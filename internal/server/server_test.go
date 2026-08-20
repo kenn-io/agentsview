@@ -5,7 +5,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"mime/multipart"
@@ -912,7 +913,7 @@ func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *test
 			Schemas map[string]struct {
 				Required   []string `json:"required"`
 				Properties map[string]struct {
-					Type json.RawMessage `json:"type"`
+					Type jsontext.Value `json:"type"`
 				} `json:"properties"`
 			} `json:"schemas"`
 		} `json:"components"`
@@ -1465,7 +1466,7 @@ func TestListSessions_Empty(t *testing.T) {
 
 	// Verify raw JSON has "sessions":[] not "sessions":null.
 	var raw struct {
-		Sessions json.RawMessage `json:"sessions"`
+		Sessions jsontext.Value `json:"sessions"`
 	}
 	if err := json.Unmarshal(
 		w.Body.Bytes(), &raw,
@@ -3666,7 +3667,7 @@ func TestSettingsDisabledProvidersDefaultToEmptyArray(t *testing.T) {
 	w := te.get(t, "/api/v1/settings")
 	assertStatus(t, w, http.StatusOK)
 	var got struct {
-		DisabledAgents json.RawMessage `json:"disabled_agents"`
+		DisabledAgents jsontext.Value `json:"disabled_agents"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.JSONEq(t, `[]`, string(got.DisabledAgents))
@@ -5304,7 +5305,7 @@ func TestHandleToolCalls_Basic(t *testing.T) {
 		ToolCalls []service.ToolCall `json:"tool_calls"`
 		Count     int                `json:"count"`
 	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	require.NoError(t, json.UnmarshalRead(w.Body, &body))
 	require.Equal(t, 2, body.Count)
 	require.Len(t, body.ToolCalls, 2)
 	assert.Equal(t, "Read", body.ToolCalls[0].ToolName)

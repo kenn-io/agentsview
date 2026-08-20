@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -228,7 +228,7 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/activity/report", func(w http.ResponseWriter, _ *http.Request) {
 		reportRequests++
-		require.NoError(t, json.NewEncoder(w).Encode(activity.Report{
+		require.NoError(t, json.MarshalWrite(w, activity.Report{
 			ReportID: "fresh-report", Timezone: "UTC",
 		}))
 	})
@@ -240,7 +240,7 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 			assert.False(t, r.URL.Query().Has("direction"))
 			assert.False(t, r.URL.Query().Has("bucket"))
 			assert.Equal(t, "true", r.URL.Query().Get("include_report"))
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			require.NoError(t, json.MarshalWrite(w, map[string]any{
 				"report_id": "original-report",
 				"sessions":  []activity.SessionRow{{SessionID: "continued"}},
 				"total":     2,
@@ -493,7 +493,7 @@ func TestActivityReportJSONMatchesHTTPExportMetadata(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 	var httpReport activity.Report
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&httpReport))
+	require.NoError(t, json.UnmarshalRead(w.Body, &httpReport))
 
 	assert.Equal(t, export.ActivityReportSchemaVersion,
 		cliReport.SchemaVersion)

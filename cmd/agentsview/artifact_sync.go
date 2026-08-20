@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -189,19 +189,12 @@ func runDaemonArtifactExchange(
 		}
 	}
 
-	decoder := json.NewDecoder(io.LimitReader(
-		response.Body,
-		daemonArtifactExchangeResponseLimit+1,
-	))
-	decoder.DisallowUnknownFields()
 	var result artifact.SyncResult
-	if err := decoder.Decode(&result); err != nil {
-		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		if err == nil {
-			err = errors.New("daemon returned trailing JSON")
-		}
+	if err := json.UnmarshalRead(
+		io.LimitReader(response.Body, daemonArtifactExchangeResponseLimit+1),
+		&result,
+		json.RejectUnknownMembers(true),
+	); err != nil {
 		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
 	}
 	return result, nil

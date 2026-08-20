@@ -4,7 +4,7 @@ package db
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"path/filepath"
 	"testing"
 
@@ -74,7 +74,7 @@ func TestInsertAndGetMessagesTokenUsage(t *testing.T) {
 			Content:          "hello",
 			ContentLength:    5,
 			Model:            "claude-sonnet-4-20250514",
-			TokenUsage:       json.RawMessage(`{"input":100,"output":0}`),
+			TokenUsage:       jsontext.Value(`{"input":100,"output":0}`),
 			ContextTokens:    500,
 			OutputTokens:     0,
 			HasContextTokens: true,
@@ -87,7 +87,7 @@ func TestInsertAndGetMessagesTokenUsage(t *testing.T) {
 			Content:          "world",
 			ContentLength:    5,
 			Model:            "claude-sonnet-4-20250514",
-			TokenUsage:       json.RawMessage(`{"input":0,"output":200}`),
+			TokenUsage:       jsontext.Value(`{"input":0,"output":200}`),
 			ContextTokens:    600,
 			OutputTokens:     200,
 			HasContextTokens: true,
@@ -128,7 +128,7 @@ func TestGetAllMessagesTokenUsage(t *testing.T) {
 		Content:       "hi",
 		ContentLength: 2,
 		Model:         "gpt-4o",
-		TokenUsage:    json.RawMessage(`{"input":50,"output":150}`),
+		TokenUsage:    jsontext.Value(`{"input":50,"output":150}`),
 		ContextTokens: 300,
 		OutputTokens:  150,
 	})
@@ -153,7 +153,7 @@ func TestGetMessageByOrdinalTokenUsage(t *testing.T) {
 		Content:       "test",
 		ContentLength: 4,
 		Model:         "claude-sonnet-4-20250514",
-		TokenUsage:    json.RawMessage(`{"cache_read":42}`),
+		TokenUsage:    jsontext.Value(`{"cache_read":42}`),
 		ContextTokens: 250,
 		OutputTokens:  99,
 	})
@@ -284,7 +284,7 @@ func TestReplaceSessionMessagesTokenUsage(t *testing.T) {
 		Content:          "new",
 		ContentLength:    3,
 		Model:            "claude-sonnet-4-20250514",
-		TokenUsage:       json.RawMessage(`{"input":999,"output":888}`),
+		TokenUsage:       jsontext.Value(`{"input":999,"output":888}`),
 		ContextTokens:    700,
 		OutputTokens:     888,
 		HasContextTokens: true,

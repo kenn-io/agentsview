@@ -3,7 +3,8 @@ package artifact
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -269,7 +270,7 @@ scan:
 	if !versionSeen {
 		return 0, invalidImportCheckpointf("version is missing")
 	}
-	if version > checkpointFormatVersion && !json.Valid(data) {
+	if version > checkpointFormatVersion && !jsontext.Value(data).IsValid() {
 		return 0, invalidImportCheckpointf("JSON is invalid")
 	}
 	return version, nil
@@ -302,31 +303,30 @@ func decodeImportCheckpointPrefix(
 	expectedOrigin string,
 	expectedSequence int,
 ) (importCheckpointSessionStream, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	token, err := decoder.Token()
+	decoder := jsontext.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.ReadToken()
 	if err != nil {
 		return importCheckpointSessionStream{}, invalidImportCheckpointf(
 			"decoding object: %v", err,
 		)
 	}
-	if token != json.Delim('{') {
+	if token.Kind() != jsontext.KindBeginObject {
 		return importCheckpointSessionStream{},
 			invalidImportCheckpointf("checkpoint must be an object")
 	}
 	state := importCheckpointFieldState{}
-	for decoder.More() {
-		token, err := decoder.Token()
+	for decoder.PeekKind() != jsontext.KindEndObject {
+		token, err := decoder.ReadToken()
 		if err != nil {
 			return importCheckpointSessionStream{}, invalidImportCheckpointf(
 				"decoding object key: %v", err,
 			)
 		}
-		key, ok := token.(string)
-		if !ok {
+		if token.Kind() != jsontext.KindString {
 			return importCheckpointSessionStream{},
 				invalidImportCheckpointf("object key is invalid")
 		}
+		key := token.String()
 		field := importCheckpointField(key)
 		if field != 0 && state.seen&field != 0 {
 			return importCheckpointSessionStream{}, invalidImportCheckpointf(
@@ -371,35 +371,34 @@ func decodeImportCheckpointPrefix(
 
 func decodeImportCheckpointFields(
 	data []byte,
-) (map[string]json.RawMessage, int, bool, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	token, err := decoder.Token()
+) (map[string]jsontext.Value, int, bool, error) {
+	decoder := jsontext.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.ReadToken()
 	if err != nil {
 		return nil, 0, false,
 			invalidImportCheckpointf("decoding object: %v", err)
 	}
-	if token != json.Delim('{') {
+	if token.Kind() != jsontext.KindBeginObject {
 		return nil, 0, false,
 			invalidImportCheckpointf("checkpoint must be an object")
 	}
-	fields := make(map[string]json.RawMessage, 3)
+	fields := make(map[string]jsontext.Value, 3)
 	var seen uint8
 	version := 0
 	versionSeen := false
 	future := false
 	unknownBeforeVersion := false
-	for decoder.More() {
-		token, err := decoder.Token()
+	for decoder.PeekKind() != jsontext.KindEndObject {
+		token, err := decoder.ReadToken()
 		if err != nil {
 			return nil, 0, false,
 				invalidImportCheckpointf("decoding object key: %v", err)
 		}
-		key, ok := token.(string)
-		if !ok {
+		if token.Kind() != jsontext.KindString {
 			return nil, 0, false,
 				invalidImportCheckpointf("object key is invalid")
 		}
+		key := token.String()
 		field := importCheckpointField(key)
 		if field != 0 && seen&field != 0 {
 			return nil, 0, false,
@@ -409,7 +408,7 @@ func decodeImportCheckpointFields(
 			seen |= field
 		}
 		if key == "v" {
-			if err := decoder.Decode(&version); err != nil {
+			if err := json.UnmarshalDecode(decoder, &version); err != nil {
 				return nil, 0, false, invalidImportCheckpointf(
 					"version is invalid: %v", err,
 				)
@@ -458,13 +457,12 @@ func decodeImportCheckpointFields(
 			fields[key] = data[valueStart:valueEnd]
 		}
 	}
-	token, err = decoder.Token()
-	if err != nil || token != json.Delim('}') {
+	token, err = decoder.ReadToken()
+	if err != nil || token.Kind() != jsontext.KindEndObject {
 		return nil, 0, false,
 			invalidImportCheckpointf("checkpoint object is incomplete")
 	}
-	var trailing json.RawMessage
-	err = decoder.Decode(&trailing)
+	_, err = decoder.ReadToken()
 	if !errors.Is(err, io.EOF) {
 		if err == nil {
 			return nil, 0, false,
@@ -501,7 +499,7 @@ func importCheckpointField(key string) uint8 {
 }
 
 func decodeImportCheckpointField(
-	decoder *json.Decoder,
+	decoder *jsontext.Decoder,
 	key string,
 	field uint8,
 	expectedOrigin string,
@@ -519,7 +517,7 @@ func decodeImportCheckpointField(
 			return nil
 		}
 		var origin string
-		if err := decoder.Decode(&origin); err != nil {
+		if err := json.UnmarshalDecode(decoder, &origin); err != nil {
 			return invalidImportCheckpointf("origin is invalid: %v", err)
 		}
 		if origin != expectedOrigin {
@@ -538,7 +536,7 @@ func decodeImportCheckpointField(
 			return nil
 		}
 		var sequence int
-		if err := decoder.Decode(&sequence); err != nil {
+		if err := json.UnmarshalDecode(decoder, &sequence); err != nil {
 			return invalidImportCheckpointf("sequence is invalid: %v", err)
 		}
 		if sequence != expectedSequence {
@@ -548,7 +546,7 @@ func decodeImportCheckpointField(
 		}
 		return nil
 	case importCheckpointVersionField:
-		if err := decoder.Decode(&state.version); err != nil {
+		if err := json.UnmarshalDecode(decoder, &state.version); err != nil {
 			return invalidImportCheckpointf("version is invalid: %v", err)
 		}
 		state.versionSeen = true
@@ -583,36 +581,8 @@ func decodeImportCheckpointField(
 	}
 }
 
-func skipImportJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delim, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delim {
-	case '{':
-		for decoder.More() {
-			if _, err := decoder.Token(); err != nil {
-				return err
-			}
-			if err := skipImportJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-	case '[':
-		for decoder.More() {
-			if err := skipImportJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-	default:
-		return errors.New("JSON value starts with a closing delimiter")
-	}
-	_, err = decoder.Token()
-	return err
+func skipImportJSONValue(decoder *jsontext.Decoder) error {
+	return decoder.SkipValue()
 }
 
 func streamImportCheckpointSessions(
@@ -688,28 +658,28 @@ func decodeImportCheckpointSessionPage(
 		)
 	}
 
-	decoder := json.NewDecoder(inputReader)
-	token, err := decoder.Token()
+	decoder := jsontext.NewDecoder(inputReader)
+	token, err := decoder.ReadToken()
 	if err != nil {
 		return nil, 0, false,
 			invalidImportCheckpointf("decoding sessions: %v", err)
 	}
-	if token != json.Delim('{') {
+	if token.Kind() != jsontext.KindBeginObject {
 		return nil, 0, false,
 			invalidImportCheckpointf("sessions must be an object")
 	}
 	page := make([]importCheckpointSession, 0, limit)
-	for len(page) < limit && decoder.More() {
-		token, err := decoder.Token()
+	for len(page) < limit && decoder.PeekKind() != jsontext.KindEndObject {
+		token, err := decoder.ReadToken()
 		if err != nil {
 			return nil, 0, false,
 				invalidImportCheckpointf("decoding session GID: %v", err)
 		}
-		gid, ok := token.(string)
-		if !ok {
+		if token.Kind() != jsontext.KindString {
 			return nil, 0, false,
 				invalidImportCheckpointf("session GID is invalid")
 		}
+		gid := token.String()
 		prefix := origin + "~"
 		if !strings.HasPrefix(gid, prefix) ||
 			len(gid) == len(prefix) ||
@@ -718,7 +688,7 @@ func decodeImportCheckpointSessionPage(
 				invalidImportCheckpointf("session GID %q is invalid", gid)
 		}
 		var manifestHash string
-		if err := decoder.Decode(&manifestHash); err != nil {
+		if err := json.UnmarshalDecode(decoder, &manifestHash); err != nil {
 			return nil, 0, false, invalidImportCheckpointf(
 				"manifest hash for %q is invalid: %v", gid, err,
 			)
@@ -770,24 +740,23 @@ func validateImportCheckpointSuffix(
 	default:
 		return invalidImportCheckpointf("checkpoint object is incomplete")
 	}
-	decoder := json.NewDecoder(suffix)
-	decoder.UseNumber()
-	token, err := decoder.Token()
-	if err != nil || token != json.Delim('{') {
+	decoder := jsontext.NewDecoder(suffix)
+	token, err := decoder.ReadToken()
+	if err != nil || token.Kind() != jsontext.KindBeginObject {
 		return invalidImportCheckpointf("checkpoint suffix is invalid")
 	}
 	state := stream.fields
-	for decoder.More() {
-		token, err := decoder.Token()
+	for decoder.PeekKind() != jsontext.KindEndObject {
+		token, err := decoder.ReadToken()
 		if err != nil {
 			return invalidImportCheckpointf(
 				"decoding object key: %v", err,
 			)
 		}
-		key, ok := token.(string)
-		if !ok {
+		if token.Kind() != jsontext.KindString {
 			return invalidImportCheckpointf("object key is invalid")
 		}
+		key := token.String()
 		field := importCheckpointField(key)
 		if field != 0 && state.seen&field != 0 {
 			return invalidImportCheckpointf("duplicate field %q", key)
@@ -802,12 +771,11 @@ func validateImportCheckpointSuffix(
 			return err
 		}
 	}
-	token, err = decoder.Token()
-	if err != nil || token != json.Delim('}') {
+	token, err = decoder.ReadToken()
+	if err != nil || token.Kind() != jsontext.KindEndObject {
 		return invalidImportCheckpointf("checkpoint object is incomplete")
 	}
-	var trailing json.RawMessage
-	err = decoder.Decode(&trailing)
+	_, err = decoder.ReadToken()
 	if !errors.Is(err, io.EOF) {
 		if err == nil {
 			return invalidImportCheckpointf("checkpoint has trailing JSON")

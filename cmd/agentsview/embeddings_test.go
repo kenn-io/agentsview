@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -64,7 +65,7 @@ func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 			Model string   `json:"model"`
 			Input []string `json:"input"`
 		}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 
 		data := make([]map[string]any, len(req.Input))
 		for i := range req.Input {
@@ -75,7 +76,7 @@ func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 			data[i] = map[string]any{"index": i, "embedding": vec}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+		require.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
 	}))
 }
 
@@ -200,14 +201,14 @@ func TestNewVectorEncoderWiresOllamaCPUFallback(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/v1/embeddings":
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			require.NoError(t, json.MarshalWrite(w, map[string]any{
 				"data": []map[string]any{{
 					"index": 0, "embedding": []float32{0, 0, 0},
 				}},
 			}))
 		case "/api/embed":
 			cpuCalls.Add(1)
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			require.NoError(t, json.MarshalWrite(w, map[string]any{
 				"model":      "test-model",
 				"embeddings": [][]float32{{1, 2, 3}},
 			}))
@@ -523,7 +524,7 @@ func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
 		var req struct {
 			Input []string `json:"input"`
 		}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		mu.Lock()
 		captured = append(captured, req.Input...)
 		mu.Unlock()
@@ -535,7 +536,7 @@ func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+		require.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
 	}))
 	defer stub.Close()
 
@@ -629,7 +630,7 @@ func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(status))
+		require.NoError(t, json.MarshalWrite(w, status))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -708,7 +709,7 @@ END`)
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(status))
+		require.NoError(t, json.MarshalWrite(w, status))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -735,7 +736,7 @@ func TestEmbeddingsBuildDirectPrintsProgress(t *testing.T) {
 		var req struct {
 			Input []string `json:"input"`
 		}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		time.Sleep(150 * time.Millisecond)
 
 		data := make([]map[string]any, len(req.Input))
@@ -743,7 +744,7 @@ func TestEmbeddingsBuildDirectPrintsProgress(t *testing.T) {
 			data[i] = map[string]any{"index": i, "embedding": []float32{1, 2, 3}}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+		require.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
 	}))
 	defer stub.Close()
 	writeEmbeddingsTestConfig(t, dataDir, stub.URL+"/v1")
@@ -1020,15 +1021,15 @@ func TestEmbeddingsBuildIncludeAutomatedFlagThreadsToDaemonRequest(t *testing.T)
 	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
 		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
 			var req vector.BuildRequest
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.NoError(t, json.UnmarshalRead(r.Body, &req))
 			gotIncludeAutomated.Store(req.IncludeAutomated)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+			_ = json.MarshalWrite(w, map[string]bool{"started": true})
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(vector.BuildStatus{Running: false})
+			_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
 		},
 	})
 
@@ -1049,15 +1050,15 @@ func TestRecallEmbeddingsBuildNormalizesIncludeAutomatedForDaemon(t *testing.T) 
 	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
 		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
 			var req vector.BuildRequest
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.NoError(t, json.UnmarshalRead(r.Body, &req))
 			gotIncludeAutomated.Store(req.IncludeAutomated)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+			_ = json.MarshalWrite(w, map[string]bool{"started": true})
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(vector.BuildStatus{Running: false})
+			_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
 		},
 	})
 
@@ -1098,15 +1099,15 @@ max_retries = 1
 	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
 		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
 			var req vector.BuildRequest
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.NoError(t, json.UnmarshalRead(r.Body, &req))
 			gotIncludeAutomated.Store(req.IncludeAutomated)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+			_ = json.MarshalWrite(w, map[string]bool{"started": true})
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(vector.BuildStatus{Running: false})
+			_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
 		},
 	})
 
@@ -1293,12 +1294,13 @@ func TestEmbeddingsListDispatchesToDaemon(t *testing.T) {
 		"GET /api/v1/embeddings/generations": func(w http.ResponseWriter, r *http.Request) {
 			listCalled.Store(true)
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			_ = json.MarshalWrite(w, map[string]any{
 				"generations": []vector.GenerationInfo{{
 					ID: 1, State: "active", Model: "daemon-model", Dimension: 3,
 					Fingerprint: "abcdef0123456789", Embedded: 7,
 				}},
 			})
+
 		},
 	})
 
@@ -1328,18 +1330,18 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
 			buildCalled.Store(true)
 			var req vector.BuildRequest
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.NoError(t, json.UnmarshalRead(r.Body, &req))
 			assert.False(t, req.Backstop)
 			assert.True(t, req.RepairInvalid,
 				"--repair-invalid must pass through to the daemon")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+			_ = json.MarshalWrite(w, map[string]bool{"started": true})
 		},
 		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
 			statusCalled.Store(true)
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(vector.BuildStatus{
+			_ = json.MarshalWrite(w, vector.BuildStatus{
 				Running: false,
 				LastResult: &vector.BuildResult{
 					Activated: true,
@@ -1350,6 +1352,7 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 					Fill: kitvec.FillStats{Documents: 5, Chunks: 6},
 				},
 			})
+
 		},
 	})
 
@@ -1425,7 +1428,7 @@ func TestEmbeddingsActivateDispatchesToDaemon(t *testing.T) {
 			var body struct {
 				Force bool `json:"force"`
 			}
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			require.NoError(t, json.UnmarshalRead(r.Body, &body))
 			gotForce.Store(body.Force)
 			w.WriteHeader(http.StatusNoContent)
 		},
@@ -1456,9 +1459,10 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		_ = json.MarshalWrite(w, map[string]string{
 			"error": "an embeddings build is already running",
 		})
+
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
 		n := statusCalls.Add(1)
@@ -1470,7 +1474,7 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(status)
+		_ = json.MarshalWrite(w, status)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -1495,16 +1499,16 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 func TestBuildViaDaemonAlwaysSendsIncludeAutomated(t *testing.T) {
 	for _, includeAutomated := range []bool{false, true} {
 		t.Run(fmt.Sprintf("include_automated=%t", includeAutomated), func(t *testing.T) {
-			var body map[string]json.RawMessage
+			var body map[string]jsontext.Value
 			mux := http.NewServeMux()
 			mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				require.NoError(t, json.UnmarshalRead(r.Body, &body))
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+				_ = json.MarshalWrite(w, map[string]bool{"started": true})
 			})
 			mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(vector.BuildStatus{Running: false})
+				_ = json.MarshalWrite(w, vector.BuildStatus{Running: false})
 			})
 			srv := httptest.NewServer(mux)
 			defer srv.Close()
@@ -1530,11 +1534,11 @@ func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+		_ = json.MarshalWrite(w, map[string]bool{"started": true})
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(vector.BuildStatus{
+		_ = json.MarshalWrite(w, vector.BuildStatus{
 			Running:   false,
 			LastError: "encoder rejected input",
 			LastResult: &vector.BuildResult{
@@ -1545,6 +1549,7 @@ func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
 				Fill: kitvec.FillStats{Documents: 1, Chunks: 1},
 			},
 		})
+
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

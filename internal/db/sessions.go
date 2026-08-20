@@ -6,7 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	pathpkg "path"
@@ -256,7 +256,7 @@ func (s *Session) ApplyQualitySignals(qs *QualitySignals) {
 func (s Session) MarshalJSON() ([]byte, error) {
 	type sessionAlias Session
 	return json.Marshal(struct {
-		sessionAlias
+		sessionAlias   `json:",inline"`
 		QualitySignals *QualitySignals `json:"quality_signals,omitempty"`
 	}{
 		sessionAlias:   sessionAlias(s),
@@ -269,7 +269,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 func (s *Session) UnmarshalJSON(data []byte) error {
 	type sessionAlias Session
 	var v struct {
-		sessionAlias
+		sessionAlias   `json:",inline"`
 		QualitySignals *QualitySignals `json:"quality_signals"`
 	}
 	if err := json.Unmarshal(data, &v); err != nil {
@@ -341,8 +341,8 @@ type Session struct {
 	SourceSessionID             string          `json:"source_session_id,omitempty"`
 	SourceVersion               string          `json:"source_version,omitempty"`
 	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines        int             `json:"parser_malformed_lines,omitempty"`
-	IsTruncated                 bool            `json:"is_truncated,omitempty"`
+	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
+	IsTruncated                 bool            `json:"is_truncated,omitzero"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	DeletionCause     *string `json:"-"`

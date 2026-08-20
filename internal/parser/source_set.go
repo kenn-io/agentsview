@@ -267,11 +267,9 @@ func (f SourceSetFactory) NewProvider(cfg ProviderConfig) Provider {
 		caps.Source.StoredSourceHints = CapabilityUnsupported
 	}
 	return &SourceSetProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   caps,
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    caps,
+		Config:  cfg,
 		sources: sources,
 	}
 }

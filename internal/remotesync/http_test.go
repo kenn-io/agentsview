@@ -6,7 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -905,7 +905,7 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
-			require.NoError(t, json.NewEncoder(w).Encode(remote.targets))
+			require.NoError(t, json.MarshalWrite(w, remote.targets))
 		case "/api/v1/remote-sync/manifest":
 			if remote.onManifest != nil {
 				remote.onManifest()
@@ -928,7 +928,7 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 			// the manifest cannot model, which the handler surfaces as
 			// 501 so the client falls back to the full archive.
 			var req TargetSet
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.NoError(t, json.UnmarshalRead(r.Body, &req))
 			manifest, err := BuildManifest(req)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusNotImplemented)
@@ -937,11 +937,11 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Content-Encoding", "gzip")
 			gz := gzip.NewWriter(w)
-			require.NoError(t, json.NewEncoder(gz).Encode(manifest))
+			require.NoError(t, json.MarshalWrite(gz, manifest))
 			require.NoError(t, gz.Close())
 		case "/api/v1/remote-sync/archive":
 			var req ArchiveRequest
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.NoError(t, json.UnmarshalRead(r.Body, &req))
 			remote.archiveRequests = append(remote.archiveRequests, req)
 			if remote.onArchive != nil {
 				remote.onArchive(req)

@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -780,10 +781,10 @@ func TestParseCodebuffToolCall_UnknownName(t *testing.T) {
 	// A tool block with empty toolName should return nil.
 	raw := `{"type":"tool","toolName":"","toolCallId":"x","input":{}}`
 	var block struct {
-		Type       string          `json:"type"`
-		ToolName   string          `json:"toolName"`
-		ToolCallID string          `json:"toolCallId"`
-		Input      json.RawMessage `json:"input"`
+		Type       string         `json:"type"`
+		ToolName   string         `json:"toolName"`
+		ToolCallID string         `json:"toolCallId"`
+		Input      jsontext.Value `json:"input"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(raw), &block))
 

@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -989,7 +990,7 @@ type agyTrajectory struct {
 	CascadeID         string                 `json:"cascadeId"`
 	Steps             []agyStep              `json:"steps"`
 	GeneratorMetadata []agyGeneratorMetadata `json:"generatorMetadata"`
-	AgyReader         json.RawMessage        `json:"agyReader"`
+	AgyReader         jsontext.Value         `json:"agyReader"`
 }
 
 type agyReaderMetadata struct {
@@ -1098,11 +1099,11 @@ type agyToolCall struct {
 }
 
 type agyRunCommand struct {
-	CommandLine         string          `json:"commandLine"`
-	ProposedCommandLine string          `json:"proposedCommandLine"`
-	Cwd                 string          `json:"cwd"`
-	ExitCode            *int            `json:"exitCode"`
-	CombinedOutput      json.RawMessage `json:"combinedOutput"`
+	CommandLine         string         `json:"commandLine"`
+	ProposedCommandLine string         `json:"proposedCommandLine"`
+	Cwd                 string         `json:"cwd"`
+	ExitCode            *int           `json:"exitCode"`
+	CombinedOutput      jsontext.Value `json:"combinedOutput"`
 }
 
 func (rc *agyRunCommand) CombinedOutputString() string {
@@ -1113,7 +1114,7 @@ func (rc *agyRunCommand) CombinedOutputString() string {
 	if err := json.Unmarshal(rc.CombinedOutput, &s); err == nil {
 		return s
 	}
-	var obj map[string]json.RawMessage
+	var obj map[string]jsontext.Value
 	if err := json.Unmarshal(rc.CombinedOutput, &obj); err == nil {
 		parts := make([]string, 0, 4)
 		for _, key := range []string{"stdout", "stderr", "output", "text", "full"} {
@@ -1139,9 +1140,9 @@ type agyViewFile struct {
 }
 
 type agyCodeAction struct {
-	Description  string          `json:"description"`
-	ActionSpec   json.RawMessage `json:"actionSpec"`
-	ActionResult json.RawMessage `json:"actionResult"`
+	Description  string         `json:"description"`
+	ActionSpec   jsontext.Value `json:"actionSpec"`
+	ActionResult jsontext.Value `json:"actionResult"`
 }
 
 type agyCodeActionResult struct {
@@ -1241,7 +1242,7 @@ func agyToolDetail(name, inputJSON string) string {
 	if !strings.HasPrefix(strings.TrimSpace(inputJSON), "{") {
 		return name
 	}
-	var input map[string]json.RawMessage
+	var input map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
 		return name
 	}
@@ -1321,7 +1322,7 @@ type agyTrajectoryParseResult struct {
 	parentCascadeID string
 }
 
-func parseAgyReaderParentCascadeID(raw json.RawMessage) string {
+func parseAgyReaderParentCascadeID(raw jsontext.Value) string {
 	if len(raw) == 0 {
 		return ""
 	}

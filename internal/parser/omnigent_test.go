@@ -6,7 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"os"
@@ -456,7 +456,7 @@ func TestDecodeOmnigentFunctionOutputPreservesJSONString(t *testing.T) {
 	require.Len(t, messages, 1)
 	require.Len(t, messages[0].ToolResults, 1)
 	result := messages[0].ToolResults[0]
-	assert.True(t, json.Valid([]byte(result.ContentRaw)))
+	assert.True(t, jsontext.Value(result.ContentRaw).IsValid())
 	assert.Equal(t, output, DecodeContent(result.ContentRaw))
 	assert.Equal(t, len(output), result.ContentLength)
 }

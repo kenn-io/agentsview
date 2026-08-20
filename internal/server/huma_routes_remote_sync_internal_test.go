@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net/http"
@@ -692,7 +692,7 @@ func TestRemoteSyncManifestListsFiles(t *testing.T) {
 	gz, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
 	require.NoError(t, err)
 	var manifest remotesync.Manifest
-	require.NoError(t, json.NewDecoder(gz).Decode(&manifest))
+	require.NoError(t, json.UnmarshalRead(gz, &manifest))
 	require.Len(t, manifest.Files, 1)
 	assert.Equal(t, sessionPath, manifest.Files[0].Path)
 	assert.Equal(t, int64(3), manifest.Files[0].Size)

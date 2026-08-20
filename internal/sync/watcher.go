@@ -67,8 +67,8 @@ type WatchBatch struct {
 	Paths           []string      `json:"paths,omitempty"`
 	Renames         []WatchRename `json:"renames,omitempty"`
 	ReconcileRoots  []string      `json:"reconcile_roots,omitempty"`
-	FullSync        bool          `json:"full_sync,omitempty"`
-	LostEvents      bool          `json:"lost_events,omitempty"`
+	FullSync        bool          `json:"full_sync,omitzero"`
+	LostEvents      bool          `json:"lost_events,omitzero"`
 	lifecycleTokens []backendLifecycleToken
 }
 

@@ -7,7 +7,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -907,7 +908,7 @@ func TestParseDiff_JSONSessionsAndDBPath(t *testing.T) {
 	out, err := executeCommand(newRootCommand(), "parse-diff", "--json")
 	require.NoError(t, err)
 
-	var got map[string]json.RawMessage
+	var got map[string]jsontext.Value
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 
 	// A clean run must serialize an empty array, never null, so jq

@@ -21,7 +21,8 @@ package parser
 
 import (
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -547,7 +548,7 @@ func parseKiloLegacyMessages(
 	totalCacheWrites int,
 	err error,
 ) {
-	var rawMessages []json.RawMessage
+	var rawMessages []jsontext.Value
 	if unmarshalErr := json.Unmarshal(data, &rawMessages); unmarshalErr != nil {
 		// Tolerate a single-object file (defensive).
 		var single kiloLegacyMessage
@@ -556,7 +557,7 @@ func parseKiloLegacyMessages(
 				time.Time{}, time.Time{}, 0, 0,
 				fmt.Errorf("parsing ui_messages.json: %w", unmarshalErr)
 		}
-		rawMessages = []json.RawMessage{data}
+		rawMessages = []jsontext.Value{data}
 	}
 
 	messages = make([]ParsedMessage, 0, len(rawMessages))
@@ -1098,7 +1099,7 @@ func distinctModels(s []string) int {
 // mixed-provider sessions where attributing all usage to one provider
 // would be incorrect.
 func parseKiloLegacyMessagesDistinctProviders(data []byte) int {
-	var rawMessages []json.RawMessage
+	var rawMessages []jsontext.Value
 	if err := json.Unmarshal(data, &rawMessages); err != nil {
 		return 0
 	}
@@ -1322,8 +1323,8 @@ func kiloUnwrapJSONEnvelope(text string) string {
 		return ""
 	}
 	var envelope struct {
-		Question string          `json:"question"`
-		Suggest  json.RawMessage `json:"suggest"`
+		Question string         `json:"question"`
+		Suggest  jsontext.Value `json:"suggest"`
 	}
 	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
 		return ""
@@ -1518,12 +1519,12 @@ func kiloExtractAPIRequestStats(text string) (
 	validPayload bool,
 ) {
 	var data struct {
-		TokensIn          any             `json:"tokensIn"`
-		TokensOut         any             `json:"tokensOut"`
-		Cost              json.RawMessage `json:"cost"`
-		InferenceProvider string          `json:"inferenceProvider"`
-		CacheReads        any             `json:"cacheReads"`
-		CacheWrites       any             `json:"cacheWrites"`
+		TokensIn          any            `json:"tokensIn"`
+		TokensOut         any            `json:"tokensOut"`
+		Cost              jsontext.Value `json:"cost"`
+		InferenceProvider string         `json:"inferenceProvider"`
+		CacheReads        any            `json:"cacheReads"`
+		CacheWrites       any            `json:"cacheWrites"`
 	}
 	if err := json.Unmarshal([]byte(text), &data); err != nil {
 		return 0, 0, 0, money.Money{}, false, "", 0, 0, false

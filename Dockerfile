@@ -13,7 +13,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM golang:1.26.6-bookworm AS build
+FROM golang:1.27.0-bookworm AS build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential ca-certificates \

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -185,7 +185,7 @@ func (hs HTTPSync) fetchManifest(
 		reader = gz
 	}
 	var manifest Manifest
-	if err := json.NewDecoder(reader).Decode(&manifest); err != nil {
+	if err := json.UnmarshalRead(reader, &manifest); err != nil {
 		return Manifest{}, false, fmt.Errorf("decode remote manifest: %w", err)
 	}
 	return manifest, true, nil
@@ -299,7 +299,7 @@ func (hs HTTPSync) fetchTargets(
 		return TargetSet{}, err
 	}
 	var targets TargetSet
-	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &targets); err != nil {
 		return TargetSet{}, fmt.Errorf("decode remote targets: %w", err)
 	}
 	return targets, nil

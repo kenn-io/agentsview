@@ -5,7 +5,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"sort"
 	"strings"
@@ -39,7 +40,7 @@ const (
 type EvalTrajectoryIngest struct {
 	RunID           string
 	TrajectoryID    string
-	Trajectory      json.RawMessage
+	Trajectory      jsontext.Value
 	ExtractorMethod string
 	SourceVersion   string
 	Project         string
@@ -159,7 +160,7 @@ func validateEvalRequiredField(field, value string) error {
 // flattens to byte-identical text — which keeps chunk ids, and thus
 // idempotency, stable. Keys are structural and skipped; non-string scalars
 // (numbers, booleans, null) carry no searchable text and are skipped too.
-func flattenTrajectoryText(raw json.RawMessage) (string, error) {
+func flattenTrajectoryText(raw jsontext.Value) (string, error) {
 	var root any
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return "", fmt.Errorf("parsing trajectory: %w", err)

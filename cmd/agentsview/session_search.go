@@ -3,7 +3,8 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -90,7 +91,7 @@ func newSessionSearchCommand() *cobra.Command {
 						"this terminal/session may itself be recorded.")
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), res)
 			}
 			return printContentSearchResult(cmd.OutOrStdout(), res, contextN)
 		},

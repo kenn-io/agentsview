@@ -43,11 +43,9 @@ func (f dbBackedProviderFactory) Capabilities() Capabilities {
 func (f dbBackedProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &dbBackedProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   f.spec.caps,
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    f.spec.caps,
+		Config:  cfg,
 		spec:    f.spec,
 		sources: newDBBackedSourceSet(f.spec, cfg.Roots),
 	}

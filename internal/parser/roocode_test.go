@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,8 +16,8 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-func jsonNumberPtr(value string) *json.Number {
-	number := json.Number(value)
+func jsonNumberPtr(value string) *jsontext.Value {
+	number := jsontext.Value(value)
 	return &number
 }
 
@@ -304,7 +305,7 @@ func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 func TestParseRooCodeSessionCostPresence(t *testing.T) {
 	tests := []struct {
 		name      string
-		totalCost *json.Number
+		totalCost *jsontext.Value
 		hasCost   bool
 		wantCost  money.Money
 		wantErr   error

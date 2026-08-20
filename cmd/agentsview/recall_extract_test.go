@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +39,7 @@ func extractModelStub(t *testing.T) *httptest.Server {
 					"prompt_tokens": 5, "completion_tokens": 2,
 				},
 			}
-			_ = json.NewEncoder(w).Encode(body)
+			_ = json.MarshalWrite(w, body)
 		}))
 	t.Cleanup(server.Close)
 	return server

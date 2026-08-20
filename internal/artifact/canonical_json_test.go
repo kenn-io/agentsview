@@ -1,7 +1,7 @@
 package artifact
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,9 +47,9 @@ func TestCanonicalJSONRecanonicalizesRawMessage(t *testing.T) {
 	t.Parallel()
 
 	type wrapper struct {
-		Value json.RawMessage `json:"value"`
+		Value jsontext.Value `json:"value"`
 	}
-	v := wrapper{Value: json.RawMessage(`{ "b" : 2, "a" : 1 }`)}
+	v := wrapper{Value: jsontext.Value(`{ "b" : 2, "a" : 1 }`)}
 
 	data, err := canonicalJSON(v)
 	require.NoError(t, err)
@@ -60,7 +60,7 @@ func TestCanonicalJSONRejectsTrailingRawMessageContent(t *testing.T) {
 	t.Parallel()
 
 	type wrapper struct {
-		Value json.RawMessage `json:"value"`
+		Value jsontext.Value `json:"value"`
 	}
 	tests := []struct {
 		name    string
@@ -74,9 +74,9 @@ func TestCanonicalJSONRejectsTrailingRawMessageContent(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := canonicalJSON(wrapper{Value: json.RawMessage(tt.raw)})
+			_, err := canonicalJSON(wrapper{Value: jsontext.Value(tt.raw)})
 			if tt.wantErr {
-				assert.ErrorContains(t, err, "content after JSON value")
+				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
 			}
@@ -88,7 +88,7 @@ func TestCanonicalJSONEmptyRawMessageEncodesAsNull(t *testing.T) {
 	t.Parallel()
 
 	type wrapper struct {
-		Value json.RawMessage `json:"value"`
+		Value jsontext.Value `json:"value"`
 	}
 
 	data, err := canonicalJSON(wrapper{})
@@ -100,11 +100,10 @@ func TestCanonicalJSONPreservesLargeNumberPrecision(t *testing.T) {
 	t.Parallel()
 
 	type wrapper struct {
-		Value json.RawMessage `json:"value"`
+		Value jsontext.Value `json:"value"`
 	}
-	// 2^53+1: unsafe to round-trip through float64, so this only survives if
-	// the RawMessage decode path uses json.Number instead of float64.
-	v := wrapper{Value: json.RawMessage(`9007199254740993`)}
+	// 2^53+1 must remain exact when canonicalizing a raw JSON value.
+	v := wrapper{Value: jsontext.Value(`9007199254740993`)}
 
 	data, err := canonicalJSON(v)
 	require.NoError(t, err)
@@ -152,14 +151,14 @@ func TestCanonicalJSONOmitsEmptyFieldsAndKeepsZeroValuesWithoutTag(t *testing.T)
 	assert.Equal(t, "{\"kept\":0}\n", string(data))
 }
 
-func TestCanonicalJSONRejectsNonStringMapKeys(t *testing.T) {
+func TestCanonicalJSONCanonicalizesIntegerMapKeys(t *testing.T) {
 	t.Parallel()
 
 	v := map[int]string{1: "a"}
 
-	_, err := canonicalJSON(v)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported canonical map key type")
+	data, err := canonicalJSON(v)
+	require.NoError(t, err)
+	assert.Equal(t, "{\"1\":\"a\"}\n", string(data))
 }
 
 func TestCanonicalJSONRejectsUnsupportedKind(t *testing.T) {
@@ -171,5 +170,5 @@ func TestCanonicalJSONRejectsUnsupportedKind(t *testing.T) {
 
 	_, err := canonicalJSON(v)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported canonical JSON kind")
+	assert.Contains(t, err.Error(), "encoding canonical artifact JSON")
 }

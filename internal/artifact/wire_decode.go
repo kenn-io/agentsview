@@ -2,7 +2,8 @@ package artifact
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 
@@ -11,10 +12,10 @@ import (
 
 func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, error) {
 	var envelope struct {
-		Version     int             `json:"v"`
-		Origin      string          `json:"origin"`
-		Segments    json.RawMessage `json:"segments"`
-		UsageEvents json.RawMessage `json:"usage_events"`
+		Version     int            `json:"v"`
+		Origin      string         `json:"origin"`
+		Segments    jsontext.Value `json:"segments"`
+		UsageEvents jsontext.Value `json:"usage_events"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return manifest{}, err
@@ -45,7 +46,7 @@ func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, err
 }
 
 func preflightManifestCollections(
-	segments, usageEvents json.RawMessage,
+	segments, usageEvents jsontext.Value,
 	limits artifactLimits,
 ) error {
 	if err := preflightSegmentReferences(segments, limits.manifestSegments); err != nil {
@@ -56,27 +57,27 @@ func preflightManifestCollections(
 	)
 }
 
-func preflightSegmentReferences(data json.RawMessage, limit int) error {
+func preflightSegmentReferences(data jsontext.Value, limit int) error {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	token, err := dec.Token()
+	dec := jsontext.NewDecoder(bytes.NewReader(trimmed))
+	token, err := dec.ReadToken()
 	if err != nil {
 		return err
 	}
-	if token != json.Delim('[') {
+	if token.Kind() != jsontext.KindBeginArray {
 		return errors.New("manifest segments must be an array")
 	}
 	seen := make(map[string]struct{}, min(limit, 16))
 	count := 0
-	for dec.More() {
+	for dec.PeekKind() != jsontext.KindEndArray {
 		if count >= limit {
 			return fmt.Errorf("manifest segment reference limit exceeded: limit %d", limit)
 		}
 		var hash string
-		if err := dec.Decode(&hash); err != nil {
+		if err := json.UnmarshalDecode(dec, &hash); err != nil {
 			return fmt.Errorf("decoding manifest segment reference: %w", err)
 		}
 		if _, ok := seen[hash]; ok {
@@ -85,17 +86,17 @@ func preflightSegmentReferences(data json.RawMessage, limit int) error {
 		seen[hash] = struct{}{}
 		count++
 	}
-	_, err = dec.Token()
+	_, err = dec.ReadToken()
 	return err
 }
 
-func preflightJSONArrayCount(data json.RawMessage, name string, limit int) error {
+func preflightJSONArrayCount(data jsontext.Value, name string, limit int) error {
 	_, err := countJSONArrayElements(data, name, limit)
 	return err
 }
 
 func countJSONArrayElements(
-	data json.RawMessage,
+	data jsontext.Value,
 	name string,
 	limit int,
 ) (int, error) {
@@ -103,26 +104,26 @@ func countJSONArrayElements(
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return 0, nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	token, err := dec.Token()
+	dec := jsontext.NewDecoder(bytes.NewReader(trimmed))
+	token, err := dec.ReadToken()
 	if err != nil {
 		return 0, err
 	}
-	if token != json.Delim('[') {
+	if token.Kind() != jsontext.KindBeginArray {
 		return 0, fmt.Errorf("%ss must be an array", name)
 	}
 	count := 0
-	for dec.More() {
+	for dec.PeekKind() != jsontext.KindEndArray {
 		if count >= limit {
 			return 0, fmt.Errorf("%s limit exceeded: limit %d", name, limit)
 		}
-		var value json.RawMessage
-		if err := dec.Decode(&value); err != nil {
+		var value jsontext.Value
+		if err := json.UnmarshalDecode(dec, &value); err != nil {
 			return 0, fmt.Errorf("decoding %s: %w", name, err)
 		}
 		count++
 	}
-	if _, err := dec.Token(); err != nil {
+	if _, err := dec.ReadToken(); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -266,9 +267,9 @@ func preflightMessageNestedCollections(
 	limits artifactLimits,
 ) (int, nestedCollectionCounts, error) {
 	var envelope struct {
-		Version   int             `json:"v"`
-		Ordinal   int             `json:"ordinal"`
-		ToolCalls json.RawMessage `json:"tool_calls"`
+		Version   int            `json:"v"`
+		Ordinal   int            `json:"ordinal"`
+		ToolCalls jsontext.Value `json:"tool_calls"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		return 0, nestedCollectionCounts{}, fmt.Errorf(
@@ -282,7 +283,7 @@ func preflightMessageNestedCollections(
 }
 
 func preflightToolCallCollections(
-	data json.RawMessage,
+	data jsontext.Value,
 	ordinal int,
 	limits artifactLimits,
 ) (nestedCollectionCounts, error) {
@@ -290,16 +291,16 @@ func preflightToolCallCollections(
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nestedCollectionCounts{}, nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	token, err := dec.Token()
+	dec := jsontext.NewDecoder(bytes.NewReader(trimmed))
+	token, err := dec.ReadToken()
 	if err != nil {
 		return nestedCollectionCounts{}, err
 	}
-	if token != json.Delim('[') {
+	if token.Kind() != jsontext.KindBeginArray {
 		return nestedCollectionCounts{}, errors.New("message tool_calls must be an array")
 	}
 	counts := nestedCollectionCounts{}
-	for dec.More() {
+	for dec.PeekKind() != jsontext.KindEndArray {
 		if counts.toolCalls >= limits.messageToolCalls {
 			return nestedCollectionCounts{}, fmt.Errorf(
 				"tool call limit exceeded for message ordinal %d: limit %d per message",
@@ -307,9 +308,9 @@ func preflightToolCallCollections(
 			)
 		}
 		var toolEnvelope struct {
-			ResultEvents json.RawMessage `json:"result_events"`
+			ResultEvents jsontext.Value `json:"result_events"`
 		}
-		if err := dec.Decode(&toolEnvelope); err != nil {
+		if err := json.UnmarshalDecode(dec, &toolEnvelope); err != nil {
 			return nestedCollectionCounts{}, fmt.Errorf(
 				"decoding tool call %d in message ordinal %d: %w",
 				counts.toolCalls, ordinal, err,
@@ -327,7 +328,7 @@ func preflightToolCallCollections(
 		counts.toolCalls++
 		counts.resultEvents += resultEvents
 	}
-	if _, err := dec.Token(); err != nil {
+	if _, err := dec.ReadToken(); err != nil {
 		return nestedCollectionCounts{}, err
 	}
 	return counts, nil

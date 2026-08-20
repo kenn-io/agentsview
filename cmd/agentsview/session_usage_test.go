@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"strings"
 	"testing"
 
@@ -13,12 +13,10 @@ import (
 
 func TestRenderSessionUsageHuman_WithCost(t *testing.T) {
 	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID: "claude:s1", Agent: "claude-code", Project: "proj",
-			TotalOutputTokens: 28800, PeakContextTokens: 118000,
-			HasTokenData: true, Cost: money.MustParseDollars("0.42"), HasCost: true,
-			Models: []string{"claude-opus-4-6"},
-		},
+		SessionID: "claude:s1", Agent: "claude-code", Project: "proj",
+		TotalOutputTokens: 28800, PeakContextTokens: 118000,
+		HasTokenData: true, Cost: money.MustParseDollars("0.42"), HasCost: true,
+		Models: []string{"claude-opus-4-6"},
 	}
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, out))
@@ -66,10 +64,8 @@ func TestRenderSessionUsageHuman_AuthoritativeCostWithoutModelsOmitsEstimateMark
 
 func TestRenderSessionUsageHuman_NoCostNoModels(t *testing.T) {
 	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID: "claude:s3", Agent: "claude-code",
-			HasTokenData: true, HasCost: false,
-		},
+		SessionID: "claude:s3", Agent: "claude-code",
+		HasTokenData: true, HasCost: false,
 	}
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, out))
@@ -81,11 +77,9 @@ func TestRenderSessionUsageHuman_NoCostNoModels(t *testing.T) {
 
 func TestRenderSessionUsageHuman_NoCost(t *testing.T) {
 	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID: "claude:s2", Agent: "claude-code",
-			HasTokenData: true, HasCost: false,
-			UnpricedModels: []string{"local-llama-99"},
-		},
+		SessionID: "claude:s2", Agent: "claude-code",
+		HasTokenData: true, HasCost: false,
+		UnpricedModels: []string{"local-llama-99"},
 	}
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, out))
@@ -97,18 +91,16 @@ func TestRenderSessionUsageHuman_NoCost(t *testing.T) {
 
 func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
 	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID:         "copilot:s1",
-			Agent:             "copilot",
-			Project:           "proj",
-			TotalOutputTokens: 2000,
-			PeakContextTokens: 5000,
-			HasTokenData:      true,
-			Cost:              money.MustParseDollars("10.00"),
-			HasCost:           true,
-			AICredits:         1000.0,
-			Models:            []string{"gpt-4"},
-		},
+		SessionID:         "copilot:s1",
+		Agent:             "copilot",
+		Project:           "proj",
+		TotalOutputTokens: 2000,
+		PeakContextTokens: 5000,
+		HasTokenData:      true,
+		Cost:              money.MustParseDollars("10.00"),
+		HasCost:           true,
+		AICredits:         1000.0,
+		Models:            []string{"gpt-4"},
 	}
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, out))
@@ -120,17 +112,15 @@ func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
 
 func TestRenderSessionUsageHuman_NonCopilotNoAICredits(t *testing.T) {
 	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID:         "claude:s1",
-			Agent:             "claude-code",
-			Project:           "proj",
-			TotalOutputTokens: 1000,
-			PeakContextTokens: 5000,
-			HasTokenData:      true,
-			Cost:              money.MustParseDollars("0.42"),
-			HasCost:           true,
-			Models:            []string{"claude-opus"},
-		},
+		SessionID:         "claude:s1",
+		Agent:             "claude-code",
+		Project:           "proj",
+		TotalOutputTokens: 1000,
+		PeakContextTokens: 5000,
+		HasTokenData:      true,
+		Cost:              money.MustParseDollars("0.42"),
+		HasCost:           true,
+		Models:            []string{"claude-opus"},
 	}
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, out))
@@ -142,14 +132,12 @@ func TestRenderSessionUsageHuman_NonCopilotNoAICredits(t *testing.T) {
 
 func TestRenderSessionUsageHuman_CopilotNoCost(t *testing.T) {
 	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID:      "copilot:s2",
-			Agent:          "copilot",
-			HasTokenData:   true,
-			HasCost:        false,
-			AICredits:      0,
-			UnpricedModels: []string{"gpt-4"},
-		},
+		SessionID:      "copilot:s2",
+		Agent:          "copilot",
+		HasTokenData:   true,
+		HasCost:        false,
+		AICredits:      0,
+		UnpricedModels: []string{"gpt-4"},
 	}
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, out))
@@ -163,24 +151,22 @@ func TestRenderSessionUsageHuman_CopilotNoCost(t *testing.T) {
 func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 	cost := money.MustParseDollars("0.42")
 	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID:         "codex:abc",
-			Agent:             "codex",
-			Project:           "my-project",
-			TotalOutputTokens: 123,
-			PeakContextTokens: 456,
-			HasTokenData:      true,
-			Cost:              cost,
-			HasCost:           true,
-			// A caller normally gets CostUSD from the shared
-			// db.CostUSDFromCost helper (called by every backend and
-			// the subagent combiner); set here directly since this
-			// test pins the JSON contract, not the computation.
-			CostUSD:        db.CostUSDFromCost(true, cost),
-			Models:         []string{"gpt-5.1"},
-			UnpricedModels: []string{"local-model"},
-		},
-		ServerRunning: true,
+		SessionID:         "codex:abc",
+		Agent:             "codex",
+		Project:           "my-project",
+		TotalOutputTokens: 123,
+		PeakContextTokens: 456,
+		HasTokenData:      true,
+		Cost:              cost,
+		HasCost:           true,
+		// A caller normally gets CostUSD from the shared
+		// db.CostUSDFromCost helper (called by every backend and
+		// the subagent combiner); set here directly since this
+		// test pins the JSON contract, not the computation.
+		CostUSD:        db.CostUSDFromCost(true, cost),
+		Models:         []string{"gpt-5.1"},
+		UnpricedModels: []string{"local-model"},
+		ServerRunning:  true,
 	}
 
 	data, err := json.Marshal(out)
@@ -193,7 +179,7 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 		"agent":               "codex",
 		"project":             "my-project",
 		"breakdown_count":     float64(0),
-		"breakdown":           nil,
+		"breakdown":           []any{},
 		"total_output_tokens": float64(123),
 		"peak_context_tokens": float64(456),
 		"has_token_data":      true,
@@ -205,7 +191,7 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 		"models":          []any{"gpt-5.1"},
 		"unpriced_models": []any{"local-model"},
 		"server_running":  true,
-	}, raw, "a session with no subagents must serialize exactly as before")
+	}, raw, "a session with no subagents must omit subagent-only fields")
 }
 
 // TestSessionUsageJSONSchemaOmitsCostUSDWhenNoCost pins the other half of
@@ -214,11 +200,9 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 // at all must omit the field entirely rather than emit cost_usd: 0.
 func TestSessionUsageJSONSchemaOmitsCostUSDWhenNoCost(t *testing.T) {
 	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID: "claude:no-cost",
-			Agent:     "claude-code",
-			HasCost:   false,
-		},
+		SessionID: "claude:no-cost",
+		Agent:     "claude-code",
+		HasCost:   false,
 	}
 
 	data, err := json.Marshal(out)
@@ -235,21 +219,19 @@ func TestSessionUsageJSONSchemaOmitsCostUSDWhenNoCost(t *testing.T) {
 // no-subagent contract above byte-identical.
 func TestSessionUsageJSONSchemaIncludesSubagentContract(t *testing.T) {
 	out := &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{
-			SessionID:      "parent-1",
-			Agent:          "claude",
-			Project:        "my-project",
-			Models:         []string{"claude-opus-4-7"},
-			BreakdownCount: 2,
-			SubagentCount:  1,
-			Breakdown: []db.SessionUsageBreakdownEntry{
-				{Ordinal: 1, Source: "message", Label: "usage"},
-				{
-					Ordinal:           2,
-					Source:            "message",
-					Label:             "usage",
-					SubagentSessionID: "agent-9f2c",
-				},
+		SessionID:      "parent-1",
+		Agent:          "claude",
+		Project:        "my-project",
+		Models:         []string{"claude-opus-4-7"},
+		BreakdownCount: 2,
+		SubagentCount:  1,
+		Breakdown: []db.SessionUsageBreakdownEntry{
+			{Ordinal: 1, Source: "message", Label: "usage"},
+			{
+				Ordinal:           2,
+				Source:            "message",
+				Label:             "usage",
+				SubagentSessionID: "agent-9f2c",
 			},
 		},
 	}
@@ -290,11 +272,9 @@ func TestRenderSessionUsageHuman_SubagentLine(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			out := &sessionUsageOutput{
-				SessionUsage: db.SessionUsage{
-					SessionID: "claude:s1", Agent: "claude-code",
-					TotalOutputTokens: 100, HasTokenData: true,
-					SubagentCount: tt.subagentCount,
-				},
+				SessionID: "claude:s1", Agent: "claude-code",
+				TotalOutputTokens: 100, HasTokenData: true,
+				SubagentCount: tt.subagentCount,
 			}
 			var b strings.Builder
 			require.NoError(t, renderSessionUsageHuman(&b, out))

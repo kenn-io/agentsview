@@ -71,12 +71,12 @@ func (s *Server) embeddingsUnavailableError() error {
 func (s *Server) registerEmbeddingsRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/embeddings", "Embeddings")
 
-	post(s, group, "/build", "Start an embeddings build", s.humaEmbeddingsBuild)
-	get(s, group, "/status", "Embeddings build status", s.humaEmbeddingsStatus)
-	get(s, group, "/generations", "List embedding generations", s.humaEmbeddingsGenerations)
-	post(s, group, "/generations/{id}/activate", "Activate an embedding generation",
+	s.post(group, "/build", "Start an embeddings build", s.humaEmbeddingsBuild)
+	s.get(group, "/status", "Embeddings build status", s.humaEmbeddingsStatus)
+	s.get(group, "/generations", "List embedding generations", s.humaEmbeddingsGenerations)
+	s.post(group, "/generations/{id}/activate", "Activate an embedding generation",
 		s.humaEmbeddingsActivate)
-	post(s, group, "/generations/{id}/retire", "Retire an embedding generation",
+	s.post(group, "/generations/{id}/retire", "Retire an embedding generation",
 		s.humaEmbeddingsRetire)
 }
 

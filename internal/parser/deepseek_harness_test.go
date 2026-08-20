@@ -3,7 +3,8 @@ package parser
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"maps"
 	"os"
 	"path/filepath"
@@ -58,7 +59,7 @@ func TestDeepSeekHarnessSafeIntegerJSONSemantics(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			value, err := deepSeekHarnessRequiredSafeInt(
-				map[string]json.RawMessage{"value": json.RawMessage(test.raw)},
+				map[string]jsontext.Value{"value": jsontext.Value(test.raw)},
 				"value", false,
 			)
 			if test.wantErr {

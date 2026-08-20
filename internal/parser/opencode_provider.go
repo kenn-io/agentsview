@@ -3,7 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -73,11 +73,9 @@ func (f openCodeFormatProviderFactory) Capabilities() Capabilities {
 func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &openCodeFormatProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   openCodeFormatProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:    cloneAgentDef(f.def),
+		Caps:   openCodeFormatProviderCapabilities(),
+		Config: cfg,
 		sources: newOpenCodeFormatSourceSet(
 			cfg.Roots, f.spec, cfg.SQLiteContainerUnchangedSinceTrust, f.index,
 		),
@@ -586,8 +584,7 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 	}
 	if src.Mode == OpenCodeSourceStorage {
 		if err := s.discoverStorageEach(ctx, root, src, storageIDs, yield); err != nil {
-			var mapErr openCodeDiscoveryMapError
-			if errors.As(err, &mapErr) {
+			if _, ok := errors.AsType[openCodeDiscoveryMapError](err); ok {
 				return false, err
 			}
 			return true, incompleteDiscoveryError(

@@ -10,9 +10,9 @@ import (
 
 func (s *Server) registerDataRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/data", "Data")
-	get(s, group, "/projects", "Get project inventory", s.humaDataProjects)
-	get(s, group, "/project-rules", "List project rules", s.humaDataProjectRules)
-	get(s, group, "/project-reclassification/candidates",
+	s.get(group, "/projects", "Get project inventory", s.humaDataProjects)
+	s.get(group, "/project-rules", "List project rules", s.humaDataProjectRules)
+	s.get(group, "/project-reclassification/candidates",
 		"List archive-wide reclassification candidates",
 		s.humaDataCandidates)
 }

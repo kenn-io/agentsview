@@ -1,5 +1,5 @@
 # Stage 1: Build agentsview binary
-FROM golang:1.26.6-bookworm AS builder
+FROM golang:1.27.0-bookworm AS builder
 
 ARG AV_VERSION=dev
 ARG AV_COMMIT=unknown

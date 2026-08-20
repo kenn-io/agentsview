@@ -23,15 +23,13 @@ type liveActivityTestProvider struct {
 
 func newLiveActivityTestProvider(hintPath string) *liveActivityTestProvider {
 	return &liveActivityTestProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{
-				Type:     parser.AgentCodex,
-				IDPrefix: "codex:",
-			},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				ActivityHints: parser.CapabilitySupported,
-			}},
+		Def: parser.AgentDef{
+			Type:     parser.AgentCodex,
+			IDPrefix: "codex:",
 		},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			ActivityHints: parser.CapabilitySupported,
+		}},
 		hintPath: hintPath,
 	}
 }

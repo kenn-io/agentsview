@@ -3,7 +3,8 @@ package insight
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -297,13 +298,13 @@ func generateClaude(
 // versions: {"result":"...","model":"..."}.
 func parseCLIResult(data []byte) (result, model string) {
 	// Try JSON array format (Claude Code v2+).
-	var events []json.RawMessage
+	var events []jsontext.Value
 	if json.Unmarshal(data, &events) == nil {
 		for _, raw := range events {
 			var ev struct {
-				Type       string                     `json:"type"`
-				Result     string                     `json:"result"`
-				ModelUsage map[string]json.RawMessage `json:"modelUsage"`
+				Type       string                    `json:"type"`
+				Result     string                    `json:"result"`
+				ModelUsage map[string]jsontext.Value `json:"modelUsage"`
 			}
 			if json.Unmarshal(raw, &ev) != nil {
 				continue

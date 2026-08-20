@@ -4,7 +4,8 @@ package parser
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"log"
@@ -1933,28 +1934,36 @@ func claudeBlockExistsIn(
 }
 
 func replaceClaudeMessageContent(line string, blocks []gjson.Result) string {
-	// UseNumber preserves the raw textual form of JSON numbers so
-	// re-marshaling doesn't truncate large integers (e.g. usage
-	// token counts) or change scientific notation.
-	dec := json.NewDecoder(strings.NewReader(line))
-	dec.UseNumber()
-	var top map[string]any
-	if err := dec.Decode(&top); err != nil {
+	var top map[string]jsontext.Value
+	if err := json.Unmarshal([]byte(line), &top); err != nil {
 		return line
 	}
-	msg, ok := top["message"].(map[string]any)
+	messageData, ok := top["message"]
 	if !ok {
 		return line
 	}
-	content := make([]json.RawMessage, 0, len(blocks))
+	var msg map[string]jsontext.Value
+	if err := json.Unmarshal(messageData, &msg); err != nil {
+		return line
+	}
+	content := make([]jsontext.Value, 0, len(blocks))
 	for _, block := range blocks {
 		if block.Raw == "" {
 			continue
 		}
-		content = append(content, json.RawMessage(block.Raw))
+		content = append(content, jsontext.Value(block.Raw))
 	}
-	msg["content"] = content
-	encoded, err := json.Marshal(top)
+	contentData, err := json.Marshal(content)
+	if err != nil {
+		return line
+	}
+	msg["content"] = contentData
+	messageData, err = json.Marshal(msg, json.Deterministic(true))
+	if err != nil {
+		return line
+	}
+	top["message"] = messageData
+	encoded, err := json.Marshal(top, json.Deterministic(true))
 	if err != nil {
 		return line
 	}
@@ -2002,10 +2011,8 @@ func resolveClaudePersistedToolResults(sessionPath, line string) string {
 		return line
 	}
 
-	dec := json.NewDecoder(strings.NewReader(line))
-	dec.UseNumber()
 	var top map[string]any
-	if err := dec.Decode(&top); err != nil {
+	if err := json.Unmarshal([]byte(line), &top); err != nil {
 		return line
 	}
 
@@ -2358,7 +2365,7 @@ func extractClaudeTokenFields(msg *ParsedMessage, line string) {
 
 	usageResult := gjson.Get(line, "message.usage")
 	if usageResult.Exists() {
-		msg.TokenUsage = json.RawMessage(usageResult.Raw)
+		msg.TokenUsage = jsontext.Value(usageResult.Raw)
 		msg.HasOutputTokens = usageResult.Get("output_tokens").Exists()
 		msg.HasContextTokens = usageResult.Get("input_tokens").Exists() ||
 			usageResult.Get("cache_creation_input_tokens").Exists() ||

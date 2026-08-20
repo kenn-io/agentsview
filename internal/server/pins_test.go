@@ -2,7 +2,7 @@ package server_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"testing"
 
@@ -38,7 +38,7 @@ func TestHandleListPins_NoFilter(t *testing.T) {
 	var resp struct {
 		Pins []db.PinnedMessage `json:"pins"`
 	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.NoError(t, json.UnmarshalRead(w.Body, &resp))
 	assert.Len(t, resp.Pins, 2)
 }
 
@@ -70,7 +70,7 @@ func TestHandleListPins_ProjectFilter(t *testing.T) {
 			var resp struct {
 				Pins []db.PinnedMessage `json:"pins"`
 			}
-			require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+			require.NoError(t, json.UnmarshalRead(w.Body, &resp))
 			assert.Len(t, resp.Pins, tc.wantCount, "query %q", tc.query)
 		})
 	}

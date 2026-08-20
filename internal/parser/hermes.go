@@ -5,7 +5,8 @@ package parser
 
 import (
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"log"
@@ -875,8 +876,7 @@ func copyHermesTranscriptFile(w io.Writer, path string) error {
 func encodeHermesStateSessionJSONL(
 	w io.Writer, ss hermesStateSession, messages []hermesStateMessage,
 ) error {
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
+	enc := jsontext.NewEncoder(w)
 
 	meta := map[string]any{"role": "session_meta"}
 	if ss.model != "" {
@@ -885,7 +885,7 @@ func encodeHermesStateSessionJSONL(
 	if ts := timeString(ss.startedAt, time.Time{}); ts != "" {
 		meta["timestamp"] = ts
 	}
-	if err := enc.Encode(meta); err != nil {
+	if err := json.MarshalEncode(enc, meta, json.Deterministic(true)); err != nil {
 		return fmt.Errorf("encode hermes session meta: %w", err)
 	}
 	for _, hm := range messages {
@@ -896,8 +896,8 @@ func encodeHermesStateSessionJSONL(
 		if hm.toolCallID != "" {
 			record["tool_call_id"] = hm.toolCallID
 		}
-		if hm.toolCalls != "" && json.Valid([]byte(hm.toolCalls)) {
-			record["tool_calls"] = json.RawMessage(hm.toolCalls)
+		if hm.toolCalls != "" && jsontext.Value([]byte(hm.toolCalls)).IsValid() {
+			record["tool_calls"] = jsontext.Value(hm.toolCalls)
 		}
 		if ts := timeString(hm.timestamp, time.Time{}); ts != "" {
 			record["timestamp"] = ts
@@ -915,18 +915,18 @@ func encodeHermesStateSessionJSONL(
 			record["reasoning_details"] = hm.reasoningDetails
 		}
 		if hm.codexReasoningItems != "" &&
-			json.Valid([]byte(hm.codexReasoningItems)) {
-			record["codex_reasoning_items"] = json.RawMessage(
+			jsontext.Value([]byte(hm.codexReasoningItems)).IsValid() {
+			record["codex_reasoning_items"] = jsontext.Value(
 				hm.codexReasoningItems,
 			)
 		}
 		if hm.codexMessageItems != "" &&
-			json.Valid([]byte(hm.codexMessageItems)) {
-			record["codex_message_items"] = json.RawMessage(
+			jsontext.Value([]byte(hm.codexMessageItems)).IsValid() {
+			record["codex_message_items"] = jsontext.Value(
 				hm.codexMessageItems,
 			)
 		}
-		if err := enc.Encode(record); err != nil {
+		if err := json.MarshalEncode(enc, record, json.Deterministic(true)); err != nil {
 			return fmt.Errorf("encode hermes session %s: %w", ss.id, err)
 		}
 	}

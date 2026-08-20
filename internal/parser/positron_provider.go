@@ -29,11 +29,9 @@ func (f positronProviderFactory) Capabilities() Capabilities {
 func (f positronProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &positronProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   positronProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    positronProviderCapabilities(),
+		Config:  cfg,
 		sources: newPositronSourceSet(cfg.Roots),
 	}
 }

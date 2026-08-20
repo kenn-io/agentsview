@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -107,7 +107,7 @@ type RecallEvidenceWindowToolCall struct {
 	ToolUseID           string `json:"tool_use_id,omitempty"`
 	InputJSON           string `json:"input_json,omitempty"`
 	SkillName           string `json:"skill_name,omitempty"`
-	ResultContentLength int    `json:"result_content_length,omitempty"`
+	ResultContentLength int    `json:"result_content_length,omitzero"`
 	ResultContent       string `json:"result_content,omitempty"`
 	SubagentSessionID   string `json:"subagent_session_id,omitempty"`
 }

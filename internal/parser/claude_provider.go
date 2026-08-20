@@ -30,11 +30,9 @@ func (f claudeProviderFactory) Capabilities() Capabilities {
 func (f claudeProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &claudeProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   claudeProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    claudeProviderCapabilities(),
+		Config:  cfg,
 		sources: newClaudeSourceSet(cfg.Roots),
 	}
 }

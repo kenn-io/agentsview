@@ -13,18 +13,18 @@ import (
 func (s *Server) registerAnalyticsRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/analytics", "Analytics")
 
-	get(s, group, "/summary", "Get analytics summary", s.humaAnalyticsSummary)
-	get(s, group, "/activity", "Get analytics activity", s.humaAnalyticsActivity)
-	get(s, group, "/heatmap", "Get analytics heatmap", s.humaAnalyticsHeatmap)
-	get(s, group, "/projects", "Get analytics by project", s.humaAnalyticsProjects)
-	get(s, group, "/hour-of-week", "Get analytics by hour of week", s.humaAnalyticsHourOfWeek)
-	get(s, group, "/sessions", "Get session shape analytics", s.humaAnalyticsSessionShape)
-	get(s, group, "/velocity", "Get velocity analytics", s.humaAnalyticsVelocity)
-	get(s, group, "/tools", "Get tool analytics", s.humaAnalyticsTools)
-	get(s, group, "/skills", "Get skill analytics", s.humaAnalyticsSkills)
-	get(s, group, "/top-sessions", "Get top sessions", s.humaAnalyticsTopSessions)
-	get(s, group, "/signals", "Get signal analytics", s.humaAnalyticsSignals)
-	get(s, group, "/signal-sessions", "Get signal session examples", s.humaAnalyticsSignalSessions)
+	s.get(group, "/summary", "Get analytics summary", s.humaAnalyticsSummary)
+	s.get(group, "/activity", "Get analytics activity", s.humaAnalyticsActivity)
+	s.get(group, "/heatmap", "Get analytics heatmap", s.humaAnalyticsHeatmap)
+	s.get(group, "/projects", "Get analytics by project", s.humaAnalyticsProjects)
+	s.get(group, "/hour-of-week", "Get analytics by hour of week", s.humaAnalyticsHourOfWeek)
+	s.get(group, "/sessions", "Get session shape analytics", s.humaAnalyticsSessionShape)
+	s.get(group, "/velocity", "Get velocity analytics", s.humaAnalyticsVelocity)
+	s.get(group, "/tools", "Get tool analytics", s.humaAnalyticsTools)
+	s.get(group, "/skills", "Get skill analytics", s.humaAnalyticsSkills)
+	s.get(group, "/top-sessions", "Get top sessions", s.humaAnalyticsTopSessions)
+	s.get(group, "/signals", "Get signal analytics", s.humaAnalyticsSignals)
+	s.get(group, "/signal-sessions", "Get signal session examples", s.humaAnalyticsSignalSessions)
 }
 
 type analyticsGranularity string

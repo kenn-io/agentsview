@@ -19,7 +19,7 @@ type PingInfo struct {
 func (s *Server) registerHealthRoutes() {
 	group := newRouteGroup(s.api, "/api", "Health")
 
-	get(s, group, "/ping", "Ping daemon", s.humaPing)
+	s.get(group, "/ping", "Ping daemon", s.humaPing)
 }
 
 func (s *Server) humaPing(

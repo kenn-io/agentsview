@@ -334,7 +334,7 @@ thread JSON files.
 | Cortex Code           | `~/.snowflake/cortex/conversations/`                                                                                                                                                                                                                 |
 | Cursor                | `~/.cursor/projects/`                                                                                                                                                                                                                                |
 | DeepSeek TUI          | `~/.codewhale/sessions/`, `~/.deepseek/sessions/`                                                                                                                                                                                                    |
-| DeepSeek Harness       | `~/.dsh/sessions/` (or `$DSH_HOME/sessions/`)                                                                                                                                                                                                        |
+| DeepSeek Harness      | `~/.dsh/sessions/` (or `$DSH_HOME/sessions/`)                                                                                                                                                                                                        |
 | Forge                 | `~/.forge/`                                                                                                                                                                                                                                          |
 | Gemini CLI            | `~/.gemini/`                                                                                                                                                                                                                                         |
 | Goose                 | `~/.local/share/goose/sessions/` (macOS and Linux), `%APPDATA%\\Block\\goose\\data\\sessions\\` (Windows)                                                                                                                                            |
@@ -677,7 +677,7 @@ ______________________________________________________________________
 
 ## Development
 
-Requires Go 1.26+ (CGO), Node.js 22+.
+Requires Go 1.27+ (CGO), Node.js 22+.
 
 ```bash
 make dev            # Go server (dev mode)

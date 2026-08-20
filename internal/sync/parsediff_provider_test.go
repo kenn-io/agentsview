@@ -326,11 +326,9 @@ func (f s3ParseDiffProviderFactory) NewProvider(
 	parser.ProviderConfig,
 ) parser.Provider {
 	return s3ParseDiffProvider{
-		ProviderBase: parser.ProviderBase{
-			Def:  f.Definition(),
-			Caps: f.Capabilities(),
-		},
-		uri: f.uri,
+		Def:  f.Definition(),
+		Caps: f.Capabilities(),
+		uri:  f.uri,
 	}
 }
 

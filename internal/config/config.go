@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/gofrs/flock"
 	"github.com/spf13/pflag"
+	"go.kenn.io/agentsview/internal/jsonutil"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
 )
@@ -113,9 +115,24 @@ type DuckDBConfig struct {
 	// preflight) may run before the client gives up, so an unresponsive
 	// endpoint fails fast instead of hanging forever. Zero selects the
 	// package default; a negative value disables the guard.
-	AttachTimeout   time.Duration `toml:"attach_timeout" json:"attach_timeout,omitempty"`
+	AttachTimeout   time.Duration `toml:"attach_timeout" json:"attach_timeout,omitzero"`
 	Projects        []string      `toml:"projects" json:"projects,omitempty"`
 	ExcludeProjects []string      `toml:"exclude_projects" json:"exclude_projects,omitempty"`
+}
+
+type duckDBConfigJSON DuckDBConfig
+
+func (c DuckDBConfig) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonutil.MarshalDurationFields(out, duckDBConfigJSON(c))
+}
+
+func (c *DuckDBConfig) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	var decoded duckDBConfigJSON
+	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
+		return err
+	}
+	*c = DuckDBConfig(decoded)
+	return nil
 }
 
 // VectorConfig holds settings for the optional local semantic-search
@@ -522,10 +539,25 @@ type RemoteHost struct {
 	Host      string          `toml:"host" json:"host"`
 	Transport RemoteTransport `toml:"transport,omitempty" json:"transport,omitempty"`
 	User      string          `toml:"user,omitempty" json:"user,omitempty"`
-	Port      int             `toml:"port,omitempty" json:"port,omitempty"`
+	Port      int             `toml:"port,omitempty" json:"port,omitzero"`
 	URL       string          `toml:"url,omitempty" json:"url,omitempty"`
 	Token     string          `toml:"token,omitempty" json:"-"`
-	Interval  time.Duration   `toml:"interval,omitempty" json:"interval,omitempty"`
+	Interval  time.Duration   `toml:"interval,omitempty" json:"interval,omitzero"`
+}
+
+type remoteHostJSON RemoteHost
+
+func (h RemoteHost) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonutil.MarshalDurationFields(out, remoteHostJSON(h))
+}
+
+func (h *RemoteHost) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	var decoded remoteHostJSON
+	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
+		return err
+	}
+	*h = RemoteHost(decoded)
+	return nil
 }
 
 // SessionSource adds one agent session root with optional machine attribution.
@@ -622,9 +654,9 @@ type Config struct {
 	// arrive within this window after a prior broadcast are coalesced
 	// into a single trailing broadcast, bounding dashboard refetch
 	// work during bursts of sync activity. Zero disables coalescing.
-	EventsCoalesceInterval time.Duration `json:"events_coalesce_interval,omitempty" toml:"events_coalesce_interval"`
+	EventsCoalesceInterval time.Duration `json:"events_coalesce_interval,omitzero" toml:"events_coalesce_interval"`
 
-	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitempty" toml:"daemon_idle_timeout"`
+	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitzero" toml:"daemon_idle_timeout"`
 
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
 
@@ -640,6 +672,21 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 
 	pgEnvOverrides pgEnvOverrides
+}
+
+type configJSON Config
+
+func (c Config) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonutil.MarshalDurationFields(out, configJSON(c))
+}
+
+func (c *Config) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	var decoded configJSON
+	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
+		return err
+	}
+	*c = Config(decoded)
+	return nil
 }
 
 func (c Config) ResolvedChartPalette() ChartPalette {

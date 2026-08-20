@@ -3,7 +3,7 @@ package extract
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -185,7 +185,7 @@ func modelServer(
 					Content string `json:"content"`
 				} `json:"messages"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			if err := json.UnmarshalRead(r.Body, &payload); err != nil {
 				t.Errorf("decoding request: %v", err)
 			}
 			text := payload.Messages[len(payload.Messages)-1].Content

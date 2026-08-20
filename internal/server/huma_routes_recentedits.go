@@ -15,7 +15,7 @@ type recentEditsInput struct {
 
 func (s *Server) registerRecentEditsRoutes() {
 	group := newRouteGroup(s.api, "/api/v1", "RecentEdits")
-	get(s, group, "/recent-edits", "List recent edits", s.humaRecentEdits)
+	s.get(group, "/recent-edits", "List recent edits", s.humaRecentEdits)
 }
 
 func (s *Server) humaRecentEdits(

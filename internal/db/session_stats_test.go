@@ -2,7 +2,8 @@ package db
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"os/exec"
@@ -283,7 +284,7 @@ func seedModelMessages(
 		// usageMessageEligibility) requires token_usage != ''. Stamp a
 		// minimal JSON blob so these fixtures qualify; the contents
 		// don't matter to model_mix, which sums output_tokens.
-		m.TokenUsage = json.RawMessage(
+		m.TokenUsage = jsontext.Value(
 			`{"output_tokens":` + itoa(p.tokens) + `}`,
 		)
 		msgs = append(msgs, m)
@@ -1502,7 +1503,7 @@ func seedCacheEconomicsMessage(
 	m.Model = model
 	m.OutputTokens = b.output
 	m.HasOutputTokens = true
-	m.TokenUsage = json.RawMessage(payload)
+	m.TokenUsage = jsontext.Value(payload)
 	require.NoError(t, d.InsertMessages([]Message{m}),
 		"seedCacheEconomicsMessage %s ord=%d", sessionID, ordinal)
 }

@@ -3,7 +3,8 @@ package catalog
 import (
 	"cmp"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -102,7 +103,7 @@ func fetchLiteLLMPricing(
 func ParseLiteLLMPricing(
 	data []byte,
 ) ([]ModelPricing, error) {
-	var raw map[string]map[string]json.RawMessage
+	var raw map[string]map[string]jsontext.Value
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parsing litellm JSON: %w", err)
 	}
@@ -147,7 +148,7 @@ func ParseLiteLLMPricing(
 
 func parsePricingBands(
 	model string,
-	fields map[string]json.RawMessage,
+	fields map[string]jsontext.Value,
 	base ModelPricing,
 ) ([]PricingBand, error) {
 	var bands []PricingBand
@@ -265,26 +266,25 @@ func parseThreshold(raw string, thousands bool) (int, error) {
 }
 
 func parseOptionalRate(
-	fields map[string]json.RawMessage,
+	fields map[string]jsontext.Value,
 	key string,
 ) (money.Money, bool, error) {
 	raw, ok := fields[key]
 	if !ok || string(raw) == "null" {
 		return money.Money{}, false, nil
 	}
-	var value json.Number
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return money.Money{}, false, err
+	if raw.Kind() != jsontext.KindNumber {
+		return money.Money{}, false, fmt.Errorf("pricing rate is not a JSON number")
 	}
-	rate, err := parsePerTokenRate(value)
+	rate, err := parsePerTokenRate(string(raw))
 	if err != nil {
 		return money.Money{}, false, err
 	}
 	return rate, true, nil
 }
 
-func parsePerTokenRate(value json.Number) (money.Money, error) {
-	microdollars, err := money.ParseScaledDecimal(value.String(), 12)
+func parsePerTokenRate(value string) (money.Money, error) {
+	microdollars, err := money.ParseScaledDecimal(value, 12)
 	if err != nil {
 		return money.Money{}, err
 	}

@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -1350,7 +1350,7 @@ func TestRecallSchedulerRequiresExplicitOptInForAutomaticBuilds(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	var imported db.RecallImportResult
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&imported))
+	require.NoError(t, json.UnmarshalRead(resp.Body, &imported))
 	assert.Equal(t, 1, imported.Imported)
 
 	assert.Never(t, func() bool {
@@ -1410,7 +1410,7 @@ func TestRecallImportSchedulesEmbeddingRefresh(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	var imported db.RecallImportResult
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&imported))
+	require.NoError(t, json.UnmarshalRead(resp.Body, &imported))
 	assert.Equal(t, 1, imported.Imported)
 
 	waitForSchedulerCondition(t, func() bool {
@@ -1469,7 +1469,7 @@ func TestVectorServingCloseWaitsForAPIStartedRecallBuild(t *testing.T) {
 		var req struct {
 			Input []string `json:"input"`
 		}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		startedOnce.Do(func() { close(encodeStarted) })
 		<-encodeRelease
 		data := make([]map[string]any, len(req.Input))
@@ -1479,7 +1479,7 @@ func TestVectorServingCloseWaitsForAPIStartedRecallBuild(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+		require.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
 	}))
 	t.Cleanup(stub.Close)
 

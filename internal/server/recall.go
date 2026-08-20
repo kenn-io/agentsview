@@ -1,12 +1,11 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"net/http"
 	"strings"
@@ -316,9 +315,9 @@ func decodeRecallListCursor(raw string) (recallListCursor, error) {
 	if err != nil {
 		return cursor, err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&cursor); err != nil {
+	if err := json.Unmarshal(
+		data, &cursor, json.RejectUnknownMembers(true),
+	); err != nil {
 		return cursor, err
 	}
 	if cursor.FilterHash == "" {
@@ -656,9 +655,9 @@ func decodeRecallExtractProgressCursor(
 	if err != nil {
 		return cursor, err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&cursor); err != nil {
+	if err := json.Unmarshal(
+		data, &cursor, json.RejectUnknownMembers(true),
+	); err != nil {
 		return recallExtractProgressCursor{}, err
 	}
 	if cursor.GenerationFingerprint == "" || cursor.UpdatedAt == "" ||
@@ -702,7 +701,7 @@ func (s *Server) handleQueryRecallEntries(
 	w http.ResponseWriter, r *http.Request,
 ) {
 	var req service.RecallQuery
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.UnmarshalRead(r.Body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}

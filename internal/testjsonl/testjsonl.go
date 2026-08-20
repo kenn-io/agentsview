@@ -4,7 +4,8 @@
 package testjsonl
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"strings"
 )
 
@@ -724,7 +725,7 @@ func GeminiSessionJSON(
 		"lastUpdated": lastUpdated,
 		"messages":    messages,
 	}
-	b, err := json.MarshalIndent(session, "", "  ")
+	b, err := json.Marshal(session, jsontext.WithIndent("  "))
 	if err != nil {
 		panic(err)
 	}

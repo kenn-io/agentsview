@@ -3,7 +3,8 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 
@@ -76,7 +77,7 @@ Findings from candidate rules are hidden by 'secrets list' unless you pass
 				fmt.Fprintln(cmd.ErrOrStderr())
 			}
 			if jsonOut {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(sum)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), sum)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"Scanned %d sessions; %d with definite leaks; "+
@@ -136,7 +137,7 @@ func newSecretsListCommand() *cobra.Command {
 						"this terminal/session may itself be recorded.")
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), res)
 			}
 			return printSecretFindingsHuman(cmd.OutOrStdout(), res)
 		},

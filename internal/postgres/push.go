@@ -6,7 +6,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -19,6 +20,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/jsonutil"
 )
 
 const (
@@ -58,6 +60,21 @@ type PushResult struct {
 	Errors           int
 	Duration         time.Duration
 	Vectors          VectorPushResult
+}
+
+type pushResultJSON PushResult
+
+func (r PushResult) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonutil.MarshalDurationFields(out, pushResultJSON(r))
+}
+
+func (r *PushResult) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	var decoded pushResultJSON
+	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
+		return err
+	}
+	*r = PushResult(decoded)
+	return nil
 }
 
 // pushPrepareProgressStride bounds how many sessions the fingerprint loop

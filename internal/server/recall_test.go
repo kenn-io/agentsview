@@ -745,9 +745,7 @@ func TestRecallExtractionStatusReportsManagerCoverage(t *testing.T) {
 
 func TestRecallExtractionLifecycleRoutesMutateAndNotify(t *testing.T) {
 	provider := &recallExtractionLifecycleProvider{
-		recallExtractionStatusProvider: recallExtractionStatusProvider{
-			status: recallextract.Status{Fingerprint: "generation-building"},
-		},
+		status: recallextract.Status{Fingerprint: "generation-building"},
 	}
 	var notifyCalls atomic.Int32
 	te := setupWithServerOpts(t, []server.Option{
@@ -785,9 +783,7 @@ func TestRecallExtractionLifecycleRoutesRequireManager(t *testing.T) {
 
 func TestRecallExtractionActivationRefusalReturnsConflict(t *testing.T) {
 	provider := &recallExtractionLifecycleProvider{
-		recallExtractionStatusProvider: recallExtractionStatusProvider{
-			status: recallextract.Status{Fingerprint: "generation-building"},
-		},
+		status:      recallextract.Status{Fingerprint: "generation-building"},
 		activateErr: db.ErrExtractActivationBlocked,
 	}
 	te := setupWithServerOpts(t, []server.Option{
@@ -801,9 +797,7 @@ func TestRecallExtractionActivationRefusalReturnsConflict(t *testing.T) {
 
 func TestRecallExtractionMaintenanceReturnsRetryable(t *testing.T) {
 	provider := &recallExtractionLifecycleProvider{
-		recallExtractionStatusProvider: recallExtractionStatusProvider{
-			status: recallextract.Status{Fingerprint: "generation-building"},
-		},
+		status:      recallextract.Status{Fingerprint: "generation-building"},
 		activateErr: db.ErrWriterClosed,
 	}
 	te := setupWithServerOpts(t, []server.Option{

@@ -2,12 +2,14 @@ package remotesync
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"sort"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/jsonutil"
 	"go.kenn.io/agentsview/internal/parser"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -17,30 +19,45 @@ type SyncStats struct {
 	SessionsTotal        int              `json:"sessions_total"`
 	Skipped              int              `json:"skipped"`
 	Failed               int              `json:"failed"`
-	PendingNew           int              `json:"pending_new,omitempty"`
-	PendingRearmed       int              `json:"pending_rearmed,omitempty"`
-	PendingReplayed      int              `json:"pending_replayed,omitempty"`
-	PendingPaths         int              `json:"pending_paths,omitempty"`
-	ArmedPaths           int              `json:"armed_paths,omitempty"`
-	ExactSources         int              `json:"exact_sources,omitempty"`
-	FallbackProviders    int              `json:"fallback_providers,omitempty"`
-	FallbackSources      int              `json:"fallback_sources,omitempty"`
-	FilesDiscovered      int              `json:"files_discovered,omitempty"`
-	FilesProcessed       int              `json:"files_processed,omitempty"`
-	PruneExactScopes     int              `json:"prune_exact_scopes,omitempty"`
-	PruneProviderScopes  int              `json:"prune_provider_scopes,omitempty"`
-	PruneHostWideScope   bool             `json:"prune_host_wide_scope,omitempty"`
-	PrunedExact          int              `json:"pruned_exact,omitempty"`
-	PrunedProvider       int              `json:"pruned_provider,omitempty"`
-	PrunedHostWide       int              `json:"pruned_host_wide,omitempty"`
-	ErrorSuppressed      int              `json:"error_suppressed,omitempty"`
+	PendingNew           int              `json:"pending_new,omitzero"`
+	PendingRearmed       int              `json:"pending_rearmed,omitzero"`
+	PendingReplayed      int              `json:"pending_replayed,omitzero"`
+	PendingPaths         int              `json:"pending_paths,omitzero"`
+	ArmedPaths           int              `json:"armed_paths,omitzero"`
+	ExactSources         int              `json:"exact_sources,omitzero"`
+	FallbackProviders    int              `json:"fallback_providers,omitzero"`
+	FallbackSources      int              `json:"fallback_sources,omitzero"`
+	FilesDiscovered      int              `json:"files_discovered,omitzero"`
+	FilesProcessed       int              `json:"files_processed,omitzero"`
+	PruneExactScopes     int              `json:"prune_exact_scopes,omitzero"`
+	PruneProviderScopes  int              `json:"prune_provider_scopes,omitzero"`
+	PruneHostWideScope   bool             `json:"prune_host_wide_scope,omitzero"`
+	PrunedExact          int              `json:"pruned_exact,omitzero"`
+	PrunedProvider       int              `json:"pruned_provider,omitzero"`
+	PrunedHostWide       int              `json:"pruned_host_wide,omitzero"`
+	ErrorSuppressed      int              `json:"error_suppressed,omitzero"`
 	FullReason           FullImportReason `json:"full_reason,omitempty"`
 	JournalOutcome       JournalOutcome   `json:"journal_outcome,omitempty"`
-	PlanningDuration     time.Duration    `json:"planning_duration,omitempty"`
-	PruningDuration      time.Duration    `json:"pruning_duration,omitempty"`
-	ProcessingDuration   time.Duration    `json:"processing_duration,omitempty"`
-	CachePersistDuration time.Duration    `json:"cache_persist_duration,omitempty"`
-	RetirementDuration   time.Duration    `json:"retirement_duration,omitempty"`
+	PlanningDuration     time.Duration    `json:"planning_duration,omitzero"`
+	PruningDuration      time.Duration    `json:"pruning_duration,omitzero"`
+	ProcessingDuration   time.Duration    `json:"processing_duration,omitzero"`
+	CachePersistDuration time.Duration    `json:"cache_persist_duration,omitzero"`
+	RetirementDuration   time.Duration    `json:"retirement_duration,omitzero"`
+}
+
+type syncStatsJSON SyncStats
+
+func (s SyncStats) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonutil.MarshalDurationFields(out, syncStatsJSON(s))
+}
+
+func (s *SyncStats) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	var decoded syncStatsJSON
+	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
+		return err
+	}
+	*s = SyncStats(decoded)
+	return nil
 }
 
 type TargetSet struct {
@@ -240,7 +257,7 @@ func (r ArchiveRequest) MarshalJSON() ([]byte, error) {
 func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		Dirs               map[parser.AgentType][]string `json:"dirs"`
-		Files              json.RawMessage               `json:"files"`
+		Files              jsontext.Value                `json:"files"`
 		ExtraFiles         []string                      `json:"extra_files"`
 		ProviderExtraFiles map[parser.AgentType][]string `json:"provider_extra_files"`
 		ForbiddenRoots     []string                      `json:"forbidden_roots"`

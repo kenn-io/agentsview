@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -322,55 +323,56 @@ func (m *discoveryDiskMap) loadGeminiConfig(ctx context.Context, root string) er
 }
 
 func (m *discoveryDiskMap) decodeGeminiProjects(ctx context.Context, path string) error {
-	return decodeJSONObjectField(path, "projects", func(dec *json.Decoder) error {
-		for dec.More() {
-			key, err := dec.Token()
+	return decodeJSONObjectField(path, "projects", func(dec *jsontext.Decoder) error {
+		for dec.PeekKind() != jsontext.KindEndObject {
+			key, err := dec.ReadToken()
 			if err != nil {
 				return err
 			}
+			absolutePath := key.String()
 			var name string
-			if err := dec.Decode(&name); err != nil {
+			if err := json.UnmarshalDecode(dec, &name); err != nil {
 				return err
 			}
-			if err := m.addGeminiPath(ctx, key.(string), name, true); err != nil {
+			if err := m.addGeminiPath(ctx, absolutePath, name, true); err != nil {
 				return err
 			}
 		}
-		_, err := dec.Token()
+		_, err := dec.ReadToken()
 		return err
 	})
 }
 
 func (m *discoveryDiskMap) decodeGeminiTrustedFolders(ctx context.Context, path string) error {
-	return decodeJSONArrayField(path, "trustedFolders", func(dec *json.Decoder) error {
-		for dec.More() {
+	return decodeJSONArrayField(path, "trustedFolders", func(dec *jsontext.Decoder) error {
+		for dec.PeekKind() != jsontext.KindEndArray {
 			var folder string
-			if err := dec.Decode(&folder); err != nil {
+			if err := json.UnmarshalDecode(dec, &folder); err != nil {
 				return err
 			}
 			if err := m.addGeminiPath(ctx, folder, "", false); err != nil {
 				return err
 			}
 		}
-		_, err := dec.Token()
+		_, err := dec.ReadToken()
 		return err
 	})
 }
 
 func decodeJSONObjectField(
-	path, field string, consume func(*json.Decoder) error,
+	path, field string, consume func(*jsontext.Decoder) error,
 ) error {
-	return decodeJSONField(path, field, json.Delim('{'), consume)
+	return decodeJSONField(path, field, jsontext.KindBeginObject, consume)
 }
 
 func decodeJSONArrayField(
-	path, field string, consume func(*json.Decoder) error,
+	path, field string, consume func(*jsontext.Decoder) error,
 ) error {
-	return decodeJSONField(path, field, json.Delim('['), consume)
+	return decodeJSONField(path, field, jsontext.KindBeginArray, consume)
 }
 
 func decodeJSONField(
-	path, field string, want json.Delim, consume func(*json.Decoder) error,
+	path, field string, want jsontext.Kind, consume func(*jsontext.Decoder) error,
 ) error {
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -380,27 +382,26 @@ func decodeJSONField(
 		return err
 	}
 	defer file.Close()
-	dec := json.NewDecoder(file)
-	if _, err := dec.Token(); err != nil {
+	dec := jsontext.NewDecoder(file)
+	if _, err := dec.ReadToken(); err != nil {
 		return err
 	}
-	for dec.More() {
-		name, err := dec.Token()
+	for dec.PeekKind() != jsontext.KindEndObject {
+		name, err := dec.ReadToken()
 		if err != nil {
 			return err
 		}
-		if name != field {
-			var discard json.RawMessage
-			if err := dec.Decode(&discard); err != nil {
+		if name.String() != field {
+			if err := dec.SkipValue(); err != nil {
 				return err
 			}
 			continue
 		}
-		delim, err := dec.Token()
+		delim, err := dec.ReadToken()
 		if err != nil {
 			return err
 		}
-		if delim != want {
+		if delim.Kind() != want {
 			return fmt.Errorf("%s: unexpected %s shape", path, field)
 		}
 		return consume(dec)

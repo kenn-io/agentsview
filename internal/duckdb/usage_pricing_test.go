@@ -2,7 +2,7 @@ package duckdb
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -48,7 +48,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	// Token mix per message: 1M input + 100k output + 1M cache read.
 	// K2.6 cost: 0.95 + 0.40 + 0.16 = 1.51
 	// K3 cost:   3.00 + 1.50 + 0.30 = 4.80
-	tokenUsage := json.RawMessage(
+	tokenUsage := jsontext.Value(
 		`{"input_tokens":1000000,"output_tokens":100000,` +
 			`"cache_creation_input_tokens":0,"cache_read_input_tokens":1000000}`)
 	kimiMessage := func(sessionID string, ordinal int, model, ts string) db.Message {
@@ -148,7 +148,7 @@ func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
 			Role:      "assistant",
 			Timestamp: "2026-07-20T12:00:00.000Z",
 			Model:     "k2d6-agent",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000000,"output_tokens":0}`),
 		}},
 		DataVersion:     1,
@@ -198,7 +198,7 @@ func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
 		},
 	}), "UpsertModelPricing")
 
-	tokenUsage := json.RawMessage(
+	tokenUsage := jsontext.Value(
 		`{"input_tokens":1000000,"output_tokens":100000,` +
 			`"cache_creation_input_tokens":0,"cache_read_input_tokens":1000000}`)
 	session := syncSession(
@@ -278,7 +278,7 @@ func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
 			Role:      "assistant",
 			Timestamp: "2026-07-20T12:00:00.000Z",
 			Model:     "kimi-for-coding",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000000,"output_tokens":0}`),
 		}},
 		DataVersion:     1,

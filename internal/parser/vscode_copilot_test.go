@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -464,15 +465,15 @@ func TestExtractVSCopilotInputJSON(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var inv, past, td json.RawMessage
+			var inv, past, td jsontext.Value
 			if tt.invMsg != "" {
-				inv = json.RawMessage(tt.invMsg)
+				inv = jsontext.Value(tt.invMsg)
 			}
 			if tt.pastMsg != "" {
-				past = json.RawMessage(tt.pastMsg)
+				past = jsontext.Value(tt.pastMsg)
 			}
 			if tt.toolData != "" {
-				td = json.RawMessage(tt.toolData)
+				td = jsontext.Value(tt.toolData)
 			}
 			got := extractVSCopilotInputJSON(inv, past, td)
 
@@ -736,7 +737,7 @@ func TestReconstructJSONLOversizedCopilotIssueShape(t *testing.T) {
 	indexedResponse := strings.Repeat("preserved-", 150)
 	line := `{"kind":0,"v":{"version":3,"sessionId":"large","creationDate":1770650022790,"requests":[{"requestId":"req1","timestamp":1770650031889,"message":{"text":"Run subagents"},"response":[` + response + `,{"value":` + strconv.Quote(indexedResponse) + `}]}]}}` + "\n"
 	var raw struct {
-		V json.RawMessage `json:"v"`
+		V jsontext.Value `json:"v"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(line), &raw))
 	require.Greater(t, len(raw.V), testVSCodeCopilotHardRecordLimit/2)

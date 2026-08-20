@@ -5,7 +5,8 @@ package db
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"strconv"
 	"testing"
 
@@ -115,14 +116,14 @@ func webSearchUsageDB(t *testing.T, model string, searches int) *DB {
 		s.Agent = "claude"
 		s.StartedAt = new("2026-07-30T10:00:00Z")
 	})
-	usage := func(webSearchRequests int) json.RawMessage {
+	usage := func(webSearchRequests int) jsontext.Value {
 		blob := `{"input_tokens":100000,"output_tokens":100000,` +
 			`"cache_creation_input_tokens":0,` +
 			`"cache_read_input_tokens":0,"server_tool_use":` +
 			`{"web_search_requests":` +
 			strconv.Itoa(webSearchRequests) +
 			`,"web_fetch_requests":0}}`
-		return json.RawMessage(blob)
+		return jsontext.Value(blob)
 	}
 	insertMessages(t, d,
 		Message{
@@ -216,7 +217,7 @@ func TestDailyUsageWebSearchFeeSurvivesDedup(t *testing.T) {
 		Role:      "assistant",
 		Timestamp: "2026-07-30T10:01:00Z",
 		Model:     "claude-websearch-test",
-		TokenUsage: json.RawMessage(
+		TokenUsage: jsontext.Value(
 			`{"input_tokens":100000,"output_tokens":100000,` +
 				`"server_tool_use":{"web_search_requests":2}}`),
 		OutputTokens:    100000,
@@ -242,7 +243,7 @@ func TestAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
 		Role:      "assistant",
 		Timestamp: "2026-07-30T10:03:00Z",
 		Model:     "claude-websearch-test",
-		TokenUsage: json.RawMessage(
+		TokenUsage: jsontext.Value(
 			`{"input_tokens":100000,"output_tokens":200000,` +
 				`"server_tool_use":{"web_search_requests":0}}`),
 		OutputTokens:    200000,

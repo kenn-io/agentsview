@@ -4,7 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -1528,15 +1529,15 @@ func extractOpenCodeText(data string) string {
 
 // openCodeToolData is the JSON structure for a tool part's data.
 type openCodeToolData struct {
-	ToolName string          `json:"tool"`
-	CallID   string          `json:"callID"`
-	State    json.RawMessage `json:"state"`
+	ToolName string         `json:"tool"`
+	CallID   string         `json:"callID"`
+	State    jsontext.Value `json:"state"`
 }
 
 // openCodeToolState holds the nested state of a tool call.
 type openCodeToolState struct {
-	Input    json.RawMessage `json:"input"`
-	Metadata json.RawMessage `json:"metadata"`
+	Input    jsontext.Value `json:"input"`
+	Metadata jsontext.Value `json:"metadata"`
 }
 
 // openCodeToolMetadata holds the optional metadata from a tool state.

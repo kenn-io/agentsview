@@ -2,7 +2,7 @@ package sync
 
 import (
 	"bufio"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"os"
@@ -109,10 +109,8 @@ func rewriteS3ClaudeToolResultLine(
 		return line, false, false, nil
 	}
 
-	dec := json.NewDecoder(strings.NewReader(line))
-	dec.UseNumber()
 	var top map[string]any
-	if err := dec.Decode(&top); err != nil {
+	if err := json.Unmarshal([]byte(line), &top); err != nil {
 		return line, false, false, nil
 	}
 	msg, ok := top["message"].(map[string]any)

@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"hash"
 	"hash/fnv"
@@ -75,7 +76,7 @@ type shelleyContent struct {
 	Text       string           `json:"Text"`
 	Thinking   string           `json:"Thinking"`
 	ToolName   string           `json:"ToolName"`
-	ToolInput  json.RawMessage  `json:"ToolInput"`
+	ToolInput  jsontext.Value   `json:"ToolInput"`
 	ToolUseID  string           `json:"ToolUseID"`
 	ToolError  bool             `json:"ToolError"`
 	ToolResult []shelleyContent `json:"ToolResult"`
@@ -86,14 +87,13 @@ type shelleyContent struct {
 // shelleyUsage mirrors the serialized llm.Usage stored in
 // messages.usage_data. The token keys are already the AgentsView
 // canonical Anthropic names, so the raw blob is stored verbatim for
-// cost pricing. json.Number keeps decoding tolerant of string- or
-// float-encoded counts.
+// cost pricing. jsontext.Value preserves string- or float-encoded counts.
 type shelleyUsage struct {
-	InputTokens              json.Number `json:"input_tokens"`
-	CacheCreationInputTokens json.Number `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     json.Number `json:"cache_read_input_tokens"`
-	OutputTokens             json.Number `json:"output_tokens"`
-	Model                    string      `json:"model"`
+	InputTokens              jsontext.Value `json:"input_tokens"`
+	CacheCreationInputTokens jsontext.Value `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     jsontext.Value `json:"cache_read_input_tokens"`
+	OutputTokens             jsontext.Value `json:"output_tokens"`
+	Model                    string         `json:"model"`
 }
 
 // ShelleyVirtualPath gives each conversation in the shared Shelley DB a
@@ -624,7 +624,7 @@ func decodeShelleyMessage(
 
 // shelleyToolInput returns the raw tool input JSON, normalizing the
 // absent/null cases to an empty string.
-func shelleyToolInput(raw json.RawMessage) string {
+func shelleyToolInput(raw jsontext.Value) string {
 	s := strings.TrimSpace(string(raw))
 	if s == "" || s == "null" {
 		return ""
@@ -709,7 +709,7 @@ func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) {
 	// against the catalog-priced per-message tokens) needs a dedicated
 	// usage-event path and is left as a follow-up. Standard gateway
 	// models are priced correctly by the catalog today.
-	msg.TokenUsage = json.RawMessage(usageData)
+	msg.TokenUsage = jsontext.Value(usageData)
 	msg.ContextTokens = context
 	msg.OutputTokens = output
 	msg.HasContextTokens = context > 0
@@ -728,13 +728,19 @@ func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) {
 // shelleyTokenCount tolerantly decodes a token count, mapping
 // empty/garbage/negative values to 0 and bounding implausibly large
 // values so a single corrupt count cannot poison aggregate totals.
-func shelleyTokenCount(n json.Number) int {
-	if n == "" {
+func shelleyTokenCount(n jsontext.Value) int {
+	if len(n) == 0 {
 		return 0
 	}
-	v, err := n.Int64()
+	raw := string(n)
+	if n.Kind() == jsontext.KindString {
+		if err := json.Unmarshal(n, &raw); err != nil {
+			return 0
+		}
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		f, ferr := n.Float64()
+		f, ferr := strconv.ParseFloat(raw, 64)
 		if ferr != nil {
 			return 0
 		}

@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -4003,13 +4003,11 @@ func TestReclassificationSurvivesRemoteResyncLifecycle(t *testing.T) {
 				}}}
 			}
 			provider := &mappingLifecycleProvider{
-				ProviderBase: parser.ProviderBase{
-					Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
-					Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-						DiscoverSources:      parser.CapabilitySupported,
-						CompositeFingerprint: parser.CapabilitySupported,
-					}},
-				},
+				Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
+				Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+					DiscoverSources:      parser.CapabilitySupported,
+					CompositeFingerprint: parser.CapabilitySupported,
+				}},
 				source: parser.SourceRef{
 					Provider: parser.AgentCowork, Key: sourcePath,
 					DisplayPath: sourcePath, FingerprintKey: sourcePath,
@@ -4124,13 +4122,11 @@ func newUsageParityProvider(sourcePath, machine string) *usageParityProvider {
 	costUSD := money.MustParseDollars("0.0125")
 	started := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	return &usageParityProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:      parser.CapabilitySupported,
-				CompositeFingerprint: parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:      parser.CapabilitySupported,
+			CompositeFingerprint: parser.CapabilitySupported,
+		}},
 		source: parser.SourceRef{
 			Provider: parser.AgentCowork, Key: sourcePath,
 			DisplayPath: sourcePath, FingerprintKey: sourcePath,

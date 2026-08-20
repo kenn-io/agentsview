@@ -5,7 +5,7 @@ package sync
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -674,11 +674,9 @@ func (f watchRootCountingFactory) NewProvider(
 	cfg parser.ProviderConfig,
 ) parser.Provider {
 	return &watchRootCountingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def:    f.Definition(),
-			Caps:   f.capabilities,
-			Config: cfg.Clone(),
-		},
+		Def:             f.Definition(),
+		Caps:            f.capabilities,
+		Config:          cfg.Clone(),
 		watchRootsCalls: f.watchRootsCalls,
 		watchPlanCalls:  f.watchPlanCalls,
 	}
@@ -793,9 +791,9 @@ func TestSyncAllBaselinesSuccessfulSkipDespiteUnrelatedProviderFailure(t *testin
 	claudeFactory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
 	require.True(t, ok)
 	failing := failingDBBackedProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{
+		Def: parser.AgentDef{
 			Type: parser.AgentWarp, DisplayName: "Warp", FileBased: false,
-		}},
+		},
 		err: errors.New("unrelated provider unavailable"), failOnCall: 2,
 	}
 	warpRoot := t.TempDir()
@@ -1057,12 +1055,10 @@ func TestSyncAllForceParseReparsesFreshStreamingProviderSource(t *testing.T) {
 	}
 	started := time.Unix(1704067200, 0)
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				StreamingDiscovery: parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			StreamingDiscovery: parser.CapabilitySupported,
+		}},
 		source:      &source,
 		fingerprint: parser.SourceFingerprint{Key: path, MTimeNS: 1},
 		parseOutcome: parser.ParseOutcome{
@@ -1108,9 +1104,7 @@ func TestForceFullParseBypassesPersistedProviderFreshness(t *testing.T) {
 	}
 	started := time.Unix(1704067200, 0)
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentWarp, FileBased: false},
-		},
+		Def:         parser.AgentDef{Type: parser.AgentWarp, FileBased: false},
 		fingerprint: parser.SourceFingerprint{Key: path, MTimeNS: 1},
 		parseOutcome: parser.ParseOutcome{
 			Results: []parser.ParseResultOutcome{{
@@ -1163,15 +1157,13 @@ func newChangedPathOutcomeEngine(
 		Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
 	}
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-				FindSource:         parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+			FindSource:         parser.CapabilitySupported,
+		}},
 		source: &source, parseOutcome: outcome(path),
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -1387,13 +1379,13 @@ func TestCollectAndBatchBaselinesHealthySourceBesideFailedSource(t *testing.T) {
 		results <- syncJob{
 			agent: agent,
 			path:  source.path,
-			processResult: processResult{results: []parser.ParseResult{{
+			results: []parser.ParseResult{{
 				Session: parser.ParsedSession{
 					ID: "duplicate", Agent: agent, Project: source.project, Machine: "local",
 					StartedAt: started, EndedAt: started,
 					File: parser.FileInfo{Path: source.path},
 				},
-			}}},
+			}},
 		}
 	}
 	close(results)
@@ -1505,14 +1497,12 @@ func TestReconcileUnsupportedSourceMarkersStayPageBounded(t *testing.T) {
 		SkipReason: parser.SkipUnsupportedSource, ResultSetComplete: true,
 	}
 	provider := &manyStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+		}},
 		sources: sources, parseOutcome: &unsupported,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -1750,12 +1740,10 @@ func TestSyncProviderDBBackedBaselinesOnlyCompleteSuccessfulSources(t *testing.T
 				}
 			}
 			provider := &baselineDBBackedProvider{
-				ProviderBase: parser.ProviderBase{
-					Def: parser.AgentDef{Type: agent, FileBased: false},
-					Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-						StreamingDiscovery: parser.CapabilitySupported,
-					}},
-				},
+				Def: parser.AgentDef{Type: agent, FileBased: false},
+				Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+					StreamingDiscovery: parser.CapabilitySupported,
+				}},
 				sources: []parser.SourceRef{
 					{Provider: agent, Key: healthyPath, DisplayPath: healthyPath, FingerprintKey: healthyPath},
 					{Provider: agent, Key: failedPath, DisplayPath: failedPath, FingerprintKey: failedPath},
@@ -1863,12 +1851,10 @@ func TestSyncProviderDBBackedBatchesWarmSourceAttributionLookup(t *testing.T) {
 				))
 			}
 			provider := &baselineDBBackedProvider{
-				ProviderBase: parser.ProviderBase{
-					Def: parser.AgentDef{Type: agent, FileBased: false},
-					Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-						StreamingDiscovery: parser.CapabilitySupported,
-					}},
-				},
+				Def: parser.AgentDef{Type: agent, FileBased: false},
+				Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+					StreamingDiscovery: parser.CapabilitySupported,
+				}},
 				sources:          sources,
 				outcomes:         make(map[string]parser.ParseOutcome),
 				fingerprintCalls: make(map[string]int),
@@ -1936,12 +1922,10 @@ func TestSyncProviderDBBackedBaselinesEveryStoredMachineForSharedSource(
 		))
 	}
 	provider := &baselineDBBackedProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: false},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				StreamingDiscovery: parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: false},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			StreamingDiscovery: parser.CapabilitySupported,
+		}},
 		sources: []parser.SourceRef{{
 			Provider: agent, Key: path,
 			DisplayPath: path, FingerprintKey: path,
@@ -2006,14 +1990,12 @@ func TestSyncProviderDBBackedAgentFlushesEachSourceBeforeParsingNext(t *testing.
 		}
 	}
 	provider := &manyStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{
-				Type: parser.AgentWarp, DisplayName: "Warp", FileBased: false,
-			},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				StreamingDiscovery: parser.CapabilitySupported,
-			}},
+		Def: parser.AgentDef{
+			Type: parser.AgentWarp, DisplayName: "Warp", FileBased: false,
 		},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			StreamingDiscovery: parser.CapabilitySupported,
+		}},
 		sources: sources,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -2085,12 +2067,10 @@ func TestSyncAllStreamsDBBackedDiscoveryExactlyOnce(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "session.db")
 	provider := &manyStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentWarp, DisplayName: "Warp"},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				StreamingDiscovery: parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: parser.AgentWarp, DisplayName: "Warp"},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			StreamingDiscovery: parser.CapabilitySupported,
+		}},
 		sources: []parser.SourceRef{{
 			Provider: parser.AgentWarp, Key: path,
 			DisplayPath: path, FingerprintKey: path,
@@ -2154,9 +2134,7 @@ func TestProviderForceReplaceRewritesResolvedMultiSessionHintScopes(t *testing.T
 		}))
 	}
 	provider := &storedHintScopeProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "scope-provider"},
-		},
+		Def:       parser.AgentDef{Type: "scope-provider"},
 		container: container,
 	}
 	engine := &Engine{
@@ -2193,15 +2171,14 @@ func TestProviderChangedPathEventKindTreatsExistingHashPathAsPhysical(t *testing
 func TestReconcileWatchRootsNeverCallsDiscoverSliceFallback(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
-	provider := &directStreamingProvider{ProviderBase: parser.ProviderBase{
+	provider := &directStreamingProvider{
 		Def: parser.AgentDef{Type: "direct-streaming"},
 		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
 			DiscoverSources:    parser.CapabilitySupported,
 			StreamingDiscovery: parser.CapabilitySupported,
 			WatchSources:       parser.CapabilitySupported,
 			FindSource:         parser.CapabilitySupported,
-		}},
-	}}
+		}}}
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{"direct-streaming": {root}},
 		Machine:   "local",
@@ -2290,15 +2267,13 @@ func TestReconcileWatchRootsParseFailureCannotAcknowledgeComplete(t *testing.T) 
 	}
 	parseErr := errors.New("injected parse failure")
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "direct-streaming", FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-				FindSource:         parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: "direct-streaming", FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+			FindSource:         parser.CapabilitySupported,
+		}},
 		source: &source, parseErr: parseErr,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -2353,15 +2328,13 @@ func TestReconcileWatchRootsPartialProviderOutcomesCannotAcknowledgeComplete(t *
 				DisplayPath: path, FingerprintKey: path,
 			}
 			provider := &directStreamingProvider{
-				ProviderBase: parser.ProviderBase{
-					Def: parser.AgentDef{Type: "partial-streaming", FileBased: true},
-					Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-						DiscoverSources:    parser.CapabilitySupported,
-						StreamingDiscovery: parser.CapabilitySupported,
-						WatchSources:       parser.CapabilitySupported,
-						FindSource:         parser.CapabilitySupported,
-					}},
-				},
+				Def: parser.AgentDef{Type: "partial-streaming", FileBased: true},
+				Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+					DiscoverSources:    parser.CapabilitySupported,
+					StreamingDiscovery: parser.CapabilitySupported,
+					WatchSources:       parser.CapabilitySupported,
+					FindSource:         parser.CapabilitySupported,
+				}},
 				source: &source, parseOutcome: tc.outcome,
 			}
 			engine := NewEngine(database, EngineConfig{
@@ -2397,15 +2370,13 @@ func TestReconcileWatchRootsCwdFilteredZeroResultRevokesDeletionProof(t *testing
 	}
 	started := time.Unix(1704067200, 0)
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-				FindSource:         parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+			FindSource:         parser.CapabilitySupported,
+		}},
 		source: &source,
 		parseOutcome: parser.ParseOutcome{
 			Results: []parser.ParseResultOutcome{{
@@ -2489,13 +2460,11 @@ func TestReconcileWatchRootsArchiveWriteFailureCannotAcknowledgeComplete(t *test
 		DisplayPath: path, FingerprintKey: path,
 	}
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "write-failure-streaming", FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources: parser.CapabilitySupported, StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources: parser.CapabilitySupported, FindSource: parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: "write-failure-streaming", FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources: parser.CapabilitySupported, StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources: parser.CapabilitySupported, FindSource: parser.CapabilitySupported,
+		}},
 		source: &source,
 		parseOutcome: parser.ParseOutcome{
 			Results: []parser.ParseResultOutcome{{
@@ -2547,15 +2516,13 @@ func TestReconcileWatchRootsOpenCodeGateSkipsUnchangedContainerInConstantState(t
 		DisplayPath: path, FingerprintKey: path,
 	}
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentOpenCode},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-				FindSource:         parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: parser.AgentOpenCode},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+			FindSource:         parser.CapabilitySupported,
+		}},
 		source: &source,
 		parseOutcome: parser.ParseOutcome{
 			Results: []parser.ParseResultOutcome{{
@@ -2617,9 +2584,9 @@ func TestReconcileWatchRootsFailsWhenDBBackedDiscoveryFails(t *testing.T) {
 	root := t.TempDir()
 	discoveryErr := errors.New("provider database unavailable")
 	provider := failingDBBackedProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{
+		Def: parser.AgentDef{
 			Type: parser.AgentWarp, DisplayName: "Warp", FileBased: false,
-		}},
+		},
 		err: discoveryErr, failOnCall: 1,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -2645,9 +2612,9 @@ func TestReconcileWatchRootsFailsWhenFileDiscoveryFails(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
 	provider := failingDBBackedProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{
+		Def: parser.AgentDef{
 			Type: parser.AgentCowork, DisplayName: "Cowork", FileBased: true,
-		}},
+		},
 		err: errors.New("source listing unavailable"), failOnCall: 1,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -2732,14 +2699,12 @@ func TestReconcileWatchRootsCancellationDuringLaterSpoolPage(t *testing.T) {
 		}
 	}
 	provider := &manyStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+		}},
 		sources: sources,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -2780,14 +2745,12 @@ func TestReconcileWatchRootsPartialSecondPageArchiveWriteFailure(t *testing.T) {
 		}
 	}
 	provider := &manyStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+		}},
 		sources: sources,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -3067,11 +3030,9 @@ func TestReconciliationReplacementIndexReportsDiscoveryAndCleanupErrors(t *testi
 	discoveryErr := errors.New("replacement discovery failed")
 	cleanupErr := errors.New("replacement cleanup failed")
 	provider := &failingDBBackedProvider{
-		ProviderBase: parser.ProviderBase{
-			Def:    parser.AgentDef{Type: parser.AgentClaude, FileBased: true},
-			Config: parser.ProviderConfig{Roots: []string{root}},
-		},
-		err: discoveryErr, failOnCall: 1,
+		Def:    parser.AgentDef{Type: parser.AgentClaude, FileBased: true},
+		Config: parser.ProviderConfig{Roots: []string{root}},
+		err:    discoveryErr, failOnCall: 1,
 	}
 	engine := NewEngine(database, EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
@@ -3286,11 +3247,10 @@ func TestTombstoneMissingWatchSourcesDoesNotRediscoverEachOwnership(t *testing.T
 			require.NoError(t, database.BaselineActiveSessionSourcePaths(
 				t.Context(), "local", sources,
 			))
-			provider := &lookupSourceProvider{ProviderBase: parser.ProviderBase{
+			provider := &lookupSourceProvider{
 				Def: parser.AgentDef{
 					Type: parser.AgentCowork, IDPrefix: "cowork:", FileBased: true,
-				},
-			}}
+				}}
 			engine := NewEngine(database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentCowork: {root},
@@ -3732,9 +3692,9 @@ func TestStartupReconciledCallbackReportsIncompleteDiscoveryOnce(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
 	provider := failingDBBackedProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{
+		Def: parser.AgentDef{
 			Type: parser.AgentCowork, DisplayName: "Cowork", FileBased: true,
-		}},
+		},
 		err: errors.New("source listing unavailable"), failOnCall: 1,
 	}
 	type callbackResult struct {
@@ -3776,9 +3736,9 @@ func TestStartupSyncFallbackUsesSuccessSignalNotMaintenanceRelease(t *testing.T)
 	database := openTestDB(t)
 	root := t.TempDir()
 	provider := failingDBBackedProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{
+		Def: parser.AgentDef{
 			Type: parser.AgentCowork, DisplayName: "Cowork", FileBased: true,
-		}},
+		},
 		err: errors.New("source listing unavailable"), failOnCall: 1,
 	}
 	reconciled := make(chan struct{}, 1)
@@ -7984,12 +7944,11 @@ func TestStampProviderFileIdentityPreservesProviderSnapshotIdentity(t *testing.T
 		authoritativeInode, authoritativeDevice = 101, 202
 	}
 
-	provider := &incrementalRequestRecorder{ProviderBase: parser.ProviderBase{
+	provider := &incrementalRequestRecorder{
 		Def: parser.AgentDef{Type: parser.AgentCodex},
 		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
 			IncrementalAppend: parser.CapabilitySupported,
-		}},
-	}}
+		}}}
 	results := []parser.ParseResult{
 		{Session: parser.ParsedSession{File: parser.FileInfo{
 			Path: path, Inode: authoritativeInode, Device: authoritativeDevice,
@@ -8138,15 +8097,14 @@ func TestTryProviderIncrementalAppendPassesPersistedSessionID(t *testing.T) {
 		Content:   "hello",
 	}}))
 
-	provider := &incrementalRequestRecorder{ProviderBase: parser.ProviderBase{
+	provider := &incrementalRequestRecorder{
 		Def: parser.AgentDef{
 			Type:     parser.AgentCodex,
 			IDPrefix: "codex:",
 		},
 		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
 			IncrementalAppend: parser.CapabilitySupported,
-		}},
-	}}
+		}}}
 	e := &Engine{
 		db:       database,
 		idPrefix: "remote~",
@@ -8196,10 +8154,8 @@ func TestCollectAndBatchPrefixesParserExcludedIDs(t *testing.T) {
 
 	results := make(chan syncJob, 1)
 	results <- syncJob{
-		processResult: processResult{
-			excludedSessionIDs: []string{"probe"},
-		},
-		path: "/remote/probe.jsonl",
+		excludedSessionIDs: []string{"probe"},
+		path:               "/remote/probe.jsonl",
 	}
 	close(results)
 
@@ -8237,10 +8193,8 @@ func TestCollectAndBatchClearsDanglingParentAfterParserExclusion(t *testing.T) {
 
 	results := make(chan syncJob, 1)
 	results <- syncJob{
-		processResult: processResult{
-			excludedSessionIDs: []string{parentID},
-		},
-		path: "/archive/excluded-spawner.jsonl",
+		excludedSessionIDs: []string{parentID},
+		path:               "/archive/excluded-spawner.jsonl",
 	}
 	close(results)
 
@@ -8515,17 +8469,15 @@ func TestFindSourceFileProviderAuthoritativePrefersProviderOverStoredPath(t *tes
 	}))
 
 	provider := &lookupSourceProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{
-				Type:        parser.AgentCowork,
-				DisplayName: "Cowork",
-				IDPrefix:    "cowork:",
-				FileBased:   true,
-			},
-			Caps: parser.Capabilities{
-				Source: parser.SourceCapabilities{
-					FindSource: parser.CapabilitySupported,
-				},
+		Def: parser.AgentDef{
+			Type:        parser.AgentCowork,
+			DisplayName: "Cowork",
+			IDPrefix:    "cowork:",
+			FileBased:   true,
+		},
+		Caps: parser.Capabilities{
+			Source: parser.SourceCapabilities{
+				FindSource: parser.CapabilitySupported,
 			},
 		},
 		source: parser.SourceRef{
@@ -9418,14 +9370,12 @@ func TestEngine_ReconcileWatchRootsReportsProgressBeforeDiscoveryReturns(t *test
 		}
 	}()
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+		}},
 		discoverStarted: started,
 		discoverRelease: release,
 	}

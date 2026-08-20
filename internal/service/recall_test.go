@@ -3,7 +3,8 @@ package service_test
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -688,27 +689,23 @@ func TestBuildRecallContextIncludesLifecycleMetadata(t *testing.T) {
 	t.Parallel()
 	text, meta, err := service.BuildRecallContext([]db.RecallResult{
 		{
-			RecallEntry: db.RecallEntry{
-				ID:                "new",
-				Type:              "procedure",
-				Scope:             "project",
-				Status:            "accepted",
-				ReviewState:       "unreviewed_auto",
-				Title:             "Current retry policy",
-				Body:              "Retry flaky command three times.",
-				SupersedesEntryID: "old",
-			},
+			ID:                "new",
+			Type:              "procedure",
+			Scope:             "project",
+			Status:            "accepted",
+			ReviewState:       "unreviewed_auto",
+			Title:             "Current retry policy",
+			Body:              "Retry flaky command three times.",
+			SupersedesEntryID: "old",
 		},
 		{
-			RecallEntry: db.RecallEntry{
-				ID:                  "old",
-				Type:                "procedure",
-				Scope:               "project",
-				Status:              "archived",
-				Title:               "Old retry policy",
-				Body:                "Retry flaky command once.",
-				SupersededByEntryID: "new",
-			},
+			ID:                  "old",
+			Type:                "procedure",
+			Scope:               "project",
+			Status:              "archived",
+			Title:               "Old retry policy",
+			Body:                "Retry flaky command once.",
+			SupersededByEntryID: "new",
 		},
 	}, 1000, "")
 
@@ -864,7 +861,7 @@ func TestDirectBackend_ListRecallEntriesReportsTrustedOnly(t *testing.T) {
 	assert.Equal(t, "trusted", list.RecallEntries[0].ID)
 	encoded, err := json.Marshal(list)
 	require.NoError(t, err)
-	var raw map[string]json.RawMessage
+	var raw map[string]jsontext.Value
 	require.NoError(t, json.Unmarshal(encoded, &raw))
 	require.Contains(t, raw, "trusted_only")
 	var trustedOnly bool
@@ -948,7 +945,7 @@ func TestDirectBackend_QueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, query.RecallEntries, 1)
 	assert.Equal(t, "trusted", query.RecallEntries[0].ID)
-	var raw map[string]json.RawMessage
+	var raw map[string]jsontext.Value
 	encoded, err := json.Marshal(query)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(encoded, &raw))

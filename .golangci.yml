@@ -1,7 +1,7 @@
 version: "2"
 run:
   tests: true
-  go: "1.26"
+  go: "1.27"
   build-tags:
     - fts5
 linters:

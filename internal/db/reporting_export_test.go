@@ -2,7 +2,7 @@ package db
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"math"
 	"testing"
@@ -625,7 +625,7 @@ func TestReportingExportUsesAttributedSessionMetadataForCompleteSnapshot(
 		Message{
 			SessionID: "reporting-parent", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-07-28T09:05:00Z", Model: "partial-model",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":10,"output_tokens":5}`),
 			ClaudeMessageID: "reporting-message",
 			ClaudeRequestID: "reporting-request",
@@ -633,7 +633,7 @@ func TestReportingExportUsesAttributedSessionMetadataForCompleteSnapshot(
 		Message{
 			SessionID: "reporting-child", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-07-28T09:06:00Z", Model: "complete-model",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":631}`),
 			ClaudeMessageID: "reporting-message",
 			ClaudeRequestID: "reporting-request",
@@ -798,7 +798,7 @@ func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
 			Model:           "model-z-ordinal-winner",
 			ClaudeMessageID: "fixture-shared-message",
 			ClaudeRequestID: "fixture-shared-request",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":29,"output_tokens":3}`,
 			),
 		},
@@ -811,7 +811,7 @@ func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
 			Model:           "model-a-semantic-runner-up",
 			ClaudeMessageID: "fixture-shared-message",
 			ClaudeRequestID: "fixture-shared-request",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":11,"output_tokens":2}`,
 			),
 		},

@@ -2,7 +2,7 @@ package sync
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"os"
 	"path/filepath"
@@ -660,11 +660,11 @@ func TestCompareMessageMetadata(t *testing.T) {
 	t.Run("token_usage payload drift is a token diff", func(t *testing.T) {
 		stored := []db.Message{{
 			Ordinal: 0, Role: "assistant",
-			TokenUsage: json.RawMessage(`{"input_tokens":1}`),
+			TokenUsage: jsontext.Value(`{"input_tokens":1}`),
 		}}
 		parsed := []db.Message{{
 			Ordinal: 0, Role: "assistant",
-			TokenUsage: json.RawMessage(`{"input_tokens":2}`),
+			TokenUsage: jsontext.Value(`{"input_tokens":2}`),
 		}}
 		diffs := compareMessageMetadata(stored, parsed, true, false, false)
 		require.Len(t, diffs, 1)
@@ -1094,7 +1094,7 @@ func TestFingerprintTwinMatchesDB(t *testing.T) {
 				ContentLength: 20,
 				Timestamp:     ts.Add(time.Second),
 				Model:         "claude-op\x00us-4",
-				TokenUsage: json.RawMessage(
+				TokenUsage: jsontext.Value(
 					`{"input_tokens":10,"output_tokens":2}`,
 				),
 				ContextTokens:    12,
@@ -1200,7 +1200,7 @@ func TestCompareStoredSessionRoundTrip(t *testing.T) {
 				ContentLength: 3,
 				Timestamp:     ts.Add(time.Second),
 				Model:         "claude-sonnet",
-				TokenUsage: json.RawMessage(
+				TokenUsage: jsontext.Value(
 					`{"input_tokens":7,"output_tokens":3}`,
 				),
 				ContextTokens:    10,
@@ -1979,30 +1979,28 @@ func TestParseDiffPresenceSweepKeepsMixedProviderRetryCoverage(t *testing.T) {
 	}
 	job := syncJob{
 		path: sourcePath,
-		processResult: processResult{
-			results: []parser.ParseResult{
-				{Session: parser.ParsedSession{
-					ID:      current.ID,
-					Agent:   parser.AgentClaude,
-					Machine: "devbox",
-					Project: "provider-project",
-					File: parser.FileInfo{
-						Path: sourcePath,
-					},
-				}},
-				{Session: parser.ParsedSession{
-					ID:      retry.ID,
-					Agent:   parser.AgentClaude,
-					Machine: "devbox",
-					Project: "provider-project",
-					File: parser.FileInfo{
-						Path: sourcePath,
-					},
-				}},
-			},
-			retrySessionIDs: map[string]bool{
-				retry.ID: true,
-			},
+		results: []parser.ParseResult{
+			{Session: parser.ParsedSession{
+				ID:      current.ID,
+				Agent:   parser.AgentClaude,
+				Machine: "devbox",
+				Project: "provider-project",
+				File: parser.FileInfo{
+					Path: sourcePath,
+				},
+			}},
+			{Session: parser.ParsedSession{
+				ID:      retry.ID,
+				Agent:   parser.AgentClaude,
+				Machine: "devbox",
+				Project: "provider-project",
+				File: parser.FileInfo{
+					Path: sourcePath,
+				},
+			}},
+		},
+		retrySessionIDs: map[string]bool{
+			retry.ID: true,
 		},
 	}
 	engine := &Engine{db: dbtest.OpenTestDB(t)}
@@ -2056,10 +2054,8 @@ func TestParseDiffPresenceSweepSkipsIncompleteProviderResults(t *testing.T) {
 		sourcePath: {missing},
 	}
 	job := syncJob{
-		path: sourcePath,
-		processResult: processResult{
-			suppressPresenceSweep: true,
-		},
+		path:                  sourcePath,
+		suppressPresenceSweep: true,
 	}
 	engine := &Engine{db: dbtest.OpenTestDB(t)}
 	report := &ParseDiffReport{FieldCounts: map[string]int{}}
@@ -2115,9 +2111,7 @@ func TestParseDiffProviderVirtualSQLiteErrorUsesExactSource(t *testing.T) {
 	}
 	job := syncJob{
 		path: firstPath,
-		processResult: processResult{
-			err: errors.New("bad virtual session"),
-		},
+		err:  errors.New("bad virtual session"),
 	}
 	engine := &Engine{db: dbtest.OpenTestDB(t)}
 	report := &ParseDiffReport{FieldCounts: map[string]int{}}

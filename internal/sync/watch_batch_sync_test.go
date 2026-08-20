@@ -202,14 +202,12 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 		}
 	}()
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+		}},
 		discoverStarted: started,
 		discoverRelease: release,
 	}
@@ -269,15 +267,13 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 		Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
 	}
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-				FindSource:         parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+			FindSource:         parser.CapabilitySupported,
+		}},
 		source:       &source,
 		parseStarted: started,
 		parseRelease: release,

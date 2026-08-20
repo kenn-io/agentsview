@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -820,10 +821,10 @@ func TestTraeChangedPathTombstonesDecodeSnapshotOncePerContainer(t *testing.T) {
 }
 
 func TestTraeAssistantFallbackVariants(t *testing.T) {
-	assert.Equal(t, "plain text", traeAssistantFallback(json.RawMessage(`"plain text"`)))
-	assert.Equal(t, "text field", traeAssistantFallback(json.RawMessage(`{"text":"text field"}`)))
-	assert.Equal(t, "proposal field", traeAssistantFallback(json.RawMessage(`{"proposal":"proposal field"}`)))
-	assert.Equal(t, "step one\nstep two", traeAssistantFallback(json.RawMessage(`{"guideline":{"planItems":[{"content":"step one"},{"content":"step two"}]}}`)))
+	assert.Equal(t, "plain text", traeAssistantFallback(jsontext.Value(`"plain text"`)))
+	assert.Equal(t, "text field", traeAssistantFallback(jsontext.Value(`{"text":"text field"}`)))
+	assert.Equal(t, "proposal field", traeAssistantFallback(jsontext.Value(`{"proposal":"proposal field"}`)))
+	assert.Equal(t, "step one\nstep two", traeAssistantFallback(jsontext.Value(`{"guideline":{"planItems":[{"content":"step one"},{"content":"step two"}]}}`)))
 }
 
 func TestTraeTimeUnmarshalVariants(t *testing.T) {

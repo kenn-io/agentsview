@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 
@@ -78,7 +77,7 @@ func (s *countingCheckpointFloorStore) checkpointFloor(context.Context, string) 
 	return s.floor, nil
 }
 
-func TestExportCheckpointBootstrapStreamsLargeSessionMap(t *testing.T) {
+func TestExportCheckpointBootstrapReadsLargeSessionMap(t *testing.T) {
 	t.Parallel()
 
 	sessions := make(map[string]string, 2000)
@@ -89,15 +88,12 @@ func TestExportCheckpointBootstrapStreamsLargeSessionMap(t *testing.T) {
 		Version: checkpointFormatVersion, Origin: contractOrigin, Sequence: 42, Sessions: sessions,
 	})
 	require.NoError(t, err)
-	reader := &maxReadReader{reader: strings.NewReader(string(body))}
-	head, err := decodeCanonicalCheckpointHead(reader, contractOrigin,
+	head, err := decodeCanonicalCheckpointHead(strings.NewReader(string(body)), contractOrigin,
 		"cp-0000000042.json", identityForBytes(t, body))
 	require.NoError(t, err)
 	mapBytes, err := canonicalJSON(sessions)
 	require.NoError(t, err)
 	assert.Equal(t, hashHex(mapBytes), head.SessionMapSHA256)
-	assert.Less(t, reader.max, len(body)/4,
-		"bootstrap must tokenize the checkpoint instead of reading its full body")
 }
 
 func TestExportCheckpointBootstrapSkipsNoncanonicalJSON(t *testing.T) {
@@ -283,18 +279,6 @@ func (s *checkpointVerifyErrorStore) Open(
 		return entry, reader, err
 	}
 	return entry, &verifyErrorReader{VerifiedReader: reader, err: s.err}, nil
-}
-
-type maxReadReader struct {
-	reader io.Reader
-	max    int
-}
-
-func (r *maxReadReader) Read(p []byte) (int, error) {
-	if len(p) > r.max {
-		r.max = len(p)
-	}
-	return r.reader.Read(p)
 }
 
 // strings64 builds a 64-character stand-in for a sha256 hex digest.

@@ -7,7 +7,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -1224,7 +1225,7 @@ func TestDuckDailyAndSessionUsageApplyPricingBandsOnlyToRequests(t *testing.T) {
 	msg := syncMessage(
 		sessionID, 0, "assistant", "request", "2026-03-12T10:00:00.000Z")
 	msg.Model = "banded-model"
-	msg.TokenUsage = json.RawMessage(`{"input_tokens":300000}`)
+	msg.TokenUsage = jsontext.Value(`{"input_tokens":300000}`)
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session:  syncSession(sessionID, "proj", "banded", "2026-03-12T10:00:00.000Z", 1),
 		Messages: []db.Message{msg},
@@ -2544,7 +2545,7 @@ func TestDailyUsageHandlesBlankMessageTimestampWithoutSessionStart(t *testing.T)
 				Role:       "assistant",
 				Timestamp:  "",
 				Model:      "claude-test",
-				TokenUsage: json.RawMessage(`{"input_tokens":100,"output_tokens":50}`),
+				TokenUsage: jsontext.Value(`{"input_tokens":100,"output_tokens":50}`),
 			},
 			{
 				SessionID:  sessionID,
@@ -2552,7 +2553,7 @@ func TestDailyUsageHandlesBlankMessageTimestampWithoutSessionStart(t *testing.T)
 				Role:       "assistant",
 				Timestamp:  "",
 				Model:      "claude-test",
-				TokenUsage: json.RawMessage(`{"input_tokens":200,"output_tokens":75}`),
+				TokenUsage: jsontext.Value(`{"input_tokens":200,"output_tokens":75}`),
 			},
 		},
 		DataVersion:     1,
@@ -2680,7 +2681,7 @@ func TestSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
 		"2026-01-13T00:00:00.000Z")
 	first.ClaudeMessageID = "msg-stream"
 	first.ClaudeRequestID = "req-stream"
-	first.TokenUsage = json.RawMessage(
+	first.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":5}`)
 	first.OutputTokens = 5
 	second := syncMessage(
@@ -2688,7 +2689,7 @@ func TestSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
 		"2026-01-13T00:01:00.000Z")
 	second.ClaudeMessageID = "msg-stream"
 	second.ClaudeRequestID = "req-stream"
-	second.TokenUsage = json.RawMessage(
+	second.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":631}`)
 	second.OutputTokens = 631
 
@@ -2741,7 +2742,7 @@ func TestUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T)
 		"2026-01-13T00:00:00.000Z")
 	first.ClaudeMessageID = "msg-stream"
 	first.ClaudeRequestID = "req-stream"
-	first.TokenUsage = json.RawMessage(
+	first.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":5}`)
 	first.OutputTokens = 5
 	second := syncMessage(
@@ -2749,7 +2750,7 @@ func TestUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T)
 		"2026-01-13T00:01:00.000Z")
 	second.ClaudeMessageID = "msg-stream"
 	second.ClaudeRequestID = "req-stream"
-	second.TokenUsage = json.RawMessage(
+	second.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":631}`)
 	second.OutputTokens = 631
 
@@ -2856,7 +2857,7 @@ func TestUsageSessionCountsFilterAfterCrossSessionSnapshotSelection(
 		"count-parent", 0, "assistant", "partial",
 		"2026-01-13T00:00:00.000Z")
 	partial.Model = "partial-model"
-	partial.TokenUsage = json.RawMessage(`{"input_tokens":10,"output_tokens":5}`)
+	partial.TokenUsage = jsontext.Value(`{"input_tokens":10,"output_tokens":5}`)
 	partial.OutputTokens = 5
 	partial.ClaudeMessageID = "count-message"
 	partial.ClaudeRequestID = "count-request"
@@ -2864,7 +2865,7 @@ func TestUsageSessionCountsFilterAfterCrossSessionSnapshotSelection(
 		"count-child", 0, "assistant", "complete",
 		"2026-01-13T00:01:00.000Z")
 	complete.Model = "complete-model"
-	complete.TokenUsage = json.RawMessage(
+	complete.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":631}`)
 	complete.OutputTokens = 631
 	complete.ClaudeMessageID = "count-message"
@@ -2908,7 +2909,7 @@ func TestUsageAggregatesPreferLatestEqualOutputSnapshot(t *testing.T) {
 	zMessage.Model = "claude-test"
 	zMessage.ClaudeMessageID = "msg-tie"
 	zMessage.ClaudeRequestID = "req-tie"
-	zMessage.TokenUsage = json.RawMessage(
+	zMessage.TokenUsage = jsontext.Value(
 		`{"input_tokens":900,"output_tokens":100}`)
 	zMessage.OutputTokens = 100
 	aMessage := syncMessage(
@@ -2916,7 +2917,7 @@ func TestUsageAggregatesPreferLatestEqualOutputSnapshot(t *testing.T) {
 	aMessage.Model = "claude-test"
 	aMessage.ClaudeMessageID = "msg-tie"
 	aMessage.ClaudeRequestID = "req-tie"
-	aMessage.TokenUsage = json.RawMessage(
+	aMessage.TokenUsage = jsontext.Value(
 		`{"input_tokens":10,"output_tokens":100}`)
 	aMessage.OutputTokens = 100
 
@@ -3477,7 +3478,7 @@ func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 		"duck-message-reasoning", 0, "assistant", "message reasoning",
 		"2026-01-19T00:01:00.000Z")
 	msg.Model = "gpt-5.4"
-	msg.TokenUsage = json.RawMessage(
+	msg.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":500}`)
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: syncSession(

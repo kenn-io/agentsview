@@ -41,10 +41,8 @@ func TestCortexProviderWatchRootsStayBounded(t *testing.T) {
 	writeSourceFile(t, transcript, "{}\n")
 	companionCalls := 0
 	provider := &cortexProvider{
-		ProviderBase: ProviderBase{
-			Def:  AgentDef{Type: AgentCortex},
-			Caps: cortexProviderCapabilities(),
-		},
+		Def:  AgentDef{Type: AgentCortex},
+		Caps: cortexProviderCapabilities(),
 		sources: NewJSONLSourceSet(
 			AgentCortex,
 			[]string{root},

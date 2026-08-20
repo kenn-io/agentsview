@@ -3,7 +3,7 @@ package extract
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -37,7 +37,7 @@ func newScriptedServer(
 				t.Errorf("request path = %q, want /chat/completions", r.URL.Path)
 			}
 			var payload map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			if err := json.UnmarshalRead(r.Body, &payload); err != nil {
 				t.Errorf("decoding request: %v", err)
 			}
 			*requests = append(*requests, payload)
@@ -74,7 +74,7 @@ func newScriptedServer(
 					"completion_tokens": 3,
 				},
 			}
-			_ = json.NewEncoder(w).Encode(body)
+			_ = json.MarshalWrite(w, body)
 		}))
 }
 
@@ -150,7 +150,7 @@ func TestClientDistillSendsBearerToken(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		_ = json.MarshalWrite(w, map[string]any{
 			"choices": []map[string]any{{
 				"finish_reason": "stop",
 				"message": map[string]any{
@@ -163,6 +163,7 @@ func TestClientDistillSendsBearerToken(t *testing.T) {
 				"completion_tokens": 3,
 			},
 		})
+
 	}))
 	defer server.Close()
 

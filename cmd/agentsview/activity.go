@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,9 +72,8 @@ func runActivityReport(cfg ActivityReportConfig) {
 
 func writeActivityReport(r activity.Report, jsonOutput bool) {
 	if jsonOutput {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(r); err != nil {
+		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+		if err := json.MarshalEncode(enc, r); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -139,7 +139,7 @@ func fetchHTTPActivityReport(
 		if err != nil {
 			return activity.Report{}, err
 		}
-	} else if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+	} else if err := json.UnmarshalRead(resp.Body, &r); err != nil {
 		return activity.Report{}, err
 	}
 	if r.Projects == nil {
@@ -231,7 +231,7 @@ func fetchHTTPActivitySessionPage(
 		RefreshRequired bool                  `json:"refresh_required"`
 		Report          *activity.Report      `json:"report"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&page); err != nil {
+	if err := json.UnmarshalRead(response.Body, &page); err != nil {
 		return activity.Report{}, err
 	}
 	if page.Report != nil {

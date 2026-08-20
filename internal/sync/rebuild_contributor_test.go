@@ -3,7 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -521,23 +521,20 @@ func TestResyncContributorCancellationPreservesArchiveAndCleansTempDB(t *testing
 	require.NoError(t, os.Remove(oldPath))
 
 	provider := &blockingRebuildProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentCowork},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources: parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: parser.AgentCowork},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources: parser.CapabilitySupported,
+		}},
 		started: make(chan struct{}),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	firstHookCalls := 0
 	secondHookCalls := 0
-	secondProvider := &trackingRebuildProvider{ProviderBase: parser.ProviderBase{
+	secondProvider := &trackingRebuildProvider{
 		Def: parser.AgentDef{Type: parser.AgentCowork},
 		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
 			DiscoverSources: parser.CapabilitySupported,
-		}},
-	}}
+		}}}
 	result := make(chan struct {
 		stats SyncStats
 		err   error
@@ -632,20 +629,17 @@ func TestResyncLocalCancellationPreventsContributors(t *testing.T) {
 	require.NoError(t, os.Remove(oldPath))
 
 	blocking := &blockingRebuildProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentCowork},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources: parser.CapabilitySupported,
-			}},
-		},
-		started: make(chan struct{}),
-	}
-	later := &trackingRebuildProvider{ProviderBase: parser.ProviderBase{
 		Def: parser.AgentDef{Type: parser.AgentCowork},
 		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
 			DiscoverSources: parser.CapabilitySupported,
 		}},
-	}}
+		started: make(chan struct{}),
+	}
+	later := &trackingRebuildProvider{
+		Def: parser.AgentDef{Type: parser.AgentCowork},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources: parser.CapabilitySupported,
+		}}}
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {root}},
 		Machine:   "local",
@@ -785,13 +779,11 @@ func (f staticUsageRebuildFactory) NewProvider(parser.ProviderConfig) parser.Pro
 func newStaticUsageRebuildProvider(id, path string, input, output int) *staticUsageRebuildProvider {
 	started := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	return &staticUsageRebuildProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:      parser.CapabilitySupported,
-				CompositeFingerprint: parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:      parser.CapabilitySupported,
+			CompositeFingerprint: parser.CapabilitySupported,
+		}},
 		source: parser.SourceRef{
 			Provider: parser.AgentCowork, Key: path, DisplayPath: path, FingerprintKey: path,
 		},
@@ -920,13 +912,12 @@ func TestResyncContributorParserFailuresAbortAndCleanTempDB(t *testing.T) {
 		AddClaudeUser("2026-01-01T00:00:00Z", "archive before parser failures").String()), 0o644))
 	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
 	require.NoError(t, os.Remove(oldPath))
-	provider := &malformedRebuildProvider{ProviderBase: parser.ProviderBase{
+	provider := &malformedRebuildProvider{
 		Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
 		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
 			DiscoverSources:      parser.CapabilitySupported,
 			CompositeFingerprint: parser.CapabilitySupported,
-		}},
-	}}
+		}}}
 
 	stats, err := engine.ResyncAllWithOptions(context.Background(), nil, RebuildOptions{
 		Contributors: []RebuildContributor{{

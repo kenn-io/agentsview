@@ -3,7 +3,7 @@ package extract
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"maps"
 	"os"
@@ -259,9 +259,9 @@ func Fingerprint(
 		PromptDigests: promptDigests,
 		Request:       request,
 	}
-	// encoding/json writes map keys in sorted order, which makes the
-	// encoding canonical for the JSON-shaped values profiles carry.
-	canonical, err := json.Marshal(identity)
+	// The identity contains maps, so deterministic ordering is part of the
+	// fingerprint contract.
+	canonical, err := json.Marshal(identity, json.Deterministic(true))
 	if err != nil {
 		return "", fmt.Errorf("encoding extraction identity: %w", err)
 	}

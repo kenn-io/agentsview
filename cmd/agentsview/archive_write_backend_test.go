@@ -269,8 +269,8 @@ func (f startupDiscoveryFailureFactory) NewProvider(
 	cfg parser.ProviderConfig,
 ) parser.Provider {
 	return &startupDiscoveryFailureProvider{
-		ProviderBase: parser.ProviderBase{Def: f.Definition(), Config: cfg},
-		err:          f.err,
+		Def: f.Definition(), Config: cfg,
+		err: f.err,
 	}
 }
 

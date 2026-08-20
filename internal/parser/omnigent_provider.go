@@ -70,17 +70,15 @@ func newOmnigentSourceSet(
 	cfg ProviderConfig, tracker *omnigentChangeTracker,
 ) omnigentSourceSet {
 	return omnigentSourceSet{
-		multiSessionContainerSourceSet: multiSessionContainerSourceSet{
-			agent: AgentOmnigent,
-			roots: cleanJSONLRoots(cfg.Roots),
-			cfg: multiSessionConfig{
-				discoverContainers: omnigentDiscoverContainers,
-				watchRoots:         omnigentWatchRoots,
-				classifyPath:       omnigentClassifyPath,
-				findMember:         omnigentFindMember,
-				fingerprint:        omnigentFingerprintSource,
-				memberPresent:      omnigentMemberPresent,
-			},
+		agent: AgentOmnigent,
+		roots: cleanJSONLRoots(cfg.Roots),
+		cfg: multiSessionConfig{
+			discoverContainers: omnigentDiscoverContainers,
+			watchRoots:         omnigentWatchRoots,
+			classifyPath:       omnigentClassifyPath,
+			findMember:         omnigentFindMember,
+			fingerprint:        omnigentFingerprintSource,
+			memberPresent:      omnigentMemberPresent,
 		},
 		tracker: tracker,
 	}

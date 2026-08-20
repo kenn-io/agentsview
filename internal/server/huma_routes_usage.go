@@ -19,10 +19,9 @@ import (
 func (s *Server) registerUsageRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/usage", "Usage")
 
-	get(s, group, "/summary", "Get usage summary", s.humaUsageSummary)
-	get(s, group, "/comparison", "Get usage comparison", s.humaUsageComparison)
-	get(
-		s, group, "/pairwise-comparison",
+	s.get(group, "/summary", "Get usage summary", s.humaUsageSummary)
+	s.get(group, "/comparison", "Get usage comparison", s.humaUsageComparison)
+	s.get(group, "/pairwise-comparison",
 		"Get usage pairwise comparison", s.humaUsagePairwiseComparison,
 	)
 	deltaSchema := s.api.OpenAPI().Components.Schemas.Map()["ServiceUsagePairwiseComparisonDelta"]
@@ -38,7 +37,7 @@ func (s *Server) registerUsageRoutes() {
 		{Type: "null"},
 	}
 	costPerSessionSchema.Ref = ""
-	get(s, group, "/top-sessions", "Get top usage sessions", s.humaUsageTopSessions)
+	s.get(group, "/top-sessions", "Get top usage sessions", s.humaUsageTopSessions)
 }
 
 type UsageFilterInput struct {
@@ -149,8 +148,7 @@ func (s *Server) usageFilterFromInput(
 			return f, nil
 		}
 	}
-	var ue *service.UsageInputError
-	if errors.As(err, &ue) {
+	if ue, ok := errors.AsType[*service.UsageInputError](err); ok {
 		return db.UsageFilter{}, usageInputAPIError(ue)
 	}
 	return db.UsageFilter{}, err
@@ -162,8 +160,7 @@ func (s *Server) humaUsageSummary(
 ) (*jsonOutput[UsageSummaryResponse], error) {
 	res, err := s.sessions.UsageSummary(ctx, usageRequestFromInput(*in))
 	if err != nil {
-		var ue *service.UsageInputError
-		if errors.As(err, &ue) {
+		if ue, ok := errors.AsType[*service.UsageInputError](err); ok {
 			return nil, usageInputAPIError(ue)
 		}
 		if handled := handleHumaContextError(err); handled != nil {
@@ -214,16 +211,14 @@ func (s *Server) humaUsagePairwiseComparison(
 ) (*jsonOutput[service.UsagePairwiseComparisonResponse], error) {
 	req, err := usagePairwiseRequestFromInput(*in)
 	if err != nil {
-		var ue *service.UsageInputError
-		if errors.As(err, &ue) {
+		if ue, ok := errors.AsType[*service.UsageInputError](err); ok {
 			return nil, usageInputAPIError(ue)
 		}
 		return nil, err
 	}
 	comparison, err := s.sessions.UsagePairwiseComparison(ctx, req)
 	if err != nil {
-		var ue *service.UsageInputError
-		if errors.As(err, &ue) {
+		if ue, ok := errors.AsType[*service.UsageInputError](err); ok {
 			return nil, usageInputAPIError(ue)
 		}
 		if handled := handleHumaContextError(err); handled != nil {

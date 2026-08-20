@@ -1,7 +1,8 @@
 package server_test
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,7 @@ import (
 )
 
 // tokenUsageJSON is a valid token_usage blob for test messages.
-var tokenUsageJSON = json.RawMessage(
+var tokenUsageJSON = jsontext.Value(
 	`{"input_tokens":100,"output_tokens":50,` +
 		`"cache_creation_input_tokens":10,` +
 		`"cache_read_input_tokens":20}`,
@@ -158,7 +159,7 @@ func seedUsagePairwiseEnv(t *testing.T, te *testEnv) {
 		project string
 		started string
 		model   string
-		usage   json.RawMessage
+		usage   jsontext.Value
 	}
 
 	entries := []entry{
@@ -167,7 +168,7 @@ func seedUsagePairwiseEnv(t *testing.T, te *testEnv) {
 			project: "alpha",
 			started: "2024-06-01T09:00:00Z",
 			model:   "claude-sonnet-4-20250514",
-			usage: json.RawMessage(
+			usage: jsontext.Value(
 				`{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":20}`,
 			),
 		},
@@ -176,7 +177,7 @@ func seedUsagePairwiseEnv(t *testing.T, te *testEnv) {
 			project: "beta",
 			started: "2024-06-01T10:00:00Z",
 			model:   "gpt-4o",
-			usage: json.RawMessage(
+			usage: jsontext.Value(
 				`{"input_tokens":30,"output_tokens":15,"cache_creation_input_tokens":0,"cache_read_input_tokens":5}`,
 			),
 		},
@@ -212,7 +213,7 @@ func TestHandleUsageSummaryJSONShape(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	// Verify all expected top-level keys exist.
-	var raw map[string]json.RawMessage
+	var raw map[string]jsontext.Value
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
 
 	required := []string{
@@ -363,7 +364,7 @@ func TestHandleUsageTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 			msg.Role = "assistant"
 			msg.Timestamp = fixture.startedAt
 			msg.Model = "gpt-5.4"
-			msg.TokenUsage = json.RawMessage(
+			msg.TokenUsage = jsontext.Value(
 				`{"input_tokens":` + fmt.Sprint(fixture.input) +
 					`,"output_tokens":` + fmt.Sprint(fixture.output) + `}`,
 			)
@@ -419,7 +420,7 @@ func TestHandleUsagePairwiseComparisonJSONShape(t *testing.T) {
 	))
 	assertStatus(t, w, http.StatusOK)
 
-	var raw map[string]json.RawMessage
+	var raw map[string]jsontext.Value
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
 	assert.Contains(t, raw, "left")
 	assert.Contains(t, raw, "right")

@@ -1003,7 +1003,6 @@ func TestCodexProviderTokenCountCursorParity(t *testing.T) {
 				testjsonl.CodexMsgJSON("assistant", "tail answer", "2024-01-01T10:00:05Z"),
 				tc.tailToken,
 			)
-
 			fullRoot := t.TempDir()
 			writeCodexProviderSessionContent(
 				t, fullRoot, tc.uuid, prefix+tail,

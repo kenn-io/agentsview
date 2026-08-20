@@ -33,11 +33,9 @@ func (f geminiProviderFactory) Capabilities() Capabilities {
 func (f geminiProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &geminiProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   geminiProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    geminiProviderCapabilities(),
+		Config:  cfg,
 		sources: newGeminiSourceSet(cfg.Roots),
 	}
 }

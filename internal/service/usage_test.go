@@ -316,7 +316,7 @@ func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
 
 	_, _, _, _, err := service.BuildUsagePairwiseFilters(
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest:   service.UsageRequest{From: "2024-06-01", To: "2024-06-02"},
+			From: "2024-06-01", To: "2024-06-02",
 			LeftDimension:  "model",
 			LeftValue:      "claude-sonnet-4-20250514",
 			RightDimension: "machine",
@@ -334,13 +334,11 @@ func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T)
 
 	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				From:     "2024-06-01",
-				To:       "2024-06-03",
-				Timezone: "UTC",
-				Model:    "model-a,model-b",
-				Project:  "alpha,beta",
-			},
+			From:           "2024-06-01",
+			To:             "2024-06-03",
+			Timezone:       "UTC",
+			Model:          "model-a,model-b",
+			Project:        "alpha,beta",
 			LeftDimension:  "model",
 			LeftValue:      "model-b",
 			RightDimension: "project",
@@ -361,11 +359,9 @@ func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testin
 
 	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				From:  "2024-06-01",
-				To:    "2024-06-03",
-				Model: "gpt-4o",
-			},
+			From:           "2024-06-01",
+			To:             "2024-06-03",
+			Model:          "gpt-4o",
 			LeftDimension:  "model",
 			LeftValue:      "claude-sonnet-4-20250514",
 			RightDimension: "model",
@@ -389,12 +385,10 @@ func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
 	res, err := be.UsagePairwiseComparison(
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				From:           "2024-06-01",
-				To:             "2024-06-01",
-				Timezone:       "UTC",
-				IncludeOneShot: true,
-			},
+			From:           "2024-06-01",
+			To:             "2024-06-01",
+			Timezone:       "UTC",
+			IncludeOneShot: true,
 			LeftDimension:  "model",
 			LeftValue:      "claude-sonnet-4-20250514",
 			RightDimension: "model",
@@ -434,12 +428,10 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
 	res, err := be.UsagePairwiseComparison(
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				From:           "2024-06-01",
-				To:             "2024-06-01",
-				Timezone:       "UTC",
-				IncludeOneShot: true,
-			},
+			From:           "2024-06-01",
+			To:             "2024-06-01",
+			Timezone:       "UTC",
+			IncludeOneShot: true,
 			LeftDimension:  "project",
 			LeftValue:      betaKey,
 			RightDimension: "model",
@@ -605,12 +597,10 @@ func TestDirectBackend_UsagePairwiseComparison_ZeroDataSide(t *testing.T) {
 	res, err := be.UsagePairwiseComparison(
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				From:           "2024-06-01",
-				To:             "2024-06-01",
-				Timezone:       "UTC",
-				IncludeOneShot: true,
-			},
+			From:           "2024-06-01",
+			To:             "2024-06-01",
+			Timezone:       "UTC",
+			IncludeOneShot: true,
 			LeftDimension:  "project",
 			LeftValue:      "missing-project",
 			RightDimension: "model",
@@ -635,13 +625,11 @@ func TestDirectBackend_UsagePairwiseComparison_ConflictingBaseFilterReturnsZeroD
 	res, err := be.UsagePairwiseComparison(
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				From:           "2024-06-01",
-				To:             "2024-06-01",
-				Timezone:       "UTC",
-				Model:          "gpt-4o",
-				IncludeOneShot: true,
-			},
+			From:           "2024-06-01",
+			To:             "2024-06-01",
+			Timezone:       "UTC",
+			Model:          "gpt-4o",
+			IncludeOneShot: true,
 			LeftDimension:  "model",
 			LeftValue:      "claude-sonnet-4-20250514",
 			RightDimension: "model",
@@ -701,13 +689,11 @@ func TestDirectBackend_UsagePairwiseComparison_DoesNotUseSentinelFilterValues(t 
 	res, err := be.UsagePairwiseComparison(
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				From:           "2024-06-01",
-				To:             "2024-06-01",
-				Timezone:       "UTC",
-				Model:          "gpt-4o",
-				IncludeOneShot: true,
-			},
+			From:           "2024-06-01",
+			To:             "2024-06-01",
+			Timezone:       "UTC",
+			Model:          "gpt-4o",
+			IncludeOneShot: true,
 			LeftDimension:  "model",
 			LeftValue:      "claude-sonnet-4-20250514",
 			RightDimension: "model",
@@ -732,12 +718,10 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 	res, err := svc.UsagePairwiseComparison(
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				From:           "2024-06-01",
-				To:             "2024-06-01",
-				Timezone:       "UTC",
-				IncludeOneShot: true,
-			},
+			From:           "2024-06-01",
+			To:             "2024-06-01",
+			Timezone:       "UTC",
+			IncludeOneShot: true,
 			LeftDimension:  "model",
 			LeftValue:      "claude-sonnet-4-20250514",
 			RightDimension: "model",
@@ -774,14 +758,12 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	res, err := svc.UsagePairwiseComparison(
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				GitBranch:         "alpha/main",
-				ExcludeProjectKey: "pl1:sha256:hidden",
-			},
-			LeftDimension:  "project",
-			LeftValue:      "alpha",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
+			GitBranch:         "alpha/main",
+			ExcludeProjectKey: "pl1:sha256:hidden",
+			LeftDimension:     "project",
+			LeftValue:         "alpha",
+			RightDimension:    "model",
+			RightValue:        "gpt-4o",
 		},
 	)
 	require.NoError(t, err)

@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -5407,7 +5408,7 @@ func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
 	})
 	tokenMsg := asstMsg("token", 0, "response")
 	tokenMsg.Model = "claude-opus-4-20250514"
-	tokenMsg.TokenUsage = json.RawMessage(`{"output_tokens":500}`)
+	tokenMsg.TokenUsage = jsontext.Value(`{"output_tokens":500}`)
 	tokenMsg.ContextTokens = 80000
 	tokenMsg.OutputTokens = 500
 	tokenMsg.HasContextTokens = true

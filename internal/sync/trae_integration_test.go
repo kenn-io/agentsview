@@ -3,7 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,7 +25,7 @@ func writeTraeSyncDB(t *testing.T, path, reply string) {
 	require.NoError(t, db.Ping())
 	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
-	value, err := json.Marshal(map[string]any{"list": []any{traeSyncSession("rewrite", reply)}})
+	value, err := json.Marshal(map[string]any{"list": []any{traeSyncSession("rewrite", reply)}}, json.Deterministic(true))
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?)`, "memento/icube-ai-agent-storage", value)
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func rewriteTraeSyncDB(t *testing.T, path, reply string, mtime time.Time) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	value, err := json.Marshal(map[string]any{"list": []any{traeSyncSession("rewrite", reply)}})
+	value, err := json.Marshal(map[string]any{"list": []any{traeSyncSession("rewrite", reply)}}, json.Deterministic(true))
 	require.NoError(t, err)
 	_, err = db.Exec(`UPDATE ItemTable SET value = ? WHERE key = ?`, value, "memento/icube-ai-agent-storage")
 	require.NoError(t, err)
@@ -67,7 +67,7 @@ func setTraeSyncDBSessions(t *testing.T, path string, sessions []any, mtime time
 	t.Helper()
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	value, err := json.Marshal(map[string]any{"list": sessions})
+	value, err := json.Marshal(map[string]any{"list": sessions}, json.Deterministic(true))
 	require.NoError(t, err)
 	_, err = db.Exec(`UPDATE ItemTable SET value = ? WHERE key = ?`, value, "memento/icube-ai-agent-storage")
 	require.NoError(t, err)
@@ -89,7 +89,7 @@ func seedTraeSyncWALDB(t *testing.T, path string, sessions []any) {
 	require.NoError(t, err)
 	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
-	value, err := json.Marshal(map[string]any{"list": sessions})
+	value, err := json.Marshal(map[string]any{"list": sessions}, json.Deterministic(true))
 	require.NoError(t, err)
 	_, err = db.Exec(
 		`INSERT INTO ItemTable(key, value) VALUES (?, ?)`,
@@ -125,7 +125,7 @@ func TestTraeEncryptedLayoutReportsUnsupportedSource(t *testing.T) {
 				value, err := json.Marshal(map[string]any{"list": []any{map[string]any{
 					"sessionId": "stub",
 					"messages":  []any{},
-				}}})
+				}}}, json.Deterministic(true))
 				require.NoError(t, err)
 				_, err = db.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?)`, "memento/icube-ai-agent-storage", value)
 				require.NoError(t, err)

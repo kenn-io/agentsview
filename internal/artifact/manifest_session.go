@@ -59,8 +59,8 @@ type manifestSession struct {
 	SourceSessionID      string `json:"source_session_id,omitempty"`
 	SourceVersion        string `json:"source_version,omitempty"`
 	TranscriptFidelity   string `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines int    `json:"parser_malformed_lines,omitempty"`
-	IsTruncated          bool   `json:"is_truncated,omitempty"`
+	ParserMalformedLines int    `json:"parser_malformed_lines,omitzero"`
+	IsTruncated          bool   `json:"is_truncated,omitzero"`
 
 	DeletedAt          *string `json:"deleted_at,omitempty"`
 	TerminationStatus  *string `json:"termination_status,omitempty"`

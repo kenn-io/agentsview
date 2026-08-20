@@ -11,7 +11,7 @@ import (
 func (s *Server) registerAssetRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/assets", "Assets")
 
-	raw(s, group, http.MethodGet, "/{filename}", "Get imported asset", s.humaGetAsset)
+	s.raw(group, http.MethodGet, "/{filename}", "Get imported asset", s.humaGetAsset)
 }
 
 type assetInput struct {

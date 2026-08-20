@@ -2,7 +2,8 @@ package parser
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -701,10 +702,10 @@ func TestConvertVibeMessageToolCalls(t *testing.T) {
 		Role: "assistant",
 		ToolCalls: []VibeToolCall{
 			{ID: "call_obj", Function: VibeToolCallFunction{
-				Name: "read_file", Arguments: json.RawMessage(`{"path":"a.txt"}`),
+				Name: "read_file", Arguments: jsontext.Value(`{"path":"a.txt"}`),
 			}},
 			{ID: "call_str", Function: VibeToolCallFunction{
-				Name: "run_shell_command", Arguments: json.RawMessage(`"{\"cmd\":\"ls\"}"`),
+				Name: "run_shell_command", Arguments: jsontext.Value(`"{\"cmd\":\"ls\"}"`),
 			}},
 		},
 	}

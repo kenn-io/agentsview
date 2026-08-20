@@ -30,11 +30,9 @@ func (f antigravityProviderFactory) Capabilities() Capabilities {
 func (f antigravityProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &antigravityProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   antigravityProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    antigravityProviderCapabilities(),
+		Config:  cfg,
 		sources: newAntigravitySourceSet(cfg.Roots),
 	}
 }

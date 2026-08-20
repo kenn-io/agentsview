@@ -3,7 +3,8 @@ package activity
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"slices"
 	"strings"
@@ -320,11 +321,11 @@ func compareInt64(left, right int64) int {
 // map keys, making this stable across store row order and daemon restarts.
 func ArtifactDigest(artifacts CandidateArtifacts) (string, error) {
 	hash := sha256.New()
-	if err := json.NewEncoder(hash).Encode(struct {
+	if err := json.MarshalEncode(jsontext.NewEncoder(hash), struct {
 		Report     Report                      `json:"report"`
 		Sessions   []SessionRow                `json:"sessions"`
 		Membership map[string]BucketMembership `json:"membership"`
-	}{artifacts.Report, artifacts.Sessions, artifacts.Membership}); err != nil {
+	}{artifacts.Report, artifacts.Sessions, artifacts.Membership}, json.Deterministic(true)); err != nil {
 		return "", fmt.Errorf("encoding activity report artifact digest: %w", err)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil

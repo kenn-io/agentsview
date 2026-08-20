@@ -200,9 +200,7 @@ func TestSyncPathsContextPropagatesChangedPathClassificationFailure(
 	))
 	wantErr := errors.New("changed-path classification failed")
 	provider := &changedPathFailureProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "changed-path-failure", FileBased: true},
-		},
+		Def:               parser.AgentDef{Type: "changed-path-failure", FileBased: true},
 		classificationErr: wantErr,
 	}
 	engine := newChangedPathFailureEngine(t, database, root, provider)
@@ -226,9 +224,7 @@ func TestSyncPathsContextPropagatesChangedPathWatchRootFailure(t *testing.T) {
 	require.NoError(t, os.WriteFile(changedPath, []byte("{}\n"), 0o600))
 	wantErr := errors.New("watch root resolution failed")
 	provider := &changedPathFailureProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "changed-path-failure", FileBased: true},
-		},
+		Def:          parser.AgentDef{Type: "changed-path-failure", FileBased: true},
 		watchPlanErr: wantErr,
 	}
 	engine := newChangedPathFailureEngine(t, database, root, provider)
@@ -246,12 +242,10 @@ func TestSyncPathsContextPropagatesStoredHintCancellation(t *testing.T) {
 	changedPath := filepath.Join(root, "container.db")
 	require.NoError(t, os.WriteFile(changedPath, []byte("fixture"), 0o600))
 	provider := &changedPathFailureProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "changed-path-failure", FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				StoredSourceHints: parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: "changed-path-failure", FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			StoredSourceHints: parser.CapabilitySupported,
+		}},
 		storedHintScopes: true,
 	}
 	engine := newChangedPathFailureEngine(t, database, root, provider)
@@ -280,14 +274,12 @@ func TestSyncPathsContextDoesNotTombstoneAfterIncompleteReplacement(t *testing.T
 		DisplayPath: changedPath, FingerprintKey: changedPath,
 	}
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "watch-failure", FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources: parser.CapabilitySupported,
-				WatchSources:    parser.CapabilitySupported,
-				FindSource:      parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: "watch-failure", FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources: parser.CapabilitySupported,
+			WatchSources:    parser.CapabilitySupported,
+			FindSource:      parser.CapabilitySupported,
+		}},
 		source:   &source,
 		parseErr: errors.New("replacement parse failed"),
 	}
@@ -335,15 +327,13 @@ func TestReconcileWatchRootsCommitsHealthyProvidersAndScopesFailedRetry(t *testi
 	}
 	started := time.Unix(1704067200, 0)
 	healthy := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "healthy-stream", FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-				FindSource:         parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: "healthy-stream", FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+			FindSource:         parser.CapabilitySupported,
+		}},
 		source: &healthySource,
 		parseOutcome: parser.ParseOutcome{
 			Results: []parser.ParseResultOutcome{{
@@ -359,9 +349,9 @@ func TestReconcileWatchRootsCommitsHealthyProvidersAndScopesFailedRetry(t *testi
 		},
 	}
 	failed := &failingDBBackedProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{
+		Def: parser.AgentDef{
 			Type: "failed-stream", FileBased: true,
-		}},
+		},
 		err: errors.New("permission denied"), failOnCall: 1,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -444,15 +434,13 @@ func TestReconcileWatchRootsLinkingFailureExpandsRetryToCompletedScopes(t *testi
 	}
 	started := time.Unix(1704067200, 0)
 	healthy := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "healthy-stream", FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				DiscoverSources:    parser.CapabilitySupported,
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-				FindSource:         parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: "healthy-stream", FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+			FindSource:         parser.CapabilitySupported,
+		}},
 		source: &healthySource,
 		parseOutcome: parser.ParseOutcome{
 			Results: []parser.ParseResultOutcome{{
@@ -468,9 +456,9 @@ func TestReconcileWatchRootsLinkingFailureExpandsRetryToCompletedScopes(t *testi
 		},
 	}
 	failed := &failingDBBackedProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{
+		Def: parser.AgentDef{
 			Type: "failed-stream", FileBased: true,
-		}},
+		},
 		err: errors.New("permission denied"), failOnCall: 1,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -574,15 +562,13 @@ func TestReconcileWatchRootsRetainsPartialFailedProviderWithoutDeletionProof(t *
 			Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
 		}
 		return &directStreamingProvider{
-			ProviderBase: parser.ProviderBase{
-				Def: parser.AgentDef{Type: agent, FileBased: true},
-				Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-					DiscoverSources:    parser.CapabilitySupported,
-					StreamingDiscovery: parser.CapabilitySupported,
-					WatchSources:       parser.CapabilitySupported,
-					FindSource:         parser.CapabilitySupported,
-				}},
-			},
+			Def: parser.AgentDef{Type: agent, FileBased: true},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				DiscoverSources:    parser.CapabilitySupported,
+				StreamingDiscovery: parser.CapabilitySupported,
+				WatchSources:       parser.CapabilitySupported,
+				FindSource:         parser.CapabilitySupported,
+			}},
 			source: &source,
 			parseOutcome: parser.ParseOutcome{
 				Results: []parser.ParseResultOutcome{{
@@ -671,9 +657,9 @@ func TestReconcileWatchRootsJoinsProviderAndLaterProcessingFailures(t *testing.T
 	discoveryErr := errors.New("provider discovery failed")
 	laterErr := errors.New("reconciliation page failed")
 	failed := &failingDBBackedProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{
+		Def: parser.AgentDef{
 			Type: "join-failed", FileBased: true,
-		}},
+		},
 		err: discoveryErr, failOnCall: 1,
 	}
 	healthySource := parser.SourceRef{
@@ -681,12 +667,10 @@ func TestReconcileWatchRootsJoinsProviderAndLaterProcessingFailures(t *testing.T
 		DisplayPath: healthyPath, FingerprintKey: healthyPath,
 	}
 	healthy := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: "join-healthy", FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				StreamingDiscovery: parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: "join-healthy", FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			StreamingDiscovery: parser.CapabilitySupported,
+		}},
 		source: &healthySource,
 	}
 	engine := NewEngine(database, EngineConfig{
@@ -751,9 +735,8 @@ func TestReconciliationCandidateDoesNotHashStableClaudeSource(t *testing.T) {
 	assert.Equal(t, size, storedSize)
 	assert.Equal(t, mtime, storedMtime)
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion("stable-session"))
-	base := &directStreamingProvider{ProviderBase: parser.ProviderBase{
-		Def: parser.AgentDef{Type: parser.AgentClaude, FileBased: true},
-	}}
+	base := &directStreamingProvider{
+		Def: parser.AgentDef{Type: parser.AgentClaude, FileBased: true}}
 	provider := &fingerprintCountingProvider{directStreamingProvider: base}
 	engine := &Engine{db: database}
 	source := parser.SourceRef{

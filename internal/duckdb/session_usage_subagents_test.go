@@ -4,7 +4,7 @@ package duckdb
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"testing"
 
@@ -50,7 +50,7 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 			// these identifiers, which is what dedup keys off.
 			ClaudeMessageID: messageID,
 			ClaudeRequestID: "req-" + messageID,
-			TokenUsage: json.RawMessage(fmt.Sprintf(
+			TokenUsage: jsontext.Value(fmt.Sprintf(
 				`{"input_tokens":%d,"output_tokens":%d}`, in, out)),
 		}
 	}

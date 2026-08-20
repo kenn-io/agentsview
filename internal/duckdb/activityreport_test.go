@@ -4,7 +4,7 @@ package duckdb
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"testing"
 	"time"
@@ -242,7 +242,7 @@ func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	root := syncSession("root", "proj1", "root first", "2026-06-14T10:00:00.000Z", 1)
 	rootMsg := syncMessage("root", 0, "assistant", "x", "2026-06-14T10:00:00.000Z")
 	rootMsg.Model = "root-model"
-	rootMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	rootMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	rootMsg.OutputTokens = 500
 	rootMsg.ClaudeMessageID = "m-root"
 	rootMsg.ClaudeRequestID = "r-root"
@@ -253,7 +253,7 @@ func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	sub.ParentSessionID = &parent
 	subMsg := syncMessage("agent-sub", 0, "assistant", "y", "2026-06-14T10:03:00.000Z")
 	subMsg.Model = "sub-model"
-	subMsg.TokenUsage = json.RawMessage(`{"input_tokens":2000,"output_tokens":700}`)
+	subMsg.TokenUsage = jsontext.Value(`{"input_tokens":2000,"output_tokens":700}`)
 	subMsg.OutputTokens = 700
 	subMsg.ClaudeMessageID = "m-sub"
 	subMsg.ClaudeRequestID = "r-sub"
@@ -265,7 +265,7 @@ func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	// must drop its usage row while the session itself still appears.
 	forkMsg := syncMessage("fork", 0, "assistant", "x", "2026-06-14T10:05:00.000Z")
 	forkMsg.Model = "root-model"
-	forkMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	forkMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	forkMsg.OutputTokens = 500
 	forkMsg.ClaudeMessageID = "m-root"
 	forkMsg.ClaudeRequestID = "r-root"
@@ -311,7 +311,7 @@ func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {
 	// cost is deterministic.
 	msg := syncMessage("s1", 0, "assistant", "x", "2026-06-14T10:30:00.000Z")
 	msg.Model = "claude-sonnet-4-20250514"
-	msg.TokenUsage = json.RawMessage(
+	msg.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":500}`)
 	msg.OutputTokens = 500
 	writes := []db.SessionBatchWrite{{
@@ -347,14 +347,14 @@ func TestDuckGetActivityReportPrefersCompleteClaudeSnapshot(t *testing.T) {
 	partial.Model = "claude-sonnet-4-20250514"
 	partial.ClaudeMessageID = "msg-stream"
 	partial.ClaudeRequestID = "req-stream"
-	partial.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":5}`)
+	partial.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":5}`)
 	partial.OutputTokens = 5
 	complete := syncMessage(
 		"streamed", 1, "assistant", "complete", "2026-06-14T10:31:00.000Z")
 	complete.Model = "claude-sonnet-4-20250514"
 	complete.ClaudeMessageID = "msg-stream"
 	complete.ClaudeRequestID = "req-stream"
-	complete.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":631}`)
+	complete.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":631}`)
 	complete.OutputTokens = 631
 	store := activityReportStore(t, []db.SessionBatchWrite{{
 		Session:         sess,
@@ -390,7 +390,7 @@ func TestDuckGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 		"activity-parent", 0, "assistant", "partial",
 		"2026-06-14T10:00:00.000Z")
 	partial.Model = "partial-model"
-	partial.TokenUsage = json.RawMessage(`{"input_tokens":10,"output_tokens":5}`)
+	partial.TokenUsage = jsontext.Value(`{"input_tokens":10,"output_tokens":5}`)
 	partial.OutputTokens = 5
 	partial.ClaudeMessageID = "activity-message"
 	partial.ClaudeRequestID = "activity-request"
@@ -398,7 +398,7 @@ func TestDuckGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 		"activity-child", 0, "assistant", "complete",
 		"2026-06-14T10:01:00.000Z")
 	complete.Model = "complete-model"
-	complete.TokenUsage = json.RawMessage(
+	complete.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":631}`)
 	complete.OutputTokens = 631
 	complete.ClaudeMessageID = "activity-message"
@@ -446,7 +446,7 @@ func TestDuckGetActivityReportSelectsPeersForLargeSnapshotKeySet(t *testing.T) {
 			"2026-06-14T10:00:00.000Z")
 		candidateMessages[i].ClaudeMessageID = messageID
 		candidateMessages[i].ClaudeRequestID = requestID
-		candidateMessages[i].TokenUsage = json.RawMessage(
+		candidateMessages[i].TokenUsage = jsontext.Value(
 			`{"input_tokens":1,"output_tokens":1}`)
 		candidateMessages[i].OutputTokens = 1
 		peerMessages[i] = syncMessage(
@@ -454,7 +454,7 @@ func TestDuckGetActivityReportSelectsPeersForLargeSnapshotKeySet(t *testing.T) {
 			"2026-06-14T10:01:00.000Z")
 		peerMessages[i].ClaudeMessageID = messageID
 		peerMessages[i].ClaudeRequestID = requestID
-		peerMessages[i].TokenUsage = json.RawMessage(
+		peerMessages[i].TokenUsage = jsontext.Value(
 			`{"input_tokens":1,"output_tokens":10}`)
 		peerMessages[i].OutputTokens = 10
 	}
@@ -487,7 +487,7 @@ func TestDuckGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
 		"excluded-earlier", 0, "assistant", "excluded",
 		"2026-06-14T10:00:00Z")
 	excludedMsg.Model = "model-x"
-	excludedMsg.TokenUsage = json.RawMessage(
+	excludedMsg.TokenUsage = jsontext.Value(
 		`{"input_tokens":10,"output_tokens":5}`)
 	excludedMsg.OutputTokens = 5
 	excludedMsg.SourceUUID = "shared-source"
@@ -495,7 +495,7 @@ func TestDuckGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
 		"included-later", 0, "assistant", "included",
 		"2026-06-14T10:01:00Z")
 	includedMsg.Model = "model-x"
-	includedMsg.TokenUsage = json.RawMessage(
+	includedMsg.TokenUsage = jsontext.Value(
 		`{"input_tokens":20,"output_tokens":631}`)
 	includedMsg.OutputTokens = 631
 	includedMsg.SourceUUID = "shared-source"
@@ -622,7 +622,7 @@ func TestDuckGetActivityReportPricingBandApplicationCountedOnce(t *testing.T) {
 	msg := syncMessage(
 		sess.ID, 0, "assistant", "request", "2026-06-14T10:30:00.000Z")
 	msg.Model = "banded-model"
-	msg.TokenUsage = json.RawMessage(`{"input_tokens":300000}`)
+	msg.TokenUsage = jsontext.Value(`{"input_tokens":300000}`)
 	store := activityReportStore(t, []db.SessionBatchWrite{{
 		Session: sess, Messages: []db.Message{msg},
 		DataVersion: 1, ReplaceMessages: true,
@@ -741,7 +741,7 @@ func TestDuckGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.
 	earlier.Agent = "claude"
 	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00.000Z")
 	earlierMsg.Model = "partial-model"
-	earlierMsg.TokenUsage = json.RawMessage(
+	earlierMsg.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":500}`)
 	earlierMsg.OutputTokens = 500
 	earlierMsg.ClaudeMessageID = "m-dup"
@@ -751,7 +751,7 @@ func TestDuckGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.
 	later.Agent = "claude"
 	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:31:00.000Z")
 	laterMsg.Model = "complete-model"
-	laterMsg.TokenUsage = json.RawMessage(
+	laterMsg.TokenUsage = jsontext.Value(
 		`{"input_tokens":2000,"output_tokens":900}`)
 	laterMsg.OutputTokens = 900
 	laterMsg.ClaudeMessageID = "m-dup"
@@ -850,7 +850,7 @@ func TestDuckGetActivityReportExcludesIneligibleUsage(t *testing.T) {
 
 	eligible := syncMessage("s1", 0, "assistant", "x", "2026-06-14T10:30:00.000Z")
 	eligible.Model = "claude-sonnet-4-20250514"
-	eligible.TokenUsage = json.RawMessage(
+	eligible.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":500}`)
 	eligible.OutputTokens = 500
 	// Ineligible: a synthetic-model message carrying real token_usage. The
@@ -858,7 +858,7 @@ func TestDuckGetActivityReportExcludesIneligibleUsage(t *testing.T) {
 	// into the day totals even though the blob is non-empty.
 	synthetic := syncMessage("s1", 1, "assistant", "y", "2026-06-14T10:31:00.000Z")
 	synthetic.Model = "<synthetic>"
-	synthetic.TokenUsage = json.RawMessage(
+	synthetic.TokenUsage = jsontext.Value(
 		`{"input_tokens":9000,"output_tokens":7000}`)
 	synthetic.OutputTokens = 7000
 
@@ -990,7 +990,7 @@ func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
 	earlierMsg.Model = "claude-sonnet-4-20250514"
 	earlierMsg.ClaudeMessageID = "dup-m"
 	earlierMsg.SourceUUID = "dup-source"
-	earlierMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	earlierMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	earlierMsg.OutputTokens = 500
 
 	later := syncSession("later", "proj2", "first", "2026-06-14T10:30:00.123Z", 1)
@@ -998,7 +998,7 @@ func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
 	laterMsg.Model = "claude-sonnet-4-20250514"
 	laterMsg.ClaudeMessageID = "dup-m"
 	laterMsg.SourceUUID = "dup-source"
-	laterMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":9000}`)
+	laterMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`)
 	laterMsg.OutputTokens = 9000
 
 	writes := []db.SessionBatchWrite{
@@ -1031,7 +1031,7 @@ func TestDuckGetActivityReportUsageDedupFallsBackToSourceUUID(t *testing.T) {
 	earlierMsg.Model = "claude-sonnet-4-20250514"
 	earlierMsg.ClaudeMessageID = "dup-m"
 	earlierMsg.SourceUUID = "src-dup"
-	earlierMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	earlierMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	earlierMsg.OutputTokens = 500
 
 	later := syncSession("later", "proj2", "first", "2026-06-14T10:30:01Z", 1)
@@ -1040,7 +1040,7 @@ func TestDuckGetActivityReportUsageDedupFallsBackToSourceUUID(t *testing.T) {
 	laterMsg.Model = "claude-sonnet-4-20250514"
 	laterMsg.ClaudeMessageID = "dup-m"
 	laterMsg.SourceUUID = "src-dup"
-	laterMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":900}`)
+	laterMsg.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":900}`)
 	laterMsg.OutputTokens = 900
 
 	writes := []db.SessionBatchWrite{
@@ -1070,7 +1070,7 @@ func TestDuckGetActivityReportZeroCostKeepsPrimaryModel(t *testing.T) {
 	msg := syncMessage("u", 0, "assistant", "x", "2026-06-14T10:30:00Z")
 	// Known model, unpriced and zero tokens -> a usage row with zero cost.
 	msg.Model = "model-x"
-	msg.TokenUsage = json.RawMessage(`{"input_tokens":0,"output_tokens":0}`)
+	msg.TokenUsage = jsontext.Value(`{"input_tokens":0,"output_tokens":0}`)
 	msg.OutputTokens = 0
 	writes := []db.SessionBatchWrite{{
 		Session: sess, Messages: []db.Message{msg},

@@ -3,7 +3,8 @@ package artifact
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -448,7 +449,7 @@ func TestExportContinuesPastInvalidTokenUsage(t *testing.T) {
 	seedSession(t, database, "invalid", "alpha")
 	require.NoError(t, database.ReplaceSessionMessages("invalid", []db.Message{{
 		SessionID: "invalid", Ordinal: 0, Role: "assistant",
-		Content: "bad usage", TokenUsage: json.RawMessage(`{"input_tokens":`),
+		Content: "bad usage", TokenUsage: jsontext.Value(`{"input_tokens":`),
 	}}))
 	seedSession(t, database, "valid", "alpha")
 

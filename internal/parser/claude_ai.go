@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"strings"
@@ -62,19 +63,19 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 	r io.Reader,
 	onConversation func(ParseResult) error,
 ) error {
-	dec := json.NewDecoder(r)
+	dec := jsontext.NewDecoder(r)
 
-	tok, err := dec.Token()
+	tok, err := dec.ReadToken()
 	if err != nil {
 		return fmt.Errorf("reading opening token: %w", err)
 	}
-	if delim, ok := tok.(json.Delim); !ok || delim != '[' {
+	if tok.Kind() != jsontext.KindBeginArray {
 		return fmt.Errorf("expected JSON array, got %v", tok)
 	}
 
-	for dec.More() {
+	for dec.PeekKind() != jsontext.KindEndArray {
 		var conv claudeAIConversation
-		if err := dec.Decode(&conv); err != nil {
+		if err := json.UnmarshalDecode(dec, &conv); err != nil {
 			return fmt.Errorf("decoding conversation: %w", err)
 		}
 
@@ -94,8 +95,8 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 			return err
 		}
 	}
-
-	return nil
+	_, err = dec.ReadToken()
+	return err
 }
 
 // assembleClaudeAIContent builds message content from content

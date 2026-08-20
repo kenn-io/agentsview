@@ -2,7 +2,8 @@ package server_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -247,7 +248,7 @@ func seedActivityReportMetadataFixture(t *testing.T, te *testEnv) {
 			if i == 1 {
 				m.Role = "assistant"
 				m.Model = fallbackModel
-				m.TokenUsage = json.RawMessage(
+				m.TokenUsage = jsontext.Value(
 					`{"input_tokens":200,"output_tokens":100}`)
 			}
 		})

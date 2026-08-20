@@ -5,7 +5,7 @@ import "context"
 func (s *Server) registerOpenersRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/openers", "Openers")
 
-	get(s, group, "", "List openers", s.humaListOpeners)
+	s.get(group, "", "List openers", s.humaListOpeners)
 }
 
 type openersResponse struct {

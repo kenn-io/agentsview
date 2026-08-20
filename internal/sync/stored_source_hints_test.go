@@ -29,9 +29,8 @@ func (f hintRecordingFactory) Definition() parser.AgentDef {
 func (f hintRecordingFactory) Capabilities() parser.Capabilities { return f.caps }
 
 func (f hintRecordingFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
-	return &hintRecordingProvider{ProviderBase: parser.ProviderBase{
-		Def: f.Definition(), Caps: f.caps, Config: cfg.Clone(),
-	}, seen: f.seen}
+	return &hintRecordingProvider{
+		Def: f.Definition(), Caps: f.caps, Config: cfg.Clone(), seen: f.seen}
 }
 
 type hintRecordingProvider struct {

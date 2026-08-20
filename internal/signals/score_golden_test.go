@@ -1,7 +1,7 @@
 package signals
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"testing"
 

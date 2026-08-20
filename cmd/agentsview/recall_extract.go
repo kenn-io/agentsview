@@ -4,7 +4,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -321,7 +322,7 @@ func newRecallExtractRunCommand() *cobra.Command {
 				return err
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()),
 					extractRunResult{
 						Sessions:  result.Sessions,
 						Failed:    result.Failed,
@@ -329,6 +330,7 @@ func newRecallExtractRunCommand() *cobra.Command {
 						Entries:   result.Entries,
 						Activated: result.Activated,
 					})
+
 			}
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"Sessions: %d done, %d failed\nUnits: %d\nEntries: %d new\n",
@@ -382,7 +384,7 @@ func newRecallExtractStatusCommand() *cobra.Command {
 				return err
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(status)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), status)
 			}
 			printExtractStatusHuman(cmd.OutOrStdout(), status)
 			return nil
@@ -600,7 +602,7 @@ func runRecallExtractPreview(
 		Chunks:        chunks,
 	}
 	if outputFormat(cmd) == "json" {
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+		return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), result)
 	}
 	return printRecallExtractDryRunHuman(cmd.OutOrStdout(), result)
 }

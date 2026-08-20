@@ -13,7 +13,8 @@ package parser
 
 import (
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -67,9 +68,9 @@ type poolsideAssistantMessageEnd struct {
 
 // poolsideToolCallParsed contains parsed tool call data.
 type poolsideToolCallParsed struct {
-	ID   string          `json:"id"`
-	Name string          `json:"name"`
-	Args json.RawMessage `json:"args"`
+	ID   string         `json:"id"`
+	Name string         `json:"name"`
+	Args jsontext.Value `json:"args"`
 }
 
 // poolsideToolCallResult contains tool call result.

@@ -3,7 +3,8 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 
 	"github.com/spf13/cobra"
 )
@@ -34,9 +35,9 @@ func newSessionWatchCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc := jsontext.NewEncoder(cmd.OutOrStdout())
 			for ev := range ch {
-				if err := enc.Encode(ev); err != nil {
+				if err := json.MarshalEncode(enc, ev); err != nil {
 					return err
 				}
 			}

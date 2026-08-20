@@ -220,9 +220,9 @@ func TestCollectAndBatchRetainsParseLeaseThroughWrite(t *testing.T) {
 	results <- syncJob{
 		path:           "/sessions/one.jsonl",
 		retentionLease: lease,
-		processResult: processResult{results: []parser.ParseResult{{
+		results: []parser.ParseResult{{
 			Session: parser.ParsedSession{ID: "one", Agent: parser.AgentClaude},
-		}}},
+		}},
 	}
 	close(results)
 	done := make(chan struct{})
@@ -299,7 +299,7 @@ func TestCollectAndBatchKeepsFanoutUnderOneLeaseUntilOneWrite(t *testing.T) {
 	results <- syncJob{
 		path:           "/sessions/data.sqlite3",
 		retentionLease: lease,
-		processResult:  processResult{results: parsed},
+		results:        parsed,
 	}
 	close(results)
 
@@ -319,7 +319,7 @@ func TestCollectAndBatchKeepsFanoutUnderOneLeaseUntilOneWrite(t *testing.T) {
 func TestStartWorkersFlushesBelowBatchUnderAdmissionPressure(t *testing.T) {
 	const agent parser.AgentType = "retention-test"
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: agent}},
+		Def: parser.AgentDef{Type: agent},
 		parseOutcome: parser.ParseOutcome{
 			Results: []parser.ParseResultOutcome{{
 				Result: parser.ParseResult{Session: parser.ParsedSession{
@@ -378,7 +378,7 @@ func TestStartWorkersFlushesBelowBatchUnderAdmissionPressure(t *testing.T) {
 func TestStartWorkersCancellationReleasesAdmissionWaiters(t *testing.T) {
 	const agent parser.AgentType = "retention-cancel-test"
 	provider := &directStreamingProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: agent}},
+		Def: parser.AgentDef{Type: agent},
 		parseOutcome: parser.ParseOutcome{
 			Results: []parser.ParseResultOutcome{{
 				Result: parser.ParseResult{Session: parser.ParsedSession{

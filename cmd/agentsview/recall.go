@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -112,7 +113,7 @@ func newRecallListCommand() *cobra.Command {
 				return err
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(list)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), list)
 			}
 			out := cmd.OutOrStdout()
 			printRecallEntryTrustedOnlyHuman(out, list.TrustedOnly)
@@ -178,7 +179,7 @@ func newRecallStatsCommand() *cobra.Command {
 			stats := buildRecallStats(list.RecallEntries, f.Limit)
 			stats.TrustedOnly = list.TrustedOnly
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(stats)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), stats)
 			}
 			return printRecallStatsHuman(cmd.OutOrStdout(), stats)
 		},
@@ -323,7 +324,7 @@ func newRecallGetCommand() *cobra.Command {
 				return fmt.Errorf("recall entry %s not found", args[0])
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(recall)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), recall)
 			}
 			if err := printRecallEntryHuman(cmd.OutOrStdout(), recall); err != nil {
 				return err
@@ -375,7 +376,7 @@ func newRecallQueryCommand() *cobra.Command {
 				return err
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), result)
 			}
 			out := cmd.OutOrStdout()
 			printRecallEntryTrustedOnlyHuman(out, result.TrustedOnly)
@@ -557,7 +558,7 @@ func newRecallBriefCommand() *cobra.Command {
 				RecallEntries:  result.RecallEntries,
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(brief)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), brief)
 			}
 			if err := printRecallBriefHuman(cmd.OutOrStdout(), brief); err != nil {
 				return err
@@ -940,7 +941,7 @@ func newRecallImportCommand() *cobra.Command {
 				return err
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), result)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Imported: %d\n", result.Imported)
 			if dryRun {

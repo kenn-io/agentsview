@@ -27,11 +27,9 @@ func (f gptmeProviderFactory) Capabilities() Capabilities {
 func (f gptmeProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &gptmeProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   gptmeProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    gptmeProviderCapabilities(),
+		Config:  cfg,
 		sources: newGptmeSourceSet(cfg.Roots),
 	}
 }

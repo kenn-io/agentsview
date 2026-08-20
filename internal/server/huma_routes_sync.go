@@ -21,14 +21,13 @@ import (
 func (s *Server) registerSyncRoutes() {
 	group := newRouteGroup(s.api, "/api/v1", "Sync")
 
-	stream(s, group, http.MethodPost, "/sync", "Trigger sync", s.humaTriggerSync)
-	stream(s, group, http.MethodPost, "/resync", "Trigger full resync", s.humaTriggerResync)
-	get(s, group, "/sync/status", "Get sync status", s.humaSyncStatus)
-	stream(
-		s, group, http.MethodPost, "/sync/remotes",
+	s.stream(group, http.MethodPost, "/sync", "Trigger sync", s.humaTriggerSync)
+	s.stream(group, http.MethodPost, "/resync", "Trigger full resync", s.humaTriggerResync)
+	s.get(group, "/sync/status", "Get sync status", s.humaSyncStatus)
+	s.stream(group, http.MethodPost, "/sync/remotes",
 		"Sync remote hosts", s.humaSyncRemotes, streamJSONResponse(),
 	)
-	postLong(s, group, "/sessions/sync", "Sync a session", s.humaSyncSession)
+	s.postLong(group, "/sessions/sync", "Sync a session", s.humaSyncSession)
 }
 
 type syncStatusResponse struct {
@@ -804,20 +803,17 @@ func httpCoordinatorFailure(
 	hosts []config.RemoteHost,
 	err error,
 ) (remoteSyncFailure, bool) {
-	var pending *remotesync.PendingCleanupError
-	if errors.As(err, &pending) {
+	if _, ok := errors.AsType[*remotesync.PendingCleanupError](err); ok {
 		return remoteSyncFailure{}, false
 	}
 	primary := primaryRemoteCoordinatorError(err)
 	var hostName string
 	summaryErr := primary
-	var contributorErr *syncpkg.RebuildContributorError
-	if errors.As(primary, &contributorErr) {
+	if contributorErr, ok := errors.AsType[*syncpkg.RebuildContributorError](primary); ok {
 		hostName = contributorErr.Contributor
 		summaryErr = contributorErr.Err
 	} else {
-		var hostErr *remotesync.HostError
-		if errors.As(primary, &hostErr) {
+		if hostErr, ok := errors.AsType[*remotesync.HostError](primary); ok {
 			hostName = hostErr.Host
 		}
 	}
@@ -865,13 +861,11 @@ func isHTTPRemoteCoordinatorError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var pending *remotesync.PendingCleanupError
-	if errors.As(err, &pending) {
+	if _, ok := errors.AsType[*remotesync.PendingCleanupError](err); ok {
 		return true
 	}
 	primary := primaryRemoteCoordinatorError(err)
-	var contributor *syncpkg.RebuildContributorError
-	if errors.As(primary, &contributor) {
+	if _, ok := errors.AsType[*syncpkg.RebuildContributorError](primary); ok {
 		return true
 	}
 	var host *remotesync.HostError
@@ -965,8 +959,7 @@ func (s *Server) runRemoteSyncHostsOwned(
 			)
 		}
 		if err != nil {
-			var pending *remotesync.PendingCleanupError
-			if errors.As(err, &pending) {
+			if pending, ok := errors.AsType[*remotesync.PendingCleanupError](err); ok {
 				return failures, totals, pending
 			}
 			// The raw error can embed the remote URL and response bodies,

@@ -2,7 +2,7 @@ package db
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"os"
 	"path/filepath"
 	"sync"
@@ -95,7 +95,7 @@ func seedChunkedAnalyticsFixture(t *testing.T, d *DB) {
 					ContentLength: 1,
 					Timestamp:     "2024-06-01T09:00:10Z",
 					Model:         "claude-sonnet-4-20250514",
-					TokenUsage: json.RawMessage(
+					TokenUsage: jsontext.Value(
 						`{"input_tokens":100,"output_tokens":10}`,
 					),
 				},

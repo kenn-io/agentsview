@@ -3,7 +3,8 @@ package extract
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -422,8 +423,7 @@ func (c *Client) distill(
 		// string still leak, and this message reaches doctor output and
 		// stored failure rows. Report the redacted endpoint instead.
 		cause := err
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
 			cause = urlErr.Err
 		}
 		if errors.Is(cause, errRedirectRefused) {
@@ -760,7 +760,7 @@ func boundedToken(value string, maxRunes int) string {
 // are rejected, and every entry needs a known type, a non-blank title and
 // body, and an entities array of strings.
 func parseEntries(content string) ([]Entry, error) {
-	top, err := strictObject(json.RawMessage(content), []string{"entries"})
+	top, err := strictObject(jsontext.Value(content), []string{"entries"})
 	if err != nil {
 		return nil, err
 	}
@@ -850,12 +850,12 @@ func parseEntries(content string) ([]Entry, error) {
 // keys, matched case-sensitively. json.Unmarshal already rejects trailing
 // data after the value.
 func strictObject(
-	data json.RawMessage, keys []string,
-) (map[string]json.RawMessage, error) {
+	data jsontext.Value, keys []string,
+) (map[string]jsontext.Value, error) {
 	if isJSONNull(data) {
 		return nil, fmt.Errorf("expected an object, got null")
 	}
-	var object map[string]json.RawMessage
+	var object map[string]jsontext.Value
 	if err := json.Unmarshal(data, &object); err != nil {
 		return nil, err
 	}
@@ -875,19 +875,19 @@ func strictObject(
 }
 
 func strictArray(
-	data json.RawMessage, name string,
-) ([]json.RawMessage, error) {
+	data jsontext.Value, name string,
+) ([]jsontext.Value, error) {
 	if isJSONNull(data) {
 		return nil, fmt.Errorf("%s must be an array, got null", name)
 	}
-	var list []json.RawMessage
+	var list []jsontext.Value
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, fmt.Errorf("%s must be an array: %w", name, err)
 	}
 	return list, nil
 }
 
-func strictString(data json.RawMessage, name string) (string, error) {
+func strictString(data jsontext.Value, name string) (string, error) {
 	if isJSONNull(data) {
 		return "", fmt.Errorf("%s must be a string, got null", name)
 	}
@@ -900,7 +900,7 @@ func strictString(data json.RawMessage, name string) (string, error) {
 
 // isJSONNull matters because json.Unmarshal treats null as a no-op for
 // maps, slices, and strings instead of reporting a type mismatch.
-func isJSONNull(data json.RawMessage) bool {
+func isJSONNull(data jsontext.Value) bool {
 	return string(bytes.TrimSpace(data)) == "null"
 }
 

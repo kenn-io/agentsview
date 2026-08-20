@@ -4,7 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -49,11 +50,9 @@ func (f windsurfProviderFactory) Capabilities() Capabilities {
 func (f windsurfProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &windsurfProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   windsurfProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    windsurfProviderCapabilities(),
+		Config:  cfg,
 		sources: newWindsurfSourceSet(cfg.Roots),
 	}
 }
@@ -833,35 +832,36 @@ func forEachWindsurfRecordFromReader(
 	ctx context.Context, reader io.Reader, fallbackSessionID string,
 	yield func(windsurfSessionRecord) error,
 ) error {
-	dec := json.NewDecoder(reader)
-	delim, err := dec.Token()
+	dec := jsontext.NewDecoder(reader)
+	delim, err := dec.ReadToken()
 	if err != nil {
 		return fmt.Errorf("parse windsurf chatdata: %w", err)
 	}
-	if delim != json.Delim('{') {
+	if delim.Kind() != jsontext.KindBeginObject {
 		return fmt.Errorf("parse windsurf chatdata: expected object")
 	}
 	var session vscodeCopilotSession
 	hasRequests := false
-	for dec.More() {
-		name, err := dec.Token()
+	for dec.PeekKind() != jsontext.KindEndObject {
+		nameToken, err := dec.ReadToken()
 		if err != nil {
 			return err
 		}
+		name := nameToken.String()
 		switch name {
 		case "version":
-			err = dec.Decode(&session.Version)
+			err = json.UnmarshalDecode(dec, &session.Version)
 		case "sessionId":
-			err = dec.Decode(&session.SessionID)
+			err = json.UnmarshalDecode(dec, &session.SessionID)
 		case "creationDate":
-			err = dec.Decode(&session.CreationDate)
+			err = json.UnmarshalDecode(dec, &session.CreationDate)
 		case "lastMessageDate":
-			err = dec.Decode(&session.LastMessageDate)
+			err = json.UnmarshalDecode(dec, &session.LastMessageDate)
 		case "customTitle":
-			err = dec.Decode(&session.CustomTitle)
+			err = json.UnmarshalDecode(dec, &session.CustomTitle)
 		case "requests":
 			hasRequests = true
-			err = dec.Decode(&session.Requests)
+			err = json.UnmarshalDecode(dec, &session.Requests)
 		case "tabs":
 			err = decodeWindsurfTabs(ctx, dec, yield)
 		default:
@@ -873,7 +873,7 @@ func forEachWindsurfRecordFromReader(
 			return fmt.Errorf("parse windsurf chatdata %s: %w", name, err)
 		}
 	}
-	if _, err := dec.Token(); err != nil {
+	if _, err := dec.ReadToken(); err != nil {
 		return err
 	}
 	if !hasRequests || len(session.Requests) == 0 {
@@ -893,22 +893,22 @@ func forEachWindsurfRecordFromReader(
 }
 
 func decodeWindsurfTabs(
-	ctx context.Context, dec *json.Decoder,
+	ctx context.Context, dec *jsontext.Decoder,
 	yield func(windsurfSessionRecord) error,
 ) error {
-	open, err := dec.Token()
-	if err != nil || open != json.Delim('[') {
+	open, err := dec.ReadToken()
+	if err != nil || open.Kind() != jsontext.KindBeginArray {
 		return fmt.Errorf("expected array")
 	}
 	var decoderRetained int64
 	defer func() { observeStreamingRetainedBytes(ctx, -decoderRetained) }()
-	for dec.More() {
+	for dec.PeekKind() != jsontext.KindEndArray {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		start := dec.InputOffset()
 		var tab windsurfChatTab
-		if err := dec.Decode(&tab); err != nil {
+		if err := json.UnmarshalDecode(dec, &tab); err != nil {
 			return fmt.Errorf("parse windsurf chat tab: %w", err)
 		}
 		encodedBytes := dec.InputOffset() - start
@@ -938,31 +938,12 @@ func decodeWindsurfTabs(
 		observeStreamingRetainedBytes(ctx, -int64(len(payload)))
 		observeStreamingRetainedBytes(ctx, -decodedRetained)
 	}
-	_, err = dec.Token()
+	_, err = dec.ReadToken()
 	return err
 }
 
-func skipJSONValue(dec *json.Decoder) error {
-	token, err := dec.Token()
-	if err != nil {
-		return err
-	}
-	delim, ok := token.(json.Delim)
-	if !ok || (delim != '{' && delim != '[') {
-		return nil
-	}
-	for dec.More() {
-		if delim == '{' {
-			if _, err := dec.Token(); err != nil {
-				return err
-			}
-		}
-		if err := skipJSONValue(dec); err != nil {
-			return err
-		}
-	}
-	_, err = dec.Token()
-	return err
+func skipJSONValue(dec *jsontext.Decoder) error {
+	return dec.SkipValue()
 }
 
 func windsurfDBHasSession(dbPath, sessionID string) (bool, error) {
@@ -1147,9 +1128,9 @@ func (t *windsurfBubbleType) UnmarshalJSON(data []byte) error {
 		*t = windsurfBubbleType(value)
 		return nil
 	}
-	var number json.Number
-	if err := json.Unmarshal(data, &number); err == nil {
-		*t = windsurfBubbleType(number.String())
+	number := jsontext.Value(data)
+	if number.Kind() == jsontext.KindNumber {
+		*t = windsurfBubbleType(number)
 		return nil
 	}
 	*t = ""
@@ -1218,7 +1199,7 @@ func (b windsurfChatBubble) isAssistant() bool {
 	}
 }
 
-func windsurfResponseItem(content string) json.RawMessage {
+func windsurfResponseItem(content string) jsontext.Value {
 	data, _ := json.Marshal(map[string]string{"value": content})
 	return data
 }

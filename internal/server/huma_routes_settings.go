@@ -16,16 +16,16 @@ import (
 func (s *Server) registerSettingsRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/settings", "Settings")
 
-	get(s, group, "", "Get settings", s.humaGetSettings)
-	put(s, group, "", "Update settings", s.humaUpdateSettings)
-	get(s, group, "/worktree-mappings", "List worktree mappings", s.humaListWorktreeMappings)
-	post(s, group, "/worktree-mappings", "Create worktree mapping", s.humaCreateWorktreeMapping)
-	put(s, group, "/worktree-mappings/{id}", "Update worktree mapping", s.humaUpdateWorktreeMapping)
-	deleteRoute(s, group, "/worktree-mappings/{id}", "Delete worktree mapping", s.humaDeleteWorktreeMapping)
-	post(s, group, "/worktree-mappings/apply", "Apply worktree mappings", s.humaApplyWorktreeMappings)
-	post(s, group, "/worktree-mappings/preview",
+	s.get(group, "", "Get settings", s.humaGetSettings)
+	s.put(group, "", "Update settings", s.humaUpdateSettings)
+	s.get(group, "/worktree-mappings", "List worktree mappings", s.humaListWorktreeMappings)
+	s.post(group, "/worktree-mappings", "Create worktree mapping", s.humaCreateWorktreeMapping)
+	s.put(group, "/worktree-mappings/{id}", "Update worktree mapping", s.humaUpdateWorktreeMapping)
+	s.deleteRoute(group, "/worktree-mappings/{id}", "Delete worktree mapping", s.humaDeleteWorktreeMapping)
+	s.post(group, "/worktree-mappings/apply", "Apply worktree mappings", s.humaApplyWorktreeMappings)
+	s.post(group, "/worktree-mappings/preview",
 		"Preview worktree project reclassification", s.humaPreviewWorktreeReclassification)
-	post(s, group, "/worktree-mappings/reclassify",
+	s.post(group, "/worktree-mappings/reclassify",
 		"Apply worktree project reclassification", s.humaReclassifyWorktreeProject)
 }
 

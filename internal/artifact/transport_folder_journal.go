@@ -3,7 +3,7 @@ package artifact
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -196,19 +196,15 @@ func readFolderJournalEvent(
 }
 
 func decodeCanonicalFolderJSON(body []byte, destination any) error {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
+	if err := json.Unmarshal(
+		body, destination, json.RejectUnknownMembers(true),
+	); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("trailing content")
-	}
-	canonical, err := json.Marshal(destination)
+	canonical, err := canonicalJSON(destination)
 	if err != nil {
 		return err
 	}
-	canonical = append(canonical, '\n')
 	if !bytes.Equal(body, canonical) {
 		return errors.New("noncanonical JSON")
 	}

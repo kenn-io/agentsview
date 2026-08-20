@@ -30,11 +30,9 @@ func (f cursorProviderFactory) Capabilities() Capabilities {
 func (f cursorProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &cursorProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   cursorProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    cursorProviderCapabilities(),
+		Config:  cfg,
 		sources: newCursorSourceSetWithConfig(cfg),
 	}
 }

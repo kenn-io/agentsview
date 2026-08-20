@@ -85,12 +85,10 @@ func newDuckDBPushProgressLogger() func(duckdbsync.PushProgress) {
 func (s *Server) registerPushRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/push", "Push")
 
-	stream(
-		s, group, http.MethodPost, "/pg",
+	s.stream(group, http.MethodPost, "/pg",
 		"Push to PostgreSQL", s.humaPGPush, streamJSONResponse(),
 	)
-	stream(
-		s, group, http.MethodPost, "/duckdb",
+	s.stream(group, http.MethodPost, "/duckdb",
 		"Push to DuckDB", s.humaDuckDBPush, streamJSONResponse(),
 	)
 }
@@ -156,24 +154,24 @@ type daemonPushRequest struct {
 	PG                     *config.PGConfig     `json:"pg,omitempty"`
 	DuckDB                 *config.DuckDBConfig `json:"duckdb,omitempty"`
 	SyncStateTarget        string               `json:"sync_state_target,omitempty"`
-	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitempty"`
+	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitzero"`
 	// NoVectors carries the CLI --no-vectors flag, which has no daemon-side
 	// flag of its own, into the push handler's vector-source gate.
-	NoVectors bool `json:"no_vectors,omitempty"`
+	NoVectors bool `json:"no_vectors,omitzero"`
 	// ScopeVectorsToChangedSessions is set by change-triggered watch
 	// pushes so the vector phase reads state only for the changed
 	// relational sessions (see postgres.PushOptions).
-	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitempty"`
+	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitzero"`
 	// LastReconciledVectorGeneration travels with a scoped push so this
 	// request's fresh Sync can promote to generation-wide when the active
 	// generation id has changed (see postgres.PushOptions).
-	LastReconciledVectorGeneration int64 `json:"last_reconciled_vector_generation,omitempty"`
+	LastReconciledVectorGeneration int64 `json:"last_reconciled_vector_generation,omitzero"`
 	// Automatic is set by the CLI's watch-mode DuckDB pushes: a mirror
 	// held by a live serve process defers instead of rebuilding the whole
 	// archive on every changed batch, and archive-scale diagnostics are
 	// skipped (see duckdbsync.SyncOptions.Automatic). Explicit pushes
 	// leave it unset and do neither.
-	Automatic     bool                        `json:"automatic,omitempty"`
+	Automatic     bool                        `json:"automatic,omitzero"`
 	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
 	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
 }

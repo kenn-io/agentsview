@@ -32,11 +32,9 @@ func (f commandCodeProviderFactory) Capabilities() Capabilities {
 func (f commandCodeProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &commandCodeProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   commandCodeProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    commandCodeProviderCapabilities(),
+		Config:  cfg,
 		sources: newCommandCodeSourceSet(cfg.Roots),
 	}
 }

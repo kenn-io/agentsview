@@ -4,7 +4,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -126,7 +127,7 @@ func newSessionListCommand() *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), notice)
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(list)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), list)
 			}
 			home, _ := os.UserHomeDir()
 			return printSessionListHuman(

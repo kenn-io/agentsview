@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -23,23 +23,23 @@ type daemonPushRequest struct {
 	PG                     *config.PGConfig     `json:"pg,omitempty"`
 	DuckDB                 *config.DuckDBConfig `json:"duckdb,omitempty"`
 	SyncStateTarget        string               `json:"sync_state_target,omitempty"`
-	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitempty"`
+	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitzero"`
 	// NoVectors mirrors the CLI --no-vectors flag into the daemon: it has no
 	// per-invocation flag of its own, so the gate must travel in the request.
-	NoVectors bool `json:"no_vectors,omitempty"`
+	NoVectors bool `json:"no_vectors,omitzero"`
 	// ScopeVectorsToChangedSessions is set by change-triggered watch
 	// pushes so the daemon's vector phase reads state only for the
 	// changed relational sessions (see postgres.PushOptions).
-	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitempty"`
+	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitzero"`
 	// LastReconciledVectorGeneration travels with a scoped push so the
 	// daemon's fresh Sync can promote to generation-wide when the active
 	// generation id has changed (see postgres.PushOptions).
-	LastReconciledVectorGeneration int64 `json:"last_reconciled_vector_generation,omitempty"`
+	LastReconciledVectorGeneration int64 `json:"last_reconciled_vector_generation,omitzero"`
 	// Automatic is set by the watch-mode DuckDB pushes so the daemon
 	// defers instead of rebuilding when a live serve process holds the
 	// mirror and skips archive-scale diagnostics (see
 	// duckdbsync.SyncOptions.Automatic).
-	Automatic     bool                        `json:"automatic,omitempty"`
+	Automatic     bool                        `json:"automatic,omitzero"`
 	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
 	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
 }
@@ -101,7 +101,7 @@ func postDaemonPush[T, P any](
 			return parseDaemonPushSSE[T](resp.Body, onProgress)
 		}
 		var out T
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		if err := json.UnmarshalRead(resp.Body, &out); err != nil {
 			return zero, err
 		}
 		return out, nil

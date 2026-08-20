@@ -32,11 +32,9 @@ func (f vscodeCopilotProviderFactory) Capabilities() Capabilities {
 func (f vscodeCopilotProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &vscodeCopilotProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   vscodeCopilotProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    vscodeCopilotProviderCapabilities(),
+		Config:  cfg,
 		sources: newVSCodeCopilotSourceSet(cfg.Roots),
 	}
 }

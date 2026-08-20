@@ -34,8 +34,9 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	// comment). The reference for parity is the session without it.
 	reference := sess
 	reference.QualitySignals = nil
+	type sessionAlias db.Session
 
-	want, err := canonicalJSON(reference)
+	want, err := canonicalJSON(sessionAlias(reference))
 	require.NoError(t, err)
 	got, err := canonicalJSON(manifestSessionFromDB(sess))
 	require.NoError(t, err)
@@ -47,7 +48,7 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	assert.Equal(t, string(got), string(withoutPointer),
 		"manifest bytes must not depend on the transient quality_signals pointer")
 
-	roundTrip, err := canonicalJSON(manifestSessionFromDB(sess).dbSession())
+	roundTrip, err := canonicalJSON(sessionAlias(manifestSessionFromDB(sess).dbSession()))
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(roundTrip),
 		"converting to the wire DTO and back must preserve every wire-visible field")

@@ -1600,10 +1600,8 @@ func (f *scopeRecordingS3Factory) NewProvider(
 ) parser.Provider {
 	f.roots = append(f.roots, append([]string(nil), cfg.Roots...))
 	return scopeRecordingS3Provider{
-		ProviderBase: parser.ProviderBase{
-			Def:  f.Definition(),
-			Caps: f.Capabilities(),
-		},
+		Def:    f.Definition(),
+		Caps:   f.Capabilities(),
 		source: f.source,
 	}
 }

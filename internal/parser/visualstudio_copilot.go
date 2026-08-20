@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -312,12 +313,12 @@ func forEachVisualStudioCopilotTraceSpan(
 	}
 	defer f.Close()
 	hasher := sha256.New()
-	dec := json.NewDecoder(io.LimitReader(io.TeeReader(f, hasher), 1<<62))
+	dec := jsontext.NewDecoder(io.LimitReader(io.TeeReader(f, hasher), 1<<62))
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		token, err := dec.Token()
+		token, err := dec.ReadToken()
 		if errors.Is(err, io.EOF) {
 			info, statErr := f.Stat()
 			if statErr != nil {
@@ -337,7 +338,7 @@ func forEachVisualStudioCopilotTraceSpan(
 		if err != nil {
 			return fmt.Errorf("decode %s: %w", path, err)
 		}
-		if token != json.Delim('{') {
+		if token.Kind() != jsontext.KindBeginObject {
 			return fmt.Errorf("decode %s: expected trace object", path)
 		}
 		if err := decodeVisualStudioCopilotTraceObject(ctx, dec, yield); err != nil {
@@ -347,14 +348,14 @@ func forEachVisualStudioCopilotTraceSpan(
 }
 
 func decodeVisualStudioCopilotTraceObject(
-	ctx context.Context, dec *json.Decoder, yield func(vsCopilotSpan) error,
+	ctx context.Context, dec *jsontext.Decoder, yield func(vsCopilotSpan) error,
 ) error {
-	for dec.More() {
-		name, err := dec.Token()
+	for dec.PeekKind() != jsontext.KindEndObject {
+		name, err := dec.ReadToken()
 		if err != nil {
 			return err
 		}
-		if name != "resourceSpans" {
+		if name.String() != "resourceSpans" {
 			if err := skipJSONValue(dec); err != nil {
 				return err
 			}
@@ -372,29 +373,29 @@ func decodeVisualStudioCopilotTraceObject(
 			return err
 		}
 	}
-	_, err := dec.Token()
+	_, err := dec.ReadToken()
 	return err
 }
 
 func decodeVisualStudioCopilotSpanArray(
-	ctx context.Context, dec *json.Decoder, yield func(vsCopilotSpan) error,
+	ctx context.Context, dec *jsontext.Decoder, yield func(vsCopilotSpan) error,
 ) error {
-	open, err := dec.Token()
+	open, err := dec.ReadToken()
 	if err != nil {
 		return err
 	}
-	if open != json.Delim('[') {
+	if open.Kind() != jsontext.KindBeginArray {
 		return fmt.Errorf("spans: expected array")
 	}
 	var decoderRetained int64
 	defer func() { observeStreamingRetainedBytes(ctx, -decoderRetained) }()
-	for dec.More() {
+	for dec.PeekKind() != jsontext.KindEndArray {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		start := dec.InputOffset()
 		var span vsCopilotSpan
-		if err := dec.Decode(&span); err != nil {
+		if err := json.UnmarshalDecode(dec, &span); err != nil {
 			return err
 		}
 		encodedBytes := dec.InputOffset() - start
@@ -410,34 +411,34 @@ func decodeVisualStudioCopilotSpanArray(
 		}
 		observeStreamingRetainedBytes(ctx, -retained)
 	}
-	_, err = dec.Token()
+	_, err = dec.ReadToken()
 	return err
 }
 
 func decodeVisualStudioCopilotObjectArray(
-	dec *json.Decoder, nestedField string, consumeNested func() error,
+	dec *jsontext.Decoder, nestedField string, consumeNested func() error,
 ) error {
-	open, err := dec.Token()
+	open, err := dec.ReadToken()
 	if err != nil {
 		return err
 	}
-	if open != json.Delim('[') {
+	if open.Kind() != jsontext.KindBeginArray {
 		return fmt.Errorf("%s parent: expected array", nestedField)
 	}
-	for dec.More() {
-		open, err := dec.Token()
+	for dec.PeekKind() != jsontext.KindEndArray {
+		open, err := dec.ReadToken()
 		if err != nil {
 			return err
 		}
-		if open != json.Delim('{') {
+		if open.Kind() != jsontext.KindBeginObject {
 			return fmt.Errorf("%s parent: expected object", nestedField)
 		}
-		for dec.More() {
-			name, err := dec.Token()
+		for dec.PeekKind() != jsontext.KindEndObject {
+			name, err := dec.ReadToken()
 			if err != nil {
 				return err
 			}
-			if name == nestedField {
+			if name.String() == nestedField {
 				if err := consumeNested(); err != nil {
 					return err
 				}
@@ -445,11 +446,11 @@ func decodeVisualStudioCopilotObjectArray(
 				return err
 			}
 		}
-		if _, err := dec.Token(); err != nil {
+		if _, err := dec.ReadToken(); err != nil {
 			return err
 		}
 	}
-	_, err = dec.Token()
+	_, err = dec.ReadToken()
 	return err
 }
 
@@ -555,7 +556,7 @@ func visualStudioCopilotConversationLine(
 	line []byte, conversationID string,
 ) ([]byte, bool) {
 	conversationID = canonicalVisualStudioCopilotConversationID(conversationID)
-	var top map[string]json.RawMessage
+	var top map[string]jsontext.Value
 	if err := json.Unmarshal(line, &top); err != nil {
 		return nil, false
 	}
@@ -563,7 +564,7 @@ func visualStudioCopilotConversationLine(
 	if !ok {
 		return nil, false
 	}
-	var resourceSpans []json.RawMessage
+	var resourceSpans []jsontext.Value
 	if err := json.Unmarshal(rsRaw, &resourceSpans); err != nil {
 		return nil, false
 	}
@@ -593,11 +594,11 @@ func visualStudioCopilotConversationLine(
 // conversation and whether the array changed (an element was dropped or
 // rewritten). A nil element returned by filter is treated as dropped.
 func visualStudioCopilotFilterArray(
-	items []json.RawMessage,
+	items []jsontext.Value,
 	conversationID string,
-	filter func(json.RawMessage, string) (json.RawMessage, bool, bool),
-) ([]json.RawMessage, bool, bool) {
-	kept := make([]json.RawMessage, 0, len(items))
+	filter func(jsontext.Value, string) (jsontext.Value, bool, bool),
+) ([]jsontext.Value, bool, bool) {
+	kept := make([]jsontext.Value, 0, len(items))
 	matched, modified := false, false
 	for _, item := range items {
 		out, m, mod := filter(item, conversationID)
@@ -612,9 +613,9 @@ func visualStudioCopilotFilterArray(
 }
 
 func visualStudioCopilotFilterResourceSpan(
-	rs json.RawMessage, conversationID string,
-) (json.RawMessage, bool, bool) {
-	var m map[string]json.RawMessage
+	rs jsontext.Value, conversationID string,
+) (jsontext.Value, bool, bool) {
+	var m map[string]jsontext.Value
 	if err := json.Unmarshal(rs, &m); err != nil {
 		return nil, false, true
 	}
@@ -622,7 +623,7 @@ func visualStudioCopilotFilterResourceSpan(
 	if !ok {
 		return nil, false, true
 	}
-	var scopeSpans []json.RawMessage
+	var scopeSpans []jsontext.Value
 	if err := json.Unmarshal(ssRaw, &scopeSpans); err != nil {
 		return nil, false, true
 	}
@@ -648,9 +649,9 @@ func visualStudioCopilotFilterResourceSpan(
 }
 
 func visualStudioCopilotFilterScopeSpan(
-	ss json.RawMessage, conversationID string,
-) (json.RawMessage, bool, bool) {
-	var m map[string]json.RawMessage
+	ss jsontext.Value, conversationID string,
+) (jsontext.Value, bool, bool) {
+	var m map[string]jsontext.Value
 	if err := json.Unmarshal(ss, &m); err != nil {
 		return nil, false, true
 	}
@@ -658,11 +659,11 @@ func visualStudioCopilotFilterScopeSpan(
 	if !ok {
 		return nil, false, true
 	}
-	var spans []json.RawMessage
+	var spans []jsontext.Value
 	if err := json.Unmarshal(spansRaw, &spans); err != nil {
 		return nil, false, true
 	}
-	kept := make([]json.RawMessage, 0, len(spans))
+	kept := make([]jsontext.Value, 0, len(spans))
 	modified := false
 	for _, sp := range spans {
 		if sameVisualStudioCopilotConversationID(
@@ -694,7 +695,7 @@ func visualStudioCopilotFilterScopeSpan(
 // visualStudioCopilotSpanConversationID extracts a span's gen_ai.conversation.id
 // attribute, returning "" when the span carries no conversation id. An id-less
 // span never matches a requested conversation, so it is dropped from exports.
-func visualStudioCopilotSpanConversationID(span json.RawMessage) string {
+func visualStudioCopilotSpanConversationID(span jsontext.Value) string {
 	var s struct {
 		Attributes []vsCopilotTraceAttr `json:"attributes"`
 	}
@@ -1295,7 +1296,7 @@ func visualStudioCopilotTraceModel(span vsCopilotSpan) string {
 
 func visualStudioCopilotTraceUsage(
 	span vsCopilotSpan,
-) (json.RawMessage, int, int, bool, bool) {
+) (jsontext.Value, int, int, bool, bool) {
 	input, hasInput := visualStudioCopilotTraceIntAttr(
 		span, "gen_ai.usage.input_tokens",
 	)
@@ -1700,11 +1701,11 @@ type vsCopilotChatMessage struct {
 }
 
 type vsCopilotChatPart struct {
-	Type      string          `json:"type"`
-	Content   string          `json:"content"`
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	Type      string         `json:"type"`
+	Content   string         `json:"content"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Arguments jsontext.Value `json:"arguments"`
 }
 
 func visualStudioCopilotChatPrompt(span vsCopilotSpan) string {
@@ -1802,7 +1803,7 @@ func visualStudioCopilotChatOutput(
 }
 
 func visualStudioCopilotChatToolInput(
-	toolName string, raw json.RawMessage,
+	toolName string, raw jsontext.Value,
 ) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""

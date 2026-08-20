@@ -5,7 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -44,9 +45,9 @@ type deepSeekHarnessEvent struct {
 	Type      string
 	Seq       int64
 	Time      int64
-	Data      json.RawMessage
+	Data      jsontext.Value
 	Ignorable bool
-	SurfaceOp json.RawMessage
+	SurfaceOp jsontext.Value
 }
 
 type deepSeekHarnessScan struct {
@@ -197,8 +198,7 @@ func scanDeepSeekHarnessLog(
 		}
 		decoded, decodeErr := decodeDeepSeekHarnessRecord(line)
 		if decodeErr != nil {
-			var unsupported deepSeekHarnessUnsupportedError
-			if errors.As(decodeErr, &unsupported) {
+			if _, ok := errors.AsType[deepSeekHarnessUnsupportedError](decodeErr); ok {
 				return deepSeekHarnessScan{}, decodeErr
 			}
 			if issue == nil {
@@ -239,8 +239,7 @@ func scanDeepSeekHarnessLog(
 		if consume != nil {
 			for _, event := range decoded {
 				if err := consume(header, event); err != nil {
-					var unsupported deepSeekHarnessUnsupportedError
-					if errors.As(err, &unsupported) {
+					if _, ok := errors.AsType[deepSeekHarnessUnsupportedError](err); ok {
 						return deepSeekHarnessScan{}, err
 					}
 					issue = fmt.Errorf("event row %d: %w", lineNo, err)
@@ -626,7 +625,7 @@ func decodeDeepSeekHarnessRecord(line []byte) ([]deepSeekHarnessEvent, error) {
 }
 
 func parseDeepSeekHarnessEvent(
-	fields map[string]json.RawMessage,
+	fields map[string]jsontext.Value,
 ) (deepSeekHarnessEvent, error) {
 	for key := range fields {
 		switch key {
@@ -690,7 +689,7 @@ func parseDeepSeekHarnessEvent(
 	}, nil
 }
 
-func validateDeepSeekHarnessSurfaceOp(raw json.RawMessage) error {
+func validateDeepSeekHarnessSurfaceOp(raw jsontext.Value) error {
 	var appendOp string
 	if json.Unmarshal(raw, &appendOp) == nil {
 		if appendOp == "append" {
@@ -721,7 +720,7 @@ func validateDeepSeekHarnessSurfaceOp(raw json.RawMessage) error {
 }
 
 func expandDeepSeekHarnessPackedRow(
-	typeName string, fields map[string]json.RawMessage,
+	typeName string, fields map[string]jsontext.Value,
 ) ([]deepSeekHarnessEvent, error) {
 	if !deepSeekHarnessExactKeys(fields, "type", "seq0", "time0", "data") {
 		return nil, errors.New("packed chunk row has unexpected fields")
@@ -819,15 +818,15 @@ func expandDeepSeekHarnessPackedRow(
 	return events, nil
 }
 
-func decodeDeepSeekHarnessObject(raw []byte) (map[string]json.RawMessage, error) {
-	var fields map[string]json.RawMessage
+func decodeDeepSeekHarnessObject(raw []byte) (map[string]jsontext.Value, error) {
+	var fields map[string]jsontext.Value
 	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 		return nil, errors.New("expected JSON object")
 	}
 	return fields, nil
 }
 
-func deepSeekHarnessExactKeys(fields map[string]json.RawMessage, keys ...string) bool {
+func deepSeekHarnessExactKeys(fields map[string]jsontext.Value, keys ...string) bool {
 	if len(fields) != len(keys) {
 		return false
 	}
@@ -840,7 +839,7 @@ func deepSeekHarnessExactKeys(fields map[string]json.RawMessage, keys ...string)
 }
 
 func deepSeekHarnessRequiredString(
-	fields map[string]json.RawMessage, key string,
+	fields map[string]jsontext.Value, key string,
 ) (string, error) {
 	raw, ok := fields[key]
 	if !ok {
@@ -853,7 +852,7 @@ func deepSeekHarnessRequiredString(
 	return value, nil
 }
 
-func deepSeekHarnessString(raw json.RawMessage) (string, error) {
+func deepSeekHarnessString(raw jsontext.Value) (string, error) {
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return "", err
@@ -862,7 +861,7 @@ func deepSeekHarnessString(raw json.RawMessage) (string, error) {
 }
 
 func deepSeekHarnessRequiredSafeInt(
-	fields map[string]json.RawMessage, key string, nonNegative bool,
+	fields map[string]jsontext.Value, key string, nonNegative bool,
 ) (int64, error) {
 	raw, ok := fields[key]
 	if !ok {
@@ -884,29 +883,22 @@ func deepSeekHarnessRequiredSafeInt(
 	return int64(numeric), nil
 }
 
-func deepSeekHarnessJSONNumber(raw json.RawMessage) (json.Number, error) {
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return "", err
+func deepSeekHarnessJSONNumber(raw jsontext.Value) (jsontext.Value, error) {
+	if raw.Kind() != jsontext.KindNumber {
+		return nil, errors.New("value is not a JSON number")
 	}
-	number, ok := value.(json.Number)
-	if !ok {
-		return "", errors.New("value is not a JSON number")
-	}
-	return number, nil
+	return raw, nil
 }
 
-func deepSeekHarnessSafeIntArray(raw json.RawMessage, nonNegative bool) ([]int64, error) {
-	var values []json.RawMessage
+func deepSeekHarnessSafeIntArray(raw jsontext.Value, nonNegative bool) ([]int64, error) {
+	var values []jsontext.Value
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, err
 	}
 	out := make([]int64, 0, len(values))
 	for _, rawValue := range values {
 		value, err := deepSeekHarnessRequiredSafeInt(
-			map[string]json.RawMessage{"value": rawValue}, "value", nonNegative,
+			map[string]jsontext.Value{"value": rawValue}, "value", nonNegative,
 		)
 		if err != nil {
 			return nil, err
@@ -916,7 +908,7 @@ func deepSeekHarnessSafeIntArray(raw json.RawMessage, nonNegative bool) ([]int64
 	return out, nil
 }
 
-func deepSeekHarnessStringArray(raw json.RawMessage) ([]string, error) {
+func deepSeekHarnessStringArray(raw jsontext.Value) ([]string, error) {
 	var values []string
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, err

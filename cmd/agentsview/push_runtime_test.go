@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -64,7 +64,7 @@ func pushRuntimeServer(
 func writeTestJSON[T any](t *testing.T, w http.ResponseWriter, value T) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
-	require.NoError(t, json.NewEncoder(w).Encode(value))
+	require.NoError(t, json.MarshalWrite(w, value))
 }
 
 // newDaemonArchiveWriteBackendForTest builds a daemon-backed archive write

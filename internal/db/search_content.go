@@ -78,14 +78,14 @@ type ContentMatch struct {
 	OrdinalRange [2]int `json:"ordinal_range"`
 	// Subordinate marks a match whose unit is classified subordinate
 	// (sidechain run, or subagent/fork session), in every mode.
-	Subordinate bool `json:"subordinate,omitempty"`
+	Subordinate bool `json:"subordinate,omitzero"`
 	// Relationship and ParentSessionID carry the matched session's lineage
 	// and Sidechain the anchor message's is_sidechain flag, populated in
 	// every mode (enrichSemanticHits for semantic/hybrid,
 	// deriveLexicalUnits for substring/regex/fts).
 	Relationship    string `json:"relationship,omitempty"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
-	Sidechain       bool   `json:"is_sidechain,omitempty"`
+	Sidechain       bool   `json:"is_sidechain,omitzero"`
 	// ContextBefore and ContextAfter hold the N messages immediately before
 	// and after this match's ordinal when the caller requested inline
 	// context (ContentSearchRequest.Context > 0). Populated by

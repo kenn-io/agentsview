@@ -4,7 +4,7 @@ package service_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,7 +39,7 @@ func TestSessionUsageWithSubagentsBillsSubagentWebSearches(t *testing.T) {
 
 	parentMsg := usageMessage(parentID, 0, "10:00:00", "m-1", 1000, 500)
 	childMsg := usageMessage(childID, 0, "10:01:00", "m-2", 2000, 1000)
-	childMsg.TokenUsage = json.RawMessage(
+	childMsg.TokenUsage = jsontext.Value(
 		`{"input_tokens":2000,"output_tokens":1000,` +
 			`"server_tool_use":{"web_search_requests":2}}`)
 	dbtest.SeedMessages(t, d, parentMsg, childMsg)

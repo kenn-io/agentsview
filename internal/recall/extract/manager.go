@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -807,8 +807,7 @@ func (m *Manager) extractSession(
 				return outcome, markErr
 			}
 			outcome.failed = true
-			var transient *transientError
-			if errors.As(err, &transient) {
+			if _, ok := errors.AsType[*transientError](err); ok {
 				// An exhausted retry ladder means the endpoint is down or
 				// saturated, not that this unit is poisoned: every
 				// remaining session would burn its own full ladder

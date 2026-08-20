@@ -4,7 +4,7 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -110,7 +110,7 @@ func TestPushTokenUsageToPostgres(t *testing.T) {
 		Content:          "hello",
 		ContentLength:    5,
 		Model:            "claude-sonnet-4-20250514",
-		TokenUsage:       json.RawMessage(`{"output_tokens":200}`),
+		TokenUsage:       jsontext.Value(`{"output_tokens":200}`),
 		ContextTokens:    900,
 		OutputTokens:     200,
 		HasContextTokens: true,

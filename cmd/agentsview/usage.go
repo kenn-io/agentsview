@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"log"
@@ -180,9 +181,8 @@ func runUsageDaily(cfg UsageDailyConfig) {
 	}
 
 	if cfg.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(result); err != nil {
+		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+		if err := json.MarshalEncode(enc, result); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -279,14 +279,13 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 func printUsageStatuslineJSON(
 	result db.DailyUsageResult, agent, date string,
 ) {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
+	enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
 	report := usageStatuslineReport{
 		Date:  date,
 		Cost:  result.Totals.TotalCost,
 		Agent: agent,
 	}
-	if err := enc.Encode(report); err != nil {
+	if err := json.MarshalEncode(enc, report); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -579,7 +578,7 @@ func fetchHTTPDailyUsage(
 		Daily         []db.DailyUsageEntry              `json:"daily"`
 		SessionCounts db.UsageSessionCounts             `json:"sessionCounts"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
 		return db.DailyUsageResult{}, err
 	}
 	if out.Projects == nil {

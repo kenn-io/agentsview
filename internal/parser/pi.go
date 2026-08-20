@@ -2,7 +2,8 @@ package parser
 
 import (
 	"bufio"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -665,7 +666,7 @@ func normalizePiIntent(argsRaw string) string {
 	}
 	// Unmarshal into a map, rename the intent key to "description",
 	// and re-marshal to produce valid JSON with proper escaping.
-	var m map[string]json.RawMessage
+	var m map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(argsRaw), &m); err != nil {
 		return argsRaw
 	}

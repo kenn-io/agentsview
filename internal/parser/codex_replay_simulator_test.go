@@ -2,7 +2,7 @@ package parser
 
 import (
 	"bufio"
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"strings"

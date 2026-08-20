@@ -2,7 +2,7 @@ package parser
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"os"
@@ -737,7 +737,7 @@ func extractOpenClaudeTokenFields(msg *ParsedMessage, line string) {
 
 	usageResult := gjson.Get(line, "message.usage")
 	if usageResult.Exists() {
-		msg.TokenUsage = json.RawMessage(usageResult.Raw)
+		msg.TokenUsage = jsontext.Value(usageResult.Raw)
 		msg.HasOutputTokens = usageResult.Get("output_tokens").Exists()
 		msg.HasContextTokens = usageResult.Get("input_tokens").Exists() ||
 			usageResult.Get("cache_creation_input_tokens").Exists() ||

@@ -6,7 +6,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
@@ -82,7 +83,7 @@ func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 			SessionID: "alpha-parent", Ordinal: 1, Role: "assistant",
 			Timestamp: "2026-05-01T10:01:00Z",
 			Model:     "model-computed",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":500,` +
 					`"cache_creation_input_tokens":200,` +
 					`"cache_read_input_tokens":300}`),
@@ -92,7 +93,7 @@ func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 			SessionID: "alpha-parent", Ordinal: 2, Role: "assistant",
 			Timestamp: "2026-05-01T10:02:00Z",
 			Model:     "model-reported",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":20,"output_tokens":10}`),
 			HasContextTokens: true, HasOutputTokens: true,
 		},
@@ -137,7 +138,7 @@ func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 		SessionID: "beta-root", Ordinal: 0, Role: "assistant",
 		Timestamp: "2026-05-01T09:10:00Z",
 		Model:     "model-reported",
-		TokenUsage: json.RawMessage(
+		TokenUsage: jsontext.Value(
 			`{"input_tokens":10,"output_tokens":20}`),
 		HasContextTokens: true, HasOutputTokens: true,
 	})
@@ -454,7 +455,7 @@ func TestSessionSummaryExportIncludesMessageReasoningTokens(t *testing.T) {
 		Role:      "assistant",
 		Timestamp: "2026-05-01T10:00:30Z",
 		Model:     "model-computed",
-		TokenUsage: json.RawMessage(
+		TokenUsage: jsontext.Value(
 			`{"input_tokens":10,"output_tokens":0,"reasoning_tokens":25}`),
 	})
 
@@ -1036,7 +1037,7 @@ func TestSessionExportUsageUsesPageReadSnapshot(t *testing.T) {
 	insertMessages(t, d, Message{
 		SessionID: "usage-snapshot", Ordinal: 0, Role: "assistant",
 		Timestamp: "2026-05-01T10:00:00Z", Model: "model-computed",
-		TokenUsage:       json.RawMessage(`{"input_tokens":100,"output_tokens":10}`),
+		TokenUsage:       jsontext.Value(`{"input_tokens":100,"output_tokens":10}`),
 		HasContextTokens: true,
 		HasOutputTokens:  true,
 	})
@@ -1085,7 +1086,7 @@ func TestSessionSummaryExportSelectsCompleteClaudeSnapshotBeforeDedup(t *testing
 			SessionID: "a-parent", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-05-01T10:00:00Z", Model: "model-computed",
 			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":100,"output_tokens":5,` +
 					`"server_tool_use":{"web_search_requests":2}}`),
 		},
@@ -1093,7 +1094,7 @@ func TestSessionSummaryExportSelectsCompleteClaudeSnapshotBeforeDedup(t *testing
 			SessionID: "z-child", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-05-01T10:01:00Z", Model: "model-computed",
 			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":100}`),
 		},
 	)
@@ -1144,7 +1145,7 @@ func TestSessionSummaryExportSelectsClaudeSnapshotFromExcludedSubagent(t *testin
 			SessionID: parentID, Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-05-01T10:00:00Z", Model: "model-computed",
 			ClaudeMessageID: "excluded-message", ClaudeRequestID: "excluded-request",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":100,"output_tokens":5,` +
 					`"server_tool_use":{"web_search_requests":2}}`),
 		},
@@ -1152,7 +1153,7 @@ func TestSessionSummaryExportSelectsClaudeSnapshotFromExcludedSubagent(t *testin
 			SessionID: "snapshot-child", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-05-01T10:01:00Z", Model: "model-computed",
 			ClaudeMessageID: "excluded-message", ClaudeRequestID: "excluded-request",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":100}`),
 		},
 	)
@@ -1196,7 +1197,7 @@ func TestSessionSummaryExportSelectsClaudeSnapshotAcrossPages(t *testing.T) {
 			SessionID: "snapshot-page-parent", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-05-01T10:00:00Z", Model: "model-computed",
 			ClaudeMessageID: "paged-message", ClaudeRequestID: "paged-request",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":100,"output_tokens":5,` +
 					`"server_tool_use":{"web_search_requests":2}}`),
 		},
@@ -1204,7 +1205,7 @@ func TestSessionSummaryExportSelectsClaudeSnapshotAcrossPages(t *testing.T) {
 			SessionID: "snapshot-page-peer", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-05-01T10:01:00Z", Model: "model-computed",
 			ClaudeMessageID: "paged-message", ClaudeRequestID: "paged-request",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":100}`),
 		},
 	)
@@ -1307,7 +1308,7 @@ func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 		insertMessages(t, d, Message{
 			SessionID: id, Ordinal: 0, Role: "assistant",
 			Timestamp: endedAt, Model: "snapshot-model",
-			TokenUsage:       json.RawMessage(`{"input_tokens":1000000}`),
+			TokenUsage:       jsontext.Value(`{"input_tokens":1000000}`),
 			HasContextTokens: true,
 		})
 	}

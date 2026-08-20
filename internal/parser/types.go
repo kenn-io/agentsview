@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"strings"
 	"time"
 
@@ -1270,7 +1271,7 @@ type ParsedMessage struct {
 	ToolResults   []ParsedToolResult
 
 	Model            string
-	TokenUsage       json.RawMessage
+	TokenUsage       jsontext.Value
 	ContextTokens    int
 	OutputTokens     int
 	HasContextTokens bool
@@ -1427,7 +1428,7 @@ func InferTokenPresence(
 		return hasContext, hasOutput
 	}
 
-	var payload map[string]json.RawMessage
+	var payload map[string]jsontext.Value
 	if err := json.Unmarshal(tokenUsage, &payload); err != nil {
 		return hasContext, hasOutput
 	}

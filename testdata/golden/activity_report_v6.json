@@ -32,11 +32,11 @@
               "microdollars": 500000
             },
             "cost_source": "computed",
-            "bands": null,
+            "bands": [],
             "application": {
               "base_request_count": 1,
               "aggregate_row_count": 0,
-              "bands": null
+              "bands": []
             }
           }
         ]
@@ -60,11 +60,11 @@
               "microdollars": 250000
             },
             "cost_source": "reported",
-            "bands": null,
+            "bands": [],
             "application": {
               "base_request_count": 0,
               "aggregate_row_count": 0,
-              "bands": null
+              "bands": []
             }
           }
         ]

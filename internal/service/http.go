@@ -6,7 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -347,7 +347,7 @@ func (b *httpBackend) Sync(
 		)
 	}
 	var detail SessionDetail
-	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &detail); err != nil {
 		return nil, err
 	}
 	return &detail, nil
@@ -540,8 +540,7 @@ func (b *httpBackend) SearchContent(
 		})
 	}
 	if err := b.getJSONLong(ctx, "/api/v1/search/content?"+q.Encode(), &out, opts...); err != nil {
-		var notImpl *errNotImplementedBody
-		if errors.As(err, &notImpl) {
+		if notImpl, ok := errors.AsType[*errNotImplementedBody](err); ok {
 			return nil, wrapSemanticUnavailable(notImpl.message)
 		}
 		return nil, err
@@ -1106,7 +1105,7 @@ func (b *httpBackend) getJSONWithClient(
 			statusCode: resp.StatusCode, body: msg,
 		}
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.UnmarshalRead(resp.Body, out)
 }
 
 func (b *httpBackend) postJSON(
@@ -1156,7 +1155,7 @@ func (b *httpBackend) postJSONWithClient(
 			statusCode: resp.StatusCode, body: msg,
 		}
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.UnmarshalRead(resp.Body, out)
 }
 
 func (b *httpBackend) postRaw(
@@ -1193,5 +1192,5 @@ func (b *httpBackend) postRaw(
 			"POST %s: HTTP %d: %s", path, resp.StatusCode, msg,
 		)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.UnmarshalRead(resp.Body, out)
 }

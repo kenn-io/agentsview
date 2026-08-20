@@ -2,7 +2,7 @@ package vector
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"path/filepath"
 	"testing"
 

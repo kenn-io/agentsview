@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -657,7 +657,7 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(targets); err != nil {
+			if err := json.MarshalWrite(w, targets); err != nil {
 				serverErrors <- err
 			}
 		case "/api/v1/remote-sync/manifest":
@@ -668,12 +668,12 @@ func TestRunRemoteSyncRequestUnifiedHTTPUsesMirrorDeltaAndBulkRebuild(t *testing
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(manifest); err != nil {
+			if err := json.MarshalWrite(w, manifest); err != nil {
 				serverErrors <- err
 			}
 		case "/api/v1/remote-sync/archive":
 			var request remotesync.ArchiveRequest
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			if err := json.UnmarshalRead(r.Body, &request); err != nil {
 				serverErrors <- err
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
@@ -2187,10 +2187,10 @@ func TestRunHTTPRemoteSyncImportsLocallyDisabledProvider(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
-			serverErrors <- json.NewEncoder(w).Encode(targets)
+			serverErrors <- json.MarshalWrite(w, targets)
 		case "/api/v1/remote-sync/manifest":
 			w.Header().Set("Content-Type", "application/json")
-			serverErrors <- json.NewEncoder(w).Encode(manifest)
+			serverErrors <- json.MarshalWrite(w, manifest)
 		case "/api/v1/remote-sync/archive":
 			w.Header().Set("Content-Type", "application/x-tar")
 			serverErrors <- remotesync.WriteArchive(w, targets)

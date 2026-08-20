@@ -4,7 +4,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"strings"
@@ -217,9 +218,8 @@ func runTokenUse(args []string) {
 		os.Exit(tokenUseExitErr)
 	}
 	if out != nil {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if encErr := enc.Encode(out); encErr != nil {
+		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+		if encErr := json.MarshalEncode(enc, out); encErr != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", encErr)
 			os.Exit(tokenUseExitErr)
 		}

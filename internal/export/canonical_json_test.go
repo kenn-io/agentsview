@@ -96,8 +96,8 @@ func TestMarshalCanonicalVectors(t *testing.T) {
 		{
 			name:   "string escaping",
 			input:  map[string]any{"text": "<>&\b\f\u2028\u2029"},
-			bytes:  `{"text":"<>&\b\f\u2028\u2029"}`,
-			digest: "sha256:654cd6bbd6c7311e46686b6cbf6dbfc9f092258e669b2d0ce2f286a5e81dd2bb",
+			bytes:  "{\"text\":\"<>&\\b\\f\u2028\u2029\"}",
+			digest: "sha256:e5de86e813b24e83a074160c5e30141ab85fb400e09f0e10a1594ce2cfedeccf",
 		},
 		{
 			name:   "exact integer above double range",

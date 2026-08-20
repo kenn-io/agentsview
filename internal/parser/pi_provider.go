@@ -29,11 +29,9 @@ func (f piProviderFactory) Capabilities() Capabilities {
 func (f piProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &piProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   piProviderCapabilities(f.def.Type),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    piProviderCapabilities(f.def.Type),
+		Config:  cfg,
 		sources: newPiSourceSet(f.def.Type, cfg.Roots),
 	}
 }

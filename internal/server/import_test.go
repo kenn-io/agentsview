@@ -2,7 +2,7 @@ package server
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -63,7 +63,7 @@ func TestHandleImportClaudeAI(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 
 	var stats importer.ImportStats
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&stats))
+	require.NoError(t, json.UnmarshalRead(rec.Body, &stats))
 	assert.Equal(t, 1, stats.Imported)
 	assert.Zero(t, stats.Updated)
 }

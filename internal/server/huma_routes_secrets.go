@@ -12,8 +12,8 @@ import (
 func (s *Server) registerSecretsRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/secrets", "Secrets")
 
-	get(s, group, "", "List secret findings", s.humaListSecrets)
-	stream(s, group, http.MethodPost, "/scan", "Scan secrets", s.humaScanSecrets)
+	s.get(group, "", "List secret findings", s.humaListSecrets)
+	s.stream(group, http.MethodPost, "/scan", "Scan secrets", s.humaScanSecrets)
 }
 
 type secretListInput struct {

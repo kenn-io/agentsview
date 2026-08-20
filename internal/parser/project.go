@@ -847,9 +847,8 @@ func deletedChildIsWorktree(
 	if err != nil || rel == "." {
 		return false
 	}
-	child := strings.SplitN(
-		filepath.ToSlash(rel), "/", 2,
-	)[0]
+	child, _, _ := strings.Cut(
+		filepath.ToSlash(rel), "/")
 	if child == "" {
 		return false
 	}

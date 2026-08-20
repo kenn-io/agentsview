@@ -21,14 +21,12 @@ func FailureSummary(err error) string {
 	if err == nil {
 		return generic
 	}
-	var pending *PendingCleanupError
-	if errors.As(err, &pending) {
+	if _, ok := errors.AsType[*PendingCleanupError](err); ok {
 		return "HTTP remote sync blocked: cleanup from an earlier sync " +
 			"still owns resources"
 	}
 
-	var statusErr *StatusError
-	if errors.As(err, &statusErr) {
+	if statusErr, ok := errors.AsType[*StatusError](err); ok {
 		// statusLabel derives the display text locally from the
 		// numeric code: the response status line (and Detail) are
 		// remote-controlled and must never reach the summary.
@@ -58,8 +56,7 @@ func FailureSummary(err error) string {
 		}
 	}
 
-	var protocolErr *IncompatibleProtocolError
-	if errors.As(err, &protocolErr) {
+	if _, ok := errors.AsType[*IncompatibleProtocolError](err); ok {
 		return "HTTP remote sync failed: collector and remote daemon use " +
 			"incompatible remote-sync protocol versions; upgrade agentsview " +
 			"on both hosts"
@@ -72,8 +69,7 @@ func FailureSummary(err error) string {
 			"config.toml), and that the url port matches"
 	}
 
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
+	if _, ok := errors.AsType[*net.DNSError](err); ok {
 		return "HTTP remote sync failed: cannot resolve the remote " +
 			"host name; check the url in this [[remote_hosts]] entry"
 	}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -533,14 +533,11 @@ func readFolderMarkerNamed(root *os.Root, name string) (folderMarker, error) {
 	if int64(len(body)) > folderMarkerMaxBytes {
 		return folderMarker{}, errors.New("invalid agentsview artifact target marker: marker is too large")
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
-	decoder.DisallowUnknownFields()
 	var marker folderMarker
-	if err := decoder.Decode(&marker); err != nil {
+	if err := json.Unmarshal(
+		body, &marker, json.RejectUnknownMembers(true),
+	); err != nil {
 		return folderMarker{}, fmt.Errorf("invalid agentsview artifact target marker: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return folderMarker{}, errors.New("invalid agentsview artifact target marker: trailing content")
 	}
 	if marker.Format != folderFormatName || marker.Version != folderFormatVersion {
 		return folderMarker{}, errors.New("invalid agentsview artifact target marker: unsupported format")
@@ -674,14 +671,11 @@ func (t *folderTransport) loadStateLocked(ctx context.Context) error {
 		return err
 	}
 	if body != "" {
-		decoder := json.NewDecoder(strings.NewReader(body))
-		decoder.DisallowUnknownFields()
 		var state folderTransportPersistedState
-		if err := decoder.Decode(&state); err != nil {
+		if err := json.Unmarshal(
+			[]byte(body), &state, json.RejectUnknownMembers(true),
+		); err != nil {
 			return fmt.Errorf("decoding artifact folder continuation state: %w", err)
-		}
-		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-			return errors.New("decoding artifact folder continuation state: trailing content")
 		}
 		if err := validateFolderTransportState(state); err != nil {
 			return err

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net"
@@ -646,12 +646,12 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(targets); err != nil {
+			if err := json.MarshalWrite(w, targets); err != nil {
 				http.Error(w, "encode targets", http.StatusInternalServerError)
 			}
 		case "/api/v1/remote-sync/manifest":
 			var requested remotesync.TargetSet
-			if err := json.NewDecoder(r.Body).Decode(&requested); err != nil {
+			if err := json.UnmarshalRead(r.Body, &requested); err != nil {
 				http.Error(w, "decode manifest request", http.StatusBadRequest)
 				return
 			}
@@ -661,13 +661,13 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(manifest); err != nil {
+			if err := json.MarshalWrite(w, manifest); err != nil {
 				http.Error(w, "encode manifest", http.StatusInternalServerError)
 			}
 		case "/api/v1/remote-sync/archive":
 			archiveRequests.Add(1)
 			var requested remotesync.ArchiveRequest
-			if err := json.NewDecoder(r.Body).Decode(&requested); err != nil {
+			if err := json.UnmarshalRead(r.Body, &requested); err != nil {
 				http.Error(w, "decode archive request", http.StatusBadRequest)
 				return
 			}
@@ -2076,7 +2076,7 @@ func captureRemoteSyncRequest(t *testing.T) (*remoteSyncRequest, http.HandlerFun
 	got := &remoteSyncRequest{}
 	return got, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
-		require.NoError(t, json.NewDecoder(r.Body).Decode(got))
+		require.NoError(t, json.UnmarshalRead(r.Body, got))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"failures":[]}`)
 	}

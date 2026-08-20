@@ -31,11 +31,9 @@ func (f kiroProviderFactory) Capabilities() Capabilities {
 func (f kiroProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &kiroProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   kiroProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    kiroProviderCapabilities(),
+		Config:  cfg,
 		sources: newKiroSourceSet(cfg.Roots),
 	}
 }

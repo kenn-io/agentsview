@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -172,7 +173,7 @@ func parseKimiSessionWithFallbackModel(
 		pendingThinkingText     []string
 		pendingToolCall         []ParsedToolCall
 		pendingModel            string
-		pendingTokenUsage       json.RawMessage
+		pendingTokenUsage       jsontext.Value
 		pendingContextTokens    int
 		pendingOutputTokens     int
 		pendingHasContextTokens bool
@@ -804,7 +805,7 @@ func kimiJSONResult(value gjson.Result) gjson.Result {
 
 func kimiNativeTokenUsage(
 	usage gjson.Result,
-) (json.RawMessage, int, int, bool, bool) {
+) (jsontext.Value, int, int, bool, bool) {
 	var (
 		inputOther          int
 		output              int

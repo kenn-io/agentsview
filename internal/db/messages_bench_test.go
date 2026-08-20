@@ -1,7 +1,7 @@
 package db
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"io"
 	"log"
@@ -51,7 +51,7 @@ func benchSessionMessages(sessionID string, n int) []Message {
 		}
 		if role == "assistant" {
 			m.Model = "claude-bench-model"
-			m.TokenUsage = json.RawMessage(
+			m.TokenUsage = jsontext.Value(
 				`{"input_tokens":120,"output_tokens":45,` +
 					`"cache_creation_input_tokens":10,` +
 					`"cache_read_input_tokens":200}`,

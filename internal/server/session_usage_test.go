@@ -2,7 +2,8 @@ package server_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,7 +37,7 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 			}
 			m.Role = "assistant"
 			m.Model = "gpt-5.1"
-			m.TokenUsage = json.RawMessage(
+			m.TokenUsage = jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":500,` +
 					`"cache_creation_input_tokens":200,` +
 					`"cache_read_input_tokens":300}`,
@@ -108,11 +109,11 @@ func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
 	})
 	te.seedMessages(t, "root-rollup", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "gpt-5.1"
-		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	})
 	te.seedMessages(t, "child-rollup", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "gpt-5.1"
-		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	})
 
 	w := te.get(t, "/api/v1/sessions/root-rollup/usage?rollup=true")
@@ -184,11 +185,11 @@ func TestHandleSessionUsage_RollupBreakdownIncludesRootRows(t *testing.T) {
 	})
 	te.seedMessages(t, "root-rollup-breakdown", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "gpt-5.1"
-		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	})
 	te.seedMessages(t, "child-rollup-breakdown", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "gpt-5.1"
-		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	})
 
 	w := te.get(t, "/api/v1/sessions/root-rollup-breakdown/usage?rollup=true&breakdown=true")
@@ -222,7 +223,7 @@ func TestHandleSessionUsage_RollupTraversesContinuationAndDedupesSharedRows(t *t
 			m.Role, m.Model = "assistant", "gpt-5.1"
 			m.ClaudeMessageID = "shared-rollup-message"
 			m.ClaudeRequestID = "shared-rollup-request"
-			m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+			m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 			if id == "nested-rollup-rework" && i == 1 {
 				m.ClaudeMessageID = "unique-rollup-message"
 				m.ClaudeRequestID = "unique-rollup-request"
@@ -255,12 +256,12 @@ func TestHandleSessionUsage_RollupIncludesUntimedSubagentUsage(t *testing.T) {
 	te.seedMessages(t, "root-rollup-untimed", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "gpt-5.1"
 		m.Timestamp = ""
-		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	})
 	te.seedMessages(t, "child-rollup-untimed", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "gpt-5.1"
 		m.Timestamp = ""
-		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	})
 
 	w := te.get(t, "/api/v1/sessions/root-rollup-untimed/usage?rollup=true")
@@ -291,7 +292,7 @@ func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t
 			m.Timestamp = "2026-03-12T10:00:00Z"
 			m.ClaudeMessageID = "shared-rollup-attribution"
 			m.ClaudeRequestID = "shared-rollup-attribution-request"
-			m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+			m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 		})
 	}
 
@@ -320,11 +321,11 @@ func TestHandleSessionUsage_IncompleteRollupOmitsPartialCost(t *testing.T) {
 	})
 	te.seedMessages(t, "root-rollup-incomplete", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "gpt-5.1"
-		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	})
 	te.seedMessages(t, "child-rollup-incomplete", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "unknown-rollup-model"
-		m.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+		m.TokenUsage = jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)
 	})
 
 	w := te.get(t, "/api/v1/sessions/root-rollup-incomplete/usage?rollup=true")
@@ -387,7 +388,7 @@ func TestHandleSessionUsage_BreakdownOrderingAndDedup(t *testing.T) {
 				m.Model = "gpt-5.1"
 				m.ClaudeMessageID = "msg-dup"
 				m.ClaudeRequestID = "req-dup"
-				m.TokenUsage = json.RawMessage(
+				m.TokenUsage = jsontext.Value(
 					`{"input_tokens":1000,"output_tokens":500,` +
 						`"cache_creation_input_tokens":200,` +
 						`"cache_read_input_tokens":300}`,
@@ -513,12 +514,12 @@ func TestHandleSessionUsage_SubagentsParamCombinesInPlace(t *testing.T) {
 	})
 	te.seedMessages(t, "subagents-root", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "gpt-5.1"
-		m.TokenUsage = json.RawMessage(
+		m.TokenUsage = jsontext.Value(
 			`{"input_tokens":1000,"output_tokens":500}`)
 	})
 	te.seedMessages(t, "subagents-child", 1, func(_ int, m *db.Message) {
 		m.Role, m.Model = "assistant", "gpt-5.1"
-		m.TokenUsage = json.RawMessage(
+		m.TokenUsage = jsontext.Value(
 			`{"input_tokens":1000,"output_tokens":500}`)
 	})
 
@@ -638,7 +639,7 @@ func TestHandleSessionUsage_SubagentRefreshFailureUsesArchivedUsage(t *testing.T
 	te.seedMessages(t, "missing-parent", 1, func(_ int, m *db.Message) {
 		m.Role = "assistant"
 		m.Model = "claude-sonnet-4-5"
-		m.TokenUsage = json.RawMessage(
+		m.TokenUsage = jsontext.Value(
 			`{"input_tokens":1000,"output_tokens":500}`)
 	})
 
@@ -668,13 +669,13 @@ func TestHandleSessionUsage_BreakdownRoundTripsWebSearchRequests(t *testing.T) {
 			m.Role = "assistant"
 			m.Model = "gpt-5.1"
 			if i == 0 {
-				m.TokenUsage = json.RawMessage(
+				m.TokenUsage = jsontext.Value(
 					`{"input_tokens":1000,"output_tokens":500,` +
 						`"server_tool_use":{"web_search_requests":3,` +
 						`"web_fetch_requests":0}}`)
 				return
 			}
-			m.TokenUsage = json.RawMessage(
+			m.TokenUsage = jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":500}`)
 		})
 

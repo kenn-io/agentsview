@@ -3,7 +3,7 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
 	"strconv"
 	"strings"
 
@@ -64,7 +64,7 @@ func annotateClaudeWebSearchRequests(
 		if !ok {
 			continue
 		}
-		msg.TokenUsage = json.RawMessage(updated)
+		msg.TokenUsage = jsontext.Value(updated)
 	}
 }
 

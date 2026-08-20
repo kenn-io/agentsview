@@ -96,11 +96,11 @@ func runDoctorSync(w io.Writer, cfg config.Config) error {
 }
 
 func collectDoctorSyncReport(cfg config.Config) doctorSyncReport {
-	report := doctorSyncReport{Config: cfg}
+	report := doctorSyncReport{Config: cfg,
 
-	report.doctorDBInspection = inspectDoctorDB(cfg.DBPath)
-	report.TempFiles = listDoctorResyncTempFiles(cfg.DBPath)
-	report.AgentRoots = collectDoctorAgentRoots(cfg)
+		doctorDBInspection: inspectDoctorDB(cfg.DBPath),
+		TempFiles:          listDoctorResyncTempFiles(cfg.DBPath),
+		AgentRoots:         collectDoctorAgentRoots(cfg)}
 	report.TraeEncryptedRoots = collectDoctorTraeEncryptedRoots(report.AgentRoots)
 	report.DebugLines, report.DebugLogErr = readDoctorDebugLines(
 		filepath.Join(cfg.DataDir, "debug.log"),

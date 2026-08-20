@@ -2,7 +2,7 @@ package vector
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -852,7 +852,7 @@ func TestSearchReducedDimensionsEndToEnd(t *testing.T) {
 			Input      []string `json:"input"`
 			Dimensions int      `json:"dimensions"`
 		}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		mu.Lock()
 		requestedDims = append(requestedDims, req.Dimensions)
 		mu.Unlock()
@@ -876,7 +876,7 @@ func TestSearchReducedDimensionsEndToEnd(t *testing.T) {
 			data[i] = map[string]any{"index": i, "embedding": vec}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+		require.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
 	}))
 	defer srv.Close()
 

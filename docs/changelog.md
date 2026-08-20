@@ -10,6 +10,11 @@ description: Release history for AgentsView
 - Preserve Antigravity CLI 1.1.5 generation usage and Low/Medium/High model
   effort from SQLite executor metadata.
 
+**Improvements**
+
+- Build and lint with Go 1.27 and golangci-lint 2.13.0. Source builds now
+  require Go 1.27+, and the Go code now uses `encoding/json/v2` semantics.
+
 ---
 
 ## 0.41.1

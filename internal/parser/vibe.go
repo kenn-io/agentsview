@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -31,8 +32,8 @@ type VibeToolCall struct {
 
 // VibeToolCallFunction represents the function details of a tool call
 type VibeToolCallFunction struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	Name      string         `json:"name"`
+	Arguments jsontext.Value `json:"arguments"`
 }
 
 // VibeSessionMetadata represents session-level metadata from meta.json
@@ -401,7 +402,7 @@ func convertVibeMessage(vibeMsg VibeMessage, ordinal int, defaultModel string) (
 // Vibe (like the OpenAI/Mistral wire format) may encode arguments either as a
 // nested JSON object or as a JSON-encoded string; the latter is unwrapped so
 // InputJSON is always the underlying object.
-func vibeToolArguments(args json.RawMessage) string {
+func vibeToolArguments(args jsontext.Value) string {
 	if len(args) > 0 && args[0] == '"' {
 		var s string
 		if err := json.Unmarshal(args, &s); err == nil {

@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"html"
 	"html/template"
@@ -101,7 +101,7 @@ func createGistWithURL(
 	}
 
 	var result gistResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &result); err != nil {
 		return nil, fmt.Errorf("parsing github response: %w", err)
 	}
 	return &result, nil
@@ -162,7 +162,7 @@ func validateGithubTokenWithURL(
 	var user struct {
 		Login string `json:"login"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &user); err != nil {
 		return "", fmt.Errorf("parsing user response: %w", err)
 	}
 	return user.Login, nil

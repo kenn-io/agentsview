@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"hash"
@@ -39,11 +39,9 @@ func (f hermesProviderFactory) Capabilities() Capabilities {
 func (f hermesProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &hermesProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   hermesProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    hermesProviderCapabilities(),
+		Config:  cfg,
 		sources: newHermesSourceSet(cfg.Roots),
 	}
 }

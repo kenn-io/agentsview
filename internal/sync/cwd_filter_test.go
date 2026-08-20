@@ -67,18 +67,16 @@ func TestCwdPrefixFilterAllows(t *testing.T) {
 // session recorded at the given cwd.
 func exclusionGateJob(cwd string) syncJob {
 	return syncJob{
-		path: "/src/session.jsonl",
-		processResult: processResult{
-			excludedSessionIDs: []string{"stale"},
-			results: []parser.ParseResult{
-				{Session: parser.ParsedSession{
-					ID:      "replacement",
-					Agent:   parser.AgentClaude,
-					Machine: "local",
-					Project: "proj",
-					Cwd:     cwd,
-				}},
-			},
+		path:               "/src/session.jsonl",
+		excludedSessionIDs: []string{"stale"},
+		results: []parser.ParseResult{
+			{Session: parser.ParsedSession{
+				ID:      "replacement",
+				Agent:   parser.AgentClaude,
+				Machine: "local",
+				Project: "proj",
+				Cwd:     cwd,
+			}},
 		},
 	}
 }
@@ -161,7 +159,7 @@ func TestCollectAndBatchKeepsAllowedSourceSiblingCurrent(t *testing.T) {
 	results <- syncJob{
 		agent: parser.AgentCowork,
 		path:  "/src/shared.jsonl",
-		processResult: processResult{results: []parser.ParseResult{
+		results: []parser.ParseResult{
 			{Session: parser.ParsedSession{
 				ID: "cowork:allowed", Agent: parser.AgentCowork,
 				Machine: "local", Project: "proj", Cwd: "/allowed/repo",
@@ -172,7 +170,7 @@ func TestCollectAndBatchKeepsAllowedSourceSiblingCurrent(t *testing.T) {
 				Machine: "local", Project: "proj", Cwd: "/outside/repo",
 				File: parser.FileInfo{Path: "/src/shared.jsonl"},
 			}},
-		}},
+		},
 	}
 	close(results)
 
@@ -213,25 +211,23 @@ func TestCollectAndBatchBaselinesAllowedMissingMemberForMixedCwdSource(
 			agent:   parser.AgentClaude,
 			path:    path,
 			machine: "local",
-			processResult: processResult{
-				results: []parser.ParseResult{
-					{Session: parser.ParsedSession{
-						ID: "replacement-allowed", Agent: parser.AgentClaude,
-						Machine: "local", Project: "proj", Cwd: "/allowed/new",
-						File: parser.FileInfo{Path: path},
-					}},
-					{Session: parser.ParsedSession{
-						ID: "replacement-filtered", Agent: parser.AgentClaude,
-						Machine: "local", Project: "proj", Cwd: "/outside/new",
-						File: parser.FileInfo{Path: path},
-					}},
-				},
-				sourceMissingMembers: []sourceMissingMember{{
-					sessionID: "stale-allowed",
-					filePath:  path,
-					machine:   "local",
+			results: []parser.ParseResult{
+				{Session: parser.ParsedSession{
+					ID: "replacement-allowed", Agent: parser.AgentClaude,
+					Machine: "local", Project: "proj", Cwd: "/allowed/new",
+					File: parser.FileInfo{Path: path},
+				}},
+				{Session: parser.ParsedSession{
+					ID: "replacement-filtered", Agent: parser.AgentClaude,
+					Machine: "local", Project: "proj", Cwd: "/outside/new",
+					File: parser.FileInfo{Path: path},
 				}},
 			},
+			sourceMissingMembers: []sourceMissingMember{{
+				sessionID: "stale-allowed",
+				filePath:  path,
+				machine:   "local",
+			}},
 		}
 		close(results)
 		return engine.collectAndBatch(
@@ -292,12 +288,12 @@ func TestCollectAndBatchCancellationRevokesRejectedMissingMemberBaseline(
 	results := make(chan syncJob, 2)
 	results <- syncJob{
 		agent: parser.AgentClaude, path: path, machine: "local",
-		processResult: processResult{sourceMissingMembers: []sourceMissingMember{
+		sourceMissingMembers: []sourceMissingMember{
 			{sessionID: allowedID, machine: "local", filePath: path},
 			{sessionID: rejectedID, machine: "local", filePath: path},
-		}},
+		},
 	}
-	results <- syncJob{processResult: processResult{err: context.Canceled}}
+	results <- syncJob{err: context.Canceled}
 	close(results)
 
 	stats := engine.collectAndBatch(
@@ -369,10 +365,10 @@ func TestCollectAndBatchFailureRevokesOnlyRejectedMissingMemberBaseline(
 	results := make(chan syncJob, 1)
 	results <- syncJob{
 		agent: parser.AgentClaude, path: path, machine: "local",
-		processResult: processResult{sourceMissingMembers: []sourceMissingMember{
+		sourceMissingMembers: []sourceMissingMember{
 			{sessionID: failingID, machine: "local", filePath: path},
 			{sessionID: rejectedID, machine: "local", filePath: path},
-		}},
+		},
 	}
 	close(results)
 

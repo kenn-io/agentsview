@@ -3,7 +3,8 @@
 package server
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"strings"
@@ -18,15 +19,15 @@ import (
 const maxEvalFieldRunes = 200
 
 type evalTrajectoryIngestRequest struct {
-	RunID           string          `json:"run_id"`
-	TrajectoryID    string          `json:"trajectory_id"`
-	Trajectory      json.RawMessage `json:"trajectory"`
-	ExtractorMethod string          `json:"extractor_method"`
-	SourceVersion   string          `json:"source_version"`
-	Project         string          `json:"project"`
-	CWD             string          `json:"cwd"`
-	GitBranch       string          `json:"git_branch"`
-	Agent           string          `json:"agent"`
+	RunID           string         `json:"run_id"`
+	TrajectoryID    string         `json:"trajectory_id"`
+	Trajectory      jsontext.Value `json:"trajectory"`
+	ExtractorMethod string         `json:"extractor_method"`
+	SourceVersion   string         `json:"source_version"`
+	Project         string         `json:"project"`
+	CWD             string         `json:"cwd"`
+	GitBranch       string         `json:"git_branch"`
+	Agent           string         `json:"agent"`
 }
 
 // registerEvalIngestRoutes wires the raw-trajectory eval ingest endpoint.
@@ -69,7 +70,7 @@ func (s *Server) handleIngestEvalTrajectory(
 		return
 	}
 	var req evalTrajectoryIngestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.UnmarshalRead(r.Body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -127,7 +128,7 @@ func (s *Server) handleIngestEvalTrajectory(
 // explicit JSON null, both of which fail the "trajectory is required" check. A
 // present-but-empty object (e.g. {}) is not empty here: it ingests to zero
 // chunks, a successful no-op.
-func isEmptyTrajectory(raw json.RawMessage) bool {
+func isEmptyTrajectory(raw jsontext.Value) bool {
 	trimmed := strings.TrimSpace(string(raw))
 	return trimmed == "" || trimmed == "null"
 }

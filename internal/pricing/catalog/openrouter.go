@@ -2,7 +2,7 @@ package catalog
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -137,7 +137,7 @@ func parseOpenRouterRate(value string) (money.Money, bool, error) {
 	if value == "" {
 		return money.Money{}, false, nil
 	}
-	rate, err := parsePerTokenRate(json.Number(value))
+	rate, err := parsePerTokenRate(value)
 	if err != nil {
 		return money.Money{}, false, err
 	}

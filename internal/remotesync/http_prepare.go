@@ -532,8 +532,7 @@ func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) 
 				p.mirrorImport.outcome = JournalCancelled
 				pendingStats.JournalOutcome = JournalCancelled
 			} else {
-				var cacheErr *rebuildCachePersistError
-				if errors.As(err, &cacheErr) {
+				if _, ok := errors.AsType[*rebuildCachePersistError](err); ok {
 					p.mirrorImport.outcome = JournalCachePersistFailed
 					pendingStats.JournalOutcome = JournalCachePersistFailed
 				} else if stats.Failed > 0 || stats.Aborted || err != nil {

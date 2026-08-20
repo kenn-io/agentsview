@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net"
@@ -210,7 +210,7 @@ func newRemoteUsageServer(
 		case "/api/v1/sessions/sync":
 			require.Equal(t, http.MethodPost, r.Method)
 			require.Equal(t, serverURL, r.Header.Get("Origin"))
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&reqs.SyncInput))
+			require.NoError(t, json.UnmarshalRead(r.Body, &reqs.SyncInput))
 			writeJSONResponse(w, detailJSON)
 		case usagePath:
 			reqs.UsagePath = r.URL.Path
@@ -1437,7 +1437,7 @@ func TestSessionUsage_UsesDiscoveredDaemon(t *testing.T) {
 			}`))
 		case "/api/v1/sessions/sync":
 			var input service.SyncInput
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&input))
+			require.NoError(t, json.UnmarshalRead(r.Body, &input))
 			assert.Equal(t, service.SyncInput{
 				ID: "remote-session", Subagents: true,
 			}, input)
@@ -1510,7 +1510,7 @@ func TestTokenUse_UsesDiscoveredDaemon(t *testing.T) {
 			}`))
 		case "/api/v1/sessions/sync":
 			var input service.SyncInput
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&input))
+			require.NoError(t, json.UnmarshalRead(r.Body, &input))
 			assert.Equal(t, service.SyncInput{
 				ID: "remote-session", Subagents: true,
 			}, input)
@@ -1904,7 +1904,7 @@ func TestSessionSync_ServerFlagTreatsPathShapedArgAsRemotePath(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, http.MethodPost, r.Method)
 			assert.Equal(t, "/api/v1/sessions/sync", r.URL.Path)
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+			require.NoError(t, json.UnmarshalRead(r.Body, &got))
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"id": "remote-session",

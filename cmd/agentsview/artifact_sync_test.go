@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -264,9 +264,9 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 		require.Equal(t, "/api/v1/artifacts/exchange", r.URL.Path)
 		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
 		require.Equal(t, tsURL(t, r), r.Header.Get("Origin"))
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		require.NoError(t, json.UnmarshalRead(r.Body, &got))
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(artifact.SyncResult{
+		require.NoError(t, json.MarshalWrite(w, artifact.SyncResult{
 			Origin:             "node-a1b2c3",
 			PublishedArtifacts: 3,
 		}))
@@ -378,7 +378,7 @@ func TestRunDaemonArtifactExchangeMakesRelativeTargetAbsolute(t *testing.T) {
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		require.NoError(t, json.UnmarshalRead(r.Body, &got))
 		w.Header().Set("Content-Type", "application/json")
 		_, err := io.WriteString(w, `{}`)
 		require.NoError(t, err)
@@ -602,7 +602,7 @@ func TestDoSyncDelegatesArtifactExchangeAfterDaemonSync(t *testing.T) {
 		) {
 			order = append(order, "artifact")
 			var request server.ArtifactExchangeRequest
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			require.NoError(t, json.UnmarshalRead(r.Body, &request))
 			assert.Equal(t, target, request.Target)
 			w.Header().Set("Content-Type", "application/json")
 			_, err := io.WriteString(

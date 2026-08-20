@@ -8660,9 +8660,7 @@ func (e *Engine) startWorkers(
 			for file := range jobs {
 				if ctx.Err() != nil {
 					emitResult(syncJob{
-						processResult: processResult{
-							err: ctx.Err(),
-						},
+						err:     ctx.Err(),
 						agent:   file.Agent,
 						path:    file.Path,
 						machine: e.machineForFile(file),

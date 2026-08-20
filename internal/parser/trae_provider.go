@@ -5,7 +5,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -384,7 +385,7 @@ func decodeTraeSessionSnapshot(value string) (traeSessionSnapshot, error) {
 		snapshot.complete = false
 		return snapshot, nil
 	}
-	var store map[string]json.RawMessage
+	var store map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(value), &store); err != nil {
 		return traeSessionSnapshot{}, err
 	}
@@ -394,7 +395,7 @@ func decodeTraeSessionSnapshot(value string) (traeSessionSnapshot, error) {
 		return snapshot, nil
 	}
 	snapshot.authoritative = true
-	var list []json.RawMessage
+	var list []jsontext.Value
 	if err := json.Unmarshal(rawList, &list); err != nil {
 		return traeSessionSnapshot{}, err
 	}
@@ -439,12 +440,12 @@ func decodeTraeSessionSnapshot(value string) (traeSessionSnapshot, error) {
 	return snapshot, nil
 }
 
-func traeExplicitList(raw json.RawMessage) bool {
+func traeExplicitList(raw jsontext.Value) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) > 0 && trimmed[0] == '['
 }
 
-func traeSessionIDHint(raw json.RawMessage) string {
+func traeSessionIDHint(raw jsontext.Value) string {
 	var hint struct {
 		SessionID string `json:"sessionId"`
 	}
@@ -471,12 +472,12 @@ func traeSessionProducesMessages(session traeSession) bool {
 	return false
 }
 
-func traeSelectRawRecord(path, id string) (json.RawMessage, bool, error) {
+func traeSelectRawRecord(path, id string) (jsontext.Value, bool, error) {
 	value, err := readTraeValue(path)
 	if err != nil {
 		return nil, false, err
 	}
-	var store map[string]json.RawMessage
+	var store map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(value), &store); err != nil {
 		return nil, false, err
 	}
@@ -484,7 +485,7 @@ func traeSelectRawRecord(path, id string) (json.RawMessage, bool, error) {
 	if !ok || !traeExplicitList(rawList) {
 		return nil, false, nil
 	}
-	var list []json.RawMessage
+	var list []jsontext.Value
 	if err := json.Unmarshal(rawList, &list); err != nil {
 		return nil, false, err
 	}
@@ -521,12 +522,12 @@ type traeSession struct {
 	Messages  []traeMessage `json:"messages"`
 }
 type traeMessage struct {
-	Role             string          `json:"role"`
-	Content          string          `json:"content"`
-	AgentTaskContent json.RawMessage `json:"agentTaskContent,omitempty"`
-	Timestamp        traeTime        `json:"timestamp"`
-	Model            string          `json:"model,omitempty"`
-	TurnIndex        int             `json:"turnIndex"`
+	Role             string         `json:"role"`
+	Content          string         `json:"content"`
+	AgentTaskContent jsontext.Value `json:"agentTaskContent,omitempty"`
+	Timestamp        traeTime       `json:"timestamp"`
+	Model            string         `json:"model,omitempty"`
+	TurnIndex        int            `json:"turnIndex"`
 }
 type traeTime struct{ time.Time }
 
@@ -596,7 +597,7 @@ func parseTraeSessionRecord(selected traeSession, project, machine, virtualPath 
 	return sess, messages
 }
 
-func traeAssistantFallback(raw json.RawMessage) string {
+func traeAssistantFallback(raw jsontext.Value) string {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
 		return text

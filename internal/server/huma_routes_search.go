@@ -13,8 +13,8 @@ import (
 func (s *Server) registerSearchRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/search", "Search")
 
-	get(s, group, "", "Search sessions", s.humaSearch)
-	getLong(s, group, "/content", "Search session content", s.humaSearchContent)
+	s.get(group, "", "Search sessions", s.humaSearch)
+	s.getLong(group, "/content", "Search session content", s.humaSearchContent)
 }
 
 type searchSort string
@@ -76,8 +76,7 @@ func (s *Server) humaSearch(
 		if errors.Is(err, service.ErrSearchUnavailable) {
 			return nil, apiError(http.StatusNotImplemented, "search not available")
 		}
-		var inputErr *db.SearchInputError
-		if errors.As(err, &inputErr) {
+		if _, ok := errors.AsType[*db.SearchInputError](err); ok {
 			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		return nil, serverError(err)
@@ -160,8 +159,7 @@ func (s *Server) humaSearchContent(
 		if errors.Is(err, db.ErrSemanticUnavailable) {
 			return nil, apiError(http.StatusNotImplemented, err.Error())
 		}
-		var inputErr *db.SearchInputError
-		if errors.As(err, &inputErr) {
+		if _, ok := errors.AsType[*db.SearchInputError](err); ok {
 			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		return nil, apiError(http.StatusInternalServerError, err.Error())

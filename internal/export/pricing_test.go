@@ -1,7 +1,7 @@
 package export
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"math"
 	"testing"
 	"time"

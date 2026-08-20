@@ -2,7 +2,7 @@ package service_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"testing"
 
@@ -102,7 +102,7 @@ func usageMessage(
 	msg.Model = "test-opus"
 	msg.ClaudeMessageID = messageID
 	msg.ClaudeRequestID = "req-" + messageID
-	msg.TokenUsage = json.RawMessage(fmt.Sprintf(
+	msg.TokenUsage = jsontext.Value(fmt.Sprintf(
 		`{"input_tokens":%d,"output_tokens":%d}`, in, out))
 	return msg
 }

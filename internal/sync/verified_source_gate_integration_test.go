@@ -103,18 +103,16 @@ func newVerifiedSourceArchiveWithRewriter(
 	root := t.TempDir()
 	database := openTestDB(t)
 	provider := &verifiedSourceCountingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{
-				Type: parser.AgentCodex, DisplayName: "Codex",
-				IDPrefix: "codex:", FileBased: true,
-			},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				WatchSources:         parser.CapabilitySupported,
-				ClassifyChangedPath:  parser.CapabilitySupported,
-				CompositeFingerprint: parser.CapabilitySupported,
-				VerifiedLocalStat:    parser.CapabilitySupported,
-			}},
+		Def: parser.AgentDef{
+			Type: parser.AgentCodex, DisplayName: "Codex",
+			IDPrefix: "codex:", FileBased: true,
 		},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			WatchSources:         parser.CapabilitySupported,
+			ClassifyChangedPath:  parser.CapabilitySupported,
+			CompositeFingerprint: parser.CapabilitySupported,
+			VerifiedLocalStat:    parser.CapabilitySupported,
+		}},
 		root:    root,
 		sources: make(map[string]parser.SourceRef, count),
 	}
@@ -280,18 +278,16 @@ func TestVerifiedSourceGateDoesNotBorrowRepairState(t *testing.T) {
 
 	newProvider := func(agent parser.AgentType) *verifiedSourceCountingProvider {
 		return &verifiedSourceCountingProvider{
-			ProviderBase: parser.ProviderBase{
-				Def: parser.AgentDef{
-					Type: agent, DisplayName: string(agent),
-					IDPrefix: string(agent) + ":", FileBased: true,
-				},
-				Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-					WatchSources:         parser.CapabilitySupported,
-					ClassifyChangedPath:  parser.CapabilitySupported,
-					CompositeFingerprint: parser.CapabilitySupported,
-					VerifiedLocalStat:    parser.CapabilitySupported,
-				}},
+			Def: parser.AgentDef{
+				Type: agent, DisplayName: string(agent),
+				IDPrefix: string(agent) + ":", FileBased: true,
 			},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				WatchSources:         parser.CapabilitySupported,
+				ClassifyChangedPath:  parser.CapabilitySupported,
+				CompositeFingerprint: parser.CapabilitySupported,
+				VerifiedLocalStat:    parser.CapabilitySupported,
+			}},
 			root: root,
 			sources: map[string]parser.SourceRef{
 				filepath.Clean(path): {
@@ -429,20 +425,18 @@ func TestVerifiedSourceGateLegacyClaudeRowMustEstablishFingerprint(t *testing.T)
 	))
 
 	provider := &verifiedSourceCountingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{
-				Type: parser.AgentClaude, DisplayName: "Claude",
-				IDPrefix: "claude:", FileBased: true,
+		Def: parser.AgentDef{
+			Type: parser.AgentClaude, DisplayName: "Claude",
+			IDPrefix: "claude:", FileBased: true,
+		},
+		Caps: parser.Capabilities{
+			Source: parser.SourceCapabilities{
+				IncrementalAppend: parser.CapabilitySupported,
+				VerifiedLocalStat: parser.CapabilitySupported,
 			},
-			Caps: parser.Capabilities{
-				Source: parser.SourceCapabilities{
-					IncrementalAppend: parser.CapabilitySupported,
-					VerifiedLocalStat: parser.CapabilitySupported,
-				},
-				Sync: parser.ProviderSyncSemantics{
-					FingerprintHashInCacheKey:           true,
-					FingerprintHashRequiredForFreshness: true,
-				},
+			Sync: parser.ProviderSyncSemantics{
+				FingerprintHashInCacheKey:           true,
+				FingerprintHashRequiredForFreshness: true,
 			},
 		},
 		root:    root,

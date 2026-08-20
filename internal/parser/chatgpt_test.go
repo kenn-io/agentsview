@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -597,9 +598,9 @@ func TestAssembleContent(t *testing.T) {
 func TestAssembleContent_ImageAsset(t *testing.T) {
 	c := chatGPTContent{
 		ContentType: "multimodal_text",
-		Parts: []json.RawMessage{
-			json.RawMessage(`"Here is an image:"`),
-			json.RawMessage(`{
+		Parts: []jsontext.Value{
+			jsontext.Value(`"Here is an image:"`),
+			jsontext.Value(`{
 				"content_type": "image_asset_pointer",
 				"asset_pointer": "file-service://file-abc123"
 			}`),
@@ -622,8 +623,8 @@ func TestAssembleContent_ImageAsset(t *testing.T) {
 func TestAssembleContent_ImageAsset_NilResolver(t *testing.T) {
 	c := chatGPTContent{
 		ContentType: "multimodal_text",
-		Parts: []json.RawMessage{
-			json.RawMessage(`{
+		Parts: []jsontext.Value{
+			jsontext.Value(`{
 				"content_type": "image_asset_pointer",
 				"asset_pointer": "file-service://file-abc123"
 			}`),
@@ -743,10 +744,10 @@ func TestParseChatGPTExport_WebSearch(t *testing.T) {
 
 // --- helpers ---
 
-// rawParts creates json.RawMessage slices from strings for
+// rawParts creates jsontext.Value slices from strings for
 // chatGPTContent.Parts test fixtures.
-func rawParts(ss ...string) []json.RawMessage {
-	var parts []json.RawMessage
+func rawParts(ss ...string) []jsontext.Value {
+	var parts []jsontext.Value
 	for _, s := range ss {
 		b, _ := json.Marshal(s)
 		parts = append(parts, b)

@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"sort"
@@ -297,9 +298,9 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	}
 
 	output := buildExportSessionsOutput(databaseID, pages)
-	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc := jsontext.NewEncoder(cmd.OutOrStdout())
 	if cfg.Format == "ndjson" {
-		if err := enc.Encode(exportSessionsMetaOutput{
+		if err := json.MarshalEncode(enc, exportSessionsMetaOutput{
 			Type:          "meta",
 			SchemaVersion: output.SchemaVersion,
 			DatabaseID:    output.DatabaseID,
@@ -310,13 +311,13 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 			return err
 		}
 		for _, row := range output.Sessions {
-			if err := enc.Encode(row); err != nil {
+			if err := json.MarshalEncode(enc, row); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	return enc.Encode(output)
+	return json.MarshalEncode(enc, output)
 }
 
 // ensureExportSessionsPricing installs embedded fallback plus custom pricing
@@ -726,7 +727,7 @@ func writeExportSessionsCursorReset(
 		Message:    "session export cursor is no longer valid; restart the export",
 		DatabaseID: databaseID,
 	}
-	if err := json.NewEncoder(cmd.ErrOrStderr()).Encode(payload); err != nil {
+	if err := json.MarshalEncode(jsontext.NewEncoder(cmd.ErrOrStderr()), payload); err != nil {
 		return err
 	}
 	return withSilentExitCode(

@@ -3,7 +3,7 @@ package artifact
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"strings"
@@ -703,7 +703,12 @@ func createHashedImportArtifact(
 }
 
 func jsonIndent(destination *bytes.Buffer, source []byte) error {
-	return json.Indent(destination, source, "", "  ")
+	formatted := jsontext.Value(source).Clone()
+	if err := formatted.Indent(jsontext.WithIndent("  ")); err != nil {
+		return err
+	}
+	_, err := destination.Write(formatted)
+	return err
 }
 
 type failingImportOpenStore struct {

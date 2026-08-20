@@ -1,7 +1,7 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"sort"
 	"strings"
 )

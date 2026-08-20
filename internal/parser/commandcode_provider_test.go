@@ -63,10 +63,8 @@ func TestCommandCodeProviderWatchRootsStayBounded(t *testing.T) {
 	writeSourceFile(t, transcript, "{}\n")
 	companionCalls := 0
 	provider := &commandCodeProvider{
-		ProviderBase: ProviderBase{
-			Def:  AgentDef{Type: AgentCommandCode},
-			Caps: commandCodeProviderCapabilities(),
-		},
+		Def:  AgentDef{Type: AgentCommandCode},
+		Caps: commandCodeProviderCapabilities(),
 		sources: NewDirectoryJSONLSourceSet(
 			AgentCommandCode,
 			[]string{root},

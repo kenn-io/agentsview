@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"html/template"
 	"net/http"
@@ -1332,7 +1332,7 @@ func TestCreateGistVisibility(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(
 				func(w http.ResponseWriter, r *http.Request) {
 					assert.NoError(t,
-						json.NewDecoder(r.Body).Decode(&payload))
+						json.UnmarshalRead(r.Body, &payload))
 					w.WriteHeader(http.StatusCreated)
 					w.Write([]byte(`{"id":"abc123",` +
 						`"html_url":"https://gist.github.com/abc123",` +

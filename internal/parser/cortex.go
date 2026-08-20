@@ -1,7 +1,8 @@
 package parser
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -59,9 +60,9 @@ type cortexContentBlock struct {
 
 // cortexToolUse is the payload for a tool_use content block.
 type cortexToolUse struct {
-	ToolUseID string          `json:"tool_use_id"`
-	Name      string          `json:"name"`
-	Input     json.RawMessage `json:"input"`
+	ToolUseID string         `json:"tool_use_id"`
+	Name      string         `json:"name"`
+	Input     jsontext.Value `json:"input"`
 }
 
 // cortexToolResult is the payload for a tool_result content block.
@@ -262,7 +263,7 @@ func cortexToolDetail(name, inputJSON string) string {
 	if !strings.HasPrefix(strings.TrimSpace(inputJSON), "{") {
 		return name
 	}
-	input := make(map[string]json.RawMessage)
+	input := make(map[string]jsontext.Value)
 	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
 		return name
 	}

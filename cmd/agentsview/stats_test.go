@@ -3,7 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -476,7 +477,7 @@ func TestStatsGolden(t *testing.T) {
 		"testdata", "stats_golden.json",
 	)
 	if *updateGolden {
-		buf, err := json.MarshalIndent(got, "", "  ")
+		buf, err := json.Marshal(got, jsontext.WithIndent("  "))
 		require.NoError(t, err, "marshal golden")
 		buf = append(buf, '\n')
 		require.NoError(t, os.MkdirAll(
@@ -496,8 +497,8 @@ func TestStatsGolden(t *testing.T) {
 	delete(want, "generated_at")
 
 	if !assert.Equal(t, want, got) {
-		gotBuf, _ := json.MarshalIndent(got, "", "  ")
-		wantBuf, _ := json.MarshalIndent(want, "", "  ")
+		gotBuf, _ := json.Marshal(got, jsontext.WithIndent("  "))
+		wantBuf, _ := json.Marshal(want, jsontext.WithIndent("  "))
 		t.Fatalf(
 			"stats JSON mismatch — regenerate with "+
 				"`go test ./cmd/agentsview -run "+

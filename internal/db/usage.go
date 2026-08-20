@@ -3,7 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"slices"
 	"sort"
@@ -1835,7 +1835,7 @@ type UsageTotals struct {
 	CacheCreationTokens int         `json:"cacheCreationTokens"`
 	CacheReadTokens     int         `json:"cacheReadTokens"`
 	TotalCost           money.Money `json:"totalCost"`
-	CopilotAICredits    float64     `json:"copilotAICredits,omitempty"`
+	CopilotAICredits    float64     `json:"copilotAICredits,omitzero"`
 	// CacheSavings is the net dollar delta vs an uncached run:
 	// cache reads save (input_rate - cache_read_rate) per token,
 	// cache creations cost (input_rate - cache_creation_rate)
@@ -2905,7 +2905,7 @@ type SessionUsage struct {
 	// a future release. New consumers should read cost.microdollars.
 	CostUSD        *float64          `json:"cost_usd,omitempty"`
 	CostSource     export.CostSource `json:"cost_source,omitempty"`
-	AICredits      float64           `json:"ai_credits,omitempty"`
+	AICredits      float64           `json:"ai_credits,omitzero"`
 	Models         []string          `json:"models"`
 	UnpricedModels []string          `json:"unpriced_models,omitempty"`
 	BreakdownCount int               `json:"breakdown_count"`
@@ -2913,7 +2913,7 @@ type SessionUsage struct {
 	// into this result. It is zero (and omitted) for own-session results,
 	// which is what GetSessionUsage always returns; only the
 	// presentation-time combining in internal/service sets it.
-	SubagentCount int                          `json:"subagent_count,omitempty"`
+	SubagentCount int                          `json:"subagent_count,omitzero"`
 	Breakdown     []SessionUsageBreakdownEntry `json:"breakdown"`
 }
 
@@ -2936,7 +2936,7 @@ type SessionUsageBreakdownEntry struct {
 	// this row was billed for, at export.WebSearchRequestMicrodollars
 	// each. Omitted when the row performed none, which is every row for
 	// every provider that does not report server tool use.
-	WebSearchRequests int         `json:"web_search_requests,omitempty"`
+	WebSearchRequests int         `json:"web_search_requests,omitzero"`
 	Cost              money.Money `json:"cost"`
 	HasCost           bool        `json:"has_cost"`
 }

@@ -10,7 +10,7 @@ import (
 func (s *Server) registerTrendsRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/trends", "Trends")
 
-	get(s, group, "/terms", "Get trend terms", s.humaTrendsTerms)
+	s.get(group, "/terms", "Get trend terms", s.humaTrendsTerms)
 }
 
 type trendsTermsInput struct {

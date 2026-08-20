@@ -5,7 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -783,9 +784,10 @@ func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool, stor
 		if gens == nil {
 			gens = []vector.GenerationInfo{}
 		}
-		return json.NewEncoder(out).Encode(struct {
+		return json.MarshalEncode(jsontext.NewEncoder(out), struct {
 			Generations []vector.GenerationInfo `json:"generations"`
 		}{gens})
+
 	}
 	printGenerationsTable(out, gens)
 	return nil
@@ -1051,7 +1053,7 @@ func (c embeddingsDaemonClient) do(
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.UnmarshalRead(resp.Body, out)
 }
 
 // daemonErrorMessage extracts the {"error": "..."} message huma's error

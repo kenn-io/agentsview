@@ -2,7 +2,8 @@ package server
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net/http"
@@ -18,13 +19,11 @@ import (
 func (s *Server) registerImportRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/import", "Import")
 
-	stream(
-		s, group, http.MethodPost, "/claude-ai",
+	s.stream(group, http.MethodPost, "/claude-ai",
 		"Import Claude.ai archive", s.humaImportClaudeAI,
 		streamJSONResponse(),
 	)
-	stream(
-		s, group, http.MethodPost, "/chatgpt",
+	s.stream(group, http.MethodPost, "/chatgpt",
 		"Import ChatGPT archive", s.humaImportChatGPT,
 		streamJSONResponse(),
 	)
@@ -257,6 +256,6 @@ func (s *Server) importChatGPTFromFile(
 func jsonStreamResponse(value any) *huma.StreamResponse {
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		hctx.SetHeader("Content-Type", "application/json")
-		_ = json.NewEncoder(hctx.BodyWriter()).Encode(value)
+		_ = json.MarshalEncode(jsontext.NewEncoder(hctx.BodyWriter()), value)
 	}}
 }

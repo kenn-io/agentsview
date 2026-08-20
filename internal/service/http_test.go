@@ -2,7 +2,8 @@ package service_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net"
@@ -347,7 +348,7 @@ func TestHTTPBackend_ListRecallEntriesIncludesTrustedOnlyParam(t *testing.T) {
 	require.NoError(t, err)
 	encoded, err := json.Marshal(list)
 	require.NoError(t, err)
-	var raw map[string]json.RawMessage
+	var raw map[string]jsontext.Value
 	require.NoError(t, json.Unmarshal(encoded, &raw))
 	require.Contains(t, raw, "trusted_only")
 	var trustedOnly bool
@@ -381,7 +382,7 @@ func TestHTTPBackend_QueryRecallEntriesIncludesSourceEpisodeID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
 		var got service.RecallQuery
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		require.NoError(t, json.UnmarshalRead(r.Body, &got))
 		assert.Equal(t, "recall-session:chunk:0001", got.SourceEpisodeID)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"entries":[]}`))
@@ -401,10 +402,10 @@ func TestHTTPBackend_QueryRecallEntriesTransportsSkipRecording(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var got service.RecallQuery
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		require.NoError(t, json.UnmarshalRead(r.Body, &got))
 		assert.True(t, got.SkipRecording)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			Mode: db.RecallQueryModeLexical, RecallEntries: []db.RecallResult{},
 		}))
 	}))
@@ -446,20 +447,18 @@ func TestHTTPBackend_QueryRecallEntriesBuildsMissingSummaries(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			RecallEntries: []db.RecallResult{{
-				RecallEntry: db.RecallEntry{
-					ID:              "m-http-summary",
-					Type:            "procedure",
-					Scope:           "project",
-					Status:          "accepted",
-					Project:         "agentsview",
-					Agent:           "codex",
-					SourceSessionID: "recall-session",
-					SourceEpisodeID: "recall-session:chunk:0001",
-					SourceRunID:     "smoke-run",
-				},
-				MatchReasons: []string{"keyword", "evidence"},
+				ID:              "m-http-summary",
+				Type:            "procedure",
+				Scope:           "project",
+				Status:          "accepted",
+				Project:         "agentsview",
+				Agent:           "codex",
+				SourceSessionID: "recall-session",
+				SourceEpisodeID: "recall-session:chunk:0001",
+				SourceRunID:     "smoke-run",
+				MatchReasons:    []string{"keyword", "evidence"},
 			}},
 			Context: "Relevant prior agentsview entries",
 			ContextMeta: &service.RecallContextMeta{
@@ -497,10 +496,10 @@ func TestHTTPBackend_QueryRecallEntriesRejectsInconsistentContextEntries(t *test
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			RecallEntries: []db.RecallResult{
-				{RecallEntry: db.RecallEntry{ID: "m-packed"}},
-				{RecallEntry: db.RecallEntry{ID: "m-other"}},
+				{ID: "m-packed"},
+				{ID: "m-other"},
 			},
 			Context: "Relevant prior agentsview entries",
 			ContextMeta: &service.RecallContextMeta{
@@ -508,7 +507,7 @@ func TestHTTPBackend_QueryRecallEntriesRejectsInconsistentContextEntries(t *test
 				IncludedIDs: []string{"m-packed"},
 			},
 			ContextEntries: []db.RecallResult{
-				{RecallEntry: db.RecallEntry{ID: "m-other"}},
+				{ID: "m-other"},
 			},
 		}))
 	}))
@@ -530,7 +529,7 @@ func TestHTTPBackend_QueryRecallEntriesRejectsMissingContextRecallEntryRows(t *t
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			RecallEntries: []db.RecallResult{},
 			Context:       "Relevant prior agentsview entries",
 			ContextMeta: &service.RecallContextMeta{
@@ -557,10 +556,10 @@ func TestHTTPBackend_QueryRecallEntriesReportsTrustedOnlyFallback(t *testing.T) 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
 		var req service.RecallQuery
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		assert.True(t, req.TrustedOnly)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			RecallEntries: []db.RecallResult{},
 		}))
 	}))
@@ -575,7 +574,7 @@ func TestHTTPBackend_QueryRecallEntriesReportsTrustedOnlyFallback(t *testing.T) 
 	require.NoError(t, err)
 	encoded, err := json.Marshal(got)
 	require.NoError(t, err)
-	var raw map[string]json.RawMessage
+	var raw map[string]jsontext.Value
 	require.NoError(t, json.Unmarshal(encoded, &raw))
 	require.Contains(t, raw, "trusted_only")
 	var trustedOnly bool
@@ -797,7 +796,7 @@ func TestHTTPBackend_RecallReads_RemoteReadOnly(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t, withHTTPStore(func(d *db.DB) db.Store {
 		return recallUnavailableHTTPStore{
-			readOnlyHTTPStore: readOnlyHTTPStore{DB: d},
+			DB: d,
 		}
 	}))
 	svc := env.Backend("", false)
@@ -845,7 +844,7 @@ func TestHTTPBackend_QueryRecallVector501PreservesSemanticCause(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotImplemented)
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{
+		require.NoError(t, json.MarshalWrite(w, map[string]string{
 			"error": body,
 		}))
 	}))
@@ -880,7 +879,7 @@ func TestHTTPBackend_QueryRecallRejectsResponseModeMismatch(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			Mode:          db.RecallQueryModeLexical,
 			RecallEntries: []db.RecallResult{},
 		}))
@@ -1082,7 +1081,7 @@ func TestHTTPSearchContent_501PreservesBackendSpecificReason(t *testing.T) {
 				func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusNotImplemented)
-					assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{
+					assert.NoError(t, json.MarshalWrite(w, map[string]string{
 						"error": tt.body,
 					}))
 				}))

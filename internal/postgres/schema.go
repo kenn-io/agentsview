@@ -2736,8 +2736,7 @@ func CheckDataVersionCompat(ctx context.Context, pg *sql.DB) error {
 // read-only or insufficient-privilege condition (SQLSTATE 25006
 // or 42501). Uses pgconn.PgError for reliable SQLSTATE matching.
 func IsReadOnlyError(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		return pgErr.Code == "25006" || pgErr.Code == "42501"
 	}
 	return false

@@ -2,9 +2,9 @@ package server
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -48,14 +48,10 @@ func (s *Server) handleArtifactExchange(
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, artifactExchangeMaxBodyBytes)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	var request ArtifactExchangeRequest
-	if err := decoder.Decode(&request); err != nil {
-		writeArtifactExchangeDecodeError(w, err)
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if err := json.UnmarshalRead(
+		r.Body, &request, json.RejectUnknownMembers(true),
+	); err != nil {
 		writeArtifactExchangeDecodeError(w, err)
 		return
 	}
@@ -78,14 +74,13 @@ func (s *Server) handleArtifactExchange(
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(result); err != nil {
+	if err := json.MarshalEncode(jsontext.NewEncoder(w), result); err != nil {
 		return
 	}
 }
 
 func writeArtifactExchangeDecodeError(w http.ResponseWriter, err error) {
-	var maxBytesError *http.MaxBytesError
-	if errors.As(err, &maxBytesError) {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		http.Error(
 			w,
 			"artifact exchange request too large",

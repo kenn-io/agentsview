@@ -3,7 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"os"
 	"path/filepath"
 	"strings"
@@ -360,16 +360,16 @@ func TestAgentByPrefixShelley(t *testing.T) {
 func TestShelleyTokenCount(t *testing.T) {
 	tests := []struct {
 		name string
-		in   json.Number
+		in   jsontext.Value
 		want int
 	}{
-		{"empty", json.Number(""), 0},
-		{"plain", json.Number("1234"), 1234},
-		{"zero", json.Number("0"), 0},
-		{"negative", json.Number("-5"), 0},
-		{"float", json.Number("42.0"), 42},
-		{"garbage", json.Number("abc"), 0},
-		{"implausible", json.Number("9999999999999"), 0},
+		{"empty", jsontext.Value(""), 0},
+		{"plain", jsontext.Value("1234"), 1234},
+		{"zero", jsontext.Value("0"), 0},
+		{"negative", jsontext.Value("-5"), 0},
+		{"float", jsontext.Value("42.0"), 42},
+		{"garbage", jsontext.Value("abc"), 0},
+		{"implausible", jsontext.Value("9999999999999"), 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

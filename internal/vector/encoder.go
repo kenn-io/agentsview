@@ -7,7 +7,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -177,7 +178,7 @@ type embeddingsRequestBody struct {
 	// length (Matryoshka truncation plus renormalization, server-side). Zero
 	// omits the field so native-dimension configurations and endpoints
 	// without dimension selection keep working.
-	Dimensions int `json:"dimensions,omitempty"`
+	Dimensions int `json:"dimensions,omitzero"`
 }
 
 // embeddingsResponseBody is the OpenAI-compatible embeddings response.
@@ -192,7 +193,7 @@ type ollamaEmbedRequest struct {
 	Model      string             `json:"model"`
 	Input      []string           `json:"input"`
 	Truncate   bool               `json:"truncate"`
-	Dimensions int                `json:"dimensions,omitempty"`
+	Dimensions int                `json:"dimensions,omitzero"`
 	Options    ollamaEmbedOptions `json:"options"`
 	KeepAlive  string             `json:"keep_alive"`
 }
@@ -232,7 +233,7 @@ func (v *embeddingVector) UnmarshalJSON(b []byte) error {
 		*v = out
 		return nil
 	}
-	var elements []json.RawMessage
+	var elements []jsontext.Value
 	if err := json.Unmarshal(b, &elements); err != nil {
 		return err
 	}
@@ -479,8 +480,7 @@ func (ec *encoderClient) encode(ctx context.Context, texts []string) ([][]float3
 		}
 		lastErr = err
 		if attempt == attempts && ec.cfg.OllamaCPUFallback {
-			var invalidErr *InvalidEmbeddingError
-			if errors.As(err, &invalidErr) {
+			if _, ok := errors.AsType[*InvalidEmbeddingError](err); ok {
 				merged, fallbackErr := ec.ollamaCPUFallback(ctx, texts, vectors)
 				if fallbackErr == nil {
 					return merged, nil
@@ -564,7 +564,7 @@ func (ec *encoderClient) ollamaCPUFallback(
 	}
 
 	var decoded ollamaEmbedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &decoded); err != nil {
 		return nil, fmt.Errorf("decode Ollama CPU response: %w", err)
 	}
 	if len(decoded.Embeddings) != len(invalidIndices) {
@@ -664,7 +664,7 @@ func (ec *encoderClient) attemptEncode(
 	}
 
 	var decoded embeddingsResponseBody
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &decoded); err != nil {
 		// A decode failure almost always means the connection died
 		// mid-stream (truncated body), not that the endpoint sent a
 		// deliberately malformed response; treat it as transient so the

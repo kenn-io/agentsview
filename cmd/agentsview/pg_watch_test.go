@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -75,7 +75,7 @@ func TestArchiveWriteBackendPGPushPostsToDaemon(t *testing.T) {
 	) {
 		gotAuth = r.Header.Get("Authorization")
 		var req daemonPushRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		assert.True(t, req.Full)
 		assert.Equal(t, []string{"a"}, req.Projects)
 		assert.Equal(t, []string{"b"}, req.ExcludeProjects)

@@ -5,7 +5,7 @@ package artifact
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"strings"
@@ -133,8 +133,8 @@ type manifest struct {
 	// and quality signal state instead of resetting to false/zero. Secret-scan
 	// state is deliberately not carried: findings live outside the manifest,
 	// so imported sessions are treated as unscanned.
-	SessionHasToolCalls   bool                    `json:"session_has_tool_calls,omitempty"`
-	SessionHasContextData bool                    `json:"session_has_context_data,omitempty"`
+	SessionHasToolCalls   bool                    `json:"session_has_tool_calls,omitzero"`
+	SessionHasContextData bool                    `json:"session_has_context_data,omitzero"`
 	SessionQualitySignals *manifestQualitySignals `json:"session_quality_signals,omitempty"`
 }
 
@@ -142,11 +142,11 @@ type artifactUsageEvent struct {
 	MessageOrdinal           *int         `json:"message_ordinal,omitempty"`
 	Source                   string       `json:"source"`
 	Model                    string       `json:"model"`
-	InputTokens              int          `json:"input_tokens,omitempty"`
-	OutputTokens             int          `json:"output_tokens,omitempty"`
-	CacheCreationInputTokens int          `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int          `json:"cache_read_input_tokens,omitempty"`
-	ReasoningTokens          int          `json:"reasoning_tokens,omitempty"`
+	InputTokens              int          `json:"input_tokens,omitzero"`
+	OutputTokens             int          `json:"output_tokens,omitzero"`
+	CacheCreationInputTokens int          `json:"cache_creation_input_tokens,omitzero"`
+	CacheReadInputTokens     int          `json:"cache_read_input_tokens,omitzero"`
+	ReasoningTokens          int          `json:"reasoning_tokens,omitzero"`
 	Cost                     *money.Money `json:"cost,omitempty"`
 	CostStatus               string       `json:"cost_status,omitempty"`
 	CostSource               string       `json:"cost_source,omitempty"`
@@ -162,13 +162,13 @@ type rawSourceRef struct {
 }
 
 type metadataEvent struct {
-	Version    int             `json:"v"`
-	HLC        string          `json:"hlc"`
-	Origin     string          `json:"origin"`
-	SessionGID string          `json:"session_gid"`
-	Op         string          `json:"op"`
-	Value      json.RawMessage `json:"value,omitempty"`
-	Pin        *MetadataPin    `json:"pin,omitempty"`
+	Version    int            `json:"v"`
+	HLC        string         `json:"hlc"`
+	Origin     string         `json:"origin"`
+	SessionGID string         `json:"session_gid"`
+	Op         string         `json:"op"`
+	Value      jsontext.Value `json:"value,omitempty"`
+	Pin        *MetadataPin   `json:"pin,omitempty"`
 }
 
 // MetadataPin identifies a pinned message with stable source coordinates.
@@ -185,26 +185,26 @@ type segmentMessage struct {
 	Content           string            `json:"content"`
 	ThinkingText      string            `json:"thinking_text,omitempty"`
 	Timestamp         string            `json:"timestamp,omitempty"`
-	HasThinking       bool              `json:"has_thinking,omitempty"`
-	HasToolUse        bool              `json:"has_tool_use,omitempty"`
-	ContentLength     int               `json:"content_length,omitempty"`
+	HasThinking       bool              `json:"has_thinking,omitzero"`
+	HasToolUse        bool              `json:"has_tool_use,omitzero"`
+	ContentLength     int               `json:"content_length,omitzero"`
 	Model             string            `json:"model,omitempty"`
-	TokenUsage        json.RawMessage   `json:"token_usage,omitempty"`
-	ContextTokens     int               `json:"context_tokens,omitempty"`
-	OutputTokens      int               `json:"output_tokens,omitempty"`
-	HasContextTokens  bool              `json:"has_context_tokens,omitempty"`
-	HasOutputTokens   bool              `json:"has_output_tokens,omitempty"`
+	TokenUsage        jsontext.Value    `json:"token_usage,omitempty"`
+	ContextTokens     int               `json:"context_tokens,omitzero"`
+	OutputTokens      int               `json:"output_tokens,omitzero"`
+	HasContextTokens  bool              `json:"has_context_tokens,omitzero"`
+	HasOutputTokens   bool              `json:"has_output_tokens,omitzero"`
 	ClaudeMessageID   string            `json:"claude_message_id,omitempty"`
 	ClaudeRequestID   string            `json:"claude_request_id,omitempty"`
 	ToolCalls         []segmentToolCall `json:"tool_calls,omitempty"`
-	IsSystem          bool              `json:"is_system,omitempty"`
+	IsSystem          bool              `json:"is_system,omitzero"`
 	SourceType        string            `json:"source_type,omitempty"`
 	SourceSubtype     string            `json:"source_subtype,omitempty"`
 	PromptSource      string            `json:"prompt_source,omitempty"`
 	SourceUUID        string            `json:"source_uuid,omitempty"`
 	SourceParentUUID  string            `json:"source_parent_uuid,omitempty"`
-	IsSidechain       bool              `json:"is_sidechain,omitempty"`
-	IsCompactBoundary bool              `json:"is_compact_boundary,omitempty"`
+	IsSidechain       bool              `json:"is_sidechain,omitzero"`
+	IsCompactBoundary bool              `json:"is_compact_boundary,omitzero"`
 }
 
 type segmentToolCall struct {

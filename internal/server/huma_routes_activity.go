@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -25,9 +25,9 @@ const (
 
 func (s *Server) registerActivityRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/activity", "Activity")
-	stream(s, group, http.MethodGet, "/report", "Get activity report",
+	s.stream(group, http.MethodGet, "/report", "Get activity report",
 		s.humaActivityReport, streamJSONResponseSchema("ActivityReport"))
-	getLong(s, group, "/report/{report_id}/sessions",
+	s.getLong(group, "/report/{report_id}/sessions",
 		"Page activity report sessions", s.humaActivityReportSessions)
 }
 
@@ -118,8 +118,7 @@ func (s *Server) humaActivityReport(
 				return
 			}
 			status := http.StatusInternalServerError
-			var responseErr *apiErrorResponse
-			if errors.As(publicErr, &responseErr) {
+			if responseErr, ok := errors.AsType[*apiErrorResponse](publicErr); ok {
 				status = responseErr.Status
 			}
 			writeHumaJSON(hctx, status,

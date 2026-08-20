@@ -5,7 +5,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/jsonutil"
 )
 
 const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
@@ -67,6 +69,21 @@ type PushResult struct {
 	Errors         int
 	Duration       time.Duration
 	Diagnostics    PushDiagnostics
+}
+
+type pushResultJSON PushResult
+
+func (r PushResult) MarshalJSONTo(out *jsontext.Encoder) error {
+	return jsonutil.MarshalDurationFields(out, pushResultJSON(r))
+}
+
+func (r *PushResult) UnmarshalJSONFrom(in *jsontext.Decoder) error {
+	var decoded pushResultJSON
+	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
+		return err
+	}
+	*r = PushResult(decoded)
+	return nil
 }
 
 // PushDiagnostics summarizes how a DuckDB push selected sessions.

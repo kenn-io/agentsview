@@ -2,7 +2,7 @@ package parser
 
 import (
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -355,7 +355,7 @@ func cursorLineIndent(line string) int {
 }
 
 func marshalCursorToolParams(params map[string]string) string {
-	data, err := json.Marshal(params)
+	data, err := json.Marshal(params, json.Deterministic(true))
 	if err != nil {
 		return ""
 	}

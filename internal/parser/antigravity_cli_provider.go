@@ -31,11 +31,9 @@ func (f antigravityCLIProviderFactory) Capabilities() Capabilities {
 func (f antigravityCLIProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &antigravityCLIProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   antigravityCLIProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    antigravityCLIProviderCapabilities(),
+		Config:  cfg,
 		sources: newAntigravityCLISourceSet(cfg.Roots),
 	}
 }

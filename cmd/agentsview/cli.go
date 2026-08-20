@@ -1,7 +1,8 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -55,8 +56,7 @@ func withSilentExitCode(err error, code int) error {
 }
 
 func exitCodeFromError(err error) int {
-	var exitErr *cliExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*cliExitError](err); ok {
 		return exitErr.code
 	}
 	return 1
@@ -856,13 +856,14 @@ func newVersionCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(versionJSON{
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), versionJSON{
 					SchemaVersion: 1,
 					Name:          "agentsview",
 					Version:       version,
 					Commit:        commit,
 					BuildDate:     buildDate,
 				})
+
 			}
 			printVersion(cmd.OutOrStdout())
 			return nil

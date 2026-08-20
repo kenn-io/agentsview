@@ -2,7 +2,8 @@ package parser
 
 import (
 	"bufio"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -38,32 +39,32 @@ func (m jsonMillis) Time() time.Time {
 type vscodeCopilotRequest struct {
 	RequestID string               `json:"requestId"`
 	Message   vscodeCopilotMessage `json:"message"`
-	Response  []json.RawMessage    `json:"response"`
+	Response  []jsontext.Value     `json:"response"`
 	Agent     *vscodeCopilotAgent  `json:"agent,omitempty"`
 	ModelID   string               `json:"modelId"`
 	Timestamp jsonMillis           `json:"timestamp"`
 	Result    *vscodeCopilotResult `json:"result,omitempty"`
-	FollowUps []json.RawMessage    `json:"followups,omitempty"`
+	FollowUps []jsontext.Value     `json:"followups,omitempty"`
 }
 
 // vscodeCopilotMessage is the user prompt.
 type vscodeCopilotMessage struct {
-	Text  string          `json:"text"`
-	Parts json.RawMessage `json:"parts,omitempty"`
+	Text  string         `json:"text"`
+	Parts jsontext.Value `json:"parts,omitempty"`
 }
 
 // vscodeCopilotAgent identifies the agent that handled the request.
 type vscodeCopilotAgent struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	FullName    string          `json:"fullName"`
-	ExtensionID json.RawMessage `json:"extensionId,omitempty"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	FullName    string         `json:"fullName"`
+	ExtensionID jsontext.Value `json:"extensionId,omitempty"`
 }
 
 // vscodeCopilotResult holds timing and metadata.
 type vscodeCopilotResult struct {
 	Timings  *vscodeCopilotTimings `json:"timings,omitempty"`
-	Metadata json.RawMessage       `json:"metadata,omitempty"`
+	Metadata jsontext.Value        `json:"metadata,omitempty"`
 }
 
 // vscodeCopilotMetadata holds the per-request token accounting
@@ -85,15 +86,15 @@ type vscodeCopilotTimings struct {
 // vscodeCopilotResponseItem is a single element of the
 // response array, with flexible typing.
 type vscodeCopilotResponseItem struct {
-	Kind              string          `json:"kind,omitempty"`
-	Value             string          `json:"value,omitempty"`
-	ToolID            string          `json:"toolId,omitempty"`
-	ToolCallID        string          `json:"toolCallId,omitempty"`
-	InvocationMessage json.RawMessage `json:"invocationMessage,omitempty"`
-	PastTenseMessage  json.RawMessage `json:"pastTenseMessage,omitempty"`
-	ToolName          string          `json:"toolName,omitempty"`
-	InlineReference   json.RawMessage `json:"inlineReference,omitempty"`
-	ToolSpecificData  json.RawMessage `json:"toolSpecificData,omitempty"`
+	Kind              string         `json:"kind,omitempty"`
+	Value             string         `json:"value,omitempty"`
+	ToolID            string         `json:"toolId,omitempty"`
+	ToolCallID        string         `json:"toolCallId,omitempty"`
+	InvocationMessage jsontext.Value `json:"invocationMessage,omitempty"`
+	PastTenseMessage  jsontext.Value `json:"pastTenseMessage,omitempty"`
+	ToolName          string         `json:"toolName,omitempty"`
+	InlineReference   jsontext.Value `json:"inlineReference,omitempty"`
+	ToolSpecificData  jsontext.Value `json:"toolSpecificData,omitempty"`
 }
 
 // vscodeCopilotToolData holds terminal-specific tool data.
@@ -357,7 +358,7 @@ func vscodeCopilotUsageEvent(
 // parseVSCodeCopilotResponse extracts text and tool calls
 // from the response items array.
 func parseVSCodeCopilotResponse(
-	raw []json.RawMessage,
+	raw []jsontext.Value,
 ) (string, []ParsedToolCall) {
 	var textParts []string
 	var toolCalls []ParsedToolCall
@@ -412,7 +413,7 @@ func parseVSCodeCopilotResponse(
 	return text, toolCalls
 }
 
-func extractVSCodeInlineReference(raw json.RawMessage) string {
+func extractVSCodeInlineReference(raw jsontext.Value) string {
 	var ref vscodeCopilotInlineReference
 	if err := json.Unmarshal(raw, &ref); err != nil {
 		return ""
@@ -559,7 +560,7 @@ func extractVSCopilotToolBody(tc ParsedToolCall) string {
 // extractVSCopilotInputJSON builds an InputJSON string from
 // the invocationMessage and toolSpecificData fields.
 func extractVSCopilotInputJSON(
-	invocationMsg, pastTenseMsg, toolData json.RawMessage,
+	invocationMsg, pastTenseMsg, toolData jsontext.Value,
 ) string {
 	result := make(map[string]any)
 
@@ -599,7 +600,7 @@ func extractVSCopilotInputJSON(
 // extractInvocationText extracts a human-readable string
 // from an invocationMessage field which can be a plain
 // string or a {"value": "..."} object.
-func extractInvocationText(raw json.RawMessage) string {
+func extractInvocationText(raw jsontext.Value) string {
 	if len(raw) == 0 {
 		return ""
 	}
@@ -670,10 +671,10 @@ func extractProjectFromURI(uri string) string {
 // jsonlOp represents a single operation in a VSCode JSONL
 // session operation log.
 type jsonlOp struct {
-	Kind int               `json:"kind"`
-	K    []json.RawMessage `json:"k,omitempty"`
-	V    json.RawMessage   `json:"v,omitempty"`
-	I    *int              `json:"i,omitempty"`
+	Kind int              `json:"kind"`
+	K    []jsontext.Value `json:"k,omitempty"`
+	V    jsontext.Value   `json:"v,omitempty"`
+	I    *int             `json:"i,omitempty"`
 }
 
 const vscodeCopilotHardRecordLimit = 128 << 20
@@ -706,30 +707,15 @@ func reconstructJSONLWithLimit(path string, hardRecordLimit int) ([]byte, error)
 	var state any
 
 	for {
-		record := newVSCodeCopilotRecordReader(reader, hardRecordLimit)
-		var op jsonlOp
-		decoder := json.NewDecoder(record)
-		decodeErr := decoder.Decode(&op)
-		if !record.sawLine && decodeErr == io.EOF {
+		record, err := readVSCodeCopilotRecord(reader, hardRecordLimit)
+		if err == io.EOF {
 			break
 		}
-		if decodeErr == nil {
-			var trailing json.RawMessage
-			if err := decoder.Decode(&trailing); err != io.EOF {
-				if err == nil {
-					decodeErr = fmt.Errorf("trailing JSON value")
-				} else {
-					decodeErr = fmt.Errorf("trailing JSON: %w", err)
-				}
-			}
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		if record.err != nil {
-			return nil, fmt.Errorf("read %s: %w", path, record.err)
-		}
-		if drainErr := record.drain(); drainErr != nil {
-			return nil, fmt.Errorf("read %s: %w", path, drainErr)
-		}
-		if decodeErr != nil {
+		var op jsonlOp
+		if err := json.Unmarshal(record, &op); err != nil {
 			continue
 		}
 
@@ -803,74 +789,27 @@ func reconstructJSONLWithLimit(path string, hardRecordLimit int) ([]byte, error)
 	return json.Marshal(state)
 }
 
-type vscodeCopilotRecordReader struct {
-	source  *bufio.Reader
-	limit   int
-	chunk   []byte
-	prefix  bool
-	read    int
-	sawLine bool
-	done    bool
-	err     error
-}
-
-func newVSCodeCopilotRecordReader(
+func readVSCodeCopilotRecord(
 	source *bufio.Reader,
 	limit int,
-) *vscodeCopilotRecordReader {
-	return &vscodeCopilotRecordReader{source: source, limit: limit}
-}
-
-func (r *vscodeCopilotRecordReader) Read(p []byte) (int, error) {
-	for len(r.chunk) == 0 {
-		if r.done {
-			if r.err != nil {
-				return 0, r.err
-			}
-			return 0, io.EOF
-		}
-
-		chunk, prefix, err := r.source.ReadLine()
+) ([]byte, error) {
+	var record []byte
+	for {
+		chunk, prefix, err := source.ReadLine()
 		if err != nil {
-			r.done = true
-			if err == io.EOF {
-				return 0, io.EOF
-			}
-			r.err = err
-			return 0, err
+			return nil, err
 		}
-		r.sawLine = true
-		if r.read+len(chunk) > r.limit {
-			r.done = true
-			r.err = fmt.Errorf(
+		if len(record)+len(chunk) > limit {
+			return nil, fmt.Errorf(
 				"VS Code Copilot JSONL record exceeds %d-byte safety ceiling",
-				r.limit,
+				limit,
 			)
-			return 0, r.err
 		}
-		r.read += len(chunk)
-		r.chunk = chunk
-		r.prefix = prefix
-		if len(chunk) == 0 && !prefix {
-			r.done = true
-			return 0, io.EOF
+		record = append(record, chunk...)
+		if !prefix {
+			return record, nil
 		}
 	}
-
-	n := copy(p, r.chunk)
-	r.chunk = r.chunk[n:]
-	if len(r.chunk) == 0 && !r.prefix {
-		r.done = true
-	}
-	return n, nil
-}
-
-func (r *vscodeCopilotRecordReader) drain() error {
-	if r.done {
-		return r.err
-	}
-	_, err := io.Copy(io.Discard, r)
-	return err
 }
 
 type vscodeCopilotDestination int
@@ -945,7 +884,7 @@ func projectVSCodeCopilotResultDetails(value any) {
 
 // decodeJSONLKeys converts raw JSON key elements to strings.
 // Keys can be strings (object keys) or numbers (array indices).
-func decodeJSONLKeys(raw []json.RawMessage) []string {
+func decodeJSONLKeys(raw []jsontext.Value) []string {
 	keys := make([]string, len(raw))
 	for i, r := range raw {
 		var s string

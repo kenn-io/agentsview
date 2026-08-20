@@ -4,7 +4,8 @@ package parser
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"strings"
@@ -40,7 +41,7 @@ func extractGeminiTokens(msg gjson.Result) geminiTokens {
 // Anthropic-style shape used by usage and cost queries. Thoughts
 // tokens are billed at the output rate, so they fold into
 // output_tokens here.
-func normalizedGeminiTokenUsage(tok geminiTokens) json.RawMessage {
+func normalizedGeminiTokenUsage(tok geminiTokens) jsontext.Value {
 	payload := map[string]int{
 		"input_tokens":            tok.Input,
 		"output_tokens":           tok.Output + tok.Thoughts,
@@ -251,7 +252,7 @@ func parseGeminiMessage(
 	}
 
 	tok := extractGeminiTokens(msg)
-	var tokenUsage json.RawMessage
+	var tokenUsage jsontext.Value
 	tokResult := msg.Get("tokens")
 	if tokResult.Exists() {
 		tokenUsage = normalizedGeminiTokenUsage(tok)

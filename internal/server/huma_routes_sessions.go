@@ -26,33 +26,33 @@ import (
 func (s *Server) registerSessionRoutes() {
 	group := newRouteGroup(s.api, "/api/v1", "Sessions")
 
-	get(s, group, "/sessions", "List sessions", s.humaListSessions)
-	get(s, group, "/sessions/sidebar-index", "List sidebar sessions", s.humaSidebarSessionIndex)
-	get(s, group, "/session-ids/resolve", "Resolve session IDs", s.humaResolveSessionIDs)
-	get(s, group, "/sessions/{id}", "Get session", s.humaGetSession)
-	get(s, group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
-	get(s, group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
-	get(s, group, "/sessions/{id}/children", "List child sessions", s.humaGetChildSessions)
-	get(s, group, "/sessions/{id}/activity", "Get session activity", s.humaGetSessionActivity)
-	get(s, group, "/sessions/{id}/timing", "Get session timing", s.humaSessionTiming)
-	get(s, group, "/sessions/{id}/usage", "Get session usage", s.humaSessionUsage)
-	stream(s, group, http.MethodGet, "/sessions/{id}/watch", "Watch session events", s.humaWatchSession)
-	stream(s, group, http.MethodGet, "/events", "Watch server events", s.humaEvents)
-	raw(s, group, http.MethodGet, "/sessions/{id}/export", "Export session as HTML", s.humaExportSession)
-	raw(s, group, http.MethodGet, "/sessions/{id}/md", "Export session as Markdown", s.humaMarkdownSession)
-	post(s, group, "/sessions/{id}/publish", "Publish session", s.humaPublishSession)
-	post(s, group, "/sessions/{id}/resume", "Resume session", s.humaResumeSession)
-	get(s, group, "/sessions/{id}/directory", "Get session directory", s.humaGetSessionDir)
-	get(s, group, "/sessions/{id}/search", "Search within a session", s.humaSearchSession)
-	post(s, group, "/sessions/{id}/open", "Open session directory", s.humaOpenSession)
-	post(s, group, "/sessions/upload", "Upload a session export", s.humaUploadSession)
-	patch(s, group, "/sessions/{id}/rename", "Rename session", s.humaRenameSession)
-	post(s, group, "/sessions/batch-delete", "Batch delete sessions", s.humaBatchDeleteSessions)
-	deleteRoute(s, group, "/sessions/{id}", "Delete session", s.humaDeleteSession)
-	post(s, group, "/sessions/{id}/restore", "Restore session", s.humaRestoreSession)
-	deleteRoute(s, group, "/sessions/{id}/permanent", "Permanently delete session", s.humaPermanentDeleteSession)
-	get(s, group, "/trash", "List trash", s.humaListTrash)
-	deleteRoute(s, group, "/trash", "Empty trash", s.humaEmptyTrash)
+	s.get(group, "/sessions", "List sessions", s.humaListSessions)
+	s.get(group, "/sessions/sidebar-index", "List sidebar sessions", s.humaSidebarSessionIndex)
+	s.get(group, "/session-ids/resolve", "Resolve session IDs", s.humaResolveSessionIDs)
+	s.get(group, "/sessions/{id}", "Get session", s.humaGetSession)
+	s.get(group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
+	s.get(group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
+	s.get(group, "/sessions/{id}/children", "List child sessions", s.humaGetChildSessions)
+	s.get(group, "/sessions/{id}/activity", "Get session activity", s.humaGetSessionActivity)
+	s.get(group, "/sessions/{id}/timing", "Get session timing", s.humaSessionTiming)
+	s.get(group, "/sessions/{id}/usage", "Get session usage", s.humaSessionUsage)
+	s.stream(group, http.MethodGet, "/sessions/{id}/watch", "Watch session events", s.humaWatchSession)
+	s.stream(group, http.MethodGet, "/events", "Watch server events", s.humaEvents)
+	s.raw(group, http.MethodGet, "/sessions/{id}/export", "Export session as HTML", s.humaExportSession)
+	s.raw(group, http.MethodGet, "/sessions/{id}/md", "Export session as Markdown", s.humaMarkdownSession)
+	s.post(group, "/sessions/{id}/publish", "Publish session", s.humaPublishSession)
+	s.post(group, "/sessions/{id}/resume", "Resume session", s.humaResumeSession)
+	s.get(group, "/sessions/{id}/directory", "Get session directory", s.humaGetSessionDir)
+	s.get(group, "/sessions/{id}/search", "Search within a session", s.humaSearchSession)
+	s.post(group, "/sessions/{id}/open", "Open session directory", s.humaOpenSession)
+	s.post(group, "/sessions/upload", "Upload a session export", s.humaUploadSession)
+	s.patch(group, "/sessions/{id}/rename", "Rename session", s.humaRenameSession)
+	s.post(group, "/sessions/batch-delete", "Batch delete sessions", s.humaBatchDeleteSessions)
+	s.deleteRoute(group, "/sessions/{id}", "Delete session", s.humaDeleteSession)
+	s.post(group, "/sessions/{id}/restore", "Restore session", s.humaRestoreSession)
+	s.deleteRoute(group, "/sessions/{id}/permanent", "Permanently delete session", s.humaPermanentDeleteSession)
+	s.get(group, "/trash", "List trash", s.humaListTrash)
+	s.deleteRoute(group, "/trash", "Empty trash", s.humaEmptyTrash)
 }
 
 type messageDirection string
@@ -382,11 +382,11 @@ type sessionUsageResponse struct {
 	// Cost.Microdollars/1e6; see db.SessionUsage.CostUSD.
 	CostUSD             *float64                        `json:"cost_usd,omitempty"`
 	CostSource          export.CostSource               `json:"cost_source,omitempty"`
-	AICredits           float64                         `json:"ai_credits,omitempty"`
+	AICredits           float64                         `json:"ai_credits,omitzero"`
 	Models              []string                        `json:"models"`
 	UnpricedModels      []string                        `json:"unpriced_models"`
 	BreakdownCount      int                             `json:"breakdown_count"`
-	SubagentCount       int                             `json:"subagent_count,omitempty"`
+	SubagentCount       int                             `json:"subagent_count,omitzero"`
 	Breakdown           []sessionUsageBreakdownResponse `json:"breakdown"`
 	ServerRunning       bool                            `json:"server_running"`
 	RollupCost          *money.Money                    `json:"rollup_cost,omitempty"`
@@ -1123,8 +1123,7 @@ func (s *Server) humaUploadSession(
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
-		var shorter *db.SessionWouldShortenError
-		if errors.As(err, &shorter) {
+		if shorter, ok := errors.AsType[*db.SessionWouldShortenError](err); ok {
 			return nil, apiError(http.StatusConflict, fmt.Sprintf(
 				"session upload rejected: session %s has %d messages, upload has %d; retry with allow_shorter=true",
 				shorter.SessionID, shorter.ExistingMessages,

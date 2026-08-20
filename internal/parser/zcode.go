@@ -38,11 +38,9 @@ func (f zcodeProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg.Roots = normalizeZCodeRoots(cfg.Roots)
 	spec := zcodeProviderSpec()
 	return &dbBackedProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   spec.caps,
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    spec.caps,
+		Config:  cfg,
 		spec:    spec,
 		sources: newDBBackedSourceSet(spec, cfg.Roots),
 	}

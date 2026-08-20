@@ -35,9 +35,8 @@ func (f deltaPlanFactory) Capabilities() parser.Capabilities {
 }
 
 func (f deltaPlanFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
-	return &deltaPlanProvider{ProviderBase: parser.ProviderBase{
-		Def: f.Definition(), Caps: f.Capabilities(), Config: cfg.Clone(),
-	}, relevance: f.relevance}
+	return &deltaPlanProvider{
+		Def: f.Definition(), Caps: f.Capabilities(), Config: cfg.Clone(), relevance: f.relevance}
 }
 
 type deltaPlanProvider struct {

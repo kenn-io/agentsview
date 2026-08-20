@@ -2,7 +2,8 @@ package server_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -757,11 +758,11 @@ func TestGenerateCannedInsight_ModelCostPromptIncludesModelBreakdown(t *testing.
 		switch i {
 		case 1:
 			m.Model = "claude-opus-4-7"
-			m.TokenUsage = json.RawMessage(
+			m.TokenUsage = jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":200,"cache_creation_input_tokens":100,"cache_read_input_tokens":50}`)
 		case 3:
 			m.Model = "claude-sonnet-4-6"
-			m.TokenUsage = json.RawMessage(
+			m.TokenUsage = jsontext.Value(
 				`{"input_tokens":2000,"output_tokens":300,"cache_creation_input_tokens":0,"cache_read_input_tokens":400}`)
 		}
 	})

@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -322,7 +323,7 @@ func TestExportReportingFallbackPricingOnUnseededArchive(t *testing.T) {
 			ContentLength: len("synthetic answer"),
 			Timestamp:     "2026-07-28T10:05:00Z",
 			Model:         model,
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":500}`,
 			),
 		},
@@ -382,7 +383,7 @@ func TestExportReportingSnapshotStoredPricingOverridesInstalledFallback(
 			ContentLength: len("synthetic answer"),
 			Timestamp:     "2026-07-28T10:05:00Z",
 			Model:         model,
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":500}`,
 			),
 		},
@@ -656,7 +657,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 			Model:           reportingGoldenPrimaryModel,
 			ClaudeMessageID: "fixture-duplicate-message",
 			ClaudeRequestID: "fixture-duplicate-request",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":200,"cache_creation_input_tokens":30,"cache_read_input_tokens":40,"server_tool_use":{"web_search_requests":2}}`,
 			),
 		},
@@ -680,7 +681,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 		Model:           reportingGoldenLatestModel,
 		ClaudeMessageID: "fixture-duplicate-message",
 		ClaudeRequestID: "fixture-duplicate-request",
-		TokenUsage: json.RawMessage(
+		TokenUsage: jsontext.Value(
 			`{"input_tokens":1000,"output_tokens":200,"cache_creation_input_tokens":30,"cache_read_input_tokens":40}`,
 		),
 	}}))

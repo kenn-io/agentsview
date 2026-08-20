@@ -6,7 +6,7 @@ package duckdb
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"strconv"
 	"testing"
 
@@ -28,8 +28,8 @@ var webSearchPricing = []db.ModelPricing{{
 // webSearchWrites seeds one Claude session with two identical assistant
 // turns, the first of which was billed for `searches` web searches.
 func webSearchWrites(model string, searches int) []db.SessionBatchWrite {
-	usage := func(requests int) json.RawMessage {
-		return json.RawMessage(
+	usage := func(requests int) jsontext.Value {
+		return jsontext.Value(
 			`{"input_tokens":100000,"output_tokens":100000,` +
 				`"server_tool_use":{"web_search_requests":` +
 				strconv.Itoa(requests) + `,"web_fetch_requests":0}}`)
@@ -100,7 +100,7 @@ func asymmetricWebSearchWrites() []db.SessionBatchWrite {
 		Content:   "fuller snapshot",
 		Timestamp: "2026-07-30T10:03:00Z",
 		Model:     "claude-websearch-test",
-		TokenUsage: json.RawMessage(
+		TokenUsage: jsontext.Value(
 			`{"input_tokens":100000,"output_tokens":200000,` +
 				`"server_tool_use":{"web_search_requests":0}}`),
 		OutputTokens:    200000,
@@ -159,7 +159,7 @@ func TestDuckWebSearchOnlyChargeMakesReportedSessionMixed(t *testing.T) {
 			SessionID: "duck-ws-mixed", Ordinal: 0, Role: "assistant",
 			Content: "searched", Timestamp: "2026-07-30T10:01:00Z",
 			Model: "claude-websearch-test",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":0,"output_tokens":0,` +
 					`"server_tool_use":{"web_search_requests":2}}`),
 			ClaudeMessageID: "m-web", ClaudeRequestID: "r-web",

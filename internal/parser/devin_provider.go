@@ -31,11 +31,9 @@ func (f devinProviderFactory) Capabilities() Capabilities {
 func (f devinProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &devinProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   devinProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    devinProviderCapabilities(),
+		Config:  cfg,
 		sources: newDevinSourceSet(cfg.Roots),
 	}
 }
@@ -114,8 +112,7 @@ func (p *devinProvider) Parse(
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
-	var transcriptErr *devinTranscriptError
-	if errors.As(err, &transcriptErr) {
+	if transcriptErr, ok := errors.AsType[*devinTranscriptError](err); ok {
 		return ParseOutcome{}, transcriptErr
 	}
 	if err != nil {

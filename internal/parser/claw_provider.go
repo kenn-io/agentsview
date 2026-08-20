@@ -40,11 +40,9 @@ func (f openClawProviderFactory) Capabilities() Capabilities {
 func (f openClawProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &openClawProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   openClawProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    openClawProviderCapabilities(),
+		Config:  cfg,
 		sources: newClawSourceSet(cfg.Roots, openClawProviderSpec()),
 	}
 }
@@ -129,11 +127,9 @@ func (f qClawProviderFactory) Capabilities() Capabilities {
 func (f qClawProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &qClawProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   qClawProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    qClawProviderCapabilities(),
+		Config:  cfg,
 		sources: newClawSourceSet(cfg.Roots, qClawProviderSpec()),
 	}
 }

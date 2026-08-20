@@ -2,7 +2,7 @@ package insight
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,7 +40,7 @@ func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
 		require.Equal(t, "tenant=local", r.URL.RawQuery)
 		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		require.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		require.NoError(t, json.UnmarshalRead(r.Body, &got))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"served-model","choices":[{"message":{"role":"assistant","content":"answer"}}]}`))
 	}))

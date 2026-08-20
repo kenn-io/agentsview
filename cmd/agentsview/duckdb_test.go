@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -173,7 +173,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	) {
 		startupPushes++
 		var req daemonPushRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		require.NotNil(t, req.DuckDB)
 		assert.Empty(t, req.DuckDB.Path,
 			"the CLI defers to the daemon's pinned mirror path")
@@ -189,7 +189,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		resolvedPushes++
 		cancel()
 		var req daemonPushRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		require.NotNil(t, req.DuckDB)
 		assert.Empty(t, req.DuckDB.Path,
 			"the CLI defers to the daemon's pinned mirror path")
@@ -411,7 +411,7 @@ func duckDBPushDaemonServerAt(
 	) {
 		assert.Equal(t, want.auth, r.Header.Get("Authorization"))
 		var req daemonPushRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		assert.Equal(t, want.full, req.Full)
 		assert.Equal(t, want.projects, req.Projects)
 		assert.Equal(t, want.excludeProjects, req.ExcludeProjects)

@@ -397,11 +397,11 @@ func resolveArchiveWriteBackend(
 		return nil, nil, err
 	}
 	return &localArchiveWriteBackend{
-			appCfg:   appCfg,
-			database: database,
-		}, func() {
-			closeWriteDB(database, writeLock)
-		}, nil
+		appCfg:   appCfg,
+		database: database,
+	}, func() {
+		closeWriteDB(database, writeLock)
+	}, nil
 }
 
 type daemonArchiveWriteBackend struct {

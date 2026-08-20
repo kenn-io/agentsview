@@ -31,11 +31,9 @@ func (f cortexProviderFactory) Capabilities() Capabilities {
 func (f cortexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &cortexProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   cortexProviderCapabilities(),
-			Config: cfg,
-		},
+		Def:     cloneAgentDef(f.def),
+		Caps:    cortexProviderCapabilities(),
+		Config:  cfg,
 		sources: newCortexSourceSet(cfg.Roots),
 	}
 }

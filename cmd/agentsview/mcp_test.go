@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"net"
 	"net/http"
@@ -177,10 +177,11 @@ func TestResolveMCPServiceExplicitServerUsesReportedCapabilities(
 				probeCount++
 				assert.Equal(t, "/api/v1/version", r.URL.Path)
 				assert.Equal(t, "Bearer probe-token", r.Header.Get("Authorization"))
-				_ = json.NewEncoder(w).Encode(map[string]any{
+				_ = json.MarshalWrite(w, map[string]any{
 					"read_only":   tt.readOnly,
 					"api_version": tt.apiVersion,
 				})
+
 			}))
 			t.Cleanup(srv.Close)
 
@@ -212,10 +213,11 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/sessions", r.URL.Path)
 		assert.Equal(t, "7", r.URL.Query().Get("limit"))
-		_ = json.NewEncoder(w).Encode(service.SessionList{
+		_ = json.MarshalWrite(w, service.SessionList{
 			Sessions: []db.Session{{ID: "from-daemon", Agent: "codex"}},
 			Total:    1,
 		})
+
 	}))
 	t.Cleanup(ts.Close)
 	host, port := splitTestServerURL(t, ts.URL)
@@ -296,7 +298,7 @@ func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) 
 		assert.Equal(t, "3", r.URL.Query().Get("min_user_messages"))
 		assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
 		assert.Equal(t, "false", r.URL.Query().Get("include_automated"))
-		_ = json.NewEncoder(w).Encode(expected)
+		_ = json.MarshalWrite(w, expected)
 	}))
 	t.Cleanup(ts.Close)
 
@@ -312,18 +314,16 @@ func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) 
 	res, err := svc.UsagePairwiseComparison(
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				From:            "2024-06-01",
-				To:              "2024-06-07",
-				Timezone:        "UTC",
-				MinUserMessages: 3,
-				IncludeOneShot:  true,
-				Model:           "gpt-4o",
-			},
-			LeftDimension:  "model",
-			LeftValue:      "claude-sonnet-4-20250514",
-			RightDimension: "project",
-			RightValue:     "proj-b",
+			From:            "2024-06-01",
+			To:              "2024-06-07",
+			Timezone:        "UTC",
+			MinUserMessages: 3,
+			IncludeOneShot:  true,
+			Model:           "gpt-4o",
+			LeftDimension:   "model",
+			LeftValue:       "claude-sonnet-4-20250514",
+			RightDimension:  "project",
+			RightValue:      "proj-b",
 		},
 	)
 	require.NoError(t, err)

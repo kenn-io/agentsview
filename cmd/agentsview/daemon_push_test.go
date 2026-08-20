@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -128,8 +129,8 @@ func TestDaemonPushWatchTransportRetriesWithoutScopeForOlderSchema(t *testing.T)
 	attempts := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
-		var body map[string]json.RawMessage
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		var body map[string]jsontext.Value
+		require.NoError(t, json.UnmarshalRead(r.Body, &body))
 		if attempts == 1 {
 			assert.Contains(t, body, "watch_batch")
 			assert.Contains(t, body, "watch_recovery")
@@ -164,8 +165,8 @@ func TestDaemonPushWatchTransportOmitsScopeForKnownOlderDaemon(t *testing.T) {
 	attempts := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
-		var body map[string]json.RawMessage
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		var body map[string]jsontext.Value
+		require.NoError(t, json.UnmarshalRead(r.Body, &body))
 		assert.NotContains(t, body, "watch_batch")
 		assert.NotContains(t, body, "watch_recovery")
 		w.Header().Set("Content-Type", "application/json")

@@ -1,11 +1,9 @@
 package remotesync
 
 import (
-	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	pathpkg "path"
@@ -294,14 +292,9 @@ func loadMirrorChangeJournal(path string) (MirrorChangeJournal, error) {
 	}
 
 	var journal MirrorChangeJournal
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&journal); err != nil {
-		return MirrorChangeJournal{}, fmt.Errorf(
-			"%w: decode %q: %v", ErrMalformedMirrorJournal, path, err,
-		)
-	}
-	if err := requireJSONEOF(decoder); err != nil {
+	if err := json.Unmarshal(
+		data, &journal, json.RejectUnknownMembers(true),
+	); err != nil {
 		return MirrorChangeJournal{}, fmt.Errorf(
 			"%w: decode %q: %v", ErrMalformedMirrorJournal, path, err,
 		)
@@ -312,18 +305,6 @@ func loadMirrorChangeJournal(path string) (MirrorChangeJournal, error) {
 		)
 	}
 	return journal, nil
-}
-
-func requireJSONEOF(decoder *json.Decoder) error {
-	var trailing any
-	err := decoder.Decode(&trailing)
-	if errors.Is(err, io.EOF) {
-		return nil
-	}
-	if err == nil {
-		return errors.New("unexpected trailing JSON value")
-	}
-	return err
 }
 
 func validateMirrorChangeJournal(journal MirrorChangeJournal) error {

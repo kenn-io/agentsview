@@ -46,8 +46,7 @@ func (err discoveryYieldError) Unwrap() error { return err.cause }
 func incompleteDiscoveryError(
 	provider AgentType, reason string, cause error,
 ) error {
-	var incomplete DiscoveryIncompleteError
-	if errors.As(cause, &incomplete) {
+	if _, ok := errors.AsType[DiscoveryIncompleteError](cause); ok {
 		return cause
 	}
 	return discoveryIncompleteCause{

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"math"
@@ -49,7 +49,7 @@ func writeJSON(t *testing.T, w http.ResponseWriter, status int, v any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	require.NoError(t, json.NewEncoder(w).Encode(v))
+	require.NoError(t, json.MarshalWrite(w, v))
 }
 
 func TestEmbeddingURLsPreserveEndpointComponents(t *testing.T) {
@@ -288,7 +288,7 @@ func TestEncoderOllamaCPUFallbackReplacesOnlyInvalidVectors(t *testing.T) {
 		case "/proxy/api/embed":
 			cpuCalls.Add(1)
 			require.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCPU))
+			require.NoError(t, json.UnmarshalRead(r.Body, &gotCPU))
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"model":      "test-model",
 				"embeddings": [][]float32{{4, 5, 6}, {7, 8, 9}},
@@ -331,7 +331,7 @@ func TestEncoderOllamaCPUFallbackOmitsDimensionsWhenNotRequested(t *testing.T) {
 				{"index": 0, "embedding": base64Embedding([]float32{0, 0, 0})},
 			}})
 		case "/api/embed":
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCPU))
+			require.NoError(t, json.UnmarshalRead(r.Body, &gotCPU))
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"model":      "test-model",
 				"embeddings": [][]float32{{1, 2, 3}},
@@ -530,7 +530,7 @@ func TestEncoderOllamaGateFallbackWaitHonorsCancellation(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/embeddings":
 			var req embeddingsRequest
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.NoError(t, json.UnmarshalRead(r.Body, &req))
 			require.Len(t, req.Input, 1)
 			if req.Input[0] == "blocker" {
 				close(blockerStarted)
@@ -1430,7 +1430,7 @@ func TestEncoderDecodeErrorIsRetried(t *testing.T) {
 			_, _ = w.Write([]byte("{not valid json"))
 			return
 		}
-		require.NoError(t, json.NewEncoder(w).Encode(embeddingsResponse{
+		require.NoError(t, json.MarshalWrite(w, embeddingsResponse{
 			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2, 3}}},
 		}))
 	}))

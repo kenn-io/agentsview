@@ -3,7 +3,8 @@ package parser
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -358,6 +359,10 @@ type warpToolStats struct {
 	UseComputer        int
 }
 
+type warpToolCount struct {
+	Count int `json:"count"`
+}
+
 func parseWarpConversationMeta(data string) warpConversationMeta {
 	var meta warpConversationMeta
 	if data == "" || data == "{}" {
@@ -371,21 +376,19 @@ func parseWarpConversationMeta(data string) warpConversationMeta {
 				BYOKTokens int `json:"byok_tokens"`
 			} `json:"token_usage"`
 			ToolUsage struct {
-				RunCommand     struct{ Count int } `json:"run_command_stats"`
-				ReadFiles      struct{ Count int } `json:"read_files_stats"`
-				SearchCodebase struct{ Count int } `json:"search_codebase_stats"`
-				Grep           struct{ Count int } `json:"grep_stats"`
-				FileGlob       struct{ Count int } `json:"file_glob_stats"`
-				ApplyFileDiff  struct {
-					Count int `json:"count"`
-				} `json:"apply_file_diff_stats"`
-				WriteLongRunning  struct{ Count int } `json:"write_to_long_running_shell_command_stats"`
-				ReadMCPResource   struct{ Count int } `json:"read_mcp_resource_stats"`
-				CallMCPTool       struct{ Count int } `json:"call_mcp_tool_stats"`
-				SuggestPlan       struct{ Count int } `json:"suggest_plan_stats"`
-				SuggestCreatePlan struct{ Count int } `json:"suggest_create_plan_stats"`
-				ReadShellOutput   struct{ Count int } `json:"read_shell_command_output_stats"`
-				UseComputer       struct{ Count int } `json:"use_computer_stats"`
+				RunCommand        warpToolCount `json:"run_command_stats"`
+				ReadFiles         warpToolCount `json:"read_files_stats"`
+				SearchCodebase    warpToolCount `json:"search_codebase_stats"`
+				Grep              warpToolCount `json:"grep_stats"`
+				FileGlob          warpToolCount `json:"file_glob_stats"`
+				ApplyFileDiff     warpToolCount `json:"apply_file_diff_stats"`
+				WriteLongRunning  warpToolCount `json:"write_to_long_running_shell_command_stats"`
+				ReadMCPResource   warpToolCount `json:"read_mcp_resource_stats"`
+				CallMCPTool       warpToolCount `json:"call_mcp_tool_stats"`
+				SuggestPlan       warpToolCount `json:"suggest_plan_stats"`
+				SuggestCreatePlan warpToolCount `json:"suggest_create_plan_stats"`
+				ReadShellOutput   warpToolCount `json:"read_shell_command_output_stats"`
+				UseComputer       warpToolCount `json:"use_computer_stats"`
 			} `json:"tool_usage_metadata"`
 		} `json:"conversation_usage_metadata"`
 	}
@@ -481,7 +484,7 @@ func extractWarpQueryText(input string) string {
 		return ""
 	}
 
-	var items []json.RawMessage
+	var items []jsontext.Value
 	if err := json.Unmarshal([]byte(input), &items); err != nil {
 		return ""
 	}

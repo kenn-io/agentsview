@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"log"
@@ -77,7 +78,7 @@ func fetchHTTPProjects(
 	var out struct {
 		Projects []db.ProjectInfo `json:"projects"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
 		return nil, err
 	}
 	return out.Projects, nil
@@ -88,9 +89,8 @@ func writeProjects(projects []db.ProjectInfo, jsonOutput bool) {
 		if projects == nil {
 			projects = []db.ProjectInfo{}
 		}
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(projects); err != nil {
+		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+		if err := json.MarshalEncode(enc, projects); err != nil {
 			fatal("encoding json: %v", err)
 		}
 		return

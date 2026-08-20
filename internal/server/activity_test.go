@@ -1,7 +1,7 @@
 package server_test
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"testing"
 
@@ -20,7 +20,7 @@ func TestGetSessionActivity(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var body db.SessionActivityResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	require.NoError(t, json.UnmarshalRead(w.Body, &body))
 
 	assert.NotZero(t, body.TotalMessages, "expected non-zero total_messages")
 	assert.NotEmpty(t, body.Buckets, "expected non-empty buckets")
@@ -34,6 +34,6 @@ func TestGetSessionActivity_NotFound(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var body db.SessionActivityResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	require.NoError(t, json.UnmarshalRead(w.Body, &body))
 	assert.Empty(t, body.Buckets, "expected empty buckets for nonexistent session")
 }

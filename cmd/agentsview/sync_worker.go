@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -104,14 +105,14 @@ func runSyncWorker(cfg config.Config, mode string, out io.Writer) error {
 func runSyncWorkerContext(
 	ctx context.Context, cfg config.Config, mode string, out io.Writer,
 ) error {
-	enc := json.NewEncoder(out)
+	enc := jsontext.NewEncoder(out)
 	// Retain the first encode error: a dropped terminal-result line means the
 	// parent never sees the outcome, so the worker must exit non-zero even if the
 	// pass itself succeeded. The parent also treats a missing result as a
 	// protocol failure, but the worker's own exit contract must not lie.
 	var encErr error
 	emit := func(line workerLine) {
-		if err := enc.Encode(line); err != nil && encErr == nil {
+		if err := json.MarshalEncode(enc, line); err != nil && encErr == nil {
 			encErr = err
 		}
 	}

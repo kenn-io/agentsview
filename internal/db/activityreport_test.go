@@ -2,7 +2,8 @@ package db
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"strings"
 	"testing"
@@ -409,7 +410,7 @@ func TestGetActivityReport_UsageCostAndTokens(t *testing.T) {
 		Content:    "x",
 		Timestamp:  "2026-06-16T10:30:00Z",
 		Model:      "claude-sonnet-4-20250514",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
@@ -444,7 +445,7 @@ func TestGetActivityReportFiltersAfterCrossSessionSnapshotSelection(t *testing.T
 		Message{
 			SessionID: "activity-parent", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-06-16T10:00:00Z", Model: "partial-model",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":10,"output_tokens":5}`),
 			ClaudeMessageID: "activity-message",
 			ClaudeRequestID: "activity-request",
@@ -452,7 +453,7 @@ func TestGetActivityReportFiltersAfterCrossSessionSnapshotSelection(t *testing.T
 		Message{
 			SessionID: "activity-child", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-06-16T10:01:00Z", Model: "complete-model",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":1000,"output_tokens":631}`),
 			ClaudeMessageID: "activity-message",
 			ClaudeRequestID: "activity-request",
@@ -494,13 +495,13 @@ func TestGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
 		Message{
 			SessionID: "excluded-earlier", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-06-16T10:00:00Z", Model: "model-x",
-			TokenUsage: json.RawMessage(`{"input_tokens":10,"output_tokens":5}`),
+			TokenUsage: jsontext.Value(`{"input_tokens":10,"output_tokens":5}`),
 			SourceUUID: "shared-source",
 		},
 		Message{
 			SessionID: "included-later", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-06-16T10:01:00Z", Model: "model-x",
-			TokenUsage: json.RawMessage(`{"input_tokens":20,"output_tokens":631}`),
+			TokenUsage: jsontext.Value(`{"input_tokens":20,"output_tokens":631}`),
 			SourceUUID: "shared-source",
 		},
 	)
@@ -531,13 +532,13 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 		Message{
 			SessionID: "candidate", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-06-16T10:00:00Z", Model: "partial-model",
-			TokenUsage:      json.RawMessage(`{"input_tokens":10,"output_tokens":5}`),
+			TokenUsage:      jsontext.Value(`{"input_tokens":10,"output_tokens":5}`),
 			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
 		},
 		Message{
 			SessionID: "snapshot-peer", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-06-16T10:01:00Z", Model: "complete-model",
-			TokenUsage:      json.RawMessage(`{"input_tokens":20,"output_tokens":631}`),
+			TokenUsage:      jsontext.Value(`{"input_tokens":20,"output_tokens":631}`),
 			ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
 		},
 	)
@@ -551,7 +552,7 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 		insertMessages(t, d, Message{
 			SessionID: id, Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-06-16T11:00:00Z", Model: "unrelated-model",
-			TokenUsage: json.RawMessage(`{"input_tokens":1,"output_tokens":1}`),
+			TokenUsage: jsontext.Value(`{"input_tokens":1,"output_tokens":1}`),
 		})
 	}
 
@@ -592,7 +593,7 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 			SessionID: "root", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-06-16T10:00:00Z",
 			Model:     "claude-sonnet-test",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":2,"output_tokens":5}`),
 			ClaudeMessageID: "msg-stream",
 			ClaudeRequestID: "req-stream",
@@ -601,7 +602,7 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 			SessionID: "child", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-06-16T10:00:01Z",
 			Model:     "claude-sonnet-test",
-			TokenUsage: json.RawMessage(
+			TokenUsage: jsontext.Value(
 				`{"input_tokens":2,"output_tokens":631}`),
 			ClaudeMessageID: "msg-stream",
 			ClaudeRequestID: "req-stream",
@@ -822,7 +823,7 @@ func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) 
 		Timestamp:       "2026-06-16T10:30:00Z",
 		Model:           "partial-model",
 		ClaudeMessageID: "m-dup", ClaudeRequestID: "r-dup",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 	insertSession(t, d, "later", "proj1", func(s *Session) {
 		s.Agent = "claude"
@@ -835,7 +836,7 @@ func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) 
 		Timestamp:       "2026-06-16T10:31:00Z",
 		Model:           "complete-model",
 		ClaudeMessageID: "m-dup", ClaudeRequestID: "r-dup",
-		TokenUsage: json.RawMessage(`{"input_tokens":2000,"output_tokens":900}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":2000,"output_tokens":900}`),
 	})
 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
@@ -881,7 +882,7 @@ func TestGetActivityReport_IncludesSubagentUsage(t *testing.T) {
 		SessionID: "root", Ordinal: 0, Role: "assistant", Content: "x",
 		Timestamp: "2026-06-16T10:00:00Z", Model: "root-model",
 		ClaudeMessageID: "m-root", ClaudeRequestID: "r-root",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 	insertSession(t, d, "agent-sub", "proj1", func(s *Session) {
 		s.Agent = "claude"
@@ -894,7 +895,7 @@ func TestGetActivityReport_IncludesSubagentUsage(t *testing.T) {
 		SessionID: "agent-sub", Ordinal: 0, Role: "assistant", Content: "y",
 		Timestamp: "2026-06-16T10:03:00Z", Model: "sub-model",
 		ClaudeMessageID: "m-sub", ClaudeRequestID: "r-sub",
-		TokenUsage: json.RawMessage(`{"input_tokens":2000,"output_tokens":700}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":2000,"output_tokens":700}`),
 	})
 	// Fork replaying the root's message: same Claude ids, so the dedup
 	// must drop its usage row while the session itself still appears.
@@ -909,7 +910,7 @@ func TestGetActivityReport_IncludesSubagentUsage(t *testing.T) {
 		SessionID: "fork", Ordinal: 0, Role: "assistant", Content: "x",
 		Timestamp: "2026-06-16T10:05:00Z", Model: "root-model",
 		ClaudeMessageID: "m-root", ClaudeRequestID: "r-root",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
@@ -1085,7 +1086,7 @@ func TestGetActivityReport_ExcludesIneligibleUsage(t *testing.T) {
 		Content:    "x",
 		Timestamp:  "2026-06-16T10:30:00Z",
 		Model:      "claude-sonnet-4-20250514",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 	// Ineligible: a synthetic-model message carrying real token_usage.
 	// usageMessageEligibility drops m.model == '<synthetic>', so these
@@ -1098,7 +1099,7 @@ func TestGetActivityReport_ExcludesIneligibleUsage(t *testing.T) {
 		Content:    "y",
 		Timestamp:  "2026-06-16T10:31:00Z",
 		Model:      "<synthetic>",
-		TokenUsage: json.RawMessage(`{"input_tokens":9000,"output_tokens":7000}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":9000,"output_tokens":7000}`),
 	})
 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
@@ -1177,7 +1178,7 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 		Timestamp:       "2026-06-16T10:30:00Z",
 		Model:           "claude-sonnet-4-20250514",
 		ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 	insertSession(t, d, "later", "proj2", func(s *Session) {
 		s.Agent = "claude"
@@ -1189,7 +1190,7 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 		Timestamp:       "2026-06-16T10:30:00.123Z",
 		Model:           "claude-sonnet-4-20250514",
 		ClaudeMessageID: "m-dup", SourceUUID: "src-dup",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":9000}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`),
 	})
 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
@@ -1218,7 +1219,7 @@ func TestGetActivityReport_UsageDedupEqualInstantUsesSessionOrder(t *testing.T) 
 		Timestamp:       "2026-06-16T10:30:00Z",
 		Model:           "claude-sonnet-4-20250514",
 		ClaudeMessageID: "m-equal", SourceUUID: "src-equal",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 	insertSession(t, d, "z-session", "project z", func(s *Session) {
 		s.Agent = "claude"
@@ -1230,7 +1231,7 @@ func TestGetActivityReport_UsageDedupEqualInstantUsesSessionOrder(t *testing.T) 
 		Timestamp:       "2026-06-16T05:30:00-05:00",
 		Model:           "claude-sonnet-4-20250514",
 		ClaudeMessageID: "m-equal", SourceUUID: "src-equal",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":9000}`),
+		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`),
 	})
 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
@@ -1264,7 +1265,7 @@ func TestGetActivityReport_UsageDedupFallsBackToSourceUUID(t *testing.T) {
 		ClaudeMessageID: "m-dup",
 		ClaudeRequestID: "",
 		SourceUUID:      "src-dup",
-		TokenUsage:      json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		TokenUsage:      jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 	insertSession(t, d, "later", "proj2", func(s *Session) {
 		s.Agent = "claude"
@@ -1281,7 +1282,7 @@ func TestGetActivityReport_UsageDedupFallsBackToSourceUUID(t *testing.T) {
 		ClaudeMessageID: "m-dup",
 		ClaudeRequestID: "",
 		SourceUUID:      "src-dup",
-		TokenUsage:      json.RawMessage(`{"input_tokens":1000,"output_tokens":900}`),
+		TokenUsage:      jsontext.Value(`{"input_tokens":1000,"output_tokens":900}`),
 	})
 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},

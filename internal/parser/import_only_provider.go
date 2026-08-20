@@ -21,10 +21,8 @@ func (f importOnlyProviderFactory) Capabilities() Capabilities {
 func (f importOnlyProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	base := importOnlyProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Config: cfg,
-		},
+		Def:    cloneAgentDef(f.def),
+		Config: cfg,
 	}
 
 	switch f.def.Type {

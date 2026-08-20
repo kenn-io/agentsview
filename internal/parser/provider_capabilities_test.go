@@ -96,8 +96,8 @@ func TestWatchSourceProvidersDiscoverEachDirectly(t *testing.T) {
 func TestSourceSetProviderDiscoverEachDoesNotCallCollectingDiscover(t *testing.T) {
 	sources := &streamingSourceSetTestDouble{}
 	provider := &SourceSetProvider{
-		ProviderBase: ProviderBase{Def: AgentDef{Type: "stream-test"}},
-		sources:      sources,
+		Def:     AgentDef{Type: "stream-test"},
+		sources: sources,
 	}
 
 	var got []SourceRef
@@ -214,12 +214,10 @@ func TestSourceSetFactoryDowngradesAndRejectsMissingExactRehydration(t *testing.
 
 func TestProviderCapabilitiesRequireWatchRootPlanner(t *testing.T) {
 	provider := &watchRootCapabilityTestProvider{
-		ProviderBase: ProviderBase{
-			Def: AgentDef{Type: "watch-root-test"},
-			Caps: Capabilities{Source: SourceCapabilities{
-				WatchRoots: CapabilitySupported,
-			}},
-		},
+		Def: AgentDef{Type: "watch-root-test"},
+		Caps: Capabilities{Source: SourceCapabilities{
+			WatchRoots: CapabilitySupported,
+		}},
 		plan: WatchPlan{Roots: []WatchRoot{{Path: "/fallback"}}},
 	}
 
@@ -232,7 +230,7 @@ func TestProviderCapabilitiesRequireWatchRootPlanner(t *testing.T) {
 
 func TestProviderCapabilitiesFallbackWatchPlanRetainsOnlyRootMetadata(t *testing.T) {
 	provider := &watchRootCapabilityTestProvider{
-		ProviderBase: ProviderBase{Def: AgentDef{Type: "legacy-watch-root-test"}},
+		Def: AgentDef{Type: "legacy-watch-root-test"},
 		plan: WatchPlan{Roots: []WatchRoot{{
 			Path:         "/sessions",
 			Recursive:    true,
@@ -287,9 +285,8 @@ type streamingSourceSetTestDouble struct {
 type streamingWithoutExactFactory struct{ testProviderFactory }
 
 func (factory streamingWithoutExactFactory) NewProvider(cfg ProviderConfig) Provider {
-	return &streamingWithoutExactProvider{testProvider: testProvider{ProviderBase: ProviderBase{
-		Def: factory.def, Caps: factory.caps, Config: cfg.Clone(),
-	}}}
+	return &streamingWithoutExactProvider{
+		Def: factory.def, Caps: factory.caps, Config: cfg.Clone()}
 }
 
 type streamingWithoutExactProvider struct{ testProvider }

@@ -44,8 +44,7 @@ func acquireVectorsWriteLockWithRetry(
 		if err == nil {
 			return lock, true, nil
 		}
-		var held writeOwnerLockHeldError
-		if !errors.As(err, &held) {
+		if _, ok := errors.AsType[writeOwnerLockHeldError](err); !ok {
 			return nil, false, err
 		}
 		if !time.Now().Before(deadline) {

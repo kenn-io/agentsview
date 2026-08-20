@@ -3,7 +3,8 @@ package cursorusage
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -153,7 +154,7 @@ func (c *Client) ListUsageEvents(
 	}
 
 	var decoded usageEventsEnvelope
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &decoded); err != nil {
 		return Page{}, fmt.Errorf("decoding filtered usage events: %w", err)
 	}
 
@@ -245,15 +246,15 @@ func (e usageEventsEnvelope) usageEvents() []rawUsageEvent {
 }
 
 type rawUsageEvent struct {
-	Timestamp      string      `json:"timestamp"`
-	Model          string      `json:"model"`
-	Kind           string      `json:"kind"`
-	TokenUsage     tokenUsage  `json:"tokenUsage"`
-	ChargedCents   json.Number `json:"chargedCents"`
-	CursorTokenFee json.Number `json:"cursorTokenFee"`
-	UserID         string      `json:"userId"`
-	UserEmail      string      `json:"userEmail"`
-	IsHeadless     bool        `json:"isHeadless"`
+	Timestamp      string         `json:"timestamp"`
+	Model          string         `json:"model"`
+	Kind           string         `json:"kind"`
+	TokenUsage     tokenUsage     `json:"tokenUsage"`
+	ChargedCents   jsontext.Value `json:"chargedCents"`
+	CursorTokenFee jsontext.Value `json:"cursorTokenFee"`
+	UserID         string         `json:"userId"`
+	UserEmail      string         `json:"userEmail"`
+	IsHeadless     bool           `json:"isHeadless"`
 }
 
 type tokenUsage struct {
@@ -294,11 +295,11 @@ func parseUsageEvent(raw rawUsageEvent) (UsageEvent, error) {
 	}, nil
 }
 
-func parseOptionalCents(value json.Number) (money.Money, error) {
-	if value == "" {
+func parseOptionalCents(value jsontext.Value) (money.Money, error) {
+	if len(value) == 0 || value.Kind() == jsontext.KindNull {
 		return money.Money{}, nil
 	}
-	parsed, err := money.ParseCents(value.String())
+	parsed, err := money.ParseCents(string(value))
 	if err != nil {
 		return money.Money{}, err
 	}

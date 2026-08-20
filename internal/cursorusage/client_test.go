@@ -2,7 +2,8 @@ package cursorusage
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -53,22 +54,21 @@ func TestFetchAllUsageEvents(t *testing.T) {
 		assert.Equal(t, "", pass)
 
 		var body requestBody
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		require.NoError(t, json.UnmarshalRead(r.Body, &body))
 		assert.Equal(t, 1, body.PageSize)
 		assert.Equal(t, "member@example.com", body.Email)
 		assert.Equal(t, int64(152683922), body.UserID)
 		assert.Equal(t, int64(1777593600000), body.StartDate)
 		assert.Equal(t, int64(1777766399000), body.EndDate)
 
-		enc := json.NewEncoder(w)
 		w.Header().Set("Content-Type", "application/json")
 		switch body.Page {
 		case 1:
-			require.NoError(t, enc.Encode(page1))
+			require.NoError(t, json.MarshalWrite(w, page1))
 		case 2:
-			require.NoError(t, enc.Encode(page2))
+			require.NoError(t, json.MarshalWrite(w, page2))
 		default:
-			require.NoError(t, enc.Encode(usageEventsEnvelope{}))
+			require.NoError(t, json.MarshalWrite(w, usageEventsEnvelope{}))
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -96,7 +96,7 @@ func TestFetchAllUsageEvents(t *testing.T) {
 }
 
 func TestParseOptionalCentsRejectsNegativeCharge(t *testing.T) {
-	_, err := parseOptionalCents(json.Number("-1"))
+	_, err := parseOptionalCents(jsontext.Value("-1"))
 	assert.ErrorIs(t, err, money.ErrNegative)
 }
 

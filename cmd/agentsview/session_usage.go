@@ -4,7 +4,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -64,9 +65,8 @@ func runSessionUsage(cmd *cobra.Command, sessionID, format string) {
 	}
 	if out != nil {
 		if format == "json" {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			if encErr := enc.Encode(out); encErr != nil {
+			enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+			if encErr := json.MarshalEncode(enc, out); encErr != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", encErr)
 				os.Exit(tokenUseExitErr)
 			}
@@ -228,7 +228,7 @@ func httpSessionUsageData(
 		)
 	}
 	var out sessionUsageOutput
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
 		return nil, tokenUseExitErr, err
 	}
 	out.ServerRunning = true

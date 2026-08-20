@@ -9,7 +9,8 @@ package parser
 
 import (
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,27 +24,27 @@ import (
 
 // rooCodeHistoryItem mirrors the HistoryItem in history_item.json.
 type rooCodeHistoryItem struct {
-	ID                      string       `json:"id"`
-	RootTaskID              string       `json:"rootTaskId,omitempty"`
-	ParentTaskID            string       `json:"parentTaskId,omitempty"`
-	Number                  int          `json:"number"`
-	Timestamp               int64        `json:"ts"`
-	Task                    string       `json:"task"`
-	TokensIn                int          `json:"tokensIn"`
-	TokensOut               int          `json:"tokensOut"`
-	CacheWrites             int          `json:"cacheWrites,omitempty"`
-	CacheReads              int          `json:"cacheReads,omitempty"`
-	TotalCost               *json.Number `json:"totalCost"`
-	Size                    int64        `json:"size,omitempty"`
-	Workspace               string       `json:"workspace,omitempty"`
-	Mode                    string       `json:"mode,omitempty"`
-	APIConfigName           string       `json:"apiConfigName,omitempty"`
-	Status                  string       `json:"status,omitempty"`
-	DelegatedToID           string       `json:"delegatedToId,omitempty"`
-	ChildIDs                []string     `json:"childIds,omitempty"`
-	AwaitingChildID         string       `json:"awaitingChildId,omitempty"`
-	CompletedByChildID      string       `json:"completedByChildId,omitempty"`
-	CompletionResultSummary string       `json:"completionResultSummary,omitempty"`
+	ID                      string          `json:"id"`
+	RootTaskID              string          `json:"rootTaskId,omitempty"`
+	ParentTaskID            string          `json:"parentTaskId,omitempty"`
+	Number                  int             `json:"number"`
+	Timestamp               int64           `json:"ts"`
+	Task                    string          `json:"task"`
+	TokensIn                int             `json:"tokensIn"`
+	TokensOut               int             `json:"tokensOut"`
+	CacheWrites             int             `json:"cacheWrites,omitempty"`
+	CacheReads              int             `json:"cacheReads,omitempty"`
+	TotalCost               *jsontext.Value `json:"totalCost"`
+	Size                    int64           `json:"size,omitempty"`
+	Workspace               string          `json:"workspace,omitempty"`
+	Mode                    string          `json:"mode,omitempty"`
+	APIConfigName           string          `json:"apiConfigName,omitempty"`
+	Status                  string          `json:"status,omitempty"`
+	DelegatedToID           string          `json:"delegatedToId,omitempty"`
+	ChildIDs                []string        `json:"childIds,omitempty"`
+	AwaitingChildID         string          `json:"awaitingChildId,omitempty"`
+	CompletedByChildID      string          `json:"completedByChildId,omitempty"`
+	CompletionResultSummary string          `json:"completionResultSummary,omitempty"`
 }
 
 // rooCodeMessage mirrors the ClineMessage in ui_messages.json.
@@ -299,7 +300,7 @@ func parseRooCodeSession(
 		// is authoritative and must override catalog-based pricing;
 		// treating it as absent would misprice token-bearing sessions.
 		if historyItem.TotalCost != nil {
-			cost, err := money.ParseDollars(historyItem.TotalCost.String())
+			cost, err := money.ParseDollars(string(*historyItem.TotalCost))
 			if err != nil {
 				return nil, nil, fmt.Errorf(
 					"parsing RooCode total cost: %w", err,
@@ -342,7 +343,7 @@ func parseRooCodeMessages(
 		return nil, 0, time.Time{}, err
 	}
 
-	var rawMessages []json.RawMessage
+	var rawMessages []jsontext.Value
 	if err := json.Unmarshal(data, &rawMessages); err != nil {
 		// Try parsing as a single message.
 		var single rooCodeMessage
@@ -351,7 +352,7 @@ func parseRooCodeMessages(
 				"parsing ui_messages.json: %w", err,
 			)
 		}
-		rawMessages = []json.RawMessage{data}
+		rawMessages = []jsontext.Value{data}
 	}
 
 	parsedMessages := make([]ParsedMessage, 0, len(rawMessages))

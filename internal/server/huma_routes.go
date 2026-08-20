@@ -2,7 +2,8 @@ package server
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"log"
@@ -218,69 +219,69 @@ func pascalASCII(s string) string {
 	return string(s[0]-('a'-'A')) + s[1:]
 }
 
-func get[I, O any](
-	s *Server, group routeGroup, path, summary string,
+func (s *Server) get[I, O any](
+	group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(group, http.MethodGet, path, summary, handler, s.humaTimeout())
+	group.register(http.MethodGet, path, summary, handler, s.humaTimeout())
 }
 
-func getLong[I, O any](
-	_ *Server, group routeGroup, path, summary string,
+func (*Server) getLong[I, O any](
+	group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(group, http.MethodGet, path, summary, handler)
+	group.register(http.MethodGet, path, summary, handler)
 }
 
-func post[I, O any](
-	s *Server, group routeGroup, path, summary string,
+func (s *Server) post[I, O any](
+	group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(group, http.MethodPost, path, summary, handler, s.humaTimeout())
+	group.register(http.MethodPost, path, summary, handler, s.humaTimeout())
 }
 
-func postLong[I, O any](
-	_ *Server, group routeGroup, path, summary string,
+func (*Server) postLong[I, O any](
+	group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(group, http.MethodPost, path, summary, handler)
+	group.register(http.MethodPost, path, summary, handler)
 }
 
-func put[I, O any](
-	s *Server, group routeGroup, path, summary string,
+func (s *Server) put[I, O any](
+	group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(group, http.MethodPut, path, summary, handler, s.humaTimeout())
+	group.register(http.MethodPut, path, summary, handler, s.humaTimeout())
 }
 
-func patch[I, O any](
-	s *Server, group routeGroup, path, summary string,
+func (s *Server) patch[I, O any](
+	group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(group, http.MethodPatch, path, summary, handler, s.humaTimeout())
+	group.register(http.MethodPatch, path, summary, handler, s.humaTimeout())
 }
 
-func deleteRoute[I, O any](
-	s *Server, group routeGroup, path, summary string,
+func (s *Server) deleteRoute[I, O any](
+	group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(group, http.MethodDelete, path, summary, handler, s.humaTimeout())
+	group.register(http.MethodDelete, path, summary, handler, s.humaTimeout())
 }
 
-func stream[I any](
-	_ *Server, group routeGroup, method, path, summary string,
+func (*Server) stream[I any](
+	group routeGroup, method, path, summary string,
 	handler func(context.Context, *I) (*huma.StreamResponse, error),
 	options ...func(*huma.Operation),
 ) {
 	routeOptions := append([]func(*huma.Operation){streamResponse()}, options...)
-	registerRoute(group, method, path, summary, handler, routeOptions...)
+	group.register(method, path, summary, handler, routeOptions...)
 }
 
-func raw[I any](
-	_ *Server, group routeGroup, method, path, summary string,
+func (*Server) raw[I any](
+	group routeGroup, method, path, summary string,
 	handler func(context.Context, *I) (*bytesOutput, error),
 ) {
-	registerRoute(group, method, path, summary, handler)
+	group.register(method, path, summary, handler)
 }
 
 func operationID(method, path string) string {
@@ -305,8 +306,8 @@ func operationID(method, path string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func registerRoute[I, O any](
-	group routeGroup, method, path, summary string,
+func (group routeGroup) register[I, O any](
+	method, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 	options ...func(*huma.Operation),
 ) {
@@ -562,5 +563,5 @@ func writeHumaJSON(ctx huma.Context, status int, value any) {
 }
 
 func sjson(w io.Writer, value any) error {
-	return json.NewEncoder(w).Encode(value)
+	return json.MarshalEncode(jsontext.NewEncoder(w), value)
 }
