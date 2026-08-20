@@ -26,7 +26,12 @@ async function gotoShowcase(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem("agentsview-session-vitals", "true");
   });
-  await page.goto(`/sessions/${SHOWCASE}`);
+  // The panel and its first call are the readiness contract below. Waiting
+  // for WebKit's full load event also waits on unrelated page resources and
+  // can exhaust the whole test timeout before either assertion runs.
+  await page.goto(`/sessions/${SHOWCASE}`, {
+    waitUntil: "domcontentloaded",
+  });
   await expect(page.locator("aside.vitals")).toBeVisible({
     timeout: 5_000,
   });

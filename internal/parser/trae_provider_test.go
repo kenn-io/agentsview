@@ -360,6 +360,33 @@ func TestTraeValidEmptyStoreReturnsCompleteNoSessionOutcome(t *testing.T) {
 	assert.True(t, outcome.ResultSetComplete)
 }
 
+func TestTraeMissingContainerReturnsCompleteNoSessionOutcome(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "globalStorage", traeStateDBName)
+	writeTraeDB(t, path, traeStoreValue(t, []any{
+		map[string]any{
+			"sessionId": "session-1",
+			"createdAt": 1715340600000,
+			"messages":  []any{map[string]any{"role": "user", "content": "archived"}},
+		},
+	}), "memento/unrelated-chat-storage")
+
+	factory, ok := ProviderFactoryByType(AgentTrae)
+	require.True(t, ok)
+	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.NoError(t, os.Remove(path))
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	assert.Empty(t, outcome.Results)
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.False(t, outcome.ForceReplace)
+}
+
 func TestTraeUnknownStoragePreservesArchiveUntilExplicitList(t *testing.T) {
 	for _, value := range []string{`{}`, `{"list":null}`} {
 		t.Run(value, func(t *testing.T) {
@@ -523,7 +550,9 @@ func TestTraeEncryptedLayoutOutcomeUnsupported(t *testing.T) {
 			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			assert.Equal(t, SkipUnsupportedSource, outcome.SkipReason)
-			assert.False(t, outcome.ResultSetComplete)
+			assert.True(t, outcome.ResultSetComplete)
+			assert.Empty(t, outcome.Results)
+			assert.Empty(t, outcome.SourceErrors)
 			assert.False(t, outcome.ForceReplace)
 		})
 	}

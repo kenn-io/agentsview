@@ -3210,31 +3210,29 @@ func TestPrepareHTTPSyncsOrdersConcurrentCallersByMirrorLockPath(t *testing.T) {
 	syncB.DB = database
 	assert.Less(t, MirrorDir(dataDirA, syncA.Host), MirrorDir(dataDirB, syncB.Host))
 
-	firstA := make(chan struct{})
-	firstB := make(chan struct{})
-	var onceA, onceB stdsync.Once
+	callerOneAtA := make(chan struct{})
+	releaseCallerOneA := make(chan struct{})
+	var callerOneAtAOnce stdsync.Once
 	var orderMu stdsync.Mutex
 	orders := map[string][]string{}
-	record := func(
-		caller, mirror string, ownOnce *stdsync.Once,
-		own chan struct{}, other <-chan struct{},
-	) {
+	record := func(caller, mirror string) {
 		orderMu.Lock()
 		orders[caller] = append(orders[caller], mirror)
 		orderMu.Unlock()
-		ownOnce.Do(func() { close(own) })
-		select {
-		case <-other:
-		case <-time.After(50 * time.Millisecond):
-		}
 	}
 	remoteA.onManifestRequest = func(r *http.Request) {
-		record(r.Header.Get("Authorization"), "mirror-a",
-			&onceA, firstA, firstB)
+		caller := r.Header.Get("Authorization")
+		record(caller, "mirror-a")
+		if caller == "Bearer caller-one" {
+			callerOneAtAOnce.Do(func() { close(callerOneAtA) })
+			select {
+			case <-releaseCallerOneA:
+			case <-r.Context().Done():
+			}
+		}
 	}
 	remoteB.onManifestRequest = func(r *http.Request) {
-		record(r.Header.Get("Authorization"), "mirror-b",
-			&onceB, firstB, firstA)
+		record(r.Header.Get("Authorization"), "mirror-b")
 	}
 
 	callerOne := []HTTPSync{syncB, syncA}
@@ -3248,24 +3246,25 @@ func TestPrepareHTTPSyncsOrdersConcurrentCallersByMirrorLockPath(t *testing.T) {
 		prepared *PreparedHTTPSyncs
 		err      error
 	}
-	// The timeout is a deadlock watchdog, not a latency budget: a real
-	// lock-order deadlock never resolves, while a loaded Windows CI runner
-	// has taken over 4s to finish both preparations legitimately.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), backgroundWaitTimeout)
 	defer cancel()
-	start := make(chan struct{})
 	results := make(chan result, 2)
-	for caller, syncs := range map[string][]HTTPSync{
-		"caller-one": callerOne,
-		"caller-two": callerTwo,
-	} {
-		go func() {
-			<-start
-			prepared, err := PrepareHTTPSyncs(ctx, syncs)
-			results <- result{caller: caller, prepared: prepared, err: err}
-		}()
+	prepare := func(caller string, syncs []HTTPSync) {
+		prepared, err := PrepareHTTPSyncs(ctx, syncs)
+		results <- result{caller: caller, prepared: prepared, err: err}
 	}
-	close(start)
+	go prepare("caller-one", callerOne)
+	select {
+	case <-callerOneAtA:
+	case <-ctx.Done():
+		orderMu.Lock()
+		observedOrders := fmt.Sprint(orders)
+		orderMu.Unlock()
+		require.FailNow(t, "caller one did not reach its first canonical mirror",
+			"orders=%s", observedOrders)
+	}
+	go prepare("caller-two", callerTwo)
+	close(releaseCallerOneA)
 
 	got := make(map[string]error, 2)
 	for range 2 {

@@ -183,20 +183,27 @@ func traeParseContainerOutcome(
 	src multiSessionSource,
 	req ParseRequest,
 ) (ParseOutcome, error) {
+	if _, err := os.Stat(src.Container); err != nil {
+		if os.IsNotExist(err) {
+			return ParseOutcome{
+				ResultSetComplete: true,
+				SkipReason:        SkipNoSession,
+			}, nil
+		}
+		return ParseOutcome{}, fmt.Errorf("stat trae container %s: %w", src.Container, err)
+	}
 	snapshot, err := traeLoadSessionSnapshot(src.Container)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
 	state := classifyTraeLayout(src.Root, snapshot)
+	if state == traeLayoutUnsupported {
+		return unsupportedMultiSessionOutcome(), nil
+	}
 	if !snapshot.authoritative {
 		return ParseOutcome{
 			ResultSetComplete: false,
-			SkipReason: func() SkipReason {
-				if state == traeLayoutUnsupported {
-					return SkipUnsupportedSource
-				}
-				return SkipNoSession
-			}(),
+			SkipReason:        SkipNoSession,
 		}, nil
 	}
 	results := make([]ParseResultOutcome, 0, len(snapshot.records))
@@ -214,14 +221,9 @@ func traeParseContainerOutcome(
 	}
 	if len(results) == 0 {
 		return ParseOutcome{
-			ResultSetComplete: state != traeLayoutUnsupported && snapshot.complete,
-			ForceReplace:      state != traeLayoutUnsupported && snapshot.complete,
-			SkipReason: func() SkipReason {
-				if state == traeLayoutUnsupported {
-					return SkipUnsupportedSource
-				}
-				return SkipNoSession
-			}(),
+			ResultSetComplete: snapshot.complete,
+			ForceReplace:      snapshot.complete,
+			SkipReason:        SkipNoSession,
 		}, nil
 	}
 	return ParseOutcome{
@@ -675,6 +677,7 @@ func traeRecordHash(raw, projectHint string) string {
 func traeProviderCapabilities() Capabilities {
 	caps := windsurfProviderCapabilities()
 	caps.Source = multiSessionContainerSourceCapabilities(CapabilitySupported, CapabilitySupported)
+	caps.Source.PersistentArchive = CapabilitySupported
 	caps.Source.CompositeFingerprint = CapabilitySupported
 	caps.Content.AggregateUsageEvents = CapabilityUnsupported
 	caps.Content.ToolCalls = CapabilityUnsupported

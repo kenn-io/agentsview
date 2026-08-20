@@ -216,12 +216,13 @@ add an archived or maintained mirror without replacing the original identity.
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/Gitlawb/openclaude.git` at
-  `1ddb7d68399a2cd5028d4c5f487676f941879eae`; see the pinned
-  [session JSONL writer](https://github.com/Gitlawb/openclaude/blob/1ddb7d68399a2cd5028d4c5f487676f941879eae/src/utils/sessionStorage.ts),
-
-    [project-directory resolver](https://github.com/Gitlawb/openclaude/blob/1ddb7d68399a2cd5028d4c5f487676f941879eae/src/utils/envUtils.ts),
-    and
-    [assistant message type](https://github.com/Gitlawb/openclaude/blob/1ddb7d68399a2cd5028d4c5f487676f941879eae/src/types/message.ts).
+  `1ddb7d68399a2cd5028d4c5f487676f941879eae`. The pinned
+  [session JSONL writer](https://github.com/Gitlawb/openclaude/blob/1ddb7d68399a2cd5028d4c5f487676f941879eae/src/utils/sessionStorage.ts)
+  records the session. The
+  [project-directory resolver](https://github.com/Gitlawb/openclaude/blob/1ddb7d68399a2cd5028d4c5f487676f941879eae/src/utils/envUtils.ts)
+  maps its project directory. The
+  [assistant message type](https://github.com/Gitlawb/openclaude/blob/1ddb7d68399a2cd5028d4c5f487676f941879eae/src/types/message.ts)
+  defines assistant content.
 
 - **Usage and cost:** Claude-style input, output, cache-creation, and cache-read
   tokens are persisted in each assistant message's API usage object.
@@ -444,8 +445,8 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## Grok Build (`grok`)
 
-- **Format:** Workspace-scoped session directories containing `summary.json`,
-  a derived `chat_history.jsonl` model-message cache, and an authoritative
+- **Format:** Workspace-scoped session directories containing `summary.json`, a
+  derived `chat_history.jsonl` model-message cache, and an authoritative
   `updates.jsonl` stream of timestamped ACP and xAI session notifications.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/xai-org/grok-build.git` at
@@ -462,30 +463,31 @@ add an archived or maintained mirror without replacing the original identity.
   records to the existing tool-result event model, so Activity can use tool
   completion time without adding derived transcript messages.
 - **Usage and cost:** Durable `turn_completed` updates may carry per-model
-  input, output, cache-read, cache-creation, and reasoning tokens plus optional
-  `costUsdTicks` (10^10 ticks per USD), as defined by the
+  input, output, cache-read, cache-creation, and reasoning tokens plus
+  optional `costUsdTicks` (10^10 ticks per USD), as defined by the
   [notification schema](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/extensions/notification.rs).
-  Agentsview emits one usage event per prompt and model, subtracts cache reads
-  from the full input count, and uses reported cost ticks when present.
+  Agentsview emits one usage event per prompt and model, subtracts cache
+  reads from the full input count, and uses reported cost ticks when present.
 - **Automation:** The first-party
   [headless guide](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
-  defines prompt flags as non-interactive invocation. The producer propagates
-  that startup mode into
+  defines prompt flags as non-interactive invocation. The producer
+  propagates that startup mode into
   [`PromptContext.is_non_interactive`](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L936-L944),
-  whose schema identifies headless, SDK, stdio, and generic ACP execution and
-  defaults false for interactive or older contexts
-  ([schema](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L145-L150),
-  [default](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L177-L199)).
-  The producer writes that context to the same session directory as
-  `prompt_context.json`
-  ([persistence](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session.rs#L1384-L1404),
-  [spawn call](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L1049-L1055)).
-  Agentsview treats only an explicit true value in a valid, session-associated
-  file as durable automation evidence; file presence, a missing field, or a
-  missing file does not classify a session as automated.
-- **Agentsview:** `internal/parser/grok.go`,
-  `internal/parser/grok_provider.go`, colocated tests, and the sanitized
-  upstream-generated fixtures in `internal/parser/testdata/grok-build`.
+  whose
+  [schema](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L145-L150)
+  identifies headless, SDK, stdio, and generic ACP execution. Its
+  [default implementation](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L177-L199)
+  defaults false for interactive or older contexts. The
+  [persistence implementation](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session.rs#L1384-L1404)
+  writes that context to the same session directory as
+  `prompt_context.json`, and the
+  [spawn call](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L1049-L1055)
+  supplies it. Agentsview treats only an explicit true value in a valid,
+  session-associated file as durable automation evidence; file presence, a
+  missing field, or a missing file does not classify a session as automated.
+- **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
+  colocated tests, and the sanitized upstream-generated fixtures in
+  `internal/parser/testdata/grok-build`.
 
 ## MiMo Code (`mimocode`)
 
@@ -852,6 +854,11 @@ add an archived or maintained mirror without replacing the original identity.
   usage and cost unavailable rather than estimating them.
 - **Agentsview:** `internal/parser/trae_provider.go`; the storage key and JSON
   shape are based on observed local databases and controlled fixtures.
+  Reverified 2026-08-19 with a controlled two-session database reduced to one
+  session and then zero sessions, plus a deleted container: complete parses
+  retain emitted members and mark removed members source-missing, missing
+  whole containers preserve archived members, and unsupported encrypted
+  layouts remain non-authoritative for archive reconciliation.
 
 ## Visual Studio Copilot (`visualstudio-copilot`)
 

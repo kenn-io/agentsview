@@ -4009,6 +4009,36 @@ func (db *DB) RemoveSessionSourceOwnershipBaselines(
 	return nil
 }
 
+// RemoveSessionSourceBaselines revokes deletion proof for the supplied source
+// paths across every stored machine attribution.
+func (db *DB) RemoveSessionSourceBaselines(
+	ctx context.Context,
+	sources []SessionSourcePath,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting source baseline removal: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := deleteSessionSourceBaselinesAcrossMachinesTx(
+		ctx, tx, sources, "rejected",
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing source baseline removal: %w", err)
+	}
+	return nil
+}
+
 // ReplaceActiveSessionSourceBaselines makes admitted the exact subset of a
 // bounded candidate page that carries deletion proof. Machine is an exact
 // stored key, including the empty key retained by legacy sessions. Existing
@@ -4193,6 +4223,31 @@ func deleteSessionSourceBaselinesTx(
 		); err != nil {
 			return fmt.Errorf(
 				"removing %s session source baselines: %w", what, err,
+			)
+		}
+	}
+	return nil
+}
+
+func deleteSessionSourceBaselinesAcrossMachinesTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sources []SessionSourcePath,
+	what string,
+) error {
+	for start := 0; start < len(sources); start += baselinePairChunk {
+		end := min(start+baselinePairChunk, len(sources))
+		filter, args, ok := buildSourcePairFilter(sources[start:end])
+		if !ok {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM local_session_source_baselines
+			WHERE `+filter, args...,
+		); err != nil {
+			return fmt.Errorf(
+				"removing %s session source baselines across machines: %w",
+				what, err,
 			)
 		}
 	}

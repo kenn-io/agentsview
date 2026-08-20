@@ -71,9 +71,11 @@ type passEpilogueEligibility struct {
 
 type reconciliationBaselineTracker struct {
 	sources                 map[machineSessionSource]struct{}
+	rejectedSources         map[machineSessionSource]struct{}
 	exactOwnerships         map[db.SessionSourceOwnership]struct{}
 	rejectedExactOwnerships map[db.SessionSourceOwnership]struct{}
 	cacheWrites             map[string]skipCacheWrite
+	nonAuthoritativeScopes  map[reconciliationSourceScope]struct{}
 }
 
 type machineSessionSource struct {
@@ -120,8 +122,9 @@ func consumeBaselineOwnerships(
 
 func newReconciliationBaselineTracker() *reconciliationBaselineTracker {
 	return &reconciliationBaselineTracker{
-		sources:     make(map[machineSessionSource]struct{}, reconciliationPageSize),
-		cacheWrites: make(map[string]skipCacheWrite),
+		sources:                make(map[machineSessionSource]struct{}, reconciliationPageSize),
+		cacheWrites:            make(map[string]skipCacheWrite),
+		nonAuthoritativeScopes: make(map[reconciliationSourceScope]struct{}),
 	}
 }
 
@@ -163,6 +166,9 @@ func (tracker *reconciliationBaselineTracker) add(
 	if source.Source.Agent == "" || source.Source.FilePath == "" {
 		return
 	}
+	if _, rejected := tracker.rejectedSources[source]; rejected {
+		return
+	}
 	tracker.sources[source] = struct{}{}
 }
 
@@ -172,6 +178,48 @@ func (tracker *reconciliationBaselineTracker) list() []machineSessionSource {
 		sources = append(sources, source)
 	}
 	return sources
+}
+
+func (tracker *reconciliationBaselineTracker) reject(
+	source machineSessionSource,
+) {
+	if source.Source.Agent == "" || source.Source.FilePath == "" {
+		return
+	}
+	if tracker.rejectedSources == nil {
+		tracker.rejectedSources = make(map[machineSessionSource]struct{})
+	}
+	delete(tracker.sources, source)
+	tracker.rejectedSources[source] = struct{}{}
+}
+
+func (tracker *reconciliationBaselineTracker) listRejected() []machineSessionSource {
+	sources := make([]machineSessionSource, 0, len(tracker.rejectedSources))
+	for source := range tracker.rejectedSources {
+		sources = append(sources, source)
+	}
+	return sources
+}
+
+func (tracker *reconciliationBaselineTracker) addNonAuthoritativeScope(
+	agent parser.AgentType, path string,
+) {
+	path = validatedProviderSourceStatPath(path)
+	if agent == "" || path == "" {
+		return
+	}
+	tracker.nonAuthoritativeScopes[reconciliationSourceScope{
+		Provider: agent,
+		Path:     canonicalReconciliationSourceIdentity(path),
+	}] = struct{}{}
+}
+
+func (tracker *reconciliationBaselineTracker) listNonAuthoritativeScopes() []reconciliationSourceScope {
+	scopes := make([]reconciliationSourceScope, 0, len(tracker.nonAuthoritativeScopes))
+	for scope := range tracker.nonAuthoritativeScopes {
+		scopes = append(scopes, scope)
+	}
+	return scopes
 }
 
 func (tracker *reconciliationBaselineTracker) addExactOwnership(
@@ -222,16 +270,29 @@ func (tracker *reconciliationBaselineTracker) listRejectedExactOwnerships() []db
 
 func (e *Engine) revokeRejectedReconciliationBaselines(
 	ctx context.Context,
+	sources []machineSessionSource,
 	ownerships []db.SessionSourceOwnership,
 ) error {
-	if err := e.db.RemoveSessionSourceOwnershipBaselines(
-		context.WithoutCancel(ctx), ownerships,
+	cleanupCtx := context.WithoutCancel(ctx)
+	rejectedSources := make([]db.SessionSourcePath, 0, len(sources))
+	for _, source := range sources {
+		rejectedSources = append(rejectedSources, source.Source)
+	}
+	var sourceErr error
+	if err := e.db.RemoveSessionSourceBaselines(
+		cleanupCtx, rejectedSources,
 	); err != nil {
-		return fmt.Errorf(
+		sourceErr = fmt.Errorf("revoke rejected source baselines: %w", err)
+	}
+	var ownershipErr error
+	if err := e.db.RemoveSessionSourceOwnershipBaselines(
+		cleanupCtx, ownerships,
+	); err != nil {
+		ownershipErr = fmt.Errorf(
 			"revoke rejected source baseline exceptions: %w", err,
 		)
 	}
-	return nil
+	return errors.Join(sourceErr, ownershipErr)
 }
 
 type reconciliationRuntimeMetrics struct {
@@ -4782,6 +4843,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		if pageStats.Aborted || pageStats.Failed > 0 {
 			cleanupErr := e.revokeRejectedReconciliationBaselines(
 				ctx,
+				baselineTracker.listRejected(),
 				baselineTracker.listRejectedExactOwnerships(),
 			)
 			stats.Aborted = true
@@ -4794,10 +4856,45 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			)
 			break
 		}
-		baselineCandidates, baselineAdmitted := eligibleReconciliationBaselines(
+		if err := spool.AddNonAuthoritativeScopes(
+			ctx, baselineTracker.listNonAuthoritativeScopes(),
+		); err != nil {
+			cleanupErr := e.revokeRejectedReconciliationBaselines(
+				ctx, baselineTracker.listRejected(),
+				baselineTracker.listRejectedExactOwnerships(),
+			)
+			stats.RecordFailed()
+			stats.Aborted = true
+			retErr = errors.Join(
+				fmt.Errorf(
+					"persist non-authoritative reconciliation scopes: %w", err,
+				),
+				cleanupErr,
+			)
+			break
+		}
+		baselineCandidates, baselineAdmitted, err := eligibleReconciliationBaselines(
+			ctx,
 			page, baselineTracker.list(), authoritativeProviders,
+			spool,
 		)
 		cacheWrites := baselineTracker.listCacheWrites()
+		if err != nil {
+			e.rejectSkipCacheWrites(cacheWrites)
+			cleanupErr := e.revokeRejectedReconciliationBaselines(
+				ctx, baselineTracker.listRejected(),
+				baselineTracker.listRejectedExactOwnerships(),
+			)
+			stats.RecordFailed()
+			stats.Aborted = true
+			retErr = errors.Join(
+				fmt.Errorf(
+					"query non-authoritative reconciliation scopes: %w", err,
+				),
+				cleanupErr,
+			)
+			break
+		}
 		exactOwnerships := baselineTracker.listExactOwnerships()
 		exactOwnerships = slices.DeleteFunc(
 			exactOwnerships,
@@ -4822,7 +4919,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		); err != nil {
 			e.rejectSkipCacheWrites(cacheWrites)
 			cleanupErr := e.revokeRejectedReconciliationBaselines(
-				ctx, rejectedExactOwnerships,
+				ctx, baselineTracker.listRejected(), rejectedExactOwnerships,
 			)
 			stats.RecordFailed()
 			stats.Aborted = true
@@ -4840,7 +4937,6 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		e.promoteSkipCacheWrites(eligibleCacheWrites)
 		cursor = page[len(page)-1].Cursor()
 	}
-
 	// Page writes committed cleanly when the paging loop finished without an
 	// error or a failed write; provider discovery failures are layered on
 	// below and must not suppress work that only depends on committed writes.
@@ -5007,14 +5103,41 @@ func (e *Engine) baselineReconciliationCandidates(
 }
 
 func eligibleReconciliationBaselines(
+	ctx context.Context,
 	candidates []reconciliationCandidate,
 	admitted []machineSessionSource,
 	eligibleProviders map[parser.AgentType]struct{},
-) ([]reconciliationCandidate, []machineSessionSource) {
+	spool reconciliationSpoolStore,
+) ([]reconciliationCandidate, []machineSessionSource, error) {
 	eligibleCandidates := make([]reconciliationCandidate, 0, len(candidates))
+	providersWithScopes := make(map[parser.AgentType]bool)
+	queriedProviders := make(map[parser.AgentType]struct{})
 	for _, candidate := range candidates {
 		if _, eligible := eligibleProviders[candidate.Provider]; !eligible {
 			continue
+		}
+		if spool != nil {
+			if _, queried := queriedProviders[candidate.Provider]; !queried {
+				hasScopes, err := spool.HasNonAuthoritativeScopes(ctx, candidate.Provider)
+				if err != nil {
+					return nil, nil, err
+				}
+				providersWithScopes[candidate.Provider] = hasScopes
+				queriedProviders[candidate.Provider] = struct{}{}
+			}
+			if providersWithScopes[candidate.Provider] {
+				physicalPath := validatedProviderSourceStatPath(candidate.Path)
+				canonicalPath := canonicalReconciliationSourceIdentity(physicalPath)
+				withheld, err := spool.ContainsNonAuthoritativeScope(
+					ctx, candidate.Provider, canonicalPath,
+				)
+				if err != nil {
+					return nil, nil, err
+				}
+				if withheld {
+					continue
+				}
+			}
 		}
 		eligibleCandidates = append(eligibleCandidates, candidate)
 	}
@@ -5024,7 +5147,7 @@ func eligibleReconciliationBaselines(
 			eligibleAdmitted = append(eligibleAdmitted, source)
 		}
 	}
-	return eligibleCandidates, eligibleAdmitted
+	return eligibleCandidates, eligibleAdmitted, nil
 }
 
 func (e *Engine) replaceActiveSessionSourceBaselinesByMachine(
@@ -5731,6 +5854,20 @@ func reconciliationProofCoversContainerMembership(
 	return false
 }
 
+func reconciliationOwnershipWithinNonAuthoritativeContainer(
+	ctx context.Context,
+	spool reconciliationSpoolStore,
+	agent parser.AgentType,
+	ownership db.SessionSourceOwnership,
+) (bool, error) {
+	if spool == nil {
+		return false, nil
+	}
+	physicalPath := validatedProviderSourceStatPath(ownership.FilePath)
+	canonicalPath := canonicalReconciliationSourceIdentity(physicalPath)
+	return spool.ContainsNonAuthoritativeScope(ctx, agent, canonicalPath)
+}
+
 // aggregateOwnedMemberGone reports whether an ownership row whose stored
 // FilePath is a still-present multi-member container has lost its member.
 // Container discovery records the container path itself for every member,
@@ -5909,6 +6046,15 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 		var provider parser.Provider
 		var replacementIndex reconciliationSpoolStore
 		ownsReplacementIndex := false
+		hasNonAuthoritativeScopes := false
+		if spool != nil {
+			hasNonAuthoritativeScopes, err = spool.HasNonAuthoritativeScopes(ctx, agent)
+			if err != nil {
+				return deleted, fmt.Errorf(
+					"query %s non-authoritative reconciliation scopes: %w", agent, err,
+				)
+			}
+		}
 		allProviderRootsCovered := reconciliationCoverageComplete(agentScopes)
 		if factory := e.providerFactories[agent]; factory != nil {
 			provider = factory.NewProvider(parser.ProviderConfig{
@@ -5962,6 +6108,20 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 					}
 					missingByPath := make(map[string]bool, len(page))
 					for _, ownership := range page {
+						if hasNonAuthoritativeScopes {
+							withheld, err := reconciliationOwnershipWithinNonAuthoritativeContainer(
+								ctx, spool, agent, ownership,
+							)
+							if err != nil {
+								return deleted, fmt.Errorf(
+									"query %s non-authoritative source %q: %w",
+									agent, ownership.FilePath, err,
+								)
+							}
+							if withheld {
+								continue
+							}
+						}
 						if !db.StoredSourcePathHintScopesContain(
 							ownership.FilePath, ownershipScopes,
 						) {
@@ -8684,6 +8844,8 @@ func (e *Engine) collectAndBatchWithOptions(
 		if tracker := reconciliationBaselineTrackerFor(ctx); tracker != nil {
 			if admitted {
 				tracker.add(source)
+			} else {
+				tracker.reject(source)
 			}
 			return
 		}
@@ -8942,6 +9104,11 @@ func (e *Engine) collectAndBatchWithOptions(
 			if cwdChanged && e.deferredSourceCwd == nil {
 				stats.RecordCwdUpdated(1)
 			}
+			if r.suppressPresenceSweep {
+				if tracker := reconciliationBaselineTrackerFor(ctx); tracker != nil {
+					tracker.addNonAuthoritativeScope(r.agent, r.path)
+				}
+			}
 			rowlessCached := e.cacheClaudeRowlessFreshness(ctx, r)
 			if !rowlessCached && r.cacheSkip && r.mtime != 0 &&
 				!r.noCacheSkip {
@@ -8949,7 +9116,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			}
 			stats.RecordSkip()
 			e.noteSQLiteContainerResult(r.path, true)
-			if r.providerFailureCount == 0 {
+			if r.providerFailureCount == 0 && !r.suppressPresenceSweep {
 				admitted, exactOwnerships, err :=
 					e.skippedSourceAllowsCwdFilter(ctx, r)
 				if err != nil {
@@ -9344,14 +9511,17 @@ func (e *Engine) baselinePendingWriteSources(
 	tracker := reconciliationBaselineTrackerFor(ctx)
 	for source, ok := range eligible {
 		candidates = append(candidates, source)
-		if !ok {
-			continue
-		}
 		if tracker != nil {
-			tracker.add(source)
+			if ok {
+				tracker.add(source)
+			} else {
+				tracker.reject(source)
+			}
 			continue
 		}
-		admitted = append(admitted, source)
+		if ok {
+			admitted = append(admitted, source)
+		}
 	}
 	if tracker != nil || len(candidates) == 0 {
 		return nil
@@ -9613,8 +9783,8 @@ type processResult struct {
 	// retrySessionIDs carries provider per-result data-version state.
 	// Legacy parsers use needsRetry as a source-wide fallback.
 	retrySessionIDs map[string]bool
-	// suppressPresenceSweep marks an incomplete source result where
-	// missing stored sessions are expected rather than parser drift.
+	// suppressPresenceSweep marks a source result that must not authorize
+	// presence or tombstone reconciliation, including clean unsupported skips.
 	suppressPresenceSweep bool
 	// providerFailureCount carries non-fatal partial outcome failures through
 	// valid partial writes. Reconciliation may persist the valid results, but
@@ -10410,12 +10580,14 @@ func (e *Engine) processProviderFile(
 			omnigentContainerExists :=
 				parser.IsOmnigentContainerSource(source) &&
 					parser.IsRegularFile(providerDiscoveredPath(source))
+			traeContainerExists := file.Agent == parser.AgentTrae &&
+				parser.IsRegularFile(providerDiscoveredPath(source))
 			if e.pathRewriter != nil ||
 				(providerVirtualSourceContainerExists(file.Path) ||
-					omnigentContainerExists) {
+					omnigentContainerExists || traeContainerExists) {
 				// The provider re-resolved this exact virtual member against a
 				// still-present shared container, or authoritatively parsed an
-				// empty omnigent container. The member was removed from the
+				// empty Omnigent or Trae container. The member was removed from the
 				// container, not the container from disk. Carry the stored
 				// ownership to the revivable tombstone seam.
 				missingMembers = owned
@@ -10426,15 +10598,16 @@ func (e *Engine) processProviderFile(
 			}
 		}
 		skipRes := processResult{
-			skip:                     !outcome.ForceReplace,
-			excludedSessionIDs:       excludedSessionIDs,
-			sourceMissingMembers:     missingMembers,
-			mtime:                    fingerprint.MTimeNS,
-			cacheSkip:                cacheSkip,
-			cacheKey:                 cacheKey,
-			noCacheSkip:              !cleanCache,
-			forceReplace:             outcome.ForceReplace,
-			suppressPresenceSweep:    !outcome.ResultSetComplete,
+			skip:                 !outcome.ForceReplace,
+			excludedSessionIDs:   excludedSessionIDs,
+			sourceMissingMembers: missingMembers,
+			mtime:                fingerprint.MTimeNS,
+			cacheSkip:            cacheSkip,
+			cacheKey:             cacheKey,
+			noCacheSkip:          !cleanCache,
+			forceReplace:         outcome.ForceReplace,
+			suppressPresenceSweep: outcome.SkipReason == parser.SkipUnsupportedSource ||
+				!outcome.ResultSetComplete,
 			providerFailureCount:     providerFailureCount,
 			providerWideFailureCount: providerWideFailureCount,
 		}
@@ -10456,7 +10629,11 @@ func (e *Engine) processProviderFile(
 	parsedCount := len(parsedResults)
 	excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
 	var missingMembers []sourceMissingMember
-	if file.Agent == parser.AgentOmnigent && outcome.ForceReplace &&
+	// Parse-diff intentionally reports a removed Trae member through its
+	// presence sweep. It never filters unchanged results or writes tombstones,
+	// so ownership reconciliation is needed only by real sync engines.
+	if ((file.Agent == parser.AgentOmnigent && outcome.ForceReplace) ||
+		(file.Agent == parser.AgentTrae && !e.forceParse)) &&
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		missingMembers, err =
 			e.providerSourceMissingSessionOwnershipsForCompleteResult(
@@ -10493,15 +10670,16 @@ func (e *Engine) processProviderFile(
 		file, parsedResults, providerSemantics.UnchangedResults,
 	)
 	res := processResult{
-		results:                  filteredResults,
-		excludedSessionIDs:       excludedSessionIDs,
-		sourceMissingMembers:     missingMembers,
-		mtime:                    fingerprint.MTimeNS,
-		cacheSkip:                cacheSkip,
-		cacheKey:                 cacheKey,
-		noCacheSkip:              !cleanCache,
-		forceReplace:             outcome.ForceReplace || incForceReplace,
-		suppressPresenceSweep:    !outcome.ResultSetComplete,
+		results:              filteredResults,
+		excludedSessionIDs:   excludedSessionIDs,
+		sourceMissingMembers: missingMembers,
+		mtime:                fingerprint.MTimeNS,
+		cacheSkip:            cacheSkip,
+		cacheKey:             cacheKey,
+		noCacheSkip:          !cleanCache,
+		forceReplace:         outcome.ForceReplace || incForceReplace,
+		suppressPresenceSweep: outcome.SkipReason == parser.SkipUnsupportedSource ||
+			!outcome.ResultSetComplete,
 		providerFailureCount:     providerFailureCount,
 		providerWideFailureCount: providerWideFailureCount,
 		retentionLease:           lease,
