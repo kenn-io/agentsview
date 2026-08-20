@@ -273,6 +273,30 @@ const (
 	antigravityStepKindPlannerResponse antigravityStepKind = 15
 )
 
+// These field numbers come from the FileDescriptorProto records embedded in
+// the official Antigravity CLI 1.1.16 Go binary. Keep the identifiers aligned
+// with the producer's protobuf names so the parser does not turn schema paths
+// back into anonymous numeric guesses.
+const (
+	agCortexStepGeneratorMetadataChatModelField   = 1
+	agCortexStepGeneratorMetadataStepIndicesField = 2
+
+	agChatModelMetadataUsageField            = 4
+	agChatModelMetadataResponseModelField    = 19
+	agChatModelMetadataModelDisplayNameField = 21
+
+	agModelUsageStatsModelField            = 1
+	agModelUsageStatsInputTokensField      = 2
+	agModelUsageStatsOutputTokensField     = 3
+	agModelUsageStatsCacheWriteTokensField = 4
+	agModelUsageStatsCacheReadTokensField  = 5
+
+	agExecutorMetadataLastStepIndexField = 3
+	agExecutorMetadataCascadeConfigField = 10
+	agCascadeConfigPlannerConfigField    = 1
+	agCascadePlannerConfigModelNameField = 28
+)
+
 type antigravityStep struct {
 	idx       int
 	kind      antigravityStepKind
@@ -426,8 +450,8 @@ func (g antigravityGenerationMetadata) maxStepIndex() (int, bool) {
 }
 
 type antigravityExecutorMetadata struct {
-	endStep int
-	model   string
+	lastStepIndex int
+	modelName     string
 }
 
 func loadAntigravityGenerationMetadata(
@@ -475,7 +499,7 @@ func loadAntigravityExecutorMetadata(
 		}
 	}
 	sort.SliceStable(executors, func(i, j int) bool {
-		return executors[i].endStep < executors[j].endStep
+		return executors[i].lastStepIndex < executors[j].lastStepIndex
 	})
 	return executors
 }
@@ -489,7 +513,7 @@ func extractAntigravityStepIndices(
 	}
 	maxInt := uint64(^uint(0) >> 1)
 	for _, field := range fields {
-		if field.Number != 2 {
+		if field.Number != agCortexStepGeneratorMetadataStepIndicesField {
 			continue
 		}
 		present = true
@@ -522,29 +546,37 @@ func extractAntigravityExecutorMetadata(
 	if err != nil {
 		return antigravityExecutorMetadata{}, false
 	}
-	end, ok := agProtoFind(fields, 3)
-	if !ok || end.Wire != pbWireVarint {
+	lastStep, ok := agProtoFind(
+		fields, agExecutorMetadataLastStepIndexField,
+	)
+	if !ok || lastStep.Wire != pbWireVarint {
 		return antigravityExecutorMetadata{}, false
 	}
-	executor, ok := agProtoFind(fields, 10)
-	if !ok || executor.Nested == nil {
+	cascadeConfig, ok := agProtoFind(
+		fields, agExecutorMetadataCascadeConfigField,
+	)
+	if !ok || cascadeConfig.Nested == nil {
 		return antigravityExecutorMetadata{}, false
 	}
-	association, ok := agProtoFind(executor.Nested, 1)
-	if !ok || association.Nested == nil {
+	plannerConfig, ok := agProtoFind(
+		cascadeConfig.Nested, agCascadeConfigPlannerConfigField,
+	)
+	if !ok || plannerConfig.Nested == nil {
 		return antigravityExecutorMetadata{}, false
 	}
-	variant, ok := agProtoFind(association.Nested, 28)
+	modelNameField, ok := agProtoFind(
+		plannerConfig.Nested, agCascadePlannerConfigModelNameField,
+	)
 	if !ok {
 		return antigravityExecutorMetadata{}, false
 	}
-	model, ok := agProtoString(variant)
-	if !ok || !isPlausibleModelName(model) {
+	modelName, ok := agProtoString(modelNameField)
+	if !ok || !isPlausibleModelName(modelName) {
 		return antigravityExecutorMetadata{}, false
 	}
 	return antigravityExecutorMetadata{
-		endStep: int(end.Varint),
-		model:   model,
+		lastStepIndex: int(lastStep.Varint),
+		modelName:     modelName,
 	}, true
 }
 
@@ -575,8 +607,8 @@ func executorModelForStep(
 	executors []antigravityExecutorMetadata, stepIndex int,
 ) string {
 	for _, executor := range executors {
-		if executor.endStep >= stepIndex {
-			return executor.model
+		if executor.lastStepIndex >= stepIndex {
+			return executor.modelName
 		}
 	}
 	return ""
@@ -597,14 +629,10 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 	genModel := resolveAntigravityGenerationModel(data, executorModel)
 	block, okUsage := extractTokenUsage(data)
 	if okUsage {
-		// gen_metadata field semantics (cross-validated against sidecar
-		// generatorMetadata ground truth in 550/550 blocks):
-		//   f2 = uncached input (inputTokens)
-		//   f3 = total output including thinking (outputTokens)
-		//   f5 = cache-read (cacheReadTokens, absent when no cache hits)
-		//   f4 = always 0/absent, ignored
-		// No per-field reasoning breakdown is available; f3 already
-		// includes thinking tokens.
+		// ModelUsageStats.input_tokens is uncached input,
+		// output_tokens includes thinking in the observed SQLite blocks,
+		// and cache_read_tokens is absent when there are no cache hits.
+		// Those blocks do not provide a separate persisted reasoning count.
 		context := block.UncachedInput + block.CacheRead
 		eventModel := genModel
 		var occurredAt string
@@ -642,16 +670,17 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 // ground truth (generatorMetadata[].chatModel.usage matches in 550/550
 // blocks):
 //
-//	UncachedInput = f2 (inputTokens, tokens not served from cache)
-//	TotalOutput   = f3 (outputTokens, includes thinking)
-//	CacheRead     = f5 (cacheReadTokens, absent/zero for cache-miss sessions)
+//	UncachedInput = ModelUsageStats.input_tokens
+//	TotalOutput   = ModelUsageStats.output_tokens, including thinking in
+//	                observed SQLite blocks
+//	CacheRead     = ModelUsageStats.cache_read_tokens
 //
 // No per-field reasoning breakdown is available in gen_metadata;
 // TotalOutput already includes thinking tokens.
 type agTokenBlock struct {
-	UncachedInput int // f2: tokens not served from cache
-	TotalOutput   int // f3: total output including thinking
-	CacheRead     int // f5: cache-read tokens (0 when absent)
+	UncachedInput int // ModelUsageStats.input_tokens
+	TotalOutput   int // ModelUsageStats.output_tokens
+	CacheRead     int // ModelUsageStats.cache_read_tokens
 }
 
 // maxPlausibleTokens caps the token values accepted by the heuristic.
@@ -667,6 +696,25 @@ func extractTokenUsage(data []byte) (agTokenBlock, bool) {
 	if err != nil {
 		return agTokenBlock{}, false
 	}
+	if chatModel, ok := extractAntigravityChatModel(fields); ok {
+		usage, ok := agProtoFind(
+			chatModel, agChatModelMetadataUsageField,
+		)
+		if !ok || usage.Nested == nil {
+			return agTokenBlock{}, false
+		}
+		return tokenBlockFrom(usage.Nested)
+	}
+	return extractLegacyAntigravityTokenUsage(fields)
+}
+
+// extractLegacyAntigravityTokenUsage preserves support for older persisted
+// records that predate CortexStepGeneratorMetadata.chat_model. Their enclosing
+// message is not represented by the current embedded descriptors, so finding
+// ModelUsageStats still requires the established bounded recursive walk.
+func extractLegacyAntigravityTokenUsage(
+	fields []agProtoField,
+) (agTokenBlock, bool) {
 	var found bool
 	var block agTokenBlock
 	var walk func([]agProtoField)
@@ -691,75 +739,83 @@ func extractTokenUsage(data []byte) (agTokenBlock, bool) {
 
 // tokenBlockFrom reports whether fs is a plausible token usage block.
 //
-// Field semantics are cross-validated against sidecar ground truth
+// The embedded ModelUsageStats descriptor names the fields below. Their usage
+// semantics are cross-validated against sidecar ground truth
 // (generatorMetadata[].chatModel.usage matches in 550/550 blocks):
 //
-//	f1 = model-kind varint in [1000, 5000)
-//	f2 = uncached input (inputTokens)
-//	f3 = total output including thinking (outputTokens)
-//	f4 = always 0/absent, ignored
-//	f5 = cache-read (cacheReadTokens, absent when no cache hits)
+//	model             = enum varint in [1000, 5000)
+//	input_tokens      = uncached input
+//	output_tokens     = total output including thinking
+//	cache_write_tokens = deprecated and ignored
+//	cache_read_tokens = cache-read input, absent when there are no cache hits
 //
 // No per-field reasoning breakdown is available in gen_metadata;
 // the reasoning return value is always 0.
 //
-// f2 and f3 are required. f5 is optional: proto3 omits zero-valued
-// fields, and a fresh session with no cache hits omits f5 entirely.
-// Requiring f5 (the previous heuristic) caused the parser to miss
-// token blocks in such sessions, which is why the single-generation
-// June-11 archives all have no extracted block under the old mapping.
+// input_tokens and output_tokens are required. cache_read_tokens is optional:
+// proto3 omits zero-valued fields, and a fresh session with no cache hits omits
+// it entirely. Requiring cache_read_tokens (the previous heuristic) caused the
+// parser to miss token blocks in such sessions.
 func tokenBlockFrom(fs []agProtoField) (agTokenBlock, bool) {
-	f1, ok1 := agProtoFind(fs, 1)
-	f2, ok2 := agProtoFind(fs, 2)
-	f3, ok3 := agProtoFind(fs, 3)
-	// f5 (cache-read) is optional: proto3 omits zero-valued fields, and
-	// cache-read is absent when a session has no cache hits.
-	f5, hasF5 := agProtoFind(fs, 5)
+	model, hasModel := agProtoFind(fs, agModelUsageStatsModelField)
+	inputTokens, hasInput := agProtoFind(
+		fs, agModelUsageStatsInputTokensField,
+	)
+	outputTokens, hasOutput := agProtoFind(
+		fs, agModelUsageStatsOutputTokensField,
+	)
+	// cache_read_tokens is optional: proto3 omits zero-valued fields.
+	cacheReadTokens, hasCacheRead := agProtoFind(
+		fs, agModelUsageStatsCacheReadTokensField,
+	)
 
-	if !ok1 || !ok2 || !ok3 ||
-		f1.Wire != pbWireVarint || f2.Wire != pbWireVarint ||
-		f3.Wire != pbWireVarint {
+	if !hasModel || !hasInput || !hasOutput ||
+		model.Wire != pbWireVarint || inputTokens.Wire != pbWireVarint ||
+		outputTokens.Wire != pbWireVarint {
 		return agTokenBlock{}, false
 	}
-	if f1.Varint < 1000 || f1.Varint >= 5000 {
+	if model.Varint < 1000 || model.Varint >= 5000 {
 		return agTokenBlock{}, false
 	}
-	if f2.Varint > maxPlausibleTokens || f3.Varint > maxPlausibleTokens {
+	if inputTokens.Varint > maxPlausibleTokens ||
+		outputTokens.Varint > maxPlausibleTokens {
 		return agTokenBlock{}, false
 	}
-	// f2 (input) and f3 (output) are independent quantities, but an
-	// implausibly large combined footprint (input + output > cap)
-	// signals a decoy block where both values individually pass the
-	// per-field cap but are collectively implausible for a single
-	// generation.
-	if f2.Varint+f3.Varint > maxPlausibleTokens {
+	// Input and output are independent quantities, but an implausibly large
+	// combined footprint signals a decoy block where both values individually
+	// pass the per-field cap.
+	if inputTokens.Varint+outputTokens.Varint > maxPlausibleTokens {
 		return agTokenBlock{}, false
 	}
-	// f4 is consistently absent/zero in real blocks and carries no
-	// semantics. Tolerate its presence but ignore the value.
-	if f4, hasF4 := agProtoFind(fs, 4); hasF4 {
-		if f4.Wire != pbWireVarint || f4.Varint > maxPlausibleTokens {
+	// cache_write_tokens is deprecated. Observed gen_metadata blocks leave it
+	// absent or zero; validate it when present but do not report another class.
+	if cacheWriteTokens, hasCacheWrite := agProtoFind(
+		fs, agModelUsageStatsCacheWriteTokensField,
+	); hasCacheWrite {
+		if cacheWriteTokens.Wire != pbWireVarint ||
+			cacheWriteTokens.Varint > maxPlausibleTokens {
 			return agTokenBlock{}, false
 		}
 	}
-	if hasF5 {
-		if f5.Wire != pbWireVarint || f5.Varint > maxPlausibleTokens {
+	if hasCacheRead {
+		if cacheReadTokens.Wire != pbWireVarint ||
+			cacheReadTokens.Varint > maxPlausibleTokens {
 			return agTokenBlock{}, false
 		}
 	}
 
 	block := agTokenBlock{
-		UncachedInput: int(f2.Varint),
-		TotalOutput:   int(f3.Varint),
+		UncachedInput: int(inputTokens.Varint),
+		TotalOutput:   int(outputTokens.Varint),
 	}
-	if hasF5 {
-		block.CacheRead = int(f5.Varint)
+	if hasCacheRead {
+		block.CacheRead = int(cacheReadTokens.Varint)
 	}
 	return block, true
 }
 
-// extractModelName prefers the complete display label in field 21 and falls
-// back to the base model slug in field 19.
+// extractModelName prefers ChatModelMetadata.model_display_name and falls back
+// to ChatModelMetadata.response_model.
 func extractModelName(data []byte) string {
 	model, _ := extractAntigravityGenerationModel(data)
 	return model
@@ -770,10 +826,78 @@ func extractAntigravityGenerationModel(data []byte) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	if model := extractModelNameFromFields(fields, 21); model != "" {
+	if chatModel, ok := extractAntigravityChatModel(fields); ok {
+		return extractAntigravityChatModelName(chatModel)
+	}
+	return extractLegacyAntigravityGenerationModel(fields)
+}
+
+func extractAntigravityChatModel(
+	fields []agProtoField,
+) ([]agProtoField, bool) {
+	chatModel, ok := agProtoFind(
+		fields, agCortexStepGeneratorMetadataChatModelField,
+	)
+	if !ok || chatModel.Nested == nil {
+		return nil, false
+	}
+	if usage, ok := agProtoFind(
+		chatModel.Nested, agChatModelMetadataUsageField,
+	); ok && usage.Nested != nil {
+		return chatModel.Nested, true
+	}
+	if extractModelNameField(
+		chatModel.Nested, agChatModelMetadataModelDisplayNameField,
+	) != "" {
+		return chatModel.Nested, true
+	}
+	if extractModelNameField(
+		chatModel.Nested, agChatModelMetadataResponseModelField,
+	) != "" {
+		return chatModel.Nested, true
+	}
+	return nil, false
+}
+
+func extractAntigravityChatModelName(
+	fields []agProtoField,
+) (string, bool) {
+	if model := extractModelNameField(
+		fields, agChatModelMetadataModelDisplayNameField,
+	); model != "" {
 		return model, true
 	}
-	return extractModelNameFromFields(fields, 19), false
+	return extractModelNameField(
+		fields, agChatModelMetadataResponseModelField,
+	), false
+}
+
+func extractModelNameField(fields []agProtoField, fieldNumber int) string {
+	field, ok := agProtoFind(fields, fieldNumber)
+	if !ok {
+		return ""
+	}
+	model, ok := agProtoString(field)
+	if !ok || !isPlausibleModelName(model) {
+		return ""
+	}
+	return model
+}
+
+// extractLegacyAntigravityGenerationModel preserves the recursive decoder for
+// older persisted records that do not contain
+// CortexStepGeneratorMetadata.chat_model.
+func extractLegacyAntigravityGenerationModel(
+	fields []agProtoField,
+) (string, bool) {
+	if model := extractModelNameFromFields(
+		fields, agChatModelMetadataModelDisplayNameField,
+	); model != "" {
+		return model, true
+	}
+	return extractModelNameFromFields(
+		fields, agChatModelMetadataResponseModelField,
+	), false
 }
 
 func extractModelNameFromFields(
@@ -823,8 +947,8 @@ func antigravityBaseModel(model string) string {
 }
 
 // isPlausibleModelName reports whether s looks like a human-readable
-// model identifier. Field 21/19 sometimes carries a nested protobuf
-// message whose low bytes (tags, varints, NULs) are valid UTF-8 --
+// model identifier. The model_display_name and response_model fields can carry
+// a nested protobuf message in older records whose low bytes are valid UTF-8.
 // agProtoString cannot tell those apart from text, and the raw bytes
 // previously leaked into messages.model (and broke `pg push`, which
 // rejects NUL bytes). Require every rune to be printable, at least

@@ -2667,21 +2667,21 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 		{
 			name:            "base slug gains executor effort",
 			generationModel: "gemini-3.7-flash",
-			modelField:      19,
+			modelField:      agChatModelMetadataResponseModelField,
 			executorModel:   "gemini-3.7-flash-high",
 			wantModel:       "gemini-3.7-flash-high",
 		},
 		{
 			name:            "different executor base is ignored",
 			generationModel: "claude-sonnet-4-6",
-			modelField:      19,
+			modelField:      agChatModelMetadataResponseModelField,
 			executorModel:   "gemini-3.7-flash-high",
 			wantModel:       "claude-sonnet-4-6",
 		},
 		{
 			name:            "display label stays authoritative",
 			generationModel: "Gemini 3.7 Flash (High)",
-			modelField:      21,
+			modelField:      agChatModelMetadataModelDisplayNameField,
 			executorModel:   "gemini-3.7-flash-medium",
 			wantModel:       "Gemini 3.7 Flash (High)",
 		},
@@ -2781,14 +2781,16 @@ func TestExtractAntigravityStepIndicesDistinguishesAbsentAndMalformed(t *testing
 		{
 			name: "absent uses legacy mapping",
 			data: encodePB([]pbField{{
-				num: 19, wire: pbWireBytes, bytes: []byte("gemini-3.7-flash"),
+				num:   agChatModelMetadataResponseModelField,
+				wire:  pbWireBytes,
+				bytes: []byte("gemini-3.7-flash"),
 			}}),
 			wantValid: true,
 		},
 		{
 			name: "packed indices",
 			data: encodePB([]pbField{{
-				num:  2,
+				num:  agCortexStepGeneratorMetadataStepIndicesField,
 				wire: pbWireBytes,
 				bytes: append(
 					encodeVarint(148), encodeVarint(149)...,
@@ -2801,7 +2803,9 @@ func TestExtractAntigravityStepIndicesDistinguishesAbsentAndMalformed(t *testing
 		{
 			name: "malformed packed indices",
 			data: encodePB([]pbField{{
-				num: 2, wire: pbWireBytes, bytes: []byte{0x80},
+				num:   agCortexStepGeneratorMetadataStepIndicesField,
+				wire:  pbWireBytes,
+				bytes: []byte{0x80},
 			}}),
 			wantPresent: true,
 		},
@@ -3318,7 +3322,8 @@ func createAntigravityMockGenMetadata(t *testing.T, uncachedInput, totalOutput, 
 
 func createAntigravityMockGenMetadataWithField(t *testing.T, fieldNum int, uncachedInput, totalOutput, cacheRead int, model string) []byte {
 	return createAntigravityMockGenMetadataData(
-		t, fieldNum, uncachedInput, totalOutput, cacheRead, model, 21, nil,
+		t, fieldNum, uncachedInput, totalOutput, cacheRead,
+		model, agChatModelMetadataModelDisplayNameField,
 	)
 }
 
@@ -3329,10 +3334,73 @@ func createAntigravityMockGenMetadataForSteps(
 	modelField int,
 	stepIndices ...int,
 ) []byte {
-	return createAntigravityMockGenMetadataData(
-		t, 1020, uncachedInput, totalOutput, cacheRead,
-		model, modelField, stepIndices,
-	)
+	t.Helper()
+	usageFields := []pbField{
+		{num: agModelUsageStatsModelField, wire: pbWireVarint, varint: 1020},
+		{
+			num:    agModelUsageStatsInputTokensField,
+			wire:   pbWireVarint,
+			varint: uint64(uncachedInput),
+		},
+		{
+			num:    agModelUsageStatsOutputTokensField,
+			wire:   pbWireVarint,
+			varint: uint64(totalOutput),
+		},
+	}
+	if cacheRead > 0 {
+		usageFields = append(usageFields, pbField{
+			num:    agModelUsageStatsCacheReadTokensField,
+			wire:   pbWireVarint,
+			varint: uint64(cacheRead),
+		})
+	}
+	chatModelFields := []pbField{{
+		num:   agChatModelMetadataUsageField,
+		wire:  pbWireBytes,
+		bytes: encodePB(usageFields),
+	}}
+	if model != "" {
+		chatModelFields = append(chatModelFields, pbField{
+			num: modelField, wire: pbWireBytes, bytes: []byte(model),
+		})
+	}
+
+	var packedStepIndices []byte
+	for _, idx := range stepIndices {
+		packedStepIndices = append(
+			packedStepIndices, encodeVarint(uint64(idx))...,
+		)
+	}
+	// Put plausible model and usage decoys outside chat_model and before the
+	// real metadata. The current-schema decoder must follow the descriptor path
+	// instead of accepting the first recursively matching field numbers.
+	decoyUsage := encodePB([]pbField{
+		{num: agModelUsageStatsModelField, wire: pbWireVarint, varint: 1020},
+		{num: agModelUsageStatsInputTokensField, wire: pbWireVarint, varint: 1},
+		{num: agModelUsageStatsOutputTokensField, wire: pbWireVarint, varint: 1},
+	})
+	legacyDecoyWrapper := encodePB([]pbField{{
+		num: 2, wire: pbWireBytes, bytes: decoyUsage,
+	}})
+	return encodePB([]pbField{
+		{
+			num:   agChatModelMetadataModelDisplayNameField,
+			wire:  pbWireBytes,
+			bytes: []byte("wrong top-level model"),
+		},
+		{num: 17, wire: pbWireBytes, bytes: legacyDecoyWrapper},
+		{
+			num:   agCortexStepGeneratorMetadataChatModelField,
+			wire:  pbWireBytes,
+			bytes: encodePB(chatModelFields),
+		},
+		{
+			num:   agCortexStepGeneratorMetadataStepIndicesField,
+			wire:  pbWireBytes,
+			bytes: packedStepIndices,
+		},
+	})
 }
 
 func createAntigravityMockGenMetadataData(
@@ -3340,23 +3408,31 @@ func createAntigravityMockGenMetadataData(
 	fieldNum, uncachedInput, totalOutput, cacheRead int,
 	model string,
 	modelField int,
-	stepIndices []int,
 ) []byte {
 	t.Helper()
-	// Build token usage inner block with remapped field semantics
-	// cross-validated against sidecar ground truth:
-	//   f2 = uncached input (inputTokens)
-	//   f3 = total output including thinking (outputTokens)
-	//   f4 = absent (never carries semantics)
-	//   f5 = cache-read (cacheReadTokens, present when > 0)
+	// Older records use unknown wrappers around a ModelUsageStats payload.
 	usageFields := []pbField{
-		{num: 1, wire: pbWireVarint, varint: uint64(fieldNum)},
-		{num: 2, wire: pbWireVarint, varint: uint64(uncachedInput)},
-		{num: 3, wire: pbWireVarint, varint: uint64(totalOutput)},
+		{
+			num:    agModelUsageStatsModelField,
+			wire:   pbWireVarint,
+			varint: uint64(fieldNum),
+		},
+		{
+			num:    agModelUsageStatsInputTokensField,
+			wire:   pbWireVarint,
+			varint: uint64(uncachedInput),
+		},
+		{
+			num:    agModelUsageStatsOutputTokensField,
+			wire:   pbWireVarint,
+			varint: uint64(totalOutput),
+		},
 	}
 	if cacheRead > 0 {
 		usageFields = append(usageFields, pbField{
-			num: 5, wire: pbWireVarint, varint: uint64(cacheRead),
+			num:    agModelUsageStatsCacheReadTokensField,
+			wire:   pbWireVarint,
+			varint: uint64(cacheRead),
 		})
 	}
 	usageInner := encodePB(usageFields)
@@ -3367,15 +3443,6 @@ func createAntigravityMockGenMetadataData(
 	topFields := []pbField{{
 		num: 17, wire: pbWireBytes, bytes: f17Inner,
 	}}
-	if len(stepIndices) > 0 {
-		var packed []byte
-		for _, idx := range stepIndices {
-			packed = append(packed, encodeVarint(uint64(idx))...)
-		}
-		topFields = append(topFields, pbField{
-			num: 2, wire: pbWireBytes, bytes: packed,
-		})
-	}
 	if model != "" {
 		topFields = append(topFields, pbField{
 			num: modelField, wire: pbWireBytes, bytes: []byte(model),
@@ -3385,17 +3452,29 @@ func createAntigravityMockGenMetadataData(
 }
 
 func createAntigravityMockExecutorMetadata(
-	endStep int, model string,
+	lastStepIndex int, modelName string,
 ) []byte {
-	association := encodePB([]pbField{{
-		num: 28, wire: pbWireBytes, bytes: []byte(model),
+	plannerConfig := encodePB([]pbField{{
+		num:   agCascadePlannerConfigModelNameField,
+		wire:  pbWireBytes,
+		bytes: []byte(modelName),
 	}})
-	executor := encodePB([]pbField{{
-		num: 1, wire: pbWireBytes, bytes: association,
+	cascadeConfig := encodePB([]pbField{{
+		num:   agCascadeConfigPlannerConfigField,
+		wire:  pbWireBytes,
+		bytes: plannerConfig,
 	}})
 	return encodePB([]pbField{
-		{num: 3, wire: pbWireVarint, varint: uint64(endStep)},
-		{num: 10, wire: pbWireBytes, bytes: executor},
+		{
+			num:    agExecutorMetadataLastStepIndexField,
+			wire:   pbWireVarint,
+			varint: uint64(lastStepIndex),
+		},
+		{
+			num:   agExecutorMetadataCascadeConfigField,
+			wire:  pbWireBytes,
+			bytes: cascadeConfig,
+		},
 	})
 }
 

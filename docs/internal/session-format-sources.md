@@ -444,10 +444,12 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## Grok Build (`grok`)
 
-- **Format:** Workspace-scoped session directories containing `summary.json`,
-  a derived `chat_history.jsonl` model-message cache, and an authoritative
+- **Format:** Workspace-scoped session directories containing `summary.json`, a
+  derived `chat_history.jsonl` model-message cache, and an authoritative
   `updates.jsonl` stream of timestamped ACP and xAI session notifications.
+
 - **Evidence:** `source`.
+
 - **Upstream:** Clone `https://github.com/xai-org/grok-build.git` at
   `d71f6e0c1f5acc5469e503e192fe14824e6f8c90`. The
   [session guide](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md)
@@ -461,31 +463,36 @@ add an archived or maintained mirror without replacing the original identity.
   Agentsview maps timestamped `tool_call` and terminal `tool_call_update`
   records to the existing tool-result event model, so Activity can use tool
   completion time without adding derived transcript messages.
+
 - **Usage and cost:** Durable `turn_completed` updates may carry per-model
-  input, output, cache-read, cache-creation, and reasoning tokens plus optional
-  `costUsdTicks` (10^10 ticks per USD), as defined by the
+  input, output, cache-read, cache-creation, and reasoning tokens plus
+  optional `costUsdTicks` (10^10 ticks per USD), as defined by the
   [notification schema](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/extensions/notification.rs).
-  Agentsview emits one usage event per prompt and model, subtracts cache reads
-  from the full input count, and uses reported cost ticks when present.
+  Agentsview emits one usage event per prompt and model, subtracts cache
+  reads from the full input count, and uses reported cost ticks when present.
+
 - **Automation:** The first-party
   [headless guide](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
-  defines prompt flags as non-interactive invocation. The producer propagates
-  that startup mode into
+  defines prompt flags as non-interactive invocation. The producer
+  propagates that startup mode into
   [`PromptContext.is_non_interactive`](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L936-L944),
-  whose schema identifies headless, SDK, stdio, and generic ACP execution and
-  defaults false for interactive or older contexts
+  whose schema identifies headless, SDK, stdio, and generic ACP execution
+  and defaults false for interactive or older contexts
   ([schema](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L145-L150),
-  [default](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L177-L199)).
-  The producer writes that context to the same session directory as
-  `prompt_context.json`
-  ([persistence](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session.rs#L1384-L1404),
-  [spawn call](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L1049-L1055)).
-  Agentsview treats only an explicit true value in a valid, session-associated
-  file as durable automation evidence; file presence, a missing field, or a
-  missing file does not classify a session as automated.
-- **Agentsview:** `internal/parser/grok.go`,
-  `internal/parser/grok_provider.go`, colocated tests, and the sanitized
-  upstream-generated fixtures in `internal/parser/testdata/grok-build`.
+
+    [default](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-agent/src/prompt/context.rs#L177-L199)).
+    The producer writes that context to the same session directory as
+    `prompt_context.json`
+    ([persistence](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session.rs#L1384-L1404),
+
+    [spawn call](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L1049-L1055)).
+    Agentsview treats only an explicit true value in a valid, session-associated
+    file as durable automation evidence; file presence, a missing field, or a
+    missing file does not classify a session as automated.
+
+- **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
+  colocated tests, and the sanitized upstream-generated fixtures in
+  `internal/parser/testdata/grok-build`.
 
 ## MiMo Code (`mimocode`)
 
@@ -1539,14 +1546,26 @@ add an archived or maintained mirror without replacing the original identity.
   specification, or authoritative protobuf schema was found. The independent
   CodeBurn evidence pinned in the `antigravity` entry also covers CLI
   discovery, live RPC metadata, and the shorter capture window, but not the
-  encrypted producer format.
+  encrypted producer format. Reverified 2026-08-20 against Google's official
+  [Antigravity CLI 1.1.16 macOS ARM64 release](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.16),
+  asset SHA-256
+  `a902e8b24fdc53504e7daf658e18f7ba47ebb9cfcf058aa6c01e37c5e610d389`. Its Go
+  binary embeds `FileDescriptorProto` records for
+  `third_party/jetski/cortex_pb/cortex.proto` and
+  `third_party/jetski/codeium_common_pb/codeium_common.proto`. These compiled
+  descriptors name the fields consumed below, but the persistence writer
+  remains closed source, so the evidence class remains `no-public-source`.
 - **Usage and cost:** SQLite `gen_metadata` and trajectory sidecars can carry
   input, output, thinking-output, cache-read, and model fields; output already
-  includes thinking. In CLI 1.1.5 SQLite, generation field 2 contains packed
-  step indices, field 19 can contain only the base model slug, and the matching
-  `executor_metadata` range carries the effort-qualified model in field 28.
-  Agentsview avoids double counting and catalog-prices usage. No provider USD
-  cost is consumed.
+  includes thinking. In CLI 1.1.5 SQLite,
+  `CortexStepGeneratorMetadata.step_indices` (field 2) contains packed step
+  indices and `ChatModelMetadata.response_model` (field 19) can contain only
+  the base model slug. The matching `ExecutorMetadata.last_step_idx` range
+  carries the effort-qualified model at
+  `cascade_config.planner_config.model_name` (fields 10, 1, and 28).
+  `ChatModelMetadata.model_display_name` (field 21) remains the complete label
+  when present. Agentsview avoids double counting and catalog-prices usage. No
+  provider USD cost is consumed.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
   `internal/parser/antigravity_crypto.go`, and
   `internal/parser/antigravity_cli_provider.go`.
