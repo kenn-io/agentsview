@@ -69,6 +69,7 @@
               onclick={() => onSelect?.(tile.id)}
               onkeydown={(event) => handleKey(event, tile.id)}
             >
+              <title>{m.usage_click_to_hide({ label: tile.label })}</title>
               <Rect
                 width={tileWidth}
                 height={tileHeight}

@@ -119,10 +119,21 @@
             y="value"
             fill="none"
             stroke={item.color}
-            stroke-width={activeTerm === item.term ? 3 : 2}
-            stroke-opacity={activeTerm !== null && activeTerm !== item.term ? 0.24 : 1}
+            strokeWidth={activeTerm === item.term ? 3 : 2}
+            strokeOpacity={activeTerm !== null && activeTerm !== item.term ? 0.24 : 1}
             stroke-linecap="round"
             stroke-linejoin="round"
+          />
+          <Spline
+            data={item.points}
+            x="date"
+            y="value"
+            fill="none"
+            stroke="transparent"
+            strokeWidth={16}
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            data-trend-hit={item.term}
             onmouseenter={() => onHover(item.term)}
             onmouseleave={() => onHover(null)}
           />
