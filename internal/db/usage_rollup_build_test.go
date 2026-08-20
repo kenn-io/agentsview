@@ -13,15 +13,162 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-func TestUsageRollupExceptionClassification(t *testing.T) {
-	ordinary := rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 10)
-	ordinary.Fact.ClaudeMessageID = ""
-	ordinary.Fact.ClaudeRequestID = ""
-	assert.False(t, isUsageRollupException(ordinary))
-	assert.True(t, isUsageRollupException(
-		rollupSnapshotFact(1, 1, "session-a", "2026-08-01", "model-a", 20)))
-	assert.True(t, isUsageRollupException(
-		rollupGeneralFact(1, 2, "session-a", "2026-08-01", "model-a", "shared", 30)))
+func TestClassifyUsageRollupFactsFinalizesSafeGroups(t *testing.T) {
+	plain := rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 5)
+	plain.Fact.ClaudeMessageID = ""
+	plain.Fact.ClaudeRequestID = ""
+	singleton := rollupSnapshotFact(1, 1, "session-a", "2026-08-01", "model-a", 10)
+	loser := rollupSnapshotFact(1, 2, "session-a", "2026-08-01", "model-a", 20)
+	loser.Fact.ClaudeMessageID = "duplicated"
+	loser.Fact.WebSearchRequests = 4
+	winner := rollupSnapshotFact(1, 3, "session-a", "2026-08-01", "model-a", 30)
+	winner.Fact.ClaudeMessageID = "duplicated"
+	winner.Fact.WebSearchRequests = 1
+
+	survivors, exceptions := classifyUsageRollupFacts(
+		[]usageRollupFact{plain, singleton, loser, winner},
+		newUsageDedupIdentitySet(),
+	)
+
+	assert.Empty(t, exceptions)
+	require.Len(t, survivors, 3)
+	assert.Equal(t, "1:0", usageRollupFactIdentity(survivors[0].Fact))
+	assert.Equal(t, "1:1", usageRollupFactIdentity(survivors[1].Fact))
+	assert.Zero(t, survivors[1].DiscardedSnapshotOutputTokens)
+	ranked := survivors[2]
+	assert.Equal(t, "1:3", usageRollupFactIdentity(ranked.Fact),
+		"the greater output snapshot must win")
+	assert.Equal(t, int64(20), ranked.DiscardedSnapshotOutputTokens)
+	assert.Equal(t, int64(4), ranked.Fact.Fact.WebSearchRequests,
+		"the maximum web-search count must carry across snapshots")
+	assert.Equal(t, "session-a", ranked.Fact.AttributionSessionID)
+}
+
+func TestClassifyUsageRollupFactsFinalizesSafeGeneralGroups(t *testing.T) {
+	early := rollupGeneralFact(1, 0, "session-a", "2026-08-01", "model-a", "shared", 10)
+	early.Fact.RawTimestamp = "2026-08-01T01:00:00Z"
+	early.DedupTimestamp = early.Fact.RawTimestamp
+	late := rollupGeneralFact(1, 1, "session-a", "2026-08-01", "model-a", "shared", 20)
+	late.Fact.RawTimestamp = "2026-08-01T02:00:00Z"
+	late.DedupTimestamp = late.Fact.RawTimestamp
+
+	survivors, exceptions := classifyUsageRollupFacts(
+		[]usageRollupFact{late, early}, newUsageDedupIdentitySet(),
+	)
+
+	assert.Empty(t, exceptions)
+	require.Len(t, survivors, 1)
+	assert.Equal(t, "1:0", usageRollupFactIdentity(survivors[0].Fact),
+		"the earliest row must win general dedup")
+}
+
+func TestClassifyUsageRollupFactsKeepsIrreducibleGroups(t *testing.T) {
+	crossSnapshot := newUsageDedupIdentitySet()
+	crossSnapshot.add("message-id", "request-id", "", "")
+	crossSource := newUsageDedupIdentitySet()
+	crossSource.add("", "", "shared-uuid", "")
+	crossUsage := newUsageDedupIdentitySet()
+	crossUsage.add("", "", "", "shared-key")
+
+	sourceFact := func(cachedID int64, index int, date, model string) usageRollupFact {
+		fact := rollupGeneralFact(cachedID, index, "session-a", date, model, "", 10)
+		fact.Fact.Source = "message"
+		fact.Fact.SourceUUID = "shared-uuid"
+		fact.Agent = "codex"
+		return fact
+	}
+	copilot := rollupGeneralFact(1, 0, "session-a", "2026-08-01", "model-a", "cp", 10)
+	reported := int64(55)
+	copilot.Fact.ReportedCostMicrodollars = &reported
+	copilot.Fact.CostSource = CopilotReportedCostSource
+	undated := rollupGeneralFact(1, 0, "session-a", "", "model-a", "shared", 10)
+	undated.Fact.RawTimestamp = ""
+	undated.DedupTimestamp = ""
+
+	cases := []struct {
+		name       string
+		facts      []usageRollupFact
+		cross      usageDedupIdentitySet
+		exceptions int
+	}{
+		{"cross-session snapshot identity",
+			[]usageRollupFact{rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 10)},
+			crossSnapshot, 1},
+		{"snapshot group spanning days", []usageRollupFact{
+			rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 10),
+			rollupSnapshotFact(1, 1, "session-a", "2026-08-02", "model-a", 20),
+		}, newUsageDedupIdentitySet(), 2},
+		{"cross-session source identity",
+			[]usageRollupFact{sourceFact(1, 0, "2026-08-01", "model-a")},
+			crossSource, 1},
+		{"general group spanning models", []usageRollupFact{
+			rollupGeneralFact(1, 0, "session-a", "2026-08-01", "model-a", "shared", 10),
+			rollupGeneralFact(1, 1, "session-a", "2026-08-01", "model-b", "shared", 20),
+		}, newUsageDedupIdentitySet(), 2},
+		{"general group spanning days", []usageRollupFact{
+			rollupGeneralFact(1, 0, "session-a", "2026-08-01", "model-a", "shared", 10),
+			rollupGeneralFact(1, 1, "session-a", "2026-08-02", "model-a", "shared", 20),
+		}, newUsageDedupIdentitySet(), 2},
+		{"cross usage key",
+			[]usageRollupFact{rollupGeneralFact(1, 0, "session-a", "2026-08-01", "model-a", "shared-key", 10)},
+			crossUsage, 1},
+		{"authoritative copilot cost",
+			[]usageRollupFact{copilot}, newUsageDedupIdentitySet(), 1},
+		{"general group with mixed empty dates", []usageRollupFact{
+			undated,
+			rollupGeneralFact(1, 1, "session-a", "2026-08-01", "model-a", "shared", 20),
+		}, newUsageDedupIdentitySet(), 2},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			survivors, exceptions := classifyUsageRollupFacts(item.facts, item.cross)
+			assert.Empty(t, survivors)
+			assert.Len(t, exceptions, item.exceptions)
+		})
+	}
+}
+
+func TestClassifyUsageRollupFactsFinalizesUndatedSameKeyGroup(t *testing.T) {
+	first := rollupGeneralFact(1, 0, "session-a", "", "model-a", "shared", 10)
+	first.Fact.RawTimestamp = ""
+	first.DedupTimestamp = ""
+	second := rollupGeneralFact(1, 1, "session-a", "", "model-a", "shared", 20)
+	second.Fact.RawTimestamp = ""
+	second.DedupTimestamp = ""
+
+	survivors, exceptions := classifyUsageRollupFacts(
+		[]usageRollupFact{first, second}, newUsageDedupIdentitySet(),
+	)
+
+	assert.Empty(t, exceptions)
+	require.Len(t, survivors, 1)
+	assert.Equal(t, "1:0", usageRollupFactIdentity(survivors[0].Fact))
+}
+
+func TestClassifyUsageRollupFactsClosesSnapshotToGeneralEdges(t *testing.T) {
+	snapshotWithKey := rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 10)
+	snapshotWithKey.Fact.UsageDedupKey = "linked"
+	general := rollupGeneralFact(1, 1, "session-a", "2026-08-01", "model-a", "linked", 20)
+
+	survivors, exceptions := classifyUsageRollupFacts(
+		[]usageRollupFact{snapshotWithKey, general}, newUsageDedupIdentitySet(),
+	)
+
+	assert.Empty(t, survivors,
+		"a snapshot fact linked into a general group is irreducible")
+	assert.Len(t, exceptions, 2)
+}
+
+func TestClassifyUsageRollupFactsSkipsNonTokenFacts(t *testing.T) {
+	activity := rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 10)
+	activity.Fact.TokenEligible = false
+
+	survivors, exceptions := classifyUsageRollupFacts(
+		[]usageRollupFact{activity}, newUsageDedupIdentitySet(),
+	)
+
+	assert.Empty(t, survivors)
+	assert.Empty(t, exceptions)
 }
 
 func TestCompareUsageFactTiesUsesAscendingIdentity(t *testing.T) {
@@ -148,11 +295,9 @@ func TestPriceUsageFactComputesCacheSavingsAndWebSearchFee(t *testing.T) {
 	assert.Equal(t, int64(1_500_000), got.Savings.Microdollars)
 }
 
-func TestBuildUsageDailyContributionsDefersSnapshotsToExceptionQuery(t *testing.T) {
-	first := rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 10)
-	first.Fact.WebSearchRequests = 3
-	second := rollupSnapshotFact(2, 0, "session-b", "2026-08-01", "model-a", 20)
-	second.Fact.WebSearchRequests = 1
+func TestBuildUsageDailyContributionsRecordsDiscardedSnapshots(t *testing.T) {
+	loser := rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 10)
+	winner := rollupSnapshotFact(1, 1, "session-a", "2026-08-01", "model-a", 20)
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "model-a",
 		Rates: export.ModelRates{
@@ -160,12 +305,15 @@ func TestBuildUsageDailyContributionsDefersSnapshotsToExceptionQuery(t *testing.
 		},
 	}})
 
-	daily, exceptions, err := buildUsageDailyContributions(
-		[]usageRollupFact{second, first}, resolver,
+	survivors, exceptions := classifyUsageRollupFacts(
+		[]usageRollupFact{loser, winner}, newUsageDedupIdentitySet(),
 	)
+	require.Empty(t, exceptions)
+	daily, err := buildUsageDailyContributions(survivors, resolver)
 	require.NoError(t, err)
-	assert.Empty(t, daily)
-	assert.Equal(t, []string{"1:0", "2:0"}, rollupFactIDs(exceptions))
+	require.Len(t, daily, 1)
+	assert.Equal(t, int64(20), daily[0].OutputTokens)
+	assert.Equal(t, int64(10), daily[0].DiscardedSnapshotOutputTokens)
 }
 
 func TestBuildUsageDailyContributionsPricesBeforeSumming(t *testing.T) {
@@ -180,8 +328,8 @@ func TestBuildUsageDailyContributionsPricesBeforeSumming(t *testing.T) {
 		},
 	}})
 
-	daily, _, err := buildUsageDailyContributions(
-		[]usageRollupFact{first, second}, resolver,
+	daily, err := buildUsageDailyContributions(
+		[]usageRollupSurvivor{{Fact: first}, {Fact: second}}, resolver,
 	)
 	require.NoError(t, err)
 	require.Len(t, daily, 1)
@@ -221,12 +369,4 @@ func rollupGeneralFact(
 			OutputTokens: output, UsageDedupKey: dedup, TokenEligible: true,
 		},
 	}
-}
-
-func rollupFactIDs(facts []usageRollupFact) []string {
-	result := make([]string, 0, len(facts))
-	for _, fact := range facts {
-		result = append(result, usageRollupFactIdentity(fact))
-	}
-	return result
 }

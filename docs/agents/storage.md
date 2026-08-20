@@ -51,11 +51,26 @@ fees, deduplication, or rollup semantics change. Catalog and user-pricing
 changes are covered separately by the pricing content digest; do not add a
 write-only extractor-version metadata key.
 
-Daily rows exclude every fact that can participate in snapshot or general
-deduplication. A timezone-specific exception tier resolves those narrow rows at
-read time. This conservative boundary covers cross-day, cross-model,
-cross-session, and snapshot-to-general cases without a second dependency graph,
-while preserving current window-scoped dedup semantics.
+Deduplication groups are classified per group at rollup build time. A group is
+finalized into daily rows only when its resolution provably cannot vary with the
+query window or live filters: every member shares one source session and one
+local date, general (`source:`/`usage:`) groups additionally share one model and
+headless state, no member links snapshot and general dedup, no member carries a
+Copilot authoritative cost, and the group's identity appears in no other cached
+session (nor, for usage keys, in the Cursor fact store). Only the remaining
+irreducible groups go to the timezone-specific exception tier that resolves
+narrow rows at read time, preserving the window-scoped dedup semantics. Cursor
+facts stay entirely on the exception tier. Because query windows are whole local
+days, a single-date group is inside or outside any window as a unit.
+
+Cross-session identity checks are conservative and served by dedicated
+`usage_facts` identity indexes, not a membership table. Whenever a fill, Cursor
+batch, or deletion changes the set of dedup identities a session (or the Cursor
+store) contributes, it must, in the same cache transaction, delete the timezone
+rollup installs of every other session holding a changed identity; rollup
+installation re-verifies inside its transaction that no finalized identity
+gained an outside member and retries as a moved source otherwise. A finalized
+daily row must never survive gaining a sibling.
 
 Treat a usage-cache file as identifiable only after both its SQLite
 `application_id` and `usage_cache_metadata.cache_kind` match. Filename matching

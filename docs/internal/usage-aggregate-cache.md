@@ -45,21 +45,49 @@ verified on every read.
 
 ### Dedup exceptions
 
-Any fact that can participate in Claude snapshot deduplication or general
-`source:`/`usage:` deduplication is stored as a narrow exception instead of a
-daily contribution. This conservative boundary makes cross-day, cross-model,
-cross-session, and snapshot-to-general cases exact without a second
-component-classification system.
+Deduplication groups are classified per group when a session's rollup is built.
+A group is finalized into daily rows only when its resolution provably cannot
+vary with the query window or live filters:
+
+- every member belongs to the building session and shares one local date (query
+  windows are whole local days, so such a group is inside or outside any
+  window as a unit);
+- for general `source:`/`usage:` groups, every member also shares one model and
+  headless state, because live model and automation filters apply before
+  general ranking;
+- no member links snapshot and general dedup (a snapshot survivor carrying a
+  usage key re-enters general ranking at read time);
+- no member carries a Copilot authoritative cost, whose per-session selection is
+  order-dependent across the whole window; and
+- the group's identity appears in no other cached session and, for usage keys,
+  not in the Cursor fact store. Partial identity indexes on `usage_facts`
+  serve this check conservatively (for example, `source:` identity ignores the
+  baked agent).
+
+Finalization applies the same ranking rules as the read path: the
+greatest-output snapshot wins, attribution follows the earliest row, the maximum
+web-search count carries over, and losing snapshot output is recorded as
+discarded. Only irreducible groups are stored as narrow exceptions, so exception
+volume scales with genuine cross-session, cross-day, and cross-model duplicates
+rather than with token-bearing messages. Cursor facts stay entirely on the
+exception tier: their keys may collide with session usage keys and their filters
+depend on per-row headless state.
 
 At read time the query loads only exception rows intersecting the requested
 window from the currently verified candidate sessions. It then applies the
 existing window-scoped ranking, attribution, filtering, and pricing rules in Go.
-Ordinary facts stay on the indexed daily path.
+Finalized groups and ordinary facts stay on the indexed daily path.
 
-Because exceptions are installed per source session, changing one transcript
-rebuilds only that session. A cross-session winner still changes immediately:
-the next request verifies every candidate session and resolves the group from
-the latest exception rows of all members.
+Because rollups are installed per source session, changing one transcript
+rebuilds that session. Whenever a fill, Cursor batch, or deletion changes the
+set of dedup identities a session contributes, the same cache transaction
+deletes the timezone rollup installs of every other session holding a changed
+identity, and rollup installation re-verifies inside its transaction that no
+finalized identity gained an outside member, retrying as a moved source
+otherwise. A finalized daily row therefore never survives gaining a sibling, and
+a cross-session winner still changes immediately: the next request verifies
+every candidate session and resolves the group from the latest exception rows of
+all members.
 
 Cursor usage uses the same exception representation under a synthetic source
 install keyed by the Cursor high-water mark. Matching-session activity has
@@ -144,9 +172,10 @@ results byte for byte. Performance reporting separates cold construction from
 warm reads and reports 1-day, 7-day, 30-day, and all-history results. The warm
 path must not scan normalized facts.
 
-Current protected-clone measurements after canonical pricing and timezone
-identity fixes are approximately 0.19 seconds for 1 day, 0.35 seconds for 7
-days, and 0.85 seconds for 30 days through the offline CLI. All-history warm
-reads are approximately six seconds. Cold construction remains proportional to
-uncached candidate-session history and is intentionally handled newest-first in
-the background.
+Warm reads must scale with daily rows and genuine duplicate groups, not with
+token-bearing messages; the release check reports exception cardinality along
+with timings. Slow foreground requests log privacy-safe phase timings and row
+counts. Cold construction remains proportional to uncached candidate-session
+history and is intentionally handled newest-first in the background.
+Protected-clone timings are re-measured for each release against the two-second
+warm 30-day gate rather than recorded here.

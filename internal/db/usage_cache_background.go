@@ -382,19 +382,34 @@ func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	tombstoneIDs := make([]string, 0, len(tombstones))
 	for _, tombstone := range tombstones {
+		tombstoneIDs = append(tombstoneIDs, tombstone.SessionID)
+	}
+	removed, err := usageFactIdentitiesForSessions(ctx, tx, tombstoneIDs)
+	if err != nil {
+		return err
+	}
+	excluded := make(map[string]bool, len(tombstoneIDs))
+	for _, sessionID := range tombstoneIDs {
+		excluded[sessionID] = true
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM usage_rollup_installs WHERE session_id = ?`,
-			tombstone.SessionID,
+			sessionID,
 		); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
-			tombstone.SessionID,
+			sessionID,
 		); err != nil {
 			return err
 		}
+	}
+	// Rebuild the survivors' rollups so groups the deleted sessions kept
+	// irreducible can finalize again.
+	if err := invalidateUsageDedupSharers(ctx, tx, removed, excluded); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE usage_cache_metadata

@@ -5,6 +5,7 @@ package db
 import (
 	"math/rand"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -125,6 +126,135 @@ func TestUsageRollupDailyMatchesLastCopilotReportedCost(t *testing.T) {
 	assert.Equal(t, legacy, rollup)
 }
 
+func countUsageRollupExceptionRows(t *testing.T, database *DB) int {
+	t.Helper()
+	snapshot, err := database.captureUsageQuery(
+		t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, cache.db.QueryRow(
+		`SELECT COUNT(*) FROM usage_rollup_exceptions`).Scan(&count))
+	return count
+}
+
+func TestUsageRollupUniqueClaudeSessionStoresNoExceptions(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-10T08:00:00Z"
+	insertSession(t, database, "unique-claude", "project", func(session *Session) {
+		session.Agent = "claude"
+		session.StartedAt = &started
+	})
+	messages := make([]Message, 0, 6)
+	for index := range 6 {
+		messages = append(messages, Message{
+			SessionID: "unique-claude", Ordinal: index, Role: "assistant",
+			Timestamp: "2026-08-10T09:00:00Z", Model: "model-a",
+			TokenUsage:      []byte(`{"input_tokens":3,"output_tokens":7}`),
+			ClaudeMessageID: "message-" + strconv.Itoa(index),
+			ClaudeRequestID: "request-" + strconv.Itoa(index),
+		})
+	}
+	require.NoError(t, database.InsertMessages(messages))
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+
+	legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
+	rollup := getDailyUsageRollupForTest(t, database, filter)
+
+	assert.Equal(t, legacy, rollup)
+	assert.Equal(t, 42, rollup.Totals.OutputTokens)
+	assert.Zero(t, countUsageRollupExceptionRows(t, database),
+		"unique Claude identities must aggregate into daily rows")
+}
+
+func TestUsageRollupSameDaySnapshotDuplicateAggregates(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "same-day", "project",
+		"2026-08-10T09:00:00Z", 0, 10, "model-a")
+	require.NoError(t, database.InsertMessages([]Message{{
+		SessionID: "same-day", Ordinal: 1, Role: "assistant",
+		Timestamp: "2026-08-10T09:05:00Z", Model: "model-a",
+		TokenUsage:      []byte(`{"output_tokens":25}`),
+		ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request",
+	}}))
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+
+	legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
+	rollup := getDailyUsageRollupForTest(t, database, filter)
+
+	assert.Equal(t, legacy, rollup)
+	assert.Equal(t, 25, rollup.Totals.OutputTokens,
+		"only the winning snapshot output may count")
+	assert.Zero(t, countUsageRollupExceptionRows(t, database),
+		"a same-day, same-session snapshot group must finalize at build time")
+}
+
+func TestUsageRollupSiblingArrivalInvalidatesFinalizedAggregate(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "original", "project-a",
+		"2026-08-10T09:00:00Z", 0, 10, "model-a")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	warm := getDailyUsageRollupForTest(t, database, filter)
+	require.Equal(t, 10, warm.Totals.OutputTokens)
+	require.Zero(t, countUsageRollupExceptionRows(t, database))
+
+	seedUsageSnapshotSession(t, database, "sibling", "project-b",
+		"2026-08-10T10:00:00Z", 0, 20, "model-a")
+
+	legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
+	rollup := getDailyUsageRollupForTest(t, database, filter)
+	assert.Equal(t, legacy, rollup,
+		"a new cross-session sibling must invalidate the finalized aggregate")
+	assert.Equal(t, 20, rollup.Totals.OutputTokens)
+}
+
+func TestUsageRollupSiblingRemovalRestoresFinalizedAggregate(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "original", "project-a",
+		"2026-08-10T09:00:00Z", 0, 10, "model-a")
+	seedUsageSnapshotSession(t, database, "sibling", "project-b",
+		"2026-08-10T10:00:00Z", 0, 20, "model-a")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	warm := getDailyUsageRollupForTest(t, database, filter)
+	require.Equal(t, 20, warm.Totals.OutputTokens)
+	require.Positive(t, countUsageRollupExceptionRows(t, database))
+
+	require.NoError(t, database.ReplaceSessionMessages("sibling", []Message{{
+		SessionID: "sibling", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-10T10:00:00Z", Model: "model-a",
+		TokenUsage:      []byte(`{"output_tokens":20}`),
+		ClaudeMessageID: "unrelated-message", ClaudeRequestID: "unrelated-request",
+	}}))
+
+	legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
+	rollup := getDailyUsageRollupForTest(t, database, filter)
+	assert.Equal(t, legacy, rollup)
+	assert.Equal(t, 30, rollup.Totals.OutputTokens,
+		"both requests must count once the identities no longer collide")
+	assert.Zero(t, countUsageRollupExceptionRows(t, database),
+		"separated identities must become daily rows again")
+}
+
+func TestUsageRollupSessionDeletionRestoresFinalizedAggregate(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "original", "project-a",
+		"2026-08-10T09:00:00Z", 0, 10, "model-a")
+	seedUsageSnapshotSession(t, database, "sibling", "project-b",
+		"2026-08-10T10:00:00Z", 0, 20, "model-a")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	warm := getDailyUsageRollupForTest(t, database, filter)
+	require.Equal(t, 20, warm.Totals.OutputTokens)
+
+	require.NoError(t, database.DeleteSession("sibling"))
+
+	legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
+	rollup := getDailyUsageRollupForTest(t, database, filter)
+	assert.Equal(t, legacy, rollup)
+	assert.Equal(t, 10, rollup.Totals.OutputTokens,
+		"a deleted sibling must stop competing immediately")
+}
+
 func TestUsageRollupWarmReadDoesNotScanFacts(t *testing.T) {
 	database := testDB(t)
 	seedUsageSnapshotSession(t, database, "warm", "project",
@@ -145,6 +275,46 @@ func TestUsageRollupWarmReadDoesNotScanFacts(t *testing.T) {
 	got, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err, "read warmed rollup")
 	assert.Equal(t, want, got)
+}
+
+func TestUsageRollupCrossIdentityQueriesUseIndexes(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "plan", "project",
+		"2026-08-10T09:00:00Z", 0, 10, "model-a")
+	snapshot, err := database.captureUsageQuery(
+		t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	conn, err := cache.db.Conn(t.Context())
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(t.Context(), `CREATE TEMP TABLE IF NOT EXISTS
+		usage_rollup_build_sessions(session_id TEXT PRIMARY KEY) WITHOUT ROWID`)
+	require.NoError(t, err)
+
+	plan := func(query string) string {
+		t.Helper()
+		rows, err := conn.QueryContext(t.Context(), `EXPLAIN QUERY PLAN `+query)
+		require.NoError(t, err)
+		defer rows.Close()
+		var details []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+			details = append(details, detail)
+		}
+		require.NoError(t, rows.Err())
+		return strings.Join(details, "\n")
+	}
+	assert.Contains(t, plan(usageRollupCrossSnapshotSQL),
+		"usage_facts_claude_identity")
+	assert.Contains(t, plan(usageRollupCrossSourceUUIDSQL),
+		"usage_facts_source_uuid")
+	usageKeyPlan := plan(usageRollupCrossUsageKeySQL)
+	assert.Contains(t, usageKeyPlan, "usage_facts_usage_dedup_key")
+	assert.Contains(t, usageKeyPlan, "cursor_usage_facts_dedup_key")
 }
 
 func TestUsageRollupSeededRandomParitySweep(t *testing.T) {
@@ -201,6 +371,43 @@ func TestUsageRollupSeededRandomParitySweep(t *testing.T) {
 		Cost: &reported, CostStatus: "exact", CostSource: "provider",
 		OccurredAt: "2026-11-01T05:30:00Z", DedupKey: "event-one",
 	}}))
+	sameDayStarted := "2026-11-01T09:00:00Z"
+	insertSession(t, database, "claude-c", "project-a", func(session *Session) {
+		session.Agent = "claude"
+		session.StartedAt = &sameDayStarted
+	})
+	sameDayMessage := func(ordinal, output int, messageID string) Message {
+		return Message{
+			SessionID: "claude-c", Ordinal: ordinal, Role: "assistant",
+			Timestamp: "2026-11-01T09:0" + strconv.Itoa(ordinal) + ":00Z",
+			Model:     "model-a",
+			TokenUsage: []byte(`{"input_tokens":10,"output_tokens":` +
+				strconv.Itoa(output) + `}`),
+			ClaudeMessageID: messageID, ClaudeRequestID: "same-day-request",
+		}
+	}
+	require.NoError(t, database.InsertMessages([]Message{
+		sameDayMessage(0, 11, "same-day-message"),
+		sameDayMessage(1, 44, "same-day-message"),
+		sameDayMessage(2, 7, "same-day-unique"),
+	}))
+	copilotStarted := "2026-11-01T10:00:00Z"
+	insertSession(t, database, "copilot-a", "project-b", func(session *Session) {
+		session.Agent = "copilot"
+		session.StartedAt = &copilotStarted
+	})
+	firstShutdown := money.MustParseDollars("4.00")
+	lastShutdown := money.MustParseDollars("6.50")
+	require.NoError(t, database.ReplaceSessionUsageEvents("copilot-a", []UsageEvent{
+		{Source: "shutdown", Model: "model-a", InputTokens: 15,
+			Cost: &firstShutdown, CostStatus: "exact",
+			CostSource: CopilotReportedCostSource,
+			OccurredAt: "2026-11-01T11:00:00Z", DedupKey: "shutdown-one"},
+		{Source: "shutdown", Model: "model-b", InputTokens: 25,
+			Cost: &lastShutdown, CostStatus: "exact",
+			CostSource: CopilotReportedCostSource,
+			OccurredAt: "2026-11-02T11:00:00Z", DedupKey: "shutdown-two"},
+	}))
 	require.NoError(t, database.InsertCursorUsageEvents([]CursorUsageEvent{
 		{OccurredAt: "2026-11-01T06:15:00Z", Model: "model-a",
 			InputTokens: 30, DedupKey: "cursor-human", IsHeadless: false},
@@ -222,7 +429,7 @@ func TestUsageRollupSeededRandomParitySweep(t *testing.T) {
 	to := []string{"2026-11-01", "2026-11-02", "2026-11-03", ""}
 	zones := []string{"UTC", "America/Chicago", "Asia/Tokyo"}
 	projects := []string{"", "project-a", "project-b"}
-	agents := []string{"", "claude", "codex", "cursor"}
+	agents := []string{"", "claude", "codex", "cursor", "copilot"}
 	models := []string{"", "model-a", "model-b"}
 	scopes := []string{"", "human", "automated"}
 	for iteration := range 36 {

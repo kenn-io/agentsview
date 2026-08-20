@@ -706,6 +706,7 @@ func (c *usageFillCoordinator) installSpoolBatch(
 
 	results := make(map[string]usageFillResult, len(versions))
 	var retry []usageSourceVersion
+	var deleted []string
 	stable := make([]usageSourceVersion, 0, len(versions))
 	currentVersions, err := c.recheckSourceVersions(ctx, versions)
 	if err != nil {
@@ -714,12 +715,7 @@ func (c *usageFillCoordinator) installSpoolBatch(
 	for _, observed := range versions {
 		current, exists := currentVersions[observed.SessionID]
 		if !exists {
-			if _, err := conn.ExecContext(ctx,
-				`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
-				observed.SessionID,
-			); err != nil {
-				return nil, versions, err
-			}
+			deleted = append(deleted, observed.SessionID)
 			results[observed.SessionID] = usageFillResult{Deleted: true}
 			continue
 		}
@@ -729,16 +725,67 @@ func (c *usageFillCoordinator) installSpoolBatch(
 		}
 		stable = append(stable, current)
 	}
+	affected := append([]string(nil), deleted...)
+	for _, version := range stable {
+		affected = append(affected, version.SessionID)
+	}
+	oldIdentities, err := usageFactIdentitiesForSessions(ctx, conn, affected)
+	if err != nil {
+		return nil, versions, err
+	}
+	for _, sessionID := range deleted {
+		for _, query := range []string{
+			`DELETE FROM usage_rollup_installs WHERE session_id = ?`,
+			`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
+		} {
+			if _, err := conn.ExecContext(ctx, query, sessionID); err != nil {
+				return nil, versions, err
+			}
+		}
+	}
 	stableResults, err := installSpoolSessions(ctx, conn, stable)
 	if err != nil {
 		return nil, versions, err
 	}
 	maps.Copy(results, stableResults)
+	if err := c.invalidateChangedIdentitySharers(
+		ctx, conn, oldIdentities, stable, affected,
+	); err != nil {
+		return nil, versions, err
+	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return nil, versions, fmt.Errorf("committing usage cache fill: %w", err)
 	}
 	committed = true
 	return results, retry, nil
+}
+
+// invalidateChangedIdentitySharers compares the dedup identities a fill
+// replaced with the ones it installed and invalidates the timezone rollups of
+// every other session sharing a changed identity, so their groups reclassify
+// against the new membership.
+func (c *usageFillCoordinator) invalidateChangedIdentitySharers(
+	ctx context.Context, conn *sql.Conn, oldIdentities usageDedupIdentitySet,
+	stable []usageSourceVersion, affected []string,
+) error {
+	if len(affected) == 0 {
+		return nil
+	}
+	stableIDs := make([]string, 0, len(stable))
+	for _, version := range stable {
+		stableIDs = append(stableIDs, version.SessionID)
+	}
+	newIdentities, err := usageSpoolIdentitiesForSessions(ctx, conn, stableIDs)
+	if err != nil {
+		return err
+	}
+	changed := newUsageDedupIdentitySet()
+	changed.mergeDifferences(oldIdentities, newIdentities)
+	excluded := make(map[string]bool, len(affected))
+	for _, sessionID := range affected {
+		excluded[sessionID] = true
+	}
+	return invalidateUsageDedupSharers(ctx, conn, changed, excluded)
 }
 
 func (c *usageFillCoordinator) recheckSourceVersions(
@@ -1102,7 +1149,9 @@ func (c *usageFillCoordinator) installCursorBatch(
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	arrived := newUsageDedupIdentitySet()
 	for _, install := range installs {
+		arrived.add("", "", "", install.dedup)
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO cursor_usage_facts(
 			source_id, timestamp_ms, raw_timestamp, model,
 			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
@@ -1116,6 +1165,11 @@ func (c *usageFillCoordinator) installCursorBatch(
 		); err != nil {
 			return err
 		}
+	}
+	// A session usage key equal to a newly arrived Cursor key must fall back
+	// to the exception tier, so its finalized rollups are invalidated here.
+	if err := invalidateUsageDedupSharers(ctx, tx, arrived, nil); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE usage_cache_metadata
@@ -1276,7 +1330,13 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	removed, err := usageFactIdentitiesForSessions(c.ctx, tx, ids)
+	if err != nil {
+		return err
+	}
+	excluded := make(map[string]bool, len(ids))
 	for _, id := range ids {
+		excluded[id] = true
 		if _, err := tx.ExecContext(c.ctx,
 			`DELETE FROM usage_rollup_installs WHERE session_id = ?`, id,
 		); err != nil {
@@ -1287,6 +1347,11 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string) error {
 		); err != nil {
 			return err
 		}
+	}
+	// Rebuild the survivors' rollups so groups the deleted sessions kept
+	// irreducible can finalize again.
+	if err := invalidateUsageDedupSharers(c.ctx, tx, removed, excluded); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

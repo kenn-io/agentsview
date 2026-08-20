@@ -82,10 +82,6 @@ type usageRollupBuild struct {
 	Exceptions                               []usageExceptionRow
 }
 
-func isUsageRollupException(fact usageRollupFact) bool {
-	return usageRollupSnapshotKey(fact) != "" || usageRollupGeneralKey(fact) != ""
-}
-
 func priceUsageFact(
 	input usagePriceInput, resolver *export.PricingResolver,
 ) (usagePriceResult, error) {
@@ -178,23 +174,16 @@ func usageRatesAndBandForFact(
 }
 
 func buildUsageDailyContributions(
-	facts []usageRollupFact, resolver *export.PricingResolver,
-) ([]usageDailyContribution, []usageRollupFact, error) {
+	survivors []usageRollupSurvivor, resolver *export.PricingResolver,
+) ([]usageDailyContribution, error) {
 	type key struct {
 		session, date, model, priced, pattern, rateHash string
 		rateOK                                          bool
 		band                                            int
 	}
 	rows := make(map[key]*usageDailyContribution)
-	var exceptions []usageRollupFact
-	for _, fact := range facts {
-		if !fact.Fact.TokenEligible {
-			continue
-		}
-		if isUsageRollupException(fact) {
-			exceptions = append(exceptions, fact)
-			continue
-		}
+	for _, survivor := range survivors {
+		fact := survivor.Fact
 		timestamp := fact.Fact.RawTimestamp
 		if timestamp == "" {
 			timestamp = fact.DedupTimestamp
@@ -203,7 +192,7 @@ func buildUsageDailyContributions(
 			Fact: fact.Fact, Timestamp: timestamp, ReportedModel: fact.Model,
 		}, resolver)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		band := -1
 		if priced.BandThreshold != nil {
@@ -227,16 +216,21 @@ func buildUsageDailyContributions(
 			rows[itemKey] = row
 		}
 		if err := addUsageFactToDailyContribution(row, fact, priced); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
+		discarded, err := addUsageInt64(row.DiscardedSnapshotOutputTokens,
+			survivor.DiscardedSnapshotOutputTokens)
+		if err != nil {
+			return nil, fmt.Errorf("summing discarded snapshot output: %w", err)
+		}
+		row.DiscardedSnapshotOutputTokens = discarded
 	}
 	result := make([]usageDailyContribution, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, *row)
 	}
 	slices.SortFunc(result, compareUsageDailyContribution)
-	slices.SortFunc(exceptions, compareUsageRollupFactIdentity)
-	return result, exceptions, nil
+	return result, nil
 }
 
 func addUsageFactToDailyContribution(
@@ -422,16 +416,16 @@ func loadCursorUsageRollupBuild(
 	if err := rows.Err(); err != nil {
 		return build, err
 	}
-	daily, exceptions, err := buildUsageDailyContributions(facts, nil)
-	if err != nil {
-		return build, err
+	// Cursor rows stay on the exception tier: their keys may collide with
+	// session usage keys and their filters depend on per-row headless state,
+	// so pricing remains deferred to the request-time group resolution.
+	for _, fact := range facts {
+		if usageRollupGeneralKey(fact) == "" {
+			return build, fmt.Errorf(
+				"Cursor usage fact %d has no dedup identity", fact.FactIndex)
+		}
 	}
-	// Cursor rows always carry a dedup key, so pricing remains deferred until
-	// their general-dedup group is resolved with session exceptions.
-	if len(daily) != 0 {
-		return build, fmt.Errorf("Cursor rollup unexpectedly produced daily rows")
-	}
-	build.Exceptions = usageRollupExceptionRows(exceptions)
+	build.Exceptions = usageRollupExceptionRows(facts)
 	return build, nil
 }
 
@@ -439,6 +433,7 @@ func buildUsageRollupSessions(
 	facts []usageRollupFact, sessions map[string]usageQuerySession,
 	versions map[string]usageSourceVersion, fills map[string]usageFillResult,
 	location *time.Location, resolver *export.PricingResolver, pricingHash string,
+	cross usageDedupIdentitySet,
 ) ([]usageRollupBuild, error) {
 	if location == nil {
 		location = time.Local
@@ -459,7 +454,8 @@ func buildUsageRollupSessions(
 			factIndex++
 		}
 		sessionFacts := facts[start:factIndex]
-		daily, exceptions, err := buildUsageDailyContributions(sessionFacts, resolver)
+		survivors, exceptions := classifyUsageRollupFacts(sessionFacts, cross)
+		daily, err := buildUsageDailyContributions(survivors, resolver)
 		if err != nil {
 			return nil, err
 		}

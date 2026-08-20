@@ -70,6 +70,13 @@ CREATE TABLE usage_facts (
     activity_eligible INTEGER NOT NULL CHECK (activity_eligible IN (0, 1)),
     PRIMARY KEY (cached_session_id, fact_index)
 ) WITHOUT ROWID;
+CREATE INDEX usage_facts_claude_identity
+    ON usage_facts (claude_message_id, claude_request_id)
+    WHERE claude_message_id != '' AND claude_request_id != '';
+CREATE INDEX usage_facts_source_uuid
+    ON usage_facts (source_uuid) WHERE source_uuid != '';
+CREATE INDEX usage_facts_usage_dedup_key
+    ON usage_facts (usage_dedup_key) WHERE usage_dedup_key != '';
 CREATE TABLE cursor_usage_facts (
     source_id INTEGER PRIMARY KEY,
     timestamp_ms INTEGER,
@@ -83,6 +90,8 @@ CREATE TABLE cursor_usage_facts (
     is_headless INTEGER NOT NULL CHECK (is_headless IN (0, 1)),
     dedup_key TEXT NOT NULL
 );
+CREATE INDEX cursor_usage_facts_dedup_key
+    ON cursor_usage_facts (dedup_key);
 CREATE TABLE usage_rollup_timezones (
     id INTEGER PRIMARY KEY,
     timezone_key TEXT NOT NULL UNIQUE,
@@ -703,6 +712,8 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 	}
 	for _, index := range []string{
 		"usage_daily_rollups_window", "usage_rollup_exceptions_window",
+		"usage_facts_claude_identity", "usage_facts_source_uuid",
+		"usage_facts_usage_dedup_key", "cursor_usage_facts_dedup_key",
 	} {
 		var exists bool
 		if err := database.QueryRowContext(ctx,

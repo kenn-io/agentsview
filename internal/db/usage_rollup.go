@@ -267,9 +267,13 @@ func (c *usageRollupCoordinator) ensureNow(
 	if err != nil {
 		return nil, usageRollupMetrics{}, err
 	}
+	cross, err := loadUsageRollupCrossIdentities(ctx, conn)
+	if err != nil {
+		return nil, usageRollupMetrics{}, err
+	}
 	builds, err := buildUsageRollupSessions(
 		facts, staleSessions, staleVersions, staleFills, snapshot.location,
-		resolver, pricingHash)
+		resolver, pricingHash, cross)
 	if err != nil {
 		return nil, usageRollupMetrics{}, err
 	}
@@ -295,7 +299,8 @@ func (c *usageRollupCoordinator) ensureNow(
 		return nil, metrics, err
 	}
 	installStarted := time.Now()
-	if err := installUsageRollupBuilds(ctx, conn, identity, snapshot.location, builds); err != nil {
+	if err := installUsageRollupBuilds(
+		ctx, conn, identity, snapshot.location, builds, cross); err != nil {
 		return nil, metrics, err
 	}
 	metrics.InstallDuration = time.Since(installStarted)
@@ -437,12 +442,26 @@ func (c *usageRollupCoordinator) currentMetadata(
 func installUsageRollupBuilds(
 	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
 	location *time.Location, builds []usageRollupBuild,
+	buildCross usageDedupIdentitySet,
 ) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// A fill committing between classification and this install can add a
+	// sibling for an identity that was finalized into a daily row. Abort on
+	// new crossness; crossness that disappeared keeps the conservative
+	// exception rows exact.
+	currentCross, err := loadUsageRollupCrossIdentities(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !currentCross.subsetOf(buildCross) {
+		return fmt.Errorf(
+			"%w: dedup identities gained members during rollup build",
+			errUsageCacheSourceChanged)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO usage_rollup_timezones(
 		timezone_key, timezone_name, interval_fingerprint, last_requested_at

@@ -4,20 +4,54 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"time"
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
+
+// usageRollupSlowRequestThreshold gates the privacy-safe phase-timing log so
+// warm reads stay silent and slow requests explain where the time went.
+const usageRollupSlowRequestThreshold = 2 * time.Second
+
+type usageRollupRequestTimings struct {
+	capture, sweep, fill, read time.Duration
+	rollup                     usageRollupMetrics
+	candidates                 int
+}
+
+func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
+	total := time.Since(started)
+	if total < usageRollupSlowRequestThreshold {
+		return
+	}
+	round := func(value time.Duration) time.Duration {
+		return value.Round(time.Millisecond)
+	}
+	log.Printf("usage rollup read took %s: capture %s, deletion sweep %s, "+
+		"fact fill %s, rollup build %s, rollup install %s, cache read %s "+
+		"(%d candidate sessions; built %d daily rows, %d exception rows in %d groups)",
+		round(total), round(timings.capture), round(timings.sweep),
+		round(timings.fill), round(timings.rollup.BuildDuration),
+		round(timings.rollup.InstallDuration), round(timings.read),
+		timings.candidates, timings.rollup.DailyRows,
+		timings.rollup.ExceptionRows, timings.rollup.ExceptionGroups)
+}
 
 func (db *DB) queryUsageRollups(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
 	includeCursor bool,
 ) (usageQuerySnapshot, usageFactsResult, *export.PricingResolver, error) {
 	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
+		started := time.Now()
+		var timings usageRollupRequestTimings
 		snapshot, captureErr := db.captureUsageQuery(ctx, filter, kind)
 		if captureErr != nil {
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, captureErr
 		}
+		timings.capture = time.Since(started)
+		timings.candidates = len(snapshot.Versions)
 		if !includeCursor || !usageCursorIncluded(filter) {
 			snapshot.CursorHighWater = 0
 		}
@@ -30,10 +64,13 @@ func (db *DB) queryUsageRollups(
 			}
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, generationErr
 		}
+		sweepStarted := time.Now()
 		if sweepErr := cache.sweepDeletionJournal(ctx, db); sweepErr != nil {
 			release()
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, sweepErr
 		}
+		timings.sweep = time.Since(sweepStarted)
+		fillStarted := time.Now()
 		fills, fillErr := cache.fill.Ensure(
 			ctx, snapshot.Versions, snapshot.CursorHighWater,
 		)
@@ -45,9 +82,10 @@ func (db *DB) queryUsageRollups(
 			}
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, fillErr
 		}
+		timings.fill = time.Since(fillStarted)
 		snapshot.dropDeleted(fills)
 		resolver := export.NewPricingResolver(snapshot.PricingRows)
-		installs, _, rollupErr := cache.rollup.Ensure(
+		installs, rollupMetrics, rollupErr := cache.rollup.Ensure(
 			ctx, snapshot, fills, resolver)
 		if rollupErr != nil {
 			release()
@@ -57,6 +95,8 @@ func (db *DB) queryUsageRollups(
 			}
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, rollupErr
 		}
+		timings.rollup = rollupMetrics
+		readStarted := time.Now()
 		var facts usageFactsResult
 		var queryErr error
 		if kind == usageQueryKindActivity {
@@ -68,8 +108,10 @@ func (db *DB) queryUsageRollups(
 			facts, queryErr = cache.usageRollupQuery(
 				ctx, snapshot, filter, installs, resolver)
 		}
+		timings.read = time.Since(readStarted)
 		if queryErr == nil {
 			release()
+			timings.logIfSlow(started)
 			return snapshot, facts, resolver, nil
 		}
 		release()
