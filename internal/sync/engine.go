@@ -2839,6 +2839,29 @@ func (e *Engine) resyncBuildLocked(
 		)
 	}
 
+	// Same trade as FTS: the usage and activity message indexes are
+	// pure derived state, so skip their per-row maintenance during the
+	// bulk load and build each B-tree once before the swap. Read-only
+	// opens require these indexes, so the rebuild must succeed before
+	// the replacement is installed.
+	if err := newDB.DropUsageMessageIndexes(); err != nil {
+		log.Printf("resync: drop temp usage indexes: %v", err)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		stats = SyncStats{
+			Aborted: true,
+			Warnings: []string{
+				"resync failed: drop temp usage indexes: " +
+					err.Error(),
+			},
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+
 	// 3. Point engine at newDB and sync into it. Report discovery as its
 	// own phase first: syncAllLocked walks every source before emitting
 	// its first syncing event, and on a large archive that walk takes
@@ -3365,6 +3388,35 @@ func (e *Engine) resyncBuildLocked(
 			time.Since(tFTS).Round(time.Millisecond),
 		)
 	}
+
+	tUsageIndexes := time.Now()
+	reportResyncPhase(
+		PhaseRebuildingSearch,
+		"Rebuilding usage indexes",
+		"",
+	)
+	if err := ops.rebuildUsageIndexes(newDB); err != nil {
+		log.Printf("resync: rebuild usage indexes: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"usage index rebuild failed, aborting swap: "+
+				err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+	log.Printf(
+		"resync: rebuild usage indexes: %s",
+		time.Since(tUsageIndexes).Round(time.Millisecond),
+	)
 
 	// Persist the fresh skip state into the replacement so the post-swap engine
 	// loads warm state: this engine after an in-process swap, or the daemon

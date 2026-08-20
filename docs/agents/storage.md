@@ -117,6 +117,11 @@ therefore reject an archive that has not first been opened by the matching
 writable version. Treat this as executable/archive version skew, not as a reason
 to mutate the archive from a read-only command.
 
+Full resync drops these indexes in the temporary database during the bulk load
+(the FTS trade: one post-load build instead of per-row B-tree maintenance) and
+must rebuild them before the swap; a failed rebuild aborts the swap because
+read-only opens require the indexes.
+
 ### Transcript usage identity
 
 Token usage, Claude message/request identities, and source UUID participate in

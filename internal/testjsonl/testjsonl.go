@@ -541,6 +541,42 @@ func (b *SessionBuilder) AddClaudeAssistant(
 	return b
 }
 
+// ClaudeAssistantUsage carries the token-usage identity fields for
+// AddClaudeAssistantUsage.
+type ClaudeAssistantUsage struct {
+	MessageID    string
+	RequestID    string
+	Model        string
+	InputTokens  int
+	OutputTokens int
+}
+
+// AddClaudeAssistantUsage appends a Claude assistant message line
+// carrying model, message/request identity, and token usage, the
+// shape billed API turns take in real Claude Code transcripts.
+func (b *SessionBuilder) AddClaudeAssistantUsage(
+	timestamp, text string, usage ClaudeAssistantUsage,
+) *SessionBuilder {
+	m := map[string]any{
+		"type":      "assistant",
+		"timestamp": timestamp,
+		"requestId": usage.RequestID,
+		"message": map[string]any{
+			"id":    usage.MessageID,
+			"model": usage.Model,
+			"content": []map[string]string{
+				{"type": "text", "text": text},
+			},
+			"usage": map[string]any{
+				"input_tokens":  usage.InputTokens,
+				"output_tokens": usage.OutputTokens,
+			},
+		},
+	}
+	b.lines = append(b.lines, mustMarshal(m))
+	return b
+}
+
 // AddCodexMeta appends a Codex session_meta line.
 func (b *SessionBuilder) AddCodexMeta(
 	timestamp, id, cwd, originator string,

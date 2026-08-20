@@ -4060,6 +4060,34 @@ func (db *DB) RebuildFTS() error {
 	return nil
 }
 
+// DropUsageMessageIndexes drops the archive usage and activity
+// message indexes so bulk message loads avoid per-row B-tree
+// maintenance. Call RebuildUsageMessageIndexes before the archive
+// is served again: read-only opens require these indexes.
+func (db *DB) DropUsageMessageIndexes() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	w := db.getWriter()
+	for _, name := range []string{
+		"idx_messages_usage_timestamp",
+		"idx_messages_usage_session_covering",
+		"idx_messages_activity_timestamp",
+	} {
+		if _, err := w.Exec(`DROP INDEX IF EXISTS ` + name); err != nil {
+			return fmt.Errorf("dropping usage index %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// RebuildUsageMessageIndexes recreates the archive usage and
+// activity message indexes after a bulk load that dropped them.
+func (db *DB) RebuildUsageMessageIndexes() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return ensureUsageIndexesLocked(db.getWriter())
+}
+
 // HasFTS checks if Full Text Search is available.
 func (db *DB) HasFTS() bool {
 	// We need to actually try to access the table, because it might exist

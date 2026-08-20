@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -147,6 +148,62 @@ func TestUsageIndexesMigration(t *testing.T) {
 	row := d.reader.Load().QueryRow(`SELECT count(*) FROM sessions`)
 	requireNoError(t, row.Scan(&sessions), "count sessions")
 	require.Equal(t, 1, sessions, "session row must survive migration")
+}
+
+func TestDropAndRebuildUsageMessageIndexes(t *testing.T) {
+	database := testDB(t)
+	usageIndexes := []string{
+		"idx_messages_usage_timestamp",
+		"idx_messages_usage_session_covering",
+		"idx_messages_activity_timestamp",
+	}
+	countIndex := func(name string) int {
+		var got int
+		require.NoError(t, database.getReader().QueryRow(
+			`SELECT count(*) FROM sqlite_master
+			 WHERE type = 'index' AND name = ?`, name,
+		).Scan(&got), "query sqlite_master for %s", name)
+		return got
+	}
+	for _, name := range usageIndexes {
+		require.Equal(t, 1, countIndex(name), "index %s before drop", name)
+	}
+
+	require.NoError(t, database.DropUsageMessageIndexes())
+	for _, name := range usageIndexes {
+		assert.Equal(t, 0, countIndex(name), "index %s after drop", name)
+	}
+
+	insertSession(t, database, "s1", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+	})
+	insertMessages(t, database, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		Content:    "x",
+		Timestamp:  "2026-06-16T10:30:00Z",
+		Model:      "claude-sonnet-4-20250514",
+		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+	})
+
+	require.NoError(t, database.RebuildUsageMessageIndexes())
+	for _, name := range usageIndexes {
+		assert.Equal(t, 1, countIndex(name), "index %s after rebuild", name)
+	}
+	assertUsageIndexColumns(t, database,
+		"idx_messages_usage_session_covering", usageSessionCoveringIndexColumns)
+
+	var indexed int
+	require.NoError(t, database.getReader().QueryRow(
+		`SELECT count(*) FROM messages
+		 INDEXED BY idx_messages_usage_session_covering
+		 WHERE session_id = 's1'
+		   AND token_usage != '' AND model != '' AND model != '<synthetic>'`,
+	).Scan(&indexed), "count via rebuilt covering index")
+	assert.Equal(t, 1, indexed,
+		"row inserted while dropped must be served by the rebuilt index")
 }
 
 func assertUsageIndexColumns(t *testing.T, d *DB, index string, want []string) {

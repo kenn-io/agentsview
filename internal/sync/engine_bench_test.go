@@ -40,8 +40,8 @@ import (
 // AGENTSVIEW_BENCH_SYNC_MESSAGES for larger local runs.
 
 const (
-	defaultBenchSyncSessions = 40
-	defaultBenchSyncMessages = 30
+	defaultBenchSyncSessions = 60
+	defaultBenchSyncMessages = 100
 	benchLargeSessionLines   = 1000
 )
 
@@ -90,9 +90,19 @@ func writeBenchClaudeArchive(
 			builder.AddClaudeUser(ts, fmt.Sprintf(
 				"user message %d in session %d", m, s,
 			))
-			builder.AddClaudeAssistant(ts, fmt.Sprintf(
+			// Unique per-turn identity and token usage, matching real
+			// Claude transcripts: assistant rows must land in the
+			// partial usage/activity indexes or bulk-ingest benchmarks
+			// never exercise their per-row maintenance cost.
+			builder.AddClaudeAssistantUsage(ts, fmt.Sprintf(
 				"assistant reply %d in session %d", m, s,
-			))
+			), testjsonl.ClaudeAssistantUsage{
+				MessageID:    fmt.Sprintf("msg_bench_%04d_%04d", s, m),
+				RequestID:    fmt.Sprintf("req_bench_%04d_%04d", s, m),
+				Model:        "claude-sonnet-4-20250514",
+				InputTokens:  1000 + m,
+				OutputTokens: 500 + m,
+			})
 		}
 		path := filepath.Join(
 			proj, fmt.Sprintf("bench-%04d.jsonl", s),

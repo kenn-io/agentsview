@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -153,4 +154,52 @@ func TestWriteSessionBatchMessageCountDecisionIsSerialized(t *testing.T) {
 	require.Equal(t, 120, shorter.ExistingMessages)
 	require.Equal(t, 24, shorter.IncomingMessages)
 	requireSessionMessageCount(t, d, "session", 120)
+}
+
+func TestWriteSessionBatchInsertSkipsRedundantModifiedTouch(t *testing.T) {
+	d := testDB(t)
+	_, err := d.getWriter().Exec(`
+		CREATE TABLE modified_touch_log(session_id TEXT);
+		CREATE TRIGGER trg_modified_touch_log
+		AFTER UPDATE OF local_modified_at ON sessions
+		BEGIN
+			INSERT INTO modified_touch_log VALUES (NEW.id);
+		END`)
+	require.NoError(t, err, "install touch-counting trigger")
+	touches := func() int {
+		var count int
+		require.NoError(t, d.getReader().QueryRow(
+			`SELECT count(*) FROM modified_touch_log`,
+		).Scan(&count), "count local_modified_at touches")
+		return count
+	}
+	resetTouches := func() {
+		_, err := d.getWriter().Exec(`DELETE FROM modified_touch_log`)
+		require.NoError(t, err, "reset touch log")
+	}
+
+	// A newly inserted session already fires the sync_marker INSERT
+	// trigger, so its revision bump must not touch local_modified_at.
+	// Replacing an existing transcript must add exactly that one touch
+	// so push targets re-select the session.
+	_, err = d.WriteSessionBatchAtomic([]SessionBatchWrite{
+		messageCountWrite("session", 4),
+	})
+	require.NoError(t, err)
+	insertTouches := touches()
+
+	resetTouches()
+	_, err = d.WriteSessionBatchAtomic([]SessionBatchWrite{
+		messageCountWrite("session", 6),
+	})
+	require.NoError(t, err)
+	require.Equal(t, insertTouches+1, touches(),
+		"revision bump must touch local_modified_at only for replacements")
+
+	var modifiedAt sql.NullString
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT local_modified_at FROM sessions WHERE id = 'session'`,
+	).Scan(&modifiedAt), "read local_modified_at")
+	require.True(t, modifiedAt.Valid && modifiedAt.String != "",
+		"batch-written session must carry local_modified_at")
 }

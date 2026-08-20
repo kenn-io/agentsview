@@ -452,7 +452,11 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if transcriptChanged {
-		if err := bumpTranscriptRevisionTx(tx, write.Session.ID); err != nil {
+		bump := bumpTranscriptRevisionTx
+		if !sessionExists {
+			bump = bumpInsertedTranscriptRevisionTx
+		}
+		if err := bump(tx, write.Session.ID); err != nil {
 			return 0, err
 		}
 	}

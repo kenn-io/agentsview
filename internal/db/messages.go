@@ -1278,23 +1278,46 @@ func replaceSessionMessagesTx(
 	return restorePinsTx(tx, sessionID, pins)
 }
 
+// bumpTranscriptRevisionTx advances the transcript revision for a
+// mutated existing session. Touching local_modified_at fires the
+// sync_marker trigger so push targets re-select the session.
 func bumpTranscriptRevisionTx(tx *sql.Tx, sessionID string) error {
+	return bumpTranscriptRevision(tx, sessionID, true)
+}
+
+// bumpInsertedTranscriptRevisionTx advances the revision for a session
+// inserted in this same transaction. The INSERT trigger already stamped
+// sync_marker, so skipping the local_modified_at touch avoids a
+// redundant trigger recompute on every bulk-loaded session.
+func bumpInsertedTranscriptRevisionTx(tx *sql.Tx, sessionID string) error {
+	return bumpTranscriptRevision(tx, sessionID, false)
+}
+
+func bumpTranscriptRevision(
+	tx *sql.Tx, sessionID string, touchModified bool,
+) error {
 	// Advancing the revision also revokes secret-scan freshness in the same
 	// transaction: the mutated transcript has content the recorded scan
 	// never saw, and consumers that require a current scan (extraction's
 	// privacy boundary) must fail closed until a rescan re-stamps it. The
 	// incremental sync path re-scans in a separate later write; the atomic
 	// replace path re-stamps inside this same transaction.
-	result, err := tx.Exec(
-		`UPDATE sessions
+	query := `UPDATE sessions
 		 SET transcript_revision = CAST(
 			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
 		 ),
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		     secrets_rules_version = ''
-		 WHERE id = ?`,
-		sessionID,
-	)
+		 WHERE id = ?`
+	if !touchModified {
+		query = `UPDATE sessions
+		 SET transcript_revision = CAST(
+			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
+		 ),
+		     secrets_rules_version = ''
+		 WHERE id = ?`
+	}
+	result, err := tx.Exec(query, sessionID)
 	if err != nil {
 		return fmt.Errorf(
 			"bumping transcript revision for %s: %w", sessionID, err,

@@ -77,6 +77,7 @@ func (e *RebuildContributorError) Unwrap() error { return e.Err }
 
 type rebuildOperations struct {
 	rebuildFTS                        func(*db.DB) error
+	rebuildUsageIndexes               func(*db.DB) error
 	reopen                            func(*db.DB) error
 	listActiveWorktreeMappingMachines func(context.Context, *db.DB) ([]string, error)
 	applyWorktreeMappings             func(context.Context, *db.DB, string) (db.ApplyWorktreeProjectMappingsResult, error)
@@ -84,7 +85,10 @@ type rebuildOperations struct {
 
 var productionRebuildOperations = rebuildOperations{
 	rebuildFTS: func(database *db.DB) error { return database.RebuildFTS() },
-	reopen:     func(database *db.DB) error { return database.Reopen() },
+	rebuildUsageIndexes: func(database *db.DB) error {
+		return database.RebuildUsageMessageIndexes()
+	},
+	reopen: func(database *db.DB) error { return database.Reopen() },
 	listActiveWorktreeMappingMachines: func(
 		ctx context.Context, database *db.DB,
 	) ([]string, error) {
@@ -100,6 +104,9 @@ var productionRebuildOperations = rebuildOperations{
 func (ops rebuildOperations) withDefaults() rebuildOperations {
 	if ops.rebuildFTS == nil {
 		ops.rebuildFTS = productionRebuildOperations.rebuildFTS
+	}
+	if ops.rebuildUsageIndexes == nil {
+		ops.rebuildUsageIndexes = productionRebuildOperations.rebuildUsageIndexes
 	}
 	if ops.reopen == nil {
 		ops.reopen = productionRebuildOperations.reopen
