@@ -3,11 +3,12 @@
   import { analytics } from "../../stores/analytics.svelte.js";
   import { getLocale, m } from "../../i18n/index.js";
 
-  const CELL_SIZE = 17;
   const CELL_GAP = 2;
-  const CELL_STEP = CELL_SIZE + CELL_GAP;
+  const CELL_HEIGHT = 17;
+  const ROW_STEP = CELL_HEIGHT + CELL_GAP;
   const ROW_LABEL_WIDTH = 29;
   const COL_LABEL_HEIGHT = 18;
+  const FALLBACK_WIDTH = 480;
   const DAYS = [
     { label: "Sun", dayIdx: 6 },
     { label: "Mon", dayIdx: 0 },
@@ -102,8 +103,13 @@
     return rows;
   });
 
-  const svgWidth = ROW_LABEL_WIDTH + 24 * CELL_STEP + 4;
-  const svgHeight = COL_LABEL_HEIGHT + 7 * CELL_STEP + 4;
+  let availableWidth = $state(0);
+  const chartWidth = $derived(availableWidth || FALLBACK_WIDTH);
+  const cellStep = $derived(
+    Math.max((chartWidth - ROW_LABEL_WIDTH - 4) / 24, 1),
+  );
+  const cellWidth = $derived(Math.max(cellStep - CELL_GAP, 1));
+  const svgHeight = COL_LABEL_HEIGHT + 7 * ROW_STEP + 4;
 
   function handleCellHover(
     e: MouseEvent,
@@ -168,9 +174,9 @@
       </button>
     </div>
   {:else if grid}
-    <div class="how-scroll">
+    <div class="how-chart" bind:clientWidth={availableWidth}>
       <Chart
-        width={svgWidth}
+        width={chartWidth}
         height={svgHeight}
         padding={0}
       >
@@ -178,7 +184,7 @@
           {#each [0, 3, 6, 9, 12, 15, 18, 21] as hour}
             <Text
               value={hour}
-              x={hour * CELL_STEP + ROW_LABEL_WIDTH + CELL_SIZE / 2}
+              x={hour * cellStep + ROW_LABEL_WIDTH + cellWidth / 2}
               y={COL_LABEL_HEIGHT - 4}
               class={`hour-label${analytics.selectedHour === hour ? " active-label" : ""}`}
               textAnchor="middle"
@@ -198,7 +204,7 @@
             <Text
               value={row.day}
               x={ROW_LABEL_WIDTH - 4}
-              y={rowIdx * CELL_STEP + COL_LABEL_HEIGHT + CELL_SIZE - 2}
+              y={rowIdx * ROW_STEP + COL_LABEL_HEIGHT + CELL_HEIGHT - 2}
               class={`day-label${analytics.selectedDow === row.dayIdx ? " active-label" : ""}`}
               textAnchor="end"
               role="button"
@@ -214,10 +220,10 @@
 
             {#each row.hours as cell}
               <Rect
-                x={cell.hour * CELL_STEP + ROW_LABEL_WIDTH}
-                y={rowIdx * CELL_STEP + COL_LABEL_HEIGHT}
-                width={CELL_SIZE}
-                height={CELL_SIZE}
+                x={cell.hour * cellStep + ROW_LABEL_WIDTH}
+                y={rowIdx * ROW_STEP + COL_LABEL_HEIGHT}
+                width={cellWidth}
+                height={CELL_HEIGHT}
                 rx={2}
                 fill={levelColor(cell.level)}
                 class={`how-cell${isDimmed(row.dayIdx, cell.hour) ? " dimmed" : ""}`}
@@ -259,9 +265,9 @@
     flex: 1;
   }
 
-  .how-scroll {
-    overflow-x: auto;
-    padding-bottom: 4px;
+  .how-chart {
+    width: 100%;
+    min-width: 0;
   }
 
   .how-container :global(.how-svg) {

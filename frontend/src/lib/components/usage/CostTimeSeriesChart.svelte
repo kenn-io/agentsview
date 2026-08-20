@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Area, Axis, Bar, Chart, Grid, Layer } from "layerchart";
+  import { Area, Bar, Chart, Layer } from "layerchart";
   import { scaleBand, scalePoint } from "d3-scale";
+  import LargeChartFrame from "../shared/LargeChartFrame.svelte";
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
@@ -310,40 +311,30 @@
         height={CHART_H + 20}
       >
         <Layer class="chart-svg">
-          <Grid x={false} y yTicks={yTickValues} class="grid-line" />
-          <Axis
-            placement="left"
-            ticks={yTickValues}
-            format={(value) => isTokenMode
+          <LargeChartFrame
+            xTicks={xTicks}
+            yTicks={yTickValues}
+            formatX={(value) => dateLabel(String(value))}
+            formatY={(value) => isTokenMode
               ? fmtTokenYLabel(Number(value))
               : fmtCostYLabel(Number(value))}
-            tickMarks={false}
-            rule={false}
-            classes={{ tickLabel: "y-label" }}
-          />
-          <Axis
-            placement="bottom"
-            ticks={xTicks}
-            format={(value) => dateLabel(String(value))}
-            tickMarks={false}
-            rule={false}
-            classes={{ tickLabel: "x-label" }}
-          />
-          {#each stackSeries as item (item.key)}
-            {#if seriesData.points.length === 1}
-              <Bar
-                data={seriesData.points[0]!}
-                seriesKey={item.key}
-                fill={item.color}
-                radius={1}
-              />
-            {:else}
-              <Area
-                seriesKey={item.key}
-                fill={item.color}
-              />
-            {/if}
-          {/each}
+          >
+            {#each stackSeries as item (item.key)}
+              {#if seriesData.points.length === 1}
+                <Bar
+                  data={seriesData.points[0]!}
+                  seriesKey={item.key}
+                  fill={item.color}
+                  radius={1}
+                />
+              {:else}
+                <Area
+                  seriesKey={item.key}
+                  fill={item.color}
+                />
+              {/if}
+            {/each}
+          </LargeChartFrame>
         </Layer>
       </Chart>
     </div>
@@ -418,25 +409,6 @@
 
   .chart-container :global(.chart-svg) {
     display: block;
-  }
-
-  .chart-container :global(.grid-line) {
-    stroke: var(--border-muted);
-    stroke-opacity: 0.35;
-    stroke-width: 1;
-    stroke-dasharray: 2 2;
-  }
-
-  .chart-container :global(.y-label) {
-    font-size: 9px;
-    fill: var(--text-muted);
-    font-family: var(--font-mono);
-  }
-
-  .chart-container :global(.x-label) {
-    font-size: 9px;
-    fill: var(--text-muted);
-    font-family: var(--font-sans);
   }
 
   .legend {

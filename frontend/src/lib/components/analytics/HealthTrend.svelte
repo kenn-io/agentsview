@@ -1,7 +1,10 @@
 <script lang="ts">
+  import { Bar, Chart, Layer } from "layerchart";
+  import { scaleBand } from "d3-scale";
   import type { SignalsTrendBucket } from "../../api/types/analytics.js";
   import { getGradeStyle, scoreToGrade } from "../../utils/grade.js";
   import { m } from "../../i18n/index.js";
+  import LargeChartFrame from "../shared/LargeChartFrame.svelte";
 
   interface Props {
     trend: SignalsTrendBucket[];
@@ -9,49 +12,91 @@
 
   let { trend }: Props = $props();
 
-  const maxScore = 100;
+  const chartData = $derived(
+    trend.map((bucket) => ({
+      ...bucket,
+      value: bucket.avg_health_score ?? 50,
+      color: bucket.avg_health_score != null
+        ? getGradeStyle(scoreToGrade(bucket.avg_health_score)).bg
+        : getGradeStyle(null).bg,
+    })),
+  );
+
+  const xTicks = $derived(
+    trend.length > 1
+      ? [trend[0]!.date, trend[trend.length - 1]!.date]
+      : trend.map((bucket) => bucket.date),
+  );
+
+  let tooltip = $state<{
+    x: number;
+    y: number;
+    text: string;
+  } | null>(null);
+
+  function barTitle(bucket: SignalsTrendBucket): string {
+    const score = bucket.avg_health_score;
+    return `${bucket.date}: ${score != null
+      ? Math.round(score)
+      : m.analytics_health_trend_no_scored_sessions()} (${m.analytics_session_shape_session_count({
+        count: bucket.session_count,
+        countLabel: bucket.session_count.toLocaleString(),
+      })})`;
+  }
+
+  function showTooltip(event: PointerEvent, bucket: SignalsTrendBucket) {
+    const rect = (event.currentTarget as SVGElement).getBoundingClientRect();
+    tooltip = {
+      x: rect.left + rect.width / 2,
+      y: rect.top - 4,
+      text: barTitle(bucket),
+    };
+  }
 </script>
 
 <div class="health-trend">
   <div class="chart-title">{m.analytics_health_trend_title()}</div>
   {#if trend.length > 0}
-    <div class="chart-area">
-      <div class="y-axis">
-        <span>100</span>
-        <span>50</span>
-        <span>0</span>
+    <Chart
+      data={chartData}
+      x="date"
+      y="value"
+      xScale={scaleBand().paddingInner(0.16).paddingOuter(0.04)}
+      yDomain={[0, 100]}
+      padding={{ top: 8, right: 12, bottom: 22, left: 32 }}
+      height={126}
+      class="health-chart"
+      role="img"
+      aria-label={m.analytics_health_trend_title()}
+    >
+      <Layer>
+        <LargeChartFrame
+          {xTicks}
+          yTicks={[0, 50, 100]}
+          formatX={(value) => String(value)}
+          formatY={(value) => String(value)}
+        >
+          {#each chartData as bucket (bucket.date)}
+            <Bar
+              data={bucket}
+              class="health-bar"
+              fill={bucket.color}
+              radius={2}
+              onpointerenter={(event) => showTooltip(event, bucket)}
+              onpointerleave={() => (tooltip = null)}
+            />
+          {/each}
+        </LargeChartFrame>
+      </Layer>
+    </Chart>
+    {#if tooltip}
+      <div
+        class="tooltip"
+        style="left: {tooltip.x}px; top: {tooltip.y}px;"
+      >
+        {tooltip.text}
       </div>
-      <div class="bars">
-        {#each trend as bucket}
-          {@const score = bucket.avg_health_score}
-          {@const height = score != null
-            ? (score / maxScore) * 100
-            : 50}
-          {@const style = score != null
-            ? getGradeStyle(scoreToGrade(score))
-            : getGradeStyle(null)}
-          <div
-            class="bar"
-            style:height="{height}%"
-            style:background={style.bg}
-            title="{bucket.date}: {score != null
-              ? Math.round(score)
-              : m.analytics_health_trend_no_scored_sessions()} ({m.analytics_session_shape_session_count({
-                count: bucket.session_count,
-                countLabel: bucket.session_count.toLocaleString(),
-              })})"
-          ></div>
-        {/each}
-      </div>
-    </div>
-    <div class="x-axis">
-      {#if trend.length > 0}
-        <span>{trend[0]!.date}</span>
-      {/if}
-      {#if trend.length > 1}
-        <span>{trend[trend.length - 1]!.date}</span>
-      {/if}
-    </div>
+    {/if}
     <div class="chart-caption">
       {m.analytics_health_trend_caption()}
     </div>
@@ -67,43 +112,21 @@
     color: var(--text-primary);
     margin-bottom: 10px;
   }
-  .chart-area {
-    display: flex;
-    gap: 4px;
-    height: 100px;
+  .health-trend :global(.health-chart) {
+    display: block;
+    width: 100%;
   }
-  .y-axis {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
+  .tooltip {
+    position: fixed;
+    transform: translateX(-50%) translateY(-100%);
+    padding: 4px 8px;
+    background: var(--text-primary);
+    color: var(--bg-primary);
     font-size: 10px;
-    color: var(--text-muted);
-    width: 24px;
-    text-align: right;
-    padding-right: 4px;
-  }
-  .bars {
-    flex: 1;
-    display: flex;
-    align-items: flex-end;
-    gap: 2px;
-    border-bottom: 1px solid var(--border-muted);
-    border-left: 1px solid var(--border-muted);
-    padding: 0 2px;
-  }
-  .bar {
-    flex: 1;
-    border-radius: 2px 2px 0 0;
-    min-width: 4px;
-    transition: height 0.3s ease;
-  }
-  .x-axis {
-    display: flex;
-    justify-content: space-between;
-    padding-left: 28px;
-    padding-top: 4px;
-    font-size: 10px;
-    color: var(--text-muted);
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: var(--z-tooltip);
   }
   .chart-caption {
     font-size: 11px;

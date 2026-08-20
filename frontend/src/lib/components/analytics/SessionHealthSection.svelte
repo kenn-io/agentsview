@@ -142,7 +142,8 @@
       <Card level="default" padding="none" class="chart-panel">
         <div class="mini-table">
           <div class="table-title">{m.analytics_by_agent()}</div>
-          <table>
+          <div class="table-scroll">
+            <table>
             <thead>
               <tr>
                 <th>{m.analytics_col_agent()}</th>
@@ -169,13 +170,15 @@
                 </tr>
               {/each}
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       </Card>
       <Card level="default" padding="none" class="chart-panel">
         <div class="mini-table">
           <div class="table-title">{m.analytics_by_project()}</div>
-          <table>
+          <div class="table-scroll">
+            <table>
             <thead>
               <tr>
                 <th>{m.analytics_col_project()}</th>
@@ -202,7 +205,8 @@
                 </tr>
               {/each}
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       </Card>
     </div>
@@ -257,6 +261,7 @@
   .chart-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    align-items: start;
     gap: 12px;
   }
   .chart-grid :global(.chart-panel) {
@@ -266,7 +271,15 @@
     grid-column: 1 / -1;
   }
   .mini-table {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: 320px;
     font-size: 12px;
+  }
+  .table-scroll {
+    min-height: 0;
+    overflow: auto;
   }
   .table-title {
     font-weight: 600;

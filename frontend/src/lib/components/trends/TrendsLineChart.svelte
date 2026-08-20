@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Axis, Chart, Circle, Grid, Layer, Spline } from "layerchart";
+  import { Chart, Circle, Layer, Spline } from "layerchart";
   import { scalePoint } from "d3-scale";
+  import LargeChartFrame from "../shared/LargeChartFrame.svelte";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import type {
     TrendsBucket,
@@ -95,59 +96,49 @@
         : m.trends_chart_aria()}
     >
       <Layer>
-        <Grid x={false} y class="grid" />
-        <Axis
-          placement="left"
-          ticks={5}
-          format={(value) => formatMetric(Number(value))}
-          tickMarks={false}
-          rule={false}
-          classes={{ tickLabel: "y-label" }}
-        />
-        <Axis
-          placement="bottom"
-          ticks={xTicks}
-          format={(value) => labelFor(String(value))}
-          tickMarks={false}
-          rule={false}
-          classes={{ tickLabel: "x-label" }}
-        />
-        {#each chartSeries as item (item.term)}
-          <Spline
-            data={item.points}
-            x="date"
-            y="value"
-            fill="none"
-            stroke={item.color}
-            strokeWidth={activeTerm === item.term ? 3 : 2}
-            strokeOpacity={activeTerm !== null && activeTerm !== item.term ? 0.24 : 1}
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-          <Spline
-            data={item.points}
-            x="date"
-            y="value"
-            fill="none"
-            stroke="transparent"
-            strokeWidth={16}
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            data-trend-hit={item.term}
-            onmouseenter={() => onHover(item.term)}
-            onmouseleave={() => onHover(null)}
-          />
-          {#if activeTerm === item.term}
-            <Circle
+        <LargeChartFrame
+          xTicks={xTicks}
+          yTicks={5}
+          formatX={(value) => labelFor(String(value))}
+          formatY={(value) => formatMetric(Number(value))}
+        >
+          {#each chartSeries as item (item.term)}
+            <Spline
               data={item.points}
               x="date"
               y="value"
-              r={3}
-              fill={item.color}
-              pointer-events="none"
+              fill="none"
+              stroke={item.color}
+              strokeWidth={activeTerm === item.term ? 3 : 2}
+              strokeOpacity={activeTerm !== null && activeTerm !== item.term ? 0.24 : 1}
+              stroke-linecap="round"
+              stroke-linejoin="round"
             />
-          {/if}
-        {/each}
+            <Spline
+              data={item.points}
+              x="date"
+              y="value"
+              fill="none"
+              stroke="transparent"
+              strokeWidth={16}
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              data-trend-hit={item.term}
+              onmouseenter={() => onHover(item.term)}
+              onmouseleave={() => onHover(null)}
+            />
+            {#if activeTerm === item.term}
+              <Circle
+                data={item.points}
+                x="date"
+                y="value"
+                r={3}
+                fill={item.color}
+                pointer-events="none"
+              />
+            {/if}
+          {/each}
+        </LargeChartFrame>
       </Layer>
     </Chart>
     {#if !hasData}
@@ -173,18 +164,6 @@
     height: 300px;
   }
 
-  .chart-wrap :global(.grid) {
-    stroke: var(--border-muted);
-    stroke-width: 1;
-  }
-
-  .chart-wrap :global(.y-label) {
-    fill: var(--text-muted);
-    font-size: 10px;
-    text-anchor: end;
-    font-variant-numeric: tabular-nums;
-  }
-
   .y-title {
     position: absolute;
     top: 8px;
@@ -194,12 +173,6 @@
     font-size: 10px;
     font-weight: 600;
     text-anchor: start;
-  }
-
-  .chart-wrap :global(.x-label) {
-    fill: var(--text-muted);
-    font-size: 10px;
-    text-anchor: middle;
   }
 
   .empty,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Chart, Circle, Layer, Line, Spline, Text } from "layerchart";
+  import { Chart, Circle, Layer, Line, Spline } from "layerchart";
   import { scalePoint } from "d3-scale";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
@@ -7,6 +7,7 @@
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import { parseLocalDate } from "../../utils/dates.js";
   import { chartSeriesColorMap } from "../../utils/chartPalette.js";
+  import LargeChartFrame from "../shared/LargeChartFrame.svelte";
 
   // Soft cap from the series-count ladder: past six skills the tail folds
   // into "Other" instead of generating more hues.
@@ -16,7 +17,8 @@
   const PLOT_TOP = 8;
   const LABEL_HEIGHT = 18;
   const SVG_HEIGHT = PLOT_TOP + PLOT_HEIGHT + LABEL_HEIGHT;
-  const PAD_X = 10;
+  const PLOT_LEFT = 40;
+  const PLOT_RIGHT = 10;
   const MAX_X_LABELS = 14;
 
   const trendEntries = $derived(analytics.skills?.trend ?? []);
@@ -126,9 +128,9 @@
 
   function xAt(index: number): number {
     const n = trendEntries.length;
-    const span = Math.max(chartWidth - 2 * PAD_X, 0);
-    if (n <= 1) return PAD_X + span / 2;
-    return PAD_X + (index * span) / (n - 1);
+    const span = Math.max(chartWidth - PLOT_LEFT - PLOT_RIGHT, 0);
+    if (n <= 1) return PLOT_LEFT + span / 2;
+    return PLOT_LEFT + (index * span) / (n - 1);
   }
 
   function seriesColor(key: string): string {
@@ -139,8 +141,7 @@
     Math.max(Math.ceil(trendEntries.length / MAX_X_LABELS), 1),
   );
 
-  function bucketLabel(date: string, index: number): string {
-    if (index % labelStep !== 0) return "";
+  function bucketLabel(date: string): string {
     const parsed = parseLocalDate(date);
     if (!parsed) return date;
     if (analytics.skillsGranularity === "month") {
@@ -165,13 +166,15 @@
     });
   }
 
-  // Edge labels anchor inward so they never clip at the chart bounds.
-  function labelAnchor(index: number): string {
-    const x = xAt(index);
-    if (x < 30) return "start";
-    if (x > chartWidth - 30) return "end";
-    return "middle";
-  }
+  const xTicks = $derived(
+    trendEntries
+      .filter((_, index) =>
+        index === 0 ||
+        index === trendEntries.length - 1 ||
+        index % labelStep === 0
+      )
+      .map((entry) => entry.date),
+  );
 
   // Crosshair: snap the pointer to the nearest bucket and read out every
   // visible series at that X in one tooltip.
@@ -185,9 +188,9 @@
       e.currentTarget as SVGElement
     ).getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const span = Math.max(chartWidth - 2 * PAD_X, 1);
+    const span = Math.max(chartWidth - PLOT_LEFT - PLOT_RIGHT, 1);
     const index = Math.min(
-      Math.max(Math.round(((x - PAD_X) / span) * (n - 1)), 0),
+      Math.max(Math.round(((x - PLOT_LEFT) / span) * (n - 1)), 0),
       n - 1,
     );
     hoverIndex = index;
@@ -325,7 +328,7 @@
         y="value"
         xScale={scalePoint()}
         yDomain={[0, maxValue]}
-        xRange={[PAD_X, chartWidth - PAD_X]}
+        xRange={[PLOT_LEFT, chartWidth - PLOT_RIGHT]}
         yRange={[PLOT_TOP + PLOT_HEIGHT, PLOT_TOP]}
         padding={0}
         width={chartWidth}
@@ -333,68 +336,54 @@
         aria-hidden="true"
       >
         <Layer class="chart-svg" aria-hidden="true">
-          <Line
-            class="baseline"
-            x1={PAD_X}
-            y1={PLOT_TOP + PLOT_HEIGHT}
-            x2={chartWidth - PAD_X}
-            y2={PLOT_TOP + PLOT_HEIGHT}
-          />
-
-          {#each chartSeries as series (series.key)}
-            {#if trendEntries.length > 1}
-              <Spline
-                class="series-line"
-                data={series.points}
-                x="date"
-                y="value"
-                style={`stroke: ${seriesColor(series.key)}`}
-                fill="none"
-              />
-            {:else}
-              <Circle
-                class="series-marker"
-                data={series.points}
-                x="date"
-                y="value"
-                r={4}
-                fill={seriesColor(series.key)}
-              />
-            {/if}
-          {/each}
-
-          {#if hoverIndex !== null}
-            <Line
-              class="crosshair"
-              x1={xAt(hoverIndex)}
-              y1={PLOT_TOP}
-              x2={xAt(hoverIndex)}
-              y2={PLOT_TOP + PLOT_HEIGHT}
-            />
+          <LargeChartFrame
+            {xTicks}
+            yTicks={4}
+            formatX={(value) => bucketLabel(String(value))}
+            formatY={(value) => Number(value).toLocaleString(getLocale())}
+          >
             {#each chartSeries as series (series.key)}
-              <Circle
-                class="series-marker"
-                data={[series.points[hoverIndex]]}
-                x="date"
-                y="value"
-                r={4}
-                fill={seriesColor(series.key)}
-              />
+              {#if trendEntries.length > 1}
+                <Spline
+                  class="series-line"
+                  data={series.points}
+                  x="date"
+                  y="value"
+                  style={`stroke: ${seriesColor(series.key)}`}
+                  fill="none"
+                />
+              {:else}
+                <Circle
+                  class="series-marker"
+                  data={series.points}
+                  x="date"
+                  y="value"
+                  r={4}
+                  fill={seriesColor(series.key)}
+                />
+              {/if}
             {/each}
-          {/if}
 
-          {#each trendEntries as entry, index (entry.date)}
-            {@const label = bucketLabel(entry.date, index)}
-            {#if label}
-              <Text
-                value={label}
-                class="x-label"
-                x={xAt(index)}
-                y={SVG_HEIGHT - 4}
-                textAnchor={labelAnchor(index) as "start" | "middle" | "end"}
+            {#if hoverIndex !== null}
+              <Line
+                class="crosshair"
+                x1={xAt(hoverIndex)}
+                y1={PLOT_TOP}
+                x2={xAt(hoverIndex)}
+                y2={PLOT_TOP + PLOT_HEIGHT}
               />
+              {#each chartSeries as series (series.key)}
+                <Circle
+                  class="series-marker"
+                  data={[series.points[hoverIndex]]}
+                  x="date"
+                  y="value"
+                  r={4}
+                  fill={seriesColor(series.key)}
+                />
+              {/each}
             {/if}
-          {/each}
+          </LargeChartFrame>
         </Layer>
       </Chart>
       <table id="skill-trend-data" class="kit-sr-only">
@@ -534,11 +523,6 @@
     display: block;
   }
 
-  .trend-container :global(.baseline) {
-    stroke: var(--border-muted);
-    stroke-width: 1;
-  }
-
   .trend-container :global(.series-line) {
     fill: none;
     stroke-width: 2;
@@ -559,11 +543,6 @@
     stroke-dasharray: none;
     opacity: 0.5;
     pointer-events: none;
-  }
-
-  .trend-container :global(.x-label) {
-    font-size: 8px;
-    fill: var(--text-muted);
   }
 
   .tooltip {

@@ -4,9 +4,9 @@
   import type { HeatmapMetric } from "../../stores/analytics.svelte.js";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
 
-  const CELL_SIZE = 16;
-  const CELL_GAP = 2;
-  const CELL_STEP = CELL_SIZE + CELL_GAP;
+  const MAX_CELL_SIZE = 16;
+  const MAX_CELL_GAP = 2;
+  const MAX_CELL_STEP = MAX_CELL_SIZE + MAX_CELL_GAP;
   const LABEL_WIDTH = 36;
   const HEADER_HEIGHT = 16;
   const DAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""];
@@ -58,6 +58,7 @@
     y: number;
     text: string;
   } | null>(null);
+  let chartAreaWidth = $state(0);
 
   function handleCellHover(
     e: MouseEvent,
@@ -130,10 +131,26 @@
     return { cols, months: monthLabels };
   });
 
+  const cellStep = $derived.by(() => {
+    if (grid.cols.length === 0 || chartAreaWidth === 0) {
+      return MAX_CELL_STEP;
+    }
+    return Math.min(
+      MAX_CELL_STEP,
+      Math.max(
+        1,
+        (chartAreaWidth - LABEL_WIDTH - 4) / grid.cols.length,
+      ),
+    );
+  });
+  const cellGap = $derived(Math.min(MAX_CELL_GAP, cellStep * 0.2));
+  const cellSize = $derived(Math.max(1, cellStep - cellGap));
   const svgWidth = $derived(
-    grid.cols.length * CELL_STEP + LABEL_WIDTH + 4,
+    grid.cols.length * cellStep + LABEL_WIDTH + 4,
   );
-  const svgHeight = 7 * CELL_STEP + HEADER_HEIGHT + 4;
+  const svgHeight = $derived(
+    7 * cellStep + HEADER_HEIGHT + 4,
+  );
   const supportsOutputTokens = $derived(
     analytics.summary?.total_output_tokens !== undefined &&
       analytics.summary?.token_reporting_sessions !== undefined,
@@ -184,7 +201,7 @@
     {#if analytics.heatmap?.entries_from && analytics.heatmap.entries_from > analytics.from}
       <div class="clamp-note">{m.analytics_heatmap_showing_recent_year()}</div>
     {/if}
-    <div class="heatmap-scroll">
+    <div class="heatmap-scroll" bind:clientWidth={chartAreaWidth}>
       <Chart
         width={svgWidth}
         height={svgHeight}
@@ -196,7 +213,7 @@
               <Text
                 value={label}
                 x={LABEL_WIDTH - 4}
-                y={i * CELL_STEP + HEADER_HEIGHT + CELL_SIZE - 1}
+                y={i * cellStep + HEADER_HEIGHT + cellSize - 1}
                 class="day-label"
                 textAnchor="end"
               />
@@ -206,7 +223,7 @@
           {#each grid.months as month}
             <Text
               value={month.label}
-              x={month.col * CELL_STEP + LABEL_WIDTH}
+              x={month.col * cellStep + LABEL_WIDTH}
               y={HEADER_HEIGHT - 4}
               class="month-label"
             />
@@ -215,10 +232,10 @@
           {#each grid.cols as col, colIdx}
             {#each col as cell}
               <Rect
-                x={colIdx * CELL_STEP + LABEL_WIDTH}
-                y={cell.dayOfWeek * CELL_STEP + HEADER_HEIGHT}
-                width={CELL_SIZE}
-                height={CELL_SIZE}
+                x={colIdx * cellStep + LABEL_WIDTH}
+                y={cell.dayOfWeek * cellStep + HEADER_HEIGHT}
+                width={cellSize}
+                height={cellSize}
                 rx={2}
                 fill={levelColor(cell.level)}
                 class={`heatmap-cell${cell.value > 0 || analytics.selectedDate === cell.date ? " clickable" : ""}${analytics.selectedDate === cell.date ? " selected" : ""}`}
@@ -300,8 +317,9 @@
   }
 
   .heatmap-scroll {
-    overflow-x: auto;
+    overflow: hidden;
     padding-bottom: 4px;
+    min-width: 0;
   }
 
   .heatmap-container :global(.heatmap-svg) {

@@ -1,8 +1,21 @@
 <script lang="ts">
-  import { Axis, Bar, Chart, Grid, Layer } from "layerchart";
-  import { scaleBand } from "d3-scale";
+  import { Bar, BarChart } from "layerchart";
+  import { scaleUtc } from "d3-scale";
+  import {
+    utcDay,
+    utcMonday,
+    utcMonth,
+    type TimeInterval,
+  } from "d3-time";
   import { analytics } from "../../stores/analytics.svelte.js";
-  import { addDays, endOfMonth } from "../../utils/dates.js";
+  import {
+    addDays,
+    endOfMonth,
+    localDateStr,
+    parseLocalDate,
+    startOfIsoWeek,
+    startOfMonth,
+  } from "../../utils/dates.js";
   import {
     formatDateTime,
     getLocale,
@@ -10,9 +23,7 @@
   } from "../../i18n/index.js";
 
   type Metric = "messages" | "sessions";
-  const MIN_BAR_WIDTH = 6;
-  const BAR_GAP = 2;
-  const HORIZONTAL_PADDING = 48;
+  const MAX_DAY_RANGE = 120;
   interface Props {
     onDateRangeChange?: (from: string, to: string) => void;
   }
@@ -21,41 +32,122 @@
 
   let metric = $state<Metric>("messages");
   let chartAreaWidth = $state(0);
+  const selectedRange = $derived(analytics.selectedActivityRange);
+
+  const dayRangeCount = $derived.by(() => {
+    const from = Date.parse(`${analytics.from}T00:00:00Z`);
+    const to = Date.parse(`${analytics.to}T00:00:00Z`);
+    if (Number.isNaN(from) || Number.isNaN(to) || to < from) return 0;
+    return Math.floor((to - from) / 86_400_000) + 1;
+  });
+  const dayViewDisabled = $derived(dayRangeCount > MAX_DAY_RANGE);
+
+  $effect(() => {
+    if (dayViewDisabled && analytics.granularity === "day") {
+      analytics.setGranularity("week");
+    }
+  });
+
+  function bucketStart(date: string): string {
+    if (analytics.granularity === "week") {
+      return startOfIsoWeek(date);
+    }
+    if (analytics.granularity === "month") {
+      return startOfMonth(date);
+    }
+    return date;
+  }
+
+  function nextBucket(date: string): string {
+    if (analytics.granularity === "week") {
+      return addDays(date, 7);
+    }
+    if (analytics.granularity === "month") {
+      const parsed = parseLocalDate(date);
+      if (!parsed) return "";
+      return localDateStr(
+        new Date(parsed.getFullYear(), parsed.getMonth() + 1, 1),
+      );
+    }
+    return addDays(date, 1);
+  }
+
+  function bucketDates(): string[] {
+    const start = bucketStart(analytics.from);
+    const end = bucketStart(analytics.to);
+    if (!start || !end || start > end) return [];
+    const dates: string[] = [];
+    for (let date = start; date && date <= end; date = nextBucket(date)) {
+      dates.push(date);
+    }
+    return dates;
+  }
+
+  const xInterval = $derived.by((): TimeInterval => {
+    if (analytics.granularity === "week") return utcMonday;
+    if (analytics.granularity === "month") return utcMonth;
+    return utcDay;
+  });
 
   const chart = $derived.by(() => {
-    const series = analytics.activity?.series;
-    if (!series || series.length === 0) {
+    const activitySeries = analytics.activity?.series;
+    if (!activitySeries || activitySeries.length === 0) {
       return { bars: [], labels: [] as string[] };
     }
 
+    const byDate = new Map(
+      activitySeries.map((entry) => [entry.date, entry]),
+    );
+    const dates = bucketDates();
+    const series = dates.length > 0
+      ? dates.map((date) => byDate.get(date) ?? {
+          date,
+          sessions: 0,
+          messages: 0,
+          user_messages: 0,
+          assistant_messages: 0,
+        })
+      : activitySeries;
     const bars = series.map((entry) => ({
       value: metric === "messages" ? entry.messages : entry.sessions,
       date: entry.date,
+      instant: new Date(`${entry.date}T00:00:00Z`),
       userMessages: entry.user_messages,
       assistantMessages: entry.assistant_messages,
     }));
 
-    const labelStep = Math.max(
-      1,
-      Math.floor(series.length / 8),
-    );
-    const labels = series
-      .filter((_, i) => i % labelStep === 0)
-      .map((entry) => entry.date);
-
-    return { bars, labels };
+    return { bars };
   });
-  const chartWidth = $derived(
-    Math.max(
-      chartAreaWidth,
-      chart.bars.length * (MIN_BAR_WIDTH + BAR_GAP) + HORIZONTAL_PADDING,
-    ),
+  const xDomain = $derived.by((): [Date, Date] | undefined => {
+    const first = chart.bars[0];
+    const last = chart.bars.at(-1);
+    if (!first || !last) return undefined;
+    return [first.instant, xInterval.offset(last.instant, 1)];
+  });
+  const barInset = $derived.by(() => {
+    if (chart.bars.length === 0 || chartAreaWidth === 0) return 0;
+    const plotWidth = Math.max(chartAreaWidth - 48, 0);
+    const bucketWidth = plotWidth / chart.bars.length;
+    return Math.max(0, Math.min(1, (bucketWidth - 0.75) / 2));
+  });
+  const selectedBrushDomain = $derived.by(():
+    | [Date, Date]
+    | undefined => {
+    if (!selectedRange) return undefined;
+    const first = new Date(`${bucketStart(selectedRange.from)}T00:00:00Z`);
+    const last = new Date(`${bucketStart(selectedRange.to)}T00:00:00Z`);
+    return [first, xInterval.offset(last, 1)];
+  });
+  const selectionCoversChart = $derived(
+    selectedRange?.from === analytics.from &&
+      selectedRange?.to === analytics.to,
   );
 
-  function formatDateLabel(date: string): string {
-    return formatDateTime(`${date}T00:00:00`, {
+  function formatDateLabel(date: Date): string {
+    return formatDateTime(date, {
       month: "short",
       day: "numeric",
+      timeZone: "UTC",
     });
   }
 
@@ -101,40 +193,70 @@
     };
   }
 
-  function handleBarClick(
-    bar: (typeof chart.bars)[number],
-  ) {
-    if (bar.value === 0) return;
-    const g = analytics.granularity;
-    if (g === "day") {
-      analytics.selectDate(bar.date);
-    } else if (g === "week") {
-      commitDateRange(bar.date, addDays(bar.date, 6));
-    } else if (g === "month") {
-      commitDateRange(bar.date, endOfMonth(bar.date));
-    }
-  }
-
   function commitDateRange(from: string, to: string) {
     if (onDateRangeChange) {
       onDateRangeChange(from, to);
-      return;
+    } else {
+      analytics.setDateRange(from, to);
     }
-    analytics.setDateRange(from, to);
+    analytics.setActivitySelection(from, to);
   }
 
   function handleBarLeave() {
     tooltip = null;
   }
 
-  function handleBarKeydown(
-    event: KeyboardEvent,
-    bar: (typeof chart.bars)[number],
-  ) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      handleBarClick(bar);
+  function brushDate(value: unknown): Date | null {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      return value;
     }
+    if (typeof value === "number") {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+    return null;
+  }
+
+  function snapBrush(selection: {
+    x: Array<number | Date | string | null>;
+    y: Array<number | Date | string | null>;
+  }) {
+    const from = brushDate(selection.x[0]);
+    const to = brushDate(selection.x[1]);
+    if (!from || !to) return selection;
+    const start = xInterval.floor(from);
+    let end = xInterval.ceil(to);
+    if (end.getTime() <= start.getTime()) {
+      end = xInterval.offset(start, 1);
+    }
+    return { ...selection, x: [start, end] };
+  }
+
+  function handleBrushEnd(event: {
+    brush: {
+      active: boolean | undefined;
+      x: Array<number | Date | string | null>;
+    };
+  }) {
+    if (!event.brush.active) return;
+    const start = brushDate(event.brush.x[0]);
+    const end = brushDate(event.brush.x[1]);
+    if (!start || !end) return;
+
+    const firstBucket = xInterval.floor(start);
+    const endBoundary = xInterval.ceil(end);
+    const lastBucket = xInterval.offset(endBoundary, -1);
+    const firstDate = firstBucket.toISOString().slice(0, 10);
+    const lastDate = lastBucket.toISOString().slice(0, 10);
+    const from = firstDate < analytics.from ? analytics.from : firstDate;
+    let to = lastDate;
+    if (analytics.granularity === "week") {
+      to = addDays(lastDate, 6);
+    } else if (analytics.granularity === "month") {
+      to = endOfMonth(lastDate);
+    }
+    if (to > analytics.to) to = analytics.to;
+    if (from <= to) commitDateRange(from, to);
   }
 </script>
 
@@ -161,6 +283,7 @@
         <button
           class="toggle-btn"
           class:active={analytics.granularity === "day"}
+          disabled={dayViewDisabled}
           onclick={() => analytics.setGranularity("day")}
         >
           {m.analytics_granularity_day()}
@@ -195,43 +318,62 @@
     </div>
   {:else if chart.bars.length > 0}
     <div class="chart-area" bind:clientWidth={chartAreaWidth}>
-      <Chart
+      <BarChart
         data={chart.bars}
-        x="date"
+        x="instant"
         y="value"
-        xScale={scaleBand().paddingInner(0.12).paddingOuter(0.02)}
+        xScale={scaleUtc()}
+        {xInterval}
+        {xDomain}
         yDomain={[0, null]}
         yNice
         padding={{ top: 20, right: 24, bottom: 20, left: 24 }}
-        width={chartWidth}
         height={164}
         class="timeline-chart"
+        axis="x"
+        grid={{ class: "grid-line" }}
+        rule={false}
+        highlight={false}
+        tooltipContext={false}
+        brush={{
+          axis: "x",
+          zoomOnBrush: false,
+          x: selectedBrushDomain,
+          clickToReset: false,
+          constrain: snapBrush,
+          onBrushEnd: handleBrushEnd,
+          classes: { range: "activity-brush-range" },
+        }}
+        props={{
+          xAxis: {
+            tickSpacing: 96,
+            format: (date) => formatDateLabel(date as Date),
+            tickMarks: false,
+            rule: false,
+            classes: { tickLabel: "x-label" },
+          },
+        }}
       >
-        <Layer>
-          <Grid x={false} y class="grid-line" />
-          <Axis
-            placement="bottom"
-            ticks={chart.labels}
-            format={(date) => formatDateLabel(String(date))}
-            tickMarks={false}
-            rule={false}
-            classes={{ tickLabel: "x-label" }}
-          />
+        {#snippet marks()}
           {#each chart.bars as bar (bar.date)}
             <Bar
               data={bar}
+              x="instant"
               radius={1}
-              class={`bar${bar.value === 0 ? " empty" : ""}${analytics.selectedDate === bar.date ? " selected" : ""}${analytics.selectedDate !== null && analytics.selectedDate !== bar.date ? " dimmed" : ""}`}
-              role="button"
-              tabindex={0}
-              onclick={() => handleBarClick(bar)}
-              onkeydown={(event) => handleBarKeydown(event, bar)}
+              insets={{ left: barInset, right: barInset }}
+              class={`bar${bar.value === 0 ? " empty" : ""}${selectedRange && bar.date >= bucketStart(selectedRange.from) && bar.date <= bucketStart(selectedRange.to) ? " selected" : ""}${selectedRange && (bar.date < bucketStart(selectedRange.from) || bar.date > bucketStart(selectedRange.to)) ? " dimmed" : ""}`}
               onpointerenter={(event) => handleBarHover(event, bar)}
               onpointerleave={handleBarLeave}
             />
           {/each}
-        </Layer>
-      </Chart>
+        {/snippet}
+      </BarChart>
+      {#if selectionCoversChart}
+        <div
+          class="activity-selection-overlay"
+          aria-hidden="true"
+        ></div>
+      {/if}
     </div>
 
     {#if tooltip}
@@ -287,14 +429,20 @@
     color: var(--text-secondary);
   }
 
+  .toggle-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
   .toggle-btn.active {
     background: var(--bg-inset);
     color: var(--text-primary);
   }
 
   .chart-area {
-    overflow-x: auto;
+    position: relative;
     padding-bottom: 4px;
+    min-width: 0;
   }
 
   .timeline-container :global(.timeline-chart) {
@@ -305,12 +453,12 @@
     stroke: var(--border-muted);
     stroke-width: 0.5;
     stroke-dasharray: 2 2;
+    stroke-opacity: 0.4;
   }
 
   .timeline-container :global(.bar) {
     fill: var(--accent-blue);
     opacity: 0.8;
-    cursor: pointer;
     transition: opacity 0.15s;
   }
 
@@ -332,7 +480,29 @@
 
   .timeline-container :global(.bar.empty) {
     opacity: 0.2;
-    cursor: default;
+  }
+
+  .timeline-container :global(.activity-brush-range) {
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 16%,
+      transparent
+    );
+    border-left: 1px solid var(--accent-blue);
+    border-right: 1px solid var(--accent-blue);
+  }
+
+  .activity-selection-overlay {
+    position: absolute;
+    inset: 20px 24px 24px;
+    pointer-events: none;
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 16%,
+      transparent
+    );
+    border-left: 1px solid var(--accent-blue);
+    border-right: 1px solid var(--accent-blue);
   }
 
   .timeline-container :global(.x-label) {

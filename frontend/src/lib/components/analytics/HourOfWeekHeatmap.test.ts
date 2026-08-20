@@ -1,16 +1,11 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import HourOfWeekHeatmap from "./HourOfWeekHeatmap.svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
+
+const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
 
 describe("HourOfWeekHeatmap", () => {
   afterEach(() => {
@@ -24,6 +19,9 @@ describe("HourOfWeekHeatmap", () => {
     };
     document.body.innerHTML = "";
     vi.restoreAllMocks();
+    if (originalClientWidth) {
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", originalClientWidth);
+    }
   });
 
   function mountWithData() {
@@ -61,25 +59,15 @@ describe("HourOfWeekHeatmap", () => {
     const component = mountWithData();
     await tick();
 
-    const dayLabels = Array.from(
-      document.querySelectorAll(".day-label"),
-    ).map((el) => el.textContent?.trim());
-    expect(dayLabels).toEqual([
-      "Sun",
-      "Mon",
-      "Tue",
-      "Wed",
-      "Thu",
-      "Fri",
-      "Sat",
-    ]);
+    const dayLabels = Array.from(document.querySelectorAll(".day-label")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(dayLabels).toEqual(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]);
 
     const fetchSpies = stubFetches();
     const firstCell = document.querySelector(".how-cell");
     expect(firstCell).toBeTruthy();
-    firstCell!.dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
-    );
+    firstCell!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await tick();
 
     expect(analytics.selectedDow).toBe(6);
@@ -87,6 +75,26 @@ describe("HourOfWeekHeatmap", () => {
     for (const spy of fetchSpies) {
       expect(spy).toHaveBeenCalledOnce();
     }
+
+    unmount(component);
+  });
+
+  it("fits all 24 hour columns inside the available width", async () => {
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => 480,
+    });
+    const component = mountWithData();
+    await tick();
+
+    const svg = document.querySelector<SVGSVGElement>("svg");
+    expect(Number(svg?.getAttribute("width"))).toBe(480);
+    const cells = document.querySelectorAll<SVGRectElement>(".how-cell");
+    expect(cells).toHaveLength(7 * 24);
+    const last = cells[cells.length - 1]!;
+    expect(Number(last.getAttribute("x")) + Number(last.getAttribute("width"))).toBeLessThanOrEqual(
+      480,
+    );
 
     unmount(component);
   });

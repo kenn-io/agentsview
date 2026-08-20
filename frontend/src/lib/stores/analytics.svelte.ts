@@ -64,6 +64,8 @@ class AnalyticsStore {
   skillsGranularity: Granularity = $state("week");
   metric: HeatmapMetric = $state("messages");
   selectedDate: string | null = $state(null);
+  selectedActivityRange: { from: string; to: string } | null =
+    $state(null);
   project: string = $state("");
   machine: string = $state("");
   agent: string = $state("");
@@ -805,6 +807,13 @@ class AnalyticsStore {
   }
 
   applyDateRange(from: string, to: string) {
+    if (
+      this.selectedActivityRange &&
+      (this.selectedActivityRange.from !== from ||
+        this.selectedActivityRange.to !== to)
+    ) {
+      this.selectedActivityRange = null;
+    }
     this.isPinned = true;
     this.from = from;
     this.to = to;
@@ -819,7 +828,12 @@ class AnalyticsStore {
     this.selectedDate = null;
     this.selectedDow = null;
     this.selectedHour = null;
+    this.selectedActivityRange = null;
     this.rollDates();
+  }
+
+  setActivitySelection(from: string, to: string) {
+    this.selectedActivityRange = { from, to };
   }
 
   setDateRange(from: string, to: string) {

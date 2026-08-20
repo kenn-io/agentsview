@@ -748,7 +748,7 @@
     padding: 12px;
     min-height: 200px;
     min-width: 0;
-    overflow-x: hidden;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     gap: 0;
