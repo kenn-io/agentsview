@@ -3,6 +3,8 @@
 package db
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -30,34 +32,63 @@ func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
 	assert.Equal(t, "America/Chicago:"+got.IntervalFingerprint, got.Key)
 }
 
-func TestUsageTimezoneIdentityTracksNamedZoneRules(t *testing.T) {
-	left := usageTimezoneIdentityFor(time.FixedZone("Named/Zone", -6*60*60), nil)
-	right := usageTimezoneIdentityFor(time.FixedZone("Named/Zone", 9*60*60), nil)
+func TestUsageTimezoneRuleFingerprintTracksNamedZoneRules(t *testing.T) {
+	left := usageTimezoneRuleFingerprint(
+		"Named/Zone", time.FixedZone("Named/Zone", -6*60*60))
+	right := usageTimezoneRuleFingerprint(
+		"Named/Zone", time.FixedZone("Named/Zone", 9*60*60))
 
-	assert.Equal(t, left.Name, right.Name)
-	assert.NotEqual(t, left.IntervalFingerprint, right.IntervalFingerprint)
-	assert.NotEqual(t, left.Key, right.Key,
+	assert.NotEqual(t, left, right,
 		"changed named-zone rules must select a new rollup generation")
 }
 
-func TestUsageTimezoneIdentitySeparatesAnonymousLocalIntervals(t *testing.T) {
-	left := usageTimezoneIdentityFor(time.FixedZone("Local", -6*60*60),
-		[]usageQueryInterval{{
-			FromMillis: 0, ToMillis: 86_400_000,
-			FromLocalDate: "2026-01-01", ToLocalDate: "2026-01-01",
-		}})
-	right := usageTimezoneIdentityFor(time.FixedZone("Local", 9*60*60),
-		[]usageQueryInterval{{
-			FromMillis: 54_000_000, ToMillis: 140_400_000,
-			FromLocalDate: "2026-01-01", ToLocalDate: "2026-01-01",
-		}})
+// testTZifSingleTransition builds a TZif v1 zone that switches from UTC+0
+// "AAA" to UTC+1 "BBB" at the given Unix instant.
+func testTZifSingleTransition(t *testing.T, transition int64) *time.Location {
+	t.Helper()
+	var buf bytes.Buffer
+	buf.WriteString("TZif")
+	buf.Write(make([]byte, 16))
+	for _, count := range []uint32{0, 0, 0, 1, 2, 8} {
+		require.NoError(t, binary.Write(&buf, binary.BigEndian, count))
+	}
+	require.NoError(t, binary.Write(&buf, binary.BigEndian, int32(transition)))
+	buf.WriteByte(1)
+	require.NoError(t, binary.Write(&buf, binary.BigEndian, int32(0)))
+	buf.Write([]byte{0, 0})
+	require.NoError(t, binary.Write(&buf, binary.BigEndian, int32(3600)))
+	buf.Write([]byte{1, 4})
+	buf.WriteString("AAA\x00BBB\x00")
+	location, err := time.LoadLocationFromTZData("Test/Zone", buf.Bytes())
+	require.NoError(t, err)
+	return location
+}
 
-	assert.NotEqual(t, left.Key, right.Key)
-	assert.NotEqual(t, left.IntervalFingerprint, right.IntervalFingerprint)
+func TestUsageTimezoneRuleFingerprintTracksTransitionInstants(t *testing.T) {
+	tuesday := time.Date(1990, 6, 12, 3, 0, 0, 0, time.UTC).Unix()
+	wednesday := time.Date(1990, 6, 13, 3, 0, 0, 0, time.UTC).Unix()
+
+	left := usageTimezoneRuleFingerprint(
+		"Test/Zone", testTZifSingleTransition(t, tuesday))
+	right := usageTimezoneRuleFingerprint(
+		"Test/Zone", testTZifSingleTransition(t, wednesday))
+
+	assert.NotEqual(t, left, right,
+		"a zoneinfo update that moves a transition must change the fingerprint")
+}
+
+func TestUsageTimezoneRuleFingerprintSeparatesAnonymousLocalRules(t *testing.T) {
+	left := usageTimezoneRuleFingerprint(
+		"Local", time.FixedZone("Local", -6*60*60))
+	right := usageTimezoneRuleFingerprint(
+		"Local", time.FixedZone("Local", 9*60*60))
+
+	assert.NotEqual(t, left, right)
 }
 
 func TestUsageTimezoneIdentityIsIndependentOfQueryWindow(t *testing.T) {
-	location := time.FixedZone("Local", -6*60*60)
+	location, err := time.LoadLocation("America/Denver")
+	require.NoError(t, err)
 	short := usageTimezoneIdentityFor(location, []usageQueryInterval{{
 		FromMillis: 0, ToMillis: 86_400_000,
 		FromLocalDate: "2026-01-01", ToLocalDate: "2026-01-01",
@@ -71,6 +102,27 @@ func TestUsageTimezoneIdentityIsIndependentOfQueryWindow(t *testing.T) {
 
 func TestUsageLocationNameDoesNotRewriteAnonymousFixedZone(t *testing.T) {
 	assert.Equal(t, "Local", usageLocationName(time.FixedZone("Local", -6*60*60)))
+}
+
+func TestUsageTimezoneIdentityCachesPerZoneNameNotPerPointer(t *testing.T) {
+	first, err := time.LoadLocation("Pacific/Chatham")
+	require.NoError(t, err)
+	second, err := time.LoadLocation("Pacific/Chatham")
+	require.NoError(t, err)
+
+	assert.Equal(t,
+		usageTimezoneIdentityFor(first, nil),
+		usageTimezoneIdentityFor(second, nil))
+
+	entries := 0
+	usageTimezoneIdentityCache.Range(func(_, value any) bool {
+		if value.(usageTimezoneIdentity).Name == "Pacific/Chatham" {
+			entries++
+		}
+		return true
+	})
+	assert.Equal(t, 1, entries,
+		"repeated LoadLocation calls for one zone must share a cache entry")
 }
 
 func TestUsageTimezoneIdentitySurvivesLocalInitialization(t *testing.T) {

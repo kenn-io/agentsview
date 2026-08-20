@@ -43,21 +43,16 @@ func usageTimezoneIdentityFor(
 	if location == nil {
 		location = time.Local
 	}
-	if cached, ok := usageTimezoneIdentityCache.Load(location); ok {
+	// Production locations come from time.LoadLocation or time.Local, so one
+	// zone name maps to one rule set for the life of the process. Keying by
+	// name keeps the cache bounded even though LoadLocation returns a fresh
+	// *time.Location on every call.
+	cacheKey := location.String()
+	if cached, ok := usageTimezoneIdentityCache.Load(cacheKey); ok {
 		return cached.(usageTimezoneIdentity)
 	}
 	name := usageLocationName(location)
-	digest := sha256.New()
-	writeUsageHashString(digest, name)
-	// Anonymous process-local locations need a stable identity independent of
-	// the requested window. Weekly probes cover historical and near-future rule
-	// transitions without relying on a platform-specific zoneinfo path.
-	for day := time.Date(1970, 1, 1, 12, 0, 0, 0, time.UTC); day.Year() <= 2100; day = day.AddDate(0, 0, 7) {
-		zone, offset := day.In(location).Zone()
-		writeUsageHashString(digest, zone)
-		writeUsageHashInt64(digest, int64(offset))
-	}
-	fingerprint := hex.EncodeToString(digest.Sum(nil))
+	fingerprint := usageTimezoneRuleFingerprint(name, location)
 	key := name + ":" + fingerprint
 	if name == "" || name == "Local" {
 		key = "local:" + fingerprint
@@ -65,8 +60,31 @@ func usageTimezoneIdentityFor(
 	identity := usageTimezoneIdentity{
 		Key: key, Name: name, IntervalFingerprint: fingerprint,
 	}
-	actual, _ := usageTimezoneIdentityCache.LoadOrStore(location, identity)
+	actual, _ := usageTimezoneIdentityCache.LoadOrStore(cacheKey, identity)
 	return actual.(usageTimezoneIdentity)
+}
+
+func usageTimezoneRuleFingerprint(name string, location *time.Location) string {
+	digest := sha256.New()
+	writeUsageHashString(digest, name)
+	// Hash every rule regime and its exact end instant from 1970 through 2100
+	// so any zoneinfo update that adds, removes, or moves a transition in that
+	// range selects a new rollup generation. Usage timestamps outside the range
+	// would be clock skew, so rule changes beyond it are out of scope.
+	end := time.Date(2101, 1, 1, 0, 0, 0, 0, time.UTC)
+	for cursor := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); cursor.Before(end); {
+		localized := cursor.In(location)
+		zone, offset := localized.Zone()
+		writeUsageHashString(digest, zone)
+		writeUsageHashInt64(digest, int64(offset))
+		_, regimeEnd := localized.ZoneBounds()
+		if regimeEnd.IsZero() || !regimeEnd.After(cursor) {
+			break
+		}
+		writeUsageHashInt64(digest, regimeEnd.Unix())
+		cursor = regimeEnd
+	}
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 func usageLocationName(location *time.Location) string {
