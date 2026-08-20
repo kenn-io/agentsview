@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
@@ -29,16 +23,14 @@ async function flushEffects() {
 }
 
 async function selectRelativeRange(days: number) {
-  const trigger = document.querySelector<HTMLButtonElement>(
-    ".kit-date-range-picker__trigger",
-  );
+  const trigger = document.querySelector<HTMLButtonElement>(".kit-date-range-picker__trigger");
   expect(trigger).not.toBeNull();
   trigger!.click();
   await flushEffects();
 
-  const preset = [
-    ...document.querySelectorAll<HTMLButtonElement>("button"),
-  ].find((button) => button.textContent?.trim() === `${days}d`);
+  const preset = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === `${days}d`,
+  );
   expect(preset).not.toBeUndefined();
   preset!.click();
   await flushEffects();
@@ -94,15 +86,11 @@ describe("AnalyticsPage sidebar controls", () => {
     component = mount(AnalyticsPage, { target: document.body });
     await flushEffects();
 
-    const anchor = document.querySelector<HTMLElement>(
-      ".toolbar-filter-anchor",
-    );
+    const anchor = document.querySelector<HTMLElement>(".toolbar-filter-anchor");
     const expandButton = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Open sidebar"]',
     );
-    const filterButton = anchor?.querySelector<HTMLButtonElement>(
-      ".filter-btn",
-    );
+    const filterButton = anchor?.querySelector<HTMLButtonElement>(".filter-btn");
 
     expect(anchor).not.toBeNull();
     expect(expandButton).not.toBeNull();
@@ -133,9 +121,7 @@ describe("AnalyticsPage sidebar controls", () => {
     await flushEffects();
 
     expect(document.querySelector(".toolbar-filter-anchor")).toBeNull();
-    expect(
-      document.querySelector('button[aria-label="Open sidebar"]'),
-    ).toBeNull();
+    expect(document.querySelector('button[aria-label="Open sidebar"]')).toBeNull();
   });
 });
 
@@ -295,7 +281,28 @@ describe("AnalyticsPage refresh behavior", () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        observe() {}
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(target: Element) {
+          this.callback(
+            [
+              {
+                target,
+                contentRect: {
+                  width: 600,
+                  height: 200,
+                  x: 0,
+                  y: 0,
+                  top: 0,
+                  left: 0,
+                  right: 600,
+                  bottom: 200,
+                  toJSON: () => ({}),
+                },
+              } as ResizeObserverEntry,
+            ],
+            this as unknown as ResizeObserver,
+          );
+        }
         unobserve() {}
         disconnect() {}
       },
@@ -371,8 +378,7 @@ describe("AnalyticsPage refresh behavior", () => {
   });
 
   it("keeps refresh progress out of content layout flow", () => {
-    const queryProgress =
-      source.match(/\.query-progress\s*{[^}]+}/)?.[0] ?? "";
+    const queryProgress = source.match(/\.query-progress\s*{[^}]+}/)?.[0] ?? "";
 
     expect(queryProgress).toContain("position: absolute");
     expect(queryProgress).toContain("left: 0;");
@@ -389,10 +395,7 @@ describe("AnalyticsPage refresh behavior", () => {
 
   it("refreshes analytics through date-aware session writeback", () => {
     const helperStart = source.indexOf("function refreshAnalytics");
-    const helperEnd = source.indexOf(
-      "\n\n  function handleDateRangeChange",
-      helperStart,
-    );
+    const helperEnd = source.indexOf("\n\n  function handleActivityRangeSelect", helperStart);
     const helperBlock = source.slice(helperStart, helperEnd);
 
     expect(helperStart).toBeGreaterThan(-1);
@@ -412,10 +415,95 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(source).toContain("if (changed || firstRun)");
   });
 
-  it("routes timeline range selections through the shared date-change path", () => {
-    expect(source).toContain(
-      "<ActivityTimeline onDateRangeChange={handleDateRangeChange} />",
+  it("uses an Activity brush as a Sessions filter without replacing the chart window", async () => {
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => 600,
+    });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
     );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    const loadSessions = vi.spyOn(sessions, "load").mockResolvedValue();
+    const from = "2026-08-01";
+    const to = "2026-08-10";
+    window.history.replaceState(null, "", `/sessions?date_from=${from}&date_to=${to}`);
+    router.isRootPath = false;
+    router.params = { date_from: from, date_to: to };
+    analytics.from = from;
+    analytics.to = to;
+    analytics.isPinned = true;
+    analytics.granularity = "day";
+    analytics.selectedActivityRange = null;
+    analytics.errors.activity = null;
+    sessions.filters.dateFrom = from;
+    sessions.filters.dateTo = to;
+    analytics.activity = {
+      granularity: "day",
+      series: Array.from({ length: 10 }, (_, index) => ({
+        date: `2026-08-${String(index + 1).padStart(2, "0")}`,
+        sessions: 1,
+        messages: 2,
+        user_messages: 1,
+        assistant_messages: 1,
+        tool_calls: 0,
+        thinking_messages: 0,
+        by_agent: {},
+      })),
+    };
+
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    await vi.waitFor(() => {
+      expect(document.querySelector(".lc-brush-context")).not.toBeNull();
+    });
+    const brush = document.querySelector<HTMLElement>(".lc-brush-context");
+    expect(brush).not.toBeNull();
+    vi.spyOn(brush!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 552,
+      bottom: 124,
+      width: 552,
+      height: 124,
+      toJSON: () => ({}),
+    });
+    brush!.dispatchEvent(
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        clientX: 120,
+        clientY: 40,
+      }),
+    );
+    window.dispatchEvent(
+      new MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: 300,
+        clientY: 40,
+      }),
+    );
+    brush!.dispatchEvent(
+      new MouseEvent("pointerup", {
+        bubbles: true,
+        clientX: 300,
+        clientY: 40,
+      }),
+    );
+    await flushEffects();
+
+    expect(analytics.from).toBe(from);
+    expect(analytics.to).toBe(to);
+    expect(sessions.filters.dateFrom).toBe("2026-08-03");
+    expect(sessions.filters.dateTo).toBe("2026-08-06");
+    expect(router.params).toEqual({ date_from: from, date_to: to });
+    expect(loadSessions).toHaveBeenCalled();
   });
 
   it("only seeds saved yoke dates during initial URL hydration", () => {
@@ -429,47 +517,27 @@ describe("AnalyticsPage refresh behavior", () => {
   });
 
   it("treats drill-down clears as analytics date changes", () => {
-    const signatureStart = source.indexOf(
-      "function analyticsPanelDateSignature",
-    );
-    const signatureEnd = source.indexOf(
-      "\n\n  function applyAnalyticsPanelDate",
-      signatureStart,
-    );
+    const signatureStart = source.indexOf("function analyticsPanelDateSignature");
+    const signatureEnd = source.indexOf("\n\n  function applyAnalyticsPanelDate", signatureStart);
     const signatureBlock = source.slice(signatureStart, signatureEnd);
     const applyStart = source.indexOf("function applyAnalyticsPanelDate");
-    const applyEnd = source.indexOf(
-      "\n\n  function handleDateRangeChange",
-      applyStart,
-    );
+    const applyEnd = source.indexOf("\n\n  function handleActivityRangeSelect", applyStart);
     const applyBlock = source.slice(applyStart, applyEnd);
 
     expect(signatureStart).toBeGreaterThan(-1);
     expect(signatureBlock).toContain("selectedDate: analytics.selectedDate");
     expect(signatureBlock).toContain("selectedDow: analytics.selectedDow");
     expect(signatureBlock).toContain("selectedHour: analytics.selectedHour");
-    expect(applyBlock).toContain(
-      "const before = analyticsPanelDateSignature();",
-    );
-    expect(applyBlock).toContain(
-      "const after = analyticsPanelDateSignature();",
-    );
+    expect(applyBlock).toContain("const before = analyticsPanelDateSignature();");
+    expect(applyBlock).toContain("const after = analyticsPanelDateSignature();");
   });
 
   it("only applies analytics URL dates when the date signature changes", () => {
-    const helperStart = source.indexOf(
-      "function sessionAnalyticsDateUrlSignature",
-    );
-    const helperEnd = source.indexOf(
-      "function clearSessionDateFilters",
-      helperStart,
-    );
+    const helperStart = source.indexOf("function sessionAnalyticsDateUrlSignature");
+    const helperEnd = source.indexOf("function clearSessionDateFilters", helperStart);
     const helperBlock = source.slice(helperStart, helperEnd);
     const effectStart = source.indexOf("const dateSignature =");
-    const effectEnd = source.indexOf(
-      "onDestroy(() => {",
-      effectStart,
-    );
+    const effectEnd = source.indexOf("onDestroy(() => {", effectStart);
     const effectBlock = source.slice(effectStart, effectEnd);
 
     expect(helperStart).toBeGreaterThan(-1);
@@ -478,17 +546,13 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(helperBlock).toContain("from: state.from");
     expect(helperBlock).toContain("to: state.to");
     expect(source).toContain("syncSessionFiltersForDateState(state)");
-    expect(source).toContain(
-      "let lastAnalyticsDateUrlSignature: string | null = $state(null);",
-    );
+    expect(source).toContain("let lastAnalyticsDateUrlSignature: string | null = $state(null);");
     expect(effectBlock).toContain(
       "const dateChanged = firstRun ||\n        lastAnalyticsDateUrlSignature !== dateSignature;",
     );
     expect(effectBlock).toContain("if (dateChanged) {");
     expect(effectBlock).toContain("changed = applyAnalyticsPanelDate(state);");
-    expect(effectBlock).toContain(
-      "lastAnalyticsDateUrlSignature = dateSignature;",
-    );
+    expect(effectBlock).toContain("lastAnalyticsDateUrlSignature = dateSignature;");
   });
 
   it("does not use the rolling fallback when cleared session date filters remove URL dates", () => {
@@ -499,16 +563,10 @@ describe("AnalyticsPage refresh behavior", () => {
     );
     const noStateBlock = source.slice(noStateStart, noStateEnd);
 
-    expect(noStateBlock).toContain(
-      "dateChanged && sessionDateFiltersAreClear()",
-    );
+    expect(noStateBlock).toContain("dateChanged && sessionDateFiltersAreClear()");
     expect(noStateBlock).toContain("yokedDates.clear();");
     expect(noStateBlock).toContain("} else if (dateChanged) {");
-    expect(noStateBlock).toContain(
-      "state = rollingPanelDate(analytics.windowDays);",
-    );
-    expect(noStateBlock).toContain(
-      "changed = applyAnalyticsPanelDate(state);",
-    );
+    expect(noStateBlock).toContain("state = rollingPanelDate(analytics.windowDays);");
+    expect(noStateBlock).toContain("changed = applyAnalyticsPanelDate(state);");
   });
 });

@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
@@ -13,10 +7,7 @@ import { usage } from "../../stores/usage.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { settings } from "../../stores/settings.svelte.js";
-import type {
-  DailyUsageEntry,
-  UsageSummaryResponse,
-} from "../../api/types/usage.js";
+import type { DailyUsageEntry, UsageSummaryResponse } from "../../api/types/usage.js";
 import { projectColor } from "../../utils/projectColor.js";
 import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 import { setLocale } from "../../i18n/index.js";
@@ -71,7 +62,7 @@ function dailyEntry(index: number): DailyUsageEntry {
     modelsUsed: ["model"],
     projectBreakdowns: [
       {
-		project_key: "pl1:sha256:agentsview",
+        project_key: "pl1:sha256:agentsview",
         project: "agentsview",
         inputTokens: 100,
         outputTokens: 50,
@@ -146,19 +137,16 @@ function mountChart() {
   return mount(CostTimeSeriesChart, {
     target: document.body,
     props: {
-      colorMap: usageChartColorMaps(
-        usage.summary,
-        settings.chartPalette,
-      )[groupBy],
+      colorMap: usageChartColorMaps(usage.summary, settings.chartPalette)[groupBy],
     },
   });
 }
 
 describe("CostTimeSeriesChart", () => {
   beforeEach(() => {
-    globalThis.ResizeObserver =
-      ImmediateResizeObserver as typeof ResizeObserver;
+    globalThis.ResizeObserver = ImmediateResizeObserver as typeof ResizeObserver;
     usage.summary = usageSummary();
+    usage.selectedTimeRange = null;
     usage.toggles.timeSeries.groupBy = "project";
     settings.chartPalette = "agentsview";
     setLocale("en");
@@ -166,13 +154,9 @@ describe("CostTimeSeriesChart", () => {
 
   afterEach(() => {
     usage.summary = null;
+    usage.selectedTimeRange = null;
     usage.mode = "cost";
-    usage.setSelectedTokenTypes([
-      "input",
-      "cache_write",
-      "cache_read",
-      "output",
-    ]);
+    usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
     settings.chartPalette = "agentsview";
     setLocale("en");
     document.body.innerHTML = "";
@@ -183,9 +167,7 @@ describe("CostTimeSeriesChart", () => {
     const component = mountChart();
     await tick();
 
-    const labels = Array.from(
-      document.querySelectorAll<SVGTextElement>("text.y-label"),
-    );
+    const labels = Array.from(document.querySelectorAll<SVGTextElement>("text.y-label"));
     expect(labels.some((label) => label.textContent?.includes("$US"))).toBe(true);
 
     unmount(component);
@@ -197,9 +179,7 @@ describe("CostTimeSeriesChart", () => {
 
     const svg = document.querySelector("svg.chart-svg");
     expect(svg).toBeTruthy();
-    const labels = Array.from(
-      document.querySelectorAll<SVGTextElement>("text.x-label"),
-    );
+    const labels = Array.from(document.querySelectorAll<SVGTextElement>("text.x-label"));
     expect(labels[0]?.textContent).toContain("Jun 4");
     expect(labels.at(-1)?.textContent).toContain("Jun 18");
 
@@ -233,15 +213,44 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  it("brushes a date range and exposes a clear-selection action", async () => {
+    const component = mountChart();
+    await tick();
+    await tick();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".lc-brush-context")).not.toBeNull();
+    });
+    const brush = document.querySelector<HTMLElement>(".lc-brush-context");
+    expect(brush).not.toBeNull();
+    usage.selectedTimeRange = { from: "2026-06-07", to: "2026-06-10" };
+    await tick();
+    const clear = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Clear selection",
+    );
+    expect(clear).toBeDefined();
+    await vi.waitFor(() => {
+      expect(document.querySelector(".usage-brush-range")).not.toBeNull();
+    });
+
+    usage.selectedTimeRange = null;
+    await tick();
+    await vi.waitFor(() => {
+      expect(document.querySelector(".usage-brush-range")).toBeNull();
+    });
+
+    unmount(component);
+  });
+
   it("scales token series from only the selected token types", async () => {
     usage.mode = "token";
     usage.setSelectedTokenTypes(["output"]);
     const component = mountChart();
     await tick();
 
-    const labels = Array.from(
-      document.querySelectorAll<SVGTextElement>("text.y-label"),
-    ).map((label) => label.textContent?.trim());
+    const labels = Array.from(document.querySelectorAll<SVGTextElement>("text.y-label")).map(
+      (label) => label.textContent?.trim(),
+    );
     expect(labels).toContain("50");
     expect(labels).not.toContain("150");
 
@@ -249,23 +258,23 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it("keeps projects with the same display label as distinct series", async () => {
-	usage.summary = usageSummary();
-	usage.summary.daily = [dailyEntry(0)];
-	usage.summary.daily[0]!.projectBreakdowns = [
-		{ ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: testMoney(6) },
-		{
-			...usage.summary.daily[0]!.projectBreakdowns![0]!,
-			project_key: "pl1:sha256:other-archive",
-			cost: testMoney(4),
-		},
-	];
+    usage.summary = usageSummary();
+    usage.summary.daily = [dailyEntry(0)];
+    usage.summary.daily[0]!.projectBreakdowns = [
+      { ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: testMoney(6) },
+      {
+        ...usage.summary.daily[0]!.projectBreakdowns![0]!,
+        project_key: "pl1:sha256:other-archive",
+        cost: testMoney(4),
+      },
+    ];
 
-	const component = mountChart();
-	await tick();
+    const component = mountChart();
+    await tick();
 
-	expect(document.querySelectorAll(".chart-svg rect.lc-bar")).toHaveLength(2);
-	expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
-	unmount(component);
+    expect(document.querySelectorAll(".chart-svg rect.lc-bar")).toHaveLength(2);
+    expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
+    unmount(component);
   });
 
   it("uses distinct active model colors for paths and legend dots", async () => {
@@ -285,12 +294,12 @@ describe("CostTimeSeriesChart", () => {
     const component = mountChart();
     await tick();
 
-    const paths = Array.from(
-      document.querySelectorAll<SVGPathElement>("path.lc-area-path"),
-    ).map((path) => path.getAttribute("fill"));
-    const dots = Array.from(
-      document.querySelectorAll<HTMLElement>(".legend-dot"),
-    ).map((dot) => dot.style.background);
+    const paths = Array.from(document.querySelectorAll<SVGPathElement>("path.lc-area-path")).map(
+      (path) => path.getAttribute("fill"),
+    );
+    const dots = Array.from(document.querySelectorAll<HTMLElement>(".legend-dot")).map(
+      (dot) => dot.style.background,
+    );
     expect(new Set(paths).size).toBe(2);
     expect(dots).toEqual(paths);
     unmount(component);
@@ -307,9 +316,7 @@ describe("CostTimeSeriesChart", () => {
     const component = mountChart();
     await tick();
 
-    const paths = document.querySelectorAll<SVGPathElement>(
-      "path.lc-area-path",
-    );
+    const paths = document.querySelectorAll<SVGPathElement>("path.lc-area-path");
     expect(paths).toHaveLength(1);
     expect(paths[0]!.getAttribute("fill")).toBe(projectColor("single-model"));
     expect(document.querySelectorAll(".legend-item")).toHaveLength(0);
@@ -328,12 +335,8 @@ describe("CostTimeSeriesChart", () => {
     const component = mountChart();
     await tick();
 
-    const marks = Array.from(
-      document.querySelectorAll<SVGElement>(".chart-svg rect.lc-bar"),
-    );
-    const dots = Array.from(
-      document.querySelectorAll<HTMLElement>(".legend-dot"),
-    );
+    const marks = Array.from(document.querySelectorAll<SVGElement>(".chart-svg rect.lc-bar"));
+    const dots = Array.from(document.querySelectorAll<HTMLElement>(".legend-dot"));
     expect(marks).toHaveLength(6);
     expect(dots).toHaveLength(6);
     expect(marks.at(-1)!.getAttribute("fill")).toBe("var(--text-muted)");
@@ -359,12 +362,12 @@ describe("CostTimeSeriesChart", () => {
     const component = mountChart();
     await tick();
 
-    const paths = Array.from(
-      document.querySelectorAll<SVGPathElement>("path.lc-area-path"),
-    ).map((path) => path.getAttribute("fill"));
-    const dots = Array.from(
-      document.querySelectorAll<HTMLElement>(".legend-dot"),
-    ).map((dot) => dot.style.background);
+    const paths = Array.from(document.querySelectorAll<SVGPathElement>("path.lc-area-path")).map(
+      (path) => path.getAttribute("fill"),
+    );
+    const dots = Array.from(document.querySelectorAll<HTMLElement>(".legend-dot")).map(
+      (dot) => dot.style.background,
+    );
     expect(paths).toEqual(["#ff7f0e", "#1f77b4"]);
     expect(dots).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
     unmount(component);

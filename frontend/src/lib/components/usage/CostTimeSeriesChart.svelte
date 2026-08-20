@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Area, Bar, Chart, Layer } from "layerchart";
+  import { Button } from "@kenn-io/kit-ui";
   import { scaleBand, scalePoint } from "d3-scale";
   import LargeChartFrame from "../shared/LargeChartFrame.svelte";
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
@@ -43,16 +44,16 @@
     points: Point[];
     keys: string[];
     maxY: number;
-	labels: Record<string, string>;
+    labels: Record<string, string>;
   } => {
-    const daily = usage.summary?.daily;
+    const daily = usage.timeSeriesSummary?.daily;
     if (!daily || daily.length === 0) {
       return { points: [], keys: [], maxY: 0, labels: {} };
     }
 
     // Sum the selected value per key across the whole range to find top N.
     const totals = new Map<string, number>();
-	const labels: Record<string, string> = {};
+    const labels: Record<string, string> = {};
     for (const day of daily) {
       if (groupBy === "project" && day.projectBreakdowns) {
         for (const b of day.projectBreakdowns) {
@@ -259,6 +260,32 @@
   function handleGroupByChange(g: GroupBy) {
     usage.setTimeSeriesGroupBy(g);
   }
+
+  const selectedBrushDomain = $derived(
+    usage.selectedTimeRange
+      ? [usage.selectedTimeRange.from, usage.selectedTimeRange.to]
+      : [null, null],
+  );
+
+  function handleBrushEnd(event: {
+    brush: {
+      active: boolean | undefined;
+      x: Array<number | Date | string | null>;
+    };
+  }) {
+    if (!event.brush.active) return;
+    const first = event.brush.x[0];
+    const last = event.brush.x[1];
+    if (typeof first !== "string" || typeof last !== "string") return;
+    const from = first < last ? first : last;
+    const to = first < last ? last : first;
+    if (
+      seriesData.points.some((point) => point.date === from) &&
+      seriesData.points.some((point) => point.date === to)
+    ) {
+      usage.setTimeRange(from, to);
+    }
+  }
 </script>
 
 <div class="chart-container">
@@ -268,28 +295,38 @@
         ? m.usage_tokens_over_time_title()
         : m.usage_cost_over_time_title()}
     </h3>
-    <div class="segment-toggle">
-      <button
-        class="toggle-btn"
-        class:active={groupBy === "project"}
-        onclick={() => handleGroupByChange("project")}
-      >
-        {m.analytics_col_project()}
-      </button>
-      <button
-        class="toggle-btn"
-        class:active={groupBy === "model"}
-        onclick={() => handleGroupByChange("model")}
-      >
-        {m.usage_model()}
-      </button>
-      <button
-        class="toggle-btn"
-        class:active={groupBy === "agent"}
-        onclick={() => handleGroupByChange("agent")}
-      >
-        {m.analytics_col_agent()}
-      </button>
+    <div class="chart-actions">
+      {#if usage.selectedTimeRange}
+        <Button
+          size="sm"
+          surface="soft"
+          label={m.sidebar_clear_selection()}
+          onclick={() => usage.clearTimeRange()}
+        />
+      {/if}
+      <div class="segment-toggle">
+        <button
+          class="toggle-btn"
+          class:active={groupBy === "project"}
+          onclick={() => handleGroupByChange("project")}
+        >
+          {m.analytics_col_project()}
+        </button>
+        <button
+          class="toggle-btn"
+          class:active={groupBy === "model"}
+          onclick={() => handleGroupByChange("model")}
+        >
+          {m.usage_model()}
+        </button>
+        <button
+          class="toggle-btn"
+          class:active={groupBy === "agent"}
+          onclick={() => handleGroupByChange("agent")}
+        >
+          {m.analytics_col_agent()}
+        </button>
+      </div>
     </div>
   </div>
 
@@ -309,6 +346,14 @@
         seriesLayout="stack"
         padding={{ top: 10, right: 24, bottom: 20, left: yLabelWidth }}
         height={CHART_H + 20}
+        brush={{
+          axis: "x",
+          zoomOnBrush: false,
+          x: selectedBrushDomain,
+          clickToReset: false,
+          onBrushEnd: handleBrushEnd,
+          classes: { range: "usage-brush-range" },
+        }}
       >
         <Layer class="chart-svg">
           <LargeChartFrame
@@ -347,7 +392,7 @@
               class="legend-dot"
               style="background: {colorMap.get(key) ?? 'var(--text-muted)'}"
             ></span>
-			{key === "__other__" ? m.shared_other() : (seriesData.labels[key] ?? key)}
+            {key === "__other__" ? m.shared_other() : (seriesData.labels[key] ?? key)}
           </span>
         {/each}
       </div>
@@ -383,6 +428,12 @@
     padding: 1px;
   }
 
+  .chart-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .toggle-btn {
     padding: 2px 8px;
     font-size: 10px;
@@ -403,8 +454,18 @@
   }
 
   .chart-scroll {
-    overflow-x: auto;
+    overflow-x: hidden;
     padding-bottom: 4px;
+  }
+
+  .chart-container :global(.usage-brush-range) {
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 16%,
+      transparent
+    );
+    border-left: 1px solid var(--accent-blue);
+    border-right: 1px solid var(--accent-blue);
   }
 
   .chart-container :global(.chart-svg) {

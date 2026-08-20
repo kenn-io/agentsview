@@ -3,7 +3,7 @@
   import { scaleLinear } from "d3-scale";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
-  import { Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import { Button, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import type { ActivityBucket } from "../../api/generated/index";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
@@ -38,6 +38,7 @@
   );
 
   let tooltip = $state<{ x: number; y: number; text: string } | null>(null);
+  let keyboardAnchorIndex = $state<number | null>(null);
 
   // Format bucket boundaries in the report's own timezone. Bucket start/end are
   // UTC instants of local calendar boundaries, so rendering them in the report
@@ -153,10 +154,39 @@
   }
 
   function onSlotKey(e: KeyboardEvent, idx: number) {
+    if (e.key === "Escape" && selectedRange) {
+      e.preventDefault();
+      onSelectRange?.(null);
+      keyboardAnchorIndex = null;
+      return;
+    }
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
+      keyboardAnchorIndex = idx;
       selectRange(idx, idx);
+      return;
     }
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const next = Math.max(
+      0,
+      Math.min(
+        buckets.length - 1,
+        idx + (e.key === "ArrowRight" ? 1 : -1),
+      ),
+    );
+    if (e.shiftKey) {
+      const anchor = keyboardAnchorIndex ?? idx;
+      keyboardAnchorIndex = anchor;
+      selectRange(anchor, next);
+    } else {
+      keyboardAnchorIndex = next;
+    }
+    queueMicrotask(() => {
+      document.querySelector<SVGElement>(
+        `[data-concurrency-bucket-index="${next}"]`,
+      )?.focus();
+    });
   }
 
   let dragStart = $state<number | null>(null);
@@ -505,6 +535,14 @@
   <div class="timeline-header">
     <h3 class="timeline-title">{m.activity_concurrency()}</h3>
     <div class="panel-actions">
+      {#if selectedRange}
+        <Button
+          size="sm"
+          surface="soft"
+          label={m.sidebar_clear_selection()}
+          onclick={() => onSelectRange?.(null)}
+        />
+      {/if}
       <div class="legend" aria-hidden="true">
         <span class="legend-item">
           <span class="swatch interactive"></span>{m.activity_interactive()}
@@ -675,6 +713,7 @@
           <Rect
             class="slot-hit"
             data-bucket-bar
+            data-concurrency-bucket-index={bar.idx}
             x={bar.cellX}
             y={TOP_PAD}
             width={bar.cellW}

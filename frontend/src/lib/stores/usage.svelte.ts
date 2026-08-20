@@ -6,23 +6,14 @@ import type {
   TopUsageSessionsResponse,
 } from "../api/types/usage.js";
 import { UsageService } from "../api/generated/index";
-import {
-  ApiError,
-  callGenerated,
-  isAbortError,
-} from "../api/runtime.js";
+import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
-import {
-  ALL_TOKEN_TYPES,
-  canonicalTokenTypes,
-  type UsageTokenType,
-} from "./usageTokenTypes.js";
+import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
-type UsagePairwiseParams =
-  Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
+type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
 type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions";
 type FetchResult = "ok" | "error" | "aborted";
 type LoadedUsageSummary = {
@@ -70,9 +61,7 @@ function isGroupBy(value: unknown): value is GroupBy {
 }
 
 function isUnknownProjectKeyError(error: unknown): boolean {
-  return error instanceof ApiError &&
-    error.status === 400 &&
-    error.code === "unknown_project_key";
+  return error instanceof ApiError && error.status === 400 && error.code === "unknown_project_key";
 }
 
 function loadToggles(): Toggles {
@@ -197,10 +186,12 @@ function samePairwiseSelection(
   left: UsagePairwiseSelection,
   right: UsagePairwiseSelection,
 ): boolean {
-  return left.left.dimension === right.left.dimension &&
+  return (
+    left.left.dimension === right.left.dimension &&
     left.left.value === right.left.value &&
     left.right.dimension === right.right.dimension &&
-    left.right.value === right.right.value;
+    left.right.value === right.right.value
+  );
 }
 
 export type UsageMode = "cost" | "token";
@@ -211,9 +202,8 @@ class UsageStore {
   isPinned: boolean = $state(false);
   windowDays: number = $state(DEFAULT_WINDOW_DAYS);
   mode: UsageMode = $state("cost");
-  selectedTokenTypes: UsageTokenType[] = $state([
-    ...ALL_TOKEN_TYPES,
-  ]);
+  selectedTokenTypes: UsageTokenType[] = $state([...ALL_TOKEN_TYPES]);
+  selectedTimeRange: { from: string; to: string } | null = $state(null);
 
   // Excluded project items and included model items
   // (comma-separated strings). Empty models = all models.
@@ -235,11 +225,9 @@ class UsageStore {
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
-  pairwiseComparison =
-    $state<UsagePairwiseComparisonResponse | null>(null);
-  pairwiseSelection = $state<UsagePairwiseSelection>(
-    emptyPairwiseSelection(),
-  );
+  private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
+  pairwiseComparison = $state<UsagePairwiseComparisonResponse | null>(null);
+  pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
   topSessions = $state<TopUsageSessionsResponse | null>(null);
   lastUpdatedAt: number | null = $state(null);
   hasNewData: boolean = $state(false);
@@ -282,35 +270,28 @@ class UsageStore {
 
   private baseParams(): UsageParams {
     const sessionFilters = sessions.filters;
-    const p: UsageParams = {
+    const range = this.selectedTimeRange ?? {
       from: this.from,
       to: this.to,
+    };
+    const p: UsageParams = {
+      from: range.from,
+      to: range.to,
       timezone: this.timezone,
       project: sessionFilters.project || undefined,
       machine: sessionFilters.machine || undefined,
       agent: sessionFilters.agent || undefined,
       termination: sessionFilters.termination || undefined,
       minUserMessages:
-        sessionFilters.minUserMessages > 0
-          ? sessionFilters.minUserMessages
-          : undefined,
+        sessionFilters.minUserMessages > 0 ? sessionFilters.minUserMessages : undefined,
       includeOneShot: sessionFilters.includeOneShot,
-      includeAutomated:
-        sessionFilters.includeAutomated || undefined,
+      includeAutomated: sessionFilters.includeAutomated || undefined,
       activeSince: sessionFilters.recentlyActive
-        ? new Date(
-            Date.now() - 24 * 60 * 60 * 1000,
-          ).toISOString()
+        ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
         : undefined,
     };
-    if (
-      sessionFilters.hideUnknownProject &&
-      sessionFilters.project !== "unknown"
-    ) {
-      p.excludeProject = joinCsvParts(
-        this.excludedProjects,
-        "unknown",
-      );
+    if (sessionFilters.hideUnknownProject && sessionFilters.project !== "unknown") {
+      p.excludeProject = joinCsvParts(this.excludedProjects, "unknown");
     } else if (this.excludedProjects) {
       p.excludeProject = this.excludedProjects;
     }
@@ -326,20 +307,20 @@ class UsageStore {
     return p;
   }
 
+  get timeSeriesSummary(): UsageSummaryResponse | null {
+    return this.timeSeriesContextSummary ?? this.summary;
+  }
+
   get pairwiseModelOptions(): string[] {
     return (this.summary?.modelTotals ?? []).map((entry) => entry.model);
   }
 
   get pairwiseProjectOptions(): string[] {
-    return (this.summary?.projectTotals ?? []).map(
-      (entry) => entry.project_key,
-    );
+    return (this.summary?.projectTotals ?? []).map((entry) => entry.project_key);
   }
 
   pairwiseProjectLabel(key: string): string {
-    return this.summary?.projectTotals.find(
-      (entry) => entry.project_key === key,
-    )?.project ?? "";
+    return this.summary?.projectTotals.find((entry) => entry.project_key === key)?.project ?? "";
   }
 
   mergeKnownProjects(
@@ -347,19 +328,13 @@ class UsageStore {
     counts: Record<string, number>,
   ): void {
     if (projects.length === 0) return;
-    const byKey = new Map(
-      this.knownProjects.map((project) => [project.id, project]),
-    );
+    const byKey = new Map(this.knownProjects.map((project) => [project.id, project]));
     let changed = false;
     for (const project of projects) {
       if (!project.project_key || !project.project) continue;
       const existing = byKey.get(project.project_key);
       const count = counts[project.project_key];
-      if (
-        !existing ||
-        existing.name !== project.project ||
-        existing.count !== count
-      ) {
+      if (!existing || existing.name !== project.project || existing.count !== count) {
         byKey.set(project.project_key, {
           id: project.project_key,
           name: project.project,
@@ -375,18 +350,11 @@ class UsageStore {
     }
   }
 
-  private pairwiseOptionsFor(
-    dimension: UsagePairwiseDimension,
-  ): string[] {
-    return dimension === "project"
-      ? this.pairwiseProjectOptions
-      : this.pairwiseModelOptions;
+  private pairwiseOptionsFor(dimension: UsagePairwiseDimension): string[] {
+    return dimension === "project" ? this.pairwiseProjectOptions : this.pairwiseModelOptions;
   }
 
-  private preferredPairwiseValue(
-    dimension: UsagePairwiseDimension,
-    fallback: string,
-  ): string {
+  private preferredPairwiseValue(dimension: UsagePairwiseDimension, fallback: string): string {
     const options = this.pairwiseOptionsFor(dimension);
     for (const option of options) {
       if (option !== fallback) return option;
@@ -398,10 +366,9 @@ class UsageStore {
     const current = this.pairwiseSelection;
     const currentLeftOptions = this.pairwiseOptionsFor(current.left.dimension);
     const currentRightOptions = this.pairwiseOptionsFor(current.right.dimension);
-    const leftValid = current.left.value !== "" &&
-      currentLeftOptions.includes(current.left.value);
-    const rightValid = current.right.value !== "" &&
-      currentRightOptions.includes(current.right.value);
+    const leftValid = current.left.value !== "" && currentLeftOptions.includes(current.left.value);
+    const rightValid =
+      current.right.value !== "" && currentRightOptions.includes(current.right.value);
     if (leftValid && rightValid) return false;
 
     const modelOptions = this.pairwiseModelOptions;
@@ -438,12 +405,16 @@ class UsageStore {
   }
 
   applyDateRange(from: string, to: string) {
+    this.selectedTimeRange = null;
+    this.timeSeriesContextSummary = null;
     this.isPinned = true;
     this.from = from;
     this.to = to;
   }
 
   applyRollingWindow(days: number) {
+    this.selectedTimeRange = null;
+    this.timeSeriesContextSummary = null;
     this.windowDays = days;
     this.isPinned = false;
     this.rollDates();
@@ -459,10 +430,21 @@ class UsageStore {
     this.fetchAll();
   }
 
-  setPairwiseSide(
-    side: UsagePairwiseSide,
-    updates: Partial<UsagePairwiseSideSelection>,
-  ): void {
+  setTimeRange(from: string, to: string) {
+    if (this.selectedTimeRange === null) {
+      this.timeSeriesContextSummary = this.summary;
+    }
+    this.selectedTimeRange = { from, to };
+    this.fetchAll();
+  }
+
+  clearTimeRange() {
+    if (this.selectedTimeRange === null) return;
+    this.selectedTimeRange = null;
+    this.fetchAll();
+  }
+
+  setPairwiseSide(side: UsagePairwiseSide, updates: Partial<UsagePairwiseSideSelection>): void {
     const next: UsagePairwiseSelection = {
       left: { ...this.pairwiseSelection.left },
       right: { ...this.pairwiseSelection.right },
@@ -470,13 +452,11 @@ class UsageStore {
     const prev = next[side];
     const dimension = updates.dimension ?? prev.dimension;
     const options = this.pairwiseOptionsFor(dimension);
-    const value = updates.value ??
+    const value =
+      updates.value ??
       (options.includes(prev.value) && prev.dimension === dimension
         ? prev.value
-        : this.preferredPairwiseValue(
-            dimension,
-            next[side === "left" ? "right" : "left"].value,
-          ));
+        : this.preferredPairwiseValue(dimension, next[side === "left" ? "right" : "left"].value));
 
     next[side] = { dimension, value };
     this.pairwiseSelection = next;
@@ -489,30 +469,22 @@ class UsageStore {
   // Toggle an item's exclusion. Clicking an included item
   // excludes it; clicking an excluded item re-includes it.
   toggleProject(name: string): void {
-    this.excludedProjects = this.toggleCsv(
-      this.excludedProjects, name,
-    );
+    this.excludedProjects = this.toggleCsv(this.excludedProjects, name);
     this.fetchAll();
   }
 
   toggleProjectKey(key: string): void {
-    this.excludedProjectKeys = this.toggleCsv(
-      this.excludedProjectKeys, key,
-    );
+    this.excludedProjectKeys = this.toggleCsv(this.excludedProjectKeys, key);
     this.fetchAll();
   }
 
   toggleAgent(name: string): void {
-    this.excludedAgents = this.toggleCsv(
-      this.excludedAgents, name,
-    );
+    this.excludedAgents = this.toggleCsv(this.excludedAgents, name);
     this.fetchAll();
   }
 
   toggleModel(name: string): void {
-    this.selectedModels = this.toggleCsv(
-      this.selectedModels, name,
-    );
+    this.selectedModels = this.toggleCsv(this.selectedModels, name);
     this.excludedModels = "";
     this.fetchAll();
   }
@@ -563,9 +535,7 @@ class UsageStore {
 
   deselectAllProjectKeys(all: string[]): void {
     const excluded = new Set(
-      this.excludedProjectKeys
-        ? this.excludedProjectKeys.split(",").filter(Boolean)
-        : [],
+      this.excludedProjectKeys ? this.excludedProjectKeys.split(",").filter(Boolean) : [],
     );
     for (const key of all) excluded.add(key);
     this.excludedProjectKeys = [...excluded].join(",");
@@ -631,10 +601,7 @@ class UsageStore {
     if (canonical.length === 0) return false;
     if (
       canonical.length === this.selectedTokenTypes.length &&
-      canonical.every(
-        (tokenType, index) =>
-          tokenType === this.selectedTokenTypes[index],
-      )
+      canonical.every((tokenType, index) => tokenType === this.selectedTokenTypes[index])
     ) {
       return false;
     }
@@ -694,17 +661,13 @@ class UsageStore {
     }
     const currentTopSessionsPromise = loadedSummary.projectScopeRecovered
       ? topSessionsPromise.then(() => {
-        if (fetchVersion !== this.fetchAllVersion) return "aborted";
-        return this.fetchTopSessions(loadedSummary.params);
-      })
+          if (fetchVersion !== this.fetchAllVersion) return "aborted";
+          return this.fetchTopSessions(loadedSummary.params);
+        })
       : topSessionsPromise;
     const [topSessionsResult, comparisonResult, pairwiseResult] = await Promise.all([
       currentTopSessionsPromise,
-      this.fetchComparison(
-        loadedSummary.version,
-        loadedSummary.summary,
-        loadedSummary.params,
-      ),
+      this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
       this.fetchPairwise(loadedSummary.version, loadedSummary.params),
     ]);
     if (
@@ -742,12 +705,15 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const params = options.params ?? this.baseParams();
-      const data = await callGenerated(() =>
-        UsageService.getApiV1UsageSummary(params),
+      const data = (await callGenerated(
+        () => UsageService.getApiV1UsageSummary(params),
         signal,
-      ) as unknown as UsageSummaryResponse;
+      )) as unknown as UsageSummaryResponse;
       if (this.versions.summary === v) {
         this.summary = data;
+        if (this.selectedTimeRange === null) {
+          this.timeSeriesContextSummary = null;
+        }
         this.errors.summary = null;
         this.ensurePairwiseSelection();
         this.clearPairwiseComparisonState();
@@ -783,17 +749,14 @@ class UsageStore {
           params: this.baseParams(),
           recoverProjectScope: false,
         });
-        return loaded === null
-          ? null
-          : { ...loaded, projectScopeRecovered: true };
+        return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
       }
       if (this.versions.summary === v) {
         // On refetch failure with cached data, swallow the error so
         // existing values stay visible instead of flipping to a "--"
         // error state. First-load failures still surface.
         if (this.summary === null) {
-          this.errors.summary =
-            e instanceof Error ? e.message : "Failed to load";
+          this.errors.summary = e instanceof Error ? e.message : "Failed to load";
         } else {
           console.warn("usage.fetchSummary refetch failed:", e);
         }
@@ -823,13 +786,14 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = await callGenerated(() =>
-        UsageService.getApiV1UsageComparison({
-          ...params,
-          currentMicrodollars: summary.totals.totalCost.microdollars,
-        }),
+      const comparison = (await callGenerated(
+        () =>
+          UsageService.getApiV1UsageComparison({
+            ...params,
+            currentMicrodollars: summary.totals.totalCost.microdollars,
+          }),
         signal,
-      ) as unknown as UsageComparison;
+      )) as unknown as UsageComparison;
       if (this.versions.summary === summaryVersion) {
         this.summary = { ...summary, comparison };
         return "ok";
@@ -856,9 +820,7 @@ class UsageStore {
     }
   }
 
-  private currentPairwiseParams(
-    params: UsageParams,
-  ): UsagePairwiseParams | null {
+  private currentPairwiseParams(params: UsageParams): UsagePairwiseParams | null {
     const selection = this.pairwiseSelection;
     if (!selection.left.value || !selection.right.value) {
       return null;
@@ -872,10 +834,7 @@ class UsageStore {
     };
   }
 
-  private async fetchPairwise(
-    summaryVersion: number,
-    params: UsageParams,
-  ): Promise<FetchResult> {
+  private async fetchPairwise(summaryVersion: number, params: UsageParams): Promise<FetchResult> {
     if (this.versions.summary !== summaryVersion) return "aborted";
     const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
@@ -893,14 +852,11 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = await callGenerated(() =>
-        UsageService.getApiV1UsagePairwiseComparison(request),
+      const comparison = (await callGenerated(
+        () => UsageService.getApiV1UsagePairwiseComparison(request),
         signal,
-      ) as unknown as UsagePairwiseComparisonResponse;
-      if (
-        this.versions.summary === summaryVersion &&
-        this.versions.pairwise === pairwiseVersion
-      ) {
+      )) as unknown as UsagePairwiseComparisonResponse;
+      if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         this.pairwiseComparison = comparison;
         this.errors.pairwise = null;
         return "ok";
@@ -912,13 +868,9 @@ class UsageStore {
         return "aborted";
       }
       status = "error";
-      if (
-        this.versions.summary === summaryVersion &&
-        this.versions.pairwise === pairwiseVersion
-      ) {
+      if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         if (this.pairwiseComparison === null) {
-          this.errors.pairwise =
-            e instanceof Error ? e.message : "Failed to load";
+          this.errors.pairwise = e instanceof Error ? e.message : "Failed to load";
         } else {
           console.warn("usage.fetchPairwise failed:", e);
         }
@@ -932,18 +884,13 @@ class UsageStore {
         status,
       });
       this.clearAbortSignal("pairwise", signal);
-      if (
-        this.versions.summary === summaryVersion &&
-        this.versions.pairwise === pairwiseVersion
-      ) {
+      if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         this.loading.pairwise = false;
       }
     }
   }
 
-  async fetchTopSessions(
-    params: UsageParams | null = null,
-  ): Promise<FetchResult> {
+  async fetchTopSessions(params: UsageParams | null = null): Promise<FetchResult> {
     const v = ++this.versions.topSessions;
     const signal = this.nextAbortSignal("topSessions");
     const isFirstLoad = this.topSessions === null;
@@ -952,18 +899,18 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const data = await callGenerated(() =>
-        UsageService.getApiV1UsageTopSessions({
-          ...(params ?? this.baseParams()),
-          sort: this.mode === "token" ? "tokens" : "cost",
-          tokenTypes:
-            this.mode === "token" &&
-            this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
-              ? this.selectedTokenTypes.join(",")
-              : undefined,
-        }),
+      const data = (await callGenerated(
+        () =>
+          UsageService.getApiV1UsageTopSessions({
+            ...(params ?? this.baseParams()),
+            sort: this.mode === "token" ? "tokens" : "cost",
+            tokenTypes:
+              this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
+                ? this.selectedTokenTypes.join(",")
+                : undefined,
+          }),
         signal,
-      ) as unknown as TopUsageSessionsResponse;
+      )) as unknown as TopUsageSessionsResponse;
       if (this.versions.topSessions === v) {
         this.topSessions = data;
         this.errors.topSessions = null;
@@ -978,8 +925,7 @@ class UsageStore {
       status = "error";
       if (this.versions.topSessions === v) {
         if (this.topSessions === null) {
-          this.errors.topSessions =
-            e instanceof Error ? e.message : "Failed to load";
+          this.errors.topSessions = e instanceof Error ? e.message : "Failed to load";
         } else {
           console.warn("usage.fetchTopSessions refetch failed:", e);
         }
@@ -1021,10 +967,7 @@ class UsageStore {
     return controller.signal;
   }
 
-  private clearAbortSignal(
-    panel: UsagePanel,
-    signal: AbortSignal,
-  ): boolean {
+  private clearAbortSignal(panel: UsagePanel, signal: AbortSignal): boolean {
     if (this.abortControllers[panel]?.signal === signal) {
       delete this.abortControllers[panel];
       this.querying[panel] = false;
@@ -1073,28 +1016,18 @@ export const USAGE_DEFAULT_WINDOW_DAYS = DEFAULT_WINDOW_DAYS;
 export function parseWindowDays(raw: string | undefined): number | null {
   if (!raw) return null;
   const n = Number.parseInt(raw, 10);
-  if (
-    !Number.isFinite(n) ||
-    n <= 0 ||
-    n > MAX_WINDOW_DAYS ||
-    String(n) !== raw
-  ) {
+  if (!Number.isFinite(n) || n <= 0 || n > MAX_WINDOW_DAYS || String(n) !== raw) {
     return null;
   }
   return n;
 }
 
-export function buildUsageUrlParams(
-  state: UsageUrlState,
-): Record<string, string> {
+export function buildUsageUrlParams(state: UsageUrlState): Record<string, string> {
   const params: Record<string, string> = {};
   if (state.isPinned) {
     if (state.from) params["from"] = state.from;
     if (state.to) params["to"] = state.to;
-  } else if (
-    state.windowDays > 0 &&
-    state.windowDays !== DEFAULT_WINDOW_DAYS
-  ) {
+  } else if (state.windowDays > 0 && state.windowDays !== DEFAULT_WINDOW_DAYS) {
     params["window_days"] = String(state.windowDays);
   }
   if (state.selectedModels) {
@@ -1112,11 +1045,7 @@ export function buildUsageUrlParams(
 }
 
 const CSV_MERGE_URL_KEYS = new Set(["exclude_project"]);
-const SESSION_DATE_URL_KEYS = new Set([
-  "date",
-  "date_from",
-  "date_to",
-]);
+const SESSION_DATE_URL_KEYS = new Set(["date", "date_from", "date_to"]);
 
 export function mergeUsageAndSessionUrlParams(
   usageParams: Record<string, string>,

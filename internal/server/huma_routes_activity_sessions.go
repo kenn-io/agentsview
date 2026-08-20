@@ -128,9 +128,7 @@ func (s *Server) humaActivityReportSessions(
 		cursor, cursorErr := decodeActivityToken[activitySessionCursorPayload](
 			tokenStore, in.Cursor,
 		)
-		if cursorErr != nil || cursor.Version != activityReportTokenVersion ||
-			cursor.Schema != export.ActivityReportSchemaVersion ||
-			cursor.Digest != digest || cursor.Offset < 0 {
+		if cursorErr != nil || !validActivitySessionCursor(cursor, digest) {
 			return nil, apiError(http.StatusBadRequest, "invalid activity session cursor")
 		}
 		continuation = &activity.SessionPageOptions{
@@ -172,7 +170,7 @@ func (s *Server) humaActivityReportSessions(
 	}
 	if page.HasNext {
 		page.NextCursor, err = encodeActivityToken(tokenStore, activitySessionCursorPayload{
-			Version: activityReportTokenVersion,
+			Version: activitySessionCursorVersion,
 			Schema:  export.ActivityReportSchemaVersion,
 			Digest:  digest, Offset: page.Next, Sort: options.Sort,
 			Direction: options.Direction, BucketRange: options.BucketRange,

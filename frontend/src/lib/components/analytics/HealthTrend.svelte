@@ -68,6 +68,7 @@
       class="health-chart"
       role="img"
       aria-label={m.analytics_health_trend_title()}
+      aria-describedby="health-trend-data"
     >
       <Layer>
         <LargeChartFrame
@@ -89,6 +90,29 @@
         </LargeChartFrame>
       </Layer>
     </Chart>
+    <table id="health-trend-data" class="kit-sr-only">
+      <caption>{m.analytics_health_trend_title()}</caption>
+      <thead>
+        <tr>
+          <th scope="col">{m.analytics_skill_trend_date()}</th>
+          <th scope="col">{m.analytics_session_health_avg_score()}</th>
+          <th scope="col">{m.analytics_col_sessions()}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each trend as bucket (bucket.date)}
+          <tr>
+            <th scope="row">{bucket.date}</th>
+            <td>
+              {bucket.avg_health_score != null
+                ? Math.round(bucket.avg_health_score)
+                : m.analytics_health_trend_no_scored_sessions()}
+            </td>
+            <td>{bucket.session_count.toLocaleString()}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
     {#if tooltip}
       <div
         class="tooltip"

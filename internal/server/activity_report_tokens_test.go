@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func TestActivityReportTokenSelectionRevalidatesResolvedQuery(t *testing.T) {
@@ -83,4 +84,19 @@ func TestActivityReportTokenSelectionRevalidatesResolvedQuery(t *testing.T) {
 
 	_, err = valid.selection()
 	require.NoError(t, err)
+}
+
+func TestActivitySessionCursorRejectsTheReportTokenVersion(t *testing.T) {
+	cursor := activitySessionCursorPayload{
+		Version:   activityReportTokenVersion,
+		Schema:    export.ActivityReportSchemaVersion,
+		Digest:    "digest",
+		Offset:    1,
+		Sort:      activity.SessionSortProject,
+		Direction: "asc",
+	}
+
+	assert.False(t, validActivitySessionCursor(cursor, "digest"))
+	cursor.Version = activitySessionCursorVersion
+	assert.True(t, validActivitySessionCursor(cursor, "digest"))
 }

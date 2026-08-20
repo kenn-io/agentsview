@@ -11,6 +11,7 @@ import (
 )
 
 const activityReportTokenVersion = 1
+const activitySessionCursorVersion = 2
 
 type activityReportTokenQuery struct {
 	Timezone      string              `json:"tz"`
@@ -50,6 +51,14 @@ type activitySessionCursorPayload struct {
 	Sort        activity.SessionSort  `json:"sort"`
 	Direction   string                `json:"direction"`
 	BucketRange *activity.BucketRange `json:"bucket_range,omitempty"`
+}
+
+func validActivitySessionCursor(
+	cursor activitySessionCursorPayload, digest string,
+) bool {
+	return cursor.Version == activitySessionCursorVersion &&
+		cursor.Schema == export.ActivityReportSchemaVersion &&
+		cursor.Digest == digest && cursor.Offset >= 0
 }
 
 func newActivityReportTokenPayload(

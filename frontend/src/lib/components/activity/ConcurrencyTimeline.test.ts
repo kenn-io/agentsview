@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
 import ConcurrencyTimeline from "./ConcurrencyTimeline.svelte";
@@ -419,9 +419,7 @@ describe("ConcurrencyTimeline", () => {
     });
     await tick();
     await dragRange(target, 0, 0);
-    expect(onSelectRange).toHaveBeenCalledWith(
-      { start: 0, end: 0, label: "10:00–10:05" },
-    );
+    expect(onSelectRange).toHaveBeenCalledWith({ start: 0, end: 0, label: "10:00–10:05" });
     unmount(c);
     target.remove();
   });
@@ -463,9 +461,7 @@ describe("ConcurrencyTimeline", () => {
     const hits = target.querySelectorAll(".slot-hit");
     expect(hits.length).toBe(2);
     await dragRange(target, 1, 1);
-    expect(onSelectRange).toHaveBeenCalledWith(
-      { start: 1, end: 1, label: "10:05–10:10" },
-    );
+    expect(onSelectRange).toHaveBeenCalledWith({ start: 1, end: 1, label: "10:05–10:10" });
     unmount(c);
     target.remove();
   });
@@ -489,6 +485,56 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
 
+  it("shows a clear-selection button for a brushed range", async () => {
+    const onSelectRange = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: {
+        report: popoverReport(),
+        selectedRange: { start: 0, end: 0 },
+        onSelectRange,
+      },
+    });
+    await tick();
+
+    const clear = [...target.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Clear selection",
+    );
+    expect(clear).toBeDefined();
+    clear!.click();
+    expect(onSelectRange).toHaveBeenCalledExactlyOnceWith(null);
+
+    unmount(c);
+    target.remove();
+  });
+
+  it("extends a keyboard selection with Shift+ArrowRight", async () => {
+    const onSelectRange = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: { report: minuteReport(), onSelectRange },
+    });
+    await tick();
+
+    const first = target.querySelector<SVGRectElement>(".slot-hit");
+    first!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+    await tick();
+
+    expect(onSelectRange).toHaveBeenCalledWith(expect.objectContaining({ start: 0, end: 1 }));
+    unmount(c);
+    target.remove();
+  });
+
   it("selects a slot with a keyboard Enter", async () => {
     const onSelectRange = vi.fn();
     const target = document.createElement("div");
@@ -501,9 +547,7 @@ describe("ConcurrencyTimeline", () => {
     const hit = target.querySelector(".slot-hit") as SVGRectElement;
     hit.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await tick();
-    expect(onSelectRange).toHaveBeenCalledWith(
-      expect.objectContaining({ start: 0, end: 0 }),
-    );
+    expect(onSelectRange).toHaveBeenCalledWith(expect.objectContaining({ start: 0, end: 0 }));
     unmount(c);
     target.remove();
   });

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Bar, BarChart } from "layerchart";
+  import { Button } from "@kenn-io/kit-ui";
   import { scaleUtc } from "d3-scale";
   import {
     utcDay,
@@ -25,13 +26,15 @@
   type Metric = "messages" | "sessions";
   const MAX_DAY_RANGE = 120;
   interface Props {
-    onDateRangeChange?: (from: string, to: string) => void;
+    onRangeSelect?: (from: string, to: string) => void;
+    onRangeClear?: () => void;
   }
 
-  let { onDateRangeChange }: Props = $props();
+  let { onRangeSelect, onRangeClear }: Props = $props();
 
   let metric = $state<Metric>("messages");
   let chartAreaWidth = $state(0);
+  let keyboardAnchorIndex = $state<number | null>(null);
   const selectedRange = $derived(analytics.selectedActivityRange);
 
   const dayRangeCount = $derived.by(() => {
@@ -194,12 +197,73 @@
   }
 
   function commitDateRange(from: string, to: string) {
-    if (onDateRangeChange) {
-      onDateRangeChange(from, to);
+    if (onRangeSelect) {
+      onRangeSelect(from, to);
     } else {
-      analytics.setDateRange(from, to);
+      analytics.setActivitySelection(from, to);
     }
-    analytics.setActivitySelection(from, to);
+  }
+
+  function clearDateRange() {
+    if (onRangeClear) {
+      onRangeClear();
+    } else {
+      analytics.clearActivitySelection();
+    }
+    keyboardAnchorIndex = null;
+  }
+
+  function commitIndexRange(firstIndex: number, lastIndex: number) {
+    const start = Math.min(firstIndex, lastIndex);
+    const end = Math.max(firstIndex, lastIndex);
+    const first = chart.bars[start];
+    const last = chart.bars[end];
+    if (!first || !last) return;
+    let to = last.date;
+    if (analytics.granularity === "week") {
+      to = addDays(to, 6);
+    } else if (analytics.granularity === "month") {
+      to = endOfMonth(to);
+    }
+    if (to > analytics.to) to = analytics.to;
+    commitDateRange(first.date, to);
+  }
+
+  function focusBar(index: number) {
+    document.querySelector<SVGElement>(
+      `[data-activity-bar-index="${index}"]`,
+    )?.focus();
+  }
+
+  function handleBarKeydown(event: KeyboardEvent, index: number) {
+    if (event.key === "Escape" && selectedRange) {
+      event.preventDefault();
+      clearDateRange();
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      keyboardAnchorIndex = index;
+      commitIndexRange(index, index);
+      return;
+    }
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const next = Math.max(
+      0,
+      Math.min(
+        chart.bars.length - 1,
+        index + (event.key === "ArrowRight" ? 1 : -1),
+      ),
+    );
+    if (event.shiftKey) {
+      const anchor = keyboardAnchorIndex ?? index;
+      keyboardAnchorIndex = anchor;
+      commitIndexRange(anchor, next);
+    } else {
+      keyboardAnchorIndex = next;
+    }
+    queueMicrotask(() => focusBar(next));
   }
 
   function handleBarLeave() {
@@ -303,6 +367,14 @@
           {m.analytics_granularity_month()}
         </button>
       </div>
+      {#if selectedRange}
+        <Button
+          size="sm"
+          surface="soft"
+          label={m.sidebar_clear_selection()}
+          onclick={clearDateRange}
+        />
+      {/if}
     </div>
   </div>
 
@@ -355,15 +427,27 @@
         }}
       >
         {#snippet marks()}
-          {#each chart.bars as bar (bar.date)}
+          {#each chart.bars as bar, index (bar.date)}
             <Bar
               data={bar}
               x="instant"
               radius={1}
               insets={{ left: barInset, right: barInset }}
               class={`bar${bar.value === 0 ? " empty" : ""}${selectedRange && bar.date >= bucketStart(selectedRange.from) && bar.date <= bucketStart(selectedRange.to) ? " selected" : ""}${selectedRange && (bar.date < bucketStart(selectedRange.from) || bar.date > bucketStart(selectedRange.to)) ? " dimmed" : ""}`}
+              role="button"
+              tabindex={0}
+              data-activity-bar-index={index}
+              aria-pressed={selectedRange !== null && bar.date >= bucketStart(selectedRange.from) && bar.date <= bucketStart(selectedRange.to)}
+              aria-label={m.analytics_activity_timeline_tooltip_value({
+                label: formatDateLabel(bar.instant),
+                value: bar.value.toLocaleString(getLocale()),
+                metric: metric === "messages"
+                  ? m.analytics_metric_messages()
+                  : m.analytics_metric_sessions(),
+              })}
               onpointerenter={(event) => handleBarHover(event, bar)}
               onpointerleave={handleBarLeave}
+              onkeydown={(event) => handleBarKeydown(event, index)}
             />
           {/each}
         {/snippet}

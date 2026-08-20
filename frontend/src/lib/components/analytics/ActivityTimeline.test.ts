@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 import ActivityTimeline from "./ActivityTimeline.svelte";
@@ -168,11 +168,11 @@ describe("ActivityTimeline", () => {
         by_agent: {},
       })),
     };
-    const onDateRangeChange = vi.fn();
+    const onRangeSelect = vi.fn();
 
     const component = mount(ActivityTimeline, {
       target: document.body,
-      props: { onDateRangeChange },
+      props: { onRangeSelect },
     });
     await tick();
     await tick();
@@ -217,9 +217,82 @@ describe("ActivityTimeline", () => {
     );
     await tick();
 
-    expect(onDateRangeChange).toHaveBeenCalledExactlyOnceWith("2026-08-03", "2026-08-06");
+    expect(onRangeSelect).toHaveBeenCalledExactlyOnceWith("2026-08-03", "2026-08-06");
     expect(document.querySelector(".activity-brush-range")).not.toBeNull();
 
+    unmount(component);
+  });
+
+  it("exposes a visible clear action for a brushed selection", async () => {
+    analytics.from = "2026-08-01";
+    analytics.to = "2026-08-10";
+    analytics.selectedActivityRange = { from: "2026-08-03", to: "2026-08-06" };
+    analytics.activity = {
+      granularity: "day",
+      series: Array.from({ length: 10 }, (_, index) => ({
+        date: `2026-08-${String(index + 1).padStart(2, "0")}`,
+        sessions: 1,
+        messages: 2,
+        user_messages: 1,
+        assistant_messages: 1,
+        tool_calls: 0,
+        thinking_messages: 0,
+        by_agent: {},
+      })),
+    };
+    const onRangeClear = vi.fn();
+
+    const component = mount(ActivityTimeline, {
+      target: document.body,
+      props: { onRangeClear },
+    });
+    await tick();
+
+    const clear = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Clear selection",
+    );
+    expect(clear).toBeDefined();
+    clear!.click();
+    expect(onRangeClear).toHaveBeenCalledOnce();
+
+    unmount(component);
+  });
+
+  it("extends a keyboard selection with Shift+ArrowRight", async () => {
+    analytics.from = "2026-08-01";
+    analytics.to = "2026-08-03";
+    analytics.activity = {
+      granularity: "day",
+      series: Array.from({ length: 3 }, (_, index) => ({
+        date: `2026-08-0${index + 1}`,
+        sessions: 1,
+        messages: 2,
+        user_messages: 1,
+        assistant_messages: 1,
+        tool_calls: 0,
+        thinking_messages: 0,
+        by_agent: {},
+      })),
+    };
+    const onRangeSelect = vi.fn();
+
+    const component = mount(ActivityTimeline, {
+      target: document.body,
+      props: { onRangeSelect },
+    });
+    await tick();
+
+    const bars = document.querySelectorAll<SVGRectElement>("rect.bar");
+    bars[0]!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+    await tick();
+
+    expect(onRangeSelect).toHaveBeenCalledWith("2026-08-01", "2026-08-02");
     unmount(component);
   });
 

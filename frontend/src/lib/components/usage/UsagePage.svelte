@@ -59,6 +59,12 @@
   const chartColorMaps = $derived(
     usageChartColorMaps(usage.summary, settings.chartPalette),
   );
+  const timeSeriesColorMap = $derived(
+    usageChartColorMaps(
+      usage.timeSeriesSummary,
+      settings.chartPalette,
+    )[usage.toggles.timeSeries.groupBy],
+  );
 
   // Keep projects already returned by the summary so a project remains
   // available after filtering removes it or the page is remounted.
@@ -562,7 +568,7 @@
 
     <Card level="default" padding="none" class="chart-panel wide">
       <CostTimeSeriesChart
-        colorMap={chartColorMaps[usage.toggles.timeSeries.groupBy]}
+        colorMap={timeSeriesColorMap}
       />
     </Card>
 

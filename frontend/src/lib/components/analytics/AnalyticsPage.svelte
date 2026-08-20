@@ -251,13 +251,12 @@
     return refresh;
   }
 
-  function handleDateRangeChange(from: string, to: string) {
-    const state = panelDateState(from, to, { mode: "fixed" });
-    if (!state) return;
-    sessionDateIntentEstablished = true;
-    analytics.setDateRange(from, to);
-    yokedDates.updateFromPanel(state);
-    writeSessionDateParams(state);
+  function handleActivityRangeSelect(from: string, to: string) {
+    analytics.setActivitySelection(from, to);
+  }
+
+  function handleActivityRangeClear() {
+    analytics.clearActivitySelection();
   }
 
   function shortTz(tz: string): string {
@@ -615,7 +614,10 @@
             </span>
           </h3>
         </div>
-        <ActivityTimeline onDateRangeChange={handleDateRangeChange} />
+        <ActivityTimeline
+          onRangeSelect={handleActivityRangeSelect}
+          onRangeClear={handleActivityRangeClear}
+        />
         <div class="chart-divider"></div>
         <HourOfWeekHeatmap />
       </Card>

@@ -250,7 +250,7 @@ func (s *Server) prepareActivityReport(
 	}
 	if page.HasNext {
 		page.NextCursor, err = encodeActivityToken(tokenStore, activitySessionCursorPayload{
-			Version: activityReportTokenVersion,
+			Version: activitySessionCursorVersion,
 			Schema:  export.ActivityReportSchemaVersion,
 			Digest:  digest, Offset: page.Next,
 			Sort: activity.SessionSortAgentMinutes, Direction: "desc",
