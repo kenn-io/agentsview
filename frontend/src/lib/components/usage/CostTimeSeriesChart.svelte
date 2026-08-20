@@ -335,14 +335,12 @@
                 data={seriesData.points[0]!}
                 seriesKey={item.key}
                 fill={item.color}
-                opacity={0.7}
                 radius={1}
               />
             {:else}
               <Area
                 seriesKey={item.key}
                 fill={item.color}
-                opacity={0.7}
               />
             {/if}
           {/each}

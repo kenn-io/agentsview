@@ -217,6 +217,18 @@ describe("CostTimeSeriesChart", () => {
     expect(bar).not.toBeNull();
     expect(Number(bar!.getAttribute("width"))).toBeGreaterThan(0);
     expect(Number(bar!.getAttribute("height"))).toBeGreaterThan(0);
+    expect(Number(bar!.getAttribute("opacity") ?? 1)).toBe(1);
+
+    unmount(component);
+  });
+
+  it("renders stacked area colors without dimming them", async () => {
+    const component = mountChart();
+    await tick();
+
+    const area = document.querySelector<SVGPathElement>("path.lc-area-path");
+    expect(area).not.toBeNull();
+    expect(Number(area!.getAttribute("opacity") ?? 1)).toBe(1);
 
     unmount(component);
   });
@@ -251,7 +263,7 @@ describe("CostTimeSeriesChart", () => {
 	const component = mountChart();
 	await tick();
 
-	expect(document.querySelectorAll(".chart-svg [opacity='0.7']")).toHaveLength(2);
+	expect(document.querySelectorAll(".chart-svg rect.lc-bar")).toHaveLength(2);
 	expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
 	unmount(component);
   });
@@ -274,7 +286,7 @@ describe("CostTimeSeriesChart", () => {
     await tick();
 
     const paths = Array.from(
-      document.querySelectorAll<SVGPathElement>("path[opacity='0.7']"),
+      document.querySelectorAll<SVGPathElement>("path.lc-area-path"),
     ).map((path) => path.getAttribute("fill"));
     const dots = Array.from(
       document.querySelectorAll<HTMLElement>(".legend-dot"),
@@ -296,7 +308,7 @@ describe("CostTimeSeriesChart", () => {
     await tick();
 
     const paths = document.querySelectorAll<SVGPathElement>(
-      "path[opacity='0.7']",
+      "path.lc-area-path",
     );
     expect(paths).toHaveLength(1);
     expect(paths[0]!.getAttribute("fill")).toBe(projectColor("single-model"));
@@ -317,7 +329,7 @@ describe("CostTimeSeriesChart", () => {
     await tick();
 
     const marks = Array.from(
-      document.querySelectorAll<SVGElement>(".chart-svg [opacity='0.7']"),
+      document.querySelectorAll<SVGElement>(".chart-svg rect.lc-bar"),
     );
     const dots = Array.from(
       document.querySelectorAll<HTMLElement>(".legend-dot"),
@@ -348,7 +360,7 @@ describe("CostTimeSeriesChart", () => {
     await tick();
 
     const paths = Array.from(
-      document.querySelectorAll<SVGPathElement>("path[opacity='0.7']"),
+      document.querySelectorAll<SVGPathElement>("path.lc-area-path"),
     ).map((path) => path.getAttribute("fill"));
     const dots = Array.from(
       document.querySelectorAll<HTMLElement>(".legend-dot"),
