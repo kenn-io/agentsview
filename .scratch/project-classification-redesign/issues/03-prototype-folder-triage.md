@@ -25,11 +25,12 @@ selected and returns a machine, suggested prefix, evidence kind, counts, and
 lexical availability. It does not return an archive-wide folder inventory,
 current-versus-inferred project mismatch, missing-path result, or problem state.
 
-The prototype's
+The prototype's rejected
 [Folder triage variant](../../../frontend/project-classification-prototype.html?variant=D)
-hard-coded `project`, `inferred`, and `status` values, then built its queues
-from those invented values. Its "Missing" state was also unsupported because
-candidate availability does not inspect the filesystem.
+now records why the earlier concept failed instead of presenting its invented
+queues as working UI. The original version hard-coded `project`, `inferred`, and
+`status` values, then built queues from them. Its "Missing" state was also
+unsupported because candidate availability does not inspect the filesystem.
 
 Do not add a folder-triage entry point or a hidden classifier to support one.
 Keep corrections deliberate and project-first in Split inspector. A future
