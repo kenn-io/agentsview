@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"io/fs"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	httppprof "net/http/pprof"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -476,6 +479,18 @@ func (s *Server) humaConfig() huma.Config {
 		version = "dev"
 	}
 	cfg := huma.DefaultConfig("AgentsView API", version)
+	jsonFormat := huma.Format{
+		Marshal: func(w io.Writer, value any) error {
+			return json.MarshalWrite(w, value)
+		},
+		Unmarshal: func(data []byte, value any) error {
+			return json.Unmarshal(data, value)
+		},
+	}
+	cfg.Formats = map[string]huma.Format{
+		"application/json": jsonFormat,
+		"json":             jsonFormat,
+	}
 	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions."
 	cfg.OpenAPIPath = "/api/openapi"
 	cfg.DocsPath = ""
@@ -485,6 +500,10 @@ func (s *Server) humaConfig() huma.Config {
 		"#/components/schemas/",
 		agentsViewSchemaNamer,
 	)
+	cfg.Components.Schemas.RegisterTypeAlias(
+		reflect.TypeFor[jsontext.Value](),
+		reflect.TypeFor[humaArbitraryJSON](),
+	)
 	if s.basePath != "" {
 		cfg.Servers = []*huma.Server{{
 			URL:         s.basePath,
@@ -492,6 +511,14 @@ func (s *Server) humaConfig() huma.Config {
 		}}
 	}
 	return cfg
+}
+
+// humaArbitraryJSON gives Huma the OpenAPI shape for jsontext.Value. Runtime
+// encoding still uses jsontext.Value directly through JSON v2.
+type humaArbitraryJSON []byte
+
+func (humaArbitraryJSON) Schema(huma.Registry) *huma.Schema {
+	return &huma.Schema{}
 }
 
 func (s *Server) routes() {

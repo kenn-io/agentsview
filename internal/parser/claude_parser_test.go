@@ -1736,6 +1736,25 @@ func TestParseClaudeSession_PersistedToolResultDoesNotOverwriteSiblings(
 	assert.Equal(t, len("small inline result"), toolResults[1].ContentLength)
 }
 
+func TestResolveClaudePersistedToolResultsPreservesUntouchedNumbers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "parent-session.jsonl")
+	resultPath := filepath.Join(dir, "parent-session", "tool-results", "result.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
+	require.NoError(t, os.WriteFile(resultPath, []byte("full output"), 0o644))
+
+	line := `{"future_counter":9007199254740993,"message":{"content":[` +
+		`{"type":"tool_result","content":"Full output saved to: ` + resultPath + `"}` +
+		`]},"toolUseResult":{"persistedOutputPath":"` + resultPath + `"}}`
+
+	got := resolveClaudePersistedToolResults(sessionPath, line)
+
+	assert.Equal(t, "9007199254740993", gjson.Get(got, "future_counter").Raw)
+	assert.Equal(t, "full output", gjson.Get(got, "message.content.0.content").Str)
+}
+
 func mustJSONString(t *testing.T, value string) string {
 	t.Helper()
 	encoded, err := json.Marshal(value)

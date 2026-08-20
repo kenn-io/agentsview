@@ -299,7 +299,7 @@ func applyWorkBuddyUsage(msg *ParsedMessage, root gjson.Result) {
 	if reasoningField.Exists() {
 		normalized["reasoning_tokens"] = reasoning
 	}
-	j, err := json.Marshal(normalized)
+	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}

@@ -22,6 +22,30 @@ func missingS3ObjectError() error {
 	}
 }
 
+func TestRewriteS3ClaudeToolResultLinePreservesUntouchedNumbers(t *testing.T) {
+	t.Parallel()
+
+	const (
+		sessionURI = "s3://bucket/laptop/raw/claude/test-proj/parent-session.jsonl"
+		original   = "/home/user-a/.claude/projects/test-proj/parent-session/tool-results/result.txt"
+		local      = "/tmp/agentsview-test/result.txt"
+	)
+	line := `{"future_counter":9007199254740993,"message":{"content":[` +
+		`{"type":"tool_result","content":"Full output saved to: ` + original + `"}` +
+		`]},"toolUseResult":{"persistedOutputPath":"` + original + `"}}`
+
+	got, changed, sawPersisted, err := rewriteS3ClaudeToolResultLine(
+		"/tmp/parent-session.jsonl", sessionURI, line,
+		map[string]string{"parent:result.txt": local},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.True(t, sawPersisted)
+	assert.Contains(t, got, `"future_counter":9007199254740993`)
+	assert.Contains(t, got, local)
+}
+
 func TestProcessS3ClaudeFetchesPersistedToolResultSidecar(t *testing.T) {
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/parent-session.jsonl"

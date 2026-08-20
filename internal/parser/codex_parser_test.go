@@ -1460,10 +1460,10 @@ func TestParseCodexSession_TokenUsage(t *testing.T) {
 		// input_tokens=10000 as the full input (cached included);
 		// after normalization the stored input_tokens is the
 		// uncached remainder (10000-6000=4000).
-		assert.NotEmpty(t, msgs[1].TokenUsage)
-		assert.Contains(t, string(msgs[1].TokenUsage), `"input_tokens":4000`)
-		assert.Contains(t, string(msgs[1].TokenUsage), `"output_tokens":500`)
-		assert.Contains(t, string(msgs[1].TokenUsage), `"cache_read_input_tokens":6000`)
+		assert.Equal(t,
+			`{"cache_read_input_tokens":6000,"input_tokens":4000,"output_tokens":500}`,
+			string(msgs[1].TokenUsage),
+		)
 		assert.Equal(t, 500, msgs[1].OutputTokens)
 		assert.Equal(t, 10000, msgs[1].ContextTokens) // 4000+6000
 		assert.True(t, msgs[1].HasOutputTokens)

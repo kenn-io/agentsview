@@ -239,7 +239,7 @@ func applyAmpTokenUsage(msg *ParsedMessage, usage gjson.Result) {
 		normalized["cache_creation_input_tokens"] = cacheCreation
 	}
 
-	j, err := json.Marshal(normalized)
+	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}

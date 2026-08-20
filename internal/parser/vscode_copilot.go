@@ -590,7 +590,7 @@ func extractVSCopilotInputJSON(
 	if len(result) == 0 {
 		return ""
 	}
-	data, err := json.Marshal(result)
+	data, err := json.Marshal(result, json.Deterministic(true))
 	if err != nil {
 		return ""
 	}
@@ -786,7 +786,7 @@ func reconstructJSONLWithLimit(path string, hardRecordLimit int) ([]byte, error)
 		return nil, nil
 	}
 
-	return json.Marshal(state)
+	return json.Marshal(state, json.Deterministic(true))
 }
 
 func readVSCodeCopilotRecord(

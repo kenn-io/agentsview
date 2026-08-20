@@ -688,7 +688,7 @@ func applyPiebaldTokenUsage(msg *ParsedMessage, mr piebaldMessageRow) {
 		"cache_read_input_tokens":     cacheReadTokens,
 		"cache_creation_input_tokens": cacheWriteTokens,
 	}
-	j, err := json.Marshal(normalized)
+	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}

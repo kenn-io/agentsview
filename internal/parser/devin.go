@@ -864,7 +864,7 @@ func devinTokenUsageFromMetrics(metrics gjson.Result) (
 	if hasCached {
 		payload["cache_read_input_tokens"] = cached
 	}
-	raw, err := json.Marshal(payload)
+	raw, err := json.Marshal(payload, json.Deterministic(true))
 	if err != nil {
 		return nil, 0, 0, false, false
 	}

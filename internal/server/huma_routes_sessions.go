@@ -414,7 +414,7 @@ type sessionUsageBreakdownResponse struct {
 	OutputTokens             int         `json:"output_tokens"`
 	CacheCreationInputTokens int         `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int         `json:"cache_read_input_tokens"`
-	WebSearchRequests        int         `json:"web_search_requests,omitempty"`
+	WebSearchRequests        int         `json:"web_search_requests,omitzero"`
 	Cost                     money.Money `json:"cost"`
 	HasCost                  bool        `json:"has_cost"`
 }

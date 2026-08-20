@@ -421,7 +421,7 @@ func (b *qwenAssistantBuffer) flush(ordinal int) (ParsedMessage, bool) {
 			"output_tokens":           b.sumOutput,
 			"cache_read_input_tokens": b.sumCacheRead,
 		}
-		if j, err := json.Marshal(normalized); err == nil {
+		if j, err := json.Marshal(normalized, json.Deterministic(true)); err == nil {
 			msg.TokenUsage = j
 		}
 		msg.OutputTokens = b.sumOutput

@@ -47,7 +47,7 @@ func normalizedGeminiTokenUsage(tok geminiTokens) jsontext.Value {
 		"output_tokens":           tok.Output + tok.Thoughts,
 		"cache_read_input_tokens": tok.Cached,
 	}
-	raw, err := json.Marshal(payload)
+	raw, err := json.Marshal(payload, json.Deterministic(true))
 	if err != nil {
 		return nil
 	}
@@ -312,7 +312,7 @@ func applyGeminiCumulativeDeltas(messages []ParsedMessage) {
 				"output_tokens":           usage.Output,
 				"cache_read_input_tokens": cachedDelta,
 			}
-			if raw, err := json.Marshal(payload); err == nil {
+			if raw, err := json.Marshal(payload, json.Deterministic(true)); err == nil {
 				messages[i].TokenUsage = raw
 			}
 		}

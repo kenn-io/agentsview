@@ -565,7 +565,7 @@ func applyPiUsage(pm *ParsedMessage, usage gjson.Result) {
 		"cache_read_input_tokens":     cacheRead,
 		"cache_creation_input_tokens": cacheCreate,
 	}
-	j, err := json.Marshal(normalized)
+	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}
@@ -679,7 +679,7 @@ func normalizePiIntent(argsRaw string) string {
 	}
 	delete(m, "agent__intent")
 	delete(m, "_i")
-	out, err := json.Marshal(m)
+	out, err := json.Marshal(m, json.Deterministic(true))
 	if err != nil {
 		return argsRaw
 	}

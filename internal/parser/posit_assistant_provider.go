@@ -1053,7 +1053,7 @@ func positAssistantFillTokenUsage(msg *ParsedMessage, usage gjson.Result) {
 	msg.ContextTokens = input + cacheRead + cacheWrite
 	msg.OutputTokens = output
 
-	tokenUsageJSON, err := json.Marshal(tokenUsage)
+	tokenUsageJSON, err := json.Marshal(tokenUsage, json.Deterministic(true))
 	if err == nil {
 		msg.TokenUsage = tokenUsageJSON
 	}

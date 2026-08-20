@@ -982,7 +982,7 @@ func normalizeDeepSeekHarnessContentImages(
 			}
 			block, _ = json.Marshal(map[string]any{
 				"type": "text", "text": "[image]",
-			})
+			}, json.Deterministic(true))
 		case "tool-result":
 			content, ok := fields["content"]
 			if !ok {
@@ -993,7 +993,7 @@ func normalizeDeepSeekHarnessContentImages(
 				return nil, err
 			}
 			fields["content"] = nested
-			block, _ = json.Marshal(fields)
+			block, _ = json.Marshal(fields, json.Deterministic(true))
 		}
 		normalized = append(normalized, block)
 	}

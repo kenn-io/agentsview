@@ -1935,7 +1935,7 @@ func claudeBlockExistsIn(
 
 func replaceClaudeMessageContent(line string, blocks []gjson.Result) string {
 	var top map[string]jsontext.Value
-	if err := json.Unmarshal([]byte(line), &top); err != nil {
+	if err := json.Unmarshal([]byte(line), &top); err != nil || top == nil {
 		return line
 	}
 	messageData, ok := top["message"]
@@ -1943,7 +1943,7 @@ func replaceClaudeMessageContent(line string, blocks []gjson.Result) string {
 		return line
 	}
 	var msg map[string]jsontext.Value
-	if err := json.Unmarshal(messageData, &msg); err != nil {
+	if err := json.Unmarshal(messageData, &msg); err != nil || msg == nil {
 		return line
 	}
 	content := make([]jsontext.Value, 0, len(blocks))
@@ -2011,36 +2011,40 @@ func resolveClaudePersistedToolResults(sessionPath, line string) string {
 		return line
 	}
 
-	var top map[string]any
-	if err := json.Unmarshal([]byte(line), &top); err != nil {
+	var top map[string]jsontext.Value
+	if err := json.Unmarshal([]byte(line), &top); err != nil || top == nil {
 		return line
 	}
 
-	msg, ok := top["message"].(map[string]any)
-	if !ok {
+	var msg map[string]jsontext.Value
+	if err := json.Unmarshal(top["message"], &msg); err != nil || msg == nil {
 		return line
 	}
-	blocks, ok := msg["content"].([]any)
-	if !ok {
+	var blocks []jsontext.Value
+	if err := json.Unmarshal(msg["content"], &blocks); err != nil {
 		return line
 	}
 
 	persistedPath := ""
-	if tur, ok := top["toolUseResult"].(map[string]any); ok {
-		if p, ok := tur["persistedOutputPath"].(string); ok {
-			persistedPath = p
-		}
+	var toolUseResult map[string]jsontext.Value
+	if err := json.Unmarshal(top["toolUseResult"], &toolUseResult); err == nil {
+		_ = json.Unmarshal(toolUseResult["persistedOutputPath"], &persistedPath)
 	}
 	toolResultCount := countClaudeToolResultBlocks(blocks)
 
 	changed := false
-	for _, rawBlock := range blocks {
-		block, ok := rawBlock.(map[string]any)
-		if !ok || block["type"] != "tool_result" {
+	for i, rawBlock := range blocks {
+		var block map[string]jsontext.Value
+		if err := json.Unmarshal(rawBlock, &block); err != nil || block == nil {
 			continue
 		}
-		content, ok := block["content"].(string)
-		if !ok {
+		var blockType string
+		if err := json.Unmarshal(block["type"], &blockType); err != nil ||
+			blockType != "tool_result" {
+			continue
+		}
+		var content string
+		if err := json.Unmarshal(block["content"], &content); err != nil {
 			continue
 		}
 		path := persistedOutputPathFromContent(content)
@@ -2055,25 +2059,45 @@ func resolveClaudePersistedToolResults(sessionPath, line string) string {
 		if !ok {
 			continue
 		}
-		block["content"] = output
+		contentData, err := json.Marshal(output)
+		if err != nil {
+			return line
+		}
+		block["content"] = contentData
+		blocks[i], err = json.Marshal(block, json.Deterministic(true))
+		if err != nil {
+			return line
+		}
 		changed = true
 	}
 	if !changed {
 		return line
 	}
 
-	encoded, err := json.Marshal(top)
+	contentData, err := json.Marshal(blocks)
+	if err != nil {
+		return line
+	}
+	msg["content"] = contentData
+	messageData, err := json.Marshal(msg, json.Deterministic(true))
+	if err != nil {
+		return line
+	}
+	top["message"] = messageData
+	encoded, err := json.Marshal(top, json.Deterministic(true))
 	if err != nil {
 		return line
 	}
 	return string(encoded)
 }
 
-func countClaudeToolResultBlocks(blocks []any) int {
+func countClaudeToolResultBlocks(blocks []jsontext.Value) int {
 	count := 0
 	for _, rawBlock := range blocks {
-		block, ok := rawBlock.(map[string]any)
-		if ok && block["type"] == "tool_result" {
+		var block struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(rawBlock, &block) == nil && block.Type == "tool_result" {
 			count++
 		}
 	}

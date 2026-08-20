@@ -606,6 +606,36 @@ func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
 	assert.Contains(t, spec.Paths["/api/v1/session-stats"], "get")
 }
 
+func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/config/terminal", `{"mode":"auto","mode":"clipboard"}`)
+
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestOpenAPIEndpointDocumentsTokenUsageAsArbitraryJSON(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/openapi.json")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var spec struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]jsontext.Value `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	messageSchema, ok := spec.Components.Schemas["DbMessage"]
+	require.True(t, ok, "spec missing DbMessage schema")
+	tokenUsage, ok := messageSchema.Properties["token_usage"]
+	require.True(t, ok, "DbMessage schema missing token_usage")
+	assert.JSONEq(t, `{}`, string(tokenUsage))
+}
+
 func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
 	te := setup(t)
 

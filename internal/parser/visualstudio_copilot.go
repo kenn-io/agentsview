@@ -1313,7 +1313,7 @@ func visualStudioCopilotTraceUsage(
 	if hasOutput {
 		normalized["output_tokens"] = output
 	}
-	data, err := json.Marshal(normalized)
+	data, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return nil, 0, 0, false, false
 	}
@@ -1397,7 +1397,7 @@ func visualStudioCopilotToolInputJSON(toolName, rawArgs string) string {
 	if m, ok := asStringAnyMap(args); ok {
 		args = normalizeVisualStudioCopilotToolArgs(toolName, m)
 	}
-	data, err := json.Marshal(args)
+	data, err := json.Marshal(args, json.Deterministic(true))
 	if err != nil {
 		return ""
 	}
@@ -1819,7 +1819,7 @@ func visualStudioCopilotChatToolInput(
 	if m, ok := asStringAnyMap(decoded); ok {
 		decoded = normalizeVisualStudioCopilotToolArgs(toolName, m)
 	}
-	data, err := json.Marshal(decoded)
+	data, err := json.Marshal(decoded, json.Deterministic(true))
 	if err != nil {
 		return ""
 	}

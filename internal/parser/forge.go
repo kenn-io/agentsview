@@ -413,7 +413,7 @@ func forgeUsageJSON(usage gjson.Result) ([]byte, int, int, bool, bool) {
 	if hasCompletion {
 		payload["output_tokens"] = int(completion.Int())
 	}
-	raw, _ := json.Marshal(payload)
+	raw, _ := json.Marshal(payload, json.Deterministic(true))
 	return raw, int(prompt.Int()) + int(cached.Int()), int(completion.Int()), hasContext, hasOutput
 }
 

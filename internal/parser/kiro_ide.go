@@ -575,7 +575,7 @@ func kiroIDEResolveAssistant(
 				if a.Input.ModifiedContent != "" {
 					m["content"] = a.Input.ModifiedContent
 				}
-				inputJSON, _ := json.Marshal(m)
+				inputJSON, _ := json.Marshal(m, json.Deterministic(true))
 				toolCalls = append(toolCalls, ParsedToolCall{
 					ToolUseID: a.ActionID,
 					ToolName:  "Write",
@@ -605,7 +605,7 @@ func kiroIDEComputeDiff(input kiroIDEActionInput) string {
 	if input.OriginalContent == "" && input.ModifiedContent == "" {
 		j, _ := json.Marshal(map[string]string{
 			"file": input.File,
-		})
+		}, json.Deterministic(true))
 		return string(j)
 	}
 
@@ -620,14 +620,14 @@ func kiroIDEComputeDiff(input kiroIDEActionInput) string {
 	if err != nil || text == "" {
 		j, _ := json.Marshal(map[string]string{
 			"file": input.File,
-		})
+		}, json.Deterministic(true))
 		return string(j)
 	}
 
 	j, _ := json.Marshal(map[string]string{
 		"file": input.File,
 		"diff": text,
-	})
+	}, json.Deterministic(true))
 	return string(j)
 }
 

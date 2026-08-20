@@ -296,7 +296,7 @@ func applyQClawAssistantUsage(
 		"cache_read_input_tokens":     cacheRead,
 		"cache_creation_input_tokens": cacheWrite,
 	}
-	j, err := json.Marshal(normalized)
+	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}

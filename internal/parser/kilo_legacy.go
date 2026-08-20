@@ -1201,7 +1201,7 @@ func classifyKiloLegacyMessage(
 			cmdName = "executeCommand"
 		}
 		inputMap := map[string]string{"command": cmdText}
-		inputJSON, err := json.Marshal(inputMap)
+		inputJSON, err := json.Marshal(inputMap, json.Deterministic(true))
 		if err != nil {
 			return RoleAssistant, nil, nil
 		}
@@ -1680,7 +1680,7 @@ func parseKiloLegacyToolCall(text string, ordinal int) *ParsedToolCall {
 	for _, field := range kiloResultBearingReadTools[strings.ToLower(toolName)] {
 		delete(toolData, field)
 	}
-	inputJSON, err := json.Marshal(toolData)
+	inputJSON, err := json.Marshal(toolData, json.Deterministic(true))
 	if err != nil {
 		return nil
 	}

@@ -1359,7 +1359,7 @@ func applyOpenCodeTokenUsage(
 		"cache_read_input_tokens":     fields.cacheRead,
 		"cache_creation_input_tokens": fields.cacheCreate,
 	}
-	j, err := json.Marshal(normalized)
+	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}

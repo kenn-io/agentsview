@@ -856,7 +856,7 @@ func parseCodebuffAIMessage(
 			}
 			inputParts["status"] = status
 
-			inputJSON, _ := json.Marshal(inputParts)
+			inputJSON, _ := json.Marshal(inputParts, json.Deterministic(true))
 
 			tc := ParsedToolCall{
 				ToolUseID: agentID,

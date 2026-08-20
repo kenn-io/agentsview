@@ -495,7 +495,7 @@ func (b *codexSessionBuilder) applyCodexTokenUsage(
 		"output_tokens":           output,
 		"cache_read_input_tokens": cached,
 	}
-	j, err := json.Marshal(normalized)
+	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}

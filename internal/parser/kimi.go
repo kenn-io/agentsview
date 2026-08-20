@@ -845,7 +845,7 @@ func kimiNativeTokenUsage(
 		"cache_read_input_tokens":     inputCacheRead,
 		"cache_creation_input_tokens": inputCacheCreate,
 	}
-	raw, err := json.Marshal(normalized)
+	raw, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return nil, 0, 0, false, false
 	}

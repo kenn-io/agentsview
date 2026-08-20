@@ -911,7 +911,7 @@ func classifyRooCodeMessage(
 			return RoleAssistant, nil, nil
 		}
 		inputMap := map[string]string{"command": cmdText}
-		inputJSON, err := json.Marshal(inputMap)
+		inputJSON, err := json.Marshal(inputMap, json.Deterministic(true))
 		if err != nil {
 			return RoleAssistant, nil, nil
 		}
@@ -1290,7 +1290,7 @@ func parseRooCodeMcpCall(text string, ordinal int) *ParsedToolCall {
 		}
 	}
 
-	inputJSON, err := json.Marshal(toolData)
+	inputJSON, err := json.Marshal(toolData, json.Deterministic(true))
 	if err != nil {
 		return nil
 	}
@@ -1332,7 +1332,7 @@ func parseRooCodeToolCall(text string, ordinal int) *ParsedToolCall {
 	}
 
 	// Re-marshal to get canonical JSON for InputJSON.
-	inputJSON, err := json.Marshal(toolData)
+	inputJSON, err := json.Marshal(toolData, json.Deterministic(true))
 	if err != nil {
 		return nil
 	}
