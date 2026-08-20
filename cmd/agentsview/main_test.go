@@ -89,6 +89,27 @@ func TestServeStartsUsageCacheBackfill(t *testing.T) {
 	close(recorder.release)
 }
 
+// Foreground servers and daemons with idle timeout disabled pass a nil
+// tracker; the backfill must still start and join its wait goroutine.
+func TestServeStartsUsageCacheBackfillWithoutIdleTracker(t *testing.T) {
+	recorder := &usageCacheBackfillRecorder{
+		started: make(chan struct{}), release: make(chan struct{}),
+		waited: make(chan struct{}),
+	}
+	startDaemonUsageCacheBackfill(context.Background(), recorder, nil)
+	select {
+	case <-recorder.started:
+	case <-time.After(time.Second):
+		t.Fatal("usage cache backfill did not start")
+	}
+	select {
+	case <-recorder.waited:
+	case <-time.After(time.Second):
+		t.Fatal("usage cache backfill was not awaited without an idle tracker")
+	}
+	close(recorder.release)
+}
+
 func (recorder *cursorSecretRecorder) SetCursorSecret(secret []byte) {
 	recorder.secret = append([]byte(nil), secret...)
 }
