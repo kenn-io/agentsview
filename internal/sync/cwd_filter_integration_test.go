@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,25 @@ func encodeCursorProjectDir(path string) string {
 		})...)
 	}
 	return strings.Join(parts, "-")
+}
+
+// cursorWorkspaceTempDir returns the public spelling of a macOS temporary
+// directory. Cursor workspace resolution normalizes /private/var to /var, so
+// fixtures must use that same user-facing path for filters and assertions.
+func cursorWorkspaceTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS != "darwin" || !strings.HasPrefix(dir, "/private/") {
+		return dir
+	}
+	publicDir := strings.TrimPrefix(dir, "/private")
+	privateInfo, err := os.Stat(dir)
+	require.NoError(t, err)
+	publicInfo, err := os.Stat(publicDir)
+	require.NoError(t, err)
+	require.True(t, os.SameFile(privateInfo, publicInfo),
+		"macOS temporary path spellings must identify the same directory")
+	return publicDir
 }
 
 func setupClaudeEnvWithCwdPrefixes(
@@ -106,10 +126,10 @@ func TestSyncEngineCursorCwdPrefixFilterAndProjectIdentity(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	matchingWorkspace := filepath.Join(workspaceRoot, "app")
 	boundaryWorkspace := filepath.Join(workspaceRoot, "app2")
-	outsideWorkspace := filepath.Join(t.TempDir(), "other")
+	outsideWorkspace := filepath.Join(cursorWorkspaceTempDir(t), "other")
 	for _, workspace := range []string{matchingWorkspace, boundaryWorkspace, outsideWorkspace} {
 		require.NoError(t, os.MkdirAll(workspace, 0o755))
 	}
@@ -158,7 +178,7 @@ func TestSyncEngineCursorIssue1418ShapeRetainsMatchingSession(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
-	workspace := filepath.Join(t.TempDir(), "work-area")
+	workspace := filepath.Join(cursorWorkspaceTempDir(t), "work-area")
 	require.NoError(t, os.MkdirAll(workspace, 0o755))
 	projectDir := encodeCursorProjectDir(workspace)
 	prefix := filepath.Dir(workspace)
@@ -291,7 +311,7 @@ func TestSyncEngineCursorCwdConsumerPaths(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	cwd := filepath.Join(t.TempDir(), "cursorworkspace")
+	cwd := filepath.Join(cursorWorkspaceTempDir(t), "cursorworkspace")
 	require.NoError(t, os.MkdirAll(cwd, 0o755))
 	projectDir := encodeCursorProjectDir(cwd)
 
@@ -391,7 +411,7 @@ func TestSyncEngineCursorCwdDataVersionRefresh(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
-	workspace := filepath.Join(t.TempDir(), "refresh")
+	workspace := filepath.Join(cursorWorkspaceTempDir(t), "refresh")
 	require.NoError(t, os.MkdirAll(workspace, 0o755))
 	projectDir := encodeCursorProjectDir(workspace)
 	prefix := workspace
@@ -1292,7 +1312,7 @@ func TestSyncEngineCursorCwdFilterRelaxationRefreshesStaleRows(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "relaxed")
 	require.NoError(t, os.MkdirAll(workspace, 0o755))
 	otherRoot := t.TempDir()

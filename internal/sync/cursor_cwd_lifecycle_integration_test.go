@@ -177,7 +177,7 @@ func TestSyncEngineCursorUnavailableChangedTranscriptPreservesCwd(t *testing.T) 
 
 func TestResyncCursorUnavailablePreservesArchiveCwd(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
 	projectDir := encodeCursorProjectDir(workspace)
 	sessionID := "12121212-3434-4567-8899-aaaaaaaaaaaa"
@@ -216,7 +216,7 @@ func TestResyncCursorUnavailablePreservesArchiveCwd(t *testing.T) {
 
 func TestResyncCursorFilteredCwdSurvivesOrphanCopy(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	oldWorkspace := filepath.Join(workspaceRoot, "Code", "old")
 	newWorkspace := filepath.Join(workspaceRoot, "Code", "new")
 	projectDir := encodeCursorProjectDir(oldWorkspace)
@@ -263,7 +263,7 @@ func TestResyncCursorFilteredCwdSurvivesOrphanCopy(t *testing.T) {
 
 func TestParseDiffCursorCwdDoesNotWriteOnParseError(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
 	projectDir := encodeCursorProjectDir(workspace)
 	sessionID := "56565656-7878-4901-8222-bbbbbbbbbbbb"
@@ -321,7 +321,7 @@ func TestParseDiffCursorCwdDoesNotWriteOnParseError(t *testing.T) {
 
 func TestSyncEngineCursorResolvedFilteredCwdIsReconciled(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	oldWorkspace := filepath.Join(workspaceRoot, "Code", "old")
 	workspace := filepath.Join(workspaceRoot, "Code", "new")
 	projectDir := encodeCursorProjectDir(workspace)
@@ -365,7 +365,7 @@ func TestSyncEngineCursorResolvedFilteredCwdIsReconciled(t *testing.T) {
 
 func TestSyncEngineCursorOversizedTranscriptReconcilesWorkspace(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
 	projectDir := encodeCursorProjectDir(workspace)
 	sessionID := "eeeeeeee-ffff-4000-8111-222222222222"
@@ -417,7 +417,7 @@ func TestSyncEngineCursorOversizedTranscriptReconcilesWorkspace(t *testing.T) {
 
 func TestSyncEngineCursorNoneSingleSessionClearsFilteredCwd(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
 	projectDir := encodeCursorProjectDir(workspace)
 	sessionID := "ffffffff-0000-4111-8222-333333333333"
@@ -461,7 +461,7 @@ func TestSyncEngineCursorNoneSingleSessionClearsFilteredCwd(t *testing.T) {
 
 func TestSyncEngineCursorRemoteClearsStoredCwd(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
 	projectDir := encodeCursorProjectDir(workspace)
 	sessionID := "11111111-2222-4333-8444-555555555555"
@@ -505,7 +505,7 @@ func TestSyncEngineCursorRemoteClearsStoredCwd(t *testing.T) {
 
 func TestSyncEngineCursorSourceMissingRevivalPreservesCwd(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
 	projectDir := encodeCursorProjectDir(workspace)
 	sessionID := "22222222-3333-4444-8555-666666666666"
@@ -554,7 +554,7 @@ func TestSyncEngineCursorSourceMissingRevivalPreservesCwd(t *testing.T) {
 
 func TestSyncEngineCursorUnchangedTranscriptFollowsWorkspaceLifecycle(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
 	projectDir := encodeCursorProjectDir(workspace)
 	sessionID := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
@@ -614,7 +614,7 @@ func TestSyncEngineCursorUnchangedTranscriptFollowsWorkspaceLifecycle(t *testing
 
 func TestSyncEngineCursorCompleteNoneAndAmbiguousClearStoredCwd(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
 	projectDir := encodeCursorProjectDir(workspace)
 	sessionID := "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"

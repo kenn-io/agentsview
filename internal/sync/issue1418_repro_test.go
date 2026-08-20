@@ -17,7 +17,7 @@ import (
 
 func TestIssue1418WorkspaceAppearsWithoutTranscriptChange(t *testing.T) {
 	root := t.TempDir()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
 	projectDir := encodeIssue1418ProjectDir(workspace)
 	sessionID := "dddddddd-eeee-4fff-8000-111111111111"
