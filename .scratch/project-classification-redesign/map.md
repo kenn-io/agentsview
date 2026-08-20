@@ -46,6 +46,9 @@ states, and acceptance criteria.
 - [Define project-classification jobs and invariants](issues/01-define-project-classification-jobs-and-invariants.md):
   Machine-scoped folder rules drive mapping, ordinary saves stay direct, broad
   changes get review, and stored classification layers support linear Undo.
+- [Prototype project workspace variants](issues/02-prototype-project-workspace-variants.md):
+  Use Split inspector so the full inventory remains visible beside the
+  selected project's folders and correction controls.
 
 ## Not yet specified
 
