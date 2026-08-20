@@ -427,8 +427,31 @@ func ResolveCodexShallowWatchRoots(root string) []string {
 // expansion. The name carries no legacy entrypoint verb so the
 // provider can call it without shimming a Discover* free function.
 func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
+	return projectJSONLSessionFiles(projectsDir, AgentClaude, discoverClaudeS3)
+}
+
+// IcodemateCLIProjectSessionFiles enumerates a terminal CLI projects root in
+// the same Claude-layout terms as ClaudeProjectSessionFiles, labeling every
+// discovered transcript with AgentIcodemate and scanning s3:// roots against
+// the icodemate provider segment (.../raw/icodemate) so machine metadata and
+// source labeling match the owning agent instead of Claude's.
+func IcodemateCLIProjectSessionFiles(projectsDir string) []DiscoveredFile {
+	return projectJSONLSessionFiles(projectsDir, AgentIcodemate, discoverIcodemateCLIS3)
+}
+
+// projectJSONLSessionFiles walks one Claude-layout projects root
+// (<root>/<project>/*.jsonl plus nested subagents trees) labeling each
+// DiscoveredFile with the owning agent, and routes s3:// roots through the
+// agent's own S3 scanner so the provider segment and agent metadata match.
+// Transient read errors on individual projects are skipped: a project
+// directory echoed by a concurrent watch may disappear mid-walk.
+func projectJSONLSessionFiles(
+	projectsDir string,
+	agent AgentType,
+	discoverS3 func(string) []DiscoveredFile,
+) []DiscoveredFile {
 	if strings.HasPrefix(projectsDir, "s3://") {
-		return discoverClaudeS3(projectsDir)
+		return discoverS3(projectsDir)
 	}
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
@@ -462,7 +485,7 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 			files = append(files, DiscoveredFile{
 				Path:    filepath.Join(projDir, name),
 				Project: entry.Name(),
-				Agent:   AgentClaude,
+				Agent:   agent,
 			})
 		}
 
@@ -492,7 +515,7 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 					files = append(files, DiscoveredFile{
 						Path:    path,
 						Project: entry.Name(),
-						Agent:   AgentClaude,
+						Agent:   agent,
 					})
 					return nil
 				},

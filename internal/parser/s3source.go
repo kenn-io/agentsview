@@ -451,6 +451,20 @@ func discoverClaudeS3(root string) []DiscoveredFile {
 	})
 }
 
+// discoverIcodemateCLIS3 lists IcodeMate terminal CLI session JSONL under an
+// s3:// projects root, mirroring discoverClaudeS3's selection rules but
+// labeling every transcript with AgentIcodemate and deriving machine metadata
+// from the .../<machine>/raw/icodemate layout, so IcodeMate objects never
+// surface as Claude sessions or under Claude's machine namespace.
+func discoverIcodemateCLIS3(root string) []DiscoveredFile {
+	return s3PrefixScan(root, s3SessionScanner{
+		Agent:    AgentIcodemate,
+		Keep:     keepClaudeS3Session,
+		Project:  func(_ string, segs []string) string { return segs[0] },
+		Sidecars: claudeS3SidecarObjects,
+	})
+}
+
 // claudeS3SubagentTranscriptPaths lists candidate subagent transcript objects,
 // mirroring the local walk in ClaudeSubagentTranscriptPaths. A root session
 // lists its own subagents prefix; a subagent lists the enclosing root's prefix

@@ -1574,18 +1574,28 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## ICodeMate (`icodemate`)
 
-- **Format:** OpenCode-compatible SQLite or legacy session/message/part storage.
+- **Format:** Two storage families under one agent, matched by on-disk layout:
+  the VSCode-extension OpenCode-compatible SQLite or legacy session/message/part
+  storage, and the terminal CLI Claude-format projects JSONL
+  (`<projectsRoot>/<project>/<session>.jsonl`).
 - **Evidence:** `no-public-source`.
 - **Upstream:** ICodeMate's first-party product pages, documentation, and public
   GitHub repository search were checked 2026-07-19 without finding producer
   source or an authoritative disk schema. The OpenCode source pinned in the
-  `opencode` entry is compatible-family evidence only.
+  `opencode` entry is compatible-family evidence for the VSCode path only; the
+  terminal CLI path's Claude-format transcript schema (type/user/assistant
+  records carrying uuid, parentUuid, sessionId, cwd, gitBranch, timestamp, and
+  message.usage token fields) is compatible-family evidence from the `claude`
+  entry.
 - **Usage and cost:** Compatible messages can persist input, output, cache-read,
   cache-write, and model identity. Agentsview catalog-prices these values and
   consumes no product-reported USD total.
 - **Agentsview:** `internal/parser/icodemate.go` delegates to
-  `internal/parser/opencode.go`; product-specific divergence is a known
-  limitation.
+  `internal/parser/opencode.go` for the VSCode OpenCode path;
+  `internal/parser/icodemate_cli.go` parses the Claude-format CLI projects
+  transcripts, and `internal/parser/icodemate_provider.go` fans the configured
+  roots out to whichever layout each root owns. Product-specific divergence is
+  a known limitation.
 
 ## WorkBuddy (`workbuddy`)
 
