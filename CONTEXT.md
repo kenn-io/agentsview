@@ -33,6 +33,18 @@ A working directory recorded by one or more sessions. Its identity is its source
 archive, machine, and normalized path; a renamed path is a different observed
 folder.
 
+**Source Agents View**:
+
+The Agents View instance that owns an archive's session ingestion and project
+corrections. It can publish read-only mirrors identified by its stable identity
+and display name. _Avoid_: Writable archive
+
+**Read-only mirror**:
+
+A copy of data published by one or more Source Agents View instances. It
+preserves each source's identity for inspection but does not own project
+corrections.
+
 **Folder suggestion**:
 
 An evidence-backed path prefix offered within a selected project as the starting

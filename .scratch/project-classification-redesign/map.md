@@ -64,6 +64,10 @@ states, and acceptance criteria.
   Offer one immediate Undo of the latest rule-set version, recompute current
   classifications, review newly expanded impact, and retain an unpruned audit
   history without exposing history controls yet.
+- [Define read-only and multi-machine behavior](issues/07-define-read-only-and-multi-machine-behavior.md):
+  Identify each Source Agents View by name, keep mirrors inspectable but
+  immutable, preserve source-aware grouping, and make copy-to-all an atomic
+  multi-machine rule change.
 
 ## Not yet specified
 
