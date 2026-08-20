@@ -539,6 +539,22 @@
         color: var(--text-secondary);
       }
 
+      .result-note {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 11px;
+        border: 1px solid color-mix(in oklch, var(--warning) 45%, var(--border));
+        border-radius: 5px;
+        background: var(--warning-soft);
+        color: var(--text-secondary);
+      }
+
+      .result-note .button {
+        min-height: 23px;
+        margin-left: auto;
+      }
+
       .save-toast {
         display: flex;
         align-items: center;
@@ -996,11 +1012,11 @@
         {
           key: "D",
           name: "Folder triage",
-          note: "A complementary folder-first queue for cleanup across projects.",
+          note: "Rejected: the archive has no evidence-based triage queue.",
         },
       ];
 
-      const projects = [
+      const initialProjects = [
         { key: "agentsview", name: "agentsview", sessions: 1684, machines: 2, folders: 5, rules: 2, last: "Today" },
         { key: "kit-ui", name: "kit-ui", sessions: 806, machines: 1, folders: 3, rules: 1, last: "Today" },
         { key: "docs-site", name: "docs-site", sessions: 594, machines: 2, folders: 4, rules: 2, last: "Yesterday" },
@@ -1008,17 +1024,54 @@
         { key: "unknown", name: "Unknown project", sessions: 214, machines: 2, folders: 6, rules: 0, last: "Today" },
       ];
 
-      const folders = [
-        { id: "agentsview-main", path: "/work/src/agentsview", machine: "host-a.example", sessions: 1160, project: "agentsview", inferred: "agentsview", status: "mapped", children: 3 },
-        { id: "agentsview-pr", path: "/work/agentsview.worktrees/pr-482", machine: "host-a.example", sessions: 186, project: "agentsview", inferred: "agentsview", status: "inferred", children: 0 },
-        { id: "agentsview-feature", path: "/work/agentsview.worktrees/folder-redesign", machine: "host-a.example", sessions: 74, project: "kit-ui", inferred: "agentsview", status: "mismatch", children: 0 },
-        { id: "agentsview-laptop", path: "/repos/agentsview", machine: "host-b.example", sessions: 264, project: "agentsview", inferred: "agentsview", status: "mapped", children: 0 },
-        { id: "kit-ui-main", path: "/work/src/kit-ui", machine: "host-a.example", sessions: 603, project: "kit-ui", inferred: "kit-ui", status: "mapped", children: 2 },
-        { id: "kit-ui-fix", path: "/work/kit-ui.worktrees/menu-fix", machine: "host-a.example", sessions: 203, project: "kit-ui", inferred: "kit-ui", status: "inferred", children: 0 },
-        { id: "docs-site-main", path: "/work/src/docs-site", machine: "host-a.example", sessions: 482, project: "docs-site", inferred: "docs-site", status: "mapped", children: 1 },
-        { id: "scratch-parser", path: "/work/scratch/parser-bench", machine: "host-a.example", sessions: 31, project: "unknown", inferred: "openapi-tools", status: "unmapped", children: 0 },
-        { id: "legacy-agentsview", path: "/archive/agentsview-old", machine: "host-b.example", sessions: 11, project: "unknown", inferred: "agentsview", status: "missing", children: 0 },
+      const initialFolders = [
+        { id: "agentsview-main", path: "/work/src/agentsview", machine: "host-a.example", sessions: 1160, project: "agentsview", candidateProject: "agentsview", ruleBacked: true, evidenceKind: "snapshot", available: true, children: 3 },
+        { id: "agentsview-pr", path: "/work/agentsview.worktrees/pr-482", machine: "host-a.example", sessions: 186, project: "agentsview", candidateProject: "agentsview", ruleBacked: false, evidenceKind: "snapshot", available: true, children: 0 },
+        { id: "agentsview-feature", path: "/work/agentsview.worktrees/folder-redesign", machine: "host-a.example", sessions: 74, project: "kit-ui", candidateProject: "agentsview", ruleBacked: false, evidenceKind: "snapshot", available: true, children: 0 },
+        { id: "agentsview-laptop", path: "/repos/agentsview", machine: "host-b.example", sessions: 264, project: "agentsview", candidateProject: "agentsview", ruleBacked: true, evidenceKind: "snapshot", available: true, children: 0 },
+        { id: "kit-ui-main", path: "/work/src/kit-ui", machine: "host-a.example", sessions: 603, project: "kit-ui", candidateProject: "kit-ui", ruleBacked: true, evidenceKind: "snapshot", available: true, children: 2 },
+        { id: "kit-ui-fix", path: "/work/kit-ui.worktrees/menu-fix", machine: "host-a.example", sessions: 203, project: "kit-ui", candidateProject: "kit-ui", ruleBacked: false, evidenceKind: "aggregate", available: true, children: 0 },
+        { id: "docs-site-main", path: "/work/src/docs-site", machine: "host-a.example", sessions: 482, project: "docs-site", candidateProject: "docs-site", ruleBacked: true, evidenceKind: "snapshot", available: true, children: 1 },
+        { id: "scratch-parser", path: "/work/scratch/parser-bench", machine: "host-a.example", sessions: 31, project: "unknown", candidateProject: "openapi-tools", ruleBacked: false, evidenceKind: "fallback", available: true, children: 0 },
+        { id: "legacy-agentsview", path: "/archive/agentsview-old", machine: "host-b.example", sessions: 11, project: "unknown", candidateProject: "agentsview", ruleBacked: false, evidenceKind: "unavailable", available: false, children: 0 },
       ];
+
+      const clone = (value) => JSON.parse(JSON.stringify(value));
+      const projects = clone(initialProjects);
+      const folders = clone(initialFolders);
+
+      const scenarios = {
+        ordinary: {
+          project: "agentsview",
+          folder: "agentsview-feature",
+          target: "agentsview",
+          prefix: "/work/agentsview.worktrees/folder-redesign",
+        },
+        broad: {
+          project: "agentsview",
+          folder: "agentsview-feature",
+          target: "agentsview",
+          prefix: "/work/agentsview.worktrees",
+        },
+        readonly: {
+          project: "agentsview",
+          folder: "agentsview-feature",
+          target: "agentsview",
+          prefix: "/work/agentsview.worktrees/folder-redesign",
+        },
+        stale: {
+          project: "agentsview",
+          folder: "agentsview-feature",
+          target: "agentsview",
+          prefix: "/work/agentsview.worktrees/folder-redesign",
+        },
+        refresh: {
+          project: "agentsview",
+          folder: "agentsview-feature",
+          target: "agentsview",
+          prefix: "/work/agentsview.worktrees/folder-redesign",
+        },
+      };
 
       const state = {
         variant: new URLSearchParams(location.search).get("variant")?.toUpperCase() || "A",
@@ -1030,8 +1083,10 @@
         reviewAccepted: false,
         lastSave: null,
         undoNotice: "",
+        result: null,
+        pendingEdit: true,
+        showSuggestions: true,
         stateOpen: false,
-        triageFilter: "attention",
       };
 
       if (!variants.some((item) => item.key === state.variant)) state.variant = "A";
@@ -1061,20 +1116,56 @@
           : projects.find((project) => project.key === state.targetProject)?.name || state.targetProject;
       }
 
-      function impact() {
-        if (state.scenario === "broad") return { matched: 418, changing: 391, projects: 4, protected: 3, broad: true };
+      function scenario() {
+        return scenarios[state.scenario] || scenarios.ordinary;
+      }
+
+      function proposalPrefix() {
+        const active = scenario();
         const folder = selectedFolder();
+        return folder.id === active.folder ? active.prefix : folder.path;
+      }
+
+      function impact() {
+        const folder = selectedFolder();
+        const prefix = proposalPrefix();
+        const affected = folders.filter((item) =>
+          item.machine === folder.machine &&
+          (item.path === prefix || item.path.startsWith(`${prefix}/`)),
+        );
+        const target = state.targetProject === "new" ? state.newProject.trim() : state.targetProject;
+        const currentProjects = [...new Set(affected.map((item) => item.project))];
+        const replacingMapping = affected.some((item) => item.project !== "unknown" && item.project !== target);
         return {
-          matched: folder.sessions,
-          changing: folder.project === state.targetProject ? 0 : folder.sessions,
-          projects: folder.status === "mismatch" ? 2 : 1,
-          protected: folder.children,
-          broad: false,
+          matched: affected.reduce((sum, item) => sum + item.sessions, 0),
+          changing: affected.filter((item) => item.project !== target).reduce((sum, item) => sum + item.sessions, 0),
+          projects: currentProjects.length,
+          projectNames: currentProjects.map((key) => projects.find((project) => project.key === key)?.name || key),
+          protected: affected.reduce((sum, item) => sum + item.children, 0),
+          broad: affected.length > 1,
+          requiresReview: replacingMapping || affected.length > 1 || currentProjects.length > 1,
+          affected,
         };
       }
 
       function isReadOnly() {
         return state.scenario === "readonly";
+      }
+
+      function resetScenario(nextScenario) {
+        projects.splice(0, projects.length, ...clone(initialProjects));
+        folders.splice(0, folders.length, ...clone(initialFolders));
+        const next = scenarios[nextScenario] || scenarios.ordinary;
+        state.scenario = nextScenario in scenarios ? nextScenario : "ordinary";
+        state.selectedProject = next.project;
+        state.selectedFolder = next.folder;
+        state.targetProject = next.target;
+        state.newProject = "";
+        state.reviewAccepted = false;
+        state.lastSave = null;
+        state.undoNotice = "";
+        state.result = null;
+        state.pendingEdit = true;
       }
 
       function folderPath(path) {
@@ -1115,6 +1206,8 @@
             <button data-action="scenario" data-scenario="ordinary" class="${state.scenario === "ordinary" ? "active" : ""}">Move one folder</button>
             <button data-action="scenario" data-scenario="broad" class="${state.scenario === "broad" ? "active" : ""}">Broad impact</button>
             <button data-action="scenario" data-scenario="readonly" class="${state.scenario === "readonly" ? "active" : ""}">Read-only source</button>
+            <button data-action="scenario" data-scenario="stale" class="${state.scenario === "stale" ? "active" : ""}">Stale preview</button>
+            <button data-action="scenario" data-scenario="refresh" class="${state.scenario === "refresh" ? "active" : ""}">Refresh failure</button>
           </div>
         </div>`;
       }
@@ -1124,37 +1217,33 @@
           <h1>${label}</h1>
           <div class="segmented" aria-label="Data view"><button class="active">Inventory</button><button>Project rules</button></div>
         </div>
-        <div class="summary-strip"><span>5 projects</span><span>3,626 sessions</span><span>2,278 governed by rules</span><span>9 folders in review set</span></div>
+        <div class="summary-strip"><span>${projects.length} projects</span><span>${projects.reduce((sum, project) => sum + project.sessions, 0).toLocaleString()} sessions</span><span>2,278 governed by rules</span><span>${folders.length} candidates in review set</span></div>
         ${scenarioBar()}
         ${state.undoNotice ? `<div class="save-toast" role="status"><strong>Undone</strong><span>${esc(state.undoNotice)}</span></div>` : ""}
+        ${resultNotice()}
         ${state.lastSave ? savedNotice() : ""}`;
       }
 
-      function statusTag(folder) {
-        const labels = {
-          mapped: ["Rule", "blue"],
-          inferred: ["Suggested", ""],
-          mismatch: ["Mismatch", "warning"],
-          unmapped: ["Unmapped", "warning"],
-          missing: ["Missing", ""],
-        };
-        const [label, tone] = labels[folder.status];
-        return `<span class="tag ${tone}">${label}</span>`;
+      function evidenceTag(folder) {
+        if (folder.ruleBacked) return `<span class="tag blue">Rule</span>`;
+        if (!folder.available) return `<span class="tag">Unavailable</span>`;
+        const labels = { snapshot: "Snapshot", aggregate: "Aggregate", fallback: "Exact cwd" };
+        return `<span class="tag">${labels[folder.evidenceKind] || "Candidate"}</span>`;
       }
 
       function folderItems(filterProject = state.selectedProject, includeSuggested = true) {
-        let rows = folders.filter((folder) => folder.project === filterProject || (includeSuggested && folder.inferred === filterProject));
+        let rows = folders.filter((folder) => folder.project === filterProject || (includeSuggested && folder.candidateProject === filterProject));
         return rows.map((folder) => `<div class="folder-item ${folder.id === state.selectedFolder ? "active" : ""} ${folder.project !== filterProject ? "suggested" : ""}">
           <button class="folder-button" data-action="folder" data-folder="${folder.id}">
             ${folderPath(folder.path)}
             <span class="folder-meta"><span>${folder.machine}</span><span>${folder.sessions} sessions</span></span>
           </button>
-          ${statusTag(folder)}
+          ${evidenceTag(folder)}
         </div>`).join("");
       }
 
       function targetPicker() {
-        const options = ["agentsview", "kit-ui", "docs-site", "new"];
+        const options = [...projects.filter((project) => project.key !== "unknown").map((project) => project.key), "new"];
         return `<div class="target-options" aria-label="Target project">
           ${options.map((key) => `<button data-action="target" data-target="${key}" class="${state.targetProject === key ? "active" : ""}">${key === "new" ? "+ New" : esc(projects.find((item) => item.key === key).name)}</button>`).join("")}
         </div>
@@ -1167,24 +1256,35 @@
         if (isReadOnly()) {
           return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>Changes are unavailable in this view.</strong><br />This source mirrors a remote archive. Open the writable archive on its source machine to change project rules.</div></div>`;
         }
-        const needsReview = data.broad && !state.reviewAccepted;
+        if (!state.pendingEdit) {
+          return `<div class="${compact ? "" : "composer"}"><div class="read-only-note"><strong>No pending correction.</strong><br />The saved version is reflected in the inventory. Select another candidate to start a new correction.</div></div>`;
+        }
+        if (state.result?.kind === "conflict") {
+          return `<div class="${compact ? "" : "composer"}"><div class="result-note"><span><strong>Nothing was saved.</strong><br />The rule set changed after this preview. Refresh the impact before reviewing again.</span><button class="button" data-action="refresh-impact">Refresh impact</button></div></div>`;
+        }
+        const needsReview = data.requiresReview && !state.reviewAccepted;
         return `<div class="composer">
           <div class="row-between"><h3>Pending correction</h3><span class="tag">${folder.machine}</span></div>
-          <div class="mapping-line"><span class="mapping-path" title="${esc(folder.path)}">${esc(folder.path)}</span><span>→</span></div>
+          <div class="mapping-line"><span class="mapping-path" title="${esc(proposalPrefix())}">${esc(proposalPrefix())}</span><span>→</span></div>
           ${targetPicker()}
           <div class="impact-line"><span>${data.matched} matched</span><span>${data.changing} changing</span><span>${data.projects} current project${data.projects === 1 ? "" : "s"}</span>${data.protected ? `<span>${data.protected} nested protected</span>` : ""}</div>
-          ${data.broad ? `<div class="impact-warning"><strong>This prefix reaches beyond the selected folder.</strong><br />It changes sessions from agentsview, kit-ui, docs-site, and Unknown project. Three nested rules keep their current classifications.</div>` : ""}
+          ${data.requiresReview ? `<div class="impact-warning"><strong>${data.broad ? "This prefix governs several observed candidates." : "This correction replaces an existing mapping."}</strong><br />Current classifications represented in the preview: ${esc(data.projectNames.join(", "))}. Review is required before saving.</div>` : ""}
           <div class="composer-actions">
             <button class="button quiet" data-action="cancel">Cancel</button>
             ${needsReview
-              ? `<button class="button primary" data-action="review">Review 391 changes</button>`
+              ? `<button class="button primary" data-action="review">Review ${data.changing} changes</button>`
               : `<button class="button primary" data-action="save" ${state.targetProject === "new" && !state.newProject.trim() ? "disabled" : ""}>${data.broad ? "Confirm and save" : "Save correction"}</button>`}
           </div>
         </div>`;
       }
 
+      function resultNotice() {
+        if (state.result?.kind !== "refresh-failed") return "";
+        return `<div class="result-note" role="status"><span><strong>Correction saved; inventory refresh failed.</strong><br />The new rule version is active. Retry the read without saving again.</span><button class="button" data-action="retry-refresh">Retry refresh</button></div>`;
+      }
+
       function savedNotice() {
-        return `<div class="save-toast" role="status"><strong>Saved</strong><span class="mono">${esc(state.lastSave.path)}</span><span>now maps to ${esc(state.lastSave.target)}.</span><button class="button" data-action="undo">Undo</button></div>`;
+        return `<div class="save-toast" role="status"><strong>Saved</strong><span class="mono">${esc(state.lastSave.path)}</span><span>now maps to ${esc(state.lastSave.target)}.</span>${isReadOnly() ? "" : `<button class="button" data-action="undo">Undo</button>`}</div>`;
       }
 
       function renderVariantA() {
@@ -1196,8 +1296,8 @@
             <aside class="inspector">
               <header><div class="row-between"><h2>${esc(project.name)}</h2><span class="tag blue">${project.rules} active rules</span></div><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.folders} observed folders</span></div></header>
               <div class="inspector-section">
-                <div class="section-header"><h3>Observed and suggested folders</h3><button class="button quiet" data-action="suggested">Show suggestions</button></div>
-                <div class="folder-list">${folderItems(project.key)}</div>
+                <div class="section-header"><h3>Observed and suggested folders</h3><button class="button quiet" data-action="suggested">${state.showSuggestions ? "Hide suggestions" : "Show suggestions"}</button></div>
+                <div class="folder-list">${folderItems(project.key, state.showSuggestions)}</div>
               </div>
               ${composer()}
             </aside>
@@ -1207,13 +1307,13 @@
 
       function ledgerPanel() {
         const project = currentProject();
-        const rows = folders.filter((folder) => folder.project === project.key || folder.inferred === project.key);
+        const rows = folders.filter((folder) => folder.project === project.key || folder.candidateProject === project.key);
         return `<div class="ledger-panel">
           <div class="ledger-list">
             ${rows.map((folder) => `<div class="ledger-row ${folder.id === state.selectedFolder ? "active" : ""}">
               <button class="ledger-action" data-action="folder" data-folder="${folder.id}">${folderPath(folder.path)}</button>
               <span class="muted">${folder.machine}</span>
-              ${statusTag(folder)}
+              ${evidenceTag(folder)}
               <span class="numeric">${folder.sessions}</span>
             </div>`).join("")}
           </div>
@@ -1225,7 +1325,7 @@
         return `<section class="page">
           ${pageLead()}
           <div class="ledger-wrap">
-            <div class="row-between"><span class="muted">Select a project to open its folder ledger without leaving the inventory.</span><button class="button" data-action="folder" data-folder="scratch-parser">Classify an unmapped folder</button></div>
+            <div class="row-between"><span class="muted">Select a project to open its folder ledger without leaving the inventory.</span><button class="button" data-action="folder" data-folder="scratch-parser">Review a candidate</button></div>
             ${inventoryTable(true)}
           </div>
         </section>`;
@@ -1238,50 +1338,24 @@
           <div class="focus-layout">
             <nav class="project-rail" aria-label="Projects"><div class="rail-heading">Project inventory</div>${projects.map((item) => `<button class="rail-project ${item.key === project.key ? "active" : ""}" data-action="project" data-project="${item.key}"><strong>${esc(item.name)}</strong><small>${item.sessions.toLocaleString()} sessions · ${item.folders} folders</small></button>`).join("")}</nav>
             <div class="focus-main">
-              <header class="focus-header"><div class="row-between"><div><h1>${esc(project.name)}</h1><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.rules} rules</span></div></div><span class="tag blue">Writable archive</span></div></header>
+              <header class="focus-header"><div class="row-between"><div><h1>${esc(project.name)}</h1><div class="project-facts"><span>${project.sessions.toLocaleString()} sessions</span><span>${project.machines} machines</span><span>${project.rules} rules</span></div></div><span class="tag blue">${isReadOnly() ? "Read-only mirror" : "Writable archive"}</span></div></header>
               <div class="focus-body">
-                <div class="path-command"><input aria-label="Find or paste a folder" placeholder="Paste a folder path or search observed folders" /><button class="button" data-action="folder" data-folder="scratch-parser">Add folder</button></div>
-                <div class="section-header"><h2>Folders for ${esc(project.name)}</h2><span class="muted">Rule, inferred, and suggested paths together</span></div>
+                <div class="read-only-note"><strong>Rejected comparison artifact.</strong><br />Search and add-folder interactions were retired when Split inspector was selected.</div>
+                <div class="section-header"><h2>Folders for ${esc(project.name)}</h2><span class="muted">Rule-backed paths and evidence candidates together</span></div>
                 <div class="folder-list">${folderItems(project.key)}</div>
               </div>
             </div>
-            <aside class="focus-side"><div><h2>Correction</h2><p class="muted">One path, one destination, visible archive impact.</p></div>${composer(true)}<div class="read-only-note"><strong>Latest saved change</strong><br /><span class="muted">docs-site mapping on host-b.example, 18 minutes ago</span><br /><button class="button quiet" data-action="undo-latest">Undo latest change</button></div></aside>
+            <aside class="focus-side"><div><h2>Correction</h2><p class="muted">One path, one destination, visible archive impact.</p></div>${composer(true)}</aside>
           </div>
         </section>`;
       }
 
-      function triageRows() {
-        const filtered = folders.filter((folder) => {
-          if (state.triageFilter === "attention") return ["mismatch", "unmapped", "missing"].includes(folder.status);
-          if (state.triageFilter === "suggested") return folder.status === "inferred";
-          if (state.triageFilter === "missing") return folder.status === "missing";
-          return true;
-        });
-        return filtered.map((folder) => `<tr class="${folder.id === state.selectedFolder ? "selected" : ""}">
-          <td><button class="project-button" data-action="folder" data-folder="${folder.id}"><span class="triage-path">${folderPath(folder.path)}<small>${folder.machine} · ${folder.sessions} sessions</small></span></button></td>
-          <td>${statusTag(folder)}</td>
-          <td>${esc(projects.find((project) => project.key === folder.project)?.name || "Unknown project")}</td>
-          <td>${esc(folder.inferred)}</td>
-          <td><div class="inline-targets"><button class="button" data-action="quick-target" data-folder="${folder.id}" data-target="${folder.inferred}">Use ${esc(folder.inferred)}</button><button class="button quiet" data-action="folder" data-folder="${folder.id}">Review</button></div></td>
-        </tr>`).join("");
-      }
-
       function renderVariantD() {
-        const filters = [
-          ["attention", "Needs attention", 3],
-          ["suggested", "Suggestions", 2],
-          ["missing", "Missing paths", 1],
-          ["all", "All observed", 9],
-        ];
         return `<section class="page">
           ${pageLead("Folder triage")}
-          <div class="triage-layout">
-            <aside class="triage-sidebar"><h2>Queues</h2>${filters.map(([key, label, count]) => `<button class="triage-filter ${state.triageFilter === key ? "active" : ""}" data-action="triage-filter" data-filter="${key}"><span>${label}</span><span class="count-badge">${count}</span></button>`).join("")}</aside>
-            <div class="triage-content">
-              <div class="triage-toolbar"><div class="path-command"><input aria-label="Filter folders" placeholder="Filter paths, machines, or projects" /></div><button class="button" data-action="scenario" data-scenario="readonly">Preview read-only</button></div>
-              <div class="table-shell"><table class="triage-table"><thead><tr><th>Observed folder</th><th>State</th><th>Current project</th><th>Likely project</th><th>Action</th></tr></thead><tbody>${triageRows()}</tbody></table></div>
-              ${state.selectedFolder ? `<div style="margin-top: 10px">${composer()}</div>` : ""}
-            </div>
+          <div class="read-only-note">
+            <strong>Rejected after live review.</strong><br />
+            The archive has no folder-level “needs attention,” mismatch, or missing-path state, so it cannot produce this queue. The candidate API begins with a project the user selected and returns evidence-backed path suggestions. Continue with A, Split inspector, for that project-first workflow.
           </div>
         </section>`;
       }
@@ -1316,6 +1390,32 @@
         setVariant(variants[next].key);
       }
 
+      function projectKeyForName(name) {
+        const existing = projects.find((project) => project.name.toLowerCase() === name.toLowerCase());
+        if (existing) return { key: existing.key, created: false };
+        const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "project";
+        let key = base;
+        let suffix = 2;
+        while (projects.some((project) => project.key === key)) key = `${base}-${suffix++}`;
+        projects.push({ key, name, sessions: 0, machines: 1, folders: 0, rules: 0, last: "Now" });
+        return { key, created: true };
+      }
+
+      function moveProjectTotals(fromKey, toKey, sessions) {
+        if (fromKey === toKey) return;
+        const from = projects.find((project) => project.key === fromKey);
+        const to = projects.find((project) => project.key === toKey);
+        if (from) {
+          from.sessions = Math.max(0, from.sessions - sessions);
+          from.folders = Math.max(0, from.folders - 1);
+        }
+        if (to) {
+          to.sessions += sessions;
+          to.folders += 1;
+          to.last = "Now";
+        }
+      }
+
       root.addEventListener("input", (event) => {
         if (event.target.matches('[data-input="new-project"]')) {
           state.newProject = event.target.value;
@@ -1333,63 +1433,115 @@
         if (action === "state") { state.stateOpen = !state.stateOpen; render(); }
         if (action === "project") {
           state.selectedProject = control.dataset.project;
-          const candidate = folders.find((folder) => folder.project === state.selectedProject || folder.inferred === state.selectedProject);
+          const candidate = folders.find((folder) => folder.project === state.selectedProject || folder.candidateProject === state.selectedProject);
           if (candidate) state.selectedFolder = candidate.id;
           state.targetProject = state.selectedProject;
+          state.pendingEdit = true;
+          state.result = null;
           state.reviewAccepted = false;
           render();
         }
         if (action === "folder") {
           state.selectedFolder = control.dataset.folder;
           const folder = selectedFolder();
-          state.selectedProject = folder.inferred === "unknown" ? folder.project : folder.inferred;
+          state.selectedProject = folder.candidateProject || folder.project;
           state.targetProject = state.selectedProject;
+          state.pendingEdit = true;
+          state.result = null;
           state.reviewAccepted = false;
           render();
         }
         if (action === "target") {
           state.targetProject = control.dataset.target;
+          state.pendingEdit = true;
+          state.result = null;
           state.reviewAccepted = false;
           render();
         }
         if (action === "scenario") {
-          state.scenario = control.dataset.scenario;
-          state.reviewAccepted = false;
-          if (state.scenario === "broad") state.selectedFolder = "agentsview-main";
-          if (state.scenario === "ordinary") state.selectedFolder = "agentsview-feature";
+          resetScenario(control.dataset.scenario);
           render();
         }
         if (action === "review") { state.reviewAccepted = true; render(); }
         if (action === "save") {
+          if (isReadOnly()) return;
+          if (state.scenario === "stale") {
+            state.result = { kind: "conflict" };
+            state.reviewAccepted = false;
+            render();
+            return;
+          }
           const folder = selectedFolder();
-          state.lastSave = { path: folder.path, target: targetLabel(), previous: folder.project };
+          const data = impact();
+          const target = state.targetProject === "new"
+            ? projectKeyForName(state.newProject.trim())
+            : { key: state.targetProject, created: false };
+          const targetProject = projects.find((project) => project.key === target.key);
+          const previousStates = data.affected.map((item) => ({
+            id: item.id,
+            machine: item.machine,
+            path: item.path,
+            project: item.project,
+            ruleBacked: item.ruleBacked,
+          }));
+          for (const item of data.affected) {
+            moveProjectTotals(item.project, target.key, item.sessions);
+            item.project = target.key;
+            item.ruleBacked = true;
+          }
+          if (targetProject) targetProject.rules += 1;
+          state.lastSave = {
+            machine: folder.machine,
+            path: proposalPrefix(),
+            target: targetProject?.name || target.key,
+            targetKey: target.key,
+            createdProjectKey: target.created ? target.key : null,
+            previousStates,
+          };
           state.undoNotice = "";
-          folder.project = state.targetProject === "new" ? state.newProject.trim() : state.targetProject;
-          folder.status = "mapped";
+          state.result = state.scenario === "refresh" ? { kind: "refresh-failed" } : { kind: "saved" };
+          state.selectedProject = target.key;
+          state.targetProject = target.key;
+          state.newProject = "";
+          state.pendingEdit = false;
           state.reviewAccepted = false;
           render();
         }
         if (action === "undo") {
-          if (state.lastSave) {
-            const folder = folders.find((item) => item.path === state.lastSave.path);
-            if (folder) { folder.project = state.lastSave.previous; folder.status = "mismatch"; }
-            state.undoNotice = `Restored ${state.lastSave.path} to ${state.lastSave.previous}.`;
+          if (state.lastSave && !isReadOnly()) {
+            for (const previous of state.lastSave.previousStates) {
+              const folder = folders.find((item) => item.id === previous.id && item.machine === previous.machine);
+              if (!folder) continue;
+              moveProjectTotals(folder.project, previous.project, folder.sessions);
+              folder.project = previous.project;
+              folder.ruleBacked = previous.ruleBacked;
+            }
+            const target = projects.find((project) => project.key === state.lastSave.targetKey);
+            if (target) target.rules = Math.max(0, target.rules - 1);
+            if (state.lastSave.createdProjectKey) {
+              const index = projects.findIndex((project) => project.key === state.lastSave.createdProjectKey);
+              if (index >= 0) projects.splice(index, 1);
+            }
+            const restored = state.lastSave.previousStates[0];
+            state.selectedFolder = restored.id;
+            state.selectedProject = state.lastSave.targetKey;
+            state.targetProject = state.lastSave.targetKey;
+            state.pendingEdit = true;
+            state.undoNotice = `Restored ${state.lastSave.path} on ${state.lastSave.machine} to its prior rule state.`;
           }
           state.lastSave = null;
+          state.result = null;
           render();
         }
-        if (action === "undo-latest") {
-          state.undoNotice = "Restored the previous docs-site rule set. 42 sessions returned to their earlier classifications.";
-          render();
-        }
-        if (action === "cancel") { state.reviewAccepted = false; render(); }
-        if (action === "triage-filter") { state.triageFilter = control.dataset.filter; render(); }
-        if (action === "quick-target") {
-          state.selectedFolder = control.dataset.folder;
-          state.targetProject = control.dataset.target;
+        if (action === "cancel") { state.pendingEdit = false; state.reviewAccepted = false; render(); }
+        if (action === "suggested") { state.showSuggestions = !state.showSuggestions; render(); }
+        if (action === "refresh-impact") {
+          state.result = null;
+          state.scenario = "ordinary";
           state.reviewAccepted = false;
           render();
         }
+        if (action === "retry-refresh") { state.result = { kind: "saved" }; render(); }
       });
 
       window.addEventListener("keydown", (event) => {

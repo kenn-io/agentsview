@@ -31,9 +31,12 @@ unambiguous. These constraints do not select the final interaction flow.
 
 ### Folder and rule model
 
-- An observed folder is identified by its machine and normalized path. Session
-  evidence defines whether it is observed. A missing folder remains relevant
-  to historical sessions, and a renamed path is a separate observed folder.
+- An observed folder is identified by its source archive, machine, and
+  normalized path. The source archive is implicit in the writable SQLite
+  archive; PostgreSQL and DuckDB mirrors retain it because the same
+  machine/path pair can arrive from several archives. Session evidence defines
+  whether a folder is observed. A renamed path is a separate observed folder;
+  filesystem availability is not part of the current candidate evidence.
 - A folder is mapped only when a project rule produces a classification for it.
   Session classifications do not map a folder. An unmapped parent may contain
   mapped children.
