@@ -346,6 +346,15 @@ func TestUsageCacheLifecycleFollowsArchiveReopenAndClose(t *testing.T) {
 	require.NoError(t, first.db.Ping())
 	started := make(chan struct{}, 1)
 	database.SetUsageCacheBackfillStarted(func() { started <- struct{}{} })
+	// Reopen restarts backfill only after the daemon lifecycle
+	// explicitly enabled it.
+	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+	select {
+	case <-started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("explicit backfill start did not notify lifecycle observer")
+	}
 
 	require.NoError(t, database.Reopen())
 	select {

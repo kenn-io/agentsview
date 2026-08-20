@@ -619,6 +619,10 @@ type DB struct {
 	usageBackfillDone    chan struct{}
 	usageBackfillErr     error
 	usageBackfillStarted func()
+	// usageBackfillEnabled records that this process explicitly started
+	// background backfill (the daemon lifecycle). Reopen restarts a pass
+	// only then, so CLI resyncs never trigger an unrequested archive scan.
+	usageBackfillEnabled bool
 	mu                   sync.Mutex // serializes writes
 	connMu               sync.RWMutex
 	retired              []*sql.DB // old pools kept open for in-flight reads
@@ -4502,6 +4506,15 @@ func (db *DB) Reopen() error {
 	}
 	if err := db.usageCache.RetireExcept(databaseID); err != nil {
 		return fmt.Errorf("retiring old usage cache generation: %w", err)
+	}
+	// Restart backfill only when this process explicitly enabled it
+	// (daemon lifecycle). A CLI resync reopening the archive must not
+	// kick off a full background scan of the replacement.
+	db.usageBackfillMu.Lock()
+	enabled := db.usageBackfillEnabled
+	db.usageBackfillMu.Unlock()
+	if !enabled {
+		return nil
 	}
 	return db.StartUsageCacheBackfill(context.Background())
 }

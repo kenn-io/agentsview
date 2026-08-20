@@ -4002,7 +4002,9 @@ func BenchmarkGetDailyUsage(b *testing.B) {
 	if _, err := d.GetDailyUsage(ctx, filter); err != nil {
 		b.Fatalf("warming GetDailyUsage: %v", err)
 	}
-	log.SetOutput(origLog)
+	// Logs stay discarded through the timed loop: a slow-request log
+	// line interleaving with the benchmark result line corrupts the
+	// bench-gate capture (see silenceBenchLogs in internal/sync).
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -4074,6 +4076,12 @@ func BenchmarkGetDailyUsageSnapshotAutomaticIndexOff(b *testing.B) {
 }
 
 func BenchmarkUsageRollup(b *testing.B) {
+	// Cold sub-benchmarks exceed the slow-request threshold on CI
+	// runners; the resulting log line would interleave with benchmark
+	// result lines and corrupt the bench-gate capture.
+	origLog := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() { log.SetOutput(origLog) })
 	database := testDB(b)
 	seedDailyUsageSnapshotBenchmark(b, database)
 	seedLongLivedUsageBenchmark(b, database)

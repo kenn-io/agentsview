@@ -3,10 +3,12 @@
 package db
 
 import (
+	"context"
 	"math/rand"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -514,4 +516,53 @@ func getDailyUsageRollupForTest(
 		t.Context(), filter, result, resolver)
 	require.NoError(t, err)
 	return daily
+}
+
+func TestUsageRollupInstallWaitsForHeldCacheWriteLock(t *testing.T) {
+	database := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "model-a",
+		InputPerMTok:  money.MustParseDollars("1.0"),
+		OutputPerMTok: money.MustParseDollars("2.0"),
+	}}))
+	seedUsageSnapshotSession(t, database, "held-session", "proj",
+		"2026-08-10T09:00:00Z", 0, 10, "model-a")
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	warm, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, warm.Daily, 1)
+
+	// A pricing change leaves facts current but forces a rollup
+	// reinstall on the next read.
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "model-a",
+		InputPerMTok:  money.MustParseDollars("1.0"),
+		OutputPerMTok: money.MustParseDollars("4.0"),
+	}}))
+	databaseID, err := database.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(ctx, databaseID)
+	require.NoError(t, err)
+
+	// Hold the cache write lock on a separate connection while the
+	// query runs: the rollup install must wait it out through the busy
+	// timeout instead of failing with a stale-snapshot write error.
+	held := openRawUsageCacheTestDB(t, cache.path)
+	t.Cleanup(func() { require.NoError(t, held.Close()) })
+	_, err = held.Exec(`BEGIN IMMEDIATE`)
+	require.NoError(t, err)
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		time.Sleep(300 * time.Millisecond)
+		_, _ = held.Exec(`COMMIT`)
+	}()
+
+	result, err := database.GetDailyUsage(ctx, filter)
+	<-released
+	require.NoError(t, err,
+		"rollup install must wait for the held cache write lock")
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, 10, result.Daily[0].OutputTokens)
 }

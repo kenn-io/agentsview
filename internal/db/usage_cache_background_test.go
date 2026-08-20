@@ -371,3 +371,74 @@ func TestCloseConnectionsStopsUsageCacheBackfill(t *testing.T) {
 	cache.fill.observer = usageFillObserver{}
 	require.NoError(t, database.Reopen())
 }
+
+func TestUsageCacheBackfillRebuildsRollupsInvalidatedByLaterBatches(t *testing.T) {
+	database := testDB(t)
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	messages := make([]Message, 0, usageCacheBackfillBatchSize+1)
+	newest := fmt.Sprintf("batch-%03d", usageCacheBackfillBatchSize)
+	for i := range usageCacheBackfillBatchSize + 1 {
+		id := fmt.Sprintf("batch-%03d", i)
+		timestamp := base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
+		insertSession(t, database, id, "project", func(session *Session) {
+			session.StartedAt = &timestamp
+			session.EndedAt = &timestamp
+		})
+		message := Message{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Timestamp: timestamp, Model: "model",
+			TokenUsage: json.RawMessage(`{"input_tokens":1}`),
+		}
+		// The newest session (first batch) and the oldest session (last
+		// batch) share one snapshot identity: filling the oldest batch
+		// invalidates the rollup already installed for the newest.
+		if i == 0 || id == newest {
+			message.ClaudeMessageID = "shared-batch-message"
+			message.ClaudeRequestID = "shared-batch-request"
+		}
+		messages = append(messages, message)
+	}
+	require.NoError(t, database.InsertMessages(messages))
+
+	snapshot, err := database.captureUsageQuery(
+		context.Background(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(
+		context.Background(), snapshot.DatabaseID)
+	require.NoError(t, err)
+
+	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+
+	assert.Equal(t, usageCacheBackfillBatchSize+1,
+		usageCacheCount(t, cache, "usage_rollup_installs"),
+		"backfill must rebuild rollups its later batches invalidated")
+	var missing int
+	require.NoError(t, cache.db.QueryRow(`SELECT count(*)
+		FROM usage_cached_sessions c
+		WHERE NOT EXISTS (
+			SELECT 1 FROM usage_rollup_installs i
+			WHERE i.session_id = c.session_id
+		)`).Scan(&missing))
+	assert.Zero(t, missing, "every cached session must keep a rollup install")
+}
+
+func TestReopenRestartsUsageBackfillOnlyWhenPreviouslyStarted(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.Reopen())
+	database.usageBackfillMu.Lock()
+	done := database.usageBackfillDone
+	database.usageBackfillMu.Unlock()
+	require.Nil(t, done,
+		"reopen must not start a backfill pass nothing enabled")
+
+	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.Reopen())
+	database.usageBackfillMu.Lock()
+	done = database.usageBackfillDone
+	database.usageBackfillMu.Unlock()
+	require.NotNil(t, done,
+		"reopen must restart backfill once it was explicitly started")
+	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+}

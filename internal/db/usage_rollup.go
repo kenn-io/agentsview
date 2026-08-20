@@ -444,16 +444,25 @@ func installUsageRollupBuilds(
 	location *time.Location, builds []usageRollupBuild,
 	buildCross usageDedupIdentitySet,
 ) error {
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+	// Take the cache write lock up front. A deferred transaction that
+	// reads before its first write fails with SQLITE_BUSY_SNAPSHOT
+	// when a concurrent fill or install commits after the read
+	// snapshot forms; BEGIN IMMEDIATE serializes writers through the
+	// busy timeout instead.
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("locking usage cache for rollup install: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
 	// A fill committing between classification and this install can add a
 	// sibling for an identity that was finalized into a daily row. Abort on
 	// new crossness; crossness that disappeared keeps the conservative
 	// exception rows exact.
-	currentCross, err := loadUsageRollupCrossIdentities(ctx, tx)
+	currentCross, err := loadUsageRollupCrossIdentities(ctx, conn)
 	if err != nil {
 		return err
 	}
@@ -463,7 +472,7 @@ func installUsageRollupBuilds(
 			errUsageCacheSourceChanged)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO usage_rollup_timezones(
+	if _, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_timezones(
 		timezone_key, timezone_name, interval_fingerprint, last_requested_at
 	) VALUES (?, ?, ?, ?) ON CONFLICT(timezone_key) DO UPDATE SET
 		timezone_name=excluded.timezone_name,
@@ -473,12 +482,12 @@ func installUsageRollupBuilds(
 		return err
 	}
 	var timezoneID int64
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM usage_rollup_timezones
+	if err := conn.QueryRowContext(ctx, `SELECT id FROM usage_rollup_timezones
 		WHERE timezone_key = ?`, identity.Key).Scan(&timezoneID); err != nil {
 		return err
 	}
 	var revisionText string
-	if err := tx.QueryRowContext(ctx, `SELECT value FROM usage_cache_metadata
+	if err := conn.QueryRowContext(ctx, `SELECT value FROM usage_cache_metadata
 		WHERE key = ?`, usageCacheMetadataNextRollupRevision).Scan(&revisionText); err != nil {
 		return err
 	}
@@ -489,7 +498,7 @@ func installUsageRollupBuilds(
 	dates := make(map[string]bool)
 	for _, build := range builds {
 		var installID int64
-		err := tx.QueryRowContext(ctx, `SELECT id FROM usage_rollup_installs
+		err := conn.QueryRowContext(ctx, `SELECT id FROM usage_rollup_installs
 			WHERE timezone_id = ? AND session_id = ?`, timezoneID, build.SessionID).Scan(&installID)
 		if err != nil && err != sql.ErrNoRows {
 			return err
@@ -498,12 +507,12 @@ func installUsageRollupBuilds(
 			for _, table := range []string{
 				"usage_daily_rollups", "usage_activity_rollups", "usage_rollup_exceptions",
 			} {
-				if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+
+				if _, err := conn.ExecContext(ctx, `DELETE FROM `+table+
 					` WHERE rollup_install_id = ?`, installID); err != nil {
 					return err
 				}
 			}
-			_, err = tx.ExecContext(ctx, `UPDATE usage_rollup_installs SET
+			_, err = conn.ExecContext(ctx, `UPDATE usage_rollup_installs SET
 				source_sync_marker=?, source_transcript_rev=?, usage_event_fingerprint=?,
 				fact_install_revision=?, baked_agent=?, baked_started_at=?,
 				pricing_hash=?, install_revision=?, cached_at=? WHERE id=?`,
@@ -512,7 +521,7 @@ func installUsageRollupBuilds(
 				build.Agent, build.StartedAt, build.PricingHash,
 				nextRevision, now, installID)
 		} else {
-			result, insertErr := tx.ExecContext(ctx, `INSERT INTO usage_rollup_installs(
+			result, insertErr := conn.ExecContext(ctx, `INSERT INTO usage_rollup_installs(
 				timezone_id, session_id, source_sync_marker, source_transcript_rev,
 				usage_event_fingerprint, fact_install_revision, baked_agent,
 				baked_started_at, pricing_hash, install_revision, cached_at
@@ -528,24 +537,28 @@ func installUsageRollupBuilds(
 		if err != nil {
 			return err
 		}
-		if err := installUsageRollupRows(ctx, tx, installID, build, dates); err != nil {
+		if err := installUsageRollupRows(ctx, conn, installID, build, dates); err != nil {
 			return err
 		}
 		nextRevision++
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE usage_cache_metadata SET value=?
+	if _, err := conn.ExecContext(ctx, `UPDATE usage_cache_metadata SET value=?
 		WHERE key=?`, strconv.FormatInt(nextRevision, 10),
 		usageCacheMetadataNextRollupRevision); err != nil {
 		return err
 	}
-	if err := installUsageRollupDays(ctx, tx, timezoneID, location, dates); err != nil {
+	if err := installUsageRollupDays(ctx, conn, timezoneID, location, dates); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("committing usage rollup install: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func installUsageRollupRows(
-	ctx context.Context, tx *sql.Tx, installID int64,
+	ctx context.Context, conn *sql.Conn, installID int64,
 	build usageRollupBuild, dates map[string]bool,
 ) error {
 	for _, row := range build.Daily {
@@ -553,7 +566,7 @@ func installUsageRollupRows(
 		if row.BandThreshold != nil {
 			band = *row.BandThreshold
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO usage_daily_rollups VALUES(
+		_, err := conn.ExecContext(ctx, `INSERT INTO usage_daily_rollups VALUES(
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			installID, row.LocalDate, row.ReportedModel, row.PricedModel,
 			row.MatchedPattern, boolInt(row.RateOK), row.RateHash, band,
@@ -569,7 +582,7 @@ func installUsageRollupRows(
 		dates[row.LocalDate] = true
 	}
 	for _, row := range build.Activity {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_activity_rollups VALUES(?, ?, ?, ?)`,
+		if _, err := conn.ExecContext(ctx, `INSERT INTO usage_activity_rollups VALUES(?, ?, ?, ?)`,
 			installID, row.LocalDate, row.Model, row.UserMessageCount); err != nil {
 			return err
 		}
@@ -577,7 +590,7 @@ func installUsageRollupRows(
 	}
 	for _, row := range build.Exceptions {
 		fact := row.Fact
-		_, err := tx.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions VALUES(
+		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions VALUES(
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			installID, row.GroupKind, row.GroupKey, fact.CachedSessionID,
 			fact.FactIndex, fact.SourceSessionID, fact.LocalDate, fact.Fact.Source,
@@ -598,7 +611,7 @@ func installUsageRollupRows(
 }
 
 func installUsageRollupDays(
-	ctx context.Context, tx *sql.Tx, timezoneID int64,
+	ctx context.Context, conn *sql.Conn, timezoneID int64,
 	location *time.Location, dates map[string]bool,
 ) error {
 	if location == nil {
@@ -610,7 +623,7 @@ func installUsageRollupDays(
 			continue
 		}
 		next := day.AddDate(0, 0, 1)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_rollup_days VALUES(?, ?, ?, ?)
+		if _, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_days VALUES(?, ?, ?, ?)
 			ON CONFLICT(timezone_id, local_date) DO UPDATE SET
 			from_ms=excluded.from_ms, to_ms=excluded.to_ms`, timezoneID, date,
 			day.UTC().UnixMilli(), next.UTC().UnixMilli()); err != nil {

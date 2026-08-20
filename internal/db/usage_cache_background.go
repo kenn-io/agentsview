@@ -33,6 +33,7 @@ func (db *DB) StartUsageCacheBackfill(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	db.usageBackfillMu.Lock()
+	db.usageBackfillEnabled = true
 	if db.usageBackfillDone != nil {
 		select {
 		case <-db.usageBackfillDone:
@@ -165,6 +166,7 @@ func (db *DB) runUsageCacheBackfillPass(
 	resolver := export.NewPricingResolver(snapshot.PricingRows)
 	covered, deleted := 0, 0
 	var dailyRows, exceptionGroups, exceptionRows int64
+	allResults := make(map[string]usageFillResult, len(snapshot.Versions))
 	for start := 0; start < len(snapshot.Versions); start += usageCacheBackfillBatchSize {
 		end := min(start+usageCacheBackfillBatchSize, len(snapshot.Versions))
 		cursorTarget := int64(0)
@@ -197,11 +199,32 @@ func (db *DB) runUsageCacheBackfillPass(
 		if end < len(snapshot.Versions) {
 			cache.fill.maintainBetweenInstallBatches(ctx)
 		}
-		for _, result := range results {
+		for id, result := range results {
+			allResults[id] = result
 			if result.Deleted {
 				deleted++
 			} else {
 				covered++
+			}
+		}
+	}
+	// Filling a later batch can invalidate a rollup install from an
+	// earlier batch when the filled session adds a sibling for an
+	// identity the earlier batch had finalized. Re-verify the whole
+	// snapshot once after every fact is filled, so the pass never
+	// completes with rollups it deleted itself.
+	if len(snapshot.Versions) > usageCacheBackfillBatchSize {
+		for _, location := range locations {
+			zoned := snapshot
+			zoned.location = location
+			if _, metrics, err := cache.rollup.Ensure(
+				ctx, zoned, allResults, resolver); err != nil {
+				return fmt.Errorf(
+					"rebuilding invalidated usage rollups during backfill: %w", err)
+			} else {
+				dailyRows += metrics.DailyRows
+				exceptionGroups += metrics.ExceptionGroups
+				exceptionRows += metrics.ExceptionRows
 			}
 		}
 	}
@@ -377,29 +400,41 @@ func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) 
 	if err != nil {
 		return err
 	}
-	tx, err := cache.db.BeginTx(ctx, nil)
+	conn, err := cache.db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer conn.Close()
+	// BEGIN IMMEDIATE: this transaction reads identities before its first
+	// delete, so a deferred begin could fail with SQLITE_BUSY_SNAPSHOT
+	// under a concurrent fill or install commit.
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("locking usage cache for deletion sweep: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
 	tombstoneIDs := make([]string, 0, len(tombstones))
 	for _, tombstone := range tombstones {
 		tombstoneIDs = append(tombstoneIDs, tombstone.SessionID)
 	}
-	removed, err := usageFactIdentitiesForSessions(ctx, tx, tombstoneIDs)
+	removed, err := usageFactIdentitiesForSessions(ctx, conn, tombstoneIDs)
 	if err != nil {
 		return err
 	}
 	excluded := make(map[string]bool, len(tombstoneIDs))
 	for _, sessionID := range tombstoneIDs {
 		excluded[sessionID] = true
-		if _, err := tx.ExecContext(ctx,
+		if _, err := conn.ExecContext(ctx,
 			`DELETE FROM usage_rollup_installs WHERE session_id = ?`,
 			sessionID,
 		); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx,
+		if _, err := conn.ExecContext(ctx,
 			`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
 			sessionID,
 		); err != nil {
@@ -408,17 +443,21 @@ func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) 
 	}
 	// Rebuild the survivors' rollups so groups the deleted sessions kept
 	// irreducible can finalize again.
-	if err := invalidateUsageDedupSharers(ctx, tx, removed, excluded); err != nil {
+	if err := invalidateUsageDedupSharers(ctx, conn, removed, excluded); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := conn.ExecContext(ctx, `
 		UPDATE usage_cache_metadata
 		SET value = CAST(MAX(CAST(value AS INTEGER), ?) AS TEXT)
 		WHERE key = ?`, through, usageCacheMetadataDeletionRevision,
 	); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("committing usage cache deletion sweep: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func (cache *usageCache) incrementalVacuum(

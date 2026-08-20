@@ -1325,24 +1325,36 @@ func (c *usageFillCoordinator) processNotificationBatch(
 }
 
 func (c *usageFillCoordinator) deleteNotificationSessions(ids []string) error {
-	tx, err := c.cache.db.BeginTx(c.ctx, nil)
+	conn, err := c.cache.db.Conn(c.ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	removed, err := usageFactIdentitiesForSessions(c.ctx, tx, ids)
+	defer conn.Close()
+	// BEGIN IMMEDIATE: this transaction reads identities before its first
+	// delete, so a deferred begin could fail with SQLITE_BUSY_SNAPSHOT
+	// under a concurrent fill or install commit.
+	if _, err := conn.ExecContext(c.ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("locking usage cache for session delete: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	removed, err := usageFactIdentitiesForSessions(c.ctx, conn, ids)
 	if err != nil {
 		return err
 	}
 	excluded := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		excluded[id] = true
-		if _, err := tx.ExecContext(c.ctx,
+		if _, err := conn.ExecContext(c.ctx,
 			`DELETE FROM usage_rollup_installs WHERE session_id = ?`, id,
 		); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(c.ctx,
+		if _, err := conn.ExecContext(c.ctx,
 			`DELETE FROM usage_cached_sessions WHERE session_id = ?`, id,
 		); err != nil {
 			return err
@@ -1350,8 +1362,12 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string) error {
 	}
 	// Rebuild the survivors' rollups so groups the deleted sessions kept
 	// irreducible can finalize again.
-	if err := invalidateUsageDedupSharers(c.ctx, tx, removed, excluded); err != nil {
+	if err := invalidateUsageDedupSharers(c.ctx, conn, removed, excluded); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if _, err := conn.ExecContext(c.ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("committing usage cache session delete: %w", err)
+	}
+	committed = true
+	return nil
 }
