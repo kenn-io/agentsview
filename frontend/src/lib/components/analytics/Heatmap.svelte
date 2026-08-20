@@ -304,32 +304,33 @@
     padding-bottom: 4px;
   }
 
-  :global(.heatmap-svg) {
+  .heatmap-container :global(.heatmap-svg) {
     display: block;
     margin: 0 auto;
   }
 
-  :global(.day-label), :global(.month-label) {
+  .heatmap-container :global(.day-label),
+  .heatmap-container :global(.month-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-sans);
   }
 
-  :global(.heatmap-cell) {
+  .heatmap-container :global(.heatmap-cell) {
     cursor: default;
   }
 
-  :global(.heatmap-cell.clickable) {
+  .heatmap-container :global(.heatmap-cell.clickable) {
     cursor: pointer;
   }
 
-  :global(.heatmap-cell.clickable:hover) {
+  .heatmap-container :global(.heatmap-cell.clickable:hover) {
     opacity: 0.8;
     stroke: var(--text-muted);
     stroke-width: 1;
   }
 
-  :global(.heatmap-cell.selected) {
+  .heatmap-container :global(.heatmap-cell.selected) {
     stroke: var(--text-primary);
     stroke-width: 2;
   }

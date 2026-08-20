@@ -10,6 +10,9 @@
   } from "../../i18n/index.js";
 
   type Metric = "messages" | "sessions";
+  const MIN_BAR_WIDTH = 6;
+  const BAR_GAP = 2;
+  const HORIZONTAL_PADDING = 48;
   interface Props {
     onDateRangeChange?: (from: string, to: string) => void;
   }
@@ -17,6 +20,7 @@
   let { onDateRangeChange }: Props = $props();
 
   let metric = $state<Metric>("messages");
+  let chartAreaWidth = $state(0);
 
   const chart = $derived.by(() => {
     const series = analytics.activity?.series;
@@ -41,6 +45,12 @@
 
     return { bars, labels };
   });
+  const chartWidth = $derived(
+    Math.max(
+      chartAreaWidth,
+      chart.bars.length * (MIN_BAR_WIDTH + BAR_GAP) + HORIZONTAL_PADDING,
+    ),
+  );
 
   function formatDateLabel(date: string): string {
     return formatDateTime(`${date}T00:00:00`, {
@@ -184,7 +194,7 @@
       </button>
     </div>
   {:else if chart.bars.length > 0}
-    <div class="chart-area">
+    <div class="chart-area" bind:clientWidth={chartAreaWidth}>
       <Chart
         data={chart.bars}
         x="date"
@@ -193,6 +203,7 @@
         yDomain={[0, null]}
         yNice
         padding={{ top: 20, right: 24, bottom: 20, left: 24 }}
+        width={chartWidth}
         height={164}
         class="timeline-chart"
       >
@@ -286,45 +297,45 @@
     padding-bottom: 4px;
   }
 
-  :global(.timeline-chart) {
+  .timeline-container :global(.timeline-chart) {
     display: block;
   }
 
-  :global(.grid-line) {
+  .timeline-container :global(.grid-line) {
     stroke: var(--border-muted);
     stroke-width: 0.5;
     stroke-dasharray: 2 2;
   }
 
-  :global(.bar) {
+  .timeline-container :global(.bar) {
     fill: var(--accent-blue);
     opacity: 0.8;
     cursor: pointer;
     transition: opacity 0.15s;
   }
 
-  :global(.bar:hover) {
+  .timeline-container :global(.bar:hover) {
     opacity: 1;
   }
 
-  :global(.bar.selected) {
+  .timeline-container :global(.bar.selected) {
     opacity: 1;
   }
 
-  :global(.bar.dimmed) {
+  .timeline-container :global(.bar.dimmed) {
     opacity: 0.2;
   }
 
-  :global(.bar.dimmed:hover) {
+  .timeline-container :global(.bar.dimmed:hover) {
     opacity: 0.5;
   }
 
-  :global(.bar.empty) {
+  .timeline-container :global(.bar.empty) {
     opacity: 0.2;
     cursor: default;
   }
 
-  :global(.x-label) {
+  .timeline-container :global(.x-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-sans);

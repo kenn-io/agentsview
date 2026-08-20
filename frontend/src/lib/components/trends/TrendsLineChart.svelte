@@ -166,18 +166,18 @@
     overflow: hidden;
   }
 
-  :global(.chart) {
+  .chart-wrap :global(.chart) {
     display: block;
     width: 100%;
     height: 300px;
   }
 
-  :global(.grid) {
+  .chart-wrap :global(.grid) {
     stroke: var(--border-muted);
     stroke-width: 1;
   }
 
-  :global(.y-label) {
+  .chart-wrap :global(.y-label) {
     fill: var(--text-muted);
     font-size: 10px;
     text-anchor: end;
@@ -195,7 +195,7 @@
     text-anchor: start;
   }
 
-  :global(.x-label) {
+  .chart-wrap :global(.x-label) {
     fill: var(--text-muted);
     font-size: 10px;
     text-anchor: middle;

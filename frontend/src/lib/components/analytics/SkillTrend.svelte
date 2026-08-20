@@ -530,16 +530,16 @@
     width: 100%;
   }
 
-  :global(.chart-svg) {
+  .trend-container :global(.chart-svg) {
     display: block;
   }
 
-  :global(.baseline) {
+  .trend-container :global(.baseline) {
     stroke: var(--border-muted);
     stroke-width: 1;
   }
 
-  :global(.series-line) {
+  .trend-container :global(.series-line) {
     fill: none;
     stroke-width: 2;
     stroke-linecap: round;
@@ -547,13 +547,13 @@
   }
 
   /* Surface ring keeps markers legible where they cross a line. */
-  :global(.series-marker) {
+  .trend-container :global(.series-marker) {
     stroke: var(--bg-surface);
     stroke-width: 2;
     pointer-events: none;
   }
 
-  :global(.crosshair) {
+  .trend-container :global(.crosshair) {
     stroke: var(--text-muted);
     stroke-width: 1;
     stroke-dasharray: none;
@@ -561,7 +561,7 @@
     pointer-events: none;
   }
 
-  :global(.x-label) {
+  .trend-container :global(.x-label) {
     font-size: 8px;
     fill: var(--text-muted);
   }

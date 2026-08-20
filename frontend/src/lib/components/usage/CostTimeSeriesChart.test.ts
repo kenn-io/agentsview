@@ -206,6 +206,21 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  it("renders a visible stacked bar for a one-day range", async () => {
+    usage.summary = usageSummary();
+    usage.summary.daily = [dailyEntry(0)];
+
+    const component = mountChart();
+    await tick();
+
+    const bar = document.querySelector<SVGRectElement>("rect.lc-bar");
+    expect(bar).not.toBeNull();
+    expect(Number(bar!.getAttribute("width"))).toBeGreaterThan(0);
+    expect(Number(bar!.getAttribute("height"))).toBeGreaterThan(0);
+
+    unmount(component);
+  });
+
   it("scales token series from only the selected token types", async () => {
     usage.mode = "token";
     usage.setSelectedTokenTypes(["output"]);
@@ -236,7 +251,7 @@ describe("CostTimeSeriesChart", () => {
 	const component = mountChart();
 	await tick();
 
-	expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
+	expect(document.querySelectorAll(".chart-svg [opacity='0.7']")).toHaveLength(2);
 	expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
 	unmount(component);
   });
@@ -301,15 +316,15 @@ describe("CostTimeSeriesChart", () => {
     const component = mountChart();
     await tick();
 
-    const paths = Array.from(
-      document.querySelectorAll<SVGPathElement>("path[opacity='0.7']"),
+    const marks = Array.from(
+      document.querySelectorAll<SVGElement>(".chart-svg [opacity='0.7']"),
     );
     const dots = Array.from(
       document.querySelectorAll<HTMLElement>(".legend-dot"),
     );
-    expect(paths).toHaveLength(6);
+    expect(marks).toHaveLength(6);
     expect(dots).toHaveLength(6);
-    expect(paths.at(-1)!.getAttribute("fill")).toBe("var(--text-muted)");
+    expect(marks.at(-1)!.getAttribute("fill")).toBe("var(--text-muted)");
     expect(dots.at(-1)!.style.background).toBe("var(--text-muted)");
     unmount(component);
   });

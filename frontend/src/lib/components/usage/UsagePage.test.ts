@@ -258,6 +258,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -294,6 +295,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -318,6 +320,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -349,6 +352,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -397,6 +401,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -431,6 +436,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -460,6 +466,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -501,6 +508,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -534,6 +542,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -552,13 +561,6 @@ describe("UsagePage refresh behavior", () => {
   });
 
   it("shares full-universe model colors across Usage panels and palette changes", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     router.route = "usage";
@@ -572,17 +574,17 @@ describe("UsagePage refresh behavior", () => {
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
 
-    const firstPath = () => document.querySelector<SVGPathElement>(
-      "path[opacity='0.7']",
+    const firstMark = () => document.querySelector<SVGElement>(
+      ".chart-svg [opacity='0.7']",
     );
     const firstDot = () => document.querySelector<HTMLElement>(".list-dot");
-    expect(firstPath()?.getAttribute("fill")).toBe("var(--accent-sky)");
+    expect(firstMark()?.getAttribute("fill")).toBe("var(--accent-sky)");
     expect(firstDot()?.style.background).toBe("var(--accent-sky)");
 
     settings.chartPalette = "matplotlib";
     await tick();
 
-    expect(firstPath()?.getAttribute("fill")).toBe("#c5b0d5");
+    expect(firstMark()?.getAttribute("fill")).toBe("#c5b0d5");
     expect(firstDot()?.style.background).toBe("rgb(197, 176, 213)");
   });
 
@@ -591,6 +593,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -612,6 +615,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -642,6 +646,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -685,6 +690,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -707,6 +713,7 @@ describe("UsagePage refresh behavior", () => {
       "ResizeObserver",
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );

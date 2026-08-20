@@ -20,6 +20,8 @@
     formatValue?: (value: number) => string;
   }
 
+  const uid = $props.id();
+
   function formatCost(value: number): string {
     return formatMoney(moneyFromMicrodollars(value));
   }
@@ -53,16 +55,19 @@
     <Layer class="treemap">
       <LayerTreemap hierarchy={root} padding={2}>
         {#snippet children({ nodes })}
-          {#each nodes.filter((node) => node.depth === 1) as node ((node.data as TreemapItem).id)}
+          {#each nodes.filter((node) => node.depth === 1) as node, index ((node.data as TreemapItem).id)}
             {@const tile = node.data as TreemapItem}
             {@const tileWidth = node.x1 - node.x0}
             {@const tileHeight = node.y1 - node.y0}
             {@const large = tileWidth > 60 && tileHeight > 40}
             {@const medium = tileWidth > 40 && tileHeight > 20}
-            <Group
-              x={node.x0}
-              y={node.y0}
+            {@const clipId = `${uid}-tile-${index}`}
+            <clipPath id={clipId}>
+              <rect x={node.x0} y={node.y0} width={tileWidth} height={tileHeight} />
+            </clipPath>
+            <g
               class="tile"
+              clip-path={`url(#${clipId})`}
               tabindex={0}
               role="button"
               aria-label={m.usage_hide_from_chart({ label: tile.label })}
@@ -70,22 +75,24 @@
               onkeydown={(event) => handleKey(event, tile.id)}
             >
               <title>{m.usage_click_to_hide({ label: tile.label })}</title>
-              <Rect
-                width={tileWidth}
-                height={tileHeight}
-                rx={3}
-                fill={tile.color}
-              />
-              {#if large}
-                <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
-                <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
-                {#if tile.meta}
-                  <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+              <Group x={node.x0} y={node.y0}>
+                <Rect
+                  width={tileWidth}
+                  height={tileHeight}
+                  rx={3}
+                  fill={tile.color}
+                />
+                {#if large}
+                  <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
+                  <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
+                  {#if tile.meta}
+                    <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+                  {/if}
+                {:else if medium}
+                  <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
                 {/if}
-              {:else if medium}
-                <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
-              {/if}
-            </Group>
+              </Group>
+            </g>
           {/each}
         {/snippet}
       </LayerTreemap>
@@ -99,28 +106,28 @@
     min-height: 0;
   }
 
-  :global(.treemap) {
+  .treemap-container :global(.treemap) {
     display: block;
   }
 
-  :global(.tile) {
+  .treemap-container :global(.tile) {
     cursor: pointer;
   }
 
-  :global(.tile:hover rect) {
+  .treemap-container :global(.tile:hover rect) {
     opacity: 0.92;
   }
 
-  :global(.tile:focus-visible) {
+  .treemap-container :global(.tile:focus-visible) {
     outline: none;
   }
 
-  :global(.tile:focus-visible rect) {
+  .treemap-container :global(.tile:focus-visible rect) {
     stroke: white;
     stroke-width: 2;
   }
 
-  :global(.tile-label) {
+  .treemap-container :global(.tile-label) {
     fill: white;
     font-size: 11px;
     font-weight: 600;
@@ -128,7 +135,7 @@
     pointer-events: none;
   }
 
-  :global(.tile-value) {
+  .treemap-container :global(.tile-value) {
     /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
     fill-opacity: 0.85;
@@ -138,7 +145,7 @@
     pointer-events: none;
   }
 
-  :global(.tile-meta) {
+  .treemap-container :global(.tile-meta) {
     /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
     fill-opacity: 0.7;
@@ -147,7 +154,7 @@
     pointer-events: none;
   }
 
-  :global(.tile-label-sm) {
+  .treemap-container :global(.tile-label-sm) {
     fill: white;
     font-size: 9px;
     font-weight: 500;

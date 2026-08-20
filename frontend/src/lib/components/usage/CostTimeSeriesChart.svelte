@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Area, Axis, Chart, Grid, Layer } from "layerchart";
-  import { scalePoint } from "d3-scale";
+  import { Area, Axis, Bar, Chart, Grid, Layer } from "layerchart";
+  import { scaleBand, scalePoint } from "d3-scale";
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
@@ -300,7 +300,9 @@
         data={seriesData.points}
         x="date"
         y={(point) => Math.max(...seriesData.keys.map((key) => point.values[key] ?? 0))}
-        xScale={scalePoint().padding(seriesData.points.length === 1 ? 0.5 : 0.05)}
+        xScale={seriesData.points.length === 1
+          ? scaleBand().padding(0.5)
+          : scalePoint().padding(0.05)}
         yDomain={[0, scale.max]}
         series={stackSeries}
         seriesLayout="stack"
@@ -328,11 +330,21 @@
             classes={{ tickLabel: "x-label" }}
           />
           {#each stackSeries as item (item.key)}
-            <Area
-              seriesKey={item.key}
-              fill={item.color}
-              opacity={0.7}
-            />
+            {#if seriesData.points.length === 1}
+              <Bar
+                data={seriesData.points[0]!}
+                seriesKey={item.key}
+                fill={item.color}
+                opacity={0.7}
+                radius={1}
+              />
+            {:else}
+              <Area
+                seriesKey={item.key}
+                fill={item.color}
+                opacity={0.7}
+              />
+            {/if}
           {/each}
         </Layer>
       </Chart>
@@ -406,23 +418,23 @@
     padding-bottom: 4px;
   }
 
-  :global(.chart-svg) {
+  .chart-container :global(.chart-svg) {
     display: block;
   }
 
-  :global(.grid-line) {
+  .chart-container :global(.grid-line) {
     stroke: var(--border-muted);
     stroke-width: 1;
     stroke-dasharray: 2 2;
   }
 
-  :global(.y-label) {
+  .chart-container :global(.y-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
 
-  :global(.x-label) {
+  .chart-container :global(.x-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-sans);

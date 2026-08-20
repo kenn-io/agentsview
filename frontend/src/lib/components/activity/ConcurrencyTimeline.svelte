@@ -674,102 +674,102 @@
     width: 100%;
   }
 
-  :global(.timeline-svg) {
+  .timeline :global(.timeline-svg) {
     display: block;
   }
 
-  :global(.grid-line) {
+  .timeline :global(.grid-line) {
     stroke: var(--border-muted);
     stroke-width: 1;
     stroke-dasharray: 2 2;
   }
 
-  :global(.y-label) {
+  .timeline :global(.y-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
 
-  :global(.x-label) {
+  .timeline :global(.x-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
 
-  :global(.concurrency-seg) {
+  .timeline :global(.concurrency-seg) {
     opacity: 0.75;
   }
 
-  :global(.concurrency-seg.interactive) {
+  .timeline :global(.concurrency-seg.interactive) {
     fill: var(--accent-blue);
   }
 
-  :global(.concurrency-seg.automated) {
+  .timeline :global(.concurrency-seg.automated) {
     fill: var(--accent-orange);
   }
 
-  :global(.concurrency-seg.selected) {
+  .timeline :global(.concurrency-seg.selected) {
     opacity: 1;
   }
 
-  :global(.concurrency-outline) {
+  .timeline :global(.concurrency-outline) {
     fill: none;
     stroke: var(--text-primary);
     stroke-width: 1;
   }
 
-  :global(.concurrency-future) {
+  .timeline :global(.concurrency-future) {
     fill: var(--bg-inset);
     opacity: 0.5;
   }
 
-  :global(.overlay-line) {
+  .timeline :global(.overlay-line) {
     fill: none;
     stroke: var(--accent-amber);
     stroke-width: 1.5;
     opacity: 0.85;
   }
 
-  :global(.overlay-axis-line),
-  :global(.overlay-axis-tick) {
+  .timeline :global(.overlay-axis-line),
+  .timeline :global(.overlay-axis-tick) {
     stroke: var(--accent-amber);
     stroke-width: 1;
     opacity: 0.55;
   }
 
-  :global(.overlay-y-label) {
+  .timeline :global(.overlay-y-label) {
     font-size: 9px;
     fill: var(--accent-amber);
     font-family: var(--font-mono);
   }
 
-  :global(.strip-cell) {
+  .timeline :global(.strip-cell) {
     fill: var(--bg-inset);
     stroke: var(--bg-surface);
     stroke-width: 0.5;
   }
 
-  :global(.strip-cell.active) {
+  .timeline :global(.strip-cell.active) {
     fill: var(--accent-blue);
     opacity: 0.55;
   }
 
-  :global(.strip-future) {
+  .timeline :global(.strip-future) {
     fill: var(--bg-inset);
     opacity: 0.5;
   }
 
-  :global(.slot-hit) {
+  .timeline :global(.slot-hit) {
     fill: transparent;
     cursor: pointer;
   }
 
-  :global(.slot-hit:hover) {
+  .timeline :global(.slot-hit:hover) {
     fill: var(--accent-blue);
     opacity: 0.08;
   }
 
-  :global(.slot-hit:focus-visible) {
+  .timeline :global(.slot-hit:focus-visible) {
     outline: 1px solid var(--accent-blue);
     outline-offset: -1px;
   }

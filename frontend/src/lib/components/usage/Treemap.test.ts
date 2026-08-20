@@ -31,6 +31,16 @@ describe("Treemap", () => {
     expect(document.querySelector(".tile title")?.textContent).toBe(
       "Click to hide Alpha",
     );
+    const tile = document.querySelector<SVGGElement>(".tile");
+    const clipPath = tile?.getAttribute("clip-path");
+    expect(typeof clipPath).toBe("string");
+    if (typeof clipPath !== "string") {
+      unmount(component);
+      return;
+    }
+    expect(clipPath).toMatch(/^url\(#.+\)$/);
+    const clipId = clipPath.slice(5, -1);
+    expect(document.getElementById(clipId)?.querySelector("rect")).not.toBeNull();
 
     unmount(component);
   });

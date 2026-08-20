@@ -264,40 +264,40 @@
     padding-bottom: 4px;
   }
 
-  :global(.how-svg) {
+  .how-container :global(.how-svg) {
     display: block;
   }
 
-  :global(.hour-label),
-  :global(.day-label) {
+  .how-container :global(.hour-label),
+  .how-container :global(.day-label) {
     font-size: 9px;
     fill: var(--text-muted);
     font-family: var(--font-sans);
     cursor: pointer;
   }
 
-  :global(.hour-label:hover),
-  :global(.day-label:hover) {
+  .how-container :global(.hour-label:hover),
+  .how-container :global(.day-label:hover) {
     fill: var(--text-primary);
   }
 
-  :global(.active-label) {
+  .how-container :global(.active-label) {
     fill: var(--accent-blue);
     font-weight: 600;
   }
 
-  :global(.how-cell) {
+  .how-container :global(.how-cell) {
     cursor: pointer;
     transition: opacity 0.15s;
   }
 
-  :global(.how-cell:hover) {
+  .how-container :global(.how-cell:hover) {
     opacity: 0.8;
     stroke: var(--text-muted);
     stroke-width: 1;
   }
 
-  :global(.how-cell.dimmed) {
+  .how-container :global(.how-cell.dimmed) {
     opacity: 0.2;
   }
 
