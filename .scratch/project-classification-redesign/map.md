@@ -49,11 +49,12 @@ states, and acceptance criteria.
 - [Prototype project workspace variants](issues/02-prototype-project-workspace-variants.md):
   Use Split inspector so the full inventory remains visible beside the
   selected project's folders and correction controls.
+- [Prototype folder triage as a complementary workflow](issues/03-prototype-folder-triage.md):
+  Reject folder triage because the product has no evidence-based problem state
+  from which to build a trustworthy queue.
 
 ## Not yet specified
 
-- The prototypes may reveal whether the overview needs new classification
-  signals, batch entry points, or no visible changes at all.
 - Folder discovery may need ranking, filtering, or grouping beyond the current
   path-prefix suggestions. The chosen interaction will determine which
   questions are real.
