@@ -37,6 +37,9 @@ vi.mock("../../stores/router.svelte.js", () => ({
   router: { params: {}, replaceParams: vi.fn() },
 }));
 vi.mock("../../stores/sync.svelte.js", () => ({ sync: syncMock }));
+vi.mock("../../feature-flags.js", () => ({
+  PROJECT_MAPPING_WORKSPACE_ENABLED: true,
+}));
 
 import { fireEvent, screen } from "@testing-library/svelte";
 import DataPage from "./DataPage.svelte";
@@ -330,6 +333,24 @@ describe("DataPage", () => {
       ],
     };
   }
+
+  it("shows only mapping rules when the project workspace flag is disabled", async () => {
+    (router as unknown as { params: Record<string, string> }).params = {
+      project_key: "k1",
+    };
+    api.getApiV1DataProjectRules.mockResolvedValue(rulesResponse("target-project"));
+
+    component = mount(DataPage, {
+      target: document.body,
+      props: { projectWorkspaceEnabled: false },
+    });
+    await flush();
+
+    expect(data.view).toBe("rules");
+    expect(api.getApiV1DataProjects).not.toHaveBeenCalled();
+    expect(document.querySelector(".rules-view")).not.toBeNull();
+    expect(document.querySelector(".data-header")).toBeNull();
+  });
 
   it("selects the matching inventory project from a rules cross-link", async () => {
     const inventory = makeInventory([
