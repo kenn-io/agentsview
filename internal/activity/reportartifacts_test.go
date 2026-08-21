@@ -20,7 +20,7 @@ func TestPageSessionsDefaultOrderMembershipAndCursorPosition(t *testing.T) {
 	membership := map[string]BucketMembership{
 		"a": {1}, "b": {1}, "c": {2},
 	}
-	bucketRange := BucketRange{Start: 0, End: 0}
+	bucketRange := BucketRange{Start: 0, End: 1}
 	page, err := PageSessions(rows, membership, SessionPageOptions{
 		Limit: 1, BucketRange: &bucketRange,
 	})
@@ -39,7 +39,7 @@ func TestPageSessionsDefaultOrderMembershipAndCursorPosition(t *testing.T) {
 	assert.Equal(t, "b", page.Sessions[0].SessionID)
 }
 
-func TestPageSessionsFiltersByInclusiveBucketRange(t *testing.T) {
+func TestPageSessionsFiltersByHalfOpenBucketRange(t *testing.T) {
 	one := 1.0
 	rows := []SessionRow{
 		{SessionID: "before", AgentMinutes: &one},
@@ -52,7 +52,7 @@ func TestPageSessionsFiltersByInclusiveBucketRange(t *testing.T) {
 		"after":  {1 << 4},
 	}
 	page, err := PageSessions(rows, membership, SessionPageOptions{
-		BucketRange: &BucketRange{Start: 1, End: 3},
+		BucketRange: &BucketRange{Start: 1, End: 4},
 	})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)

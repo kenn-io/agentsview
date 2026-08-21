@@ -113,7 +113,8 @@ export class ActivityService {
     cursor,
     sort,
     direction,
-    bucket,
+    bucketStart,
+    bucketEnd,
     includeReport,
   }: {
     /**
@@ -129,17 +130,21 @@ export class ActivityService {
      */
     cursor?: string,
     /**
-     * Sort: agent_minutes, cost, first_active, project, or agent
+     * Session sort
      */
-    sort?: string,
+    sort?: 'agent_minutes' | 'cost' | 'first_active' | 'project' | 'agent',
     /**
      * Sort direction
      */
     direction?: 'asc' | 'desc',
     /**
-     * Optional timeline bucket index
+     * First timeline bucket in the half-open range
      */
-    bucket?: number,
+    bucketStart?: number,
+    /**
+     * Exclusive end of the timeline bucket range
+     */
+    bucketEnd?: number,
     /**
      * Include full report metadata for stateless clients
      */
@@ -156,7 +161,8 @@ export class ActivityService {
         'cursor': cursor,
         'sort': sort,
         'direction': direction,
-        'bucket': bucket,
+        'bucket_start': bucketStart,
+        'bucket_end': bucketEnd,
         'include_report': includeReport,
       },
       errors: {

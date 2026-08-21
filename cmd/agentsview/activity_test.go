@@ -76,7 +76,7 @@ func TestResolveActivityReportCursorInheritsPagingOptions(t *testing.T) {
 		Preset: "custom", From: "2026-07-03T10:00:00Z",
 		To: "2026-07-03T13:00:00Z", Timezone: "UTC", Bucket: "1d",
 		SessionsLimit: 1, SessionsSort: "project", SessionsDirection: "asc",
-		SessionsBucketStart: "0", SessionsBucketEnd: "0",
+		SessionsBucketStart: "0", SessionsBucketEnd: "1",
 	}, database)
 	require.NoError(t, err)
 	require.Len(t, first.BySession, 1)
@@ -98,7 +98,7 @@ func TestResolveActivityReportCursorRejectsExplicitPagingMismatch(t *testing.T) 
 		Preset: "custom", From: "2026-07-03T10:00:00Z",
 		To: "2026-07-03T13:00:00Z", Timezone: "UTC", Bucket: "1d",
 		SessionsLimit: 1, SessionsSort: "project", SessionsDirection: "asc",
-		SessionsBucketStart: "0", SessionsBucketEnd: "0",
+		SessionsBucketStart: "0", SessionsBucketEnd: "1",
 	}, database)
 	require.NoError(t, err)
 	require.NotEmpty(t, first.SessionsNextCursor)
@@ -111,7 +111,7 @@ func TestResolveActivityReportCursorRejectsExplicitPagingMismatch(t *testing.T) 
 		{"direction", func(cfg *ActivityReportConfig) { cfg.SessionsDirection = "desc" }},
 		{"bucket range", func(cfg *ActivityReportConfig) {
 			cfg.SessionsBucketStart = "0"
-			cfg.SessionsBucketEnd = "1"
+			cfg.SessionsBucketEnd = "2"
 		}},
 	}
 	for _, tc := range tests {

@@ -125,9 +125,9 @@
 
   function fmtSelectionRange(start: number, end: number): string {
     const first = buckets[start];
-    const last = buckets[end];
+    const last = buckets[end - 1];
     if (!first || !last) return "";
-    if (start === end) return fmtBucketRange(first);
+    if (end - start === 1) return fmtBucketRange(first);
     const startMs = Date.parse(first.start);
     const endMs = Date.parse(last.end);
     if (Number.isNaN(startMs) || Number.isNaN(endMs)) return "";
@@ -141,11 +141,11 @@
   }
 
   // Bucket membership is computed by the shared backend aggregator. The chart
-  // emits an inclusive range; ActivityPage requests that page asynchronously.
+  // emits a half-open range; ActivityPage requests that page asynchronously.
   function selectRange(startIndex: number, endIndex: number) {
     if (!onSelectRange) return;
     const start = Math.min(startIndex, endIndex);
-    const end = Math.max(startIndex, endIndex);
+    const end = Math.max(startIndex, endIndex) + 1;
     if (sameRange(start, end)) {
       onSelectRange(null);
       return;
@@ -197,7 +197,7 @@
       const end = dragEnd ?? dragStart;
       return {
         start: Math.min(dragStart, end),
-        end: Math.max(dragStart, end),
+        end: Math.max(dragStart, end) + 1,
       };
     }
     return selectedRange;
@@ -391,7 +391,7 @@
   const selectionBounds = $derived.by(() => {
     if (!activeRange) return null;
     const first = bars[activeRange.start];
-    const last = bars[activeRange.end];
+    const last = bars[activeRange.end - 1];
     if (!first || !last) return null;
     return {
       x: first.cellX,
@@ -616,14 +616,14 @@
 
         {#each bars as bar (bar.idx)}
           <Rect
-            class={`concurrency-seg interactive${activeRange && bar.idx >= activeRange.start && bar.idx <= activeRange.end ? " selected" : ""}`}
+            class={`concurrency-seg interactive${activeRange && bar.idx >= activeRange.start && bar.idx < activeRange.end ? " selected" : ""}`}
             x={bar.x}
             y={bar.interactiveY}
             width={bar.w}
             height={bar.interactiveH}
           />
           <Rect
-            class={`concurrency-seg automated${activeRange && bar.idx >= activeRange.start && bar.idx <= activeRange.end ? " selected" : ""}`}
+            class={`concurrency-seg automated${activeRange && bar.idx >= activeRange.start && bar.idx < activeRange.end ? " selected" : ""}`}
             x={bar.x}
             y={bar.automatedY}
             width={bar.w}
@@ -720,7 +720,7 @@
             height={stripY + STRIP_H - TOP_PAD}
             role="button"
             tabindex={0}
-            aria-pressed={activeRange !== null && bar.idx >= activeRange.start && bar.idx <= activeRange.end}
+            aria-pressed={activeRange !== null && bar.idx >= activeRange.start && bar.idx < activeRange.end}
             aria-label={m.activity_filter_active_in_range()}
             onmouseenter={(event) => b && showSlotTip(event, b)}
             onmouseleave={hideTip}

@@ -624,11 +624,19 @@ class AnalyticsStore {
   }
 
   async fetchHourOfWeek(params: AnalyticsParams | null = null): Promise<FetchResult> {
+    let requestParams = params;
+    if (requestParams === null) {
+      requestParams = this.baseParams({ includeTime: false });
+      if (this.selectedActivityRange) {
+        requestParams.from = this.selectedActivityRange.from;
+        requestParams.to = this.selectedActivityRange.to;
+      }
+    }
     return await this.executeFetch(
       "hourOfWeek",
       () =>
         AnalyticsService.getApiV1AnalyticsHourOfWeek(
-          params ?? this.filterParams({ includeTime: false }),
+          requestParams,
         ) as unknown as Promise<HourOfWeekResponse>,
       (data) => {
         this.hourOfWeek = data;

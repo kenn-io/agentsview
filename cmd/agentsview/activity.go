@@ -319,7 +319,7 @@ func activitySessionPageOptions(
 	if cfg.SessionsBucketStart != "" {
 		start, startErr := strconv.Atoi(cfg.SessionsBucketStart)
 		end, endErr := strconv.Atoi(cfg.SessionsBucketEnd)
-		if startErr != nil || endErr != nil || start < 0 || end < start {
+		if startErr != nil || endErr != nil || start < 0 || end <= start {
 			return activity.SessionPageOptions{}, fmt.Errorf(
 				"invalid sessions bucket range %q..%q",
 				cfg.SessionsBucketStart, cfg.SessionsBucketEnd,

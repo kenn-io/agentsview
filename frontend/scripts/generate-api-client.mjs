@@ -40,6 +40,19 @@ function generatedTrailingNewlineCounts(dir, base = dir, counts = new Map()) {
   return counts;
 }
 
+function generatedSources(dir, base = dir, sources = new Map()) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      generatedSources(path, base, sources);
+      continue;
+    }
+    if (!entry.name.endsWith(".ts")) continue;
+    sources.set(relative(base, path), readFileSync(path, "utf8"));
+  }
+  return sources;
+}
+
 function normalizeGeneratedTrailingNewlines(dir, preferred, base = dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
@@ -86,6 +99,8 @@ function run(cmd, args, options = {}) {
 }
 
 const generatedDir = join(frontendDir, "src/lib/api/generated");
+const verifyGenerated = process.argv.includes("--check");
+const previousGeneratedSources = verifyGenerated ? generatedSources(generatedDir) : null;
 const generatedTrailingNewlines = generatedTrailingNewlineCounts(generatedDir);
 const tempDir = mkdtempSync(join(tmpdir(), "agentsview-openapi-"));
 try {
@@ -135,4 +150,20 @@ try {
   normalizeGeneratedTrailingNewlines(generatedDir, generatedTrailingNewlines);
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
+}
+
+if (previousGeneratedSources) {
+  const currentGeneratedSources = generatedSources(generatedDir);
+  const paths = new Set([
+    ...previousGeneratedSources.keys(),
+    ...currentGeneratedSources.keys(),
+  ]);
+  const changed = [...paths].filter(
+    (path) => previousGeneratedSources.get(path) !== currentGeneratedSources.get(path),
+  );
+  if (changed.length > 0) {
+    throw new Error(
+      `generated API client was stale and has been regenerated:\n${changed.join("\n")}`,
+    );
+  }
 }

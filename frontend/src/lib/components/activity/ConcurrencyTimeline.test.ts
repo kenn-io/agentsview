@@ -419,7 +419,7 @@ describe("ConcurrencyTimeline", () => {
     });
     await tick();
     await dragRange(target, 0, 0);
-    expect(onSelectRange).toHaveBeenCalledWith({ start: 0, end: 0, label: "10:00–10:05" });
+    expect(onSelectRange).toHaveBeenCalledWith({ start: 0, end: 1, label: "10:00–10:05" });
     unmount(c);
     target.remove();
   });
@@ -461,7 +461,7 @@ describe("ConcurrencyTimeline", () => {
     const hits = target.querySelectorAll(".slot-hit");
     expect(hits.length).toBe(2);
     await dragRange(target, 1, 1);
-    expect(onSelectRange).toHaveBeenCalledWith({ start: 1, end: 1, label: "10:05–10:10" });
+    expect(onSelectRange).toHaveBeenCalledWith({ start: 1, end: 2, label: "10:05–10:10" });
     unmount(c);
     target.remove();
   });
@@ -474,7 +474,7 @@ describe("ConcurrencyTimeline", () => {
       target,
       props: {
         report: popoverReport(),
-        selectedRange: { start: 0, end: 0 },
+        selectedRange: { start: 0, end: 1 },
         onSelectRange,
       },
     });
@@ -493,7 +493,7 @@ describe("ConcurrencyTimeline", () => {
       target,
       props: {
         report: popoverReport(),
-        selectedRange: { start: 0, end: 0 },
+        selectedRange: { start: 0, end: 1 },
         onSelectRange,
       },
     });
@@ -530,7 +530,7 @@ describe("ConcurrencyTimeline", () => {
     );
     await tick();
 
-    expect(onSelectRange).toHaveBeenCalledWith(expect.objectContaining({ start: 0, end: 1 }));
+    expect(onSelectRange).toHaveBeenCalledWith(expect.objectContaining({ start: 0, end: 2 }));
     unmount(c);
     target.remove();
   });
@@ -547,7 +547,7 @@ describe("ConcurrencyTimeline", () => {
     const hit = target.querySelector(".slot-hit") as SVGRectElement;
     hit.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await tick();
-    expect(onSelectRange).toHaveBeenCalledWith(expect.objectContaining({ start: 0, end: 0 }));
+    expect(onSelectRange).toHaveBeenCalledWith(expect.objectContaining({ start: 0, end: 1 }));
     unmount(c);
     target.remove();
   });
@@ -557,7 +557,7 @@ describe("ConcurrencyTimeline", () => {
     document.body.appendChild(target);
     const c = mount(ConcurrencyTimeline, {
       target,
-      props: { report: popoverReport(), selectedRange: { start: 0, end: 0 } },
+      props: { report: popoverReport(), selectedRange: { start: 0, end: 1 } },
     });
     await tick();
     const selection = target.querySelector(".range-selection");
@@ -578,7 +578,7 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
 
-  it("drags across buckets to emit an inclusive range", async () => {
+  it("drags across buckets to emit a half-open range", async () => {
     const onSelectRange = vi.fn();
     const target = document.createElement("div");
     document.body.appendChild(target);
@@ -592,7 +592,7 @@ describe("ConcurrencyTimeline", () => {
 
     expect(onSelectRange).toHaveBeenCalledWith({
       start: 0,
-      end: 2,
+      end: 3,
       label: "00:00–00:15",
     });
     unmount(c);

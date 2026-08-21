@@ -68,7 +68,7 @@ type SessionPageOptions struct {
 
 type BucketRange struct {
 	Start int `json:"start"`
-	End   int `json:"end"`
+	End   int `json:"end"` // Exclusive.
 }
 
 // SessionPageOptionPresence records which cursor-bound options the caller
@@ -116,7 +116,7 @@ func NormalizeSessionPageOptions(options SessionPageOptions) (SessionPageOptions
 		)
 	}
 	if options.BucketRange != nil &&
-		(options.BucketRange.Start < 0 || options.BucketRange.End < options.BucketRange.Start) {
+		(options.BucketRange.Start < 0 || options.BucketRange.End <= options.BucketRange.Start) {
 		return SessionPageOptions{}, fmt.Errorf("invalid activity session bucket range")
 	}
 	return options, nil

@@ -497,6 +497,7 @@ export class SessionsService {
   public static postApiV1SessionsUpload({
     project,
     machine = 'remote',
+    allowShorter,
     formData,
   }: {
     /**
@@ -507,6 +508,10 @@ export class SessionsService {
      * Machine name for imported session
      */
     machine?: string,
+    /**
+     * Permit replacing an existing session with fewer messages
+     */
+    allowShorter?: boolean,
     formData?: {
       file: Blob;
     },
@@ -517,6 +522,7 @@ export class SessionsService {
       query: {
         'project': project,
         'machine': machine,
+        'allow_shorter': allowShorter,
       },
       formData: formData,
       mediaType: 'multipart/form-data',

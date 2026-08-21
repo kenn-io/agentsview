@@ -48,6 +48,11 @@ jobs:
         with:
           node-version: "24"
 
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'false' || 'true' }}
+
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend

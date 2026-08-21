@@ -1040,7 +1040,8 @@ still contribute cost and output tokens when usage rows exist.
 Schema v6 returns at most the first 200 session rows in `by_session` and no
 longer returns raw activity intervals. Fetch later pages, alternate sorts, or a
 bucket drill-down through the sessions endpoint. It accepts `limit` (default
-200, maximum 500), `cursor`, `sort`, `direction`, and a zero-based `bucket`.
+200, maximum 500), `cursor`, `sort`, `direction`, and the zero-based half-open
+range `bucket_start` and `bucket_end`. Both range bounds must be present.
 If the archive changed since the signed `report_id` was created, the response
 sets `refresh_required` and includes a complete replacement `report` so clients
 never combine different report generations.

@@ -13,10 +13,10 @@ type activityReportSessionsInput struct {
 	ReportID      string           `path:"report_id" required:"true" doc:"Signed Activity report ID"`
 	Limit         int              `query:"limit" minimum:"0" maximum:"500" doc:"Maximum session rows"`
 	Cursor        string           `query:"cursor" doc:"Opaque page cursor"`
-	Sort          string           `query:"sort" doc:"Sort: agent_minutes, cost, first_active, project, or agent"`
+	Sort          string           `query:"sort" enum:"agent_minutes,cost,first_active,project,agent" doc:"Session sort"`
 	Direction     string           `query:"direction" enum:"asc,desc" doc:"Sort direction"`
-	BucketStart   optionalIntParam `query:"bucket_start" minimum:"0" doc:"First timeline bucket in the inclusive range"`
-	BucketEnd     optionalIntParam `query:"bucket_end" minimum:"0" doc:"Last timeline bucket in the inclusive range"`
+	BucketStart   optionalIntParam `query:"bucket_start" minimum:"0" doc:"First timeline bucket in the half-open range"`
+	BucketEnd     optionalIntParam `query:"bucket_end" minimum:"1" doc:"Exclusive end of the timeline bucket range"`
 	IncludeReport bool             `query:"include_report" doc:"Include full report metadata for stateless clients"`
 }
 
@@ -151,7 +151,7 @@ func (s *Server) humaActivityReportSessions(
 	}
 	if options.BucketRange != nil &&
 		(options.BucketRange.Start < 0 ||
-			options.BucketRange.End >= artifacts.Report.BucketCount) {
+			options.BucketRange.End > artifacts.Report.BucketCount) {
 		if in.Cursor != "" {
 			return nil, apiError(http.StatusBadRequest, "invalid activity session cursor")
 		}

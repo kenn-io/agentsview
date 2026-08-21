@@ -244,7 +244,7 @@ func requireActivityBucketMembership(
 		artifacts.Sessions, artifacts.Membership,
 		activity.SessionPageOptions{BucketRange: &activity.BucketRange{
 			Start: bucket,
-			End:   bucket,
+			End:   bucket + 1,
 		}},
 	)
 	require.NoError(t, err)

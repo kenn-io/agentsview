@@ -34,20 +34,21 @@ func (m BucketMembership) Contains(index int) bool {
 }
 
 // Intersects reports whether the session belongs to any bucket in the
-// inclusive range [start, end].
+// half-open range [start, end).
 func (m BucketMembership) Intersects(start, end int) bool {
-	if start < 0 || end < start || start/64 >= len(m) {
+	if start < 0 || end <= start || start/64 >= len(m) {
 		return false
 	}
+	last := end - 1
 	firstWord := start / 64
-	lastWord := min(end/64, len(m)-1)
+	lastWord := min(last/64, len(m)-1)
 	for word := firstWord; word <= lastWord; word++ {
 		mask := ^uint64(0)
 		if word == firstWord {
 			mask &= ^uint64(0) << uint(start%64)
 		}
-		if word == lastWord && end%64 != 63 {
-			mask &= (uint64(1) << uint(end%64+1)) - 1
+		if word == lastWord && last%64 != 63 {
+			mask &= (uint64(1) << uint(last%64+1)) - 1
 		}
 		if m[word]&mask != 0 {
 			return true

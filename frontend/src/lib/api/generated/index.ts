@@ -157,7 +157,6 @@ export type { ExportPricingFallback } from './models/ExportPricingFallback';
 export type { ExportProjectIdentity } from './models/ExportProjectIdentity';
 export type { ExportProjectMapEntry } from './models/ExportProjectMapEntry';
 export type { FillStats } from './models/FillStats';
-export type { FormFile } from './models/FormFile';
 export type { GenerateInsightRequest } from './models/GenerateInsightRequest';
 export type { GithubConfigResponse } from './models/GithubConfigResponse';
 export type { InsightCannedSessionFilters } from './models/InsightCannedSessionFilters';

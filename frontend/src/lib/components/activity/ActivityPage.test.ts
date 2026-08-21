@@ -206,7 +206,7 @@ describe("ActivityPage bucket drill-down", () => {
     await selectFirstActivityRange();
     await flushEffects();
     expect(activity.loadSessionPage).toHaveBeenCalledWith({
-      bucketRange: { start: 0, end: 0 },
+      bucketRange: { start: 0, end: 1 },
     });
     expect(screen.getByTitle("Clear time filter")).toBeTruthy();
 

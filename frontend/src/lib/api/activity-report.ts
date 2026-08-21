@@ -1,7 +1,12 @@
 import type { Report, SessionRow } from "./types/activity.js";
 import {
+  ActivityService,
+  type ActivityReportSessionsResponse,
+} from "./generated/index";
+import {
   ApiError,
   authHeaders,
+  callGenerated,
   getBase,
   responseErrorMessage,
 } from "./runtime.js";
@@ -32,12 +37,11 @@ export interface ActivityReportProgress {
   rows_processed?: number;
 }
 
-export type ActivitySessionSort =
-  | "agent_minutes"
-  | "cost"
-  | "first_active"
-  | "project"
-  | "agent";
+type ActivitySessionRequest = Parameters<
+  typeof ActivityService.getApiV1ActivityReportReportIdSessions
+>[0];
+
+export type ActivitySessionSort = NonNullable<ActivitySessionRequest["sort"]>;
 
 export interface ActivityBucketRange {
   start: number;
@@ -52,14 +56,13 @@ export interface ActivitySessionPageOptions {
   bucketRange?: ActivityBucketRange | null;
 }
 
-export interface ActivitySessionPage {
-  report_id: string;
+export type ActivitySessionPage = Omit<
+  ActivityReportSessionsResponse,
+  "sessions" | "report"
+> & {
   sessions: SessionRow[];
-  next_cursor?: string;
-  total: number;
-  refresh_required?: boolean;
   report?: Report;
-}
+};
 
 function appendQuery(params: URLSearchParams, key: string, value: unknown): void {
   if (value === undefined || value === null || value === "") return;
@@ -169,19 +172,20 @@ export async function fetchActivitySessions(
   options: ActivitySessionPageOptions,
   signal?: AbortSignal,
 ): Promise<ActivitySessionPage> {
-  const params = new URLSearchParams();
-  appendQuery(params, "limit", options.limit);
-  appendQuery(params, "cursor", options.cursor);
-  appendQuery(params, "sort", options.sort);
-  appendQuery(params, "direction", options.direction);
-  appendQuery(params, "bucket_start", options.bucketRange?.start);
-  appendQuery(params, "bucket_end", options.bucketRange?.end);
-  const res = await fetch(
-    `${getBase()}/activity/report/${encodeURIComponent(reportID)}/sessions?${params}`,
-    authHeaders({ method: "GET", signal }),
+  const page = await callGenerated(
+    () => ActivityService.getApiV1ActivityReportReportIdSessions({
+      reportId: reportID,
+      limit: options.limit,
+      cursor: options.cursor,
+      sort: options.sort,
+      direction: options.direction,
+      bucketStart: options.bucketRange?.start,
+      bucketEnd: options.bucketRange?.end,
+    }),
+    signal,
   );
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
-  return await res.json() as ActivitySessionPage;
+  return {
+    ...page,
+    sessions: (page.sessions ?? []) as SessionRow[],
+  };
 }

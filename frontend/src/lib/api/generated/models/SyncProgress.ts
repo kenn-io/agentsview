@@ -7,6 +7,8 @@ export type SyncProgress = {
   bytes_total?: number;
   current_project?: string;
   detail?: string;
+  fallback_providers?: number;
+  fallback_sources?: number;
   hint?: string;
   messages_indexed: number;
   phase: string;

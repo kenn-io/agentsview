@@ -194,9 +194,10 @@ Session pages are available at:
 GET /api/v1/activity/report/{report_id}/sessions
 ```
 
-The endpoint accepts `limit`, `cursor`, `sort`, `direction`, and an optional
-zero-based `bucket`. Ordinary page responses contain only the bounded session
-page. Stateless clients that also need report metadata can request
+The endpoint accepts `limit`, `cursor`, `sort`, `direction`, and the optional
+zero-based half-open range `bucket_start` and `bucket_end`. Both range bounds
+must be present. Ordinary page responses contain only the bounded session page.
+Stateless clients that also need report metadata can request
 `include_report=true`; refresh-required responses always include the complete
 replacement report. Ordering always ends with session ID ascending, so a signed
 position cursor remains deterministic after cache eviction or daemon restart.

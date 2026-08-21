@@ -508,6 +508,21 @@ describe("AnalyticsStore heatmap uses full range", () => {
   });
 });
 
+describe("AnalyticsStore hour-of-week range context", () => {
+  it("keeps the parent range during a full refresh with a selected date", async () => {
+    analytics.applyDateRange("2024-01-01", "2024-01-31");
+    analytics.selectDate("2024-01-15");
+    vi.clearAllMocks();
+    mockAllAPIs();
+
+    await analytics.fetchAll();
+
+    expect(analyticsService.getApiV1AnalyticsHourOfWeek).toHaveBeenLastCalledWith(
+      expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
+    );
+  });
+});
+
 describe("AnalyticsStore token metrics", () => {
   it("passes output_tokens heatmap metric through to the API", () => {
     analytics.setMetric("output_tokens");
