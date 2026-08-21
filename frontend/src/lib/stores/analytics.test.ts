@@ -437,6 +437,21 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 });
 
 describe("AnalyticsStore freshness state", () => {
+  it("records a successful Quality refresh time", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-06-15T15:00:00Z"));
+
+      await analytics.fetchSignalsForQuality();
+
+      expect(analytics.lastUpdatedAt).toBe(
+        new Date("2026-06-15T15:00:00Z").getTime(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records full refresh time and clears new-data hints", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

@@ -37,4 +37,21 @@ describe("QualityPage", () => {
     expect(document.body.textContent).toContain("Quality Patterns");
     expect(insights.load).not.toHaveBeenCalled();
   });
+
+  it("shows refresh activity while a filtered quality query is running", async () => {
+    component = mount(QualityPage, { target: document.body });
+    await tick();
+
+    analytics.querying.signals = true;
+    await tick();
+
+    const content = document.querySelector(".content");
+    const refreshButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Refresh quality"]',
+    );
+
+    expect(content?.getAttribute("aria-busy")).toBe("true");
+    expect(content?.querySelector(".query-progress")).not.toBeNull();
+    expect(refreshButton?.disabled).toBe(true);
+  });
 });

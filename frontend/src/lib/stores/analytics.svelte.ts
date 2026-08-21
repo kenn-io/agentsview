@@ -792,7 +792,10 @@ class AnalyticsStore {
     // The Quality page has no model control and the model filter is an
     // Analytics-only scope; omit it so a model selected on Analytics does not
     // silently narrow the Quality signal facts.
-    await this.fetchSignals({ includeModel: false });
+    const result = await this.fetchSignals({ includeModel: false });
+    if (result === "ok") {
+      this.markRefreshComplete();
+    }
   }
 
   setTopMetric(m: TopSessionsMetric) {
