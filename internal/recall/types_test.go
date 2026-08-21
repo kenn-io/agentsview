@@ -32,6 +32,12 @@ func TestNormalizeReviewState(t *testing.T) {
 			wantOK:    true,
 		},
 		{
+			name:      "human rejected remains explicit",
+			value:     ReviewStateHumanRejected,
+			wantState: ReviewStateHumanRejected,
+			wantOK:    true,
+		},
+		{
 			name:      "unknown state is rejected",
 			value:     "self_approved",
 			wantState: "",

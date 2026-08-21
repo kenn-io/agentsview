@@ -120,6 +120,9 @@ type Store interface {
 	// RecallEntries.
 	ListRecallEntries(ctx context.Context, q RecallQuery) ([]RecallEntry, error)
 	GetRecallEntry(ctx context.Context, id string) (*RecallEntry, error)
+	ReviewRecallEntry(
+		ctx context.Context, id string, action RecallReviewAction,
+	) (RecallEntry, error)
 	QueryRecallEntries(ctx context.Context, q RecallQuery) (RecallPage, error)
 	RecordRecallQueryEvent(
 		ctx context.Context, event RecallQueryEvent,

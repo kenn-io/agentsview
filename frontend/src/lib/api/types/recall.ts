@@ -33,6 +33,8 @@ export interface RecallEntry {
   evidence?: RecallEvidence[];
 }
 
+export type RecallReviewAction = "approve" | "archive";
+
 export interface RecallEntriesResponse {
   entries: RecallEntry[];
   trusted_only: boolean;
@@ -117,6 +119,7 @@ export interface RecallEntryFilters {
   project?: string;
   type?: string;
   sourceRunId?: string;
+  status?: string;
   reviewState?: string;
   limit?: number;
   cursor?: string;

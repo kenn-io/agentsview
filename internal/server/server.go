@@ -542,6 +542,10 @@ func (s *Server) routes() {
 		"GET /api/v1/recall/entries/{id}",
 		s.handleGetRecallEntry,
 	))
+	s.mux.Handle("POST /api/v1/recall/entries/{id}/review", s.withTimeout(
+		"POST /api/v1/recall/entries/{id}/review",
+		s.handleReviewRecallEntry,
+	))
 	s.mux.Handle("GET /api/v1/recall/extraction/status", s.withTimeout(
 		"GET /api/v1/recall/extraction/status",
 		s.handleRecallExtractionStatus,

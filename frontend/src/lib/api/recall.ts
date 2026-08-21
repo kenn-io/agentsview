@@ -7,13 +7,9 @@ import type {
   RecallExtractProgressPage,
   RecallExtractProgressResponse,
   RecallExtractionStatus,
+  RecallReviewAction,
 } from "./types/recall.js";
-import {
-  ApiError,
-  authHeaders,
-  getBase,
-  responseErrorMessage,
-} from "./runtime.js";
+import { ApiError, authHeaders, getBase, responseErrorMessage } from "./runtime.js";
 
 const SESSION_RECALL_LIMIT = 500;
 const RECALL_PAGE_LIMIT = 200;
@@ -32,6 +28,7 @@ export async function fetchRecallEntries(
   if (filters.sourceRunId) {
     query.set("source_run_id", filters.sourceRunId);
   }
+  if (filters.status) query.set("status", filters.status);
   if (filters.reviewState) {
     query.set("review_state", filters.reviewState);
   }
@@ -41,10 +38,7 @@ export async function fetchRecallEntries(
     authHeaders({ signal }),
   );
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      await responseErrorMessage(response),
-    );
+    throw new ApiError(response.status, await responseErrorMessage(response));
   }
   const data = (await response.json()) as RecallEntriesResponse;
   return {
@@ -54,18 +48,29 @@ export async function fetchRecallEntries(
   };
 }
 
+export async function reviewRecallEntry(
+  id: string,
+  action: RecallReviewAction,
+): Promise<RecallEntry> {
+  const response = await fetch(
+    `${getBase()}/recall/entries/${encodeURIComponent(id)}/review`,
+    authHeaders({
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
+  );
+  if (!response.ok) {
+    throw new ApiError(response.status, await responseErrorMessage(response));
+  }
+  return (await response.json()) as RecallEntry;
+}
+
 export async function fetchRecallExtractionStatus(
   signal?: AbortSignal,
 ): Promise<RecallExtractionStatus> {
-  const response = await fetch(
-    `${getBase()}/recall/extraction/status`,
-    authHeaders({ signal }),
-  );
+  const response = await fetch(`${getBase()}/recall/extraction/status`, authHeaders({ signal }));
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      await responseErrorMessage(response),
-    );
+    throw new ApiError(response.status, await responseErrorMessage(response));
   }
   return (await response.json()) as RecallExtractionStatus;
 }
@@ -85,10 +90,7 @@ export async function fetchRecallExtractionProgress(
     authHeaders({ signal }),
   );
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      await responseErrorMessage(response),
-    );
+    throw new ApiError(response.status, await responseErrorMessage(response));
   }
   const data = (await response.json()) as RecallExtractProgressResponse;
   return {
@@ -99,15 +101,9 @@ export async function fetchRecallExtractionProgress(
 }
 
 async function postRecallExtractionAction(path: string): Promise<void> {
-  const response = await fetch(
-    `${getBase()}${path}`,
-    authHeaders({ method: "POST" }),
-  );
+  const response = await fetch(`${getBase()}${path}`, authHeaders({ method: "POST" }));
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      await responseErrorMessage(response),
-    );
+    throw new ApiError(response.status, await responseErrorMessage(response));
   }
 }
 
@@ -115,9 +111,7 @@ export async function activateRecallExtractionGeneration(): Promise<void> {
   await postRecallExtractionAction("/recall/extraction/activate");
 }
 
-export async function retireRecallExtractionGeneration(
-  fingerprint: string,
-): Promise<void> {
+export async function retireRecallExtractionGeneration(fingerprint: string): Promise<void> {
   await postRecallExtractionAction(
     `/recall/extraction/generations/${encodeURIComponent(fingerprint)}/retire`,
   );
@@ -136,10 +130,7 @@ export async function fetchSessionRecall(
     authHeaders({ signal }),
   );
   if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      await responseErrorMessage(response),
-    );
+    throw new ApiError(response.status, await responseErrorMessage(response));
   }
   const data = (await response.json()) as RecallEntriesResponse;
   return data.entries ?? [];

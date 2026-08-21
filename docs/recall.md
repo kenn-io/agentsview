@@ -35,11 +35,11 @@ The current implementation is local and SQLite-only. The CLI provides:
 
 The top-level **Recall** page has two tabs:
 
-- **Corpus** is a read-only browser for distilled entries. It shows extraction
-  coverage and generation state, and filters entries by text, project, entry
-  type, generation, and review state. Expand an entry to inspect its body,
-  trigger, uncertainty, provenance metadata, and evidence links back to the
-  source transcript.
+- **Corpus** is a browser and review surface for distilled entries. It shows
+  extraction coverage and generation state, and filters entries by text,
+  project, entry type, generation, and review state. Expand an entry to inspect
+  its body, trigger, uncertainty, provenance metadata, evidence links back to
+  the source transcript, and review controls for automatic entries.
 - **Generated insights** creates and stores longer reports over an explicit
   session scope. Its form always shows the date range, project, session agent,
   automated-session scope, report template, generator, and optional focus used
@@ -109,12 +109,24 @@ The Corpus tab is not available through PostgreSQL or DuckDB stores, so those
 read-only servers open Recall on Generated insights instead. On the local SQLite
 UI, Session Vital Signs also includes a read-only Recall panel for the open
 session and links each evidence range back to the transcript. Corpus population,
-review, extraction-generation management, and ranked querying remain CLI and
-HTTP API workflows.
+extraction-generation management, and ranked querying remain CLI and HTTP API
+workflows.
 
 The daemon exposes the same inspection and query operations over its HTTP API.
 Ordinary queries record measurement data when the SQLite store is writable, but
 read-only archives remain queryable without recording.
+
+### Review extracted entries
+
+Expand an accepted `unreviewed_auto` entry in the Corpus table to approve or
+archive it. **Approve** immediately marks the entry `human_reviewed`; approval
+is disabled when its source evidence has been revoked. **Archive** asks for
+confirmation, then marks the entry `human_rejected` and removes it from the
+served Recall corpus.
+
+Both decisions are durable human states and are not reversed by later
+extraction-generation changes. This surface deliberately has no entry editing,
+bulk review, or undo action.
 
 ## Vector and hybrid retrieval
 
@@ -231,11 +243,12 @@ or manufacture stable message IDs and digests. Evidence must belong to the same
 source session as its entry. These checks run through the shared insertion and
 reviewed-import boundaries rather than through a separate model write path.
 
-Entries have one of four review states:
+Entries have one of five review states:
 
 | Review state      | Meaning                                                 |
 | ----------------- | ------------------------------------------------------- |
-| `human_reviewed`  | Explicitly accepted through the reviewed import surface |
+| `human_reviewed`  | Explicitly approved by a human                          |
+| `human_rejected`  | Explicitly rejected and archived by a human             |
 | `unreviewed_auto` | Generated or omitted review decision                    |
 | `calibrated_auto` | Automated output from a calibrated future policy        |
 | `eval_raw`        | Quarantined evaluation material                         |

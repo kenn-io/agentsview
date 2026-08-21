@@ -1664,6 +1664,7 @@ func TestActivateExtractGenerationSwitchesServedEntries(t *testing.T) {
 		entry("e-old", "fp-old", "archived", "unreviewed_auto"),
 		entry("e-new-staged", "fp-new", "archived", "unreviewed_auto"),
 		entry("e-reviewed", "fp-old", "accepted", "human_reviewed"),
+		entry("e-rejected", "fp-old", "archived", "human_rejected"),
 	})
 	require.NoError(t, err)
 	require.NoError(t, d.ActivateExtractGeneration(
@@ -1684,6 +1685,8 @@ func TestActivateExtractGenerationSwitchesServedEntries(t *testing.T) {
 		"activation must stop serving the retired generation's entries")
 	assert.Equal(t, "accepted", status("e-reviewed"),
 		"human-reviewed entries are not lifecycle-managed")
+	assert.Equal(t, "archived", status("e-rejected"),
+		"human-rejected entries are not lifecycle-managed")
 }
 
 func TestRetireExtractGenerationArchivesServedEntries(t *testing.T) {
@@ -3054,6 +3057,7 @@ func TestUpsertExtractProgressDigestChangeRemovesEntriesAtomically(t *testing.T)
 	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
 		machineEntry("e-1", "unreviewed_auto"),
 		machineEntry("e-human", "human_reviewed"),
+		machineEntry("e-rejected", "human_rejected"),
 	})
 	require.NoError(t, err)
 
@@ -3083,6 +3087,10 @@ func TestUpsertExtractProgressDigestChangeRemovesEntriesAtomically(t *testing.T)
 	human, err := d.GetRecallEntry(ctx, "e-human")
 	require.NoError(t, err)
 	require.NotNil(t, human, "human-touched entries are never machine-deleted")
+	rejected, err := d.GetRecallEntry(ctx, "e-rejected")
+	require.NoError(t, err)
+	require.NotNil(t, rejected,
+		"human-rejected entries are never machine-deleted")
 
 	// A refused progress write rolls the entry delete back with it.
 	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{

@@ -1090,6 +1090,169 @@ func TestGetRecallEntryFoundAndMissing(t *testing.T) {
 	assertStatus(t, w, http.StatusNotFound)
 }
 
+func TestReviewRecallEntryApproveAndArchive(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		action     string
+		wantStatus string
+		wantReview string
+	}{
+		{
+			name: "approve", action: "approve", wantStatus: "accepted",
+			wantReview: corerecall.ReviewStateHumanReviewed,
+		},
+		{
+			name: "archive", action: "archive", wantStatus: "archived",
+			wantReview: corerecall.ReviewStateHumanRejected,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var notifications atomic.Int32
+			te := setupWithServerOpts(t, []server.Option{
+				server.WithRecallCorpusMutationNotifier(func() {
+					notifications.Add(1)
+				}),
+			})
+			seedReviewableRecallEntry(t, te, "review-me", true,
+				corerecall.StatusAccepted,
+				corerecall.ReviewStateUnreviewedAuto)
+
+			w := te.post(t, "/api/v1/recall/entries/review-me/review",
+				`{"action":"`+tt.action+`"}`)
+
+			assertStatus(t, w, http.StatusOK)
+			got := decode[db.RecallEntry](t, w)
+			assert.Equal(t, tt.wantStatus, got.Status)
+			assert.Equal(t, tt.wantReview, got.ReviewState)
+			require.Len(t, got.Evidence, 1)
+			assert.Equal(t, int32(1), notifications.Load())
+		})
+	}
+}
+
+func TestReviewRecallEntryMapsRequestAndTransitionErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		id         string
+		body       string
+		provenance bool
+		status     string
+		review     string
+		seed       bool
+		wantStatus int
+	}{
+		{
+			name: "malformed JSON", id: "review-me", body: `{"action":`,
+			provenance: true, status: corerecall.StatusAccepted,
+			review: corerecall.ReviewStateUnreviewedAuto, seed: true,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "unknown field", id: "review-me",
+			body:       `{"action":"approve","note":"no"}`,
+			provenance: true, status: corerecall.StatusAccepted,
+			review: corerecall.ReviewStateUnreviewedAuto, seed: true,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "unknown action", id: "review-me", body: `{"action":"publish"}`,
+			provenance: true, status: corerecall.StatusAccepted,
+			review: corerecall.ReviewStateUnreviewedAuto, seed: true,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "missing entry", id: "missing", body: `{"action":"approve"}`,
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name: "already approved", id: "review-me", body: `{"action":"archive"}`,
+			provenance: true, status: corerecall.StatusAccepted,
+			review: corerecall.ReviewStateHumanReviewed, seed: true,
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "already rejected", id: "review-me", body: `{"action":"approve"}`,
+			status: corerecall.StatusArchived,
+			review: corerecall.ReviewStateHumanRejected, seed: true,
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "archived automatic", id: "review-me", body: `{"action":"archive"}`,
+			provenance: true, status: corerecall.StatusArchived,
+			review: corerecall.ReviewStateUnreviewedAuto, seed: true,
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "revoked approval", id: "review-me", body: `{"action":"approve"}`,
+			status: corerecall.StatusAccepted,
+			review: corerecall.ReviewStateUnreviewedAuto, seed: true,
+			wantStatus: http.StatusConflict,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var notifications atomic.Int32
+			te := setupWithServerOpts(t, []server.Option{
+				server.WithRecallCorpusMutationNotifier(func() {
+					notifications.Add(1)
+				}),
+			})
+			if tt.seed {
+				seedReviewableRecallEntry(t, te, tt.id, tt.provenance,
+					tt.status, tt.review)
+			}
+
+			w := te.post(t, "/api/v1/recall/entries/"+tt.id+"/review", tt.body)
+
+			assertStatus(t, w, tt.wantStatus)
+			assert.Zero(t, notifications.Load())
+		})
+	}
+}
+
+func TestReviewRecallEntryAllowsRevokedArchive(t *testing.T) {
+	te := setup(t)
+	seedReviewableRecallEntry(t, te, "review-me", false,
+		corerecall.StatusAccepted, corerecall.ReviewStateUnreviewedAuto)
+
+	w := te.post(t, "/api/v1/recall/entries/review-me/review",
+		`{"action":"archive"}`)
+
+	assertStatus(t, w, http.StatusOK)
+	got := decode[db.RecallEntry](t, w)
+	assert.Equal(t, corerecall.ReviewStateHumanRejected, got.ReviewState)
+}
+
+func TestReviewRecallEntryMapsUnavailableWriters(t *testing.T) {
+	t.Run("maintenance", func(t *testing.T) {
+		var notifications atomic.Int32
+		te := setupWithServerOpts(t, []server.Option{
+			server.WithRecallCorpusMutationNotifier(func() {
+				notifications.Add(1)
+			}),
+		})
+		seedReviewableRecallEntry(t, te, "review-me", true,
+			corerecall.StatusAccepted, corerecall.ReviewStateUnreviewedAuto)
+		require.NoError(t, te.db.CloseWriter())
+		t.Cleanup(func() { require.NoError(t, te.db.ReopenWriter()) })
+
+		w := te.post(t, "/api/v1/recall/entries/review-me/review",
+			`{"action":"approve"}`)
+
+		assertStatus(t, w, http.StatusServiceUnavailable)
+		assert.Equal(t, "5", w.Header().Get("Retry-After"))
+		assert.Zero(t, notifications.Load())
+	})
+
+	t.Run("read only", func(t *testing.T) {
+		te := setupPGMode(t)
+		w := te.post(t, "/api/v1/recall/entries/missing/review",
+			`{"action":"approve"}`)
+		assertStatus(t, w, http.StatusNotImplemented)
+	})
+}
+
 func TestQueryRecallEntriesReturnsContext(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)
@@ -1692,4 +1855,25 @@ func seedRecallEntry(t *testing.T, te *testEnv, m db.RecallEntry) {
 	}
 	_, err := te.db.InsertRecallEntry(m)
 	require.NoError(t, err, "InsertRecallEntry")
+}
+
+func seedReviewableRecallEntry(
+	t *testing.T,
+	te *testEnv,
+	id string,
+	provenance bool,
+	status string,
+	reviewState string,
+) {
+	t.Helper()
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID: id, Type: "fact", Scope: "project", Status: status,
+		ReviewState: reviewState, Title: "Review this fact", Body: "Fact body",
+		SourceSessionID: "recall-session", ProvenanceOK: provenance,
+		Evidence: []db.RecallEvidence{{
+			SessionID: "recall-session", MessageStartOrdinal: 1,
+			MessageEndOrdinal: 2, Snippet: "Supporting transcript range.",
+		}},
+	})
 }

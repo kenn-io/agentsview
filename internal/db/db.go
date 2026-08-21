@@ -3894,6 +3894,16 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 		}
 	}
 
+	db.mu.Lock()
+	err = migrateRecallReviewStateConstraintLocked(db.getWriter())
+	db.mu.Unlock()
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf(
+			"migrating recall review state: %w", err,
+		)
+	}
+
 	if err := db.init(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initializing schema: %w", err)

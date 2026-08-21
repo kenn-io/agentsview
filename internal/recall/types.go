@@ -34,6 +34,7 @@ const LexicalScorePolicyVersion = "recall-lexical-v1"
 
 const (
 	ReviewStateHumanReviewed  = "human_reviewed"
+	ReviewStateHumanRejected  = "human_rejected"
 	ReviewStateUnreviewedAuto = "unreviewed_auto"
 	ReviewStateCalibratedAuto = "calibrated_auto"
 	ReviewStateEvalRaw        = "eval_raw"
@@ -49,6 +50,7 @@ func NormalizeReviewState(value string) (string, bool) {
 	}
 	switch value {
 	case ReviewStateHumanReviewed,
+		ReviewStateHumanRejected,
 		ReviewStateUnreviewedAuto,
 		ReviewStateCalibratedAuto,
 		ReviewStateEvalRaw:
