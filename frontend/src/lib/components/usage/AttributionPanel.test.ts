@@ -133,6 +133,7 @@ describe("AttributionPanel agent exclusion", () => {
   afterEach(() => {
     usage.summary = null;
     usage.excludedAgents = "";
+    usage.selectedTimeRange = null;
     usage.toggles.attribution.groupBy = "project";
     document.body.innerHTML = "";
   });
@@ -154,6 +155,23 @@ describe("AttributionPanel agent exclusion", () => {
         expect.objectContaining({ excludeAgent: "codex" }),
       ),
     );
+    unmount(component);
+  });
+
+  it("keeps the active chart brush when excluding an attribution row", async () => {
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+    const component = mountPanel();
+    await tick();
+
+    document.querySelectorAll<HTMLElement>(".list-row")[1]!.click();
+
+    expect(usage.selectedTimeRange).toEqual({
+      from: "2024-01-08",
+      to: "2024-01-14",
+    });
     unmount(component);
   });
 });

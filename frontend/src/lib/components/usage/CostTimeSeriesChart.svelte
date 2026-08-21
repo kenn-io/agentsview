@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Area, Bar, Chart, Layer } from "layerchart";
+  import { Area, Bar, Chart, Layer, Tooltip } from "layerchart";
   import { Button } from "@kenn-io/kit-ui";
   import { scaleBand, scalePoint } from "d3-scale";
   import LargeChartFrame from "../shared/LargeChartFrame.svelte";
@@ -21,7 +21,7 @@
   // Reserved headroom at the top of the plot area so the
   // maximum bar, its grid line, and the top y-axis label's
   // ascenders do not clip against the SVG viewBox edge.
-  const MAX_SERIES = 5;
+  const MAX_SERIES = 10;
 
   interface Point {
     date: string;
@@ -38,6 +38,13 @@
     cacheReadTokens: number;
   }): number {
     return sumSelectedTokens(b, usage.selectedTokenTypes);
+  }
+
+  function isSeriesVisible(key: string): boolean {
+    if (groupBy === "project") return !usage.isProjectKeyExcluded(key);
+    if (groupBy === "agent") return !usage.isAgentExcluded(key);
+    if (!usage.selectedModels) return true;
+    return usage.selectedModels.split(",").includes(key);
   }
 
   const seriesData = $derived.by((): {
@@ -57,6 +64,7 @@
     for (const day of daily) {
       if (groupBy === "project" && day.projectBreakdowns) {
         for (const b of day.projectBreakdowns) {
+          if (!isSeriesVisible(b.project_key)) continue;
           labels[b.project_key] = b.project;
           const value = isTokenMode
             ? breakdownTokens(b)
@@ -68,6 +76,7 @@
         }
       } else if (groupBy === "model" && day.modelBreakdowns) {
         for (const b of day.modelBreakdowns) {
+          if (!isSeriesVisible(b.modelName)) continue;
           const value = isTokenMode
             ? breakdownTokens(b)
             : b.cost.microdollars;
@@ -79,6 +88,7 @@
         }
       } else if (groupBy === "agent" && day.agentBreakdowns) {
         for (const b of day.agentBreakdowns) {
+          if (!isSeriesVisible(b.agent)) continue;
           const value = isTokenMode
             ? breakdownTokens(b)
             : b.cost.microdollars;
@@ -122,20 +132,26 @@
       let items: Array<{ key: string; value: number }> = [];
 
       if (groupBy === "project" && day.projectBreakdowns) {
-        items = day.projectBreakdowns.map((b) => ({
-          key: b.project_key,
-          value: isTokenMode ? breakdownTokens(b) : b.cost.microdollars,
-        }));
+        items = day.projectBreakdowns
+          .filter((b) => isSeriesVisible(b.project_key))
+          .map((b) => ({
+            key: b.project_key,
+            value: isTokenMode ? breakdownTokens(b) : b.cost.microdollars,
+          }));
       } else if (groupBy === "model" && day.modelBreakdowns) {
-        items = day.modelBreakdowns.map((b) => ({
-          key: b.modelName,
-          value: isTokenMode ? breakdownTokens(b) : b.cost.microdollars,
-        }));
+        items = day.modelBreakdowns
+          .filter((b) => isSeriesVisible(b.modelName))
+          .map((b) => ({
+            key: b.modelName,
+            value: isTokenMode ? breakdownTokens(b) : b.cost.microdollars,
+          }));
       } else if (groupBy === "agent" && day.agentBreakdowns) {
-        items = day.agentBreakdowns.map((b) => ({
-          key: b.agent,
-          value: isTokenMode ? breakdownTokens(b) : b.cost.microdollars,
-        }));
+        items = day.agentBreakdowns
+          .filter((b) => isSeriesVisible(b.agent))
+          .map((b) => ({
+            key: b.agent,
+            value: isTokenMode ? breakdownTokens(b) : b.cost.microdollars,
+          }));
       }
 
       for (const { key, value } of items) {
@@ -226,6 +242,14 @@
     });
   }
 
+  function tooltipDateLabel(date: string): string {
+    return formatDateTime(`${date}T00:00:00`, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
+
   const xTicks = $derived.by(() => {
     const pts = seriesData.points;
     const step = Math.max(Math.ceil(pts.length / 6), 1);
@@ -256,6 +280,25 @@
         : colorMap.get(key) ?? "var(--text-muted)",
     })),
   );
+
+  function seriesColor(key: string): string {
+    return key === "__other__"
+      ? "var(--text-muted)"
+      : colorMap.get(key) ?? "var(--text-muted)";
+  }
+
+  function tooltipRows(point: Point) {
+    return seriesData.keys
+      .map((key) => ({
+        key,
+        label: key === "__other__"
+          ? m.shared_other()
+          : seriesData.labels[key] ?? key,
+        value: point.values[key] ?? 0,
+        color: seriesColor(key),
+      }))
+      .sort((a, b) => b.value - a.value);
+  }
 
   function handleGroupByChange(g: GroupBy) {
     usage.setTimeSeriesGroupBy(g);
@@ -403,6 +446,7 @@
           onBrushEnd: handleBrushEnd,
           classes: { range: "usage-brush-range" },
         }}
+        tooltipContext={{ mode: "bisect-x" }}
       >
         <Layer class="chart-svg">
           <LargeChartFrame
@@ -430,6 +474,24 @@
             {/each}
           </LargeChartFrame>
         </Layer>
+        <Tooltip.Root variant="none" fadeDuration={0}>
+          {#snippet children({ data })}
+            <div class="usage-series-tooltip" role="status">
+              <div class="tooltip-date">{tooltipDateLabel(data.date)}</div>
+              {#each tooltipRows(data) as row (row.key)}
+                <div class="tooltip-row">
+                  <span class="tooltip-dot" style="background: {row.color}"></span>
+                  <span class="tooltip-name">{row.label}</span>
+                  <span class="tooltip-value">
+                    {isTokenMode
+                      ? fmtTokenYLabel(row.value)
+                      : formatMoney(moneyFromMicrodollars(row.value))}
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/snippet}
+        </Tooltip.Root>
       </Chart>
     </div>
 
@@ -574,6 +636,51 @@
 
   .chart-container :global(.chart-svg) {
     display: block;
+  }
+
+  .usage-series-tooltip {
+    min-width: 180px;
+    max-width: 300px;
+    padding: 8px 10px;
+    color: var(--text-primary);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md);
+    font-size: 11px;
+  }
+
+  .tooltip-date {
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  .tooltip-row {
+    display: grid;
+    grid-template-columns: 7px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 7px;
+    min-height: 20px;
+  }
+
+  .tooltip-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+
+  .tooltip-name {
+    overflow: hidden;
+    color: var(--text-secondary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tooltip-value {
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
   }
 
   .legend {

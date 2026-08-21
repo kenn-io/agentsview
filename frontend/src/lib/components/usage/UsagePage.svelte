@@ -57,13 +57,10 @@
   let unsubEvents: (() => void) | undefined;
 
   const chartColorMaps = $derived(
-    usageChartColorMaps(usage.summary, settings.chartPalette),
-  );
-  const timeSeriesColorMap = $derived(
     usageChartColorMaps(
       usage.timeSeriesSummary,
       settings.chartPalette,
-    )[usage.toggles.timeSeries.groupBy],
+    ),
   );
 
   // Keep projects already returned by the summary so a project remains
@@ -572,7 +569,7 @@
 
     <Card level="default" padding="none" class="chart-panel wide">
       <CostTimeSeriesChart
-        colorMap={timeSeriesColorMap}
+        colorMap={chartColorMaps[usage.toggles.timeSeries.groupBy]}
       />
     </Card>
 

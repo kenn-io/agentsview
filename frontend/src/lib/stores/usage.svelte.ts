@@ -604,20 +604,29 @@ class UsageStore {
     this.fetchAll();
   }
 
-  toggleProjectKey(key: string): void {
+  toggleProjectKey(
+    key: string,
+    options: { preserveTimeRange?: boolean } = {},
+  ): void {
     this.excludedProjectKeys = this.toggleCsv(this.excludedProjectKeys, key);
-    this.fetchAll();
+    this.fetchAll(options);
   }
 
-  toggleAgent(name: string): void {
+  toggleAgent(
+    name: string,
+    options: { preserveTimeRange?: boolean } = {},
+  ): void {
     this.excludedAgents = this.toggleCsv(this.excludedAgents, name);
-    this.fetchAll();
+    this.fetchAll(options);
   }
 
-  toggleModel(name: string): void {
+  toggleModel(
+    name: string,
+    options: { preserveTimeRange?: boolean } = {},
+  ): void {
     this.selectedModels = this.toggleCsv(this.selectedModels, name);
     this.excludedModels = "";
-    this.fetchAll();
+    this.fetchAll(options);
   }
 
   private toggleCsv(csv: string, name: string): string {

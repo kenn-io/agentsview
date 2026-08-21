@@ -387,12 +387,12 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("keeps rendered other-series output muted", async () => {
+  it("renders ten named series before rolling the rest into Other", async () => {
     usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
-    const models = Array.from({ length: 6 }, (_, index) => ({
+    const models = Array.from({ length: 11 }, (_, index) => ({
       modelName: `model-${index}`,
-      cost: testMoney(6 - index),
+      cost: testMoney(11 - index),
     }));
     usage.summary.daily = [modelDailyEntry(0, models)];
 
@@ -401,10 +401,54 @@ describe("CostTimeSeriesChart", () => {
 
     const marks = Array.from(document.querySelectorAll<SVGElement>(".chart-svg rect.lc-bar"));
     const dots = Array.from(document.querySelectorAll<HTMLElement>(".legend-dot"));
-    expect(marks).toHaveLength(6);
-    expect(dots).toHaveLength(6);
+    expect(marks).toHaveLength(11);
+    expect(dots).toHaveLength(11);
     expect(marks.at(-1)!.getAttribute("fill")).toBe("var(--text-muted)");
     expect(dots.at(-1)!.style.background).toBe("var(--text-muted)");
+    unmount(component);
+  });
+
+  it("shows hovered series in descending value order", async () => {
+    usage.summary = usageSummary();
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary.daily = [
+      modelDailyEntry(0, [
+        { modelName: "small", cost: testMoney(1) },
+        { modelName: "large", cost: testMoney(9) },
+        { modelName: "medium", cost: testMoney(4) },
+      ]),
+      modelDailyEntry(1, [
+        { modelName: "small", cost: testMoney(2) },
+        { modelName: "large", cost: testMoney(3) },
+        { modelName: "medium", cost: testMoney(8) },
+      ]),
+    ];
+
+    const component = mountChart();
+    await tick();
+    const target = document.querySelector<HTMLElement>(".lc-tooltip-context")!;
+    target.dispatchEvent(new MouseEvent("pointerenter", {
+      bubbles: true,
+      clientX: 0,
+      clientY: 0,
+    }));
+    target.dispatchEvent(new MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 0,
+      clientY: 0,
+    }));
+    await tick();
+
+    const tooltip = document.querySelector(".usage-series-tooltip")!;
+    expect(tooltip).toBeTruthy();
+    expect(tooltip.querySelector(".tooltip-date")?.textContent).toContain("Jun 4, 2026");
+    const rows = Array.from(tooltip.querySelectorAll(".tooltip-row"));
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.textContent).toContain("large");
+    expect(rows[0]!.textContent).toContain("$9.00");
+    expect(rows[1]!.textContent).toContain("medium");
+    expect(rows[2]!.textContent).toContain("small");
+
     unmount(component);
   });
 
