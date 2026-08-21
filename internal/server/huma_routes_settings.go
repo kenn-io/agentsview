@@ -187,12 +187,14 @@ func (s *Server) humaUpdateSettings(
 
 func (s *Server) localWorktreeMappingHumaDB() (*db.DB, string, error) {
 	localDB, ok := s.db.(*db.DB)
-	if !ok || localDB == nil || localDB.ReadOnly() || s.engine == nil {
+	if !ok || localDB == nil || localDB.ReadOnly() {
 		return nil, "", apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
-	machine := strings.TrimSpace(s.engine.Machine())
-	if machine == "" {
-		machine = s.cfg.InstallationID
+	machine := strings.TrimSpace(s.cfg.InstallationID)
+	if s.engine != nil {
+		if engineMachine := strings.TrimSpace(s.engine.Machine()); engineMachine != "" {
+			machine = engineMachine
+		}
 	}
 	return localDB, machine, nil
 }
@@ -338,14 +340,14 @@ func (s *Server) humaApplyWorktreeMappings(
 	ctx context.Context,
 	in *worktreeMappingApplyInput,
 ) (*jsonOutput[applyWorktreeMappingsResponse], error) {
-	_, machine, err := s.localWorktreeMappingHumaDB()
+	localDB, machine, err := s.localWorktreeMappingHumaDB()
 	if err != nil {
 		return nil, err
 	}
 	if in.Body.Machine != nil && strings.TrimSpace(*in.Body.Machine) != "" {
 		machine = strings.TrimSpace(*in.Body.Machine)
 	}
-	result, err := s.engine.ApplyWorktreeProjectMappings(ctx, machine)
+	result, err := s.syncEngineForLocal(localDB).ApplyWorktreeProjectMappings(ctx, machine)
 	if err != nil {
 		return nil, internalError("apply worktree mappings", err)
 	}
@@ -391,7 +393,7 @@ func (s *Server) humaReclassifyWorktreeProject(
 	if err != nil {
 		return nil, humaWorktreeReclassificationError(err)
 	}
-	mapping, result, err := s.engine.ApplyWorktreeReclassification(
+	mapping, result, err := s.syncEngineForLocal(localDB).ApplyWorktreeReclassification(
 		ctx, draft, in.Body.MappingToken, current.ExistingMappingID,
 	)
 	if err != nil {
