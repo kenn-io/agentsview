@@ -513,19 +513,15 @@
     --typeahead-max-width: 150px;
   }
 
-  /* The refresh control always owns the same toolbar footprint. Progress
-     replaces its age label inside this box, so phase and row-count updates
-     cannot reflow the filters or report body. */
   .activity-refresh {
-    flex: 0 0 220px;
-    width: 220px;
+    flex: 0 1 auto;
     max-width: 100%;
     min-width: 0;
     overflow: hidden;
   }
 
   .activity-refresh :global(.kit-refresh-control) {
-    width: 100%;
+    max-width: 100%;
     min-width: 0;
   }
 
