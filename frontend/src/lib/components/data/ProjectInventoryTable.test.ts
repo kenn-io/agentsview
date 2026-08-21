@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { fireEvent, screen } from "@testing-library/svelte";
 import ProjectInventoryTable from "./ProjectInventoryTable.svelte";
@@ -79,7 +79,7 @@ describe("ProjectInventoryTable", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   afterEach(() => {
-    if (component) unmount(component);
+    if (component) void unmount(component);
     component = undefined;
     document.body.innerHTML = "";
   });
@@ -132,7 +132,7 @@ describe("ProjectInventoryTable", () => {
     expect(document.body.textContent).toContain(m.data_no_matches());
   });
 
-  it("renders an em dash for null first/last activity", async () => {
+  it("renders an em dash for missing last activity", async () => {
     const inventory = makeInventory(fixtureRows());
     component = mount(ProjectInventoryTable, {
       target: document.body,
@@ -142,8 +142,7 @@ describe("ProjectInventoryTable", () => {
 
     const betaRow = document.querySelector('.project-row[data-project-key="beta"]');
     const cells = betaRow?.querySelectorAll("td");
-    expect(cells?.[5]?.textContent?.trim()).toBe("—");
-    expect(cells?.[6]?.textContent?.trim()).toBe("—");
+    expect(cells?.[4]?.textContent?.trim()).toBe("—");
   });
 
   it("renders rule annotations with accessible titles", async () => {
