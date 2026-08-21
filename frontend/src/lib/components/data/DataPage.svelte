@@ -9,6 +9,15 @@
   import ProjectWorkspace from "./ProjectWorkspace.svelte";
   import WorktreeMappingRules from "./WorktreeMappingRules.svelte";
   import { SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
+  import { PROJECT_MAPPING_WORKSPACE_ENABLED } from "../../feature-flags.js";
+
+  interface Props {
+    projectWorkspaceEnabled?: boolean;
+  }
+
+  let {
+    projectWorkspaceEnabled = PROJECT_MAPPING_WORKSPACE_ENABLED,
+  }: Props = $props();
 
   const viewOptions: SegmentedControlOption[] = $derived([
     { value: "inventory", label: m.data_view_inventory() },
@@ -58,8 +67,8 @@
   }
 
   onMount(() => {
-    const detach = data.attach();
-    void data.load();
+    const detach = data.attach(projectWorkspaceEnabled);
+    if (projectWorkspaceEnabled) void data.load();
     return () => {
       data.cancelInFlightReads();
       detach();
@@ -68,17 +77,19 @@
 </script>
 
 <div class="data-page">
-  <div class="data-header">
-    <h2>{m.data_projects_heading()}</h2>
-    <SegmentedControl
-      options={viewOptions}
-      value={data.view}
-      ariaLabel={m.data_view_toggle_label()}
-      onchange={onViewChange}
-    />
-  </div>
+  {#if projectWorkspaceEnabled}
+    <div class="data-header">
+      <h2>{m.data_projects_heading()}</h2>
+      <SegmentedControl
+        options={viewOptions}
+        value={data.view}
+        ariaLabel={m.data_view_toggle_label()}
+        onchange={onViewChange}
+      />
+    </div>
+  {/if}
 
-  {#if data.view === "rules"}
+  {#if !projectWorkspaceEnabled || data.view === "rules"}
     <!-- The rules component captures its machine prop once at mount, so
          store-driven machine changes remount it and reset machine-specific
          form state. Background refreshes stay in place so drafts survive. -->
@@ -88,8 +99,10 @@
         machine={data.rulesMachine}
         refreshVersion={data.rulesRefreshVersion}
         onMachineChange={(machine) => data.setRulesMachine(machine)}
-        onSelectProject={selectProjectByLabel}
-        onMutated={() => void data.load({ background: true })}
+        onSelectProject={projectWorkspaceEnabled ? selectProjectByLabel : undefined}
+        onMutated={projectWorkspaceEnabled
+          ? () => void data.load({ background: true })
+          : undefined}
       />
     {/key}
   {:else if data.inventory}
