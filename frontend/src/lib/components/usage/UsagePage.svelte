@@ -532,7 +532,7 @@
       <RefreshControl
         lastUpdatedAt={usage.lastUpdatedAt}
         busy={usage.isQuerying}
-        onRefresh={() => usage.fetchAll()}
+        onRefresh={() => usage.fetchAll({ preserveTimeRange: true })}
         label={m.usage_refresh()}
         title={m.shared_refresh()}
       />

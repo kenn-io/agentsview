@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type {
+  TopSessionEntry,
   UsageComparison,
   UsagePairwiseComparisonResponse,
   UsageSummaryResponse,
@@ -160,6 +161,22 @@ vi.mock("../api/generated/index", () => ({
 }));
 
 const TOGGLES_KEY = "usage-toggles";
+
+function topSession(sessionId: string): TopSessionEntry {
+  return {
+    sessionId,
+    displayName: sessionId,
+    agent: "codex",
+    project: "demo",
+    startedAt: "2026-06-07T12:00:00Z",
+    inputTokens: 100,
+    outputTokens: 25,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    totalTokens: 125,
+    cost: testMoney(1),
+  };
+}
 
 function installStorage(initial: Record<string, string> = {}) {
   const data = new Map(Object.entries(initial));
@@ -1528,6 +1545,48 @@ describe("UsageStore time-series range selection", () => {
     expect(usage.selectedTimeRange).toBeNull();
     expect(usage.summary).toEqual(context);
     expect(usage.timeSeriesSummary).toEqual(context);
+  });
+
+  it("restores parent top sessions when a selected-range summary fails", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = usageSummary(15);
+    usage.topSessions = [topSession("parent-before")];
+    usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("range request failed"));
+    usageServiceMocks.getApiV1UsageTopSessions
+      .mockResolvedValueOnce([topSession("selected-range")])
+      .mockResolvedValueOnce([topSession("parent-after")]);
+
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+
+    await vi.waitFor(() => {
+      expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(2);
+    });
+    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenLastCalledWith(
+      expect.objectContaining({ from: "2026-06-04", to: "2026-06-18" }),
+    );
+    expect(usage.topSessions).toEqual([topSession("parent-after")]);
+  });
+
+  it("does not retain parent top sessions when a selected-range request fails", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = usageSummary(15);
+    usage.topSessions = [topSession("parent")];
+    usageServiceMocks.getApiV1UsageTopSessions.mockRejectedValueOnce(
+      new Error("top sessions failed"),
+    );
+
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+
+    await vi.waitFor(() => {
+      expect(usage.errors.topSessions).toBe("top sessions failed");
+    });
+    expect(usage.selectedTimeRange).toEqual({
+      from: "2026-06-07",
+      to: "2026-06-10",
+    });
+    expect(usage.topSessions).toBeNull();
   });
 
   it("clears an active brush before applying a non-date filter", async () => {

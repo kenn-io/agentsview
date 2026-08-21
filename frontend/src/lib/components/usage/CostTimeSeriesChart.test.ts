@@ -157,6 +157,9 @@ describe("CostTimeSeriesChart", () => {
     vi.restoreAllMocks();
     usage.summary = null;
     usage.selectedTimeRange = null;
+    usage.excludedProjectKeys = "";
+    usage.excludedAgents = "";
+    usage.selectedModels = "";
     usage.mode = "cost";
     usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
     settings.chartPalette = "agentsview";
@@ -427,16 +430,20 @@ describe("CostTimeSeriesChart", () => {
     const component = mountChart();
     await tick();
     const target = document.querySelector<HTMLElement>(".lc-tooltip-context")!;
-    target.dispatchEvent(new MouseEvent("pointerenter", {
-      bubbles: true,
-      clientX: 0,
-      clientY: 0,
-    }));
-    target.dispatchEvent(new MouseEvent("pointermove", {
-      bubbles: true,
-      clientX: 0,
-      clientY: 0,
-    }));
+    target.dispatchEvent(
+      new MouseEvent("pointerenter", {
+        bubbles: true,
+        clientX: 0,
+        clientY: 0,
+      }),
+    );
+    target.dispatchEvent(
+      new MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: 0,
+        clientY: 0,
+      }),
+    );
     await tick();
 
     const tooltip = document.querySelector(".usage-series-tooltip")!;
@@ -449,6 +456,76 @@ describe("CostTimeSeriesChart", () => {
     expect(rows[1]!.textContent).toContain("medium");
     expect(rows[2]!.textContent).toContain("small");
 
+    unmount(component);
+  });
+
+  it("shows the hovered non-first date", async () => {
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => OBSERVED_WIDTH,
+    });
+    usage.summary = usageSummary();
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary.daily = [
+      modelDailyEntry(0, [{ modelName: "model", cost: testMoney(1) }]),
+      modelDailyEntry(1, [{ modelName: "model", cost: testMoney(2) }]),
+      modelDailyEntry(2, [{ modelName: "model", cost: testMoney(3) }]),
+    ];
+
+    const component = mountChart();
+    await tick();
+    const target = document.querySelector<HTMLElement>(".lc-tooltip-context")!;
+    Object.defineProperty(target, "offsetWidth", {
+      configurable: true,
+      value: OBSERVED_WIDTH,
+    });
+    Object.defineProperty(target, "offsetHeight", {
+      configurable: true,
+      value: 180,
+    });
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: OBSERVED_WIDTH,
+      bottom: 180,
+      width: OBSERVED_WIDTH,
+      height: 180,
+      toJSON: () => ({}),
+    });
+    target.dispatchEvent(
+      new MouseEvent("pointerenter", {
+        bubbles: true,
+        clientX: OBSERVED_WIDTH - 30,
+        clientY: 40,
+      }),
+    );
+    target.dispatchEvent(
+      new MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: OBSERVED_WIDTH - 30,
+        clientY: 40,
+      }),
+    );
+    await tick();
+
+    expect(document.querySelector(".usage-series-tooltip .tooltip-date")?.textContent).toContain(
+      "Jun 6, 2026",
+    );
+    unmount(component);
+  });
+
+  it("does not restore the unfiltered total when every project is excluded", async () => {
+    usage.summary = usageSummary();
+    usage.selectedTimeRange = { from: "2026-06-04", to: "2026-06-18" };
+    usage.excludedProjectKeys = "pl1:sha256:agentsview";
+
+    const component = mountChart();
+    await tick();
+
+    expect(document.querySelector(".empty")).toBeTruthy();
+    expect(document.querySelectorAll(".chart-svg path.lc-area-path")).toHaveLength(0);
     unmount(component);
   });
 

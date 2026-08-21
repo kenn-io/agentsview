@@ -25,7 +25,12 @@
 
   interface Point {
     date: string;
+    time: number;
     values: Record<string, number>;
+  }
+
+  function dateTime(date: string): number {
+    return Date.parse(`${date}T00:00:00Z`);
   }
 
   const groupBy = $derived(usage.toggles.timeSeries.groupBy);
@@ -61,8 +66,10 @@
     // Sum the selected value per key across the whole range to find top N.
     const totals = new Map<string, number>();
     const labels: Record<string, string> = {};
+    let hasBreakdownData = false;
     for (const day of daily) {
       if (groupBy === "project" && day.projectBreakdowns) {
+        hasBreakdownData ||= day.projectBreakdowns.length > 0;
         for (const b of day.projectBreakdowns) {
           if (!isSeriesVisible(b.project_key)) continue;
           labels[b.project_key] = b.project;
@@ -75,6 +82,7 @@
           );
         }
       } else if (groupBy === "model" && day.modelBreakdowns) {
+        hasBreakdownData ||= day.modelBreakdowns.length > 0;
         for (const b of day.modelBreakdowns) {
           if (!isSeriesVisible(b.modelName)) continue;
           const value = isTokenMode
@@ -87,6 +95,7 @@
           labels[b.modelName] = b.modelName;
         }
       } else if (groupBy === "agent" && day.agentBreakdowns) {
+        hasBreakdownData ||= day.agentBreakdowns.length > 0;
         for (const b of day.agentBreakdowns) {
           if (!isSeriesVisible(b.agent)) continue;
           const value = isTokenMode
@@ -103,8 +112,12 @@
 
     // If only one key or few keys, no need for "Other".
     if (totals.size === 0) {
+      if (hasBreakdownData) {
+        return { points: [], keys: [], maxY: 0, labels };
+      }
       const points = daily.map((d) => ({
         date: d.date,
+        time: dateTime(d.date),
         values: {
           total: isTokenMode
             ? breakdownTokens(d)
@@ -162,7 +175,7 @@
             (values["__other__"] ?? 0) + value;
         }
       }
-      points.push({ date: day.date, values });
+      points.push({ date: day.date, time: dateTime(day.date), values });
     }
 
     // Build ordered key list: top N by value desc, then
@@ -257,7 +270,7 @@
       .filter((_, index) =>
         index === 0 || index === pts.length - 1 || index % step === 0
       )
-      .map((point) => point.date);
+      .map((point) => point.time);
   });
 
   function fmtCostYLabel(v: number): string {
@@ -306,7 +319,10 @@
 
   const selectedBrushDomain = $derived(
     usage.selectedTimeRange
-      ? [usage.selectedTimeRange.from, usage.selectedTimeRange.to]
+      ? [
+          dateTime(usage.selectedTimeRange.from),
+          dateTime(usage.selectedTimeRange.to),
+        ]
       : [null, null],
   );
 
@@ -319,15 +335,12 @@
     if (!event.brush.active) return;
     const first = event.brush.x[0];
     const last = event.brush.x[1];
-    if (typeof first !== "string" || typeof last !== "string") return;
-    const from = first < last ? first : last;
-    const to = first < last ? last : first;
-    if (
-      seriesData.points.some((point) => point.date === from) &&
-      seriesData.points.some((point) => point.date === to)
-    ) {
-      usage.setTimeRange(from, to);
-    }
+    if (typeof first !== "number" || typeof last !== "number") return;
+    const fromTime = Math.min(first, last);
+    const toTime = Math.max(first, last);
+    const from = seriesData.points.find((point) => point.time === fromTime)?.date;
+    const to = seriesData.points.find((point) => point.time === toTime)?.date;
+    if (from && to) usage.setTimeRange(from, to);
   }
 
   function handleKeyboardRangeSubmit(event: SubmitEvent) {
@@ -428,7 +441,7 @@
     <div class="chart-scroll">
       <Chart
         data={seriesData.points}
-        x="date"
+        x="time"
         y={(point) => Math.max(...seriesData.keys.map((key) => point.values[key] ?? 0))}
         xScale={seriesData.points.length === 1
           ? scaleBand().padding(0.5)
@@ -452,7 +465,9 @@
           <LargeChartFrame
             xTicks={xTicks}
             yTicks={yTickValues}
-            formatX={(value) => dateLabel(String(value))}
+            formatX={(value) => dateLabel(
+              new Date(Number(value)).toISOString().slice(0, 10),
+            )}
             formatY={(value) => isTokenMode
               ? fmtTokenYLabel(Number(value))
               : fmtCostYLabel(Number(value))}

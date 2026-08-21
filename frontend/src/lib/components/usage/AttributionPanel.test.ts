@@ -112,10 +112,7 @@ function mountPanel(colorMap?: ReadonlyMap<string, string>) {
   return mount(AttributionPanel, {
     target: document.body,
     props: {
-      colorMap: colorMap ?? usageChartColorMaps(
-        usage.summary,
-        settings.chartPalette,
-      )[groupBy],
+      colorMap: colorMap ?? usageChartColorMaps(usage.summary, settings.chartPalette)[groupBy],
     },
   });
 }
@@ -131,6 +128,7 @@ describe("AttributionPanel agent exclusion", () => {
   });
 
   afterEach(() => {
+    usage.cancelInFlightReads();
     usage.summary = null;
     usage.excludedAgents = "";
     usage.selectedTimeRange = null;
@@ -149,9 +147,7 @@ describe("AttributionPanel agent exclusion", () => {
     rows[1]!.click(); // exclude "codex"
 
     await vi.waitFor(() =>
-      expect(
-        usageServiceMocks.getApiV1UsageSummary,
-      ).toHaveBeenLastCalledWith(
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
         expect.objectContaining({ excludeAgent: "codex" }),
       ),
     );
@@ -159,9 +155,7 @@ describe("AttributionPanel agent exclusion", () => {
   });
 
   it("keeps the active chart brush when excluding an attribution row", async () => {
-    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
-      () => new Promise(() => {}),
-    );
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
     usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
     const component = mountPanel();
     await tick();
@@ -172,6 +166,33 @@ describe("AttributionPanel agent exclusion", () => {
       from: "2024-01-08",
       to: "2024-01-14",
     });
+    unmount(component);
+  });
+
+  it("rolls back an agent exclusion when its active-range refresh fails", async () => {
+    usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+    usage.isTimeRangeSummaryProvisional = false;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockRejectedValueOnce(new Error("filter request failed"))
+      .mockResolvedValueOnce(summaryWithAgents(["claude", "codex"]));
+    const component = mountPanel();
+    await tick();
+
+    document.querySelectorAll<HTMLElement>(".list-row")[1]!.click();
+
+    await vi.waitFor(() => expect(usage.excludedAgents).toBe(""));
+    expect(usage.selectedTimeRange).toEqual({
+      from: "2024-01-08",
+      to: "2024-01-14",
+    });
+    const params = usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
+    expect(params).toEqual(
+      expect.objectContaining({
+        from: "2024-01-08",
+        to: "2024-01-14",
+      }),
+    );
+    expect(params?.excludeAgent).toBeUndefined();
     unmount(component);
   });
 });
@@ -201,9 +222,7 @@ describe("AttributionPanel project identity", () => {
     rows[1]!.click();
 
     await vi.waitFor(() =>
-      expect(
-        usageServiceMocks.getApiV1UsageSummary,
-      ).toHaveBeenLastCalledWith(
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
         expect.objectContaining({
           excludeProjectKey: "pl1:sha256:second",
         }),
@@ -217,12 +236,7 @@ describe("AttributionPanel colors", () => {
   afterEach(() => {
     usage.summary = null;
     usage.mode = "cost";
-    usage.setSelectedTokenTypes([
-      "input",
-      "cache_write",
-      "cache_read",
-      "output",
-    ]);
+    usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
     usage.toggles.attribution.groupBy = "project";
     usage.toggles.attribution.view = "list";
     settings.chartPalette = "agentsview";
@@ -237,9 +251,9 @@ describe("AttributionPanel colors", () => {
     const component = mountPanel();
     await tick();
 
-    const colors = Array.from(
-      document.querySelectorAll<HTMLElement>(".list-dot"),
-    ).map((dot) => dot.getAttribute("style"));
+    const colors = Array.from(document.querySelectorAll<HTMLElement>(".list-dot")).map((dot) =>
+      dot.getAttribute("style"),
+    );
     expect(new Set(colors).size).toBe(2);
     unmount(component);
   });
@@ -252,12 +266,12 @@ describe("AttributionPanel colors", () => {
     const component = mountPanel();
     await tick();
 
-    const tileColors = Array.from(
-      document.querySelectorAll<SVGRectElement>(".tile rect"),
-    ).map((tile) => tile.getAttribute("fill"));
-    const railColors = Array.from(
-      document.querySelectorAll<HTMLElement>(".rail-dot"),
-    ).map((dot) => dot.style.background);
+    const tileColors = Array.from(document.querySelectorAll<SVGRectElement>(".tile rect")).map(
+      (tile) => tile.getAttribute("fill"),
+    );
+    const railColors = Array.from(document.querySelectorAll<HTMLElement>(".rail-dot")).map(
+      (dot) => dot.style.background,
+    );
     expect(new Set(tileColors).size).toBe(2);
     expect(railColors).toEqual(tileColors);
     unmount(component);
@@ -296,9 +310,7 @@ describe("AttributionPanel colors", () => {
     const component = mountPanel();
     await tick();
 
-    expect(
-      document.querySelector(".tile-value")?.textContent?.trim(),
-    ).toBe("250k");
+    expect(document.querySelector(".tile-value")?.textContent?.trim()).toBe("250k");
     unmount(component);
   });
 
@@ -314,24 +326,21 @@ describe("AttributionPanel colors", () => {
     const component = mountPanel(supplied);
     await tick();
 
-    const listColors = Array.from(
-      document.querySelectorAll<HTMLElement>(".list-dot"),
-    ).map((dot) => dot.style.background);
+    const listColors = Array.from(document.querySelectorAll<HTMLElement>(".list-dot")).map(
+      (dot) => dot.style.background,
+    );
     expect(listColors).toEqual(["rgb(18, 52, 86)", "rgb(171, 205, 239)"]);
 
     usage.toggles.attribution.view = "treemap";
     await tick();
-    const tileColors = Array.from(
-      document.querySelectorAll<SVGRectElement>(".tile rect"),
-    ).map((tile) => tile.getAttribute("fill"));
-    const railColors = Array.from(
-      document.querySelectorAll<HTMLElement>(".rail-dot"),
-    ).map((dot) => dot.style.background);
+    const tileColors = Array.from(document.querySelectorAll<SVGRectElement>(".tile rect")).map(
+      (tile) => tile.getAttribute("fill"),
+    );
+    const railColors = Array.from(document.querySelectorAll<HTMLElement>(".rail-dot")).map(
+      (dot) => dot.style.background,
+    );
     expect(tileColors).toEqual(["#123456", "#abcdef"]);
-    expect(railColors).toEqual([
-      "rgb(18, 52, 86)",
-      "rgb(171, 205, 239)",
-    ]);
+    expect(railColors).toEqual(["rgb(18, 52, 86)", "rgb(171, 205, 239)"]);
     unmount(component);
   });
 
@@ -344,17 +353,14 @@ describe("AttributionPanel colors", () => {
     const component = mountPanel();
     await tick();
 
-    const tileColors = Array.from(
-      document.querySelectorAll<SVGRectElement>(".tile rect"),
-    ).map((tile) => tile.getAttribute("fill"));
-    const railColors = Array.from(
-      document.querySelectorAll<HTMLElement>(".rail-dot"),
-    ).map((dot) => dot.style.background);
+    const tileColors = Array.from(document.querySelectorAll<SVGRectElement>(".tile rect")).map(
+      (tile) => tile.getAttribute("fill"),
+    );
+    const railColors = Array.from(document.querySelectorAll<HTMLElement>(".rail-dot")).map(
+      (dot) => dot.style.background,
+    );
     expect(tileColors).toEqual(["#ff7f0e", "#1f77b4"]);
-    expect(railColors).toEqual([
-      "rgb(255, 127, 14)",
-      "rgb(31, 119, 180)",
-    ]);
+    expect(railColors).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
     unmount(component);
   });
 });

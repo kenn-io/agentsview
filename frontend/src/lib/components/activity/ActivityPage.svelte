@@ -514,13 +514,15 @@
   }
 
   .activity-refresh {
-    flex: 0 1 auto;
+    flex: 0 0 132px;
+    width: 132px;
     max-width: 100%;
     min-width: 0;
     overflow: hidden;
   }
 
   .activity-refresh :global(.kit-refresh-control) {
+    width: 100%;
     max-width: 100%;
     min-width: 0;
   }

@@ -330,7 +330,10 @@
   {#if usage.errors.pairwise}
     <Card level="default" padding="none" class="error-bar">
       <span>{usage.errors.pairwise}</span>
-      <button class="retry-btn" onclick={() => usage.fetchAll()}>
+      <button
+        class="retry-btn"
+        onclick={() => usage.fetchAll({ preserveTimeRange: true })}
+      >
         {m.shared_retry()}
       </button>
     </Card>

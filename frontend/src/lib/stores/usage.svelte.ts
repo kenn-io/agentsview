@@ -561,6 +561,8 @@ class UsageStore {
       this.summary = summaryForDateRange(this.timeSeriesContextSummary, from, to);
       this.isTimeRangeSummaryProvisional = true;
     }
+    this.topSessions = null;
+    this.errors.topSessions = null;
     void this.fetchAll({ preserveTimeRange: true });
   }
 
@@ -604,29 +606,58 @@ class UsageStore {
     this.fetchAll();
   }
 
-  toggleProjectKey(
-    key: string,
-    options: { preserveTimeRange?: boolean } = {},
-  ): void {
+  toggleProjectKey(key: string, options: { preserveTimeRange?: boolean } = {}): void {
+    const previous = this.excludedProjectKeys;
     this.excludedProjectKeys = this.toggleCsv(this.excludedProjectKeys, key);
-    this.fetchAll(options);
+    const changed = this.excludedProjectKeys;
+    void this.fetchAllWithResult(options).then((ok) => {
+      if (
+        ok ||
+        !options.preserveTimeRange ||
+        this.selectedTimeRange === null ||
+        this.excludedProjectKeys !== changed
+      )
+        return;
+      this.excludedProjectKeys = previous;
+      void this.fetchAll({ preserveTimeRange: true });
+    });
   }
 
-  toggleAgent(
-    name: string,
-    options: { preserveTimeRange?: boolean } = {},
-  ): void {
+  toggleAgent(name: string, options: { preserveTimeRange?: boolean } = {}): void {
+    const previous = this.excludedAgents;
     this.excludedAgents = this.toggleCsv(this.excludedAgents, name);
-    this.fetchAll(options);
+    const changed = this.excludedAgents;
+    void this.fetchAllWithResult(options).then((ok) => {
+      if (
+        ok ||
+        !options.preserveTimeRange ||
+        this.selectedTimeRange === null ||
+        this.excludedAgents !== changed
+      )
+        return;
+      this.excludedAgents = previous;
+      void this.fetchAll({ preserveTimeRange: true });
+    });
   }
 
-  toggleModel(
-    name: string,
-    options: { preserveTimeRange?: boolean } = {},
-  ): void {
+  toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
+    const previousSelected = this.selectedModels;
+    const previousExcluded = this.excludedModels;
     this.selectedModels = this.toggleCsv(this.selectedModels, name);
     this.excludedModels = "";
-    this.fetchAll(options);
+    const changed = this.selectedModels;
+    void this.fetchAllWithResult(options).then((ok) => {
+      if (
+        ok ||
+        !options.preserveTimeRange ||
+        this.selectedTimeRange === null ||
+        this.selectedModels !== changed
+      )
+        return;
+      this.selectedModels = previousSelected;
+      this.excludedModels = previousExcluded;
+      void this.fetchAll({ preserveTimeRange: true });
+    });
   }
 
   private toggleCsv(csv: string, name: string): string {
@@ -782,7 +813,14 @@ class UsageStore {
     this.to = to;
   }
 
-  async fetchAll(options: { preserveTimeRange?: boolean } = {}) {
+  async fetchAll(options: { preserveTimeRange?: boolean } = {}): Promise<void> {
+    await this.fetchAllWithResult(options);
+  }
+
+  private async fetchAllWithResult(
+    options: { preserveTimeRange?: boolean } = {},
+  ): Promise<boolean> {
+    const selectedRangeAtStart = this.selectedTimeRange ? { ...this.selectedTimeRange } : null;
     if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
       this.selectedTimeRange = null;
       if (this.timeSeriesContextSummary) {
@@ -803,9 +841,21 @@ class UsageStore {
     });
     const topSessionsPromise = this.fetchTopSessions(params);
     const loadedSummary = await summaryPromise;
-    if (fetchVersion !== this.fetchAllVersion || !loadedSummary) {
+    if (fetchVersion !== this.fetchAllVersion) {
       await topSessionsPromise;
-      return;
+      return false;
+    }
+    if (!loadedSummary) {
+      await topSessionsPromise;
+      if (
+        selectedRangeAtStart !== null &&
+        this.selectedTimeRange === null &&
+        fetchVersion === this.fetchAllVersion
+      ) {
+        this.invalidatePanel("topSessions");
+        await this.fetchTopSessions(this.baseParams());
+      }
+      return false;
     }
     const currentTopSessionsPromise = loadedSummary.projectScopeRecovered
       ? topSessionsPromise.then(() => {
@@ -825,7 +875,9 @@ class UsageStore {
       pairwiseResult === "ok"
     ) {
       this.markRefreshComplete();
+      return true;
     }
+    return false;
   }
 
   async fetchSummary(
@@ -905,7 +957,11 @@ class UsageStore {
         // request is in flight. If that request fails, restore the parent
         // window rather than leaving provisional values under an active brush.
         // Other cached refetch failures keep their existing values visible.
-        if (this.selectedTimeRange !== null && this.timeSeriesContextSummary !== null) {
+        if (
+          this.isTimeRangeSummaryProvisional &&
+          this.selectedTimeRange !== null &&
+          this.timeSeriesContextSummary !== null
+        ) {
           this.summary = this.timeSeriesContextSummary;
           this.selectedTimeRange = null;
           this.timeSeriesContextSummary = null;

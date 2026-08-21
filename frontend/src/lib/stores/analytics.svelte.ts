@@ -300,7 +300,7 @@ class AnalyticsStore {
 
   clearDate() {
     this.selectedDate = null;
-    this.clearDrilldownData();
+    this.clearDrilldownData({ preserveHourOfWeek: true });
     this.fetchSummary();
     this.fetchProjects();
     this.fetchSessionShape();
@@ -846,7 +846,7 @@ class AnalyticsStore {
     } else {
       this.selectedDate = date;
     }
-    this.clearDrilldownData();
+    this.clearDrilldownData({ preserveHourOfWeek: true });
     this.fetchSummary();
     this.fetchProjects();
     this.fetchSessionShape();
@@ -866,10 +866,12 @@ class AnalyticsStore {
     void sessions.load();
   }
 
-  private clearDrilldownData() {
+  private clearDrilldownData({
+    preserveHourOfWeek = false,
+  }: { preserveHourOfWeek?: boolean } = {}) {
     this.summary = null;
     this.projects = null;
-    this.hourOfWeek = null;
+    if (!preserveHourOfWeek) this.hourOfWeek = null;
     this.sessionShape = null;
     this.velocity = null;
     this.tools = null;

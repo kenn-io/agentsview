@@ -311,6 +311,15 @@ describe("AnalyticsStore.selectDate", () => {
     expect(analyticsService.getApiV1AnalyticsHourOfWeek).not.toHaveBeenCalled();
   });
 
+  it("keeps the parent hour-of-week data while a date is selected", () => {
+    const parent = makeHourOfWeek();
+    analytics.hourOfWeek = parent;
+
+    analytics.selectDate("2024-01-15");
+
+    expect(analytics.hourOfWeek).toEqual(parent);
+  });
+
   it("should pass selected date as from/to for filtered panels", () => {
     analytics.selectDate("2024-01-15");
 
@@ -658,6 +667,16 @@ describe("AnalyticsStore.clearDate", () => {
     });
     expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(expected);
     expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenLastCalledWith(expected);
+  });
+
+  it("keeps the parent hour-of-week data when the date is cleared", () => {
+    analytics.selectedDate = "2024-01-15";
+    const parent = makeHourOfWeek();
+    analytics.hourOfWeek = parent;
+
+    analytics.clearDate();
+
+    expect(analytics.hourOfWeek).toEqual(parent);
   });
 });
 
