@@ -75,19 +75,6 @@
     !!preview && (preview.existing_mapping_id != null || preview.distinct_projects > 1),
   );
 
-  function pathParts(path: string) {
-    if (!path) {
-      return { parent: "", name: m.data_reclassify_path_unavailable() };
-    }
-    const trimmed = path.replace(/[\\/]+$/, "") || path;
-    const separator = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-    if (separator < 0) return { parent: "", name: trimmed };
-    return {
-      parent: trimmed.slice(0, separator + 1),
-      name: trimmed.slice(separator + 1),
-    };
-  }
-
   onMount(() => void loadCandidates());
   onDestroy(() => {
     disposed = true;
@@ -327,7 +314,6 @@
     {:else}
       <div class="folder-list">
         {#each candidates as candidate (candidate.id)}
-          {@const parts = pathParts(candidate.suggested_prefix)}
           <div class="folder-row" class:selected={candidate.id === selectedCandidateId}>
             <Button
               size="sm"
@@ -340,21 +326,22 @@
             >
               {#snippet children()}
                 <span class="folder-path">
-                  <span class="folder-parent">{parts.parent}</span>
-                  <span class="folder-name">{parts.name}</span>
+                  {candidate.suggested_prefix || m.data_reclassify_path_unavailable()}
                 </span>
                 <span class="folder-details">
                   <span>{candidate.machine}</span>
                   <span>{m.data_reclassify_candidate_sessions({ count: candidate.contributing_sessions })}</span>
                 </span>
-                {#if candidate.available}
-                  <span class="folder-action">{m.data_reclassify_use_for_project()}</span>
-                {/if}
+                <span class="folder-footer">
+                  {#if candidate.available}
+                    <span class="folder-action">{m.data_reclassify_use_for_project()}</span>
+                  {/if}
+                  <Chip size="xs" tone={candidate.available ? "muted" : "warning"} uppercase={false}>
+                    {evidenceLabel(candidate.evidence_kind)}
+                  </Chip>
+                </span>
               {/snippet}
             </Button>
-            <Chip size="xs" tone={candidate.available ? "muted" : "warning"} uppercase={false}>
-              {evidenceLabel(candidate.evidence_kind)}
-            </Chip>
           </div>
         {/each}
       </div>
@@ -495,7 +482,7 @@
   .suggestions {
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: var(--space-4);
     padding: 10px 12px;
     border-bottom: 1px solid var(--border-muted);
   }
@@ -511,7 +498,7 @@
   .composer {
     display: flex;
     flex-direction: column;
-    gap: 9px;
+    gap: var(--space-4);
     padding: 11px 12px;
     background: var(--bg-inset);
   }
@@ -522,12 +509,8 @@
     border-radius: var(--radius-sm);
   }
   .folder-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 8px;
-    min-height: 42px;
-    padding: 4px 8px 4px 3px;
+    min-height: 72px;
+    padding: 4px;
     border-bottom: 1px solid var(--border-muted);
   }
   .folder-row:last-child {
@@ -537,49 +520,44 @@
   .folder-row :global(.folder-choice) {
     width: 100%;
     min-width: 0;
+    flex-direction: column;
+    align-items: stretch;
     justify-content: flex-start;
     text-align: left;
     padding-inline: 8px;
     border-color: transparent;
     background: transparent;
+    white-space: normal;
   }
   .folder-path {
-    display: flex;
-    min-width: 0;
-    overflow: hidden;
+    display: block;
     font-family: var(--font-mono);
     font-weight: 400;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
   .folder-details {
     display: flex;
-    gap: 7px;
+    gap: var(--space-4);
     margin-top: 2px;
     color: var(--text-muted);
     font-family: var(--font-sans);
     font-size: 10px;
   }
   .folder-action {
-    display: block;
-    margin-top: 2px;
     color: var(--accent-blue);
     font-family: var(--font-sans);
     font-size: 10px;
     font-weight: 600;
   }
-  .folder-parent {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--text-muted);
-    white-space: nowrap;
-  }
-  .folder-name {
-    flex: none;
-    max-width: 70%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--text-primary);
-    white-space: nowrap;
+  .folder-footer {
+    display: flex;
+    min-height: 18px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 3px;
   }
   .mapping-row {
     display: grid;
@@ -587,7 +565,7 @@
     align-items: end;
     gap: 8px;
   }
-  .impact { display: flex; flex-wrap: wrap; gap: 10px; color: var(--text-secondary); font-size: 10px; }
+  .impact { display: flex; flex-wrap: wrap; gap: var(--space-5); color: var(--text-secondary); font-size: 10px; }
   .normalized { color: var(--text-secondary); font-size: 12px; }
   .warning { color: var(--accent-orange); font-size: 12px; }
   .error-text { color: var(--accent-red); font-size: 12px; }

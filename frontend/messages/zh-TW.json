@@ -839,6 +839,46 @@
       "match": { "countPlural=other": "{countNumber} 個會話受規則管理" }
     }
   ],
+  "data_selection_hint": "點選一個專案，然後按住 Shift 點選以選取一個範圍。",
+  "data_selection_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "已選取 {countNumber} 個專案" }
+    }
+  ],
+  "data_selection_clear": "清除",
+  "data_batch_workspace_label": "批次專案更正",
+  "data_batch_heading": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "已選取 {countNumber} 個專案" }
+    }
+  ],
+  "data_batch_label": "批次",
+  "data_batch_folders_heading": "已選取的資料夾",
+  "data_batch_folders_intro": "來自所選專案的資料夾建議。",
+  "data_batch_correction_heading": "批次更正",
+  "data_batch_correction_intro": "將下方所有可用資料夾對應到同一個專案。",
+  "data_batch_folder_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 個資料夾" }
+    }
+  ],
+  "data_batch_target_project": "將所選資料夾對應到",
+  "data_batch_saving": "正在儲存批次更正…",
+  "data_batch_save": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "儲存 {countNumber} 項更正" }
+    }
+  ],
+  "data_batch_partial_save": "已儲存 {saved}/{count} 項。",
+  "data_batch_saved": "批次更正已儲存至 {project}",
   "data_filter_projects": "篩選專案",
   "data_col_project": "專案",
   "data_col_sessions": "會話",

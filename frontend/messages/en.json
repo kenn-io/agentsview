@@ -881,6 +881,58 @@
       }
     }
   ],
+  "data_selection_hint": "Click a project, then Shift-click to select a range.",
+  "data_selection_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} project selected",
+        "countPlural=other": "{countNumber} projects selected"
+      }
+    }
+  ],
+  "data_selection_clear": "Clear",
+  "data_batch_workspace_label": "Bulk project correction",
+  "data_batch_heading": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} project selected",
+        "countPlural=other": "{countNumber} projects selected"
+      }
+    }
+  ],
+  "data_batch_label": "Bulk",
+  "data_batch_folders_heading": "Selected folders",
+  "data_batch_folders_intro": "Folder suggestions from the selected projects.",
+  "data_batch_correction_heading": "Bulk correction",
+  "data_batch_correction_intro": "Map every available folder below to one project.",
+  "data_batch_folder_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} folder",
+        "countPlural=other": "{countNumber} folders"
+      }
+    }
+  ],
+  "data_batch_target_project": "Map selected folders to",
+  "data_batch_saving": "Saving bulk correction…",
+  "data_batch_save": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Save {countNumber} correction",
+        "countPlural=other": "Save {countNumber} corrections"
+      }
+    }
+  ],
+  "data_batch_partial_save": "Saved {saved} of {count}.",
+  "data_batch_saved": "Bulk correction saved to {project}",
   "data_filter_projects": "Filter projects",
   "data_col_project": "Project",
   "data_col_sessions": "Sessions",

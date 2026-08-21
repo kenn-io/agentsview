@@ -839,6 +839,46 @@
       "match": { "countPlural=other": "{countNumber} 个会话受规则管理" }
     }
   ],
+  "data_selection_hint": "点击一个项目，然后按住 Shift 点击以选择一个范围。",
+  "data_selection_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "已选择 {countNumber} 个项目" }
+    }
+  ],
+  "data_selection_clear": "清除",
+  "data_batch_workspace_label": "批量项目更正",
+  "data_batch_heading": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "已选择 {countNumber} 个项目" }
+    }
+  ],
+  "data_batch_label": "批量",
+  "data_batch_folders_heading": "已选择的文件夹",
+  "data_batch_folders_intro": "来自所选项目的文件夹建议。",
+  "data_batch_correction_heading": "批量更正",
+  "data_batch_correction_intro": "将下方所有可用文件夹映射到同一个项目。",
+  "data_batch_folder_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个文件夹" }
+    }
+  ],
+  "data_batch_target_project": "将所选文件夹映射到",
+  "data_batch_saving": "正在保存批量更正…",
+  "data_batch_save": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "保存 {countNumber} 项更正" }
+    }
+  ],
+  "data_batch_partial_save": "已保存 {saved}/{count} 项。",
+  "data_batch_saved": "批量更正已保存到 {project}",
   "data_filter_projects": "筛选项目",
   "data_col_project": "项目",
   "data_col_sessions": "会话",

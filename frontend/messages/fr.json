@@ -881,6 +881,58 @@
       }
     }
   ],
+  "data_selection_hint": "Cliquez sur un projet, puis Maj-cliquez pour sélectionner une plage.",
+  "data_selection_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} projet sélectionné",
+        "countPlural=other": "{countNumber} projets sélectionnés"
+      }
+    }
+  ],
+  "data_selection_clear": "Effacer",
+  "data_batch_workspace_label": "Correction groupée de projets",
+  "data_batch_heading": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} projet sélectionné",
+        "countPlural=other": "{countNumber} projets sélectionnés"
+      }
+    }
+  ],
+  "data_batch_label": "Groupé",
+  "data_batch_folders_heading": "Dossiers sélectionnés",
+  "data_batch_folders_intro": "Suggestions de dossiers pour les projets sélectionnés.",
+  "data_batch_correction_heading": "Correction groupée",
+  "data_batch_correction_intro": "Associez tous les dossiers disponibles ci-dessous à un seul projet.",
+  "data_batch_folder_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} dossier",
+        "countPlural=other": "{countNumber} dossiers"
+      }
+    }
+  ],
+  "data_batch_target_project": "Associer les dossiers sélectionnés à",
+  "data_batch_saving": "Enregistrement de la correction groupée…",
+  "data_batch_save": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Enregistrer {countNumber} correction",
+        "countPlural=other": "Enregistrer {countNumber} corrections"
+      }
+    }
+  ],
+  "data_batch_partial_save": "{saved} sur {count} enregistrées.",
+  "data_batch_saved": "Correction groupée enregistrée dans {project}",
   "data_filter_projects": "Filtrer les projets",
   "data_col_project": "Projet",
   "data_col_sessions": "Sessions",

@@ -841,6 +841,46 @@
       "match": { "countPlural=other": "규칙이 적용된 세션 {countNumber}개" }
     }
   ],
+  "data_selection_hint": "프로젝트를 클릭한 다음 Shift-클릭하여 범위를 선택하세요.",
+  "data_selection_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "프로젝트 {countNumber}개 선택됨" }
+    }
+  ],
+  "data_selection_clear": "지우기",
+  "data_batch_workspace_label": "프로젝트 일괄 수정",
+  "data_batch_heading": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "프로젝트 {countNumber}개 선택됨" }
+    }
+  ],
+  "data_batch_label": "일괄",
+  "data_batch_folders_heading": "선택한 폴더",
+  "data_batch_folders_intro": "선택한 프로젝트의 폴더 제안입니다.",
+  "data_batch_correction_heading": "일괄 수정",
+  "data_batch_correction_intro": "아래의 사용 가능한 모든 폴더를 하나의 프로젝트에 매핑합니다.",
+  "data_batch_folder_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "폴더 {countNumber}개" }
+    }
+  ],
+  "data_batch_target_project": "선택한 폴더를 매핑할 프로젝트",
+  "data_batch_saving": "일괄 수정 저장 중…",
+  "data_batch_save": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "수정 {countNumber}개 저장" }
+    }
+  ],
+  "data_batch_partial_save": "{count}개 중 {saved}개를 저장했습니다.",
+  "data_batch_saved": "일괄 수정을 {project}에 저장했습니다",
   "data_filter_projects": "프로젝트 필터링",
   "data_col_project": "프로젝트",
   "data_col_sessions": "세션",

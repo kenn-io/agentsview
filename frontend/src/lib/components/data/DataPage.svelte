@@ -6,6 +6,7 @@
   import type { DbProjectInventoryRow } from "../../api/generated/index";
   import type { ProjectInfo } from "../../api/types/core.js";
   import ProjectInventoryTable from "./ProjectInventoryTable.svelte";
+  import ProjectBatchWorkspace from "./ProjectBatchWorkspace.svelte";
   import ProjectWorkspace from "./ProjectWorkspace.svelte";
   import WorktreeMappingRules from "./WorktreeMappingRules.svelte";
   import {
@@ -30,6 +31,7 @@
   ]);
 
   let workspaceGeneration = $state(0);
+  let selectedProjectKeys = $state<string[]>([]);
 
   const dataReadOnly = $derived(sync.serverVersion === null || sync.readOnly);
 
@@ -38,8 +40,25 @@
     return rows.map((row) => ({ name: row.label, session_count: row.sessions }));
   });
 
+  const tableSelectedKeys = $derived(
+    selectedProjectKeys.length > 0
+      ? selectedProjectKeys
+      : data.selectedProjectKey
+        ? [data.selectedProjectKey]
+        : [],
+  );
+
+  const selectedRows = $derived.by((): DbProjectInventoryRow[] => {
+    const rows = (data.inventory?.projects ?? []) as DbProjectInventoryRow[];
+    const keys = new Set(tableSelectedKeys);
+    return rows.filter((row) => keys.has(row.project_key));
+  });
+
   function onViewChange(value: string) {
-    if (value === "rules") data.showRules();
+    if (value === "rules") {
+      selectedProjectKeys = [];
+      data.showRules();
+    }
     else data.showInventory();
   }
 
@@ -47,6 +66,7 @@
     const rows = (data.inventory?.projects ?? []) as DbProjectInventoryRow[];
     const row = rows.find((r) => r.label === label);
     if (row) {
+      selectedProjectKeys = [row.project_key];
       data.selectProject(row.project_key);
     } else {
       // The inventory may not have loaded yet, or the rule may target a
@@ -58,6 +78,7 @@
 
   function closeWorkspace() {
     const key = data.selectedProjectKey;
+    selectedProjectKeys = [];
     data.clearSelection();
     requestAnimationFrame(() => {
       // Match on dataset instead of an attribute selector so arbitrary
@@ -71,9 +92,38 @@
     });
   }
 
+  function selectProjects(activeKey: string, keys: string[]) {
+    selectedProjectKeys = keys;
+    data.selectProject(activeKey);
+  }
+
+  async function refreshSingleCorrection(key: string, target: string): Promise<boolean> {
+    const refreshed = await data.refreshAfterApply(key, target);
+    if (refreshed) {
+      selectedProjectKeys = data.selectedProjectKey ? [data.selectedProjectKey] : [];
+    }
+    return refreshed;
+  }
+
+  async function refreshBatchCorrection(target: string): Promise<boolean> {
+    const refreshed = await data.load({ background: true });
+    if (!refreshed) return false;
+    const rows = (data.inventory?.projects ?? []) as DbProjectInventoryRow[];
+    const targetRow = rows.find((row) => row.label === target);
+    selectedProjectKeys = targetRow ? [targetRow.project_key] : [];
+    if (targetRow) data.selectProject(targetRow.project_key);
+    else data.clearSelection();
+    return true;
+  }
+
   function completeCorrection(target: string) {
     workspaceGeneration += 1;
     showFlash(m.data_reclassify_saved({ project: target }), { tone: "success" });
+  }
+
+  function completeBatchCorrection(target: string, _count: number) {
+    workspaceGeneration += 1;
+    showFlash(m.data_batch_saved({ project: target }), { tone: "success" });
   }
 
   onMount(() => {
@@ -133,23 +183,38 @@
     {#if data.inventory.total_projects === 0}
       <div class="status">{m.data_empty()}</div>
     {:else}
-      <div class="split" class:has-selection={data.selectedRow !== null}>
+      <div class="split" class:has-selection={selectedRows.length > 0}>
         <div class="pane-table">
           <ProjectInventoryTable
             inventory={data.inventory}
-            selectedKey={data.selectedProjectKey}
-            onSelect={(key) => data.selectProject(key)}
+            selectedKeys={tableSelectedKeys}
+            onSelect={selectProjects}
+            onClear={closeWorkspace}
           />
         </div>
-        {#if data.selectedRow}
+        {#if selectedRows.length > 1}
           <div class="pane-detail">
-            {#key `${data.selectedProjectKey}:${workspaceGeneration}`}
-              <ProjectWorkspace
-                row={data.selectedRow}
+            {#key `${tableSelectedKeys.join(":")}:${workspaceGeneration}`}
+              <ProjectBatchWorkspace
+                rows={selectedRows}
                 projects={inventoryProjects}
                 readOnly={dataReadOnly}
                 onClose={closeWorkspace}
-                onRefresh={(key, target) => data.refreshAfterApply(key, target)}
+                onRefresh={refreshBatchCorrection}
+                onComplete={completeBatchCorrection}
+                onOpenRules={(machine) => data.showRules(machine)}
+              />
+            {/key}
+          </div>
+        {:else if selectedRows[0]}
+          <div class="pane-detail">
+            {#key `${data.selectedProjectKey}:${workspaceGeneration}`}
+              <ProjectWorkspace
+                row={selectedRows[0]}
+                projects={inventoryProjects}
+                readOnly={dataReadOnly}
+                onClose={closeWorkspace}
+                onRefresh={refreshSingleCorrection}
                 onComplete={completeCorrection}
                 onOpenRules={(machine) => data.showRules(machine)}
               />
@@ -203,7 +268,7 @@
   .split {
     display: grid;
     grid-template-columns: minmax(380px, 1.15fr) minmax(340px, 0.85fr);
-    gap: 10px;
+    gap: var(--space-5);
     min-height: 0;
     flex: 1;
   }

@@ -881,6 +881,46 @@
       }
     }
   ],
+  "data_selection_hint": "プロジェクトをクリックし、Shift キーを押しながらクリックして範囲を選択します。",
+  "data_selection_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 件のプロジェクトを選択中" }
+    }
+  ],
+  "data_selection_clear": "クリア",
+  "data_batch_workspace_label": "プロジェクトの一括修正",
+  "data_batch_heading": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 件のプロジェクトを選択中" }
+    }
+  ],
+  "data_batch_label": "一括",
+  "data_batch_folders_heading": "選択したフォルダー",
+  "data_batch_folders_intro": "選択したプロジェクトからのフォルダー候補です。",
+  "data_batch_correction_heading": "一括修正",
+  "data_batch_correction_intro": "以下の使用可能なフォルダーをすべて 1 つのプロジェクトに割り当てます。",
+  "data_batch_folder_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 個のフォルダー" }
+    }
+  ],
+  "data_batch_target_project": "選択したフォルダーの割り当て先",
+  "data_batch_saving": "一括修正を保存しています…",
+  "data_batch_save": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 件の修正を保存" }
+    }
+  ],
+  "data_batch_partial_save": "{count} 件中 {saved} 件を保存しました。",
+  "data_batch_saved": "一括修正を {project} に保存しました",
   "data_filter_projects": "プロジェクトをフィルタリングする",
   "data_col_project": "プロジェクト",
   "data_col_sessions": "セッション",
