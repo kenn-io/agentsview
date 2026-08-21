@@ -90,6 +90,7 @@ class AnalyticsStore {
   signals = $state<SignalsAnalyticsResponse | null>(null);
   topMetric: TopSessionsMetric = $state("messages");
   lastUpdatedAt: number | null = $state(null);
+  qualityLastUpdatedAt: number | null = $state(null);
   hasNewData: boolean = $state(false);
 
   loading = $state({
@@ -794,7 +795,7 @@ class AnalyticsStore {
     // silently narrow the Quality signal facts.
     const result = await this.fetchSignals({ includeModel: false });
     if (result === "ok") {
-      this.markRefreshComplete();
+      this.qualityLastUpdatedAt = Date.now();
     }
   }
 

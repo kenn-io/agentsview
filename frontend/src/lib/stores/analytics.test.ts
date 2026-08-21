@@ -275,6 +275,7 @@ function resetStore() {
   analytics.topSessions = null;
   analytics.signals = null;
   analytics.lastUpdatedAt = null;
+  analytics.qualityLastUpdatedAt = null;
   analytics.hasNewData = false;
   analytics.querying = {
     summary: false,
@@ -437,16 +438,24 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 });
 
 describe("AnalyticsStore freshness state", () => {
-  it("records a successful Quality refresh time", async () => {
+  it("records Quality freshness without changing dashboard freshness", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
+      analytics.lastUpdatedAt = new Date(
+        "2026-06-15T14:55:00Z",
+      ).getTime();
+      analytics.hasNewData = true;
       vi.setSystemTime(new Date("2026-06-15T15:00:00Z"));
 
       await analytics.fetchSignalsForQuality();
 
-      expect(analytics.lastUpdatedAt).toBe(
+      expect(analytics.qualityLastUpdatedAt).toBe(
         new Date("2026-06-15T15:00:00Z").getTime(),
       );
+      expect(analytics.lastUpdatedAt).toBe(
+        new Date("2026-06-15T14:55:00Z").getTime(),
+      );
+      expect(analytics.hasNewData).toBe(true);
     } finally {
       vi.useRealTimers();
     }

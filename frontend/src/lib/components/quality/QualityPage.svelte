@@ -613,7 +613,7 @@
     </div>
 
     <RefreshControl
-      lastUpdatedAt={analytics.lastUpdatedAt}
+      lastUpdatedAt={analytics.qualityLastUpdatedAt}
       busy={querying}
       onRefresh={handleRefresh}
       label={m.quality_page_refresh()}
