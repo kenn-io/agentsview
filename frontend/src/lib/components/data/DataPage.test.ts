@@ -92,7 +92,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (component) unmount(component);
+  if (component) void unmount(component);
   component = undefined;
   document.body.innerHTML = "";
   vi.useRealTimers();
@@ -246,7 +246,7 @@ describe("DataPage", () => {
     await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
     await flush();
     return refreshSpy;
@@ -257,6 +257,9 @@ describe("DataPage", () => {
 
     expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(refreshSpy).toHaveBeenCalledWith("k1", "target-project");
+    expect(screen.getByRole("status").textContent).toContain(
+      m.data_reclassify_saved({ project: "target-project" }),
+    );
   });
 
   it("remounts the editor after a completed apply that keeps the selection", async () => {
@@ -289,7 +292,7 @@ describe("DataPage", () => {
     await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
 
     // Dismiss the workspace while the reclassify request is still in flight.

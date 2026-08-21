@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, TextInput } from "@kenn-io/kit-ui";
+  import { Button, Chip, TextInput } from "@kenn-io/kit-ui";
   import { onDestroy, onMount } from "svelte";
   import {
     DataService,
@@ -12,7 +12,6 @@
   import type { ProjectInfo } from "../../api/types/core.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
-  import { displayProjectLabel } from "./project-label.js";
 
   // Candidates load once on mount; there is no reactive reload when the
   // project identity changes. Hosts MUST remount this component whenever
@@ -24,8 +23,9 @@
     projects: ProjectInfo[];
     readOnly?: boolean;
     onRefresh: (appliedTarget: string) => Promise<boolean>;
-    onComplete: () => void;
+    onComplete: (target: string) => void;
     onOpenRules?: (machine: string) => void;
+    onCandidateCount?: (count: number) => void;
   }
 
   let {
@@ -36,6 +36,7 @@
     onRefresh,
     onComplete,
     onOpenRules = undefined,
+    onCandidateCount = undefined,
   }: Props = $props();
 
   let candidates = $state<DbWorktreeReclassificationCandidate[]>([]);
@@ -54,6 +55,7 @@
   let appliedTarget = $state("");
   let refreshing = $state(false);
   let applyError = $state("");
+  let reviewing = $state(false);
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   const candidatesRead = new LatestRead();
@@ -62,18 +64,15 @@
   const selectedCandidate = $derived(
     candidates.find((candidate) => candidate.id === selectedCandidateId),
   );
-  const candidateMachines = $derived(
-    [...new Set(candidates.map((candidate) => candidate.machine).filter(Boolean))],
-  );
-  const hasAvailableCandidate = $derived(
-    candidates.some((candidate) => candidate.available),
-  );
   const canApply = $derived(
     !applied &&
       !applying &&
       !previewLoading &&
       !!preview?.mapping_token &&
       preview.matched_sessions > 0,
+  );
+  const requiresReview = $derived(
+    !!preview && (preview.existing_mapping_id != null || preview.distinct_projects > 1),
   );
 
   function pathParts(path: string) {
@@ -111,6 +110,7 @@
       );
       if (!candidatesRead.isCurrent(signal)) return;
       candidates = (response.candidates ?? []) as DbWorktreeReclassificationCandidate[];
+      onCandidateCount?.(candidates.length);
       if (candidates.length === 1) selectCandidate(candidates[0]!.id);
     } catch (error) {
       if (isAbortError(error) || !candidatesRead.isCurrent(signal)) return;
@@ -128,6 +128,7 @@
     preview = null;
     previewError = "";
     conflict = false;
+    reviewing = false;
     if (previewTimer !== undefined) clearTimeout(previewTimer);
     previewTimer = undefined;
   }
@@ -138,7 +139,39 @@
     const candidate = candidates.find((item) => item.id === id);
     machine = candidate?.machine ?? "";
     pathPrefix = candidate?.suggested_prefix ?? "";
+    targetProject = candidate?.available ? projectLabel : "";
     schedulePreview();
+  }
+
+  function cancelCorrection() {
+    clearAcceptedPreview();
+    selectedCandidateId = "";
+    machine = "";
+    pathPrefix = "";
+    targetProject = "";
+  }
+
+  function reviewImpact() {
+    if (canApply && requiresReview) reviewing = true;
+  }
+
+  function backToCorrection() {
+    reviewing = false;
+  }
+
+  function evidenceLabel(kind: string): string {
+    switch (kind) {
+      case "snapshot":
+        return m.data_reclassify_evidence_snapshot();
+      case "aggregate":
+        return m.data_reclassify_evidence_aggregate();
+      case "fallback":
+        return m.data_reclassify_evidence_exact_cwd();
+      case "unavailable":
+        return m.data_reclassify_evidence_unavailable();
+      default:
+        return m.data_reclassify_evidence_suggestion();
+    }
   }
 
   function editPrefix(value: string) {
@@ -214,7 +247,7 @@
   async function apply() {
     if (readOnly) return;
     const token = preview?.mapping_token;
-    if (!canApply || !token) return;
+    if (!canApply || !token || (requiresReview && !reviewing)) return;
     applying = true;
     applyError = "";
     // Capture the request body and applied target before awaiting: edits made
@@ -272,38 +305,30 @@
     }
     if (disposed) return;
     refreshing = false;
-    if (refreshed) onComplete();
+    if (refreshed) onComplete(appliedTarget);
   }
 </script>
 
 <div class="editor">
-  <!-- Display-only copy distinguishes empty private labels and the parser's
-       "unknown" sentinel; the raw label still feeds candidates, preview, and
-       apply requests. -->
-  <p class="original">{m.data_reclassify_original({ project: displayProjectLabel(projectLabel) })}</p>
-
-  {#if candidatesLoading}
-    <p class="muted">{m.data_reclassify_candidates_loading()}</p>
-  {:else if candidatesError}
-    <p class="error-text">{candidatesError}</p>
-  {:else if candidates.length === 0}
-    <p class="muted">{m.data_reclassify_no_candidates()}</p>
-  {:else}
-    <div class="observed-folders">
-      <div class="folder-heading">
-        <strong>{m.data_mapping_observed_folders()}</strong>
-        {#if candidateMachines.length === 1}
-          <span class="folder-meta">{candidateMachines[0]}</span>
-        {/if}
+  <section class="suggestions">
+    <div class="section-heading">
+      <div>
+        <h4>{m.data_mapping_observed_folders()}</h4>
+        <p>{m.data_reclassify_suggestions_intro()}</p>
       </div>
+    </div>
+
+    {#if candidatesLoading}
+      <p class="muted">{m.data_reclassify_candidates_loading()}</p>
+    {:else if candidatesError}
+      <p class="error-text">{candidatesError}</p>
+    {:else if candidates.length === 0}
+      <p class="muted">{m.data_reclassify_no_candidates()}</p>
+    {:else}
       <div class="folder-list">
         {#each candidates as candidate (candidate.id)}
           {@const parts = pathParts(candidate.suggested_prefix)}
-          <div
-            class="folder-row"
-            class:selected={candidate.id === selectedCandidateId}
-            class:with-machine={candidateMachines.length > 1}
-          >
+          <div class="folder-row" class:selected={candidate.id === selectedCandidateId}>
             <Button
               size="sm"
               class="folder-choice"
@@ -318,28 +343,33 @@
                   <span class="folder-parent">{parts.parent}</span>
                   <span class="folder-name">{parts.name}</span>
                 </span>
+                <span class="folder-details">
+                  <span>{candidate.machine}</span>
+                  <span>{m.data_reclassify_candidate_sessions({ count: candidate.contributing_sessions })}</span>
+                </span>
+                {#if candidate.available}
+                  <span class="folder-action">{m.data_reclassify_use_for_project()}</span>
+                {/if}
               {/snippet}
             </Button>
-            {#if candidateMachines.length > 1}
-              <span class="folder-meta">{candidate.machine}</span>
-            {/if}
-            <span class="folder-meta">
-              {m.data_reclassify_candidate_sessions({
-                count: candidate.contributing_sessions,
-              })}
-            </span>
+            <Chip size="xs" tone={candidate.available ? "muted" : "warning"} uppercase={false}>
+              {evidenceLabel(candidate.evidence_kind)}
+            </Chip>
           </div>
         {/each}
       </div>
-    </div>
+    {/if}
+  </section>
 
-    {#if selectedCandidate}
+  {#if selectedCandidate}
+    <section class="composer">
       {#if !selectedCandidate.available}
-        <p class="warning" role="alert">
-          {m.data_reclassify_cwd_unavailable()}
-        </p>
+        <p class="warning" role="alert">{m.data_reclassify_cwd_unavailable()}</p>
       {:else if !readOnly}
-        <strong class="mapping-title">{m.data_mapping_definition()}</strong>
+        <div class="composer-heading">
+          <h4>{m.data_mapping_definition()}</h4>
+          <Chip size="xs" tone="workspace" uppercase={false}>{machine}</Chip>
+        </div>
         <div class="mapping-row">
           <label class="field">
             <span>{m.data_reclassify_path_prefix()}</span>
@@ -350,7 +380,6 @@
               oninput={editPrefix}
             />
           </label>
-          <span class="mapping-arrow" aria-hidden="true">→</span>
           <label class="field target-field">
             <span>{m.data_reclassify_target_project()}</span>
             <ProjectTypeahead
@@ -366,86 +395,89 @@
             />
           </label>
         </div>
-      {/if}
-    {/if}
-  {/if}
 
-  {#if !readOnly}
-    {#if previewLoading}
-      <p class="muted">{m.data_reclassify_previewing()}</p>
-    {:else if preview}
-      <strong class="impact-title">{m.data_reclassify_full_archive_impact()}</strong>
-      <div class="impact" aria-live="polite">
-        <span>{m.data_reclassify_sessions_matched({ count: preview.matched_sessions })}</span>
-        <span>{m.data_reclassify_sessions_changing({ count: preview.updated_sessions })}</span>
-        <span>{m.data_reclassify_projects_affected({ count: preview.distinct_projects })}</span>
-      </div>
-      {#if preview.normalized_project && preview.normalized_project !== targetProject.trim()}
-        <p class="normalized">
-          {m.data_reclassify_normalized_target({ project: preview.normalized_project })}
-        </p>
-      {/if}
-      {#if preview.distinct_projects > 1}
-        <div class="warning" role="alert">
-          {m.data_reclassify_multiple_projects()}
-          {#if preview.project_samples?.length}
-            <ul>
-              {#each preview.project_samples as sample}
-                <li>{sample.project} ({m.data_reclassify_project_sample_sessions({ count: sample.count })})</li>
-              {/each}
-            </ul>
+        {#if previewLoading}
+          <p class="muted">{m.data_reclassify_previewing()}</p>
+        {:else if preview}
+          <div class="impact" aria-live="polite">
+            <span>{m.data_reclassify_sessions_matched({ count: preview.matched_sessions })}</span>
+            <span>{m.data_reclassify_sessions_changing({ count: preview.updated_sessions })}</span>
+            <span>{m.data_reclassify_projects_affected({ count: preview.distinct_projects })}</span>
+          </div>
+          {#if preview.normalized_project && preview.normalized_project !== targetProject.trim()}
+            <p class="normalized">{m.data_reclassify_normalized_target({ project: preview.normalized_project })}</p>
+          {/if}
+          {#if requiresReview}
+            <div class="impact-warning" role="alert">
+              <strong>{preview.existing_mapping_id != null
+                ? m.data_reclassify_replaces_rule()
+                : m.data_reclassify_multiple_projects()}</strong>
+              {#if reviewing && preview.project_samples?.length}
+                <ul>
+                  {#each preview.project_samples as sample}
+                    <li>{sample.project} ({m.data_reclassify_project_sample_sessions({ count: sample.count })})</li>
+                  {/each}
+                </ul>
+              {/if}
+            </div>
+          {:else if preview.matched_sessions === 0}
+            <p class="error-text">{m.data_reclassify_zero_matches()}</p>
+          {/if}
+        {/if}
+
+        {#if conflict}<p class="warning">{m.data_reclassify_conflict()}</p>{/if}
+        {#if previewError}<p class="error-text">{previewError}</p>{/if}
+        {#if applyError}<p class="error-text">{applyError}</p>{/if}
+        {#if applied && !refreshing}
+          <p class="warning" role="status">{m.data_reclassify_applied_refresh_failed()}</p>
+        {/if}
+
+        {#if onOpenRules}
+          <p class="rules-note">
+            {m.data_reclassify_managed_in_rules()}
+            <button class="link-btn" onclick={() => onOpenRules?.(machine)}>{m.data_reclassify_open_rules()}</button>
+          </p>
+        {/if}
+
+        <div class="action-row">
+          {#if applied}
+            <Button
+              label={refreshing ? m.data_reclassify_refreshing() : m.data_reclassify_retry_refresh()}
+              disabled={refreshing}
+              tone="info"
+              surface="solid"
+              onclick={retryRefresh}
+            />
+          {:else if reviewing}
+            <Button label={m.data_reclassify_back()} onclick={backToCorrection} />
+            <Button
+              label={applying ? m.data_reclassify_applying() : m.data_reclassify_confirm_save()}
+              disabled={!canApply}
+              tone="info"
+              surface="solid"
+              onclick={apply}
+            />
+          {:else}
+            <Button label={m.data_reclassify_cancel()} onclick={cancelCorrection} />
+            <Button
+              label={applying
+                ? m.data_reclassify_applying()
+                : requiresReview
+                  ? m.data_reclassify_review_impact()
+                  : m.data_reclassify_apply()}
+              disabled={!canApply}
+              tone="info"
+              surface="solid"
+              onclick={requiresReview ? reviewImpact : apply}
+            />
           {/if}
         </div>
-      {:else if preview.matched_sessions === 0}
-        <p class="error-text">{m.data_reclassify_zero_matches()}</p>
-      {/if}
-    {/if}
-
-    {#if conflict}
-      <p class="warning">{m.data_reclassify_conflict()}</p>
-    {/if}
-    {#if previewError}<p class="error-text">{previewError}</p>{/if}
-    {#if applyError}<p class="error-text">{applyError}</p>{/if}
-    {#if applied && !refreshing}
-      <p class="warning" role="status">{m.data_reclassify_applied_refresh_failed()}</p>
-    {/if}
-  {:else}
-    <p class="warning" role="note">{m.data_reclassify_read_only()}</p>
-  {/if}
-
-  {#if onOpenRules}
-    <p class="rules-note">
-      {m.data_reclassify_managed_in_rules()}
-      <button class="link-btn" onclick={() => onOpenRules?.(machine)}>
-        {m.data_reclassify_open_rules()}
-      </button>
-    </p>
-  {/if}
-
-  {#if !readOnly && (applied || hasAvailableCandidate)}
-    <div class="action-row">
-      {#if applied}
-        <Button
-          label={refreshing
-            ? m.data_reclassify_refreshing()
-            : m.data_reclassify_retry_refresh()}
-          disabled={refreshing}
-          tone="info"
-          surface="solid"
-          onclick={retryRefresh}
-        />
       {:else}
-        <Button
-          label={applying
-            ? m.data_reclassify_applying()
-            : m.data_reclassify_apply()}
-          disabled={!canApply}
-          tone="info"
-          surface="solid"
-          onclick={apply}
-        />
+        <p class="warning" role="note">{m.data_reclassify_read_only()}</p>
       {/if}
-    </div>
+    </section>
+  {:else if readOnly}
+    <section class="composer"><p class="warning" role="note">{m.data_reclassify_read_only()}</p></section>
   {/if}
 </div>
 
@@ -456,30 +488,35 @@
     flex-direction: column;
   }
 
-  .editor { gap: 12px; }
+  .editor { flex: 1; min-height: 0; overflow-y: auto; }
   .field { gap: var(--space-2); font-size: 12px; }
-  .impact-title { font-size: 12px; }
   .target-field { --typeahead-min-width: 100%; }
-  .original { margin: 0; color: var(--text-secondary); }
   .muted, .rules-note { color: var(--text-muted); font-size: 11px; }
-  .impact { display: flex; gap: 12px; font-size: 12px; }
-  .observed-folders {
+  .suggestions {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 7px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-muted);
   }
-  .folder-heading {
+  .section-heading,
+  .composer-heading {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
   }
-  .folder-heading > strong, .mapping-title {
-    color: var(--text-secondary);
-    font-size: 11px;
+  h4 { margin: 0; color: var(--text-primary); font-size: 12px; }
+  .section-heading p { margin: 2px 0 0; color: var(--text-muted); font-size: 10px; }
+  .composer {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 11px 12px;
+    background: var(--bg-inset);
   }
   .folder-list {
-    max-height: min(224px, 32vh);
+    max-height: min(260px, 34vh);
     overflow-y: auto;
     border: 1px solid var(--border-muted);
     border-radius: var(--radius-sm);
@@ -489,21 +526,19 @@
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
-    min-height: 32px;
-    padding: 2px 8px 2px 2px;
+    min-height: 42px;
+    padding: 4px 8px 4px 3px;
     border-bottom: 1px solid var(--border-muted);
   }
   .folder-row:last-child {
     border-bottom: 0;
-  }
-  .folder-row.with-machine {
-    grid-template-columns: minmax(0, 1fr) auto auto;
   }
   .folder-row.selected { background: var(--bg-inset); }
   .folder-row :global(.folder-choice) {
     width: 100%;
     min-width: 0;
     justify-content: flex-start;
+    text-align: left;
     padding-inline: 8px;
     border-color: transparent;
     background: transparent;
@@ -514,6 +549,22 @@
     overflow: hidden;
     font-family: var(--font-mono);
     font-weight: 400;
+  }
+  .folder-details {
+    display: flex;
+    gap: 7px;
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 10px;
+  }
+  .folder-action {
+    display: block;
+    margin-top: 2px;
+    color: var(--accent-blue);
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 600;
   }
   .folder-parent {
     min-width: 0;
@@ -530,28 +581,19 @@
     color: var(--text-primary);
     white-space: nowrap;
   }
-  .folder-meta {
-    color: var(--text-muted);
-    font-size: 10px;
-    white-space: nowrap;
-  }
   .mapping-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: end;
     gap: 8px;
   }
-  .mapping-arrow {
-    padding-bottom: 8px;
-    color: var(--text-muted);
-    font-size: 16px;
-  }
-  .impact { flex-wrap: wrap; padding: 8px; background: var(--bg-inset); border-radius: var(--radius-sm); }
+  .impact { display: flex; flex-wrap: wrap; gap: 10px; color: var(--text-secondary); font-size: 10px; }
   .normalized { color: var(--text-secondary); font-size: 12px; }
   .warning { color: var(--accent-orange); font-size: 12px; }
   .error-text { color: var(--accent-red); font-size: 12px; }
   .warning, .error-text, .muted, .normalized, .rules-note { margin: 0; }
-  .warning ul { margin: 6px 0 0; padding-left: 18px; }
+  .impact-warning { padding: 8px; border: 1px solid color-mix(in srgb, var(--accent-orange) 35%, var(--border-muted)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent-orange) 7%, var(--bg-surface)); color: var(--text-secondary); font-size: 11px; line-height: 1.45; }
+  .impact-warning ul { margin: 6px 0 0; padding-left: 18px; }
   .action-row { display: flex; justify-content: flex-end; gap: 8px; }
   .link-btn {
     margin-left: 4px;
@@ -569,13 +611,5 @@
       grid-template-columns: 1fr;
       align-items: start;
     }
-    .folder-row.with-machine {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-    .folder-row.with-machine .folder-meta:first-of-type {
-      grid-column: 1 / -1;
-      padding-left: 8px;
-    }
-    .mapping-arrow { display: none; }
   }
 </style>

@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { fireEvent, screen } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
 import type { DbProjectInventoryRow } from "../../api/generated/index";
 import ProjectWorkspace from "./ProjectWorkspace.svelte";
-import { formatDateTime, m } from "../../i18n/index.js";
+import { m } from "../../i18n/index.js";
 
 const api = vi.hoisted(() => ({
   candidates: vi.fn(),
@@ -54,14 +54,6 @@ function makeRow(overrides: Partial<DbProjectInventoryRow> = {}): DbProjectInven
   };
 }
 
-function fmt(ts: string): string {
-  return formatDateTime(new Date(ts), {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 async function flush() {
   await tick();
   await Promise.resolve();
@@ -79,7 +71,7 @@ describe("ProjectWorkspace", () => {
   });
 
   afterEach(() => {
-    if (component) unmount(component);
+    if (component) void unmount(component);
     component = undefined;
     document.body.innerHTML = "";
   });
@@ -100,25 +92,17 @@ describe("ProjectWorkspace", () => {
     });
   }
 
-  it("renders the project context header with counts, activity range, and annotations", async () => {
+  it("renders the compact project context with counts, suggestions, and active rules", async () => {
+    api.candidates.mockResolvedValue({ candidates: [candidate] });
     render({ row: makeRow({ enabled_rules_targeting: 2, recorded_as_original: true }) });
     await flush();
 
     expect(screen.getByRole("heading", { name: "wrong-project" })).toBeTruthy();
     const text = document.body.textContent ?? "";
-    expect(text).toContain(m.data_col_sessions());
-    expect(text).toContain("9");
-    expect(text).toContain(m.data_col_machines());
-    expect(text).toContain(m.data_col_cwds());
-    expect(text).toContain(m.data_workspace_activity());
-    expect(text).toContain(
-      m.data_workspace_activity_range({
-        first: fmt("2026-01-05T10:00:00Z"),
-        last: fmt("2026-03-09T18:30:00Z"),
-      }),
-    );
+    expect(text).toContain(m.data_summary_sessions({ count: 9 }));
+    expect(text).toContain(m.data_summary_machines({ count: 2 }));
+    expect(text).toContain(m.data_summary_folder_suggestions({ count: 1 }));
     expect(text).toContain(m.data_rules_targeting({ count: 2 }));
-    expect(text).toContain(m.data_recorded_original());
   });
 
   it("falls back to the localized unknown label for an empty project label", async () => {
@@ -140,24 +124,11 @@ describe("ProjectWorkspace", () => {
     render({ row: makeRow({ label: "unknown" }) });
     await flush();
 
-    expect(
-      screen.getByRole("heading", { name: m.data_project_unclassified() }),
-    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: m.data_project_unclassified() })).toBeTruthy();
     expect(api.candidates).toHaveBeenCalledWith({
       projectLabel: "unknown",
       projectKey: "pl1:sha256:wrong",
     });
-  });
-
-  it("shows the no-activity message when both timestamps are absent", async () => {
-    const row = makeRow();
-    delete row.first_activity;
-    delete row.last_activity;
-    render({ row });
-    await flush();
-
-    expect(document.body.textContent).toContain(m.data_workspace_no_activity());
-    expect(document.body.textContent).not.toContain("–");
   });
 
   it("mounts the editor for the row's label and key", async () => {

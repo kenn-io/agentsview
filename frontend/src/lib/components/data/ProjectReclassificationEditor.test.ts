@@ -42,7 +42,7 @@ const preview = {
   normalized_project: "target-project",
   matched_sessions: 7,
   updated_sessions: 6,
-  distinct_projects: 2,
+  distinct_projects: 1,
   project_samples: [
     { project: "wrong-project", count: 6 },
     { project: "another-project", count: 1 },
@@ -78,7 +78,7 @@ describe("ProjectReclassificationEditor", () => {
   });
 
   afterEach(() => {
-    if (component) unmount(component);
+    if (component) void unmount(component);
     component = undefined;
     document.body.innerHTML = "";
     vi.useRealTimers();
@@ -113,13 +113,11 @@ describe("ProjectReclassificationEditor", () => {
       projectLabel: "wrong-project",
       projectKey: "pl1:sha256:wrong",
     });
-    expect(screen.getByText(/Current project: wrong-project/)).toBeTruthy();
-    expect(screen.getByText("Observed folders")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: candidate.suggested_prefix }),
-    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: m.data_mapping_observed_folders() })).toBeTruthy();
+    expect(screen.getByText(m.data_reclassify_suggestions_intro())).toBeTruthy();
+    expect(screen.getByRole("button", { name: candidate.suggested_prefix })).toBeTruthy();
     expect(screen.getByDisplayValue(candidate.suggested_prefix)).toBeTruthy();
-    expect(screen.getByText("remote.example")).toBeTruthy();
+    expect(screen.getAllByText("remote.example")).toHaveLength(2);
 
     await chooseTarget();
 
@@ -135,8 +133,7 @@ describe("ProjectReclassificationEditor", () => {
     });
     expect(screen.getByText(/7 sessions matched/)).toBeTruthy();
     expect(screen.getByText(/6 sessions will change/)).toBeTruthy();
-    expect(screen.getByText(/2 projects/)).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain("multiple projects");
+    expect(screen.getByText(/1 project/)).toBeTruthy();
     expect(screen.queryByText(/Will be saved as/)).toBeNull();
   });
 
@@ -144,7 +141,7 @@ describe("ProjectReclassificationEditor", () => {
     render({ projectLabel: "" });
     await flush();
 
-    expect(screen.getByText(/Current project: unknown/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: m.data_mapping_definition() })).toBeTruthy();
     expect(api.candidates).toHaveBeenCalledWith({
       projectLabel: "",
       projectKey: "pl1:sha256:wrong",
@@ -161,13 +158,7 @@ describe("ProjectReclassificationEditor", () => {
     render({ projectLabel: "unknown" });
     await flush();
 
-    expect(
-      screen.getByText(
-        m.data_reclassify_original({
-          project: m.data_project_unclassified(),
-        }),
-      ),
-    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: m.data_mapping_definition() })).toBeTruthy();
     expect(api.candidates).toHaveBeenCalledWith({
       projectLabel: "unknown",
       projectKey: "pl1:sha256:wrong",
@@ -191,7 +182,7 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     await fireEvent.click(screen.getByTitle("Project"));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
-    const prefix = screen.getByLabelText("Folder path");
+    const prefix = screen.getByLabelText("Path prefix");
     await fireEvent.input(prefix, { target: { value: "/srv/first" } });
     await vi.advanceTimersByTimeAsync(200);
     await fireEvent.input(prefix, { target: { value: "/srv/final" } });
@@ -224,7 +215,7 @@ describe("ProjectReclassificationEditor", () => {
     expect(api.preview.mock.calls[0]![0].requestBody.project).toBe("new-project");
     expect(screen.getByText(/matches no sessions/)).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Save and apply mapping" }) as HTMLButtonElement,
+      screen.getByRole("button", { name: "Save correction" }) as HTMLButtonElement,
     ).toHaveProperty("disabled", true);
   });
 
@@ -235,9 +226,7 @@ describe("ProjectReclassificationEditor", () => {
     await fireEvent.input(screen.getByRole("combobox"), {
       target: { value: "new-project" },
     });
-    await fireEvent.mouseDown(
-      screen.getByRole("option", { name: 'Use project "new-project"' }),
-    );
+    await fireEvent.mouseDown(screen.getByRole("option", { name: 'Use project "new-project"' }));
     await flush();
 
     // Typeahead reports an empty query while closing after selection, then
@@ -251,7 +240,7 @@ describe("ProjectReclassificationEditor", () => {
     expect(api.preview).toHaveBeenCalledTimes(1);
     expect(api.preview.mock.calls[0]![0].requestBody.project).toBe("new-project");
     expect(
-      screen.getByRole("button", { name: "Save and apply mapping" }) as HTMLButtonElement,
+      screen.getByRole("button", { name: "Save correction" }) as HTMLButtonElement,
     ).toHaveProperty("disabled", false);
   });
 
@@ -268,14 +257,14 @@ describe("ProjectReclassificationEditor", () => {
     render();
     await flush();
     await chooseTarget();
-    const prefix = screen.getByLabelText("Folder path");
+    const prefix = screen.getByLabelText("Path prefix");
     await fireEvent.input(prefix, { target: { value: "/srv/latest" } });
     await vi.advanceTimersByTimeAsync(300);
     await flush();
     resolveFirst({ ...preview, mapping_token: "obsolete-token" });
     await flush();
 
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
     expect(api.apply.mock.calls[0]![0].requestBody.mapping_token).toBe("latest-token");
   });
@@ -285,7 +274,7 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     await chooseTarget();
     expect(
-      screen.getByRole("button", { name: "Save and apply mapping" }) as HTMLButtonElement,
+      screen.getByRole("button", { name: "Save correction" }) as HTMLButtonElement,
     ).toHaveProperty("disabled", false);
 
     await fireEvent.click(screen.getByTitle("Project"));
@@ -293,7 +282,7 @@ describe("ProjectReclassificationEditor", () => {
       target: { value: "target-pro" },
     });
 
-    const apply = screen.getByRole("button", { name: "Save and apply mapping" });
+    const apply = screen.getByRole("button", { name: "Save correction" });
     expect(apply as HTMLButtonElement).toHaveProperty("disabled", true);
     await fireEvent.click(apply);
     expect(api.apply).not.toHaveBeenCalled();
@@ -310,12 +299,12 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     expect(screen.getByText(/Calculating full-archive impact/)).toBeTruthy();
 
-    await fireEvent.input(screen.getByLabelText("Folder path"), { target: { value: "" } });
+    await fireEvent.input(screen.getByLabelText("Path prefix"), { target: { value: "" } });
     await flush();
 
     expect(screen.queryByText(/Calculating full-archive impact/)).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Save and apply mapping" }) as HTMLButtonElement,
+      screen.getByRole("button", { name: "Save correction" }) as HTMLButtonElement,
     ).toHaveProperty("disabled", true);
   });
 
@@ -335,40 +324,34 @@ describe("ProjectReclassificationEditor", () => {
     render();
     await flush();
 
-    expect(screen.getByText("Observed folders")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: candidate.suggested_prefix }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "/" }),
-    ).toBeTruthy();
-    expect(screen.queryByLabelText("Folder path")).toBeNull();
+    expect(screen.getByText("Folder suggestions")).toBeTruthy();
+    expect(screen.getByRole("button", { name: candidate.suggested_prefix })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "/" })).toBeTruthy();
+    expect(screen.queryByLabelText("Path prefix")).toBeNull();
     await fireEvent.click(screen.getByRole("button", { name: "/" }));
     await flush();
     expect(screen.getByText(/filesystem root/)).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Save and apply mapping" }) as HTMLButtonElement,
-    ).toHaveProperty("disabled", true);
+    expect(screen.queryByRole("button", { name: "Save correction" })).toBeNull();
   });
 
   it("does not offer mapping controls for a filesystem-root candidate", async () => {
     api.candidates.mockResolvedValue({
-      candidates: [{
-        ...candidate,
-        suggested_prefix: "/",
-        available: false,
-      }],
+      candidates: [
+        {
+          ...candidate,
+          suggested_prefix: "/",
+          available: false,
+        },
+      ],
     });
     render();
     await flush();
 
     expect(screen.getByRole("button", { name: "/" })).toBeTruthy();
     expect(screen.getByText(/filesystem root/)).toBeTruthy();
-    expect(screen.queryByLabelText("Folder path")).toBeNull();
+    expect(screen.queryByLabelText("Path prefix")).toBeNull();
     expect(screen.queryByTitle("Project")).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Save and apply mapping" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save correction" })).toBeNull();
   });
 
   it("applies exactly once and offers only refresh retry after a post-commit failure", async () => {
@@ -380,14 +363,14 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     await chooseTarget();
 
-    const apply = screen.getByRole("button", { name: "Save and apply mapping" });
+    const apply = screen.getByRole("button", { name: "Save correction" });
     await fireEvent.click(apply);
     await flush();
 
     expect(api.apply).toHaveBeenCalledTimes(1);
     expect(api.apply.mock.calls[0]![0].requestBody.mapping_token).toBe("token-1");
     expect(onRefresh).toHaveBeenCalledWith("renamed-target");
-    expect(screen.queryByRole("button", { name: "Save and apply mapping" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save correction" })).toBeNull();
     expect(screen.getByText(/mapping was saved, but the project inventory/)).toBeTruthy();
     const retryButton = screen.getByRole("button", { name: "Retry refresh" });
     await fireEvent.click(retryButton);
@@ -395,9 +378,10 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     expect(api.apply).toHaveBeenCalledTimes(1);
     expect(onRefresh).toHaveBeenCalledTimes(2);
-    expect(
-      screen.getByRole("button", { name: "Refreshing…" }) as HTMLButtonElement,
-    ).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Refreshing…" }) as HTMLButtonElement).toHaveProperty(
+      "disabled",
+      true,
+    );
 
     retry.resolve(true);
     await flush();
@@ -411,7 +395,7 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     await chooseTarget();
 
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
 
     const refreshing = screen.getByRole("button", { name: "Refreshing…" });
@@ -437,9 +421,9 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     await chooseTarget();
 
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
-    const applying = screen.getByRole("button", { name: "Saving and applying…" });
+    const applying = screen.getByRole("button", { name: "Saving correction…" });
     expect(applying as HTMLButtonElement).toHaveProperty("disabled", true);
     await fireEvent.click(applying);
     expect(onRefresh).not.toHaveBeenCalled();
@@ -459,7 +443,7 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     await chooseTarget();
 
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
 
     // Change the target selection while the reclassify request is in flight.
@@ -467,9 +451,7 @@ describe("ProjectReclassificationEditor", () => {
     await fireEvent.input(screen.getByRole("combobox"), {
       target: { value: "other-project" },
     });
-    await fireEvent.mouseDown(
-      screen.getByRole("option", { name: 'Use project "other-project"' }),
-    );
+    await fireEvent.mouseDown(screen.getByRole("option", { name: 'Use project "other-project"' }));
     await flush();
 
     pendingApply.resolve({ mapping: {}, result: preview });
@@ -488,10 +470,10 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     await chooseTarget();
 
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
 
-    if (component) unmount(component);
+    if (component) void unmount(component);
     component = undefined;
     pendingApply.resolve({ mapping: {}, result: preview });
     await flush();
@@ -504,18 +486,53 @@ describe("ProjectReclassificationEditor", () => {
   it("localizes and number-formats project sample session counts", async () => {
     api.preview.mockResolvedValueOnce({
       ...preview,
+      distinct_projects: 2,
       project_samples: [{ project: "wrong-project", count: 1234 }],
     });
     render();
     await flush();
     await chooseTarget();
 
-    expect(screen.getByRole("alert").textContent).toContain(
-      "wrong-project (1,234 sessions)",
-    );
+    expect(api.apply).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("button", { name: "Review impact" }));
+    await flush();
+
+    expect(screen.getByRole("alert").textContent).toContain("wrong-project (1,234 sessions)");
+    expect(screen.getByRole("button", { name: "Confirm and save" })).toBeTruthy();
   });
 
-  it("keeps same-machine folders distinct without repeating the machine on every row", async () => {
+  it("requires an inline review before replacing an existing mapping rule", async () => {
+    api.preview.mockResolvedValueOnce({
+      ...preview,
+      existing_mapping_id: 14,
+    });
+    render();
+    await flush();
+    await chooseTarget();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Review impact" }));
+    await flush();
+    expect(api.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Confirm and save" })).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
+    await flush();
+    expect(api.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a pending correction without mutating mappings", async () => {
+    render();
+    await flush();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await flush();
+
+    expect(screen.queryByRole("heading", { name: "Project correction" })).toBeNull();
+    expect(api.apply).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-machine folder suggestions distinct with their row evidence", async () => {
     api.candidates.mockResolvedValue({
       candidates: [
         candidate,
@@ -530,12 +547,10 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
 
     const otherPath = "/srv/worktrees/example/repo/other-branch";
-    expect(
-      screen.getByRole("button", { name: candidate.suggested_prefix }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: candidate.suggested_prefix })).toBeTruthy();
     expect(screen.getByText("branch")).toBeTruthy();
     expect(screen.getByText("other-branch")).toBeTruthy();
-    expect(screen.getAllByText("remote.example")).toHaveLength(1);
+    expect(screen.getAllByText("remote.example")).toHaveLength(2);
     await fireEvent.click(screen.getByRole("button", { name: otherPath }));
     await flush();
 
@@ -547,7 +562,7 @@ describe("ProjectReclassificationEditor", () => {
     render({ onOpenRules });
     await flush();
 
-    await fireEvent.click(screen.getByRole("button", { name: "Open Rules" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Open project mapping rules" }));
 
     expect(onOpenRules).toHaveBeenCalledTimes(1);
     expect(onOpenRules).toHaveBeenCalledWith("remote.example");
@@ -558,13 +573,13 @@ describe("ProjectReclassificationEditor", () => {
     render();
     await flush();
     await chooseTarget();
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
 
     expect(api.apply).toHaveBeenCalledTimes(1);
     expect(api.preview).toHaveBeenCalledTimes(2);
     expect(screen.getByText(/changed since the preview/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save and apply mapping" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save correction" })).toBeTruthy();
   });
 
   it("renders candidates as read-only evidence without editing, preview, or apply", async () => {
@@ -581,8 +596,8 @@ describe("ProjectReclassificationEditor", () => {
     render({ readOnly: true });
     await flush();
 
-    expect(screen.getByText(/This store is read-only/)).toBeTruthy();
-    expect(screen.getByRole("note").textContent).toContain("read-only");
+    expect(screen.getByText(/Changes are unavailable here/)).toBeTruthy();
+    expect(screen.getByRole("note").textContent).toContain("Source Agents View");
     const otherPath = "/srv/worktrees/example/repo/other-branch";
     await fireEvent.click(screen.getByRole("button", { name: otherPath }));
     await vi.advanceTimersByTimeAsync(300);
@@ -590,9 +605,9 @@ describe("ProjectReclassificationEditor", () => {
 
     expect(screen.getAllByText("remote.example").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/3 sessions/).length).toBeGreaterThan(0);
-    expect(screen.queryByLabelText("Folder path")).toBeNull();
+    expect(screen.queryByLabelText("Path prefix")).toBeNull();
     expect(screen.queryByTitle("Project")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Save and apply mapping" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save correction" })).toBeNull();
     expect(api.preview).not.toHaveBeenCalled();
   });
 
@@ -604,29 +619,27 @@ describe("ProjectReclassificationEditor", () => {
 
     expect(screen.getAllByText("remote.example").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/3 sessions/).length).toBeGreaterThan(0);
-    expect(
-      screen.getByRole("button", { name: candidate.suggested_prefix }),
-    ).toBeTruthy();
-    expect(screen.queryByLabelText("Folder path")).toBeNull();
+    expect(screen.getByRole("button", { name: candidate.suggested_prefix })).toBeTruthy();
+    expect(screen.queryByLabelText("Path prefix")).toBeNull();
     expect(screen.queryByTitle("Project")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Save and apply mapping" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save correction" })).toBeNull();
     expect(api.preview).not.toHaveBeenCalled();
   });
 
-  it("shows the rules note with the Open Rules action only when onOpenRules is provided", async () => {
+  it("shows the rules note with the Open project mapping rules action only when onOpenRules is provided", async () => {
     render({ onOpenRules: vi.fn() });
     await flush();
 
-    expect(screen.getByText(/edited in the Rules view/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open Rules" })).toBeTruthy();
+    expect(screen.getByText(/saved as a project mapping rule/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open project mapping rules" })).toBeTruthy();
 
-    if (component) unmount(component);
+    if (component) void unmount(component);
     component = undefined;
     document.body.innerHTML = "";
     render();
     await flush();
 
-    expect(screen.queryByText(/edited in the Rules view/)).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open Rules" })).toBeNull();
+    expect(screen.queryByText(/saved as a project mapping rule/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open project mapping rules" })).toBeNull();
   });
 });

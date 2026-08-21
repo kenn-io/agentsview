@@ -810,7 +810,7 @@
   "data_projects_heading": "Projets",
   "data_view_toggle_label": "Vue des données",
   "data_view_inventory": "Inventaire",
-  "data_view_rules": "Règles",
+  "data_view_rules": "Règles de correspondance des projets",
   "data_summary_projects": [
     {
       "declarations": [
@@ -836,6 +836,34 @@
       "match": {
         "countPlural=one": "{countNumber} session",
         "countPlural=other": "{countNumber} sessions"
+      }
+    }
+  ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} machine",
+        "countPlural=other": "{countNumber} machines"
+      }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} suggestion de dossier",
+        "countPlural=other": "{countNumber} suggestions de dossier"
       }
     }
   ],
@@ -887,8 +915,15 @@
   "data_reclassify_candidates_failed": "Impossible de trouver les dossiers de session",
   "data_reclassify_no_candidates": "Aucun dossier de session trouvé pour ce projet.",
   "data_reclassify_choose_worktree": "Choisir un dossier",
-  "data_mapping_observed_folders": "Dossiers observés",
-  "data_mapping_definition": "Correspondance",
+  "data_mapping_observed_folders": "Suggestions de dossiers",
+  "data_reclassify_suggestions_intro": "Chemins suggérés à partir des sessions de ce projet.",
+  "data_mapping_definition": "Correction du projet",
+  "data_reclassify_use_for_project": "Utiliser pour ce projet",
+  "data_reclassify_evidence_snapshot": "Instantané",
+  "data_reclassify_evidence_aggregate": "Agrégat",
+  "data_reclassify_evidence_exact_cwd": "Répertoire exact",
+  "data_reclassify_evidence_unavailable": "Aucun préfixe utilisable",
+  "data_reclassify_evidence_suggestion": "Suggestion",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -904,7 +939,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "Ce dossier ne peut pas être associé en toute sécurité, car il est indisponible ou représente la racine du système de fichiers.",
-  "data_reclassify_path_prefix": "Chemin du dossier",
+  "data_reclassify_path_prefix": "Préfixe du chemin",
   "data_reclassify_target_project": "Projet",
   "data_reclassify_use_custom_project": "Utiliser le projet « {query} »",
   "data_reclassify_path_unavailable": "Chemin indisponible",
@@ -971,15 +1006,22 @@
   ],
   "data_reclassify_zero_matches": "Ce préfixe ne correspond à aucune session de l’archive.",
   "data_reclassify_conflict": "Les correspondances ont changé depuis l’aperçu. L’impact a été actualisé ; vérifiez-le avant d’appliquer.",
-  "data_reclassify_apply": "Enregistrer et appliquer",
-  "data_reclassify_applying": "Enregistrement et application…",
-  "data_reclassify_apply_failed": "Impossible d’enregistrer et d’appliquer la correspondance",
+  "data_reclassify_replaces_rule": "Cette correction remplace une règle de correspondance de projet existante.",
+  "data_reclassify_review_impact": "Vérifier l’impact",
+  "data_reclassify_back": "Retour",
+  "data_reclassify_confirm_save": "Confirmer et enregistrer",
+  "data_reclassify_cancel": "Annuler",
+  "data_reclassify_apply": "Enregistrer la correction",
+  "data_reclassify_applying": "Enregistrement de la correction…",
+  "data_reclassify_apply_failed": "Impossible d’enregistrer la correction",
+  "data_reclassify_saved": "Correction du projet enregistrée pour {project}",
+  "data_flash_success_label": "Succès",
   "data_reclassify_applied_refresh_failed": "La correspondance est enregistrée, mais l’inventaire des projets n’a pas pu être actualisé. Relancez seulement l’actualisation.",
   "data_reclassify_retry_refresh": "Réessayer l’actualisation",
   "data_reclassify_refreshing": "Actualisation…",
-  "data_reclassify_read_only": "Ce magasin est en lecture seule. Gérez les règles de classification depuis l’archive accessible en écriture qui ingère les sessions de cette machine.",
-  "data_reclassify_managed_in_rules": "Les correspondances créées ici peuvent être modifiées dans la vue Règles.",
-  "data_reclassify_open_rules": "Ouvrir les règles",
+  "data_reclassify_read_only": "Les modifications ne sont pas disponibles ici. Ouvrez l’Agents View source pour gérer les règles de correspondance des projets.",
+  "data_reclassify_managed_in_rules": "Cette correction sera enregistrée comme règle de correspondance de projet.",
+  "data_reclassify_open_rules": "Ouvrir les règles de correspondance",
   "data_workspace_all_projects": "Tous les projets",
   "data_workspace_close": "Fermer les détails du projet",
   "data_workspace_activity": "Activité",

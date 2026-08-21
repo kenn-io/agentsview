@@ -783,7 +783,7 @@
   "data_projects_heading": "项目",
   "data_view_toggle_label": "数据视图",
   "data_view_inventory": "清单",
-  "data_view_rules": "规则",
+  "data_view_rules": "项目映射规则",
   "data_summary_projects": [
     {
       "declarations": [
@@ -804,6 +804,28 @@
       ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "{countNumber} 个会话" }
+    }
+  ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 台机器" }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个文件夹建议" }
     }
   ],
   "data_summary_governed": [
@@ -848,8 +870,15 @@
   "data_reclassify_candidates_failed": "无法查找会话文件夹",
   "data_reclassify_no_candidates": "未找到此项目的会话文件夹。",
   "data_reclassify_choose_worktree": "选择文件夹",
-  "data_mapping_observed_folders": "已发现的文件夹",
-  "data_mapping_definition": "映射",
+  "data_mapping_observed_folders": "文件夹建议",
+  "data_reclassify_suggestions_intro": "根据此项目中的会话建议的路径。",
+  "data_mapping_definition": "项目更正",
+  "data_reclassify_use_for_project": "用于此项目",
+  "data_reclassify_evidence_snapshot": "快照",
+  "data_reclassify_evidence_aggregate": "汇总",
+  "data_reclassify_evidence_exact_cwd": "精确工作目录",
+  "data_reclassify_evidence_unavailable": "无可用前缀",
+  "data_reclassify_evidence_suggestion": "建议",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -862,7 +891,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "此文件夹无法安全映射，因为它不可用或表示文件系统根目录。",
-  "data_reclassify_path_prefix": "文件夹路径",
+  "data_reclassify_path_prefix": "路径前缀",
   "data_reclassify_target_project": "项目",
   "data_reclassify_use_custom_project": "使用项目“{query}”",
   "data_reclassify_path_unavailable": "路径不可用",
@@ -917,15 +946,22 @@
   ],
   "data_reclassify_zero_matches": "此前缀与存档中的任何会话都不匹配。",
   "data_reclassify_conflict": "映射自预览后已更改。影响已刷新；应用前请检查。",
-  "data_reclassify_apply": "保存并应用映射",
-  "data_reclassify_applying": "正在保存并应用…",
-  "data_reclassify_apply_failed": "无法保存并应用映射",
+  "data_reclassify_replaces_rule": "此更正将替换现有的项目映射规则。",
+  "data_reclassify_review_impact": "检查影响",
+  "data_reclassify_back": "返回",
+  "data_reclassify_confirm_save": "确认并保存",
+  "data_reclassify_cancel": "取消",
+  "data_reclassify_apply": "保存更正",
+  "data_reclassify_applying": "正在保存更正…",
+  "data_reclassify_apply_failed": "无法保存更正",
+  "data_reclassify_saved": "已保存 {project} 的项目更正",
+  "data_flash_success_label": "成功",
   "data_reclassify_applied_refresh_failed": "映射已保存，但无法刷新项目清单。请仅重试刷新。",
   "data_reclassify_retry_refresh": "重试刷新",
   "data_reclassify_refreshing": "正在刷新…",
-  "data_reclassify_read_only": "此存储为只读。请在收录此机器会话的可写存档中管理分类规则。",
-  "data_reclassify_managed_in_rules": "可在“规则”视图中编辑在此创建的映射。",
-  "data_reclassify_open_rules": "打开规则",
+  "data_reclassify_read_only": "此处无法进行更改。请打开源 Agents View 管理项目映射规则。",
+  "data_reclassify_managed_in_rules": "此更正将保存为项目映射规则。",
+  "data_reclassify_open_rules": "打开项目映射规则",
   "data_workspace_all_projects": "所有项目",
   "data_workspace_close": "关闭项目详情",
   "data_workspace_activity": "活动",

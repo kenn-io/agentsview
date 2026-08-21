@@ -783,7 +783,7 @@
   "data_projects_heading": "專案",
   "data_view_toggle_label": "資料檢視",
   "data_view_inventory": "清單",
-  "data_view_rules": "規則",
+  "data_view_rules": "專案對應規則",
   "data_summary_projects": [
     {
       "declarations": [
@@ -804,6 +804,28 @@
       ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "{countNumber} 個會話" }
+    }
+  ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 台機器" }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 個資料夾建議" }
     }
   ],
   "data_summary_governed": [
@@ -848,8 +870,15 @@
   "data_reclassify_candidates_failed": "無法尋找工作階段資料夾",
   "data_reclassify_no_candidates": "找不到此項目的工作階段資料夾。",
   "data_reclassify_choose_worktree": "選擇資料夾",
-  "data_mapping_observed_folders": "觀察到的資料夾",
-  "data_mapping_definition": "對應",
+  "data_mapping_observed_folders": "資料夾建議",
+  "data_reclassify_suggestions_intro": "根據此專案中的工作階段建議的路徑。",
+  "data_mapping_definition": "專案更正",
+  "data_reclassify_use_for_project": "用於此專案",
+  "data_reclassify_evidence_snapshot": "快照",
+  "data_reclassify_evidence_aggregate": "彙總",
+  "data_reclassify_evidence_exact_cwd": "精確工作目錄",
+  "data_reclassify_evidence_unavailable": "無可用前綴",
+  "data_reclassify_evidence_suggestion": "建議",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -862,7 +891,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "此資料夾無法安全對應，因為它無法使用或代表檔案系統根目錄。",
-  "data_reclassify_path_prefix": "資料夾路徑",
+  "data_reclassify_path_prefix": "路徑前綴",
   "data_reclassify_target_project": "項目",
   "data_reclassify_use_custom_project": "使用項目「{query}」",
   "data_reclassify_path_unavailable": "路徑無法使用",
@@ -917,15 +946,22 @@
   ],
   "data_reclassify_zero_matches": "此前綴與封存中的任何工作階段都不符合。",
   "data_reclassify_conflict": "對應自預覽後已變更。影響已重新整理；套用前請檢查。",
-  "data_reclassify_apply": "儲存並套用對應",
-  "data_reclassify_applying": "正在儲存並套用…",
-  "data_reclassify_apply_failed": "無法儲存並套用對應",
+  "data_reclassify_replaces_rule": "此更正將取代現有的專案對應規則。",
+  "data_reclassify_review_impact": "檢查影響",
+  "data_reclassify_back": "返回",
+  "data_reclassify_confirm_save": "確認並儲存",
+  "data_reclassify_cancel": "取消",
+  "data_reclassify_apply": "儲存更正",
+  "data_reclassify_applying": "正在儲存更正…",
+  "data_reclassify_apply_failed": "無法儲存更正",
+  "data_reclassify_saved": "已儲存 {project} 的專案更正",
+  "data_flash_success_label": "成功",
   "data_reclassify_applied_refresh_failed": "對應已儲存，但無法重新整理項目清單。請只重試重新整理。",
   "data_reclassify_retry_refresh": "重試重新整理",
   "data_reclassify_refreshing": "正在重新整理…",
-  "data_reclassify_read_only": "此儲存區為唯讀。請在收錄此機器工作階段的可寫入封存中管理分類規則。",
-  "data_reclassify_managed_in_rules": "可在「規則」檢視中編輯在此建立的對應。",
-  "data_reclassify_open_rules": "開啟規則",
+  "data_reclassify_read_only": "此處無法進行變更。請開啟來源 Agents View 管理專案對應規則。",
+  "data_reclassify_managed_in_rules": "此更正將儲存為專案對應規則。",
+  "data_reclassify_open_rules": "開啟專案對應規則",
   "data_workspace_all_projects": "所有專案",
   "data_workspace_close": "關閉專案詳細資訊",
   "data_workspace_activity": "活動",

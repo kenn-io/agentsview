@@ -810,7 +810,7 @@
   "data_projects_heading": "Projects",
   "data_view_toggle_label": "Data view",
   "data_view_inventory": "Inventory",
-  "data_view_rules": "Rules",
+  "data_view_rules": "Project mapping rules",
   "data_summary_projects": [
     {
       "declarations": [
@@ -836,6 +836,34 @@
       "match": {
         "countPlural=one": "{countNumber} session",
         "countPlural=other": "{countNumber} sessions"
+      }
+    }
+  ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} machine",
+        "countPlural=other": "{countNumber} machines"
+      }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} folder suggestion",
+        "countPlural=other": "{countNumber} folder suggestions"
       }
     }
   ],
@@ -887,8 +915,15 @@
   "data_reclassify_candidates_failed": "Failed to find session folders",
   "data_reclassify_no_candidates": "No session folders were found for this project.",
   "data_reclassify_choose_worktree": "Choose a folder",
-  "data_mapping_observed_folders": "Observed folders",
-  "data_mapping_definition": "Mapping",
+  "data_mapping_observed_folders": "Folder suggestions",
+  "data_reclassify_suggestions_intro": "Paths suggested from sessions in this project.",
+  "data_mapping_definition": "Project correction",
+  "data_reclassify_use_for_project": "Use for this project",
+  "data_reclassify_evidence_snapshot": "Snapshot",
+  "data_reclassify_evidence_aggregate": "Aggregate",
+  "data_reclassify_evidence_exact_cwd": "Exact cwd",
+  "data_reclassify_evidence_unavailable": "No usable prefix",
+  "data_reclassify_evidence_suggestion": "Suggestion",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -904,7 +939,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "This folder cannot be mapped safely because it is unavailable or represents a filesystem root.",
-  "data_reclassify_path_prefix": "Folder path",
+  "data_reclassify_path_prefix": "Path prefix",
   "data_reclassify_target_project": "Project",
   "data_reclassify_use_custom_project": "Use project \"{query}\"",
   "data_reclassify_path_unavailable": "Path unavailable",
@@ -971,15 +1006,22 @@
   ],
   "data_reclassify_zero_matches": "This prefix matches no sessions in the archive.",
   "data_reclassify_conflict": "Mappings changed since the preview. The impact has been refreshed; review it before applying.",
-  "data_reclassify_apply": "Save and apply mapping",
-  "data_reclassify_applying": "Saving and applying…",
-  "data_reclassify_apply_failed": "Failed to save and apply mapping",
+  "data_reclassify_replaces_rule": "This correction replaces an existing project mapping rule.",
+  "data_reclassify_review_impact": "Review impact",
+  "data_reclassify_back": "Back",
+  "data_reclassify_confirm_save": "Confirm and save",
+  "data_reclassify_cancel": "Cancel",
+  "data_reclassify_apply": "Save correction",
+  "data_reclassify_applying": "Saving correction…",
+  "data_reclassify_apply_failed": "Failed to save correction",
+  "data_reclassify_saved": "Project correction saved for {project}",
+  "data_flash_success_label": "Success",
   "data_reclassify_applied_refresh_failed": "The mapping was saved, but the project inventory could not refresh. Retry only the refresh.",
   "data_reclassify_retry_refresh": "Retry refresh",
   "data_reclassify_refreshing": "Refreshing…",
-  "data_reclassify_read_only": "This store is read-only. Manage classification rules from the writable archive that ingests this machine's sessions.",
-  "data_reclassify_managed_in_rules": "Mappings created here can be edited in the Rules view.",
-  "data_reclassify_open_rules": "Open Rules",
+  "data_reclassify_read_only": "Changes are unavailable here. Open the Source Agents View to manage project mapping rules.",
+  "data_reclassify_managed_in_rules": "This correction will be saved as a project mapping rule.",
+  "data_reclassify_open_rules": "Open project mapping rules",
   "data_workspace_all_projects": "All projects",
   "data_workspace_close": "Close project details",
   "data_workspace_activity": "Activity",
