@@ -32,7 +32,7 @@
      * component switches machines locally.
      */
     onMachineChange?: (machine: string) => void;
-    onSelectProject: (label: string) => void;
+    onSelectProject?: (label: string) => void;
     /** Called after each successful create/update/delete/apply mutation. */
     onMutated?: () => void;
   }
@@ -49,7 +49,7 @@
     machine: initialMachine = "",
     refreshVersion = 0,
     onMachineChange = undefined,
-    onSelectProject,
+    onSelectProject = undefined,
     onMutated = undefined,
   }: Props = $props();
 
@@ -394,12 +394,14 @@
                 <tr class="rule-row" class:disabled={!mapping.enabled}>
                   <td class="col-prefix" title={mapping.path_prefix}>{mapping.path_prefix}</td>
                   <td>
-                    {#if mapping.project}
+                    {#if mapping.project && onSelectProject}
                       <button
                         class="link-btn"
                         title={m.data_rules_view_project({ project: mapping.project })}
-                        onclick={() => onSelectProject(mapping.project)}
+                        onclick={() => onSelectProject?.(mapping.project)}
                       >{mapping.project}</button>
+                    {:else if mapping.project}
+                      <span>{mapping.project}</span>
                     {:else}
                       <span class="derived-label">{derivedLayoutLabel(mapping)}</span>
                     {/if}

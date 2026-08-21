@@ -96,28 +96,35 @@ afterEach(() => {
 
 describe("hydrateFromUrl", () => {
   it("defaults to the inventory view with no selection or machine", () => {
-    data.hydrateFromUrl({});
+    data.hydrateFromUrl({}, true);
     expect(data.view).toBe("inventory");
     expect(data.selectedProjectKey).toBe("");
     expect(data.rulesMachine).toBe("");
   });
 
   it("selects the project_key param in the inventory view", () => {
-    data.hydrateFromUrl({ project_key: "k1" });
+    data.hydrateFromUrl({ project_key: "k1" }, true);
     expect(data.view).toBe("inventory");
     expect(data.selectedProjectKey).toBe("k1");
   });
 
   it("hydrates the rules view with a machine and clears any selection", () => {
-    data.hydrateFromUrl({ view: "rules", machine: "machine-a" });
+    data.hydrateFromUrl({ view: "rules", machine: "machine-a" }, true);
     expect(data.view).toBe("rules");
     expect(data.rulesMachine).toBe("machine-a");
     expect(data.selectedProjectKey).toBe("");
   });
 
   it("falls back to the inventory view for an unknown view value", () => {
-    data.hydrateFromUrl({ view: "bogus" });
+    data.hydrateFromUrl({ view: "bogus" }, true);
     expect(data.view).toBe("inventory");
+    expect(data.rulesMachine).toBe("");
+  });
+
+  it("keeps a disabled project workspace in the rules view", () => {
+    data.hydrateFromUrl({ project_key: "k1" }, false);
+    expect(data.view).toBe("rules");
+    expect(data.selectedProjectKey).toBe("");
     expect(data.rulesMachine).toBe("");
   });
 });
@@ -228,7 +235,7 @@ describe("attach", () => {
     (routerMod.router as unknown as { params: Record<string, string> }).params = {
       project_key: "k1",
     };
-    detach = data.attach();
+    detach = data.attach(true);
     expect(data.view).toBe("inventory");
     expect(data.selectedProjectKey).toBe("k1");
 
@@ -249,7 +256,7 @@ describe("attach", () => {
 
   it("stops re-hydrating and reloading once the returned detach runs", async () => {
     (routerMod.router as unknown as { params: Record<string, string> }).params = {};
-    detach = data.attach();
+    detach = data.attach(true);
     const release = detach;
     detach = null;
     release();
@@ -270,7 +277,7 @@ describe("attach", () => {
       view: "rules",
     };
     data.inventory = makeInventory([makeRow({ project_key: "before" })]);
-    detach = data.attach();
+    detach = data.attach(true);
 
     const afterSession = makeInventory([
       makeRow({ project_key: "after-session", sessions: 2 }),
