@@ -94,11 +94,11 @@
       {/each}
     </div>
 
-    {#if savingsLabel === "saved"}
+    {#if !usage.isTimeRangeSummaryProvisional && savingsLabel === "saved"}
       <div class="savings-callout saved">
         {m.usage_saved_vs_uncached({ cost: formatMoney(savings) })}
       </div>
-    {:else if savingsLabel === "costlier"}
+    {:else if !usage.isTimeRangeSummaryProvisional && savingsLabel === "costlier"}
       <div class="savings-callout costlier">
         {m.usage_more_than_uncached({ cost: formatMoney(moneyFromMicrodollars(Math.abs(savings.microdollars))) })}
       </div>

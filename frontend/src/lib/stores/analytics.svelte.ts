@@ -300,6 +300,7 @@ class AnalyticsStore {
 
   clearDate() {
     this.selectedDate = null;
+    this.clearDrilldownData();
     this.fetchSummary();
     this.fetchProjects();
     this.fetchSessionShape();
@@ -746,6 +747,10 @@ class AnalyticsStore {
   async fetchSignalsForQuality() {
     this.rollDates();
     this.selectedDate = null;
+    if (this.selectedActivityRange !== null) {
+      this.selectedActivityRange = null;
+      this.restoreSessionsParentRange();
+    }
     this.selectedDow = null;
     this.selectedHour = null;
     // The Quality page has no model control and the model filter is an
@@ -788,7 +793,9 @@ class AnalyticsStore {
   }
 
   setActivitySelection(from: string, to: string) {
+    this.selectedDate = null;
     this.selectedActivityRange = { from, to };
+    this.clearDrilldownData();
     sessions.applyPanelDateFilters({ date_from: from, date_to: to }, null);
     sessions.activeSessionId = null;
     sessions.load();
@@ -806,12 +813,8 @@ class AnalyticsStore {
   clearActivitySelection() {
     if (this.selectedActivityRange === null) return;
     this.selectedActivityRange = null;
-    sessions.applyPanelDateFilters(
-      { date_from: this.from, date_to: this.to },
-      this.isPinned ? null : this.windowDays,
-    );
-    sessions.activeSessionId = null;
-    sessions.load();
+    this.clearDrilldownData();
+    this.restoreSessionsParentRange();
     this.fetchSummary();
     this.fetchProjects();
     this.fetchHourOfWeek();
@@ -834,11 +837,16 @@ class AnalyticsStore {
   }
 
   selectDate(date: string) {
+    if (this.selectedActivityRange !== null) {
+      this.selectedActivityRange = null;
+      this.restoreSessionsParentRange();
+    }
     if (this.selectedDate === date) {
       this.selectedDate = null;
     } else {
       this.selectedDate = date;
     }
+    this.clearDrilldownData();
     this.fetchSummary();
     this.fetchProjects();
     this.fetchSessionShape();
@@ -847,6 +855,27 @@ class AnalyticsStore {
     this.fetchSkills();
     this.fetchTopSessions();
     this.fetchSignals();
+  }
+
+  private restoreSessionsParentRange() {
+    sessions.applyPanelDateFilters(
+      { date_from: this.from, date_to: this.to },
+      this.isPinned ? null : this.windowDays,
+    );
+    sessions.activeSessionId = null;
+    void sessions.load();
+  }
+
+  private clearDrilldownData() {
+    this.summary = null;
+    this.projects = null;
+    this.hourOfWeek = null;
+    this.sessionShape = null;
+    this.velocity = null;
+    this.tools = null;
+    this.skills = null;
+    this.topSessions = null;
+    this.signals = null;
   }
 
   setGranularity(g: Granularity) {

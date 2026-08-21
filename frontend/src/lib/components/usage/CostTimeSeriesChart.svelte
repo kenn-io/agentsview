@@ -286,6 +286,21 @@
       usage.setTimeRange(from, to);
     }
   }
+
+  function handleKeyboardRangeSubmit(event: SubmitEvent) {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    const from = String(data.get("from") ?? "");
+    const to = String(data.get("to") ?? "");
+    if (
+      from < to &&
+      seriesData.points.some((point) => point.date === from) &&
+      seriesData.points.some((point) => point.date === to)
+    ) {
+      usage.setTimeRange(from, to);
+    }
+  }
 </script>
 
 <div class="chart-container">
@@ -296,6 +311,40 @@
         : m.usage_cost_over_time_title()}
     </h3>
     <div class="chart-actions">
+      <form
+        class="keyboard-range"
+        aria-label={m.shared_range_select_date_range()}
+        onsubmit={handleKeyboardRangeSubmit}
+      >
+        <label>
+          <span>{m.shared_range_from()}</span>
+          <input
+            type="date"
+            name="from"
+            min={seriesData.points[0]?.date}
+            max={seriesData.points.at(-1)?.date}
+            value={usage.selectedTimeRange?.from ?? seriesData.points[0]?.date ?? ""}
+            required
+          />
+        </label>
+        <label>
+          <span>{m.shared_range_to()}</span>
+          <input
+            type="date"
+            name="to"
+            min={seriesData.points[0]?.date}
+            max={seriesData.points.at(-1)?.date}
+            value={usage.selectedTimeRange?.to ?? seriesData.points.at(-1)?.date ?? ""}
+            required
+          />
+        </label>
+        <Button
+          type="submit"
+          size="sm"
+          surface="soft"
+          label={m.shared_range_select_date_range()}
+        />
+      </form>
       {#if usage.selectedTimeRange}
         <Button
           size="sm"
@@ -408,6 +457,7 @@
   }
 
   .chart-header {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -432,6 +482,60 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .keyboard-range {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .keyboard-range:focus-within {
+    z-index: 3;
+    top: calc(100% + 4px);
+    right: 0;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 8px;
+    overflow: visible;
+    clip: auto;
+    display: flex;
+    align-items: end;
+    gap: 8px;
+    white-space: normal;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md);
+  }
+
+  .keyboard-range label {
+    display: grid;
+    gap: 3px;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .keyboard-range input {
+    min-height: 24px;
+    padding: 2px 6px;
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--bg-inset);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+  }
+
+  .keyboard-range input:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
   }
 
   .toggle-btn {

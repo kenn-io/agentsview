@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
@@ -13,6 +13,7 @@ import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 import { setLocale } from "../../i18n/index.js";
 
 const OBSERVED_WIDTH = 1648;
+const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
 
 class ImmediateResizeObserver implements ResizeObserver {
   private readonly callback: ResizeObserverCallback;
@@ -153,6 +154,7 @@ describe("CostTimeSeriesChart", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     usage.summary = null;
     usage.selectedTimeRange = null;
     usage.mode = "cost";
@@ -160,6 +162,9 @@ describe("CostTimeSeriesChart", () => {
     settings.chartPalette = "agentsview";
     setLocale("en");
     document.body.innerHTML = "";
+    if (originalClientWidth) {
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", originalClientWidth);
+    }
   });
 
   it("renders localized French currency labels", async () => {
@@ -239,6 +244,65 @@ describe("CostTimeSeriesChart", () => {
       expect(document.querySelector(".usage-brush-range")).toBeNull();
     });
 
+    unmount(component);
+  });
+
+  it("commits a pointer brush through the chart boundary", async () => {
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => OBSERVED_WIDTH,
+    });
+    const setTimeRange = vi.spyOn(usage, "setTimeRange").mockImplementation(() => {});
+    const component = mountChart();
+    await tick();
+    await tick();
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".lc-brush-context")).not.toBeNull();
+    });
+    const brush = document.querySelector<HTMLElement>(".lc-brush-context")!;
+    expect(Number.parseFloat(brush.style.width)).toBeGreaterThan(0);
+    vi.spyOn(brush, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: OBSERVED_WIDTH,
+      bottom: 180,
+      width: OBSERVED_WIDTH,
+      height: 180,
+      toJSON: () => ({}),
+    });
+
+    brush.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true, clientX: 390, clientY: 60 }),
+    );
+    window.dispatchEvent(
+      new MouseEvent("pointermove", { bubbles: true, clientX: 730, clientY: 60 }),
+    );
+    await tick();
+    expect(document.querySelector(".usage-brush-range")).not.toBeNull();
+    brush.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, clientX: 730, clientY: 60 }));
+    await tick();
+
+    expect(setTimeRange).toHaveBeenCalledOnce();
+    expect(setTimeRange.mock.calls[0]?.[0]).not.toBe(setTimeRange.mock.calls[0]?.[1]);
+    unmount(component);
+  });
+
+  it("commits a date range from keyboard-accessible controls", async () => {
+    const setTimeRange = vi.spyOn(usage, "setTimeRange").mockImplementation(() => {});
+    const component = mountChart();
+    await tick();
+
+    const form = document.querySelector<HTMLFormElement>("form.keyboard-range")!;
+    const from = form.elements.namedItem("from") as HTMLInputElement;
+    const to = form.elements.namedItem("to") as HTMLInputElement;
+    from.value = "2026-06-07";
+    to.value = "2026-06-10";
+    form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+
+    expect(setTimeRange).toHaveBeenCalledExactlyOnceWith("2026-06-07", "2026-06-10");
     unmount(component);
   });
 

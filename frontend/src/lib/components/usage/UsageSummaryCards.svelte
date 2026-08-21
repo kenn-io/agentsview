@@ -209,9 +209,7 @@
           label: () => m.analytics_summary_projects(),
           value: () =>
             String(
-              Object.keys(
-                usage.summary?.sessionCounts.byProject ?? {},
-              ).length,
+              usage.summary?.projectTotals.length ?? 0,
             ),
         },
         {
@@ -273,9 +271,7 @@
         label: () => m.analytics_summary_projects(),
         value: () =>
           String(
-            Object.keys(
-              usage.summary?.sessionCounts.byProject ?? {},
-            ).length,
+            usage.summary?.projectTotals.length ?? 0,
           ),
       },
       {

@@ -219,6 +219,7 @@
     const first = chart.bars[start];
     const last = chart.bars[end];
     if (!first || !last) return;
+    const from = first.date < analytics.from ? analytics.from : first.date;
     let to = last.date;
     if (analytics.granularity === "week") {
       to = addDays(to, 6);
@@ -226,7 +227,7 @@
       to = endOfMonth(to);
     }
     if (to > analytics.to) to = analytics.to;
-    commitDateRange(first.date, to);
+    commitDateRange(from, to);
   }
 
   function focusBar(index: number) {

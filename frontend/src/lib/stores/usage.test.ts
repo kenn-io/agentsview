@@ -1513,6 +1513,38 @@ describe("UsageStore time-series range selection", () => {
     expect(usage.summary?.daily.map((day) => day.date)).toEqual(["2026-06-08", "2026-06-09"]);
   });
 
+  it("restores the parent summary when the selected-range request fails", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    const context = usageSummary(15);
+    usage.summary = context;
+    usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("range request failed"));
+
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+
+    await vi.waitFor(() => {
+      expect(usage.errors.summary).toBe("range request failed");
+    });
+    expect(usage.selectedTimeRange).toBeNull();
+    expect(usage.summary).toEqual(context);
+    expect(usage.timeSeriesSummary).toEqual(context);
+  });
+
+  it("clears an active brush before applying a non-date filter", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = usageSummary(15);
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+    vi.clearAllMocks();
+
+    usage.toggleModel("model-a");
+
+    expect(usage.selectedTimeRange).toBeNull();
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ from: "2026-06-04", to: "2026-06-18", model: "model-a" }),
+    );
+  });
+
   it("clears the brush and refetches the parent window", async () => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");

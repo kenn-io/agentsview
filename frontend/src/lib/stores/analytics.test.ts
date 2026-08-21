@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { analytics } from "./analytics.svelte.js";
 import { sessions } from "./sessions.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
@@ -577,6 +577,54 @@ describe("AnalyticsStore activity range selection", () => {
       expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
     );
   });
+
+  it("replaces a selected heatmap date with the brushed range", () => {
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    analytics.selectDate("2024-01-15");
+    vi.clearAllMocks();
+    mockAllAPIs();
+
+    analytics.setActivitySelection("2024-01-10", "2024-01-12");
+
+    expect(analytics.selectedDate).toBeNull();
+    expect(analytics.selectedActivityRange).toEqual({
+      from: "2024-01-10",
+      to: "2024-01-12",
+    });
+    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ from: "2024-01-10", to: "2024-01-12" }),
+    );
+  });
+
+  it("replaces a brushed range with a heatmap date and restores Sessions", () => {
+    const loadSessions = vi.spyOn(sessions, "load").mockResolvedValue();
+    analytics.setActivitySelection("2024-01-10", "2024-01-12");
+    vi.clearAllMocks();
+    mockAllAPIs();
+
+    analytics.selectDate("2024-01-15");
+
+    expect(analytics.selectedActivityRange).toBeNull();
+    expect(analytics.selectedDate).toBe("2024-01-15");
+    expect(sessions.filters.dateFrom).toBe("2024-01-01");
+    expect(sessions.filters.dateTo).toBe("2024-01-31");
+    expect(loadSessions).toHaveBeenCalledOnce();
+  });
+
+  it("does not retain parent summary data when a brushed-range request fails", async () => {
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    analytics.summary = makeSummary();
+    analyticsService.getApiV1AnalyticsSummary.mockRejectedValueOnce(
+      new Error("range request failed"),
+    );
+
+    analytics.setActivitySelection("2024-01-10", "2024-01-12");
+
+    await vi.waitFor(() => {
+      expect(analytics.errors.summary).toBe("range request failed");
+    });
+    expect(analytics.summary).toBeNull();
+  });
 });
 
 describe("AnalyticsStore.clearDate", () => {
@@ -1148,12 +1196,17 @@ describe("AnalyticsStore rolling default date range", () => {
     analytics.to = "2026-04-30";
     analytics.isPinned = true;
     analytics.selectedDate = "2026-04-12";
+    analytics.selectedActivityRange = {
+      from: "2026-04-08",
+      to: "2026-04-14",
+    };
     analytics.selectedDow = 2;
     analytics.selectedHour = 16;
 
     await analytics.fetchSignalsForQuality();
 
     expect(analytics.selectedDate).toBeNull();
+    expect(analytics.selectedActivityRange).toBeNull();
     expect(analytics.selectedDow).toBeNull();
     expect(analytics.selectedHour).toBeNull();
     expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenCalledWith(

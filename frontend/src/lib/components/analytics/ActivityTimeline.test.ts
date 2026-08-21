@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 import ActivityTimeline from "./ActivityTimeline.svelte";
@@ -293,6 +293,51 @@ describe("ActivityTimeline", () => {
     await tick();
 
     expect(onRangeSelect).toHaveBeenCalledWith("2026-08-01", "2026-08-02");
+    unmount(component);
+  });
+
+  it("clips a keyboard week selection to a partial leading window", async () => {
+    analytics.from = "2026-08-05";
+    analytics.to = "2026-08-16";
+    analytics.granularity = "week";
+    analytics.activity = {
+      granularity: "week",
+      series: [
+        {
+          date: "2026-08-03",
+          sessions: 1,
+          messages: 2,
+          user_messages: 1,
+          assistant_messages: 1,
+          tool_calls: 0,
+          thinking_messages: 0,
+          by_agent: {},
+        },
+        {
+          date: "2026-08-10",
+          sessions: 1,
+          messages: 2,
+          user_messages: 1,
+          assistant_messages: 1,
+          tool_calls: 0,
+          thinking_messages: 0,
+          by_agent: {},
+        },
+      ],
+    };
+    const onRangeSelect = vi.fn();
+
+    const component = mount(ActivityTimeline, {
+      target: document.body,
+      props: { onRangeSelect },
+    });
+    await tick();
+
+    document
+      .querySelector<SVGRectElement>("rect.bar")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(onRangeSelect).toHaveBeenCalledWith("2026-08-05", "2026-08-09");
     unmount(component);
   });
 

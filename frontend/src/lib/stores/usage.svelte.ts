@@ -304,6 +304,7 @@ function summaryForDateRange(
       hitRate: cacheHitDenominator > 0 ? cacheReadTokens / cacheHitDenominator : 0,
       savingsVsUncached: { microdollars: 0 },
     },
+    unsupportedUsage: undefined,
     comparison: undefined,
   };
 }
@@ -338,6 +339,7 @@ class UsageStore {
 
   summary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
+  isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<UsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
   topSessions = $state<TopUsageSessionsResponse | null>(null);
@@ -519,6 +521,7 @@ class UsageStore {
   applyDateRange(from: string, to: string) {
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
+    this.isTimeRangeSummaryProvisional = false;
     this.isPinned = true;
     this.from = from;
     this.to = to;
@@ -527,6 +530,7 @@ class UsageStore {
   applyRollingWindow(days: number) {
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
+    this.isTimeRangeSummaryProvisional = false;
     this.windowDays = days;
     this.isPinned = false;
     this.rollDates();
@@ -555,8 +559,9 @@ class UsageStore {
     this.selectedTimeRange = { from, to };
     if (this.timeSeriesContextSummary) {
       this.summary = summaryForDateRange(this.timeSeriesContextSummary, from, to);
+      this.isTimeRangeSummaryProvisional = true;
     }
-    void this.fetchAll();
+    void this.fetchAll({ preserveTimeRange: true });
   }
 
   clearTimeRange() {
@@ -566,6 +571,7 @@ class UsageStore {
       this.summary = this.timeSeriesContextSummary;
       this.timeSeriesContextSummary = null;
     }
+    this.isTimeRangeSummaryProvisional = false;
     void this.fetchAll();
   }
 
@@ -767,7 +773,15 @@ class UsageStore {
     this.to = to;
   }
 
-  async fetchAll() {
+  async fetchAll(options: { preserveTimeRange?: boolean } = {}) {
+    if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
+      this.selectedTimeRange = null;
+      if (this.timeSeriesContextSummary) {
+        this.summary = this.timeSeriesContextSummary;
+        this.timeSeriesContextSummary = null;
+      }
+      this.isTimeRangeSummaryProvisional = false;
+    }
     const fetchVersion = ++this.fetchAllVersion;
     this.invalidatePanel("pairwise");
     this.invalidatePanel("topSessions");
@@ -836,6 +850,7 @@ class UsageStore {
       )) as unknown as UsageSummaryResponse;
       if (this.versions.summary === v) {
         this.summary = data;
+        this.isTimeRangeSummaryProvisional = false;
         if (this.selectedTimeRange === null) {
           this.timeSeriesContextSummary = null;
         }
@@ -877,10 +892,17 @@ class UsageStore {
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
       }
       if (this.versions.summary === v) {
-        // On refetch failure with cached data, swallow the error so
-        // existing values stay visible instead of flipping to a "--"
-        // error state. First-load failures still surface.
-        if (this.summary === null) {
+        // A selected-range summary is synthesized from daily data while the
+        // request is in flight. If that request fails, restore the parent
+        // window rather than leaving provisional values under an active brush.
+        // Other cached refetch failures keep their existing values visible.
+        if (this.selectedTimeRange !== null && this.timeSeriesContextSummary !== null) {
+          this.summary = this.timeSeriesContextSummary;
+          this.selectedTimeRange = null;
+          this.timeSeriesContextSummary = null;
+          this.isTimeRangeSummaryProvisional = false;
+          this.errors.summary = e instanceof Error ? e.message : "Failed to load";
+        } else if (this.summary === null) {
           this.errors.summary = e instanceof Error ? e.message : "Failed to load";
         } else {
           console.warn("usage.fetchSummary refetch failed:", e);
