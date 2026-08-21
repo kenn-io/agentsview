@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +18,7 @@ func TestIssue1418WorkspaceAppearsWithoutTranscriptChange(t *testing.T) {
 	root := t.TempDir()
 	workspaceRoot := cursorWorkspaceTempDir(t)
 	workspace := filepath.Join(workspaceRoot, "Code", "app")
-	projectDir := encodeIssue1418ProjectDir(workspace)
+	projectDir := encodeCursorProjectDir(workspace)
 	sessionID := "dddddddd-eeee-4fff-8000-111111111111"
 	path := filepath.Join(root, projectDir, "agent-transcripts", sessionID+".jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -54,22 +53,4 @@ func TestIssue1418WorkspaceAppearsWithoutTranscriptChange(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, second)
 	assert.Equal(t, workspace, second.Cwd)
-}
-
-func encodeIssue1418ProjectDir(path string) string {
-	path = filepath.Clean(path)
-	volume := filepath.VolumeName(path)
-	path = strings.TrimLeft(strings.TrimPrefix(path, volume), `/\`)
-	parts := make([]string, 0)
-	if volume != "" {
-		parts = append(parts, strings.TrimSuffix(volume, ":"))
-	}
-	for _, component := range strings.FieldsFunc(path, func(r rune) bool {
-		return r == '/' || r == '\\'
-	}) {
-		if component != "" {
-			parts = append(parts, component)
-		}
-	}
-	return strings.Join(parts, "-")
 }
