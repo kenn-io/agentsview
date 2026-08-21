@@ -40,7 +40,7 @@ test.describe("Usage page", () => {
     ).toBeVisible();
   });
 
-  test("keeps the chart fixed when a brush adds the clear action", async ({
+  test("keeps summary cards and the chart fixed through brush selection", async ({
     page,
   }) => {
     await expect(
@@ -50,16 +50,32 @@ test.describe("Usage page", () => {
     const chart = page.locator(".chart-container").first();
     const plot = chart.locator("svg").first();
     const brush = chart.locator(".lc-brush-context");
+    const summaryRow = page.locator(".summary-cards");
+    const summaryCards = summaryRow.locator(".card");
     await expect(plot).toBeVisible({ timeout: 10_000 });
     await expect(brush).toBeVisible({ timeout: 10_000 });
 
-    const chartBefore = await chart.boundingBox();
-    const before = await plot.boundingBox();
+    const measureLayout = async () => {
+      const row = await summaryRow.boundingBox();
+      const chartBox = await chart.boundingBox();
+      const plotBox = await plot.boundingBox();
+      const cardBoxes = await summaryCards.evaluateAll((cards) =>
+        cards.map((card) => card.getBoundingClientRect().height),
+      );
+      expect(row).not.toBeNull();
+      expect(chartBox).not.toBeNull();
+      expect(plotBox).not.toBeNull();
+      if (!row || !chartBox || !plotBox) {
+        throw new Error("Usage layout is not measurable");
+      }
+      expect(new Set(cardBoxes).size).toBe(1);
+      return { row, chart: chartBox, plot: plotBox, cardBoxes };
+    };
+
+    const beforeLayout = await measureLayout();
     const brushBounds = await brush.boundingBox();
-    expect(chartBefore).not.toBeNull();
-    expect(before).not.toBeNull();
     expect(brushBounds).not.toBeNull();
-    if (!chartBefore || !before || !brushBounds) return;
+    if (!brushBounds) return;
 
     const y = brushBounds.y + brushBounds.height / 2;
     await page.mouse.move(
@@ -77,14 +93,26 @@ test.describe("Usage page", () => {
     await expect(
       chart.getByRole("button", { name: "Clear selection" }),
     ).toBeVisible();
-    const chartAfter = await chart.boundingBox();
-    const after = await plot.boundingBox();
-    expect(chartAfter).not.toBeNull();
-    expect(after).not.toBeNull();
-    if (!chartAfter || !after) return;
-    expect(after.y - chartAfter.y).toBe(
-      before.y - chartBefore.y,
+    const selectedLayout = await measureLayout();
+    expect(selectedLayout.plot.y - selectedLayout.chart.y).toBe(
+      beforeLayout.plot.y - beforeLayout.chart.y,
     );
+    expect(selectedLayout.cardBoxes).toEqual(beforeLayout.cardBoxes);
+    expect(selectedLayout.row.height).toBe(beforeLayout.row.height);
+    expect(selectedLayout.chart.y).toBe(beforeLayout.chart.y);
+    expect(selectedLayout.plot.y).toBe(beforeLayout.plot.y);
+
+    await chart
+      .getByRole("button", { name: "Clear selection" })
+      .click();
+    await expect(
+      chart.getByRole("button", { name: "Clear selection" }),
+    ).toBeHidden();
+    const clearedLayout = await measureLayout();
+    expect(clearedLayout.cardBoxes).toEqual(beforeLayout.cardBoxes);
+    expect(clearedLayout.row.height).toBe(beforeLayout.row.height);
+    expect(clearedLayout.chart.y).toBe(beforeLayout.chart.y);
+    expect(clearedLayout.plot.y).toBe(beforeLayout.plot.y);
   });
 
   test("shows attribution panel with treemap", async ({

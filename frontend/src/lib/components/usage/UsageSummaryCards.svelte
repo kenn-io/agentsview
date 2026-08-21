@@ -334,6 +334,7 @@
   .summary-cards :global(.card) {
     flex: 1;
     min-width: 120px;
+    height: 90px;
     padding: 12px;
     display: flex;
     flex-direction: column;
