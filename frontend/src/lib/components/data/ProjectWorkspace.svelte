@@ -126,7 +126,7 @@
   .project-facts {
     display: flex;
     flex-wrap: wrap;
-    gap: 14px;
+    gap: var(--space-6);
     margin-top: 7px;
     color: var(--text-muted);
     font-size: 10px;
