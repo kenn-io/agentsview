@@ -813,7 +813,7 @@
   "data_projects_heading": "プロジェクト",
   "data_view_toggle_label": "データビュー",
   "data_view_inventory": "インベントリ",
-  "data_view_rules": "ルール",
+  "data_view_rules": "プロジェクトマッピングルール",
   "data_summary_projects": [
     {
       "declarations": [
@@ -839,6 +839,34 @@
       "match": {
         "countPlural=one": "{countNumber} セッション",
         "countPlural=other": "{countNumber} セッション"
+      }
+    }
+  ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 台のマシン",
+        "countPlural=other": "{countNumber} 台のマシン"
+      }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 件のフォルダー候補",
+        "countPlural=other": "{countNumber} 件のフォルダー候補"
       }
     }
   ],
@@ -890,8 +918,15 @@
   "data_reclassify_candidates_failed": "セッションフォルダーが見つかりませんでした",
   "data_reclassify_no_candidates": "このプロジェクトのセッション フォルダーが見つかりませんでした。",
   "data_reclassify_choose_worktree": "フォルダーを選択してください",
-  "data_mapping_observed_folders": "監視フォルダー",
-  "data_mapping_definition": "マッピング",
+  "data_mapping_observed_folders": "フォルダー候補",
+  "data_reclassify_suggestions_intro": "このプロジェクトのセッションから提案されたパスです。",
+  "data_mapping_definition": "プロジェクトの修正",
+  "data_reclassify_use_for_project": "このプロジェクトに使用",
+  "data_reclassify_evidence_snapshot": "スナップショット",
+  "data_reclassify_evidence_aggregate": "集計",
+  "data_reclassify_evidence_exact_cwd": "正確な cwd",
+  "data_reclassify_evidence_unavailable": "使用可能な接頭辞なし",
+  "data_reclassify_evidence_suggestion": "候補",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -907,7 +942,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "このフォルダーは使用できないか、ファイルシステムのルートを表すため、安全にマップできません。",
-  "data_reclassify_path_prefix": "フォルダーパス",
+  "data_reclassify_path_prefix": "パス接頭辞",
   "data_reclassify_target_project": "プロジェクト",
   "data_reclassify_use_custom_project": "プロジェクト「{query}」を使用します",
   "data_reclassify_path_unavailable": "パスが利用できません",
@@ -974,15 +1009,22 @@
   ],
   "data_reclassify_zero_matches": "このプレフィックスは、アーカイブ内のどのセッションにも一致しません。",
   "data_reclassify_conflict": "プレビュー以降、マッピングが変更されました。影響範囲を更新しました。適用前に確認してください。",
-  "data_reclassify_apply": "マッピングを保存して適用する",
-  "data_reclassify_applying": "保存して適用…",
-  "data_reclassify_apply_failed": "マッピングの保存と適用に失敗しました",
+  "data_reclassify_replaces_rule": "この修正は既存のプロジェクトマッピングルールを置き換えます。",
+  "data_reclassify_review_impact": "影響を確認",
+  "data_reclassify_back": "戻る",
+  "data_reclassify_confirm_save": "確認して保存",
+  "data_reclassify_cancel": "キャンセル",
+  "data_reclassify_apply": "修正を保存",
+  "data_reclassify_applying": "修正を保存中…",
+  "data_reclassify_apply_failed": "修正を保存できませんでした",
+  "data_reclassify_saved": "{project} のプロジェクト修正を保存しました",
+  "data_flash_success_label": "成功",
   "data_reclassify_applied_refresh_failed": "マッピングは保存されましたが、プロジェクト インベントリを更新できませんでした。更新のみを再試行します。",
   "data_reclassify_retry_refresh": "リフレッシュを再試行する",
   "data_reclassify_refreshing": "更新中…",
-  "data_reclassify_read_only": "このストアは読み取り専用です。このマシンのセッションを取り込む書き込み可能なアーカイブから分類ルールを管理します。",
-  "data_reclassify_managed_in_rules": "ここで作成したマッピングは、ルール ビューで編集できます。",
-  "data_reclassify_open_rules": "ルールを開く",
+  "data_reclassify_read_only": "ここでは変更できません。ソース Agents View を開いてプロジェクトマッピングルールを管理してください。",
+  "data_reclassify_managed_in_rules": "この修正はプロジェクトマッピングルールとして保存されます。",
+  "data_reclassify_open_rules": "プロジェクトマッピングルールを開く",
   "data_workspace_all_projects": "すべてのプロジェクト",
   "data_workspace_close": "プロジェクトの詳細を閉じる",
   "data_workspace_activity": "活動",

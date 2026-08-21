@@ -30,9 +30,7 @@
     | "label"
     | "sessions"
     | "machines"
-    | "agents"
     | "distinct_cwds"
-    | "first_activity"
     | "last_activity"
     | "rules_targeting";
   type SortDir = "asc" | "desc";
@@ -59,12 +57,8 @@
         return a.sessions - b.sessions;
       case "machines":
         return a.machines - b.machines;
-      case "agents":
-        return a.agents - b.agents;
       case "distinct_cwds":
         return a.distinct_cwds - b.distinct_cwds;
-      case "first_activity":
-        return (a.first_activity ?? "").localeCompare(b.first_activity ?? "");
       case "last_activity":
         return (a.last_activity ?? "").localeCompare(b.last_activity ?? "");
       case "rules_targeting":
@@ -115,9 +109,7 @@
   const columns: Column[] = $derived([
     { key: "sessions", label: m.data_col_sessions(), numeric: true },
     { key: "machines", label: m.data_col_machines(), numeric: true },
-    { key: "agents", label: m.data_col_agents(), numeric: true },
     { key: "distinct_cwds", label: m.data_col_cwds(), numeric: true },
-    { key: "first_activity", label: m.data_col_first_activity() },
     { key: "last_activity", label: m.data_col_last_activity() },
     { key: "rules_targeting", label: m.data_col_rules(), numeric: true },
   ]);
@@ -179,9 +171,7 @@
               </td>
               <td class="col-num">{formatNumber(row.sessions)}</td>
               <td class="col-num">{formatNumber(row.machines)}</td>
-              <td class="col-num">{formatNumber(row.agents)}</td>
               <td class="col-num">{formatNumber(row.distinct_cwds)}</td>
-              <td>{fmtDate(row.first_activity)}</td>
               <td>{fmtDate(row.last_activity)}</td>
               <td class="col-num">
                 {row.enabled_rules_targeting > 0 ? formatNumber(row.enabled_rules_targeting) : "—"}
@@ -199,16 +189,17 @@
 <style>
   .inventory-table {
     display: flex;
+    height: 100%;
     flex-direction: column;
     gap: 8px;
     min-width: 0;
+    padding: 10px;
   }
 
   .table-scroll {
-    max-height: 480px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
   }
 
   .table {
@@ -231,7 +222,7 @@
   }
 
   tbody td {
-    padding: 5px 8px;
+    padding: 7px 8px;
     border-bottom: 1px solid var(--border-muted);
     color: var(--text-secondary);
     white-space: nowrap;
@@ -247,7 +238,7 @@
   }
 
   .project-row.selected {
-    background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+    background: color-mix(in srgb, var(--accent-blue) 11%, var(--bg-surface));
   }
 
   .project-row:focus-visible {

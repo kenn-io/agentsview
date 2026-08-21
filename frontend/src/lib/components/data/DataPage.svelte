@@ -8,7 +8,12 @@
   import ProjectInventoryTable from "./ProjectInventoryTable.svelte";
   import ProjectWorkspace from "./ProjectWorkspace.svelte";
   import WorktreeMappingRules from "./WorktreeMappingRules.svelte";
-  import { SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
+  import {
+    FlashBanner,
+    SegmentedControl,
+    showFlash,
+    type SegmentedControlOption,
+  } from "@kenn-io/kit-ui";
   import { PROJECT_MAPPING_WORKSPACE_ENABLED } from "../../feature-flags.js";
 
   interface Props {
@@ -66,6 +71,11 @@
     });
   }
 
+  function completeCorrection(target: string) {
+    workspaceGeneration += 1;
+    showFlash(m.data_reclassify_saved({ project: target }), { tone: "success" });
+  }
+
   onMount(() => {
     const detach = data.attach(projectWorkspaceEnabled);
     if (projectWorkspaceEnabled) void data.load();
@@ -77,6 +87,7 @@
 </script>
 
 <div class="data-page">
+  <FlashBanner toneLabels={{ success: m.data_flash_success_label() }} />
   {#if projectWorkspaceEnabled}
     <div class="data-header">
       <h2>{m.data_projects_heading()}</h2>
@@ -139,7 +150,7 @@
                 readOnly={dataReadOnly}
                 onClose={closeWorkspace}
                 onRefresh={(key, target) => data.refreshAfterApply(key, target)}
-                onComplete={() => (workspaceGeneration += 1)}
+                onComplete={completeCorrection}
                 onOpenRules={(machine) => data.showRules(machine)}
               />
             {/key}
@@ -165,7 +176,7 @@
     gap: 12px;
     padding: 12px;
     min-height: 0;
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   .data-header {
@@ -186,23 +197,25 @@
     gap: 16px;
     font-size: 11px;
     color: var(--text-muted);
+    padding: 0 2px;
   }
 
   .split {
-    display: flex;
-    gap: 12px;
+    display: grid;
+    grid-template-columns: minmax(380px, 1.15fr) minmax(340px, 0.85fr);
+    gap: 10px;
     min-height: 0;
     flex: 1;
   }
 
-  .pane-table {
-    flex: 1 1 55%;
-    min-width: 0;
-  }
-
+  .pane-table,
   .pane-detail {
-    flex: 1 1 45%;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
   }
 
   @media (max-width: 760px) {
@@ -211,7 +224,7 @@
     }
 
     .pane-detail {
-      flex-basis: 100%;
+      grid-column: 1 / -1;
     }
   }
 
