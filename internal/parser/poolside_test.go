@@ -464,8 +464,10 @@ func TestParsePoolsideShellEnrichment(t *testing.T) {
 	}
 
 	require.NotNil(t, shellStatusTC, "shell_status tool call not found")
-	assert.Contains(t, shellStatusTC.InputJSON, "npm test", "shell_status should have enriched cmd")
-	assert.Contains(t, shellStatusTC.InputJSON, "shell-npm-test", "shell_status should have shell_id")
+	assert.Equal(t,
+		`{"cmd":"npm test","shell_id":"shell-npm-test"}`,
+		shellStatusTC.InputJSON,
+	)
 }
 
 func TestParsePoolsideDeniedToolCall(t *testing.T) {

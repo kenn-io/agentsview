@@ -1752,7 +1752,7 @@ func buildKiloLegacyMCPInputJSON(toolData map[string]any) string {
 				}
 			}
 		case map[string]any, []any:
-			if b, err := json.Marshal(v); err == nil {
+			if b, err := json.Marshal(v, json.Deterministic(true)); err == nil {
 				return string(b)
 			}
 		}
@@ -1764,7 +1764,7 @@ func buildKiloLegacyMCPInputJSON(toolData map[string]any) string {
 		}
 		env[k] = val
 	}
-	if b, err := json.Marshal(env); err == nil {
+	if b, err := json.Marshal(env, json.Deterministic(true)); err == nil {
 		return string(b)
 	}
 	return "{}"

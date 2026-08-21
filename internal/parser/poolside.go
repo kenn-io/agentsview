@@ -355,7 +355,9 @@ func parsePoolsideSession(
 								"shell_id": args.ShellID,
 								"cmd":      cmd,
 							}
-							if data, err := json.Marshal(enriched); err == nil {
+							if data, err := json.Marshal(
+								enriched, json.Deterministic(true),
+							); err == nil {
 								inputJSON = string(data)
 							}
 						}

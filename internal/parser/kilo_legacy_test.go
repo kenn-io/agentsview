@@ -466,6 +466,21 @@ func TestParseKiloLegacyMCPToolCallUnit(t *testing.T) {
 	assert.Equal(t, "Read", tcLegacy.Category)
 }
 
+func TestBuildKiloLegacyMCPInputJSONDeterministic(t *testing.T) {
+	assert.Equal(t, `{"a":1,"z":2}`, buildKiloLegacyMCPInputJSON(
+		map[string]any{
+			"arguments": map[string]any{"z": 2, "a": 1},
+		},
+	))
+	assert.Equal(t,
+		`{"arguments":"invalid","serverName":"srv","toolName":"tool"}`,
+		buildKiloLegacyMCPInputJSON(map[string]any{
+			"type": "use_mcp_tool", "toolName": "tool",
+			"serverName": "srv", "arguments": "invalid",
+		}),
+	)
+}
+
 func TestParseKiloLegacySessionCompactBoundaryEmitted(t *testing.T) {
 	taskDir := writeKiloLegacyFixture(t)
 	msgs := []map[string]any{
