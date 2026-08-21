@@ -121,6 +121,9 @@ describe("AttributionPanel agent exclusion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     usage.summary = summaryWithAgents(["claude", "codex"]);
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(
+      summaryWithAgents(["claude", "codex"]),
+    );
     usage.excludedAgents = "";
     usage.toggles.attribution.groupBy = "agent";
     usage.toggles.attribution.view = "list";
@@ -131,7 +134,7 @@ describe("AttributionPanel agent exclusion", () => {
     usage.cancelInFlightReads();
     usage.summary = null;
     usage.excludedAgents = "";
-    usage.selectedTimeRange = null;
+    usage.applyDateRange(usage.from, usage.to);
     usage.toggles.attribution.groupBy = "project";
     document.body.innerHTML = "";
   });
@@ -185,14 +188,20 @@ describe("AttributionPanel agent exclusion", () => {
       from: "2024-01-08",
       to: "2024-01-14",
     });
-    const params = usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
-    expect(params).toEqual(
+    const restoredSelectionParams = usageServiceMocks.getApiV1UsageSummary.mock.calls
+      .map(([params]) => params)
+      .find(
+        (params) =>
+          params.from === "2024-01-08" &&
+          params.to === "2024-01-14" &&
+          params.excludeAgent === undefined,
+      );
+    expect(restoredSelectionParams).toEqual(
       expect.objectContaining({
         from: "2024-01-08",
         to: "2024-01-14",
       }),
     );
-    expect(params?.excludeAgent).toBeUndefined();
     unmount(component);
   });
 });
@@ -201,6 +210,7 @@ describe("AttributionPanel project identity", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     usage.summary = summaryWithDuplicateProjectLabels();
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithDuplicateProjectLabels());
     usage.excludedProjectKeys = "";
     usage.toggles.attribution.groupBy = "project";
     usage.toggles.attribution.view = "list";

@@ -16,6 +16,10 @@ type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
 type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions";
 type FetchResult = "ok" | "error" | "aborted";
+type FetchAllOptions = {
+  preserveTimeRange?: boolean;
+  refreshTimeSeriesContext?: boolean;
+};
 type LoadedUsageSummary = {
   version: number;
   summary: UsageSummaryResponse;
@@ -563,7 +567,7 @@ class UsageStore {
     }
     this.topSessions = null;
     this.errors.topSessions = null;
-    void this.fetchAll({ preserveTimeRange: true });
+    void this.fetchAll({ preserveTimeRange: true, refreshTimeSeriesContext: false });
   }
 
   clearTimeRange() {
@@ -799,13 +803,11 @@ class UsageStore {
     this.to = to;
   }
 
-  async fetchAll(options: { preserveTimeRange?: boolean } = {}): Promise<void> {
+  async fetchAll(options: FetchAllOptions = {}): Promise<void> {
     await this.fetchAllWithResult(options);
   }
 
-  private async fetchAllWithResult(
-    options: { preserveTimeRange?: boolean } = {},
-  ): Promise<FetchResult> {
+  private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
     const selectedRangeAtStart = this.selectedTimeRange ? { ...this.selectedTimeRange } : null;
     if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
       this.selectedTimeRange = null;
@@ -821,9 +823,16 @@ class UsageStore {
     this.rollDates();
     saveUsageFilters(this);
     const params = this.baseParams();
+    const contextParams =
+      options.preserveTimeRange &&
+      options.refreshTimeSeriesContext !== false &&
+      selectedRangeAtStart !== null
+        ? { ...params, from: this.from, to: this.to }
+        : undefined;
     const summaryPromise = this.fetchSummary({
       loadComparison: false,
       params,
+      contextParams,
     });
     const topSessionsPromise = this.fetchTopSessions(params);
     const loadedSummary = await summaryPromise;
@@ -881,6 +890,7 @@ class UsageStore {
     options: {
       loadComparison?: boolean;
       params?: UsageParams;
+      contextParams?: UsageParams;
       recoverProjectScope?: boolean;
     } = {},
   ): Promise<LoadedUsageSummary | null> {
@@ -902,14 +912,26 @@ class UsageStore {
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const params = options.params ?? this.baseParams();
-      const data = (await callGenerated(
-        () => UsageService.getApiV1UsageSummary(params),
-        signal,
-      )) as unknown as UsageSummaryResponse;
+      const contextParams = options.contextParams;
+      let data: UsageSummaryResponse;
+      let contextData: UsageSummaryResponse | null = null;
+      if (contextParams) {
+        [data, contextData] = (await Promise.all([
+          callGenerated(() => UsageService.getApiV1UsageSummary(params), signal),
+          callGenerated(() => UsageService.getApiV1UsageSummary(contextParams), signal),
+        ])) as [UsageSummaryResponse, UsageSummaryResponse];
+      } else {
+        data = (await callGenerated(
+          () => UsageService.getApiV1UsageSummary(params),
+          signal,
+        )) as unknown as UsageSummaryResponse;
+      }
       if (this.versions.summary === v) {
         this.summary = data;
         this.isTimeRangeSummaryProvisional = false;
-        if (this.selectedTimeRange === null) {
+        if (contextData !== null) {
+          this.timeSeriesContextSummary = contextData;
+        } else if (this.selectedTimeRange === null) {
           this.timeSeriesContextSummary = null;
         }
         this.errors.summary = null;
@@ -942,9 +964,17 @@ class UsageStore {
       ) {
         this.excludedProjectKeys = "";
         this.abortPanel("topSessions");
+        const recoveredParams = this.baseParams();
         const loaded = await this.fetchSummary({
           loadComparison,
-          params: this.baseParams(),
+          params: recoveredParams,
+          contextParams: options.contextParams
+            ? {
+                ...recoveredParams,
+                from: options.contextParams.from,
+                to: options.contextParams.to,
+              }
+            : undefined,
           recoverProjectScope: false,
         });
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };

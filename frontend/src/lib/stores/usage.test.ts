@@ -1411,6 +1411,53 @@ describe("UsageStore time-series range selection", () => {
     );
   });
 
+  it("refreshes the parent chart context while keeping an active selection", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    const originalParent = usageSummary(15);
+    const initialSelection = usageSummary(4);
+    const refreshedSelection = usageSummary(6);
+    const refreshedParent = usageSummary(21);
+    originalParent.from = "2026-06-04";
+    originalParent.to = "2026-06-18";
+    initialSelection.from = "2026-06-07";
+    initialSelection.to = "2026-06-10";
+    refreshedSelection.from = "2026-06-07";
+    refreshedSelection.to = "2026-06-10";
+    refreshedParent.from = "2026-06-04";
+    refreshedParent.to = "2026-06-18";
+    usage.summary = originalParent;
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(initialSelection);
+
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+    await vi.waitFor(() => {
+      expect(usage.summary).toMatchObject(initialSelection);
+    });
+    vi.clearAllMocks();
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      if (params.from === "2026-06-04" && params.to === "2026-06-18") {
+        return refreshedParent;
+      }
+      return refreshedSelection;
+    });
+
+    await usage.fetchAll({ preserveTimeRange: true });
+
+    expect(usage.selectedTimeRange).toEqual({ from: "2026-06-07", to: "2026-06-10" });
+    expect(usage.summary).toMatchObject(refreshedSelection);
+    expect(usage.timeSeriesSummary).toEqual(refreshedParent);
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ from: "2026-06-07", to: "2026-06-10" }),
+    );
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ from: "2026-06-04", to: "2026-06-18" }),
+    );
+
+    usage.clearTimeRange();
+    expect(usage.summary).toEqual(refreshedParent);
+  });
+
   it("ignores a zero-width chart selection", async () => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");
