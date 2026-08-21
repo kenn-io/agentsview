@@ -561,6 +561,13 @@
     gap: 8px;
   }
 
+  .chart-actions :global(.kit-button.kit-button--sm) {
+    height: 20px;
+    min-height: 20px;
+    padding: 0 8px;
+    font-size: 10px;
+  }
+
   .keyboard-range {
     position: absolute;
     width: 1px;

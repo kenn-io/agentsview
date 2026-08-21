@@ -40,6 +40,53 @@ test.describe("Usage page", () => {
     ).toBeVisible();
   });
 
+  test("keeps the chart fixed when a brush adds the clear action", async ({
+    page,
+  }) => {
+    await expect(
+      page.locator(".summary-cards .card-value").first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    const chart = page.locator(".chart-container").first();
+    const plot = chart.locator("svg").first();
+    const brush = chart.locator(".lc-brush-context");
+    await expect(plot).toBeVisible({ timeout: 10_000 });
+    await expect(brush).toBeVisible({ timeout: 10_000 });
+
+    const chartBefore = await chart.boundingBox();
+    const before = await plot.boundingBox();
+    const brushBounds = await brush.boundingBox();
+    expect(chartBefore).not.toBeNull();
+    expect(before).not.toBeNull();
+    expect(brushBounds).not.toBeNull();
+    if (!chartBefore || !before || !brushBounds) return;
+
+    const y = brushBounds.y + brushBounds.height / 2;
+    await page.mouse.move(
+      brushBounds.x + brushBounds.width * 0.25,
+      y,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      brushBounds.x + brushBounds.width * 0.65,
+      y,
+      { steps: 8 },
+    );
+    await page.mouse.up();
+
+    await expect(
+      chart.getByRole("button", { name: "Clear selection" }),
+    ).toBeVisible();
+    const chartAfter = await chart.boundingBox();
+    const after = await plot.boundingBox();
+    expect(chartAfter).not.toBeNull();
+    expect(after).not.toBeNull();
+    if (!chartAfter || !after) return;
+    expect(after.y - chartAfter.y).toBe(
+      before.y - chartBefore.y,
+    );
+  });
+
   test("shows attribution panel with treemap", async ({
     page,
   }) => {
