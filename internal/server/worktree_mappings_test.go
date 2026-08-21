@@ -257,6 +257,36 @@ func TestWorktreePreviewAPIUsesFullArchiveAndBoundsSamples(t *testing.T) {
 	assertStatus(t, w, http.StatusBadRequest)
 }
 
+func TestWorktreeReclassificationAPILocalNoSyncMode(t *testing.T) {
+	te := setupNoSyncMode(t)
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: "no-sync-session", Machine: "test", Agent: "codex",
+		Project: "branch-label", Cwd: "/srv/worktrees/example/feature",
+	}))
+
+	previewW := te.post(t, "/api/v1/settings/worktree-mappings/preview", `{
+		"machine": "test",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example",
+		"original_project": "branch-label"
+	}`)
+	assertStatus(t, previewW, http.StatusOK)
+	preview := decode[db.WorktreeReclassificationPreview](t, previewW)
+	require.NotEmpty(t, preview.MappingToken)
+
+	w := te.post(t, "/api/v1/settings/worktree-mappings/reclassify", `{
+		"machine": "test",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example",
+		"original_project": "branch-label",
+		"mapping_token": "`+preview.MappingToken+`"
+	}`)
+	assertStatus(t, w, http.StatusOK)
+	session, err := te.db.GetSession(context.Background(), "no-sync-session")
+	require.NoError(t, err)
+	assert.Equal(t, "canonical_example", session.Project)
+}
+
 func TestActivityProjectReclassificationAPIRejectsStaleToken(t *testing.T) {
 	te := setup(t)
 	require.NoError(t, te.db.UpsertSession(db.Session{
