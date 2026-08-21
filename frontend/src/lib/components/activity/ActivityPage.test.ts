@@ -2,6 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { fireEvent, screen } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
+vi.mock("../../feature-flags.js", () => ({
+  PROJECT_MAPPING_WORKSPACE_ENABLED: true,
+}));
 import { activity } from "../../stores/activity.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
