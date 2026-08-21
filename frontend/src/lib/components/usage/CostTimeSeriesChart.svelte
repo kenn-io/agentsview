@@ -35,6 +35,11 @@
 
   const groupBy = $derived(usage.toggles.timeSeries.groupBy);
   const isTokenMode = $derived(usage.mode === "token");
+  const chartTitle = $derived(
+    isTokenMode
+      ? m.usage_tokens_over_time_title()
+      : m.usage_cost_over_time_title(),
+  );
 
   function breakdownTokens(b: {
     inputTokens: number;
@@ -362,20 +367,18 @@
 <div class="chart-container">
   <div class="chart-header">
     <h3 class="chart-title">
-      {isTokenMode
-        ? m.usage_tokens_over_time_title()
-        : m.usage_cost_over_time_title()}
+      {chartTitle}
     </h3>
     <div class="chart-actions">
       <form
-        class="keyboard-range"
+        class="keyboard-range kit-sr-only"
         aria-label={m.shared_range_select_date_range()}
         onsubmit={handleKeyboardRangeSubmit}
       >
         <label>
           <span>{m.shared_range_from()}</span>
-          <input
-            type="date"
+          <!-- kit-ui-check-ignore: focus-only keyboard fallback for the chart brush; DateRangePicker would duplicate the page range control and alter chart chrome. -->
+          <input type="date"
             name="from"
             min={seriesData.points[0]?.date}
             max={seriesData.points.at(-1)?.date}
@@ -385,8 +388,8 @@
         </label>
         <label>
           <span>{m.shared_range_to()}</span>
-          <input
-            type="date"
+          <!-- kit-ui-check-ignore: focus-only keyboard fallback for the chart brush; DateRangePicker would duplicate the page range control and alter chart chrome. -->
+          <input type="date"
             name="to"
             min={seriesData.points[0]?.date}
             max={seriesData.points.at(-1)?.date}
@@ -461,7 +464,7 @@
         }}
         tooltipContext={{ mode: "bisect-x" }}
       >
-        <Layer class="chart-svg">
+        <Layer class="chart-svg" title={chartTitle}>
           <LargeChartFrame
             xTicks={xTicks}
             yTicks={yTickValues}
@@ -568,18 +571,6 @@
     font-size: 10px;
   }
 
-  .keyboard-range {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
   .keyboard-range:focus-within {
     z-index: 3;
     top: calc(100% + 4px);
@@ -589,7 +580,7 @@
     margin: 0;
     padding: 8px;
     overflow: visible;
-    clip: auto;
+    clip-path: none;
     display: flex;
     align-items: end;
     gap: 8px;
@@ -602,11 +593,12 @@
 
   .keyboard-range label {
     display: grid;
-    gap: 3px;
+    gap: var(--space-2);
     font-size: 10px;
     color: var(--text-muted);
   }
 
+  /* kit-ui-check-ignore: native date input for the focus-only brush fallback; Card is not a form-control replacement. */
   .keyboard-range input {
     min-height: 24px;
     padding: 2px 6px;
@@ -682,7 +674,7 @@
     display: grid;
     grid-template-columns: 7px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 7px;
+    gap: var(--space-4);
     min-height: 20px;
   }
 

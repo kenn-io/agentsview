@@ -52,7 +52,7 @@
 
 <div class="treemap-container" bind:clientWidth={measuredWidth}>
   <Chart width={chartWidth} {height} padding={0}>
-    <Layer class="treemap">
+    <Layer class="treemap" title={m.usage_treemap()}>
       <LayerTreemap hierarchy={root} padding={2}>
         {#snippet children({ nodes })}
           {#each nodes.filter((node) => node.depth === 1) as node, index ((node.data as TreemapItem).id)}

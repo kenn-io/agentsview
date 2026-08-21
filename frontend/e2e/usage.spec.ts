@@ -34,9 +34,10 @@ test.describe("Usage page", () => {
     await expect(
       page.locator(".chart-container"),
     ).toBeVisible();
-    // SVG chart should render.
     await expect(
-      page.locator(".chart-container svg"),
+      page
+        .locator(".chart-container")
+        .getByRole("figure", { name: "Cost Over Time" }),
     ).toBeVisible();
   });
 
@@ -124,9 +125,10 @@ test.describe("Usage page", () => {
     await expect(
       page.locator(".attribution-panel"),
     ).toBeVisible();
-    // Treemap SVG should be rendered.
     await expect(
-      page.locator(".treemap-container svg"),
+      page
+        .locator(".treemap-container")
+        .getByRole("figure", { name: "Treemap" }),
     ).toBeVisible();
   });
 
