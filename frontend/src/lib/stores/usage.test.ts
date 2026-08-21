@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type {
   UsageComparison,
   UsagePairwiseComparisonResponse,
@@ -1394,6 +1394,125 @@ describe("UsageStore time-series range selection", () => {
     );
   });
 
+  it("ignores a zero-width chart selection", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = usageSummary(15);
+    vi.clearAllMocks();
+
+    usage.setTimeRange("2026-06-07", "2026-06-07");
+
+    expect(usage.selectedTimeRange).toBeNull();
+    expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
+  });
+
+  it("does not refetch an unchanged chart selection", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = usageSummary(15);
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+    vi.clearAllMocks();
+
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+
+    expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
+  });
+
+  it("shows locally aggregated daily data before the range request finishes", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    const context = usageSummary(6);
+    context.daily = [
+      {
+        date: "2026-06-07",
+        inputTokens: 10,
+        outputTokens: 1,
+        cacheCreationTokens: 2,
+        cacheReadTokens: 3,
+        totalCost: testMoney(1),
+        modelsUsed: ["model-a"],
+        projectBreakdowns: [
+          {
+            project_key: "pl1:sha256:alpha",
+            project: "alpha",
+            inputTokens: 10,
+            outputTokens: 1,
+            cacheCreationTokens: 2,
+            cacheReadTokens: 3,
+            cost: testMoney(1),
+          },
+        ],
+      },
+      {
+        date: "2026-06-08",
+        inputTokens: 20,
+        outputTokens: 2,
+        cacheCreationTokens: 4,
+        cacheReadTokens: 6,
+        totalCost: testMoney(2),
+        modelsUsed: ["model-a"],
+        projectBreakdowns: [
+          {
+            project_key: "pl1:sha256:alpha",
+            project: "alpha",
+            inputTokens: 20,
+            outputTokens: 2,
+            cacheCreationTokens: 4,
+            cacheReadTokens: 6,
+            cost: testMoney(2),
+          },
+        ],
+      },
+      {
+        date: "2026-06-09",
+        inputTokens: 30,
+        outputTokens: 3,
+        cacheCreationTokens: 6,
+        cacheReadTokens: 9,
+        totalCost: testMoney(3),
+        modelsUsed: ["model-b"],
+        projectBreakdowns: [
+          {
+            project_key: "pl1:sha256:beta",
+            project: "beta",
+            inputTokens: 30,
+            outputTokens: 3,
+            cacheCreationTokens: 6,
+            cacheReadTokens: 9,
+            cost: testMoney(3),
+          },
+        ],
+      },
+    ];
+    usage.summary = context;
+
+    usage.setTimeRange("2026-06-08", "2026-06-09");
+
+    expect(usage.timeSeriesSummary).toEqual(context);
+    expect(usage.summary).toMatchObject({
+      from: "2026-06-08",
+      to: "2026-06-09",
+      totals: {
+        inputTokens: 50,
+        outputTokens: 5,
+        cacheCreationTokens: 10,
+        cacheReadTokens: 15,
+        totalCost: testMoney(5),
+      },
+      projectTotals: [
+        expect.objectContaining({
+          project_key: "pl1:sha256:beta",
+          cost: testMoney(3),
+        }),
+        expect.objectContaining({
+          project_key: "pl1:sha256:alpha",
+          cost: testMoney(2),
+        }),
+      ],
+    });
+    expect(usage.summary?.daily.map((day) => day.date)).toEqual(["2026-06-08", "2026-06-09"]);
+  });
+
   it("clears the brush and refetches the parent window", async () => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");
@@ -1404,6 +1523,7 @@ describe("UsageStore time-series range selection", () => {
     usage.clearTimeRange();
 
     expect(usage.selectedTimeRange).toBeNull();
+    expect(usage.summary).toEqual(usage.timeSeriesSummary);
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
       expect.objectContaining({ from: "2026-06-04", to: "2026-06-18" }),
     );
