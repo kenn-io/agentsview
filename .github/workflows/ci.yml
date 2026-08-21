@@ -573,6 +573,8 @@ jobs:
       - name: Build frontend
         run: npm run build
         working-directory: frontend
+        env:
+          VITE_PROJECT_MAPPING_WORKSPACE: "true"
 
       - name: Embed frontend in Go source tree
         run: |
