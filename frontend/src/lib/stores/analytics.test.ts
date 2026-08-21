@@ -605,7 +605,7 @@ describe("AnalyticsStore activity range selection", () => {
     );
   });
 
-  it("replaces a brushed range with a heatmap date and restores Sessions", () => {
+  it("replaces a brushed range with a heatmap date and restores parent context", () => {
     const loadSessions = vi.spyOn(sessions, "load").mockResolvedValue();
     analytics.setActivitySelection("2024-01-10", "2024-01-12");
     vi.clearAllMocks();
@@ -618,6 +618,10 @@ describe("AnalyticsStore activity range selection", () => {
     expect(sessions.filters.dateFrom).toBe("2024-01-01");
     expect(sessions.filters.dateTo).toBe("2024-01-31");
     expect(loadSessions).toHaveBeenCalledOnce();
+    expect(analyticsService.getApiV1AnalyticsHourOfWeek).toHaveBeenCalledOnce();
+    expect(analyticsService.getApiV1AnalyticsHourOfWeek).toHaveBeenLastCalledWith(
+      expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
+    );
   });
 
   it("does not retain parent summary data when a brushed-range request fails", async () => {

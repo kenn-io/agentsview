@@ -608,15 +608,11 @@ class UsageStore {
 
   toggleProjectKey(key: string, options: { preserveTimeRange?: boolean } = {}): void {
     const previous = this.excludedProjectKeys;
+    const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedProjectKeys = this.toggleCsv(this.excludedProjectKeys, key);
     const changed = this.excludedProjectKeys;
-    void this.fetchAllWithResult(options).then((ok) => {
-      if (
-        ok ||
-        !options.preserveTimeRange ||
-        this.selectedTimeRange === null ||
-        this.excludedProjectKeys !== changed
-      )
+    void this.fetchAllWithResult(options).then((result) => {
+      if (result !== "error" || !hadSelectedTimeRange || this.excludedProjectKeys !== changed)
         return;
       this.excludedProjectKeys = previous;
       void this.fetchAll({ preserveTimeRange: true });
@@ -625,16 +621,11 @@ class UsageStore {
 
   toggleAgent(name: string, options: { preserveTimeRange?: boolean } = {}): void {
     const previous = this.excludedAgents;
+    const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedAgents = this.toggleCsv(this.excludedAgents, name);
     const changed = this.excludedAgents;
-    void this.fetchAllWithResult(options).then((ok) => {
-      if (
-        ok ||
-        !options.preserveTimeRange ||
-        this.selectedTimeRange === null ||
-        this.excludedAgents !== changed
-      )
-        return;
+    void this.fetchAllWithResult(options).then((result) => {
+      if (result !== "error" || !hadSelectedTimeRange || this.excludedAgents !== changed) return;
       this.excludedAgents = previous;
       void this.fetchAll({ preserveTimeRange: true });
     });
@@ -643,17 +634,12 @@ class UsageStore {
   toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
     const previousSelected = this.selectedModels;
     const previousExcluded = this.excludedModels;
+    const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.selectedModels = this.toggleCsv(this.selectedModels, name);
     this.excludedModels = "";
     const changed = this.selectedModels;
-    void this.fetchAllWithResult(options).then((ok) => {
-      if (
-        ok ||
-        !options.preserveTimeRange ||
-        this.selectedTimeRange === null ||
-        this.selectedModels !== changed
-      )
-        return;
+    void this.fetchAllWithResult(options).then((result) => {
+      if (result !== "error" || !hadSelectedTimeRange || this.selectedModels !== changed) return;
       this.selectedModels = previousSelected;
       this.excludedModels = previousExcluded;
       void this.fetchAll({ preserveTimeRange: true });
@@ -819,7 +805,7 @@ class UsageStore {
 
   private async fetchAllWithResult(
     options: { preserveTimeRange?: boolean } = {},
-  ): Promise<boolean> {
+  ): Promise<FetchResult> {
     const selectedRangeAtStart = this.selectedTimeRange ? { ...this.selectedTimeRange } : null;
     if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
       this.selectedTimeRange = null;
@@ -843,19 +829,22 @@ class UsageStore {
     const loadedSummary = await summaryPromise;
     if (fetchVersion !== this.fetchAllVersion) {
       await topSessionsPromise;
-      return false;
+      return "aborted";
     }
     if (!loadedSummary) {
       await topSessionsPromise;
+      if (fetchVersion !== this.fetchAllVersion) return "aborted";
       if (
         selectedRangeAtStart !== null &&
         this.selectedTimeRange === null &&
         fetchVersion === this.fetchAllVersion
       ) {
         this.invalidatePanel("topSessions");
+        this.topSessions = null;
+        this.errors.topSessions = null;
         await this.fetchTopSessions(this.baseParams());
       }
-      return false;
+      return "error";
     }
     const currentTopSessionsPromise = loadedSummary.projectScopeRecovered
       ? topSessionsPromise.then(() => {
@@ -875,9 +864,17 @@ class UsageStore {
       pairwiseResult === "ok"
     ) {
       this.markRefreshComplete();
-      return true;
+      return "ok";
     }
-    return false;
+    if (
+      fetchVersion !== this.fetchAllVersion ||
+      topSessionsResult === "aborted" ||
+      comparisonResult === "aborted" ||
+      pairwiseResult === "aborted"
+    ) {
+      return "aborted";
+    }
+    return "error";
   }
 
   async fetchSummary(

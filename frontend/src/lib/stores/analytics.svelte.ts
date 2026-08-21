@@ -623,12 +623,12 @@ class AnalyticsStore {
     );
   }
 
-  async fetchHourOfWeek(): Promise<FetchResult> {
+  async fetchHourOfWeek(params: AnalyticsParams | null = null): Promise<FetchResult> {
     return await this.executeFetch(
       "hourOfWeek",
       () =>
         AnalyticsService.getApiV1AnalyticsHourOfWeek(
-          this.filterParams({ includeTime: false }),
+          params ?? this.filterParams({ includeTime: false }),
         ) as unknown as Promise<HourOfWeekResponse>,
       (data) => {
         this.hourOfWeek = data;
@@ -837,7 +837,8 @@ class AnalyticsStore {
   }
 
   selectDate(date: string) {
-    if (this.selectedActivityRange !== null) {
+    const hadActivityRange = this.selectedActivityRange !== null;
+    if (hadActivityRange) {
       this.selectedActivityRange = null;
       this.restoreSessionsParentRange();
     }
@@ -846,9 +847,10 @@ class AnalyticsStore {
     } else {
       this.selectedDate = date;
     }
-    this.clearDrilldownData({ preserveHourOfWeek: true });
+    this.clearDrilldownData({ preserveHourOfWeek: !hadActivityRange });
     this.fetchSummary();
     this.fetchProjects();
+    if (hadActivityRange) this.fetchHourOfWeek(this.baseParams({ includeTime: false }));
     this.fetchSessionShape();
     this.fetchVelocity();
     this.fetchTools();

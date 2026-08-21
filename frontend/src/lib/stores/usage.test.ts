@@ -1568,6 +1568,26 @@ describe("UsageStore time-series range selection", () => {
     expect(usage.topSessions).toEqual([topSession("parent-after")]);
   });
 
+  it("clears selected-range top sessions when parent recovery fails", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = usageSummary(15);
+    usage.topSessions = [topSession("parent-before")];
+    usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("range request failed"));
+    usageServiceMocks.getApiV1UsageTopSessions
+      .mockResolvedValueOnce([topSession("selected-range")])
+      .mockRejectedValueOnce(new Error("parent sessions failed"));
+
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+
+    await vi.waitFor(() => {
+      expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(2);
+    });
+    expect(usage.selectedTimeRange).toBeNull();
+    expect(usage.topSessions).toBeNull();
+    expect(usage.errors.topSessions).toBe("parent sessions failed");
+  });
+
   it("does not retain parent top sessions when a selected-range request fails", async () => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");
@@ -1602,6 +1622,63 @@ describe("UsageStore time-series range selection", () => {
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
       expect.objectContaining({ from: "2026-06-04", to: "2026-06-18", model: "model-a" }),
     );
+  });
+
+  it("keeps a filter whose request is superseded by a refresh", async () => {
+    let resolveFilterRequest: ((value: UsageSummaryResponse) => void) | undefined;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFilterRequest = resolve;
+          }),
+      )
+      .mockResolvedValue(usageSummary(15));
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = usageSummary(15);
+    usage.selectedTimeRange = { from: "2026-06-07", to: "2026-06-10" };
+
+    usage.toggleAgent("codex", { preserveTimeRange: true });
+    await Promise.resolve();
+    await usage.fetchAll({ preserveTimeRange: true });
+    resolveFilterRequest?.(usageSummary(15));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(usage.excludedAgents).toBe("codex");
+  });
+
+  it("rolls back a filter when its provisional-range request fails", async () => {
+    let resolveInitialRange: ((value: UsageSummaryResponse) => void) | undefined;
+    usageServiceMocks.getApiV1UsageSummary
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInitialRange = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(new Error("filter request failed"))
+      .mockResolvedValue(usageSummary(15));
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    usage.summary = usageSummary(15);
+
+    usage.setTimeRange("2026-06-07", "2026-06-10");
+    usage.toggleAgent("codex", { preserveTimeRange: true });
+
+    await vi.waitFor(() => {
+      expect(usage.excludedAgents).toBe("");
+    });
+    expect(usage.selectedTimeRange).toBeNull();
+    const parentRequest = usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
+    expect(parentRequest).toEqual(
+      expect.objectContaining({
+        from: "2026-06-04",
+        to: "2026-06-18",
+      }),
+    );
+    expect(parentRequest?.excludeAgent).toBeUndefined();
+    resolveInitialRange?.(usageSummary(15));
   });
 
   it("clears the brush and refetches the parent window", async () => {

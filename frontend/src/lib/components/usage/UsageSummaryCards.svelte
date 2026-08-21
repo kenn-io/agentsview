@@ -230,7 +230,7 @@
         sub: () => vsPrior ?? "",
         featured: true,
       },
-      ...(usage.summary?.totals.copilotAICredits
+      ...(usage.timeSeriesSummary?.totals.copilotAICredits
         ? [
             {
               label: () => m.usage_summary_copilot_ai_credits(),
