@@ -162,10 +162,10 @@ func (s *icodemateCLISourceSet) Parse(
 		return ParseOutcome{}, fmt.Errorf("icodemate cli source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine)
-	project := GetProjectName(firstNonEmptyJSONLString(
+	project := claudeProviderProject(ctx, firstNonEmptyJSONLString(
 		req.Source.ProjectHint,
 		filepath.Base(filepath.Dir(path)),
-	))
+	), path)
 	results, excludedIDs, err := parseIcodemateCLISession(
 		path, project, machine,
 	)
@@ -386,19 +386,14 @@ func icodemateCLICompositeFingerprint(
 	if err != nil {
 		return "", 0, 0, err
 	}
+	transcriptDir := filepath.Dir(path)
 	for _, sidecar := range sidecars {
-		info, statErr := os.Stat(sidecar)
-		if statErr != nil {
-			return "", 0, 0, fmt.Errorf("stat %s: %w", sidecar, statErr)
-		}
-		changeTime, ok := codexIndexChangeTime(sidecar, info)
-		if ok {
-			_, _ = fmt.Fprintf(
-				h, "sidecar\x00%s\x00%d\x00%d\x00%d\x00",
-				filepath.ToSlash(sidecar), info.Size(),
-				info.ModTime().UnixNano(), changeTime,
+		relativePath, relErr := filepath.Rel(transcriptDir, sidecar)
+		if relErr != nil {
+			return "", 0, 0, fmt.Errorf(
+				"resolve sidecar %s relative to %s: %w",
+				sidecar, path, relErr,
 			)
-			continue
 		}
 		sidecarHash, hashErr := hashJSONLSourceFile(sidecar)
 		if hashErr != nil {
@@ -406,7 +401,7 @@ func icodemateCLICompositeFingerprint(
 		}
 		_, _ = fmt.Fprintf(
 			h, "sidecar\x00%s\x00%s\x00",
-			filepath.ToSlash(sidecar), sidecarHash,
+			filepath.ToSlash(relativePath), sidecarHash,
 		)
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), size, mtime, nil

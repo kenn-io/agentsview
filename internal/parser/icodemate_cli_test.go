@@ -31,12 +31,16 @@ func TestIcodemateCLIDiscoverParseAndFindSource(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "my-project")
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	repo := filepath.Join(t.TempDir(), "canonical-project")
+	cwd := filepath.Join(repo, "internal", "parser")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(cwd, 0o755))
 
 	path := filepath.Join(projectDir, "session-cli.jsonl")
 	content := strings.Join([]string{
 		buildMetadataLine(map[string]any{
 			"type": "user", "timestamp": tsEarly, "uuid": "u1", "parentUuid": "",
-			"cwd": "/workspace/my-project", "gitBranch": "main",
+			"cwd": cwd, "gitBranch": "main",
 			"message": map[string]any{"role": "user", "content": "hello cli"},
 		}),
 		buildMetadataLine(map[string]any{
@@ -88,8 +92,8 @@ func TestIcodemateCLIDiscoverParseAndFindSource(t *testing.T) {
 	assert.Equal(t, AgentIcodemate, sess.Agent)
 	assert.Equal(t, "icodemate:session-cli", sess.ID)
 	assert.Equal(t, "devbox", sess.Machine)
-	assert.Equal(t, "my_project", sess.Project)
-	assert.Equal(t, "/workspace/my-project", sess.Cwd)
+	assert.Equal(t, "canonical_project", sess.Project)
+	assert.Equal(t, cwd, sess.Cwd)
 	assert.Equal(t, "main", sess.GitBranch)
 	assert.Equal(t, "hello cli", sess.FirstMessage)
 	assert.Equal(t, "hash-cli", sess.File.Hash)
@@ -516,6 +520,37 @@ func TestIcodemateCLISidecarChangeInvalidatesAndMapsOwningSource(t *testing.T) {
 	require.Len(t, messages[2].ToolResults, 1)
 	assert.Equal(t, "later persisted output\n",
 		DecodeContent(messages[2].ToolResults[0].ContentRaw))
+}
+
+func TestIcodemateCLICompositeFingerprintStableAcrossRoots(t *testing.T) {
+	fingerprints := make([]SourceFingerprint, 0, 2)
+	for range 2 {
+		root := t.TempDir()
+		projectDir := filepath.Join(root, "project")
+		sessionPath := filepath.Join(projectDir, "session.jsonl")
+		resultPath := filepath.Join(
+			projectDir, "session", "tool-results", "output.txt",
+		)
+		writeSourceFile(t, sessionPath, claudeProviderFixture("same transcript"))
+		writeSourceFile(t, resultPath, "same persisted output\n")
+
+		provider, ok := NewProvider(
+			AgentIcodemate, ProviderConfig{Roots: []string{root}},
+		)
+		require.True(t, ok)
+		source, found, err := provider.FindSource(
+			t.Context(), FindSourceRequest{RawSessionID: "session"},
+		)
+		require.NoError(t, err)
+		require.True(t, found)
+		fingerprint, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+		fingerprints = append(fingerprints, fingerprint)
+	}
+
+	require.Len(t, fingerprints, 2)
+	assert.Equal(t, fingerprints[0].Hash, fingerprints[1].Hash,
+		"materialization roots must not affect source identity")
 }
 
 func TestIcodemateCLIParentSidecarChangeMapsSubagentSources(t *testing.T) {

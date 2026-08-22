@@ -1600,12 +1600,15 @@ add an archived or maintained mirror without replacing the original identity.
   repeated assistant message snapshots by message ID, and resolves local and
   S3-materialized persisted tool-result sidecars before extracting content.
   Local sidecar writes map back to their owning transcript and participate in
-  its freshness fingerprint. CLI transcript identity is the filename session
-  ID across configured roots, so duplicate or moved copies reconcile as one
-  `icodemate:` session. Branch reconciliation follows that identity across
-  prior and current source paths and archive rebuilds. S3 subagent refreshes
-  retain archived parent provider and machine metadata instead of importing
-  ICodeMate children as Claude. S3 discovery also preserves transcript-only
+  its content-based, extraction-root-independent freshness fingerprint. CLI
+  project attribution uses transcript cwd and branch metadata to resolve
+  repository subdirectories and managed worktrees. Transcript identity is the
+  filename session ID across configured roots, so duplicate or moved copies
+  reconcile as one `icodemate:` session. Branch reconciliation follows that
+  identity across prior and current source paths and archive rebuilds. S3
+  subagent refreshes retain archived parent provider and machine metadata
+  instead of importing ICodeMate children as Claude. S3 discovery also
+  preserves transcript-only
   size and mtime separately from composite sidecar freshness. A trailing
   partial local or S3 JSONL record stays incomplete and retryable without
   replacing archived branch content.
