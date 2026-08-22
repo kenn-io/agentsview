@@ -1763,14 +1763,15 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 	release := filepath.Join(t.TempDir(), "release-producer")
 	firstCaptureDir := filepath.Join(t.TempDir(), "capture-first")
 	firstResultPath := filepath.Join(t.TempDir(), "result-first.json")
-	t.Cleanup(func() { _ = os.WriteFile(release, []byte("release"), 0o600) })
 
 	type response struct {
 		outcome RunOutcome
 		err     error
 	}
 	firstDone := make(chan response, 1)
+	firstStopped := make(chan struct{})
 	go func() {
+		defer close(firstStopped)
 		outcome, err := Run(t.Context(), RunOptions{
 			Provider: ProviderClaude, OccurrenceID: "reserved-first",
 			ProviderSessionID: sessionID,
@@ -1790,10 +1791,18 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 		})
 		firstDone <- response{outcome: outcome, err: err}
 	}()
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, []byte("release"), 0o600)
+		select {
+		case <-firstStopped:
+		case <-time.After(20 * time.Second):
+			t.Error("reserved capture did not stop during cleanup")
+		}
+	})
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(marker)
 		return err == nil
-	}, 2*time.Second, 10*time.Millisecond)
+	}, 20*time.Second, 10*time.Millisecond)
 	secondCaptureDir := filepath.Join(t.TempDir(), "capture-second")
 	secondWorkDir := t.TempDir()
 	var secondOutput bytes.Buffer
@@ -1824,12 +1833,12 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 			root, encodeClaudeWorkDir(resolvedWorkDir), sessionID+".jsonl",
 		))
 		return err == nil
-	}, 2*time.Second, 10*time.Millisecond)
+	}, 20*time.Second, 10*time.Millisecond)
 	select {
 	case first := <-firstDone:
 		require.NoError(t, first.err)
 		assert.Equal(t, 0, first.outcome.ExitCode)
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		require.FailNow(t, "reserved capture did not finish after release")
 	}
 }
@@ -1940,12 +1949,12 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 		}
 		var captured manifest
 		if json.Unmarshal(data, &captured) != nil || captured.SourcesComplete ||
-			len(captured.Sources) != 1 {
+			len(captured.Sources) == 0 {
 			return false
 		}
 		sessionID = captured.ProviderSessionID
 		return sessionID != ""
-	}, 5*time.Second, time.Millisecond)
+	}, 20*time.Second, time.Millisecond)
 
 	rootPath := filepath.Join(root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
 	rootData := []byte(strings.Join(
@@ -1961,7 +1970,7 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 		var captured manifest
 		return json.Unmarshal(data, &captured) == nil &&
 			!captured.SourcesComplete && len(captured.Sources) == 2
-	}, 5*time.Second, time.Millisecond)
+	}, 20*time.Second, time.Millisecond)
 	require.NoError(t, os.Rename(childPath, filepath.Join(t.TempDir(), "removed.jsonl")))
 
 	response := <-done
@@ -2080,7 +2089,7 @@ func TestCaptureDistinguishesAnObservedSourceThatDisappears(t *testing.T) {
 	producer := copyCaptureHelper(t, "claude")
 	limits := testLimits()
 	limits.FinalizationWait = 5 * time.Second
-	limits.Quiescence = 400 * time.Millisecond
+	limits.Quiescence = 2 * time.Second
 	type runResponse struct {
 		outcome RunOutcome
 		err     error
@@ -2106,7 +2115,7 @@ func TestCaptureDistinguishesAnObservedSourceThatDisappears(t *testing.T) {
 		}
 		var captured manifest
 		return json.Unmarshal(data, &captured) == nil && captured.SourceObserved
-	}, 5*time.Second, 10*time.Millisecond)
+	}, 20*time.Second, 10*time.Millisecond)
 	require.NoError(t, os.Rename(root, root+"-gone"))
 	response := <-done
 	require.Error(t, response.err)

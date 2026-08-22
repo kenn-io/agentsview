@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"syscall"
 	"testing"
@@ -229,6 +230,13 @@ func TestIsHostUnavailable(t *testing.T) {
 			err:  fmt.Errorf("decode remote manifest: %w", io.ErrUnexpectedEOF),
 			want: false,
 		},
+		{
+			name: "HTTP response headers truncated",
+			err: &url.Error{
+				Op: "Get", URL: "http://127.0.0.1", Err: io.ErrUnexpectedEOF,
+			},
+			want: true,
+		},
 		{name: "timeout with retained cleanup", err: &cleanupRetryTestError{
 			cause: syscall.ETIMEDOUT,
 		}, want: false},
@@ -268,32 +276,6 @@ func TestIsHostUnavailableWhenHTTPServerClosesBeforeHeaders(t *testing.T) {
 	)
 	require.NoError(t, <-serverResult)
 	require.Error(t, err)
-	assert.True(t, IsHostUnavailable(err))
-}
-
-func TestIsHostUnavailableWhenHTTPHeadersAreTruncated(t *testing.T) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, listener.Close()) })
-
-	serverResult := make(chan error, 1)
-	go func() {
-		conn, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			serverResult <- acceptErr
-			return
-		}
-		_, writeErr := io.WriteString(
-			conn, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n",
-		)
-		serverResult <- errors.Join(writeErr, conn.Close())
-	}()
-
-	_, err = (HTTPSync{URL: "http://" + listener.Addr().String()}).fetchTargets(
-		t.Context(), http.DefaultClient,
-	)
-	require.NoError(t, <-serverResult)
-	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.True(t, IsHostUnavailable(err))
 }
 
