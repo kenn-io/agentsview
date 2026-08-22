@@ -5461,18 +5461,21 @@ func (e *Engine) reconciliationCandidate(
 	statPath := validatedProviderSourceStatPath(path)
 	claudeCompatible := isClaudeCompatibleTranscriptAgentPath(agent, path)
 	if claudeCompatible {
-		sourceSize, sourceMtime, sourceOK := claudeCompatibleFileSourceInfo(
+		transcriptSize, transcriptMtime, transcriptOK := claudeTranscriptFileSourceInfo(
 			parser.DiscoveredFile{Path: statPath, Agent: agent},
 		)
-		if sourceOK {
-			preference1 = sourceSize
-			preference2 = sourceMtime
+		if transcriptOK {
+			preference1 = transcriptSize
+			preference2 = transcriptMtime
+			sourceSize, sourceMtime, sourceOK := claudeCompatibleFileSourceInfo(
+				parser.DiscoveredFile{Path: statPath, Agent: agent},
+			)
 			fullID := applyIDPrefixToID(
 				e.idPrefix, claudeCompatibleArchiveSessionID(agent, identity),
 			)
 			storedPath := e.db.GetSessionFilePath(fullID)
 			storedSize, storedMtime, stored := e.db.GetSessionFileInfo(fullID)
-			if stored && e.effectiveSourcePath(path) == storedPath &&
+			if sourceOK && stored && e.effectiveSourcePath(path) == storedPath &&
 				storedSize == sourceSize && storedMtime == sourceMtime &&
 				e.db.GetSessionDataVersion(fullID) >= db.CurrentDataVersion() {
 				preference3 = 1
@@ -7984,8 +7987,8 @@ func (e *Engine) effectiveSourcePath(path string) string {
 func claudeCandidateHasAppendProgress(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	candidateSize, _, candidateOK := claudeCompatibleFileSourceInfo(candidate)
-	currentSize, _, currentOK := claudeCompatibleFileSourceInfo(current)
+	candidateSize, _, candidateOK := claudeTranscriptFileSourceInfo(candidate)
+	currentSize, _, currentOK := claudeTranscriptFileSourceInfo(current)
 	if !candidateOK || !currentOK {
 		return false
 	}
@@ -7995,8 +7998,8 @@ func claudeCandidateHasAppendProgress(
 func preferClaudeDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	candidateSize, candidateMtime, candidateOK := claudeCompatibleFileSourceInfo(candidate)
-	currentSize, currentMtime, currentOK := claudeCompatibleFileSourceInfo(current)
+	candidateSize, candidateMtime, candidateOK := claudeTranscriptFileSourceInfo(candidate)
+	currentSize, currentMtime, currentOK := claudeTranscriptFileSourceInfo(current)
 	switch {
 	case candidateOK && !currentOK:
 		return true
@@ -8011,6 +8014,26 @@ func preferClaudeDiscoveredFile(
 		}
 	}
 	return candidate.Path < current.Path
+}
+
+func claudeTranscriptFileSourceInfo(
+	file parser.DiscoveredFile,
+) (size, mtime int64, ok bool) {
+	if isS3SourcePath(file.Path) {
+		if file.TranscriptMtime != 0 {
+			return file.TranscriptSize, file.TranscriptMtime, true
+		}
+		obj, err := statS3Object(file.Path)
+		if err != nil {
+			return 0, 0, false
+		}
+		return obj.Size, obj.LastModified.UnixNano(), true
+	}
+	info, err := os.Stat(file.Path)
+	if err != nil {
+		return 0, 0, false
+	}
+	return info.Size(), info.ModTime().UnixNano(), true
 }
 
 func claudeCompatibleFileSourceInfo(
@@ -16680,6 +16703,10 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	if !isOpenCodeFormatStorageAgent(agent) {
 		return false
 	}
+	if agent == parser.AgentIcodemate &&
+		strings.EqualFold(filepath.Ext(path), ".jsonl") {
+		return false
+	}
 	store := e.archiveStore
 	if store == nil {
 		store = e.db
@@ -16696,6 +16723,14 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	storedHasStorageFingerprint := hasOpenCodeFormatStorageFingerprint(
 		agent, storedHash,
 	)
+	currentIsOpenCodeStorage := isOpenCodeFormatStoragePath(agent, path) ||
+		isOpenCodeFormatSQLiteVirtualPath(agent, path)
+	storedIsOpenCodeStorage := isOpenCodeFormatStoragePath(agent, storedPath) ||
+		isOpenCodeFormatSQLiteVirtualPath(agent, storedPath) ||
+		(storedPath == "" && storedHasStorageFingerprint)
+	if !currentIsOpenCodeStorage && !storedIsOpenCodeStorage {
+		return false
+	}
 	storedIsSQLiteVirtual := isOpenCodeFormatSQLiteVirtualPath(
 		agent, storedPath,
 	)
@@ -17449,7 +17484,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		if fp := e.db.GetSessionFilePath(sessionID); isS3SourcePath(fp) {
 			stat := statS3Object
 			if def, ok := parser.AgentByPrefix(sessionID); ok &&
-				def.Type == parser.AgentClaude {
+				(def.Type == parser.AgentClaude || def.Type == parser.AgentIcodemate) {
 				stat = statClaudeS3Session
 			} else if ok && def.Type == parser.AgentCodex {
 				stat = statCodexS3Session
@@ -17458,7 +17493,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 				context.Background(), sessionID,
 			); err == nil && sess != nil {
 				switch sess.Agent {
-				case string(parser.AgentClaude):
+				case string(parser.AgentClaude), string(parser.AgentIcodemate):
 					stat = statClaudeS3Session
 				case string(parser.AgentCodex):
 					stat = statCodexS3Session
@@ -17507,7 +17542,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	if isS3SourcePath(path) {
 		stat := statS3Object
 		switch def.Type {
-		case parser.AgentClaude:
+		case parser.AgentClaude, parser.AgentIcodemate:
 			stat = statClaudeS3Session
 		case parser.AgentCodex:
 			stat = statCodexS3Session
@@ -17519,6 +17554,14 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		return obj.LastModified.UnixNano()
 	}
 
+	if def.Type == parser.AgentIcodemate &&
+		strings.EqualFold(filepath.Ext(path), ".jsonl") {
+		_, mtime, err := parser.IcodemateCLICompositeFileInfo(path)
+		if err != nil {
+			return 0
+		}
+		return mtime
+	}
 	if isOpenCodeFormatStorageAgent(def.Type) {
 		mtime, err := openCodeFormatSourceMtime(def.Type, path)
 		if err != nil {

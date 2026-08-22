@@ -1527,21 +1527,75 @@ func TestSourceMtimeS3HostPrefixedClaudeUsesSidecarMetadata(t *testing.T) {
 	)
 }
 
+func TestSourceMtimeS3IcodemateUsesSidecarMetadata(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/icodemate/test-proj/manual-id.jsonl"
+	transcriptMtime := time.Date(2026, 6, 24, 13, 5, 0, 0, time.UTC)
+	sidecarMtime := transcriptMtime.Add(time.Minute)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:        "laptop~icodemate:manual-id",
+		Project:   "test-proj",
+		Machine:   "laptop",
+		Agent:     "icodemate",
+		FilePath:  strPtr(path),
+		FileSize:  int64Ptr(128),
+		FileMtime: int64Ptr(transcriptMtime.UnixNano()),
+	}))
+
+	oldStat := statS3Object
+	oldStatClaude := statClaudeS3Session
+	t.Cleanup(func() {
+		statS3Object = oldStat
+		statClaudeS3Session = oldStatClaude
+	})
+	statS3Object = func(got string) (parser.S3Object, error) {
+		require.Equal(t, path, got)
+		return parser.S3Object{
+			URI:          path,
+			Size:         128,
+			LastModified: transcriptMtime,
+		}, nil
+	}
+	statClaudeS3Session = func(got string) (parser.S3Object, error) {
+		require.Equal(t, path, got)
+		return parser.S3Object{
+			URI:          path,
+			Size:         256,
+			LastModified: sidecarMtime,
+		}, nil
+	}
+
+	e := &Engine{
+		db:      database,
+		machine: "central",
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentIcodemate: {"s3://bucket/laptop/raw/icodemate"},
+		},
+	}
+
+	assert.Equal(t, sidecarMtime.UnixNano(),
+		e.SourceMtime("laptop~icodemate:manual-id"))
+}
+
 func TestPickPreferredClaudeDiscoveredFileUsesS3Metadata(t *testing.T) {
 	database := openTestDB(t)
 	oldFile := parser.DiscoveredFile{
-		Agent:       parser.AgentClaude,
-		Path:        "s3://bucket/a/test-proj/session.jsonl",
-		Project:     "test-proj",
-		SourceSize:  100,
-		SourceMtime: time.Date(2026, 6, 24, 13, 3, 0, 0, time.UTC).UnixNano(),
+		Agent:           parser.AgentClaude,
+		Path:            "s3://bucket/a/test-proj/session.jsonl",
+		Project:         "test-proj",
+		SourceSize:      1000,
+		SourceMtime:     time.Date(2026, 6, 24, 13, 5, 0, 0, time.UTC).UnixNano(),
+		TranscriptSize:  100,
+		TranscriptMtime: time.Date(2026, 6, 24, 13, 3, 0, 0, time.UTC).UnixNano(),
 	}
 	newFile := parser.DiscoveredFile{
-		Agent:       parser.AgentClaude,
-		Path:        "s3://bucket/z/test-proj/session.jsonl",
-		Project:     "test-proj",
-		SourceSize:  200,
-		SourceMtime: time.Date(2026, 6, 24, 13, 4, 0, 0, time.UTC).UnixNano(),
+		Agent:           parser.AgentClaude,
+		Path:            "s3://bucket/z/test-proj/session.jsonl",
+		Project:         "test-proj",
+		SourceSize:      200,
+		SourceMtime:     time.Date(2026, 6, 24, 13, 4, 0, 0, time.UTC).UnixNano(),
+		TranscriptSize:  200,
+		TranscriptMtime: time.Date(2026, 6, 24, 13, 4, 0, 0, time.UTC).UnixNano(),
 	}
 	e := &Engine{db: database, machine: "central"}
 

@@ -431,6 +431,8 @@ func s3PrefixScan(root string, scan s3SessionScanner) []DiscoveredFile {
 			SourceSize:        source.Size,
 			SourceMtime:       source.LastModified.UnixNano(),
 			SourceFingerprint: source.Fingerprint,
+			TranscriptSize:    obj.Size,
+			TranscriptMtime:   obj.LastModified.UnixNano(),
 		})
 	}
 	return out

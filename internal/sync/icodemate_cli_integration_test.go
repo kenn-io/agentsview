@@ -114,6 +114,66 @@ func TestIcodemateCLIForkSessionsReconcileAcrossSourceReparse(t *testing.T) {
 	assert.Equal(t, "source_missing", *archivedFork.DeletionCause)
 }
 
+func TestIcodemateCLIShortenedTranscriptReplacesArchivedMessages(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "project", "shortened.jsonl")
+	initial := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "first prompt").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "obsolete reply").
+		String()
+	dbtest.WriteTestFile(t, path, []byte(initial))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentIcodemate: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	shortened := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "replacement prompt").
+		String()
+	dbtest.WriteTestFile(t, path, []byte(shortened))
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	messages, err := database.GetMessages(
+		t.Context(), "icodemate:shortened", 0, 10, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "replacement prompt", messages[0].Content)
+}
+
+func TestIcodemateCLISourceMtimeIncludesPersistedToolResults(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "project", "mtime.jsonl")
+	sidecar := filepath.Join(
+		root, "project", "mtime", "tool-results", "output.txt",
+	)
+	dbtest.WriteTestFile(t, path, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "prompt").String()))
+	dbtest.WriteTestFile(t, sidecar, []byte("persisted output\n"))
+	transcriptTime := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
+	sidecarTime := transcriptTime.Add(time.Minute)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(sidecar, sidecarTime, sidecarTime))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentIcodemate: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	assert.Equal(t, sidecarTime.UnixNano(),
+		engine.SourceMtime("icodemate:mtime"))
+}
+
 func TestIcodemateCLIPartialForkWriteRetriesWholeSource(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -213,11 +273,15 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 	archiveRoot := t.TempDir()
 	livePath := filepath.Join(liveRoot, "live-project", "duplicate.jsonl")
 	archivePath := filepath.Join(archiveRoot, "archive-project", "duplicate.jsonl")
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUser("2024-01-01T00:00:00Z", "same logical session").
+	liveContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "complete session").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "complete reply").
 		String()
-	dbtest.WriteTestFile(t, livePath, []byte(content))
-	dbtest.WriteTestFile(t, archivePath, []byte(content))
+	archiveContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "stale session").
+		String()
+	dbtest.WriteTestFile(t, livePath, []byte(liveContent))
+	dbtest.WriteTestFile(t, archivePath, []byte(archiveContent))
 	liveSidecar := filepath.Join(
 		liveRoot, "live-project", "duplicate", "tool-results", "output.txt",
 	)
@@ -225,7 +289,7 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 		archiveRoot, "archive-project", "duplicate", "tool-results", "output.txt",
 	)
 	dbtest.WriteTestFile(t, liveSidecar, []byte("persisted output\n"))
-	dbtest.WriteTestFile(t, archiveSidecar, []byte("persisted output\n"))
+	dbtest.WriteTestFile(t, archiveSidecar, []byte(strings.Repeat("stale output\n", 100)))
 	older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Second)
 	require.NoError(t, os.Chtimes(archivePath, older, older))
@@ -247,6 +311,11 @@ func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
 	assert.Equal(t, 1, first.Synced)
 	assert.Equal(t, livePath,
 		database.GetSessionFilePath("icodemate:duplicate"))
+	messages, err := database.GetMessages(
+		t.Context(), "icodemate:duplicate", 0, 10, true,
+	)
+	require.NoError(t, err)
+	assert.Len(t, messages, 2)
 
 	touchedArchive := newer.Add(time.Second)
 	require.NoError(t, os.Chtimes(archivePath, touchedArchive, touchedArchive))

@@ -57,6 +57,10 @@ type DiscoveredFile struct {
 	Machine     string    // source machine override; empty = engine default
 	SourceSize  int64     // source object size for s3:// sources
 	SourceMtime int64     // source object mtime for s3:// sources, UnixNano
+	// TranscriptSize and TranscriptMtime retain the primary JSONL object's
+	// metadata when SourceSize and SourceMtime include persisted-result sidecars.
+	TranscriptSize  int64
+	TranscriptMtime int64
 	// SourceFingerprint is a durable object fingerprint for s3:// sources.
 	SourceFingerprint string
 	ForceParse        bool // caller requires freshness bypass

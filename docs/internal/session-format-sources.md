@@ -1604,6 +1604,9 @@ add an archived or maintained mirror without replacing the original identity.
   ID across configured roots, so duplicate or moved copies reconcile as one
   `icodemate:` session. S3 subagent refreshes retain the parent provider and
   machine namespace instead of importing ICodeMate children as Claude.
+  Polling includes local and S3 sidecar mtimes, shortened CLI transcripts
+  replace archived messages, and duplicate ranking uses transcript metadata
+  rather than sidecar volume.
   Complete CLI parses reconcile the transcript's current branch membership,
   and source freshness is recorded only after every emitted branch commits;
   unchanged S3 transcripts use that persisted all-branch state to skip object
