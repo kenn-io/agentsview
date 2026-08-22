@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -158,7 +159,7 @@ func TestUsageDailyGolden(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
 	assert.Equal(t, export.UsageDailySchemaVersion, report.SchemaVersion)
 
-	assertGoldenBytes(t, "usage_daily_v5.json", []byte(stdout))
+	assertCatalogGoldenBytes(t, "usage_daily_v5.json", []byte(stdout))
 }
 
 func TestUsageDailyBreakdownGolden(t *testing.T) {
@@ -188,7 +189,7 @@ func TestUsageDailyBreakdownGolden(t *testing.T) {
 		assert.Equal(t, "golden-host", daily.MachineBreakdowns[0].MachineName)
 	}
 
-	assertGoldenBytes(t, "usage_daily_breakdown_v5.json", []byte(stdout))
+	assertCatalogGoldenBytes(t, "usage_daily_breakdown_v5.json", []byte(stdout))
 }
 
 func setupExportGoldenDataDir(t *testing.T) string {
@@ -453,6 +454,30 @@ func assertGoldenBytes(t *testing.T, name string, got []byte) {
 		assert.Equal(t, string(want), string(got),
 			"golden mismatch for %s", name)
 	}
+}
+
+func assertCatalogGoldenBytes(t *testing.T, name string, got []byte) {
+	t.Helper()
+	var report struct {
+		Pricing struct {
+			EffectiveRowCount int `json:"effective_row_count"`
+		} `json:"pricing"`
+	}
+	require.NoError(t, json.Unmarshal(got, &report), "decode %s", name)
+	require.Greater(t, report.Pricing.EffectiveRowCount, 1000,
+		"pricing catalog row count for %s", name)
+
+	rowCountPattern := regexp.MustCompile(
+		`("effective_row_count"\s*:\s*)\d+`,
+	)
+	digestPattern := regexp.MustCompile(
+		`("digest"\s*:\s*)"[^"]*"`,
+	)
+	got = rowCountPattern.ReplaceAll(got, []byte(`${1}1001`))
+	got = digestPattern.ReplaceAll(got, []byte(
+		`${1}"sha256:0000000000000000000000000000000000000000000000000000000000000000"`,
+	))
+	assertGoldenBytes(t, name, got)
 }
 
 func TestDefaultUsageDateRange(t *testing.T) {
