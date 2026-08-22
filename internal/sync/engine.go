@@ -6451,7 +6451,7 @@ func (e *Engine) reconcileCopiedSourceMissingMembers(
 		ownerships = append(ownerships, db.SessionSourceOwnership{
 			ID:       member.sessionID,
 			Machine:  member.machine,
-			Agent:    string(parser.AgentClaude),
+			Agent:    string(member.agent),
 			FilePath: member.filePath,
 		})
 	}
@@ -6466,10 +6466,10 @@ func (e *Engine) reconcileCopiedSourceMissingMembers(
 	for i, member := range members {
 		e.clearSkipInMemory(member.filePath)
 		e.clearSkipInMemory(providerAgentSkipCacheKey(
-			member.filePath, parser.AgentClaude,
+			member.filePath, member.agent,
 		))
 		if err := target.DeleteProviderStatHash(
-			ctx, parser.AgentClaude, member.filePath,
+			ctx, member.agent, member.filePath,
 		); err != nil {
 			return tombstoned, fmt.Errorf(
 				"clear copied source freshness for %s: %w",
@@ -6477,7 +6477,7 @@ func (e *Engine) reconcileCopiedSourceMissingMembers(
 			)
 		}
 		changed, err := target.SoftDeleteSessionSourceOwnership(
-			ctx, member.machine, string(parser.AgentClaude),
+			ctx, member.machine, string(member.agent),
 			member.sessionID, member.filePath,
 		)
 		if err != nil {
@@ -6488,7 +6488,7 @@ func (e *Engine) reconcileCopiedSourceMissingMembers(
 		}
 		if changed {
 			tombstoned++
-			e.invalidateVerifiedSource(parser.AgentClaude, member.filePath)
+			e.invalidateVerifiedSource(member.agent, member.filePath)
 			continue
 		}
 		needsBaseline = append(needsBaseline, ownerships[i])
@@ -7126,6 +7126,8 @@ func (e *Engine) discoverProviderSources(
 				discovered.SourceSize = s3.Size
 				discovered.SourceMtime = s3.MtimeNS
 				discovered.SourceFingerprint = s3.Fingerprint
+				discovered.TranscriptSize = s3.TranscriptSize
+				discovered.TranscriptMtime = s3.TranscriptMtimeNS
 				discovered.ProviderProcess = false
 				if discovered.Project == "" {
 					discovered.Project = s3.Project
@@ -9616,6 +9618,7 @@ type sourceMissingMember struct {
 	sessionID string
 	filePath  string
 	machine   string
+	agent     parser.AgentType
 }
 
 type processResult struct {
@@ -10772,6 +10775,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 			members = append(members, sourceMissingMember{
 				sessionID: id,
 				filePath:  sourcePath,
+				agent:     agent,
 				machine: e.machineForProviderSource(
 					agent, source, sourcePath,
 				),
@@ -10833,6 +10837,26 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 	excludedSessionIDs []string,
 	results []parser.ParseResult,
 ) ([]sourceMissingMember, error) {
+	type membershipReader interface {
+		ListSessionWriteIdentitiesByID(
+			context.Context, []string,
+		) (map[string]db.SessionWriteIdentity, error)
+		ListSessionIDsByFilePath(string, string) ([]string, error)
+		ListSessionMachinesByID(
+			context.Context, []string,
+		) (map[string]string, error)
+	}
+	reader := membershipReader(e.db)
+	if e.archiveStore != nil {
+		archived, ok := e.archiveStore.(membershipReader)
+		if !ok {
+			return nil, fmt.Errorf(
+				"archive %T does not support %s source membership lookup",
+				e.archiveStore, agent,
+			)
+		}
+		reader = archived
+	}
 	present := make(map[string]struct{}, len(results)+len(excludedSessionIDs))
 	paths := make(map[string]struct{}, 1)
 	emittedIDs := make([]string, 0, len(results))
@@ -10853,7 +10877,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 	if len(paths) == 0 && sourcePath != "" {
 		paths[e.effectiveSourcePath(sourcePath)] = struct{}{}
 	}
-	storedIdentities, err := e.db.ListSessionWriteIdentitiesByID(ctx, emittedIDs)
+	storedIdentities, err := reader.ListSessionWriteIdentitiesByID(ctx, emittedIDs)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"list stored %s source identities: %w", agent, err,
@@ -10871,7 +10895,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 	var members []sourceMissingMember
 	var sessionIDs []string
 	for path := range paths {
-		storedIDs, err := e.db.ListSessionIDsByFilePath(path, string(agent))
+		storedIDs, err := reader.ListSessionIDsByFilePath(path, string(agent))
 		if err != nil {
 			return nil, fmt.Errorf(
 				"list %s sessions for complete source %s: %w",
@@ -10885,6 +10909,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 			members = append(members, sourceMissingMember{
 				sessionID: id,
 				filePath:  path,
+				agent:     agent,
 			})
 			sessionIDs = append(sessionIDs, id)
 		}
@@ -10892,7 +10917,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 	if len(members) == 0 {
 		return nil, nil
 	}
-	storedMachines, err := e.db.ListSessionMachinesByID(ctx, sessionIDs)
+	storedMachines, err := reader.ListSessionMachinesByID(ctx, sessionIDs)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"list stored %s session machines: %w", agent, err,
@@ -10965,6 +10990,7 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 			members = append(members, sourceMissingMember{
 				sessionID: id,
 				filePath:  path,
+				agent:     parser.AgentClaude,
 			})
 			sessionIDs = append(sessionIDs, id)
 		}
@@ -11027,6 +11053,7 @@ func (index *archiveStaleClaudeForkIndex) missingMembers(
 				sessionID: ownership.ID,
 				filePath:  path,
 				machine:   ownership.Machine,
+				agent:     parser.AgentClaude,
 			})
 		}
 	}

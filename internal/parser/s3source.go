@@ -345,12 +345,14 @@ func combineS3Fingerprints(values ...string) string {
 // MaterializedFileSource. The metadata threaded here is what lets the
 // incremental cutoff and skip checks run without performing that fetch.
 type S3DiscoveredSource struct {
-	URI         string
-	Project     string
-	Machine     string
-	Size        int64
-	MtimeNS     int64
-	Fingerprint string
+	URI               string
+	Project           string
+	Machine           string
+	Size              int64
+	MtimeNS           int64
+	Fingerprint       string
+	TranscriptSize    int64
+	TranscriptMtimeNS int64
 }
 
 // s3SourceRefFromDiscoveredFile builds the SourceRef for an s3:// session object
@@ -366,12 +368,14 @@ func s3SourceRefFromDiscoveredFile(root string, file DiscoveredFile) SourceRef {
 		FingerprintKey: file.Path,
 		ProjectHint:    file.Project,
 		Opaque: S3DiscoveredSource{
-			URI:         file.Path,
-			Project:     file.Project,
-			Machine:     file.Machine,
-			Size:        file.SourceSize,
-			MtimeNS:     file.SourceMtime,
-			Fingerprint: file.SourceFingerprint,
+			URI:               file.Path,
+			Project:           file.Project,
+			Machine:           file.Machine,
+			Size:              file.SourceSize,
+			MtimeNS:           file.SourceMtime,
+			Fingerprint:       file.SourceFingerprint,
+			TranscriptSize:    file.TranscriptSize,
+			TranscriptMtimeNS: file.TranscriptMtime,
 		},
 	}
 }

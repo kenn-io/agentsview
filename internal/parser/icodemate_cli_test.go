@@ -334,6 +334,8 @@ func TestIcodemateCLIProviderDiscoversS3Sessions(t *testing.T) {
 	assert.Equal(t, "proj", s3.Project)
 	assert.Equal(t, int64(33), s3.Size)
 	assert.Equal(t, sidecarMtime.UnixNano(), s3.MtimeNS)
+	assert.Equal(t, int64(11), s3.TranscriptSize)
+	assert.Equal(t, sessionMtime.UnixNano(), s3.TranscriptMtimeNS)
 	assert.Contains(t, s3.Fingerprint, "session")
 	assert.Contains(t, s3.Fingerprint, "sidecar")
 }

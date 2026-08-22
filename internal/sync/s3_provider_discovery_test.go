@@ -85,3 +85,28 @@ func TestProcessFileS3ProviderDiscoveredRoutesToS3Path(t *testing.T) {
 	assert.Equal(t, "laptop", sess.Machine)
 	assert.Equal(t, path, derefString(sess.FilePath))
 }
+
+func TestDiscoverProviderSourcesThreadsS3TranscriptMetadata(t *testing.T) {
+	const root = "s3://bucket/remote-box/raw/claude"
+	const uri = root + "/proj/session.jsonl"
+	e := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {root},
+		},
+		Machine: "central",
+		ProviderFactories: []parser.ProviderFactory{
+			s3ParseDiffProviderFactory{uri: uri},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(e.Close)
+
+	files, failures := e.discoverProviderSources(t.Context(), nil, nil)
+	require.Zero(t, failures)
+	require.Len(t, files, 1)
+	assert.Equal(t, int64(2048), files[0].TranscriptSize)
+	assert.Equal(t,
+		int64(1779012020000)*1_000_000, files[0].TranscriptMtime)
+}
