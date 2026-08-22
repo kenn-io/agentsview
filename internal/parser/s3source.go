@@ -1,4 +1,4 @@
-// ABOUTME: Reads Claude/Codex session JSONL directly from an S3-compatible
+// ABOUTME: Reads session JSONL directly from an S3-compatible
 // ABOUTME: object store (AWS S3, MinIO, Aliyun OSS, R2, ...) — pure Go, no cgo.
 package parser
 
@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -174,27 +173,6 @@ func StatS3Object(uri string) (S3Object, error) {
 	return statS3Object(uri)
 }
 
-// StatClaudeS3Session returns metadata for a Claude transcript plus matching
-// tool-result sidecars that can change parsed content without changing JSONL.
-func StatClaudeS3Session(uri string) (S3Object, error) {
-	obj, err := statS3Object(uri)
-	if err != nil {
-		return S3Object{}, err
-	}
-	return foldClaudeS3SidecarMetadata(obj, func(root string) []S3Object {
-		objects, err := listS3Objects(root)
-		if err != nil {
-			return nil
-		}
-		return objects
-	}), nil
-}
-
-// StatCodexS3Session returns metadata for a Codex rollout object.
-func StatCodexS3Session(uri string) (S3Object, error) {
-	return statS3Object(uri)
-}
-
 func statS3ObjectDefault(uri string) (S3Object, error) {
 	cl, err := s3Client()
 	if err != nil {
@@ -238,31 +216,6 @@ func s3MachineFromRoot(root, provider string) string {
 		}
 	}
 	return ""
-}
-
-func foldClaudeS3SidecarMetadata(
-	obj S3Object, list func(root string) []S3Object,
-) S3Object {
-	for _, root := range claudeS3SidecarRoots(obj.URI) {
-		for _, sidecar := range list(root) {
-			obj = foldS3ObjectMetadata(obj, sidecar)
-		}
-	}
-	return obj
-}
-
-func claudeS3SidecarRoots(uri string) []string {
-	sessionPath := strings.TrimSuffix(uri, ".jsonl")
-	if sessionPath == "" || sessionPath == uri {
-		return nil
-	}
-	roots := []string{sessionPath + "/tool-results"}
-	if strings.HasPrefix(pathBase(sessionPath), "agent-") {
-		if idx := strings.LastIndex(sessionPath, "/subagents/"); idx > 0 {
-			roots = append(roots, sessionPath[:idx]+"/tool-results")
-		}
-	}
-	return roots
 }
 
 func pathBase(p string) string {
@@ -376,17 +329,16 @@ func s3SourceRefFromDiscoveredFile(root string, file DiscoveredFile) SourceRef {
 	}
 }
 
-// s3SessionScanner configures the shared S3 discovery scan over a session root
+// S3SessionScanner configures the shared S3 discovery scan over a session root
 // laid out as .../<machine>/raw/<provider>. The scan lists every object under
 // the root, derives the source machine from that layout, and emits a
 // DiscoveredFile for each object Keep accepts. Keep and Project receive both the
 // raw relative path and its pre-split segments so a provider expresses its
 // selection and project rules without re-splitting. Sidecars, when set, returns
 // the companion objects whose size/mtime/fingerprint fold into the session's
-// freshness identity (Claude tool-results); providers without sidecars leave it
-// nil, and providers that derive the project from session content leave Project
-// nil.
-type s3SessionScanner struct {
+// freshness identity; providers without sidecars leave it nil, and providers
+// that derive the project from session content leave Project nil.
+type S3SessionScanner struct {
 	Agent    AgentType
 	Keep     func(rel string, segs []string) bool
 	Project  func(rel string, segs []string) string
@@ -394,10 +346,9 @@ type s3SessionScanner struct {
 }
 
 // s3PrefixScan is the shared S3 discovery body for the
-// .../<machine>/raw/<provider> layout. discoverClaudeS3 and discoverCodexS3 are
-// thin configurations of it, and any JSONL provider whose sessions land under
-// the same layout can reuse it by supplying its own Keep/Project predicates.
-func s3PrefixScan(root string, scan s3SessionScanner) []DiscoveredFile {
+// .../<machine>/raw/<provider> layout. Providers reuse it by supplying an
+// S3SessionScanner with their own Keep/Project predicates.
+func s3PrefixScan(root string, scan S3SessionScanner) []DiscoveredFile {
 	objects, err := listS3Objects(root)
 	if err != nil {
 		return nil
@@ -434,232 +385,6 @@ func s3PrefixScan(root string, scan s3SessionScanner) []DiscoveredFile {
 		})
 	}
 	return out
-}
-
-// discoverClaudeS3 lists Claude session JSONL under an s3:// projects root,
-// mirroring DiscoverClaudeProjects' selection rules:
-//   - top-level <project>/<uuid>.jsonl   (skip names starting "agent-")
-//   - subagents .../subagents/.../agent-*.jsonl
-//
-// Project is the first path segment under the root (e.g. "-home-user-proj").
-func discoverClaudeS3(root string) []DiscoveredFile {
-	return s3PrefixScan(root, s3SessionScanner{
-		Agent:    AgentClaude,
-		Keep:     keepClaudeS3Session,
-		Project:  func(_ string, segs []string) string { return segs[0] },
-		Sidecars: claudeS3SidecarObjects,
-	})
-}
-
-// claudeS3SubagentTranscriptPaths lists candidate subagent transcript objects,
-// mirroring the local walk in ClaudeSubagentTranscriptPaths. A root session
-// lists its own subagents prefix; a subagent lists the enclosing root's prefix
-// so nested descendants can be linked before relationship traversal scopes the
-// result. A listing error reads as no subagents, matching the local walk
-// swallowing filesystem errors: the caller's usage query degrades to stale
-// delegated totals instead of failing.
-func claudeS3SubagentTranscriptPaths(sessionPath string) []string {
-	base := sessionPath[strings.LastIndex(sessionPath, "/")+1:]
-	stem := strings.TrimSuffix(base, ".jsonl")
-	if stem == "" {
-		return nil
-	}
-	prefix := strings.TrimSuffix(sessionPath, ".jsonl") + "/subagents"
-	if strings.HasPrefix(stem, "agent-") {
-		const marker = "/subagents/"
-		idx := strings.LastIndex(sessionPath, marker)
-		if idx < 0 {
-			return nil
-		}
-		prefix = sessionPath[:idx] + "/subagents"
-	}
-	objects, err := listS3Objects(prefix)
-	if err != nil {
-		return nil
-	}
-	var paths []string
-	for _, obj := range objects {
-		if obj.URI == sessionPath {
-			continue
-		}
-		name := obj.URI[strings.LastIndex(obj.URI, "/")+1:]
-		if strings.HasPrefix(name, "agent-") &&
-			strings.HasSuffix(name, ".jsonl") {
-			paths = append(paths, obj.URI)
-		}
-	}
-	sort.Strings(paths)
-	return paths
-}
-
-// keepClaudeS3Session selects Claude transcript objects: a top-level
-// <project>/<uuid>.jsonl (excluding agent-* names and any subagents path), or a
-// subagent under .../subagents/.../agent-*.jsonl.
-func keepClaudeS3Session(rel string, segs []string) bool {
-	if !strings.HasSuffix(rel, ".jsonl") || len(segs) < 2 {
-		return false
-	}
-	base := segs[len(segs)-1]
-	if len(segs) >= 4 && segs[2] == "subagents" {
-		return strings.HasPrefix(base, "agent-")
-	}
-	return len(segs) == 2 && !strings.HasPrefix(base, "agent-") &&
-		!slices.Contains(segs, "subagents")
-}
-
-// claudeS3SidecarObjects returns the tool-results sidecar objects (under the
-// session's tool-results prefix, plus the parent session's for subagents) whose
-// metadata folds into the transcript's freshness identity. It filters the bulk
-// listing rather than re-listing per prefix, since the scan already holds every
-// object under the root.
-func claudeS3SidecarObjects(uri string, all []S3Object) []S3Object {
-	var matched []S3Object
-	for _, sidecarRoot := range claudeS3SidecarRoots(uri) {
-		prefix := strings.TrimSuffix(sidecarRoot, "/") + "/"
-		for _, candidate := range all {
-			if strings.HasPrefix(candidate.URI, prefix) {
-				matched = append(matched, candidate)
-			}
-		}
-	}
-	return matched
-}
-
-// discoverCodexS3 lists Codex rollout-*.jsonl under an s3:// sessions root
-// (any depth — Codex nests under 2026/MM/DD/). Project is derived from
-// session content, so it is left empty here, as in the local path.
-func discoverCodexS3(root string) []DiscoveredFile {
-	return s3PrefixScan(root, s3SessionScanner{
-		Agent: AgentCodex,
-		Keep: func(_ string, segs []string) bool {
-			return isCodexSessionFilename(segs[len(segs)-1])
-		},
-	})
-}
-
-// FindCodexS3ParentSessionURI locates one explicitly named parent rollout
-// under the same configured Codex S3 root as childURI. It lists metadata only;
-// callers decide whether and where to materialize the matching object.
-func FindCodexS3ParentSessionURI(
-	configuredRoot, childURI, parentID string,
-) (string, bool) {
-	if parentID == "" || strings.TrimSpace(parentID) != parentID ||
-		strings.ContainsAny(parentID, `/\\`) ||
-		CodexSessionUUIDFromFilename("rollout-x-"+parentID+".jsonl") != parentID {
-		return "", false
-	}
-	root, ok := codexS3RootURI(configuredRoot, childURI)
-	if !ok {
-		return "", false
-	}
-	objects, err := listS3Objects(root)
-	if err != nil {
-		return "", false
-	}
-	var matches []string
-	for _, obj := range objects {
-		if _, withinRoot := s3RelativePath(root, obj.URI); !withinRoot {
-			continue
-		}
-		name := path.Base(obj.URI)
-		if CodexSessionUUIDFromFilename(name) == parentID {
-			matches = append(matches, obj.URI)
-		}
-	}
-	if len(matches) == 0 {
-		return "", false
-	}
-	sort.Slice(matches, func(i, j int) bool {
-		iArchived := strings.Contains(matches[i], "/archived_sessions/")
-		jArchived := strings.Contains(matches[j], "/archived_sessions/")
-		if iArchived != jArchived {
-			return !iArchived
-		}
-		return matches[i] < matches[j]
-	})
-	return matches[0], true
-}
-
-func codexS3RootURI(configuredRoot, sessionURI string) (string, bool) {
-	if !strings.HasPrefix(sessionURI, "s3://") {
-		return "", false
-	}
-	if configuredRoot != "" {
-		configuredRoot = strings.TrimSuffix(configuredRoot, "/")
-		if !strings.HasPrefix(configuredRoot, "s3://") {
-			return "", false
-		}
-		if _, ok := s3RelativePath(configuredRoot, sessionURI); !ok {
-			return "", false
-		}
-		return configuredRoot, true
-	}
-	parts := strings.Split(strings.TrimPrefix(sessionURI, "s3://"), "/")
-	if len(parts) < 2 || !isCodexSessionFilename(parts[len(parts)-1]) {
-		return "", false
-	}
-	for i := len(parts) - 3; i >= 1; i-- {
-		if parts[i] == "raw" && parts[i+1] == "codex" {
-			return "s3://" + strings.Join(parts[:i+2], "/"), true
-		}
-	}
-	for i := len(parts) - 2; i >= 1; i-- {
-		if parts[i] == "sessions" || parts[i] == "archived_sessions" {
-			return "s3://" + strings.Join(parts[:i], "/"), true
-		}
-	}
-	if len(parts) >= 5 && IsDigits(parts[len(parts)-4]) &&
-		IsDigits(parts[len(parts)-3]) && IsDigits(parts[len(parts)-2]) {
-		return "s3://" + strings.Join(parts[:len(parts)-4], "/"), true
-	}
-	return "s3://" + strings.Join(parts[:len(parts)-1], "/"), true
-}
-
-// CodexS3SessionIndexURI returns the session_index.jsonl URI adjacent to the
-// configured Codex sessions root represented by a rollout URI.
-func CodexS3SessionIndexURI(sessionURI string) (string, bool) {
-	if !strings.HasPrefix(sessionURI, "s3://") {
-		return "", false
-	}
-	trimmed := strings.TrimPrefix(sessionURI, "s3://")
-	parts := strings.Split(trimmed, "/")
-	if len(parts) < 2 || !isCodexSessionFilename(parts[len(parts)-1]) {
-		return "", false
-	}
-
-	for i := len(parts) - 3; i >= 1; i-- {
-		if parts[i] == "raw" && parts[i+1] == "codex" {
-			rootEnd := i + 2
-			if rootEnd < len(parts)-1 &&
-				(parts[rootEnd] == "sessions" ||
-					parts[rootEnd] == "archived_sessions") {
-				return s3URIWithLast(parts[:rootEnd], CodexSessionIndexFilename), true
-			}
-			return s3URIWithLast(parts[:i+1], CodexSessionIndexFilename), true
-		}
-	}
-
-	for i := len(parts) - 2; i >= 1; i-- {
-		if parts[i] == "sessions" || parts[i] == "archived_sessions" {
-			return s3URIWithLast(parts[:i], CodexSessionIndexFilename), true
-		}
-	}
-
-	sessionRootEnd := len(parts) - 1
-	if len(parts) >= 5 &&
-		IsDigits(parts[len(parts)-4]) &&
-		IsDigits(parts[len(parts)-3]) &&
-		IsDigits(parts[len(parts)-2]) {
-		sessionRootEnd = len(parts) - 4
-	}
-	if sessionRootEnd <= 0 {
-		return "", false
-	}
-	parent := parts[:sessionRootEnd]
-	if len(parent) > 1 {
-		parent = parent[:len(parent)-1]
-	}
-	return s3URIWithLast(parent, CodexSessionIndexFilename), true
 }
 
 func s3URIWithLast(parts []string, last string) string {

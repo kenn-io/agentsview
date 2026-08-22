@@ -428,7 +428,7 @@ func ResolveCodexShallowWatchRoots(root string) []string {
 // provider can call it without shimming a Discover* free function.
 func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 	if strings.HasPrefix(projectsDir, "s3://") {
-		return discoverClaudeS3(projectsDir)
+		return s3PrefixScan(projectsDir, claudeS3Scanner())
 	}
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {

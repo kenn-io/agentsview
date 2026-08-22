@@ -69,51 +69,11 @@ func applyIDPrefixToParsedResult(
 }
 
 func safeS3TempRelPath(file parser.DiscoveredFile) (string, error) {
-	trimmed := strings.TrimPrefix(file.Path, "s3://")
-	parts := strings.Split(trimmed, "/")
-	relParts := parts
-	if len(parts) > 1 {
-		relParts = parts[1:]
-	}
-	if file.Agent == parser.AgentClaude {
-		for i := 0; i+1 < len(parts); i++ {
-			if parts[i] == "raw" && parts[i+1] == "claude" {
-				relParts = parts[i+2:]
-				break
-			}
-		}
-	}
-	if file.Agent == parser.AgentCodex {
-		for i := 0; i+1 < len(parts); i++ {
-			if parts[i] == "raw" && parts[i+1] == "codex" {
-				relParts = parts[i+2:]
-				break
-			}
-		}
-		relParts = codexS3TempRelParts(relParts)
-	}
-	if len(relParts) == 0 {
+	p, ok := s3ProviderFor(file.Agent)
+	if !ok {
 		return "", fmt.Errorf("unsafe s3 object name: %q", file.Path)
 	}
-	for _, part := range relParts {
-		if part == "" || part == "." || part == ".." ||
-			strings.ContainsAny(part, `\/`) {
-			return "", fmt.Errorf("unsafe s3 object name: %q", file.Path)
-		}
-	}
-	return filepath.Join(relParts...), nil
-}
-
-func codexS3TempRelParts(parts []string) []string {
-	for i, part := range parts {
-		if part == "sessions" || part == "archived_sessions" {
-			return parts[i:]
-		}
-	}
-	if len(parts) == 0 {
-		return parts
-	}
-	return append([]string{"sessions"}, parts...)
+	return p.S3TempRelPath(file.Path)
 }
 
 func hydrateS3CodexSessionIndex(sessionPath, sessionURI string) (string, error) {
@@ -214,7 +174,7 @@ func hydrateS3CodexParent(
 	return true
 }
 
-// processS3Session reads a Claude/Codex session JSONL directly from object
+// processS3Session reads a session JSONL directly from object
 // storage (in-process, no persistent local mirror): download the object's
 // bytes, buffer them to a transient temp file so the existing path-based
 // parsers (incremental offsets, subagent layout) work unchanged, run the
@@ -288,6 +248,26 @@ func (e *Engine) processS3Session(
 				}
 			}
 		}
+	default:
+		rawID := ""
+		if p, ok := s3ProviderFor(file.Agent); ok {
+			rawID = p.S3SessionID(file.Path)
+		}
+		if rawID != "" {
+			fullID := applyIDPrefixToID(idPrefix, rawID)
+			if !sourceChanged &&
+				e.shouldSkipFileWithPrefix(
+					idPrefix, rawID, sourceInfo, sourceFingerprint,
+				) &&
+				e.db.GetSessionFilePath(fullID) == file.Path {
+				sess, _ := e.db.GetSession(ctx, fullID)
+				if sess != nil &&
+					sess.Project != "" &&
+					!parser.NeedsProjectReparse(sess.Project) {
+					return processResult{skip: true}
+				}
+			}
+		}
 	}
 
 	relPath, err := safeS3TempRelPath(file)
@@ -351,6 +331,23 @@ func (e *Engine) processS3Session(
 		}
 		if indexPath != "" {
 			defer parser.EvictCodexSessionIndex(indexPath)
+		}
+	default:
+		configuredRoot := ""
+		if file.ProviderSource != nil {
+			configuredRoot = file.ProviderSource.ConfiguredRoot
+		}
+		if p, ok := s3ProviderFor(file.Agent); ok {
+			if err := p.S3PostFetchHydrate(dir, tmp, configuredRoot, file.Path); err != nil {
+				return processResult{err: err, noCacheSkip: true, retentionLease: lease}
+			}
+		}
+	}
+	if err := os.Chtimes(tmp, sourceInfo.ModTime(), sourceInfo.ModTime()); err != nil {
+		return processResult{
+			err:            fmt.Errorf("setting S3 source modification time: %w", err),
+			noCacheSkip:    true,
+			retentionLease: lease,
 		}
 	}
 	res, err := e.parseMaterializedS3Source(ctx, file, dir, tmp)

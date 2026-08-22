@@ -17,7 +17,12 @@ var (
 	statS3Object        = parser.StatS3Object
 	statClaudeS3Session = parser.StatClaudeS3Session
 	statCodexS3Session  = parser.StatCodexS3Session
+	lookupS3Provider    = parser.S3ProviderFor
 )
+
+func s3ProviderFor(agent parser.AgentType) (parser.S3Provider, bool) {
+	return lookupS3Provider(agent)
+}
 
 func s3SourceFileInfo(file parser.DiscoveredFile) (os.FileInfo, error) {
 	size := file.SourceSize
@@ -52,35 +57,31 @@ func s3SourceFingerprint(file parser.DiscoveredFile) string {
 }
 
 func statS3SourceObject(file parser.DiscoveredFile) (parser.S3Object, error) {
-	stat := statS3Object
+	// Keep Claude/Codex package-level hooks so existing tests can stub
+	// sidecar-aware stats without replacing the provider.
 	switch file.Agent {
 	case parser.AgentClaude:
-		stat = statClaudeS3Session
+		return statClaudeS3Session(file.Path)
 	case parser.AgentCodex:
-		stat = statCodexS3Session
+		return statCodexS3Session(file.Path)
 	}
-	return stat(file.Path)
+	p, ok := s3ProviderFor(file.Agent)
+	if !ok {
+		return parser.S3Object{}, fmt.Errorf("unsupported s3 agent type: %s", file.Agent)
+	}
+	return p.S3StatSession(file.Path)
 }
 
 func s3DiscoveredSessionID(file parser.DiscoveredFile) string {
-	switch file.Agent {
-	case parser.AgentClaude:
-		id := claudeSessionIDFromPath(file.Path)
-		if id == "" {
-			return ""
-		}
-		return applyIDPrefixToID(s3SessionIDPrefix(file.Machine), id)
-	case parser.AgentCodex:
-		uuid := parser.CodexSessionUUIDFromFilename(path.Base(file.Path))
-		if uuid == "" {
-			return ""
-		}
-		return applyIDPrefixToID(
-			s3SessionIDPrefix(file.Machine), "codex:"+uuid,
-		)
-	default:
+	p, ok := s3ProviderFor(file.Agent)
+	if !ok {
 		return ""
 	}
+	id := p.S3SessionID(file.Path)
+	if id == "" {
+		return ""
+	}
+	return applyIDPrefixToID(s3SessionIDPrefix(file.Machine), id)
 }
 
 func (e *Engine) s3SourceMetadataChanged(file parser.DiscoveredFile) bool {
@@ -320,7 +321,7 @@ func s3MachineFromRoot(root string) string {
 }
 
 func isS3AgentRootSegment(seg string) bool {
-	return seg == "claude" || seg == "codex"
+	return parser.AgentSupportsS3Discovery(parser.AgentType(seg))
 }
 
 func s3RelFromRoot(root, uri string) (string, bool) {
@@ -354,9 +355,13 @@ func (e *Engine) hydrateS3DiscoveredFile(
 		if file.Machine == "" {
 			file.Machine = s3MachineFromRoot(root)
 		}
-		if file.Project == "" && file.Agent == parser.AgentClaude {
-			if first, _, ok := strings.Cut(rel, "/"); ok {
-				file.Project = first
+		if file.Project == "" {
+			if p, ok := s3ProviderFor(file.Agent); ok {
+				scan := p.S3Scanner()
+				if scan.Project != nil && strings.Contains(rel, "/") {
+					segs := strings.Split(rel, "/")
+					file.Project = scan.Project(rel, segs)
+				}
 			}
 		}
 		break
@@ -367,14 +372,8 @@ func (e *Engine) hydrateS3DiscoveredFile(
 		}
 	}
 	if file.SourceMtime == 0 {
-		stat := statS3Object
-		switch file.Agent {
-		case parser.AgentClaude:
-			stat = statClaudeS3Session
-		case parser.AgentCodex:
-			stat = statCodexS3Session
-		}
-		if obj, err := stat(file.Path); err == nil {
+		obj, err := statS3SourceObject(*file)
+		if err == nil {
 			file.SourceSize = obj.Size
 			file.SourceMtime = obj.LastModified.UnixNano()
 			file.SourceFingerprint = obj.Fingerprint

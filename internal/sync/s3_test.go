@@ -106,6 +106,64 @@ func TestProcessS3CodexNamespacesIDsBySourceMachine(t *testing.T) {
 	assert.Nil(t, raw)
 }
 
+func TestProcessS3CursorNamespacesIDsBySourceMachine(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/cursor/demo-proj/shared-id.jsonl"
+	content := "user:\nHello from Cursor\nassistant:\nHi there.\n"
+	objectMtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		if got != path {
+			return nil, missingS3ObjectError()
+		}
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	e := &Engine{db: database, machine: "central"}
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent:       parser.AgentCursor,
+		Path:        path,
+		Project:     "demo-proj",
+		Machine:     "laptop",
+		SourceSize:  int64(len(content)),
+		SourceMtime: objectMtime.UnixNano(),
+	})
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
+		sess: res.results[0].Session,
+		msgs: res.results[0].Messages,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Equal(t, 0, failed)
+
+	sess, err := database.GetSessionFull(context.Background(), "laptop~cursor:shared-id")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "laptop", sess.Machine)
+	assert.Equal(t, "cursor", sess.Agent)
+	assert.Equal(t, path, derefString(sess.FilePath))
+	assert.Equal(t, objectMtime.Format(time.RFC3339Nano), derefString(sess.StartedAt))
+	assert.Equal(t, objectMtime.Format(time.RFC3339Nano), derefString(sess.EndedAt))
+	raw, err := database.GetSessionFull(context.Background(), "cursor:shared-id")
+	require.NoError(t, err)
+	assert.Nil(t, raw)
+}
+
+func TestProcessFileS3UnsupportedAgent(t *testing.T) {
+	e := &Engine{db: openTestDB(t), machine: "central"}
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent:       parser.AgentGrok,
+		Path:        "s3://bucket/laptop/raw/grok/proj/sess.jsonl",
+		SourceMtime: 1,
+	})
+	require.Error(t, res.err)
+	assert.Contains(t, res.err.Error(), "unsupported s3 agent type")
+}
+
 func TestProcessS3CodexForkRetriesUntilParentAvailable(t *testing.T) {
 	database := openTestDB(t)
 	const root = "s3://bucket/laptop/raw/codex"

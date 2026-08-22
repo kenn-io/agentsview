@@ -809,9 +809,10 @@ PostgreSQL.
 
 ### S3-Compatible Session Sources
 
-Claude and Codex session roots can also be `s3://` URIs. This is useful when
-several machines push their raw session files to object storage and one central
-AgentsView instance reads them without SSH access to those machines.
+Claude, Codex, and Cursor session roots can also be `s3://` URIs. This is
+useful when several machines push their raw session files to object storage
+and one central AgentsView instance reads them without SSH access to those
+machines.
 
 ```toml
 claude_project_dirs = [
@@ -823,11 +824,16 @@ codex_sessions_dirs = [
   "~/.codex/sessions",
   "s3://agent-archive/laptop/raw/codex",
 ]
+
+cursor_project_dirs = [
+  "~/.cursor/projects",
+  "s3://agent-archive/laptop/raw/cursor",
+]
 ```
 
 S3 sources are read-only inputs to the normal local sync. AgentsView lists
 matching objects, fetches each changed object to a temporary file, parses it
-with the existing Claude/Codex parser, records the original `s3://` URI as
+with the existing per-agent parser, records the original `s3://` URI as
 `file_path`, and removes the temporary file. No persistent local mirror is
 created.
 
@@ -854,6 +860,7 @@ Expected object layouts:
 s3://bucket/.../<machine>/raw/claude/<project>/<uuid>.jsonl
 s3://bucket/.../<machine>/raw/claude/<project>/subagents/.../agent-*.jsonl
 s3://bucket/.../<machine>/raw/codex/2026/06/24/rollout-*.jsonl
+s3://bucket/.../<machine>/raw/cursor/<project>/<uuid>.jsonl
 ```
 
 The machine name is derived from the path segment immediately before `raw`. If
@@ -1028,7 +1035,7 @@ autonomous run whose last persisted prompt is outside either bound, that rollout
 uses native-watcher freshness until another persisted prompt makes it hot
 again.
 
-For `s3://` Claude and Codex roots, change detection uses object size,
+For `s3://` Claude, Codex, and Cursor roots, change detection uses object size,
 `LastModified`, and available object fingerprints such as ETag, version ID, and
 checksums from listing or stat calls. Object content is downloaded only after
 that metadata shows a parse may be needed.
