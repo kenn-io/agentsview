@@ -283,11 +283,13 @@ force unchanged manifest-capable files to transfer again. Directory-scoped and
 verbatim curated content still use delta transfer. Windsurf's sanitized curated
 export remains a separate full-archive transfer on every sync. HTTP collectors
 and spokes must use the same remote-sync protocol version; incompatible peers
-fail before exchanging targets or archive data. An HTTP preparation or
-contributor failure aborts the combined rebuild without replacing the active
-archive or running SSH. Ordinary incremental and post-swap SSH failures retain
-per-host reporting, and the command exits non-zero if any host failed. See
-[Incremental Sync](/remote-access/#incremental-sync).
+fail before exchanging targets or archive data. A configured HTTP host that is
+offline, unreachable, or times out is skipped; reachable HTTP hosts still join
+the combined rebuild. Other HTTP preparation or contributor failures abort the
+combined rebuild without replacing the active archive or running SSH. Ordinary
+incremental and post-swap SSH failures retain per-host reporting, and the
+command exits non-zero for any failure other than an unavailable configured
+HTTP host. See [Incremental Sync](/remote-access/#incremental-sync).
 
 `agentsview sync --host X` syncs one host, not the whole configured list. When
 the local daemon knows a configured host with that identity, it uses the stored

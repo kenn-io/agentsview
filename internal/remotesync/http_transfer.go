@@ -26,6 +26,24 @@ type downloadedArchive struct {
 	remove     func(string) error
 }
 
+type httpBodyReadError struct{ err error }
+
+func (e *httpBodyReadError) Error() string { return e.err.Error() }
+func (e *httpBodyReadError) Unwrap() error { return e.err }
+
+type httpBodyReader struct {
+	r   io.Reader
+	err error
+}
+
+func (r *httpBodyReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		r.err = &httpBodyReadError{err: err}
+	}
+	return n, err
+}
+
 // downloadedArchiveCleanupError retains a spool whose removal failed so the
 // process-level cleanup registry can retry it before another HTTP sync starts.
 type downloadedArchiveCleanupError struct {
@@ -131,7 +149,10 @@ func (hs HTTPSync) downloadArchive(
 	closeErr := spool.Close()
 	if copyErr != nil {
 		return nil, errors.Join(
-			fmt.Errorf("download archive: %w", copyErr), closeErr,
+			&httpBodyReadError{
+				err: fmt.Errorf("download archive: %w", copyErr),
+			},
+			closeErr,
 		)
 	}
 	if closeErr != nil {

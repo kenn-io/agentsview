@@ -2774,8 +2774,14 @@ func (e *Engine) resyncBuildLocked(
 	localOldFileSessions := oldFileSessions
 	rebuildOldFileSessions := oldFileSessions
 	contributorOldFileSessions := make([]int, len(opts.Contributors))
-	if len(opts.Contributors) > 0 {
-		contributorPrefixes := make([]string, 0, len(opts.Contributors))
+	if len(opts.Contributors) > 0 ||
+		len(opts.UnavailableContributorIDPrefixes) > 0 {
+		contributorPrefixes := slices.Clone(
+			opts.UnavailableContributorIDPrefixes,
+		)
+		contributorPrefixes = slices.Grow(
+			contributorPrefixes, len(opts.Contributors),
+		)
 		for _, contributor := range opts.Contributors {
 			if contributor.Config.IDPrefix != "" {
 				contributorPrefixes = append(
@@ -3143,7 +3149,8 @@ func (e *Engine) resyncBuildLocked(
 	}
 
 	localSafetyAbort := false
-	if len(opts.Contributors) > 0 {
+	if len(opts.Contributors) > 0 ||
+		len(opts.UnavailableContributorIDPrefixes) > 0 {
 		// Evaluate local safety after contributors so a contributor's own
 		// cancellation or failure remains the reported abort reason. Trash
 		// copied from the old archive cannot make an empty local pass safe.

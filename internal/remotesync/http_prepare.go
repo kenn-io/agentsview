@@ -50,10 +50,11 @@ func (e *HostError) Unwrap() error { return e.Err }
 // Source ownership stays internal so locks and temporary roots can only be
 // released as a group.
 type PreparedHTTPSyncs struct {
-	mu      sync.Mutex
-	sources []*PreparedHTTP
-	closing bool
-	borrows int
+	mu                    sync.Mutex
+	sources               []*PreparedHTTP
+	unavailableIDPrefixes []string
+	closing               bool
+	borrows               int
 }
 
 // PrepareHTTPSyncs prepares HTTP hosts in deterministic order, using canonical
@@ -64,11 +65,26 @@ type PreparedHTTPSyncs struct {
 func PrepareHTTPSyncs(
 	ctx context.Context, syncs []HTTPSync,
 ) (*PreparedHTTPSyncs, error) {
-	return prepareHTTPSyncs(ctx, syncs, func(
+	prepared, _, err := prepareHTTPSyncsWithUnavailable(ctx, syncs, false, func(
 		ctx context.Context, hs HTTPSync,
 	) (*PreparedHTTP, error) {
 		return hs.Prepare(ctx)
 	})
+	return prepared, err
+}
+
+// PrepareAvailableHTTPSyncs prepares every reachable HTTP host. Unavailable
+// hosts are omitted; other failures retain the all-or-nothing cleanup behavior
+// of PrepareHTTPSyncs.
+func PrepareAvailableHTTPSyncs(
+	ctx context.Context, syncs []HTTPSync,
+) (*PreparedHTTPSyncs, error) {
+	prepared, _, err := prepareHTTPSyncsWithUnavailable(ctx, syncs, true, func(
+		ctx context.Context, hs HTTPSync,
+	) (*PreparedHTTP, error) {
+		return hs.Prepare(ctx)
+	})
+	return prepared, err
 }
 
 func prepareHTTPSyncs(
@@ -76,6 +92,18 @@ func prepareHTTPSyncs(
 	syncs []HTTPSync,
 	prepare func(context.Context, HTTPSync) (*PreparedHTTP, error),
 ) (*PreparedHTTPSyncs, error) {
+	prepared, _, err := prepareHTTPSyncsWithUnavailable(
+		ctx, syncs, false, prepare,
+	)
+	return prepared, err
+}
+
+func prepareHTTPSyncsWithUnavailable(
+	ctx context.Context,
+	syncs []HTTPSync,
+	skipUnavailable bool,
+	prepare func(context.Context, HTTPSync) (*PreparedHTTP, error),
+) (*PreparedHTTPSyncs, []*HostError, error) {
 	type orderedSync struct {
 		sync    HTTPSync
 		sortKey string
@@ -94,7 +122,7 @@ func prepareHTTPSyncs(
 		}
 		lockPath, err := canonicalMirrorLockPath(MirrorDir(hs.DataDir, hs.Host))
 		if err != nil {
-			return nil, &HostError{
+			return nil, nil, &HostError{
 				Host: hs.Host, Operation: "resolve mirror lock", Err: err,
 			}
 		}
@@ -103,7 +131,7 @@ func prepareHTTPSyncs(
 				"%w: hosts %q and %q use %q",
 				ErrDuplicateMirrorLock, previous.Host, hs.Host, lockPath,
 			)
-			return nil, &HostError{
+			return nil, nil, &HostError{
 				Host: hs.Host, Operation: "resolve mirror lock", Err: cause,
 			}
 		}
@@ -119,6 +147,7 @@ func prepareHTTPSyncs(
 	prepared := &PreparedHTTPSyncs{
 		sources: make([]*PreparedHTTP, 0, len(ordered)),
 	}
+	var unavailable []*HostError
 	for _, input := range ordered {
 		hs := input.sync
 		if hs.Lifecycle != nil && hs.Lifecycle.PrepareStarted != nil {
@@ -129,50 +158,66 @@ func prepareHTTPSyncs(
 			hs.Lifecycle.PrepareFinished(err)
 		}
 		if err != nil {
+			primary := &HostError{Host: hs.Host, Operation: "prepare", Err: err}
+			if skipUnavailable && source == nil && ctx.Err() == nil &&
+				IsHostUnavailable(err) {
+				unavailable = append(unavailable, primary)
+				prepared.unavailableIDPrefixes = append(
+					prepared.unavailableIDPrefixes, rebuildIDPrefix(hs.Host),
+				)
+				hs.reportProgressDetail(
+					"Skipped offline remote host " + hs.Host,
+				)
+				continue
+			}
 			if source != nil {
 				prepared.sources = append(prepared.sources, source)
 			}
-			primary := &HostError{Host: hs.Host, Operation: "prepare", Err: err}
 			cleanupErr := prepared.Close()
 			if cleanupErr != nil {
-				return prepared, errors.Join(primary, cleanupErr)
+				return prepared, unavailable, errors.Join(primary, cleanupErr)
 			}
-			return nil, primary
+			return nil, unavailable, primary
 		}
 		prepared.sources = append(prepared.sources, source)
 	}
-	return prepared, nil
+	return prepared, unavailable, nil
 }
 
-// BorrowRebuildContributors borrows rebuild descriptions while the prepared
-// set retains cleanup ownership. Callers must invoke the idempotent release
-// function after the rebuild stops using every contributor. Close refuses to
-// release any source while a borrow remains active.
-func (p *PreparedHTTPSyncs) BorrowRebuildContributors() (
-	contributors []syncpkg.RebuildContributor,
+// BorrowRebuildOptions borrows rebuild descriptions and unavailable host
+// namespaces while the prepared set retains cleanup ownership. Callers must
+// invoke the idempotent release function after the rebuild stops using the
+// options. Close refuses to release any source while a borrow remains active.
+func (p *PreparedHTTPSyncs) BorrowRebuildOptions() (
+	options syncpkg.RebuildOptions,
 	release func(),
 	err error,
 ) {
 	if p == nil {
-		return nil, nil, ErrPreparedClosed
+		return syncpkg.RebuildOptions{}, nil, ErrPreparedClosed
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closing {
-		return nil, nil, ErrPreparedClosed
+		return syncpkg.RebuildOptions{}, nil, ErrPreparedClosed
 	}
-	contributors = make([]syncpkg.RebuildContributor, 0, len(p.sources))
+	options.Contributors = make(
+		[]syncpkg.RebuildContributor, 0, len(p.sources),
+	)
+	options.UnavailableContributorIDPrefixes = slices.Clone(
+		p.unavailableIDPrefixes,
+	)
 	for _, source := range p.sources {
 		if source == nil {
 			continue
 		}
 		contributor, err := source.RebuildContributor()
 		if err != nil {
-			return nil, nil, &HostError{
+			return syncpkg.RebuildOptions{}, nil, &HostError{
 				Host: source.sync.Host, Operation: "build rebuild contributor", Err: err,
 			}
 		}
-		contributors = append(contributors, contributor)
+		options.Contributors = append(options.Contributors, contributor)
 	}
 	p.borrows++
 	var once sync.Once
@@ -183,7 +228,7 @@ func (p *PreparedHTTPSyncs) BorrowRebuildContributors() (
 			p.mu.Unlock()
 		})
 	}
-	return contributors, release, nil
+	return options, release, nil
 }
 
 // Close releases prepared sources in reverse order. Successfully closed

@@ -44,6 +44,10 @@ type RebuildContributor struct {
 // RebuildOptions configures optional sources for an atomic full rebuild.
 type RebuildOptions struct {
 	Contributors []RebuildContributor
+	// UnavailableContributorIDPrefixes identifies configured contributor
+	// namespaces that could not be prepared. Their history is excluded from
+	// rebuild safety expectations and survives through orphan copying.
+	UnavailableContributorIDPrefixes []string
 	// includePhaseDiagnostics is enabled only by the options entrypoint. The
 	// legacy ResyncAll wrapper keeps both returned and in-flight stats free of
 	// options-only diagnostics.

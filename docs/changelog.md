@@ -18,6 +18,8 @@ description: Release history for AgentsView
 
 - Preserve Antigravity CLI 1.1.5 generation usage and Low/Medium/High model
   effort from SQLite executor metadata.
+- Let `agentsview sync` skip offline configured HTTP hosts while local and
+  reachable remote sources continue to sync.
 
 **Improvements**
 

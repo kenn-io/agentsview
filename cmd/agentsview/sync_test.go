@@ -18,6 +18,7 @@ import (
 	"strings"
 	stdsync "sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ import (
 )
 
 type fakeCLIPreparedHTTPRebuild struct {
-	contributors  []agentsync.RebuildContributor
+	options       agentsync.RebuildOptions
 	closed        int
 	released      bool
 	closeReleased bool
@@ -47,10 +48,10 @@ type cliLifecycleError struct{ err error }
 func (e *cliLifecycleError) Error() string { return "lifecycle: " + e.err.Error() }
 func (e *cliLifecycleError) Unwrap() error { return e.err }
 
-func (p *fakeCLIPreparedHTTPRebuild) BorrowRebuildContributors() (
-	[]agentsync.RebuildContributor, func(), error,
+func (p *fakeCLIPreparedHTTPRebuild) BorrowRebuildOptions() (
+	agentsync.RebuildOptions, func(), error,
 ) {
-	return p.contributors, func() { p.released = true }, nil
+	return p.options, func() { p.released = true }, nil
 }
 
 func (p *fakeCLIPreparedHTTPRebuild) Close() error {
@@ -148,13 +149,15 @@ func TestDoSyncConfiguredFullUsesUnifiedHTTPContributorBeforeSSH(t *testing.T) {
 	}
 	sshHost := config.RemoteHost{Host: "ssh-box"}
 	var order []string
-	prepared := &fakeCLIPreparedHTTPRebuild{contributors: []agentsync.RebuildContributor{{
-		Name: "http-box",
-		AfterSync: func(*agentsync.Engine, *db.DB) error {
-			order = append(order, "http contributor")
-			return nil
-		},
-	}}}
+	prepared := &fakeCLIPreparedHTTPRebuild{options: agentsync.RebuildOptions{
+		Contributors: []agentsync.RebuildContributor{{
+			Name: "http-box",
+			AfterSync: func(*agentsync.Engine, *db.DB) error {
+				order = append(order, "http contributor")
+				return nil
+			},
+		}},
+	}}
 	originalPrepare := prepareHTTPRebuildCLI
 	prepareHTTPRebuildCLI = func(
 		_ context.Context, syncs []remotesync.HTTPSync,
@@ -204,13 +207,15 @@ func TestDoSyncConfiguredFullIgnoresSSHHistoryDuringUnifiedSafetyCheck(t *testin
 		Agent: "claude", FilePath: &missingPath, MessageCount: 1,
 	}))
 	httpRoot := t.TempDir()
-	prepared := &fakeCLIPreparedHTTPRebuild{contributors: []agentsync.RebuildContributor{{
-		Name: "http-box",
-		Config: agentsync.EngineConfig{
-			AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {httpRoot}},
-			Machine:   "http-box", IDPrefix: "http-box~", Ephemeral: true,
-		},
-	}}}
+	prepared := &fakeCLIPreparedHTTPRebuild{options: agentsync.RebuildOptions{
+		Contributors: []agentsync.RebuildContributor{{
+			Name: "http-box",
+			Config: agentsync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {httpRoot}},
+				Machine:   "http-box", IDPrefix: "http-box~", Ephemeral: true,
+			},
+		}},
+	}}
 	originalPrepare := prepareHTTPRebuildCLI
 	prepareHTTPRebuildCLI = func(
 		context.Context, []remotesync.HTTPSync,
@@ -387,10 +392,12 @@ func TestDoSyncContributorFailureMapsRemotePreservesCauseAndSkipsSSH(t *testing.
 		ID: "preserved", Project: "archive", Machine: "local", Agent: "codex",
 	}))
 	cause := errors.New("cache snapshot failed")
-	prepared := &fakeCLIPreparedHTTPRebuild{contributors: []agentsync.RebuildContributor{{
-		Name:      "http-box",
-		AfterSync: func(*agentsync.Engine, *db.DB) error { return cause },
-	}}}
+	prepared := &fakeCLIPreparedHTTPRebuild{options: agentsync.RebuildOptions{
+		Contributors: []agentsync.RebuildContributor{{
+			Name:      "http-box",
+			AfterSync: func(*agentsync.Engine, *db.DB) error { return cause },
+		}},
+	}}
 	originalPrepare := prepareHTTPRebuildCLI
 	prepareHTTPRebuildCLI = func(
 		context.Context, []remotesync.HTTPSync,
@@ -777,6 +784,33 @@ func TestDoSyncIncrementalKeepsOrdinaryRemotePath(t *testing.T) {
 	assert.Equal(t, 1, activeCalls)
 }
 
+func TestDoSyncIncrementalReportsSkippedOfflineHTTPHost(t *testing.T) {
+	cfg, database := newDirectSyncFixture(t)
+	host := config.RemoteHost{
+		Host: "offline", Transport: config.RemoteTransportHTTP,
+		URL: "http://offline.invalid", Token: "token",
+	}
+	restore := stubHTTPRemoteSyncForTest(t, func(
+		context.Context, config.RemoteHost, bool,
+	) (remotesync.SyncStats, error) {
+		return remotesync.SyncStats{}, syscall.ETIMEDOUT
+	})
+	t.Cleanup(restore)
+	var output bytes.Buffer
+	printer := newRemoteProgressPrinter(&output, time.Now)
+
+	didResync, failures, err := runConfiguredLocalAndRemotes(
+		context.Background(), cfg, database, []config.RemoteHost{host}, false,
+		printer.Print,
+	)
+	printer.Finish()
+
+	require.NoError(t, err)
+	assert.False(t, didResync)
+	assert.Empty(t, failures)
+	assert.Contains(t, output.String(), "Skipped offline remote host offline")
+}
+
 func TestDoSyncPreparationFailureReturnsRemoteFailureOutcome(t *testing.T) {
 	env := newSyncCLIEnv(t)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
@@ -820,10 +854,12 @@ token = "remote-token"
 		0o600,
 	))
 	cause := errors.New("persist remote cache")
-	prepared := &fakeCLIPreparedHTTPRebuild{contributors: []agentsync.RebuildContributor{{
-		Name:      "http-box",
-		AfterSync: func(*agentsync.Engine, *db.DB) error { return cause },
-	}}}
+	prepared := &fakeCLIPreparedHTTPRebuild{options: agentsync.RebuildOptions{
+		Contributors: []agentsync.RebuildContributor{{
+			Name:      "http-box",
+			AfterSync: func(*agentsync.Engine, *db.DB) error { return cause },
+		}},
+	}}
 	originalPrepare := prepareHTTPRebuildCLI
 	prepareHTTPRebuildCLI = func(
 		context.Context, []remotesync.HTTPSync,
@@ -931,7 +967,7 @@ func TestRunRemoteHosts_AttemptsAllAndCollectsFailures(t *testing.T) {
 	failBeta := errors.New("ssh down")
 
 	var attempted []config.RemoteHost
-	failures, blocked := runRemoteHosts(hosts, true, func(rh config.RemoteHost, full bool) error {
+	failures, blocked := runRemoteHosts(hosts, true, nil, func(rh config.RemoteHost, full bool) error {
 		attempted = append(attempted, rh)
 		assert.True(t, full, "full flag should propagate to syncFn")
 		if rh.Host == "beta" {
@@ -951,11 +987,47 @@ func TestRunRemoteHosts_AttemptsAllAndCollectsFailures(t *testing.T) {
 
 func TestRunRemoteHosts_AllSucceedReturnsEmpty(t *testing.T) {
 	hosts := []config.RemoteHost{{Host: "alpha"}, {Host: "beta"}}
-	failures, blocked := runRemoteHosts(hosts, false, func(config.RemoteHost, bool) error {
+	failures, blocked := runRemoteHosts(hosts, false, nil, func(config.RemoteHost, bool) error {
 		return nil
 	})
 	require.NoError(t, blocked)
 	assert.Empty(t, failures)
+}
+
+func TestRunRemoteHostsSkipsOfflineConfiguredHTTPHost(t *testing.T) {
+	hosts := []config.RemoteHost{
+		{Host: "offline", Transport: config.RemoteTransportHTTP},
+		{Host: "broken", Transport: config.RemoteTransportHTTP},
+		{Host: "reachable", Transport: config.RemoteTransportHTTP},
+	}
+	broken := errors.New("remote import failed")
+	var attempted []string
+
+	var progress []agentsync.Progress
+	failures, blocked := runRemoteHosts(hosts, false, func(p agentsync.Progress) {
+		progress = append(progress, p)
+	}, func(
+		rh config.RemoteHost, _ bool,
+	) error {
+		attempted = append(attempted, rh.Host)
+		switch rh.Host {
+		case "offline":
+			return syscall.ETIMEDOUT
+		case "broken":
+			return broken
+		default:
+			return nil
+		}
+	})
+
+	require.NoError(t, blocked)
+	assert.Equal(t, []string{"offline", "broken", "reachable"}, attempted)
+	require.Len(t, failures, 1)
+	assert.Equal(t, "broken", failures[0].Host.Host)
+	assert.ErrorIs(t, failures[0].Err, broken)
+	assert.Contains(t, progress, agentsync.Progress{
+		Detail: "Skipped offline remote host offline",
+	})
 }
 
 func TestRunRemoteSyncOnceDispatchesHTTP(t *testing.T) {
@@ -1102,7 +1174,7 @@ func TestRunRemoteHostsStopsOnPendingHTTPCleanupWithoutMisattribution(t *testing
 
 	failures, blocked := runRemoteHosts([]config.RemoteHost{
 		httpHost("alpha"), httpHost("beta"), httpHost("gamma"),
-	}, false, run)
+	}, false, nil, run)
 	require.Len(t, failures, 1)
 	assert.Equal(t, "alpha", failures[0].Host.Host)
 	assert.Same(t, owner, failures[0].Err)
@@ -1114,7 +1186,7 @@ func TestRunRemoteHostsStopsOnPendingHTTPCleanupWithoutMisattribution(t *testing
 	assert.Equal(t, 2, owner.retries)
 
 	failures, blocked = runRemoteHosts(
-		[]config.RemoteHost{httpHost("delta")}, false, run,
+		[]config.RemoteHost{httpHost("delta")}, false, nil, run,
 	)
 	assert.Empty(t, failures)
 	require.ErrorAs(t, blocked, &pending)
@@ -1122,7 +1194,7 @@ func TestRunRemoteHostsStopsOnPendingHTTPCleanupWithoutMisattribution(t *testing
 	assert.Equal(t, 3, owner.retries)
 
 	failures, blocked = runRemoteHosts(
-		[]config.RemoteHost{httpHost("epsilon")}, false, run,
+		[]config.RemoteHost{httpHost("epsilon")}, false, nil, run,
 	)
 	assert.Empty(t, failures)
 	require.NoError(t, blocked)
@@ -1398,6 +1470,9 @@ func TestRemoteProgressPrinterWritesTimedStepLines(t *testing.T) {
 	printer.Print(agentsync.Progress{
 		Detail: "Synced 10 sessions from devbox (1 unchanged)",
 	})
+	printer.Print(agentsync.Progress{
+		Detail: "Skipped offline remote host laptop",
+	})
 	printer.Finish()
 
 	got := out.String()
@@ -1408,6 +1483,8 @@ func TestRemoteProgressPrinterWritesTimedStepLines(t *testing.T) {
 	assert.Contains(t, got, "\r  Processing sessions from devbox: 10/10 sessions (100%) · 100 messages\x1b[K")
 	assert.Contains(t, got, "\n  Processing sessions from devbox completed in 3.35s\n")
 	assert.Contains(t, got, "  Synced 10 sessions from devbox (1 unchanged)\n")
+	assert.Contains(t, got, "  Skipped offline remote host laptop\n")
+	assert.NotContains(t, got, "Skipped offline remote host laptop completed")
 	assert.True(t, strings.HasSuffix(got, "\n"), "remote progress should finish on a newline")
 }
 

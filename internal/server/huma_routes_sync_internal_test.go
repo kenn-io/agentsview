@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	stdlibsync "sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -39,6 +40,14 @@ type syncRouteFixture struct {
 	db        *db.DB
 	srv       *Server
 	handler   http.Handler
+}
+
+type offlineRemoteTransport struct{}
+
+func (offlineRemoteTransport) RoundTrip(
+	*http.Request,
+) (*http.Response, error) {
+	return nil, syscall.ETIMEDOUT
 }
 
 type syncRouteFixtureConfig struct {
@@ -318,16 +327,16 @@ func stubRunHTTPRemoteSync(
 }
 
 type fakePreparedHTTPRebuild struct {
-	contributors []syncpkg.RebuildContributor
-	closed       int
-	committed    int
-	closeErrors  []error
+	options     syncpkg.RebuildOptions
+	closed      int
+	committed   int
+	closeErrors []error
 }
 
-func (p *fakePreparedHTTPRebuild) BorrowRebuildContributors() (
-	[]syncpkg.RebuildContributor, func(), error,
+func (p *fakePreparedHTTPRebuild) BorrowRebuildOptions() (
+	syncpkg.RebuildOptions, func(), error,
 ) {
-	return p.contributors, func() {}, nil
+	return p.options, func() {}, nil
 }
 
 func (p *fakePreparedHTTPRebuild) Close() error {
@@ -527,10 +536,12 @@ func TestRunRemoteSyncRequestUnifiedHTTPContributorFailureSkipsSSH(t *testing.T)
 	assertSessionCount(t, f.db, 0)
 
 	sentinel := errors.New("persist remote cache")
-	prepared := &fakePreparedHTTPRebuild{contributors: []syncpkg.RebuildContributor{{
-		Name:      "alpha",
-		AfterSync: func(*syncpkg.Engine, *db.DB) error { return sentinel },
-	}}}
+	prepared := &fakePreparedHTTPRebuild{options: syncpkg.RebuildOptions{
+		Contributors: []syncpkg.RebuildContributor{{
+			Name:      "alpha",
+			AfterSync: func(*syncpkg.Engine, *db.DB) error { return sentinel },
+		}},
+	}}
 	stubPrepareHTTPRebuild(t, func(
 		_ context.Context, syncs []remotesync.HTTPSync,
 	) (preparedHTTPRebuild, error) {
@@ -576,12 +587,12 @@ func TestRunRemoteSyncRequestContributorFailurePrecedesRetainedCleanupHost(t *te
 		Host: "beta", Operation: "cleanup", Err: cleanupCause,
 	}
 	prepared := &fakePreparedHTTPRebuild{
-		contributors: []syncpkg.RebuildContributor{{
+		options: syncpkg.RebuildOptions{Contributors: []syncpkg.RebuildContributor{{
 			Name: "alpha",
 			AfterSync: func(*syncpkg.Engine, *db.DB) error {
 				return contributorCause
 			},
-		}},
+		}}},
 		closeErrors: []error{cleanupErr, cleanupErr},
 	}
 	stubPrepareHTTPRebuild(t, func(
@@ -971,7 +982,7 @@ func TestRunRemoteSyncHostsOwnedLogsPerHostLifecycle(t *testing.T) {
 		[]config.RemoteHost{
 			{Host: "alpha", Transport: config.RemoteTransportHTTP, Token: "secret-token"},
 			{Host: "beta", Transport: config.RemoteTransportHTTP, Token: "secret-token"},
-		}, true, nil, true,
+		}, true, nil, true, false,
 	)
 
 	require.NoError(t, err)
@@ -1100,13 +1111,15 @@ func TestRunRemoteSyncRequestMixedRunsSSHFullAfterUnifiedSwap(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	f.writeClaudeSession(t, "proj/local.jsonl", "local swapped before ssh")
 	order := make([]string, 0, 3)
-	prepared := &fakePreparedHTTPRebuild{contributors: []syncpkg.RebuildContributor{{
-		Name: "alpha",
-		AfterSync: func(_ *syncpkg.Engine, database *db.DB) error {
-			order = append(order, "http")
-			return nil
-		},
-	}}}
+	prepared := &fakePreparedHTTPRebuild{options: syncpkg.RebuildOptions{
+		Contributors: []syncpkg.RebuildContributor{{
+			Name: "alpha",
+			AfterSync: func(_ *syncpkg.Engine, database *db.DB) error {
+				order = append(order, "http")
+				return nil
+			},
+		}},
+	}}
 	stubPrepareHTTPRebuild(t, func(
 		context.Context, []remotesync.HTTPSync,
 	) (preparedHTTPRebuild, error) {
@@ -1208,6 +1221,35 @@ func TestRunRemoteSyncRequestRemoteOnlyKeepsActiveHTTPPath(t *testing.T) {
 	assert.Equal(t, 1, activeCalls)
 }
 
+func TestPrepareHTTPRebuildOmitsOfflineHost(t *testing.T) {
+	var progress []syncpkg.Progress
+	prepared, err := prepareHTTPRebuild(
+		context.Background(), []remotesync.HTTPSync{{
+			Host: "offline",
+			URL:  "http://offline.invalid",
+			Client: &http.Client{
+				Transport: offlineRemoteTransport{},
+			},
+			Progress: func(p syncpkg.Progress) {
+				progress = append(progress, p)
+			},
+		}},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, prepared)
+	options, release, err := prepared.BorrowRebuildOptions()
+	require.NoError(t, err)
+	assert.Empty(t, options.Contributors)
+	assert.Equal(t, []string{"offline~"},
+		options.UnavailableContributorIDPrefixes)
+	release()
+	require.NoError(t, prepared.Close())
+	assert.Contains(t, progress, syncpkg.Progress{
+		Detail: "Skipped offline remote host offline",
+	})
+}
+
 func TestRunRemoteSyncRequestIncrementalKeepsActiveHTTPPath(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	prepareCalls := 0
@@ -1236,6 +1278,62 @@ func TestRunRemoteSyncRequestIncrementalKeepsActiveHTTPPath(t *testing.T) {
 	assert.Empty(t, response.Failures)
 	assert.Zero(t, prepareCalls)
 	assert.Equal(t, 1, activeCalls)
+}
+
+func TestRunRemoteSyncRequestConfiguredSkipsOfflineHTTPHost(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	var calls []string
+	stubRunHTTPRemoteSync(t, func(
+		_ context.Context, rh config.RemoteHost, _ bool,
+	) (remotesync.SyncStats, error) {
+		calls = append(calls, rh.Host)
+		if rh.Host == "offline" {
+			return remotesync.SyncStats{}, syscall.ETIMEDOUT
+		}
+		return remotesync.SyncStats{SessionsSynced: 1}, nil
+	})
+	var progress []syncpkg.Progress
+
+	response := f.srv.runRemoteSyncRequest(
+		context.Background(), f.db, f.srv.syncEngineForLocal(f.db),
+		remoteSyncRequest{
+			IncludeLocal: true,
+			Hosts: []config.RemoteHost{
+				{Host: "offline", Transport: config.RemoteTransportHTTP},
+				{Host: "reachable", Transport: config.RemoteTransportHTTP},
+			},
+		},
+		func(p syncpkg.Progress) { progress = append(progress, p) },
+	)
+
+	require.NotNil(t, response.LocalStats)
+	assert.Empty(t, response.Error)
+	assert.Empty(t, response.Failures)
+	assert.Equal(t, []string{"offline", "reachable"}, calls)
+	assert.Contains(t, progress, syncpkg.Progress{
+		Detail: "Skipped offline remote host offline",
+	})
+}
+
+func TestRunRemoteSyncRequestExplicitHostKeepsOfflineFailure(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	stubRunHTTPRemoteSync(t, func(
+		context.Context, config.RemoteHost, bool,
+	) (remotesync.SyncStats, error) {
+		return remotesync.SyncStats{}, syscall.ETIMEDOUT
+	})
+
+	response := f.srv.runRemoteSyncRequest(
+		context.Background(), f.db, f.srv.syncEngineForLocal(f.db),
+		remoteSyncRequest{Hosts: []config.RemoteHost{{
+			Host: "offline", Transport: config.RemoteTransportHTTP,
+		}}}, nil,
+	)
+
+	assert.Empty(t, response.Error)
+	require.Len(t, response.Failures, 1)
+	assert.Equal(t, "offline", response.Failures[0].Host.Host)
+	assert.Contains(t, response.Failures[0].Err, "connection timed out")
 }
 
 func TestRunRemoteSyncRequestAttributesOuterOwnedHTTPCleanup(t *testing.T) {

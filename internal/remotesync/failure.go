@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"syscall"
 )
@@ -82,6 +84,51 @@ func FailureSummary(err error) string {
 	}
 
 	return generic
+}
+
+// IsHostUnavailable reports transport failures that mean the configured
+// remote cannot currently be reached. Callers use this to treat optional fleet
+// members as absent while preserving authentication, protocol, response, and
+// import failures as actionable errors.
+func IsHostUnavailable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if _, ok := errors.AsType[*PendingCleanupError](err); ok {
+		return false
+	}
+	var cleanup cleanupRetrier
+	if errors.As(err, &cleanup) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ETIMEDOUT) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH) {
+		return true
+	}
+	if errors.Is(err, io.EOF) {
+		if _, ok := errors.AsType[*url.Error](err); ok {
+			return true
+		}
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		if _, ok := errors.AsType[*url.Error](err); ok {
+			return true
+		}
+		if _, ok := errors.AsType[*httpBodyReadError](err); ok {
+			return true
+		}
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || netErr == nil {
+		return false
+	}
+	return netErr.Timeout()
 }
 
 // statusLabel renders an HTTP status for user-facing messages using

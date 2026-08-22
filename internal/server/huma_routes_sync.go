@@ -101,7 +101,7 @@ var runHTTPRemoteSync = func(
 }
 
 type preparedHTTPRebuild interface {
-	BorrowRebuildContributors() ([]syncpkg.RebuildContributor, func(), error)
+	BorrowRebuildOptions() (syncpkg.RebuildOptions, func(), error)
 	Close() error
 }
 
@@ -109,7 +109,7 @@ var prepareHTTPRebuild = func(
 	ctx context.Context,
 	syncs []remotesync.HTTPSync,
 ) (preparedHTTPRebuild, error) {
-	return remotesync.PrepareHTTPSyncs(ctx, syncs)
+	return remotesync.PrepareAvailableHTTPSyncs(ctx, syncs)
 }
 
 type preparedHTTPRebuildLease struct {
@@ -514,7 +514,7 @@ func (s *Server) runRemoteSyncRequest(
 				stats, err := engine.SyncThenRun(
 					ctx, req.Full, progress, func(forceFull bool) error {
 						failures, remoteStats, blocked = s.runRemoteSyncHostsOwned(
-							ctx, local, req.Hosts, forceFull, progress, true,
+							ctx, local, req.Hosts, forceFull, progress, true, true,
 						)
 						return blocked
 					},
@@ -543,11 +543,11 @@ func (s *Server) runRemoteSyncRequest(
 					if prepared == nil {
 						return syncpkg.RebuildOptions{}, nil, nil
 					}
-					contributors, release, err := prepared.BorrowRebuildContributors()
+					options, release, err := prepared.BorrowRebuildOptions()
 					if err != nil {
 						return syncpkg.RebuildOptions{}, prepared, err
 					}
-					return syncpkg.RebuildOptions{Contributors: contributors},
+					return options,
 						&preparedHTTPRebuildLease{
 							prepared: prepared,
 							release:  release,
@@ -567,6 +567,7 @@ func (s *Server) runRemoteSyncRequest(
 					}
 					failures, remoteStats, blocked = s.runRemoteSyncHostsOwned(
 						ctx, local, hosts, forceFull, progress, !outerOwnsHTTP,
+						true,
 					)
 					return blocked
 				},
@@ -605,6 +606,7 @@ func (s *Server) runRemoteSyncRequest(
 			err := engine.RunExclusive(func() error {
 				failures, remoteStats, blocked = s.runRemoteSyncHostsOwned(
 					ctx, local, req.Hosts, req.Full, progress, !outerOwnsHTTP,
+					false,
 				)
 				return blocked
 			})
@@ -687,6 +689,14 @@ func newUnifiedHTTPHostLifecycle(
 		PrepareFinished: func(err error) {
 			outcome := remoteSyncLifecycleOutcome(ctx, err)
 			duration := time.Since(preparationStarted).Round(time.Millisecond)
+			if err != nil && ctx.Err() == nil &&
+				remotesync.IsHostUnavailable(err) {
+				log.Printf(
+					"remote sync HTTP host preparation finished: host=%s duration=%s outcome=skipped",
+					host.Host, duration,
+				)
+				return
+			}
 			if err != nil {
 				log.Printf(
 					"remote sync HTTP host preparation finished: host=%s duration=%s outcome=%s error=%q",
@@ -880,7 +890,7 @@ func (s *Server) runRemoteSyncHosts(
 	progress func(syncpkg.Progress),
 ) ([]remoteSyncFailure, remotesync.SyncStats, error) {
 	return s.runRemoteSyncHostsOwned(
-		ctx, local, hosts, full, progress, true,
+		ctx, local, hosts, full, progress, true, false,
 	)
 }
 
@@ -899,6 +909,7 @@ func (s *Server) runRemoteSyncHostsOwned(
 	full bool,
 	progress func(syncpkg.Progress),
 	acquireHTTPRegistry bool,
+	skipUnavailable bool,
 ) ([]remoteSyncFailure, remotesync.SyncStats, error) {
 	ingestionCfg := s.ingestionConfig()
 	failures := make([]remoteSyncFailure, 0)
@@ -942,6 +953,26 @@ func (s *Server) runRemoteSyncHostsOwned(
 		totals.SessionsTotal += stats.SessionsTotal
 		totals.Skipped += stats.Skipped
 		totals.Failed += stats.Failed
+		unavailable := err != nil && skipUnavailable &&
+			rh.Transport == config.RemoteTransportHTTP &&
+			ctx.Err() == nil && remotesync.IsHostUnavailable(err)
+		if unavailable {
+			log.Printf(
+				"remote sync host finished: host=%s transport=%s duration=%s sessions_synced=%d sessions_total=%d skipped=%d failed=%d outcome=skipped",
+				rh.Host, transport, time.Since(started).Round(time.Millisecond),
+				stats.SessionsSynced, stats.SessionsTotal, stats.Skipped,
+				stats.Failed,
+			)
+			log.Printf(
+				"remote sync %s skipped: host is offline", rh.Host,
+			)
+			if progress != nil {
+				progress(syncpkg.Progress{
+					Detail: "Skipped offline remote host " + rh.Host,
+				})
+			}
+			continue
+		}
 		outcome := remoteSyncLifecycleOutcome(ctx, err)
 		if err != nil {
 			log.Printf(

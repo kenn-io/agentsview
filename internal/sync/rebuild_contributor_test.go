@@ -209,6 +209,36 @@ func TestResyncAbortsWhenContributorLosesHistoricalSource(t *testing.T) {
 	assert.NotNil(t, remote, "aborted rebuild must preserve the active archive")
 }
 
+func TestResyncPreservesAllOfflineRemoteHistoryAsOrphans(t *testing.T) {
+	localRoot := t.TempDir()
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	missingPath := filepath.Join(t.TempDir(), "offline-session.jsonl")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "offline~session", Project: "archive", Machine: "offline",
+		Agent: "claude", FilePath: &missingPath, MessageCount: 1,
+	}))
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {localRoot}},
+		Machine:   "collector",
+	})
+	t.Cleanup(engine.Close)
+
+	stats, err := engine.ResyncAllWithOptions(
+		context.Background(), nil, RebuildOptions{
+			UnavailableContributorIDPrefixes: []string{"offline~"},
+		},
+	)
+
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted, "offline contributor history is not local safety loss")
+	assert.Equal(t, 1, stats.OrphanedCopied)
+	preserved, err := database.GetSession(context.Background(), "offline~session")
+	require.NoError(t, err)
+	assert.NotNil(t, preserved, "offline remote history must survive as an orphan")
+}
+
 func TestResyncAbortsWhenLabeledLocalSourceDisappearsAlongsideHealthyContributor(
 	t *testing.T,
 ) {

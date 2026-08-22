@@ -129,6 +129,12 @@ connection refusal usually means the daemon is not running, is still bound to
 loopback, or the URL port is wrong; DNS and timeout messages point back to the
 configured `url`.
 
+A bare `agentsview sync` treats offline, unreachable, and timed-out configured
+HTTP hosts as absent fleet members. It prints a skipped-host progress line,
+continues with local and reachable remote sources, and exits successfully unless
+another error occurs. `agentsview sync --host X` remains strict and reports an
+unavailable explicitly selected host as an error.
+
 For always-available fleet nodes launched with `agentsview daemon start`, set:
 
 ```toml

@@ -177,13 +177,15 @@ func importEngineConfig(
 	return syncpkg.EngineConfig{
 		AgentDirs:               layout.engineDirs,
 		Machine:                 host,
-		IDPrefix:                host + "~",
+		IDPrefix:                rebuildIDPrefix(host),
 		PathRewriter:            layout.paths.pathRewriter(),
 		StoredPathResolver:      layout.paths.storedPathResolver(),
 		Ephemeral:               true,
 		BlockedResultCategories: blockedResultCategories,
 	}
 }
+
+func rebuildIDPrefix(host string) string { return host + "~" }
 
 func loadImportSkipCache(
 	database *db.DB,

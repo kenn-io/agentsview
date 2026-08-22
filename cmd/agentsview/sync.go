@@ -299,7 +299,8 @@ func (p *remoteProgressPrinter) Print(progress sync.Progress) {
 	if label == "" {
 		return
 	}
-	if strings.HasPrefix(label, "Synced ") {
+	if strings.HasPrefix(label, "Synced ") ||
+		strings.HasPrefix(label, "Skipped ") {
 		p.finishCurrent()
 		fmt.Fprintf(p.w, "  %s\n", label)
 		return
@@ -378,7 +379,7 @@ func syncLocalAndRemotes(
 ) ([]remoteHostFailure, error) {
 	didResync := localSync()
 	full := cfgFull || didResync
-	return runRemoteHosts(hosts, full, remoteSync)
+	return runRemoteHosts(hosts, full, nil, remoteSync)
 }
 
 func runRemoteSync(
@@ -459,14 +460,14 @@ var httpRemoteCleanupRegistry = new(remotesync.CleanupRegistry)
 var errUnifiedRebuildAborted = sync.ErrUnifiedRebuildAborted
 
 type preparedHTTPRebuildCLI interface {
-	BorrowRebuildContributors() ([]sync.RebuildContributor, func(), error)
+	BorrowRebuildOptions() (sync.RebuildOptions, func(), error)
 	Close() error
 }
 
 var prepareHTTPRebuildCLI = func(
 	ctx context.Context, syncs []remotesync.HTTPSync,
 ) (preparedHTTPRebuildCLI, error) {
-	return remotesync.PrepareHTTPSyncs(ctx, syncs)
+	return remotesync.PrepareAvailableHTTPSyncs(ctx, syncs)
 }
 
 var runLocalSyncWithRebuildCLI = runLocalSyncWithRebuild
@@ -564,10 +565,11 @@ type remoteHostFailure struct {
 // runRemoteHosts syncs each configured host in declared order via syncFn and
 // continues past host-attributable failures. A pending cleanup from an earlier
 // host stops iteration and is returned separately because the callback for the
-// current host never ran. The helper performs no logging so callers own all
-// output.
+// current host never ran. Unavailable configured HTTP hosts are omitted from
+// the returned failures.
 func runRemoteHosts(
 	hosts []config.RemoteHost, full bool,
+	progress sync.ProgressFunc,
 	syncFn func(config.RemoteHost, bool) error,
 ) ([]remoteHostFailure, error) {
 	var failures []remoteHostFailure
@@ -575,6 +577,15 @@ func runRemoteHosts(
 		if err := syncFn(rh, full); err != nil {
 			if pending, ok := errors.AsType[*remotesync.PendingCleanupError](err); ok {
 				return failures, pending
+			}
+			if rh.Transport == config.RemoteTransportHTTP &&
+				remotesync.IsHostUnavailable(err) {
+				if progress != nil {
+					progress(sync.Progress{
+						Detail: "Skipped offline remote host " + rh.Host,
+					})
+				}
+				continue
 			}
 			failures = append(failures, remoteHostFailure{
 				Host: rh,
@@ -644,7 +655,7 @@ func runConfiguredLocalAndRemotes(
 				func(forceFull bool) error {
 					var blocked error
 					failures, blocked = runRemoteHosts(
-						hosts, forceFull,
+						hosts, forceFull, progress,
 						func(rh config.RemoteHost, remoteFull bool) error {
 							_, err := runRemoteSyncTransport(
 								ctx, appCfg, database, rh, remoteFull,
@@ -669,11 +680,11 @@ func runConfiguredLocalAndRemotes(
 				if prepared == nil {
 					return sync.RebuildOptions{}, nil, nil
 				}
-				contributors, release, err := prepared.BorrowRebuildContributors()
+				options, release, err := prepared.BorrowRebuildOptions()
 				if err != nil {
 					return sync.RebuildOptions{}, prepared, err
 				}
-				return sync.RebuildOptions{Contributors: contributors},
+				return options,
 					&preparedHTTPRebuildLeaseCLI{
 						prepared: prepared,
 						release:  release,
@@ -686,7 +697,7 @@ func runConfiguredLocalAndRemotes(
 				}
 				var blocked error
 				failures, blocked = runRemoteHosts(
-					remoteHosts, forceFull,
+					remoteHosts, forceFull, progress,
 					func(rh config.RemoteHost, remoteFull bool) error {
 						_, err := runRemoteSyncTransport(
 							ctx, appCfg, database, rh, remoteFull,

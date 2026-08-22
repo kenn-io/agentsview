@@ -3151,6 +3151,42 @@ func TestPrepareHTTPSyncsSortsHostsAndUnwindsOnFailure(t *testing.T) {
 	assert.Empty(t, roots, "unwind removes the successful legacy root and spools")
 }
 
+func TestPrepareAvailableHTTPSyncsOmitsOfflineHost(t *testing.T) {
+	var progress []string
+	syncs := []HTTPSync{
+		{Host: "reachable", Progress: func(p syncpkg.Progress) {
+			progress = append(progress, p.Detail)
+		}},
+		{Host: "offline", Progress: func(p syncpkg.Progress) {
+			progress = append(progress, p.Detail)
+		}},
+	}
+	prepared, unavailable, err := prepareHTTPSyncsWithUnavailable(
+		context.Background(), syncs, true,
+		func(_ context.Context, hs HTTPSync) (*PreparedHTTP, error) {
+			if hs.Host == "offline" {
+				return nil, fakeTimeoutError{}
+			}
+			return &PreparedHTTP{sync: hs}, nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, prepared)
+	require.Len(t, unavailable, 1)
+	assert.Equal(t, "offline", unavailable[0].Host)
+	require.Len(t, prepared.sources, 1)
+	assert.Equal(t, "reachable", prepared.sources[0].sync.Host)
+	options, release, err := prepared.BorrowRebuildOptions()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"offline~"},
+		options.UnavailableContributorIDPrefixes)
+	require.Len(t, options.Contributors, 1)
+	release()
+	assert.Contains(t, progress, "Skipped offline remote host offline")
+	require.NoError(t, prepared.Close())
+}
+
 func TestPrepareHTTPSyncsLegacySourcesDoNotCreateWorkingDirectoryLocks(t *testing.T) {
 	remoteA := newMirrorTestRemote(t)
 	remoteA.writeSession(t, "a.jsonl",
@@ -3433,14 +3469,14 @@ func TestPreparedHTTPSyncsHoldAllLocksUntilClose(t *testing.T) {
 		context.Background(), []HTTPSync{syncB, syncA},
 	)
 	require.NoError(t, err)
-	contributors, release, err := prepared.BorrowRebuildContributors()
+	options, release, err := prepared.BorrowRebuildOptions()
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		release()
 		require.NoError(t, prepared.Close())
 	})
 	assert.Equal(t, []string{"host-a", "host-b"}, []string{
-		contributors[0].Name, contributors[1].Name,
+		options.Contributors[0].Name, options.Contributors[1].Name,
 	})
 
 	for _, host := range []string{"host-a", "host-b"} {
@@ -3468,7 +3504,7 @@ func TestPreparedHTTPSyncsHoldAllLocksUntilClose(t *testing.T) {
 		require.NotNil(t, competing, host)
 		require.NoError(t, competing.Close())
 	}
-	_, _, err = prepared.BorrowRebuildContributors()
+	_, _, err = prepared.BorrowRebuildOptions()
 	assert.ErrorIs(t, err, ErrPreparedClosed,
 		"closed aggregate cannot expose contributors")
 }
@@ -3481,17 +3517,17 @@ func TestPreparedHTTPSyncsBorrowBlocksCloseUntilRelease(t *testing.T) {
 	_, hs := newMirrorSync(t, remote, dataDir)
 	prepared, err := PrepareHTTPSyncs(context.Background(), []HTTPSync{hs})
 	require.NoError(t, err)
-	contributors, release, err := prepared.BorrowRebuildContributors()
+	options, release, err := prepared.BorrowRebuildOptions()
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		release()
 		require.NoError(t, prepared.Close())
 	})
-	require.Len(t, contributors, 1)
-	assert.Equal(t, hs.Host, contributors[0].Name)
+	require.Len(t, options.Contributors, 1)
+	assert.Equal(t, hs.Host, options.Contributors[0].Name)
 
 	assert.ErrorIs(t, prepared.Close(), ErrPreparedInUse)
-	_, _, err = prepared.BorrowRebuildContributors()
+	_, _, err = prepared.BorrowRebuildOptions()
 	assert.ErrorIs(t, err, ErrPreparedClosed,
 		"a Close attempt ends new borrowing while retained ownership remains retryable")
 	lockCtx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
@@ -3511,7 +3547,7 @@ func TestPreparedHTTPSyncsBorrowBlocksCloseUntilRelease(t *testing.T) {
 	require.NoError(t, lockErr)
 	require.NotNil(t, competing)
 	require.NoError(t, competing.Close())
-	_, _, err = prepared.BorrowRebuildContributors()
+	_, _, err = prepared.BorrowRebuildOptions()
 	assert.ErrorIs(t, err, ErrPreparedClosed)
 }
 
@@ -3521,7 +3557,7 @@ func TestPreparedHTTPSyncsBorrowAndCloseAreRaceSafe(t *testing.T) {
 		lock:        &MirrorLockHandle{},
 		releaseLock: func(*MirrorLockHandle) error { return nil },
 	}}}
-	_, initialRelease, err := prepared.BorrowRebuildContributors()
+	_, initialRelease, err := prepared.BorrowRebuildOptions()
 	require.NoError(t, err)
 	start := make(chan struct{})
 	borrowResults := make(chan error, 8)
@@ -3529,7 +3565,7 @@ func TestPreparedHTTPSyncsBorrowAndCloseAreRaceSafe(t *testing.T) {
 	for range 8 {
 		go func() {
 			<-start
-			_, release, borrowErr := prepared.BorrowRebuildContributors()
+			_, release, borrowErr := prepared.BorrowRebuildOptions()
 			if borrowErr == nil {
 				release()
 				release()
