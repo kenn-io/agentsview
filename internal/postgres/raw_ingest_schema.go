@@ -212,6 +212,71 @@ END;
 $raw_ingest_triggers$;
 `
 
+const rawSyncWritePrivilegeSQL = `
+WITH required_table_privileges(table_name, privilege) AS (
+    VALUES
+        ('raw_devices', 'SELECT'),
+        ('raw_device_tokens', 'SELECT'),
+        ('raw_device_tokens', 'INSERT'),
+        ('raw_objects', 'SELECT'),
+        ('raw_objects', 'INSERT'),
+        ('raw_objects', 'UPDATE'),
+        ('raw_manifests', 'SELECT'),
+        ('raw_manifests', 'INSERT'),
+        ('raw_manifest_entries', 'INSERT'),
+        ('raw_manifest_objects', 'INSERT'),
+        ('raw_source_heads', 'SELECT'),
+        ('raw_source_heads', 'INSERT'),
+        ('raw_source_heads', 'UPDATE'),
+        ('raw_ingest_jobs', 'INSERT')
+), job_table(table_name, table_ref) AS (
+    SELECT
+        format('%I.%I', $1::text, 'raw_ingest_jobs'),
+        to_regclass(format('%I.%I', $1::text, 'raw_ingest_jobs'))
+), job_sequence(sequence_name) AS (
+    SELECT CASE
+        WHEN table_ref IS NULL THEN NULL
+        ELSE pg_get_serial_sequence(table_name, 'id')
+    END
+    FROM job_table
+)
+SELECT
+    COALESCE(current_setting('transaction_read_only', true), 'off') <> 'on'
+    AND COALESCE(bool_and(
+        to_regclass(format('%I.%I', $1::text, table_name)) IS NOT NULL
+        AND has_table_privilege(
+            current_user,
+            to_regclass(format('%I.%I', $1::text, table_name)),
+            privilege
+        )
+    ), false)
+    AND COALESCE((
+        SELECT sequence_name IS NULL
+            OR has_sequence_privilege(current_user, sequence_name, 'USAGE')
+        FROM job_sequence
+    ), false)
+FROM required_table_privileges`
+
+// CanWriteRawSyncSchema reports whether the current role can use every table
+// and any owned sequence required by the raw-sync control plane. It deliberately
+// probes DML separately from EnsureSchema's DDL capability so a least-privilege
+// runtime role can serve a schema provisioned by an administrator.
+func CanWriteRawSyncSchema(
+	ctx context.Context, db *sql.DB, schema string,
+) (bool, error) {
+	if db == nil {
+		return false, errors.New("raw sync write probe requires a PostgreSQL connection")
+	}
+	if strings.TrimSpace(schema) == "" {
+		return false, errors.New("raw sync write probe requires a schema")
+	}
+	var writable bool
+	if err := db.QueryRowContext(ctx, rawSyncWritePrivilegeSQL, schema).Scan(&writable); err != nil {
+		return false, fmt.Errorf("probing raw sync write privileges: %w", err)
+	}
+	return writable, nil
+}
+
 func ensureRawIngestSchemaPG(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, rawIngestDDL); err != nil {
 		return fmt.Errorf("creating raw ingest schema: %w", err)

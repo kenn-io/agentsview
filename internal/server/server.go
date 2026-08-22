@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
+	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/service"
@@ -65,6 +66,8 @@ const daemonService = "agentsview"
 const (
 	defaultInsightLogDrainTimeout    = 2 * time.Second
 	defaultInsightLogStopWaitTimeout = 500 * time.Millisecond
+	corsAllowedRequestHeaders        = "Content-Type, Authorization, " +
+		service.SemanticSearchIntentHeader + ", " + rawSyncDeviceIDHeader
 )
 
 // Server is the HTTP server that serves the SPA and REST API.
@@ -166,6 +169,9 @@ type Server struct {
 	localResyncRunner LocalResyncRunner
 
 	artifactExchangeRunner ArtifactExchangeRunner
+	rawSyncDeviceAuth      RawSyncDeviceAuth
+	rawSyncCustody         RawSyncCustody
+	rawSyncSchemaOnly      bool
 
 	ensurePricing func(context.Context, *db.DB) error
 }
@@ -274,6 +280,43 @@ func (s *Server) ingestionConfig() config.Config {
 
 // Option configures a Server.
 type Option func(*Server)
+
+// RawSyncDeviceAuth exchanges device credentials and authenticates scoped
+// raw-transport tokens.
+type RawSyncDeviceAuth interface {
+	AuthenticateCredential(
+		context.Context, string, string,
+	) (rawsync.AuthIdentity, error)
+	IssueToken(
+		context.Context, string, string, rawsync.DeviceTokenScope,
+	) (rawsync.IssuedDeviceToken, error)
+	AuthenticateToken(
+		context.Context, string, rawsync.DeviceTokenScope,
+	) (rawsync.AuthIdentity, error)
+}
+
+// RawSyncCustody exposes authenticated raw-custody control-plane operations.
+type RawSyncCustody interface {
+	MissingObjects(
+		context.Context,
+		rawsync.AuthIdentity,
+		parser.AgentType,
+		[]rawsync.ObjectRef,
+	) ([]rawsync.ObjectRef, error)
+	CommitManifest(
+		context.Context,
+		rawsync.AuthIdentity,
+		rawsync.Manifest,
+	) (rawsync.CommitResult, error)
+}
+
+// WithRawSyncServices enables authenticated raw-sync machine routes.
+func WithRawSyncServices(auth RawSyncDeviceAuth, custody RawSyncCustody) Option {
+	return func(s *Server) {
+		s.rawSyncDeviceAuth = auth
+		s.rawSyncCustody = custody
+	}
+}
 
 func insightAgentConfig(
 	cfg map[string]config.AgentConfig,
@@ -1344,7 +1387,7 @@ func corsMiddleware(
 				)
 				w.Header().Set(
 					"Access-Control-Allow-Headers",
-					"Content-Type, Authorization, "+service.SemanticSearchIntentHeader,
+					corsAllowedRequestHeaders,
 				)
 				if r.Method == http.MethodOptions {
 					w.WriteHeader(http.StatusNoContent)
@@ -1381,7 +1424,7 @@ func corsMiddleware(
 			)
 			w.Header().Set(
 				"Access-Control-Allow-Headers",
-				"Content-Type, Authorization, "+service.SemanticSearchIntentHeader,
+				corsAllowedRequestHeaders,
 			)
 			if r.Method == http.MethodOptions {
 				if !safeForReads {

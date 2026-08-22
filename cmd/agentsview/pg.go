@@ -522,8 +522,14 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		context.Background(),
 		os.Interrupt, syscall.SIGTERM,
 	)
+	var cleanupRawSync func() error
 	cleanup := func() {
 		stop()
+		if cleanupRawSync != nil {
+			if err := cleanupRawSync(); err != nil {
+				log.Printf("warning: closing raw sync object repository: %v", err)
+			}
+		}
 		cleanupStore()
 	}
 
@@ -555,6 +561,13 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		cleanup()
 		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
 	}
+	rawSyncWritable, err := postgres.CanWriteRawSyncSchema(
+		ctx, store.DB(), pgCfg.Schema,
+	)
+	if err != nil {
+		cleanup()
+		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
+	}
 	if err := wirePGVectorSearch(ctx, appCfg, store, "pg serve"); err != nil {
 		cleanup()
 		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
@@ -575,6 +588,14 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		cleanup()
 		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
 	}
+	rawSyncOption, closeRawSync, err := preparePGRawSyncServicesIfWritable(
+		ctx, appCfg.DataDir, store.DB(), rawSyncWritable,
+	)
+	if err != nil {
+		cleanup()
+		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
+	}
+	cleanupRawSync = closeRawSync
 
 	opts := []server.Option{
 		server.WithVersion(server.VersionInfo{
@@ -586,6 +607,9 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		}),
 		server.WithDataDir(appCfg.DataDir),
 		server.WithBaseContext(ctx),
+	}
+	if rawSyncOption != nil {
+		opts = append(opts, rawSyncOption)
 	}
 	if basePath != "" {
 		opts = append(opts, server.WithBasePath(basePath))

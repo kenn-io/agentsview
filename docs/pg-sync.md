@@ -18,9 +18,9 @@ search, and, as of 0.23.0, the Usage dashboard as well.
 
     [Hosted Raw Sync](/hosted-raw-sync/) is a separate, in-development path in
     which a hosted server retains original provider artifacts and performs
-    parsing and embedding. Its internal custody and device-authentication
-    foundations do not change the `pg push`, `pg push --watch`, or `pg serve`
-    behavior documented on this page.
+    parsing and embedding. Writable `pg serve` deployments now expose part of its
+    authenticated HTTP control plane. This does not change `pg push`, `pg push
+    --watch`, or the read-only session UI and APIs documented on this page.
 
 ## Quick Start
 
@@ -73,8 +73,10 @@ agentsview pg serve
 ```
 
 Opens the read-only web UI at `http://127.0.0.1:8080`, backed
-entirely by PostgreSQL. No local SQLite, file watching, or uploads
-— just the viewer.
+entirely by PostgreSQL. It does not use local SQLite or file watching, and its
+session UI and APIs do not accept session uploads. A writable deployment can
+also expose the separate, partial [hosted raw-sync control
+plane](/hosted-raw-sync/#http-control-plane).
 
 ---
 
@@ -353,11 +355,17 @@ agentsview pg serve [flags]
 | `--tls-key` | | TLS key path |
 | `--allowed-subnet` | | CIDR allowlist (repeatable/comma-separated) |
 
-The server is read-only — uploads, file watching, and local
-sync are all disabled. Sessions from all machines appear in
-a single unified view. The same deployment also serves the
-analytics dashboard and the Usage page from PostgreSQL-backed
-queries.
+The normal session server is read-only: session uploads, file watching, and
+local sync are disabled. Sessions from all machines appear in a single unified
+view. The same deployment also serves the analytics dashboard and the Usage
+page from PostgreSQL-backed queries.
+
+When the PostgreSQL role can write the raw-sync tables and ingest-job sequence,
+`pg serve` also registers the partial [hosted raw-sync control
+plane](/hosted-raw-sync/#http-control-plane). Those routes can write raw custody
+metadata and local raw-sync storage, but they do not make the session APIs
+writable. A PostgreSQL role without the required raw-sync write privileges omits
+the runtime routes.
 
 On startup, `pg serve` automatically applies any pending
 schema migrations to PostgreSQL, creating new tables and
@@ -372,6 +380,10 @@ needed and printed on startup. Pass it via
 `Authorization: Bearer <token>` on API requests. The SSE watch
 endpoint also accepts `?token=<token>` as a query parameter since
 the `EventSource` API cannot set custom headers.
+
+The raw-sync machine routes do not accept this shared bearer token. They use
+their own device credentials and operation-scoped tokens as described in the
+[hosted raw-sync security boundary](/hosted-raw-sync/#security-and-deployment-boundary).
 
 For LAN access, combine `require_auth = true` with a non-loopback
 bind such as `agentsview pg serve --host 0.0.0.0`, or keep the

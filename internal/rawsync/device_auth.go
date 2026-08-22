@@ -52,6 +52,56 @@ func (s DeviceTokenScope) single() bool {
 	return s.valid() && s&(s-1) == 0
 }
 
+// Names returns the canonical wire names in stable authorization order.
+func (s DeviceTokenScope) Names() []string {
+	if !s.valid() {
+		return nil
+	}
+	names := make([]string, 0, 4)
+	for _, scope := range []struct {
+		bit  DeviceTokenScope
+		name string
+	}{
+		{ScopeNegotiate, "negotiate"},
+		{ScopeUpload, "upload"},
+		{ScopeCommit, "commit"},
+		{ScopeStatus, "status"},
+	} {
+		if s&scope.bit != 0 {
+			names = append(names, scope.name)
+		}
+	}
+	return names
+}
+
+// ParseDeviceTokenScopeNames validates named scopes without accepting aliases.
+func ParseDeviceTokenScopeNames(names []string) (DeviceTokenScope, error) {
+	var scopes DeviceTokenScope
+	for _, name := range names {
+		var scope DeviceTokenScope
+		switch name {
+		case "negotiate":
+			scope = ScopeNegotiate
+		case "upload":
+			scope = ScopeUpload
+		case "commit":
+			scope = ScopeCommit
+		case "status":
+			scope = ScopeStatus
+		default:
+			return 0, fmt.Errorf("%w: invalid device token scope name", ErrInvalid)
+		}
+		if scopes&scope != 0 {
+			return 0, fmt.Errorf("%w: duplicate device token scope name", ErrInvalid)
+		}
+		scopes |= scope
+	}
+	if !scopes.valid() {
+		return 0, fmt.Errorf("%w: at least one device token scope is required", ErrInvalid)
+	}
+	return scopes, nil
+}
+
 // CredentialDigest is the only persisted form of a device credential.
 type CredentialDigest [sha256.Size]byte
 
@@ -95,6 +145,9 @@ type IssuedDeviceToken struct {
 // DeviceAuthStore owns durable enrollment, token exchange, and revocation.
 type DeviceAuthStore interface {
 	EnrollDevice(context.Context, DeviceEnrollmentRecord) error
+	AuthenticateCredential(
+		context.Context, string, CredentialDigest,
+	) (AuthIdentity, error)
 	IssueToken(
 		context.Context, string, CredentialDigest, DeviceTokenRecord,
 	) (AuthIdentity, error)
@@ -171,6 +224,37 @@ func (s *DeviceAuthService) EnrollDevice(
 	}, nil
 }
 
+// AuthenticateCredential derives identity from one active device credential
+// without creating a token.
+func (s *DeviceAuthService) AuthenticateCredential(
+	ctx context.Context,
+	deviceID string,
+	credential string,
+) (AuthIdentity, error) {
+	if err := validateOpaqueID("device", deviceID); err != nil {
+		return AuthIdentity{}, err
+	}
+	digest, err := digestDeviceSecret(credential, credentialPrefix)
+	if err != nil {
+		return AuthIdentity{}, err
+	}
+	identity, err := s.store.AuthenticateCredential(
+		ctx, deviceID, CredentialDigest(digest),
+	)
+	if err != nil {
+		return AuthIdentity{}, fmt.Errorf("authenticating raw sync device credential: %w", err)
+	}
+	if err := validateServiceIdentity(identity); err != nil {
+		return AuthIdentity{}, fmt.Errorf("validating raw sync credential identity: %w", err)
+	}
+	if identity.DeviceID != deviceID {
+		return AuthIdentity{}, fmt.Errorf(
+			"raw sync credential store returned a different device: %w", ErrConflict,
+		)
+	}
+	return identity, nil
+}
+
 // IssueToken exchanges an active device credential for a scoped access token.
 func (s *DeviceAuthService) IssueToken(
 	ctx context.Context,
@@ -207,6 +291,11 @@ func (s *DeviceAuthService) IssueToken(
 	}
 	if err := validateServiceIdentity(identity); err != nil {
 		return IssuedDeviceToken{}, fmt.Errorf("validating raw sync token identity: %w", err)
+	}
+	if identity.DeviceID != deviceID {
+		return IssuedDeviceToken{}, fmt.Errorf(
+			"raw sync token store returned a different device: %w", ErrConflict,
+		)
 	}
 	return IssuedDeviceToken{
 		Token: token, Identity: identity, Scopes: scopes, ExpiresAt: record.ExpiresAt,

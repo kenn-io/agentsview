@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/rawsync"
 )
 
 // contextKey is an unexported type for context keys in this package.
@@ -15,6 +18,7 @@ const (
 	// When set to true, host-check and CORS middleware skip
 	// their restrictions.
 	ctxKeyRemoteAuth contextKey = iota
+	ctxKeyRawSyncIdentity
 )
 
 // isRemoteAuth returns true if the request was authenticated as a
@@ -85,6 +89,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		s.mu.RLock()
 		token := s.cfg.AuthToken
 		authRequired := s.cfg.RequireAuth
+		writeTimeout := s.cfg.WriteTimeout
 		s.mu.RUnlock()
 
 		// CORS preflight requests (OPTIONS) never include credentials.
@@ -93,12 +98,44 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// mark OPTIONS as authenticated so the CORS middleware
 		// allows the preflight for cross-origin clients.
 		if r.Method == http.MethodOptions {
-			if authRequired && token != "" {
+			if s.isRawSyncOwnAuthPath(r.URL.Path) || authRequired && token != "" {
 				ctx := context.WithValue(r.Context(), ctxKeyRemoteAuth, true)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Raw-sync machine routes authenticate their own device credentials
+		// and scoped tokens before Host and CORS middleware relax remote
+		// restrictions. They never compare against the legacy shared bearer.
+		if s.isRawSyncOwnAuthPath(r.URL.Path) {
+			requestCtx := r.Context()
+			cancel := func() {}
+			if writeTimeout > 0 {
+				requestCtx, cancel = context.WithTimeout(requestCtx, writeTimeout)
+			}
+			defer cancel()
+			r = r.WithContext(requestCtx)
+			identity, err := s.authenticateRawSyncRequest(r)
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					http.Error(w, "raw sync authentication timed out", http.StatusGatewayTimeout)
+					return
+				}
+				if errors.Is(err, rawsync.ErrUnauthorized) ||
+					errors.Is(err, rawsync.ErrInvalid) {
+					setCORSOnAuthError(w, r)
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
+				http.Error(w, "raw sync authentication failed", http.StatusInternalServerError)
+				return
+			}
+			ctx := context.WithValue(requestCtx, ctxKeyRawSyncIdentity, identity)
+			ctx = context.WithValue(ctx, ctxKeyRemoteAuth, true)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
@@ -171,6 +208,45 @@ func isRemoteSyncPath(path string) bool {
 
 func isArtifactExchangePath(path string) bool {
 	return path == "/api/v1/artifacts/exchange"
+}
+
+func (s *Server) isRawSyncOwnAuthPath(path string) bool {
+	if s.rawSyncDeviceAuth == nil {
+		return false
+	}
+	if path == "/api/v1/raw-sync/tokens" {
+		return true
+	}
+	if s.rawSyncCustody == nil {
+		return false
+	}
+	return path == "/api/v1/raw-sync/objects/missing" ||
+		path == "/api/v1/raw-sync/manifests"
+}
+
+func (s *Server) authenticateRawSyncRequest(
+	r *http.Request,
+) (rawsync.AuthIdentity, error) {
+	secret, err := rawSyncBearer(r.Header.Get("Authorization"))
+	if err != nil {
+		return rawsync.AuthIdentity{}, err
+	}
+	switch r.URL.Path {
+	case "/api/v1/raw-sync/tokens":
+		return s.rawSyncDeviceAuth.AuthenticateCredential(
+			r.Context(), r.Header.Get(rawSyncDeviceIDHeader), secret,
+		)
+	case "/api/v1/raw-sync/objects/missing":
+		return s.rawSyncDeviceAuth.AuthenticateToken(
+			r.Context(), secret, rawsync.ScopeNegotiate,
+		)
+	case "/api/v1/raw-sync/manifests":
+		return s.rawSyncDeviceAuth.AuthenticateToken(
+			r.Context(), secret, rawsync.ScopeCommit,
+		)
+	default:
+		return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
+	}
 }
 
 // setCORSOnAuthError adds CORS headers to 401 responses so

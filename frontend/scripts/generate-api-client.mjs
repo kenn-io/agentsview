@@ -26,6 +26,37 @@ function suppressExpectedAbortLogging() {
   writeFileSync(requestPath, source.replace(generatedCatch, cancellationAwareCatch));
 }
 
+function preserveExplicitAuthorizationHeaders() {
+  const requestPath = join(frontendDir, "src/lib/api/generated/core/request.ts");
+  const source = readFileSync(requestPath, "utf8");
+  const generatedAuth = `  if (isStringWithValue(token)) {
+    headers['Authorization'] = \`Bearer \${token}\`;
+  }
+
+  if (isStringWithValue(username) && isStringWithValue(password)) {
+    const credentials = base64(\`\${username}:\${password}\`);
+    headers['Authorization'] = \`Basic \${credentials}\`;
+  }
+`;
+  const explicitHeaderFirst = `  if (isStringWithValue(token) && !isStringWithValue(headers['Authorization'])) {
+    headers['Authorization'] = \`Bearer \${token}\`;
+  }
+
+  if (
+    isStringWithValue(username) &&
+    isStringWithValue(password) &&
+    !isStringWithValue(headers['Authorization'])
+  ) {
+    const credentials = base64(\`\${username}:\${password}\`);
+    headers['Authorization'] = \`Basic \${credentials}\`;
+  }
+`;
+  if (!source.includes(generatedAuth)) {
+    throw new Error("generated request headers no longer match the authorization patch");
+  }
+  writeFileSync(requestPath, source.replace(generatedAuth, explicitHeaderFirst));
+}
+
 function generatedTrailingNewlineCounts(dir, base = dir, counts = new Map()) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
@@ -164,6 +195,7 @@ try {
     run("npx", openapiArgs, { cwd: frontendDir });
   }
   suppressExpectedAbortLogging();
+  preserveExplicitAuthorizationHeaders();
   normalizeGeneratedTrailingNewlines(generatedDir, generatedTrailingNewlines);
 } finally {
   rmSync(tempDir, { recursive: true, force: true });

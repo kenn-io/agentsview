@@ -106,6 +106,41 @@ func TestDeviceAuthServiceCredentialAndExpiryFailuresStayOpaque(t *testing.T) {
 	assert.NotContains(t, err.Error(), issued.Token)
 }
 
+func TestDeviceAuthServiceAuthenticatesCredentialWithoutIssuingToken(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryDeviceAuthStore()
+	service, err := NewDeviceAuthService(store, time.Hour)
+	require.NoError(t, err)
+	service.random = bytes.NewReader(append(
+		bytes.Repeat([]byte{7}, deviceIDRandomSize),
+		bytes.Repeat([]byte{8}, secretRandomSize)...,
+	))
+
+	enrollment, err := service.EnrollDevice(t.Context(), "tenant-c", "uploader")
+	require.NoError(t, err)
+	identity, err := service.AuthenticateCredential(
+		t.Context(), enrollment.Identity.DeviceID, enrollment.Credential,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, enrollment.Identity, identity)
+	assert.Zero(t, store.issueCalls)
+
+	_, err = service.AuthenticateCredential(
+		t.Context(), enrollment.Identity.DeviceID,
+		"avdc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+	)
+	assert.ErrorIs(t, err, ErrUnauthorized)
+	assert.NotContains(t, err.Error(), enrollment.Credential)
+
+	_, err = service.RevokeDevice(t.Context(), enrollment.Identity)
+	require.NoError(t, err)
+	_, err = service.AuthenticateCredential(
+		t.Context(), enrollment.Identity.DeviceID, enrollment.Credential,
+	)
+	assert.ErrorIs(t, err, ErrUnauthorized)
+}
+
 func TestDeviceAuthServiceRejectsInvalidScopeRequestsBeforeStoreAccess(t *testing.T) {
 	t.Parallel()
 
@@ -125,6 +160,55 @@ func TestDeviceAuthServiceRejectsInvalidScopeRequestsBeforeStoreAccess(t *testin
 	)
 	assert.ErrorIs(t, err, ErrInvalid)
 	assert.Zero(t, store.authenticateCalls)
+}
+
+func TestDeviceAuthServiceRejectsCredentialStoreIdentityMismatch(t *testing.T) {
+	t.Parallel()
+
+	store := &mismatchedDeviceAuthStore{identity: AuthIdentity{
+		TenantID: "tenant-other",
+		DeviceID: "dev_other",
+	}}
+	service, err := NewDeviceAuthService(store, time.Hour)
+	require.NoError(t, err)
+	service.random = bytes.NewReader(bytes.Repeat([]byte{9}, secretRandomSize))
+	credential := "avdc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+	_, err = service.AuthenticateCredential(t.Context(), "dev_requested", credential)
+	assert.ErrorIs(t, err, ErrConflict)
+
+	_, err = service.IssueToken(
+		t.Context(), "dev_requested", credential, ScopeNegotiate,
+	)
+	assert.ErrorIs(t, err, ErrConflict)
+}
+
+func TestDeviceTokenScopeNamesRoundTripCanonicalWireValues(t *testing.T) {
+	t.Parallel()
+
+	scope, err := ParseDeviceTokenScopeNames([]string{
+		"commit", "negotiate", "status", "upload",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ScopeAll, scope)
+	assert.Equal(t, []string{
+		"negotiate", "upload", "commit", "status",
+	}, scope.Names())
+}
+
+func TestParseDeviceTokenScopeNamesRejectsAmbiguousValues(t *testing.T) {
+	t.Parallel()
+
+	for _, names := range [][]string{
+		{},
+		{"upload", "upload"},
+		{"Upload"},
+		{"unknown"},
+	} {
+		_, err := ParseDeviceTokenScopeNames(names)
+		assert.ErrorIs(t, err, ErrInvalid, "names: %v", names)
+	}
+	assert.Nil(t, DeviceTokenScope(0).Names())
 }
 
 func TestDigestDeviceSecretRejectsOversizedInputWithoutProportionalAllocation(t *testing.T) {
@@ -164,6 +248,18 @@ func (s *memoryDeviceAuthStore) EnrollDevice(
 	}
 	s.devices[record.Identity.DeviceID] = record
 	return nil
+}
+
+func (s *memoryDeviceAuthStore) AuthenticateCredential(
+	_ context.Context,
+	deviceID string,
+	credential CredentialDigest,
+) (AuthIdentity, error) {
+	device, exists := s.devices[deviceID]
+	if !exists || device.RevokedAt != nil || device.CredentialDigest != credential {
+		return AuthIdentity{}, ErrUnauthorized
+	}
+	return device.Identity, nil
 }
 
 func (s *memoryDeviceAuthStore) IssueToken(
@@ -215,3 +311,25 @@ func (s *memoryDeviceAuthStore) RevokeDevice(
 }
 
 var _ DeviceAuthStore = (*memoryDeviceAuthStore)(nil)
+
+type mismatchedDeviceAuthStore struct {
+	DeviceAuthStore
+	identity AuthIdentity
+}
+
+func (s *mismatchedDeviceAuthStore) AuthenticateCredential(
+	context.Context,
+	string,
+	CredentialDigest,
+) (AuthIdentity, error) {
+	return s.identity, nil
+}
+
+func (s *mismatchedDeviceAuthStore) IssueToken(
+	context.Context,
+	string,
+	CredentialDigest,
+	DeviceTokenRecord,
+) (AuthIdentity, error) {
+	return s.identity, nil
+}

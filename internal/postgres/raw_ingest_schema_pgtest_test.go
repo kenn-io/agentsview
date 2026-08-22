@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"net/url"
 	"strings"
 	"testing"
@@ -265,6 +266,7 @@ func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 	for _, grant := range []string{
 		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` + schema + ` TO ` + role,
+		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ` + schema + ` TO ` + role,
 	} {
 		_, err = admin.Exec(grant)
 		require.NoError(t, err, grant)
@@ -281,6 +283,133 @@ func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 	require.NoError(t, syncer.EnsureSchema(t.Context()),
 		"restricted push role must not fail on raw custody DDL")
 	assert.True(t, syncer.schemaDone)
+	writable, err := CanWriteRawSyncSchema(t.Context(), restricted, schema)
+	require.NoError(t, err)
+	assert.True(t, writable,
+		"DML-capable role must remain eligible when raw custody DDL is restricted")
+}
+
+func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_raw_runtime_privilege_test"
+	const role = "agentsview_raw_runtime"
+	const rolePassword = "agentsview_raw_runtime_pw"
+
+	admin, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open admin")
+	t.Cleanup(func() { _ = admin.Close() })
+	_, err = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
+
+	_, _ = admin.Exec(`DROP OWNED BY ` + role)
+	_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+	_, err = admin.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+	require.NoError(t, err, "create runtime role")
+	t.Cleanup(func() {
+		_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+		_, _ = admin.Exec(`DROP OWNED BY ` + role)
+		_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+	})
+	for _, grant := range []string{
+		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
+		`GRANT SELECT ON ` + schema + `.raw_devices TO ` + role,
+		`GRANT SELECT, INSERT ON ` + schema + `.raw_device_tokens TO ` + role,
+		`GRANT SELECT, INSERT, UPDATE ON ` + schema + `.raw_objects TO ` + role,
+		`GRANT SELECT, INSERT ON ` + schema + `.raw_manifests TO ` + role,
+		`GRANT INSERT ON ` + schema + `.raw_manifest_entries TO ` + role,
+		`GRANT INSERT ON ` + schema + `.raw_manifest_objects TO ` + role,
+		`GRANT SELECT, INSERT, UPDATE ON ` + schema + `.raw_source_heads TO ` + role,
+		`GRANT INSERT ON ` + schema + `.raw_ingest_jobs TO ` + role,
+		`GRANT USAGE ON SEQUENCE ` + schema + `.raw_ingest_jobs_id_seq TO ` + role,
+	} {
+		_, err = admin.Exec(grant)
+		require.NoError(t, err, grant)
+	}
+
+	restrictedURL, err := url.Parse(pgURL)
+	require.NoError(t, err)
+	restrictedURL.User = url.UserPassword(role, rolePassword)
+	restricted, err := Open(restrictedURL.String(), schema, true)
+	require.NoError(t, err, "Open runtime role")
+	t.Cleanup(func() { _ = restricted.Close() })
+
+	writable, err := CanWriteRawSyncSchema(t.Context(), restricted, schema)
+	require.NoError(t, err)
+	assert.True(t, writable)
+
+	requiredTablePrivileges := []struct {
+		table     string
+		privilege string
+	}{
+		{"raw_devices", "SELECT"},
+		{"raw_device_tokens", "SELECT"},
+		{"raw_device_tokens", "INSERT"},
+		{"raw_objects", "SELECT"},
+		{"raw_objects", "INSERT"},
+		{"raw_objects", "UPDATE"},
+		{"raw_manifests", "SELECT"},
+		{"raw_manifests", "INSERT"},
+		{"raw_manifest_entries", "INSERT"},
+		{"raw_manifest_objects", "INSERT"},
+		{"raw_source_heads", "SELECT"},
+		{"raw_source_heads", "INSERT"},
+		{"raw_source_heads", "UPDATE"},
+		{"raw_ingest_jobs", "INSERT"},
+	}
+	for _, required := range requiredTablePrivileges {
+		t.Run(required.table+"_"+strings.ToLower(required.privilege), func(t *testing.T) {
+			revoke := `REVOKE ` + required.privilege + ` ON ` +
+				schema + `.` + required.table + ` FROM ` + role
+			grant := `GRANT ` + required.privilege + ` ON ` +
+				schema + `.` + required.table + ` TO ` + role
+			_, err := admin.Exec(revoke)
+			require.NoError(t, err, revoke)
+			t.Cleanup(func() {
+				_, cleanupErr := admin.Exec(grant)
+				require.NoError(t, cleanupErr, grant)
+			})
+
+			writable, err := CanWriteRawSyncSchema(t.Context(), restricted, schema)
+			require.NoError(t, err)
+			assert.False(t, writable,
+				"runtime role must have %s on %s", required.privilege, required.table)
+		})
+	}
+}
+
+func TestCanWriteRawSyncSchemaAcceptsSequenceFreeJobIDs(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_raw_sequence_free_test"
+
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pg.Close() })
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	})
+	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+
+	var sequenceName sql.NullString
+	err = pg.QueryRow(`SELECT pg_get_serial_sequence(
+		$1, 'id'
+	)`, schema+".raw_ingest_jobs").Scan(&sequenceName)
+	require.NoError(t, err)
+	if sequenceName.Valid {
+		_, err = pg.Exec(`ALTER TABLE ` + schema + `.raw_ingest_jobs
+			ALTER COLUMN id SET DEFAULT (
+				EXTRACT(EPOCH FROM clock_timestamp()) * 1000000
+			)::BIGINT`)
+		require.NoError(t, err)
+		_, err = pg.Exec(`DROP SEQUENCE ` + schema + `.raw_ingest_jobs_id_seq`)
+		require.NoError(t, err)
+	}
+
+	writable, err := CanWriteRawSyncSchema(t.Context(), pg, schema)
+	require.NoError(t, err)
+	assert.True(t, writable)
 }
 
 func repeatedHex(value string) string {

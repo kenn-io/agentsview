@@ -54,6 +54,35 @@ func (s *RawDeviceAuthStore) EnrollDevice(
 	return nil
 }
 
+// AuthenticateCredential derives identity from one active device credential.
+func (s *RawDeviceAuthStore) AuthenticateCredential(
+	ctx context.Context,
+	deviceID string,
+	credential rawsync.CredentialDigest,
+) (rawsync.AuthIdentity, error) {
+	if err := validateRawDeviceLookupID(deviceID); err != nil {
+		return rawsync.AuthIdentity{}, err
+	}
+	var identity rawsync.AuthIdentity
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, device_id
+		FROM raw_devices
+		WHERE device_id = $1
+			AND credential_sha256 = $2
+			AND revoked_at IS NULL`,
+		deviceID, credential[:],
+	).Scan(&identity.TenantID, &identity.DeviceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
+	}
+	if err != nil {
+		return rawsync.AuthIdentity{}, fmt.Errorf(
+			"authenticating raw sync device credential: %w", err,
+		)
+	}
+	return identity, nil
+}
+
 // IssueToken atomically verifies one active device credential and records the token.
 func (s *RawDeviceAuthStore) IssueToken(
 	ctx context.Context,

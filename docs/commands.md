@@ -662,8 +662,10 @@ ______________________________________________________________________
 
 ### `agentsview pg serve`
 
-Start a read-only web UI backed by PostgreSQL. See [PostgreSQL Sync](/pg-sync/)
-for full documentation.
+Start a read-only session web UI backed by PostgreSQL. On a writable PostgreSQL
+schema, the same server also registers the partial [hosted raw-sync control
+plane](/hosted-raw-sync/#http-control-plane). See [PostgreSQL Sync](/pg-sync/)
+for full server documentation.
 
 ```bash
 agentsview pg serve [flags]

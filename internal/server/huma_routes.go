@@ -45,9 +45,12 @@ type bytesOutput struct {
 }
 
 type apiErrorResponse struct {
-	Status  int    `json:"-"`
-	Code    string `json:"code,omitempty"`
-	Message string `json:"error"`
+	Status            int    `json:"-"`
+	Code              string `json:"code,omitempty"`
+	Message           string `json:"error"`
+	CurrentManifestID string `json:"current_manifest_id,omitempty"`
+	CurrentReceipt    string `json:"current_receipt,omitempty"`
+	CurrentGeneration int64  `json:"current_generation,omitzero"`
 }
 
 func (e *apiErrorResponse) Error() string {
@@ -333,6 +336,12 @@ func (group routeGroup) register[I, O any](
 		option(&op)
 	}
 	huma.Register(group.api, op, handler)
+}
+
+func maxBodyBytes(limit int64) func(*huma.Operation) {
+	return func(op *huma.Operation) {
+		op.MaxBodyBytes = limit
+	}
 }
 
 func streamResponse() func(*huma.Operation) {

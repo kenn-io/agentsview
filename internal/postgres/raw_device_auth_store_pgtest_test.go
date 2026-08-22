@@ -37,6 +37,15 @@ func TestRawDeviceAuthStoreLifecycleAndTenantIsolation(t *testing.T) {
 	wantCredentialDigest := sha256.Sum256([]byte(first.Credential))
 	assert.Equal(t, hex.EncodeToString(wantCredentialDigest[:]), storedDigest)
 	assert.NotContains(t, storedDigest, first.Credential)
+	identity, err := service.AuthenticateCredential(
+		t.Context(), first.Identity.DeviceID, first.Credential,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, first.Identity, identity)
+	_, err = service.AuthenticateCredential(
+		t.Context(), first.Identity.DeviceID, second.Credential,
+	)
+	assert.ErrorIs(t, err, rawsync.ErrUnauthorized)
 
 	_, err = service.IssueToken(
 		t.Context(), first.Identity.DeviceID, second.Credential, rawsync.ScopeAll,
@@ -76,6 +85,10 @@ func TestRawDeviceAuthStoreLifecycleAndTenantIsolation(t *testing.T) {
 
 	_, err = service.AuthenticateToken(t.Context(), firstToken.Token, rawsync.ScopeUpload)
 	assert.ErrorIs(t, err, rawsync.ErrUnauthorized)
+	_, err = service.AuthenticateCredential(
+		t.Context(), first.Identity.DeviceID, first.Credential,
+	)
+	assert.ErrorIs(t, err, rawsync.ErrUnauthorized)
 	_, err = service.IssueToken(
 		t.Context(), first.Identity.DeviceID, first.Credential, rawsync.ScopeUpload,
 	)
@@ -85,7 +98,7 @@ func TestRawDeviceAuthStoreLifecycleAndTenantIsolation(t *testing.T) {
 		t.Context(), second.Identity.DeviceID, second.Credential, rawsync.ScopeStatus,
 	)
 	require.NoError(t, err)
-	identity, err := service.AuthenticateToken(
+	identity, err = service.AuthenticateToken(
 		t.Context(), secondToken.Token, rawsync.ScopeStatus,
 	)
 	require.NoError(t, err)
