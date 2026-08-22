@@ -2,15 +2,11 @@ package parser
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"github.com/tidwall/gjson"
 )
 
 // Icodemate exposes two storage families under the single icodemate agent:
@@ -139,10 +135,9 @@ func (s *icodemateCLISourceSet) streamLocalRoot(
 
 // discoveredSourceRef builds the SourceRef for one enumerated session file.
 // Local files resolve through the regular file-backed source ref; s3://
-// objects (enumerated by ClaudeProjectSessionFiles via discoverClaudeS3) carry
-// their durable object metadata in the Opaque payload, because the
-// IsRegularFile gate sourceRef applies to a local path would otherwise drop
-// every remote object.
+// objects (enumerated by IcodemateCLIProjectSessionFiles) carry their durable
+// object metadata in the Opaque payload, because the IsRegularFile gate
+// sourceRef applies to a local path would otherwise drop every remote object.
 func (s *icodemateCLISourceSet) discoveredSourceRef(
 	root string, file DiscoveredFile,
 ) (SourceRef, bool) {
@@ -168,29 +163,29 @@ func (s *icodemateCLISourceSet) Parse(
 		req.Source.ProjectHint,
 		filepath.Base(filepath.Dir(path)),
 	))
-	sess, msgs, err := parseIcodemateCLISession(path, project, machine)
+	results, excludedIDs, err := parseIcodemateCLISession(
+		path, project, machine,
+	)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
-	if sess == nil {
-		return ParseOutcome{
-			ResultSetComplete: true,
-			SkipReason:        SkipNoSession,
-		}, nil
-	}
 	if req.Fingerprint.Hash != "" {
-		sess.File.Hash = req.Fingerprint.Hash
+		for i := range results {
+			results[i].Session.File.Hash = req.Fingerprint.Hash
+		}
+	}
+	out := make([]ParseResultOutcome, 0, len(results))
+	for _, result := range results {
+		out = append(out, ParseResultOutcome{
+			Result:      result,
+			DataVersion: DataVersionCurrent,
+		})
 	}
 	return ParseOutcome{
-		Results: []ParseResultOutcome{{
-			Result: ParseResult{
-				Session:  *sess,
-				Messages: msgs,
-			},
-			DataVersion: DataVersionCurrent,
-		}},
-		ResultSetComplete: true,
-		ForceReplace:      true,
+		Results:            out,
+		ExcludedSessionIDs: excludedIDs,
+		ResultSetComplete:  true,
+		ForceReplace:       true,
 	}, nil
 }
 
@@ -385,329 +380,28 @@ func (s *icodemateCLISourceSet) hasRoot(root string) bool {
 	return false
 }
 
-// parseIcodemateCLISession parses one IcodeMate CLI JSONL transcript
-// (<root>/<project>/<session>.jsonl). The transcript schema matches Claude
-// Code's, so the reader reuses the shared Claude JSONL helpers; the comment
-// above and the relabels below keep it an Icodemate-owned parser rather than
-// the Claude-source-set one, so the two families stay independent.
+// parseIcodemateCLISession parses one ICodeMate CLI JSONL transcript through
+// the shared Claude graph parser, then moves every result into ICodeMate's
+// namespace. Reusing the graph parser is required for fork selection,
+// streaming assistant snapshots, and persisted tool-result sidecars to keep
+// the same semantics as the compatible Claude transcript format.
 func parseIcodemateCLISession(
 	path, project, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	info, err := os.Stat(path)
+) ([]ParseResult, []string, error) {
+	results, excluded, err := claudeParseFile(
+		path, project, machine,
+		claudeParseOptions{compatibleTitleEvents: true},
+	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, fmt.Errorf("icodemate cli parse %s: %w", path, err)
 	}
 
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open %s: %w", path, err)
+	InferRelationshipTypes(results)
+	applyIcodemateCLIIdentity(results)
+	for i := range excluded {
+		excluded[i] = icodemateCLISessionID(excluded[i])
 	}
-	defer f.Close()
-
-	lr := newLineReader(f, maxLineSize)
-	defer releaseLineReader(lr)
-	lastLine := ""
-	malformedLines := 0
-	ordinal := 0
-	var (
-		messages       []ParsedMessage
-		queuedCommands []claudeQueuedCommand
-		startedAt      time.Time
-		endedAt        time.Time
-		firstUser      string
-		userCount      int
-		sessionID      = strings.TrimSuffix(filepath.Base(path), ".jsonl")
-		sessionName    string
-		customTitle    string
-		aiTitle        string
-		cwd            string
-		gitBranch      string
-	)
-
-	for {
-		line, ok := lr.next()
-		if !ok {
-			break
-		}
-		lastLine = line
-		if !gjson.Valid(line) {
-			malformedLines++
-			continue
-		}
-
-		switch strings.TrimSpace(gjson.Get(line, "type").Str) {
-		case "attachment":
-			if qc, ok := extractIcodemateCLIQueuedCommand(line); ok {
-				queuedCommands = append(queuedCommands, qc)
-			}
-			continue
-		case "custom-title":
-			if v := strings.TrimSpace(gjson.Get(line, "customTitle").Str); v != "" {
-				customTitle = v
-			}
-			continue
-		case "ai-title":
-			if v := strings.TrimSpace(gjson.Get(line, "aiTitle").Str); v != "" {
-				aiTitle = v
-			}
-			continue
-		}
-
-		if ts := extractTimestamp(line); !ts.IsZero() {
-			if startedAt.IsZero() || ts.Before(startedAt) {
-				startedAt = ts
-			}
-			if ts.After(endedAt) {
-				endedAt = ts
-			}
-		}
-
-		if sessionName == "" {
-			if v := strings.TrimSpace(gjson.Get(line, "sessionName").Str); v != "" {
-				sessionName = v
-			}
-		}
-		if cwd == "" {
-			if v := strings.TrimSpace(gjson.Get(line, "cwd").Str); v != "" {
-				cwd = v
-			}
-		}
-		if gitBranch == "" {
-			if v := strings.TrimSpace(gjson.Get(line, "gitBranch").Str); v != "" {
-				gitBranch = v
-			}
-		}
-
-		if isIcodemateCLICompactBoundary(line) {
-			content, _, _, _, _, _ := ExtractTextContent(
-				gjson.Get(line, "message.content"),
-			)
-			messages = append(messages, ParsedMessage{
-				Ordinal:           ordinal,
-				Role:              RoleAssistant,
-				Content:           content,
-				Timestamp:         extractTimestamp(line),
-				IsSystem:          true,
-				ContentLength:     len(content),
-				SourceType:        "system",
-				SourceSubtype:     "compact_boundary",
-				SourceUUID:        gjson.Get(line, "uuid").Str,
-				SourceParentUUID:  gjson.Get(line, "parentUuid").Str,
-				IsCompactBoundary: true,
-				IsSidechain:       gjson.Get(line, "isSidechain").Bool(),
-			})
-			ordinal++
-			continue
-		}
-
-		role := strings.TrimSpace(gjson.Get(line, "message.role").Str)
-		if role == "" {
-			role = strings.TrimSpace(gjson.Get(line, "type").Str)
-		}
-		switch role {
-		case "user", "assistant", "system":
-		default:
-			continue
-		}
-		if role == "user" && gjson.Get(line, "isMeta").Bool() {
-			continue
-		}
-
-		content := gjson.Get(line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, toolCalls, toolResults :=
-			ExtractTextContent(content)
-		if strings.TrimSpace(text) == "" && len(toolResults) == 0 &&
-			len(toolCalls) == 0 && role != "system" {
-			continue
-		}
-
-		if role == "system" {
-			messages = append(messages, ParsedMessage{
-				Ordinal:          ordinal,
-				Role:             RoleSystem,
-				Content:          text,
-				ThinkingText:     thinkingText,
-				Timestamp:        extractTimestamp(line),
-				HasThinking:      hasThinking,
-				HasToolUse:       hasToolUse,
-				IsSystem:         true,
-				ContentLength:    len(text),
-				ToolCalls:        toolCalls,
-				ToolResults:      toolResults,
-				SourceType:       "system",
-				SourceSubtype:    strings.TrimSpace(gjson.Get(line, "subtype").Str),
-				SourceUUID:       gjson.Get(line, "uuid").Str,
-				SourceParentUUID: gjson.Get(line, "parentUuid").Str,
-				IsSidechain:      gjson.Get(line, "isSidechain").Bool(),
-			})
-			ordinal++
-			continue
-		}
-
-		if role == "user" && strings.TrimSpace(text) == "" &&
-			len(toolResults) == 0 {
-			continue
-		}
-
-		msg := ParsedMessage{
-			Ordinal:            ordinal,
-			Role:               RoleType(role),
-			Content:            text,
-			ThinkingText:       thinkingText,
-			Timestamp:          extractTimestamp(line),
-			HasThinking:        hasThinking,
-			HasToolUse:         hasToolUse,
-			ContentLength:      len(text),
-			ToolCalls:          toolCalls,
-			ToolResults:        toolResults,
-			SourceType:         role,
-			SourceUUID:         gjson.Get(line, "uuid").Str,
-			SourceParentUUID:   gjson.Get(line, "parentUuid").Str,
-			IsSidechain:        gjson.Get(line, "isSidechain").Bool(),
-			tokenPresenceKnown: role == "assistant",
-		}
-		if role == "assistant" {
-			extractIcodemateCLITokenFields(&msg, line)
-			msg.StopReason = gjson.Get(line, "message.stop_reason").Str
-		}
-		messages = append(messages, msg)
-		ordinal++
-		if role == "user" && strings.TrimSpace(text) != "" {
-			userCount++
-			if firstUser == "" {
-				firstUser = truncate(strings.ReplaceAll(text, "\n", " "), 300)
-			}
-		}
-	}
-
-	if err := lr.Err(); err != nil {
-		return nil, nil, fmt.Errorf("reading %s: %w", path, err)
-	}
-
-	isTruncated := lastLine != "" &&
-		strings.TrimSpace(lastLine) != "" &&
-		!gjson.Valid(lastLine) &&
-		!fileEndsWithNewline(f, info.Size())
-
-	if len(messages) == 0 && len(queuedCommands) == 0 {
-		return nil, nil, nil
-	}
-
-	if len(queuedCommands) > 0 {
-		messages = mergeQueuedCommands(
-			messages, queuedCommands, 0, icodemateCLIQueuedCommandMessage,
-		)
-		firstUser, userCount = firstMessageAndUserCount(messages)
-		for _, qc := range queuedCommands {
-			if qc.timestamp.After(endedAt) {
-				endedAt = qc.timestamp
-			}
-			if !qc.timestamp.IsZero() &&
-				(startedAt.IsZero() || qc.timestamp.Before(startedAt)) {
-				startedAt = qc.timestamp
-			}
-		}
-	}
-
-	if customTitle != "" {
-		sessionName = customTitle
-	} else if aiTitle != "" {
-		sessionName = aiTitle
-	}
-
-	project = firstNonEmptyJSONLString(
-		project, GetProjectName(filepath.Base(filepath.Dir(path))),
-	)
-	if project == "" {
-		project = "unknown"
-	}
-
-	parentSessionID, relationshipType := icodemateCLIRelationship(path, sessionID)
-	sess := &ParsedSession{
-		ID:               icodemateCLISessionID(sessionID),
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentIcodemate,
-		ParentSessionID:  parentSessionID,
-		RelationshipType: relationshipType,
-		Cwd:              cwd,
-		GitBranch:        gitBranch,
-		FirstMessage:     firstUser,
-		SessionName:      sessionName,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: userCount,
-		MalformedLines:   malformedLines,
-		IsTruncated:      isTruncated,
-		File: FileInfo{
-			Path:  path,
-			Size:  info.Size(),
-			Mtime: info.ModTime().UnixNano(),
-		},
-	}
-	accumulateMessageTokenUsage(sess, messages)
-	sess.TerminationStatus = Classify(
-		messages,
-		lastAssistantStopReason(icodemateCLISemanticMessages(messages)),
-		isTruncated,
-	)
-	return sess, messages, nil
-}
-
-func icodemateCLIRelationship(
-	path, sessionID string,
-) (string, RelationshipType) {
-	parent := claudeCompanionParentSessionID(path, sessionID)
-	if parent == "" {
-		return "", RelNone
-	}
-	return icodemateCLISessionID(parent), RelSubagent
-}
-
-func icodemateCLISemanticMessages(messages []ParsedMessage) []ParsedMessage {
-	filtered := make([]ParsedMessage, 0, len(messages))
-	for _, msg := range messages {
-		if msg.IsSystem {
-			continue
-		}
-		filtered = append(filtered, msg)
-	}
-	return filtered
-}
-
-func extractIcodemateCLIQueuedCommand(line string) (claudeQueuedCommand, bool) {
-	attachment := gjson.Get(line, "attachment")
-	if attachment.Get("type").Str != "queued_command" {
-		return claudeQueuedCommand{}, false
-	}
-	if attachment.Get("commandMode").Str != "prompt" {
-		return claudeQueuedCommand{}, false
-	}
-	if attachment.Get("isMeta").Bool() || attachment.Get("origin").Exists() {
-		return claudeQueuedCommand{}, false
-	}
-
-	prompt, _, _, _, _, _ := ExtractTextContent(attachment.Get("prompt"))
-	if strings.TrimSpace(prompt) == "" {
-		return claudeQueuedCommand{}, false
-	}
-
-	return claudeQueuedCommand{
-		prompt:    prompt,
-		timestamp: extractTimestamp(line),
-	}, true
-}
-
-func icodemateCLIQueuedCommandMessage(q claudeQueuedCommand) ParsedMessage {
-	return ParsedMessage{
-		Role:          RoleUser,
-		Content:       q.prompt,
-		Timestamp:     q.timestamp,
-		ContentLength: len(q.prompt),
-		SourceType:    "user",
-		SourceSubtype: "queued_command",
-	}
+	return results, excluded, nil
 }
 
 func icodemateCLISessionID(id string) string {
@@ -718,35 +412,30 @@ func icodemateCLISessionID(id string) string {
 	return "icodemate:" + id
 }
 
-func isIcodemateCLICompactBoundary(line string) bool {
-	if gjson.Get(line, "isCompactSummary").Bool() {
-		return true
-	}
-	if gjson.Get(line, "compact_boundary").Bool() {
-		return true
-	}
-	switch strings.TrimSpace(gjson.Get(line, "subtype").Str) {
-	case "compact_boundary", "compact-summary", "compact_summary":
-		return true
-	}
-	return strings.TrimSpace(gjson.Get(line, "type").Str) == "compact_boundary"
-}
-
-func extractIcodemateCLITokenFields(msg *ParsedMessage, line string) {
-	msg.Model = gjson.Get(line, "message.model").String()
-
-	usageResult := gjson.Get(line, "message.usage")
-	if usageResult.Exists() {
-		msg.TokenUsage = json.RawMessage(usageResult.Raw)
-		msg.HasOutputTokens = usageResult.Get("output_tokens").Exists()
-		msg.HasContextTokens = usageResult.Get("input_tokens").Exists() ||
-			usageResult.Get("cache_creation_input_tokens").Exists() ||
-			usageResult.Get("cache_read_input_tokens").Exists()
-
-		input := int(usageResult.Get("input_tokens").Int())
-		cacheCreation := int(usageResult.Get("cache_creation_input_tokens").Int())
-		cacheRead := int(usageResult.Get("cache_read_input_tokens").Int())
-		msg.OutputTokens = int(usageResult.Get("output_tokens").Int())
-		msg.ContextTokens = input + cacheCreation + cacheRead
+func applyIcodemateCLIIdentity(results []ParseResult) {
+	for i := range results {
+		result := &results[i]
+		result.Session.Agent = AgentIcodemate
+		result.Session.ID = icodemateCLISessionID(result.Session.ID)
+		result.Session.ParentSessionID = icodemateCLISessionID(
+			result.Session.ParentSessionID,
+		)
+		result.Session.SourceSessionID = icodemateCLISessionID(
+			result.Session.SourceSessionID,
+		)
+		for j := range result.Messages {
+			for k := range result.Messages[j].ToolCalls {
+				call := &result.Messages[j].ToolCalls[k]
+				call.SubagentSessionID = icodemateCLISessionID(
+					call.SubagentSessionID,
+				)
+				for n := range call.ResultEvents {
+					call.ResultEvents[n].SubagentSessionID =
+						icodemateCLISessionID(
+							call.ResultEvents[n].SubagentSessionID,
+						)
+				}
+			}
+		}
 	}
 }

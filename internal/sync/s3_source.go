@@ -54,7 +54,7 @@ func s3SourceFingerprint(file parser.DiscoveredFile) string {
 func statS3SourceObject(file parser.DiscoveredFile) (parser.S3Object, error) {
 	stat := statS3Object
 	switch file.Agent {
-	case parser.AgentClaude:
+	case parser.AgentClaude, parser.AgentIcodemate:
 		stat = statClaudeS3Session
 	case parser.AgentCodex:
 		stat = statCodexS3Session
@@ -70,6 +70,14 @@ func s3DiscoveredSessionID(file parser.DiscoveredFile) string {
 			return ""
 		}
 		return applyIDPrefixToID(s3SessionIDPrefix(file.Machine), id)
+	case parser.AgentIcodemate:
+		id := strings.TrimSuffix(path.Base(file.Path), ".jsonl")
+		if id == "" {
+			return ""
+		}
+		return applyIDPrefixToID(
+			s3SessionIDPrefix(file.Machine), "icodemate:"+id,
+		)
 	case parser.AgentCodex:
 		uuid := parser.CodexSessionUUIDFromFilename(path.Base(file.Path))
 		if uuid == "" {
@@ -320,7 +328,7 @@ func s3MachineFromRoot(root string) string {
 }
 
 func isS3AgentRootSegment(seg string) bool {
-	return seg == "claude" || seg == "codex"
+	return seg == "claude" || seg == "codex" || seg == "icodemate"
 }
 
 func s3RelFromRoot(root, uri string) (string, bool) {
@@ -354,7 +362,9 @@ func (e *Engine) hydrateS3DiscoveredFile(
 		if file.Machine == "" {
 			file.Machine = s3MachineFromRoot(root)
 		}
-		if file.Project == "" && file.Agent == parser.AgentClaude {
+		if file.Project == "" &&
+			(file.Agent == parser.AgentClaude ||
+				file.Agent == parser.AgentIcodemate) {
 			if first, _, ok := strings.Cut(rel, "/"); ok {
 				file.Project = first
 			}
@@ -369,7 +379,7 @@ func (e *Engine) hydrateS3DiscoveredFile(
 	if file.SourceMtime == 0 {
 		stat := statS3Object
 		switch file.Agent {
-		case parser.AgentClaude:
+		case parser.AgentClaude, parser.AgentIcodemate:
 			stat = statClaudeS3Session
 		case parser.AgentCodex:
 			stat = statCodexS3Session

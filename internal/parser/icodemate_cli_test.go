@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +77,6 @@ func TestIcodemateCLIDiscoverParseAndFindSource(t *testing.T) {
 	outcome, err := provider.Parse(context.Background(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: SourceFingerprint{Hash: "hash-cli"},
-		Machine:     "devbox",
 	})
 	require.NoError(t, err)
 	require.True(t, outcome.ResultSetComplete)
@@ -87,6 +87,7 @@ func TestIcodemateCLIDiscoverParseAndFindSource(t *testing.T) {
 	msgs := outcome.Results[0].Result.Messages
 	assert.Equal(t, AgentIcodemate, sess.Agent)
 	assert.Equal(t, "icodemate:session-cli", sess.ID)
+	assert.Equal(t, "devbox", sess.Machine)
 	assert.Equal(t, "my_project", sess.Project)
 	assert.Equal(t, "/workspace/my-project", sess.Cwd)
 	assert.Equal(t, "main", sess.GitBranch)
@@ -97,6 +98,99 @@ func TestIcodemateCLIDiscoverParseAndFindSource(t *testing.T) {
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
 	assert.Equal(t, 7, msgs[1].OutputTokens)
 	assert.Equal(t, 17, msgs[1].ContextTokens)
+}
+
+func TestParseIcodemateCLIStreamingSnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "streaming.jsonl")
+	content := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_stream","content":[{"type":"text","text":"Work"}],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_stream","content":[{"type":"text","text":"Working"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a3","parentUuid":"a2","message":{"id":"msg_stream","content":[{"type":"text","text":"Working"}],"usage":{"input_tokens":1,"output_tokens":3}}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	results, excluded, err := parseIcodemateCLISession(
+		path, "project", "devbox",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, excluded)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "Working", results[0].Messages[1].Content)
+	assert.Equal(t, 3, results[0].Messages[1].OutputTokens)
+	assert.Equal(t, 3, results[0].Session.TotalOutputTokens)
+}
+
+func TestParseIcodemateCLISplitsDivergentBranches(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fork-session.jsonl")
+	content := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"root","message":{"content":"start"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"root","message":{"content":[{"type":"text","text":"main reply 1"}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":"main prompt 2"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:03Z","uuid":"u3","parentUuid":"u2","message":{"content":"main prompt 3"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:04Z","uuid":"u4","parentUuid":"u3","message":{"content":"main prompt 4"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:05Z","uuid":"u5","parentUuid":"u4","message":{"content":"main prompt 5"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:06Z","uuid":"fork","parentUuid":"root","message":{"content":[{"type":"text","text":"fork reply"}]}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	results, excluded, err := parseIcodemateCLISession(
+		path, "project", "devbox",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, excluded)
+	require.Len(t, results, 2)
+
+	assert.Equal(t, "icodemate:fork-session", results[0].Session.ID)
+	assert.Equal(t, AgentIcodemate, results[0].Session.Agent)
+	for _, message := range results[0].Messages {
+		assert.NotEqual(t, "fork reply", message.Content)
+	}
+
+	assert.Equal(t, "icodemate:fork-session-fork", results[1].Session.ID)
+	assert.Equal(t, "icodemate:fork-session", results[1].Session.ParentSessionID)
+	assert.Equal(t, RelFork, results[1].Session.RelationshipType)
+	require.Len(t, results[1].Messages, 1)
+	assert.Equal(t, "fork reply", results[1].Messages[0].Content)
+}
+
+func TestParseIcodemateCLIResolvesPersistedToolResult(t *testing.T) {
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "project", "parent-session")
+	resultPath := filepath.Join(sessionDir, "tool-results", "output.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
+	fullOutput := "full output line 1\nfull output line 2\n"
+	require.NoError(t, os.WriteFile(resultPath, []byte(fullOutput), 0o644))
+
+	resultPathJSON, err := json.Marshal(resultPath)
+	require.NoError(t, err)
+	persistedContent, err := json.Marshal(
+		"<persisted-output>\nOutput too large. Full output saved to: " +
+			resultPath + "\n\nPreview:\npreview only\n</persisted-output>",
+	)
+	require.NoError(t, err)
+	content := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + string(persistedContent) + `}]},"toolUseResult":{"persistedOutputPath":` + string(resultPathJSON) + `}}`,
+	}, "\n") + "\n"
+	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
+	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
+
+	results, excluded, err := parseIcodemateCLISession(
+		sessionPath, "project", "devbox",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, excluded)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Messages, 3)
+	require.Len(t, results[0].Messages[2].ToolResults, 1)
+	assert.Equal(
+		t,
+		fullOutput,
+		DecodeContent(results[0].Messages[2].ToolResults[0].ContentRaw),
+	)
 }
 
 // TestIcodemateProviderMergesOpenCodeAndCLIRoots exercises the hybrid

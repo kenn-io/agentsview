@@ -1595,7 +1595,10 @@ add an archived or maintained mirror without replacing the original identity.
   `internal/parser/icodemate_cli.go` parses the Claude-format CLI projects
   transcripts, and `internal/parser/icodemate_provider.go` fans the configured
   roots out to whichever layout each root owns. Product-specific divergence is
-  a known limitation.
+  a known limitation. Reverified 2026-08-22 with controlled compatible-format
+  fixtures: the CLI parser uses the Claude UUID/parent UUID graph, coalesces
+  repeated assistant message snapshots by message ID, and resolves local and
+  S3-materialized persisted tool-result sidecars before extracting content.
 
 ## WorkBuddy (`workbuddy`)
 

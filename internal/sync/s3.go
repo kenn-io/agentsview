@@ -75,9 +75,10 @@ func safeS3TempRelPath(file parser.DiscoveredFile) (string, error) {
 	if len(parts) > 1 {
 		relParts = parts[1:]
 	}
-	if file.Agent == parser.AgentClaude {
+	if file.Agent == parser.AgentClaude || file.Agent == parser.AgentIcodemate {
+		providerSegment := string(file.Agent)
 		for i := 0; i+1 < len(parts); i++ {
-			if parts[i] == "raw" && parts[i+1] == "claude" {
+			if parts[i] == "raw" && parts[i+1] == providerSegment {
 				relParts = parts[i+2:]
 				break
 			}
@@ -214,11 +215,11 @@ func hydrateS3CodexParent(
 	return true
 }
 
-// processS3Session reads a Claude/Codex session JSONL directly from object
-// storage (in-process, no persistent local mirror): download the object's
-// bytes, buffer them to a transient temp file so the existing path-based
-// parsers (incremental offsets, subagent layout) work unchanged, run the
-// normal per-agent processor, then delete the temp file.
+// processS3Session reads a Claude-compatible or Codex session JSONL directly
+// from object storage (in-process, no persistent local mirror). It downloads
+// the object's bytes to a transient temp file so existing path-based parsers
+// (incremental offsets and subagent layout) work unchanged, runs the normal
+// per-agent processor, then deletes the temp file.
 func (e *Engine) processS3Session(
 	ctx context.Context, file parser.DiscoveredFile, sourceInfo os.FileInfo,
 ) processResult {
@@ -332,7 +333,7 @@ func (e *Engine) processS3Session(
 	hydratedToolResults := false
 	sawPersistedToolResults := false
 	switch file.Agent {
-	case parser.AgentClaude:
+	case parser.AgentClaude, parser.AgentIcodemate:
 		rewrote, sawPersisted, err := hydrateS3ClaudeToolResults(tmp, file.Path)
 		if err != nil {
 			return processResult{err: err, noCacheSkip: true, retentionLease: lease}

@@ -102,32 +102,35 @@ func claudeParseFile(
 
 	// First pass: collect all valid lines with metadata.
 	var (
-		entries         = make([]dagEntry, 0)
-		queuedCommands  []claudeQueuedCommand
-		hasAnyUUID      bool
-		allHaveUUID     bool
-		parentSessionID string
-		sourceSessionID string
-		sourceVersion   string
-		cwd             string
-		gitBranch       string
-		displayName     string
-		agentLabel      string
-		entrypoint      string
-		sessionKind     string
-		foundParentSID  bool
-		uploadSessionID string
-		uploadRoot      bool
-		uploadSidechain bool
-		uploadEvidence  = true
-		lineIndex       int
-		uuidLineOrdinal int
-		malformedLines  int
-		lastLineHasData bool
-		lastLineValid   bool
-		subagentMap     = map[string]string{}
-		globalStart     time.Time
-		globalEnd       time.Time
+		entries          = make([]dagEntry, 0)
+		queuedCommands   []claudeQueuedCommand
+		hasAnyUUID       bool
+		allHaveUUID      bool
+		parentSessionID  string
+		sourceSessionID  string
+		sourceVersion    string
+		cwd              string
+		gitBranch        string
+		displayName      string
+		compatibleName   string
+		compatibleAI     string
+		compatibleCustom string
+		agentLabel       string
+		entrypoint       string
+		sessionKind      string
+		foundParentSID   bool
+		uploadSessionID  string
+		uploadRoot       bool
+		uploadSidechain  bool
+		uploadEvidence   = true
+		lineIndex        int
+		uuidLineOrdinal  int
+		malformedLines   int
+		lastLineHasData  bool
+		lastLineValid    bool
+		subagentMap      = map[string]string{}
+		globalStart      time.Time
+		globalEnd        time.Time
 	)
 	allHaveUUID = true
 	if !opts.uploadIdentity {
@@ -167,6 +170,27 @@ func claudeParseFile(
 		}
 
 		entryType := gjson.GetBytes(lineBytes, "type").Str
+		if opts.compatibleTitleEvents {
+			if compatibleName == "" {
+				compatibleName = strings.Clone(strings.TrimSpace(
+					gjson.GetBytes(lineBytes, "sessionName").Str,
+				))
+			}
+			switch entryType {
+			case "custom-title":
+				if value := strings.TrimSpace(
+					gjson.GetBytes(lineBytes, "customTitle").Str,
+				); value != "" {
+					compatibleCustom = strings.Clone(value)
+				}
+			case "ai-title":
+				if value := strings.TrimSpace(
+					gjson.GetBytes(lineBytes, "aiTitle").Str,
+				); value != "" {
+					compatibleAI = strings.Clone(value)
+				}
+			}
+		}
 		if agentLabel == "" {
 			if value := gjson.GetBytes(lineBytes, "agentSetting").Str; strings.TrimSpace(value) != "" {
 				agentLabel = strings.Clone(value)
@@ -368,6 +392,11 @@ func claudeParseFile(
 		Path:  path,
 		Size:  info.Size(),
 		Mtime: info.ModTime().UnixNano(),
+	}
+	if opts.compatibleTitleEvents {
+		displayName = firstNonEmptyJSONLString(
+			compatibleCustom, compatibleAI, compatibleName, displayName,
+		)
 	}
 
 	meta := claudeSessionMeta{

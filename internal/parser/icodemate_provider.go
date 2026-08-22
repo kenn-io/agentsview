@@ -39,7 +39,7 @@ func (f icodemateProviderFactory) Definition() AgentDef {
 }
 
 func (f icodemateProviderFactory) Capabilities() Capabilities {
-	return openCodeFormatProviderCapabilities()
+	return icodemateProviderCapabilities()
 }
 
 func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
@@ -50,7 +50,7 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	return &icodemateProvider{
 		ProviderBase: ProviderBase{
 			Def:    cloneAgentDef(f.def),
-			Caps:   openCodeFormatProviderCapabilities(),
+			Caps:   icodemateProviderCapabilities(),
 			Config: cfg,
 		},
 		opencode: &openCodeFormatProvider{
@@ -79,6 +79,25 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 			cfg.SQLiteContainerUnchangedSinceTrust,
 		),
 	}
+}
+
+// icodemateProviderCapabilities combines the OpenCode container mechanics of
+// the VS Code extension with the Claude-compatible multi-session semantics of
+// terminal CLI transcripts.
+func icodemateProviderCapabilities() Capabilities {
+	caps := openCodeFormatProviderCapabilities()
+	caps.Source.MultiSessionSource = CapabilitySupported
+	caps.Source.ExcludedSessions = CapabilitySupported
+	caps.Source.ForceReplaceOnParse = CapabilitySupported
+	caps.Content.SessionName = CapabilitySupported
+	caps.Content.GitBranch = CapabilitySupported
+	caps.Content.Subagents = CapabilitySupported
+	caps.Content.ToolResults = CapabilitySupported
+	caps.Content.TerminationStatus = CapabilitySupported
+	caps.Content.MalformedLineCount = CapabilitySupported
+	caps.Content.TruncationStatus = CapabilitySupported
+	caps.Content.StopReason = CapabilitySupported
+	return caps
 }
 
 // splitIcodemateRoots partitions configured roots by on-disk layout. A root
@@ -212,6 +231,7 @@ func (p *icodemateProvider) Parse(
 	case openCodeFormatSource, *openCodeFormatSource:
 		return p.opencode.Parse(ctx, req)
 	case icodemateCLISource, *icodemateCLISource, MaterializedFileSource:
+		req.Machine = firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 		return p.cli.Parse(ctx, req)
 	default:
 		return ParseOutcome{}, fmt.Errorf("icodemate source path unavailable")

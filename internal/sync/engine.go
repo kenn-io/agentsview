@@ -9673,9 +9673,9 @@ func (e *Engine) processFile(
 
 	// Every registered agent is provider-authoritative, so processProviderFile
 	// owns all local-file processing. The only sources that fall through are
-	// s3:// Claude/Codex objects, which bypass the provider (its source sets
-	// read local files) and use the legacy S3 sync path. Anything else is an
-	// unrecognized agent type.
+	// s3:// Claude-compatible/Codex objects, which bypass the provider (its
+	// source sets read local files) and use the legacy S3 sync path. Anything
+	// else is an unrecognized agent type.
 	if !strings.HasPrefix(file.Path, "s3://") {
 		return processResult{
 			err: fmt.Errorf("unknown agent type: %s", file.Agent),
@@ -9725,7 +9725,7 @@ func (e *Engine) processFile(
 
 	var res processResult
 	switch file.Agent {
-	case parser.AgentClaude, parser.AgentCodex:
+	case parser.AgentClaude, parser.AgentIcodemate, parser.AgentCodex:
 		res = e.processS3Session(ctx, file, info)
 	default:
 		res = processResult{
