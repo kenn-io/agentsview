@@ -513,6 +513,8 @@ func TestRawSyncCanonicalOpenAPISpecIncludesRoutes(t *testing.T) {
 		"/api/v1/raw-sync/tokens",
 		"/api/v1/raw-sync/objects/missing",
 		"/api/v1/raw-sync/manifests",
+		"/api/v1/raw-sync/uploads",
+		"/api/v1/raw-sync/uploads/{upload_id}",
 	} {
 		assert.Contains(t, paths, path)
 	}

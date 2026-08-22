@@ -58,6 +58,10 @@ type gzipResponseWriter struct {
 	plain       bool
 }
 
+func (w *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func (w *gzipResponseWriter) Header() http.Header {
 	return w.ResponseWriter.Header()
 }
