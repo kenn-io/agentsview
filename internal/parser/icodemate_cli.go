@@ -172,6 +172,11 @@ func (s *icodemateCLISourceSet) Parse(
 	if err != nil {
 		return ParseOutcome{}, err
 	}
+	if slices.ContainsFunc(results, func(result ParseResult) bool {
+		return result.Session.IsTruncated
+	}) {
+		return ParseOutcome{ResultSetComplete: false}, nil
+	}
 	for i := range results {
 		if req.Fingerprint.Size != 0 {
 			results[i].Session.File.Size = req.Fingerprint.Size

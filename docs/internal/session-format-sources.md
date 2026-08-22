@@ -1606,7 +1606,9 @@ add an archived or maintained mirror without replacing the original identity.
   prior and current source paths and archive rebuilds. S3 subagent refreshes
   retain archived parent provider and machine metadata instead of importing
   ICodeMate children as Claude. S3 discovery also preserves transcript-only
-  size and mtime separately from composite sidecar freshness.
+  size and mtime separately from composite sidecar freshness. A trailing
+  partial JSONL record stays incomplete and retryable without replacing
+  archived branch content.
   Polling includes local and S3 sidecar mtimes, shortened CLI transcripts
   replace archived messages, and duplicate ranking uses transcript metadata
   rather than sidecar volume.

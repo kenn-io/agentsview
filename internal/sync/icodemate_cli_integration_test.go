@@ -86,6 +86,22 @@ func TestIcodemateCLIForkSessionsReconcileAcrossSourceReparse(t *testing.T) {
 	require.NotNil(t, forkSession.ParentSessionID)
 	assert.Equal(t, "icodemate:fork-session", *forkSession.ParentSessionID)
 
+	truncated := mainLines[0] + "\n" + `{"type":"assistant","uuid":"partial`
+	require.NoError(t, os.WriteFile(path, []byte(truncated), 0o644))
+	incomplete := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, incomplete.Failed)
+	assert.Zero(t, incomplete.Synced)
+	forkSession, err = database.GetSession(
+		context.Background(), "icodemate:fork-session-fork",
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, forkSession)
+	messages, err := database.GetMessages(
+		context.Background(), "icodemate:fork-session", 0, 20, true,
+	)
+	require.NoError(t, err)
+	assert.Len(t, messages, len(mainLines))
+
 	mainOnly := strings.Join(mainLines, "\n") + "\n" +
 		`{"type":"ai-title","aiTitle":"Main only"}` + "\n"
 	require.NoError(t, os.WriteFile(path, []byte(mainOnly), 0o644))
