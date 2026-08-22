@@ -523,6 +523,7 @@ func TestIcodemateCLISidecarChangeInvalidatesAndMapsOwningSource(t *testing.T) {
 }
 
 func TestIcodemateCLICompositeFingerprintStableAcrossRoots(t *testing.T) {
+	transcript := claudeProviderFixture("same transcript")
 	fingerprints := make([]SourceFingerprint, 0, 2)
 	for range 2 {
 		root := t.TempDir()
@@ -531,7 +532,7 @@ func TestIcodemateCLICompositeFingerprintStableAcrossRoots(t *testing.T) {
 		resultPath := filepath.Join(
 			projectDir, "session", "tool-results", "output.txt",
 		)
-		writeSourceFile(t, sessionPath, claudeProviderFixture("same transcript"))
+		writeSourceFile(t, sessionPath, transcript)
 		writeSourceFile(t, resultPath, "same persisted output\n")
 
 		provider, ok := NewProvider(
