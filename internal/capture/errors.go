@@ -17,8 +17,7 @@ func errorWithReason(reason ReasonCode, message string) error {
 }
 
 func reasonForError(err error, fallback ReasonCode) ReasonCode {
-	var classified *reasonError
-	if errors.As(err, &classified) {
+	if classified, ok := errors.AsType[*reasonError](err); ok {
 		return classified.reason
 	}
 	return fallback

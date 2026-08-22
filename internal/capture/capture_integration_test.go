@@ -1466,7 +1466,7 @@ func TestRunCodexFindsChildInSpawnDayShard(t *testing.T) {
 	assertIntPointer(t, result.Usage.OutputTokens, 12)
 }
 
-func TestRunCodexRetriesWhenChildChangesDuringCopy(t *testing.T) {
+func TestRunCodexRetriesWhenChildChangesDuringFinalization(t *testing.T) {
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
@@ -1492,18 +1492,20 @@ func TestRunCodexRetriesWhenChildChangesDuringCopy(t *testing.T) {
 	}()
 
 	childID := "22222222-2222-4222-8222-222222222222"
+	rootID := "11111111-1111-4111-8111-111111111111"
+	day := filepath.FromSlash(time.Now().UTC().Format("2006/01/02"))
 	childPath := filepath.Join(
-		root, filepath.FromSlash(time.Now().UTC().Format("2006/01/02")),
+		root, day,
 		"rollout-child-"+childID+".jsonl",
 	)
+	rootCopyPath := filepath.Join(
+		captureDir, sourcesDirName, filepath.FromSlash(bundleSourcePrefix(ProviderCodex)),
+		day, "rollout-test-"+rootID+".jsonl",
+	)
 	require.Eventually(t, func() bool {
-		data, err := os.ReadFile(filepath.Join(captureDir, manifestFileName))
-		if err != nil {
-			return false
-		}
-		var captured manifest
-		return json.Unmarshal(data, &captured) == nil && len(captured.Sources) == 1
-	}, 20*time.Second, time.Millisecond)
+		info, err := os.Lstat(rootCopyPath)
+		return err == nil && info.Mode().IsRegular()
+	}, 20*time.Second, 10*time.Millisecond)
 	changed := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(childPath, changed, changed))
 

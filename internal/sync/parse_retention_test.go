@@ -271,17 +271,17 @@ func TestCollectAndBatchDiscardsPendingResultAfterCancellation(t *testing.T) {
 
 	results := make(chan syncJob, 2)
 	results <- syncJob{
+		results: []parser.ParseResult{{
+			Session: parser.ParsedSession{ID: "one", Agent: parser.AgentClaude},
+		}},
 		path:           "/sessions/one.jsonl",
 		retentionLease: lease,
-		processResult: processResult{results: []parser.ParseResult{{
-			Session: parser.ParsedSession{ID: "one", Agent: parser.AgentClaude},
-		}}},
 	}
 	results <- syncJob{
-		path: "/sessions/two.jsonl",
-		processResult: processResult{results: []parser.ParseResult{{
+		results: []parser.ParseResult{{
 			Session: parser.ParsedSession{ID: "two", Agent: parser.AgentClaude},
-		}}},
+		}},
+		path: "/sessions/two.jsonl",
 	}
 	close(results)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -349,12 +349,12 @@ func TestCollectAndBatchPromotesClaudeSourceAfterShutdownCancellation(t *testing
 	}
 	results := make(chan syncJob, 1)
 	results <- syncJob{
-		agent: parser.AgentClaude,
-		path:  "/sessions/root.jsonl",
-		processResult: processResult{results: []parser.ParseResult{
+		results: []parser.ParseResult{
 			{Session: parser.ParsedSession{ID: "root", Agent: parser.AgentClaude}},
 			{Session: parser.ParsedSession{ID: "fork", Agent: parser.AgentClaude}},
-		}},
+		},
+		agent: parser.AgentClaude,
+		path:  "/sessions/root.jsonl",
 	}
 	close(results)
 

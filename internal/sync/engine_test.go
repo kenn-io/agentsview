@@ -8308,14 +8308,14 @@ func TestCollectAndBatchCompletesPostWriteLinksAfterCancellation(t *testing.T) {
 	sourcePath := filepath.Join(t.TempDir(), "link-child.jsonl")
 	results := make(chan syncJob, 1)
 	results <- syncJob{
-		agent: parser.AgentZencoder, path: sourcePath, machine: "local",
-		processResult: processResult{results: []parser.ParseResult{{
+		results: []parser.ParseResult{{
 			Session: parser.ParsedSession{
 				ID: "link-child", Project: "project", Machine: "local",
 				Agent: parser.AgentZencoder,
 				File:  parser.FileInfo{Path: sourcePath, Size: 1, Mtime: 1},
 			},
-		}}},
+		}},
+		agent: parser.AgentZencoder, path: sourcePath, machine: "local",
 	}
 	close(results)
 	ctx, cancel := context.WithCancel(t.Context())
