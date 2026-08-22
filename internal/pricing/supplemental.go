@@ -15,13 +15,13 @@ import (
 // (kimi-for-coding, daimon-kimi-code, daimon-kimi-messages) with
 // date-based pricing: those names left the static set (the seed
 // deletes their stale rows) and k3/k3-agent moved from K2.6 to K3
-// rates.
-const supplementalVersion = "2"
+// rates. Version 3 removed moonshot/kimi-k3 after LiteLLM added it.
+const supplementalVersion = "3"
 
 // Canonical pricing models the date-ambiguous aliases resolve to.
 // KimiK26Canonical exists in the embedded LiteLLM snapshot;
 // KimiK3Canonical is seeded by the supplemental set below because the
-// LiteLLM catalog does not list Kimi K3.
+// LiteLLM catalog lists only the provider-qualified Kimi K3 name.
 const (
 	KimiK26Canonical = "moonshot/kimi-k2.6"
 	KimiK3Canonical  = "kimi-k3"
@@ -131,14 +131,13 @@ func CanonicalModelForTimestamp(model, ts string) string {
 //
 // The rates below are ESTIMATES at the Kimi K3 list pricing (input
 // 3.00, output 15.00, cache creation 0, cache read 0.30 per MTok):
-// the Kimi CLI reports k3 and kimi-k3 (also seen as moonshot/kimi-k3),
-// and Kimi Work (the kimi-desktop daimon runtime) reports k3-agent,
-// none of which carry public rate cards. K3 itself is absent from the
-// LiteLLM catalog, so kimi-k3 and moonshot/kimi-k3 are seeded here too
-// — CanonicalModelForDate maps the date-ambiguous aliases onto these
-// canonical rows. The seed upserts them like any other fallback row,
-// so a later LiteLLM refresh still overwrites them if upstream ever
-// lists the real models.
+// the Kimi CLI reports k3 and kimi-k3, and Kimi Work (the kimi-desktop
+// daimon runtime) reports k3-agent, none of which carry public rate
+// cards. LiteLLM now lists moonshot/kimi-k3, so that qualified name
+// comes from the snapshot. CanonicalModelForDate maps date-ambiguous
+// aliases onto the unqualified kimi-k3 row below. The seed upserts
+// these rows like any other fallback row, so a later LiteLLM refresh
+// still overwrites them if upstream lists the real models.
 var supplementalPricing = []ModelPricing{
 	{
 		ModelPattern:         "k3",
@@ -156,13 +155,6 @@ var supplementalPricing = []ModelPricing{
 	},
 	{
 		ModelPattern:         "kimi-k3",
-		InputPerMTok:         money.MustParseDollars("3.00"),
-		OutputPerMTok:        money.MustParseDollars("15.00"),
-		CacheCreationPerMTok: money.Money{},
-		CacheReadPerMTok:     money.MustParseDollars("0.30"),
-	},
-	{
-		ModelPattern:         "moonshot/kimi-k3",
 		InputPerMTok:         money.MustParseDollars("3.00"),
 		OutputPerMTok:        money.MustParseDollars("15.00"),
 		CacheCreationPerMTok: money.Money{},

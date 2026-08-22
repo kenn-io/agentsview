@@ -36,12 +36,12 @@ func mustRate(dollars string) money.Money {
 }
 
 const (
-	defaultSnapshotRef      = "db257992fb8e3048af8c1cec9da738c28b4fe603"
-	defaultSnapshotSHA256   = "0e89b636ccf858edbf95a3f6188476b6eab6cf21f66d16a65c2184229ef81cbe"
+	defaultSnapshotRef      = "ec4174c397aaa726c13c2734664a8b4acaa11b5b"
+	defaultSnapshotSHA256   = "567c178e34a516c5015601b00c10fc2fb3a928504cbbaacd69bd87dcf0614811"
 	defaultSnapshotBranch   = "litellm-pricing-snapshot"
 	defaultSnapshotFile     = "litellm_snapshot.json.gz"
 	defaultSnapshotBaseURL  = "https://raw.githubusercontent.com/kenn-io/agentsview"
-	defaultLiteLLMSourceRef = "551e5d097c11f08fd2400a25a651b1844fcf89c2"
+	defaultLiteLLMSourceRef = "418c7c6012d7c39a9d4a28c72cabe1995595ad2b"
 )
 
 var immutableGitRefPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)

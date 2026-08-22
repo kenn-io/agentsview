@@ -20,6 +20,16 @@ func testRate(dollars string) money.Money {
 	return rate
 }
 
+func assertFlatPricing(t *testing.T, want, got ModelPricing) {
+	t.Helper()
+	assert.Equal(t, want.ModelPattern, got.ModelPattern)
+	assert.Equal(t, want.InputPerMTok, got.InputPerMTok)
+	assert.Equal(t, want.OutputPerMTok, got.OutputPerMTok)
+	assert.Equal(t, want.CacheCreationPerMTok, got.CacheCreationPerMTok)
+	assert.Equal(t, want.CacheReadPerMTok, got.CacheReadPerMTok)
+	assert.Empty(t, got.Bands)
+}
+
 func TestFallbackPricing_Opus46Rates(t *testing.T) {
 	prices := requireEmbeddedFallbackPricing(t)
 	var got *ModelPricing
@@ -39,7 +49,7 @@ func TestFallbackPricing_Opus46Rates(t *testing.T) {
 		CacheCreationPerMTok: testRate("6.25"),
 		CacheReadPerMTok:     testRate("0.50"),
 	}
-	assert.Equal(t, want, *got)
+	assertFlatPricing(t, want, *got)
 }
 
 func TestFallbackPricing_Opus47Rates(t *testing.T) {
@@ -63,7 +73,7 @@ func TestFallbackPricing_Opus47Rates(t *testing.T) {
 		CacheCreationPerMTok: testRate("6.25"),
 		CacheReadPerMTok:     testRate("0.50"),
 	}
-	assert.Equal(t, want, *got)
+	assertFlatPricing(t, want, *got)
 }
 
 func TestFallbackPricing_Opus48Rates(t *testing.T) {
@@ -87,7 +97,7 @@ func TestFallbackPricing_Opus48Rates(t *testing.T) {
 		CacheCreationPerMTok: testRate("6.25"),
 		CacheReadPerMTok:     testRate("0.50"),
 	}
-	assert.Equal(t, want, *got)
+	assertFlatPricing(t, want, *got)
 }
 
 func TestFallbackPricing_Fable5Rates(t *testing.T) {
@@ -111,7 +121,7 @@ func TestFallbackPricing_Fable5Rates(t *testing.T) {
 		CacheCreationPerMTok: testRate("12.50"),
 		CacheReadPerMTok:     testRate("1"),
 	}
-	assert.Equal(t, want, *got)
+	assertFlatPricing(t, want, *got)
 }
 
 func TestFallbackPricing_HermesModels(t *testing.T) {

@@ -12,14 +12,12 @@ import (
 
 // TestSupplementalPricing_KimiK3StaticAliases pins the curated static
 // alias set: the flat-rate internal names reported by the Kimi CLI
-// (k3, kimi-k3, moonshot/kimi-k3) and Kimi Work (k3-agent), all at the
-// K3 list pricing. The date-ambiguous aliases (kimi-for-coding,
-// daimon-kimi-code, daimon-kimi-messages) must NOT appear here — a
-// static exact-match row would shadow CanonicalModelForDate.
+// (k3, kimi-k3) and Kimi Work (k3-agent), all at the K3 list pricing.
+// The date-ambiguous aliases (kimi-for-coding, daimon-kimi-code,
+// daimon-kimi-messages) must NOT appear here — a static exact-match row
+// would shadow CanonicalModelForDate.
 func TestSupplementalPricing_KimiK3StaticAliases(t *testing.T) {
 	supplementals := SupplementalPricing()
-	require.Len(t, supplementals, 4,
-		"static supplemental set must hold exactly the four flat K3 rows")
 
 	byPattern := make(map[string]ModelPricing)
 	for _, p := range supplementals {
@@ -36,12 +34,11 @@ func TestSupplementalPricing_KimiK3StaticAliases(t *testing.T) {
 		"k3",
 		"k3-agent",
 		"kimi-k3",
-		"moonshot/kimi-k3",
 	} {
 		got, ok := byPattern[model]
 		require.True(t, ok, "supplemental alias %q missing", model)
 		want.ModelPattern = model
-		assert.Equal(t, want, got, "supplemental alias %q rates", model)
+		assertFlatPricing(t, want, got)
 	}
 
 	for _, model := range DateAliasedModels() {

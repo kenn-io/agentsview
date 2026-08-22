@@ -21,11 +21,12 @@ called out when it is not the product's own producer source.
 ## Pricing Catalog Evidence
 
 Agentsview's fetched and embedded token prices come from LiteLLM's
-[`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/551e5d097c11f08fd2400a25a651b1844fcf89c2/model_prices_and_context_window.json)
-at pinned commit `551e5d097c11f08fd2400a25a651b1844fcf89c2`. LiteLLM's
-[`cost_per_token` implementation](https://github.com/BerriAI/litellm/blob/551e5d097c11f08fd2400a25a651b1844fcf89c2/litellm/litellm_core_utils/llm_cost_calc/utils.py)
+[`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/418c7c6012d7c39a9d4a28c72cabe1995595ad2b/model_prices_and_context_window.json)
+at pinned commit `418c7c6012d7c39a9d4a28c72cabe1995595ad2b`. LiteLLM's
+[`cost_per_token` implementation](https://github.com/BerriAI/litellm/blob/418c7c6012d7c39a9d4a28c72cabe1995595ad2b/litellm/litellm_core_utils/llm_cost_calc/utils.py)
 shows that these catalog fields are request-pricing thresholds rather than
-model-name conventions.
+model-name conventions. Reverified 2026-08-21 against the pinned catalog and
+cost implementation.
 
 Agentsview recognizes the anchored standard field shape
 `input_cost_per_token_above_<N>[k]_tokens`, including the published 200K and
