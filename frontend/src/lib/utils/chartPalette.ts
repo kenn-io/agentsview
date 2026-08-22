@@ -1,4 +1,4 @@
-import { seriesColorMap } from "./projectColor.js";
+import { PROJECT_PALETTE, seriesColorMap } from "./projectColor.js";
 
 export type ChartPalette = "agentsview" | "matplotlib";
 
@@ -29,6 +29,14 @@ const TAB20B_AND_TAB20C = [
   "#dadaeb",
 ] as const;
 
+function matplotlibFamily(count: number): readonly string[] {
+  return count <= 9
+    ? TAB10
+    : count <= 18
+      ? TAB20
+      : TAB20B_AND_TAB20C;
+}
+
 export function isChartPalette(value: unknown): value is ChartPalette {
   return value === "agentsview" || value === "matplotlib";
 }
@@ -53,11 +61,7 @@ export function chartSeriesColorMap(
     }
   } else {
     activeIds.sort();
-    const family = activeIds.length <= 9
-      ? TAB10
-      : activeIds.length <= 18
-        ? TAB20
-        : TAB20B_AND_TAB20C;
+    const family = matplotlibFamily(activeIds.length);
     for (const [index, id] of activeIds.entries()) {
       colors.set(id, family[index % family.length]!);
     }
@@ -70,5 +74,24 @@ export function chartSeriesColorMap(
       palette === "agentsview" ? agentsviewOtherColor ?? MUTED : MUTED,
     );
   }
+  return colors;
+}
+
+export function orderedChartSeriesColorMap(
+  ids: readonly string[],
+  palette: ChartPalette,
+): ReadonlyMap<string, string> {
+  const activeIds = [...new Set(ids)]
+    .filter((id) => id !== "" && id !== "__other__");
+  const family = palette === "agentsview"
+    ? PROJECT_PALETTE
+    : matplotlibFamily(activeIds.length);
+  const colors = new Map<string, string>();
+
+  for (const [index, id] of activeIds.entries()) {
+    colors.set(id, family[index % family.length]!);
+  }
+  if (ids.includes("")) colors.set("", MUTED);
+  if (ids.includes("__other__")) colors.set("__other__", MUTED);
   return colors;
 }

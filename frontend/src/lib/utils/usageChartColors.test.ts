@@ -67,11 +67,12 @@ function tenModelSummary(): UsageSummaryResponse {
 }
 
 describe("usageChartColorMaps", () => {
-  it("chooses the Matplotlib family from the full model universe", () => {
+  it("assigns Matplotlib colors by aggregate cost descending", () => {
     const colors = usageChartColorMaps(tenModelSummary(), "matplotlib").model;
 
     expect(colors.size).toBe(10);
-    expect(colors.get("model-alpha")).toBe("#1f77b4");
-    expect(colors.get("model-zulu")).toBe("#c5b0d5");
+    expect(colors.get("model-zulu")).toBe("#1f77b4");
+    expect(colors.get("model-india")).toBe("#aec7e8");
+    expect(colors.get("model-alpha")).toBe("#c5b0d5");
   });
 });

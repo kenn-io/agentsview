@@ -354,7 +354,7 @@ describe("AttributionPanel colors", () => {
     unmount(component);
   });
 
-  it("uses lexical Matplotlib colors for colliding model representations", async () => {
+  it("uses aggregate-cost-ranked Matplotlib colors for model representations", async () => {
     settings.chartPalette = "matplotlib";
     usage.summary = summaryWithModels();
     usage.toggles.attribution.groupBy = "model";
@@ -369,8 +369,8 @@ describe("AttributionPanel colors", () => {
     const railColors = Array.from(document.querySelectorAll<HTMLElement>(".rail-dot")).map(
       (dot) => dot.style.background,
     );
-    expect(tileColors).toEqual(["#ff7f0e", "#1f77b4"]);
-    expect(railColors).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
+    expect(tileColors).toEqual(["#1f77b4", "#ff7f0e"]);
+    expect(railColors).toEqual(["rgb(31, 119, 180)", "rgb(255, 127, 14)"]);
     unmount(component);
   });
 });

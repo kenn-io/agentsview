@@ -578,14 +578,14 @@ describe("UsagePage refresh behavior", () => {
       ".chart-svg .lc-bar, .chart-svg .lc-area-path",
     );
     const firstDot = () => document.querySelector<HTMLElement>(".list-dot");
-    expect(firstMark()?.getAttribute("fill")).toBe("var(--accent-sky)");
-    expect(firstDot()?.style.background).toBe("var(--accent-sky)");
+    expect(firstMark()?.getAttribute("fill")).toBe("var(--accent-blue)");
+    expect(firstDot()?.style.background).toBe("var(--accent-blue)");
 
     settings.chartPalette = "matplotlib";
     await tick();
 
-    expect(firstMark()?.getAttribute("fill")).toBe("#c5b0d5");
-    expect(firstDot()?.style.background).toBe("rgb(197, 176, 213)");
+    expect(firstMark()?.getAttribute("fill")).toBe("#1f77b4");
+    expect(firstDot()?.style.background).toBe("rgb(31, 119, 180)");
   });
 
   it("loads agent metadata on mount for the Agent dropdown", async () => {

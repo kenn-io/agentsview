@@ -8,7 +8,6 @@ import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { settings } from "../../stores/settings.svelte.js";
 import type { DailyUsageEntry, UsageSummaryResponse } from "../../api/types/usage.js";
-import { projectColor } from "../../utils/projectColor.js";
 import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 import { setLocale } from "../../i18n/index.js";
 
@@ -372,7 +371,7 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("keeps a single rendered model series on its established color", async () => {
+  it("assigns the first usage color to a single rendered model series", async () => {
     usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
     usage.summary.daily = [
@@ -385,7 +384,7 @@ describe("CostTimeSeriesChart", () => {
 
     const paths = document.querySelectorAll<SVGPathElement>("path.lc-area-path");
     expect(paths).toHaveLength(1);
-    expect(paths[0]!.getAttribute("fill")).toBe(projectColor("single-model"));
+    expect(paths[0]!.getAttribute("fill")).toBe("var(--accent-blue)");
     expect(document.querySelectorAll(".legend-item")).toHaveLength(0);
     unmount(component);
   });
@@ -529,7 +528,7 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("uses lexical Matplotlib colors for colliding model paths and legend dots", async () => {
+  it("uses aggregate-cost-ranked Matplotlib colors for model paths and legend dots", async () => {
     settings.chartPalette = "matplotlib";
     usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
@@ -553,8 +552,8 @@ describe("CostTimeSeriesChart", () => {
     const dots = Array.from(document.querySelectorAll<HTMLElement>(".legend-dot")).map(
       (dot) => dot.style.background,
     );
-    expect(paths).toEqual(["#ff7f0e", "#1f77b4"]);
-    expect(dots).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
+    expect(paths).toEqual(["#1f77b4", "#ff7f0e"]);
+    expect(dots).toEqual(["rgb(31, 119, 180)", "rgb(255, 127, 14)"]);
     unmount(component);
   });
 });
