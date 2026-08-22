@@ -10,6 +10,7 @@ import (
 )
 
 var _ Provider = (*claudeProvider)(nil)
+var _ S3Provider = (*claudeProvider)(nil)
 
 type claudeProviderFactory struct {
 	def AgentDef
@@ -365,7 +366,7 @@ func (s claudeSourceSet) streamLocalRoot(
 
 // discoveredSourceRef builds the SourceRef for one enumerated Claude session
 // file. Local files resolve through the regular file-backed source ref; s3://
-// objects (which ClaudeProjectSessionFiles enumerates via discoverClaudeS3)
+// objects (which ClaudeProjectSessionFiles enumerates via claudeS3Scanner)
 // carry their durable object metadata in the Opaque payload, because the
 // IsRegularFile gate that sourceRef applies to a local path would otherwise drop
 // every remote object.
@@ -381,6 +382,9 @@ func (s claudeSourceSet) discoveredSourceRef(
 func (s claudeSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
+		if isS3URI(root) {
+			continue
+		}
 		roots = append(roots, WatchRoot{
 			Path:         root,
 			Recursive:    true,
@@ -678,6 +682,7 @@ func claudeProviderCapabilities() Capabilities {
 			ForceReplaceOnParse:  CapabilitySupported,
 			VerifiedLocalStat:    CapabilitySupported,
 			MultiFileStatHash:    CapabilitySupported,
+			S3Discovery:          CapabilitySupported,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,

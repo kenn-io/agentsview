@@ -377,6 +377,17 @@ func TestCursorProviderFingerprintSkipsOversizedTranscriptHash(t *testing.T) {
 	assert.Contains(t, err.Error(), "file too large")
 }
 
+func TestCursorPathFromSourceMaterializedFile(t *testing.T) {
+	s := newCursorSourceSet([]string{t.TempDir()})
+	path := filepath.Join(t.TempDir(), "abc.jsonl")
+	got, ok := s.pathFromSource(SourceRef{
+		Provider: AgentCursor,
+		Opaque:   MaterializedFileSource{Path: path},
+	})
+	require.True(t, ok)
+	assert.Equal(t, path, got)
+}
+
 func cursorProviderWriteTranscript(
 	t *testing.T,
 	dir string,
