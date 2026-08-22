@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -1013,11 +1014,15 @@ func applyUsageResult(
 		result.Assurance.State = AssuranceUnavailable
 		result.Assurance.Reasons = append(result.Assurance.Reasons, ReasonUsageUnavailable)
 	}
-	if usageData.HasCost {
+	transcriptCostIncomplete :=
+		slices.Contains(result.Assurance.Reasons, ReasonUnfinishedSession) ||
+			slices.Contains(result.Assurance.Reasons, ReasonMalformedTranscript)
+	if usageData.HasCost && (!transcriptCostIncomplete ||
+		usageData.CostSource == export.CostSourceReported) {
 		result.Cost = &Cost{
 			Amount: usageData.Cost, Currency: "USD", Source: usageData.CostSource,
 		}
-	} else if result.Usage != nil {
+	} else if result.Usage != nil || transcriptCostIncomplete {
 		if result.Assurance.State == AssuranceComplete {
 			result.Assurance.State = AssurancePartial
 		}

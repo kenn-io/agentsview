@@ -238,9 +238,9 @@ add an archived or maintained mirror without replacing the original identity.
   equivalent row. It also requires the materialized breakdown length to match
   its recorded count. A larger context row from another session therefore
   cannot hide missing delegated input or cache usage. Reverified 2026-08-22
-  that an incomplete category breakdown also withholds computed or mixed cost;
-  provider-reported cost remains authoritative when no computed component
-  contributes.
+  that an incomplete category breakdown, malformed included transcript, or
+  unfinished included session withholds computed or mixed cost;
+  provider-reported cost remains authoritative.
 
 ## OpenClaude (`openclaude`)
 
