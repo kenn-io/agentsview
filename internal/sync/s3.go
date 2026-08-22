@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -256,6 +257,23 @@ func (e *Engine) processS3Session(
 				return processResult{skip: true}
 			}
 		}
+	case parser.AgentIcodemate:
+		sessionID := "icodemate:" +
+			strings.TrimSuffix(sourceInfo.Name(), ".jsonl")
+		fullID := applyIDPrefixToID(idPrefix, sessionID)
+		if e.shouldSkipFileWithPrefix(
+			idPrefix, sessionID, sourceInfo, sourceFingerprint,
+		) &&
+			e.db.GetSessionFilePathNotSourceMissing(fullID) == file.Path &&
+			e.db.GetDataVersionByAgentPath(
+				file.Path, string(parser.AgentIcodemate),
+			) >= db.CurrentDataVersion() {
+			sess, _ := e.db.GetSession(ctx, fullID)
+			if sess != nil && sess.Project != "" &&
+				!parser.NeedsProjectReparse(sess.Project) {
+				return processResult{skip: true}
+			}
+		}
 	case parser.AgentCodex:
 		if uuid := parser.CodexSessionUUIDFromFilename(
 			path.Base(file.Path),
@@ -383,7 +401,8 @@ func (e *Engine) processS3Session(
 	res.excludedSessionIDs = applyIDPrefixToIDs(
 		idPrefix, res.excludedSessionIDs,
 	)
-	if file.Agent == parser.AgentClaude {
+	switch file.Agent {
+	case parser.AgentClaude:
 		missing, err := e.claudeSourceMissingSessionOwnershipsForCompleteResult(
 			ctx,
 			file.Path,
@@ -404,6 +423,22 @@ func (e *Engine) processS3Session(
 			res.claudeRowlessFreshnessKey =
 				e.claudeRowlessFreshnessCacheKey(file.Path, sourceFingerprint)
 		}
+	case parser.AgentIcodemate:
+		missing, err := e.completeMultiSessionSourceMissingMembers(
+			ctx,
+			file.Agent,
+			file.Path,
+			res.excludedSessionIDs,
+			res.results,
+		)
+		if err != nil {
+			return processResult{
+				err:            err,
+				noCacheSkip:    true,
+				retentionLease: lease,
+			}
+		}
+		res.sourceMissingMembers = missing
 	}
 	res.retentionLease = lease
 	return res

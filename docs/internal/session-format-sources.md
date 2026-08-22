@@ -1599,6 +1599,10 @@ add an archived or maintained mirror without replacing the original identity.
   fixtures: the CLI parser uses the Claude UUID/parent UUID graph, coalesces
   repeated assistant message snapshots by message ID, and resolves local and
   S3-materialized persisted tool-result sidecars before extracting content.
+  Complete CLI parses reconcile the transcript's current branch membership,
+  and source freshness is recorded only after every emitted branch commits;
+  unchanged S3 transcripts use that persisted all-branch state to skip object
+  downloads.
 
 ## WorkBuddy (`workbuddy`)
 

@@ -47,18 +47,8 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	opencodeRoots, cliRoots := splitIcodemateRoots(cfg.Roots)
 	opencodeCfg := cfg
 	opencodeCfg.Roots = opencodeRoots
-	return &icodemateProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   icodemateProviderCapabilities(),
-			Config: cfg,
-		},
+	provider := &icodemateProvider{
 		opencode: &openCodeFormatProvider{
-			ProviderBase: ProviderBase{
-				Def:    cloneAgentDef(f.def),
-				Caps:   openCodeFormatProviderCapabilities(),
-				Config: opencodeCfg,
-			},
 			sources: newOpenCodeFormatSourceSet(
 				opencodeRoots,
 				openCodeProviderSpecForAgent(AgentIcodemate),
@@ -79,6 +69,17 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 			cfg.SQLiteContainerUnchangedSinceTrust,
 		),
 	}
+	provider.ProviderBase = ProviderBase{
+		Def:    cloneAgentDef(f.def),
+		Caps:   icodemateProviderCapabilities(),
+		Config: cfg,
+	}
+	provider.opencode.ProviderBase = ProviderBase{
+		Def:    cloneAgentDef(f.def),
+		Caps:   openCodeFormatProviderCapabilities(),
+		Config: opencodeCfg,
+	}
+	return provider
 }
 
 // icodemateProviderCapabilities combines the OpenCode container mechanics of

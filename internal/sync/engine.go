@@ -9004,9 +9004,11 @@ func (e *Engine) collectAndBatchWithOptions(
 			r.releaseRetention()
 			continue
 		}
-		claudeDAG := r.agent == parser.AgentClaude && len(r.results) > 1
+		atomicDAG := sourceRequiresAtomicDAGCompletion(
+			r.agent, len(r.results),
+		)
 		var sourceCompletionSkipped map[string]bool
-		if claudeDAG {
+		if atomicDAG {
 			activeResultIDs, skipped :=
 				e.partitionIntentionalSourceSkips(resultIDs)
 			sourceCompletionSkipped = skipped
@@ -9015,7 +9017,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				activeResultIDs, staleVersion,
 			); err != nil {
 				e.clearProviderSourceFreshness(ctx, r.providerStatHash)
-				log.Printf("stage Claude source data versions: %v", err)
+				log.Printf("stage DAG source data versions: %v", err)
 				stats.RecordFailed()
 				e.noteSQLiteContainerResult(r.path, false)
 				r.releaseRetention()
@@ -9199,7 +9201,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sess:                    pr.Session,
 					msgs:                    pr.Messages,
 					usageEvents:             pr.UsageEvents,
-					needsRetry:              sessionNeedsRetry || claudeDAG,
+					needsRetry:              sessionNeedsRetry || atomicDAG,
 					forceReplace:            r.forceReplace,
 					baselineEligible:        !sourceNeedsRetry,
 					storageTrustPath:        r.storageTrustPath,
@@ -9210,19 +9212,19 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceCwdStoredOK:       r.sourceCwdStoredOK,
 					sourceCompletionSkipped: sourceCompletionSkipped[applyIDPrefixToID(e.idPrefix, pr.Session.ID)],
 				}
-				if i == 0 &&
-					(r.agent == parser.AgentClaude || r.providerStatHash != nil) {
-					// Claude can emit several DAG branches from one transcript.
+				if i == 0 && (atomicDAG || r.providerStatHash != nil) {
+					// Claude-compatible providers can emit several DAG branches
+					// from one transcript.
 					// Carry their contiguous write count so the flush can make
 					// one source-level completion decision. Other digest-backed
 					// providers currently emit one result per source.
 					pw.sourceWriteCount = 1
-					if r.agent == parser.AgentClaude {
+					if atomicDAG {
 						pw.sourceWriteCount = len(allowed)
 					}
 					pw.providerStatHash = r.providerStatHash
 					pw.sourceCompletionEligible = !sourceNeedsRetry
-					pw.promoteSourceOnComplete = claudeDAG
+					pw.promoteSourceOnComplete = atomicDAG
 				}
 				pending = append(pending, pw)
 				if runtimeMetrics != nil {
@@ -10472,6 +10474,23 @@ func (e *Engine) processProviderFile(
 				retentionLease: lease,
 			}, true
 		}
+	} else if file.Agent == parser.AgentIcodemate && outcome.ForceReplace &&
+		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
+		missingMembers, err =
+			e.completeMultiSessionSourceMissingMembers(
+				ctx, file.Agent, file.Path,
+				outcome.ExcludedSessionIDs, parsedResults,
+			)
+		if err != nil {
+			return processResult{
+				err:            err,
+				mtime:          fingerprint.MTimeNS,
+				cacheSkip:      cacheSkip,
+				cacheKey:       cacheKey,
+				noCacheSkip:    true,
+				retentionLease: lease,
+			}, true
+		}
 	} else if file.Agent == parser.AgentClaude &&
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		missingMembers, err =
@@ -10737,6 +10756,75 @@ func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
 		missing = append(missing, member)
 	}
 	return missing, nil
+}
+
+// completeMultiSessionSourceMissingMembers lists active sessions under an
+// exact source path that a complete authoritative parse did not emit. This is
+// used by new multi-session providers whose current parser owns the complete
+// membership set, unlike Claude's separate legacy-only stale-fork cleanup.
+func (e *Engine) completeMultiSessionSourceMissingMembers(
+	ctx context.Context,
+	agent parser.AgentType,
+	sourcePath string,
+	excludedSessionIDs []string,
+	results []parser.ParseResult,
+) ([]sourceMissingMember, error) {
+	present := make(map[string]struct{}, len(results)+len(excludedSessionIDs))
+	paths := make(map[string]struct{}, 1)
+	for _, result := range results {
+		if id := applyIDPrefixToID(e.idPrefix, result.Session.ID); id != "" {
+			present[id] = struct{}{}
+		}
+		path := result.Session.File.Path
+		if path == "" {
+			continue
+		}
+		if e.pathRewriter != nil {
+			path = e.pathRewriter(path)
+		}
+		paths[path] = struct{}{}
+	}
+	if len(paths) == 0 && sourcePath != "" {
+		paths[e.effectiveSourcePath(sourcePath)] = struct{}{}
+	}
+	for _, id := range e.applyIDPrefixToSessionIDs(excludedSessionIDs) {
+		present[id] = struct{}{}
+	}
+
+	var members []sourceMissingMember
+	var sessionIDs []string
+	for path := range paths {
+		storedIDs, err := e.db.ListSessionIDsByFilePath(path, string(agent))
+		if err != nil {
+			return nil, fmt.Errorf(
+				"list %s sessions for complete source %s: %w",
+				agent, path, err,
+			)
+		}
+		for _, id := range storedIDs {
+			if _, ok := present[id]; ok {
+				continue
+			}
+			members = append(members, sourceMissingMember{
+				sessionID: id,
+				filePath:  path,
+			})
+			sessionIDs = append(sessionIDs, id)
+		}
+	}
+	if len(members) == 0 {
+		return nil, nil
+	}
+	storedMachines, err := e.db.ListSessionMachinesByID(ctx, sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list stored %s session machines: %w", agent, err,
+		)
+	}
+	for i := range members {
+		members[i].machine = storedMachines[members[i].sessionID]
+	}
+	return members, nil
 }
 
 // claudeSourceMissingSessionOwnershipsForCompleteResult lists stored active
@@ -17906,9 +17994,11 @@ func (e *Engine) processAndWriteSessionFile(
 			"queue subagent parent repairs: %w", err,
 		)
 	}
-	claudeDAG := file.Agent == parser.AgentClaude && len(res.results) > 1
+	atomicDAG := sourceRequiresAtomicDAGCompletion(
+		file.Agent, len(res.results),
+	)
 	var sourceCompletionSkipped map[string]bool
-	if claudeDAG {
+	if atomicDAG {
 		activeResultIDs, skipped :=
 			e.partitionIntentionalSourceSkips(resultIDs)
 		sourceCompletionSkipped = skipped
@@ -18049,7 +18139,7 @@ func (e *Engine) processAndWriteSessionFile(
 			sess:                pr.Session,
 			msgs:                pr.Messages,
 			usageEvents:         pr.UsageEvents,
-			needsRetry:          sessionNeedsRetry || claudeDAG,
+			needsRetry:          sessionNeedsRetry || atomicDAG,
 			forceReplace:        res.forceReplace,
 			sourceCwdResolution: res.sourceCwdResolution,
 			sourceCwdStored:     res.sourceCwdStored,
@@ -18108,7 +18198,7 @@ func (e *Engine) processAndWriteSessionFile(
 	// A source-level digest is valid only when every active result and its
 	// hierarchy links commit without retry state or archive preservation.
 	// User-excluded and trashed members are resolved without writes; the other
-	// Claude DAG members stay stale until the source-level decision succeeds.
+	// DAG members stay stale until the source-level decision succeeds.
 	sourceComplete := resolved == len(res.results) &&
 		!preserved && !sourceNeedsRetry
 	if !sourceComplete {
@@ -18120,13 +18210,13 @@ func (e *Engine) processAndWriteSessionFile(
 			"link changed subagent sessions: %w", err,
 		)
 	}
-	if sourceComplete && claudeDAG {
+	if sourceComplete && atomicDAG {
 		if err := e.db.SetSessionDataVersions(
 			writtenIDs, db.CurrentDataVersion(),
 		); err != nil {
 			markSourceIncomplete()
 			return false, sessionsChanged, fmt.Errorf(
-				"complete Claude source data versions: %w", err,
+				"complete DAG source data versions: %w", err,
 			)
 		}
 	}
@@ -18135,6 +18225,15 @@ func (e *Engine) processAndWriteSessionFile(
 	}
 
 	return preserved, sessionsChanged, nil
+}
+
+func sourceRequiresAtomicDAGCompletion(
+	agent parser.AgentType, resultCount int,
+) bool {
+	if resultCount <= 1 {
+		return false
+	}
+	return agent == parser.AgentClaude || agent == parser.AgentIcodemate
 }
 
 func (e *Engine) applyWorktreeMappingToSingleSession(
