@@ -1058,6 +1058,15 @@ func firstNonEmptyJSONLString(values ...string) string {
 }
 
 func hashJSONLSourceFile(path string) (string, error) {
+	return hashJSONLSourceFileContext(context.Background(), path)
+}
+
+func hashJSONLSourceFileContext(
+	ctx context.Context, path string,
+) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", path, err)
@@ -1065,8 +1074,20 @@ func hashJSONLSourceFile(path string) (string, error) {
 	defer f.Close()
 
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, checkedContextReader{ctx: ctx, reader: f}); err != nil {
 		return "", fmt.Errorf("hash %s: %w", path, err)
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+type checkedContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r checkedContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }

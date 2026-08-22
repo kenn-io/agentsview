@@ -3,6 +3,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"strconv"
 	"strings"
@@ -37,10 +38,21 @@ const usageWebSearchRequestsPath = "server_tool_use.web_search_requests"
 func annotateClaudeWebSearchRequests(
 	messages []ParsedMessage, counts map[string]int,
 ) {
+	_ = annotateClaudeWebSearchRequestsContext(
+		context.Background(), messages, counts,
+	)
+}
+
+func annotateClaudeWebSearchRequestsContext(
+	ctx context.Context, messages []ParsedMessage, counts map[string]int,
+) error {
 	if len(counts) == 0 {
-		return
+		return ctx.Err()
 	}
 	for i := range messages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		msg := &messages[i]
 		if len(msg.TokenUsage) == 0 || len(msg.ToolCalls) == 0 {
 			continue
@@ -50,6 +62,9 @@ func annotateClaudeWebSearchRequests(
 		}
 		total := 0
 		for _, tc := range msg.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if tc.ToolName != claudeWebSearchToolName ||
 				tc.ToolUseID == "" {
 				continue
@@ -66,6 +81,7 @@ func annotateClaudeWebSearchRequests(
 		}
 		msg.TokenUsage = jsontext.Value(updated)
 	}
+	return ctx.Err()
 }
 
 // collectClaudeWebSearchCounts maps a WebSearch tool_use id to the number of
@@ -73,8 +89,20 @@ func annotateClaudeWebSearchRequests(
 // identified unambiguously are skipped rather than guessed at, and the first
 // count seen for an id wins so a redelivered line cannot inflate it.
 func collectClaudeWebSearchCounts(entries []dagEntry) map[string]int {
+	counts, _ := collectClaudeWebSearchCountsContext(
+		context.Background(), entries,
+	)
+	return counts
+}
+
+func collectClaudeWebSearchCountsContext(
+	ctx context.Context, entries []dagEntry,
+) (map[string]int, error) {
 	var counts map[string]int
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if e.entryType != "user" {
 			continue
 		}
@@ -86,7 +114,10 @@ func collectClaudeWebSearchCounts(entries []dagEntry) map[string]int {
 		if count <= 0 {
 			continue
 		}
-		id, ok := singleClaudeToolResultID(e.line)
+		id, ok, err := singleClaudeToolResultIDContext(ctx, e.line)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			continue
 		}
@@ -98,7 +129,7 @@ func collectClaudeWebSearchCounts(entries []dagEntry) map[string]int {
 		}
 		counts[id] = count
 	}
-	return counts
+	return counts, ctx.Err()
 }
 
 // needsClaudeFullParseForWebSearchCounts reports whether an appended search
@@ -119,17 +150,24 @@ func needsClaudeFullParseForWebSearchCounts(entries []dagEntry) bool {
 	return false
 }
 
-// singleClaudeToolResultID returns the tool_use_id of a record's only
+// singleClaudeToolResultIDContext returns the tool_use_id of a record's only
 // tool_result block. Records with no tool result, or with more than one,
 // report false: their toolUseResult cannot be attributed to one tool call.
-func singleClaudeToolResultID(line string) (string, bool) {
+func singleClaudeToolResultIDContext(
+	ctx context.Context, line string,
+) (string, bool, error) {
 	content := gjson.Get(line, "message.content")
 	if !content.IsArray() {
-		return "", false
+		return "", false, ctx.Err()
 	}
 	id := ""
 	ambiguous := false
+	var contextErr error
 	content.ForEach(func(_, block gjson.Result) bool {
+		if err := ctx.Err(); err != nil {
+			contextErr = err
+			return false
+		}
 		if block.Get("type").Str != "tool_result" {
 			return true
 		}
@@ -140,10 +178,13 @@ func singleClaudeToolResultID(line string) (string, bool) {
 		id = block.Get("tool_use_id").Str
 		return true
 	})
-	if ambiguous || id == "" {
-		return "", false
+	if contextErr != nil {
+		return "", false, contextErr
 	}
-	return id, true
+	if ambiguous || id == "" {
+		return "", false, nil
+	}
+	return id, true, ctx.Err()
 }
 
 // usageWebSearchRequests reads the billed web search count out of a stored

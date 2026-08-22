@@ -112,17 +112,26 @@ func GetSessionUsageRollup(
 func delegatedDescendants(
 	ctx context.Context, store db.Store, rootID string,
 ) ([]db.Session, error) {
+	return delegatedDescendantsFrom(ctx, store, rootID, false)
+}
+
+func delegatedDescendantsFrom(
+	ctx context.Context, store db.Store, rootID string, rootDelegated bool,
+) ([]db.Session, error) {
 	type walkState struct {
 		id        string
 		delegated bool
 	}
 	visited := map[walkState]struct{}{
-		{id: rootID}: {},
+		{id: rootID, delegated: rootDelegated}: {},
 	}
 	included := make(map[string]struct{})
-	queue := []walkState{{id: rootID}}
+	queue := []walkState{{id: rootID, delegated: rootDelegated}}
 	var out []db.Session
 	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		parent := queue[0]
 		queue = queue[1:]
 		children, err := store.GetChildSessions(ctx, parent.id)
@@ -130,6 +139,9 @@ func delegatedDescendants(
 			return nil, err
 		}
 		for _, child := range children {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if child.ID == rootID {
 				continue
 			}
@@ -152,6 +164,14 @@ func delegatedDescendants(
 		}
 	}
 	return out, nil
+}
+
+// DelegatedUsageSessions returns the canonical session set included by the
+// session-usage subagent rollup. The root itself is not returned.
+func DelegatedUsageSessions(
+	ctx context.Context, store db.Store, rootID string,
+) ([]db.Session, error) {
+	return delegatedDescendants(ctx, store, rootID)
 }
 
 func explicitSubagentCount(descendants []db.Session) int {

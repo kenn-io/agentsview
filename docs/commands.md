@@ -5,6 +5,33 @@ description: All AgentsView commands, flags, and environment variables
 
 ## Commands
 
+### `agentsview capture`
+
+Capture and export the usage of one exact non-interactive automation run
+without starting the daemon, server, web interface, or watchers:
+
+```bash
+agentsview capture run \
+  --provider claude \
+  --occurrence build-42 \
+  --capture-dir ./capture-build-42 \
+  --result ./usage-build-42.json \
+  -- claude -p "Diagnose the build failure."
+
+agentsview capture report \
+  --capture-dir ./capture-build-42 \
+  --result ./usage-build-42.json
+```
+
+`capture run` supports direct `claude -p` and `codex exec --json` producer
+adapters. It leaves child standard input, output, error, and exit outcome
+intact. The result always uses a separate file; recovery-only `capture report`
+may use `--result -` for standard output. See
+[One-shot CI capture](/one-shot-capture/) for the result contract, retry
+behavior, failure codes, and a complete GitHub Actions job.
+
+______________________________________________________________________
+
 ### `agentsview daemon`
 
 Manage the detached writable SQLite server:

@@ -40,7 +40,7 @@ func TestCanonicalManifestGolden(t *testing.T) {
 	ordinal := 2
 	parent := "parent-1"
 	name := "Fixture"
-	raw := rawSourceRef{
+	raw := RawSourceRef{
 		Hash:      "raw123",
 		Size:      4096,
 		MediaType: "application/jsonl",

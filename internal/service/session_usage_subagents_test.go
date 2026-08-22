@@ -14,6 +14,37 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
+type aggregationCancelContext struct {
+	context.Context
+	armed     bool
+	remaining int
+}
+
+func (c *aggregationCancelContext) Err() error {
+	if !c.armed {
+		return nil
+	}
+	if c.remaining == 0 {
+		return context.Canceled
+	}
+	c.remaining--
+	return nil
+}
+
+type cancelAfterRowsStore struct {
+	*rollupStore
+	cancelContext *aggregationCancelContext
+}
+
+func (s *cancelAfterRowsStore) GetSessionUsageRows(
+	ctx context.Context, ids []string,
+) (*activity.SessionUsageRows, error) {
+	rows, err := s.rollupStore.GetSessionUsageRows(ctx, ids)
+	s.cancelContext.armed = true
+	s.cancelContext.remaining = 100
+	return rows, err
+}
+
 // usageRow builds one row of the kind a store's GetSessionUsageRows returns:
 // already deduplicated across the whole id set and ordered by timestamp.
 func usageRow(
@@ -108,6 +139,72 @@ func TestSessionUsageWithSubagentsCombinesCostAcrossDescendants(t *testing.T) {
 	assert.Equal(t, 10, got.Breakdown[1].OutputTokens)
 }
 
+func TestSessionUsageWithSubagentsStopsAggregationAfterRowsLoad(t *testing.T) {
+	rows := make([]activity.UsageRow, 2_000)
+	for i := range rows {
+		rows[i] = activity.UsageRow{
+			SessionID: "child", Model: "model", Contributes: true,
+			OutputTokens: 1, Priced: true,
+		}
+	}
+	ctx := &aggregationCancelContext{Context: context.Background()}
+	store := &cancelAfterRowsStore{
+		cancelContext: ctx,
+		rollupStore: &rollupStore{
+			usages: map[string]*db.SessionUsage{
+				"root": {SessionID: "root", HasTokenData: true},
+			},
+			children: map[string][]db.Session{
+				"root": {{ID: "child", RelationshipType: "subagent"}},
+			},
+			rows: rows,
+		},
+	}
+
+	got, err := service.SessionUsageWithSubagents(ctx, store, "root", true)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, got)
+}
+
+func TestSessionUsageTokenTotalsStopsDuringProjection(t *testing.T) {
+	breakdown := make([]db.SessionUsageBreakdownEntry, 2_000)
+	for i := range breakdown {
+		breakdown[i] = db.SessionUsageBreakdownEntry{
+			InputTokens: 1, OutputTokens: 1,
+		}
+	}
+	ctx := &aggregationCancelContext{
+		Context: context.Background(), armed: true, remaining: 100,
+	}
+
+	totals, complete, err := service.SessionUsageTokenTotals(ctx, &db.SessionUsage{
+		HasTokenData: true, TotalOutputTokens: len(breakdown),
+		BreakdownCount: len(breakdown), Breakdown: breakdown,
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, complete)
+	assert.Equal(t, db.UsageTotals{}, totals)
+}
+
+func TestSessionUsageTokenTotalsRejectsPartialBreakdownMaterialization(t *testing.T) {
+	totals, complete, err := service.SessionUsageTokenTotals(
+		context.Background(), &db.SessionUsage{
+			HasTokenData: true, TotalOutputTokens: 7, PeakContextTokens: 11,
+			BreakdownCount: 2, TokenBreakdownComplete: true,
+			Breakdown: []db.SessionUsageBreakdownEntry{{
+				InputTokens: 11, OutputTokens: 7,
+			}},
+		})
+
+	require.NoError(t, err)
+	assert.False(t, complete,
+		"one materialized row cannot prove a two-row breakdown is complete")
+	assert.Equal(t, 11, totals.InputTokens)
+	assert.Equal(t, 7, totals.OutputTokens)
+}
+
 // TestSessionUsageWithSubagentsCountsRowlessSessionsFromAggregates covers the
 // other half of the output-token rule: a session that produced no usage rows
 // has no echo to deduplicate and nothing else to report, so its stored
@@ -115,7 +212,9 @@ func TestSessionUsageWithSubagentsCombinesCostAcrossDescendants(t *testing.T) {
 func TestSessionUsageWithSubagentsCountsRowlessSessionsFromAggregates(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
-			"root": {SessionID: "root", TotalOutputTokens: 7},
+			"root": {
+				SessionID: "root", HasTokenData: true, TotalOutputTokens: 7,
+			},
 		},
 		children: map[string][]db.Session{
 			"root": {
@@ -174,7 +273,7 @@ func TestSessionUsageWithSubagentsIsMissingWhenSessionIsMissing(t *testing.T) {
 func TestSessionUsageWithSubagentsTerminatesOnCycles(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
-			"root": {SessionID: "root"},
+			"root": {SessionID: "root", HasTokenData: true},
 		},
 		children: map[string][]db.Session{
 			"root":    {{ID: "agent-a", RelationshipType: "subagent"}},
@@ -195,7 +294,9 @@ func TestSessionUsageWithSubagentsTerminatesOnCycles(t *testing.T) {
 
 func TestSessionUsageWithSubagentsDescendsThroughNonSubagentLinks(t *testing.T) {
 	store := &rollupStore{
-		usages: map[string]*db.SessionUsage{"root": {SessionID: "root"}},
+		usages: map[string]*db.SessionUsage{
+			"root": {SessionID: "root", HasTokenData: true},
+		},
 		children: map[string][]db.Session{
 			"root": {{ID: "fork", RelationshipType: "fork"}},
 			"fork": {{ID: "agent-a", RelationshipType: "subagent"}},
@@ -219,7 +320,7 @@ func TestSessionUsageWithSubagentsDescendsThroughNonSubagentLinks(t *testing.T) 
 		"the root fork is traversed, while the fork inside the subagent is priced")
 }
 
-func TestSessionUsageWithSubagentsReportsTokenDataFromSubagentsOnly(t *testing.T) {
+func TestSessionUsageWithSubagentsWithholdsUsageWhenRootIsUnavailable(t *testing.T) {
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {SessionID: "root", HasTokenData: false},
@@ -235,13 +336,75 @@ func TestSessionUsageWithSubagentsReportsTokenDataFromSubagentsOnly(t *testing.T
 		},
 	}
 
-	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", false)
+	got, _, err := service.SessionUsageWithRequiredSubagents(
+		context.Background(), store, "root", []string{"agent-a"}, false)
 	require.NoError(t, err)
-	assert.True(t, got.HasTokenData,
-		"a parent whose only token data lives in subagents has token data")
+	assert.False(t, got.HasTokenData,
+		"child usage must not turn unknown root usage into an exact total")
 	assert.Equal(t, 10, got.TotalOutputTokens,
 		"the subagent's complete total is included")
+}
+
+func TestSessionUsageWithSubagentsWithholdsUsageForUncoveredChild(t *testing.T) {
+	store := &rollupStore{
+		usages: map[string]*db.SessionUsage{
+			"root": {
+				SessionID: "root", HasTokenData: true, HasCost: true,
+				TotalOutputTokens: 10, BreakdownCount: 1,
+				Cost: money.MustParseDollars("1"),
+			},
+		},
+		children: map[string][]db.Session{
+			"root": {{ID: "agent-missing", RelationshipType: "subagent"}},
+		},
+		rows: []activity.UsageRow{
+			usageRow("root", "opus", "2026-07-30T10:00:00Z", 0, "1"),
+		},
+	}
+
+	got, _, err := service.SessionUsageWithRequiredSubagents(
+		context.Background(), store, "root", []string{"agent-missing"}, false)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.False(t, got.HasTokenData,
+		"a child with no token evidence must not silently contribute zero")
+	assert.False(t, got.HasCost,
+		"root-only cost must not be reported as the complete occurrence cost")
+
+	_, complete, err := service.SessionUsageTokenTotals(
+		context.Background(), got)
+	require.NoError(t, err)
+	assert.False(t, complete)
+}
+
+func TestSessionUsageWithRequiredSubagentsReconcilesRootOnlyRows(t *testing.T) {
+	store := &rollupStore{
+		usages: map[string]*db.SessionUsage{
+			"root": {
+				SessionID: "root", HasTokenData: true, HasCost: true,
+				TotalOutputTokens: 20, BreakdownCount: 1,
+				Cost: money.MustParseDollars("2"),
+			},
+		},
+		rows: []activity.UsageRow{
+			usageRow("root", "opus", "2026-07-30T10:00:00Z", 0, "1"),
+		},
+	}
+
+	got, descendants, err := service.SessionUsageWithRequiredSubagents(
+		context.Background(), store, "root", nil, true)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Empty(t, descendants)
+	assert.Equal(t, 20, got.TotalOutputTokens)
+	assert.True(t, got.HasTokenData)
+	assert.False(t, got.HasCost,
+		"a partial root row must not yield a partial computed cost")
+
+	_, complete, err := service.SessionUsageTokenTotals(context.Background(), got)
+	require.NoError(t, err)
+	assert.False(t, complete,
+		"the row does not cover the stored root output total")
 }
 
 func TestSessionUsageWithSubagentsWithholdsIncompleteCost(t *testing.T) {

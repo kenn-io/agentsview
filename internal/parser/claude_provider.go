@@ -101,6 +101,7 @@ func (p *claudeProvider) Parse(
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	project := claudeProviderProject(ctx, req.Source.ProjectHint, path)
 	opts := claudeParseOptions{
+		ctx:            ctx,
 		siblingLineage: claudeSourceIsProjectLevel(req.Source, path),
 	}
 	results, excludedIDs, err := claudeParseFile(path, project, machine, opts)
@@ -476,7 +477,7 @@ func (s claudeSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	hash, err := hashJSONLSourceFile(path)
+	hash, err := hashJSONLSourceFileContext(ctx, path)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}

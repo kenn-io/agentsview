@@ -827,7 +827,7 @@ func validateArtifactQueueLimit(limit int) error {
 // artifact origin (pg_sync_state key artifact_origin_id) so that archives
 // which have never created or adopted an artifact origin never populate the
 // export queue.
-func enqueueArtifactExportTx(tx *sql.Tx, sessionID string) error {
+func enqueueArtifactExportTx(tx transactionQueries, sessionID string) error {
 	_, err := tx.Exec(`
 		INSERT INTO artifact_export_queue(session_id)
 		SELECT id FROM sessions WHERE id = ? AND (
@@ -921,7 +921,7 @@ func (db *DB) ConfigureArtifactLocalMachine(machine string) error {
 }
 
 func artifactExportGenerationTx(
-	tx *sql.Tx, sessionID string,
+	tx transactionQueries, sessionID string,
 ) (int64, bool, error) {
 	var generation int64
 	err := tx.QueryRow(`
@@ -937,7 +937,7 @@ func artifactExportGenerationTx(
 }
 
 func enqueueArtifactExportIfGenerationUnchangedTx(
-	tx *sql.Tx,
+	tx transactionQueries,
 	sessionID string,
 	generationBefore int64,
 	existedBefore bool,

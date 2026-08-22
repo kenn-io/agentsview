@@ -393,6 +393,28 @@ func TestCodexProviderFullParseSnapshotExcludesLaterGrowth(t *testing.T) {
 	assert.Equal(t, int64(len(tail)), outcome.ConsumedBytes)
 }
 
+func TestCodexFullParseHonorsContextBetweenLines(t *testing.T) {
+	root := t.TempDir()
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229ed"
+	path := writeCodexProviderSession(t, root, uuid, "question")
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	concrete, ok := provider.(*codexProvider)
+	require.True(t, ok)
+	snapshot, err := os.Open(path)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	info, err := snapshot.Stat()
+	require.NoError(t, err)
+	ctx := newCancelOnErrCheckContext(t, 4)
+
+	_, _, err = concrete.parseSessionSnapshotContext(
+		ctx, path, "local", false, snapshot, info,
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestCodexProviderFullParseSnapshotKeepsDescriptorIdentityAfterReplacement(
 	t *testing.T,
 ) {

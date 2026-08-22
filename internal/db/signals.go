@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 )
@@ -64,7 +63,7 @@ func (db *DB) UpdateSessionSignals(
 // on SessionSignalUpdate are carried here only so callers can forward them to
 // replaceSecretFindingsTx alongside the findings.
 func updateSessionSignalsTx(
-	tx *sql.Tx, sessionID string, u SessionSignalUpdate,
+	tx transactionQueries, sessionID string, u SessionSignalUpdate,
 ) error {
 	_, err := tx.Exec(`
 		UPDATE sessions SET

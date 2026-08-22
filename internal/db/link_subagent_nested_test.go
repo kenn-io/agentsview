@@ -102,6 +102,54 @@ func TestLinkSubagentSessionsReParentsNestedGrandchild(t *testing.T) {
 	}
 }
 
+func TestSubagentFinalizationHonorsCanceledContext(t *testing.T) {
+	t.Run("link", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "spawner", "p", func(s *Session) {
+			s.MessageCount = 1
+		})
+		insertSession(t, d, "kid", "p", func(s *Session) {
+			s.MessageCount = 1
+		})
+		insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		err := d.LinkSubagentSessionsContext(ctx)
+
+		require.ErrorIs(t, err, context.Canceled)
+		kid, getErr := d.GetSession(t.Context(), "kid")
+		require.NoError(t, getErr)
+		assert.Nil(t, kid.ParentSessionID)
+	})
+
+	t.Run("queued repair", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "spawner", "p", func(s *Session) {
+			s.MessageCount = 1
+		})
+		insertSession(t, d, "kid", "p", func(s *Session) {
+			s.MessageCount = 1
+			s.ParentSessionID = Ptr("wrong-parent")
+			s.RelationshipType = "subagent"
+		})
+		insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
+		require.NoError(t, d.QueueSubagentParentRepairs([]string{"kid"}))
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		err := d.RepairQueuedSubagentParentsContext(ctx)
+
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, "wrong-parent", parentOfSession(t, d, "kid"))
+		var queued int
+		require.NoError(t, d.Reader().QueryRow(
+			"SELECT count(*) FROM subagent_parent_repair_queue",
+		).Scan(&queued))
+		assert.Equal(t, 1, queued, "canceled repair must remain recoverable")
+	})
+}
+
 // TestLinkSubagentSessionsUpgradesTypeWhenParentAlreadyMatches guards the
 // regression flagged in review: LinkSubagentSessions sets BOTH parent_session_id
 // and relationship_type='subagent'. A session can already carry the correct

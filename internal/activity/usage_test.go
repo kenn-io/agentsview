@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -113,6 +114,51 @@ func TestDedupUsagePrefersLatestEqualOutputClaudeSnapshot(t *testing.T) {
 	assert.Equal(t, 300, deduped[0].CacheReadTokens)
 	assert.Equal(t, 2, deduped[0].WebSearchRequests)
 	assert.Equal(t, money.MustParseDollars("9"), deduped[0].Cost)
+}
+
+func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {
+	usage := []UsageRow{
+		{
+			SessionID: "root", Timestamp: "2026-06-16T10:00:00Z",
+			InputTokens: 100, OutputTokens: 5,
+			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
+		},
+		{
+			SessionID: "child", Timestamp: "2026-06-16T10:01:00Z",
+			InputTokens: 900, OutputTokens: 100,
+			CacheCreationTokens: 200, CacheReadTokens: 300,
+			ClaudeMessageID: "msg-stream", ClaudeRequestID: "req-stream",
+		},
+	}
+
+	coverage, err := CanonicalSessionTokenCoverageContext(
+		context.Background(), usage)
+	require.NoError(t, err)
+
+	want := SessionTokenCoverage{OutputTokens: 100, PeakContextTokens: 1400}
+	assert.Equal(t, want, coverage["root"])
+	assert.Equal(t, want, coverage["child"])
+}
+
+func TestCanonicalSessionTokenCoverageCreditsGenericDuplicateCategories(t *testing.T) {
+	usage := []UsageRow{
+		{
+			SessionID: "root", InputTokens: 700, OutputTokens: 80,
+			CacheReadTokens: 100, UsageDedupKey: "shared-usage",
+		},
+		{
+			SessionID: "child", OutputTokens: 80,
+			UsageDedupKey: "shared-usage",
+		},
+	}
+
+	coverage, err := CanonicalSessionTokenCoverageContext(
+		context.Background(), usage)
+	require.NoError(t, err)
+
+	want := SessionTokenCoverage{OutputTokens: 80, PeakContextTokens: 800}
+	assert.Equal(t, want, coverage["root"])
+	assert.Equal(t, want, coverage["child"])
 }
 
 func TestClaudeSnapshotEquivalentInstantUsesSemanticTieBreakers(t *testing.T) {

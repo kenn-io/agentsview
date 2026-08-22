@@ -157,6 +157,9 @@ type sqliteSessionUsageOrderedRow struct {
 func (db *DB) GetSessionUsageRows(
 	ctx context.Context, ids []string,
 ) (*activity.SessionUsageRows, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -167,10 +170,16 @@ func (db *DB) GetSessionUsageRows(
 	rateResolver := export.NewPricingResolver(pricing)
 	sessionOrder := make(map[string]int, len(ids))
 	for i, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		sessionOrder[id] = i
 	}
 	var rowsAcc []sqliteSessionUsageOrderedRow
 	err = queryChunked(ids, func(chunk []string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ph, args := inPlaceholders(chunk)
 		query := usageRowSelect() + ` AND u.session_id IN ` + ph
 		rows, queryErr := db.getReader().QueryContext(ctx, query, args...)
@@ -179,6 +188,9 @@ func (db *DB) GetSessionUsageRows(
 		}
 		defer rows.Close()
 		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			r, scanErr := scanUsageRow(rows)
 			if scanErr != nil {
 				return fmt.Errorf("scanning session usage rows: %w", scanErr)
@@ -200,24 +212,37 @@ func (db *DB) GetSessionUsageRows(
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(rowsAcc, func(i, j int) bool {
-		return sqliteSessionUsageRowLess(rowsAcc[i], rowsAcc[j], sessionOrder)
+	err = stableSortContext(ctx, rowsAcc, func(a, b sqliteSessionUsageOrderedRow) bool {
+		return sqliteSessionUsageRowLess(a, b, sessionOrder)
 	})
+	if err != nil {
+		return nil, err
+	}
 	snapshotRows := make([]activity.UsageRow, len(rowsAcc))
 	rowContributes := make([]bool, len(rowsAcc))
 	rawOutputTokensBySession := make(map[string]int)
 	for i, o := range rowsAcc {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
 			sqliteSessionUsageRowTokens(o.scan)
 		snapshotRows[i] = activity.UsageRow{
-			SessionID:      o.scan.sessionID,
-			Timestamp:      o.scan.ts,
-			MessageOrdinal: o.ordinal,
-			OutputTokens:   outputTok,
+			SessionID:           o.scan.sessionID,
+			Timestamp:           o.scan.ts,
+			MessageOrdinal:      o.ordinal,
+			UsageSource:         o.scan.usageSource,
+			InputTokens:         inputTok,
+			OutputTokens:        outputTok,
+			CacheCreationTokens: cacheCrTok,
+			CacheReadTokens:     cacheRdTok,
 			WebSearchRequests: usageRowWebSearchRequests(
 				o.scan.usageSource, o.scan.tokenJSON),
+			Agent:           o.scan.agent,
 			ClaudeMessageID: o.scan.claudeMessageID,
 			ClaudeRequestID: o.scan.claudeRequestID,
+			SourceUUID:      o.scan.sourceUUID,
+			UsageDedupKey:   o.scan.usageDedupKey,
 		}
 		rowContributes[i] = activity.UsageDataContributes(
 			o.scan.cost.Valid, inputTok, outputTok, reasoningTok,
@@ -225,13 +250,24 @@ func (db *DB) GetSessionUsageRows(
 			usageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
 		rawOutputTokensBySession[o.scan.sessionID] += outputTok
 	}
-	snapshotMask, snapshotAttribution, snapshotWebSearchRequests :=
-		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
+	canonicalTokenCoverageBySession, err :=
+		activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
+	if err != nil {
+		return nil, err
+	}
+	snapshotMask, snapshotAttribution, snapshotWebSearchRequests, err :=
+		activity.ClaudeSnapshotSurvivorSelectionContext(ctx, snapshotRows)
+	if err != nil {
+		return nil, err
+	}
 	seen := make(map[usageDedupToken]struct{})
 	deduplicatedOutputTokens := make(map[string]int)
 	discardedContributingSessions := make(map[string]struct{})
 	out := make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !snapshotMask[i] {
 			deduplicatedOutputTokens[o.scan.sessionID] +=
 				snapshotRows[i].OutputTokens
@@ -306,12 +342,68 @@ func (db *DB) GetSessionUsageRows(
 			WebSearchRequests:   snapshotWebSearchRequests[i],
 		})
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return &activity.SessionUsageRows{
-		Rows:                          out,
-		RawOutputTokensBySession:      rawOutputTokensBySession,
-		DeduplicatedOutputTokens:      deduplicatedOutputTokens,
-		DiscardedContributingSessions: discardedContributingSessions,
+		Rows:                            out,
+		RawOutputTokensBySession:        rawOutputTokensBySession,
+		DeduplicatedOutputTokens:        deduplicatedOutputTokens,
+		DiscardedContributingSessions:   discardedContributingSessions,
+		CanonicalTokenCoverageBySession: canonicalTokenCoverageBySession,
 	}, nil
+}
+
+func stableSortContext[T any](
+	ctx context.Context, values []T, less func(a, b T) bool,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(values) < 2 {
+		return nil
+	}
+	scratch := make([]T, len(values))
+	source, target := values, scratch
+	for width := 1; width < len(values); width *= 2 {
+		for left := 0; left < len(values); left += 2 * width {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			middle := min(left+width, len(values))
+			right := min(left+2*width, len(values))
+			i, j := left, middle
+			for k := left; k < right; k++ {
+				if k&255 == 0 {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
+				if j >= right || i < middle && !less(source[j], source[i]) {
+					target[k] = source[i]
+					i++
+				} else {
+					target[k] = source[j]
+					j++
+				}
+			}
+		}
+		source, target = target, source
+		if width > len(values)/2 {
+			break
+		}
+	}
+	if &source[0] != &values[0] {
+		for i := range values {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			values[i] = source[i]
+		}
+	}
+	return ctx.Err()
 }
 
 // nullInt64Pointer converts a nullable message ordinal into the pointer

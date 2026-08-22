@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"time"
 )
 
@@ -119,17 +120,38 @@ func (s *ValidationStats) add(o ValidationStats) {
 func ValidateAndSanitize(
 	s *Session, msgs []Message, events []UsageEvent,
 ) ValidationStats {
+	stats, _ := ValidateAndSanitizeContext(
+		context.Background(), s, msgs, events,
+	)
+	return stats
+}
+
+// ValidateAndSanitizeContext applies the central validation contract while
+// allowing bounded callers to stop between rows.
+func ValidateAndSanitizeContext(
+	ctx context.Context,
+	s *Session, msgs []Message, events []UsageEvent,
+) (ValidationStats, error) {
 	var stats ValidationStats
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
 	if s != nil {
 		stats.add(SanitizeSession(s))
 	}
 	for i := range msgs {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		stats.add(SanitizeMessage(&msgs[i]))
 	}
 	for i := range events {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
 		stats.add(SanitizeUsageEvent(&events[i]))
 	}
-	return stats
+	return stats, ctx.Err()
 }
 
 // SanitizeMessage applies the contract to a single message row.

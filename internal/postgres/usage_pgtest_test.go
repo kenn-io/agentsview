@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -2003,6 +2004,12 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 	assert.Equal(t, map[string]struct{}{
 		"pg-sub-parent": {}, "agent-pg-a": {}, "agent-pg-dedup-only": {},
 	}, rowSet.DiscardedContributingSessions)
+	assert.Equal(t, map[string]activity.SessionTokenCoverage{
+		"pg-sub-parent":       {OutputTokens: 500, PeakContextTokens: 1000},
+		"agent-pg-a":          {OutputTokens: 1500, PeakContextTokens: 2000},
+		"agent-pg-b":          {OutputTokens: 100, PeakContextTokens: 500},
+		"agent-pg-dedup-only": {OutputTokens: 500, PeakContextTokens: 1000},
+	}, rowSet.CanonicalTokenCoverageBySession)
 	require.Len(t, rowSet.Rows, 3)
 	assert.Equal(t, []string{
 		"agent-pg-a", "agent-pg-b", "agent-pg-dedup-only",

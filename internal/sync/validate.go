@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -17,6 +18,13 @@ func validateAndSanitize(
 	s *db.Session, msgs []db.Message, events []db.UsageEvent,
 ) validationStats {
 	return db.ValidateAndSanitize(s, msgs, events)
+}
+
+func validateAndSanitizeContext(
+	ctx context.Context,
+	s *db.Session, msgs []db.Message, events []db.UsageEvent,
+) (validationStats, error) {
+	return db.ValidateAndSanitizeContext(ctx, s, msgs, events)
 }
 
 func sanitizeMessage(m *db.Message) validationStats {

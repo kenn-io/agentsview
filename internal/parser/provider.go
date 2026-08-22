@@ -54,6 +54,10 @@ type ProviderFactory interface {
 type ProviderConfig struct {
 	Roots   []string
 	Machine string
+	// StableSourceSnapshots reports that source files cannot change during
+	// parsing. Bounded capture enables it after copying quiescent transcripts
+	// so providers can classify an invalid end-of-file record as durable.
+	StableSourceSnapshots bool
 	// SourceMachines labels configured roots with their source machine. A
 	// provider must treat roots owned by another machine as remote metadata.
 	SourceMachines map[string]string

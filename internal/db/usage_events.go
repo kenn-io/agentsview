@@ -88,7 +88,10 @@ func (db *DB) ReplaceSessionUsageEvents(
 }
 
 func replaceSessionUsageEventsTx(
-	tx *sql.Tx, sessionID string, events []UsageEvent, enqueueArtifact bool,
+	tx transactionQueries,
+	sessionID string,
+	events []UsageEvent,
+	enqueueArtifact bool,
 ) error {
 	if _, err := tx.Exec(
 		`DELETE FROM usage_events WHERE session_id = ?`,

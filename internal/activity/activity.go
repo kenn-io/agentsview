@@ -84,18 +84,29 @@ type UsageRow struct {
 	UsageDedupKey     string
 }
 
+// SessionTokenCoverage records the canonical token categories represented for
+// one source session. Equivalent snapshots and duplicate rows credit their
+// canonical survivor to every source session that contained the usage.
+type SessionTokenCoverage struct {
+	OutputTokens      int
+	PeakContextTokens int
+}
+
 // SessionUsageRows is a globally ordered, cross-session-deduplicated usage
 // row set. RawOutputTokensBySession records output from every usage row before
 // snapshot selection or cross-session deduplication. DeduplicatedOutputTokens
 // records output removed from each session when an earlier transcript already
 // represented the same usage.
+// CanonicalTokenCoverageBySession describes the output and context categories
+// represented by the survivor set for each original source session.
 // DiscardedContributingSessions records sessions whose snapshot or duplicate
 // rows carried billable usage before they were removed.
 type SessionUsageRows struct {
-	Rows                          []UsageRow
-	RawOutputTokensBySession      map[string]int
-	DeduplicatedOutputTokens      map[string]int
-	DiscardedContributingSessions map[string]struct{}
+	Rows                            []UsageRow
+	RawOutputTokensBySession        map[string]int
+	DeduplicatedOutputTokens        map[string]int
+	DiscardedContributingSessions   map[string]struct{}
+	CanonicalTokenCoverageBySession map[string]SessionTokenCoverage
 }
 
 // UsageDataContributes reports whether normalized usage data represents spend.
@@ -120,6 +131,21 @@ type UsageCostAllocation struct {
 // session total; when it does, that settlement replaces the session's row
 // estimates and is distributed by their catalog-cost weights.
 func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
+	allocated, err := AllocateUsageCostsContext(context.Background(), usage)
+	if err != nil {
+		panic(err)
+	}
+	return allocated
+}
+
+// AllocateUsageCostsContext is AllocateUsageCosts with cancellation for
+// bounded in-memory aggregation paths.
+func AllocateUsageCostsContext(
+	ctx context.Context, usage []UsageRow,
+) ([]UsageCostAllocation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	type sessionCost struct {
 		carrier int
 		cost    money.Money
@@ -128,6 +154,9 @@ func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
 	allocated := make([]UsageCostAllocation, len(usage))
 	sessionCosts := make(map[string]*sessionCost)
 	for i, row := range usage {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		allocated[i] = UsageCostAllocation{
 			Cost: row.Cost, CostSource: row.CostSource,
 			Priced: row.Priced, Contributes: row.Contributes,
@@ -140,6 +169,9 @@ func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
 		}
 	}
 	for i, row := range usage {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		selected := sessionCosts[row.SessionID]
 		if selected == nil || !allocated[i].Contributes {
 			continue
@@ -147,6 +179,9 @@ func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
 		selected.indices = append(selected.indices, i)
 	}
 	for _, selected := range sessionCosts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if len(selected.indices) == 0 {
 			allocated[selected.carrier] = UsageCostAllocation{
 				Cost: selected.cost, CostSource: export.CostSourceReported,
@@ -156,17 +191,28 @@ func AllocateUsageCosts(usage []UsageRow) []UsageCostAllocation {
 		}
 		weights := make([]money.Money, len(selected.indices))
 		for i, index := range selected.indices {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			weights[i] = usage[index].Cost
 		}
-		costs := export.AllocateCostByWeight(selected.cost, weights)
+		costs, err := export.AllocateCostByWeightContext(
+			ctx, selected.cost, weights,
+		)
+		if err != nil {
+			return nil, err
+		}
 		for i, index := range selected.indices {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			allocated[index] = UsageCostAllocation{
 				Cost: costs[i], CostSource: export.CostSourceReported,
 				Priced: true, Contributes: true,
 			}
 		}
 	}
-	return allocated
+	return allocated, nil
 }
 
 // Report is the API payload.
@@ -497,25 +543,89 @@ func usageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
 	return usageDedupToken{}, false
 }
 
+func sessionUsageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
+	if u.ClaudeMessageID != "" && u.ClaudeRequestID != "" {
+		return usageDedupToken{
+			kind:  "claude",
+			value: u.ClaudeMessageID + ":" + u.ClaudeRequestID,
+		}, true
+	}
+	if u.UsageSource == "message" && u.Agent != "" && u.SourceUUID != "" {
+		return usageDedupToken{
+			kind:  "source",
+			value: u.Agent + ":" + u.SourceUUID,
+		}, true
+	}
+	if u.UsageDedupKey != "" {
+		return usageDedupToken{
+			kind:  "usage",
+			value: u.UsageDedupKey,
+		}, true
+	}
+	return usageDedupToken{}, false
+}
+
 // ClaudeSnapshotSurvivorSelection also returns the earliest session and the
 // maximum billed web-search count for each surviving snapshot. Callers use the
 // former for attribution and the latter when pricing the selected token row.
 func ClaudeSnapshotSurvivorSelection(
 	usage []UsageRow,
 ) (mask []bool, attribution []string, webSearchRequests []int) {
-	return claudeSnapshotSurvivorSelection(usage, nil)
+	mask, attribution, webSearchRequests, err :=
+		ClaudeSnapshotSurvivorSelectionContext(context.Background(), usage)
+	if err != nil {
+		panic(err)
+	}
+	return mask, attribution, webSearchRequests
+}
+
+// ClaudeSnapshotSurvivorSelectionContext applies snapshot selection while
+// allowing bounded callers to stop large in-memory passes.
+func ClaudeSnapshotSurvivorSelectionContext(
+	ctx context.Context, usage []UsageRow,
+) (mask []bool, attribution []string, webSearchRequests []int, err error) {
+	mask, attribution, webSearchRequests, _, err =
+		claudeSnapshotSelectionContext(ctx, usage, nil)
+	return mask, attribution, webSearchRequests, err
 }
 
 func claudeSnapshotSurvivorSelection(
 	usage []UsageRow, eligible []bool,
 ) (mask []bool, attribution []string, webSearchRequests []int) {
+	mask, attribution, webSearchRequests, _, err :=
+		claudeSnapshotSelectionContext(context.Background(), usage, eligible)
+	if err != nil {
+		panic(err)
+	}
+	return mask, attribution, webSearchRequests
+}
+
+func claudeSnapshotSelectionContext(
+	ctx context.Context, usage []UsageRow, eligible []bool,
+) (
+	mask []bool,
+	attribution []string,
+	webSearchRequests []int,
+	canonical []int,
+	err error,
+) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, nil, err
+	}
 	mask = make([]bool, len(usage))
 	attribution = make([]string, len(usage))
 	webSearchRequests = make([]int, len(usage))
+	canonical = make([]int, len(usage))
+	for i := range canonical {
+		canonical[i] = -1
+	}
 	best := make(map[claudeUsageSnapshotToken]int)
 	earliest := make(map[claudeUsageSnapshotToken]int)
 	maximumWebSearchRequests := make(map[claudeUsageSnapshotToken]int)
 	for i, u := range usage {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, nil, err
+		}
 		if eligible != nil && !eligible[i] {
 			continue
 		}
@@ -523,6 +633,7 @@ func claudeSnapshotSurvivorSelection(
 			mask[i] = true
 			attribution[i] = u.SessionID
 			webSearchRequests[i] = u.WebSearchRequests
+			canonical[i] = i
 			continue
 		}
 		key := claudeUsageSnapshotToken{
@@ -541,11 +652,86 @@ func claudeSnapshotSurvivorSelection(
 			maximumWebSearchRequests[key], u.WebSearchRequests)
 	}
 	for key, i := range best {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, nil, err
+		}
 		mask[i] = true
 		attribution[i] = usage[earliest[key]].SessionID
 		webSearchRequests[i] = maximumWebSearchRequests[key]
 	}
-	return mask, attribution, webSearchRequests
+	for i, u := range usage {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if eligible != nil && !eligible[i] {
+			continue
+		}
+		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
+			continue
+		}
+		canonical[i] = best[claudeUsageSnapshotToken{
+			messageID: u.ClaudeMessageID,
+			requestID: u.ClaudeRequestID,
+		}]
+	}
+	return mask, attribution, webSearchRequests, canonical, nil
+}
+
+// CanonicalSessionTokenCoverageContext reports which token categories the
+// canonical survivor set represents for every original source session.
+func CanonicalSessionTokenCoverageContext(
+	ctx context.Context, usage []UsageRow,
+) (map[string]SessionTokenCoverage, error) {
+	_, _, _, snapshotCanonical, err :=
+		claudeSnapshotSelectionContext(ctx, usage, nil)
+	if err != nil {
+		return nil, err
+	}
+	genericCanonical := make(map[int]int, len(usage))
+	seen := make(map[usageDedupToken]int)
+	for i, row := range usage {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if snapshotCanonical[i] != i {
+			continue
+		}
+		genericCanonical[i] = i
+		if key, ok := sessionUsageDedupTokenForRow(row); ok {
+			if previous, duplicate := seen[key]; duplicate {
+				genericCanonical[i] = previous
+				continue
+			}
+			seen[key] = i
+		}
+	}
+	coverage := make(map[string]SessionTokenCoverage)
+	seenBySession := make(map[string]map[int]struct{})
+	for i, row := range usage {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		snapshotIndex := snapshotCanonical[i]
+		if snapshotIndex < 0 {
+			continue
+		}
+		canonicalIndex := genericCanonical[snapshotIndex]
+		if seenBySession[row.SessionID] == nil {
+			seenBySession[row.SessionID] = make(map[int]struct{})
+		}
+		if _, duplicate := seenBySession[row.SessionID][canonicalIndex]; duplicate {
+			continue
+		}
+		seenBySession[row.SessionID][canonicalIndex] = struct{}{}
+		canonicalRow := usage[canonicalIndex]
+		value := coverage[row.SessionID]
+		value.OutputTokens += canonicalRow.OutputTokens
+		value.PeakContextTokens = max(value.PeakContextTokens,
+			canonicalRow.InputTokens+canonicalRow.CacheCreationTokens+
+				canonicalRow.CacheReadTokens)
+		coverage[row.SessionID] = value
+	}
+	return coverage, nil
 }
 
 func earlierClaudeSnapshotAttribution(candidate, current UsageRow) bool {

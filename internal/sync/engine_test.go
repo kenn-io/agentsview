@@ -4961,6 +4961,69 @@ func TestWriteBatchRemoteIDPrefixUsageEvents(t *testing.T) {
 	assert.Equal(t, 50, events[0].OutputTokens)
 }
 
+func TestDisabledSignalRecomputationSkipsEveryFullWritePath(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		write func(*Engine, pendingWrite) error
+	}{
+		{
+			name: "ordinary",
+			write: func(e *Engine, pw pendingWrite) error {
+				written, _, failed, _ := e.writeBatch(
+					[]pendingWrite{pw}, syncWriteDefault, true,
+				)
+				if written != 1 || failed != 0 {
+					return fmt.Errorf("written=%d failed=%d", written, failed)
+				}
+				return nil
+			},
+		},
+		{
+			name: "bulk",
+			write: func(e *Engine, pw pendingWrite) error {
+				written, _, failed, _ := e.writeBatch(
+					[]pendingWrite{pw}, syncWriteBulk, true,
+				)
+				if written != 1 || failed != 0 {
+					return fmt.Errorf("written=%d failed=%d", written, failed)
+				}
+				return nil
+			},
+		},
+		{name: "single session", write: (*Engine).writeSessionFull},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := openTestDB(t)
+			engine := NewEngine(database, EngineConfig{
+				Machine: "capture", DisableSignalRecomputation: true,
+			})
+			t.Cleanup(engine.Close)
+			id := "no-signals-" + strings.ReplaceAll(tc.name, " ", "-")
+			pw := pendingWrite{
+				sess: parser.ParsedSession{
+					ID: id, Project: "capture", Machine: "capture",
+					Agent: parser.AgentClaude, StartedAt: time.Now(),
+					MessageCount: 1,
+				},
+				msgs: []parser.ParsedMessage{{
+					Role: parser.RoleUser, Content: "bounded capture content",
+				}},
+			}
+
+			require.NoError(t, tc.write(engine, pw))
+
+			session, err := database.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Zero(t, session.QualitySignalVersion)
+			assert.Empty(t, session.SecretsRulesVersion)
+			messages, err := database.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			assert.Len(t, messages, 1)
+		})
+	}
+}
+
 func TestWriteBatchBulkDemotesFailedDeclaredMember(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -8212,6 +8275,73 @@ func TestCollectAndBatchClearsDanglingParentAfterParserExclusion(t *testing.T) {
 	require.NotNil(t, child)
 	assert.Nil(t, child.ParentSessionID,
 		"bulk exclusion must clear a child parent that no longer exists")
+}
+
+func TestCollectAndBatchCompletesPostWriteLinksAfterCancellation(t *testing.T) {
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+
+	for _, session := range []db.Session{
+		{ID: "link-parent", Project: "project", Machine: "local", Agent: "zencoder"},
+		{ID: "repair-parent", Project: "project", Machine: "local", Agent: "zencoder"},
+		{ID: "repair-child", Project: "project", Machine: "local", Agent: "zencoder"},
+	} {
+		require.NoError(t, database.UpsertSession(session))
+	}
+	require.NoError(t, database.InsertMessages([]db.Message{
+		{SessionID: "link-parent", Ordinal: 0, Role: "assistant",
+			Content: "spawn link child", HasToolUse: true,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "link-call", ToolName: "Task", Category: "Task",
+				SubagentSessionID: "link-child",
+			}}},
+		{SessionID: "repair-parent", Ordinal: 0, Role: "assistant",
+			Content: "spawn repair child", HasToolUse: true,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "repair-call", ToolName: "Task", Category: "Task",
+				SubagentSessionID: "repair-child",
+			}}},
+	}))
+	require.NoError(t, database.QueueSubagentParentRepairs([]string{"repair-child"}))
+
+	sourcePath := filepath.Join(t.TempDir(), "link-child.jsonl")
+	results := make(chan syncJob, 1)
+	results <- syncJob{
+		agent: parser.AgentZencoder, path: sourcePath, machine: "local",
+		processResult: processResult{results: []parser.ParseResult{{
+			Session: parser.ParsedSession{
+				ID: "link-child", Project: "project", Machine: "local",
+				Agent: parser.AgentZencoder,
+				File:  parser.FileInfo{Path: sourcePath, Size: 1, Mtime: 1},
+			},
+		}}},
+	}
+	close(results)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	stats := engine.collectAndBatchWithOptions(
+		ctx, results, 1, 1, nil, syncWriteDefault,
+		collectAndBatchOptions{observeResult: func(syncJob) { cancel() }},
+	)
+
+	assert.Equal(t, 1, stats.Synced)
+	linked, err := database.GetSession(t.Context(), "link-child")
+	require.NoError(t, err)
+	require.NotNil(t, linked)
+	require.NotNil(t, linked.ParentSessionID)
+	assert.Equal(t, "link-parent", *linked.ParentSessionID)
+	repaired, err := database.GetSession(t.Context(), "repair-child")
+	require.NoError(t, err)
+	require.NotNil(t, repaired)
+	require.NotNil(t, repaired.ParentSessionID)
+	assert.Equal(t, "repair-parent", *repaired.ParentSessionID)
+	var queued int
+	require.NoError(t, database.Reader().QueryRow(
+		"SELECT count(*) FROM subagent_parent_repair_queue",
+	).Scan(&queued))
+	assert.Zero(t, queued)
 }
 
 func TestShouldSkipByPathWithRewriter(t *testing.T) {

@@ -722,7 +722,12 @@ func (e *Engine) parseDiffCollectFile(
 			return err
 		}
 		pw = preserved[0]
-		prepared, msgs, verdict := e.prepareSessionWrite(pw, resolver)
+		prepared, msgs, verdict, err := e.prepareSessionWriteContext(
+			ctx, pw, resolver,
+		)
+		if err != nil {
+			return err
+		}
 		id := prepared.ID
 		if verdict != sessionWriteOK {
 			// prepareSessionWrite returns a zero session on veto;
@@ -739,8 +744,12 @@ func (e *Engine) parseDiffCollectFile(
 		compare := verdict == sessionWriteOK && !pw.needsRetry &&
 			stored != nil && stored.DeletedAt == nil
 		if compare {
-			events, _ := toDBUsageEvents(id, pw.usageEvents)
-			var err error
+			events, _, err := toDBUsageEventsContext(
+				ctx, id, pw.usageEvents,
+			)
+			if err != nil {
+				return err
+			}
 			fields, err = e.compareStoredSession(
 				ctx, stored, prepared, msgs, events,
 			)

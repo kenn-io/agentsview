@@ -678,6 +678,17 @@ func TestOpenCreatesFile(t *testing.T) {
 	require.NoError(t, err, "db file not created")
 }
 
+func TestOpenIsolatedStartsNoWALCheckpointLoop(t *testing.T) {
+	d, err := OpenIsolated(filepath.Join(t.TempDir(), "capture.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+
+	d.checkpointMu.Lock()
+	stop := d.checkpointStop
+	d.checkpointMu.Unlock()
+	assert.Nil(t, stop)
+}
+
 func TestOpenDataVersionBump_PreservesData(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")

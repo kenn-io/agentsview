@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	jsonv1 "encoding/json"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"maps"
 	"net"
@@ -498,6 +500,35 @@ type CustomModelRate struct {
 	OutputMicrodollarsPerMTok        int64 `json:"output_microdollars_per_mtok" toml:"output_microdollars_per_mtok"`
 	CacheCreationMicrodollarsPerMTok int64 `json:"cache_creation_microdollars_per_mtok,omitempty" toml:"cache_creation_microdollars_per_mtok"`
 	CacheReadMicrodollarsPerMTok     int64 `json:"cache_read_microdollars_per_mtok,omitempty" toml:"cache_read_microdollars_per_mtok"`
+}
+
+func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
+	var decoded struct {
+		CustomModelPricing map[string]CustomModelRate `toml:"custom_model_pricing"`
+	}
+	metadata, err := toml.Decode(data, &decoded)
+	if err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	for _, key := range metadata.Undecoded() {
+		if len(key) != 3 || key[0] != "custom_model_pricing" {
+			continue
+		}
+		return nil, fmt.Errorf(
+			"%s: unsupported pricing field; use input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
+			key.String(),
+		)
+	}
+	for model, rate := range decoded.CustomModelPricing {
+		if rate.InputMicrodollarsPerMTok < 0 ||
+			rate.OutputMicrodollarsPerMTok < 0 ||
+			rate.CacheCreationMicrodollarsPerMTok < 0 ||
+			rate.CacheReadMicrodollarsPerMTok < 0 {
+			return nil, fmt.Errorf(
+				"custom_model_pricing.%s: rates must not be negative", model)
+		}
+	}
+	return decoded.CustomModelPricing, nil
 }
 
 type RemoteTransport string
@@ -1210,67 +1241,110 @@ func (c *Config) loadLegacyJSONReadOnly() error {
 		return fmt.Errorf("reading config.json: %w", err)
 	}
 
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return fmt.Errorf("parsing config.json: %w", err)
+	converted, err := legacyJSONToTOML(data)
+	if err != nil {
+		return err
 	}
+	return c.applyConfigTOML(converted)
+}
+
+func legacyJSONToTOML(data []byte) (string, error) {
+	var m map[string]any
+	decoder := jsonv1.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&m); err != nil {
+		return "", fmt.Errorf("parsing config.json: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		return "", fmt.Errorf("parsing config.json: %w", err)
+	}
+	normalized, err := normalizeLegacyJSONNumbers(m)
+	if err != nil {
+		return "", fmt.Errorf("parsing config.json: %w", err)
+	}
+	m = normalized.(map[string]any)
 
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
-		return fmt.Errorf("encoding config.json: %w", err)
+		return "", fmt.Errorf("encoding config.json: %w", err)
 	}
-	return c.applyConfigTOML(buf.String())
+	return buf.String(), nil
+}
+
+func normalizeLegacyJSONNumbers(value any) (any, error) {
+	switch typed := value.(type) {
+	case jsonv1.Number:
+		if strings.ContainsAny(typed.String(), ".eE") {
+			return typed.Float64()
+		}
+		return typed.Int64()
+	case map[string]any:
+		for key, child := range typed {
+			normalized, err := normalizeLegacyJSONNumbers(child)
+			if err != nil {
+				return nil, err
+			}
+			typed[key] = normalized
+		}
+	case []any:
+		for index, child := range typed {
+			normalized, err := normalizeLegacyJSONNumbers(child)
+			if err != nil {
+				return nil, err
+			}
+			typed[index] = normalized
+		}
+	}
+	return value, nil
 }
 
 func (c *Config) applyConfigTOML(data string) error {
 	var file struct {
-		GithubToken                    string                     `toml:"github_token"`
-		CursorSecret                   string                     `toml:"cursor_secret"`
-		CursorAdminAPIKey              string                     `toml:"cursor_admin_api_key"`
-		CursorAdminEmail               string                     `toml:"cursor_admin_email"`
-		CursorAdminUserID              string                     `toml:"cursor_admin_user_id"`
-		Host                           string                     `toml:"host"`
-		Port                           int                        `toml:"port"`
-		ChartPalette                   ChartPalette               `toml:"chart_palette"`
-		PublicURL                      string                     `toml:"public_url"`
-		PublicOrigins                  []string                   `toml:"public_origins"`
-		Proxy                          ProxyConfig                `toml:"proxy"`
-		WatchExcludePatterns           []string                   `toml:"watch_exclude_patterns"`
-		DisabledAgents                 []string                   `toml:"disabled_agents"`
-		SyncIncludeCwdPrefixes         []string                   `toml:"sync_include_cwd_prefixes"`
-		ScanProtectedPaths             bool                       `toml:"scan_protected_paths"`
-		ResultContentBlockedCategories []string                   `toml:"result_content_blocked_categories"`
-		Terminal                       TerminalConfig             `toml:"terminal"`
-		AuthToken                      string                     `toml:"auth_token"`
-		RequireAuth                    bool                       `toml:"require_auth"`
-		RemoteAccess                   bool                       `toml:"remote_access"`
-		DisableUpdateCheck             bool                       `toml:"disable_update_check"`
-		DefaultPG                      string                     `toml:"default_pg"`
-		PG                             PGConfig                   `toml:"pg"`
-		DuckDB                         DuckDBConfig               `toml:"duckdb"`
-		Vector                         VectorConfig               `toml:"vector"`
-		Recall                         RecallConfig               `toml:"recall"`
-		Insights                       InsightsConfig             `toml:"insights"`
-		Automated                      AutomatedConfig            `toml:"automated"`
-		Agent                          map[string]AgentConfig     `toml:"agent"`
-		EventsCoalesceInterval         time.Duration              `toml:"events_coalesce_interval"`
-		DaemonIdleTimeout              time.Duration              `toml:"daemon_idle_timeout"`
-		CustomModelPricing             map[string]CustomModelRate `toml:"custom_model_pricing"`
-		RemoteHosts                    []RemoteHost               `toml:"remote_hosts"`
-		SessionSources                 []sessionSourceConfig      `toml:"session_sources"`
+		GithubToken                    string                 `toml:"github_token"`
+		CursorSecret                   string                 `toml:"cursor_secret"`
+		CursorAdminAPIKey              string                 `toml:"cursor_admin_api_key"`
+		CursorAdminEmail               string                 `toml:"cursor_admin_email"`
+		CursorAdminUserID              string                 `toml:"cursor_admin_user_id"`
+		Host                           string                 `toml:"host"`
+		Port                           int                    `toml:"port"`
+		ChartPalette                   ChartPalette           `toml:"chart_palette"`
+		PublicURL                      string                 `toml:"public_url"`
+		PublicOrigins                  []string               `toml:"public_origins"`
+		Proxy                          ProxyConfig            `toml:"proxy"`
+		WatchExcludePatterns           []string               `toml:"watch_exclude_patterns"`
+		DisabledAgents                 []string               `toml:"disabled_agents"`
+		SyncIncludeCwdPrefixes         []string               `toml:"sync_include_cwd_prefixes"`
+		ScanProtectedPaths             bool                   `toml:"scan_protected_paths"`
+		ResultContentBlockedCategories []string               `toml:"result_content_blocked_categories"`
+		Terminal                       TerminalConfig         `toml:"terminal"`
+		AuthToken                      string                 `toml:"auth_token"`
+		RequireAuth                    bool                   `toml:"require_auth"`
+		RemoteAccess                   bool                   `toml:"remote_access"`
+		DisableUpdateCheck             bool                   `toml:"disable_update_check"`
+		DefaultPG                      string                 `toml:"default_pg"`
+		PG                             PGConfig               `toml:"pg"`
+		DuckDB                         DuckDBConfig           `toml:"duckdb"`
+		Vector                         VectorConfig           `toml:"vector"`
+		Recall                         RecallConfig           `toml:"recall"`
+		Insights                       InsightsConfig         `toml:"insights"`
+		Automated                      AutomatedConfig        `toml:"automated"`
+		Agent                          map[string]AgentConfig `toml:"agent"`
+		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
+		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
+		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
+		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
 	}
 	meta, err := toml.Decode(data, &file)
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
-	for _, key := range meta.Undecoded() {
-		if len(key) != 3 || key[0] != "custom_model_pricing" {
-			continue
-		}
-		return fmt.Errorf(
-			"%s: unsupported pricing field; use input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
-			key.String(),
-		)
+	customModelPricing, err := decodeCustomModelPricing(data)
+	if err != nil {
+		return err
 	}
 	var raw map[string]any
 	if _, err := toml.Decode(data, &raw); err != nil {
@@ -1489,16 +1563,8 @@ func (c *Config) applyConfigTOML(data string) error {
 			c.Agent[name] = cfg
 		}
 	}
-	if len(file.CustomModelPricing) > 0 {
-		for model, rate := range file.CustomModelPricing {
-			if rate.InputMicrodollarsPerMTok < 0 ||
-				rate.OutputMicrodollarsPerMTok < 0 ||
-				rate.CacheCreationMicrodollarsPerMTok < 0 ||
-				rate.CacheReadMicrodollarsPerMTok < 0 {
-				return fmt.Errorf("custom_model_pricing.%s: rates must not be negative", model)
-			}
-		}
-		c.CustomModelPricing = file.CustomModelPricing
+	if len(customModelPricing) > 0 {
+		c.CustomModelPricing = customModelPricing
 	}
 	if len(file.RemoteHosts) > 0 {
 		hosts := make([]RemoteHost, len(file.RemoteHosts))

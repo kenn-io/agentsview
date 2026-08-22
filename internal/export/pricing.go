@@ -1,6 +1,7 @@
 package export
 
 import (
+	"context"
 	"math/big"
 	"sort"
 	"strings"
@@ -455,15 +456,37 @@ func CombinedCostSource(computed, reported bool) CostSource {
 // components. The final positive-weight component receives the integer
 // remainder so allocations add back to the authoritative total exactly.
 func AllocateCostByWeight(total money.Money, weights []money.Money) []money.Money {
+	allocated, err := AllocateCostByWeightContext(
+		context.Background(), total, weights,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return allocated
+}
+
+// AllocateCostByWeightContext is AllocateCostByWeight with cancellation for
+// bounded in-memory aggregation paths.
+func AllocateCostByWeightContext(
+	ctx context.Context,
+	total money.Money,
+	weights []money.Money,
+) ([]money.Money, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	allocated := make([]money.Money, len(weights))
 	if len(weights) == 0 || total.Microdollars == 0 {
-		return allocated
+		return allocated, nil
 	}
 
 	weightTotal := new(big.Int)
 	remainderIndex := -1
 	equalWeights := false
 	for i, weight := range weights {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if weight.Microdollars > 0 {
 			weightTotal.Add(weightTotal, big.NewInt(weight.Microdollars))
 			remainderIndex = i
@@ -478,6 +501,9 @@ func AllocateCostByWeight(total money.Money, weights []money.Money) []money.Mone
 	assigned := new(big.Int)
 	totalInt := big.NewInt(total.Microdollars)
 	for i, weight := range weights {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if equalWeights {
 			weight = money.Money{Microdollars: 1}
 		}
@@ -492,12 +518,15 @@ func AllocateCostByWeight(total money.Money, weights []money.Money) []money.Mone
 		allocated[i] = money.Money{Microdollars: share.Int64()}
 		assigned.Add(assigned, share)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	remainder := new(big.Int).Sub(totalInt, assigned)
 	if !remainder.IsInt64() {
 		panic(money.ErrOverflow)
 	}
 	allocated[remainderIndex] = money.Money{Microdollars: remainder.Int64()}
-	return allocated
+	return allocated, nil
 }
 
 func pricingSource(rows []EffectivePricingRow) string {

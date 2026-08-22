@@ -25,7 +25,7 @@ type rollupStore struct {
 }
 
 func (s *rollupStore) GetSessionUsageRows(
-	_ context.Context, ids []string,
+	ctx context.Context, ids []string,
 ) (*activity.SessionUsageRows, error) {
 	if s.rows == nil {
 		return nil, nil
@@ -35,6 +35,7 @@ func (s *rollupStore) GetSessionUsageRows(
 		included[id] = struct{}{}
 	}
 	rows := make([]activity.UsageRow, 0, len(s.rows))
+	coverageRows := make([]activity.UsageRow, 0, len(s.rows))
 	rawOutputTokensBySession := make(map[string]int)
 	for _, row := range s.rows {
 		sourceSessionID := row.SourceSessionID
@@ -43,12 +44,19 @@ func (s *rollupStore) GetSessionUsageRows(
 		}
 		if _, ok := included[sourceSessionID]; ok {
 			rows = append(rows, row)
+			row.SessionID = sourceSessionID
+			coverageRows = append(coverageRows, row)
 			rawOutputTokensBySession[sourceSessionID] += row.OutputTokens
 		}
 	}
+	coverage, err := activity.CanonicalSessionTokenCoverageContext(ctx, coverageRows)
+	if err != nil {
+		return nil, err
+	}
 	return &activity.SessionUsageRows{
-		Rows:                     rows,
-		RawOutputTokensBySession: rawOutputTokensBySession,
+		Rows:                            rows,
+		RawOutputTokensBySession:        rawOutputTokensBySession,
+		CanonicalTokenCoverageBySession: coverage,
 	}, s.rowsErr
 }
 

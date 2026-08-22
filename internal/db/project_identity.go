@@ -848,12 +848,36 @@ func upsertProjectIdentityObservationTx(
 	tx *sql.Tx,
 	obs export.ProjectIdentityObservation,
 ) error {
-	return upsertProjectIdentityObservationWithSnapshotProjectTx(
-		tx, obs, obs.Project, false, false,
+	return upsertProjectIdentityObservationTxContext(
+		context.Background(), tx, obs,
+	)
+}
+
+func upsertProjectIdentityObservationTxContext(
+	ctx context.Context,
+	tx *sql.Tx,
+	obs export.ProjectIdentityObservation,
+) error {
+	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+		ctx, tx, obs, obs.Project, false, false,
 	)
 }
 
 func upsertProjectIdentityObservationWithSnapshotProjectTx(
+	tx *sql.Tx,
+	obs export.ProjectIdentityObservation,
+	snapshotProject string,
+	sessionInserted bool,
+	allowSnapshotProjectCorrection bool,
+) error {
+	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+		context.Background(), tx, obs, snapshotProject, sessionInserted,
+		allowSnapshotProjectCorrection,
+	)
+}
+
+func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
+	ctx context.Context,
 	tx *sql.Tx,
 	obs export.ProjectIdentityObservation,
 	snapshotProject string,
@@ -865,7 +889,7 @@ func upsertProjectIdentityObservationWithSnapshotProjectTx(
 		return err
 	}
 	if err := upsertProjectIdentityObservationExec(
-		context.Background(), tx,
+		ctx, tx,
 		func(ctx context.Context, query string, args ...any) rowScanner {
 			return tx.QueryRowContext(ctx, query, args...)
 		},
@@ -874,7 +898,7 @@ func upsertProjectIdentityObservationWithSnapshotProjectTx(
 		return err
 	}
 	if err := writeSessionProjectIdentitySnapshotExec(
-		context.Background(), tx,
+		ctx, tx,
 		func(ctx context.Context, query string, args ...any) rowScanner {
 			return tx.QueryRowContext(ctx, query, args...)
 		},

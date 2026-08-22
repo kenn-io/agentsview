@@ -66,34 +66,58 @@ const RefreshCooldown = time.Hour
 // aliases so they cannot shadow the date-based CanonicalModelForDate
 // pricing path.
 func SeedFallback(database *db.DB) error {
-	stored, err := database.GetPricingMeta(fallbackVersionMetaKey)
+	return SeedFallbackContext(context.Background(), database)
+}
+
+// SeedFallbackContext is SeedFallback with cancellation checks between each
+// catalog operation. It is intended for bounded, short-lived workflows.
+func SeedFallbackContext(ctx context.Context, database *db.DB) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stored, err := database.GetPricingMetaContext(ctx, fallbackVersionMetaKey)
 	if err != nil {
 		return err
 	}
-	storageVersion, err := database.GetPricingMeta(pricingStorageMetaKey)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	storageVersion, err := database.GetPricingMetaContext(ctx, pricingStorageMetaKey)
 	if err != nil {
 		return err
 	}
 	if stored == pricing.SeedVersion && storageVersion == pricingStorageVersion {
 		return nil
 	}
-	if err := storeFallback(database); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := storeFallbackContext(ctx, database); err != nil {
 		return err
 	}
 	// Only delete while reseeding (version mismatch). A later LiteLLM
 	// refresh that legitimately lists one of these names is not
 	// clobbered on every startup.
-	if err := database.DeleteModelPricing(
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := database.DeleteModelPricingContext(ctx,
 		pricing.DateAliasedModels(),
 	); err != nil {
 		return err
 	}
-	if err := database.SetPricingMeta(
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := database.SetPricingMetaContext(ctx,
 		fallbackVersionMetaKey, pricing.SeedVersion,
 	); err != nil {
 		return err
 	}
-	return database.SetPricingMeta(pricingStorageMetaKey, pricingStorageVersion)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return database.SetPricingMetaContext(ctx, pricingStorageMetaKey, pricingStorageVersion)
 }
 
 // RefreshIfStale refreshes when the last attempt is older than cooldown.
@@ -295,7 +319,13 @@ func storeCatalog(database *db.DB, catalog pricing.Catalog) error {
 // the sentinel still claims it. Databases that never stored the sentinel
 // keep none.
 func storeFallback(database *db.DB) error {
-	value, err := database.GetPricingMeta(pricing.OpenRouterModelsMetaKey)
+	return storeFallbackContext(context.Background(), database)
+}
+
+func storeFallbackContext(ctx context.Context, database *db.DB) error {
+	value, err := database.GetPricingMetaContext(
+		ctx, pricing.OpenRouterModelsMetaKey,
+	)
 	if err != nil {
 		return err
 	}
@@ -323,8 +353,8 @@ func storeFallback(database *db.DB) error {
 			Value: pricing.EncodeOpenRouterModels(owned),
 		}
 	}
-	return database.ReconcileModelPricing(
-		dbModelPricing(fallback), retired, meta,
+	return database.ReconcileModelPricingContext(
+		ctx, dbModelPricing(fallback), retired, meta,
 	)
 }
 

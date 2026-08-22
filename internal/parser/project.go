@@ -59,6 +59,20 @@ func statGitEntry(gitPath string) (os.FileInfo, error) {
 // process that never opts in cannot raise a consent prompt from parsing.
 var allowProtectedPathProbes atomic.Bool
 
+type filesystemProjectDiscoveryKey struct{}
+
+// WithoutFilesystemProjectDiscovery returns a context that limits project
+// attribution to transcript metadata and lexical path rules. Bounded importers
+// use it so recorded working directories are never touched on the local host.
+func WithoutFilesystemProjectDiscovery(ctx context.Context) context.Context {
+	return context.WithValue(ctx, filesystemProjectDiscoveryKey{}, true)
+}
+
+func filesystemProjectDiscoveryDisabled(ctx context.Context) bool {
+	disabled, _ := ctx.Value(filesystemProjectDiscoveryKey{}).(bool)
+	return disabled
+}
+
 // SetAllowProtectedPathProbes sets whether project extraction may probe
 // macOS TCC-protected working directories for git roots. Wired from the
 // scan_protected_paths config option by the sync engine.
@@ -226,19 +240,24 @@ func ExtractProjectFromCwdWithBranch(
 }
 
 // ExtractProjectFromCwdWithBranchContext extracts a canonical project name
-// from cwd and optionally git branch metadata. The context parameter is
-// retained for compatibility: extraction no longer execs git — passive
-// discovery must not let git follow config-derived paths such as
-// [include] path into locations the probe policy never vetted — so all
-// resolution is filesystem-local and needs no cancellation.
+// from cwd and optionally git branch metadata. A context created by
+// WithoutFilesystemProjectDiscovery skips local Git-root discovery.
 func ExtractProjectFromCwdWithBranchContext(
-	_ context.Context, cwd, gitBranch string,
+	ctx context.Context, cwd, gitBranch string,
 ) string {
-	return extractProjectFromCwdWithBranch(cwd, gitBranch)
+	return extractProjectFromCwdWithBranchPolicy(
+		cwd, gitBranch, !filesystemProjectDiscoveryDisabled(ctx),
+	)
 }
 
 func extractProjectFromCwdWithBranch(
 	cwd, gitBranch string,
+) string {
+	return extractProjectFromCwdWithBranchPolicy(cwd, gitBranch, true)
+}
+
+func extractProjectFromCwdWithBranchPolicy(
+	cwd, gitBranch string, discoverFilesystem bool,
 ) string {
 	if cwd == "" {
 		return ""
@@ -262,7 +281,8 @@ func extractProjectFromCwdWithBranch(
 	// an unbacked autofs prefix cascades through automountd into
 	// opendirectoryd (/usr/libexec/od_user_homes), so we probe
 	// the prefix once before walking.
-	if filepath.IsAbs(cleaned) && !isForeignOSPath(cwd, cleaned, winPath) &&
+	if discoverFilesystem && filepath.IsAbs(cleaned) &&
+		!isForeignOSPath(cwd, cleaned, winPath) &&
 		probeGitRootForCwd(cleaned) {
 		if root := findGitRepoRoot(cleaned); root != "" {
 			name := filepath.Base(root)

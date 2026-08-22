@@ -981,40 +981,121 @@ func configureReaderPool(reader *sql.DB) {
 // If the schema is current but the data version is stale, the database
 // is also preserved and marked for a re-sync on the next cycle.
 func Open(path string) (*DB, error) {
+	return open(context.Background(), path, true)
+}
+
+// OpenIsolated opens an archive without starting long-running database
+// maintenance. Short-lived, isolated workflows must close the returned DB.
+func OpenIsolated(path string) (*DB, error) {
+	return open(context.Background(), path, false)
+}
+
+// OpenIsolatedContext is OpenIsolated with cooperative cancellation between
+// database initialization phases. The returned database must be closed.
+func OpenIsolatedContext(ctx context.Context, path string) (*DB, error) {
+	return open(ctx, path, false)
+}
+
+// OpenFreshIsolatedContext initializes a current-schema archive in an empty,
+// pre-created regular file without running historical migrations or backfills.
+// Short-lived workflows that own and rebuild their scratch archive use this
+// path so their deadline covers every initialization operation they require.
+func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("checking fresh database file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() != 0 {
+		return nil, errors.New("fresh database file must be an empty regular file")
+	}
+	d, err := openAndInit(ctx, path, false, false)
+	if err != nil {
+		return nil, err
+	}
+	closeOnError := func(err error) (*DB, error) {
+		return nil, errors.Join(err, d.CloseContext(ctx))
+	}
+	if _, err := d.GetOrCreateDatabaseID(ctx); err != nil {
+		return closeOnError(fmt.Errorf("initializing database id: %w", err))
+	}
+	if _, err := d.GetOrCreateArchiveID(ctx); err != nil {
+		return closeOnError(fmt.Errorf("initializing archive id: %w", err))
+	}
+	if _, err := d.GetOrCreateArchiveSalt(ctx); err != nil {
+		return closeOnError(fmt.Errorf("initializing archive salt: %w", err))
+	}
+	if err := d.EnsureProjectIdentityBackfillQueued(ctx); err != nil {
+		return closeOnError(fmt.Errorf("queueing project identity backfill: %w", err))
+	}
+	if err := d.setDataVersion(ctx); err != nil {
+		return closeOnError(fmt.Errorf("setting data version: %w", err))
+	}
+	return d, nil
+}
+
+func open(ctx context.Context, path string, backgroundMaintenance bool) (*DB, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating db directory: %w", err)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	schemaRepairNeeded, dataStale, err := probeDatabase(path)
 	if err != nil {
 		return nil, fmt.Errorf("checking database: %w", err)
 	}
 
-	d, err := openAndInit(path, schemaRepairNeeded)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	d, err := openAndInit(ctx, path, schemaRepairNeeded, backgroundMaintenance)
 	if err != nil {
 		return nil, err
 	}
+	closeOnError := func(err error) (*DB, error) {
+		if _, bounded := ctx.Deadline(); bounded {
+			return nil, errors.Join(err, d.CloseContext(ctx))
+		}
+		return nil, errors.Join(err, d.Close())
+	}
 
-	if err := d.migrateColumns(); err != nil {
-		d.Close()
-		return nil, fmt.Errorf("migrating columns: %w", err)
+	if err := ctx.Err(); err != nil {
+		return closeOnError(err)
 	}
-	if _, err := d.GetOrCreateDatabaseID(context.Background()); err != nil {
-		d.Close()
-		return nil, fmt.Errorf("initializing database id: %w", err)
+	if err := d.migrateColumns(ctx); err != nil {
+		return closeOnError(fmt.Errorf("migrating columns: %w", err))
 	}
-	if _, err := d.GetOrCreateArchiveID(context.Background()); err != nil {
-		d.Close()
-		return nil, fmt.Errorf("initializing archive id: %w", err)
+	if err := ctx.Err(); err != nil {
+		return closeOnError(err)
 	}
-	if _, err := d.GetOrCreateArchiveSalt(context.Background()); err != nil {
-		d.Close()
-		return nil, fmt.Errorf("initializing archive salt: %w", err)
+	if _, err := d.GetOrCreateDatabaseID(ctx); err != nil {
+		return closeOnError(fmt.Errorf("initializing database id: %w", err))
 	}
-	if err := d.EnsureProjectIdentityBackfillQueued(context.Background()); err != nil {
-		d.Close()
-		return nil, fmt.Errorf("queueing project identity backfill: %w", err)
+	if err := ctx.Err(); err != nil {
+		return closeOnError(err)
+	}
+	if _, err := d.GetOrCreateArchiveID(ctx); err != nil {
+		return closeOnError(fmt.Errorf("initializing archive id: %w", err))
+	}
+	if err := ctx.Err(); err != nil {
+		return closeOnError(err)
+	}
+	if _, err := d.GetOrCreateArchiveSalt(ctx); err != nil {
+		return closeOnError(fmt.Errorf("initializing archive salt: %w", err))
+	}
+	if err := ctx.Err(); err != nil {
+		return closeOnError(err)
+	}
+	if err := d.EnsureProjectIdentityBackfillQueued(ctx); err != nil {
+		return closeOnError(fmt.Errorf("queueing project identity backfill: %w", err))
 	}
 
 	if dataStale || schemaRepairNeeded {
@@ -1027,14 +1108,17 @@ func Open(path string) (*DB, error) {
 		// When data is stale, preserve the old version so
 		// the "needs resync" state survives process restarts
 		// until ResyncAll completes successfully.
-		if err := d.setDataVersion(); err != nil {
-			d.Close()
-			return nil, fmt.Errorf(
-				"setting data version: %w", err,
-			)
+		if err := ctx.Err(); err != nil {
+			return closeOnError(err)
+		}
+		if err := d.setDataVersion(ctx); err != nil {
+			return closeOnError(fmt.Errorf("setting data version: %w", err))
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return closeOnError(err)
+	}
 	return d, nil
 }
 
@@ -2343,8 +2427,8 @@ func applyColumnMigrations(
 // repairLegacySchemaBeforeInit adds legacy columns before schema initialization.
 // The stale data marker is committed in the same transaction so a restart
 // cannot skip the required full resync.
-func repairLegacySchemaBeforeInit(w *writerHandle) error {
-	tx, err := w.BeginTx(context.Background(), nil)
+func repairLegacySchemaBeforeInit(ctx context.Context, w *writerHandle) error {
+	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("starting schema repair transaction: %w", err)
 	}
@@ -2353,18 +2437,20 @@ func repairLegacySchemaBeforeInit(w *writerHandle) error {
 	if err := applyColumnMigrations(
 		legacySchemaColumnMigrations(),
 		func(query string, args ...any) rowScanner {
-			return tx.QueryRow(query, args...)
+			return tx.QueryRowContext(ctx, query, args...)
 		},
-		tx.Exec,
+		func(query string, args ...any) (sql.Result, error) {
+			return tx.ExecContext(ctx, query, args...)
+		},
 	); err != nil {
 		return err
 	}
 	var version int
-	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("reading repaired archive version: %w", err)
 	}
 	if version >= dataVersion {
-		if _, err := tx.Exec(
+		if _, err := tx.ExecContext(ctx,
 			fmt.Sprintf("PRAGMA user_version = %d", dataVersion-1),
 		); err != nil {
 			return fmt.Errorf("marking repaired archive stale: %w", err)
@@ -2525,39 +2611,57 @@ END;
 // migrateColumns adds columns introduced by this branch to databases created
 // by older releases, then runs the data repairs required by a normal writable
 // startup. Schema-only callers use applySchemaColumnMigrations directly.
-func (db *DB) migrateColumns() error {
+func (db *DB) migrateColumns(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := migrateMoneyColumnsLocked(w); err != nil {
 		return err
 	}
-	if _, err := w.Exec(modelPricingBandsSchemaSQL); err != nil {
+	if _, err := w.ExecContext(ctx, modelPricingBandsSchemaSQL); err != nil {
 		return fmt.Errorf("creating model pricing bands: %w", err)
 	}
-	if _, err := w.Exec(artifactSessionQueueTriggerDropsSQL); err != nil {
+	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerDropsSQL); err != nil {
 		return fmt.Errorf("dropping artifact session queue triggers: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := applySchemaColumnMigrations(w); err != nil {
 		return err
 	}
-	if _, err := w.Exec(artifactSessionQueueTriggerCreatesSQL); err != nil {
+	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
 		return fmt.Errorf("installing artifact session queue triggers: %w", err)
 	}
-	if err := installSyncMarkerSchemaLocked(w); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := installSyncMarkerSchemaLocked(ctx, w); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := db.createPartialIndexesLocked(w); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := db.backfillIsAutomatedLocked(w); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := db.backfillToolCallFieldsLocked(w); err != nil {
 		return err
 	}
 
-	if _, err := w.Exec(
+	if _, err := w.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_file_path
 		 ON tool_calls(file_path)
 		 WHERE file_path IS NOT NULL`,
@@ -2567,7 +2671,7 @@ func (db *DB) migrateColumns() error {
 		)
 	}
 
-	if _, err := w.Exec(
+	if _, err := w.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_termination_status
 		 ON sessions(termination_status)`,
 	); err != nil {
@@ -2579,7 +2683,7 @@ func (db *DB) migrateColumns() error {
 	// without walking the whole table. Created here rather than in
 	// schema.sql because local_modified_at is a migrated column that legacy
 	// archives gain just above.
-	if _, err := w.Exec(
+	if _, err := w.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_local_modified
 		 ON sessions(local_modified_at)`,
 	); err != nil {
@@ -2587,7 +2691,7 @@ func (db *DB) migrateColumns() error {
 			"creating idx_sessions_local_modified: %w", err,
 		)
 	}
-	if _, err := w.Exec(
+	if _, err := w.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_insights_cache
 		 ON insights(cache_key, created_at DESC)
 		 WHERE cache_key != ''`,
@@ -2597,7 +2701,7 @@ func (db *DB) migrateColumns() error {
 		)
 	}
 
-	if _, err := w.Exec(`
+	if _, err := w.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS remote_skipped_files (
 			host       TEXT NOT NULL,
 			path       TEXT NOT NULL,
@@ -2610,7 +2714,7 @@ func (db *DB) migrateColumns() error {
 		)
 	}
 
-	if _, err := w.Exec(`
+	if _, err := w.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS worktree_project_mappings (
 			id          INTEGER PRIMARY KEY,
 			machine     TEXT NOT NULL,
@@ -2632,7 +2736,7 @@ func (db *DB) migrateColumns() error {
 			"creating worktree_project_mappings: %w", err,
 		)
 	}
-	if _, err := w.Exec(`
+	if _, err := w.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS archive_metadata (
 			key        TEXT PRIMARY KEY,
 			value      TEXT NOT NULL,
@@ -2694,20 +2798,32 @@ func (db *DB) migrateColumns() error {
 			"creating project identity metadata: %w", err,
 		)
 	}
-	if _, err := w.Exec(projectIdentityRevisionSchemaSQL); err != nil {
+	if _, err := w.ExecContext(ctx, projectIdentityRevisionSchemaSQL); err != nil {
 		return fmt.Errorf("creating project identity revision triggers: %w", err)
 	}
-	if _, err := w.Exec(projectIdentitySnapshotInvariantSchemaSQL); err != nil {
+	if _, err := w.ExecContext(ctx, projectIdentitySnapshotInvariantSchemaSQL); err != nil {
 		return fmt.Errorf("creating project identity snapshot trigger: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := db.scrubProjectIdentityGitRemoteCredentialsLocked(w); err != nil {
 		return err
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := db.ensureUsageEventsSchemaLocked(w); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := db.ensureCursorUsageEventsSchemaLocked(w); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := requeueInvalidArtifactPublicationsLocked(w); err != nil {
@@ -3009,16 +3125,16 @@ const backfillSyncMarkerSQL = `UPDATE sessions SET sync_marker = MAX(
 // Safe to run on every startup: the CREATE IF NOT EXISTS statements and
 // the backfill's WHERE sync_marker IS NULL clause make it a no-op once
 // the archive is caught up.
-func installSyncMarkerSchemaLocked(w *writerHandle) error {
-	tx, err := w.BeginTx(context.Background(), nil)
+func installSyncMarkerSchemaLocked(ctx context.Context, w *writerHandle) error {
+	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning sync_marker schema transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(syncMarkerSchemaSQL); err != nil {
+	if _, err := tx.ExecContext(ctx, syncMarkerSchemaSQL); err != nil {
 		return fmt.Errorf("creating sync_marker index and triggers: %w", err)
 	}
-	if _, err := tx.Exec(backfillSyncMarkerSQL); err != nil {
+	if _, err := tx.ExecContext(ctx, backfillSyncMarkerSQL); err != nil {
 		return fmt.Errorf("backfilling sync_marker: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -3033,13 +3149,13 @@ func installSyncMarkerSchemaLocked(w *writerHandle) error {
 // transaction, another process's session delete could land in the window
 // where a trigger is absent, skipping the journal row that incremental
 // mirror consumers (PG tombstones, the DuckDB deletion delta) rely on.
-func execSchemaScriptLocked(w *writerHandle) error {
-	tx, err := w.BeginTx(context.Background(), nil)
+func execSchemaScriptLocked(ctx context.Context, w *writerHandle) error {
+	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning schema script transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(schemaSQL); err != nil {
+	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -3851,13 +3967,20 @@ func (db *DB) Vacuum() error {
 	return err
 }
 
-func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
+func openAndInit(
+	ctx context.Context,
+	path string,
+	schemaRepairNeeded, backgroundMaintenance bool,
+) (*DB, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	writer, err := sql.Open("sqlite3", makeDSN(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening writer: %w", err)
 	}
 	writer.SetMaxOpenConns(1)
-	if err := configureWAL(writer); err != nil {
+	if err := configureWALContext(ctx, writer); err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
@@ -3883,28 +4006,42 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 		)
 	}
 	if schemaRepairNeeded {
+		if err := ctx.Err(); err != nil {
+			_ = db.CloseContext(ctx)
+			return nil, err
+		}
 		db.mu.Lock()
-		err = repairLegacySchemaBeforeInit(db.getWriter())
+		err = repairLegacySchemaBeforeInit(ctx, db.getWriter())
 		db.mu.Unlock()
 		if err != nil {
-			db.Close()
+			_ = db.CloseContext(ctx)
 			return nil, fmt.Errorf(
 				"repairing legacy schema before initialization: %w", err,
 			)
 		}
 	}
 
-	if err := db.init(); err != nil {
-		db.Close()
+	if err := ctx.Err(); err != nil {
+		_ = db.CloseContext(ctx)
+		return nil, err
+	}
+	if err := db.init(ctx); err != nil {
+		_ = db.CloseContext(ctx)
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
-	db.startWALCheckpointLoop()
+	if backgroundMaintenance {
+		db.startWALCheckpointLoop()
+	}
 	return db, nil
 }
 
 func configureWAL(conn *sql.DB) error {
+	return configureWALContext(context.Background(), conn)
+}
+
+func configureWALContext(ctx context.Context, conn *sql.DB) error {
 	var limit int64
-	if err := conn.QueryRow(
+	if err := conn.QueryRowContext(ctx,
 		fmt.Sprintf(
 			"PRAGMA journal_size_limit = %d",
 			walJournalSizeLimitBytes,
@@ -4108,12 +4245,12 @@ func (db *DB) HasFTS() bool {
 // by a newer build. Called by Open() only when data is
 // current (not stale), so the marker survives until
 // ResyncAll completes.
-func (db *DB) setDataVersion() error {
+func (db *DB) setDataVersion(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	var current int
-	if err := db.getWriter().QueryRow(
+	if err := db.getWriter().QueryRowContext(ctx,
 		"PRAGMA user_version",
 	).Scan(&current); err != nil {
 		return fmt.Errorf("reading data version: %w", err)
@@ -4122,7 +4259,7 @@ func (db *DB) setDataVersion() error {
 		return nil
 	}
 
-	_, err := db.getWriter().Exec(
+	_, err := db.getWriter().ExecContext(ctx,
 		fmt.Sprintf("PRAGMA user_version = %d", dataVersion),
 	)
 	if err != nil {
@@ -4131,25 +4268,25 @@ func (db *DB) setDataVersion() error {
 	return nil
 }
 
-func (db *DB) init() error {
+func (db *DB) init(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
-	if err := execSchemaScriptLocked(w); err != nil {
+	if err := execSchemaScriptLocked(ctx, w); err != nil {
 		return err
 	}
 
 	// Add result_content column to tool_calls if not present
 	// (non-destructive migration for existing databases).
 	var rcCount int
-	if err := w.QueryRow(
-		`SELECT count(*) FROM pragma_table_info('tool_calls')` +
+	if err := w.QueryRowContext(ctx,
+		`SELECT count(*) FROM pragma_table_info('tool_calls')`+
 			` WHERE name = 'result_content'`,
 	).Scan(&rcCount); err != nil {
 		return fmt.Errorf("probing result_content column: %w", err)
 	}
 	if rcCount == 0 {
-		if _, err := w.Exec(
+		if _, err := w.ExecContext(ctx,
 			`ALTER TABLE tool_calls ADD COLUMN result_content TEXT`,
 		); err != nil {
 			return fmt.Errorf("adding result_content column: %w", err)
@@ -4158,8 +4295,8 @@ func (db *DB) init() error {
 
 	// Check if FTS table exists before trying to create it
 	var ftsCount int
-	if err := w.QueryRow(
-		"SELECT count(*) FROM sqlite_master" +
+	if err := w.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master"+
 			" WHERE type='table' AND name='messages_fts'",
 	).Scan(&ftsCount); err != nil {
 		return fmt.Errorf("checking fts table: %w", err)
@@ -4168,7 +4305,7 @@ func (db *DB) init() error {
 
 	// Attempt to initialize FTS. Failure is non-fatal
 	// (might be missing module).
-	if _, err := w.Exec(schemaFTS); err != nil {
+	if _, err := w.ExecContext(ctx, schemaFTS); err != nil {
 		if !strings.Contains(
 			err.Error(), "no such module",
 		) {
@@ -4177,8 +4314,8 @@ func (db *DB) init() error {
 	} else if !hadFTS {
 		// Schema init succeeded and we didn't have FTS
 		// before. Populate the index for existing messages.
-		if _, err := w.Exec(
-			"INSERT INTO messages_fts(messages_fts)" +
+		if _, err := w.ExecContext(ctx,
+			"INSERT INTO messages_fts(messages_fts)"+
 				" VALUES('rebuild')",
 		); err != nil {
 			return fmt.Errorf("backfilling FTS: %w", err)
@@ -4186,36 +4323,36 @@ func (db *DB) init() error {
 	}
 
 	var recallFTSCount int
-	if err := w.QueryRow(
-		"SELECT count(*) FROM sqlite_master" +
+	if err := w.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master"+
 			" WHERE type='table' AND name='recall_entries_fts'",
 	).Scan(&recallFTSCount); err != nil {
 		return fmt.Errorf("checking recall entries fts table: %w", err)
 	}
 	hadRecallFTS := recallFTSCount > 0
-	if _, err := w.Exec(recallEntriesFTS); err != nil {
+	if _, err := w.ExecContext(ctx, recallEntriesFTS); err != nil {
 		if !strings.Contains(
 			err.Error(), "no such module",
 		) {
 			return fmt.Errorf("initializing recall entries FTS: %w", err)
 		}
-		if _, err := w.Exec(recallEntriesFTS4); err != nil {
+		if _, err := w.ExecContext(ctx, recallEntriesFTS4); err != nil {
 			if !strings.Contains(
 				err.Error(), "no such module",
 			) {
 				return fmt.Errorf("initializing recall entries FTS4: %w", err)
 			}
 		} else if !hadRecallFTS {
-			if _, err := w.Exec(
-				"INSERT INTO recall_entries_fts(rowid, title, body, trigger)" +
+			if _, err := w.ExecContext(ctx,
+				"INSERT INTO recall_entries_fts(rowid, title, body, trigger)"+
 					" SELECT rowid, title, body, trigger FROM recall_entries",
 			); err != nil {
 				return fmt.Errorf("backfilling recall entries FTS4: %w", err)
 			}
 		}
 	} else if !hadRecallFTS {
-		if _, err := w.Exec(
-			"INSERT INTO recall_entries_fts(recall_entries_fts)" +
+		if _, err := w.ExecContext(ctx,
+			"INSERT INTO recall_entries_fts(recall_entries_fts)"+
 				" VALUES('rebuild')",
 		); err != nil {
 			return fmt.Errorf("backfilling recall entries FTS: %w", err)
@@ -4223,20 +4360,20 @@ func (db *DB) init() error {
 	}
 
 	var recallEvidenceFTSCount int
-	if err := w.QueryRow(
-		"SELECT count(*) FROM sqlite_master" +
+	if err := w.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master"+
 			" WHERE type='table' AND name='recall_evidence_fts'",
 	).Scan(&recallEvidenceFTSCount); err != nil {
 		return fmt.Errorf("checking recall evidence fts table: %w", err)
 	}
 	hadRecallEvidenceFTS := recallEvidenceFTSCount > 0
-	if _, err := w.Exec(recallEvidenceFTS); err != nil {
+	if _, err := w.ExecContext(ctx, recallEvidenceFTS); err != nil {
 		if !strings.Contains(
 			err.Error(), "no such module",
 		) {
 			return fmt.Errorf("initializing recall evidence FTS: %w", err)
 		}
-		if _, err := w.Exec(recallEvidenceFTS4); err != nil {
+		if _, err := w.ExecContext(ctx, recallEvidenceFTS4); err != nil {
 			if !strings.Contains(
 				err.Error(), "no such module",
 			) {
@@ -4245,8 +4382,8 @@ func (db *DB) init() error {
 				)
 			}
 		} else if !hadRecallEvidenceFTS {
-			if _, err := w.Exec(
-				"INSERT INTO recall_evidence_fts(rowid, snippet)" +
+			if _, err := w.ExecContext(ctx,
+				"INSERT INTO recall_evidence_fts(rowid, snippet)"+
 					" SELECT id, snippet FROM recall_evidence",
 			); err != nil {
 				return fmt.Errorf(
@@ -4255,8 +4392,8 @@ func (db *DB) init() error {
 			}
 		}
 	} else if !hadRecallEvidenceFTS {
-		if _, err := w.Exec(
-			"INSERT INTO recall_evidence_fts(recall_evidence_fts)" +
+		if _, err := w.ExecContext(ctx,
+			"INSERT INTO recall_evidence_fts(recall_evidence_fts)"+
 				" VALUES('rebuild')",
 		); err != nil {
 			return fmt.Errorf("backfilling recall evidence FTS: %w", err)
@@ -4278,6 +4415,19 @@ func (db *DB) init() error {
 // error, and the undrained pools are retained so a retry cannot succeed
 // before they actually drain.
 func (db *DB) Close() error {
+	return db.CloseContext(context.Background())
+}
+
+// CloseContext closes the database and bounds connection draining by ctx.
+// It still closes every pool before returning a deadline error so no new work
+// can start after cancellation.
+func (db *DB) CloseContext(ctx context.Context) error {
+	_, callerBounded := ctx.Deadline()
+	if !callerBounded {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, closeDrainTimeout)
+		defer cancel()
+	}
 	db.StopUsageCacheBackfill()
 	var cacheErr error
 	if db.usageCache != nil {
@@ -4316,12 +4466,15 @@ func (db *DB) Close() error {
 		errs = append(errs, w.Close())
 		closed = append(closed, w)
 	}
-	if stillOpen := drainPools(closed); len(stillOpen) > 0 {
+	if stillOpen := drainPoolsContext(ctx, closed); len(stillOpen) > 0 {
 		db.retainUndrainedPools(stillOpen)
+		closeErr := errors.New("database connection drain timed out")
+		if callerBounded {
+			closeErr = ctx.Err()
+		}
 		errs = append(errs, fmt.Errorf(
-			"db connections still in use %v after close; "+
-				"write ownership is not safe to release",
-			closeDrainTimeout))
+			"db connections still in use at close deadline; "+
+				"write ownership is not safe to release: %w", closeErr))
 	}
 	return errors.Join(errs...)
 }
@@ -4460,24 +4613,28 @@ func checkpointWALWithoutWriter(path string) error {
 // file can be renamed on every platform. Gives up after closeDrainTimeout
 // and returns the pools that still had connections checked out.
 func drainPools(pools []*sql.DB) []*sql.DB {
-	deadline := time.Now().Add(closeDrainTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), closeDrainTimeout)
+	defer cancel()
+	return drainPoolsContext(ctx, pools)
+}
+
+func drainPoolsContext(ctx context.Context, pools []*sql.DB) []*sql.DB {
 	var undrained []*sql.DB
 	for _, p := range pools {
-		if !drainPoolUntil(p, deadline) {
+		if !drainPoolContext(ctx, p) {
 			undrained = append(undrained, p)
 		}
 	}
 	return undrained
 }
 
-// drainPoolUntil waits for every connection in the already-closed pool to be
-// released, reporting false if any survive past the deadline.
-func drainPoolUntil(p *sql.DB, deadline time.Time) bool {
+func drainPoolContext(ctx context.Context, p *sql.DB) bool {
 	for p.Stats().OpenConnections > 0 {
-		if time.Now().After(deadline) {
+		select {
+		case <-ctx.Done():
 			return false
+		case <-time.After(2 * time.Millisecond):
 		}
-		time.Sleep(2 * time.Millisecond)
 	}
 	return true
 }

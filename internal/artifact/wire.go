@@ -124,7 +124,7 @@ type manifest struct {
 	SessionName     *string              `json:"session_name,omitempty"`
 	Segments        []string             `json:"segments"`
 	UsageEvents     []artifactUsageEvent `json:"usage_events,omitempty"`
-	RawSource       *rawSourceRef        `json:"raw_source,omitempty"`
+	RawSource       *RawSourceRef        `json:"raw_source,omitempty"`
 	DataVersion     int                  `json:"data_version"`
 	Generation      int                  `json:"generation"`
 	// Signal state persisted on the session row but absent from the wire
@@ -154,7 +154,9 @@ type artifactUsageEvent struct {
 	DedupKey                 string       `json:"dedup_key,omitempty"`
 }
 
-type rawSourceRef struct {
+// RawSourceRef identifies one bounded raw provider artifact without embedding
+// its contents in a portable manifest.
+type RawSourceRef struct {
 	Hash      string `json:"hash"`
 	Size      int64  `json:"size"`
 	MediaType string `json:"media_type,omitempty"`
@@ -245,7 +247,7 @@ const maxRawSourceSize = int64(1 << 30)
 // ValidateRawSource checks a manifest's optional raw_source reference
 // against the stable wire contract. A nil reference is valid (raw capture is
 // optional).
-func ValidateRawSource(raw *rawSourceRef) error {
+func ValidateRawSource(raw *RawSourceRef) error {
 	if raw == nil {
 		return nil
 	}

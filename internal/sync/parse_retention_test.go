@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -258,6 +259,58 @@ func TestCollectAndBatchRetainsParseLeaseThroughWrite(t *testing.T) {
 	<-done
 }
 
+func TestCollectAndBatchDiscardsPendingResultAfterCancellation(t *testing.T) {
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		Machine:                      "local",
+		DiscardPendingWritesOnCancel: true,
+	})
+	t.Cleanup(engine.Close)
+	budget := newParseRetentionBudget(defaultParseRetentionBytes)
+	lease, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
+	require.NoError(t, err)
+
+	results := make(chan syncJob, 2)
+	results <- syncJob{
+		path:           "/sessions/one.jsonl",
+		retentionLease: lease,
+		processResult: processResult{results: []parser.ParseResult{{
+			Session: parser.ParsedSession{ID: "one", Agent: parser.AgentClaude},
+		}}},
+	}
+	results <- syncJob{
+		path: "/sessions/two.jsonl",
+		processResult: processResult{results: []parser.ParseResult{{
+			Session: parser.ParsedSession{ID: "two", Agent: parser.AgentClaude},
+		}}},
+	}
+	close(results)
+	ctx, cancel := context.WithCancel(t.Context())
+	writes := 0
+	engine.writeBatchOverride = func(
+		[]pendingWrite, syncWriteMode, bool,
+	) (int, int, int, int) {
+		writes++
+		return 1, 0, 0, 0
+	}
+
+	observed := 0
+	stats := engine.collectAndBatchWithOptions(
+		ctx, results, 2, 2, nil, syncWriteDefault,
+		collectAndBatchOptions{observeResult: func(syncJob) {
+			observed++
+			if observed == 2 {
+				cancel()
+			}
+		}},
+	)
+
+	assert.True(t, stats.Aborted)
+	assert.Zero(t, writes, "cancellation must not flush parsed scratch rows")
+	next, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
+	require.NoError(t, err, "discarded parse data must release its retention lease")
+	next.Release()
+}
+
 func TestDrainResultsReleasesParseLeases(t *testing.T) {
 	budget := newParseRetentionBudget(defaultParseRetentionBytes)
 	lease, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
@@ -273,6 +326,42 @@ func TestDrainResultsReleasesParseLeases(t *testing.T) {
 	next, err := budget.acquire(ctx, defaultParseRetentionBytes)
 	require.NoError(t, err)
 	next.Release()
+}
+
+func TestCollectAndBatchPromotesClaudeSourceAfterShutdownCancellation(t *testing.T) {
+	database := openTestDB(t)
+	for _, id := range []string{"root", "fork"} {
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: id, Project: "project-a", Machine: "local", Agent: "claude",
+		}))
+		require.NoError(t, database.SetSessionDataVersion(
+			id, db.CurrentDataVersion(),
+		))
+	}
+	engine := NewEngine(database, EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	ctx, cancel := context.WithCancel(t.Context())
+	engine.writeBatchOverride = func(
+		batch []pendingWrite, _ syncWriteMode, _ bool,
+	) (int, int, int, int) {
+		cancel()
+		return len(batch), 0, 0, 0
+	}
+	results := make(chan syncJob, 1)
+	results <- syncJob{
+		agent: parser.AgentClaude,
+		path:  "/sessions/root.jsonl",
+		processResult: processResult{results: []parser.ParseResult{
+			{Session: parser.ParsedSession{ID: "root", Agent: parser.AgentClaude}},
+			{Session: parser.ParsedSession{ID: "fork", Agent: parser.AgentClaude}},
+		}},
+	}
+	close(results)
+
+	engine.collectAndBatch(ctx, results, 1, 2, nil, syncWriteDefault)
+
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion("root"))
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion("fork"))
 }
 
 func TestCollectAndBatchKeepsFanoutUnderOneLeaseUntilOneWrite(t *testing.T) {

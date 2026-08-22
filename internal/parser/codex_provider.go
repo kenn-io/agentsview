@@ -267,8 +267,8 @@ func (p *codexProvider) Parse(
 		EvictCodexSessionIndexForSession(path)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	parentID, parentResolved := p.codexParentResolution(path)
-	sess, msgs, err := p.parseSession(path, machine, false)
+	parentID, parentResolved := p.codexParentResolution(ctx, path)
+	sess, msgs, err := p.parseSessionContext(ctx, path, machine, false)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -768,7 +768,7 @@ func (s codexSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	hash, err := hashJSONLSourceFile(path)
+	hash, err := hashJSONLSourceFileContext(ctx, path)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}

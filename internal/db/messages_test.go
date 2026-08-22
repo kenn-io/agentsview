@@ -363,6 +363,35 @@ func TestWriteSessionBatchCommitsGoodRowsAndSkipsBadRows(t *testing.T) {
 	assert.Nil(t, excluded, "excluded session should not be written")
 }
 
+func TestWriteSessionBatchContextDoesNotWriteAfterCancellation(t *testing.T) {
+	d := testDB(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	result, err := d.WriteSessionBatchContext(ctx, []SessionBatchWrite{{
+		Session: Session{
+			ID:      "cancelled-batch",
+			Project: "proj",
+			Machine: defaultMachine,
+			Agent:   defaultAgent,
+		},
+		Messages: []Message{userMsg("cancelled-batch", 0, "prompt")},
+		UsageEvents: []UsageEvent{{
+			SessionID:   "cancelled-batch",
+			Source:      "message",
+			Model:       "model-a",
+			InputTokens: 10,
+		}},
+		DataVersion: CurrentDataVersion(),
+	}})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, result.WrittenSessions)
+	session, readErr := d.GetSessionFull(t.Context(), "cancelled-batch")
+	require.NoError(t, readErr)
+	assert.Nil(t, session)
+}
+
 func TestMigration_ThinkingTextColumn(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")

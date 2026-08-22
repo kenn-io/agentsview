@@ -44,6 +44,25 @@ func TestExtractProjectFromCwdGuardedCwdSkipsGitWalk(t *testing.T) {
 		"a guarded cwd must fall back to its basename")
 }
 
+func TestExtractProjectFromCwdContextCanDisableFilesystemDiscovery(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repository")
+	cwd := filepath.Join(repo, "recorded-cwd")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(cwd, 0o755))
+
+	origGuard := probeGitRootForCwd
+	t.Cleanup(func() { probeGitRootForCwd = origGuard })
+	probeGitRootForCwd = func(string) bool {
+		assert.Fail(t, "lexical project discovery must not probe the filesystem")
+		return true
+	}
+
+	ctx := WithoutFilesystemProjectDiscovery(t.Context())
+	assert.Equal(t, "recorded_cwd",
+		ExtractProjectFromCwdWithBranchContext(ctx, cwd, ""))
+}
+
 // TestExtractProjectFromCwdProtectedGitdirTargetFallsBack pins that a linked
 // worktree in an unguarded directory whose .git file targets a refused gitdir
 // stops at the worktree itself: following the target would read commondir and

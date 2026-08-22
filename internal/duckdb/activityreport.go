@@ -268,19 +268,31 @@ func (s *Store) GetSessionUsageRows(
 	rawOutputTokensBySession := make(map[string]int)
 	for i, o := range rowsAcc {
 		snapshotRows[i] = activity.UsageRow{
-			SessionID:         o.scan.sessionID,
-			Timestamp:         o.scan.ts,
-			MessageOrdinal:    o.ordinal,
-			OutputTokens:      o.scan.outputTok,
-			WebSearchRequests: o.scan.webSearchRequests,
-			ClaudeMessageID:   o.scan.claudeMessageID,
-			ClaudeRequestID:   o.scan.claudeRequestID,
+			SessionID:           o.scan.sessionID,
+			Timestamp:           o.scan.ts,
+			MessageOrdinal:      o.ordinal,
+			UsageSource:         o.scan.source,
+			InputTokens:         o.scan.inputTok,
+			OutputTokens:        o.scan.outputTok,
+			CacheCreationTokens: o.scan.cacheCr,
+			CacheReadTokens:     o.scan.cacheRd,
+			WebSearchRequests:   o.scan.webSearchRequests,
+			Agent:               o.scan.agent,
+			ClaudeMessageID:     o.scan.claudeMessageID,
+			ClaudeRequestID:     o.scan.claudeRequestID,
+			SourceUUID:          o.scan.sourceUUID,
+			UsageDedupKey:       o.scan.usageDedupKey,
 		}
 		rowContributes[i] = activity.UsageDataContributes(
 			o.scan.cost != nil, o.scan.inputTok, o.scan.outputTok,
 			o.scan.reasoningTok, o.scan.cacheCr, o.scan.cacheRd,
 			o.scan.webSearchRequests)
 		rawOutputTokensBySession[o.scan.sessionID] += o.scan.outputTok
+	}
+	canonicalTokenCoverageBySession, err :=
+		activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
+	if err != nil {
+		return nil, err
 	}
 	snapshotMask, snapshotAttribution, snapshotWebSearchRequests :=
 		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
@@ -347,10 +359,11 @@ func (s *Store) GetSessionUsageRows(
 		})
 	}
 	return &activity.SessionUsageRows{
-		Rows:                          out,
-		RawOutputTokensBySession:      rawOutputTokensBySession,
-		DeduplicatedOutputTokens:      deduplicatedOutputTokens,
-		DiscardedContributingSessions: discardedContributingSessions,
+		Rows:                            out,
+		RawOutputTokensBySession:        rawOutputTokensBySession,
+		DeduplicatedOutputTokens:        deduplicatedOutputTokens,
+		DiscardedContributingSessions:   discardedContributingSessions,
+		CanonicalTokenCoverageBySession: canonicalTokenCoverageBySession,
 	}, nil
 }
 

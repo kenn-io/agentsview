@@ -120,6 +120,18 @@ func TestClaudeProviderSourceMethods(t *testing.T) {
 	assert.Empty(t, ignored)
 }
 
+func TestClaudeFullParseHonorsContextBetweenLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeSourceFile(t, path, claudeProviderFixture("question"))
+	ctx := newCancelOnErrCheckContext(t, 4)
+
+	_, _, err := claudeParseFile(
+		path, "project", "machine", claudeParseOptions{ctx: ctx},
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestClaudeProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 	root := t.TempDir()
 	targetRoot := t.TempDir()

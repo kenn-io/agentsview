@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,13 +11,28 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+const contextCheckInterval = 256
+
+func contextErrEvery(ctx context.Context, index int) error {
+	if index%contextCheckInterval == 0 {
+		return ctx.Err()
+	}
+	return nil
+}
+
 // countingReader wraps an io.Reader and counts bytes read.
 type countingReader struct {
-	r io.Reader
-	n int64
+	ctx context.Context
+	r   io.Reader
+	n   int64
 }
 
 func (cr *countingReader) Read(p []byte) (int, error) {
+	if cr.ctx != nil {
+		if err := cr.ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
 	n, err := cr.r.Read(p)
 	cr.n += int64(n)
 	return n, err
@@ -48,7 +64,14 @@ var lineReaderPool = sync.Pool{
 }
 
 func newLineReader(r io.Reader, maxLen int) *lineReader {
+	return newLineReaderContext(context.Background(), r, maxLen)
+}
+
+func newLineReaderContext(
+	ctx context.Context, r io.Reader, maxLen int,
+) *lineReader {
 	lr := lineReaderPool.Get().(*lineReader)
+	lr.cr.ctx = ctx
 	lr.cr.r = r
 	lr.cr.n = 0
 	lr.r.Reset(lr.cr)
@@ -68,6 +91,7 @@ func releaseLineReader(lr *lineReader) {
 		lr.buf = lr.buf[:0]
 	}
 	lr.r.Reset(nil)
+	lr.cr.ctx = nil
 	lr.cr.r = nil
 	lr.cr.n = 0
 	lr.maxLen = 0

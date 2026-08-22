@@ -212,20 +212,32 @@ func (s *Store) GetSessionUsageRows(
 				},
 			)
 		snapshotRows[i] = activity.UsageRow{
-			SessionID:      o.scan.sessionID,
-			Timestamp:      o.tsText,
-			MessageOrdinal: o.ordinal,
-			OutputTokens:   outputTok,
+			SessionID:           o.scan.sessionID,
+			Timestamp:           o.tsText,
+			MessageOrdinal:      o.ordinal,
+			UsageSource:         o.scan.usageSource,
+			InputTokens:         inputTok,
+			OutputTokens:        outputTok,
+			CacheCreationTokens: cacheCrTok,
+			CacheReadTokens:     cacheRdTok,
 			WebSearchRequests: pgUsageRowWebSearchRequests(
 				o.scan.usageSource, o.scan.tokenJSON),
+			Agent:           o.scan.agent,
 			ClaudeMessageID: o.scan.claudeMessageID,
 			ClaudeRequestID: o.scan.claudeRequestID,
+			SourceUUID:      o.scan.sourceUUID,
+			UsageDedupKey:   o.scan.usageDedupKey,
 		}
 		rowContributes[i] = activity.UsageDataContributes(
 			o.scan.cost.Valid, inputTok, outputTok, reasoningTok,
 			cacheCrTok, cacheRdTok,
 			pgUsageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
 		rawOutputTokensBySession[o.scan.sessionID] += outputTok
+	}
+	canonicalTokenCoverageBySession, err :=
+		activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
+	if err != nil {
+		return nil, err
 	}
 	snapshotMask, snapshotAttribution, snapshotWebSearchRequests :=
 		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
@@ -320,10 +332,11 @@ func (s *Store) GetSessionUsageRows(
 		})
 	}
 	return &activity.SessionUsageRows{
-		Rows:                          out,
-		RawOutputTokensBySession:      rawOutputTokensBySession,
-		DeduplicatedOutputTokens:      deduplicatedOutputTokens,
-		DiscardedContributingSessions: discardedContributingSessions,
+		Rows:                            out,
+		RawOutputTokensBySession:        rawOutputTokensBySession,
+		DeduplicatedOutputTokens:        deduplicatedOutputTokens,
+		DiscardedContributingSessions:   discardedContributingSessions,
+		CanonicalTokenCoverageBySession: canonicalTokenCoverageBySession,
 	}, nil
 }
 

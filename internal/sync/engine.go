@@ -462,6 +462,21 @@ type EngineConfig struct {
 	// local sync watermarks or pollute the skipped_files table
 	// with temp-dir paths.
 	Ephemeral bool
+	// DiscardPendingWritesOnCancel makes scoped callers treat cancellation as
+	// a hard archive-write boundary. Isolated capture databases use it because
+	// retries rebuild scratch state; live archives leave it false so cancellation
+	// can still revoke already-staged deletion proof before returning.
+	DiscardPendingWritesOnCancel bool
+	// DisableSignalRecomputation skips quality and secret signal work. It is
+	// reserved for bounded parsers whose result does not consume those fields.
+	DisableSignalRecomputation bool
+	// DisableFilesystemProjectDiscovery prevents project attribution from
+	// touching working directories recorded in imported transcripts. Bounded
+	// capture uses lexical metadata instead.
+	DisableFilesystemProjectDiscovery bool
+	// StableSourceSnapshots reports that configured source files are immutable
+	// for this engine. Bounded capture sets it after copying quiescent sources.
+	StableSourceSnapshots bool
 	// Emitter, when non-nil, is called once after each sync pass
 	// that wrote data. Safe to leave nil (e.g., in PG serve mode
 	// where the engine is not run).
@@ -543,13 +558,17 @@ type Engine struct {
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
-	ephemeral              bool
-	idPrefix               string
-	pathRewriter           func(string) string
-	storedPathResolver     func(string) (string, bool)
-	emitter                Emitter
-	providerFactories      map[parser.AgentType]parser.ProviderFactory
-	providerMigrationModes map[parser.AgentType]parser.ProviderMigrationMode
+	ephemeral               bool
+	discardWritesOnCancel   bool
+	disableSignalRecompute  bool
+	disableProjectDiscovery bool
+	stableSourceSnapshots   bool
+	idPrefix                string
+	pathRewriter            func(string) string
+	storedPathResolver      func(string) (string, bool)
+	emitter                 Emitter
+	providerFactories       map[parser.AgentType]parser.ProviderFactory
+	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
 	// providerStatHashers caches the optional MultiFileStatHasher
 	// implementations keyed by AgentType. Populated at engine
 	// construction by type-asserting each constructed provider; nil
@@ -879,6 +898,10 @@ func NewEngine(
 		skipHashKeys:            skipHashKeys,
 		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
 		ephemeral:               cfg.Ephemeral,
+		discardWritesOnCancel:   cfg.DiscardPendingWritesOnCancel,
+		disableSignalRecompute:  cfg.DisableSignalRecomputation,
+		disableProjectDiscovery: cfg.DisableFilesystemProjectDiscovery,
+		stableSourceSnapshots:   cfg.StableSourceSnapshots,
 		idPrefix:                cfg.IDPrefix,
 		pathRewriter:            cfg.PathRewriter,
 		storedPathResolver:      cfg.StoredPathResolver,
@@ -913,6 +936,9 @@ func NewEngine(
 			context.Background(), sessionID,
 		)
 	}
+	if cfg.DisableSignalRecomputation {
+		recompute = func(string) {}
+	}
 	e.signalSched = newSignalScheduler(
 		signalRecomputeInterval, signalRecomputeQuiet,
 		// Inline runs happen from markDirty inside writeIncremental,
@@ -930,6 +956,9 @@ func NewEngine(
 			flush()
 		},
 	)
+	if cfg.DisableSignalRecomputation {
+		e.signalSched.stop()
+	}
 	return e
 }
 
@@ -1631,6 +1660,9 @@ func (e *Engine) applyChangedPathSyncLocked(
 func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	if e.refuseWriteInForceParse("SyncPaths") {
 		return nil
+	}
+	if e.disableProjectDiscovery {
+		ctx = parser.WithoutFilesystemProjectDiscovery(ctx)
 	}
 	stats, tombstoned, err := func() (SyncStats, int, error) {
 		e.syncMu.Lock()
@@ -8972,8 +9004,19 @@ func (e *Engine) collectAndBatchWithOptions(
 		if len(pending) == 0 {
 			return
 		}
+		if ctx.Err() != nil && e.discardWritesOnCancel {
+			releaseParseRetentionLeases(pendingLeases)
+			pending = pending[:0]
+			pendingLeases = pendingLeases[:0]
+			pendingCacheWrites = pendingCacheWrites[:0]
+			return
+		}
 		func() {
 			defer releaseParseRetentionLeases(pendingLeases)
+			completionCtx := ctx
+			if !e.discardWritesOnCancel {
+				completionCtx = context.WithoutCancel(ctx)
+			}
 			var outcome writeBatchOutcome
 			if e.writeBatchOverride != nil {
 				writtenSessions, writtenMessages, failedSessions, cwdFiltered :=
@@ -8994,7 +9037,12 @@ func (e *Engine) collectAndBatchWithOptions(
 					}
 				}
 			} else {
-				outcome = e.writeBatchWithOutcome(pending, writeMode, false)
+				outcome = e.writeBatchWithOutcomeContext(
+					completionCtx, pending, writeMode, false,
+				)
+			}
+			if ctx.Err() != nil && e.discardWritesOnCancel {
+				return
 			}
 			// Claude can emit several session rows from one DAG transcript.
 			// Those rows are initially written below the current data version,
@@ -9030,8 +9078,8 @@ func (e *Engine) collectAndBatchWithOptions(
 							e.idPrefix, pending[j].sess.ID,
 						))
 					}
-					if err := e.db.SetSessionDataVersions(
-						ids, db.CurrentDataVersion(),
+					if err := e.db.SetSessionDataVersionsContext(
+						completionCtx, ids, db.CurrentDataVersion(),
 					); err != nil {
 						log.Printf(
 							"complete provider source data versions: %v", err,
@@ -9112,6 +9160,12 @@ func (e *Engine) collectAndBatchWithOptions(
 		}
 		if options.observeResult != nil {
 			options.observeResult(r)
+		}
+		if ctx.Err() != nil && e.discardWritesOnCancel {
+			stats.Aborted = true
+			r.releaseRetention()
+			drainResults(results, total-i-1)
+			goto flush
 		}
 
 		if r.err != nil {
@@ -9481,7 +9535,13 @@ func (e *Engine) collectAndBatchWithOptions(
 
 flush:
 	flushPending()
+	if ctx.Err() != nil && e.discardWritesOnCancel {
+		return stats
+	}
 	flushBaselineSources()
+	if ctx.Err() != nil && e.discardWritesOnCancel {
+		return stats
+	}
 	if len(exactBaselineOwnerships) > 0 ||
 		len(rejectedBaselineOwnerships) > 0 {
 		exactOwnerships := make(
@@ -9508,17 +9568,21 @@ flush:
 			e.poisonSQLiteContainerPass()
 		}
 	}
+	postWriteCtx := ctx
+	if !e.discardWritesOnCancel {
+		postWriteCtx = context.WithoutCancel(ctx)
+	}
 
 	// Link subagent child sessions to their parents via
 	// tool_calls.subagent_session_id references. Run once
 	// after all batches to avoid repeated full-table scans.
 	if deferred, _ := ctx.Value(deferGlobalLinkContextKey{}).(bool); !deferred {
-		if err := e.linkSubagentSessions(ctx); err != nil {
+		if err := e.linkSubagentSessions(postWriteCtx); err != nil {
 			log.Printf("link subagent sessions: %v", err)
 			stats.RecordFailed()
 		}
 	}
-	if err := e.db.RepairQueuedSubagentParents(); err != nil {
+	if err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx); err != nil {
 		log.Printf("repair queued subagent parents: %v", err)
 		stats.RecordFailed()
 	}
@@ -9714,7 +9778,7 @@ func (e *Engine) linkSubagentSessions(ctx context.Context) error {
 	if runtimeMetrics := reconciliationRuntimeMetricsFor(ctx); runtimeMetrics != nil {
 		runtimeMetrics.globalLinkPass()
 	}
-	return e.db.LinkSubagentSessions()
+	return e.db.LinkSubagentSessionsContext(ctx)
 }
 
 // drainResults consumes remaining items from the results
@@ -10137,10 +10201,11 @@ func (e *Engine) processProviderFile(
 	}
 	machine := e.machineForFile(file)
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:          e.agentDirs[file.Agent],
-		Machine:        e.machine,
-		SourceMachines: e.sourceMachines[file.Agent],
-		PathRewriter:   e.pathRewriter,
+		Roots:                 e.agentDirs[file.Agent],
+		Machine:               e.machine,
+		StableSourceSnapshots: e.stableSourceSnapshots,
+		SourceMachines:        e.sourceMachines[file.Agent],
+		PathRewriter:          e.pathRewriter,
 	})
 
 	source, found, err := e.providerSourceForDiscoveredFile(ctx, provider, file)
@@ -14312,6 +14377,9 @@ func (e *Engine) failProjectIdentityBackfill(
 func (e *Engine) recomputeSignalsFromDB(
 	ctx context.Context, sessionID string,
 ) (int, error) {
+	if e.disableSignalRecompute {
+		return 0, nil
+	}
 	sess, err := e.db.GetSessionFull(ctx, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -14598,6 +14666,12 @@ type worktreeProjectResolver func(
 ) (string, bool)
 
 func (e *Engine) loadWorktreeProjectResolver() worktreeProjectResolver {
+	return e.loadWorktreeProjectResolverContext(context.Background())
+}
+
+func (e *Engine) loadWorktreeProjectResolverContext(
+	ctx context.Context,
+) worktreeProjectResolver {
 	cache := map[string][]db.WorktreeProjectMapping{}
 	failed := map[string]bool{}
 	return func(machine, cwd, currentProject string) (string, bool) {
@@ -14611,7 +14685,7 @@ func (e *Engine) loadWorktreeProjectResolver() worktreeProjectResolver {
 			}
 			var err error
 			mappings, err = e.db.ListActiveWorktreeProjectMappings(
-				context.Background(), machine,
+				ctx, machine,
 			)
 			if err != nil {
 				log.Printf(
@@ -14639,6 +14713,9 @@ func (e *Engine) loadWorktreeProjectResolver() worktreeProjectResolver {
 // Skipping leaves the stored project untouched, which is what an unreachable
 // working directory would produce anyway.
 func (e *Engine) skipSourceProjectProbe(pw *pendingWrite) bool {
+	if e.disableProjectDiscovery {
+		return true
+	}
 	sess := &pw.sess
 	cwd := sourceProjectPreservationCwd(*pw)
 	if sess.ID == "" || cwd == "" || pw.sourceIdentityUnverified {
@@ -14842,11 +14919,32 @@ func (e *Engine) writeBatchWithOutcome(
 	writeMode syncWriteMode,
 	forceReplace bool,
 ) writeBatchOutcome {
+	return e.writeBatchWithOutcomeContext(
+		context.Background(), batch, writeMode, forceReplace,
+	)
+}
+
+func (e *Engine) writeBatchWithOutcomeContext(
+	ctx context.Context,
+	batch []pendingWrite,
+	writeMode syncWriteMode,
+	forceReplace bool,
+) writeBatchOutcome {
+	outcome := writeBatchOutcome{
+		written:  make([]bool, len(batch)),
+		resolved: make([]bool, len(batch)),
+	}
+	if ctx.Err() != nil {
+		return outcome
+	}
 	var err error
 	batch, err = e.normalizePendingWriteMachines(
-		context.Background(), batch,
+		ctx, batch,
 	)
 	if err != nil {
+		if ctx.Err() != nil {
+			return outcome
+		}
 		log.Printf("normalize pending write machines: %v", err)
 		outcome := writeBatchOutcome{
 			written:  make([]bool, len(batch)),
@@ -14859,9 +14957,12 @@ func (e *Engine) writeBatchWithOutcome(
 		return outcome
 	}
 	batch, err = e.preserveUnavailableSourceProjects(
-		context.Background(), batch,
+		ctx, batch,
 	)
 	if err != nil {
+		if ctx.Err() != nil {
+			return outcome
+		}
 		log.Printf("preserve unavailable source projects: %v", err)
 		outcome := writeBatchOutcome{
 			written:  make([]bool, len(batch)),
@@ -14873,19 +14974,23 @@ func (e *Engine) writeBatchWithOutcome(
 		outcome.failedSessions = len(batch)
 		return outcome
 	}
-	if writeMode == syncWriteBulk {
-		return e.writeBatchBulkWithOutcome(batch, forceReplace)
+	if ctx.Err() != nil {
+		return outcome
 	}
-
-	outcome := writeBatchOutcome{
-		written:  make([]bool, len(batch)),
-		resolved: make([]bool, len(batch)),
+	if writeMode == syncWriteBulk || e.discardWritesOnCancel {
+		return e.writeBatchBulkWithOutcomeContext(ctx, batch, forceReplace)
 	}
-	resolveWorktreeProject := e.loadWorktreeProjectResolver()
+	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 	for i, pw := range batch {
-		s, msgs, verdict := e.prepareSessionWrite(
-			pw, resolveWorktreeProject,
+		if ctx.Err() != nil {
+			return outcome
+		}
+		s, msgs, verdict, prepErr := e.prepareSessionWriteContext(
+			ctx, pw, resolveWorktreeProject,
 		)
+		if prepErr != nil {
+			return outcome
+		}
 		if verdict != sessionWriteOK {
 			if verdict == sessionWriteCwdFiltered {
 				outcome.cwdFiltered++
@@ -14903,6 +15008,9 @@ func (e *Engine) writeBatchWithOutcome(
 			existing < db.CurrentDataVersion() {
 			stale = true
 		}
+		if ctx.Err() != nil {
+			return outcome
+		}
 
 		// The session row must exist before messages can be inserted (FK
 		// constraint), but a source-missing row stays tombstoned until every
@@ -14912,6 +15020,9 @@ func (e *Engine) writeBatchWithOutcome(
 		revivingSourceMissing, err :=
 			e.upsertSessionPendingContentForWrite(pw, s)
 		if err != nil {
+			if ctx.Err() != nil {
+				return outcome
+			}
 			if isIntentionalSessionSkip(err) {
 				outcome.resolved[i] = true
 				if pw.sess.File.Path != "" {
@@ -14932,15 +15043,30 @@ func (e *Engine) writeBatchWithOutcome(
 			pw, forceReplace, stale, revivingSourceMissing,
 		)
 
-		update, findings := computeSignalsAndSecrets(s, msgs)
+		var update db.SessionSignalUpdate
+		var findings []db.SecretFinding
+		if !e.disableSignalRecompute {
+			update, findings = computeSignalsAndSecrets(s, msgs)
+			if ctx.Err() != nil {
+				return outcome
+			}
+		}
 
 		var werr error
-		if replaceMessages {
+		if replaceMessages && !e.disableSignalRecompute {
 			werr = e.db.ReplaceSessionContent(s.ID, msgs, update, findings)
+		} else if replaceMessages {
+			if msgs == nil {
+				msgs = []db.Message{}
+			}
+			werr = e.db.ReplaceSessionMessages(s.ID, msgs)
 		} else {
 			werr = e.writeMessages(s.ID, msgs)
 		}
 		if werr != nil {
+			if ctx.Err() != nil {
+				return outcome
+			}
 			log.Printf(
 				"write messages for %s: %v",
 				s.ID, werr,
@@ -14949,9 +15075,21 @@ func (e *Engine) writeBatchWithOutcome(
 			outcome.failedSessions++
 			continue
 		}
+		if ctx.Err() != nil {
+			return outcome
+		}
+		usageEvents, usageErr := e.usageEventsForWriteContext(
+			ctx, s.ID, pw.usageEvents,
+		)
+		if usageErr != nil {
+			return outcome
+		}
 		if err := e.db.ReplaceSessionUsageEvents(
-			s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
+			s.ID, usageEvents,
 		); err != nil {
+			if ctx.Err() != nil {
+				return outcome
+			}
 			log.Printf(
 				"write usage events for %s: %v",
 				s.ID, err,
@@ -14959,6 +15097,9 @@ func (e *Engine) writeBatchWithOutcome(
 			e.markStaleFailedMemberWrite(pw)
 			outcome.failedSessions++
 			continue
+		}
+		if ctx.Err() != nil {
+			return outcome
 		}
 
 		// Advance data_version only after the message and usage writes
@@ -14968,6 +15109,9 @@ func (e *Engine) writeBatchWithOutcome(
 		if err := e.db.SetSessionDataVersion(
 			s.ID, dataVersionForWrite(pw),
 		); err != nil {
+			if ctx.Err() != nil {
+				return outcome
+			}
 			log.Printf(
 				"set data_version for %s: %v", s.ID, err,
 			)
@@ -14975,8 +15119,14 @@ func (e *Engine) writeBatchWithOutcome(
 			outcome.failedSessions++
 			continue
 		}
+		if ctx.Err() != nil {
+			return outcome
+		}
 
-		if !replaceMessages {
+		if !replaceMessages && !e.disableSignalRecompute {
+			if ctx.Err() != nil {
+				return outcome
+			}
 			// Same ordering contract as recomputeSignalsFromDB: the
 			// version-advancing signals update only runs after findings
 			// persisted, so a partial failure leaves the session below
@@ -14989,7 +15139,13 @@ func (e *Engine) writeBatchWithOutcome(
 				log.Printf("signals: update %s: %v", s.ID, err)
 			}
 		}
+		if ctx.Err() != nil {
+			return outcome
+		}
 		if err := e.db.ReviveSourceMissingSession(s.ID); err != nil {
+			if ctx.Err() != nil {
+				return outcome
+			}
 			log.Printf("revive source-missing session %s: %v", s.ID, err)
 			outcome.failedSessions++
 			continue
@@ -15019,14 +15175,33 @@ func (e *Engine) prepareSessionWrite(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 ) (db.Session, []db.Message, sessionWriteVerdict) {
-	msgs := toDBMessages(pw, e.blockedResultCategories)
-	s := toDBSession(pw)
-	applySessionMessageDerivedFields(
-		&s,
-		msgs,
-		pw.sess.CountsAuthoritative,
+	s, msgs, verdict, _ := e.prepareSessionWriteContext(
+		context.Background(), pw, resolveWorktreeProject,
 	)
-	e.applyRemoteRewrites(&s, msgs)
+	return s, msgs, verdict
+}
+
+func (e *Engine) prepareSessionWriteContext(
+	ctx context.Context,
+	pw pendingWrite,
+	resolveWorktreeProject worktreeProjectResolver,
+) (db.Session, []db.Message, sessionWriteVerdict, error) {
+	msgs, err := toDBMessagesContext(ctx, pw, e.blockedResultCategories)
+	if err != nil {
+		return db.Session{}, nil, sessionWritePreserved, err
+	}
+	s, err := toDBSessionContext(ctx, pw)
+	if err != nil {
+		return db.Session{}, nil, sessionWritePreserved, err
+	}
+	if err := applySessionMessageDerivedFieldsContext(
+		ctx, &s, msgs, pw.sess.CountsAuthoritative,
+	); err != nil {
+		return db.Session{}, nil, sessionWritePreserved, err
+	}
+	if err := e.applyRemoteRewritesContext(ctx, &s, msgs); err != nil {
+		return db.Session{}, nil, sessionWritePreserved, err
+	}
 	applySourceCwdResolution(
 		&s, pw.sourceCwdResolution, pw.sourceCwdStored, pw.sourceCwdStoredOK,
 	)
@@ -15043,34 +15218,44 @@ func (e *Engine) prepareSessionWrite(
 	// preserve/merge handling so a filtered session is not written by
 	// any downstream path.
 	if !e.cwdFilter.allows(s.Cwd) {
-		return db.Session{}, nil, sessionWriteCwdFiltered
+		return db.Session{}, nil, sessionWriteCwdFiltered, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return db.Session{}, nil, sessionWritePreserved, err
 	}
 
 	if e.shouldPreserveOpenCodeFormatArchive(
 		pw.sess.Agent, pw.sess.File.Path, s.ID,
 		pw.sess.File.Mtime, derefString(s.FileHash), msgs,
 	) {
-		return db.Session{}, nil, sessionWritePreserved
+		return db.Session{}, nil, sessionWritePreserved, nil
 	}
 	if e.shouldPreserveRooCodeArchive(pw.sess.Agent, s.ID, msgs) {
-		return db.Session{}, nil, sessionWritePreserved
+		return db.Session{}, nil, sessionWritePreserved, nil
 	}
 	if mergedMsgs, preserve, archived := e.reconcileVisualStudioCopilotArchive(
 		pw.sess.Agent, s.ID, pw.sess.File.Size, msgs,
 	); preserve {
-		return db.Session{}, nil, sessionWritePreserved
+		return db.Session{}, nil, sessionWritePreserved, nil
 	} else if mergedMsgs != nil {
 		parsedMsgs := msgs
 		msgs = mergedMsgs
 		applyVisualStudioCopilotArchiveSessionFields(
 			&s, archived, parsedMsgs, msgs,
 		)
-		applySessionMessageDerivedFields(
-			&s,
-			msgs,
-			pw.sess.CountsAuthoritative,
-		)
-		applySessionTokenTotalsFromMessages(&s, msgs)
+		if err := applySessionMessageDerivedFieldsContext(
+			ctx, &s, msgs, pw.sess.CountsAuthoritative,
+		); err != nil {
+			return db.Session{}, nil, sessionWritePreserved, err
+		}
+		if err := applySessionTokenTotalsFromMessagesContext(
+			ctx, &s, msgs,
+		); err != nil {
+			return db.Session{}, nil, sessionWritePreserved, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return db.Session{}, nil, sessionWritePreserved, err
 	}
 	// Snapshot, before sanitizing, whether the session's token aggregates
 	// are derived from the per-message rows or the per-usage-event rows, by
@@ -15079,10 +15264,16 @@ func (e *Engine) prepareSessionWrite(
 	// Warp/Vibe/Hermes/Zed -- must survive the per-row clamp untouched.
 	// Source=="session" usage events mirror those same summary totals, so
 	// exclude them from the event-derived detector and re-clamp path.
-	msgTotal, msgHasOut, msgPeak, msgHasCtx := messageTokenTotals(msgs)
-	evtTotal, evtHasOut, evtPeak, evtHasCtx := usageEventTokenTotals(
-		pw.usageEvents, false,
-	)
+	msgTotal, msgHasOut, msgPeak, msgHasCtx, err :=
+		messageTokenTotalsContext(ctx, msgs)
+	if err != nil {
+		return db.Session{}, nil, sessionWritePreserved, err
+	}
+	evtTotal, evtHasOut, evtPeak, evtHasCtx, err :=
+		usageEventTokenTotalsContext(ctx, pw.usageEvents, false)
+	if err != nil {
+		return db.Session{}, nil, sessionWritePreserved, err
+	}
 	totalFromMsgs := s.HasTotalOutputTokens == msgHasOut &&
 		s.TotalOutputTokens == msgTotal
 	totalFromEvts := s.HasTotalOutputTokens == evtHasOut &&
@@ -15096,7 +15287,10 @@ func (e *Engine) prepareSessionWrite(
 	// through here so all agents are covered uniformly. The returned fix
 	// counts and the parser malformed-line count are accumulated per
 	// agent for the sync summary's anomaly section.
-	vs := validateAndSanitize(&s, msgs, nil)
+	vs, err := validateAndSanitizeContext(ctx, &s, msgs, nil)
+	if err != nil {
+		return db.Session{}, nil, sessionWritePreserved, err
+	}
 	e.anomalies.recordSanitize(vs)
 	e.anomalies.recordMalformedLines(
 		s.Agent, pw.sess.File.Path, s.ParserMalformedLines,
@@ -15128,46 +15322,76 @@ func (e *Engine) prepareSessionWrite(
 	// was clamped, keeping the pass idempotent. Messages take precedence when
 	// both sources match (identical values).
 	if totalFromMsgs {
-		t, h, _, _ := messageTokenTotals(msgs)
+		t, h, _, _, err := messageTokenTotalsContext(ctx, msgs)
+		if err != nil {
+			return db.Session{}, nil, sessionWritePreserved, err
+		}
 		s.TotalOutputTokens, s.HasTotalOutputTokens = t, h
 	} else if totalFromEvts {
-		t, h, _, _ := usageEventTokenTotals(pw.usageEvents, true)
+		t, h, _, _, err := usageEventTokenTotalsContext(
+			ctx, pw.usageEvents, true,
+		)
+		if err != nil {
+			return db.Session{}, nil, sessionWritePreserved, err
+		}
 		s.TotalOutputTokens, s.HasTotalOutputTokens = t, h
 	}
 	if peakFromMsgs {
-		_, _, p, h := messageTokenTotals(msgs)
+		_, _, p, h, err := messageTokenTotalsContext(ctx, msgs)
+		if err != nil {
+			return db.Session{}, nil, sessionWritePreserved, err
+		}
 		s.PeakContextTokens, s.HasPeakContextTokens = p, h
 	} else if peakFromEvts {
-		_, _, p, h := usageEventTokenTotals(pw.usageEvents, true)
+		_, _, p, h, err := usageEventTokenTotalsContext(
+			ctx, pw.usageEvents, true,
+		)
+		if err != nil {
+			return db.Session{}, nil, sessionWritePreserved, err
+		}
 		s.PeakContextTokens, s.HasPeakContextTokens = p, h
 	}
-	return s, msgs, sessionWriteOK
+	return s, msgs, sessionWriteOK, ctx.Err()
 }
 
-func applySessionMessageDerivedFields(
+func applySessionMessageDerivedFieldsContext(
+	ctx context.Context,
 	s *db.Session,
 	msgs []db.Message,
 	countsAuthoritative bool,
-) {
+) error {
 	if !countsAuthoritative {
-		s.MessageCount, s.UserMessageCount = postFilterCounts(msgs)
+		var err error
+		s.MessageCount, s.UserMessageCount, err = postFilterCountsContext(
+			ctx, msgs,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	s.IsAutomated = db.IsAutomatedSessionMetadata(s.Agent, s.SessionKind) ||
 		db.IsAutomatedTranscript(
 			s.UserMessageCount, msgs, s.FirstMessage,
 		)
+	return ctx.Err()
 }
 
-// messageTokenTotals computes the message-derived session token
+// messageTokenTotalsContext computes the message-derived session token
 // aggregates: the sum of per-message output tokens and the peak
 // per-message context tokens, each with a presence flag. It is the
-// canonical derivation shared by applySessionTokenTotalsFromMessages and
-// the post-sanitize reconciliation that re-derives message-derived totals
-// from the clamped rows. Absent values return 0 with a false presence.
-func messageTokenTotals(
-	msgs []db.Message,
-) (totalOut int, hasOut bool, peakCtx int, hasCtx bool) {
+// canonical derivation shared by session preparation and the post-sanitize
+// reconciliation that re-derives message-derived totals from the clamped rows.
+// Absent values return 0 with a false presence.
+func messageTokenTotalsContext(
+	ctx context.Context, msgs []db.Message,
+) (totalOut int, hasOut bool, peakCtx int, hasCtx bool, err error) {
 	for _, msg := range msgs {
+		if err = ctx.Err(); err != nil {
+			return
+		}
 		if msg.HasOutputTokens {
 			hasOut = true
 			totalOut += msg.OutputTokens
@@ -15179,15 +15403,24 @@ func messageTokenTotals(
 			}
 		}
 	}
-	return totalOut, hasOut, peakCtx, hasCtx
+	err = ctx.Err()
+	return
 }
 
-func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
-	totalOut, hasOut, peakCtx, hasCtx := messageTokenTotals(msgs)
+func applySessionTokenTotalsFromMessagesContext(
+	ctx context.Context, s *db.Session, msgs []db.Message,
+) error {
+	totalOut, hasOut, peakCtx, hasCtx, err := messageTokenTotalsContext(
+		ctx, msgs,
+	)
+	if err != nil {
+		return err
+	}
 	s.TotalOutputTokens = totalOut
 	s.HasTotalOutputTokens = hasOut
 	s.PeakContextTokens = peakCtx
 	s.HasPeakContextTokens = hasCtx
+	return nil
 }
 
 // usageEventTokenTotals computes event-derived session token aggregates through
@@ -15198,11 +15431,14 @@ func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
 // excluded from this detector and re-clamp path. When clamp is true each
 // included event token field is first bounded to the per-row plausibility cap,
 // matching how sanitizeUsageEvent bounds the stored usage_event row.
-func usageEventTokenTotals(
-	events []parser.ParsedUsageEvent, clamp bool,
-) (totalOut int, hasOut bool, peakCtx int, hasCtx bool) {
+func usageEventTokenTotalsContext(
+	ctx context.Context, events []parser.ParsedUsageEvent, clamp bool,
+) (totalOut int, hasOut bool, peakCtx int, hasCtx bool, err error) {
 	rolled := make([]parser.ParsedUsageEvent, 0, len(events))
 	for _, ev := range events {
+		if err = ctx.Err(); err != nil {
+			return
+		}
 		if ev.Source == "session" {
 			continue
 		}
@@ -15210,6 +15446,9 @@ func usageEventTokenTotals(
 	}
 	if clamp {
 		for i, ev := range rolled {
+			if err = ctx.Err(); err != nil {
+				return
+			}
 			ev.InputTokens = clampedTokens(ev.InputTokens)
 			ev.OutputTokens = clampedTokens(ev.OutputTokens)
 			ev.CacheCreationInputTokens = clampedTokens(
@@ -15219,7 +15458,9 @@ func usageEventTokenTotals(
 			rolled[i] = ev
 		}
 	}
-	return parser.UsageEventTokenAggregate(rolled)
+	totalOut, hasOut, peakCtx, hasCtx, err =
+		parser.UsageEventTokenAggregateContext(ctx, rolled)
+	return
 }
 
 func applyVisualStudioCopilotArchiveSessionFields(
@@ -15838,6 +16079,14 @@ type localGitIdentity struct {
 func (e *Engine) writeBatchBulkWithOutcome(
 	batch []pendingWrite, forceReplace bool,
 ) writeBatchOutcome {
+	return e.writeBatchBulkWithOutcomeContext(
+		context.Background(), batch, forceReplace,
+	)
+}
+
+func (e *Engine) writeBatchBulkWithOutcomeContext(
+	ctx context.Context, batch []pendingWrite, forceReplace bool,
+) writeBatchOutcome {
 	outcome := writeBatchOutcome{
 		written:  make([]bool, len(batch)),
 		resolved: make([]bool, len(batch)),
@@ -15847,13 +16096,19 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	sources := make(map[string]batchSourceFile, len(batch))
 	pendingByID := make(map[string]pendingWrite, len(batch))
 	pendingIndexByID := make(map[string]int, len(batch))
-	resolveWorktreeProject := e.loadWorktreeProjectResolver()
+	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 
 	for pendingIndex, pw := range batch {
+		if ctx.Err() != nil {
+			return outcome
+		}
 		tPrep := time.Now()
-		s, msgs, verdict := e.prepareSessionWrite(
-			pw, resolveWorktreeProject,
+		s, msgs, verdict, prepErr := e.prepareSessionWriteContext(
+			ctx, pw, resolveWorktreeProject,
 		)
+		if prepErr != nil {
+			return outcome
+		}
 		e.phaseStats.PrepNanos.Add(int64(time.Since(tPrep)))
 		if verdict != sessionWriteOK {
 			if verdict == sessionWriteCwdFiltered {
@@ -15864,20 +16119,34 @@ func (e *Engine) writeBatchBulkWithOutcome(
 		replaceMessages := shouldReplaceFullParseMessages(
 			pw, forceReplace, false, false,
 		)
-		tScan := time.Now()
-		update, findings := computeSignalsAndSecrets(s, msgs)
-		e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
+		var update db.SessionSignalUpdate
+		var findings []db.SecretFinding
+		if !e.disableSignalRecompute {
+			tScan := time.Now()
+			update, findings = computeSignalsAndSecrets(s, msgs)
+			if ctx.Err() != nil {
+				return outcome
+			}
+			e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
+		}
 		snapshotProject := pw.sess.Project
+		usageEvents, usageErr := e.usageEventsForWriteContext(
+			ctx, s.ID, pw.usageEvents,
+		)
+		if usageErr != nil {
+			return outcome
+		}
 		writes = append(writes, db.SessionBatchWrite{
 			Session:     s,
 			Messages:    msgs,
-			UsageEvents: e.usageEventsForWrite(s.ID, pw.usageEvents),
+			UsageEvents: usageEvents,
 			IdentityObservation: identityObservationOrZero(
 				e.projectIdentityObservationForWrite(pw, s),
 			),
 			IdentitySnapshotProject: &snapshotProject,
 			Signals:                 update,
 			Findings:                findings,
+			SkipSignalUpdates:       e.disableSignalRecompute,
 			DataVersion:             dataVersionForWrite(pw),
 			ReplaceMessages:         replaceMessages,
 		})
@@ -15895,9 +16164,12 @@ func (e *Engine) writeBatchBulkWithOutcome(
 	if len(writes) == 0 {
 		return outcome
 	}
+	if ctx.Err() != nil {
+		return outcome
+	}
 
 	tWrite := time.Now()
-	result, err := e.db.WriteSessionBatch(writes)
+	result, err := e.db.WriteSessionBatchContext(ctx, writes)
 	e.phaseStats.WriteNanos.Add(int64(time.Since(tWrite)))
 	e.phaseStats.Batches.Add(1)
 	e.phaseStats.WriteBatchSize.Add(int64(len(writes)))
@@ -16019,7 +16291,7 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 	// automountd/opendirectoryd CPU storm.
 	// mayProbeLocalPath also guards export.NormalizeRootPath below, which
 	// resolves symlinks and would reach into a protected location on its own.
-	if e.idPrefix == "" && e.pathRewriter == nil &&
+	if !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
 		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(rootPath) {
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
@@ -16703,13 +16975,22 @@ func (e *Engine) writeSessionFullWithResolver(
 		log.Printf("upsert session %s: %v", s.ID, err)
 		return err
 	}
-	update, findings := computeSignalsAndSecrets(s, msgs)
-	if err := e.db.ReplaceSessionContent(s.ID, msgs, update, findings); err != nil {
+	var replaceErr error
+	if e.disableSignalRecompute {
+		if msgs == nil {
+			msgs = []db.Message{}
+		}
+		replaceErr = e.db.ReplaceSessionMessages(s.ID, msgs)
+	} else {
+		update, findings := computeSignalsAndSecrets(s, msgs)
+		replaceErr = e.db.ReplaceSessionContent(s.ID, msgs, update, findings)
+	}
+	if replaceErr != nil {
 		log.Printf(
 			"replace messages for %s: %v",
-			s.ID, err,
+			s.ID, replaceErr,
 		)
-		return err
+		return replaceErr
 	}
 	if err := e.db.ReplaceSessionUsageEvents(
 		s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
@@ -17031,8 +17312,17 @@ func (e *Engine) applyIDPrefixToSessionIDs(ids []string) []string {
 func (e *Engine) applyRemoteRewrites(
 	s *db.Session, msgs []db.Message,
 ) {
+	_ = e.applyRemoteRewritesContext(context.Background(), s, msgs)
+}
+
+func (e *Engine) applyRemoteRewritesContext(
+	ctx context.Context, s *db.Session, msgs []db.Message,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if e.idPrefix == "" {
-		return
+		return nil
 	}
 	s.ID = applyIDPrefixToID(e.idPrefix, s.ID)
 	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
@@ -17044,8 +17334,14 @@ func (e *Engine) applyRemoteRewrites(
 		s.FilePath = &fp
 	}
 	for i := range msgs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		msgs[i].SessionID = s.ID
 		for j := range msgs[i].ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			msgs[i].ToolCalls[j].SessionID = s.ID
 			if msgs[i].ToolCalls[j].SubagentSessionID != "" {
 				msgs[i].ToolCalls[j].SubagentSessionID =
@@ -17066,11 +17362,22 @@ func (e *Engine) applyRemoteRewrites(
 			}
 		}
 	}
+	return ctx.Err()
 }
 
 // toDBSession converts a pendingWrite to a db.Session.
 func toDBSession(pw pendingWrite) db.Session {
-	hasTotal, hasPeak := pw.sess.TokenCoverage(pw.msgs)
+	s, _ := toDBSessionContext(context.Background(), pw)
+	return s
+}
+
+func toDBSessionContext(
+	ctx context.Context, pw pendingWrite,
+) (db.Session, error) {
+	hasTotal, hasPeak, err := pw.sess.TokenCoverageContext(ctx, pw.msgs)
+	if err != nil {
+		return db.Session{}, err
+	}
 	s := db.Session{
 		ID:                   pw.sess.ID,
 		Project:              pw.sess.Project,
@@ -17119,15 +17426,33 @@ func toDBSession(pw pendingWrite) db.Session {
 	if !pw.sess.EndedAt.IsZero() {
 		s.EndedAt = timeutil.Ptr(pw.sess.EndedAt)
 	}
-	return s
+	return s, ctx.Err()
 }
 
 // toDBMessages converts parsed messages to db.Message rows
 // with tool-result pairing and filtering applied.
 func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
+	msgs, _ := toDBMessagesContext(context.Background(), pw, blocked)
+	return msgs
+}
+
+func toDBMessagesContext(
+	ctx context.Context, pw pendingWrite, blocked map[string]bool,
+) ([]db.Message, error) {
 	msgs := make([]db.Message, len(pw.msgs))
 	for i, m := range pw.msgs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		hasCtx, hasOut := m.TokenPresence()
+		toolCalls, err := convertToolCallsContext(ctx, pw.sess.ID, m.ToolCalls)
+		if err != nil {
+			return nil, err
+		}
+		toolResults, err := convertToolResultsContext(ctx, m.ToolResults)
+		if err != nil {
+			return nil, err
+		}
 		msgs[i] = db.Message{
 			SessionID:         pw.sess.ID,
 			Ordinal:           m.Ordinal,
@@ -17154,13 +17479,11 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 			SourceParentUUID:  m.SourceParentUUID,
 			IsSidechain:       m.IsSidechain,
 			IsCompactBoundary: m.IsCompactBoundary,
-			ToolCalls: convertToolCalls(
-				pw.sess.ID, m.ToolCalls,
-			),
-			ToolResults: convertToolResults(m.ToolResults),
+			ToolCalls:         toolCalls,
+			ToolResults:       toolResults,
 		}
 	}
-	return pairAndFilter(msgs, blocked)
+	return pairAndFilterContext(ctx, msgs, blocked)
 }
 
 // toDBUsageEvents converts parser usage events for one session.
@@ -17171,8 +17494,20 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 func toDBUsageEvents(
 	sessionID string, events []parser.ParsedUsageEvent,
 ) ([]db.UsageEvent, validationStats) {
+	out, stats, _ := toDBUsageEventsContext(
+		context.Background(), sessionID, events,
+	)
+	return out, stats
+}
+
+func toDBUsageEventsContext(
+	ctx context.Context, sessionID string, events []parser.ParsedUsageEvent,
+) ([]db.UsageEvent, validationStats, error) {
 	out := make([]db.UsageEvent, 0, len(events))
 	for _, ev := range events {
+		if err := ctx.Err(); err != nil {
+			return nil, validationStats{}, err
+		}
 		out = append(out, db.UsageEvent{
 			SessionID:                sessionID,
 			MessageOrdinal:           ev.MessageOrdinal,
@@ -17193,7 +17528,8 @@ func toDBUsageEvents(
 	// Route usage events through the central validation/sanitization
 	// pass so they get the same treatment as messages and sessions at
 	// every call site.
-	return out, validateAndSanitize(nil, nil, out)
+	stats, err := validateAndSanitizeContext(ctx, nil, nil, out)
+	return out, stats, err
 }
 
 // usageEventsForWrite converts usage events for a session about to be
@@ -17202,9 +17538,21 @@ func toDBUsageEvents(
 func (e *Engine) usageEventsForWrite(
 	sessionID string, events []parser.ParsedUsageEvent,
 ) []db.UsageEvent {
-	out, vs := toDBUsageEvents(sessionID, events)
-	e.anomalies.recordSanitize(vs)
+	out, _ := e.usageEventsForWriteContext(
+		context.Background(), sessionID, events,
+	)
 	return out
+}
+
+func (e *Engine) usageEventsForWriteContext(
+	ctx context.Context, sessionID string, events []parser.ParsedUsageEvent,
+) ([]db.UsageEvent, error) {
+	out, vs, err := toDBUsageEventsContext(ctx, sessionID, events)
+	if err != nil {
+		return nil, err
+	}
+	e.anomalies.recordSanitize(vs)
+	return out, nil
 }
 
 // postFilterCounts returns the total and user message counts
@@ -17212,12 +17560,22 @@ func (e *Engine) usageEventsForWrite(
 // (e.g. Zencoder compaction, continuation notices) are excluded
 // from the user count.
 func postFilterCounts(msgs []db.Message) (total, user int) {
+	total, user, _ = postFilterCountsContext(context.Background(), msgs)
+	return
+}
+
+func postFilterCountsContext(
+	ctx context.Context, msgs []db.Message,
+) (total, user int, err error) {
 	for _, m := range msgs {
+		if err = ctx.Err(); err != nil {
+			return
+		}
 		if m.Role == "user" && !m.IsSystem {
 			user++
 		}
 	}
-	return len(msgs), user
+	return len(msgs), user, ctx.Err()
 }
 
 // chunkHasRealUserPrompt reports whether msgs contains a message the
@@ -18507,14 +18865,30 @@ func int64Ptr(n int64) *int64 {
 func convertToolCalls(
 	sessionID string, parsed []parser.ParsedToolCall,
 ) []db.ToolCall {
+	calls, _ := convertToolCallsContext(
+		context.Background(), sessionID, parsed,
+	)
+	return calls
+}
+
+func convertToolCallsContext(
+	ctx context.Context, sessionID string, parsed []parser.ParsedToolCall,
+) ([]db.ToolCall, error) {
 	if len(parsed) == 0 {
-		return nil
+		return nil, ctx.Err()
 	}
 	calls := make([]db.ToolCall, len(parsed))
 	for i, tc := range parsed {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		filePath := tc.FilePath
 		if filePath == "" {
 			filePath = parser.ResolveFilePathFromJSON(tc.InputJSON)
+		}
+		resultEvents, err := convertToolResultEventsContext(ctx, tc.ResultEvents)
+		if err != nil {
+			return nil, err
 		}
 		calls[i] = db.ToolCall{
 			SessionID:         sessionID,
@@ -18526,20 +18900,23 @@ func convertToolCalls(
 			CallIndex:         i,
 			SkillName:         tc.SkillName,
 			SubagentSessionID: tc.SubagentSessionID,
-			ResultEvents:      convertToolResultEvents(tc.ResultEvents),
+			ResultEvents:      resultEvents,
 		}
 	}
-	return calls
+	return calls, ctx.Err()
 }
 
-func convertToolResultEvents(
-	parsed []parser.ParsedToolResultEvent,
-) []db.ToolResultEvent {
+func convertToolResultEventsContext(
+	ctx context.Context, parsed []parser.ParsedToolResultEvent,
+) ([]db.ToolResultEvent, error) {
 	if len(parsed) == 0 {
-		return nil
+		return nil, ctx.Err()
 	}
 	events := make([]db.ToolResultEvent, len(parsed))
 	for i, ev := range parsed {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		events[i] = db.ToolResultEvent{
 			ToolUseID:         ev.ToolUseID,
 			AgentID:           ev.AgentID,
@@ -18552,36 +18929,57 @@ func convertToolResultEvents(
 			EventIndex:        i,
 		}
 	}
-	return events
+	return events, ctx.Err()
 }
 
 // convertToolResults maps parsed tool results to db.ToolResult
 // structs for use in pairing before DB insert.
-func convertToolResults(
-	parsed []parser.ParsedToolResult,
-) []db.ToolResult {
+func convertToolResultsContext(
+	ctx context.Context, parsed []parser.ParsedToolResult,
+) ([]db.ToolResult, error) {
 	if len(parsed) == 0 {
-		return nil
+		return nil, ctx.Err()
 	}
 	results := make([]db.ToolResult, len(parsed))
 	for i, tr := range parsed {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		results[i] = db.ToolResult{
 			ToolUseID:     tr.ToolUseID,
 			ContentLength: tr.ContentLength,
 			ContentRaw:    tr.ContentRaw,
 		}
 	}
-	return results
+	return results, ctx.Err()
 }
 
 // pairAndFilter pairs tool results with their corresponding
 // tool calls, then removes user messages that carried only
 // tool_result blocks (no displayable text).
 func pairAndFilter(msgs []db.Message, blocked map[string]bool) []db.Message {
-	pairToolResults(msgs, blocked)
-	pairToolResultEventSummaries(msgs, blocked)
+	filtered, _ := pairAndFilterContext(
+		context.Background(), msgs, blocked,
+	)
+	return filtered
+}
+
+func pairAndFilterContext(
+	ctx context.Context, msgs []db.Message, blocked map[string]bool,
+) ([]db.Message, error) {
+	if err := pairToolResultsContext(ctx, msgs, blocked); err != nil {
+		return nil, err
+	}
+	if err := pairToolResultEventSummariesContext(
+		ctx, msgs, blocked,
+	); err != nil {
+		return nil, err
+	}
 	filtered := msgs[:0]
 	for _, m := range msgs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if m.Role == "user" &&
 			len(m.ToolResults) > 0 &&
 			strings.TrimSpace(m.Content) == "" {
@@ -18589,16 +18987,28 @@ func pairAndFilter(msgs []db.Message, blocked map[string]bool) []db.Message {
 		}
 		filtered = append(filtered, m)
 	}
-	return filtered
+	return filtered, ctx.Err()
 }
 
 // pairToolResults matches tool_result content to their
 // corresponding tool_calls across message boundaries using
 // tool_use_id. Categories in blocked are stored without content.
 func pairToolResults(msgs []db.Message, blocked map[string]bool) {
+	_ = pairToolResultsContext(context.Background(), msgs, blocked)
+}
+
+func pairToolResultsContext(
+	ctx context.Context, msgs []db.Message, blocked map[string]bool,
+) error {
 	idx := make(map[string]*db.ToolCall)
 	for i := range msgs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		for j := range msgs[i].ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			tc := &msgs[i].ToolCalls[j]
 			if tc.ToolUseID != "" {
 				idx[tc.ToolUseID] = tc
@@ -18606,10 +19016,16 @@ func pairToolResults(msgs []db.Message, blocked map[string]bool) {
 		}
 	}
 	if len(idx) == 0 {
-		return
+		return ctx.Err()
 	}
 	for _, m := range msgs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		for _, tr := range m.ToolResults {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if tc, ok := idx[tr.ToolUseID]; ok {
 				tc.ResultContentLength = tr.ContentLength
 				if !blocked[tc.Category] {
@@ -18618,18 +19034,38 @@ func pairToolResults(msgs []db.Message, blocked map[string]bool) {
 			}
 		}
 	}
+	return ctx.Err()
 }
 
 func pairToolResultEventSummaries(
 	msgs []db.Message, blocked map[string]bool,
 ) {
+	_ = pairToolResultEventSummariesContext(
+		context.Background(), msgs, blocked,
+	)
+}
+
+func pairToolResultEventSummariesContext(
+	ctx context.Context, msgs []db.Message, blocked map[string]bool,
+) error {
 	for i := range msgs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		for j := range msgs[i].ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			tc := &msgs[i].ToolCalls[j]
 			if len(tc.ResultEvents) == 0 {
 				continue
 			}
-			summary := summarizeToolResultEvents(tc.ResultEvents)
+			summary, err := summarizeToolResultEventsContext(
+				ctx, tc.ResultEvents,
+			)
+			if err != nil {
+				return err
+			}
 			tc.ResultContentLength = len(summary)
 			if blocked[tc.Category] {
 				tc.ResultContent = ""
@@ -18641,13 +19077,14 @@ func pairToolResultEventSummaries(
 			tc.ResultContent = summary
 		}
 	}
+	return ctx.Err()
 }
 
-func summarizeToolResultEvents(
-	events []db.ToolResultEvent,
-) string {
+func summarizeToolResultEventsContext(
+	ctx context.Context, events []db.ToolResultEvent,
+) (string, error) {
 	if len(events) == 0 {
-		return ""
+		return "", ctx.Err()
 	}
 	type agentSummary struct {
 		order   int
@@ -18658,6 +19095,9 @@ func summarizeToolResultEvents(
 	lastAnon := ""
 	allHaveAgentID := true
 	for _, ev := range events {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if strings.TrimSpace(ev.Content) == "" {
 			continue
 		}
@@ -18683,20 +19123,23 @@ func summarizeToolResultEvents(
 		if len(latestByAgent) == 1 {
 			summary := latestByAgent[orderedAgents[0]].content
 			if lastAnon != "" {
-				return summary + "\n\n" + lastAnon
+				return summary + "\n\n" + lastAnon, ctx.Err()
 			}
-			return summary
+			return summary, ctx.Err()
 		}
-		return lastAnon
+		return lastAnon, ctx.Err()
 	}
 	parts := make([]string, 0, len(orderedAgents))
 	for _, agentID := range orderedAgents {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
 	}
 	if !allHaveAgentID && lastAnon != "" {
 		parts = append(parts, lastAnon)
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), ctx.Err()
 }
 
 // emit fires a refresh event if an emitter is wired. Safe to call
