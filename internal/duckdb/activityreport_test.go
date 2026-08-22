@@ -332,6 +332,8 @@ func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {
 		duckDayQuery(t, "2026-06-14", "UTC"))
 	require.NoError(t, err)
 	assert.Equal(t, 1, r.Totals.Sessions)
+	require.Len(t, r.Buckets, 288)
+	assert.Equal(t, 1000, r.Buckets[126].InputTokens)
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	// Cost = (1000*3 + 500*15) / 1e6 = 0.0105
 	assert.Equal(t, money.MustParseDollars("0.0105"), r.Totals.Cost)

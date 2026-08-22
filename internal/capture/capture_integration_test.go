@@ -1928,8 +1928,10 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 		err     error
 	}
 	done := make(chan runResponse, 1)
+	persisted := make(chan struct{})
+	release := make(chan struct{}, 1)
 	go func() {
-		outcome, runErr := Run(context.Background(), RunOptions{
+		outcome, runErr := runWithHooks(context.Background(), RunOptions{
 			Provider: ProviderClaude, OccurrenceID: "subagent-removed",
 			CaptureDir: captureDir, ResultPath: resultPath,
 			ProviderRoot: root, WorkDir: workDir,
@@ -1937,24 +1939,35 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 			Environment: helperEnvironment(root, "claude-subagent", 0),
 			Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 			Limits:      testLimits(), CustomPricing: testPricing(),
+		}, &captureHooks{
+			afterPersistedSources: func() {
+				close(persisted)
+				<-release
+			},
 		})
 		done <- runResponse{outcome: outcome, err: runErr}
 	}()
+	t.Cleanup(func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	})
 
-	var sessionID string
-	require.Eventually(t, func() bool {
-		data, readErr := os.ReadFile(filepath.Join(captureDir, manifestFileName))
-		if readErr != nil {
-			return false
-		}
-		var captured manifest
-		if json.Unmarshal(data, &captured) != nil || captured.SourcesComplete ||
-			len(captured.Sources) == 0 {
-			return false
-		}
-		sessionID = captured.ProviderSessionID
-		return sessionID != ""
-	}, 20*time.Second, time.Millisecond)
+	select {
+	case <-persisted:
+	case response := <-done:
+		require.NoError(t, response.err)
+		require.Fail(t, "capture completed before persisting its source set")
+	case <-time.After(20 * time.Second):
+		require.Fail(t, "capture did not persist its source set")
+	}
+	data, err := os.ReadFile(filepath.Join(captureDir, manifestFileName))
+	require.NoError(t, err)
+	var captured manifest
+	require.NoError(t, json.Unmarshal(data, &captured))
+	sessionID := captured.ProviderSessionID
+	require.NotEmpty(t, sessionID)
 
 	rootPath := filepath.Join(root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
 	rootData := []byte(strings.Join(
@@ -1962,21 +1975,13 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 	require.NoError(t, os.WriteFile(rootPath, rootData, 0o600))
 	childPath := filepath.Join(
 		strings.TrimSuffix(rootPath, ".jsonl"), "subagents", "agent-abc123.jsonl")
-	require.Eventually(t, func() bool {
-		data, readErr := os.ReadFile(filepath.Join(captureDir, manifestFileName))
-		if readErr != nil {
-			return false
-		}
-		var captured manifest
-		return json.Unmarshal(data, &captured) == nil &&
-			!captured.SourcesComplete && len(captured.Sources) == 2
-	}, 20*time.Second, time.Millisecond)
 	require.NoError(t, os.Rename(childPath, filepath.Join(t.TempDir(), "removed.jsonl")))
+	release <- struct{}{}
 
 	response := <-done
 	require.NoError(t, response.err)
 	assert.Zero(t, response.outcome.ExitCode)
-	data, err := os.ReadFile(resultPath)
+	data, err = os.ReadFile(resultPath)
 	require.NoError(t, err)
 	result, err := DecodeResult(bytes.NewReader(data))
 	require.NoError(t, err)

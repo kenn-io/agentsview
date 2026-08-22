@@ -158,7 +158,9 @@ add an archived or maintained mirror without replacing the original identity.
   its frozen first-seen, token-only semantics. Reverified 2026-08-06 that
   DuckDB records a web-search-only flat fee as computed pricing provenance, so
   combining it with a provider-reported cost is labeled `mixed` like the
-  SQLite archive.
+  SQLite archive. Reverified 2026-08-22 that activity buckets carry the
+  selected Claude input-token snapshots identically across SQLite, PostgreSQL,
+  and DuckDB.
 - **Agentsview:** `internal/parser/claude.go` and
   `internal/parser/claude_provider.go`; local observations and fixtures are
   the implementation evidence for fields not documented upstream. Reverified

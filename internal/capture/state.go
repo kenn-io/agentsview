@@ -93,11 +93,12 @@ type manifest struct {
 }
 
 type captureState struct {
-	dir                  string
-	lock                 *flock.Flock
-	createdInfo          os.FileInfo
-	manifest             manifest
-	finalizationDeadline time.Time
+	dir                   string
+	lock                  *flock.Flock
+	createdInfo           os.FileInfo
+	manifest              manifest
+	finalizationDeadline  time.Time
+	afterPersistedSources func()
 }
 
 func createState(dir string, m manifest) (*captureState, error) {

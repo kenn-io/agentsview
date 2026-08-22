@@ -881,7 +881,7 @@ func (s *Store) activityReportUsage(
 	baseRows := make([]activity.UsageRow, len(rowsAcc))
 	for i, o := range rowsAcc {
 		row := o.row
-		_, row.OutputTokens, _, _, _ = pgDailyUsageRowTokens(o.scan)
+		row.InputTokens, row.OutputTokens, _, _, _ = pgDailyUsageRowTokens(o.scan)
 		row.WebSearchRequests = pgUsageRowWebSearchRequests(
 			o.scan.usageSource, o.scan.tokenJSON)
 		baseRows[i] = row
@@ -895,7 +895,7 @@ func (s *Store) activityReportUsage(
 		if !mask[i] {
 			continue
 		}
-		_, outputTok, _, _, _ := pgDailyUsageRowTokens(o.scan)
+		inputTok, outputTok, _, _, _ := pgDailyUsageRowTokens(o.scan)
 		costRow := o.scan
 		var sessionCost *money.Money
 		if o.scan.costSource == db.CopilotReportedCostSource && o.scan.cost.Valid {
@@ -916,6 +916,7 @@ func (s *Store) activityReportUsage(
 		}
 		row := o.row
 		row.SessionID = attribution[i]
+		row.InputTokens = inputTok
 		row.OutputTokens = outputTok
 		row.WebSearchRequests = webSearchRequests[i]
 		row.Cost = cost

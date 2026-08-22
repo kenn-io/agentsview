@@ -40,6 +40,10 @@ type RunOptions struct {
 	AgentsViewVersion string
 }
 
+type captureHooks struct {
+	afterPersistedSources func()
+}
+
 type ReportOptions struct {
 	CaptureDir        string
 	ResultPath        string
@@ -159,6 +163,14 @@ func resolveWorkDir(dir string) (string, error) {
 }
 
 func Run(ctx context.Context, opts RunOptions) (RunOutcome, error) {
+	return runWithHooks(ctx, opts, nil)
+}
+
+func runWithHooks(
+	ctx context.Context,
+	opts RunOptions,
+	hooks *captureHooks,
+) (RunOutcome, error) {
 	prepared, err := prepareRun(opts)
 	if err != nil {
 		return RunOutcome{}, err
@@ -193,6 +205,9 @@ func Run(ctx context.Context, opts RunOptions) (RunOutcome, error) {
 	})
 	if err != nil {
 		return RunOutcome{}, err
+	}
+	if hooks != nil {
+		state.afterPersistedSources = hooks.afterPersistedSources
 	}
 	defer state.close()
 	if err := invalidateResult(prepared.resultPath); err != nil {
@@ -565,6 +580,11 @@ func finalize(
 				continue
 			}
 			return captureFailure(state, err, agentsViewVersion)
+		}
+		if state.afterPersistedSources != nil {
+			afterPersistedSources := state.afterPersistedSources
+			state.afterPersistedSources = nil
+			afterPersistedSources()
 		}
 		ingested, err := ingest(
 			finalCtx, state, persisted.Paths, persisted.Snapshots,

@@ -882,6 +882,7 @@ func (s *Store) activityReportUsage(
 				SessionID:         r.sessionID,
 				Model:             r.model,
 				Timestamp:         tsStr,
+				InputTokens:       r.inputTok,
 				OutputTokens:      r.outputTok,
 				WebSearchRequests: r.webSearchRequests,
 				Agent:             r.agent,
