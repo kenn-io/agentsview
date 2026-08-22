@@ -288,6 +288,8 @@ func TestParseDiffProviderSourcesThreadsS3Metadata(t *testing.T) {
 	assert.Equal(t, int64(4096), f.SourceSize)
 	assert.Equal(t, int64(1779012030000)*1_000_000, f.SourceMtime)
 	assert.Equal(t, "s3-fingerprint", f.SourceFingerprint)
+	assert.Equal(t, int64(2048), f.TranscriptSize)
+	assert.Equal(t, int64(1779012020000)*1_000_000, f.TranscriptMtime)
 	assert.Equal(t, "myproj", f.Project)
 }
 
@@ -345,12 +347,14 @@ func (p s3ParseDiffProvider) Discover(
 		Key:         p.uri,
 		DisplayPath: p.uri,
 		Opaque: parser.S3DiscoveredSource{
-			URI:         p.uri,
-			Project:     "myproj",
-			Machine:     "remote-box",
-			Size:        4096,
-			MtimeNS:     int64(1779012030000) * 1_000_000,
-			Fingerprint: "s3-fingerprint",
+			URI:               p.uri,
+			Project:           "myproj",
+			Machine:           "remote-box",
+			Size:              4096,
+			MtimeNS:           int64(1779012030000) * 1_000_000,
+			Fingerprint:       "s3-fingerprint",
+			TranscriptSize:    2048,
+			TranscriptMtimeNS: int64(1779012020000) * 1_000_000,
 		},
 	}}, nil
 }

@@ -103,6 +103,67 @@ func TestProcessS3ClaudeFetchesPersistedToolResultSidecar(t *testing.T) {
 	assert.Equal(t, 1, fetched[sidecarPath])
 }
 
+func TestProcessS3IcodemateFetchesPersistedToolResultSidecar(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/icodemate/test-proj/parent-session.jsonl"
+	sidecarPath := "s3://bucket/laptop/raw/icodemate/test-proj/" +
+		"parent-session/tool-results/output.txt"
+	localResultPath := "/tmp/icodemate/cli/projects/test-proj/" +
+		"parent-session/tool-results/output.txt"
+	fullOutput := "full ICodeMate output\n"
+	persistedContentJSON := mustSyncJSONString(t,
+		"<persisted-output>\n"+
+			"Output too large. Full output saved to: "+localResultPath+
+			"\n\nPreview:\npreview only\n</persisted-output>")
+	resultPathJSON := mustSyncJSONString(t, localResultPath)
+	content := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + persistedContentJSON + `}]},"toolUseResult":{"persistedOutputPath":` + resultPathJSON + `}}`,
+	}, "\n")
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetched := make(map[string]int)
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		fetched[got]++
+		switch got {
+		case path:
+			return io.NopCloser(strings.NewReader(content)), nil
+		case sidecarPath:
+			return io.NopCloser(strings.NewReader(fullOutput)), nil
+		default:
+			return nil, errors.New("unexpected s3 fetch: " + got)
+		}
+	}
+
+	e := &Engine{db: database, machine: "central"}
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent:       parser.AgentIcodemate,
+		Path:        path,
+		Project:     "test-proj",
+		Machine:     "laptop",
+		SourceSize:  int64(len(content)),
+		SourceMtime: time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC).UnixNano(),
+	})
+
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.Equal(t, parser.AgentIcodemate, res.results[0].Session.Agent)
+	assert.Equal(t, "laptop~icodemate:parent-session", res.results[0].Session.ID)
+	require.Len(t, res.results[0].Messages, 3)
+	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
+	assert.Equal(
+		t,
+		fullOutput,
+		parser.DecodeContent(
+			res.results[0].Messages[2].ToolResults[0].ContentRaw,
+		),
+	)
+	assert.Equal(t, 1, fetched[path])
+	assert.Equal(t, 1, fetched[sidecarPath])
+}
+
 func TestProcessS3ClaudeMissingSidecarKeepsPersistedPreview(t *testing.T) {
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/parent-session.jsonl"
