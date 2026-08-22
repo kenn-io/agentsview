@@ -99,7 +99,15 @@ function run(cmd, args, options = {}) {
 }
 
 const generatedDir = join(frontendDir, "src/lib/api/generated");
-const verifyGenerated = process.argv.includes("--check");
+const checkIfGoAvailable = process.argv.includes("--check-if-go-available");
+const verifyGenerated = process.argv.includes("--check") || checkIfGoAvailable;
+if (checkIfGoAvailable) {
+  const goVersion = spawnSync("go", ["version"], { stdio: "ignore" });
+  if (goVersion.error?.code === "ENOENT") {
+    console.warn("Skipping generated API client check because Go is not available.");
+    process.exit(0);
+  }
+}
 const previousGeneratedSources = verifyGenerated ? generatedSources(generatedDir) : null;
 const generatedTrailingNewlines = generatedTrailingNewlineCounts(generatedDir);
 const tempDir = mkdtempSync(join(tmpdir(), "agentsview-openapi-"));
