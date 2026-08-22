@@ -41,6 +41,7 @@ function makeReport(overrides: Partial<Report> = {}): Report {
       end: "2026-06-16T09:00:00Z",
       max_agents: 3,
       agent_minutes: 30,
+      input_tokens: 120000,
       output_tokens: 9000,
       cost: testMoney(0.9),
       interactive_at_peak: 2,
@@ -352,7 +353,7 @@ describe("ConcurrencyTimeline", () => {
     await tick();
     const tip = target.querySelector(".tooltip");
     expect(tip).toBeTruthy();
-    expect(tip!.textContent).toContain("peak 3");
+    expect(tip!.querySelector(".tooltip-metrics > div")?.textContent).toContain("Peak Concurrency");
     hit.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
     await tick();
     expect(target.querySelector(".tooltip")).toBeNull();
@@ -360,20 +361,26 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
 
-  it("labels the token count as output and surfaces cost in the tooltip", async () => {
+  it("shows structured compact metrics with cost in the tooltip", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
-    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    const report = makeReport();
+    report.buckets![2]!.agent_minutes = 7500;
+    const c = mount(ConcurrencyTimeline, { target, props: { report } });
     await tick();
-    const hit = target.querySelectorAll(".slot-hit")[2] as SVGRectElement; // 9000 tokens, $0.90
+    const hit = target.querySelectorAll(".slot-hit")[2] as SVGRectElement;
     hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
     await tick();
     const tip = target.querySelector(".tooltip");
     expect(tip).toBeTruthy();
-    // Disambiguates input vs output tokens and shows the overlay's cost value.
-    expect(tip!.textContent).toContain("output tokens");
-    expect(tip!.textContent).toContain("9,000");
-    expect(tip!.textContent).toContain("$0.90");
+    const rows = Array.from(tip!.querySelectorAll(".tooltip-metrics > div"));
+    expect(rows.map((row) => row.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "Peak Concurrency 3 (2 int / 1 auto)",
+      "Agent-min 7.5K",
+      "Input Tokens 120K",
+      "Output Tokens 9K",
+      "Cost $0.90",
+    ]);
     unmount(c);
     target.remove();
   });
@@ -387,9 +394,12 @@ describe("ConcurrencyTimeline", () => {
     hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
     await tick();
     const tip = target.querySelector(".tooltip");
-    expect(tip!.textContent).toContain("peak 3 (2 int / 1 auto)");
+    const rows = tip!.querySelectorAll(".tooltip-metrics > div");
+    expect(rows[0]!.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Peak Concurrency 3 (2 int / 1 auto)",
+    );
     // agent-minutes stays a single combined figure, not split by automation.
-    expect(tip!.textContent).toContain("30.0 agent-min");
+    expect(rows[1]!.textContent?.replace(/\s+/g, " ").trim()).toBe("Agent-min 30");
     unmount(c);
     target.remove();
   });
@@ -403,8 +413,8 @@ describe("ConcurrencyTimeline", () => {
     hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
     await tick();
     const tip = target.querySelector(".tooltip");
-    expect(tip!.textContent).toContain("peak 1");
-    expect(tip!.textContent).not.toContain("int /");
+    const peakRow = tip!.querySelector(".tooltip-metrics > div");
+    expect(peakRow?.textContent?.replace(/\s+/g, " ").trim()).toBe("Peak Concurrency 1");
     unmount(c);
     target.remove();
   });
