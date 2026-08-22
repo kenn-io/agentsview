@@ -424,6 +424,9 @@ func (e *Engine) processS3Session(
 				e.claudeRowlessFreshnessCacheKey(file.Path, sourceFingerprint)
 		}
 	case parser.AgentIcodemate:
+		if res.suppressPresenceSweep || res.providerWideFailureCount > 0 {
+			break
+		}
 		missing, err := e.completeMultiSessionSourceMissingMembers(
 			ctx,
 			file.Agent,
@@ -487,10 +490,16 @@ func (e *Engine) parseMaterializedS3Source(
 	if err != nil {
 		return processResult{}, err
 	}
+	providerWideFailureCount := len(outcome.SourceErrors)
+	if !outcome.ResultSetComplete {
+		providerWideFailureCount++
+	}
+	providerFailureCount := providerWideFailureCount
 	retrySessionIDs := make(map[string]bool)
 	for _, result := range outcome.Results {
 		if result.DataVersion == parser.DataVersionNeedsRetry {
 			retrySessionIDs[result.Result.Session.ID] = true
+			providerFailureCount++
 		}
 	}
 	if len(retrySessionIDs) == 0 {
@@ -501,9 +510,13 @@ func (e *Engine) parseMaterializedS3Source(
 	// session but excludes its ID), and the caller needs those IDs to drop the
 	// previously-archived row on resync. ForceReplace must survive too.
 	return processResult{
-		results:            parseOutcomeResults(outcome.Results),
-		excludedSessionIDs: append([]string(nil), outcome.ExcludedSessionIDs...),
-		forceReplace:       outcome.ForceReplace,
-		retrySessionIDs:    retrySessionIDs,
+		results:                  parseOutcomeResults(outcome.Results),
+		excludedSessionIDs:       append([]string(nil), outcome.ExcludedSessionIDs...),
+		forceReplace:             outcome.ForceReplace,
+		retrySessionIDs:          retrySessionIDs,
+		suppressPresenceSweep:    !outcome.ResultSetComplete,
+		providerFailureCount:     providerFailureCount,
+		providerWideFailureCount: providerWideFailureCount,
+		noCacheSkip:              !providerOutcomeAllowsCleanSkipCache(outcome),
 	}, nil
 }

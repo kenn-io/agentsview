@@ -123,6 +123,34 @@ func TestProcessS3IcodemateReconcilesRemovedForkThenSkipsUnchanged(
 	require.Equal(t, 2, firstStats.Synced)
 	require.Equal(t, 1, fetches)
 
+	content = mainLines[0] + "\n{"
+	mtime += int64(time.Second)
+	fingerprint = "s3:fingerprint:icodemate-truncated"
+	file.SourceSize = int64(len(content))
+	file.SourceMtime = mtime
+	file.SourceFingerprint = fingerprint
+	truncated := engine.processFile(t.Context(), file)
+	require.NoError(t, truncated.err)
+	jobs = make(chan syncJob, 1)
+	jobs <- syncJob{
+		path: file.Path, agent: file.Agent, machine: file.Machine,
+		processResult: truncated,
+	}
+	close(jobs)
+	truncatedStats := engine.collectAndBatch(
+		t.Context(), jobs, 1, 1, nil, syncWriteDefault,
+	)
+	require.Equal(t, 1, truncatedStats.Failed)
+	require.Zero(t, truncatedStats.Synced)
+	require.Zero(t, truncatedStats.Tombstoned)
+	require.Equal(t, 2, fetches)
+
+	const forkID = "laptop~icodemate:fork-session-fork"
+	fork, err := database.GetSession(t.Context(), forkID)
+	require.NoError(t, err)
+	require.NotNil(t, fork,
+		"an incomplete source must preserve its archived branches")
+
 	content = strings.Join(mainLines, "\n") + "\n"
 	mtime += int64(time.Second)
 	fingerprint = "s3:fingerprint:icodemate-main-only"
@@ -144,10 +172,9 @@ func TestProcessS3IcodemateReconcilesRemovedForkThenSkipsUnchanged(
 	require.Zero(t, secondStats.Failed)
 	require.Equal(t, 1, secondStats.Synced)
 	require.Equal(t, 1, secondStats.Tombstoned)
-	require.Equal(t, 2, fetches)
+	require.Equal(t, 3, fetches)
 
-	const forkID = "laptop~icodemate:fork-session-fork"
-	fork, err := database.GetSession(t.Context(), forkID)
+	fork, err = database.GetSession(t.Context(), forkID)
 	require.NoError(t, err)
 	assert.Nil(t, fork)
 	archivedFork, err := database.GetSessionFull(t.Context(), forkID)
@@ -162,7 +189,7 @@ func TestProcessS3IcodemateReconcilesRemovedForkThenSkipsUnchanged(
 	third := freshEngine.processFile(t.Context(), file)
 	require.NoError(t, third.err)
 	assert.True(t, third.skip)
-	assert.Equal(t, 2, fetches,
+	assert.Equal(t, 3, fetches,
 		"a fresh engine must not fetch an unchanged complete source")
 }
 
