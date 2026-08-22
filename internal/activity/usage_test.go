@@ -25,11 +25,11 @@ func TestApplyUsage_DedupAndDayFilter(t *testing.T) {
 	// the range is dropped without claiming a key.
 	usage := []UsageRow{
 		{SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r"},
+			InputTokens: 1000, OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r"},
 		{SessionID: "a", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r"},
+			InputTokens: 1000, OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "x", ClaudeRequestID: "r"},
 		{SessionID: "a", Model: "m1", Timestamp: "2026-06-15T23:00:00Z",
-			OutputTokens: 999, Cost: money.MustParseDollars("9.0"), UsageDedupKey: "k-out"},
+			InputTokens: 9999, OutputTokens: 999, Cost: money.MustParseDollars("9.0"), UsageDedupKey: "k-out"},
 	}
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
@@ -43,6 +43,7 @@ func TestApplyUsage_DedupAndDayFilter(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("1.0"), r.Totals.InteractiveCost)
 	assert.Equal(t, money.MustParseDollars("0.0"), r.Totals.AutomatedCost)
 	// 10:00 UTC -> bucket 120 (10*12).
+	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
 	assert.Equal(t, 100, r.Buckets[120].OutputTokens)
 	assert.Equal(t, money.MustParseDollars("1.0"), r.Buckets[120].Cost)
 }

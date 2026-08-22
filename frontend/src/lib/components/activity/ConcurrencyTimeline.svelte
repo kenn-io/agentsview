@@ -37,7 +37,7 @@
     (report.buckets ?? []) as ActivityBucket[],
   );
 
-  let tooltip = $state<{ x: number; y: number; text: string } | null>(null);
+  let tooltip = $state<{ x: number; y: number; bucket: ActivityBucket } | null>(null);
   let keyboardAnchorIndex = $state<number | null>(null);
 
   // Format bucket boundaries in the report's own timezone. Bucket start/end are
@@ -101,21 +101,10 @@
   // agent was running at the peak.
   function showSlotTip(e: MouseEvent, b: ActivityBucket) {
     const rect = (e.currentTarget as Element).getBoundingClientRect();
-    const peakSplit =
-      b.automated_at_peak > 0
-        ? ` (${m.activity_int_auto_short({ int: b.interactive_at_peak, auto: b.automated_at_peak })})`
-        : "";
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text:
-        `${fmtBucketRange(b)} · ${m.activity_peak_label({ count: b.max_agents })}${peakSplit} · ` +
-        `${m.activity_agent_min_value({ value: b.agent_minutes.toFixed(1) })} · ` +
-        `${m.activity_output_tokens_value({
-          count: b.output_tokens,
-          countLabel: b.output_tokens.toLocaleString(getLocale()),
-        })} · ` +
-        formatMoney(b.cost),
+      bucket: b,
     };
   }
 
@@ -270,6 +259,22 @@
     if (abs >= 1_000) return `${trimDecimal(v / 1_000, 1)}k`;
     if (Number.isInteger(v)) return String(v);
     return trimDecimal(v, 1);
+  }
+
+  function fmtCompactValue(v: number): string {
+    return new Intl.NumberFormat(getLocale(), {
+      notation: "compact",
+      compactDisplay: "short",
+      maximumFractionDigits: 1,
+    }).format(v);
+  }
+
+  function peakValue(b: ActivityBucket): string {
+    if (b.automated_at_peak === 0) return String(b.max_agents);
+    return `${b.max_agents} (${m.activity_int_auto_short({
+      int: b.interactive_at_peak,
+      auto: b.automated_at_peak,
+    })})`;
   }
 
   function fmtOverlayTick(v: number): string {
@@ -734,7 +739,29 @@
 
     {#if tooltip}
       <div class="tooltip" style="left: {tooltip.x}px; top: {tooltip.y}px;">
-        {tooltip.text}
+        <div class="tooltip-date">{fmtBucketRange(tooltip.bucket)}</div>
+        <dl class="tooltip-metrics">
+          <div>
+            <dt>{m.activity_peak_concurrency()}</dt>
+            <dd>{peakValue(tooltip.bucket)}</dd>
+          </div>
+          <div>
+            <dt>{m.activity_agent_min()}</dt>
+            <dd>{fmtCompactValue(tooltip.bucket.agent_minutes)}</dd>
+          </div>
+          <div>
+            <dt>{m.usage_input_tokens()}</dt>
+            <dd>{fmtCompactValue(tooltip.bucket.input_tokens ?? 0)}</dd>
+          </div>
+          <div>
+            <dt>{m.usage_output_tokens()}</dt>
+            <dd>{fmtCompactValue(tooltip.bucket.output_tokens)}</dd>
+          </div>
+          <div>
+            <dt>{m.activity_cost()}</dt>
+            <dd>{formatMoney(tooltip.bucket.cost)}</dd>
+          </div>
+        </dl>
       </div>
     {/if}
   </div>
@@ -930,13 +957,44 @@
   .tooltip {
     position: fixed;
     transform: translateX(-50%) translateY(-100%);
-    padding: 4px 8px;
+    min-width: 168px;
+    padding: 8px 10px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;
     z-index: var(--z-tooltip);
+  }
+
+  .tooltip-date {
+    padding-bottom: 6px;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    font-weight: 600;
+  }
+
+  .tooltip-metrics {
+    display: grid;
+    gap: 4px;
+    margin: 6px 0 0;
+  }
+
+  .tooltip-metrics > div {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: baseline;
+  }
+
+  .tooltip-metrics dt {
+    opacity: 0.7;
+  }
+
+  .tooltip-metrics dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    text-align: right;
   }
 </style>

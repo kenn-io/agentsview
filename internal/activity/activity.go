@@ -274,6 +274,7 @@ type Bucket struct {
 	End          string      `json:"end"`
 	MaxAgents    int         `json:"max_agents"`
 	AgentMinutes float64     `json:"agent_minutes"`
+	InputTokens  int         `json:"input_tokens,omitempty"`
 	OutputTokens int         `json:"output_tokens"`
 	Cost         money.Money `json:"cost"`
 	// Automated/interactive split of the concurrency peak: the live automated
@@ -887,8 +888,8 @@ func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 	return out
 }
 
-// applyUsage dedups usage rows to the range, then accumulates output tokens
-// and cost into r.Totals and the window whose [Start, End) contains each row's
+// applyUsage dedups usage rows to the range, then accumulates tokens and cost
+// into r.Totals and the window whose [Start, End) contains each row's
 // timestamp.
 func applyUsage(r *Report, p Params, windows []BucketWindow, start, end time.Time,
 	usage []UsageRow, automatedBy map[string]bool) error {
@@ -926,6 +927,7 @@ func applyUsageRows(
 		}
 		t, _ := parseTS(u.Timestamp)
 		if b := windowIndex(windows, t); b >= 0 && b < len(r.Buckets) {
+			r.Buckets[b].InputTokens += u.InputTokens
 			r.Buckets[b].OutputTokens += u.OutputTokens
 			r.Buckets[b].Cost, err = money.Add(
 				r.Buckets[b].Cost, allocated[i].Cost,

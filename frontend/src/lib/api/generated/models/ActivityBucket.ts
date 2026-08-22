@@ -8,9 +8,9 @@ export type ActivityBucket = {
   automated_at_peak: number;
   cost: MoneyMoney;
   end: string;
+  input_tokens?: number;
   interactive_at_peak: number;
   max_agents: number;
   output_tokens: number;
   start: string;
 };
-
