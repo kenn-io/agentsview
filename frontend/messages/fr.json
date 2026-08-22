@@ -1056,6 +1056,29 @@
       }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} aperçu de session",
+        "countPlural=other": "{countNumber} aperçus de sessions"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "{current} sur {count}",
+  "data_reclassify_session_preview_previous": "Session précédente",
+  "data_reclassify_session_preview_next": "Session suivante",
+  "data_reclassify_session_preview_loading": "Chargement de l'aperçu de la session…",
+  "data_reclassify_session_preview_failed": "Impossible de charger l'aperçu de la session",
+  "data_reclassify_session_preview_no_message": "Aucun message de session disponible",
+  "data_reclassify_session_preview_current_project": "Projet actuel",
+  "data_reclassify_session_preview_next_project": "Après correction",
+  "data_reclassify_session_preview_folder": "Dossier de la session",
   "data_reclassify_zero_matches": "Ce préfixe ne correspond à aucune session de l’archive.",
   "data_reclassify_conflict": "Les correspondances ont changé depuis l’aperçu. L’impact a été actualisé ; vérifiez-le avant d’appliquer.",
   "data_reclassify_replaces_rule": "Cette correction remplace une règle de correspondance de projet existante.",

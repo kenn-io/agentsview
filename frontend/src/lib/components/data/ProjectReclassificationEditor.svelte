@@ -6,12 +6,14 @@
     SettingsService,
     type DbWorktreeReclassificationCandidate,
     type DbWorktreeReclassificationPreview,
+    type DbWorktreeReclassificationSessionSample,
   } from "../../api/generated/index";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
   import type { ProjectInfo } from "../../api/types/core.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import ProjectSessionPreviewCarousel from "./ProjectSessionPreviewCarousel.svelte";
 
   // Candidates load once on mount; there is no reactive reload when the
   // project identity changes. Hosts MUST remount this component whenever
@@ -73,6 +75,9 @@
   );
   const requiresReview = $derived(
     !!preview && (preview.existing_mapping_id != null || preview.distinct_projects > 1),
+  );
+  const sessionSamples = $derived(
+    (preview?.session_samples ?? []) as DbWorktreeReclassificationSessionSample[],
   );
 
   onMount(() => void loadCandidates());
@@ -459,6 +464,12 @@
             />
           {/if}
         </div>
+
+        {#if preview && sessionSamples.length > 0}
+          {#key preview.mapping_token}
+            <ProjectSessionPreviewCarousel samples={sessionSamples} />
+          {/key}
+        {/if}
       {:else}
         <p class="warning" role="note">{m.data_reclassify_read_only()}</p>
       {/if}
@@ -560,9 +571,9 @@
     margin-top: 3px;
   }
   .mapping-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    align-items: end;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     gap: 8px;
   }
   .impact { display: flex; flex-wrap: wrap; gap: var(--space-5); color: var(--text-secondary); font-size: 10px; }
@@ -582,12 +593,5 @@
     font: inherit;
     font-size: 11px;
     cursor: pointer;
-  }
-
-  @media (max-width: 760px) {
-    .mapping-row {
-      grid-template-columns: 1fr;
-      align-items: start;
-    }
   }
 </style>

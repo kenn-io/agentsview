@@ -984,6 +984,29 @@
       "match": { "countPlural=other": "{countNumber} 个会话" }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 个会话预览",
+        "countPlural=other": "{countNumber} 个会话预览"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "第 {current} 个，共 {count} 个",
+  "data_reclassify_session_preview_previous": "上一个会话",
+  "data_reclassify_session_preview_next": "下一个会话",
+  "data_reclassify_session_preview_loading": "正在加载会话预览…",
+  "data_reclassify_session_preview_failed": "无法加载会话预览",
+  "data_reclassify_session_preview_no_message": "没有可用的会话消息",
+  "data_reclassify_session_preview_current_project": "当前项目",
+  "data_reclassify_session_preview_next_project": "更正后",
+  "data_reclassify_session_preview_folder": "会话文件夹",
   "data_reclassify_zero_matches": "此前缀与存档中的任何会话都不匹配。",
   "data_reclassify_conflict": "映射自预览后已更改。影响已刷新；应用前请检查。",
   "data_reclassify_replaces_rule": "此更正将替换现有的项目映射规则。",

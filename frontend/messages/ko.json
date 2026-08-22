@@ -986,6 +986,29 @@
       "match": { "countPlural=other": "세션 {countNumber}개" }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "세션 미리보기 {countNumber}개",
+        "countPlural=other": "세션 미리보기 {countNumber}개"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "{count}개 중 {current}번째",
+  "data_reclassify_session_preview_previous": "이전 세션",
+  "data_reclassify_session_preview_next": "다음 세션",
+  "data_reclassify_session_preview_loading": "세션 미리보기 불러오는 중…",
+  "data_reclassify_session_preview_failed": "세션 미리보기를 불러오지 못했습니다",
+  "data_reclassify_session_preview_no_message": "사용 가능한 세션 메시지가 없습니다",
+  "data_reclassify_session_preview_current_project": "현재 프로젝트",
+  "data_reclassify_session_preview_next_project": "수정 후",
+  "data_reclassify_session_preview_folder": "세션 폴더",
   "data_reclassify_zero_matches": "이 접두사와 일치하는 아카이브 세션이 없습니다.",
   "data_reclassify_conflict": "미리 보기 이후 매핑이 변경되었습니다. 영향이 새로 고쳐졌으니 적용 전에 확인하세요.",
   "data_reclassify_replaces_rule": "이 수정은 기존 프로젝트 매핑 규칙을 대체합니다.",

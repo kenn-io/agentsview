@@ -984,6 +984,29 @@
       "match": { "countPlural=other": "{countNumber} 個工作階段" }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 個工作階段預覽",
+        "countPlural=other": "{countNumber} 個工作階段預覽"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "第 {current} 個，共 {count} 個",
+  "data_reclassify_session_preview_previous": "上一個工作階段",
+  "data_reclassify_session_preview_next": "下一個工作階段",
+  "data_reclassify_session_preview_loading": "正在載入工作階段預覽…",
+  "data_reclassify_session_preview_failed": "無法載入工作階段預覽",
+  "data_reclassify_session_preview_no_message": "沒有可用的工作階段訊息",
+  "data_reclassify_session_preview_current_project": "目前專案",
+  "data_reclassify_session_preview_next_project": "更正後",
+  "data_reclassify_session_preview_folder": "工作階段資料夾",
   "data_reclassify_zero_matches": "此前綴與封存中的任何工作階段都不符合。",
   "data_reclassify_conflict": "對應自預覽後已變更。影響已重新整理；套用前請檢查。",
   "data_reclassify_replaces_rule": "此更正將取代現有的專案對應規則。",

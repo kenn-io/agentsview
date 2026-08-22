@@ -1056,6 +1056,29 @@
       }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} session preview",
+        "countPlural=other": "{countNumber} session previews"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "{current} of {count}",
+  "data_reclassify_session_preview_previous": "Previous session",
+  "data_reclassify_session_preview_next": "Next session",
+  "data_reclassify_session_preview_loading": "Loading session preview…",
+  "data_reclassify_session_preview_failed": "Failed to load session preview",
+  "data_reclassify_session_preview_no_message": "No session message available",
+  "data_reclassify_session_preview_current_project": "Current project",
+  "data_reclassify_session_preview_next_project": "After correction",
+  "data_reclassify_session_preview_folder": "Session folder",
   "data_reclassify_zero_matches": "This prefix matches no sessions in the archive.",
   "data_reclassify_conflict": "Mappings changed since the preview. The impact has been refreshed; review it before applying.",
   "data_reclassify_replaces_rule": "This correction replaces an existing project mapping rule.",

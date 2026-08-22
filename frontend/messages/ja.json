@@ -1044,6 +1044,29 @@
       }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 件のセッションプレビュー",
+        "countPlural=other": "{countNumber} 件のセッションプレビュー"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "{count} 件中 {current} 件目",
+  "data_reclassify_session_preview_previous": "前のセッション",
+  "data_reclassify_session_preview_next": "次のセッション",
+  "data_reclassify_session_preview_loading": "セッションプレビューを読み込み中…",
+  "data_reclassify_session_preview_failed": "セッションプレビューを読み込めませんでした",
+  "data_reclassify_session_preview_no_message": "表示できるセッションメッセージがありません",
+  "data_reclassify_session_preview_current_project": "現在のプロジェクト",
+  "data_reclassify_session_preview_next_project": "修正後",
+  "data_reclassify_session_preview_folder": "セッションフォルダー",
   "data_reclassify_zero_matches": "このプレフィックスは、アーカイブ内のどのセッションにも一致しません。",
   "data_reclassify_conflict": "プレビュー以降、マッピングが変更されました。影響範囲を更新しました。適用前に確認してください。",
   "data_reclassify_replaces_rule": "この修正は既存のプロジェクトマッピングルールを置き換えます。",
