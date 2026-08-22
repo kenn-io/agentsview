@@ -10835,9 +10835,11 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 ) ([]sourceMissingMember, error) {
 	present := make(map[string]struct{}, len(results)+len(excludedSessionIDs))
 	paths := make(map[string]struct{}, 1)
+	emittedIDs := make([]string, 0, len(results))
 	for _, result := range results {
 		if id := applyIDPrefixToID(e.idPrefix, result.Session.ID); id != "" {
 			present[id] = struct{}{}
+			emittedIDs = append(emittedIDs, id)
 		}
 		path := result.Session.File.Path
 		if path == "" {
@@ -10850,6 +10852,17 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 	}
 	if len(paths) == 0 && sourcePath != "" {
 		paths[e.effectiveSourcePath(sourcePath)] = struct{}{}
+	}
+	storedIdentities, err := e.db.ListSessionWriteIdentitiesByID(ctx, emittedIDs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list stored %s source identities: %w", agent, err,
+		)
+	}
+	for _, identity := range storedIdentities {
+		if identity.Agent == string(agent) && identity.FilePath != "" {
+			paths[identity.FilePath] = struct{}{}
+		}
 	}
 	for _, id := range e.applyIDPrefixToSessionIDs(excludedSessionIDs) {
 		present[id] = struct{}{}

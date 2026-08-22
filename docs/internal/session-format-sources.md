@@ -1602,8 +1602,10 @@ add an archived or maintained mirror without replacing the original identity.
   Local sidecar writes map back to their owning transcript and participate in
   its freshness fingerprint. CLI transcript identity is the filename session
   ID across configured roots, so duplicate or moved copies reconcile as one
-  `icodemate:` session. S3 subagent refreshes retain the parent provider and
-  machine namespace instead of importing ICodeMate children as Claude.
+  `icodemate:` session. Branch reconciliation follows that identity across
+  prior and current source paths. S3 subagent refreshes retain archived parent
+  provider and machine metadata instead of importing ICodeMate children as
+  Claude.
   Polling includes local and S3 sidecar mtimes, shortened CLI transcripts
   replace archived messages, and duplicate ranking uses transcript metadata
   rather than sidecar volume.

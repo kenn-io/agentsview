@@ -330,8 +330,16 @@ func TestIcodemateCLIReconcilePreservesMovedSessionAcrossRoots(t *testing.T) {
 	oldRoot := t.TempDir()
 	newRoot := t.TempDir()
 	oldPath := filepath.Join(oldRoot, "old-project", "moved.jsonl")
-	initial := testjsonl.NewSessionBuilder().
-		AddClaudeUser("2024-01-01T00:00:00Z", "old").String()
+	mainLines := []string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"root","message":{"content":"start"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"root","message":{"content":[{"type":"text","text":"main reply 1"}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":"main prompt 2"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:03Z","uuid":"u3","parentUuid":"u2","message":{"content":"main prompt 3"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:04Z","uuid":"u4","parentUuid":"u3","message":{"content":"main prompt 4"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:05Z","uuid":"u5","parentUuid":"u4","message":{"content":"main prompt 5"}}`,
+	}
+	forkLine := `{"type":"assistant","timestamp":"2024-01-01T10:00:06Z","uuid":"fork","parentUuid":"root","message":{"content":[{"type":"text","text":"fork reply"}]}}`
+	initial := strings.Join(append(mainLines, forkLine), "\n") + "\n"
 	dbtest.WriteTestFile(t, oldPath, []byte(initial))
 
 	database := dbtest.OpenTestDB(t)
@@ -342,7 +350,7 @@ func TestIcodemateCLIReconcilePreservesMovedSessionAcrossRoots(t *testing.T) {
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
 
 	require.NoError(t, os.Remove(oldPath))
 	newPath := filepath.Join(newRoot, "new-project", "moved.jsonl")
@@ -365,4 +373,15 @@ func TestIcodemateCLIReconcilePreservesMovedSessionAcrossRoots(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Len(t, messages, 2)
+
+	fork, err := database.GetSession(t.Context(), "icodemate:moved-fork")
+	require.NoError(t, err)
+	assert.Nil(t, fork)
+	archivedFork, err := database.GetSessionFull(
+		t.Context(), "icodemate:moved-fork",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, archivedFork)
+	require.NotNil(t, archivedFork.DeletionCause)
+	assert.Equal(t, "source_missing", *archivedFork.DeletionCause)
 }

@@ -3,10 +3,13 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+var subagentTranscriptPaths = parser.ClaudeSubagentTranscriptPaths
 
 // SyncSessionWithSubagentsContext refreshes one session and the candidate
 // Claude subagent transcripts in its root tree. Child discovery still runs
@@ -18,19 +21,31 @@ func (e *Engine) SyncSessionWithSubagentsContext(
 ) error {
 	parentErr := e.SyncSingleSessionContext(ctx, sessionID)
 
-	sourcePath := e.db.GetSessionFilePath(sessionID)
+	parentAgent := parser.AgentClaude
+	if def, ok := parser.AgentByPrefix(sessionID); ok {
+		parentAgent = def.Type
+	}
+	parent, lookupErr := e.db.GetSessionFull(ctx, sessionID)
+	if lookupErr != nil {
+		return errors.Join(parentErr, fmt.Errorf(
+			"load parent session for subagent sync: %w", lookupErr,
+		))
+	}
+	sourcePath := ""
+	if parent != nil {
+		parentAgent = parser.AgentType(parent.Agent)
+		if parent.FilePath != nil {
+			sourcePath = *parent.FilePath
+		}
+	}
 	if sourcePath == "" {
 		sourcePath = e.FindSourceFile(sessionID)
 	}
-	paths := parser.ClaudeSubagentTranscriptPaths(sourcePath)
+	paths := subagentTranscriptPaths(sourcePath)
 	if len(paths) == 0 {
 		return parentErr
 	}
 
-	parentAgent := parser.AgentClaude
-	if parent, _ := e.db.GetSession(ctx, sessionID); parent != nil {
-		parentAgent = parser.AgentType(parent.Agent)
-	}
 	var subagentErr error
 	if strings.HasPrefix(sourcePath, "s3://") {
 		subagentErr = e.SyncS3SubagentTranscriptsContext(
