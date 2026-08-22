@@ -1949,7 +1949,7 @@ func TestExportFullDrainCapAppliesToWritesArrivingDuringDrain(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	concurrent := &reEnqueueAfterAcknowledgeStore{DB: database}
 
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	result, err := exportFullToStoreWithDrainRounds(

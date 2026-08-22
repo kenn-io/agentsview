@@ -148,6 +148,10 @@ func TestSessionUsageWithRequiredSubagentsRequiresPerSessionContextCoverage(
 	require.NoError(t, err)
 	assert.False(t, complete,
 		"the parent's context must not cover the child's missing context categories")
+	assert.False(t, got.HasCost,
+		"computed cost must not omit the child's uncovered context categories")
+	assert.Zero(t, got.Cost)
+	assert.Nil(t, got.CostUSD)
 }
 
 func TestSessionUsageWithSubagentsOverSQLiteCombinesAndDedupes(t *testing.T) {

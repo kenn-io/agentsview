@@ -207,39 +207,40 @@ add an archived or maintained mirror without replacing the original identity.
   transcript carries no `sessionKind` — the writer re-stamps the current
   process's kind on each persisted line, overwriting the copied value, so the
   bg marker reflects the forking process and cannot be inherited through
-  replayed entries. Evidence remains `no-public-source`.
-  Reverified 2026-08-16 with Claude Code 2.1.233 using a controlled
-  `claude -p --session-id <uuid>` probe under an isolated
-  `CLAUDE_CONFIG_DIR`. Before the deliberately bounded probe was terminated
-  during its API retry, Claude had created the exact UUID transcript under
-  `projects/<sanitized-cwd>/`. A working directory containing spaces, `.`,
-  `_`, `@`, and separators confirmed that the producer preserves ASCII
-  letters, digits, and `-` and replaces every other character with `-`. The
-  transcript existed before process exit, so an interrupted wrapper can retain
-  exact recovery evidence. One-shot capture copies the exact root and bounded
-  subagent tree after an unchanged-file interval, requires every persisted
-  child reference to have a captured transcript, and includes every captured
-  subagent file even when interruption prevented its link record from being
-  flushed. Parser termination remains separate assurance; an interrupted
+  replayed entries. Evidence remains `no-public-source`. Reverified 2026-08-16
+  with Claude Code 2.1.233 using a controlled `claude -p --session-id <uuid>`
+  probe under an isolated `CLAUDE_CONFIG_DIR`. Before the deliberately bounded
+  probe was terminated during its API retry, Claude had created the exact UUID
+  transcript under `projects/<sanitized-cwd>/`. A working directory containing
+  spaces, `.`, `_`, `@`, and separators confirmed that the producer preserves
+  ASCII letters, digits, and `-` and replaces every other character with `-`.
+  The transcript existed before process exit, so an interrupted wrapper can
+  retain exact recovery evidence. One-shot capture copies the exact root and
+  bounded subagent tree after an unchanged-file interval, requires every
+  persisted child reference to have a captured transcript, and includes every
+  captured subagent file even when interruption prevented its link record from
+  being flushed. Parser termination remains separate assurance; an interrupted
   transcript can still contain usable token records. Because an unparseable
   middle record may hide usage, one-shot capture marks assurance partial when
-  any included session reports parser-malformed lines.
-  One-shot correlation reserves the provider root, encoded working directory,
-  and explicit UUID across processes until finalization ends. The final usage
-  read keeps SQLite ordering, snapshot selection, deduplication, pricing, and
-  token projection under the same bounded finalization context.
-  Reverified 2026-08-20 that a child-start failure is persisted as a terminal
-  capture state: later `capture report` retries do not discover or attribute a
-  matching transcript for an execution that never started.
-  Reverified 2026-08-21 that recovery refuses to seal when the wrapper did not
-  durably record execution completion, even if the transcript is temporarily
-  quiescent and receives more usage later.
-  Reverified 2026-08-21 that exact token projection compares canonical output
-  and context coverage separately for every included session, while crediting
-  a deduplicated snapshot to each source session that contained its equivalent
-  row. It also requires the materialized breakdown length to match its recorded
-  count. A larger context row from another session therefore cannot hide
-  missing delegated input or cache usage.
+  any included session reports parser-malformed lines. One-shot correlation
+  reserves the provider root, encoded working directory, and explicit UUID
+  across processes until finalization ends. The final usage read keeps SQLite
+  ordering, snapshot selection, deduplication, pricing, and token projection
+  under the same bounded finalization context. Reverified 2026-08-20 that a
+  child-start failure is persisted as a terminal capture state: later
+  `capture report` retries do not discover or attribute a matching transcript
+  for an execution that never started. Reverified 2026-08-21 that recovery
+  refuses to seal when the wrapper did not durably record execution completion,
+  even if the transcript is temporarily quiescent and receives more usage
+  later. Reverified 2026-08-21 that exact token projection compares canonical
+  output and context coverage separately for every included session, while
+  crediting a deduplicated snapshot to each source session that contained its
+  equivalent row. It also requires the materialized breakdown length to match
+  its recorded count. A larger context row from another session therefore
+  cannot hide missing delegated input or cache usage. Reverified 2026-08-22
+  that an incomplete category breakdown also withholds computed or mixed cost;
+  provider-reported cost remains authoritative when no computed component
+  contributes.
 
 ## OpenClaude (`openclaude`)
 
@@ -369,18 +370,18 @@ add an archived or maintained mirror without replacing the original identity.
   `session_meta.id` equal to that UUID and ended with `task_complete`. One-shot
   capture therefore accepts only this structured mode, tees its bytes without
   interpreting formatted stderr, and validates the ID against filenames and
-  `session_meta` inside the wrapper-start local and UTC days, each plus or minus
-  one day. It copies and ingests that exact rollout first, then uses parsed
-  `spawn_agent` links and their message timestamps to repeat the same bounded
-  day-shard lookup around each child's spawn time.
-  Final accounting uses only the provider-shaped copies in the capture
-  directory. Malformed JSONL records are counted on both root and delegated
-  sessions so one-shot capture marks otherwise usable accounting as partial
-  instead of silently treating the transcript as complete. Reverified
-  2026-08-20 that this includes an unterminated invalid final record after
-  `task_complete`; ordinary live parsing still defers that tail while its
-  writer can complete it. This bounded lookup is deliberately separate from
-  the provider's general full-archive UUID discovery.
+  `session_meta` inside the wrapper-start local and UTC days, each plus or
+  minus one day. It copies and ingests that exact rollout first, then uses
+  parsed `spawn_agent` links and their message timestamps to repeat the same
+  bounded day-shard lookup around each child's spawn time. Final accounting
+  uses only the provider-shaped copies in the capture directory. Malformed
+  JSONL records are counted on both root and delegated sessions so one-shot
+  capture marks otherwise usable accounting as partial instead of silently
+  treating the transcript as complete. Reverified 2026-08-20 that this
+  includes an unterminated invalid final record after `task_complete`;
+  ordinary live parsing still defers that tail while its writer can complete
+  it. This bounded lookup is deliberately separate from the provider's general
+  full-archive UUID discovery.
 
 ## TraeX (`traex`)
 

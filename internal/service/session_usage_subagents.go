@@ -285,7 +285,7 @@ func combineSubagentUsageFromRows(
 		return nil, err
 	}
 	out.HasCost = combined.hasCostSettlement && combined.allPriced && outputCostCovered &&
-		sessionCostCovered
+		sessionCostCovered && (!combined.hasComputedCost || out.TokenBreakdownComplete)
 	if out.HasCost {
 		out.Cost = combined.cost
 		out.CostSource = export.CombinedCostSource(

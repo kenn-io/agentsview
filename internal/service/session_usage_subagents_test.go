@@ -66,6 +66,13 @@ func usageRow(
 }
 
 func TestSessionUsageWithSubagentsCombinesCostAcrossDescendants(t *testing.T) {
+	rootRow := usageRow("root", "opus", "2026-07-30T10:00:00Z", 0, "1")
+	rootRow.CacheReadTokens = 880
+	agentARow := usageRow("agent-a", "sonnet", "2026-07-30T10:01:00Z", 0, "2")
+	agentARow.CacheReadTokens = 1980
+	agentBRow := usageRow("agent-b", "opus", "2026-07-30T10:02:00Z", 0, "4")
+	agentBRow.CacheReadTokens = 80
+
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {
@@ -92,9 +99,9 @@ func TestSessionUsageWithSubagentsCombinesCostAcrossDescendants(t *testing.T) {
 			},
 		},
 		rows: []activity.UsageRow{
-			usageRow("root", "opus", "2026-07-30T10:00:00Z", 0, "1"),
-			usageRow("agent-a", "sonnet", "2026-07-30T10:01:00Z", 0, "2"),
-			usageRow("agent-b", "opus", "2026-07-30T10:02:00Z", 0, "4"),
+			rootRow,
+			agentARow,
+			agentBRow,
 		},
 	}
 
