@@ -27,10 +27,14 @@ func (e *Engine) SyncSessionWithSubagentsContext(
 		return parentErr
 	}
 
+	parentAgent := parser.AgentClaude
+	if parent, _ := e.db.GetSession(ctx, sessionID); parent != nil {
+		parentAgent = parser.AgentType(parent.Agent)
+	}
 	var subagentErr error
 	if strings.HasPrefix(sourcePath, "s3://") {
-		subagentErr = e.SyncClaudeS3SubagentTranscriptsContext(
-			ctx, sessionID, paths)
+		subagentErr = e.SyncS3SubagentTranscriptsContext(
+			ctx, sessionID, parentAgent, paths)
 	} else {
 		subagentErr = e.SyncPathsContext(ctx, paths)
 	}

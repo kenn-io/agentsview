@@ -2286,46 +2286,54 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 	ctx context.Context,
 	files []parser.DiscoveredFile,
 ) ([]parser.DiscoveredFile, error) {
-	sessionIDs := make(map[string]struct{})
+	sessionIDs := make(map[parser.AgentType]map[string]struct{})
 	seen := make(map[string]struct{}, len(files))
 	for _, file := range files {
 		seen[string(file.Agent)+"\x00"+file.Path] = struct{}{}
-		if file.Agent != parser.AgentClaude {
+		if !isClaudeCompatibleTranscriptFile(file) {
 			continue
 		}
 		sessionID := claudeSessionIDFromPath(file.Path)
 		if sessionID == "" {
 			continue
 		}
-		sessionIDs[sessionID] = struct{}{}
+		if sessionIDs[file.Agent] == nil {
+			sessionIDs[file.Agent] = make(map[string]struct{})
+		}
+		sessionIDs[file.Agent][sessionID] = struct{}{}
 	}
 	if len(sessionIDs) == 0 {
 		return files, nil
 	}
 
-	listSessionFiles := e.claudeProjectSessionFiles
-	if listSessionFiles == nil {
-		listSessionFiles = parser.ClaudeProjectSessionFiles
-	}
 	out := files
-	for _, claudeDir := range e.agentDirs[parser.AgentClaude] {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	for agent, ids := range sessionIDs {
+		listSessionFiles := parser.IcodemateCLIProjectSessionFiles
+		if agent == parser.AgentClaude {
+			listSessionFiles = e.claudeProjectSessionFiles
+			if listSessionFiles == nil {
+				listSessionFiles = parser.ClaudeProjectSessionFiles
+			}
 		}
-		for _, candidate := range listSessionFiles(claudeDir) {
+		for _, root := range e.agentDirs[agent] {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			sessionID := claudeSessionIDFromPath(candidate.Path)
-			if _, ok := sessionIDs[sessionID]; !ok {
-				continue
+			for _, candidate := range listSessionFiles(root) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				sessionID := claudeSessionIDFromPath(candidate.Path)
+				if _, ok := ids[sessionID]; !ok {
+					continue
+				}
+				key := string(candidate.Agent) + "\x00" + candidate.Path
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, candidate)
 			}
-			key := string(candidate.Agent) + "\x00" + candidate.Path
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, candidate)
 		}
 	}
 	return out, nil
@@ -5451,15 +5459,21 @@ func (e *Engine) reconciliationCandidate(
 	root := reconciliationWatchRoot(path, watchRoots, roots)
 	preference1, preference2, preference3 := int64(0), int64(0), int64(0)
 	statPath := validatedProviderSourceStatPath(path)
-	if agent == parser.AgentClaude {
-		if info, err := os.Stat(statPath); err == nil {
-			preference1 = info.Size()
-			preference2 = info.ModTime().UnixNano()
-			fullID := applyIDPrefixToID(e.idPrefix, identity)
+	claudeCompatible := isClaudeCompatibleTranscriptAgentPath(agent, path)
+	if claudeCompatible {
+		sourceSize, sourceMtime, sourceOK := claudeCompatibleFileSourceInfo(
+			parser.DiscoveredFile{Path: statPath, Agent: agent},
+		)
+		if sourceOK {
+			preference1 = sourceSize
+			preference2 = sourceMtime
+			fullID := applyIDPrefixToID(
+				e.idPrefix, claudeCompatibleArchiveSessionID(agent, identity),
+			)
 			storedPath := e.db.GetSessionFilePath(fullID)
 			storedSize, storedMtime, stored := e.db.GetSessionFileInfo(fullID)
 			if stored && e.effectiveSourcePath(path) == storedPath &&
-				storedSize == info.Size() && storedMtime == info.ModTime().UnixNano() &&
+				storedSize == sourceSize && storedMtime == sourceMtime &&
 				e.db.GetSessionDataVersion(fullID) >= db.CurrentDataVersion() {
 				preference3 = 1
 			}
@@ -5468,11 +5482,11 @@ func (e *Engine) reconciliationCandidate(
 	if isCodexFormatAgent(agent) && codexLayoutForPath(path) == parser.CodexLayoutDated {
 		preference1 = 1
 	}
-	if isOpenCodeFormatAgent(agent) {
+	if isOpenCodeFormatAgent(agent) && !claudeCompatible {
 		if statPath == path {
 			preference1 = 1
 		}
-	} else if agent != parser.AgentClaude && !isCodexFormatAgent(agent) {
+	} else if !claudeCompatible && !isCodexFormatAgent(agent) {
 		for i, configured := range roots {
 			if samePathOrDescendant(statPath, configured) {
 				preference1 = int64(len(roots) - i)
@@ -5507,11 +5521,11 @@ func boolPreference(value bool) int64 {
 }
 
 func reconciliationSourceIdentity(agent parser.AgentType, source parser.SourceRef) string {
-	if agent == parser.AgentClaude {
-		return claudeSessionIDFromPath(providerDiscoveredPath(source))
+	path := providerDiscoveredPath(source)
+	if isClaudeCompatibleTranscriptAgentPath(agent, path) {
+		return claudeSessionIDFromPath(path)
 	}
 	if isOpenCodeFormatAgent(agent) {
-		path := providerDiscoveredPath(source)
 		if statPath := validatedProviderSourceStatPath(path); statPath != path {
 			_, sessionID, _ := parser.ParseVirtualSourcePath(path)
 			return sessionID
@@ -5788,6 +5802,11 @@ func reconciliationReplacementIdentity(
 	switch agent {
 	case parser.AgentClaude:
 		return claudeSessionIDFromPath(storedPath)
+	case parser.AgentIcodemate:
+		if strings.EqualFold(filepath.Ext(storedPath), ".jsonl") {
+			return claudeSessionIDFromPath(storedPath)
+		}
+		return ""
 	case parser.AgentCodex, parser.AgentTraeX:
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(storedPath))
 		if uuid == "" {
@@ -7812,7 +7831,7 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 	byKey := make(map[string][]parser.DiscoveredFile)
 	sessionIDByKey := make(map[string]string)
 	for _, file := range files {
-		if file.Agent != parser.AgentClaude {
+		if !isClaudeCompatibleTranscriptFile(file) {
 			continue
 		}
 		sessionID := claudeSessionIDFromPath(file.Path)
@@ -7837,7 +7856,7 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 	out := files[:0]
 	seen := make(map[string]struct{}, len(preferred))
 	for _, file := range files {
-		if file.Agent != parser.AgentClaude {
+		if !isClaudeCompatibleTranscriptFile(file) {
 			out = append(out, file)
 			continue
 		}
@@ -7859,7 +7878,23 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 func claudeDiscoveredFileKey(
 	file parser.DiscoveredFile, sessionID string,
 ) string {
-	return discoveredFileIDPrefix(file) + "\x00" + sessionID
+	return string(file.Agent) + "\x00" + discoveredFileIDPrefix(file) + "\x00" + sessionID
+}
+
+func isClaudeCompatibleTranscriptFile(file parser.DiscoveredFile) bool {
+	return isClaudeCompatibleTranscriptAgentPath(file.Agent, file.Path)
+}
+
+func isClaudeCompatibleTranscriptAgentPath(agent parser.AgentType, path string) bool {
+	return (agent == parser.AgentClaude || agent == parser.AgentIcodemate) &&
+		claudeSessionIDFromPath(path) != ""
+}
+
+func claudeCompatibleArchiveSessionID(agent parser.AgentType, rawSessionID string) string {
+	if agent == parser.AgentIcodemate {
+		return "icodemate:" + strings.TrimPrefix(rawSessionID, "icodemate:")
+	}
+	return rawSessionID
 }
 
 func claudeSessionIDFromPath(path string) string {
@@ -7882,7 +7917,9 @@ func (e *Engine) pickPreferredClaudeDiscoveredFile(
 	if isS3SourcePath(candidates[0].Path) {
 		idPrefix = s3SessionIDPrefix(candidates[0].Machine)
 	}
-	fullID := applyIDPrefixToID(idPrefix, sessionID)
+	fullID := applyIDPrefixToID(
+		idPrefix, claudeCompatibleArchiveSessionID(candidates[0].Agent, sessionID),
+	)
 	storedPath := e.db.GetSessionFilePath(fullID)
 	if storedPath != "" {
 		for _, candidate := range candidates {
@@ -7917,7 +7954,7 @@ func (e *Engine) pickPreferredClaudeDiscoveredFile(
 func (e *Engine) claudeSourceMatchesStored(
 	sessionID string, file parser.DiscoveredFile,
 ) bool {
-	size, mtime, ok := claudeDiscoveredFileSourceInfo(file)
+	size, mtime, ok := claudeCompatibleFileSourceInfo(file)
 	if !ok {
 		return false
 	}
@@ -7947,8 +7984,8 @@ func (e *Engine) effectiveSourcePath(path string) string {
 func claudeCandidateHasAppendProgress(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	candidateSize, _, candidateOK := claudeDiscoveredFileSourceInfo(candidate)
-	currentSize, _, currentOK := claudeDiscoveredFileSourceInfo(current)
+	candidateSize, _, candidateOK := claudeCompatibleFileSourceInfo(candidate)
+	currentSize, _, currentOK := claudeCompatibleFileSourceInfo(current)
 	if !candidateOK || !currentOK {
 		return false
 	}
@@ -7958,8 +7995,8 @@ func claudeCandidateHasAppendProgress(
 func preferClaudeDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	candidateSize, candidateMtime, candidateOK := claudeDiscoveredFileSourceInfo(candidate)
-	currentSize, currentMtime, currentOK := claudeDiscoveredFileSourceInfo(current)
+	candidateSize, candidateMtime, candidateOK := claudeCompatibleFileSourceInfo(candidate)
+	currentSize, currentMtime, currentOK := claudeCompatibleFileSourceInfo(current)
 	switch {
 	case candidateOK && !currentOK:
 		return true
@@ -7976,7 +8013,7 @@ func preferClaudeDiscoveredFile(
 	return candidate.Path < current.Path
 }
 
-func claudeDiscoveredFileSourceInfo(
+func claudeCompatibleFileSourceInfo(
 	file parser.DiscoveredFile,
 ) (size, mtime int64, ok bool) {
 	if isS3SourcePath(file.Path) {
@@ -7988,6 +8025,10 @@ func claudeDiscoveredFileSourceInfo(
 			return 0, 0, false
 		}
 		return obj.Size, obj.LastModified.UnixNano(), true
+	}
+	if file.Agent == parser.AgentIcodemate {
+		size, mtime, err := parser.IcodemateCLICompositeFileInfo(file.Path)
+		return size, mtime, err == nil
 	}
 	info, err := os.Stat(file.Path)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func TestIcodemateCLIForkSessionsReconcileAcrossSourceReparse(t *testing.T) {
@@ -204,4 +206,94 @@ func TestIcodemateCLIPartialForkWriteRetriesWholeSource(t *testing.T) {
 		database.GetSessionDataVersion("icodemate:forked"))
 	assert.Equal(t, db.CurrentDataVersion(),
 		database.GetSessionDataVersion("icodemate:forked-fork"))
+}
+
+func TestIcodemateCLIDeduplicatesSameSessionAcrossRoots(t *testing.T) {
+	liveRoot := t.TempDir()
+	archiveRoot := t.TempDir()
+	livePath := filepath.Join(liveRoot, "live-project", "duplicate.jsonl")
+	archivePath := filepath.Join(archiveRoot, "archive-project", "duplicate.jsonl")
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "same logical session").
+		String()
+	dbtest.WriteTestFile(t, livePath, []byte(content))
+	dbtest.WriteTestFile(t, archivePath, []byte(content))
+	liveSidecar := filepath.Join(
+		liveRoot, "live-project", "duplicate", "tool-results", "output.txt",
+	)
+	archiveSidecar := filepath.Join(
+		archiveRoot, "archive-project", "duplicate", "tool-results", "output.txt",
+	)
+	dbtest.WriteTestFile(t, liveSidecar, []byte("persisted output\n"))
+	dbtest.WriteTestFile(t, archiveSidecar, []byte("persisted output\n"))
+	older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Second)
+	require.NoError(t, os.Chtimes(archivePath, older, older))
+	require.NoError(t, os.Chtimes(archiveSidecar, older, older))
+	require.NoError(t, os.Chtimes(livePath, newer, newer))
+	require.NoError(t, os.Chtimes(liveSidecar, newer, newer))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentIcodemate: {liveRoot, archiveRoot},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	first := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, first.Failed)
+	assert.Equal(t, 1, first.Synced)
+	assert.Equal(t, livePath,
+		database.GetSessionFilePath("icodemate:duplicate"))
+
+	touchedArchive := newer.Add(time.Second)
+	require.NoError(t, os.Chtimes(archivePath, touchedArchive, touchedArchive))
+	engine.SyncPaths([]string{archivePath})
+	assert.Zero(t, engine.LastSyncStats().Synced,
+		"a stale duplicate watcher event must not replace the committed source")
+	assert.Equal(t, livePath,
+		database.GetSessionFilePath("icodemate:duplicate"))
+}
+
+func TestIcodemateCLIReconcilePreservesMovedSessionAcrossRoots(t *testing.T) {
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	oldPath := filepath.Join(oldRoot, "old-project", "moved.jsonl")
+	initial := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "old").String()
+	dbtest.WriteTestFile(t, oldPath, []byte(initial))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentIcodemate: {oldRoot, newRoot},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	require.NoError(t, os.Remove(oldPath))
+	newPath := filepath.Join(newRoot, "new-project", "moved.jsonl")
+	replacement := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "replacement").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "still active").
+		String()
+	dbtest.WriteTestFile(t, newPath, []byte(replacement))
+	require.NoError(t, engine.ReconcileWatchRoots(
+		t.Context(), []string{oldRoot, newRoot}, false,
+	))
+
+	active, err := database.GetSession(t.Context(), "icodemate:moved")
+	require.NoError(t, err)
+	require.NotNil(t, active)
+	assert.Equal(t, newPath,
+		database.GetSessionFilePath("icodemate:moved"))
+	messages, err := database.GetMessages(
+		t.Context(), "icodemate:moved", 0, 10, true,
+	)
+	require.NoError(t, err)
+	assert.Len(t, messages, 2)
 }

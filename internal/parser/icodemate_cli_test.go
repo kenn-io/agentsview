@@ -410,7 +410,8 @@ func TestIcodemateCLISourceMethods(t *testing.T) {
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
+	assert.Empty(t, plan.Roots[0].IncludeGlobs,
+		"the recursive watcher must admit persisted tool-result sidecars")
 	assert.Equal(t, "icodemate:cli-projects:"+root, plan.Roots[0].DebounceKey)
 
 	discovered, err := provider.Discover(context.Background())
@@ -456,4 +457,87 @@ func TestIcodemateCLISourceMethods(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, ignored)
+}
+
+func TestIcodemateCLISidecarChangeInvalidatesAndMapsOwningSource(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	sessionPath := filepath.Join(projectDir, "sidecar-session.jsonl")
+	resultPath := filepath.Join(
+		projectDir, "sidecar-session", "tool-results", "output.txt",
+	)
+	writeSourceFile(t, resultPath, "first persisted output\n")
+
+	resultPathJSON, err := json.Marshal(resultPath)
+	require.NoError(t, err)
+	persistedContent, err := json.Marshal(
+		"<persisted-output>\nOutput too large. Full output saved to: " +
+			resultPath + "\n</persisted-output>",
+	)
+	require.NoError(t, err)
+	writeSourceFile(t, sessionPath, strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + string(persistedContent) + `}]},"toolUseResult":{"persistedOutputPath":` + string(resultPathJSON) + `}}`,
+	}, "\n")+"\n")
+
+	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID: "sidecar-session",
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+	before, err := provider.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+
+	writeSourceFile(t, resultPath, "later persisted output\n")
+	after, err := provider.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, after.Hash,
+		"a sidecar-only write must invalidate the owning transcript")
+
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: resultPath, EventKind: "write", WatchRoot: root,
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sessionPath, changed[0].DisplayPath)
+
+	parsed, err := provider.Parse(t.Context(), ParseRequest{
+		Source: changed[0], Fingerprint: after,
+	})
+	require.NoError(t, err)
+	require.Len(t, parsed.Results, 1)
+	messages := parsed.Results[0].Result.Messages
+	require.Len(t, messages, 3)
+	require.Len(t, messages[2].ToolResults, 1)
+	assert.Equal(t, "later persisted output\n",
+		DecodeContent(messages[2].ToolResults[0].ContentRaw))
+}
+
+func TestIcodemateCLIParentSidecarChangeMapsSubagentSources(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	parentPath := filepath.Join(projectDir, "parent.jsonl")
+	childPath := filepath.Join(
+		projectDir, "parent", "subagents", "agent-child.jsonl",
+	)
+	resultPath := filepath.Join(
+		projectDir, "parent", "tool-results", "output.txt",
+	)
+	writeSourceFile(t, parentPath, claudeProviderFixture("parent"))
+	writeSourceFile(t, childPath, claudeProviderFixture("child"))
+	writeSourceFile(t, resultPath, "persisted output\n")
+
+	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: resultPath, EventKind: "write", WatchRoot: root,
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 2)
+	assert.ElementsMatch(t, []string{parentPath, childPath}, []string{
+		changed[0].DisplayPath, changed[1].DisplayPath,
+	})
 }

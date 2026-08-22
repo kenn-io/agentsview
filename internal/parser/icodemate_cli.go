@@ -2,10 +2,13 @@ package parser
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -169,8 +172,14 @@ func (s *icodemateCLISourceSet) Parse(
 	if err != nil {
 		return ParseOutcome{}, err
 	}
-	if req.Fingerprint.Hash != "" {
-		for i := range results {
+	for i := range results {
+		if req.Fingerprint.Size != 0 {
+			results[i].Session.File.Size = req.Fingerprint.Size
+		}
+		if req.Fingerprint.MTimeNS != 0 {
+			results[i].Session.File.Mtime = req.Fingerprint.MTimeNS
+		}
+		if req.Fingerprint.Hash != "" {
 			results[i].Session.File.Hash = req.Fingerprint.Hash
 		}
 	}
@@ -193,10 +202,9 @@ func (s *icodemateCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
 		roots = append(roots, WatchRoot{
-			Path:         root,
-			Recursive:    true,
-			IncludeGlobs: []string{"*.jsonl"},
-			DebounceKey:  string(AgentIcodemate) + ":cli-projects:" + root,
+			Path:        root,
+			Recursive:   true,
+			DebounceKey: string(AgentIcodemate) + ":cli-projects:" + root,
 		})
 	}
 	return WatchPlan{Roots: roots}, nil
@@ -219,6 +227,9 @@ func (s *icodemateCLISourceSet) SourcesForChangedPath(
 		if !s.hasRoot(root) {
 			return nil, nil
 		}
+		if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
+			return sources, err
+		}
 		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
 		if !ok {
 			return nil, nil
@@ -226,6 +237,9 @@ func (s *icodemateCLISourceSet) SourcesForChangedPath(
 		return []SourceRef{source}, nil
 	}
 	for _, root := range s.roots {
+		if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
+			return sources, err
+		}
 		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
 		if ok {
 			return []SourceRef{source}, nil
@@ -284,19 +298,172 @@ func (s *icodemateCLISourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	hash, err := hashJSONLSourceFile(path)
+	hash, size, mtime, err := icodemateCLICompositeFingerprint(path, info)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
 	inode, device := sourceFileIdentity(info)
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
-		Size:    info.Size(),
-		MTimeNS: info.ModTime().UnixNano(),
+		Size:    size,
+		MTimeNS: mtime,
 		Inode:   inode,
 		Device:  device,
 		Hash:    hash,
 	}, nil
+}
+
+func (s *icodemateCLISourceSet) sourcesForToolResultPath(
+	root, changedPath string,
+) ([]SourceRef, error) {
+	root = filepath.Clean(root)
+	changedPath = filepath.Clean(changedPath)
+	rel, err := filepath.Rel(root, changedPath)
+	if err != nil || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, nil
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	toolResultsAt := slices.Index(parts, "tool-results")
+	if toolResultsAt < 2 || toolResultsAt == len(parts)-1 {
+		return nil, nil
+	}
+	toolDir := filepath.Join(append([]string{root}, parts[:toolResultsAt+1]...)...)
+	ownerBase := filepath.Dir(toolDir)
+	var sources []SourceRef
+	seen := make(map[string]struct{})
+	add := func(path string) {
+		source, ok := s.sourceRef(root, path)
+		if !ok {
+			return
+		}
+		if _, ok := seen[source.Key]; ok {
+			return
+		}
+		seen[source.Key] = struct{}{}
+		sources = append(sources, source)
+	}
+	add(ownerBase + ".jsonl")
+	if slices.Contains(parts[:toolResultsAt], "subagents") {
+		return sources, nil
+	}
+
+	subagentsRoot := filepath.Join(ownerBase, "subagents")
+	err = filepath.WalkDir(subagentsRoot, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "agent-") ||
+			!strings.HasSuffix(entry.Name(), ".jsonl") {
+			return nil
+		}
+		add(path)
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		err = nil
+	}
+	return sources, err
+}
+
+func icodemateCLICompositeFingerprint(
+	path string, transcriptInfo os.FileInfo,
+) (hash string, size, mtime int64, err error) {
+	transcriptHash, err := hashJSONLSourceFile(path)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "transcript\x00%s\x00", transcriptHash)
+	sidecars, size, mtime, err := icodemateCLICompositeFileInfo(
+		path, transcriptInfo,
+	)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	for _, sidecar := range sidecars {
+		info, statErr := os.Stat(sidecar)
+		if statErr != nil {
+			return "", 0, 0, fmt.Errorf("stat %s: %w", sidecar, statErr)
+		}
+		changeTime, ok := codexIndexChangeTime(sidecar, info)
+		if ok {
+			_, _ = fmt.Fprintf(
+				h, "sidecar\x00%s\x00%d\x00%d\x00%d\x00",
+				filepath.ToSlash(sidecar), info.Size(),
+				info.ModTime().UnixNano(), changeTime,
+			)
+			continue
+		}
+		sidecarHash, hashErr := hashJSONLSourceFile(sidecar)
+		if hashErr != nil {
+			return "", 0, 0, hashErr
+		}
+		_, _ = fmt.Fprintf(
+			h, "sidecar\x00%s\x00%s\x00",
+			filepath.ToSlash(sidecar), sidecarHash,
+		)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), size, mtime, nil
+}
+
+// IcodemateCLICompositeFileInfo reports the same aggregate size and mtime used
+// by the CLI source fingerprint. The sync duplicate resolver uses it to compare
+// a candidate against the committed source without ignoring tool-result
+// sidecars.
+func IcodemateCLICompositeFileInfo(path string) (size, mtime int64, err error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	_, size, mtime, err = icodemateCLICompositeFileInfo(path, info)
+	return size, mtime, err
+}
+
+func icodemateCLICompositeFileInfo(
+	path string, transcriptInfo os.FileInfo,
+) (sidecars []string, size, mtime int64, err error) {
+	sidecars, err = icodemateCLISidecarFiles(path)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	size = transcriptInfo.Size()
+	mtime = transcriptInfo.ModTime().UnixNano()
+	for _, sidecar := range sidecars {
+		info, statErr := os.Stat(sidecar)
+		if statErr != nil {
+			return nil, 0, 0, statErr
+		}
+		size += info.Size()
+		mtime = max(mtime, info.ModTime().UnixNano())
+	}
+	return sidecars, size, mtime, nil
+}
+
+func icodemateCLISidecarFiles(sessionPath string) ([]string, error) {
+	seenDirs := make(map[string]struct{})
+	var files []string
+	for _, dir := range claudeToolResultDirs(sessionPath) {
+		dir = filepath.Clean(dir)
+		if _, ok := seenDirs[dir]; ok {
+			continue
+		}
+		seenDirs[dir] = struct{}{}
+		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !entry.IsDir() {
+				files = append(files, path)
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	slices.Sort(files)
+	return slices.Compact(files), nil
 }
 
 func (s *icodemateCLISourceSet) pathFromSource(source SourceRef) (string, bool) {

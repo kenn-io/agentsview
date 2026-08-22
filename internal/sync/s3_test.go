@@ -684,8 +684,9 @@ func TestSyncClaudeS3SubagentTranscriptsContextPreservesStoredParentNamespace(
 		Machine:   "central",
 		Ephemeral: true,
 	})
-	require.NoError(t, engine.SyncClaudeS3SubagentTranscriptsContext(
-		context.Background(), "laptop~parent-uuid", []string{childPath}))
+	require.NoError(t, engine.SyncS3SubagentTranscriptsContext(
+		context.Background(), "laptop~parent-uuid", parser.AgentClaude,
+		[]string{childPath}))
 
 	child, err := database.GetSessionFull(
 		context.Background(), "laptop~agent-worker1")
@@ -702,6 +703,64 @@ func TestSyncClaudeS3SubagentTranscriptsContextPreservesStoredParentNamespace(
 		context.Background(), "agent-worker1")
 	require.NoError(t, err)
 	assert.Nil(t, rawChild, "the child must not collide with a local session")
+}
+
+func TestSyncS3IcodemateSubagentPreservesAgentAndIDNamespace(t *testing.T) {
+	database := openTestDB(t)
+	const root = "s3://bucket/laptop/raw/icodemate"
+	const parentPath = root + "/project/parent-uuid.jsonl"
+	const childPath = root +
+		"/project/parent-uuid/subagents/agent-worker1.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			"2026-05-20T10:01:00Z", "do the subtask", "parent-uuid").
+		AddClaudeAssistant("2026-05-20T10:01:30Z", "subtask done").
+		String()
+
+	oldFetch := fetchS3Object
+	oldStat := statClaudeS3Session
+	t.Cleanup(func() {
+		fetchS3Object = oldFetch
+		statClaudeS3Session = oldStat
+	})
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, childPath, got)
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	statClaudeS3Session = func(got string) (parser.S3Object, error) {
+		require.Equal(t, childPath, got)
+		return parser.S3Object{
+			URI:          childPath,
+			Size:         int64(len(content)),
+			LastModified: time.Date(2026, 5, 20, 10, 2, 0, 0, time.UTC),
+			Fingerprint:  "s3-meta:icodemate-worker1",
+		}, nil
+	}
+
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:       "laptop~icodemate:parent-uuid",
+		Project:  "project",
+		Machine:  "laptop",
+		Agent:    "icodemate",
+		FilePath: strPtr(parentPath),
+	}))
+	engine := NewEngine(database, EngineConfig{Machine: "central", Ephemeral: true})
+	require.NoError(t, engine.SyncS3SubagentTranscriptsContext(
+		t.Context(), "laptop~icodemate:parent-uuid", parser.AgentIcodemate,
+		[]string{childPath},
+	))
+
+	child, err := database.GetSessionFull(
+		t.Context(), "laptop~icodemate:agent-worker1")
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Equal(t, "icodemate", child.Agent)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "laptop~icodemate:parent-uuid", *child.ParentSessionID)
+	claudeChild, err := database.GetSessionFull(
+		t.Context(), "laptop~agent-worker1")
+	require.NoError(t, err)
+	assert.Nil(t, claudeChild)
 }
 
 func TestSyncClaudeS3SubagentTranscriptsEmitsSessionsForForkTombstone(
@@ -772,8 +831,8 @@ func TestSyncClaudeS3SubagentTranscriptsEmitsSessionsForForkTombstone(
 		Emitter: emitter,
 	})
 	t.Cleanup(engine.Close)
-	require.NoError(t, engine.SyncClaudeS3SubagentTranscriptsContext(
-		t.Context(), "laptop~parent-uuid", []string{childPath},
+	require.NoError(t, engine.SyncS3SubagentTranscriptsContext(
+		t.Context(), "laptop~parent-uuid", parser.AgentClaude, []string{childPath},
 	))
 
 	assert.Equal(t, []string{"messages", "sessions"}, emitter.got(),
@@ -838,8 +897,9 @@ func TestSyncClaudeS3SubagentTranscriptsContextUsesPrefixedChildProject(
 		Ephemeral: true,
 	})
 
-	require.NoError(t, engine.SyncClaudeS3SubagentTranscriptsContext(
-		context.Background(), "laptop~parent-uuid", []string{childPath}))
+	require.NoError(t, engine.SyncS3SubagentTranscriptsContext(
+		context.Background(), "laptop~parent-uuid", parser.AgentClaude,
+		[]string{childPath}))
 
 	remoteChild, err := database.GetSessionFull(
 		context.Background(), "laptop~agent-worker1")
