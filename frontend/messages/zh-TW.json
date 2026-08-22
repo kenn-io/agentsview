@@ -1026,6 +1026,8 @@
   "data_reclassify_managed_in_rules": "此更正將儲存為專案對應規則。",
   "data_reclassify_open_rules": "開啟專案對應規則",
   "data_workspace_all_projects": "所有專案",
+  "data_workspace_map_whole_project": "對應整個專案",
+  "data_workspace_correct_one_folder": "修正單一資料夾",
   "data_workspace_close": "關閉專案詳細資訊",
   "data_workspace_activity": "活動",
   "data_workspace_activity_range": "{first} – {last}",

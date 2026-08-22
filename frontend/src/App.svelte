@@ -820,7 +820,7 @@
     <RecentEditsPage />
   </div>
 {:else if router.route === "data"}
-  <div class="page-scroll">
+  <div class="page-scroll data-page-host">
     <DataPage />
   </div>
 {:else if router.route === "settings"}
@@ -932,6 +932,11 @@
   }
 
   .settings-page-host {
+    display: flex;
+    overflow: hidden;
+  }
+
+  .data-page-host {
     display: flex;
     overflow: hidden;
   }

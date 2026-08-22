@@ -1098,6 +1098,8 @@
   "data_reclassify_managed_in_rules": "Cette correction sera enregistrée comme règle de correspondance de projet.",
   "data_reclassify_open_rules": "Ouvrir les règles de correspondance",
   "data_workspace_all_projects": "Tous les projets",
+  "data_workspace_map_whole_project": "Mapper tout le projet",
+  "data_workspace_correct_one_folder": "Corriger un dossier",
   "data_workspace_close": "Fermer les détails du projet",
   "data_workspace_activity": "Activité",
   "data_workspace_activity_range": "{first} – {last}",

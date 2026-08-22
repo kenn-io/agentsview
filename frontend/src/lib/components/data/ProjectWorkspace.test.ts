@@ -8,6 +8,8 @@ import { m } from "../../i18n/index.js";
 
 const api = vi.hoisted(() => ({
   candidates: vi.fn(),
+  listSessions: vi.fn(),
+  listMessages: vi.fn(),
   preview: vi.fn(),
   apply: vi.fn(),
 }));
@@ -15,6 +17,10 @@ const api = vi.hoisted(() => ({
 vi.mock("../../api/generated/index", () => ({
   DataService: {
     getApiV1DataProjectReclassificationCandidates: api.candidates,
+  },
+  SessionsService: {
+    getApiV1Sessions: api.listSessions,
+    getApiV1SessionsIdMessages: api.listMessages,
   },
   SettingsService: {
     postApiV1SettingsWorktreeMappingsPreview: api.preview,
@@ -24,6 +30,8 @@ vi.mock("../../api/generated/index", () => ({
 vi.mock("../../api/runtime.js", () => ({
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
+  configureGeneratedClient: vi.fn(),
+  isRemoteConnection: vi.fn(() => false),
 }));
 
 const candidate = {
@@ -65,9 +73,62 @@ describe("ProjectWorkspace", () => {
 
   beforeEach(() => {
     api.candidates.mockReset();
+    api.listSessions.mockReset();
+    api.listMessages.mockReset();
     api.preview.mockReset();
     api.apply.mockReset();
     api.candidates.mockResolvedValue({ candidates: [] });
+    api.listSessions.mockResolvedValue({
+      sessions: [
+        {
+          id: "session-1",
+          project: "wrong-project",
+          cwd: "/srv/worktrees/example/repo",
+          display_name: "Fix project mapping",
+          first_message: "Work out which project this session belongs to",
+          agent: "codex",
+          started_at: "2026-03-09T18:30:00Z",
+        },
+      ],
+      total: 1,
+    });
+    api.listMessages.mockResolvedValue({
+      count: 2,
+      messages: [
+        {
+          id: 1,
+          session_id: "session-1",
+          ordinal: 0,
+          role: "user",
+          content: "Work out which project this session belongs to",
+          timestamp: "2026-03-09T18:30:00Z",
+          has_thinking: false,
+          thinking_text: "",
+          has_tool_use: false,
+          content_length: 47,
+          model: "",
+          context_tokens: 0,
+          output_tokens: 0,
+          is_system: false,
+        },
+        {
+          id: 2,
+          session_id: "session-1",
+          ordinal: 1,
+          role: "assistant",
+          content: "The repository layout shows this belongs to project A.",
+          timestamp: "2026-03-09T18:31:00Z",
+          has_thinking: false,
+          thinking_text: "",
+          has_tool_use: false,
+          content_length: 53,
+          model: "codex",
+          context_tokens: 0,
+          output_tokens: 0,
+          is_system: false,
+        },
+      ],
+    });
   });
 
   afterEach(() => {
@@ -136,6 +197,48 @@ describe("ProjectWorkspace", () => {
     await flush();
 
     expect(api.candidates).toHaveBeenCalledWith({
+      projectLabel: "wrong-project",
+      projectKey: "pl1:sha256:wrong",
+    });
+  });
+
+  it("shows the selected project's sessions before a correction is drafted", async () => {
+    render();
+    await flush();
+    await flush();
+
+    expect(api.listSessions).toHaveBeenCalledWith({
+      project: "wrong-project",
+      includeOneShot: true,
+      includeAutomated: true,
+      includeChildren: true,
+      limit: 20,
+      orderBy: "recent",
+    });
+    expect(api.listMessages).toHaveBeenCalledWith({
+      id: "session-1",
+      limit: 12,
+      direction: "asc",
+      roles: "user,assistant",
+    });
+    expect(screen.getByText("The repository layout shows this belongs to project A.")).toBeTruthy();
+  });
+
+  it("opens the existing all-folders correction for one selected project", async () => {
+    api.candidates.mockResolvedValue({ candidates: [candidate] });
+    render();
+    await flush();
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: m.data_workspace_map_whole_project() }),
+    );
+    await flush();
+
+    expect(screen.getByRole("heading", { name: m.data_batch_correction_heading() })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: m.data_workspace_correct_one_folder() }),
+    ).toBeTruthy();
+    expect(api.candidates).toHaveBeenLastCalledWith({
       projectLabel: "wrong-project",
       projectKey: "pl1:sha256:wrong",
     });

@@ -14,6 +14,7 @@
   import { LatestRead } from "../../utils/latest-read.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import ProjectSessionPreviewCarousel from "./ProjectSessionPreviewCarousel.svelte";
+  import { ChevronDownIcon, ChevronRightIcon } from "../../icons.js";
 
   // Candidates load once on mount; there is no reactive reload when the
   // project identity changes. Hosts MUST remount this component whenever
@@ -58,6 +59,7 @@
   let refreshing = $state(false);
   let applyError = $state("");
   let reviewing = $state(false);
+  let suggestionsExpanded = $state(true);
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   const candidatesRead = new LatestRead();
@@ -303,53 +305,65 @@
 
 <div class="editor">
   <section class="suggestions">
-    <div class="section-heading">
-      <div>
-        <h4>{m.data_mapping_observed_folders()}</h4>
-        <p>{m.data_reclassify_suggestions_intro()}</p>
-      </div>
-    </div>
+    <Button
+      size="sm"
+      class="suggestions-toggle"
+      label={m.data_mapping_observed_folders()}
+      ariaExpanded={suggestionsExpanded}
+      onclick={() => (suggestionsExpanded = !suggestionsExpanded)}
+    >
+      {#snippet trailing()}
+        {#if suggestionsExpanded}
+          <ChevronDownIcon size="13" strokeWidth="2.2" aria-hidden="true" />
+        {:else}
+          <ChevronRightIcon size="13" strokeWidth="2.2" aria-hidden="true" />
+        {/if}
+      {/snippet}
+    </Button>
 
-    {#if candidatesLoading}
-      <p class="muted">{m.data_reclassify_candidates_loading()}</p>
-    {:else if candidatesError}
-      <p class="error-text">{candidatesError}</p>
-    {:else if candidates.length === 0}
-      <p class="muted">{m.data_reclassify_no_candidates()}</p>
-    {:else}
-      <div class="folder-list">
-        {#each candidates as candidate (candidate.id)}
-          <div class="folder-row" class:selected={candidate.id === selectedCandidateId}>
-            <Button
-              size="sm"
-              class="folder-choice"
-              ariaLabel={candidate.suggested_prefix || m.data_reclassify_path_unavailable()}
-              title={candidate.suggested_prefix || m.data_reclassify_path_unavailable()}
-              tone={candidate.id === selectedCandidateId ? "info" : "neutral"}
-              surface={candidate.id === selectedCandidateId ? "soft" : "outline"}
-              onclick={() => selectCandidate(candidate.id)}
-            >
-              {#snippet children()}
-                <span class="folder-path">
-                  {candidate.suggested_prefix || m.data_reclassify_path_unavailable()}
-                </span>
-                <span class="folder-details">
-                  <span>{candidate.machine}</span>
-                  <span>{m.data_reclassify_candidate_sessions({ count: candidate.contributing_sessions })}</span>
-                </span>
-                <span class="folder-footer">
-                  {#if candidate.available}
-                    <span class="folder-action">{m.data_reclassify_use_for_project()}</span>
-                  {/if}
-                  <Chip size="xs" tone={candidate.available ? "muted" : "warning"} uppercase={false}>
-                    {evidenceLabel(candidate.evidence_kind)}
-                  </Chip>
-                </span>
-              {/snippet}
-            </Button>
-          </div>
-        {/each}
-      </div>
+    {#if suggestionsExpanded}
+      <p class="suggestions-intro">{m.data_reclassify_suggestions_intro()}</p>
+      {#if candidatesLoading}
+        <p class="muted">{m.data_reclassify_candidates_loading()}</p>
+      {:else if candidatesError}
+        <p class="error-text">{candidatesError}</p>
+      {:else if candidates.length === 0}
+        <p class="muted">{m.data_reclassify_no_candidates()}</p>
+      {:else}
+        <div class="folder-list">
+          {#each candidates as candidate (candidate.id)}
+            <div class="folder-row" class:selected={candidate.id === selectedCandidateId}>
+              <Button
+                size="sm"
+                class="folder-choice"
+                ariaLabel={candidate.suggested_prefix || m.data_reclassify_path_unavailable()}
+                title={candidate.suggested_prefix || m.data_reclassify_path_unavailable()}
+                tone={candidate.id === selectedCandidateId ? "info" : "neutral"}
+                surface={candidate.id === selectedCandidateId ? "soft" : "outline"}
+                onclick={() => selectCandidate(candidate.id)}
+              >
+                {#snippet children()}
+                  <span class="folder-path">
+                    {candidate.suggested_prefix || m.data_reclassify_path_unavailable()}
+                  </span>
+                  <span class="folder-details">
+                    <span>{candidate.machine}</span>
+                    <span>{m.data_reclassify_candidate_sessions({ count: candidate.contributing_sessions })}</span>
+                  </span>
+                  <span class="folder-footer">
+                    {#if candidate.available}
+                      <span class="folder-action">{m.data_reclassify_use_for_project()}</span>
+                    {/if}
+                    <Chip size="xs" tone={candidate.available ? "muted" : "warning"} uppercase={false}>
+                      {evidenceLabel(candidate.evidence_kind)}
+                    </Chip>
+                  </span>
+                {/snippet}
+              </Button>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </section>
 
@@ -388,14 +402,19 @@
           </label>
         </div>
 
-        {#if previewLoading}
-          <p class="muted">{m.data_reclassify_previewing()}</p>
-        {:else if preview}
-          <div class="impact" aria-live="polite">
-            <span>{m.data_reclassify_sessions_matched({ count: preview.matched_sessions })}</span>
-            <span>{m.data_reclassify_sessions_changing({ count: preview.updated_sessions })}</span>
-            <span>{m.data_reclassify_projects_affected({ count: preview.distinct_projects })}</span>
-          </div>
+        <div class="impact-slot" aria-live="polite">
+          {#if previewLoading}
+            <p class="muted">{m.data_reclassify_previewing()}</p>
+          {:else if preview}
+            <div class="impact">
+              <span>{m.data_reclassify_sessions_matched({ count: preview.matched_sessions })}</span>
+              <span>{m.data_reclassify_sessions_changing({ count: preview.updated_sessions })}</span>
+              <span>{m.data_reclassify_projects_affected({ count: preview.distinct_projects })}</span>
+            </div>
+          {/if}
+        </div>
+
+        {#if preview}
           {#if preview.normalized_project && preview.normalized_project !== targetProject.trim()}
             <p class="normalized">{m.data_reclassify_normalized_target({ project: preview.normalized_project })}</p>
           {/if}
@@ -497,7 +516,6 @@
     padding: 10px 12px;
     border-bottom: 1px solid var(--border-muted);
   }
-  .section-heading,
   .composer-heading {
     display: flex;
     align-items: center;
@@ -505,7 +523,25 @@
     gap: 12px;
   }
   h4 { margin: 0; color: var(--text-primary); font-size: 12px; }
-  .section-heading p { margin: 2px 0 0; color: var(--text-muted); font-size: 10px; }
+  .suggestions :global(.suggestions-toggle.kit-button) {
+    width: 100%;
+    min-height: 28px;
+    justify-content: space-between;
+    padding: 0 2px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 650;
+    transform: none;
+  }
+  .suggestions :global(.suggestions-toggle.kit-button:hover:not(:disabled)) {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-primary);
+  }
+  .suggestions-intro { margin: 0; color: var(--text-muted); font-size: 10px; }
   .composer {
     display: flex;
     flex-direction: column;
@@ -575,6 +611,11 @@
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
+  }
+  .impact-slot {
+    display: flex;
+    min-height: 16px;
+    align-items: center;
   }
   .impact { display: flex; flex-wrap: wrap; gap: var(--space-5); color: var(--text-secondary); font-size: 10px; }
   .normalized { color: var(--text-secondary); font-size: 12px; }

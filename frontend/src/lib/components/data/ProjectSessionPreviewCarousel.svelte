@@ -73,7 +73,6 @@
   <Button
     size="sm"
     class="session-preview-toggle"
-    surface="soft"
     label={m.data_reclassify_session_preview_count({ count: samples.length })}
     ariaExpanded={expanded}
     onclick={toggleExpanded}
@@ -158,9 +157,23 @@
     padding-top: 10px;
     border-top: 1px solid var(--border-muted);
   }
-  .session-previews :global(.session-preview-toggle) {
+  .session-previews :global(.session-preview-toggle.kit-button) {
     width: 100%;
+    min-height: 28px;
     justify-content: space-between;
+    padding: 0 2px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 650;
+    transform: none;
+  }
+  .session-previews :global(.session-preview-toggle.kit-button:hover:not(:disabled)) {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-primary);
   }
   .carousel {
     display: flex;

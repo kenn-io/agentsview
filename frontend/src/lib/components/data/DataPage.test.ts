@@ -6,6 +6,8 @@ import type { DbProjectInventory, DbProjectInventoryRow } from "../../api/genera
 const api = vi.hoisted(() => ({
   getApiV1DataProjects: vi.fn(),
   getApiV1DataProjectRules: vi.fn(),
+  listSessions: vi.fn(),
+  listMessages: vi.fn(),
   candidates: vi.fn(),
   preview: vi.fn(),
   apply: vi.fn(),
@@ -14,6 +16,7 @@ const api = vi.hoisted(() => ({
 const syncMock = vi.hoisted(() => ({
   serverVersion: { version: "1.0.0", read_only: false } as object | null,
   readOnly: false,
+  onSyncComplete: vi.fn(),
 }));
 
 vi.mock("../../api/generated/index", () => ({
@@ -21,6 +24,10 @@ vi.mock("../../api/generated/index", () => ({
     getApiV1DataProjects: api.getApiV1DataProjects,
     getApiV1DataProjectRules: api.getApiV1DataProjectRules,
     getApiV1DataProjectReclassificationCandidates: api.candidates,
+  },
+  SessionsService: {
+    getApiV1Sessions: api.listSessions,
+    getApiV1SessionsIdMessages: api.listMessages,
   },
   SettingsService: {
     postApiV1SettingsWorktreeMappingsPreview: api.preview,
@@ -74,11 +81,15 @@ let component: ReturnType<typeof mount> | undefined;
 beforeEach(() => {
   api.getApiV1DataProjects.mockReset();
   api.getApiV1DataProjectRules.mockReset();
+  api.listSessions.mockReset();
+  api.listMessages.mockReset();
   api.candidates.mockReset();
   api.preview.mockReset();
   api.apply.mockReset();
   api.applyMappings.mockReset();
   api.candidates.mockResolvedValue({ candidates: [] });
+  api.listSessions.mockResolvedValue({ sessions: [], total: 0 });
+  api.listMessages.mockResolvedValue({ messages: [], count: 0 });
   syncMock.serverVersion = { version: "1.0.0", read_only: false };
   syncMock.readOnly = false;
   data.inventory = null;

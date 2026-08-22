@@ -1098,6 +1098,8 @@
   "data_reclassify_managed_in_rules": "This correction will be saved as a project mapping rule.",
   "data_reclassify_open_rules": "Open project mapping rules",
   "data_workspace_all_projects": "All projects",
+  "data_workspace_map_whole_project": "Map whole project",
+  "data_workspace_correct_one_folder": "Correct one folder",
   "data_workspace_close": "Close project details",
   "data_workspace_activity": "Activity",
   "data_workspace_activity_range": "{first} – {last}",

@@ -1028,6 +1028,8 @@
   "data_reclassify_managed_in_rules": "이 수정은 프로젝트 매핑 규칙으로 저장됩니다.",
   "data_reclassify_open_rules": "프로젝트 매핑 규칙 열기",
   "data_workspace_all_projects": "모든 프로젝트",
+  "data_workspace_map_whole_project": "전체 프로젝트 매핑",
+  "data_workspace_correct_one_folder": "폴더 하나 수정",
   "data_workspace_close": "프로젝트 세부 정보 닫기",
   "data_workspace_activity": "활동",
   "data_workspace_activity_range": "{first} – {last}",

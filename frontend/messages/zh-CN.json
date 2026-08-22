@@ -1026,6 +1026,8 @@
   "data_reclassify_managed_in_rules": "此更正将保存为项目映射规则。",
   "data_reclassify_open_rules": "打开项目映射规则",
   "data_workspace_all_projects": "所有项目",
+  "data_workspace_map_whole_project": "映射整个项目",
+  "data_workspace_correct_one_folder": "修正单个文件夹",
   "data_workspace_close": "关闭项目详情",
   "data_workspace_activity": "活动",
   "data_workspace_activity_range": "{first} – {last}",

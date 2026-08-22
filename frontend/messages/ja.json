@@ -1086,6 +1086,8 @@
   "data_reclassify_managed_in_rules": "この修正はプロジェクトマッピングルールとして保存されます。",
   "data_reclassify_open_rules": "プロジェクトマッピングルールを開く",
   "data_workspace_all_projects": "すべてのプロジェクト",
+  "data_workspace_map_whole_project": "プロジェクト全体をマッピング",
+  "data_workspace_correct_one_folder": "1つのフォルダーを修正",
   "data_workspace_close": "プロジェクトの詳細を閉じる",
   "data_workspace_activity": "活動",
   "data_workspace_activity_range": "{first} – {last}",

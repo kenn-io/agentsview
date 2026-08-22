@@ -47,6 +47,7 @@
     message: Message;
     session?: Session | null;
     isSubagentContext?: boolean;
+    compact?: boolean;
     highlightQuery?: string;
     isCurrentHighlight?: boolean;
   }
@@ -55,6 +56,7 @@
     message,
     session,
     isSubagentContext = false,
+    compact = false,
     highlightQuery = "",
     isCurrentHighlight = false,
   }: Props = $props();
@@ -376,6 +378,7 @@
 <div
   class="message"
   class:is-user={isUser}
+  class:compact
   style:border-left-color={accentColor}
   style:background={roleBg}
 >
@@ -572,11 +575,20 @@
     border-radius: 0 var(--radius-md) var(--radius-md) 0;
   }
 
+  .message.compact {
+    padding: 9px 10px;
+  }
+
   .message-header {
     display: flex;
     align-items: center;
     gap: 8px;
     margin-bottom: 10px;
+  }
+
+  .compact .message-header {
+    gap: 6px;
+    margin-bottom: 6px;
   }
 
   .role-icon {
@@ -593,15 +605,29 @@
     line-height: 1;
   }
 
+  .compact .role-icon {
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+  }
+
   .role-label {
     font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.01em;
   }
 
+  .compact .role-label {
+    font-size: 11px;
+  }
+
   .timestamp {
     font-size: 12px;
     color: var(--text-muted);
+  }
+
+  .compact .timestamp {
+    font-size: 10px;
   }
 
   .header-meta {
@@ -724,6 +750,11 @@
     line-height: 1.7;
     color: var(--text-primary);
     word-wrap: break-word;
+  }
+
+  .compact .text-content {
+    font-size: 12px;
+    line-height: 1.55;
   }
 
   .message-body {

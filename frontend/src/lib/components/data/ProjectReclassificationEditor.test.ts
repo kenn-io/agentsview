@@ -113,7 +113,7 @@ describe("ProjectReclassificationEditor", () => {
       projectLabel: "wrong-project",
       projectKey: "pl1:sha256:wrong",
     });
-    expect(screen.getByRole("heading", { name: m.data_mapping_observed_folders() })).toBeTruthy();
+    expect(screen.getByRole("button", { name: m.data_mapping_observed_folders() })).toBeTruthy();
     expect(screen.getByText(m.data_reclassify_suggestions_intro())).toBeTruthy();
     expect(screen.getByRole("button", { name: candidate.suggested_prefix })).toBeTruthy();
     expect(screen.getByDisplayValue(candidate.suggested_prefix)).toBeTruthy();
@@ -332,6 +332,21 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
     expect(screen.getByText(/filesystem root/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save correction" })).toBeNull();
+  });
+
+  it("collapses folder suggestions without hiding the correction", async () => {
+    render();
+    await flush();
+
+    const toggle = screen.getByRole("button", { name: m.data_mapping_observed_folders() });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: candidate.suggested_prefix })).toBeTruthy();
+
+    await fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: candidate.suggested_prefix })).toBeNull();
+    expect(screen.getByRole("heading", { name: m.data_mapping_definition() })).toBeTruthy();
   });
 
   it("does not offer mapping controls for a filesystem-root candidate", async () => {
