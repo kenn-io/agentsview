@@ -110,6 +110,7 @@ func TestProcessS3CursorNamespacesIDsBySourceMachine(t *testing.T) {
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/cursor/demo-proj/shared-id.jsonl"
 	content := "user:\nHello from Cursor\nassistant:\nHi there.\n"
+	objectMtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
 
 	oldFetch := fetchS3Object
 	t.Cleanup(func() { fetchS3Object = oldFetch })
@@ -127,7 +128,7 @@ func TestProcessS3CursorNamespacesIDsBySourceMachine(t *testing.T) {
 		Project:     "demo-proj",
 		Machine:     "laptop",
 		SourceSize:  int64(len(content)),
-		SourceMtime: time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano(),
+		SourceMtime: objectMtime.UnixNano(),
 	})
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
@@ -145,6 +146,8 @@ func TestProcessS3CursorNamespacesIDsBySourceMachine(t *testing.T) {
 	assert.Equal(t, "laptop", sess.Machine)
 	assert.Equal(t, "cursor", sess.Agent)
 	assert.Equal(t, path, derefString(sess.FilePath))
+	assert.Equal(t, objectMtime.Format(time.RFC3339Nano), derefString(sess.StartedAt))
+	assert.Equal(t, objectMtime.Format(time.RFC3339Nano), derefString(sess.EndedAt))
 	raw, err := database.GetSessionFull(context.Background(), "cursor:shared-id")
 	require.NoError(t, err)
 	assert.Nil(t, raw)

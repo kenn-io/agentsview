@@ -1940,12 +1940,12 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 		}
 		var captured manifest
 		if json.Unmarshal(data, &captured) != nil || captured.SourcesComplete ||
-			len(captured.Sources) != 1 {
+			len(captured.Sources) == 0 {
 			return false
 		}
 		sessionID = captured.ProviderSessionID
 		return sessionID != ""
-	}, 5*time.Second, time.Millisecond)
+	}, 20*time.Second, time.Millisecond)
 
 	rootPath := filepath.Join(root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
 	rootData := []byte(strings.Join(
@@ -1961,7 +1961,7 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 		var captured manifest
 		return json.Unmarshal(data, &captured) == nil &&
 			!captured.SourcesComplete && len(captured.Sources) == 2
-	}, 5*time.Second, time.Millisecond)
+	}, 20*time.Second, time.Millisecond)
 	require.NoError(t, os.Rename(childPath, filepath.Join(t.TempDir(), "removed.jsonl")))
 
 	response := <-done

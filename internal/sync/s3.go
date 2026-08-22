@@ -343,6 +343,13 @@ func (e *Engine) processS3Session(
 			}
 		}
 	}
+	if err := os.Chtimes(tmp, sourceInfo.ModTime(), sourceInfo.ModTime()); err != nil {
+		return processResult{
+			err:            fmt.Errorf("setting S3 source modification time: %w", err),
+			noCacheSkip:    true,
+			retentionLease: lease,
+		}
+	}
 	res, err := e.parseMaterializedS3Source(ctx, file, dir, tmp)
 	if err != nil {
 		return processResult{err: err, noCacheSkip: true, retentionLease: lease}

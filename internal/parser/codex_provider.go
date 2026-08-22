@@ -84,11 +84,9 @@ func (f *codexProviderFactory) Capabilities() Capabilities {
 func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &codexProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Caps:   f.Capabilities(),
-			Config: cfg,
-		},
+		Def:             cloneAgentDef(f.def),
+		Caps:            f.Capabilities(),
+		Config:          cfg,
 		spec:            f.spec,
 		sources:         newCodexSourceSet(f.spec.agent, cfg.Roots),
 		cursorCache:     f.cursorCache,
