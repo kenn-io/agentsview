@@ -204,6 +204,35 @@ describe("DataPage", () => {
     expect(screen.getByRole("heading", { name: "wrong-project" })).toBeTruthy();
   });
 
+  it("replaces a local range selection when browser navigation selects one project", async () => {
+    const inventory = makeInventory([
+      makeRow({ project_key: "k1", label: "first", sessions: 3 }),
+      makeRow({ project_key: "k2", label: "second", sessions: 2 }),
+      makeRow({ project_key: "k3", label: "third", sessions: 1 }),
+    ]);
+    api.getApiV1DataProjects.mockResolvedValue(inventory);
+
+    component = mount(DataPage, { target: document.body });
+    await flush();
+
+    await fireEvent.click(document.querySelector('[data-project-key="k1"]') as Element);
+    await fireEvent.click(document.querySelector('[data-project-key="k3"]') as Element, {
+      shiftKey: true,
+    });
+    await flush();
+    expect(document.querySelectorAll('.project-row[aria-selected="true"]')).toHaveLength(3);
+
+    (router as unknown as { params: Record<string, string> }).params = { project_key: "k2" };
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await flush();
+
+    expect(document.querySelectorAll('.project-row[aria-selected="true"]')).toHaveLength(1);
+    expect(document.querySelector('[data-project-key="k2"]')?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("heading", { name: "second" })).toBeTruthy();
+  });
+
   const candidate = {
     id: "candidate-1",
     machine: "machine-a",

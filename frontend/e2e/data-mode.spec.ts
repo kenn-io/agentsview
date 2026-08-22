@@ -57,15 +57,14 @@ test.describe("Data mode project reclassification", () => {
     await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
     const ws = workspace(page);
     await expect(ws.getByRole("heading", { name: wrongProject })).toBeVisible();
-    await expect(ws.getByText(`Current project: ${wrongProject}`)).toBeVisible();
-    await expect(ws.getByText("Observed folders")).toBeVisible();
+    await expect(ws.getByText("Folder suggestions")).toBeVisible();
     await expect(
       ws.getByRole("button", { name: worktreeRoot }),
     ).toBeVisible();
     await expect(ws.getByText(machine)).toBeVisible();
     await expect(ws.getByText("2 sessions", { exact: true })).toBeVisible();
 
-    const prefix = ws.getByRole("textbox", { name: "Folder path" });
+    const prefix = ws.getByRole("textbox", { name: "Path prefix" });
     await expect(prefix).toHaveValue(worktreeRoot);
     await prefix.fill(broaderPrefix);
 
@@ -77,7 +76,6 @@ test.describe("Data mode project reclassification", () => {
       .click();
 
     await expect.poll(() => previewRequests).toBe(1);
-    await expect(ws.getByText("Full archive impact")).toBeVisible();
     await expect(
       ws.getByText("2 sessions matched", { exact: true }),
     ).toBeVisible();
@@ -86,7 +84,7 @@ test.describe("Data mode project reclassification", () => {
     ).toBeVisible();
     await expect(ws.getByText("1 project", { exact: true })).toBeVisible();
 
-    await ws.getByRole("button", { name: "Save and apply mapping" }).click();
+    await ws.getByRole("button", { name: "Save correction" }).click();
 
     // Explicit inventory reload; selection follows the applied target.
     await expect(
@@ -98,7 +96,7 @@ test.describe("Data mode project reclassification", () => {
 
     await page
       .locator('[aria-label="Data view"]')
-      .getByText("Rules", { exact: true })
+      .getByText("Project mapping rules", { exact: true })
       .click();
     await expect(
       page.getByRole("heading", { name: "Worktree mappings" }),
@@ -148,22 +146,21 @@ test.describe("Data mode project reclassification", () => {
     await row.click();
 
     const ws = workspace(page);
-    await expect(ws.getByText(`Current project: ${wrongProject}`)).toBeVisible();
-    await expect(ws.getByText("Observed folders")).toBeVisible();
+    await expect(ws.getByText("Folder suggestions")).toBeVisible();
     await expect(
       ws.getByRole("button", { name: worktreeRoot }),
     ).toBeVisible();
     await expect(ws.getByRole("note")).toContainText(
-      "This store is read-only.",
+      "Changes are unavailable here.",
     );
     await expect(
-      ws.getByRole("textbox", { name: "Folder path" }),
+      ws.getByRole("textbox", { name: "Path prefix" }),
     ).toHaveCount(0);
     await expect(
       ws.getByRole("button", { name: "Project", exact: true }),
     ).toHaveCount(0);
     await expect(
-      ws.getByRole("button", { name: "Save and apply mapping" }),
+      ws.getByRole("button", { name: "Save correction" }),
     ).toHaveCount(0);
 
     expect(mutationRequests).toEqual([]);

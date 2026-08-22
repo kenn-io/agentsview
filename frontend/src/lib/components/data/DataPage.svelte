@@ -62,6 +62,11 @@
     else data.showInventory();
   }
 
+  function openRules(machine: string) {
+    selectedProjectKeys = [];
+    data.showRules(machine);
+  }
+
   function selectProjectByLabel(label: string) {
     const rows = (data.inventory?.projects ?? []) as DbProjectInventoryRow[];
     const row = rows.find((r) => r.label === label);
@@ -128,8 +133,13 @@
 
   onMount(() => {
     const detach = data.attach(projectWorkspaceEnabled);
+    const clearRangeSelection = () => {
+      selectedProjectKeys = [];
+    };
+    window.addEventListener("popstate", clearRangeSelection);
     if (projectWorkspaceEnabled) void data.load();
     return () => {
+      window.removeEventListener("popstate", clearRangeSelection);
       data.cancelInFlightReads();
       detach();
     };
@@ -202,7 +212,7 @@
                 onClose={closeWorkspace}
                 onRefresh={refreshBatchCorrection}
                 onComplete={completeBatchCorrection}
-                onOpenRules={(machine) => data.showRules(machine)}
+                onOpenRules={openRules}
               />
             {/key}
           </div>
@@ -216,7 +226,7 @@
                 onClose={closeWorkspace}
                 onRefresh={refreshSingleCorrection}
                 onComplete={completeCorrection}
-                onOpenRules={(machine) => data.showRules(machine)}
+                onOpenRules={openRules}
               />
             {/key}
           </div>
@@ -267,10 +277,14 @@
 
   .split {
     display: grid;
-    grid-template-columns: minmax(380px, 1.15fr) minmax(340px, 0.85fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-5);
     min-height: 0;
     flex: 1;
+  }
+
+  .split.has-selection {
+    grid-template-columns: minmax(380px, 1.15fr) minmax(340px, 0.85fr);
   }
 
   .pane-table,
@@ -284,6 +298,10 @@
   }
 
   @media (max-width: 760px) {
+    .split.has-selection {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
     .split.has-selection .pane-table {
       display: none;
     }
