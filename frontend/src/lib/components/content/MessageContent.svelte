@@ -36,8 +36,9 @@
     session?: Session | null;
     isSubagentContext?: boolean;
     searchOrdinal?: number;
+    compact?: boolean;
   }
-  let { message, session, isSubagentContext = false, searchOrdinal }: Props = $props();
+  let { message, session, isSubagentContext = false, searchOrdinal, compact = false }: Props = $props();
   let copied = $state(false);
   let segments = $derived(enrichSegments(
     parseContent(message.content, message.has_tool_use, message.id, message.content_length),
@@ -233,7 +234,7 @@
   }
 </script>
 
-<div class="message" class:is-user={isUser} style:border-left-color={accentColor} style:background={roleBg}>
+<div class="message" class:is-user={isUser} class:compact style:border-left-color={accentColor} style:background={roleBg}>
   <div class="message-header">
     <span class="role-icon" style:background={accentColor} style:color={accentForeground}>{roleIcon}</span>
     <span class="role-label" style:color={accentColor}>{roleLabel}</span>
@@ -420,4 +421,10 @@
   .markdown :global(th) { background: var(--bg-inset); font-weight: 600; }
   .markdown :global(img) { max-width: 100%; border-radius: var(--radius-sm); }
   .markdown :global(strong) { font-weight: 600; }
+  .message.compact { padding: 9px 10px; }
+  .compact .message-header { gap: 6px; margin-bottom: 6px; }
+  .compact .role-icon { width: 18px; height: 18px; font-size: 10px; }
+  .compact .role-label { font-size: 11px; }
+  .compact .timestamp { font-size: 10px; }
+  .compact .text-content { font-size: 12px; line-height: 1.55; }
 </style>
