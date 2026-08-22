@@ -573,5 +573,5 @@ func TestActivityReportGolden(t *testing.T) {
 	})
 	require.NoError(t, err, "activity report json golden command")
 
-	assertCatalogGoldenBytes(t, "activity_report_v6.json", []byte(stdout))
+	assertCatalogGolden(t, "activity_report_v6.json", []byte(stdout))
 }
