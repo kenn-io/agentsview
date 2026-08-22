@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +112,12 @@ const previousGeneratedSources = verifyGenerated ? generatedSources(generatedDir
 const generatedTrailingNewlines = generatedTrailingNewlineCounts(generatedDir);
 const tempDir = mkdtempSync(join(tmpdir(), "agentsview-openapi-"));
 try {
+  const pricingSnapshot = join(repoRoot, "internal/pricing/snapshot/litellm_snapshot.json.gz");
+  if (!existsSync(pricingSnapshot)) {
+    run("go", ["run", "./internal/pricing/cmd/litellm-snapshot"], {
+      cwd: repoRoot,
+    });
+  }
   const specPath = join(tempDir, "openapi.json");
   const spec = run("go", ["run", "./cmd/agentsview", "openapi"], {
     cwd: repoRoot,
