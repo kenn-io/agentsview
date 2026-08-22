@@ -401,6 +401,13 @@ func resolveActivityReport(
 	if err != nil {
 		return activity.Report{}, err
 	}
+	if options.BucketRange != nil &&
+		options.BucketRange.End > artifacts.Report.BucketCount {
+		if cursor != nil {
+			return activity.Report{}, fmt.Errorf("invalid sessions cursor")
+		}
+		return activity.Report{}, fmt.Errorf("invalid activity report bucket")
+	}
 	digest, err := activity.ArtifactDigest(artifacts)
 	if err != nil {
 		return activity.Report{}, err

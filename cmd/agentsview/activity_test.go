@@ -171,6 +171,15 @@ func TestResolveActivityReport_BadBucket(t *testing.T) {
 	require.Error(t, err, "off-allow-list bucket is rejected before query")
 }
 
+func TestResolveActivityReportRejectsSessionRangePastBucketCount(t *testing.T) {
+	d := newTestDB(t)
+	_, err := resolveActivityReport(ActivityReportConfig{
+		Preset: "day", Date: "2026-06-16", Timezone: "UTC",
+		SessionsBucketStart: "287", SessionsBucketEnd: "289",
+	}, d)
+	require.EqualError(t, err, "invalid activity report bucket")
+}
+
 func TestResolveActivityReport_JSONShape(t *testing.T) {
 	d := newTestDB(t)
 	r, err := resolveActivityReport(ActivityReportConfig{
