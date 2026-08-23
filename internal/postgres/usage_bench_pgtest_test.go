@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,22 +19,25 @@ import (
 
 const pgUsageBenchmarkSchemaPrefix = "agentsview_pg_usage_bench"
 
+const pgUsageBenchmarkBulkRows = 24
+
 type pgUsageBenchmarkCase struct {
-	name       string
-	from, to   string
-	breakdowns bool
+	name                      string
+	from, to                  string
+	breakdowns                bool
+	expectedEligibleInputRows int
 }
 
 func pgUsageBenchmarkCases() []pgUsageBenchmarkCase {
 	return []pgUsageBenchmarkCase{
-		{name: "one-day/no-breakdowns", from: "2026-08-12", to: "2026-08-12"},
-		{name: "one-day/breakdowns", from: "2026-08-12", to: "2026-08-12", breakdowns: true},
-		{name: "seven-day/no-breakdowns", from: "2026-08-06", to: "2026-08-12"},
-		{name: "seven-day/breakdowns", from: "2026-08-06", to: "2026-08-12", breakdowns: true},
-		{name: "thirty-day/no-breakdowns", from: "2026-07-14", to: "2026-08-12"},
-		{name: "thirty-day/breakdowns", from: "2026-07-14", to: "2026-08-12", breakdowns: true},
-		{name: "all-history/no-breakdowns"},
-		{name: "all-history/breakdowns", breakdowns: true},
+		{name: "one-day/no-breakdowns", from: "2026-08-12", to: "2026-08-12", expectedEligibleInputRows: 8},
+		{name: "one-day/breakdowns", from: "2026-08-12", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 8},
+		{name: "seven-day/no-breakdowns", from: "2026-08-06", to: "2026-08-12", expectedEligibleInputRows: 16},
+		{name: "seven-day/breakdowns", from: "2026-08-06", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 16},
+		{name: "thirty-day/no-breakdowns", from: "2026-07-14", to: "2026-08-12", expectedEligibleInputRows: 17},
+		{name: "thirty-day/breakdowns", from: "2026-07-14", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 17},
+		{name: "all-history/no-breakdowns", expectedEligibleInputRows: 29},
+		{name: "all-history/breakdowns", breakdowns: true, expectedEligibleInputRows: 29},
 	}
 }
 
@@ -41,12 +45,18 @@ func pgUsageBenchmarkFilter(tc pgUsageBenchmarkCase) db.UsageFilter {
 	return db.UsageFilter{From: tc.from, To: tc.to, Timezone: "UTC", Breakdowns: tc.breakdowns}
 }
 
+func pgUsageBenchmarkValidationFilter() db.UsageFilter {
+	return db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"}
+}
+
 type pgUsageBenchmarkFixture struct {
-	pgURL  string
-	schema string
-	local  *db.DB
-	remote *Store
-	sync   *Sync
+	pgURL            string
+	schema           string
+	local            *db.DB
+	remote           *Store
+	sync             *Sync
+	expectedSessions int
+	expectedMessages int
 }
 
 func pgUsageRemoteCardinality(t testing.TB, remote *Store) (int, int) {
@@ -95,22 +105,62 @@ func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 
 	var version string
 	req.NoError(remote.DB().QueryRowContext(t.Context(), "SHOW server_version").Scan(&version))
-	t.Logf("pg_version=%s fixture_sessions=%d fixture_messages=%d fixture_usage_events=%d", version, 6, 5, 1)
+	t.Logf("pg_version=%s fixture_baseline_sessions=%d fixture_baseline_messages=%d fixture_usage_events=%d", version, 6, 5, 1)
 	return &pgUsageBenchmarkFixture{
 		pgURL: pgURL, schema: schema,
 		local: local, remote: remote, sync: syncer,
+		expectedSessions: 6, expectedMessages: 5,
 	}
+}
+
+func (f *pgUsageBenchmarkFixture) addBulk(t testing.TB, count int) {
+	t.Helper()
+	seedPGUsageBenchmarkBulkFixture(t, f.local, count)
+	f.expectedSessions += count
+	f.expectedMessages += count
+}
+
+func seedPGUsageBenchmarkBulkFixture(t testing.TB, local *db.DB, count int) {
+	t.Helper()
+	sessions := make([]db.Session, 0, count)
+	messages := make([]db.Message, 0, count)
+	for i := 0; i < count; i++ {
+		day := "2026-06-20"
+		if i < 4 {
+			day = "2026-08-12"
+		} else if i < 12 {
+			day = "2026-08-08"
+		}
+		sessionID := "benchmark-bulk-" + strconv.Itoa(i)
+		startedAt := day + "T09:00:00Z"
+		sessions = append(sessions, db.Session{
+			ID: sessionID, Project: "bulk-project", Machine: "bench-machine",
+			Agent: "bulk", StartedAt: &startedAt, MessageCount: 1,
+			UserMessageCount: 1,
+		})
+		messages = append(messages, db.Message{
+			SessionID: sessionID, Ordinal: 0, Role: "assistant",
+			Timestamp: day + "T09:01:00Z", Model: "model-priced",
+			TokenUsage:      json.RawMessage(`{"input_tokens":1,"output_tokens":0}`),
+			ClaudeMessageID: "benchmark-bulk-message-" + strconv.Itoa(i),
+			ClaudeRequestID: "benchmark-bulk-request-" + strconv.Itoa(i),
+		})
+	}
+	for i := range sessions {
+		require.NoError(t, local.UpsertSession(sessions[i]))
+	}
+	require.NoError(t, local.InsertMessages(messages))
 }
 
 func (f *pgUsageBenchmarkFixture) prime(t testing.TB) {
 	t.Helper()
 	result, err := f.sync.Push(t.Context(), true, nil)
 	require.NoError(t, err)
-	require.Equal(t, 6, result.SessionsPushed)
-	require.Equal(t, 5, result.MessagesPushed)
+	require.Equal(t, f.expectedSessions, result.SessionsPushed)
+	require.Equal(t, f.expectedMessages, result.MessagesPushed)
 	sessions, messages := pgUsageRemoteCardinality(t, f.remote)
-	require.Equal(t, 6, sessions)
-	require.Equal(t, 5, messages)
+	require.Equal(t, f.expectedSessions, sessions)
+	require.Equal(t, f.expectedMessages, messages)
 }
 
 func (f *pgUsageBenchmarkFixture) resetRemoteEmpty(t testing.TB) {
@@ -128,8 +178,8 @@ func (f *pgUsageBenchmarkFixture) requireFixedCardinality(t testing.TB) {
 	require.NoError(t, err)
 	require.Equal(t, 1, messageCount)
 	sessions, messages := pgUsageRemoteCardinality(t, f.remote)
-	require.Equal(t, 6, sessions)
-	require.Equal(t, 5, messages)
+	require.Equal(t, f.expectedSessions, sessions)
+	require.Equal(t, f.expectedMessages, messages)
 }
 
 func (f *pgUsageBenchmarkFixture) replaceDeltaMessage(t testing.TB, payload string) {
@@ -279,12 +329,14 @@ func (s *pgUsageMethodRecorder) GetSessionUsage(
 
 func BenchmarkPGUsageRead(b *testing.B) {
 	fixture := openPGUsageBenchmarkFixture(b)
+	fixture.addBulk(b, pgUsageBenchmarkBulkRows)
 	fixture.prime(b)
 	ctx := context.Background()
 	for _, tc := range pgUsageBenchmarkCases() {
 		b.Run(tc.name, func(b *testing.B) {
 			filter := pgUsageBenchmarkFilter(tc)
 			eligibleUsageInputRows, tokenUsageBytes := measurePGUsageFixture(b, fixture.remote, filter)
+			require.Equal(b, tc.expectedEligibleInputRows, eligibleUsageInputRows)
 			requireCompleteUsageParity(b, fixture.local, fixture.remote, filter)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -405,6 +457,8 @@ func BenchmarkPGUsageRefresh(b *testing.B) {
 			sessions, messages := pgUsageRemoteCardinality(b, fixture.remote)
 			require.Equal(b, 6, sessions)
 			require.Equal(b, 5, messages)
+			requireCompleteUsageParity(b, fixture.local, fixture.remote,
+				pgUsageBenchmarkValidationFilter())
 			sessionsPushed += result.SessionsPushed
 			messagesPushed += result.MessagesPushed
 			iterations++
@@ -437,6 +491,8 @@ func BenchmarkPGUsageRefresh(b *testing.B) {
 			require.Equal(b, 1, result.SessionsPushed)
 			require.Equal(b, 1, result.MessagesPushed)
 			fixture.requireFixedCardinality(b)
+			requireCompleteUsageParity(b, fixture.local, fixture.remote,
+				pgUsageBenchmarkValidationFilter())
 			sessionsPushed += result.SessionsPushed
 			messagesPushed += result.MessagesPushed
 			iterations++

@@ -171,6 +171,76 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 		"cross-backend daily breakdown result")
 }
 
+func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
+	const schema = "agentsview_usage_fractional_rounding_test"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	local := testDB(t)
+	seedUsageParityFixture(t, local)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "model-fractional",
+		InputPerMTok: money.Money{Microdollars: 500_000},
+	}}))
+	startedAt := "2026-08-12T13:00:00Z"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: "fractional-rounding", Project: "project-rounding",
+		Machine: "parity-machine", Agent: "claude", StartedAt: &startedAt,
+		MessageCount: 2, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{
+		{
+			SessionID: "fractional-rounding", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-08-12T13:01:00Z", Model: "model-fractional",
+			TokenUsage:      json.RawMessage(`{"input_tokens":1,"output_tokens":0}`),
+			ClaudeMessageID: "fractional-message-0", ClaudeRequestID: "fractional-request-0",
+		},
+		{
+			SessionID: "fractional-rounding", Ordinal: 1, Role: "assistant",
+			Timestamp: "2026-08-12T13:02:00Z", Model: "model-fractional",
+			TokenUsage:      json.RawMessage(`{"input_tokens":1,"output_tokens":0}`),
+			ClaudeMessageID: "fractional-message-1", ClaudeRequestID: "fractional-request-1",
+		},
+	}))
+
+	syncer, err := New(pgURL, schema, local, "parity-machine", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	remote, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remote.Close()) })
+
+	filter := db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"}
+	for _, backend := range []struct {
+		name  string
+		store db.Store
+	}{
+		{name: "sqlite", store: local},
+		{name: "postgres", store: remote},
+	} {
+		t.Run(backend.name, func(t *testing.T) {
+			usage, err := backend.store.GetSessionUsage(
+				t.Context(), "fractional-rounding", true)
+			require.NoError(t, err)
+			require.NotNil(t, usage)
+			require.Equal(t, int64(2), usage.Cost.Microdollars)
+			require.True(t, usage.HasCost)
+			require.Len(t, usage.Breakdown, 2)
+			for _, row := range usage.Breakdown {
+				require.Equal(t, 1, row.InputTokens)
+				require.Equal(t, int64(1), row.Cost.Microdollars)
+			}
+			daily, err := backend.store.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			require.Equal(t, 59, daily.Totals.InputTokens)
+			require.Equal(t, int64(260_042), daily.Totals.TotalCost.Microdollars)
+		})
+	}
+}
+
 func requireCompleteUsageParity(
 	t testing.TB, local, remote db.Store, filter db.UsageFilter,
 ) {
