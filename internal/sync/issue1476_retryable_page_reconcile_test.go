@@ -388,6 +388,8 @@ func TestIssue1476OverflowRetryBatchReachesWatcherBackoff(t *testing.T) {
 		pathLength  int
 	}{
 		{name: "count", sourceCount: reconciliationRetryPathLimit + 1},
+		// One oversized path crosses the byte cap without making callback timing
+		// depend on hundreds of database writes under race instrumentation.
 		{name: "bytes", sourceCount: 1, pathLength: reconciliationRetryPathByteLimit + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
