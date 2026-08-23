@@ -452,9 +452,16 @@ func (e *Engine) parseMaterializedS3Source(
 		return processResult{}, err
 	}
 	retrySessionIDs := make(map[string]bool)
+	deferredCount := 0
+	providerFailureCount := 0
 	for _, result := range outcome.Results {
 		if result.DataVersion == parser.DataVersionNeedsRetry {
 			retrySessionIDs[result.Result.Session.ID] = true
+			if isCodexFormatAgent(file.Agent) {
+				deferredCount++
+			} else {
+				providerFailureCount++
+			}
 		}
 	}
 	if len(retrySessionIDs) == 0 {
@@ -465,9 +472,11 @@ func (e *Engine) parseMaterializedS3Source(
 	// session but excludes its ID), and the caller needs those IDs to drop the
 	// previously-archived row on resync. ForceReplace must survive too.
 	return processResult{
-		results:            parseOutcomeResults(outcome.Results),
-		excludedSessionIDs: append([]string(nil), outcome.ExcludedSessionIDs...),
-		forceReplace:       outcome.ForceReplace,
-		retrySessionIDs:    retrySessionIDs,
+		results:              parseOutcomeResults(outcome.Results),
+		excludedSessionIDs:   append([]string(nil), outcome.ExcludedSessionIDs...),
+		forceReplace:         outcome.ForceReplace,
+		retrySessionIDs:      retrySessionIDs,
+		deferredCount:        deferredCount,
+		providerFailureCount: providerFailureCount,
 	}, nil
 }
