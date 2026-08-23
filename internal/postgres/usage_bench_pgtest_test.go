@@ -200,6 +200,14 @@ func (f *pgUsageBenchmarkFixture) prime(t testing.TB) {
 	require.Equal(t, f.expectedMessages, messages)
 }
 
+func (f *pgUsageBenchmarkFixture) analyzeUsageTables(t testing.TB) {
+	t.Helper()
+	_, err := f.remote.DB().ExecContext(t.Context(),
+		"ANALYZE sessions, messages, usage_events, cursor_usage_events, model_pricing, model_pricing_bands")
+	require.NoError(t, err)
+	t.Logf("analyzed_usage_tables=sessions,messages,usage_events,cursor_usage_events,model_pricing,model_pricing_bands")
+}
+
 func (f *pgUsageBenchmarkFixture) resetRemoteEmpty(t testing.TB) {
 	t.Helper()
 	cleanNamedPGSchema(t, f.pgURL, f.schema)
@@ -378,6 +386,7 @@ func BenchmarkPGUsageRead(b *testing.B) {
 	fixture := openPGUsageBenchmarkFixture(b)
 	fixture.addBulk(b, pgUsageBenchmarkBulkSessions)
 	fixture.prime(b)
+	fixture.analyzeUsageTables(b)
 	loadedSessions, loadedMessages := pgUsageRemoteCardinality(b, fixture.remote)
 	require.Equal(b, 6+pgUsageBenchmarkBulkSessions, loadedSessions)
 	require.Equal(b, 5+pgUsageBenchmarkBulkSessions*pgUsageBenchmarkBulkMessagesPerSession, loadedMessages)
@@ -614,6 +623,7 @@ func BenchmarkPGUsageRefreshLarge(b *testing.B) {
 		fixture := openPGUsageBenchmarkFixture(b)
 		fixture.addBulk(b, pgUsageBenchmarkBulkSessions)
 		fixture.prime(b)
+		fixture.analyzeUsageTables(b)
 		loadedSessions, loadedMessages := pgUsageRemoteCardinality(b, fixture.remote)
 		b.Logf("fixture_scale=bulk_sessions=%d bulk_messages=%d messages_per_session=%d loaded_table_rows=sessions:%d messages:%d",
 			pgUsageBenchmarkBulkSessions,
