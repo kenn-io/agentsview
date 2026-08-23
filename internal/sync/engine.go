@@ -7304,7 +7304,8 @@ func (e *Engine) syncAllLocked(
 	e.lastSyncStats = persisted
 	e.mu.Unlock()
 
-	if recordSyncState && stats.providerFailures == 0 {
+	if recordSyncState && stats.providerFailures == 0 &&
+		stats.ProcessingComplete() {
 		e.recordSyncFinished()
 	}
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
