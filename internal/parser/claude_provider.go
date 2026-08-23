@@ -265,12 +265,52 @@ func claudeSourceIsProjectLevel(source SourceRef, path string) bool {
 		!strings.HasPrefix(parts[1], "agent-")
 }
 
+// claudeLayoutSpec parameterizes claudeSourceSet over the agents that store
+// transcripts in Claude Code's projects layout
+// (<root>/<project>/<session>.jsonl with optional subagents/ trees and
+// per-session tool-results/ companion directories). Discovery, watch,
+// changed-path classification, find, and fingerprint plumbing are identical
+// across these agents; only the labels and the sidecar-freshness contract
+// differ. Parse semantics stay on each provider: Claude keeps incremental
+// appends and sibling lineage, while ICodeMate CLI relabels the shared DAG
+// parse onto its own agent and ID prefix.
+type claudeLayoutSpec struct {
+	agent         AgentType
+	dirLabel      string
+	debounceScope string
+	watchGlobs    []string
+	listFiles     func(string) []DiscoveredFile
+	// sidecarSources includes persisted tool-result companions in watch
+	// coverage, changed-path mapping, and source fingerprints. The Claude
+	// provider keeps this off: its stored fingerprints hash only the
+	// transcript, and switching to composite hashes would invalidate every
+	// archived Claude fingerprint and force a full reparse.
+	sidecarSources bool
+}
+
+func claudeLayoutSpecClaude() claudeLayoutSpec {
+	return claudeLayoutSpec{
+		agent:         AgentClaude,
+		dirLabel:      "Claude project directory",
+		debounceScope: "projects",
+		watchGlobs:    []string{"*.jsonl"},
+		listFiles:     ClaudeProjectSessionFiles,
+	}
+}
+
 type claudeSourceSet struct {
+	spec  claudeLayoutSpec
 	roots []string
 }
 
 func newClaudeSourceSet(roots []string) claudeSourceSet {
-	return claudeSourceSet{roots: cleanJSONLRoots(roots)}
+	return newClaudeLayoutSourceSet(claudeLayoutSpecClaude(), roots)
+}
+
+func newClaudeLayoutSourceSet(
+	spec claudeLayoutSpec, roots []string,
+) claudeSourceSet {
+	return claudeSourceSet{spec: spec, roots: cleanJSONLRoots(roots)}
 }
 
 func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -280,7 +320,7 @@ func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		for _, file := range ClaudeProjectSessionFiles(root) {
+		for _, file := range s.spec.listFiles(root) {
 			source, ok := s.discoveredSourceRef(root, file)
 			if !ok {
 				continue
@@ -300,7 +340,7 @@ func (s claudeSourceSet) DiscoverEach(
 			return err
 		}
 		if strings.HasPrefix(root, "s3://") {
-			for _, file := range ClaudeProjectSessionFiles(root) {
+			for _, file := range s.spec.listFiles(root) {
 				source, ok := s.discoveredSourceRef(root, file)
 				if ok {
 					if err := yield(source); err != nil {
@@ -324,7 +364,7 @@ func (s claudeSourceSet) streamLocalRoot(
 	var incomplete error
 	err := streamDirectoryEntries(ctx, root, func(project os.DirEntry) error {
 		isProjectDir, dirErr := streamingDirCandidateOrIncomplete(
-			AgentClaude, "Claude project directory", project, root,
+			s.spec.agent, s.spec.dirLabel, project, root,
 		)
 		if dirErr != nil {
 			incomplete = errors.Join(incomplete, dirErr)
@@ -364,10 +404,10 @@ func (s claudeSourceSet) streamLocalRoot(
 	return errors.Join(incomplete, err)
 }
 
-// discoveredSourceRef builds the SourceRef for one enumerated Claude session
-// file. Local files resolve through the regular file-backed source ref; s3://
-// objects (which ClaudeProjectSessionFiles enumerates via claudeS3Scanner)
-// carry their durable object metadata in the Opaque payload, because the
+// discoveredSourceRef builds the SourceRef for one enumerated session file.
+// Local files resolve through the regular file-backed source ref; s3://
+// objects (which spec.listFiles enumerates via the agent's S3 scanner) carry
+// their durable object metadata in the Opaque payload, because the
 // IsRegularFile gate that sourceRef applies to a local path would otherwise drop
 // every remote object.
 func (s claudeSourceSet) discoveredSourceRef(
@@ -388,8 +428,9 @@ func (s claudeSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 		roots = append(roots, WatchRoot{
 			Path:         root,
 			Recursive:    true,
-			IncludeGlobs: []string{"*.jsonl"},
-			DebounceKey:  string(AgentClaude) + ":projects:" + root,
+			IncludeGlobs: s.spec.watchGlobs,
+			DebounceKey: string(s.spec.agent) + ":" +
+				s.spec.debounceScope + ":" + root,
 		})
 	}
 	return WatchPlan{Roots: roots}, nil
@@ -416,6 +457,11 @@ func (s claudeSourceSet) SourcesForChangedPath(
 		if !s.hasRoot(root) {
 			return nil, nil
 		}
+		if s.spec.sidecarSources {
+			if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
+				return sources, err
+			}
+		}
 		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
 		if !ok {
 			return nil, nil
@@ -423,6 +469,11 @@ func (s claudeSourceSet) SourcesForChangedPath(
 		return []SourceRef{source}, nil
 	}
 	for _, root := range s.roots {
+		if s.spec.sidecarSources {
+			if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
+				return sources, err
+			}
+		}
 		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
 		if ok {
 			return []SourceRef{source}, nil
@@ -472,7 +523,9 @@ func (s claudeSourceSet) Fingerprint(
 	}
 	path, ok := s.pathFromSource(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("claude source path unavailable")
+		return SourceFingerprint{}, fmt.Errorf(
+			"%s source path unavailable", s.spec.agent,
+		)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -481,15 +534,21 @@ func (s claudeSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	hash, err := hashJSONLSourceFileContext(ctx, path)
+	size, mtime := info.Size(), info.ModTime().UnixNano()
+	var hash string
+	if s.spec.sidecarSources {
+		hash, size, mtime, err = claudeLayoutCompositeFingerprint(ctx, path, info)
+	} else {
+		hash, err = hashJSONLSourceFileContext(ctx, path)
+	}
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
 	inode, device := sourceFileIdentity(info)
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
-		Size:    info.Size(),
-		MTimeNS: info.ModTime().UnixNano(),
+		Size:    size,
+		MTimeNS: mtime,
 		Inode:   inode,
 		Device:  device,
 		Hash:    hash,
@@ -556,7 +615,7 @@ func (s claudeSourceSet) sourceRefFromPath(root, path string) (SourceRef, bool) 
 		return SourceRef{}, false
 	}
 	return SourceRef{
-		Provider:       AgentClaude,
+		Provider:       s.spec.agent,
 		Key:            path,
 		DisplayPath:    path,
 		FingerprintKey: path,

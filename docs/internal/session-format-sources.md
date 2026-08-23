@@ -1650,18 +1650,50 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## ICodeMate (`icodemate`)
 
-- **Format:** OpenCode-compatible SQLite or legacy session/message/part storage.
+- **Format:** Two storage families under one agent, matched by on-disk layout:
+  the VSCode-extension OpenCode-compatible SQLite or legacy
+  session/message/part storage, and the terminal CLI Claude-format projects
+  JSONL (`<projectsRoot>/<project>/<session>.jsonl`).
 - **Evidence:** `no-public-source`.
 - **Upstream:** ICodeMate's first-party product pages, documentation, and public
   GitHub repository search were checked 2026-07-19 without finding producer
   source or an authoritative disk schema. The OpenCode source pinned in the
-  `opencode` entry is compatible-family evidence only.
+  `opencode` entry is compatible-family evidence for the VSCode path only; the
+  terminal CLI path's Claude-format transcript schema (type/user/assistant
+  records carrying uuid, parentUuid, sessionId, cwd, gitBranch, timestamp, and
+  message.usage token fields) is compatible-family evidence from the `claude`
+  entry.
 - **Usage and cost:** Compatible messages can persist input, output, cache-read,
   cache-write, and model identity. Agentsview catalog-prices these values and
   consumes no product-reported USD total.
 - **Agentsview:** `internal/parser/icodemate.go` delegates to
-  `internal/parser/opencode.go`; product-specific divergence is a known
-  limitation.
+  `internal/parser/opencode.go` for the VSCode OpenCode path;
+  `internal/parser/icodemate_cli.go` parses the Claude-format CLI projects
+  transcripts, and `internal/parser/icodemate_provider.go` fans the configured
+  roots out to whichever layout each root owns. Product-specific divergence is
+  a known limitation. Reverified 2026-08-22 with controlled compatible-format
+  fixtures: the CLI parser uses the Claude UUID/parent UUID graph, coalesces
+  repeated assistant message snapshots by message ID, and resolves local and
+  S3-materialized persisted tool-result sidecars before extracting content.
+  Local sidecar writes map back to their owning transcript and participate in
+  its content-based, extraction-root-independent freshness fingerprint. Remote
+  imports resolve persisted paths against their extracted sidecars before
+  parsing. CLI project attribution uses transcript cwd and branch metadata to
+  resolve repository subdirectories and managed worktrees. Transcript identity
+  is the filename session ID across configured roots, so duplicate or moved
+  copies reconcile as one `icodemate:` session. Branch reconciliation follows
+  that identity across prior and current source paths and archive rebuilds. S3
+  subagent refreshes retain archived parent provider and machine metadata
+  instead of importing ICodeMate children as Claude. S3 discovery also
+  preserves transcript-only size and mtime separately from composite sidecar
+  freshness. A trailing partial local or S3 JSONL record stays incomplete and
+  retryable without replacing archived branch content. Polling includes local
+  and S3 sidecar mtimes, shortened CLI transcripts replace archived messages,
+  and duplicate ranking uses transcript metadata rather than sidecar volume.
+  Complete CLI parses reconcile the transcript's current branch membership,
+  and source freshness is recorded only after every emitted branch commits;
+  unchanged S3 transcripts use that persisted all-branch state to skip object
+  downloads.
 
 ## WorkBuddy (`workbuddy`)
 

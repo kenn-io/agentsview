@@ -31,9 +31,10 @@ func TestProviderCapabilitiesS3DiscoveryMatchConsumers(t *testing.T) {
 		"new providers must opt in explicitly")
 
 	supported := map[AgentType]bool{
-		AgentClaude: true,
-		AgentCodex:  true,
-		AgentCursor: true,
+		AgentClaude:    true,
+		AgentCodex:     true,
+		AgentCursor:    true,
+		AgentIcodemate: true,
 	}
 	for _, factory := range ProviderFactories() {
 		agent := factory.Definition().Type

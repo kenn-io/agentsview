@@ -69,6 +69,130 @@ func TestProcessFileS3UsesObjectMetadataToSkipBeforeFetch(t *testing.T) {
 	assert.False(t, fetched, "unchanged S3 object should not be fetched")
 }
 
+func TestProcessS3IcodemateReconcilesRemovedForkThenSkipsUnchanged(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	const uri = "s3://bucket/laptop/raw/icodemate/project/fork-session.jsonl"
+	mainLines := []string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"root","message":{"content":"start"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"root","message":{"content":[{"type":"text","text":"main reply 1"}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":"main prompt 2"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:03Z","uuid":"u3","parentUuid":"u2","message":{"content":"main prompt 3"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:04Z","uuid":"u4","parentUuid":"u3","message":{"content":"main prompt 4"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:05Z","uuid":"u5","parentUuid":"u4","message":{"content":"main prompt 5"}}`,
+	}
+	forkLine := `{"type":"assistant","timestamp":"2024-01-01T10:00:06Z","uuid":"fork","parentUuid":"root","message":{"content":[{"type":"text","text":"fork reply"}]}}`
+	content := strings.Join(append(mainLines, forkLine), "\n") + "\n"
+	mtime := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC).UnixNano()
+	fingerprint := "s3:fingerprint:icodemate-forked"
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	var fetches int
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, uri, got)
+		fetches++
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	engine := NewEngine(database, EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	file := parser.DiscoveredFile{
+		Agent:             parser.AgentIcodemate,
+		Path:              uri,
+		Project:           "project",
+		Machine:           "laptop",
+		SourceSize:        int64(len(content)),
+		SourceMtime:       mtime,
+		SourceFingerprint: fingerprint,
+	}
+	first := engine.processFile(t.Context(), file)
+	require.NoError(t, first.err)
+	require.Len(t, first.results, 2)
+	jobs := make(chan syncJob, 1)
+	jobs <- syncJob{
+		path: file.Path, agent: file.Agent, machine: file.Machine,
+		processResult: first,
+	}
+	close(jobs)
+	firstStats := engine.collectAndBatch(
+		t.Context(), jobs, 1, 1, nil, syncWriteDefault,
+	)
+	require.Zero(t, firstStats.Failed)
+	require.Equal(t, 2, firstStats.Synced)
+	require.Equal(t, 1, fetches)
+
+	content = mainLines[0] + "\n{"
+	mtime += int64(time.Second)
+	fingerprint = "s3:fingerprint:icodemate-truncated"
+	file.SourceSize = int64(len(content))
+	file.SourceMtime = mtime
+	file.SourceFingerprint = fingerprint
+	truncated := engine.processFile(t.Context(), file)
+	require.NoError(t, truncated.err)
+	jobs = make(chan syncJob, 1)
+	jobs <- syncJob{
+		path: file.Path, agent: file.Agent, machine: file.Machine,
+		processResult: truncated,
+	}
+	close(jobs)
+	truncatedStats := engine.collectAndBatch(
+		t.Context(), jobs, 1, 1, nil, syncWriteDefault,
+	)
+	require.Equal(t, 1, truncatedStats.Failed)
+	require.Zero(t, truncatedStats.Synced)
+	require.Zero(t, truncatedStats.Tombstoned)
+	require.Equal(t, 2, fetches)
+
+	const forkID = "laptop~icodemate:fork-session-fork"
+	fork, err := database.GetSession(t.Context(), forkID)
+	require.NoError(t, err)
+	require.NotNil(t, fork,
+		"an incomplete source must preserve its archived branches")
+
+	content = strings.Join(mainLines, "\n") + "\n"
+	mtime += int64(time.Second)
+	fingerprint = "s3:fingerprint:icodemate-main-only"
+	file.SourceSize = int64(len(content))
+	file.SourceMtime = mtime
+	file.SourceFingerprint = fingerprint
+	second := engine.processFile(t.Context(), file)
+	require.NoError(t, second.err)
+	require.Len(t, second.results, 1)
+	jobs = make(chan syncJob, 1)
+	jobs <- syncJob{
+		path: file.Path, agent: file.Agent, machine: file.Machine,
+		processResult: second,
+	}
+	close(jobs)
+	secondStats := engine.collectAndBatch(
+		t.Context(), jobs, 1, 1, nil, syncWriteDefault,
+	)
+	require.Zero(t, secondStats.Failed)
+	require.Equal(t, 1, secondStats.Synced)
+	require.Equal(t, 1, secondStats.Tombstoned)
+	require.Equal(t, 3, fetches)
+
+	fork, err = database.GetSession(t.Context(), forkID)
+	require.NoError(t, err)
+	assert.Nil(t, fork)
+	archivedFork, err := database.GetSessionFull(t.Context(), forkID)
+	require.NoError(t, err)
+	require.NotNil(t, archivedFork)
+	require.NotNil(t, archivedFork.DeletionCause)
+	assert.Equal(t, "source_missing", *archivedFork.DeletionCause)
+
+	engine.Close()
+	freshEngine := NewEngine(database, EngineConfig{Machine: "local"})
+	t.Cleanup(freshEngine.Close)
+	third := freshEngine.processFile(t.Context(), file)
+	require.NoError(t, third.err)
+	assert.True(t, third.skip)
+	assert.Equal(t, 3, fetches,
+		"a fresh engine must not fetch an unchanged complete source")
+}
+
 func TestProcessS3ClaudeForceParseBypassesPrimarylessFreshness(t *testing.T) {
 	database := openTestDB(t)
 	const uri = "s3://bucket/root/claude/project/force-replay.jsonl"
@@ -1525,21 +1649,75 @@ func TestSourceMtimeS3HostPrefixedClaudeUsesSidecarMetadata(t *testing.T) {
 	)
 }
 
+func TestSourceMtimeS3IcodemateUsesSidecarMetadata(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/icodemate/test-proj/manual-id.jsonl"
+	transcriptMtime := time.Date(2026, 6, 24, 13, 5, 0, 0, time.UTC)
+	sidecarMtime := transcriptMtime.Add(time.Minute)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:        "laptop~icodemate:manual-id",
+		Project:   "test-proj",
+		Machine:   "laptop",
+		Agent:     "icodemate",
+		FilePath:  strPtr(path),
+		FileSize:  int64Ptr(128),
+		FileMtime: int64Ptr(transcriptMtime.UnixNano()),
+	}))
+
+	oldStat := statS3Object
+	oldStatClaude := statClaudeS3Session
+	t.Cleanup(func() {
+		statS3Object = oldStat
+		statClaudeS3Session = oldStatClaude
+	})
+	statS3Object = func(got string) (parser.S3Object, error) {
+		require.Equal(t, path, got)
+		return parser.S3Object{
+			URI:          path,
+			Size:         128,
+			LastModified: transcriptMtime,
+		}, nil
+	}
+	statClaudeS3Session = func(got string) (parser.S3Object, error) {
+		require.Equal(t, path, got)
+		return parser.S3Object{
+			URI:          path,
+			Size:         256,
+			LastModified: sidecarMtime,
+		}, nil
+	}
+
+	e := &Engine{
+		db:      database,
+		machine: "central",
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentIcodemate: {"s3://bucket/laptop/raw/icodemate"},
+		},
+	}
+
+	assert.Equal(t, sidecarMtime.UnixNano(),
+		e.SourceMtime("laptop~icodemate:manual-id"))
+}
+
 func TestPickPreferredClaudeDiscoveredFileUsesS3Metadata(t *testing.T) {
 	database := openTestDB(t)
 	oldFile := parser.DiscoveredFile{
-		Agent:       parser.AgentClaude,
-		Path:        "s3://bucket/a/test-proj/session.jsonl",
-		Project:     "test-proj",
-		SourceSize:  100,
-		SourceMtime: time.Date(2026, 6, 24, 13, 3, 0, 0, time.UTC).UnixNano(),
+		Agent:           parser.AgentClaude,
+		Path:            "s3://bucket/a/test-proj/session.jsonl",
+		Project:         "test-proj",
+		SourceSize:      1000,
+		SourceMtime:     time.Date(2026, 6, 24, 13, 5, 0, 0, time.UTC).UnixNano(),
+		TranscriptSize:  100,
+		TranscriptMtime: time.Date(2026, 6, 24, 13, 3, 0, 0, time.UTC).UnixNano(),
 	}
 	newFile := parser.DiscoveredFile{
-		Agent:       parser.AgentClaude,
-		Path:        "s3://bucket/z/test-proj/session.jsonl",
-		Project:     "test-proj",
-		SourceSize:  200,
-		SourceMtime: time.Date(2026, 6, 24, 13, 4, 0, 0, time.UTC).UnixNano(),
+		Agent:           parser.AgentClaude,
+		Path:            "s3://bucket/z/test-proj/session.jsonl",
+		Project:         "test-proj",
+		SourceSize:      200,
+		SourceMtime:     time.Date(2026, 6, 24, 13, 4, 0, 0, time.UTC).UnixNano(),
+		TranscriptSize:  200,
+		TranscriptMtime: time.Date(2026, 6, 24, 13, 4, 0, 0, time.UTC).UnixNano(),
 	}
 	e := &Engine{db: database, machine: "central"}
 

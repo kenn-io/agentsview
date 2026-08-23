@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -215,6 +216,24 @@ func (e *Engine) processS3Session(
 				return processResult{skip: true}
 			}
 		}
+	case parser.AgentIcodemate:
+		sessionID := claudeFormatArchiveSessionID(
+			file.Agent, strings.TrimSuffix(sourceInfo.Name(), ".jsonl"),
+		)
+		fullID := applyIDPrefixToID(idPrefix, sessionID)
+		if e.shouldSkipFileWithPrefix(
+			idPrefix, sessionID, sourceInfo, sourceFingerprint,
+		) &&
+			e.db.GetSessionFilePathNotSourceMissing(fullID) == file.Path &&
+			e.db.GetDataVersionByAgentPath(
+				file.Path, string(parser.AgentIcodemate),
+			) >= db.CurrentDataVersion() {
+			sess, _ := e.db.GetSession(ctx, fullID)
+			if sess != nil && sess.Project != "" &&
+				!parser.NeedsProjectReparse(sess.Project) {
+				return processResult{skip: true}
+			}
+		}
 	case parser.AgentCodex:
 		if uuid := parser.CodexSessionUUIDFromFilename(
 			path.Base(file.Path),
@@ -308,15 +327,15 @@ func (e *Engine) processS3Session(
 	}
 	hydratedToolResults := false
 	sawPersistedToolResults := false
-	switch file.Agent {
-	case parser.AgentClaude:
+	switch {
+	case isClaudeFormatAgent(file.Agent):
 		rewrote, sawPersisted, err := hydrateS3ClaudeToolResults(tmp, file.Path)
 		if err != nil {
 			return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 		}
 		hydratedToolResults = rewrote
 		sawPersistedToolResults = sawPersisted
-	case parser.AgentCodex:
+	case file.Agent == parser.AgentCodex:
 		configuredRoot := ""
 		if file.ProviderSource != nil {
 			configuredRoot = file.ProviderSource.ConfiguredRoot
@@ -374,7 +393,8 @@ func (e *Engine) processS3Session(
 	res.excludedSessionIDs = applyIDPrefixToIDs(
 		idPrefix, res.excludedSessionIDs,
 	)
-	if file.Agent == parser.AgentClaude {
+	switch file.Agent {
+	case parser.AgentClaude:
 		missing, err := e.claudeSourceMissingSessionOwnershipsForCompleteResult(
 			ctx,
 			file.Path,
@@ -395,6 +415,25 @@ func (e *Engine) processS3Session(
 			res.claudeRowlessFreshnessKey =
 				e.claudeRowlessFreshnessCacheKey(file.Path, sourceFingerprint)
 		}
+	case parser.AgentIcodemate:
+		if res.suppressPresenceSweep || res.providerWideFailureCount > 0 {
+			break
+		}
+		missing, err := e.completeMultiSessionSourceMissingMembers(
+			ctx,
+			file.Agent,
+			file.Path,
+			res.excludedSessionIDs,
+			res.results,
+		)
+		if err != nil {
+			return processResult{
+				err:            err,
+				noCacheSkip:    true,
+				retentionLease: lease,
+			}
+		}
+		res.sourceMissingMembers = missing
 	}
 	res.retentionLease = lease
 	return res
@@ -443,10 +482,16 @@ func (e *Engine) parseMaterializedS3Source(
 	if err != nil {
 		return processResult{}, err
 	}
+	providerWideFailureCount := len(outcome.SourceErrors)
+	if !outcome.ResultSetComplete {
+		providerWideFailureCount++
+	}
+	providerFailureCount := providerWideFailureCount
 	retrySessionIDs := make(map[string]bool)
 	for _, result := range outcome.Results {
 		if result.DataVersion == parser.DataVersionNeedsRetry {
 			retrySessionIDs[result.Result.Session.ID] = true
+			providerFailureCount++
 		}
 	}
 	if len(retrySessionIDs) == 0 {
@@ -457,9 +502,13 @@ func (e *Engine) parseMaterializedS3Source(
 	// session but excludes its ID), and the caller needs those IDs to drop the
 	// previously-archived row on resync. ForceReplace must survive too.
 	return processResult{
-		results:            parseOutcomeResults(outcome.Results),
-		excludedSessionIDs: append([]string(nil), outcome.ExcludedSessionIDs...),
-		forceReplace:       outcome.ForceReplace,
-		retrySessionIDs:    retrySessionIDs,
+		results:                  parseOutcomeResults(outcome.Results),
+		excludedSessionIDs:       append([]string(nil), outcome.ExcludedSessionIDs...),
+		forceReplace:             outcome.ForceReplace,
+		retrySessionIDs:          retrySessionIDs,
+		suppressPresenceSweep:    !outcome.ResultSetComplete,
+		providerFailureCount:     providerFailureCount,
+		providerWideFailureCount: providerWideFailureCount,
+		noCacheSkip:              !providerOutcomeAllowsCleanSkipCache(outcome),
 	}, nil
 }

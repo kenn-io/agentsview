@@ -268,6 +268,8 @@ func (e *Engine) parseDiffProviderSources(
 			discovered.SourceSize = s3.Size
 			discovered.SourceMtime = s3.MtimeNS
 			discovered.SourceFingerprint = s3.Fingerprint
+			discovered.TranscriptSize = s3.TranscriptSize
+			discovered.TranscriptMtime = s3.TranscriptMtimeNS
 			if discovered.Project == "" {
 				discovered.Project = s3.Project
 			}

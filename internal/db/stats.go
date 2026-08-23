@@ -124,6 +124,16 @@ func (db *DB) FileBackedSessionCountForRebuildOwner(
 			continue
 		}
 		seenAgents[agent] = struct{}{}
+		if agent == string(parser.AgentIcodemate) {
+			// ICodeMate shares one agent label across OpenCode containers and
+			// ordinary CLI JSONL transcripts. Keep the CLI rows protected by
+			// empty-discovery safety while excluding the self-preserving
+			// container layouts.
+			conditions = append(conditions,
+				`(agent <> ? OR lower(file_path) LIKE '%.jsonl')`)
+			args = append(args, agent)
+			continue
+		}
 		conditions = append(conditions, `agent <> ?`)
 		args = append(args, agent)
 	}

@@ -67,12 +67,13 @@ func statS3SourceObject(file parser.DiscoveredFile) (parser.S3Object, error) {
 func statS3SourceObjectWithProvider(
 	file parser.DiscoveredFile, p parser.S3Provider,
 ) (parser.S3Object, error) {
-	// Keep Claude/Codex package-level hooks so existing tests can stub
-	// sidecar-aware stats without replacing the provider.
-	switch file.Agent {
-	case parser.AgentClaude:
+	// Keep Claude-format/Codex package-level hooks so existing tests can stub
+	// sidecar-aware stats without replacing the provider. ICodeMate CLI
+	// transcripts share Claude's sidecar-aware stat and its seam.
+	switch {
+	case isClaudeFormatAgent(file.Agent):
 		return statClaudeS3Session(file.Path)
-	case parser.AgentCodex:
+	case file.Agent == parser.AgentCodex:
 		return statCodexS3Session(file.Path)
 	}
 	return p.S3StatSession(file.Path)
@@ -398,7 +399,7 @@ func (e *Engine) hydrateS3DiscoveredFile(
 	}
 }
 
-// SyncClaudeS3SubagentTranscriptsContext ingests the given s3:// Claude
+// SyncS3SubagentTranscriptsContext ingests the given s3:// Claude-compatible
 // subagent transcript objects. The changed-path pipeline
 // (SyncPathsContext) classifies by statting local files, so it cannot
 // route s3:// objects; the on-demand subagent refresh behind `session
@@ -409,11 +410,15 @@ func (e *Engine) hydrateS3DiscoveredFile(
 // remaining objects still sync. parentSessionID preserves the stored
 // parent's machine namespace when its original S3 root is no longer
 // configured.
-func (e *Engine) SyncClaudeS3SubagentTranscriptsContext(
-	ctx context.Context, parentSessionID string, paths []string,
+func (e *Engine) SyncS3SubagentTranscriptsContext(
+	ctx context.Context, parentSessionID string, parentAgent parser.AgentType,
+	paths []string,
 ) error {
-	if e.refuseWriteInForceParse("SyncClaudeS3SubagentTranscripts") {
+	if e.refuseWriteInForceParse("SyncS3SubagentTranscripts") {
 		return nil
+	}
+	if !isClaudeFormatAgent(parentAgent) {
+		return fmt.Errorf("sync s3 subagent transcripts: unsupported parent agent %q", parentAgent)
 	}
 	e.syncMu.Lock()
 	synced := false
@@ -446,11 +451,12 @@ func (e *Engine) SyncClaudeS3SubagentTranscriptsContext(
 			continue
 		}
 		file := parser.DiscoveredFile{
-			Path: p, Agent: parser.AgentClaude, Machine: parentMachine,
+			Path: p, Agent: parentAgent, Machine: parentMachine,
 		}
-		sessionID := strings.TrimSuffix(path.Base(p), ".jsonl")
-		childID := applyIDPrefixToID(
-			s3SessionIDPrefix(parentMachine), sessionID)
+		childID := s3DiscoveredSessionID(file)
+		if childID == "" {
+			continue
+		}
 		e.hydrateS3DiscoveredFile(ctx, childID, &file)
 		if file.Project == "" {
 			file.Project = parentProject
