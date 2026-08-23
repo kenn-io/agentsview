@@ -1937,3 +1937,65 @@ add an archived or maintained mirror without replacing the original identity.
 - **Agentsview:** `internal/parser/codebuff.go` and
   `internal/parser/codebuff_provider.go`; single-file provider with JSON array
   parsing.
+
+## t3code (`t3`)
+
+- **Format:** One shared SQLite database per install at
+  `<base>/userdata/state.sqlite`, where `<base>` is the configured t3 home or
+  `~/.t3`; a development build uses `<base>/dev` in place of
+  `<base>/userdata`. t3code is event-sourced: an append-only event log is
+  folded into `projection_*` read models, and those projections are the only
+  tables a reader can interpret without replaying the log. The visible
+  conversation is `projection_threads` (one row per thread, soft-deleted via
+  `deleted_at`) joined to `projection_thread_messages` (`role`, `text`, and
+  millisecond-precision ISO-8601 `created_at`/`updated_at`), with
+  `projection_projects` supplying the workspace root and
+  `projection_thread_sessions` the backing provider. Thinking, tool calls, and
+  tool results are not projected into the message table; they live in
+  `projection_thread_activities` and the event log. Columns are migrated in
+  place: `model_selection_json` replaced a bare `model` column, and
+  `attachments_json` and `provider_instance_id` were both added after the
+  projections were introduced, so a database's generation determines which
+  columns exist.
+
+- **Evidence:** `source`.
+
+- **Upstream:** Clone `https://github.com/pingdotgg/t3code.git` at
+  `5a7a7cf2925c88388a023f0d4eb6b9096884e817`. See the pinned
+  [projection schema](https://github.com/pingdotgg/t3code/blob/5a7a7cf2925c88388a023f0d4eb6b9096884e817/apps/server/src/persistence/Migrations/005_Projections.ts),
+
+    [state path derivation](https://github.com/pingdotgg/t3code/blob/5a7a7cf2925c88388a023f0d4eb6b9096884e817/apps/server/src/config.ts),
+
+    [desktop base and state directory resolution](https://github.com/pingdotgg/t3code/blob/5a7a7cf2925c88388a023f0d4eb6b9096884e817/apps/desktop/src/app/DesktopStatePaths.ts),
+
+    [model-selection canonicalization](https://github.com/pingdotgg/t3code/blob/5a7a7cf2925c88388a023f0d4eb6b9096884e817/apps/server/src/persistence/Migrations/016_CanonicalizeModelSelections.ts),
+
+    [message attachments](https://github.com/pingdotgg/t3code/blob/5a7a7cf2925c88388a023f0d4eb6b9096884e817/apps/server/src/persistence/Migrations/007_ProjectionThreadMessageAttachments.ts),
+    and
+    [thread-session instance IDs](https://github.com/pingdotgg/t3code/blob/5a7a7cf2925c88388a023f0d4eb6b9096884e817/apps/server/src/persistence/Migrations/028_ProjectionThreadSessionInstanceId.ts).
+
+- **Usage and cost:** The projections record no token, cache, credit, or USD
+  fields. t3code delegates execution to another agent, so usage stays in that
+  provider's own transcripts, which Agentsview indexes separately;
+  `projection_thread_sessions` records which provider and instance ran a
+  thread. `model_selection_json` (or the legacy `model` column) names the
+  model the thread last ran on, which Agentsview attributes to its assistant
+  messages.
+
+- **Agentsview:** `internal/parser/t3.go` and
+  `internal/parser/t3_provider.go`. The database is a multi-session container:
+  discovery surfaces `state.sqlite` once and Parse fans it out into one
+  session per thread, addressed by `<db>#<threadID>`, so one live thread's
+  writes never invalidate its neighbours. Soft-deleted threads are skipped and
+  resolve to tombstones. Change detection is per thread and mtime-only --
+  t3's millisecond timestamps already separate two writes in the same second,
+  so unlike Shelley no message content is read to build a digest -- and folds
+  in the newest message timestamp so a future writer that stops bumping
+  `updated_at` cannot silently freeze the cursor. Optional columns are probed
+  with `PRAGMA table_info`, so a pre-canonicalization database still parses
+  with its model read from the legacy column. A worktree thread's
+  `worktree_path` wins over the project's `workspace_root` as the cwd. The
+  agent is `RemoteSyncExcluded`: `userdata/` holds `clerk-tokens.json`,
+  `cloud-auth-token.json`, and a `secrets/` directory of encrypted blobs
+  beside the database, and the database itself carries `auth_sessions` and
+  `auth_pairing_links`.

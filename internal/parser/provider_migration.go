@@ -70,6 +70,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentGptme:          ProviderMigrationProviderAuthoritative,
 	AgentQoder:          ProviderMigrationProviderAuthoritative,
 	AgentShelley:        ProviderMigrationProviderAuthoritative,
+	AgentT3:             ProviderMigrationProviderAuthoritative,
 	AgentAider:          ProviderMigrationProviderAuthoritative,
 	AgentOMP:            ProviderMigrationProviderAuthoritative,
 	AgentReasonix:       ProviderMigrationProviderAuthoritative,

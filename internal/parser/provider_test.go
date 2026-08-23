@@ -155,6 +155,7 @@ func TestStoredSourceHintCapabilitiesMatchConsumers(t *testing.T) {
 		AgentKiro:      true,
 		AgentPiebald:   true,
 		AgentShelley:   true,
+		AgentT3:        true,
 		AgentTrae:      true,
 		AgentVSCopilot: true,
 		AgentWarp:      true,

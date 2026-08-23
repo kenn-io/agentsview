@@ -56,6 +56,11 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentKiro: {
 			UnchangedResults: UnchangedResultMTime,
 		},
+		// t3 records millisecond timestamps, so the per-thread mtime alone
+		// distinguishes same-second writes and no content digest is needed.
+		AgentT3: {
+			UnchangedResults: UnchangedResultMTime,
+		},
 		AgentTrae: {
 			UnchangedResults: UnchangedResultMTimeAndHash,
 		},

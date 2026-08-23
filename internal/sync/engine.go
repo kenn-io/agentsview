@@ -2274,6 +2274,8 @@ func providerDeletedPhysicalSQLiteSource(
 		return filepath.Base(path) == parser.GooseDBName
 	case parser.AgentShelley:
 		return filepath.Base(path) == shelleyDBFile
+	case parser.AgentT3:
+		return filepath.Base(path) == t3DBFile
 	default:
 		return false
 	}
@@ -2461,6 +2463,8 @@ func isUnder(dir, path string) (string, bool) {
 // parse run through the provider facade; this constant remains for the
 // provider-neutral physical-DB deletion and skip-cache checks in the engine.
 const shelleyDBFile = "shelley.db"
+
+const t3DBFile = "state.sqlite"
 
 // resyncTempSuffix is appended to the original DB path to
 // form the temp database path during resync.
@@ -7977,14 +7981,21 @@ func discoveredFileMtime(
 		if p, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, "threads.db"); ok {
 			dbPath = p
 		}
-		return zedDBCompositeMtime(dbPath)
+		return sqliteContainerCompositeMtime(dbPath)
 	}
 	if file.Agent == parser.AgentShelley {
 		dbPath := file.Path
 		if p, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, shelleyDBFile); ok {
 			dbPath = p
 		}
-		return shelleyDBCompositeMtime(dbPath)
+		return sqliteContainerCompositeMtime(dbPath)
+	}
+	if file.Agent == parser.AgentT3 {
+		dbPath := file.Path
+		if p, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, t3DBFile); ok {
+			dbPath = p
+		}
+		return sqliteContainerCompositeMtime(dbPath)
 	}
 	if file.Agent == parser.AgentVSCopilot {
 		// Sessions are stored under a <traceFile>#<conversationID> virtual
@@ -8247,32 +8258,11 @@ func claudeDiscoveredFileSourceInfo(
 	return info.Size(), info.ModTime().UnixNano(), true
 }
 
-// zedDBCompositeMtime returns the maximum mtime across the Zed
-// threads.db main file and its WAL/SHM siblings. WAL-only updates
-// do not touch threads.db itself, so the composite is needed to
-// detect all changes.
-func zedDBCompositeMtime(dbPath string) (int64, error) {
-	var maxMtime int64
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		info, err := os.Stat(dbPath + suffix)
-		if err != nil {
-			continue
-		}
-		if t := info.ModTime().UnixNano(); t > maxMtime {
-			maxMtime = t
-		}
-	}
-	if maxMtime == 0 {
-		return 0, &os.PathError{Op: "stat", Path: dbPath, Err: os.ErrNotExist}
-	}
-	return maxMtime, nil
-}
-
-// shelleyDBCompositeMtime returns the maximum mtime across the Shelley
-// shelley.db main file and its WAL/SHM siblings. The DB is WAL-mode and
-// churns constantly, so WAL-only updates that do not touch shelley.db
-// itself still need to be detected.
-func shelleyDBCompositeMtime(dbPath string) (int64, error) {
+// sqliteContainerCompositeMtime returns the maximum mtime across a WAL-mode
+// SQLite container and its journal siblings. A commit can advance the
+// database's committed state without touching the main file, so a WAL-only
+// update still has to be detected.
+func sqliteContainerCompositeMtime(dbPath string) (int64, error) {
 	var maxMtime int64
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		info, err := os.Stat(dbPath + suffix)
@@ -12126,6 +12116,14 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, shelleyDBFile); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentT3 {
+		if filepath.Base(file.Path) == t3DBFile {
+			return false
+		}
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, t3DBFile); ok {
 			return false
 		}
 	}
@@ -18090,6 +18088,15 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	if def.Type == parser.AgentShelley {
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, shelleyDBFile); ok {
 			mtime, err := parser.ShelleySourceMtime(path)
+			if err != nil {
+				return 0
+			}
+			return mtime
+		}
+	}
+	if def.Type == parser.AgentT3 {
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, t3DBFile); ok {
+			mtime, err := parser.T3SourceMtime(path)
 			if err != nil {
 				return 0
 			}

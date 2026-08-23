@@ -77,6 +77,7 @@ const (
 	AgentOmnigent       AgentType = "omnigent"
 	AgentCodebuff       AgentType = "codebuff"
 	AgentFreebuff       AgentType = "freebuff"
+	AgentT3             AgentType = "t3"
 )
 
 const AgentDeepSeekHarness AgentType = "deepseek-harness"
@@ -959,6 +960,34 @@ var Registry = []AgentDef{
 		IDPrefix:          "codebuff:",
 		FileBased:         true,
 		PeriodicReconcile: true,
+		Usage: UsageCapabilities{
+			NoPerMessageTokenData: true,
+		},
+	},
+	{
+		// t3code keeps every thread in one SQLite database under its
+		// userdata root, so the root is the directory holding
+		// state.sqlite rather than a session tree.
+		Type:        AgentT3,
+		DisplayName: "t3code",
+		EnvVar:      "T3_USERDATA_DIR",
+		ConfigKey:   "t3_dirs",
+		// A release install keeps its state under userdata/; a development
+		// build of the same app uses dev/ beside it.
+		DefaultDirs: []string{".t3/userdata", ".t3/dev"},
+		IDPrefix:    "t3:",
+		FileBased:   false,
+		// The watcher sees state.sqlite and its WAL/SHM siblings, but a
+		// WAL commit need not touch the database file itself, so the
+		// per-thread cursor is reconciled on a schedule as well.
+		PeriodicReconcile: true,
+		// userdata/ holds the transcripts and the credentials together:
+		// clerk-tokens.json, cloud-auth-token.json, and a secrets/
+		// directory of encrypted blobs are siblings of state.sqlite, and
+		// the database itself carries auth_sessions and
+		// auth_pairing_links. No part of this root can be copied off the
+		// machine safely.
+		RemoteSyncExcluded: true,
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
 		},

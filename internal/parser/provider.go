@@ -1205,6 +1205,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newRooCodeProviderFactory(def)
 	case AgentCodebuff:
 		return newCodebuffProviderFactory(def)
+	case AgentT3:
+		return newT3ProviderFactory(def)
 	default:
 		panic("missing provider factory for " + string(def.Type))
 	}
