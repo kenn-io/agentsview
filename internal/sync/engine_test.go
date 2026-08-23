@@ -1538,14 +1538,25 @@ func TestIssue1476MissingParentForkDoesNotStarveLaterPages(t *testing.T) {
 	var retry interface{ ReconciliationRetryPaths() []string }
 	require.ErrorAs(t, err, &retry)
 	assert.Equal(t, []string{deferredPath}, retry.ReconciliationRetryPaths())
-	later, getErr := database.GetSession(t.Context(), "session-256")
+	healthySamePageID := strings.TrimSuffix(
+		filepath.Base(sources[deferredIndex-1].DisplayPath),
+		filepath.Ext(sources[deferredIndex-1].DisplayPath),
+	)
+	healthySamePage, getErr := database.GetSession(t.Context(), healthySamePageID)
+	require.NoError(t, getErr)
+	require.NotNil(t, healthySamePage, "healthy session on the deferred page must be included")
+	laterSessionID := strings.TrimSuffix(
+		filepath.Base(sources[len(sources)-1].DisplayPath),
+		filepath.Ext(sources[len(sources)-1].DisplayPath),
+	)
+	later, getErr := database.GetSession(t.Context(), laterSessionID)
 	require.NoError(t, getErr)
 	require.NotNil(t, later, "cursor must advance beyond the deferred page")
 	assert.Less(t, database.GetSessionDataVersion("forked-child"), db.CurrentDataVersion())
 	assert.Equal(t, 1,
 		engine.LastReconciliationResult().Metrics.MaxNonAuthoritativeScopeRows)
 	t.Logf("cursor progress: later page session %q present", later.ID)
-	t.Logf("later-provider presence assertion: session-256 present")
+	t.Logf("later-provider presence assertion: %s present", laterSessionID)
 	t.Logf("deferred state: forked-child data version remains stale")
 	t.Logf("rowless proof gate: non-authoritative scope rows=%d",
 		engine.LastReconciliationResult().Metrics.MaxNonAuthoritativeScopeRows)
