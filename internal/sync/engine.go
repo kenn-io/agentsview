@@ -9825,7 +9825,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			stats.messagesIndexed = progress.MessagesIndexed
 			r.releaseRetention()
 		} else {
-			sourceNeedsRetry := sourceProofWithheld
+			sourceNeedsRetry := presenceProofWithheld
 			for i, pr := range allowed {
 				sessionNeedsRetry := r.providerWideFailureCount > 0 ||
 					r.needsRetryForSession(pr.Session.ID)

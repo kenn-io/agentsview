@@ -88,6 +88,17 @@ func TestWatchBatchDeferOnlyCompositionAndRootScope(t *testing.T) {
 	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, retry.WatchRetryBatch())
 }
 
+func TestWatchBatchKeepsEmptyTypedRootScope(t *testing.T) {
+	cause := errors.New("deferred path")
+	err := watchBatchReconciliationError(&watchBatchTestError{
+		cause: cause, paths: []string{"deferred"}, roots: []string{},
+	}, []string{"fallback"}, []string{"original-root"}, false, false)
+
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{Paths: []string{"deferred"}}, retry.WatchRetryBatch())
+}
+
 func TestApplyWatchBatchRunsRootsOnlyForDeferOnlyPathErrors(t *testing.T) {
 	pathCause := errors.New("deferred path")
 	root := t.TempDir()

@@ -129,7 +129,6 @@ func watchBatchReconciliationError(
 	hasScopedRoots := errors.As(cause, &scoped)
 	if hasScopedRoots {
 		retryRoots = watchDeduplicateStrings(scoped.ReconciliationRetryRoots())
-		hasScopedRoots = len(retryRoots) > 0
 	}
 	if !hasScopedRoots {
 		retryRoots = watchDeduplicateStrings(roots)
