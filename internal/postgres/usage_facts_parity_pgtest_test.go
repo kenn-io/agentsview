@@ -260,6 +260,7 @@ func seedUsageParityFixture(t testing.TB, local *db.DB) {
 		usageParitySessionFixture("reported", "project-c", "hermes", "2026-08-12T11:00:00Z", 5, 30),
 		usageParitySessionFixture("blank-timestamp", "project-d", "claude", "2026-08-12T12:00:00Z", 3, 7),
 		usageParitySessionFixture("activity-only", "project-e", "claude", "2026-07-20T13:00:00Z", 0, 0),
+		usageParitySessionFixture("historical-usage", "project-f", "claude", "2026-07-20T13:02:00Z", 4, 6),
 	}
 	for i := range sessions {
 		require.NoError(t, local.UpsertSession(sessions[i]),
@@ -288,7 +289,11 @@ func seedUsageParityFixture(t testing.TB, local *db.DB) {
 		{
 			SessionID: "activity-only", Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-07-20T13:01:00Z", Model: "model-activity",
-			TokenUsage: json.RawMessage(`{"input_tokens":4,"output_tokens":2}`),
+		},
+		{
+			SessionID: "historical-usage", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-07-20T13:02:00Z", Model: "model-priced",
+			TokenUsage: json.RawMessage(`{"input_tokens":6,"output_tokens":4}`),
 		},
 	}), "seed messages")
 

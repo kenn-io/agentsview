@@ -95,7 +95,7 @@ func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 
 	var version string
 	req.NoError(remote.DB().QueryRowContext(t.Context(), "SHOW server_version").Scan(&version))
-	t.Logf("pg_version=%s fixture_sessions=%d fixture_messages=%d fixture_usage_events=%d", version, 5, 4, 1)
+	t.Logf("pg_version=%s fixture_sessions=%d fixture_messages=%d fixture_usage_events=%d", version, 6, 5, 1)
 	return &pgUsageBenchmarkFixture{
 		pgURL: pgURL, schema: schema,
 		local: local, remote: remote, sync: syncer,
@@ -106,11 +106,11 @@ func (f *pgUsageBenchmarkFixture) prime(t testing.TB) {
 	t.Helper()
 	result, err := f.sync.Push(t.Context(), true, nil)
 	require.NoError(t, err)
-	require.Equal(t, 5, result.SessionsPushed)
-	require.Equal(t, 4, result.MessagesPushed)
+	require.Equal(t, 6, result.SessionsPushed)
+	require.Equal(t, 5, result.MessagesPushed)
 	sessions, messages := pgUsageRemoteCardinality(t, f.remote)
-	require.Equal(t, 5, sessions)
-	require.Equal(t, 4, messages)
+	require.Equal(t, 6, sessions)
+	require.Equal(t, 5, messages)
 }
 
 func (f *pgUsageBenchmarkFixture) resetRemoteEmpty(t testing.TB) {
@@ -128,8 +128,8 @@ func (f *pgUsageBenchmarkFixture) requireFixedCardinality(t testing.TB) {
 	require.NoError(t, err)
 	require.Equal(t, 1, messageCount)
 	sessions, messages := pgUsageRemoteCardinality(t, f.remote)
-	require.Equal(t, 5, sessions)
-	require.Equal(t, 4, messages)
+	require.Equal(t, 6, sessions)
+	require.Equal(t, 5, messages)
 }
 
 func (f *pgUsageBenchmarkFixture) replaceDeltaMessage(t testing.TB, payload string) {
@@ -179,6 +179,30 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 			} else {
 				require.Zero(t, len(usage.Breakdown))
 			}
+		})
+	}
+}
+
+func TestPGUsageBenchmarkActivityOnlySessionCoverage(t *testing.T) {
+	fixture := openPGUsageBenchmarkFixture(t)
+	fixture.prime(t)
+	filter := db.UsageFilter{Timezone: "UTC"}
+	for _, backend := range []struct {
+		name  string
+		store db.Store
+	}{
+		{name: "sqlite", store: fixture.local},
+		{name: "postgres", store: fixture.remote},
+	} {
+		t.Run(backend.name, func(t *testing.T) {
+			counts, err := backend.store.GetUsageSessionCounts(t.Context(), filter)
+			require.NoError(t, err)
+			matching, err := backend.store.GetUsageMatchingSessionCount(t.Context(), filter)
+			require.NoError(t, err)
+			require.NotContains(t, counts.ByProject, "project-e")
+			require.Equal(t, 4, counts.Total)
+			require.Equal(t, 6, matching,
+				"tokenless activity-only session matches without normal usage rows")
 		})
 	}
 }
@@ -376,21 +400,21 @@ func BenchmarkPGUsageRefresh(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			require.Equal(b, 5, result.SessionsPushed)
-			require.Equal(b, 4, result.MessagesPushed)
+			require.Equal(b, 6, result.SessionsPushed)
+			require.Equal(b, 5, result.MessagesPushed)
 			sessions, messages := pgUsageRemoteCardinality(b, fixture.remote)
-			require.Equal(b, 5, sessions)
-			require.Equal(b, 4, messages)
+			require.Equal(b, 6, sessions)
+			require.Equal(b, 5, messages)
 			sessionsPushed += result.SessionsPushed
 			messagesPushed += result.MessagesPushed
 			iterations++
 			b.StartTimer()
 		}
 		b.StopTimer()
-		require.Equal(b, 5*iterations, sessionsPushed)
-		require.Equal(b, 4*iterations, messagesPushed)
-		b.ReportMetric(5, "sessions_pushed")
-		b.ReportMetric(4, "messages_pushed")
+		require.Equal(b, 6*iterations, sessionsPushed)
+		require.Equal(b, 5*iterations, messagesPushed)
+		b.ReportMetric(6, "sessions_pushed")
+		b.ReportMetric(5, "messages_pushed")
 	})
 	b.Run("DeltaPush", func(b *testing.B) {
 		fixture := openPGUsageBenchmarkFixture(b)
