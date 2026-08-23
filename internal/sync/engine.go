@@ -3137,7 +3137,7 @@ func (e *Engine) resyncBuildLocked(
 			}
 			return nil
 		}
-		if contributorStats.Aborted || stats.Aborted || ctx.Err() != nil ||
+		if !contributorStats.ProcessingComplete() || stats.Aborted || ctx.Err() != nil ||
 			contributorSafetyAbort {
 			failureHookErr := runAfterFailure()
 			contributorEngine.Close()
@@ -4037,7 +4037,7 @@ func (e *Engine) syncThenRunLocked(
 	if ctx.Err() != nil {
 		return stats, ctx.Err()
 	}
-	if stats.Deferred > 0 {
+	if !stats.ProcessingComplete() {
 		return stats, nil
 	}
 	// work typically scans and pushes SQLite rows, so flush any
@@ -4170,7 +4170,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
-	if stats.Deferred > 0 {
+	if !stats.ProcessingComplete() {
 		return stats, nil
 	}
 	e.signalSched.flushAllInline()

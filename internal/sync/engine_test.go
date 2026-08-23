@@ -3879,6 +3879,43 @@ func TestStartupSyncFallbackUsesSuccessSignalNotMaintenanceRelease(t *testing.T)
 	}
 }
 
+func TestSyncThenRunSuppressesWorkWhenProcessingIsIncomplete(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	cause := errors.New("source listing unavailable")
+	provider := &failingDBBackedProvider{
+		err: cause, failOnCall: 1,
+	}
+	provider.ProviderBase = parser.ProviderBase{
+		Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {root}},
+		Machine:   "local",
+		ProviderFactories: []parser.ProviderFactory{
+			failingDBBackedFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	workCalled := false
+	stats, err := engine.SyncThenRun(
+		t.Context(), false, nil, func(bool) error {
+			workCalled = true
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.False(t, stats.ProcessingComplete())
+	assert.Greater(t, stats.providerFailures, 0)
+	assert.False(t, workCalled,
+		"incomplete sync results must not run downstream acknowledgement work")
+}
+
 func TestStartupReconciledCallbackOwnersRetainFailureForLaterSuccess(t *testing.T) {
 	tests := []struct {
 		name    string
