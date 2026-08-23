@@ -5,6 +5,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,6 +15,29 @@ import (
 )
 
 const pgUsageBenchmarkSchema = "agentsview_pg_usage_bench"
+
+type pgUsageBenchmarkCase struct {
+	name       string
+	from, to   string
+	breakdowns bool
+}
+
+func pgUsageBenchmarkCases() []pgUsageBenchmarkCase {
+	return []pgUsageBenchmarkCase{
+		{name: "one-day/no-breakdowns", from: "2026-08-12", to: "2026-08-12"},
+		{name: "one-day/breakdowns", from: "2026-08-12", to: "2026-08-12", breakdowns: true},
+		{name: "seven-day/no-breakdowns", from: "2026-08-06", to: "2026-08-12"},
+		{name: "seven-day/breakdowns", from: "2026-08-06", to: "2026-08-12", breakdowns: true},
+		{name: "thirty-day/no-breakdowns", from: "2026-07-14", to: "2026-08-12"},
+		{name: "thirty-day/breakdowns", from: "2026-07-14", to: "2026-08-12", breakdowns: true},
+		{name: "all-history/no-breakdowns"},
+		{name: "all-history/breakdowns", breakdowns: true},
+	}
+}
+
+func pgUsageBenchmarkFilter(tc pgUsageBenchmarkCase) db.UsageFilter {
+	return db.UsageFilter{From: tc.from, To: tc.to, Timezone: "UTC", Breakdowns: tc.breakdowns}
+}
 
 type pgUsageBenchmarkFixture struct {
 	local  *db.DB
@@ -74,18 +99,9 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 
-	for _, tc := range []struct {
-		name       string
-		from, to   string
-		breakdowns bool
-	}{
-		{name: "one-day", from: "2026-08-12", to: "2026-08-12"},
-		{name: "seven-day", from: "2026-08-06", to: "2026-08-12"},
-		{name: "thirty-day", from: "2026-07-14", to: "2026-08-12", breakdowns: true},
-		{name: "all-history", breakdowns: true},
-	} {
+	for _, tc := range pgUsageBenchmarkCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			filter := db.UsageFilter{From: tc.from, To: tc.to, Timezone: "UTC", Breakdowns: tc.breakdowns}
+			filter := pgUsageBenchmarkFilter(tc)
 			localResult := captureUsageParitySnapshot(t, local, filter)
 			remoteResult := captureUsageParitySnapshot(t, remote, filter)
 			require.NotEmpty(t, remoteResult.Top)
@@ -100,74 +116,150 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 func BenchmarkPGUsageRead(b *testing.B) {
 	fixture := openPGUsageBenchmarkFixture(b)
 	ctx := context.Background()
-	for _, tc := range []struct {
-		name       string
-		from, to   string
-		breakdowns bool
-	}{
-		{name: "one-day", from: "2026-08-12", to: "2026-08-12"},
-		{name: "seven-day", from: "2026-08-06", to: "2026-08-12"},
-		{name: "thirty-day", from: "2026-07-14", to: "2026-08-12", breakdowns: true},
-		{name: "all-history", breakdowns: true},
-	} {
+	for _, tc := range pgUsageBenchmarkCases() {
 		b.Run(tc.name, func(b *testing.B) {
-			filter := db.UsageFilter{From: tc.from, To: tc.to, Timezone: "UTC", Breakdowns: tc.breakdowns}
-			b.ReportMetric(5, "rows_scanned")
-			b.ReportMetric(178, "bytes_token_usage")
+			filter := pgUsageBenchmarkFilter(tc)
+			rowsScanned, tokenUsageBytes := measurePGUsageFixture(b, fixture.remote, filter)
+			validatePGUsageBenchmarkRead(b, fixture.remote, ctx, filter)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				daily, err := fixture.remote.GetDailyUsage(ctx, filter)
-				require.NoError(b, err)
+				if err != nil {
+					b.Fatal(err)
+				}
 				top, err := fixture.remote.GetTopSessionsByCost(ctx, filter, 10)
-				require.NoError(b, err)
+				if err != nil {
+					b.Fatal(err)
+				}
 				counts, err := fixture.remote.GetUsageSessionCounts(ctx, filter)
-				require.NoError(b, err)
+				if err != nil {
+					b.Fatal(err)
+				}
 				matching, err := fixture.remote.GetUsageMatchingSessionCount(ctx, filter)
-				require.NoError(b, err)
+				if err != nil {
+					b.Fatal(err)
+				}
 				session, err := fixture.remote.GetSessionUsage(ctx, "snapshot-winner", true)
-				require.NoError(b, err)
-				require.NotEmpty(b, daily.Daily)
-				require.NotEmpty(b, top)
-				require.NotZero(b, counts.Total)
-				require.NotZero(b, matching)
-				require.NotNil(b, session)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(daily.Daily) == 0 || len(top) == 0 || counts.Total == 0 || matching == 0 || session == nil {
+					b.Fatal("usage benchmark returned an empty result")
+				}
 			}
+			b.ReportMetric(float64(rowsScanned), "rows_scanned")
+			b.ReportMetric(float64(tokenUsageBytes), "bytes_token_usage")
 		})
 	}
+}
+
+func validatePGUsageBenchmarkRead(b *testing.B, store *Store, ctx context.Context, filter db.UsageFilter) {
+	b.Helper()
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(b, err)
+	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(b, err)
+	counts, err := store.GetUsageSessionCounts(ctx, filter)
+	require.NoError(b, err)
+	matching, err := store.GetUsageMatchingSessionCount(ctx, filter)
+	require.NoError(b, err)
+	session, err := store.GetSessionUsage(ctx, "snapshot-winner", true)
+	require.NoError(b, err)
+	require.NotEmpty(b, daily.Daily)
+	require.NotEmpty(b, top)
+	require.NotZero(b, counts.Total)
+	require.NotZero(b, matching)
+	require.NotNil(b, session)
+}
+
+func measurePGUsageFixture(b *testing.B, store *Store, filter db.UsageFilter) (int, int64) {
+	b.Helper()
+	ctx := b.Context()
+	messageWhere, args := pgUsageBenchmarkWindow("timestamp", filter)
+	var messageRows int
+	var tokenUsageBytes int64
+	if err := store.DB().QueryRowContext(ctx,
+		"SELECT count(*), COALESCE(sum(octet_length(token_usage)), 0) FROM messages"+messageWhere,
+		args...,
+	).Scan(&messageRows, &tokenUsageBytes); err != nil {
+		b.Fatal(err)
+	}
+	eventWhere, eventArgs := pgUsageBenchmarkWindow("occurred_at", filter)
+	var eventRows int
+	if err := store.DB().QueryRowContext(ctx,
+		"SELECT count(*) FROM usage_events"+eventWhere, eventArgs...,
+	).Scan(&eventRows); err != nil {
+		b.Fatal(err)
+	}
+	return messageRows + eventRows, tokenUsageBytes
+}
+
+func pgUsageBenchmarkWindow(column string, filter db.UsageFilter) (string, []any) {
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if filter.From != "" {
+		args = append(args, filter.From)
+		clauses = append(clauses, column+" >= $"+strconv.Itoa(len(args))+"::date")
+	}
+	if filter.To != "" {
+		args = append(args, filter.To)
+		clauses = append(clauses, column+" < ($"+strconv.Itoa(len(args))+"::date + INTERVAL '1 day')")
+	}
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
 func BenchmarkPGUsageRefresh(b *testing.B) {
 	fixture := openPGUsageBenchmarkFixture(b)
 	ctx := context.Background()
 	b.Run("ColdPush", func(b *testing.B) {
+		var sessionsPushed, messagesPushed int
 		for i := 0; i < b.N; i++ {
 			result, err := fixture.sync.Push(ctx, true, nil)
-			require.NoError(b, err)
-			require.NotZero(b, result.SessionsPushed)
-			b.ReportMetric(float64(result.SessionsPushed), "sessions_pushed")
-			b.ReportMetric(float64(result.MessagesPushed), "messages_pushed")
+			if err != nil {
+				b.Fatal(err)
+			}
+			sessionsPushed += result.SessionsPushed
+			messagesPushed += result.MessagesPushed
 		}
+		require.NotZero(b, sessionsPushed)
+		require.NotZero(b, messagesPushed)
+		b.ReportMetric(float64(sessionsPushed)/float64(b.N), "sessions_pushed")
+		b.ReportMetric(float64(messagesPushed)/float64(b.N), "messages_pushed")
 	})
 	b.Run("DeltaPush", func(b *testing.B) {
+		var sessionsPushed, messagesPushed int
 		for i := 0; i < b.N; i++ {
 			session := usageParitySessionFixture("snapshot-winner", "project-b", "claude", "2026-08-12T10:01:00Z", 10+i+1, 20)
-			require.NoError(b, fixture.local.UpsertSession(session))
+			if err := fixture.local.UpsertSession(session); err != nil {
+				b.Fatal(err)
+			}
 			result, err := fixture.sync.Push(ctx, false, nil)
-			require.NoError(b, err)
-			b.ReportMetric(float64(result.SessionsPushed), "sessions_pushed")
-			b.ReportMetric(float64(result.MessagesPushed), "messages_pushed")
+			if err != nil {
+				b.Fatal(err)
+			}
+			sessionsPushed += result.SessionsPushed
+			messagesPushed += result.MessagesPushed
 		}
+		require.NotZero(b, sessionsPushed)
+		require.NotZero(b, messagesPushed)
+		b.ReportMetric(float64(sessionsPushed)/float64(b.N), "sessions_pushed")
+		b.ReportMetric(float64(messagesPushed)/float64(b.N), "messages_pushed")
 	})
 	b.Run("CatalogProbe", func(b *testing.B) {
+		var tables int
 		for i := 0; i < b.N; i++ {
-			var tables int
 			err := fixture.remote.DB().QueryRowContext(ctx, `
 				SELECT count(*) FROM pg_catalog.pg_class c
 				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 				WHERE n.nspname = $1 AND c.relkind IN ('r', 'i')`, pgUsageBenchmarkSchema).Scan(&tables)
-			require.NoError(b, err)
-			require.NotZero(b, tables)
-			b.ReportMetric(float64(tables), "catalog_rows")
+			if err != nil {
+				b.Fatal(err)
+			}
 		}
+		require.NotZero(b, tables)
+		b.ReportMetric(float64(tables), "catalog_rows")
 	})
 }

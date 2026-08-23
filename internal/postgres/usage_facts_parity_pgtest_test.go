@@ -31,6 +31,8 @@ type usageParityDaily struct {
 	CostMicrodollars    int64
 	Models              []string
 	SessionCounts       db.UsageSessionCounts
+	ProjectBreakdowns   []usageParityProjectBreakdown
+	AgentBreakdowns     []usageParityAgentBreakdown
 }
 
 type usageParityTopSession struct {
@@ -62,6 +64,20 @@ type usageParityBreakdown struct {
 	OutputTokens     int
 	CostMicrodollars int64
 	HasCost          bool
+}
+
+type usageParityProjectBreakdown struct {
+	ProjectKey, Project                  string
+	InputTokens, OutputTokens            int
+	CacheCreationTokens, CacheReadTokens int
+	CostMicrodollars                     int64
+}
+
+type usageParityAgentBreakdown struct {
+	Agent                                string
+	InputTokens, OutputTokens            int
+	CacheCreationTokens, CacheReadTokens int
+	CostMicrodollars                     int64
 }
 
 func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
@@ -270,6 +286,24 @@ func captureUsageParitySnapshot(
 	for _, day := range daily.Daily {
 		out.Daily.Dates = append(out.Daily.Dates, day.Date)
 		out.Daily.Models = append(out.Daily.Models, day.ModelsUsed...)
+		for _, breakdown := range day.ProjectBreakdowns {
+			out.Daily.ProjectBreakdowns = append(out.Daily.ProjectBreakdowns, usageParityProjectBreakdown{
+				ProjectKey: breakdown.ProjectKey, Project: breakdown.Project,
+				InputTokens: breakdown.InputTokens, OutputTokens: breakdown.OutputTokens,
+				CacheCreationTokens: breakdown.CacheCreationTokens,
+				CacheReadTokens:     breakdown.CacheReadTokens,
+				CostMicrodollars:    breakdown.Cost.Microdollars,
+			})
+		}
+		for _, breakdown := range day.AgentBreakdowns {
+			out.Daily.AgentBreakdowns = append(out.Daily.AgentBreakdowns, usageParityAgentBreakdown{
+				Agent: breakdown.Agent, InputTokens: breakdown.InputTokens,
+				OutputTokens:        breakdown.OutputTokens,
+				CacheCreationTokens: breakdown.CacheCreationTokens,
+				CacheReadTokens:     breakdown.CacheReadTokens,
+				CostMicrodollars:    breakdown.Cost.Microdollars,
+			})
+		}
 	}
 	sort.Strings(out.Daily.Models)
 	for _, entry := range top {

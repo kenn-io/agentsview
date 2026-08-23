@@ -10,7 +10,7 @@ auto-push watcher or OS service, then serve a read-only web UI from
 it — useful for team dashboards or multi-machine setups.
 
 The PostgreSQL usage optimization baseline and its architecture boundary are
-recorded in [the usage benchmark decision](/internal/pg-usage-native-optimization/).
+recorded in [the maintainer usage benchmark decision](https://github.com/kenn-io/agentsview/blob/main/docs/internal/pg-usage-native-optimization.md).
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine
 pushes its own sessions; `pg serve` reads from the shared database.

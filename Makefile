@@ -359,7 +359,7 @@ postgres-up:
 	docker compose -f docker-compose.test.yml up -d --wait
 
 # Run opt-in PostgreSQL usage benchmarks against the pinned PG16 service.
-bench-pg-usage:
+bench-pg-usage: pricing-snapshot
 	docker compose -f docker-compose.test.yml up -d --wait postgres
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -tags "fts5,pgtest,kit_posthog_disabled" ./internal/postgres \
