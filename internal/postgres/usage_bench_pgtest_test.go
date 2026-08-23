@@ -4,7 +4,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,7 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-const pgUsageBenchmarkSchema = "agentsview_pg_usage_bench"
+const pgUsageBenchmarkSchemaPrefix = "agentsview_pg_usage_bench"
 
 type pgUsageBenchmarkCase struct {
 	name       string
@@ -40,37 +42,45 @@ func pgUsageBenchmarkFilter(tc pgUsageBenchmarkCase) db.UsageFilter {
 }
 
 type pgUsageBenchmarkFixture struct {
+	schema string
 	local  *db.DB
 	remote *Store
 	sync   *Sync
 	filter db.UsageFilter
 }
 
+func pgUsageBenchmarkSchema(b *testing.B) string {
+	b.Helper()
+	hash := sha256.Sum256([]byte(b.Name() + "\x00" + b.TempDir()))
+	return pgUsageBenchmarkSchemaPrefix + "_" + hex.EncodeToString(hash[:8])
+}
+
 func openPGUsageBenchmarkFixture(b *testing.B) *pgUsageBenchmarkFixture {
 	b.Helper()
 	req := require.New(b)
 	pgURL := testPGURL(b)
+	schema := pgUsageBenchmarkSchema(b)
 	admin, err := sql.Open("pgx", pgURL)
 	req.NoError(err)
-	_, err = admin.Exec("DROP SCHEMA IF EXISTS " + pgUsageBenchmarkSchema + " CASCADE")
+	_, err = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
 	req.NoError(err)
 	req.NoError(admin.Close())
 
 	local, err := db.Open(b.TempDir() + "/usage-bench.db")
 	req.NoError(err)
 	seedUsageParityFixture(b, local)
-	syncer, err := New(pgURL, pgUsageBenchmarkSchema, local, "bench-machine", true, SyncOptions{})
+	syncer, err := New(pgURL, schema, local, "bench-machine", true, SyncOptions{})
 	req.NoError(err)
 	_, err = syncer.Push(b.Context(), true, nil)
 	req.NoError(err)
-	remote, err := NewStore(pgURL, pgUsageBenchmarkSchema, true)
+	remote, err := NewStore(pgURL, schema, true)
 	req.NoError(err)
 	b.Cleanup(func() {
 		_ = remote.Close()
 		_ = syncer.Close()
 		_ = local.Close()
 		admin, _ := sql.Open("pgx", pgURL)
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + pgUsageBenchmarkSchema + " CASCADE")
+		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
 		_ = admin.Close()
 	})
 
@@ -78,7 +88,8 @@ func openPGUsageBenchmarkFixture(b *testing.B) *pgUsageBenchmarkFixture {
 	req.NoError(remote.DB().QueryRowContext(b.Context(), "SHOW server_version").Scan(&version))
 	b.Logf("pg_version=%s fixture_sessions=%d fixture_messages=%d fixture_usage_events=%d", version, 5, 4, 1)
 	return &pgUsageBenchmarkFixture{
-		local: local, remote: remote, sync: syncer,
+		schema: schema,
+		local:  local, remote: remote, sync: syncer,
 		filter: db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"},
 	}
 }
@@ -320,7 +331,7 @@ func BenchmarkPGUsageRefresh(b *testing.B) {
 			err := fixture.remote.DB().QueryRowContext(ctx, `
 				SELECT count(*) FROM pg_catalog.pg_class c
 				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-				WHERE n.nspname = $1 AND c.relkind IN ('r', 'i')`, pgUsageBenchmarkSchema).Scan(&tables)
+				WHERE n.nspname = $1 AND c.relkind IN ('r', 'i')`, fixture.schema).Scan(&tables)
 			if err != nil {
 				b.Fatal(err)
 			}
