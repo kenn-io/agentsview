@@ -27,6 +27,7 @@ describe("KNOWN_AGENTS", () => {
       "amp",
       "zencoder",
       "zed",
+      "t3",
       "vscode-copilot",
       "visualstudio-copilot",
       "pi",
@@ -216,6 +217,7 @@ describe("agentLabel", () => {
     expect(agentLabel("workbuddy")).toBe("WorkBuddy");
     expect(agentLabel("piebald")).toBe("Piebald");
     expect(agentLabel("zed")).toBe("Zed");
+    expect(agentLabel("t3")).toBe("t3code");
     expect(agentLabel("qwen")).toBe("Qwen Code");
     expect(agentLabel("qwenpaw")).toBe("QwenPaw");
     expect(agentLabel("deepseek-tui")).toBe("DeepSeek TUI");

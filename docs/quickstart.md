@@ -275,6 +275,7 @@ export QWENPAW_DIR=~/custom/qwenpaw
 export REASONIX_DIR=~/custom/reasonix
 export ROOCODE_DIR=~/custom/roocode
 export SHELLEY_DIR=~/custom/shelley
+export T3_USERDATA_DIR=~/custom/t3/userdata
 export TRAE_DIR=~/custom/trae/User
 export VISUALSTUDIO_COPILOT_DIR=~/custom/visualstudio-copilot/traces
 export VSCODE_COPILOT_DIR=~/custom/vscode

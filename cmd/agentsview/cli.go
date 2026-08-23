@@ -914,6 +914,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  CURSOR_PROJECTS_DIR     Cursor projects directory")
 	fmt.Fprintln(w, "  IFLOW_DIR               iFlow projects directory")
 	fmt.Fprintln(w, "  AMP_DIR                 Amp threads directory")
+	fmt.Fprintln(w, "  T3_USERDATA_DIR         t3code userdata directory")
 	fmt.Fprintln(w, "  ZED_DIR                 Zed data directory")
 	fmt.Fprintln(w, "  QWEN_PROJECTS_DIR       Qwen Code projects directory")
 	fmt.Fprintln(w, "  QWENPAW_DIR             QwenPaw workspaces directory")

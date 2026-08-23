@@ -302,6 +302,7 @@ Omitting the key keeps its default directories.
 | Reasonix              | `~/.reasonix/` and `~/AppData/Roaming/reasonix/`                                 | JSONL sessions plus `.jsonl.meta` sidecars                                                                                      |
 | RooCode               | (platform-specific, see below)                                                   | `history_item.json` + `ui_messages.json` per task                                                                              |
 | Shelley               | `~/.config/shelley/`                                                             | SQLite database (`shelley.db`)                                                                                                  |
+| t3code                | `~/.t3/userdata/` and `~/.t3/dev/`                                               | SQLite database (`state.sqlite`)                                                                                                |
 | Visual Studio Copilot | (platform-specific, see below)                                                   | Trace JSONL files                                                                                                               |
 | VS Code Copilot       | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
 | Windsurf              | (platform-specific, see below)                                                   | SQLite `workspaceStorage/<hash>/state.vscdb` workspace chat data                                                                |
@@ -708,6 +709,7 @@ export QWENPAW_DIR=~/custom/qwenpaw
 export REASONIX_DIR=~/custom/reasonix
 export ROOCODE_DIR=~/custom/roocode
 export SHELLEY_DIR=~/custom/shelley
+export T3_USERDATA_DIR=~/custom/t3/userdata
 export TRAE_DIR=~/custom/trae/User
 export TRAEX_SESSIONS_DIR=~/custom/trae/cli/sessions
 export VISUALSTUDIO_COPILOT_DIR=~/custom/visualstudio-copilot/traces
@@ -772,7 +774,8 @@ The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `opencode_dirs`, `openhands_dirs`, `pi_dirs`, `prime_agent_dirs`, `piebald_dirs`,
 `posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`, `qoder_project_dirs`,
 `qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `roocode_dirs`,
-`shelley_dirs`, `traex_sessions_dirs`, `visualstudio_copilot_dirs`,
+`shelley_dirs`, `t3_dirs`, `traex_sessions_dirs`,
+`visualstudio_copilot_dirs`,
 `vscode_copilot_dirs`, `windsurf_dirs`, `warp_dirs`,
 `workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and `zencoder_dirs`. Each
 accepts an array of paths. Environment variables take precedence over these

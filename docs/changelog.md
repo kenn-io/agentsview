@@ -7,6 +7,11 @@ description: Release history for AgentsView
 
 **New features**
 
+- Add t3code session support. Threads are read from the shared
+  `state.sqlite` under `~/.t3/userdata`, one session per thread, with
+  titles, project, worktree cwd, and model attribution. The root is
+  excluded from remote sync because t3code stores its credentials
+  beside the database.
 - Add automation-only one-shot capture for exact `claude -p` and
   `codex exec --json` executions, with isolated accounting, recoverable retries,
   exclusively created and protected local evidence, preserved child streams

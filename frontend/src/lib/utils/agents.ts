@@ -21,6 +21,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   { name: "amp", color: "var(--accent-coral)", label: "Amp" },
   { name: "zencoder", color: "var(--accent-red)", label: "Zencoder" },
   { name: "zed", color: "var(--accent-green)", label: "Zed" },
+  { name: "t3", color: "var(--accent-orange)", label: "t3code" },
   {
     name: "vscode-copilot",
     color: "var(--accent-teal)",

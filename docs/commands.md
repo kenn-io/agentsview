@@ -1320,6 +1320,7 @@ agentsview help
 | `REASONIX_DIR`                    | `~/.reasonix` and `~/AppData/Roaming/reasonix`       | Reasonix data directory                                                                             |
 | `ROOCODE_DIR`                     | (platform-specific)                                  | RooCode VS Code extension data directory                                                            |
 | `SHELLEY_DIR`                     | `~/.config/shelley`                                  | Shelley data directory                                                                              |
+| `T3_USERDATA_DIR`                 | `~/.t3/userdata`                                     | t3code userdata directory                                                                           |
 | `TRAE_DIR`                        | (platform-specific)                                  | Trae editor user-data directory                                                                     |
 | `VISUALSTUDIO_COPILOT_DIR`        | (platform-specific)                                  | Visual Studio Copilot traces directory                                                              |
 | `VSCODE_COPILOT_DIR`              | (platform-specific)                                  | VS Code Copilot sessions directory                                                                  |

@@ -92,6 +92,7 @@ across every project, model, and tool.
   <a class="agent-chip" data-agent="reasonix" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Rx</span><span class="agent-chip__name">Reasonix</span></a>
   <a class="agent-chip" data-agent="roocode" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Ro</span><span class="agent-chip__name">RooCode</span></a>
   <a class="agent-chip" data-agent="shelley" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Sh</span><span class="agent-chip__name">Shelley</span></a>
+  <a class="agent-chip" data-agent="t3" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">t3</span><span class="agent-chip__name">t3code</span></a>
   <a class="agent-chip" data-agent="trae" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Tr</span><span class="agent-chip__name">Trae</span></a>
   <a class="agent-chip" data-agent="traex" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Tx</span><span class="agent-chip__name">TraeX</span></a>
   <a class="agent-chip" data-agent="workbuddy" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Wb</span><span class="agent-chip__name">WorkBuddy</span></a>
