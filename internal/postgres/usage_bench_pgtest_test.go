@@ -295,16 +295,21 @@ func BenchmarkPGUsageRefresh(b *testing.B) {
 	b.Run("DeltaPush", func(b *testing.B) {
 		var sessionsPushed, messagesPushed int
 		for i := 0; i < b.N; i++ {
+			messageCount, err := fixture.local.MessageCount("snapshot-winner")
+			if err != nil {
+				b.Fatal(err)
+			}
+			nextOrdinal := messageCount + 1
 			session := usageParitySessionFixture(
 				"snapshot-winner", "project-b", "claude", "2026-08-12T10:01:00Z",
 				10+i+1, 20)
-			session.MessageCount = i + 2
+			session.MessageCount = nextOrdinal
 			if err := fixture.local.UpsertSession(session); err != nil {
 				b.Fatal(err)
 			}
 			if err := fixture.local.InsertMessages([]db.Message{{
 				SessionID:     "snapshot-winner",
-				Ordinal:       i + 1,
+				Ordinal:       nextOrdinal,
 				Role:          "assistant",
 				Content:       "delta-payload-" + strconv.Itoa(i),
 				ContentLength: len("delta-payload-" + strconv.Itoa(i)),
