@@ -5,6 +5,8 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -170,29 +172,71 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 }
 
 func requireCompleteUsageParity(
-	t *testing.T, local, remote db.Store, filter db.UsageFilter,
+	t testing.TB, local, remote db.Store, filter db.UsageFilter,
 ) {
 	t.Helper()
-	ctx := context.Background()
+	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter))
+}
+
+func completeUsageParity(
+	ctx context.Context, local, remote db.Store, filter db.UsageFilter,
+) error {
 	localDaily, err := local.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
+	if err != nil {
+		return fmt.Errorf("local GetDailyUsage: %w", err)
+	}
 	remoteDaily, err := remote.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, localDaily, remoteDaily, "complete daily result")
+	if err != nil {
+		return fmt.Errorf("remote GetDailyUsage: %w", err)
+	}
+	if !reflect.DeepEqual(localDaily, remoteDaily) {
+		return fmt.Errorf("complete daily result differs")
+	}
 	localTop, err := local.GetTopSessionsByCost(ctx, filter, 10)
-	require.NoError(t, err)
+	if err != nil {
+		return fmt.Errorf("local GetTopSessionsByCost: %w", err)
+	}
 	remoteTop, err := remote.GetTopSessionsByCost(ctx, filter, 10)
-	require.NoError(t, err)
-	require.Equal(t, localTop, remoteTop, "complete top-session result")
-	localSession, err := local.GetSessionUsage(ctx, "snapshot-winner", true)
-	require.NoError(t, err)
-	remoteSession, err := remote.GetSessionUsage(ctx, "snapshot-winner", true)
-	require.NoError(t, err)
-	require.Equal(t, localSession, remoteSession, "complete session result")
-	localWithoutBreakdown := captureUsageParitySession(t, local, false)
-	remoteWithoutBreakdown := captureUsageParitySession(t, remote, false)
-	require.Equal(t, localWithoutBreakdown, remoteWithoutBreakdown,
-		"complete session result without breakdown")
+	if err != nil {
+		return fmt.Errorf("remote GetTopSessionsByCost: %w", err)
+	}
+	if !reflect.DeepEqual(localTop, remoteTop) {
+		return fmt.Errorf("complete top-session result differs")
+	}
+	localCounts, err := local.GetUsageSessionCounts(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("local GetUsageSessionCounts: %w", err)
+	}
+	remoteCounts, err := remote.GetUsageSessionCounts(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("remote GetUsageSessionCounts: %w", err)
+	}
+	if !reflect.DeepEqual(localCounts, remoteCounts) {
+		return fmt.Errorf("complete session-count result differs")
+	}
+	localMatching, err := local.GetUsageMatchingSessionCount(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("local GetUsageMatchingSessionCount: %w", err)
+	}
+	remoteMatching, err := remote.GetUsageMatchingSessionCount(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("remote GetUsageMatchingSessionCount: %w", err)
+	}
+	if localMatching != remoteMatching {
+		return fmt.Errorf("complete matching-session-count result differs")
+	}
+	localSession, err := local.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	if err != nil {
+		return fmt.Errorf("local GetSessionUsage: %w", err)
+	}
+	remoteSession, err := remote.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	if err != nil {
+		return fmt.Errorf("remote GetSessionUsage: %w", err)
+	}
+	if !reflect.DeepEqual(localSession, remoteSession) {
+		return fmt.Errorf("complete session result differs")
+	}
+	return nil
 }
 
 func seedUsageParityFixture(t testing.TB, local *db.DB) {

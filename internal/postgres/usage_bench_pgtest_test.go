@@ -151,10 +151,10 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 	require.Zero(t, sessions)
 	require.Zero(t, messages)
 	fixture.prime(t)
-	rowsScanned, tokenUsageBytes := measurePGUsageFixture(t, fixture.remote, db.UsageFilter{
+	eligibleUsageInputRows, tokenUsageBytes := measurePGUsageFixture(t, fixture.remote, db.UsageFilter{
 		From: "2026-08-12", To: "2026-08-12", Timezone: "UTC",
 	})
-	require.Equal(t, 4, rowsScanned,
+	require.Equal(t, 4, eligibleUsageInputRows,
 		"daily usage metrics include the blank-timestamp message via session start")
 	require.Equal(t, int64(len(`{"input_tokens":10,"output_tokens":5}`))+
 		int64(len(`{"input_tokens":20,"output_tokens":10,"server_tool_use":{"web_search_requests":1}}`))+
@@ -183,6 +183,76 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 	}
 }
 
+type pgUsageCountsOverride struct {
+	db.Store
+	counts db.UsageSessionCounts
+}
+
+func (s pgUsageCountsOverride) GetUsageSessionCounts(
+	context.Context, db.UsageFilter,
+) (db.UsageSessionCounts, error) {
+	return s.counts, nil
+}
+
+func TestPGUsageBenchmarkReadPreflightRejectsMismatchedCompleteResult(t *testing.T) {
+	fixture := openPGUsageBenchmarkFixture(t)
+	fixture.prime(t)
+	filter := pgUsageBenchmarkFilter(pgUsageBenchmarkCases()[0])
+	counts, err := fixture.remote.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	counts.Total++
+	remote := pgUsageCountsOverride{Store: fixture.remote, counts: counts}
+	require.Error(t, completeUsageParity(t.Context(), fixture.local, remote, filter),
+		"complete preflight must reject a non-empty PostgreSQL count mismatch")
+
+	recorded := &pgUsageMethodRecorder{Store: fixture.remote}
+	requireCompleteUsageParity(t, fixture.local, recorded, filter)
+	require.ElementsMatch(t, []string{
+		"GetDailyUsage", "GetTopSessionsByCost", "GetUsageSessionCounts",
+		"GetUsageMatchingSessionCount", "GetSessionUsage",
+	}, recorded.calls)
+}
+
+type pgUsageMethodRecorder struct {
+	db.Store
+	calls []string
+}
+
+func (s *pgUsageMethodRecorder) GetDailyUsage(
+	ctx context.Context, filter db.UsageFilter,
+) (db.DailyUsageResult, error) {
+	s.calls = append(s.calls, "GetDailyUsage")
+	return s.Store.GetDailyUsage(ctx, filter)
+}
+
+func (s *pgUsageMethodRecorder) GetTopSessionsByCost(
+	ctx context.Context, filter db.UsageFilter, limit int,
+) ([]db.TopSessionEntry, error) {
+	s.calls = append(s.calls, "GetTopSessionsByCost")
+	return s.Store.GetTopSessionsByCost(ctx, filter, limit)
+}
+
+func (s *pgUsageMethodRecorder) GetUsageSessionCounts(
+	ctx context.Context, filter db.UsageFilter,
+) (db.UsageSessionCounts, error) {
+	s.calls = append(s.calls, "GetUsageSessionCounts")
+	return s.Store.GetUsageSessionCounts(ctx, filter)
+}
+
+func (s *pgUsageMethodRecorder) GetUsageMatchingSessionCount(
+	ctx context.Context, filter db.UsageFilter,
+) (int, error) {
+	s.calls = append(s.calls, "GetUsageMatchingSessionCount")
+	return s.Store.GetUsageMatchingSessionCount(ctx, filter)
+}
+
+func (s *pgUsageMethodRecorder) GetSessionUsage(
+	ctx context.Context, sessionID string, includeBreakdown bool,
+) (*db.SessionUsage, error) {
+	s.calls = append(s.calls, "GetSessionUsage")
+	return s.Store.GetSessionUsage(ctx, sessionID, includeBreakdown)
+}
+
 func BenchmarkPGUsageRead(b *testing.B) {
 	fixture := openPGUsageBenchmarkFixture(b)
 	fixture.prime(b)
@@ -190,8 +260,8 @@ func BenchmarkPGUsageRead(b *testing.B) {
 	for _, tc := range pgUsageBenchmarkCases() {
 		b.Run(tc.name, func(b *testing.B) {
 			filter := pgUsageBenchmarkFilter(tc)
-			rowsScanned, tokenUsageBytes := measurePGUsageFixture(b, fixture.remote, filter)
-			validatePGUsageBenchmarkRead(b, fixture.remote, ctx, filter, tc.breakdowns)
+			eligibleUsageInputRows, tokenUsageBytes := measurePGUsageFixture(b, fixture.remote, filter)
+			requireCompleteUsageParity(b, fixture.local, fixture.remote, filter)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				daily, err := fixture.remote.GetDailyUsage(ctx, filter)
@@ -219,36 +289,9 @@ func BenchmarkPGUsageRead(b *testing.B) {
 					b.Fatal("usage benchmark returned an empty result")
 				}
 			}
-			b.ReportMetric(float64(rowsScanned), "rows_scanned")
+			b.ReportMetric(float64(eligibleUsageInputRows), "eligible_usage_input_rows")
 			b.ReportMetric(float64(tokenUsageBytes), "bytes_token_usage")
 		})
-	}
-}
-
-func validatePGUsageBenchmarkRead(
-	b *testing.B, store *Store, ctx context.Context, filter db.UsageFilter,
-	breakdowns bool,
-) {
-	b.Helper()
-	daily, err := store.GetDailyUsage(ctx, filter)
-	require.NoError(b, err)
-	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
-	require.NoError(b, err)
-	counts, err := store.GetUsageSessionCounts(ctx, filter)
-	require.NoError(b, err)
-	matching, err := store.GetUsageMatchingSessionCount(ctx, filter)
-	require.NoError(b, err)
-	session, err := store.GetSessionUsage(ctx, "snapshot-winner", breakdowns)
-	require.NoError(b, err)
-	require.NotEmpty(b, daily.Daily)
-	require.NotEmpty(b, top)
-	require.NotZero(b, counts.Total)
-	require.NotZero(b, matching)
-	require.NotNil(b, session)
-	if breakdowns {
-		require.NotEmpty(b, session.Breakdown)
-	} else {
-		require.Empty(b, session.Breakdown)
 	}
 }
 
@@ -256,6 +299,7 @@ func measurePGUsageFixture(
 	t testing.TB, store *Store, filter db.UsageFilter,
 ) (int, int64) {
 	t.Helper()
+	// This counts eligible fixture inputs outside timing, not PostgreSQL execution-plan rows.
 	ctx := t.Context()
 	messageWhere, args := pgUsageBenchmarkWindow(
 		"COALESCE(m.timestamp, s.started_at)", filter)

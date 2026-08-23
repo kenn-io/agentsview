@@ -8,10 +8,12 @@ push, and catalog probe paths against the pinned PostgreSQL 16 compose
 service.
 
 The benchmark reuses the SQLite/PostgreSQL parity fixture, including survivor,
-reported-cost, rounding, timestamp, and activity-only cases. Exact non-empty
-results are asserted before timing. `rows_scanned` and `bytes_token_usage` are
-measured from the fixture rows selected by each window, while `ns/op`, `B/op`, and `allocs/op`
-come from the Go benchmark runner.
+reported-cost, rounding, timestamp, and activity-only cases. Each read case
+compares complete SQLite and PostgreSQL results for all five usage methods
+before timing. `eligible_usage_input_rows` counts eligible fixture message and
+usage-event inputs outside timing, not PostgreSQL execution-plan rows, while
+`bytes_token_usage` measures token-usage bytes from those inputs. `ns/op`,
+`B/op`, and `allocs/op` come from the Go benchmark runner.
 
 This is evidence only. It does not choose a facts table, aggregate, trigger,
 refresh schedule, or materialized view. Go-owned pricing, per-survivor
