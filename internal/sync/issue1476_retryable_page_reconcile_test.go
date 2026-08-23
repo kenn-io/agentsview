@@ -388,7 +388,7 @@ func TestIssue1476OverflowRetryBatchReachesWatcherBackoff(t *testing.T) {
 		pathLength  int
 	}{
 		{name: "count", sourceCount: reconciliationRetryPathLimit + 1},
-		{name: "bytes", sourceCount: reconciliationRetryPathLimit, pathLength: reconciliationRetryPathByteLimit/reconciliationRetryPathLimit + 1},
+		{name: "bytes", sourceCount: 1, pathLength: reconciliationRetryPathByteLimit + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := openTestDB(t)
