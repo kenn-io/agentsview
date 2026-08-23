@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -174,4 +176,66 @@ func TestClaudeCandidateHasAppendProgress(t *testing.T) {
 	require.True(t, claudeCandidateHasAppendProgress(large, small))
 	require.False(t, claudeCandidateHasAppendProgress(equal, small))
 	require.False(t, claudeCandidateHasAppendProgress(small, large))
+}
+
+// TestProtectedFileSessionCountDisabledIcodemate pins the resync
+// empty-discovery safety accounting: with the ICodeMate provider enabled,
+// its CLI JSONL rows stay protected while container rows are excluded; with
+// the provider disabled, nothing is discovered and every ICodeMate row must
+// leave the protected count so a rebuild can complete while preserving the
+// disabled provider's sessions. The scoped variant covers contributor-backed
+// rebuild accounting.
+func TestProtectedFileSessionCountDisabledIcodemate(t *testing.T) {
+	database := openTestDB(t)
+	containerPath := "/data/icodemate/icodemate.db"
+	cliPath := "/data/icodemate/cli/projects/proj/abc.jsonl"
+	claudePath := "/data/claude/projects/proj/def.jsonl"
+	for _, sess := range []db.Session{
+		{
+			ID: "icodemate:container-1", Project: "proj", Machine: "local",
+			Agent: "icodemate", FilePath: &containerPath, MessageCount: 1,
+		},
+		{
+			ID: "icodemate:cli-1", Project: "proj", Machine: "local",
+			Agent: "icodemate", FilePath: &cliPath, MessageCount: 1,
+		},
+		{
+			ID: "claude-1", Project: "proj", Machine: "local",
+			Agent: "claude", FilePath: &claudePath, MessageCount: 1,
+		},
+	} {
+		require.NoError(t, database.UpsertSession(sess))
+	}
+
+	tests := []struct {
+		name           string
+		preserveAgents []parser.AgentType
+		scoped         bool
+		want           int
+	}{
+		{
+			name: "enabled provider protects CLI transcript rows",
+			want: 2,
+		},
+		{
+			name:           "disabled provider releases every icodemate row",
+			preserveAgents: []parser.AgentType{parser.AgentIcodemate},
+			want:           1,
+		},
+		{
+			name:           "contributor-scoped disabled provider releases icodemate rows",
+			preserveAgents: []parser.AgentType{parser.AgentIcodemate},
+			scoped:         true,
+			want:           1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			count, err := protectedFileSessionCount(
+				database, "local", "", tt.scoped, tt.preserveAgents,
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, count)
+		})
+	}
 }

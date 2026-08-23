@@ -2797,14 +2797,25 @@ func (e *Engine) resyncBuildLocked(
 				)
 			}
 		}
-		excludedAgents := []string{
-			string(parser.AgentOpenCode),
-			string(parser.AgentKilo),
-			string(parser.AgentMiMoCode),
-			string(parser.AgentIcodemate),
+		disabledStorage := storageAgentsForDisabledProviders(e.preserveAgents)
+		// A disabled ICodeMate provider discovers nothing, so its CLI JSONL
+		// rows are preserved rather than rediscovered and must leave the
+		// protected count with the container rows.
+		excludedAgents := []db.RebuildAgentExclusion{
+			{Agent: string(parser.AgentOpenCode)},
+			{Agent: string(parser.AgentKilo)},
+			{Agent: string(parser.AgentMiMoCode)},
+			{
+				Agent: string(parser.AgentIcodemate),
+				KeepJSONLRows: !slices.Contains(
+					disabledStorage, parser.AgentIcodemate,
+				),
+			},
 		}
-		for _, agent := range storageAgentsForDisabledProviders(e.preserveAgents) {
-			excludedAgents = append(excludedAgents, string(agent))
+		for _, agent := range disabledStorage {
+			excludedAgents = append(
+				excludedAgents, db.RebuildAgentExclusion{Agent: string(agent)},
+			)
 		}
 		localOldFileSessions, err = origDB.FileBackedSessionCountForRebuildOwner(
 			context.Background(), e.machine, contributorPrefixes, excludedAgents,
@@ -3877,10 +3888,19 @@ func protectedFileSessionCount(
 			database, agent, machine, idPrefix, scoped,
 		)
 	}
-	count -= countIcodemateContainerRootSessions(
-		database, machine, idPrefix, scoped,
-	)
 	storageAgents := storageAgentsForDisabledProviders(preserveAgents)
+	if slices.Contains(storageAgents, parser.AgentIcodemate) {
+		// A disabled ICodeMate provider discovers nothing, so its CLI JSONL
+		// rows are preserved rather than rediscovered: subtract every
+		// ICodeMate row, not just the self-preserving container layouts.
+		count -= countRootSessionsForAgent(
+			database, parser.AgentIcodemate, machine, idPrefix, scoped,
+		)
+	} else {
+		count -= countIcodemateContainerRootSessions(
+			database, machine, idPrefix, scoped,
+		)
+	}
 	seenPreserved := make(map[parser.AgentType]struct{}, len(storageAgents))
 	for _, agent := range storageAgents {
 		if _, seen := seenPreserved[agent]; seen {
