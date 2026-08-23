@@ -1638,8 +1638,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 	e.anomalies.applyTo(&stats)
 	e.persistSkipCache()
 	complete := prepared.classificationErr == nil && ctx.Err() == nil &&
-		!stats.Aborted && stats.Failed == 0 && stats.providerFailures == 0 &&
-		stats.deferredCount == 0
+		stats.ProcessingComplete()
 	tombstoned := 0
 	if complete && len(prepared.missingPaths) > 0 {
 		var err error
@@ -1658,9 +1657,9 @@ func (e *Engine) applyChangedPathSyncLocked(
 		log.Printf("sync: %d file(s) updated", stats.Synced)
 	}
 	if err := errors.Join(prepared.classificationErr, ctx.Err()); err != nil {
-		if stats.deferredCount > 0 {
+		if stats.Deferred > 0 {
 			return stats, tombstoned, &incompleteReconciliationError{
-				deferred: stats.deferredCount,
+				deferred: stats.Deferred,
 				paths:    append([]string(nil), stats.deferredRetryPaths...),
 				overflow: stats.deferredRetryOverflow,
 				cause:    err,
@@ -1673,9 +1672,9 @@ func (e *Engine) applyChangedPathSyncLocked(
 			"changed-path sync incomplete: %d source or archive failures",
 			stats.Failed,
 		)
-		if stats.deferredCount > 0 {
+		if stats.Deferred > 0 {
 			incompleteErr = &incompleteReconciliationError{
-				deferred:  stats.deferredCount,
+				deferred:  stats.Deferred,
 				paths:     append([]string(nil), stats.deferredRetryPaths...),
 				overflow:  stats.deferredRetryOverflow,
 				cause:     incompleteErr,
@@ -4255,6 +4254,13 @@ func (stats SyncStats) AuthoritativeDiscoveryComplete() bool {
 	return !stats.Aborted && stats.providerFailures == 0
 }
 
+// ProcessingComplete reports whether all processed results reached a terminal
+// state that may acknowledge the run and retire retry state.
+func (stats SyncStats) ProcessingComplete() bool {
+	return !stats.Aborted && stats.Failed == 0 &&
+		stats.providerFailures == 0 && stats.Deferred == 0
+}
+
 // RunStartupMaintenance waits for the daemon-launching foreground sync, then
 // runs work under the same mutex used by sync and resync database swaps.
 func (e *Engine) RunStartupMaintenance(
@@ -4662,7 +4668,7 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	)
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
-		stats.Failed == 0 && stats.providerFailures == 0
+		stats.ProcessingComplete()
 	if err == nil && !complete {
 		err = errors.New("watch root reconciliation aborted")
 	}
@@ -5088,9 +5094,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 	}
 	canTombstoneCompletedScopes :=
-		retErr == nil && (failures > 0 || stats.deferredCount > 0) &&
+		retErr == nil && (failures > 0 || stats.Deferred > 0) &&
 			stats.Failed == 0 && !stats.Aborted
-	if failures > 0 || stats.deferredCount > 0 {
+	if failures > 0 || stats.Deferred > 0 {
 		retryRoots := append([]string(nil), failedRoots...)
 		if retErr != nil || stats.deferredRetryOverflow {
 			for _, completed := range completedScopes {
@@ -5101,7 +5107,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 		incomplete := &incompleteReconciliationError{
 			failures:  failures,
-			deferred:  stats.deferredCount,
+			deferred:  stats.Deferred,
 			roots:     retryRoots,
 			paths:     append([]string(nil), stats.deferredRetryPaths...),
 			overflow:  stats.deferredRetryOverflow,
@@ -5131,8 +5137,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		e.lastSyncStats = stats
 		e.mu.Unlock()
 	}
-	if retErr == nil && ctx.Err() == nil && !stats.Aborted &&
-		stats.Failed == 0 && stats.providerFailures == 0 {
+	if retErr == nil && ctx.Err() == nil && stats.ProcessingComplete() {
 		tombstoned, retErr = e.tombstoneMissingWatchSourceScopesLocked(
 			ctx, completedScopes, spool,
 		)
@@ -6109,18 +6114,18 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	dst.CwdUpdated += src.CwdUpdated
 	dst.Aborted = dst.Aborted || src.Aborted
 	if !dst.deferredRetryOverflow {
-		deferredCount := dst.deferredCount
+		deferred := dst.Deferred
 		for _, path := range src.deferredRetryPaths {
 			dst.recordDeferred(path)
 		}
-		dst.deferredCount = deferredCount + src.deferredCount
+		dst.Deferred = deferred + src.Deferred
 		dst.deferredRetryOverflow = dst.deferredRetryOverflow ||
 			src.deferredRetryOverflow
 		if dst.deferredRetryOverflow {
 			dst.deferredRetryPaths = nil
 		}
 	} else {
-		dst.deferredCount += src.deferredCount
+		dst.Deferred += src.Deferred
 	}
 }
 
@@ -10923,7 +10928,7 @@ func (e *Engine) processProviderFile(
 				res.retrySessionIDs = make(map[string]bool)
 			}
 			res.retrySessionIDs[result.Result.Session.ID] = true
-			if file.Agent == parser.AgentCodex {
+			if isCodexFormatAgent(file.Agent) {
 				res.deferredCount++
 			} else {
 				res.providerFailureCount++

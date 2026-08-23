@@ -171,5 +171,5 @@ func mergeSyncStats(dst *SyncStats, src SyncStats) {
 			}
 		}
 	}
-	dst.deferredCount += src.deferredCount
+	dst.Deferred += src.Deferred
 }

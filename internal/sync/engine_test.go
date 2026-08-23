@@ -1483,9 +1483,18 @@ func (provider *manyStreamingProvider) Parse(
 }
 
 func TestIssue1476MissingParentForkDoesNotStarveLaterPages(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentCodex, parser.AgentTraeX} {
+		t.Run(string(agent), func(t *testing.T) {
+			testIssue1476MissingParentForkDoesNotStarveLaterPages(t, agent)
+		})
+	}
+}
+
+func testIssue1476MissingParentForkDoesNotStarveLaterPages(
+	t *testing.T, agent parser.AgentType,
+) {
 	database := openTestDB(t)
 	root := t.TempDir()
-	const agent parser.AgentType = parser.AgentCodex
 	const sourceCount = reconciliationPageSize + 1
 	const deferredIndex = 8
 	sources := make([]parser.SourceRef, sourceCount)

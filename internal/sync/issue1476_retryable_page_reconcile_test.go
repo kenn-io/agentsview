@@ -30,6 +30,27 @@ type issue1476WatchProvider struct {
 	discoverCalls     *atomic.Int32
 }
 
+func TestSyncStatsProcessingCompleteTruthTable(t *testing.T) {
+	tests := []struct {
+		name          string
+		stats         SyncStats
+		wantOK        bool
+		wantDiscovery bool
+	}{
+		{name: "clean", wantOK: true, wantDiscovery: true},
+		{name: "deferred", stats: SyncStats{Deferred: 1}, wantDiscovery: true},
+		{name: "hard failure", stats: SyncStats{Failed: 1}, wantDiscovery: true},
+		{name: "provider failure", stats: SyncStats{providerFailures: 1}},
+		{name: "aborted", stats: SyncStats{Aborted: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantOK, tt.stats.ProcessingComplete())
+			assert.Equal(t, tt.wantDiscovery, tt.stats.AuthoritativeDiscoveryComplete())
+		})
+	}
+}
+
 func (p *issue1476WatchProvider) WatchPlan(context.Context) (parser.WatchPlan, error) {
 	return parser.WatchPlan{Roots: []parser.WatchRoot{{Path: p.root}}}, nil
 }
@@ -351,7 +372,7 @@ func TestIssue1476DeferredRetryPathsRemainBounded(t *testing.T) {
 	byteBound.recordDeferred(strings.Repeat("y", reconciliationRetryPathByteLimit+1))
 	assert.True(t, byteBound.deferredRetryOverflow)
 	assert.Empty(t, byteBound.deferredRetryPaths)
-	t.Logf("bounded retry scope: %d paths exceed the exact-path bound and fall back to roots", stats.deferredCount)
+	t.Logf("bounded retry scope: %d paths exceed the exact-path bound and fall back to roots", stats.Deferred)
 }
 
 func TestIssue1476OverflowRetryBatchReachesWatcherBackoff(t *testing.T) {
@@ -476,7 +497,7 @@ func TestIssue1476ChangedPathRetryBatchRetainsDeferredPath(t *testing.T) {
 	assert.True(t, deferOnly.ReconciliationRetryDeferOnly())
 	assert.Equal(t, []string{path}, retry.WatchRetryBatch().Paths)
 	assert.Empty(t, retry.WatchRetryBatch().ReconcileRoots)
-	assert.Equal(t, 1, engine.LastSyncStats().deferredCount)
+	assert.Equal(t, 1, engine.LastSyncStats().Deferred)
 }
 
 func TestIssue1476WatchBatchKeepsExactDeferredPath(t *testing.T) {
@@ -493,4 +514,20 @@ func TestIssue1476WatchBatchKeepsExactDeferredPath(t *testing.T) {
 	assert.Equal(t, []string{deferredPath}, retry.WatchRetryBatch().Paths)
 	assert.Equal(t, []string{`C:\sessions\hard-failure`}, retry.WatchRetryBatch().ReconcileRoots)
 	t.Logf("exact retry scope: retained path %q", deferredPath)
+}
+
+func TestIssue1476FullOriginKeepsTypedRetryScope(t *testing.T) {
+	deferredPath := `C:\\sessions\\forked-child.jsonl`
+	cause := &incompleteReconciliationError{
+		failures: 1, deferred: 1,
+		paths: []string{deferredPath},
+	}
+	err := watchBatchReconciliationError(
+		cause, []string{`C:\\sessions\\changed.jsonl`}, nil, true, true,
+	)
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{
+		Paths: []string{deferredPath}, LostEvents: true,
+	}, retry.WatchRetryBatch())
 }

@@ -62,10 +62,13 @@ type SyncResult struct {
 // produced at least one session — used by ResyncAll to compare
 // against Failed on the same unit.
 type SyncStats struct {
-	TotalSessions  int                 `json:"total_sessions"`
-	Synced         int                 `json:"synced"`
-	Skipped        int                 `json:"skipped"`
-	Failed         int                 `json:"failed"`
+	TotalSessions int `json:"total_sessions"`
+	Synced        int `json:"synced"`
+	Skipped       int `json:"skipped"`
+	Failed        int `json:"failed"`
+	// Deferred counts provider results retained for a later retry. It is
+	// run-local completion state, not a durable or API field.
+	Deferred       int                 `json:"-"`
 	OrphanedCopied int                 `json:"orphaned_copied,omitempty"`
 	Warnings       []string            `json:"warnings,omitempty"`
 	Aborted        bool                `json:"aborted,omitempty"`
@@ -103,7 +106,6 @@ type SyncStats struct {
 	parserExcludedFiles    int // file-level intentional parser exclusions
 	parserExcludedIDs      []string
 	providerFailures       int // authoritative discoveries that did not complete
-	deferredCount          int // provider-authored results deferred for retry
 	deferredRetryPaths     []string
 	deferredRetryOverflow  bool
 	// ArchiveRebuilt records a completed full-resync database swap. A rebuild
@@ -414,7 +416,7 @@ func (s *SyncStats) RecordFailed() {
 }
 
 func (s *SyncStats) recordDeferred(path string) {
-	s.deferredCount++
+	s.Deferred++
 	s.retainDeferredRetryPath(path)
 }
 

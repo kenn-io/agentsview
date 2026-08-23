@@ -67,7 +67,7 @@ func runRemoteSourceSyncPass(
 		return
 	}
 	stats := engine.SyncRootsSince(ctx, roots, time.Time{}, nil)
-	if stats.Failed > 0 || stats.Aborted {
+	if !stats.ProcessingComplete() {
 		log.Printf(
 			"scheduled remote source sync: %d synced, %d failed, aborted=%v",
 			stats.Synced, stats.Failed, stats.Aborted,

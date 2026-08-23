@@ -218,6 +218,15 @@ func TestJournalOutcomeClosedSet(t *testing.T) {
 	assert.False(t, JournalOutcome("retained(invented)").Valid())
 }
 
+func TestDeferredDeltaRetainsJournalAndRequiredDataVersion(t *testing.T) {
+	engineStats := syncpkg.SyncStats{Deferred: 1}
+	assert.False(t, shouldPersistImportDataVersion(engineStats))
+	assert.Equal(t, JournalProcessingFailures, deltaImportOutcome(engineStats),
+		"deferred processing retains the journal")
+	assert.NotEqual(t, JournalRetired, deltaImportOutcome(engineStats),
+		"deferred processing must not advance the required data version")
+}
+
 func TestPreparedDeltaImportPoisonProjectionDisarmsAndRearms(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)

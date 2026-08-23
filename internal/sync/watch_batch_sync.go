@@ -119,7 +119,9 @@ func watchBatchReconciliationError(
 	hasScopedPaths := errors.As(cause, &scopedPaths)
 	if hasScopedPaths {
 		retryPaths = watchDeduplicateStrings(scopedPaths.ReconciliationRetryPaths())
-	} else {
+		hasScopedPaths = len(retryPaths) > 0
+	}
+	if !hasScopedPaths {
 		retryPaths = watchDeduplicateStrings(paths)
 	}
 	var scoped interface{ ReconciliationRetryRoots() []string }
@@ -127,16 +129,13 @@ func watchBatchReconciliationError(
 	hasScopedRoots := errors.As(cause, &scoped)
 	if hasScopedRoots {
 		retryRoots = watchDeduplicateStrings(scoped.ReconciliationRetryRoots())
-	} else {
+		hasScopedRoots = len(retryRoots) > 0
+	}
+	if !hasScopedRoots {
 		retryRoots = watchDeduplicateStrings(roots)
 	}
 	var overflow interface{ ReconciliationRetryOverflow() bool }
 	overflowed := errors.As(cause, &overflow) && overflow.ReconciliationRetryOverflow()
-	if full {
-		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
-			FullSync: true, LostEvents: lostEvents,
-		}}
-	}
 	if overflowed && len(retryPaths) == 0 && len(retryRoots) == 0 {
 		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
 			FullSync: true, LostEvents: lostEvents,
@@ -145,6 +144,11 @@ func watchBatchReconciliationError(
 	if len(retryPaths) > 0 || len(retryRoots) > 0 {
 		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
 			Paths: retryPaths, ReconcileRoots: retryRoots, LostEvents: lostEvents,
+		}}
+	}
+	if full {
+		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
+			FullSync: true, LostEvents: lostEvents,
 		}}
 	}
 	retry := WatchBatch{FullSync: full, LostEvents: lostEvents}

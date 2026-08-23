@@ -866,6 +866,9 @@ func runLocalSyncAuthoritative(
 	if !stats.AuthoritativeDiscoveryComplete() {
 		return didResync, errors.New("local sync discovery incomplete")
 	}
+	if !stats.ProcessingComplete() {
+		return didResync, errors.New("local sync processing incomplete")
+	}
 	return didResync, nil
 }
 

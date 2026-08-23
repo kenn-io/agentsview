@@ -295,6 +295,8 @@ func resyncBuildResultFromStats(
 	case stats.Aborted:
 		result.Status = "aborted"
 		result.DiscoveryComplete = false
+	case stats.Deferred > 0:
+		result.Status = "failed"
 	case !result.DiscoveryComplete:
 		result.Status = "failed"
 	default:
@@ -341,7 +343,7 @@ func workerResultFromStats(
 		if ctx.Err() != nil {
 			result.Error = ctx.Err().Error()
 		}
-	case stats.Failed > 0 || !result.DiscoveryComplete:
+	case !stats.ProcessingComplete() || !result.DiscoveryComplete:
 		result.Status = "failed"
 	default:
 		result.Status = "ok"

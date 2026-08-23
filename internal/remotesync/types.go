@@ -43,6 +43,12 @@ type SyncStats struct {
 	ProcessingDuration   time.Duration    `json:"processing_duration,omitzero"`
 	CachePersistDuration time.Duration    `json:"cache_persist_duration,omitzero"`
 	RetirementDuration   time.Duration    `json:"retirement_duration,omitzero"`
+	Deferred             int              `json:"-"`
+	incomplete           bool
+}
+
+func (s SyncStats) ProcessingComplete() bool {
+	return !s.incomplete && s.Deferred == 0
 }
 
 type syncStatsJSON SyncStats
