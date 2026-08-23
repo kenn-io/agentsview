@@ -1271,6 +1271,59 @@ func TestResolveDirs_ClaudeConfigDirRootEnvVar(t *testing.T) {
 	})
 }
 
+func TestResolveDirs_T3Precedence(t *testing.T) {
+	t.Run("config array overrides defaults", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		writeConfig(t, dir, map[string]any{
+			"t3_dirs": []string{"/one", "/two"},
+		})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"/one", "/two"},
+			cfg.ResolveDirs(parser.AgentT3))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentT3))
+	})
+
+	t.Run("T3_USERDATA_DIR overrides the config array", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		root := t.TempDir()
+		t.Setenv("T3_USERDATA_DIR", root)
+		writeConfig(t, dir, map[string]any{
+			"t3_dirs": []string{"/one"},
+		})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{root}, cfg.ResolveDirs(parser.AgentT3))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentT3))
+	})
+
+	t.Run("default covers the release and development state dirs", func(t *testing.T) {
+		setupTestEnv(t)
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		dirs := cfg.ResolveDirs(parser.AgentT3)
+		require.Len(t, dirs, 2)
+		assert.Equal(t, filepath.Join(".t3", "userdata"),
+			lastTwoPathElements(dirs[0]))
+		assert.Equal(t, filepath.Join(".t3", "dev"),
+			lastTwoPathElements(dirs[1]))
+		assert.False(t, cfg.IsUserConfigured(parser.AgentT3))
+	})
+}
+
+// lastTwoPathElements keeps the default-directory assertion independent of the
+// test home directory.
+func lastTwoPathElements(path string) string {
+	parent, leaf := filepath.Split(filepath.Clean(path))
+	return filepath.Join(filepath.Base(filepath.Clean(parent)), leaf)
+}
+
 func TestResolveDirs_DeepSeekHarnessPrecedence(t *testing.T) {
 	t.Run("config array overrides default", func(t *testing.T) {
 		dir := setupTestEnv(t)
