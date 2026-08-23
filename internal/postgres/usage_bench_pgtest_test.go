@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -21,17 +22,17 @@ import (
 const pgUsageBenchmarkSchemaPrefix = "agentsview_pg_usage_bench"
 
 const (
-	pgUsageBenchmarkBulkSessions           = 48
-	pgUsageBenchmarkBulkMessagesPerSession = 4
+	pgUsageBenchmarkBulkSessions           = 500
+	pgUsageBenchmarkBulkMessagesPerSession = 200
 	pgUsageBenchmarkBulkDateBuckets        = 4
 )
 
 var (
 	pgUsageBenchmarkBulkProjects = []string{
-		"bulk-project-a", "bulk-project-b", "bulk-project-c",
-		"bulk-project-d", "bulk-project-e", "bulk-project-f",
+		"agentsview", "quokka", "arrow-rs", "side-quests", "infrastructure",
+		"blog", "experiments", "docs", "dotfiles", "playground",
 	}
-	pgUsageBenchmarkBulkAgents = []string{"claude", "codex", "cursor", "hermes"}
+	pgUsageBenchmarkBulkAgents = []string{"claude", "codex", "openhands"}
 	pgUsageBenchmarkBulkModels = []string{
 		"model-priced", "model-reported", "model-bulk-cheap", "model-bulk-premium",
 	}
@@ -46,14 +47,14 @@ type pgUsageBenchmarkCase struct {
 
 func pgUsageBenchmarkCases() []pgUsageBenchmarkCase {
 	return []pgUsageBenchmarkCase{
-		{name: "one-day/no-breakdowns", from: "2026-08-12", to: "2026-08-12", expectedEligibleInputRows: 52},
-		{name: "one-day/breakdowns", from: "2026-08-12", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 52},
-		{name: "seven-day/no-breakdowns", from: "2026-08-06", to: "2026-08-12", expectedEligibleInputRows: 100},
-		{name: "seven-day/breakdowns", from: "2026-08-06", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 100},
-		{name: "thirty-day/no-breakdowns", from: "2026-07-14", to: "2026-08-12", expectedEligibleInputRows: 149},
-		{name: "thirty-day/breakdowns", from: "2026-07-14", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 149},
-		{name: "all-history/no-breakdowns", expectedEligibleInputRows: 197},
-		{name: "all-history/breakdowns", breakdowns: true, expectedEligibleInputRows: 197},
+		{name: "one-day/no-breakdowns", from: "2026-08-12", to: "2026-08-12", expectedEligibleInputRows: 25_004},
+		{name: "one-day/breakdowns", from: "2026-08-12", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 25_004},
+		{name: "seven-day/no-breakdowns", from: "2026-08-06", to: "2026-08-12", expectedEligibleInputRows: 50_004},
+		{name: "seven-day/breakdowns", from: "2026-08-06", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 50_004},
+		{name: "thirty-day/no-breakdowns", from: "2026-07-14", to: "2026-08-12", expectedEligibleInputRows: 75_005},
+		{name: "thirty-day/breakdowns", from: "2026-07-14", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 75_005},
+		{name: "all-history/no-breakdowns", expectedEligibleInputRows: 100_005},
+		{name: "all-history/breakdowns", breakdowns: true, expectedEligibleInputRows: 100_005},
 	}
 }
 
@@ -155,6 +156,8 @@ func seedPGUsageBenchmarkBulkFixture(t testing.TB, local *db.DB, count int) {
 		}
 		sessionID := "benchmark-bulk-" + strconv.Itoa(i)
 		startedAt := day + "T09:00:00Z"
+		startTime, err := time.Parse(time.RFC3339, startedAt)
+		require.NoError(t, err)
 		sessions = append(sessions, db.Session{
 			ID: sessionID, Project: pgUsageBenchmarkBulkProjects[i%len(pgUsageBenchmarkBulkProjects)],
 			Machine: "bench-machine", Agent: pgUsageBenchmarkBulkAgents[i%len(pgUsageBenchmarkBulkAgents)],
@@ -162,14 +165,15 @@ func seedPGUsageBenchmarkBulkFixture(t testing.TB, local *db.DB, count int) {
 			UserMessageCount: 2,
 		})
 		for ordinal := 0; ordinal < pgUsageBenchmarkBulkMessagesPerSession; ordinal++ {
-			inputTokens := 10 + (i % 7) + ordinal
-			outputTokens := 5 + (i % 5) + ordinal
+			inputTokens := 1200 + (i % 17) + ordinal
+			outputTokens := 480 + (i % 13) + (ordinal % 11)
 			messages = append(messages, db.Message{
 				SessionID: sessionID, Ordinal: ordinal, Role: "assistant",
-				Timestamp: day + "T09:0" + strconv.Itoa(ordinal+1) + ":00Z",
+				Timestamp: startTime.Add(time.Duration(ordinal) * time.Minute).Format(time.RFC3339),
 				Model:     pgUsageBenchmarkBulkModels[(i+ordinal)%len(pgUsageBenchmarkBulkModels)],
 				TokenUsage: json.RawMessage(`{"input_tokens":` + strconv.Itoa(inputTokens) +
-					`,"output_tokens":` + strconv.Itoa(outputTokens) + `}`),
+					`,"output_tokens":` + strconv.Itoa(outputTokens) +
+					`,"cache_creation_input_tokens":300,"cache_read_input_tokens":2400}`),
 				ClaudeMessageID: "benchmark-bulk-message-" + strconv.Itoa(i) + "-" + strconv.Itoa(ordinal),
 				ClaudeRequestID: "benchmark-bulk-request-" + strconv.Itoa(i) + "-" + strconv.Itoa(ordinal),
 			})
@@ -216,16 +220,26 @@ func (f *pgUsageBenchmarkFixture) requireFixedCardinality(t testing.TB) {
 }
 
 func (f *pgUsageBenchmarkFixture) replaceDeltaMessage(t testing.TB, payload string) {
+	f.replaceDeltaSessionMessage(t, "snapshot-winner", payload, 1)
+}
+
+func (f *pgUsageBenchmarkFixture) replaceDeltaBulkMessage(t testing.TB, payload string) {
+	f.replaceDeltaSessionMessage(t, "benchmark-bulk-0", payload, pgUsageBenchmarkBulkMessagesPerSession)
+}
+
+func (f *pgUsageBenchmarkFixture) replaceDeltaSessionMessage(
+	t testing.TB, sessionID, payload string, expectedCount int,
+) {
 	t.Helper()
 	f.requireFixedCardinality(t)
-	messages, err := f.local.GetMessages(t.Context(), "snapshot-winner", 0, 1, true)
+	messages, err := f.local.GetMessages(t.Context(), sessionID, 0, expectedCount, true)
 	require.NoError(t, err)
-	require.Len(t, messages, 1)
+	require.Len(t, messages, expectedCount)
 	messages[0].TokenUsage = []byte(payload)
-	require.NoError(t, f.local.ReplaceSessionMessages("snapshot-winner", messages))
-	messageCount, err := f.local.MessageCount("snapshot-winner")
+	require.NoError(t, f.local.ReplaceSessionMessages(sessionID, messages))
+	messageCount, err := f.local.MessageCount(sessionID)
 	require.NoError(t, err)
-	require.Equal(t, 1, messageCount)
+	require.Equal(t, expectedCount, messageCount)
 }
 
 func TestPGUsageBenchmarkFixture(t *testing.T) {
@@ -364,16 +378,20 @@ func BenchmarkPGUsageRead(b *testing.B) {
 	fixture := openPGUsageBenchmarkFixture(b)
 	fixture.addBulk(b, pgUsageBenchmarkBulkSessions)
 	fixture.prime(b)
+	loadedSessions, loadedMessages := pgUsageRemoteCardinality(b, fixture.remote)
+	require.Equal(b, 6+pgUsageBenchmarkBulkSessions, loadedSessions)
+	require.Equal(b, 5+pgUsageBenchmarkBulkSessions*pgUsageBenchmarkBulkMessagesPerSession, loadedMessages)
 	ctx := context.Background()
 	for _, tc := range pgUsageBenchmarkCases() {
 		b.Run(tc.name, func(b *testing.B) {
 			filter := pgUsageBenchmarkFilter(tc)
-			b.Logf("fixture_scale=bulk_sessions=%d bulk_messages=%d messages_per_session=%d projects=%d agents=%d models=%d dates=%d",
+			b.Logf("fixture_scale=bulk_sessions=%d bulk_messages=%d messages_per_session=%d projects=%d agents=%d models=%d dates=%d loaded_table_rows=sessions:%d messages:%d",
 				pgUsageBenchmarkBulkSessions,
 				pgUsageBenchmarkBulkSessions*pgUsageBenchmarkBulkMessagesPerSession,
 				pgUsageBenchmarkBulkMessagesPerSession,
 				len(pgUsageBenchmarkBulkProjects), len(pgUsageBenchmarkBulkAgents),
-				len(pgUsageBenchmarkBulkModels), pgUsageBenchmarkBulkDateBuckets)
+				len(pgUsageBenchmarkBulkModels), pgUsageBenchmarkBulkDateBuckets,
+				loadedSessions, loadedMessages)
 			eligibleUsageInputRows, tokenUsageBytes := measurePGUsageFixture(b, fixture.remote, filter)
 			require.Equal(b, tc.expectedEligibleInputRows, eligibleUsageInputRows)
 			requireCompleteUsageParity(b, fixture.local, fixture.remote, filter)
@@ -396,7 +414,7 @@ func BenchmarkPGUsageRead(b *testing.B) {
 					b.Fatal(err)
 				}
 				session, err := fixture.remote.GetSessionUsage(
-					ctx, "snapshot-winner", tc.breakdowns)
+					ctx, "benchmark-bulk-0", tc.breakdowns)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -557,5 +575,73 @@ func BenchmarkPGUsageRefresh(b *testing.B) {
 		}
 		require.NotZero(b, tables)
 		b.ReportMetric(float64(tables), "catalog_rows")
+	})
+}
+
+func BenchmarkPGUsageRefreshLarge(b *testing.B) {
+	ctx := context.Background()
+	b.Run("ColdPush", func(b *testing.B) {
+		fixture := openPGUsageBenchmarkFixture(b)
+		fixture.addBulk(b, pgUsageBenchmarkBulkSessions)
+		b.Logf("fixture_scale=bulk_sessions=%d bulk_messages=%d messages_per_session=%d configured_table_rows=sessions:%d messages:%d",
+			pgUsageBenchmarkBulkSessions,
+			pgUsageBenchmarkBulkSessions*pgUsageBenchmarkBulkMessagesPerSession,
+			pgUsageBenchmarkBulkMessagesPerSession,
+			fixture.expectedSessions,
+			fixture.expectedMessages)
+		for b.Loop() {
+			b.StopTimer()
+			fixture.resetRemoteEmpty(b)
+			b.StartTimer()
+			result, err := fixture.sync.Push(ctx, true, nil)
+			b.StopTimer()
+			require.NoError(b, err)
+			require.Equal(b, fixture.expectedSessions, result.SessionsPushed)
+			require.Equal(b, fixture.expectedMessages, result.MessagesPushed)
+			sessions, messages := pgUsageRemoteCardinality(b, fixture.remote)
+			require.Equal(b, fixture.expectedSessions, sessions)
+			require.Equal(b, fixture.expectedMessages, messages)
+			b.Logf("loaded_table_rows=sessions:%d messages:%d", sessions, messages)
+			requireCompleteUsageParity(b, fixture.local, fixture.remote,
+				pgUsageBenchmarkValidationFilter())
+			b.StartTimer()
+		}
+		b.ReportMetric(float64(fixture.expectedSessions), "sessions_pushed")
+		b.ReportMetric(float64(fixture.expectedMessages), "messages_pushed")
+	})
+
+	b.Run("DeltaPush", func(b *testing.B) {
+		fixture := openPGUsageBenchmarkFixture(b)
+		fixture.addBulk(b, pgUsageBenchmarkBulkSessions)
+		fixture.prime(b)
+		loadedSessions, loadedMessages := pgUsageRemoteCardinality(b, fixture.remote)
+		b.Logf("fixture_scale=bulk_sessions=%d bulk_messages=%d messages_per_session=%d loaded_table_rows=sessions:%d messages:%d",
+			pgUsageBenchmarkBulkSessions,
+			pgUsageBenchmarkBulkSessions*pgUsageBenchmarkBulkMessagesPerSession,
+			pgUsageBenchmarkBulkMessagesPerSession,
+			loadedSessions,
+			loadedMessages)
+		iterations := 0
+		for b.Loop() {
+			b.StopTimer()
+			payload := `{"input_tokens":2000,"output_tokens":800}`
+			if iterations%2 == 1 {
+				payload = `{"input_tokens":2001,"output_tokens":801}`
+			}
+			fixture.replaceDeltaBulkMessage(b, payload)
+			b.StartTimer()
+			result, err := fixture.sync.Push(ctx, false, nil)
+			b.StopTimer()
+			require.NoError(b, err)
+			require.Equal(b, 1, result.SessionsPushed)
+			require.Equal(b, pgUsageBenchmarkBulkMessagesPerSession, result.MessagesPushed)
+			fixture.requireFixedCardinality(b)
+			requireCompleteUsageParity(b, fixture.local, fixture.remote,
+				pgUsageBenchmarkValidationFilter())
+			iterations++
+			b.StartTimer()
+		}
+		b.ReportMetric(1, "sessions_pushed")
+		b.ReportMetric(pgUsageBenchmarkBulkMessagesPerSession, "messages_pushed")
 	})
 }

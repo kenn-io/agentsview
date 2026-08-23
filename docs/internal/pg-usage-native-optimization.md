@@ -15,10 +15,13 @@ usage-event inputs outside timing, not PostgreSQL execution-plan rows, while
 `bytes_token_usage` measures token-usage bytes from those inputs. `ns/op`,
 `B/op`, and `allocs/op` come from the Go benchmark runner.
 
-The read workload is configured as 48 sessions with four messages per session,
-six projects, four agents, four priced models, and four date buckets. The
-correctness and refresh benchmarks retain the smaller parity fixture so their
-exact push and result assertions stay deterministic.
+The read workload is configured as 500 sessions with 200 messages per session,
+ten projects, three agents, four priced models, and four date buckets, for
+100,000 bulk messages. The correctness and standard refresh benchmarks retain
+the smaller parity fixture so their exact push and result assertions stay
+deterministic. `BenchmarkPGUsageRefreshLarge` deliberately loads the
+repository-scale corpus to measure cold-load and multi-message delta behavior
+separately.
 
 This is evidence only. It does not choose a facts table, aggregate, trigger,
 refresh schedule, or materialized view. Go-owned pricing, per-survivor
