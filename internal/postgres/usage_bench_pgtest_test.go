@@ -98,6 +98,15 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 	remote, err := NewStore(pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
+	rowsScanned, tokenUsageBytes := measurePGUsageFixture(t, remote, db.UsageFilter{
+		From: "2026-08-12", To: "2026-08-12", Timezone: "UTC",
+	})
+	require.Equal(t, 4, rowsScanned,
+		"daily usage metrics include the blank-timestamp message via session start")
+	require.Equal(t, int64(len(`{"input_tokens":10,"output_tokens":5}`))+
+		int64(len(`{"input_tokens":20,"output_tokens":10,"server_tool_use":{"web_search_requests":1}}`))+
+		int64(len(`{"input_tokens":7,"output_tokens":3}`)), tokenUsageBytes,
+		"token bytes cover every token-eligible daily message")
 
 	for _, tc := range pgUsageBenchmarkCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,6 +118,14 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 			require.Equal(t, localResult, remoteResult)
 			require.NotZero(t, remoteResult.Counts.Total)
 			require.NotZero(t, remoteResult.MatchingSessionCount)
+			usage, err := remote.GetSessionUsage(
+				t.Context(), "snapshot-winner", tc.breakdowns)
+			require.NoError(t, err)
+			if tc.breakdowns {
+				require.NotZero(t, usage.BreakdownCount)
+			} else {
+				require.Zero(t, usage.BreakdownCount)
+			}
 		})
 	}
 }
@@ -120,7 +137,7 @@ func BenchmarkPGUsageRead(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			filter := pgUsageBenchmarkFilter(tc)
 			rowsScanned, tokenUsageBytes := measurePGUsageFixture(b, fixture.remote, filter)
-			validatePGUsageBenchmarkRead(b, fixture.remote, ctx, filter)
+			validatePGUsageBenchmarkRead(b, fixture.remote, ctx, filter, tc.breakdowns)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				daily, err := fixture.remote.GetDailyUsage(ctx, filter)
@@ -139,7 +156,8 @@ func BenchmarkPGUsageRead(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				session, err := fixture.remote.GetSessionUsage(ctx, "snapshot-winner", true)
+				session, err := fixture.remote.GetSessionUsage(
+					ctx, "snapshot-winner", tc.breakdowns)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -153,7 +171,10 @@ func BenchmarkPGUsageRead(b *testing.B) {
 	}
 }
 
-func validatePGUsageBenchmarkRead(b *testing.B, store *Store, ctx context.Context, filter db.UsageFilter) {
+func validatePGUsageBenchmarkRead(
+	b *testing.B, store *Store, ctx context.Context, filter db.UsageFilter,
+	breakdowns bool,
+) {
 	b.Helper()
 	daily, err := store.GetDailyUsage(ctx, filter)
 	require.NoError(b, err)
@@ -163,7 +184,7 @@ func validatePGUsageBenchmarkRead(b *testing.B, store *Store, ctx context.Contex
 	require.NoError(b, err)
 	matching, err := store.GetUsageMatchingSessionCount(ctx, filter)
 	require.NoError(b, err)
-	session, err := store.GetSessionUsage(ctx, "snapshot-winner", true)
+	session, err := store.GetSessionUsage(ctx, "snapshot-winner", breakdowns)
 	require.NoError(b, err)
 	require.NotEmpty(b, daily.Daily)
 	require.NotEmpty(b, top)
@@ -172,24 +193,50 @@ func validatePGUsageBenchmarkRead(b *testing.B, store *Store, ctx context.Contex
 	require.NotNil(b, session)
 }
 
-func measurePGUsageFixture(b *testing.B, store *Store, filter db.UsageFilter) (int, int64) {
-	b.Helper()
-	ctx := b.Context()
-	messageWhere, args := pgUsageBenchmarkWindow("timestamp", filter)
+func measurePGUsageFixture(
+	t testing.TB, store *Store, filter db.UsageFilter,
+) (int, int64) {
+	t.Helper()
+	ctx := t.Context()
+	messageWhere, args := pgUsageBenchmarkWindow(
+		"COALESCE(m.timestamp, s.started_at)", filter)
+	messageWindow := strings.TrimPrefix(messageWhere, " WHERE ")
+	if messageWindow == "" {
+		messageWindow = "TRUE"
+	}
 	var messageRows int
 	var tokenUsageBytes int64
 	if err := store.DB().QueryRowContext(ctx,
-		"SELECT count(*), COALESCE(sum(octet_length(token_usage)), 0) FROM messages"+messageWhere,
+		`SELECT count(*), COALESCE(sum(octet_length(m.token_usage)), 0)
+		 FROM messages m
+		 JOIN sessions s ON s.id = m.session_id
+		 WHERE m.token_usage != ''
+		   AND m.model != ''
+		   AND m.model != '<synthetic>'
+		   AND s.deleted_at IS NULL
+		   AND COALESCE(m.timestamp, s.started_at) IS NOT NULL
+		   AND `+messageWindow,
 		args...,
 	).Scan(&messageRows, &tokenUsageBytes); err != nil {
-		b.Fatal(err)
+		t.Fatal(err)
 	}
-	eventWhere, eventArgs := pgUsageBenchmarkWindow("occurred_at", filter)
+	eventWhere, eventArgs := pgUsageBenchmarkWindow(
+		"COALESCE(ue.occurred_at, s.started_at)", filter)
+	eventWindow := strings.TrimPrefix(eventWhere, " WHERE ")
+	if eventWindow == "" {
+		eventWindow = "TRUE"
+	}
 	var eventRows int
 	if err := store.DB().QueryRowContext(ctx,
-		"SELECT count(*) FROM usage_events"+eventWhere, eventArgs...,
+		`SELECT count(*)
+		 FROM usage_events ue
+		 JOIN sessions s ON s.id = ue.session_id
+		 WHERE ue.model != ''
+		   AND s.deleted_at IS NULL
+		   AND COALESCE(ue.occurred_at, s.started_at) IS NOT NULL
+		   AND `+eventWindow, eventArgs...,
 	).Scan(&eventRows); err != nil {
-		b.Fatal(err)
+		t.Fatal(err)
 	}
 	return messageRows + eventRows, tokenUsageBytes
 }
@@ -232,8 +279,22 @@ func BenchmarkPGUsageRefresh(b *testing.B) {
 	b.Run("DeltaPush", func(b *testing.B) {
 		var sessionsPushed, messagesPushed int
 		for i := 0; i < b.N; i++ {
-			session := usageParitySessionFixture("snapshot-winner", "project-b", "claude", "2026-08-12T10:01:00Z", 10+i+1, 20)
+			session := usageParitySessionFixture(
+				"snapshot-winner", "project-b", "claude", "2026-08-12T10:01:00Z",
+				10+i+1, 20)
+			session.MessageCount = i + 2
 			if err := fixture.local.UpsertSession(session); err != nil {
+				b.Fatal(err)
+			}
+			if err := fixture.local.InsertMessages([]db.Message{{
+				SessionID:     "snapshot-winner",
+				Ordinal:       i + 1,
+				Role:          "assistant",
+				Content:       "delta-payload-" + strconv.Itoa(i),
+				ContentLength: len("delta-payload-" + strconv.Itoa(i)),
+				Timestamp:     "2026-08-12T10:01:00Z",
+				Model:         "model-priced",
+			}}); err != nil {
 				b.Fatal(err)
 			}
 			result, err := fixture.sync.Push(ctx, false, nil)
