@@ -752,6 +752,51 @@ func TestSyncThenRunWithRebuildRejectsIncompleteContributor(t *testing.T) {
 		"an incomplete rebuild must not run downstream work")
 }
 
+func TestResyncAllRejectsDeferredLocalReplacement(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "deferred.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	source := parser.SourceRef{
+		Provider: parser.AgentCodex, Key: path, DisplayPath: path,
+		FingerprintKey: path,
+	}
+	provider := &incompleteContributorProvider{source: source}
+	provider.ProviderBase = parser.ProviderBase{
+		Def: parser.AgentDef{Type: parser.AgentCodex, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources: parser.CapabilitySupported,
+		}},
+	}
+	database := openTestDB(t)
+	missingPath := filepath.Join(t.TempDir(), "missing.jsonl")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "deferred", Project: "complete archive",
+		Machine: "local", Agent: string(parser.AgentCodex),
+		FilePath: &missingPath, MessageCount: 1,
+	}))
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+		Machine:   "local",
+		ProviderFactories: []parser.ProviderFactory{
+			incompleteContributorFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	stats := engine.ResyncAll(t.Context(), nil)
+
+	assert.True(t, stats.Aborted)
+	assert.Equal(t, 1, stats.Deferred)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
+	kept, err := database.GetSession(t.Context(), "deferred")
+	require.NoError(t, err)
+	require.NotNil(t, kept)
+	assert.Equal(t, "complete archive", kept.Project)
+}
+
 func TestResyncLocalCancellationPreventsContributors(t *testing.T) {
 	root := t.TempDir()
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))

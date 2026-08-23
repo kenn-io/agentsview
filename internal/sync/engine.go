@@ -3065,7 +3065,7 @@ func (e *Engine) resyncBuildLocked(
 			phaseSnapshot("local", &e.phaseStats))
 	}
 	localStats := stats
-	if stats.Aborted || ctx.Err() != nil {
+	if localStats.Deferred > 0 || stats.Aborted || ctx.Err() != nil {
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
