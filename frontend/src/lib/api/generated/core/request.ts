@@ -233,6 +233,32 @@ export const getResponseHeader = (response: Response, responseHeader?: string): 
   return undefined;
 };
 
+export const getResponseHeaders = (
+  response: Response,
+  responseHeaders?: ApiRequestOptions['responseHeaders'],
+): Record<string, string | number | boolean> | undefined => {
+  if (!responseHeaders) return undefined;
+  return Object.fromEntries(Object.entries(responseHeaders).map(([property, option]) => {
+    const content = response.headers.get(option.name);
+    if (content === null) throw new Error(`Response header ${option.name} is missing`);
+    switch (option.type) {
+      case 'number': {
+        const value = Number(content);
+        if (!Number.isFinite(value)) {
+          throw new Error(`Response header ${option.name} is not a number`);
+        }
+        return [property, value];
+      }
+      case 'boolean':
+        if (content === 'true') return [property, true];
+        if (content === 'false') return [property, false];
+        throw new Error(`Response header ${option.name} is not a boolean`);
+      default:
+        return [property, content];
+    }
+  }));
+};
+
 export const getResponseBody = async (response: Response): Promise<any> => {
   if (response.status !== 204) {
     try {
@@ -308,13 +334,16 @@ export const request = <T>(config: OpenAPIConfig, options: ApiRequestOptions): C
         const response = await sendRequest(config, options, url, body, formData, headers, onCancel);
         const responseBody = await getResponseBody(response);
         const responseHeader = getResponseHeader(response, options.responseHeader);
+        const responseHeaders = response.ok
+          ? getResponseHeaders(response, options.responseHeaders)
+          : undefined;
 
         const result: ApiResult = {
           url,
           ok: response.ok,
           status: response.status,
           statusText: response.statusText,
-          body: responseHeader ?? responseBody,
+          body: responseHeaders ?? responseHeader ?? responseBody,
         };
 
         catchErrorCodes(options, result);

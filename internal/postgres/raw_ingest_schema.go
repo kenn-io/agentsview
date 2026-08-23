@@ -42,6 +42,31 @@ CREATE TABLE IF NOT EXISTS raw_device_tokens (
         REFERENCES raw_devices (tenant_id, device_id) ON DELETE RESTRICT
 );
 
+CREATE TABLE IF NOT EXISTS raw_upload_sessions (
+    upload_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    offset_bytes BIGINT NOT NULL DEFAULT 0
+        CHECK (offset_bytes >= 0 AND offset_bytes <= size_bytes),
+    generation BIGINT NOT NULL DEFAULT 0 CHECK (generation >= 0),
+    state TEXT NOT NULL DEFAULT 'open'
+        CHECK (state IN ('open', 'complete', 'expired')),
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ,
+    CHECK (expires_at > created_at),
+    CHECK (
+        (state = 'complete' AND completed_at IS NOT NULL AND offset_bytes = size_bytes)
+        OR (state <> 'complete' AND completed_at IS NULL)
+    ),
+    FOREIGN KEY (tenant_id, device_id)
+        REFERENCES raw_devices (tenant_id, device_id) ON DELETE RESTRICT
+);
+
 CREATE TABLE IF NOT EXISTS raw_objects (
     tenant_id TEXT NOT NULL,
     sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
@@ -166,6 +191,14 @@ CREATE INDEX IF NOT EXISTS idx_raw_ingest_jobs_lease
     WHERE state = 'leased';
 CREATE INDEX IF NOT EXISTS idx_raw_device_tokens_expiry
     ON raw_device_tokens (expires_at, tenant_id, device_id);
+CREATE INDEX IF NOT EXISTS idx_raw_upload_sessions_expiry
+    ON raw_upload_sessions (expires_at, upload_id)
+    WHERE state = 'open';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_upload_sessions_open_object
+    ON raw_upload_sessions (
+        tenant_id, device_id, provider, sha256, size_bytes
+    )
+    WHERE state = 'open';
 `
 
 const rawIngestAppendOnlyDDL = `
@@ -218,6 +251,10 @@ WITH required_table_privileges(table_name, privilege) AS (
         ('raw_devices', 'SELECT'),
         ('raw_device_tokens', 'SELECT'),
         ('raw_device_tokens', 'INSERT'),
+        ('raw_upload_sessions', 'SELECT'),
+        ('raw_upload_sessions', 'INSERT'),
+        ('raw_upload_sessions', 'UPDATE'),
+        ('raw_upload_sessions', 'DELETE'),
         ('raw_objects', 'SELECT'),
         ('raw_objects', 'INSERT'),
         ('raw_objects', 'UPDATE'),

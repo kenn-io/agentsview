@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sync"
 	"time"
@@ -57,8 +58,17 @@ func preparePGRawSyncServices(
 		limits:   rawsync.DefaultManifestLimits(),
 		version:  fmt.Sprintf("parser-data-%d", db.CurrentDataVersion()),
 	}
-
-	return server.WithRawSyncServices(auth, custody), custody.Close, nil
+	uploadOption, closeUploads, err := preparePGRawSyncUploads(
+		dataDir, database, custody,
+	)
+	if err != nil {
+		return nil, nil, errors.Join(err, custody.Close())
+	}
+	return combinePGRawSyncOptions(
+			server.WithRawSyncServices(auth, custody), uploadOption,
+		), func() error {
+			return errors.Join(closeUploads(), custody.Close())
+		}, nil
 }
 
 // pgRawSyncCustody keeps ordinary pg serve startup independent from the local
@@ -88,6 +98,20 @@ func (c *pgRawSyncCustody) MissingObjects(
 		return nil, err
 	}
 	return service.MissingObjects(ctx, identity, provider, objects)
+}
+
+func (c *pgRawSyncCustody) FinalizeObject(
+	ctx context.Context,
+	identity rawsync.AuthIdentity,
+	provider parser.AgentType,
+	object rawsync.ObjectRef,
+	body io.Reader,
+) (rawsync.PutResult, error) {
+	service, err := c.openService(ctx)
+	if err != nil {
+		return rawsync.PutResult{}, err
+	}
+	return service.FinalizeObject(ctx, identity, provider, object, body)
 }
 
 func (c *pgRawSyncCustody) CommitManifest(
@@ -143,4 +167,33 @@ func (c *pgRawSyncCustody) Close() error {
 		return nil
 	}
 	return c.repository.Close()
+}
+
+func preparePGRawSyncUploads(
+	dataDir string,
+	database *sql.DB,
+	custody rawsync.UploadCustody,
+) (server.Option, func() error, error) {
+	uploadStore, err := postgres.NewRawUploadStore(database, dataDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("preparing raw upload session store: %w", err)
+	}
+	uploads, err := rawsync.NewUploadService(
+		uploadStore, custody, rawsync.DefaultUploadSessionTTL,
+	)
+	if err != nil {
+		return nil, nil, errors.Join(
+			fmt.Errorf("preparing raw upload service: %w", err),
+			uploadStore.Close(),
+		)
+	}
+	return server.WithRawSyncUploads(uploads), uploadStore.Close, nil
+}
+
+func combinePGRawSyncOptions(options ...server.Option) server.Option {
+	return func(target *server.Server) {
+		for _, option := range options {
+			option(target)
+		}
+	}
 }
