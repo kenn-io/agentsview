@@ -42,6 +42,7 @@ func pgUsageBenchmarkFilter(tc pgUsageBenchmarkCase) db.UsageFilter {
 }
 
 type pgUsageBenchmarkFixture struct {
+	pgURL  string
 	schema string
 	local  *db.DB
 	remote *Store
@@ -49,33 +50,42 @@ type pgUsageBenchmarkFixture struct {
 	filter db.UsageFilter
 }
 
-func pgUsageBenchmarkSchema(b *testing.B) string {
-	b.Helper()
-	hash := sha256.Sum256([]byte(b.Name() + "\x00" + b.TempDir()))
+func pgUsageRemoteCardinality(t testing.TB, remote *Store) (int, int) {
+	t.Helper()
+	var sessions, messages int
+	err := remote.DB().QueryRowContext(
+		t.Context(), "SELECT (SELECT count(*) FROM sessions), (SELECT count(*) FROM messages)",
+	).Scan(&sessions, &messages)
+	require.NoError(t, err)
+	return sessions, messages
+}
+
+func pgUsageBenchmarkSchema(t testing.TB) string {
+	t.Helper()
+	hash := sha256.Sum256([]byte(t.Name() + "\x00" + t.TempDir()))
 	return pgUsageBenchmarkSchemaPrefix + "_" + hex.EncodeToString(hash[:8])
 }
 
-func openPGUsageBenchmarkFixture(b *testing.B) *pgUsageBenchmarkFixture {
-	b.Helper()
-	req := require.New(b)
-	pgURL := testPGURL(b)
-	schema := pgUsageBenchmarkSchema(b)
+func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
+	t.Helper()
+	req := require.New(t)
+	pgURL := testPGURL(t)
+	schema := pgUsageBenchmarkSchema(t)
 	admin, err := sql.Open("pgx", pgURL)
 	req.NoError(err)
 	_, err = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
 	req.NoError(err)
 	req.NoError(admin.Close())
 
-	local, err := db.Open(b.TempDir() + "/usage-bench.db")
+	local, err := db.Open(t.TempDir() + "/usage-bench.db")
 	req.NoError(err)
-	seedUsageParityFixture(b, local)
+	seedUsageParityFixture(t, local)
 	syncer, err := New(pgURL, schema, local, "bench-machine", true, SyncOptions{})
 	req.NoError(err)
-	_, err = syncer.Push(b.Context(), true, nil)
-	req.NoError(err)
+	req.NoError(EnsureSchema(t.Context(), syncer.pg, schema))
 	remote, err := NewStore(pgURL, schema, true)
 	req.NoError(err)
-	b.Cleanup(func() {
+	t.Cleanup(func() {
 		_ = remote.Close()
 		_ = syncer.Close()
 		_ = local.Close()
@@ -85,13 +95,56 @@ func openPGUsageBenchmarkFixture(b *testing.B) *pgUsageBenchmarkFixture {
 	})
 
 	var version string
-	req.NoError(remote.DB().QueryRowContext(b.Context(), "SHOW server_version").Scan(&version))
-	b.Logf("pg_version=%s fixture_sessions=%d fixture_messages=%d fixture_usage_events=%d", version, 5, 4, 1)
+	req.NoError(remote.DB().QueryRowContext(t.Context(), "SHOW server_version").Scan(&version))
+	t.Logf("pg_version=%s fixture_sessions=%d fixture_messages=%d fixture_usage_events=%d", version, 5, 4, 1)
 	return &pgUsageBenchmarkFixture{
-		schema: schema,
-		local:  local, remote: remote, sync: syncer,
+		pgURL: pgURL, schema: schema,
+		local: local, remote: remote, sync: syncer,
 		filter: db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"},
 	}
+}
+
+func (f *pgUsageBenchmarkFixture) prime(t testing.TB) {
+	t.Helper()
+	result, err := f.sync.Push(t.Context(), true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 5, result.SessionsPushed)
+	require.Equal(t, 4, result.MessagesPushed)
+	sessions, messages := pgUsageRemoteCardinality(t, f.remote)
+	require.Equal(t, 5, sessions)
+	require.Equal(t, 4, messages)
+}
+
+func (f *pgUsageBenchmarkFixture) resetRemoteEmpty(t testing.TB) {
+	t.Helper()
+	cleanNamedPGSchema(t, f.pgURL, f.schema)
+	require.NoError(t, EnsureSchema(t.Context(), f.sync.pg, f.schema))
+	sessions, messages := pgUsageRemoteCardinality(t, f.remote)
+	require.Zero(t, sessions)
+	require.Zero(t, messages)
+}
+
+func (f *pgUsageBenchmarkFixture) requireFixedCardinality(t testing.TB) {
+	t.Helper()
+	messageCount, err := f.local.MessageCount("snapshot-winner")
+	require.NoError(t, err)
+	require.Equal(t, 1, messageCount)
+	sessions, messages := pgUsageRemoteCardinality(t, f.remote)
+	require.Equal(t, 5, sessions)
+	require.Equal(t, 4, messages)
+}
+
+func (f *pgUsageBenchmarkFixture) replaceDeltaMessage(t testing.TB, payload string) {
+	t.Helper()
+	f.requireFixedCardinality(t)
+	messages, err := f.local.GetMessages(t.Context(), "snapshot-winner", 0, 1, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	messages[0].TokenUsage = []byte(payload)
+	require.NoError(t, f.local.ReplaceSessionMessages("snapshot-winner", messages))
+	messageCount, err := f.local.MessageCount("snapshot-winner")
+	require.NoError(t, err)
+	require.Equal(t, 1, messageCount)
 }
 
 func TestPGUsageBenchmarkFixture(t *testing.T) {
@@ -99,17 +152,9 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 	const schema = "agentsview_usage_benchmark_fixture_test"
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-	local := testDB(t)
-	seedUsageParityFixture(t, local)
-	syncer, err := New(pgURL, schema, local, "bench-fixture-machine", true, SyncOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
-	_, err = syncer.Push(t.Context(), true, nil)
-	require.NoError(t, err)
-	remote, err := NewStore(pgURL, schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, remote.Close()) })
-	rowsScanned, tokenUsageBytes := measurePGUsageFixture(t, remote, db.UsageFilter{
+	fixture := openPGUsageBenchmarkFixture(t)
+	fixture.prime(t)
+	rowsScanned, tokenUsageBytes := measurePGUsageFixture(t, fixture.remote, db.UsageFilter{
 		From: "2026-08-12", To: "2026-08-12", Timezone: "UTC",
 	})
 	require.Equal(t, 4, rowsScanned,
@@ -122,14 +167,14 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 	for _, tc := range pgUsageBenchmarkCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			filter := pgUsageBenchmarkFilter(tc)
-			localResult := captureUsageParitySnapshot(t, local, filter)
-			remoteResult := captureUsageParitySnapshot(t, remote, filter)
+			localResult := captureUsageParitySnapshot(t, fixture.local, filter)
+			remoteResult := captureUsageParitySnapshot(t, fixture.remote, filter)
 			require.NotEmpty(t, remoteResult.Top)
 			require.NotEmpty(t, remoteResult.Daily.Dates)
 			require.Equal(t, localResult, remoteResult)
 			require.NotZero(t, remoteResult.Counts.Total)
 			require.NotZero(t, remoteResult.MatchingSessionCount)
-			usage, err := remote.GetSessionUsage(
+			usage, err := fixture.remote.GetSessionUsage(
 				t.Context(), "snapshot-winner", tc.breakdowns)
 			require.NoError(t, err)
 			if tc.breakdowns {
@@ -143,6 +188,7 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 
 func BenchmarkPGUsageRead(b *testing.B) {
 	fixture := openPGUsageBenchmarkFixture(b)
+	fixture.prime(b)
 	ctx := context.Background()
 	for _, tc := range pgUsageBenchmarkCases() {
 		b.Run(tc.name, func(b *testing.B) {
@@ -275,64 +321,72 @@ func pgUsageBenchmarkWindow(column string, filter db.UsageFilter) (string, []any
 }
 
 func BenchmarkPGUsageRefresh(b *testing.B) {
-	fixture := openPGUsageBenchmarkFixture(b)
 	ctx := context.Background()
 	b.Run("ColdPush", func(b *testing.B) {
+		fixture := openPGUsageBenchmarkFixture(b)
 		var sessionsPushed, messagesPushed int
-		for i := 0; i < b.N; i++ {
+		iterations := 0
+		for b.Loop() {
+			b.StopTimer()
+			fixture.resetRemoteEmpty(b)
+			b.StartTimer()
 			result, err := fixture.sync.Push(ctx, true, nil)
+			b.StopTimer()
 			if err != nil {
 				b.Fatal(err)
 			}
+			require.Equal(b, 5, result.SessionsPushed)
+			require.Equal(b, 4, result.MessagesPushed)
+			sessions, messages := pgUsageRemoteCardinality(b, fixture.remote)
+			require.Equal(b, 5, sessions)
+			require.Equal(b, 4, messages)
 			sessionsPushed += result.SessionsPushed
 			messagesPushed += result.MessagesPushed
+			iterations++
+			b.StartTimer()
 		}
-		require.NotZero(b, sessionsPushed)
-		require.NotZero(b, messagesPushed)
-		b.ReportMetric(float64(sessionsPushed)/float64(b.N), "sessions_pushed")
-		b.ReportMetric(float64(messagesPushed)/float64(b.N), "messages_pushed")
+		b.StopTimer()
+		require.Equal(b, 5*iterations, sessionsPushed)
+		require.Equal(b, 4*iterations, messagesPushed)
+		b.ReportMetric(5, "sessions_pushed")
+		b.ReportMetric(4, "messages_pushed")
 	})
 	b.Run("DeltaPush", func(b *testing.B) {
+		fixture := openPGUsageBenchmarkFixture(b)
+		fixture.prime(b)
 		var sessionsPushed, messagesPushed int
-		for i := 0; i < b.N; i++ {
-			messageCount, err := fixture.local.MessageCount("snapshot-winner")
-			if err != nil {
-				b.Fatal(err)
+		iterations := 0
+		for b.Loop() {
+			b.StopTimer()
+			payload := `{"input_tokens":20,"output_tokens":10}`
+			if iterations%2 == 1 {
+				payload = `{"input_tokens":21,"output_tokens":9}`
 			}
-			nextOrdinal := messageCount + 1
-			session := usageParitySessionFixture(
-				"snapshot-winner", "project-b", "claude", "2026-08-12T10:01:00Z",
-				10+i+1, 20)
-			session.MessageCount = nextOrdinal
-			if err := fixture.local.UpsertSession(session); err != nil {
-				b.Fatal(err)
-			}
-			if err := fixture.local.InsertMessages([]db.Message{{
-				SessionID:     "snapshot-winner",
-				Ordinal:       nextOrdinal,
-				Role:          "assistant",
-				Content:       "delta-payload-" + strconv.Itoa(i),
-				ContentLength: len("delta-payload-" + strconv.Itoa(i)),
-				Timestamp:     "2026-08-12T10:01:00Z",
-				Model:         "model-priced",
-			}}); err != nil {
-				b.Fatal(err)
-			}
+			fixture.replaceDeltaMessage(b, payload)
+			b.StartTimer()
 			result, err := fixture.sync.Push(ctx, false, nil)
+			b.StopTimer()
 			if err != nil {
 				b.Fatal(err)
 			}
+			require.Equal(b, 1, result.SessionsPushed)
+			require.Equal(b, 1, result.MessagesPushed)
+			fixture.requireFixedCardinality(b)
 			sessionsPushed += result.SessionsPushed
 			messagesPushed += result.MessagesPushed
+			iterations++
+			b.StartTimer()
 		}
-		require.NotZero(b, sessionsPushed)
-		require.NotZero(b, messagesPushed)
-		b.ReportMetric(float64(sessionsPushed)/float64(b.N), "sessions_pushed")
-		b.ReportMetric(float64(messagesPushed)/float64(b.N), "messages_pushed")
+		b.StopTimer()
+		require.Equal(b, iterations, sessionsPushed)
+		require.Equal(b, iterations, messagesPushed)
+		b.ReportMetric(1, "sessions_pushed")
+		b.ReportMetric(1, "messages_pushed")
 	})
 	b.Run("CatalogProbe", func(b *testing.B) {
+		fixture := openPGUsageBenchmarkFixture(b)
 		var tables int
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			err := fixture.remote.DB().QueryRowContext(ctx, `
 				SELECT count(*) FROM pg_catalog.pg_class c
 				JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

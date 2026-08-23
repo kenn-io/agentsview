@@ -27,7 +27,7 @@ func cleanPGSchema(t *testing.T, pgURL string) {
 	)
 }
 
-func cleanNamedPGSchema(t *testing.T, pgURL, schema string) {
+func cleanNamedPGSchema(t testing.TB, pgURL, schema string) {
 	t.Helper()
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err, "connecting to pg")
