@@ -15,11 +15,27 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const pgUsageBenchmarkSchemaPrefix = "agentsview_pg_usage_bench"
 
-const pgUsageBenchmarkBulkRows = 24
+const (
+	pgUsageBenchmarkBulkSessions           = 48
+	pgUsageBenchmarkBulkMessagesPerSession = 4
+	pgUsageBenchmarkBulkDateBuckets        = 4
+)
+
+var (
+	pgUsageBenchmarkBulkProjects = []string{
+		"bulk-project-a", "bulk-project-b", "bulk-project-c",
+		"bulk-project-d", "bulk-project-e", "bulk-project-f",
+	}
+	pgUsageBenchmarkBulkAgents = []string{"claude", "codex", "cursor", "hermes"}
+	pgUsageBenchmarkBulkModels = []string{
+		"model-priced", "model-reported", "model-bulk-cheap", "model-bulk-premium",
+	}
+)
 
 type pgUsageBenchmarkCase struct {
 	name                      string
@@ -30,14 +46,14 @@ type pgUsageBenchmarkCase struct {
 
 func pgUsageBenchmarkCases() []pgUsageBenchmarkCase {
 	return []pgUsageBenchmarkCase{
-		{name: "one-day/no-breakdowns", from: "2026-08-12", to: "2026-08-12", expectedEligibleInputRows: 8},
-		{name: "one-day/breakdowns", from: "2026-08-12", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 8},
-		{name: "seven-day/no-breakdowns", from: "2026-08-06", to: "2026-08-12", expectedEligibleInputRows: 16},
-		{name: "seven-day/breakdowns", from: "2026-08-06", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 16},
-		{name: "thirty-day/no-breakdowns", from: "2026-07-14", to: "2026-08-12", expectedEligibleInputRows: 17},
-		{name: "thirty-day/breakdowns", from: "2026-07-14", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 17},
-		{name: "all-history/no-breakdowns", expectedEligibleInputRows: 29},
-		{name: "all-history/breakdowns", breakdowns: true, expectedEligibleInputRows: 29},
+		{name: "one-day/no-breakdowns", from: "2026-08-12", to: "2026-08-12", expectedEligibleInputRows: 52},
+		{name: "one-day/breakdowns", from: "2026-08-12", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 52},
+		{name: "seven-day/no-breakdowns", from: "2026-08-06", to: "2026-08-12", expectedEligibleInputRows: 100},
+		{name: "seven-day/breakdowns", from: "2026-08-06", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 100},
+		{name: "thirty-day/no-breakdowns", from: "2026-07-14", to: "2026-08-12", expectedEligibleInputRows: 149},
+		{name: "thirty-day/breakdowns", from: "2026-07-14", to: "2026-08-12", breakdowns: true, expectedEligibleInputRows: 149},
+		{name: "all-history/no-breakdowns", expectedEligibleInputRows: 197},
+		{name: "all-history/breakdowns", breakdowns: true, expectedEligibleInputRows: 197},
 	}
 }
 
@@ -117,35 +133,52 @@ func (f *pgUsageBenchmarkFixture) addBulk(t testing.TB, count int) {
 	t.Helper()
 	seedPGUsageBenchmarkBulkFixture(t, f.local, count)
 	f.expectedSessions += count
-	f.expectedMessages += count
+	f.expectedMessages += count * pgUsageBenchmarkBulkMessagesPerSession
 }
 
 func seedPGUsageBenchmarkBulkFixture(t testing.TB, local *db.DB, count int) {
 	t.Helper()
+	require.Greater(t, count, 0)
+	require.Zero(t, count%pgUsageBenchmarkBulkDateBuckets, "bulk sessions must divide evenly across date buckets")
+	sessionsPerDate := count / pgUsageBenchmarkBulkDateBuckets
 	sessions := make([]db.Session, 0, count)
-	messages := make([]db.Message, 0, count)
+	messages := make([]db.Message, 0, count*pgUsageBenchmarkBulkMessagesPerSession)
 	for i := 0; i < count; i++ {
 		day := "2026-06-20"
-		if i < 4 {
+		switch i / sessionsPerDate {
+		case 0:
 			day = "2026-08-12"
-		} else if i < 12 {
+		case 1:
 			day = "2026-08-08"
+		case 2:
+			day = "2026-07-20"
 		}
 		sessionID := "benchmark-bulk-" + strconv.Itoa(i)
 		startedAt := day + "T09:00:00Z"
 		sessions = append(sessions, db.Session{
-			ID: sessionID, Project: "bulk-project", Machine: "bench-machine",
-			Agent: "bulk", StartedAt: &startedAt, MessageCount: 1,
-			UserMessageCount: 1,
+			ID: sessionID, Project: pgUsageBenchmarkBulkProjects[i%len(pgUsageBenchmarkBulkProjects)],
+			Machine: "bench-machine", Agent: pgUsageBenchmarkBulkAgents[i%len(pgUsageBenchmarkBulkAgents)],
+			StartedAt: &startedAt, MessageCount: pgUsageBenchmarkBulkMessagesPerSession,
+			UserMessageCount: 2,
 		})
-		messages = append(messages, db.Message{
-			SessionID: sessionID, Ordinal: 0, Role: "assistant",
-			Timestamp: day + "T09:01:00Z", Model: "model-priced",
-			TokenUsage:      json.RawMessage(`{"input_tokens":1,"output_tokens":0}`),
-			ClaudeMessageID: "benchmark-bulk-message-" + strconv.Itoa(i),
-			ClaudeRequestID: "benchmark-bulk-request-" + strconv.Itoa(i),
-		})
+		for ordinal := 0; ordinal < pgUsageBenchmarkBulkMessagesPerSession; ordinal++ {
+			inputTokens := 10 + (i % 7) + ordinal
+			outputTokens := 5 + (i % 5) + ordinal
+			messages = append(messages, db.Message{
+				SessionID: sessionID, Ordinal: ordinal, Role: "assistant",
+				Timestamp: day + "T09:0" + strconv.Itoa(ordinal+1) + ":00Z",
+				Model:     pgUsageBenchmarkBulkModels[(i+ordinal)%len(pgUsageBenchmarkBulkModels)],
+				TokenUsage: json.RawMessage(`{"input_tokens":` + strconv.Itoa(inputTokens) +
+					`,"output_tokens":` + strconv.Itoa(outputTokens) + `}`),
+				ClaudeMessageID: "benchmark-bulk-message-" + strconv.Itoa(i) + "-" + strconv.Itoa(ordinal),
+				ClaudeRequestID: "benchmark-bulk-request-" + strconv.Itoa(i) + "-" + strconv.Itoa(ordinal),
+			})
+		}
 	}
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
+		{ModelPattern: "model-bulk-cheap", InputPerMTok: money.Money{Microdollars: 500_000}, OutputPerMTok: money.Money{Microdollars: 1_000_000}},
+		{ModelPattern: "model-bulk-premium", InputPerMTok: money.Money{Microdollars: 2_000_000}, OutputPerMTok: money.Money{Microdollars: 3_000_000}},
+	}))
 	for i := range sessions {
 		require.NoError(t, local.UpsertSession(sessions[i]))
 	}
@@ -329,12 +362,18 @@ func (s *pgUsageMethodRecorder) GetSessionUsage(
 
 func BenchmarkPGUsageRead(b *testing.B) {
 	fixture := openPGUsageBenchmarkFixture(b)
-	fixture.addBulk(b, pgUsageBenchmarkBulkRows)
+	fixture.addBulk(b, pgUsageBenchmarkBulkSessions)
 	fixture.prime(b)
 	ctx := context.Background()
 	for _, tc := range pgUsageBenchmarkCases() {
 		b.Run(tc.name, func(b *testing.B) {
 			filter := pgUsageBenchmarkFilter(tc)
+			b.Logf("fixture_scale=bulk_sessions=%d bulk_messages=%d messages_per_session=%d projects=%d agents=%d models=%d dates=%d",
+				pgUsageBenchmarkBulkSessions,
+				pgUsageBenchmarkBulkSessions*pgUsageBenchmarkBulkMessagesPerSession,
+				pgUsageBenchmarkBulkMessagesPerSession,
+				len(pgUsageBenchmarkBulkProjects), len(pgUsageBenchmarkBulkAgents),
+				len(pgUsageBenchmarkBulkModels), pgUsageBenchmarkBulkDateBuckets)
 			eligibleUsageInputRows, tokenUsageBytes := measurePGUsageFixture(b, fixture.remote, filter)
 			require.Equal(b, tc.expectedEligibleInputRows, eligibleUsageInputRows)
 			requireCompleteUsageParity(b, fixture.local, fixture.remote, filter)

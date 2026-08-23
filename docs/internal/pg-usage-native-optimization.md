@@ -15,6 +15,11 @@ usage-event inputs outside timing, not PostgreSQL execution-plan rows, while
 `bytes_token_usage` measures token-usage bytes from those inputs. `ns/op`,
 `B/op`, and `allocs/op` come from the Go benchmark runner.
 
+The read workload is configured as 48 sessions with four messages per session,
+six projects, four agents, four priced models, and four date buckets. The
+correctness and refresh benchmarks retain the smaller parity fixture so their
+exact push and result assertions stay deterministic.
+
 This is evidence only. It does not choose a facts table, aggregate, trigger,
 refresh schedule, or materialized view. Go-owned pricing, per-survivor
 microdollar rounding, Cockroach-compatible SQL, SQLite parity, and read-only
