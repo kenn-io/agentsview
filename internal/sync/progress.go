@@ -414,6 +414,10 @@ func (s *SyncStats) RecordFailed() {
 
 func (s *SyncStats) recordDeferred(path string) {
 	s.deferredCount++
+	s.retainDeferredRetryPath(path)
+}
+
+func (s *SyncStats) retainDeferredRetryPath(path string) {
 	if s.deferredRetryOverflow || path == "" {
 		return
 	}

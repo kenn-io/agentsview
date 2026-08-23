@@ -105,17 +105,32 @@ func (e *watchBatchApplyError) WatchRetryBatch() WatchBatch {
 }
 
 func watchBatchReconciliationError(
-	cause error, roots []string, full, lostEvents bool,
+	cause error, paths, roots []string, full, lostEvents bool,
 ) error {
 	var scopedPaths interface{ ReconciliationRetryPaths() []string }
 	var retryPaths []string
 	if errors.As(cause, &scopedPaths) {
-		retryPaths = watchDeduplicateStrings(scopedPaths.ReconciliationRetryPaths())
+		retryPaths = watchDeduplicateStrings(append(
+			append([]string(nil), paths...), scopedPaths.ReconciliationRetryPaths()...,
+		))
+	} else {
+		retryPaths = watchDeduplicateStrings(paths)
 	}
 	var scoped interface{ ReconciliationRetryRoots() []string }
 	var retryRoots []string
 	if errors.As(cause, &scoped) {
-		retryRoots = watchDeduplicateStrings(scoped.ReconciliationRetryRoots())
+		retryRoots = watchDeduplicateStrings(append(
+			append([]string(nil), roots...), scoped.ReconciliationRetryRoots()...,
+		))
+	} else {
+		retryRoots = watchDeduplicateStrings(roots)
+	}
+	var overflow interface{ ReconciliationRetryOverflow() bool }
+	overflowed := errors.As(cause, &overflow) && overflow.ReconciliationRetryOverflow()
+	if overflowed && len(retryPaths) == 0 && len(retryRoots) == 0 {
+		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
+			FullSync: true, LostEvents: lostEvents,
+		}}
 	}
 	if len(retryPaths) > 0 || len(retryRoots) > 0 {
 		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
@@ -233,7 +248,7 @@ func ApplyWatchBatch(
 			var deferred interface{ ReconciliationRetryPaths() []string }
 			if errors.As(err, &deferred) {
 				return watchBatchReconciliationError(
-					err, plan.reconcileRoots, plan.full, plan.lostEvents,
+					err, plan.paths, plan.reconcileRoots, plan.full, plan.lostEvents,
 				)
 			}
 			retry := WatchBatch{FullSync: plan.full, LostEvents: plan.lostEvents}
@@ -259,7 +274,7 @@ func ApplyWatchBatch(
 			err = engine.ReconcileWatchRoots(ctx, reconcileRoots, false)
 		}
 		if err != nil {
-			return watchBatchReconciliationError(err, nil, true, plan.lostEvents)
+			return watchBatchReconciliationError(err, nil, nil, true, plan.lostEvents)
 		}
 		return nil
 	}
@@ -275,7 +290,7 @@ func ApplyWatchBatch(
 	}
 	if err != nil {
 		return watchBatchReconciliationError(
-			err, plan.reconcileRoots, false, plan.lostEvents,
+			err, nil, plan.reconcileRoots, false, plan.lostEvents,
 		)
 	}
 	return nil
@@ -326,7 +341,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 			var deferred interface{ ReconciliationRetryPaths() []string }
 			if errors.As(pathErr, &deferred) {
 				return stats, watchBatchReconciliationError(
-					pathErr, plan.reconcileRoots, plan.full, plan.lostEvents,
+					pathErr, plan.paths, plan.reconcileRoots, plan.full, plan.lostEvents,
 				)
 			}
 			retry := WatchBatch{FullSync: plan.full, LostEvents: plan.lostEvents}
@@ -353,7 +368,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 		changed = changed || reconcileStats.hasSessionChanges() || tombstoned > 0
 		if reconcileErr != nil {
 			return stats, watchBatchReconciliationError(
-				reconcileErr, reconcileRoots, plan.full, plan.lostEvents,
+				reconcileErr, nil, reconcileRoots, plan.full, plan.lostEvents,
 			)
 		}
 	}

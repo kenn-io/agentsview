@@ -28,9 +28,11 @@ func TestMergeSyncStatsIncludesAdditiveRebuildFields(t *testing.T) {
 		RebuildPhases:  []RebuildPhaseStats{{Contributor: "local", BatchedWrites: 1}},
 	}
 	src := SyncStats{
-		OrphanedCopied: 3,
-		Tombstoned:     2,
-		RebuildPhases:  []RebuildPhaseStats{{Contributor: "remote", BatchedWrites: 2}},
+		OrphanedCopied:     3,
+		Tombstoned:         2,
+		RebuildPhases:      []RebuildPhaseStats{{Contributor: "remote", BatchedWrites: 2}},
+		deferredCount:      1,
+		deferredRetryPaths: []string{"remote.jsonl"},
 	}
 
 	mergeSyncStats(&dst, src)
@@ -42,6 +44,8 @@ func TestMergeSyncStatsIncludesAdditiveRebuildFields(t *testing.T) {
 		{Contributor: "local", BatchedWrites: 1},
 		{Contributor: "remote", BatchedWrites: 2},
 	}, dst.RebuildPhases)
+	assert.Equal(t, 1, dst.deferredCount)
+	assert.Equal(t, []string{"remote.jsonl"}, dst.deferredRetryPaths)
 }
 
 func TestResyncAllLegacyOmitsContributorDiagnostics(t *testing.T) {

@@ -48,6 +48,30 @@ func TestIssue1476DeferredRetryPathsRemainBounded(t *testing.T) {
 	t.Logf("bounded retry scope: %d paths exceed the exact-path bound and fall back to roots", stats.deferredCount)
 }
 
+func TestIssue1476OverflowRetryBatchReachesWatcherBackoff(t *testing.T) {
+	for _, name := range []string{"count", "bytes"} {
+		t.Run(name, func(t *testing.T) {
+			stats := SyncStats{}
+			if name == "count" {
+				for i := range reconciliationRetryPathLimit + 1 {
+					stats.recordDeferred(strconv.Itoa(i))
+				}
+			} else {
+				stats.recordDeferred(strings.Repeat("x", reconciliationRetryPathByteLimit+1))
+			}
+			retryErr := watchBatchReconciliationError(
+				&incompleteReconciliationError{
+					deferred: stats.deferredCount, overflow: stats.deferredRetryOverflow,
+				}, nil, nil, false, false,
+			)
+			retry, ok := callbackRetryBatch(retryErr)
+			require.True(t, ok)
+			assert.True(t, retry.FullSync,
+				"overflow without an affected root must use full watcher recovery")
+		})
+	}
+}
+
 func TestIssue1476ChangedPathRetryBatchRetainsDeferredPath(t *testing.T) {
 	const agent parser.AgentType = parser.AgentCodex
 	_, engine, _, _, path := newChangedPathOutcomeEngine(
@@ -81,12 +105,15 @@ func TestIssue1476ChangedPathRetryBatchRetainsDeferredPath(t *testing.T) {
 func TestIssue1476WatchBatchKeepsExactDeferredPath(t *testing.T) {
 	deferredPath := `C:\sessions\forked-child.jsonl`
 	cause := &incompleteReconciliationError{
-		deferred: 1, paths: []string{deferredPath},
+		failures: 1, deferred: 1,
+		roots: []string{`C:\sessions\hard-failure`}, paths: []string{deferredPath},
 	}
-	err := watchBatchReconciliationError(cause, []string{`C:\sessions`}, false, false)
+	err := watchBatchReconciliationError(
+		cause, []string{`C:\sessions\changed.jsonl`}, []string{`C:\sessions`}, false, false,
+	)
 	var retry interface{ WatchRetryBatch() WatchBatch }
 	require.True(t, errors.As(err, &retry))
-	assert.Equal(t, []string{deferredPath}, retry.WatchRetryBatch().Paths)
-	assert.Empty(t, retry.WatchRetryBatch().ReconcileRoots)
+	assert.Equal(t, []string{`C:\sessions\changed.jsonl`, deferredPath}, retry.WatchRetryBatch().Paths)
+	assert.Equal(t, []string{`C:\sessions`, `C:\sessions\hard-failure`}, retry.WatchRetryBatch().ReconcileRoots)
 	t.Logf("exact retry scope: retained path %q", deferredPath)
 }

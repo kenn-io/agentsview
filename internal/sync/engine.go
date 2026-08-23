@@ -1663,6 +1663,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 				err, &incompleteReconciliationError{
 					deferred: stats.deferredCount,
 					paths:    append([]string(nil), stats.deferredRetryPaths...),
+					overflow: stats.deferredRetryOverflow,
 				},
 			)
 		}
@@ -1678,6 +1679,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 				&incompleteReconciliationError{
 					deferred: stats.deferredCount,
 					paths:    append([]string(nil), stats.deferredRetryPaths...),
+					overflow: stats.deferredRetryOverflow,
 				}, incompleteErr,
 			)
 		}
@@ -5103,6 +5105,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			deferred:  stats.deferredCount,
 			roots:     retryRoots,
 			paths:     append([]string(nil), stats.deferredRetryPaths...),
+			overflow:  stats.deferredRetryOverflow,
 			completed: completedScopes,
 			cause:     discoveryErr,
 		}
@@ -5180,6 +5183,7 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 		deferred: incomplete.deferred,
 		roots:    retryRoots,
 		paths:    append([]string(nil), incomplete.paths...),
+		overflow: incomplete.overflow,
 		cause:    errors.Join(incomplete, err),
 	}
 }
@@ -5668,6 +5672,7 @@ type incompleteReconciliationError struct {
 	deferred  int
 	roots     []string
 	paths     []string
+	overflow  bool
 	completed []reconciliationProviderScope
 	cause     error
 }
@@ -5693,6 +5698,10 @@ func (e *incompleteReconciliationError) ReconciliationRetryRoots() []string {
 
 func (e *incompleteReconciliationError) ReconciliationRetryPaths() []string {
 	return append([]string(nil), e.paths...)
+}
+
+func (e *incompleteReconciliationError) ReconciliationRetryOverflow() bool {
+	return e.overflow
 }
 
 func (e *Engine) reconciliationCandidate(
