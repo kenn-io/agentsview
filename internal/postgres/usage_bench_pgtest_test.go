@@ -122,9 +122,9 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 				t.Context(), "snapshot-winner", tc.breakdowns)
 			require.NoError(t, err)
 			if tc.breakdowns {
-				require.NotZero(t, usage.BreakdownCount)
+				require.NotZero(t, len(usage.Breakdown))
 			} else {
-				require.Zero(t, usage.BreakdownCount)
+				require.Zero(t, len(usage.Breakdown))
 			}
 		})
 	}

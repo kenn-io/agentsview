@@ -145,6 +145,16 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	require.Equal(t, want, localGot, "SQLite facts result")
 	require.Equal(t, want, remoteGot, "PostgreSQL live result")
 	require.Equal(t, localGot, remoteGot, "cross-backend result")
+	wantWithoutBreakdown := want.Session
+	wantWithoutBreakdown.Breakdown = nil
+	localWithoutBreakdown := captureUsageParitySession(t, local, false)
+	remoteWithoutBreakdown := captureUsageParitySession(t, remote, false)
+	require.Equal(t, wantWithoutBreakdown, localWithoutBreakdown,
+		"SQLite session result without breakdown")
+	require.Equal(t, wantWithoutBreakdown, remoteWithoutBreakdown,
+		"PostgreSQL session result without breakdown")
+	require.Equal(t, localWithoutBreakdown, remoteWithoutBreakdown,
+		"cross-backend session result without breakdown")
 	requireCompleteUsageParity(t, local, remote, filter)
 }
 
@@ -168,6 +178,10 @@ func requireCompleteUsageParity(
 	remoteSession, err := remote.GetSessionUsage(ctx, "snapshot-winner", true)
 	require.NoError(t, err)
 	require.Equal(t, localSession, remoteSession, "complete session result")
+	localWithoutBreakdown := captureUsageParitySession(t, local, false)
+	remoteWithoutBreakdown := captureUsageParitySession(t, remote, false)
+	require.Equal(t, localWithoutBreakdown, remoteWithoutBreakdown,
+		"complete session result without breakdown")
 }
 
 func seedUsageParityFixture(t testing.TB, local *db.DB) {
@@ -255,9 +269,7 @@ func captureUsageParitySnapshot(
 	require.NoError(t, err, "usage session counts")
 	matching, err := store.GetUsageMatchingSessionCount(ctx, filter)
 	require.NoError(t, err, "matching session count")
-	session, err := store.GetSessionUsage(ctx, "snapshot-winner", true)
-	require.NoError(t, err, "session usage")
-	require.NotNil(t, session, "session usage result")
+	session := captureUsageParitySession(t, store, true)
 
 	out := usageParitySnapshot{
 		Daily: usageParityDaily{
@@ -272,16 +284,7 @@ func captureUsageParitySnapshot(
 			},
 		},
 		Counts: counts, MatchingSessionCount: matching,
-		Session: usageParitySession{
-			SessionID:         session.SessionID,
-			TotalOutputTokens: session.TotalOutputTokens,
-			PeakContextTokens: session.PeakContextTokens,
-			HasTokenData:      session.HasTokenData,
-			CostMicrodollars:  session.Cost.Microdollars,
-			HasCost:           session.HasCost, Models: session.Models,
-			UnpricedModels: session.UnpricedModels,
-			BreakdownCount: session.BreakdownCount,
-		},
+		Session: session,
 	}
 	for _, day := range daily.Daily {
 		out.Daily.Dates = append(out.Daily.Dates, day.Date)
@@ -313,8 +316,31 @@ func captureUsageParitySnapshot(
 			CostMicrodollars: entry.Cost.Microdollars,
 		})
 	}
+	return out
+}
+
+func captureUsageParitySession(
+	t *testing.T, store db.Store, includeBreakdown bool,
+) usageParitySession {
+	t.Helper()
+	session, err := store.GetSessionUsage(
+		context.Background(), "snapshot-winner", includeBreakdown)
+	require.NoError(t, err, "session usage")
+	require.NotNil(t, session, "session usage result")
+
+	out := usageParitySession{
+		SessionID:         session.SessionID,
+		TotalOutputTokens: session.TotalOutputTokens,
+		PeakContextTokens: session.PeakContextTokens,
+		HasTokenData:      session.HasTokenData,
+		CostMicrodollars:  session.Cost.Microdollars,
+		HasCost:           session.HasCost,
+		Models:            session.Models,
+		UnpricedModels:    session.UnpricedModels,
+		BreakdownCount:    session.BreakdownCount,
+	}
 	for _, entry := range session.Breakdown {
-		out.Session.Breakdown = append(out.Session.Breakdown, usageParityBreakdown{
+		out.Breakdown = append(out.Breakdown, usageParityBreakdown{
 			Source: entry.Source, Timestamp: entry.Timestamp, Model: entry.Model,
 			InputTokens: entry.InputTokens, OutputTokens: entry.OutputTokens,
 			CostMicrodollars: entry.Cost.Microdollars, HasCost: entry.HasCost,
