@@ -41,6 +41,8 @@ type t3TestProject struct {
 	id            string
 	title         string
 	workspaceRoot string
+	createdAt     string
+	updatedAt     string
 }
 
 // t3TestDB describes a fixture database. legacy reproduces a pre-migration
@@ -132,8 +134,10 @@ func createT3DB(t *testing.T, spec t3TestDB) string {
 	for _, p := range spec.projects {
 		_, err := conn.Exec(
 			`INSERT INTO projection_projects
-			   (project_id, title, workspace_root) VALUES (?, ?, ?)`,
-			p.id, p.title, p.workspaceRoot)
+			   (project_id, title, workspace_root, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+			p.id, p.title, p.workspaceRoot,
+			nullableT3(p.createdAt), nullableT3(p.updatedAt))
 		require.NoError(t, err)
 	}
 
@@ -367,6 +371,115 @@ func TestT3ThreadMetaTracksNewestActivity(t *testing.T) {
 	mtime, err := T3SourceMtime(metas[0].VirtualPath)
 	require.NoError(t, err)
 	assert.Equal(t, want, mtime)
+}
+
+// An in-place edit bumps only the message's updated_at. The discovery token
+// and the parse-persisted mtime must both advance to that stamp -- if they
+// diverged, the reparse the fingerprint triggers would be discarded as
+// unchanged and the edit lost.
+func TestT3ChangeTokenSeesInPlaceMessageEdits(t *testing.T) {
+	spec := t3SampleDB(false)
+	spec.threads[0].messages[1].updatedAt = "2026-08-23T09:00:00.000Z"
+	dbPath := createT3DB(t, spec)
+
+	conn, err := OpenT3DB(dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	metas, err := ListT3ThreadMetas(conn, dbPath)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+
+	want := parseTimestamp("2026-08-23T09:00:00.000Z").UnixNano()
+	assert.Equal(t, want, metas[0].FileMtime, "discovery token")
+
+	results := parseT3All(t, dbPath, "testbox")
+	require.Len(t, results, 1)
+	assert.Equal(t, want, results[0].Session.File.Mtime,
+		"the parse must persist the same change token discovery computed")
+}
+
+// A workspace-root change surfaces only through the project row's updated_at,
+// so the change token must include the project timestamps on both sides.
+func TestT3ChangeTokenSeesProjectChanges(t *testing.T) {
+	spec := t3SampleDB(false)
+	spec.projects[0].updatedAt = "2026-08-23T10:30:00.000Z"
+	dbPath := createT3DB(t, spec)
+
+	conn, err := OpenT3DB(dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	metas, err := ListT3ThreadMetas(conn, dbPath)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+
+	want := parseTimestamp("2026-08-23T10:30:00.000Z").UnixNano()
+	assert.Equal(t, want, metas[0].FileMtime, "discovery token")
+
+	results := parseT3All(t, dbPath, "testbox")
+	require.Len(t, results, 1)
+	assert.Equal(t, want, results[0].Session.File.Mtime,
+		"the parse must persist the same change token discovery computed")
+}
+
+// The dropped-row rule: an empty message never reaches the transcript, but its
+// timestamps still count toward the change token because the discovery query
+// aggregates over every row.
+func TestT3ChangeTokenIncludesDroppedMessages(t *testing.T) {
+	spec := t3SampleDB(false)
+	spec.threads[0].messages = append(spec.threads[0].messages, t3TestMessage{
+		id: "m-empty", role: "assistant", text: "  ",
+		createdAt: "2026-08-23T11:00:00.000Z", attachments: "[]",
+	})
+	dbPath := createT3DB(t, spec)
+
+	results := parseT3All(t, dbPath, "testbox")
+	require.Len(t, results, 1)
+	assert.Len(t, results[0].Messages, 3, "empty message stays dropped")
+	want := parseTimestamp("2026-08-23T11:00:00.000Z").UnixNano()
+	assert.Equal(t, want, results[0].Session.File.Mtime)
+
+	conn, err := OpenT3DB(dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	metas, err := ListT3ThreadMetas(conn, dbPath)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	assert.Equal(t, want, metas[0].FileMtime)
+}
+
+func TestT3BatchMemberPresent(t *testing.T) {
+	spec := t3SampleDB(false)
+	spec.threads = append(spec.threads, t3TestThread{
+		id: "9c2f0f2a-1111-4222-8333-444455556666", projectID: "proj-1",
+		title: "gone", createdAt: "2026-08-21T10:00:00.000Z",
+		updatedAt: "2026-08-21T10:05:00.000Z",
+		deletedAt: "2026-08-21T11:00:00.000Z",
+	})
+	dbPath := createT3DB(t, spec)
+	container := multiSessionSource{Container: dbPath}
+	member := func(id string) multiSessionSource {
+		return multiSessionSource{
+			Container: dbPath, MemberID: id, Path: T3VirtualPath(dbPath, id),
+		}
+	}
+	live := member("70d3aebd-8924-4ad9-9c1a-2f1b6d1f4a55")
+	deleted := member("9c2f0f2a-1111-4222-8333-444455556666")
+	missing := member("00000000-0000-4000-8000-000000000000")
+
+	present := t3BatchMemberPresent(
+		container, []multiSessionSource{live, deleted, missing})
+	assert.True(t, present[live.Path])
+	assert.False(t, present[deleted.Path], "soft-deleted thread is absent")
+	assert.False(t, present[missing.Path])
+
+	// An unreadable database reports every member present so a locked or
+	// vanished container never tombstones the archive.
+	broken := multiSessionSource{
+		Container: filepath.Join(t.TempDir(), "missing", t3DBName),
+	}
+	present = t3BatchMemberPresent(broken, []multiSessionSource{live, deleted})
+	assert.True(t, present[live.Path])
+	assert.True(t, present[deleted.Path])
 }
 
 func TestT3VirtualPathRoundTrip(t *testing.T) {

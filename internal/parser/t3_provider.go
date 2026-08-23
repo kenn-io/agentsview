@@ -30,6 +30,9 @@ func newT3ProviderFactory(def AgentDef) ProviderFactory {
 				WithContextContainerParse(t3ParseContainer),
 				WithContextMemberParse(t3ParseMember),
 				WithMemberPresence(t3MemberPresent),
+				// One query answers the whole tombstone pass; without this the
+				// base would open the database once per stored member.
+				WithBatchMemberPresence(t3BatchMemberPresent),
 			)
 		},
 	)
@@ -155,6 +158,52 @@ func t3MemberPresent(src multiSessionSource) bool {
 		return IsRegularFile(src.Container)
 	}
 	return T3ThreadExists(src.Container, src.MemberID)
+}
+
+// t3BatchMemberPresent answers one changed container's tombstone pass with a
+// single connection and a single query over live thread IDs. On any error it
+// reports every member present, matching Trae: a locked or vanished database
+// must not tombstone the archive.
+func t3BatchMemberPresent(
+	container multiSessionSource, members []multiSessionSource,
+) map[string]bool {
+	present := make(map[string]bool, len(members))
+	allPresent := func() map[string]bool {
+		for _, member := range members {
+			present[member.Path] = true
+		}
+		return present
+	}
+	if len(members) == 0 {
+		return present
+	}
+	conn, err := openT3DB(container.Container)
+	if err != nil {
+		return allPresent()
+	}
+	defer conn.Close()
+
+	rows, err := conn.Query(
+		`SELECT thread_id FROM projection_threads WHERE deleted_at IS NULL`)
+	if err != nil {
+		return allPresent()
+	}
+	defer rows.Close()
+	live := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return allPresent()
+		}
+		live[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return allPresent()
+	}
+	for _, member := range members {
+		present[member.Path] = live[member.MemberID]
+	}
+	return present
 }
 
 func t3ParseMember(

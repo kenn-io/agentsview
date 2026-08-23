@@ -164,6 +164,53 @@ func TestSyncT3ReparsesOnlyTheChangedThread(t *testing.T) {
 		"an untouched thread keeps its checkpoint when a sibling changes")
 }
 
+// An in-place edit bumps only the message row's text and updated_at -- the
+// thread row does not change. The edit must still be persisted: if the parsed
+// mtime failed to advance with it, the engine would discard the reparse as
+// unchanged and the stale text would survive.
+func TestSyncT3PersistsInPlaceMessageEdit(t *testing.T) {
+	root := t.TempDir()
+	userdata := filepath.Join(root, ".t3", "userdata")
+	dbPath := writeT3StateDB(t, userdata)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentT3: {userdata},
+		},
+		Machine: "devbox",
+	})
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 2, Skipped: 0})
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_thread_messages
+		    SET text = 'The token refresh races; pin the fixture clock.',
+		        updated_at = '2026-08-22T13:00:00.000Z'
+		  WHERE message_id = 'm-a2'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	// Only the edited thread is re-persisted; its sibling stays skipped.
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
+
+	ctx := context.Background()
+	msgs, err := database.GetMessages(ctx, "t3:thread-alpha", 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "The token refresh races; pin the fixture clock.",
+		msgs[1].Content)
+
+	beta, err := database.GetSession(ctx, "t3:thread-beta")
+	require.NoError(t, err)
+	require.NotNil(t, beta)
+	assert.Equal(t, 1, beta.MessageCount)
+
+	// And the edit is not re-persisted forever: the stored mtime now matches
+	// the change token, so the next pass skips everything.
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 0, Skipped: 0})
+}
+
 // A soft-deleted thread stops being discovered.
 func TestSyncT3SkipsSoftDeletedThread(t *testing.T) {
 	root := t.TempDir()

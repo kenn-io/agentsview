@@ -1989,9 +1989,14 @@ add an archived or maintained mirror without replacing the original identity.
   writes never invalidate its neighbours. Soft-deleted threads are skipped and
   resolve to tombstones. Change detection is per thread and mtime-only --
   t3's millisecond timestamps already separate two writes in the same second,
-  so unlike Shelley no message content is read to build a digest -- and folds
-  in the newest message timestamp so a future writer that stops bumping
-  `updated_at` cannot silently freeze the cursor. Optional columns are probed
+  so unlike Shelley no message content is read to build a digest. The change
+  token is the latest of the thread's, its messages', and its project's
+  created/updated timestamps: message `updated_at` so an in-place edit
+  advances it, and the project stamps because `workspace_root` determines the
+  session's cwd and project. Discovery and parse compute the token from the
+  same timestamps, so a fingerprint-triggered reparse is never discarded as
+  unchanged, and a tombstone pass resolves membership for every stored thread
+  with one query. Optional columns are probed
   with `PRAGMA table_info`, so a pre-canonicalization database still parses
   with its model read from the legacy column. A worktree thread's
   `worktree_path` wins over the project's `workspace_root` as the cwd. The

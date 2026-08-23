@@ -82,10 +82,16 @@ func T3ThreadExists(dbPath, threadID string) bool {
 type T3ThreadMeta struct {
 	RawID       string
 	VirtualPath string
-	// FileMtime is the thread's newest activity as a nanosecond timestamp.
-	// t3 writes ISO-8601 timestamps with millisecond precision, so unlike
-	// Shelley no content digest is needed to separate two writes in the same
-	// second; the millisecond term already distinguishes them.
+	// FileMtime is the per-thread change token as a nanosecond timestamp: the
+	// latest of the thread's, its messages', and its project's created/updated
+	// timestamps. Message updated_at is included so an in-place edit advances
+	// the token, and the project timestamps are included because
+	// workspace_root determines the session's cwd and project. The parse path
+	// persists the identical token as File.Mtime (see buildT3ParseResult); if
+	// the two ever diverged, a reparse triggered by the fingerprint would be
+	// discarded as unchanged by the mtime comparison. t3 writes ISO-8601
+	// timestamps with millisecond precision, so unlike Shelley no content
+	// digest is needed to separate two writes in the same second.
 	FileMtime int64
 }
 
@@ -108,19 +114,27 @@ func ForEachT3ThreadMeta(
 	ctx context.Context, conn *sql.DB, dbPath string,
 	yield func(T3ThreadMeta) error,
 ) error {
-	return forEachT3ThreadMetaQuery(ctx, conn, dbPath, "", nil, yield)
+	shape, err := inspectT3Schema(ctx, conn)
+	if err != nil {
+		return err
+	}
+	return forEachT3ThreadMetaQuery(ctx, conn, shape, dbPath, "", nil, yield)
 }
 
 // T3ThreadMetaByID resolves one thread's change signal.
 func T3ThreadMetaByID(
 	ctx context.Context, conn *sql.DB, dbPath, threadID string,
 ) (T3ThreadMeta, bool, error) {
+	shape, err := inspectT3Schema(ctx, conn)
+	if err != nil {
+		return T3ThreadMeta{}, false, err
+	}
 	var (
 		meta  T3ThreadMeta
 		found bool
 	)
-	err := forEachT3ThreadMetaQuery(
-		ctx, conn, dbPath, "AND t.thread_id = ?", []any{threadID},
+	err = forEachT3ThreadMetaQuery(
+		ctx, conn, shape, dbPath, "AND t.thread_id = ?", []any{threadID},
 		func(m T3ThreadMeta) error {
 			meta, found = m, true
 			return nil
@@ -130,20 +144,23 @@ func T3ThreadMetaByID(
 }
 
 func forEachT3ThreadMetaQuery(
-	ctx context.Context, conn *sql.DB, dbPath, extraWhere string, args []any,
+	ctx context.Context, conn *sql.DB, shape t3Schema,
+	dbPath, extraWhere string, args []any,
 	yield func(T3ThreadMeta) error,
 ) error {
-	// The thread's own updated_at is bumped on message activity today, but the
-	// newest message timestamp is folded in as well so a future writer that
-	// stops bumping it cannot silently freeze change detection. Only
-	// timestamps are read here, never message text, which keeps the scan
-	// cheap enough to run on every reconcile.
+	// Only timestamps are read here, never message text, which keeps the scan
+	// cheap enough to run on every reconcile. The aggregated stamps feed
+	// t3LatestNanos exactly as the parse path does, so both compute one token.
 	query := `SELECT t.thread_id,
-	                 COALESCE(t.updated_at, t.created_at, ''),
-	                 COALESCE(MAX(COALESCE(m.updated_at, m.created_at)), '')
+	                 COALESCE(t.updated_at, ''),
+	                 COALESCE(t.created_at, ''),
+	                 COALESCE(MAX(m.created_at), ''),
+	                 COALESCE(MAX(` + shape.messageUpdatedExpr("m.") + `), ''),
+	                 MAX(` + shape.projectUpdatedExpr() + `),
+	                 MAX(` + shape.projectCreatedExpr() + `)
 	            FROM projection_threads t
 	            LEFT JOIN projection_thread_messages m
-	                   ON m.thread_id = t.thread_id
+	                   ON m.thread_id = t.thread_id` + shape.projectJoin() + `
 	           WHERE t.deleted_at IS NULL ` + extraWhere + `
 	           GROUP BY t.thread_id
 	           ORDER BY t.thread_id`
@@ -154,8 +171,10 @@ func forEachT3ThreadMetaQuery(
 	defer rows.Close()
 
 	for rows.Next() {
-		var threadID, threadUpdated, newestMessage string
-		if err := rows.Scan(&threadID, &threadUpdated, &newestMessage); err != nil {
+		var threadID string
+		var stamps [6]string
+		if err := rows.Scan(&threadID, &stamps[0], &stamps[1], &stamps[2],
+			&stamps[3], &stamps[4], &stamps[5]); err != nil {
 			return fmt.Errorf("scanning t3 thread meta: %w", err)
 		}
 		if !IsValidSessionID(threadID) {
@@ -165,7 +184,7 @@ func forEachT3ThreadMetaQuery(
 		if err := yield(T3ThreadMeta{
 			RawID:       threadID,
 			VirtualPath: T3VirtualPath(dbPath, threadID),
-			FileMtime:   t3LatestNanos(threadUpdated, newestMessage),
+			FileMtime:   t3LatestNanos(stamps[:]...),
 		}); err != nil {
 			return err
 		}
@@ -173,8 +192,8 @@ func forEachT3ThreadMetaQuery(
 	return rows.Err()
 }
 
-// t3LatestNanos returns the later of two ISO-8601 timestamps as Unix
-// nanoseconds, or 0 when neither parses.
+// t3LatestNanos returns the latest of the given ISO-8601 timestamps as Unix
+// nanoseconds, or 0 when none parses.
 func t3LatestNanos(values ...string) int64 {
 	var latest time.Time
 	for _, v := range values {
@@ -227,7 +246,11 @@ type t3Schema struct {
 	hasModelSelectionJSON bool
 	hasLegacyModel        bool
 	hasAttachments        bool
+	hasMessageUpdatedAt   bool
 	hasProviderInstanceID bool
+	hasProjectsTable      bool
+	hasProjectUpdatedAt   bool
+	hasProjectCreatedAt   bool
 }
 
 func (s t3Schema) modelSelectionExpr() string {
@@ -251,9 +274,48 @@ func (s t3Schema) attachmentsExpr() string {
 	return `''`
 }
 
+// messageUpdatedExpr qualifies the column with table when the caller joins
+// multiple tables that all carry an updated_at.
+func (s t3Schema) messageUpdatedExpr(table string) string {
+	if s.hasMessageUpdatedAt {
+		return `COALESCE(` + table + `updated_at, '')`
+	}
+	return `''`
+}
+
 func (s t3Schema) providerInstanceExpr() string {
 	if s.hasProviderInstanceID {
 		return `COALESCE(s.provider_instance_id, '')`
+	}
+	return `''`
+}
+
+// projectJoin returns the projection_projects LEFT JOIN, or "" when the table
+// is absent so a query never references a table that does not exist.
+func (s t3Schema) projectJoin() string {
+	if s.hasProjectsTable {
+		return ` LEFT JOIN projection_projects p ON p.project_id = t.project_id`
+	}
+	return ``
+}
+
+func (s t3Schema) workspaceRootExpr() string {
+	if s.hasProjectsTable {
+		return `COALESCE(p.workspace_root, '')`
+	}
+	return `''`
+}
+
+func (s t3Schema) projectUpdatedExpr() string {
+	if s.hasProjectsTable && s.hasProjectUpdatedAt {
+		return `COALESCE(p.updated_at, '')`
+	}
+	return `''`
+}
+
+func (s t3Schema) projectCreatedExpr() string {
+	if s.hasProjectsTable && s.hasProjectCreatedAt {
+		return `COALESCE(p.created_at, '')`
 	}
 	return `''`
 }
@@ -288,7 +350,9 @@ func inspectT3Schema(ctx context.Context, conn *sql.DB) (t3Schema, error) {
 	if len(messageColumns) == 0 {
 		return shape, fmt.Errorf("missing t3 projection_thread_messages table")
 	}
-	for _, required := range []string{"message_id", "thread_id", "role", "text"} {
+	for _, required := range []string{
+		"message_id", "thread_id", "role", "text", "created_at",
+	} {
 		if !messageColumns[required] {
 			return shape, fmt.Errorf(
 				"missing required t3 projection_thread_messages column %s", required,
@@ -296,12 +360,21 @@ func inspectT3Schema(ctx context.Context, conn *sql.DB) (t3Schema, error) {
 		}
 	}
 	shape.hasAttachments = messageColumns["attachments_json"]
+	shape.hasMessageUpdatedAt = messageColumns["updated_at"]
 
 	sessionColumns, err := t3TableColumns(ctx, conn, "projection_thread_sessions")
 	if err != nil {
 		return shape, err
 	}
 	shape.hasProviderInstanceID = sessionColumns["provider_instance_id"]
+
+	projectColumns, err := t3TableColumns(ctx, conn, "projection_projects")
+	if err != nil {
+		return shape, err
+	}
+	shape.hasProjectsTable = len(projectColumns) > 0
+	shape.hasProjectUpdatedAt = projectColumns["updated_at"]
+	shape.hasProjectCreatedAt = projectColumns["created_at"]
 	return shape, nil
 }
 
@@ -347,6 +420,8 @@ type t3ThreadRow struct {
 	modelSelectionJSON string
 	legacyModel        string
 	workspaceRoot      string
+	projectUpdatedAt   string
+	projectCreatedAt   string
 	providerName       string
 	providerInstanceID string
 }
@@ -365,11 +440,12 @@ func loadT3Thread(
 	                 COALESCE(t.worktree_path, ''),
 	                 ` + shape.modelSelectionExpr() + `,
 	                 ` + shape.legacyModelExpr() + `,
-	                 COALESCE(p.workspace_root, ''),
+	                 ` + shape.workspaceRootExpr() + `,
+	                 ` + shape.projectUpdatedExpr() + `,
+	                 ` + shape.projectCreatedExpr() + `,
 	                 COALESCE(s.provider_name, ''),
 	                 ` + shape.providerInstanceExpr() + `
-	            FROM projection_threads t
-	            LEFT JOIN projection_projects p ON p.project_id = t.project_id
+	            FROM projection_threads t` + shape.projectJoin() + `
 	            LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
 	           WHERE t.thread_id = ? AND t.deleted_at IS NULL
 	           LIMIT 1`
@@ -377,8 +453,8 @@ func loadT3Thread(
 	err := conn.QueryRowContext(ctx, query, threadID).Scan(
 		&row.threadID, &row.title, &row.createdAt, &row.updatedAt,
 		&row.branch, &row.worktreePath, &row.modelSelectionJSON,
-		&row.legacyModel, &row.workspaceRoot, &row.providerName,
-		&row.providerInstanceID,
+		&row.legacyModel, &row.workspaceRoot, &row.projectUpdatedAt,
+		&row.projectCreatedAt, &row.providerName, &row.providerInstanceID,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -389,28 +465,52 @@ func loadT3Thread(
 	return row, true, nil
 }
 
+// t3MessageStamps carries the newest created_at and updated_at seen across a
+// thread's messages -- all of them, including rows the parser drops as empty,
+// because the discovery-side change token aggregates over every row. If the
+// parse-side token skipped dropped rows, the two would diverge and the engine
+// would discard a legitimately reparsed thread as unchanged.
+type t3MessageStamps struct {
+	maxCreated string
+	maxUpdated string
+}
+
 func loadT3Messages(
 	ctx context.Context, conn *sql.DB, shape t3Schema, threadID string,
-) ([]ParsedMessage, error) {
+) ([]ParsedMessage, t3MessageStamps, error) {
 	// message_id breaks ties: two messages can share a created_at at
 	// millisecond precision, and an unstable order would reshuffle the
 	// transcript between parses.
 	query := `SELECT COALESCE(role, ''), COALESCE(text, ''),
-	                 COALESCE(created_at, ''), ` + shape.attachmentsExpr() + `
+	                 COALESCE(created_at, ''),
+	                 ` + shape.messageUpdatedExpr("") + `,
+	                 ` + shape.attachmentsExpr() + `
 	            FROM projection_thread_messages
 	           WHERE thread_id = ?
 	           ORDER BY created_at, message_id`
 	rows, err := conn.QueryContext(ctx, query, threadID)
 	if err != nil {
-		return nil, fmt.Errorf("loading t3 messages for %s: %w", threadID, err)
+		return nil, t3MessageStamps{}, fmt.Errorf(
+			"loading t3 messages for %s: %w", threadID, err)
 	}
 	defer rows.Close()
 
 	var messages []ParsedMessage
+	var stamps t3MessageStamps
 	for rows.Next() {
-		var role, text, createdAt, attachments string
-		if err := rows.Scan(&role, &text, &createdAt, &attachments); err != nil {
-			return nil, fmt.Errorf("scanning t3 message: %w", err)
+		var role, text, createdAt, updatedAt, attachments string
+		if err := rows.Scan(
+			&role, &text, &createdAt, &updatedAt, &attachments,
+		); err != nil {
+			return nil, t3MessageStamps{}, fmt.Errorf("scanning t3 message: %w", err)
+		}
+		// ISO-8601 strings in one format order lexicographically, matching the
+		// SQL MAX() the discovery query uses.
+		if createdAt > stamps.maxCreated {
+			stamps.maxCreated = createdAt
+		}
+		if updatedAt > stamps.maxUpdated {
+			stamps.maxUpdated = updatedAt
 		}
 		content := strings.TrimSpace(text)
 		if content == "" && !t3HasAttachments(attachments) {
@@ -425,9 +525,10 @@ func loadT3Messages(
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("reading t3 messages for %s: %w", threadID, err)
+		return nil, t3MessageStamps{}, fmt.Errorf(
+			"reading t3 messages for %s: %w", threadID, err)
 	}
-	return messages, nil
+	return messages, stamps, nil
 }
 
 // t3HasAttachments keeps an image-only message in the transcript: it carries no
@@ -507,17 +608,18 @@ func parseT3ThreadFromDBWithSchema(
 		// parse skip it rather than failing the whole database.
 		return nil, nil
 	}
-	messages, err := loadT3Messages(ctx, conn, shape, threadID)
+	messages, stamps, err := loadT3Messages(ctx, conn, shape, threadID)
 	if err != nil {
 		return nil, err
 	}
-	result := buildT3ParseResult(row, messages, dbPath, info, machine)
+	result := buildT3ParseResult(row, messages, stamps, dbPath, info, machine)
 	return &result, nil
 }
 
 func buildT3ParseResult(
 	row t3ThreadRow,
 	messages []ParsedMessage,
+	stamps t3MessageStamps,
 	dbPath string,
 	info os.FileInfo,
 	machine string,
@@ -570,12 +672,14 @@ func buildT3ParseResult(
 		}
 	}
 
-	mtime := endedAt.UnixNano()
-	if len(messages) > 0 {
-		if last := messages[len(messages)-1].Timestamp; last.After(endedAt) {
-			mtime = last.UnixNano()
-		}
-	}
+	// The persisted mtime is the same change token discovery computes (see
+	// T3ThreadMeta.FileMtime): built from the identical timestamps, so a
+	// fingerprint-triggered reparse is never discarded as unchanged.
+	mtime := t3LatestNanos(
+		row.updatedAt, row.createdAt,
+		stamps.maxUpdated, stamps.maxCreated,
+		row.projectUpdatedAt, row.projectCreatedAt,
+	)
 
 	sess := ParsedSession{
 		ID:               t3IDPrefix + row.threadID,
