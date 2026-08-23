@@ -1521,6 +1521,19 @@ type syncJob struct {
 	retentionLease *parseRetentionLease
 }
 
+const (
+	reconciliationRetryPathLimit     = 256
+	reconciliationRetryPathByteLimit = 64 * 1024
+)
+
+func reconciliationRetryPathBytes(paths []string) int {
+	bytes := 0
+	for _, path := range paths {
+		bytes += len(path)
+	}
+	return bytes
+}
+
 func (j *syncJob) releaseRetention() {
 	if j == nil {
 		return
@@ -5055,10 +5068,12 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			)
 		}
 	}
-	canTombstoneCompletedScopes := retErr == nil && failures > 0
-	if failures > 0 {
+	canTombstoneCompletedScopes :=
+		(failures > 0 || stats.deferredCount > 0) &&
+			stats.Failed == 0 && !stats.Aborted
+	if failures > 0 || stats.deferredCount > 0 {
 		retryRoots := append([]string(nil), failedRoots...)
-		if retErr != nil {
+		if retErr != nil || stats.deferredRetryOverflow {
 			for _, completed := range completedScopes {
 				retryRoots = append(retryRoots, completed.roots...)
 			}
@@ -5067,7 +5082,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 		incomplete := &incompleteReconciliationError{
 			failures:  failures,
+			deferred:  stats.deferredCount,
 			roots:     retryRoots,
+			paths:     append([]string(nil), stats.deferredRetryPaths...),
 			completed: completedScopes,
 			cause:     discoveryErr,
 		}
@@ -5142,7 +5159,9 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 	retryRoots = slices.Compact(retryRoots)
 	return deleted, &incompleteReconciliationError{
 		failures: incomplete.failures,
+		deferred: incomplete.deferred,
 		roots:    retryRoots,
+		paths:    append([]string(nil), incomplete.paths...),
 		cause:    errors.Join(incomplete, err),
 	}
 }
@@ -5628,12 +5647,20 @@ type reconciliationProviderScope struct {
 
 type incompleteReconciliationError struct {
 	failures  int
+	deferred  int
 	roots     []string
+	paths     []string
 	completed []reconciliationProviderScope
 	cause     error
 }
 
 func (e *incompleteReconciliationError) Error() string {
+	if e.failures == 0 {
+		return fmt.Sprintf(
+			"watch root reconciliation deferred: %d provider results need retry",
+			e.deferred,
+		)
+	}
 	return fmt.Sprintf(
 		"watch root reconciliation incomplete: %d provider discoveries failed",
 		e.failures,
@@ -5644,6 +5671,10 @@ func (e *incompleteReconciliationError) Unwrap() error { return e.cause }
 
 func (e *incompleteReconciliationError) ReconciliationRetryRoots() []string {
 	return append([]string(nil), e.roots...)
+}
+
+func (e *incompleteReconciliationError) ReconciliationRetryPaths() []string {
+	return append([]string(nil), e.paths...)
 }
 
 func (e *Engine) reconciliationCandidate(
@@ -6046,6 +6077,20 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	dst.cwdFilteredFiles += src.cwdFilteredFiles
 	dst.CwdUpdated += src.CwdUpdated
 	dst.Aborted = dst.Aborted || src.Aborted
+	if !dst.deferredRetryOverflow {
+		deferredCount := dst.deferredCount
+		for _, path := range src.deferredRetryPaths {
+			dst.recordDeferred(path)
+		}
+		dst.deferredCount = deferredCount + src.deferredCount
+		dst.deferredRetryOverflow = dst.deferredRetryOverflow ||
+			src.deferredRetryOverflow
+		if dst.deferredRetryOverflow {
+			dst.deferredRetryPaths = nil
+		}
+	} else {
+		dst.deferredCount += src.deferredCount
+	}
 }
 
 // tombstoneMissingWatchSourcesLocked adapts a raw changed-path root list to
@@ -9203,6 +9248,15 @@ func (e *Engine) collectAndBatchWithOptions(
 		for range r.providerFailureCount {
 			stats.RecordFailed()
 		}
+		for range r.deferredCount {
+			stats.recordDeferred(r.path)
+		}
+		proofWithheld := r.sourceProofWithheld(false)
+		if proofWithheld {
+			if tracker := reconciliationBaselineTrackerFor(ctx); tracker != nil {
+				tracker.addNonAuthoritativeScope(r.agent, r.path)
+			}
+		}
 		if r.skip {
 			cwdChanged, err := e.reconcileSkippedSourceCwd(r)
 			if err != nil {
@@ -9220,14 +9274,14 @@ func (e *Engine) collectAndBatchWithOptions(
 					tracker.addNonAuthoritativeScope(r.agent, r.path)
 				}
 			}
-			rowlessCached := e.cacheClaudeRowlessFreshness(ctx, r)
+			rowlessCached := !proofWithheld && e.cacheClaudeRowlessFreshness(ctx, r)
 			if !rowlessCached && r.cacheSkip && r.mtime != 0 &&
 				!r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime)
 			}
 			stats.RecordSkip()
-			e.noteSQLiteContainerResult(r.path, true)
-			if r.providerFailureCount == 0 && !r.suppressPresenceSweep {
+			e.noteSQLiteContainerResult(r.path, !proofWithheld)
+			if !proofWithheld && !r.suppressPresenceSweep {
 				admitted, exactOwnerships, err :=
 					e.skippedSourceAllowsCwdFilter(ctx, r)
 				if err != nil {
@@ -9380,11 +9434,11 @@ func (e *Engine) collectAndBatchWithOptions(
 					)
 				}
 			}
-			e.noteSQLiteContainerResult(r.path, true)
-			if r.providerFailureCount == 0 &&
+			e.noteSQLiteContainerResult(r.path, !proofWithheld)
+			if !proofWithheld &&
 				sourceAllowsParserExclusions {
 				baselineProcessedSource(r, true)
-			} else if r.providerFailureCount == 0 {
+			} else if !proofWithheld {
 				baselineProcessedSource(r, false)
 			}
 			progress.SessionsDone++
@@ -9428,9 +9482,8 @@ func (e *Engine) collectAndBatchWithOptions(
 		// must never hide a filtered session from a future allow-list
 		// change; such containers simply keep the pre-gate re-verify
 		// behavior.
-		e.noteSQLiteContainerResult(
-			r.path, vetoed == 0 && len(r.retrySessionIDs) == 0,
-		)
+		sourceProofWithheld := r.sourceProofWithheld(vetoed > 0)
+		e.noteSQLiteContainerResult(r.path, !sourceProofWithheld)
 		if vetoed > 0 && len(allowed) == 0 {
 			e.clearProviderSourceFreshness(ctx, r.providerStatHash)
 			// Claude can emit a synthetic base result for a replay-only
@@ -9438,9 +9491,11 @@ func (e *Engine) collectAndBatchWithOptions(
 			// stale fork is also preserved, record the successful complete parse
 			// under a filter-scoped marker. This restores steady-state freshness
 			// without letting a later filter configuration inherit the proof.
-			e.cacheClaudeRowlessFreshness(ctx, r)
+			if !sourceProofWithheld {
+				e.cacheClaudeRowlessFreshness(ctx, r)
+			}
 			stats.cwdFilteredFiles++
-			if r.providerFailureCount == 0 {
+			if !sourceProofWithheld {
 				baselineProcessedSource(r, false)
 			}
 			progress.SessionsDone++
@@ -9457,7 +9512,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				continue
 			}
 			stats.RecordSynced(1)
-			if r.providerFailureCount == 0 {
+			if !sourceProofWithheld {
 				baselineJob := r
 				baselineJob.machine = r.incremental.machine
 				baselineProcessedSource(baselineJob, true)
@@ -9468,8 +9523,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			stats.messagesIndexed = progress.MessagesIndexed
 			r.releaseRetention()
 		} else {
-			sourceNeedsRetry := vetoed > 0 ||
-				r.providerFailureCount > 0 || len(r.retrySessionIDs) > 0
+			sourceNeedsRetry := sourceProofWithheld
 			for i, pr := range allowed {
 				sessionNeedsRetry := r.providerWideFailureCount > 0 ||
 					r.needsRetryForSession(pr.Session.ID)
@@ -9904,6 +9958,7 @@ type processResult struct {
 	// retrySessionIDs carries provider per-result data-version state.
 	// Legacy parsers use needsRetry as a source-wide fallback.
 	retrySessionIDs map[string]bool
+	deferredCount   int
 	// suppressPresenceSweep marks a source result that must not authorize
 	// presence or tombstone reconciliation, including clean unsupported skips.
 	suppressPresenceSweep bool
@@ -9952,6 +10007,11 @@ func (r processResult) needsRetryForSession(sessionID string) bool {
 
 func (r processResult) suppressesPresenceSweepForRetry() bool {
 	return r.retrySessionIDs == nil && r.needsRetry
+}
+
+func (r processResult) sourceProofWithheld(hardFailure bool) bool {
+	return hardFailure || r.providerFailureCount > 0 || r.deferredCount > 0 ||
+		len(r.retrySessionIDs) > 0 || r.needsRetry
 }
 
 func (e *Engine) processFile(
@@ -10831,7 +10891,7 @@ func (e *Engine) processProviderFile(
 				res.retrySessionIDs = make(map[string]bool)
 			}
 			res.retrySessionIDs[result.Result.Session.ID] = true
-			res.providerFailureCount++
+			res.deferredCount++
 		}
 	}
 	if e.forceParseRequested(file) {
@@ -18626,8 +18686,7 @@ func (e *Engine) processAndWriteSessionFile(
 		return false, sessionsChanged, nil
 	}
 
-	sourceNeedsRetry := res.providerFailureCount > 0 ||
-		len(res.retrySessionIDs) > 0
+	sourceNeedsRetry := res.sourceProofWithheld(false)
 	resolved := 0
 	writtenIDs := make([]string, 0, len(res.results))
 	markSourceIncomplete := func() {

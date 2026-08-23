@@ -107,15 +107,20 @@ func (e *watchBatchApplyError) WatchRetryBatch() WatchBatch {
 func watchBatchReconciliationError(
 	cause error, roots []string, full, lostEvents bool,
 ) error {
+	var scopedPaths interface{ ReconciliationRetryPaths() []string }
+	var retryPaths []string
+	if errors.As(cause, &scopedPaths) {
+		retryPaths = watchDeduplicateStrings(scopedPaths.ReconciliationRetryPaths())
+	}
 	var scoped interface{ ReconciliationRetryRoots() []string }
+	var retryRoots []string
 	if errors.As(cause, &scoped) {
-		if failedRoots := watchDeduplicateStrings(
-			scoped.ReconciliationRetryRoots(),
-		); len(failedRoots) > 0 {
-			return &watchBatchApplyError{cause: cause, retry: WatchBatch{
-				ReconcileRoots: failedRoots, LostEvents: lostEvents,
-			}}
-		}
+		retryRoots = watchDeduplicateStrings(scoped.ReconciliationRetryRoots())
+	}
+	if len(retryPaths) > 0 || len(retryRoots) > 0 {
+		return &watchBatchApplyError{cause: cause, retry: WatchBatch{
+			Paths: retryPaths, ReconcileRoots: retryRoots, LostEvents: lostEvents,
+		}}
 	}
 	retry := WatchBatch{FullSync: full, LostEvents: lostEvents}
 	if !full {

@@ -102,6 +102,9 @@ type SyncStats struct {
 	parserExcludedFiles    int // file-level intentional parser exclusions
 	parserExcludedIDs      []string
 	providerFailures       int // authoritative discoveries that did not complete
+	deferredCount          int // provider-authored results deferred for retry
+	deferredRetryPaths     []string
+	deferredRetryOverflow  bool
 	// ArchiveRebuilt records a completed full-resync database swap. A rebuild
 	// can preserve/copy durable corpus rows while syncing zero session files,
 	// so downstream refresh consumers cannot infer it from Synced. It is not
@@ -407,6 +410,26 @@ func (s *SyncStats) RecordCwdUpdated(n int) {
 // RecordFailed increments the hard-failure counter.
 func (s *SyncStats) RecordFailed() {
 	s.Failed++
+}
+
+func (s *SyncStats) recordDeferred(path string) {
+	s.deferredCount++
+	if s.deferredRetryOverflow || path == "" {
+		return
+	}
+	for _, retained := range s.deferredRetryPaths {
+		if retained == path {
+			return
+		}
+	}
+	if len(s.deferredRetryPaths) >= reconciliationRetryPathLimit ||
+		reconciliationRetryPathBytes(s.deferredRetryPaths)+len(path) >
+			reconciliationRetryPathByteLimit {
+		s.deferredRetryOverflow = true
+		s.deferredRetryPaths = nil
+		return
+	}
+	s.deferredRetryPaths = append(s.deferredRetryPaths, path)
 }
 
 // Percent returns the sync progress as a percentage (0–100).

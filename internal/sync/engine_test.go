@@ -1412,6 +1412,7 @@ type manyStreamingProvider struct {
 	parser.ProviderBase
 	sources       []parser.SourceRef
 	parseOutcome  *parser.ParseOutcome
+	parseOutcomes map[string]parser.ParseOutcome
 	discoverCalls atomic.Int32
 	streamCalls   atomic.Int32
 }
@@ -1460,6 +1461,9 @@ func (*manyStreamingProvider) WatchPlan(context.Context) (parser.WatchPlan, erro
 func (provider *manyStreamingProvider) Parse(
 	_ context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
+	if outcome, ok := provider.parseOutcomes[req.Source.DisplayPath]; ok {
+		return outcome, nil
+	}
 	if provider.parseOutcome != nil {
 		return *provider.parseOutcome, nil
 	}
@@ -1476,6 +1480,75 @@ func (provider *manyStreamingProvider) Parse(
 		}},
 		ResultSetComplete: true,
 	}, nil
+}
+
+func TestIssue1476MissingParentForkDoesNotStarveLaterPages(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	const agent parser.AgentType = "codex-retryable-page"
+	const sourceCount = reconciliationPageSize + 1
+	const deferredIndex = 8
+	sources := make([]parser.SourceRef, sourceCount)
+	outcomes := make(map[string]parser.ParseOutcome, sourceCount)
+	started := time.Unix(1704067200, 0)
+	for i := range sources {
+		path := filepath.Join(root, fmt.Sprintf("session-%03d.jsonl", i))
+		require.NoError(t, os.WriteFile(path, []byte("session"), 0o600))
+		sources[i] = parser.SourceRef{
+			Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
+		}
+		id := fmt.Sprintf("session-%03d", i)
+		session := parser.ParsedSession{
+			ID: id, Agent: agent, Project: "project", Machine: "local",
+			StartedAt: started, EndedAt: started, File: parser.FileInfo{Path: path},
+		}
+		outcomes[path] = parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result:      parser.ParseResult{Session: session},
+				DataVersion: parser.DataVersionCurrent,
+			}}, ResultSetComplete: true,
+		}
+	}
+	deferredPath := sources[deferredIndex].Key
+	deferred := outcomes[deferredPath]
+	deferred.Results[0].Result.Session.ID = "forked-child"
+	deferred.Results[0].Result.Session.ParentSessionID = "codex:missing-parent"
+	deferred.Results[0].DataVersion = parser.DataVersionNeedsRetry
+	outcomes[deferredPath] = deferred
+	provider := &manyStreamingProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{Type: agent, FileBased: true},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				StreamingDiscovery: parser.CapabilitySupported,
+				WatchSources:       parser.CapabilitySupported,
+			}},
+		},
+		sources: sources, parseOutcomes: outcomes,
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{manyStreamingFactory{provider}},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	err := engine.ReconcileWatchRoots(t.Context(), []string{root}, false)
+	var retry interface{ ReconciliationRetryPaths() []string }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, []string{deferredPath}, retry.ReconciliationRetryPaths())
+	later, getErr := database.GetSession(t.Context(), "session-256")
+	require.NoError(t, getErr)
+	require.NotNil(t, later, "cursor must advance beyond the deferred page")
+	assert.Less(t, database.GetSessionDataVersion("forked-child"), db.CurrentDataVersion())
+	assert.Equal(t, 1,
+		engine.LastReconciliationResult().Metrics.MaxNonAuthoritativeScopeRows)
+	t.Logf("cursor progress: later page session %q present", later.ID)
+	t.Logf("later-provider presence assertion: session-256 present")
+	t.Logf("deferred state: forked-child data version remains stale")
+	t.Logf("rowless proof gate: non-authoritative scope rows=%d",
+		engine.LastReconciliationResult().Metrics.MaxNonAuthoritativeScopeRows)
 }
 
 func TestReconcileUnsupportedSourceMarkersStayPageBounded(t *testing.T) {
