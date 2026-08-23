@@ -153,6 +153,9 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	fixture := openPGUsageBenchmarkFixture(t)
+	sessions, messages := pgUsageRemoteCardinality(t, fixture.remote)
+	require.Zero(t, sessions)
+	require.Zero(t, messages)
 	fixture.prime(t)
 	rowsScanned, tokenUsageBytes := measurePGUsageFixture(t, fixture.remote, db.UsageFilter{
 		From: "2026-08-12", To: "2026-08-12", Timezone: "UTC",
@@ -360,7 +363,7 @@ func BenchmarkPGUsageRefresh(b *testing.B) {
 			b.StopTimer()
 			payload := `{"input_tokens":20,"output_tokens":10}`
 			if iterations%2 == 1 {
-				payload = `{"input_tokens":21,"output_tokens":9}`
+				payload = `{"input_tokens":21,"output_tokens":10}`
 			}
 			fixture.replaceDeltaMessage(b, payload)
 			b.StartTimer()
