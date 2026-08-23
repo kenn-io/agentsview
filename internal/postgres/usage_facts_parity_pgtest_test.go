@@ -154,7 +154,7 @@ func requireCompleteUsageParity(
 	require.Equal(t, localSession, remoteSession, "complete session result")
 }
 
-func seedUsageParityFixture(t *testing.T, local *db.DB) {
+func seedUsageParityFixture(t testing.TB, local *db.DB) {
 	t.Helper()
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
 		{

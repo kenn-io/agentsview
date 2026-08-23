@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func testPGURL(t *testing.T) string {
+func testPGURL(t testing.TB) string {
 	t.Helper()
 	url := os.Getenv("TEST_PG_URL")
 	if url == "" {
