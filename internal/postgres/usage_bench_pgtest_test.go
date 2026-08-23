@@ -47,7 +47,6 @@ type pgUsageBenchmarkFixture struct {
 	local  *db.DB
 	remote *Store
 	sync   *Sync
-	filter db.UsageFilter
 }
 
 func pgUsageRemoteCardinality(t testing.TB, remote *Store) (int, int) {
@@ -100,7 +99,6 @@ func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 	return &pgUsageBenchmarkFixture{
 		pgURL: pgURL, schema: schema,
 		local: local, remote: remote, sync: syncer,
-		filter: db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"},
 	}
 }
 
@@ -148,10 +146,6 @@ func (f *pgUsageBenchmarkFixture) replaceDeltaMessage(t testing.TB, payload stri
 }
 
 func TestPGUsageBenchmarkFixture(t *testing.T) {
-	pgURL := testPGURL(t)
-	const schema = "agentsview_usage_benchmark_fixture_test"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	fixture := openPGUsageBenchmarkFixture(t)
 	sessions, messages := pgUsageRemoteCardinality(t, fixture.remote)
 	require.Zero(t, sessions)

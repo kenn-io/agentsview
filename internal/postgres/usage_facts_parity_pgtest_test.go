@@ -123,7 +123,7 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 			ByProject: map[string]int{"project-a": 1, "project-c": 1, "project-d": 1},
 			ByAgent:   map[string]int{"claude": 2, "hermes": 1},
 		},
-		MatchingSessionCount: 5,
+		MatchingSessionCount: 4,
 		Session: usageParitySession{
 			SessionID: "snapshot-winner", TotalOutputTokens: 10,
 			PeakContextTokens: 20, HasTokenData: true,
@@ -156,6 +156,17 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	require.Equal(t, localWithoutBreakdown, remoteWithoutBreakdown,
 		"cross-backend session result without breakdown")
 	requireCompleteUsageParity(t, local, remote, filter)
+
+	breakdownFilter := filter
+	breakdownFilter.Breakdowns = true
+	localWithBreakdowns := captureUsageParitySnapshot(t, local, breakdownFilter)
+	remoteWithBreakdowns := captureUsageParitySnapshot(t, remote, breakdownFilter)
+	require.NotEmpty(t, localWithBreakdowns.Daily.ProjectBreakdowns)
+	require.NotEmpty(t, localWithBreakdowns.Daily.AgentBreakdowns)
+	require.NotEmpty(t, remoteWithBreakdowns.Daily.ProjectBreakdowns)
+	require.NotEmpty(t, remoteWithBreakdowns.Daily.AgentBreakdowns)
+	require.Equal(t, localWithBreakdowns, remoteWithBreakdowns,
+		"cross-backend daily breakdown result")
 }
 
 func requireCompleteUsageParity(
@@ -204,7 +215,7 @@ func seedUsageParityFixture(t testing.TB, local *db.DB) {
 		usageParitySessionFixture("snapshot-winner", "project-b", "claude", "2026-08-12T10:01:00Z", 10, 20),
 		usageParitySessionFixture("reported", "project-c", "hermes", "2026-08-12T11:00:00Z", 5, 30),
 		usageParitySessionFixture("blank-timestamp", "project-d", "claude", "2026-08-12T12:00:00Z", 3, 7),
-		usageParitySessionFixture("activity-only", "project-e", "claude", "2026-08-12T13:00:00Z", 0, 0),
+		usageParitySessionFixture("activity-only", "project-e", "claude", "2026-07-20T13:00:00Z", 0, 0),
 	}
 	for i := range sessions {
 		require.NoError(t, local.UpsertSession(sessions[i]),
@@ -232,7 +243,8 @@ func seedUsageParityFixture(t testing.TB, local *db.DB) {
 		},
 		{
 			SessionID: "activity-only", Ordinal: 0, Role: "assistant",
-			Timestamp: "2026-08-12T13:01:00Z", Model: "model-activity",
+			Timestamp: "2026-07-20T13:01:00Z", Model: "model-activity",
+			TokenUsage: json.RawMessage(`{"input_tokens":4,"output_tokens":2}`),
 		},
 	}), "seed messages")
 
