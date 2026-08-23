@@ -194,9 +194,8 @@ func TestSyncWatchBatchThenRunComposesDeferredPathAndRootFailure(t *testing.T) {
 	}
 	rootCause := errors.New("root failure")
 	provider := &issue1476WatchProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentCodex, FileBased: true}, Caps: issue1476WatchCapabilities(),
-		},
+		Def:  parser.AgentDef{Type: parser.AgentCodex, FileBased: true},
+		Caps: issue1476WatchCapabilities(),
 		root: root, source: parser.SourceRef{
 			Provider: parser.AgentCodex, Key: path, DisplayPath: path, FingerprintKey: path,
 		},
@@ -297,9 +296,8 @@ func TestSyncWatchBatchThenRunDeferredHardFailureSuppressesRoots(t *testing.T) {
 		SourceKey: path, SessionID: "hard-source", Err: errors.New("hard source failure"),
 	}}
 	provider := &issue1476WatchProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: parser.AgentCodex, FileBased: true}, Caps: issue1476WatchCapabilities(),
-		},
+		Def:  parser.AgentDef{Type: parser.AgentCodex, FileBased: true},
+		Caps: issue1476WatchCapabilities(),
 		root: root, source: parser.SourceRef{
 			Provider: parser.AgentCodex, Key: path, DisplayPath: path, FingerprintKey: path,
 		},
