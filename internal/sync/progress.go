@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"slices"
 	gosync "sync"
 	"time"
 )
@@ -421,10 +422,8 @@ func (s *SyncStats) retainDeferredRetryPath(path string) {
 	if s.deferredRetryOverflow || path == "" {
 		return
 	}
-	for _, retained := range s.deferredRetryPaths {
-		if retained == path {
-			return
-		}
+	if slices.Contains(s.deferredRetryPaths, path) {
+		return
 	}
 	if len(s.deferredRetryPaths) >= reconciliationRetryPathLimit ||
 		reconciliationRetryPathBytes(s.deferredRetryPaths)+len(path) >

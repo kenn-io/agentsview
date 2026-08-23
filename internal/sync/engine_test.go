@@ -1516,13 +1516,11 @@ func TestIssue1476MissingParentForkDoesNotStarveLaterPages(t *testing.T) {
 	deferred.Results[0].DataVersion = parser.DataVersionNeedsRetry
 	outcomes[deferredPath] = deferred
 	provider := &manyStreamingProvider{
-		ProviderBase: parser.ProviderBase{
-			Def: parser.AgentDef{Type: agent, FileBased: true},
-			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-				StreamingDiscovery: parser.CapabilitySupported,
-				WatchSources:       parser.CapabilitySupported,
-			}},
-		},
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+		}},
 		sources: sources, parseOutcomes: outcomes,
 	}
 	engine := NewEngine(database, EngineConfig{

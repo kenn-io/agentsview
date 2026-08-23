@@ -1659,13 +1659,12 @@ func (e *Engine) applyChangedPathSyncLocked(
 	}
 	if err := errors.Join(prepared.classificationErr, ctx.Err()); err != nil {
 		if stats.deferredCount > 0 {
-			return stats, tombstoned, errors.Join(
-				err, &incompleteReconciliationError{
-					deferred: stats.deferredCount,
-					paths:    append([]string(nil), stats.deferredRetryPaths...),
-					overflow: stats.deferredRetryOverflow,
-				},
-			)
+			return stats, tombstoned, &incompleteReconciliationError{
+				deferred: stats.deferredCount,
+				paths:    append([]string(nil), stats.deferredRetryPaths...),
+				overflow: stats.deferredRetryOverflow,
+				cause:    err,
+			}
 		}
 		return stats, tombstoned, err
 	}
@@ -1675,13 +1674,13 @@ func (e *Engine) applyChangedPathSyncLocked(
 			stats.Failed,
 		)
 		if stats.deferredCount > 0 {
-			incompleteErr = errors.Join(
-				&incompleteReconciliationError{
-					deferred: stats.deferredCount,
-					paths:    append([]string(nil), stats.deferredRetryPaths...),
-					overflow: stats.deferredRetryOverflow,
-				}, incompleteErr,
-			)
+			incompleteErr = &incompleteReconciliationError{
+				deferred:  stats.deferredCount,
+				paths:     append([]string(nil), stats.deferredRetryPaths...),
+				overflow:  stats.deferredRetryOverflow,
+				cause:     incompleteErr,
+				deferOnly: stats.Failed == 0 && stats.providerFailures == 0 && !stats.Aborted,
+			}
 		}
 		return stats, tombstoned, incompleteErr
 	}
@@ -5675,6 +5674,7 @@ type incompleteReconciliationError struct {
 	overflow  bool
 	completed []reconciliationProviderScope
 	cause     error
+	deferOnly bool
 }
 
 func (e *incompleteReconciliationError) Error() string {
@@ -5691,6 +5691,10 @@ func (e *incompleteReconciliationError) Error() string {
 }
 
 func (e *incompleteReconciliationError) Unwrap() error { return e.cause }
+
+func (e *incompleteReconciliationError) ReconciliationRetryDeferOnly() bool {
+	return e.deferOnly
+}
 
 func (e *incompleteReconciliationError) ReconciliationRetryRoots() []string {
 	return append([]string(nil), e.roots...)

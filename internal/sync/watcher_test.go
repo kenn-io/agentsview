@@ -939,6 +939,57 @@ func TestWatcherSchedulerContinuesIntakeWithOnePendingAccumulator(t *testing.T) 
 		"watcher callbacks must remain serialized")
 }
 
+func TestWatcherDeferredPathRetryPreservesCoalescedReconcileRoot(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	calls := make(chan WatchBatch, 2)
+	var callbackCount atomic.Int32
+	backend := newFakeWatchBackend()
+	w, err := newWatcherWithBackend(
+		0, 0,
+		func(_ context.Context, batch WatchBatch) error {
+			calls <- batch
+			if callbackCount.Add(1) == 1 {
+				close(started)
+				<-release
+				return &watchBatchApplyError{
+					cause: errors.New("deferred path"),
+					retry: WatchBatch{Paths: []string{"/sessions/deferred.jsonl"}},
+				}
+			}
+			return nil
+		},
+		backend, defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
+	)
+	require.NoError(t, err)
+	w.Start()
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		w.Stop()
+	})
+
+	backend.sendEvent(t, "/sessions/deferred.jsonl")
+	select {
+	case <-started:
+	case <-time.After(watcherTestTimeout):
+		t.Fatal("timed out waiting for deferred callback")
+	}
+	backend.sendBackendEvent(t, backendEvent{
+		Path: "/sessions", Root: "/sessions", Op: backendOpReconcileRootChange,
+	})
+	close(release)
+	first := receiveWatchBatch(t, calls)
+	second := receiveWatchBatch(t, calls)
+	assert.Contains(t, first.Paths, "/sessions/deferred.jsonl")
+	assert.Contains(t, second.Paths, "/sessions/deferred.jsonl")
+	assert.Contains(t, second.ReconcileRoots, "/sessions")
+	assert.False(t, second.FullSync)
+}
+
 func TestWatcherOverflowCollapsesPathAndByteLimitsToOneFullSync(t *testing.T) {
 	tests := []struct {
 		name         string
