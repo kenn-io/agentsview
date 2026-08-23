@@ -1638,7 +1638,8 @@ func (e *Engine) applyChangedPathSyncLocked(
 	e.anomalies.applyTo(&stats)
 	e.persistSkipCache()
 	complete := prepared.classificationErr == nil && ctx.Err() == nil &&
-		!stats.Aborted && stats.Failed == 0 && stats.providerFailures == 0
+		!stats.Aborted && stats.Failed == 0 && stats.providerFailures == 0 &&
+		stats.deferredCount == 0
 	tombstoned := 0
 	if complete && len(prepared.missingPaths) > 0 {
 		var err error
@@ -1657,13 +1658,30 @@ func (e *Engine) applyChangedPathSyncLocked(
 		log.Printf("sync: %d file(s) updated", stats.Synced)
 	}
 	if err := errors.Join(prepared.classificationErr, ctx.Err()); err != nil {
+		if stats.deferredCount > 0 {
+			return stats, tombstoned, errors.Join(
+				err, &incompleteReconciliationError{
+					deferred: stats.deferredCount,
+					paths:    append([]string(nil), stats.deferredRetryPaths...),
+				},
+			)
+		}
 		return stats, tombstoned, err
 	}
 	if !complete {
-		return stats, tombstoned, fmt.Errorf(
+		incompleteErr := fmt.Errorf(
 			"changed-path sync incomplete: %d source or archive failures",
 			stats.Failed,
 		)
+		if stats.deferredCount > 0 {
+			incompleteErr = errors.Join(
+				&incompleteReconciliationError{
+					deferred: stats.deferredCount,
+					paths:    append([]string(nil), stats.deferredRetryPaths...),
+				}, incompleteErr,
+			)
+		}
+		return stats, tombstoned, incompleteErr
 	}
 	return stats, tombstoned, nil
 }
@@ -5069,7 +5087,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 	}
 	canTombstoneCompletedScopes :=
-		(failures > 0 || stats.deferredCount > 0) &&
+		retErr == nil && (failures > 0 || stats.deferredCount > 0) &&
 			stats.Failed == 0 && !stats.Aborted
 	if failures > 0 || stats.deferredCount > 0 {
 		retryRoots := append([]string(nil), failedRoots...)
@@ -9482,8 +9500,9 @@ func (e *Engine) collectAndBatchWithOptions(
 		// must never hide a filtered session from a future allow-list
 		// change; such containers simply keep the pre-gate re-verify
 		// behavior.
-		sourceProofWithheld := r.sourceProofWithheld(vetoed > 0)
-		e.noteSQLiteContainerResult(r.path, !sourceProofWithheld)
+		presenceProofWithheld := r.sourceProofWithheld(vetoed > 0)
+		sourceProofWithheld := r.sourceProofWithheld(false)
+		e.noteSQLiteContainerResult(r.path, !presenceProofWithheld)
 		if vetoed > 0 && len(allowed) == 0 {
 			e.clearProviderSourceFreshness(ctx, r.providerStatHash)
 			// Claude can emit a synthetic base result for a replay-only
@@ -10891,7 +10910,11 @@ func (e *Engine) processProviderFile(
 				res.retrySessionIDs = make(map[string]bool)
 			}
 			res.retrySessionIDs[result.Result.Session.ID] = true
-			res.deferredCount++
+			if file.Agent == parser.AgentCodex {
+				res.deferredCount++
+			} else {
+				res.providerFailureCount++
+			}
 		}
 	}
 	if e.forceParseRequested(file) {

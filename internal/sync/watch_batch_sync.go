@@ -230,6 +230,12 @@ func ApplyWatchBatch(
 	}
 	if len(plan.paths) > 0 {
 		if err := engine.SyncPathsContext(ctx, plan.paths); err != nil {
+			var deferred interface{ ReconciliationRetryPaths() []string }
+			if errors.As(err, &deferred) {
+				return watchBatchReconciliationError(
+					err, plan.reconcileRoots, plan.full, plan.lostEvents,
+				)
+			}
 			retry := WatchBatch{FullSync: plan.full, LostEvents: plan.lostEvents}
 			if !plan.full {
 				retry.Paths = append([]string(nil), plan.paths...)
@@ -317,6 +323,12 @@ func (e *Engine) SyncWatchBatchThenRun(
 		mergeSyncStats(&stats, pathStats)
 		changed = changed || pathStats.hasSessionChanges() || tombstoned > 0
 		if pathErr != nil {
+			var deferred interface{ ReconciliationRetryPaths() []string }
+			if errors.As(pathErr, &deferred) {
+				return stats, watchBatchReconciliationError(
+					pathErr, plan.reconcileRoots, plan.full, plan.lostEvents,
+				)
+			}
 			retry := WatchBatch{FullSync: plan.full, LostEvents: plan.lostEvents}
 			if !plan.full {
 				retry.Paths = append([]string(nil), plan.paths...)

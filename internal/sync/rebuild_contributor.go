@@ -161,4 +161,14 @@ func mergeSyncStats(dst *SyncStats, src SyncStats) {
 	)
 	dst.cwdFilteredSessions += src.cwdFilteredSessions
 	dst.cwdFilteredFiles += src.cwdFilteredFiles
+	dst.deferredCount += src.deferredCount
+	if !dst.deferredRetryOverflow {
+		for _, path := range src.deferredRetryPaths {
+			dst.recordDeferred(path)
+		}
+		dst.deferredRetryOverflow = src.deferredRetryOverflow
+		if dst.deferredRetryOverflow {
+			dst.deferredRetryPaths = nil
+		}
+	}
 }

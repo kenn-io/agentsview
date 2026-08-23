@@ -1485,7 +1485,7 @@ func (provider *manyStreamingProvider) Parse(
 func TestIssue1476MissingParentForkDoesNotStarveLaterPages(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
-	const agent parser.AgentType = "codex-retryable-page"
+	const agent parser.AgentType = parser.AgentCodex
 	const sourceCount = reconciliationPageSize + 1
 	const deferredIndex = 8
 	sources := make([]parser.SourceRef, sourceCount)

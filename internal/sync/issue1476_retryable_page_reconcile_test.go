@@ -5,9 +5,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestIssue1476SourceProofWithheldCoversDeferredAndHardFailures(t *testing.T) {
@@ -39,7 +41,41 @@ func TestIssue1476DeferredRetryPathsRemainBounded(t *testing.T) {
 	}
 	assert.True(t, stats.deferredRetryOverflow)
 	assert.Empty(t, stats.deferredRetryPaths)
+	byteBound := SyncStats{}
+	byteBound.recordDeferred(strings.Repeat("y", reconciliationRetryPathByteLimit+1))
+	assert.True(t, byteBound.deferredRetryOverflow)
+	assert.Empty(t, byteBound.deferredRetryPaths)
 	t.Logf("bounded retry scope: %d paths exceed the exact-path bound and fall back to roots", stats.deferredCount)
+}
+
+func TestIssue1476ChangedPathRetryBatchRetainsDeferredPath(t *testing.T) {
+	const agent parser.AgentType = parser.AgentCodex
+	_, engine, _, _, path := newChangedPathOutcomeEngine(
+		t, agent, func(path string) parser.ParseOutcome {
+			started := time.Unix(1704067200, 0)
+			return parser.ParseOutcome{
+				Results: []parser.ParseResultOutcome{{
+					Result: parser.ParseResult{Session: parser.ParsedSession{
+						ID: "forked-child", Agent: agent, Project: "project",
+						Machine: "local", StartedAt: started, EndedAt: started,
+						File: parser.FileInfo{Path: path},
+					}},
+					DataVersion: parser.DataVersionNeedsRetry,
+				}},
+				ResultSetComplete: true,
+			}
+		},
+	)
+	t.Cleanup(engine.Close)
+
+	_, err := engine.SyncWatchBatchThenRun(
+		t.Context(), WatchBatch{Paths: []string{path}}, nil, nil,
+	)
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, []string{path}, retry.WatchRetryBatch().Paths)
+	assert.Empty(t, retry.WatchRetryBatch().ReconcileRoots)
+	assert.Equal(t, 1, engine.LastSyncStats().deferredCount)
 }
 
 func TestIssue1476WatchBatchKeepsExactDeferredPath(t *testing.T) {
