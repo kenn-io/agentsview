@@ -191,6 +191,11 @@ func validatePGUsageBenchmarkRead(
 	require.NotZero(b, counts.Total)
 	require.NotZero(b, matching)
 	require.NotNil(b, session)
+	if breakdowns {
+		require.NotEmpty(b, session.Breakdown)
+	} else {
+		require.Empty(b, session.Breakdown)
+	}
 }
 
 func measurePGUsageFixture(
