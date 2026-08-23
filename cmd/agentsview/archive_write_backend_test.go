@@ -236,6 +236,37 @@ func TestLocalArchiveWriteBackendDuckDBPushRejectsIncompleteDiscovery(t *testing
 		"an incomplete local archive must stop before mirror push")
 }
 
+func TestLocalArchiveWriteBackendPGPushRejectsDeferredProcessing(t *testing.T) {
+	backend := testLocalArchiveWriteBackend(t)
+	original := coordinateLocalSyncRunner
+	coordinateLocalSyncRunner = func(
+		context.Context,
+		config.Config,
+		*db.DB,
+		bool,
+		syncpkg.ProgressFunc,
+		bool,
+		func() (syncpkg.RebuildOptions, syncpkg.RebuildCleanup, error),
+		func(bool, bool) error,
+	) (bool, syncpkg.SyncStats, error) {
+		return false, syncpkg.SyncStats{Deferred: 1}, nil
+	}
+	t.Cleanup(func() { coordinateLocalSyncRunner = original })
+
+	var err error
+	out := captureStdout(t, func() {
+		_, err = backend.PGPush(
+			t.Context(),
+			pgTargetSelection{PG: config.PGConfig{URL: unreachablePGURL}},
+			PGPushConfig{}, nil, nil,
+		)
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "local sync processing incomplete")
+	assert.NotContains(t, out, "Connecting to PostgreSQL")
+}
+
 func TestRunPGWatchStartupSyncFallsBackAfterAbortedResync(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	missingPath := filepath.Join(t.TempDir(), "missing.jsonl")

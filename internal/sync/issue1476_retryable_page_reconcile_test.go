@@ -188,10 +188,16 @@ func TestSyncWatchBatchThenRunDeferredPathExecutesPlannedRoot(t *testing.T) {
 	}
 	engine := newIssue1476WatchEngine(t, root, provider)
 
+	workCalled := false
 	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{
 		Paths: []string{path}, ReconcileRoots: []string{root},
-	}, nil, nil)
+	}, nil, func() error {
+		workCalled = true
+		return nil
+	})
 	require.Error(t, err)
+	assert.False(t, workCalled,
+		"deferred processing must not run post-sync acknowledgement work")
 	assert.Greater(t, discoverCalls.Load(), int32(0),
 		"producer-marked defer-only paths must allow one planned root phase")
 	var retry interface{ WatchRetryBatch() WatchBatch }

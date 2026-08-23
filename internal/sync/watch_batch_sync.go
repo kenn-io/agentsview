@@ -444,6 +444,9 @@ func (e *Engine) SyncWatchBatchThenRun(
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
+	if !stats.ProcessingComplete() {
+		return stats, nil
+	}
 	e.signalSched.flushAllInline()
 	e.clearCurrentProgress()
 	if work != nil {

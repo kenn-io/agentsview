@@ -397,11 +397,11 @@ func resolveArchiveWriteBackend(
 		return nil, nil, err
 	}
 	return &localArchiveWriteBackend{
-		appCfg:   appCfg,
-		database: database,
-	}, func() {
-		closeWriteDB(database, writeLock)
-	}, nil
+			appCfg:   appCfg,
+			database: database,
+		}, func() {
+			closeWriteDB(database, writeLock)
+		}, nil
 }
 
 type daemonArchiveWriteBackend struct {
@@ -778,7 +778,12 @@ func (b *localArchiveWriteBackend) PGPush(
 	projects []string,
 	excludeProjects []string,
 ) (postgres.PushResult, error) {
-	didResync := runLocalSync(ctx, b.appCfg, b.database, cfg.Full)
+	didResync, err := runLocalSyncAuthoritative(
+		ctx, b.appCfg, b.database, cfg.Full,
+	)
+	if err != nil {
+		return postgres.PushResult{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return postgres.PushResult{}, err
 	}

@@ -563,6 +563,27 @@ func TestSyncThenRunForPushRunnerErrorSkipsPush(t *testing.T) {
 	assert.Contains(t, err.Error(), "resync build reported failed")
 }
 
+func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
+	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
+		context.Context, func(syncpkg.Progress),
+	) (syncpkg.SyncStats, error) {
+		return syncpkg.SyncStats{Deferred: 1}, nil
+	}))
+	engine := f.srv.syncEngineForLocal(f.db)
+	t.Cleanup(engine.Close)
+
+	err := f.srv.syncThenRunForPush(
+		t.Context(), engine, f.db, true, nil, nil,
+		func(bool) error {
+			require.FailNow(t, "push work must not run after deferred worker processing")
+			return nil
+		},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "local sync processing incomplete")
+}
+
 func TestSyncThenRunForPushAppliesCurrentWatchBatchBeforeWork(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	changed := f.writeClaudeSession(t, "proj/changed.jsonl", "scoped daemon push")
