@@ -118,6 +118,30 @@ func TestApplyWatchBatchRunsRootsOnlyForDeferOnlyPathErrors(t *testing.T) {
 	assert.ErrorIs(t, err, classification)
 }
 
+func TestApplyWatchBatchComposesDeferredPathAndRootFailure(t *testing.T) {
+	pathCause := errors.New("deferred path")
+	rootCause := errors.New("root failure")
+	root := filepath.Join(t.TempDir(), "root")
+	syncer := &watchBatchTestSyncer{
+		pathErr: &watchBatchTestError{
+			cause: pathCause, paths: []string{"deferred"}, deferOnly: true,
+		},
+		rootErr: &watchBatchTestError{cause: rootCause, roots: []string{"failed-root"}},
+	}
+	err := ApplyWatchBatch(t.Context(), syncer, WatchBatch{
+		Paths: []string{"changed"}, ReconcileRoots: []string{root}, LostEvents: true,
+	}, nil)
+	require.Error(t, err)
+	assert.Equal(t, 1, syncer.rootCalls)
+	assert.ErrorIs(t, err, pathCause)
+	assert.ErrorIs(t, err, rootCause)
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{
+		Paths: []string{"deferred"}, ReconcileRoots: []string{"failed-root"}, LostEvents: true,
+	}, retry.WatchRetryBatch())
+}
+
 func TestValidateWatchBatchRejectsMalformedScope(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	child := filepath.Join(root, "nested")

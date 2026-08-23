@@ -21,8 +21,12 @@ type issue1476WatchProvider struct {
 	parser.ProviderBase
 	root              string
 	source            parser.SourceRef
+	sourcesByPath     map[string][]parser.SourceRef
 	outcome           parser.ParseOutcome
+	outcomes          map[string]parser.ParseOutcome
 	classificationErr error
+	discoverSource    *parser.SourceRef
+	discoverErr       error
 	discoverCalls     *atomic.Int32
 }
 
@@ -31,21 +35,29 @@ func (p *issue1476WatchProvider) WatchPlan(context.Context) (parser.WatchPlan, e
 }
 
 func (p *issue1476WatchProvider) SourcesForChangedPath(
-	context.Context, parser.ChangedPathRequest,
+	_ context.Context, req parser.ChangedPathRequest,
 ) ([]parser.SourceRef, error) {
 	if p.classificationErr != nil {
 		return nil, p.classificationErr
+	}
+	if sources, ok := p.sourcesByPath[req.Path]; ok {
+		return append([]parser.SourceRef(nil), sources...), nil
 	}
 	return []parser.SourceRef{p.source}, nil
 }
 
 func (p *issue1476WatchProvider) DiscoverEach(
-	context.Context, func(parser.SourceRef) error,
+	_ context.Context, yield func(parser.SourceRef) error,
 ) error {
 	if p.discoverCalls != nil {
 		p.discoverCalls.Add(1)
 	}
-	return nil
+	if p.discoverSource != nil {
+		if err := yield(*p.discoverSource); err != nil {
+			return err
+		}
+	}
+	return p.discoverErr
 }
 
 func (p *issue1476WatchProvider) Fingerprint(
@@ -55,8 +67,11 @@ func (p *issue1476WatchProvider) Fingerprint(
 }
 
 func (p *issue1476WatchProvider) Parse(
-	context.Context, parser.ParseRequest,
+	_ context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
+	if outcome, ok := p.outcomes[req.Source.DisplayPath]; ok {
+		return outcome, nil
+	}
 	return p.outcome, nil
 }
 
@@ -105,6 +120,20 @@ func issue1476DeferredOutcome(path string, agent parser.AgentType) parser.ParseO
 	}
 }
 
+func issue1476CurrentOutcome(path string, agent parser.AgentType) parser.ParseOutcome {
+	started := time.Unix(1704067200, 0)
+	return parser.ParseOutcome{
+		Results: []parser.ParseResultOutcome{{
+			Result: parser.ParseResult{Session: parser.ParsedSession{
+				ID: "root-session", Agent: agent, Project: "project", Machine: "local",
+				StartedAt: started, EndedAt: started, File: parser.FileInfo{Path: path},
+			}},
+			DataVersion: parser.DataVersionCurrent,
+		}},
+		ResultSetComplete: true,
+	}
+}
+
 func issue1476WatchCapabilities() parser.Capabilities {
 	return parser.Capabilities{Source: parser.SourceCapabilities{
 		DiscoverSources:    parser.CapabilitySupported,
@@ -118,15 +147,23 @@ func TestSyncWatchBatchThenRunDeferredPathExecutesPlannedRoot(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "deferred.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	rootPath := filepath.Join(root, "root-session.jsonl")
+	require.NoError(t, os.WriteFile(rootPath, []byte("{}\n"), 0o600))
 	var discoverCalls atomic.Int32
+	rootSource := parser.SourceRef{
+		Provider: parser.AgentCodex, Key: rootPath, DisplayPath: rootPath, FingerprintKey: rootPath,
+	}
 	provider := &issue1476WatchProvider{
 		Def:  parser.AgentDef{Type: parser.AgentCodex, FileBased: true},
 		Caps: issue1476WatchCapabilities(),
 		root: root, source: parser.SourceRef{
 			Provider: parser.AgentCodex, Key: path, DisplayPath: path, FingerprintKey: path,
 		},
-		outcome:       issue1476DeferredOutcome(path, parser.AgentCodex),
-		discoverCalls: &discoverCalls,
+		outcome:        issue1476DeferredOutcome(path, parser.AgentCodex),
+		outcomes:       map[string]parser.ParseOutcome{rootPath: issue1476CurrentOutcome(rootPath, parser.AgentCodex)},
+		sourcesByPath:  map[string][]parser.SourceRef{rootPath: {rootSource}},
+		discoverSource: &rootSource,
+		discoverCalls:  &discoverCalls,
 	}
 	engine := newIssue1476WatchEngine(t, root, provider)
 
@@ -141,6 +178,45 @@ func TestSyncWatchBatchThenRunDeferredPathExecutesPlannedRoot(t *testing.T) {
 	assert.Equal(t, []string{path}, retry.WatchRetryBatch().Paths)
 	assert.Empty(t, retry.WatchRetryBatch().ReconcileRoots,
 		"a successful root must not be retried solely because the path is deferred")
+	stored, dbErr := engine.db.GetSession(t.Context(), "root-session")
+	require.NoError(t, dbErr)
+	require.NotNil(t, stored, "root reconciliation must discover, parse, and write the root session")
+}
+
+func TestSyncWatchBatchThenRunComposesDeferredPathAndRootFailure(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "deferred.jsonl")
+	rootPath := filepath.Join(root, "root-session.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(rootPath, []byte("{}\n"), 0o600))
+	rootSource := parser.SourceRef{
+		Provider: parser.AgentCodex, Key: rootPath, DisplayPath: rootPath, FingerprintKey: rootPath,
+	}
+	rootCause := errors.New("root failure")
+	provider := &issue1476WatchProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{Type: parser.AgentCodex, FileBased: true}, Caps: issue1476WatchCapabilities(),
+		},
+		root: root, source: parser.SourceRef{
+			Provider: parser.AgentCodex, Key: path, DisplayPath: path, FingerprintKey: path,
+		},
+		outcome:        issue1476DeferredOutcome(path, parser.AgentCodex),
+		sourcesByPath:  map[string][]parser.SourceRef{rootPath: {rootSource}},
+		outcomes:       map[string]parser.ParseOutcome{rootPath: issue1476CurrentOutcome(rootPath, parser.AgentCodex)},
+		discoverSource: &rootSource, discoverErr: rootCause,
+	}
+	engine := newIssue1476WatchEngine(t, root, provider)
+
+	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{
+		Paths: []string{path}, ReconcileRoots: []string{root}, LostEvents: true,
+	}, nil, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, rootCause)
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{
+		Paths: []string{path}, ReconcileRoots: []string{root}, LostEvents: true,
+	}, retry.WatchRetryBatch())
 }
 
 func TestSyncWatchBatchThenRunMixedDeferredErrorsSuppressRoots(t *testing.T) {
@@ -206,6 +282,39 @@ func TestSyncWatchBatchThenRunDeferredCancellationSuppressesRoots(t *testing.T) 
 	require.ErrorAs(t, err, &deferOnly)
 	assert.False(t, deferOnly.ReconciliationRetryDeferOnly())
 	assert.Zero(t, discoverCalls.Load(), "deferred cancellation must suppress roots")
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{Paths: []string{path}, ReconcileRoots: []string{root}}, retry.WatchRetryBatch())
+}
+
+func TestSyncWatchBatchThenRunDeferredHardFailureSuppressesRoots(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "deferred.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	var discoverCalls atomic.Int32
+	outcome := issue1476DeferredOutcome(path, parser.AgentCodex)
+	outcome.SourceErrors = []parser.SourceError{{
+		SourceKey: path, SessionID: "hard-source", Err: errors.New("hard source failure"),
+	}}
+	provider := &issue1476WatchProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{Type: parser.AgentCodex, FileBased: true}, Caps: issue1476WatchCapabilities(),
+		},
+		root: root, source: parser.SourceRef{
+			Provider: parser.AgentCodex, Key: path, DisplayPath: path, FingerprintKey: path,
+		},
+		outcome: outcome, discoverCalls: &discoverCalls,
+	}
+	engine := newIssue1476WatchEngine(t, root, provider)
+
+	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{
+		Paths: []string{path}, ReconcileRoots: []string{root},
+	}, nil, nil)
+	require.Error(t, err)
+	var deferOnly interface{ ReconciliationRetryDeferOnly() bool }
+	require.ErrorAs(t, err, &deferOnly)
+	assert.False(t, deferOnly.ReconciliationRetryDeferOnly())
+	assert.Zero(t, discoverCalls.Load(), "deferred plus hard failure must suppress roots")
 	var retry interface{ WatchRetryBatch() WatchBatch }
 	require.ErrorAs(t, err, &retry)
 	assert.Equal(t, WatchBatch{Paths: []string{path}, ReconcileRoots: []string{root}}, retry.WatchRetryBatch())
