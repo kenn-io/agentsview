@@ -3716,7 +3716,7 @@ func TestStartupMaintenanceWaitsForForegroundSyncAndSerializesLaterSyncs(
 	require.NoError(t, <-laterSyncDone)
 }
 
-func TestDeferredStartupPassDoesNotAcknowledgeMaintenance(t *testing.T) {
+func TestDeferredStartupPassDoesNotAcknowledgeReconciliation(t *testing.T) {
 	database := openTestDB(t)
 	engine := NewEngine(database, EngineConfig{
 		Machine:                 "local",
@@ -3727,10 +3727,6 @@ func TestDeferredStartupPassDoesNotAcknowledgeMaintenance(t *testing.T) {
 	engine.RecordStartupReconciled(SyncStats{Deferred: 1}, nil)
 
 	assert.False(t, engine.StartupReconciled())
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancel()
-	err := engine.RunStartupMaintenance(ctx, func() error { return nil })
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestStartupSyncFallbackRunsWhenForegroundSyncNeverArrives(t *testing.T) {

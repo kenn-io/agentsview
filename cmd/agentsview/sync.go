@@ -998,6 +998,9 @@ func coordinateLocalSync(
 		}
 		return didResync, stats, errUnifiedRebuildAborted
 	}
+	if !stats.ProcessingComplete() {
+		return didResync, stats, errors.New("local sync processing incomplete")
+	}
 	return didResync, stats, nil
 }
 

@@ -533,6 +533,9 @@ func (s *Server) runRemoteSyncRequest(
 					},
 				)
 				localStats = &stats
+				if err == nil && !stats.Aborted {
+					err = requireProcessingComplete(stats)
+				}
 				return remotesync.SyncStats{}, err
 			}
 			stats, err := engine.SyncThenRunWithRebuild(
@@ -586,6 +589,9 @@ func (s *Server) runRemoteSyncRequest(
 				},
 			)
 			localStats = &stats
+			if err == nil && !stats.Aborted {
+				err = requireProcessingComplete(stats)
+			}
 			return remotesync.SyncStats{}, err
 		}
 		var coordinatorErr error

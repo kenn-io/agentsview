@@ -3946,7 +3946,7 @@ func (e *Engine) SyncThenRun(
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, err) }()
 	stats, err = e.syncThenRunLocked(ctx, full, onProgress, work)
-	if err == nil && stats.ProcessingComplete() {
+	if err == nil && stats.Deferred == 0 {
 		// Release while syncMu is still held. A timed fallback that was
 		// already waiting on the mutex can then recheck the gate before it
 		// performs any duplicate startup work.
@@ -3979,7 +3979,7 @@ func (e *Engine) syncThenRunLocked(
 	if ctx.Err() != nil {
 		return stats, ctx.Err()
 	}
-	if !stats.ProcessingComplete() {
+	if stats.Deferred > 0 {
 		return stats, nil
 	}
 	// work typically scans and pushes SQLite rows, so flush any
@@ -4042,7 +4042,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 	}()
 	defer e.syncMu.Unlock()
 	defer func() {
-		if retErr == nil && stats.ProcessingComplete() {
+		if retErr == nil && stats.Deferred == 0 {
 			// Match SyncThenRun: successful foreground coordination unblocks
 			// startup backfills while syncMu is still held.
 			e.ReleaseStartupMaintenance()
@@ -4112,7 +4112,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
-	if !stats.ProcessingComplete() {
+	if stats.Deferred > 0 {
 		return stats, nil
 	}
 	e.signalSched.flushAllInline()
@@ -4164,7 +4164,7 @@ func (e *Engine) recordStartupReconciled(
 				"startup discovery incomplete: %d provider failures",
 				stats.providerFailures,
 			)
-		} else if !stats.ProcessingComplete() {
+		} else if stats.Deferred > 0 {
 			e.startupReconciledErr = fmt.Errorf(
 				"startup processing incomplete: %d deferred, %d failed",
 				stats.Deferred, stats.Failed,
@@ -4188,7 +4188,7 @@ func startupReconciliationSucceeded(
 	ctx context.Context, stats SyncStats, err error,
 ) bool {
 	return err == nil && ctx.Err() == nil &&
-		stats.AuthoritativeDiscoveryComplete() && stats.ProcessingComplete()
+		stats.AuthoritativeDiscoveryComplete() && stats.Deferred == 0
 }
 
 // RecordStartupReconciled acknowledges a startup pass performed out of process
@@ -4225,9 +4225,7 @@ func (e *Engine) RecordStartupReconciledExclusive(stats SyncStats, err error) {
 	e.lastSyncStats = stats
 	e.mu.Unlock()
 	e.recordStartupReconciled(context.Background(), stats, err)
-	if stats.ProcessingComplete() || stats.Deferred == 0 {
-		e.ReleaseStartupMaintenance()
-	}
+	e.ReleaseStartupMaintenance()
 }
 
 // FinishStartupReconciled fires the completion tail that the in-process defers

@@ -74,8 +74,8 @@ func requireCompleteProcessing(stats syncpkg.SyncStats) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"remote import processing incomplete: aborted=%t failed=%d",
-		stats.Aborted, stats.Failed,
+		"remote import processing incomplete: aborted=%t failed=%d deferred=%d",
+		stats.Aborted, stats.Failed, stats.Deferred,
 	)
 }
 

@@ -301,6 +301,7 @@ func TestRequireCompleteRejectsDeferredWithoutHardFailure(t *testing.T) {
 	err := requireCompleteProcessing(syncpkg.SyncStats{Deferred: 1})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed=0")
+	assert.Contains(t, err.Error(), "deferred=1")
 }
 
 func TestImporterReturnsPartialStatsWhenOneSourceFails(t *testing.T) {

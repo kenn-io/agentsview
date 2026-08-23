@@ -299,12 +299,14 @@ func (pending *PreparedDeltaImport) Execute(
 	case ctx.Err() != nil:
 		stats.JournalOutcome = JournalCancelled
 		processErr = ctx.Err()
-	case processErr != nil || deltaImportOutcome(engineStats) != JournalRetired:
+	case processErr != nil:
+		stats.JournalOutcome = JournalProcessingFailures
+	case deltaImportOutcome(engineStats) != JournalRetired:
 		stats.JournalOutcome = deltaImportOutcome(engineStats)
 		if processErr == nil {
 			processErr = fmt.Errorf(
-				"remote import processing incomplete: aborted=%t failed=%d",
-				engineStats.Aborted, engineStats.Failed,
+				"remote import processing incomplete: aborted=%t failed=%d deferred=%d",
+				engineStats.Aborted, engineStats.Failed, engineStats.Deferred,
 			)
 		}
 	default:
