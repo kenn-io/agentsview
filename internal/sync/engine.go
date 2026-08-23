@@ -2410,46 +2410,54 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 	ctx context.Context,
 	files []parser.DiscoveredFile,
 ) ([]parser.DiscoveredFile, error) {
-	sessionIDs := make(map[string]struct{})
+	sessionIDs := make(map[parser.AgentType]map[string]struct{})
 	seen := make(map[string]struct{}, len(files))
 	for _, file := range files {
 		seen[string(file.Agent)+"\x00"+file.Path] = struct{}{}
-		if file.Agent != parser.AgentClaude {
+		if !isClaudeFormatTranscriptFile(file) {
 			continue
 		}
 		sessionID := claudeSessionIDFromPath(file.Path)
 		if sessionID == "" {
 			continue
 		}
-		sessionIDs[sessionID] = struct{}{}
+		if sessionIDs[file.Agent] == nil {
+			sessionIDs[file.Agent] = make(map[string]struct{})
+		}
+		sessionIDs[file.Agent][sessionID] = struct{}{}
 	}
 	if len(sessionIDs) == 0 {
 		return files, nil
 	}
 
-	listSessionFiles := e.claudeProjectSessionFiles
-	if listSessionFiles == nil {
-		listSessionFiles = parser.ClaudeProjectSessionFiles
-	}
 	out := files
-	for _, claudeDir := range e.agentDirs[parser.AgentClaude] {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	for agent, ids := range sessionIDs {
+		listSessionFiles := parser.IcodemateCLIProjectSessionFiles
+		if agent == parser.AgentClaude {
+			listSessionFiles = e.claudeProjectSessionFiles
+			if listSessionFiles == nil {
+				listSessionFiles = parser.ClaudeProjectSessionFiles
+			}
 		}
-		for _, candidate := range listSessionFiles(claudeDir) {
+		for _, root := range e.agentDirs[agent] {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			sessionID := claudeSessionIDFromPath(candidate.Path)
-			if _, ok := sessionIDs[sessionID]; !ok {
-				continue
+			for _, candidate := range listSessionFiles(root) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				sessionID := claudeSessionIDFromPath(candidate.Path)
+				if _, ok := ids[sessionID]; !ok {
+					continue
+				}
+				key := string(candidate.Agent) + "\x00" + candidate.Path
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, candidate)
 			}
-			key := string(candidate.Agent) + "\x00" + candidate.Path
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, candidate)
 		}
 	}
 	return out, nil
@@ -2820,14 +2828,25 @@ func (e *Engine) resyncBuildLocked(
 				)
 			}
 		}
-		excludedAgents := []string{
-			string(parser.AgentOpenCode),
-			string(parser.AgentKilo),
-			string(parser.AgentMiMoCode),
-			string(parser.AgentIcodemate),
+		disabledStorage := storageAgentsForDisabledProviders(e.preserveAgents)
+		// A disabled ICodeMate provider discovers nothing, so its CLI JSONL
+		// rows are preserved rather than rediscovered and must leave the
+		// protected count with the container rows.
+		excludedAgents := []db.RebuildAgentExclusion{
+			{Agent: string(parser.AgentOpenCode)},
+			{Agent: string(parser.AgentKilo)},
+			{Agent: string(parser.AgentMiMoCode)},
+			{
+				Agent: string(parser.AgentIcodemate),
+				KeepJSONLRows: !slices.Contains(
+					disabledStorage, parser.AgentIcodemate,
+				),
+			},
 		}
-		for _, agent := range storageAgentsForDisabledProviders(e.preserveAgents) {
-			excludedAgents = append(excludedAgents, string(agent))
+		for _, agent := range disabledStorage {
+			excludedAgents = append(
+				excludedAgents, db.RebuildAgentExclusion{Agent: string(agent)},
+			)
 		}
 		localOldFileSessions, err = origDB.FileBackedSessionCountForRebuildOwner(
 			context.Background(), e.machine, contributorPrefixes, excludedAgents,
@@ -3821,6 +3840,34 @@ func countRootSessionsForAgent(
 	return count
 }
 
+func countIcodemateContainerRootSessions(
+	database *db.DB, machine, idPrefix string, scoped bool,
+) int {
+	machinePredicate := ""
+	args := []any{string(parser.AgentIcodemate)}
+	if scoped {
+		machinePredicate = " AND machine = ?"
+		args = append(args, machine)
+	}
+	if idPrefix != "" {
+		machinePredicate += " AND substr(id, 1, length(?)) = ?"
+		args = append(args, idPrefix, idPrefix)
+	}
+	var count int
+	err := database.Reader().QueryRow(`
+		SELECT COUNT(*) FROM sessions
+		WHERE agent = ?
+		  AND lower(file_path) NOT LIKE '%.jsonl'
+		  AND message_count > 0
+		  AND relationship_type NOT IN ('subagent', 'fork')
+		  AND deleted_at IS NULL
+	`+machinePredicate, args...).Scan(&count)
+	if err != nil {
+		log.Printf("count root ICodeMate container sessions: %v", err)
+	}
+	return count
+}
+
 func storageAgentsForDisabledProviders(
 	disabledProviders []parser.AgentType,
 ) []parser.AgentType {
@@ -3867,13 +3914,24 @@ func protectedFileSessionCount(
 		parser.AgentOpenCode,
 		parser.AgentKilo,
 		parser.AgentMiMoCode,
-		parser.AgentIcodemate,
 	} {
 		count -= countRootSessionsForAgent(
 			database, agent, machine, idPrefix, scoped,
 		)
 	}
 	storageAgents := storageAgentsForDisabledProviders(preserveAgents)
+	if slices.Contains(storageAgents, parser.AgentIcodemate) {
+		// A disabled ICodeMate provider discovers nothing, so its CLI JSONL
+		// rows are preserved rather than rediscovered: subtract every
+		// ICodeMate row, not just the self-preserving container layouts.
+		count -= countRootSessionsForAgent(
+			database, parser.AgentIcodemate, machine, idPrefix, scoped,
+		)
+	} else {
+		count -= countIcodemateContainerRootSessions(
+			database, machine, idPrefix, scoped,
+		)
+	}
 	seenPreserved := make(map[parser.AgentType]struct{}, len(storageAgents))
 	for _, agent := range storageAgents {
 		if _, seen := seenPreserved[agent]; seen {
@@ -5743,28 +5801,63 @@ func (e *Engine) reconciliationCandidate(
 	root := reconciliationWatchRoot(path, watchRoots, roots)
 	preference1, preference2, preference3 := int64(0), int64(0), int64(0)
 	statPath := validatedProviderSourceStatPath(path)
-	if agent == parser.AgentClaude {
-		if info, err := os.Stat(statPath); err == nil {
-			preference1 = info.Size()
-			preference2 = info.ModTime().UnixNano()
-			fullID := applyIDPrefixToID(e.idPrefix, identity)
+	claudeFormat := isClaudeFormatTranscript(agent, path)
+	if claudeFormat {
+		// This mirrors the duplicate-selection policy documented on
+		// claudeFormatTranscriptPreference. Claude ranks size, mtime, then
+		// unchanged-committed-copy; ICodeMate ranks committed-or-longer,
+		// mtime, then size, because its transcripts are rewritten in place
+		// and a larger stale copy must not outrank the committed source.
+		transcriptSize, transcriptMtime, transcriptOK := claudeTranscriptFileSourceInfo(
+			parser.DiscoveredFile{Path: statPath, Agent: agent},
+		)
+		if transcriptOK {
+			if agent == parser.AgentIcodemate {
+				preference2, preference3 = claudeFormatTranscriptPreference(
+					agent, transcriptSize, transcriptMtime,
+				)
+			} else {
+				preference1, preference2 = claudeFormatTranscriptPreference(
+					agent, transcriptSize, transcriptMtime,
+				)
+			}
+			fullID := applyIDPrefixToID(
+				e.idPrefix, claudeFormatArchiveSessionID(agent, identity),
+			)
 			storedPath := e.db.GetSessionFilePath(fullID)
-			storedSize, storedMtime, stored := e.db.GetSessionFileInfo(fullID)
-			if stored && e.effectiveSourcePath(path) == storedPath &&
-				storedSize == info.Size() && storedMtime == info.ModTime().UnixNano() &&
-				e.db.GetSessionDataVersion(fullID) >= db.CurrentDataVersion() {
-				preference3 = 1
+			if agent == parser.AgentIcodemate {
+				preferredAgainstStored := storedPath != "" &&
+					e.effectiveSourcePath(path) == storedPath
+				if !preferredAgainstStored && storedPath != "" {
+					storedTranscriptSize, _, storedTranscriptOK :=
+						claudeTranscriptFileSourceInfo(parser.DiscoveredFile{
+							Path: storedPath, Agent: agent,
+						})
+					preferredAgainstStored = storedTranscriptOK &&
+						transcriptSize > storedTranscriptSize
+				}
+				preference1 = boolPreference(preferredAgainstStored)
+			} else {
+				sourceSize, sourceMtime, sourceOK := claudeFormatFileSourceInfo(
+					parser.DiscoveredFile{Path: statPath, Agent: agent},
+				)
+				storedSize, storedMtime, stored := e.db.GetSessionFileInfo(fullID)
+				if sourceOK && stored && e.effectiveSourcePath(path) == storedPath &&
+					storedSize == sourceSize && storedMtime == sourceMtime &&
+					e.db.GetSessionDataVersion(fullID) >= db.CurrentDataVersion() {
+					preference3 = 1
+				}
 			}
 		}
 	}
 	if isCodexFormatAgent(agent) && codexLayoutForPath(path) == parser.CodexLayoutDated {
 		preference1 = 1
 	}
-	if isOpenCodeFormatAgent(agent) {
+	if isOpenCodeFormatAgent(agent) && !claudeFormat {
 		if statPath == path {
 			preference1 = 1
 		}
-	} else if agent != parser.AgentClaude && !isCodexFormatAgent(agent) {
+	} else if !claudeFormat && !isCodexFormatAgent(agent) {
 		for i, configured := range roots {
 			if samePathOrDescendant(statPath, configured) {
 				preference1 = int64(len(roots) - i)
@@ -5799,11 +5892,11 @@ func boolPreference(value bool) int64 {
 }
 
 func reconciliationSourceIdentity(agent parser.AgentType, source parser.SourceRef) string {
-	if agent == parser.AgentClaude {
-		return claudeSessionIDFromPath(providerDiscoveredPath(source))
+	path := providerDiscoveredPath(source)
+	if isClaudeFormatTranscript(agent, path) {
+		return claudeSessionIDFromPath(path)
 	}
 	if isOpenCodeFormatAgent(agent) {
-		path := providerDiscoveredPath(source)
 		if statPath := validatedProviderSourceStatPath(path); statPath != path {
 			_, sessionID, _ := parser.ParseVirtualSourcePath(path)
 			return sessionID
@@ -6091,9 +6184,13 @@ func aggregateOwnedMemberGone(
 func reconciliationReplacementIdentity(
 	agent parser.AgentType, storedPath string,
 ) string {
+	if isClaudeFormatAgent(agent) {
+		if isClaudeFormatTranscript(agent, storedPath) {
+			return claudeSessionIDFromPath(storedPath)
+		}
+		return ""
+	}
 	switch agent {
-	case parser.AgentClaude:
-		return claudeSessionIDFromPath(storedPath)
 	case parser.AgentCodex, parser.AgentTraeX:
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(storedPath))
 		if uuid == "" {
@@ -6772,7 +6869,7 @@ func (e *Engine) reconcileCopiedSourceMissingMembers(
 		ownerships = append(ownerships, db.SessionSourceOwnership{
 			ID:       member.sessionID,
 			Machine:  member.machine,
-			Agent:    string(parser.AgentClaude),
+			Agent:    string(member.agent),
 			FilePath: member.filePath,
 		})
 	}
@@ -6787,10 +6884,10 @@ func (e *Engine) reconcileCopiedSourceMissingMembers(
 	for i, member := range members {
 		e.clearSkipInMemory(member.filePath)
 		e.clearSkipInMemory(providerAgentSkipCacheKey(
-			member.filePath, parser.AgentClaude,
+			member.filePath, member.agent,
 		))
 		if err := target.DeleteProviderStatHash(
-			ctx, parser.AgentClaude, member.filePath,
+			ctx, member.agent, member.filePath,
 		); err != nil {
 			return tombstoned, fmt.Errorf(
 				"clear copied source freshness for %s: %w",
@@ -6798,7 +6895,7 @@ func (e *Engine) reconcileCopiedSourceMissingMembers(
 			)
 		}
 		changed, err := target.SoftDeleteSessionSourceOwnership(
-			ctx, member.machine, string(parser.AgentClaude),
+			ctx, member.machine, string(member.agent),
 			member.sessionID, member.filePath,
 		)
 		if err != nil {
@@ -6809,7 +6906,7 @@ func (e *Engine) reconcileCopiedSourceMissingMembers(
 		}
 		if changed {
 			tombstoned++
-			e.invalidateVerifiedSource(parser.AgentClaude, member.filePath)
+			e.invalidateVerifiedSource(member.agent, member.filePath)
 			continue
 		}
 		needsBaseline = append(needsBaseline, ownerships[i])
@@ -7139,7 +7236,7 @@ func (e *Engine) syncAllLocked(
 
 	nonContainerDiscovered := 0
 	for _, f := range all {
-		if !isOpenCodeFormatStorageAgent(f.Agent) {
+		if !isOpenCodeFormatContainerSource(f.Agent, f.Path) {
 			nonContainerDiscovered++
 		}
 	}
@@ -7448,6 +7545,8 @@ func (e *Engine) discoverProviderSources(
 				discovered.SourceSize = s3.Size
 				discovered.SourceMtime = s3.MtimeNS
 				discovered.SourceFingerprint = s3.Fingerprint
+				discovered.TranscriptSize = s3.TranscriptSize
+				discovered.TranscriptMtime = s3.TranscriptMtimeNS
 				discovered.ProviderProcess = false
 				if discovered.Project == "" {
 					discovered.Project = s3.Project
@@ -7786,6 +7885,19 @@ func (e *Engine) filterFilesByMtime(
 			out = append(out, f)
 			continue
 		}
+		if usesCompositeSidecarFreshness(f.Agent, f.Path) {
+			rawSessionID := claudeSessionIDFromPath(f.Path)
+			sessionID := applyIDPrefixToID(
+				e.idPrefix,
+				claudeFormatArchiveSessionID(f.Agent, rawSessionID),
+			)
+			if e.icodemateCLIDeletedCompanionMtime(
+				sessionID, f.Path, mtime,
+			) >= cutoffNs {
+				out = append(out, f)
+				continue
+			}
+		}
 		if f.Agent != parser.AgentCodex {
 			continue
 		}
@@ -7820,6 +7932,33 @@ func (e *Engine) filterFilesByMtime(
 		out = append(out, pickPreferredCodexDiscoveredFile(e.db, candidates))
 	}
 	return out
+}
+
+// icodemateCLIDeletedCompanionMtime recovers the project-directory deletion
+// signal only when the committed source metadata proves that the now-missing
+// per-session directory contributed to the last fingerprint. This avoids
+// making unrelated sibling-session changes refresh every CLI transcript.
+func (e *Engine) icodemateCLIDeletedCompanionMtime(
+	sessionID, path string, currentMtime int64,
+) int64 {
+	transcriptInfo, err := os.Stat(path)
+	if err != nil {
+		return currentMtime
+	}
+	companionDir := strings.TrimSuffix(path, filepath.Ext(path))
+	if _, err := os.Stat(companionDir); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return currentMtime
+	}
+	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(sessionID)
+	if !ok || (storedSize == transcriptInfo.Size() &&
+		storedMtime == transcriptInfo.ModTime().UnixNano()) {
+		return currentMtime
+	}
+	projectInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		return currentMtime
+	}
+	return max(currentMtime, projectInfo.ModTime().UnixNano())
 }
 
 // codebuffCompositeMtime returns a composite freshness timestamp for a
@@ -7964,6 +8103,13 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	if file.Agent == parser.AgentCodebuff || file.Agent == parser.AgentFreebuff {
 		return codebuffCompositeMtime(file.Path)
 	}
+	// ICodeMate CLI fingerprints hash transcript and sidecar contents. The
+	// incremental cutoff needs only their stat metadata, including sidecar
+	// directory mtimes so deletions remain visible without hashing every
+	// unchanged transcript during each polling pass.
+	if usesCompositeSidecarFreshness(file.Agent, file.Path) {
+		return parser.ClaudeLayoutCompositeMtime(file.Path)
+	}
 	// Watermark-only shared-container sources carry their session-row
 	// watermark from discovery. Consulting the provider Fingerprint instead
 	// would resolve the full composite with one indexed child lookup per
@@ -8039,14 +8185,7 @@ func discoveredFileMtime(
 		if file.SourceMtime != 0 {
 			return file.SourceMtime, nil
 		}
-		stat := statS3Object
-		switch file.Agent {
-		case parser.AgentClaude:
-			stat = statClaudeS3Session
-		case parser.AgentCodex:
-			stat = statCodexS3Session
-		}
-		obj, err := stat(file.Path)
+		obj, err := statS3SourceObject(file)
 		if err != nil {
 			return 0, err
 		}
@@ -8156,7 +8295,7 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 	byKey := make(map[string][]parser.DiscoveredFile)
 	sessionIDByKey := make(map[string]string)
 	for _, file := range files {
-		if file.Agent != parser.AgentClaude {
+		if !isClaudeFormatTranscriptFile(file) {
 			continue
 		}
 		sessionID := claudeSessionIDFromPath(file.Path)
@@ -8181,7 +8320,7 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 	out := files[:0]
 	seen := make(map[string]struct{}, len(preferred))
 	for _, file := range files {
-		if file.Agent != parser.AgentClaude {
+		if !isClaudeFormatTranscriptFile(file) {
 			out = append(out, file)
 			continue
 		}
@@ -8203,7 +8342,53 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 func claudeDiscoveredFileKey(
 	file parser.DiscoveredFile, sessionID string,
 ) string {
-	return discoveredFileIDPrefix(file) + "\x00" + sessionID
+	return string(file.Agent) + "\x00" + discoveredFileIDPrefix(file) + "\x00" + sessionID
+}
+
+// isClaudeFormatAgent reports whether an agent stores sessions as Claude
+// projects-layout JSONL transcripts parsed by the shared Claude DAG pipeline.
+// Like isCodexFormatAgent for TraeX, it gates the format-shaped branches
+// (duplicate expansion and dedup, reconciliation identity, atomic
+// multi-session DAG completion, S3 transcript stat and hydration) so the
+// ICodeMate terminal CLI gets the same handling as Claude. Branches tied to
+// Claude's legacy archive semantics (stale-fork-only cleanup) or to
+// ICodeMate's sidecar-composite freshness stay keyed to the concrete agent.
+// OpenClaude also stores this layout but parses linearly to one session per
+// file, so it stays outside this set.
+func isClaudeFormatAgent(agent parser.AgentType) bool {
+	return agent == parser.AgentClaude || agent == parser.AgentIcodemate
+}
+
+func isClaudeFormatTranscriptFile(file parser.DiscoveredFile) bool {
+	return isClaudeFormatTranscript(file.Agent, file.Path)
+}
+
+// isClaudeFormatTranscript additionally requires a session-bearing .jsonl
+// path. For ICodeMate this distinguishes CLI transcripts from the agent's
+// OpenCode-storage family, which shares the same agent label.
+func isClaudeFormatTranscript(agent parser.AgentType, path string) bool {
+	return isClaudeFormatAgent(agent) && claudeSessionIDFromPath(path) != ""
+}
+
+// claudeFormatArchiveSessionID maps a raw filename-derived session ID into
+// the owning agent's archive namespace using its registry ID prefix
+// (empty for Claude, "icodemate:" for ICodeMate).
+func claudeFormatArchiveSessionID(agent parser.AgentType, rawSessionID string) string {
+	def, ok := parser.AgentByType(agent)
+	if !ok || def.IDPrefix == "" {
+		return rawSessionID
+	}
+	return def.IDPrefix + strings.TrimPrefix(rawSessionID, def.IDPrefix)
+}
+
+// usesCompositeSidecarFreshness reports whether a source's freshness signals
+// (effective mtime, duplicate-selection stat, polling cutoff) must include
+// persisted tool-result sidecars. Only ICodeMate CLI transcripts opt in:
+// Claude keeps plain-file freshness because its stored fingerprints hash only
+// the transcript, and switching would invalidate every archived Claude
+// fingerprint.
+func usesCompositeSidecarFreshness(agent parser.AgentType, path string) bool {
+	return agent == parser.AgentIcodemate && isClaudeFormatTranscript(agent, path)
 }
 
 func claudeSessionIDFromPath(path string) string {
@@ -8226,14 +8411,22 @@ func (e *Engine) pickPreferredClaudeDiscoveredFile(
 	if isS3SourcePath(candidates[0].Path) {
 		idPrefix = s3SessionIDPrefix(candidates[0].Machine)
 	}
-	fullID := applyIDPrefixToID(idPrefix, sessionID)
+	fullID := applyIDPrefixToID(
+		idPrefix, claudeFormatArchiveSessionID(candidates[0].Agent, sessionID),
+	)
 	storedPath := e.db.GetSessionFilePath(fullID)
 	if storedPath != "" {
 		for _, candidate := range candidates {
 			if e.effectiveSourcePath(candidate.Path) != storedPath {
 				continue
 			}
-			if e.claudeSourceMatchesStored(fullID, candidate) {
+			// Per the claudeFormatTranscriptPreference policy: ICodeMate's
+			// committed copy stays preferred even when its composite sidecar
+			// metadata moved, while Claude's committed copy must still match
+			// the stored stat. Either way a competitor wins only with strict
+			// transcript append progress.
+			if candidate.Agent == parser.AgentIcodemate ||
+				e.claudeSourceMatchesStored(fullID, candidate) {
 				best := candidate
 				for _, competing := range candidates {
 					if e.effectiveSourcePath(competing.Path) == storedPath ||
@@ -8261,7 +8454,7 @@ func (e *Engine) pickPreferredClaudeDiscoveredFile(
 func (e *Engine) claudeSourceMatchesStored(
 	sessionID string, file parser.DiscoveredFile,
 ) bool {
-	size, mtime, ok := claudeDiscoveredFileSourceInfo(file)
+	size, mtime, ok := claudeFormatFileSourceInfo(file)
 	if !ok {
 		return false
 	}
@@ -8291,8 +8484,8 @@ func (e *Engine) effectiveSourcePath(path string) string {
 func claudeCandidateHasAppendProgress(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	candidateSize, _, candidateOK := claudeDiscoveredFileSourceInfo(candidate)
-	currentSize, _, currentOK := claudeDiscoveredFileSourceInfo(current)
+	candidateSize, _, candidateOK := claudeTranscriptFileSourceInfo(candidate)
+	currentSize, _, currentOK := claudeTranscriptFileSourceInfo(current)
 	if !candidateOK || !currentOK {
 		return false
 	}
@@ -8302,36 +8495,94 @@ func claudeCandidateHasAppendProgress(
 func preferClaudeDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	candidateSize, candidateMtime, candidateOK := claudeDiscoveredFileSourceInfo(candidate)
-	currentSize, currentMtime, currentOK := claudeDiscoveredFileSourceInfo(current)
+	candidateSize, candidateMtime, candidateOK := claudeTranscriptFileSourceInfo(candidate)
+	currentSize, currentMtime, currentOK := claudeTranscriptFileSourceInfo(current)
 	switch {
 	case candidateOK && !currentOK:
 		return true
 	case !candidateOK && currentOK:
 		return false
 	case candidateOK && currentOK:
-		if candidateSize != currentSize {
-			return candidateSize > currentSize
+		candidatePrimary, candidateSecondary := claudeFormatTranscriptPreference(
+			candidate.Agent, candidateSize, candidateMtime,
+		)
+		currentPrimary, currentSecondary := claudeFormatTranscriptPreference(
+			current.Agent, currentSize, currentMtime,
+		)
+		if candidatePrimary != currentPrimary {
+			return candidatePrimary > currentPrimary
 		}
-		if candidateMtime != currentMtime {
-			return candidateMtime > currentMtime
+		if candidateSecondary != currentSecondary {
+			return candidateSecondary > currentSecondary
 		}
 	}
 	return candidate.Path < current.Path
 }
 
-func claudeDiscoveredFileSourceInfo(
+// claudeFormatTranscriptPreference orders same-session duplicate transcripts
+// across configured roots. The policy per agent:
+//
+// Claude transcripts are append-only, so a larger copy is strictly newer
+// work: rank size first, mtime second. The committed stored copy wins only
+// while its stat still matches the stored metadata (an unchanged committed
+// copy); see pickPreferredClaudeDiscoveredFile.
+//
+// ICodeMate CLI transcripts are rewritten in place (ForceReplace parses), so
+// size is not progress: a legitimately shortened rewrite must beat a larger
+// stale copy. The committed stored path stays preferred unless a competing
+// copy shows strict transcript append progress (a continued session moved to
+// another root); among uncommitted copies, mtime ranks first and size breaks
+// ties. Only transcript bytes participate — sidecar composites are reserved
+// for freshness, not duplicate ranking, so bulky tool results cannot outrank
+// a newer transcript.
+func claudeFormatTranscriptPreference(
+	agent parser.AgentType, size, mtime int64,
+) (primary, secondary int64) {
+	if agent == parser.AgentIcodemate {
+		return mtime, size
+	}
+	return size, mtime
+}
+
+func claudeTranscriptFileSourceInfo(
+	file parser.DiscoveredFile,
+) (size, mtime int64, ok bool) {
+	if isS3SourcePath(file.Path) {
+		if file.TranscriptMtime != 0 {
+			return file.TranscriptSize, file.TranscriptMtime, true
+		}
+		obj, err := statS3Object(file.Path)
+		if err != nil {
+			return 0, 0, false
+		}
+		return obj.Size, obj.LastModified.UnixNano(), true
+	}
+	info, err := os.Stat(file.Path)
+	if err != nil {
+		return 0, 0, false
+	}
+	return info.Size(), info.ModTime().UnixNano(), true
+}
+
+func claudeFormatFileSourceInfo(
 	file parser.DiscoveredFile,
 ) (size, mtime int64, ok bool) {
 	if isS3SourcePath(file.Path) {
 		if file.SourceMtime != 0 {
 			return file.SourceSize, file.SourceMtime, true
 		}
-		obj, err := statClaudeS3Session(file.Path)
+		obj, err := statS3SourceObject(parser.DiscoveredFile{
+			Agent: parser.AgentClaude,
+			Path:  file.Path,
+		})
 		if err != nil {
 			return 0, 0, false
 		}
 		return obj.Size, obj.LastModified.UnixNano(), true
+	}
+	if usesCompositeSidecarFreshness(file.Agent, file.Path) {
+		size, mtime, err := parser.ClaudeLayoutCompositeFileInfo(file.Path)
+		return size, mtime, err == nil
 	}
 	info, err := os.Stat(file.Path)
 	if err != nil {
@@ -9384,9 +9635,11 @@ func (e *Engine) collectAndBatchWithOptions(
 			r.releaseRetention()
 			continue
 		}
-		claudeDAG := r.agent == parser.AgentClaude && len(r.results) > 1
+		atomicDAG := sourceRequiresAtomicDAGCompletion(
+			r.agent, len(r.results),
+		)
 		var sourceCompletionSkipped map[string]bool
-		if claudeDAG {
+		if atomicDAG {
 			activeResultIDs, skipped :=
 				e.partitionIntentionalSourceSkips(resultIDs)
 			sourceCompletionSkipped = skipped
@@ -9395,7 +9648,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				activeResultIDs, staleVersion,
 			); err != nil {
 				e.clearProviderSourceFreshness(ctx, r.providerStatHash)
-				log.Printf("stage Claude source data versions: %v", err)
+				log.Printf("stage DAG source data versions: %v", err)
 				stats.RecordFailed()
 				e.noteSQLiteContainerResult(r.path, false)
 				r.releaseRetention()
@@ -9580,7 +9833,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sess:                    pr.Session,
 					msgs:                    pr.Messages,
 					usageEvents:             pr.UsageEvents,
-					needsRetry:              sessionNeedsRetry || claudeDAG,
+					needsRetry:              sessionNeedsRetry || atomicDAG,
 					forceReplace:            r.forceReplace,
 					baselineEligible:        !sourceNeedsRetry,
 					storageTrustPath:        r.storageTrustPath,
@@ -9591,19 +9844,19 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceCwdStoredOK:       r.sourceCwdStoredOK,
 					sourceCompletionSkipped: sourceCompletionSkipped[applyIDPrefixToID(e.idPrefix, pr.Session.ID)],
 				}
-				if i == 0 &&
-					(r.agent == parser.AgentClaude || r.providerStatHash != nil) {
-					// Claude can emit several DAG branches from one transcript.
+				if i == 0 && (atomicDAG || r.providerStatHash != nil) {
+					// Claude-compatible providers can emit several DAG branches
+					// from one transcript.
 					// Carry their contiguous write count so the flush can make
 					// one source-level completion decision. Other digest-backed
 					// providers currently emit one result per source.
 					pw.sourceWriteCount = 1
-					if r.agent == parser.AgentClaude {
+					if atomicDAG {
 						pw.sourceWriteCount = len(allowed)
 					}
 					pw.providerStatHash = r.providerStatHash
 					pw.sourceCompletionEligible = !sourceNeedsRetry
-					pw.promoteSourceOnComplete = claudeDAG
+					pw.promoteSourceOnComplete = atomicDAG
 				}
 				pending = append(pending, pw)
 				if runtimeMetrics != nil {
@@ -9944,6 +10197,7 @@ type sourceMissingMember struct {
 	sessionID string
 	filePath  string
 	machine   string
+	agent     parser.AgentType
 }
 
 type processResult struct {
@@ -10073,17 +10327,24 @@ func (e *Engine) processFile(
 
 	// Every registered agent is provider-authoritative, so processProviderFile
 	// owns all local-file processing. The only sources that fall through are
-	// s3:// Claude/Codex objects, which bypass the provider (its source sets
-	// read local files) and use the legacy S3 sync path. Anything else is an
-	// unrecognized agent type.
+	// s3:// objects for providers that declare S3Discovery, which bypass the
+	// provider (its source sets read local files) and use the dedicated S3
+	// sync path. Anything else is an unrecognized agent type.
 	if !strings.HasPrefix(file.Path, "s3://") {
 		return processResult{
 			err: fmt.Errorf("unknown agent type: %s", file.Agent),
 		}
 	}
 
+	s3Provider, ok := s3ProviderFor(file.Agent)
+	if !ok {
+		return processResult{
+			err: fmt.Errorf("unsupported s3 agent type: %s", file.Agent),
+		}
+	}
+
 	if file.SourceMtime == 0 {
-		obj, err := statS3SourceObject(file)
+		obj, err := statS3SourceObjectWithProvider(file, s3Provider)
 		if err != nil {
 			return processResult{
 				err: fmt.Errorf("stat %s: %w", file.Path, err),
@@ -10123,15 +10384,7 @@ func (e *Engine) processFile(
 		}
 	}
 
-	var res processResult
-	switch file.Agent {
-	case parser.AgentClaude, parser.AgentCodex:
-		res = e.processS3Session(ctx, file, info)
-	default:
-		res = processResult{
-			err: fmt.Errorf("unsupported s3 agent type: %s", file.Agent),
-		}
-	}
+	var res = e.processS3Session(ctx, file, info, s3Provider)
 	res.cacheSkip = cacheSkip
 	res.mtime = mtime
 	res.sourceFingerprint = sourceFingerprint
@@ -10280,7 +10533,7 @@ func (e *Engine) processProviderFile(
 		return processResult{}, false
 	}
 	// S3 sources are not provider-owned: the provider source sets read local
-	// files, so s3:// paths use the legacy S3 sync path (processS3Session),
+	// files, so s3:// paths use the dedicated S3 sync path (processS3Session),
 	// which handles object fetch, fingerprinting, and per-agent skip logic.
 	if strings.HasPrefix(file.Path, "s3://") {
 		return processResult{}, false
@@ -10733,10 +10986,11 @@ func (e *Engine) processProviderFile(
 		}
 	}
 	outcome, err := provider.Parse(ctx, parser.ParseRequest{
-		Source:      source,
-		Fingerprint: fingerprint,
-		Machine:     machine,
-		ForceParse:  e.forceParseRequested(file),
+		Source:             source,
+		Fingerprint:        fingerprint,
+		Machine:            machine,
+		ForceParse:         e.forceParseRequested(file),
+		StoredPathResolver: e.storedPathResolver,
 	})
 	if err != nil {
 		if !e.forceParse {
@@ -10869,6 +11123,23 @@ func (e *Engine) processProviderFile(
 		missingMembers, err =
 			e.providerSourceMissingSessionOwnershipsForCompleteResult(
 				ctx, provider, source, parsedResults,
+			)
+		if err != nil {
+			return processResult{
+				err:            err,
+				mtime:          fingerprint.MTimeNS,
+				cacheSkip:      cacheSkip,
+				cacheKey:       cacheKey,
+				noCacheSkip:    true,
+				retentionLease: lease,
+			}, true
+		}
+	} else if file.Agent == parser.AgentIcodemate && outcome.ForceReplace &&
+		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
+		missingMembers, err =
+			e.completeMultiSessionSourceMissingMembers(
+				ctx, file.Agent, file.Path,
+				outcome.ExcludedSessionIDs, parsedResults,
 			)
 		if err != nil {
 			return processResult{
@@ -11102,6 +11373,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 			members = append(members, sourceMissingMember{
 				sessionID: id,
 				filePath:  sourcePath,
+				agent:     agent,
 				machine: e.machineForProviderSource(
 					agent, source, sourcePath,
 				),
@@ -11150,6 +11422,109 @@ func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
 		missing = append(missing, member)
 	}
 	return missing, nil
+}
+
+// completeMultiSessionSourceMissingMembers lists active sessions under an
+// exact source path that a complete authoritative parse did not emit. This is
+// used by new multi-session providers whose current parser owns the complete
+// membership set, unlike Claude's separate legacy-only stale-fork cleanup.
+func (e *Engine) completeMultiSessionSourceMissingMembers(
+	ctx context.Context,
+	agent parser.AgentType,
+	sourcePath string,
+	excludedSessionIDs []string,
+	results []parser.ParseResult,
+) ([]sourceMissingMember, error) {
+	type membershipReader interface {
+		ListSessionWriteIdentitiesByID(
+			context.Context, []string,
+		) (map[string]db.SessionWriteIdentity, error)
+		ListSessionIDsByFilePath(string, string) ([]string, error)
+		ListSessionMachinesByID(
+			context.Context, []string,
+		) (map[string]string, error)
+	}
+	reader := membershipReader(e.db)
+	if e.archiveStore != nil {
+		archived, ok := e.archiveStore.(membershipReader)
+		if !ok {
+			return nil, fmt.Errorf(
+				"archive %T does not support %s source membership lookup",
+				e.archiveStore, agent,
+			)
+		}
+		reader = archived
+	}
+	present := make(map[string]struct{}, len(results)+len(excludedSessionIDs))
+	paths := make(map[string]struct{}, 1)
+	emittedIDs := make([]string, 0, len(results))
+	for _, result := range results {
+		if id := applyIDPrefixToID(e.idPrefix, result.Session.ID); id != "" {
+			present[id] = struct{}{}
+			emittedIDs = append(emittedIDs, id)
+		}
+		path := result.Session.File.Path
+		if path == "" {
+			continue
+		}
+		if e.pathRewriter != nil {
+			path = e.pathRewriter(path)
+		}
+		paths[path] = struct{}{}
+	}
+	if len(paths) == 0 && sourcePath != "" {
+		paths[e.effectiveSourcePath(sourcePath)] = struct{}{}
+	}
+	storedIdentities, err := reader.ListSessionWriteIdentitiesByID(ctx, emittedIDs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list stored %s source identities: %w", agent, err,
+		)
+	}
+	for _, identity := range storedIdentities {
+		if identity.Agent == string(agent) && identity.FilePath != "" {
+			paths[identity.FilePath] = struct{}{}
+		}
+	}
+	for _, id := range e.applyIDPrefixToSessionIDs(excludedSessionIDs) {
+		present[id] = struct{}{}
+	}
+
+	var members []sourceMissingMember
+	var sessionIDs []string
+	for path := range paths {
+		storedIDs, err := reader.ListSessionIDsByFilePath(path, string(agent))
+		if err != nil {
+			return nil, fmt.Errorf(
+				"list %s sessions for complete source %s: %w",
+				agent, path, err,
+			)
+		}
+		for _, id := range storedIDs {
+			if _, ok := present[id]; ok {
+				continue
+			}
+			members = append(members, sourceMissingMember{
+				sessionID: id,
+				filePath:  path,
+				agent:     agent,
+			})
+			sessionIDs = append(sessionIDs, id)
+		}
+	}
+	if len(members) == 0 {
+		return nil, nil
+	}
+	storedMachines, err := reader.ListSessionMachinesByID(ctx, sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list stored %s session machines: %w", agent, err,
+		)
+	}
+	for i := range members {
+		members[i].machine = storedMachines[members[i].sessionID]
+	}
+	return members, nil
 }
 
 // claudeSourceMissingSessionOwnershipsForCompleteResult lists stored active
@@ -11213,6 +11588,7 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 			members = append(members, sourceMissingMember{
 				sessionID: id,
 				filePath:  path,
+				agent:     parser.AgentClaude,
 			})
 			sessionIDs = append(sessionIDs, id)
 		}
@@ -11275,6 +11651,7 @@ func (index *archiveStaleClaudeForkIndex) missingMembers(
 				sessionID: ownership.ID,
 				filePath:  path,
 				machine:   ownership.Machine,
+				agent:     parser.AgentClaude,
 			})
 		}
 	}
@@ -17180,6 +17557,11 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	if !isOpenCodeFormatStorageAgent(agent) {
 		return false
 	}
+	// An ICodeMate CLI transcript is a plain rewritable file, never a
+	// self-preserving OpenCode container.
+	if isClaudeFormatTranscript(agent, path) {
+		return false
+	}
 	store := e.archiveStore
 	if store == nil {
 		store = e.db
@@ -17196,6 +17578,14 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	storedHasStorageFingerprint := hasOpenCodeFormatStorageFingerprint(
 		agent, storedHash,
 	)
+	currentIsOpenCodeStorage := isOpenCodeFormatStoragePath(agent, path) ||
+		isOpenCodeFormatSQLiteVirtualPath(agent, path)
+	storedIsOpenCodeStorage := isOpenCodeFormatStoragePath(agent, storedPath) ||
+		isOpenCodeFormatSQLiteVirtualPath(agent, storedPath) ||
+		(storedPath == "" && storedHasStorageFingerprint)
+	if !currentIsOpenCodeStorage && !storedIsOpenCodeStorage {
+		return false
+	}
 	storedIsSQLiteVirtual := isOpenCodeFormatSQLiteVirtualPath(
 		agent, storedPath,
 	)
@@ -17328,6 +17718,14 @@ func isOpenCodeFormatStoragePath(
 ) bool {
 	return strings.HasSuffix(path, ".json") &&
 		!isOpenCodeFormatSQLiteVirtualPath(agent, path)
+}
+
+func isOpenCodeFormatContainerSource(
+	agent parser.AgentType, path string,
+) bool {
+	return isOpenCodeFormatStorageAgent(agent) &&
+		(isOpenCodeFormatStoragePath(agent, path) ||
+			isOpenCodeFormatSQLiteVirtualPath(agent, path))
 }
 
 func isOpenCodeFormatSQLiteVirtualPath(
@@ -18024,24 +18422,24 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	host, rawID := parser.StripHostPrefix(sessionID)
 	if host != "" {
 		if fp := e.db.GetSessionFilePath(sessionID); isS3SourcePath(fp) {
-			stat := statS3Object
-			if def, ok := parser.AgentByPrefix(sessionID); ok &&
-				def.Type == parser.AgentClaude {
-				stat = statClaudeS3Session
-			} else if ok && def.Type == parser.AgentCodex {
-				stat = statCodexS3Session
-			}
+			agent := parser.AgentType("")
 			if sess, err := e.db.GetSession(
 				context.Background(), sessionID,
 			); err == nil && sess != nil {
-				switch sess.Agent {
-				case string(parser.AgentClaude):
-					stat = statClaudeS3Session
-				case string(parser.AgentCodex):
-					stat = statCodexS3Session
+				agent = parser.AgentType(sess.Agent)
+			}
+			if agent == "" {
+				if def, ok := parser.AgentByPrefix(sessionID); ok {
+					agent = def.Type
 				}
 			}
-			obj, err := stat(fp)
+			if agent == "" {
+				return 0
+			}
+			obj, err := statS3SourceObject(parser.DiscoveredFile{
+				Agent: agent,
+				Path:  fp,
+			})
 			if err != nil {
 				return 0
 			}
@@ -18082,20 +18480,23 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		}
 	}
 	if isS3SourcePath(path) {
-		stat := statS3Object
-		switch def.Type {
-		case parser.AgentClaude:
-			stat = statClaudeS3Session
-		case parser.AgentCodex:
-			stat = statCodexS3Session
-		}
-		obj, err := stat(path)
+		obj, err := statS3SourceObject(parser.DiscoveredFile{
+			Agent: def.Type,
+			Path:  path,
+		})
 		if err != nil {
 			return 0
 		}
 		return obj.LastModified.UnixNano()
 	}
 
+	if usesCompositeSidecarFreshness(def.Type, path) {
+		mtime, err := parser.ClaudeLayoutCompositeMtime(path)
+		if err != nil {
+			return 0
+		}
+		return mtime
+	}
 	if isOpenCodeFormatStorageAgent(def.Type) {
 		mtime, err := openCodeFormatSourceMtime(def.Type, path)
 		if err != nil {
@@ -18612,9 +19013,11 @@ func (e *Engine) processAndWriteSessionFile(
 			"queue subagent parent repairs: %w", err,
 		)
 	}
-	claudeDAG := file.Agent == parser.AgentClaude && len(res.results) > 1
+	atomicDAG := sourceRequiresAtomicDAGCompletion(
+		file.Agent, len(res.results),
+	)
 	var sourceCompletionSkipped map[string]bool
-	if claudeDAG {
+	if atomicDAG {
 		activeResultIDs, skipped :=
 			e.partitionIntentionalSourceSkips(resultIDs)
 		sourceCompletionSkipped = skipped
@@ -18754,7 +19157,7 @@ func (e *Engine) processAndWriteSessionFile(
 			sess:                pr.Session,
 			msgs:                pr.Messages,
 			usageEvents:         pr.UsageEvents,
-			needsRetry:          sessionNeedsRetry || claudeDAG,
+			needsRetry:          sessionNeedsRetry || atomicDAG,
 			forceReplace:        res.forceReplace,
 			sourceCwdResolution: res.sourceCwdResolution,
 			sourceCwdStored:     res.sourceCwdStored,
@@ -18813,7 +19216,7 @@ func (e *Engine) processAndWriteSessionFile(
 	// A source-level digest is valid only when every active result and its
 	// hierarchy links commit without retry state or archive preservation.
 	// User-excluded and trashed members are resolved without writes; the other
-	// Claude DAG members stay stale until the source-level decision succeeds.
+	// DAG members stay stale until the source-level decision succeeds.
 	sourceComplete := resolved == len(res.results) &&
 		!preserved && !sourceNeedsRetry
 	if !sourceComplete {
@@ -18825,13 +19228,13 @@ func (e *Engine) processAndWriteSessionFile(
 			"link changed subagent sessions: %w", err,
 		)
 	}
-	if sourceComplete && claudeDAG {
+	if sourceComplete && atomicDAG {
 		if err := e.db.SetSessionDataVersions(
 			writtenIDs, db.CurrentDataVersion(),
 		); err != nil {
 			markSourceIncomplete()
 			return false, sessionsChanged, fmt.Errorf(
-				"complete Claude source data versions: %w", err,
+				"complete DAG source data versions: %w", err,
 			)
 		}
 	}
@@ -18840,6 +19243,15 @@ func (e *Engine) processAndWriteSessionFile(
 	}
 
 	return preserved, sessionsChanged, nil
+}
+
+func sourceRequiresAtomicDAGCompletion(
+	agent parser.AgentType, resultCount int,
+) bool {
+	if resultCount <= 1 {
+		return false
+	}
+	return isClaudeFormatAgent(agent)
 }
 
 func (e *Engine) applyWorktreeMappingToSingleSession(

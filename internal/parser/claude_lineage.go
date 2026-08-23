@@ -73,16 +73,19 @@ var (
 	claudeSniffCache = map[string]claudeSniffCacheEntry{}
 )
 
-// claudeParseOptions gates opt-in parse behaviors that only the local
-// Claude provider enables. Uploads, Cowork, and Qoder reuse the Claude
-// parse body and must keep every option off.
+// claudeParseOptions gates opt-in parse behaviors for providers that reuse the
+// Claude transcript pipeline.
 type claudeParseOptions struct {
-	ctx context.Context
+	ctx                         context.Context
+	persistedOutputPathResolver func(string) (string, bool)
 	// siblingLineage enables background-fork lineage resolution
 	// against sibling transcripts in the same directory.
 	siblingLineage bool
 	// uploadIdentity enables adoption of explicit rooted transcript IDs.
 	uploadIdentity bool
+	// compatibleTitleEvents enables the sessionName, custom-title, and
+	// ai-title fields written by compatible transcript producers.
+	compatibleTitleEvents bool
 }
 
 // claudeLineagePlan describes an established fork lineage: the leading

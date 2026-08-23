@@ -13,6 +13,7 @@ import (
 
 var _ Provider = (*codexProvider)(nil)
 var _ ActivityHintProvider = (*codexProvider)(nil)
+var _ S3Provider = (*codexProvider)(nil)
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
 // implementation for Codex and its TraeX fork. Both reuse the same
@@ -73,14 +74,18 @@ func (f *codexProviderFactory) Definition() AgentDef {
 }
 
 func (f *codexProviderFactory) Capabilities() Capabilities {
-	return codexProviderCapabilities()
+	caps := codexProviderCapabilities()
+	if f.spec.agent == AgentCodex {
+		caps.Source.S3Discovery = CapabilitySupported
+	}
+	return caps
 }
 
 func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &codexProvider{
 		Def:             cloneAgentDef(f.def),
-		Caps:            codexProviderCapabilities(),
+		Caps:            f.Capabilities(),
 		Config:          cfg,
 		spec:            f.spec,
 		sources:         newCodexSourceSet(f.spec.agent, cfg.Roots),
@@ -441,8 +446,8 @@ func newCodexSourceSet(agent AgentType, roots []string) codexSourceSet {
 // owns Codex's out-of-band files: the session_index.jsonl sidecar and the
 // s3://.../raw/codex/... archive layout. Only Codex does. A fork writes
 // neither, so it must not watch, fan out on, or import them -- importing an
-// s3:// root through discoverCodexS3 would stamp AgentCodex and silently move
-// the sessions into Codex's identity namespace.
+// s3:// root through the Codex S3 scanner would stamp AgentCodex and silently
+// move the sessions into Codex's identity namespace.
 func (s codexSourceSet) ownsCodexSidecars() bool {
 	return s.agent == AgentCodex
 }
@@ -462,7 +467,7 @@ func (s codexSourceSet) DiscoverEach(
 			if !s.ownsCodexSidecars() {
 				continue
 			}
-			for _, file := range discoverCodexS3(root) {
+			for _, file := range s3PrefixScan(root, codexS3Scanner()) {
 				if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
 					return err
 				}
@@ -516,7 +521,7 @@ func (s codexSourceSet) discover(
 			if !s.ownsCodexSidecars() {
 				continue
 			}
-			for _, file := range discoverCodexS3(root) {
+			for _, file := range s3PrefixScan(root, codexS3Scanner()) {
 				source := s3SourceRefFromDiscoveredFile(root, file)
 				if _, ok := byKey[source.Key]; ok {
 					continue
@@ -650,6 +655,9 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots)*2)
 	seenShallow := make(map[string]struct{})
 	for _, root := range s.roots {
+		if isS3URI(root) {
+			continue
+		}
 		roots = append(roots, WatchRoot{
 			Path:         root,
 			Recursive:    true,

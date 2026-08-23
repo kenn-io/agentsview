@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -62,19 +61,18 @@ func TestPreparePGRawSyncServicesSkipsReadOnlySchema(t *testing.T) {
 	assert.Nil(t, cleanup)
 }
 
-func TestPreparePGRawSyncServicesDoesNotHoldArtifactSyncRepository(t *testing.T) {
+func TestPreparePGRawSyncServicesDoesNotOpenArtifactSyncRepository(t *testing.T) {
 	t.Parallel()
 
 	dataDir := t.TempDir()
+	repositoryPath := filepath.Join(dataDir, "artifacts")
+	require.NoError(t, os.WriteFile(repositoryPath, []byte("occupied"), 0o600))
+
 	_, cleanup, err := preparePGRawSyncServices(
 		t.Context(), dataDir, new(sql.DB),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cleanup()) })
-
-	repository, err := artifact.OpenRepository(t.Context(), dataDir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(t, cleanup())
 }
 
 func TestPreparePGRawSyncServicesDefersRawRepositoryOpen(t *testing.T) {

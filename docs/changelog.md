@@ -14,6 +14,10 @@ description: Release history for AgentsView
   Existing Claude sources and conflicting provider identities cannot be reused
   as a new occurrence.
 
+- Ingest Cursor sessions from S3 roots through a shared single-file S3 provider
+  interface, so additional JSONL agents can opt in without repeating per-agent
+  sync switches.
+
 **Bug fixes**
 
 - Preserve Antigravity CLI 1.1.5 generation usage and Low/Medium/High model

@@ -17,7 +17,12 @@ var (
 	statS3Object        = parser.StatS3Object
 	statClaudeS3Session = parser.StatClaudeS3Session
 	statCodexS3Session  = parser.StatCodexS3Session
+	lookupS3Provider    = parser.S3ProviderFor
 )
+
+func s3ProviderFor(agent parser.AgentType) (parser.S3Provider, bool) {
+	return lookupS3Provider(agent)
+}
 
 func s3SourceFileInfo(file parser.DiscoveredFile) (os.FileInfo, error) {
 	size := file.SourceSize
@@ -52,50 +57,64 @@ func s3SourceFingerprint(file parser.DiscoveredFile) string {
 }
 
 func statS3SourceObject(file parser.DiscoveredFile) (parser.S3Object, error) {
-	stat := statS3Object
-	switch file.Agent {
-	case parser.AgentClaude:
-		stat = statClaudeS3Session
-	case parser.AgentCodex:
-		stat = statCodexS3Session
+	p, ok := s3ProviderFor(file.Agent)
+	if !ok {
+		return parser.S3Object{}, fmt.Errorf("unsupported s3 agent type: %s", file.Agent)
 	}
-	return stat(file.Path)
+	return statS3SourceObjectWithProvider(file, p)
+}
+
+func statS3SourceObjectWithProvider(
+	file parser.DiscoveredFile, p parser.S3Provider,
+) (parser.S3Object, error) {
+	// Keep Claude-format/Codex package-level hooks so existing tests can stub
+	// sidecar-aware stats without replacing the provider. ICodeMate CLI
+	// transcripts share Claude's sidecar-aware stat and its seam.
+	switch {
+	case isClaudeFormatAgent(file.Agent):
+		return statClaudeS3Session(file.Path)
+	case file.Agent == parser.AgentCodex:
+		return statCodexS3Session(file.Path)
+	}
+	return p.S3StatSession(file.Path)
 }
 
 func s3DiscoveredSessionID(file parser.DiscoveredFile) string {
-	switch file.Agent {
-	case parser.AgentClaude:
-		id := claudeSessionIDFromPath(file.Path)
-		if id == "" {
-			return ""
-		}
-		return applyIDPrefixToID(s3SessionIDPrefix(file.Machine), id)
-	case parser.AgentCodex:
-		uuid := parser.CodexSessionUUIDFromFilename(path.Base(file.Path))
-		if uuid == "" {
-			return ""
-		}
-		return applyIDPrefixToID(
-			s3SessionIDPrefix(file.Machine), "codex:"+uuid,
-		)
-	default:
+	p, ok := s3ProviderFor(file.Agent)
+	if !ok {
 		return ""
 	}
+	return s3DiscoveredSessionIDWithProvider(file, p)
+}
+
+func s3DiscoveredSessionIDWithProvider(
+	file parser.DiscoveredFile, p parser.S3Provider,
+) string {
+	id := p.S3SessionID(file.Path)
+	if id == "" {
+		return ""
+	}
+	return applyIDPrefixToID(s3SessionIDPrefix(file.Machine), id)
 }
 
 func (e *Engine) s3SourceMetadataChanged(file parser.DiscoveredFile) bool {
 	if file.SourceMtime == 0 {
 		return false
 	}
+	p, ok := s3ProviderFor(file.Agent)
+	if !ok {
+		return false
+	}
 	return e.s3SourceMetadataChangedFromInfo(
-		file, file.SourceSize, file.SourceMtime, file.SourceFingerprint,
+		file, p, file.SourceSize, file.SourceMtime, file.SourceFingerprint,
 	)
 }
 
 func (e *Engine) s3SourceMetadataChangedFromInfo(
-	file parser.DiscoveredFile, size, mtime int64, sourceFingerprint string,
+	file parser.DiscoveredFile, p parser.S3Provider,
+	size, mtime int64, sourceFingerprint string,
 ) bool {
-	sessionID := s3DiscoveredSessionID(file)
+	sessionID := s3DiscoveredSessionIDWithProvider(file, p)
 	if sessionID == "" {
 		return false
 	}
@@ -320,7 +339,7 @@ func s3MachineFromRoot(root string) string {
 }
 
 func isS3AgentRootSegment(seg string) bool {
-	return seg == "claude" || seg == "codex"
+	return parser.AgentSupportsS3Discovery(parser.AgentType(seg))
 }
 
 func s3RelFromRoot(root, uri string) (string, bool) {
@@ -354,9 +373,13 @@ func (e *Engine) hydrateS3DiscoveredFile(
 		if file.Machine == "" {
 			file.Machine = s3MachineFromRoot(root)
 		}
-		if file.Project == "" && file.Agent == parser.AgentClaude {
-			if first, _, ok := strings.Cut(rel, "/"); ok {
-				file.Project = first
+		if file.Project == "" {
+			if p, ok := s3ProviderFor(file.Agent); ok {
+				scan := p.S3Scanner()
+				if scan.Project != nil && strings.Contains(rel, "/") {
+					segs := strings.Split(rel, "/")
+					file.Project = scan.Project(rel, segs)
+				}
 			}
 		}
 		break
@@ -367,14 +390,8 @@ func (e *Engine) hydrateS3DiscoveredFile(
 		}
 	}
 	if file.SourceMtime == 0 {
-		stat := statS3Object
-		switch file.Agent {
-		case parser.AgentClaude:
-			stat = statClaudeS3Session
-		case parser.AgentCodex:
-			stat = statCodexS3Session
-		}
-		if obj, err := stat(file.Path); err == nil {
+		obj, err := statS3SourceObject(*file)
+		if err == nil {
 			file.SourceSize = obj.Size
 			file.SourceMtime = obj.LastModified.UnixNano()
 			file.SourceFingerprint = obj.Fingerprint
@@ -382,7 +399,7 @@ func (e *Engine) hydrateS3DiscoveredFile(
 	}
 }
 
-// SyncClaudeS3SubagentTranscriptsContext ingests the given s3:// Claude
+// SyncS3SubagentTranscriptsContext ingests the given s3:// Claude-compatible
 // subagent transcript objects. The changed-path pipeline
 // (SyncPathsContext) classifies by statting local files, so it cannot
 // route s3:// objects; the on-demand subagent refresh behind `session
@@ -393,11 +410,15 @@ func (e *Engine) hydrateS3DiscoveredFile(
 // remaining objects still sync. parentSessionID preserves the stored
 // parent's machine namespace when its original S3 root is no longer
 // configured.
-func (e *Engine) SyncClaudeS3SubagentTranscriptsContext(
-	ctx context.Context, parentSessionID string, paths []string,
+func (e *Engine) SyncS3SubagentTranscriptsContext(
+	ctx context.Context, parentSessionID string, parentAgent parser.AgentType,
+	paths []string,
 ) error {
-	if e.refuseWriteInForceParse("SyncClaudeS3SubagentTranscripts") {
+	if e.refuseWriteInForceParse("SyncS3SubagentTranscripts") {
 		return nil
+	}
+	if !isClaudeFormatAgent(parentAgent) {
+		return fmt.Errorf("sync s3 subagent transcripts: unsupported parent agent %q", parentAgent)
 	}
 	e.syncMu.Lock()
 	synced := false
@@ -430,11 +451,12 @@ func (e *Engine) SyncClaudeS3SubagentTranscriptsContext(
 			continue
 		}
 		file := parser.DiscoveredFile{
-			Path: p, Agent: parser.AgentClaude, Machine: parentMachine,
+			Path: p, Agent: parentAgent, Machine: parentMachine,
 		}
-		sessionID := strings.TrimSuffix(path.Base(p), ".jsonl")
-		childID := applyIDPrefixToID(
-			s3SessionIDPrefix(parentMachine), sessionID)
+		childID := s3DiscoveredSessionID(file)
+		if childID == "" {
+			continue
+		}
 		e.hydrateS3DiscoveredFile(ctx, childID, &file)
 		if file.Project == "" {
 			file.Project = parentProject

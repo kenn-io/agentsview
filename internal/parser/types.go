@@ -875,7 +875,7 @@ var Registry = []AgentDef{
 		DisplayName:    "IcodeMate",
 		EnvVar:         "ICODEMATE_DIR",
 		ConfigKey:      "icodemate_dirs",
-		DefaultDirs:    []string{".local/share/icodemate"},
+		DefaultDirs:    []string{".local/share/icodemate", ".icodemate/cli/projects"},
 		IDPrefix:       "icodemate:",
 		WatchSubdirs:   []string{"storage/session_diff"},
 		FileBased:      true,

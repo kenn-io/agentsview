@@ -58,14 +58,13 @@ AgentsView compares roots as absolute, cleaned paths and ignores case on
 Windows. Legacy per-agent settings and structured entries retain their original
 path spelling, except that a leading `~/` is expanded to the current home
 directory before scanning. When a structured source names the same root as a
-per-agent array, default, or environment variable, the structured entry
-supplies the machine label.
+per-agent array, default, or environment variable, the structured entry supplies
+the machine label.
 
 `session_sources` accepts filesystem roots only. Keep using the existing
-Claude/Codex per-agent arrays for `s3://` roots; S3 ingestion has established
-machine-derived ID-prefix behavior that differs from filesystem labeling. Native
-SQLite-backed agent stores are supported when `dir` points at their filesystem
-root.
+per-agent arrays for `s3://` roots; S3 ingestion has established machine-derived
+ID-prefix behavior that differs from filesystem labeling. Native SQLite-backed
+agent stores are supported when `dir` points at their filesystem root.
 
 ## Transport Rules
 
@@ -149,10 +148,10 @@ reliably; the periodic sync remains the backstop.
 - The machine label is stored per discovered source root. Filter sessions by
   `machine` in the session browser, API, and analytics views.
 - A session keeps the machine label it received when it was first ingested.
-  Editing a source's `machine` value affects newly discovered sessions but does
-  not retroactively relabel existing ones, even when their source files later
-  change. `agentsview sync --full` also preserves the stored label. Changing
-  attribution for existing sessions is not currently supported.
+  Editing a source's `machine` value affects newly discovered sessions but
+  does not retroactively relabel existing ones, even when their source files
+  later change. `agentsview sync --full` also preserves the stored label.
+  Changing attribution for existing sessions is not currently supported.
 - Filesystem machine labels do **not** namespace session IDs. If the same native
   session is copied into two configured roots, AgentsView continues to
   deduplicate it by the agent's native session ID.
@@ -161,11 +160,11 @@ reliably; the periodic sync remains the backstop.
 - Roots that cannot be watched fall back to polling, as described under
   [Large Watch Trees](/configuration/#large-watch-trees).
 - A machine label changes attribution, not source identity or conflict
-  resolution. Do not intentionally place different sessions with the same native
-  ID in separate roots.
+  resolution. Do not intentionally place different sessions with the same
+  native ID in separate roots.
 - Deleting a transported source file does not automatically erase the archived
-  session. The local SQLite database is a persistent archive; use pruning tools
-  when removal is intended.
+  session. The local SQLite database is a persistent archive; use pruning
+  tools when removal is intended.
 
 Filesystem sync is intentionally simple: one primary AgentsView owns the archive
 and UI. PostgreSQL remains the better fit for independently running AgentsView

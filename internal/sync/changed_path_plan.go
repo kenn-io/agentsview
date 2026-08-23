@@ -231,7 +231,7 @@ func (e *Engine) resolveClaudeDuplicateAttribution(
 	preferredFiles := e.dedupeClaudeDiscoveredFiles(expanded)
 	preferredBySession := make(map[string]parser.DiscoveredFile)
 	for _, file := range preferredFiles {
-		if file.Agent != parser.AgentClaude {
+		if !isClaudeFormatTranscriptFile(file) {
 			continue
 		}
 		sessionID := claudeSessionIDFromPath(file.Path)
@@ -245,7 +245,7 @@ func (e *Engine) resolveClaudeDuplicateAttribution(
 	}
 	for path, attribution := range plan.attribution {
 		for i, file := range attribution.files {
-			if file.Agent != parser.AgentClaude {
+			if !isClaudeFormatTranscriptFile(file) {
 				continue
 			}
 			sessionID := claudeSessionIDFromPath(file.Path)
@@ -263,23 +263,29 @@ func (e *Engine) resolveClaudeDuplicateAttribution(
 }
 
 // expandAffectedClaudeDuplicateCandidates resolves the archive's stored source
-// for each exact Claude session in the plan. The changed source and stored
+// for each exact Claude-compatible session in the plan. The changed source and stored
 // source are sufficient for DB-aware preference without invoking corpus-wide
 // project or nested-subagent discovery.
 func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 	ctx context.Context,
 	files []parser.DiscoveredFile,
 ) ([]parser.DiscoveredFile, error) {
-	factory := e.providerFactories[parser.AgentClaude]
-	roots := e.agentDirs[parser.AgentClaude]
-	if factory == nil || len(roots) == 0 {
+	providers := make(map[parser.AgentType]parser.Provider)
+	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentIcodemate} {
+		factory := e.providerFactories[agent]
+		roots := e.agentDirs[agent]
+		if factory == nil || len(roots) == 0 {
+			continue
+		}
+		providers[agent] = factory.NewProvider(parser.ProviderConfig{
+			Roots: roots, Machine: e.machine,
+			SourceMachines: e.sourceMachines[agent],
+			PathRewriter:   e.pathRewriter,
+		})
+	}
+	if len(providers) == 0 {
 		return files, nil
 	}
-	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots: roots, Machine: e.machine,
-		SourceMachines: e.sourceMachines[parser.AgentClaude],
-		PathRewriter:   e.pathRewriter,
-	})
 	out := append([]parser.DiscoveredFile(nil), files...)
 	seenSources := make(map[string]struct{}, len(files))
 	seenSessions := make(map[string]struct{})
@@ -290,7 +296,11 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if file.Agent != parser.AgentClaude {
+		if !isClaudeFormatTranscriptFile(file) {
+			continue
+		}
+		provider := providers[file.Agent]
+		if provider == nil {
 			continue
 		}
 		sessionID := claudeSessionIDFromPath(file.Path)
@@ -301,7 +311,9 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 		if isS3SourcePath(file.Path) {
 			idPrefix = s3SessionIDPrefix(file.Machine)
 		}
-		fullID := applyIDPrefixToID(idPrefix, sessionID)
+		fullID := applyIDPrefixToID(
+			idPrefix, claudeFormatArchiveSessionID(file.Agent, sessionID),
+		)
 		sessionKey := discoveredFileIDPrefix(file) + "\x00" + fullID
 		if _, seen := seenSessions[sessionKey]; seen {
 			continue
