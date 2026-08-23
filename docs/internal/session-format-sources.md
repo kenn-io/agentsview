@@ -1478,10 +1478,23 @@ add an archived or maintained mirror without replacing the original identity.
   were also public, but no matching producer or authoritative
   persisted-session schema was found.
 - **Usage and cost:** Language-model messages can persist input, output,
-  cache-read, and cache-write tokens with model identity. Agentsview
-  catalog-prices these values; no provider-reported USD total is consumed.
+  cache-read, and cache-write tokens with model identity. Observed GLM, Gemma,
+  and Kimi records use the Anthropic-shaped `cacheWriteTokens` field for the
+  uncached prompt remainder while leaving `inputTokens` at zero; these model
+  families do not expose a separately billed cache-write category in the
+  pricing catalog. Claude records retain real cache-write semantics.
+  Agentsview catalog-prices these values; no provider-reported USD total is
+  consumed.
 - **Agentsview:** `internal/parser/posit_assistant_provider.go`; current schema
-  details are based on observed files and fixtures.
+  details are based on observed files and fixtures. Reverified 2026-08-22
+  against the samples reported in
+  [#1466](https://github.com/kenn-io/agentsview/issues/1466): the parser folds
+  the persisted cache-write remainder into uncached input only for recognized
+  GLM, Gemma, and Kimi model families. Missing and unrecognized model identities
+  preserve Posit Assistant's original buckets, and full context remains the
+  sum of the persisted input, cache-read, and cache-write fields. Data version
+  91 reparses existing Posit Assistant archives through the normal
+  non-destructive resync path.
 
 ## Z Code (`zcode`)
 

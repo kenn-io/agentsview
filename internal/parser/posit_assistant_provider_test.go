@@ -501,6 +501,110 @@ func TestPositAssistantProviderParseSparseTokenUsage(t *testing.T) {
 	assert.False(t, empty.HasContextTokens)
 }
 
+func TestPositAssistantProviderNormalizesInferredCacheWrites(t *testing.T) {
+	tests := []struct {
+		name        string
+		positai     string
+		wantModel   string
+		wantUsage   string
+		wantContext int
+		wantOutput  int
+	}{
+		{
+			name:        "GLM inferred cache write",
+			positai:     `"modelId":"glm-4.7","usage":{"inputTokens":0,"outputTokens":7,"cacheReadTokens":20,"cacheWriteTokens":80}`,
+			wantModel:   "glm-4.7",
+			wantUsage:   `{"input_tokens":80,"output_tokens":7,"cache_read_input_tokens":20}`,
+			wantContext: 100,
+			wantOutput:  7,
+		},
+		{
+			name:        "provider-qualified Gemma inferred cache write",
+			positai:     `"modelId":"google/gemma-3-27b-it","usage":{"inputTokens":5,"outputTokens":7,"cacheReadTokens":20,"cacheWriteTokens":80}`,
+			wantModel:   "google/gemma-3-27b-it",
+			wantUsage:   `{"input_tokens":85,"output_tokens":7,"cache_read_input_tokens":20}`,
+			wantContext: 105,
+			wantOutput:  7,
+		},
+		{
+			name:        "provider-qualified Kimi inferred cache write",
+			positai:     `"modelId":"moonshotai/kimi-k2.5","usage":{"inputTokens":0,"outputTokens":7,"cacheReadTokens":20,"cacheWriteTokens":80}`,
+			wantModel:   "moonshotai/kimi-k2.5",
+			wantUsage:   `{"input_tokens":80,"output_tokens":7,"cache_read_input_tokens":20}`,
+			wantContext: 100,
+			wantOutput:  7,
+		},
+		{
+			name:        "Claude real cache write",
+			positai:     `"modelId":"claude-sonnet-4-6","usage":{"inputTokens":5,"outputTokens":7,"cacheReadTokens":20,"cacheWriteTokens":80}`,
+			wantModel:   "claude-sonnet-4-6",
+			wantUsage:   `{"input_tokens":5,"output_tokens":7,"cache_read_input_tokens":20,"cache_creation_input_tokens":80}`,
+			wantContext: 105,
+			wantOutput:  7,
+		},
+		{
+			name:        "missing model preserves producer buckets",
+			positai:     `"usage":{"inputTokens":5,"outputTokens":7,"cacheReadTokens":20,"cacheWriteTokens":80}`,
+			wantUsage:   `{"input_tokens":5,"output_tokens":7,"cache_read_input_tokens":20,"cache_creation_input_tokens":80}`,
+			wantContext: 105,
+			wantOutput:  7,
+		},
+		{
+			name:        "unrecognized model preserves producer buckets",
+			positai:     `"modelId":"custom-auto-model","usage":{"inputTokens":5,"outputTokens":7,"cacheReadTokens":20,"cacheWriteTokens":80}`,
+			wantModel:   "custom-auto-model",
+			wantUsage:   `{"input_tokens":5,"output_tokens":7,"cache_read_input_tokens":20,"cache_creation_input_tokens":80}`,
+			wantContext: 105,
+			wantOutput:  7,
+		},
+		{
+			name:        "fully cached zero-valued prompt split",
+			positai:     `"modelId":"glm-4.7","usage":{"inputTokens":0,"outputTokens":0,"cacheReadTokens":100,"cacheWriteTokens":0}`,
+			wantModel:   "glm-4.7",
+			wantUsage:   `{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":100}`,
+			wantContext: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			convDir := filepath.Join(root, "ws1", "99999999-9999-4999-8999-999999999999")
+			writeSourceFile(t, filepath.Join(convDir, "conversation.json"), `{
+				"schemaVersion":"3",
+				"root":{"id":"99999999-9999-4999-8999-999999999999","timestamp":1735689600000,"metadata":{"kind":"main"}},
+				"messages":[{"id":"n1","parentId":"99999999-9999-4999-8999-999999999999","isActive":true,"lmMessageIds":[0,1],"timestamp":1735689600000}]
+			}`)
+			writeSourceFile(t, filepath.Join(convDir, "lm-messages.jsonl"),
+				`{"id":0,"message":{"role":"user","content":"hi"}}`+"\n"+
+					`{"id":1,"message":{"role":"assistant","content":[{"type":"text","text":"done"}],"providerOptions":{"providerMetadata":{"positai":{`+tt.positai+`}}}}}`+"\n")
+
+			provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
+				Roots: []string{root},
+			})
+			require.True(t, ok)
+			discovered, err := provider.Discover(context.Background())
+			require.NoError(t, err)
+			require.Len(t, discovered, 1)
+			outcome, err := provider.Parse(context.Background(), ParseRequest{
+				Source: discovered[0],
+			})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			messages := outcome.Results[0].Result.Messages
+			require.Len(t, messages, 2)
+			assistant := messages[1]
+
+			assert.Equal(t, tt.wantModel, assistant.Model)
+			assert.JSONEq(t, tt.wantUsage, string(assistant.TokenUsage))
+			assert.Equal(t, tt.wantContext, assistant.ContextTokens)
+			assert.True(t, assistant.HasContextTokens)
+			assert.Equal(t, tt.wantOutput, assistant.OutputTokens)
+			assert.True(t, assistant.HasOutputTokens)
+		})
+	}
+}
+
 func TestPositAssistantProviderClassifiesDeletedPaths(t *testing.T) {
 	root := t.TempDir()
 	convDir := filepath.Join(root, "ws1", "55555555-5555-4555-8555-555555555555")
