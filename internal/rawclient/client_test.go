@@ -129,13 +129,24 @@ func TestClientRefusesCredentialRedirects(t *testing.T) {
 				return &http.Client{Timeout: time.Second}
 			},
 		},
+		{
+			name: "supplied client with permissive redirect policy",
+			httpClient: func() *http.Client {
+				return &http.Client{
+					Timeout: time.Second,
+					CheckRedirect: func(*http.Request, []*http.Request) error {
+						return nil
+					},
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			var redirected int32
+			var redirected atomic.Int32
 			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				atomic.AddInt32(&redirected, 1)
+				redirected.Add(1)
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprintf(w, `{"token":"avdt_redirected","device_id":"dev_test",`+
 					`"scopes":["negotiate","upload","commit"],"expires_at":%q}`,
@@ -158,7 +169,7 @@ func TestClientRefusesCredentialRedirects(t *testing.T) {
 			require.NoError(t, err)
 			_, err = client.tokens.token(t.Context())
 			assert.Error(t, err)
-			assert.EqualValues(t, 0, atomic.LoadInt32(&redirected),
+			assert.EqualValues(t, 0, redirected.Load(),
 				"redirect target must not receive the device credential")
 		})
 	}

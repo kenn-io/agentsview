@@ -144,7 +144,9 @@ func NewClient(cfg Config) (*Client, error) {
 			Timeout:       10 * time.Minute,
 			CheckRedirect: refuseRedirects,
 		}
-	} else if httpClient.CheckRedirect == nil {
+	} else {
+		// Always replace the caller's policy: 307 and 308 responses can
+		// replay the token-exchange body containing the device credential.
 		enforced := *httpClient
 		enforced.CheckRedirect = refuseRedirects
 		httpClient = &enforced
