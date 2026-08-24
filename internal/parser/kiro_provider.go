@@ -118,9 +118,36 @@ func (p *kiroProvider) Parse(
 		return p.parseSQLiteDB(ctx, src, machine)
 	case kiroSourceSQLiteSession:
 		return p.parseSQLiteSession(src, machine, req.Fingerprint)
+	case kiroSourceCurrentJSONL:
+		return p.parseCurrentJSONL(src, machine, req.Fingerprint)
 	default:
 		return p.parseLegacyJSONL(src, machine, req.Fingerprint)
 	}
+}
+
+func (p *kiroProvider) parseCurrentJSONL(
+	src kiroSource, machine string, fingerprint SourceFingerprint,
+) (ParseOutcome, error) {
+	sess, msgs, err := p.parseCurrentSession(src.Path, src.SessionID, machine)
+	if err != nil {
+		return ParseOutcome{}, err
+	}
+	if sess == nil {
+		return ParseOutcome{ResultSetComplete: true, SkipReason: SkipNoSession}, nil
+	}
+	if fingerprint.Size > 0 {
+		sess.File.Size = fingerprint.Size
+	}
+	if fingerprint.MTimeNS > 0 {
+		sess.File.Mtime = fingerprint.MTimeNS
+	}
+	if fingerprint.Hash != "" {
+		sess.File.Hash = fingerprint.Hash
+	}
+	return ParseOutcome{Results: []ParseResultOutcome{{
+		Result:      ParseResult{Session: *sess, Messages: msgs},
+		DataVersion: DataVersionCurrent,
+	}}, ResultSetComplete: true}, nil
 }
 
 func (p *kiroProvider) parseSQLiteDB(
@@ -288,6 +315,7 @@ const (
 	kiroSourceLegacyJSONL kiroSourceKind = iota
 	kiroSourceSQLiteDB
 	kiroSourceSQLiteSession
+	kiroSourceCurrentJSONL
 )
 
 type kiroSource struct {
@@ -326,6 +354,11 @@ func (s kiroSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 				addJSONLSource(source, &sources, seen)
 			}
 		}
+		for _, file := range s.discoverCurrentJSONL(root) {
+			if source, ok := s.sourceRef(root, file.Path, false); ok {
+				addJSONLSource(source, &sources, seen)
+			}
+		}
 	}
 	sortJSONLSources(sources)
 	return sources, nil
@@ -357,19 +390,10 @@ func (s kiroSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) e
 				return closeErr
 			}
 		}
-		if err := streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-				return nil
-			}
-			path := filepath.Join(root, entry.Name())
-			if s.legacyPathShadowed(path) {
-				return nil
-			}
-			if source, ok := s.sourceRef(root, path, false); ok {
-				return yield(source)
-			}
-			return nil
-		}); err != nil {
+		if err := s.discoverLegacyJSONLEach(ctx, root, yield); err != nil {
+			return err
+		}
+		if err := s.discoverCurrentJSONLEach(ctx, root, yield); err != nil {
 			return err
 		}
 	}
@@ -381,8 +405,8 @@ func (s kiroSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	for _, root := range s.roots {
 		roots = append(roots, WatchRoot{
 			Path:         root,
-			Recursive:    false,
-			IncludeGlobs: []string{"*.jsonl", kiroSQLiteDBName, kiroSQLiteDBName + "-*"},
+			Recursive:    true,
+			IncludeGlobs: []string{"*.jsonl", "messages.jsonl", "session.json", kiroSQLiteDBName, kiroSQLiteDBName + "-*"},
 			DebounceKey:  string(AgentKiro) + ":root:" + root,
 		})
 	}
@@ -435,6 +459,8 @@ func (s kiroSourceSet) StoredSourceHintScopes(
 				Path: src.DBPath, IncludeVirtualMembers: true,
 			}}
 		case kiroSourceSQLiteSession, kiroSourceLegacyJSONL:
+			return []StoredSourceHintScope{{Path: src.Path}}
+		case kiroSourceCurrentJSONL:
 			return []StoredSourceHintScope{{Path: src.Path}}
 		}
 		return nil
@@ -528,15 +554,18 @@ func (s kiroSourceSet) FindSource(
 			}
 		}
 	}
-	sources, err := s.Discover(ctx)
-	if err != nil {
-		return SourceRef{}, false, err
-	}
-	for _, source := range sources {
-		src := source.Opaque.(kiroSource)
-		if src.Kind == kiroSourceLegacyJSONL &&
-			KiroSessionIDFromPath(src.Path) == req.RawSessionID {
+	for _, root := range s.roots {
+		if source, ok := s.findCurrentJSONL(root, req.RawSessionID); ok {
 			return source, true, nil
+		}
+	}
+	for _, root := range s.roots {
+		for _, file := range s.discoverLegacyJSONL(root) {
+			if KiroSessionIDFromPath(file.Path) == req.RawSessionID {
+				if source, ok := s.sourceRef(root, file.Path, false); ok {
+					return source, true, nil
+				}
+			}
 		}
 	}
 	return SourceRef{}, false, nil
@@ -616,6 +645,15 @@ func (s kiroSourceSet) Fingerprint(
 		}
 		return fingerprint, nil
 	}
+	if src.Kind == kiroSourceCurrentJSONL {
+		sidecar := filepath.Join(filepath.Dir(src.Path), "session.json")
+		if sideInfo, err := os.Stat(sidecar); err == nil && !sideInfo.IsDir() {
+			fingerprint.Size += sideInfo.Size()
+			if sideInfo.ModTime().UnixNano() > fingerprint.MTimeNS {
+				fingerprint.MTimeNS = sideInfo.ModTime().UnixNano()
+			}
+		}
+	}
 	hash, err := hashJSONLSourceFile(src.Path)
 	if err != nil {
 		return SourceFingerprint{}, err
@@ -650,6 +688,12 @@ func (s kiroSourceSet) sourceRef(
 ) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
+	if currentPath, sessionID, ok := kiroCurrentPathUnderRoot(root, path); ok {
+		if !allowMissing && !kiroRegularFileUnderRoot(root, currentPath) {
+			return SourceRef{}, false
+		}
+		return s.newSourceRef(root, currentPath, "", sessionID, kiroSourceCurrentJSONL), true
+	}
 	if kiroLegacyPathUnderRoot(root, path) && IsRegularFile(path) {
 		return s.newSourceRef(root, path, "", "", kiroSourceLegacyJSONL), true
 	}
@@ -677,6 +721,9 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 	}
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
+	if currentPath, sessionID, ok := kiroCurrentPathForEvent(root, path); ok {
+		return s.newSourceRef(root, currentPath, "", sessionID, kiroSourceCurrentJSONL), true
+	}
 	if kiroLegacyPathUnderRoot(root, path) {
 		return s.newSourceRef(root, path, "", "", kiroSourceLegacyJSONL), true
 	}
@@ -697,6 +744,11 @@ func (s kiroSourceSet) currentSessionIDs() map[string]struct{} {
 	for _, root := range s.roots {
 		for id := range KiroSQLiteSessionIDs(root) {
 			ids[id] = struct{}{}
+		}
+		for _, file := range s.discoverCurrentJSONL(root) {
+			if _, id, ok := kiroCurrentPathUnderRoot(root, file.Path); ok {
+				ids[id] = struct{}{}
+			}
 		}
 	}
 	return ids
@@ -765,10 +817,179 @@ func kiroLegacyPathUnderRoot(root, path string) bool {
 	if !ok {
 		return false
 	}
-	if strings.Contains(rel, string(filepath.Separator)) {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) == 2 && parts[0] != "cli" {
+		return false
+	}
+	if len(parts) > 2 {
 		return false
 	}
 	return strings.HasSuffix(rel, ".jsonl")
+}
+
+func (s kiroSourceSet) discoverCurrentJSONL(root string) []DiscoveredFile {
+	var files []DiscoveredFile
+	add := func(workspace, session string) {
+		path := filepath.Join(root, workspace, session, "messages.jsonl")
+		if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok && kiroRegularFileUnderRoot(root, path) {
+			files = append(files, DiscoveredFile{Path: path, Agent: AgentKiro})
+		}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if isKiroCurrentSessionDir(entry.Name()) {
+			add("", entry.Name())
+			continue
+		}
+		children, err := os.ReadDir(filepath.Join(root, entry.Name()))
+		if err != nil {
+			continue
+		}
+		for _, child := range children {
+			if child.IsDir() && isKiroCurrentSessionDir(child.Name()) {
+				add(entry.Name(), child.Name())
+			}
+		}
+	}
+	return files
+}
+
+func (s kiroSourceSet) findCurrentJSONL(root, sessionID string) (SourceRef, bool) {
+	if !isKiroCurrentSessionDir(sessionID) {
+		return SourceRef{}, false
+	}
+	for _, workspace := range []string{"", "*"} {
+		if workspace == "" {
+			path := filepath.Join(root, sessionID, "messages.jsonl")
+			if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok && kiroRegularFileUnderRoot(root, path) {
+				return s.newSourceRef(root, path, "", sessionID, kiroSourceCurrentJSONL), true
+			}
+			continue
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return SourceRef{}, false
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(root, entry.Name(), sessionID, "messages.jsonl")
+			if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok && kiroRegularFileUnderRoot(root, path) {
+				return s.newSourceRef(root, path, "", sessionID, kiroSourceCurrentJSONL), true
+			}
+		}
+	}
+	return SourceRef{}, false
+}
+
+func (s kiroSourceSet) discoverCurrentJSONLEach(ctx context.Context, root string, yield func(SourceRef) error) error {
+	return streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
+		if !entry.IsDir() {
+			return nil
+		}
+		if isKiroCurrentSessionDir(entry.Name()) {
+			path := filepath.Join(root, entry.Name(), "messages.jsonl")
+			if source, ok := s.sourceRef(root, path, false); ok {
+				return yield(source)
+			}
+			return nil
+		}
+		workspace := filepath.Join(root, entry.Name())
+		return streamDirectoryEntries(ctx, workspace, func(child os.DirEntry) error {
+			if !child.IsDir() || !isKiroCurrentSessionDir(child.Name()) {
+				return nil
+			}
+			path := filepath.Join(workspace, child.Name(), "messages.jsonl")
+			if source, ok := s.sourceRef(root, path, false); ok {
+				return yield(source)
+			}
+			return nil
+		})
+	})
+}
+
+func (s kiroSourceSet) discoverLegacyJSONLEach(ctx context.Context, root string, yield func(SourceRef) error) error {
+	for _, dir := range []string{root, filepath.Join(root, "cli")} {
+		if err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+				return nil
+			}
+			path := filepath.Join(dir, entry.Name())
+			if s.legacyPathShadowed(path) {
+				return nil
+			}
+			if source, ok := s.sourceRef(root, path, false); ok {
+				return yield(source)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isKiroCurrentSessionDir(name string) bool {
+	id := strings.TrimPrefix(name, "sess_")
+	return strings.HasPrefix(name, "sess_") && IsValidSessionID(id)
+}
+
+func kiroCurrentPathUnderRoot(root, path string) (string, string, bool) {
+	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
+	if !ok {
+		return "", "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if (len(parts) != 2 && len(parts) != 3) || parts[len(parts)-1] != "messages.jsonl" {
+		return "", "", false
+	}
+	session := parts[len(parts)-2]
+	if !isKiroCurrentSessionDir(session) {
+		return "", "", false
+	}
+	return filepath.Clean(path), session, true
+}
+
+func kiroCurrentPathForEvent(root, path string) (string, string, bool) {
+	if current, id, ok := kiroCurrentPathUnderRoot(root, path); ok {
+		return current, id, true
+	}
+	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
+	if !ok {
+		return "", "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if (len(parts) != 2 && len(parts) != 3) || parts[len(parts)-1] != "session.json" {
+		return "", "", false
+	}
+	session := parts[len(parts)-2]
+	if !isKiroCurrentSessionDir(session) {
+		return "", "", false
+	}
+	return filepath.Join(filepath.Dir(path), "messages.jsonl"), session, true
+}
+
+func kiroRegularFileUnderRoot(root, path string) bool {
+	if !IsRegularFile(path) {
+		return false
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	_, ok := relUnder(resolvedRoot, resolvedPath)
+	return ok
 }
 
 func kiroProviderCapabilities() Capabilities {

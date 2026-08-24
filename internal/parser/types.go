@@ -595,7 +595,7 @@ var Registry = []AgentDef{
 		EnvVar:      "KIRO_SESSIONS_DIR",
 		ConfigKey:   "kiro_dirs",
 		DefaultDirs: []string{
-			".kiro/sessions/cli",
+			".kiro/sessions",
 			".local/share/kiro-cli",
 		},
 		IDPrefix:  "kiro:",

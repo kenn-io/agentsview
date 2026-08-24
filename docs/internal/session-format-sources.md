@@ -1294,6 +1294,12 @@ add an archived or maintained mirror without replacing the original identity.
   currently consumes none of those sidecar usage fields, so it emits no Kiro
   usage or cost metrics.
 
+  Current CLI sessions use `~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl`
+  or the direct `sess_<id>/messages.jsonl` form, with optional `session.json`.
+  Agentsview admits only these exact producer-relative shapes, preserves the
+  literal `sess_<id>` identity, and maps documented user, assistant, tool-call,
+  and tool-result envelope fields. Unknown and malformed records are ignored.
+
 - **Agentsview:** `internal/parser/kiro.go`, `internal/parser/kiro_sqlite.go`,
   and `internal/parser/kiro_provider.go`; both generations must remain
   discoverable.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func TestKiroProviderSourceMethods(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
-	assert.False(t, plan.Roots[0].Recursive)
+	assert.True(t, plan.Roots[0].Recursive)
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, "*.jsonl")
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, kiroSQLiteDBName)
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, kiroSQLiteDBName+"-*")
@@ -456,6 +457,73 @@ func TestKiroProviderRejectsInvalidStoredSQLitePaths(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, ok, "stored path %q", path)
 	}
+}
+
+// Synthetic reproduction: the reporter supplied no loadable transcript.
+func TestKiroProviderCurrentLayoutParsesMessages(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "workspace", "sess_0123456789abcdef", "messages.jsonl")
+	writeSourceFile(t, path, strings.Join([]string{
+		`{"payload":{"type":"user","content":"hello"}}`,
+		`{"payload":{"type":"assistant","content":"hi"}}`,
+		`{"payload":{"type":"tool_call","toolName":"read","toolCallId":"call-1","args":{"path":"a.go"}}}`,
+		`{"payload":{"type":"tool_result","toolCallId":"call-1","content":"ok"}}`,
+		`{"payload":{"type":"informational","content":"skip"}}`,
+	}, "\n")+"\n")
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "kiro:sess_0123456789abcdef", outcome.Results[0].Result.Session.ID)
+	assert.Len(t, outcome.Results[0].Result.Messages, 4)
+}
+
+func TestKiroProviderCurrentLayoutRejectsLookalikesAndEscapes(t *testing.T) {
+	root := t.TempDir()
+	valid := filepath.Join(root, "workspace", "sess_0123456789abcdef", "messages.jsonl")
+	writeSourceFile(t, valid, `{"payload":{"type":"user","content":"ok"}}`+"\n")
+	for _, path := range []string{
+		filepath.Join(root, "workspace", ".history", "sess_0123456789abcdef", "messages.jsonl"),
+		filepath.Join(root, "workspace", "sess_0123456789abcdef", "snapshots", "messages.jsonl"),
+		filepath.Join(root, "workspace", "nested", "sess_0123456789abcdef", "messages.jsonl"),
+		filepath.Join(root, "workspace", "session_0123456789abcdef", "messages.jsonl"),
+	} {
+		writeSourceFile(t, path, `{"payload":{"type":"user","content":"bad"}}`+"\n")
+	}
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, valid, sources[0].DisplayPath)
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "sess_../escape"})
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestKiroProviderCurrentLayoutLifecycleAndExactLookup(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sess_0123456789abcdef", "messages.jsonl")
+	writeSourceFile(t, path, `{"payload":{"type":"user","content":"hello"}}`+"\n")
+	sidecar := filepath.Join(filepath.Dir(path), "session.json")
+	writeSourceFile(t, sidecar, `{"title":"Synthetic","workspacePaths":["/home/user/project"]}`)
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{Path: sidecar, WatchRoot: root, EventKind: "write"})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, path, changed[0].DisplayPath)
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "sess_0123456789abcdef"})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, path, found.DisplayPath)
+	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	require.NoError(t, err)
+	assert.Greater(t, fingerprint.Size, int64(len(`{"payload":{"type":"user","content":"hello"}}`)+1))
 }
 
 func TestKiroIDEProviderSourceMethods(t *testing.T) {
