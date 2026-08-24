@@ -554,6 +554,10 @@ func (s multiSessionContainerSourceSet) PersistentArchiveSource(
 	return "", false
 }
 
+func (s multiSessionContainerSourceSet) StoredMemberSource(path, fullSessionID string) (string, bool) {
+	return s.PersistentArchiveSource(path, fullSessionID)
+}
+
 func (s multiSessionContainerSourceSet) ReconciliationMemberIdentity(
 	fullSessionID string,
 ) string {

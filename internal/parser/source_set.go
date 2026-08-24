@@ -192,6 +192,14 @@ func (p *SourceSetProvider) PersistentArchiveSource(
 	return resolver.PersistentArchiveSource(path, fullSessionID)
 }
 
+func (p *SourceSetProvider) StoredMemberSource(path, fullSessionID string) (string, bool) {
+	resolver, ok := p.sources.(StoredMemberSourceResolver)
+	if !ok {
+		return "", false
+	}
+	return resolver.StoredMemberSource(path, fullSessionID)
+}
+
 // sourceSetFreshnessHasher is the optional inner-source-set shape of
 // parser.MultiFileStatHasher. A SourceSet-backed base that owns a
 // multi-file on-disk layout (currently codebuffSourceSet) implements

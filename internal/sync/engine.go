@@ -6550,9 +6550,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							// longer yields this member; tombstone directly — the
 							// guards below all assume a vanished stored path.
 							if e.preserveMissingSources &&
-								preserveConfiguredMissingSource(
-									ctx, provider, ownership.FilePath, ownership.ID,
-								) {
+								!storedMemberSource(provider, ownership.FilePath, ownership.ID) {
 								continue
 							}
 							changed, err := e.tombstoneSessionSourceOwnership(
@@ -6780,9 +6778,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							}
 						}
 						if e.preserveMissingSources &&
-							preserveConfiguredMissingSource(
-								ctx, provider, ownership.FilePath, ownership.ID,
-							) {
+							!storedMemberSource(provider, ownership.FilePath, ownership.ID) {
 							continue
 						}
 						changed, err := e.tombstoneSessionSourceOwnership(
@@ -10335,40 +10331,16 @@ type sourceMissingMember struct {
 	virtual   bool
 }
 
-// preserveConfiguredMissingSource applies only to provider-validated physical
-// sources. Virtual members identify imported or migrated storage ownership and
-// retain the existing source-missing reconciliation policy.
-func preserveConfiguredMissingSource(
-	ctx context.Context, provider parser.Provider, filePath, sessionID string,
-) bool {
+func storedMemberSource(provider parser.Provider, filePath, fullSessionID string) bool {
 	if provider == nil {
 		return false
 	}
-	resolver, ok := provider.(parser.PersistentArchiveSourceResolver)
-	if ok {
-		if _, valid := resolver.PersistentArchiveSource(filePath, sessionID); valid {
-			return false
-		}
-	}
-
-	providerType := provider.Definition().Type
-	if providerType == parser.AgentHermes {
-		if _, _, ok := parser.ParseVirtualSourcePathForBase(filePath, "state.db"); !ok {
-			return true
-		}
-		_, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
-			StoredFilePath: filePath,
-			RawSessionID:   sessionID,
-		})
-		return err == nil && found
-	}
-	if (providerType == parser.AgentDevin || providerType == parser.AgentWindsurf) &&
-		strings.Contains(filePath, "#") {
-		// These providers own hash-delimited virtual members. A syntactically
-		// similar path is virtual only after the provider resolver validates it.
+	resolver, ok := provider.(parser.StoredMemberSourceResolver)
+	if !ok {
 		return false
 	}
-	return true
+	_, ok = resolver.StoredMemberSource(filePath, fullSessionID)
+	return ok
 }
 
 func configuredSourceMissingMembers(
@@ -11602,7 +11574,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 				sessionID: id,
 				filePath:  sourcePath,
 				agent:     agent,
-				virtual:   !preserveConfiguredMissingSource(ctx, provider, sourcePath, id),
+				virtual:   storedMemberSource(provider, sourcePath, id),
 				machine: e.machineForProviderSource(
 					agent, source, sourcePath,
 				),
@@ -11744,7 +11716,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 				sessionID: id,
 				filePath:  path,
 				agent:     agent,
-				virtual:   !preserveConfiguredMissingSource(ctx, provider, path, id),
+				virtual:   storedMemberSource(provider, path, id),
 			})
 			sessionIDs = append(sessionIDs, id)
 		}
@@ -11808,8 +11780,8 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 	if index := e.archiveStaleClaudeForks; index != nil {
 		members := index.missingMembers(paths, present)
 		for i := range members {
-			members[i].virtual = !preserveConfiguredMissingSource(
-				ctx, provider, members[i].filePath, members[i].sessionID,
+			members[i].virtual = storedMemberSource(
+				provider, members[i].filePath, members[i].sessionID,
 			)
 		}
 		return members, nil
@@ -11833,7 +11805,7 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 				sessionID: id,
 				filePath:  path,
 				agent:     parser.AgentClaude,
-				virtual:   !preserveConfiguredMissingSource(ctx, provider, path, id),
+				virtual:   storedMemberSource(provider, path, id),
 			})
 			sessionIDs = append(sessionIDs, id)
 		}

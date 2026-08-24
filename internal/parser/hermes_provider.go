@@ -124,6 +124,31 @@ func (p *hermesProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
+func (p *hermesProvider) StoredMemberSource(path, fullSessionID string) (string, bool) {
+	rawID := ProviderRawSessionIDFromFull(p.Def, fullSessionID)
+	if rawID == "" || !IsValidSessionID(rawID) {
+		return "", false
+	}
+	path = filepath.Clean(path)
+	for _, root := range p.sources.roots {
+		stateDB, sessionsDir, ok := hermesStatePaths(root)
+		if !ok {
+			continue
+		}
+		if samePath(path, stateDB) {
+			return stateDB, true
+		}
+		if storedDB, member, ok := ParseVirtualSourcePathForBase(path, "state.db"); ok && samePath(storedDB, stateDB) && member == rawID {
+			return stateDB, true
+		}
+		if hermesPathInTranscriptDir(sessionsDir, path) &&
+			HermesSessionID(filepath.Base(path)) == rawID {
+			return "", false
+		}
+	}
+	return "", false
+}
+
 func (p *hermesProvider) Fingerprint(
 	ctx context.Context,
 	source SourceRef,

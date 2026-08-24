@@ -101,6 +101,24 @@ func (p *windsurfProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
+func (p *windsurfProvider) StoredMemberSource(path, fullSessionID string) (string, bool) {
+	rawID := ProviderRawSessionIDFromFull(p.Def, fullSessionID)
+	if rawID == "" {
+		return "", false
+	}
+	for _, root := range p.sources.roots {
+		ref, ok := p.sources.sourceRef(root, path)
+		if !ok {
+			continue
+		}
+		source := ref.Opaque.(windsurfSource)
+		if source.SessionID == rawID {
+			return source.DBPath, true
+		}
+	}
+	return "", false
+}
+
 func (p *windsurfProvider) Fingerprint(
 	ctx context.Context,
 	source SourceRef,

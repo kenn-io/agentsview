@@ -118,6 +118,10 @@ func (p *kiroProvider) PersistentArchiveSource(
 	return "", false
 }
 
+func (p *kiroProvider) StoredMemberSource(path, fullSessionID string) (string, bool) {
+	return p.PersistentArchiveSource(path, fullSessionID)
+}
+
 func (p *kiroProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,

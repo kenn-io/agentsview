@@ -222,6 +222,11 @@ type PersistentArchiveSourceResolver interface {
 	) (physicalPath string, ok bool)
 }
 
+// StoredMemberSourceResolver validates provider-owned logical member paths.
+type StoredMemberSourceResolver interface {
+	StoredMemberSource(path string, fullSessionID string) (physicalContainer string, ok bool)
+}
+
 // StoredSourceHintScope identifies one bounded stored-path prefix. Providers
 // explicitly declare virtual-member ownership because filename shape cannot
 // distinguish extensionless containers from ordinary paths.
@@ -298,6 +303,10 @@ func (b ProviderBase) FindSource(
 	FindSourceRequest,
 ) (SourceRef, bool, error) {
 	return SourceRef{}, false, nil
+}
+
+func (b ProviderBase) StoredMemberSource(string, string) (string, bool) {
+	return "", false
 }
 
 func (b ProviderBase) Fingerprint(

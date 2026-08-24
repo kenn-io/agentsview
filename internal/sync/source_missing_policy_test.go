@@ -1,7 +1,8 @@
 package sync
 
 import (
-	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,76 +10,57 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-type sourceMissingPolicyProvider struct {
-	parser.ProviderBase
-	validVirtual bool
-}
-
-func (sourceMissingPolicyProvider) Parse(
-	context.Context, parser.ParseRequest,
-) (parser.ParseOutcome, error) {
-	return parser.ParseOutcome{}, nil
-}
-
-func (p sourceMissingPolicyProvider) PersistentArchiveSource(
-	string, string,
-) (string, bool) {
-	if p.validVirtual {
-		return "state.db", true
+func TestStoredMemberSourceUsesProviderOwnedValidation(t *testing.T) {
+	root := t.TempDir()
+	newProvider := func(t *testing.T, agent parser.AgentType) parser.Provider {
+		provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		return provider
 	}
-	return "", false
-}
+	resolver := func(provider parser.Provider, path, id string) (string, bool) {
+		return provider.(parser.StoredMemberSourceResolver).StoredMemberSource(path, id)
+	}
 
-func TestPreserveConfiguredMissingSourceUsesProviderValidation(t *testing.T) {
-	physicalHashPath := `C:\workspace\project#1\session.jsonl`
-	tests := []struct {
-		name     string
-		provider parser.Provider
-		path     string
-		want     bool
-	}{
-		{
-			name: "physical hash path",
-			provider: sourceMissingPolicyProvider{ProviderBase: parser.ProviderBase{
-				Def: parser.AgentDef{Type: parser.AgentClaude},
-			}},
-			path: physicalHashPath,
-			want: true,
-		},
-		{
-			name: "validated Devin virtual path",
-			provider: sourceMissingPolicyProvider{
-				ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentDevin}},
-				validVirtual: true,
-			},
-			path: `C:\workspace\db#session-1`,
-			want: false,
-		},
-		{
-			name: "validated Windsurf virtual path",
-			provider: sourceMissingPolicyProvider{
-				ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentWindsurf}},
-				validVirtual: true,
-			},
-			path: `C:\workspace\state.vscdb#session-1`,
-			want: false,
-		},
-		{
-			name: "unvalidated Devin virtual path",
-			provider: sourceMissingPolicyProvider{ProviderBase: parser.ProviderBase{
-				Def: parser.AgentDef{Type: parser.AgentDevin},
-			}},
-			path: `C:\workspace\db#unknown`,
-			want: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, preserveConfiguredMissingSource(
-				context.Background(), tt.provider, tt.path, "session-1",
-			))
-		})
-	}
+	t.Run("Hermes aggregate and virtual members", func(t *testing.T) {
+		stateDB := filepath.Join(root, "state.db")
+		require.NoError(t, os.WriteFile(stateDB, nil, 0o600))
+		provider, ok := parser.NewProvider(parser.AgentHermes, parser.ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		container, ok := resolver(provider, stateDB, "hermes:member-1")
+		assert.True(t, ok)
+		assert.Equal(t, stateDB, container)
+		container, ok = resolver(provider, stateDB+"#member-1", "hermes:member-1")
+		assert.True(t, ok)
+		assert.Equal(t, stateDB, container)
+	})
+
+	t.Run("Hermes transcript and physical hash path", func(t *testing.T) {
+		provider := newProvider(t, parser.AgentHermes)
+		_, ok := resolver(provider, filepath.Join(root, "sessions", "member-1.jsonl"), "hermes:member-1")
+		assert.False(t, ok)
+		_, ok = resolver(provider, filepath.Join(root, "project#archive.jsonl"), "hermes:member-1")
+		assert.False(t, ok)
+	})
+
+	t.Run("Devin DB member and mismatch", func(t *testing.T) {
+		provider := newProvider(t, parser.AgentDevin)
+		path := filepath.Join(root, "cli", "sessions.db") + "#session-1"
+		container, ok := resolver(provider, path, "devin:session-1")
+		assert.True(t, ok)
+		assert.Equal(t, filepath.Join(root, "cli", "sessions.db"), container)
+		_, ok = resolver(provider, path, "devin:session-2")
+		assert.False(t, ok)
+	})
+
+	t.Run("Windsurf vscdb member and mismatch", func(t *testing.T) {
+		provider := newProvider(t, parser.AgentWindsurf)
+		path := filepath.Join(root, "workspaceStorage", "project", "state.vscdb") + "#session-1"
+		container, ok := resolver(provider, path, "windsurf:session-1")
+		assert.True(t, ok)
+		assert.Equal(t, filepath.Join(root, "workspaceStorage", "project", "state.vscdb"), container)
+		_, ok = resolver(provider, path, "windsurf:session-2")
+		assert.False(t, ok)
+	})
 }
 
 func TestConfiguredSourceMissingMembersKeepsVirtualMembersOnTombstonePolicy(t *testing.T) {

@@ -8776,15 +8776,6 @@ func TestFindSourceFileProviderAuthoritativePrefersProviderOverStoredPath(t *tes
 	assert.True(t, provider.findRequests[0].RequireFreshSource)
 }
 
-func TestPreserveConfiguredMissingSourceTreatsHashNamedPhysicalPathAsPhysical(
-	t *testing.T,
-) {
-	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{})
-	require.True(t, ok)
-	path := filepath.Join(t.TempDir(), "project#archive.jsonl")
-	assert.True(t, preserveConfiguredMissingSource(context.Background(), provider, path, "session"))
-}
-
 // TestStripVirtualSourceSuffixAider verifies that an aider
 // <history>#<runIdx> virtual path strips back to its physical history file,
 // so parse-diff missing-run and parse-error reporting keys on the on-disk
