@@ -649,7 +649,6 @@ func TestDirectBackend_IncludeDeletedReachesListAndSearch(t *testing.T) {
 	dbtest.EnsureTestDBAt(t, path)
 	d := dbtest.OpenTestDBAt(t, path)
 	env := &directTestEnv{db: d}
-	svc := service.NewDirectBackend(d, nil)
 	for _, id := range []string{"direct-active", "direct-deleted"} {
 		dbtest.SeedSession(t, env.db, id, "proj", func(s *db.Session) {
 			s.MessageCount = 2
@@ -674,7 +673,7 @@ func TestDirectBackend_IncludeDeletedReachesListAndSearch(t *testing.T) {
 	require.NoError(t, conn.Close())
 	d = dbtest.OpenTestDBAt(t, path)
 	env.db = d
-	svc = service.NewDirectBackend(d, nil)
+	svc := service.NewDirectBackend(d, nil)
 	defaultList, err := svc.List(context.Background(), service.ListFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"direct-active"}, directSessionIDs(defaultList.Sessions))

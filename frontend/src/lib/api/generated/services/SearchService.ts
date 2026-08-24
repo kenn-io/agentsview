@@ -92,6 +92,7 @@ export class SearchService {
     includeChildren,
     includeAutomated,
     includeOneShot,
+    includeDeleted,
     limit,
     cursor,
     context,
@@ -177,6 +178,10 @@ export class SearchService {
      */
     includeOneShot?: boolean,
     /**
+     * Include retained soft-deleted sessions
+     */
+    includeDeleted?: boolean,
+    /**
      * Maximum number of results
      */
     limit?: number,
@@ -215,6 +220,7 @@ export class SearchService {
         'include_children': includeChildren,
         'include_automated': includeAutomated,
         'include_one_shot': includeOneShot,
+        'include_deleted': includeDeleted,
         'limit': limit,
         'cursor': cursor,
         'context': context,

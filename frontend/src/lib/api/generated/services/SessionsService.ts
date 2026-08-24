@@ -114,6 +114,7 @@ export class SessionsService {
     includeAutomated,
     includeChildren,
     includeSource,
+    includeDeleted,
     outcome,
     healthGrade,
     cursor,
@@ -194,6 +195,10 @@ export class SessionsService {
      */
     includeSource?: boolean,
     /**
+     * Include retained soft-deleted sessions
+     */
+    includeDeleted?: boolean,
+    /**
      * Filter by detected outcome
      */
     outcome?: string,
@@ -255,6 +260,7 @@ export class SessionsService {
         'include_automated': includeAutomated,
         'include_children': includeChildren,
         'include_source': includeSource,
+        'include_deleted': includeDeleted,
         'outcome': outcome,
         'health_grade': healthGrade,
         'cursor': cursor,
@@ -334,6 +340,7 @@ export class SessionsService {
     includeAutomated,
     includeChildren,
     includeSource,
+    includeDeleted,
     outcome,
     healthGrade,
     cursor,
@@ -414,6 +421,10 @@ export class SessionsService {
      */
     includeSource?: boolean,
     /**
+     * Include retained soft-deleted sessions
+     */
+    includeDeleted?: boolean,
+    /**
      * Filter by detected outcome
      */
     outcome?: string,
@@ -475,6 +486,7 @@ export class SessionsService {
         'include_automated': includeAutomated,
         'include_children': includeChildren,
         'include_source': includeSource,
+        'include_deleted': includeDeleted,
         'outcome': outcome,
         'health_grade': healthGrade,
         'cursor': cursor,
