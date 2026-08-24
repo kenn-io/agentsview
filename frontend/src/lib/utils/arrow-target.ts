@@ -1,5 +1,3 @@
-const SESSION_LIST_QUERY = ".session-list-scroll";
-
 export type ArrowTarget = "sessionList" | "message" | "none";
 
 let sessionListElement: HTMLElement | null = null;
@@ -34,8 +32,5 @@ export function resolveArrowTarget(
 }
 
 export function getSessionListElement(): HTMLElement | null {
-  return sessionListElement ??
-    (typeof document === "undefined"
-      ? null
-      : document.querySelector<HTMLElement>(SESSION_LIST_QUERY));
+  return sessionListElement;
 }

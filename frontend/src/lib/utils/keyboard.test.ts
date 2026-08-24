@@ -157,7 +157,7 @@ describe("registerShortcuts", () => {
       return list;
     }
 
-    it("navigates sessions from focused or hovered list context", () => {
+    it("navigates sessions up and down in the registered list", () => {
       const list = mountSessionList();
       sessions.sessions = [
         { id: "s1" } as any,
@@ -169,6 +169,29 @@ describe("registerShortcuts", () => {
       row.focus();
       fireKey("ArrowDown");
       expect(sessions.activeSessionId).toBe("s2");
+      fireKey("ArrowUp");
+      expect(sessions.activeSessionId).toBe("s1");
+      expect(navigateMessage).not.toHaveBeenCalled();
+    });
+
+    it("keeps arrow navigation within the starred-only list", () => {
+      const list = mountSessionList();
+      sessions.sessions = [
+        { id: "s1" } as any,
+        { id: "s2" } as any,
+        { id: "s3" } as any,
+      ];
+      sessions.activeSessionId = "s1";
+      starred.filterOnly = true;
+      starred.ids = new Set(["s1", "s3"]);
+      const row = document.createElement("button");
+      list.appendChild(row);
+      row.focus();
+
+      fireKey("ArrowDown");
+      expect(sessions.activeSessionId).toBe("s3");
+      fireKey("ArrowUp");
+      expect(sessions.activeSessionId).toBe("s1");
       expect(navigateMessage).not.toHaveBeenCalled();
     });
 
@@ -186,11 +209,36 @@ describe("registerShortcuts", () => {
       expect(sessions.activeSessionId).toBeNull();
     });
 
+    it("does not route arrows from a dialog through the message fallback", () => {
+      const list = mountSessionList();
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      const button = document.createElement("button");
+      dialog.appendChild(button);
+      list.appendChild(dialog);
+      button.focus();
+
+      fireKey("ArrowDown");
+
+      expect(navigateMessage).not.toHaveBeenCalled();
+      expect(sessions.activeSessionId).toBeNull();
+    });
+
     it("clears the list route when the component disconnects", () => {
       const list = mountSessionList();
       list.remove();
       fireKey("ArrowDown");
       expect(navigateMessage).toHaveBeenCalledWith(1);
+    });
+
+    it("clears the list route when registration is unregistered", () => {
+      const list = mountSessionList();
+      detachSessionList?.();
+      detachSessionList = undefined;
+      list.appendChild(document.createElement("button"));
+      fireKey("ArrowDown");
+      expect(navigateMessage).toHaveBeenCalledWith(1);
+      expect(sessions.activeSessionId).toBeNull();
     });
   });
 

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { resolveArrowTarget } from "./arrow-target.js";
+import {
+  getSessionListElement,
+  registerSessionList,
+  resolveArrowTarget,
+} from "./arrow-target.js";
 
 function makeList() {
   const list = document.createElement("div");
@@ -46,5 +50,16 @@ describe("resolveArrowTarget", () => {
     const list = makeList();
     list.remove();
     expect(resolveArrowTarget(document.body, list, true)).toBe("message");
+  });
+
+  it("uses registration as the sole source of the session-list element", () => {
+    const list = makeList();
+    const detach = registerSessionList(list);
+
+    expect(getSessionListElement()).toBe(list);
+    detach();
+    expect(getSessionListElement()).toBeNull();
+    expect(resolveArrowTarget(document.body, null, true)).toBe("message");
+    list.remove();
   });
 });

@@ -59,7 +59,9 @@ test.describe("Session list", () => {
     await expect(sp.sessionItems.first()).toHaveClass(/active/);
   });
 
-  test("plain arrows over the sessions list navigate sessions", async () => {
+  test("plain arrows over the sessions list navigate sessions", async ({
+    page,
+  }) => {
     await sp.selectSession(0);
     await expect(sp.sessionItems.first()).toHaveClass(/active/);
 

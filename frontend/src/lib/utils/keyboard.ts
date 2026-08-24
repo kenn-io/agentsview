@@ -13,6 +13,12 @@ import { copyToClipboard } from "./clipboard.js";
 import { toggleSidebarWithFocus } from "./sidebar-toggle.js";
 import { getSessionListElement, resolveArrowTarget } from "./arrow-target.js";
 
+function starredSessionFilter(): ((s: { id: string }) => boolean) | undefined {
+  return starred.filterOnly
+    ? (s: { id: string }) => starred.isStarred(s.id)
+    : undefined;
+}
+
 function isInputFocused(): boolean {
   const el = document.activeElement;
   if (!el) return false;
@@ -146,31 +152,33 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
     const keyActions: Record<string, () => void> = {
       j: () => opts.navigateMessage(1),
       ArrowDown: () => {
-        if (resolveArrowTarget(document.activeElement, getSessionListElement()) === "sessionList") {
-          sessions.navigateSession(1);
-        } else {
+        const target = resolveArrowTarget(
+          document.activeElement,
+          getSessionListElement(),
+        );
+        if (target === "sessionList") {
+          sessions.navigateSession(1, starredSessionFilter());
+        } else if (target === "message") {
           opts.navigateMessage(1);
         }
       },
       k: () => opts.navigateMessage(-1),
       ArrowUp: () => {
-        if (resolveArrowTarget(document.activeElement, getSessionListElement()) === "sessionList") {
-          sessions.navigateSession(-1);
-        } else {
+        const target = resolveArrowTarget(
+          document.activeElement,
+          getSessionListElement(),
+        );
+        if (target === "sessionList") {
+          sessions.navigateSession(-1, starredSessionFilter());
+        } else if (target === "message") {
           opts.navigateMessage(-1);
         }
       },
       "]": () => {
-        const filter = starred.filterOnly
-          ? (s: { id: string }) => starred.isStarred(s.id)
-          : undefined;
-        sessions.navigateSession(1, filter);
+        sessions.navigateSession(1, starredSessionFilter());
       },
       "[": () => {
-        const filter = starred.filterOnly
-          ? (s: { id: string }) => starred.isStarred(s.id)
-          : undefined;
-        sessions.navigateSession(-1, filter);
+        sessions.navigateSession(-1, starredSessionFilter());
       },
       o: () => ui.toggleSort(),
       l: () => ui.cycleLayout(),
