@@ -492,26 +492,6 @@ func resolveKiloLegacyTarget(root string) (string, []string) {
 	return targetRoot, files
 }
 
-func resolveProviderFiles(agent parser.AgentType, root string, keep func(string) bool) (string, []string) {
-	provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
-	if !ok {
-		return "", nil
-	}
-	sources, err := provider.Discover(context.Background())
-	if err != nil {
-		return "", nil
-	}
-	var files []string
-	for _, source := range sources {
-		path := providerDiscoveredPath(source)
-		if keep(path) && regularCuratedFile(root, path) {
-			files = append(files, filepath.Clean(path))
-		}
-	}
-	slices.Sort(files)
-	return root, slices.Compact(files)
-}
-
 func curatedRoot(root string) bool {
 	info, err := os.Lstat(root)
 	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0

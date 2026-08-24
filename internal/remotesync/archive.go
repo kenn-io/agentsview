@@ -83,10 +83,6 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 	return nil
 }
 
-func writeHermesStateDBSnapshot(tw *tar.Writer, stateDB string) error {
-	return writeSQLiteStateDBSnapshot(tw, stateDB)
-}
-
 func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 	_, modTime, exists := hermesSQLiteSnapshotIdentity(stateDB)
 	if !exists {

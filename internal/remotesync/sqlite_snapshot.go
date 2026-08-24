@@ -220,10 +220,6 @@ func sqliteSnapshotPaths(stateDB string) []string {
 	}
 }
 
-func hermesStateDBForArchivePath(path string) (string, bool) {
-	return sqliteSnapshotForArchivePath(path)
-}
-
 func sqliteSnapshotForArchivePath(path string) (string, bool) {
 	path = filepath.Clean(path)
 	switch filepath.Base(path) {
