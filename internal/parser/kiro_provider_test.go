@@ -596,6 +596,77 @@ func TestKiroProviderRejectsCurrentSymlinkEscapeOnLookupAndChange(t *testing.T) 
 	assert.Empty(t, changed)
 }
 
+func TestKiroProviderFindSourceRanksAllRepresentationsAndRoots(t *testing.T) {
+	root := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	legacy := filepath.Join(root, rawID+".jsonl")
+	current := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	writeSourceFile(t, legacy, kiroProviderJSONLFixture("legacy"))
+	writeSourceFile(t, current, `{"payload":{"type":"user","content":"current"}}`+"\n")
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: rawID, StoredFilePath: legacy,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, current, found.DisplayPath,
+		"a non-pinned stored hint must use the same representation ranking as discovery")
+	pinned, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: rawID, StoredFilePath: legacy, PreferStoredSource: true,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, legacy, pinned.DisplayPath)
+}
+
+func TestKiroProviderChangedCurrentEventIncludesSQLiteDuplicate(t *testing.T) {
+	root := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	current := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	writeSourceFile(t, current, `{"payload":{"type":"user","content":"current"}}`+"\n")
+	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
+	seedKiroSQLiteSession(t, db, "/home/user/code/kiro-app", rawID,
+		readKiroFixture(t, "standard_payload.json"), 1779012000000, 1779012030000)
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: current, WatchRoot: root, EventKind: "write",
+	})
+	require.NoError(t, err)
+	got := make([]string, len(changed))
+	for i, source := range changed {
+		got[i] = source.DisplayPath
+	}
+	assert.ElementsMatch(t, []string{current, KiroSQLiteVirtualPath(dbPath, rawID)}, got)
+	assert.Equal(t, int64(3), provider.(ReconciliationSourceRanker).
+		ReconciliationSourceRank(changed[1]).Class,
+		"SQLite remains the higher-ranked duplicate when a current transcript changes")
+}
+
+func TestKiroProviderCurrentSidecarRequiresRegularContainedFile(t *testing.T) {
+	root := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	current := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	writeSourceFile(t, current, `{"payload":{"type":"user","content":"hello"}}`+"\n")
+	sidecar := filepath.Join(filepath.Dir(current), "session.json")
+	require.NoError(t, os.Mkdir(sidecar, 0o755))
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: sidecar, WatchRoot: root, EventKind: "write",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, changed, "a directory named session.json is not metadata")
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Empty(t, outcome.Results[0].Result.Session.SessionName)
+}
+
 func TestKiroIDEProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	oldWSHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

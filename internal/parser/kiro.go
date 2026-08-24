@@ -339,8 +339,10 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 		return nil, nil, nil
 	}
 	meta := kiroCurrentMeta{}
-	if data, err := os.ReadFile(filepath.Join(filepath.Dir(path), "session.json")); err == nil {
-		_ = json.Unmarshal(data, &meta)
+	if sidecar, ok := kiroCurrentSidecarPath(p.sources.roots, path); ok {
+		if data, err := os.ReadFile(sidecar); err == nil {
+			_ = json.Unmarshal(data, &meta)
+		}
 	}
 	cwd := ""
 	if len(meta.WorkspacePaths) > 0 {

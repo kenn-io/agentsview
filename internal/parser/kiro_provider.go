@@ -454,6 +454,16 @@ func (s kiroSourceSet) SourcesForChangedPath(
 			continue
 		}
 		sources := []SourceRef{source}
+		if current, ok := s.sourceFromRef(source); ok &&
+			current.Kind == kiroSourceCurrentJSONL {
+			if dbPath := kiroSQLiteDBPath(root); dbPath != "" &&
+				KiroSQLiteSessionExists(dbPath, current.SessionID) {
+				sources = append(sources, s.newSourceRef(
+					root, KiroSQLiteVirtualPath(dbPath, current.SessionID), dbPath,
+					current.SessionID, kiroSourceSQLiteSession,
+				))
+			}
+		}
 		sources = append(
 			sources,
 			s.changedPathTombstones(root, source, req.StoredSourcePaths)...,
@@ -541,6 +551,7 @@ func (s kiroSourceSet) FindSource(
 	if err := ctx.Err(); err != nil {
 		return SourceRef{}, false, err
 	}
+	var hinted []SourceRef
 	for _, path := range []string{req.StoredFilePath, req.FingerprintKey} {
 		if path == "" {
 			continue
@@ -553,14 +564,21 @@ func (s kiroSourceSet) FindSource(
 				if req.RawSessionID == "" {
 					return source, true, nil
 				}
+				if sourceMatchesKiroSession(source, req.RawSessionID) {
+					if req.PreferStoredSource {
+						return source, true, nil
+					}
+					hinted = append(hinted, source)
+				}
 			}
 		}
 	}
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
 	}
+	var candidates []SourceRef
+	candidates = append(candidates, hinted...)
 	for _, root := range s.roots {
-		var candidates []SourceRef
 		if dbPath := kiroSQLiteDBPath(root); dbPath != "" &&
 			KiroSQLiteSessionExists(dbPath, req.RawSessionID) {
 			candidates = append(candidates, s.newSourceRef(
@@ -568,8 +586,13 @@ func (s kiroSourceSet) FindSource(
 				req.RawSessionID, kiroSourceSQLiteSession,
 			))
 		}
-		if source, ok := s.findCurrentJSONL(root, req.RawSessionID); ok {
-			candidates = append(candidates, source)
+		for _, file := range s.discoverCurrentJSONL(root) {
+			if _, id, ok := kiroCurrentPathUnderRoot(root, file.Path); ok &&
+				id == req.RawSessionID {
+				if source, ok := s.sourceRef(root, file.Path, false); ok {
+					candidates = append(candidates, source)
+				}
+			}
 		}
 		if path := s.legacySourceFile(root, req.RawSessionID); path != "" {
 			if source, ok := s.sourceRef(root, path, false); ok {
@@ -584,9 +607,9 @@ func (s kiroSourceSet) FindSource(
 				candidates = append(candidates, source)
 			}
 		}
-		if source, ok := s.bestSource(candidates); ok {
-			return source, true, nil
-		}
+	}
+	if source, ok := s.bestSource(candidates); ok {
+		return source, true, nil
 	}
 	return SourceRef{}, false, nil
 }
@@ -666,11 +689,12 @@ func (s kiroSourceSet) Fingerprint(
 		return fingerprint, nil
 	}
 	if src.Kind == kiroSourceCurrentJSONL {
-		sidecar := filepath.Join(filepath.Dir(src.Path), "session.json")
-		if sideInfo, err := os.Stat(sidecar); err == nil && !sideInfo.IsDir() {
-			fingerprint.Size += sideInfo.Size()
-			if sideInfo.ModTime().UnixNano() > fingerprint.MTimeNS {
-				fingerprint.MTimeNS = sideInfo.ModTime().UnixNano()
+		if sidecar, ok := kiroCurrentSidecarPath(s.roots, src.Path); ok {
+			if sideInfo, err := os.Stat(sidecar); err == nil {
+				fingerprint.Size += sideInfo.Size()
+				if sideInfo.ModTime().UnixNano() > fingerprint.MTimeNS {
+					fingerprint.MTimeNS = sideInfo.ModTime().UnixNano()
+				}
 			}
 		}
 	}
@@ -746,6 +770,11 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if currentPath, sessionID, ok := kiroCurrentPathForEvent(root, path); ok {
+		if filepath.Base(path) == "session.json" {
+			if _, err := os.Lstat(path); err == nil && !kiroRegularFileUnderRoot(root, path) {
+				return SourceRef{}, false
+			}
+		}
 		if !kiroEventPathUnderRoot(root, currentPath) {
 			return SourceRef{}, false
 		}
@@ -812,6 +841,7 @@ func (s kiroSourceSet) newSourceRef(
 	}
 	return SourceRef{
 		Provider:       AgentKiro,
+		ConfiguredRoot: root,
 		Key:            key,
 		DisplayPath:    path,
 		FingerprintKey: path,
@@ -825,6 +855,22 @@ func (s kiroSourceSet) newSourceRef(
 	}
 }
 
+func sourceMatchesKiroSession(source SourceRef, rawID string) bool {
+	src, ok := source.Opaque.(kiroSource)
+	if !ok {
+		if ptr, ptrOK := source.Opaque.(*kiroSource); ptrOK && ptr != nil {
+			src, ok = *ptr, true
+		}
+	}
+	if !ok {
+		return false
+	}
+	if src.SessionID != "" {
+		return src.SessionID == rawID
+	}
+	return KiroSessionIDFromPath(src.Path) == rawID
+}
+
 func (s kiroSourceSet) bestSource(sources []SourceRef) (SourceRef, bool) {
 	if len(sources) == 0 {
 		return SourceRef{}, false
@@ -833,12 +879,23 @@ func (s kiroSourceSet) bestSource(sources []SourceRef) (SourceRef, bool) {
 	bestRank := s.sourceRank(best)
 	for _, source := range sources[1:] {
 		rank := s.sourceRank(source)
-		if rank.Class > bestRank.Class ||
-			(rank.Class == bestRank.Class && rank.Recency > bestRank.Recency) {
+		bestRoot, sourceRoot := s.rootIndex(best.ConfiguredRoot), s.rootIndex(source.ConfiguredRoot)
+		if sourceRoot < bestRoot ||
+			(sourceRoot == bestRoot && (rank.Class > bestRank.Class ||
+				(rank.Class == bestRank.Class && rank.Recency > bestRank.Recency))) {
 			best, bestRank = source, rank
 		}
 	}
 	return best, true
+}
+
+func (s kiroSourceSet) rootIndex(root string) int {
+	for i, configured := range s.roots {
+		if samePath(configured, root) {
+			return i
+		}
+	}
+	return len(s.roots)
 }
 
 func (s kiroSourceSet) sourceRank(source SourceRef) ReconciliationSourceRank {
@@ -1051,6 +1108,20 @@ func kiroCurrentPathForEvent(root, path string) (string, string, bool) {
 		return "", "", false
 	}
 	return filepath.Join(filepath.Dir(path), "messages.jsonl"), session, true
+}
+
+func kiroCurrentSidecarPath(roots []string, transcript string) (string, bool) {
+	for _, root := range roots {
+		current, _, ok := kiroCurrentPathUnderRoot(root, transcript)
+		if !ok || !samePath(current, transcript) {
+			continue
+		}
+		sidecar := filepath.Join(filepath.Dir(transcript), "session.json")
+		if kiroRegularFileUnderRoot(root, sidecar) {
+			return sidecar, true
+		}
+	}
+	return "", false
 }
 
 func kiroRegularFileUnderRoot(root, path string) bool {
