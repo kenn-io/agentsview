@@ -29,6 +29,8 @@ export interface DisplayItem {
   group?: SessionGroup;
   /** Session groups represented by a collapsible section header. */
   sectionGroups?: SessionGroup[];
+  /** Sessions represented by a collapsible child-group header. */
+  memberSessionIds?: string[];
   /** For child items within an expanded continuation chain. */
   session?: SessionGroupInput;
   /** True when this is a child session inside an expanded group. */
@@ -291,6 +293,7 @@ function emitGroupItems(
       label: "Subagents",
       count: subagents.length,
       group: g,
+      memberSessionIds: subagents.map((session) => session.id),
       depth: 1,
       isLastChild: depth1Idx === depth1Count - 1,
       height: TEAM_HEADER_HEIGHT,
@@ -331,6 +334,7 @@ function emitGroupItems(
       label: "Team",
       count: teammates.length,
       group: g,
+      memberSessionIds: teammates.map((session) => session.id),
       depth: 1,
       isLastChild: depth1Idx === depth1Count - 1,
       height: TEAM_HEADER_HEIGHT,
@@ -427,6 +431,11 @@ export function adjacentVisibleSessionId(
   let current = displayItems.findIndex(
     (item) => displaySessionId(item) === activeSessionId,
   );
+  if (current < 0) {
+    current = displayItems.findIndex(
+      (item) => item.memberSessionIds?.includes(activeSessionId),
+    );
+  }
   if (current < 0) {
     current = displayItems.findIndex(
       (item) =>

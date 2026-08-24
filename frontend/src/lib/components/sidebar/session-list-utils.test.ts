@@ -400,6 +400,57 @@ describe("adjacentVisibleSessionId", () => {
     );
   });
 
+  it.each([
+    {
+      name: "subagent",
+      child: {
+        relationship_type: "subagent" as const,
+      },
+    },
+    {
+      name: "teammate",
+      child: {
+        first_message: "<teammate-message>hi</teammate-message>",
+      },
+    },
+  ])("skips a collapsed $name group in both directions", ({ child }) => {
+    const root = makeSession({ id: "root" });
+    const continuation = makeSession({
+      id: "continuation",
+      parent_session_id: root.id,
+    });
+    const hidden = makeSession({
+      id: "hidden",
+      parent_session_id: root.id,
+      ...child,
+    });
+    const lineage: SessionGroup = {
+      key: root.id,
+      project: root.project,
+      sessions: [root, continuation, hidden],
+      primarySessionId: root.id,
+      totalMessages: 30,
+      firstMessage: root.first_message,
+      startedAt: root.started_at,
+      endedAt: hidden.ended_at,
+    };
+    const next = makeGroup("gpt", 1, "next");
+    const items = buildDisplayItems(
+      [lineage, next],
+      [],
+      "none",
+      new Set(),
+      new Set([lineage.key]),
+    );
+
+    expect(adjacentVisibleSessionId(items, hidden.id, -1)).toBe(
+      continuation.id,
+    );
+    expect(adjacentVisibleSessionId(items, hidden.id, 1)).toBe(
+      next.primarySessionId,
+    );
+  });
+
   it("moves from a collapsed section to the next visible session", () => {
     const claude = makeGroup("claude", 1, "collapsed");
     const gpt = makeGroup("gpt", 1, "visible");
