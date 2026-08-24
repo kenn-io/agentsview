@@ -802,7 +802,11 @@ func verbatimSessionFileUnderAllowedRoot(
 		if !ok || rel == "" {
 			continue
 		}
-		if !sessionFileShape(agent, rel) {
+		if agent == parser.AgentVSCodeCopilot && isVSCodeWorkspaceMetadata(rel) {
+			if !vscodeWorkspaceMetadataTiedToAllowedSession(allowed, dir, file) {
+				continue
+			}
+		} else if !sessionFileShape(agent, rel) {
 			continue
 		}
 		if symlinkEscapesRoot(dir, file) {
@@ -824,10 +828,6 @@ func sessionFileShape(agent parser.AgentType, rel string) bool {
 		return ok
 	case parser.AgentVSCodeCopilot:
 		parts := strings.Split(rel, "/")
-		if len(parts) == 3 && parts[0] == "workspaceStorage" &&
-			parts[1] != "" && parts[2] == "workspace.json" {
-			return true
-		}
 		if len(parts) == 4 && parts[0] == "workspaceStorage" &&
 			parts[2] == "chatSessions" {
 			return parser.IsValidSessionID(strings.TrimSuffix(parts[3], filepath.Ext(parts[3]))) &&
@@ -844,6 +844,46 @@ func sessionFileShape(agent parser.AgentType, rel string) bool {
 	default:
 		return rooCodeSessionFileShape(rel)
 	}
+}
+
+func vscodeWorkspaceMetadataTiedToAllowedSession(
+	allowed TargetSet, root, file string,
+) bool {
+	rel, ok := remoteArchiveRel(root, file)
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rel, "/")
+	if !isVSCodeWorkspaceMetadata(rel) {
+		return false
+	}
+	for _, selected := range allowed.Files[parser.AgentVSCodeCopilot] {
+		selectedRel, ok := remoteArchiveRel(root, selected)
+		if !ok {
+			continue
+		}
+		selectedParts := strings.Split(selectedRel, "/")
+		if len(selectedParts) != 4 || selectedParts[0] != "workspaceStorage" ||
+			selectedParts[1] != parts[1] || selectedParts[2] != "chatSessions" {
+			continue
+		}
+		if vscodeChatSessionFileShape(selectedParts[3]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isVSCodeWorkspaceMetadata(rel string) bool {
+	parts := strings.Split(rel, "/")
+	return len(parts) == 3 && parts[0] == "workspaceStorage" &&
+		parts[1] != "" && parts[2] == "workspace.json"
+}
+
+func vscodeChatSessionFileShape(name string) bool {
+	ext := filepath.Ext(name)
+	return (ext == ".json" || ext == ".jsonl") &&
+		parser.IsValidSessionID(strings.TrimSuffix(name, ext))
 }
 
 func isAiderUnsafeRoot(dir string) bool {

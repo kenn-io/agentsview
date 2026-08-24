@@ -575,6 +575,54 @@ func TestRemoteSyncArchiveRejectsDeltaForFileScopedAgent(t *testing.T) {
 	assert.NotContains(t, archiveW.Body.String(), "extension secret value")
 }
 
+func TestRemoteSyncArchiveRejectsUnauthorizedVSCodeWorkspaceInFullArchive(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	vscodeRoot := filepath.Join(dir, "Code", "User")
+	workspaceDir := filepath.Join(vscodeRoot, "workspaceStorage", "allowed")
+	chatPath := filepath.Join(workspaceDir, "chatSessions", "01234567-89ab-cdef-0123-456789abcdef.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(chatPath), 0o755))
+	require.NoError(t, os.WriteFile(chatPath, []byte(`{"id":"chat"}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspaceDir, "workspace.json"), []byte(`{"folder":"/repo"}`), 0o644,
+	))
+	srv := New(config.Config{
+		Host:        "127.0.0.1",
+		Port:        8080,
+		DataDir:     dir,
+		DBPath:      dbPath,
+		AuthToken:   "remote-token",
+		RequireAuth: false,
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCodeCopilot: {vscodeRoot},
+		},
+	}, database, nil)
+	handler := currentRemoteSyncHandler(srv.Handler())
+	targetReq := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
+	targetReq.Header.Set("Authorization", "Bearer remote-token")
+	targetW := httptest.NewRecorder()
+	handler.ServeHTTP(targetW, targetReq)
+	require.Equal(t, http.StatusOK, targetW.Code, targetW.Body.String())
+	var targets remotesync.TargetSet
+	require.NoError(t, json.Unmarshal(targetW.Body.Bytes(), &targets))
+	unauthorized := filepath.Join(vscodeRoot, "workspaceStorage", "other", "workspace.json")
+	targets.Files[parser.AgentVSCodeCopilot] = append(
+		targets.Files[parser.AgentVSCodeCopilot], unauthorized,
+	)
+	payload, err := json.Marshal(remotesync.ArchiveRequest{TargetSet: targets})
+	require.NoError(t, err)
+	archiveReq := httptest.NewRequest(
+		http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload),
+	)
+	archiveReq.Header.Set("Authorization", "Bearer remote-token")
+	archiveReq.Header.Set("Content-Type", "application/json")
+	archiveW := httptest.NewRecorder()
+	handler.ServeHTTP(archiveW, archiveReq)
+
+	assert.Equal(t, http.StatusForbidden, archiveW.Code, archiveW.Body.String())
+}
+
 func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
 	handler, targets, _ := newWindsurfRemoteSyncServer(t)
 	payload, err := json.Marshal(targets)

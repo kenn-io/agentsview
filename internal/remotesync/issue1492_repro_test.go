@@ -239,6 +239,28 @@ func TestIssue1492VanishedVSCodeWorkspaceIsEvictedFromMirror(t *testing.T) {
 	assert.Equal(t, []string{mirrorWorkspace}, diff.Deletions)
 }
 
+func TestIssue1492VSCodeWorkspaceMetadataRequiresSelectedChat(t *testing.T) {
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "workspaceStorage", "allowed")
+	chat := filepath.Join(workspaceDir, "chatSessions", "01234567-89ab-cdef-0123-456789abcdef.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(chat), 0o755))
+	require.NoError(t, os.WriteFile(chat, []byte(`{"id":"chat"}`), 0o644))
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentVSCodeCopilot: {root},
+	}}
+	allowed := ResolveTargets(cfg)
+	unauthorized := filepath.Join(root, "workspaceStorage", "other", "workspace.json")
+	_, ok := SelectAllowedFiles(allowed, []string{unauthorized})
+	assert.False(t, ok)
+
+	requested := TargetSet{
+		Dirs:  map[parser.AgentType][]string{parser.AgentVSCodeCopilot: {root}},
+		Files: map[parser.AgentType][]string{parser.AgentVSCodeCopilot: {chat, unauthorized}},
+	}
+	_, ok = SelectAllowedTargets(allowed, requested)
+	assert.False(t, ok)
+}
+
 func TestIssue1492EmptyEditorRootsRemainWithoutEmptyFileTargets(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{filepath.Join(root, "cursor"), filepath.Join(root, "vscode")} {
