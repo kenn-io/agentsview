@@ -529,7 +529,10 @@ func (m *model) analyticsLines() []string {
 func (m *model) usageLines() []string {
 	u := m.pageData.Usage
 	if u == nil {
-		return nil
+		if len(m.pageData.UsageTopSessions) == 0 {
+			return nil
+		}
+		return append([]string{titleStyle.Render("Usage"), "", titleStyle.Render("Top sessions by cost")}, m.usageTopSessionLines()...)
 	}
 	lines := []string{titleStyle.Render("Usage"), mutedStyle.Render(u.From + " → " + u.To), "",
 		fmt.Sprintf("Total cost          %s", formatMoney(u.Totals.TotalCost)), metric("Input tokens", u.Totals.InputTokens), metric("Output tokens", u.Totals.OutputTokens),
@@ -563,10 +566,16 @@ func (m *model) usageLines() []string {
 			fmt.Sprintf("delta %s · %d tokens · %d sessions", formatMoney(pair.Deltas.TotalCostDelta), pair.Deltas.TotalTokensDelta, pair.Deltas.SessionCountDelta))
 	}
 	lines = append(lines, "", titleStyle.Render("Top sessions by cost"))
+	lines = append(lines, m.usageTopSessionLines()...)
+	lines = append(lines, "", mutedStyle.Render(":compare model|LEFT|RIGHT or :compare project|LEFT|RIGHT"))
+	return lines
+}
+
+func (m *model) usageTopSessionLines() []string {
+	lines := make([]string, 0, len(m.pageData.UsageTopSessions))
 	for _, session := range m.pageData.UsageTopSessions {
 		lines = append(lines, fmt.Sprintf("%-28s %-10s %8s  %10d tokens", truncateWidth(safe(session.DisplayName), 28), safe(session.Agent), formatMoney(session.Cost), session.TotalTokens))
 	}
-	lines = append(lines, "", mutedStyle.Render(":compare model|LEFT|RIGHT or :compare project|LEFT|RIGHT"))
 	return lines
 }
 

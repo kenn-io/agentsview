@@ -26,6 +26,7 @@ type fakeDataClient struct {
 	sessionExtrasFn func(context.Context, string) (SessionExtras, error)
 	messagesFn      func(context.Context, string, service.MessageFilter) (*service.MessageList, error)
 	loadPageFn      func(context.Context, Page, PageQuery) (PageData, error)
+	pageUpdates     <-chan pageUpdate
 }
 
 func (f *fakeDataClient) ListSessions(context.Context, service.ListFilter) (*service.SessionList, error) {
@@ -118,6 +119,12 @@ func (f *fakeDataClient) LoadPage(ctx context.Context, page Page, query PageQuer
 		return f.loadPageFn(ctx, page, query)
 	}
 	return f.page, nil
+}
+
+func (f *fakeDataClient) LoadPageUpdates(
+	context.Context, Page, PageQuery,
+) (<-chan pageUpdate, bool) {
+	return f.pageUpdates, f.pageUpdates != nil
 }
 func (f *fakeDataClient) Mutate(_ context.Context, mutation Mutation) (string, error) {
 	f.mutations = append(f.mutations, mutation)
@@ -359,6 +366,34 @@ func TestSwitchPageKeepsCachedContentVisibleDuringRefresh(t *testing.T) {
 	report := m.renderReport(80, 20)
 	assert.Contains(t, report, "73")
 	assert.NotContains(t, report, m.strings.Loading)
+}
+
+func TestDashboardDisplaysSurfacesAsTheyLoad(t *testing.T) {
+	updates := make(chan pageUpdate, 2)
+	m := newModel(context.Background(), &fakeDataClient{pageUpdates: updates}, Options{})
+	m.width, m.height, m.page = 100, 30, PageDashboard
+	command := m.loadCurrent()
+	updates <- pageUpdate{Data: PageData{Analytics: &db.AnalyticsSummary{TotalSessions: 73}}}
+
+	first := command()
+	next, command := m.Update(first)
+	m = next.(*model)
+
+	require.NotNil(t, command)
+	assert.True(t, m.loading)
+	assert.Contains(t, m.renderReport(80, 20), "73")
+
+	updates <- pageUpdate{
+		Data: PageData{Analytics: &db.AnalyticsSummary{TotalSessions: 74}},
+		Done: true,
+	}
+	second := command()
+	next, command = m.Update(second)
+	m = next.(*model)
+
+	assert.Nil(t, command)
+	assert.False(t, m.loading)
+	assert.Contains(t, m.renderReport(80, 20), "74")
 }
 
 func TestSwitchPageCancelsPreviousPageLoad(t *testing.T) {

@@ -108,6 +108,8 @@ type pageLoadedMsg struct {
 	page       Page
 	data       PageData
 	err        error
+	done       bool
+	updates    <-chan pageUpdate
 }
 type mutationDoneMsg struct {
 	message string
@@ -195,6 +197,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation != m.generation {
 			return m, nil
 		}
+		m.stopPageLoad()
 		m.loading = false
 		if msg.err != nil {
 			m.errText = msg.err.Error()
@@ -280,16 +283,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation != m.generation {
 			return m, nil
 		}
-		m.loading = false
+		done := msg.done || msg.updates == nil
+		m.loading = !done
+		if done {
+			m.stopPageLoad()
+		}
 		if msg.err != nil {
 			m.errText = msg.err.Error()
 			return m, nil
 		}
-		m.errText, m.pageData = "", msg.data
+		m.pageData = msg.data
 		m.pageCache[msg.page] = msg.data
 		delete(m.reportCache, msg.page)
+		m.errText = ""
 		if msg.data.Settings != nil {
 			m.readOnly = msg.data.Settings.ReadOnly
+		}
+		if !done {
+			return m, waitPageUpdateCmd(msg.generation, msg.page, msg.updates)
 		}
 		return m, nil
 	case mutationDoneMsg:
@@ -918,7 +929,7 @@ func (m *model) previousPage() (tea.Model, tea.Cmd) {
 
 func (m *model) loadCurrent() tea.Cmd {
 	m.stopPageLoad()
-	loadCtx, cancel := context.WithCancel(m.ctx)
+	loadCtx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
 	m.cancelPageLoad = cancel
 	m.generation++
 	gen := m.generation
@@ -926,22 +937,41 @@ func (m *model) loadCurrent() tea.Cmd {
 	if m.page == PageSessions {
 		filter, query, cursor := m.filter, m.query.Search, m.searchCursor
 		return func() tea.Msg {
-			ctx, cancel := context.WithTimeout(loadCtx, 30*time.Second)
-			defer cancel()
 			if query != "" {
-				result, err := m.client.Search(ctx, service.SearchRequest{Query: query, Project: filter.Project, Cursor: cursor, Limit: 100})
+				result, err := m.client.Search(loadCtx, service.SearchRequest{Query: query, Project: filter.Project, Cursor: cursor, Limit: 100})
 				return sessionsLoadedMsg{generation: gen, search: result, err: err}
 			}
-			page, err := m.client.ListSessions(ctx, filter)
+			page, err := m.client.ListSessions(loadCtx, filter)
 			return sessionsLoadedMsg{generation: gen, page: page, err: err}
 		}
 	}
 	page, query := m.page, m.query
+	if client, ok := m.client.(progressiveDataClient); ok {
+		if updates, supported := client.LoadPageUpdates(loadCtx, page, query); supported {
+			return waitPageUpdateCmd(gen, page, updates)
+		}
+	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(loadCtx, 30*time.Second)
-		defer cancel()
-		data, err := m.client.LoadPage(ctx, page, query)
+		data, err := m.client.LoadPage(loadCtx, page, query)
 		return pageLoadedMsg{generation: gen, page: page, data: data, err: err}
+	}
+}
+
+func waitPageUpdateCmd(
+	generation uint64, page Page, updates <-chan pageUpdate,
+) tea.Cmd {
+	return func() tea.Msg {
+		update, ok := <-updates
+		if !ok {
+			return pageLoadedMsg{
+				generation: generation, page: page, done: true,
+				err: errors.New("page update stream ended before completion"),
+			}
+		}
+		return pageLoadedMsg{
+			generation: generation, page: page, data: update.Data, err: update.Err,
+			done: update.Done, updates: updates,
+		}
 	}
 }
 

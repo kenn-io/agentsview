@@ -171,6 +171,46 @@ func TestClientLoadsDashboardSurfacesConcurrently(t *testing.T) {
 	require.NoError(t, <-errs)
 }
 
+func TestClientStreamsDashboardSurfacesAsTheyFinish(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/analytics/summary" {
+			_, _ = io.WriteString(w, `{"total_sessions":73}`)
+			return
+		}
+		<-release
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		server.Close()
+	})
+
+	updates, supported := NewClient(server.URL, "", false).LoadPageUpdates(
+		context.Background(), PageDashboard, PageQuery{},
+	)
+	require.True(t, supported)
+	select {
+	case update := <-updates:
+		require.NoError(t, update.Err)
+		require.NotNil(t, update.Data.Analytics)
+		assert.Equal(t, 73, update.Data.Analytics.TotalSessions)
+		assert.False(t, update.Done)
+	case <-time.After(time.Second):
+		require.FailNow(t, "dashboard summary was held behind slower surfaces")
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	var final pageUpdate
+	for update := range updates {
+		final = update
+	}
+	require.NoError(t, final.Err)
+	assert.True(t, final.Done)
+	assert.NotNil(t, final.Data.Signals)
+}
+
 func TestClientLoadsSessionExtrasConcurrently(t *testing.T) {
 	started := make(chan string, 3)
 	release := make(chan struct{})
@@ -327,6 +367,54 @@ func TestClientLoadsUsageSummaryAndTopSessionsConcurrently(t *testing.T) {
 		"/api/v1/usage/summary":      true,
 		"/api/v1/usage/top-sessions": true,
 	}, seen)
+}
+
+func TestClientStreamsUsageRankingBeforeSlowerSummary(t *testing.T) {
+	releaseSummary := make(chan struct{})
+	var releaseOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/usage/summary":
+			<-releaseSummary
+			_, _ = io.WriteString(w, `{}`)
+		case "/api/v1/usage/top-sessions":
+			_, _ = io.WriteString(w, `[{"sessionId":"s1","displayName":"fast result","agent":"codex","cost":{"microdollars":1000},"totalTokens":7}]`)
+		case "/api/v1/usage/comparison":
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseSummary) })
+		server.Close()
+	})
+
+	updates, supported := NewClient(server.URL, "", false).LoadPageUpdates(
+		context.Background(), PageUsage, PageQuery{},
+	)
+	require.True(t, supported)
+	select {
+	case update := <-updates:
+		require.NoError(t, update.Err)
+		require.Len(t, update.Data.UsageTopSessions, 1)
+		assert.Equal(t, "fast result", update.Data.UsageTopSessions[0].DisplayName)
+		assert.Nil(t, update.Data.Usage)
+		assert.False(t, update.Done)
+	case <-time.After(time.Second):
+		require.FailNow(t, "usage ranking was held behind the slower summary")
+	}
+
+	releaseOnce.Do(func() { close(releaseSummary) })
+	var final pageUpdate
+	for update := range updates {
+		final = update
+	}
+	require.NoError(t, final.Err)
+	assert.True(t, final.Done)
+	assert.NotNil(t, final.Data.Usage)
+	assert.NotNil(t, final.Data.UsageComparison)
+	assert.Len(t, final.Data.UsageTopSessions, 1)
 }
 
 func TestClientReturnsDaemonErrorMessage(t *testing.T) {

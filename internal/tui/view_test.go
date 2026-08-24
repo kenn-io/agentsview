@@ -139,6 +139,22 @@ func TestPageLoadInvalidatesCachedReport(t *testing.T) {
 	assert.NotContains(t, view, "old row")
 }
 
+func TestUsageRendersCompletedRankingWhileSummaryLoads(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.width, m.height, m.focus, m.page, m.loading = 100, 30, 1, PageUsage, true
+	m.pageData.UsageTopSessions = []db.TopSessionEntry{{
+		DisplayName: "fast result",
+		Agent:       "codex",
+		TotalTokens: 7,
+	}}
+
+	report := m.renderReport(80, 20)
+
+	assert.Contains(t, report, "Top sessions by cost")
+	assert.Contains(t, report, "fast result")
+	assert.NotContains(t, report, m.strings.Loading)
+}
+
 func BenchmarkModelViewLongTranscript(b *testing.B) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
 	m.width, m.height, m.focus = 160, 50, 2

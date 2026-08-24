@@ -125,6 +125,16 @@ type PageData struct {
 	Embeddings       *EmbeddingGenerations
 }
 
+type pageUpdate struct {
+	Data PageData
+	Err  error
+	Done bool
+}
+
+type progressiveDataClient interface {
+	LoadPageUpdates(context.Context, Page, PageQuery) (<-chan pageUpdate, bool)
+}
+
 // DataClient is the TUI's daemon seam. Tests can replace it with a focused fake.
 type DataClient interface {
 	ListSessions(context.Context, service.ListFilter) (*service.SessionList, error)
@@ -340,7 +350,35 @@ func (c *Client) LoadPage(ctx context.Context, page Page, q PageQuery) (PageData
 	}
 }
 
+func (c *Client) LoadPageUpdates(
+	ctx context.Context, page Page, q PageQuery,
+) (<-chan pageUpdate, bool) {
+	if page != PageDashboard {
+		if page == PageUsage {
+			return c.loadUsageUpdates(ctx, q, reportValues(q)), true
+		}
+		return nil, false
+	}
+	return c.loadDashboardUpdates(ctx, reportValues(q)), true
+}
+
 func (c *Client) loadUsage(ctx context.Context, q PageQuery, values url.Values) (PageData, error) {
+	var data PageData
+	for update := range c.loadUsageUpdates(ctx, q, values) {
+		data = update.Data
+		if update.Err != nil {
+			return data, update.Err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return data, err
+	}
+	return data, nil
+}
+
+func (c *Client) loadUsageUpdates(
+	ctx context.Context, q PageQuery, values url.Values,
+) <-chan pageUpdate {
 	usageRequest := service.UsageRequest{
 		From: q.From, To: q.To, Timezone: q.Timezone, Project: q.Project,
 		Agent: q.Agent, Machine: q.Machine, Model: q.Model,
@@ -350,65 +388,109 @@ func (c *Client) loadUsage(ctx context.Context, q PageQuery, values url.Values) 
 		MinUserMessages: q.MinUserMessages, IncludeOneShot: q.IncludeOneShot,
 		IncludeAutomated: q.IncludeAutomated,
 	}
-	values.Set("include_one_shot", strconv.FormatBool(q.IncludeOneShot))
-	values.Set("include_automated", strconv.FormatBool(q.IncludeAutomated))
-	values.Set("limit", "20")
-	var summary *service.UsageSummaryResult
-	var topSessions []db.TopSessionEntry
-	var summaryErr, topSessionsErr error
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		summary, summaryErr = c.sessions.UsageSummary(ctx, usageRequest)
-	}()
-	go func() {
-		defer wg.Done()
-		topSessionsErr = c.get(ctx, "/api/v1/usage/top-sessions", values, &topSessions)
-	}()
-	wg.Wait()
-	if summaryErr != nil {
-		return PageData{}, summaryErr
-	}
-	if topSessionsErr != nil {
-		return PageData{}, topSessionsErr
-	}
+	topValues := cloneURLValues(values)
+	topValues.Set("include_one_shot", strconv.FormatBool(q.IncludeOneShot))
+	topValues.Set("include_automated", strconv.FormatBool(q.IncludeAutomated))
+	topValues.Set("limit", "20")
 
-	data := PageData{Usage: summary, UsageTopSessions: topSessions}
-	values.Del("limit")
-	values.Set("current_microdollars",
-		strconv.FormatInt(summary.Totals.TotalCost.Microdollars, 10))
-	var comparison UsageComparison
-	var comparisonErr, pairwiseErr error
-	wg.Add(1)
+	type result struct {
+		kind       string
+		summary    *service.UsageSummaryResult
+		top        []db.TopSessionEntry
+		comparison *UsageComparison
+		pairwise   *service.UsagePairwiseComparisonResponse
+		err        error
+	}
+	results := make(chan result, 4)
+	updates := make(chan pageUpdate, 1)
+	loadCtx, cancel := context.WithCancel(ctx)
 	go func() {
-		defer wg.Done()
-		comparisonErr = c.get(ctx, "/api/v1/usage/comparison", values, &comparison)
+		summary, err := c.sessions.UsageSummary(loadCtx, usageRequest)
+		results <- result{kind: "summary", summary: summary, err: err}
 	}()
-	if q.CompareDimension != "" && q.CompareLeft != "" && q.CompareRight != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			data.UsagePairwise, pairwiseErr = c.sessions.UsagePairwiseComparison(ctx, service.UsagePairwiseComparisonRequest{
-				UsageRequest:  usageRequest,
-				LeftDimension: q.CompareDimension, LeftValue: q.CompareLeft,
-				RightDimension: q.CompareDimension, RightValue: q.CompareRight,
-			})
-		}()
-	}
-	wg.Wait()
-	if comparisonErr != nil {
-		return PageData{}, comparisonErr
-	}
-	if pairwiseErr != nil {
-		return PageData{}, pairwiseErr
-	}
-	data.UsageComparison = &comparison
-	return data, nil
+	go func() {
+		var top []db.TopSessionEntry
+		err := c.get(loadCtx, "/api/v1/usage/top-sessions", topValues, &top)
+		results <- result{kind: "top", top: top, err: err}
+	}()
+	go func() {
+		defer close(updates)
+		defer cancel()
+		data, pending := PageData{}, 2
+		for pending > 0 {
+			var loaded result
+			select {
+			case loaded = <-results:
+			case <-loadCtx.Done():
+				return
+			}
+			pending--
+			if loaded.err != nil {
+				select {
+				case updates <- pageUpdate{Data: data, Err: loaded.err, Done: true}:
+				case <-loadCtx.Done():
+				}
+				return
+			}
+			switch loaded.kind {
+			case "summary":
+				data.Usage = loaded.summary
+				comparisonValues := cloneURLValues(values)
+				comparisonValues.Set("current_microdollars", strconv.FormatInt(
+					loaded.summary.Totals.TotalCost.Microdollars, 10,
+				))
+				pending++
+				go func() {
+					var comparison UsageComparison
+					err := c.get(loadCtx, "/api/v1/usage/comparison", comparisonValues, &comparison)
+					results <- result{kind: "comparison", comparison: &comparison, err: err}
+				}()
+				if q.CompareDimension != "" && q.CompareLeft != "" && q.CompareRight != "" {
+					pending++
+					go func() {
+						pairwise, err := c.sessions.UsagePairwiseComparison(loadCtx, service.UsagePairwiseComparisonRequest{
+							UsageRequest:  usageRequest,
+							LeftDimension: q.CompareDimension, LeftValue: q.CompareLeft,
+							RightDimension: q.CompareDimension, RightValue: q.CompareRight,
+						})
+						results <- result{kind: "pairwise", pairwise: pairwise, err: err}
+					}()
+				}
+			case "top":
+				data.UsageTopSessions = loaded.top
+			case "comparison":
+				data.UsageComparison = loaded.comparison
+			case "pairwise":
+				data.UsagePairwise = loaded.pairwise
+			}
+			select {
+			case updates <- pageUpdate{Data: data, Done: pending == 0}:
+			case <-loadCtx.Done():
+				return
+			}
+		}
+	}()
+	return updates
 }
 
 func (c *Client) loadDashboard(ctx context.Context, values url.Values) (PageData, error) {
-	data := PageData{}
+	var data PageData
+	for update := range c.loadDashboardUpdates(ctx, values) {
+		data = update.Data
+		if update.Err != nil {
+			return data, update.Err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return data, err
+	}
+	return data, nil
+}
+
+func (c *Client) loadDashboardUpdates(
+	ctx context.Context, values url.Values,
+) <-chan pageUpdate {
+	updates := make(chan pageUpdate, 1)
 	loads := []struct {
 		path string
 		out  any
@@ -425,33 +507,71 @@ func (c *Client) loadDashboard(ctx context.Context, values url.Values) (PageData
 		{"/api/v1/analytics/top-sessions", new(db.TopSessionsResponse)},
 		{"/api/v1/analytics/signals", new(db.SignalsAnalyticsResponse)},
 	}
-	errs := make([]error, len(loads))
-	var wg sync.WaitGroup
-	wg.Add(len(loads))
-	for i := range loads {
+	type result struct {
+		index int
+		err   error
+	}
+	results := make(chan result, len(loads))
+	for index := range loads {
 		go func() {
-			defer wg.Done()
-			errs[i] = c.get(ctx, loads[i].path, values, loads[i].out)
+			results <- result{index: index, err: c.get(
+				ctx, loads[index].path, values, loads[index].out,
+			)}
 		}()
 	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return PageData{}, err
+	go func() {
+		defer close(updates)
+		var data PageData
+		for completed := 1; completed <= len(loads); completed++ {
+			var loaded result
+			select {
+			case loaded = <-results:
+			case <-ctx.Done():
+				return
+			}
+			if loaded.err != nil {
+				select {
+				case updates <- pageUpdate{Data: data, Err: loaded.err, Done: true}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			setDashboardPart(&data, loaded.index, loads[loaded.index].out)
+			select {
+			case updates <- pageUpdate{Data: data, Done: completed == len(loads)}:
+			case <-ctx.Done():
+				return
+			}
 		}
+	}()
+	return updates
+}
+
+func setDashboardPart(data *PageData, index int, value any) {
+	switch index {
+	case 0:
+		data.Analytics = value.(*db.AnalyticsSummary)
+	case 1:
+		data.AnalyticsSeries = value.(*db.ActivityResponse)
+	case 2:
+		data.Heatmap = value.(*db.HeatmapResponse)
+	case 3:
+		data.Projects = value.(*db.ProjectsAnalyticsResponse)
+	case 4:
+		data.HourOfWeek = value.(*db.HourOfWeekResponse)
+	case 5:
+		data.SessionShape = value.(*db.SessionShapeResponse)
+	case 6:
+		data.Velocity = value.(*db.VelocityResponse)
+	case 7:
+		data.Tools = value.(*db.ToolsAnalyticsResponse)
+	case 8:
+		data.Skills = value.(*db.SkillsAnalyticsResponse)
+	case 9:
+		data.TopSessions = value.(*db.TopSessionsResponse)
+	case 10:
+		data.Signals = value.(*db.SignalsAnalyticsResponse)
 	}
-	data.Analytics = loads[0].out.(*db.AnalyticsSummary)
-	data.AnalyticsSeries = loads[1].out.(*db.ActivityResponse)
-	data.Heatmap = loads[2].out.(*db.HeatmapResponse)
-	data.Projects = loads[3].out.(*db.ProjectsAnalyticsResponse)
-	data.HourOfWeek = loads[4].out.(*db.HourOfWeekResponse)
-	data.SessionShape = loads[5].out.(*db.SessionShapeResponse)
-	data.Velocity = loads[6].out.(*db.VelocityResponse)
-	data.Tools = loads[7].out.(*db.ToolsAnalyticsResponse)
-	data.Skills = loads[8].out.(*db.SkillsAnalyticsResponse)
-	data.TopSessions = loads[9].out.(*db.TopSessionsResponse)
-	data.Signals = loads[10].out.(*db.SignalsAnalyticsResponse)
-	return data, nil
 }
 
 func reportValues(q PageQuery) url.Values {
@@ -484,6 +604,14 @@ func reportValues(q PageQuery) url.Values {
 		v.Set("include_automated", "true")
 	}
 	return v
+}
+
+func cloneURLValues(values url.Values) url.Values {
+	cloned := make(url.Values, len(values))
+	for key, entries := range values {
+		cloned[key] = append([]string(nil), entries...)
+	}
+	return cloned
 }
 
 func splitTerms(raw string) []string {
