@@ -205,6 +205,57 @@ func TestIssue1492VanishedCursorAndVSCodeFilesRemainAuthorized(t *testing.T) {
 	}
 }
 
+func TestIssue1492EmptyEditorRootsRemainWithoutEmptyFileTargets(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{filepath.Join(root, "cursor"), filepath.Join(root, "vscode")} {
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+	}
+	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentCursor:        {filepath.Join(root, "cursor")},
+		parser.AgentVSCodeCopilot: {filepath.Join(root, "vscode")},
+	}})
+
+	assert.Contains(t, targets.Dirs[parser.AgentCursor], filepath.Join(root, "cursor"))
+	assert.Contains(t, targets.Dirs[parser.AgentVSCodeCopilot], filepath.Join(root, "vscode"))
+	assert.NotContains(t, targets.Files, parser.AgentCursor)
+	assert.NotContains(t, targets.Files, parser.AgentVSCodeCopilot)
+}
+
+func TestIssue1492VanishedZedDatabaseRemainsEvictable(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, parser.ZedThreadsDBRelPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	require.NoError(t, os.WriteFile(dbPath, []byte("selected"), 0o644))
+	configured := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentZed: {root},
+	}}
+	initial := ResolveTargets(configured)
+	require.Equal(t, []string{dbPath}, initial.Files[parser.AgentZed])
+	require.NoError(t, os.Remove(dbPath))
+
+	fresh := ResolveTargets(configured)
+	assert.Equal(t, []string{root}, fresh.Dirs[parser.AgentZed])
+	assert.Equal(t, []string{dbPath}, fresh.Files[parser.AgentZed])
+	manifest, err := BuildManifest(fresh)
+	require.NoError(t, err)
+	assert.Empty(t, manifest.Files)
+
+	selected, ok := SelectAllowedFiles(fresh, []string{dbPath})
+	require.True(t, ok)
+	var delta bytes.Buffer
+	require.NoError(t, WriteArchiveFiles(&delta, fresh, selected))
+	assert.Empty(t, archiveEntries(t, delta.Bytes()))
+
+	mirror := t.TempDir()
+	mirrorPath, err := safeRemappedRemotePath(mirror, dbPath)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(mirrorPath), 0o755))
+	require.NoError(t, os.WriteFile(mirrorPath, []byte("stale"), 0o644))
+	diff, err := MirrorDiff(mirror, manifest)
+	require.NoError(t, err)
+	assert.Equal(t, []string{mirrorPath}, diff.Deletions)
+}
+
 func TestIssue1492ZedSnapshotDeltaUsesOnlineBackup(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, parser.ZedThreadsDBRelPath)

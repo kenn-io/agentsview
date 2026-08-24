@@ -92,7 +92,9 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				root, targetFiles := resolveEditorTarget(def.Type, dir)
 				if root != "" {
 					dirs[def.Type] = append(dirs[def.Type], root)
-					files[def.Type] = append(files[def.Type], targetFiles...)
+					if len(targetFiles) > 0 {
+						files[def.Type] = append(files[def.Type], targetFiles...)
+					}
 				}
 				continue
 			}
@@ -530,10 +532,25 @@ func resolveZedTarget(root string) (string, []string) {
 		return "", nil
 	}
 	dbPath := filepath.Join(root, parser.ZedThreadsDBRelPath)
-	if !regularCuratedFile(root, dbPath) {
+	if !curatedFileOrMissing(root, dbPath) {
 		return "", nil
 	}
 	return root, []string{dbPath}
+}
+
+// curatedFileOrMissing retains a selected leaf through a deletion race so the
+// manifest can omit it and the mirror can evict its stale copy.
+func curatedFileOrMissing(root, path string) bool {
+	path = filepath.Clean(path)
+	rel, err := filepath.Rel(root, path)
+	if err != nil || !filepath.IsLocal(rel) || symlinkEscapesRoot(root, path) {
+		return false
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return true
+	}
+	return err == nil && info.Mode().IsRegular()
 }
 
 // resolvePoolsideTarget narrows a Poolside application-data root to
