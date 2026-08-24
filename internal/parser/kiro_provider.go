@@ -790,6 +790,9 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 		return s.newSourceRef(root, path, dbPath, sessionID, kiroSourceSQLiteSession), true
 	}
 	if dbPath, ok := kiroDBPathForEvent(root, path); ok {
+		if !kiroDBUnderRoot(root, dbPath, false) {
+			return SourceRef{}, false
+		}
 		return s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB), true
 	}
 	return SourceRef{}, false
@@ -880,9 +883,9 @@ func (s kiroSourceSet) bestSource(sources []SourceRef) (SourceRef, bool) {
 	for _, source := range sources[1:] {
 		rank := s.sourceRank(source)
 		bestRoot, sourceRoot := s.rootIndex(best.ConfiguredRoot), s.rootIndex(source.ConfiguredRoot)
-		if sourceRoot < bestRoot ||
-			(sourceRoot == bestRoot && (rank.Class > bestRank.Class ||
-				(rank.Class == bestRank.Class && rank.Recency > bestRank.Recency))) {
+		if rank.Class > bestRank.Class ||
+			(rank.Class == bestRank.Class && (sourceRoot < bestRoot ||
+				(sourceRoot == bestRoot && rank.Recency > bestRank.Recency))) {
 			best, bestRank = source, rank
 		}
 	}
