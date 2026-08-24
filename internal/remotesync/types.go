@@ -218,6 +218,14 @@ func (t TargetSet) DeltaAllowedRoots() []string {
 			continue
 		}
 		if verbatimFileScopedAgent(agent) || snapshotFileScopedAgent(agent) {
+			if len(files) == 0 {
+				for _, dir := range t.Dirs[agent] {
+					if !forbidden.within(dir) {
+						roots = append(roots, dir)
+					}
+				}
+				continue
+			}
 			for _, file := range files {
 				if !forbidden.within(file) {
 					roots = append(roots, file)

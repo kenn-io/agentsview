@@ -93,6 +93,7 @@ func TestIssue1492ZedActiveWALIsOneStableStandaloneDatabase(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
 	defer writer.Close()
 	_, err = writer.Exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('wal-thread');`)
 	require.NoError(t, err)
@@ -158,6 +159,85 @@ func TestIssue1492VanishedCuratedFileIsOmittedAndDeltaIsConfined(t *testing.T) {
 
 	_, ok := SelectAllowedFiles(targets, []string{filepath.Join(root, "project", "mcp_auth.json")})
 	assert.False(t, ok)
+}
+
+func TestIssue1492VanishedCursorAndVSCodeFilesRemainAuthorized(t *testing.T) {
+	id := "01234567-89ab-cdef-0123-456789abcdef"
+	tests := []struct {
+		name  string
+		agent parser.AgentType
+		path  func(string) string
+	}{
+		{
+			name:  "cursor",
+			agent: parser.AgentCursor,
+			path: func(root string) string {
+				return filepath.Join(root, "project", "agent-transcripts", id+".jsonl")
+			},
+		},
+		{
+			name:  "vscode",
+			agent: parser.AgentVSCodeCopilot,
+			path: func(root string) string {
+				return filepath.Join(root, "workspaceStorage", "hash", "chatSessions", id+".json")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := tt.path(root)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, []byte("session"), 0o644))
+			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{tt.agent: {root}}}
+			stale := ResolveTargets(cfg)
+			require.Contains(t, stale.Files[tt.agent], path)
+			require.NoError(t, os.Remove(path))
+
+			fresh := ResolveTargets(cfg)
+			require.Contains(t, fresh.Dirs[tt.agent], root)
+			files, ok := SelectAllowedFiles(fresh, []string{path})
+			require.True(t, ok, "vanished %s file must remain authorized", tt.name)
+			var delta bytes.Buffer
+			require.NoError(t, WriteArchiveFiles(&delta, fresh, files))
+			assert.Empty(t, archiveEntries(t, delta.Bytes()))
+		})
+	}
+}
+
+func TestIssue1492ZedSnapshotDeltaUsesOnlineBackup(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, parser.ZedThreadsDBRelPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+	_, err = writer.Exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('delta-thread')`)
+	require.NoError(t, err)
+	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentZed: {root},
+	}})
+	files, ok := SelectAllowedFiles(targets, []string{dbPath})
+	require.True(t, ok, "Zed snapshot must be authorized as a delta file")
+	var delta bytes.Buffer
+	require.NoError(t, WriteArchiveFiles(&delta, targets, files))
+	entries := archiveEntries(t, delta.Bytes())
+	require.Len(t, entries, 1)
+	var snapshot []byte
+	for name, body := range entries {
+		if strings.HasSuffix(name, "/threads/threads.db") {
+			snapshot = body
+		}
+	}
+	require.NotEmpty(t, snapshot)
+	snapshotPath := filepath.Join(t.TempDir(), "threads.db")
+	require.NoError(t, os.WriteFile(snapshotPath, snapshot, 0o600))
+	reader, err := sql.Open("sqlite3", snapshotPath)
+	require.NoError(t, err)
+	var id string
+	require.NoError(t, reader.QueryRow("SELECT id FROM threads").Scan(&id))
+	assert.Equal(t, "delta-thread", id)
+	require.NoError(t, reader.Close())
 }
 
 func keys(values map[string][]byte) []string {

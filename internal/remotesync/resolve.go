@@ -90,7 +90,7 @@ func ResolveTargets(cfg config.Config) TargetSet {
 			if def.Type == parser.AgentCursor ||
 				def.Type == parser.AgentVSCodeCopilot {
 				root, targetFiles := resolveEditorTarget(def.Type, dir)
-				if root != "" && len(targetFiles) > 0 {
+				if root != "" {
 					dirs[def.Type] = append(dirs[def.Type], root)
 					files[def.Type] = append(files[def.Type], targetFiles...)
 				}
@@ -98,7 +98,7 @@ func ResolveTargets(cfg config.Config) TargetSet {
 			}
 			if def.Type == parser.AgentZed {
 				root, targetFiles := resolveZedTarget(dir)
-				if root != "" && len(targetFiles) > 0 {
+				if root != "" {
 					dirs[def.Type] = append(dirs[def.Type], root)
 					files[def.Type] = append(files[def.Type], targetFiles...)
 				}
@@ -768,7 +768,7 @@ func kiloLegacySessionFileShape(rel string) bool {
 func verbatimSessionFileUnderAllowedRoot(
 	allowed TargetSet, agent parser.AgentType, file string,
 ) bool {
-	if !verbatimFileScopedAgent(agent) {
+	if !verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 		return false
 	}
 	if !isAbsRemotePath(file) {
@@ -802,6 +802,24 @@ func sessionFileShape(agent parser.AgentType, rel string) bool {
 	switch agent {
 	case parser.AgentKiloLegacy:
 		return kiloLegacySessionFileShape(rel)
+	case parser.AgentCursor:
+		_, ok := parser.ParseCursorTranscriptRelPath(rel)
+		return ok
+	case parser.AgentVSCodeCopilot:
+		parts := strings.Split(rel, "/")
+		if len(parts) == 4 && parts[0] == "workspaceStorage" &&
+			parts[2] == "chatSessions" {
+			return parser.IsValidSessionID(strings.TrimSuffix(parts[3], filepath.Ext(parts[3]))) &&
+				(filepath.Ext(parts[3]) == ".json" || filepath.Ext(parts[3]) == ".jsonl")
+		}
+		if len(parts) == 3 && parts[0] == "globalStorage" &&
+			(parts[1] == "emptyWindowChatSessions" || parts[1] == "transferredChatSessions") {
+			return parser.IsValidSessionID(strings.TrimSuffix(parts[2], filepath.Ext(parts[2]))) &&
+				(filepath.Ext(parts[2]) == ".json" || filepath.Ext(parts[2]) == ".jsonl")
+		}
+		return false
+	case parser.AgentZed:
+		return filepath.ToSlash(filepath.Clean(rel)) == parser.ZedThreadsDBRelPath
 	default:
 		return rooCodeSessionFileShape(rel)
 	}
@@ -856,10 +874,10 @@ func selectAllowedFile(
 		return canonical, !forbidden.within(canonical)
 	}
 	for agent, files := range allowed.Files {
-		if !verbatimFileScopedAgent(agent) {
+		if !verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 			continue
 		}
-		// Verbatim file-scoped agents (RooCode) delta-stream exactly
+		// Verbatim and snapshot file-scoped agents delta-stream exactly
 		// their curated files; the exact-match requirement keeps
 		// settings and caches under their directory unreachable. A
 		// session-shaped file missing from the fresh resolution is
