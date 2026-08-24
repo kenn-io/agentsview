@@ -6551,7 +6551,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							// guards below all assume a vanished stored path.
 							if e.preserveMissingSources &&
 								preserveConfiguredMissingSource(
-									provider, ownership.FilePath, ownership.ID,
+									ctx, provider, ownership.FilePath, ownership.ID,
 								) {
 								continue
 							}
@@ -6781,7 +6781,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 						}
 						if e.preserveMissingSources &&
 							preserveConfiguredMissingSource(
-								provider, ownership.FilePath, ownership.ID,
+								ctx, provider, ownership.FilePath, ownership.ID,
 							) {
 							continue
 						}
@@ -10335,20 +10335,38 @@ type sourceMissingMember struct {
 	virtual   bool
 }
 
-// preserveConfiguredMissingSource applies only to physical provider sources.
-// Virtual members identify imported or migrated storage ownership and retain
-// the existing source-missing reconciliation policy.
+// preserveConfiguredMissingSource applies only to provider-validated physical
+// sources. Virtual members identify imported or migrated storage ownership and
+// retain the existing source-missing reconciliation policy.
 func preserveConfiguredMissingSource(
-	provider parser.Provider, filePath, sessionID string,
+	ctx context.Context, provider parser.Provider, filePath, sessionID string,
 ) bool {
+	if provider == nil {
+		return false
+	}
 	resolver, ok := provider.(parser.PersistentArchiveSourceResolver)
 	if ok {
-		_, virtual := resolver.PersistentArchiveSource(filePath, sessionID)
-		return !virtual
+		if _, valid := resolver.PersistentArchiveSource(filePath, sessionID); valid {
+			return false
+		}
 	}
-	if provider != nil && provider.Definition().Type == parser.AgentHermes {
-		_, _, virtual := parser.ParseVirtualSourcePathForBase(filePath, "state.db")
-		return !virtual
+
+	providerType := provider.Definition().Type
+	if providerType == parser.AgentHermes {
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(filePath, "state.db"); !ok {
+			return true
+		}
+		_, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
+			StoredFilePath: filePath,
+			RawSessionID:   sessionID,
+		})
+		return err == nil && found
+	}
+	if (providerType == parser.AgentDevin || providerType == parser.AgentWindsurf) &&
+		strings.Contains(filePath, "#") {
+		// These providers own hash-delimited virtual members. A syntactically
+		// similar path is virtual only after the provider resolver validates it.
+		return false
 	}
 	return true
 }
@@ -10361,7 +10379,7 @@ func configuredSourceMissingMembers(
 	}
 	filtered := make([]sourceMissingMember, 0, len(members))
 	for _, member := range members {
-		if !member.virtual {
+		if member.virtual {
 			filtered = append(filtered, member)
 		}
 	}
@@ -11584,7 +11602,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 				sessionID: id,
 				filePath:  sourcePath,
 				agent:     agent,
-				virtual:   !preserveConfiguredMissingSource(provider, sourcePath, id),
+				virtual:   !preserveConfiguredMissingSource(ctx, provider, sourcePath, id),
 				machine: e.machineForProviderSource(
 					agent, source, sourcePath,
 				),
@@ -11726,7 +11744,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 				sessionID: id,
 				filePath:  path,
 				agent:     agent,
-				virtual:   !preserveConfiguredMissingSource(provider, path, id),
+				virtual:   !preserveConfiguredMissingSource(ctx, provider, path, id),
 			})
 			sessionIDs = append(sessionIDs, id)
 		}
@@ -11791,7 +11809,7 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 		members := index.missingMembers(paths, present)
 		for i := range members {
 			members[i].virtual = !preserveConfiguredMissingSource(
-				provider, members[i].filePath, members[i].sessionID,
+				ctx, provider, members[i].filePath, members[i].sessionID,
 			)
 		}
 		return members, nil
@@ -11815,7 +11833,7 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 				sessionID: id,
 				filePath:  path,
 				agent:     parser.AgentClaude,
-				virtual:   !preserveConfiguredMissingSource(provider, path, id),
+				virtual:   !preserveConfiguredMissingSource(ctx, provider, path, id),
 			})
 			sessionIDs = append(sessionIDs, id)
 		}

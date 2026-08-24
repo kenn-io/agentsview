@@ -8782,7 +8782,7 @@ func TestPreserveConfiguredMissingSourceTreatsHashNamedPhysicalPathAsPhysical(
 	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{})
 	require.True(t, ok)
 	path := filepath.Join(t.TempDir(), "project#archive.jsonl")
-	assert.True(t, preserveConfiguredMissingSource(provider, path, "session"))
+	assert.True(t, preserveConfiguredMissingSource(context.Background(), provider, path, "session"))
 }
 
 // TestStripVirtualSourceSuffixAider verifies that an aider
