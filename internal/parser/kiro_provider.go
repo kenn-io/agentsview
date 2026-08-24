@@ -837,9 +837,10 @@ func (s kiroSourceSet) newSourceRef(
 	kind kiroSourceKind,
 ) SourceRef {
 	key := path
-	if kind == kiroSourceSQLiteSession || kind == kiroSourceCurrentJSONL {
+	switch kind {
+	case kiroSourceSQLiteSession, kiroSourceCurrentJSONL:
 		key = sessionID
-	} else if kind == kiroSourceLegacyJSONL {
+	case kiroSourceLegacyJSONL:
 		key = KiroSessionIDFromPath(path)
 	}
 	return SourceRef{
@@ -1013,26 +1014,6 @@ func (s kiroSourceSet) discoverCurrentJSONL(root string) []DiscoveredFile {
 		}
 	}
 	return files
-}
-
-func (s kiroSourceSet) findCurrentJSONL(root, sessionID string) (SourceRef, bool) {
-	if !isKiroCurrentSessionDir(sessionID) {
-		return SourceRef{}, false
-	}
-	paths := []string{filepath.Join(root, sessionID, "messages.jsonl")}
-	if entries, err := os.ReadDir(root); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() && isKiroCurrentWorkspaceDir(entry.Name()) {
-				paths = append(paths, filepath.Join(root, entry.Name(), sessionID, "messages.jsonl"))
-			}
-		}
-	}
-	for _, path := range paths {
-		if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok && kiroRegularFileUnderRoot(root, path) {
-			return s.newSourceRef(root, path, "", sessionID, kiroSourceCurrentJSONL), true
-		}
-	}
-	return SourceRef{}, false
 }
 
 func (s kiroSourceSet) discoverCurrentJSONLEach(ctx context.Context, root string, yield func(SourceRef) error) error {
