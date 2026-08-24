@@ -6550,7 +6550,9 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							// longer yields this member; tombstone directly — the
 							// guards below all assume a vanished stored path.
 							if e.preserveMissingSources &&
-								preserveConfiguredMissingSource(ownership.FilePath) {
+								preserveConfiguredMissingSource(
+									provider, ownership.FilePath, ownership.ID,
+								) {
 								continue
 							}
 							changed, err := e.tombstoneSessionSourceOwnership(
@@ -6778,7 +6780,9 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							}
 						}
 						if e.preserveMissingSources &&
-							preserveConfiguredMissingSource(ownership.FilePath) {
+							preserveConfiguredMissingSource(
+								provider, ownership.FilePath, ownership.ID,
+							) {
 							continue
 						}
 						changed, err := e.tombstoneSessionSourceOwnership(
@@ -10328,14 +10332,25 @@ type sourceMissingMember struct {
 	filePath  string
 	machine   string
 	agent     parser.AgentType
+	virtual   bool
 }
 
 // preserveConfiguredMissingSource applies only to physical provider sources.
 // Virtual members identify imported or migrated storage ownership and retain
 // the existing source-missing reconciliation policy.
-func preserveConfiguredMissingSource(filePath string) bool {
-	_, _, virtual := parser.ParseVirtualSourcePath(filePath)
-	return !virtual
+func preserveConfiguredMissingSource(
+	provider parser.Provider, filePath, sessionID string,
+) bool {
+	resolver, ok := provider.(parser.PersistentArchiveSourceResolver)
+	if ok {
+		_, virtual := resolver.PersistentArchiveSource(filePath, sessionID)
+		return !virtual
+	}
+	if provider != nil && provider.Definition().Type == parser.AgentHermes {
+		_, _, virtual := parser.ParseVirtualSourcePathForBase(filePath, "state.db")
+		return !virtual
+	}
+	return true
 }
 
 func configuredSourceMissingMembers(
@@ -10346,7 +10361,7 @@ func configuredSourceMissingMembers(
 	}
 	filtered := make([]sourceMissingMember, 0, len(members))
 	for _, member := range members {
-		if !preserveConfiguredMissingSource(member.filePath) {
+		if !member.virtual {
 			filtered = append(filtered, member)
 		}
 	}
@@ -11318,7 +11333,7 @@ func (e *Engine) processProviderFile(
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		missingMembers, err =
 			e.completeMultiSessionSourceMissingMembers(
-				ctx, file.Agent, file.Path,
+				ctx, provider, file.Agent, file.Path,
 				outcome.ExcludedSessionIDs, parsedResults,
 			)
 		if err != nil {
@@ -11335,7 +11350,7 @@ func (e *Engine) processProviderFile(
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
 		missingMembers, err =
 			e.claudeSourceMissingSessionOwnershipsForCompleteResult(
-				ctx, file.Path, outcome.ExcludedSessionIDs, parsedResults,
+				ctx, provider, file.Path, outcome.ExcludedSessionIDs, parsedResults,
 			)
 		if err != nil {
 			return processResult{
@@ -11569,6 +11584,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 				sessionID: id,
 				filePath:  sourcePath,
 				agent:     agent,
+				virtual:   !preserveConfiguredMissingSource(provider, sourcePath, id),
 				machine: e.machineForProviderSource(
 					agent, source, sourcePath,
 				),
@@ -11631,6 +11647,7 @@ func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResultWithPres
 // membership set, unlike Claude's separate legacy-only stale-fork cleanup.
 func (e *Engine) completeMultiSessionSourceMissingMembers(
 	ctx context.Context,
+	provider parser.Provider,
 	agent parser.AgentType,
 	sourcePath string,
 	excludedSessionIDs []string,
@@ -11709,6 +11726,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 				sessionID: id,
 				filePath:  path,
 				agent:     agent,
+				virtual:   !preserveConfiguredMissingSource(provider, path, id),
 			})
 			sessionIDs = append(sessionIDs, id)
 		}
@@ -11742,6 +11760,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 // transcripts, whose sessions are legitimately absent from this parse.
 func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 	ctx context.Context,
+	provider parser.Provider,
 	sourcePath string,
 	excludedSessionIDs []string,
 	results []parser.ParseResult,
@@ -11769,7 +11788,13 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 		present[id] = struct{}{}
 	}
 	if index := e.archiveStaleClaudeForks; index != nil {
-		return index.missingMembers(paths, present), nil
+		members := index.missingMembers(paths, present)
+		for i := range members {
+			members[i].virtual = !preserveConfiguredMissingSource(
+				provider, members[i].filePath, members[i].sessionID,
+			)
+		}
+		return members, nil
 	}
 	var members []sourceMissingMember
 	var sessionIDs []string
@@ -11790,6 +11815,7 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 				sessionID: id,
 				filePath:  path,
 				agent:     parser.AgentClaude,
+				virtual:   !preserveConfiguredMissingSource(provider, path, id),
 			})
 			sessionIDs = append(sessionIDs, id)
 		}

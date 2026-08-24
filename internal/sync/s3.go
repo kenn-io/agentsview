@@ -397,6 +397,7 @@ func (e *Engine) processS3Session(
 	case parser.AgentClaude:
 		missing, err := e.claudeSourceMissingSessionOwnershipsForCompleteResult(
 			ctx,
+			nil,
 			file.Path,
 			res.excludedSessionIDs,
 			res.results,
@@ -421,6 +422,7 @@ func (e *Engine) processS3Session(
 		}
 		missing, err := e.completeMultiSessionSourceMissingMembers(
 			ctx,
+			nil,
 			file.Agent,
 			file.Path,
 			res.excludedSessionIDs,
