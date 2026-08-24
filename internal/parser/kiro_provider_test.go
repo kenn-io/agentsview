@@ -487,6 +487,9 @@ func TestKiroProviderCurrentLayoutRejectsLookalikesAndEscapes(t *testing.T) {
 	valid := filepath.Join(root, "workspace", "sess_0123456789abcdef", "messages.jsonl")
 	writeSourceFile(t, valid, `{"payload":{"type":"user","content":"ok"}}`+"\n")
 	for _, path := range []string{
+		filepath.Join(root, ".history", "sess_0123456789abcdef", "messages.jsonl"),
+		filepath.Join(root, "snapshots", "sess_0123456789abcdef", "messages.jsonl"),
+		filepath.Join(root, "arbitrary", "sess_0123456789abcdef", "messages.jsonl"),
 		filepath.Join(root, "workspace", ".history", "sess_0123456789abcdef", "messages.jsonl"),
 		filepath.Join(root, "workspace", "sess_0123456789abcdef", "snapshots", "messages.jsonl"),
 		filepath.Join(root, "workspace", "nested", "sess_0123456789abcdef", "messages.jsonl"),
