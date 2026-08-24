@@ -665,12 +665,17 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		}
 	}
 	for agent, files := range requested.Files {
-		allowedFiles, ok := allowed.Files[agent]
-		if !ok {
-			return TargetSet{}, false
-		}
+		allowedFiles, hasAllowedFiles := allowed.Files[agent]
 		for _, file := range files {
 			selectedFile, ok := selectAllowedString(allowedFiles, file)
+			if !ok && (!hasAllowedFiles || len(allowedFiles) == 0) {
+				ok = verbatimSessionFileUnderAllowedRoot(
+					allowed, agent, file, files,
+				)
+				if ok {
+					selectedFile = file
+				}
+			}
 			if !ok {
 				// Targets are re-resolved for every request, so a
 				// session file deleted between the client's target
@@ -679,7 +684,7 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 				// the sync over a routine deletion race; the archive
 				// writers tolerate missing files, so authorize
 				// session-shaped paths under a still-allowed root.
-				if !verbatimSessionFileUnderAllowedRoot(allowed, agent, file) {
+				if !verbatimSessionFileUnderAllowedRoot(allowed, agent, file, files) {
 					return TargetSet{}, false
 				}
 				selectedFile = file
@@ -784,6 +789,7 @@ func kiloLegacySessionFileShape(rel string) bool {
 // the symlink walk rejects components that would escape the root.
 func verbatimSessionFileUnderAllowedRoot(
 	allowed TargetSet, agent parser.AgentType, file string,
+	candidateFiles ...[]string,
 ) bool {
 	if !verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 		return false
@@ -803,7 +809,9 @@ func verbatimSessionFileUnderAllowedRoot(
 			continue
 		}
 		if agent == parser.AgentVSCodeCopilot && isVSCodeWorkspaceMetadata(rel) {
-			if !vscodeWorkspaceMetadataTiedToAllowedSession(allowed, dir, file) {
+			if !vscodeWorkspaceMetadataTiedToAllowedSession(
+				allowed, dir, file, candidateFiles...,
+			) {
 				continue
 			}
 		} else if !sessionFileShape(agent, rel) {
@@ -847,7 +855,7 @@ func sessionFileShape(agent parser.AgentType, rel string) bool {
 }
 
 func vscodeWorkspaceMetadataTiedToAllowedSession(
-	allowed TargetSet, root, file string,
+	allowed TargetSet, root, file string, candidateFiles ...[]string,
 ) bool {
 	rel, ok := remoteArchiveRel(root, file)
 	if !ok {
@@ -857,7 +865,11 @@ func vscodeWorkspaceMetadataTiedToAllowedSession(
 	if !isVSCodeWorkspaceMetadata(rel) {
 		return false
 	}
-	for _, selected := range allowed.Files[parser.AgentVSCodeCopilot] {
+	selectedFiles := allowed.Files[parser.AgentVSCodeCopilot]
+	for _, files := range candidateFiles {
+		selectedFiles = append(selectedFiles, files...)
+	}
+	for _, selected := range selectedFiles {
 		selectedRel, ok := remoteArchiveRel(root, selected)
 		if !ok {
 			continue
@@ -912,7 +924,7 @@ func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	selected := make([]string, 0, len(files))
 	for _, file := range files {
-		canonical, ok := selectAllowedFile(allowed, forbidden, file)
+		canonical, ok := selectAllowedFile(allowed, forbidden, file, files)
 		if !ok {
 			return nil, false
 		}
@@ -930,6 +942,7 @@ func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
 // under a trusted allowed root before the matcher sees it.
 func selectAllowedFile(
 	allowed TargetSet, forbidden forbiddenRootMatcher, file string,
+	candidateFiles []string,
 ) (string, bool) {
 	if canonical, ok := selectAllowedString(allowed.AllExtraFiles(), file); ok {
 		return canonical, !forbidden.within(canonical)
@@ -948,7 +961,24 @@ func selectAllowedFile(
 		if canonical, ok := selectAllowedString(files, file); ok {
 			return canonical, !forbidden.within(canonical)
 		}
-		if verbatimSessionFileUnderAllowedRoot(allowed, agent, file) {
+		if verbatimSessionFileUnderAllowedRoot(allowed, agent, file, files) {
+			return file, !forbidden.within(file)
+		}
+	}
+	// A fresh editor resolution can retain the authorized root while all
+	// curated leaves have vanished. The request still carries the prior
+	// exact file set, so validate its strict shape against that root before
+	// considering any directory-scoped agents.
+	for _, agent := range []parser.AgentType{
+		parser.AgentCursor, parser.AgentVSCodeCopilot, parser.AgentZed,
+		parser.AgentRooCode, parser.AgentKiloLegacy,
+	} {
+		if _, ok := allowed.Dirs[agent]; !ok {
+			continue
+		}
+		if verbatimSessionFileUnderAllowedRoot(
+			allowed, agent, file, candidateFiles,
+		) {
 			return file, !forbidden.within(file)
 		}
 	}
@@ -959,7 +989,8 @@ func selectAllowedFile(
 		return "", false
 	}
 	for agent, dirs := range allowed.Dirs {
-		if _, fileScoped := allowed.Files[agent]; fileScoped {
+		if _, fileScoped := allowed.Files[agent]; fileScoped ||
+			verbatimFileScopedAgent(agent) || snapshotFileScopedAgent(agent) {
 			// File-scoped agents export a curated file list, not a raw
 			// directory walk. Accepting a delta request by directory
 			// prefix would stream a raw file (an unsanitized

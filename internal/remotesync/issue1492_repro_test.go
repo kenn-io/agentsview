@@ -205,6 +205,40 @@ func TestIssue1492VanishedCursorAndVSCodeFilesRemainAuthorized(t *testing.T) {
 	}
 }
 
+func TestIssue1492AllCuratedEditorFilesVanishedRemainAuthorized(t *testing.T) {
+	id := "01234567-89ab-cdef-0123-456789abcdef"
+	tests := []struct {
+		name  string
+		agent parser.AgentType
+		path  string
+	}{
+		{"cursor", parser.AgentCursor, filepath.Join("project", "agent-transcripts", id+".jsonl")},
+		{"vscode", parser.AgentVSCodeCopilot, filepath.Join("workspaceStorage", "hash", "chatSessions", id+".json")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, tt.path)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, []byte("session"), 0o644))
+			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{tt.agent: {root}}}
+			stale := ResolveTargets(cfg)
+			require.NoError(t, os.Remove(path))
+			fresh := ResolveTargets(cfg)
+			selected, ok := SelectAllowedTargets(fresh, stale)
+			require.True(t, ok, "vanished %s target must remain authorized", tt.name)
+			manifest, err := BuildManifest(selected)
+			require.NoError(t, err)
+			assert.Empty(t, manifest.Files)
+			files, ok := SelectAllowedFiles(fresh, []string{path})
+			require.True(t, ok, "vanished %s delta must remain authorized", tt.name)
+			var delta bytes.Buffer
+			require.NoError(t, WriteArchiveFiles(&delta, fresh, files))
+			assert.Empty(t, archiveEntries(t, delta.Bytes()))
+		})
+	}
+}
+
 func TestIssue1492VanishedVSCodeWorkspaceIsEvictedFromMirror(t *testing.T) {
 	root := t.TempDir()
 	workspaceDir := filepath.Join(root, "workspaceStorage", "hash")

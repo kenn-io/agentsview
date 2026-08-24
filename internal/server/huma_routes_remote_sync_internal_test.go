@@ -126,6 +126,46 @@ func TestIssue1492AuthenticatedHTTPMirrorImportUsesCuratedTargets(t *testing.T) 
 	assert.NotContains(t, mirrorFiles, "mcp_auth.json")
 }
 
+func TestIssue1492AuthenticatedAllCuratedFilesVanishedLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "server.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	root := filepath.Join(dir, "cursor")
+	file := filepath.Join(root, "project", "agent-transcripts", "01234567-89ab-cdef-0123-456789abcdef.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o755))
+	require.NoError(t, os.WriteFile(file, []byte("cursor transcript"), 0o644))
+	srv := New(config.Config{
+		Host: "127.0.0.1", Port: 8080, DataDir: dir, DBPath: dbPath,
+		AuthToken: "remote-token", RequireAuth: true,
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
+	}, database, nil)
+	handler := currentRemoteSyncHandler(srv.Handler())
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
+	get.Header.Set("Authorization", "Bearer remote-token")
+	getW := httptest.NewRecorder()
+	handler.ServeHTTP(getW, get)
+	require.Equal(t, http.StatusOK, getW.Code, getW.Body.String())
+	var stale remotesync.TargetSet
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &stale))
+	require.NoError(t, os.Remove(file))
+
+	post := func(path string, body any) *httptest.ResponseRecorder {
+		payload, err := json.Marshal(body)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer remote-token")
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w
+	}
+	manifestW := post("/api/v1/remote-sync/manifest", stale)
+	require.Equal(t, http.StatusOK, manifestW.Code, manifestW.Body.String())
+	archiveW := post("/api/v1/remote-sync/archive", remotesync.ArchiveRequest{TargetSet: stale})
+	require.Equal(t, http.StatusOK, archiveW.Code, archiveW.Body.String())
+	assert.Empty(t, tarEntries(t, archiveW.Body.Bytes()))
+}
+
 func TestRemoteSyncTargetsRequiresBearerAndBypassesHostCheck(t *testing.T) {
 	_, handler, _ := newRemoteSyncServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
