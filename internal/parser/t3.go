@@ -191,6 +191,71 @@ func t3DigestMessage(
 	)
 }
 
+// t3FingerprintPrefix versions the persisted fingerprint format. The stored
+// hash carries the session-row watermark ahead of the content digest so the
+// changed-container merge can compare row watermark against row watermark:
+// the stored file_mtime is the full change token, which a late message can
+// dominate, and comparing the row-only listing against it would mask a later
+// thread or project update until scheduled reconciliation. A hash without
+// this prefix (or from a different version) simply falls back to file_mtime
+// on the stored side and is re-emitted once, after which the parse persists
+// the current format.
+const t3FingerprintPrefix = "t3w1:"
+
+// t3SessionRowWatermarkNS is the thread-row-plus-project watermark: the same
+// value forEachT3ThreadWatermark lists, computed from the same fields, so the
+// merge compares like against like.
+func t3SessionRowWatermarkNS(row t3ThreadRow) int64 {
+	return t3LatestNanos(
+		row.updatedAt, row.createdAt,
+		row.projectUpdatedAt, row.projectCreatedAt,
+	)
+}
+
+// t3Fingerprint renders the persisted fingerprint: the session-row watermark,
+// then the content digest. Equality semantics are unchanged -- any digest
+// input that moves the watermark also moves the digest, since the digest
+// folds every timestamp the watermark reads.
+func t3Fingerprint(watermarkNS int64, h hash.Hash64) string {
+	return t3FingerprintPrefix + strconv.FormatInt(watermarkNS, 10) +
+		":" + digestFingerprintHex(h)
+}
+
+// T3MetadataWatermarkNS recovers the session-row watermark from a stored t3
+// fingerprint, reporting false for bare digests, other providers' formats,
+// and anything malformed -- the caller's file_mtime fallback is the safe
+// answer for those.
+func T3MetadataWatermarkNS(hash string) (int64, bool) {
+	rest, ok := strings.CutPrefix(hash, t3FingerprintPrefix)
+	if !ok {
+		return 0, false
+	}
+	watermark, digest, ok := strings.Cut(rest, ":")
+	if !ok || digest == "" || strings.Contains(digest, ":") {
+		return 0, false
+	}
+	ns, err := strconv.ParseInt(watermark, 10, 64)
+	if err != nil || ns < 0 {
+		return 0, false
+	}
+	return ns, true
+}
+
+// t3FingerprintDigestBits extracts the content-digest half of a fingerprint
+// for the watch token's sub-millisecond fold.
+func t3FingerprintDigestBits(fingerprint string) (uint64, bool) {
+	if rest, ok := strings.CutPrefix(fingerprint, t3FingerprintPrefix); ok {
+		if _, digest, found := strings.Cut(rest, ":"); found {
+			fingerprint = digest
+		}
+	}
+	digest, err := strconv.ParseUint(fingerprint, 16, 64)
+	if err != nil {
+		return 0, false
+	}
+	return digest, true
+}
+
 func forEachT3ThreadMetaQuery(
 	ctx context.Context, conn *sql.DB, shape t3Schema,
 	dbPath, extraWhere string, args []any,
@@ -253,7 +318,7 @@ func forEachT3ThreadMetaQuery(
 				stamps.maxUpdated, stamps.maxCreated,
 				cur.projectUpdatedAt, cur.projectCreatedAt,
 			),
-			Fingerprint: digestFingerprintHex(h),
+			Fingerprint: t3Fingerprint(t3SessionRowWatermarkNS(cur), h),
 		})
 	}
 	for rows.Next() {
@@ -425,7 +490,7 @@ func T3SourceMtimeContext(ctx context.Context, path string) (int64, error) {
 // first keeps the token stable even if a stamp ever carried finer precision.
 func t3WatchToken(meta T3ThreadMeta) int64 {
 	token := meta.FileMtime - meta.FileMtime%int64(time.Millisecond)
-	if digest, err := strconv.ParseUint(meta.Fingerprint, 16, 64); err == nil {
+	if digest, ok := t3FingerprintDigestBits(meta.Fingerprint); ok {
 		token += int64(digest % uint64(time.Millisecond))
 	}
 	return token
@@ -861,7 +926,8 @@ func parseT3ThreadFromDBWithSchema(
 		return nil, err
 	}
 	result := buildT3ParseResult(
-		row, messages, stamps, digestFingerprintHex(digest),
+		row, messages, stamps,
+		t3Fingerprint(t3SessionRowWatermarkNS(row), digest),
 		dbPath, info, machine,
 	)
 	return &result, nil

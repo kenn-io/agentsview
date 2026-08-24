@@ -632,6 +632,48 @@ func TestT3ThreadWatermarkDefersMessageOnlyAdvances(t *testing.T) {
 	assert.Less(t, watermark, fullToken)
 }
 
+// The stored fingerprint carries the session-row watermark ahead of the
+// digest so the changed-container merge compares row watermark against row
+// watermark instead of against a possibly message-dominated file_mtime.
+func TestT3FingerprintCarriesSessionRowWatermark(t *testing.T) {
+	dbPath := createT3DB(t, t3SampleDB(false))
+	conn, err := OpenT3DB(dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	shape, err := inspectT3Schema(context.Background(), conn)
+	require.NoError(t, err)
+
+	metas, err := ListT3ThreadMetas(context.Background(), conn, dbPath)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+
+	decoded, ok := T3MetadataWatermarkNS(metas[0].Fingerprint)
+	require.True(t, ok)
+	var listed int64
+	require.NoError(t, forEachT3ThreadWatermark(
+		context.Background(), conn, shape, dbPath,
+		func(_, _ string, watermarkNS int64) error {
+			listed = watermarkNS
+			return nil
+		}))
+	assert.Equal(t, listed, decoded,
+		"the embedded watermark and the listing must compare like against like")
+
+	// Malformed or foreign hashes decode to nothing and fall back to mtime.
+	for _, hash := range []string{
+		"", "abcdef0123456789", "t3w1:", "t3w1:notanumber:abc",
+		"t3w1:-5:abc", "t3w1:123", "t3w1:123:a:b", "ocv1:1:2:3:4:5:6",
+	} {
+		_, ok := T3MetadataWatermarkNS(hash)
+		assert.Falsef(t, ok, "hash %q must not decode", hash)
+	}
+
+	// The watch token still folds the digest half of the composite format.
+	digestBits, ok := t3FingerprintDigestBits(metas[0].Fingerprint)
+	require.True(t, ok)
+	assert.NotZero(t, digestBits)
+}
+
 func TestT3ContainerPathForEvent(t *testing.T) {
 	dbPath := createT3DB(t, t3SampleDB(false))
 	root := filepath.Dir(dbPath)

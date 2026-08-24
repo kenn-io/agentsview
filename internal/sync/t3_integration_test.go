@@ -462,6 +462,73 @@ func TestT3ChangedPathEmitsOnlyAdvancedMembers(t *testing.T) {
 	assert.Equal(t, dbPath+"#thread-alpha", sources[0].DisplayPath)
 }
 
+// A late message can dominate the stored file_mtime, sitting above any later
+// thread-row advance. The merge must still emit that advance: the stored
+// fingerprint embeds the session-row watermark, so row watermark compares
+// against row watermark rather than against the message-dominated token.
+func TestT3ChangedPathSeesRowAdvanceUnderMessageDominatedMtime(t *testing.T) {
+	root := t.TempDir()
+	userdata := filepath.Join(root, ".t3", "userdata")
+	dbPath := writeT3StateDB(t, userdata)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentT3: {userdata},
+		},
+		Machine: "devbox",
+	})
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 2, Skipped: 0})
+
+	// An in-place edit stamps a message far past the thread row (row stays at
+	// 10:05), so the stored file_mtime becomes message-dominated at 13:00.
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_thread_messages
+		    SET updated_at = '2026-08-22T13:00:00.000Z'
+		  WHERE message_id = 'm-a2'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
+	_, storedMtime, ok := database.GetSessionFileInfo("t3:thread-alpha")
+	require.True(t, ok)
+	require.Equal(t, parseT3TestStamp(t, "2026-08-22T13:00:00.000Z"), storedMtime)
+
+	// A thread-row advance BELOW the stored mtime: a rename at 11:00.
+	conn, err = sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_threads
+		    SET title = 'Renamed after the fact',
+		        updated_at = '2026-08-22T11:00:00.000Z'
+		  WHERE thread_id = 'thread-alpha'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	provider, ok2 := parser.NewProvider(parser.AgentT3, parser.ProviderConfig{
+		Roots: []string{userdata},
+	})
+	require.True(t, ok2)
+	sources, err := provider.SourcesForChangedPath(context.Background(),
+		parser.ChangedPathRequest{
+			Path:                      dbPath + "-wal",
+			WatchRoot:                 userdata,
+			AllowWatermarkOnlySources: true,
+			StoredMemberFreshnessPage: engine.storedMemberFreshnessPager(dbPath),
+		})
+	require.NoError(t, err)
+	require.Len(t, sources, 1,
+		"a row advance below the message-dominated mtime must still be emitted")
+	assert.Equal(t, dbPath+"#thread-alpha", sources[0].DisplayPath)
+}
+
+func parseT3TestStamp(t *testing.T, stamp string) int64 {
+	t.Helper()
+	ts, err := time.Parse(time.RFC3339Nano, stamp)
+	require.NoError(t, err)
+	return ts.UnixNano()
+}
+
 // A soft-deleted thread stops being discovered.
 func TestSyncT3SkipsSoftDeletedThread(t *testing.T) {
 	root := t.TempDir()

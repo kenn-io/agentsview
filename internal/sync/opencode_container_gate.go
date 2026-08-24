@@ -347,6 +347,9 @@ func storedSessionRowWatermarkNS(
 	); ok {
 		return metadata
 	}
+	if metadata, ok := parser.T3MetadataWatermarkNS(member.Hash); ok {
+		return metadata
+	}
 	return member.MTimeNS
 }
 

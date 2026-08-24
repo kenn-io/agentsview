@@ -2037,7 +2037,10 @@ add an archived or maintained mirror without replacing the original identity.
   and its project's created/updated timestamps: message `updated_at` so an
   in-place edit advances it, and the project stamps because `workspace_root`
   determines the session's cwd and project. A digest over every
-  parser-observed thread, project, and message field is stored in file_hash,
+  parser-observed thread, project, and message field is stored in file_hash
+  behind a versioned prefix that also embeds the session-row watermark, so
+  the changed-container merge compares row watermark against row watermark
+  rather than against a possibly message-dominated file_mtime,
   because t3 is event-sourced: refolding the event log after an app update
   rewrites projection rows whose timestamps derive from the events and do not
   move, and the accepted legacy generations lack message and project
