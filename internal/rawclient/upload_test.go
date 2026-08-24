@@ -400,6 +400,27 @@ func TestUploadObjectResumesFromServerOffset(t *testing.T) {
 	assert.Equal(t, 10, uploaded)
 }
 
+func TestUploadObjectAdoptsConcurrentDuplicateCompletion(t *testing.T) {
+	t.Parallel()
+	body := []byte("concurrent duplicate")
+	script := &uploadScript{
+		length: int64(len(body)), failFirst: "offset_conflict", postIncomplete: true,
+	}
+	// The POST is stale at offset zero. Before this client's first PATCH lands,
+	// another uploader completes the shared session at the full object length.
+	script.startOffset, script.offset = 0, int64(len(body))
+	server := httptest.NewServer(script.handler(t))
+	t.Cleanup(server.Close)
+	client := newTestClient(t, server.URL, time.Minute)
+
+	require.NoError(t, client.UploadObject(t.Context(),
+		parser.AgentClaude, newUploadObject(t, body), bytes.NewReader(body)))
+	// The stale data PATCH was rejected, then one empty PATCH confirmed the
+	// completed session; no duplicate bytes were accepted.
+	require.Len(t, script.patchBytes, 1)
+	assert.Empty(t, script.patchBytes[0])
+}
+
 func TestUploadObjectChecksumMismatchIsTerminal(t *testing.T) {
 	t.Parallel()
 	body := []byte("terminal")

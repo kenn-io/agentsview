@@ -124,6 +124,28 @@ func TestUploadServiceReturnsCurrentOffsetWithoutWritingOnConflict(t *testing.T)
 	assert.Zero(t, custody.finalizeCalls)
 }
 
+func TestUploadServiceReturnsCurrentOffsetAfterConcurrentCompletion(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	store := newMemoryUploadSessionStore()
+	custody := newMemoryUploadCustody()
+	service := newUploadServiceForTest(t, store, custody, now)
+	identity := AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}
+	body := []byte("concurrent duplicate")
+	object := objectRefForBytes(t, body)
+	session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
+	require.NoError(t, err)
+	store.completeBeforeAppend = true
+
+	_, err = service.Append(t.Context(), identity, session.ID, 0, body[:5])
+
+	var conflict *UploadOffsetConflictError
+	require.ErrorAs(t, err, &conflict)
+	assert.Equal(t, object.Length, conflict.CurrentOffset)
+	assert.Empty(t, store.data, "the stale chunk must not be accepted")
+}
+
 func TestUploadServiceChecksumMismatchResetsSession(t *testing.T) {
 	t.Parallel()
 
@@ -321,16 +343,17 @@ func newUploadServiceForTest(
 }
 
 type memoryUploadSessionStore struct {
-	mu             sync.Mutex
-	session        UploadSession
-	data           []byte
-	events         *[]string
-	openReader     func([]byte) io.ReadCloser
-	completeOnOpen bool
-	resetErr       error
-	createCalls    int
-	resetCalls     int
-	completeCalls  int
+	mu                   sync.Mutex
+	session              UploadSession
+	data                 []byte
+	events               *[]string
+	openReader           func([]byte) io.ReadCloser
+	completeBeforeAppend bool
+	completeOnOpen       bool
+	resetErr             error
+	createCalls          int
+	resetCalls           int
+	completeCalls        int
 }
 
 func newMemoryUploadSessionStore() *memoryUploadSessionStore {
@@ -380,6 +403,12 @@ func (s *memoryUploadSessionStore) Append(
 	}
 	if s.session.ID != uploadID || s.session.Identity != identity {
 		return UploadSession{}, ErrNotFound
+	}
+	if s.completeBeforeAppend {
+		s.completeBeforeAppend = false
+		s.session.Offset = s.session.Object.Length
+		s.session.Complete = true
+		return s.session, nil
 	}
 	if s.session.Offset != expectedOffset {
 		return UploadSession{}, &UploadOffsetConflictError{

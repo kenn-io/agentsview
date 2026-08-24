@@ -227,6 +227,11 @@ func (s *UploadService) Append(
 		return UploadSession{}, fmt.Errorf("validating appended raw upload session: %w", err)
 	}
 	if session.Complete {
+		if session.Offset != expectedOffset {
+			return UploadSession{}, &UploadOffsetConflictError{
+				CurrentOffset: session.Offset,
+			}
+		}
 		return session, nil
 	}
 	expectedAfter := expectedOffset + int64(len(chunk))
