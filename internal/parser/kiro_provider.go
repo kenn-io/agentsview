@@ -83,6 +83,31 @@ func (p *kiroProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+func (p *kiroProvider) ReconciliationSourceRank(
+	source SourceRef,
+) ReconciliationSourceRank {
+	src, ok := p.sources.sourceFromRef(source)
+	if !ok {
+		return ReconciliationSourceRank{}
+	}
+	class := int64(0)
+	switch src.Kind {
+	case kiroSourceLegacyJSONL:
+		class = 1
+	case kiroSourceCurrentJSONL:
+		class = 2
+	case kiroSourceSQLiteSession:
+		class = 3
+	}
+	recency := source.DiscoveryMTimeNS
+	if recency == 0 && src.Path != "" {
+		if info, err := os.Stat(src.Path); err == nil {
+			recency = info.ModTime().UnixNano()
+		}
+	}
+	return ReconciliationSourceRank{Class: class, Recency: recency}
+}
+
 func (p *kiroProvider) PersistentArchiveSource(
 	path string, fullSessionID string,
 ) (string, bool) {
@@ -516,20 +541,6 @@ func (s kiroSourceSet) FindSource(
 	if err := ctx.Err(); err != nil {
 		return SourceRef{}, false, err
 	}
-	if req.RawSessionID != "" {
-		for _, root := range s.roots {
-			dbPath := kiroSQLiteDBPath(root)
-			if dbPath != "" && KiroSQLiteSessionExists(dbPath, req.RawSessionID) {
-				return s.newSourceRef(
-					root,
-					KiroSQLiteVirtualPath(dbPath, req.RawSessionID),
-					dbPath,
-					req.RawSessionID,
-					kiroSourceSQLiteSession,
-				), true, nil
-			}
-		}
-	}
 	for _, path := range []string{req.StoredFilePath, req.FingerprintKey} {
 		if path == "" {
 			continue
@@ -539,7 +550,9 @@ func (s kiroSourceSet) FindSource(
 				if req.RequireFreshSource && !kiroSourceExists(source) {
 					continue
 				}
-				return source, true, nil
+				if req.RawSessionID == "" {
+					return source, true, nil
+				}
 			}
 		}
 	}
@@ -547,25 +560,32 @@ func (s kiroSourceSet) FindSource(
 		return SourceRef{}, false, nil
 	}
 	for _, root := range s.roots {
-		path := s.legacySourceFile(root, req.RawSessionID)
-		if path != "" {
-			if source, ok := s.sourceRef(root, path, false); ok {
-				return source, true, nil
-			}
+		var candidates []SourceRef
+		if dbPath := kiroSQLiteDBPath(root); dbPath != "" &&
+			KiroSQLiteSessionExists(dbPath, req.RawSessionID) {
+			candidates = append(candidates, s.newSourceRef(
+				root, KiroSQLiteVirtualPath(dbPath, req.RawSessionID), dbPath,
+				req.RawSessionID, kiroSourceSQLiteSession,
+			))
 		}
-	}
-	for _, root := range s.roots {
 		if source, ok := s.findCurrentJSONL(root, req.RawSessionID); ok {
-			return source, true, nil
+			candidates = append(candidates, source)
 		}
-	}
-	for _, root := range s.roots {
-		for _, file := range s.discoverLegacyJSONL(root) {
-			if KiroSessionIDFromPath(file.Path) == req.RawSessionID {
-				if source, ok := s.sourceRef(root, file.Path, false); ok {
-					return source, true, nil
-				}
+		if path := s.legacySourceFile(root, req.RawSessionID); path != "" {
+			if source, ok := s.sourceRef(root, path, false); ok {
+				candidates = append(candidates, source)
 			}
+		}
+		for _, file := range s.discoverLegacyJSONL(root) {
+			if KiroSessionIDFromPath(file.Path) != req.RawSessionID {
+				continue
+			}
+			if source, ok := s.sourceRef(root, file.Path, false); ok {
+				candidates = append(candidates, source)
+			}
+		}
+		if source, ok := s.bestSource(candidates); ok {
+			return source, true, nil
 		}
 	}
 	return SourceRef{}, false, nil
@@ -689,12 +709,16 @@ func (s kiroSourceSet) sourceRef(
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if currentPath, sessionID, ok := kiroCurrentPathUnderRoot(root, path); ok {
-		if !allowMissing && !kiroRegularFileUnderRoot(root, currentPath) {
+		if _, err := os.Lstat(currentPath); err == nil {
+			if !kiroRegularFileUnderRoot(root, currentPath) {
+				return SourceRef{}, false
+			}
+		} else if !allowMissing || !kiroEventPathUnderRoot(root, currentPath) {
 			return SourceRef{}, false
 		}
 		return s.newSourceRef(root, currentPath, "", sessionID, kiroSourceCurrentJSONL), true
 	}
-	if kiroLegacyPathUnderRoot(root, path) && IsRegularFile(path) {
+	if kiroLegacyPathUnderRoot(root, path) && kiroRegularFileUnderRoot(root, path) {
 		return s.newSourceRef(root, path, "", "", kiroSourceLegacyJSONL), true
 	}
 	if dbPath, sessionID, ok := kiroSQLiteVirtualPathParts(path); ok {
@@ -709,7 +733,7 @@ func (s kiroSourceSet) sourceRef(
 	if !kiroLegacyPathUnderRoot(root, path) {
 		return SourceRef{}, false
 	}
-	if !allowMissing && !IsRegularFile(path) {
+	if !allowMissing && !kiroRegularFileUnderRoot(root, path) {
 		return SourceRef{}, false
 	}
 	return s.newSourceRef(root, path, "", "", kiroSourceLegacyJSONL), true
@@ -722,9 +746,12 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if currentPath, sessionID, ok := kiroCurrentPathForEvent(root, path); ok {
+		if !kiroEventPathUnderRoot(root, currentPath) {
+			return SourceRef{}, false
+		}
 		return s.newSourceRef(root, currentPath, "", sessionID, kiroSourceCurrentJSONL), true
 	}
-	if kiroLegacyPathUnderRoot(root, path) {
+	if kiroLegacyPathUnderRoot(root, path) && kiroEventPathUnderRoot(root, path) {
 		return s.newSourceRef(root, path, "", "", kiroSourceLegacyJSONL), true
 	}
 	if dbPath, sessionID, ok := kiroSQLiteVirtualPathParts(path); ok {
@@ -764,6 +791,11 @@ func (s kiroSourceSet) legacyPathShadowed(path string) bool {
 		if dbPath != "" && KiroSQLiteSessionExists(dbPath, legacyID) {
 			return true
 		}
+		for _, file := range s.discoverCurrentJSONL(root) {
+			if _, id, ok := kiroCurrentPathUnderRoot(root, file.Path); ok && id == legacyID {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -772,9 +804,15 @@ func (s kiroSourceSet) newSourceRef(
 	root, path, dbPath, sessionID string,
 	kind kiroSourceKind,
 ) SourceRef {
+	key := path
+	if kind == kiroSourceSQLiteSession || kind == kiroSourceCurrentJSONL {
+		key = sessionID
+	} else if kind == kiroSourceLegacyJSONL {
+		key = KiroSessionIDFromPath(path)
+	}
 	return SourceRef{
 		Provider:       AgentKiro,
-		Key:            path,
+		Key:            key,
 		DisplayPath:    path,
 		FingerprintKey: path,
 		Opaque: kiroSource{
@@ -785,6 +823,45 @@ func (s kiroSourceSet) newSourceRef(
 			Kind:      kind,
 		},
 	}
+}
+
+func (s kiroSourceSet) bestSource(sources []SourceRef) (SourceRef, bool) {
+	if len(sources) == 0 {
+		return SourceRef{}, false
+	}
+	best := sources[0]
+	bestRank := s.sourceRank(best)
+	for _, source := range sources[1:] {
+		rank := s.sourceRank(source)
+		if rank.Class > bestRank.Class ||
+			(rank.Class == bestRank.Class && rank.Recency > bestRank.Recency) {
+			best, bestRank = source, rank
+		}
+	}
+	return best, true
+}
+
+func (s kiroSourceSet) sourceRank(source SourceRef) ReconciliationSourceRank {
+	src, ok := s.sourceFromRef(source)
+	if !ok {
+		return ReconciliationSourceRank{}
+	}
+	class := int64(0)
+	switch src.Kind {
+	case kiroSourceLegacyJSONL:
+		class = 1
+	case kiroSourceCurrentJSONL:
+		class = 2
+	case kiroSourceSQLiteSession:
+		class = 3
+	}
+	recency := source.DiscoveryMTimeNS
+	if recency == 0 {
+		if info, err := os.Stat(src.Path); err == nil {
+			recency = info.ModTime().UnixNano()
+		}
+	}
+	return ReconciliationSourceRank{Class: class, Recency: recency}
 }
 
 func kiroDBUnderRoot(root, dbPath string, requireRegular bool) bool {
@@ -990,6 +1067,30 @@ func kiroRegularFileUnderRoot(root, path string) bool {
 	}
 	_, ok := relUnder(resolvedRoot, resolvedPath)
 	return ok
+}
+
+// kiroEventPathUnderRoot validates an event path even when the changed file
+// has already been removed; existing ancestors must resolve inside the root.
+func kiroEventPathUnderRoot(root, path string) bool {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if _, ok := relUnder(root, path); !ok {
+		return false
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	for candidate := path; ; candidate = filepath.Dir(candidate) {
+		if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+			_, ok := relUnder(resolvedRoot, resolved)
+			return ok
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return false
+		}
+	}
 }
 
 func kiroProviderCapabilities() Capabilities {

@@ -526,6 +526,76 @@ func TestKiroProviderCurrentLayoutLifecycleAndExactLookup(t *testing.T) {
 	assert.Greater(t, fingerprint.Size, int64(len(`{"payload":{"type":"user","content":"hello"}}`)+1))
 }
 
+func TestKiroProviderLogicalIdentityAndRankUnifyLegacyAndCurrent(t *testing.T) {
+	root := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	legacy := filepath.Join(root, rawID+".jsonl")
+	current := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	writeSourceFile(t, legacy, kiroProviderJSONLFixture("legacy"))
+	writeSourceFile(t, current, `{"timestamp":"2026-08-24T12:34:56Z","payload":{"type":"user","content":"current"}}`+"\n")
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, current, discovered[0].DisplayPath)
+	assert.Equal(t, rawID, discovered[0].Key)
+
+	var streamed []SourceRef
+	err = provider.(interface {
+		DiscoverEach(context.Context, func(SourceRef) error) error
+	}).DiscoverEach(context.Background(), func(source SourceRef) error {
+		streamed = append(streamed, source)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, streamed, 1)
+	assert.Equal(t, rawID, streamed[0].Key)
+	ranker := provider.(ReconciliationSourceRanker)
+	assert.Equal(t, int64(2), ranker.ReconciliationSourceRank(streamed[0]).Class)
+	legacySource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{StoredFilePath: legacy})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawID, legacySource.Key)
+	assert.Equal(t, int64(1), ranker.ReconciliationSourceRank(legacySource).Class)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, current, found.DisplayPath)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: found})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	require.Len(t, outcome.Results[0].Result.Messages, 1)
+	assert.Equal(t, time.Date(2026, 8, 24, 12, 34, 56, 0, time.UTC),
+		outcome.Results[0].Result.Messages[0].Timestamp)
+}
+
+func TestKiroProviderRejectsCurrentSymlinkEscapeOnLookupAndChange(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	outsidePath := filepath.Join(outside, "messages.jsonl")
+	writeSourceFile(t, outsidePath, `{"payload":{"type":"user","content":"outside"}}`+"\n")
+	path := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsidePath, path); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{StoredFilePath: path})
+	require.NoError(t, err)
+	assert.False(t, ok)
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{Path: path, WatchRoot: root, EventKind: "write"})
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+}
+
 func TestKiroIDEProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	oldWSHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

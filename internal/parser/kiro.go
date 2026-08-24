@@ -296,6 +296,7 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 			continue
 		}
 		payload := gjson.Get(line, "payload")
+		timestamp := kiroCurrentMessageTimestamp(gjson.Get(line, "timestamp"))
 		typ := payload.Get("type").Str
 		content := strings.TrimSpace(payload.Get("content").Str)
 		switch typ {
@@ -310,7 +311,7 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 			if role == RoleUser && firstMessage == "" {
 				firstMessage = truncate(strings.ReplaceAll(content, "\n", " "), 300)
 			}
-			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: role, Content: content, ContentLength: len(content), Model: payload.Get("reasoningModelId").Str})
+			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: role, Content: content, Timestamp: timestamp, ContentLength: len(content), Model: payload.Get("reasoningModelId").Str})
 			ordinal++
 		case "tool_call":
 			name, id := payload.Get("toolName").Str, payload.Get("toolCallId").Str
@@ -319,7 +320,7 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 			}
 			call := ParsedToolCall{ToolUseID: id, ToolName: name, Category: NormalizeToolCategory(name), InputJSON: payload.Get("args").Raw}
 			display := kiroFormatToolCalls([]ParsedToolCall{call})
-			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: RoleAssistant, Content: display, ContentLength: len(display), HasToolUse: true, ToolCalls: []ParsedToolCall{call}})
+			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: RoleAssistant, Content: display, Timestamp: timestamp, ContentLength: len(display), HasToolUse: true, ToolCalls: []ParsedToolCall{call}})
 			ordinal++
 		case "tool_result":
 			id := payload.Get("toolCallId").Str
@@ -327,7 +328,7 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 				continue
 			}
 			raw := payload.Get("content").Raw
-			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: RoleUser, ToolResults: []ParsedToolResult{{ToolUseID: id, ContentRaw: raw, ContentLength: len(raw)}}})
+			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: RoleUser, Timestamp: timestamp, ToolResults: []ParsedToolResult{{ToolUseID: id, ContentRaw: raw, ContentLength: len(raw)}}})
 			ordinal++
 		}
 	}
@@ -363,6 +364,19 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 		}
 	}
 	return &ParsedSession{ID: "kiro:" + sessionID, Project: project, Machine: machine, Agent: AgentKiro, Cwd: cwd, FirstMessage: firstMessage, StartedAt: startedAt, EndedAt: endedAt, MessageCount: len(messages), UserMessageCount: userCount, SessionName: meta.Title, File: FileInfo{Path: path, Size: info.Size(), Mtime: info.ModTime().UnixNano()}}, messages, nil
+}
+
+func kiroCurrentMessageTimestamp(value gjson.Result) time.Time {
+	if ts := parseTimestamp(value.Str); !ts.IsZero() {
+		return ts
+	}
+	if value.Type == gjson.Number {
+		millis := value.Int()
+		if millis != 0 {
+			return time.UnixMilli(millis).UTC()
+		}
+	}
+	return time.Time{}
 }
 
 // kiroExtractText extracts concatenated text from a Kiro message's
