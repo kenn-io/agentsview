@@ -426,7 +426,7 @@ type UnitOffset struct {
 
 // ScanEmbeddableUnits streams the embeddable universe — user/assistant
 // messages that are not is_system and not system-prefixed (per
-// SystemPrefixSQL), from non-trashed sessions — reducing contiguous runs of
+// SystemPrefixSQL) — reducing contiguous runs of
 // embeddable assistant messages between embeddable user messages into single
 // EmbeddableUnit "run" documents; each embeddable user message is emitted as
 // its own "user" unit. Units are emitted in (session_id, ordinal) order of
@@ -443,6 +443,9 @@ type UnitOffset struct {
 // sessionFilterPredicates' ExcludeAutomated scope applies
 // (automatedScopePredicate("human", ...)), so the embedding index's default
 // scope matches session search's default exclusion of automated sessions.
+// Soft-deleted sessions remain in the scan because semantic and hybrid search
+// apply the session deletion filter after vector lookup. Hard-deleted sessions
+// have no session row and therefore leave the scan for full refresh to prune.
 // maxEnded returns the maximum sessions.ended_at seen across the scanned
 // rows (as its original raw string), or "" when the scan produced no rows.
 //
@@ -465,7 +468,6 @@ func (db *DB) ScanEmbeddableUnits(
 	preds := []string{
 		"m.role IN ('user', 'assistant')",
 		"m.is_system = 0",
-		"s.deleted_at IS NULL",
 		SystemPrefixSQL("m.content", "m.role"),
 	}
 	if !includeAutomated {

@@ -1,5 +1,5 @@
-// ABOUTME: end-to-end semantic search tests wiring a real internal/vector
-// ABOUTME: index into db.SearchContent, pinning anchor-local snippet centering.
+// ABOUTME: End-to-end semantic and hybrid search tests using a real vector index.
+// ABOUTME: Covers snippet centering and retained soft-deleted session vectors.
 package db_test
 
 import (
@@ -115,4 +115,61 @@ func TestSearchContentSemanticCrossMemberChunkCentersOnAnchorMessage(t *testing.
 		"snippet must center on the anchor message's matched content")
 	assert.NotContains(t, m.Snippet, memberA,
 		"snippet must not carry text from a different run member")
+}
+
+func TestSearchContentSemanticAndHybridRetainSoftDeletedVectors(t *testing.T) {
+	ctx := context.Background()
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSessionWithMessages(t, d, "deleted-session", "proj", []db.Message{
+		dbtest.UserMsg("deleted-session", 0, "archived vector content"),
+	}, dbtest.WithMessageCounts(2, 2))
+
+	enc := func(_ context.Context, texts []string) ([][]float32, error) {
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+
+	ix, err := vector.Open(ctx, filepath.Join(t.TempDir(), "vectors.db"), false, 4000)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, ix.Close()) }()
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
+	_, err = ix.Build(ctx, d, enc, gen, vector.BuildOptions{})
+	require.NoError(t, err)
+
+	d.SetVectorSearcher(vectorIndexSearcher{ix: ix, enc: enc})
+	active, err := d.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern: "unrelated query", Mode: "semantic", Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, active.Matches, 1)
+	assert.Equal(t, "deleted-session", active.Matches[0].SessionID)
+
+	require.NoError(t, d.SoftDeleteSession("deleted-session"))
+	_, err = ix.Build(ctx, d, enc, gen, vector.BuildOptions{Backstop: true})
+	require.NoError(t, err)
+
+	for _, mode := range []string{"semantic", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "hybrid" && !d.HasFTS() {
+				t.Skip("FTS5 is unavailable")
+			}
+
+			withoutDeleted, err := d.SearchContent(ctx, db.ContentSearchFilter{
+				Pattern: "unrelated query", Mode: mode, Limit: 10,
+			})
+			require.NoError(t, err)
+			assert.Empty(t, withoutDeleted.Matches)
+
+			withDeleted, err := d.SearchContent(ctx, db.ContentSearchFilter{
+				Pattern: "unrelated query", Mode: mode,
+				IncludeDeleted: true, Limit: 10,
+			})
+			require.NoError(t, err)
+			require.Len(t, withDeleted.Matches, 1)
+			assert.Equal(t, "deleted-session", withDeleted.Matches[0].SessionID)
+		})
+	}
 }

@@ -635,10 +635,10 @@ func TestScanEmbeddableUnitsOrdersBySessionThenOrdinal(t *testing.T) {
 	assert.Equal(t, 0, got[2].Ordinal)
 }
 
-// TestScanEmbeddableUnitsExcludesTrashedSessions asserts that units
-// belonging to a soft-deleted (trashed) session never stream, since a
-// trashed session's content should not be indexed for semantic search.
-func TestScanEmbeddableUnitsExcludesTrashedSessions(t *testing.T) {
+// TestScanEmbeddableUnitsIncludesTrashedSessions asserts that units belonging
+// to a soft-deleted session still stream so include-deleted semantic search
+// remains available after a full vector refresh.
+func TestScanEmbeddableUnitsIncludesTrashedSessions(t *testing.T) {
 	d := testDB(t)
 
 	insertSession(t, d, "trashed-sess", "proj", func(s *Session) {
@@ -662,8 +662,11 @@ func TestScanEmbeddableUnitsExcludesTrashedSessions(t *testing.T) {
 
 	got, _ := scanUnits(t, d, "", true)
 
-	require.Len(t, got, 1)
-	assert.Equal(t, "live-sess", got[0].SessionID)
+	require.Len(t, got, 2)
+	assert.ElementsMatch(t, []string{"live-sess", "trashed-sess"}, []string{
+		got[0].SessionID,
+		got[1].SessionID,
+	})
 }
 
 // TestScanEmbeddableUnitsSessionChangeClosesOpenRun asserts that a run left
