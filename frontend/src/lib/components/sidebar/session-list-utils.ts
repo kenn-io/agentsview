@@ -27,6 +27,8 @@ export interface DisplayItem {
   label: string;
   count: number;
   group?: SessionGroup;
+  /** Session groups represented by a collapsible section header. */
+  sectionGroups?: SessionGroup[];
   /** For child items within an expanded continuation chain. */
   session?: SessionGroupInput;
   /** True when this is a child session inside an expanded group. */
@@ -389,6 +391,7 @@ export function buildDisplayItems(
       type: "header",
       label: section.label,
       count: section.groups.length,
+      sectionGroups: section.groups,
       height: HEADER_HEIGHT,
       top: y.value,
     });
@@ -401,6 +404,67 @@ export function buildDisplayItems(
     }
   }
   return items;
+}
+
+function displaySessionId(item: DisplayItem): string | null {
+  if (item.type !== "session") return null;
+  if (item.isChild) return item.session?.id ?? null;
+  return item.group?.primarySessionId ?? null;
+}
+
+/**
+ * Find the next rendered session row. When a collapsed lineage or section
+ * hides the active session, treat its visible representative as the current
+ * position.
+ */
+export function adjacentVisibleSessionId(
+  displayItems: DisplayItem[],
+  activeSessionId: string | null,
+  delta: number,
+): string | null {
+  if (!activeSessionId) return null;
+
+  let current = displayItems.findIndex(
+    (item) => displaySessionId(item) === activeSessionId,
+  );
+  if (current < 0) {
+    current = displayItems.findIndex(
+      (item) =>
+        item.type === "session" &&
+        item.group?.sessions.some(
+          (session) => session.id === activeSessionId,
+        ),
+    );
+  }
+  if (current < 0) {
+    current = displayItems.findIndex(
+      (item) =>
+        item.type === "header" &&
+        item.sectionGroups?.some((group) =>
+          group.sessions.some(
+            (session) => session.id === activeSessionId,
+          ),
+        ),
+    );
+  }
+
+  if (current < 0) {
+    const rows = displayItems.filter(
+      (item) => item.type === "session",
+    );
+    const edge = delta > 0 ? rows[0] : rows[rows.length - 1];
+    return edge ? displaySessionId(edge) : null;
+  }
+
+  for (
+    let next = current + delta;
+    next >= 0 && next < displayItems.length;
+    next += delta
+  ) {
+    const id = displaySessionId(displayItems[next]!);
+    if (id) return id;
+  }
+  return null;
 }
 
 /**

@@ -25,6 +25,7 @@
     OVERSCAN,
     STORAGE_KEY_GROUP,
     getInitialGroupMode,
+    adjacentVisibleSessionId,
     buildGroupSections,
     buildDisplayItems,
     computeTotalSize,
@@ -50,11 +51,20 @@
   let expandedGroups: Set<string> = $state(new Set());
   let detachSidebar: (() => void) | null = null;
 
+  function navigateVisibleSession(delta: number) {
+    const id = adjacentVisibleSessionId(
+      renderDisplayItems,
+      sessions.activeSessionId,
+      delta,
+    );
+    if (id) sessions.selectSession(id);
+  }
+
   onMount(() => {
     detachSidebar = sessions.attachSidebar();
     const element = containerRef;
     if (!element) return;
-    return registerSessionList(element);
+    return registerSessionList(element, navigateVisibleSession);
   });
 
   $effect(() => {

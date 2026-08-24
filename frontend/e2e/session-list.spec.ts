@@ -59,7 +59,7 @@ test.describe("Session list", () => {
     await expect(sp.sessionItems.first()).toHaveClass(/active/);
   });
 
-  test("plain arrows over the sessions list navigate sessions", async ({
+  test("plain arrows follow the last session or message interaction", async ({
     page,
   }) => {
     const sessionWithMessages = sp.sessionItems
@@ -79,8 +79,7 @@ test.describe("Session list", () => {
     );
     await expect(sessionWithMessages).toHaveClass(/active/);
 
-    await page.mouse.move(0, 0);
-    await sp.sessionListScroll.hover();
+    await sessionWithMessages.focus();
     const activeSessionBefore =
       await sessionWithMessages.getAttribute("data-session-id");
     await page.keyboard.press("ArrowDown");
@@ -90,7 +89,6 @@ test.describe("Session list", () => {
 
     if (!hasMessages) return;
 
-    await sp.scroller.hover();
     await sp.messageRows.first().click();
     await page.keyboard.press("ArrowDown");
     await expect(sp.messageRows.nth(1)).toHaveClass(/selected/);

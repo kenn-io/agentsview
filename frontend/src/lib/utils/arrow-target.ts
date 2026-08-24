@@ -1,21 +1,33 @@
 export type ArrowTarget = "sessionList" | "message" | "none";
+export type ArrowInteractionTarget = Exclude<ArrowTarget, "none">;
 
 let sessionListElement: HTMLElement | null = null;
+let sessionListNavigate: ((delta: number) => void) | null = null;
 
-export function registerSessionList(element: HTMLElement): () => void {
+export function registerSessionList(
+  element: HTMLElement,
+  navigate: (delta: number) => void,
+): () => void {
   sessionListElement = element;
+  sessionListNavigate = navigate;
   return () => {
-    if (sessionListElement === element) sessionListElement = null;
+    if (sessionListElement === element) {
+      sessionListElement = null;
+      sessionListNavigate = null;
+    }
   };
+}
+
+export function navigateRegisteredSessionList(delta: number): boolean {
+  if (!sessionListElement?.isConnected || !sessionListNavigate) return false;
+  sessionListNavigate(delta);
+  return true;
 }
 
 export function resolveArrowTarget(
   activeElement: Element | null = typeof document === "undefined" ? null : document.activeElement,
   sessionList: HTMLElement | null = sessionListElement,
-  finePointer =
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(hover: hover) and (pointer: fine)").matches,
+  lastInteraction: ArrowInteractionTarget | null = null,
 ): ArrowTarget {
   const active = activeElement as HTMLElement | null;
   if (
@@ -26,19 +38,8 @@ export function resolveArrowTarget(
   }
 
   if (!sessionList?.isConnected) return "message";
-
-  // A fine-pointer hover inside the document is fresher than focus left on a
-  // row, so moving into the message pane restores message navigation.
-  const pointerIsInsideDocument =
-    finePointer &&
-    typeof document !== "undefined" &&
-    document.documentElement.matches(":hover");
-  if (pointerIsInsideDocument) {
-    return sessionList.matches(":hover") ? "sessionList" : "message";
-  }
-
+  if (lastInteraction) return lastInteraction;
   if (sessionList.contains(active)) return "sessionList";
-  if (finePointer && sessionList.matches(":hover")) return "sessionList";
   return "message";
 }
 

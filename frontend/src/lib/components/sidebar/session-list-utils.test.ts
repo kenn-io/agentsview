@@ -5,6 +5,7 @@ import {
   ITEM_HEIGHT,
   HEADER_HEIGHT,
   STORAGE_KEY,
+  adjacentVisibleSessionId,
   buildGroupSections,
   buildDisplayItems,
   computeTotalSize,
@@ -341,6 +342,99 @@ describe("buildDisplayItems (grouped)", () => {
       expect(parts[0]).toBe("session");
       expect(parts[1]).toBe(s.label);
     }
+  });
+});
+
+describe("adjacentVisibleSessionId", () => {
+  it("follows grouped display order instead of source order", () => {
+    const groups = [
+      makeGroup("gpt", 1, "g1"),
+      makeGroup("claude", 1, "c1"),
+      makeGroup("claude", 1, "c2"),
+    ];
+    const sections = buildGroupSections(groups, "agent");
+    const items = buildDisplayItems(
+      groups,
+      sections,
+      "agent",
+      new Set(),
+      new Set(),
+    );
+
+    expect(
+      adjacentVisibleSessionId(
+        items,
+        groups[2]!.primarySessionId,
+        1,
+      ),
+    ).toBe(groups[0]!.primarySessionId);
+  });
+
+  it("maps a hidden child to its collapsed lineage row", () => {
+    const root = makeSession({ id: "root" });
+    const child = makeSession({
+      id: "child",
+      parent_session_id: "root",
+    });
+    const lineage: SessionGroup = {
+      key: root.id,
+      project: root.project,
+      sessions: [root, child],
+      primarySessionId: root.id,
+      totalMessages: root.message_count + child.message_count,
+      firstMessage: root.first_message,
+      startedAt: root.started_at,
+      endedAt: child.ended_at,
+    };
+    const next = makeGroup("gpt", 1, "next");
+    const items = buildDisplayItems(
+      [lineage, next],
+      [],
+      "none",
+      new Set(),
+      new Set(),
+    );
+
+    expect(adjacentVisibleSessionId(items, child.id, 1)).toBe(
+      next.primarySessionId,
+    );
+  });
+
+  it("moves from a collapsed section to the next visible session", () => {
+    const claude = makeGroup("claude", 1, "collapsed");
+    const gpt = makeGroup("gpt", 1, "visible");
+    const groups = [claude, gpt];
+    const sections = buildGroupSections(groups, "agent");
+    const items = buildDisplayItems(
+      groups,
+      sections,
+      "agent",
+      new Set(["claude"]),
+      new Set(),
+    );
+
+    expect(
+      adjacentVisibleSessionId(items, claude.primarySessionId, 1),
+    ).toBe(gpt.primarySessionId);
+  });
+
+  it("uses the visible edge when the active session is filtered out", () => {
+    const first = makeGroup("claude", 1, "first");
+    const last = makeGroup("gpt", 1, "last");
+    const items = buildDisplayItems(
+      [first, last],
+      [],
+      "none",
+      new Set(),
+      new Set(),
+    );
+
+    expect(adjacentVisibleSessionId(items, "filtered", 1)).toBe(
+      first.primarySessionId,
+    );
+    expect(adjacentVisibleSessionId(items, "filtered", -1)).toBe(
+      last.primarySessionId,
+    );
   });
 });
 

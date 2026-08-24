@@ -11,7 +11,12 @@ import { configureGeneratedClient } from "../api/runtime.js";
 import { supportsResume, buildResumeCommand, formatResumeResponseCommand } from "./resume.js";
 import { copyToClipboard } from "./clipboard.js";
 import { toggleSidebarWithFocus } from "./sidebar-toggle.js";
-import { getSessionListElement, resolveArrowTarget } from "./arrow-target.js";
+import {
+  getSessionListElement,
+  navigateRegisteredSessionList,
+  resolveArrowTarget,
+  type ArrowInteractionTarget,
+} from "./arrow-target.js";
 
 function starredSessionFilter(): ((s: { id: string }) => boolean) | undefined {
   return starred.filterOnly
@@ -64,6 +69,16 @@ function activeResumeModel(sessionId: string): string {
  * Returns a cleanup function to remove the listener.
  */
 export function registerShortcuts(opts: ShortcutOptions): () => void {
+  let lastArrowInteraction: ArrowInteractionTarget | null = null;
+
+  function rememberArrowInteraction(e: PointerEvent | FocusEvent) {
+    if (!(e.target instanceof Node)) return;
+    const sessionList = getSessionListElement();
+    lastArrowInteraction = sessionList?.contains(e.target)
+      ? "sessionList"
+      : "message";
+  }
+
   function handler(e: KeyboardEvent) {
     const meta = e.metaKey || e.ctrlKey;
 
@@ -155,9 +170,10 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
         const target = resolveArrowTarget(
           document.activeElement,
           getSessionListElement(),
+          lastArrowInteraction,
         );
         if (target === "sessionList") {
-          sessions.navigateSession(1, starredSessionFilter());
+          navigateRegisteredSessionList(1);
         } else if (target === "message") {
           opts.navigateMessage(1);
         }
@@ -167,9 +183,10 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
         const target = resolveArrowTarget(
           document.activeElement,
           getSessionListElement(),
+          lastArrowInteraction,
         );
         if (target === "sessionList") {
-          sessions.navigateSession(-1, starredSessionFilter());
+          navigateRegisteredSessionList(-1);
         } else if (target === "message") {
           opts.navigateMessage(-1);
         }
@@ -266,6 +283,12 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
     }
   }
 
+  document.addEventListener("pointerdown", rememberArrowInteraction, true);
+  document.addEventListener("focusin", rememberArrowInteraction, true);
   document.addEventListener("keydown", handler);
-  return () => document.removeEventListener("keydown", handler);
+  return () => {
+    document.removeEventListener("pointerdown", rememberArrowInteraction, true);
+    document.removeEventListener("focusin", rememberArrowInteraction, true);
+    document.removeEventListener("keydown", handler);
+  };
 }

@@ -149,11 +149,19 @@ describe("registerShortcuts", () => {
   });
 
   describe("arrow target", () => {
-    function mountSessionList() {
+    function mountSessionList(
+      navigate = (delta: number) =>
+        sessions.navigateSession(
+          delta,
+          starred.filterOnly
+            ? (session) => starred.isStarred(session.id)
+            : undefined,
+        ),
+    ) {
       const list = document.createElement("div");
       list.className = "session-list-scroll";
       document.body.appendChild(list);
-      detachSessionList = registerSessionList(list);
+      detachSessionList = registerSessionList(list, navigate);
       return list;
     }
 
@@ -172,6 +180,31 @@ describe("registerShortcuts", () => {
       fireKey("ArrowUp");
       expect(sessions.activeSessionId).toBe("s1");
       expect(navigateMessage).not.toHaveBeenCalled();
+    });
+
+    it("switches panes after deliberate pointer interaction, not hover", () => {
+      const navigateSessions = vi.fn();
+      const list = mountSessionList(navigateSessions);
+      const row = document.createElement("button");
+      list.appendChild(row);
+      row.focus();
+
+      fireKey("ArrowDown");
+      expect(navigateSessions).toHaveBeenCalledWith(1);
+
+      const message = document.createElement("div");
+      document.body.appendChild(message);
+      message.dispatchEvent(new Event("pointermove", { bubbles: true }));
+      fireKey("ArrowDown");
+      expect(navigateSessions).toHaveBeenCalledTimes(2);
+      expect(navigateMessage).not.toHaveBeenCalled();
+
+      message.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      expect(document.activeElement).toBe(row);
+
+      fireKey("ArrowDown");
+      expect(navigateSessions).toHaveBeenCalledTimes(2);
+      expect(navigateMessage).toHaveBeenCalledWith(1);
     });
 
     it("keeps arrow navigation within the starred-only list", () => {
