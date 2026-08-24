@@ -348,6 +348,47 @@ func TestT3FreshnessGateConsultsDigest(t *testing.T) {
 		"the thread that actually changed still reparses")
 }
 
+// The session watcher's fallback polls Engine.SourceMtime and compares for
+// inequality. t3 is not file-based, so it must be routed to its digest-bearing
+// watch token before the generic provider-fingerprint path -- the fingerprint
+// mtime deliberately carries no digest bits and would leave a
+// timestamp-preserving rewrite invisible to a watched session.
+func TestSyncT3EngineSourceMtimeSeesSameTimestampRewrite(t *testing.T) {
+	root := t.TempDir()
+	userdata := filepath.Join(root, ".t3", "userdata")
+	dbPath := writeT3StateDB(t, userdata)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentT3: {userdata},
+		},
+		Machine: "devbox",
+	})
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 2, Skipped: 0})
+
+	before := engine.SourceMtime("t3:thread-alpha")
+	require.NotZero(t, before)
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_thread_messages
+		    SET text = 'Refolded with identical timestamps.'
+		  WHERE message_id = 'm-a2'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	after := engine.SourceMtime("t3:thread-alpha")
+	assert.NotEqual(t, before, after,
+		"the engine watch token must move when only content did")
+	ms := int64(time.Millisecond)
+	assert.Equal(t, before-before%ms, after-after%ms,
+		"the millisecond part is the unchanged timestamp")
+
+	// A deleted thread reads as gone, which the watcher treats as terminal.
+	assert.Zero(t, engine.SourceMtime("t3:00000000-0000-4000-8000-000000000000"))
+}
+
 // A soft-deleted thread stops being discovered.
 func TestSyncT3SkipsSoftDeletedThread(t *testing.T) {
 	root := t.TempDir()

@@ -18342,6 +18342,25 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
 	if !def.FileBased {
+		// t3 resolves through its own watch token rather than the provider
+		// fingerprint below: the fingerprint mtime is the persisted change
+		// token and deliberately carries no digest bits, so it cannot see a
+		// projection rewrite whose timestamps do not move. T3SourceMtime
+		// folds the parser-visible digest into the timestamp's unused
+		// sub-millisecond bits for exactly this watcher comparison.
+		if def.Type == parser.AgentT3 {
+			if path := e.FindSourceFile(sessionID); path != "" {
+				if _, _, ok := parser.ParseVirtualSourcePathForBase(
+					path, t3DBFile,
+				); ok {
+					mtime, err := parser.T3SourceMtime(path)
+					if err != nil {
+						return 0
+					}
+					return mtime
+				}
+			}
+		}
 		// Forge, Piebald, Warp, and ZCode are DB-backed providers: their
 		// per-session source mtime comes from the provider fingerprint
 		// (which mirrors the legacy List*SessionMeta last-modified value).
@@ -18492,15 +18511,6 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	if def.Type == parser.AgentShelley {
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, shelleyDBFile); ok {
 			mtime, err := parser.ShelleySourceMtime(path)
-			if err != nil {
-				return 0
-			}
-			return mtime
-		}
-	}
-	if def.Type == parser.AgentT3 {
-		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, t3DBFile); ok {
-			mtime, err := parser.T3SourceMtime(path)
 			if err != nil {
 				return 0
 			}
