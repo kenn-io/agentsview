@@ -304,6 +304,8 @@ func TestProcessS3CodexForkRetriesUntilParentAvailable(t *testing.T) {
 	first := e.processFile(t.Context(), file)
 	require.NoError(t, first.err)
 	require.Len(t, first.results, 1)
+	assert.Equal(t, 1, first.deferredCount,
+		"Codex-format S3 retry results must remain visible to completion gates")
 	require.Len(t, first.results[0].Messages, 4)
 	fullChildID := "laptop~codex:" + childID
 	written, _, failed, _ := e.writeBatch([]pendingWrite{{
@@ -321,6 +323,7 @@ func TestProcessS3CodexForkRetriesUntilParentAvailable(t *testing.T) {
 	second := e.processFile(t.Context(), file)
 	require.NoError(t, second.err)
 	require.Len(t, second.results, 1)
+	assert.Zero(t, second.deferredCount)
 	require.Len(t, second.results[0].Messages, 2)
 	assert.Equal(t, "child task", second.results[0].Messages[0].Content)
 	assert.Equal(t, 500, second.results[0].Messages[1].OutputTokens)

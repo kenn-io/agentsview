@@ -231,6 +231,17 @@ func journalForcesFullParse(journal MirrorChangeJournal) bool {
 	return false
 }
 
+func shouldPersistImportDataVersion(stats syncpkg.SyncStats) bool {
+	return stats.ProcessingComplete()
+}
+
+func deltaImportOutcome(stats syncpkg.SyncStats) JournalOutcome {
+	if shouldPersistImportDataVersion(stats) {
+		return JournalRetired
+	}
+	return JournalProcessingFailures
+}
+
 func (pending *PreparedDeltaImport) Execute(
 	ctx context.Context,
 ) (SyncStats, error) {
@@ -273,6 +284,8 @@ func (pending *PreparedDeltaImport) Execute(
 	stats.SessionsTotal = engineStats.TotalSessions
 	stats.Skipped = engineStats.Skipped
 	stats.Failed = engineStats.Failed
+	stats.Deferred = engineStats.Deferred
+	stats.incomplete = !engineStats.ProcessingComplete()
 
 	cachePersistStart := time.Now()
 	if err := pending.persistSkipCache(pending.database, engine); err != nil {
@@ -286,12 +299,14 @@ func (pending *PreparedDeltaImport) Execute(
 	case ctx.Err() != nil:
 		stats.JournalOutcome = JournalCancelled
 		processErr = ctx.Err()
-	case processErr != nil || engineStats.Aborted || engineStats.Failed > 0:
+	case processErr != nil:
 		stats.JournalOutcome = JournalProcessingFailures
+	case deltaImportOutcome(engineStats) != JournalRetired:
+		stats.JournalOutcome = deltaImportOutcome(engineStats)
 		if processErr == nil {
 			processErr = fmt.Errorf(
-				"remote import processing incomplete: aborted=%t failed=%d",
-				engineStats.Aborted, engineStats.Failed,
+				"remote import processing incomplete: aborted=%t failed=%d deferred=%d",
+				engineStats.Aborted, engineStats.Failed, engineStats.Deferred,
 			)
 		}
 	default:

@@ -50,6 +50,13 @@ type remoteSyncRequest struct {
 	Hosts        []config.RemoteHost `json:"hosts"`
 }
 
+func requireProcessingComplete(stats syncpkg.SyncStats) error {
+	if stats.ProcessingComplete() {
+		return nil
+	}
+	return errors.New("local sync processing incomplete")
+}
+
 type remoteSyncFailure struct {
 	Host config.RemoteHost `json:"host"`
 	Err  string            `json:"error"`
@@ -299,12 +306,15 @@ func (s *Server) runSyncWithResyncFallback(
 			}
 			return stats, err
 		}
-		return stats, nil
+		return stats, requireProcessingComplete(stats)
 	}
-	stats, _ := engine.SyncThenRun(
+	stats, err := engine.SyncThenRun(
 		ctx, false, progress, func(bool) error { return nil },
 	)
-	return stats, nil
+	if err != nil {
+		return stats, err
+	}
+	return stats, requireProcessingComplete(stats)
 }
 
 func (s *Server) humaTriggerResync(
@@ -354,12 +364,15 @@ func (s *Server) runResyncWithFallback(
 			}
 			return stats, err
 		}
-		return stats, nil
+		return stats, requireProcessingComplete(stats)
 	}
-	stats, _ := engine.SyncThenRun(
+	stats, err := engine.SyncThenRun(
 		ctx, true, progress, func(bool) error { return nil },
 	)
-	return stats, nil
+	if err != nil {
+		return stats, err
+	}
+	return stats, requireProcessingComplete(stats)
 }
 
 func (s *Server) humaSyncRemotes(
@@ -520,6 +533,9 @@ func (s *Server) runRemoteSyncRequest(
 					},
 				)
 				localStats = &stats
+				if err == nil && !stats.Aborted {
+					err = requireProcessingComplete(stats)
+				}
 				return remotesync.SyncStats{}, err
 			}
 			stats, err := engine.SyncThenRunWithRebuild(
@@ -573,6 +589,9 @@ func (s *Server) runRemoteSyncRequest(
 				},
 			)
 			localStats = &stats
+			if err == nil && !stats.Aborted {
+				err = requireProcessingComplete(stats)
+			}
 			return remotesync.SyncStats{}, err
 		}
 		var coordinatorErr error

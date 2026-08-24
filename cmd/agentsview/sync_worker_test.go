@@ -389,6 +389,12 @@ func TestResyncBuildResultFromStatsToleratesMinorityParseFailures(t *testing.T) 
 			wantStatus: "aborted",
 		},
 		{
+			name:       "deferred processing",
+			ctx:        context.Background(),
+			stats:      sync.SyncStats{Deferred: 1},
+			wantStatus: "failed",
+		},
+		{
 			name:       "build error",
 			ctx:        context.Background(),
 			stats:      sync.SyncStats{Synced: 10},

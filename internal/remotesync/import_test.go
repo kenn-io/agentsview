@@ -200,6 +200,24 @@ func TestPreparedHTTPSyncRebuildOutcomeClassification(t *testing.T) {
 	}
 }
 
+func TestPreparedHTTPSyncDeferredRebuildIsNotCommitReady(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	remote.writeSession(t, "session.jsonl",
+		time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC), "deferred rebuild")
+	_, hs := newMirrorSync(t, remote, t.TempDir())
+	prepared, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+	contributor, err := prepared.RebuildContributor()
+	require.NoError(t, err)
+
+	contributor.Finished(syncpkg.SyncStats{Deferred: 1}, nil)
+	assert.False(t, prepared.commitReady)
+	assert.Equal(t, JournalProcessingFailures, prepared.mirrorImport.outcome)
+	require.ErrorContains(t, prepared.Commit(), "not ready to commit")
+	assert.FileExists(t, mirrorJournalPath(MirrorDir(hs.DataDir, hs.Host)))
+}
+
 func TestPreparedHTTPSyncRebuildRetirementFailureRecordsDuration(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	remote.writeSession(t, "session.jsonl",
@@ -277,6 +295,13 @@ func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
 	require.NotNil(t, full)
 	require.NotNil(t, full.FilePath)
 	assert.Contains(t, *full.FilePath, "devbox:/home/wes/.claude/projects/test-project/session.jsonl")
+}
+
+func TestRequireCompleteRejectsDeferredWithoutHardFailure(t *testing.T) {
+	err := requireCompleteProcessing(syncpkg.SyncStats{Deferred: 1})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed=0")
+	assert.Contains(t, err.Error(), "deferred=1")
 }
 
 func TestImporterHydratesIcodematePersistedToolResult(t *testing.T) {
