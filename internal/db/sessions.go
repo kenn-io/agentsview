@@ -759,6 +759,9 @@ func (db *DB) ListSessions(
 func (db *DB) GetSidebarSessionIndex(
 	ctx context.Context, f SessionFilter,
 ) (SidebarSessionIndex, error) {
+	// IncludeDeleted is scoped to list and content-search queries; sidebar
+	// indexes retain their existing active-session policy.
+	f.IncludeDeleted = false
 	f.IncludeChildren = true
 	f.IncludeOrphans = true
 

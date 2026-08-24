@@ -58,7 +58,11 @@ func TestIncludeDeletedListAndContentSearchPreservesExclusions(t *testing.T) {
 		seedSearchSession(t, d, id, "proj", [][2]string{{"user", "deleted NEEDLE " + id}})
 	}
 	_, err := d.getWriter().Exec(
-		"UPDATE sessions SET deleted_at = ? WHERE id != ?",
+		`UPDATE sessions SET deleted_at = ?, deletion_cause = CASE id
+			WHEN 'source-missing' THEN 'source_missing'
+			WHEN 'user-trash' THEN 'user_deleted'
+			WHEN 'permanent' THEN 'user_deleted'
+		END WHERE id != ?`,
 		"2026-05-21T00:00:00Z", "active",
 	)
 	require.NoError(t, err, "soft-delete retained sessions")
@@ -95,18 +99,52 @@ func TestIncludeDeletedListAndContentSearchPreservesExclusions(t *testing.T) {
 	require.NoError(t, err, "include-deleted search")
 	assert.ElementsMatch(t, []string{"active", "source-missing", "user-trash"},
 		contentMatchIDs(withDeletedSearch.Matches))
+	var causes map[string]string
+	rows, err := d.getReader().Query(
+		"SELECT id, deletion_cause FROM sessions WHERE id IN (?, ?, ?)",
+		"source-missing", "user-trash", "permanent",
+	)
+	require.NoError(t, err)
+	causes = map[string]string{}
+	defer rows.Close()
+	for rows.Next() {
+		var id, cause string
+		require.NoError(t, rows.Scan(&id, &cause))
+		causes[id] = cause
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[string]string{
+		"source-missing": "source_missing",
+		"user-trash":     "user_deleted",
+		"permanent":      "user_deleted",
+	}, causes)
 }
 
 func TestIncludeDeletedChildrenExecutesRootAndChildPredicates(t *testing.T) {
 	d := testDB(t)
-	seedSearchSession(t, d, "deleted-root", "proj", [][2]string{{"user", "NEEDLE root"}})
-	seedSearchSession(t, d, "deleted-child", "proj", [][2]string{{"user", "NEEDLE child"}})
+	for _, id := range []string{"deleted-root", "subagent-child", "fork-child", "continuation-child"} {
+		seedSearchSession(t, d, id, "proj", [][2]string{{"user", "NEEDLE " + id}})
+	}
 	_, err := d.getWriter().Exec(`
-		UPDATE sessions SET deleted_at = ? WHERE id IN (?, ?);
-		UPDATE sessions SET relationship_type = 'subagent', parent_session_id = ?
-		WHERE id = ?`,
-		"2026-05-21T00:00:00Z", "deleted-root", "deleted-child",
-		"deleted-root", "deleted-child")
+		UPDATE sessions SET deleted_at = ? WHERE id IN (?, ?, ?, ?);
+		UPDATE sessions SET deletion_cause = CASE id
+			WHEN 'deleted-root' THEN 'source_missing'
+			ELSE 'user_deleted'
+		END WHERE id IN (?, ?, ?, ?);
+		UPDATE sessions SET relationship_type = CASE id
+			WHEN 'subagent-child' THEN 'subagent'
+			WHEN 'fork-child' THEN 'fork'
+			WHEN 'continuation-child' THEN 'continuation'
+		END, parent_session_id = ? WHERE id IN (?, ?, ?);
+		UPDATE sessions SET source_version = CASE id
+			WHEN 'subagent-child' THEN 'v-subagent'
+			WHEN 'fork-child' THEN 'v-fork'
+			WHEN 'continuation-child' THEN 'v-continuation'
+		END WHERE id IN (?, ?, ?)`,
+		"2026-05-21T00:00:00Z", "deleted-root", "subagent-child", "fork-child", "continuation-child",
+		"deleted-root", "subagent-child", "fork-child", "continuation-child",
+		"deleted-root", "subagent-child", "fork-child", "continuation-child",
+		"subagent-child", "fork-child", "continuation-child")
 	require.NoError(t, err, "soft-delete root and child")
 
 	defaultList, err := d.ListSessions(context.Background(), SessionFilter{
@@ -120,7 +158,7 @@ func TestIncludeDeletedChildrenExecutesRootAndChildPredicates(t *testing.T) {
 		IncludeDeleted:  true, Limit: 50,
 	})
 	require.NoError(t, err, "include-deleted child list")
-	assert.ElementsMatch(t, []string{"deleted-root", "deleted-child"},
+	assert.ElementsMatch(t, []string{"deleted-root", "subagent-child", "fork-child", "continuation-child"},
 		collectIDs(withDeleted.Sessions))
 
 	withDeletedSearch, err := d.SearchContent(context.Background(), ContentSearchFilter{
@@ -129,8 +167,43 @@ func TestIncludeDeletedChildrenExecutesRootAndChildPredicates(t *testing.T) {
 		Limit: 50,
 	})
 	require.NoError(t, err, "include-deleted child search")
-	assert.ElementsMatch(t, []string{"deleted-root", "deleted-child"},
+	assert.ElementsMatch(t, []string{"deleted-root", "subagent-child", "fork-child", "continuation-child"},
 		contentMatchIDs(withDeletedSearch.Matches))
+
+	page, err := d.ListSessions(context.Background(), SessionFilter{
+		IncludeChildren: true, IncludeDeleted: true, Limit: 1,
+	})
+	require.NoError(t, err, "include-deleted paginated child list")
+	ids := collectIDs(page.Sessions)
+	for page.NextCursor != "" {
+		page, err = d.ListSessions(context.Background(), SessionFilter{
+			IncludeChildren: true, IncludeDeleted: true,
+			Cursor: page.NextCursor, Limit: 1,
+		})
+		require.NoError(t, err, "include-deleted next child page")
+		ids = append(ids, collectIDs(page.Sessions)...)
+	}
+	assert.ElementsMatch(t, []string{
+		"deleted-root", "subagent-child", "fork-child", "continuation-child",
+	}, ids)
+}
+
+func TestIncludeDeletedDoesNotAffectSidebarIndex(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "sidebar-root", "proj", [][2]string{{"user", "root"}})
+	seedSearchSession(t, d, "sidebar-child", "proj", [][2]string{{"user", "child"}})
+	_, err := d.getWriter().Exec(`
+		UPDATE sessions SET deleted_at = ?, deletion_cause = 'user_deleted'
+		WHERE id IN (?, ?);
+		UPDATE sessions SET relationship_type = 'subagent', parent_session_id = ?
+		WHERE id = ?`, "2026-05-21T00:00:00Z", "sidebar-root", "sidebar-child",
+		"sidebar-root", "sidebar-child")
+	require.NoError(t, err)
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		IncludeDeleted: true, Limit: 1,
+	})
+	require.NoError(t, err, "sidebar index with include-deleted")
+	assert.Empty(t, index.Sessions)
 }
 
 func contentMatchIDs(matches []ContentMatch) []string {

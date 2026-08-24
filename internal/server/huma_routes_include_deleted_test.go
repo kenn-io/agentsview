@@ -47,4 +47,9 @@ func TestHumaIncludeDeletedQueryMappingForListAndContentSearch(t *testing.T) {
 		"/api/v1/search/content?pattern=needle&in=messages&limit=50&include_deleted=true")
 	assert.Equal(t, http.StatusOK, withDeletedSearch.Code)
 	assert.Contains(t, withDeletedSearch.Body.String(), "huma-deleted")
+
+	withDeletedSidebar := te.get(t,
+		"/api/v1/sessions/sidebar-index?limit=50&include_deleted=true")
+	assert.Equal(t, http.StatusOK, withDeletedSidebar.Code)
+	assert.NotContains(t, withDeletedSidebar.Body.String(), "huma-deleted")
 }
