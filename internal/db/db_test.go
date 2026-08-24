@@ -6957,7 +6957,7 @@ func TestSoftDeleteSessions(t *testing.T) {
 	assert.Equal(t, 0, n, "empty: rows=")
 }
 
-func TestSoftDeleteConvertsSourceMissingTombstonesToUserTrash(t *testing.T) {
+func TestSoftDeleteKeepsSourceMissingStateIndependent(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	paths := map[string]string{
@@ -6970,7 +6970,7 @@ func TestSoftDeleteConvertsSourceMissingTombstonesToUserTrash(t *testing.T) {
 			s.FilePath = &path
 		})
 		baselineSessionSource(t, d, defaultMachine, "claude", path)
-		changed, err := d.SoftDeleteSessionSourceOwnership(
+		changed, err := d.MarkSessionSourceMissing(
 			ctx, defaultMachine, "claude", id, path,
 		)
 		require.NoError(t, err)
@@ -6986,8 +6986,8 @@ func TestSoftDeleteConvertsSourceMissingTombstonesToUserTrash(t *testing.T) {
 		full, err := d.GetSessionFull(ctx, id)
 		require.NoError(t, err)
 		require.NotNil(t, full)
-		assert.Nil(t, full.DeletionCause,
-			"an explicit user deletion must replace the recoverable source tombstone")
+		assert.NotNil(t, full.SourceMissingAt)
+		assert.Nil(t, full.DeletionCause)
 		assert.True(t, d.IsSessionTrashed(id))
 	}
 }

@@ -561,7 +561,7 @@ func TestWriteBatchResyncReplacementEmptyMachineRemainsEmpty(t *testing.T) {
 		"a rebuild must retain an empty attribution already in the replacement")
 }
 
-func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
+func TestClaudeIDFreshnessRejectsSourceMissingState(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
 	missingPath := filepath.Join(root, "missing.jsonl")
@@ -593,7 +593,7 @@ func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
 			Agent: string(parser.AgentClaude), FilePath: missingPath,
 		}},
 	))
-	changed, err := database.SoftDeleteSessionSourceOwnership(
+	changed, err := database.MarkSessionSourceMissing(
 		t.Context(), "local", string(parser.AgentClaude), "missing", missingPath,
 	)
 	require.NoError(t, err)
@@ -612,7 +612,7 @@ func TestClaudeIDFreshnessRejectsSourceMissingTombstone(t *testing.T) {
 
 	assert.False(t, engine.shouldSkipFileWithPrefix(
 		"", "missing", info, hash,
-	), "a byte-identical restored source must be reparsed and revived")
+	), "a byte-identical restored source must be reparsed")
 	assert.True(t, engine.shouldSkipFileWithPrefix(
 		"", "user-deleted", info, hash,
 	), "ordinary user trash keeps the established freshness behavior")
@@ -3210,7 +3210,7 @@ func TestTombstoneMissingWatchSourcesScopesSharedPathByAgent(t *testing.T) {
 	for _, id := range []string{"claude-shared", "codex-shared"} {
 		active, err := database.GetSession(t.Context(), id)
 		require.NoError(t, err)
-		assert.Nil(t, active)
+		assert.NotNil(t, active)
 	}
 }
 
@@ -3281,8 +3281,8 @@ func TestTombstoneMissingWatchSourcesCodexReplacementFallback(t *testing.T) {
 		"a surviving same-UUID duplicate is a replacement, not a deletion")
 	gone, err := database.GetSession(t.Context(), "codex:"+solo)
 	require.NoError(t, err)
-	assert.Nil(t, gone,
-		"a missing copy with no survivor must tombstone")
+	assert.NotNil(t, gone,
+		"a missing copy with no survivor must be marked source-missing")
 }
 
 func TestTombstoneMissingWatchSourcesPaginatesLargeArchive(t *testing.T) {
@@ -3416,7 +3416,7 @@ func TestTombstoneMissingWatchSourcesDoesNotInferUnvalidatedVirtualPaths(t *test
 		"provider-neutral reconciliation must not reinterpret '#' as virtual syntax")
 }
 
-func TestReconcileWatchRootsRevivesRecreatedSourceMissingSession(t *testing.T) {
+func TestReconcileWatchRootsRefreshesRecreatedSourceMissingSession(t *testing.T) {
 	fx := newEngineFixture(t)
 	t.Cleanup(fx.engine.Close)
 	path := fx.writeClaudeSession(t, "project", "session.jsonl", "first")
@@ -3434,7 +3434,7 @@ func TestReconcileWatchRootsRevivesRecreatedSourceMissingSession(t *testing.T) {
 	))
 	active, err = fx.db.GetSession(t.Context(), "session")
 	require.NoError(t, err)
-	assert.Nil(t, active, "missing source is hidden after reconciliation")
+	assert.NotNil(t, active, "missing source remains browsable after reconciliation")
 
 	fx.writeClaudeSession(t, "project", "session.jsonl", "recreated")
 	require.NoError(t, fx.engine.ReconcileWatchRoots(
@@ -3442,17 +3442,17 @@ func TestReconcileWatchRootsRevivesRecreatedSourceMissingSession(t *testing.T) {
 	))
 	active, err = fx.db.GetSession(t.Context(), "session")
 	require.NoError(t, err)
-	require.NotNil(t, active, "same source must become visible after recreation")
+	require.NotNil(t, active, "session remains visible after source recreation")
 	require.NotNil(t, active.FirstMessage)
 	assert.Equal(t, "recreated", *active.FirstMessage)
 	messages, err := fx.db.GetAllMessages(t.Context(), "session")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "recreated", messages[0].Content,
-		"revival must replace message rows left by the deleted source")
+		"source return must replace messages retained while the source was missing")
 }
 
-func TestReconcileWatchRootsRevivesByteIdenticalSourceWithWarmSkipCache(
+func TestReconcileWatchRootsRefreshesByteIdenticalSourceWithWarmSkipCache(
 	t *testing.T,
 ) {
 	fx := newEngineFixture(t)
@@ -3483,7 +3483,7 @@ func TestReconcileWatchRootsRevivesByteIdenticalSourceWithWarmSkipCache(
 	))
 	active, err := fx.db.GetSession(t.Context(), "session")
 	require.NoError(t, err)
-	assert.Nil(t, active, "missing source is hidden after reconciliation")
+	assert.NotNil(t, active, "missing source remains browsable after reconciliation")
 
 	fx.engine.Close()
 	fx.engineWithEmitter(nil)
@@ -3497,7 +3497,7 @@ func TestReconcileWatchRootsRevivesByteIdenticalSourceWithWarmSkipCache(
 	active, err = fx.db.GetSession(t.Context(), "session")
 	require.NoError(t, err)
 	require.NotNil(t, active,
-		"a source-missing tombstone must not retain a cache entry that hides restoration")
+		"source-missing state must not retain a cache entry that hides restoration")
 	require.NotNil(t, active.FirstMessage)
 	assert.Equal(t, "unchanged", *active.FirstMessage)
 }
@@ -3542,8 +3542,8 @@ func TestReconcileWatchRootsPreservesHistoricalRowsUntilExactSourceObserved(
 		"a never-observed historical row must remain in the persistent archive")
 	observed, err = fx.db.GetSession(t.Context(), "observed")
 	require.NoError(t, err)
-	assert.Nil(t, observed,
-		"a source observed by the prior pass becomes deletion-eligible")
+	assert.NotNil(t, observed,
+		"a source observed by the prior pass can be marked source-missing")
 }
 
 func TestReconciliationSourceBaselineUsesStoredPathRewrite(t *testing.T) {
@@ -3569,7 +3569,7 @@ func TestReconciliationSourceBaselineUsesStoredPathRewrite(t *testing.T) {
 		}},
 		nil, nil,
 	))
-	changed, err := database.SoftDeleteSessionSourceOwnership(
+	changed, err := database.MarkSessionSourceMissing(
 		t.Context(), "host", "claude", "session", storedPath,
 	)
 	require.NoError(t, err)
@@ -3625,8 +3625,8 @@ func TestSyncPathsBaselinesPresentSourceBeforeLaterDelete(t *testing.T) {
 	fx.engine.SyncPathsContext(t.Context(), []string{path})
 	active, err = fx.db.GetSession(t.Context(), "incremental")
 	require.NoError(t, err)
-	assert.Nil(t, active,
-		"a later watcher delete may tombstone the exact previously observed path")
+	assert.NotNil(t, active,
+		"a later watcher delete may mark the exact observed path source-missing")
 }
 
 func TestStartupMaintenanceWaitsForForegroundSyncAndSerializesLaterSyncs(
@@ -7086,7 +7086,7 @@ func TestWriteBatchFailedReplacementKeepsSourceMissingSessionRetryable(t *testin
 			Agent: string(parser.AgentQwenPaw), FilePath: path,
 		}},
 	))
-	changed, err := database.SoftDeleteSessionSourceOwnership(
+	changed, err := database.MarkSessionSourceMissing(
 		t.Context(), "local", string(parser.AgentQwenPaw),
 		"qwenpaw:retry-revival", path,
 	)
@@ -7114,8 +7114,8 @@ func TestWriteBatchFailedReplacementKeepsSourceMissingSessionRetryable(t *testin
 	assert.Equal(t, 1, failed)
 	active, err := database.GetSession(t.Context(), "qwenpaw:retry-revival")
 	require.NoError(t, err)
-	assert.Nil(t, active,
-		"a failed content replacement must not revive the source-missing row")
+	assert.NotNil(t, active,
+		"a failed content replacement must not clear source-missing state")
 	info := fakeSnapshotInfo{
 		fName: filepath.Base(path), fSize: int64(len("new content")), fMtime: 2,
 	}

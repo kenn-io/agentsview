@@ -162,12 +162,10 @@ func TestSyncGooseTranscriptAndChangedDatabase(t *testing.T) {
 	))
 	active, err := database.GetSession(context.Background(), "goose:session-001")
 	require.NoError(t, err)
-	assert.Nil(t, active)
+	assert.NotNil(t, active)
 	archived, err := database.GetSessionFull(context.Background(), "goose:session-001")
 	require.NoError(t, err)
-	require.NotNil(t, archived)
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 }
 
 func TestReconcileProviderRootsGooseSkipsUnchangedSession(t *testing.T) {

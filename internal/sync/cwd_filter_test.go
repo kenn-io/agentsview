@@ -249,10 +249,7 @@ func TestCollectAndBatchBaselinesAllowedMissingMemberForMixedCwdSource(
 	require.Zero(t, second.Failed)
 	stale, err := database.GetSessionFull(ctx, "stale-allowed")
 	require.NoError(t, err)
-	require.NotNil(t, stale)
-	require.NotNil(t, stale.DeletionCause,
-		"the next mixed-CWD parse must retire the admitted missing member")
-	assert.Equal(t, "source_missing", *stale.DeletionCause)
+	assertSourceMissingState(t, stale)
 }
 
 func TestCollectAndBatchCancellationRevokesRejectedMissingMemberBaseline(
@@ -347,10 +344,10 @@ func TestCollectAndBatchFailureRevokesOnlyRejectedMissingMemberBaseline(
 	))
 	require.NoError(t, database.Update(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-			CREATE TRIGGER fail_first_source_missing_tombstone
-			BEFORE UPDATE OF deleted_at ON sessions
+			CREATE TRIGGER fail_first_source_missing_mark
+			BEFORE UPDATE OF source_missing_at ON sessions
 			WHEN NEW.id = 'failed-mixed-11111111-2222-4333-8444-555555555555'
-			 AND NEW.deletion_cause = 'source_missing'
+			 AND NEW.source_missing_at IS NOT NULL
 			BEGIN
 				SELECT RAISE(FAIL, 'injected first-member tombstone failure');
 			END`)
@@ -413,10 +410,10 @@ func seedPartialSourceMissingFailure(
 	))
 	require.NoError(t, database.Update(func(tx *sql.Tx) error {
 		_, err := tx.Exec(`
-			CREATE TRIGGER fail_second_source_missing_tombstone
-			BEFORE UPDATE OF deleted_at ON sessions
+			CREATE TRIGGER fail_second_source_missing_mark
+			BEFORE UPDATE OF source_missing_at ON sessions
 			WHEN NEW.id = 'partial-success-b'
-			 AND NEW.deletion_cause = 'source_missing'
+			 AND NEW.source_missing_at IS NOT NULL
 			BEGIN
 				SELECT RAISE(FAIL, 'injected later-member tombstone failure');
 			END`)
@@ -448,9 +445,7 @@ func TestSyncAllCountsAndEmitsPartialSourceMissingTombstones(t *testing.T) {
 		"a failed pass must notify clients about its committed tombstone")
 	first, err := fx.db.GetSessionFull(t.Context(), firstID)
 	require.NoError(t, err)
-	require.NotNil(t, first)
-	require.NotNil(t, first.DeletionCause)
-	assert.Equal(t, "source_missing", *first.DeletionCause)
+	assertSourceMissingState(t, first)
 	failing, err := fx.db.GetSession(t.Context(), failingID)
 	require.NoError(t, err)
 	assert.NotNil(t, failing, "the member that failed to tombstone must remain active")
@@ -482,9 +477,7 @@ func TestSyncThenRunEmitsPartialSourceMissingTombstones(t *testing.T) {
 		"coordinated completion must notify clients about its committed tombstone")
 	first, err := fx.db.GetSessionFull(t.Context(), firstID)
 	require.NoError(t, err)
-	require.NotNil(t, first)
-	require.NotNil(t, first.DeletionCause)
-	assert.Equal(t, "source_missing", *first.DeletionCause)
+	assertSourceMissingState(t, first)
 	failing, err := fx.db.GetSession(t.Context(), failingID)
 	require.NoError(t, err)
 	assert.NotNil(t, failing, "the member that failed to tombstone must remain active")
@@ -511,9 +504,7 @@ func TestSyncSingleSessionEmitsPartialSourceMissingTombstones(t *testing.T) {
 		"a failed single-session sync must notify clients about its committed tombstone")
 	first, err := fx.db.GetSessionFull(t.Context(), firstID)
 	require.NoError(t, err)
-	require.NotNil(t, first)
-	require.NotNil(t, first.DeletionCause)
-	assert.Equal(t, "source_missing", *first.DeletionCause)
+	assertSourceMissingState(t, first)
 	failing, err := fx.db.GetSession(t.Context(), failingID)
 	require.NoError(t, err)
 	assert.NotNil(t, failing, "the member that failed to tombstone must remain active")
@@ -659,7 +650,7 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnPageFailure(
 		"the CWD-rejected stale fork must remain active")
 
 	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec("DROP TRIGGER fail_second_source_missing_tombstone")
+		_, err := tx.Exec("DROP TRIGGER fail_second_source_missing_mark")
 		return err
 	}))
 	require.NoError(t, os.Remove(filteredPath))

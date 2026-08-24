@@ -301,7 +301,6 @@ func runServe(cfg config.Config, opts serveOptions) {
 			DisabledAgents:          cfg.DisabledAgents,
 			IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths:      cfg.ScanProtectedPaths,
-			PreserveMissingSources:  cfg.PreserveMissingSources,
 			Machine:                 cfg.LocalMachineName,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			Emitter:                 emitter,
@@ -429,9 +428,8 @@ func runServe(cfg config.Config, opts serveOptions) {
 	identityBackfillEngine := engine
 	if identityBackfillEngine == nil {
 		identityBackfillEngine = sync.NewEngine(database, sync.EngineConfig{
-			Machine:                cfg.LocalMachineName,
-			ScanProtectedPaths:     cfg.ScanProtectedPaths,
-			PreserveMissingSources: cfg.PreserveMissingSources,
+			Machine:            cfg.LocalMachineName,
+			ScanProtectedPaths: cfg.ScanProtectedPaths,
 		})
 	}
 	go idleTracker.Do(func() {

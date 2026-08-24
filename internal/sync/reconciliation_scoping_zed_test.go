@@ -55,7 +55,7 @@ func TestReconcileProviderRootsZedContainerPassReclaimsRemovedMember(
 
 	removed, err := database.GetSession(t.Context(), "zed:removed")
 	require.NoError(t, err)
-	assert.Nil(t, removed,
+	assert.NotNil(t, removed,
 		"a container-scoped pass reclaims a removed member")
 	kept, err := database.GetSession(t.Context(), "zed:kept")
 	require.NoError(t, err)

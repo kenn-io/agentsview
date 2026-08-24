@@ -167,10 +167,7 @@ func TestReconcileProviderRootsProofBoundedTombstoneWithinDescendant(t *testing.
 
 	deleted, err := database.GetSessionFull(t.Context(), "s-in")
 	require.NoError(t, err)
-	require.NotNil(t, deleted)
-	require.NotNil(t, deleted.DeletionCause)
-	assert.Equal(t, "source_missing", *deleted.DeletionCause,
-		"a missing source inside the proof is tombstoned in the same pass")
+	assertSourceMissingState(t, deleted)
 
 	survivor, err := database.GetSession(t.Context(), "s-out")
 	require.NoError(t, err)
@@ -320,10 +317,7 @@ func TestReconcileProviderRootsCaseVariantRootAdmitsAsExact(t *testing.T) {
 		"a case-variant of the configured root must not produce empty discovery")
 	gone, err := database.GetSessionFull(t.Context(), "old-session")
 	require.NoError(t, err)
-	require.NotNil(t, gone)
-	require.NotNil(t, gone.DeletionCause)
-	assert.Equal(t, "source_missing", *gone.DeletionCause,
-		"a case-variant request carries the exact root's full authority")
+	assertSourceMissingState(t, gone)
 }
 
 // scopedStreamingProvider is a multi-root fake whose discovery reflects the
@@ -519,10 +513,7 @@ func TestReconcileProviderRootsScopedVirtualMemberChecksRelocationWhenContainerG
 		"a member the provider resolves under another root is a move")
 	gone, err := database.GetSessionFull(t.Context(), "gone")
 	require.NoError(t, err)
-	require.NotNil(t, gone)
-	require.NotNil(t, gone.DeletionCause)
-	assert.Equal(t, "source_missing", *gone.DeletionCause,
-		"a member the provider resolves nowhere is reclaimed")
+	assertSourceMissingState(t, gone)
 }
 
 func scopedTestSource(agent parser.AgentType, path string) parser.SourceRef {
@@ -582,10 +573,7 @@ func TestReconcileProviderRootsScopedFailureCommitsHealthySiblingScope(t *testin
 		"the failed scope retries at the caller's own width")
 	gone, getErr := database.GetSessionFull(t.Context(), "s1")
 	require.NoError(t, getErr)
-	require.NotNil(t, gone)
-	require.NotNil(t, gone.DeletionCause)
-	assert.Equal(t, "source_missing", *gone.DeletionCause,
-		"the healthy scope still commits its proof-bounded tombstone")
+	assertSourceMissingState(t, gone)
 	survivor, getErr := database.GetSession(t.Context(), "s2")
 	require.NoError(t, getErr)
 	assert.NotNil(t, survivor, "the failed scope preserves its sessions")
@@ -678,9 +666,7 @@ func TestReconcilePartialRequestCoveringAllRootsKeepsFullAuthority(t *testing.T)
 	for _, id := range []string{"gone-one", "gone-two"} {
 		gone, err := database.GetSessionFull(t.Context(), id)
 		require.NoError(t, err)
-		require.NotNil(t, gone)
-		require.NotNil(t, gone.DeletionCause)
-		assert.Equal(t, "source_missing", *gone.DeletionCause)
+		assertSourceMissingState(t, gone)
 	}
 	for _, id := range []string{"keep-one", "keep-two"} {
 		active, err := database.GetSession(t.Context(), id)

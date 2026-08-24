@@ -27,7 +27,7 @@ func seedVirtualMemberRow(
 // paged freshness read: pages arrive in ascending path order honoring the
 // limit, duplicate session rows for one member fold completely even when the
 // page boundary lands on that member (the MAX-mtime row carries its hash
-// while the MIN data version survives), source-missing tombstones and paths
+// while the MIN data version survives), source-missing rows and paths
 // outside the container never surface, and the done flag reports exhaustion.
 func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 	t *testing.T,
@@ -43,11 +43,10 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 	seedVirtualMemberRow(t, d, "outside", "/data/other.db#x", 400, 5, "")
 	_, err := d.getWriter().Exec(
 		`UPDATE sessions SET
-			deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-			deletion_cause = 'source_missing'
+			source_missing_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = 'b'`,
 	)
-	require.NoError(t, err, "tombstone member b")
+	require.NoError(t, err, "mark member b source-missing")
 
 	page, done, err := d.ListVirtualContainerMemberFreshnessPage(
 		t.Context(), container, "", 1,
@@ -70,7 +69,7 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 	assert.False(t, done)
 	require.Len(t, page, 1)
 	assert.Equal(t, container+"#c", page[0].Path,
-		"the tombstoned member must never surface")
+		"the source-missing member must never surface")
 
 	page, done, err = d.ListVirtualContainerMemberFreshnessPage(
 		t.Context(), container, page[0].Path, 1,

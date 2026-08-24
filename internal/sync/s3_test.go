@@ -882,7 +882,7 @@ func TestSyncArchivedS3IcodemateParentPreservesChildAgentAndIDNamespace(
 			ID: parentID, Machine: "laptop", Agent: "icodemate", FilePath: parentPath,
 		}},
 	))
-	tombstoned, err := database.SoftDeleteSessionSourceOwnership(
+	tombstoned, err := database.MarkSessionSourceMissing(
 		t.Context(), "laptop", "icodemate", parentID, parentPath,
 	)
 	require.NoError(t, err)
@@ -980,9 +980,7 @@ func TestSyncClaudeS3SubagentTranscriptsEmitsSessionsForForkTombstone(
 		"S3 fork cleanup must refresh messages and the session index")
 	stale, err := database.GetSessionFull(t.Context(), staleID)
 	require.NoError(t, err)
-	require.NotNil(t, stale)
-	require.NotNil(t, stale.DeletionCause)
-	assert.Equal(t, "source_missing", *stale.DeletionCause)
+	assertSourceMissingState(t, stale)
 }
 
 func TestSyncClaudeS3SubagentTranscriptsContextUsesPrefixedChildProject(

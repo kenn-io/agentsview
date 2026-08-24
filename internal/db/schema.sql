@@ -80,9 +80,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- mirrored to PG/DuckDB.
     last_write_incremental INTEGER NOT NULL DEFAULT 0,
     deleted_at  TEXT,
-    -- NULL remains the established user-trash representation; source_missing
-    -- is recoverable when the file reappears.
+    -- Retained for compatibility with older archives and mirrors. New source
+    -- availability state is stored independently in source_missing_at.
     deletion_cause TEXT,
+    -- SQLite-only sync state. A missing source must not hide or trash the
+    -- archived session; it only prevents freshness checks from skipping a
+    -- reparse when that source returns.
+    source_missing_at TEXT,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     termination_status TEXT,
     secret_leak_count INTEGER NOT NULL DEFAULT 0,

@@ -530,8 +530,8 @@ func TestSyncEngineCursorSourceMissingRevivalPreservesCwd(t *testing.T) {
 	assert.Equal(t, workspace, stored.Cwd)
 	require.NoError(t, d.Update(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
-			"UPDATE sessions SET deleted_at = 'now', deletion_cause = ? WHERE id = ?",
-			"source_missing", fullID,
+			"UPDATE sessions SET source_missing_at = 'now' WHERE id = ?",
+			fullID,
 		)
 		return err
 	}))

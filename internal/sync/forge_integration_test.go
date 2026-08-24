@@ -247,14 +247,11 @@ func TestReconcileWatchRootsForgeDeletedMemberTombstonesSession(t *testing.T) {
 
 	deleted, err := env.db.GetSession(t.Context(), "forge:deleted-member")
 	require.NoError(t, err)
-	assert.Nil(t, deleted,
+	assert.NotNil(t, deleted,
 		"full sync must baseline dedicated streaming sources for later reconciliation")
 	archived, err := env.db.GetSessionFull(t.Context(), "forge:deleted-member")
 	require.NoError(t, err)
-	require.NotNil(t, archived)
-	require.NotNil(t, archived.DeletedAt)
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 	assert.Equal(t, beforeDelete.MessageCount, archived.MessageCount,
 		"source loss must retain the archived transcript")
 	surviving, err := env.db.GetSession(t.Context(), "forge:surviving-member")

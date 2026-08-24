@@ -314,7 +314,10 @@ func TestSyncWatchBatchThenRunMissingPathTombstoneIsCardinalityBounded(t *testin
 				func() error {
 					stored, getErr := database.GetSession(t.Context(), "deleted")
 					require.NoError(t, getErr)
-					assert.Nil(t, stored)
+					assert.NotNil(t, stored)
+					full, fullErr := database.GetSessionFull(t.Context(), "deleted")
+					require.NoError(t, fullErr)
+					assertSourceMissingState(t, full)
 					return nil
 				},
 			)

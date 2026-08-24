@@ -279,10 +279,15 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 		return 0, nil
 	}
 
+	trashFilter := "deleted_at IS NOT NULL"
+	if oldDBHasColumn(ctx, tx, "sessions", "deletion_cause") {
+		trashFilter += " AND (deletion_cause IS NULL" +
+			" OR deletion_cause <> '" + legacyDeletionCauseSourceMissing + "')"
+	}
 	if _, err := tx.ExecContext(ctx, `
 		CREATE TEMP TABLE _trashed_ids AS
 		SELECT id FROM old_db.sessions
-		WHERE deleted_at IS NOT NULL
+		WHERE `+trashFilter+`
 		  AND id NOT IN (SELECT id FROM main.excluded_sessions)`); err != nil {
 		return 0, fmt.Errorf(
 			"identifying trashed sessions: %w", err,
@@ -1136,10 +1141,9 @@ func (d *DB) CopySessionMetadataFrom(
 	defer func() { _ = tx.Rollback() }()
 
 	// Copy user-managed metadata from the quiesced old DB. User-owned
-	// deleted_at is copied for all rows. Recoverable source_missing state is
-	// already carried by the pre-sync trash/orphan copy and must not re-hide a
-	// row that the fresh sync revived after its source reappeared. display_name
-	// is overlaid ONLY for
+	// deleted_at is copied for all rows. Legacy source_missing deletion state
+	// must not re-hide a row that the fresh sync revived after its source
+	// reappeared. display_name is overlaid ONLY for
 	// user-owned rows: the fresh DB already holds re-parsed session_name
 	// values, so agent-owned and cleared rows must keep the fresh value.
 	// Probe columns first so older source DBs don't abort.
@@ -1151,12 +1155,12 @@ func (d *DB) CopySessionMetadataFrom(
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
 			SET deleted_at = CASE
-					WHEN old_s.deletion_cause = '`+deletionCauseSourceMissing+`'
+					WHEN old_s.deletion_cause = '`+legacyDeletionCauseSourceMissing+`'
 					THEN main.sessions.deleted_at
 					ELSE old_s.deleted_at
 				END,
 				deletion_cause = CASE
-					WHEN old_s.deletion_cause = '`+deletionCauseSourceMissing+`'
+					WHEN old_s.deletion_cause = '`+legacyDeletionCauseSourceMissing+`'
 					THEN main.sessions.deletion_cause
 					ELSE old_s.deletion_cause
 				END
@@ -1699,6 +1703,9 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	}
 	if oldDBHasColumn(ctx, tx, "sessions", "deletion_cause") {
 		cols = append(cols, "deletion_cause")
+	}
+	if oldDBHasColumn(ctx, tx, "sessions", "source_missing_at") {
+		cols = append(cols, "source_missing_at")
 	}
 	cols = append(cols, "created_at")
 	for _, c := range []string{

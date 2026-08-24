@@ -2352,7 +2352,7 @@ func TestParseDiffClaudeMissingRowsRequireLegacyForkEvidence(t *testing.T) {
 			"stale rows must not trip --fail-on-change")
 	})
 
-	t.Run("stale fork is tombstone-bound", func(t *testing.T) {
+	t.Run("stale fork is marked source-missing", func(t *testing.T) {
 		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 		path := env.writeClaudeSession(t, "test-proj", "pd-real.jsonl",
 			parseDiffClaudeContent("real prompt", "real reply"))
@@ -2372,14 +2372,14 @@ func TestParseDiffClaudeMissingRowsRequireLegacyForkEvidence(t *testing.T) {
 			Examined: 1, Identical: 1, ExcludedByParser: 1,
 		}, report.Totals, "totals")
 		assert.Empty(t, report.FieldCounts,
-			"tombstone-bound rows are not parser drift")
+			"source-missing rows are not parser drift")
 
 		sd := findSessionDiff(report, "pd-legacy-fork")
 		require.NotNil(t, sd, "legacy fork not listed")
 		assert.Equal(t, sync.DiffExcluded, sd.Class, "class")
-		assert.Equal(t, "member source missing (would tombstone)", sd.Reason)
+		assert.Equal(t, "member source missing (would record source state)", sd.Reason)
 		assert.False(t, report.HasFailures(),
-			"an intentional source-missing tombstone must not trip --fail-on-change")
+			"an intentional source-state change must not trip --fail-on-change")
 	})
 
 	t.Run("stale fork outside CWD filter is policy-preserved", func(t *testing.T) {

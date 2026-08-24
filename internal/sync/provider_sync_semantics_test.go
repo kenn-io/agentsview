@@ -476,13 +476,11 @@ func TestOmnigentCompleteResultOwnershipTombstonesAndRevivesMissingMember(
 
 	active, err := database.GetSession(t.Context(), "omnigent:missing")
 	require.NoError(t, err)
-	assert.Nil(t, active)
+	assert.NotNil(t, active)
 	archived, err := database.GetSessionFull(t.Context(), "omnigent:missing")
 	require.NoError(t, err)
-	require.NotNil(t, archived)
 	assert.Empty(t, archived.Machine)
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 
 	// The revived member re-appears through a real container change: the
 	// database fingerprint moves, so the promoted container cache entry no

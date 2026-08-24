@@ -176,12 +176,10 @@ func TestProcessS3IcodemateReconcilesRemovedForkThenSkipsUnchanged(
 
 	fork, err = database.GetSession(t.Context(), forkID)
 	require.NoError(t, err)
-	assert.Nil(t, fork)
+	assert.NotNil(t, fork)
 	archivedFork, err := database.GetSessionFull(t.Context(), forkID)
 	require.NoError(t, err)
-	require.NotNil(t, archivedFork)
-	require.NotNil(t, archivedFork.DeletionCause)
-	assert.Equal(t, "source_missing", *archivedFork.DeletionCause)
+	assertSourceMissingState(t, archivedFork)
 
 	engine.Close()
 	freshEngine := NewEngine(database, EngineConfig{Machine: "local"})
@@ -2067,11 +2065,7 @@ func TestSyncRootsSinceTombstonesStaleClaudeS3Fork(t *testing.T) {
 	require.Zero(t, second.Failed)
 	stale, err = database.GetSessionFull(t.Context(), staleID)
 	require.NoError(t, err)
-	require.NotNil(t, stale)
-	require.NotNil(t, stale.DeletedAt,
-		"the omitted S3 fork must be tombstoned")
-	require.NotNil(t, stale.DeletionCause)
-	assert.Equal(t, "source_missing", *stale.DeletionCause)
+	assertSourceMissingState(t, stale)
 }
 
 func TestSyncRootsSinceSkipsZeroResultClaudeS3SourceWithOnlyRejectedFork(
@@ -2168,9 +2162,7 @@ func TestSyncRootsSinceSkipsZeroResultClaudeS3SourceWithOnlyRejectedFork(
 		"an actionable stale fork must force a complete source parse")
 	allowed, err := database.GetSessionFull(t.Context(), allowedID)
 	require.NoError(t, err)
-	require.NotNil(t, allowed)
-	require.NotNil(t, allowed.DeletionCause,
-		"the admitted stale fork must be retired before steady state")
+	assertSourceMissingState(t, allowed)
 
 	second := engine.SyncRootsSince(
 		t.Context(), []string{remoteRoot}, time.Time{}, nil,
@@ -2210,7 +2202,7 @@ func TestProcessS3ClaudeSourceMissingPrimaryUsesRowlessMarker(
 			ID: parentID, Machine: "remote-box", Agent: "claude", FilePath: uri,
 		}},
 	))
-	tombstoned, err := database.SoftDeleteSessionSourceOwnership(
+	tombstoned, err := database.MarkSessionSourceMissing(
 		t.Context(), "remote-box", "claude", parentID, uri,
 	)
 	require.NoError(t, err)
@@ -2265,8 +2257,5 @@ func TestProcessS3ClaudeSourceMissingPrimaryUsesRowlessMarker(
 		"rowless freshness must avoid downloading the unchanged S3 object again")
 	primary, err := database.GetSessionFull(t.Context(), parentID)
 	require.NoError(t, err)
-	require.NotNil(t, primary)
-	require.NotNil(t, primary.DeletionCause,
-		"the source-missing primary must stay tombstoned")
-	assert.Equal(t, "source_missing", *primary.DeletionCause)
+	assertSourceMissingState(t, primary)
 }

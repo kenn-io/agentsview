@@ -122,9 +122,7 @@ func TestReconcileProviderRootsDoesNotExpandAcrossProviders(t *testing.T) {
 	// Deletion within scope is preserved.
 	deleted, err := database.GetSessionFull(t.Context(), aiderIDs[2])
 	require.NoError(t, err)
-	require.NotNil(t, deleted)
-	require.NotNil(t, deleted.DeletionCause)
-	assert.Equal(t, "source_missing", *deleted.DeletionCause)
+	assertSourceMissingState(t, deleted)
 
 	// Surviving Aider sources stay active.
 	for i, id := range aiderIDs {

@@ -58,8 +58,8 @@ func TestGetCwdByAgentPathUsesSourceMissingPreservationRow(t *testing.T) {
 	}))
 	require.NoError(t, d.Update(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
-			"UPDATE sessions SET deleted_at = 'now', deletion_cause = ? WHERE id = ?",
-			deletionCauseSourceMissing, "cursor:revive",
+			"UPDATE sessions SET source_missing_at = 'now' WHERE id = ?",
+			"cursor:revive",
 		)
 		return err
 	}))
@@ -168,8 +168,7 @@ func TestStaleDataVersionAgentPathsMatchesPerPathForm(t *testing.T) {
 	require.NoError(t, d.SetSessionDataVersion("cursor:missing", 0))
 	require.NoError(t, d.Update(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
-			"UPDATE sessions SET deleted_at = 'now',"+
-				" deletion_cause = 'source_missing' WHERE id = ?",
+			"UPDATE sessions SET source_missing_at = 'now' WHERE id = ?",
 			"cursor:missing",
 		)
 		return err

@@ -226,7 +226,7 @@ func TestReconcileTraeUnsupportedSiblingPreservesArchiveAuthority(t *testing.T) 
 
 	supported, err = database.GetSession(t.Context(), "trae:rewrite")
 	require.NoError(t, err)
-	assert.Nil(t, supported, "supported sibling removal must tombstone")
+	assert.NotNil(t, supported, "supported sibling removal remains browsable")
 	unsupported, err = database.GetSession(t.Context(), "trae:unsupported")
 	require.NoError(t, err)
 	assert.NotNil(t, unsupported, "unsupported container member must remain active")
@@ -339,12 +339,10 @@ func TestReconcileTraeCompleteContainerTombstonesRemovedMember(t *testing.T) {
 	assert.NotNil(t, kept, "remaining container member must stay active")
 	removed, err := database.GetSession(t.Context(), "trae:removed")
 	require.NoError(t, err)
-	assert.Nil(t, removed, "removed container member must not stay active")
+	assert.NotNil(t, removed, "removed container member must remain browsable")
 	archived, err := database.GetSessionFull(t.Context(), "trae:removed")
 	require.NoError(t, err)
-	require.NotNil(t, archived)
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 }
 
 func TestReconcileTraeEmptyContainerTombstonesLastMember(t *testing.T) {
@@ -373,12 +371,10 @@ func TestReconcileTraeEmptyContainerTombstonesLastMember(t *testing.T) {
 
 	active, err := database.GetSession(t.Context(), "trae:rewrite")
 	require.NoError(t, err)
-	assert.Nil(t, active, "last removed member must not stay active")
+	assert.NotNil(t, active, "last removed member must remain browsable")
 	archived, err := database.GetSessionFull(t.Context(), "trae:rewrite")
 	require.NoError(t, err)
-	require.NotNil(t, archived, "last removed member must remain archived")
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 }
 
 func TestProcessFileProviderTraeSameSizeSameMtimeRewriteReparses(t *testing.T) {

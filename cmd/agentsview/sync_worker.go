@@ -369,7 +369,6 @@ func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 		DisabledAgents:          cfg.DisabledAgents,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,
-		PreserveMissingSources:  cfg.PreserveMissingSources,
 		Machine:                 cfg.LocalMachineName,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 	}

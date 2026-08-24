@@ -64,8 +64,13 @@ func TestReconcileProviderRootsOpenCodeContainerSyncsAndTombstonesMembers(
 		context.Background(), "opencode:oc-container-removed",
 	)
 	require.NoError(t, err)
-	assert.Nil(t, removed,
-		"a container-scoped pass reclaims a removed member")
+	assert.NotNil(t, removed,
+		"a container-scoped pass leaves a removed member browsable")
+	archived, err := env.db.GetSessionFull(
+		context.Background(), "opencode:oc-container-removed",
+	)
+	require.NoError(t, err)
+	assertSourceMissingState(t, archived)
 }
 
 // TestReconcileProviderRootsOpenCodeMemberPassCannotTrustPartialMembership

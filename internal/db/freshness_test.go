@@ -92,7 +92,7 @@ func TestGetSessionFilePathNotSourceMissing(t *testing.T) {
 			ID: "missing", Machine: "local", Agent: "claude", FilePath: path,
 		}},
 	))
-	tombstoned, err := d.SoftDeleteSessionSourceOwnership(
+	tombstoned, err := d.MarkSessionSourceMissing(
 		ctx, "local", "claude", "missing", path,
 	)
 	require.NoError(t, err)

@@ -218,7 +218,6 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 		DisabledAgents:          cfg.DisabledAgents,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,
-		PreserveMissingSources:  cfg.PreserveMissingSources,
 		Machine:                 cfg.LocalMachineName,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 		Emitter:                 emitter,

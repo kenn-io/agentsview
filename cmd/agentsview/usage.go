@@ -343,13 +343,12 @@ func ensureFreshData(
 
 	if database.NeedsResync() {
 		engine := sync.NewEngine(database, sync.EngineConfig{
-			AgentDirs:              appCfg.AgentDirs,
-			SourceMachines:         appCfg.SourceMachines,
-			DisabledAgents:         appCfg.DisabledAgents,
-			IncludeCwdPrefixes:     appCfg.SyncIncludeCwdPrefixes,
-			ScanProtectedPaths:     appCfg.ScanProtectedPaths,
-			PreserveMissingSources: appCfg.PreserveMissingSources,
-			Machine:                appCfg.LocalMachineName,
+			AgentDirs:          appCfg.AgentDirs,
+			SourceMachines:     appCfg.SourceMachines,
+			DisabledAgents:     appCfg.DisabledAgents,
+			IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
+			ScanProtectedPaths: appCfg.ScanProtectedPaths,
+			Machine:            appCfg.LocalMachineName,
 		})
 		defer engine.Close()
 		fmt.Fprintln(os.Stderr,
@@ -371,13 +370,12 @@ func ensureFreshData(
 	}
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
-		AgentDirs:              appCfg.AgentDirs,
-		SourceMachines:         appCfg.SourceMachines,
-		DisabledAgents:         appCfg.DisabledAgents,
-		IncludeCwdPrefixes:     appCfg.SyncIncludeCwdPrefixes,
-		ScanProtectedPaths:     appCfg.ScanProtectedPaths,
-		PreserveMissingSources: appCfg.PreserveMissingSources,
-		Machine:                appCfg.LocalMachineName,
+		AgentDirs:          appCfg.AgentDirs,
+		SourceMachines:     appCfg.SourceMachines,
+		DisabledAgents:     appCfg.DisabledAgents,
+		IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths: appCfg.ScanProtectedPaths,
+		Machine:            appCfg.LocalMachineName,
 	})
 	defer engine.Close()
 

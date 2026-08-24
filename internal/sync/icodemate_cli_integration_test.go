@@ -121,14 +121,12 @@ func TestIcodemateCLIForkSessionsReconcileAcrossSourceReparse(t *testing.T) {
 		context.Background(), "icodemate:fork-session-fork",
 	)
 	require.NoError(t, err)
-	assert.Nil(t, forkSession)
+	assert.NotNil(t, forkSession)
 	archivedFork, err := database.GetSessionFull(
 		context.Background(), "icodemate:fork-session-fork",
 	)
 	require.NoError(t, err)
-	require.NotNil(t, archivedFork)
-	require.NotNil(t, archivedFork.DeletionCause)
-	assert.Equal(t, "source_missing", *archivedFork.DeletionCause)
+	assertSourceMissingState(t, archivedFork)
 }
 
 func TestIcodemateCLIShortenedTranscriptReplacesArchivedMessages(t *testing.T) {
@@ -596,14 +594,12 @@ func TestIcodemateCLIReconcilePreservesMovedSessionAcrossRoots(t *testing.T) {
 
 	fork, err := database.GetSession(t.Context(), "icodemate:moved-fork")
 	require.NoError(t, err)
-	assert.Nil(t, fork)
+	assert.NotNil(t, fork)
 	archivedFork, err := database.GetSessionFull(
 		t.Context(), "icodemate:moved-fork",
 	)
 	require.NoError(t, err)
-	require.NotNil(t, archivedFork)
-	require.NotNil(t, archivedFork.DeletionCause)
-	assert.Equal(t, "source_missing", *archivedFork.DeletionCause)
+	assertSourceMissingState(t, archivedFork)
 }
 
 func TestIcodemateCLIResyncAllTombstonesRemovedFork(t *testing.T) {
@@ -639,12 +635,10 @@ func TestIcodemateCLIResyncAllTombstonesRemovedFork(t *testing.T) {
 
 	fork, err := database.GetSession(t.Context(), "icodemate:resync-fork-fork")
 	require.NoError(t, err)
-	assert.Nil(t, fork)
+	assert.NotNil(t, fork)
 	archivedFork, err := database.GetSessionFull(
 		t.Context(), "icodemate:resync-fork-fork",
 	)
 	require.NoError(t, err)
-	require.NotNil(t, archivedFork)
-	require.NotNil(t, archivedFork.DeletionCause)
-	assert.Equal(t, "source_missing", *archivedFork.DeletionCause)
+	assertSourceMissingState(t, archivedFork)
 }

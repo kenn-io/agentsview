@@ -1120,7 +1120,7 @@ func TestSyncCodebuffTombstoneClearsProviderStatHash(t *testing.T) {
 		"the archived session row must be soft-deleted after a "+
 			"missing-source reconcile; a non-nil sess means "+
 			"tombstoneSessionSourceOwnership never reached "+
-			"SoftDeleteSessionSourceOwnership, so the provider_freshness "+
+			"MarkSessionSourceMissing, so the provider_freshness "+
 			"assertion below would pin nothing about Issue 3")
 
 	_, hasAfter, err := database.GetProviderStatHash(

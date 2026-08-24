@@ -154,7 +154,7 @@ func TestDeepSeekHarnessSyncReplacesPartialResponseAndDeduplicatesSeedUsage(t *t
 	engine.SyncPaths([]string{parentPath})
 	removed, err := database.GetSession(t.Context(), parentID)
 	require.NoError(t, err)
-	assert.Nil(t, removed)
+	assert.NotNil(t, removed)
 
 	require.NoError(t, os.Remove(siblingPath))
 }

@@ -362,7 +362,7 @@ func TestProjectIdentityReclassificationReconcilesAggregatesAndPreservesSnapshot
 	}
 }
 
-func TestProjectIdentityReclassificationPreservesLegacySourceMissingEvidence(
+func TestProjectIdentityReclassificationPreservesSourceMissingEvidence(
 	t *testing.T,
 ) {
 	d := testDB(t)
@@ -394,9 +394,8 @@ func TestProjectIdentityReclassificationPreservesLegacySourceMissingEvidence(
 	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `
 		UPDATE sessions
-		SET deleted_at = '2026-07-30T12:00:00Z',
-			deletion_cause = ?
-		WHERE id = 'legacy-missing'`, deletionCauseSourceMissing)
+		SET source_missing_at = '2026-07-30T12:00:00Z'
+		WHERE id = 'legacy-missing'`)
 	require.NoError(t, err)
 
 	draft := WorktreeReclassificationDraft{

@@ -910,13 +910,10 @@ func TestSyncOmnigentCompleteContainerMissingConversationPreservesArchive(
 	require.Zero(t, stats.Failed)
 	active, err := archive.GetSession(t.Context(), "omnigent:0:conv_0001")
 	require.NoError(t, err)
-	assert.Nil(t, active)
+	assert.NotNil(t, active)
 	archived, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0001")
 	require.NoError(t, err)
-	require.NotNil(t, archived,
-		"complete container parsing must retain the source-missing archive row")
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 	assert.Equal(t, 1, archived.MessageCount)
 }
 
@@ -952,13 +949,10 @@ func TestSyncOmnigentCompleteEmptyContainerPreservesFinalConversation(
 	require.Zero(t, stats.Failed)
 	active, err := archive.GetSession(t.Context(), "omnigent:0:conv_0000")
 	require.NoError(t, err)
-	assert.Nil(t, active)
+	assert.NotNil(t, active)
 	archived, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0000")
 	require.NoError(t, err)
-	require.NotNil(t, archived,
-		"deleting the final source conversation must retain its archive row")
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 	assert.Equal(t, 1, archived.MessageCount)
 }
 
@@ -1608,16 +1602,13 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 				t.Context(), "omnigent:0:"+deletedID,
 			)
 			require.NoError(t, err)
-			assert.Nil(t, active,
-				"the complete container parse must retire the deleted member")
+			assert.NotNil(t, active,
+				"the deleted member must remain browsable")
 			archived, err := archive.GetSessionFull(
 				t.Context(), "omnigent:0:"+deletedID,
 			)
 			require.NoError(t, err)
-			require.NotNil(t, archived,
-				"retiring a deleted member must preserve its archive row")
-			require.NotNil(t, archived.DeletionCause)
-			assert.Equal(t, "source_missing", *archived.DeletionCause)
+			assertSourceMissingState(t, archived)
 			assert.Equal(t, 1, archived.MessageCount)
 			survivor, err := archive.GetSession(
 				t.Context(), "omnigent:0:conv_0000",
@@ -1724,15 +1715,12 @@ func TestSyncOmnigentRetiresDeletedConversationAndPreservesSurvivors(t *testing.
 	engine.SyncAll(context.Background(), nil)
 	deleted, err = archive.GetSession(context.Background(), "omnigent:0:conv_0064")
 	require.NoError(t, err)
-	assert.Nil(t, deleted)
+	assert.NotNil(t, deleted)
 	archived, err := archive.GetSessionFull(
 		context.Background(), "omnigent:0:conv_0064",
 	)
 	require.NoError(t, err)
-	require.NotNil(t, archived,
-		"retiring a deleted conversation must preserve the archived session row")
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 	assert.Equal(t, 1, archived.MessageCount,
 		"source-missing retirement must preserve archived messages")
 	survivor, err := archive.GetSession(
@@ -1785,10 +1773,7 @@ func TestSyncOmnigentCwdFilterDeletionAppliesWithUnchangedSurvivors(
 		context.Background(), "omnigent:0:conv_0000",
 	)
 	require.NoError(t, err)
-	require.NotNil(t, retired)
-	require.NotNil(t, retired.DeletionCause,
-		"the allowed member's deletion must be applied even when all survivors are unchanged")
-	assert.Equal(t, "source_missing", *retired.DeletionCause)
+	assertSourceMissingState(t, retired)
 	survivor, err := archive.GetSession(
 		context.Background(), "omnigent:0:conv_0001",
 	)
@@ -1854,10 +1839,7 @@ func TestSyncOmnigentCwdFilterFreezesDisallowedMissingMember(t *testing.T) {
 		context.Background(), "omnigent:0:conv_0000",
 	)
 	require.NoError(t, err)
-	require.NotNil(t, retired)
-	require.NotNil(t, retired.DeletionCause,
-		"the allowed missing member must be retired")
-	assert.Equal(t, "source_missing", *retired.DeletionCause)
+	assertSourceMissingState(t, retired)
 
 	frozen, err := archive.GetSession(
 		context.Background(), "omnigent:0:conv_0001",

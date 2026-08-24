@@ -76,24 +76,6 @@ func (p *devinProvider) FindSource(
 	return p.sources.FindSource(ctx, req)
 }
 
-func (p *devinProvider) StoredMemberSource(path, fullSessionID string) (string, bool) {
-	rawID := ProviderRawSessionIDFromFull(p.Def, fullSessionID)
-	if rawID == "" {
-		return "", false
-	}
-	for _, root := range p.sources.roots {
-		ref, ok := p.sources.sourceRef(root, path, true)
-		if !ok {
-			continue
-		}
-		source := ref.Opaque.(devinSource)
-		if source.SessionID == rawID {
-			return source.DBPath, true
-		}
-	}
-	return "", false
-}
-
 func (p *devinProvider) Fingerprint(
 	ctx context.Context,
 	source SourceRef,

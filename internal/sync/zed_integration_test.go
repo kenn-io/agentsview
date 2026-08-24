@@ -246,14 +246,11 @@ func TestReconcileWatchRootsZedDeletedMemberTombstonesSession(t *testing.T) {
 
 	deleted, err := database.GetSession(t.Context(), "zed:deleted-thread")
 	require.NoError(t, err)
-	assert.Nil(t, deleted,
-		"a present authoritative container must retire a missing virtual member")
+	assert.NotNil(t, deleted,
+		"a missing source must leave the archived session browsable")
 	archived, err := database.GetSessionFull(t.Context(), "zed:deleted-thread")
 	require.NoError(t, err)
-	require.NotNil(t, archived)
-	require.NotNil(t, archived.DeletedAt)
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 	assert.Equal(t, beforeDelete.MessageCount, archived.MessageCount,
 		"source loss must retain the archived transcript")
 	surviving, err := database.GetSession(t.Context(), "zed:surviving-thread")

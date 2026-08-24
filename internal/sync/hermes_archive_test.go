@@ -511,46 +511,8 @@ func TestReconcileHermesDefaultSessionsRootTombstonesRemovedStateMember(t *testi
 	))
 	stored, err = database.GetSession(t.Context(), "hermes:child")
 	require.NoError(t, err)
-	assert.Nil(t, stored,
+	assert.NotNil(t, stored,
 		"authoritative reconciliation must tombstone a removed state.db member")
-}
-
-func TestReconcileHermesConfiguredPolicyKeepsVirtualStateMemberPolicy(t *testing.T) {
-	root := t.TempDir()
-	stateDB := writeHermesArchiveStateDB(t, root)
-	sessionsDir := filepath.Join(root, "sessions")
-	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
-
-	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentHermes: {sessionsDir},
-		},
-		Machine:                "localbox",
-		PreserveMissingSources: true,
-	})
-	t.Cleanup(engine.Close)
-
-	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
-		t.Context(), []string{sessionsDir}, false,
-	))
-	stored, err := database.GetSession(t.Context(), "hermes:child")
-	require.NoError(t, err)
-	require.NotNil(t, stored, "initial reconciliation must store the state member")
-
-	conn, err := sql.Open("sqlite3", stateDB)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'child'")
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-
-	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
-		t.Context(), []string{sessionsDir}, false,
-	))
-	stored, err = database.GetSession(t.Context(), "hermes:child")
-	require.NoError(t, err)
-	assert.Nil(t, stored,
-		"configured preservation must not broaden to Hermes virtual members")
 }
 
 // TestReconcileHermesScopedArchiveTombstonesRemovedStateMember pins
@@ -597,7 +559,7 @@ func TestReconcileHermesScopedArchiveTombstonesRemovedStateMember(
 
 	stored, err = database.GetSession(t.Context(), "hermes:child")
 	require.NoError(t, err)
-	assert.Nil(t, stored,
+	assert.NotNil(t, stored,
 		"an archive-scoped pass proves its own membership and reclaims the member")
 	survivor, err := database.GetSession(t.Context(), "hermes:keeper")
 	require.NoError(t, err)
@@ -640,7 +602,7 @@ func TestReconcileHermesLabeledStateDBRootTombstonesRemovedMember(t *testing.T) 
 	))
 	stored, err = database.GetSession(t.Context(), "hermes:child")
 	require.NoError(t, err)
-	assert.Nil(t, stored)
+	assert.NotNil(t, stored)
 }
 
 // Streamed discovery must open state.db a bounded number of times per pass:
@@ -813,7 +775,7 @@ func TestReconcileHermesSiblingMemberChangeBoundsUnchangedMemberWork(
 		))
 		removed, err := database.GetSession(t.Context(), "hermes:member-000")
 		require.NoError(t, err)
-		assert.Nil(t, removed, "removed member must tombstone")
+		assert.NotNil(t, removed, "removed member must remain browsable")
 		survivor, err := database.GetSession(t.Context(), "hermes:member-001")
 		require.NoError(t, err)
 		assert.NotNil(t, survivor, "surviving members must stay active")
@@ -888,7 +850,7 @@ func TestReconcileHermesSyncAllSeededStateMemberRemovalTombstones(
 	))
 	removed, err := database.GetSession(t.Context(), "hermes:child")
 	require.NoError(t, err)
-	assert.Nil(t, removed,
+	assert.NotNil(t, removed,
 		"audit reconciliation must tombstone a SyncAll-seeded removed member")
 	survivor, err := database.GetSession(t.Context(), "hermes:survivor")
 	require.NoError(t, err)
@@ -936,7 +898,7 @@ func TestReconcileHermesRelativeSessionsRootTombstonesRemovedStateMember(
 	))
 	stored, err = database.GetSession(t.Context(), "hermes:child")
 	require.NoError(t, err)
-	assert.Nil(t, stored,
+	assert.NotNil(t, stored,
 		"absolute reconciliation scope must cover a configured relative root")
 }
 
@@ -1166,7 +1128,7 @@ func TestReconcileHermesRemovedProfileTombstonesItsTranscripts(t *testing.T) {
 
 	stored, err := database.GetSession(t.Context(), "hermes:gone")
 	require.NoError(t, err)
-	assert.Nil(t, stored,
+	assert.NotNil(t, stored,
 		"a removal event must reclaim the deleted profile's transcripts")
 	survivor, err := database.GetSession(t.Context(), "hermes:kept")
 	require.NoError(t, err)
@@ -1204,7 +1166,7 @@ func TestReconcileHermesFlatRootDescendantTombstonesRemovedTranscript(
 
 	stored, err := database.GetSession(t.Context(), "hermes:gone")
 	require.NoError(t, err)
-	assert.Nil(t, stored,
+	assert.NotNil(t, stored,
 		"a removed flat-root transcript must be reclaimed by its own request")
 	survivor, err := database.GetSession(t.Context(), "hermes:kept")
 	require.NoError(t, err)

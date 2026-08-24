@@ -122,10 +122,6 @@ func (p *dbBackedProvider) PersistentArchiveSource(
 	return "", false
 }
 
-func (p *dbBackedProvider) StoredMemberSource(path, fullSessionID string) (string, bool) {
-	return p.PersistentArchiveSource(path, fullSessionID)
-}
-
 func (p *dbBackedProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,

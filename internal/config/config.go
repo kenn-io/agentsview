@@ -607,39 +607,38 @@ type sessionSourceConfig struct {
 
 // Config holds all application configuration.
 type Config struct {
-	Host                   string                 `json:"host" toml:"host"`
-	Port                   int                    `json:"port" toml:"port"`
-	ChartPalette           ChartPalette           `json:"chart_palette" toml:"chart_palette"`
-	DataDir                string                 `json:"data_dir" toml:"data_dir"`
-	DBPath                 string                 `json:"-" toml:"-"`
-	PublicURL              string                 `json:"public_url,omitempty" toml:"public_url"`
-	PublicOrigins          []string               `json:"public_origins,omitempty" toml:"public_origins"`
-	Proxy                  ProxyConfig            `json:"proxy,omitempty" toml:"proxy"`
-	WatchExcludePatterns   []string               `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
-	DisabledAgents         []parser.AgentType     `json:"disabled_agents,omitempty" toml:"disabled_agents"`
-	CursorSecret           string                 `json:"cursor_secret" toml:"cursor_secret"`
-	CursorAdminAPIKey      string                 `json:"cursor_admin_api_key,omitempty" toml:"cursor_admin_api_key"`
-	CursorAdminEmail       string                 `json:"cursor_admin_email,omitempty" toml:"cursor_admin_email"`
-	CursorAdminUserID      string                 `json:"cursor_admin_user_id,omitempty" toml:"cursor_admin_user_id"`
-	GithubToken            string                 `json:"github_token,omitempty" toml:"github_token"`
-	Terminal               TerminalConfig         `json:"terminal,omitempty" toml:"terminal"`
-	AuthToken              string                 `json:"auth_token,omitempty" toml:"auth_token"`
-	RequireAuth            bool                   `json:"require_auth" toml:"require_auth"`
-	PreserveMissingSources bool                   `json:"preserve_missing_sources" toml:"preserve_missing_sources"`
-	NoBrowser              bool                   `json:"no_browser" toml:"no_browser"`
-	DisableUpdateCheck     bool                   `json:"disable_update_check" toml:"disable_update_check"`
-	NoSync                 bool                   `json:"-" toml:"-"`
-	SkipInitialSync        bool                   `json:"-" toml:"-"`
-	PG                     PGConfig               `json:"pg,omitempty" toml:"pg"`
-	DefaultPG              string                 `json:"default_pg,omitempty" toml:"default_pg"`
-	PGTargets              map[string]PGConfig    `json:"-" toml:"-"`
-	DuckDB                 DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
-	Vector                 VectorConfig           `json:"vector,omitempty" toml:"vector"`
-	Recall                 RecallConfig           `json:"recall,omitempty" toml:"recall"`
-	Insights               InsightsConfig         `json:"insights,omitempty" toml:"insights"`
-	Automated              AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
-	Agent                  map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
-	WriteTimeout           time.Duration          `json:"-" toml:"-"`
+	Host                 string                 `json:"host" toml:"host"`
+	Port                 int                    `json:"port" toml:"port"`
+	ChartPalette         ChartPalette           `json:"chart_palette" toml:"chart_palette"`
+	DataDir              string                 `json:"data_dir" toml:"data_dir"`
+	DBPath               string                 `json:"-" toml:"-"`
+	PublicURL            string                 `json:"public_url,omitempty" toml:"public_url"`
+	PublicOrigins        []string               `json:"public_origins,omitempty" toml:"public_origins"`
+	Proxy                ProxyConfig            `json:"proxy,omitempty" toml:"proxy"`
+	WatchExcludePatterns []string               `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
+	DisabledAgents       []parser.AgentType     `json:"disabled_agents,omitempty" toml:"disabled_agents"`
+	CursorSecret         string                 `json:"cursor_secret" toml:"cursor_secret"`
+	CursorAdminAPIKey    string                 `json:"cursor_admin_api_key,omitempty" toml:"cursor_admin_api_key"`
+	CursorAdminEmail     string                 `json:"cursor_admin_email,omitempty" toml:"cursor_admin_email"`
+	CursorAdminUserID    string                 `json:"cursor_admin_user_id,omitempty" toml:"cursor_admin_user_id"`
+	GithubToken          string                 `json:"github_token,omitempty" toml:"github_token"`
+	Terminal             TerminalConfig         `json:"terminal,omitempty" toml:"terminal"`
+	AuthToken            string                 `json:"auth_token,omitempty" toml:"auth_token"`
+	RequireAuth          bool                   `json:"require_auth" toml:"require_auth"`
+	NoBrowser            bool                   `json:"no_browser" toml:"no_browser"`
+	DisableUpdateCheck   bool                   `json:"disable_update_check" toml:"disable_update_check"`
+	NoSync               bool                   `json:"-" toml:"-"`
+	SkipInitialSync      bool                   `json:"-" toml:"-"`
+	PG                   PGConfig               `json:"pg,omitempty" toml:"pg"`
+	DefaultPG            string                 `json:"default_pg,omitempty" toml:"default_pg"`
+	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
+	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
+	Vector               VectorConfig           `json:"vector,omitempty" toml:"vector"`
+	Recall               RecallConfig           `json:"recall,omitempty" toml:"recall"`
+	Insights             InsightsConfig         `json:"insights,omitempty" toml:"insights"`
+	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
+	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
+	WriteTimeout         time.Duration          `json:"-" toml:"-"`
 	// LocalMachineName is the operating-system hostname used to identify
 	// sessions ingested from this machine. It is runtime-derived rather than
 	// persisted configuration so local and remote source labels share the same
@@ -1324,7 +1323,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		Terminal                       TerminalConfig         `toml:"terminal"`
 		AuthToken                      string                 `toml:"auth_token"`
 		RequireAuth                    bool                   `toml:"require_auth"`
-		PreserveMissingSources         bool                   `toml:"preserve_missing_sources"`
 		RemoteAccess                   bool                   `toml:"remote_access"`
 		DisableUpdateCheck             bool                   `toml:"disable_update_check"`
 		DefaultPG                      string                 `toml:"default_pg"`
@@ -1418,9 +1416,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.AuthToken = file.AuthToken
 	}
 	c.RequireAuth = file.RequireAuth || file.RemoteAccess
-	if meta.IsDefined("preserve_missing_sources") {
-		c.PreserveMissingSources = file.PreserveMissingSources
-	}
 	c.DisableUpdateCheck = file.DisableUpdateCheck
 	if meta.IsDefined("default_pg") {
 		c.DefaultPG = normalizePGTargetName(file.DefaultPG)

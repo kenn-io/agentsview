@@ -719,10 +719,7 @@ func TestCwdFilterBaselinesOnlyAdmittedStaleClaudeForkAfterZeroResultParse(
 			syncSource()
 			allowed, err := env.db.GetSessionFull(t.Context(), allowedID)
 			require.NoError(t, err)
-			require.NotNil(t, allowed)
-			require.NotNil(t, allowed.DeletionCause,
-				"the admitted stale fork must converge after baseline establishment")
-			assert.Equal(t, "source_missing", *allowed.DeletionCause)
+			assertSourceMissingState(t, allowed)
 			disallowed, err := env.db.GetSession(t.Context(), disallowedID)
 			require.NoError(t, err)
 			assert.NotNil(t, disallowed,
@@ -758,9 +755,7 @@ func TestCwdFilterBaselinesOnlyAdmittedStaleClaudeForkAfterZeroResultParse(
 				require.Zero(t, env.engine.SyncAll(t.Context(), nil).Failed)
 				disallowed, err = env.db.GetSessionFull(t.Context(), disallowedID)
 				require.NoError(t, err)
-				require.NotNil(t, disallowed)
-				require.NotNil(t, disallowed.DeletionCause,
-					"the newly admitted stale fork must resume reconciliation")
+				assertSourceMissingState(t, disallowed)
 			}
 		})
 	}
@@ -816,10 +811,7 @@ func TestSyncSingleSessionBaselinesOnlyAdmittedStaleClaudeFork(t *testing.T) {
 	require.NoError(t, env.engine.SyncSingleSession(parentID))
 	allowed, err := env.db.GetSessionFull(t.Context(), allowedID)
 	require.NoError(t, err)
-	require.NotNil(t, allowed)
-	require.NotNil(t, allowed.DeletionCause,
-		"a later single-session sync must retire the admitted stale fork")
-	assert.Equal(t, "source_missing", *allowed.DeletionCause)
+	assertSourceMissingState(t, allowed)
 	disallowed, err := env.db.GetSession(t.Context(), disallowedID)
 	require.NoError(t, err)
 	assert.NotNil(t, disallowed,
@@ -873,9 +865,7 @@ func TestSyncSingleSessionEmitsSessionsForStaleClaudeForkTombstone(
 		"single-session fork cleanup must refresh messages and the session index")
 	stale, err := env.db.GetSessionFull(t.Context(), staleID)
 	require.NoError(t, err)
-	require.NotNil(t, stale)
-	require.NotNil(t, stale.DeletionCause)
-	assert.Equal(t, "source_missing", *stale.DeletionCause)
+	assertSourceMissingState(t, stale)
 }
 
 func TestSyncSingleSessionFreshnessSkipReconcilesNarrowedCwdBaselines(
@@ -926,10 +916,7 @@ func TestSyncSingleSessionFreshnessSkipReconcilesNarrowedCwdBaselines(
 
 	primary, err := env.db.GetSessionFull(t.Context(), parentID)
 	require.NoError(t, err)
-	require.NotNil(t, primary)
-	require.NotNil(t, primary.DeletionCause,
-		"the admitted primary must retain exact deletion proof")
-	assert.Equal(t, "source_missing", *primary.DeletionCause)
+	assertSourceMissingState(t, primary)
 	rejected, err := env.db.GetSession(t.Context(), rejectedID)
 	require.NoError(t, err)
 	assert.NotNil(t, rejected,
@@ -976,10 +963,7 @@ func TestSyncAllCwdRejectedStaleClaudeForkReturnsToFreshnessSkip(
 	require.Zero(t, second.Failed)
 	allowed, err := env.db.GetSessionFull(t.Context(), allowedID)
 	require.NoError(t, err)
-	require.NotNil(t, allowed)
-	require.NotNil(t, allowed.DeletionCause,
-		"the admitted stale fork must be retired before testing freshness")
-	assert.Equal(t, "source_missing", *allowed.DeletionCause)
+	assertSourceMissingState(t, allowed)
 	disallowed, err := env.db.GetSession(t.Context(), disallowedID)
 	require.NoError(t, err)
 	require.NotNil(t, disallowed,
@@ -998,10 +982,7 @@ func TestSyncAllCwdRejectedStaleClaudeForkReturnsToFreshnessSkip(
 	))
 	primary, err := env.db.GetSessionFull(t.Context(), parentID)
 	require.NoError(t, err)
-	require.NotNil(t, primary)
-	require.NotNil(t, primary.DeletionCause,
-		"the admitted primary must retain proof through the mixed-CWD skip")
-	assert.Equal(t, "source_missing", *primary.DeletionCause)
+	assertSourceMissingState(t, primary)
 	disallowed, err = env.db.GetSession(t.Context(), disallowedID)
 	require.NoError(t, err)
 	assert.NotNil(t, disallowed,
@@ -1119,9 +1100,7 @@ func TestReconcileWatchRootsReportsSourceMissingClaudeForkTombstone(
 		"member-only reconciliation changes must emit a sessions event")
 	stale, err := env.db.GetSessionFull(t.Context(), staleID)
 	require.NoError(t, err)
-	require.NotNil(t, stale)
-	require.NotNil(t, stale.DeletionCause)
-	assert.Equal(t, "source_missing", *stale.DeletionCause)
+	assertSourceMissingState(t, stale)
 }
 
 func TestWatchReconcilePreservesCwdRejectedForkAfterMixedSourceDeleted(
@@ -1168,10 +1147,7 @@ func TestWatchReconcilePreservesCwdRejectedForkAfterMixedSourceDeleted(
 	))
 	primary, err := env.db.GetSessionFull(t.Context(), parentID)
 	require.NoError(t, err)
-	require.NotNil(t, primary)
-	require.NotNil(t, primary.DeletionCause,
-		"the admitted primary must retain deletion proof")
-	assert.Equal(t, "source_missing", *primary.DeletionCause)
+	assertSourceMissingState(t, primary)
 	disallowed, err := env.db.GetSession(t.Context(), disallowedID)
 	require.NoError(t, err)
 	assert.NotNil(t, disallowed,
@@ -1270,7 +1246,7 @@ func TestSyncAllSourceMissingPrimaryWithRejectedForkReturnsToFreshnessSkip(
 			ID: parentID, Machine: "local", Agent: "claude", FilePath: path,
 		}},
 	))
-	tombstoned, err := env.db.SoftDeleteSessionSourceOwnership(
+	tombstoned, err := env.db.MarkSessionSourceMissing(
 		t.Context(), "local", "claude", parentID, path,
 	)
 	require.NoError(t, err)
@@ -1297,10 +1273,7 @@ func TestSyncAllSourceMissingPrimaryWithRejectedForkReturnsToFreshnessSkip(
 
 	primary, err := env.db.GetSessionFull(t.Context(), parentID)
 	require.NoError(t, err)
-	require.NotNil(t, primary)
-	require.NotNil(t, primary.DeletionCause,
-		"the source-missing primary must stay tombstoned")
-	assert.Equal(t, "source_missing", *primary.DeletionCause)
+	assertSourceMissingState(t, primary)
 	rejected, err := env.db.GetSession(t.Context(), rejectedID)
 	require.NoError(t, err)
 	assert.NotNil(t, rejected,

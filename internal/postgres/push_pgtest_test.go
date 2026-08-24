@@ -1350,7 +1350,7 @@ func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 		"source-owned fields should still update")
 }
 
-func TestPushPreservesRecoverableWatcherTombstonesAcrossPG(t *testing.T) {
+func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_push_source_missing_test"
 	pg, err := Open(pgURL, schema, true)
@@ -1401,7 +1401,7 @@ func TestPushPreservesRecoverableWatcherTombstonesAcrossPG(t *testing.T) {
 		t.Context(), "test-machine", sources,
 	))
 	for id, path := range paths {
-		changed, tombstoneErr := local.SoftDeleteSessionSourceOwnership(
+		changed, tombstoneErr := local.MarkSessionSourceMissing(
 			t.Context(), "test-machine", "claude", id, path,
 		)
 		require.NoError(t, tombstoneErr)
@@ -1413,16 +1413,15 @@ func TestPushPreservesRecoverableWatcherTombstonesAcrossPG(t *testing.T) {
 	for _, id := range []string{"source-revive", "source-protected"} {
 		active, getErr := store.GetSession(t.Context(), id)
 		require.NoError(t, getErr)
-		assert.Nil(t, active, "%s must remain hidden while its source is missing", id)
+		require.NotNil(t, active, "%s must remain browsable", id)
 		var deleted bool
 		var cause sql.NullString
 		require.NoError(t, pg.QueryRow(`
 			SELECT deleted_at IS NOT NULL, deletion_cause
 			FROM sessions WHERE id = $1`, id,
 		).Scan(&deleted, &cause))
-		assert.True(t, deleted)
-		require.True(t, cause.Valid)
-		assert.Equal(t, "source_missing", cause.String)
+		assert.False(t, deleted)
+		assert.False(t, cause.Valid)
 	}
 	trashed, err := store.ListTrashedSessions(t.Context())
 	require.NoError(t, err)
@@ -1434,10 +1433,10 @@ func TestPushPreservesRecoverableWatcherTombstonesAcrossPG(t *testing.T) {
 
 	restored, err := store.RestoreSession("source-protected")
 	require.NoError(t, err)
-	assert.Zero(t, restored, "PG restore must refuse watcher tombstones")
+	assert.Zero(t, restored, "a visible session is not in user trash")
 	deleted, err := store.DeleteSessionIfTrashed("source-protected")
 	require.NoError(t, err)
-	assert.Zero(t, deleted, "PG permanent delete must refuse watcher tombstones")
+	assert.Zero(t, deleted, "a visible session cannot be emptied from trash")
 	deleted, err = store.DeleteSessionIfTrashed("user-delete")
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, deleted, "ordinary PG user trash remains deletable")
@@ -1475,7 +1474,7 @@ func TestPushPreservesRecoverableWatcherTombstonesAcrossPG(t *testing.T) {
 	protected, err := store.GetSessionFull(t.Context(), "source-protected")
 	require.NoError(t, err)
 	assert.NotNil(t, protected,
-		"EmptyTrash must not purge a still-missing recoverable source")
+		"EmptyTrash must not purge a visible session with a missing local source")
 }
 
 func TestPushPreservesPGServePermanentDeletes(t *testing.T) {

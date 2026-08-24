@@ -2054,6 +2054,15 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN local_modified_at TEXT",
 		},
 		{
+			"sessions", "source_missing_at",
+			"ALTER TABLE sessions ADD COLUMN source_missing_at TEXT;" +
+				" UPDATE sessions" +
+				" SET source_missing_at = deleted_at," +
+				" deleted_at = NULL, deletion_cause = NULL," +
+				" local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')" +
+				" WHERE deletion_cause = 'source_missing'",
+		},
+		{
 			"sessions", "transcript_revision",
 			"ALTER TABLE sessions ADD COLUMN transcript_revision TEXT NOT NULL DEFAULT '0'",
 		},

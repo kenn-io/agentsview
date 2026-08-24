@@ -141,13 +141,11 @@ func TestReconcileWatchRootsTombstonesMissingLabeledFilesystemSession(
 
 	active, err := database.GetSession(t.Context(), "missing-session")
 	require.NoError(t, err)
-	assert.Nil(t, active)
+	assert.NotNil(t, active)
 	archived, err := database.GetSessionFull(t.Context(), "missing-session")
 	require.NoError(t, err)
-	require.NotNil(t, archived)
+	assertSourceMissingState(t, archived)
 	assert.Equal(t, "archivebox", archived.Machine)
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
 }
 
 func TestSyncAllSincePreservesIngestedFilesystemMachine(t *testing.T) {
@@ -540,9 +538,10 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 		context.Background(), []string{archiveRoot}, false,
 	))
 
-	assert.NotContains(t, activeSessionMachines(t, database), "archive-session",
-		"a removed source must be tombstoned even though its stored label "+
-			"no longer matches the configured one")
+	archived, err := database.GetSessionFull(t.Context(), "archive-session")
+	require.NoError(t, err)
+	assertSourceMissingState(t, archived)
+	assert.Equal(t, "archivebox", archived.Machine)
 }
 
 func TestReconcileTombstonesLegacyEmptyMachineSession(t *testing.T) {
@@ -600,13 +599,11 @@ func TestReconcileTombstonesLegacyEmptyMachineSession(t *testing.T) {
 
 	active, err := database.GetSession(t.Context(), "legacy-empty-machine")
 	require.NoError(t, err)
-	assert.Nil(t, active)
+	assert.NotNil(t, active)
 	archived, err := database.GetSessionFull(t.Context(), "legacy-empty-machine")
 	require.NoError(t, err)
-	require.NotNil(t, archived)
+	assertSourceMissingState(t, archived)
 	assert.Empty(t, archived.Machine)
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
 }
 
 // activeSessionMachines returns the stored machine of every active session,

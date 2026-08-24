@@ -408,10 +408,7 @@ func TestReconcileWatchRootsCommitsHealthyProvidersAndScopesFailedRetry(t *testi
 	}
 	removed, getErr := database.GetSessionFull(t.Context(), "healthy-removed")
 	require.NoError(t, getErr)
-	require.NotNil(t, removed)
-	require.NotNil(t, removed.DeletionCause)
-	assert.Equal(t, "source_missing", *removed.DeletionCause,
-		"a failed provider must not discard healthy-scope deletion coverage")
+	assertSourceMissingState(t, removed)
 	var retryErr reconciliationRetryRootError
 	require.ErrorAs(t, err, &retryErr)
 	assert.Equal(t, []string{failedRoot}, retryErr.ReconciliationRetryRoots())
@@ -634,10 +631,7 @@ func TestReconcileWatchRootsRetainsPartialFailedProviderWithoutDeletionProof(t *
 	assert.NotNil(t, healthyStored)
 	healthyMissing, getErr := database.GetSessionFull(t.Context(), "healthy-missing")
 	require.NoError(t, getErr)
-	require.NotNil(t, healthyMissing)
-	require.NotNil(t, healthyMissing.DeletionCause)
-	assert.Equal(t, "source_missing", *healthyMissing.DeletionCause,
-		"an independent completed scope must retain deletion coverage")
+	assertSourceMissingState(t, healthyMissing)
 	healthyOwnership, listErr := database.ListActiveSessionSourceOwnershipScopesPage(
 		t.Context(), "local", "partial-healthy",
 		[]db.StoredSourcePathHintScope{{Path: healthyRoot}}, db.SessionSourceCursor{},

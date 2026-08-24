@@ -73,9 +73,10 @@ type SyncStats struct {
 	Warnings       []string            `json:"warnings,omitempty"`
 	Aborted        bool                `json:"aborted,omitempty"`
 	RebuildPhases  []RebuildPhaseStats `json:"rebuild_phases,omitempty"`
-	// Tombstoned counts committed session removals that are not ordinary sync
-	// writes. It remains meaningful on a partially failed or aborted pass: a
-	// later retry cannot rediscover an already-tombstoned row to notify clients.
+	// Tombstoned is the legacy protocol name for committed source-missing state
+	// changes that are not ordinary sync writes. It remains meaningful on a
+	// partially failed or aborted pass: a later retry will skip an already-marked
+	// row, so this first transition is the one that must notify clients.
 	Tombstoned int `json:"tombstoned,omitempty"`
 	// CwdUpdated counts durable source workspace (Cwd) reconciliations that
 	// changed rows without an ordinary session write. It is exported and
@@ -92,7 +93,7 @@ type SyncStats struct {
 	filesOK int // unexported: file-level success counter
 	// sourceMissingArchiveMembers carries members discovered in the original
 	// archive while a full resync writes into its replacement. Orphan copy must
-	// materialize them before the rebuild can apply the same guarded tombstone
+	// materialize them before the rebuild can apply the same guarded source-state
 	// transition used by an in-place sync.
 	sourceMissingArchiveMembers []sourceMissingMember
 	filesDiscovered             int // file-based total, excludes DB-backed agents

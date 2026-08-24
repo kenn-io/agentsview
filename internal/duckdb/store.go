@@ -684,7 +684,6 @@ func (s *Store) ListTrashedSessions(ctx context.Context) ([]db.Session, error) {
 	rows, err := s.queryContext(ctx,
 		"SELECT "+duckSessionCols+
 			" FROM sessions WHERE deleted_at IS NOT NULL"+
-			" AND deletion_cause IS NULL"+
 			" ORDER BY deleted_at DESC LIMIT 500",
 	)
 	if err != nil {
