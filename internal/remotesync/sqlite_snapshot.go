@@ -175,7 +175,43 @@ func hermesStateDBTargets(targets TargetSet) []string {
 	return paths
 }
 
+func sqliteSnapshotPathsForTargets(targets TargetSet) []string {
+	paths := hermesStateDBTargets(targets)
+	seen := make(map[string]struct{}, len(paths)+len(targets.Files[parser.AgentZed]))
+	for _, path := range paths {
+		seen[path] = struct{}{}
+	}
+	for _, path := range targets.Files[parser.AgentZed] {
+		if filepath.Base(filepath.Clean(path)) == "threads.db" {
+			seen[filepath.Clean(path)] = struct{}{}
+		}
+	}
+	paths = paths[:0]
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func sqliteSnapshotTargets(targets TargetSet) map[string]parser.AgentType {
+	out := make(map[string]parser.AgentType)
+	for _, path := range sqliteSnapshotPathsForTargets(targets) {
+		out[path] = parser.AgentHermes
+	}
+	for _, path := range targets.Files[parser.AgentZed] {
+		if filepath.Base(filepath.Clean(path)) == "threads.db" {
+			out[filepath.Clean(path)] = parser.AgentZed
+		}
+	}
+	return out
+}
+
 func hermesSQLitePaths(stateDB string) []string {
+	return sqliteSnapshotPaths(stateDB)
+}
+
+func sqliteSnapshotPaths(stateDB string) []string {
 	return []string{
 		filepath.Clean(stateDB),
 		filepath.Clean(stateDB + "-wal"),
@@ -185,15 +221,19 @@ func hermesSQLitePaths(stateDB string) []string {
 }
 
 func hermesStateDBForArchivePath(path string) (string, bool) {
+	return sqliteSnapshotForArchivePath(path)
+}
+
+func sqliteSnapshotForArchivePath(path string) (string, bool) {
 	path = filepath.Clean(path)
 	switch filepath.Base(path) {
-	case "state.db":
+	case "state.db", "threads.db":
 		return path, true
-	case "state.db-wal":
+	case "state.db-wal", "threads.db-wal":
 		return strings.TrimSuffix(path, "-wal"), true
-	case "state.db-shm":
+	case "state.db-shm", "threads.db-shm":
 		return strings.TrimSuffix(path, "-shm"), true
-	case "state.db-journal":
+	case "state.db-journal", "threads.db-journal":
 		return strings.TrimSuffix(path, "-journal"), true
 	default:
 		return "", false

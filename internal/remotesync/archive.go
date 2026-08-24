@@ -16,7 +16,7 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 	tw := tar.NewWriter(w)
 	forbidden := newForbiddenRootMatcher(targets.ForbiddenRoots)
 	hermesSQLite := make(map[string]string)
-	for _, stateDB := range hermesStateDBTargets(targets) {
+	for stateDB := range sqliteSnapshotTargets(targets) {
 		for _, path := range hermesSQLitePaths(stateDB) {
 			hermesSQLite[path] = stateDB
 		}
@@ -32,7 +32,7 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 				return nil
 			}
 			writtenHermesState[stateDB] = struct{}{}
-			return writeHermesStateDBSnapshot(tw, stateDB)
+			return writeSQLiteStateDBSnapshot(tw, stateDB)
 		}
 		if optional {
 			return writeOptionalArchiveFile(tw, path)
@@ -84,13 +84,17 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 }
 
 func writeHermesStateDBSnapshot(tw *tar.Writer, stateDB string) error {
+	return writeSQLiteStateDBSnapshot(tw, stateDB)
+}
+
+func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 	_, modTime, exists := hermesSQLiteSnapshotIdentity(stateDB)
 	if !exists {
 		return nil
 	}
 	tmpDir, err := os.MkdirTemp("", "agentsview-hermes-snapshot-*")
 	if err != nil {
-		return fmt.Errorf("create hermes snapshot dir: %w", err)
+		return fmt.Errorf("create sqlite snapshot dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 	snapshotPath := filepath.Join(tmpDir, "state.db")
@@ -366,7 +370,7 @@ func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	allowedRoots := allowed.DeltaAllowedRoots()
 	hermesStateDBs := make(map[string]struct{})
-	for _, stateDB := range hermesStateDBTargets(allowed) {
+	for stateDB := range sqliteSnapshotTargets(allowed) {
 		hermesStateDBs[filepath.Clean(stateDB)] = struct{}{}
 	}
 	writtenHermesState := make(map[string]struct{})
@@ -375,12 +379,12 @@ func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 		if !ok {
 			continue
 		}
-		if stateDB, isHermesSQLite := hermesStateDBForArchivePath(local); isHermesSQLite {
+		if stateDB, isHermesSQLite := sqliteSnapshotForArchivePath(local); isHermesSQLite {
 			stateDB = filepath.Clean(stateDB)
 			if _, allowed := hermesStateDBs[stateDB]; allowed {
 				if _, written := writtenHermesState[stateDB]; !written {
 					writtenHermesState[stateDB] = struct{}{}
-					if err := writeHermesStateDBSnapshot(tw, stateDB); err != nil {
+					if err := writeSQLiteStateDBSnapshot(tw, stateDB); err != nil {
 						return err
 					}
 				}

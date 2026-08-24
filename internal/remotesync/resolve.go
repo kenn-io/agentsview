@@ -87,6 +87,23 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				}
 				continue
 			}
+			if def.Type == parser.AgentCursor ||
+				def.Type == parser.AgentVSCodeCopilot {
+				root, targetFiles := resolveEditorTarget(def.Type, dir)
+				if root != "" && len(targetFiles) > 0 {
+					dirs[def.Type] = append(dirs[def.Type], root)
+					files[def.Type] = append(files[def.Type], targetFiles...)
+				}
+				continue
+			}
+			if def.Type == parser.AgentZed {
+				root, targetFiles := resolveZedTarget(dir)
+				if root != "" && len(targetFiles) > 0 {
+					dirs[def.Type] = append(dirs[def.Type], root)
+					files[def.Type] = append(files[def.Type], targetFiles...)
+				}
+				continue
+			}
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 				continue
 			}
@@ -107,6 +124,57 @@ func ResolveTargets(cfg config.Config) TargetSet {
 		Dirs: dirs, Files: files, ProviderExtraFiles: providerExtraFiles,
 		ForbiddenRoots: forbiddenRoots,
 	})
+}
+
+// resolveEditorTarget asks the parser for the exact session files it would
+// consume, then adds only the workspace manifest needed to preserve project
+// attribution. The configured editor root remains the authorization boundary.
+func resolveEditorTarget(agent parser.AgentType, root string) (string, []string) {
+	root = filepath.Clean(root)
+	if !curatedRoot(root) {
+		return "", nil
+	}
+	provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
+	if !ok {
+		return "", nil
+	}
+	sources, err := provider.Discover(context.Background())
+	if err != nil {
+		return "", nil
+	}
+	seen := make(map[string]struct{})
+	var files []string
+	for _, source := range sources {
+		path := providerDiscoveredPath(source)
+		if path == "" || !regularCuratedFile(root, path) {
+			continue
+		}
+		if _, exists := seen[path]; !exists {
+			seen[path] = struct{}{}
+			files = append(files, path)
+		}
+		if agent != parser.AgentVSCodeCopilot {
+			continue
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil || filepath.IsAbs(rel) {
+			continue
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) != 4 || parts[0] != "workspaceStorage" ||
+			parts[2] != "chatSessions" {
+			continue
+		}
+		workspace := filepath.Join(root, "workspaceStorage", parts[1], "workspace.json")
+		if regularCuratedFile(root, workspace) {
+			if _, exists := seen[workspace]; !exists {
+				seen[workspace] = struct{}{}
+				files = append(files, workspace)
+			}
+		}
+	}
+	sort.Strings(files)
+	return root, files
 }
 
 func isLocalRemoteSyncSource(
@@ -420,6 +488,52 @@ func resolveKiloLegacyTarget(root string) (string, []string) {
 		return "", nil
 	}
 	return targetRoot, files
+}
+
+func resolveProviderFiles(agent parser.AgentType, root string, keep func(string) bool) (string, []string) {
+	provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}})
+	if !ok {
+		return "", nil
+	}
+	sources, err := provider.Discover(context.Background())
+	if err != nil {
+		return "", nil
+	}
+	var files []string
+	for _, source := range sources {
+		path := providerDiscoveredPath(source)
+		if keep(path) && regularCuratedFile(root, path) {
+			files = append(files, filepath.Clean(path))
+		}
+	}
+	slices.Sort(files)
+	return root, slices.Compact(files)
+}
+
+func curatedRoot(root string) bool {
+	info, err := os.Lstat(root)
+	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
+}
+
+func regularCuratedFile(root, path string) bool {
+	path = filepath.Clean(path)
+	rel, err := filepath.Rel(root, path)
+	if err != nil || !filepath.IsLocal(rel) || symlinkEscapesRoot(root, path) {
+		return false
+	}
+	return regularRemoteSyncFile(path)
+}
+
+func resolveZedTarget(root string) (string, []string) {
+	root = filepath.Clean(root)
+	if !curatedRoot(root) {
+		return "", nil
+	}
+	dbPath := filepath.Join(root, parser.ZedThreadsDBRelPath)
+	if !regularCuratedFile(root, dbPath) {
+		return "", nil
+	}
+	return root, []string{dbPath}
 }
 
 // resolvePoolsideTarget narrows a Poolside application-data root to

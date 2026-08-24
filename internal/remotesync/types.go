@@ -114,7 +114,12 @@ func (t TargetSet) HasFileScopedAgents() bool {
 // its state DB) must stay on the full-archive flow, and new
 // file-scoped agents default to sanitized until added here.
 func verbatimFileScopedAgent(agent parser.AgentType) bool {
-	return agent == parser.AgentRooCode || agent == parser.AgentKiloLegacy
+	return agent == parser.AgentRooCode || agent == parser.AgentKiloLegacy ||
+		agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot
+}
+
+func snapshotFileScopedAgent(agent parser.AgentType) bool {
+	return agent == parser.AgentZed
 }
 
 // HasSanitizedFileScopedAgents reports whether any agent's export is
@@ -122,7 +127,7 @@ func verbatimFileScopedAgent(agent parser.AgentType) bool {
 // manifest/delta path cannot model.
 func (t TargetSet) HasSanitizedFileScopedAgents() bool {
 	for agent := range t.Files {
-		if !verbatimFileScopedAgent(agent) {
+		if !verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 			return true
 		}
 	}
@@ -146,7 +151,8 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 	dirScoped.ForbiddenRoots = append([]string(nil), t.ForbiddenRoots...)
 	fileScoped.ForbiddenRoots = append([]string(nil), t.ForbiddenRoots...)
 	for agent, dirs := range t.Dirs {
-		if _, ok := t.Files[agent]; ok && !verbatimFileScopedAgent(agent) {
+		if _, ok := t.Files[agent]; ok &&
+			!verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 			if fileScoped.Dirs == nil {
 				fileScoped.Dirs = make(map[parser.AgentType][]string)
 			}
@@ -160,7 +166,7 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 	}
 	for agent, files := range t.Files {
 		target := &fileScoped
-		if verbatimFileScopedAgent(agent) {
+		if verbatimFileScopedAgent(agent) || snapshotFileScopedAgent(agent) {
 			target = &dirScoped
 		}
 		if target.Files == nil {
@@ -172,7 +178,7 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 	for agent, files := range t.ProviderExtraFiles {
 		target := &dirScoped
 		if _, fileScopedAgent := t.Files[agent]; fileScopedAgent &&
-			!verbatimFileScopedAgent(agent) {
+			!verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 			target = &fileScoped
 		}
 		if target.ProviderExtraFiles == nil {
@@ -211,7 +217,7 @@ func (t TargetSet) DeltaAllowedRoots() []string {
 		if parser.RemoteSyncExcludedAgent(agent) {
 			continue
 		}
-		if verbatimFileScopedAgent(agent) {
+		if verbatimFileScopedAgent(agent) || snapshotFileScopedAgent(agent) {
 			for _, file := range files {
 				if !forbidden.within(file) {
 					roots = append(roots, file)
