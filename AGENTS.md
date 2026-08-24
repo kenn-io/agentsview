@@ -18,6 +18,7 @@
 | SQLite, PostgreSQL, CockroachDB, DuckDB, archive resync, or storage queries   | `docs/agents/storage.md`             |
 | Watchers, polling, sync scheduling, background work, or memory investigations | `docs/agents/background-work.md`     |
 | Build commands, toolchains, CI build tags, or dependencies                    | `docs/agents/build.md`               |
+| S3 ingest, `S3Provider`, or `Source.S3Discovery`                              | `docs/agents/s3-providers.md`        |
 | Any frontend file                                                             | `frontend/AGENTS.md`                 |
 | Frontend controls, styling, or reusable components                            | `frontend/AGENTS.md` and `DESIGN.md` |
 

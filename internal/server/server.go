@@ -66,8 +66,12 @@ const daemonService = "agentsview"
 const (
 	defaultInsightLogDrainTimeout    = 2 * time.Second
 	defaultInsightLogStopWaitTimeout = 500 * time.Millisecond
+	defaultHTTPReadTimeout           = 10 * time.Second
 	corsAllowedRequestHeaders        = "Content-Type, Authorization, " +
-		service.SemanticSearchIntentHeader + ", " + rawSyncDeviceIDHeader
+		service.SemanticSearchIntentHeader + ", " + rawSyncDeviceIDHeader +
+		", " + rawSyncUploadOffsetHeader
+	corsExposedResponseHeaders = rawSyncUploadOffsetHeader + ", " +
+		rawSyncUploadLengthHeader + ", " + rawSyncUploadCompleteHeader + ", Location"
 )
 
 // Server is the HTTP server that serves the SPA and REST API.
@@ -102,6 +106,7 @@ type Server struct {
 
 	insightLogDrainTimeout    time.Duration
 	insightLogStopWaitTimeout time.Duration
+	httpReadTimeout           time.Duration
 
 	// handlerDelay is injected before each timeout-wrapped
 	// handler, used only by tests to guarantee handlers
@@ -172,6 +177,7 @@ type Server struct {
 	rawSyncDeviceAuth      RawSyncDeviceAuth
 	rawSyncCustody         RawSyncCustody
 	rawSyncSchemaOnly      bool
+	rawSyncUploads         RawSyncUploads
 
 	ensurePricing func(context.Context, *db.DB) error
 }
@@ -232,6 +238,7 @@ func New(
 		httpRemoteCleanupRegistry: new(remotesync.CleanupRegistry),
 		insightLogDrainTimeout:    defaultInsightLogDrainTimeout,
 		insightLogStopWaitTimeout: defaultInsightLogStopWaitTimeout,
+		httpReadTimeout:           defaultHTTPReadTimeout,
 		ensurePricing:             pricingrefresh.EnsureCurrent,
 		spaFS:                     dist,
 		spaHandler:                http.FileServerFS(dist),
@@ -310,11 +317,40 @@ type RawSyncCustody interface {
 	) (rawsync.CommitResult, error)
 }
 
+// RawSyncUploads exposes authenticated resumable raw-object transfers.
+type RawSyncUploads interface {
+	Start(
+		context.Context,
+		rawsync.AuthIdentity,
+		parser.AgentType,
+		rawsync.ObjectRef,
+	) (rawsync.UploadSession, bool, error)
+	Status(
+		context.Context,
+		rawsync.AuthIdentity,
+		string,
+	) (rawsync.UploadSession, error)
+	Append(
+		context.Context,
+		rawsync.AuthIdentity,
+		string,
+		int64,
+		[]byte,
+	) (rawsync.UploadSession, error)
+}
+
 // WithRawSyncServices enables authenticated raw-sync machine routes.
 func WithRawSyncServices(auth RawSyncDeviceAuth, custody RawSyncCustody) Option {
 	return func(s *Server) {
 		s.rawSyncDeviceAuth = auth
 		s.rawSyncCustody = custody
+	}
+}
+
+// WithRawSyncUploads enables the scoped resumable raw-object data plane.
+func WithRawSyncUploads(uploads RawSyncUploads) Option {
+	return func(s *Server) {
+		s.rawSyncUploads = uploads
 	}
 }
 
@@ -1205,7 +1241,7 @@ func (s *Server) Serve(ln net.Listener) error {
 	srv := &http.Server{
 		Addr:        addr,
 		Handler:     s.Handler(),
-		ReadTimeout: 10 * time.Second,
+		ReadTimeout: s.httpReadTimeout,
 		IdleTimeout: 120 * time.Second,
 	}
 	if s.baseCtx != nil {
@@ -1383,12 +1419,13 @@ func corsMiddleware(
 				ensureVaryHeader(w.Header(), "Origin")
 				w.Header().Set(
 					"Access-Control-Allow-Methods",
-					"GET, POST, PUT, PATCH, DELETE, OPTIONS",
+					"GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS",
 				)
 				w.Header().Set(
 					"Access-Control-Allow-Headers",
 					corsAllowedRequestHeaders,
 				)
+				w.Header().Set("Access-Control-Expose-Headers", corsExposedResponseHeaders)
 				if r.Method == http.MethodOptions {
 					w.WriteHeader(http.StatusNoContent)
 					return
@@ -1420,12 +1457,13 @@ func corsMiddleware(
 			ensureVaryHeader(w.Header(), "Origin")
 			w.Header().Set(
 				"Access-Control-Allow-Methods",
-				"GET, POST, PUT, PATCH, DELETE, OPTIONS",
+				"GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS",
 			)
 			w.Header().Set(
 				"Access-Control-Allow-Headers",
 				corsAllowedRequestHeaders,
 			)
+			w.Header().Set("Access-Control-Expose-Headers", corsExposedResponseHeaders)
 			if r.Method == http.MethodOptions {
 				if !safeForReads {
 					http.Error(

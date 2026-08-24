@@ -39,6 +39,9 @@ func (s *Server) registerRawSyncRoutes() {
 		http.MethodPost, "/manifests", "Commit a raw manifest",
 		s.humaRawSyncManifest, s.humaTimeout(), maxBodyBytes(rawSyncControlMaxBodyBytes),
 	)
+	if s.rawSyncUploads != nil || s.rawSyncSchemaOnly {
+		s.registerRawUploadRoutes(group)
+	}
 }
 
 type rawSyncTokenInput struct {
@@ -177,11 +180,25 @@ func rawSyncHTTPError(err error) error {
 		return nil
 	}
 	var headConflict *rawsync.HeadConflictError
+	var offsetConflict *rawsync.UploadOffsetConflictError
+	var checksumMismatch *rawsync.UploadChecksumMismatchError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return apiError(http.StatusGatewayTimeout, "gateway timeout")
 	case errors.Is(err, rawsync.ErrUnauthorized):
 		return apiErrorWithCode(http.StatusUnauthorized, "unauthorized", "Unauthorized")
+	case errors.As(err, &offsetConflict) && offsetConflict != nil:
+		offset := offsetConflict.CurrentOffset
+		return &apiErrorResponse{
+			Status: http.StatusConflict, Code: "upload_offset_conflict",
+			Message: "raw upload offset changed", CurrentUploadOffset: &offset,
+		}
+	case errors.As(err, &checksumMismatch) && checksumMismatch != nil:
+		offset := checksumMismatch.CurrentOffset
+		return &apiErrorResponse{
+			Status: http.StatusConflict, Code: "checksum_mismatch",
+			Message: "raw upload checksum did not match", CurrentUploadOffset: &offset,
+		}
 	case errors.As(err, &headConflict) && headConflict != nil:
 		return &apiErrorResponse{
 			Status:            http.StatusConflict,

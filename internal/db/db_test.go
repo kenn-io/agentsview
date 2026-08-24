@@ -1027,8 +1027,13 @@ func TestCurrentDataVersionIncludesOpenCodeProjectMetadataChange(t *testing.T) {
 }
 
 func TestCurrentDataVersionGrokMessageTimestamps(t *testing.T) {
-	assert.Equal(t, 90, CurrentDataVersion(),
-		"Grok message timestamps require a sequential backfill")
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 90,
+		"version 90 is the data-version boundary for Grok message timestamps")
+}
+
+func TestCurrentDataVersionPositAssistantCacheAccounting(t *testing.T) {
+	assert.Equal(t, 91, CurrentDataVersion(),
+		"Posit Assistant cache accounting requires a sequential backfill")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

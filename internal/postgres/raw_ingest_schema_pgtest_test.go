@@ -28,6 +28,7 @@ func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
 	for _, table := range []string{
 		"raw_devices",
 		"raw_device_tokens",
+		"raw_upload_sessions",
 		"raw_objects",
 		"raw_manifests",
 		"raw_manifest_entries",
@@ -47,6 +48,8 @@ func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
 
 	for _, index := range []string{
 		"idx_raw_device_tokens_expiry",
+		"idx_raw_upload_sessions_expiry",
+		"idx_raw_upload_sessions_open_object",
 		"idx_raw_ingest_jobs_ready",
 		"idx_raw_ingest_jobs_lease",
 	} {
@@ -77,6 +80,10 @@ func TestRawIngestSchemaUsesTenantScopedKeys(t *testing.T) {
 		},
 		"raw_device_tokens": {
 			"PRIMARY KEY (token_sha256)",
+			"FOREIGN KEY (tenant_id, device_id)",
+		},
+		"raw_upload_sessions": {
+			"PRIMARY KEY (upload_id)",
 			"FOREIGN KEY (tenant_id, device_id)",
 		},
 		"raw_objects": {
@@ -315,6 +322,7 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
 		`GRANT SELECT ON ` + schema + `.raw_devices TO ` + role,
 		`GRANT SELECT, INSERT ON ` + schema + `.raw_device_tokens TO ` + role,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ` + schema + `.raw_upload_sessions TO ` + role,
 		`GRANT SELECT, INSERT, UPDATE ON ` + schema + `.raw_objects TO ` + role,
 		`GRANT SELECT, INSERT ON ` + schema + `.raw_manifests TO ` + role,
 		`GRANT INSERT ON ` + schema + `.raw_manifest_entries TO ` + role,
@@ -345,6 +353,10 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 		{"raw_devices", "SELECT"},
 		{"raw_device_tokens", "SELECT"},
 		{"raw_device_tokens", "INSERT"},
+		{"raw_upload_sessions", "SELECT"},
+		{"raw_upload_sessions", "INSERT"},
+		{"raw_upload_sessions", "UPDATE"},
+		{"raw_upload_sessions", "DELETE"},
 		{"raw_objects", "SELECT"},
 		{"raw_objects", "INSERT"},
 		{"raw_objects", "UPDATE"},

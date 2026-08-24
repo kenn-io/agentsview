@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,4 +146,121 @@ func TestCodexSourceSetDiscoversS3Sessions(t *testing.T) {
 	assert.Equal(t, int64(11), s3.Size)
 	assert.Equal(t, mtime.UnixNano(), s3.MtimeNS)
 	assert.Contains(t, s3.Fingerprint, "rollout")
+}
+
+func TestS3CapableWatchPlansExcludeS3Roots(t *testing.T) {
+	localRoot := t.TempDir()
+	for _, tc := range []struct {
+		name  string
+		agent AgentType
+	}{
+		{name: "claude", agent: AgentClaude},
+		{name: "codex", agent: AgentCodex},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s3Root := "s3://bucket/laptop/raw/" + string(tc.agent)
+			provider, ok := NewProvider(tc.agent, ProviderConfig{
+				Roots: []string{localRoot, s3Root},
+			})
+			require.True(t, ok)
+
+			plan, err := provider.WatchPlan(context.Background())
+			require.NoError(t, err)
+			foundLocal := false
+			for _, root := range plan.Roots {
+				if root.Path == localRoot {
+					foundLocal = true
+				}
+				assert.False(t, strings.HasPrefix(root.Path, "s3:"), root.Path)
+			}
+			assert.True(t, foundLocal, "watch plan should retain the local root")
+		})
+	}
+}
+
+func TestCursorSourceSetDiscoversS3Sessions(t *testing.T) {
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+
+	root := "s3://bucket/laptop/raw/cursor"
+	jsonlURI := root + "/demo-proj/11111111-1111-4111-8111-111111111111.jsonl"
+	txtURI := root + "/demo-proj/22222222-2222-4222-8222-222222222222.txt"
+	ignored := root + "/demo-proj/notes.md"
+	mtime := time.Unix(100, 0)
+	listS3Objects = func(got string) ([]S3Object, error) {
+		require.Equal(t, root, got)
+		return []S3Object{
+			{
+				URI: jsonlURI, Size: 11, LastModified: mtime,
+				Fingerprint: "s3-meta:jsonl",
+			},
+			{
+				URI: txtURI, Size: 7, LastModified: mtime,
+				Fingerprint: "s3-meta:txt",
+			},
+			{
+				URI: ignored, Size: 3, LastModified: mtime,
+				Fingerprint: "s3-meta:md",
+			},
+		}, nil
+	}
+
+	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+
+	byPath := make(map[string]SourceRef, len(sources))
+	for _, src := range sources {
+		byPath[src.DisplayPath] = src
+		assert.Equal(t, AgentCursor, src.Provider)
+		assert.Equal(t, "demo-proj", src.ProjectHint)
+		s3, ok := src.Opaque.(S3DiscoveredSource)
+		require.True(t, ok)
+		assert.Equal(t, "laptop", s3.Machine)
+		assert.Equal(t, "demo-proj", s3.Project)
+	}
+	require.Contains(t, byPath, jsonlURI)
+	require.Contains(t, byPath, txtURI)
+	assert.Equal(t, int64(11), byPath[jsonlURI].Opaque.(S3DiscoveredSource).Size)
+	assert.Equal(t, int64(7), byPath[txtURI].Opaque.(S3DiscoveredSource).Size)
+}
+
+func TestCursorSourceSetDiscoverEachYieldsS3Sessions(t *testing.T) {
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+
+	root := "s3://bucket/laptop/raw/cursor"
+	sessionURI := root + "/demo-proj/11111111-1111-4111-8111-111111111111.jsonl"
+	listS3Objects = func(string) ([]S3Object, error) {
+		return []S3Object{{
+			URI:          sessionURI,
+			Size:         11,
+			LastModified: time.Unix(100, 0),
+			Fingerprint:  "s3-meta:jsonl",
+		}}, nil
+	}
+
+	var got []SourceRef
+	err := newCursorSourceSet([]string{root}).DiscoverEach(
+		context.Background(),
+		func(src SourceRef) error {
+			got = append(got, src)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, sessionURI, got[0].DisplayPath)
+	assert.Equal(t, AgentCursor, got[0].Provider)
+}
+
+func TestCursorWatchPlanSkipsS3Roots(t *testing.T) {
+	local := t.TempDir()
+	plan, err := newCursorSourceSet([]string{
+		local,
+		"s3://bucket/laptop/raw/cursor",
+	}).WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, local, plan.Roots[0].Path)
 }

@@ -1009,11 +1009,27 @@ func positAssistantToolResults(content gjson.Result) []ParsedToolResult {
 	return results
 }
 
+// positAssistantFoldsCacheWriteIntoInput reports whether Posit Assistant's
+// cacheWriteTokens bucket is the inferred uncached prompt remainder for the
+// model family, rather than a separately billed cache creation. Missing and
+// unrecognized model identities fail closed and preserve the producer's
+// original bucket labels.
+func positAssistantFoldsCacheWriteIntoInput(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if slash := strings.LastIndexByte(model, '/'); slash >= 0 {
+		model = model[slash+1:]
+	}
+	return strings.HasPrefix(model, "glm-") ||
+		strings.HasPrefix(model, "gemma-") ||
+		strings.HasPrefix(model, "kimi-")
+}
+
 // positAssistantFillTokenUsage maps positai usage metadata onto the message.
-// ContextTokens counts the full billed context (fresh input plus cache reads
-// and writes), matching the Claude parser's attribution. TokenUsage is
-// re-emitted with Claude-style snake_case keys so downstream token-presence
-// and cost consumers read it uniformly.
+// ContextTokens counts the full prompt context (fresh input plus cache reads
+// and persisted cache writes), matching the Claude parser's attribution. For
+// known auto-cached non-Anthropic families, the persisted cache-write bucket
+// is folded into uncached input before TokenUsage is re-emitted with
+// Claude-style snake_case keys for downstream presence and cost consumers.
 func positAssistantFillTokenUsage(msg *ParsedMessage, usage gjson.Result) {
 	if !usage.Exists() {
 		return
@@ -1039,7 +1055,11 @@ func positAssistantFillTokenUsage(msg *ParsedMessage, usage gjson.Result) {
 	cacheWriteField := usage.Get("cacheWriteTokens")
 	if cacheWriteField.Exists() {
 		cacheWrite = int(cacheWriteField.Int())
-		tokenUsage["cache_creation_input_tokens"] = cacheWrite
+		if positAssistantFoldsCacheWriteIntoInput(msg.Model) {
+			tokenUsage["input_tokens"] = input + cacheWrite
+		} else {
+			tokenUsage["cache_creation_input_tokens"] = cacheWrite
+		}
 	}
 	if len(tokenUsage) == 0 {
 		return

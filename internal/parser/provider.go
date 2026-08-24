@@ -929,6 +929,9 @@ type ParseRequest struct {
 	Fingerprint SourceFingerprint
 	Machine     string
 	ForceParse  bool
+	// StoredPathResolver maps a canonical remote companion path back to the
+	// materialized file used by this parse.
+	StoredPathResolver func(string) (string, bool)
 }
 
 // ParseOutcome is the full-parse provider output. It is meaningful only when

@@ -57,6 +57,164 @@ function preserveExplicitAuthorizationHeaders() {
   writeFileSync(requestPath, source.replace(generatedAuth, explicitHeaderFirst));
 }
 
+function preserveStructuredResponseHeaders() {
+  const optionsPath = join(frontendDir, "src/lib/api/generated/core/ApiRequestOptions.ts");
+  const optionsSource = readFileSync(optionsPath, "utf8");
+  const generatedOption = "  readonly responseHeader?: string;\n";
+  const structuredOption = `  readonly responseHeader?: string;
+  readonly responseHeaders?: Record<string, {
+    readonly name: string;
+    readonly type: 'string' | 'number' | 'boolean';
+  }>;
+`;
+  if (!optionsSource.includes(generatedOption)) {
+    throw new Error("generated request options no longer match the response-header patch");
+  }
+  writeFileSync(optionsPath, optionsSource.replace(generatedOption, structuredOption));
+
+  const requestPath = join(frontendDir, "src/lib/api/generated/core/request.ts");
+  let requestSource = readFileSync(requestPath, "utf8");
+  const generatedHeaderReader = `export const getResponseHeader = (response: Response, responseHeader?: string): string | undefined => {
+  if (responseHeader) {
+    const content = response.headers.get(responseHeader);
+    if (isString(content)) {
+      return content;
+    }
+  }
+  return undefined;
+};
+`;
+  const structuredHeaderReader = `${generatedHeaderReader}
+export const getResponseHeaders = (
+  response: Response,
+  responseHeaders?: ApiRequestOptions['responseHeaders'],
+): Record<string, string | number | boolean> | undefined => {
+  if (!responseHeaders) return undefined;
+  return Object.fromEntries(Object.entries(responseHeaders).map(([property, option]) => {
+    const content = response.headers.get(option.name);
+    if (content === null) throw new Error(\`Response header \${option.name} is missing\`);
+    switch (option.type) {
+      case 'number': {
+        const value = Number(content);
+        if (!Number.isFinite(value)) {
+          throw new Error(\`Response header \${option.name} is not a number\`);
+        }
+        return [property, value];
+      }
+      case 'boolean':
+        if (content === 'true') return [property, true];
+        if (content === 'false') return [property, false];
+        throw new Error(\`Response header \${option.name} is not a boolean\`);
+      default:
+        return [property, content];
+    }
+  }));
+};
+`;
+  if (!requestSource.includes(generatedHeaderReader)) {
+    throw new Error("generated request helper no longer matches the response-header patch");
+  }
+  requestSource = requestSource.replace(generatedHeaderReader, structuredHeaderReader);
+  const generatedResponseRead = `        const responseBody = await getResponseBody(response);
+        const responseHeader = getResponseHeader(response, options.responseHeader);
+
+        const result: ApiResult = {
+          url,
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          body: responseHeader ?? responseBody,
+        };
+`;
+  const structuredResponseRead = `        const responseBody = await getResponseBody(response);
+        const responseHeader = getResponseHeader(response, options.responseHeader);
+        const responseHeaders = response.ok
+          ? getResponseHeaders(response, options.responseHeaders)
+          : undefined;
+
+        const result: ApiResult = {
+          url,
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          body: responseHeaders ?? responseHeader ?? responseBody,
+        };
+`;
+  if (!requestSource.includes(generatedResponseRead)) {
+    throw new Error("generated request flow no longer matches the response-header patch");
+  }
+  writeFileSync(requestPath, requestSource.replace(generatedResponseRead, structuredResponseRead));
+}
+
+function preserveRawSyncUploadStatusResponse() {
+  const modelName = "RawSyncUploadStatusResponse";
+  const modelPath = join(frontendDir, `src/lib/api/generated/models/${modelName}.ts`);
+  writeFileSync(modelPath, `/* generated using openapi-typescript-codegen -- do not edit */
+/* istanbul ignore file */
+/* tslint:disable */
+/* eslint-disable */
+export type ${modelName} = {
+  offset: number;
+  length: number;
+  complete: boolean;
+};
+`);
+
+  const indexPath = join(frontendDir, "src/lib/api/generated/index.ts");
+  const indexSource = readFileSync(indexPath, "utf8");
+  const responseExport = "export type { RawSyncUploadResponse } from './models/RawSyncUploadResponse';\n";
+  if (!indexSource.includes(responseExport)) {
+    throw new Error("generated API index no longer matches the raw upload status patch");
+  }
+  writeFileSync(
+    indexPath,
+    indexSource.replace(
+      responseExport,
+      `${responseExport}export type { ${modelName} } from './models/${modelName}';\n`,
+    ),
+  );
+
+  const servicePath = join(frontendDir, "src/lib/api/generated/services/RawSyncService.ts");
+  let serviceSource = readFileSync(servicePath, "utf8");
+  const responseImport =
+    "import type { RawSyncUploadResponse } from '../models/RawSyncUploadResponse';\n";
+  if (!serviceSource.includes(responseImport)) {
+    throw new Error("generated raw sync imports no longer match the upload status patch");
+  }
+  serviceSource = serviceSource.replace(
+    responseImport,
+    `${responseImport}import type { ${modelName} } from '../models/${modelName}';\n`,
+  );
+  const statusStart = serviceSource.indexOf("   * Read a raw upload offset");
+  const statusEnd = serviceSource.indexOf("  /**", statusStart + 1);
+  if (statusStart < 0 || statusEnd < 0) {
+    throw new Error("generated raw upload status method was not found");
+  }
+  let statusMethod = serviceSource.slice(statusStart, statusEnd);
+  const generatedDocumentation = "   * @returns string OK";
+  const generatedReturn = "  }): CancelablePromise<string> {";
+  const generatedHeader = "      responseHeader: 'Upload-Complete',";
+  if (
+    !statusMethod.includes(generatedDocumentation) ||
+    !statusMethod.includes(generatedReturn) ||
+    !statusMethod.includes(generatedHeader)
+  ) {
+    throw new Error("generated raw upload status method no longer matches the header patch");
+  }
+  statusMethod = statusMethod
+    .replace(generatedDocumentation, `   * @returns ${modelName} OK`)
+    .replace(generatedReturn, `  }): CancelablePromise<${modelName}> {`)
+    .replace(generatedHeader, `      responseHeaders: {
+        offset: { name: 'Upload-Offset', type: 'number' },
+        length: { name: 'Upload-Length', type: 'number' },
+        complete: { name: 'Upload-Complete', type: 'boolean' },
+      },`);
+  writeFileSync(
+    servicePath,
+    serviceSource.slice(0, statusStart) + statusMethod + serviceSource.slice(statusEnd),
+  );
+}
+
 function generatedTrailingNewlineCounts(dir, base = dir, counts = new Map()) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
@@ -196,6 +354,8 @@ try {
   }
   suppressExpectedAbortLogging();
   preserveExplicitAuthorizationHeaders();
+  preserveStructuredResponseHeaders();
+  preserveRawSyncUploadStatusResponse();
   normalizeGeneratedTrailingNewlines(generatedDir, generatedTrailingNewlines);
 } finally {
   rmSync(tempDir, { recursive: true, force: true });

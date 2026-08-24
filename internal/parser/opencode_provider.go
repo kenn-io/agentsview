@@ -54,14 +54,6 @@ func newMiMoCodeProviderFactory(def AgentDef) ProviderFactory {
 	}
 }
 
-func newIcodemateProviderFactory(def AgentDef) ProviderFactory {
-	return openCodeFormatProviderFactory{
-		def:   cloneAgentDef(def),
-		spec:  openCodeProviderSpecForAgent(AgentIcodemate),
-		index: newOpenCodeFormatSourceIndex(),
-	}
-}
-
 func (f openCodeFormatProviderFactory) Definition() AgentDef {
 	return cloneAgentDef(f.def)
 }

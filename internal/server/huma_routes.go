@@ -45,12 +45,13 @@ type bytesOutput struct {
 }
 
 type apiErrorResponse struct {
-	Status            int    `json:"-"`
-	Code              string `json:"code,omitempty"`
-	Message           string `json:"error"`
-	CurrentManifestID string `json:"current_manifest_id,omitempty"`
-	CurrentReceipt    string `json:"current_receipt,omitempty"`
-	CurrentGeneration int64  `json:"current_generation,omitzero"`
+	Status              int    `json:"-"`
+	Code                string `json:"code,omitempty"`
+	Message             string `json:"error"`
+	CurrentManifestID   string `json:"current_manifest_id,omitempty"`
+	CurrentReceipt      string `json:"current_receipt,omitempty"`
+	CurrentGeneration   int64  `json:"current_generation,omitzero"`
+	CurrentUploadOffset *int64 `json:"upload_offset,omitempty"`
 }
 
 func (e *apiErrorResponse) Error() string {
@@ -423,6 +424,26 @@ func (s *Server) humaTimeout() func(*huma.Operation) {
 				triggerStatus:  http.StatusServiceUnavailable,
 			}
 			timeoutHandler.ServeHTTP(tw, req.WithContext(ctx.Context()))
+		})
+	}
+}
+
+func (s *Server) humaReadDeadline(timeout time.Duration) func(*huma.Operation) {
+	return func(op *huma.Operation) {
+		op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
+			_, writer := humago.Unwrap(ctx)
+			err := http.NewResponseController(writer).SetReadDeadline(
+				time.Now().Add(timeout),
+			)
+			if err != nil && !errors.Is(err, http.ErrNotSupported) {
+				log.Printf("extending request read deadline: %v", err)
+				_ = huma.WriteErr(
+					s.api, ctx, http.StatusInternalServerError,
+					"Unable to prepare request upload",
+				)
+				return
+			}
+			next(ctx)
 		})
 	}
 }
