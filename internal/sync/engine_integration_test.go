@@ -16676,28 +16676,15 @@ func TestSyncAllTombstonesStaleClaudeForkRow(t *testing.T) {
 		"append after tombstone should take the incremental path")
 }
 
-func TestSyncAllPreservesStaleClaudeForkRowWhenConfigured(t *testing.T) {
-	env := setupTestEnv(t)
+func TestReconcileWatchRootsPreservesAndRevivesMissingSourceWhenConfigured(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 	content := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsEarly, "hello there", "/workspace/api").
+		AddClaudeUser(tsEarly, "configured source", "/workspace/api").
 		String()
 	path := env.writeClaudeSession(t, "-workspace-api", "configured-sess.jsonl", content)
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-
-	staleID := "configured-sess-11111111-2222-4333-8444-555555555555"
-	parentID := "configured-sess"
-	result, err := env.db.WriteSessionBatch([]db.SessionBatchWrite{{
-		Session: db.Session{
-			ID: staleID, Project: "api", Machine: "local", Agent: "claude",
-			ParentSessionID: &parentID, RelationshipType: "fork", FilePath: &path,
-		},
-	}})
-	require.NoError(t, err)
-	require.Equal(t, 1, result.WrittenSessions)
-	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
-	require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
-		t.Context(), "local", []db.SessionSourcePath{{Agent: "claude", FilePath: path}},
-	))
 
 	env.engine.Close()
 	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
@@ -16705,18 +16692,47 @@ func TestSyncAllPreservesStaleClaudeForkRowWhenConfigured(t *testing.T) {
 		Machine:   "local", PreserveMissingSources: true,
 	})
 	t.Cleanup(env.engine.Close)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = f.WriteString(testjsonl.ClaudeAssistantJSON(
-		[]map[string]any{{"type": "text", "text": "append"}}, tsEarlyS1) + "\n")
-	require.NoError(t, f.Close())
-	require.NoError(t, err)
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		t.Context(), []string{env.claudeDir}, false,
+	))
 
-	stale, err := env.db.GetSessionFull(t.Context(), staleID)
+	active, err := env.db.GetSessionFull(t.Context(), "configured-sess")
 	require.NoError(t, err)
-	require.NotNil(t, stale)
-	assert.Nil(t, stale.DeletedAt, "configured reconciliation must preserve source-missing rows")
+	require.NotNil(t, active)
+	assert.Nil(t, active.DeletedAt,
+		"configured reconciliation must preserve a removed source file")
+	assert.Nil(t, active.DeletionCause)
+
+	dbtest.WriteTestFile(t, path, []byte(content))
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		t.Context(), []string{env.claudeDir}, false,
+	))
+	revived, err := env.db.GetSessionFull(t.Context(), "configured-sess")
+	require.NoError(t, err)
+	require.NotNil(t, revived)
+	assert.Nil(t, revived.DeletedAt, "source revival must keep the session active")
+	assert.Nil(t, revived.DeletionCause)
+}
+
+func TestReconcileWatchRootsTombstonesMissingSourceByDefault(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "default source", "/workspace/api").
+		String()
+	path := env.writeClaudeSession(t, "-workspace-api", "default-sess.jsonl", content)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		t.Context(), []string{env.claudeDir}, false,
+	))
+
+	archived, err := env.db.GetSessionFull(t.Context(), "default-sess")
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	require.NotNil(t, archived.DeletedAt)
+	require.NotNil(t, archived.DeletionCause)
+	assert.Equal(t, "source_missing", *archived.DeletionCause)
 }
 
 func TestSyncAllRetriesStaleClaudeForkCleanupAfterEstablishingBaseline(

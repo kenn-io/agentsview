@@ -6394,6 +6394,9 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 	scopes []reconciliationProviderScope,
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
+	if e.preserveMissingSources {
+		return 0, nil
+	}
 	if e.pathRewriter != nil {
 		// Remote imports rewrite extraction paths to canonical stored paths in
 		// one direction only. Without a stored-to-local inverse, stat and
