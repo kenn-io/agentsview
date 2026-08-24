@@ -195,6 +195,31 @@ describe("registerShortcuts", () => {
       expect(navigateMessage).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ["direct/root", {}],
+      ["subagent", { relationship_type: "subagent" }],
+      ["forked child", { parent_session_id: "root", relationship_type: "fork" }],
+      ["continuation", { parent_session_id: "root", relationship_type: "continuation" }],
+      ["imported", { agent: "imported-agent" }],
+      ["soft-deleted", { deleted_at: "2026-08-01T00:00:00Z" }],
+      ["tombstoned", { tombstoned: true }],
+    ])("preserves arrow routing for the %s Session lineage variant", (_name, variant) => {
+      const list = mountSessionList();
+      sessions.sessions = [
+        { id: "root" } as any,
+        { id: "variant", ...variant } as any,
+      ];
+      sessions.activeSessionId = "root";
+      const row = document.createElement("button");
+      list.appendChild(row);
+      row.focus();
+
+      fireKey("ArrowDown");
+
+      expect(sessions.activeSessionId).toBe("variant");
+      expect(navigateMessage).not.toHaveBeenCalled();
+    });
+
     it("keeps message fallback and native vetoes", () => {
       const list = mountSessionList();
       list.appendChild(document.createElement("button"));

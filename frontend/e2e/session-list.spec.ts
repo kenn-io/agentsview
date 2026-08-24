@@ -62,9 +62,15 @@ test.describe("Session list", () => {
   test("plain arrows over the sessions list navigate sessions", async ({
     page,
   }) => {
-    await sp.selectSession(0);
+    const sessionId = await sp.sessionItems.first().getAttribute(
+      "data-session-id",
+    );
+    expect(sessionId).toBeTruthy();
+    await page.goto(`/sessions/${encodeURIComponent(sessionId!)}`);
+    await expect(sp.messageRows.first()).toBeVisible();
     await expect(sp.sessionItems.first()).toHaveClass(/active/);
 
+    await page.mouse.move(0, 0);
     await sp.sessionListScroll.hover();
     await page.keyboard.press("ArrowDown");
     await expect(sp.sessionItems.nth(1)).toHaveClass(/active/);

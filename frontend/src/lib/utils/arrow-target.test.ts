@@ -31,6 +31,30 @@ describe("resolveArrowTarget", () => {
     list.remove();
   });
 
+  it("lets document hover override stale row focus", () => {
+    const list = makeList();
+    const row = document.createElement("button");
+    list.appendChild(row);
+    const documentHover = vi
+      .spyOn(document.documentElement, "matches")
+      .mockImplementation((selector) => selector === ":hover");
+    vi.spyOn(list, "matches").mockReturnValue(false);
+
+    expect(resolveArrowTarget(row, list, true)).toBe("message");
+
+    documentHover.mockRestore();
+    list.remove();
+  });
+
+  it("keeps focused list keyboard routing without pointer hover", () => {
+    const list = makeList();
+    const row = document.createElement("button");
+    list.appendChild(row);
+
+    expect(resolveArrowTarget(row, list, true)).toBe("sessionList");
+    list.remove();
+  });
+
   it("vetoes native editing and modal focus", () => {
     const list = makeList();
     const input = document.createElement("input");
@@ -50,6 +74,36 @@ describe("resolveArrowTarget", () => {
     const list = makeList();
     list.remove();
     expect(resolveArrowTarget(document.body, list, true)).toBe("message");
+  });
+
+  it("keeps native and dialog vetoes when the ref is disconnected", () => {
+    const list = makeList();
+    const input = document.createElement("input");
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const button = document.createElement("button");
+    dialog.appendChild(button);
+    list.remove();
+
+    expect(resolveArrowTarget(input, list, true)).toBe("none");
+    expect(resolveArrowTarget(button, list, true)).toBe("none");
+  });
+
+  it("treats missing matchMedia as a coarse-pointer fallback", () => {
+    const list = makeList();
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: undefined,
+    });
+
+    expect(resolveArrowTarget(document.body, list)).toBe("message");
+
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: originalMatchMedia,
+    });
+    list.remove();
   });
 
   it("uses registration as the sole source of the session-list element", () => {
