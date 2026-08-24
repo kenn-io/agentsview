@@ -20,6 +20,14 @@ func openTestStore(t *testing.T) *Store {
 	return store
 }
 
+func testCommitResult(sequence int, generation int64) rawsync.CommitResult {
+	return rawsync.CommitResult{
+		ManifestID: fmt.Sprintf("%064x", sequence*2),
+		Receipt:    fmt.Sprintf("%064x", sequence*2+1),
+		Generation: generation,
+	}
+}
+
 func TestStoreDeviceRoundTrip(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -36,9 +44,56 @@ func TestStoreDeviceRoundTrip(t *testing.T) {
 func TestStoreAdvanceHeadRequiresReceipt(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
+	commit := testCommitResult(1, 1)
+	commit.Receipt = ""
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1",
-		"src-1", "", rawsync.CommitResult{ManifestID: "rm_1"})
+		"src-1", "", commit)
 	require.ErrorIs(t, err, ErrMissingReceipt)
+}
+
+func TestStoreAdvanceHeadRejectsInvalidCommitResult(t *testing.T) {
+	t.Parallel()
+	valid := testCommitResult(1, 1)
+	tests := []struct {
+		name   string
+		commit rawsync.CommitResult
+	}{
+		{
+			name: "noncanonical manifest ID",
+			commit: rawsync.CommitResult{
+				ManifestID: "rm_1", Receipt: valid.Receipt, Generation: 1,
+			},
+		},
+		{
+			name: "uppercase receipt",
+			commit: rawsync.CommitResult{
+				ManifestID: valid.ManifestID,
+				Receipt:    "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+				Generation: 1,
+			},
+		},
+		{
+			name: "zero generation",
+			commit: rawsync.CommitResult{
+				ManifestID: valid.ManifestID, Receipt: valid.Receipt, Generation: 0,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := openTestStore(t)
+			require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
+
+			err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+				"root-1", "src-1", "", tt.commit)
+			require.ErrorIs(t, err, rawsync.ErrInvalid)
+			_, ok, readErr := store.SourceHead(t.Context(), parser.AgentClaude,
+				"root-1", "src-1")
+			require.NoError(t, readErr)
+			assert.False(t, ok, "invalid commit result must not persist a source head")
+		})
+	}
 }
 
 func TestStoreHeadLifecycle(t *testing.T) {
@@ -49,21 +104,21 @@ func TestStoreHeadLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	first := rawsync.CommitResult{ManifestID: "rm_1", Receipt: "rr_1", Generation: 4}
+	first := testCommitResult(1, 4)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "rr_1", head.Receipt)
+	assert.Equal(t, first.Receipt, head.Receipt)
 	assert.Equal(t, int64(4), head.Generation)
-	assert.Equal(t, "rm_1", head.ManifestID)
+	assert.Equal(t, first.ManifestID, head.ManifestID)
 
-	second := rawsync.CommitResult{ManifestID: "rm_2", Receipt: "rr_2", Generation: 5}
-	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "rr_1", second))
+	second := testCommitResult(2, 5)
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", first.Receipt, second))
 	head, ok, err = store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "rr_2", head.Receipt)
+	assert.Equal(t, second.Receipt, head.Receipt)
 }
 
 func TestStorePersistsAcrossReopen(t *testing.T) {
@@ -72,8 +127,8 @@ func TestStorePersistsAcrossReopen(t *testing.T) {
 	store, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_persist"))
-	require.NoError(t, store.AdvanceHead(t.Context(), "dev_persist", parser.AgentClaude, "r", "s", "",
-		rawsync.CommitResult{ManifestID: "rm", Receipt: "rr", Generation: 1}))
+	commit := testCommitResult(1, 1)
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_persist", parser.AgentClaude, "r", "s", "", commit))
 	require.NoError(t, store.Close())
 
 	reopened, err := Open(t.Context(), path)
@@ -82,27 +137,27 @@ func TestStorePersistsAcrossReopen(t *testing.T) {
 	head, ok, err := reopened.SourceHead(t.Context(), parser.AgentClaude, "r", "s")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "rr", head.Receipt)
+	assert.Equal(t, commit.Receipt, head.Receipt)
 }
 
 func TestStoreAdvanceHeadRejectsStaleParent(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
-	first := rawsync.CommitResult{ManifestID: "rm_1", Receipt: "rr_1", Generation: 4}
+	first := testCommitResult(1, 4)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// A delayed second-generation result carrying the stale parent receipt
 	// must never overwrite the newer acknowledged head.
-	stale := rawsync.CommitResult{ManifestID: "rm_2", Receipt: "rr_2", Generation: 5}
+	stale := testCommitResult(2, 5)
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", stale)
 	require.ErrorIs(t, err, ErrHeadConflict)
 
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "rr_1", head.Receipt)
-	assert.Equal(t, "rm_1", head.ManifestID)
+	assert.Equal(t, first.Receipt, head.Receipt)
+	assert.Equal(t, first.ManifestID, head.ManifestID)
 	assert.Equal(t, int64(4), head.Generation)
 }
 
@@ -110,7 +165,7 @@ func TestStoreAdvanceHeadIdempotentReplay(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
-	first := rawsync.CommitResult{ManifestID: "rm_1", Receipt: "rr_1", Generation: 4}
+	first := testCommitResult(1, 4)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// A retried manifest carries the same parent it used for the original
@@ -120,8 +175,8 @@ func TestStoreAdvanceHeadIdempotentReplay(t *testing.T) {
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "rr_1", head.Receipt)
-	assert.Equal(t, "rm_1", head.ManifestID)
+	assert.Equal(t, first.Receipt, head.Receipt)
+	assert.Equal(t, first.ManifestID, head.ManifestID)
 	assert.Equal(t, int64(4), head.Generation)
 }
 
@@ -129,13 +184,13 @@ func TestStoreAdvanceHeadRejectsLowerGeneration(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
-	current := rawsync.CommitResult{ManifestID: "rm_5", Receipt: "rr_5", Generation: 5}
+	current := testCommitResult(5, 5)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
 		"root-1", "src-1", "", current))
 
-	older := rawsync.CommitResult{ManifestID: "rm_4", Receipt: "rr_4", Generation: 4}
+	older := testCommitResult(4, 4)
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
-		"root-1", "src-1", "rr_5", older)
+		"root-1", "src-1", current.Receipt, older)
 	require.ErrorIs(t, err, ErrHeadConflict)
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
@@ -153,11 +208,7 @@ func TestStoreConcurrentAdvanceHeadReturnsCASResults(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan error, writers)
 	for i := range writers {
-		commit := rawsync.CommitResult{
-			ManifestID: fmt.Sprintf("rm_%d", i),
-			Receipt:    fmt.Sprintf("rr_%d", i),
-			Generation: 1,
-		}
+		commit := testCommitResult(i, 1)
 		go func() {
 			<-start
 			results <- store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
@@ -186,8 +237,8 @@ func TestStoreSetDeviceChangeClearsHeads(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
-	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "",
-		rawsync.CommitResult{ManifestID: "rm_1", Receipt: "rr_1", Generation: 1}))
+	first := testCommitResult(1, 1)
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// Re-provisioning under a different device identity clears per-source
 	// heads: the server chains heads per device, so the new device starts
@@ -203,7 +254,7 @@ func TestStoreSetDeviceChangeClearsHeads(t *testing.T) {
 
 	// The new chain advances from empty, and recording the same device
 	// again is a no-op that keeps both the head and the provisioning time.
-	fresh := rawsync.CommitResult{ManifestID: "rm_2", Receipt: "rr_2", Generation: 1}
+	fresh := testCommitResult(2, 1)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_2", parser.AgentClaude, "root-1", "src-1", "", fresh))
 	var createdAt string
 	require.NoError(t, store.db.QueryRowContext(t.Context(),
@@ -212,7 +263,7 @@ func TestStoreSetDeviceChangeClearsHeads(t *testing.T) {
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "rr_2", head.Receipt)
+	assert.Equal(t, fresh.Receipt, head.Receipt)
 	var createdAtAfter string
 	require.NoError(t, store.db.QueryRowContext(t.Context(),
 		`SELECT created_at FROM device_config WHERE id = 1`).Scan(&createdAtAfter))
@@ -224,8 +275,9 @@ func TestStoreSetDeviceChangeClearsHeads(t *testing.T) {
 func TestStoreAdvanceHeadRequiresConfiguredDevice(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
+	commit := testCommitResult(1, 1)
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "",
-		rawsync.CommitResult{ManifestID: "rm_1", Receipt: "rr_1", Generation: 1})
+		commit)
 	require.ErrorIs(t, err, ErrDeviceNotConfigured)
 }
 
@@ -236,18 +288,18 @@ func TestStoreAdvanceHeadRejectsForeignDevice(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
-	first := rawsync.CommitResult{ManifestID: "rm_1", Receipt: "rr_1", Generation: 1}
+	first := testCommitResult(1, 1)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// A different device may not advance dev_1's chain even with the
 	// correct expected parent receipt.
-	second := rawsync.CommitResult{ManifestID: "rm_2", Receipt: "rr_2", Generation: 2}
-	err := store.AdvanceHead(t.Context(), "dev_2", parser.AgentClaude, "root-1", "src-1", "rr_1", second)
+	second := testCommitResult(2, 2)
+	err := store.AdvanceHead(t.Context(), "dev_2", parser.AgentClaude, "root-1", "src-1", first.Receipt, second)
 	require.ErrorIs(t, err, ErrDeviceMismatch)
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "rr_1", head.Receipt)
+	assert.Equal(t, first.Receipt, head.Receipt)
 
 	// Re-provisioning clears heads; a delayed first-generation ack from
 	// dev_1 (empty expected parent) must not repopulate dev_2's chain.
@@ -266,8 +318,9 @@ func TestStoreAdvanceHeadAbsentSourceRequiresEmptyParent(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
-	commit := rawsync.CommitResult{ManifestID: "rm_ghost", Receipt: "rr_ghost_child", Generation: 1}
-	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "rr_ghost", commit)
+	commit := testCommitResult(1, 1)
+	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1",
+		testCommitResult(2, 1).Receipt, commit)
 	require.ErrorIs(t, err, ErrHeadConflict)
 	_, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)

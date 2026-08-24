@@ -232,6 +232,9 @@ func (s *Store) AdvanceHead(
 	if commit.Receipt == "" || commit.ManifestID == "" {
 		return ErrMissingReceipt
 	}
+	if err := rawsync.ValidateCommitResult(commit); err != nil {
+		return fmt.Errorf("rawcheckpoint: invalid commit result: %w", err)
+	}
 	return s.withImmediateWrite(ctx, "advance head", func(conn *sql.Conn) error {
 		var configured string
 		err := conn.QueryRowContext(ctx,

@@ -13,6 +13,21 @@ type CommitResult struct {
 	Created    bool
 }
 
+// ValidateCommitResult rejects commit acknowledgements that cannot be used as
+// durable source-chain checkpoints.
+func ValidateCommitResult(result CommitResult) error {
+	if !isCanonicalSHA256(result.ManifestID) {
+		return fmt.Errorf("%w: commit manifest ID must be lowercase SHA-256", ErrInvalid)
+	}
+	if !isCanonicalSHA256(result.Receipt) {
+		return fmt.Errorf("%w: commit receipt must be lowercase SHA-256", ErrInvalid)
+	}
+	if result.Generation <= 0 {
+		return fmt.Errorf("%w: commit generation must be positive", ErrInvalid)
+	}
+	return nil
+}
+
 // HeadConflictError reports the current accepted source head.
 type HeadConflictError struct {
 	CurrentManifestID string

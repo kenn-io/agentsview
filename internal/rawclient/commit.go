@@ -38,10 +38,14 @@ func (c *Client) CommitManifest(
 	if wire.Receipt == "" {
 		return rawsync.CommitResult{}, fmt.Errorf("rawclient: commit response missing receipt")
 	}
-	return rawsync.CommitResult{
+	result := rawsync.CommitResult{
 		ManifestID: wire.ManifestID,
 		Receipt:    wire.Receipt,
 		Generation: wire.Generation,
 		Created:    wire.Created,
-	}, nil
+	}
+	if err := rawsync.ValidateCommitResult(result); err != nil {
+		return rawsync.CommitResult{}, fmt.Errorf("rawclient: invalid commit response: %w", err)
+	}
+	return result, nil
 }
