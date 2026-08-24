@@ -6549,8 +6549,10 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							// The container still exists but the streamed pass no
 							// longer yields this member; tombstone directly — the
 							// guards below all assume a vanished stored path.
-							if e.preserveMissingSources &&
-								!storedMemberSource(provider, ownership.FilePath, ownership.ID) {
+							if configPreservesMissingSource(
+								e.preserveMissingSources, provider,
+								ownership.FilePath, ownership.ID,
+							) {
 								continue
 							}
 							changed, err := e.tombstoneSessionSourceOwnership(
@@ -6777,8 +6779,10 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 								}
 							}
 						}
-						if e.preserveMissingSources &&
-							!storedMemberSource(provider, ownership.FilePath, ownership.ID) {
+						if configPreservesMissingSource(
+							e.preserveMissingSources, provider,
+							ownership.FilePath, ownership.ID,
+						) {
 							continue
 						}
 						changed, err := e.tombstoneSessionSourceOwnership(
@@ -10341,6 +10345,15 @@ func storedMemberSource(provider parser.Provider, filePath, fullSessionID string
 	}
 	_, ok = resolver.StoredMemberSource(filePath, fullSessionID)
 	return ok
+}
+
+func configPreservesMissingSource(
+	preserve bool, provider parser.Provider, filePath, fullSessionID string,
+) bool {
+	// Config-only preservation is local-provider policy. Remote roots such as
+	// S3 deliberately have no provider and must retain source-missing cleanup.
+	return preserve && provider != nil &&
+		!storedMemberSource(provider, filePath, fullSessionID)
 }
 
 func configuredSourceMissingMembers(

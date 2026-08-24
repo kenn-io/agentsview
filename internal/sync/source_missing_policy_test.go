@@ -74,3 +74,7 @@ func TestConfiguredSourceMissingMembersKeepsVirtualMembersOnTombstonePolicy(t *t
 	assert.Equal(t, "virtual", got[0].sessionID)
 	assert.Equal(t, members, configuredSourceMissingMembers(false, members))
 }
+
+func TestConfiguredMissingSourcePreservationFailsClosedForS3(t *testing.T) {
+	assert.False(t, configPreservesMissingSource(true, nil, "s3://bucket/session.jsonl", "claude:session"))
+}
