@@ -56,10 +56,11 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentKiro: {
 			UnchangedResults: UnchangedResultMTime,
 		},
-		// t3 records millisecond timestamps, so the per-thread mtime alone
-		// distinguishes same-second writes and no content digest is needed.
+		// t3 is event-sourced: a projection rebuild rewrites rows whose
+		// timestamps derive from the events and do not move, so the digest
+		// stored in file_hash is the only signal that sees it.
 		AgentT3: {
-			UnchangedResults: UnchangedResultMTime,
+			UnchangedResults: UnchangedResultMTimeAndHash,
 		},
 		AgentTrae: {
 			UnchangedResults: UnchangedResultMTimeAndHash,

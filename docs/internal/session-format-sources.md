@@ -2032,16 +2032,20 @@ add an archived or maintained mirror without replacing the original identity.
   discovery surfaces `state.sqlite` once and Parse fans it out into one
   session per thread, addressed by `<db>#<threadID>`, so one live thread's
   writes never invalidate its neighbours. Soft-deleted threads are skipped and
-  resolve to tombstones. Change detection is per thread and mtime-only --
-  t3's millisecond timestamps already separate two writes in the same second,
-  so unlike Shelley no message content is read to build a digest. The change
-  token is the latest of the thread's, its messages', and its project's
-  created/updated timestamps: message `updated_at` so an in-place edit
-  advances it, and the project stamps because `workspace_root` determines the
-  session's cwd and project. Discovery and parse compute the token from the
-  same timestamps, so a fingerprint-triggered reparse is never discarded as
-  unchanged, and a tombstone pass resolves membership for every stored thread
-  with one query. Optional columns are probed
+  resolve to tombstones. Change detection is per thread and uses two signals,
+  like Shelley. The mtime token is the latest of the thread's, its messages',
+  and its project's created/updated timestamps: message `updated_at` so an
+  in-place edit advances it, and the project stamps because `workspace_root`
+  determines the session's cwd and project. A digest over every
+  parser-observed thread, project, and message field is stored in file_hash,
+  because t3 is event-sourced: refolding the event log after an app update
+  rewrites projection rows whose timestamps derive from the events and do not
+  move, and the accepted legacy generations lack message and project
+  `updated_at` entirely -- the digest is the only signal that sees either.
+  Discovery and parse compute both signals from the same fields in the same
+  order, so a fingerprint-triggered reparse is never discarded as unchanged,
+  and a tombstone pass resolves membership for every stored thread with one
+  query. Optional columns are probed
   with `PRAGMA table_info`, so a pre-canonicalization database still parses
   with its model read from the legacy column. A worktree thread's
   `worktree_path` wins over the project's `workspace_root` as the cwd. The

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"hash"
+	"hash/fnv"
 	"os"
 	"strings"
 	"time"
@@ -89,10 +91,17 @@ type T3ThreadMeta struct {
 	// workspace_root determines the session's cwd and project. The parse path
 	// persists the identical token as File.Mtime (see buildT3ParseResult); if
 	// the two ever diverged, a reparse triggered by the fingerprint would be
-	// discarded as unchanged by the mtime comparison. t3 writes ISO-8601
-	// timestamps with millisecond precision, so unlike Shelley no content
-	// digest is needed to separate two writes in the same second.
+	// discarded as unchanged by the mtime comparison.
 	FileMtime int64
+	// Fingerprint is a digest over every parser-observed thread, project, and
+	// message field, stored in file_hash. t3 is event-sourced: rebuilding the
+	// projections from the event log -- an app update changing the fold logic
+	// -- rewrites rows whose timestamps derive from the events and therefore
+	// do not move, so content can change while FileMtime stands still. The
+	// accepted legacy generations additionally lack message and project
+	// updated_at columns entirely. The digest is the signal that sees both;
+	// see t3DigestThread and t3DigestMessage.
+	Fingerprint string
 }
 
 // ListT3ThreadMetas collects every live thread's change signal on an
@@ -143,51 +152,144 @@ func T3ThreadMetaByID(
 	return meta, found, err
 }
 
+// t3DigestThread and t3DigestMessage fold every parser-observed field into a
+// running FNV-1a hash, length-framed so equal byte counts cannot collide by
+// moving bytes between fields. The meta scan and the parse path must fold the
+// same fields in the same order -- thread row first, then messages ordered by
+// created_at, message_id -- so the discovery digest and the stored file_hash
+// match for unchanged threads.
+func t3DigestThread(h hash.Hash64, row t3ThreadRow) {
+	digestLengthFramedFields(
+		h,
+		"thread",
+		row.threadID,
+		row.title,
+		row.createdAt,
+		row.updatedAt,
+		row.branch,
+		row.worktreePath,
+		row.modelSelectionJSON,
+		row.legacyModel,
+		row.workspaceRoot,
+		row.projectUpdatedAt,
+		row.projectCreatedAt,
+		row.providerName,
+		row.providerInstanceID,
+	)
+}
+
+func t3DigestMessage(
+	h hash.Hash64,
+	messageID, role, text, createdAt, updatedAt, attachments string,
+) {
+	digestLengthFramedFields(
+		h, "message", messageID, role, text, createdAt, updatedAt, attachments,
+	)
+}
+
 func forEachT3ThreadMetaQuery(
 	ctx context.Context, conn *sql.DB, shape t3Schema,
 	dbPath, extraWhere string, args []any,
 	yield func(T3ThreadMeta) error,
 ) error {
-	// Only timestamps are read here, never message text, which keeps the scan
-	// cheap enough to run on every reconcile. The aggregated stamps feed
-	// t3LatestNanos exactly as the parse path does, so both compute one token.
+	// The scan streams every parser-observed field, thread-grouped with
+	// messages in parse order, folding each thread's rows into the digest the
+	// same way the parse path does. Reading message text here is the price of
+	// seeing projection rebuilds whose event-derived timestamps do not move;
+	// the timestamps alone feed t3LatestNanos exactly as buildT3ParseResult
+	// does, so both paths compute one token.
 	query := `SELECT t.thread_id,
-	                 COALESCE(t.updated_at, ''),
+	                 COALESCE(t.title, ''),
 	                 COALESCE(t.created_at, ''),
-	                 COALESCE(MAX(m.created_at), ''),
-	                 COALESCE(MAX(` + shape.messageUpdatedExpr("m.") + `), ''),
-	                 MAX(` + shape.projectUpdatedExpr() + `),
-	                 MAX(` + shape.projectCreatedExpr() + `)
+	                 COALESCE(t.updated_at, ''),
+	                 COALESCE(t.branch, ''),
+	                 COALESCE(t.worktree_path, ''),
+	                 ` + shape.modelSelectionExpr() + `,
+	                 ` + shape.legacyModelExpr() + `,
+	                 ` + shape.workspaceRootExpr() + `,
+	                 ` + shape.projectUpdatedExpr() + `,
+	                 ` + shape.projectCreatedExpr() + `,
+	                 COALESCE(s.provider_name, ''),
+	                 ` + shape.providerInstanceExpr() + `,
+	                 COALESCE(m.message_id, ''),
+	                 COALESCE(m.role, ''),
+	                 COALESCE(m.text, ''),
+	                 COALESCE(m.created_at, ''),
+	                 ` + shape.messageUpdatedExpr("m.") + `,
+	                 ` + shape.attachmentsExpr("m.") + `
 	            FROM projection_threads t
 	            LEFT JOIN projection_thread_messages m
 	                   ON m.thread_id = t.thread_id` + shape.projectJoin() + `
+	            LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
 	           WHERE t.deleted_at IS NULL ` + extraWhere + `
-	           GROUP BY t.thread_id
-	           ORDER BY t.thread_id`
+	           ORDER BY t.thread_id, m.created_at, m.message_id`
 	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("listing t3 threads: %w", err)
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var threadID string
-		var stamps [6]string
-		if err := rows.Scan(&threadID, &stamps[0], &stamps[1], &stamps[2],
-			&stamps[3], &stamps[4], &stamps[5]); err != nil {
-			return fmt.Errorf("scanning t3 thread meta: %w", err)
-		}
-		if !IsValidSessionID(threadID) {
-			continue
+	var (
+		curID  string
+		cur    t3ThreadRow
+		stamps t3MessageStamps
+	)
+	h := fnv.New64a()
+	flush := func() error {
+		// curID is "" before the first row; IsValidSessionID rejects it.
+		if !IsValidSessionID(curID) {
+			return nil
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
-		if err := yield(T3ThreadMeta{
-			RawID:       threadID,
-			VirtualPath: T3VirtualPath(dbPath, threadID),
-			FileMtime:   t3LatestNanos(stamps[:]...),
-		}); err != nil {
-			return err
+		return yield(T3ThreadMeta{
+			RawID:       curID,
+			VirtualPath: T3VirtualPath(dbPath, curID),
+			FileMtime: t3LatestNanos(
+				cur.updatedAt, cur.createdAt,
+				stamps.maxUpdated, stamps.maxCreated,
+				cur.projectUpdatedAt, cur.projectCreatedAt,
+			),
+			Fingerprint: digestFingerprintHex(h),
+		})
+	}
+	for rows.Next() {
+		var row t3ThreadRow
+		var msgID, msgRole, msgText, msgCreated, msgUpdated, msgAttachments string
+		if err := rows.Scan(
+			&row.threadID, &row.title, &row.createdAt, &row.updatedAt,
+			&row.branch, &row.worktreePath, &row.modelSelectionJSON,
+			&row.legacyModel, &row.workspaceRoot, &row.projectUpdatedAt,
+			&row.projectCreatedAt, &row.providerName, &row.providerInstanceID,
+			&msgID, &msgRole, &msgText, &msgCreated, &msgUpdated,
+			&msgAttachments,
+		); err != nil {
+			return fmt.Errorf("scanning t3 thread meta: %w", err)
 		}
+		if row.threadID != curID {
+			if err := flush(); err != nil {
+				return err
+			}
+			curID, cur, stamps = row.threadID, row, t3MessageStamps{}
+			h = fnv.New64a()
+			t3DigestThread(h, cur)
+		}
+		// A thread without messages joins one all-empty message row; a real
+		// message always carries its primary key.
+		if msgID == "" {
+			continue
+		}
+		t3DigestMessage(
+			h, msgID, msgRole, msgText, msgCreated, msgUpdated, msgAttachments,
+		)
+		if msgCreated > stamps.maxCreated {
+			stamps.maxCreated = msgCreated
+		}
+		if msgUpdated > stamps.maxUpdated {
+			stamps.maxUpdated = msgUpdated
+		}
+	}
+	if err := flush(); err != nil {
+		return err
 	}
 	return rows.Err()
 }
@@ -274,9 +376,11 @@ func (s t3Schema) legacyModelExpr() string {
 	return `''`
 }
 
-func (s t3Schema) attachmentsExpr() string {
+// attachmentsExpr qualifies the column with table when the caller joins
+// multiple tables.
+func (s t3Schema) attachmentsExpr(table string) string {
 	if s.hasAttachments {
-		return `COALESCE(attachments_json, '')`
+		return `COALESCE(` + table + `attachments_json, '')`
 	}
 	return `''`
 }
@@ -484,14 +588,16 @@ type t3MessageStamps struct {
 
 func loadT3Messages(
 	ctx context.Context, conn *sql.DB, shape t3Schema, threadID string,
+	digest hash.Hash64,
 ) ([]ParsedMessage, t3MessageStamps, error) {
 	// message_id breaks ties: two messages can share a created_at at
 	// millisecond precision, and an unstable order would reshuffle the
 	// transcript between parses.
-	query := `SELECT COALESCE(role, ''), COALESCE(text, ''),
+	query := `SELECT COALESCE(message_id, ''), COALESCE(role, ''),
+	                 COALESCE(text, ''),
 	                 COALESCE(created_at, ''),
 	                 ` + shape.messageUpdatedExpr("") + `,
-	                 ` + shape.attachmentsExpr() + `
+	                 ` + shape.attachmentsExpr("") + `
 	            FROM projection_thread_messages
 	           WHERE thread_id = ?
 	           ORDER BY created_at, message_id`
@@ -505,14 +611,17 @@ func loadT3Messages(
 	var messages []ParsedMessage
 	var stamps t3MessageStamps
 	for rows.Next() {
-		var role, text, createdAt, updatedAt, attachments string
+		var messageID, role, text, createdAt, updatedAt, attachments string
 		if err := rows.Scan(
-			&role, &text, &createdAt, &updatedAt, &attachments,
+			&messageID, &role, &text, &createdAt, &updatedAt, &attachments,
 		); err != nil {
 			return nil, t3MessageStamps{}, fmt.Errorf("scanning t3 message: %w", err)
 		}
+		t3DigestMessage(
+			digest, messageID, role, text, createdAt, updatedAt, attachments,
+		)
 		// ISO-8601 strings in one format order lexicographically, matching the
-		// SQL MAX() the discovery query uses.
+		// string comparison the discovery scan uses.
 		if createdAt > stamps.maxCreated {
 			stamps.maxCreated = createdAt
 		}
@@ -615,11 +724,16 @@ func parseT3ThreadFromDBWithSchema(
 		// parse skip it rather than failing the whole database.
 		return nil, nil
 	}
-	messages, stamps, err := loadT3Messages(ctx, conn, shape, threadID)
+	digest := fnv.New64a()
+	t3DigestThread(digest, row)
+	messages, stamps, err := loadT3Messages(ctx, conn, shape, threadID, digest)
 	if err != nil {
 		return nil, err
 	}
-	result := buildT3ParseResult(row, messages, stamps, dbPath, info, machine)
+	result := buildT3ParseResult(
+		row, messages, stamps, digestFingerprintHex(digest),
+		dbPath, info, machine,
+	)
 	return &result, nil
 }
 
@@ -627,6 +741,7 @@ func buildT3ParseResult(
 	row t3ThreadRow,
 	messages []ParsedMessage,
 	stamps t3MessageStamps,
+	fingerprint string,
 	dbPath string,
 	info os.FileInfo,
 	machine string,
@@ -710,6 +825,9 @@ func buildT3ParseResult(
 			Path:  T3VirtualPath(dbPath, row.threadID),
 			Size:  info.Size(),
 			Mtime: mtime,
+			// The same digest the discovery scan computes; the sync skip
+			// compares it to catch rewrites whose timestamps do not move.
+			Hash: fingerprint,
 		},
 	}
 	return ParseResult{Session: sess, Messages: messages}

@@ -211,6 +211,44 @@ func TestSyncT3PersistsInPlaceMessageEdit(t *testing.T) {
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 0, Skipped: 0})
 }
 
+// A projection rebuild rewrites content while every event-derived timestamp
+// stands still. Only the content digest can see it, so the rewrite must
+// survive the mtime-and-hash unchanged gate and be persisted.
+func TestSyncT3PersistsSameTimestampRewrite(t *testing.T) {
+	root := t.TempDir()
+	userdata := filepath.Join(root, ".t3", "userdata")
+	dbPath := writeT3StateDB(t, userdata)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentT3: {userdata},
+		},
+		Machine: "devbox",
+	})
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 2, Skipped: 0})
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_thread_messages
+		    SET text = 'Refolded: the race was in the fixture clock.'
+		  WHERE message_id = 'm-a2'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
+
+	msgs, err := database.GetMessages(
+		context.Background(), "t3:thread-alpha", 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Refolded: the race was in the fixture clock.",
+		msgs[1].Content)
+
+	// The stored hash now matches the digest, so the next pass converges.
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 0, Skipped: 0})
+}
+
 // A soft-deleted thread stops being discovered.
 func TestSyncT3SkipsSoftDeletedThread(t *testing.T) {
 	root := t.TempDir()

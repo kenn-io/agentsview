@@ -3,7 +3,6 @@ package parser
 import (
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -197,18 +196,13 @@ func shelleyDigestMessage(h hash.Hash64, r shelleyMessageRow) {
 }
 
 func shelleyDigestFields(h hash.Hash64, fields ...string) {
-	var n [8]byte
-	for _, s := range fields {
-		binary.LittleEndian.PutUint64(n[:], uint64(len(s)))
-		_, _ = h.Write(n[:])
-		_, _ = h.Write([]byte(s))
-	}
+	digestLengthFramedFields(h, fields...)
 }
 
 // shelleyFingerprint renders a content-digest hash as the stable string
 // stored in file_hash and compared by the sync skip.
 func shelleyFingerprint(h hash.Hash64) string {
-	return strconv.FormatUint(h.Sum64(), 16)
+	return digestFingerprintHex(h)
 }
 
 // ListShelleyConversationMetas returns the skip state for every

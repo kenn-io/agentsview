@@ -460,6 +460,49 @@ func TestT3ChangeTokenIncludesDroppedMessages(t *testing.T) {
 	assert.Equal(t, want, metas[0].FileMtime)
 }
 
+// t3 is event-sourced: a projection rebuild can rewrite content while every
+// event-derived timestamp stands still. The digest must move when the content
+// does, on both the discovery and parse sides, while the mtime token stays
+// put -- that pair is exactly what UnchangedResultMTimeAndHash consumes.
+func TestT3DigestSeesSameTimestampRewrite(t *testing.T) {
+	dbPath := createT3DB(t, t3SampleDB(false))
+
+	tokenOf := func() (int64, string, string) {
+		t.Helper()
+		conn, err := OpenT3DB(dbPath)
+		require.NoError(t, err)
+		defer conn.Close()
+		metas, err := ListT3ThreadMetas(conn, dbPath)
+		require.NoError(t, err)
+		require.Len(t, metas, 1)
+		results := parseT3All(t, dbPath, "testbox")
+		require.Len(t, results, 1)
+		// The invariant everything hangs on: discovery and parse agree.
+		assert.Equal(t, metas[0].FileMtime, results[0].Session.File.Mtime)
+		assert.Equal(t, metas[0].Fingerprint, results[0].Session.File.Hash)
+		return metas[0].FileMtime, metas[0].Fingerprint, results[0].Messages[1].Content
+	}
+
+	mtimeBefore, hashBefore, _ := tokenOf()
+	require.NotEmpty(t, hashBefore)
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_thread_messages
+		    SET text = 'Refolded: the cookie race was in the fixture.'
+		  WHERE message_id = 'm-2'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	mtimeAfter, hashAfter, content := tokenOf()
+	assert.Equal(t, mtimeBefore, mtimeAfter,
+		"no timestamp moved, so the mtime token must not either")
+	assert.NotEqual(t, hashBefore, hashAfter,
+		"the digest is the only signal that can see this rewrite")
+	assert.Equal(t, "Refolded: the cookie race was in the fixture.", content)
+}
+
 func TestT3BatchMemberPresent(t *testing.T) {
 	spec := t3SampleDB(false)
 	spec.threads = append(spec.threads, t3TestThread{

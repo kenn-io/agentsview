@@ -142,6 +142,7 @@ func t3FingerprintSource(
 	}
 	if found {
 		fingerprint.MTimeNS = meta.FileMtime
+		fingerprint.Hash = meta.Fingerprint
 		return fingerprint, nil
 	}
 	// The thread row is gone but the database file is still present. Return a
@@ -309,7 +310,13 @@ func t3ProviderCapabilities() Capabilities {
 			Relationships:        CapabilityUnsupported,
 		},
 		Sync: ProviderSyncSemantics{
-			UnchangedResults: UnchangedResultMTime,
+			// Mtime alone cannot see a projection rebuild: t3 is
+			// event-sourced, so refolding the event log rewrites rows whose
+			// timestamps derive from the events and do not move. The digest
+			// stored in file_hash is the signal that catches those rewrites,
+			// and it also covers the accepted legacy generations that lack
+			// message and project updated_at columns.
+			UnchangedResults: UnchangedResultMTimeAndHash,
 		},
 	}
 }
