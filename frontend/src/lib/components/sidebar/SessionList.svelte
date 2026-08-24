@@ -17,6 +17,7 @@
   import { TrashIcon, CheckIcon } from "../../icons.js";
   import { formatNumber } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
+  import { registerSessionList } from "../../utils/arrow-target.js";
   import {
     type DisplayItem,
     type GroupMode,
@@ -51,6 +52,9 @@
 
   onMount(() => {
     detachSidebar = sessions.attachSidebar();
+    const element = containerRef;
+    if (!element) return;
+    return registerSessionList(element);
   });
 
   $effect(() => {

@@ -10,6 +10,7 @@ import { copyToClipboard } from "../utils/clipboard.js";
 import AppHeader from "../components/layout/AppHeader.svelte";
 import SidebarToggleButton from "../components/layout/SidebarToggleButton.svelte";
 import { registerShortcuts } from "./keyboard.js";
+import { registerSessionList } from "./arrow-target.js";
 
 vi.mock("../utils/clipboard.js", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
@@ -28,6 +29,7 @@ describe("registerShortcuts", () => {
   let cleanup: () => void;
   let navigateMessage: (delta: number) => void;
   let navigateUserPrompt: (delta: number) => void;
+  let detachSessionList: (() => void) | undefined;
 
   beforeEach(() => {
     ui.activeModal = null;
@@ -41,10 +43,13 @@ describe("registerShortcuts", () => {
     navigateMessage = vi.fn();
     navigateUserPrompt = vi.fn();
     cleanup = registerShortcuts({ navigateMessage, navigateUserPrompt });
+    detachSessionList = undefined;
   });
 
   afterEach(() => {
     cleanup();
+    detachSessionList?.();
+    document.body.innerHTML = "";
   });
 
   describe("Cmd+K modal toggle", () => {
@@ -140,6 +145,52 @@ describe("registerShortcuts", () => {
       ui.activeModal = "commandPalette";
       fireKey("J", { shiftKey: true });
       expect(navigateUserPrompt).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("arrow target", () => {
+    function mountSessionList() {
+      const list = document.createElement("div");
+      list.className = "session-list-scroll";
+      document.body.appendChild(list);
+      detachSessionList = registerSessionList(list);
+      return list;
+    }
+
+    it("navigates sessions from focused or hovered list context", () => {
+      const list = mountSessionList();
+      sessions.sessions = [
+        { id: "s1" } as any,
+        { id: "s2" } as any,
+      ];
+      sessions.activeSessionId = "s1";
+      const row = document.createElement("button");
+      list.appendChild(row);
+      row.focus();
+      fireKey("ArrowDown");
+      expect(sessions.activeSessionId).toBe("s2");
+      expect(navigateMessage).not.toHaveBeenCalled();
+    });
+
+    it("keeps message fallback and native vetoes", () => {
+      const list = mountSessionList();
+      list.appendChild(document.createElement("button"));
+      fireKey("ArrowDown");
+      expect(navigateMessage).toHaveBeenCalledWith(1);
+
+      const input = document.createElement("input");
+      list.appendChild(input);
+      input.focus();
+      fireKey("ArrowDown");
+      expect(navigateMessage).toHaveBeenCalledTimes(1);
+      expect(sessions.activeSessionId).toBeNull();
+    });
+
+    it("clears the list route when the component disconnects", () => {
+      const list = mountSessionList();
+      list.remove();
+      fireKey("ArrowDown");
+      expect(navigateMessage).toHaveBeenCalledWith(1);
     });
   });
 

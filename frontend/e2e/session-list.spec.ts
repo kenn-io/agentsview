@@ -59,6 +59,20 @@ test.describe("Session list", () => {
     await expect(sp.sessionItems.first()).toHaveClass(/active/);
   });
 
+  test("plain arrows over the sessions list navigate sessions", async () => {
+    await sp.selectSession(0);
+    await expect(sp.sessionItems.first()).toHaveClass(/active/);
+
+    await sp.sessionListScroll.hover();
+    await page.keyboard.press("ArrowDown");
+    await expect(sp.sessionItems.nth(1)).toHaveClass(/active/);
+
+    await sp.scroller.hover();
+    await sp.messageRows.first().click();
+    await page.keyboard.press("ArrowDown");
+    await expect(sp.messageRows.nth(1)).toHaveClass(/selected/);
+  });
+
   const filterCases = [
     { project: "project-alpha", expectedCount: ALPHA_SESSIONS },
     { project: "project-beta", expectedCount: BETA_SESSIONS },

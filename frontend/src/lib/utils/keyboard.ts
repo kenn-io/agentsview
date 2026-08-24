@@ -11,6 +11,7 @@ import { configureGeneratedClient } from "../api/runtime.js";
 import { supportsResume, buildResumeCommand, formatResumeResponseCommand } from "./resume.js";
 import { copyToClipboard } from "./clipboard.js";
 import { toggleSidebarWithFocus } from "./sidebar-toggle.js";
+import { getSessionListElement, resolveArrowTarget } from "./arrow-target.js";
 
 function isInputFocused(): boolean {
   const el = document.activeElement;
@@ -144,9 +145,21 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
 
     const keyActions: Record<string, () => void> = {
       j: () => opts.navigateMessage(1),
-      ArrowDown: () => opts.navigateMessage(1),
+      ArrowDown: () => {
+        if (resolveArrowTarget(document.activeElement, getSessionListElement()) === "sessionList") {
+          sessions.navigateSession(1);
+        } else {
+          opts.navigateMessage(1);
+        }
+      },
       k: () => opts.navigateMessage(-1),
-      ArrowUp: () => opts.navigateMessage(-1),
+      ArrowUp: () => {
+        if (resolveArrowTarget(document.activeElement, getSessionListElement()) === "sessionList") {
+          sessions.navigateSession(-1);
+        } else {
+          opts.navigateMessage(-1);
+        }
+      },
       "]": () => {
         const filter = starred.filterOnly
           ? (s: { id: string }) => starred.isStarred(s.id)
