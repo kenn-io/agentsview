@@ -153,6 +153,7 @@ func (c *Client) UploadObject(
 
 // appendChunk PATCHes one chunk at offset and returns the server-confirmed
 // next offset and completion, preferring the response headers over the body.
+// A successful response must acknowledge exactly the bytes in this request.
 func (c *Client) appendChunk(
 	ctx context.Context,
 	uploadID string,
@@ -182,6 +183,12 @@ func (c *Client) appendChunk(
 	}
 	if err := validateUploadProgress(next, complete, object.Length); err != nil {
 		return 0, false, err
+	}
+	expectedNext := offset + int64(len(chunk))
+	if next != expectedNext {
+		return 0, false, fmt.Errorf(
+			"rawclient: upload response confirmed offset %d; expected offset %d after %d-byte chunk",
+			next, expectedNext, len(chunk))
 	}
 	return next, complete, nil
 }

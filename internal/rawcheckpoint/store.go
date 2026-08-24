@@ -221,6 +221,8 @@ func (s *Store) SourceHead(
 // can never repopulate heads that SetDevice cleared. Callers must pass the
 // server's durable CommitResult; an empty receipt is refused so no unsafe
 // checkpoint can advance.
+// A new source must begin at generation one, and each non-replay advancement
+// must be exactly the next generation; acknowledgements cannot skip state.
 func (s *Store) AdvanceHead(
 	ctx context.Context,
 	deviceID string,
@@ -257,7 +259,7 @@ func (s *Store) AdvanceHead(
 		).Scan(&current.ManifestID, &current.Receipt, &current.Generation)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			if expectedParentReceipt != "" {
+			if expectedParentReceipt != "" || commit.Generation != 1 {
 				return ErrHeadConflict
 			}
 			_, err = conn.ExecContext(ctx, `INSERT INTO raw_sources
@@ -280,7 +282,7 @@ func (s *Store) AdvanceHead(
 			current.Generation == commit.Generation {
 			return nil
 		}
-		if commit.Generation <= current.Generation ||
+		if commit.Generation-current.Generation != 1 ||
 			current.Receipt != expectedParentReceipt {
 			return ErrHeadConflict
 		}

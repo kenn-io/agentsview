@@ -96,6 +96,41 @@ func TestStoreAdvanceHeadRejectsInvalidCommitResult(t *testing.T) {
 	}
 }
 
+func TestStoreAdvanceHeadRequiresFirstGeneration(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
+
+	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+		"root-1", "src-1", "", testCommitResult(1, 2))
+	require.ErrorIs(t, err, ErrHeadConflict)
+	_, ok, readErr := store.SourceHead(t.Context(), parser.AgentClaude,
+		"root-1", "src-1")
+	require.NoError(t, readErr)
+	assert.False(t, ok, "a source chain may not begin after generation one")
+}
+
+func TestStoreAdvanceHeadRejectsGenerationGap(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
+	first := testCommitResult(1, 1)
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+		"root-1", "src-1", "", first))
+
+	gap := testCommitResult(3, 3)
+	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+		"root-1", "src-1", first.Receipt, gap)
+	require.ErrorIs(t, err, ErrHeadConflict)
+	head, ok, readErr := store.SourceHead(t.Context(), parser.AgentClaude,
+		"root-1", "src-1")
+	require.NoError(t, readErr)
+	require.True(t, ok)
+	assert.Equal(t, first.ManifestID, head.ManifestID)
+	assert.Equal(t, first.Receipt, head.Receipt)
+	assert.Equal(t, first.Generation, head.Generation)
+}
+
 func TestStoreHeadLifecycle(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -104,16 +139,16 @@ func TestStoreHeadLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	first := testCommitResult(1, 4)
+	first := testCommitResult(1, 1)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, first.Receipt, head.Receipt)
-	assert.Equal(t, int64(4), head.Generation)
+	assert.Equal(t, int64(1), head.Generation)
 	assert.Equal(t, first.ManifestID, head.ManifestID)
 
-	second := testCommitResult(2, 5)
+	second := testCommitResult(2, 2)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", first.Receipt, second))
 	head, ok, err = store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
@@ -144,12 +179,12 @@ func TestStoreAdvanceHeadRejectsStaleParent(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
-	first := testCommitResult(1, 4)
+	first := testCommitResult(1, 1)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// A delayed second-generation result carrying the stale parent receipt
 	// must never overwrite the newer acknowledged head.
-	stale := testCommitResult(2, 5)
+	stale := testCommitResult(2, 2)
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", stale)
 	require.ErrorIs(t, err, ErrHeadConflict)
 
@@ -158,14 +193,14 @@ func TestStoreAdvanceHeadRejectsStaleParent(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, first.Receipt, head.Receipt)
 	assert.Equal(t, first.ManifestID, head.ManifestID)
-	assert.Equal(t, int64(4), head.Generation)
+	assert.Equal(t, int64(1), head.Generation)
 }
 
 func TestStoreAdvanceHeadIdempotentReplay(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
-	first := testCommitResult(1, 4)
+	first := testCommitResult(1, 1)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// A retried manifest carries the same parent it used for the original
@@ -177,18 +212,21 @@ func TestStoreAdvanceHeadIdempotentReplay(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, first.Receipt, head.Receipt)
 	assert.Equal(t, first.ManifestID, head.ManifestID)
-	assert.Equal(t, int64(4), head.Generation)
+	assert.Equal(t, int64(1), head.Generation)
 }
 
 func TestStoreAdvanceHeadRejectsLowerGeneration(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
-	current := testCommitResult(5, 5)
+	first := testCommitResult(1, 1)
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
-		"root-1", "src-1", "", current))
+		"root-1", "src-1", "", first))
+	current := testCommitResult(2, 2)
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+		"root-1", "src-1", first.Receipt, current))
 
-	older := testCommitResult(4, 4)
+	older := testCommitResult(3, 1)
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
 		"root-1", "src-1", current.Receipt, older)
 	require.ErrorIs(t, err, ErrHeadConflict)

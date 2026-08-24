@@ -320,6 +320,48 @@ func TestUploadObjectRejectsMalformedPatchResponse(t *testing.T) {
 	}
 }
 
+func TestUploadObjectRejectsPatchOffsetBeyondChunk(t *testing.T) {
+	t.Parallel()
+	body := []byte("hello")
+	object := newUploadObject(t, body)
+	var patchedBytes atomic.Int64
+	handler := withTokenRoute(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPost:
+			io.WriteString(w, uploadResponseJSON("up_1", object, 0, false))
+		case http.MethodPatch:
+			chunk, err := io.ReadAll(r.Body)
+			if !assert.NoError(t, err) {
+				http.Error(w, "read chunk", http.StatusInternalServerError)
+				return
+			}
+			patchedBytes.Add(int64(len(chunk)))
+			w.Header().Set("Upload-Offset", strconv.FormatInt(object.Length, 10))
+			w.Header().Set("Upload-Length", strconv.FormatInt(object.Length, 10))
+			w.Header().Set("Upload-Complete", "true")
+			io.WriteString(w, uploadResponseJSON(
+				"up_1", object, object.Length, true))
+		default:
+			http.Error(w, "unexpected", http.StatusNotFound)
+		}
+	}))
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	client, err := NewClient(Config{
+		BaseURL: server.URL, DeviceID: "dev_test", Credential: "avdc_test",
+		TokenMargin: time.Minute, ChunkBytes: 2,
+	})
+	require.NoError(t, err)
+
+	err = client.UploadObject(t.Context(), parser.AgentClaude,
+		object, bytes.NewReader(body))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "expected offset 2")
+	assert.EqualValues(t, 2, patchedBytes.Load(),
+		"client must reject completion after only the first chunk")
+}
+
 func TestUploadObjectSingleChunkCompletes(t *testing.T) {
 	t.Parallel()
 	body := []byte("hello")
