@@ -92,6 +92,7 @@ func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
 
 	page, err := store.ListSessions(ctx, db.SessionFilter{
 		IncludeChildren: true,
+		IncludeSource:   true,
 	})
 	require.NoError(t, err, "ListSessions")
 	require.Len(t, page.Sessions, 1, "expected one listed session")

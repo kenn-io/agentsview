@@ -113,6 +113,7 @@ export class SessionsService {
     includeOneShot,
     includeAutomated,
     includeChildren,
+    includeSource,
     outcome,
     healthGrade,
     cursor,
@@ -189,6 +190,10 @@ export class SessionsService {
      */
     includeChildren?: boolean,
     /**
+     * Include source file paths
+     */
+    includeSource?: boolean,
+    /**
      * Filter by detected outcome
      */
     outcome?: string,
@@ -249,6 +254,7 @@ export class SessionsService {
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
         'include_children': includeChildren,
+        'include_source': includeSource,
         'outcome': outcome,
         'health_grade': healthGrade,
         'cursor': cursor,
@@ -327,6 +333,7 @@ export class SessionsService {
     includeOneShot,
     includeAutomated,
     includeChildren,
+    includeSource,
     outcome,
     healthGrade,
     cursor,
@@ -403,6 +410,10 @@ export class SessionsService {
      */
     includeChildren?: boolean,
     /**
+     * Include source file paths
+     */
+    includeSource?: boolean,
+    /**
      * Filter by detected outcome
      */
     outcome?: string,
@@ -463,6 +474,7 @@ export class SessionsService {
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
         'include_children': includeChildren,
+        'include_source': includeSource,
         'outcome': outcome,
         'health_grade': healthGrade,
         'cursor': cursor,

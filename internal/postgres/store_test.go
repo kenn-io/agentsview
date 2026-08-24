@@ -34,14 +34,14 @@ func ensureStoreSchema(t *testing.T, pgURL string) {
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count,
-			 user_message_count)
+			 user_message_count, file_path)
 		VALUES
 			('store-test-001', 'test-machine',
 			 'test-project', 'claude-code',
 			 'hello world',
 			 '2026-03-12T10:00:00Z'::timestamptz,
 			 '2026-03-12T10:30:00Z'::timestamptz,
-			 2, 1)
+			 2, 1, '/fixtures/store-test-001.jsonl')
 	`)
 	require.NoError(t, err, "inserting test session")
 	_, err = pg.Exec(`
@@ -176,8 +176,16 @@ func TestStoreListSessions(t *testing.T) {
 	)
 	require.NoError(t, err, "ListSessions")
 	assert.NotZero(t, page.Total, "expected at least 1 session")
-	t.Logf("sessions: %d, total: %d",
-		len(page.Sessions), page.Total)
+	require.Len(t, page.Sessions, 1)
+	assert.Nil(t, page.Sessions[0].FilePath)
+
+	withSource, err := store.ListSessions(
+		ctx, db.SessionFilter{IncludeSource: true, Limit: 10},
+	)
+	require.NoError(t, err, "ListSessions with source")
+	require.Len(t, withSource.Sessions, 1)
+	require.NotNil(t, withSource.Sessions[0].FilePath)
+	assert.Equal(t, "/fixtures/store-test-001.jsonl", *withSource.Sessions[0].FilePath)
 }
 
 func TestStoreListSessions_MachineMultiSelect(t *testing.T) {
