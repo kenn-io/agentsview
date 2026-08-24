@@ -690,17 +690,26 @@ func TestParseT3Thread_MessageEmptinessRules(t *testing.T) {
 			id: "m-empty", role: "assistant", text: "",
 			createdAt: "2026-08-22T23:21:00.000Z", attachments: "[]",
 		},
+		t3TestMessage{
+			id: "m-mixed", role: "user", text: "what is this dialog?",
+			createdAt:   "2026-08-22T23:22:00.000Z",
+			attachments: `[{"type":"image","name":"dialog.png"}]`,
+		},
 	)
 	dbPath := createT3DB(t, spec)
 
 	results := parseT3All(t, dbPath, "testbox")
 	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 4)
+	require.Len(t, results[0].Messages, 5)
 	// The image-only turn renders a placeholder instead of a blank message.
 	assert.Equal(t, "[Image: screenshot.webp]", results[0].Messages[3].Content)
 	assert.Equal(t, len("[Image: screenshot.webp]"),
 		results[0].Messages[3].ContentLength)
 	assert.Equal(t, RoleUser, results[0].Messages[3].Role)
+	// A text-plus-image turn keeps its text and appends the placeholder, so
+	// the attachment does not silently vanish from the transcript.
+	assert.Equal(t, "what is this dialog?\n[Image: dialog.png]",
+		results[0].Messages[4].Content)
 	// Ordinals stay contiguous after the dropped message.
 	for i, msg := range results[0].Messages {
 		assert.Equal(t, i, msg.Ordinal)

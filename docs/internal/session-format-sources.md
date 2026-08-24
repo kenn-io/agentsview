@@ -2052,8 +2052,9 @@ add an archived or maintained mirror without replacing the original identity.
   listing merged against the caller's stored freshness, emitting only the
   threads that advanced; like the OpenCode watermark listing, that merge
   cannot see a timestamp-blind rewrite, which the digest catches during
-  scheduled reconciliation and full parses instead. An image-only message renders an
-  "[Image: name]" placeholder rather than a blank turn. Optional columns are
+  scheduled reconciliation and full parses instead. Attachments render as "[Image: name]"
+  placeholder lines appended after any message text, so an image-only turn is
+  not blank and a text-plus-image turn keeps its attachment. Optional columns are
   probed
   with `PRAGMA table_info`, so a pre-canonicalization database still parses
   with its model read from the legacy column. A worktree thread's

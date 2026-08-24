@@ -715,13 +715,19 @@ func loadT3Messages(
 			stamps.maxUpdated = updatedAt
 		}
 		content := strings.TrimSpace(text)
-		if content == "" {
-			if !t3HasAttachments(attachments) {
-				continue
+		if t3HasAttachments(attachments) {
+			// Attachments render as placeholder lines whether or not the
+			// message also carries text: an image-only turn would otherwise
+			// be blank, and a text-plus-image turn would silently lose the
+			// attachment from the transcript.
+			placeholder := t3AttachmentPlaceholder(attachments)
+			if content == "" {
+				content = placeholder
+			} else {
+				content += "\n" + placeholder
 			}
-			// An image-only message is a turn the user took; without a
-			// placeholder it would render as a blank turn.
-			content = t3AttachmentPlaceholder(attachments)
+		} else if content == "" {
+			continue
 		}
 		messages = append(messages, ParsedMessage{
 			Ordinal:       len(messages),
