@@ -44,14 +44,16 @@ func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {
 func TestFilterToQueryKeepsListOptions(t *testing.T) {
 	t.Parallel()
 	query := filterToQuery(ListFilter{
-		Timezone:      "America/New_York",
-		Cursor:        "next-page",
-		IncludeSource: true,
+		Timezone:       "America/New_York",
+		Cursor:         "next-page",
+		IncludeSource:  true,
+		IncludeDeleted: true,
 	})
 
 	assert.Equal(t, "America/New_York", query.Get("timezone"))
 	assert.Equal(t, "next-page", query.Get("cursor"))
 	assert.Equal(t, "true", query.Get("include_source"))
+	assert.Equal(t, "true", query.Get("include_deleted"))
 }
 
 func TestSearchContentUsesLongRunningClient(t *testing.T) {

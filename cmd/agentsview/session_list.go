@@ -27,6 +27,7 @@ func newSessionListCommand() *cobra.Command {
 		minUserMessages                         int
 		includeOneShot                          bool
 		includeAutomated, includeChildren       bool
+		includeDeleted                          bool
 		outcome, healthGrade                    string
 		minToolFailures                         int
 		hasSecret                               bool
@@ -69,6 +70,7 @@ func newSessionListCommand() *cobra.Command {
 				IncludeOneShot:   includeOneShot,
 				IncludeAutomated: includeAutomated,
 				IncludeChildren:  includeChildren,
+				IncludeDeleted:   includeDeleted,
 				Outcome:          outcome,
 				HealthGrade:      healthGrade,
 				HasSecret:        hasSecret,
@@ -166,6 +168,8 @@ func newSessionListCommand() *cobra.Command {
 		"Include automated sessions (excluded by default)")
 	flags.BoolVar(&includeChildren, "include-children", false,
 		"Include subagent/child sessions")
+	flags.BoolVar(&includeDeleted, "include-deleted", false,
+		"Include retained soft-deleted sessions")
 	flags.StringVar(&outcome, "outcome", "",
 		"Filter by outcome (comma-separated: success,failure,...)")
 	flags.StringVar(&healthGrade, "health-grade", "",

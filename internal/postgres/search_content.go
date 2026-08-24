@@ -93,6 +93,7 @@ func pgSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
 		ExcludeOneShot:   !f.IncludeOneShot,
 		ExcludeAutomated: !f.IncludeAutomated,
 		IncludeChildren:  f.IncludeChildren,
+		IncludeDeleted:   f.IncludeDeleted,
 	}
 }
 

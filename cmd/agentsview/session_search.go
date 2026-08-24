@@ -28,6 +28,7 @@ func newSessionSearchCommand() *cobra.Command {
 		activeSince, since                       string
 		includeChildren, includeAutomated        bool
 		includeOneShot                           bool
+		includeDeleted                           bool
 		limit, cursor, contextN                  int
 	)
 	cmd := &cobra.Command{
@@ -77,6 +78,7 @@ func newSessionSearchCommand() *cobra.Command {
 				IncludeChildren:  includeChildren,
 				IncludeAutomated: includeAutomated,
 				IncludeOneShot:   includeOneShot,
+				IncludeDeleted:   includeDeleted,
 				Scope:            scope,
 				Limit:            limit,
 				Cursor:           cursor,
@@ -123,6 +125,8 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.BoolVar(&includeChildren, "include-children", false, "Include subagent sessions")
 	flags.BoolVar(&includeAutomated, "include-automated", false, "Include automated sessions")
 	flags.BoolVar(&includeOneShot, "include-one-shot", false, "Include one-shot sessions")
+	flags.BoolVar(&includeDeleted, "include-deleted", false,
+		"Include retained soft-deleted sessions")
 	flags.IntVar(&limit, "limit", 0, "Max results (default 50, max 500)")
 	flags.IntVar(&cursor, "cursor", 0, "Pagination cursor from a previous response")
 	flags.IntVar(&contextN, "context", 0,

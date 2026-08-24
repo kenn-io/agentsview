@@ -24,6 +24,14 @@ func TestSessionListSinceMutuallyExclusiveWithActiveSince(t *testing.T) {
 		"--since and --active-since are mutually exclusive")
 }
 
+func TestSessionListIncludeDeletedFlag(t *testing.T) {
+	cmd := newSessionListCommand()
+	cmd.SetArgs([]string{"--help"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, cmd.Flag("include-deleted").Usage, "soft-deleted")
+}
+
 func TestSessionListSinceRejectsInvalidFormat(t *testing.T) {
 	_, err := executeCommand(newRootCommand(),
 		"session", "list", "--since", "3x")

@@ -232,6 +232,9 @@ func filterToQuery(f ListFilter) url.Values {
 	if f.IncludeSource {
 		q.Set("include_source", "true")
 	}
+	if f.IncludeDeleted {
+		q.Set("include_deleted", "true")
+	}
 	setIfNotEmpty("outcome", f.Outcome)
 	setIfNotEmpty("health_grade", f.HealthGrade)
 	setIfNotEmpty("termination", f.Termination)
@@ -525,6 +528,9 @@ func (b *httpBackend) SearchContent(
 	}
 	if req.IncludeOneShot {
 		q.Set("include_one_shot", "true")
+	}
+	if req.IncludeDeleted {
+		q.Set("include_deleted", "true")
 	}
 	if req.Limit > 0 {
 		q.Set("limit", strconv.Itoa(req.Limit))

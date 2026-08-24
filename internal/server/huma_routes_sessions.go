@@ -77,6 +77,7 @@ type sessionFilterInput struct {
 	IncludeAutomated bool              `query:"include_automated" doc:"Include automated sessions"`
 	IncludeChildren  bool              `query:"include_children" doc:"Include child sessions"`
 	IncludeSource    bool              `query:"include_source" doc:"Include source file paths"`
+	IncludeDeleted   bool              `query:"include_deleted" doc:"Include retained soft-deleted sessions"`
 	Outcome          string            `query:"outcome" doc:"Filter by detected outcome"`
 	HealthGrade      string            `query:"health_grade" doc:"Filter by health grade"`
 	Cursor           string            `query:"cursor" doc:"Opaque pagination cursor"`
@@ -144,6 +145,7 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 		IncludeAutomated: in.IncludeAutomated,
 		IncludeChildren:  in.IncludeChildren,
 		IncludeSource:    in.IncludeSource,
+		IncludeDeleted:   in.IncludeDeleted,
 		Outcome:          in.Outcome,
 		HealthGrade:      in.HealthGrade,
 		Cursor:           in.Cursor,

@@ -194,6 +194,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
 		IncludeSource:        f.IncludeSource,
+		IncludeDeleted:       f.IncludeDeleted,
 		Cursor:               f.Cursor,
 		Limit:                f.Limit,
 		MinToolFailures:      f.MinToolFailures,
@@ -823,6 +824,7 @@ func (b *directBackend) SearchContent(
 		IncludeChildren:  req.IncludeChildren,
 		IncludeAutomated: req.IncludeAutomated,
 		IncludeOneShot:   req.IncludeOneShot,
+		IncludeDeleted:   req.IncludeDeleted,
 		Scope:            req.Scope,
 		// The store builds snippets from the full source field and redacts
 		// secrets (including ones straddling the snippet window) unless reveal

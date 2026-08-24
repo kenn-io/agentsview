@@ -37,6 +37,14 @@ func TestSessionSearchSinceMutuallyExclusiveWithActiveSince(t *testing.T) {
 		"--since and --active-since are mutually exclusive")
 }
 
+func TestSessionSearchIncludeDeletedFlag(t *testing.T) {
+	cmd := newSessionSearchCommand()
+	cmd.SetArgs([]string{"--help"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, cmd.Flag("include-deleted").Usage, "soft-deleted")
+}
+
 func TestSessionSearchSinceRejectsInvalidFormat(t *testing.T) {
 	cmd := newSessionSearchCommand()
 	cmd.SetArgs([]string{"needle", "--since", "3x"})

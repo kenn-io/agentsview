@@ -168,6 +168,7 @@ type ContentSearchRequest struct {
 	Project, ExcludeProject, Machine, Agent           string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
+	IncludeDeleted                                    bool `json:"include_deleted,omitempty"`
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch string
 
@@ -388,6 +389,7 @@ type ListFilter struct {
 	IncludeAutomated bool   `json:"include_automated,omitempty"`
 	IncludeChildren  bool   `json:"include_children,omitempty"`
 	IncludeSource    bool   `json:"include_source,omitempty"`
+	IncludeDeleted   bool   `json:"include_deleted,omitempty"`
 	Outcome          string `json:"outcome,omitempty"`      // comma-separated
 	HealthGrade      string `json:"health_grade,omitempty"` // comma-separated
 	Termination      string `json:"termination,omitempty"`  // comma-separated

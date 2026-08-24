@@ -52,6 +52,7 @@ type contentSearchInput struct {
 	IncludeChildren  bool               `query:"include_children" doc:"Include child sessions"`
 	IncludeAutomated bool               `query:"include_automated" doc:"Include automated sessions"`
 	IncludeOneShot   bool               `query:"include_one_shot" doc:"Include one-shot sessions"`
+	IncludeDeleted   bool               `query:"include_deleted" doc:"Include retained soft-deleted sessions"`
 	Limit            int                `query:"limit" minimum:"0" doc:"Maximum number of results"`
 	Cursor           int                `query:"cursor" minimum:"0" doc:"Pagination cursor"`
 	Context          int                `query:"context" doc:"Include N messages of context before and after each match (max 10)"`
@@ -137,6 +138,7 @@ func (s *Server) humaSearchContent(
 		IncludeChildren:  in.IncludeChildren,
 		IncludeAutomated: in.IncludeAutomated,
 		IncludeOneShot:   in.IncludeOneShot,
+		IncludeDeleted:   in.IncludeDeleted,
 		Scope:            string(in.Scope),
 		Limit:            in.Limit,
 		Cursor:           in.Cursor,

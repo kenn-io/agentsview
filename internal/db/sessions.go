@@ -528,6 +528,7 @@ type SessionFilter struct {
 	// (session list, substring/regex/fts search) leaves this false.
 	ChildExemptOneShot bool
 	ExcludeAutomated   bool     // exclude sessions where is_automated = 1
+	IncludeDeleted     bool     // include retained soft-deleted sessions
 	AutomatedScope     string   // "", "human", "all", or "automated"
 	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
 	IncludeOrphans     bool     // promote orphan child rows to sidebar roots

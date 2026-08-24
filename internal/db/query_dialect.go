@@ -429,10 +429,9 @@ func BuildSessionBaseFilterSQL(
 	f SessionFilter, dialect QueryDialect,
 ) (string, []any) {
 	b := NewQueryBuilder(dialect, 0)
-	preds := []string{
-		"message_count > 0",
-		"deleted_at IS NULL",
-	}
+	preds := []string{"message_count > 0"}
+	preds = append(preds, sessionDeletionPredicates(f, b,
+		func(col string) string { return col })...)
 	filterPreds, oneShotPred := sessionFilterPredicates(f, b, func(col string) string { return col })
 	preds = append(preds, filterPreds...)
 	if oneShotPred != "" {
@@ -489,10 +488,8 @@ func buildSessionFilterWithBuilder(
 		return qualifier + "." + col
 	}
 
-	basePreds := []string{
-		q("message_count") + " > 0",
-		q("deleted_at") + " IS NULL",
-	}
+	basePreds := []string{q("message_count") + " > 0"}
+	basePreds = append(basePreds, sessionDeletionPredicates(f, b, q)...)
 	if !f.IncludeChildren {
 		basePreds = append(basePreds,
 			q("relationship_type")+" NOT IN ("+b.dialect.SidebarChildRelationshipsSQL()+")")
@@ -516,6 +513,10 @@ func buildSessionFilterWithBuilder(
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
 	rootMatchParts = append(rootMatchParts,
+		sessionDeletionPredicates(f, b, func(col string) string {
+			return "root_session." + col
+		})...)
+	rootMatchParts = append(rootMatchParts,
 		BuildCanonicalRootWhere(b.dialect, "root_session", f.IncludeOrphans))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
 	childAutomationPred := automationScopePredicate(f, b.dialect, "s")
@@ -526,17 +527,32 @@ func buildSessionFilterWithBuilder(
 
 	cte := "WITH RECURSIVE tree(id) AS (" +
 		"SELECT root_session.id FROM sessions root_session" +
-		" WHERE root_session.message_count > 0" +
-		" AND root_session.deleted_at IS NULL AND " +
+		" WHERE root_session.message_count > 0 AND " +
 		rootMatch +
 		" UNION " +
 		"SELECT s.id FROM sessions s" +
 		" JOIN tree t ON s.parent_session_id = t.id" +
-		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
+		" WHERE s.message_count > 0 AND " +
+		strings.Join(sessionDeletionPredicates(f, b, func(col string) string {
+			return "s." + col
+		}), " AND ") +
 		childAutomationWhere +
 		") SELECT id FROM tree"
 
 	return baseWhere + " AND " + q("id") + " IN (" + cte + ")"
+}
+
+func sessionDeletionPredicates(
+	f SessionFilter, b *QueryBuilder, q func(string) string,
+) []string {
+	if !f.IncludeDeleted {
+		return []string{q("deleted_at") + " IS NULL"}
+	}
+	id := q("id")
+	if id == "id" {
+		id = "sessions.id"
+	}
+	return []string{"NOT EXISTS (SELECT 1 FROM excluded_sessions es WHERE es.id = " + id + ")"}
 }
 
 func automationScopePredicate(

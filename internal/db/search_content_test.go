@@ -52,6 +52,59 @@ func TestSearchContentSubstringMessages(t *testing.T) {
 	assert.Contains(t, m.Snippet, "DATABASE_URL", "snippet")
 }
 
+func TestIncludeDeletedListAndContentSearchPreservesExclusions(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"active", "source-missing", "user-trash", "permanent"} {
+		seedSearchSession(t, d, id, "proj", [][2]string{{"user", "deleted NEEDLE " + id}})
+	}
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET deleted_at = ? WHERE id != ?",
+		"2026-05-21T00:00:00Z", "active",
+	)
+	require.NoError(t, err, "soft-delete retained sessions")
+	_, err = d.getWriter().Exec(
+		"INSERT INTO excluded_sessions (id) VALUES (?)", "permanent",
+	)
+	require.NoError(t, err, "exclude permanent session")
+
+	defaultList, err := d.ListSessions(context.Background(), SessionFilter{
+		ExcludeOneShot: true, ExcludeAutomated: true, Limit: 50,
+	})
+	require.NoError(t, err, "default list")
+	assert.Equal(t, []string{"active"}, collectIDs(defaultList.Sessions))
+
+	withDeleted, err := d.ListSessions(context.Background(), SessionFilter{
+		ExcludeOneShot: true, ExcludeAutomated: true,
+		IncludeDeleted: true, Limit: 50,
+	})
+	require.NoError(t, err, "include-deleted list")
+	assert.ElementsMatch(t, []string{"active", "source-missing", "user-trash"},
+		collectIDs(withDeleted.Sessions))
+
+	defaultSearch, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 50,
+	})
+	require.NoError(t, err, "default search")
+	assert.Equal(t, []string{"active"}, contentMatchIDs(defaultSearch.Matches))
+
+	withDeletedSearch, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
+		IncludeOneShot: true, IncludeDeleted: true, Limit: 50,
+	})
+	require.NoError(t, err, "include-deleted search")
+	assert.ElementsMatch(t, []string{"active", "source-missing", "user-trash"},
+		contentMatchIDs(withDeletedSearch.Matches))
+}
+
+func contentMatchIDs(matches []ContentMatch) []string {
+	ids := make([]string, len(matches))
+	for i, match := range matches {
+		ids[i] = match.SessionID
+	}
+	return ids
+}
+
 // TestSearchContentRedactsStraddlingSecret pins the default (non-reveal)
 // content-search guarantee: a secret adjacent to the match that extends past
 // the snippet window must not leak. A snippet-only redaction would cut the PEM

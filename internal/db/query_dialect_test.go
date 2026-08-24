@@ -184,6 +184,20 @@ func TestBuildSessionFilterSQLResolvesDSTDateBounds(t *testing.T) {
 	}
 }
 
+func TestBuildSessionFilterSQLIncludeDeletedKeepsPermanentExclusions(t *testing.T) {
+	defaultSQL, _ := BuildSessionFilterSQL(SessionFilter{}, SQLiteQueryDialect())
+	assert.Contains(t, normalizeSQL(defaultSQL), "deleted_at IS NULL")
+
+	includeSQL, _ := BuildSessionFilterSQL(SessionFilter{
+		IncludeDeleted: true, IncludeChildren: true,
+	}, SQLiteQueryDialect())
+	normalized := normalizeSQL(includeSQL)
+	assert.NotContains(t, normalized, "deleted_at IS NULL")
+	assert.Contains(t, normalized, "NOT EXISTS (SELECT 1 FROM excluded_sessions")
+	assert.Contains(t, normalized, "root_session.id")
+	assert.Contains(t, normalized, "s.id")
+}
+
 func TestBuildSessionFilterSQLRendersIncludeChildrenCTE(t *testing.T) {
 	filter := SessionFilter{
 		IncludeChildren:  true,

@@ -35,6 +35,7 @@ type ContentSearchFilter struct {
 	Project, ExcludeProject, Machine, Agent           string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
+	IncludeDeleted                                    bool // include retained soft-deleted sessions
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch string
 
@@ -130,6 +131,7 @@ func contentSessionFilter(f ContentSearchFilter) SessionFilter {
 		ExcludeOneShot:   !f.IncludeOneShot,
 		ExcludeAutomated: !f.IncludeAutomated,
 		IncludeChildren:  f.IncludeChildren,
+		IncludeDeleted:   f.IncludeDeleted,
 	}
 }
 
