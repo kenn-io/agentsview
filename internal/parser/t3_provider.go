@@ -317,6 +317,14 @@ func t3ProviderCapabilities() Capabilities {
 			// and it also covers the accepted legacy generations that lack
 			// message and project updated_at columns.
 			UnchangedResults: UnchangedResultMTimeAndHash,
+			// The digest must also gate the pre-parse freshness skip: a
+			// timestamp-blind rewrite leaves size and mtime matching the
+			// stored row, and without the hash comparison the skip would
+			// keep the stale projection forever. The engine's
+			// providerFingerprintHashEstablishesFreshness covers the inverse
+			// case, where another thread's growth moves the shared
+			// container's stat under an unchanged member.
+			FingerprintHashRequiredForFreshness: true,
 		},
 	}
 }

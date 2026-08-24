@@ -12956,10 +12956,13 @@ func (e *Engine) providerFingerprintHashMatchesDB(
 // invalidates every member's stat identity; the per-member hash covers the
 // member's full parse input (session row, messages, selected transcript), so
 // a matching stored hash bounds re-parse and rewrite work to the changed
-// members instead of the whole archive. Providers whose fingerprint stat is
-// per-source stay stat-gated: a stat mismatch there means real change.
+// members instead of the whole archive. t3 members have the same shape:
+// their fingerprint size is the shared state.sqlite's, and the per-member
+// digest covers every parser-observed thread, project, and message field.
+// Providers whose fingerprint stat is per-source stay stat-gated: a stat
+// mismatch there means real change.
 func providerFingerprintHashEstablishesFreshness(agent parser.AgentType) bool {
-	return agent == parser.AgentHermes
+	return agent == parser.AgentHermes || agent == parser.AgentT3
 }
 
 // providerSourceHashFreshDespiteStat is the stat-mismatch arm of

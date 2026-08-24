@@ -58,9 +58,11 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		},
 		// t3 is event-sourced: a projection rebuild rewrites rows whose
 		// timestamps derive from the events and do not move, so the digest
-		// stored in file_hash is the only signal that sees it.
+		// stored in file_hash is the only signal that sees it -- which also
+		// means freshness cannot be established without comparing it.
 		AgentT3: {
-			UnchangedResults: UnchangedResultMTimeAndHash,
+			UnchangedResults:                    UnchangedResultMTimeAndHash,
+			FingerprintHashRequiredForFreshness: true,
 		},
 		AgentTrae: {
 			UnchangedResults: UnchangedResultMTimeAndHash,

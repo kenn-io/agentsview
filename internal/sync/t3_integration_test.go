@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -247,6 +248,99 @@ func TestSyncT3PersistsSameTimestampRewrite(t *testing.T) {
 
 	// The stored hash now matches the digest, so the next pass converges.
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 0, Skipped: 0})
+}
+
+// The pre-parse freshness gate must consult the digest in both directions.
+// A same-timestamp rewrite leaves size and mtime matching the stored row, so
+// only the required hash comparison can defeat the skip; and another thread's
+// growth moves the shared container's size under an unchanged member, where
+// only the matching hash can establish freshness and keep reconciliation from
+// reparsing the whole archive on every pass.
+func TestT3FreshnessGateConsultsDigest(t *testing.T) {
+	root := t.TempDir()
+	userdata := filepath.Join(root, ".t3", "userdata")
+	dbPath := writeT3StateDB(t, userdata)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentT3: {userdata},
+		},
+		Machine: "devbox",
+	})
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 2, Skipped: 0})
+
+	ctx := context.Background()
+	provider, ok := parser.NewProvider(parser.AgentT3, parser.ProviderConfig{
+		Roots: []string{userdata},
+	})
+	require.True(t, ok)
+	factory, ok := parser.ProviderFactoryByType(parser.AgentT3)
+	require.True(t, ok)
+	semantics := factory.Capabilities().Sync
+	require.True(t, semantics.FingerprintHashRequiredForFreshness)
+
+	freshInDB := func(rawID string) bool {
+		t.Helper()
+		ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
+			RawSessionID:  rawID,
+			FullSessionID: "t3:" + rawID,
+		})
+		require.NoError(t, err)
+		require.True(t, found)
+		fingerprint, err := provider.Fingerprint(ctx, ref)
+		require.NoError(t, err)
+		return engine.providerSourceUnchangedInDB(
+			ctx, ref, fingerprint, semantics, nil,
+		)
+	}
+
+	assert.True(t, freshInDB("thread-alpha"),
+		"an untouched member is fresh against its stored row")
+
+	// A rewrite that moves no timestamp and preserves length: size and mtime
+	// both still match the stored row, so only the digest can see it.
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_thread_messages
+		    SET text = 'The token refresh RACES.'
+		  WHERE message_id = 'm-a2'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	assert.False(t, freshInDB("thread-alpha"),
+		"a timestamp-blind rewrite must defeat the freshness skip")
+
+	// Restore and let the sync converge again before the growth case.
+	conn, err = sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_thread_messages
+		    SET text = 'The token refresh races.'
+		  WHERE message_id = 'm-a2'`)
+	require.NoError(t, err)
+
+	// Another thread's growth changes the shared container's size, which is
+	// every member's fingerprint size. The unchanged member's matching digest
+	// must still establish freshness, or reconciliation would reparse the
+	// whole archive after every write anywhere in the database.
+	sizeBefore, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`INSERT INTO projection_thread_messages VALUES
+		 ('m-b2', 'thread-beta', 'assistant', ?, 0,
+		  '2026-08-22T14:00:00.000Z', '2026-08-22T14:00:00.000Z', NULL)`,
+		strings.Repeat("a reply long enough to force new database pages. ", 4096))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	sizeAfter, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	require.NotEqual(t, sizeBefore.Size(), sizeAfter.Size(),
+		"the growth case only tests the escape hatch if the container size moved")
+
+	assert.True(t, freshInDB("thread-alpha"),
+		"an unchanged member stays fresh on its digest despite container growth")
+	assert.False(t, freshInDB("thread-beta"),
+		"the thread that actually changed still reparses")
 }
 
 // A soft-deleted thread stops being discovered.
