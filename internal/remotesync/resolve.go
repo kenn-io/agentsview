@@ -494,7 +494,10 @@ func resolveKiloLegacyTarget(root string) (string, []string) {
 
 func curatedRoot(root string) bool {
 	info, err := os.Lstat(root)
-	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
+	if err != nil || info == nil {
+		return false
+	}
+	return info.IsDir() && info.Mode()&os.ModeSymlink == 0
 }
 
 func regularCuratedFile(root, path string) bool {
@@ -530,7 +533,10 @@ func curatedFileOrMissing(root, path string) bool {
 	if os.IsNotExist(err) {
 		return true
 	}
-	return err == nil && info.Mode().IsRegular()
+	if err != nil || info == nil {
+		return false
+	}
+	return info.Mode().IsRegular()
 }
 
 // resolvePoolsideTarget narrows a Poolside application-data root to
