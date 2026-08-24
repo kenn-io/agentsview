@@ -229,6 +229,9 @@ func filterToQuery(f ListFilter) url.Values {
 	if f.IncludeChildren {
 		q.Set("include_children", "true")
 	}
+	if f.IncludeSource {
+		q.Set("include_source", "true")
+	}
 	setIfNotEmpty("outcome", f.Outcome)
 	setIfNotEmpty("health_grade", f.HealthGrade)
 	setIfNotEmpty("termination", f.Termination)

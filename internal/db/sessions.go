@@ -152,8 +152,14 @@ type rowScanner interface {
 
 // scanSessionRow scans sessionBaseCols into a Session.
 func scanSessionRow(rs rowScanner) (Session, error) {
+	return scanSessionRowWithSource(rs, false)
+}
+
+// scanSessionRowWithSource scans sessionBaseCols and an optional trailing
+// file_path into a Session.
+func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error) {
 	var s Session
-	err := rs.Scan(
+	targets := []any{
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
@@ -184,7 +190,11 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus,
 		&s.TranscriptRevision, &s.CreatedAt,
-	)
+	}
+	if includeSource {
+		targets = append(targets, &s.FilePath)
+	}
+	err := rs.Scan(targets...)
 	return s, err
 }
 
@@ -520,6 +530,7 @@ type SessionFilter struct {
 	AutomatedScope     string   // "", "human", "all", or "automated"
 	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
 	IncludeOrphans     bool     // promote orphan child rows to sidebar roots
+	IncludeSource      bool     // include the session source file path in list rows
 	Outcome            []string // filter by outcome values
 	HealthGrade        []string // filter by health grade values
 	MinToolFailures    *int     // minimum tool_failure_signal_count
@@ -706,7 +717,11 @@ func (db *DB) ListSessions(
 		)
 	}
 
-	query := "SELECT " + sessionBaseCols +
+	columns := sessionBaseCols
+	if f.IncludeSource {
+		columns += ", file_path"
+	}
+	query := "SELECT " + columns +
 		" FROM sessions WHERE " + cursorWhere + " " +
 		pageBuilder.OrderByClause(rs, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
@@ -719,7 +734,7 @@ func (db *DB) ListSessions(
 	}
 	defer rows.Close()
 
-	sessions, err := scanSessionRows(rows)
+	sessions, err := scanSessionRowsWithSource(rows, f.IncludeSource)
 	if err != nil {
 		return SessionPage{}, err
 	}
@@ -5165,9 +5180,13 @@ func (db *DB) GetBranches(
 // scanSessionRows iterates rows and scans each using
 // scanSessionRow.
 func scanSessionRows(rows *sql.Rows) ([]Session, error) {
+	return scanSessionRowsWithSource(rows, false)
+}
+
+func scanSessionRowsWithSource(rows *sql.Rows, includeSource bool) ([]Session, error) {
 	sessions := []Session{}
 	for rows.Next() {
-		s, err := scanSessionRow(rows)
+		s, err := scanSessionRowWithSource(rows, includeSource)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)
 		}
