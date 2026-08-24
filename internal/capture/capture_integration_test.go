@@ -1088,7 +1088,6 @@ func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	firstResultPath := filepath.Join(t.TempDir(), "first.json")
 	limits := testLimits()
-	limits.FinalizationWait = 5 * time.Second
 	limits.MaxSourceBytes = 8 << 10
 	producer := copyCaptureHelper(t, "claude")
 

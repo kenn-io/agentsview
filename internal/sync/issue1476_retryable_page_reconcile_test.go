@@ -387,7 +387,8 @@ func TestIssue1476OverflowRetryBatchReachesWatcherBackoff(t *testing.T) {
 		sourceCount int
 		pathLength  int
 	}{
-		{name: "count", sourceCount: reconciliationRetryPathLimit + 1},
+		// Count and byte overflow share deferredRetryOverflow; the direct test above
+		// covers both bounds. Keep the watcher integration on the cheap byte case.
 		// One oversized path crosses the byte cap without making callback timing
 		// depend on hundreds of database writes under race instrumentation.
 		{name: "bytes", sourceCount: 1, pathLength: reconciliationRetryPathByteLimit + 1},
