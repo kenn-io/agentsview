@@ -8,6 +8,7 @@ import (
 	"hash"
 	"hash/fnv"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -316,9 +317,15 @@ func t3LatestNanos(values ...string) int64 {
 	return latest.UnixNano()
 }
 
-// T3SourceMtime resolves the per-thread change signal for a virtual t3 source
+// T3SourceMtime resolves the per-thread change token for a virtual t3 source
 // path. The live watcher compares it for inequality and treats a zero or error
-// result as "source gone".
+// result as "source gone". It returns the thread's change-token timestamp plus
+// a sub-millisecond term derived from the parser-visible digest, so the
+// watcher reacts to a projection rewrite whose timestamps do not move -- the
+// meta scan computes the digest anyway, and returning the timestamp alone
+// would discard the only part of it that sees such a rewrite. This value is
+// watcher-only and never written to file_mtime or range-filtered, so the
+// sub-millisecond term is harmless here.
 func T3SourceMtime(path string) (int64, error) {
 	return T3SourceMtimeContext(context.Background(), path)
 }
@@ -342,7 +349,18 @@ func T3SourceMtimeContext(ctx context.Context, path string) (int64, error) {
 	if !found {
 		return 0, nil
 	}
-	return meta.FileMtime, nil
+	return t3WatchToken(meta), nil
+}
+
+// t3WatchToken folds the digest into the timestamp's sub-millisecond bits.
+// t3 stamps carry millisecond precision, so those bits are unused; truncating
+// first keeps the token stable even if a stamp ever carried finer precision.
+func t3WatchToken(meta T3ThreadMeta) int64 {
+	token := meta.FileMtime - meta.FileMtime%int64(time.Millisecond)
+	if digest, err := strconv.ParseUint(meta.Fingerprint, 16, 64); err == nil {
+		token += int64(digest % uint64(time.Millisecond))
+	}
+	return token
 }
 
 // t3Schema records which optional columns this database generation has. The
@@ -629,8 +647,13 @@ func loadT3Messages(
 			stamps.maxUpdated = updatedAt
 		}
 		content := strings.TrimSpace(text)
-		if content == "" && !t3HasAttachments(attachments) {
-			continue
+		if content == "" {
+			if !t3HasAttachments(attachments) {
+				continue
+			}
+			// An image-only message is a turn the user took; without a
+			// placeholder it would render as a blank turn.
+			content = t3AttachmentPlaceholder(attachments)
 		}
 		messages = append(messages, ParsedMessage{
 			Ordinal:       len(messages),
@@ -655,6 +678,39 @@ func t3HasAttachments(raw string) bool {
 		return false
 	}
 	return true
+}
+
+// t3AttachmentMeta is the slice element of attachments_json; only the fields
+// a placeholder can render are decoded.
+type t3AttachmentMeta struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+}
+
+// t3AttachmentPlaceholder renders attachments_json as visible placeholder
+// text, one line per attachment, in the "[Image: name]" shape the Codebuff
+// and Claude-web parsers use. Undecodable JSON still yields a placeholder:
+// the caller already knows an attachment exists, and a blank turn would hide
+// it.
+func t3AttachmentPlaceholder(raw string) string {
+	var attachments []t3AttachmentMeta
+	if err := json.Unmarshal([]byte(raw), &attachments); err != nil ||
+		len(attachments) == 0 {
+		return "[Attachment]"
+	}
+	parts := make([]string, 0, len(attachments))
+	for _, a := range attachments {
+		label := "Attachment"
+		if strings.EqualFold(strings.TrimSpace(a.Type), "image") {
+			label = "Image"
+		}
+		if name := strings.TrimSpace(a.Name); name != "" {
+			parts = append(parts, "["+label+": "+name+"]")
+		} else {
+			parts = append(parts, "["+label+"]")
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func t3Role(role string) RoleType {

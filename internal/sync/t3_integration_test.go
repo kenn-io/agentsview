@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -102,7 +103,11 @@ func TestSyncT3Threads(t *testing.T) {
 		database.GetSessionFilePath("t3:thread-beta"))
 	_, storedMtime, ok := database.GetSessionFileInfo("t3:thread-alpha")
 	require.True(t, ok)
-	assert.Equal(t, engine.SourceMtime("t3:thread-alpha"), storedMtime)
+	// The watcher token is the stored change-token timestamp with the digest
+	// folded into its sub-millisecond bits, so the millisecond parts agree.
+	watchToken := engine.SourceMtime("t3:thread-alpha")
+	ms := int64(time.Millisecond)
+	assert.Equal(t, storedMtime-storedMtime%ms, watchToken-watchToken%ms)
 
 	msgs, err := database.GetMessages(ctx, "t3:thread-alpha", 0, 100, true)
 	require.NoError(t, err)

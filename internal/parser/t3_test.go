@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -367,10 +368,11 @@ func TestT3ThreadMetaTracksNewestActivity(t *testing.T) {
 	want := parseTimestamp("2026-08-22T23:30:00.000Z").UnixNano()
 	assert.Equal(t, want, metas[0].FileMtime)
 
-	// The watcher's lookup must agree with discovery.
-	mtime, err := T3SourceMtime(metas[0].VirtualPath)
+	// The watcher's token carries the same millisecond timestamp, with the
+	// digest folded into the otherwise-unused sub-millisecond bits.
+	token, err := T3SourceMtime(metas[0].VirtualPath)
 	require.NoError(t, err)
-	assert.Equal(t, want, mtime)
+	assert.Equal(t, want, token-token%int64(time.Millisecond))
 
 	// A message past the thread's updated_at also ends the session there --
 	// otherwise activity ordering and date windows would go stale for exactly
@@ -503,6 +505,48 @@ func TestT3DigestSeesSameTimestampRewrite(t *testing.T) {
 	assert.Equal(t, "Refolded: the cookie race was in the fixture.", content)
 }
 
+// The live watcher compares T3SourceMtime for inequality, so a rewrite whose
+// timestamps do not move must still change the returned token -- the digest
+// in the sub-millisecond bits is what carries it.
+func TestT3WatchTokenSeesSameTimestampRewrite(t *testing.T) {
+	dbPath := createT3DB(t, t3SampleDB(false))
+	vpath := T3VirtualPath(dbPath, "70d3aebd-8924-4ad9-9c1a-2f1b6d1f4a55")
+
+	before, err := T3SourceMtime(vpath)
+	require.NoError(t, err)
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_thread_messages
+		    SET text = 'Refolded with identical timestamps.'
+		  WHERE message_id = 'm-2'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	after, err := T3SourceMtime(vpath)
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after,
+		"the watch token must move when only content did")
+	assert.Equal(t,
+		before-before%int64(time.Millisecond),
+		after-after%int64(time.Millisecond),
+		"the millisecond part is the unchanged timestamp")
+}
+
+func TestT3AttachmentPlaceholder(t *testing.T) {
+	assert.Equal(t, "[Image: shot.webp]",
+		t3AttachmentPlaceholder(`[{"type":"image","name":"shot.webp"}]`))
+	assert.Equal(t, "[Image]",
+		t3AttachmentPlaceholder(`[{"type":"image"}]`))
+	assert.Equal(t, "[Attachment: notes.pdf]",
+		t3AttachmentPlaceholder(`[{"type":"file","name":"notes.pdf"}]`))
+	assert.Equal(t, "[Image: a.png]\n[Attachment]",
+		t3AttachmentPlaceholder(
+			`[{"type":"image","name":"a.png"},{"type":"file"}]`))
+	assert.Equal(t, "[Attachment]", t3AttachmentPlaceholder(`not json`))
+}
+
 func TestT3BatchMemberPresent(t *testing.T) {
 	spec := t3SampleDB(false)
 	spec.threads = append(spec.threads, t3TestThread{
@@ -598,7 +642,10 @@ func TestParseT3Thread_MessageEmptinessRules(t *testing.T) {
 	results := parseT3All(t, dbPath, "testbox")
 	require.Len(t, results, 1)
 	require.Len(t, results[0].Messages, 4)
-	assert.Empty(t, results[0].Messages[3].Content)
+	// The image-only turn renders a placeholder instead of a blank message.
+	assert.Equal(t, "[Image: screenshot.webp]", results[0].Messages[3].Content)
+	assert.Equal(t, len("[Image: screenshot.webp]"),
+		results[0].Messages[3].ContentLength)
 	assert.Equal(t, RoleUser, results[0].Messages[3].Role)
 	// Ordinals stay contiguous after the dropped message.
 	for i, msg := range results[0].Messages {

@@ -2044,8 +2044,12 @@ add an archived or maintained mirror without replacing the original identity.
   `updated_at` entirely -- the digest is the only signal that sees either.
   Discovery and parse compute both signals from the same fields in the same
   order, so a fingerprint-triggered reparse is never discarded as unchanged,
-  and a tombstone pass resolves membership for every stored thread with one
-  query. Optional columns are probed
+  a tombstone pass resolves membership for every stored thread with one
+  query, and the live watcher's token folds the digest into the timestamp's
+  unused sub-millisecond bits so a watched session reacts to
+  timestamp-preserving rewrites too. An image-only message renders an
+  "[Image: name]" placeholder rather than a blank turn. Optional columns are
+  probed
   with `PRAGMA table_info`, so a pre-canonicalization database still parses
   with its model read from the legacy column. A worktree thread's
   `worktree_path` wins over the project's `workspace_root` as the cwd. The
