@@ -81,13 +81,16 @@ func (c *Client) UploadObject(
 		return fmt.Errorf("rawclient: decode upload session: %w", err)
 	}
 	resp.Body.Close()
+	if err := validateUploadIdentity(session, object, ""); err != nil {
+		return err
+	}
+	if err := validateUploadProgress(session.Offset, session.Complete, object.Length); err != nil {
+		return err
+	}
 	if session.Complete {
 		return nil
 	}
 	offset := session.Offset
-	if offset < 0 || offset > object.Length {
-		return fmt.Errorf("rawclient: upload session offset %d out of range", offset)
-	}
 	buf := make([]byte, c.chunkBytes)
 	conflicts := 0
 	for offset < object.Length {
@@ -98,7 +101,9 @@ func (c *Client) UploadObject(
 		if _, err := content.ReadAt(chunk, offset); err != nil {
 			return fmt.Errorf("rawclient: read object bytes at %d: %w", offset, err)
 		}
-		next, complete, err := c.appendChunk(ctx, session.UploadID, offset, chunk)
+		next, complete, err := c.appendChunk(
+			ctx, session.UploadID, object, offset, chunk,
+		)
 		if err != nil {
 			if apiErr, ok := errors.AsType[*APIError](err); ok &&
 				apiErr.Code == CodeUploadOffset &&
@@ -121,9 +126,6 @@ func (c *Client) UploadObject(
 			return err
 		}
 		conflicts = 0
-		if next < 0 || next > object.Length {
-			return fmt.Errorf("rawclient: upload offset %d out of range", next)
-		}
 		if next <= offset && !complete {
 			return fmt.Errorf("rawclient: upload made no progress at offset %d", offset)
 		}
@@ -136,7 +138,9 @@ func (c *Client) UploadObject(
 	// the start response and the last chunk can both land here. One empty
 	// PATCH at the confirmed offset asks the server to finalize; custody is
 	// not accepted until it answers complete.
-	next, complete, err := c.appendChunk(ctx, session.UploadID, offset, nil)
+	next, complete, err := c.appendChunk(
+		ctx, session.UploadID, object, offset, nil,
+	)
 	if err != nil {
 		return err
 	}
@@ -152,6 +156,7 @@ func (c *Client) UploadObject(
 func (c *Client) appendChunk(
 	ctx context.Context,
 	uploadID string,
+	object rawsync.ObjectRef,
 	offset int64,
 	chunk []byte,
 ) (int64, bool, error) {
@@ -161,15 +166,56 @@ func (c *Client) appendChunk(
 		return 0, false, err
 	}
 	defer resp.Body.Close()
-	if next, complete, ok := uploadProgress(resp.Header); ok {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return next, complete, nil
-	}
 	var out uploadPatchResponse
 	if err := jsonDecode(resp.Body, &out); err != nil {
 		return 0, false, fmt.Errorf("rawclient: decode upload append: %w", err)
 	}
-	return out.Offset, out.Complete, nil
+	if err := validateUploadIdentity(out.uploadStartResponse, object, uploadID); err != nil {
+		return 0, false, err
+	}
+	if err := validateUploadProgress(out.Offset, out.Complete, object.Length); err != nil {
+		return 0, false, err
+	}
+	next, complete := out.Offset, out.Complete
+	if headerOffset, headerComplete, ok := uploadProgress(resp.Header); ok {
+		next, complete = headerOffset, headerComplete
+	}
+	if err := validateUploadProgress(next, complete, object.Length); err != nil {
+		return 0, false, err
+	}
+	return next, complete, nil
+}
+
+func validateUploadIdentity(
+	response uploadStartResponse,
+	object rawsync.ObjectRef,
+	uploadID string,
+) error {
+	if response.Object != object {
+		return fmt.Errorf("rawclient: upload response identifies a different object")
+	}
+	if uploadID != "" {
+		if response.UploadID != uploadID {
+			return fmt.Errorf("rawclient: upload response identifies a different upload ID")
+		}
+		return nil
+	}
+	if !response.Complete && response.UploadID == "" {
+		return fmt.Errorf("rawclient: incomplete upload response is missing upload ID")
+	}
+	return nil
+}
+
+func validateUploadProgress(offset int64, complete bool, length int64) error {
+	if offset < 0 || offset > length {
+		return fmt.Errorf("rawclient: upload response offset %d out of range", offset)
+	}
+	if complete && offset != length {
+		return fmt.Errorf(
+			"rawclient: upload response complete at offset %d, want %d", offset, length,
+		)
+	}
+	return nil
 }
 
 // uploadProgress reads the authoritative post-PATCH progress headers. It
