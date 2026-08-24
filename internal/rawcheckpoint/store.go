@@ -30,6 +30,35 @@ type Store struct {
 	db *sql.DB
 }
 
+func (s *Store) withImmediateWrite(
+	ctx context.Context,
+	operation string,
+	fn func(*sql.Conn) error,
+) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("rawcheckpoint: %s: %w", operation, err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("rawcheckpoint: %s: %w", operation, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	if err := fn(conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("rawcheckpoint: %s: %w", operation, err)
+	}
+	committed = true
+	return nil
+}
+
 var ErrMissingReceipt = errors.New(
 	"rawcheckpoint: head advancement requires a durable receipt")
 
@@ -113,37 +142,33 @@ func (s *Store) SetDevice(ctx context.Context, deviceID string) error {
 	if deviceID == "" {
 		return fmt.Errorf("rawcheckpoint: device ID is required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("rawcheckpoint: set device: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var current string
-	err = tx.QueryRowContext(ctx,
-		`SELECT device_id FROM device_config WHERE id = 1`).Scan(&current)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO device_config (id, device_id, created_at) VALUES (1, ?, ?)`,
-			deviceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	return s.withImmediateWrite(ctx, "set device", func(conn *sql.Conn) error {
+		var current string
+		err := conn.QueryRowContext(ctx,
+			`SELECT device_id FROM device_config WHERE id = 1`).Scan(&current)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if _, err := conn.ExecContext(ctx,
+				`INSERT INTO device_config (id, device_id, created_at) VALUES (1, ?, ?)`,
+				deviceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+				return fmt.Errorf("rawcheckpoint: set device: %w", err)
+			}
+		case err != nil:
 			return fmt.Errorf("rawcheckpoint: set device: %w", err)
+		case current == deviceID:
+			return nil
+		default:
+			if _, err := conn.ExecContext(ctx,
+				`UPDATE device_config SET device_id = ?, created_at = ? WHERE id = 1`,
+				deviceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+				return fmt.Errorf("rawcheckpoint: set device: %w", err)
+			}
+			if _, err := conn.ExecContext(ctx, `DELETE FROM raw_sources`); err != nil {
+				return fmt.Errorf("rawcheckpoint: set device: %w", err)
+			}
 		}
-	case err != nil:
-		return fmt.Errorf("rawcheckpoint: set device: %w", err)
-	case current == deviceID:
 		return nil
-	default:
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE device_config SET device_id = ?, created_at = ? WHERE id = 1`,
-			deviceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-			return fmt.Errorf("rawcheckpoint: set device: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM raw_sources`); err != nil {
-			return fmt.Errorf("rawcheckpoint: set device: %w", err)
-		}
-	}
-	return tx.Commit()
+	})
 }
 
 // Device returns the recorded device identity and whether one has been set.
@@ -207,54 +232,71 @@ func (s *Store) AdvanceHead(
 	if commit.Receipt == "" || commit.ManifestID == "" {
 		return ErrMissingReceipt
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("rawcheckpoint: advance head: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return s.withImmediateWrite(ctx, "advance head", func(conn *sql.Conn) error {
+		var configured string
+		err := conn.QueryRowContext(ctx,
+			`SELECT device_id FROM device_config WHERE id = 1`).Scan(&configured)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return ErrDeviceNotConfigured
+		case err != nil:
+			return fmt.Errorf("rawcheckpoint: advance head: read device: %w", err)
+		case configured != deviceID:
+			return ErrDeviceMismatch
+		}
 
-	var configured string
-	err = tx.QueryRowContext(ctx,
-		`SELECT device_id FROM device_config WHERE id = 1`).Scan(&configured)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return ErrDeviceNotConfigured
-	case err != nil:
-		return fmt.Errorf("rawcheckpoint: advance head: read device: %w", err)
-	case configured != deviceID:
-		return ErrDeviceMismatch
-	}
+		var current SourceHead
+		err = conn.QueryRowContext(ctx,
+			`SELECT head_manifest_id, head_receipt, head_generation
+			 FROM raw_sources
+			 WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
+			string(provider), configuredRootID, sourceKey,
+		).Scan(&current.ManifestID, &current.Receipt, &current.Generation)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if expectedParentReceipt != "" {
+				return ErrHeadConflict
+			}
+			_, err = conn.ExecContext(ctx, `INSERT INTO raw_sources
+				(provider, configured_root_id, source_key,
+				 head_manifest_id, head_receipt, head_generation, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				string(provider), configuredRootID, sourceKey,
+				commit.ManifestID, commit.Receipt, commit.Generation,
+				time.Now().UTC().Format(time.RFC3339Nano))
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: advance head: %w", err)
+			}
+			return nil
+		case err != nil:
+			return fmt.Errorf("rawcheckpoint: advance head: read head: %w", err)
+		}
 
-	result, err := tx.ExecContext(ctx, `INSERT INTO raw_sources
-		(provider, configured_root_id, source_key,
-		 head_manifest_id, head_receipt, head_generation, updated_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?
-		WHERE ?8 = ''
-		   OR ?8 = (SELECT head_receipt FROM raw_sources
-		            WHERE provider = ?1 AND configured_root_id = ?2 AND source_key = ?3)
-		ON CONFLICT(provider, configured_root_id, source_key) DO UPDATE SET
-			head_manifest_id = excluded.head_manifest_id,
-			head_receipt = excluded.head_receipt,
-			head_generation = excluded.head_generation,
-			updated_at = excluded.updated_at
-		WHERE raw_sources.head_receipt = ?8`,
-		string(provider), configuredRootID, sourceKey,
-		commit.ManifestID, commit.Receipt, commit.Generation,
-		time.Now().UTC().Format(time.RFC3339Nano),
-		expectedParentReceipt)
-	if err != nil {
-		return fmt.Errorf("rawcheckpoint: advance head: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rawcheckpoint: advance head: %w", err)
-	}
-	if rows == 0 {
-		// Either the insert was gated on a nonempty expected parent
-		// receipt for an absent row, or the stored head (never empty
-		// once set) does not match the expected parent receipt: an
-		// older or racing writer lost.
-		return ErrHeadConflict
-	}
-	return tx.Commit()
+		if current.ManifestID == commit.ManifestID &&
+			current.Receipt == commit.Receipt &&
+			current.Generation == commit.Generation {
+			return nil
+		}
+		if commit.Generation <= current.Generation ||
+			current.Receipt != expectedParentReceipt {
+			return ErrHeadConflict
+		}
+		result, err := conn.ExecContext(ctx, `UPDATE raw_sources SET
+			head_manifest_id = ?, head_receipt = ?, head_generation = ?, updated_at = ?
+			WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
+			commit.ManifestID, commit.Receipt, commit.Generation,
+			time.Now().UTC().Format(time.RFC3339Nano),
+			string(provider), configuredRootID, sourceKey)
+		if err != nil {
+			return fmt.Errorf("rawcheckpoint: advance head: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rawcheckpoint: advance head: %w", err)
+		}
+		if rows != 1 {
+			return ErrHeadConflict
+		}
+		return nil
+	})
 }

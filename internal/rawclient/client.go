@@ -140,7 +140,14 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Minute}
+		httpClient = &http.Client{
+			Timeout:       10 * time.Minute,
+			CheckRedirect: refuseRedirects,
+		}
+	} else if httpClient.CheckRedirect == nil {
+		enforced := *httpClient
+		enforced.CheckRedirect = refuseRedirects
+		httpClient = &enforced
 	}
 	chunkBytes := cfg.ChunkBytes
 	if chunkBytes <= 0 {
@@ -160,6 +167,10 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	client.tokens = newTokenProvider(client, cfg.DeviceID, cfg.Credential, margin)
 	return client, nil
+}
+
+func refuseRedirects(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 // do performs one authenticated JSON request, retrying exactly once with a

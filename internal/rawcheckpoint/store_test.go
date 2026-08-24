@@ -1,6 +1,8 @@
 package rawcheckpoint
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -111,15 +113,73 @@ func TestStoreAdvanceHeadIdempotentReplay(t *testing.T) {
 	first := rawsync.CommitResult{ManifestID: "rm_1", Receipt: "rr_1", Generation: 4}
 	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
-	// Re-acknowledging the stored head with its own receipt passes the
-	// compare-and-swap and rewrites identical values.
-	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "rr_1", first))
+	// A retried manifest carries the same parent it used for the original
+	// commit. Recognize the identical committed result without requiring the
+	// now-current receipt as a fabricated parent.
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "rr_1", head.Receipt)
 	assert.Equal(t, "rm_1", head.ManifestID)
 	assert.Equal(t, int64(4), head.Generation)
+}
+
+func TestStoreAdvanceHeadRejectsLowerGeneration(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
+	current := rawsync.CommitResult{ManifestID: "rm_5", Receipt: "rr_5", Generation: 5}
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+		"root-1", "src-1", "", current))
+
+	older := rawsync.CommitResult{ManifestID: "rm_4", Receipt: "rr_4", Generation: 4}
+	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+		"root-1", "src-1", "rr_5", older)
+	require.ErrorIs(t, err, ErrHeadConflict)
+	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, current.ManifestID, head.ManifestID)
+	assert.Equal(t, current.Receipt, head.Receipt)
+	assert.Equal(t, current.Generation, head.Generation)
+}
+
+func TestStoreConcurrentAdvanceHeadReturnsCASResults(t *testing.T) {
+	store := openTestStore(t)
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
+
+	const writers = 16
+	start := make(chan struct{})
+	results := make(chan error, writers)
+	for i := range writers {
+		commit := rawsync.CommitResult{
+			ManifestID: fmt.Sprintf("rm_%d", i),
+			Receipt:    fmt.Sprintf("rr_%d", i),
+			Generation: 1,
+		}
+		go func() {
+			<-start
+			results <- store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+				"root-1", "src-1", "", commit)
+		}()
+	}
+	close(start)
+
+	var successes, conflicts int
+	for range writers {
+		err := <-results
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrHeadConflict):
+			conflicts++
+		default:
+			assert.NoError(t, err, "concurrent writers must return a CAS result")
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, writers-1, conflicts)
 }
 
 func TestStoreSetDeviceChangeClearsHeads(t *testing.T) {

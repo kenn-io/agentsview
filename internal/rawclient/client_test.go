@@ -3,8 +3,12 @@ package rawclient
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -110,4 +114,52 @@ func TestAsAPIErrorRejectsForeignErrors(t *testing.T) {
 	t.Parallel()
 	var got APIError
 	assert.False(t, AsAPIError(errors.New("boom"), &got))
+}
+
+func TestClientRefusesCredentialRedirects(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		httpClient func() *http.Client
+	}{
+		{name: "default client"},
+		{
+			name: "supplied client without redirect policy",
+			httpClient: func() *http.Client {
+				return &http.Client{Timeout: time.Second}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var redirected int32
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				atomic.AddInt32(&redirected, 1)
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"token":"avdt_redirected","device_id":"dev_test",`+
+					`"scopes":["negotiate","upload","commit"],"expires_at":%q}`,
+					time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano))
+			}))
+			t.Cleanup(target.Close)
+			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+			}))
+			t.Cleanup(endpoint.Close)
+
+			var supplied *http.Client
+			if tt.httpClient != nil {
+				supplied = tt.httpClient()
+			}
+			client, err := NewClient(Config{
+				BaseURL: endpoint.URL, DeviceID: "dev_test",
+				Credential: "avdc_test", HTTPClient: supplied,
+			})
+			require.NoError(t, err)
+			_, err = client.tokens.token(t.Context())
+			assert.Error(t, err)
+			assert.EqualValues(t, 0, atomic.LoadInt32(&redirected),
+				"redirect target must not receive the device credential")
+		})
+	}
 }
