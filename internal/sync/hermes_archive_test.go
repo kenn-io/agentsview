@@ -515,6 +515,44 @@ func TestReconcileHermesDefaultSessionsRootTombstonesRemovedStateMember(t *testi
 		"authoritative reconciliation must tombstone a removed state.db member")
 }
 
+func TestReconcileHermesConfiguredPolicyKeepsVirtualStateMemberPolicy(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {sessionsDir},
+		},
+		Machine:                "localbox",
+		PreserveMissingSources: true,
+	})
+	t.Cleanup(engine.Close)
+
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{sessionsDir}, false,
+	))
+	stored, err := database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, stored, "initial reconciliation must store the state member")
+
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'child'")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{sessionsDir}, false,
+	))
+	stored, err = database.GetSession(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	assert.Nil(t, stored,
+		"configured preservation must not broaden to Hermes virtual members")
+}
+
 // TestReconcileHermesScopedArchiveTombstonesRemovedStateMember pins
 // aggregate-member authority for a pass scoped to one complete archive: the
 // scope's proof spans the archive's whole state.db membership, so a removed

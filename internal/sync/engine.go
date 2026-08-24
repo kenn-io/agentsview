@@ -6394,9 +6394,6 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 	scopes []reconciliationProviderScope,
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
-	if e.preserveMissingSources {
-		return 0, nil
-	}
 	if e.pathRewriter != nil {
 		// Remote imports rewrite extraction paths to canonical stored paths in
 		// one direction only. Without a stored-to-local inverse, stat and
@@ -6552,6 +6549,10 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							// The container still exists but the streamed pass no
 							// longer yields this member; tombstone directly — the
 							// guards below all assume a vanished stored path.
+							if e.preserveMissingSources &&
+								preserveConfiguredMissingSource(ownership.FilePath) {
+								continue
+							}
 							changed, err := e.tombstoneSessionSourceOwnership(
 								ctx, ownership.Machine, ownership.Agent,
 								ownership.ID, ownership.FilePath,
@@ -6775,6 +6776,10 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 									continue
 								}
 							}
+						}
+						if e.preserveMissingSources &&
+							preserveConfiguredMissingSource(ownership.FilePath) {
+							continue
 						}
 						changed, err := e.tombstoneSessionSourceOwnership(
 							ctx, ownership.Machine, ownership.Agent,
@@ -9800,10 +9805,12 @@ func (e *Engine) collectAndBatchWithOptions(
 		// unchanged survivors are dropped from r.results before this
 		// point, so the source-wide gate would freeze an allowed
 		// member's deletion whenever everything else was unchanged.
-		if len(r.sourceMissingMembers) > 0 &&
-			!e.preserveMissingSources && !options.preserveMissingSources {
+		configuredMissingMembers := configuredSourceMissingMembers(
+			e.preserveMissingSources, r.sourceMissingMembers,
+		)
+		if len(configuredMissingMembers) > 0 && !options.preserveMissingSources {
 			tombstoned, deferred, tombstoneErr := e.reconcileSourceMissingMembers(
-				ctx, r.agent, r.sourceMissingMembers,
+				ctx, r.agent, configuredMissingMembers,
 				baselineExactOwnership, rejectExactOwnership,
 			)
 			stats.Tombstoned += tombstoned
@@ -10321,6 +10328,29 @@ type sourceMissingMember struct {
 	filePath  string
 	machine   string
 	agent     parser.AgentType
+}
+
+// preserveConfiguredMissingSource applies only to physical provider sources.
+// Virtual members identify imported or migrated storage ownership and retain
+// the existing source-missing reconciliation policy.
+func preserveConfiguredMissingSource(filePath string) bool {
+	_, _, virtual := parser.ParseVirtualSourcePath(filePath)
+	return !virtual
+}
+
+func configuredSourceMissingMembers(
+	preserve bool, members []sourceMissingMember,
+) []sourceMissingMember {
+	if !preserve {
+		return members
+	}
+	filtered := make([]sourceMissingMember, 0, len(members))
+	for _, member := range members {
+		if !preserveConfiguredMissingSource(member.filePath) {
+			filtered = append(filtered, member)
+		}
+	}
+	return filtered
 }
 
 type processResult struct {
@@ -19239,11 +19269,14 @@ func (e *Engine) processAndWriteSessionFile(
 	// row as a revivable source-missing tombstone. The cwd-filter
 	// freeze is judged per member against the archived cwd, matching
 	// the batch path.
-	if len(res.sourceMissingMembers) > 0 && !e.preserveMissingSources {
+	configuredMissingMembers := configuredSourceMissingMembers(
+		e.preserveMissingSources, res.sourceMissingMembers,
+	)
+	if len(configuredMissingMembers) > 0 {
 		var exactOwnerships []db.SessionSourceOwnership
 		var rejectedExactOwnerships []db.SessionSourceOwnership
 		tombstoned, _, err := e.reconcileSourceMissingMembers(
-			ctx, file.Agent, res.sourceMissingMembers,
+			ctx, file.Agent, configuredMissingMembers,
 			func(ownership db.SessionSourceOwnership) {
 				exactOwnerships = append(exactOwnerships, ownership)
 			},
