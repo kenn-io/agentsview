@@ -845,6 +845,7 @@
 
   .overlay-toggle :global(.kit-typeahead) {
     flex: 0 0 96px;
+    width: 96px;
   }
 
   .timeline-body {
