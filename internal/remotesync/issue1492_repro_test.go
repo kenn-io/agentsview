@@ -205,6 +205,40 @@ func TestIssue1492VanishedCursorAndVSCodeFilesRemainAuthorized(t *testing.T) {
 	}
 }
 
+func TestIssue1492VanishedVSCodeWorkspaceIsEvictedFromMirror(t *testing.T) {
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "workspaceStorage", "hash")
+	workspace := filepath.Join(workspaceDir, "workspace.json")
+	chat := filepath.Join(workspaceDir, "chatSessions", "01234567-89ab-cdef-0123-456789abcdef.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(chat), 0o755))
+	require.NoError(t, os.WriteFile(workspace, []byte(`{"folder":"/repo"}`), 0o644))
+	require.NoError(t, os.WriteFile(chat, []byte(`{"id":"chat"}`), 0o644))
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentVSCodeCopilot: {root},
+	}}
+	initial := ResolveTargets(cfg)
+	require.Contains(t, initial.Files[parser.AgentVSCodeCopilot], workspace)
+
+	mirror := t.TempDir()
+	mirrorWorkspace, err := safeRemappedRemotePath(mirror, workspace)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(mirrorWorkspace), 0o755))
+	require.NoError(t, os.WriteFile(mirrorWorkspace, []byte("stale"), 0o644))
+	require.NoError(t, os.Remove(workspace))
+	fresh := ResolveTargets(cfg)
+	selected, ok := SelectAllowedFiles(fresh, []string{workspace})
+	require.True(t, ok, "vanished workspace.json must remain authorized")
+	var delta bytes.Buffer
+	require.NoError(t, WriteArchiveFiles(&delta, fresh, selected))
+	assert.Empty(t, archiveEntries(t, delta.Bytes()))
+
+	manifest, err := BuildManifest(fresh)
+	require.NoError(t, err)
+	diff, err := MirrorDiff(mirror, manifest)
+	require.NoError(t, err)
+	assert.Equal(t, []string{mirrorWorkspace}, diff.Deletions)
+}
+
 func TestIssue1492EmptyEditorRootsRemainWithoutEmptyFileTargets(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{filepath.Join(root, "cursor"), filepath.Join(root, "vscode")} {

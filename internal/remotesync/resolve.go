@@ -775,7 +775,7 @@ func kiloLegacySessionFileShape(rel string) bool {
 	return false
 }
 
-// verbatimSessionFileUnderAllowedRoot authorizes a session-shaped file
+// verbatimSessionFileUnderAllowedRoot authorizes a curated file
 // under a verbatim file-scoped agent's still-allowed root when the
 // file itself is absent from the fresh per-request resolution — the
 // deletion race between a client's target fetch and its next request.
@@ -824,6 +824,10 @@ func sessionFileShape(agent parser.AgentType, rel string) bool {
 		return ok
 	case parser.AgentVSCodeCopilot:
 		parts := strings.Split(rel, "/")
+		if len(parts) == 3 && parts[0] == "workspaceStorage" &&
+			parts[1] != "" && parts[2] == "workspace.json" {
+			return true
+		}
 		if len(parts) == 4 && parts[0] == "workspaceStorage" &&
 			parts[2] == "chatSessions" {
 			return parser.IsValidSessionID(strings.TrimSuffix(parts[3], filepath.Ext(parts[3]))) &&
