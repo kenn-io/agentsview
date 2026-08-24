@@ -192,15 +192,22 @@ func forEachT3ThreadMetaQuery(
 	return rows.Err()
 }
 
-// t3LatestNanos returns the latest of the given ISO-8601 timestamps as Unix
-// nanoseconds, or 0 when none parses.
-func t3LatestNanos(values ...string) int64 {
+// t3LatestTime returns the latest of the given ISO-8601 timestamps, or the
+// zero time when none parses.
+func t3LatestTime(values ...string) time.Time {
 	var latest time.Time
 	for _, v := range values {
 		if ts := parseTimestamp(v); !ts.IsZero() && ts.After(latest) {
 			latest = ts
 		}
 	}
+	return latest
+}
+
+// t3LatestNanos returns the latest of the given ISO-8601 timestamps as Unix
+// nanoseconds, or 0 when none parses.
+func t3LatestNanos(values ...string) int64 {
+	latest := t3LatestTime(values...)
 	if latest.IsZero() {
 		return 0
 	}
@@ -651,7 +658,12 @@ func buildT3ParseResult(
 	}
 
 	startedAt := parseTimestamp(row.createdAt)
-	endedAt := parseTimestamp(row.updatedAt)
+	// A message can carry a timestamp past the thread's updated_at (the
+	// defensive case the change token covers), so session activity ends at
+	// the latest of the thread's and its messages' stamps. Project stamps
+	// stay out: a workspace rename is not conversation activity, so they
+	// feed only the change token below.
+	endedAt := t3LatestTime(row.updatedAt, stamps.maxCreated, stamps.maxUpdated)
 	if startedAt.IsZero() {
 		startedAt = endedAt
 	} else if endedAt.IsZero() {

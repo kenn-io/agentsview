@@ -371,6 +371,13 @@ func TestT3ThreadMetaTracksNewestActivity(t *testing.T) {
 	mtime, err := T3SourceMtime(metas[0].VirtualPath)
 	require.NoError(t, err)
 	assert.Equal(t, want, mtime)
+
+	// A message past the thread's updated_at also ends the session there --
+	// otherwise activity ordering and date windows would go stale for exactly
+	// the writes the change token was built to see.
+	results := parseT3All(t, dbPath, "testbox")
+	require.Len(t, results, 1)
+	assert.Equal(t, want, results[0].Session.EndedAt.UnixNano())
 }
 
 // An in-place edit bumps only the message's updated_at. The discovery token
@@ -396,6 +403,8 @@ func TestT3ChangeTokenSeesInPlaceMessageEdits(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Equal(t, want, results[0].Session.File.Mtime,
 		"the parse must persist the same change token discovery computed")
+	// An edit is conversation activity, so it also moves the session's end.
+	assert.Equal(t, want, results[0].Session.EndedAt.UnixNano())
 }
 
 // A workspace-root change surfaces only through the project row's updated_at,
@@ -419,6 +428,10 @@ func TestT3ChangeTokenSeesProjectChanges(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Equal(t, want, results[0].Session.File.Mtime,
 		"the parse must persist the same change token discovery computed")
+	// A workspace rename is not conversation activity: it advances the change
+	// token but must not move the session's end.
+	assert.Equal(t, parseTimestamp(spec.threads[0].updatedAt).UnixNano(),
+		results[0].Session.EndedAt.UnixNano())
 }
 
 // The dropped-row rule: an empty message never reaches the transcript, but its
