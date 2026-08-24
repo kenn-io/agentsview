@@ -424,6 +424,44 @@ type UnitOffset struct {
 	ByteStart int `json:"b"`
 }
 
+// SoftDeletedSessionIDs returns the subset of ids whose retained session row
+// is soft-deleted. Hard-deleted sessions have no row and are not returned.
+func (db *DB) SoftDeletedSessionIDs(
+	ctx context.Context, ids []string,
+) (map[string]struct{}, error) {
+	deleted := make(map[string]struct{})
+	err := queryChunked(ids, func(chunk []string) error {
+		placeholders, args := inPlaceholders(chunk)
+		rows, err := db.getReader().QueryContext(ctx,
+			"SELECT id FROM sessions WHERE deleted_at IS NOT NULL AND id IN "+placeholders,
+			args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying soft-deleted sessions: %w", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning soft-deleted session id: %w", err)
+			}
+			deleted[id] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterating soft-deleted session ids: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing soft-deleted session ids: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return deleted, nil
+}
+
 // ScanEmbeddableUnits streams the embeddable universe — user/assistant
 // messages that are not is_system and not system-prefixed (per
 // SystemPrefixSQL) — reducing contiguous runs of

@@ -94,6 +94,145 @@ type BuildResult struct {
 	Fill        kitvec.FillStats
 }
 
+type softDeletedSessionSource interface {
+	SoftDeletedSessionIDs(
+		ctx context.Context, sessionIDs []string,
+	) (map[string]struct{}, error)
+}
+
+// softDeletedPendingStore keeps soft-deleted transcript content out of the
+// encoder. It omits deleted documents from each pending page without stamping
+// them, then Build prunes those mirror rows after active documents finish.
+// Already-covered documents never enter PendingForGeneration and therefore
+// keep their existing vectors during ordinary and backstop builds.
+type softDeletedPendingStore struct {
+	kitvec.Store[string, string]
+	ix      *Index
+	source  softDeletedSessionSource
+	skipped map[string]string // doc key -> session id
+}
+
+func (s *softDeletedPendingStore) PendingForGeneration(
+	ctx context.Context, gen string, limit int,
+) ([]kitvec.Pending[string], error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	pending, err := s.Store.PendingForGeneration(ctx, gen, limit+len(s.skipped))
+	if err != nil || len(pending) == 0 {
+		return pending, err
+	}
+
+	docSessions, sessionIDs, err := s.sessionsForPending(ctx, pending)
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := s.source.SoftDeletedSessionIDs(ctx, sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("classifying pending soft-deleted sessions: %w", err)
+	}
+
+	eligible := make([]kitvec.Pending[string], 0, min(limit, len(pending)))
+	for _, p := range pending {
+		sessionID := docSessions[p.Doc]
+		if _, ok := deleted[sessionID]; ok {
+			s.skipped[p.Doc] = sessionID
+			continue
+		}
+		delete(s.skipped, p.Doc)
+		eligible = append(eligible, p)
+		if len(eligible) == limit {
+			break
+		}
+	}
+	return eligible, nil
+}
+
+func (s *softDeletedPendingStore) sessionsForPending(
+	ctx context.Context, pending []kitvec.Pending[string],
+) (map[string]string, []string, error) {
+	keys := make([]string, len(pending))
+	for i, p := range pending {
+		keys[i] = p.Doc
+	}
+	docSessions := make(map[string]string, len(keys))
+	if err := chunkKeys(keys, func(chunk []string) error {
+		placeholders, args := inPlaceholders(chunk)
+		rows, err := s.ix.db.QueryContext(ctx,
+			`SELECT doc_key, session_id FROM `+s.ix.spec.DocsTable+
+				` WHERE doc_key IN `+placeholders,
+			args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying pending document sessions: %w", err)
+		}
+		for rows.Next() {
+			var key, sessionID string
+			if err := rows.Scan(&key, &sessionID); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning pending document session: %w", err)
+			}
+			docSessions[key] = sessionID
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterating pending document sessions: %w", err)
+		}
+		return rows.Close()
+	}); err != nil {
+		return nil, nil, err
+	}
+
+	seen := make(map[string]struct{}, len(docSessions))
+	sessionIDs := make([]string, 0, len(docSessions))
+	for _, p := range pending {
+		sessionID, ok := docSessions[p.Doc]
+		if !ok {
+			return nil, nil, fmt.Errorf("pending document %s has no mirror session", p.Doc)
+		}
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	return docSessions, sessionIDs, nil
+}
+
+func (s *softDeletedPendingStore) pruneSkipped(ctx context.Context) (int, error) {
+	if len(s.skipped) == 0 {
+		return 0, nil
+	}
+	sessionIDs := make([]string, 0, len(s.skipped))
+	seen := make(map[string]struct{}, len(s.skipped))
+	for _, sessionID := range s.skipped {
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	deleted, err := s.source.SoftDeletedSessionIDs(ctx, sessionIDs)
+	if err != nil {
+		return 0, fmt.Errorf("rechecking skipped soft-deleted sessions: %w", err)
+	}
+
+	var pruned int
+	for key, sessionID := range s.skipped {
+		if _, ok := deleted[sessionID]; !ok {
+			continue
+		}
+		removed, err := s.ix.deleteMirrorDocument(ctx, key)
+		if err != nil {
+			return pruned, fmt.Errorf("pruning unembedded soft-deleted document %s: %w", key, err)
+		}
+		if removed {
+			pruned++
+		}
+	}
+	return pruned, nil
+}
+
 // Build runs one embedding pass against gen (the desired vector space, from
 // config: Model, Dimensions, and the fingerprinted Params — max_input_chars,
 // doc_unit_scheme, and chunk_overlap_chars; see vectorGeneration in
@@ -186,10 +325,18 @@ func (ix *Index) Build(
 	}
 
 	wrapped, finish := ix.wrapProgress(validatingEncoder(enc), total, o.Progress)
-	fillStore := &repairQueueCompletingStore{
+	var fillStore kitvec.Store[string, string] = &repairQueueCompletingStore{
 		Store: ix.store,
 		db:    ix.db,
 		spec:  ix.spec,
+	}
+	var deletedStore *softDeletedPendingStore
+	if source, ok := src.(softDeletedSessionSource); ok {
+		deletedStore = &softDeletedPendingStore{
+			Store: fillStore, ix: ix, source: source,
+			skipped: make(map[string]string),
+		}
+		fillStore = deletedStore
 	}
 	fillStats, fillErr := kitvec.Fill[string, string](ctx, fillStore, target, wrapped,
 		kitvec.WithFillSplit[string](ix.split),
@@ -209,6 +356,13 @@ func (ix *Index) Build(
 	result.Fill = fillStats
 	if fillErr != nil {
 		return result, fillErr
+	}
+	if deletedStore != nil {
+		pruned, err := deletedStore.pruneSkipped(ctx)
+		if err != nil {
+			return result, err
+		}
+		result.Refresh.Deleted += pruned
 	}
 
 	activated, err := ix.maybeActivate(ctx, target, wasBuilding)

@@ -124,7 +124,9 @@ func TestSearchContentSemanticAndHybridRetainSoftDeletedVectors(t *testing.T) {
 		dbtest.UserMsg("deleted-session", 0, "archived vector content"),
 	}, dbtest.WithMessageCounts(2, 2))
 
+	var encoded []string
 	enc := func(_ context.Context, texts []string) ([][]float32, error) {
+		encoded = append(encoded, texts...)
 		out := make([][]float32, len(texts))
 		for i := range texts {
 			out[i] = []float32{1, 0, 0}
@@ -148,8 +150,10 @@ func TestSearchContentSemanticAndHybridRetainSoftDeletedVectors(t *testing.T) {
 	assert.Equal(t, "deleted-session", active.Matches[0].SessionID)
 
 	require.NoError(t, d.SoftDeleteSession("deleted-session"))
+	encoded = nil
 	_, err = ix.Build(ctx, d, enc, gen, vector.BuildOptions{Backstop: true})
 	require.NoError(t, err)
+	assert.Empty(t, encoded, "a backstop must reuse the existing deleted-session vector")
 
 	for _, mode := range []string{"semantic", "hybrid"} {
 		t.Run(mode, func(t *testing.T) {
@@ -172,4 +176,60 @@ func TestSearchContentSemanticAndHybridRetainSoftDeletedVectors(t *testing.T) {
 			assert.Equal(t, "deleted-session", withDeleted.Matches[0].SessionID)
 		})
 	}
+
+	dbtest.SeedSessionWithMessages(t, d, "active-session", "proj", []db.Message{
+		dbtest.UserMsg("active-session", 0, "new active vector content"),
+	}, dbtest.WithMessageCounts(2, 2))
+	encoded = nil
+	nextGen := kitvec.Generation{Model: "next-fake-model", Dimensions: 3}
+	result, err := ix.Build(ctx, d, enc, nextGen, vector.BuildOptions{Backstop: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"new active vector content"}, encoded,
+		"a new generation must not re-embed deleted transcript content")
+	assert.Equal(t, 1, result.Fill.Documents)
+}
+
+func TestVectorBuildDoesNotEncodeAlreadyDeletedSessions(t *testing.T) {
+	ctx := context.Background()
+	d := dbtest.OpenTestDB(t)
+	for _, session := range []struct {
+		id, content string
+	}{
+		{id: "active-session", content: "active vector content"},
+		{id: "deleted-session", content: "deleted vector content"},
+	} {
+		dbtest.SeedSessionWithMessages(t, d, session.id, "proj", []db.Message{
+			dbtest.UserMsg(session.id, 0, session.content),
+		}, dbtest.WithMessageCounts(2, 2))
+	}
+	require.NoError(t, d.SoftDeleteSession("deleted-session"))
+
+	var encoded []string
+	enc := func(_ context.Context, texts []string) ([][]float32, error) {
+		encoded = append(encoded, texts...)
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+
+	ix, err := vector.Open(ctx, filepath.Join(t.TempDir(), "vectors.db"), false, 4000)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, ix.Close()) }()
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
+	result, err := ix.Build(ctx, d, enc, gen, vector.BuildOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"active vector content"}, encoded,
+		"the encoder must receive active content and never deleted content")
+	assert.Equal(t, 1, result.Fill.Documents)
+
+	d.SetVectorSearcher(vectorIndexSearcher{ix: ix, enc: enc})
+	page, err := d.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern: "unrelated query", Mode: "semantic",
+		IncludeDeleted: true, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "active-session", page.Matches[0].SessionID)
 }

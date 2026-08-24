@@ -1080,7 +1080,10 @@ requires auth, or `--pg` to read from configured PostgreSQL.
 When that hides matching sessions on the first page, it reports the counts and
 the corresponding `--include-one-shot` or `--include-automated` flags on stderr.
 Use `--include-deleted` to include retained soft-deleted sessions; permanently
-excluded sessions remain hidden.
+excluded sessions remain hidden. Semantic and hybrid searches reuse only
+vectors created before deletion. Agentsview does not send an already deleted
+transcript to the configured embedding server, so those modes omit a deleted
+session when it has no compatible existing vector.
 Stdout, including `--format json`, keeps its existing shape for pipelines.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from
