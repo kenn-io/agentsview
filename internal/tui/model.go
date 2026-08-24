@@ -47,6 +47,8 @@ type model struct {
 	findMatches                                        []int
 	findIndex                                          int
 	pageData                                           PageData
+	pageCache                                          map[Page]PageData
+	reportCache                                        map[Page]renderedReport
 	open                                               func(string) error
 	theme, messageLayout                               string
 	highContrast                                       bool
@@ -54,11 +56,19 @@ type model struct {
 	renderedMessages                                   map[int]renderedMessage
 	sessionLoadGeneration                              uint64
 	cancelSessionLoad                                  context.CancelFunc
+	cancelPageLoad                                     context.CancelFunc
 }
 
 type renderedMessage struct {
 	content, rendered, theme, layout string
 	width                            int
+}
+
+type renderedReport struct {
+	selected                              int
+	theme, messageLayout                  string
+	highContrast, showThinking, showTools bool
+	lines                                 []string
 }
 
 type sessionsLoadedMsg struct {
@@ -95,6 +105,7 @@ type findLoadedMsg struct {
 
 type pageLoadedMsg struct {
 	generation uint64
+	page       Page
 	data       PageData
 	err        error
 }
@@ -156,6 +167,7 @@ func newModel(ctx context.Context, client DataClient, opts Options) *model {
 		open: opts.Open, theme: state.Theme, messageLayout: state.MessageLayout,
 		highContrast: state.HighContrast,
 		showThinking: !state.HideThinking, showTools: !state.HideTools,
+		pageCache: make(map[Page]PageData), reportCache: make(map[Page]renderedReport),
 	}
 	m.input = textinput.New()
 	m.input.CharLimit = 4096
@@ -274,6 +286,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.errText, m.pageData = "", msg.data
+		m.pageCache[msg.page] = msg.data
+		delete(m.reportCache, msg.page)
 		if msg.data.Settings != nil {
 			m.readOnly = msg.data.Settings.ReadOnly
 		}
@@ -297,7 +311,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitEventCmd(msg.events)
 	case eventMsg:
-		if msg.event.Event != "data_changed" {
+		if msg.event.Event != "data_changed" || m.page != PageSessions {
 			return m, waitEventCmd(msg.events)
 		}
 		return m, tea.Batch(m.loadCurrent(), waitEventCmd(msg.events))
@@ -850,7 +864,7 @@ func (m *model) switchPage(page Page) (tea.Model, tea.Cmd) {
 	if page != PageSessions {
 		m.stopSessionLoad()
 	}
-	m.pageData = PageData{}
+	m.pageData = m.pageCache[page]
 	for i, candidate := range pages {
 		if candidate == page {
 			m.navIndex = i
@@ -903,13 +917,16 @@ func (m *model) previousPage() (tea.Model, tea.Cmd) {
 }
 
 func (m *model) loadCurrent() tea.Cmd {
+	m.stopPageLoad()
+	loadCtx, cancel := context.WithCancel(m.ctx)
+	m.cancelPageLoad = cancel
 	m.generation++
 	gen := m.generation
 	m.loading, m.errText = true, ""
 	if m.page == PageSessions {
 		filter, query, cursor := m.filter, m.query.Search, m.searchCursor
 		return func() tea.Msg {
-			ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
+			ctx, cancel := context.WithTimeout(loadCtx, 30*time.Second)
 			defer cancel()
 			if query != "" {
 				result, err := m.client.Search(ctx, service.SearchRequest{Query: query, Project: filter.Project, Cursor: cursor, Limit: 100})
@@ -921,10 +938,17 @@ func (m *model) loadCurrent() tea.Cmd {
 	}
 	page, query := m.page, m.query
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
+		ctx, cancel := context.WithTimeout(loadCtx, 30*time.Second)
 		defer cancel()
 		data, err := m.client.LoadPage(ctx, page, query)
-		return pageLoadedMsg{generation: gen, data: data, err: err}
+		return pageLoadedMsg{generation: gen, page: page, data: data, err: err}
+	}
+}
+
+func (m *model) stopPageLoad() {
+	if m.cancelPageLoad != nil {
+		m.cancelPageLoad()
+		m.cancelPageLoad = nil
 	}
 }
 
@@ -1146,28 +1170,43 @@ func (m *model) pageHasSelection() bool {
 }
 
 func (m *model) reportLineCount() int {
+	return len(m.reportLines())
+}
+
+func (m *model) reportLines() []string {
+	if cached, ok := m.reportCache[m.page]; ok &&
+		cached.selected == m.selected && cached.theme == m.theme &&
+		cached.highContrast == m.highContrast && cached.messageLayout == m.messageLayout &&
+		cached.showThinking == m.showThinking && cached.showTools == m.showTools {
+		return cached.lines
+	}
+	var lines []string
 	switch m.page {
 	case PageDashboard:
-		return len(m.analyticsLines())
+		lines = m.analyticsLines()
 	case PageUsage:
-		return len(m.usageLines())
+		lines = m.usageLines()
 	case PageActivity:
-		return len(m.activityLines())
+		lines = m.activityLines()
 	case PageTrends:
-		return len(m.trendsLines())
+		lines = m.trendsLines()
 	case PageInsights:
-		return len(m.insightLines())
+		lines = m.insightLines()
 	case PagePinned:
-		return len(m.pinLines())
+		lines = m.pinLines()
 	case PageTrash:
-		return len(m.trashLines())
+		lines = m.trashLines()
 	case PageRecentEdits:
-		return len(m.recentEditLines())
+		lines = m.recentEditLines()
 	case PageSettings:
-		return len(m.settingsLines())
-	default:
-		return 0
+		lines = m.settingsLines()
 	}
+	m.reportCache[m.page] = renderedReport{
+		selected: m.selected, theme: m.theme, highContrast: m.highContrast,
+		messageLayout: m.messageLayout, showThinking: m.showThinking,
+		showTools: m.showTools, lines: lines,
+	}
+	return lines
 }
 func (m *model) setSelection(i int) { m.selected = clamp(i, 0, m.itemCount()-1) }
 func (m *model) clampSelection()    { m.setSelection(m.selected) }

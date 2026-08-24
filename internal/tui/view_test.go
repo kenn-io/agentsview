@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -95,6 +96,49 @@ func TestTranscriptRenderWorkIsBoundedByViewport(t *testing.T) {
 		"100x more off-screen tool output must keep per-redraw work bounded")
 }
 
+func TestCachedReportRenderWorkIsBoundedByResultSize(t *testing.T) {
+	makeModel := func(rowCount int) *model {
+		m := newModel(context.Background(), &fakeDataClient{}, Options{})
+		m.width, m.height, m.focus, m.page = 100, 30, 1, PageActivity
+		m.pageData.Activity = &activity.Report{BySession: make([]activity.SessionRow, rowCount)}
+		for i := range m.pageData.Activity.BySession {
+			m.pageData.Activity.BySession[i] = activity.SessionRow{
+				SessionID: fmt.Sprintf("session-%d", i),
+				Title:     fmt.Sprintf("Session %d", i),
+			}
+		}
+		_ = m.View()
+		return m
+	}
+	small := makeModel(100)
+	large := makeModel(10_000)
+
+	smallAllocs := testing.AllocsPerRun(3, func() { _ = small.View() })
+	largeAllocs := testing.AllocsPerRun(3, func() { _ = large.View() })
+
+	assert.Less(t, largeAllocs, smallAllocs*2,
+		"100x more cached off-screen report rows must keep per-redraw work bounded")
+}
+
+func TestPageLoadInvalidatesCachedReport(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.width, m.height, m.focus, m.page, m.generation = 100, 30, 1, PageActivity, 1
+	m.pageData.Activity = &activity.Report{BySession: []activity.SessionRow{{Title: "old row"}}}
+	assert.Contains(t, m.View().Content, "old row")
+
+	next, _ := m.Update(pageLoadedMsg{
+		generation: 1,
+		page:       PageActivity,
+		data: PageData{Activity: &activity.Report{
+			BySession: []activity.SessionRow{{Title: "new row"}},
+		}},
+	})
+
+	view := next.(*model).View().Content
+	assert.Contains(t, view, "new row")
+	assert.NotContains(t, view, "old row")
+}
+
 func BenchmarkModelViewLongTranscript(b *testing.B) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
 	m.width, m.height, m.focus = 160, 50, 2
@@ -130,6 +174,26 @@ func BenchmarkModelViewToolResult(b *testing.B) {
 					ToolName: "Read", ResultContent: strings.Repeat("tool result\n", lineCount),
 				}},
 			}}
+			_ = m.View()
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				benchmarkViewContent = m.View().Content
+			}
+		})
+	}
+}
+
+func BenchmarkModelViewCachedActivityReport(b *testing.B) {
+	for _, rowCount := range []int{100, 10_000} {
+		b.Run(fmt.Sprintf("rows-%d", rowCount), func(b *testing.B) {
+			m := newModel(context.Background(), &fakeDataClient{}, Options{})
+			m.width, m.height, m.focus, m.page = 100, 30, 1, PageActivity
+			m.pageData.Activity = &activity.Report{BySession: make([]activity.SessionRow, rowCount)}
+			for i := range m.pageData.Activity.BySession {
+				m.pageData.Activity.BySession[i].Title = fmt.Sprintf("Session %d", i)
+			}
 			_ = m.View()
 
 			b.ReportAllocs()

@@ -419,27 +419,7 @@ func renderMarkdown(raw string, width int, theme string) string {
 }
 
 func (m *model) renderReport(width, height int) string {
-	var lines []string
-	switch m.page {
-	case PageDashboard:
-		lines = m.analyticsLines()
-	case PageUsage:
-		lines = m.usageLines()
-	case PageActivity:
-		lines = m.activityLines()
-	case PageTrends:
-		lines = m.trendsLines()
-	case PageInsights:
-		lines = m.insightLines()
-	case PagePinned:
-		lines = m.pinLines()
-	case PageTrash:
-		lines = m.trashLines()
-	case PageRecentEdits:
-		lines = m.recentEditLines()
-	case PageSettings:
-		lines = m.settingsLines()
-	}
+	lines := m.reportLines()
 	if m.loading && len(lines) == 0 {
 		lines = []string{m.strings.Loading}
 	}

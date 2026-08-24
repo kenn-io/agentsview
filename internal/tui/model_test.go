@@ -25,6 +25,7 @@ type fakeDataClient struct {
 	getSessionFn    func(context.Context, string) (*service.SessionDetail, error)
 	sessionExtrasFn func(context.Context, string) (SessionExtras, error)
 	messagesFn      func(context.Context, string, service.MessageFilter) (*service.MessageList, error)
+	loadPageFn      func(context.Context, Page, PageQuery) (PageData, error)
 }
 
 func (f *fakeDataClient) ListSessions(context.Context, service.ListFilter) (*service.SessionList, error) {
@@ -111,7 +112,11 @@ func TestNextMessageFromContinuesFullPages(t *testing.T) {
 func (*fakeDataClient) Search(context.Context, service.SearchRequest) (*service.SessionSearchResult, error) {
 	return &service.SessionSearchResult{}, nil
 }
-func (f *fakeDataClient) LoadPage(context.Context, Page, PageQuery) (PageData, error) {
+
+func (f *fakeDataClient) LoadPage(ctx context.Context, page Page, query PageQuery) (PageData, error) {
+	if f.loadPageFn != nil {
+		return f.loadPageFn(ctx, page, query)
+	}
 	return f.page, nil
 }
 func (f *fakeDataClient) Mutate(_ context.Context, mutation Mutation) (string, error) {
@@ -145,6 +150,22 @@ func TestModelDoesNotReloadForServerHeartbeat(t *testing.T) {
 
 	next, command := m.Update(eventMsg{
 		event:  ServerEvent{Event: "heartbeat", Data: "2026-08-19T00:00:00Z"},
+		events: events,
+	})
+
+	require.NotNil(t, command)
+	assert.Equal(t, uint64(4), next.(*model).generation)
+	assert.False(t, next.(*model).loading)
+}
+
+func TestReportPageDoesNotReloadForDataChangedEvent(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.page = PageDashboard
+	m.generation = 4
+	events := make(chan ServerEvent)
+
+	next, command := m.Update(eventMsg{
+		event:  ServerEvent{Event: "data_changed", Data: `{"scope":"messages"}`},
 		events: events,
 	})
 
@@ -314,6 +335,73 @@ func TestReportPagesScrollWithoutSessionRows(t *testing.T) {
 
 	require.Nil(t, command)
 	assert.Equal(t, 1, next.(*model).scroll)
+}
+
+func TestSwitchPageKeepsCachedContentVisibleDuringRefresh(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.width, m.height = 100, 30
+	m.page, m.generation = PageDashboard, 2
+
+	next, _ := m.Update(pageLoadedMsg{
+		generation: 2,
+		page:       PageDashboard,
+		data: PageData{Analytics: &db.AnalyticsSummary{
+			TotalSessions: 73,
+		}},
+	})
+	m = next.(*model)
+	_, _ = m.switchPage(PageUsage)
+	next, command := m.switchPage(PageDashboard)
+	m = next.(*model)
+
+	require.NotNil(t, command)
+	assert.True(t, m.loading)
+	report := m.renderReport(80, 20)
+	assert.Contains(t, report, "73")
+	assert.NotContains(t, report, m.strings.Loading)
+}
+
+func TestSwitchPageCancelsPreviousPageLoad(t *testing.T) {
+	started := make(chan struct{}, 1)
+	canceled := make(chan struct{}, 1)
+	fake := &fakeDataClient{
+		loadPageFn: func(ctx context.Context, page Page, _ PageQuery) (PageData, error) {
+			if page == PageDashboard {
+				started <- struct{}{}
+				<-ctx.Done()
+				canceled <- struct{}{}
+				return PageData{}, ctx.Err()
+			}
+			return PageData{}, nil
+		},
+	}
+	m := newModel(context.Background(), fake, Options{})
+	m.page = PageDashboard
+	first := m.loadCurrent()
+	done := make(chan struct{})
+	go func() {
+		_ = first()
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "dashboard load did not start")
+	}
+
+	_, second := m.switchPage(PageUsage)
+
+	require.NotNil(t, second)
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "dashboard load was not canceled")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "canceled dashboard load did not return")
+	}
 }
 
 func TestAnalyticsLinesIgnoreNilAgentRows(t *testing.T) {
