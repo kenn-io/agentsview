@@ -797,6 +797,9 @@ func verbatimSessionFileUnderAllowedRoot(
 	if !isAbsRemotePath(file) {
 		return false
 	}
+	if _, err := os.Lstat(file); err == nil || !os.IsNotExist(err) {
+		return false
+	}
 	if _, err := safeRemotePathArchiveName(file); err != nil {
 		return false
 	}

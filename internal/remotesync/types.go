@@ -151,6 +151,9 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 	dirScoped.ForbiddenRoots = append([]string(nil), t.ForbiddenRoots...)
 	fileScoped.ForbiddenRoots = append([]string(nil), t.ForbiddenRoots...)
 	for agent, dirs := range t.Dirs {
+		if emptyCuratedFileScopedAgent(agent, t.Files[agent]) {
+			continue
+		}
 		if _, ok := t.Files[agent]; ok &&
 			!verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 			if fileScoped.Dirs == nil {
@@ -165,6 +168,9 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 		dirScoped.Dirs[agent] = dirs
 	}
 	for agent, files := range t.Files {
+		if emptyCuratedFileScopedAgent(agent, files) {
+			continue
+		}
 		target := &fileScoped
 		if verbatimFileScopedAgent(agent) || snapshotFileScopedAgent(agent) {
 			target = &dirScoped
@@ -187,6 +193,11 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 		target.ProviderExtraFiles[agent] = files
 	}
 	return dirScoped, fileScoped
+}
+
+func emptyCuratedFileScopedAgent(agent parser.AgentType, files []string) bool {
+	return len(files) == 0 &&
+		(agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot)
 }
 
 // DeltaAllowedRoots returns the trusted base paths a delta-archive file
