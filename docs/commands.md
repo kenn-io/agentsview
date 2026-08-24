@@ -1079,6 +1079,8 @@ requires auth, or `--pg` to read from configured PostgreSQL.
 `agentsview session list` excludes one-shot and automated sessions by default.
 When that hides matching sessions on the first page, it reports the counts and
 the corresponding `--include-one-shot` or `--include-automated` flags on stderr.
+Use `--include-deleted` to include retained soft-deleted sessions; permanently
+excluded sessions remain hidden.
 Stdout, including `--format json`, keeps its existing shape for pipelines.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json/v2"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mattn/go-runewidth"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -38,11 +40,38 @@ func TestSessionSearchSinceMutuallyExclusiveWithActiveSince(t *testing.T) {
 }
 
 func TestSessionSearchIncludeDeletedFlag(t *testing.T) {
-	cmd := newSessionSearchCommand()
-	cmd.SetArgs([]string{"--help"})
-	err := cmd.Execute()
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "search-active", project: "proj"},
+		sessionSeed{id: "search-deleted", project: "proj"},
+	)
+	seedSearchMessage(t, dataDir, "search-active", "needle active")
+	seedSearchMessage(t, dataDir, "search-deleted", "needle deleted")
+	conn, err := sql.Open("sqlite3", filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
-	assert.Contains(t, cmd.Flag("include-deleted").Usage, "soft-deleted")
+	_, err = conn.Exec("UPDATE sessions SET deleted_at = ? WHERE id = ?",
+		"2026-05-21T00:00:00Z", "search-deleted")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	defaultOut, err := executeCommand(newRootCommand(),
+		"session", "search", "needle", "--format", "json")
+	require.NoError(t, err)
+	defaultResult := decodeCLIJSON[service.ContentSearchResult](t, defaultOut)
+	assert.Equal(t, []string{"search-active"}, searchMatchIDs(defaultResult.Matches))
+	withDeletedOut, err := executeCommand(newRootCommand(),
+		"session", "search", "needle", "--include-deleted", "--format", "json")
+	require.NoError(t, err)
+	withDeletedResult := decodeCLIJSON[service.ContentSearchResult](t, withDeletedOut)
+	assert.ElementsMatch(t, []string{"search-active", "search-deleted"},
+		searchMatchIDs(withDeletedResult.Matches))
+}
+
+func searchMatchIDs(matches []db.ContentMatch) []string {
+	ids := make([]string, len(matches))
+	for i := range matches {
+		ids[i] = matches[i].SessionID
+	}
+	return ids
 }
 
 func TestSessionSearchSinceRejectsInvalidFormat(t *testing.T) {

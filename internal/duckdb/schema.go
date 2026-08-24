@@ -13,9 +13,10 @@ import (
 // SchemaVersion is the version of the DuckDB mirror schema created by
 // createSchema. The mirror schema is create-only: there are no in-place
 // migrations between versions. A version mismatch means the mirror file
-// must be rebuilt with 'agentsview duckdb push --full'. v11 adds the raw GenAI
-// pricing document on top of v10's usage-accounting rebuild boundary.
-const SchemaVersion = 11
+// must be rebuilt with 'agentsview duckdb push --full'. v12 adds the
+// permanently-excluded session catalog needed by opt-in deleted-session
+// queries on top of v11's raw GenAI pricing document.
+const SchemaVersion = 12
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -708,6 +709,17 @@ var mirrorTables = []tableSpec{
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_secret_findings_session ON secret_findings(session_id)",
 			"CREATE INDEX IF NOT EXISTS idx_secret_findings_rule ON secret_findings(rule_name)",
+		},
+	},
+	{
+		name: "excluded_sessions",
+		create: `CREATE TABLE IF NOT EXISTS excluded_sessions (
+			id TEXT PRIMARY KEY,
+			created_at TIMESTAMP
+		)`,
+		columns: []columnSpec{
+			{"id", "id TEXT"},
+			{"created_at", "created_at TIMESTAMP"},
 		},
 	},
 	{

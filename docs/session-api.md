@@ -273,6 +273,7 @@ therefore appear on both dates.
 | `--include-one-shot`  | `include_one_shot`  | bool                              |
 | `--include-automated` | `include_automated` | bool                              |
 | `--include-children`  | `include_children`  | bool                              |
+| `--include-deleted`   | `include_deleted`   | bool; include retained soft-deleted sessions |
 | `--outcome`           | `outcome`           | comma-separated                   |
 | `--health-grade`      | `health_grade`      | comma-separated                   |
 | `--min-tool-failures` | `min_tool_failures` | int; `0` is a meaningful filter   |
@@ -586,7 +587,8 @@ agentsview session search <pattern> [flags]
 
 One-shot, automated, and subagent sessions are excluded by
 default; opt back in with `--include-one-shot`,
-`--include-automated`, or `--include-children`.
+`--include-automated`, or `--include-children`. Retained soft-deleted
+sessions are excluded by default and require `--include-deleted`.
 
 | Flag                  | HTTP param          | Notes                                                  |
 |-----------------------|---------------------|--------------------------------------------------------|
@@ -612,6 +614,7 @@ default; opt back in with `--include-one-shot`,
 | `--include-children`  | `include_children`  | bool                                                   |
 | `--include-automated` | `include_automated` | bool                                                   |
 | `--include-one-shot`  | `include_one_shot`  | bool                                                   |
+| `--include-deleted`   | `include_deleted`   | bool; include retained soft-deleted sessions          |
 | `--limit`             | `limit`             | int; default 50, max 500                               |
 | `--cursor`            | `cursor`            | int — pagination cursor from a previous response       |
 

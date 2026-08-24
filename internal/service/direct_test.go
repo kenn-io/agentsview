@@ -643,6 +643,78 @@ func TestDirectBackend_List_TimezoneValidationAndUTCDefault(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
 }
 
+func TestDirectBackend_IncludeDeletedReachesListAndSearch(t *testing.T) {
+	dir := dbtest.MkdirTempWithCleanup(t, "agentsview-direct-include-deleted-")
+	path := filepath.Join(dir, "sessions.db")
+	dbtest.EnsureTestDBAt(t, path)
+	d := dbtest.OpenTestDBAt(t, path)
+	env := &directTestEnv{db: d}
+	svc := service.NewDirectBackend(d, nil)
+	for _, id := range []string{"direct-active", "direct-deleted"} {
+		dbtest.SeedSession(t, env.db, id, "proj", func(s *db.Session) {
+			s.MessageCount = 2
+			s.UserMessageCount = 2
+			if id == "direct-deleted" {
+				s.DeletedAt = dbtest.Ptr("2026-05-21T00:00:00Z")
+			}
+		})
+		require.NoError(t, env.db.ReplaceSessionMessages(id, []db.Message{
+			{SessionID: id, Ordinal: 0, Role: "user", Content: "needle " + id,
+				Timestamp: "2026-05-20T12:00:00Z"},
+			{SessionID: id, Ordinal: 1, Role: "assistant", Content: "reply",
+				Timestamp: "2026-05-20T12:00:01Z"},
+		}))
+	}
+	require.NoError(t, d.Close())
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = conn.Exec("UPDATE sessions SET deleted_at = ? WHERE id = ?",
+		"2026-05-21T00:00:00Z", "direct-deleted")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	d = dbtest.OpenTestDBAt(t, path)
+	env.db = d
+	svc = service.NewDirectBackend(d, nil)
+	defaultList, err := svc.List(context.Background(), service.ListFilter{Limit: 50})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"direct-active"}, directSessionIDs(defaultList.Sessions))
+	withDeleted, err := svc.List(context.Background(), service.ListFilter{
+		IncludeDeleted: true, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"direct-active", "direct-deleted"},
+		directSessionIDs(withDeleted.Sessions))
+
+	defaultSearch, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "needle", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"direct-active"}, directMatchIDs(defaultSearch.Matches))
+	withDeletedSearch, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "needle", Mode: "substring", Sources: []string{"messages"},
+		IncludeDeleted: true, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"direct-active", "direct-deleted"},
+		directMatchIDs(withDeletedSearch.Matches))
+}
+
+func directSessionIDs(sessions []db.Session) []string {
+	ids := make([]string, len(sessions))
+	for i := range sessions {
+		ids[i] = sessions[i].ID
+	}
+	return ids
+}
+
+func directMatchIDs(matches []db.ContentMatch) []string {
+	ids := make([]string, len(matches))
+	for i := range matches {
+		ids[i] = matches[i].SessionID
+	}
+	return ids
+}
+
 func TestDirectSearchContentRejectsInvalidTimezone(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)

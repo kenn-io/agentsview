@@ -52,6 +52,7 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 		"tool_calls",
 		"tool_result_events",
 		"secret_findings",
+		"excluded_sessions",
 		"starred_sessions",
 		"pinned_messages",
 	} {

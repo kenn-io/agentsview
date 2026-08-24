@@ -97,6 +97,42 @@ func TestIncludeDeletedListAndContentSearchPreservesExclusions(t *testing.T) {
 		contentMatchIDs(withDeletedSearch.Matches))
 }
 
+func TestIncludeDeletedChildrenExecutesRootAndChildPredicates(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "deleted-root", "proj", [][2]string{{"user", "NEEDLE root"}})
+	seedSearchSession(t, d, "deleted-child", "proj", [][2]string{{"user", "NEEDLE child"}})
+	_, err := d.getWriter().Exec(`
+		UPDATE sessions SET deleted_at = ? WHERE id IN (?, ?);
+		UPDATE sessions SET relationship_type = 'subagent', parent_session_id = ?
+		WHERE id = ?`,
+		"2026-05-21T00:00:00Z", "deleted-root", "deleted-child",
+		"deleted-root", "deleted-child")
+	require.NoError(t, err, "soft-delete root and child")
+
+	defaultList, err := d.ListSessions(context.Background(), SessionFilter{
+		IncludeChildren: true, Limit: 50,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, collectIDs(defaultList.Sessions))
+
+	withDeleted, err := d.ListSessions(context.Background(), SessionFilter{
+		IncludeChildren: true,
+		IncludeDeleted:  true, Limit: 50,
+	})
+	require.NoError(t, err, "include-deleted child list")
+	assert.ElementsMatch(t, []string{"deleted-root", "deleted-child"},
+		collectIDs(withDeleted.Sessions))
+
+	withDeletedSearch, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
+		IncludeChildren: true, IncludeOneShot: true, IncludeDeleted: true,
+		Limit: 50,
+	})
+	require.NoError(t, err, "include-deleted child search")
+	assert.ElementsMatch(t, []string{"deleted-root", "deleted-child"},
+		contentMatchIDs(withDeletedSearch.Matches))
+}
+
 func contentMatchIDs(matches []ContentMatch) []string {
 	ids := make([]string, len(matches))
 	for i, match := range matches {

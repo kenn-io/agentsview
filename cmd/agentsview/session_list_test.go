@@ -4,9 +4,12 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -25,11 +28,27 @@ func TestSessionListSinceMutuallyExclusiveWithActiveSince(t *testing.T) {
 }
 
 func TestSessionListIncludeDeletedFlag(t *testing.T) {
-	cmd := newSessionListCommand()
-	cmd.SetArgs([]string{"--help"})
-	err := cmd.Execute()
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "list-active", project: "proj"},
+		sessionSeed{id: "list-deleted", project: "proj"},
+	)
+	conn, err := sql.Open("sqlite3", filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
-	assert.Contains(t, cmd.Flag("include-deleted").Usage, "soft-deleted")
+	_, err = conn.Exec("UPDATE sessions SET deleted_at = ? WHERE id = ?",
+		"2026-05-21T00:00:00Z", "list-deleted")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	defaultOut, err := executeCommand(newRootCommand(),
+		"session", "list", "--format", "json")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"list-active"}, sessionListIDs(t, defaultOut))
+	withDeletedOut, err := executeCommand(newRootCommand(),
+		"session", "list", "--include-deleted", "--format", "json")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"list-active", "list-deleted"},
+		sessionListIDs(t, withDeletedOut))
 }
 
 func TestSessionListSinceRejectsInvalidFormat(t *testing.T) {

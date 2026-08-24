@@ -430,8 +430,8 @@ func BuildSessionBaseFilterSQL(
 ) (string, []any) {
 	b := NewQueryBuilder(dialect, 0)
 	preds := []string{"message_count > 0"}
-	preds = append(preds, sessionDeletionPredicates(f, b,
-		func(col string) string { return col })...)
+	preds = append(preds, sessionDeletionPredicates(f,
+		func(col string) string { return col }, "")...)
 	filterPreds, oneShotPred := sessionFilterPredicates(f, b, func(col string) string { return col })
 	preds = append(preds, filterPreds...)
 	if oneShotPred != "" {
@@ -489,7 +489,7 @@ func buildSessionFilterWithBuilder(
 	}
 
 	basePreds := []string{q("message_count") + " > 0"}
-	basePreds = append(basePreds, sessionDeletionPredicates(f, b, q)...)
+	basePreds = append(basePreds, sessionDeletionPredicates(f, q, qualifier)...)
 	if !f.IncludeChildren {
 		basePreds = append(basePreds,
 			q("relationship_type")+" NOT IN ("+b.dialect.SidebarChildRelationshipsSQL()+")")
@@ -513,9 +513,9 @@ func buildSessionFilterWithBuilder(
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
 	rootMatchParts = append(rootMatchParts,
-		sessionDeletionPredicates(f, b, func(col string) string {
+		sessionDeletionPredicates(f, func(col string) string {
 			return "root_session." + col
-		})...)
+		}, "root_session")...)
 	rootMatchParts = append(rootMatchParts,
 		BuildCanonicalRootWhere(b.dialect, "root_session", f.IncludeOrphans))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
@@ -533,9 +533,9 @@ func buildSessionFilterWithBuilder(
 		"SELECT s.id FROM sessions s" +
 		" JOIN tree t ON s.parent_session_id = t.id" +
 		" WHERE s.message_count > 0 AND " +
-		strings.Join(sessionDeletionPredicates(f, b, func(col string) string {
+		strings.Join(sessionDeletionPredicates(f, func(col string) string {
 			return "s." + col
-		}), " AND ") +
+		}, "s"), " AND ") +
 		childAutomationWhere +
 		") SELECT id FROM tree"
 
@@ -543,13 +543,13 @@ func buildSessionFilterWithBuilder(
 }
 
 func sessionDeletionPredicates(
-	f SessionFilter, b *QueryBuilder, q func(string) string,
+	f SessionFilter, q func(string) string, qualifier string,
 ) []string {
 	if !f.IncludeDeleted {
 		return []string{q("deleted_at") + " IS NULL"}
 	}
-	id := q("id")
-	if id == "id" {
+	id := qualifier + ".id"
+	if qualifier == "" {
 		id = "sessions.id"
 	}
 	return []string{"NOT EXISTS (SELECT 1 FROM excluded_sessions es WHERE es.id = " + id + ")"}
