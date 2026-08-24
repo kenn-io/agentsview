@@ -40,8 +40,15 @@ type KiroSQLiteStore struct {
 
 // OpenKiroSQLiteStore opens a read-only current-store Kiro SQLite DB.
 func OpenKiroSQLiteStore(dbPath string) (*KiroSQLiteStore, error) {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+	info, err := os.Lstat(dbPath)
+	if os.IsNotExist(err) {
 		return nil, fmt.Errorf("kiro sqlite db not found: %s", dbPath)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stat kiro sqlite db %s: %w", dbPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing symlinked kiro sqlite db: %s", dbPath)
 	}
 	db, err := openKiroSQLiteDB(dbPath)
 	if err != nil {
@@ -67,6 +74,17 @@ func kiroSQLiteDBPath(dir string) string {
 	path := filepath.Join(dir, kiroSQLiteDBName)
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
+		return ""
+	}
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return ""
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return ""
+	}
+	if _, ok := relUnder(resolvedDir, resolvedPath); !ok {
 		return ""
 	}
 	return path

@@ -928,6 +928,21 @@ func kiroDBUnderRoot(root, dbPath string, requireRegular bool) bool {
 	if !ok || filepath.ToSlash(rel) != kiroSQLiteDBName {
 		return false
 	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	resolvedDB, err := filepath.EvalSymlinks(dbPath)
+	if err != nil {
+		if requireRegular {
+			return false
+		}
+		_, rootErr := os.Stat(root)
+		return rootErr == nil
+	}
+	if _, ok := relUnder(resolvedRoot, resolvedDB); !ok {
+		return false
+	}
 	return !requireRegular || IsRegularFile(dbPath)
 }
 
@@ -979,7 +994,6 @@ func (s kiroSourceSet) discoverCurrentJSONL(root string) []DiscoveredFile {
 		}
 		if isKiroCurrentSessionDir(entry.Name()) {
 			add("", entry.Name())
-			continue
 		}
 		if !isKiroCurrentWorkspaceDir(entry.Name()) {
 			continue
@@ -1028,7 +1042,6 @@ func (s kiroSourceSet) discoverCurrentJSONLEach(ctx context.Context, root string
 			if source, ok := s.sourceRef(root, path, false); ok {
 				return yield(source)
 			}
-			return nil
 		}
 		if !isKiroCurrentWorkspaceDir(entry.Name()) {
 			return nil

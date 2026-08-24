@@ -486,7 +486,7 @@ func TestKiroProviderCurrentLayoutRejectsLookalikesAndEscapes(t *testing.T) {
 	root := t.TempDir()
 	valid := filepath.Join(root, "project-a", "sess_0123456789abcdef", "messages.jsonl")
 	writeSourceFile(t, valid, `{"payload":{"type":"user","content":"ok"}}`+"\n")
-	secondValid := filepath.Join(root, "workspace", "sess_fedcba9876543210", "messages.jsonl")
+	secondValid := filepath.Join(root, "sess_fedcba9876543210", "sess_aaaaaaaaaaaaaaaa", "messages.jsonl")
 	writeSourceFile(t, secondValid, `{"payload":{"type":"user","content":"ok"}}`+"\n")
 	for _, path := range []string{
 		filepath.Join(root, ".history", "sess_0123456789abcdef", "messages.jsonl"),
@@ -507,7 +507,7 @@ func TestKiroProviderCurrentLayoutRejectsLookalikesAndEscapes(t *testing.T) {
 	assert.ElementsMatch(t, []string{valid, secondValid}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
 	for _, tc := range []struct{ id, path string }{
 		{"sess_0123456789abcdef", valid},
-		{"sess_fedcba9876543210", secondValid},
+		{"sess_aaaaaaaaaaaaaaaa", secondValid},
 	} {
 		found, foundOK, findErr := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: tc.id})
 		require.NoError(t, findErr)
@@ -689,6 +689,34 @@ func TestKiroProviderCurrentSidecarRequiresRegularContainedFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Empty(t, outcome.Results[0].Result.Session.SessionName)
+}
+
+func TestKiroProviderRejectsSQLiteSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	outsideDB := filepath.Join(outside, kiroSQLiteDBName)
+	_, db := newKiroProviderSQLiteDBAt(t, outside)
+	require.NoError(t, db.Close())
+	dbPath := filepath.Join(root, kiroSQLiteDBName)
+	if err := os.Symlink(outsideDB, dbPath); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, sources)
+
+	virtual := KiroSQLiteVirtualPath(dbPath, "sqlite-session")
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: virtual,
+		RawSessionID:   "sqlite-session",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
+	_, err = OpenKiroSQLiteStore(dbPath)
+	assert.Error(t, err, "a symlinked database must not be opened")
 }
 
 func TestKiroIDEProviderSourceMethods(t *testing.T) {
