@@ -484,16 +484,18 @@ func TestKiroProviderCurrentLayoutParsesMessages(t *testing.T) {
 
 func TestKiroProviderCurrentLayoutRejectsLookalikesAndEscapes(t *testing.T) {
 	root := t.TempDir()
-	valid := filepath.Join(root, "workspace", "sess_0123456789abcdef", "messages.jsonl")
+	valid := filepath.Join(root, "project-a", "sess_0123456789abcdef", "messages.jsonl")
 	writeSourceFile(t, valid, `{"payload":{"type":"user","content":"ok"}}`+"\n")
+	secondValid := filepath.Join(root, "workspace", "sess_fedcba9876543210", "messages.jsonl")
+	writeSourceFile(t, secondValid, `{"payload":{"type":"user","content":"ok"}}`+"\n")
 	for _, path := range []string{
 		filepath.Join(root, ".history", "sess_0123456789abcdef", "messages.jsonl"),
 		filepath.Join(root, "snapshots", "sess_0123456789abcdef", "messages.jsonl"),
-		filepath.Join(root, "arbitrary", "sess_0123456789abcdef", "messages.jsonl"),
 		filepath.Join(root, "workspace", ".history", "sess_0123456789abcdef", "messages.jsonl"),
 		filepath.Join(root, "workspace", "sess_0123456789abcdef", "snapshots", "messages.jsonl"),
 		filepath.Join(root, "workspace", "nested", "sess_0123456789abcdef", "messages.jsonl"),
 		filepath.Join(root, "workspace", "session_0123456789abcdef", "messages.jsonl"),
+		filepath.Join(root, "project-a", "sess_bad.id", "messages.jsonl"),
 	} {
 		writeSourceFile(t, path, `{"payload":{"type":"user","content":"bad"}}`+"\n")
 	}
@@ -501,8 +503,27 @@ func TestKiroProviderCurrentLayoutRejectsLookalikesAndEscapes(t *testing.T) {
 	require.True(t, ok)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, valid, sources[0].DisplayPath)
+	require.Len(t, sources, 2)
+	assert.ElementsMatch(t, []string{valid, secondValid}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
+	for _, tc := range []struct{ id, path string }{
+		{"sess_0123456789abcdef", valid},
+		{"sess_fedcba9876543210", secondValid},
+	} {
+		found, foundOK, findErr := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: tc.id})
+		require.NoError(t, findErr)
+		require.True(t, foundOK)
+		assert.Equal(t, tc.path, found.DisplayPath)
+	}
+	sidecar := filepath.Join(filepath.Dir(valid), "session.json")
+	writeSourceFile(t, sidecar, `{"title":"Synthetic"}`)
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{Path: sidecar, WatchRoot: root, EventKind: "write"})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, valid, changed[0].DisplayPath)
+	changed, err = provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{Path: valid, WatchRoot: root, EventKind: "write"})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, valid, changed[0].DisplayPath)
 	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "sess_../escape"})
 	require.NoError(t, err)
 	assert.False(t, ok)

@@ -963,14 +963,8 @@ func kiroLegacyPathUnderRoot(root, path string) bool {
 
 func (s kiroSourceSet) discoverCurrentJSONL(root string) []DiscoveredFile {
 	var files []DiscoveredFile
-	add := func(session string) {
-		path := filepath.Join(root, session, "messages.jsonl")
-		if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok && kiroRegularFileUnderRoot(root, path) {
-			files = append(files, DiscoveredFile{Path: path, Agent: AgentKiro})
-		}
-	}
-	addWorkspace := func(session string) {
-		path := filepath.Join(root, kiroCurrentWorkspaceDir, session, "messages.jsonl")
+	add := func(workspace, session string) {
+		path := filepath.Join(root, workspace, session, "messages.jsonl")
 		if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok && kiroRegularFileUnderRoot(root, path) {
 			files = append(files, DiscoveredFile{Path: path, Agent: AgentKiro})
 		}
@@ -984,15 +978,20 @@ func (s kiroSourceSet) discoverCurrentJSONL(root string) []DiscoveredFile {
 			continue
 		}
 		if isKiroCurrentSessionDir(entry.Name()) {
-			add(entry.Name())
+			add("", entry.Name())
+			continue
 		}
-	}
-	workspace := filepath.Join(root, kiroCurrentWorkspaceDir)
-	children, err := os.ReadDir(workspace)
-	if err == nil {
+		if !isKiroCurrentWorkspaceDir(entry.Name()) {
+			continue
+		}
+		workspace := filepath.Join(root, entry.Name())
+		children, err := os.ReadDir(workspace)
+		if err != nil {
+			continue
+		}
 		for _, child := range children {
 			if child.IsDir() && isKiroCurrentSessionDir(child.Name()) {
-				addWorkspace(child.Name())
+				add(entry.Name(), child.Name())
 			}
 		}
 	}
@@ -1003,10 +1002,15 @@ func (s kiroSourceSet) findCurrentJSONL(root, sessionID string) (SourceRef, bool
 	if !isKiroCurrentSessionDir(sessionID) {
 		return SourceRef{}, false
 	}
-	for _, path := range []string{
-		filepath.Join(root, sessionID, "messages.jsonl"),
-		filepath.Join(root, kiroCurrentWorkspaceDir, sessionID, "messages.jsonl"),
-	} {
+	paths := []string{filepath.Join(root, sessionID, "messages.jsonl")}
+	if entries, err := os.ReadDir(root); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() && isKiroCurrentWorkspaceDir(entry.Name()) {
+				paths = append(paths, filepath.Join(root, entry.Name(), sessionID, "messages.jsonl"))
+			}
+		}
+	}
+	for _, path := range paths {
 		if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok && kiroRegularFileUnderRoot(root, path) {
 			return s.newSourceRef(root, path, "", sessionID, kiroSourceCurrentJSONL), true
 		}
@@ -1026,10 +1030,10 @@ func (s kiroSourceSet) discoverCurrentJSONLEach(ctx context.Context, root string
 			}
 			return nil
 		}
-		if entry.Name() != kiroCurrentWorkspaceDir {
+		if !isKiroCurrentWorkspaceDir(entry.Name()) {
 			return nil
 		}
-		workspace := filepath.Join(root, kiroCurrentWorkspaceDir)
+		workspace := filepath.Join(root, entry.Name())
 		return streamDirectoryEntries(ctx, workspace, func(child os.DirEntry) error {
 			if !child.IsDir() || !isKiroCurrentSessionDir(child.Name()) {
 				return nil
@@ -1069,7 +1073,9 @@ func isKiroCurrentSessionDir(name string) bool {
 	return strings.HasPrefix(name, "sess_") && IsValidSessionID(id)
 }
 
-const kiroCurrentWorkspaceDir = "workspace"
+func isKiroCurrentWorkspaceDir(name string) bool {
+	return name != "" && name != ".history" && name != "snapshots"
+}
 
 func kiroCurrentPathUnderRoot(root, path string) (string, string, bool) {
 	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
@@ -1080,7 +1086,7 @@ func kiroCurrentPathUnderRoot(root, path string) (string, string, bool) {
 	if (len(parts) != 2 && len(parts) != 3) || parts[len(parts)-1] != "messages.jsonl" {
 		return "", "", false
 	}
-	if len(parts) == 3 && parts[0] != kiroCurrentWorkspaceDir {
+	if len(parts) == 3 && !isKiroCurrentWorkspaceDir(parts[0]) {
 		return "", "", false
 	}
 	session := parts[len(parts)-2]
@@ -1102,11 +1108,11 @@ func kiroCurrentPathForEvent(root, path string) (string, string, bool) {
 	if (len(parts) != 2 && len(parts) != 3) || parts[len(parts)-1] != "session.json" {
 		return "", "", false
 	}
-	session := parts[len(parts)-2]
-	if !isKiroCurrentSessionDir(session) {
+	current, session, ok := kiroCurrentPathUnderRoot(root, filepath.Join(filepath.Dir(path), "messages.jsonl"))
+	if !ok {
 		return "", "", false
 	}
-	return filepath.Join(filepath.Dir(path), "messages.jsonl"), session, true
+	return current, session, true
 }
 
 func kiroCurrentSidecarPath(roots []string, transcript string) (string, bool) {
