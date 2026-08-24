@@ -2048,11 +2048,13 @@ add an archived or maintained mirror without replacing the original identity.
   query, and the live watcher's token folds the digest into the timestamp's
   unused sub-millisecond bits so a watched session reacts to
   timestamp-preserving rewrites too. A watcher event on the
-  continuously-written database is answered with a timestamps-only watermark
-  listing merged against the caller's stored freshness, emitting only the
-  threads that advanced; like the OpenCode watermark listing, that merge
-  cannot see a timestamp-blind rewrite, which the digest catches during
-  scheduled reconciliation and full parses instead. Attachments render as "[Image: name]"
+  continuously-written database is answered with a session-row watermark
+  listing -- one indexed thread row plus its project row, never the messages
+  table -- merged against the caller's stored freshness, emitting only the
+  threads that advanced. Like the OpenCode watermark listing, that merge
+  cannot see a timestamp-blind rewrite or a message stamped without the
+  thread row moving; the full meta scan's message stamps and digest catch
+  both during scheduled reconciliation and full parses. Attachments render as "[Image: name]"
   placeholder lines appended after any message text, so an image-only turn is
   not blank and a text-plus-image turn keeps its attachment. Optional columns are
   probed

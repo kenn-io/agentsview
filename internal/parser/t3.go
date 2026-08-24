@@ -106,11 +106,14 @@ type T3ThreadMeta struct {
 }
 
 // ListT3ThreadMetas collects every live thread's change signal on an
-// already-open connection.
-func ListT3ThreadMetas(conn *sql.DB, dbPath string) ([]T3ThreadMeta, error) {
+// already-open connection. It threads the caller's context through so a
+// canceled sync can interrupt the archive-wide scan.
+func ListT3ThreadMetas(
+	ctx context.Context, conn *sql.DB, dbPath string,
+) ([]T3ThreadMeta, error) {
 	var metas []T3ThreadMeta
 	err := ForEachT3ThreadMeta(
-		context.Background(), conn, dbPath,
+		ctx, conn, dbPath,
 		func(meta T3ThreadMeta) error {
 			metas = append(metas, meta)
 			return nil
@@ -296,14 +299,15 @@ func forEachT3ThreadMetaQuery(
 }
 
 // forEachT3ThreadWatermark streams every live thread's virtual path and
-// change-token watermark in ascending thread-ID (and therefore virtual-path)
-// order, reading only timestamps -- no message text and no digest. It backs
-// the changed-container watermark merge: a watcher event needs to know which
-// threads advanced, and paying the full digest scan for that on every debounced
-// write would be archive-sized work. The watermark deliberately cannot see a
-// timestamp-blind projection rewrite; those are caught by the digest during
-// scheduled reconciliation and full parses, the same documented limitation the
-// OpenCode watermark listing has.
+// session-row watermark in ascending thread-ID (and therefore virtual-path)
+// order. It backs the changed-container watermark merge, so it reads only the
+// thread and project rows -- one indexed row per live thread, never the
+// messages table -- the same session-row-watermark shape the OpenCode listing
+// uses. t3 bumps the thread's updated_at on message activity, so the row
+// watermark tracks ordinary writes; the changes it deliberately cannot see --
+// a timestamp-blind projection rewrite, or a message stamped without the
+// thread row moving -- are caught by the full meta scan's message stamps and
+// digest during scheduled reconciliation and full parses.
 func forEachT3ThreadWatermark(
 	ctx context.Context, conn *sql.DB, shape t3Schema, dbPath string,
 	yield func(threadID, virtualPath string, watermarkNS int64) error,
@@ -311,15 +315,10 @@ func forEachT3ThreadWatermark(
 	query := `SELECT t.thread_id,
 	                 COALESCE(t.updated_at, ''),
 	                 COALESCE(t.created_at, ''),
-	                 COALESCE(MAX(m.created_at), ''),
-	                 COALESCE(MAX(` + shape.messageUpdatedExpr("m.") + `), ''),
-	                 MAX(` + shape.projectUpdatedExpr() + `),
-	                 MAX(` + shape.projectCreatedExpr() + `)
-	            FROM projection_threads t
-	            LEFT JOIN projection_thread_messages m
-	                   ON m.thread_id = t.thread_id` + shape.projectJoin() + `
+	                 ` + shape.projectUpdatedExpr() + `,
+	                 ` + shape.projectCreatedExpr() + `
+	            FROM projection_threads t` + shape.projectJoin() + `
 	           WHERE t.deleted_at IS NULL
-	           GROUP BY t.thread_id
 	           ORDER BY t.thread_id`
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
@@ -329,9 +328,10 @@ func forEachT3ThreadWatermark(
 
 	for rows.Next() {
 		var threadID string
-		var stamps [6]string
-		if err := rows.Scan(&threadID, &stamps[0], &stamps[1], &stamps[2],
-			&stamps[3], &stamps[4], &stamps[5]); err != nil {
+		var stamps [4]string
+		if err := rows.Scan(
+			&threadID, &stamps[0], &stamps[1], &stamps[2], &stamps[3],
+		); err != nil {
 			return fmt.Errorf("scanning t3 thread watermark: %w", err)
 		}
 		if !IsValidSessionID(threadID) {

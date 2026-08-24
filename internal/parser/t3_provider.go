@@ -285,7 +285,7 @@ func t3ParseContainer(
 	if err != nil {
 		return nil, err
 	}
-	metas, err := ListT3ThreadMetas(conn, src.Container)
+	metas, err := ListT3ThreadMetas(ctx, conn, src.Container)
 	if err != nil {
 		return nil, err
 	}

@@ -220,7 +220,7 @@ func parseT3All(t *testing.T, dbPath, machine string) []ParseResult {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	metas, err := ListT3ThreadMetas(conn, dbPath)
+	metas, err := ListT3ThreadMetas(context.Background(), conn, dbPath)
 	require.NoError(t, err)
 	var out []ParseResult
 	for _, m := range metas {
@@ -361,7 +361,7 @@ func TestT3ThreadMetaTracksNewestActivity(t *testing.T) {
 	conn, err := OpenT3DB(dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
-	metas, err := ListT3ThreadMetas(conn, dbPath)
+	metas, err := ListT3ThreadMetas(context.Background(), conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas, 1)
 
@@ -394,7 +394,7 @@ func TestT3ChangeTokenSeesInPlaceMessageEdits(t *testing.T) {
 	conn, err := OpenT3DB(dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
-	metas, err := ListT3ThreadMetas(conn, dbPath)
+	metas, err := ListT3ThreadMetas(context.Background(), conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas, 1)
 
@@ -419,7 +419,7 @@ func TestT3ChangeTokenSeesProjectChanges(t *testing.T) {
 	conn, err := OpenT3DB(dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
-	metas, err := ListT3ThreadMetas(conn, dbPath)
+	metas, err := ListT3ThreadMetas(context.Background(), conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas, 1)
 
@@ -456,7 +456,7 @@ func TestT3ChangeTokenIncludesDroppedMessages(t *testing.T) {
 	conn, err := OpenT3DB(dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
-	metas, err := ListT3ThreadMetas(conn, dbPath)
+	metas, err := ListT3ThreadMetas(context.Background(), conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas, 1)
 	assert.Equal(t, want, metas[0].FileMtime)
@@ -474,7 +474,7 @@ func TestT3DigestSeesSameTimestampRewrite(t *testing.T) {
 		conn, err := OpenT3DB(dbPath)
 		require.NoError(t, err)
 		defer conn.Close()
-		metas, err := ListT3ThreadMetas(conn, dbPath)
+		metas, err := ListT3ThreadMetas(context.Background(), conn, dbPath)
 		require.NoError(t, err)
 		require.Len(t, metas, 1)
 		results := parseT3All(t, dbPath, "testbox")
@@ -547,10 +547,11 @@ func TestT3AttachmentPlaceholder(t *testing.T) {
 	assert.Equal(t, "[Attachment]", t3AttachmentPlaceholder(`not json`))
 }
 
-// The watermark listing is the cheap half of change detection: it must agree
-// with the full meta scan on every thread's token and stream in ascending
-// virtual-path order, or the stored-freshness merge would silently skip or
-// double-emit members.
+// The watermark listing is the cheap half of change detection: it reads only
+// the thread and project rows, so it must equal the full meta token whenever
+// the thread row is the newest signal, sit at or below it otherwise, and
+// stream in ascending virtual-path order -- or the stored-freshness merge
+// would silently skip or double-emit members.
 func TestT3ThreadWatermarksMatchMetaTokens(t *testing.T) {
 	spec := t3SampleDB(false)
 	spec.projects[0].updatedAt = "2026-08-23T10:30:00.000Z"
@@ -572,7 +573,7 @@ func TestT3ThreadWatermarksMatchMetaTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	want := map[string]int64{}
-	metas, err := ListT3ThreadMetas(conn, dbPath)
+	metas, err := ListT3ThreadMetas(context.Background(), conn, dbPath)
 	require.NoError(t, err)
 	for _, m := range metas {
 		want[m.VirtualPath] = m.FileMtime
@@ -587,8 +588,48 @@ func TestT3ThreadWatermarksMatchMetaTokens(t *testing.T) {
 			return nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, want, got)
+	assert.Equal(t, want, got,
+		"the thread row is the newest signal in every fixture thread")
 	assert.IsIncreasing(t, paths)
+}
+
+// A message stamped past the thread row is the one signal the session-row
+// watermark deliberately does not see: the event path defers it to the full
+// meta scan at reconciliation, so the watermark must sit below the full token
+// rather than equal it.
+func TestT3ThreadWatermarkDefersMessageOnlyAdvances(t *testing.T) {
+	spec := t3SampleDB(false)
+	spec.threads[0].updatedAt = "2026-08-22T22:56:00.000Z"
+	spec.threads[0].messages = append(spec.threads[0].messages, t3TestMessage{
+		id: "m-late", role: "assistant", text: "late",
+		createdAt: "2026-08-22T23:30:00.000Z",
+	})
+	dbPath := createT3DB(t, spec)
+
+	conn, err := OpenT3DB(dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	shape, err := inspectT3Schema(context.Background(), conn)
+	require.NoError(t, err)
+
+	metas, err := ListT3ThreadMetas(context.Background(), conn, dbPath)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	fullToken := metas[0].FileMtime
+	require.Equal(t,
+		parseTimestamp("2026-08-22T23:30:00.000Z").UnixNano(), fullToken)
+
+	var watermark int64
+	err = forEachT3ThreadWatermark(context.Background(), conn, shape, dbPath,
+		func(_, _ string, watermarkNS int64) error {
+			watermark = watermarkNS
+			return nil
+		})
+	require.NoError(t, err)
+	assert.Equal(t,
+		parseTimestamp("2026-08-22T22:56:00.000Z").UnixNano(), watermark,
+		"the session-row watermark carries the thread row, not the message")
+	assert.Less(t, watermark, fullToken)
 }
 
 func TestT3ContainerPathForEvent(t *testing.T) {
