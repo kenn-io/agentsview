@@ -1842,7 +1842,7 @@ func (e *Engine) classifyProviderChangedPath(
 		// caller's stored authority only while the container provably has
 		// not changed across the listing window, and the pass-level capture
 		// guard does not exist yet at classification time.
-		watermarkContainer := openCodeContainerPathForChangedPathEvent(
+		watermarkContainer := watermarkContainerPathForChangedPathEvent(
 			agentType, roots, path,
 		)
 		var watermarkPreState parser.SQLiteContainerState

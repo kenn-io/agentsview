@@ -389,6 +389,79 @@ func TestSyncT3EngineSourceMtimeSeesSameTimestampRewrite(t *testing.T) {
 	assert.Zero(t, engine.SourceMtime("t3:00000000-0000-4000-8000-000000000000"))
 }
 
+// t3 writes its shared database continuously, so watcher work must scale with
+// what changed, not with the archive. A changed-path event answered with
+// stored freshness emits only the members whose watermark advanced: zero for
+// a no-op WAL touch, exactly one after a single thread's write. Without
+// stored authority the provider falls back to the full-fidelity container
+// answer.
+func TestT3ChangedPathEmitsOnlyAdvancedMembers(t *testing.T) {
+	root := t.TempDir()
+	userdata := filepath.Join(root, ".t3", "userdata")
+	dbPath := writeT3StateDB(t, userdata)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentT3: {userdata},
+		},
+		Machine: "devbox",
+	})
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 2, Skipped: 0})
+
+	ctx := context.Background()
+	provider, ok := parser.NewProvider(parser.AgentT3, parser.ProviderConfig{
+		Roots: []string{userdata},
+	})
+	require.True(t, ok)
+
+	// The engine only grants stored authority when it can resolve the event
+	// to the shared container.
+	require.Equal(t, dbPath, watermarkContainerPathForChangedPathEvent(
+		parser.AgentT3, []string{userdata}, dbPath+"-wal"))
+
+	changed := func(withPager bool) []parser.SourceRef {
+		t.Helper()
+		req := parser.ChangedPathRequest{
+			Path:                      dbPath + "-wal",
+			WatchRoot:                 userdata,
+			AllowWatermarkOnlySources: true,
+		}
+		if withPager {
+			req.StoredMemberFreshnessPage = engine.storedMemberFreshnessPager(dbPath)
+		}
+		sources, err := provider.SourcesForChangedPath(ctx, req)
+		require.NoError(t, err)
+		return sources
+	}
+
+	// No stored authority: the full-fidelity container answer is preserved.
+	sources := changed(false)
+	require.Len(t, sources, 1)
+	assert.Equal(t, dbPath, sources[0].DisplayPath)
+
+	// Stored authority, nothing advanced: a no-op WAL touch emits nothing.
+	assert.Empty(t, changed(true))
+
+	// One thread's write emits exactly that member.
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`INSERT INTO projection_thread_messages VALUES
+		 ('m-a3', 'thread-alpha', 'user', 'Ship it.', 0,
+		  '2026-08-22T15:00:00.000Z', '2026-08-22T15:00:00.000Z', NULL)`)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE projection_threads SET updated_at = '2026-08-22T15:00:00.000Z'
+		  WHERE thread_id = 'thread-alpha'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	sources = changed(true)
+	require.Len(t, sources, 1,
+		"only the advanced member is emitted, not the whole archive")
+	assert.Equal(t, dbPath+"#thread-alpha", sources[0].DisplayPath)
+}
+
 // A soft-deleted thread stops being discovered.
 func TestSyncT3SkipsSoftDeletedThread(t *testing.T) {
 	root := t.TempDir()

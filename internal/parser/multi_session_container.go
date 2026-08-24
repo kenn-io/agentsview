@@ -187,6 +187,18 @@ type multiSessionConfig struct {
 	// out container result (used when all members share the container's content
 	// hash). Member parses are always stamped.
 	stampContainerHash bool
+	// changedContainerWatermarkListing streams the container's live members
+	// with their per-member watermarks in ascending virtual-path order, so a
+	// changed-container event can be answered with only the members whose
+	// watermark the caller's stored freshness does not cover, instead of the
+	// whole container. covered reports whether the stored side vouches for a
+	// member; failures inside it fail open (the member is emitted). Optional;
+	// when nil every container event fans out the whole container.
+	changedContainerWatermarkListing func(
+		ctx context.Context, container string,
+		covered func(path string, watermarkNS int64) bool,
+		yield func(multiSessionMatch) error,
+	) error
 }
 
 type MultiSessionOption func(*multiSessionConfig)
@@ -320,6 +332,16 @@ func WithFreshStoredMember(
 
 func WithContainerHashStamping() MultiSessionOption {
 	return func(c *multiSessionConfig) { c.stampContainerHash = true }
+}
+
+func WithChangedContainerWatermarkListing(
+	fn func(
+		ctx context.Context, container string,
+		covered func(path string, watermarkNS int64) bool,
+		yield func(multiSessionMatch) error,
+	) error,
+) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.changedContainerWatermarkListing = fn }
 }
 
 func NewMultiSessionContainerSourceSet(
@@ -480,6 +502,11 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 			continue
 		}
 		tombstones := s.changedPathTombstones(root, match, req.StoredSourcePaths)
+		if members, ok := s.changedContainerWatermarkSources(
+			ctx, root, match, req,
+		); ok {
+			return append(members, tombstones...), nil
+		}
 		sources := make([]SourceRef, 0, 1+len(tombstones))
 		if req.EventKind != "remove" ||
 			len(tombstones) == 0 ||
@@ -490,6 +517,57 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 		return sources, nil
 	}
 	return nil, nil
+}
+
+// changedContainerWatermarkSources answers a changed whole-container event
+// with only the members whose watermark the caller's stored freshness does
+// not cover. It engages only when the provider supplied a listing, the caller
+// allowed watermark-merged sources and holds stored authority, and the
+// container still exists (a removed container must keep flowing through the
+// container-plus-tombstones path). ok=false means the caller should fall back
+// to whole-container emission; a listing failure also falls back rather than
+// dropping the event. An empty emitted set is a real answer: nothing under
+// the container advanced.
+func (s multiSessionContainerSourceSet) changedContainerWatermarkSources(
+	ctx context.Context,
+	root string,
+	match multiSessionMatch,
+	req ChangedPathRequest,
+) ([]SourceRef, bool) {
+	if s.cfg.changedContainerWatermarkListing == nil ||
+		match.MemberID != "" ||
+		!req.AllowWatermarkOnlySources ||
+		req.StoredMemberFreshnessPage == nil ||
+		req.EventKind == "remove" ||
+		!IsRegularFile(match.Container) {
+		return nil, false
+	}
+	cursor := storedMemberFreshnessCursor{pager: req.StoredMemberFreshnessPage}
+	covered := func(path string, watermarkNS int64) bool {
+		if cursor.failed {
+			return false
+		}
+		isCovered, err := cursor.covers(ctx, path, watermarkNS)
+		if err != nil {
+			// Fail open: without stored authority every member must be
+			// emitted rather than silently dropped.
+			cursor.failed = true
+			return false
+		}
+		return isCovered
+	}
+	sources := make([]SourceRef, 0, 4)
+	err := s.cfg.changedContainerWatermarkListing(
+		ctx, match.Container, covered,
+		func(member multiSessionMatch) error {
+			sources = append(sources, s.sourceRef(root, member))
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, false
+	}
+	return sources, true
 }
 
 func (s multiSessionContainerSourceSet) StoredSourceHintScopes(

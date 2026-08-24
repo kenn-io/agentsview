@@ -33,6 +33,10 @@ func newT3ProviderFactory(def AgentDef) ProviderFactory {
 				// One query answers the whole tombstone pass; without this the
 				// base would open the database once per stored member.
 				WithBatchMemberPresence(t3BatchMemberPresent),
+				// A watcher event on the continuously-written database emits
+				// only the threads whose watermark advanced past the stored
+				// freshness, instead of fanning out the whole container.
+				WithChangedContainerWatermarkListing(t3ChangedContainerWatermarks),
 			)
 		},
 	)
@@ -159,6 +163,38 @@ func t3MemberPresent(src multiSessionSource) bool {
 		return IsRegularFile(src.Container)
 	}
 	return T3ThreadExists(src.Container, src.MemberID)
+}
+
+// t3ChangedContainerWatermarks streams live threads with their change-token
+// watermarks so the base can answer a changed-container event with only the
+// members the caller's stored freshness does not cover. Timestamps only: the
+// digest is deliberately not computed here (see forEachT3ThreadWatermark).
+func t3ChangedContainerWatermarks(
+	ctx context.Context, container string,
+	covered func(path string, watermarkNS int64) bool,
+	yield func(multiSessionMatch) error,
+) error {
+	conn, err := OpenT3DB(container)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	shape, err := inspectT3Schema(ctx, conn)
+	if err != nil {
+		return err
+	}
+	return forEachT3ThreadWatermark(ctx, conn, shape, container,
+		func(threadID, virtualPath string, watermarkNS int64) error {
+			if covered(virtualPath, watermarkNS) {
+				return nil
+			}
+			return yield(multiSessionMatch{
+				Path:      virtualPath,
+				Container: container,
+				MemberID:  threadID,
+			})
+		},
+	)
 }
 
 // t3BatchMemberPresent answers one changed container's tombstone pass with a

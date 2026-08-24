@@ -547,6 +547,60 @@ func TestT3AttachmentPlaceholder(t *testing.T) {
 	assert.Equal(t, "[Attachment]", t3AttachmentPlaceholder(`not json`))
 }
 
+// The watermark listing is the cheap half of change detection: it must agree
+// with the full meta scan on every thread's token and stream in ascending
+// virtual-path order, or the stored-freshness merge would silently skip or
+// double-emit members.
+func TestT3ThreadWatermarksMatchMetaTokens(t *testing.T) {
+	spec := t3SampleDB(false)
+	spec.projects[0].updatedAt = "2026-08-23T10:30:00.000Z"
+	spec.threads = append(spec.threads, t3TestThread{
+		id: "0a000000-0000-4000-8000-000000000001", projectID: "proj-1",
+		title: "second", createdAt: "2026-08-21T09:00:00.000Z",
+		updatedAt: "2026-08-21T09:05:00.000Z",
+		messages: []t3TestMessage{{
+			id: "s-1", role: "user", text: "hello",
+			createdAt: "2026-08-21T09:00:01.000Z",
+		}},
+	})
+	dbPath := createT3DB(t, spec)
+
+	conn, err := OpenT3DB(dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	shape, err := inspectT3Schema(context.Background(), conn)
+	require.NoError(t, err)
+
+	want := map[string]int64{}
+	metas, err := ListT3ThreadMetas(conn, dbPath)
+	require.NoError(t, err)
+	for _, m := range metas {
+		want[m.VirtualPath] = m.FileMtime
+	}
+
+	var paths []string
+	got := map[string]int64{}
+	err = forEachT3ThreadWatermark(context.Background(), conn, shape, dbPath,
+		func(_, virtualPath string, watermarkNS int64) error {
+			paths = append(paths, virtualPath)
+			got[virtualPath] = watermarkNS
+			return nil
+		})
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	assert.IsIncreasing(t, paths)
+}
+
+func TestT3ContainerPathForEvent(t *testing.T) {
+	dbPath := createT3DB(t, t3SampleDB(false))
+	root := filepath.Dir(dbPath)
+	assert.Equal(t, dbPath, T3ContainerPathForEvent(root, dbPath))
+	assert.Equal(t, dbPath, T3ContainerPathForEvent(root, dbPath+"-wal"))
+	assert.Equal(t, dbPath, T3ContainerPathForEvent(root, dbPath+"-shm"))
+	assert.Empty(t, T3ContainerPathForEvent(root, filepath.Join(root, "other.db")))
+	assert.Empty(t, T3ContainerPathForEvent("", dbPath))
+}
+
 func TestT3BatchMemberPresent(t *testing.T) {
 	spec := t3SampleDB(false)
 	spec.threads = append(spec.threads, t3TestThread{

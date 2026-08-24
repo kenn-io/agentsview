@@ -214,6 +214,30 @@ func addSQLiteContainerState(
 // openCodeContainerPathForChangedPathEvent maps a changed-path event to the
 // shared SQLite container it names for one OpenCode-family agent, or ""
 // when the agent has no container or the event is not a container write.
+// watermarkContainerPathForChangedPathEvent resolves a changed path to the
+// shared SQLite container whose watermark-merged listing can answer it, for
+// every provider family that implements one: the OpenCode format and t3.
+// An empty result means the event gets no stored-freshness authority and the
+// provider answers with its full-fidelity listing.
+func watermarkContainerPathForChangedPathEvent(
+	agent parser.AgentType,
+	roots []string,
+	path string,
+) string {
+	if agent == parser.AgentT3 {
+		for _, dir := range roots {
+			if dir == "" || strings.HasPrefix(dir, "s3://") {
+				continue
+			}
+			if container := parser.T3ContainerPathForEvent(dir, path); container != "" {
+				return container
+			}
+		}
+		return ""
+	}
+	return openCodeContainerPathForChangedPathEvent(agent, roots, path)
+}
+
 func openCodeContainerPathForChangedPathEvent(
 	agent parser.AgentType,
 	roots []string,

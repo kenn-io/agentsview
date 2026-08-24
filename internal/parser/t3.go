@@ -295,6 +295,74 @@ func forEachT3ThreadMetaQuery(
 	return rows.Err()
 }
 
+// forEachT3ThreadWatermark streams every live thread's virtual path and
+// change-token watermark in ascending thread-ID (and therefore virtual-path)
+// order, reading only timestamps -- no message text and no digest. It backs
+// the changed-container watermark merge: a watcher event needs to know which
+// threads advanced, and paying the full digest scan for that on every debounced
+// write would be archive-sized work. The watermark deliberately cannot see a
+// timestamp-blind projection rewrite; those are caught by the digest during
+// scheduled reconciliation and full parses, the same documented limitation the
+// OpenCode watermark listing has.
+func forEachT3ThreadWatermark(
+	ctx context.Context, conn *sql.DB, shape t3Schema, dbPath string,
+	yield func(threadID, virtualPath string, watermarkNS int64) error,
+) error {
+	query := `SELECT t.thread_id,
+	                 COALESCE(t.updated_at, ''),
+	                 COALESCE(t.created_at, ''),
+	                 COALESCE(MAX(m.created_at), ''),
+	                 COALESCE(MAX(` + shape.messageUpdatedExpr("m.") + `), ''),
+	                 MAX(` + shape.projectUpdatedExpr() + `),
+	                 MAX(` + shape.projectCreatedExpr() + `)
+	            FROM projection_threads t
+	            LEFT JOIN projection_thread_messages m
+	                   ON m.thread_id = t.thread_id` + shape.projectJoin() + `
+	           WHERE t.deleted_at IS NULL
+	           GROUP BY t.thread_id
+	           ORDER BY t.thread_id`
+	rows, err := conn.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("listing t3 thread watermarks: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var threadID string
+		var stamps [6]string
+		if err := rows.Scan(&threadID, &stamps[0], &stamps[1], &stamps[2],
+			&stamps[3], &stamps[4], &stamps[5]); err != nil {
+			return fmt.Errorf("scanning t3 thread watermark: %w", err)
+		}
+		if !IsValidSessionID(threadID) {
+			continue
+		}
+		if err := yield(
+			threadID, T3VirtualPath(dbPath, threadID),
+			t3LatestNanos(stamps[:]...),
+		); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// T3ContainerPathForEvent resolves a changed-path event naming state.sqlite or
+// one of its WAL/SHM/journal siblings under root to the container's canonical
+// path, for callers that gate a watermark-merged listing on the container's
+// pre-listing state.
+func T3ContainerPathForEvent(root, path string) string {
+	if root == "" {
+		return ""
+	}
+	if container, ok := sqliteContainerPathForEvent(
+		root, path, t3DBName, false,
+	); ok {
+		return container
+	}
+	return ""
+}
+
 // t3LatestTime returns the latest of the given ISO-8601 timestamps, or the
 // zero time when none parses.
 func t3LatestTime(values ...string) time.Time {

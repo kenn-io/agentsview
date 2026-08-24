@@ -2047,7 +2047,12 @@ add an archived or maintained mirror without replacing the original identity.
   a tombstone pass resolves membership for every stored thread with one
   query, and the live watcher's token folds the digest into the timestamp's
   unused sub-millisecond bits so a watched session reacts to
-  timestamp-preserving rewrites too. An image-only message renders an
+  timestamp-preserving rewrites too. A watcher event on the
+  continuously-written database is answered with a timestamps-only watermark
+  listing merged against the caller's stored freshness, emitting only the
+  threads that advanced; like the OpenCode watermark listing, that merge
+  cannot see a timestamp-blind rewrite, which the digest catches during
+  scheduled reconciliation and full parses instead. An image-only message renders an
   "[Image: name]" placeholder rather than a blank turn. Optional columns are
   probed
   with `PRAGMA table_info`, so a pre-canonicalization database still parses
