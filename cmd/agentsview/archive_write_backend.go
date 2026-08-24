@@ -970,6 +970,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		DisabledAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
+		PreserveMissingSources:  b.appCfg.PreserveMissingSources,
 		Machine:                 b.appCfg.LocalMachineName,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 	})
@@ -1101,6 +1102,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 		DisabledAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
+		PreserveMissingSources:  b.appCfg.PreserveMissingSources,
 		Machine:                 b.appCfg.LocalMachineName,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 	})

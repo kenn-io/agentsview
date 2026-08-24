@@ -263,6 +263,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 			DisabledAgents:          b.cfg.DisabledAgents,
 			IncludeCwdPrefixes:      b.cfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths:      b.cfg.ScanProtectedPaths,
+			PreserveMissingSources:  b.cfg.PreserveMissingSources,
 			Machine:                 b.cfg.LocalMachineName,
 			BlockedResultCategories: b.cfg.ResultContentBlockedCategories,
 		})

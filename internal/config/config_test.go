@@ -2326,6 +2326,28 @@ func TestLoadFile_SyncIncludeCwdPrefixesDefaultsEmpty(t *testing.T) {
 	assert.Empty(t, cfg.SyncIncludeCwdPrefixes)
 }
 
+func TestLoadFile_PreserveMissingSources(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "absent", want: false},
+		{name: "false", value: "false", want: false},
+		{name: "true", value: "true", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			if tt.value != "" {
+				f.WriteConfigText(t, "preserve_missing_sources = "+tt.value+"\n")
+			}
+			cfg := f.LoadMinimal(t)
+			assert.Equal(t, tt.want, cfg.PreserveMissingSources)
+		})
+	}
+}
+
 func TestLoadMinimal_ExpandsUserSuppliedLocalPaths(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)

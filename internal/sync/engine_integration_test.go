@@ -16676,6 +16676,49 @@ func TestSyncAllTombstonesStaleClaudeForkRow(t *testing.T) {
 		"append after tombstone should take the incremental path")
 }
 
+func TestSyncAllPreservesStaleClaudeForkRowWhenConfigured(t *testing.T) {
+	env := setupTestEnv(t)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hello there", "/workspace/api").
+		String()
+	path := env.writeClaudeSession(t, "-workspace-api", "configured-sess.jsonl", content)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	staleID := "configured-sess-11111111-2222-4333-8444-555555555555"
+	parentID := "configured-sess"
+	result, err := env.db.WriteSessionBatch([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID: staleID, Project: "api", Machine: "local", Agent: "claude",
+			ParentSessionID: &parentID, RelationshipType: "fork", FilePath: &path,
+		},
+	}})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.WrittenSessions)
+	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
+		t.Context(), "local", []db.SessionSourcePath{{Agent: "claude", FilePath: path}},
+	))
+
+	env.engine.Close()
+	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}},
+		Machine:   "local", PreserveMissingSources: true,
+	})
+	t.Cleanup(env.engine.Close)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.ClaudeAssistantJSON(
+		[]map[string]any{{"type": "text", "text": "append"}}, tsEarlyS1) + "\n")
+	require.NoError(t, f.Close())
+	require.NoError(t, err)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	stale, err := env.db.GetSessionFull(t.Context(), staleID)
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	assert.Nil(t, stale.DeletedAt, "configured reconciliation must preserve source-missing rows")
+}
+
 func TestSyncAllRetriesStaleClaudeForkCleanupAfterEstablishingBaseline(
 	t *testing.T,
 ) {

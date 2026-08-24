@@ -442,6 +442,9 @@ type EngineConfig struct {
 	// scan_protected_paths config option. The safe default belongs to the
 	// zero value so an engine built without the option never prompts.
 	ScanProtectedPaths bool
+	// PreserveMissingSources keeps source-missing sessions active during
+	// local reconciliation. Remote/import engines leave the zero value.
+	PreserveMissingSources bool
 	// IDPrefix is prepended to all session IDs. Used by
 	// remote sync to namespace IDs by host (e.g. "host~").
 	IDPrefix string
@@ -526,15 +529,16 @@ type Engine struct {
 	// TCC-protected locations. homeDir is empty when the home directory
 	// cannot be resolved, which disables the gate rather than guessing.
 	// goos mirrors runtime.GOOS so the gate is testable off-darwin.
-	scanProtectedPaths bool
-	homeDir            string
-	goos               string
-	syncMu             gosync.Mutex // serializes all sync operations
-	mu                 gosync.RWMutex
-	lastSync           time.Time
-	lastSyncStats      SyncStats
-	currentProgress    *Progress
-	progressStallAfter time.Duration
+	scanProtectedPaths     bool
+	preserveMissingSources bool
+	homeDir                string
+	goos                   string
+	syncMu                 gosync.Mutex // serializes all sync operations
+	mu                     gosync.RWMutex
+	lastSync               time.Time
+	lastSyncStats          SyncStats
+	currentProgress        *Progress
+	progressStallAfter     time.Duration
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
@@ -891,6 +895,7 @@ func NewEngine(
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
 		scanProtectedPaths:      cfg.ScanProtectedPaths,
+		preserveMissingSources:  cfg.PreserveMissingSources,
 		homeDir:                 userHomeDirOrEmpty(),
 		goos:                    runtime.GOOS,
 		skipCache:               skipCache,
@@ -9792,7 +9797,8 @@ func (e *Engine) collectAndBatchWithOptions(
 		// unchanged survivors are dropped from r.results before this
 		// point, so the source-wide gate would freeze an allowed
 		// member's deletion whenever everything else was unchanged.
-		if len(r.sourceMissingMembers) > 0 && !options.preserveMissingSources {
+		if len(r.sourceMissingMembers) > 0 &&
+			!e.preserveMissingSources && !options.preserveMissingSources {
 			tombstoned, deferred, tombstoneErr := e.reconcileSourceMissingMembers(
 				ctx, r.agent, r.sourceMissingMembers,
 				baselineExactOwnership, rejectExactOwnership,
@@ -19230,7 +19236,7 @@ func (e *Engine) processAndWriteSessionFile(
 	// row as a revivable source-missing tombstone. The cwd-filter
 	// freeze is judged per member against the archived cwd, matching
 	// the batch path.
-	if len(res.sourceMissingMembers) > 0 {
+	if len(res.sourceMissingMembers) > 0 && !e.preserveMissingSources {
 		var exactOwnerships []db.SessionSourceOwnership
 		var rejectedExactOwnerships []db.SessionSourceOwnership
 		tombstoned, _, err := e.reconcileSourceMissingMembers(

@@ -74,12 +74,13 @@ func syncService(
 		return nil, nil, fmt.Errorf("opening db: %w", err)
 	}
 	engine := sync.NewEngine(d, sync.EngineConfig{
-		AgentDirs:          cfg.AgentDirs,
-		SourceMachines:     cfg.SourceMachines,
-		DisabledAgents:     cfg.DisabledAgents,
-		IncludeCwdPrefixes: cfg.SyncIncludeCwdPrefixes,
-		ScanProtectedPaths: cfg.ScanProtectedPaths,
-		Machine:            cfg.LocalMachineName,
+		AgentDirs:              cfg.AgentDirs,
+		SourceMachines:         cfg.SourceMachines,
+		DisabledAgents:         cfg.DisabledAgents,
+		IncludeCwdPrefixes:     cfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths:     cfg.ScanProtectedPaths,
+		PreserveMissingSources: cfg.PreserveMissingSources,
+		Machine:                cfg.LocalMachineName,
 	})
 	// Close the engine before the DB so pending debounced signal
 	// recomputes flush while the DB is still open.
