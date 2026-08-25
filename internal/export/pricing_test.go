@@ -173,6 +173,34 @@ func TestPricingResolverResolveUsesCanonicalWithoutExactCustom(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("2"), lookup.Rates.InputPerMTok)
 }
 
+func TestPricingResolverResolveAtPrefersCanonicalCustomOverGenAI(t *testing.T) {
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{
+			ModelPattern: "gpt-5.6-luna",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("7"),
+				Source:       PricingRowSourceCustom,
+			},
+		},
+		{
+			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+			GenAISource: PricingRowSourceEmbedded,
+		},
+	})
+
+	pricedModel, lookup := resolver.ResolveAt(
+		"luna-runtime-alias", "gpt-5.6-luna",
+		time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+	)
+
+	assert.Equal(t, "gpt-5.6-luna", pricedModel)
+	require.True(t, lookup.OK)
+	assert.Equal(t, "gpt-5.6-luna", lookup.Pattern)
+	assert.Equal(t, money.MustParseDollars("7"), lookup.Rates.InputPerMTok)
+	assert.Equal(t, PricingRowSourceCustom, lookup.Rates.Source)
+}
+
 func TestPricingResolverBuildBlockKeepsReportedModelResolutions(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{
 		{

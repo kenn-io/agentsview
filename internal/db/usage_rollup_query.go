@@ -405,7 +405,7 @@ func aggregateUsageRollupExceptions(
 	authoritative := make(map[string]authoritativeCandidate)
 	for _, fact := range survivors {
 		priced, err := priceUsageFact(usagePriceInput{
-			Fact: fact.Fact, Timestamp: fact.DedupTimestamp,
+			Fact: fact.Fact, Timestamp: fact.Fact.RawTimestamp,
 			ReportedModel: fact.Model,
 		}, resolver)
 		if err != nil {
@@ -429,13 +429,13 @@ func aggregateUsageRollupExceptions(
 				Project: session.Project, Agent: session.Agent, Machine: session.Machine,
 				Model: fact.Model, PricedModel: priced.PricedModel,
 				MatchedPattern: priced.MatchedPattern, RateOK: priced.RateOK,
-				PricingTimestamp:              fact.DedupTimestamp,
+				PricingTimestamp:              fact.Fact.RawTimestamp,
 				BandThreshold:                 priced.BandThreshold,
 				DiscardedSnapshotOutputTokens: discarded,
 			}
 			groups[itemKey] = group
 		} else if group.PricingTimestamp == "" {
-			group.PricingTimestamp = fact.DedupTimestamp
+			group.PricingTimestamp = fact.Fact.RawTimestamp
 		}
 		if err := addUsageFactToGroup(group, fact, priced); err != nil {
 			return nil, err

@@ -230,6 +230,14 @@ func (r *PricingResolver) ResolveAt(
 			OK:      true,
 		}
 	}
+	pricedModel := canonicalModel
+	if pricedModel == "" {
+		pricedModel = reportedModel
+	}
+	flatLookup := r.Lookup(pricedModel)
+	if flatLookup.OK && flatLookup.Rates.Source == PricingRowSourceCustom {
+		return pricedModel, flatLookup
+	}
 	if !timestamp.IsZero() {
 		if pricedModel, rates, ok := r.resolveGenAI(
 			reportedModel, canonicalModel, timestamp,
@@ -237,11 +245,7 @@ func (r *PricingResolver) ResolveAt(
 			return pricedModel, rates
 		}
 	}
-	pricedModel := canonicalModel
-	if pricedModel == "" {
-		pricedModel = reportedModel
-	}
-	return pricedModel, r.Lookup(pricedModel)
+	return pricedModel, flatLookup
 }
 
 func (r *PricingResolver) resolveGenAI(

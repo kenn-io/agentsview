@@ -189,9 +189,6 @@ func buildUsageDailyContributions(
 	for _, survivor := range survivors {
 		fact := survivor.Fact
 		timestamp := fact.Fact.RawTimestamp
-		if timestamp == "" {
-			timestamp = fact.DedupTimestamp
-		}
 		priced, err := priceUsageFact(usagePriceInput{
 			Fact: fact.Fact, Timestamp: timestamp, ReportedModel: fact.Model,
 		}, resolver)

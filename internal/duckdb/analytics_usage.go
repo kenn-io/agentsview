@@ -3234,6 +3234,7 @@ SELECT
 	NULL AS message_ordinal,
 	'cursor' AS source,
 	cu.occurred_at AS ts,
+	cu.occurred_at AS pricing_ts,
 	cu.model AS model,
 	'' AS token_json,
 	'' AS claude_message_id,
@@ -3316,6 +3317,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 	query := fmt.Sprintf(`
 		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 			'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
+			m.timestamp AS pricing_ts,
 			m.model AS model, m.token_usage AS token_json,
 			m.claude_message_id AS claude_message_id,
 			m.claude_request_id AS claude_request_id,
@@ -3336,6 +3338,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 		UNION ALL
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 			ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
+			ue.occurred_at AS pricing_ts,
 			ue.model AS model, '' AS token_json,
 			'' AS claude_message_id, '' AS claude_request_id,
 			'' AS source_uuid,
@@ -3505,7 +3508,7 @@ func duckPriceModelCaseSQL() string {
 		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
 			THEN '%[2]s'
 		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
-			AND (ts IS NULL OR ts >= TIMESTAMP '%[4]s')
+			AND (pricing_ts IS NULL OR pricing_ts >= TIMESTAMP '%[4]s')
 			THEN '%[5]s'
 		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
 			THEN '%[2]s'
@@ -3717,6 +3720,7 @@ type duckUsageBucket struct {
 type duckUsageAggregateRow struct {
 	date           string
 	ts             string
+	pricingTS      string
 	sessionID      string
 	project        string
 	agent          string
@@ -3751,6 +3755,7 @@ type duckSessionUsageRow struct {
 	messageOrdinal    sql.NullInt64
 	source            string
 	ts                string
+	pricingTS         string
 	model             string
 	inputTok          int
 	outputTok         int
@@ -3776,7 +3781,7 @@ func duckUsagePricingTimestamp(ts string) time.Time {
 }
 
 func duckSessionUsageLookupModel(r duckSessionUsageRow) string {
-	return duckUsageLookupModel(r.model, r.ts)
+	return duckUsageLookupModel(r.model, r.pricingTS)
 }
 
 func duckUsageAggregateCost(
@@ -3914,7 +3919,7 @@ func duckSessionUsageRowCost(
 	}
 	_, lookup := pricing.ResolveAt(
 		r.model, duckSessionUsageLookupModel(r),
-		duckUsagePricingTimestamp(r.ts),
+		duckUsagePricingTimestamp(r.pricingTS),
 	)
 	if !lookup.OK {
 		fee, feeErr := export.WebSearchFee(r.webSearchRequests)
@@ -3993,7 +3998,7 @@ func (s *Store) forEachDailyUsageAggregateRow(
 	// turn several unrepresentable sub-microdollar rows into stored cost.
 	query := cte + `
 		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model, price_model,
-			source, message_ordinal, ts,
+			source, message_ordinal, ts, pricing_ts,
 			input_tokens_norm AS input_tokens,
 			output_tokens_norm AS output_tokens,
 			cache_create_norm AS cache_creation_tokens,
@@ -4021,10 +4026,10 @@ func (s *Store) forEachDailyUsageAggregateRow(
 	defer rows.Close()
 	for rows.Next() {
 		var r duckUsageAggregateRow
-		var ts any
+		var ts, pricingTS any
 		if err := rows.Scan(
 			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
-			&r.priceModel, &r.source, &r.messageOrdinal, &ts,
+			&r.priceModel, &r.source, &r.messageOrdinal, &ts, &pricingTS,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
 			&r.billableCacheCr, &r.billableCacheRd,
@@ -4035,6 +4040,7 @@ func (s *Store) forEachDailyUsageAggregateRow(
 			return fmt.Errorf("scanning duckdb daily usage aggregate: %w", err)
 		}
 		r.ts = formatDBTime(ts)
+		r.pricingTS = formatDBTime(pricingTS)
 		if err := visit(r); err != nil {
 			return err
 		}
@@ -4092,7 +4098,7 @@ func (s *Store) GetDailyUsage(
 			accum[key] = b
 		}
 		cost, savings, _, _, priceErr := duckUsageAggregateResolvedCost(
-			r.model, r.priceModel, duckUsagePricingTimestamp(r.ts),
+			r.model, r.priceModel, duckUsagePricingTimestamp(r.pricingTS),
 			r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 			r.billableInput, r.billableOutput, r.billableReason,
 			r.billableCacheCr, r.billableCacheRd, r.billableWebSearch,
@@ -4392,7 +4398,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	// after each row has been quantized to whole microdollars.
 	query := cte + `
 		SELECT session_id, project, agent, model, price_model, source, message_ordinal, ts,
-			display_name, started_at,
+			pricing_ts, display_name, started_at,
 			input_tokens_norm AS input_tokens,
 			output_tokens_norm AS output_tokens,
 			snapshot_deduplicated_output_tokens,
@@ -4422,10 +4428,10 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	defer rows.Close()
 	for rows.Next() {
 		var r duckUsageAggregateRow
-		var ts, startedAt any
+		var ts, pricingTS, startedAt any
 		if err := rows.Scan(
 			&r.sessionID, &r.project, &r.agent, &r.model,
-			&r.priceModel, &r.source, &r.messageOrdinal, &ts,
+			&r.priceModel, &r.source, &r.messageOrdinal, &ts, &pricingTS,
 			&r.displayName, &startedAt,
 			&r.inputTok, &r.outputTok, &r.snapshotDedupOutput,
 			&r.cacheCr, &r.cacheRd,
@@ -4438,6 +4444,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			return fmt.Errorf("scanning duckdb session usage aggregate: %w", err)
 		}
 		r.ts = formatDBTime(ts)
+		r.pricingTS = formatDBTime(pricingTS)
 		r.startedAt = formatDBTime(startedAt)
 		if err := visit(r); err != nil {
 			return err
@@ -4481,7 +4488,7 @@ func (s *Store) sessionUsageRows(
 ) ([]duckSessionUsageRow, error) {
 	cte, args := duckUsageCTE(db.UsageFilter{}, sessionID)
 	query := cte + `
-		SELECT session_id, message_ordinal, source, ts, model,
+		SELECT session_id, message_ordinal, source, ts, pricing_ts, model,
 			input_tokens_norm, output_tokens_norm,
 			cache_create_norm, cache_read_norm,
 			reasoning_tokens_norm, web_search_requests_norm,
@@ -4499,15 +4506,16 @@ func (s *Store) sessionUsageRows(
 	var out []duckSessionUsageRow
 	for rows.Next() {
 		var r duckSessionUsageRow
-		var ts any
+		var ts, pricingTS any
 		if err := rows.Scan(
-			&r.sessionID, &r.messageOrdinal, &r.source, &ts, &r.model,
+			&r.sessionID, &r.messageOrdinal, &r.source, &ts, &pricingTS, &r.model,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
 			&r.reasoningTok, &r.webSearchRequests, &r.cost, &r.costSource,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb session usage row: %w", err)
 		}
 		r.ts = formatDBTime(ts)
+		r.pricingTS = formatDBTime(pricingTS)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -4538,7 +4546,7 @@ func (s *Store) GetTopSessionsByCost(
 				bySession[r.sessionID] = a
 			}
 			cost, _, _, _, priceErr := duckUsageAggregateResolvedCost(
-				r.model, r.priceModel, duckUsagePricingTimestamp(r.ts),
+				r.model, r.priceModel, duckUsagePricingTimestamp(r.pricingTS),
 				r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 				r.billableInput, r.billableOutput, r.billableReason,
 				r.billableCacheCr, r.billableCacheRd, r.billableWebSearch,
@@ -4751,7 +4759,7 @@ func (s *Store) GetSessionUsage(
 				authoritativeCost = &v
 			}
 			cost, _, priced, contributes, priceErr := duckUsageAggregateResolvedCost(
-				r.model, r.priceModel, duckUsagePricingTimestamp(r.ts),
+				r.model, r.priceModel, duckUsagePricingTimestamp(r.pricingTS),
 				r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 				r.billableInput, r.billableOutput, r.billableReason,
 				r.billableCacheCr, r.billableCacheRd, r.billableWebSearch,

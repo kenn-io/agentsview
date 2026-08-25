@@ -944,8 +944,8 @@ func pgActivityReportRowStatusWithWebSearchRequests(
 	r pgDailyUsageScanRow, webSearches int, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
 	pricedModel, lookup := pricing.ResolveAt(
-		r.model, pgUsageLookupModel(r.model, r.ts),
-		pgUsagePricingTimestamp(r.ts),
+		r.model, pgUsageLookupModel(r.model, r.pricingTS),
+		pgUsagePricingTimestamp(r.pricingTS),
 	)
 	inTok, outTok, crTok, rdTok, reasoningTok := pgDailyUsageRowTokens(r)
 	if r.cost.Valid {

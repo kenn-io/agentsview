@@ -688,7 +688,7 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('untimed-rollup-model', 3000000, 15000000, 3750000, 300000, 'seed')`)
+		) VALUES ('gpt-5.6-luna', 3000000, 15000000, 3750000, 300000, 'seed')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -703,8 +703,8 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 			session_id, ordinal, role, content, timestamp, content_length,
 			model, token_usage
 		) VALUES
-			('pg-rollup-untimed-root', 0, 'assistant', 'root', NULL, 4, 'untimed-rollup-model', '{"input_tokens":1000,"output_tokens":500}'),
-			('pg-rollup-untimed-child', 0, 'assistant', 'child', NULL, 5, 'untimed-rollup-model', '{"input_tokens":1000,"output_tokens":500}')`)
+			('pg-rollup-untimed-root', 0, 'assistant', 'root', NULL, 4, 'gpt-5.6-luna', '{"input_tokens":1000,"output_tokens":500}'),
+			('pg-rollup-untimed-child', 0, 'assistant', 'child', NULL, 5, 'gpt-5.6-luna', '{"input_tokens":1000,"output_tokens":500}')`)
 	require.NoError(t, err)
 
 	rollup, err := service.GetSessionUsageRollup(ctx, store, "pg-rollup-untimed-root", false)

@@ -556,9 +556,10 @@ func TestDuckActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing
 
 			_, cost, priced, contributes, err := duckActivityReportRowStatus(
 				duckActivityReportUsageRow{
-					model:    "daimon-kimi-code",
-					ts:       tt.timestamp,
-					inputTok: 1_000_000,
+					model:     "daimon-kimi-code",
+					ts:        tt.timestamp,
+					pricingTS: tt.timestamp,
+					inputTok:  1_000_000,
 				},
 				resolver,
 			)
@@ -598,9 +599,10 @@ func TestDuckActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
 
 	_, cost, priced, contributes, err := duckActivityReportRowStatus(
 		duckActivityReportUsageRow{
-			model:    "daimon-kimi-code",
-			ts:       "2026-07-19T00:00:00Z",
-			inputTok: 1_000_000,
+			model:     "daimon-kimi-code",
+			ts:        "2026-07-19T00:00:00Z",
+			pricingTS: "2026-07-19T00:00:00Z",
+			inputTok:  1_000_000,
 		},
 		resolver,
 	)
@@ -615,6 +617,36 @@ func TestDuckActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
 	resolutions := block.Models["daimon-kimi-code"].Resolutions
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, "daimon-kimi-code", resolutions[0].PricedModel)
+}
+
+func TestDuckActivityReportRowStatusUsesFlatRateForUntimedUsage(t *testing.T) {
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+		{
+			ModelPattern: "gpt-5.6-luna",
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("9"),
+				Source:       export.PricingRowSourceFetched,
+			},
+		},
+		{
+			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+			GenAISource: export.PricingRowSourceEmbedded,
+		},
+	})
+
+	_, cost, priced, contributes, err := duckActivityReportRowStatus(
+		duckActivityReportUsageRow{
+			model: "gpt-5.6-luna", ts: "2026-08-01T00:00:00Z",
+			pricingTS: "", inputTok: 1_000,
+		},
+		resolver,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+	assert.Equal(t, money.MustParseDollars("0.009"), cost)
 }
 
 func TestDuckGetActivityReportPricingBandApplicationCountedOnce(t *testing.T) {

@@ -745,7 +745,7 @@ func TestGetDailyUsageFallsBackForEmptyMessageTimestamp(t *testing.T) {
 	ctx := context.Background()
 
 	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
+		ModelPattern:  "gpt-5.6-luna",
 		InputPerMTok:  money.MustParseDollars("3.0"),
 		OutputPerMTok: money.MustParseDollars("15.0"),
 	}}), "UpsertModelPricing")
@@ -759,7 +759,7 @@ func TestGetDailyUsageFallsBackForEmptyMessageTimestamp(t *testing.T) {
 		Ordinal:   0,
 		Role:      "assistant",
 		Timestamp: "",
-		Model:     "claude-sonnet-4-20250514",
+		Model:     "gpt-5.6-luna",
 		TokenUsage: jsontext.Value(
 			`{"input_tokens":1000,"output_tokens":500}`,
 		),
@@ -775,6 +775,9 @@ func TestGetDailyUsageFallsBackForEmptyMessageTimestamp(t *testing.T) {
 	assert.Equal(t, "2024-06-15", result.Daily[0].Date, "Date")
 	assert.Equal(t, 1000, result.Totals.InputTokens, "InputTokens")
 	assert.Equal(t, 500, result.Totals.OutputTokens, "OutputTokens")
+	assert.Equal(t, money.MustParseDollars("0.0105"),
+		result.Totals.TotalCost,
+		"untimed usage must use the flat fallback, not the session start date")
 }
 
 func TestBoundedUsagePreservesMalformedTimestampDateFallbackBeforeSnapshotRanking(

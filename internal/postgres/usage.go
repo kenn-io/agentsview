@@ -226,6 +226,7 @@ SELECT
 	m.ordinal AS message_ordinal,
 	'message' AS usage_source,
 	COALESCE(m.timestamp, s.started_at) AS ts,
+	m.timestamp AS pricing_ts,
 	m.model,
 	m.token_usage,
 	0 AS input_tokens,
@@ -259,6 +260,7 @@ SELECT
 	ue.message_ordinal,
 	ue.source AS usage_source,
 	COALESCE(ue.occurred_at, s.started_at) AS ts,
+	ue.occurred_at AS pricing_ts,
 	ue.model,
 	'' AS token_usage,
 	ue.input_tokens,
@@ -304,6 +306,7 @@ SELECT
 	m.ordinal AS message_ordinal,
 	'message' AS usage_source,
 	COALESCE(m.timestamp, s.started_at) AS ts,
+	m.timestamp AS pricing_ts,
 	m.model,
 	m.token_usage,
 	0 AS input_tokens,
@@ -331,6 +334,7 @@ SELECT
 	ue.message_ordinal,
 	ue.source AS usage_source,
 	COALESCE(ue.occurred_at, s.started_at) AS ts,
+	ue.occurred_at AS pricing_ts,
 	ue.model,
 	'' AS token_usage,
 	ue.input_tokens,
@@ -360,6 +364,7 @@ SELECT
 	m.ordinal AS message_ordinal,
 	'message' AS usage_source,
 	COALESCE(m.timestamp, s.started_at) AS ts,
+	m.timestamp AS pricing_ts,
 	m.model,
 	m.token_usage,
 	0 AS input_tokens,
@@ -386,6 +391,7 @@ SELECT
 	ue.message_ordinal,
 	ue.source AS usage_source,
 	COALESCE(ue.occurred_at, s.started_at) AS ts,
+	ue.occurred_at AS pricing_ts,
 	ue.model,
 	'' AS token_usage,
 	ue.input_tokens,
@@ -494,6 +500,7 @@ type pgUsageScanRow struct {
 	messageOrdinal           sql.NullInt64
 	usageSource              string
 	ts                       sql.NullTime
+	pricingTS                sql.NullTime
 	model                    string
 	tokenJSON                string
 	inputTokens              int
@@ -523,6 +530,7 @@ type pgDailyUsageScanRow struct {
 	messageOrdinal           sql.NullInt64
 	usageSource              string
 	ts                       sql.NullTime
+	pricingTS                sql.NullTime
 	model                    string
 	tokenJSON                string
 	webSearchRequests        sql.NullInt64
@@ -556,6 +564,7 @@ SELECT
 	u.message_ordinal,
 	u.usage_source,
 	u.ts,
+	u.pricing_ts,
 	u.model,
 	u.token_usage,
 	u.input_tokens,
@@ -643,6 +652,7 @@ SELECT
 	u.message_ordinal,
 	u.usage_source,
 	u.ts,
+	u.pricing_ts,
 	u.model,
 	u.token_usage,
 	` + webSearchColumn + ` AS web_search_requests,
@@ -790,6 +800,7 @@ SELECT
 	NULL::INT AS message_ordinal,
 	'cursor' AS usage_source,
 	cu.occurred_at AS ts,
+	cu.occurred_at AS pricing_ts,
 	cu.model,
 	'' AS token_usage,
 	cu.input_tokens,
@@ -984,6 +995,7 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 		&r.messageOrdinal,
 		&r.usageSource,
 		&r.ts,
+		&r.pricingTS,
 		&r.model,
 		&r.tokenJSON,
 		&r.inputTokens,
@@ -1023,6 +1035,7 @@ func scanPGDailyUsageRowWithMachine(
 		&r.messageOrdinal,
 		&r.usageSource,
 		&r.ts,
+		&r.pricingTS,
 		&r.model,
 		&r.tokenJSON,
 		&r.webSearchRequests,
@@ -1138,8 +1151,8 @@ func pgDailyUsageAmounts(
 		pgDailyUsageRowTokens(r)
 
 	pricedModel, lookup := pricing.ResolveAt(
-		r.model, pgUsageLookupModel(r.model, r.ts),
-		pgUsagePricingTimestamp(r.ts),
+		r.model, pgUsageLookupModel(r.model, r.pricingTS),
+		pgUsagePricingTimestamp(r.pricingTS),
 	)
 	rates := lookup.Rates
 	requestScoped := pgUsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
@@ -1293,8 +1306,8 @@ func pgSessionRowCostWithWebSearchRequests(
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 	pricedModel, lookup := pricing.ResolveAt(
-		r.model, pgUsageLookupModel(r.model, r.ts),
-		pgUsagePricingTimestamp(r.ts),
+		r.model, pgUsageLookupModel(r.model, r.pricingTS),
+		pgUsagePricingTimestamp(r.pricingTS),
 	)
 	if r.cost.Valid {
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
