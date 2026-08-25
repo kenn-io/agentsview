@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -765,6 +766,79 @@ func TestKiroProviderChangedCurrentEventIncludesSQLiteDuplicate(t *testing.T) {
 	assert.Equal(t, []string{KiroSQLiteVirtualPath(dbPath, rawID)}, got)
 	assert.Equal(t, int64(3), provider.(ReconciliationSourceRanker).
 		ReconciliationSourceRank(changed[0]).Class)
+}
+
+func TestKiroProviderChangedCurrentEventScansOnlyAffectedSession(t *testing.T) {
+	root := t.TempDir()
+	targetID := "sess_0123456789abcdef"
+	target := filepath.Join(root, "workspace", targetID, "messages.jsonl")
+	writeSourceFile(t, target, `{"payload":{"type":"user","content":"target"}}`+"\n")
+	for i := 0; i < 128; i++ {
+		id := fmt.Sprintf("sess_%016x", i)
+		path := filepath.Join(root, "workspace", id, "messages.jsonl")
+		writeSourceFile(t, path, `{"payload":{"type":"user","content":"decoy"}}`+"\n")
+	}
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	kiro := provider.(*kiroProvider)
+	var readDirs []string
+	kiro.sources.readDir = func(path string) ([]os.DirEntry, error) {
+		readDirs = append(readDirs, path)
+		return os.ReadDir(path)
+	}
+
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: target, WatchRoot: root, EventKind: "write",
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, target, changed[0].DisplayPath)
+	assert.Equal(t, []string{root}, readDirs,
+		"a non-database event should inspect only the root directory")
+}
+
+func TestKiroProviderChangedLegacyEventPreservesMetadataIdentity(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "storage-name.jsonl")
+	writeSourceFile(t, path, kiroProviderJSONLFixture("legacy"))
+	writeSourceFile(t, filepath.Join(root, "storage-name.json"),
+		kiroProviderMetaFixture("mapped-session", "/home/user/code/legacy"))
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: path, WatchRoot: root, EventKind: "write",
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, path, changed[0].DisplayPath)
+}
+
+func TestKiroProviderDiscoveryFailsOnCurrentRootReadError(t *testing.T) {
+	root := t.TempDir()
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	provider.(*kiroProvider).sources.readDir = func(string) ([]os.DirEntry, error) {
+		return nil, fmt.Errorf("current root is unreadable")
+	}
+	_, err := provider.Discover(context.Background())
+	assert.Error(t, err)
+}
+
+func TestKiroProviderDiscoveryFailsOnCurrentWorkspaceReadError(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	require.NoError(t, os.Mkdir(workspace, 0o755))
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	provider.(*kiroProvider).sources.readDir = func(path string) ([]os.DirEntry, error) {
+		if samePath(path, root) {
+			return os.ReadDir(path)
+		}
+		return nil, fmt.Errorf("current workspace is unreadable")
+	}
+	_, err := provider.Discover(context.Background())
+	assert.Error(t, err)
 }
 
 func TestKiroProviderCurrentSidecarRequiresRegularContainedFile(t *testing.T) {

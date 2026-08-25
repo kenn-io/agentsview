@@ -347,6 +347,7 @@ type kiroSource struct {
 type kiroSourceSet struct {
 	roots     []string
 	planCache *kiroChangedPlanCache
+	readDir   func(string) ([]os.DirEntry, error)
 }
 
 type kiroChangedPlanCache struct {
@@ -360,6 +361,7 @@ func newKiroSourceSet(roots []string) kiroSourceSet {
 	return kiroSourceSet{
 		roots:     cleanJSONLRoots(roots),
 		planCache: &kiroChangedPlanCache{},
+		readDir:   os.ReadDir,
 	}
 }
 
@@ -417,7 +419,11 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 			}
 			databases = append(databases, dbSource)
 		}
-		for _, file := range s.discoverCurrentJSONL(root) {
+		currentFiles, err := s.discoverCurrentJSONL(root)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, file := range currentFiles {
 			if source, ok := s.sourceRef(root, file.Path, false); ok {
 				if _, id, ok := kiroCurrentPathUnderRoot(root, file.Path); ok {
 					s.setSourceMTime(&source)
@@ -589,7 +595,7 @@ func (s kiroSourceSet) SourcesForChangedPath(
 		if !ok {
 			continue
 		}
-		winners, databases, err := s.sourcePlanForChangedPath(ctx, req)
+		winners, databases, err := s.sourcePlanForChangedPath(ctx, req, source)
 		if err != nil {
 			return nil, err
 		}
@@ -623,8 +629,26 @@ func (s kiroSourceSet) SourcesForChangedPath(
 }
 
 func (s kiroSourceSet) sourcePlanForChangedPath(
-	ctx context.Context, req ChangedPathRequest,
+	ctx context.Context, req ChangedPathRequest, changed SourceRef,
 ) (map[string]SourceRef, []SourceRef, error) {
+	changedSrc, ok := s.sourceFromRef(changed)
+	if !ok {
+		return nil, nil, nil
+	}
+	if changedSrc.Kind != kiroSourceSQLiteDB {
+		id := changedSrc.SessionID
+		if id == "" {
+			id = KiroSessionIDFromPath(changedSrc.Path)
+		}
+		winner, found, err := s.sourceForSession(ctx, id, changed)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !found {
+			return map[string]SourceRef{}, nil, nil
+		}
+		return map[string]SourceRef{id: winner}, nil, nil
+	}
 	if s.planCache == nil {
 		return s.sourcePlan(ctx)
 	}
@@ -647,6 +671,69 @@ func (s kiroSourceSet) sourcePlanForChangedPath(
 	s.planCache.databases = databases
 	s.planCache.mu.Unlock()
 	return winners, databases, nil
+}
+
+func (s kiroSourceSet) sourceForSession(
+	ctx context.Context, sessionID string, changed SourceRef,
+) (SourceRef, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return SourceRef{}, false, err
+	}
+	if sessionID == "" {
+		return SourceRef{}, false, nil
+	}
+	var candidates []SourceRef
+	if changedSrc, ok := s.sourceFromRef(changed); ok &&
+		changedSrc.Kind != kiroSourceSQLiteDB && kiroSourceExists(changed) {
+		s.setSourceMTime(&changed)
+		candidates = append(candidates, changed)
+	}
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return SourceRef{}, false, err
+		}
+		dbPath, err := kiroSQLiteDBPathChecked(root)
+		if err != nil {
+			return SourceRef{}, false, err
+		}
+		if dbPath != "" {
+			meta, found, err := KiroSQLiteSessionMetaForID(dbPath, sessionID)
+			if err != nil {
+				return SourceRef{}, false, fmt.Errorf(
+					"find Kiro SQLite session %s: %w", sessionID, err,
+				)
+			}
+			if found {
+				source := s.newSourceRef(
+					root, meta.VirtualPath, dbPath, sessionID,
+					kiroSourceSQLiteSession,
+				)
+				source.DiscoveryMTimeNS = meta.FileMtime
+				candidates = append(candidates, source)
+			}
+		}
+		currentFiles, err := s.discoverCurrentJSONLForSession(root, sessionID)
+		if err != nil {
+			return SourceRef{}, false, err
+		}
+		for _, file := range currentFiles {
+			if source, ok := s.sourceRef(root, file.Path, false); ok {
+				s.setSourceMTime(&source)
+				candidates = append(candidates, source)
+			}
+		}
+		if filepath.Base(sessionID) == sessionID && sessionID != "." && sessionID != ".." {
+			for _, dir := range []string{root, filepath.Join(root, "cli")} {
+				path := filepath.Join(dir, sessionID+".jsonl")
+				if source, ok := s.sourceRef(root, path, false); ok {
+					s.setSourceMTime(&source)
+					candidates = append(candidates, source)
+				}
+			}
+		}
+	}
+	winner, found := s.bestSource(candidates)
+	return winner, found, nil
 }
 
 func kiroChangedPlanCacheKey(req ChangedPathRequest) string {
@@ -796,7 +883,11 @@ func (s kiroSourceSet) FindSource(
 				))
 			}
 		}
-		for _, file := range s.discoverCurrentJSONL(root) {
+		currentFiles, err := s.discoverCurrentJSONL(root)
+		if err != nil {
+			return SourceRef{}, false, err
+		}
+		for _, file := range currentFiles {
 			if _, id, ok := kiroCurrentPathUnderRoot(root, file.Path); ok &&
 				id == req.RawSessionID {
 				if source, ok := s.sourceRef(root, file.Path, false); ok {
@@ -1185,7 +1276,7 @@ func kiroLegacyPathUnderRoot(root, path string) bool {
 	return strings.HasSuffix(rel, ".jsonl")
 }
 
-func (s kiroSourceSet) discoverCurrentJSONL(root string) []DiscoveredFile {
+func (s kiroSourceSet) discoverCurrentJSONL(root string) ([]DiscoveredFile, error) {
 	var files []DiscoveredFile
 	add := func(workspace, session string) {
 		path := filepath.Join(root, workspace, session, "messages.jsonl")
@@ -1193,9 +1284,12 @@ func (s kiroSourceSet) discoverCurrentJSONL(root string) []DiscoveredFile {
 			files = append(files, DiscoveredFile{Path: path, Agent: AgentKiro})
 		}
 	}
-	entries, err := os.ReadDir(root)
+	entries, err := s.readDir(root)
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -1208,9 +1302,12 @@ func (s kiroSourceSet) discoverCurrentJSONL(root string) []DiscoveredFile {
 			continue
 		}
 		workspace := filepath.Join(root, entry.Name())
-		children, err := os.ReadDir(workspace)
+		children, err := s.readDir(workspace)
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
 		}
 		for _, child := range children {
 			if child.IsDir() && isKiroCurrentSessionDir(child.Name()) {
@@ -1218,7 +1315,38 @@ func (s kiroSourceSet) discoverCurrentJSONL(root string) []DiscoveredFile {
 			}
 		}
 	}
-	return files
+	return files, nil
+}
+
+func (s kiroSourceSet) discoverCurrentJSONLForSession(
+	root, sessionID string,
+) ([]DiscoveredFile, error) {
+	if !isKiroCurrentSessionDir(sessionID) {
+		return nil, nil
+	}
+	var files []DiscoveredFile
+	add := func(workspace string) {
+		path := filepath.Join(root, workspace, sessionID, "messages.jsonl")
+		if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok &&
+			kiroRegularFileUnderRoot(root, path) {
+			files = append(files, DiscoveredFile{Path: path, Agent: AgentKiro})
+		}
+	}
+	add("")
+	entries, err := s.readDir(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return files, nil
+		}
+		return nil, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !isKiroCurrentWorkspaceDir(entry.Name()) {
+			continue
+		}
+		add(entry.Name())
+	}
+	return files, nil
 }
 
 func (s kiroSourceSet) discoverCurrentJSONLEach(ctx context.Context, root string, yield func(SourceRef) error) error {
