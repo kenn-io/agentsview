@@ -440,6 +440,30 @@ func TestSelectAllowedTargetsRootOnlyCuratedRequestIsEmptyAndNoFilesystemAccess(
 	assert.Empty(t, selected.Files[parser.AgentCursor])
 }
 
+func TestSelectAllowedTargetsDirectoryOnlyRequestRequiresCurrentCuratedFiles(t *testing.T) {
+	root := t.TempDir()
+	cases := []struct {
+		agent parser.AgentType
+		file  string
+	}{
+		{agent: parser.AgentCursor, file: filepath.Join(root, "cursor", "chat.jsonl")},
+		{agent: parser.AgentVSCodeCopilot, file: filepath.Join(root, "vscode", "chat.json")},
+		{agent: parser.AgentRooCode, file: filepath.Join(root, "roo", "session.json")},
+		{agent: parser.AgentZed, file: filepath.Join(root, parser.ZedThreadsDBRelPath)},
+	}
+	for _, tc := range cases {
+		allowed := TargetSet{
+			Dirs:  map[parser.AgentType][]string{tc.agent: {root}},
+			Files: map[parser.AgentType][]string{tc.agent: {tc.file}},
+		}
+		requested := TargetSet{
+			Dirs: map[parser.AgentType][]string{tc.agent: {root}},
+		}
+		_, ok := SelectAllowedTargets(allowed, requested)
+		assert.False(t, ok, "%s directory-only request must not discard current curated files", tc.agent)
+	}
+}
+
 func TestIssue1492EmptyCuratedRootsProduceEmptyArchives(t *testing.T) {
 	root := t.TempDir()
 	cursorRoot := filepath.Join(root, "cursor")

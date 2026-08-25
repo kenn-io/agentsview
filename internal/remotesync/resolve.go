@@ -645,9 +645,13 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		allowedDirs := allowed.Dirs[agent]
 		fileScoped := allowed.isFileScoped(agent)
 		if fileScoped {
-			if _, hasRequestedFiles := requested.Files[agent]; !hasRequestedFiles &&
-				!verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
-				return TargetSet{}, false
+			if _, hasRequestedFiles := requested.Files[agent]; !hasRequestedFiles {
+				emptyEditorScope :=
+					(agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot) &&
+						len(allowed.Files[agent]) == 0
+				if !emptyEditorScope {
+					return TargetSet{}, false
+				}
 			}
 		}
 		for _, dir := range dirs {
