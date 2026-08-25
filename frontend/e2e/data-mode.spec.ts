@@ -12,6 +12,22 @@ function workspace(page: Page) {
   return page.locator("section.workspace");
 }
 
+function waitForApiResponse(page: Page, method: string, pathname: string) {
+  return page
+    .waitForResponse((response) => {
+      const url = new URL(response.url());
+      return (
+        response.request().method() === method &&
+        url.pathname === pathname &&
+        response.ok()
+      );
+    })
+    .then(async (response) => {
+      await response.body();
+      return response;
+    });
+}
+
 test.describe("Data mode project reclassification", () => {
   test.skip(
     ({ browserName }) => browserName !== "chromium",
@@ -47,16 +63,35 @@ test.describe("Data mode project reclassification", () => {
 
     const reportPromise = page.waitForResponse((response) => {
       const url = new URL(response.url());
-      return url.pathname === "/api/v1/activity/report" && response.ok();
+      return (
+        response.request().method() === "GET" &&
+        url.pathname === "/api/v1/activity/report" &&
+        response.ok()
+      );
     });
     await page.goto("/activity?window_days=40");
     await reportPromise;
+    const reportLoading = page.getByText("Loading activity report...", {
+      exact: true,
+    });
+    await reportLoading.waitFor({ state: "hidden" });
     // The breakdown project link's visible text is the project name itself;
     // "View {project} in Data" lives only in its title attribute, which the
     // accessible name computation ignores once the link has text content.
     const link = page.getByTitle(`View ${wrongProject} in Data`);
     await expect(link).toBeVisible();
+    const inventoryPromise = waitForApiResponse(
+      page,
+      "GET",
+      "/api/v1/data/projects",
+    );
+    const candidatesPromise = waitForApiResponse(
+      page,
+      "GET",
+      "/api/v1/data/project-reclassification/candidates",
+    );
     await link.click();
+    await Promise.all([inventoryPromise, candidatesPromise]);
 
     await expect(page).toHaveURL(/\/data\?.*project_key=/);
     await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
@@ -65,8 +100,8 @@ test.describe("Data mode project reclassification", () => {
       ws.getByRole("heading", { name: wrongProject }),
     ).toBeVisible();
     await expect(
-      ws.getByRole("heading", { name: "Folder suggestions" }),
-    ).toBeVisible();
+      ws.getByRole("button", { name: "Folder suggestions" }),
+    ).toHaveAttribute("aria-expanded", "true");
     await expect(
       ws.getByRole("button", { name: worktreeRoot }),
     ).toBeVisible();
@@ -87,10 +122,16 @@ test.describe("Data mode project reclassification", () => {
     await ws.getByRole("button", { name: "Project", exact: true }).click();
     const targetInput = ws.getByRole("combobox");
     await targetInput.fill(targetProject);
+    const previewPromise = waitForApiResponse(
+      page,
+      "POST",
+      "/api/v1/settings/worktree-mappings/preview",
+    );
     await page
       .getByRole("option", { name: `Use project "${targetProject}"` })
       .click();
 
+    await previewPromise;
     await expect.poll(() => previewRequests).toBe(1);
     await expect(
       ws.getByText("2 sessions matched", { exact: true }),
@@ -100,7 +141,18 @@ test.describe("Data mode project reclassification", () => {
     ).toBeVisible();
     await expect(ws.getByText("1 project", { exact: true })).toBeVisible();
 
+    const reclassifyPromise = waitForApiResponse(
+      page,
+      "POST",
+      "/api/v1/settings/worktree-mappings/reclassify",
+    );
+    const refreshPromise = waitForApiResponse(
+      page,
+      "GET",
+      "/api/v1/data/projects",
+    );
     await ws.getByRole("button", { name: "Save correction" }).click();
+    await Promise.all([reclassifyPromise, refreshPromise]);
 
     // Explicit inventory reload; selection follows the applied target.
     await expect(
@@ -110,15 +162,27 @@ test.describe("Data mode project reclassification", () => {
     await expect(page.getByRole("row", { name: targetProject })).toBeVisible();
     await expect(page.getByRole("row", { name: wrongProject })).toHaveCount(0);
 
+    const rulesPromise = waitForApiResponse(
+      page,
+      "GET",
+      "/api/v1/data/project-rules",
+    );
     await page
       .locator('[aria-label="Data view"]')
       .getByText("Project mapping rules", { exact: true })
       .click();
+    await rulesPromise;
     await expect(
       page.getByRole("heading", { name: "Worktree mappings" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Select machine" }).click();
+    const machineRulesPromise = waitForApiResponse(
+      page,
+      "GET",
+      "/api/v1/data/project-rules",
+    );
     await page.getByRole("option", { name: machine, exact: true }).click();
+    await machineRulesPromise;
 
     const rule = page.locator("tr.rule-row");
     await expect(rule).toHaveCount(1);
