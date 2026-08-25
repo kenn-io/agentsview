@@ -45,7 +45,12 @@ test.describe("Data mode project reclassification", () => {
       }
     });
 
+    const reportPromise = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/v1/activity/report" && response.ok();
+    });
     await page.goto("/activity?window_days=40");
+    await reportPromise;
     // The breakdown project link's visible text is the project name itself;
     // "View {project} in Data" lives only in its title attribute, which the
     // accessible name computation ignores once the link has text content.
@@ -56,13 +61,24 @@ test.describe("Data mode project reclassification", () => {
     await expect(page).toHaveURL(/\/data\?.*project_key=/);
     await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
     const ws = workspace(page);
-    await expect(ws.getByRole("heading", { name: wrongProject })).toBeVisible();
-    await expect(ws.getByText("Folder suggestions")).toBeVisible();
+    await expect(
+      ws.getByRole("heading", { name: wrongProject }),
+    ).toBeVisible();
+    await expect(
+      ws.getByRole("heading", { name: "Folder suggestions" }),
+    ).toBeVisible();
     await expect(
       ws.getByRole("button", { name: worktreeRoot }),
     ).toBeVisible();
-    await expect(ws.getByText(machine)).toBeVisible();
-    await expect(ws.getByText("2 sessions", { exact: true })).toBeVisible();
+    const correctionHeader = ws
+      .getByRole("heading", { name: "Project correction" })
+      .locator("..");
+    await expect(
+      correctionHeader.getByText(machine, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      ws.locator("header").getByText("2 sessions", { exact: true }),
+    ).toBeVisible();
 
     const prefix = ws.getByRole("textbox", { name: "Path prefix" });
     await expect(prefix).toHaveValue(worktreeRoot);
