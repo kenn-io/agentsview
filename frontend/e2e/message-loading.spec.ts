@@ -203,6 +203,11 @@ test.describe("Message loading", () => {
     await sp.goto();
     await sp.selectFirstSession();
 
+    await sp.scroller.dispatchEvent("pointerdown", {
+      bubbles: true,
+      pointerType: "mouse",
+    });
+
     const follow = page.getByLabel("Follow latest messages");
     await follow.click();
     await expect(follow).toHaveAttribute("aria-pressed", "true");
