@@ -125,8 +125,14 @@ type PricingResolver struct {
 	genAI                *pricingpkg.GenAIPrices
 	genAISource          PricingRowSource
 	genAIUpdatedAt       *time.Time
+	recordedBandKeys     []pricingBandKeyCacheEntry
 	recorded             map[string]map[pricingRecordKey]*pricingRecord
 	unattributedReported bool
+}
+
+type pricingBandKeyCacheEntry struct {
+	bands []PricingBand
+	key   string
 }
 
 type pricingRecord struct {
@@ -428,15 +434,105 @@ func (r *PricingResolver) record(
 		output:      lookup.Rates.OutputPerMTok.Microdollars,
 		cacheWrite:  lookup.Rates.CacheWritePerMTok.Microdollars,
 		cacheRead:   lookup.Rates.CacheReadPerMTok.Microdollars,
-		bands:       canonicalPricingBandsSortKey(lookup.Rates.Bands),
+		bands:       r.recordedBandsKey(lookup.Rates.Bands),
 	}
 	rec := byPricedModel[key]
 	if rec == nil {
-		rec = &pricingRecord{}
+		rec = &pricingRecord{lookup: clonePricingLookup(lookup)}
 		byPricedModel[key] = rec
+	} else if !pricingLookupEqual(rec.lookup, lookup) {
+		// Preserve the existing last-observation behavior when two lookups
+		// share a canonical record key but differ in non-key representation.
+		rec.lookup = clonePricingLookup(lookup)
 	}
-	rec.lookup = clonePricingLookup(lookup)
 	return rec
+}
+
+func (r *PricingResolver) recordedBandsKey(bands []PricingBand) string {
+	if len(bands) == 0 {
+		return ""
+	}
+	for _, cached := range r.recordedBandKeys {
+		if pricingBandsCanonicalEqual(cached.bands, bands) {
+			return cached.key
+		}
+	}
+	key := canonicalPricingBandsSortKey(bands)
+	r.recordedBandKeys = append(r.recordedBandKeys, pricingBandKeyCacheEntry{
+		bands: append([]PricingBand(nil), bands...),
+		key:   key,
+	})
+	return key
+}
+
+func pricingBandsCanonicalEqual(a, b []PricingBand) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for position := range a {
+		if !pricingBandEqual(
+			canonicalPricingBandAt(a, position),
+			canonicalPricingBandAt(b, position),
+		) {
+			return false
+		}
+	}
+	return true
+}
+
+// canonicalPricingBandsSortKey sorts bands by threshold with a stable sort.
+// Select the band at the same logical position without allocating a copy.
+func canonicalPricingBandAt(bands []PricingBand, position int) PricingBand {
+	for i, band := range bands {
+		rank := 0
+		for j, other := range bands {
+			if other.AboveInputTokens < band.AboveInputTokens ||
+				(other.AboveInputTokens == band.AboveInputTokens && j < i) {
+				rank++
+			}
+		}
+		if rank == position {
+			return band
+		}
+	}
+	return PricingBand{}
+}
+
+func pricingBandEqual(a, b PricingBand) bool {
+	if a.AboveInputTokens != b.AboveInputTokens ||
+		a.InputPerMTok != b.InputPerMTok ||
+		a.OutputPerMTok != b.OutputPerMTok ||
+		a.CacheWritePerMTok != b.CacheWritePerMTok ||
+		a.CacheReadPerMTok != b.CacheReadPerMTok {
+		return false
+	}
+	return pricingTimeEqual(a.UpdatedAt, b.UpdatedAt)
+}
+
+func pricingLookupEqual(a, b PricingLookup) bool {
+	if a.Pattern != b.Pattern || a.OK != b.OK ||
+		a.Rates.InputPerMTok != b.Rates.InputPerMTok ||
+		a.Rates.OutputPerMTok != b.Rates.OutputPerMTok ||
+		a.Rates.CacheWritePerMTok != b.Rates.CacheWritePerMTok ||
+		a.Rates.CacheReadPerMTok != b.Rates.CacheReadPerMTok ||
+		a.Rates.Source != b.Rates.Source ||
+		!pricingTimeEqual(a.Rates.UpdatedAt, b.Rates.UpdatedAt) ||
+		len(a.Rates.Bands) != len(b.Rates.Bands) {
+		return false
+	}
+	for i := range a.Rates.Bands {
+		if !pricingBandEqual(a.Rates.Bands[i], b.Rates.Bands[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func pricingTimeEqual(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }
 
 func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
