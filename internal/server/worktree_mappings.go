@@ -72,3 +72,12 @@ type worktreeReclassificationApplyResponse struct {
 	Mapping db.WorktreeProjectMapping          `json:"mapping"`
 	Result  db.WorktreeReclassificationPreview `json:"result"`
 }
+
+type sessionProjectAssignmentInput struct {
+	SessionID string `path:"session_id" required:"true" doc:"Session ID"`
+	Body      sessionProjectAssignmentRequest
+}
+
+type sessionProjectAssignmentRequest struct {
+	Project string `json:"project"`
+}

@@ -61,6 +61,16 @@ async function flush() {
   await tick();
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("ProjectSessionPreviewCarousel", () => {
   it("loads session content lazily and moves through the preview samples", async () => {
     component = mount(ProjectSessionPreviewCarousel, {
@@ -92,5 +102,40 @@ describe("ProjectSessionPreviewCarousel", () => {
     expect(screen.getByText("Review the second project")).toBeTruthy();
     expect(screen.getByText("project-b-old")).toBeTruthy();
     expect(screen.getByText("/worktrees/project-a/branch-two")).toBeTruthy();
+  });
+
+  it("ignores a late failure after returning to cached session content", async () => {
+    const second = deferred<never>();
+    api.getSession.mockImplementation(({ id }: { id: string }) => {
+      if (id === "session-2") return second.promise;
+      return Promise.resolve({
+        id,
+        agent: "claude",
+        created_at: "2026-08-20T12:00:00Z",
+        first_message: "Cached first session",
+        message_count: 4,
+      });
+    });
+    component = mount(ProjectSessionPreviewCarousel, {
+      target: document.body,
+      props: { samples },
+    });
+    await fireEvent.click(
+      screen.getByRole("button", {
+        name: m.data_reclassify_session_preview_count({ count: 2 }),
+      }),
+    );
+    await flush();
+    await fireEvent.click(
+      screen.getByRole("button", { name: m.data_reclassify_session_preview_next() }),
+    );
+    await fireEvent.click(
+      screen.getByRole("button", { name: m.data_reclassify_session_preview_previous() }),
+    );
+    second.reject(new Error("late failure"));
+    await flush();
+
+    expect(screen.getByText("Cached first session")).toBeTruthy();
+    expect(screen.queryByText(m.data_reclassify_session_preview_failed())).toBeNull();
   });
 });

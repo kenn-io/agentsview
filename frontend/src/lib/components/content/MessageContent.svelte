@@ -47,6 +47,7 @@
     session?: Session | null;
     isSubagentContext?: boolean;
     compact?: boolean;
+    allowMutations?: boolean;
     highlightQuery?: string;
     isCurrentHighlight?: boolean;
   }
@@ -56,6 +57,7 @@
     session,
     isSubagentContext = false,
     compact = false,
+    allowMutations = true,
     highlightQuery = "",
     isCurrentHighlight = false,
   }: Props = $props();
@@ -330,7 +332,8 @@
   }
 
   let canForkFromMessage = $derived(
-    owningSession?.agent === "claude" &&
+    allowMutations &&
+      owningSession?.agent === "claude" &&
       !(owningSession?.id ?? "").includes("~") &&
       !(sync.readOnly && isRemoteConnection()),
   );
@@ -402,17 +405,19 @@
       copiedTitle={m.message_content_copied()}
       onclick={handleCopy}
     />
-    <button
-      type="button"
-      class="pin-btn"
-      class:pinned
-      title={pinned
-        ? m.message_content_unpin_message()
-        : m.message_content_pin_message()}
-      onclick={handleTogglePin}
-    >
-      <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
-    </button>
+    {#if allowMutations}
+      <button
+        type="button"
+        class="pin-btn"
+        class:pinned
+        title={pinned
+          ? m.message_content_unpin_message()
+          : m.message_content_pin_message()}
+        onclick={handleTogglePin}
+      >
+        <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
+      </button>
+    {/if}
     {#if canForkFromMessage}
       <button
         type="button"

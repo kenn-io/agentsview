@@ -129,7 +129,7 @@ func TestDuckWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 		"DuckDB and SQLite include zero-message inventory sessions")
 }
 
-func TestDuckWorktreeCandidatesIncludeResolvedProjectAliases(t *testing.T) {
+func TestDuckWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	const (
@@ -183,7 +183,9 @@ func TestDuckWorktreeCandidatesIncludeResolvedProjectAliases(t *testing.T) {
 
 	assert.Equal(t, localCandidates, duckCandidates)
 	require.Len(t, duckCandidates, 1)
-	assert.Equal(t, 2, duckCandidates[0].ContributingSessions)
+	assert.Equal(t, 1, duckCandidates[0].ContributingSessions)
+	require.Len(t, duckCandidates[0].Examples, 1)
+	assert.Equal(t, "primary-session", duckCandidates[0].Examples[0].SessionID)
 }
 
 // TestDuckListArchiveWorktreeCandidatesKeyMismatch verifies the DuckDB

@@ -895,6 +895,14 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 			want:   "middleman",
 		},
 		{
+			name: "ClaudeRepoLocalWorktree",
+			cwd: filepath.FromSlash(
+				"/workspace/agentsview/.claude/worktrees/awesome-almeida-fddd4e",
+			),
+			branch: "awesome-almeida-fddd4e",
+			want:   "agentsview",
+		},
+		{
 			name: "RoborevCIWorktree",
 			cwd: filepath.FromSlash(
 				"/data/.roborev/ci-worktrees/widget/roborev-ci-101-1001",
