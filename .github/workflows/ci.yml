@@ -370,8 +370,8 @@ jobs:
             Start-Sleep -Seconds (10 * $attempt)
           }
 
-      - name: Run Windows desktop update tests
-        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib install_downloaded_update
+      - name: Run Windows desktop unit tests
+        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib
 
   integration:
     runs-on: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
