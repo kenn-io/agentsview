@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const isDuckDBBackend = process.env.AGENTSVIEW_E2E_BACKEND === "duckdb";
+const mappingWorkspaceE2EEnabled =
+  process.env.PROJECT_MAPPING_WORKSPACE_E2E_ENABLED === "true";
 const wrongProject = "wrong_branch_label";
 const targetProject = "sample_service";
 const machine = "remote-example-host";
@@ -29,6 +31,11 @@ function waitForApiResponse(page: Page, method: string, pathname: string) {
 }
 
 test.describe("Data mode project reclassification", () => {
+  test.skip(
+    !mappingWorkspaceE2EEnabled,
+    "requires a frontend build with the project mapping workspace enabled",
+  );
+
   test.skip(
     ({ browserName }) => browserName !== "chromium",
     "the workflow mutates the shared fixture once",
