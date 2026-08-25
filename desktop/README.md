@@ -33,6 +33,23 @@ The `prepare-sidecar` step runs automatically for `tauri:dev` and `tauri:build`.
 It builds `agentsview` and copies it to
 `src-tauri/binaries/agentsview-<target-triple>`.
 
+## Deep Links
+
+The desktop app registers the `agentsview://` URL scheme. External tools can
+open a specific session in the app:
+
+```bash
+open "agentsview://sessions/<session-id>"
+```
+
+If the app is already running, the existing window is focused and navigated to
+the session. If it is not running, the app starts, waits for the backend, and
+then opens the session. URLs outside `agentsview://sessions/<session-id>` are
+ignored.
+
+On Windows and Linux a second launch forwards its URL to the running instance
+and exits, so only one app instance runs at a time.
+
 ## Environment Notes (Desktop)
 
 When launched from Finder/Explorer, desktop apps usually do not inherit your
@@ -46,11 +63,11 @@ probing is skipped by default.
 Optional escape hatch:
 
 - Add overrides in `~/.agentsview/desktop.env`:
-    - Example: `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
-    - Example: `ANTHROPIC_API_KEY=...`
+  - Example: `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
+  - Example: `ANTHROPIC_API_KEY=...`
 - Windows WSL bridge example:
-    - `CODEX_SESSIONS_DIR=wsl:Ubuntu:/home/me/.codex/sessions` (becomes
-      `\\wsl.localhost\Ubuntu\home\me\.codex\sessions` in desktop wrapper env)
+  - `CODEX_SESSIONS_DIR=wsl:Ubuntu:/home/me/.codex/sessions` (becomes
+    `\\wsl.localhost\Ubuntu\home\me\.codex\sessions` in desktop wrapper env)
 - On Windows, this file resolves to `%USERPROFILE%\\.agentsview\\desktop.env`.
 - Force a custom PATH with `AGENTSVIEW_DESKTOP_PATH`.
 - Skip login-shell env loading with `AGENTSVIEW_DESKTOP_SKIP_LOGIN_SHELL_ENV=1`.
