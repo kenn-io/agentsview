@@ -428,6 +428,8 @@ func TestSelectAllowedTargetsRootOnlyCuratedRequestIsEmptyAndNoFilesystemAccess(
 	}
 	_, ok = SelectAllowedTargets(forbiddenAllowed, stale)
 	assert.False(t, ok, "stale curated files under forbidden roots must stay rejected")
+	_, ok = SelectAllowedFiles(forbiddenAllowed, stale.Files[parser.AgentCursor])
+	assert.False(t, ok, "stale delta files under forbidden roots must stay rejected")
 
 	selected, ok := SelectAllowedTargets(allowed, TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},

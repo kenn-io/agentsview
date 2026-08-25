@@ -201,6 +201,10 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 		return t
 	}
 	forbidden := newForbiddenRootMatcher(t.ForbiddenRoots)
+	fileScopedAgents := make(map[parser.AgentType]struct{}, len(t.Files))
+	for agent := range t.Files {
+		fileScopedAgents[agent] = struct{}{}
+	}
 	for agent, dirs := range t.Dirs {
 		kept := withoutForbidden(dirs, forbidden)
 		if len(kept) == 0 {
@@ -212,7 +216,8 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 	for agent, files := range t.Files {
 		kept := withoutForbidden(files, forbidden)
 		if len(kept) == 0 {
-			if _, hasDirs := t.Dirs[agent]; hasDirs {
+			if _, hasDirs := t.Dirs[agent]; hasDirs &&
+				(agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot) {
 				t.Files[agent] = []string{}
 			} else {
 				delete(t.Files, agent)
@@ -224,8 +229,11 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 	// A file-scoped agent's root is only safe to advertise alongside its
 	// curated file list; if filtering removed either half, drop both so the
 	// agent cannot degrade to a raw directory target.
-	for agent := range t.Files {
-		if !t.isFileScoped(agent) {
+	for agent := range fileScopedAgents {
+		_, hasFiles := t.Files[agent]
+		if !hasFiles || !t.isFileScoped(agent) {
+			delete(t.Dirs, agent)
+			delete(t.Files, agent)
 			continue
 		}
 		if _, hasDirs := t.Dirs[agent]; !hasDirs {
@@ -667,7 +675,7 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			selectedFile, ok := selectAllowedString(allowedFiles, file)
 			include := true
 			if !ok {
-				selectedFile, include, ok = classifyCuratedFile(
+				include, ok = classifyCuratedFile(
 					allowed, forbidden, agent, file, files,
 				)
 				if !ok {
@@ -778,15 +786,15 @@ func kiloLegacySessionFileShape(rel string) bool {
 func classifyCuratedFile(
 	allowed TargetSet, forbidden forbiddenRootMatcher, agent parser.AgentType, file string,
 	candidateFiles ...[]string,
-) (string, bool, bool) {
+) (bool, bool) {
 	if !verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
-		return "", false, false
+		return false, false
 	}
 	if !isAbsRemotePath(file) {
-		return "", false, false
+		return false, false
 	}
 	if _, err := safeRemotePathArchiveName(file); err != nil {
-		return "", false, false
+		return false, false
 	}
 	for _, dir := range allowed.Dirs[agent] {
 		if forbidden.within(dir) {
@@ -809,28 +817,28 @@ func classifyCuratedFile(
 			continue
 		}
 		if symlinkEscapesRoot(dir, file) {
-			return "", false, false
+			return false, false
 		}
 		if forbidden.within(file) {
-			return "", false, false
+			return false, false
 		}
 		info, err := os.Lstat(file)
 		if os.IsNotExist(err) {
-			return "", false, true
+			return false, true
 		}
 		if err != nil || !info.Mode().IsRegular() {
-			return "", false, false
+			return false, false
 		}
 		if agent == parser.AgentVSCodeCopilot && isVSCodeWorkspaceMetadata(rel) &&
-			vscodeWorkspaceChatVanished(allowed, dir, rel, candidateFiles...) {
-			return "", false, true
+			vscodeWorkspaceChatVanished(allowed, forbidden, dir, rel, candidateFiles...) {
+			return false, true
 		}
 		if hasPreferredCuratedSibling(dir, allowed.Files[agent], rel) {
-			return "", false, true
+			return false, true
 		}
-		return "", false, false
+		return false, false
 	}
-	return "", false, false
+	return false, false
 }
 
 func hasPreferredCuratedSibling(root string, allowedFiles []string, rel string) bool {
@@ -855,7 +863,8 @@ func hasPreferredCuratedSibling(root string, allowedFiles []string, rel string) 
 }
 
 func vscodeWorkspaceChatVanished(
-	allowed TargetSet, root, rel string, candidateFiles ...[]string,
+	allowed TargetSet, forbidden forbiddenRootMatcher, root, rel string,
+	candidateFiles ...[]string,
 ) bool {
 	parts := strings.Split(rel, "/")
 	for _, files := range candidateFiles {
@@ -874,7 +883,7 @@ func vscodeWorkspaceChatVanished(
 				continue
 			}
 			if _, err := safeRemotePathArchiveName(file); err != nil ||
-				symlinkEscapesRoot(root, file) {
+				symlinkEscapesRoot(root, file) || forbidden.within(file) {
 				continue
 			}
 			if _, err := os.Lstat(file); !os.IsNotExist(err) {
@@ -1030,29 +1039,11 @@ func selectAllowedFile(
 		if canonical, ok := selectAllowedString(files, file); ok {
 			return canonical, true, !forbidden.within(canonical)
 		}
-		canonical, include, ok := classifyCuratedFile(
+		include, ok := classifyCuratedFile(
 			allowed, forbidden, agent, file, files,
 		)
 		if ok {
-			return canonical, include, !forbidden.within(file)
-		}
-	}
-	// A fresh editor resolution can retain the authorized root while all
-	// curated leaves have vanished. The request still carries the prior
-	// exact file set, so validate its strict shape against that root before
-	// considering any directory-scoped agents.
-	for _, agent := range []parser.AgentType{
-		parser.AgentCursor, parser.AgentVSCodeCopilot, parser.AgentZed,
-		parser.AgentRooCode, parser.AgentKiloLegacy,
-	} {
-		if _, ok := allowed.Dirs[agent]; !ok {
-			continue
-		}
-		canonical, include, ok := classifyCuratedFile(
-			allowed, forbidden, agent, file, candidateFiles,
-		)
-		if ok {
-			return canonical, include, !forbidden.within(file)
+			return file, include, !forbidden.within(file)
 		}
 	}
 	if !isAbsRemotePath(file) {

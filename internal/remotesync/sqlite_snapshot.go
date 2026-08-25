@@ -194,14 +194,14 @@ func sqliteSnapshotPathsForTargets(targets TargetSet) []string {
 	return paths
 }
 
-func sqliteSnapshotTargets(targets TargetSet) map[string]parser.AgentType {
-	out := make(map[string]parser.AgentType)
+func sqliteSnapshotTargets(targets TargetSet) map[string]struct{} {
+	out := make(map[string]struct{})
 	for _, path := range sqliteSnapshotPathsForTargets(targets) {
-		out[path] = parser.AgentHermes
+		out[path] = struct{}{}
 	}
 	for _, path := range targets.Files[parser.AgentZed] {
 		if filepath.Base(filepath.Clean(path)) == "threads.db" {
-			out[filepath.Clean(path)] = parser.AgentZed
+			out[filepath.Clean(path)] = struct{}{}
 		}
 	}
 	return out
