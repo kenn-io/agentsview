@@ -397,8 +397,7 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 			dbSource := s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB)
 			metas, err := ListKiroSQLiteSessionMeta(dbPath)
 			if err != nil {
-				databases = append(databases, dbSource)
-				continue
+				return nil, nil, fmt.Errorf("list Kiro SQLite sessions in %s: %w", dbPath, err)
 			}
 			dbSourceSrc, ok := s.sourceFromRef(dbSource)
 			if !ok {
@@ -477,6 +476,7 @@ func (s kiroSourceSet) setSourceMTime(source *SourceRef) {
 }
 
 func (s kiroSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	var firstErr error
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -484,7 +484,10 @@ func (s kiroSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) e
 		if dbPath := kiroSQLiteDBPath(root); dbPath != "" {
 			store, err := OpenKiroSQLiteStore(dbPath)
 			if err != nil {
-				return err
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
 			err = store.ForEachSessionMeta(ctx, func(meta KiroSQLiteSessionMeta) error {
 				source := s.newSourceRef(
@@ -496,10 +499,16 @@ func (s kiroSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) e
 			})
 			closeErr := store.Close()
 			if err != nil {
-				return err
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
 			if closeErr != nil {
-				return closeErr
+				if firstErr == nil {
+					firstErr = closeErr
+				}
+				continue
 			}
 		}
 		if err := s.discoverLegacyJSONLEach(ctx, root, yield); err != nil {
@@ -509,7 +518,7 @@ func (s kiroSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) e
 			return err
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func (s kiroSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
@@ -563,7 +572,11 @@ func (s kiroSourceSet) SourcesForChangedPath(
 				sources = append(sources, winner)
 			}
 		}
-		sources = append(sources, s.changedPathTombstones(root, source, req.StoredSourcePaths, winners)...)
+		tombstones, err := s.changedPathTombstones(root, source, req.StoredSourcePaths, winners)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, tombstones...)
 		return sources, nil
 	}
 	return nil, nil
@@ -648,10 +661,10 @@ func (s kiroSourceSet) changedPathTombstones(
 	changed SourceRef,
 	storedPaths []string,
 	winners map[string]SourceRef,
-) []SourceRef {
+) ([]SourceRef, error) {
 	src, ok := s.sourceFromRef(changed)
 	if !ok || src.Kind != kiroSourceSQLiteDB || !IsRegularFile(src.DBPath) {
-		return nil
+		return nil, nil
 	}
 	var tombstones []SourceRef
 	seen := make(map[string]struct{})
@@ -667,7 +680,11 @@ func (s kiroSourceSet) changedPathTombstones(
 		if !samePath(member.DBPath, src.DBPath) {
 			continue
 		}
-		if KiroSQLiteSessionExists(member.DBPath, member.SessionID) {
+		exists, err := KiroSQLiteSessionExistsWithError(member.DBPath, member.SessionID)
+		if err != nil {
+			return nil, fmt.Errorf("check Kiro SQLite session %s: %w", member.SessionID, err)
+		}
+		if exists {
 			continue
 		}
 		if winner, ok := winners[member.SessionID]; ok {
@@ -683,7 +700,7 @@ func (s kiroSourceSet) changedPathTombstones(
 		seen[member.Path] = struct{}{}
 		tombstones = append(tombstones, ref)
 	}
-	return tombstones
+	return tombstones, nil
 }
 
 func (s kiroSourceSet) FindSource(
@@ -721,12 +738,19 @@ func (s kiroSourceSet) FindSource(
 	var candidates []SourceRef
 	candidates = append(candidates, hinted...)
 	for _, root := range s.roots {
-		if dbPath := kiroSQLiteDBPath(root); dbPath != "" &&
-			KiroSQLiteSessionExists(dbPath, req.RawSessionID) {
-			candidates = append(candidates, s.newSourceRef(
-				root, KiroSQLiteVirtualPath(dbPath, req.RawSessionID), dbPath,
-				req.RawSessionID, kiroSourceSQLiteSession,
-			))
+		if dbPath := kiroSQLiteDBPath(root); dbPath != "" {
+			exists, err := KiroSQLiteSessionExistsWithError(dbPath, req.RawSessionID)
+			if err != nil {
+				return SourceRef{}, false, fmt.Errorf(
+					"find Kiro SQLite session %s: %w", req.RawSessionID, err,
+				)
+			}
+			if exists {
+				candidates = append(candidates, s.newSourceRef(
+					root, KiroSQLiteVirtualPath(dbPath, req.RawSessionID), dbPath,
+					req.RawSessionID, kiroSourceSQLiteSession,
+				))
+			}
 		}
 		for _, file := range s.discoverCurrentJSONL(root) {
 			if _, id, ok := kiroCurrentPathUnderRoot(root, file.Path); ok &&

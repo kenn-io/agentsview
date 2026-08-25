@@ -105,15 +105,20 @@ func kiroSQLiteVirtualPathParts(path string) (string, string, bool) {
 // KiroSQLiteSessionExists reports whether the current Kiro DB has
 // at least one row for sessionID.
 func KiroSQLiteSessionExists(dbPath, sessionID string) bool {
+	exists, _ := KiroSQLiteSessionExistsWithError(dbPath, sessionID)
+	return exists
+}
+
+func KiroSQLiteSessionExistsWithError(dbPath, sessionID string) (bool, error) {
 	if dbPath == "" || sessionID == "" {
-		return false
+		return false, nil
 	}
 	store, err := OpenKiroSQLiteStore(dbPath)
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer store.Close()
-	return store.SessionExists(sessionID)
+	return store.SessionExists(sessionID), nil
 }
 
 // SessionExists reports whether the current Kiro DB has at least one

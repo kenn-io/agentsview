@@ -645,12 +645,8 @@ func TestKiroProviderDiscoveryFailsOnSQLiteMetadataError(t *testing.T) {
 	writeSourceFile(t, dbPath, "not a sqlite database")
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+	_, err := provider.Discover(context.Background())
 	assert.Error(t, err)
-	assert.Empty(t, outcome.Results)
 }
 
 func TestKiroProviderLogicalIdentityAndRankUnifyLegacyAndCurrent(t *testing.T) {
