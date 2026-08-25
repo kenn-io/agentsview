@@ -9,11 +9,13 @@ accounts, everything local.
 
 ## Install
 
+### macOs/ Linux
 ```bash
-# macOS / Linux
 curl -fsSL https://agentsview.io/install.sh | bash
+```
 
-# Windows
+### Windows
+```bash
 powershell -ExecutionPolicy ByPass -c "irm https://agentsview.io/install.ps1 | iex"
 ```
 
