@@ -506,6 +506,25 @@ func TestIssue1492VanishedZedDatabaseRemainsEvictable(t *testing.T) {
 	assert.Equal(t, []string{mirrorPath}, diff.Deletions)
 }
 
+func TestIssue1492ZedSnapshotErrorsPropagate(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, parser.ZedThreadsDBRelPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	require.NoError(t, os.WriteFile(dbPath, []byte("corrupt sqlite database"), 0o644))
+	targets := TargetSet{
+		Dirs:  map[parser.AgentType][]string{parser.AgentZed: {root}},
+		Files: map[parser.AgentType][]string{parser.AgentZed: {dbPath}},
+	}
+	_, err := BuildManifest(targets)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "identify sqlite snapshot")
+
+	var archive bytes.Buffer
+	err = WriteArchive(&archive, targets)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "identify sqlite snapshot")
+}
+
 func TestIssue1492ZedSnapshotDeltaUsesOnlineBackup(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, parser.ZedThreadsDBRelPath)

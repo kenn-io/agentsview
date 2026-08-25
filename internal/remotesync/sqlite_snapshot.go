@@ -127,6 +127,16 @@ func hermesSQLiteSnapshotIdentity(path string) (int64, time.Time, bool) {
 	return size, modTime, exists
 }
 
+func sqliteSnapshotIdentityForAgent(
+	path string, agent parser.AgentType,
+) (int64, time.Time, bool, error) {
+	if agent == parser.AgentZed {
+		return sqliteSnapshotIdentity(path)
+	}
+	size, modTime, exists := hermesSQLiteSnapshotIdentity(path)
+	return size, modTime, exists, nil
+}
+
 func sqliteSnapshotModTime(stateDB string, modTime time.Time) time.Time {
 	for _, suffix := range []string{"-wal", "-journal"} {
 		info, err := os.Lstat(stateDB + suffix)
@@ -194,14 +204,14 @@ func sqliteSnapshotPathsForTargets(targets TargetSet) []string {
 	return paths
 }
 
-func sqliteSnapshotTargets(targets TargetSet) map[string]struct{} {
-	out := make(map[string]struct{})
+func sqliteSnapshotTargets(targets TargetSet) map[string]parser.AgentType {
+	out := make(map[string]parser.AgentType)
 	for _, path := range sqliteSnapshotPathsForTargets(targets) {
-		out[path] = struct{}{}
+		out[path] = parser.AgentHermes
 	}
 	for _, path := range targets.Files[parser.AgentZed] {
 		if filepath.Base(filepath.Clean(path)) == "threads.db" {
-			out[filepath.Clean(path)] = struct{}{}
+			out[filepath.Clean(path)] = parser.AgentZed
 		}
 	}
 	return out

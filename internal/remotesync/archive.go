@@ -16,7 +16,8 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 	tw := tar.NewWriter(w)
 	forbidden := newForbiddenRootMatcher(targets.ForbiddenRoots)
 	hermesSQLite := make(map[string]string)
-	for stateDB := range sqliteSnapshotTargets(targets) {
+	snapshotAgents := sqliteSnapshotTargets(targets)
+	for stateDB := range snapshotAgents {
 		for _, path := range hermesSQLitePaths(stateDB) {
 			hermesSQLite[path] = stateDB
 		}
@@ -32,7 +33,7 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 				return nil
 			}
 			writtenHermesState[stateDB] = struct{}{}
-			return writeSQLiteStateDBSnapshot(tw, stateDB)
+			return writeSQLiteStateDBSnapshot(tw, stateDB, snapshotAgents[stateDB])
 		}
 		if optional {
 			return writeOptionalArchiveFile(tw, path)
@@ -83,8 +84,13 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 	return nil
 }
 
-func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
-	_, modTime, exists := hermesSQLiteSnapshotIdentity(stateDB)
+func writeSQLiteStateDBSnapshot(
+	tw *tar.Writer, stateDB string, agent parser.AgentType,
+) error {
+	_, modTime, exists, err := sqliteSnapshotIdentityForAgent(stateDB, agent)
+	if err != nil {
+		return fmt.Errorf("identify sqlite snapshot %q: %w", stateDB, err)
+	}
 	if !exists {
 		return nil
 	}
@@ -95,7 +101,11 @@ func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 	defer os.RemoveAll(tmpDir)
 	snapshotPath := filepath.Join(tmpDir, "state.db")
 	if err := writeHermesSnapshotFile(snapshotPath, stateDB); err != nil {
-		return fmt.Errorf("snapshot hermes database %q: %w", stateDB, err)
+		label := "sqlite"
+		if agent == parser.AgentHermes {
+			label = "hermes"
+		}
+		return fmt.Errorf("snapshot %s database %q: %w", label, stateDB, err)
 	}
 	if err := os.Chtimes(snapshotPath, modTime, modTime); err != nil {
 		return fmt.Errorf("stamp hermes database snapshot: %w", err)
@@ -365,10 +375,7 @@ func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 	tw := tar.NewWriter(w)
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	allowedRoots := allowed.DeltaAllowedRoots()
-	hermesStateDBs := make(map[string]struct{})
-	for stateDB := range sqliteSnapshotTargets(allowed) {
-		hermesStateDBs[filepath.Clean(stateDB)] = struct{}{}
-	}
+	snapshotAgents := sqliteSnapshotTargets(allowed)
 	writtenHermesState := make(map[string]struct{})
 	for _, path := range files {
 		local, ok := resolveDeltaFilePath(allowedRoots, forbidden, path)
@@ -377,10 +384,10 @@ func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 		}
 		if stateDB, isHermesSQLite := sqliteSnapshotForArchivePath(local); isHermesSQLite {
 			stateDB = filepath.Clean(stateDB)
-			if _, allowed := hermesStateDBs[stateDB]; allowed {
+			if agent, allowed := snapshotAgents[stateDB]; allowed {
 				if _, written := writtenHermesState[stateDB]; !written {
 					writtenHermesState[stateDB] = struct{}{}
-					if err := writeSQLiteStateDBSnapshot(tw, stateDB); err != nil {
+					if err := writeSQLiteStateDBSnapshot(tw, stateDB, agent); err != nil {
 						return err
 					}
 				}

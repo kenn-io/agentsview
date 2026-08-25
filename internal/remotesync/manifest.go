@@ -111,11 +111,14 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 			return Manifest{}, err
 		}
 	}
-	for stateDB := range snapshotTargets {
+	for stateDB, agent := range snapshotTargets {
 		if forbidden.within(stateDB) {
 			continue
 		}
-		size, modTime, exists := hermesSQLiteSnapshotIdentity(stateDB)
+		size, modTime, exists, err := sqliteSnapshotIdentityForAgent(stateDB, agent)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("identify sqlite snapshot %q: %w", stateDB, err)
+		}
 		if exists {
 			m.Files = append(m.Files, ManifestEntry{
 				Path: stateDB, Size: size, MtimeNS: modTime.UnixNano(),
