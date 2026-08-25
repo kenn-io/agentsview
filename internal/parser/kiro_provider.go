@@ -440,7 +440,10 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 				}
 			}
 		}
-		legacyFiles := s.discoverLegacyJSONL(root)
+		legacyFiles, err := s.discoverLegacyJSONL(root)
+		if err != nil {
+			return nil, nil, err
+		}
 		s.indexLegacyFiles(root, legacyFiles)
 		for _, file := range legacyFiles {
 			id := KiroSessionIDFromPath(file.Path)
@@ -585,7 +588,7 @@ func (s kiroSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 		roots = append(roots, WatchRoot{
 			Path:         root,
 			Recursive:    true,
-			IncludeGlobs: []string{"*.jsonl", "messages.jsonl", "session.json", kiroSQLiteDBName, kiroSQLiteDBName + "-*"},
+			IncludeGlobs: []string{"*.jsonl", "*.json", "messages.jsonl", "session.json", kiroSQLiteDBName, kiroSQLiteDBName + "-*"},
 			DebounceKey:  string(AgentKiro) + ":root:" + root,
 		})
 	}
@@ -734,7 +737,11 @@ func (s kiroSourceSet) sourceForSession(
 				candidates = append(candidates, source)
 			}
 		}
-		for _, source := range s.legacySourcesForSession(root, sessionID, changed) {
+		legacySources, err := s.legacySourcesForSession(root, sessionID, changed)
+		if err != nil {
+			return SourceRef{}, false, err
+		}
+		for _, source := range legacySources {
 			s.setSourceMTime(&source)
 			candidates = append(candidates, source)
 		}
@@ -767,22 +774,29 @@ func (s kiroSourceSet) indexLegacyFiles(root string, files []DiscoveredFile) {
 	kiroLegacyIdentityIndex.indexed[root] = true
 }
 
-func (s kiroSourceSet) ensureLegacyIdentityIndex(root string) {
+func (s kiroSourceSet) ensureLegacyIdentityIndex(root string) error {
 	root = filepath.Clean(root)
 	kiroLegacyIdentityIndex.RLock()
 	indexed := kiroLegacyIdentityIndex.indexed[root]
 	kiroLegacyIdentityIndex.RUnlock()
 	if indexed {
-		return
+		return nil
 	}
-	s.indexLegacyFiles(root, s.discoverLegacyJSONL(root))
+	files, err := s.discoverLegacyJSONL(root)
+	if err != nil {
+		return err
+	}
+	s.indexLegacyFiles(root, files)
+	return nil
 }
 
 func (s kiroSourceSet) legacySourcesForSession(
 	root, sessionID string, changed SourceRef,
-) []SourceRef {
+) ([]SourceRef, error) {
 	root = filepath.Clean(root)
-	s.ensureLegacyIdentityIndex(root)
+	if err := s.ensureLegacyIdentityIndex(root); err != nil {
+		return nil, err
+	}
 	paths := make(map[string]struct{})
 	if changedSrc, ok := s.sourceFromRef(changed); ok &&
 		changedSrc.Kind == kiroSourceLegacyJSONL &&
@@ -808,7 +822,7 @@ func (s kiroSourceSet) legacySourcesForSession(
 			sources = append(sources, source)
 		}
 	}
-	return sources
+	return sources, nil
 }
 
 func kiroChangedPlanCacheKey(req ChangedPathRequest) string {
@@ -975,7 +989,11 @@ func (s kiroSourceSet) FindSource(
 				candidates = append(candidates, source)
 			}
 		}
-		for _, file := range s.discoverLegacyJSONL(root) {
+		legacyFiles, err := s.discoverLegacyJSONL(root)
+		if err != nil {
+			return SourceRef{}, false, err
+		}
+		for _, file := range legacyFiles {
 			if KiroSessionIDFromPath(file.Path) != req.RawSessionID {
 				continue
 			}
@@ -1074,13 +1092,33 @@ func (s kiroSourceSet) Fingerprint(
 			}
 		}
 	}
+	sidecar := ""
+	if src.Kind == kiroSourceLegacyJSONL {
+		candidate, found, sidecarErr := kiroLegacySidecarPath(s.roots, src.Path)
+		if sidecarErr != nil {
+			return SourceFingerprint{}, sidecarErr
+		}
+		if found {
+			sidecar = candidate
+			sideInfo, statErr := os.Stat(sidecar)
+			if statErr != nil {
+				return SourceFingerprint{}, fmt.Errorf("stat %s: %w", sidecar, statErr)
+			}
+			fingerprint.Size += sideInfo.Size()
+			if sideInfo.ModTime().UnixNano() > fingerprint.MTimeNS {
+				fingerprint.MTimeNS = sideInfo.ModTime().UnixNano()
+			}
+		}
+	}
 	hash := ""
 	if src.Kind == kiroSourceCurrentJSONL {
-		sidecar := ""
+		sidecar = ""
 		if candidate, ok := kiroCurrentSidecarPath(s.roots, src.Path); ok {
 			sidecar = candidate
 		}
-		hash, err = hashKiroCurrentSource(src.Path, sidecar)
+		hash, err = hashKiroJSONLSource(src.Path, sidecar)
+	} else if src.Kind == kiroSourceLegacyJSONL {
+		hash, err = hashKiroJSONLSource(src.Path, sidecar)
 	} else {
 		hash, err = hashJSONLSourceFile(src.Path)
 	}
@@ -1091,7 +1129,7 @@ func (s kiroSourceSet) Fingerprint(
 	return fingerprint, nil
 }
 
-func hashKiroCurrentSource(transcript, sidecar string) (string, error) {
+func hashKiroJSONLSource(transcript, sidecar string) (string, error) {
 	transcriptHash, err := hashJSONLSourceFile(transcript)
 	if err != nil {
 		return "", err
@@ -1199,6 +1237,12 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 		}
 		return s.newSourceRef(root, currentPath, "", sessionID, kiroSourceCurrentJSONL), true
 	}
+	if legacyPath, ok := kiroLegacyMetaPathForEvent(root, path); ok {
+		if !kiroEventPathUnderRoot(root, legacyPath) {
+			return SourceRef{}, false
+		}
+		return s.newSourceRef(root, legacyPath, "", "", kiroSourceLegacyJSONL), true
+	}
 	if kiroLegacyPathUnderRoot(root, path) && kiroEventPathUnderRoot(root, path) {
 		return s.newSourceRef(root, path, "", "", kiroSourceLegacyJSONL), true
 	}
@@ -1215,6 +1259,14 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 		return s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB), true
 	}
 	return SourceRef{}, false
+}
+
+func kiroLegacyMetaPathForEvent(root, path string) (string, bool) {
+	if filepath.Ext(path) != ".json" {
+		return "", false
+	}
+	legacyPath := strings.TrimSuffix(filepath.Clean(path), ".json") + ".jsonl"
+	return legacyPath, kiroLegacyPathUnderRoot(root, legacyPath)
 }
 
 func (s kiroSourceSet) newSourceRef(
@@ -1396,11 +1448,19 @@ func kiroLegacyPathUnderRoot(root, path string) bool {
 
 func (s kiroSourceSet) discoverCurrentJSONL(root string) ([]DiscoveredFile, error) {
 	var files []DiscoveredFile
-	add := func(workspace, session string) {
+	add := func(workspace, session string) error {
 		path := filepath.Join(root, workspace, session, "messages.jsonl")
-		if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok && kiroRegularFileUnderRoot(root, path) {
+		if _, _, ok := kiroCurrentPathUnderRoot(root, path); !ok {
+			return nil
+		}
+		regular, err := kiroRegularFileUnderRootChecked(root, path)
+		if err != nil {
+			return fmt.Errorf("probe Kiro current transcript %s: %w", path, err)
+		}
+		if regular {
 			files = append(files, DiscoveredFile{Path: path, Agent: AgentKiro})
 		}
+		return nil
 	}
 	entries, err := s.readDir(root)
 	if err != nil {
@@ -1414,7 +1474,9 @@ func (s kiroSourceSet) discoverCurrentJSONL(root string) ([]DiscoveredFile, erro
 			continue
 		}
 		if isKiroCurrentSessionDir(entry.Name()) {
-			add("", entry.Name())
+			if err := add("", entry.Name()); err != nil {
+				return nil, err
+			}
 		}
 		if !isKiroCurrentWorkspaceDir(entry.Name()) {
 			continue
@@ -1429,7 +1491,9 @@ func (s kiroSourceSet) discoverCurrentJSONL(root string) ([]DiscoveredFile, erro
 		}
 		for _, child := range children {
 			if child.IsDir() && isKiroCurrentSessionDir(child.Name()) {
-				add(entry.Name(), child.Name())
+				if err := add(entry.Name(), child.Name()); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -1443,14 +1507,23 @@ func (s kiroSourceSet) discoverCurrentJSONLForSession(
 		return nil, nil
 	}
 	var files []DiscoveredFile
-	add := func(workspace string) {
+	add := func(workspace string) error {
 		path := filepath.Join(root, workspace, sessionID, "messages.jsonl")
-		if _, _, ok := kiroCurrentPathUnderRoot(root, path); ok &&
-			kiroRegularFileUnderRoot(root, path) {
+		if _, _, ok := kiroCurrentPathUnderRoot(root, path); !ok {
+			return nil
+		}
+		regular, err := kiroRegularFileUnderRootChecked(root, path)
+		if err != nil {
+			return fmt.Errorf("probe Kiro current transcript %s: %w", path, err)
+		}
+		if regular {
 			files = append(files, DiscoveredFile{Path: path, Agent: AgentKiro})
 		}
+		return nil
 	}
-	add("")
+	if err := add(""); err != nil {
+		return nil, err
+	}
 	entries, err := s.readDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1462,7 +1535,9 @@ func (s kiroSourceSet) discoverCurrentJSONLForSession(
 		if !entry.IsDir() || !isKiroCurrentWorkspaceDir(entry.Name()) {
 			continue
 		}
-		add(entry.Name())
+		if err := add(entry.Name()); err != nil {
+			return nil, err
+		}
 	}
 	return files, nil
 }
@@ -1474,6 +1549,13 @@ func (s kiroSourceSet) discoverCurrentJSONLEach(ctx context.Context, root string
 		}
 		if isKiroCurrentSessionDir(entry.Name()) {
 			path := filepath.Join(root, entry.Name(), "messages.jsonl")
+			regular, err := kiroRegularFileUnderRootChecked(root, path)
+			if err != nil {
+				return fmt.Errorf("probe Kiro current transcript %s: %w", path, err)
+			}
+			if !regular {
+				return nil
+			}
 			if source, ok := s.sourceRef(root, path, false); ok {
 				return yield(source)
 			}
@@ -1487,6 +1569,13 @@ func (s kiroSourceSet) discoverCurrentJSONLEach(ctx context.Context, root string
 				return nil
 			}
 			path := filepath.Join(workspace, child.Name(), "messages.jsonl")
+			regular, err := kiroRegularFileUnderRootChecked(root, path)
+			if err != nil {
+				return fmt.Errorf("probe Kiro current transcript %s: %w", path, err)
+			}
+			if !regular {
+				return nil
+			}
 			if source, ok := s.sourceRef(root, path, false); ok {
 				return yield(source)
 			}
@@ -1502,6 +1591,16 @@ func (s kiroSourceSet) discoverLegacyJSONLEach(ctx context.Context, root string,
 				return nil
 			}
 			path := filepath.Join(dir, entry.Name())
+			regular, err := kiroRegularFileUnderRootChecked(root, path)
+			if err != nil {
+				return fmt.Errorf("probe Kiro legacy transcript %s: %w", path, err)
+			}
+			if !regular {
+				return nil
+			}
+			if _, err := loadKiroMetaStrict(path); err != nil {
+				return err
+			}
 			if source, ok := s.sourceRef(root, path, false); ok {
 				return yield(source)
 			}
@@ -1576,19 +1675,59 @@ func kiroCurrentSidecarPath(roots []string, transcript string) (string, bool) {
 }
 
 func kiroRegularFileUnderRoot(root, path string) bool {
-	if !IsRegularFile(path) {
-		return false
+	regular, _ := kiroRegularFileUnderRootChecked(root, path)
+	return regular
+}
+
+func kiroRegularFileUnderRootChecked(root, path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, nil
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return false
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
 	}
 	resolvedPath, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return false
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
 	}
 	_, ok := relUnder(resolvedRoot, resolvedPath)
-	return ok
+	return ok, nil
+}
+
+func kiroLegacySidecarPath(
+	roots []string, transcript string,
+) (string, bool, error) {
+	for _, root := range roots {
+		if !kiroLegacyPathUnderRoot(root, transcript) {
+			continue
+		}
+		sidecar := strings.TrimSuffix(transcript, ".jsonl") + ".json"
+		if _, err := os.Lstat(sidecar); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", false, fmt.Errorf("stat %s: %w", sidecar, err)
+		}
+		if !kiroEventPathUnderRoot(root, sidecar) {
+			continue
+		}
+		return sidecar, true, nil
+	}
+	return "", false, nil
 }
 
 // kiroEventPathUnderRoot validates an event path even when the changed file

@@ -857,6 +857,50 @@ func TestKiroProviderChangedLegacyEventPreservesMetadataIdentity(t *testing.T) {
 	assert.Equal(t, path, changed[0].DisplayPath)
 }
 
+func TestKiroProviderLegacySidecarEventAndFingerprint(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "storage-name.jsonl")
+	sidecar := filepath.Join(root, "storage-name.json")
+	writeSourceFile(t, path, kiroProviderJSONLFixture("legacy"))
+	writeSourceFile(t, sidecar, kiroProviderMetaFixture("mapped-session", "/home/user/code/legacy"))
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: sidecar, WatchRoot: root, EventKind: "write",
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, path, changed[0].DisplayPath)
+	before, err := provider.Fingerprint(context.Background(), changed[0])
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(sidecar, []byte(
+		strings.Replace(
+			kiroProviderMetaFixture("mapped-session", "/home/user/code/legacy"),
+			`"title":"mapped-session"`, `"title":"mapped-sessioX"`, 1,
+		),
+	), 0o644))
+	transcriptInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	earlier := transcriptInfo.ModTime().Add(-time.Minute)
+	require.NoError(t, os.Chtimes(sidecar, earlier, earlier))
+	after, err := provider.Fingerprint(context.Background(), changed[0])
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, after.Hash)
+}
+
+func TestKiroProviderLegacyMetadataDecodeFailureIsRetryable(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "storage-name.jsonl")
+	writeSourceFile(t, path, kiroProviderJSONLFixture("legacy"))
+	writeSourceFile(t, filepath.Join(root, "storage-name.json"), "{")
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	_, err := provider.Discover(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode Kiro legacy metadata")
+}
+
 func TestKiroProviderChangedCurrentEventRanksMetadataMappedLegacy(t *testing.T) {
 	currentRoot := t.TempDir()
 	legacyRoot := t.TempDir()

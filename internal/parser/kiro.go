@@ -31,25 +31,38 @@ type kiroMeta struct {
 // discoverLegacyJSONL finds all .jsonl session files under a Kiro
 // CLI sessions directory. Layout:
 // <sessionsDir>/<uuid>.jsonl  (with companion <uuid>.json)
-func (s kiroSourceSet) discoverLegacyJSONL(sessionsDir string) []DiscoveredFile {
+func (s kiroSourceSet) discoverLegacyJSONL(sessionsDir string) ([]DiscoveredFile, error) {
 	var files []DiscoveredFile
 	for _, dir := range []string{sessionsDir, filepath.Join(sessionsDir, "cli")} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("read Kiro legacy directory %s: %w", dir, err)
+			}
 			continue
 		}
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 				continue
 			}
-			files = append(files, DiscoveredFile{Path: filepath.Join(dir, e.Name()), Agent: AgentKiro})
+			path := filepath.Join(dir, e.Name())
+			if _, err := loadKiroMetaStrict(path); err != nil {
+				return nil, err
+			}
+			regular, err := kiroRegularFileUnderRootChecked(sessionsDir, path)
+			if err != nil {
+				return nil, fmt.Errorf("probe Kiro legacy transcript %s: %w", path, err)
+			}
+			if regular {
+				files = append(files, DiscoveredFile{Path: path, Agent: AgentKiro})
+			}
 		}
 	}
 
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
-	return files
+	return files, nil
 }
 
 // legacySourceFile locates a legacy Kiro JSONL session file by its raw
@@ -81,16 +94,24 @@ func KiroSessionIDFromPath(jsonlPath string) string {
 // loadKiroMeta reads the companion .json metadata file for a
 // session JSONL file.
 func loadKiroMeta(jsonlPath string) *kiroMeta {
+	meta, _ := loadKiroMetaStrict(jsonlPath)
+	return meta
+}
+
+func loadKiroMetaStrict(jsonlPath string) (*kiroMeta, error) {
 	jsonPath := strings.TrimSuffix(jsonlPath, ".jsonl") + ".json"
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read Kiro legacy metadata %s: %w", jsonPath, err)
 	}
 	var m kiroMeta
 	if err := json.Unmarshal(data, &m); err != nil {
-		return nil
+		return nil, fmt.Errorf("decode Kiro legacy metadata %s: %w", jsonPath, err)
 	}
-	return &m
+	return &m, nil
 }
 
 // parseLegacySession parses a Kiro CLI session from its JSONL file.
@@ -204,7 +225,10 @@ func (p *kiroProvider) parseLegacySession(
 	}
 
 	// Extract metadata from companion .json file.
-	meta := loadKiroMeta(path)
+	meta, err := loadKiroMetaStrict(path)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	sessionID := strings.TrimSuffix(
 		filepath.Base(path), ".jsonl",
