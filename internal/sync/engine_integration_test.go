@@ -1723,6 +1723,39 @@ func TestSyncEngineKiroFullParseReplacesMessages(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "kiro:"+rawID, 1)
 }
 
+func TestSyncEngineKiroSameStatMetadataRewriteIsDetected(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
+	rawID := "sess_0123456789abcdef"
+	path := filepath.Join(env.kiroDir, "workspace", rawID, "messages.jsonl")
+	sidecar := filepath.Join(filepath.Dir(path), "session.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(
+		`{"payload":{"type":"user","content":"hello"}}`+"\n",
+	), 0o644))
+	require.NoError(t, os.WriteFile(sidecar, []byte(`{"title":"A"}`), 0o644))
+	stamp := time.Unix(1_700_000_000, 0)
+	require.NoError(t, os.Chtimes(path, stamp, stamp))
+	require.NoError(t, os.Chtimes(sidecar, stamp, stamp))
+
+	initial := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, initial.Aborted)
+	before, err := env.db.GetSessionFull(context.Background(), "kiro:"+rawID)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.SessionName)
+	assert.Equal(t, "A", *before.SessionName)
+
+	require.NoError(t, os.WriteFile(sidecar, []byte(`{"title":"B"}`), 0o644))
+	require.NoError(t, os.Chtimes(sidecar, stamp, stamp))
+	updated := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, updated.Aborted)
+	after, err := env.db.GetSessionFull(context.Background(), "kiro:"+rawID)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.SessionName)
+	assert.Equal(t, "B", *after.SessionName)
+}
+
 func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
 	legacyRoot := t.TempDir()
 	sqliteRoot := t.TempDir()
@@ -1833,6 +1866,37 @@ func TestSyncRootsSinceKiroPreservesOutOfScopeWinnerAfterSQLiteRemoval(
 	require.NoError(t, err)
 	assert.NotNil(t, active,
 		"an out-of-scope current winner must preserve a removed DB member")
+}
+
+func TestSyncRootsSinceKiroArbitratesAcrossConfiguredRootsBeforeProcessing(
+	t *testing.T,
+) {
+	winnerRoot := t.TempDir()
+	partialRoot := t.TempDir()
+	env := setupSingleAgentTestEnvWithDirs(
+		t, parser.AgentKiro, []string{winnerRoot, partialRoot},
+	)
+	rawID := "sess_0123456789abcdef"
+	for root, content := range map[string]string{
+		winnerRoot:  "configured winner",
+		partialRoot: "scoped loser",
+	} {
+		path := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(
+			fmt.Sprintf(`{"payload":{"type":"user","content":%q}}`, content)+"\n",
+		), 0o644))
+	}
+
+	initial := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, initial.Aborted)
+	assertMessageContent(t, env.db, "kiro:"+rawID, "configured winner")
+
+	stats := env.engine.SyncRootsSince(
+		context.Background(), []string{partialRoot}, time.Time{}, nil,
+	)
+	require.False(t, stats.Aborted)
+	assertMessageContent(t, env.db, "kiro:"+rawID, "configured winner")
 }
 
 func TestSyncRootsSinceKiroTombstonesRemovedAllShadowedMember(

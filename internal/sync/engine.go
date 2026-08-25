@@ -5558,6 +5558,9 @@ func (e *Engine) streamReconciliationCandidates(
 			}
 			planRetryRoots = append(planRetryRoots, scope.RetryRoots...)
 		}
+		if agent == parser.AgentKiro {
+			traversalRoots = append([]string(nil), e.agentDirs[agent]...)
+		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: traversalRoots, Machine: e.machine, PathRewriter: e.pathRewriter,
 			SourceMachines:                     e.sourceMachines[agent],
@@ -5584,8 +5587,15 @@ func (e *Engine) streamReconciliationCandidates(
 			for _, scope := range group.scopes {
 				groupRetryRoots = append(groupRetryRoots, scope.RetryRoots...)
 			}
+			discoveryRoots := group.roots
+			if agent == parser.AgentKiro {
+				// Kiro source arbitration spans every configured root even when
+				// the proof scope is partial; only the winning candidate inside
+				// that proof is admitted to processing below.
+				discoveryRoots = e.agentDirs[agent]
+			}
 			scopeProvider := factory.NewProvider(parser.ProviderConfig{
-				Roots: group.roots, Machine: e.machine,
+				Roots: discoveryRoots, Machine: e.machine,
 				SourceMachines:                     e.sourceMachines[agent],
 				PathRewriter:                       e.pathRewriter,
 				SQLiteContainerUnchangedSinceTrust: containerTrusted,
@@ -5605,12 +5615,23 @@ func (e *Engine) streamReconciliationCandidates(
 				// Kiro precedence uses configured roots for reordered scoped requests.
 				rankingRoots = e.agentDirs[agent]
 			}
+			var kiroWinners map[string]reconciliationCandidate
+			if agent == parser.AgentKiro {
+				kiroWinners = make(map[string]reconciliationCandidate)
+			}
 			var spoolErr error
 			err = discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
 				candidate, ok := e.reconciliationCandidate(
 					provider, source, rankingRoots, watchRoots,
 				)
 				if !ok {
+					return nil
+				}
+				if agent == parser.AgentKiro {
+					current, exists := kiroWinners[candidate.Identity]
+					if !exists || reconciliationCandidatePreferred(candidate, current) {
+						kiroWinners[candidate.Identity] = candidate
+					}
 					return nil
 				}
 				admitted := false
@@ -5642,6 +5663,29 @@ func (e *Engine) streamReconciliationCandidates(
 				spoolErr = spool.Add(ctx, candidate)
 				return spoolErr
 			})
+			if err == nil && agent == parser.AgentKiro {
+				for _, identity := range slices.Sorted(maps.Keys(kiroWinners)) {
+					candidate := kiroWinners[identity]
+					admitted := false
+					for _, proofScopes := range groupProofs {
+						if db.StoredSourcePathHintScopesContain(candidate.Path, proofScopes) {
+							admitted = true
+							break
+						}
+					}
+					if !admitted {
+						continue
+					}
+					spoolErr = spool.Add(ctx, candidate)
+					if spoolErr != nil {
+						break
+					}
+				}
+				if spoolErr != nil {
+					return providers, completedScopes,
+						failedRoots, failures, discoveryErr, spoolErr
+				}
+			}
 			if err != nil {
 				if spoolErr != nil {
 					return providers, completedScopes,
@@ -5895,6 +5939,21 @@ func (e *Engine) reconciliationCandidate(
 		Project: source.ProjectHint, Preference1: preference1,
 		Preference2: preference2, Preference3: preference3,
 	}, true
+}
+
+func reconciliationCandidatePreferred(
+	candidate, current reconciliationCandidate,
+) bool {
+	if candidate.Preference1 != current.Preference1 {
+		return candidate.Preference1 > current.Preference1
+	}
+	if candidate.Preference2 != current.Preference2 {
+		return candidate.Preference2 > current.Preference2
+	}
+	if candidate.Preference3 != current.Preference3 {
+		return candidate.Preference3 > current.Preference3
+	}
+	return candidate.Path < current.Path
 }
 
 func configuredRootPreference(path string, roots []string) int64 {

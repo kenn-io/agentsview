@@ -54,7 +54,8 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 			UnchangedResults: UnchangedResultMTime,
 		},
 		AgentKiro: {
-			UnchangedResults: UnchangedResultMTime,
+			UnchangedResults:                    UnchangedResultMTimeAndHash,
+			FingerprintHashRequiredForFreshness: true,
 		},
 		AgentTrae: {
 			UnchangedResults: UnchangedResultMTimeAndHash,

@@ -1618,7 +1618,8 @@ func kiroProviderCapabilities() Capabilities {
 			ToolResults:  CapabilitySupported,
 		},
 		Sync: ProviderSyncSemantics{
-			UnchangedResults: UnchangedResultMTime,
+			UnchangedResults:                    UnchangedResultMTimeAndHash,
+			FingerprintHashRequiredForFreshness: true,
 		},
 	}
 }
