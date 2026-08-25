@@ -155,11 +155,14 @@ type BuildStatus struct {
 }
 
 // EncodeSettings groups the encode-shape knobs of one embeddings server,
-// resolved from config ([vector.embeddings.servers.<name>] batch_size and
-// concurrency).
+// resolved from config.
 type EncodeSettings struct {
 	// BatchSize is the number of inputs sent per HTTP call.
 	BatchSize int
+	// ModelContextTokens and MaxBatchTokens bound the worst-case total input
+	// tokens sent per HTTP call. Zero leaves token-budget batching disabled.
+	ModelContextTokens int
+	MaxBatchTokens     int
 	// Concurrency is the number of documents encoded in parallel.
 	Concurrency int
 }
@@ -427,14 +430,16 @@ func (m *Manager) runBuild(
 		return BuildResult{}, errors.New("embedding build target has no unit source")
 	}
 	return m.ix.Build(ctx, target.Source, me.Encode, target.Generation, BuildOptions{
-		FullRebuild:      req.FullRebuild,
-		Backstop:         req.Backstop,
-		RepairInvalid:    req.RepairInvalid,
-		IncludeAutomated: req.IncludeAutomated,
-		BatchSize:        me.Settings.BatchSize,
-		Concurrency:      me.Settings.Concurrency,
-		CorpusRevision:   target.CorpusRevision,
-		Progress:         m.reportProgress,
+		FullRebuild:        req.FullRebuild,
+		Backstop:           req.Backstop,
+		RepairInvalid:      req.RepairInvalid,
+		IncludeAutomated:   req.IncludeAutomated,
+		BatchSize:          me.Settings.BatchSize,
+		ModelContextTokens: me.Settings.ModelContextTokens,
+		MaxBatchTokens:     me.Settings.MaxBatchTokens,
+		Concurrency:        me.Settings.Concurrency,
+		CorpusRevision:     target.CorpusRevision,
+		Progress:           m.reportProgress,
 	})
 }
 

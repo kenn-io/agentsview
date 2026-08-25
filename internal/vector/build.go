@@ -54,6 +54,12 @@ type BuildOptions struct {
 	IncludeAutomated bool
 	// BatchSize is the encode batch size (config batch_size).
 	BatchSize int
+	// ModelContextTokens is the maximum tokens accepted for one input.
+	// MaxBatchTokens is the provider's total input-token cap per request.
+	// When both are positive, batching charges every input the full model
+	// context so provider-side truncation cannot push a request over its cap.
+	ModelContextTokens int
+	MaxBatchTokens     int
 	// Concurrency is the number of documents encoded in parallel (config
 	// concurrency). Values <= 0 encode sequentially.
 	Concurrency int
@@ -187,7 +193,7 @@ func (ix *Index) Build(
 	}
 	fillStats, fillErr := kitvec.Fill[string, string](ctx, fillStore, target, wrapped, kitvec.FillOptions[string]{
 		Split:       ix.split,
-		Batch:       kitvec.BatchOptions{BatchSize: o.BatchSize, Concurrency: 1},
+		Batch:       o.encodeBatchOptions(),
 		Concurrency: o.Concurrency,
 		// A positive BatchSize packs chunks from several documents into one
 		// encode call, so a permanent rejection arrives without knowing which
@@ -269,7 +275,7 @@ func (ix *Index) buildInvalidRepair(
 	wrapped, finish := ix.wrapProgress(validatingEncoder(enc), total, o.Progress)
 	fill, fillErr := fillRepairQueue(ctx, store, target, wrapped, repairFillOptions{
 		Split:       ix.split,
-		Batch:       kitvec.BatchOptions{BatchSize: o.BatchSize, Concurrency: 1},
+		Batch:       o.encodeBatchOptions(),
 		Concurrency: o.Concurrency,
 	})
 	finish()
@@ -295,6 +301,22 @@ func (ix *Index) buildInvalidRepair(
 			"invalid vector repair incomplete: %d targets remain queued", remaining)
 	}
 	return result, nil
+}
+
+// encodeBatchOptions applies the provider's aggregate token budget before kit
+// composes requests. Each input is conservatively estimated at the full model
+// context because providers may truncate every oversized input to exactly that
+// length. This makes floor(max_batch_tokens/model_context_tokens) a safe bound
+// independent of document contents or provider tokenization.
+func (o BuildOptions) encodeBatchOptions() kitvec.BatchOptions {
+	batchSize := o.BatchSize
+	if o.ModelContextTokens > 0 && o.MaxBatchTokens > 0 {
+		tokenBound := max(o.MaxBatchTokens/o.ModelContextTokens, 1)
+		if batchSize <= 0 || tokenBound < batchSize {
+			batchSize = tokenBound
+		}
+	}
+	return kitvec.BatchOptions{BatchSize: batchSize, Concurrency: 1}
 }
 
 // repairRemaining preserves the accumulated committed target count as a

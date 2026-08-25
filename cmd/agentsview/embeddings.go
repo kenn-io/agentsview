@@ -350,8 +350,10 @@ func vectorDocumentEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSe
 		set.ByName[name] = vector.ManagedEncoder{
 			Encode: enc,
 			Settings: vector.EncodeSettings{
-				BatchSize:   server.BatchSize,
-				Concurrency: server.Concurrency,
+				BatchSize:          server.BatchSize,
+				ModelContextTokens: c.ModelContextTokens,
+				MaxBatchTokens:     server.MaxBatchTokens,
+				Concurrency:        server.Concurrency,
 			},
 		}
 	}

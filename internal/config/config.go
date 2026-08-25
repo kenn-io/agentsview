@@ -142,9 +142,11 @@ type VectorConfig struct {
 // Model identity (model, dimension, request_dimensions, max_input_chars,
 // query_prefix, document_prefix, input_suffix) is deliberately global rather
 // than per-server: it joins the generation fingerprint, and query vectors are
-// only comparable to stored document vectors from the same space. Servers
-// differ only in transport and capacity, so a build run on any server produces
-// vectors every other server's queries can search.
+// only comparable to stored document vectors from the same space.
+// ModelContextTokens is also global because it describes the model, but only
+// controls conservative request batching and does not join the fingerprint.
+// Servers differ only in transport and capacity, so a build run on any server
+// produces vectors every other server's queries can search.
 type VectorEmbeddingsConfig struct {
 	Model     string `toml:"model" json:"model"`
 	Dimension int    `toml:"dimension" json:"dimension"`
@@ -160,6 +162,11 @@ type VectorEmbeddingsConfig struct {
 	// MaxInputChars caps the rune length of each chunk sent for
 	// embedding. Default 8192.
 	MaxInputChars int `toml:"max_input_chars" json:"max_input_chars"`
+	// ModelContextTokens is the maximum tokens the model accepts for one
+	// input. When a server sets MaxBatchTokens, builds conservatively charge
+	// this full amount for every input while composing request batches.
+	// Zero leaves token-budget batching disabled. Default 0.
+	ModelContextTokens int `toml:"model_context_tokens" json:"model_context_tokens,omitempty"`
 	// QueryPrefix is prepended verbatim to search queries before embedding.
 	// It allows instruction-tuned models to distinguish queries from indexed
 	// documents. Changing it cuts a new vector generation. Default empty.
@@ -196,6 +203,10 @@ type VectorEmbeddingsServerConfig struct {
 	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
 	// BatchSize is the number of inputs sent per HTTP call. Default 32.
 	BatchSize int `toml:"batch_size" json:"batch_size"`
+	// MaxBatchTokens is the provider's maximum total input tokens per HTTP
+	// call. When set with ModelContextTokens, builds reduce BatchSize so the
+	// worst-case request remains within this cap. Zero disables the cap.
+	MaxBatchTokens int `toml:"max_batch_tokens" json:"max_batch_tokens,omitempty"`
 	// Concurrency is the number of documents embedded in parallel during a
 	// build against this server. Sequential requests leave a build
 	// round-trip-bound against remote endpoints, so the default is 4;
@@ -309,6 +320,11 @@ func (c VectorConfig) Validate() error {
 			"[vector.embeddings] max_input_chars must be greater than 0, got %d",
 			c.Embeddings.MaxInputChars)
 	}
+	if c.Embeddings.ModelContextTokens < 0 {
+		return fmt.Errorf(
+			"[vector.embeddings] model_context_tokens must not be negative, got %d",
+			c.Embeddings.ModelContextTokens)
+	}
 	if err := c.Embeddings.validateServers(); err != nil {
 		return err
 	}
@@ -362,7 +378,7 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 		}
 	}
 	for _, name := range sortedServerNames(c.Servers) {
-		if err := c.Servers[name].validate(name); err != nil {
+		if err := c.Servers[name].validate(name, c.ModelContextTokens); err != nil {
 			return err
 		}
 	}
@@ -370,7 +386,7 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 }
 
 // validate checks one named server's transport settings.
-func (c VectorEmbeddingsServerConfig) validate(name string) error {
+func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens int) error {
 	section := fmt.Sprintf("[vector.embeddings.servers.%s]", name)
 	if c.Endpoint == "" {
 		return fmt.Errorf("%s endpoint is required", section)
@@ -390,6 +406,19 @@ func (c VectorEmbeddingsServerConfig) validate(name string) error {
 	}
 	if c.BatchSize <= 0 {
 		return fmt.Errorf("%s batch_size must be greater than 0, got %d", section, c.BatchSize)
+	}
+	if c.MaxBatchTokens < 0 {
+		return fmt.Errorf(
+			"%s max_batch_tokens must not be negative, got %d", section, c.MaxBatchTokens)
+	}
+	if c.MaxBatchTokens > 0 && modelContextTokens <= 0 {
+		return fmt.Errorf(
+			"%s max_batch_tokens requires [vector.embeddings] model_context_tokens", section)
+	}
+	if c.MaxBatchTokens > 0 && c.MaxBatchTokens < modelContextTokens {
+		return fmt.Errorf(
+			"%s max_batch_tokens (%d) must be at least model_context_tokens (%d)",
+			section, c.MaxBatchTokens, modelContextTokens)
 	}
 	if c.Concurrency <= 0 {
 		return fmt.Errorf("%s concurrency must be greater than 0, got %d", section, c.Concurrency)
@@ -1391,6 +1420,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("vector", "embeddings", "max_input_chars") {
 		c.Vector.Embeddings.MaxInputChars = file.Vector.Embeddings.MaxInputChars
+	}
+	if meta.IsDefined("vector", "embeddings", "model_context_tokens") {
+		c.Vector.Embeddings.ModelContextTokens = file.Vector.Embeddings.ModelContextTokens
 	}
 	if meta.IsDefined("vector", "embeddings", "query_prefix") {
 		c.Vector.Embeddings.QueryPrefix = file.Vector.Embeddings.QueryPrefix

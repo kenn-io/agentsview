@@ -103,6 +103,59 @@ func TestManagerBuildUsingSelectsNamedEncoder(t *testing.T) {
 	assert.Positive(t, localCalls.Load(), "a build without Using must encode on the default server")
 }
 
+// TestManagerCapsBuildBatchesByWorstCaseTokenBudget covers the Voyage repro:
+// four inputs can each be truncated to the 32,000-token model context, making
+// a 128,000-token request that exceeds the provider's 120,000-token cap. The
+// encoder is the provider boundary, so its recorded arguments prove the
+// oversized request is split before submission.
+func TestManagerCapsBuildBatchesByWorstCaseTokenBudget(t *testing.T) {
+	const (
+		configuredBatchSize = 4
+		modelContextTokens  = 32000
+		maxBatchTokens      = 120000
+	)
+
+	ix := openTestIndex(t)
+	rows := make([]fakeUnit, configuredBatchSize)
+	for i := range rows {
+		rows[i] = fakeUnit{
+			unit:    userDoc("s1", fmt.Sprintf("u%d", i), i, fmt.Sprintf("doc-%d", i)),
+			endedAt: fmt.Sprintf("2024-01-01T00:00:0%dZ", i),
+		}
+	}
+	src := &fakeUnitSource{rows: rows}
+
+	var submittedBatchSizes []int
+	enc := func(_ context.Context, texts []string) ([][]float32, error) {
+		submittedBatchSizes = append(submittedBatchSizes, len(texts))
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+	encoders := EncoderSet{Default: "voyage", ByName: map[string]ManagedEncoder{
+		"voyage": {
+			Encode: enc,
+			Settings: EncodeSettings{
+				BatchSize:          configuredBatchSize,
+				ModelContextTokens: modelContextTokens,
+				MaxBatchTokens:     maxBatchTokens,
+				Concurrency:        1,
+			},
+		},
+	}}
+	m := NewManager(ix, src, encoders, fakeGeneration("fake-model"))
+
+	started, err := m.TryBuild(context.Background(), BuildRequest{})
+	require.NoError(t, err)
+	require.True(t, started)
+	assert.Equal(t, []int{3, 1}, submittedBatchSizes)
+	for _, size := range submittedBatchSizes {
+		assert.LessOrEqual(t, size*modelContextTokens, maxBatchTokens)
+	}
+}
+
 func TestManagerResolvesBuildTargetForEveryPass(t *testing.T) {
 	ix := openTestIndex(t)
 	oldGeneration := kitvec.Generation{

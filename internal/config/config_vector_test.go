@@ -87,6 +87,11 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "max_input_chars",
 		},
 		{
+			name:    "enabled negative model_context_tokens",
+			mutate:  func(c *VectorConfig) { c.Embeddings.ModelContextTokens = -1 },
+			wantErr: "model_context_tokens",
+		},
+		{
 			name:    "enabled with no servers",
 			mutate:  func(c *VectorConfig) { c.Embeddings.Servers = nil },
 			wantErr: "at least one server",
@@ -132,6 +137,43 @@ func TestVectorConfigValidate(t *testing.T) {
 				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) { s.BatchSize = -1 })
 			},
 			wantErr: "batch_size",
+		},
+		{
+			name: "server negative max_batch_tokens",
+			mutate: func(c *VectorConfig) {
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) {
+					s.MaxBatchTokens = -1
+				})
+			},
+			wantErr: "max_batch_tokens",
+		},
+		{
+			name: "server max_batch_tokens requires model context",
+			mutate: func(c *VectorConfig) {
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) {
+					s.MaxBatchTokens = 120000
+				})
+			},
+			wantErr: "requires [vector.embeddings] model_context_tokens",
+		},
+		{
+			name: "server max_batch_tokens must fit one model context",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.ModelContextTokens = 32000
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) {
+					s.MaxBatchTokens = 30000
+				})
+			},
+			wantErr: "must be at least model_context_tokens",
+		},
+		{
+			name: "server token budget accepts Voyage repro limits",
+			mutate: func(c *VectorConfig) {
+				c.Embeddings.ModelContextTokens = 32000
+				mutateServer(c, "local", func(s *VectorEmbeddingsServerConfig) {
+					s.MaxBatchTokens = 120000
+				})
+			},
 		},
 		{
 			name: "server zero concurrency",
@@ -284,12 +326,14 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 			"vector": map[string]any{
 				"enabled": true,
 				"embeddings": map[string]any{
-					"model":     "nomic-embed-text",
-					"dimension": 768,
+					"model":                "nomic-embed-text",
+					"dimension":            768,
+					"model_context_tokens": 32000,
 					"servers": map[string]any{
 						"local": map[string]any{
-							"endpoint":    "http://localhost:11434/v1",
-							"max_retries": 0,
+							"endpoint":         "http://localhost:11434/v1",
+							"max_retries":      0,
+							"max_batch_tokens": 120000,
 						},
 					},
 				},
@@ -302,7 +346,9 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Equal(t, 4, server.Concurrency, "unset concurrency keeps default")
 		assert.Equal(t, "30s", server.Timeout, "unset timeout keeps default")
 		assert.Equal(t, 0, server.MaxRetries, "explicit max_retries=0 overrides default")
+		assert.Equal(t, 120000, server.MaxBatchTokens)
 		assert.Equal(t, 8192, cfg.Vector.Embeddings.MaxInputChars, "unset max_input_chars keeps default")
+		assert.Equal(t, 32000, cfg.Vector.Embeddings.ModelContextTokens)
 		assert.Equal(t, "24h", cfg.Vector.Embed.BackstopInterval, "unset backstop_interval keeps default")
 		assert.False(t, cfg.Vector.IncludeAutomated, "unset include_automated keeps the false default")
 		assert.Empty(t, cfg.Vector.Embeddings.QueryPrefix, "unset query_prefix defaults to empty")
