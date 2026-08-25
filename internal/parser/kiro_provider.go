@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -357,6 +358,15 @@ type kiroChangedPlanCache struct {
 	databases []SourceRef
 }
 
+var kiroLegacyIdentityIndex = struct {
+	sync.RWMutex
+	roots   map[string]map[string]map[string]struct{}
+	indexed map[string]bool
+}{
+	roots:   make(map[string]map[string]map[string]struct{}),
+	indexed: make(map[string]bool),
+}
+
 func newKiroSourceSet(roots []string) kiroSourceSet {
 	return kiroSourceSet{
 		roots:     cleanJSONLRoots(roots),
@@ -390,7 +400,6 @@ func (s kiroSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []SourceRef, error) {
 	candidates := make(map[string][]SourceRef)
 	databases := make([]SourceRef, 0)
-	databaseMetas := make(map[string][]KiroSQLiteSessionMeta)
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
@@ -411,7 +420,6 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 			}
 			dbSourceSrc.SessionIDsTotal = len(metas)
 			dbSource.Opaque = dbSourceSrc
-			databaseMetas[dbPath] = metas
 			for _, meta := range metas {
 				member := s.newSourceRef(root, meta.VirtualPath, dbPath, meta.SessionID, kiroSourceSQLiteSession)
 				member.DiscoveryMTimeNS = meta.FileMtime
@@ -431,7 +439,9 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 				}
 			}
 		}
-		for _, file := range s.discoverLegacyJSONL(root) {
+		legacyFiles := s.discoverLegacyJSONL(root)
+		s.indexLegacyFiles(root, legacyFiles)
+		for _, file := range legacyFiles {
 			id := KiroSessionIDFromPath(file.Path)
 			if id == "" {
 				continue
@@ -451,23 +461,24 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 	for i := range databases {
 		src, _ := s.sourceFromRef(databases[i])
 		src.SessionIDs = make(map[string]struct{})
+		src.PreservedIDs = nil
 		for id, winner := range winners {
 			winnerSrc, ok := s.sourceFromRef(winner)
-			if ok && winnerSrc.Kind == kiroSourceSQLiteSession && samePath(winnerSrc.DBPath, src.DBPath) {
-				src.SessionIDs[id] = struct{}{}
+			if !ok {
+				continue
 			}
+			if winnerSrc.Kind == kiroSourceSQLiteSession && samePath(winnerSrc.DBPath, src.DBPath) {
+				src.SessionIDs[id] = struct{}{}
+				continue
+			}
+			src.PreservedIDs = append(src.PreservedIDs, "kiro:"+id)
 		}
+		sort.Strings(src.PreservedIDs)
 		if src.SessionIDsTotal > 0 && len(src.SessionIDs) < src.SessionIDsTotal {
 			src.SessionIDsSet = true
-			for _, meta := range databaseMetas[src.DBPath] {
-				if _, ok := src.SessionIDs[meta.SessionID]; !ok {
-					src.PreservedIDs = append(src.PreservedIDs, "kiro:"+meta.SessionID)
-				}
-			}
 		} else {
 			src.SessionIDs = nil
 			src.SessionIDsSet = false
-			src.PreservedIDs = nil
 		}
 		databases[i].Opaque = src
 	}
@@ -722,18 +733,81 @@ func (s kiroSourceSet) sourceForSession(
 				candidates = append(candidates, source)
 			}
 		}
-		if filepath.Base(sessionID) == sessionID && sessionID != "." && sessionID != ".." {
-			for _, dir := range []string{root, filepath.Join(root, "cli")} {
-				path := filepath.Join(dir, sessionID+".jsonl")
-				if source, ok := s.sourceRef(root, path, false); ok {
-					s.setSourceMTime(&source)
-					candidates = append(candidates, source)
-				}
-			}
+		for _, source := range s.legacySourcesForSession(root, sessionID, changed) {
+			s.setSourceMTime(&source)
+			candidates = append(candidates, source)
 		}
 	}
 	winner, found := s.bestSource(candidates)
 	return winner, found, nil
+}
+
+func (s kiroSourceSet) indexLegacyFiles(root string, files []DiscoveredFile) {
+	root = filepath.Clean(root)
+	kiroLegacyIdentityIndex.Lock()
+	defer kiroLegacyIdentityIndex.Unlock()
+	bySession := kiroLegacyIdentityIndex.roots[root]
+	if bySession == nil {
+		bySession = make(map[string]map[string]struct{})
+		kiroLegacyIdentityIndex.roots[root] = bySession
+	}
+	for _, file := range files {
+		id := KiroSessionIDFromPath(file.Path)
+		if id == "" {
+			continue
+		}
+		paths := bySession[id]
+		if paths == nil {
+			paths = make(map[string]struct{})
+			bySession[id] = paths
+		}
+		paths[filepath.Clean(file.Path)] = struct{}{}
+	}
+	kiroLegacyIdentityIndex.indexed[root] = true
+}
+
+func (s kiroSourceSet) ensureLegacyIdentityIndex(root string) {
+	root = filepath.Clean(root)
+	kiroLegacyIdentityIndex.RLock()
+	indexed := kiroLegacyIdentityIndex.indexed[root]
+	kiroLegacyIdentityIndex.RUnlock()
+	if indexed {
+		return
+	}
+	s.indexLegacyFiles(root, s.discoverLegacyJSONL(root))
+}
+
+func (s kiroSourceSet) legacySourcesForSession(
+	root, sessionID string, changed SourceRef,
+) []SourceRef {
+	root = filepath.Clean(root)
+	s.ensureLegacyIdentityIndex(root)
+	paths := make(map[string]struct{})
+	if changedSrc, ok := s.sourceFromRef(changed); ok &&
+		changedSrc.Kind == kiroSourceLegacyJSONL &&
+		samePath(changedSrc.Root, root) &&
+		kiroSourceExists(changed) &&
+		KiroSessionIDFromPath(changedSrc.Path) == sessionID {
+		paths[filepath.Clean(changedSrc.Path)] = struct{}{}
+		s.indexLegacyFiles(root, []DiscoveredFile{{
+			Path: changedSrc.Path, Agent: AgentKiro,
+		}})
+	}
+	kiroLegacyIdentityIndex.RLock()
+	for path := range kiroLegacyIdentityIndex.roots[root][sessionID] {
+		paths[path] = struct{}{}
+	}
+	kiroLegacyIdentityIndex.RUnlock()
+	sources := make([]SourceRef, 0, len(paths))
+	for path := range paths {
+		if KiroSessionIDFromPath(path) != sessionID {
+			continue
+		}
+		if source, ok := s.sourceRef(root, path, false); ok {
+			sources = append(sources, source)
+		}
+	}
+	return sources
 }
 
 func kiroChangedPlanCacheKey(req ChangedPathRequest) string {

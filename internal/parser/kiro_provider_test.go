@@ -814,6 +814,29 @@ func TestKiroProviderChangedLegacyEventPreservesMetadataIdentity(t *testing.T) {
 	assert.Equal(t, path, changed[0].DisplayPath)
 }
 
+func TestKiroProviderChangedCurrentEventRanksMetadataMappedLegacy(t *testing.T) {
+	currentRoot := t.TempDir()
+	legacyRoot := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	current := filepath.Join(currentRoot, "workspace", rawID, "messages.jsonl")
+	writeSourceFile(t, current, `{"payload":{"type":"user","content":"current"}}`+"\n")
+	legacy := filepath.Join(legacyRoot, "storage-name.jsonl")
+	writeSourceFile(t, legacy, kiroProviderJSONLFixture("legacy"))
+	writeSourceFile(t, filepath.Join(legacyRoot, "storage-name.json"),
+		kiroProviderMetaFixture(rawID, "/home/user/code/legacy"))
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{
+		Roots: []string{currentRoot, legacyRoot},
+	})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: current, WatchRoot: currentRoot, EventKind: "write",
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, current, changed[0].DisplayPath)
+}
+
 func TestKiroProviderDiscoveryFailsOnCurrentRootReadError(t *testing.T) {
 	root := t.TempDir()
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})

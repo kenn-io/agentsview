@@ -1772,6 +1772,49 @@ func TestSyncEngineKiroPartialSQLitePreservesShadowedAndTombstonesRemoved(
 	assert.NotNil(t, activeShadowed)
 }
 
+func TestSyncRootsSinceKiroPreservesOutOfScopeWinnerAfterSQLiteRemoval(
+	t *testing.T,
+) {
+	winnerRoot := t.TempDir()
+	partialRoot := t.TempDir()
+	env := setupSingleAgentTestEnvWithDirs(
+		t, parser.AgentKiro, []string{winnerRoot, partialRoot},
+	)
+	rawID := "sess_0123456789abcdef"
+	partial := createKiroSQLiteDB(t, partialRoot)
+	partial.addSession(
+		t, "/home/user/code/partial", rawID,
+		readKiroSQLiteFixture(t, "overlap_payload.json"),
+		1779015600000, 1779015610000,
+	)
+	current := filepath.Join(winnerRoot, "workspace", rawID, "messages.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(current), 0o755))
+	require.NoError(t, os.WriteFile(
+		current,
+		[]byte(`{"payload":{"type":"user","content":"current"}}`+"\n"),
+		0o644,
+	))
+
+	initial := env.engine.SyncAll(context.Background(), nil)
+	require.Zero(t, initial.Failed)
+	active, err := env.db.GetSession(context.Background(), "kiro:"+rawID)
+	require.NoError(t, err)
+	require.NotNil(t, active)
+
+	_, err = partial.db.Exec(
+		`DELETE FROM conversations_v2 WHERE conversation_id = ?`, rawID,
+	)
+	require.NoError(t, err)
+	env.engine.SyncRootsSince(
+		context.Background(), []string{partialRoot}, time.Time{}, nil,
+	)
+
+	active, err = env.db.GetSession(context.Background(), "kiro:"+rawID)
+	require.NoError(t, err)
+	assert.NotNil(t, active,
+		"an out-of-scope current winner must preserve a removed DB member")
+}
+
 func TestSyncEngineKiroLegacyOnlySyncPath(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	writeLegacyKiroSession(
