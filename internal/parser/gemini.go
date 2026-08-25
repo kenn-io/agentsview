@@ -6,13 +6,17 @@ import (
 	"bytes"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
 )
+
+var errGeminiMissingSessionID = errors.New("missing sessionId")
 
 // geminiTokens holds token usage counts from a Gemini message.
 type geminiTokens struct {
@@ -83,7 +87,8 @@ func (p *geminiProvider) parseSession(
 			)
 		}
 	}
-	if bytes.IndexByte(data, '\n') >= 0 {
+	if strings.EqualFold(filepath.Ext(path), ".jsonl") ||
+		bytes.IndexByte(data, '\n') >= 0 {
 		return parseGeminiJSONL(
 			path, project, machine, info, data,
 		)
@@ -99,7 +104,7 @@ func parseGeminiJSONObject(
 	sessionID := root.Get("sessionId").Str
 	if sessionID == "" {
 		return nil, nil, fmt.Errorf(
-			"missing sessionId in %s", path,
+			"%w in %s", errGeminiMissingSessionID, path,
 		)
 	}
 
@@ -208,7 +213,7 @@ func parseGeminiJSONL(
 	}
 	if sessionID == "" {
 		return nil, nil, fmt.Errorf(
-			"missing sessionId in %s", path,
+			"%w in %s", errGeminiMissingSessionID, path,
 		)
 	}
 

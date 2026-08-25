@@ -5395,6 +5395,65 @@ func TestSyncPathsGeminiJSONL(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "gemini:"+sessionID, 2)
 }
 
+func TestReconcileGeminiMissingSessionIDDoesNotBlockHealthySources(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentGemini)
+	hash := "abcdef1234567890"
+	damagedPath := env.writeGeminiSession(
+		t,
+		filepath.Join(
+			"tmp", hash, "chats",
+			"session-missing-id.jsonl",
+		),
+		strings.Join([]string{
+			`{"sessionId":"reconcile-damaged","projectHash":"` + hash + `","startTime":"` + tsEarly + `","lastUpdated":"` + tsEarlyS5 + `","kind":"main"}`,
+			`{"id":"m1","timestamp":"` + tsEarly + `","type":"user","content":[{"text":"archived prompt"}]}`,
+		}, "\n"),
+	)
+	initial := env.engine.SyncAll(t.Context(), nil)
+	require.Zero(t, initial.Failed)
+	assertSessionMessageCount(t, env.db, "gemini:reconcile-damaged", 1)
+
+	require.NoError(t, os.WriteFile(
+		damagedPath,
+		[]byte(strings.Join([]string{
+			`{"id":"m1","timestamp":"` + tsEarly + `","type":"user","content":[{"text":"orphaned prompt"}]}`,
+			`{"id":"m2","timestamp":"` + tsEarlyS5 + `","type":"gemini","content":"orphaned reply"}`,
+		}, "\n")),
+		0o600,
+	))
+	validPath := env.writeGeminiSession(
+		t,
+		filepath.Join(
+			"tmp", hash, "chats",
+			"session-valid.jsonl",
+		),
+		strings.Join([]string{
+			`{"sessionId":"reconcile-valid","projectHash":"` + hash + `","startTime":"` + tsEarly + `","lastUpdated":"` + tsEarlyS5 + `","kind":"main"}`,
+			`{"id":"m1","timestamp":"` + tsEarly + `","type":"user","content":[{"text":"healthy prompt"}]}`,
+		}, "\n"),
+	)
+
+	reconcile := func() {
+		t.Helper()
+		err := env.engine.ReconcileWatchRoots(
+			t.Context(), []string{env.geminiDir}, false,
+		)
+		require.NoError(t, err)
+		result := env.engine.LastReconciliationResult()
+		assert.True(t, result.Complete)
+		assert.Zero(t, result.ProviderFailures)
+	}
+
+	reconcile()
+	assertSessionMessageCount(t, env.db, "gemini:reconcile-valid", 1)
+	assertSessionMessageCount(t, env.db, "gemini:reconcile-damaged", 1)
+
+	reconcile()
+	assertSessionMessageCount(t, env.db, "gemini:reconcile-damaged", 1)
+	assert.FileExists(t, damagedPath)
+	assert.FileExists(t, validPath)
+}
+
 func TestSyncPathsGeminiProjectMetadataEventRefreshesProject(t *testing.T) {
 	env := setupTestEnv(t)
 

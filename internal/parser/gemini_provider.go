@@ -100,6 +100,16 @@ func (p *geminiProvider) Parse(
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	sess, msgs, err := p.parseSession(path, req.Source.ProjectHint, machine)
 	if err != nil {
+		if errors.Is(err, errGeminiMissingSessionID) {
+			// A session-shaped file without Gemini's metadata record has no
+			// stable identity to archive. Treat the durable source shape as an
+			// unsupported skip so reconciliation can advance without claiming
+			// authority to retire previously archived sessions.
+			return ParseOutcome{
+				ResultSetComplete: true,
+				SkipReason:        SkipUnsupportedSource,
+			}, nil
+		}
 		return ParseOutcome{}, err
 	}
 	if sess == nil {

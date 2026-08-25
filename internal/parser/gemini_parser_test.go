@@ -123,6 +123,44 @@ func TestParseGeminiSession_JSONLStream(t *testing.T) {
 	)
 }
 
+func TestGeminiProviderMissingSessionIDIsUnsupportedSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "multiple records",
+			content: strings.Join([]string{
+				`{"id":"m1","type":"user","content":[{"text":"orphaned prompt"}]}`,
+				`{"id":"m2","type":"gemini","content":"orphaned reply"}`,
+			}, "\n"),
+		},
+		{
+			name:    "single record without final newline",
+			content: `{"id":"m1","type":"user","content":[{"text":"orphaned prompt"}]}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := createTestFile(t, "session.jsonl", test.content)
+			provider := newGeminiTestProvider(t)
+
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: SourceRef{
+				Provider:       AgentGemini,
+				DisplayPath:    path,
+				FingerprintKey: path,
+				Opaque:         geminiSource{Path: path},
+			}})
+
+			require.NoError(t, err)
+			assert.True(t, outcome.ResultSetComplete)
+			assert.Equal(t, SkipUnsupportedSource, outcome.SkipReason)
+			assert.Empty(t, outcome.Results)
+			assert.Empty(t, outcome.SourceErrors)
+		})
+	}
+}
+
 func TestParseGeminiSession_JSONLStreamLargeRecord(t *testing.T) {
 	largeContent := strings.Repeat("x", 16*1024*1024+1)
 	content := strings.Join([]string{
@@ -557,7 +595,7 @@ func TestParseGeminiSession_EdgeCases(t *testing.T) {
 		content := `{"projectHash":"abc","startTime":"2024-01-01T00:00:00Z","lastUpdated":"2024-01-01T00:00:00Z","messages":[]}`
 		path := createTestFile(t, "session.json", content)
 		_, _, err := parseGeminiTestSession(t, path, "my_project", "local")
-		assert.Error(t, err)
+		assert.ErrorIs(t, err, errGeminiMissingSessionID)
 	})
 }
 
