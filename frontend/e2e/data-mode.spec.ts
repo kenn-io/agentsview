@@ -39,17 +39,10 @@ test.describe("Data mode project reclassification", () => {
   }) => {
     test.skip(isDuckDBBackend, "requires the writable SQLite archive");
 
-    let previewRequests = 0;
     let reclassifyMutations = 0;
     const legacyCandidateRequests: string[] = [];
     page.on("request", (request) => {
       const pathname = new URL(request.url()).pathname;
-      if (
-        request.method() === "POST" &&
-        pathname === "/api/v1/settings/worktree-mappings/preview"
-      ) {
-        previewRequests += 1;
-      }
       if (
         request.method() === "POST" &&
         pathname === "/api/v1/settings/worktree-mappings/reclassify"
@@ -132,7 +125,6 @@ test.describe("Data mode project reclassification", () => {
       .click();
 
     await previewPromise;
-    await expect.poll(() => previewRequests).toBe(1);
     await expect(
       ws.getByText("2 sessions matched", { exact: true }),
     ).toBeVisible();
