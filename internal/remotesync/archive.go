@@ -43,7 +43,7 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 		if parser.RemoteSyncExcludedAgent(agent) {
 			continue
 		}
-		if _, fileScoped := targets.Files[agent]; fileScoped {
+		if targets.isFileScoped(agent) {
 			continue
 		}
 		for _, root := range dirs {

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"database/sql"
+	"encoding/json/v2"
 	"io"
 	"os"
 	"path/filepath"
@@ -295,7 +296,7 @@ func TestIssue1492VSCodeWorkspaceMetadataRequiresSelectedChat(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestIssue1492EmptyEditorRootsRemainWithoutEmptyFileTargets(t *testing.T) {
+func TestIssue1492EmptyEditorRootsRetainEmptyFileTargets(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{filepath.Join(root, "cursor"), filepath.Join(root, "vscode")} {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
@@ -307,8 +308,122 @@ func TestIssue1492EmptyEditorRootsRemainWithoutEmptyFileTargets(t *testing.T) {
 
 	assert.Contains(t, targets.Dirs[parser.AgentCursor], filepath.Join(root, "cursor"))
 	assert.Contains(t, targets.Dirs[parser.AgentVSCodeCopilot], filepath.Join(root, "vscode"))
-	assert.NotContains(t, targets.Files, parser.AgentCursor)
-	assert.NotContains(t, targets.Files, parser.AgentVSCodeCopilot)
+	assert.Empty(t, targets.Files[parser.AgentCursor])
+	assert.Empty(t, targets.Files[parser.AgentVSCodeCopilot])
+	_, cursorMarker := targets.Files[parser.AgentCursor]
+	_, vscodeMarker := targets.Files[parser.AgentVSCodeCopilot]
+	assert.True(t, cursorMarker)
+	assert.True(t, vscodeMarker)
+
+	data, err := json.Marshal(targets)
+	require.NoError(t, err)
+	var roundTrip TargetSet
+	require.NoError(t, json.Unmarshal(data, &roundTrip))
+	_, cursorMarker = roundTrip.Files[parser.AgentCursor]
+	_, vscodeMarker = roundTrip.Files[parser.AgentVSCodeCopilot]
+	assert.True(t, cursorMarker)
+	assert.True(t, vscodeMarker)
+
+	allowedSibling := filepath.Join(root, "allowed")
+	filtered := filterForbiddenTargets(TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {allowedSibling, filepath.Join(root, "forbidden")},
+		},
+		Files:          map[parser.AgentType][]string{parser.AgentCursor: {}},
+		ForbiddenRoots: []string{filepath.Join(root, "forbidden")},
+	})
+	_, marker := filtered.Files[parser.AgentCursor]
+	assert.True(t, marker)
+	filtered = filterForbiddenTargets(TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {filepath.Join(root, "forbidden")},
+		},
+		Files:          map[parser.AgentType][]string{parser.AgentCursor: {}},
+		ForbiddenRoots: []string{filepath.Join(root, "forbidden")},
+	})
+	_, marker = filtered.Files[parser.AgentCursor]
+	assert.False(t, marker)
+}
+
+func TestArchiveRequestPreservesEmptyFiles(t *testing.T) {
+	request := ArchiveRequest{
+		TargetSet: TargetSet{
+			Dirs:  map[parser.AgentType][]string{parser.AgentCursor: {"/root"}},
+			Files: map[parser.AgentType][]string{parser.AgentCursor: {}},
+		},
+		DeltaFiles: []string{},
+	}
+	data, err := json.Marshal(request)
+	require.NoError(t, err)
+	var decoded ArchiveRequest
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	files, ok := decoded.Files[parser.AgentCursor]
+	require.True(t, ok)
+	assert.Empty(t, files)
+	assert.NotNil(t, decoded.DeltaFiles)
+}
+
+func TestSelectAllowedTargetsRootOnlyCuratedRequestIsEmptyAndNoFilesystemAccess(t *testing.T) {
+	root := t.TempDir()
+	allowed := TargetSet{
+		Dirs:  map[parser.AgentType][]string{parser.AgentCursor: {root}},
+		Files: map[parser.AgentType][]string{parser.AgentCursor: {}},
+	}
+	requested := TargetSet{
+		Dirs:  map[parser.AgentType][]string{parser.AgentCursor: {root}},
+		Files: map[parser.AgentType][]string{parser.AgentCursor: {`/attacker/evil`}},
+	}
+	var touched []string
+	orig := evalSymlinksFn
+	evalSymlinksFn = func(path string) (string, error) {
+		if strings.Contains(path, "attacker") {
+			touched = append(touched, path)
+		}
+		return orig(path)
+	}
+	t.Cleanup(func() { evalSymlinksFn = orig })
+	_, ok := SelectAllowedTargets(allowed, requested)
+	assert.False(t, ok)
+	assert.Empty(t, touched)
+
+	selected, ok := SelectAllowedTargets(allowed, TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
+	})
+	require.True(t, ok)
+	_, marker := selected.Files[parser.AgentCursor]
+	assert.True(t, marker)
+	assert.Empty(t, selected.Files[parser.AgentCursor])
+}
+
+func TestIssue1492EmptyCuratedRootsProduceEmptyArchives(t *testing.T) {
+	root := t.TempDir()
+	cursorRoot := filepath.Join(root, "cursor")
+	vscodeRoot := filepath.Join(root, "vscode")
+	for _, path := range []string{
+		filepath.Join(cursorRoot, "mcp_auth.json"),
+		filepath.Join(vscodeRoot, "User", "settings.json"),
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte("credential decoy"), 0o600))
+	}
+	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentCursor:        {cursorRoot},
+		parser.AgentVSCodeCopilot: {vscodeRoot},
+	}})
+
+	for _, agent := range []parser.AgentType{
+		parser.AgentCursor, parser.AgentVSCodeCopilot,
+	} {
+		files, ok := targets.Files[agent]
+		require.True(t, ok, "%s must retain its file-scope marker", agent)
+		assert.Empty(t, files)
+	}
+	manifest, err := BuildManifest(targets)
+	require.NoError(t, err)
+	assert.Empty(t, manifest.Files)
+	var archive bytes.Buffer
+	require.NoError(t, WriteArchive(&archive, targets))
+	assert.Empty(t, archiveEntries(t, archive.Bytes()))
 }
 
 func TestIssue1492VanishedZedDatabaseRemainsEvictable(t *testing.T) {

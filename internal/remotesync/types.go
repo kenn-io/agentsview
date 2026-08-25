@@ -106,6 +106,11 @@ func (t TargetSet) HasFileScopedAgents() bool {
 	return len(t.Files) > 0
 }
 
+func (t TargetSet) isFileScoped(agent parser.AgentType) bool {
+	_, ok := t.Files[agent]
+	return ok
+}
+
 // verbatimFileScopedAgent reports whether a file-scoped agent's
 // curated files are exported byte-for-byte by WriteArchive. Verbatim
 // agents (RooCode) can ride the manifest/delta path: the manifest
@@ -151,10 +156,7 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 	dirScoped.ForbiddenRoots = append([]string(nil), t.ForbiddenRoots...)
 	fileScoped.ForbiddenRoots = append([]string(nil), t.ForbiddenRoots...)
 	for agent, dirs := range t.Dirs {
-		if emptyCuratedFileScopedAgent(agent, t.Files[agent]) {
-			continue
-		}
-		if _, ok := t.Files[agent]; ok &&
+		if t.isFileScoped(agent) &&
 			!verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 			if fileScoped.Dirs == nil {
 				fileScoped.Dirs = make(map[parser.AgentType][]string)
@@ -168,9 +170,6 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 		dirScoped.Dirs[agent] = dirs
 	}
 	for agent, files := range t.Files {
-		if emptyCuratedFileScopedAgent(agent, files) {
-			continue
-		}
 		target := &fileScoped
 		if verbatimFileScopedAgent(agent) || snapshotFileScopedAgent(agent) {
 			target = &dirScoped
@@ -195,11 +194,6 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 	return dirScoped, fileScoped
 }
 
-func emptyCuratedFileScopedAgent(agent parser.AgentType, files []string) bool {
-	return len(files) == 0 &&
-		(agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot)
-}
-
 // DeltaAllowedRoots returns the trusted base paths a delta-archive file
 // may resolve under: every non-file-scoped agent directory, the
 // verbatim file-scoped agents' curated files (exact matches only —
@@ -215,7 +209,7 @@ func (t TargetSet) DeltaAllowedRoots() []string {
 		if parser.RemoteSyncExcludedAgent(agent) {
 			continue
 		}
-		if _, fileScoped := t.Files[agent]; fileScoped {
+		if t.isFileScoped(agent) {
 			continue
 		}
 		for _, dir := range dirs {
@@ -229,14 +223,6 @@ func (t TargetSet) DeltaAllowedRoots() []string {
 			continue
 		}
 		if verbatimFileScopedAgent(agent) || snapshotFileScopedAgent(agent) {
-			if len(files) == 0 {
-				for _, dir := range t.Dirs[agent] {
-					if !forbidden.within(dir) {
-						roots = append(roots, dir)
-					}
-				}
-				continue
-			}
 			for _, file := range files {
 				if !forbidden.within(file) {
 					roots = append(roots, file)

@@ -92,9 +92,7 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				root, targetFiles := resolveEditorTarget(def.Type, dir)
 				if root != "" {
 					dirs[def.Type] = append(dirs[def.Type], root)
-					if len(targetFiles) > 0 {
-						files[def.Type] = append(files[def.Type], targetFiles...)
-					}
+					files[def.Type] = append([]string{}, targetFiles...)
 				}
 				continue
 			}
@@ -215,7 +213,11 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 	for agent, files := range t.Files {
 		kept := withoutForbidden(files, forbidden)
 		if len(kept) == 0 {
-			delete(t.Files, agent)
+			if _, hasDirs := t.Dirs[agent]; hasDirs {
+				t.Files[agent] = []string{}
+			} else {
+				delete(t.Files, agent)
+			}
 			continue
 		}
 		t.Files[agent] = kept
@@ -633,9 +635,10 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 	forbidden := newForbiddenRootMatcher(selected.ForbiddenRoots)
 	for agent, dirs := range requested.Dirs {
 		allowedDirs := allowed.Dirs[agent]
-		if _, fileScoped := allowed.Files[agent]; fileScoped {
-			requestedFiles, ok := requested.Files[agent]
-			if !ok || len(requestedFiles) == 0 {
+		fileScoped := allowed.isFileScoped(agent)
+		if fileScoped {
+			if _, hasRequestedFiles := requested.Files[agent]; !hasRequestedFiles &&
+				!verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 				return TargetSet{}, false
 			}
 		}
@@ -649,31 +652,28 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			}
 			selected.Dirs[agent] = append(selected.Dirs[agent], selectedDir)
 		}
+		if fileScoped {
+			if selected.Files == nil {
+				selected.Files = make(map[parser.AgentType][]string)
+			}
+			if _, ok := selected.Files[agent]; !ok {
+				selected.Files[agent] = []string{}
+			}
+		}
 	}
 	for agent, files := range requested.Files {
-		allowedFiles, hasAllowedFiles := allowed.Files[agent]
+		allowedFiles := allowed.Files[agent]
 		for _, file := range files {
 			selectedFile, ok := selectAllowedString(allowedFiles, file)
-			if !ok && (!hasAllowedFiles || len(allowedFiles) == 0) {
-				ok = verbatimSessionFileUnderAllowedRoot(
-					allowed, agent, file, files,
-				)
-				if ok {
-					selectedFile = file
-				}
-			}
+			include := true
 			if !ok {
-				// Targets are re-resolved for every request, so a
-				// session file deleted between the client's target
-				// fetch and this request is no longer in the fresh
-				// resolution. Failing the whole request would abort
-				// the sync over a routine deletion race; the archive
-				// writers tolerate missing files, so authorize
-				// session-shaped paths under a still-allowed root.
-				if !verbatimSessionFileUnderAllowedRoot(allowed, agent, file, files) {
+				selectedFile, include, ok = classifyCuratedFile(allowed, agent, file, files)
+				if !ok {
 					return TargetSet{}, false
 				}
-				selectedFile = file
+			}
+			if !include {
+				continue
 			}
 			if selected.Files == nil {
 				selected.Files = make(map[parser.AgentType][]string)
@@ -766,28 +766,25 @@ func kiloLegacySessionFileShape(rel string) bool {
 	return false
 }
 
-// verbatimSessionFileUnderAllowedRoot authorizes a curated file
+// classifyCuratedFile validates a stale curated file request
 // under a verbatim file-scoped agent's still-allowed root when the
 // file itself is absent from the fresh per-request resolution — the
 // deletion race between a client's target fetch and its next request.
 // The strict shape keeps everything else under the root
 // (settings/mcp_settings.json, checkpoints, caches) unreachable, and
 // the symlink walk rejects components that would escape the root.
-func verbatimSessionFileUnderAllowedRoot(
+func classifyCuratedFile(
 	allowed TargetSet, agent parser.AgentType, file string,
 	candidateFiles ...[]string,
-) bool {
+) (string, bool, bool) {
 	if !verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
-		return false
+		return "", false, false
 	}
 	if !isAbsRemotePath(file) {
-		return false
-	}
-	if _, err := os.Lstat(file); err == nil || !os.IsNotExist(err) {
-		return false
+		return "", false, false
 	}
 	if _, err := safeRemotePathArchiveName(file); err != nil {
-		return false
+		return "", false, false
 	}
 	for _, dir := range allowed.Dirs[agent] {
 		if remotePathDialect(file) != remotePathDialect(dir) {
@@ -807,9 +804,82 @@ func verbatimSessionFileUnderAllowedRoot(
 			continue
 		}
 		if symlinkEscapesRoot(dir, file) {
-			return false
+			return "", false, false
 		}
-		return true
+		info, err := os.Lstat(file)
+		if os.IsNotExist(err) {
+			return "", false, true
+		}
+		if err != nil || !info.Mode().IsRegular() {
+			return "", false, false
+		}
+		if agent == parser.AgentVSCodeCopilot && isVSCodeWorkspaceMetadata(rel) &&
+			vscodeWorkspaceChatVanished(allowed, dir, rel, candidateFiles...) {
+			return "", false, true
+		}
+		if hasPreferredCuratedSibling(dir, allowed.Files[agent], rel) {
+			return "", false, true
+		}
+		return "", false, false
+	}
+	return "", false, false
+}
+
+func hasPreferredCuratedSibling(root string, allowedFiles []string, rel string) bool {
+	separator := strings.LastIndexByte(rel, '/')
+	dir, name := rel[:separator+1], rel[separator+1:]
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	for _, file := range allowedFiles {
+		candidate, ok := remoteArchiveRel(root, file)
+		if !ok {
+			continue
+		}
+		candidateSeparator := strings.LastIndexByte(candidate, '/')
+		candidateDir := candidate[:candidateSeparator+1]
+		candidateName := candidate[candidateSeparator+1:]
+		if candidateDir == dir &&
+			strings.TrimSuffix(candidateName, filepath.Ext(candidateName)) == stem &&
+			filepath.Ext(candidateName) != filepath.Ext(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func vscodeWorkspaceChatVanished(
+	allowed TargetSet, root, rel string, candidateFiles ...[]string,
+) bool {
+	parts := strings.Split(rel, "/")
+	for _, files := range candidateFiles {
+		for _, file := range files {
+			chatRel, ok := remoteArchiveRel(root, file)
+			if !ok {
+				continue
+			}
+			chatParts := strings.Split(chatRel, "/")
+			if len(chatParts) != 4 || chatParts[0] != "workspaceStorage" ||
+				chatParts[1] != parts[1] || chatParts[2] != "chatSessions" ||
+				!vscodeChatSessionFileShape(chatParts[3]) {
+				continue
+			}
+			if !isAbsRemotePath(file) || remotePathDialect(file) != remotePathDialect(root) {
+				continue
+			}
+			if _, err := safeRemotePathArchiveName(file); err != nil ||
+				symlinkEscapesRoot(root, file) {
+				continue
+			}
+			if _, err := os.Lstat(file); !os.IsNotExist(err) {
+				continue
+			}
+			for _, allowedFile := range allowed.Files[parser.AgentVSCodeCopilot] {
+				allowedRel, ok := remoteArchiveRel(root, allowedFile)
+				if ok && strings.HasPrefix(allowedRel, "workspaceStorage/"+parts[1]+"/chatSessions/") {
+					return false
+				}
+			}
+			return true
+		}
 	}
 	return false
 }
@@ -913,11 +983,13 @@ func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	selected := make([]string, 0, len(files))
 	for _, file := range files {
-		canonical, ok := selectAllowedFile(allowed, forbidden, file, files)
+		canonical, include, ok := selectAllowedFile(allowed, forbidden, file, files)
 		if !ok {
 			return nil, false
 		}
-		selected = append(selected, canonical)
+		if include {
+			selected = append(selected, canonical)
+		}
 	}
 	return selected, true
 }
@@ -932,9 +1004,9 @@ func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
 func selectAllowedFile(
 	allowed TargetSet, forbidden forbiddenRootMatcher, file string,
 	candidateFiles []string,
-) (string, bool) {
+) (string, bool, bool) {
 	if canonical, ok := selectAllowedString(allowed.AllExtraFiles(), file); ok {
-		return canonical, !forbidden.within(canonical)
+		return canonical, true, !forbidden.within(canonical)
 	}
 	for agent, files := range allowed.Files {
 		if !verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
@@ -948,10 +1020,11 @@ func selectAllowedFile(
 		// skips it because its delta roots come from the same fresh
 		// resolution.
 		if canonical, ok := selectAllowedString(files, file); ok {
-			return canonical, !forbidden.within(canonical)
+			return canonical, true, !forbidden.within(canonical)
 		}
-		if verbatimSessionFileUnderAllowedRoot(allowed, agent, file, files) {
-			return file, !forbidden.within(file)
+		canonical, include, ok := classifyCuratedFile(allowed, agent, file, files)
+		if ok {
+			return canonical, include, !forbidden.within(file)
 		}
 	}
 	// A fresh editor resolution can retain the authorized root while all
@@ -965,20 +1038,21 @@ func selectAllowedFile(
 		if _, ok := allowed.Dirs[agent]; !ok {
 			continue
 		}
-		if verbatimSessionFileUnderAllowedRoot(
+		canonical, include, ok := classifyCuratedFile(
 			allowed, agent, file, candidateFiles,
-		) {
-			return file, !forbidden.within(file)
+		)
+		if ok {
+			return canonical, include, !forbidden.within(file)
 		}
 	}
 	if !isAbsRemotePath(file) {
-		return "", false
+		return "", false, false
 	}
 	if _, err := safeRemotePathArchiveName(file); err != nil {
-		return "", false
+		return "", false, false
 	}
 	for agent, dirs := range allowed.Dirs {
-		if _, fileScoped := allowed.Files[agent]; fileScoped ||
+		if allowed.isFileScoped(agent) ||
 			verbatimFileScopedAgent(agent) || snapshotFileScopedAgent(agent) {
 			// File-scoped agents export a curated file list, not a raw
 			// directory walk. Accepting a delta request by directory
@@ -1001,7 +1075,7 @@ func selectAllowedFile(
 			}
 			if _, ok := remoteArchiveRel(dir, file); ok {
 				if symlinkEscapesRoot(dir, file) {
-					return "", false
+					return "", false, false
 				}
 				// Exact root matches are allowed: file roots (Aider
 				// history files) must stream, and a directory root
@@ -1009,11 +1083,11 @@ func selectAllowedFile(
 				// non-regular entries. The file is anchored under the
 				// trusted dir at this point, so the forbidden check may
 				// canonicalize it.
-				return file, !forbidden.within(file)
+				return file, true, !forbidden.within(file)
 			}
 		}
 	}
-	return "", false
+	return "", false, false
 }
 
 type pathDialect int
