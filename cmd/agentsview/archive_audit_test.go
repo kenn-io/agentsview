@@ -390,11 +390,11 @@ func TestSyncWorkerAuditModeRunsSyncPass(t *testing.T) {
 	assert.Equal(t, 3, result.Synced)
 }
 
-// TestSyncWorkerAuditTombstonesMissedDeletion is the audit's safety-net
+// TestSyncWorkerAuditMarksMissedSourceMissing is the audit's safety-net
 // regression: a source file deleted while no watcher was running must be
-// tombstoned by the daily audit, with the session row preserved in the
+// marked missing by the daily audit, with the session left browsable in the
 // persistent archive.
-func TestSyncWorkerAuditTombstonesMissedDeletion(t *testing.T) {
+func TestSyncWorkerAuditMarksMissedSourceMissing(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database, err := db.Open(cfg.DBPath)
 	require.NoError(t, err)
@@ -415,20 +415,24 @@ func TestSyncWorkerAuditTombstonesMissedDeletion(t *testing.T) {
 	result := decodeSingleResult(t, &out)
 	assert.Equal(t, "ok", result.Status)
 	assert.Equal(t, 1, result.Tombstoned,
-		"the audit must reconcile the deletion the watcher missed")
+		"the audit must report the source-state change the watcher missed")
 
 	database, err = db.Open(cfg.DBPath)
 	require.NoError(t, err)
 	defer database.Close()
-	var live, total int
+	var visible, sourceMissing, total int
 	require.NoError(t, database.Reader().QueryRow(
 		"SELECT COUNT(*) FROM sessions WHERE deleted_at IS NULL",
-	).Scan(&live))
+	).Scan(&visible))
+	require.NoError(t, database.Reader().QueryRow(
+		"SELECT COUNT(*) FROM sessions WHERE source_missing_at IS NOT NULL",
+	).Scan(&sourceMissing))
 	require.NoError(t, database.Reader().QueryRow(
 		"SELECT COUNT(*) FROM sessions",
 	).Scan(&total))
-	assert.Equal(t, 2, live, "the deleted source's session must be tombstoned")
-	assert.Equal(t, 3, total, "tombstoning must preserve the archived row")
+	assert.Equal(t, 3, visible, "a missing source must not hide its session")
+	assert.Equal(t, 1, sourceMissing, "the audit must record the missing source")
+	assert.Equal(t, 3, total, "source reconciliation must preserve every archived row")
 	persistedSkips, err := database.LoadSkippedFiles()
 	require.NoError(t, err)
 	assert.NotContains(t, persistedSkips, hashKey,
