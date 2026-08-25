@@ -211,7 +211,7 @@ func loadPGGenAIPricing(
 		&document.Version, &document.SourceRef, &document.Source,
 		&document.Data, &document.UpdatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if err == sql.ErrNoRows || isUndefinedTable(err) {
 		return nil, nil
 	}
 	if err != nil {

@@ -40,6 +40,7 @@ type pricingProbeState struct {
 	err              error
 	rows             [][]driver.Value
 	genAIRows        [][]driver.Value
+	genAIErr         error
 	block            <-chan struct{}
 	afterCancelBlock <-chan struct{}
 	done             chan struct{}
@@ -111,7 +112,11 @@ func (c *pricingProbeConn) QueryContext(
 	if strings.Contains(strings.ToLower(query), "from genai_pricing") {
 		c.state.mu.Lock()
 		values := append([][]driver.Value(nil), c.state.genAIRows...)
+		err := c.state.genAIErr
 		c.state.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return &pricingProbeRows{columns: []string{
 			"version", "source_ref", "source", "data_json", "updated_at",
 		}, values: values}, nil
@@ -372,6 +377,28 @@ func TestLoadPricingMapUsesFallbackForSentinelOnlyCatalog(t *testing.T) {
 
 	assert.NotContains(t, byPattern, "_fallback_version")
 	assert.Contains(t, byPattern, "gpt-5.5")
+}
+
+func TestLoadPricingMapUsesEmbeddedGenAIWhenTableMissing(t *testing.T) {
+	state := &pricingProbeState{
+		genAIErr: errors.New(
+			`relation "genai_pricing" does not exist (SQLSTATE 42P01)`,
+		),
+	}
+	store := &Store{pg: newPricingProbeDB(t, state)}
+
+	rows, err := store.loadPricingMap(context.Background())
+	require.NoError(t, err)
+
+	var genAIRow *export.EffectivePricingRow
+	for i := range rows {
+		if rows[i].GenAI != nil {
+			genAIRow = &rows[i]
+			break
+		}
+	}
+	require.NotNil(t, genAIRow, "embedded GenAI pricing row")
+	assert.Equal(t, export.PricingRowSourceEmbedded, genAIRow.GenAISource)
 }
 
 func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
