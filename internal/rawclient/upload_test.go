@@ -86,6 +86,13 @@ type uploadScript struct {
 	object         rawsync.ObjectRef
 }
 
+type fullReadEOFReaderAt []byte
+
+func (r fullReadEOFReaderAt) ReadAt(dst []byte, offset int64) (int, error) {
+	n := copy(dst, r[offset:])
+	return n, io.EOF
+}
+
 func (s *uploadScript) handler(t *testing.T) http.Handler {
 	return withTokenRoute(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -374,6 +381,20 @@ func TestUploadObjectSingleChunkCompletes(t *testing.T) {
 		parser.AgentClaude, newUploadObject(t, body), bytes.NewReader(body)))
 	// One PATCH carried the whole object; the stale body did not mislead the
 	// client because the response headers won.
+	require.Len(t, script.patchBytes, 1)
+	assert.Equal(t, body, script.patchBytes[0])
+}
+
+func TestUploadObjectAcceptsFullReadWithEOF(t *testing.T) {
+	t.Parallel()
+	body := []byte("hello")
+	script := &uploadScript{length: int64(len(body))}
+	server := httptest.NewServer(script.handler(t))
+	t.Cleanup(server.Close)
+	client := newTestClient(t, server.URL, time.Minute)
+
+	require.NoError(t, client.UploadObject(t.Context(),
+		parser.AgentClaude, newUploadObject(t, body), fullReadEOFReaderAt(body)))
 	require.Len(t, script.patchBytes, 1)
 	assert.Equal(t, body, script.patchBytes[0])
 }

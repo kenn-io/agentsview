@@ -98,7 +98,8 @@ func (c *Client) UploadObject(
 		if remain := object.Length - offset; remain < int64(len(chunk)) {
 			chunk = chunk[:remain]
 		}
-		if _, err := content.ReadAt(chunk, offset); err != nil {
+		if n, err := content.ReadAt(chunk, offset); err != nil &&
+			!(errors.Is(err, io.EOF) && n == len(chunk)) {
 			return fmt.Errorf("rawclient: read object bytes at %d: %w", offset, err)
 		}
 		next, complete, err := c.appendChunk(
