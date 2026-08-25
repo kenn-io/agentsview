@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   listMessages: vi.fn(),
   preview: vi.fn(),
   apply: vi.fn(),
+  assignSession: vi.fn(),
 }));
 
 vi.mock("../../api/generated/index", () => ({
@@ -25,6 +26,7 @@ vi.mock("../../api/generated/index", () => ({
   SettingsService: {
     postApiV1SettingsWorktreeMappingsPreview: api.preview,
     postApiV1SettingsWorktreeMappingsReclassify: api.apply,
+    putApiV1SettingsSessionProjectAssignmentsSessionId: api.assignSession,
   },
 }));
 vi.mock("../../api/runtime.js", () => ({
@@ -68,6 +70,16 @@ async function flush() {
   await tick();
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("ProjectWorkspace", () => {
   let component: ReturnType<typeof mount> | undefined;
 
@@ -77,9 +89,20 @@ describe("ProjectWorkspace", () => {
     api.listMessages.mockReset();
     api.preview.mockReset();
     api.apply.mockReset();
+    api.assignSession.mockReset();
     api.candidates.mockResolvedValue({ candidates: [] });
     api.listSessions.mockResolvedValue({
       sessions: [
+        {
+          id: "session-automated",
+          project: "wrong-project",
+          cwd: "/srv/worktrees/example/repo",
+          display_name: "Automated review",
+          first_message: "Review the changes",
+          agent: "codex",
+          started_at: "2026-03-09T18:32:00Z",
+          is_automated: true,
+        },
         {
           id: "session-1",
           project: "wrong-project",
@@ -88,9 +111,10 @@ describe("ProjectWorkspace", () => {
           first_message: "Work out which project this session belongs to",
           agent: "codex",
           started_at: "2026-03-09T18:30:00Z",
+          is_automated: false,
         },
       ],
-      total: 1,
+      total: 2,
     });
     api.listMessages.mockResolvedValue({
       count: 2,
@@ -128,6 +152,12 @@ describe("ProjectWorkspace", () => {
           is_system: false,
         },
       ],
+    });
+    api.assignSession.mockResolvedValue({
+      session_id: "session-1",
+      project: "target-project",
+      created_at: "2026-03-09T18:35:00Z",
+      updated_at: "2026-03-09T18:35:00Z",
     });
   });
 
@@ -202,7 +232,7 @@ describe("ProjectWorkspace", () => {
     });
   });
 
-  it("shows the selected project's sessions before a correction is drafted", async () => {
+  it("shows a human-started session before newer automated sessions", async () => {
     render();
     await flush();
     await flush();
@@ -222,6 +252,112 @@ describe("ProjectWorkspace", () => {
       roles: "user,assistant",
     });
     expect(screen.getByText("The repository layout shows this belongs to project A.")).toBeTruthy();
+    expect(screen.queryByTitle(m.message_content_pin_message())).toBeNull();
+  });
+
+  it("keeps cached transcript content when a session left behind fails", async () => {
+    const automatedMessages = deferred<never>();
+    api.listMessages.mockImplementation(({ id }: { id: string }) => {
+      if (id === "session-automated") return automatedMessages.promise;
+      return Promise.resolve({
+        count: 1,
+        messages: [
+          {
+            id: 1,
+            session_id: "session-1",
+            ordinal: 0,
+            role: "user",
+            content: "Cached mapping context",
+            timestamp: "2026-03-09T18:30:00Z",
+            has_thinking: false,
+            thinking_text: "",
+            has_tool_use: false,
+            content_length: 22,
+            model: "",
+            context_tokens: 0,
+            output_tokens: 0,
+            is_system: false,
+          },
+        ],
+      });
+    });
+    render();
+    await flush();
+    await flush();
+    await fireEvent.click(
+      screen.getByRole("button", { name: m.data_reclassify_session_preview_next() }),
+    );
+    await fireEvent.click(
+      screen.getByRole("button", { name: m.data_reclassify_session_preview_previous() }),
+    );
+    automatedMessages.reject(new Error("late failure"));
+    await flush();
+
+    expect(screen.getByText("Cached mapping context")).toBeTruthy();
+    expect(screen.queryByText(m.data_reclassify_session_preview_failed())).toBeNull();
+  });
+
+  it("assigns only the active session to a selected project", async () => {
+    const onRefresh = vi.fn().mockResolvedValue(true);
+    render({ onRefresh });
+    await flush();
+    await flush();
+
+    await fireEvent.click(screen.getByTitle(m.data_session_assignment_target()));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await flush();
+    await fireEvent.click(screen.getByRole("button", { name: m.data_session_assignment_save() }));
+    await flush();
+
+    expect(api.assignSession).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      requestBody: { project: "target-project" },
+    });
+    expect(onRefresh).toHaveBeenCalledWith("pl1:sha256:wrong", "target-project");
+    expect(api.listMessages).toHaveBeenLastCalledWith({
+      id: "session-automated",
+      limit: 12,
+      direction: "asc",
+      roles: "user,assistant",
+    });
+  });
+
+  it("lets users pin a session to its currently inferred project", async () => {
+    const onRefresh = vi.fn().mockResolvedValue(true);
+    api.assignSession.mockResolvedValue({
+      session_id: "session-1",
+      project: "wrong-project",
+      created_at: "2026-03-09T18:35:00Z",
+      updated_at: "2026-03-09T18:35:00Z",
+    });
+    render({
+      projects: [{ name: "wrong-project", session_count: 9 }],
+      onRefresh,
+    });
+    await flush();
+    await flush();
+
+    await fireEvent.click(screen.getByTitle(m.data_session_assignment_target()));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "wrong-project (9)" }));
+    await flush();
+    const assignButton = screen.getByRole("button", {
+      name: m.data_session_assignment_save(),
+    });
+    expect(assignButton.getAttribute("disabled")).toBeNull();
+    await fireEvent.click(assignButton);
+    await flush();
+
+    expect(api.assignSession).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      requestBody: { project: "wrong-project" },
+    });
+    expect(onRefresh).toHaveBeenCalledWith("pl1:sha256:wrong", "wrong-project");
+    expect(api.listMessages).toHaveBeenLastCalledWith({
+      id: "session-1",
+      limit: 12,
+      direction: "asc",
+      roles: "user,assistant",
+    });
   });
 
   it("opens the existing all-folders correction for one selected project", async () => {

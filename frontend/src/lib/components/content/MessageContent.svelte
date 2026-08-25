@@ -37,8 +37,9 @@
     isSubagentContext?: boolean;
     searchOrdinal?: number;
     compact?: boolean;
+    allowMutations?: boolean;
   }
-  let { message, session, isSubagentContext = false, searchOrdinal, compact = false }: Props = $props();
+  let { message, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
   let copied = $state(false);
   let segments = $derived(enrichSegments(
     parseContent(message.content, message.has_tool_use, message.id, message.content_length),
@@ -204,7 +205,7 @@
       pinTimer = setTimeout(() => { pinFeedback = ""; }, 1500);
     } catch { /* Preserve the existing non-blocking pin interaction. */ }
   }
-  let canForkFromMessage = $derived(owningSession?.agent === "claude" &&
+  let canForkFromMessage = $derived(allowMutations && owningSession?.agent === "claude" &&
     !(owningSession?.id ?? "").includes("~") && !(sync.readOnly && isRemoteConnection()));
   async function handleForkFromHere() {
     if (!canForkFromMessage) return;
@@ -241,10 +242,12 @@
     <CopyButton revealOnHover {copied} ariaLabel={m.message_content_copy_message()}
       copiedAriaLabel={m.message_content_copied_message()} title={m.message_content_copy_message()}
       copiedTitle={m.message_content_copied()} onclick={handleCopy} />
+    {#if allowMutations}
     <button type="button" class="pin-btn" class:pinned
       title={pinned ? m.message_content_unpin_message() : m.message_content_pin_message()} onclick={handleTogglePin}>
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
+    {/if}
     {#if canForkFromMessage}
       <button type="button" class="pin-btn fork-btn" title={m.session_breadcrumb_resume_session()}
         aria-label={m.session_breadcrumb_resume_session()} onclick={handleForkFromHere}>

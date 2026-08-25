@@ -291,6 +291,10 @@ func evaluateWorktreeMappingsTx(
 		SELECT id, project, cwd, file_path
 		FROM sessions
 		WHERE machine = ? AND deleted_at IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = sessions.id
+			)
 		ORDER BY id`
 	args := []any{machine}
 	if sessionID != "" {
@@ -298,6 +302,10 @@ func evaluateWorktreeMappingsTx(
 			SELECT id, project, cwd, file_path
 			FROM sessions
 			WHERE machine = ? AND deleted_at IS NULL
+				AND NOT EXISTS (
+					SELECT 1 FROM session_project_assignments spa
+					WHERE spa.session_id = sessions.id
+				)
 				AND (id = ? OR (
 					file_path IS NOT NULL AND file_path != ''
 					AND file_path = (
