@@ -35,6 +35,7 @@
   let targetProject = $state("");
   let assigning = $state(false);
   let assignmentError = $state("");
+  let assignmentRefreshError = $state("");
   const sessionsRead = new LatestRead();
   const messagesRead = new LatestRead();
 
@@ -74,6 +75,7 @@
         ...loadedSessions.filter((session) => !session.is_automated),
         ...loadedSessions.filter((session) => session.is_automated),
       ];
+      activeIndex = 0;
       const firstSession = sessions[0];
       if (firstSession) await loadMessages(firstSession.id);
     } catch (error) {
@@ -98,9 +100,9 @@
     const session = activeSession;
     const target = targetProject.trim();
     if (!session || !target || assigning) return;
-    const changesProject = target !== session.project;
     assigning = true;
     assignmentError = "";
+    assignmentRefreshError = "";
     try {
       const assignment = await callGenerated(() =>
         SettingsService.putApiV1SettingsSessionProjectAssignmentsSessionId({
@@ -108,19 +110,20 @@
           requestBody: { project: target },
         }),
       );
+      let inventoryRefreshed = false;
+      try {
+        inventoryRefreshed = await onAssigned(assignment.project);
+      } catch {
+        inventoryRefreshed = false;
+      }
+      targetProject = "";
+      await loadSessions();
+      if (!inventoryRefreshed) {
+        assignmentRefreshError = m.data_session_assignment_refresh_failed();
+      }
       showFlash(m.data_session_assignment_saved({ project: assignment.project }), {
         tone: "success",
       });
-      if (changesProject) {
-        sessions = sessions.filter((item) => item.id !== session.id);
-        activeIndex = Math.min(activeIndex, Math.max(0, sessions.length - 1));
-      }
-      targetProject = "";
-      await onAssigned(assignment.project);
-      if (changesProject) {
-        const nextSession = sessions[activeIndex];
-        if (nextSession) await loadMessages(nextSession.id);
-      }
     } catch (error) {
       assignmentError = error instanceof Error
         ? error.message
@@ -193,7 +196,7 @@
             <IconButton
               size="sm"
               ariaLabel={m.data_reclassify_session_preview_previous()}
-              disabled={activeIndex === 0}
+              disabled={assigning || activeIndex === 0}
               onclick={() => move(-1)}
             >
               <ChevronLeftIcon size="14" aria-hidden="true" />
@@ -201,7 +204,7 @@
             <IconButton
               size="sm"
               ariaLabel={m.data_reclassify_session_preview_next()}
-              disabled={activeIndex === sessions.length - 1}
+              disabled={assigning || activeIndex === sessions.length - 1}
               onclick={() => move(1)}
             >
               <ChevronRightIcon size="14" aria-hidden="true" />
@@ -268,6 +271,11 @@
             </div>
             {#if assignmentError}
               <p class="preview-status error-text" role="alert">{assignmentError}</p>
+            {/if}
+            {#if assignmentRefreshError}
+              <p class="preview-status error-text" role="status">
+                {assignmentRefreshError}
+              </p>
             {/if}
           {/if}
         </div>

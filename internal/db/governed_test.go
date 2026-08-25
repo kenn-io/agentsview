@@ -89,6 +89,22 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 			Machine: "ws", PathPrefix: "/work/a"}])
 	})
 
+	t.Run("assigned sibling is evidence but is not governed", func(t *testing.T) {
+		got := EvaluateGovernedSessions(
+			[]ArchiveMappings{{Mappings: []WorktreeProjectMapping{
+				explicitMapping("ws", "/work/a", "alpha"),
+			}}},
+			[]MappingEvaluationRow{
+				{SessionID: "assigned-reference", Machine: "ws", Project: "pinned",
+					Cwd: "/work/a/sub", FilePath: "shared.jsonl", ProjectAssigned: true},
+				{SessionID: "empty-cwd", Machine: "ws", Project: "x",
+					Cwd: "", FilePath: "shared.jsonl"},
+			})
+		assert.Equal(t, 1, got.GovernedSessions)
+		assert.Equal(t, 1, got.SessionsByRule[GovernedRuleKey{
+			Machine: "ws", PathPrefix: "/work/a"}])
+	})
+
 	t.Run("conflicting siblings block empty cwd fallback", func(t *testing.T) {
 		got := EvaluateGovernedSessions(
 			[]ArchiveMappings{{Mappings: []WorktreeProjectMapping{

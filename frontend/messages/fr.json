@@ -1086,6 +1086,7 @@
   "data_session_assignment_saving": "Affectation…",
   "data_session_assignment_failed": "Impossible d’affecter la session",
   "data_session_assignment_saved": "Session affectée à {project}",
+  "data_session_assignment_refresh_failed": "La session a été affectée, mais l’inventaire des projets n’a pas pu être actualisé.",
   "data_reclassify_zero_matches": "Ce préfixe ne correspond à aucune session de l’archive.",
   "data_reclassify_conflict": "Les correspondances ont changé depuis l’aperçu. L’impact a été actualisé ; vérifiez-le avant d’appliquer.",
   "data_reclassify_replaces_rule": "Cette correction remplace une règle de correspondance de projet existante.",

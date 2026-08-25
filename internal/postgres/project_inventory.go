@@ -315,7 +315,8 @@ func (s *Store) projectInventoryCandidateRows(
 	var err error
 	if machine == nil {
 		rows, err = s.pg.QueryContext(ctx, `
-			SELECT id, machine, project, cwd, COALESCE(file_path, ''), source_archive_id
+			SELECT id, machine, project, cwd, COALESCE(file_path, ''),
+				project_assigned, source_archive_id
 			FROM sessions
 			WHERE deleted_at IS NULL
 			  AND source_archive_id != ''
@@ -324,7 +325,8 @@ func (s *Store) projectInventoryCandidateRows(
 			       FROM source_worktree_project_mappings WHERE enabled)`)
 	} else {
 		rows, err = s.pg.QueryContext(ctx, `
-			SELECT id, machine, project, cwd, COALESCE(file_path, ''), source_archive_id
+			SELECT id, machine, project, cwd, COALESCE(file_path, ''),
+				project_assigned, source_archive_id
 			FROM sessions
 			WHERE deleted_at IS NULL
 			  AND source_archive_id != ''
@@ -345,7 +347,7 @@ func (s *Store) projectInventoryCandidateRows(
 		var row db.MappingEvaluationRow
 		if err := rows.Scan(
 			&row.SessionID, &row.Machine, &row.Project, &row.Cwd, &row.FilePath,
-			&row.SourceArchiveID,
+			&row.ProjectAssigned, &row.SourceArchiveID,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning pg project inventory candidate session: %w", err)

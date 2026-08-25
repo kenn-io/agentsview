@@ -1086,6 +1086,7 @@
   "data_session_assignment_saving": "Assigning…",
   "data_session_assignment_failed": "Failed to assign session",
   "data_session_assignment_saved": "Session assigned to {project}",
+  "data_session_assignment_refresh_failed": "The session was assigned, but the project inventory could not refresh.",
   "data_reclassify_zero_matches": "This prefix matches no sessions in the archive.",
   "data_reclassify_conflict": "Mappings changed since the preview. The impact has been refreshed; review it before applying.",
   "data_reclassify_replaces_rule": "This correction replaces an existing project mapping rule.",

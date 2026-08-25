@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     machine            TEXT NOT NULL,
     owner_marker       TEXT NOT NULL DEFAULT '',
     project            TEXT NOT NULL,
+    project_assigned   BOOLEAN NOT NULL DEFAULT FALSE,
     agent              TEXT NOT NULL,
     agent_label        TEXT NOT NULL DEFAULT '',
     entrypoint         TEXT NOT NULL DEFAULT '',
@@ -944,6 +945,11 @@ func EnsureSchema(
 			"model_pricing_bands", "cache_creation_1h_microdollars_per_mtok",
 			`cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0`,
 			"adding model_pricing_bands.cache_creation_1h_microdollars_per_mtok",
+		},
+		{
+			"sessions", "project_assigned",
+			`project_assigned BOOLEAN NOT NULL DEFAULT FALSE`,
+			"adding sessions.project_assigned",
 		},
 		{
 			"sessions", "transcript_revision",

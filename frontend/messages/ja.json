@@ -1074,6 +1074,7 @@
   "data_session_assignment_saving": "割り当て中…",
   "data_session_assignment_failed": "セッションを割り当てられませんでした",
   "data_session_assignment_saved": "セッションを {project} に割り当てました",
+  "data_session_assignment_refresh_failed": "セッションは割り当てられましたが、プロジェクト一覧を更新できませんでした。",
   "data_reclassify_zero_matches": "このプレフィックスは、アーカイブ内のどのセッションにも一致しません。",
   "data_reclassify_conflict": "プレビュー以降、マッピングが変更されました。影響範囲を更新しました。適用前に確認してください。",
   "data_reclassify_replaces_rule": "この修正は既存のプロジェクトマッピングルールを置き換えます。",

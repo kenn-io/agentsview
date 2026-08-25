@@ -1561,6 +1561,13 @@ func (d *DB) CopySessionMetadataFrom(
 	// Session assignments are user-owned metadata. Restore them only for
 	// sessions that survived the rebuild, then reapply the effective project
 	// selected by the user instead of the parser-derived label.
+	type copiedProjectChange struct {
+		sessionID       string
+		previousProject string
+		freshProject    string
+		assignedProject sql.NullString
+	}
+	var projectChanges []copiedProjectChange
 	if oldDBHasTable(ctx, tx, "session_project_assignments") {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_project_assignments
@@ -1574,37 +1581,26 @@ func (d *DB) CopySessionMetadataFrom(
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying session project assignments: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE main.sessions
-			SET project = assignment.project
-			FROM main.session_project_assignments assignment
-			WHERE main.sessions.id = assignment.session_id`); err != nil {
-			return fmt.Errorf("applying copied session project assignments: %w", err)
-		}
-	}
-
-	if oldDBHasTable(ctx, tx, "sessions") {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT current.id, previous.project, current.project
+			SELECT current.id, previous.project, current.project,
+				assignment.project
 			FROM main.sessions current
 			JOIN old_db.sessions previous ON previous.id = current.id
+			LEFT JOIN main.session_project_assignments assignment
+				ON assignment.session_id = current.id
 			WHERE previous.project != current.project
+				OR assignment.project IS NOT NULL
 			ORDER BY current.id`)
 		if err != nil {
 			return fmt.Errorf("listing reparsed session project changes: %w", err)
 		}
-		type copiedProjectChange struct {
-			sessionID       string
-			previousProject string
-			currentProject  string
-		}
-		var projectChanges []copiedProjectChange
 		for rows.Next() {
 			var change copiedProjectChange
 			if err := rows.Scan(
 				&change.sessionID,
 				&change.previousProject,
-				&change.currentProject,
+				&change.freshProject,
+				&change.assignedProject,
 			); err != nil {
 				rows.Close()
 				return fmt.Errorf("scanning reparsed session project change: %w", err)
@@ -1618,16 +1614,57 @@ func (d *DB) CopySessionMetadataFrom(
 		if err := rows.Close(); err != nil {
 			return fmt.Errorf("closing reparsed session project changes: %w", err)
 		}
-		for _, change := range projectChanges {
-			if err := reconcileSessionProjectIdentityAggregatesTx(
-				ctx, tx, change.sessionID,
-				[]string{change.previousProject, change.currentProject},
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET project = assignment.project
+			FROM main.session_project_assignments assignment
+			WHERE main.sessions.id = assignment.session_id`); err != nil {
+			return fmt.Errorf("applying copied session project assignments: %w", err)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "sessions") && len(projectChanges) == 0 {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT current.id, previous.project, current.project
+			FROM main.sessions current
+			JOIN old_db.sessions previous ON previous.id = current.id
+			WHERE previous.project != current.project
+			ORDER BY current.id`)
+		if err != nil {
+			return fmt.Errorf("listing reparsed session project changes: %w", err)
+		}
+		for rows.Next() {
+			var change copiedProjectChange
+			if err := rows.Scan(
+				&change.sessionID,
+				&change.previousProject,
+				&change.freshProject,
 			); err != nil {
-				return fmt.Errorf(
-					"reconciling reparsed session project change %s: %w",
-					change.sessionID, err,
-				)
+				rows.Close()
+				return fmt.Errorf("scanning reparsed session project change: %w", err)
 			}
+			projectChanges = append(projectChanges, change)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterating reparsed session project changes: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing reparsed session project changes: %w", err)
+		}
+	}
+	for _, change := range projectChanges {
+		projects := []string{change.previousProject, change.freshProject}
+		if change.assignedProject.Valid {
+			projects = append(projects, change.assignedProject.String)
+		}
+		if err := reconcileSessionProjectIdentityAggregatesTx(
+			ctx, tx, change.sessionID, projects,
+		); err != nil {
+			return fmt.Errorf(
+				"reconciling reparsed session project change %s: %w",
+				change.sessionID, err,
+			)
 		}
 	}
 

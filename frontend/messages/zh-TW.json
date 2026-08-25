@@ -1014,6 +1014,7 @@
   "data_session_assignment_saving": "正在指派…",
   "data_session_assignment_failed": "無法指派工作階段",
   "data_session_assignment_saved": "工作階段已指派至 {project}",
+  "data_session_assignment_refresh_failed": "工作階段已指派，但無法重新整理專案清單。",
   "data_reclassify_zero_matches": "此前綴與封存中的任何工作階段都不符合。",
   "data_reclassify_conflict": "對應自預覽後已變更。影響已重新整理；套用前請檢查。",
   "data_reclassify_replaces_rule": "此更正將取代現有的專案對應規則。",

@@ -288,24 +288,24 @@ func evaluateWorktreeMappingsTx(
 	sessionID string,
 ) (worktreeReclassificationEvaluation, error) {
 	query := `
-		SELECT id, project, cwd, file_path
-		FROM sessions
-		WHERE machine = ? AND deleted_at IS NULL
-			AND NOT EXISTS (
+		SELECT id, project, cwd, file_path,
+			EXISTS (
 				SELECT 1 FROM session_project_assignments spa
 				WHERE spa.session_id = sessions.id
 			)
+		FROM sessions
+		WHERE machine = ? AND deleted_at IS NULL
 		ORDER BY id`
 	args := []any{machine}
 	if sessionID != "" {
 		query = `
-			SELECT id, project, cwd, file_path
-			FROM sessions
-			WHERE machine = ? AND deleted_at IS NULL
-				AND NOT EXISTS (
+			SELECT id, project, cwd, file_path,
+				EXISTS (
 					SELECT 1 FROM session_project_assignments spa
 					WHERE spa.session_id = sessions.id
 				)
+			FROM sessions
+			WHERE machine = ? AND deleted_at IS NULL
 				AND (id = ? OR (
 					file_path IS NOT NULL AND file_path != ''
 					AND file_path = (
@@ -327,7 +327,9 @@ func evaluateWorktreeMappingsTx(
 		var row worktreeMappingSessionRow
 		var filePath sql.NullString
 		row.machine = machine
-		if err := rows.Scan(&row.id, &row.project, &row.cwd, &filePath); err != nil {
+		if err := rows.Scan(
+			&row.id, &row.project, &row.cwd, &filePath, &row.assigned,
+		); err != nil {
 			rows.Close()
 			return worktreeReclassificationEvaluation{}, fmt.Errorf(
 				"scanning session for worktree mapping evaluation: %w", err,
@@ -365,6 +367,9 @@ func evaluateWorktreeMappingsTx(
 	writeWorktreeTokenFields(impactHash, "impact-v1")
 	evaluation := worktreeReclassificationEvaluation{projects: map[string]int{}}
 	for _, row := range sessions {
+		if row.assigned {
+			continue
+		}
 		if sessionID != "" && row.id != sessionID {
 			continue
 		}

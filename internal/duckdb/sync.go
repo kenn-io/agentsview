@@ -1033,7 +1033,8 @@ func (s *Sync) sessionFingerprints(
 // quality analytics stale until the next full rebuild.
 func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 	return []any{
-		sess.ID, sess.Project, mirroredSessionMachine(sess, machine), sess.Agent,
+		sess.ID, sess.Project, sess.ProjectAssigned,
+		mirroredSessionMachine(sess, machine), sess.Agent,
 		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
 		nilString(sess.FirstMessage), nilString(sess.DisplayName),
 		nilString(sess.SessionName),

@@ -15,8 +15,9 @@ import (
 // migrations between versions. A version mismatch means the mirror file
 // must be rebuilt with 'agentsview duckdb push --full'. v12 adds the 1h
 // cache-write rate columns on top of v11's raw GenAI pricing document. v13
-// adds row-level provider identity to messages and usage events.
-const SchemaVersion = 13
+// adds row-level provider identity to messages and usage events. v14 adds
+// explicit session-project assignment state.
+const SchemaVersion = 14
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -109,6 +110,7 @@ var mirrorTables = []tableSpec{
 		create: `CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
 			project TEXT NOT NULL,
+			project_assigned BOOLEAN NOT NULL DEFAULT FALSE,
 			machine TEXT NOT NULL DEFAULT 'local',
 			agent TEXT NOT NULL DEFAULT 'claude',
 			agent_label TEXT NOT NULL DEFAULT '',
@@ -180,6 +182,7 @@ var mirrorTables = []tableSpec{
 		columns: []columnSpec{
 			{"id", "id TEXT"},
 			{"project", "project TEXT NOT NULL DEFAULT ''"},
+			{"project_assigned", "project_assigned BOOLEAN NOT NULL DEFAULT FALSE"},
 			{"machine", "machine TEXT NOT NULL DEFAULT 'local'"},
 			{"agent", "agent TEXT NOT NULL DEFAULT 'claude'"},
 			{"agent_label", "agent_label TEXT NOT NULL DEFAULT ''"},
