@@ -796,73 +796,73 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 	}{
 		{
 			name:   "OfflineWorktreePath",
-			cwd:    filepath.FromSlash("/Users/wesm/code/agentsview-worktree-tool-call-arguments"),
+			cwd:    filepath.FromSlash("/Users/user-a/code/agentsview-worktree-tool-call-arguments"),
 			branch: "worktree-tool-call-arguments",
 			want:   "agentsview",
 		},
 		{
 			name:   "BranchWithSlash",
-			cwd:    filepath.FromSlash("/Users/wesm/code/agentsview-feature-worktree-support"),
+			cwd:    filepath.FromSlash("/Users/user-a/code/agentsview-feature-worktree-support"),
 			branch: "feature/worktree-support",
 			want:   "agentsview",
 		},
 		{
 			name:   "MismatchNoTrim",
-			cwd:    filepath.FromSlash("/Users/wesm/code/agentsview-hotfix"),
+			cwd:    filepath.FromSlash("/Users/user-a/code/agentsview-hotfix"),
 			branch: "feature/other",
 			want:   "agentsview_hotfix",
 		},
 		{
 			name:   "DefaultBranchNoTrim",
-			cwd:    filepath.FromSlash("/Users/wesm/code/project-main"),
+			cwd:    filepath.FromSlash("/Users/user-a/code/project-main"),
 			branch: "main",
 			want:   "project_main",
 		},
 		{
 			name:   "SupersetWorktreeFlat",
-			cwd:    filepath.FromSlash("/Users/wesm/.superset/worktrees/agentsview/tauri-packaging"),
+			cwd:    filepath.FromSlash("/Users/user-a/.superset/worktrees/agentsview/tauri-packaging"),
 			branch: "tauri-packaging",
 			want:   "agentsview",
 		},
 		{
 			name:   "SupersetWorktreeNested",
-			cwd:    filepath.FromSlash("/Users/wesm/.superset/worktrees/agentsview/fix/worktrees"),
+			cwd:    filepath.FromSlash("/Users/user-a/.superset/worktrees/agentsview/fix/worktrees"),
 			branch: "fix/worktrees",
 			want:   "agentsview",
 		},
 		{
 			name:   "SupersetWorktreeContainerOnly",
-			cwd:    filepath.FromSlash("/Users/wesm/.superset/worktrees/agentsview"),
+			cwd:    filepath.FromSlash("/Users/user-a/.superset/worktrees/agentsview"),
 			branch: "",
 			want:   "agentsview",
 		},
 		{
 			name:   "ConductorWorktreeFlat",
-			cwd:    filepath.FromSlash("/Users/wesm/conductor/workspaces/my-app/feature-branch"),
+			cwd:    filepath.FromSlash("/Users/user-a/conductor/workspaces/my-app/feature-branch"),
 			branch: "feature-branch",
 			want:   "my_app",
 		},
 		{
 			name:   "ConductorWorktreeNested",
-			cwd:    filepath.FromSlash("/Users/wesm/conductor/workspaces/my-app/fix/auth-bug"),
+			cwd:    filepath.FromSlash("/Users/user-a/conductor/workspaces/my-app/fix/auth-bug"),
 			branch: "fix/auth-bug",
 			want:   "my_app",
 		},
 		{
-			name: "MiddlemanGitHubWorktree",
+			name: "GenericClientGitHubWorktree",
 			cwd: filepath.FromSlash(
-				"/Users/wesm/.config/middleman/worktrees/github.com/wesm/middleman/pr-205",
+				"/Users/user-a/.config/worktree-client/worktrees/github.com/example-org/sampleapp/pr-205",
 			),
 			branch: "fix-exited-agent-session-cleanup",
-			want:   "middleman",
+			want:   "sampleapp",
 		},
 		{
-			name: "MiddlemanGitHubWorktreeSubdir",
+			name: "GenericClientGitHubWorktreeSubdir",
 			cwd: filepath.FromSlash(
-				"/Users/wesm/.config/middleman/worktrees/github.com/wesm/middleman/pr-205/internal/parser",
+				"/Users/user-a/.config/worktree-client/worktrees/github.com/example-org/sampleapp/pr-205/internal/parser",
 			),
 			branch: "fix-exited-agent-session-cleanup",
-			want:   "middleman",
+			want:   "sampleapp",
 		},
 		{
 			name: "GenericGitHubWorktreeNested",
@@ -889,10 +889,10 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 		{
 			name: "CodexAppWorktree",
 			cwd: filepath.FromSlash(
-				"/Users/wesm/.codex/worktrees/44be/middleman/internal/parser",
+				"/Users/user-a/.codex/worktrees/44be/sampleapp/internal/parser",
 			),
 			branch: "fix-exited-agent-session-cleanup",
-			want:   "middleman",
+			want:   "sampleapp",
 		},
 		{
 			name: "ClaudeRepoLocalWorktree",
