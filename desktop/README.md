@@ -50,6 +50,11 @@ ignored.
 On Windows and Linux a second launch forwards its URL to the running instance
 and exits, so only one app instance runs at a time.
 
+If a link appears to do nothing, deep link handling is recorded in
+`agentsview-desktop.log` (File > Open Logs Folder, or the tray menu). On macOS
+the scheme is registered through the bundled app's `Info.plist`, so dev builds
+(`tauri:dev`) do not receive deep links; use a bundled build.
+
 ## Environment Notes (Desktop)
 
 When launched from Finder/Explorer, desktop apps usually do not inherit your

@@ -89,12 +89,48 @@ struct DeepLinkState {
     dispatch: Mutex<DeepLinkDispatch>,
 }
 
-// Routes stay Deferred until the first backend redirect so a deep
-// link that launches the app rides redirect_when_ready instead of
-// racing it.
+// Routes stay Deferred until the next backend redirect so a deep
+// link that arrives before the server answers rides
+// redirect_when_ready instead of racing it.
 enum DeepLinkDispatch {
     Deferred(Option<String>),
     Live,
+}
+
+impl DeepLinkDispatch {
+    // Some((port, route)) means the caller should navigate now.
+    fn route_for_navigation(&mut self, route: String, port: Option<u16>) -> Option<(u16, String)> {
+        match self {
+            DeepLinkDispatch::Deferred(pending) => {
+                *pending = Some(route);
+                None
+            }
+            DeepLinkDispatch::Live => match port {
+                Some(port) => Some((port, route)),
+                // Sidecar is down; hold the route for the next redirect.
+                None => {
+                    *self = DeepLinkDispatch::Deferred(Some(route));
+                    None
+                }
+            },
+        }
+    }
+
+    fn take_pending(&mut self) -> Option<String> {
+        match std::mem::replace(self, DeepLinkDispatch::Live) {
+            DeepLinkDispatch::Deferred(pending) => pending,
+            DeepLinkDispatch::Live => None,
+        }
+    }
+
+    // A freshly published port precedes HTTP readiness, so a route
+    // dispatched in that window would be clobbered by the pending
+    // redirect's fallback root navigation; hold routes until it runs.
+    fn defer(&mut self) {
+        if matches!(self, DeepLinkDispatch::Live) {
+            *self = DeepLinkDispatch::Deferred(None);
+        }
+    }
 }
 
 impl Default for DeepLinkState {
@@ -287,8 +323,10 @@ fn setup_deep_link_handling(app: &App) {
             handle_deep_link_url(&handle, &url);
         }
     });
-    // The plugin consumed launch arguments (Windows/Linux) during its
-    // own setup, before the listener above existed, so drain them here.
+    // Launch URLs can precede the listener above: the plugin consumes
+    // Windows/Linux launch arguments during its own setup, and macOS
+    // can deliver an Opened event before app setup runs. Both paths
+    // record into get_current, so drain it here.
     if let Ok(Some(urls)) = app.deep_link().get_current() {
         for url in urls {
             handle_deep_link_url(app.handle(), &url);
@@ -298,17 +336,40 @@ fn setup_deep_link_handling(app: &App) {
     // AppImages that were never registered with a launcher.
     #[cfg(any(windows, target_os = "linux"))]
     if let Err(err) = app.deep_link().register_all() {
-        eprintln!("[agentsview] failed to register deep link schemes: {err}");
+        log_deep_link_event(
+            app.handle(),
+            format!("failed to register deep link schemes: {err}").as_str(),
+        );
     }
 }
 
 fn handle_deep_link_url(handle: &AppHandle, url: &Url) {
     let Some(route) = deep_link_session_route(url) else {
-        eprintln!("[agentsview] ignoring unsupported deep link URL: {url}");
+        log_deep_link_event(
+            handle,
+            format!("ignoring unsupported deep link URL: {url}").as_str(),
+        );
         return;
     };
+    log_deep_link_event(
+        handle,
+        format!("opening deep link {url} as route {route}").as_str(),
+    );
     show_main_window(handle);
     dispatch_deep_link_route(handle, route);
+}
+
+// Packaged builds discard stderr (no console on Windows, detached from
+// any terminal when Finder-launched), so mirror deep link diagnostics
+// into the desktop log file that Open Logs Folder surfaces.
+fn log_deep_link_event(handle: &AppHandle, message: &str) {
+    eprintln!("[agentsview] {message}");
+    let Ok(path) = desktop_log_file_path(handle) else {
+        return;
+    };
+    if let Err(err) = append_sidecar_log_record_at_path(&path, "deep-link", message) {
+        eprintln!("[agentsview] failed to append deep link log: {err}");
+    }
 }
 
 fn dispatch_deep_link_route(handle: &AppHandle, route: String) {
@@ -316,38 +377,27 @@ fn dispatch_deep_link_route(handle: &AppHandle, route: String) {
     let Ok(mut dispatch) = deep_link_state.dispatch.lock() else {
         return;
     };
-    match &mut *dispatch {
-        DeepLinkDispatch::Deferred(pending) => {
-            *pending = Some(route);
-        }
-        DeepLinkDispatch::Live => {
-            let port = handle
-                .state::<SidecarState>()
-                .backend_port
-                .lock()
-                .ok()
-                .and_then(|g| *g);
-            match port {
-                Some(port) => {
-                    drop(dispatch);
-                    navigate_main_window_to_route(handle, port, route.as_str());
-                }
-                // Sidecar is down; hold the route for the next redirect.
-                None => *dispatch = DeepLinkDispatch::Deferred(Some(route)),
-            }
-        }
+    if let Some((port, route)) = dispatch.route_for_navigation(route, current_backend_port(handle))
+    {
+        drop(dispatch);
+        navigate_main_window_to_route(handle, port, route.as_str());
     }
 }
 
 fn take_pending_deep_link_route(handle: &AppHandle) -> Option<String> {
     let deep_link_state = handle.try_state::<DeepLinkState>()?;
     let mut dispatch = deep_link_state.dispatch.lock().ok()?;
-    let pending = match &mut *dispatch {
-        DeepLinkDispatch::Deferred(pending) => pending.take(),
-        DeepLinkDispatch::Live => None,
+    dispatch.take_pending()
+}
+
+fn defer_deep_link_dispatch(app: &AppHandle) {
+    let Some(deep_link_state) = app.try_state::<DeepLinkState>() else {
+        return;
     };
-    *dispatch = DeepLinkDispatch::Live;
-    pending
+    let Ok(mut dispatch) = deep_link_state.dispatch.lock() else {
+        return;
+    };
+    dispatch.defer();
 }
 
 fn navigate_main_window_to_route(handle: &AppHandle, port: u16, route: &str) {
@@ -358,11 +408,17 @@ fn navigate_main_window_to_route(handle: &AppHandle, port: u16, route: &str) {
     match Url::parse(target.as_str()) {
         Ok(url) => {
             if let Err(err) = window.navigate(url) {
-                eprintln!("[agentsview] deep link navigation failed: {err}");
+                log_deep_link_event(
+                    handle,
+                    format!("deep link navigation failed: {err}").as_str(),
+                );
             }
         }
         Err(err) => {
-            eprintln!("[agentsview] invalid deep link target URL {target}: {err}");
+            log_deep_link_event(
+                handle,
+                format!("invalid deep link target URL {target}: {err}").as_str(),
+            );
         }
     }
 }
@@ -1032,6 +1088,7 @@ fn save_sidecar(app: &AppHandle, child: CommandChild) -> Result<u64, DynError> {
 fn save_sidecar_port(app: &AppHandle, port: u16) {
     let state = app.state::<SidecarState>();
     set_sidecar_port(&state, Some(port));
+    defer_deep_link_dispatch(app);
 }
 
 fn clear_sidecar_port(app: &AppHandle) {
@@ -1642,7 +1699,13 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
     thread::spawn(move || {
         if wait_for_server(port, READY_TIMEOUT) {
             let target_url = match take_pending_deep_link_route(window.app_handle()) {
-                Some(route) => desktop_route_url(port, route.as_str()),
+                Some(route) => {
+                    log_deep_link_event(
+                        window.app_handle(),
+                        format!("redirecting to deferred deep link route {route}").as_str(),
+                    );
+                    desktop_route_url(port, route.as_str())
+                }
                 None => desktop_redirect_url(port),
             };
             match Url::parse(target_url.as_str()) {
@@ -4938,6 +5001,73 @@ agentsview running at http://127.0.0.1:18082
                 "{input}"
             );
         }
+    }
+
+    #[test]
+    fn deep_link_dispatch_defers_routes_until_first_redirect() {
+        let mut dispatch = DeepLinkDispatch::Deferred(None);
+        assert_eq!(
+            dispatch.route_for_navigation("/sessions/a".to_string(), Some(18080)),
+            None
+        );
+        assert_eq!(dispatch.take_pending().as_deref(), Some("/sessions/a"));
+        assert_eq!(dispatch.take_pending(), None);
+    }
+
+    #[test]
+    fn deep_link_dispatch_keeps_latest_route_while_deferred() {
+        let mut dispatch = DeepLinkDispatch::Deferred(None);
+        assert_eq!(
+            dispatch.route_for_navigation("/sessions/a".to_string(), None),
+            None
+        );
+        assert_eq!(
+            dispatch.route_for_navigation("/sessions/b".to_string(), Some(18080)),
+            None
+        );
+        assert_eq!(dispatch.take_pending().as_deref(), Some("/sessions/b"));
+    }
+
+    #[test]
+    fn deep_link_dispatch_navigates_directly_once_live() {
+        let mut dispatch = DeepLinkDispatch::Deferred(None);
+        dispatch.take_pending();
+        assert_eq!(
+            dispatch.route_for_navigation("/sessions/a".to_string(), Some(18080)),
+            Some((18080, "/sessions/a".to_string()))
+        );
+    }
+
+    #[test]
+    fn deep_link_dispatch_re_defers_live_route_when_port_unknown() {
+        let mut dispatch = DeepLinkDispatch::Deferred(None);
+        dispatch.take_pending();
+        assert_eq!(
+            dispatch.route_for_navigation("/sessions/a".to_string(), None),
+            None
+        );
+        assert_eq!(dispatch.take_pending().as_deref(), Some("/sessions/a"));
+    }
+
+    #[test]
+    fn deep_link_dispatch_defer_holds_routes_for_the_next_redirect() {
+        // A republished port precedes readiness, so a route arriving
+        // after defer() must wait for the redirect, not navigate.
+        let mut dispatch = DeepLinkDispatch::Deferred(None);
+        dispatch.take_pending();
+        dispatch.defer();
+        assert_eq!(
+            dispatch.route_for_navigation("/sessions/a".to_string(), Some(18080)),
+            None
+        );
+        assert_eq!(dispatch.take_pending().as_deref(), Some("/sessions/a"));
+    }
+
+    #[test]
+    fn deep_link_dispatch_defer_preserves_pending_route() {
+        let mut dispatch = DeepLinkDispatch::Deferred(Some("/sessions/a".to_string()));
+        dispatch.defer();
+        assert_eq!(dispatch.take_pending().as_deref(), Some("/sessions/a"));
     }
 
     #[test]
