@@ -11204,14 +11204,21 @@ func (e *Engine) processProviderFile(
 					parser.IsRegularFile(providerDiscoveredPath(source))
 			traeContainerExists := file.Agent == parser.AgentTrae &&
 				parser.IsRegularFile(providerDiscoveredPath(source))
+			sourceFileMissing := false
+			if statPath := validatedProviderSourceStatPath(file.Path); statPath != "" {
+				_, statErr := e.lstatSource(statPath)
+				sourceFileMissing = os.IsNotExist(statErr)
+			}
 			if e.pathRewriter != nil ||
 				(providerVirtualSourceContainerExists(file.Path) ||
-					omnigentContainerExists || traeContainerExists) {
+					omnigentContainerExists || traeContainerExists ||
+					sourceFileMissing) {
 				// The provider re-resolved this exact virtual member against a
 				// still-present shared container, or authoritatively parsed an
-				// empty Omnigent or Trae container. The member was removed from the
-				// container, not the container from disk. Carry the stored
-				// ownership to the recoverable source-missing seam.
+				// empty Omnigent or Trae container, or the backing source itself
+				// is gone. Carry the stored ownership to the recoverable
+				// source-missing seam instead of treating absence as a parser
+				// exclusion.
 				missingMembers = owned
 			} else {
 				for _, member := range owned {

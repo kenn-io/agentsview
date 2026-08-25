@@ -421,7 +421,7 @@ func TestFindSourceFileVisualStudioCopilotReturnsVirtualPath(t *testing.T) {
 		"mtime must resolve the virtual path to the physical trace")
 }
 
-func TestSyncRootsSinceVisualStudioCopilotPollTombstonesDeletedVS2026Session(
+func TestSyncRootsSinceVisualStudioCopilotPollMarksDeletedVS2026SourceMissing(
 	t *testing.T,
 ) {
 	if testing.Short() {
@@ -456,13 +456,16 @@ func TestSyncRootsSinceVisualStudioCopilotPollTombstonesDeletedVS2026Session(
 	require.NoError(t, os.Remove(sessionPath))
 	engine.SyncRootsSince(context.Background(), []string{root}, time.Time{}, nil)
 
-	gone, err := database.GetSession(context.Background(), sessionID)
+	full, err := database.GetSessionFull(context.Background(), sessionID)
 	require.NoError(t, err)
-	assert.Nil(t, gone,
-		"unwatched polling must tombstone deleted VS 2026 session files")
+	assertSourceMissingState(t, full)
+	sess, err := database.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess, "unwatched polling must preserve the archived session")
+	assertSessionMessageCount(t, database, sessionID, 1)
 }
 
-func TestSyncPathsVisualStudioCopilotTombstonesDeletedVS2026Session(t *testing.T) {
+func TestSyncPathsVisualStudioCopilotMarksDeletedVS2026SourceMissing(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -495,10 +498,14 @@ func TestSyncPathsVisualStudioCopilotTombstonesDeletedVS2026Session(t *testing.T
 	require.NoError(t, os.Remove(sessionPath))
 	engine.SyncPathsContext(context.Background(), []string{sessionPath})
 
-	gone, err := database.GetSession(context.Background(), sessionID)
+	full, err := database.GetSessionFull(context.Background(), sessionID)
 	require.NoError(t, err)
-	assert.Nil(t, gone,
-		"an extensionless container event must tombstone its stored virtual member")
+	assertSourceMissingState(t, full)
+	sess, err := database.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess,
+		"an extensionless container event must preserve its archived virtual member")
+	assertSessionMessageCount(t, database, sessionID, 1)
 }
 
 func TestSyncRootsSinceVisualStudioCopilotPollPreservesVS2026SessionWhenRootMissing(

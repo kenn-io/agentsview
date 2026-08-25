@@ -1044,16 +1044,11 @@ func TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash(t *testing.T) {
 			"(Issue 2) regressed")
 }
 
-// TestSyncCodebuffTombstoneClearsProviderStatHash pins Issue 3 at
-// end-to-end behavior: when a Codebuff source is removed from
-// disk and reconciliation tombstones the archived row, the
-// engine must drop the provider_freshness row in addition to
-// the session-source-ownership rows. Without that, a future
-// byte-identical restoration of the directory would falsely be
-// considered fresh by the digest gate (Issue 1) and the
-// tombstoned session could not be revived. A regression that
-// leaves the side-table intact surfaces here as a non-nil
-// provider_freshness row after the reconcile-driven tombstone.
+// TestSyncCodebuffMissingSourceClearsProviderStatHash verifies that removing a
+// Codebuff source marks the archived session source-missing and invalidates its
+// provider freshness. The archived transcript remains readable, while a later
+// byte-identical restoration is forced through parsing so it can clear the
+// source-missing state.
 //
 // ReconcileProviderRoots is the production-realistic trigger for
 // tombstoneMissingWatchSourcesForAgentLocked: it iterates the
@@ -1065,7 +1060,7 @@ func TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash(t *testing.T) {
 // non-persistent sources — which means a SyncPathsContext test
 // would never reach the tombstone, only mark the source via the
 // in-memory skip cache.
-func TestSyncCodebuffTombstoneClearsProviderStatHash(t *testing.T) {
+func TestSyncCodebuffMissingSourceClearsProviderStatHash(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1107,21 +1102,17 @@ func TestSyncCodebuffTombstoneClearsProviderStatHash(t *testing.T) {
 		"reconcile must complete; an error here would mask whether "+
 			"the tombstone path was actually reached")
 
-	// Sentinel: confirm the tombstone actually fired by ensuring the
-	// archived session row is soft-deleted. GetSession filters out
-	// rows whose deleted_at IS NOT NULL, so a tombstoned row returns
-	// (nil, nil). Without this assertion the test could pass for the
-	// wrong reason if reconcile's owner-page lookup missed the
-	// archived record and tombstoneSessionSourceOwnership never ran.
-	const sessionID = "codebuff:project-0:2026-07-15T10-00-00.000Z"
+	// The shared fixture declares a free-tier agent in run-state.json, so the
+	// stored session uses the Freebuff identity even though the owning provider
+	// and provider_freshness key are Codebuff.
+	const sessionID = "freebuff:project-0:2026-07-15T10-00-00.000Z"
+	full, err := database.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err)
+	assertSourceMissingState(t, full)
 	sess, err := database.GetSession(context.Background(), sessionID)
 	require.NoError(t, err)
-	require.Nil(t, sess,
-		"the archived session row must be soft-deleted after a "+
-			"missing-source reconcile; a non-nil sess means "+
-			"tombstoneSessionSourceOwnership never reached "+
-			"MarkSessionSourceMissing, so the provider_freshness "+
-			"assertion below would pin nothing about Issue 3")
+	require.NotNil(t, sess, "a missing source must not hide the archived session")
+	assertSessionMessageCount(t, database, sessionID, 1)
 
 	_, hasAfter, err := database.GetProviderStatHash(
 		context.Background(), parser.AgentCodebuff, chatPath,
