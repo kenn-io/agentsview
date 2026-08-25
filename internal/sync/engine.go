@@ -5600,10 +5600,15 @@ func (e *Engine) streamReconciliationCandidates(
 			for i, scope := range group.scopes {
 				groupProofs[i] = storedSourceDBHintScopes(scope.PhysicalProofScopes)
 			}
+			rankingRoots := traversalRoots
+			if agent == parser.AgentKiro {
+				// Kiro precedence uses configured roots for reordered scoped requests.
+				rankingRoots = e.agentDirs[agent]
+			}
 			var spoolErr error
 			err = discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
 				candidate, ok := e.reconciliationCandidate(
-					provider, source, traversalRoots, watchRoots,
+					provider, source, rankingRoots, watchRoots,
 				)
 				if !ok {
 					return nil
@@ -5858,12 +5863,7 @@ func (e *Engine) reconciliationCandidate(
 			preference1 = 1
 		}
 	} else if !claudeFormat && !isCodexFormatAgent(agent) {
-		for i, configured := range roots {
-			if samePathOrDescendant(statPath, configured) {
-				preference1 = int64(len(roots) - i)
-				break
-			}
-		}
+		preference1 = configuredRootPreference(statPath, roots)
 	}
 	if ranker, ok := provider.(parser.ReconciliationSourceRanker); ok {
 		rank := ranker.ReconciliationSourceRank(source)
@@ -5882,6 +5882,15 @@ func (e *Engine) reconciliationCandidate(
 		Project: source.ProjectHint, Preference1: preference1,
 		Preference2: preference2, Preference3: preference3,
 	}, true
+}
+
+func configuredRootPreference(path string, roots []string) int64 {
+	for i, configured := range roots {
+		if samePathOrDescendant(path, configured) {
+			return int64(len(roots) - i)
+		}
+	}
+	return 0
 }
 
 func boolPreference(value bool) int64 {

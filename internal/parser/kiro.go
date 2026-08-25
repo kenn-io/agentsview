@@ -298,16 +298,9 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 		}
 		payload := gjson.Get(line, "payload")
 		timestamp := kiroCurrentMessageTimestamp(gjson.Get(line, "timestamp"))
-		if !timestamp.IsZero() {
-			if earliestMessage.IsZero() || timestamp.Before(earliestMessage) {
-				earliestMessage = timestamp
-			}
-			if latestMessage.IsZero() || timestamp.After(latestMessage) {
-				latestMessage = timestamp
-			}
-		}
 		typ := payload.Get("type").Str
 		content := strings.TrimSpace(payload.Get("content").Str)
+		accepted := false
 		switch typ {
 		case "user", "assistant":
 			if content == "" {
@@ -321,6 +314,7 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 				firstMessage = truncate(strings.ReplaceAll(content, "\n", " "), 300)
 			}
 			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: role, Content: content, Timestamp: timestamp, ContentLength: len(content), Model: payload.Get("reasoningModelId").Str})
+			accepted = true
 			ordinal++
 		case "tool_call":
 			name, id := payload.Get("toolName").Str, payload.Get("toolCallId").Str
@@ -330,6 +324,7 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 			call := ParsedToolCall{ToolUseID: id, ToolName: name, Category: NormalizeToolCategory(name), InputJSON: payload.Get("args").Raw}
 			display := kiroFormatToolCalls([]ParsedToolCall{call})
 			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: RoleAssistant, Content: display, Timestamp: timestamp, ContentLength: len(display), HasToolUse: true, ToolCalls: []ParsedToolCall{call}})
+			accepted = true
 			ordinal++
 		case "tool_result":
 			id := payload.Get("toolCallId").Str
@@ -338,7 +333,16 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 			}
 			raw := payload.Get("content").Raw
 			messages = append(messages, ParsedMessage{Ordinal: ordinal, Role: RoleUser, Timestamp: timestamp, ToolResults: []ParsedToolResult{{ToolUseID: id, ContentRaw: raw, ContentLength: len(raw)}}})
+			accepted = true
 			ordinal++
+		}
+		if accepted && !timestamp.IsZero() {
+			if earliestMessage.IsZero() || timestamp.Before(earliestMessage) {
+				earliestMessage = timestamp
+			}
+			if latestMessage.IsZero() || timestamp.After(latestMessage) {
+				latestMessage = timestamp
+			}
 		}
 	}
 	if err := lr.Err(); err != nil {

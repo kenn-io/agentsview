@@ -4157,6 +4157,26 @@ func (f fakeFileInfo) ModTime() time.Time {
 func (f fakeFileInfo) IsDir() bool { return false }
 func (f fakeFileInfo) Sys() any    { return nil }
 
+func TestKiroReconciliationRootPreferenceUsesConfiguredOrder(t *testing.T) {
+	first := filepath.Join(t.TempDir(), "first")
+	second := filepath.Join(t.TempDir(), "second")
+	firstPath := filepath.Join(first, "sess.jsonl")
+	secondPath := filepath.Join(second, "sess.jsonl")
+
+	assert.Equal(t, int64(2), configuredRootPreference(
+		firstPath, []string{first, second},
+	))
+	assert.Equal(t, int64(1), configuredRootPreference(
+		secondPath, []string{first, second},
+	))
+	assert.Equal(t, int64(1), configuredRootPreference(
+		firstPath, []string{second, first},
+	))
+	assert.Equal(t, int64(2), configuredRootPreference(
+		secondPath, []string{second, first},
+	))
+}
+
 func TestFilterEmptyMessages(t *testing.T) {
 	tests := []struct {
 		name string

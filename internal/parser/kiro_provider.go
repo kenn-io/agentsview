@@ -219,7 +219,7 @@ func (p *kiroProvider) parseSQLiteDB(
 	if len(results) == 0 && len(sourceErrs) == 0 {
 		return ParseOutcome{
 			ResultSetComplete: true,
-			ForceReplace:      true,
+			ForceReplace:      !src.SessionIDsSet && !src.SessionIDsZeroWinner,
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
@@ -227,7 +227,7 @@ func (p *kiroProvider) parseSQLiteDB(
 		Results:           results,
 		SourceErrors:      sourceErrs,
 		ResultSetComplete: true,
-		ForceReplace:      true,
+		ForceReplace:      !src.SessionIDsSet && !src.SessionIDsZeroWinner,
 	}, nil
 }
 
@@ -324,13 +324,15 @@ const (
 )
 
 type kiroSource struct {
-	Root          string
-	Path          string
-	DBPath        string
-	SessionID     string
-	Kind          kiroSourceKind
-	SessionIDs    map[string]struct{}
-	SessionIDsSet bool
+	Root                 string
+	Path                 string
+	DBPath               string
+	SessionID            string
+	Kind                 kiroSourceKind
+	SessionIDs           map[string]struct{}
+	SessionIDsSet        bool
+	SessionIDsTotal      int
+	SessionIDsZeroWinner bool
 }
 
 type kiroSourceSet struct {
@@ -373,12 +375,19 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 		if dbPath := kiroSQLiteDBPath(root); dbPath != "" {
 			dbSource := s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB)
 			metas, err := ListKiroSQLiteSessionMeta(dbPath)
-			if err == nil {
-				for _, meta := range metas {
-					member := s.newSourceRef(root, meta.VirtualPath, dbPath, meta.SessionID, kiroSourceSQLiteSession)
-					member.DiscoveryMTimeNS = meta.FileMtime
-					candidates[meta.SessionID] = append(candidates[meta.SessionID], member)
-				}
+			if err != nil {
+				return nil, nil, fmt.Errorf("list Kiro SQLite sessions in %s: %w", dbPath, err)
+			}
+			dbSourceSrc, ok := s.sourceFromRef(dbSource)
+			if !ok {
+				return nil, nil, fmt.Errorf("Kiro SQLite source unavailable: %s", dbPath)
+			}
+			dbSourceSrc.SessionIDsTotal = len(metas)
+			dbSource.Opaque = dbSourceSrc
+			for _, meta := range metas {
+				member := s.newSourceRef(root, meta.VirtualPath, dbPath, meta.SessionID, kiroSourceSQLiteSession)
+				member.DiscoveryMTimeNS = meta.FileMtime
+				candidates[meta.SessionID] = append(candidates[meta.SessionID], member)
 			}
 			databases = append(databases, dbSource)
 		}
@@ -410,12 +419,19 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 	for i := range databases {
 		src, _ := s.sourceFromRef(databases[i])
 		src.SessionIDs = make(map[string]struct{})
-		src.SessionIDsSet = true
 		for id, winner := range winners {
 			winnerSrc, ok := s.sourceFromRef(winner)
 			if ok && winnerSrc.Kind == kiroSourceSQLiteSession && samePath(winnerSrc.DBPath, src.DBPath) {
 				src.SessionIDs[id] = struct{}{}
 			}
+		}
+		if src.SessionIDsTotal > 0 && len(src.SessionIDs) < src.SessionIDsTotal {
+			src.SessionIDsSet = true
+			src.SessionIDsZeroWinner = len(src.SessionIDs) == 0
+		} else {
+			src.SessionIDs = nil
+			src.SessionIDsSet = false
+			src.SessionIDsZeroWinner = false
 		}
 		databases[i].Opaque = src
 	}

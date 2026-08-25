@@ -162,6 +162,7 @@ func TestKiroProviderSkipsShadowedLegacySource(t *testing.T) {
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID:   "shadowed-session",
 		StoredFilePath: shadowedPath,
 	})
 	require.NoError(t, err)
@@ -207,6 +208,7 @@ func TestKiroProviderShadowsLegacyAcrossAllRoots(t *testing.T) {
 	assert.Equal(t, dbPath, discovered[0].DisplayPath)
 
 	legacySource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID:   "shared-session",
 		StoredFilePath: legacyPath,
 	})
 	require.NoError(t, err)
@@ -218,6 +220,45 @@ func TestKiroProviderShadowsLegacyAcrossAllRoots(t *testing.T) {
 	assert.True(t, outcome.ResultSetComplete)
 	assert.Len(t, outcome.Results, 1)
 	assert.Equal(t, "kiro:shared-session", outcome.Results[0].Result.Session.ID)
+}
+
+func TestKiroProviderZeroWinnerSQLitePreservesArchive(t *testing.T) {
+	currentRoot := t.TempDir()
+	sqliteRoot := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	dbPath, db := newKiroProviderSQLiteDBAt(t, sqliteRoot)
+	seedKiroSQLiteSession(
+		t, db, "/home/user/code/current", rawID,
+		readKiroFixture(t, "standard_payload.json"),
+		1779012000000, 1779012030000,
+	)
+	currentPath := filepath.Join(currentRoot, "workspace", rawID, "messages.jsonl")
+	writeSourceFile(t, currentPath, `{"payload":{"type":"user","content":"current"}}`+"\n")
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{
+		Roots: []string{currentRoot, sqliteRoot},
+	})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	var database SourceRef
+	var foundCurrent bool
+	for _, source := range discovered {
+		if source.DisplayPath == dbPath {
+			database = source
+		}
+		if source.DisplayPath == currentPath {
+			foundCurrent = true
+		}
+	}
+	require.True(t, foundCurrent)
+	require.Equal(t, dbPath, database.DisplayPath)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: database})
+	require.NoError(t, err)
+	assert.Empty(t, outcome.Results)
+	assert.False(t, outcome.ForceReplace)
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 }
 
 func TestKiroProviderFingerprintsSQLiteAndLegacySources(t *testing.T) {
@@ -548,6 +589,59 @@ func TestKiroProviderCurrentLayoutLifecycleAndExactLookup(t *testing.T) {
 	fingerprint, err := provider.Fingerprint(context.Background(), found)
 	require.NoError(t, err)
 	assert.Greater(t, fingerprint.Size, int64(len(`{"payload":{"type":"user","content":"hello"}}`)+1))
+}
+
+func TestKiroProviderCurrentBoundsUseAcceptedMessageTimestamps(t *testing.T) {
+	root := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	path := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	writeSourceFile(t, path, strings.Join([]string{
+		`{"timestamp":"2099-01-01T00:00:00Z","payload":{"type":"session_metadata"}}`,
+		`{"timestamp":"2026-08-24T12:30:00Z","payload":{"type":"assistant","content":"latest"}}`,
+		`{"timestamp":"2026-08-24T12:00:00Z","payload":{"type":"user","content":"earliest"}}`,
+	}, "\n")+"\n")
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	require.NoError(t, err)
+	require.True(t, found)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	session := outcome.Results[0].Result.Session
+	assert.Equal(t, time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC), session.StartedAt)
+	assert.Equal(t, time.Date(2026, 8, 24, 12, 30, 0, 0, time.UTC), session.EndedAt)
+}
+
+func TestKiroProviderStablePathTieBreak(t *testing.T) {
+	root := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	direct := filepath.Join(root, rawID, "messages.jsonl")
+	workspace := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	fixture := `{"timestamp":"2026-08-24T12:00:00Z","payload":{"type":"user","content":"same"}}` + "\n"
+	writeSourceFile(t, direct, fixture)
+	writeSourceFile(t, workspace, fixture)
+	tie := time.Unix(1700000000, 0)
+	require.NoError(t, os.Chtimes(direct, tie, tie))
+	require.NoError(t, os.Chtimes(workspace, tie, tie))
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	found, foundOK, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	require.NoError(t, err)
+	require.True(t, foundOK)
+	assert.Equal(t, direct, found.DisplayPath)
+}
+
+func TestKiroProviderDiscoveryFailsOnSQLiteMetadataError(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, kiroSQLiteDBName)
+	writeSourceFile(t, dbPath, "not a sqlite database")
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	_, err := provider.Discover(context.Background())
+	assert.Error(t, err)
 }
 
 func TestKiroProviderLogicalIdentityAndRankUnifyLegacyAndCurrent(t *testing.T) {
