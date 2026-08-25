@@ -405,7 +405,7 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 			}
 			dbSourceSrc, ok := s.sourceFromRef(dbSource)
 			if !ok {
-				return nil, nil, fmt.Errorf("Kiro SQLite source unavailable: %s", dbPath)
+				return nil, nil, fmt.Errorf("kiro SQLite source unavailable: %s", dbPath)
 			}
 			dbSourceSrc.SessionIDsTotal = len(metas)
 			dbSource.Opaque = dbSourceSrc
@@ -729,7 +729,7 @@ func (s kiroSourceSet) changedPathTombstones(
 		}
 		if winner, ok := winners[member.SessionID]; ok {
 			if winnerSrc, winnerOK := s.sourceFromRef(winner); winnerOK &&
-				!(winnerSrc.Kind == kiroSourceSQLiteSession && samePath(winnerSrc.DBPath, member.DBPath)) {
+				(winnerSrc.Kind != kiroSourceSQLiteSession || !samePath(winnerSrc.DBPath, member.DBPath)) {
 				tombstones = append(tombstones, winner)
 			}
 			continue

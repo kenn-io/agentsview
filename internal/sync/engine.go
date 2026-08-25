@@ -11474,17 +11474,6 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 	return members, nil
 }
 
-func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
-	ctx context.Context,
-	provider parser.Provider,
-	source parser.SourceRef,
-	results []parser.ParseResult,
-) ([]sourceMissingMember, error) {
-	return e.providerSourceMissingSessionOwnershipsForCompleteResultWithPreserved(
-		ctx, provider, source, nil, results,
-	)
-}
-
 func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResultWithPreserved(
 	ctx context.Context,
 	provider parser.Provider,
@@ -19384,20 +19373,6 @@ func (e *Engine) applyWorktreeMappingToSingleSession(
 
 // kiroSQLiteDBName is the filename of the current-store Kiro SQLite DB.
 const kiroSQLiteDBName = "data.sqlite3"
-
-// kiroSQLiteDBPath returns the current-store Kiro SQLite DB path when the
-// configured root contains one, or "" otherwise.
-func kiroSQLiteDBPath(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	path := filepath.Join(dir, kiroSQLiteDBName)
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return ""
-	}
-	return path
-}
 
 // parseKiroSQLiteVirtualPath splits a virtual Kiro SQLite source path back
 // into its database path and raw session ID using the provider-neutral
