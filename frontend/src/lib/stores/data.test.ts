@@ -363,6 +363,39 @@ describe("unknownProjectKey", () => {
 });
 
 describe("refreshAfterApply", () => {
+  it("keeps an event refresh from superseding the post-apply selection refresh", async () => {
+    vi.useFakeTimers();
+    data.selectedProjectKey = "k1";
+    (routerMod.router as unknown as { params: Record<string, string> }).params = {
+      project_key: "k1",
+    };
+    detach = data.attach(true);
+
+    let resolveLoad!: (inventory: DbProjectInventory) => void;
+    api.getApiV1DataProjects.mockImplementationOnce(
+      () =>
+        new Promise<DbProjectInventory>((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+
+    const pending = data.refreshAfterApply("k1", "Merged Target");
+    emitDataChanged?.({ scope: "sessions" });
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
+
+    resolveLoad(
+      makeInventory([
+        makeRow({ project_key: "k2", label: "Beta" }),
+        makeRow({ project_key: "k3", label: "Merged Target" }),
+      ]),
+    );
+
+    await expect(pending).resolves.toBe(true);
+    expect(data.selectedProjectKey).toBe("k3");
+  });
+
   it("keeps the selection when the original key still exists", async () => {
     const inventory = makeInventory([
       makeRow({ project_key: "k1", label: "Alpha" }),

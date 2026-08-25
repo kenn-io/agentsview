@@ -24,6 +24,7 @@ class DataStore {
 
   #inventoryRead = new LatestRead();
   #loadVersion = 0;
+  #mutationRefreshes = 0;
 
   /**
    * The inventory row matching selectedProjectKey, or null when there is no
@@ -58,7 +59,9 @@ class DataStore {
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
-        if (projectWorkspaceEnabled) void this.load({ background: true });
+        if (projectWorkspaceEnabled && this.#mutationRefreshes === 0) {
+          void this.load({ background: true });
+        }
         if (this.view === "rules") this.rulesRefreshVersion++;
       }, DATA_REFRESH_DEBOUNCE_MS);
     });
@@ -196,7 +199,7 @@ class DataStore {
    * reload is in flight, that choice wins and the reselection is skipped.
    */
   async refreshAfterApply(originalKey: string, appliedTargetLabel: string): Promise<boolean> {
-    const ok = await this.load({ background: true });
+    const ok = await this.loadAfterMutation();
     if (!ok) return false;
     if (this.selectedProjectKey !== originalKey) return true;
     const rows = (this.inventory?.projects ?? []) as DbProjectInventoryRow[];
@@ -205,6 +208,20 @@ class DataStore {
     this.selectedProjectKey = target ? target.project_key : "";
     this.writeUrl();
     return true;
+  }
+
+  /**
+   * Refresh after a committed mutation without letting its matching data event
+   * start a competing inventory read. The mutation refresh already covers that
+   * event; later events can schedule their own background load normally.
+   */
+  async loadAfterMutation(): Promise<boolean> {
+    this.#mutationRefreshes++;
+    try {
+      return await this.load({ background: true });
+    } finally {
+      this.#mutationRefreshes--;
+    }
   }
 }
 
