@@ -131,7 +131,7 @@ func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
 	assert.Equal(t, "clicked", candidates[0].Examples[0].SessionID)
 }
 
-func TestListArchiveWorktreeCandidatesIncludesResolvedProjectAliases(
+func TestListArchiveWorktreeCandidatesExcludesDifferentProjectKeys(
 	t *testing.T,
 ) {
 	d := testDB(t)
@@ -183,8 +183,10 @@ func TestListArchiveWorktreeCandidatesIncludesResolvedProjectAliases(
 	)
 	require.NoError(t, err)
 	require.Len(t, candidates, 1)
-	assert.Equal(t, 2, candidates[0].ContributingSessions)
-	assert.Equal(t, "/srv/worktrees/repo/feature",
+	assert.Equal(t, 1, candidates[0].ContributingSessions)
+	require.Len(t, candidates[0].Examples, 1)
+	assert.Equal(t, "primary-session", candidates[0].Examples[0].SessionID)
+	assert.Equal(t, "/srv/worktrees/repo/feature/cmd",
 		candidates[0].SuggestedPrefix)
 }
 

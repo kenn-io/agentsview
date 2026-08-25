@@ -1,19 +1,28 @@
 <script lang="ts">
-  import { Button, IconButton } from "@kenn-io/kit-ui";
+  import { Button, IconButton, showFlash } from "@kenn-io/kit-ui";
   import { onDestroy, onMount } from "svelte";
-  import { SessionsService, type DbSession } from "../../api/generated/index";
+  import {
+    SessionsService,
+    SettingsService,
+    type DbSession,
+  } from "../../api/generated/index";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import type { Message } from "../../api/types.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import MessageContent from "../content/MessageContent.svelte";
+  import type { ProjectInfo } from "../../api/types/core.js";
+  import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
 
   interface Props {
     projectLabel: string;
+    projects: ProjectInfo[];
+    readOnly: boolean;
+    onAssigned: (target: string) => Promise<boolean>;
   }
 
-  let { projectLabel }: Props = $props();
+  let { projectLabel, projects, readOnly, onAssigned }: Props = $props();
 
   let sessions = $state<DbSession[]>([]);
   let expanded = $state(true);
@@ -23,6 +32,9 @@
   let messagesBySession = $state<Record<string, Message[]>>({});
   let messagesLoadingId = $state("");
   let messagesError = $state("");
+  let targetProject = $state("");
+  let assigning = $state(false);
+  let assignmentError = $state("");
   const sessionsRead = new LatestRead();
   const messagesRead = new LatestRead();
 
@@ -57,7 +69,11 @@
       // The generated list model currently exposes `sessions` as `any[]`.
       // Keep the cast at this API boundary and use the generated row model
       // everywhere inside the component.
-      sessions = (response.sessions ?? []) as DbSession[];
+      const loadedSessions = (response.sessions ?? []) as DbSession[];
+      sessions = [
+        ...loadedSessions.filter((session) => !session.is_automated),
+        ...loadedSessions.filter((session) => session.is_automated),
+      ];
       const firstSession = sessions[0];
       if (firstSession) await loadMessages(firstSession.id);
     } catch (error) {
@@ -72,12 +88,52 @@
     const nextIndex = Math.max(0, Math.min(sessions.length - 1, activeIndex + offset));
     if (nextIndex === activeIndex) return;
     activeIndex = nextIndex;
+    targetProject = "";
+    assignmentError = "";
     const nextSession = sessions[nextIndex];
     if (nextSession) void loadMessages(nextSession.id);
   }
 
+  async function assignActiveSession() {
+    const session = activeSession;
+    const target = targetProject.trim();
+    if (!session || !target || assigning) return;
+    const changesProject = target !== session.project;
+    assigning = true;
+    assignmentError = "";
+    try {
+      const assignment = await callGenerated(() =>
+        SettingsService.putApiV1SettingsSessionProjectAssignmentsSessionId({
+          sessionId: session.id,
+          requestBody: { project: target },
+        }),
+      );
+      showFlash(m.data_session_assignment_saved({ project: assignment.project }), {
+        tone: "success",
+      });
+      if (changesProject) {
+        sessions = sessions.filter((item) => item.id !== session.id);
+        activeIndex = Math.min(activeIndex, Math.max(0, sessions.length - 1));
+      }
+      targetProject = "";
+      await onAssigned(assignment.project);
+      if (changesProject) {
+        const nextSession = sessions[activeIndex];
+        if (nextSession) await loadMessages(nextSession.id);
+      }
+    } catch (error) {
+      assignmentError = error instanceof Error
+        ? error.message
+        : m.data_session_assignment_failed();
+    } finally {
+      assigning = false;
+    }
+  }
+
   async function loadMessages(sessionId: string) {
     messagesError = "";
+    messagesRead.cancel();
+    messagesLoadingId = "";
     if (messagesBySession[sessionId]) return;
     const signal = messagesRead.begin();
     messagesLoadingId = sessionId;
@@ -163,7 +219,12 @@
           {:else}
             {#each activeMessages as message (message.id)}
               <div class="preview-message">
-                <MessageContent {message} session={activeSession} compact />
+                <MessageContent
+                  {message}
+                  session={activeSession}
+                  compact
+                  allowMutations={false}
+                />
               </div>
             {/each}
           {/if}
@@ -175,6 +236,41 @@
             <code>{activeSession.cwd}</code>
           </div>
         {/if}
+
+        <div class="session-assignment">
+          <div class="assignment-copy">
+            <strong>{m.data_session_assignment_heading()}</strong>
+            <span>{m.data_session_assignment_intro()}</span>
+          </div>
+          {#if readOnly}
+            <p class="preview-status">{m.data_reclassify_read_only()}</p>
+          {:else}
+            <div class="assignment-controls">
+              <ProjectTypeahead
+                {projects}
+                value={targetProject}
+                onselect={(value) => (targetProject = value)}
+                onquery={() => (assignmentError = "")}
+                includeAll={false}
+                allowCustom={true}
+                customLabel={m.data_reclassify_use_custom_project({ query: "{query}" })}
+                placeholder={m.data_session_assignment_target()}
+                title={m.data_session_assignment_target()}
+              />
+              <Button
+                size="sm"
+                label={assigning
+                  ? m.data_session_assignment_saving()
+                  : m.data_session_assignment_save()}
+                disabled={!targetProject.trim() || assigning}
+                onclick={() => void assignActiveSession()}
+              />
+            </div>
+            {#if assignmentError}
+              <p class="preview-status error-text" role="alert">{assignmentError}</p>
+            {/if}
+          {/if}
+        </div>
       </div>
     {/if}
   {/if}
@@ -276,5 +372,37 @@
     font-family: var(--font-mono);
     font-size: 9px;
     overflow-wrap: anywhere;
+  }
+
+  .session-assignment {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-muted);
+  }
+
+  .assignment-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .assignment-copy strong {
+    color: var(--text-primary);
+    font-size: 11px;
+  }
+
+  .assignment-copy span {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.4;
+  }
+
+  .assignment-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
   }
 </style>

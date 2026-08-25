@@ -50,6 +50,8 @@
 
   async function loadDetail(sample: DbWorktreeReclassificationSessionSample) {
     loadError = "";
+    detailRead.cancel();
+    loadingId = "";
     if (details[sample.id]) return;
     const signal = detailRead.begin();
     loadingId = sample.id;

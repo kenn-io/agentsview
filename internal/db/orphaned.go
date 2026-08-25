@@ -1107,9 +1107,10 @@ func (d *DB) CopyExcludedSessionsFrom(
 // CopySessionMetadataFrom merges user-managed data from the
 // source DB into sessions that were re-synced into this DB.
 // This preserves display_name, deleted_at, starred_sessions, pinned_messages,
-// archive metadata, project identity observations, and worktree project
-// mappings across full DB rebuilds. Immutable project snapshots are restored
-// only from source versions that recorded parser-source labels reliably.
+// archive metadata, project identity observations, worktree project mappings,
+// and explicit session project assignments across full DB rebuilds. Immutable
+// project snapshots are restored only from source versions that recorded
+// parser-source labels reliably.
 func (d *DB) CopySessionMetadataFrom(
 	sourcePath string,
 ) error {
@@ -1554,6 +1555,31 @@ func (d *DB) CopySessionMetadataFrom(
 					key_source = excluded.key_source,
 					key = excluded.key`); err != nil {
 			return fmt.Errorf("copying session project identity snapshots: %w", err)
+		}
+	}
+
+	// Session assignments are user-owned metadata. Restore them only for
+	// sessions that survived the rebuild, then reapply the effective project
+	// selected by the user instead of the parser-derived label.
+	if oldDBHasTable(ctx, tx, "session_project_assignments") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.session_project_assignments
+				(session_id, project, created_at, updated_at)
+			SELECT session_id, project, created_at, updated_at
+			FROM old_db.session_project_assignments
+			WHERE session_id IN (SELECT id FROM main.sessions)
+			ON CONFLICT(session_id) DO UPDATE SET
+				project = excluded.project,
+				created_at = excluded.created_at,
+				updated_at = excluded.updated_at`); err != nil {
+			return fmt.Errorf("copying session project assignments: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET project = assignment.project
+			FROM main.session_project_assignments assignment
+			WHERE main.sessions.id = assignment.session_id`); err != nil {
+			return fmt.Errorf("applying copied session project assignments: %w", err)
 		}
 	}
 

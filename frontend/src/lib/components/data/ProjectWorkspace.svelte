@@ -108,7 +108,12 @@
     {/if}
   </div>
   <div class="project-session-pane">
-    <ProjectSessionPreviewPane projectLabel={row.label} />
+    <ProjectSessionPreviewPane
+      projectLabel={row.label}
+      {projects}
+      {readOnly}
+      onAssigned={(target) => onRefresh(workspaceKey, target)}
+    />
   </div>
 </section>
 

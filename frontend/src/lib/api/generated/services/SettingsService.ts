@@ -4,8 +4,10 @@
 /* eslint-disable */
 import type { ApplyWorktreeMappingsRequest } from '../models/ApplyWorktreeMappingsRequest';
 import type { ApplyWorktreeMappingsResponse } from '../models/ApplyWorktreeMappingsResponse';
+import type { DbSessionProjectAssignment } from '../models/DbSessionProjectAssignment';
 import type { DbWorktreeProjectMapping } from '../models/DbWorktreeProjectMapping';
 import type { DbWorktreeReclassificationPreview } from '../models/DbWorktreeReclassificationPreview';
+import type { SessionProjectAssignmentRequest } from '../models/SessionProjectAssignmentRequest';
 import type { SettingsResponse } from '../models/SettingsResponse';
 import type { SettingsUpdateRequest } from '../models/SettingsUpdateRequest';
 import type { WorktreeMappingRequest } from '../models/WorktreeMappingRequest';
@@ -53,6 +55,44 @@ export class SettingsService {
     return __request(OpenAPI, {
       method: 'PUT',
       url: '/api/v1/settings',
+      body: requestBody,
+      mediaType: 'application/json',
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Assign one session to a project
+   * @returns DbSessionProjectAssignment OK
+   * @throws ApiError
+   */
+  public static putApiV1SettingsSessionProjectAssignmentsSessionId({
+    sessionId,
+    requestBody,
+  }: {
+    /**
+     * Session ID
+     */
+    sessionId: string,
+    requestBody: SessionProjectAssignmentRequest,
+  }): CancelablePromise<DbSessionProjectAssignment> {
+    return __request(OpenAPI, {
+      method: 'PUT',
+      url: '/api/v1/settings/session-project-assignments/{session_id}',
+      path: {
+        'session_id': sessionId,
+      },
       body: requestBody,
       mediaType: 'application/json',
       errors: {

@@ -287,6 +287,27 @@ func TestWorktreeReclassificationAPILocalNoSyncMode(t *testing.T) {
 	assert.Equal(t, "canonical_example", session.Project)
 }
 
+func TestSessionProjectAssignmentAPILocalNoSyncMode(t *testing.T) {
+	te := setupNoSyncMode(t)
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: "temporary-session", Machine: "test", Agent: "codex",
+		Project: "temporary", Cwd: "/tmp/agent-run",
+	}))
+
+	w := te.put(t,
+		"/api/v1/settings/session-project-assignments/temporary-session",
+		`{"project":"real-project"}`,
+	)
+	assertStatus(t, w, http.StatusOK)
+	assignment := decode[db.SessionProjectAssignment](t, w)
+	assert.Equal(t, "temporary-session", assignment.SessionID)
+	assert.Equal(t, "real_project", assignment.Project)
+
+	session, err := te.db.GetSession(context.Background(), "temporary-session")
+	require.NoError(t, err)
+	assert.Equal(t, "real_project", session.Project)
+}
+
 func TestActivityProjectReclassificationAPIRejectsStaleToken(t *testing.T) {
 	te := setup(t)
 	require.NoError(t, te.db.UpsertSession(db.Session{

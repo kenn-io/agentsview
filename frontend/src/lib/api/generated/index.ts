@@ -83,6 +83,7 @@ export type { DbSecretFindingRow } from './models/DbSecretFindingRow';
 export type { DbSession } from './models/DbSession';
 export type { DbSessionActivityBucket } from './models/DbSessionActivityBucket';
 export type { DbSessionActivityResponse } from './models/DbSessionActivityResponse';
+export type { DbSessionProjectAssignment } from './models/DbSessionProjectAssignment';
 export type { DbSessionShapeResponse } from './models/DbSessionShapeResponse';
 export type { DbSessionStats } from './models/DbSessionStats';
 export type { DbSessionTiming } from './models/DbSessionTiming';
@@ -209,6 +210,7 @@ export type { ServiceUsagePairwiseComparisonDelta } from './models/ServiceUsageP
 export type { ServiceUsagePairwiseComparisonResponse } from './models/ServiceUsagePairwiseComparisonResponse';
 export type { ServiceUsagePairwiseComparisonSide } from './models/ServiceUsagePairwiseComparisonSide';
 export type { SessionDirectoryResponse } from './models/SessionDirectoryResponse';
+export type { SessionProjectAssignmentRequest } from './models/SessionProjectAssignmentRequest';
 export type { SessionProviderResponse } from './models/SessionProviderResponse';
 export type { SessionUsageBreakdownResponse } from './models/SessionUsageBreakdownResponse';
 export type { SessionUsageResponse } from './models/SessionUsageResponse';

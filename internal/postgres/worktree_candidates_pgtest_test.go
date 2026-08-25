@@ -145,7 +145,7 @@ func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 	assert.Equal(t, "fallback", localCandidates[4].EvidenceKind)
 }
 
-func TestPGWorktreeCandidatesIncludeResolvedProjectAliases(t *testing.T) {
+func TestPGWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 	const schema = "agentsview_worktree_candidates_alias_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 	const (
@@ -199,7 +199,9 @@ func TestPGWorktreeCandidatesIncludeResolvedProjectAliases(t *testing.T) {
 
 	assert.Equal(t, localCandidates, pgCandidates)
 	require.Len(t, pgCandidates, 1)
-	assert.Equal(t, 2, pgCandidates[0].ContributingSessions)
+	assert.Equal(t, 1, pgCandidates[0].ContributingSessions)
+	require.Len(t, pgCandidates[0].Examples, 1)
+	assert.Equal(t, "primary-session", pgCandidates[0].Examples[0].SessionID)
 }
 
 func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {

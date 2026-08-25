@@ -776,6 +776,44 @@ CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_match
 CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_project
     ON worktree_project_mappings(machine, project);
 
+-- A user-selected project for one session. This is deliberately independent
+-- of folder rules: temporary working directories often belong to a real
+-- project without being useful future mapping evidence.
+CREATE TABLE IF NOT EXISTS session_project_assignments (
+    session_id TEXT PRIMARY KEY,
+    project    TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_project_assignment_insert
+AFTER INSERT ON sessions
+WHEN EXISTS (
+    SELECT 1 FROM session_project_assignments WHERE session_id = NEW.id
+)
+BEGIN
+    UPDATE sessions
+    SET project = (
+        SELECT project FROM session_project_assignments WHERE session_id = NEW.id
+    )
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_project_assignment_update
+AFTER UPDATE OF project ON sessions
+WHEN EXISTS (
+    SELECT 1
+    FROM session_project_assignments
+    WHERE session_id = NEW.id AND project != NEW.project
+)
+BEGIN
+    UPDATE sessions
+    SET project = (
+        SELECT project FROM session_project_assignments WHERE session_id = NEW.id
+    )
+    WHERE id = NEW.id;
+END;
+
 CREATE TABLE IF NOT EXISTS archive_metadata (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,

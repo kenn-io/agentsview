@@ -27,6 +27,8 @@ func (s *Server) registerSettingsRoutes() {
 		"Preview worktree project reclassification", s.humaPreviewWorktreeReclassification)
 	s.post(group, "/worktree-mappings/reclassify",
 		"Apply worktree project reclassification", s.humaReclassifyWorktreeProject)
+	s.put(group, "/session-project-assignments/{session_id}",
+		"Assign one session to a project", s.humaAssignSessionProject)
 }
 
 type settingsInput struct {
@@ -373,6 +375,30 @@ func (s *Server) humaReclassifyWorktreeProject(
 	return &jsonOutput[worktreeReclassificationApplyResponse]{
 		Body: worktreeReclassificationApplyResponse{Mapping: mapping, Result: result},
 	}, nil
+}
+
+func (s *Server) humaAssignSessionProject(
+	ctx context.Context,
+	in *sessionProjectAssignmentInput,
+) (*jsonOutput[db.SessionProjectAssignment], error) {
+	localDB, _, err := s.localWorktreeMappingHumaDB()
+	if err != nil {
+		return nil, err
+	}
+	assignment, err := s.syncEngineForLocal(localDB).AssignSessionProject(
+		ctx, in.SessionID, in.Body.Project,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, apiError(http.StatusNotFound, "session not found")
+		case strings.Contains(err.Error(), "required"):
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		default:
+			return nil, internalError("assign session project", err)
+		}
+	}
+	return &jsonOutput[db.SessionProjectAssignment]{Body: assignment}, nil
 }
 
 func humaWorktreeReclassificationError(err error) error {

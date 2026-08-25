@@ -474,6 +474,12 @@ func TestOpenReadOnlyCopyHelpersReturnErrReadOnly(t *testing.T) {
 	requireReadOnlyOp(t, "CopyWorktreeProjectMappingsFrom", func() error {
 		return readonly.CopyWorktreeProjectMappingsFrom(srcPath)
 	})
+	requireReadOnlyOp(t, "AssignSessionProject", func() error {
+		_, err := readonly.AssignSessionProject(
+			context.Background(), "session", "project",
+		)
+		return err
+	})
 }
 
 func TestOpenReadOnlyMissingDBFailsWithoutCreatingFiles(t *testing.T) {

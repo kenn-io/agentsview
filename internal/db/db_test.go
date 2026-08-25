@@ -1051,6 +1051,11 @@ func TestCurrentDataVersionPositAssistantProviderIdentity(t *testing.T) {
 		"Posit Assistant provider identity requires re-parsing usage rows")
 }
 
+func TestCurrentDataVersionClaudeRepoLocalWorktrees(t *testing.T) {
+	assert.Equal(t, 96, CurrentDataVersion(),
+		"Claude repository-local worktrees require a sequential backfill")
+}
+
 func TestCurrentDataVersionAntigravityCLICwdAndWorktreeProject(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 96,
 		"Antigravity CLI cwd and worktree project recovery require a sequential backfill")

@@ -1067,7 +1067,11 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, machine, project, cwd, file_path
 		FROM sessions
-		WHERE file_path = ? AND deleted_at IS NULL`,
+		WHERE file_path = ? AND deleted_at IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = sessions.id
+			)`,
 		filePath,
 	)
 	if err != nil {
