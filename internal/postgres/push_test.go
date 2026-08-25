@@ -767,7 +767,8 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 	// session_kind sits between entrypoint and the archive-provenance
 	// parameters; it is empty when the session carries no kind marker.
 	assert.Equal(t, "", state.upsertArgs[63].Value)
-	assert.Equal(t, "[]", state.upsertArgs[67].Value)
+	assert.Equal(t, false, state.upsertArgs[67].Value)
+	assert.Equal(t, "[]", state.upsertArgs[68].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
 	assert.Contains(t, query,

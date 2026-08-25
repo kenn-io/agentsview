@@ -210,6 +210,37 @@ func TestDuckProjectInventoryMatchesSQLite(t *testing.T) {
 		"misc has no rule targeting it by raw label, only gamma is resolved to")
 }
 
+func TestDuckGovernedCountExcludesAssignedSiblingEvidence(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	sharedPath := t.TempDir() + "/sessions.jsonl"
+	seedInventorySession(t, local, "assigned-reference", "alpha", func(s *db.Session) {
+		s.Machine = duckPushMachine
+		s.Cwd = "/w/a/run"
+		s.FilePath = &sharedPath
+	})
+	seedInventorySession(t, local, "empty-cwd", "misc", func(s *db.Session) {
+		s.Machine = duckPushMachine
+		s.FilePath = &sharedPath
+	})
+	_, err := local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+		Machine: duckPushMachine, PathPrefix: "/w/a",
+		Project: "alpha", Enabled: true,
+	})
+	require.NoError(t, err)
+	_, err = local.AssignSessionProject(ctx, "assigned-reference", "alpha")
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	pushDataReadMirror(t, ctx, syncer)
+	localInv, err := local.GetProjectInventory(ctx)
+	require.NoError(t, err)
+	duckInv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, localInv.GovernedSessions)
+	assert.Equal(t, localInv.GovernedSessions, duckInv.GovernedSessions)
+}
+
 func TestDuckProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

@@ -303,6 +303,22 @@ describe("ProjectWorkspace", () => {
     await flush();
     await flush();
 
+    api.listSessions.mockResolvedValueOnce({
+      sessions: [
+        {
+          id: "session-automated",
+          project: "wrong-project",
+          cwd: "/srv/worktrees/example/repo",
+          display_name: "Automated review",
+          first_message: "Review the changes",
+          agent: "codex",
+          started_at: "2026-03-09T18:32:00Z",
+          is_automated: true,
+        },
+      ],
+      total: 1,
+    });
+
     await fireEvent.click(screen.getByTitle(m.data_session_assignment_target()));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
     await flush();
@@ -320,6 +336,58 @@ describe("ProjectWorkspace", () => {
       direction: "asc",
       roles: "user,assistant",
     });
+  });
+
+  it("disables carousel navigation while an assignment is pending", async () => {
+    const assignment = deferred<{
+      session_id: string;
+      project: string;
+      created_at: string;
+      updated_at: string;
+    }>();
+    api.assignSession.mockReturnValueOnce(assignment.promise);
+    render();
+    await flush();
+    await flush();
+
+    await fireEvent.click(screen.getByTitle(m.data_session_assignment_target()));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await flush();
+    await fireEvent.click(screen.getByRole("button", { name: m.data_session_assignment_save() }));
+    await flush();
+
+    expect(
+      screen.getByRole("button", { name: m.data_reclassify_session_preview_previous() })
+        .getAttribute("disabled"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: m.data_reclassify_session_preview_next() })
+        .getAttribute("disabled"),
+    ).not.toBeNull();
+
+    assignment.resolve({
+      session_id: "session-1",
+      project: "target-project",
+      created_at: "2026-03-09T18:35:00Z",
+      updated_at: "2026-03-09T18:35:00Z",
+    });
+    await flush();
+  });
+
+  it("reports when an assignment is saved but inventory refresh fails", async () => {
+    render({ onRefresh: vi.fn().mockResolvedValue(false) });
+    await flush();
+    await flush();
+
+    await fireEvent.click(screen.getByTitle(m.data_session_assignment_target()));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await flush();
+    await fireEvent.click(screen.getByRole("button", { name: m.data_session_assignment_save() }));
+    await flush();
+
+    expect(api.assignSession).toHaveBeenCalledTimes(1);
+    expect(api.listSessions).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(m.data_session_assignment_refresh_failed())).toBeTruthy();
   });
 
   it("lets users pin a session to its currently inferred project", async () => {
