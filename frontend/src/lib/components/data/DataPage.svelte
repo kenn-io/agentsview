@@ -111,7 +111,7 @@
   }
 
   async function refreshBatchCorrection(target: string): Promise<boolean> {
-    const refreshed = await data.load({ background: true });
+    const refreshed = await data.loadAfterMutation();
     if (!refreshed) return false;
     const rows = (data.inventory?.projects ?? []) as DbProjectInventoryRow[];
     const targetRow = rows.find((row) => row.label === target);
