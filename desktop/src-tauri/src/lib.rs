@@ -445,7 +445,22 @@ fn deep_link_session_route(url: &Url) -> Option<String> {
     if id.is_empty() || id == "." || id == ".." || id.contains('\\') {
         return None;
     }
-    Some(format!("/sessions/{id}"))
+    let route = format!("/sessions/{id}");
+    Some(match deep_link_msg_param(url) {
+        Some(msg) => format!("{route}?msg={msg}"),
+        None => route,
+    })
+}
+
+// Only ?msg=<ordinal|last> is forwarded; the frontend scrolls to that
+// message. Anything else in the query is dropped.
+fn deep_link_msg_param(url: &Url) -> Option<String> {
+    let value = url
+        .query_pairs()
+        .find(|(key, _)| key == "msg")
+        .map(|(_, value)| value.into_owned())?;
+    let valid = value == "last" || (!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()));
+    valid.then_some(value)
 }
 
 trait MainWindowVisibility {
@@ -1651,7 +1666,8 @@ fn desktop_redirect_url(port: u16) -> String {
 }
 
 fn desktop_route_url(port: u16, route: &str) -> String {
-    format!("http://{HOST}:{port}{route}?desktop=1")
+    let sep = if route.contains('?') { '&' } else { '?' };
+    format!("http://{HOST}:{port}{route}{sep}desktop=1")
 }
 
 /// Recover a dead or stale WebView on window focus.
@@ -4980,6 +4996,10 @@ agentsview running at http://127.0.0.1:18082
             desktop_route_url(18080, "/sessions/abc-123"),
             "http://127.0.0.1:18080/sessions/abc-123?desktop=1"
         );
+        assert_eq!(
+            desktop_route_url(18080, "/sessions/abc-123?msg=last"),
+            "http://127.0.0.1:18080/sessions/abc-123?msg=last&desktop=1"
+        );
     }
 
     #[test]
@@ -4992,6 +5012,14 @@ agentsview running at http://127.0.0.1:18082
                 "agentsview://sessions/cursor:0198c6a1-b125-7c60-8d3f-2f9e4a7b1c2d",
                 "/sessions/cursor:0198c6a1-b125-7c60-8d3f-2f9e4a7b1c2d",
             ),
+            ("agentsview://sessions/abc?msg=42", "/sessions/abc?msg=42"),
+            (
+                "agentsview://sessions/abc?msg=last",
+                "/sessions/abc?msg=last",
+            ),
+            ("agentsview://sessions/abc?msg=", "/sessions/abc"),
+            ("agentsview://sessions/abc?msg=evil&x=1", "/sessions/abc"),
+            ("agentsview://sessions/abc?other=1", "/sessions/abc"),
         ];
         for (input, want) in cases {
             let url = Url::parse(input).expect(input);

@@ -42,6 +42,9 @@ open a specific session in the app:
 open "agentsview://sessions/<session-id>"
 ```
 
+An optional `?msg=<ordinal>` or `?msg=last` query scrolls to that message in the
+session; other query parameters are dropped.
+
 If the app is already running, the existing window is focused and navigated to
 the session. If it is not running, the app starts, waits for the backend, and
 then opens the session. URLs outside `agentsview://sessions/<session-id>` are
