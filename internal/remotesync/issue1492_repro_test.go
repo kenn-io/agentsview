@@ -375,11 +375,12 @@ func TestIssue1492CuratedEditorRootsAccumulateFiles(t *testing.T) {
 }
 
 func TestArchiveRequestPreservesEmptyFiles(t *testing.T) {
+	targetSet := TargetSet{
+		Dirs:  map[parser.AgentType][]string{parser.AgentCursor: {"/root"}},
+		Files: map[parser.AgentType][]string{parser.AgentCursor: {}},
+	}
 	request := ArchiveRequest{
-		TargetSet: TargetSet{
-			Dirs:  map[parser.AgentType][]string{parser.AgentCursor: {"/root"}},
-			Files: map[parser.AgentType][]string{parser.AgentCursor: {}},
-		},
+		TargetSet:  targetSet,
 		DeltaFiles: []string{},
 	}
 	data, err := json.Marshal(request)
