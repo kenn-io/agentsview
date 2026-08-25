@@ -571,6 +571,21 @@
     });
   });
 
+  // Recover a not-found session that syncs in later: when the routed
+  // row appears in a refreshed sessions list while the not-found
+  // state is showing, re-run the selection load path so messages and
+  // the session watch restart. retryActiveSession clears the flag,
+  // so this cannot loop.
+  $effect(() => {
+    const notFound = sessions.activeSessionNotFound;
+    const appeared = sessions.activeSession !== undefined;
+    untrack(() => {
+      if (notFound && appeared) {
+        void sessions.retryActiveSession();
+      }
+    });
+  });
+
   // Deep-link: clear the selection when the URL drops its session.
   // Tracks the route alongside the session id: entering bare /sessions
   // from a non-session page leaves the id null both sides, so a

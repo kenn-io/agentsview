@@ -1,9 +1,11 @@
+import { tick } from "svelte";
 import type { DataChangedEvent } from "../api/client.js";
 import {
   MetadataService,
   SessionsService,
 } from "../api/generated/index";
 import {
+  ApiError,
   callGenerated,
   configureGeneratedClient,
   isAbortError,
@@ -296,6 +298,8 @@ class SessionsStore {
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
   activeSessionId: string | null = $state(null);
+  // Lets the message pane explain a 404 instead of rendering blank.
+  activeSessionNotFound: boolean = $state(false);
   activeSessionUsageVersion: number = $state(0);
   childSessions: Map<string, Session> = $state(new Map());
   nextCursor: string | null = $state(null);
@@ -880,6 +884,7 @@ class SessionsStore {
     this.refreshRead.cancel();
     this.childSessionsRead.cancel();
     this.activeSessionId = id;
+    this.activeSessionNotFound = false;
     this.activeSessionUsageVersion = 0;
     this.refreshVersion++;
     this.childSessionsVersion++;
@@ -928,9 +933,17 @@ class SessionsStore {
           } else {
             this.sessions = [...this.sessions, session];
           }
+          this.activeSessionNotFound = false;
         }
-      } catch {
-        // Session not found — selection stands without metadata
+      } catch (err) {
+        // Selection stands without metadata; flag a not-found
+        // response so the message pane can say so.
+        if (
+          err instanceof ApiError && err.status === 404 &&
+          this.activeSessionId === id && this.navigateRead.isCurrent(signal)
+        ) {
+          this.activeSessionNotFound = true;
+        }
       } finally {
         this.navigateRead.finish(signal);
         if (this.navigateInFlight === entry) {
@@ -940,6 +953,20 @@ class SessionsStore {
     })();
     this.navigateInFlight = entry;
     return entry.promise;
+  }
+
+  /**
+   * Re-run the full selection load path for the active session after
+   * a not-found. Deselecting and reselecting across a tick restarts
+   * the per-session effects (messages, watch, pins, timing) that key
+   * on the active session id, which a same-id refetch would not.
+   */
+  async retryActiveSession() {
+    const id = this.activeSessionId;
+    if (!id) return;
+    this.setActiveSession(null);
+    await tick();
+    await this.navigateToSession(id);
   }
 
   private async hydrateSelectedIndexOnlySession(id: string) {
