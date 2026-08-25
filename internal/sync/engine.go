@@ -5651,6 +5651,13 @@ func (e *Engine) streamReconciliationCandidates(
 					return providers, completedScopes,
 						failedRoots, failures, discoveryErr, ctx.Err()
 				}
+				if agent == parser.AgentKiro {
+					kiroErr := fmt.Errorf(
+						"%s provider streaming discovery: %w", agent, err,
+					)
+					return providers, completedScopes, failedRoots, failures,
+						errors.Join(discoveryErr, kiroErr), kiroErr
+				}
 				log.Printf("%s provider streaming discovery: %v", agent, err)
 				failures++
 				failedRoots = append(failedRoots, groupRetryRoots...)

@@ -393,7 +393,11 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		if dbPath := kiroSQLiteDBPath(root); dbPath != "" {
+		dbPath, dbPathErr := kiroSQLiteDBPathChecked(root)
+		if dbPathErr != nil {
+			return nil, nil, dbPathErr
+		}
+		if dbPath != "" {
 			dbSource := s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB)
 			metas, err := ListKiroSQLiteSessionMeta(dbPath)
 			if err != nil {
@@ -476,12 +480,42 @@ func (s kiroSourceSet) setSourceMTime(source *SourceRef) {
 }
 
 func (s kiroSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		dbPath, err := kiroSQLiteDBPathChecked(root)
+		if err != nil {
+			return err
+		}
+		if dbPath == "" {
+			continue
+		}
+		store, err := OpenKiroSQLiteStore(dbPath)
+		if err != nil {
+			return err
+		}
+		listErr := store.ForEachSessionMeta(ctx, func(KiroSQLiteSessionMeta) error {
+			return nil
+		})
+		closeErr := store.Close()
+		if listErr != nil {
+			return listErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
 	var firstErr error
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if dbPath := kiroSQLiteDBPath(root); dbPath != "" {
+		dbPath, dbPathErr := kiroSQLiteDBPathChecked(root)
+		if dbPathErr != nil {
+			return dbPathErr
+		}
+		if dbPath != "" {
 			store, err := OpenKiroSQLiteStore(dbPath)
 			if err != nil {
 				if firstErr == nil {
@@ -512,10 +546,16 @@ func (s kiroSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) e
 			}
 		}
 		if err := s.discoverLegacyJSONLEach(ctx, root, yield); err != nil {
-			return err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		if err := s.discoverCurrentJSONLEach(ctx, root, yield); err != nil {
-			return err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 	}
 	return firstErr
@@ -738,7 +778,11 @@ func (s kiroSourceSet) FindSource(
 	var candidates []SourceRef
 	candidates = append(candidates, hinted...)
 	for _, root := range s.roots {
-		if dbPath := kiroSQLiteDBPath(root); dbPath != "" {
+		dbPath, dbPathErr := kiroSQLiteDBPathChecked(root)
+		if dbPathErr != nil {
+			return SourceRef{}, false, dbPathErr
+		}
+		if dbPath != "" {
 			exists, err := KiroSQLiteSessionExistsWithError(dbPath, req.RawSessionID)
 			if err != nil {
 				return SourceRef{}, false, fmt.Errorf(

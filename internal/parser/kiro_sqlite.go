@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -68,26 +69,37 @@ func (s *KiroSQLiteStore) Close() error {
 // kiroSQLiteDBPath returns the current-store Kiro SQLite DB when the
 // configured root contains one.
 func kiroSQLiteDBPath(dir string) string {
+	path, _ := kiroSQLiteDBPathChecked(dir)
+	return path
+}
+
+func kiroSQLiteDBPathChecked(dir string) (string, error) {
 	if dir == "" {
-		return ""
+		return "", nil
 	}
 	path := filepath.Join(dir, kiroSQLiteDBName)
 	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return ""
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("stat Kiro SQLite DB %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return "", nil
 	}
 	resolvedDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	resolvedPath, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	if _, ok := relUnder(resolvedDir, resolvedPath); !ok {
-		return ""
+		return "", nil
 	}
-	return path
+	return path, nil
 }
 
 // KiroSQLiteVirtualPath gives each conversation inside the shared
@@ -118,14 +130,19 @@ func KiroSQLiteSessionExistsWithError(dbPath, sessionID string) (bool, error) {
 		return false, err
 	}
 	defer store.Close()
-	return store.SessionExists(sessionID), nil
+	return store.sessionExists(sessionID)
 }
 
 // SessionExists reports whether the current Kiro DB has at least one
 // row for sessionID.
 func (s *KiroSQLiteStore) SessionExists(sessionID string) bool {
+	exists, _ := s.sessionExists(sessionID)
+	return exists
+}
+
+func (s *KiroSQLiteStore) sessionExists(sessionID string) (bool, error) {
 	if s == nil || s.db == nil || sessionID == "" {
-		return false
+		return false, nil
 	}
 	var found int
 	err := s.db.QueryRow(
@@ -135,7 +152,10 @@ func (s *KiroSQLiteStore) SessionExists(sessionID string) bool {
 		  LIMIT 1`,
 		sessionID,
 	).Scan(&found)
-	return err == nil
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // ListKiroSQLiteSessionMeta returns one metadata row per logical
