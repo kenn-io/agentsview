@@ -1707,7 +1707,7 @@ func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
 	legacyRoot := t.TempDir()
 	sqliteRoot := t.TempDir()
 	env := setupSingleAgentTestEnvWithDirs(
-		t, parser.AgentKiro, []string{legacyRoot, sqliteRoot},
+		t, parser.AgentKiro, []string{sqliteRoot, legacyRoot},
 	)
 
 	ks := createKiroSQLiteDB(t, sqliteRoot)

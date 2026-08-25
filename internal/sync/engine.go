@@ -7194,7 +7194,6 @@ func (e *Engine) syncAllLocked(
 		all = dedupeDiscoveredFiles(all)
 	}
 	all = e.dedupeClaudeDiscoveredFiles(all)
-	all = e.filterShadowedLegacyKiroFiles(all)
 	if forceDiscoveredFiles {
 		for i := range all {
 			all[i].ForceParse = true
@@ -7461,8 +7460,14 @@ func (e *Engine) discoverProviderSources(
 		if !ok || factory == nil {
 			continue
 		}
+		providerRoots := filteredRoots
+		if agentType == parser.AgentKiro {
+			// Kiro must arbitrate against out-of-scope roots before scoped
+			// admission, otherwise a lower-ranked in-scope copy is imported.
+			providerRoots = roots
+		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:                              filteredRoots,
+			Roots:                              providerRoots,
 			Machine:                            e.machine,
 			SourceMachines:                     e.sourceMachines[agentType],
 			PathRewriter:                       e.pathRewriter,
@@ -7489,6 +7494,9 @@ func (e *Engine) discoverProviderSources(
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
 			continue
+		}
+		if agentType == parser.AgentKiro {
+			sources = filterProviderSourcesToScope(sources, scope)
 		}
 		forceParseSource := func(string) bool { return false }
 		if agentType == parser.AgentVSCopilot {
@@ -7556,6 +7564,19 @@ func (e *Engine) discoverProviderSources(
 		}
 	}
 	return files, failures
+}
+
+func filterProviderSourcesToScope(
+	sources []parser.SourceRef,
+	scope *rootSyncScope,
+) []parser.SourceRef {
+	filtered := sources[:0]
+	for _, source := range sources {
+		if scope.includes(source.ConfiguredRoot) {
+			filtered = append(filtered, source)
+		}
+	}
+	return filtered
 }
 
 func providerSourcePathSet(sources []parser.SourceRef) map[string]struct{} {
@@ -18183,21 +18204,6 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 		}
 		return ""
 	}
-	if def.Type == parser.AgentKiro {
-		for _, dir := range e.agentDirs[parser.AgentKiro] {
-			dbPath := kiroSQLiteDBPath(dir)
-			if dbPath == "" ||
-				!parser.KiroSQLiteSessionExists(
-					dbPath, rawSessionID,
-				) {
-				continue
-			}
-			return parser.KiroSQLiteVirtualPath(
-				dbPath, rawSessionID,
-			)
-		}
-	}
-
 	bareID := strings.TrimPrefix(rawID, def.IDPrefix)
 	storedPath := e.db.GetSessionFilePath(sessionID)
 
@@ -19299,58 +19305,6 @@ func (e *Engine) applyWorktreeMappingToSingleSession(
 		)
 	}
 	return mapped.Project, nil
-}
-
-// filterShadowedLegacyKiroFiles drops discovered legacy Kiro JSONL sources
-// whose logical session ID already exists in a current-store SQLite database
-// under any configured Kiro root. The Kiro provider performs the same
-// shadowing during its own Discover, but only across the roots it is
-// configured with; a scoped sync (e.g. SyncRootsSince over a single root)
-// configures the provider with that scope only, so the engine reapplies the
-// cross-root shadow here using every configured Kiro root. This keeps a legacy
-// file from being imported when its session lives in the SQLite store of a
-// different, out-of-scope root.
-func (e *Engine) filterShadowedLegacyKiroFiles(
-	files []parser.DiscoveredFile,
-) []parser.DiscoveredFile {
-	if !hasLegacyKiroCandidates(files) {
-		return files
-	}
-
-	currentIDs := make(map[string]struct{})
-	for _, dir := range e.agentDirs[parser.AgentKiro] {
-		for id := range parser.KiroSQLiteSessionIDs(dir) {
-			currentIDs[id] = struct{}{}
-		}
-	}
-	if len(currentIDs) == 0 {
-		return files
-	}
-
-	out := files[:0]
-	for _, file := range files {
-		if file.Agent != parser.AgentKiro ||
-			filepath.Base(file.Path) == kiroSQLiteDBName {
-			out = append(out, file)
-			continue
-		}
-		legacyID := parser.KiroSessionIDFromPath(file.Path)
-		if _, shadowed := currentIDs[legacyID]; shadowed {
-			continue
-		}
-		out = append(out, file)
-	}
-	return out
-}
-
-func hasLegacyKiroCandidates(files []parser.DiscoveredFile) bool {
-	for _, file := range files {
-		if file.Agent == parser.AgentKiro &&
-			filepath.Base(file.Path) != kiroSQLiteDBName {
-			return true
-		}
-	}
-	return false
 }
 
 // kiroSQLiteDBName is the filename of the current-store Kiro SQLite DB.

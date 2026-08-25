@@ -86,26 +86,7 @@ func (p *kiroProvider) Fingerprint(
 func (p *kiroProvider) ReconciliationSourceRank(
 	source SourceRef,
 ) ReconciliationSourceRank {
-	src, ok := p.sources.sourceFromRef(source)
-	if !ok {
-		return ReconciliationSourceRank{}
-	}
-	class := int64(0)
-	switch src.Kind {
-	case kiroSourceLegacyJSONL:
-		class = 1
-	case kiroSourceCurrentJSONL:
-		class = 2
-	case kiroSourceSQLiteSession:
-		class = 3
-	}
-	recency := source.DiscoveryMTimeNS
-	if recency == 0 && src.Path != "" {
-		if info, err := os.Stat(src.Path); err == nil {
-			recency = info.ModTime().UnixNano()
-		}
-	}
-	return ReconciliationSourceRank{Class: class, Recency: recency}
+	return p.sources.sourceRank(source)
 }
 
 func (p *kiroProvider) PersistentArchiveSource(
@@ -205,6 +186,11 @@ func (p *kiroProvider) parseSQLiteDB(
 	results := make([]ParseResultOutcome, 0, len(metas))
 	var sourceErrs []SourceError
 	for _, meta := range metas {
+		if src.SessionIDsSet {
+			if _, ok := src.SessionIDs[meta.SessionID]; !ok {
+				continue
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return ParseOutcome{}, err
 		}
@@ -303,12 +289,6 @@ func (p *kiroProvider) parseLegacyJSONL(
 	machine string,
 	fingerprint SourceFingerprint,
 ) (ParseOutcome, error) {
-	if p.sources.legacyPathShadowed(src.Path) {
-		return ParseOutcome{
-			ResultSetComplete: true,
-			SkipReason:        SkipNoSession,
-		}, nil
-	}
 	sess, msgs, err := p.parseLegacySession(src.Path, machine)
 	if err != nil {
 		return ParseOutcome{}, err
@@ -344,11 +324,13 @@ const (
 )
 
 type kiroSource struct {
-	Root      string
-	Path      string
-	DBPath    string
-	SessionID string
-	Kind      kiroSourceKind
+	Root          string
+	Path          string
+	DBPath        string
+	SessionID     string
+	Kind          kiroSourceKind
+	SessionIDs    map[string]struct{}
+	SessionIDsSet bool
 }
 
 type kiroSourceSet struct {
@@ -360,33 +342,95 @@ func newKiroSourceSet(roots []string) kiroSourceSet {
 }
 
 func (s kiroSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	var sources []SourceRef
+	winners, databases, err := s.sourcePlan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]SourceRef, 0, len(winners)+len(databases))
 	seen := make(map[string]struct{})
-	currentIDs := s.currentSessionIDs()
-	for _, root := range s.roots {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	for _, source := range databases {
+		addJSONLSource(source, &sources, seen)
+	}
+	for _, source := range winners {
+		if src, ok := s.sourceFromRef(source); ok && src.Kind == kiroSourceSQLiteSession {
+			continue
 		}
-		if dbPath := kiroSQLiteDBPath(root); dbPath != "" {
-			addJSONLSource(s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB), &sources, seen)
-		}
-		for _, file := range s.discoverLegacyJSONL(root) {
-			if _, shadowed := currentIDs[KiroSessionIDFromPath(file.Path)]; shadowed {
-				continue
-			}
-			source, ok := s.sourceRef(root, file.Path, false)
-			if ok {
-				addJSONLSource(source, &sources, seen)
-			}
-		}
-		for _, file := range s.discoverCurrentJSONL(root) {
-			if source, ok := s.sourceRef(root, file.Path, false); ok {
-				addJSONLSource(source, &sources, seen)
-			}
-		}
+		addJSONLSource(source, &sources, seen)
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+// sourcePlan is the single Kiro authority used before normal workers are
+// started. Physical SQLite sources carry the member allowlist selected here.
+func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []SourceRef, error) {
+	candidates := make(map[string][]SourceRef)
+	databases := make([]SourceRef, 0)
+	for _, root := range s.roots {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if dbPath := kiroSQLiteDBPath(root); dbPath != "" {
+			dbSource := s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB)
+			metas, err := ListKiroSQLiteSessionMeta(dbPath)
+			if err == nil {
+				for _, meta := range metas {
+					member := s.newSourceRef(root, meta.VirtualPath, dbPath, meta.SessionID, kiroSourceSQLiteSession)
+					member.DiscoveryMTimeNS = meta.FileMtime
+					candidates[meta.SessionID] = append(candidates[meta.SessionID], member)
+				}
+			}
+			databases = append(databases, dbSource)
+		}
+		for _, file := range s.discoverCurrentJSONL(root) {
+			if source, ok := s.sourceRef(root, file.Path, false); ok {
+				if _, id, ok := kiroCurrentPathUnderRoot(root, file.Path); ok {
+					s.setSourceMTime(&source)
+					candidates[id] = append(candidates[id], source)
+				}
+			}
+		}
+		for _, file := range s.discoverLegacyJSONL(root) {
+			id := KiroSessionIDFromPath(file.Path)
+			if id == "" {
+				continue
+			}
+			if source, ok := s.sourceRef(root, file.Path, false); ok {
+				s.setSourceMTime(&source)
+				candidates[id] = append(candidates[id], source)
+			}
+		}
+	}
+	winners := make(map[string]SourceRef, len(candidates))
+	for id, list := range candidates {
+		if winner, ok := s.bestSource(list); ok {
+			winners[id] = winner
+		}
+	}
+	for i := range databases {
+		src, _ := s.sourceFromRef(databases[i])
+		src.SessionIDs = make(map[string]struct{})
+		src.SessionIDsSet = true
+		for id, winner := range winners {
+			winnerSrc, ok := s.sourceFromRef(winner)
+			if ok && winnerSrc.Kind == kiroSourceSQLiteSession && samePath(winnerSrc.DBPath, src.DBPath) {
+				src.SessionIDs[id] = struct{}{}
+			}
+		}
+		databases[i].Opaque = src
+	}
+	return winners, databases, nil
+}
+
+func (s kiroSourceSet) setSourceMTime(source *SourceRef) {
+	if source.DiscoveryMTimeNS != 0 {
+		return
+	}
+	if src, ok := s.sourceFromRef(*source); ok {
+		if info, err := os.Stat(src.Path); err == nil {
+			source.DiscoveryMTimeNS = info.ModTime().UnixNano()
+		}
+	}
 }
 
 func (s kiroSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
@@ -453,21 +497,30 @@ func (s kiroSourceSet) SourcesForChangedPath(
 		if !ok {
 			continue
 		}
-		sources := []SourceRef{source}
-		if current, ok := s.sourceFromRef(source); ok &&
-			current.Kind == kiroSourceCurrentJSONL {
-			if dbPath := kiroSQLiteDBPath(root); dbPath != "" &&
-				KiroSQLiteSessionExists(dbPath, current.SessionID) {
-				sources = append(sources, s.newSourceRef(
-					root, KiroSQLiteVirtualPath(dbPath, current.SessionID), dbPath,
-					current.SessionID, kiroSourceSQLiteSession,
-				))
+		winners, databases, err := s.sourcePlan(ctx)
+		if err != nil {
+			return nil, err
+		}
+		current, _ := s.sourceFromRef(source)
+		sources := make([]SourceRef, 0, 2)
+		if current.Kind == kiroSourceSQLiteDB {
+			for _, database := range databases {
+				db, ok := s.sourceFromRef(database)
+				if ok && samePath(db.DBPath, current.DBPath) {
+					sources = append(sources, database)
+					break
+				}
+			}
+		} else {
+			id := current.SessionID
+			if id == "" {
+				id = KiroSessionIDFromPath(current.Path)
+			}
+			if winner, ok := winners[id]; ok {
+				sources = append(sources, winner)
 			}
 		}
-		sources = append(
-			sources,
-			s.changedPathTombstones(root, source, req.StoredSourcePaths)...,
-		)
+		sources = append(sources, s.changedPathTombstones(root, source, req.StoredSourcePaths, winners)...)
 		return sources, nil
 	}
 	return nil, nil
@@ -513,6 +566,7 @@ func (s kiroSourceSet) changedPathTombstones(
 	root string,
 	changed SourceRef,
 	storedPaths []string,
+	winners map[string]SourceRef,
 ) []SourceRef {
 	src, ok := s.sourceFromRef(changed)
 	if !ok || src.Kind != kiroSourceSQLiteDB || !IsRegularFile(src.DBPath) {
@@ -533,6 +587,13 @@ func (s kiroSourceSet) changedPathTombstones(
 			continue
 		}
 		if KiroSQLiteSessionExists(member.DBPath, member.SessionID) {
+			continue
+		}
+		if winner, ok := winners[member.SessionID]; ok {
+			if winnerSrc, winnerOK := s.sourceFromRef(winner); winnerOK &&
+				!(winnerSrc.Kind == kiroSourceSQLiteSession && samePath(winnerSrc.DBPath, member.DBPath)) {
+				tombstones = append(tombstones, winner)
+			}
 			continue
 		}
 		if _, dup := seen[member.Path]; dup {
@@ -798,40 +859,6 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 	return SourceRef{}, false
 }
 
-func (s kiroSourceSet) currentSessionIDs() map[string]struct{} {
-	ids := make(map[string]struct{})
-	for _, root := range s.roots {
-		for id := range KiroSQLiteSessionIDs(root) {
-			ids[id] = struct{}{}
-		}
-		for _, file := range s.discoverCurrentJSONL(root) {
-			if _, id, ok := kiroCurrentPathUnderRoot(root, file.Path); ok {
-				ids[id] = struct{}{}
-			}
-		}
-	}
-	return ids
-}
-
-func (s kiroSourceSet) legacyPathShadowed(path string) bool {
-	legacyID := KiroSessionIDFromPath(path)
-	if legacyID == "" {
-		return false
-	}
-	for _, root := range s.roots {
-		dbPath := kiroSQLiteDBPath(root)
-		if dbPath != "" && KiroSQLiteSessionExists(dbPath, legacyID) {
-			return true
-		}
-		for _, file := range s.discoverCurrentJSONL(root) {
-			if _, id, ok := kiroCurrentPathUnderRoot(root, file.Path); ok && id == legacyID {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (s kiroSourceSet) newSourceRef(
 	root, path, dbPath, sessionID string,
 	kind kiroSourceKind,
@@ -884,9 +911,10 @@ func (s kiroSourceSet) bestSource(sources []SourceRef) (SourceRef, bool) {
 	for _, source := range sources[1:] {
 		rank := s.sourceRank(source)
 		bestRoot, sourceRoot := s.rootIndex(best.ConfiguredRoot), s.rootIndex(source.ConfiguredRoot)
-		if rank.Class > bestRank.Class ||
-			(rank.Class == bestRank.Class && (sourceRoot < bestRoot ||
-				(sourceRoot == bestRoot && rank.Recency > bestRank.Recency))) {
+		if sourceRoot < bestRoot ||
+			(sourceRoot == bestRoot && (rank.Class > bestRank.Class ||
+				(rank.Class == bestRank.Class && (rank.Recency > bestRank.Recency ||
+					(rank.Recency == bestRank.Recency && s.sourcePath(source) < s.sourcePath(best)))))) {
 			best, bestRank = source, rank
 		}
 	}
@@ -907,15 +935,7 @@ func (s kiroSourceSet) sourceRank(source SourceRef) ReconciliationSourceRank {
 	if !ok {
 		return ReconciliationSourceRank{}
 	}
-	class := int64(0)
-	switch src.Kind {
-	case kiroSourceLegacyJSONL:
-		class = 1
-	case kiroSourceCurrentJSONL:
-		class = 2
-	case kiroSourceSQLiteSession:
-		class = 3
-	}
+	class := kiroSourceClass(src.Kind)
 	recency := source.DiscoveryMTimeNS
 	if recency == 0 {
 		if info, err := os.Stat(src.Path); err == nil {
@@ -923,6 +943,42 @@ func (s kiroSourceSet) sourceRank(source SourceRef) ReconciliationSourceRank {
 		}
 	}
 	return ReconciliationSourceRank{Class: class, Recency: recency}
+}
+
+func kiroSourceClass(kind kiroSourceKind) int64 {
+	switch kind {
+	case kiroSourceLegacyJSONL:
+		return 1
+	case kiroSourceCurrentJSONL:
+		return 2
+	case kiroSourceSQLiteSession:
+		return 3
+	default:
+		return 0
+	}
+}
+
+func (s kiroSourceSet) sourcePath(source SourceRef) string {
+	if src, ok := s.sourceFromRef(source); ok {
+		path := src.Path
+		if path == "" {
+			path = src.DBPath
+		}
+		if canonical, err := filepath.EvalSymlinks(path); err == nil {
+			path = canonical
+		}
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(providerSourcePathForRank(source))
+}
+
+func providerSourcePathForRank(source SourceRef) string {
+	for _, path := range []string{source.DisplayPath, source.FingerprintKey, source.Key} {
+		if path != "" {
+			return path
+		}
+	}
+	return ""
 }
 
 func kiroDBUnderRoot(root, dbPath string, requireRegular bool) bool {
@@ -1051,9 +1107,6 @@ func (s kiroSourceSet) discoverLegacyJSONLEach(ctx context.Context, root string,
 				return nil
 			}
 			path := filepath.Join(dir, entry.Name())
-			if s.legacyPathShadowed(path) {
-				return nil
-			}
 			if source, ok := s.sourceRef(root, path, false); ok {
 				return yield(source)
 			}

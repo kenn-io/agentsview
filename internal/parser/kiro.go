@@ -287,6 +287,7 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 	var messages []ParsedMessage
 	firstMessage := ""
 	ordinal := 0
+	var earliestMessage, latestMessage time.Time
 	for {
 		line, ok := lr.next()
 		if !ok {
@@ -297,6 +298,14 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 		}
 		payload := gjson.Get(line, "payload")
 		timestamp := kiroCurrentMessageTimestamp(gjson.Get(line, "timestamp"))
+		if !timestamp.IsZero() {
+			if earliestMessage.IsZero() || timestamp.Before(earliestMessage) {
+				earliestMessage = timestamp
+			}
+			if latestMessage.IsZero() || timestamp.After(latestMessage) {
+				latestMessage = timestamp
+			}
+		}
 		typ := payload.Get("type").Str
 		content := strings.TrimSpace(payload.Get("content").Str)
 		switch typ {
@@ -354,10 +363,16 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 	}
 	startedAt, endedAt := parseTimestamp(meta.CreatedAt), parseTimestamp(meta.LastModifiedAt)
 	if startedAt.IsZero() {
-		startedAt = info.ModTime()
+		startedAt = earliestMessage
+		if startedAt.IsZero() {
+			startedAt = info.ModTime()
+		}
 	}
 	if endedAt.IsZero() {
-		endedAt = info.ModTime()
+		endedAt = latestMessage
+		if endedAt.IsZero() {
+			endedAt = info.ModTime()
+		}
 	}
 	userCount := 0
 	for _, msg := range messages {

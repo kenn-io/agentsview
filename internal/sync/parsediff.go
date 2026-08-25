@@ -84,7 +84,6 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		files = append(files, providerFiles...)
 	}
 	files = dedupeDiscoveredFiles(files)
-	files = e.filterShadowedLegacyKiroFiles(files)
 
 	// Newest first by source mtime (composite stats for virtual
 	// paths), tie-broken by path so the --limit sample is stable.

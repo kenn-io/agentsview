@@ -170,8 +170,8 @@ func TestKiroProviderSkipsShadowedLegacySource(t *testing.T) {
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: source})
 	require.NoError(t, err)
 	assert.True(t, outcome.ResultSetComplete)
-	assert.Equal(t, SkipNoSession, outcome.SkipReason)
-	assert.Empty(t, outcome.Results)
+	assert.Len(t, outcome.Results, 1)
+	assert.Equal(t, "kiro:shadowed-session", outcome.Results[0].Result.Session.ID)
 
 	source, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
 		FullSessionID:  "host~kiro:shadowed-session",
@@ -216,8 +216,8 @@ func TestKiroProviderShadowsLegacyAcrossAllRoots(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, outcome.ResultSetComplete)
-	assert.Equal(t, SkipNoSession, outcome.SkipReason)
-	assert.Empty(t, outcome.Results)
+	assert.Len(t, outcome.Results, 1)
+	assert.Equal(t, "kiro:shared-session", outcome.Results[0].Result.Session.ID)
 }
 
 func TestKiroProviderFingerprintsSQLiteAndLegacySources(t *testing.T) {
@@ -574,10 +574,11 @@ func TestKiroProviderLogicalIdentityAndRankUnifyLegacyAndCurrent(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	require.Len(t, streamed, 1)
+	require.Len(t, streamed, 2)
 	assert.Equal(t, rawID, streamed[0].Key)
 	ranker := provider.(ReconciliationSourceRanker)
-	assert.Equal(t, int64(2), ranker.ReconciliationSourceRank(streamed[0]).Class)
+	assert.Equal(t, int64(1), ranker.ReconciliationSourceRank(streamed[0]).Class)
+	assert.Equal(t, int64(2), ranker.ReconciliationSourceRank(streamed[1]).Class)
 	legacySource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{StoredFilePath: legacy})
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -662,10 +663,9 @@ func TestKiroProviderChangedCurrentEventIncludesSQLiteDuplicate(t *testing.T) {
 	for i, source := range changed {
 		got[i] = source.DisplayPath
 	}
-	assert.ElementsMatch(t, []string{current, KiroSQLiteVirtualPath(dbPath, rawID)}, got)
+	assert.Equal(t, []string{KiroSQLiteVirtualPath(dbPath, rawID)}, got)
 	assert.Equal(t, int64(3), provider.(ReconciliationSourceRanker).
-		ReconciliationSourceRank(changed[1]).Class,
-		"SQLite remains the higher-ranked duplicate when a current transcript changes")
+		ReconciliationSourceRank(changed[0]).Class)
 }
 
 func TestKiroProviderCurrentSidecarRequiresRegularContainedFile(t *testing.T) {
