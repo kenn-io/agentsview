@@ -92,7 +92,10 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				root, targetFiles := resolveEditorTarget(def.Type, dir)
 				if root != "" {
 					dirs[def.Type] = append(dirs[def.Type], root)
-					files[def.Type] = append([]string{}, targetFiles...)
+					if _, exists := files[def.Type]; !exists {
+						files[def.Type] = []string{}
+					}
+					files[def.Type] = append(files[def.Type], targetFiles...)
 				}
 				continue
 			}
@@ -198,10 +201,6 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 		return t
 	}
 	forbidden := newForbiddenRootMatcher(t.ForbiddenRoots)
-	fileScoped := make(map[parser.AgentType]bool, len(t.Files))
-	for agent := range t.Files {
-		fileScoped[agent] = true
-	}
 	for agent, dirs := range t.Dirs {
 		kept := withoutForbidden(dirs, forbidden)
 		if len(kept) == 0 {
@@ -225,10 +224,11 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 	// A file-scoped agent's root is only safe to advertise alongside its
 	// curated file list; if filtering removed either half, drop both so the
 	// agent cannot degrade to a raw directory target.
-	for agent := range fileScoped {
-		_, hasDirs := t.Dirs[agent]
-		_, hasFiles := t.Files[agent]
-		if hasDirs != hasFiles {
+	for agent := range t.Files {
+		if !t.isFileScoped(agent) {
+			continue
+		}
+		if _, hasDirs := t.Dirs[agent]; !hasDirs {
 			delete(t.Dirs, agent)
 			delete(t.Files, agent)
 		}
@@ -667,7 +667,9 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			selectedFile, ok := selectAllowedString(allowedFiles, file)
 			include := true
 			if !ok {
-				selectedFile, include, ok = classifyCuratedFile(allowed, agent, file, files)
+				selectedFile, include, ok = classifyCuratedFile(
+					allowed, forbidden, agent, file, files,
+				)
 				if !ok {
 					return TargetSet{}, false
 				}
@@ -774,7 +776,7 @@ func kiloLegacySessionFileShape(rel string) bool {
 // (settings/mcp_settings.json, checkpoints, caches) unreachable, and
 // the symlink walk rejects components that would escape the root.
 func classifyCuratedFile(
-	allowed TargetSet, agent parser.AgentType, file string,
+	allowed TargetSet, forbidden forbiddenRootMatcher, agent parser.AgentType, file string,
 	candidateFiles ...[]string,
 ) (string, bool, bool) {
 	if !verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
@@ -787,6 +789,9 @@ func classifyCuratedFile(
 		return "", false, false
 	}
 	for _, dir := range allowed.Dirs[agent] {
+		if forbidden.within(dir) {
+			continue
+		}
 		if remotePathDialect(file) != remotePathDialect(dir) {
 			continue
 		}
@@ -804,6 +809,9 @@ func classifyCuratedFile(
 			continue
 		}
 		if symlinkEscapesRoot(dir, file) {
+			return "", false, false
+		}
+		if forbidden.within(file) {
 			return "", false, false
 		}
 		info, err := os.Lstat(file)
@@ -1022,7 +1030,9 @@ func selectAllowedFile(
 		if canonical, ok := selectAllowedString(files, file); ok {
 			return canonical, true, !forbidden.within(canonical)
 		}
-		canonical, include, ok := classifyCuratedFile(allowed, agent, file, files)
+		canonical, include, ok := classifyCuratedFile(
+			allowed, forbidden, agent, file, files,
+		)
 		if ok {
 			return canonical, include, !forbidden.within(file)
 		}
@@ -1039,7 +1049,7 @@ func selectAllowedFile(
 			continue
 		}
 		canonical, include, ok := classifyCuratedFile(
-			allowed, agent, file, candidateFiles,
+			allowed, forbidden, agent, file, candidateFiles,
 		)
 		if ok {
 			return canonical, include, !forbidden.within(file)

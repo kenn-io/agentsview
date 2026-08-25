@@ -182,7 +182,7 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 	dirScoped.ExtraFiles = t.ExtraFiles
 	for agent, files := range t.ProviderExtraFiles {
 		target := &dirScoped
-		if _, fileScopedAgent := t.Files[agent]; fileScopedAgent &&
+		if t.isFileScoped(agent) &&
 			!verbatimFileScopedAgent(agent) && !snapshotFileScopedAgent(agent) {
 			target = &fileScoped
 		}

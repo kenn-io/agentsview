@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json/v2"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -345,6 +346,34 @@ func TestIssue1492EmptyEditorRootsRetainEmptyFileTargets(t *testing.T) {
 	assert.False(t, marker)
 }
 
+func TestIssue1492CuratedEditorRootsAccumulateFiles(t *testing.T) {
+	root := t.TempDir()
+	cursorRoots := []string{filepath.Join(root, "cursor-a"), filepath.Join(root, "cursor-b")}
+	vscodeRoots := []string{filepath.Join(root, "vscode-a"), filepath.Join(root, "vscode-b")}
+	for i, cursorRoot := range cursorRoots {
+		path := filepath.Join(cursorRoot, "project", "agent-transcripts",
+			fmt.Sprintf("01234567-89ab-cdef-0123-456789abcde%d.jsonl", i))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte("cursor"), 0o644))
+	}
+	for i, vscodeRoot := range vscodeRoots {
+		workspaceDir := filepath.Join(vscodeRoot, "workspaceStorage", fmt.Sprintf("hash-%d", i))
+		chat := filepath.Join(workspaceDir, "chatSessions", "01234567-89ab-cdef-0123-456789abcdef.json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(chat), 0o755))
+		require.NoError(t, os.WriteFile(chat, []byte(`{"id":"chat"}`), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(workspaceDir, "workspace.json"), []byte(`{"folder":"/repo"}`), 0o644))
+	}
+	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+		parser.AgentCursor:        cursorRoots,
+		parser.AgentVSCodeCopilot: vscodeRoots,
+	}})
+
+	assert.ElementsMatch(t, cursorRoots, targets.Dirs[parser.AgentCursor])
+	assert.Len(t, targets.Files[parser.AgentCursor], len(cursorRoots))
+	assert.ElementsMatch(t, vscodeRoots, targets.Dirs[parser.AgentVSCodeCopilot])
+	assert.Len(t, targets.Files[parser.AgentVSCodeCopilot], len(vscodeRoots)*2)
+}
+
 func TestArchiveRequestPreservesEmptyFiles(t *testing.T) {
 	request := ArchiveRequest{
 		TargetSet: TargetSet{
@@ -385,6 +414,20 @@ func TestSelectAllowedTargetsRootOnlyCuratedRequestIsEmptyAndNoFilesystemAccess(
 	_, ok := SelectAllowedTargets(allowed, requested)
 	assert.False(t, ok)
 	assert.Empty(t, touched)
+
+	forbiddenAllowed := TargetSet{
+		Dirs:           map[parser.AgentType][]string{parser.AgentCursor: {root}},
+		Files:          map[parser.AgentType][]string{parser.AgentCursor: {}},
+		ForbiddenRoots: []string{root},
+	}
+	stale := TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
+		Files: map[parser.AgentType][]string{parser.AgentCursor: {
+			filepath.Join(root, "project", "agent-transcripts", "01234567-89ab-cdef-0123-456789abcdef.jsonl"),
+		}},
+	}
+	_, ok = SelectAllowedTargets(forbiddenAllowed, stale)
+	assert.False(t, ok, "stale curated files under forbidden roots must stay rejected")
 
 	selected, ok := SelectAllowedTargets(allowed, TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},

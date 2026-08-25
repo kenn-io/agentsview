@@ -218,6 +218,46 @@ func TestIssue1492AuthenticatedVSCodeWorkspacePresentChatMissingEvictsMirror(t *
 	archiveW := post("/api/v1/remote-sync/archive", remotesync.ArchiveRequest{TargetSet: stale})
 	require.Equal(t, http.StatusOK, archiveW.Code, archiveW.Body.String())
 	assert.Empty(t, tarEntries(t, archiveW.Body.Bytes()))
+	require.NoError(t, os.WriteFile(chat, []byte(`{"id":"chat"}`), 0o644))
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	dataDir := t.TempDir()
+	clientDB, err := db.Open(filepath.Join(dataDir, "client.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, clientDB.Close()) })
+	sync := func() {
+		_, err := (remotesync.HTTPSync{
+			Host: "vscode-host", URL: ts.URL, Token: "remote-token",
+			DataDir: dataDir, DB: clientDB,
+		}).Run(t.Context())
+		require.NoError(t, err)
+	}
+	sync()
+	mirrorRoot := remotesync.MirrorDir(dataDir, "vscode-host")
+	mirrorContains := func(name string) bool {
+		found := false
+		err := filepath.Walk(mirrorRoot, func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if !info.IsDir() && filepath.Base(path) == name {
+				found = true
+			}
+			return nil
+		})
+		if err != nil && !os.IsNotExist(err) {
+			require.NoError(t, err)
+		}
+		return found
+	}
+	assert.True(t, mirrorContains(filepath.Base(chat)))
+	assert.True(t, mirrorContains(filepath.Base(workspace)))
+
+	require.NoError(t, os.Remove(chat))
+	sync()
+	assert.False(t, mirrorContains(filepath.Base(chat)))
+	assert.False(t, mirrorContains(filepath.Base(workspace)))
 }
 
 func TestIssue1492AuthenticatedEmptyCuratedCredentialDecoys(t *testing.T) {
