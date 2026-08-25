@@ -4,6 +4,28 @@ export type ArrowInteractionTarget = Exclude<ArrowTarget, "none">;
 let sessionListElement: HTMLElement | null = null;
 let sessionListNavigate: ((delta: number) => void) | null = null;
 
+function isRendered(element: HTMLElement | null): element is HTMLElement {
+  if (!element?.isConnected) return false;
+
+  const view = element.ownerDocument.defaultView;
+  for (
+    let current: HTMLElement | null = element;
+    current;
+    current = current.parentElement
+  ) {
+    const style = view?.getComputedStyle(current);
+    if (
+      current.hidden ||
+      style?.display === "none" ||
+      style?.visibility === "hidden" ||
+      style?.visibility === "collapse"
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function registerSessionList(
   element: HTMLElement,
   navigate: (delta: number) => void,
@@ -19,7 +41,7 @@ export function registerSessionList(
 }
 
 export function navigateRegisteredSessionList(delta: number): boolean {
-  if (!sessionListElement?.isConnected || !sessionListNavigate) return false;
+  if (!isRendered(sessionListElement) || !sessionListNavigate) return false;
   sessionListNavigate(delta);
   return true;
 }
@@ -37,7 +59,7 @@ export function resolveArrowTarget(
     return "none";
   }
 
-  if (!sessionList?.isConnected) return "message";
+  if (!isRendered(sessionList)) return "message";
   if (lastInteraction) return lastInteraction;
   if (sessionList.contains(active)) return "sessionList";
   return "message";

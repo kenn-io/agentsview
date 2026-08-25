@@ -83,4 +83,30 @@ describe("resolveArrowTarget", () => {
     expect(resolveArrowTarget(document.body, null, "sessionList")).toBe("message");
     list.remove();
   });
+
+  it("rejects a registered list only while its sidebar is hidden", () => {
+    const sidebar = document.createElement("aside");
+    const list = document.createElement("div");
+    sidebar.appendChild(list);
+    document.body.appendChild(sidebar);
+    const navigate = vi.fn();
+    const detach = registerSessionList(list, navigate);
+
+    sidebar.style.display = "none";
+    expect(resolveArrowTarget(document.body, list, "sessionList")).toBe(
+      "message",
+    );
+    expect(navigateRegisteredSessionList(1)).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+
+    sidebar.style.display = "flex";
+    expect(resolveArrowTarget(document.body, list, "sessionList")).toBe(
+      "sessionList",
+    );
+    expect(navigateRegisteredSessionList(1)).toBe(true);
+    expect(navigate).toHaveBeenCalledWith(1);
+
+    detach();
+    sidebar.remove();
+  });
 });

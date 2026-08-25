@@ -289,6 +289,21 @@ describe("registerShortcuts", () => {
       expect(navigateMessage).toHaveBeenCalledWith(1);
     });
 
+    it("routes arrows to messages after mobile auto-close hides the sidebar", () => {
+      const navigateSessions = vi.fn();
+      const sidebar = document.createElement("aside");
+      document.body.appendChild(sidebar);
+      const list = mountSessionList(navigateSessions);
+      sidebar.appendChild(list);
+      list.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+
+      sidebar.style.display = "none";
+      fireKey("ArrowDown");
+
+      expect(navigateSessions).not.toHaveBeenCalled();
+      expect(navigateMessage).toHaveBeenCalledWith(1);
+    });
+
     it("clears the list route when registration is unregistered", () => {
       const list = mountSessionList();
       detachSessionList?.();
