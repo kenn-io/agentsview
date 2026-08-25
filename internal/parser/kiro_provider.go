@@ -1131,6 +1131,20 @@ func (s kiroSourceSet) sourceFromRef(source SourceRef) (kiroSource, bool) {
 	return kiroSource{}, false
 }
 
+// IsKiroSQLiteSource reports whether a Kiro source is backed by the current
+// SQLite store rather than one of the JSONL layouts.
+func IsKiroSQLiteSource(source SourceRef) bool {
+	src, ok := (kiroSourceSet{}).sourceFromRef(source)
+	return ok && (src.Kind == kiroSourceSQLiteDB || src.Kind == kiroSourceSQLiteSession)
+}
+
+// KiroSQLiteSourcePresent reports whether the SQLite container for a Kiro
+// source still exists at parse time.
+func KiroSQLiteSourcePresent(source SourceRef) bool {
+	src, ok := (kiroSourceSet{}).sourceFromRef(source)
+	return ok && IsRegularFile(src.DBPath)
+}
+
 func (s kiroSourceSet) sourceRef(
 	root, path string,
 	allowMissing bool,

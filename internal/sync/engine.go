@@ -11167,8 +11167,12 @@ func (e *Engine) processProviderFile(
 		excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
 		preservedSessionIDs := providerPreservedSessionIDs(provider, source)
 		var missingMembers []sourceMissingMember
-		if file.Agent == parser.AgentKiro && outcome.ResultSetComplete &&
-			len(outcome.SourceErrors) == 0 {
+		if file.Agent == parser.AgentKiro &&
+			parser.KiroSQLiteSourcePresent(source) &&
+			outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
+			// Only a present SQLite container owns a complete membership set.
+			// Current and legacy JSONL sources can legitimately parse to no
+			// accepted records during a partial rewrite and must preserve archive rows.
 			missingMembers, err = e.providerSourceMissingSessionOwnershipsForCompleteResultWithPreserved(
 				ctx, provider, source, preservedSessionIDs, nil,
 			)

@@ -1756,6 +1756,29 @@ func TestSyncEngineKiroSameStatMetadataRewriteIsDetected(t *testing.T) {
 	assert.Equal(t, "B", *after.SessionName)
 }
 
+func TestSyncEngineKiroEmptyCurrentRewritePreservesArchive(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
+	rawID := "sess_0123456789abcdef"
+	path := filepath.Join(env.kiroDir, "workspace", rawID, "messages.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(
+		`{"payload":{"type":"user","content":"keep this"}}`+"\n",
+	), 0o644))
+	env.engine.SyncPaths([]string{path})
+
+	require.NoError(t, os.WriteFile(path, []byte(
+		`{"payload":{"type":"session_metadata","content":"not a message"}}`+"\n",
+	), 0o644))
+	future := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(path, future, future))
+	env.engine.SyncPaths([]string{path})
+
+	active, err := env.db.GetSession(context.Background(), "kiro:"+rawID)
+	require.NoError(t, err)
+	assert.NotNil(t, active, "an empty current rewrite must preserve the archive")
+	assertMessageContent(t, env.db, "kiro:"+rawID, "keep this")
+}
+
 func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
 	legacyRoot := t.TempDir()
 	sqliteRoot := t.TempDir()
