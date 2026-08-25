@@ -773,7 +773,7 @@ func TestKiroProviderChangedCurrentEventScansOnlyAffectedSession(t *testing.T) {
 	targetID := "sess_0123456789abcdef"
 	target := filepath.Join(root, "workspace", targetID, "messages.jsonl")
 	writeSourceFile(t, target, `{"payload":{"type":"user","content":"target"}}`+"\n")
-	for i := 0; i < 128; i++ {
+	for i := range 128 {
 		id := fmt.Sprintf("sess_%016x", i)
 		path := filepath.Join(root, "workspace", id, "messages.jsonl")
 		writeSourceFile(t, path, `{"payload":{"type":"user","content":"decoy"}}`+"\n")
