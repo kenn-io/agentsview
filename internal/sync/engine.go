@@ -17279,6 +17279,9 @@ func shouldReplaceFullParseMessages(
 ) bool {
 	return forceReplace || pw.forceReplace || pw.needsRetry || stale ||
 		revivingSourceMissing ||
+		// Kiro full parses rebuild the complete accepted message projection;
+		// append semantics would retain rows removed or rewritten by the source.
+		pw.sess.Agent == parser.AgentKiro ||
 		pw.sess.Agent == parser.AgentCowork ||
 		// Copilot execution start/completion records arrive after the
 		// assistant tool-call message and attach result events to it. An

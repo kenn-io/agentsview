@@ -353,8 +353,12 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 	}
 	meta := kiroCurrentMeta{}
 	if sidecar, ok := kiroCurrentSidecarPath(p.sources.roots, path); ok {
-		if data, err := os.ReadFile(sidecar); err == nil {
-			_ = json.Unmarshal(data, &meta)
+		data, readErr := os.ReadFile(sidecar)
+		if readErr != nil {
+			return nil, nil, fmt.Errorf("read Kiro current metadata %s: %w", sidecar, readErr)
+		}
+		if unmarshalErr := json.Unmarshal(data, &meta); unmarshalErr != nil {
+			return nil, nil, fmt.Errorf("decode Kiro current metadata %s: %w", sidecar, unmarshalErr)
 		}
 	}
 	cwd := ""

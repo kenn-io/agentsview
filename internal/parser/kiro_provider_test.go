@@ -597,6 +597,49 @@ func TestKiroProviderCurrentLayoutLifecycleAndExactLookup(t *testing.T) {
 	assert.Greater(t, fingerprint.Size, int64(len(`{"payload":{"type":"user","content":"hello"}}`)+1))
 }
 
+func TestKiroProviderCurrentFingerprintIncludesSidecarContent(t *testing.T) {
+	root := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	path := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	sidecar := filepath.Join(filepath.Dir(path), "session.json")
+	writeSourceFile(t, path, `{"payload":{"type":"user","content":"hello"}}`+"\n")
+	writeSourceFile(t, sidecar, `{"title":"A"}`)
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	require.NoError(t, err)
+	require.True(t, found)
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(sidecar, []byte(`{"title":"B"}`), 0o644))
+	transcriptInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	earlier := transcriptInfo.ModTime().Add(-time.Minute)
+	require.NoError(t, os.Chtimes(sidecar, earlier, earlier))
+	after, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, after.Hash)
+}
+
+func TestKiroProviderCurrentMetadataDecodeFailureIsRetryable(t *testing.T) {
+	root := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	path := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	sidecar := filepath.Join(filepath.Dir(path), "session.json")
+	writeSourceFile(t, path, `{"payload":{"type":"user","content":"hello"}}`+"\n")
+	writeSourceFile(t, sidecar, "{")
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	require.NoError(t, err)
+	require.True(t, found)
+	_, err = provider.Parse(context.Background(), ParseRequest{Source: source})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode Kiro current metadata")
+}
+
 func TestKiroProviderCurrentBoundsUseAcceptedMessageTimestamps(t *testing.T) {
 	root := t.TempDir()
 	rawID := "sess_0123456789abcdef"

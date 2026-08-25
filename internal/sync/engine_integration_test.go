@@ -1703,6 +1703,26 @@ func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
 	require.Contains(t, *sess.FilePath, "data.sqlite3#overlap-session", "legacy event replaced sqlite-backed session: %+v", sess)
 }
 
+func TestSyncEngineKiroFullParseReplacesMessages(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
+	rawID := "sess_0123456789abcdef"
+	path := filepath.Join(env.kiroDir, "workspace", rawID, "messages.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join([]string{
+		`{"payload":{"type":"user","content":"first"}}`,
+		`{"payload":{"type":"assistant","content":"second"}}`,
+	}, "\n")+"\n"), 0o644))
+	env.engine.SyncPaths([]string{path})
+	assertSessionMessageCount(t, env.db, "kiro:"+rawID, 2)
+	require.NoError(t, os.WriteFile(path, []byte(
+		`{"payload":{"type":"user","content":"rewritten"}}`+"\n",
+	), 0o644))
+	future := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(path, future, future))
+	env.engine.SyncPaths([]string{path})
+	assertSessionMessageCount(t, env.db, "kiro:"+rawID, 1)
+}
+
 func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
 	legacyRoot := t.TempDir()
 	sqliteRoot := t.TempDir()

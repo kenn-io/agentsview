@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -1073,12 +1074,41 @@ func (s kiroSourceSet) Fingerprint(
 			}
 		}
 	}
-	hash, err := hashJSONLSourceFile(src.Path)
+	hash := ""
+	if src.Kind == kiroSourceCurrentJSONL {
+		sidecar := ""
+		if candidate, ok := kiroCurrentSidecarPath(s.roots, src.Path); ok {
+			sidecar = candidate
+		}
+		hash, err = hashKiroCurrentSource(src.Path, sidecar)
+	} else {
+		hash, err = hashJSONLSourceFile(src.Path)
+	}
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
 	fingerprint.Hash = hash
 	return fingerprint, nil
+}
+
+func hashKiroCurrentSource(transcript, sidecar string) (string, error) {
+	transcriptHash, err := hashJSONLSourceFile(transcript)
+	if err != nil {
+		return "", err
+	}
+	sidecarHash := "missing"
+	if sidecar != "" {
+		if _, err := os.Stat(sidecar); err == nil {
+			sidecarHash, err = hashJSONLSourceFile(sidecar)
+			if err != nil {
+				return "", err
+			}
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("stat %s: %w", sidecar, err)
+		}
+	}
+	digest := sha256.Sum256([]byte("kiro-current\x00" + transcriptHash + "\x00" + sidecarHash))
+	return fmt.Sprintf("%x", digest[:]), nil
 }
 
 func (s kiroSourceSet) sourceFromRef(source SourceRef) (kiroSource, bool) {
