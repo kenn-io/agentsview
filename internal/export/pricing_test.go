@@ -9,7 +9,78 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
+
+func TestPricingResolverUsesHistoricalGenAIPricesBeforeFlatFallback(t *testing.T) {
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	genAI := EffectivePricingRow{
+		GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+		GenAISource: PricingRowSourceEmbedded,
+	}
+	flat := EffectivePricingRow{
+		ModelPattern: "gpt-5.6-luna",
+		Rates: ModelRates{
+			InputPerMTok: money.MustParseDollars("9"),
+			Source:       PricingRowSourceFetched,
+		},
+	}
+	resolver := NewPricingResolver([]EffectivePricingRow{flat, genAI})
+
+	beforeModel, before := resolver.ResolveAt(
+		"gpt-5.6-luna", "gpt-5.6-luna",
+		time.Date(2026, 7, 29, 23, 59, 59, 0, time.UTC),
+	)
+	afterModel, after := resolver.ResolveAt(
+		"gpt-5.6-luna", "gpt-5.6-luna",
+		time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
+	)
+
+	require.True(t, before.OK)
+	require.True(t, after.OK)
+	assert.Equal(t, "gpt-5.6-luna", beforeModel)
+	assert.Equal(t, "gpt-5.6-luna", afterModel)
+	assert.Equal(t, money.MustParseDollars("1"), before.Rates.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("6"), before.Rates.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.2"), after.Rates.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("1.2"), after.Rates.OutputPerMTok)
+
+	_, withoutTimestamp := resolver.Resolve("gpt-5.6-luna", "gpt-5.6-luna")
+	require.True(t, withoutTimestamp.OK)
+	assert.Equal(t, money.MustParseDollars("9"), withoutTimestamp.Rates.InputPerMTok,
+		"usage without an event timestamp falls back to the flat catalog")
+
+	resolver.RecordResolvedComputed("gpt-5.6-luna", beforeModel, before)
+	resolver.RecordResolvedComputed("gpt-5.6-luna", afterModel, after)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	resolutions := block.Models["gpt-5.6-luna"].Resolutions
+	require.Len(t, resolutions, 2)
+	assert.ElementsMatch(t, []money.Money{
+		money.MustParseDollars("1"),
+		money.MustParseDollars("0.2"),
+	}, []money.Money{
+		resolutions[0].InputCostPerMTok,
+		resolutions[1].InputCostPerMTok,
+	})
+
+	custom := EffectivePricingRow{
+		ModelPattern: "gpt-5.6-luna",
+		Rates: ModelRates{
+			InputPerMTok: money.MustParseDollars("7"),
+			Source:       PricingRowSourceCustom,
+		},
+	}
+	_, customLookup := NewPricingResolver(
+		[]EffectivePricingRow{flat, genAI, custom},
+	).ResolveAt(
+		"gpt-5.6-luna", "gpt-5.6-luna",
+		time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+	)
+	require.True(t, customLookup.OK)
+	assert.Equal(t, money.MustParseDollars("7"), customLookup.Rates.InputPerMTok)
+	assert.Equal(t, PricingRowSourceCustom, customLookup.Rates.Source)
+}
 
 func TestPricingResolverBuildBlockUsesRecordedLookup(t *testing.T) {
 	updatedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)

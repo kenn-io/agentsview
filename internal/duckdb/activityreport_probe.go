@@ -17,7 +17,10 @@ func (s *Store) ActivityReportSourceProbe(
 		COALESCE((SELECT MAX(data_version) FROM sessions), 0),
 		COALESCE((SELECT MAX(id) FROM messages), 0),
 		COALESCE((SELECT MAX(id) FROM usage_events), 0),
-		COALESCE(CAST((SELECT MAX(updated_at) FROM model_pricing) AS VARCHAR), ''),
+		GREATEST(
+			COALESCE(CAST((SELECT MAX(updated_at) FROM model_pricing) AS VARCHAR), ''),
+			COALESCE(CAST((SELECT MAX(updated_at) FROM genai_pricing) AS VARCHAR), '')
+		),
 		COALESCE(CAST((SELECT value FROM sync_metadata WHERE key = ?) AS BIGINT), 0)`,
 		identityRevisionMetadataKey).Scan(
 		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,

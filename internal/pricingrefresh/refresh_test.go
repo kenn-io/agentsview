@@ -194,6 +194,40 @@ func TestRefreshIfStaleStoresDegradedCatalog(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("1"), stored.InputPerMTok)
 }
 
+func TestRefreshIfStaleStoresGenAIDocumentWhenLiteLLMFails(t *testing.T) {
+	database := testDB(t)
+	raw := []byte(`[
+  {
+    "id":"test-provider",
+    "model_match":{"starts_with":"test-model"},
+    "models":[{
+      "id":"test-model",
+      "match":{"equals":"test-model"},
+      "prices":{"input_mtok":1}
+    }]
+  }
+]`)
+	prices, err := pricing.ParseGenAIPrices(raw)
+	require.NoError(t, err)
+	document, err := pricing.NewGenAIDocument(prices, "upstream-main")
+	require.NoError(t, err)
+	wantErr := errors.New("LiteLLM unavailable")
+
+	refreshed, err := RefreshIfStale(database, func() (pricing.Catalog, error) {
+		return pricing.Catalog{GenAI: &document}, wantErr
+	}, time.Hour, pricingTestNow())
+
+	assert.ErrorIs(t, err, wantErr)
+	assert.True(t, refreshed)
+	stored, readErr := database.GetGenAIPricing(context.Background())
+	require.NoError(t, readErr)
+	require.NotNil(t, stored)
+	assert.Equal(t, document.Version, stored.Version)
+	assert.Equal(t, "upstream-main", stored.SourceRef)
+	assert.Equal(t, db.GenAIPricingSourceFetched, stored.Source)
+	assert.Equal(t, raw, stored.Data)
+}
+
 func TestEnsureFetchFailurePreservesFallback(t *testing.T) {
 	database := testDB(t)
 	wantErr := errors.New("network down")

@@ -174,7 +174,10 @@ func (db *DB) assembleDailyUsageFacts(
 func recordUsageFactsPricing(
 	resolver *export.PricingResolver, group usageFactsGroup,
 ) {
-	_, lookup := resolver.Resolve(group.Model, group.PricedModel)
+	_, lookup := resolver.ResolveAt(
+		group.Model, group.PricedModel,
+		usagePricingTimestamp(group.PricingTimestamp),
+	)
 	for range group.ReportedCount {
 		resolver.RecordResolvedReported(group.Model, group.PricedModel, lookup)
 	}

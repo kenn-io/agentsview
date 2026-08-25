@@ -417,8 +417,10 @@ func setGoldenPricingUpdatedAt(t *testing.T, dbPath string) {
 	defer func() {
 		require.NoError(t, conn.Close(), "close pricing timestamp db")
 	}()
-	_, err = conn.Exec(`UPDATE model_pricing SET updated_at = ?`,
-		goldenPricingUpdatedAt)
+	_, err = conn.Exec(`
+		UPDATE model_pricing SET updated_at = ?;
+		UPDATE genai_pricing SET updated_at = ?`,
+		goldenPricingUpdatedAt, goldenPricingUpdatedAt)
 	require.NoError(t, err, "set deterministic pricing updated_at")
 }
 

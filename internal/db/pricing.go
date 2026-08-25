@@ -528,6 +528,22 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 	); err != nil {
 		return fmt.Errorf("copying model pricing bands: %w", err)
 	}
+	var hasGenAI bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM old_db.sqlite_master
+		WHERE type = 'table' AND name = 'genai_pricing'
+	)`).Scan(&hasGenAI); err != nil {
+		return fmt.Errorf("checking GenAI pricing storage: %w", err)
+	}
+	if hasGenAI {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR REPLACE INTO genai_pricing
+				(singleton, version, source_ref, source, data_json, updated_at)
+			SELECT singleton, version, source_ref, source, data_json, updated_at
+			FROM old_db.genai_pricing`); err != nil {
+			return fmt.Errorf("copying GenAI pricing document: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing model pricing copy: %w", err)
 	}

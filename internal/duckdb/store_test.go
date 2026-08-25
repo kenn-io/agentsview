@@ -3169,7 +3169,7 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-6",
+		ModelPattern:  "authoritative-cost-model",
 		InputPerMTok:  money.MustParseDollars("10"),
 		OutputPerMTok: money.MustParseDollars("20"),
 	}}))
@@ -3188,7 +3188,7 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 		{
 			Session: authoritative,
 			UsageEvents: []db.UsageEvent{{
-				Source: "shutdown", Model: "claude-sonnet-4-6",
+				Source: "shutdown", Model: "authoritative-cost-model",
 				InputTokens: 1000, OutputTokens: 500,
 				Cost: &reportedCost, CostStatus: "exact",
 				CostSource: db.CopilotReportedCostSource,
@@ -3200,7 +3200,7 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 		{
 			Session: estimated,
 			UsageEvents: []db.UsageEvent{{
-				Source: "shutdown", Model: "claude-sonnet-4-6",
+				Source: "shutdown", Model: "authoritative-cost-model",
 				InputTokens: 1000, OutputTokens: 500,
 				OccurredAt: "2026-01-18T01:01:00.000Z",
 				DedupKey:   "estimated",
@@ -3469,7 +3469,7 @@ func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
-		ModelPattern:  "gpt-5.4",
+		ModelPattern:  "reasoning-model",
 		InputPerMTok:  money.MustParseDollars("1"),
 		OutputPerMTok: money.MustParseDollars("2"),
 	}}))
@@ -3477,7 +3477,7 @@ func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 	msg := syncMessage(
 		"duck-message-reasoning", 0, "assistant", "message reasoning",
 		"2026-01-19T00:01:00.000Z")
-	msg.Model = "gpt-5.4"
+	msg.Model = "reasoning-model"
 	msg.TokenUsage = jsontext.Value(
 		`{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":500}`)
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{

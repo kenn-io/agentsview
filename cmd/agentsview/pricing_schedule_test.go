@@ -20,8 +20,8 @@ import (
 // swap, and the surrounding work can take longer on loaded Windows runners.
 const pricingResyncTestTimeout = 30 * time.Second
 
-// pricingCatalogTransport answers the LiteLLM and OpenRouter catalog
-// requests a refresh makes and records their URLs.
+// pricingCatalogTransport answers the GenAI Prices, LiteLLM, and OpenRouter
+// catalog requests a refresh makes and records their URLs.
 type pricingCatalogTransport struct {
 	requests chan *http.Request
 }
@@ -31,7 +31,9 @@ func (t pricingCatalogTransport) RoundTrip(
 ) (*http.Response, error) {
 	t.requests <- req
 	body := `{"data": []}`
-	if req.URL.Host == "raw.githubusercontent.com" {
+	if strings.HasSuffix(req.URL.Path, "/prices/new_data/v2/data.json") {
+		body = `[]`
+	} else if req.URL.Host == "raw.githubusercontent.com" {
 		body = `{
 			"scheduled-model": {
 				"input_cost_per_token": 0.000002,
@@ -55,7 +57,7 @@ func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
 		"_litellm_last_attempt", previousAttempt,
 	))
 
-	requests := make(chan *http.Request, 2)
+	requests := make(chan *http.Request, 3)
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = pricingCatalogTransport{requests: requests}
 	t.Cleanup(func() {
@@ -87,6 +89,11 @@ func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
 		return err == nil && price != nil
 	}, time.Second, time.Millisecond)
 
+	require.Equal(t,
+		"https://raw.githubusercontent.com/pydantic/genai-prices/main/"+
+			"prices/new_data/v2/data.json",
+		(<-requests).URL.String(),
+	)
 	require.Equal(t,
 		"https://raw.githubusercontent.com/BerriAI/litellm/main/"+
 			"model_prices_and_context_window.json",
@@ -137,7 +144,7 @@ func TestStartPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
 		}
 	}, pricingResyncTestTimeout, time.Millisecond)
 
-	requests := make(chan *http.Request, 2)
+	requests := make(chan *http.Request, 3)
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = pricingCatalogTransport{requests: requests}
 	t.Cleanup(func() {

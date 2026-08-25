@@ -31,7 +31,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 		prices = duckFallbackPricingRows()
 	}
 	if len(prices) == 0 {
-		return nil
+		return s.syncGenAIPricing(ctx)
 	}
 
 	existing, err := s.listDuckModelPricing(ctx)
@@ -43,7 +43,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 		return fmt.Errorf("planning duckdb pricing sync: %w", err)
 	}
 	if len(prices) == 0 && len(removePatterns) == 0 {
-		return nil
+		return s.syncGenAIPricing(ctx)
 	}
 	if err := s.removeDuckModelPricing(ctx, removePatterns); err != nil {
 		return err
@@ -100,6 +100,124 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb pricing sync: %w", err)
+	}
+	return s.syncGenAIPricing(ctx)
+}
+
+type duckGenAIPricingQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type duckGenAIPricingRow interface {
+	Scan(...any) error
+}
+
+func embeddedDuckGenAIPricingDocument() db.GenAIPricingDocument {
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	return db.GenAIPricingDocument{
+		Version: embedded.Version, SourceRef: embedded.SourceRef,
+		Source: db.GenAIPricingSourceEmbedded, Data: embedded.RawJSON(),
+	}
+}
+
+func loadDuckGenAIPricing(
+	ctx context.Context, q duckGenAIPricingQuerier,
+) (*db.GenAIPricingDocument, error) {
+	return scanDuckGenAIPricing(q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, data_json, updated_at
+		FROM genai_pricing WHERE singleton = 1`))
+}
+
+func scanDuckGenAIPricing(
+	row duckGenAIPricingRow,
+) (*db.GenAIPricingDocument, error) {
+	var document db.GenAIPricingDocument
+	err := row.Scan(
+		&document.Version, &document.SourceRef, &document.Source,
+		&document.Data, &document.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading duckdb GenAI pricing document: %w", err)
+	}
+	return &document, nil
+}
+
+func duckGenAIEffectivePricingRow(
+	document *db.GenAIPricingDocument,
+) (export.EffectivePricingRow, error) {
+	if document == nil {
+		embedded := pricingpkg.EmbeddedGenAIDocument()
+		return export.EffectivePricingRow{
+			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+			GenAISource: export.PricingRowSourceEmbedded,
+		}, nil
+	}
+	parsed, err := pricingpkg.ParseGenAIDocument(
+		document.Data, document.Version, document.SourceRef,
+	)
+	if err != nil {
+		return export.EffectivePricingRow{}, fmt.Errorf(
+			"parsing duckdb GenAI pricing document: %w", err,
+		)
+	}
+	var updatedAt *time.Time
+	if parsedTime, parseErr := time.Parse(
+		time.RFC3339Nano, document.UpdatedAt,
+	); parseErr == nil {
+		utc := parsedTime.UTC()
+		updatedAt = &utc
+	}
+	source := export.PricingRowSourceFetched
+	if document.Source == db.GenAIPricingSourceEmbedded {
+		source = export.PricingRowSourceEmbedded
+	}
+	return export.EffectivePricingRow{
+		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
+		GenAISource: source, GenAIUpdatedAt: updatedAt,
+	}, nil
+}
+
+func (s *Sync) syncGenAIPricing(ctx context.Context) error {
+	document, err := s.local.GetGenAIPricing(ctx)
+	if err != nil {
+		return fmt.Errorf("reading local GenAI pricing document: %w", err)
+	}
+	if document == nil {
+		embedded := embeddedDuckGenAIPricingDocument()
+		document = &embedded
+	}
+	tx, err := s.duck.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning duckdb GenAI pricing sync: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	existing, err := loadDuckGenAIPricing(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if db.GenAIPricingDocumentsEqual(existing, document) {
+		return nil
+	}
+	if err := s.execMutation(ctx, tx, `
+		INSERT INTO genai_pricing
+			(singleton, version, source_ref, source, data_json, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?)
+		ON CONFLICT(singleton) DO UPDATE SET
+			version = excluded.version,
+			source_ref = excluded.source_ref,
+			source = excluded.source,
+			data_json = excluded.data_json,
+			updated_at = excluded.updated_at`,
+		document.Version, document.SourceRef, document.Source,
+		document.Data, document.UpdatedAt,
+	); err != nil {
+		return fmt.Errorf("upserting duckdb GenAI pricing document: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing duckdb GenAI pricing sync: %w", err)
 	}
 	return nil
 }

@@ -1,8 +1,10 @@
 package export
 
 import (
+	"cmp"
 	"context"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -102,8 +104,12 @@ func (r ModelRates) pricingBandForTokens(
 }
 
 type EffectivePricingRow struct {
-	ModelPattern string
-	Rates        ModelRates
+	ModelPattern   string
+	Rates          ModelRates
+	GenAI          *pricingpkg.GenAIPrices
+	GenAIVersion   string
+	GenAISource    PricingRowSource
+	GenAIUpdatedAt *time.Time
 }
 
 type PricingLookup struct {
@@ -116,7 +122,10 @@ type PricingResolver struct {
 	rows                 []EffectivePricingRow
 	byModel              map[string]ModelRates
 	lookupCache          map[string]PricingLookup
-	recorded             map[string]map[string]*pricingRecord
+	genAI                *pricingpkg.GenAIPrices
+	genAISource          PricingRowSource
+	genAIUpdatedAt       *time.Time
+	recorded             map[string]map[pricingRecordKey]*pricingRecord
 	unattributedReported bool
 }
 
@@ -129,23 +138,49 @@ type pricingRecord struct {
 	bandRequestCounts map[int]int
 }
 
+type pricingRecordKey struct {
+	pricedModel                          string
+	pattern                              string
+	ok                                   bool
+	source                               PricingRowSource
+	input, output, cacheWrite, cacheRead int64
+	bands                                string
+}
+
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
 	copied := make([]EffectivePricingRow, len(rows))
 	byModel := make(map[string]ModelRates, len(rows))
 	for i, row := range rows {
 		row.Rates.Bands = append([]PricingBand(nil), row.Rates.Bands...)
 		copied[i] = row
+		if row.GenAI != nil {
+			if copied[i].GenAIUpdatedAt != nil {
+				updatedAt := copied[i].GenAIUpdatedAt.UTC()
+				copied[i].GenAIUpdatedAt = &updatedAt
+			}
+			continue
+		}
 		if row.ModelPattern == "" {
 			continue
 		}
 		byModel[row.ModelPattern] = row.Rates
 	}
-	return &PricingResolver{
+	resolver := &PricingResolver{
 		rows:        copied,
 		byModel:     byModel,
 		lookupCache: make(map[string]PricingLookup),
-		recorded:    make(map[string]map[string]*pricingRecord),
+		recorded:    make(map[string]map[pricingRecordKey]*pricingRecord),
 	}
+	for _, row := range copied {
+		if row.GenAI == nil {
+			continue
+		}
+		resolver.genAI = row.GenAI
+		resolver.genAISource = row.GenAISource
+		resolver.genAIUpdatedAt = row.GenAIUpdatedAt
+		break
+	}
+	return resolver
 }
 
 func (r *PricingResolver) Lookup(model string) PricingLookup {
@@ -176,6 +211,14 @@ func clonePricingLookup(lookup PricingLookup) PricingLookup {
 func (r *PricingResolver) Resolve(
 	reportedModel, canonicalModel string,
 ) (string, PricingLookup) {
+	return r.ResolveAt(reportedModel, canonicalModel, time.Time{})
+}
+
+// ResolveAt applies exact custom pricing, then the timestamp-aware GenAI
+// Prices document, then the existing LiteLLM/OpenRouter rows.
+func (r *PricingResolver) ResolveAt(
+	reportedModel, canonicalModel string, timestamp time.Time,
+) (string, PricingLookup) {
 	if r == nil {
 		return reportedModel, PricingLookup{}
 	}
@@ -187,11 +230,84 @@ func (r *PricingResolver) Resolve(
 			OK:      true,
 		}
 	}
+	if !timestamp.IsZero() {
+		if pricedModel, rates, ok := r.resolveGenAI(
+			reportedModel, canonicalModel, timestamp,
+		); ok {
+			return pricedModel, rates
+		}
+	}
 	pricedModel := canonicalModel
 	if pricedModel == "" {
 		pricedModel = reportedModel
 	}
 	return pricedModel, r.Lookup(pricedModel)
+}
+
+func (r *PricingResolver) resolveGenAI(
+	reportedModel, canonicalModel string, timestamp time.Time,
+) (string, PricingLookup, bool) {
+	if r.genAI == nil {
+		return "", PricingLookup{}, false
+	}
+	models := []string{reportedModel}
+	if canonicalModel != "" && canonicalModel != reportedModel {
+		models = []string{canonicalModel, reportedModel}
+	}
+	for _, model := range models {
+		provider, unqualified := genAIProviderAndModel(model)
+		for _, candidate := range []struct {
+			provider string
+			model    string
+			priced   string
+		}{{provider, unqualified, model}, {"", model, model}} {
+			if candidate.model == "" {
+				continue
+			}
+			resolved, ok := r.genAI.Resolve(
+				candidate.provider, candidate.model, timestamp,
+			)
+			if !ok {
+				continue
+			}
+			return candidate.priced, PricingLookup{
+				Rates: ModelRates{
+					InputPerMTok:      resolved.InputPerMTok,
+					OutputPerMTok:     resolved.OutputPerMTok,
+					CacheWritePerMTok: resolved.CacheCreationPerMTok,
+					CacheReadPerMTok:  resolved.CacheReadPerMTok,
+					UpdatedAt:         r.genAIUpdatedAt,
+					Source:            r.genAISource,
+					Bands:             genAIPricingBands(resolved.Bands),
+				},
+				Pattern: resolved.ModelPattern,
+				OK:      true,
+			}, true
+		}
+	}
+	return "", PricingLookup{}, false
+}
+
+func genAIProviderAndModel(model string) (string, string) {
+	provider, unqualified, ok := strings.Cut(model, "/")
+	if !ok {
+		return "", model
+	}
+	return provider, unqualified
+}
+
+func genAIPricingBands(bands []pricingpkg.PricingBand) []PricingBand {
+	out := make([]PricingBand, len(bands))
+	for i, band := range bands {
+		out[i] = PricingBand{
+			AboveInputTokens:  band.AboveInputTokens,
+			InputPerMTok:      band.InputPerMTok,
+			OutputPerMTok:     band.OutputPerMTok,
+			CacheWritePerMTok: band.CacheCreationPerMTok,
+			CacheReadPerMTok:  band.CacheReadPerMTok,
+		}
+	}
+	return out
 }
 
 func (r *PricingResolver) RecordComputed(model string, lookup PricingLookup) {
@@ -296,13 +412,24 @@ func (r *PricingResolver) record(
 ) *pricingRecord {
 	byPricedModel := r.recorded[reportedModel]
 	if byPricedModel == nil {
-		byPricedModel = make(map[string]*pricingRecord)
+		byPricedModel = make(map[pricingRecordKey]*pricingRecord)
 		r.recorded[reportedModel] = byPricedModel
 	}
-	rec := byPricedModel[pricedModel]
+	key := pricingRecordKey{
+		pricedModel: pricedModel,
+		pattern:     lookup.Pattern,
+		ok:          lookup.OK,
+		source:      lookup.Rates.Source,
+		input:       lookup.Rates.InputPerMTok.Microdollars,
+		output:      lookup.Rates.OutputPerMTok.Microdollars,
+		cacheWrite:  lookup.Rates.CacheWritePerMTok.Microdollars,
+		cacheRead:   lookup.Rates.CacheReadPerMTok.Microdollars,
+		bands:       canonicalPricingBandsSortKey(lookup.Rates.Bands),
+	}
+	rec := byPricedModel[key]
 	if rec == nil {
 		rec = &pricingRecord{}
-		byPricedModel[pricedModel] = rec
+		byPricedModel[key] = rec
 	}
 	rec.lookup = clonePricingLookup(lookup)
 	return rec
@@ -326,18 +453,18 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 		if len(byPricedModel) == 0 {
 			continue
 		}
-		pricedModels := make([]string, 0, len(byPricedModel))
-		for pricedModel := range byPricedModel {
-			pricedModels = append(pricedModels, pricedModel)
+		resolutions := make([]pricingRecordKey, 0, len(byPricedModel))
+		for key := range byPricedModel {
+			resolutions = append(resolutions, key)
 		}
-		sort.Strings(pricedModels)
+		slices.SortFunc(resolutions, comparePricingRecordKey)
 
 		provenance := ModelPricingProvenance{
-			Resolutions: make([]EffectiveModelRate, 0, len(pricedModels)),
+			Resolutions: make([]EffectiveModelRate, 0, len(resolutions)),
 		}
 		var modelComputed, modelReported bool
-		for _, pricedModel := range pricedModels {
-			rec := byPricedModel[pricedModel]
+		for _, key := range resolutions {
+			rec := byPricedModel[key]
 			if rec == nil {
 				continue
 			}
@@ -345,7 +472,7 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 			modelComputed = modelComputed || rec.computed
 			modelReported = modelReported || rec.reported
 			rate := EffectiveModelRate{
-				PricedModel:           pricedModel,
+				PricedModel:           key.pricedModel,
 				InputCostPerMTok:      rec.lookup.Rates.InputPerMTok,
 				OutputCostPerMTok:     rec.lookup.Rates.OutputPerMTok,
 				CacheWriteCostPerMTok: rec.lookup.Rates.CacheWritePerMTok,
@@ -396,6 +523,30 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 		},
 		Models: models,
 	}, nil
+}
+
+func comparePricingRecordKey(a, b pricingRecordKey) int {
+	for _, comparison := range []int{
+		strings.Compare(a.pricedModel, b.pricedModel),
+		strings.Compare(a.pattern, b.pattern),
+		strings.Compare(string(a.source), string(b.source)),
+		cmp.Compare(a.input, b.input),
+		cmp.Compare(a.output, b.output),
+		cmp.Compare(a.cacheWrite, b.cacheWrite),
+		cmp.Compare(a.cacheRead, b.cacheRead),
+		strings.Compare(a.bands, b.bands),
+	} {
+		if comparison != 0 {
+			return comparison
+		}
+	}
+	if a.ok != b.ok {
+		if !a.ok {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
 
 func pricingApplicationForRecord(rec *pricingRecord) PricingApplication {
@@ -532,7 +683,11 @@ func AllocateCostByWeightContext(
 func pricingSource(rows []EffectivePricingRow) string {
 	var custom, fetched, embedded bool
 	for _, row := range rows {
-		switch row.Rates.Source {
+		source := row.Rates.Source
+		if row.GenAI != nil {
+			source = row.GenAISource
+		}
+		switch source {
 		case PricingRowSourceCustom:
 			custom = true
 		case PricingRowSourceFetched:
@@ -570,6 +725,12 @@ func customPricingRowCount(rows []EffectivePricingRow) int {
 func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 	var latest *time.Time
 	for _, row := range rows {
+		if row.GenAIUpdatedAt != nil {
+			t := row.GenAIUpdatedAt.UTC()
+			if latest == nil || t.After(*latest) {
+				latest = &t
+			}
+		}
 		if row.Rates.UpdatedAt != nil {
 			t := row.Rates.UpdatedAt.UTC()
 			if latest == nil || t.After(*latest) {

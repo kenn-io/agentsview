@@ -26,6 +26,20 @@ func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
 	})
 	out := make([]any, 0, len(copied))
 	for _, row := range copied {
+		if row.GenAI != nil {
+			var updatedAt any
+			if row.GenAIUpdatedAt != nil {
+				updatedAt = row.GenAIUpdatedAt.UTC().Format(jsonTimeLayout)
+			}
+			out = append(out, map[string]any{
+				"genai_prices": map[string]any{
+					"source":     string(row.GenAISource),
+					"updated_at": updatedAt,
+					"version":    row.GenAIVersion,
+				},
+			})
+			continue
+		}
 		var updatedAt any
 		if row.Rates.UpdatedAt != nil {
 			updatedAt = row.Rates.UpdatedAt.UTC().Format(jsonTimeLayout)
@@ -113,6 +127,16 @@ func canonicalPricingRowLess(a, b EffectivePricingRow) bool {
 }
 
 func canonicalPricingRowSortValues(row EffectivePricingRow) []string {
+	if row.GenAI != nil {
+		updatedAt := ""
+		if row.GenAIUpdatedAt != nil {
+			updatedAt = row.GenAIUpdatedAt.UTC().Format(jsonTimeLayout)
+		}
+		return []string{
+			"", "genai_prices", row.GenAIVersion,
+			string(row.GenAISource), updatedAt, "", "", "",
+		}
+	}
 	updatedAt := ""
 	if row.Rates.UpdatedAt != nil {
 		updatedAt = row.Rates.UpdatedAt.UTC().Format(jsonTimeLayout)

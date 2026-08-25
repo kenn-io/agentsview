@@ -3,6 +3,7 @@ package pricing
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -29,20 +30,16 @@ func ParseOpenRouterPricing(data []byte) ([]ModelPricing, error) {
 	return catalog.ParseOpenRouterPricing(data)
 }
 
-// Catalog is one upstream pricing snapshot: the LiteLLM and OpenRouter
-// rows as fetched. Reconcile merges them over a stored table.
+// Catalog is one refresh result from the GenAI Prices, LiteLLM, and OpenRouter
+// upstream sources. Reconcile merges the flat fallback rows over storage.
 type Catalog struct {
+	GenAI      *GenAIDocument
 	LiteLLM    []ModelPricing
 	OpenRouter []ModelPricing
 }
 
-// FetchCatalog fetches LiteLLM and OpenRouter. A LiteLLM failure fails
-// the whole snapshot and the caller keeps its last stored pricing. An
-// OpenRouter failure returns a LiteLLM-only snapshot alongside the
-// error: Reconcile treats the empty OpenRouter side as delisting
-// nothing, so previously stored OpenRouter rows stay priced and tracked
-// while the fresh LiteLLM rates are still stored, and the caller
-// surfaces the error as a warning.
+// FetchCatalog fetches GenAI Prices first, followed by LiteLLM and OpenRouter.
+// Successful earlier sources remain available when a later source fails.
 func FetchCatalog() (Catalog, error) {
 	return FetchCatalogContext(context.Background())
 }
@@ -50,26 +47,53 @@ func FetchCatalog() (Catalog, error) {
 // FetchCatalogContext is FetchCatalog bound to ctx.
 func FetchCatalogContext(ctx context.Context) (Catalog, error) {
 	return fetchCatalog(
-		ctx, FetchLiteLLMPricingContext, FetchOpenRouterPricingContext,
+		ctx,
+		FetchGenAIPricesContext,
+		FetchLiteLLMPricingContext,
+		FetchOpenRouterPricingContext,
 	)
 }
 
 func fetchCatalog(
 	ctx context.Context,
+	fetchGenAI func(context.Context) (*GenAIPrices, error),
 	fetchLiteLLM, fetchOpenRouter func(context.Context) ([]ModelPricing, error),
 ) (Catalog, error) {
-	litellm, err := fetchLiteLLM(ctx)
-	if err != nil {
-		return Catalog{}, err
+	var result Catalog
+	var warnings []error
+	genAI, genAIErr := fetchGenAI(ctx)
+	if genAIErr != nil {
+		warnings = append(warnings, fmt.Errorf(
+			"fetching GenAI Prices (preserving stored document): %w",
+			genAIErr,
+		))
+	} else {
+		document, err := NewGenAIDocument(genAI, catalog.GenAIPricesURL)
+		if err != nil {
+			warnings = append(warnings, err)
+		} else {
+			result.GenAI = &document
+		}
 	}
-	openrouter, err := fetchOpenRouter(ctx)
-	if err != nil {
-		return Catalog{LiteLLM: litellm}, fmt.Errorf(
+	litellm, liteLLMErr := fetchLiteLLM(ctx)
+	if liteLLMErr != nil {
+		warnings = append(warnings, fmt.Errorf(
+			"fetching LiteLLM catalog (preserving stored rates): %w",
+			liteLLMErr,
+		))
+		return result, errors.Join(warnings...)
+	}
+	result.LiteLLM = litellm
+	openrouter, openRouterErr := fetchOpenRouter(ctx)
+	if openRouterErr != nil {
+		warnings = append(warnings, fmt.Errorf(
 			"fetching openrouter catalog (storing litellm rates only): %w",
-			err,
-		)
+			openRouterErr,
+		))
+	} else {
+		result.OpenRouter = openrouter
 	}
-	return Catalog{LiteLLM: litellm, OpenRouter: openrouter}, nil
+	return result, errors.Join(warnings...)
 }
 
 // Reconcile merges the catalog over a stored table and returns the rows to

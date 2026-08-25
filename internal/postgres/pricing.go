@@ -189,6 +189,72 @@ func clonePricingRows(
 	return out
 }
 
+type pgGenAIPricingQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func embeddedPGGenAIPricingDocument() db.GenAIPricingDocument {
+	embedded := pricing.EmbeddedGenAIDocument()
+	return db.GenAIPricingDocument{
+		Version: embedded.Version, SourceRef: embedded.SourceRef,
+		Source: db.GenAIPricingSourceEmbedded, Data: embedded.RawJSON(),
+	}
+}
+
+func loadPGGenAIPricing(
+	ctx context.Context, q pgGenAIPricingQuerier,
+) (*db.GenAIPricingDocument, error) {
+	var document db.GenAIPricingDocument
+	err := q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, data_json, updated_at
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&document.Version, &document.SourceRef, &document.Source,
+		&document.Data, &document.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading pg GenAI pricing document: %w", err)
+	}
+	return &document, nil
+}
+
+func pgGenAIEffectivePricingRow(
+	document *db.GenAIPricingDocument,
+) (export.EffectivePricingRow, error) {
+	if document == nil {
+		embedded := pricing.EmbeddedGenAIDocument()
+		return export.EffectivePricingRow{
+			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+			GenAISource: export.PricingRowSourceEmbedded,
+		}, nil
+	}
+	parsed, err := pricing.ParseGenAIDocument(
+		document.Data, document.Version, document.SourceRef,
+	)
+	if err != nil {
+		return export.EffectivePricingRow{}, fmt.Errorf(
+			"parsing pg GenAI pricing document: %w", err,
+		)
+	}
+	var updatedAt *time.Time
+	if parsedTime, parseErr := time.Parse(
+		time.RFC3339Nano, document.UpdatedAt,
+	); parseErr == nil {
+		utc := parsedTime.UTC()
+		updatedAt = &utc
+	}
+	source := export.PricingRowSourceFetched
+	if document.Source == db.GenAIPricingSourceEmbedded {
+		source = export.PricingRowSourceEmbedded
+	}
+	return export.EffectivePricingRow{
+		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
+		GenAISource: source, GenAIUpdatedAt: updatedAt,
+	}, nil
+}
+
 func (s *Store) loadPricingMap(
 	ctx context.Context,
 ) ([]export.EffectivePricingRow, error) {
@@ -229,19 +295,27 @@ func (s *Store) startPricingLoad() *pricingLoad {
 }
 
 func (s *Store) runPricingLoad(ctx context.Context, load *pricingLoad) {
+	defer load.cancel()
 	out := map[string]export.ModelRates{}
 	dbRows, err := s.mergeDBPricing(ctx, out)
 	if err == nil && dbRows == 0 {
 		out = fallbackPricingMap()
 	}
-	load.cancel()
-
 	var prices []export.EffectivePricingRow
 	if err == nil {
 		s.pricingMu.Lock()
 		s.applyCustomPricing(out)
 		s.pricingMu.Unlock()
 		prices = pricingMapRows(out)
+		var document *db.GenAIPricingDocument
+		document, err = loadPGGenAIPricing(ctx, s.pg)
+		if err == nil {
+			var row export.EffectivePricingRow
+			row, err = pgGenAIEffectivePricingRow(document)
+			if err == nil {
+				prices = append(prices, row)
+			}
+		}
 	}
 
 	s.pricingLoadMu.Lock()
@@ -779,6 +853,28 @@ func lockPGModelPricing(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+func upsertPGGenAIPricing(
+	ctx context.Context, tx *sql.Tx, document db.GenAIPricingDocument,
+) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO genai_pricing
+			(singleton, version, source_ref, source, data_json, updated_at)
+		VALUES (1, $1, $2, $3, $4, $5)
+		ON CONFLICT(singleton) DO UPDATE SET
+			version = excluded.version,
+			source_ref = excluded.source_ref,
+			source = excluded.source,
+			data_json = excluded.data_json,
+			updated_at = excluded.updated_at`,
+		document.Version, document.SourceRef, document.Source,
+		document.Data, document.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upserting pg GenAI pricing document: %w", err)
+	}
+	return nil
+}
+
 func (s *Sync) syncModelPricing(ctx context.Context) error {
 	prices, err := s.local.ListModelPricing(ctx)
 	if err != nil {
@@ -786,6 +882,14 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	}
 	if len(prices) == 0 {
 		prices = fallbackPricingRows()
+	}
+	localGenAI, err := s.local.GetGenAIPricing(ctx)
+	if err != nil {
+		return fmt.Errorf("reading local GenAI pricing document: %w", err)
+	}
+	if localGenAI == nil {
+		embedded := embeddedPGGenAIPricingDocument()
+		localGenAI = &embedded
 	}
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
@@ -809,13 +913,23 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("planning model pricing sync: %w", err)
 	}
-	if len(changedPrices) == 0 && len(removePatterns) == 0 {
+	existingGenAI, err := loadPGGenAIPricing(ctx, tx)
+	if err != nil {
+		return err
+	}
+	genAIChanged := !db.GenAIPricingDocumentsEqual(existingGenAI, localGenAI)
+	if len(changedPrices) == 0 && len(removePatterns) == 0 && !genAIChanged {
 		return nil
 	}
 	if err := reconcileModelPricing(
 		ctx, tx, changedPrices, removePatterns,
 	); err != nil {
 		return fmt.Errorf("syncing model pricing to pg: %w", err)
+	}
+	if genAIChanged {
+		if err := upsertPGGenAIPricing(ctx, tx, *localGenAI); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing pg pricing sync: %w", err)

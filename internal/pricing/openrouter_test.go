@@ -14,6 +14,10 @@ func rate(dollars string) money.Money {
 	return money.MustParseDollars(dollars)
 }
 
+func noGenAIPricing(context.Context) (*GenAIPrices, error) {
+	return nil, errors.New("GenAI Prices unavailable")
+}
+
 func TestFetchCatalogDegradesWhenOpenRouterFails(t *testing.T) {
 	litellm := []ModelPricing{
 		{ModelPattern: "acme/model", InputPerMTok: rate("1")},
@@ -27,7 +31,7 @@ func TestFetchCatalogDegradesWhenOpenRouterFails(t *testing.T) {
 	}
 
 	catalog, err := fetchCatalog(
-		context.Background(), fetchLiteLLM, fetchOpenRouter,
+		context.Background(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
 	)
 
 	assert.ErrorIs(t, err, openrouterErr)
@@ -46,7 +50,7 @@ func TestFetchCatalogFailsWhenLiteLLMFails(t *testing.T) {
 	}
 
 	catalog, err := fetchCatalog(
-		context.Background(), fetchLiteLLM, fetchOpenRouter,
+		context.Background(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
 	)
 
 	assert.ErrorIs(t, err, litellmErr)

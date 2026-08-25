@@ -20,7 +20,26 @@ called out when it is not the product's own producer source.
 
 ## Pricing Catalog Evidence
 
-Agentsview's fetched and embedded token prices come from LiteLLM's
+Agentsview uses Pydantic GenAI Prices v2 as its historical and conditional
+pricing source. The embedded snapshot pins upstream
+[`data.json`](https://github.com/pydantic/genai-prices/blob/83a49e8b386176a1e28e9d9aedeea5e2b4abc586/prices/new_data/v2/data.json)
+and its generated
+[`JSON Schema`](https://github.com/pydantic/genai-prices/blob/83a49e8b386176a1e28e9d9aedeea5e2b4abc586/prices/new_data/v2/data.schema.json)
+at commit `83a49e8b386176a1e28e9d9aedeea5e2b4abc586`. Agentsview preserves the
+complete upstream JSON in its embedded artifact and refreshed singleton row. It
+compiles the provider and model match rules, ordered start-date and UTC
+time-window conditions, token prices, and whole-request tier thresholds at
+runtime. Reverified 2026-08-25 against the pinned data, schema, and typed Python
+source.
+
+For a usage event with a valid timestamp, pricing precedence is an exact user
+custom rate, a matching Pydantic conditional rate at that timestamp, then the
+existing flat catalog. Events without a valid timestamp skip Pydantic because
+choosing its oldest conditional record would invent a historical date. Pydantic
+currently carries both GPT-5.6 Luna price periods but not Grok 4.6, so the flat
+fallback remains necessary.
+
+Agentsview's flat fallback prices come from LiteLLM's
 [`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/418c7c6012d7c39a9d4a28c72cabe1995595ad2b/model_prices_and_context_window.json)
 at pinned commit `418c7c6012d7c39a9d4a28c72cabe1995595ad2b`. LiteLLM's
 [`cost_per_token` implementation](https://github.com/BerriAI/litellm/blob/418c7c6012d7c39a9d4a28c72cabe1995595ad2b/litellm/litellm_core_utils/llm_cost_calc/utils.py)
@@ -1490,11 +1509,11 @@ add an archived or maintained mirror without replacing the original identity.
   against the samples reported in
   [#1466](https://github.com/kenn-io/agentsview/issues/1466): the parser folds
   the persisted cache-write remainder into uncached input only for recognized
-  GLM, Gemma, and Kimi model families. Missing and unrecognized model identities
-  preserve Posit Assistant's original buckets, and full context remains the
-  sum of the persisted input, cache-read, and cache-write fields. Data version
-  91 reparses existing Posit Assistant archives through the normal
-  non-destructive resync path.
+  GLM, Gemma, and Kimi model families. Missing and unrecognized model
+  identities preserve Posit Assistant's original buckets, and full context
+  remains the sum of the persisted input, cache-read, and cache-write fields.
+  Data version 91 reparses existing Posit Assistant archives through the
+  normal non-destructive resync path.
 
 ## Z Code (`zcode`)
 

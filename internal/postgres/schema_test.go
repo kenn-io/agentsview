@@ -585,6 +585,7 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	state.existingTables = map[string]bool{
 		"model_pricing":                                   true,
 		"model_pricing_bands":                             true,
+		"genai_pricing":                                   true,
 		"source_archives":                                 true,
 		"source_project_identity_observations":            true,
 		"source_project_identity_observation_scopes":      true,
@@ -623,6 +624,7 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 	state.existingTables = map[string]bool{
 		"model_pricing":                                   true,
 		"model_pricing_bands":                             true,
+		"genai_pricing":                                   true,
 		"source_archives":                                 true,
 		"source_project_identity_observations":            true,
 		"source_project_identity_observation_scopes":      true,
@@ -961,6 +963,8 @@ func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 	// a table to write into.
 	state.existingTables = map[string]bool{
 		"model_pricing":                             true,
+		"model_pricing_bands":                       true,
+		"genai_pricing":                             true,
 		"source_archives":                           true,
 		"source_project_identity_observations":      true,
 		"source_session_project_identity_snapshots": true,
@@ -996,6 +1000,8 @@ func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {
 	// usage rows. The fast path must fall back to EnsureSchema.
 	state.existingTables = map[string]bool{
 		"model_pricing":       true,
+		"model_pricing_bands": true,
+		"genai_pricing":       true,
 		"cursor_usage_events": true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}

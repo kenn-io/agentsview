@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	usageCacheFormatVersion = 1
+	usageCacheFormatVersion = 2
 	usageCacheApplicationID = 0x41565543
 	usageCacheKind          = "agentsview-usage-facts"
 
@@ -132,6 +132,7 @@ CREATE TABLE usage_daily_rollups (
     matched_pattern TEXT NOT NULL,
     rate_ok INTEGER NOT NULL CHECK (rate_ok IN (0, 1)),
     rate_hash TEXT NOT NULL,
+	pricing_timestamp TEXT NOT NULL,
     band_threshold INTEGER NOT NULL DEFAULT -1,
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,

@@ -152,11 +152,10 @@ func (s *Store) GetSessionUsageRows(
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	pricing, err := s.loadPricing(ctx)
+	rateResolver, err := s.loadPricingResolver(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading duckdb pricing: %w", err)
 	}
-	rateResolver := export.NewPricingResolver(duckPricingRows(pricing))
 	sessionOrder := make(map[string]int, len(ids))
 	for i, id := range ids {
 		sessionOrder[id] = i
@@ -821,11 +820,10 @@ func (s *Store) activityReportUsage(
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
 
-	pricing, err := s.loadPricing(ctx)
+	rateResolver, err := s.loadPricingResolver(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading duckdb pricing: %w", err)
 	}
-	rateResolver := export.NewPricingResolver(duckPricingRows(pricing))
 	if len(ids) == 0 {
 		block, err := rateResolver.BuildBlock()
 		if err != nil {
@@ -1119,7 +1117,9 @@ func duckActivityReportRowStatus(
 		r.cacheCr, r.cacheRd, r.webSearchRequests,
 	) {
 		contributes = true
-		_, lookup := pricing.Resolve(r.model, canonicalModel)
+		_, lookup := pricing.ResolveAt(
+			r.model, canonicalModel, duckUsagePricingTimestamp(r.ts),
+		)
 		priced = lookup.OK
 		billableInput = r.inputTok
 		billableOutput = r.outputTok
@@ -1136,7 +1136,7 @@ func duckActivityReportRowStatus(
 		billableCacheRd = r.cacheRd
 	}
 	cost, savings, _, _, err = duckUsageAggregateResolvedCost(
-		r.model, canonicalModel,
+		r.model, canonicalModel, duckUsagePricingTimestamp(r.ts),
 		r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 		billableInput, billableOutput, billableReasoning,
 		billableCacheCr, billableCacheRd, billableWebSearch,

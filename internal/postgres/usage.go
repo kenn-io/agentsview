@@ -1120,6 +1120,13 @@ func pgUsageLookupModel(model string, ts sql.NullTime) string {
 	return model
 }
 
+func pgUsagePricingTimestamp(ts sql.NullTime) time.Time {
+	if !ts.Valid {
+		return time.Time{}
+	}
+	return ts.Time
+}
+
 func pgDailyUsageAmounts(
 	r pgDailyUsageScanRow, pricing *export.PricingResolver,
 ) (
@@ -1130,8 +1137,10 @@ func pgDailyUsageAmounts(
 	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
 		pgDailyUsageRowTokens(r)
 
-	pricedModel, lookup := pricing.Resolve(
-		r.model, pgUsageLookupModel(r.model, r.ts))
+	pricedModel, lookup := pricing.ResolveAt(
+		r.model, pgUsageLookupModel(r.model, r.ts),
+		pgUsagePricingTimestamp(r.ts),
+	)
 	rates := lookup.Rates
 	requestScoped := pgUsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource {
@@ -1283,8 +1292,10 @@ func pgSessionRowCostWithWebSearchRequests(
 			r.inputTokens, r.outputTokens,
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
-	pricedModel, lookup := pricing.Resolve(
-		r.model, pgUsageLookupModel(r.model, r.ts))
+	pricedModel, lookup := pricing.ResolveAt(
+		r.model, pgUsageLookupModel(r.model, r.ts),
+		pgUsagePricingTimestamp(r.ts),
+	)
 	if r.cost.Valid {
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 		return money.Money{Microdollars: r.cost.Int64}, true, true, nil

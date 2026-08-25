@@ -91,6 +91,11 @@ func (c *usageProbeConn) QueryContext(
 	c.state.mu.Unlock()
 
 	normalized := strings.ToLower(query)
+	if strings.Contains(normalized, "from genai_pricing") {
+		return &usageProbeRows{columns: []string{
+			"version", "source_ref", "source", "data_json", "updated_at",
+		}}, nil
+	}
 	if strings.Contains(normalized, "from model_pricing") {
 		return &usageProbeRows{
 			columns: []string{

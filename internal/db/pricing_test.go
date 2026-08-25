@@ -564,7 +564,7 @@ func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
 
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
-	assert.Equal(t, "custom", block.Source)
+	assert.Equal(t, "custom+embedded", block.Source)
 	assert.Equal(t, 1, block.CustomOverrideCount)
 }
 

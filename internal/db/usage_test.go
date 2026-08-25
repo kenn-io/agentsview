@@ -690,7 +690,7 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	rawOutput := MaxPlausibleTokens + 500_000
 
 	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "gpt-5.4",
+		ModelPattern:  "session-summary-model",
 		InputPerMTok:  money.MustParseDollars("1.0"),
 		OutputPerMTok: money.MustParseDollars("2.0"),
 	}}), "UpsertModelPricing")
@@ -709,7 +709,7 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 		[]UsageEvent{{
 			SessionID:    "hermes:summary",
 			Source:       "session",
-			Model:        "gpt-5.4",
+			Model:        "session-summary-model",
 			InputTokens:  rawInput,
 			OutputTokens: rawOutput,
 			OccurredAt:   "2026-05-14T10:05:00Z",
@@ -1121,22 +1121,21 @@ func TestInsertCursorUsageEventsDedupesAtPostgresTimestampPrecision(t *testing.T
 // TestGetDailyUsage_CacheSavingsUsesPerModelRates pins down
 // that totals.CacheSavings is computed from each row's actual
 // per-model pricing, not a hard-coded proxy. A hard-coded
-// Sonnet rate would misreport an Opus-heavy workload because
-// Opus rates are roughly 5x Sonnet on both sides.
+// standard rate would misreport a premium-rate workload.
 func TestGetDailyUsage_CacheSavingsUsesPerModelRates(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
 	requireNoError(t, d.UpsertModelPricing([]ModelPricing{
 		{
-			ModelPattern:         "claude-opus-4-6",
+			ModelPattern:         "premium-cache-model",
 			InputPerMTok:         money.MustParseDollars("15.0"),
 			OutputPerMTok:        money.MustParseDollars("75.0"),
 			CacheCreationPerMTok: money.MustParseDollars("18.75"),
 			CacheReadPerMTok:     money.MustParseDollars("1.50"),
 		},
 		{
-			ModelPattern:         "claude-sonnet-4-20250514",
+			ModelPattern:         "standard-cache-model",
 			InputPerMTok:         money.MustParseDollars("3.0"),
 			OutputPerMTok:        money.MustParseDollars("15.0"),
 			CacheCreationPerMTok: money.MustParseDollars("3.75"),
@@ -1159,7 +1158,7 @@ func TestGetDailyUsage_CacheSavingsUsesPerModelRates(t *testing.T) {
 	insertMessages(t, d, Message{
 		SessionID: "s-opus", Ordinal: 0,
 		Role: "assistant", Timestamp: "2024-06-15T10:30:00Z",
-		Model: "claude-opus-4-6", TokenUsage: tokens,
+		Model: "premium-cache-model", TokenUsage: tokens,
 	})
 
 	insertSession(t, d, "s-sonnet", "proj", func(s *Session) {
@@ -1169,7 +1168,7 @@ func TestGetDailyUsage_CacheSavingsUsesPerModelRates(t *testing.T) {
 	insertMessages(t, d, Message{
 		SessionID: "s-sonnet", Ordinal: 0,
 		Role: "assistant", Timestamp: "2024-06-15T10:35:00Z",
-		Model: "claude-sonnet-4-20250514", TokenUsage: tokens,
+		Model: "standard-cache-model", TokenUsage: tokens,
 	})
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
@@ -1177,18 +1176,18 @@ func TestGetDailyUsage_CacheSavingsUsesPerModelRates(t *testing.T) {
 	})
 	requireNoError(t, err, "GetDailyUsage")
 
-	// Opus per-token delta: read earns (15 - 1.50) = 13.50,
+	// Premium per-token delta: read earns (15 - 1.50) = 13.50,
 	// creation earns (15 - 18.75) = -3.75.
-	// Opus savings on 1M + 1M = 13.50 + (-3.75) = 9.75.
-	// Sonnet per-token delta: read earns (3 - 0.30) = 2.70,
+	// Premium savings on 1M + 1M = 13.50 + (-3.75) = 9.75.
+	// Standard per-token delta: read earns (3 - 0.30) = 2.70,
 	// creation earns (3 - 3.75) = -0.75.
-	// Sonnet savings on 1M + 1M = 2.70 + (-0.75) = 1.95.
+	// Standard savings on 1M + 1M = 2.70 + (-0.75) = 1.95.
 	// Net total savings = 9.75 + 1.95 = 11.70.
 	wantSavings := money.MustParseDollars("11.70")
 	assert.Equal(t, wantSavings, result.Totals.CacheSavings,
 		"Totals.CacheSavings")
 
-	// Falsification: if the code had used Sonnet rates for
+	// Falsification: if the code had used standard rates for
 	// both rows the total would be 2 * 1.95 = 3.90, which
 	// differs from wantSavings by >$7. Assert we're nowhere
 	// near that value so a regression to a single-rate path
@@ -1368,7 +1367,7 @@ func TestGetDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "gpt-5.4",
+		ModelPattern:  "reasoning-model",
 		InputPerMTok:  money.MustParseDollars("1"),
 		OutputPerMTok: money.MustParseDollars("2"),
 	}}))
@@ -1381,7 +1380,7 @@ func TestGetDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 		Ordinal:   0,
 		Role:      "assistant",
 		Timestamp: "2026-05-14T10:30:00Z",
-		Model:     "gpt-5.4",
+		Model:     "reasoning-model",
 		TokenUsage: jsontext.Value(
 			`{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":500}`),
 	})
@@ -1520,7 +1519,7 @@ func TestUsageAggregationClampsMessageTokenJSON(t *testing.T) {
 	const maxTokens = 2_000_000
 
 	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:         "claude-sonnet-4-20250514",
+		ModelPattern:         "clamped-token-model",
 		InputPerMTok:         money.MustParseDollars("1.0"),
 		OutputPerMTok:        money.MustParseDollars("2.0"),
 		CacheCreationPerMTok: money.MustParseDollars("3.0"),
@@ -1539,7 +1538,7 @@ func TestUsageAggregationClampsMessageTokenJSON(t *testing.T) {
 		SessionID: "sess1", Ordinal: 0,
 		Role:      "assistant",
 		Timestamp: "2024-06-15T10:30:00Z",
-		Model:     "claude-sonnet-4-20250514",
+		Model:     "clamped-token-model",
 		TokenUsage: jsontext.Value(
 			`{"input_tokens":9999999999,` +
 				`"output_tokens":9999999999,` +
@@ -5193,14 +5192,14 @@ func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
 		{
-			ModelPattern:         "gpt-4",
+			ModelPattern:         "credit-model",
 			InputPerMTok:         money.MustParseDollars("15.0"),
 			OutputPerMTok:        money.MustParseDollars("60.0"),
 			CacheCreationPerMTok: money.MustParseDollars("15.0"),
 			CacheReadPerMTok:     money.MustParseDollars("6.0"),
 		},
 		{
-			ModelPattern:         "claude-opus-4-6",
+			ModelPattern:         "noncredit-model",
 			InputPerMTok:         money.MustParseDollars("3.0"),
 			OutputPerMTok:        money.MustParseDollars("15.0"),
 			CacheCreationPerMTok: money.MustParseDollars("3.75"),
@@ -5221,7 +5220,7 @@ func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 			name:        "copilot credits computed",
 			sessionID:   "copilot:aicredits",
 			agent:       "copilot",
-			model:       "gpt-4",
+			model:       "credit-model",
 			inputRate:   money.MustParseDollars("15"),
 			outputRate:  money.MustParseDollars("60"),
 			wantCredits: true,
@@ -5230,7 +5229,7 @@ func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 			name:        "non copilot capability credits computed",
 			sessionID:   "ai-credit-agent:aicredits",
 			agent:       "ai-credit-agent",
-			model:       "gpt-4",
+			model:       "credit-model",
 			inputRate:   money.MustParseDollars("15"),
 			outputRate:  money.MustParseDollars("60"),
 			wantCredits: true,
@@ -5239,7 +5238,7 @@ func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 			name:       "non copilot has no credits",
 			sessionID:  "claude:nocredits",
 			agent:      "claude-code",
-			model:      "claude-opus-4-6",
+			model:      "noncredit-model",
 			inputRate:  money.MustParseDollars("3"),
 			outputRate: money.MustParseDollars("15"),
 		},

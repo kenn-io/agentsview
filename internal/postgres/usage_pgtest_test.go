@@ -50,7 +50,7 @@ func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {
 			message_count, user_message_count
 		) VALUES (
 			'usage-fallback-001', 'test-machine', 'proj', 'claude',
-			'2026-03-12T10:00:00Z'::timestamptz, 1, 1
+			'2026-08-13T10:00:00Z'::timestamptz, 1, 1
 		)`)
 	require.NoError(t, err, "insert session")
 	_, err = store.DB().ExecContext(ctx, `
@@ -59,19 +59,19 @@ func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {
 			content_length, model, token_usage
 		) VALUES (
 			'usage-fallback-001', 0, 'assistant', 'hi',
-			'2026-03-12T10:00:00Z'::timestamptz, 2,
-			'claude-sonnet-4-20250514',
+			'2026-08-13T10:00:00Z'::timestamptz, 2,
+			'xai/grok-4.6',
 			'{"input_tokens":1000000}'
 		)`)
 	require.NoError(t, err, "insert message")
 
 	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From:     "2026-03-12",
-		To:       "2026-03-12",
+		From:     "2026-08-13",
+		To:       "2026-08-13",
 		Timezone: "UTC",
 	})
 	require.NoError(t, err, "GetDailyUsage")
-	assert.Equal(t, money.MustParseDollars("6"), result.Totals.TotalCost)
+	assert.Equal(t, money.MustParseDollars("4"), result.Totals.TotalCost)
 	assert.Len(t, result.Daily, 1)
 }
 
@@ -545,7 +545,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, 'seed')`)
+		) VALUES ('priced-model', 3000000, 15000000, 3750000, 300000, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -566,7 +566,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 		) VALUES (
 			'codex:usage-priced', 1, 'assistant', 'done',
 			'2026-03-12T10:01:00Z'::timestamptz, 4,
-			'gpt-5.1',
+			'priced-model',
 			'{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":200,"cache_read_input_tokens":300}'
 		)`)
 	require.NoError(t, err, "insert message")
@@ -587,7 +587,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	// SQLite and DuckDB for the same cost (see db.CostUSDFromCost).
 	require.NotNil(t, got.CostUSD)
 	assert.InDelta(t, 0.01134, *got.CostUSD, 1e-9)
-	assert.Equal(t, []string{"gpt-5.1"}, got.Models)
+	assert.Equal(t, []string{"priced-model"}, got.Models)
 	assert.Empty(t, got.UnpricedModels)
 	require.Len(t, got.Breakdown, 1, "Breakdown")
 	entry := got.Breakdown[0]
@@ -597,7 +597,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	assert.Equal(t, "message", entry.Source)
 	assert.Equal(t, "Prompt 2", entry.Label)
 	assert.Equal(t, "2026-03-12T10:01:00Z", entry.Timestamp)
-	assert.Equal(t, "gpt-5.1", entry.Model)
+	assert.Equal(t, "priced-model", entry.Model)
 	assert.Equal(t, 1000, entry.InputTokens)
 	assert.Equal(t, 500, entry.OutputTokens)
 	assert.Equal(t, 200, entry.CacheCreationInputTokens)
@@ -613,7 +613,7 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, 'seed')`)
+		) VALUES ('rollup-model', 3000000, 15000000, 3750000, 300000, 'seed')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -629,9 +629,9 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 			session_id, ordinal, role, content, timestamp, content_length,
 			model, token_usage, claude_message_id, claude_request_id
 		) VALUES
-			('pg-rollup-root', 0, 'assistant', 'root', '2026-03-12T10:00:00Z', 4, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}', 'pg-rollup-shared', 'pg-rollup-request'),
-			('pg-rollup-child', 0, 'assistant', 'child', '2026-03-12T10:02:00Z', 5, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}', 'pg-rollup-shared', 'pg-rollup-request'),
-			('pg-rollup-child', 1, 'assistant', 'child unique', '2026-03-12T10:03:00Z', 12, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}', 'pg-rollup-unique', 'pg-rollup-unique-request')`)
+			('pg-rollup-root', 0, 'assistant', 'root', '2026-03-12T10:00:00Z', 4, 'rollup-model', '{"input_tokens":1000,"output_tokens":500}', 'pg-rollup-shared', 'pg-rollup-request'),
+			('pg-rollup-child', 0, 'assistant', 'child', '2026-03-12T10:02:00Z', 5, 'rollup-model', '{"input_tokens":1000,"output_tokens":500}', 'pg-rollup-shared', 'pg-rollup-request'),
+			('pg-rollup-child', 1, 'assistant', 'child unique', '2026-03-12T10:03:00Z', 12, 'rollup-model', '{"input_tokens":1000,"output_tokens":500}', 'pg-rollup-unique', 'pg-rollup-unique-request')`)
 	require.NoError(t, err)
 
 	rollup, err := service.GetSessionUsageRollup(ctx, store, "pg-rollup-root", false)
@@ -688,7 +688,7 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, 'seed')`)
+		) VALUES ('untimed-rollup-model', 3000000, 15000000, 3750000, 300000, 'seed')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -703,8 +703,8 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 			session_id, ordinal, role, content, timestamp, content_length,
 			model, token_usage
 		) VALUES
-			('pg-rollup-untimed-root', 0, 'assistant', 'root', NULL, 4, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}'),
-			('pg-rollup-untimed-child', 0, 'assistant', 'child', NULL, 5, 'gpt-5.1', '{"input_tokens":1000,"output_tokens":500}')`)
+			('pg-rollup-untimed-root', 0, 'assistant', 'root', NULL, 4, 'untimed-rollup-model', '{"input_tokens":1000,"output_tokens":500}'),
+			('pg-rollup-untimed-child', 0, 'assistant', 'child', NULL, 5, 'untimed-rollup-model', '{"input_tokens":1000,"output_tokens":500}')`)
 	require.NoError(t, err)
 
 	rollup, err := service.GetSessionUsageRollup(ctx, store, "pg-rollup-untimed-root", false)
@@ -1407,7 +1407,7 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('gpt-5.4', 1000000, 2000000, 0, 0, 'seed')`)
+		) VALUES ('summary-event-model', 1000000, 2000000, 0, 0, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1426,7 +1426,7 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 			session_id, message_ordinal, source, model, input_tokens,
 			output_tokens, occurred_at, dedup_key
 		) VALUES (
-			'hermes-summary', 0, 'session', 'gpt-5.4', $1, $2,
+			'hermes-summary', 0, 'session', 'summary-event-model', $1, $2,
 			'2026-05-14T10:05:00Z'::timestamptz, 'session:hermes-summary'
 		)`, rawInput, rawOutput)
 	require.NoError(t, err, "insert usage event")
@@ -1473,7 +1473,7 @@ func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('gpt-5.4', 1000000, 2000000, 0, 0, 'seed')`)
+		) VALUES ('reasoning-model', 1000000, 2000000, 0, 0, 'seed')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1491,7 +1491,7 @@ func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 		) VALUES (
 			'pg-message-reasoning', 0, 'assistant', 'done',
 			'2026-05-14T10:30:00Z'::timestamptz, 4,
-			'gpt-5.4',
+			'reasoning-model',
 			'{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":3000000000}'
 		)`)
 	require.NoError(t, err, "insert message")

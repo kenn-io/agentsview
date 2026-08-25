@@ -354,6 +354,15 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
     PRIMARY KEY (model_pattern, above_input_tokens)
 );
 
+CREATE TABLE IF NOT EXISTS genai_pricing (
+    singleton SMALLINT PRIMARY KEY CHECK (singleton = 1),
+    version TEXT NOT NULL,
+    source_ref TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL CHECK (source IN ('embedded', 'fetched')),
+    data_json BYTEA NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS source_archives (
     source_archive_id   TEXT PRIMARY KEY,
     source_archive_salt TEXT NOT NULL
@@ -2556,6 +2565,17 @@ func CheckSchemaCompat(
 			)
 		}
 		rows.Close()
+
+		rows, err = db.QueryContext(ctx,
+			`SELECT singleton, version, source_ref, source, data_json, updated_at
+			 FROM genai_pricing LIMIT 0`)
+		if err != nil {
+			return fmt.Errorf(
+				"genai_pricing table missing required columns: %w",
+				err,
+			)
+		}
+		rows.Close()
 	}
 
 	rows, err = db.QueryContext(ctx,
@@ -2692,6 +2712,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	}
 	if !pgHasTable(ctx, db, "model_pricing") ||
 		!pgHasTable(ctx, db, "model_pricing_bands") ||
+		!pgHasTable(ctx, db, "genai_pricing") ||
 		!pgHasTable(ctx, db, "source_archives") ||
 		!pgHasTable(ctx, db, "source_project_identity_observations") ||
 		!pgHasTable(ctx, db, "source_project_identity_observation_scopes") ||

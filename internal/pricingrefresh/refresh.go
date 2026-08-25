@@ -75,6 +75,9 @@ func SeedFallbackContext(ctx context.Context, database *db.DB) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := seedEmbeddedGenAI(ctx, database); err != nil {
+		return err
+	}
 	stored, err := database.GetPricingMetaContext(ctx, fallbackVersionMetaKey)
 	if err != nil {
 		return err
@@ -156,7 +159,7 @@ func refreshAt(
 		)
 	}
 	catalog, fetchErr := fetch()
-	if fetchErr != nil && len(catalog.LiteLLM) == 0 {
+	if fetchErr != nil && catalog.GenAI == nil && len(catalog.LiteLLM) == 0 {
 		return false, fetchErr
 	}
 	if err := storeCatalog(database, catalog); err != nil {
@@ -173,6 +176,9 @@ func Ensure(
 	now time.Time,
 ) (bool, error) {
 	if offline {
+		if err := seedEmbeddedGenAI(context.Background(), database); err != nil {
+			return false, err
+		}
 		return false, storeFallback(database)
 	}
 	if err := SeedFallback(database); err != nil {
@@ -283,6 +289,20 @@ func runCurrent(
 // retiring an already-deleted row is a no-op and a re-listed pattern is
 // re-adopted.
 func storeCatalog(database *db.DB, catalog pricing.Catalog) error {
+	if catalog.GenAI != nil {
+		if err := database.UpsertGenAIPricing(
+			context.Background(), db.GenAIPricingDocument{
+				Version: catalog.GenAI.Version, SourceRef: catalog.GenAI.SourceRef,
+				Source: db.GenAIPricingSourceFetched,
+				Data:   catalog.GenAI.RawJSON(),
+			},
+		); err != nil {
+			return err
+		}
+	}
+	if len(catalog.LiteLLM) == 0 && len(catalog.OpenRouter) == 0 {
+		return nil
+	}
 	value, err := database.GetPricingMeta(pricing.OpenRouterModelsMetaKey)
 	if err != nil {
 		return err
@@ -309,6 +329,14 @@ func storeCatalog(database *db.DB, catalog pricing.Catalog) error {
 			Value: pricing.EncodeOpenRouterModels(owned),
 		},
 	)
+}
+
+func seedEmbeddedGenAI(ctx context.Context, database *db.DB) error {
+	embedded := pricing.EmbeddedGenAIDocument()
+	return database.InsertMissingGenAIPricing(ctx, db.GenAIPricingDocument{
+		Version: embedded.Version, SourceRef: embedded.SourceRef,
+		Source: db.GenAIPricingSourceEmbedded, Data: embedded.RawJSON(),
+	})
 }
 
 // storeFallback writes the embedded catalog over the stored table. Like

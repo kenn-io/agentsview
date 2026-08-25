@@ -2964,6 +2964,27 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]duckRates, error) {
 	return out, nil
 }
 
+func (s *Store) loadPricingResolver(
+	ctx context.Context,
+) (*export.PricingResolver, error) {
+	pricing, err := s.loadPricing(ctx)
+	if err != nil {
+		return nil, err
+	}
+	document, err := scanDuckGenAIPricing(s.queryRowContext(ctx, `
+		SELECT version, source_ref, source, data_json, updated_at
+		FROM genai_pricing WHERE singleton = 1`))
+	if err != nil {
+		return nil, err
+	}
+	genAI, err := duckGenAIEffectivePricingRow(document)
+	if err != nil {
+		return nil, err
+	}
+	rows := duckPricingRows(pricing)
+	return export.NewPricingResolver(append(rows, genAI)), nil
+}
+
 func duckCustomPricingSource() export.PricingRowSource {
 	return export.PricingRowSourceCustom
 }
@@ -3695,6 +3716,7 @@ type duckUsageBucket struct {
 
 type duckUsageAggregateRow struct {
 	date           string
+	ts             string
 	sessionID      string
 	project        string
 	agent          string
@@ -3748,6 +3770,11 @@ func duckUsageLookupModel(model, ts string) string {
 	return model
 }
 
+func duckUsagePricingTimestamp(ts string) time.Time {
+	timestamp, _ := parseAnalyticsTime(ts)
+	return timestamp
+}
+
 func duckSessionUsageLookupModel(r duckSessionUsageRow) string {
 	return duckUsageLookupModel(r.model, r.ts)
 }
@@ -3763,7 +3790,7 @@ func duckUsageAggregateCost(
 	pricing *export.PricingResolver,
 ) (money.Money, money.Money, bool, bool, error) {
 	return duckUsageAggregateResolvedCost(
-		model, model,
+		model, model, time.Time{},
 		inputTok, outputTok, cacheCr, cacheRd,
 		billableInput, billableOutput, billableReasoning,
 		billableCacheCr, billableCacheRd, billableWebSearchRequests,
@@ -3776,7 +3803,7 @@ func duckUsageAggregateCost(
 // same way it zeroes the billable token counts, so a reported cost is never
 // topped up with a fee it already settles.
 func duckUsageAggregateResolvedCost(
-	reportedModel, canonicalModel string,
+	reportedModel, canonicalModel string, pricingTimestamp time.Time,
 	inputTok, outputTok, cacheCr, cacheRd int,
 	billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheRd int,
 	billableWebSearchRequests int,
@@ -3785,7 +3812,9 @@ func duckUsageAggregateResolvedCost(
 	requestScoped bool,
 	pricing *export.PricingResolver,
 ) (money.Money, money.Money, bool, bool, error) {
-	pricedModel, lookup := pricing.Resolve(reportedModel, canonicalModel)
+	pricedModel, lookup := pricing.ResolveAt(
+		reportedModel, canonicalModel, pricingTimestamp,
+	)
 	hasBillableTokens := billableInput != 0 || billableOutput != 0 ||
 		billableReasoning != 0 || billableCacheCr != 0 || billableCacheRd != 0
 	hasComputedUsage := hasBillableTokens || billableWebSearchRequests > 0
@@ -3883,7 +3912,10 @@ func duckSessionUsageRowCost(
 		r.cacheCr == 0 && r.cacheRd == 0 && r.webSearchRequests == 0 {
 		return money.Money{}, true, false, nil
 	}
-	_, lookup := pricing.Resolve(r.model, duckSessionUsageLookupModel(r))
+	_, lookup := pricing.ResolveAt(
+		r.model, duckSessionUsageLookupModel(r),
+		duckUsagePricingTimestamp(r.ts),
+	)
 	if !lookup.OK {
 		fee, feeErr := export.WebSearchFee(r.webSearchRequests)
 		if feeErr != nil {
@@ -3961,7 +3993,7 @@ func (s *Store) forEachDailyUsageAggregateRow(
 	// turn several unrepresentable sub-microdollar rows into stored cost.
 	query := cte + `
 		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model, price_model,
-			source, message_ordinal,
+			source, message_ordinal, ts,
 			input_tokens_norm AS input_tokens,
 			output_tokens_norm AS output_tokens,
 			cache_create_norm AS cache_creation_tokens,
@@ -3989,9 +4021,10 @@ func (s *Store) forEachDailyUsageAggregateRow(
 	defer rows.Close()
 	for rows.Next() {
 		var r duckUsageAggregateRow
+		var ts any
 		if err := rows.Scan(
 			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
-			&r.priceModel, &r.source, &r.messageOrdinal,
+			&r.priceModel, &r.source, &r.messageOrdinal, &ts,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
 			&r.billableCacheCr, &r.billableCacheRd,
@@ -4001,6 +4034,7 @@ func (s *Store) forEachDailyUsageAggregateRow(
 		); err != nil {
 			return fmt.Errorf("scanning duckdb daily usage aggregate: %w", err)
 		}
+		r.ts = formatDBTime(ts)
 		if err := visit(r); err != nil {
 			return err
 		}
@@ -4014,11 +4048,10 @@ func (s *Store) forEachDailyUsageAggregateRow(
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
-	pricing, err := s.loadPricing(ctx)
+	rateResolver, err := s.loadPricingResolver(ctx)
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
-	rateResolver := export.NewPricingResolver(duckPricingRows(pricing))
 	type usageAccumKey struct {
 		date    string
 		project string
@@ -4059,7 +4092,7 @@ func (s *Store) GetDailyUsage(
 			accum[key] = b
 		}
 		cost, savings, _, _, priceErr := duckUsageAggregateResolvedCost(
-			r.model, r.priceModel,
+			r.model, r.priceModel, duckUsagePricingTimestamp(r.ts),
 			r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 			r.billableInput, r.billableOutput, r.billableReason,
 			r.billableCacheCr, r.billableCacheRd, r.billableWebSearch,
@@ -4358,7 +4391,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	// Top-session and session-usage callers aggregate these rows in Go only
 	// after each row has been quantized to whole microdollars.
 	query := cte + `
-		SELECT session_id, project, agent, model, price_model, source, message_ordinal,
+		SELECT session_id, project, agent, model, price_model, source, message_ordinal, ts,
 			display_name, started_at,
 			input_tokens_norm AS input_tokens,
 			output_tokens_norm AS output_tokens,
@@ -4389,10 +4422,10 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	defer rows.Close()
 	for rows.Next() {
 		var r duckUsageAggregateRow
-		var startedAt any
+		var ts, startedAt any
 		if err := rows.Scan(
 			&r.sessionID, &r.project, &r.agent, &r.model,
-			&r.priceModel, &r.source, &r.messageOrdinal,
+			&r.priceModel, &r.source, &r.messageOrdinal, &ts,
 			&r.displayName, &startedAt,
 			&r.inputTok, &r.outputTok, &r.snapshotDedupOutput,
 			&r.cacheCr, &r.cacheRd,
@@ -4404,6 +4437,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		); err != nil {
 			return fmt.Errorf("scanning duckdb session usage aggregate: %w", err)
 		}
+		r.ts = formatDBTime(ts)
 		r.startedAt = formatDBTime(startedAt)
 		if err := visit(r); err != nil {
 			return err
@@ -4482,11 +4516,10 @@ func (s *Store) sessionUsageRows(
 func (s *Store) GetTopSessionsByCost(
 	ctx context.Context, f db.UsageFilter, limit int,
 ) ([]db.TopSessionEntry, error) {
-	pricing, err := s.loadPricing(ctx)
+	rateResolver, err := s.loadPricingResolver(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rateResolver := export.NewPricingResolver(duckPricingRows(pricing))
 	type acc struct {
 		row               db.TopSessionEntry
 		tokens            int
@@ -4505,7 +4538,7 @@ func (s *Store) GetTopSessionsByCost(
 				bySession[r.sessionID] = a
 			}
 			cost, _, _, _, priceErr := duckUsageAggregateResolvedCost(
-				r.model, r.priceModel,
+				r.model, r.priceModel, duckUsagePricingTimestamp(r.ts),
 				r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 				r.billableInput, r.billableOutput, r.billableReason,
 				r.billableCacheCr, r.billableCacheRd, r.billableWebSearch,
@@ -4682,11 +4715,10 @@ func (s *Store) GetSessionUsage(
 	if err != nil || sess == nil {
 		return nil, err
 	}
-	pricing, err := s.loadPricing(ctx)
+	rateResolver, err := s.loadPricingResolver(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rateResolver := export.NewPricingResolver(duckPricingRows(pricing))
 	var breakdownRows []duckSessionUsageRow
 	breakdownCount := 0
 	if includeBreakdown {
@@ -4719,7 +4751,7 @@ func (s *Store) GetSessionUsage(
 				authoritativeCost = &v
 			}
 			cost, _, priced, contributes, priceErr := duckUsageAggregateResolvedCost(
-				r.model, r.priceModel,
+				r.model, r.priceModel, duckUsagePricingTimestamp(r.ts),
 				r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
 				r.billableInput, r.billableOutput, r.billableReason,
 				r.billableCacheCr, r.billableCacheRd, r.billableWebSearch,

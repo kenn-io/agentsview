@@ -17,7 +17,10 @@ func (db *DB) ActivityReportSourceProbe(
 		COALESCE((SELECT MAX(data_version) FROM sessions), 0),
 		COALESCE((SELECT MAX(id) FROM messages), 0),
 		COALESCE((SELECT MAX(id) FROM usage_events), 0),
-		COALESCE((SELECT MAX(updated_at) FROM model_pricing), ''),
+		MAX(
+			COALESCE((SELECT MAX(updated_at) FROM model_pricing), ''),
+			COALESCE((SELECT MAX(updated_at) FROM genai_pricing), '')
+		),
 		COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata
 			WHERE key = ?), 0)`, archiveMetadataProjectIdentityRevisionKey).Scan(
 		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,

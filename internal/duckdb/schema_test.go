@@ -48,6 +48,7 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 		"cursor_usage_events",
 		"model_pricing",
 		"model_pricing_bands",
+		"genai_pricing",
 		"tool_calls",
 		"tool_result_events",
 		"secret_findings",
