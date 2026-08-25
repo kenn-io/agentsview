@@ -276,7 +276,7 @@ func (s *Store) IngestEvalTrajectory(
 	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
 }
 
-const duckSessionCols = `id, project, machine, agent,
+const duckSessionCols = `id, project, project_assigned, machine, agent,
 	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
@@ -313,7 +313,7 @@ func scanSessionWithSource(
 	var createdAt any
 	var startedAt, endedAt, deletedAt any
 	targets := []any{
-		&s.ID, &s.Project, &s.Machine, &s.Agent,
+		&s.ID, &s.Project, &s.ProjectAssigned, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName,
 		&createdAt, &startedAt, &endedAt,
