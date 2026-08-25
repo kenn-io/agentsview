@@ -4177,6 +4177,20 @@ func TestKiroReconciliationRootPreferenceUsesConfiguredOrder(t *testing.T) {
 	))
 }
 
+func TestKiroReconciliationRootPreferenceUsesSourceAttribution(t *testing.T) {
+	ancestor := filepath.Join(t.TempDir(), "ancestor")
+	descendant := filepath.Join(ancestor, "descendant")
+	path := filepath.Join(descendant, "session.jsonl")
+	source := parser.SourceRef{ConfiguredRoot: descendant}
+
+	assert.Equal(t, int64(1), configuredRootPreferenceForSource(
+		source, path, []string{ancestor, descendant},
+	), "the provider root must outrank an overlapping ancestor")
+	assert.Equal(t, int64(2), configuredRootPreferenceForSource(
+		parser.SourceRef{}, path, []string{ancestor, descendant},
+	), "unknown attribution must retain the path fallback")
+}
+
 func TestFilterEmptyMessages(t *testing.T) {
 	tests := []struct {
 		name string

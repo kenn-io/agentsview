@@ -5876,7 +5876,7 @@ func (e *Engine) reconciliationCandidate(
 		rank := ranker.ReconciliationSourceRank(source)
 		if agent == parser.AgentKiro {
 			preference1 = rank.Class
-			preference2 = configuredRootPreference(statPath, roots)
+			preference2 = configuredRootPreferenceForSource(source, statPath, roots)
 			preference3 = rank.Recency
 		} else {
 			preference2 = rank.Class
@@ -5904,6 +5904,20 @@ func configuredRootPreference(path string, roots []string) int64 {
 		}
 	}
 	return 0
+}
+
+func configuredRootPreferenceForSource(
+	source parser.SourceRef, path string, roots []string,
+) int64 {
+	if source.ConfiguredRoot != "" {
+		for i, configured := range roots {
+			if samePathOrDescendant(configured, source.ConfiguredRoot) &&
+				samePathOrDescendant(source.ConfiguredRoot, configured) {
+				return int64(len(roots) - i)
+			}
+		}
+	}
+	return configuredRootPreference(path, roots)
 }
 
 func boolPreference(value bool) int64 {
@@ -11145,7 +11159,9 @@ func (e *Engine) processProviderFile(
 			}
 		}
 		skipRes := processResult{
-			skip:                 !outcome.ForceReplace,
+			// A complete Kiro source can report no current rows while still
+			// owning stored members that need source-missing reconciliation.
+			skip:                 !outcome.ForceReplace && len(missingMembers) == 0,
 			excludedSessionIDs:   excludedSessionIDs,
 			preservedSessionIDs:  preservedSessionIDs,
 			sourceMissingMembers: missingMembers,
