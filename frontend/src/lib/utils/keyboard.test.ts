@@ -193,6 +193,7 @@ describe("registerShortcuts", () => {
       expect(navigateSessions).toHaveBeenCalledWith(1);
 
       const message = document.createElement("div");
+      message.className = "message-list-scroll";
       document.body.appendChild(message);
       message.dispatchEvent(new Event("pointermove", { bubbles: true }));
       fireKey("ArrowDown");
@@ -205,6 +206,36 @@ describe("registerShortcuts", () => {
       fireKey("ArrowDown");
       expect(navigateSessions).toHaveBeenCalledTimes(2);
       expect(navigateMessage).toHaveBeenCalledWith(1);
+
+      const unrelated = document.createElement("button");
+      document.body.appendChild(unrelated);
+      row.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      unrelated.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      fireKey("ArrowDown");
+      expect(navigateSessions).toHaveBeenCalledTimes(3);
+      expect(navigateMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("uses session navigation after a sidebar control interaction", () => {
+      const navigateSessions = vi.fn();
+      const sidebar = document.createElement("aside");
+      sidebar.id = "session-sidebar";
+      const filter = document.createElement("button");
+      sidebar.appendChild(filter);
+      document.body.appendChild(sidebar);
+      const list = mountSessionList(navigateSessions);
+      sidebar.appendChild(list);
+
+      const messagePane = document.createElement("div");
+      messagePane.className = "message-list-scroll";
+      document.body.appendChild(messagePane);
+      messagePane.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      filter.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+
+      fireKey("ArrowDown");
+
+      expect(navigateSessions).toHaveBeenCalledWith(1);
+      expect(navigateMessage).not.toHaveBeenCalled();
     });
 
     it("keeps arrow navigation within the starred-only list", () => {

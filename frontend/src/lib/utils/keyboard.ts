@@ -72,11 +72,17 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
   let lastArrowInteraction: ArrowInteractionTarget | null = null;
 
   function rememberArrowInteraction(e: PointerEvent | FocusEvent) {
-    if (!(e.target instanceof Node)) return;
+    if (!(e.target instanceof Element)) return;
     const sessionList = getSessionListElement();
-    lastArrowInteraction = sessionList?.contains(e.target)
-      ? "sessionList"
-      : "message";
+    const sessionSidebar = sessionList?.closest("#session-sidebar");
+    if (
+      sessionList?.contains(e.target) ||
+      sessionSidebar?.contains(e.target)
+    ) {
+      lastArrowInteraction = "sessionList";
+    } else if (e.target.closest(".message-list-scroll")) {
+      lastArrowInteraction = "message";
+    }
   }
 
   function handler(e: KeyboardEvent) {
