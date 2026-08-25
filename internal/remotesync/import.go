@@ -53,19 +53,30 @@ func (im Importer) ImportExtracted(
 	stats.SessionsTotal = engineStats.TotalSessions
 	stats.Skipped = engineStats.Skipped
 	stats.Failed = engineStats.Failed
+	stats.Deferred = engineStats.Deferred
+	stats.incomplete = !engineStats.ProcessingComplete()
 	if err := saveEngineSkipCache(im.DB, engine, layout.paths); err != nil {
 		return stats, err
 	}
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
-	if im.RequireComplete && (engineStats.Aborted || engineStats.Failed > 0) {
-		return stats, fmt.Errorf(
-			"remote import processing incomplete: aborted=%t failed=%d",
-			engineStats.Aborted, engineStats.Failed,
-		)
+	if im.RequireComplete {
+		if err := requireCompleteProcessing(engineStats); err != nil {
+			return stats, err
+		}
 	}
 	return stats, nil
+}
+
+func requireCompleteProcessing(stats syncpkg.SyncStats) error {
+	if stats.ProcessingComplete() {
+		return nil
+	}
+	return fmt.Errorf(
+		"remote import processing incomplete: aborted=%t failed=%d deferred=%d",
+		stats.Aborted, stats.Failed, stats.Deferred,
+	)
 }
 
 // importLayout maps stable remote paths to one prepared source root. Keeping

@@ -9,6 +9,9 @@ PostgreSQL database, keep that database current with an optional
 auto-push watcher or OS service, then serve a read-only web UI from
 it — useful for team dashboards or multi-machine setups.
 
+The PostgreSQL usage optimization baseline and its architecture boundary are
+recorded in `docs/internal/pg-usage-native-optimization.md`.
+
 The sync direction is one-way: SQLite to PostgreSQL. Each machine
 pushes its own sessions; `pg serve` reads from the shared database.
 The resulting UI includes the session browser, analytics dashboard,

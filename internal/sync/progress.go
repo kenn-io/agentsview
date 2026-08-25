@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"slices"
 	gosync "sync"
 	"time"
 )
@@ -61,10 +62,13 @@ type SyncResult struct {
 // produced at least one session — used by ResyncAll to compare
 // against Failed on the same unit.
 type SyncStats struct {
-	TotalSessions  int                 `json:"total_sessions"`
-	Synced         int                 `json:"synced"`
-	Skipped        int                 `json:"skipped"`
-	Failed         int                 `json:"failed"`
+	TotalSessions int `json:"total_sessions"`
+	Synced        int `json:"synced"`
+	Skipped       int `json:"skipped"`
+	Failed        int `json:"failed"`
+	// Deferred counts provider results retained for a later retry. It is
+	// run-local completion state, not a durable or API field.
+	Deferred       int                 `json:"-"`
 	OrphanedCopied int                 `json:"orphaned_copied,omitempty"`
 	Warnings       []string            `json:"warnings,omitempty"`
 	Aborted        bool                `json:"aborted,omitempty"`
@@ -102,6 +106,8 @@ type SyncStats struct {
 	parserExcludedFiles    int // file-level intentional parser exclusions
 	parserExcludedIDs      []string
 	providerFailures       int // authoritative discoveries that did not complete
+	deferredRetryPaths     []string
+	deferredRetryOverflow  bool
 	// ArchiveRebuilt records a completed full-resync database swap. A rebuild
 	// can preserve/copy durable corpus rows while syncing zero session files,
 	// so downstream refresh consumers cannot infer it from Synced. It is not
@@ -407,6 +413,28 @@ func (s *SyncStats) RecordCwdUpdated(n int) {
 // RecordFailed increments the hard-failure counter.
 func (s *SyncStats) RecordFailed() {
 	s.Failed++
+}
+
+func (s *SyncStats) recordDeferred(path string) {
+	s.Deferred++
+	s.retainDeferredRetryPath(path)
+}
+
+func (s *SyncStats) retainDeferredRetryPath(path string) {
+	if s.deferredRetryOverflow || path == "" {
+		return
+	}
+	if slices.Contains(s.deferredRetryPaths, path) {
+		return
+	}
+	if len(s.deferredRetryPaths) >= reconciliationRetryPathLimit ||
+		reconciliationRetryPathBytes(s.deferredRetryPaths)+len(path) >
+			reconciliationRetryPathByteLimit {
+		s.deferredRetryOverflow = true
+		s.deferredRetryPaths = nil
+		return
+	}
+	s.deferredRetryPaths = append(s.deferredRetryPaths, path)
 }
 
 // Percent returns the sync progress as a percentage (0–100).

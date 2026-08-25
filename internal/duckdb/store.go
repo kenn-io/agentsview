@@ -303,10 +303,16 @@ const duckSessionCols = `id, project, machine, agent,
 	deleted_at, deletion_cause, termination_status, transcript_revision`
 
 func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
+	return scanSessionWithSource(rs, false)
+}
+
+func scanSessionWithSource(
+	rs interface{ Scan(...any) error }, includeSource bool,
+) (db.Session, error) {
 	var s db.Session
 	var createdAt any
 	var startedAt, endedAt, deletedAt any
-	err := rs.Scan(
+	targets := []any{
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName,
@@ -335,7 +341,11 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
-	)
+	}
+	if includeSource {
+		targets = append(targets, &s.FilePath)
+	}
+	err := rs.Scan(targets...)
 	if err != nil {
 		return s, err
 	}
@@ -353,9 +363,15 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 }
 
 func scanSessionRows(rows *sql.Rows) ([]db.Session, error) {
+	return scanSessionRowsWithSource(rows, false)
+}
+
+func scanSessionRowsWithSource(
+	rows *sql.Rows, includeSource bool,
+) ([]db.Session, error) {
 	sessions := []db.Session{}
 	for rows.Next() {
-		s, err := scanSession(rows)
+		s, err := scanSessionWithSource(rows, includeSource)
 		if err != nil {
 			return nil, fmt.Errorf("scanning duckdb session: %w", err)
 		}
@@ -499,7 +515,11 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 		}
 		cursorWhere += " AND " + pageBuilder.CursorPredicate(rs, f, vals, cur.ID)
 	}
-	query := "SELECT " + duckSessionCols +
+	columns := duckSessionCols
+	if f.IncludeSource {
+		columns += ", file_path"
+	}
+	query := "SELECT " + columns +
 		" FROM sessions WHERE " + cursorWhere + " " +
 		pageBuilder.OrderByClause(rs, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
@@ -509,7 +529,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 		return db.SessionPage{}, fmt.Errorf("querying duckdb sessions: %w", err)
 	}
 	defer rows.Close()
-	sessions, err := scanSessionRows(rows)
+	sessions, err := scanSessionRowsWithSource(rows, f.IncludeSource)
 	if err != nil {
 		return db.SessionPage{}, err
 	}

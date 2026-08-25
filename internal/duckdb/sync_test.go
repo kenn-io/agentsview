@@ -2227,8 +2227,9 @@ func TestReadStatusFromConfigCountsAllSourceMachines(t *testing.T) {
 }
 
 type syncFixture struct {
-	alphaID string
-	betaID  string
+	alphaID   string
+	alphaPath string
+	betaID    string
 }
 
 func newLocalDB(t *testing.T) *db.DB {
@@ -2490,11 +2491,14 @@ func seedDuckDBSyncFixture(t *testing.T, local *db.DB) syncFixture {
 	}}))
 	alphaID := "duck-sync-alpha"
 	betaID := "duck-sync-beta"
+	alphaPath := filepath.Join(t.TempDir(), "alpha.jsonl")
 	alphaSecret := "secret token sk-duckdb"
 	callIndex := 0
+	alphaSession := syncSession(alphaID, "alpha", "alpha first", "2026-01-10T00:00:00.000Z", 2)
+	alphaSession.FilePath = &alphaPath
 	writes := []db.SessionBatchWrite{
 		{
-			Session: syncSession(alphaID, "alpha", "alpha first", "2026-01-10T00:00:00.000Z", 2),
+			Session: alphaSession,
 			Messages: []db.Message{
 				syncMessage(alphaID, 0, "user", "alpha first", "2026-01-10T00:00:00.000Z"),
 				syncMessage(alphaID, 1, "assistant", alphaSecret, "2026-01-10T00:01:00.000Z",
@@ -2557,7 +2561,7 @@ func seedDuckDBSyncFixture(t *testing.T, local *db.DB) syncFixture {
 	note := "pin alpha"
 	_, err = local.PinMessage(alphaID, msgs[0].ID, &note)
 	require.NoError(t, err)
-	return syncFixture{alphaID: alphaID, betaID: betaID}
+	return syncFixture{alphaID: alphaID, alphaPath: alphaPath, betaID: betaID}
 }
 
 func syncSession(id, project, first, ts string, messageCount int) db.Session {

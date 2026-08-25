@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,144 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+type watchBatchTestError struct {
+	cause     error
+	paths     []string
+	roots     []string
+	deferOnly bool
+}
+
+func (e *watchBatchTestError) Error() string { return e.cause.Error() }
+func (e *watchBatchTestError) Unwrap() error { return e.cause }
+func (e *watchBatchTestError) ReconciliationRetryPaths() []string {
+	return append([]string(nil), e.paths...)
+}
+func (e *watchBatchTestError) ReconciliationRetryRoots() []string {
+	return append([]string(nil), e.roots...)
+}
+func (e *watchBatchTestError) ReconciliationRetryDeferOnly() bool { return e.deferOnly }
+
+type watchBatchTestSyncer struct {
+	pathErr     error
+	rootErr     error
+	rootCalls   int
+	plannedPath []string
+}
+
+func (s *watchBatchTestSyncer) SyncPathsContext(_ context.Context, paths []string) error {
+	s.plannedPath = append([]string(nil), paths...)
+	return s.pathErr
+}
+func (*watchBatchTestSyncer) HasActiveSessionSourceBelow(string, string) (bool, error) {
+	return false, nil
+}
+func (*watchBatchTestSyncer) ReconciliationRootsForAgent(string) []string { return nil }
+func (s *watchBatchTestSyncer) ReconcileWatchRoots(context.Context, []string, bool) error {
+	s.rootCalls++
+	return s.rootErr
+}
+func (s *watchBatchTestSyncer) ReconcileWatchRootsAfterLostEvents(context.Context, []string, bool) error {
+	s.rootCalls++
+	return s.rootErr
+}
+
+func TestWatchBatchDeferOnlyCompositionAndRootScope(t *testing.T) {
+	pathCause := errors.New("deferred path")
+	rootCause := errors.New("typed root")
+	pathPhase := watchBatchReconciliationError(&watchBatchTestError{
+		cause: pathCause, paths: []string{"path", "path"}, deferOnly: true,
+	}, []string{"fallback"}, nil, false, false)
+	rootPhase := watchBatchReconciliationError(&watchBatchTestError{
+		cause: rootCause, roots: []string{"failed", "failed"},
+	}, nil, []string{"successful", "failed"}, false, true)
+	err := composeWatchBatchErrors(pathPhase, rootPhase)
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.ErrorIs(t, err, pathCause)
+	assert.ErrorIs(t, err, rootCause)
+	assert.Equal(t, WatchBatch{
+		Paths: []string{"path"}, ReconcileRoots: []string{"failed"}, LostEvents: true,
+	}, retry.WatchRetryBatch())
+	untyped := watchBatchReconciliationError(
+		errors.New("untyped root"), nil,
+		[]string{"successful", "failed"}, false, false,
+	)
+	require.ErrorAs(t, untyped, &retry)
+	assert.Equal(t, []string{"successful", "failed"}, retry.WatchRetryBatch().ReconcileRoots)
+
+	full := composeWatchBatchErrors(
+		&watchBatchApplyError{cause: pathCause, retry: WatchBatch{Paths: []string{"path"}}},
+		&watchBatchApplyError{cause: rootCause, retry: WatchBatch{FullSync: true, LostEvents: true}},
+	)
+	require.ErrorAs(t, full, &retry)
+	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, retry.WatchRetryBatch())
+}
+
+func TestWatchBatchKeepsEmptyTypedRootScope(t *testing.T) {
+	cause := errors.New("deferred path")
+	err := watchBatchReconciliationError(&watchBatchTestError{
+		cause: cause, paths: []string{"deferred"}, roots: []string{},
+	}, []string{"fallback"}, []string{"original-root"}, false, false)
+
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{Paths: []string{"deferred"}}, retry.WatchRetryBatch())
+}
+
+func TestApplyWatchBatchRunsRootsOnlyForDeferOnlyPathErrors(t *testing.T) {
+	pathCause := errors.New("deferred path")
+	root := t.TempDir()
+	syncer := &watchBatchTestSyncer{pathErr: &watchBatchTestError{
+		cause: pathCause, paths: []string{filepath.Join(root, "deferred")}, deferOnly: true,
+	}}
+	err := ApplyWatchBatch(t.Context(), syncer, WatchBatch{
+		Paths: []string{filepath.Join(root, "changed")}, ReconcileRoots: []string{root},
+	}, nil)
+	require.Error(t, err)
+	assert.Equal(t, 1, syncer.rootCalls)
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, []string{filepath.Join(root, "deferred")}, retry.WatchRetryBatch().Paths)
+	assert.Empty(t, retry.WatchRetryBatch().ReconcileRoots)
+
+	classification := errors.New("classification")
+	syncer = &watchBatchTestSyncer{pathErr: &watchBatchTestError{
+		cause: classification, paths: []string{"deferred"}, deferOnly: false,
+	}}
+	err = ApplyWatchBatch(t.Context(), syncer, WatchBatch{
+		Paths: []string{"changed"}, ReconcileRoots: []string{"root"},
+	}, nil)
+	require.Error(t, err)
+	assert.Zero(t, syncer.rootCalls)
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{Paths: []string{"changed"}, ReconcileRoots: []string{"root"}}, retry.WatchRetryBatch())
+	assert.ErrorIs(t, err, classification)
+}
+
+func TestApplyWatchBatchComposesDeferredPathAndRootFailure(t *testing.T) {
+	pathCause := errors.New("deferred path")
+	rootCause := errors.New("root failure")
+	root := filepath.Join(t.TempDir(), "root")
+	syncer := &watchBatchTestSyncer{
+		pathErr: &watchBatchTestError{
+			cause: pathCause, paths: []string{"deferred"}, deferOnly: true,
+		},
+		rootErr: &watchBatchTestError{cause: rootCause, roots: []string{"failed-root"}},
+	}
+	err := ApplyWatchBatch(t.Context(), syncer, WatchBatch{
+		Paths: []string{"changed"}, ReconcileRoots: []string{root}, LostEvents: true,
+	}, nil)
+	require.Error(t, err)
+	assert.Equal(t, 1, syncer.rootCalls)
+	assert.ErrorIs(t, err, pathCause)
+	assert.ErrorIs(t, err, rootCause)
+	var retry interface{ WatchRetryBatch() WatchBatch }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{
+		Paths: []string{"deferred"}, ReconcileRoots: []string{"failed-root"}, LostEvents: true,
+	}, retry.WatchRetryBatch())
+}
 
 func TestValidateWatchBatchRejectsMalformedScope(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")

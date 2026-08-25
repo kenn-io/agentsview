@@ -421,14 +421,20 @@ func (s *Server) syncThenRunForPush(
 	work func(forceFull bool) error,
 ) error {
 	if watchBatch != nil && !full && !local.NeedsResync() {
-		_, err := engine.SyncWatchBatchThenRun(
+		stats, err := engine.SyncWatchBatchThenRun(
 			ctx, *watchBatch, watchRecovery,
 			func() error { return work(false) },
 		)
+		if err == nil {
+			err = requireProcessingComplete(stats)
+		}
 		return err
 	}
 	if s.localResyncRunner == nil || (!full && !local.NeedsResync()) {
-		_, err := engine.SyncThenRun(ctx, full, nil, work)
+		stats, err := engine.SyncThenRun(ctx, full, nil, work)
+		if err == nil {
+			err = requireProcessingComplete(stats)
+		}
 		return err
 	}
 	if _, err := s.runResyncWithFallback(ctx, engine, nil); err != nil {

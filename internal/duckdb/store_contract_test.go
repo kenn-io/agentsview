@@ -316,6 +316,15 @@ func duckContractSessionsCursorsAndMetadata(
 	require.Len(t, page.Sessions, 1)
 	require.Equal(t, fixture.betaID, page.Sessions[0].ID)
 	require.NotEmpty(t, page.NextCursor)
+	assert.Nil(t, page.Sessions[0].FilePath)
+
+	withSource, err := store.ListSessions(ctx, db.SessionFilter{
+		Project: "alpha", IncludeSource: true, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, withSource.Sessions, 1)
+	require.NotNil(t, withSource.Sessions[0].FilePath)
+	assert.Equal(t, fixture.alphaPath, *withSource.Sessions[0].FilePath)
 
 	cur, err := store.DecodeCursor(page.NextCursor)
 	require.NoError(t, err)

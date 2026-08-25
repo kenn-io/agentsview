@@ -193,6 +193,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		ExcludeOneShot:       !f.IncludeOneShot,
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
+		IncludeSource:        f.IncludeSource,
 		Cursor:               f.Cursor,
 		Limit:                f.Limit,
 		MinToolFailures:      f.MinToolFailures,

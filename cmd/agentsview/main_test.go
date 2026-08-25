@@ -2854,11 +2854,17 @@ func TestSyncWatchBatch(t *testing.T) {
 	})
 }
 
-type stubRetryRootsError struct{ roots []string }
+type stubRetryRootsError struct {
+	paths    []string
+	roots    []string
+	overflow bool
+}
 
 func (e *stubRetryRootsError) Error() string { return "reconciliation incomplete" }
 
 func (e *stubRetryRootsError) ReconciliationRetryRoots() []string { return e.roots }
+func (e *stubRetryRootsError) ReconciliationRetryPaths() []string { return e.paths }
+func (e *stubRetryRootsError) ReconciliationRetryOverflow() bool  { return e.overflow }
 
 // TestGapReconciliationRetryBatch pins the startup-gap classification: a gap
 // reconciliation error carrying retry roots yields a scoped retry batch, and
@@ -2870,6 +2876,22 @@ func TestGapReconciliationRetryBatch(t *testing.T) {
 	assert.Equal(t, agentsync.WatchBatch{
 		ReconcileRoots: []string{"/b", "/a"},
 	}, scoped)
+
+	typed := gapReconciliationRetryBatch(fmt.Errorf(
+		"gap: %w", &stubRetryRootsError{
+			paths: []string{"/sessions/child.jsonl", "/sessions/child.jsonl"},
+			roots: []string{"/sessions/root"},
+		},
+	))
+	assert.Equal(t, agentsync.WatchBatch{
+		Paths:          []string{"/sessions/child.jsonl"},
+		ReconcileRoots: []string{"/sessions/root"},
+	}, typed)
+
+	overflow := gapReconciliationRetryBatch(fmt.Errorf(
+		"gap: %w", &stubRetryRootsError{paths: []string{"/child"}, overflow: true},
+	))
+	assert.Equal(t, agentsync.WatchBatch{FullSync: true}, overflow)
 
 	full := gapReconciliationRetryBatch(errors.New("plain failure"))
 	assert.Equal(t, agentsync.WatchBatch{FullSync: true}, full)

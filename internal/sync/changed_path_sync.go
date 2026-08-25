@@ -203,7 +203,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if stats.Aborted || stats.Failed > 0 || stats.providerFailures > 0 {
+	if !stats.ProcessingComplete() {
 		return result, errors.Join(processErr, fmt.Errorf(
 			"changed-path plan sync incomplete: %d source or archive failures",
 			stats.Failed,

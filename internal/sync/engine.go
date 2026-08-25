@@ -1521,6 +1521,19 @@ type syncJob struct {
 	retentionLease *parseRetentionLease
 }
 
+const (
+	reconciliationRetryPathLimit     = 256
+	reconciliationRetryPathByteLimit = 64 * 1024
+)
+
+func reconciliationRetryPathBytes(paths []string) int {
+	bytes := 0
+	for _, path := range paths {
+		bytes += len(path)
+	}
+	return bytes
+}
+
 func (j *syncJob) releaseRetention() {
 	if j == nil {
 		return
@@ -1625,7 +1638,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 	e.anomalies.applyTo(&stats)
 	e.persistSkipCache()
 	complete := prepared.classificationErr == nil && ctx.Err() == nil &&
-		!stats.Aborted && stats.Failed == 0 && stats.providerFailures == 0
+		stats.ProcessingComplete()
 	tombstoned := 0
 	if complete && len(prepared.missingPaths) > 0 {
 		var err error
@@ -1644,13 +1657,31 @@ func (e *Engine) applyChangedPathSyncLocked(
 		log.Printf("sync: %d file(s) updated", stats.Synced)
 	}
 	if err := errors.Join(prepared.classificationErr, ctx.Err()); err != nil {
+		if stats.Deferred > 0 {
+			return stats, tombstoned, &incompleteReconciliationError{
+				deferred: stats.Deferred,
+				paths:    append([]string(nil), stats.deferredRetryPaths...),
+				overflow: stats.deferredRetryOverflow,
+				cause:    err,
+			}
+		}
 		return stats, tombstoned, err
 	}
 	if !complete {
-		return stats, tombstoned, fmt.Errorf(
+		incompleteErr := fmt.Errorf(
 			"changed-path sync incomplete: %d source or archive failures",
 			stats.Failed,
 		)
+		if stats.Deferred > 0 {
+			incompleteErr = &incompleteReconciliationError{
+				deferred:  stats.Deferred,
+				paths:     append([]string(nil), stats.deferredRetryPaths...),
+				overflow:  stats.deferredRetryOverflow,
+				cause:     incompleteErr,
+				deferOnly: stats.Failed == 0 && stats.providerFailures == 0 && !stats.Aborted,
+			}
+		}
+		return stats, tombstoned, incompleteErr
 	}
 	return stats, tombstoned, nil
 }
@@ -3034,7 +3065,7 @@ func (e *Engine) resyncBuildLocked(
 			phaseSnapshot("local", &e.phaseStats))
 	}
 	localStats := stats
-	if stats.Aborted || ctx.Err() != nil {
+	if localStats.Deferred > 0 || stats.Aborted || ctx.Err() != nil {
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
@@ -3106,7 +3137,7 @@ func (e *Engine) resyncBuildLocked(
 			}
 			return nil
 		}
-		if contributorStats.Aborted || stats.Aborted || ctx.Err() != nil ||
+		if !contributorStats.ProcessingComplete() || stats.Aborted || ctx.Err() != nil ||
 			contributorSafetyAbort {
 			failureHookErr := runAfterFailure()
 			contributorEngine.Close()
@@ -3973,7 +4004,7 @@ func (e *Engine) SyncThenRun(
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, err) }()
 	stats, err = e.syncThenRunLocked(ctx, full, onProgress, work)
-	if err == nil {
+	if err == nil && stats.Deferred == 0 {
 		// Release while syncMu is still held. A timed fallback that was
 		// already waiting on the mutex can then recheck the gate before it
 		// performs any duplicate startup work.
@@ -4005,6 +4036,9 @@ func (e *Engine) syncThenRunLocked(
 	}
 	if ctx.Err() != nil {
 		return stats, ctx.Err()
+	}
+	if !stats.ProcessingComplete() {
+		return stats, nil
 	}
 	// work typically scans and pushes SQLite rows, so flush any
 	// deferred signal recomputes first (inline: syncMu is held) or
@@ -4066,7 +4100,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 	}()
 	defer e.syncMu.Unlock()
 	defer func() {
-		if retErr == nil && !stats.Aborted {
+		if retErr == nil && stats.Deferred == 0 {
 			// Match SyncThenRun: successful foreground coordination unblocks
 			// startup backfills while syncMu is still held.
 			e.ReleaseStartupMaintenance()
@@ -4136,6 +4170,9 @@ func (e *Engine) SyncThenRunWithRebuild(
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
+	if !stats.ProcessingComplete() {
+		return stats, nil
+	}
 	e.signalSched.flushAllInline()
 	e.clearCurrentProgress()
 	if err := work(full || didResync, didResync); err != nil {
@@ -4185,6 +4222,11 @@ func (e *Engine) recordStartupReconciled(
 				"startup discovery incomplete: %d provider failures",
 				stats.providerFailures,
 			)
+		} else if stats.Deferred > 0 {
+			e.startupReconciledErr = fmt.Errorf(
+				"startup processing incomplete: %d deferred, %d failed",
+				stats.Deferred, stats.Failed,
+			)
 		}
 		if e.startupAttemptReady != nil {
 			close(e.startupAttemptReady)
@@ -4204,7 +4246,7 @@ func startupReconciliationSucceeded(
 	ctx context.Context, stats SyncStats, err error,
 ) bool {
 	return err == nil && ctx.Err() == nil &&
-		stats.AuthoritativeDiscoveryComplete()
+		stats.AuthoritativeDiscoveryComplete() && stats.Deferred == 0
 }
 
 // RecordStartupReconciled acknowledges a startup pass performed out of process
@@ -4279,6 +4321,13 @@ func (e *Engine) StartupReconciled() bool {
 // Individual parser warnings do not make discovery incomplete.
 func (stats SyncStats) AuthoritativeDiscoveryComplete() bool {
 	return !stats.Aborted && stats.providerFailures == 0
+}
+
+// ProcessingComplete reports whether all processed results reached a terminal
+// state that may acknowledge the run and retire retry state.
+func (stats SyncStats) ProcessingComplete() bool {
+	return !stats.Aborted && stats.Failed == 0 &&
+		stats.providerFailures == 0 && stats.Deferred == 0
 }
 
 // RunStartupMaintenance waits for the daemon-launching foreground sync, then
@@ -4688,7 +4737,7 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	)
 	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
-		stats.Failed == 0 && stats.providerFailures == 0
+		stats.ProcessingComplete()
 	if err == nil && !complete {
 		err = errors.New("watch root reconciliation aborted")
 	}
@@ -5113,10 +5162,12 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			)
 		}
 	}
-	canTombstoneCompletedScopes := retErr == nil && failures > 0
-	if failures > 0 {
+	canTombstoneCompletedScopes :=
+		retErr == nil && (failures > 0 || stats.Deferred > 0) &&
+			stats.Failed == 0 && !stats.Aborted
+	if failures > 0 || stats.Deferred > 0 {
 		retryRoots := append([]string(nil), failedRoots...)
-		if retErr != nil {
+		if retErr != nil || stats.deferredRetryOverflow {
 			for _, completed := range completedScopes {
 				retryRoots = append(retryRoots, completed.roots...)
 			}
@@ -5125,7 +5176,10 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 		incomplete := &incompleteReconciliationError{
 			failures:  failures,
+			deferred:  stats.Deferred,
 			roots:     retryRoots,
+			paths:     append([]string(nil), stats.deferredRetryPaths...),
+			overflow:  stats.deferredRetryOverflow,
 			completed: completedScopes,
 			cause:     discoveryErr,
 		}
@@ -5152,8 +5206,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		e.lastSyncStats = stats
 		e.mu.Unlock()
 	}
-	if retErr == nil && ctx.Err() == nil && !stats.Aborted &&
-		stats.Failed == 0 && stats.providerFailures == 0 {
+	if retErr == nil && ctx.Err() == nil && stats.ProcessingComplete() {
 		tombstoned, retErr = e.tombstoneMissingWatchSourceScopesLocked(
 			ctx, completedScopes, spool,
 		)
@@ -5200,7 +5253,10 @@ func (e *Engine) tombstoneCompletedReconciliationScopesLocked(
 	retryRoots = slices.Compact(retryRoots)
 	return deleted, &incompleteReconciliationError{
 		failures: incomplete.failures,
+		deferred: incomplete.deferred,
 		roots:    retryRoots,
+		paths:    append([]string(nil), incomplete.paths...),
+		overflow: incomplete.overflow,
 		cause:    errors.Join(incomplete, err),
 	}
 }
@@ -5686,12 +5742,22 @@ type reconciliationProviderScope struct {
 
 type incompleteReconciliationError struct {
 	failures  int
+	deferred  int
 	roots     []string
+	paths     []string
+	overflow  bool
 	completed []reconciliationProviderScope
 	cause     error
+	deferOnly bool
 }
 
 func (e *incompleteReconciliationError) Error() string {
+	if e.failures == 0 {
+		return fmt.Sprintf(
+			"watch root reconciliation deferred: %d provider results need retry",
+			e.deferred,
+		)
+	}
 	return fmt.Sprintf(
 		"watch root reconciliation incomplete: %d provider discoveries failed",
 		e.failures,
@@ -5700,8 +5766,20 @@ func (e *incompleteReconciliationError) Error() string {
 
 func (e *incompleteReconciliationError) Unwrap() error { return e.cause }
 
+func (e *incompleteReconciliationError) ReconciliationRetryDeferOnly() bool {
+	return e.deferOnly
+}
+
 func (e *incompleteReconciliationError) ReconciliationRetryRoots() []string {
 	return append([]string(nil), e.roots...)
+}
+
+func (e *incompleteReconciliationError) ReconciliationRetryPaths() []string {
+	return append([]string(nil), e.paths...)
+}
+
+func (e *incompleteReconciliationError) ReconciliationRetryOverflow() bool {
+	return e.overflow
 }
 
 func (e *Engine) reconciliationCandidate(
@@ -6143,6 +6221,20 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	dst.cwdFilteredFiles += src.cwdFilteredFiles
 	dst.CwdUpdated += src.CwdUpdated
 	dst.Aborted = dst.Aborted || src.Aborted
+	if !dst.deferredRetryOverflow {
+		deferred := dst.Deferred
+		for _, path := range src.deferredRetryPaths {
+			dst.recordDeferred(path)
+		}
+		dst.Deferred = deferred + src.Deferred
+		dst.deferredRetryOverflow = dst.deferredRetryOverflow ||
+			src.deferredRetryOverflow
+		if dst.deferredRetryOverflow {
+			dst.deferredRetryPaths = nil
+		}
+	} else {
+		dst.Deferred += src.Deferred
+	}
 }
 
 // tombstoneMissingWatchSourcesLocked adapts a raw changed-path root list to
@@ -7309,7 +7401,8 @@ func (e *Engine) syncAllLocked(
 	e.lastSyncStats = persisted
 	e.mu.Unlock()
 
-	if recordSyncState && stats.providerFailures == 0 {
+	if recordSyncState && stats.providerFailures == 0 &&
+		stats.ProcessingComplete() {
 		e.recordSyncFinished()
 	}
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
@@ -9454,6 +9547,15 @@ func (e *Engine) collectAndBatchWithOptions(
 		for range r.providerFailureCount {
 			stats.RecordFailed()
 		}
+		for range r.deferredCount {
+			stats.recordDeferred(r.path)
+		}
+		proofWithheld := r.sourceProofWithheld(false)
+		if proofWithheld {
+			if tracker := reconciliationBaselineTrackerFor(ctx); tracker != nil {
+				tracker.addNonAuthoritativeScope(r.agent, r.path)
+			}
+		}
 		if r.skip {
 			cwdChanged, err := e.reconcileSkippedSourceCwd(r)
 			if err != nil {
@@ -9471,14 +9573,14 @@ func (e *Engine) collectAndBatchWithOptions(
 					tracker.addNonAuthoritativeScope(r.agent, r.path)
 				}
 			}
-			rowlessCached := e.cacheClaudeRowlessFreshness(ctx, r)
+			rowlessCached := !proofWithheld && e.cacheClaudeRowlessFreshness(ctx, r)
 			if !rowlessCached && r.cacheSkip && r.mtime != 0 &&
 				!r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime)
 			}
 			stats.RecordSkip()
-			e.noteSQLiteContainerResult(r.path, true)
-			if r.providerFailureCount == 0 && !r.suppressPresenceSweep {
+			e.noteSQLiteContainerResult(r.path, !proofWithheld)
+			if !proofWithheld && !r.suppressPresenceSweep {
 				admitted, exactOwnerships, err :=
 					e.skippedSourceAllowsCwdFilter(ctx, r)
 				if err != nil {
@@ -9633,11 +9735,11 @@ func (e *Engine) collectAndBatchWithOptions(
 					)
 				}
 			}
-			e.noteSQLiteContainerResult(r.path, true)
-			if r.providerFailureCount == 0 &&
+			e.noteSQLiteContainerResult(r.path, !proofWithheld)
+			if !proofWithheld &&
 				sourceAllowsParserExclusions {
 				baselineProcessedSource(r, true)
-			} else if r.providerFailureCount == 0 {
+			} else if !proofWithheld {
 				baselineProcessedSource(r, false)
 			}
 			progress.SessionsDone++
@@ -9681,9 +9783,9 @@ func (e *Engine) collectAndBatchWithOptions(
 		// must never hide a filtered session from a future allow-list
 		// change; such containers simply keep the pre-gate re-verify
 		// behavior.
-		e.noteSQLiteContainerResult(
-			r.path, vetoed == 0 && len(r.retrySessionIDs) == 0,
-		)
+		presenceProofWithheld := r.sourceProofWithheld(vetoed > 0)
+		sourceProofWithheld := r.sourceProofWithheld(false)
+		e.noteSQLiteContainerResult(r.path, !presenceProofWithheld)
 		if vetoed > 0 && len(allowed) == 0 {
 			e.clearProviderSourceFreshness(ctx, r.providerStatHash)
 			// Claude can emit a synthetic base result for a replay-only
@@ -9691,9 +9793,11 @@ func (e *Engine) collectAndBatchWithOptions(
 			// stale fork is also preserved, record the successful complete parse
 			// under a filter-scoped marker. This restores steady-state freshness
 			// without letting a later filter configuration inherit the proof.
-			e.cacheClaudeRowlessFreshness(ctx, r)
+			if !sourceProofWithheld {
+				e.cacheClaudeRowlessFreshness(ctx, r)
+			}
 			stats.cwdFilteredFiles++
-			if r.providerFailureCount == 0 {
+			if !sourceProofWithheld {
 				baselineProcessedSource(r, false)
 			}
 			progress.SessionsDone++
@@ -9710,7 +9814,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				continue
 			}
 			stats.RecordSynced(1)
-			if r.providerFailureCount == 0 {
+			if !sourceProofWithheld {
 				baselineJob := r
 				baselineJob.machine = r.incremental.machine
 				baselineProcessedSource(baselineJob, true)
@@ -9721,8 +9825,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			stats.messagesIndexed = progress.MessagesIndexed
 			r.releaseRetention()
 		} else {
-			sourceNeedsRetry := vetoed > 0 ||
-				r.providerFailureCount > 0 || len(r.retrySessionIDs) > 0
+			sourceNeedsRetry := presenceProofWithheld
 			for i, pr := range allowed {
 				sessionNeedsRetry := r.providerWideFailureCount > 0 ||
 					r.needsRetryForSession(pr.Session.ID)
@@ -10158,6 +10261,7 @@ type processResult struct {
 	// retrySessionIDs carries provider per-result data-version state.
 	// Legacy parsers use needsRetry as a source-wide fallback.
 	retrySessionIDs map[string]bool
+	deferredCount   int
 	// suppressPresenceSweep marks a source result that must not authorize
 	// presence or tombstone reconciliation, including clean unsupported skips.
 	suppressPresenceSweep bool
@@ -10206,6 +10310,11 @@ func (r processResult) needsRetryForSession(sessionID string) bool {
 
 func (r processResult) suppressesPresenceSweepForRetry() bool {
 	return r.retrySessionIDs == nil && r.needsRetry
+}
+
+func (r processResult) sourceProofWithheld(hardFailure bool) bool {
+	return hardFailure || r.providerFailureCount > 0 || r.deferredCount > 0 ||
+		len(r.retrySessionIDs) > 0 || r.needsRetry
 }
 
 func (e *Engine) processFile(
@@ -11102,7 +11211,11 @@ func (e *Engine) processProviderFile(
 				res.retrySessionIDs = make(map[string]bool)
 			}
 			res.retrySessionIDs[result.Result.Session.ID] = true
-			res.providerFailureCount++
+			if isCodexFormatAgent(file.Agent) {
+				res.deferredCount++
+			} else {
+				res.providerFailureCount++
+			}
 		}
 	}
 	if e.forceParseRequested(file) {
@@ -19029,8 +19142,7 @@ func (e *Engine) processAndWriteSessionFile(
 		return false, sessionsChanged, nil
 	}
 
-	sourceNeedsRetry := res.providerFailureCount > 0 ||
-		len(res.retrySessionIDs) > 0
+	sourceNeedsRetry := res.sourceProofWithheld(false)
 	resolved := 0
 	writtenIDs := make([]string, 0, len(res.results))
 	markSourceIncomplete := func() {

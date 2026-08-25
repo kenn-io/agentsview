@@ -103,6 +103,7 @@ func (rs *RemoteSync) Run(
 	stats, err = remotesync.Importer{
 		Host:                    rs.Host,
 		Full:                    rs.Full,
+		RequireComplete:         true,
 		DB:                      rs.DB,
 		BlockedResultCategories: rs.BlockedResultCategories,
 		Progress:                progress,

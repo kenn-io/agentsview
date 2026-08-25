@@ -1412,6 +1412,7 @@ type manyStreamingProvider struct {
 	parser.ProviderBase
 	sources       []parser.SourceRef
 	parseOutcome  *parser.ParseOutcome
+	parseOutcomes map[string]parser.ParseOutcome
 	discoverCalls atomic.Int32
 	streamCalls   atomic.Int32
 }
@@ -1460,6 +1461,9 @@ func (*manyStreamingProvider) WatchPlan(context.Context) (parser.WatchPlan, erro
 func (provider *manyStreamingProvider) Parse(
 	_ context.Context, req parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
+	if outcome, ok := provider.parseOutcomes[req.Source.DisplayPath]; ok {
+		return outcome, nil
+	}
 	if provider.parseOutcome != nil {
 		return *provider.parseOutcome, nil
 	}
@@ -1476,6 +1480,93 @@ func (provider *manyStreamingProvider) Parse(
 		}},
 		ResultSetComplete: true,
 	}, nil
+}
+
+func TestIssue1476MissingParentForkDoesNotStarveLaterPages(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentCodex, parser.AgentTraeX} {
+		t.Run(string(agent), func(t *testing.T) {
+			testIssue1476MissingParentForkDoesNotStarveLaterPages(t, agent)
+		})
+	}
+}
+
+func testIssue1476MissingParentForkDoesNotStarveLaterPages(
+	t *testing.T, agent parser.AgentType,
+) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	const sourceCount = reconciliationPageSize + 1
+	const deferredIndex = 8
+	sources := make([]parser.SourceRef, sourceCount)
+	outcomes := make(map[string]parser.ParseOutcome, sourceCount)
+	started := time.Unix(1704067200, 0)
+	for i := range sources {
+		path := filepath.Join(root, fmt.Sprintf("session-%03d.jsonl", i))
+		require.NoError(t, os.WriteFile(path, []byte("session"), 0o600))
+		sources[i] = parser.SourceRef{
+			Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
+		}
+		id := fmt.Sprintf("session-%03d", i)
+		session := parser.ParsedSession{
+			ID: id, Agent: agent, Project: "project", Machine: "local",
+			StartedAt: started, EndedAt: started, File: parser.FileInfo{Path: path},
+		}
+		outcomes[path] = parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result:      parser.ParseResult{Session: session},
+				DataVersion: parser.DataVersionCurrent,
+			}}, ResultSetComplete: true,
+		}
+	}
+	deferredPath := sources[deferredIndex].Key
+	deferred := outcomes[deferredPath]
+	deferred.Results[0].Result.Session.ID = "forked-child"
+	deferred.Results[0].Result.Session.ParentSessionID = "codex:missing-parent"
+	deferred.Results[0].DataVersion = parser.DataVersionNeedsRetry
+	outcomes[deferredPath] = deferred
+	provider := &manyStreamingProvider{
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+		}},
+		sources: sources, parseOutcomes: outcomes,
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{manyStreamingFactory{provider}},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	err := engine.ReconcileWatchRoots(t.Context(), []string{root}, false)
+	var retry interface{ ReconciliationRetryPaths() []string }
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, []string{deferredPath}, retry.ReconciliationRetryPaths())
+	healthySamePageID := strings.TrimSuffix(
+		filepath.Base(sources[deferredIndex-1].DisplayPath),
+		filepath.Ext(sources[deferredIndex-1].DisplayPath),
+	)
+	healthySamePage, getErr := database.GetSession(t.Context(), healthySamePageID)
+	require.NoError(t, getErr)
+	require.NotNil(t, healthySamePage, "healthy session on the deferred page must be included")
+	laterSessionID := strings.TrimSuffix(
+		filepath.Base(sources[len(sources)-1].DisplayPath),
+		filepath.Ext(sources[len(sources)-1].DisplayPath),
+	)
+	later, getErr := database.GetSession(t.Context(), laterSessionID)
+	require.NoError(t, getErr)
+	require.NotNil(t, later, "cursor must advance beyond the deferred page")
+	assert.Less(t, database.GetSessionDataVersion("forked-child"), db.CurrentDataVersion())
+	assert.Equal(t, 1,
+		engine.LastReconciliationResult().Metrics.MaxNonAuthoritativeScopeRows)
+	t.Logf("cursor progress: later page session %q present", later.ID)
+	t.Logf("later-provider presence assertion: %s present", laterSessionID)
+	t.Logf("deferred state: forked-child data version remains stale")
+	t.Logf("rowless proof gate: non-authoritative scope rows=%d",
+		engine.LastReconciliationResult().Metrics.MaxNonAuthoritativeScopeRows)
 }
 
 func TestReconcileUnsupportedSourceMarkersStayPageBounded(t *testing.T) {
@@ -3625,6 +3716,19 @@ func TestStartupMaintenanceWaitsForForegroundSyncAndSerializesLaterSyncs(
 	require.NoError(t, <-laterSyncDone)
 }
 
+func TestDeferredStartupPassDoesNotAcknowledgeReconciliation(t *testing.T) {
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		Machine:                 "local",
+		DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+
+	engine.RecordStartupReconciled(SyncStats{Deferred: 1}, nil)
+
+	assert.False(t, engine.StartupReconciled())
+}
+
 func TestStartupSyncFallbackRunsWhenForegroundSyncNeverArrives(t *testing.T) {
 	database := openTestDB(t)
 	engine := NewEngine(database, EngineConfig{
@@ -3773,6 +3877,43 @@ func TestStartupSyncFallbackUsesSuccessSignalNotMaintenanceRelease(t *testing.T)
 	case <-time.After(time.Second):
 		require.FailNow(t, "successful fallback did not reconcile startup")
 	}
+}
+
+func TestSyncThenRunSuppressesWorkWhenProcessingIsIncomplete(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	cause := errors.New("source listing unavailable")
+	provider := &failingDBBackedProvider{
+		err: cause, failOnCall: 1,
+	}
+	provider.ProviderBase = parser.ProviderBase{
+		Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {root}},
+		Machine:   "local",
+		ProviderFactories: []parser.ProviderFactory{
+			failingDBBackedFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	workCalled := false
+	stats, err := engine.SyncThenRun(
+		t.Context(), false, nil, func(bool) error {
+			workCalled = true
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.False(t, stats.ProcessingComplete())
+	assert.Greater(t, stats.providerFailures, 0)
+	assert.False(t, workCalled,
+		"incomplete sync results must not run downstream acknowledgement work")
 }
 
 func TestStartupReconciledCallbackOwnersRetainFailureForLaterSuccess(t *testing.T) {

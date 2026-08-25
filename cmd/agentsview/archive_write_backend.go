@@ -778,7 +778,12 @@ func (b *localArchiveWriteBackend) PGPush(
 	projects []string,
 	excludeProjects []string,
 ) (postgres.PushResult, error) {
-	didResync := runLocalSync(ctx, b.appCfg, b.database, cfg.Full)
+	didResync, err := runLocalSyncAuthoritative(
+		ctx, b.appCfg, b.database, cfg.Full,
+	)
+	if err != nil {
+		return postgres.PushResult{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return postgres.PushResult{}, err
 	}
@@ -918,6 +923,9 @@ func (b *localArchiveWriteBackend) newDuckDBPusher(
 			}
 			if !stats.AuthoritativeDiscoveryComplete() {
 				return errors.New("local sync discovery incomplete")
+			}
+			if !stats.ProcessingComplete() {
+				return errors.New("local sync processing incomplete")
 			}
 			engine.FlushSignals()
 			return nil
@@ -1118,6 +1126,9 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 				if !stats.AuthoritativeDiscoveryComplete() {
 					return errors.New("local sync discovery incomplete")
 				}
+				if !stats.ProcessingComplete() {
+					return errors.New("local sync processing incomplete")
+				}
 				// The push scans SQLite rows right after this returns;
 				// flush deferred signal recomputes so pushed sessions
 				// carry current signal/secret fields.
@@ -1221,6 +1232,9 @@ func runPGWatchStartupSync(
 	}
 	if !stats.AuthoritativeDiscoveryComplete() {
 		return didResync, errors.New("startup sync discovery incomplete")
+	}
+	if !stats.ProcessingComplete() {
+		return didResync, errors.New("startup sync processing incomplete")
 	}
 	return didResync, nil
 }

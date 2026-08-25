@@ -5,6 +5,8 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -31,6 +33,8 @@ type usageParityDaily struct {
 	CostMicrodollars    int64
 	Models              []string
 	SessionCounts       db.UsageSessionCounts
+	ProjectBreakdowns   []usageParityProjectBreakdown
+	AgentBreakdowns     []usageParityAgentBreakdown
 }
 
 type usageParityTopSession struct {
@@ -62,6 +66,20 @@ type usageParityBreakdown struct {
 	OutputTokens     int
 	CostMicrodollars int64
 	HasCost          bool
+}
+
+type usageParityProjectBreakdown struct {
+	ProjectKey, Project                  string
+	InputTokens, OutputTokens            int
+	CacheCreationTokens, CacheReadTokens int
+	CostMicrodollars                     int64
+}
+
+type usageParityAgentBreakdown struct {
+	Agent                                string
+	InputTokens, OutputTokens            int
+	CacheCreationTokens, CacheReadTokens int
+	CostMicrodollars                     int64
 }
 
 func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
@@ -107,7 +125,7 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 			ByProject: map[string]int{"project-a": 1, "project-c": 1, "project-d": 1},
 			ByAgent:   map[string]int{"claude": 2, "hermes": 1},
 		},
-		MatchingSessionCount: 5,
+		MatchingSessionCount: 4,
 		Session: usageParitySession{
 			SessionID: "snapshot-winner", TotalOutputTokens: 10,
 			PeakContextTokens: 20, HasTokenData: true,
@@ -129,32 +147,169 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	require.Equal(t, want, localGot, "SQLite facts result")
 	require.Equal(t, want, remoteGot, "PostgreSQL live result")
 	require.Equal(t, localGot, remoteGot, "cross-backend result")
+	wantWithoutBreakdown := want.Session
+	wantWithoutBreakdown.Breakdown = nil
+	localWithoutBreakdown := captureUsageParitySession(t, local, false)
+	remoteWithoutBreakdown := captureUsageParitySession(t, remote, false)
+	require.Equal(t, wantWithoutBreakdown, localWithoutBreakdown,
+		"SQLite session result without breakdown")
+	require.Equal(t, wantWithoutBreakdown, remoteWithoutBreakdown,
+		"PostgreSQL session result without breakdown")
+	require.Equal(t, localWithoutBreakdown, remoteWithoutBreakdown,
+		"cross-backend session result without breakdown")
 	requireCompleteUsageParity(t, local, remote, filter)
+
+	breakdownFilter := filter
+	breakdownFilter.Breakdowns = true
+	localWithBreakdowns := captureUsageParitySnapshot(t, local, breakdownFilter)
+	remoteWithBreakdowns := captureUsageParitySnapshot(t, remote, breakdownFilter)
+	require.NotEmpty(t, localWithBreakdowns.Daily.ProjectBreakdowns)
+	require.NotEmpty(t, localWithBreakdowns.Daily.AgentBreakdowns)
+	require.NotEmpty(t, remoteWithBreakdowns.Daily.ProjectBreakdowns)
+	require.NotEmpty(t, remoteWithBreakdowns.Daily.AgentBreakdowns)
+	require.Equal(t, localWithBreakdowns, remoteWithBreakdowns,
+		"cross-backend daily breakdown result")
+}
+
+func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
+	const schema = "agentsview_usage_fractional_rounding_test"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	local := testDB(t)
+	seedUsageParityFixture(t, local)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "model-fractional",
+		InputPerMTok: money.Money{Microdollars: 500_000},
+	}}))
+	startedAt := "2026-08-12T13:00:00Z"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: "fractional-rounding", Project: "project-rounding",
+		Machine: "parity-machine", Agent: "claude", StartedAt: &startedAt,
+		MessageCount: 2, UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{
+		{
+			SessionID: "fractional-rounding", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-08-12T13:01:00Z", Model: "model-fractional",
+			TokenUsage:      json.RawMessage(`{"input_tokens":1,"output_tokens":0}`),
+			ClaudeMessageID: "fractional-message-0", ClaudeRequestID: "fractional-request-0",
+		},
+		{
+			SessionID: "fractional-rounding", Ordinal: 1, Role: "assistant",
+			Timestamp: "2026-08-12T13:02:00Z", Model: "model-fractional",
+			TokenUsage:      json.RawMessage(`{"input_tokens":1,"output_tokens":0}`),
+			ClaudeMessageID: "fractional-message-1", ClaudeRequestID: "fractional-request-1",
+		},
+	}))
+
+	syncer, err := New(pgURL, schema, local, "parity-machine", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	remote, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remote.Close()) })
+
+	filter := db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"}
+	for _, backend := range []struct {
+		name  string
+		store db.Store
+	}{
+		{name: "sqlite", store: local},
+		{name: "postgres", store: remote},
+	} {
+		t.Run(backend.name, func(t *testing.T) {
+			usage, err := backend.store.GetSessionUsage(
+				t.Context(), "fractional-rounding", true)
+			require.NoError(t, err)
+			require.NotNil(t, usage)
+			require.Equal(t, int64(2), usage.Cost.Microdollars)
+			require.True(t, usage.HasCost)
+			require.Len(t, usage.Breakdown, 2)
+			for _, row := range usage.Breakdown {
+				require.Equal(t, 1, row.InputTokens)
+				require.Equal(t, int64(1), row.Cost.Microdollars)
+			}
+			daily, err := backend.store.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			require.Equal(t, 59, daily.Totals.InputTokens)
+			require.Equal(t, int64(260_042), daily.Totals.TotalCost.Microdollars)
+		})
+	}
 }
 
 func requireCompleteUsageParity(
-	t *testing.T, local, remote db.Store, filter db.UsageFilter,
+	t testing.TB, local, remote db.Store, filter db.UsageFilter,
 ) {
 	t.Helper()
-	ctx := context.Background()
-	localDaily, err := local.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	remoteDaily, err := remote.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, localDaily, remoteDaily, "complete daily result")
-	localTop, err := local.GetTopSessionsByCost(ctx, filter, 10)
-	require.NoError(t, err)
-	remoteTop, err := remote.GetTopSessionsByCost(ctx, filter, 10)
-	require.NoError(t, err)
-	require.Equal(t, localTop, remoteTop, "complete top-session result")
-	localSession, err := local.GetSessionUsage(ctx, "snapshot-winner", true)
-	require.NoError(t, err)
-	remoteSession, err := remote.GetSessionUsage(ctx, "snapshot-winner", true)
-	require.NoError(t, err)
-	require.Equal(t, localSession, remoteSession, "complete session result")
+	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter))
 }
 
-func seedUsageParityFixture(t *testing.T, local *db.DB) {
+func completeUsageParity(
+	ctx context.Context, local, remote db.Store, filter db.UsageFilter,
+) error {
+	localDaily, err := local.GetDailyUsage(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("local GetDailyUsage: %w", err)
+	}
+	remoteDaily, err := remote.GetDailyUsage(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("remote GetDailyUsage: %w", err)
+	}
+	if !reflect.DeepEqual(localDaily, remoteDaily) {
+		return fmt.Errorf("complete daily result differs")
+	}
+	localTop, err := local.GetTopSessionsByCost(ctx, filter, 10)
+	if err != nil {
+		return fmt.Errorf("local GetTopSessionsByCost: %w", err)
+	}
+	remoteTop, err := remote.GetTopSessionsByCost(ctx, filter, 10)
+	if err != nil {
+		return fmt.Errorf("remote GetTopSessionsByCost: %w", err)
+	}
+	if !reflect.DeepEqual(localTop, remoteTop) {
+		return fmt.Errorf("complete top-session result differs")
+	}
+	localCounts, err := local.GetUsageSessionCounts(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("local GetUsageSessionCounts: %w", err)
+	}
+	remoteCounts, err := remote.GetUsageSessionCounts(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("remote GetUsageSessionCounts: %w", err)
+	}
+	if !reflect.DeepEqual(localCounts, remoteCounts) {
+		return fmt.Errorf("complete session-count result differs")
+	}
+	localMatching, err := local.GetUsageMatchingSessionCount(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("local GetUsageMatchingSessionCount: %w", err)
+	}
+	remoteMatching, err := remote.GetUsageMatchingSessionCount(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("remote GetUsageMatchingSessionCount: %w", err)
+	}
+	if localMatching != remoteMatching {
+		return fmt.Errorf("complete matching-session-count result differs")
+	}
+	localSession, err := local.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	if err != nil {
+		return fmt.Errorf("local GetSessionUsage: %w", err)
+	}
+	remoteSession, err := remote.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	if err != nil {
+		return fmt.Errorf("remote GetSessionUsage: %w", err)
+	}
+	if !reflect.DeepEqual(localSession, remoteSession) {
+		return fmt.Errorf("complete session result differs")
+	}
+	return nil
+}
+
+func seedUsageParityFixture(t testing.TB, local *db.DB) {
 	t.Helper()
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
 		{
@@ -174,7 +329,8 @@ func seedUsageParityFixture(t *testing.T, local *db.DB) {
 		usageParitySessionFixture("snapshot-winner", "project-b", "claude", "2026-08-12T10:01:00Z", 10, 20),
 		usageParitySessionFixture("reported", "project-c", "hermes", "2026-08-12T11:00:00Z", 5, 30),
 		usageParitySessionFixture("blank-timestamp", "project-d", "claude", "2026-08-12T12:00:00Z", 3, 7),
-		usageParitySessionFixture("activity-only", "project-e", "claude", "2026-08-12T13:00:00Z", 0, 0),
+		usageParitySessionFixture("activity-only", "project-e", "claude", "2026-07-20T13:00:00Z", 0, 0),
+		usageParitySessionFixture("historical-usage", "project-f", "claude", "2026-07-20T13:02:00Z", 4, 6),
 	}
 	for i := range sessions {
 		require.NoError(t, local.UpsertSession(sessions[i]),
@@ -202,7 +358,12 @@ func seedUsageParityFixture(t *testing.T, local *db.DB) {
 		},
 		{
 			SessionID: "activity-only", Ordinal: 0, Role: "assistant",
-			Timestamp: "2026-08-12T13:01:00Z", Model: "model-activity",
+			Timestamp: "2026-07-20T13:01:00Z", Model: "model-activity",
+		},
+		{
+			SessionID: "historical-usage", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-07-20T13:02:00Z", Model: "model-priced",
+			TokenUsage: json.RawMessage(`{"input_tokens":6,"output_tokens":4}`),
 		},
 	}), "seed messages")
 
@@ -239,9 +400,7 @@ func captureUsageParitySnapshot(
 	require.NoError(t, err, "usage session counts")
 	matching, err := store.GetUsageMatchingSessionCount(ctx, filter)
 	require.NoError(t, err, "matching session count")
-	session, err := store.GetSessionUsage(ctx, "snapshot-winner", true)
-	require.NoError(t, err, "session usage")
-	require.NotNil(t, session, "session usage result")
+	session := captureUsageParitySession(t, store, true)
 
 	out := usageParitySnapshot{
 		Daily: usageParityDaily{
@@ -256,20 +415,29 @@ func captureUsageParitySnapshot(
 			},
 		},
 		Counts: counts, MatchingSessionCount: matching,
-		Session: usageParitySession{
-			SessionID:         session.SessionID,
-			TotalOutputTokens: session.TotalOutputTokens,
-			PeakContextTokens: session.PeakContextTokens,
-			HasTokenData:      session.HasTokenData,
-			CostMicrodollars:  session.Cost.Microdollars,
-			HasCost:           session.HasCost, Models: session.Models,
-			UnpricedModels: session.UnpricedModels,
-			BreakdownCount: session.BreakdownCount,
-		},
+		Session: session,
 	}
 	for _, day := range daily.Daily {
 		out.Daily.Dates = append(out.Daily.Dates, day.Date)
 		out.Daily.Models = append(out.Daily.Models, day.ModelsUsed...)
+		for _, breakdown := range day.ProjectBreakdowns {
+			out.Daily.ProjectBreakdowns = append(out.Daily.ProjectBreakdowns, usageParityProjectBreakdown{
+				ProjectKey: breakdown.ProjectKey, Project: breakdown.Project,
+				InputTokens: breakdown.InputTokens, OutputTokens: breakdown.OutputTokens,
+				CacheCreationTokens: breakdown.CacheCreationTokens,
+				CacheReadTokens:     breakdown.CacheReadTokens,
+				CostMicrodollars:    breakdown.Cost.Microdollars,
+			})
+		}
+		for _, breakdown := range day.AgentBreakdowns {
+			out.Daily.AgentBreakdowns = append(out.Daily.AgentBreakdowns, usageParityAgentBreakdown{
+				Agent: breakdown.Agent, InputTokens: breakdown.InputTokens,
+				OutputTokens:        breakdown.OutputTokens,
+				CacheCreationTokens: breakdown.CacheCreationTokens,
+				CacheReadTokens:     breakdown.CacheReadTokens,
+				CostMicrodollars:    breakdown.Cost.Microdollars,
+			})
+		}
 	}
 	sort.Strings(out.Daily.Models)
 	for _, entry := range top {
@@ -279,8 +447,31 @@ func captureUsageParitySnapshot(
 			CostMicrodollars: entry.Cost.Microdollars,
 		})
 	}
+	return out
+}
+
+func captureUsageParitySession(
+	t *testing.T, store db.Store, includeBreakdown bool,
+) usageParitySession {
+	t.Helper()
+	session, err := store.GetSessionUsage(
+		context.Background(), "snapshot-winner", includeBreakdown)
+	require.NoError(t, err, "session usage")
+	require.NotNil(t, session, "session usage result")
+
+	out := usageParitySession{
+		SessionID:         session.SessionID,
+		TotalOutputTokens: session.TotalOutputTokens,
+		PeakContextTokens: session.PeakContextTokens,
+		HasTokenData:      session.HasTokenData,
+		CostMicrodollars:  session.Cost.Microdollars,
+		HasCost:           session.HasCost,
+		Models:            session.Models,
+		UnpricedModels:    session.UnpricedModels,
+		BreakdownCount:    session.BreakdownCount,
+	}
 	for _, entry := range session.Breakdown {
-		out.Session.Breakdown = append(out.Session.Breakdown, usageParityBreakdown{
+		out.Breakdown = append(out.Breakdown, usageParityBreakdown{
 			Source: entry.Source, Timestamp: entry.Timestamp, Model: entry.Model,
 			InputTokens: entry.InputTokens, OutputTokens: entry.OutputTokens,
 			CostMicrodollars: entry.Cost.Microdollars, HasCost: entry.HasCost,

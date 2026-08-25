@@ -2244,11 +2244,21 @@ type watchSyncer = sync.WatchBatchSyncer
 // The daemon queues the batch on the watcher before opening dispatch so the
 // affected roots re-reconcile with backoff.
 func gapReconciliationRetryBatch(gapErr error) sync.WatchBatch {
-	var scoped interface{ ReconciliationRetryRoots() []string }
-	if errors.As(gapErr, &scoped) {
-		if roots := deduplicateStrings(scoped.ReconciliationRetryRoots()); len(roots) > 0 {
-			return sync.WatchBatch{ReconcileRoots: roots}
-		}
+	var pathsSource interface{ ReconciliationRetryPaths() []string }
+	var rootsSource interface{ ReconciliationRetryRoots() []string }
+	var overflowSource interface{ ReconciliationRetryOverflow() bool }
+	var paths, roots []string
+	if errors.As(gapErr, &pathsSource) {
+		paths = deduplicateStrings(pathsSource.ReconciliationRetryPaths())
+	}
+	if errors.As(gapErr, &rootsSource) {
+		roots = deduplicateStrings(rootsSource.ReconciliationRetryRoots())
+	}
+	if errors.As(gapErr, &overflowSource) && overflowSource.ReconciliationRetryOverflow() {
+		return sync.WatchBatch{FullSync: true}
+	}
+	if len(paths) > 0 || len(roots) > 0 {
+		return sync.WatchBatch{Paths: paths, ReconcileRoots: roots}
 	}
 	return sync.WatchBatch{FullSync: true}
 }

@@ -488,10 +488,15 @@ func (e *Engine) parseMaterializedS3Source(
 	}
 	providerFailureCount := providerWideFailureCount
 	retrySessionIDs := make(map[string]bool)
+	deferredCount := 0
 	for _, result := range outcome.Results {
 		if result.DataVersion == parser.DataVersionNeedsRetry {
 			retrySessionIDs[result.Result.Session.ID] = true
-			providerFailureCount++
+			if isCodexFormatAgent(file.Agent) {
+				deferredCount++
+			} else {
+				providerFailureCount++
+			}
 		}
 	}
 	if len(retrySessionIDs) == 0 {
@@ -510,5 +515,6 @@ func (e *Engine) parseMaterializedS3Source(
 		providerFailureCount:     providerFailureCount,
 		providerWideFailureCount: providerWideFailureCount,
 		noCacheSkip:              !providerOutcomeAllowsCleanSkipCache(outcome),
+		deferredCount:            deferredCount,
 	}, nil
 }

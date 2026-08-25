@@ -1088,7 +1088,6 @@ func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	firstResultPath := filepath.Join(t.TempDir(), "first.json")
 	limits := testLimits()
-	limits.FinalizationWait = 5 * time.Second
 	limits.MaxSourceBytes = 8 << 10
 	producer := copyCaptureHelper(t, "claude")
 
@@ -1306,6 +1305,8 @@ func TestRunCodexMalformedRecordSealsPartialUsage(t *testing.T) {
 			root := t.TempDir()
 			resultPath := filepath.Join(t.TempDir(), "result.json")
 			producer := copyCaptureHelper(t, "codex")
+			limits := testLimits()
+			limits.FinalizationWait = 30 * time.Second
 			_, err := Run(context.Background(), RunOptions{
 				Provider: ProviderCodex, OccurrenceID: "codex-malformed-" + tc.name,
 				CaptureDir: filepath.Join(t.TempDir(), "capture"),
@@ -1313,7 +1314,7 @@ func TestRunCodexMalformedRecordSealsPartialUsage(t *testing.T) {
 				Command:     []string{producer, "exec", "--json", "prompt"},
 				Environment: helperEnvironment(root, tc.mode, 0),
 				Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
-				Limits:      testLimits(), CustomPricing: testPricing(),
+				Limits:      limits, CustomPricing: testPricing(),
 			})
 			require.NoError(t, err)
 

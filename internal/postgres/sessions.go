@@ -42,10 +42,9 @@ type Store struct {
 	semanticUnavailableReason string
 }
 
-// pgSessionCols is the column list for standard PG session queries.
-// PostgreSQL retains the source file path used by read-side session
-// functionality while omitting volatile local fingerprint metadata.
-const pgSessionCols = `id, project, machine, agent,
+// pgSessionBaseCols is the column list for PG session queries that do not
+// expose source paths.
+const pgSessionBaseCols = `id, project, machine, agent,
 	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
@@ -71,7 +70,12 @@ const pgSessionCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity, parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision,
+	deleted_at, deletion_cause, termination_status, transcript_revision`
+
+// pgSessionCols is the column list for full PG session queries.
+// PostgreSQL retains the source file path used by read-side session
+// functionality while omitting volatile local fingerprint metadata.
+const pgSessionCols = pgSessionBaseCols + `,
 	file_path`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
@@ -200,10 +204,16 @@ func pgTerminationPred(status string, pb *paramBuilder) string {
 func scanPGSession(
 	rs interface{ Scan(...any) error },
 ) (db.Session, error) {
+	return scanPGSessionWithSource(rs, true)
+}
+
+func scanPGSessionWithSource(
+	rs interface{ Scan(...any) error }, includeSource bool,
+) (db.Session, error) {
 	var s db.Session
 	var createdAt *time.Time
 	var startedAt, endedAt, deletedAt *time.Time
-	err := rs.Scan(
+	targets := []any{
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName,
@@ -233,8 +243,11 @@ func scanPGSession(
 		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
-		&s.FilePath,
-	)
+	}
+	if includeSource {
+		targets = append(targets, &s.FilePath)
+	}
+	err := rs.Scan(targets...)
 	if err != nil {
 		return s, err
 	}
@@ -294,9 +307,15 @@ func (s *Store) FindSessionIDsByPartial(
 func scanPGSessionRows(
 	rows *sql.Rows,
 ) ([]db.Session, error) {
+	return scanPGSessionRowsWithSource(rows, true)
+}
+
+func scanPGSessionRowsWithSource(
+	rows *sql.Rows, includeSource bool,
+) ([]db.Session, error) {
 	sessions := []db.Session{}
 	for rows.Next() {
-		s, err := scanPGSession(rows)
+		s, err := scanPGSessionWithSource(rows, includeSource)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"scanning session: %w", err,
@@ -462,7 +481,11 @@ func (s *Store) ListSessions(
 		)
 	}
 
-	query := "SELECT " + pgSessionCols +
+	columns := pgSessionBaseCols
+	if f.IncludeSource {
+		columns = pgSessionCols
+	}
+	query := "SELECT " + columns +
 		" FROM sessions WHERE " + cursorWhere + " " +
 		pageBuilder.OrderByClause(rs, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
@@ -477,7 +500,7 @@ func (s *Store) ListSessions(
 	}
 	defer rows.Close()
 
-	sessions, err := scanPGSessionRows(rows)
+	sessions, err := scanPGSessionRowsWithSource(rows, f.IncludeSource)
 	if err != nil {
 		return db.SessionPage{}, err
 	}
