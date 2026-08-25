@@ -1265,6 +1265,18 @@ add an archived or maintained mirror without replacing the original identity.
 - **Format:** Legacy JSONL plus companion metadata JSON, and newer SQLite
   session databases.
 
+  The issue-reported current layout uses
+  `~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl` or the direct
+  `sess_<id>/messages.jsonl` form, with optional `session.json`. Agentsview
+  admits only these exact producer-relative shapes: one workspace segment,
+  no `.history` or `snapshots` workspace, a valid `sess_<id>` directory, and
+  no nested session directory. It preserves the literal `sess_<id>` identity
+  and maps user, assistant, tool-call, and tool-result envelope fields;
+  unknown and malformed records are ignored. This observed layout has no
+  pinned producer schema source. For duplicate IDs, SQLite outranks current
+  JSONL, current outranks legacy JSONL, configured root order breaks ties
+  within a class, and recency then canonical path provide deterministic ties.
+
 - **Evidence:** `documentation`.
 
 - **Upstream:** Kiro's first-party [license page](https://kiro.dev/license/) and
@@ -1293,12 +1305,6 @@ add an archived or maintained mirror without replacing the original identity.
   found input/output counters present but zero and no cache split. Agentsview
   currently consumes none of those sidecar usage fields, so it emits no Kiro
   usage or cost metrics.
-
-  Current CLI sessions use `~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl`
-  or the direct `sess_<id>/messages.jsonl` form, with optional `session.json`.
-  Agentsview admits only these exact producer-relative shapes, preserves the
-  literal `sess_<id>` identity, and maps documented user, assistant, tool-call,
-  and tool-result envelope fields. Unknown and malformed records are ignored.
 
 - **Agentsview:** `internal/parser/kiro.go`, `internal/parser/kiro_sqlite.go`,
   and `internal/parser/kiro_provider.go`; both generations must remain

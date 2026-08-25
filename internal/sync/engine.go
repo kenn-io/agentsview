@@ -5867,8 +5867,14 @@ func (e *Engine) reconciliationCandidate(
 	}
 	if ranker, ok := provider.(parser.ReconciliationSourceRanker); ok {
 		rank := ranker.ReconciliationSourceRank(source)
-		preference2 = rank.Class
-		preference3 = rank.Recency
+		if agent == parser.AgentKiro {
+			preference1 = rank.Class
+			preference2 = configuredRootPreference(statPath, roots)
+			preference3 = rank.Recency
+		} else {
+			preference2 = rank.Class
+			preference3 = rank.Recency
+		}
 	}
 	if agent == parser.AgentAntigravityCLI {
 		preference2 = boolPreference(strings.HasSuffix(path, ".db"))
@@ -10233,6 +10239,9 @@ type sourceMissingMember struct {
 type processResult struct {
 	results            []parser.ParseResult
 	excludedSessionIDs []string
+	// preservedSessionIDs are higher-ranked members omitted by a shared source;
+	// they remain present while lower-ranked source ownership is reconciled.
+	preservedSessionIDs []string
 	// sourceMissingMembers carries stored sessions whose virtual member
 	// source no longer exists inside a still-present shared container
 	// (e.g. a Windsurf conversation deleted from state.vscdb). They must
@@ -11076,8 +11085,24 @@ func (e *Engine) processProviderFile(
 			e.anomalies.recordUnsupportedSourceLayout(string(file.Agent), file.Path)
 		}
 		excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
+		preservedSessionIDs := providerPreservedSessionIDs(provider, source)
 		var missingMembers []sourceMissingMember
-		if outcome.ForceReplace && outcome.ResultSetComplete {
+		if file.Agent == parser.AgentKiro && outcome.ResultSetComplete &&
+			len(outcome.SourceErrors) == 0 {
+			missingMembers, err = e.providerSourceMissingSessionOwnershipsForCompleteResultWithPreserved(
+				ctx, provider, source, preservedSessionIDs, nil,
+			)
+			if err != nil {
+				return processResult{
+					err:            err,
+					mtime:          fingerprint.MTimeNS,
+					cacheSkip:      cacheSkip,
+					cacheKey:       cacheKey,
+					noCacheSkip:    true,
+					retentionLease: lease,
+				}, true
+			}
+		} else if outcome.ForceReplace && outcome.ResultSetComplete {
 			owned, ownershipErr :=
 				e.providerSourceSessionOwnershipsForForceReplace(
 					ctx, provider, source,
@@ -11115,6 +11140,7 @@ func (e *Engine) processProviderFile(
 		skipRes := processResult{
 			skip:                 !outcome.ForceReplace,
 			excludedSessionIDs:   excludedSessionIDs,
+			preservedSessionIDs:  preservedSessionIDs,
 			sourceMissingMembers: missingMembers,
 			mtime:                fingerprint.MTimeNS,
 			cacheSkip:            cacheSkip,
@@ -11143,17 +11169,18 @@ func (e *Engine) processProviderFile(
 	parsedResults := parseOutcomeResults(outcome.Results)
 	parsedCount := len(parsedResults)
 	excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
+	preservedSessionIDs := providerPreservedSessionIDs(provider, source)
 	var missingMembers []sourceMissingMember
 	// Parse-diff intentionally reports a removed Trae member through its
 	// presence sweep. It never filters unchanged results or writes tombstones,
 	// so ownership reconciliation is needed only by real sync engines.
-	if ((file.Agent == parser.AgentOmnigent && outcome.ForceReplace) ||
+	if (file.Agent == parser.AgentKiro ||
+		(file.Agent == parser.AgentOmnigent && outcome.ForceReplace) ||
 		(file.Agent == parser.AgentTrae && !e.forceParse)) &&
 		outcome.ResultSetComplete && len(outcome.SourceErrors) == 0 {
-		missingMembers, err =
-			e.providerSourceMissingSessionOwnershipsForCompleteResult(
-				ctx, provider, source, parsedResults,
-			)
+		missingMembers, err = e.providerSourceMissingSessionOwnershipsForCompleteResultWithPreserved(
+			ctx, provider, source, preservedSessionIDs, parsedResults,
+		)
 		if err != nil {
 			return processResult{
 				err:            err,
@@ -11204,6 +11231,7 @@ func (e *Engine) processProviderFile(
 	res := processResult{
 		results:              filteredResults,
 		excludedSessionIDs:   excludedSessionIDs,
+		preservedSessionIDs:  preservedSessionIDs,
 		sourceMissingMembers: missingMembers,
 		mtime:                fingerprint.MTimeNS,
 		cacheSkip:            cacheSkip,
@@ -11345,6 +11373,20 @@ func (e *Engine) providerSourceSessionIDsForForceReplace(
 	return ids, nil
 }
 
+type preservedSessionIDProvider interface {
+	PreservedSessionIDs(parser.SourceRef) []string
+}
+
+func providerPreservedSessionIDs(
+	provider parser.Provider, source parser.SourceRef,
+) []string {
+	preserved, ok := provider.(preservedSessionIDProvider)
+	if !ok {
+		return nil
+	}
+	return preserved.PreservedSessionIDs(source)
+}
+
 // providerSourceSessionOwnershipsForForceReplace lists the stored active
 // sessions owned by a force-replaced source, paired with the exact stored
 // file path each row is tracked under, so callers can either hard-delete
@@ -11431,10 +11473,27 @@ func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResult(
 	source parser.SourceRef,
 	results []parser.ParseResult,
 ) ([]sourceMissingMember, error) {
+	return e.providerSourceMissingSessionOwnershipsForCompleteResultWithPreserved(
+		ctx, provider, source, nil, results,
+	)
+}
+
+func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResultWithPreserved(
+	ctx context.Context,
+	provider parser.Provider,
+	source parser.SourceRef,
+	preservedSessionIDs []string,
+	results []parser.ParseResult,
+) ([]sourceMissingMember, error) {
 	emitted := make(map[string]struct{}, len(results))
 	for _, result := range results {
 		id := applyIDPrefixToID(e.idPrefix, result.Session.ID)
 		if id != "" {
+			emitted[id] = struct{}{}
+		}
+	}
+	for _, id := range preservedSessionIDs {
+		if id := applyIDPrefixToID(e.idPrefix, id); id != "" {
 			emitted[id] = struct{}{}
 		}
 	}

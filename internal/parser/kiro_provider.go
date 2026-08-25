@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 var _ Provider = (*kiroProvider)(nil)
@@ -87,6 +88,14 @@ func (p *kiroProvider) ReconciliationSourceRank(
 	source SourceRef,
 ) ReconciliationSourceRank {
 	return p.sources.sourceRank(source)
+}
+
+func (p *kiroProvider) PreservedSessionIDs(source SourceRef) []string {
+	src, ok := p.sources.sourceFromRef(source)
+	if !ok || len(src.PreservedIDs) == 0 {
+		return nil
+	}
+	return append([]string(nil), src.PreservedIDs...)
 }
 
 func (p *kiroProvider) PersistentArchiveSource(
@@ -219,7 +228,7 @@ func (p *kiroProvider) parseSQLiteDB(
 	if len(results) == 0 && len(sourceErrs) == 0 {
 		return ParseOutcome{
 			ResultSetComplete: true,
-			ForceReplace:      !src.SessionIDsSet && !src.SessionIDsZeroWinner,
+			ForceReplace:      !src.SessionIDsSet,
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
@@ -227,7 +236,7 @@ func (p *kiroProvider) parseSQLiteDB(
 		Results:           results,
 		SourceErrors:      sourceErrs,
 		ResultSetComplete: true,
-		ForceReplace:      !src.SessionIDsSet && !src.SessionIDsZeroWinner,
+		ForceReplace:      !src.SessionIDsSet,
 	}, nil
 }
 
@@ -324,23 +333,34 @@ const (
 )
 
 type kiroSource struct {
-	Root                 string
-	Path                 string
-	DBPath               string
-	SessionID            string
-	Kind                 kiroSourceKind
-	SessionIDs           map[string]struct{}
-	SessionIDsSet        bool
-	SessionIDsTotal      int
-	SessionIDsZeroWinner bool
+	Root            string
+	Path            string
+	DBPath          string
+	SessionID       string
+	Kind            kiroSourceKind
+	SessionIDs      map[string]struct{}
+	SessionIDsSet   bool
+	SessionIDsTotal int
+	PreservedIDs    []string
 }
 
 type kiroSourceSet struct {
-	roots []string
+	roots     []string
+	planCache *kiroChangedPlanCache
+}
+
+type kiroChangedPlanCache struct {
+	mu        sync.Mutex
+	key       string
+	winners   map[string]SourceRef
+	databases []SourceRef
 }
 
 func newKiroSourceSet(roots []string) kiroSourceSet {
-	return kiroSourceSet{roots: cleanJSONLRoots(roots)}
+	return kiroSourceSet{
+		roots:     cleanJSONLRoots(roots),
+		planCache: &kiroChangedPlanCache{},
+	}
 }
 
 func (s kiroSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -368,6 +388,7 @@ func (s kiroSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []SourceRef, error) {
 	candidates := make(map[string][]SourceRef)
 	databases := make([]SourceRef, 0)
+	databaseMetas := make(map[string][]KiroSQLiteSessionMeta)
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
@@ -376,7 +397,8 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 			dbSource := s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB)
 			metas, err := ListKiroSQLiteSessionMeta(dbPath)
 			if err != nil {
-				return nil, nil, fmt.Errorf("list Kiro SQLite sessions in %s: %w", dbPath, err)
+				databases = append(databases, dbSource)
+				continue
 			}
 			dbSourceSrc, ok := s.sourceFromRef(dbSource)
 			if !ok {
@@ -384,6 +406,7 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 			}
 			dbSourceSrc.SessionIDsTotal = len(metas)
 			dbSource.Opaque = dbSourceSrc
+			databaseMetas[dbPath] = metas
 			for _, meta := range metas {
 				member := s.newSourceRef(root, meta.VirtualPath, dbPath, meta.SessionID, kiroSourceSQLiteSession)
 				member.DiscoveryMTimeNS = meta.FileMtime
@@ -427,11 +450,15 @@ func (s kiroSourceSet) sourcePlan(ctx context.Context) (map[string]SourceRef, []
 		}
 		if src.SessionIDsTotal > 0 && len(src.SessionIDs) < src.SessionIDsTotal {
 			src.SessionIDsSet = true
-			src.SessionIDsZeroWinner = len(src.SessionIDs) == 0
+			for _, meta := range databaseMetas[src.DBPath] {
+				if _, ok := src.SessionIDs[meta.SessionID]; !ok {
+					src.PreservedIDs = append(src.PreservedIDs, "kiro:"+meta.SessionID)
+				}
+			}
 		} else {
 			src.SessionIDs = nil
 			src.SessionIDsSet = false
-			src.SessionIDsZeroWinner = false
+			src.PreservedIDs = nil
 		}
 		databases[i].Opaque = src
 	}
@@ -513,7 +540,7 @@ func (s kiroSourceSet) SourcesForChangedPath(
 		if !ok {
 			continue
 		}
-		winners, databases, err := s.sourcePlan(ctx)
+		winners, databases, err := s.sourcePlanForChangedPath(ctx, req)
 		if err != nil {
 			return nil, err
 		}
@@ -540,6 +567,44 @@ func (s kiroSourceSet) SourcesForChangedPath(
 		return sources, nil
 	}
 	return nil, nil
+}
+
+func (s kiroSourceSet) sourcePlanForChangedPath(
+	ctx context.Context, req ChangedPathRequest,
+) (map[string]SourceRef, []SourceRef, error) {
+	if s.planCache == nil {
+		return s.sourcePlan(ctx)
+	}
+	key := kiroChangedPlanCacheKey(req)
+	s.planCache.mu.Lock()
+	if s.planCache.key == key {
+		winners, databases := s.planCache.winners, s.planCache.databases
+		s.planCache.mu.Unlock()
+		return winners, databases, nil
+	}
+	s.planCache.mu.Unlock()
+
+	winners, databases, err := s.sourcePlan(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	s.planCache.mu.Lock()
+	s.planCache.key = key
+	s.planCache.winners = winners
+	s.planCache.databases = databases
+	s.planCache.mu.Unlock()
+	return winners, databases, nil
+}
+
+func kiroChangedPlanCacheKey(req ChangedPathRequest) string {
+	info, err := os.Stat(req.Path)
+	if err != nil {
+		return fmt.Sprintf("%s\x00%s\x00%s\x00missing", req.WatchRoot, req.Path, req.EventKind)
+	}
+	return fmt.Sprintf(
+		"%s\x00%s\x00%s\x00%d\x00%d",
+		req.WatchRoot, req.Path, req.EventKind, info.Size(), info.ModTime().UnixNano(),
+	)
 }
 
 func (s kiroSourceSet) StoredSourceHintScopes(
@@ -927,9 +992,9 @@ func (s kiroSourceSet) bestSource(sources []SourceRef) (SourceRef, bool) {
 	for _, source := range sources[1:] {
 		rank := s.sourceRank(source)
 		bestRoot, sourceRoot := s.rootIndex(best.ConfiguredRoot), s.rootIndex(source.ConfiguredRoot)
-		if sourceRoot < bestRoot ||
-			(sourceRoot == bestRoot && (rank.Class > bestRank.Class ||
-				(rank.Class == bestRank.Class && (rank.Recency > bestRank.Recency ||
+		if rank.Class > bestRank.Class ||
+			(rank.Class == bestRank.Class && (sourceRoot < bestRoot ||
+				(sourceRoot == bestRoot && (rank.Recency > bestRank.Recency ||
 					(rank.Recency == bestRank.Recency && s.sourcePath(source) < s.sourcePath(best)))))) {
 			best, bestRank = source, rank
 		}
@@ -1140,7 +1205,8 @@ func isKiroCurrentSessionDir(name string) bool {
 }
 
 func isKiroCurrentWorkspaceDir(name string) bool {
-	return name != "" && name != ".history" && name != "snapshots"
+	return name != "" && name != ".history" && name != "snapshots" &&
+		!isKiroCurrentSessionDir(name)
 }
 
 func kiroCurrentPathUnderRoot(root, path string) (string, string, bool) {

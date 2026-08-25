@@ -1707,7 +1707,7 @@ func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
 	legacyRoot := t.TempDir()
 	sqliteRoot := t.TempDir()
 	env := setupSingleAgentTestEnvWithDirs(
-		t, parser.AgentKiro, []string{sqliteRoot, legacyRoot},
+		t, parser.AgentKiro, []string{legacyRoot, sqliteRoot},
 	)
 
 	ks := createKiroSQLiteDB(t, sqliteRoot)
@@ -1725,6 +1725,51 @@ func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
 		context.Background(), []string{legacyRoot}, time.Time{}, nil,
 	)
 	assert.Equal(t, 0, stats.TotalSessions, "total sessions")
+}
+
+func TestSyncEngineKiroPartialSQLitePreservesShadowedAndTombstonesRemoved(
+	t *testing.T,
+) {
+	winnerRoot := t.TempDir()
+	partialRoot := t.TempDir()
+	env := setupSingleAgentTestEnvWithDirs(
+		t, parser.AgentKiro, []string{winnerRoot, partialRoot},
+	)
+	winner := createKiroSQLiteDB(t, winnerRoot)
+	partial := createKiroSQLiteDB(t, partialRoot)
+	fixture := readKiroSQLiteFixture(t, "overlap_payload.json")
+	winner.addSession(t, "/home/user/code/winner", "shadowed", fixture, 1779015600000, 1779015610000)
+	partial.addSession(t, "/home/user/code/partial", "shadowed", fixture, 1779015600000, 1779015610000)
+	partial.addSession(t, "/home/user/code/partial", "removed", fixture, 1779015600000, 1779015610000)
+
+	initial := env.engine.SyncAll(context.Background(), nil)
+	require.Zero(t, initial.Failed)
+	activeShadowed, err := env.db.GetSession(context.Background(), "kiro:shadowed")
+	require.NoError(t, err)
+	require.NotNil(t, activeShadowed)
+	activeRemoved, err := env.db.GetSession(context.Background(), "kiro:removed")
+	require.NoError(t, err)
+	require.NotNil(t, activeRemoved)
+
+	_, err = partial.db.Exec(
+		`DELETE FROM conversations_v2 WHERE conversation_id = ?`, "removed",
+	)
+	require.NoError(t, err)
+	env.engine.SyncPaths([]string{partial.path})
+
+	activeRemoved, err = env.db.GetSession(context.Background(), "kiro:removed")
+	require.NoError(t, err)
+	assert.Nil(t, activeRemoved)
+	archivedRemoved, err := env.db.GetSessionFull(
+		context.Background(), "kiro:removed",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, archivedRemoved)
+	require.NotNil(t, archivedRemoved.DeletionCause)
+	assert.Equal(t, "source_missing", *archivedRemoved.DeletionCause)
+	activeShadowed, err = env.db.GetSession(context.Background(), "kiro:shadowed")
+	require.NoError(t, err)
+	assert.NotNil(t, activeShadowed)
 }
 
 func TestSyncEngineKiroLegacyOnlySyncPath(t *testing.T) {

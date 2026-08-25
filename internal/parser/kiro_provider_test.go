@@ -226,15 +226,18 @@ func TestKiroProviderZeroWinnerSQLitePreservesArchive(t *testing.T) {
 	currentRoot := t.TempDir()
 	sqliteRoot := t.TempDir()
 	rawID := "sess_0123456789abcdef"
+	winnerDBPath, winnerDB := newKiroProviderSQLiteDBAt(t, currentRoot)
+	seedKiroSQLiteSession(
+		t, winnerDB, "/home/user/code/current", rawID,
+		readKiroFixture(t, "standard_payload.json"),
+		1779012000000, 1779012030000,
+	)
 	dbPath, db := newKiroProviderSQLiteDBAt(t, sqliteRoot)
 	seedKiroSQLiteSession(
 		t, db, "/home/user/code/current", rawID,
 		readKiroFixture(t, "standard_payload.json"),
 		1779012000000, 1779012030000,
 	)
-	currentPath := filepath.Join(currentRoot, "workspace", rawID, "messages.jsonl")
-	writeSourceFile(t, currentPath, `{"payload":{"type":"user","content":"current"}}`+"\n")
-
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{
 		Roots: []string{currentRoot, sqliteRoot},
 	})
@@ -242,22 +245,25 @@ func TestKiroProviderZeroWinnerSQLitePreservesArchive(t *testing.T) {
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	var database SourceRef
-	var foundCurrent bool
+	var foundWinner bool
 	for _, source := range discovered {
 		if source.DisplayPath == dbPath {
 			database = source
 		}
-		if source.DisplayPath == currentPath {
-			foundCurrent = true
+		if source.DisplayPath == winnerDBPath {
+			foundWinner = true
 		}
 	}
-	require.True(t, foundCurrent)
+	require.True(t, foundWinner)
 	require.Equal(t, dbPath, database.DisplayPath)
 
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: database})
 	require.NoError(t, err)
 	assert.Empty(t, outcome.Results)
 	assert.False(t, outcome.ForceReplace)
+	assert.Equal(t, []string{"kiro:" + rawID}, provider.(interface {
+		PreservedSessionIDs(SourceRef) []string
+	}).PreservedSessionIDs(database))
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 }
 
@@ -527,8 +533,8 @@ func TestKiroProviderCurrentLayoutRejectsLookalikesAndEscapes(t *testing.T) {
 	root := t.TempDir()
 	valid := filepath.Join(root, "project-a", "sess_0123456789abcdef", "messages.jsonl")
 	writeSourceFile(t, valid, `{"payload":{"type":"user","content":"ok"}}`+"\n")
-	secondValid := filepath.Join(root, "sess_fedcba9876543210", "sess_aaaaaaaaaaaaaaaa", "messages.jsonl")
-	writeSourceFile(t, secondValid, `{"payload":{"type":"user","content":"ok"}}`+"\n")
+	nestedSession := filepath.Join(root, "sess_fedcba9876543210", "sess_aaaaaaaaaaaaaaaa", "messages.jsonl")
+	writeSourceFile(t, nestedSession, `{"payload":{"type":"user","content":"bad"}}`+"\n")
 	for _, path := range []string{
 		filepath.Join(root, ".history", "sess_0123456789abcdef", "messages.jsonl"),
 		filepath.Join(root, "snapshots", "sess_0123456789abcdef", "messages.jsonl"),
@@ -544,11 +550,10 @@ func TestKiroProviderCurrentLayoutRejectsLookalikesAndEscapes(t *testing.T) {
 	require.True(t, ok)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	require.Len(t, sources, 2)
-	assert.ElementsMatch(t, []string{valid, secondValid}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
+	require.Len(t, sources, 1)
+	assert.Equal(t, valid, sources[0].DisplayPath)
 	for _, tc := range []struct{ id, path string }{
 		{"sess_0123456789abcdef", valid},
-		{"sess_aaaaaaaaaaaaaaaa", secondValid},
 	} {
 		found, foundOK, findErr := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: tc.id})
 		require.NoError(t, findErr)
@@ -640,8 +645,12 @@ func TestKiroProviderDiscoveryFailsOnSQLiteMetadataError(t *testing.T) {
 	writeSourceFile(t, dbPath, "not a sqlite database")
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	_, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
 	assert.Error(t, err)
+	assert.Empty(t, outcome.Results)
 }
 
 func TestKiroProviderLogicalIdentityAndRankUnifyLegacyAndCurrent(t *testing.T) {
