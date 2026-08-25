@@ -1082,7 +1082,9 @@ func (s kiroSourceSet) Fingerprint(
 		}
 		return fingerprint, nil
 	}
-	if src.Kind == kiroSourceCurrentJSONL {
+	sidecar := ""
+	switch src.Kind {
+	case kiroSourceCurrentJSONL:
 		if sidecar, ok := kiroCurrentSidecarPath(s.roots, src.Path); ok {
 			if sideInfo, err := os.Stat(sidecar); err == nil {
 				fingerprint.Size += sideInfo.Size()
@@ -1091,9 +1093,7 @@ func (s kiroSourceSet) Fingerprint(
 				}
 			}
 		}
-	}
-	sidecar := ""
-	if src.Kind == kiroSourceLegacyJSONL {
+	case kiroSourceLegacyJSONL:
 		candidate, found, sidecarErr := kiroLegacySidecarPath(s.roots, src.Path)
 		if sidecarErr != nil {
 			return SourceFingerprint{}, sidecarErr
@@ -1111,15 +1111,16 @@ func (s kiroSourceSet) Fingerprint(
 		}
 	}
 	hash := ""
-	if src.Kind == kiroSourceCurrentJSONL {
+	switch src.Kind {
+	case kiroSourceCurrentJSONL:
 		sidecar = ""
 		if candidate, ok := kiroCurrentSidecarPath(s.roots, src.Path); ok {
 			sidecar = candidate
 		}
 		hash, err = hashKiroJSONLSource(src.Path, sidecar)
-	} else if src.Kind == kiroSourceLegacyJSONL {
+	case kiroSourceLegacyJSONL:
 		hash, err = hashKiroJSONLSource(src.Path, sidecar)
-	} else {
+	default:
 		hash, err = hashJSONLSourceFile(src.Path)
 	}
 	if err != nil {
