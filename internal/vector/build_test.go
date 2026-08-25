@@ -83,6 +83,35 @@ func TestBuildFirstBuildEmbedsAllAndActivates(t *testing.T) {
 	assert.Equal(t, gen.Fingerprint(), active)
 }
 
+func TestBuildContinuesPastDeletedOnlyPendingPage(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := &fakeUnitSource{deletedSessions: make(map[string]struct{})}
+	for i := range 128 {
+		sessionID := fmt.Sprintf("deleted-%03d", i)
+		src.rows = append(src.rows, fakeUnit{
+			unit:    userDoc(sessionID, "message", 0, "deleted content"),
+			endedAt: "2024-01-01T00:00:00Z",
+		})
+		src.deletedSessions[sessionID] = struct{}{}
+	}
+	src.rows = append(src.rows, fakeUnit{
+		unit:    userDoc("z-active", "message", 0, "active content"),
+		endedAt: "2024-01-01T00:00:00Z",
+	})
+
+	var encoded []string
+	enc := func(_ context.Context, texts []string) ([][]float32, error) {
+		encoded = append(encoded, texts...)
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	result, err := ix.Build(ctx, src, enc, fakeGeneration("fake-model"), BuildOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"active content"}, encoded)
+	assert.Equal(t, 1, result.Fill.Documents)
+	assert.True(t, result.Activated)
+}
+
 func TestBuildSecondBuildNoChangesFillsZero(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()

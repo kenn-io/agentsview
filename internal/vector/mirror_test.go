@@ -21,6 +21,7 @@ type fakeUnitSource struct {
 	rows                []fakeUnit
 	gotSince            string
 	gotIncludeAutomated bool
+	deletedSessions     map[string]struct{}
 }
 
 // fakeUnit pairs an EmbeddableUnit with the ended_at of its session, so the
@@ -55,6 +56,18 @@ func (f *fakeUnitSource) ScanEmbeddableUnits(
 		}
 	}
 	return maxEnded, nil
+}
+
+func (f *fakeUnitSource) SoftDeletedSessionIDs(
+	_ context.Context, sessionIDs []string,
+) (map[string]struct{}, error) {
+	deleted := make(map[string]struct{})
+	for _, sessionID := range sessionIDs {
+		if _, ok := f.deletedSessions[sessionID]; ok {
+			deleted[sessionID] = struct{}{}
+		}
+	}
+	return deleted, nil
 }
 
 // userDoc builds the single-message "user" unit shape most mirror and build

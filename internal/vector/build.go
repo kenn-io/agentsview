@@ -118,34 +118,39 @@ func (s *softDeletedPendingStore) PendingForGeneration(
 	if limit <= 0 {
 		return nil, nil
 	}
-	pending, err := s.Store.PendingForGeneration(ctx, gen, limit+len(s.skipped))
-	if err != nil || len(pending) == 0 {
-		return pending, err
-	}
-
-	docSessions, sessionIDs, err := s.sessionsForPending(ctx, pending)
-	if err != nil {
-		return nil, err
-	}
-	deleted, err := s.source.SoftDeletedSessionIDs(ctx, sessionIDs)
-	if err != nil {
-		return nil, fmt.Errorf("classifying pending soft-deleted sessions: %w", err)
-	}
-
-	eligible := make([]kitvec.Pending[string], 0, min(limit, len(pending)))
-	for _, p := range pending {
-		sessionID := docSessions[p.Doc]
-		if _, ok := deleted[sessionID]; ok {
-			s.skipped[p.Doc] = sessionID
-			continue
+	for {
+		pendingLimit := limit + len(s.skipped)
+		pending, err := s.Store.PendingForGeneration(ctx, gen, pendingLimit)
+		if err != nil || len(pending) == 0 {
+			return pending, err
 		}
-		delete(s.skipped, p.Doc)
-		eligible = append(eligible, p)
-		if len(eligible) == limit {
-			break
+
+		docSessions, sessionIDs, err := s.sessionsForPending(ctx, pending)
+		if err != nil {
+			return nil, err
+		}
+		deleted, err := s.source.SoftDeletedSessionIDs(ctx, sessionIDs)
+		if err != nil {
+			return nil, fmt.Errorf("classifying pending soft-deleted sessions: %w", err)
+		}
+
+		eligible := make([]kitvec.Pending[string], 0, min(limit, len(pending)))
+		for _, p := range pending {
+			sessionID := docSessions[p.Doc]
+			if _, ok := deleted[sessionID]; ok {
+				s.skipped[p.Doc] = sessionID
+				continue
+			}
+			delete(s.skipped, p.Doc)
+			eligible = append(eligible, p)
+			if len(eligible) == limit {
+				break
+			}
+		}
+		if len(eligible) > 0 || len(pending) < pendingLimit {
+			return eligible, nil
 		}
 	}
-	return eligible, nil
 }
 
 func (s *softDeletedPendingStore) sessionsForPending(
