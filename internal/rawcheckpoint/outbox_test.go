@@ -100,8 +100,9 @@ func TestOpenWithOptionsMigratesVersionOneAndEnforcesForeignKeys(t *testing.T) {
 	require.Error(t, err, "foreign keys must reject an orphaned outbox entry")
 }
 
-func TestOpenWithOptionsCompactsVersionThreeInvalidGenerations(t *testing.T) {
+func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "checkpoint.db")
+	spoolDir := filepath.Join(t.TempDir(), "spool")
 	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, false))
 	require.NoError(t, err)
 	for _, statements := range [][]string{
@@ -120,33 +121,127 @@ func TestOpenWithOptionsCompactsVersionThreeInvalidGenerations(t *testing.T) {
 		VALUES ('root-a', 'claude', '/capture', ?, ?)`, timestamp, timestamp)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO raw_sources
-		(provider, configured_root_id, source_key, latest_capture_id, updated_at)
-		VALUES ('claude', 'root-a', 'source-a', '', ?)`, timestamp)
+		(provider, configured_root_id, source_key, head_manifest_id,
+		 head_receipt, head_generation, latest_capture_id, updated_at)
+		VALUES ('claude', 'root-a', 'source-a', ?, ?, 1, 'capture-queued', ?)`,
+		validCheckpointDigest(1), validCheckpointDigest(2), timestamp)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO outbox_generations
 		(capture_id, provider, configured_root_id, source_key, captured_at,
-		 kind, state, metadata_bytes, created_at, updated_at)
+		 kind, state, manifest_id, metadata_bytes, created_at, updated_at)
 		VALUES ('capture-invalid', 'claude', 'root-a', 'source-a', ?,
-		 'snapshot', 'invalid', 1792, ?, ?)`, timestamp, timestamp, timestamp)
+		 'snapshot', 'invalid', '', 100, ?, ?),
+		('capture-acknowledged', 'claude', 'root-a', 'source-a', ?,
+		 'snapshot', 'acknowledged', ?, 200, ?, ?),
+		('capture-queued', 'claude', 'root-a', 'source-a', ?,
+		 'snapshot', 'queued', '', 300, ?, ?)`,
+		timestamp, timestamp, timestamp,
+		timestamp, validCheckpointDigest(1), timestamp, timestamp,
+		timestamp, timestamp, timestamp)
+	require.NoError(t, err)
+	invalidOnly := validCheckpointDigest(3)
+	acknowledgedOnly := validCheckpointDigest(4)
+	shared := validCheckpointDigest(5)
+	_, err = db.Exec(`INSERT INTO outbox_objects
+		(sha256, length, spool_name, ref_count, state, created_at)
+		VALUES (?, 5, ?, 1, 'live', ?),
+		       (?, 7, ?, 1, 'live', ?),
+		       (?, 11, ?, 2, 'live', ?)`,
+		invalidOnly, invalidOnly, timestamp,
+		acknowledgedOnly, acknowledgedOnly, timestamp,
+		shared, shared, timestamp)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO outbox_entries
+		(capture_id, entry_ordinal, path, length, mod_time_ns,
+		 file_identity, prefix_sha256, appendable)
+		VALUES ('capture-invalid', 0, 'invalid.jsonl', 16, 0, 'invalid', ?, 1),
+		       ('capture-acknowledged', 0, 'acknowledged.jsonl', 7, 0,
+		        'acknowledged', ?, 1),
+		       ('capture-queued', 0, 'queued.jsonl', 11, 0, 'queued', ?, 1)`,
+		invalidOnly, acknowledgedOnly, shared)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO outbox_entry_objects
+		(capture_id, entry_ordinal, object_ordinal, sha256, length)
+		VALUES ('capture-invalid', 0, 0, ?, 5),
+		       ('capture-invalid', 0, 1, ?, 11),
+		       ('capture-acknowledged', 0, 0, ?, 7),
+		       ('capture-queued', 0, 0, ?, 11)`,
+		invalidOnly, shared, acknowledgedOnly, shared)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO raw_source_base_entries
+		(provider, configured_root_id, source_key, entry_ordinal, path, length,
+		 mod_time_ns, file_identity, prefix_sha256, appendable)
+		VALUES ('claude', 'root-a', 'source-a', 0, 'acknowledged.jsonl', 7,
+		        0, 'acknowledged', ?, 1)`, acknowledgedOnly)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO raw_source_base_objects
+		(provider, configured_root_id, source_key, entry_ordinal,
+		 object_ordinal, sha256, length)
+		VALUES ('claude', 'root-a', 'source-a', 0, 0, ?, 7)`, acknowledgedOnly)
 	require.NoError(t, err)
 	_, err = db.Exec(`PRAGMA user_version = 3`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
+	for _, object := range []struct {
+		digest string
+		data   string
+	}{
+		{digest: invalidOnly, data: "12345"},
+		{digest: acknowledgedOnly, data: "1234567"},
+		{digest: shared, data: "12345678901"},
+	} {
+		objectDir := filepath.Join(spoolDir, "objects", "sha256", object.digest[:2])
+		require.NoError(t, os.MkdirAll(objectDir, 0o700))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(objectDir, object.digest), []byte(object.data), 0o600,
+		))
+	}
 
 	store, err := OpenWithOptions(t.Context(), path, Options{
-		SpoolDir: filepath.Join(t.TempDir(), "spool"), MaxOutboxBytes: 1 << 20,
+		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
 	usage, err := store.OutboxUsage(t.Context())
 	require.NoError(t, err)
-	assert.Zero(t, usage.UsedBytes)
+	assert.Equal(t, int64(311), usage.UsedBytes)
 	var generations int
 	require.NoError(t, store.db.QueryRow(
 		`SELECT count(*) FROM outbox_generations`,
 	).Scan(&generations))
-	assert.Zero(t, generations)
+	assert.Equal(t, 1, generations)
+
+	var sharedReferences int
+	var sharedState string
+	require.NoError(t, store.db.QueryRow(
+		`SELECT ref_count, state FROM outbox_objects WHERE sha256 = ? AND length = 11`,
+		shared,
+	).Scan(&sharedReferences, &sharedState))
+	assert.Equal(t, 1, sharedReferences)
+	assert.Equal(t, "live", sharedState)
+	_, err = os.Stat(store.ObjectPath(rawsync.ObjectRef{SHA256: shared, Length: 11}))
+	assert.NoError(t, err)
+
+	var invalidObjects int
+	require.NoError(t, store.db.QueryRow(
+		`SELECT count(*) FROM outbox_objects WHERE sha256 = ? AND length = 5`,
+		invalidOnly,
+	).Scan(&invalidObjects))
+	assert.Zero(t, invalidObjects)
+	_, err = os.Stat(store.ObjectPath(rawsync.ObjectRef{SHA256: invalidOnly, Length: 5}))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+
+	var acknowledgedReferences int
+	var acknowledgedState string
+	require.NoError(t, store.db.QueryRow(
+		`SELECT ref_count, state FROM outbox_objects WHERE sha256 = ? AND length = 7`,
+		acknowledgedOnly,
+	).Scan(&acknowledgedReferences, &acknowledgedState))
+	assert.Zero(t, acknowledgedReferences)
+	assert.Equal(t, "remote", acknowledgedState)
+	_, err = os.Stat(store.ObjectPath(rawsync.ObjectRef{SHA256: acknowledgedOnly, Length: 7}))
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestOpenWithOptionsPreservesVersionFourRootCoverageGap(t *testing.T) {

@@ -229,6 +229,24 @@ var versionFourMigrationStatements = []string{
 			AND generation.manifest_id = raw_sources.head_manifest_id
 		LIMIT 1
 	), '')`,
+	`UPDATE outbox_objects SET ref_count = ref_count - (
+		SELECT count(*) FROM outbox_entry_objects AS entry_object
+		JOIN outbox_generations AS generation
+			ON generation.capture_id = entry_object.capture_id
+		WHERE generation.state IN ('invalid', 'acknowledged')
+			AND entry_object.sha256 = outbox_objects.sha256
+			AND entry_object.length = outbox_objects.length
+	)
+	WHERE EXISTS (
+		SELECT 1 FROM outbox_entry_objects AS entry_object
+		JOIN outbox_generations AS generation
+			ON generation.capture_id = entry_object.capture_id
+		WHERE generation.state IN ('invalid', 'acknowledged')
+			AND entry_object.sha256 = outbox_objects.sha256
+			AND entry_object.length = outbox_objects.length
+	)`,
+	`UPDATE outbox_objects SET state = 'garbage_pending'
+		WHERE ref_count = 0 AND state != 'remote'`,
 	`DELETE FROM outbox_generations WHERE state = 'invalid'`,
 	`UPDATE outbox_generations SET predecessor_capture_id = NULL
 		WHERE predecessor_capture_id IN (
