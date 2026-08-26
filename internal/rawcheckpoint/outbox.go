@@ -741,9 +741,12 @@ func (s *Store) loadGenerationEntries(ctx context.Context, captureID string) ([]
 	return entries, nil
 }
 
-// CollectGarbage removes unreferenced spool objects and only then releases
-// their charged rows. Missing files are an idempotent success.
+// CollectGarbage waits for active object publication, removes unreferenced
+// spool objects, and only then releases their charged rows. Missing files are
+// an idempotent success.
 func (s *Store) CollectGarbage(ctx context.Context) (GarbageCollectionReport, error) {
+	s.publicationMu.Lock()
+	defer s.publicationMu.Unlock()
 	s.objectMu.Lock()
 	defer s.objectMu.Unlock()
 	var report GarbageCollectionReport

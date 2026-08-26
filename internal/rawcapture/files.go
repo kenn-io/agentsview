@@ -330,37 +330,43 @@ func (c *Capturer) captureAppendFile(
 	return entry, installed, err
 }
 
-func (c *Capturer) verifyReusedFile(
+func (c *Capturer) captureReusedFile(
 	ctx context.Context,
 	observed observedCaptureEntry,
 	base rawcheckpoint.CapturedEntry,
-) error {
+) (rawcheckpoint.CapturedEntry, error) {
 	planned := observed.planned
 	file := observed.file
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("rawcapture: seek %q: filesystem error", planned.Path)
+		return rawcheckpoint.CapturedEntry{}, fmt.Errorf(
+			"rawcapture: seek %q: filesystem error", planned.Path,
+		)
 	}
 	before, err := file.Stat()
 	if err != nil {
-		return ErrSourceChanged
+		return rawcheckpoint.CapturedEntry{}, ErrSourceChanged
 	}
 	identity := stableFileIdentity(file, before)
 	if !before.Mode().IsRegular() || before.Size() != base.Length ||
 		identity == "" || identity != observed.identity || identity != base.FileIdentity {
-		return ErrSourceChanged
+		return rawcheckpoint.CapturedEntry{}, ErrSourceChanged
 	}
 	hash := sha256.New()
 	length, err := copyContext(ctx, hash, file)
 	if err != nil {
-		return fmt.Errorf("rawcapture: read %q: %w", planned.Path, sanitizeFilesystemError(err))
+		return rawcheckpoint.CapturedEntry{}, fmt.Errorf(
+			"rawcapture: read %q: %w", planned.Path, sanitizeFilesystemError(err),
+		)
 	}
 	afterHandle, err := file.Stat()
 	if err != nil {
-		return fmt.Errorf("rawcapture: restat %q: filesystem error", planned.Path)
+		return rawcheckpoint.CapturedEntry{}, fmt.Errorf(
+			"rawcapture: restat %q: filesystem error", planned.Path,
+		)
 	}
 	afterFile, err := observed.root.Open(observed.relative)
 	if err != nil {
-		return ErrSourceChanged
+		return rawcheckpoint.CapturedEntry{}, ErrSourceChanged
 	}
 	afterPath, pathErr := afterFile.Stat()
 	afterIdentity := ""
@@ -371,9 +377,12 @@ func (c *Capturer) verifyReusedFile(
 	if pathErr != nil || !os.SameFile(before, afterPath) || !stableFileInfo(before, afterHandle) ||
 		afterIdentity != identity ||
 		length != base.Length || hex.EncodeToString(hash.Sum(nil)) != base.PrefixSHA256 {
-		return ErrSourceChanged
+		return rawcheckpoint.CapturedEntry{}, ErrSourceChanged
 	}
-	return nil
+	entry := cloneCapturedEntry(base)
+	entry.ModTimeNS = before.ModTime().UnixNano()
+	entry.FileIdentity = identity
+	return entry, nil
 }
 
 func (c *Capturer) verifyCapturedFile(

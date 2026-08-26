@@ -485,6 +485,45 @@ func TestInsertCapturedObjectsPromotesRemoteRowWhenLocalBytesArePresent(t *testi
 	assert.Equal(t, ref.Length, usage.UsedBytes)
 }
 
+func TestCollectGarbageWaitsForObjectPublication(t *testing.T) {
+	store, _ := openOutboxTestStore(t, 1<<20)
+	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
+	_, err := store.db.Exec(`INSERT INTO outbox_objects
+		(sha256, length, spool_name, ref_count, state, created_at)
+		VALUES (?, ?, 'objects/pending', 0, 'garbage_pending', '2026-08-25T00:00:00Z')`,
+		ref.SHA256, ref.Length)
+	require.NoError(t, err)
+	finishPublication := store.BeginObjectPublication()
+	installOutboxTestObject(t, store, ref, []byte("abc"))
+	type collectionOutcome struct {
+		report GarbageCollectionReport
+		err    error
+	}
+	started := make(chan struct{})
+	completed := make(chan collectionOutcome, 1)
+	go func() {
+		close(started)
+		report, err := store.CollectGarbage(t.Context())
+		completed <- collectionOutcome{report: report, err: err}
+	}()
+	<-started
+
+	select {
+	case outcome := <-completed:
+		finishPublication()
+		require.FailNow(t, "garbage collection completed during publication",
+			"report=%+v error=%v", outcome.report, outcome.err)
+	case <-time.After(100 * time.Millisecond):
+		assert.FileExists(t, store.ObjectPath(ref))
+	}
+
+	finishPublication()
+	outcome := <-completed
+	require.NoError(t, outcome.err)
+	assert.Equal(t, GarbageCollectionReport{Objects: 1, Bytes: 3}, outcome.report)
+	assert.NoFileExists(t, store.ObjectPath(ref))
+}
+
 func testCapturedGeneration(
 	sequence int,
 	root ConfiguredRoot,

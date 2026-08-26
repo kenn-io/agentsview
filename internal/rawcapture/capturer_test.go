@@ -609,6 +609,37 @@ func TestCapturerStoresOnlySuffixObjectForVerifiedAppend(t *testing.T) {
 	assert.Equal(t, []byte("two\n"), suffix)
 }
 
+func TestCapturerRefreshesReusedCompanionMetadataForAppend(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	provider, source, transcriptPath := captureFileProvider(t, "one\n")
+	companionPath := filepath.Join(filepath.Dir(transcriptPath), "session_index.jsonl")
+	require.NoError(t, os.WriteFile(companionPath, []byte("index\n"), 0o600))
+	provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
+		Path: "project/session_index.jsonl", LocalPath: companionPath,
+	})
+	capturer := New(store)
+	_, err := capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	initialInfo, err := os.Stat(companionPath)
+	require.NoError(t, err)
+	touchedAt := initialInfo.ModTime().Add(time.Hour)
+	require.NoError(t, os.Chtimes(companionPath, touchedAt, touchedAt))
+	currentInfo, err := os.Stat(companionPath)
+	require.NoError(t, err)
+	require.NotEqual(t, initialInfo.ModTime(), currentInfo.ModTime())
+	require.NoError(t, appendFile(transcriptPath, "two\n"))
+
+	result, err := capturer.Capture(t.Context(), provider, source)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
+	base, ok, err := store.CaptureBase(t.Context(), result.Source)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 2)
+	assert.Equal(t, currentInfo.ModTime().UnixNano(), base.Entries[1].ModTimeNS)
+}
+
 func TestCapturerAppendsFromAcknowledgedBaseAfterLocalObjectGC(t *testing.T) {
 	store, _ := openCapturerTestStore(t, 1<<20)
 	require.NoError(t, store.SetDevice(t.Context(), "device-a"))

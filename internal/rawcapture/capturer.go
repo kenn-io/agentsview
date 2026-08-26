@@ -237,8 +237,7 @@ func (c *Capturer) Capture(
 				ctx, observed[i], assessment.appendBases[i],
 			)
 		} else if assessment.mode == captureAppend {
-			err = c.verifyReusedFile(ctx, observed[i], assessment.appendBases[i])
-			entry = cloneCapturedEntry(assessment.appendBases[i])
+			entry, err = c.captureReusedFile(ctx, observed[i], assessment.appendBases[i])
 		} else {
 			entry, newlyInstalled, err = c.captureFile(ctx, observed[i])
 		}
