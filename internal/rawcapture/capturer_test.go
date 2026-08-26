@@ -224,6 +224,24 @@ func TestCapturerReturnsUnchangedWithoutAnotherGeneration(t *testing.T) {
 	assert.Equal(t, first.CaptureID, base.CaptureID)
 }
 
+func TestCapturerRejectsSameSizeMutationBeforeUnchangedDecision(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	provider, source, sourcePath := captureFileProvider(t, "one\n")
+	capturer := New(store)
+	_, err := capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	initialPlanCalls := provider.planCalls.Load()
+	provider.planHook = func(call int32) {
+		if call == initialPlanCalls+2 {
+			require.NoError(t, os.WriteFile(sourcePath, []byte("two\n"), 0o600))
+		}
+	}
+
+	_, err = capturer.Capture(t.Context(), provider, source)
+
+	require.ErrorIs(t, err, ErrSourceChanged)
+}
+
 func TestCapturerRejectsMutationWithoutPublishingGeneration(t *testing.T) {
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
@@ -810,6 +828,65 @@ func TestSuccessfulSourceDoesNotClearAnotherSourceCoverageGap(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, rawcheckpoint.CoverageDegraded, coverage.State)
 	assert.Equal(t, "outbox_full", coverage.Reason)
+}
+
+func TestUnchangedSourcesClearOnlyTheirOwnCoverageFailures(t *testing.T) {
+	const maxBytes = int64(1 << 20)
+	store, _ := openCapturerTestStore(t, maxBytes)
+	root := t.TempDir()
+	firstPath := filepath.Join(root, "first.jsonl")
+	secondPath := filepath.Join(root, "second.jsonl")
+	require.NoError(t, os.WriteFile(firstPath, []byte("first\n"), 0o600))
+	require.NoError(t, os.WriteFile(secondPath, []byte("second\n"), 0o600))
+	newProvider := func(sourceKey, path string) *captureTestProvider {
+		return &captureTestProvider{
+			Def: parser.AgentDef{Type: parser.AgentClaude},
+			Caps: parser.Capabilities{RawCapture: parser.RawCaptureCapabilities{
+				Support: parser.CapabilitySupported, Shape: parser.RawCaptureShapeFiles,
+				Append: parser.RawCaptureAppendOne, Snapshot: parser.RawCaptureSnapshotNone,
+			}},
+			plan: parser.RawCapturePlan{
+				ConfiguredRoot: root, CaptureRoot: root, SourceKey: sourceKey,
+				Entries: []parser.RawCaptureEntry{{
+					Path: filepath.Base(path), LocalPath: path, Appendable: true,
+				}},
+			},
+		}
+	}
+	firstProvider := newProvider("first", firstPath)
+	secondProvider := newProvider("second", secondPath)
+	firstSource := parser.SourceRef{Provider: parser.AgentClaude, Key: "first"}
+	secondSource := parser.SourceRef{Provider: parser.AgentClaude, Key: "second"}
+	first, err := New(store).Capture(t.Context(), firstProvider, firstSource)
+	require.NoError(t, err)
+	second, err := New(store).Capture(t.Context(), secondProvider, secondSource)
+	require.NoError(t, err)
+	_, err = store.ReserveSourceCapture(t.Context(), first.Source, maxBytes)
+	require.ErrorIs(t, err, rawcheckpoint.ErrOutboxFull)
+	_, err = store.ReserveSourceCapture(t.Context(), second.Source, maxBytes)
+	require.ErrorIs(t, err, rawcheckpoint.ErrOutboxFull)
+
+	firstRetry, err := New(store).Capture(t.Context(), firstProvider, firstSource)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusUnchanged, firstRetry.Status)
+	coverage, ok, err := store.Coverage(
+		t.Context(), parser.AgentClaude, first.Source.ConfiguredRootID,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawcheckpoint.CoverageDegraded, coverage.State)
+
+	secondRetry, err := New(store).Capture(t.Context(), secondProvider, secondSource)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusUnchanged, secondRetry.Status)
+	coverage, ok, err = store.Coverage(
+		t.Context(), parser.AgentClaude, second.Source.ConfiguredRootID,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawcheckpoint.CoverageComplete, coverage.State)
 }
 
 func TestCapturerReservesOnlyVerifiedSuffixForAcknowledgedLargeSource(t *testing.T) {

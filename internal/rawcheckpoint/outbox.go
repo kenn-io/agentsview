@@ -348,6 +348,39 @@ func (s *Store) ReleaseReservation(ctx context.Context, reservationID string) er
 	})
 }
 
+// CompleteUnchangedCapture atomically releases a verified unchanged capture's
+// reservation and clears only that source's coverage failure.
+func (s *Store) CompleteUnchangedCapture(
+	ctx context.Context,
+	reservationID string,
+	source SourceIdentity,
+) error {
+	if reservationID == "" || source.Provider == "" ||
+		source.ConfiguredRootID == "" || source.SourceKey == "" {
+		return fmt.Errorf("rawcheckpoint: invalid unchanged capture")
+	}
+	return s.withImmediateWrite(ctx, "complete unchanged capture", func(conn *sql.Conn) error {
+		var reservationRoot string
+		err := conn.QueryRowContext(ctx,
+			`SELECT configured_root_id FROM outbox_reservations WHERE id = ?`, reservationID,
+		).Scan(&reservationRoot)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrReservationMissing
+		}
+		if err != nil {
+			return fmt.Errorf("rawcheckpoint: complete unchanged capture: read reservation: %w", err)
+		}
+		if reservationRoot != source.ConfiguredRootID {
+			return ErrCaptureConflict
+		}
+		if _, err := conn.ExecContext(ctx,
+			`DELETE FROM outbox_reservations WHERE id = ?`, reservationID); err != nil {
+			return fmt.Errorf("rawcheckpoint: complete unchanged capture: release reservation: %w", err)
+		}
+		return clearSourceCoverageFailureConn(ctx, conn, source, s.now().UTC())
+	})
+}
+
 // OutboxUsage returns exact charged object and metadata bytes plus active
 // worst-case reservations.
 func (s *Store) OutboxUsage(ctx context.Context) (OutboxUsage, error) {

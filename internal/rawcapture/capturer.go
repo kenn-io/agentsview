@@ -177,6 +177,20 @@ func (c *Capturer) Capture(
 		if err := validateCapturePlanStillCurrent(ctx, provider, source, plan, scope); err != nil {
 			return Result{}, err
 		}
+		for i := range observed {
+			if err := c.verifyCapturedFile(ctx, observed[i], capturedFileState{
+				length:       observed[i].info.Size(),
+				modTimeNS:    observed[i].info.ModTime().UnixNano(),
+				fileIdentity: observed[i].identity,
+				prefixSHA256: assessment.entries[i].PrefixSHA256,
+			}); err != nil {
+				return Result{}, err
+			}
+		}
+		if err := c.store.CompleteUnchangedCapture(ctx, reservation.ID, identity); err != nil {
+			return Result{}, err
+		}
+		committed = true
 		return Result{Status: StatusUnchanged, Source: identity}, nil
 	}
 	captureID, err := newCaptureID()
@@ -454,7 +468,7 @@ func (c *Capturer) assessCapture(
 		prospective = append(prospective, cloneCapturedEntry(previous))
 	}
 	if suffixBytes == 0 {
-		return captureAssessment{unchanged: true}, nil
+		return captureAssessment{entries: prospective, unchanged: true}, nil
 	}
 	return captureAssessment{
 		mode: captureAppend, objectBytes: suffixBytes, entries: prospective,
