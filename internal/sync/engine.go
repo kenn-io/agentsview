@@ -7660,7 +7660,12 @@ func filterProviderSourcesToScope(
 ) []parser.SourceRef {
 	filtered := sources[:0]
 	for _, source := range sources {
-		if scope.includes(source.ConfiguredRoot) {
+		// Overlapping roots can attribute a winner to an out-of-scope
+		// ancestor; a physically in-scope source stays admitted.
+		if scope.includes(source.ConfiguredRoot) ||
+			scope.includes(validatedProviderSourceStatPath(
+				providerDiscoveredPath(source),
+			)) {
 			filtered = append(filtered, source)
 		}
 	}

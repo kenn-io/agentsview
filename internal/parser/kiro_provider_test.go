@@ -840,6 +840,25 @@ func TestKiroProviderChangedCurrentEventScansOnlyAffectedSession(t *testing.T) {
 		"a non-database event should inspect only the root directory")
 }
 
+func TestKiroProviderChangedCurrentEventIgnoresUnrelatedLegacyDamage(t *testing.T) {
+	root := t.TempDir()
+	rawID := "sess_0123456789abcdef"
+	current := filepath.Join(root, "workspace", rawID, "messages.jsonl")
+	writeSourceFile(t, current, `{"payload":{"type":"user","content":"current"}}`+"\n")
+	writeSourceFile(t, filepath.Join(root, "broken.jsonl"), "{}\n")
+	writeSourceFile(t, filepath.Join(root, "broken.json"), "{")
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: current, WatchRoot: root, EventKind: "write",
+	})
+	require.NoError(t, err,
+		"an unrelated malformed legacy sidecar must not fail a current-session event")
+	require.Len(t, changed, 1)
+	assert.Equal(t, current, changed[0].DisplayPath)
+}
+
 func TestKiroProviderChangedLegacyEventPreservesMetadataIdentity(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "storage-name.jsonl")

@@ -1965,6 +1965,31 @@ func TestSyncRootsSinceKiroTombstonesRemovedAllShadowedMember(
 	assert.Equal(t, "source_missing", *archived.DeletionCause)
 }
 
+func TestSyncRootsSinceKiroOverlappingRootsKeepInScopeWinner(t *testing.T) {
+	parent := t.TempDir()
+	child := filepath.Join(parent, "nest")
+	require.NoError(t, os.MkdirAll(child, 0o755))
+	env := setupSingleAgentTestEnvWithDirs(
+		t, parser.AgentKiro, []string{parent, child},
+	)
+	rawID := "sess_0123456789abcdef"
+	path := filepath.Join(child, rawID, "messages.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(
+		`{"payload":{"type":"user","content":"scoped"}}`+"\n",
+	), 0o644))
+
+	stats := env.engine.SyncRootsSince(
+		context.Background(), []string{child}, time.Time{}, nil,
+	)
+	require.False(t, stats.Aborted)
+
+	active, err := env.db.GetSession(context.Background(), "kiro:"+rawID)
+	require.NoError(t, err)
+	assert.NotNil(t, active,
+		"a physically in-scope winner attributed to an overlapping ancestor root must stay admitted")
+}
+
 func TestReconcileWatchRootsKiroDiscoveryFailureDoesNotAbortOtherAgents(
 	t *testing.T,
 ) {
