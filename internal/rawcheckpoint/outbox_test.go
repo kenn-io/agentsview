@@ -123,7 +123,8 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO raw_sources
 		(provider, configured_root_id, source_key, head_manifest_id,
 		 head_receipt, head_generation, latest_capture_id, updated_at)
-		VALUES ('claude', 'root-a', 'source-a', ?, ?, 1, 'capture-queued', ?)`,
+		VALUES ('claude', 'root-a', 'source-a', ?, ?, 1,
+			'capture-invalid-descendant', ?)`,
 		validCheckpointDigest(1), validCheckpointDigest(2), timestamp)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO outbox_generations
@@ -217,6 +218,14 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	base, ok, err := store.CaptureBase(t.Context(), SourceIdentity{
+		Provider: parser.AgentClaude, ConfiguredRootID: "root-a", SourceKey: "source-a",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "capture-acknowledged", base.CaptureID)
+	require.Len(t, base.Entries, 1)
+	assert.Equal(t, "acknowledged.jsonl", base.Entries[0].Path)
 
 	usage, err := store.OutboxUsage(t.Context())
 	require.NoError(t, err)

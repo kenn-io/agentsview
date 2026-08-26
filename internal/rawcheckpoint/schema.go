@@ -262,6 +262,11 @@ var versionFourMigrationStatements = []string{
 			SELECT capture_id FROM outbox_generations WHERE state = 'acknowledged'
 		)`,
 	`DELETE FROM outbox_generations WHERE state = 'acknowledged'`,
+	`UPDATE raw_sources SET latest_capture_id = head_capture_id
+		WHERE latest_capture_id != '' AND NOT EXISTS (
+			SELECT 1 FROM outbox_generations AS generation
+			WHERE generation.capture_id = raw_sources.latest_capture_id
+		)`,
 }
 
 var versionFiveMigrationStatements = []string{
