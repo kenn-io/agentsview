@@ -34,12 +34,14 @@ Agentsview rejects negative scalar, tier base, and tier prices while accepting
 zero. Reverified 2026-08-26 against the pinned data, schema, typed Python
 source, and parser boundary.
 
-For a usage event with a valid timestamp, pricing precedence is an exact user
-custom rate, a matching Pydantic conditional rate at that timestamp, then the
-existing flat catalog. Events without a valid timestamp skip Pydantic because
-choosing its oldest conditional record would invent a historical date. Pydantic
-currently carries both GPT-5.6 Luna price periods but not Grok 4.6, so the flat
-fallback remains necessary.
+For a usage event with a valid timestamp, pricing precedence is a user custom
+rate resolved from the reported or caller-supplied canonical model, a matching
+Pydantic conditional rate at that timestamp, then the existing flat catalog. An
+exact custom rate for the reported model takes precedence over canonicalization.
+Events without a valid timestamp skip Pydantic because choosing its oldest
+conditional record would invent a historical date. Pydantic currently carries
+both GPT-5.6 Luna price periods but not Grok 4.6, so the flat fallback remains
+necessary.
 
 Agentsview's flat fallback prices come from LiteLLM's
 [`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/418c7c6012d7c39a9d4a28c72cabe1995595ad2b/model_prices_and_context_window.json)
