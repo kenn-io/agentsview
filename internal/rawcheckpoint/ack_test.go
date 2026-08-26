@@ -1,6 +1,7 @@
 package rawcheckpoint
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -170,6 +171,51 @@ func TestAcknowledgedCaptureBaseRetainsObjectReferencesAfterLocalGC(t *testing.T
 	assert.Equal(t, commit.Receipt, base.Head.Receipt)
 	assert.Equal(t, generation.Entries, base.Entries)
 	assert.NoFileExists(t, store.ObjectPath(ref))
+}
+
+func TestCaptureBaseSnapshotRemainsCoherentDuringAcknowledgement(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
+	installOutboxTestObject(t, store, ref, []byte("abc"))
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
+	require.NoError(t, err)
+	generation := testCapturedGeneration(1, root, "", ref)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	_, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	commit := rawsync.CommitResult{
+		ManifestID: validCheckpointDigest(1), Receipt: validCheckpointDigest(2),
+		Generation: 1, Created: true,
+	}
+	require.NoError(t, store.BindFinalizedManifestID(
+		t.Context(), "device-a", generation.CaptureID, commit.ManifestID,
+	))
+
+	tx, err := store.db.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	var captureID string
+	require.NoError(t, tx.QueryRowContext(t.Context(), `SELECT latest_capture_id
+		FROM raw_sources WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
+		string(generation.Source.Provider), generation.Source.ConfiguredRootID,
+		generation.Source.SourceKey,
+	).Scan(&captureID))
+	require.Equal(t, generation.CaptureID, captureID)
+
+	_, err = store.AcknowledgeGeneration(
+		t.Context(), "device-a", generation.CaptureID, commit,
+	)
+	require.NoError(t, err)
+	base, ok, err := captureBaseSnapshot(t.Context(), tx, generation.Source)
+
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, generation.CaptureID, base.CaptureID)
+	assert.Empty(t, base.Head.Receipt)
+	assert.Zero(t, base.Head.Generation)
+	assert.Equal(t, generation.Entries, base.Entries)
 }
 
 func TestAcknowledgedGenerationCompactsToBoundedHeadReplayState(t *testing.T) {

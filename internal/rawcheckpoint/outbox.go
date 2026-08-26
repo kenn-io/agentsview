@@ -553,11 +553,40 @@ func (s *Store) CaptureBase(
 	ctx context.Context,
 	source SourceIdentity,
 ) (CaptureBaseState, bool, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return CaptureBaseState{}, false, fmt.Errorf(
+			"rawcheckpoint: begin capture base snapshot: %w", err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+	base, found, err := captureBaseSnapshot(ctx, tx, source)
+	if err != nil {
+		return CaptureBaseState{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CaptureBaseState{}, false, fmt.Errorf(
+			"rawcheckpoint: commit capture base snapshot: %w", err,
+		)
+	}
+	return base, found, nil
+}
+
+type checkpointQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func captureBaseSnapshot(
+	ctx context.Context,
+	queryer checkpointQueryer,
+	source SourceIdentity,
+) (CaptureBaseState, bool, error) {
 	var captureID string
 	var headCaptureID string
 	var head SourceHead
 	var updatedAt string
-	err := s.db.QueryRowContext(ctx, `SELECT latest_capture_id, head_capture_id, head_manifest_id,
+	err := queryer.QueryRowContext(ctx, `SELECT latest_capture_id, head_capture_id, head_manifest_id,
 		head_receipt, head_generation, updated_at FROM raw_sources
 		WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
 		string(source.Provider), source.ConfiguredRootID, source.SourceKey,
@@ -571,7 +600,7 @@ func (s *Store) CaptureBase(
 	}
 	head.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 	if captureID != headCaptureID {
-		generation, err := s.loadGeneration(ctx, captureID)
+		generation, err := loadGeneration(ctx, queryer, captureID)
 		if err != nil {
 			return CaptureBaseState{}, false, err
 		}
@@ -581,7 +610,7 @@ func (s *Store) CaptureBase(
 			}, true, nil
 		}
 	}
-	entries, err := s.loadAcknowledgedBase(ctx, source)
+	entries, err := loadAcknowledgedBase(ctx, queryer, source)
 	if err != nil {
 		return CaptureBaseState{}, false, err
 	}
@@ -591,11 +620,12 @@ func (s *Store) CaptureBase(
 	return CaptureBaseState{CaptureID: captureID, Head: head, Entries: entries}, true, nil
 }
 
-func (s *Store) loadAcknowledgedBase(
+func loadAcknowledgedBase(
 	ctx context.Context,
+	queryer checkpointQueryer,
 	source SourceIdentity,
 ) ([]CapturedEntry, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT entry_ordinal, path, length,
+	rows, err := queryer.QueryContext(ctx, `SELECT entry_ordinal, path, length,
 		mod_time_ns, file_identity, prefix_sha256, appendable
 		FROM raw_source_base_entries
 		WHERE provider = ? AND configured_root_id = ? AND source_key = ?
@@ -621,7 +651,7 @@ func (s *Store) loadAcknowledgedBase(
 	}
 	rows.Close()
 	for i, ordinal := range ordinals {
-		objectRows, err := s.db.QueryContext(ctx, `SELECT sha256, length
+		objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
 			FROM raw_source_base_objects
 			WHERE provider = ? AND configured_root_id = ? AND source_key = ?
 			AND entry_ordinal = ? ORDER BY object_ordinal`, string(source.Provider),
@@ -667,15 +697,19 @@ func (s *Store) NextGeneration(
 	if err != nil {
 		return CapturedGeneration{}, false, fmt.Errorf("rawcheckpoint: read next generation: %w", err)
 	}
-	generation, err := s.loadGeneration(ctx, captureID)
+	generation, err := loadGeneration(ctx, s.db, captureID)
 	return generation, err == nil, err
 }
 
-func (s *Store) loadGeneration(ctx context.Context, captureID string) (CapturedGeneration, error) {
+func loadGeneration(
+	ctx context.Context,
+	queryer checkpointQueryer,
+	captureID string,
+) (CapturedGeneration, error) {
 	var generation CapturedGeneration
 	var provider, capturedAt, kind string
 	var predecessor sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT provider, configured_root_id,
+	err := queryer.QueryRowContext(ctx, `SELECT provider, configured_root_id,
 		source_key, predecessor_capture_id, captured_at, kind
 		FROM outbox_generations WHERE capture_id = ?`, captureID,
 	).Scan(&provider, &generation.Source.ConfiguredRootID,
@@ -688,7 +722,7 @@ func (s *Store) loadGeneration(ctx context.Context, captureID string) (CapturedG
 	generation.PredecessorCaptureID = predecessor.String
 	generation.CapturedAt, _ = time.Parse(time.RFC3339Nano, capturedAt)
 	generation.Kind = rawsync.ManifestKind(kind)
-	entries, err := s.loadGenerationEntries(ctx, captureID)
+	entries, err := loadGenerationEntries(ctx, queryer, captureID)
 	if err != nil {
 		return CapturedGeneration{}, err
 	}
@@ -696,8 +730,12 @@ func (s *Store) loadGeneration(ctx context.Context, captureID string) (CapturedG
 	return generation, nil
 }
 
-func (s *Store) loadGenerationEntries(ctx context.Context, captureID string) ([]CapturedEntry, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT entry_ordinal, path, length,
+func loadGenerationEntries(
+	ctx context.Context,
+	queryer checkpointQueryer,
+	captureID string,
+) ([]CapturedEntry, error) {
+	rows, err := queryer.QueryContext(ctx, `SELECT entry_ordinal, path, length,
 		mod_time_ns, file_identity, prefix_sha256, appendable
 		FROM outbox_entries WHERE capture_id = ? ORDER BY entry_ordinal`, captureID)
 	if err != nil {
@@ -720,7 +758,7 @@ func (s *Store) loadGenerationEntries(ctx context.Context, captureID string) ([]
 		return nil, fmt.Errorf("rawcheckpoint: load generation entries: %w", err)
 	}
 	for i, ordinal := range ordinals {
-		objectRows, err := s.db.QueryContext(ctx, `SELECT sha256, length
+		objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
 			FROM outbox_entry_objects WHERE capture_id = ? AND entry_ordinal = ?
 			ORDER BY object_ordinal`, captureID, ordinal)
 		if err != nil {
