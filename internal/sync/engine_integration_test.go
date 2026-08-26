@@ -1965,6 +1965,52 @@ func TestSyncRootsSinceKiroTombstonesRemovedAllShadowedMember(
 	assert.Equal(t, "source_missing", *archived.DeletionCause)
 }
 
+func TestReconcileWatchRootsKiroDiscoveryFailureDoesNotAbortOtherAgents(
+	t *testing.T,
+) {
+	env := setupFocusedTestEnv(t, parser.AgentKiro, parser.AgentClaude)
+	rawID := "sess_0123456789abcdef"
+	kiroPath := filepath.Join(env.kiroDir, "workspace", rawID, "messages.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(kiroPath), 0o755))
+	require.NoError(t, os.WriteFile(kiroPath, []byte(
+		`{"payload":{"type":"user","content":"keep"}}`+"\n",
+	), 0o644))
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Hello").
+		String()
+	claudePath := env.writeClaudeSession(
+		t, "claude-project", "claude-session.jsonl", content,
+	)
+	initial := env.engine.SyncAll(t.Context(), nil)
+	require.Zero(t, initial.Failed)
+	kiroBefore, err := env.db.GetSession(t.Context(), "kiro:"+rawID)
+	require.NoError(t, err)
+	require.NotNil(t, kiroBefore)
+	claudeBefore, err := env.db.GetSession(t.Context(), "claude-session")
+	require.NoError(t, err)
+	require.NotNil(t, claudeBefore)
+
+	require.NoError(t, os.Remove(claudePath))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(env.kiroDir, "broken.jsonl"), []byte("{}\n"), 0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(env.kiroDir, "broken.json"), []byte("{"), 0o644,
+	))
+
+	err = env.engine.ReconcileWatchRoots(t.Context(), nil, true)
+	require.Error(t, err, "the failed Kiro scope must stay queued for retry")
+
+	claudeGone, err := env.db.GetSession(t.Context(), "claude-session")
+	require.NoError(t, err)
+	assert.Nil(t, claudeGone,
+		"a Kiro discovery failure must not abort other agents' reconciliation")
+	kiroKept, err := env.db.GetSession(t.Context(), "kiro:"+rawID)
+	require.NoError(t, err)
+	assert.NotNil(t, kiroKept,
+		"Kiro sessions must be preserved when Kiro discovery fails")
+}
+
 func TestSyncEngineKiroLegacyOnlySyncPath(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	writeLegacyKiroSession(
