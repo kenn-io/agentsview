@@ -662,6 +662,56 @@ func TestPushSessionRechecksExclusionAfterSuccessfulUpsert(t *testing.T) {
 	require.NoError(t, tx.Rollback(), "Rollback")
 }
 
+func TestPushSessionRejectsInvalidTimestamps(t *testing.T) {
+	t.Parallel()
+	bad := "not-a-timestamp"
+	tests := []struct {
+		name  string
+		field string
+		set   func(*db.Session)
+	}{
+		{
+			name: "created_at", field: "created_at",
+			set: func(s *db.Session) { s.CreatedAt = bad },
+		},
+		{
+			name: "started_at", field: "started_at",
+			set: func(s *db.Session) { s.StartedAt = &bad },
+		},
+		{
+			name: "ended_at", field: "ended_at",
+			set: func(s *db.Session) { s.EndedAt = &bad },
+		},
+		{
+			name: "deleted_at", field: "deleted_at",
+			set: func(s *db.Session) { s.DeletedAt = &bad },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			state := &pushSessionProbeState{}
+			pg := newPushSessionProbeDB(t, state)
+			tx, err := pg.BeginTx(t.Context(), nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx.Rollback() })
+
+			sess := db.Session{
+				ID: "invalid-time", Project: "project", Machine: "machine",
+				Agent: "claude", CreatedAt: "2026-01-01T00:00:00Z",
+			}
+			tt.set(&sess)
+			err = (&Sync{machine: "machine"}).pushSession(
+				t.Context(), tx, sess, "marker", nil,
+			)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.field)
+			assert.Zero(t, state.upserts)
+		})
+	}
+}
+
 func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 	state := &pushSessionProbeState{}
 	pg := newPushSessionProbeDB(t, state)

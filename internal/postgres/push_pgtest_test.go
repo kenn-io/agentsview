@@ -18,6 +18,64 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_push_legacy_time_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	ctx := t.Context()
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(ctx, pg, schema))
+
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	defer local.Close()
+
+	const sessionID = "legacy-offset-time"
+	started := "2026-03-09 22:48:29.937+00"
+	ended := "2026-03-14 00:32:16.577+00"
+	created := "2026-04-14 04:09:28.922+00"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: sessionID, Project: "project", Machine: "machine", Agent: "claude",
+		StartedAt: &started, EndedAt: &ended, MessageCount: 1,
+		UserMessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: sessionID, Ordinal: 0, Role: "user", Content: "message",
+		ContentLength: len("message"), Timestamp: started,
+	}}))
+	raw, err := sql.Open("sqlite3", local.Path())
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx,
+		`UPDATE sessions SET created_at = ? WHERE id = ?`, created, sessionID)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	syncer := &Sync{
+		pg: pg, local: local, machine: "machine", schema: schema, schemaDone: true,
+	}
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	var gotCreated, gotStarted, gotEnded, gotMessage time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT created_at, started_at, ended_at
+		FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&gotCreated, &gotStarted, &gotEnded))
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT timestamp FROM messages
+		WHERE session_id = $1 AND ordinal = 0`, sessionID,
+	).Scan(&gotMessage))
+
+	assert.Equal(t, "2026-04-14T04:09:28.922Z", FormatISO8601(gotCreated))
+	assert.Equal(t, "2026-03-09T22:48:29.937Z", FormatISO8601(gotStarted))
+	assert.Equal(t, "2026-03-14T00:32:16.577Z", FormatISO8601(gotEnded))
+	assert.Equal(t, "2026-03-09T22:48:29.937Z", FormatISO8601(gotMessage))
+}
+
 func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_usage_fingerprint_money_test"

@@ -42,6 +42,24 @@ func TestParseSQLiteTimestamp(t *testing.T) {
 			"2026-03-11T12:34:56Z",
 		},
 		{
+			"space separated fractional short offset",
+			"2026-03-11 12:34:56.123+00",
+			true,
+			"2026-03-11T12:34:56.123Z",
+		},
+		{
+			"space separated fractional colon offset",
+			"2026-03-11 12:34:56.123456+00:00",
+			true,
+			"2026-03-11T12:34:56.123456Z",
+		},
+		{
+			"space separated fractional non-UTC offset",
+			"2026-03-11 12:34:56.123456789-07:00",
+			true,
+			"2026-03-11T19:34:56.123456789Z",
+		},
+		{
 			"empty string",
 			"",
 			false,

@@ -62,7 +62,11 @@ func paddedUTCBound(ts string, hours int) string {
 	if err != nil {
 		return ts
 	}
-	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
+	padded := t.Add(time.Duration(hours) * time.Hour)
+	if padded.Year() < 1 {
+		padded = time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
+	}
+	return padded.Format(time.RFC3339)
 }
 
 func appendPGUsageBranchFilterClauses(
