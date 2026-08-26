@@ -424,6 +424,9 @@ func parseGenAIRate(raw jsontext.Value) (genAIRate, error) {
 		if err != nil {
 			return genAIRate{}, err
 		}
+		if base.Microdollars < 0 {
+			return genAIRate{}, fmt.Errorf("price must be non-negative")
+		}
 		return genAIRate{base: base}, nil
 	}
 	var tiered rawGenAITieredPrice
@@ -433,6 +436,9 @@ func parseGenAIRate(raw jsontext.Value) (genAIRate, error) {
 	base, err := money.ParseDollars(strings.TrimSpace(string(tiered.Base)))
 	if err != nil {
 		return genAIRate{}, fmt.Errorf("invalid base price: %w", err)
+	}
+	if base.Microdollars < 0 {
+		return genAIRate{}, fmt.Errorf("base price must be non-negative")
 	}
 	tiers := make([]genAITier, len(tiered.Tiers))
 	for i, tier := range tiered.Tiers {
@@ -446,6 +452,9 @@ func parseGenAIRate(raw jsontext.Value) (genAIRate, error) {
 		)
 		if parseErr != nil {
 			return genAIRate{}, fmt.Errorf("invalid tier price: %w", parseErr)
+		}
+		if price.Microdollars < 0 {
+			return genAIRate{}, fmt.Errorf("tier price must be non-negative")
 		}
 		tiers[i] = genAITier{start: tier.Start, price: price}
 	}

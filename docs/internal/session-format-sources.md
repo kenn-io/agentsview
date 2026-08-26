@@ -29,8 +29,10 @@ at commit `83a49e8b386176a1e28e9d9aedeea5e2b4abc586`. Agentsview preserves the
 complete upstream JSON in its embedded artifact and refreshed singleton row. It
 compiles the provider and model match rules, ordered start-date and UTC
 time-window conditions, token prices, and whole-request tier thresholds at
-runtime. Reverified 2026-08-25 against the pinned data, schema, and typed Python
-source.
+runtime. The upstream v2 schema permits generic JSON numbers for prices;
+Agentsview rejects negative scalar, tier base, and tier prices while accepting
+zero. Reverified 2026-08-26 against the pinned data, schema, typed Python
+source, and parser boundary.
 
 For a usage event with a valid timestamp, pricing precedence is an exact user
 custom rate, a matching Pydantic conditional rate at that timestamp, then the

@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"encoding/json/jsontext"
 	"testing"
 	"time"
 
@@ -9,6 +10,36 @@ import (
 
 	"go.kenn.io/agentsview/internal/money"
 )
+
+func TestParseGenAIRateRejectsNegativePrices(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "scalar", raw: `-0.1`},
+		{name: "tier base", raw: `{"base": -0.1, "tiers": []}`},
+		{
+			name: "tier price",
+			raw:  `{"base": 0, "tiers": [{"start": 0, "price": -0.1}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseGenAIRate(jsontext.Value(tt.raw))
+			assert.ErrorContains(t, err, "must be non-negative")
+		})
+	}
+}
+
+func TestParseGenAIRateAcceptsZeroPrices(t *testing.T) {
+	for _, raw := range []string{
+		`0`,
+		`{"base": 0, "tiers": [{"start": 0, "price": 0}]}`,
+	} {
+		_, err := parseGenAIRate(jsontext.Value(raw))
+		assert.NoError(t, err)
+	}
+}
 
 func TestParseGenAIPricesResolvesMatchingConditionsAndTiers(t *testing.T) {
 	data := []byte(`[
