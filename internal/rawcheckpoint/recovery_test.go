@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
@@ -97,6 +99,47 @@ func TestRecoverInvalidatesBrokenOfflineSuffixAndResetsAcknowledgedBase(t *testi
 		&generations,
 	))
 	assert.Zero(t, generations)
+}
+
+func TestOpenRecoversInterruptedSourceReservationAsCoverageGap(t *testing.T) {
+	base := t.TempDir()
+	checkpointPath := filepath.Join(base, "checkpoint.db")
+	spoolDir := filepath.Join(base, "spool")
+	sourceRoot := filepath.Join(base, "sources")
+	require.NoError(t, os.MkdirAll(sourceRoot, 0o755))
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	options := Options{
+		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
+		Now: func() time.Time { return now },
+	}
+	store, err := OpenWithOptions(t.Context(), checkpointPath, options)
+	require.NoError(t, err)
+	root, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, sourceRoot)
+	require.NoError(t, err)
+	source := SourceIdentity{
+		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-a",
+	}
+	_, err = store.ReserveSourceCapture(t.Context(), source, 128)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	reopened, err := OpenWithOptions(t.Context(), checkpointPath, options)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	usage, err := reopened.OutboxUsage(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, usage.ReservedBytes)
+	coverage, ok, err := reopened.Coverage(t.Context(), root.Provider, root.ID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, CoverageDegraded, coverage.State)
+	assert.Equal(t, "capture_interrupted", coverage.Reason)
+	var failureReason string
+	require.NoError(t, reopened.db.QueryRow(`SELECT reason FROM raw_coverage_failures
+		WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
+		string(source.Provider), source.ConfiguredRootID, source.SourceKey,
+	).Scan(&failureReason))
+	assert.Equal(t, "capture_interrupted", failureReason)
 }
 
 func TestVerifyObjectPerformsExplicitFullDigestCheck(t *testing.T) {

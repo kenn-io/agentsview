@@ -317,8 +317,9 @@ func (s *Store) reserveCapture(
 		}
 		now := s.now().UTC()
 		if _, err := conn.ExecContext(ctx, `INSERT INTO outbox_reservations
-			(id, configured_root_id, reserved_bytes, created_at)
-			VALUES (?, ?, ?, ?)`, id, source.ConfiguredRootID, bytes,
+			(id, provider, configured_root_id, source_key, reserved_bytes, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)`, id, string(source.Provider),
+			source.ConfiguredRootID, source.SourceKey, bytes,
 			now.Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("rawcheckpoint: reserve capture: %w", err)
 		}

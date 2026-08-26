@@ -98,6 +98,32 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 			checkpointFilesystemError(err))
 	}
 	err = s.withImmediateWrite(ctx, "recover object spool state", func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, `SELECT provider, configured_root_id, source_key
+			FROM outbox_reservations`)
+		if err != nil {
+			return fmt.Errorf("rawcheckpoint: recover: list stale reservations: %w", err)
+		}
+		var interrupted []SourceIdentity
+		for rows.Next() {
+			var source SourceIdentity
+			if err := rows.Scan(
+				&source.Provider, &source.ConfiguredRootID, &source.SourceKey,
+			); err != nil {
+				rows.Close()
+				return fmt.Errorf("rawcheckpoint: recover: list stale reservations: %w", err)
+			}
+			interrupted = append(interrupted, source)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("rawcheckpoint: recover: list stale reservations: %w", err)
+		}
+		for _, source := range interrupted {
+			if err := setSourceCoverageDegradedConn(
+				ctx, conn, source, "capture_interrupted", s.now().UTC(),
+			); err != nil {
+				return err
+			}
+		}
 		result, err := conn.ExecContext(ctx, `DELETE FROM outbox_reservations`)
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: recover: clear stale reservations: %w", err)

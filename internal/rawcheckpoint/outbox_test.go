@@ -142,14 +142,25 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 	invalidOnly := validCheckpointDigest(3)
 	acknowledgedOnly := validCheckpointDigest(4)
 	shared := validCheckpointDigest(5)
+	invalidDescendant := validCheckpointDigest(6)
 	_, err = db.Exec(`INSERT INTO outbox_objects
 		(sha256, length, spool_name, ref_count, state, created_at)
 		VALUES (?, 5, ?, 1, 'live', ?),
 		       (?, 7, ?, 1, 'live', ?),
-		       (?, 11, ?, 2, 'live', ?)`,
+		       (?, 11, ?, 2, 'live', ?),
+		       (?, 13, ?, 1, 'live', ?)`,
 		invalidOnly, invalidOnly, timestamp,
 		acknowledgedOnly, acknowledgedOnly, timestamp,
-		shared, shared, timestamp)
+		shared, shared, timestamp,
+		invalidDescendant, invalidDescendant, timestamp)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO outbox_generations
+		(capture_id, provider, configured_root_id, source_key,
+		 predecessor_capture_id, captured_at, kind, state, metadata_bytes,
+		 created_at, updated_at)
+		VALUES ('capture-invalid-descendant', 'claude', 'root-a', 'source-a',
+		 'capture-invalid', ?, 'snapshot', 'queued', 400, ?, ?)`,
+		timestamp, timestamp, timestamp)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO outbox_entries
 		(capture_id, entry_ordinal, path, length, mod_time_ns,
@@ -157,16 +168,19 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 		VALUES ('capture-invalid', 0, 'invalid.jsonl', 16, 0, 'invalid', ?, 1),
 		       ('capture-acknowledged', 0, 'acknowledged.jsonl', 7, 0,
 		        'acknowledged', ?, 1),
-		       ('capture-queued', 0, 'queued.jsonl', 11, 0, 'queued', ?, 1)`,
-		invalidOnly, acknowledgedOnly, shared)
+		       ('capture-queued', 0, 'queued.jsonl', 11, 0, 'queued', ?, 1),
+		       ('capture-invalid-descendant', 0, 'descendant.jsonl', 13, 0,
+		        'descendant', ?, 1)`,
+		invalidOnly, acknowledgedOnly, shared, invalidDescendant)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO outbox_entry_objects
 		(capture_id, entry_ordinal, object_ordinal, sha256, length)
 		VALUES ('capture-invalid', 0, 0, ?, 5),
 		       ('capture-invalid', 0, 1, ?, 11),
 		       ('capture-acknowledged', 0, 0, ?, 7),
-		       ('capture-queued', 0, 0, ?, 11)`,
-		invalidOnly, shared, acknowledgedOnly, shared)
+		       ('capture-queued', 0, 0, ?, 11),
+		       ('capture-invalid-descendant', 0, 0, ?, 13)`,
+		invalidOnly, shared, acknowledgedOnly, shared, invalidDescendant)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO raw_source_base_entries
 		(provider, configured_root_id, source_key, entry_ordinal, path, length,
@@ -189,6 +203,7 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 		{digest: invalidOnly, data: "12345"},
 		{digest: acknowledgedOnly, data: "1234567"},
 		{digest: shared, data: "12345678901"},
+		{digest: invalidDescendant, data: "1234567890123"},
 	} {
 		objectDir := filepath.Join(spoolDir, "objects", "sha256", object.digest[:2])
 		require.NoError(t, os.MkdirAll(objectDir, 0o700))
@@ -230,6 +245,16 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 	).Scan(&invalidObjects))
 	assert.Zero(t, invalidObjects)
 	_, err = os.Stat(store.ObjectPath(rawsync.ObjectRef{SHA256: invalidOnly, Length: 5}))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	var descendantObjects int
+	require.NoError(t, store.db.QueryRow(
+		`SELECT count(*) FROM outbox_objects WHERE sha256 = ? AND length = 13`,
+		invalidDescendant,
+	).Scan(&descendantObjects))
+	assert.Zero(t, descendantObjects)
+	_, err = os.Stat(store.ObjectPath(rawsync.ObjectRef{
+		SHA256: invalidDescendant, Length: 13,
+	}))
 	assert.ErrorIs(t, err, os.ErrNotExist)
 
 	var acknowledgedReferences int

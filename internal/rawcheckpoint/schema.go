@@ -98,7 +98,9 @@ var versionTwoMigrationStatements = []string{
 	)`,
 	`CREATE TABLE outbox_reservations (
 		id TEXT PRIMARY KEY,
+		provider TEXT NOT NULL,
 		configured_root_id TEXT NOT NULL,
+		source_key TEXT NOT NULL,
 		reserved_bytes INTEGER NOT NULL CHECK (reserved_bytes >= 0),
 		created_at TEXT NOT NULL,
 		FOREIGN KEY (configured_root_id) REFERENCES configured_roots(id) ON DELETE CASCADE
@@ -229,20 +231,27 @@ var versionFourMigrationStatements = []string{
 			AND generation.manifest_id = raw_sources.head_manifest_id
 		LIMIT 1
 	), '')`,
-	`UPDATE outbox_objects SET ref_count = ref_count - (
+	`WITH RECURSIVE invalid_suffix(capture_id) AS (
+		SELECT capture_id FROM outbox_generations WHERE state = 'invalid'
+		UNION
+		SELECT generation.capture_id FROM outbox_generations AS generation
+		JOIN invalid_suffix
+			ON generation.predecessor_capture_id = invalid_suffix.capture_id
+	), discarded(capture_id) AS (
+		SELECT capture_id FROM invalid_suffix
+		UNION
+		SELECT capture_id FROM outbox_generations WHERE state = 'acknowledged'
+	)
+	UPDATE outbox_objects SET ref_count = ref_count - (
 		SELECT count(*) FROM outbox_entry_objects AS entry_object
-		JOIN outbox_generations AS generation
-			ON generation.capture_id = entry_object.capture_id
-		WHERE generation.state IN ('invalid', 'acknowledged')
-			AND entry_object.sha256 = outbox_objects.sha256
+		JOIN discarded ON discarded.capture_id = entry_object.capture_id
+		WHERE entry_object.sha256 = outbox_objects.sha256
 			AND entry_object.length = outbox_objects.length
 	)
 	WHERE EXISTS (
 		SELECT 1 FROM outbox_entry_objects AS entry_object
-		JOIN outbox_generations AS generation
-			ON generation.capture_id = entry_object.capture_id
-		WHERE generation.state IN ('invalid', 'acknowledged')
-			AND entry_object.sha256 = outbox_objects.sha256
+		JOIN discarded ON discarded.capture_id = entry_object.capture_id
+		WHERE entry_object.sha256 = outbox_objects.sha256
 			AND entry_object.length = outbox_objects.length
 	)`,
 	`UPDATE outbox_objects SET state = 'garbage_pending'
