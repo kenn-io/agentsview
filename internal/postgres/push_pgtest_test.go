@@ -74,6 +74,37 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 	assert.Equal(t, "2026-03-09T22:48:29.937Z", FormatISO8601(gotStarted))
 	assert.Equal(t, "2026-03-14T00:32:16.577Z", FormatISO8601(gotEnded))
 	assert.Equal(t, "2026-03-09T22:48:29.937Z", FormatISO8601(gotMessage))
+
+	_, err = pg.ExecContext(ctx, `
+		UPDATE sessions
+		SET created_at = '0001-01-01T00:00:00Z',
+			started_at = NULL,
+			ended_at = NULL
+		WHERE id = $1`, sessionID)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(ctx,
+		`UPDATE messages SET timestamp = NULL WHERE session_id = $1`, sessionID)
+	require.NoError(t, err)
+	require.NoError(t, local.SetSyncState(timestampNormalizationBackfillStateKey, ""))
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.SessionsPushed)
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT created_at, started_at, ended_at
+		FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&gotCreated, &gotStarted, &gotEnded))
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT timestamp FROM messages
+		WHERE session_id = $1 AND ordinal = 0`, sessionID,
+	).Scan(&gotMessage))
+	assert.Equal(t, "2026-04-14T04:09:28.922Z", FormatISO8601(gotCreated))
+	assert.Equal(t, "2026-03-09T22:48:29.937Z", FormatISO8601(gotStarted))
+	assert.Equal(t, "2026-03-14T00:32:16.577Z", FormatISO8601(gotEnded))
+	assert.Equal(t, "2026-03-09T22:48:29.937Z", FormatISO8601(gotMessage))
+	marker, err := local.GetSyncState(timestampNormalizationBackfillStateKey)
+	require.NoError(t, err)
+	assert.Equal(t, "1", marker)
 }
 
 func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {

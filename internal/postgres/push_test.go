@@ -329,6 +329,36 @@ func TestTranscriptRevisionBackfillForcesOneFullPush(t *testing.T) {
 	assert.False(t, needed)
 }
 
+func TestTimestampNormalizationBackfillForcesOneFullPush(t *testing.T) {
+	store := &syncStateStoreStub{}
+
+	full, needed, err := applyTimestampNormalizationBackfillRequirement(
+		store, false,
+	)
+	require.NoError(t, err)
+	assert.True(t, full)
+	assert.True(t, needed)
+
+	require.NoError(t, completeTimestampNormalizationBackfill(
+		store, needed, PushResult{},
+	))
+	full, needed, err = applyTimestampNormalizationBackfillRequirement(
+		store, false,
+	)
+	require.NoError(t, err)
+	assert.False(t, full)
+	assert.False(t, needed)
+}
+
+func TestTimestampNormalizationBackfillRetriesAfterPushErrors(t *testing.T) {
+	store := &syncStateStoreStub{}
+
+	require.NoError(t, completeTimestampNormalizationBackfill(
+		store, true, PushResult{Errors: 1},
+	))
+	assert.Empty(t, store.values[timestampNormalizationBackfillStateKey])
+}
+
 func TestCompleteSessionAliasBackfillMarksDoneUnlessErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name string
