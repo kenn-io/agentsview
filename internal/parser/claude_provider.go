@@ -11,6 +11,7 @@ import (
 
 var _ Provider = (*claudeProvider)(nil)
 var _ S3Provider = (*claudeProvider)(nil)
+var _ RawCaptureProvider = (*claudeProvider)(nil)
 
 type claudeProviderFactory struct {
 	def AgentDef
@@ -75,6 +76,35 @@ func (p *claudeProvider) Fingerprint(
 	source SourceRef,
 ) (SourceFingerprint, error) {
 	return p.sources.Fingerprint(ctx, source)
+}
+
+func (p *claudeProvider) PlanRawCapture(
+	ctx context.Context,
+	source SourceRef,
+) (RawCapturePlan, error) {
+	if err := ctx.Err(); err != nil {
+		return RawCapturePlan{}, err
+	}
+	src, ok := source.Opaque.(claudeSource)
+	if !ok || src.Root == "" || src.Path == "" || isS3URI(src.Root) {
+		return RawCapturePlan{}, invalidRawCapturePlan("claude source is not a local discovered transcript")
+	}
+	rel, err := filepath.Rel(src.Root, src.Path)
+	if err != nil {
+		return RawCapturePlan{}, invalidRawCapturePlan(
+			"resolve claude source path: %s", rawCaptureFilesystemError(err),
+		)
+	}
+	return RawCapturePlan{
+		ConfiguredRoot: src.Root,
+		CaptureRoot:    src.Root,
+		SourceKey:      source.Key,
+		Entries: []RawCaptureEntry{{
+			Path:       filepath.ToSlash(rel),
+			LocalPath:  src.Path,
+			Appendable: true,
+		}},
+	}, nil
 }
 
 // ComputeMultiFileStatHash implements parser.MultiFileStatHasher for the
@@ -763,6 +793,12 @@ func claudeProviderCapabilities() Capabilities {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,
+		},
+		RawCapture: RawCaptureCapabilities{
+			Support:  CapabilitySupported,
+			Shape:    RawCaptureShapeFiles,
+			Append:   RawCaptureAppendOne,
+			Snapshot: RawCaptureSnapshotNone,
 		},
 	}
 }

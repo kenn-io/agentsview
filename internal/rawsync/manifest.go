@@ -9,7 +9,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawpath"
 )
 
 var (
@@ -202,6 +202,25 @@ func ValidateAndCanonicalize(
 	}, nil
 }
 
+// ValidateManifestForUpload applies server upload policy before local capture
+// commits bytes. It reserves the largest valid authentication envelope and a
+// future parent receipt so a queued manifest cannot become oversized later.
+func ValidateManifestForUpload(manifest Manifest, limits ManifestLimits) error {
+	prospective := manifest
+	if prospective.ExpectedParentReceipt == "" {
+		prospective.ExpectedParentReceipt = strings.Repeat("0", 64)
+	}
+	identity, err := NewAuthIdentity(
+		strings.Repeat(`"`, maxOpaqueIDBytes),
+		strings.Repeat(`"`, maxOpaqueIDBytes),
+	)
+	if err != nil {
+		return err
+	}
+	_, err = ValidateAndCanonicalize(identity, prospective, limits)
+	return err
+}
+
 // ValidateCanonicalManifest verifies canonical integrity without imposing a
 // deployment's policy limits a second time.
 func ValidateCanonicalManifest(manifest CanonicalManifest) error {
@@ -385,40 +404,10 @@ func validateEntries(manifest Manifest, limits ManifestLimits) ([]ObjectRef, err
 }
 
 func validateEntryPath(value string, maxBytes int) error {
-	if value == "" || len(value) > maxBytes || !utf8.ValidString(value) ||
-		path.IsAbs(value) || path.Clean(value) != value || value == "." ||
-		value == ".." || strings.HasPrefix(value, "../") ||
-		strings.ContainsRune(value, '\\') || isPlatformUnsafeEntryPath(value) {
-		return fmt.Errorf("%w: entry path is not a canonical relative path", ErrInvalid)
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("%w: entry path contains a control character", ErrInvalid)
-		}
+	if err := rawpath.Validate(value, maxBytes); err != nil {
+		return fmt.Errorf("%w: entry path: %v", ErrInvalid, err)
 	}
 	return nil
-}
-
-func isPlatformUnsafeEntryPath(value string) bool {
-	if strings.ContainsRune(value, ':') {
-		return true
-	}
-	for component := range strings.SplitSeq(value, "/") {
-		if strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ") {
-			return true
-		}
-		base, _, _ := strings.Cut(component, ".")
-		upper := strings.ToUpper(base)
-		switch upper {
-		case "CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$":
-			return true
-		}
-		if len(upper) == 4 && upper[3] >= '1' && upper[3] <= '9' &&
-			(upper[:3] == "COM" || upper[:3] == "LPT") {
-			return true
-		}
-	}
-	return false
 }
 
 // validateProvider fails closed for providers the server cannot classify and

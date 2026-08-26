@@ -209,6 +209,58 @@ func TestValidateAndCanonicalizeAcceptsEmptyTombstone(t *testing.T) {
 	assert.Empty(t, got.Manifest.Entries)
 }
 
+func TestValidateManifestForUploadAllowsProvisionalParentReceipt(t *testing.T) {
+	t.Parallel()
+
+	manifest := validManifest()
+	manifest.ExpectedParentReceipt = ""
+
+	require.NoError(t, ValidateManifestForUpload(manifest, DefaultManifestLimits()))
+}
+
+func TestValidateManifestForUploadEnforcesProspectiveObjectLimit(t *testing.T) {
+	t.Parallel()
+
+	manifest := validManifest()
+	limits := DefaultManifestLimits()
+	limits.MaxObjects = 2
+
+	err := ValidateManifestForUpload(manifest, limits)
+
+	require.ErrorIs(t, err, ErrInvalid)
+}
+
+func TestValidateManifestForUploadReservesWorstCaseEscapedAuthenticationIDs(t *testing.T) {
+	t.Parallel()
+
+	manifest := validManifest()
+	manifest.ExpectedParentReceipt = ""
+	prospective := cloneManifest(manifest)
+	prospective.ExpectedParentReceipt = strings.Repeat("0", 64)
+	asciiIdentity, err := NewAuthIdentity(
+		strings.Repeat("t", maxOpaqueIDBytes),
+		strings.Repeat("d", maxOpaqueIDBytes),
+	)
+	require.NoError(t, err)
+	ascii, err := ValidateAndCanonicalize(
+		asciiIdentity, prospective, DefaultManifestLimits(),
+	)
+	require.NoError(t, err)
+	limits := DefaultManifestLimits()
+	limits.MaxCanonicalBytes = len(ascii.CanonicalJSON)
+	escapedIdentity, err := NewAuthIdentity(
+		strings.Repeat(`"`, maxOpaqueIDBytes),
+		strings.Repeat(`"`, maxOpaqueIDBytes),
+	)
+	require.NoError(t, err)
+	_, err = ValidateAndCanonicalize(escapedIdentity, prospective, limits)
+	require.ErrorIs(t, err, ErrInvalid, "test limit must reject valid escaped IDs")
+
+	err = ValidateManifestForUpload(manifest, limits)
+
+	require.ErrorIs(t, err, ErrInvalid)
+}
+
 func validManifest() Manifest {
 	return Manifest{
 		SchemaVersion:    ManifestSchemaVersion,

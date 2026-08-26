@@ -29,6 +29,7 @@ const checkpointDriverName = "sqlite"
 func checkpointDSN(path string, readOnly bool) string {
 	params := url.Values{}
 	params.Add("_pragma", "busy_timeout(5000)")
+	params.Add("_pragma", "foreign_keys(1)")
 	if readOnly {
 		params.Set("mode", "ro")
 	} else {

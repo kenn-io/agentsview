@@ -9,13 +9,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
-
-const schemaVersion = 1
 
 // SourceHead is the last server-acknowledged head of one logical source.
 type SourceHead struct {
@@ -27,7 +28,20 @@ type SourceHead struct {
 
 // Store is the durable checkpoint database.
 type Store struct {
-	db *sql.DB
+	db             *sql.DB
+	spoolDir       string
+	maxOutboxBytes int64
+	now            func() time.Time
+	objectMu       sync.Mutex
+	publicationMu  sync.Mutex
+	processLocks   []*flock.Flock
+}
+
+// BeginObjectPublication serializes the interval in which a capturer can
+// install unpublished objects and either commit or discard them.
+func (s *Store) BeginObjectPublication() func() {
+	s.publicationMu.Lock()
+	return s.publicationMu.Unlock
 }
 
 func (s *Store) withImmediateWrite(
@@ -73,65 +87,24 @@ var ErrDeviceMismatch = errors.New(
 
 // Open opens (creating if needed) the checkpoint database at path.
 func Open(ctx context.Context, path string) (*Store, error) {
+	return OpenWithOptions(ctx, path, Options{})
+}
+
+func openCheckpointDB(path string) (*sql.DB, error) {
 	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("rawcheckpoint: open: %w", err)
 	}
-	store := &Store{db: db}
-	if err := store.init(ctx); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return store, nil
-}
-
-func (s *Store) init(ctx context.Context) error {
-	var version int
-	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("rawcheckpoint: read schema version: %w", err)
-	}
-	if version > schemaVersion {
-		return fmt.Errorf("rawcheckpoint: database schema %d is newer than supported %d",
-			version, schemaVersion)
-	}
-	if version == schemaVersion {
-		return nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("rawcheckpoint: begin schema: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, statement := range []string{
-		`CREATE TABLE IF NOT EXISTS device_config (
-			id INTEGER PRIMARY KEY CHECK (id = 1),
-			device_id TEXT NOT NULL,
-			created_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS raw_sources (
-			provider TEXT NOT NULL,
-			configured_root_id TEXT NOT NULL,
-			source_key TEXT NOT NULL,
-			head_manifest_id TEXT NOT NULL DEFAULT '',
-			head_receipt TEXT NOT NULL DEFAULT '',
-			head_generation INTEGER NOT NULL DEFAULT 0,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY (provider, configured_root_id, source_key)
-		)`,
-	} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("rawcheckpoint: create schema: %w", err)
-		}
-	}
-	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
-		return fmt.Errorf("rawcheckpoint: set schema version: %w", err)
-	}
-	return tx.Commit()
+	return db, nil
 }
 
 // Close releases the database handle.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	dbErr := s.db.Close()
+	lockErr := releaseStoreLocks(s.processLocks)
+	s.processLocks = nil
+	return errors.Join(dbErr, lockErr)
+}
 
 // SetDevice records this laptop's device identity, replacing any previously
 // recorded value so re-provisioning overwrites instead of failing. Changing
@@ -142,7 +115,8 @@ func (s *Store) SetDevice(ctx context.Context, deviceID string) error {
 	if deviceID == "" {
 		return fmt.Errorf("rawcheckpoint: device ID is required")
 	}
-	return s.withImmediateWrite(ctx, "set device", func(conn *sql.Conn) error {
+	reset := false
+	err := s.withImmediateWrite(ctx, "set device", func(conn *sql.Conn) error {
 		var current string
 		err := conn.QueryRowContext(ctx,
 			`SELECT device_id FROM device_config WHERE id = 1`).Scan(&current)
@@ -158,17 +132,40 @@ func (s *Store) SetDevice(ctx context.Context, deviceID string) error {
 		case current == deviceID:
 			return nil
 		default:
+			reset = true
 			if _, err := conn.ExecContext(ctx,
 				`UPDATE device_config SET device_id = ?, created_at = ? WHERE id = 1`,
 				deviceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 				return fmt.Errorf("rawcheckpoint: set device: %w", err)
 			}
-			if _, err := conn.ExecContext(ctx, `DELETE FROM raw_sources`); err != nil {
+			if _, err := conn.ExecContext(ctx,
+				`UPDATE outbox_objects SET ref_count = 0, state = 'garbage_pending'`); err != nil {
+				return fmt.Errorf("rawcheckpoint: set device: %w", err)
+			}
+			for _, statement := range []string{
+				`DELETE FROM outbox_generations`,
+				`DELETE FROM outbox_reservations`,
+				`DELETE FROM raw_source_base_entries`,
+				`DELETE FROM raw_coverage_failures`,
+				`DELETE FROM raw_coverage`,
+				`DELETE FROM raw_sources`,
+			} {
+				if _, err := conn.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("rawcheckpoint: set device: %w", err)
+				}
+			}
+			if _, err := conn.ExecContext(ctx,
+				`UPDATE outbox_objects SET state = 'garbage_pending' WHERE ref_count = 0`); err != nil {
 				return fmt.Errorf("rawcheckpoint: set device: %w", err)
 			}
 		}
 		return nil
 	})
+	if err != nil || !reset {
+		return err
+	}
+	_, err = s.CollectGarbage(ctx)
+	return err
 }
 
 // Device returns the recorded device identity and whether one has been set.

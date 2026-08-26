@@ -35,6 +35,17 @@ func (c *Client) MissingObjects(
 	provider parser.AgentType,
 	objects []rawsync.ObjectRef,
 ) ([]rawsync.ObjectRef, error) {
+	positions := make(map[rawsync.ObjectRef]int, len(objects))
+	for i, object := range objects {
+		canonical, err := rawsync.NewObjectRef(object.SHA256, object.Length)
+		if err != nil || canonical != object {
+			return nil, fmt.Errorf("rawclient: invalid missing object request")
+		}
+		if _, duplicate := positions[object]; duplicate {
+			return nil, fmt.Errorf("rawclient: invalid missing object request: duplicate object")
+		}
+		positions[object] = i
+	}
 	body := struct {
 		Provider parser.AgentType    `json:"provider"`
 		Objects  []rawsync.ObjectRef `json:"objects"`
@@ -49,6 +60,15 @@ func (c *Client) MissingObjects(
 	}
 	if err := jsonDecode(resp.Body, &out); err != nil {
 		return nil, fmt.Errorf("rawclient: decode missing objects: %w", err)
+	}
+	lastPosition := -1
+	for _, object := range out.Missing {
+		canonical, err := rawsync.NewObjectRef(object.SHA256, object.Length)
+		position, requested := positions[object]
+		if err != nil || canonical != object || !requested || position <= lastPosition {
+			return nil, fmt.Errorf("rawclient: invalid missing objects response")
+		}
+		lastPosition = position
 	}
 	return out.Missing, nil
 }

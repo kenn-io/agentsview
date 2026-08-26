@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 var _ Provider = (*codexProvider)(nil)
 var _ ActivityHintProvider = (*codexProvider)(nil)
 var _ S3Provider = (*codexProvider)(nil)
+var _ RawCaptureProvider = (*codexProvider)(nil)
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
 // implementation for Codex and its TraeX fork. Both reuse the same
@@ -77,6 +79,8 @@ func (f *codexProviderFactory) Capabilities() Capabilities {
 	caps := codexProviderCapabilities()
 	if f.spec.agent == AgentCodex {
 		caps.Source.S3Discovery = CapabilitySupported
+	} else {
+		caps.RawCapture = RawCaptureCapabilities{}
 	}
 	return caps
 }
@@ -241,6 +245,61 @@ func (p *codexProvider) Fingerprint(
 	source SourceRef,
 ) (SourceFingerprint, error) {
 	return p.sources.Fingerprint(ctx, source)
+}
+
+func (p *codexProvider) PlanRawCapture(
+	ctx context.Context,
+	source SourceRef,
+) (RawCapturePlan, error) {
+	if err := ctx.Err(); err != nil {
+		return RawCapturePlan{}, err
+	}
+	if p.spec.agent != AgentCodex {
+		return RawCapturePlan{}, invalidRawCapturePlan("provider does not own Codex raw companions")
+	}
+	src, ok := source.Opaque.(codexSource)
+	if !ok || src.Root == "" || src.Path == "" || isS3URI(src.Root) {
+		return RawCapturePlan{}, invalidRawCapturePlan("codex source is not a local discovered transcript")
+	}
+	captureRoot := filepath.Clean(src.Root)
+	indexPath := codexSessionIndexPath(src.Path)
+	if indexPath != "" {
+		captureRoot = filepath.Dir(indexPath)
+	}
+	rel, err := filepath.Rel(captureRoot, src.Path)
+	if err != nil {
+		return RawCapturePlan{}, invalidRawCapturePlan(
+			"resolve Codex source path: %s", rawCaptureFilesystemError(err),
+		)
+	}
+	entries := []RawCaptureEntry{{
+		Path:       filepath.ToSlash(rel),
+		LocalPath:  src.Path,
+		Appendable: true,
+	}}
+	if indexPath != "" {
+		info, err := os.Stat(indexPath)
+		switch {
+		case err == nil && info.Mode().IsRegular():
+			entries = append(entries, RawCaptureEntry{
+				Path:      CodexSessionIndexFilename,
+				LocalPath: indexPath,
+			})
+		case errors.Is(err, os.ErrNotExist):
+		case err != nil:
+			return RawCapturePlan{}, invalidRawCapturePlan(
+				"stat Codex session index: %s", rawCaptureFilesystemError(err),
+			)
+		default:
+			return RawCapturePlan{}, invalidRawCapturePlan("Codex session index is not a regular file")
+		}
+	}
+	return RawCapturePlan{
+		ConfiguredRoot: src.Root,
+		CaptureRoot:    captureRoot,
+		SourceKey:      source.Key,
+		Entries:        entries,
+	}, nil
 }
 
 // ComputeMultiFileStatHash implements parser.MultiFileStatHasher over the
@@ -1016,6 +1075,12 @@ func codexProviderCapabilities() Capabilities {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,
+		},
+		RawCapture: RawCaptureCapabilities{
+			Support:  CapabilitySupported,
+			Shape:    RawCaptureShapeFiles,
+			Append:   RawCaptureAppendOne,
+			Snapshot: RawCaptureSnapshotNone,
 		},
 	}
 }

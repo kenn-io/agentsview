@@ -1,3 +1,7 @@
+review_agent = "codex"
+review_model = "gpt-5.6-terra"
+review_reasoning = "high"
+
 review_guidelines = """
 agentsview is a single-user developer tool. Default mode binds to
 127.0.0.1. Optional managed Caddy proxy mode allows LAN access while

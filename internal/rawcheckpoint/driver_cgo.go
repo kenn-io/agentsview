@@ -32,6 +32,7 @@ const checkpointDriverName = "sqlite3"
 // directory name would silently open a different file.
 func checkpointDSN(path string, readOnly bool) string {
 	params := url.Values{}
+	params.Set("_foreign_keys", "on")
 	if readOnly {
 		params.Set("mode", "ro")
 		params.Set("_busy_timeout", "5000")

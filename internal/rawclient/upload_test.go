@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -62,6 +64,43 @@ func TestMissingObjectsRoundTrip(t *testing.T) {
 	require.Len(t, missing, 1)
 	assert.Equal(t, digest, missing[0].SHA256)
 	assert.Equal(t, int64(3), missing[0].Length)
+}
+
+func TestMissingObjectsRejectsResponseOutsideRequestedOrderedSubset(t *testing.T) {
+	t.Parallel()
+	first := rawsync.ObjectRef{SHA256: strings.Repeat("a", 64), Length: 1}
+	second := rawsync.ObjectRef{SHA256: strings.Repeat("b", 64), Length: 2}
+	unrelated := rawsync.ObjectRef{SHA256: strings.Repeat("c", 64), Length: 3}
+	for _, tc := range []struct {
+		name     string
+		response []rawsync.ObjectRef
+	}{
+		{name: "unrelated", response: []rawsync.ObjectRef{unrelated}},
+		{name: "duplicate", response: []rawsync.ObjectRef{first, first}},
+		{name: "reordered", response: []rawsync.ObjectRef{second, first}},
+		{name: "noncanonical", response: []rawsync.ObjectRef{{SHA256: "bad", Length: 1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mux := withTokenRoute(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				payload, err := json.Marshal(struct {
+					Missing []rawsync.ObjectRef `json:"missing"`
+				}{Missing: tc.response})
+				assert.NoError(t, err)
+				_, _ = w.Write(payload)
+			}))
+			server := httptest.NewServer(mux)
+			t.Cleanup(server.Close)
+			client := newTestClient(t, server.URL, time.Minute)
+
+			_, err := client.MissingObjects(
+				t.Context(), parser.AgentClaude, []rawsync.ObjectRef{first, second},
+			)
+
+			require.ErrorContains(t, err, "invalid missing objects response")
+		})
+	}
 }
 
 // uploadScript is a scripted resumable-upload backend. startOffset is what
