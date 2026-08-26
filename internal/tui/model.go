@@ -54,6 +54,7 @@ type model struct {
 	showThinking, showTools                            bool
 	renderedMessages                                   map[int]renderedMessage
 	transcriptLoading                                  bool
+	sessionLoadFailed                                  bool
 	sessionLoadGeneration                              uint64
 	sessionLoadContext                                 context.Context
 	cancelSessionLoad                                  context.CancelFunc
@@ -229,6 +230,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transcriptLoading = false
 		}
 		if msg.err != nil {
+			m.sessionLoadFailed = true
 			m.errText = msg.err.Error()
 			return m, nil
 		}
@@ -268,6 +270,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
+			m.sessionLoadFailed = true
 			m.errText = msg.err.Error()
 			return m, nil
 		}
@@ -415,7 +418,7 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.focus = 2
-			if m.detail != nil && m.detail.ID == id {
+			if m.detail != nil && m.detail.ID == id && !m.sessionLoadFailed {
 				return m, nil
 			}
 			return m, m.loadSelectedSession()
@@ -1008,6 +1011,7 @@ func (m *model) loadSelectedSession() tea.Cmd {
 		m.detail, m.messages, m.extras = nil, nil, SessionExtras{}
 		m.nextMessageOrdinal = nil
 		m.transcriptLoading = false
+		m.sessionLoadFailed = false
 		return nil
 	}
 	return m.loadSession(id, service.MessageFilter{Limit: initialMessageLimit}, nil)
@@ -1074,6 +1078,7 @@ func (m *model) prepareSessionPreview(id string) {
 	m.findMatches, m.findIndex = nil, 0
 	m.renderedMessages = nil
 	m.transcriptLoading = true
+	m.sessionLoadFailed = false
 	m.errText = ""
 }
 

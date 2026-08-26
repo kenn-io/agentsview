@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -327,6 +328,43 @@ func TestEnterFocusesLoadedSessionWithoutReloading(t *testing.T) {
 
 	require.Nil(t, command)
 	assert.Equal(t, 2, next.(*model).focus)
+}
+
+func TestEnterRetriesFailedSessionLoad(t *testing.T) {
+	detailCalls, messageCalls := 0, 0
+	fake := &fakeDataClient{
+		getSessionFn: func(_ context.Context, id string) (*service.SessionDetail, error) {
+			detailCalls++
+			return &service.SessionDetail{Session: db.Session{ID: id}}, nil
+		},
+		messagesFn: func(_ context.Context, _ string, _ service.MessageFilter) (*service.MessageList, error) {
+			messageCalls++
+			return &service.MessageList{}, nil
+		},
+	}
+	m := newModel(context.Background(), fake, Options{})
+	m.focus, m.generation = 1, 1
+	m.sessions = []db.Session{{ID: "session"}}
+	_ = m.loadSelectedSession()
+	_, _ = m.Update(sessionLoadedMsg{
+		generation: 1, load: m.sessionLoadGeneration, sessionID: "session",
+		initialMessages: true, err: errors.New("temporary failure"),
+	})
+
+	next, command := m.updateKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = next.(*model)
+	require.NotNil(t, command)
+	batch, ok := command().(tea.BatchMsg)
+	require.True(t, ok)
+	require.Len(t, batch, 2)
+	for _, load := range batch {
+		_ = load()
+	}
+
+	assert.Equal(t, 2, m.focus)
+	assert.Equal(t, 1, detailCalls)
+	assert.Equal(t, 1, messageCalls)
+	assert.False(t, m.sessionLoadFailed)
 }
 
 func TestPersistedStateRoundTrip(t *testing.T) {
