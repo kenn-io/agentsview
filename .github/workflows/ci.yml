@@ -262,9 +262,113 @@ jobs:
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run ${{ matrix.name }} tests
-        run: go test -tags "fts5" ${{ matrix.package }} -count=1 -timeout=20m
+        shell: pwsh
+        run: |
+          go test -json -tags "fts5" ${{ matrix.package }} -count=1 -timeout=20m 2>&1 |
+            Tee-Object -FilePath go-test-events.jsonl
+          exit $LASTEXITCODE
         env:
           CGO_ENABLED: "1"
+
+      - name: Summarize ${{ matrix.name }} test timing
+        if: always()
+        shell: pwsh
+        run: |
+          $eventsPath = "go-test-events.jsonl"
+          if (-not (Test-Path $eventsPath)) {
+            Write-Warning "Go test event log was not created"
+            exit 0
+          }
+
+          $events = @(
+            Get-Content $eventsPath | ForEach-Object {
+              try {
+                $_ | ConvertFrom-Json -ErrorAction Stop
+              } catch {
+                # Keep the raw artifact authoritative if a killed process left
+                # one incomplete line at the end of the stream.
+              }
+            }
+          )
+          if ($events.Count -eq 0) {
+            Write-Warning "Go test event log contains no complete JSON events"
+            exit 0
+          }
+
+          $terminal = @{}
+          $completed = @(
+            $events | Where-Object {
+              $_.Test -and $_.Action -in @("pass", "fail", "skip")
+            }
+          )
+          foreach ($event in $completed) {
+            $terminal[$event.Test] = $event.Action
+          }
+
+          $seenActive = @{}
+          $active = @(
+            $events |
+              Where-Object { $_.Test -and $_.Action -eq "run" } |
+              Sort-Object Time -Descending |
+              Where-Object {
+                if ($terminal.ContainsKey($_.Test) -or $seenActive.ContainsKey($_.Test)) {
+                  return $false
+                }
+                $seenActive[$_.Test] = $true
+                return $true
+              }
+          )
+
+          $summary = [System.Collections.Generic.List[string]]::new()
+          $summary.Add("## ${{ matrix.name }} Go test diagnostics")
+          $summary.Add("")
+          $summary.Add("### Tests active when the process ended")
+          $summary.Add("")
+          if ($active.Count -eq 0) {
+            $summary.Add("None.")
+          } else {
+            foreach ($event in $active | Select-Object -First 25) {
+              $summary.Add("- ``$($event.Test.Replace('|', '\|'))`` (started $($event.Time))")
+            }
+          }
+
+          $summary.Add("")
+          $summary.Add("### Slowest completed tests")
+          $summary.Add("")
+          $summary.Add("| Test | Result | Seconds |")
+          $summary.Add("| --- | --- | ---: |")
+          foreach ($event in $completed |
+            Sort-Object { [double]$_.Elapsed } -Descending |
+            Select-Object -First 25) {
+            $name = $event.Test.Replace('|', '\|')
+            $elapsed = "{0:N3}" -f [double]$event.Elapsed
+            $summary.Add("| ``$name`` | $($event.Action) | $elapsed |")
+          }
+
+          $summary.Add("")
+          $summary.Add("### Last completed tests")
+          $summary.Add("")
+          $summary.Add("| Completed | Test | Result | Seconds |")
+          $summary.Add("| --- | --- | --- | ---: |")
+          foreach ($event in $completed |
+            Sort-Object Time -Descending |
+            Select-Object -First 25) {
+            $name = $event.Test.Replace('|', '\|')
+            $elapsed = "{0:N3}" -f [double]$event.Elapsed
+            $summary.Add("| $($event.Time) | ``$name`` | $($event.Action) | $elapsed |")
+          }
+
+          $summary | Write-Output
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload ${{ matrix.name }} test events
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: go-test-events-windows-${{ matrix.name }}-attempt-${{ github.run_attempt }}
+          path: go-test-events.jsonl
+          if-no-files-found: warn
+          retention-days: 7
 
   # Keep the derived-mirror suite concurrent with the main Windows package set.
   test-duckdb-windows:
