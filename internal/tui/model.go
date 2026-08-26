@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -54,7 +53,9 @@ type model struct {
 	highContrast                                       bool
 	showThinking, showTools                            bool
 	renderedMessages                                   map[int]renderedMessage
+	transcriptLoading                                  bool
 	sessionLoadGeneration                              uint64
+	sessionLoadContext                                 context.Context
 	cancelSessionLoad                                  context.CancelFunc
 	cancelPageLoad                                     context.CancelFunc
 }
@@ -79,14 +80,16 @@ type sessionsLoadedMsg struct {
 }
 
 type sessionLoadedMsg struct {
-	generation uint64
-	load       uint64
-	sessionID  string
-	detail     *service.SessionDetail
-	messages   *service.MessageList
-	anchor     *int
-	append     bool
-	err        error
+	generation      uint64
+	load            uint64
+	sessionID       string
+	detail          *service.SessionDetail
+	messages        *service.MessageList
+	anchor          *int
+	append          bool
+	initialMessages bool
+	pageSize        int
+	err             error
 }
 
 type sessionExtrasLoadedMsg struct {
@@ -222,6 +225,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.sessionID != "" && msg.sessionID != m.selectedSessionID() {
 			return m, nil
 		}
+		if msg.initialMessages {
+			m.transcriptLoading = false
+		}
 		if msg.err != nil {
 			m.errText = msg.err.Error()
 			return m, nil
@@ -237,18 +243,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messages = msg.messages.Messages
 				m.renderedMessages = nil
 			}
-			m.nextMessageOrdinal = nextMessageFrom(msg.messages)
-		}
-		if !msg.append {
-			m.messageSelected = 0
-			if msg.anchor != nil {
-				for i, message := range m.messages {
-					if message.Ordinal == *msg.anchor {
-						m.messageSelected = i
-						break
+			m.nextMessageOrdinal = nextMessageFrom(msg.messages, msg.pageSize)
+			if !msg.append {
+				m.messageSelected = 0
+				if msg.anchor != nil {
+					for i, message := range m.messages {
+						if message.Ordinal == *msg.anchor {
+							m.messageSelected = i
+							break
+						}
 					}
 				}
 			}
+		}
+		if msg.initialMessages {
+			return m, m.loadSessionExtras(msg.sessionID, msg.generation, msg.load)
 		}
 		return m, nil
 	case sessionExtrasLoadedMsg:
@@ -401,6 +410,14 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.switchPage(pages[m.navIndex])
 		}
 		if m.page == PageSessions {
+			id := m.selectedSessionID()
+			if id == "" {
+				return m, nil
+			}
+			m.focus = 2
+			if m.detail != nil && m.detail.ID == id {
+				return m, nil
+			}
 			return m, m.loadSelectedSession()
 		}
 		if m.page == PagePinned && m.selected >= 0 && m.selected < len(m.pageData.Pins) {
@@ -982,15 +999,18 @@ func (m *model) stopPageLoad() {
 	}
 }
 
+const initialMessageLimit = 50
+
 func (m *model) loadSelectedSession() tea.Cmd {
 	id := m.selectedSessionID()
 	if id == "" {
 		m.stopSessionLoad()
 		m.detail, m.messages, m.extras = nil, nil, SessionExtras{}
 		m.nextMessageOrdinal = nil
+		m.transcriptLoading = false
 		return nil
 	}
-	return m.loadSession(id, service.MessageFilter{Limit: 200}, nil)
+	return m.loadSession(id, service.MessageFilter{Limit: initialMessageLimit}, nil)
 }
 
 func (m *model) loadSession(id string, filter service.MessageFilter, anchor *int) tea.Cmd {
@@ -998,43 +1018,63 @@ func (m *model) loadSession(id string, filter service.MessageFilter, anchor *int
 	m.sessionLoadGeneration++
 	load := m.sessionLoadGeneration
 	loadCtx, cancel := context.WithCancel(m.ctx)
-	m.cancelSessionLoad = cancel
+	m.sessionLoadContext, m.cancelSessionLoad = loadCtx, cancel
 	gen := m.generation
+	m.prepareSessionPreview(id)
 
-	transcript := func() tea.Msg {
+	detail := func() tea.Msg {
 		ctx, cancel := context.WithTimeout(loadCtx, 30*time.Second)
 		defer cancel()
-		var detail *service.SessionDetail
-		var messages *service.MessageList
-		var detailErr, messagesErr error
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			detail, detailErr = m.client.GetSession(ctx, id)
-		}()
-		go func() {
-			defer wg.Done()
-			messages, messagesErr = m.client.Messages(ctx, id, filter)
-		}()
-		wg.Wait()
-		if detailErr != nil {
-			return sessionLoadedMsg{generation: gen, load: load, sessionID: id, err: detailErr}
-		}
+		result, err := m.client.GetSession(ctx, id)
 		return sessionLoadedMsg{
-			generation: gen, load: load, sessionID: id, detail: detail,
-			messages: messages, anchor: anchor, err: messagesErr,
+			generation: gen, load: load, sessionID: id, detail: result, err: err,
 		}
 	}
-	extras := func() tea.Msg {
+	messages := func() tea.Msg {
+		ctx, cancel := context.WithTimeout(loadCtx, 30*time.Second)
+		defer cancel()
+		result, err := m.client.Messages(ctx, id, filter)
+		return sessionLoadedMsg{
+			generation: gen, load: load, sessionID: id, messages: result,
+			anchor: anchor, initialMessages: true, pageSize: filter.Limit, err: err,
+		}
+	}
+	return tea.Batch(detail, messages)
+}
+
+func (m *model) loadSessionExtras(id string, generation, load uint64) tea.Cmd {
+	loadCtx := m.sessionLoadContext
+	if loadCtx == nil {
+		loadCtx = m.ctx
+	}
+	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(loadCtx, 30*time.Second)
 		defer cancel()
 		result, err := m.client.SessionExtras(ctx, id)
 		return sessionExtrasLoadedMsg{
-			generation: gen, load: load, sessionID: id, extras: result, err: err,
+			generation: generation, load: load, sessionID: id, extras: result, err: err,
 		}
 	}
-	return tea.Batch(transcript, extras)
+}
+
+func (m *model) prepareSessionPreview(id string) {
+	preview := db.Session{ID: id}
+	if m.query.Search != "" && m.selected >= 0 && m.selected < len(m.searchResults) {
+		result := m.searchResults[m.selected]
+		name := result.Name
+		preview.Project, preview.Agent, preview.DisplayName = result.Project, result.Agent, &name
+	} else if m.selected >= 0 && m.selected < len(m.sessions) && m.sessions[m.selected].ID == id {
+		preview = m.sessions[m.selected]
+	}
+	m.detail = &service.SessionDetail{Session: preview}
+	m.messages, m.extras = nil, SessionExtras{}
+	m.messageCount = preview.MessageCount
+	m.messageSelected, m.scroll = 0, 0
+	m.nextMessageOrdinal = nil
+	m.findMatches, m.findIndex = nil, 0
+	m.renderedMessages = nil
+	m.transcriptLoading = true
+	m.errText = ""
 }
 
 func (m *model) stopSessionLoad() {
@@ -1042,6 +1082,7 @@ func (m *model) stopSessionLoad() {
 		m.cancelSessionLoad()
 		m.cancelSessionLoad = nil
 	}
+	m.sessionLoadContext = nil
 }
 
 func (m *model) openReferencedSession(id string, ordinal int) (tea.Model, tea.Cmd) {
@@ -1064,13 +1105,17 @@ func (m *model) loadMoreMessages() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
 		defer cancel()
-		messages, err := m.client.Messages(ctx, id, service.MessageFilter{From: &from, Limit: 200})
-		return sessionLoadedMsg{generation: gen, load: load, sessionID: id, messages: messages, append: true, err: err}
+		const pageSize = 200
+		messages, err := m.client.Messages(ctx, id, service.MessageFilter{From: &from, Limit: pageSize})
+		return sessionLoadedMsg{
+			generation: gen, load: load, sessionID: id, messages: messages,
+			append: true, pageSize: pageSize, err: err,
+		}
 	}
 }
 
-func nextMessageFrom(messages *service.MessageList) *int {
-	if messages == nil || messages.LastOrdinal == nil || len(messages.Messages) < 200 {
+func nextMessageFrom(messages *service.MessageList, pageSize int) *int {
+	if messages == nil || messages.LastOrdinal == nil || pageSize <= 0 || len(messages.Messages) < pageSize {
 		return nil
 	}
 	next := *messages.LastOrdinal + 1

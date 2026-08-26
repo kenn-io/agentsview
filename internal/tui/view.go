@@ -230,6 +230,9 @@ func (m *model) renderTranscript(width, height int) string {
 	lines = append(lines, m.sessionVitalLines(width)...)
 	lines = append(lines, "")
 	lineLimit := max(1, height*2)
+	if m.transcriptLoading {
+		lines = append(lines, m.strings.Loading)
+	}
 	start := max(0, m.messageSelected-2)
 	for i := start; i < len(m.messages); i++ {
 		message := m.messages[i]

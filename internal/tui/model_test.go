@@ -104,11 +104,11 @@ func TestNextMessageFromContinuesFullPages(t *testing.T) {
 		full[i].Ordinal = i + 200
 	}
 
-	next := nextMessageFrom(&service.MessageList{Messages: full, LastOrdinal: &last})
+	next := nextMessageFrom(&service.MessageList{Messages: full, LastOrdinal: &last}, 200)
 
 	require.NotNil(t, next)
 	assert.Equal(t, 400, *next)
-	assert.Nil(t, nextMessageFrom(&service.MessageList{Messages: full[:199], LastOrdinal: &last}))
+	assert.Nil(t, nextMessageFrom(&service.MessageList{Messages: full[:199], LastOrdinal: &last}, 200))
 }
 func (*fakeDataClient) Search(context.Context, service.SearchRequest) (*service.SessionSearchResult, error) {
 	return &service.SessionSearchResult{}, nil
@@ -218,33 +218,57 @@ func TestModelLoadsSessionAndRendersSafeTranscript(t *testing.T) {
 	assert.NotContains(t, view.Content, "\x1b]52")
 }
 
-func TestSelectedSessionLoadsTranscriptAndVitalsConcurrently(t *testing.T) {
+func TestSelectedSessionShowsPreviewWhileTranscriptLoads(t *testing.T) {
+	name := "New session"
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.width, m.height, m.focus = 100, 30, 2
+	m.sessions = []db.Session{{ID: "old"}, {ID: "new", DisplayName: &name, Agent: "codex", MessageCount: 73}}
+	m.selected = 1
+	m.detail = &service.SessionDetail{Session: db.Session{ID: "old"}}
+	m.messages = []db.Message{{ID: 1, Content: "old transcript"}}
+
+	command := m.loadSelectedSession()
+
+	require.NotNil(t, command)
+	require.NotNil(t, m.detail)
+	assert.Equal(t, "new", m.detail.ID)
+	assert.Empty(t, m.messages)
+	assert.True(t, m.transcriptLoading)
+	view := m.View().Content
+	assert.Contains(t, view, "New session")
+	assert.Contains(t, view, m.strings.Loading)
+	assert.NotContains(t, view, "old transcript")
+}
+
+func TestSelectedSessionDisplaysMessagesBeforeSlowMetadata(t *testing.T) {
 	started := make(chan string, 3)
-	release := make(chan struct{})
+	releaseSlow := make(chan struct{})
 	wait := func(ctx context.Context, name string) error {
 		started <- name
 		select {
-		case <-release:
+		case <-releaseSlow:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
+	filters := make(chan service.MessageFilter, 1)
 	fake := &fakeDataClient{}
 	fake.getSessionFn = func(ctx context.Context, id string) (*service.SessionDetail, error) {
 		err := wait(ctx, "detail")
 		return &service.SessionDetail{Session: db.Session{ID: id}}, err
 	}
-	fake.messagesFn = func(ctx context.Context, _ string, _ service.MessageFilter) (*service.MessageList, error) {
-		err := wait(ctx, "messages")
-		return &service.MessageList{Messages: []db.Message{{ID: 1}}}, err
+	fake.messagesFn = func(_ context.Context, _ string, filter service.MessageFilter) (*service.MessageList, error) {
+		started <- "messages"
+		filters <- filter
+		return &service.MessageList{Messages: []db.Message{{ID: 1, Content: "ready"}}}, nil
 	}
 	fake.sessionExtrasFn = func(ctx context.Context, _ string) (SessionExtras, error) {
 		err := wait(ctx, "extras")
 		return SessionExtras{Timing: &db.SessionTiming{}}, err
 	}
 	m := newModel(context.Background(), fake, Options{})
-	m.sessions = []db.Session{{ID: "session"}}
+	m.sessions = []db.Session{{ID: "session", Agent: "codex"}}
 
 	command := m.loadSelectedSession()
 	batch, ok := command().(tea.BatchMsg)
@@ -255,24 +279,54 @@ func TestSelectedSessionLoadsTranscriptAndVitalsConcurrently(t *testing.T) {
 		go func() { results <- load() }()
 	}
 	seen := make(map[string]bool)
-	for range 3 {
+	for range 2 {
 		select {
-		case name := <-started:
-			seen[name] = true
+		case call := <-started:
+			seen[call] = true
 		case <-time.After(time.Second):
-			require.FailNow(t, "session requests did not start concurrently")
+			close(releaseSlow)
+			require.FailNow(t, "primary session requests did not start concurrently")
 		}
 	}
-	close(release)
-	for range batch {
-		next, _ := m.Update(<-results)
-		m = next.(*model)
+	assert.Equal(t, map[string]bool{"detail": true, "messages": true}, seen)
+
+	next, extrasCommand := m.Update(<-results)
+	m = next.(*model)
+	require.NotNil(t, extrasCommand)
+	require.Len(t, m.messages, 1)
+	assert.Equal(t, "ready", m.messages[0].Content)
+	assert.False(t, m.transcriptLoading)
+	assert.Nil(t, m.extras.Timing)
+	assert.Equal(t, initialMessageLimit, (<-filters).Limit)
+
+	extrasResult := make(chan tea.Msg, 1)
+	go func() { extrasResult <- extrasCommand() }()
+	select {
+	case call := <-started:
+		assert.Equal(t, "extras", call)
+	case <-time.After(time.Second):
+		close(releaseSlow)
+		require.FailNow(t, "session extras did not start after transcript loaded")
 	}
 
-	assert.Equal(t, map[string]bool{"detail": true, "messages": true, "extras": true}, seen)
-	require.NotNil(t, m.detail)
-	require.Len(t, m.messages, 1)
+	close(releaseSlow)
+	next, _ = m.Update(<-results)
+	m = next.(*model)
+	next, _ = m.Update(<-extrasResult)
+	m = next.(*model)
 	assert.NotNil(t, m.extras.Timing)
+}
+
+func TestEnterFocusesLoadedSessionWithoutReloading(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.focus = 1
+	m.sessions = []db.Session{{ID: "session"}}
+	m.detail = &service.SessionDetail{Session: db.Session{ID: "session"}}
+
+	next, command := m.updateKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+
+	require.Nil(t, command)
+	assert.Equal(t, 2, next.(*model).focus)
 }
 
 func TestPersistedStateRoundTrip(t *testing.T) {
