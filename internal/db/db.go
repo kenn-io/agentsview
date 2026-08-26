@@ -1179,6 +1179,12 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	if _, err := d.GetOrCreateArchiveSalt(ctx); err != nil {
 		return closeOnError(fmt.Errorf("initializing archive salt: %w", err))
 	}
+	d.mu.Lock()
+	err = d.convergeSQLiteCommonSchemaLocked(ctx, nil)
+	d.mu.Unlock()
+	if err != nil {
+		return closeOnError(fmt.Errorf("initializing common schema: %w", err))
+	}
 	if err := d.EnsureProjectIdentityBackfillQueued(ctx); err != nil {
 		return closeOnError(fmt.Errorf("queueing project identity backfill: %w", err))
 	}

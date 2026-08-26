@@ -5,13 +5,12 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/activity"
@@ -262,6 +261,47 @@ func (f UsageFilter) appendUsageSessionFilterClauses(
 	return where, args
 }
 
+// appendUsageMatchingActivityClauses requires the session to have at
+// least one row that GetUsageMatchingSessionCount's bounded branch would
+// count: an assistant, non-synthetic message (model optional — some
+// Copilot assistant messages parse before a model name is known) or a
+// usage_events row with a model. Model/ExcludeModel narrow those same
+// rows. Seeding the EXISTS subqueries with the matching eligibility
+// predicates keeps the unbounded branch's semantics aligned with the
+// bounded branch's per-row predicates, so the same filter matches the
+// same sessions whether or not a date range is set.
+func (f UsageFilter) appendUsageMatchingActivityClauses(
+	where string, args []any,
+) (string, []any) {
+	var messageArgs []any
+	messageWhere, messageArgs := f.appendUsageSourceFilterClauses(
+		usageMatchingMessageSourceEligibility, messageArgs, "m.model",
+	)
+	var eventArgs []any
+	eventWhere, eventArgs := f.appendUsageSourceFilterClauses(
+		usageEventSourceEligibility, eventArgs, "ue.model",
+	)
+
+	where += `
+	AND (
+		EXISTS (
+			SELECT 1
+			FROM messages m
+			WHERE m.session_id = s.id
+				AND ` + messageWhere + `
+		)
+		OR EXISTS (
+			SELECT 1
+			FROM usage_events ue
+			WHERE ue.session_id = s.id
+				AND ` + eventWhere + `
+		)
+	)`
+	args = append(args, messageArgs...)
+	args = append(args, eventArgs...)
+	return where, args
+}
+
 func buildUsageTerminationPredSQLite(status string) (string, []any) {
 	if status == "" || status == "all" {
 		return "", nil
@@ -347,6 +387,24 @@ const usageMessageSourceEligibility = `
     AND m.model != '<synthetic>'`
 
 // usageMatchingMessageEligibility is usageMessageEligibility with the
+// token-presence requirement removed and the model-presence requirement
+// relaxed to a role check. GetUsageMatchingSessionCount counts sessions
+// that have usage-shaped activity even when the agent (e.g. Copilot)
+// never records per-message tokens or, for some assistant messages, a
+// model name, so it must not gate on m.token_usage or m.model != ” the
+// way every token/cost query does; Model/ExcludeModel filters are applied
+// separately and still narrow the match when set. Do not reuse this for
+// usageRowQuery or its callers — see the usageMessageEligibility doc
+// comment above.
+const usageMatchingMessageEligibility = `
+    m.role = 'assistant'
+    AND m.model != '<synthetic>'
+    AND s.deleted_at IS NULL`
+
+const usageMatchingMessageSourceEligibility = `
+    m.role = 'assistant'
+    AND m.model != '<synthetic>'`
+
 const usageEventEligibility = `
     ue.model != ''
     AND s.deleted_at IS NULL`
@@ -803,6 +861,19 @@ func dailyUsageRowSelectFromRowsWithMachine(
 		})
 }
 
+func dailyUsageRowSelectFromSnapshotRowsWithMachine(
+	rowsSQL string, includeMachine bool,
+) string {
+	return dailyUsageRowSelectFromRowsWithColumns(
+		rowsSQL, includeMachine, dailyUsageRowColumns{
+			session:   "u.snapshot_attribution_session_id",
+			webSearch: "u.snapshot_web_search_requests",
+			project:   "u.snapshot_project",
+			agent:     "u.snapshot_agent",
+			machine:   "u.snapshot_machine",
+		})
+}
+
 func dailyUsageRowSelectFromRowsWithColumns(
 	rowsSQL string, includeMachine bool, cols dailyUsageRowColumns,
 ) string {
@@ -968,10 +1039,32 @@ func usageBoundedRowsSQL(
 	return rowsSQL, args
 }
 
+// usageMatchingSessionRowsSQLForBounds is usageRowsSQLForBounds's bounded
+// branch built from the relaxed usageMatchingMessageEligibility predicates,
+// so GetUsageMatchingSessionCount only relaxes the token-usage and
+// model-presence requirements and keeps the same per-row
+// Model/ExcludeModel filtering as the normal bounded path.
+func usageMatchingSessionRowsSQLForBounds(
+	f UsageFilter, b usageBounds,
+) (string, []any) {
+	return usageBoundedRowsSQL(
+		f, b,
+		usageMatchingMessageSourceEligibility, usageMatchingMessageEligibility)
+}
+
 func usageRowQuery(f UsageFilter) (string, []any) {
 	rowsSQL, args := usageRowsSQLForBounds(f, usageBoundsForFilter(f))
 	query := dailyUsageRowSelectFromRows(rowsSQL)
 	return query, args
+}
+
+func topSessionsUsageRowQuery(f UsageFilter) (string, []any) {
+	bounds := usageBoundsForFilter(f)
+	rowsSQL, rowsArgs := usageRowsSQLForBounds(
+		usageSnapshotInputFilter(f), bounds)
+	rowsSQL, args := snapshotRankedDailyUsageRowsSQL(
+		rowsSQL, rowsArgs, f, bounds)
+	return dailyUsageRowSelectFromSnapshotRowsWithMachine(rowsSQL, false), args
 }
 
 func usageSnapshotInputFilter(f UsageFilter) UsageFilter {
@@ -1359,6 +1452,10 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 	return r, err
 }
 
+func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
+	return scanDailyUsageRowWithMachine(rows, false)
+}
+
 func scanDailyUsageRowWithMachine(
 	rows *sql.Rows, includeMachine bool,
 ) (dailyUsageScanRow, error) {
@@ -1440,202 +1537,6 @@ func dailyUsageRowWebSearchRequests(r dailyUsageScanRow) int {
 		return max(int(r.webSearchRequests.Int64), 0)
 	}
 	return usageRowWebSearchRequests(r.usageSource, r.tokenJSON)
-}
-
-func skipJSONSpace(tokenJSON string, i int) int {
-	for i < len(tokenJSON) && isJSONSpace(tokenJSON[i]) {
-		i++
-	}
-	return i
-}
-
-func parseJSONString(tokenJSON string, i int) (string, int, bool) {
-	if i >= len(tokenJSON) || tokenJSON[i] != '"' {
-		return "", i, false
-	}
-	plain := true
-	for j := i + 1; j < len(tokenJSON); j++ {
-		c := tokenJSON[j]
-		switch {
-		case c == '\\':
-			if j+1 >= len(tokenJSON) {
-				return "", len(tokenJSON), false
-			}
-			plain = false
-			j++
-		case c == '"':
-			if plain && utf8.ValidString(tokenJSON[i+1:j]) {
-				return tokenJSON[i+1 : j], j + 1, true
-			}
-			raw := tokenJSON[i : j+1]
-			var value string
-			err := json.Unmarshal([]byte(raw), &value)
-			if err != nil {
-				return "", j + 1, false
-			}
-			return value, j + 1, true
-		case c < 0x20:
-			plain = false
-		}
-	}
-	return "", len(tokenJSON), false
-}
-
-func parseUsageTokenInt(tokenJSON string, i int) (int, int, bool) {
-	if i >= len(tokenJSON) {
-		return 0, i, false
-	}
-	if tokenJSON[i] == '"' {
-		value, next, ok := parseJSONString(tokenJSON, i)
-		if !ok {
-			return 0, next, false
-		}
-		parsed, ok := parseUsageTokenIntLiteral(strings.TrimSpace(value))
-		return parsed, next, ok
-	}
-	start := i
-	if tokenJSON[i] == '-' {
-		i++
-	}
-	digitStart := i
-	for i < len(tokenJSON) && tokenJSON[i] >= '0' && tokenJSON[i] <= '9' {
-		i++
-	}
-	if i == digitStart {
-		next, ok := skipJSONValue(tokenJSON, start)
-		if ok {
-			return 0, next, false
-		}
-		return 0, start, false
-	}
-	parsed, ok := parseUsageTokenIntLiteral(tokenJSON[start:i])
-	return parsed, i, ok
-}
-
-func parseUsageTokenIntLiteral(value string) (int, bool) {
-	parsed, err := strconv.ParseInt(value, 10, 0)
-	if err == nil {
-		return int(parsed), true
-	}
-	if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
-		if strings.HasPrefix(value, "-") {
-			return -int(^uint(0)>>1) - 1, true
-		}
-		return int(^uint(0) >> 1), true
-	}
-	return 0, false
-}
-
-func skipJSONValue(tokenJSON string, i int) (int, bool) {
-	i = skipJSONSpace(tokenJSON, i)
-	if i >= len(tokenJSON) {
-		return i, false
-	}
-	switch tokenJSON[i] {
-	case '"':
-		_, next, ok := parseJSONString(tokenJSON, i)
-		return next, ok
-	case '{', '[':
-		return skipJSONComposite(tokenJSON, i)
-	case 't':
-		if strings.HasPrefix(tokenJSON[i:], "true") {
-			return i + len("true"), true
-		}
-	case 'f':
-		if strings.HasPrefix(tokenJSON[i:], "false") {
-			return i + len("false"), true
-		}
-	case 'n':
-		if strings.HasPrefix(tokenJSON[i:], "null") {
-			return i + len("null"), true
-		}
-	default:
-		return skipJSONNumber(tokenJSON, i)
-	}
-	return i, false
-}
-
-func skipJSONComposite(tokenJSON string, i int) (int, bool) {
-	var stack []byte
-	switch tokenJSON[i] {
-	case '{':
-		stack = append(stack, '}')
-	case '[':
-		stack = append(stack, ']')
-	default:
-		return i, false
-	}
-	i++
-	for i < len(tokenJSON) {
-		switch tokenJSON[i] {
-		case '"':
-			_, next, ok := parseJSONString(tokenJSON, i)
-			if !ok {
-				return next, false
-			}
-			i = next
-		case '{':
-			stack = append(stack, '}')
-			i++
-		case '[':
-			stack = append(stack, ']')
-			i++
-		case '}', ']':
-			if len(stack) == 0 || tokenJSON[i] != stack[len(stack)-1] {
-				return i + 1, false
-			}
-			stack = stack[:len(stack)-1]
-			i++
-			if len(stack) == 0 {
-				return i, true
-			}
-		default:
-			i++
-		}
-	}
-	return len(tokenJSON), false
-}
-
-func skipJSONNumber(tokenJSON string, i int) (int, bool) {
-	start := i
-	if tokenJSON[i] == '-' {
-		i++
-	}
-	digitStart := i
-	for i < len(tokenJSON) && tokenJSON[i] >= '0' && tokenJSON[i] <= '9' {
-		i++
-	}
-	if i == digitStart {
-		return start, false
-	}
-	if i < len(tokenJSON) && tokenJSON[i] == '.' {
-		i++
-		fracStart := i
-		for i < len(tokenJSON) && tokenJSON[i] >= '0' && tokenJSON[i] <= '9' {
-			i++
-		}
-		if i == fracStart {
-			return start, false
-		}
-	}
-	if i < len(tokenJSON) && (tokenJSON[i] == 'e' || tokenJSON[i] == 'E') {
-		i++
-		if i < len(tokenJSON) && (tokenJSON[i] == '+' || tokenJSON[i] == '-') {
-			i++
-		}
-		expStart := i
-		for i < len(tokenJSON) && tokenJSON[i] >= '0' && tokenJSON[i] <= '9' {
-			i++
-		}
-		if i == expStart {
-			return start, false
-		}
-	}
-	return i, true
-}
-
-func isJSONSpace(b byte) bool {
-	return b == ' ' || b == '\n' || b == '\r' || b == '\t'
 }
 
 func clampedUsageRowTokens(
@@ -1876,6 +1777,56 @@ func usageDedupTokenForRow(
 		}, true
 	}
 	return usageDedupToken{}, false
+}
+
+func (db *DB) loadTopSessionMetadata(
+	ctx context.Context, sessionIDs []string,
+) (map[string]topSessionMetadata, error) {
+	out := make(map[string]topSessionMetadata, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return out, nil
+	}
+
+	placeholders := make([]string, len(sessionIDs))
+	args := make([]any, len(sessionIDs))
+	for i, id := range sessionIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := `
+SELECT
+	id,
+	COALESCE(NULLIF(COALESCE(display_name, session_name), ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
+	agent,
+	project,
+	COALESCE(started_at, '') AS started_at
+FROM sessions
+WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying top session metadata: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		var meta topSessionMetadata
+		if err := rows.Scan(
+			&id,
+			&meta.displayName,
+			&meta.agent,
+			&meta.project,
+			&meta.startedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning top session metadata: %w", err)
+		}
+		out[id] = meta
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating top session metadata: %w", err)
+	}
+	return out, nil
 }
 
 func loadTopSessionMetadataFrom(
@@ -2169,6 +2120,672 @@ func paddedUTCBound(ts string, hours int) string {
 		padded = time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
 	}
 	return padded.Format(time.RFC3339)
+}
+
+// loadPricingMap reads the model_pricing table into a map for
+// in-memory joins. This is much faster than a SQL LEFT JOIN
+// on every row of the daily usage scan, since the pricing
+// table is tiny and repeated resolver lookups are cached.
+func (db *DB) loadPricingMap(
+	ctx context.Context,
+) ([]export.EffectivePricingRow, error) {
+	return db.loadPricingMapFrom(ctx, db.getReader())
+}
+
+func (db *DB) loadPricingMapFrom(
+	ctx context.Context, q sessionExportQuerier,
+) ([]export.EffectivePricingRow, error) {
+	prices, err := listModelPricingFrom(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	db.pricingMu.RLock()
+	custom := maps.Clone(db.pricing.custom)
+	effective := cloneModelRates(db.pricing.effective)
+	emptyCatalog := cloneModelRates(db.pricing.emptyCatalog)
+	db.pricingMu.RUnlock()
+
+	fallback := fallbackRateMap()
+	out := make(map[string]export.ModelRates)
+	for _, p := range prices {
+		if strings.HasPrefix(p.ModelPattern, "_") {
+			continue
+		}
+		rates := modelPricingRates(p)
+		rates.Source = modelPricingSource(p, fallback)
+		out[p.ModelPattern] = rates
+	}
+
+	if len(out) == 0 {
+		for model, rates := range emptyCatalog {
+			rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+			out[model] = rates
+		}
+	}
+	for model, cp := range custom {
+		rates := export.ModelRates{
+			InputPerMTok: money.Money{
+				Microdollars: cp.InputMicrodollarsPerMTok,
+			},
+			OutputPerMTok: money.Money{
+				Microdollars: cp.OutputMicrodollarsPerMTok,
+			},
+			CacheWritePerMTok: money.Money{
+				Microdollars: cp.CacheCreationMicrodollarsPerMTok,
+			},
+			CacheReadPerMTok: money.Money{
+				Microdollars: cp.CacheReadMicrodollarsPerMTok,
+			},
+		}
+		rates.Source = customPricingSource()
+		out[model] = rates
+	}
+	for model, rates := range effective {
+		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+		out[model] = rates
+	}
+
+	return pricingMapRows(out), nil
+}
+
+// getDailyUsageLegacy is the wide-row test oracle for the facts-backed path.
+// Production callers enter through GetDailyUsage in usage_cache_daily.go.
+func (db *DB) getDailyUsageLegacy(
+	ctx context.Context, f UsageFilter,
+) (DailyUsageResult, error) {
+	loc := f.location()
+
+	pricing, err := db.loadPricingMap(ctx)
+	if err != nil {
+		return DailyUsageResult{},
+			fmt.Errorf("loading pricing: %w", err)
+	}
+	rateResolver := export.NewPricingResolver(pricing)
+
+	// Filter on usage timestamp (not only session started_at) so
+	// long-lived sessions that span date boundaries are included.
+	// Pad by +/-14h to cover all timezone offsets; the actual
+	// date filtering happens post-query via localDate.
+	bounds := usageBoundsForFilter(f)
+	query, rowsArgs := dailyUsageRowsSQLForBounds(
+		f, bounds, db.hasCursorUsageTable())
+	query, args := snapshotRankedDailyUsageRowsSQL(query, rowsArgs, f, bounds)
+	query = dailyUsageRowSelectFromSnapshotRowsWithMachine(
+		query, f.Breakdowns)
+	query += ` ORDER BY u.ts ASC, u.session_id ASC,
+		COALESCE(u.message_ordinal, -1) ASC`
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return DailyUsageResult{},
+			fmt.Errorf("querying daily usage: %w", err)
+	}
+	defer rows.Close()
+
+	type bucket struct {
+		inputTok  int
+		outputTok int
+		cacheCr   int
+		cacheRd   int
+		cost      money.Money
+	}
+	type sessionCost struct {
+		estimated     map[usageCostAllocationKey]money.Money
+		authoritative *money.Money
+	}
+
+	accum := make(map[usageCostAllocationKey]*bucket)
+	sessionCosts := make(map[string]sessionCost)
+	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
+
+	seen := make(map[usageDedupToken]struct{})
+	var seenSessions map[string]UsageSessionInfo
+	if !f.SkipSessionCounts {
+		seenSessions = make(map[string]UsageSessionInfo)
+	}
+	projectLabels := make(map[string]struct{})
+
+	// totalSavings is the running sum of per-message cache
+	// savings using each row's actual per-model rates. We sum
+	// at the message level instead of deriving from totals
+	// later because the rate mix varies per workload and a
+	// single fallback rate would misreport mixed-model periods.
+	var totalSavings money.Money
+
+	for rows.Next() {
+		r, scanErr := scanDailyUsageRowWithMachine(rows, f.Breakdowns)
+		if scanErr != nil {
+			return DailyUsageResult{},
+				fmt.Errorf("scanning daily usage row: %w", scanErr)
+		}
+
+		date := localDate(r.ts, loc)
+		if f.From != "" && date < f.From {
+			continue
+		}
+		if f.To != "" && date > f.To {
+			continue
+		}
+		// Dedup AFTER the date filter so out-of-range rows
+		// (pulled in by the ±14h timezone padding) don't mark
+		// a key as seen and suppress the in-range duplicate.
+		if key, ok := usageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+
+		if seenSessions != nil && r.usageSource != "cursor" {
+			if _, ok := seenSessions[r.sessionID]; !ok {
+				seenSessions[r.sessionID] = UsageSessionInfo{
+					Project: r.project,
+					Agent:   r.agent,
+				}
+			}
+		}
+		if r.project != "" {
+			projectLabels[r.project] = struct{}{}
+		}
+
+		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings, priceErr :=
+			dailyUsageAmounts(r, rateResolver)
+		if priceErr != nil {
+			return DailyUsageResult{}, priceErr
+		}
+		totalSavings, priceErr = money.Add(totalSavings, savings)
+		if priceErr != nil {
+			return DailyUsageResult{}, fmt.Errorf(
+				"summing daily usage cache savings: %w", priceErr)
+		}
+
+		key := usageCostAllocationKey{
+			date: date, project: r.project,
+			agent: r.agent, machine: r.machine, model: r.model,
+		}
+		b, ok := accum[key]
+		if !ok {
+			b = &bucket{}
+			accum[key] = b
+		}
+		b.inputTok += inputTok
+		b.outputTok += outputTok
+		b.cacheCr += cacheCrTok
+		b.cacheRd += cacheRdTok
+
+		sc := sessionCosts[r.sessionID]
+		if sc.estimated == nil {
+			sc.estimated = make(map[usageCostAllocationKey]money.Money)
+		}
+		sc.estimated[key], priceErr = money.Add(sc.estimated[key], cost)
+		if priceErr != nil {
+			return DailyUsageResult{}, fmt.Errorf(
+				"summing daily usage session cost: %w", priceErr)
+		}
+		if useAuthoritativeCost &&
+			r.costSource == CopilotReportedCostSource && r.cost.Valid {
+			v := money.Money{Microdollars: r.cost.Int64}
+			sc.authoritative = &v
+			rateResolver.RecordUnattributedReported()
+		}
+		sessionCosts[r.sessionID] = sc
+	}
+	if err := rows.Err(); err != nil {
+		return DailyUsageResult{},
+			fmt.Errorf("iterating daily usage rows: %w", err)
+	}
+	sessionIDs := make([]string, 0, len(sessionCosts))
+	for sessionID := range sessionCosts {
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	sort.Strings(sessionIDs)
+	for _, sessionID := range sessionIDs {
+		sc := sessionCosts[sessionID]
+		if sc.authoritative != nil {
+			costs := allocateUsageCostByKey(*sc.authoritative, sc.estimated)
+			for key, cost := range costs {
+				b := accum[key]
+				if b == nil {
+					b = &bucket{}
+					accum[key] = b
+				}
+				b.cost, err = money.Add(b.cost, cost)
+				if err != nil {
+					return DailyUsageResult{}, fmt.Errorf(
+						"summing allocated daily usage cost: %w", err)
+				}
+			}
+		} else {
+			for key, cost := range sc.estimated {
+				b := accum[key]
+				if b == nil {
+					b = &bucket{}
+					accum[key] = b
+				}
+				b.cost, err = money.Add(b.cost, cost)
+				if err != nil {
+					return DailyUsageResult{}, fmt.Errorf(
+						"summing estimated daily usage cost: %w", err)
+				}
+			}
+		}
+	}
+
+	// Two paths: without breakdowns (CLI, fast) and with breakdowns
+	// (web UI). The fast path uses the original (date, model)
+	// grouping with no extra column reads. The breakdown path adds
+	// project/agent dimensions and builds three decomposition slices.
+
+	if !f.Breakdowns {
+		// Fast path: group by (date, model) only.
+		type dateModelKey struct {
+			date  string
+			model string
+		}
+		type modelAccum struct {
+			inputTok  int
+			outputTok int
+			cacheCr   int
+			cacheRd   int
+			cost      money.Money
+		}
+		dm := make(map[dateModelKey]*modelAccum)
+		for key, b := range accum {
+			dmk := dateModelKey{date: key.date, model: key.model}
+			ma, ok := dm[dmk]
+			if !ok {
+				ma = &modelAccum{}
+				dm[dmk] = ma
+			}
+			ma.inputTok += b.inputTok
+			ma.outputTok += b.outputTok
+			ma.cacheCr += b.cacheCr
+			ma.cacheRd += b.cacheRd
+			ma.cost, err = money.Add(ma.cost, b.cost)
+			if err != nil {
+				return DailyUsageResult{}, fmt.Errorf(
+					"summing daily model cost: %w", err)
+			}
+		}
+
+		type dayData struct {
+			models map[string]*modelAccum
+		}
+		days := make(map[string]*dayData)
+		for key, ma := range dm {
+			dd, ok := days[key.date]
+			if !ok {
+				dd = &dayData{
+					models: make(map[string]*modelAccum),
+				}
+				days[key.date] = dd
+			}
+			dd.models[key.model] = ma
+		}
+
+		dateKeys := make([]string, 0, len(days))
+		for d := range days {
+			dateKeys = append(dateKeys, d)
+		}
+		sort.Strings(dateKeys)
+
+		daily := make([]DailyUsageEntry, 0, len(dateKeys))
+		var totals UsageTotals
+
+		for _, date := range dateKeys {
+			dd, ok := days[date]
+			if !ok || dd == nil {
+				continue
+			}
+			var entry DailyUsageEntry
+			entry.Date = date
+
+			modelNames := make([]string, 0, len(dd.models))
+			for m := range dd.models {
+				modelNames = append(modelNames, m)
+			}
+			sort.Slice(modelNames, func(i, j int) bool {
+				left := dd.models[modelNames[i]]
+				right := dd.models[modelNames[j]]
+				if left == nil || right == nil {
+					return left != nil
+				}
+				ci := left.cost
+				cj := right.cost
+				if ci.Microdollars != cj.Microdollars {
+					return ci.Microdollars > cj.Microdollars
+				}
+				return modelNames[i] < modelNames[j]
+			})
+			entry.ModelsUsed = modelNames
+			mbd := make(
+				[]ModelBreakdown, 0, len(modelNames),
+			)
+			for _, m := range modelNames {
+				ma, ok := dd.models[m]
+				if !ok || ma == nil {
+					continue
+				}
+				entry.InputTokens += ma.inputTok
+				entry.OutputTokens += ma.outputTok
+				entry.CacheCreationTokens += ma.cacheCr
+				entry.CacheReadTokens += ma.cacheRd
+				entry.TotalCost, err = money.Add(entry.TotalCost, ma.cost)
+				if err != nil {
+					return DailyUsageResult{}, fmt.Errorf(
+						"summing daily entry cost: %w", err)
+				}
+				mbd = append(mbd, ModelBreakdown{
+					ModelName:           m,
+					InputTokens:         ma.inputTok,
+					OutputTokens:        ma.outputTok,
+					CacheCreationTokens: ma.cacheCr,
+					CacheReadTokens:     ma.cacheRd,
+					Cost:                ma.cost,
+				})
+			}
+			entry.ModelBreakdowns = mbd
+			daily = append(daily, entry)
+
+			totals.InputTokens += entry.InputTokens
+			totals.OutputTokens += entry.OutputTokens
+			totals.CacheCreationTokens += entry.CacheCreationTokens
+			totals.CacheReadTokens += entry.CacheReadTokens
+			totals.TotalCost, err = money.Add(totals.TotalCost, entry.TotalCost)
+			if err != nil {
+				return DailyUsageResult{}, fmt.Errorf(
+					"summing daily usage total: %w", err)
+			}
+		}
+
+		if daily == nil {
+			daily = []DailyUsageEntry{}
+		}
+		totals.CacheSavings = totalSavings
+
+		var aiCredits float64
+		for key, b := range accum {
+			aiCredits += AICreditsFromCost(key.agent, b.cost)
+		}
+		if aiCredits > 0 {
+			totals.CopilotAICredits = aiCredits
+		}
+		var sessionCounts UsageSessionCounts
+		if seenSessions != nil {
+			sessionCounts = NewUsageSessionCounts(seenSessions)
+		}
+		projects, err := db.BuildProjectIdentityMap(ctx,
+			sortedSetKeys(projectLabels))
+		if err != nil {
+			return DailyUsageResult{}, err
+		}
+		projectRows := DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+		SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
+		daily = projectRows.Daily
+		sessionCounts = projectRows.SessionCounts
+		pricingBlock, err := rateResolver.BuildBlock()
+		if err != nil {
+			return DailyUsageResult{}, fmt.Errorf(
+				"building pricing block: %w", err)
+		}
+		return DailyUsageResult{
+			SchemaVersion: export.UsageDailySchemaVersion,
+			Pricing:       &pricingBlock,
+			Projects:      export.ProjectMapForWire(projects),
+			Daily:         daily,
+			Totals:        totals,
+			SessionCounts: sessionCounts,
+		}, nil
+	}
+
+	// Breakdown path: single walk builds model/project/agent maps.
+	type dayMaps struct {
+		models   map[string]bucket
+		projects map[string]bucket
+		agents   map[string]bucket
+		machines map[string]bucket
+	}
+	days := make(map[string]*dayMaps, 64)
+	for key, b := range accum {
+		dm, ok := days[key.date]
+		if !ok {
+			dm = &dayMaps{
+				models:   make(map[string]bucket, 4),
+				projects: make(map[string]bucket, 8),
+				agents:   make(map[string]bucket, 4),
+				machines: make(map[string]bucket, 4),
+			}
+			days[key.date] = dm
+		}
+		cur := dm.models[key.model]
+		cur.inputTok += b.inputTok
+		cur.outputTok += b.outputTok
+		cur.cacheCr += b.cacheCr
+		cur.cacheRd += b.cacheRd
+		cur.cost, err = money.Add(cur.cost, b.cost)
+		if err != nil {
+			return DailyUsageResult{}, fmt.Errorf(
+				"summing daily model breakdown cost: %w", err)
+		}
+		dm.models[key.model] = cur
+
+		cur = dm.projects[key.project]
+		cur.inputTok += b.inputTok
+		cur.outputTok += b.outputTok
+		cur.cacheCr += b.cacheCr
+		cur.cacheRd += b.cacheRd
+		cur.cost, err = money.Add(cur.cost, b.cost)
+		if err != nil {
+			return DailyUsageResult{}, fmt.Errorf(
+				"summing daily project breakdown cost: %w", err)
+		}
+		dm.projects[key.project] = cur
+
+		cur = dm.agents[key.agent]
+		cur.inputTok += b.inputTok
+		cur.outputTok += b.outputTok
+		cur.cacheCr += b.cacheCr
+		cur.cacheRd += b.cacheRd
+		cur.cost, err = money.Add(cur.cost, b.cost)
+		if err != nil {
+			return DailyUsageResult{}, fmt.Errorf(
+				"summing daily agent breakdown cost: %w", err)
+		}
+		dm.agents[key.agent] = cur
+
+		cur = dm.machines[key.machine]
+		cur.inputTok += b.inputTok
+		cur.outputTok += b.outputTok
+		cur.cacheCr += b.cacheCr
+		cur.cacheRd += b.cacheRd
+		cur.cost, err = money.Add(cur.cost, b.cost)
+		if err != nil {
+			return DailyUsageResult{}, fmt.Errorf(
+				"summing daily machine breakdown cost: %w", err)
+		}
+		dm.machines[key.machine] = cur
+	}
+
+	dateKeys := make([]string, 0, len(days))
+	for d := range days {
+		dateKeys = append(dateKeys, d)
+	}
+	sort.Strings(dateKeys)
+
+	daily := make([]DailyUsageEntry, 0, len(dateKeys))
+	var totals UsageTotals
+
+	for _, date := range dateKeys {
+		dm, ok := days[date]
+		if !ok || dm == nil {
+			continue
+		}
+		var entry DailyUsageEntry
+		entry.Date = date
+
+		modelNames := make([]string, 0, len(dm.models))
+		for m := range dm.models {
+			modelNames = append(modelNames, m)
+		}
+		sort.Slice(modelNames, func(i, j int) bool {
+			left := dm.models[modelNames[i]]
+			right := dm.models[modelNames[j]]
+			ci := left.cost
+			cj := right.cost
+			if ci.Microdollars != cj.Microdollars {
+				return ci.Microdollars > cj.Microdollars
+			}
+			return modelNames[i] < modelNames[j]
+		})
+		entry.ModelsUsed = modelNames
+		mbd := make(
+			[]ModelBreakdown, 0, len(modelNames),
+		)
+		for _, m := range modelNames {
+			b, ok := dm.models[m]
+			if !ok {
+				continue
+			}
+			entry.InputTokens += b.inputTok
+			entry.OutputTokens += b.outputTok
+			entry.CacheCreationTokens += b.cacheCr
+			entry.CacheReadTokens += b.cacheRd
+			entry.TotalCost, err = money.Add(entry.TotalCost, b.cost)
+			if err != nil {
+				return DailyUsageResult{}, fmt.Errorf(
+					"summing daily breakdown entry cost: %w", err)
+			}
+			mbd = append(mbd, ModelBreakdown{
+				ModelName:           m,
+				InputTokens:         b.inputTok,
+				OutputTokens:        b.outputTok,
+				CacheCreationTokens: b.cacheCr,
+				CacheReadTokens:     b.cacheRd,
+				Cost:                b.cost,
+			})
+		}
+		entry.ModelBreakdowns = mbd
+
+		pbd := make(
+			[]ProjectBreakdown, 0, len(dm.projects),
+		)
+		for p, b := range dm.projects {
+			pbd = append(pbd, ProjectBreakdown{
+				Project:             p,
+				InputTokens:         b.inputTok,
+				OutputTokens:        b.outputTok,
+				CacheCreationTokens: b.cacheCr,
+				CacheReadTokens:     b.cacheRd,
+				Cost:                b.cost,
+			})
+		}
+		sort.Slice(pbd, func(i, j int) bool {
+			if pbd[i].Cost.Microdollars != pbd[j].Cost.Microdollars {
+				return pbd[i].Cost.Microdollars > pbd[j].Cost.Microdollars
+			}
+			return pbd[i].Project < pbd[j].Project
+		})
+		entry.ProjectBreakdowns = pbd
+
+		abd := make(
+			[]AgentBreakdown, 0, len(dm.agents),
+		)
+		for a, b := range dm.agents {
+			abd = append(abd, AgentBreakdown{
+				Agent:               a,
+				InputTokens:         b.inputTok,
+				OutputTokens:        b.outputTok,
+				CacheCreationTokens: b.cacheCr,
+				CacheReadTokens:     b.cacheRd,
+				Cost:                b.cost,
+			})
+		}
+		sort.Slice(abd, func(i, j int) bool {
+			if abd[i].Cost.Microdollars != abd[j].Cost.Microdollars {
+				return abd[i].Cost.Microdollars > abd[j].Cost.Microdollars
+			}
+			return abd[i].Agent < abd[j].Agent
+		})
+		entry.AgentBreakdowns = abd
+
+		machineBreakdowns := make(
+			[]MachineBreakdown, 0, len(dm.machines),
+		)
+		for machine, b := range dm.machines {
+			machineBreakdowns = append(machineBreakdowns, MachineBreakdown{
+				MachineName:         machine,
+				InputTokens:         b.inputTok,
+				OutputTokens:        b.outputTok,
+				CacheCreationTokens: b.cacheCr,
+				CacheReadTokens:     b.cacheRd,
+				Cost:                b.cost,
+			})
+		}
+		sort.Slice(machineBreakdowns, func(i, j int) bool {
+			if machineBreakdowns[i].Cost.Microdollars != machineBreakdowns[j].Cost.Microdollars {
+				return machineBreakdowns[i].Cost.Microdollars > machineBreakdowns[j].Cost.Microdollars
+			}
+			return machineBreakdowns[i].MachineName < machineBreakdowns[j].MachineName
+		})
+		entry.MachineBreakdowns = machineBreakdowns
+
+		daily = append(daily, entry)
+
+		totals.InputTokens += entry.InputTokens
+		totals.OutputTokens += entry.OutputTokens
+		totals.CacheCreationTokens += entry.CacheCreationTokens
+		totals.CacheReadTokens += entry.CacheReadTokens
+		totals.TotalCost, err = money.Add(totals.TotalCost, entry.TotalCost)
+		if err != nil {
+			return DailyUsageResult{}, fmt.Errorf(
+				"summing daily breakdown total: %w", err)
+		}
+	}
+
+	if daily == nil {
+		daily = []DailyUsageEntry{}
+	}
+
+	totals.CacheSavings = totalSavings
+
+	var aiCredits float64
+	for _, d := range daily {
+		for _, ab := range d.AgentBreakdowns {
+			aiCredits += AICreditsFromCost(ab.Agent, ab.Cost)
+		}
+	}
+	if aiCredits > 0 {
+		totals.CopilotAICredits = aiCredits
+	}
+
+	var sessionCounts UsageSessionCounts
+	if seenSessions != nil {
+		sessionCounts = NewUsageSessionCounts(seenSessions)
+	}
+	projects, err := db.BuildProjectIdentityMap(ctx, sortedSetKeys(projectLabels))
+	if err != nil {
+		return DailyUsageResult{}, err
+	}
+	projectRows := DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+	SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
+	daily = projectRows.Daily
+	sessionCounts = projectRows.SessionCounts
+	pricingBlock, err := rateResolver.BuildBlock()
+	if err != nil {
+		return DailyUsageResult{}, fmt.Errorf(
+			"building pricing block: %w", err)
+	}
+	return DailyUsageResult{
+		SchemaVersion: export.UsageDailySchemaVersion,
+		Pricing:       &pricingBlock,
+		Projects:      export.ProjectMapForWire(projects),
+		Daily:         daily,
+		Totals:        totals,
+		SessionCounts: sessionCounts,
+	}, nil
 }
 
 // GetDailyUsage returns token usage and cost aggregated by day.
@@ -2826,6 +3443,159 @@ func SortAndLimitTopSessions(
 	return result
 }
 
+// getTopSessionsByCostLegacy is the wide-row test oracle for the facts path.
+func (db *DB) getTopSessionsByCostLegacy(
+	ctx context.Context, f UsageFilter, limit int,
+) ([]TopSessionEntry, error) {
+	pricing, err := db.loadPricingMap(ctx)
+	if err != nil {
+		return nil,
+			fmt.Errorf("loading pricing: %w", err)
+	}
+	rateResolver := export.NewPricingResolver(pricing)
+
+	query, args := topSessionsUsageRowQuery(f)
+	// Deterministic order so the dedup "winner" (the session
+	// that gets credit for a duplicate message.id + request.id
+	// pair) is stable across runs: earliest timestamp wins,
+	// then session_id, then message ordinal.
+	query += ` ORDER BY u.ts ASC, u.session_id ASC,
+		COALESCE(u.message_ordinal, -1) ASC`
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil,
+			fmt.Errorf("querying top sessions: %w", err)
+	}
+	defer rows.Close()
+
+	loc := f.location()
+
+	type sessAccum struct {
+		inputTokens       int
+		outputTokens      int
+		cacheCreateTokens int
+		cacheReadTokens   int
+		totalTokens       int
+		cost              money.Money
+		authoritativeCost *money.Money
+	}
+
+	accum := make(map[string]*sessAccum)
+	// Track insertion order for stable iteration.
+	var order []string
+
+	// Dedup duplicate usage rows across fork/subagent
+	// boundaries so per-session totals match the aggregate
+	// totals from GetDailyUsage. Same key and ordering rules.
+	seen := make(map[usageDedupToken]struct{})
+
+	for rows.Next() {
+		r, err := scanDailyUsageRow(rows)
+		if err != nil {
+			return nil,
+				fmt.Errorf("scanning top sessions row: %w", err)
+		}
+
+		// Post-query date filter (same as GetDailyUsage).
+		date := localDate(r.ts, loc)
+		if f.From != "" && date < f.From {
+			continue
+		}
+		if f.To != "" && date > f.To {
+			continue
+		}
+		// Dedup AFTER the date filter, matching GetDailyUsage,
+		// so out-of-range rows pulled in by the ±14h padding
+		// don't claim a key and suppress the in-range duplicate.
+		if key, ok := usageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+
+		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _, priceErr :=
+			dailyUsageAmounts(r, rateResolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
+
+		sa, ok := accum[r.sessionID]
+		if !ok {
+			sa = &sessAccum{}
+			accum[r.sessionID] = sa
+			order = append(order, r.sessionID)
+		}
+		sa.inputTokens += inputTok
+		sa.outputTokens += outputTok
+		sa.cacheCreateTokens += cacheCrTok
+		sa.cacheReadTokens += cacheRdTok
+		sa.totalTokens += inputTok + outputTok + cacheCrTok + cacheRdTok
+		sa.cost, priceErr = money.Add(sa.cost, cost)
+		if priceErr != nil {
+			return nil, fmt.Errorf("summing top-session cost: %w", priceErr)
+		}
+		if f.Model == "" && f.ExcludeModel == "" &&
+			r.costSource == CopilotReportedCostSource && r.cost.Valid {
+			v := money.Money{Microdollars: r.cost.Int64}
+			sa.authoritativeCost = &v
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil,
+			fmt.Errorf("iterating top sessions rows: %w", err)
+	}
+	result := make([]TopSessionEntry, 0, len(order))
+	for _, id := range order {
+		sa, ok := accum[id]
+		if !ok || sa == nil {
+			continue
+		}
+		result = append(result, TopSessionEntry{
+			SessionID:           id,
+			DisplayName:         id,
+			InputTokens:         sa.inputTokens,
+			OutputTokens:        sa.outputTokens,
+			CacheCreationTokens: sa.cacheCreateTokens,
+			CacheReadTokens:     sa.cacheReadTokens,
+			TotalTokens:         sa.totalTokens,
+			Cost: func() money.Money {
+				if sa.authoritativeCost != nil {
+					return *sa.authoritativeCost
+				}
+				return sa.cost
+			}(),
+		})
+	}
+
+	result = SortAndLimitTopSessions(
+		result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
+	)
+
+	sessionIDs := make([]string, len(result))
+	for i := range result {
+		sessionIDs[i] = result[i].SessionID
+	}
+	metadata, err := db.loadTopSessionMetadata(ctx, sessionIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range result {
+		if meta, ok := metadata[result[i].SessionID]; ok {
+			result[i].DisplayName = meta.displayName
+			result[i].Agent = meta.agent
+			result[i].Project = meta.project
+			result[i].StartedAt = meta.startedAt
+		}
+	}
+
+	return result, nil
+}
+
 // GetTopSessionsByCost returns sessions ranked by total cost, or by total
 // tokens when f.TopSessionsSort is "tokens",
 // over the filter range. Default limit 20, max 100.
@@ -3191,6 +3961,218 @@ func sessionUsageBreakdownLabel(r usageScanRow) string {
 // the session does not exist. BreakdownCount is always populated;
 // per-row Breakdown entries are built only when includeBreakdown is
 // true so callers that need just the totals avoid the row payload.
+func (db *DB) getSessionUsageLegacy(
+	ctx context.Context, sessionID string, includeBreakdown bool,
+) (*SessionUsage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sess, err := db.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil {
+		return nil, nil
+	}
+
+	pricing, err := db.loadPricingMap(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading pricing: %w", err)
+	}
+	rateResolver := export.NewPricingResolver(pricing)
+
+	query := usageRowSelect() + ` AND u.session_id = ?
+		ORDER BY u.ts ASC, u.session_id ASC,
+		COALESCE(u.message_ordinal, -1) ASC,
+		u.usage_source ASC,
+		COALESCE(u.usage_dedup_key, '') ASC`
+	rows, err := db.getReader().QueryContext(ctx, query, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("querying session usage: %w", err)
+	}
+	defer rows.Close()
+
+	var cost money.Money
+	var authoritativeCost *money.Money
+	var hasComputedCost, hasReportedCost bool
+	contributing := false
+	allPriced := true
+	modelsSet := make(map[string]struct{})
+	unpricedSet := make(map[string]struct{})
+	breakdown := make([]SessionUsageBreakdownEntry, 0)
+	breakdownCount := 0
+
+	var usageRows []usageScanRow
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		r, scanErr := scanUsageRow(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scanning session usage row: %w", scanErr)
+		}
+		usageRows = append(usageRows, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating session usage rows: %w", err)
+	}
+	snapshotRows := make([]activity.UsageRow, len(usageRows))
+	for i, r := range usageRows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var outputTokens int
+		if r.usageSource == "message" {
+			_, outputTokens, _, _ = clampedUsageTokenCounters(r.tokenJSON)
+		} else {
+			_, outputTokens, _, _ = usageEventRowTokens(
+				r.usageSource,
+				r.inputTokens, r.outputTokens,
+				r.cacheCreationInputTokens, r.cacheReadInputTokens)
+		}
+		snapshotRows[i] = activity.UsageRow{
+			SessionID:      r.sessionID,
+			Timestamp:      r.ts,
+			MessageOrdinal: usageRowMessageOrdinal(r.messageOrdinal),
+			OutputTokens:   outputTokens,
+			WebSearchRequests: usageRowWebSearchRequests(
+				r.usageSource, r.tokenJSON),
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+		}
+	}
+	snapshotMask, _, snapshotWebSearchRequests, err :=
+		activity.ClaudeSnapshotSurvivorSelectionContext(ctx, snapshotRows)
+	if err != nil {
+		return nil, err
+	}
+	deduplicatedOutputTokens := 0
+	seen := make(map[usageDedupToken]struct{})
+	for i, r := range usageRows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !snapshotMask[i] {
+			deduplicatedOutputTokens += snapshotRows[i].OutputTokens
+			continue
+		}
+		if key, ok := usageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+
+		costRow := r
+		authoritative := r.costSource == CopilotReportedCostSource && r.cost.Valid
+		if authoritative {
+			v := money.Money{Microdollars: r.cost.Int64}
+			authoritativeCost = &v
+			costRow.cost = sql.NullInt64{}
+		}
+		c, priced, contributes, priceErr := sessionRowCostWithWebSearchRequests(
+			costRow, snapshotWebSearchRequests[i], rateResolver)
+		if priceErr != nil {
+			return nil, priceErr
+		}
+		if !contributes {
+			continue
+		}
+		contributing = true
+		modelsSet[r.model] = struct{}{}
+		if !authoritative {
+			if r.cost.Valid {
+				hasReportedCost = true
+			} else {
+				hasComputedCost = true
+			}
+		}
+		if priced {
+			cost, priceErr = money.Add(cost, c)
+			if priceErr != nil {
+				return nil, fmt.Errorf("summing session usage cost: %w", priceErr)
+			}
+		} else {
+			allPriced = false
+			unpricedSet[r.model] = struct{}{}
+		}
+		breakdownCount++
+		if includeBreakdown {
+			breakdown = append(breakdown,
+				sessionUsageBreakdownEntryWithWebSearchRequests(
+					r, breakdownCount, c, priced,
+					snapshotWebSearchRequests[i]))
+		}
+	}
+	if authoritativeCost != nil && len(breakdown) > 0 {
+		weights := make([]money.Money, len(breakdown))
+		for i := range breakdown {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			weights[i] = breakdown[i].Cost
+		}
+		costs, err := export.AllocateCostByWeightContext(
+			ctx, *authoritativeCost, weights,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for i := range breakdown {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			breakdown[i].Cost = costs[i]
+			breakdown[i].HasCost = true
+		}
+	}
+
+	models, err := sortedSetKeysContext(ctx, modelsSet)
+	if err != nil {
+		return nil, err
+	}
+	out := &SessionUsage{
+		SessionID:         sess.ID,
+		Agent:             sess.Agent,
+		Project:           sess.Project,
+		TotalOutputTokens: max(sess.TotalOutputTokens-deduplicatedOutputTokens, 0),
+		PeakContextTokens: sess.PeakContextTokens,
+		HasTokenData:      sess.HasTotalOutputTokens || sess.HasPeakContextTokens,
+		Models:            models,
+		HasCost:           authoritativeCost != nil || (contributing && allPriced),
+		BreakdownCount:    breakdownCount,
+		Breakdown:         breakdown,
+	}
+	if out.HasCost {
+		if authoritativeCost != nil {
+			out.Cost = *authoritativeCost
+			out.CostSource = export.CostSourceReported
+		} else {
+			out.Cost = cost
+			out.CostSource = export.CombinedCostSource(hasComputedCost, hasReportedCost)
+		}
+		out.AICredits = AICreditsFromCost(sess.Agent, out.Cost)
+	}
+	out.CostUSD = CostUSDFromCost(out.HasCost, out.Cost)
+	if len(unpricedSet) > 0 {
+		out.UnpricedModels, err = sortedSetKeysContext(ctx, unpricedSet)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// sortedSetKeys returns the map keys sorted; never nil so JSON
+// renders "[]" rather than "null".
+
+// GetSessionUsage returns one session's exact intra-session usage summary.
 func (s *BunStore) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*SessionUsage, error) {
@@ -3403,6 +4385,58 @@ func sortedSetKeys(set map[string]struct{}) []string {
 	return out
 }
 
+func stableSortContext[T any](
+	ctx context.Context, values []T, less func(a, b T) bool,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(values) < 2 {
+		return nil
+	}
+	scratch := make([]T, len(values))
+	source, target := values, scratch
+	for width := 1; width < len(values); width *= 2 {
+		for left := 0; left < len(values); left += 2 * width {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			middle := min(left+width, len(values))
+			right := min(left+2*width, len(values))
+			i, j := left, middle
+			for k := left; k < right; k++ {
+				if k&255 == 0 {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
+				if j >= right || i < middle && !less(source[j], source[i]) {
+					target[k] = source[i]
+					i++
+				} else {
+					target[k] = source[j]
+					j++
+				}
+			}
+		}
+		source, target = target, source
+		if width > len(values)/2 {
+			break
+		}
+	}
+	if &source[0] != &values[0] {
+		for i := range values {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			values[i] = source[i]
+		}
+	}
+	return ctx.Err()
+}
+
 func sortedSetKeysContext(
 	ctx context.Context, set map[string]struct{},
 ) ([]string, error) {
@@ -3455,6 +4489,96 @@ func NewUsageSessionCounts(
 // Like GetDailyUsage and GetTopSessionsByCost, this query pads
 // the UTC bounds by +/-14h and applies a post-query localDate
 // filter so timezone-boundary messages are counted correctly.
+func (db *DB) getUsageSessionCountsLegacy(
+	ctx context.Context, f UsageFilter,
+) (UsageSessionCounts, error) {
+	query, args := topSessionsUsageRowQuery(f)
+	// Deterministic ordering so the Claude dedup winner — the
+	// session that "owns" a shared message — is stable across
+	// runs. Matches GetDailyUsage / GetTopSessionsByCost so all
+	// three queries agree on which session gets credit.
+	query += ` ORDER BY u.ts ASC, u.session_id ASC,
+		COALESCE(u.message_ordinal, -1) ASC`
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return UsageSessionCounts{},
+			fmt.Errorf("querying session counts: %w", err)
+	}
+	defer rows.Close()
+
+	loc := f.location()
+
+	// Track which sessions pass the localDate filter via a
+	// set of seen session IDs. Each session is counted once
+	// regardless of how many qualifying messages it has.
+	type sessInfo struct {
+		project string
+		agent   string
+	}
+	seen := make(map[string]sessInfo)
+
+	// Usage dedup mirrors GetDailyUsage: if a session only
+	// qualifies because of rows that duplicate an earlier
+	// session's usage (fork/subagent replays), that session
+	// should NOT be counted. Otherwise sessionCounts would
+	// disagree with the deduped token totals.
+	dedup := make(map[usageDedupToken]struct{})
+
+	for rows.Next() {
+		r, err := scanDailyUsageRow(rows)
+		if err != nil {
+			return UsageSessionCounts{},
+				fmt.Errorf("scanning session counts: %w", err)
+		}
+
+		// Post-query date filter (same as GetDailyUsage).
+		date := localDate(r.ts, loc)
+		if f.From != "" && date < f.From {
+			continue
+		}
+		if f.To != "" && date > f.To {
+			continue
+		}
+
+		// Dedup AFTER the date filter, matching the other two
+		// queries so ±14h padding rows don't claim keys.
+		if key, ok := usageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
+			if _, dup := dedup[key]; dup {
+				continue
+			}
+			dedup[key] = struct{}{}
+		}
+
+		if _, ok := seen[r.sessionID]; !ok {
+			seen[r.sessionID] = sessInfo{
+				project: r.project,
+				agent:   r.agent,
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return UsageSessionCounts{},
+			fmt.Errorf("iterating session counts: %w", err)
+	}
+
+	out := UsageSessionCounts{
+		Total:     len(seen),
+		ByProject: make(map[string]int),
+		ByAgent:   make(map[string]int),
+	}
+	for _, info := range seen {
+		out.ByProject[info.project]++
+		out.ByAgent[info.agent]++
+	}
+
+	return out, nil
+}
+
+// GetUsageSessionCounts returns distinct session counts for the usage filter.
 func (s *BunStore) GetUsageSessionCounts(
 	ctx context.Context, f UsageFilter,
 ) (UsageSessionCounts, error) {
@@ -3531,6 +4655,59 @@ func (s *BunStore) GetUsageSessionCounts(
 // own), the same shape usageRowsSQLForBounds uses, so a session whose
 // started_at/ended_at fall outside the window but whose message activity
 // falls inside it is still counted.
+func (db *DB) getUsageMatchingSessionCountLegacy(
+	ctx context.Context, f UsageFilter,
+) (int, error) {
+	bounds := usageBoundsForFilter(f)
+
+	if !bounds.bounded() {
+		where, args := f.appendUsageSessionFilterClauses(usageSessionEligibility, nil)
+		where, args = f.appendUsageMatchingActivityClauses(where, args)
+
+		var count int
+		err := db.getReader().QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM sessions s WHERE `+where, args...).Scan(&count)
+		if err != nil {
+			return 0, fmt.Errorf("querying matching usage sessions: %w", err)
+		}
+		return count, nil
+	}
+
+	rowsSQL, args := usageMatchingSessionRowsSQLForBounds(f, bounds)
+	rows, err := db.getReader().QueryContext(
+		ctx, dailyUsageRowSelectFromRows(rowsSQL), args...)
+	if err != nil {
+		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
+	}
+	defer rows.Close()
+
+	loc := f.location()
+	seen := make(map[string]struct{})
+	for rows.Next() {
+		r, err := scanDailyUsageRow(rows)
+		if err != nil {
+			return 0, fmt.Errorf("scanning matching usage session: %w", err)
+		}
+		date := localDate(r.ts, loc)
+		if date == "" {
+			continue
+		}
+		if f.From != "" && date < f.From {
+			continue
+		}
+		if f.To != "" && date > f.To {
+			continue
+		}
+		seen[r.sessionID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
+	}
+	return len(seen), nil
+}
+
+// GetUsageMatchingSessionCount returns the number of matching sessions.
 func (s *BunStore) GetUsageMatchingSessionCount(
 	ctx context.Context, f UsageFilter,
 ) (int, error) {

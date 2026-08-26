@@ -1915,7 +1915,7 @@ func createContentSearchIndexesPG(ctx context.Context, db bun.IConn) {
 // complete integrity marker: rows can arrive from stale clients
 // after the hash was stamped.
 func backfillIsAutomatedPG(
-	ctx context.Context, pg bun.IConn,
+	ctx context.Context, pg bun.IDB,
 ) error {
 	_, err := backfillIsAutomatedPGWithProgress(ctx, pg)
 	return err
@@ -2190,7 +2190,7 @@ func markProjectIdentityRemoteScrubDone(
 }
 
 func batchUpdateAutomatedPG(
-	ctx context.Context, pg bun.IConn,
+	ctx context.Context, pg bun.IDB,
 	ids []string, val bool,
 ) error {
 	const batchSize = 500
@@ -2203,13 +2203,13 @@ func batchUpdateAutomatedPG(
 		for j, id := range batch {
 			phs[j] = pb.add(id)
 		}
-		_, err := pg.ExecContext(ctx,
+		_, err := pg.NewRaw(
 			"UPDATE sessions SET is_automated = "+valPh+
 				" WHERE id IN ("+
 				strings.Join(phs, ",")+
 				")",
 			pb.args...,
-		)
+		).Exec(ctx)
 		if err != nil {
 			return fmt.Errorf(
 				"updating is_automated in PG: %w", err,

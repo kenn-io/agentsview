@@ -790,6 +790,12 @@ func upsertArchiveSessionRow(
 	} else if s.CreatedAt == "" {
 		s.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
+	normalizeSignalsPendingSince := timestampNeedsPortablePrecision(
+		current.SignalsPendingSince,
+	)
+	normalizeDeletedAt := timestampNeedsPortablePrecision(current.DeletedAt)
+	normalizeLocalModifiedAt := timestampNeedsPortablePrecision(current.LocalModifiedAt)
+	normalizeCreatedAt := timestampNeedsPortablePrecision(&current.CreatedAt)
 	row, err := CanonicalSessionRow(s)
 	if err != nil {
 		return sessionUpsertResult{}, err
@@ -807,10 +813,54 @@ func upsertArchiveSessionRow(
 		}
 	}
 	normalizeCanonicalSessionTimestampPrecision(&row)
-	if err := UpsertSessionRow(ctx, store, row, "data_version"); err != nil {
+	if err := UpsertSessionRow(
+		ctx, store, row,
+		bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive)...,
+	); err != nil {
 		return sessionUpsertResult{}, err
 	}
-
+	if !inserted {
+		archiveTimestamps := store.NewUpdate().Table("sessions")
+		archiveTimestampsChanged := false
+		for _, field := range []struct {
+			column    string
+			updated   *bunmodel.Timestamp
+			normalize bool
+		}{
+			{"signals_pending_since", row.SignalsPendingSince,
+				normalizeSignalsPendingSince},
+			{"deleted_at", row.DeletedAt,
+				result.sourceMissing || normalizeDeletedAt},
+			{"local_modified_at", row.LocalModifiedAt,
+				normalizeLocalModifiedAt},
+		} {
+			if field.normalize {
+				if field.updated == nil {
+					archiveTimestamps = archiveTimestamps.Set(field.column + " = NULL")
+				} else {
+					archiveTimestamps = archiveTimestamps.Set(
+						field.column+" = ?", field.updated,
+					)
+				}
+				archiveTimestampsChanged = true
+			}
+		}
+		if normalizeCreatedAt {
+			archiveTimestamps = archiveTimestamps.Set("created_at = ?", row.CreatedAt)
+			archiveTimestampsChanged = true
+		}
+		if result.sourceMissing {
+			archiveTimestamps = archiveTimestamps.Set("deletion_cause = NULL")
+			archiveTimestampsChanged = true
+		}
+		if archiveTimestampsChanged {
+			if _, err := archiveTimestamps.Where("id = ?", s.ID).Exec(ctx); err != nil {
+				return sessionUpsertResult{}, fmt.Errorf(
+					"normalizing archive timestamps for session %s: %w", s.ID, err,
+				)
+			}
+		}
+	}
 	update := store.NewUpdate().Table("sessions").
 		Set("next_ordinal = ?", s.NextOrdinal).
 		Set("last_entry_uuid = ?", s.LastEntryUUID)
@@ -826,6 +876,10 @@ func upsertArchiveSessionRow(
 		)
 	}
 	return result, nil
+}
+
+func timestampNeedsPortablePrecision(value *bunmodel.Timestamp) bool {
+	return value != nil && value.Nanosecond()%int(time.Microsecond) != 0
 }
 
 var canonicalSessionFieldIndexByColumn = func() map[string]int {

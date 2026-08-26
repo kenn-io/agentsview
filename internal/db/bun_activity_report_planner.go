@@ -154,8 +154,9 @@ terminal_with_message AS (
 		next_message.role AS next_message_role,
 		next_message.model AS next_message_model
 	FROM ordered_terminal AS ot
-	LEFT JOIN messages AS next_message ON next_message.id = (
-		SELECT next.id FROM messages AS next
+	LEFT JOIN messages AS next_message ON next_message.session_id = ot.session_id
+		AND next_message.ordinal = (
+		SELECT next.ordinal FROM messages AS next
 		WHERE next.session_id = ot.session_id
 			AND next.ordinal > ot.ordinal
 			AND ` + bunNullableTimestamp("next.timestamp") + ` IS NOT NULL
@@ -167,8 +168,9 @@ terminal_with_message AS (
 last_messages AS (
 	SELECT message.session_id, message.ordinal, message.timestamp
 	FROM terminal_sessions AS terminal_session
-	JOIN messages AS message ON message.id = (
-		SELECT latest.id FROM messages AS latest
+	JOIN messages AS message ON message.session_id = terminal_session.session_id
+		AND message.ordinal = (
+		SELECT latest.ordinal FROM messages AS latest
 		WHERE latest.session_id = terminal_session.session_id
 			AND ` + bunNullableTimestamp("latest.timestamp") + ` IS NOT NULL
 		ORDER BY latest.ordinal DESC
@@ -251,8 +253,9 @@ all_candidates AS (
 		), 'unknown') AS prior_model,
 		0 AS source_order, 0 AS call_index, 0 AS event_index
 	FROM messages AS m
-	JOIN messages AS successor ON successor.id = (
-		SELECT next.id FROM messages AS next
+	JOIN messages AS successor ON successor.session_id = m.session_id
+		AND successor.ordinal = (
+		SELECT next.ordinal FROM messages AS next
 		WHERE next.session_id = m.session_id
 			AND next.ordinal > m.ordinal
 			AND ` + bunNullableTimestamp("next.timestamp") + ` IS NOT NULL

@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -17,6 +16,9 @@ import (
 func (s *BunStore) GetSessionUsageRows(
 	ctx context.Context, ids []string,
 ) (*activity.SessionUsageRows, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -34,10 +36,16 @@ func (s *BunStore) GetSessionUsageRows(
 		}
 		sessionOrder := make(map[string]int, len(ids))
 		for index, id := range ids {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			sessionOrder[id] = index
 		}
 		candidates := make([]activityReportUsageCandidate, 0, len(projections))
 		for _, projection := range projections {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			row := usageProjectionToDailyRow(projection)
 			parsed, parseErr := parseTimestamp(row.ts)
 			ordinal := int64(-1)
@@ -57,8 +65,9 @@ func (s *BunStore) GetSessionUsageRows(
 				},
 			})
 		}
-		sort.SliceStable(candidates, func(i, j int) bool {
-			a, b := candidates[i], candidates[j]
+		if err := stableSortContext(ctx, candidates, func(
+			a, b activityReportUsageCandidate,
+		) bool {
 			if a.validTS && b.validTS && !a.ts.Equal(b.ts) {
 				return a.ts.Before(b.ts)
 			}
@@ -86,21 +95,30 @@ func (s *BunStore) GetSessionUsageRows(
 				return a.scan.usageDedupKey < b.scan.usageDedupKey
 			}
 			return !a.validTS && a.row.Timestamp < b.row.Timestamp
-		})
+		}); err != nil {
+			return err
+		}
 		snapshotRows := make([]activity.UsageRow, len(candidates))
 		rowContributes := make([]bool, len(candidates))
 		rawOutputTokensBySession := make(map[string]int)
 		for i, candidate := range candidates {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
 				dailyUsageRowTokens(candidate.scan)
 			snapshotRows[i] = activity.UsageRow{
 				SessionID: candidate.scan.sessionID,
 				Timestamp: candidate.scan.ts, MessageOrdinal: candidate.ordinal,
-				OutputTokens: outputTok,
+				UsageSource: candidate.scan.usageSource,
+				InputTokens: inputTok, OutputTokens: outputTok,
+				CacheCreationTokens: cacheCrTok, CacheReadTokens: cacheRdTok,
 				WebSearchRequests: usageRowWebSearchRequests(
 					candidate.scan.usageSource, candidate.scan.tokenJSON),
-				ClaudeMessageID: candidate.scan.claudeMessageID,
+				Agent: candidate.scan.agent, ClaudeMessageID: candidate.scan.claudeMessageID,
 				ClaudeRequestID: candidate.scan.claudeRequestID,
+				SourceUUID:      candidate.scan.sourceUUID,
+				UsageDedupKey:   candidate.scan.usageDedupKey,
 			}
 			rowContributes[i] = activity.UsageDataContributes(
 				candidate.scan.cost.Valid, inputTok, outputTok, reasoningTok,
@@ -108,12 +126,23 @@ func (s *BunStore) GetSessionUsageRows(
 			)
 			rawOutputTokensBySession[candidate.scan.sessionID] += outputTok
 		}
-		mask, attribution, webSearchRequests :=
-			activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
+		canonicalTokenCoverageBySession, err :=
+			activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
+		if err != nil {
+			return err
+		}
+		mask, attribution, webSearchRequests, err :=
+			activity.ClaudeSnapshotSurvivorSelectionContext(ctx, snapshotRows)
+		if err != nil {
+			return err
+		}
 		seen := make(map[usageDedupToken]struct{})
 		deduplicatedOutputTokens := make(map[string]int)
 		discardedContributingSessions := make(map[string]struct{})
 		for i, candidate := range candidates {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			sourceSessionID := candidate.scan.sessionID
 			if !mask[i] {
 				deduplicatedOutputTokens[sourceSessionID] +=
@@ -148,7 +177,7 @@ func (s *BunStore) GetSessionUsageRows(
 			}
 		}
 		rows, err := materializeActivityReportUsageRows(
-			candidates, mask, attribution, webSearchRequests,
+			ctx, candidates, mask, attribution, webSearchRequests,
 			export.NewPricingResolver(pricing),
 		)
 		if err != nil {
@@ -156,8 +185,9 @@ func (s *BunStore) GetSessionUsageRows(
 		}
 		result = &activity.SessionUsageRows{
 			Rows: rows, RawOutputTokensBySession: rawOutputTokensBySession,
-			DeduplicatedOutputTokens:      deduplicatedOutputTokens,
-			DiscardedContributingSessions: discardedContributingSessions,
+			DeduplicatedOutputTokens:        deduplicatedOutputTokens,
+			DiscardedContributingSessions:   discardedContributingSessions,
+			CanonicalTokenCoverageBySession: canonicalTokenCoverageBySession,
 		}
 		return nil
 	})
@@ -348,6 +378,6 @@ func (s *BunStore) bunActivityReportUsageFrom(
 			q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
 		)
 	return materializeActivityReportUsageCandidates(
-		candidates, mask, attribution, webSearchRequests, rateResolver,
+		ctx, candidates, mask, attribution, webSearchRequests, rateResolver,
 	)
 }

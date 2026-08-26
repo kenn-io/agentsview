@@ -909,20 +909,6 @@ func upsertProjectIdentityObservationWithSnapshotProjectBun(
 	sessionInserted bool,
 	allowSnapshotProjectCorrection bool,
 ) error {
-	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		context.Background(), tx, obs, snapshotProject, sessionInserted,
-		allowSnapshotProjectCorrection,
-	)
-}
-
-func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-	ctx context.Context,
-	tx *sql.Tx,
-	obs export.ProjectIdentityObservation,
-	snapshotProject string,
-	sessionInserted bool,
-	allowSnapshotProjectCorrection bool,
-) error {
 	normalized, err := normalizeProjectIdentityObservation(obs)
 	if err != nil {
 		return err

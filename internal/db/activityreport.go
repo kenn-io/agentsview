@@ -414,11 +414,12 @@ func (db *BunStore) activityReportUsageCandidatesFrom(
 		webSearchRequests = make([]int, len(candidates))
 	}
 	return materializeActivityReportUsageCandidates(
-		candidates, nil, nil, webSearchRequests, rateResolver,
+		ctx, candidates, nil, nil, webSearchRequests, rateResolver,
 	)
 }
 
 func materializeActivityReportUsageCandidates(
+	ctx context.Context,
 	candidates []activityReportUsageCandidate,
 	mask []bool,
 	attribution []string,
@@ -426,7 +427,7 @@ func materializeActivityReportUsageCandidates(
 	rateResolver *export.PricingResolver,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out, err := materializeActivityReportUsageRows(
-		candidates, mask, attribution, webSearchRequests, rateResolver,
+		ctx, candidates, mask, attribution, webSearchRequests, rateResolver,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -439,6 +440,7 @@ func materializeActivityReportUsageCandidates(
 }
 
 func materializeActivityReportUsageRows(
+	ctx context.Context,
 	candidates []activityReportUsageCandidate,
 	mask []bool,
 	attribution []string,
@@ -447,6 +449,9 @@ func materializeActivityReportUsageRows(
 ) ([]activity.UsageRow, error) {
 	out := make([]activity.UsageRow, 0, len(candidates))
 	for i, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if mask != nil && !mask[i] {
 			continue
 		}

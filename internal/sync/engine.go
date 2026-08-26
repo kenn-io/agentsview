@@ -19496,18 +19496,6 @@ func toDBUsageEventsContext(
 	return out, stats, err
 }
 
-// usageEventsForWrite converts usage events for a session about to be
-// written and records the central-validation fix counts in the per-run
-// anomaly accumulator for the sync summary.
-func (e *Engine) usageEventsForWrite(
-	sessionID string, events []parser.ParsedUsageEvent,
-) []db.UsageEvent {
-	out, _ := e.usageEventsForWriteContext(
-		context.Background(), sessionID, events,
-	)
-	return out
-}
-
 func (e *Engine) usageEventsForWriteContext(
 	ctx context.Context, sessionID string, events []parser.ParsedUsageEvent,
 ) ([]db.UsageEvent, error) {

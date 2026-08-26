@@ -283,7 +283,7 @@ func TestParseDiffCursorCwdDoesNotWriteOnParseError(t *testing.T) {
 	initial.Close()
 	require.NoError(t, d.Update(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
-			"UPDATE sessions SET local_modified_at = 'before' WHERE id = ?",
+			"UPDATE sessions SET local_modified_at = '2026-08-01T00:00:00Z' WHERE id = ?",
 			"cursor:"+sessionID,
 		)
 		return err
@@ -530,7 +530,7 @@ func TestSyncEngineCursorSourceMissingRevivalPreservesCwd(t *testing.T) {
 	assert.Equal(t, workspace, stored.Cwd)
 	require.NoError(t, d.Update(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
-			"UPDATE sessions SET source_missing_at = 'now' WHERE id = ?",
+			"UPDATE sessions SET source_missing_at = '2026-08-01T00:00:00Z' WHERE id = ?",
 			fullID,
 		)
 		return err

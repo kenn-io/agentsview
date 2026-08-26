@@ -269,6 +269,7 @@ func TestBunStoreListSessionsIncludesSourceOnlyWhenRequested(t *testing.T) {
 	sourcePath := "/sessions/source.jsonl"
 	_, err = store.NewInsert().Model(&bunmodel.Session{
 		ID: "source-session", Project: "alpha", Machine: "host", Agent: "codex",
+		MessageCount: 1, UserMessageCount: 1,
 		CreatedAt: bunmodel.NewTimestamp(
 			time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC),
 		),

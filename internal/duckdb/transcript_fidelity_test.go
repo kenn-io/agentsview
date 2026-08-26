@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"context"
-	"encoding/json/v2"
 	"path/filepath"
 	"testing"
 

@@ -20,7 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
+func TestPushPreservesCanonicalTimestamps(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_push_legacy_time_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -37,9 +37,9 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 	defer local.Close()
 
 	const sessionID = "legacy-offset-time"
-	started := "2026-03-09 22:48:29.937+00"
-	ended := "2026-03-14 00:32:16.577+00"
-	created := "2026-04-14 04:09:28.922+00"
+	started := "2026-03-09T22:48:29.937Z"
+	ended := "2026-03-14T00:32:16.577Z"
+	created := "2026-04-14T04:09:28.922Z"
 	require.NoError(t, local.UpsertSession(db.Session{
 		ID: sessionID, Project: "project", Machine: "machine", Agent: "claude",
 		StartedAt: &started, EndedAt: &ended, MessageCount: 1,

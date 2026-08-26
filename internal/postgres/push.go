@@ -966,7 +966,7 @@ func (s *Sync) syncProjectIdentityObservations(
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO sync_metadata (key, value) VALUES ($1, '1')
+		INSERT INTO sync_metadata (key, value) VALUES (?, '1')
 		ON CONFLICT (key) DO UPDATE SET
 			value = (sync_metadata.value::bigint + 1)::text`,
 		activityReportProjectIdentityGenerationKey,

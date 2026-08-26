@@ -876,7 +876,7 @@ func TestUsageFallsBackForUnsupportedMessageTimestamp(t *testing.T) {
 			insertMessages(t, database, Message{
 				SessionID: "unsupported-ts", Ordinal: 0, Role: "assistant",
 				Timestamp: tc.timestamp, Model: "test-model",
-				TokenUsage: json.RawMessage(
+				TokenUsage: jsontext.Value(
 					`{"input_tokens":1000,"output_tokens":500}`,
 				),
 			})
