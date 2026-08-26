@@ -111,6 +111,30 @@ func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
 	assert.Equal(t, 1, seen)
 }
 
+func TestActivityReportCandidateSourcePublishesRetryableSnapshotOnce(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "replayed", "p", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:01:00Z")
+	})
+	seedMessage(t, d, "replayed", 0, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "replayed", 1, "assistant", "2026-06-16T10:01:00Z", "model")
+
+	store := NewBunStore(&replayingReadBackend{
+		first: d.bunReader, second: d.bunReader,
+	})
+	var candidates []activity.IntervalCandidate
+	err := store.ActivityReportCandidateSource(
+		[]string{"replayed"}, dayQuery(t, "2026-06-16", "UTC"),
+	)(t.Context(), func(candidate activity.IntervalCandidate) error {
+		candidates = append(candidates, candidate)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, candidates, 1,
+		"one query snapshot must publish each interval once")
+}
+
 func TestSQLiteActivityReportCandidateSourceDoesNotRequireGlobalTimestampIndex(
 	t *testing.T,
 ) {
@@ -178,6 +202,27 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 	require.Len(t, report.BySession, 1)
 	require.NotNil(t, report.BySession[0].AgentMinutes)
 	assert.InDelta(t, 1.0, *report.BySession[0].AgentMinutes, 1e-9)
+}
+
+func TestGetActivityReport_FutureToolCompletionDoesNotScopeOldSession(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "future-completion", "tools", func(s *Session) {
+		s.Agent = "grok"
+		s.StartedAt = Ptr("2026-06-15T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-15T10:01:00Z")
+	})
+	seedMessage(t, d, "future-completion", 0, "assistant",
+		"2026-06-15T10:00:00Z", "model-x")
+	timingInsertToolResultEvent(t, d, "future-completion", 0, 0,
+		"sample-call", "completed", "2026-06-20T10:01:00Z", 1)
+
+	report, err := d.GetActivityReport(
+		t.Context(), AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, report.BySession,
+		"a completion days later cannot pull an old session into the report")
 }
 
 func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {

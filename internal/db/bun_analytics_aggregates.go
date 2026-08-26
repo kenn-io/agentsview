@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -156,23 +154,19 @@ GROUP BY tool.session_id, TRIM(tool.skill_name), session.agent, session.project,
 }
 
 type bunVelocityAggregateRow struct {
-	SessionID        string          `bun:"session_id"`
-	Kind             string          `bun:"kind"`
-	Label            string          `bun:"label"`
-	Sessions         int             `bun:"sessions"`
-	MessageCount     int             `bun:"message_count"`
-	AssistantChars   int             `bun:"assistant_chars"`
-	ToolCount        int             `bun:"tool_count"`
-	ActiveSeconds    float64         `bun:"active_seconds"`
-	TurnCycleSeconds sql.NullFloat64 `bun:"turn_cycle_seconds"`
-	FirstResponseSec sql.NullFloat64 `bun:"first_response_seconds"`
+	Kind                  string  `bun:"kind"`
+	Label                 string  `bun:"label"`
+	Sessions              int     `bun:"sessions"`
+	TurnCycleP50          float64 `bun:"turn_cycle_p50"`
+	TurnCycleP90          float64 `bun:"turn_cycle_p90"`
+	FirstResponseP50      float64 `bun:"first_response_p50"`
+	FirstResponseP90      float64 `bun:"first_response_p90"`
+	MsgsPerActiveMin      float64 `bun:"msgs_per_active_min"`
+	CharsPerActiveMin     float64 `bun:"chars_per_active_min"`
+	ToolCallsPerActiveMin float64 `bun:"tool_calls_per_active_min"`
 }
 
-type bunVelocityAggregate struct {
-	accum          velocityAccumulator
-	throughputSeen map[string]struct{}
-	responseSeen   map[string]struct{}
-}
+const bunAnalyticsVelocityMessagesCTE = "analytics_velocity_messages"
 
 func (s *BunStore) getBunAnalyticsVelocityAggregate(
 	ctx context.Context, store bun.IDB, f AnalyticsFilter,
@@ -187,22 +181,24 @@ func (s *BunStore) getBunAnalyticsVelocityAggregate(
 	if builder.needsMessageQualification() {
 		ctes = append(ctes, builder.scopedMessageCTEs()...)
 	}
-	velocityMessages := BunCTEFragment{
-		Name: bunAnalyticsScopedMessagesCTE,
-		Query: BunSQL(`SELECT message.*
+	velocityMessagesName := bunAnalyticsScopedMessagesCTE
+	if len(builder.models) == 0 {
+		velocityMessagesName = bunAnalyticsVelocityMessagesCTE
+		velocityMessages := BunCTEFragment{
+			Name: bunAnalyticsVelocityMessagesCTE,
+			Query: BunSQL(`SELECT message.*
 		FROM messages AS message
 		JOIN ` + bunAnalyticsFilteredSessionsCTE + ` AS session
 			ON session.id = message.session_id`),
-	}
-	if len(builder.models) > 0 {
-		velocityMessages = BunCTEFragment{}
-	} else if f.HasTimeFilter() {
-		velocityMessages.Query = BunSQL(`SELECT message.*
+		}
+		if f.HasTimeFilter() {
+			velocityMessages.Query = BunSQL(`SELECT message.*
 		FROM messages AS message
 		JOIN ` + bunAnalyticsQualifiedSessionsCTE + ` AS qualified
 			ON qualified.session_id = message.session_id`)
+		}
+		ctes = append(ctes, velocityMessages)
 	}
-	ctes = append(ctes, velocityMessages)
 	with := renderBunCTEs(ctes...)
 	gapDuration := builder.dialect.DurationSeconds(
 		BunSQL("previous_timestamp"), BunSQL("timestamp"),
@@ -218,16 +214,19 @@ func (s *BunStore) getBunAnalyticsVelocityAggregate(
 	if len(builder.models) > 0 {
 		toolPredicates = " AND tool_message.model IN (?)"
 		toolArgs = append(toolArgs, bun.List(builder.models))
-	}
-	if f.DayOfWeek != nil || f.Hour != nil {
-		toolLocal := builder.dialect.LocalTimestamp("tool_message.timestamp", builder.zone)
-		for _, predicate := range builder.messageDayHourPredicates(toolLocal) {
-			toolPredicates += " AND " + predicate.SQL
-			toolArgs = append(toolArgs, predicate.Args...)
+		if f.DayOfWeek != nil || f.Hour != nil {
+			toolLocal := builder.dialect.LocalTimestamp(
+				"tool_message.timestamp", builder.zone,
+			)
+			for _, predicate := range builder.messageDayHourPredicates(toolLocal) {
+				toolPredicates += " AND " + predicate.SQL
+				toolArgs = append(toolArgs, predicate.Args...)
+			}
 		}
 	}
 	query := bunAnalyticsVelocityAggregateSQL(
-		gapDuration.SQL, turnDuration.SQL, firstResponseDuration.SQL, toolPredicates,
+		velocityMessagesName, gapDuration.SQL, turnDuration.SQL,
+		firstResponseDuration.SQL, toolPredicates,
 	)
 	args := append([]any{}, with.Args...)
 	args = append(args, gapDuration.Args...)
@@ -244,7 +243,8 @@ func (s *BunStore) getBunAnalyticsVelocityAggregate(
 }
 
 func bunAnalyticsVelocityAggregateSQL(
-	gapDuration, turnDuration, firstResponseDuration, toolPredicates string,
+	messageSource, gapDuration, turnDuration, firstResponseDuration,
+	toolPredicates string,
 ) string {
 	return `ordered AS (
 	SELECT scoped.*,
@@ -252,7 +252,7 @@ func bunAnalyticsVelocityAggregateSQL(
 		LAG(timestamp) OVER (PARTITION BY session_id ORDER BY ordinal) AS previous_timestamp,
 		ROW_NUMBER() OVER (PARTITION BY session_id, role ORDER BY ordinal) AS role_number,
 		COUNT(*) OVER (PARTITION BY session_id) AS scoped_count
-	FROM ` + bunAnalyticsScopedMessagesCTE + ` AS scoped
+	FROM ` + messageSource + ` AS scoped
 ),
 message_facts AS (
 	SELECT ordered.*, CASE WHEN timestamp IS NOT NULL AND previous_timestamp IS NOT NULL
@@ -306,101 +306,135 @@ first_responses AS (
 			AND candidate.ordinal > first_users.ordinal
 			AND candidate.role = 'assistant' AND candidate.timestamp IS NOT NULL)
 ),
-facts AS (
+session_metrics AS (
 	SELECT session_facts.*,
 		COALESCE(tool_counts.tool_count, 0) AS tool_count,
-		CASE WHEN message_facts.turn_cycle_seconds > 0
-			AND message_facts.turn_cycle_seconds <= 1800
-			THEN message_facts.turn_cycle_seconds END AS turn_cycle_seconds,
 		first_responses.first_response_seconds
 	FROM session_facts
-	JOIN message_facts ON message_facts.session_id = session_facts.session_id
 	LEFT JOIN tool_counts ON tool_counts.session_id = session_facts.session_id
 	LEFT JOIN first_responses ON first_responses.session_id = session_facts.session_id
+),
+grouped_sessions AS (
+	SELECT session_metrics.*, 'overall' AS kind, '' AS label FROM session_metrics
+	UNION ALL
+	SELECT session_metrics.*, 'agent', agent FROM session_metrics
+	UNION ALL
+	SELECT session_metrics.*, 'complexity', complexity FROM session_metrics
+),
+group_totals AS (
+	SELECT kind, label, CAST(COUNT(*) AS BIGINT) AS sessions,
+		CAST(SUM(CASE WHEN active_seconds > 0 THEN message_count ELSE 0 END)
+			AS BIGINT) AS message_count,
+		CAST(SUM(CASE WHEN active_seconds > 0 THEN assistant_chars ELSE 0 END)
+			AS BIGINT) AS assistant_chars,
+		CAST(SUM(CASE WHEN active_seconds > 0 THEN tool_count ELSE 0 END)
+			AS BIGINT) AS tool_count,
+		CAST(SUM(active_seconds) AS DOUBLE PRECISION) AS active_seconds
+	FROM grouped_sessions
+	GROUP BY kind, label
+),
+turn_samples AS (
+	SELECT grouped_sessions.kind, grouped_sessions.label,
+		message_facts.turn_cycle_seconds AS sample
+	FROM grouped_sessions
+	JOIN message_facts
+		ON message_facts.session_id = grouped_sessions.session_id
+	WHERE message_facts.turn_cycle_seconds > 0
+		AND message_facts.turn_cycle_seconds <= 1800
+),
+ranked_turn_samples AS (
+	SELECT kind, label, sample,
+		ROW_NUMBER() OVER (PARTITION BY kind, label ORDER BY sample) AS sample_rank,
+		COUNT(*) OVER (PARTITION BY kind, label) AS sample_count
+	FROM turn_samples
+),
+turn_percentiles AS (
+	SELECT kind, label,
+		MAX(CASE WHEN sample_rank =
+			((sample_count - sample_count % 2) / 2) + 1
+			THEN sample END) AS p50,
+		MAX(CASE WHEN sample_rank =
+			((sample_count * 9 - (sample_count * 9) % 10) / 10) + 1
+			THEN sample END) AS p90
+	FROM ranked_turn_samples
+	GROUP BY kind, label
+),
+first_response_samples AS (
+	SELECT kind, label, first_response_seconds AS sample
+	FROM grouped_sessions
+	WHERE first_response_seconds IS NOT NULL
+),
+ranked_first_response_samples AS (
+	SELECT kind, label, sample,
+		ROW_NUMBER() OVER (PARTITION BY kind, label ORDER BY sample) AS sample_rank,
+		COUNT(*) OVER (PARTITION BY kind, label) AS sample_count
+	FROM first_response_samples
+),
+first_response_percentiles AS (
+	SELECT kind, label,
+		MAX(CASE WHEN sample_rank =
+			((sample_count - sample_count % 2) / 2) + 1
+			THEN sample END) AS p50,
+		MAX(CASE WHEN sample_rank =
+			((sample_count * 9 - (sample_count * 9) % 10) / 10) + 1
+			THEN sample END) AS p90
+	FROM ranked_first_response_samples
+	GROUP BY kind, label
 )
-SELECT session_id, 'overall' AS kind, '' AS label,
-	CAST(sessions AS BIGINT) AS sessions,
-	CAST(message_count AS BIGINT) AS message_count,
-	CAST(assistant_chars AS BIGINT) AS assistant_chars,
-	CAST(tool_count AS BIGINT) AS tool_count,
-	active_seconds, turn_cycle_seconds, first_response_seconds FROM facts
-UNION ALL
-SELECT session_id, 'agent', agent,
-	CAST(sessions AS BIGINT) AS sessions,
-	CAST(message_count AS BIGINT) AS message_count,
-	CAST(assistant_chars AS BIGINT) AS assistant_chars,
-	CAST(tool_count AS BIGINT) AS tool_count,
-	active_seconds, turn_cycle_seconds, first_response_seconds FROM facts
-UNION ALL
-SELECT session_id, 'complexity', complexity,
-	CAST(sessions AS BIGINT) AS sessions,
-	CAST(message_count AS BIGINT) AS message_count,
-	CAST(assistant_chars AS BIGINT) AS assistant_chars,
-	CAST(tool_count AS BIGINT) AS tool_count,
-	active_seconds, turn_cycle_seconds, first_response_seconds FROM facts
-ORDER BY kind, label`
+SELECT group_totals.kind, group_totals.label, group_totals.sessions,
+	COALESCE(ROUND(turn_percentiles.p50 * 10.0) / 10.0, 0.0) AS turn_cycle_p50,
+	COALESCE(ROUND(turn_percentiles.p90 * 10.0) / 10.0, 0.0) AS turn_cycle_p90,
+	COALESCE(ROUND(first_response_percentiles.p50 * 10.0) / 10.0, 0.0)
+		AS first_response_p50,
+	COALESCE(ROUND(first_response_percentiles.p90 * 10.0) / 10.0, 0.0)
+		AS first_response_p90,
+	CASE WHEN group_totals.active_seconds > 0 THEN
+		ROUND((group_totals.message_count * 60.0 /
+			group_totals.active_seconds) * 10.0) / 10.0
+		ELSE 0.0 END AS msgs_per_active_min,
+	CASE WHEN group_totals.active_seconds > 0 THEN
+		ROUND((group_totals.assistant_chars * 60.0 /
+			group_totals.active_seconds) * 10.0) / 10.0
+		ELSE 0.0 END AS chars_per_active_min,
+	CASE WHEN group_totals.active_seconds > 0 THEN
+		ROUND((group_totals.tool_count * 60.0 /
+			group_totals.active_seconds) * 10.0) / 10.0
+		ELSE 0.0 END AS tool_calls_per_active_min
+FROM group_totals
+LEFT JOIN turn_percentiles ON turn_percentiles.kind = group_totals.kind
+	AND turn_percentiles.label = group_totals.label
+LEFT JOIN first_response_percentiles
+	ON first_response_percentiles.kind = group_totals.kind
+	AND first_response_percentiles.label = group_totals.label
+ORDER BY group_totals.kind, group_totals.label`
 }
 
 func buildBunAnalyticsVelocity(rows []bunVelocityAggregateRow) VelocityResponse {
-	groups := map[string]*bunVelocityAggregate{}
-	for _, row := range rows {
-		key := row.Kind + "\x00" + row.Label
-		group := groups[key]
-		if group == nil {
-			group = &bunVelocityAggregate{
-				throughputSeen: map[string]struct{}{}, responseSeen: map[string]struct{}{},
-			}
-			groups[key] = group
-		}
-		// Every session emits one row per scoped message. Count its session and
-		// throughput totals only once; timing samples remain one row per event.
-		sessionKey := row.SessionID
-		if _, ok := group.throughputSeen[sessionKey]; !ok {
-			group.throughputSeen[sessionKey] = struct{}{}
-			group.accum.sessions += row.Sessions
-			if row.ActiveSeconds > 0 {
-				group.accum.totalMsgs += row.MessageCount
-				group.accum.totalChars += row.AssistantChars
-				group.accum.totalToolCalls += row.ToolCount
-				group.accum.activeMinutes += row.ActiveSeconds / 60
-			}
-		}
-		if row.TurnCycleSeconds.Valid {
-			group.accum.turnCycles = append(group.accum.turnCycles, row.TurnCycleSeconds.Float64)
-		}
-		if row.FirstResponseSec.Valid {
-			if _, ok := group.responseSeen[row.SessionID]; ok {
-				continue
-			}
-			group.responseSeen[row.SessionID] = struct{}{}
-			group.accum.firstResponses = append(group.accum.firstResponses, row.FirstResponseSec.Float64)
-		}
-	}
 	result := VelocityResponse{ByAgent: []VelocityBreakdown{}, ByComplexity: []VelocityBreakdown{}}
-	if group := groups["overall\x00"]; group != nil {
-		result.Overall = group.accum.computeOverview()
-	}
-	for key, group := range groups {
-		parts := strings.SplitN(key, "\x00", 2)
-		switch parts[0] {
+	for _, row := range rows {
+		overview := VelocityOverview{
+			TurnCycleSec: Percentiles{
+				P50: row.TurnCycleP50, P90: row.TurnCycleP90,
+			},
+			FirstResponseSec: Percentiles{
+				P50: row.FirstResponseP50, P90: row.FirstResponseP90,
+			},
+			MsgsPerActiveMin:      row.MsgsPerActiveMin,
+			CharsPerActiveMin:     row.CharsPerActiveMin,
+			ToolCallsPerActiveMin: row.ToolCallsPerActiveMin,
+		}
+		switch row.Kind {
+		case "overall":
+			result.Overall = overview
 		case "agent":
 			result.ByAgent = append(result.ByAgent, VelocityBreakdown{
-				Label: parts[1], Sessions: group.accum.sessions,
-				Overview: group.accum.computeOverview(),
+				Label: row.Label, Sessions: row.Sessions, Overview: overview,
 			})
 		case "complexity":
 			result.ByComplexity = append(result.ByComplexity, VelocityBreakdown{
-				Label: parts[1], Sessions: group.accum.sessions,
-				Overview: group.accum.computeOverview(),
+				Label: row.Label, Sessions: row.Sessions, Overview: overview,
 			})
 		}
 	}
-	sort.Slice(result.ByAgent, func(i, j int) bool {
-		return result.ByAgent[i].Label < result.ByAgent[j].Label
-	})
-	order := map[string]int{"1-15": 0, "16-60": 1, "61+": 2}
-	sort.Slice(result.ByComplexity, func(i, j int) bool {
-		return order[result.ByComplexity[i].Label] < order[result.ByComplexity[j].Label]
-	})
 	return result
 }

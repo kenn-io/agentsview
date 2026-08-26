@@ -107,7 +107,8 @@ func bunFrustrationSignalFrom(
 ) (bunFrustrationSignal, error) {
 	var rows []SignalRow
 	if err := store.NewRaw(`WITH `+with.SQL+` SELECT id, outcome,
-		health_score, health_grade FROM analytics_signal_facts ORDER BY id`,
+		health_score, health_grade, quality_signal_version
+		FROM analytics_signal_facts ORDER BY id`,
 		with.Args...).Scan(ctx, &rows); err != nil {
 		return bunFrustrationSignal{}, fmt.Errorf("querying Bun frustration candidates: %w", err)
 	}
@@ -122,9 +123,11 @@ func bunFrustrationSignalFrom(
 	result := bunFrustrationSignal{}
 	for i := range rows {
 		rows[i].FrustrationMarkerCount = counts[rows[i].ID]
-		result.total += rows[i].FrustrationMarkerCount
-		if rows[i].FrustrationMarkerCount > 0 {
-			result.sessions++
+		if rows[i].QualitySignalVersion > 0 {
+			result.total += rows[i].FrustrationMarkerCount
+			if rows[i].FrustrationMarkerCount > 0 {
+				result.sessions++
+			}
 		}
 	}
 	result.calibration = calibrateSignal(rows, "frustration_marker_count")

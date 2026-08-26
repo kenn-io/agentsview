@@ -48,6 +48,7 @@ func (s *BunStore) bunActivityReportScopeFrom(
 		", session.created_at)"
 	startBound := s.backend.TimestampOrderExpr("?")
 	endBound := s.backend.TimestampOrderExpr("?")
+	terminalEndBound := s.backend.TimestampOrderExpr("?")
 	ctes := renderBunCTEs(filtered, BunCTEFragment{
 		Name: "activity_report_sessions",
 		Query: BunSQL(`SELECT session.*
@@ -60,10 +61,15 @@ func (s *BunStore) bunActivityReportScopeFrom(
 				AND terminal.status IN ('completed', 'errored')
 				AND `+bunNullableTimestamp("terminal.timestamp")+` IS NOT NULL
 				AND `+s.backend.TimestampOrderExpr(
-			bunNullableTimestamp("terminal.timestamp"))+` >= `+startBound+`))
+			bunNullableTimestamp("terminal.timestamp"))+` >= `+startBound+`
+				AND `+s.backend.TimestampOrderExpr(
+			bunNullableTimestamp("terminal.timestamp"))+` < `+terminalEndBound+`))
 		AND `+s.backend.TimestampOrderExpr(activityStart)+` < `+endBound,
 			bunmodel.NewTimestamp(q.RangeStart),
 			bunmodel.NewTimestamp(q.RangeStart),
+			bunmodel.NewTimestamp(q.EffectiveEnd.Add(
+				time.Duration(q.GapCapSeconds)*time.Second,
+			)),
 			bunmodel.NewTimestamp(q.RangeEnd)),
 	})
 	query := `WITH ` + ctes.SQL + `
@@ -298,15 +304,15 @@ ORDER BY ` + orderedTimestamp("start_timestamp") + `,
 	}
 }
 
-// ActivityReportCandidateSource exposes the shared Bun pairing stream for
-// cross-backend contract tests.
+// ActivityReportCandidateSource exposes the shared single-query Bun pairing
+// stream for cross-backend contract tests.
 func (s *BunStore) ActivityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
 	return func(
 		ctx context.Context, yield func(activity.IntervalCandidate) error,
 	) error {
-		return s.consistentView(ctx, func(store bun.IDB) error {
+		return s.view(ctx, func(store bun.IDB) error {
 			return s.bunActivityReportCandidateSourceFrom(store, ids, q)(ctx, yield)
 		})
 	}
