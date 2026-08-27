@@ -140,6 +140,12 @@ func TestOpenCodeReconciliationKeepsVirtualPathWithinItsConfiguredRoot(t *testin
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses-shared"), source.DisplayPath)
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: OpenCodeSQLiteVirtualPath(dbPath, "ses-shared"), EventKind: "write",
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses-shared"), changed[0].DisplayPath)
 }
 
 func TestOpenCodeReconciliationAcceptsCaseVariantChannelContainer(t *testing.T) {

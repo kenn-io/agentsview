@@ -933,17 +933,15 @@ func (s openCodeFormatSourceSet) SourcesForChangedPath(
 		return nil, nil
 	}
 	if dbPath, _, virtual := s.spec.parseVirtual(req.Path); virtual {
-		for _, root := range s.roots {
-			if _, under := relUnder(root, dbPath); !under {
-				continue
-			}
-			source, ok, err := s.canonicalVirtualSource(ctx, root, req.Path)
-			if err != nil || !ok {
-				return nil, err
-			}
-			return []SourceRef{source}, nil
+		root, ok := s.mostSpecificRootFor(dbPath)
+		if !ok {
+			return nil, nil
 		}
-		return nil, nil
+		source, found, err := s.canonicalVirtualSource(ctx, root, req.Path)
+		if err != nil || !found {
+			return nil, err
+		}
+		return []SourceRef{source}, nil
 	}
 	pathExists := true
 	if _, err := os.Stat(req.Path); err != nil {
