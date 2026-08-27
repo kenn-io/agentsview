@@ -9241,8 +9241,7 @@ func (e *Engine) collectAndBatch(
 }
 
 type collectAndBatchOptions struct {
-	preserveMissingSources bool
-	observeResult          func(syncJob)
+	observeResult func(syncJob)
 }
 
 func (e *Engine) collectAndBatchWithOptions(
@@ -9792,7 +9791,7 @@ func (e *Engine) collectAndBatchWithOptions(
 		// unchanged survivors are dropped from r.results before this
 		// point, so the source-wide gate would freeze an allowed
 		// member's deletion whenever everything else was unchanged.
-		if len(r.sourceMissingMembers) > 0 && !options.preserveMissingSources {
+		if len(r.sourceMissingMembers) > 0 {
 			tombstoned, deferred, tombstoneErr := e.reconcileSourceMissingMembers(
 				ctx, r.agent, r.sourceMissingMembers,
 				baselineExactOwnership, rejectExactOwnership,

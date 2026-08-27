@@ -142,7 +142,6 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 				onProgress(progress)
 			}
 		}, syncWriteDefault, collectAndBatchOptions{
-			preserveMissingSources: true,
 			observeResult: func(job syncJob) {
 				result.FilesProcessed++
 				if job.incremental != nil {

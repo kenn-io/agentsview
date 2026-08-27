@@ -1803,7 +1803,7 @@ func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
 	assert.Equal(t, 0, stats.TotalSessions, "total sessions")
 }
 
-func TestSyncEngineKiroPartialSQLitePreservesShadowedAndTombstonesRemoved(
+func TestSyncEngineKiroPartialSQLitePreservesShadowedAndMarksRemovedSourceMissing(
 	t *testing.T,
 ) {
 	winnerRoot := t.TempDir()
@@ -1835,14 +1835,13 @@ func TestSyncEngineKiroPartialSQLitePreservesShadowedAndTombstonesRemoved(
 
 	activeRemoved, err = env.db.GetSession(context.Background(), "kiro:removed")
 	require.NoError(t, err)
-	assert.Nil(t, activeRemoved)
+	assert.NotNil(t, activeRemoved,
+		"a removed member must remain browsable")
 	archivedRemoved, err := env.db.GetSessionFull(
 		context.Background(), "kiro:removed",
 	)
 	require.NoError(t, err)
-	require.NotNil(t, archivedRemoved)
-	require.NotNil(t, archivedRemoved.DeletionCause)
-	assert.Equal(t, "source_missing", *archivedRemoved.DeletionCause)
+	assertSourceMissingState(t, archivedRemoved)
 	activeShadowed, err = env.db.GetSession(context.Background(), "kiro:shadowed")
 	require.NoError(t, err)
 	assert.NotNil(t, activeShadowed)
@@ -1922,7 +1921,7 @@ func TestSyncRootsSinceKiroArbitratesAcrossConfiguredRootsBeforeProcessing(
 	assertMessageContent(t, env.db, "kiro:"+rawID, "configured winner")
 }
 
-func TestSyncRootsSinceKiroTombstonesRemovedAllShadowedMember(
+func TestSyncRootsSinceKiroMarksRemovedAllShadowedMemberSourceMissing(
 	t *testing.T,
 ) {
 	winnerRoot := t.TempDir()
@@ -1954,15 +1953,13 @@ func TestSyncRootsSinceKiroTombstonesRemovedAllShadowedMember(
 
 	active, err := env.db.GetSession(context.Background(), "kiro:removed")
 	require.NoError(t, err)
-	assert.Nil(t, active,
-		"a removed member must be tombstoned even when all remaining DB rows are shadowed")
+	assert.NotNil(t, active,
+		"a removed member must remain browsable even when all remaining DB rows are shadowed")
 	archived, err := env.db.GetSessionFull(
 		context.Background(), "kiro:removed",
 	)
 	require.NoError(t, err)
-	require.NotNil(t, archived)
-	require.NotNil(t, archived.DeletionCause)
-	assert.Equal(t, "source_missing", *archived.DeletionCause)
+	assertSourceMissingState(t, archived)
 }
 
 func TestSyncRootsSinceKiroOverlappingRootsKeepInScopeWinner(t *testing.T) {
@@ -2026,10 +2023,13 @@ func TestReconcileWatchRootsKiroDiscoveryFailureDoesNotAbortOtherAgents(
 	err = env.engine.ReconcileWatchRoots(t.Context(), nil, true)
 	require.Error(t, err, "the failed Kiro scope must stay queued for retry")
 
-	claudeGone, err := env.db.GetSession(t.Context(), "claude-session")
+	claudeMissing, err := env.db.GetSession(t.Context(), "claude-session")
 	require.NoError(t, err)
-	assert.Nil(t, claudeGone,
-		"a Kiro discovery failure must not abort other agents' reconciliation")
+	assert.NotNil(t, claudeMissing,
+		"a missing Claude source must remain browsable")
+	claudeArchived, err := env.db.GetSessionFull(t.Context(), "claude-session")
+	require.NoError(t, err)
+	assertSourceMissingState(t, claudeArchived)
 	kiroKept, err := env.db.GetSession(t.Context(), "kiro:"+rawID)
 	require.NoError(t, err)
 	assert.NotNil(t, kiroKept,
