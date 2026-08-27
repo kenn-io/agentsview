@@ -516,17 +516,14 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 				source.ProjectHint = file.Project
 				addJSONLSource(source, &sources, seen)
 			}
-			if !storageDiscoveryIncomplete {
-				s.markDiscoveredProjectMetadata(root)
-				for _, file := range files {
-					id := strings.TrimSuffix(filepath.Base(file.Path), ".json")
-					if id != "" {
-						storageIDs[id] = struct{}{}
-					}
+			for _, file := range files {
+				id := strings.TrimSuffix(filepath.Base(file.Path), ".json")
+				if id != "" {
+					storageIDs[id] = struct{}{}
 				}
 			}
-			if storageDiscoveryIncomplete {
-				continue
+			if !storageDiscoveryIncomplete {
+				s.markDiscoveredProjectMetadata(root)
 			}
 		}
 		knownStorageID := func(_ context.Context, id string) (bool, error) {
@@ -631,7 +628,6 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 		}()
 	}
 	if src.Mode == OpenCodeSourceStorage {
-		storageIncomplete := false
 		if err := s.discoverStorageEach(ctx, root, src, discoveredIDs, yield); err != nil {
 			if _, ok := errors.AsType[openCodeDiscoveryMapError](err); ok {
 				return false, err
@@ -642,10 +638,6 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 			incomplete = errors.Join(incomplete, incompleteDiscoveryError(
 				s.spec.agent, "stream storage "+src.SessionRoot, err,
 			))
-			storageIncomplete = true
-		}
-		if storageIncomplete {
-			return true, incomplete
 		}
 	}
 	if !hasSQLite {
@@ -2172,6 +2164,10 @@ func (s openCodeFormatSourceSet) sourceRef(
 	path = filepath.Clean(path)
 	if dbPath, sessionID, ok := s.spec.parseVirtual(path); ok {
 		if _, under := relUnder(root, dbPath); !under {
+			return SourceRef{}, false
+		}
+		if !isRecognizedOpenCodeContainerPath(root, dbPath, s.spec.format) ||
+			!IsRegularFile(dbPath) {
 			return SourceRef{}, false
 		}
 		if promoteVirtual {
