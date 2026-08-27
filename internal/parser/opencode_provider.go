@@ -839,13 +839,7 @@ func (s openCodeFormatSourceSet) reconciliationContainer(
 }
 
 func reconciliationOpenCodeContainerPath(root, path string, f openCodeFormat) (string, bool) {
-	name := filepath.Base(path)
-	if strings.HasSuffix(name, "-wal") {
-		name = strings.TrimSuffix(name, "-wal")
-	}
-	if strings.HasSuffix(name, "-shm") {
-		name = strings.TrimSuffix(name, "-shm")
-	}
+	name := trimSQLiteSidecarSuffix(filepath.Base(path))
 	canonical := filepath.Join(root, f.dbName)
 	if strings.EqualFold(name, f.dbName) {
 		for _, alias := range []string{canonical, canonical + "-wal", canonical + "-shm"} {
@@ -1305,7 +1299,7 @@ func (s openCodeFormatSourceSet) withPrecedingSQLiteIDs(
 	src := s.resolve(root)
 	var skip map[string]struct{}
 	for _, candidate := range src.DBPaths {
-		if strings.EqualFold(filepath.Clean(candidate), filepath.Clean(dbPath)) {
+		if filepath.Clean(candidate) == filepath.Clean(dbPath) {
 			break
 		}
 		lister := s.spec.listSQLite
@@ -1475,13 +1469,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 
 	if isSQLiteChange {
 		dbPath := filepath.Clean(path)
-		base := filepath.Base(dbPath)
-		if strings.HasSuffix(base, "-wal") {
-			dbPath = strings.TrimSuffix(dbPath, "-wal")
-		}
-		if strings.HasSuffix(base, "-shm") {
-			dbPath = strings.TrimSuffix(dbPath, "-shm")
-		}
+		dbPath = trimSQLiteSidecarSuffix(dbPath)
 		if !isRecognizedOpenCodeContainerPath(root, dbPath, s.spec.format) || !IsRegularFile(dbPath) {
 			return nil, true, nil
 		}
@@ -1875,22 +1863,16 @@ func (s openCodeFormatSourceSet) sqliteChangeRelevance(
 	root, path, rel string,
 ) (ChangedPathRelevance, bool) {
 	container := filepath.Join(root, rel)
-	base := filepath.Base(container)
-	if strings.HasSuffix(base, "-wal") {
-		container = strings.TrimSuffix(container, "-wal")
-	}
-	if strings.HasSuffix(base, "-shm") {
-		container = strings.TrimSuffix(container, "-shm")
-	}
+	container = trimSQLiteSidecarSuffix(container)
 	if !isRecognizedOpenCodeContainerPath(root, container, s.spec.format) {
 		return ChangedPathUnclassified, false
 	}
 	switch {
-	case strings.HasSuffix(filepath.Base(path), "-shm"):
+	case hasFoldedSuffix(filepath.Base(path), "-shm"):
 		// SHM is only SQLite's WAL index. WAL frames or the checkpointed main
 		// database carry the source changes, so SHM events are redundant.
 		return ChangedPathNonData, true
-	case strings.HasSuffix(filepath.Base(path), "-wal"):
+	case hasFoldedSuffix(filepath.Base(path), "-wal"):
 		// A read-only connection can create an empty WAL while inspecting a
 		// quiet database. Ignore it, as well as WAL removal after a checkpoint;
 		// the corresponding main-database write is watched separately.
@@ -1903,6 +1885,20 @@ func (s openCodeFormatSourceSet) sqliteChangeRelevance(
 		// the container moved or was removed, so the watch push must remain.
 		return ChangedPathDataBearing, true
 	}
+}
+
+func hasFoldedSuffix(value, suffix string) bool {
+	return len(value) >= len(suffix) &&
+		strings.EqualFold(value[len(value)-len(suffix):], suffix)
+}
+
+func trimSQLiteSidecarSuffix(path string) string {
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if hasFoldedSuffix(path, suffix) {
+			return path[:len(path)-len(suffix)]
+		}
+	}
+	return path
 }
 
 func isRecognizedOpenCodeContainerPath(root, path string, f openCodeFormat) bool {

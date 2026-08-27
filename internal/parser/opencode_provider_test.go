@@ -77,6 +77,42 @@ func TestOpenCodeReconciliationAcceptsCaseVariantChannelContainer(t *testing.T) 
 	assert.Equal(t, filepath.Join(root, "OpenCode-Local.db"), container)
 }
 
+func TestOpenCodeReconciliationAcceptsCaseVariantChannelSidecars(t *testing.T) {
+	root := t.TempDir()
+	sources := newOpenCodeFormatSourceSet(
+		[]string{root}, openCodeProviderSpecForAgent(AgentOpenCode), nil,
+	)
+	for _, suffix := range []string{"-WAL", "-SHM"} {
+		requested := filepath.Join(root, "OpenCode-Local.db"+suffix+"#ses-1")
+		container, ok := sources.reconciliationContainer(requested)
+		assert.True(t, ok, suffix)
+		assert.Equal(t, filepath.Join(root, "OpenCode-Local.db"), container)
+	}
+}
+
+func TestOpenCodePrecedingSQLiteArbitrationPreservesCaseDistinctPaths(t *testing.T) {
+	root := t.TempDir()
+	earlier := filepath.Join(root, "opencode-LOCAL.db")
+	later := filepath.Join(root, "opencode-local.db")
+	spec := openCodeProviderSpecForAgent(AgentOpenCode)
+	spec.listSQLiteWatermark = nil
+	spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
+		if path == earlier {
+			return []OpenCodeSessionMeta{{SessionID: "ses-earlier"}}, nil
+		}
+		return nil, nil
+	}
+	sources := newOpenCodeFormatSourceSet([]string{root}, spec, nil)
+	sources.resolvedSources[filepath.Clean(root)] = OpenCodeSource{
+		Mode:    OpenCodeSourceSQLite,
+		DBPaths: []string{earlier, later},
+		DBPath:  earlier,
+	}
+
+	skip := sources.withPrecedingSQLiteIDs(root, later, nil)
+	assert.Contains(t, skip, "ses-earlier")
+}
+
 func TestOpenCodeProviderSkipsCorruptAdditionalChannelContainer(t *testing.T) {
 	root := t.TempDir()
 	canonical := filepath.Join(root, "opencode.db")

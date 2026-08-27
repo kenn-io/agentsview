@@ -418,13 +418,7 @@ func IsOpenCodeSQLiteVirtualPath(path string) bool {
 // reconciliation enumerates the directory.
 func OpenCodeSQLiteContainerPathForEvent(root, path string) (string, bool) {
 	path = filepath.Clean(path)
-	base := filepath.Base(path)
-	if strings.HasSuffix(base, "-wal") {
-		path = strings.TrimSuffix(path, "-wal")
-	}
-	if strings.HasSuffix(base, "-shm") {
-		path = strings.TrimSuffix(path, "-shm")
-	}
+	path = trimSQLiteSidecarSuffix(path)
 	if !IsOpenCodeSQLiteContainerPath(root, path) {
 		return "", false
 	}

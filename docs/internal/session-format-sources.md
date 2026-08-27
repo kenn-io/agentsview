@@ -621,7 +621,7 @@ add an archived or maintained mirror without replacing the original identity.
   regular files matching those names, with `opencode.db` taking precedence
   over channel databases for duplicate session IDs. Storage JSON remains
   authoritative over every SQLite container. Verified against OpenCode commit
-  `6568a824553200254e30e5a49c2831d1fb5f62e2` in the producer's
+  `5f5ea53afb2630227ead917f1a0ddf784c33150c` in the producer's
   `packages/core/src/database/database.ts` and
   `packages/core/src/installation/version.ts`.
 - **Configuration boundary:** `OPENCODE_DB` may select an explicit absolute,
