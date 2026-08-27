@@ -64,6 +64,14 @@ func TestOpenCodeProviderDiscoversChannelSuffixedContainers(t *testing.T) {
 	}
 	assert.Contains(t, changedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-channel"))
 	assert.NotContains(t, changedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-shared"))
+	resolver, ok := provider.(ReconciliationSourceResolver)
+	require.True(t, ok)
+	reconciled, found, err := resolver.SourceForReconciliation(
+		t.Context(), OpenCodeSQLiteVirtualPath(channel, "ses-shared"), "",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, OpenCodeSQLiteVirtualPath(canonical, "ses-shared"), reconciled.DisplayPath)
 }
 
 func TestOpenCodeReconciliationAcceptsCaseVariantChannelContainer(t *testing.T) {
@@ -113,7 +121,7 @@ func TestOpenCodePrecedingSQLiteArbitrationPreservesCaseDistinctPaths(t *testing
 	assert.Contains(t, skip, "ses-earlier")
 }
 
-func TestOpenCodeProviderSkipsCorruptAdditionalChannelContainer(t *testing.T) {
+func TestOpenCodeProviderReportsCorruptAdditionalChannelContainer(t *testing.T) {
 	root := t.TempDir()
 	canonical := filepath.Join(root, "opencode.db")
 	channel := filepath.Join(root, "opencode-local.db")
@@ -122,9 +130,38 @@ func TestOpenCodeProviderSkipsCorruptAdditionalChannelContainer(t *testing.T) {
 	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, OpenCodeSQLiteVirtualPath(canonical, "ses-healthy"), sources[0].DisplayPath)
+	require.Error(t, err)
+	requireSourcePathsMatch(t, sources, []string{
+		OpenCodeSQLiteVirtualPath(canonical, "ses-healthy"),
+	})
+}
+
+func TestOpenCodeStreamingDiscoveryContinuesHealthyChannelsAfterUnreadableCanonical(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	canonical := filepath.Join(root, "opencode.db")
+	channel := filepath.Join(root, "opencode-local.db")
+	require.NoError(t, os.WriteFile(canonical, []byte("not sqlite"), 0o600))
+	_, seeder, db := newTestDBAt(t, channel)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	seeder.AddProject("prj_1", "/workspace/channel")
+	seeder.AddSession(
+		"ses-channel", "prj_1", "", "Channel", 1700000000000, 1700000010000,
+	)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	var paths []string
+	err := provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			paths = append(paths, source.DisplayPath)
+			return nil
+		},
+	)
+	require.Error(t, err)
+	assert.Equal(t, []string{
+		OpenCodeSQLiteVirtualPath(channel, "ses-channel"),
+	}, paths)
 }
 
 func TestOpenCodeHybridStreamingDiscoveryReportsIncompleteSQLiteFailure(
@@ -141,7 +178,7 @@ func TestOpenCodeHybridStreamingDiscoveryReportsIncompleteSQLiteFailure(
 	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(t, err)
+	require.Error(t, err)
 	requireSourcePathsMatch(t, discovered, []string{storagePath})
 	var streamed []SourceRef
 	err = provider.(StreamingDiscoverer).DiscoverEach(
@@ -1558,8 +1595,8 @@ func TestOpenCodeProviderDiscoveryToleratesCorruptSQLiteDB(t *testing.T) {
 	storagePath := writeOpenCodeProviderStorageSession(
 		t, root, "session", "ses_valid", "storage-app", "Valid Session",
 	)
-	// A present-but-corrupt optional DB must not abort discovery of the valid
-	// storage-backed session that lives in the same root.
+	// A present-but-corrupt optional DB must not suppress the valid
+	// storage-backed session, but discovery must remain incomplete.
 	require.NoError(t, os.WriteFile(
 		filepath.Join(root, "opencode.db"), []byte("not a sqlite database"), 0o644,
 	))
@@ -1568,7 +1605,7 @@ func TestOpenCodeProviderDiscoveryToleratesCorruptSQLiteDB(t *testing.T) {
 	require.True(t, ok)
 
 	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, storagePath, discovered[0].DisplayPath)
 }

@@ -475,6 +475,7 @@ func (s openCodeFormatSourceSet) resolve(root string) OpenCodeSource {
 
 func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
+	var incomplete error
 	seen := make(map[string]struct{})
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
@@ -496,18 +497,18 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 			s.markDiscoveredProjectMetadata(root)
 			storageIDs = s.spec.storageIDs(root)
 		}
-		for i, dbPath := range src.DBPaths {
+		for _, dbPath := range src.DBPaths {
 			trusted := s.containerTrusted != nil && s.containerTrusted(dbPath)
 			dbSources, err := s.sqliteSources(ctx, root, dbPath, storageIDs, trusted)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil, err
 				}
-				if src.Mode == OpenCodeSourceStorage || i > 0 {
-					log.Printf("sync %s: skipping unreadable %s: %v", s.spec.agent, dbPath, err)
-					continue
-				}
-				return nil, err
+				log.Printf("sync %s: unreadable %s: %v", s.spec.agent, dbPath, err)
+				incomplete = errors.Join(incomplete, incompleteDiscoveryError(
+					s.spec.agent, "SQLite "+dbPath, err,
+				))
+				continue
 			}
 			for _, source := range dbSources {
 				if _, id, ok := s.spec.parseVirtual(source.Key); ok {
@@ -521,7 +522,7 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 		}
 	}
 	sortJSONLSources(sources)
-	return sources, nil
+	return sources, incomplete
 }
 
 func (s openCodeFormatSourceSet) DiscoverEach(
@@ -603,7 +604,8 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 	// watermark listing: computing every session's child digest for a pass
 	// that verifies nothing would be archive-sized work nothing reads (see
 	// ProviderConfig.SQLiteContainerUnchangedSinceTrust).
-	for i, dbPath := range src.DBPaths {
+	var incomplete error
+	for _, dbPath := range src.DBPaths {
 		stream := s.spec.streamSQLite
 		if s.containerTrusted != nil && s.containerTrusted(dbPath) && s.spec.streamSQLiteWatermark != nil {
 			stream = s.spec.streamSQLiteWatermark
@@ -648,12 +650,14 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 			if ctx.Err() != nil {
 				return false, err
 			}
-			if i > 0 {
-				log.Printf("sync %s: skipping unreadable %s: %v", s.spec.agent, dbPath, err)
-				continue
-			}
-			return true, incompleteDiscoveryError(s.spec.agent, "stream SQLite "+dbPath, err)
+			log.Printf("sync %s: unreadable %s: %v", s.spec.agent, dbPath, err)
+			incomplete = errors.Join(incomplete, incompleteDiscoveryError(
+				s.spec.agent, "stream SQLite "+dbPath, err,
+			))
 		}
+	}
+	if incomplete != nil {
+		return true, incomplete
 	}
 	return false, nil
 }
@@ -974,6 +978,19 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 		return SourceRef{}, false, err
 	}
 	for _, root := range s.roots {
+		if _, _, virtual := s.spec.parseVirtual(path); virtual {
+			source, ok, err := s.canonicalVirtualSource(ctx, root, path)
+			if err != nil || !ok {
+				if err != nil {
+					return SourceRef{}, false, err
+				}
+				continue
+			}
+			if project != "" {
+				source.ProjectHint = project
+			}
+			return source, true, nil
+		}
 		source, ok := s.sourceRef(root, path, false)
 		if !ok {
 			continue
@@ -1016,7 +1033,7 @@ func (s openCodeFormatSourceSet) canonicalVirtualSource(
 			return SourceRef{}, false, ctx.Err()
 		}
 	}
-	source, ok := s.sourceRef(root, virtualPath, false)
+	source, ok := s.sourceRef(root, virtualPath, true)
 	return source, ok, nil
 }
 
@@ -1299,7 +1316,7 @@ func (s openCodeFormatSourceSet) withPrecedingSQLiteIDs(
 	src := s.resolve(root)
 	var skip map[string]struct{}
 	for _, candidate := range src.DBPaths {
-		if filepath.Clean(candidate) == filepath.Clean(dbPath) {
+		if sameSQLiteContainerPath(candidate, dbPath) {
 			break
 		}
 		lister := s.spec.listSQLite
@@ -1324,6 +1341,23 @@ func (s openCodeFormatSourceSet) withPrecedingSQLiteIDs(
 		return storageIDs
 	}
 	return skip
+}
+
+func sameSQLiteContainerPath(candidate, dbPath string) bool {
+	candidate = filepath.Clean(candidate)
+	dbPath = filepath.Clean(dbPath)
+	if candidate == dbPath {
+		return true
+	}
+	candidateInfo, err := os.Stat(candidate)
+	if err != nil {
+		return false
+	}
+	dbInfo, err := os.Stat(dbPath)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(candidateInfo, dbInfo)
 }
 
 // changedWatermarkSources answers a shared-container change event with only
@@ -1925,9 +1959,6 @@ func isOpenCodeSQLiteContainerNameFolded(f openCodeFormat, name string) bool {
 		return false
 	}
 	channel := name[len(prefix) : len(name)-len(suffix)]
-	if channel == "" {
-		return false
-	}
 	for _, r := range channel {
 		if !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') &&
 			!(r >= '0' && r <= '9') && r != '.' && r != '_' && r != '-' {

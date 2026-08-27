@@ -855,7 +855,12 @@ func TestOpenCodeSQLiteContainerNameContract(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(root, "opencode-extra.db"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "nested"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "nested", "opencode-nested.db"), []byte("x"), 0o644))
-	assert.Equal(t, []string{filepath.Join(root, "opencode.db"), filepath.Join(root, "opencode-beta.1_x.db"), filepath.Join(root, "opencode-local.db")}, openCodeSQLiteContainerPaths(openCodeFmt, root))
+	assert.Equal(t, []string{
+		filepath.Join(root, "opencode.db"),
+		filepath.Join(root, "opencode-.db"),
+		filepath.Join(root, "opencode-beta.1_x.db"),
+		filepath.Join(root, "opencode-local.db"),
+	}, openCodeSQLiteContainerPaths(openCodeFmt, root))
 	for _, f := range []openCodeFormat{kiloFmt, mimoFmt, icodemateFmt} {
 		assert.False(t, isOpenCodeSQLiteContainerName(f, f.dbName+"-local.db"))
 		assert.False(t, isRecognizedOpenCodeContainerPath(

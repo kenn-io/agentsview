@@ -15,10 +15,11 @@ import (
 // sync work is bounded by the changed batch, not total archive size" rule for
 // shared SQLite containers.
 //
-// Every session in an OpenCode root lives in one physical opencode.db. Stamping
-// that container's size onto each session's fingerprint made any single
-// session's write change every other session's fingerprint, so one changed
-// session re-parsed the whole root — on a production container that is
+// Each session within an OpenCode SQLite container shares that container's
+// physical database. Stamping that container's size onto each session's
+// fingerprint made any single session's write change every other session's
+// fingerprint, so one changed session re-parsed the whole root. On a
+// production container that is
 // thousands of sessions re-read out of a multi-GB database every time the
 // watcher fires. The per-session composite mtime (session, project, and child
 // message/part time_updated) replaces it, so a one-session change must leave

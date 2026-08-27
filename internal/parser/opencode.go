@@ -760,9 +760,9 @@ func openCodeSessionHasDirectoryCached(
 }
 
 // openCodeCompositeMtimeExpr is the per-session change signal for a
-// SQLite-backed OpenCode container. Every session in a root shares one
-// physical opencode.db, so the container file's own size and mtime move
-// whenever any single session is written and cannot discriminate between
+// SQLite-backed OpenCode container. Every session in a container shares that
+// container's physical database, so the container file's own size and mtime
+// move whenever any single session is written and cannot discriminate between
 // sessions. These four columns can:
 //
 //   - session.time_updated  — the session row itself
@@ -1917,7 +1917,7 @@ func loadOpenCodeStorageParts(
 
 // OpenCodeSourceMtime returns a composite mtime for either an
 // OpenCode storage session JSON path or a legacy SQLite virtual
-// path in the form opencode.db#<sessionID>.
+// path in the form <container.db>#<sessionID>.
 func OpenCodeSourceMtime(sourcePath string) (int64, error) {
 	if sourcePath == "" {
 		return 0, nil

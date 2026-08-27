@@ -114,9 +114,6 @@ func isOpenCodeSQLiteContainerName(f openCodeFormat, name string) bool {
 		return false
 	}
 	channel := strings.TrimSuffix(strings.TrimPrefix(name, "opencode-"), ".db")
-	if channel == "" {
-		return false
-	}
 	for _, r := range channel {
 		if !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') &&
 			!(r >= '0' && r <= '9') && r != '.' && r != '_' && r != '-' {
@@ -126,6 +123,11 @@ func isOpenCodeSQLiteContainerName(f openCodeFormat, name string) bool {
 	return true
 }
 
+func isCanonicalOpenCodeSQLiteName(f openCodeFormat, name string) bool {
+	return name == f.dbName ||
+		(f.agent == AgentOpenCode && strings.EqualFold(name, f.dbName))
+}
+
 func openCodeSQLiteContainerPaths(f openCodeFormat, root string) []string {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -133,7 +135,12 @@ func openCodeSQLiteContainerPaths(f openCodeFormat, root string) []string {
 	}
 	var names []string
 	for _, entry := range entries {
-		if entry.IsDir() || !isOpenCodeSQLiteContainerName(f, entry.Name()) {
+		name := entry.Name()
+		recognized := isOpenCodeSQLiteContainerName(f, name)
+		if f.agent == AgentOpenCode {
+			recognized = isOpenCodeSQLiteContainerNameFolded(f, name)
+		}
+		if entry.IsDir() || !recognized {
 			continue
 		}
 		info, err := entry.Info()
@@ -143,11 +150,10 @@ func openCodeSQLiteContainerPaths(f openCodeFormat, root string) []string {
 		names = append(names, entry.Name())
 	}
 	sort.Slice(names, func(i, j int) bool {
-		if names[i] == f.dbName {
-			return true
-		}
-		if names[j] == f.dbName {
-			return false
+		canonicalI := isCanonicalOpenCodeSQLiteName(f, names[i])
+		canonicalJ := isCanonicalOpenCodeSQLiteName(f, names[j])
+		if canonicalI != canonicalJ {
+			return canonicalI
 		}
 		return names[i] < names[j]
 	})

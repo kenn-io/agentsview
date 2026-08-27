@@ -666,9 +666,11 @@ add an archived or maintained mirror without replacing the original identity.
   counts as a failure, matching the existing `exit status N` heuristic, and a
   timed-out command records `timeout: true` with no `exit` key, so it is not
   detected here. See #1256.
-- **Change detection (SQLite layout):** every session in a root shares one
-  physical `opencode.db`, so the container's own size and mtime move whenever
-  any single session is written and cannot discriminate between sessions.
+- **Change detection (SQLite layout):** every session in one SQLite container
+  shares that container's physical database, so the container's own size and
+  mtime move whenever any single session is written and cannot discriminate
+  between sessions. A root can contain the canonical and channel-specific
+  containers described above, and each container is fingerprinted separately.
   Agentsview instead builds a per-session composite from
   `session.time_updated`, `project.time_updated`, `MAX(message.time_updated)`,
   and `MAX(part.time_updated)` (`openCodeCompositeMtimeExpr`), and omits the
