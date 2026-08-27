@@ -224,7 +224,8 @@ func (s *Store) GetSessionUsageRows(
 		SELECT session_id, message_ordinal, ts, pricing_ts, source, model,
 			agent, claude_message_id, claude_request_id, source_uuid,
 			usage_dedup_key, input_tokens_norm, output_tokens_norm,
-			cache_create_norm, cache_read_norm, reasoning_tokens_norm,
+			cache_create_norm, cache_create_1h_norm, cache_read_norm,
+			reasoning_tokens_norm,
 			web_search_requests_norm, cost_microdollars, cost_source
 		FROM usage_normalized`
 	rows, err := s.queryContext(ctx, query, queryArgs...)
@@ -240,7 +241,7 @@ func (s *Store) GetSessionUsageRows(
 			&r.sessionID, &r.messageOrdinal, &ts, &pricingTS, &r.source, &r.model,
 			&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
 			&r.usageDedupKey,
-			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
+			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheCr1h, &r.cacheRd,
 			&r.reasoningTok, &r.webSearchRequests, &r.cost, &r.costSource,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb session usage rows: %w", err)
@@ -803,6 +804,7 @@ type duckActivityReportUsageRow struct {
 	inputTok          int
 	outputTok         int
 	cacheCr           int
+	cacheCr1h         int
 	cacheRd           int
 	reasoningTok      int
 	webSearchRequests int
@@ -865,7 +867,7 @@ func (s *Store) activityReportUsage(
 			&r.sessionID, &r.messageOrdinal, &r.ts, &pricingTS, &r.source, &r.model,
 			&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
 			&r.usageDedupKey,
-			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
+			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheCr1h, &r.cacheRd,
 			&r.reasoningTok, &r.webSearchRequests, &r.cost, &r.costSource,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
@@ -1077,6 +1079,12 @@ func duckActivityReportUsageQuery(candidateWhere string) string {
 					WHEN source = 'session' THEN GREATEST(cache_create, 0)
 					ELSE LEAST(GREATEST(cache_create, 0), %[1]d)
 				END AS cache_create_norm,
+					-- 1h-TTL subset of cache_create_norm from the nested
+					-- Anthropic breakdown; only message rows carry it.
+					CASE
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation.ephemeral_1h_input_tokens') AS BIGINT), 0), 0), %[1]d)
+						ELSE 0
+					END AS cache_create_1h_norm,
 					CASE
 						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[1]d)
 						WHEN source = 'session' THEN GREATEST(cache_read, 0)
@@ -1097,8 +1105,8 @@ func duckActivityReportUsageQuery(candidateWhere string) string {
 		SELECT session_id, message_ordinal, ts, pricing_ts, source, model, agent,
 				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 				input_tokens_norm, output_tokens_norm,
-				cache_create_norm, cache_read_norm, reasoning_tokens_norm,
-				web_search_requests_norm,
+				cache_create_norm, cache_create_1h_norm, cache_read_norm,
+				reasoning_tokens_norm, web_search_requests_norm,
 				cost_microdollars, cost_source
 		FROM usage_normalized`,
 		db.MaxPlausibleTokens, candidateWhere)
@@ -1115,7 +1123,7 @@ func duckActivityReportRowStatus(
 ) (savings, cost money.Money, priced, contributes bool, err error) {
 	canonicalModel := duckUsageLookupModel(r.model, r.pricingTS)
 	var explicitCost int64
-	var billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheRd int
+	var billableInput, billableOutput, billableReasoning, billableCacheCr, billableCacheCr1h, billableCacheRd int
 	var billableWebSearch int
 	if r.cost != nil {
 		explicitCost = *r.cost
@@ -1134,6 +1142,7 @@ func duckActivityReportRowStatus(
 		billableOutput = r.outputTok
 		billableReasoning = r.reasoningTok
 		billableCacheCr = r.cacheCr
+		billableCacheCr1h = r.cacheCr1h
 		billableCacheRd = r.cacheRd
 		billableWebSearch = r.webSearchRequests
 	} else {
@@ -1142,13 +1151,14 @@ func duckActivityReportRowStatus(
 		billableOutput = r.outputTok
 		billableReasoning = r.reasoningTok
 		billableCacheCr = r.cacheCr
+		billableCacheCr1h = r.cacheCr1h
 		billableCacheRd = r.cacheRd
 	}
 	cost, savings, _, _, err = duckUsageAggregateResolvedCost(
 		r.model, canonicalModel, duckUsagePricingTimestamp(r.pricingTS),
-		r.inputTok, r.outputTok, r.cacheCr, r.cacheRd,
+		r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
 		billableInput, billableOutput, billableReasoning,
-		billableCacheCr, billableCacheRd, billableWebSearch,
+		billableCacheCr, billableCacheCr1h, billableCacheRd, billableWebSearch,
 		explicitCost,
 		r.cost != nil,
 		db.UsageSourceIsRequestScoped(r.source) ||

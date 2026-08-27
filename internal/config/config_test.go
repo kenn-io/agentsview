@@ -2179,6 +2179,34 @@ output_microdollars_per_mtok = 1
 	assert.Contains(t, err.Error(), "rates must not be negative")
 }
 
+func TestLoadFile_CustomModelPricing1hCacheCreation(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `[custom_model_pricing.model]
+input_microdollars_per_mtok = 10000000
+output_microdollars_per_mtok = 50000000
+cache_creation_microdollars_per_mtok = 12500000
+cache_creation_1h_microdollars_per_mtok = 20000000
+cache_read_microdollars_per_mtok = 1000000
+`)
+
+	cfg := f.LoadMinimal(t)
+	require.Contains(t, cfg.CustomModelPricing, "model")
+	assert.Equal(t, int64(20_000_000),
+		cfg.CustomModelPricing["model"].CacheCreation1hMicrodollarsPerMTok)
+}
+
+func TestLoadFileRejectsNegative1hCustomModelPricing(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `[custom_model_pricing.model]
+input_microdollars_per_mtok = 1
+cache_creation_1h_microdollars_per_mtok = -1
+`)
+
+	err := f.LoadMinimalErr(t)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rates must not be negative")
+}
+
 func TestLoadFileRejectsLegacyCustomModelPricingFields(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, `[custom_model_pricing.model]

@@ -948,6 +948,8 @@ func pgActivityReportRowStatusWithWebSearchRequests(
 		pgUsagePricingTimestamp(r.pricingTS),
 	)
 	inTok, outTok, crTok, rdTok, reasoningTok := pgDailyUsageRowTokens(r)
+	cr1hTok := pgUsageRowCacheCreation1hTokens(
+		r.usageSource, r.tokenJSON, crTok)
 	if r.cost.Valid {
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
@@ -967,7 +969,7 @@ func pgActivityReportRowStatusWithWebSearchRequests(
 	requestScoped := pgUsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(
 		requestScoped,
-		inTok, outTok, reasoningTok, crTok, rdTok)
+		inTok, outTok, reasoningTok, crTok, cr1hTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing pg activity usage for model %q: %w", r.model, err)

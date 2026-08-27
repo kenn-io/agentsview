@@ -516,6 +516,46 @@ func TestDuckGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
 		"an excluded duplicate must not suppress included usage")
 }
 
+// TestDuckActivityReportRowStatus1hCacheWrites prices the 1h-TTL subset of
+// a message row's cache writes at the 1h rate through the activity-report
+// path, and splits the cache-savings math the same way (issue #1452's
+// first sample request).
+func TestDuckActivityReportRowStatus1hCacheWrites(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "claude-fable-5",
+		Rates: export.ModelRates{
+			InputPerMTok:        money.MustParseDollars("10"),
+			OutputPerMTok:       money.MustParseDollars("50"),
+			CacheWritePerMTok:   money.MustParseDollars("12.50"),
+			CacheWrite1hPerMTok: money.MustParseDollars("20"),
+			CacheReadPerMTok:    money.MustParseDollars("1"),
+		},
+	}})
+
+	savings, cost, priced, contributes, err := duckActivityReportRowStatus(
+		duckActivityReportUsageRow{
+			model:     "claude-fable-5",
+			source:    "message",
+			ts:        "2026-08-13T12:00:05Z",
+			inputTok:  2,
+			outputTok: 62,
+			cacheCr:   8989,
+			cacheCr1h: 8989,
+			cacheRd:   15892,
+		},
+		resolver,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+	// 2x10 + 62x50 + 8989x20 + 15892x1 per MTok = $0.198792, matching
+	// Claude Code's own total_cost_usd for this request.
+	assert.Equal(t, money.Money{Microdollars: 198_792}, cost)
+	// Savings: reads earn (10 - 1) x 15892; 1h writes cost (10 - 20) x 8989.
+	assert.Equal(t, money.Money{Microdollars: 53_138}, savings)
+}
+
 func TestDuckActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T) {
 	tests := []struct {
 		name         string

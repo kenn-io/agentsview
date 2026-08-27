@@ -942,28 +942,36 @@ Response excerpt:
     },
     "models": {
       "gpt-5.4": {
-        "matched_pattern": "gpt-5.4",
-        "input_cost_per_mtok": {"microdollars": 2500000},
-        "output_cost_per_mtok": {"microdollars": 15000000},
-        "cache_write_cost_per_mtok": {"microdollars": 0},
-        "cache_read_cost_per_mtok": {"microdollars": 250000},
         "cost_source": "computed",
-        "bands": [
+        "resolutions": [
           {
-            "above_input_tokens": 272000,
-            "input_cost_per_mtok": {"microdollars": 5000000},
-            "output_cost_per_mtok": {"microdollars": 22500000},
+            "priced_model": "gpt-5.4",
+            "matched_pattern": "gpt-5.4",
+            "input_cost_per_mtok": {"microdollars": 2500000},
+            "output_cost_per_mtok": {"microdollars": 15000000},
             "cache_write_cost_per_mtok": {"microdollars": 0},
-            "cache_read_cost_per_mtok": {"microdollars": 500000}
+            "cache_write_1h_cost_per_mtok": {"microdollars": 0},
+            "cache_read_cost_per_mtok": {"microdollars": 250000},
+            "cost_source": "computed",
+            "bands": [
+              {
+                "above_input_tokens": 272000,
+                "input_cost_per_mtok": {"microdollars": 5000000},
+                "output_cost_per_mtok": {"microdollars": 22500000},
+                "cache_write_cost_per_mtok": {"microdollars": 0},
+                "cache_write_1h_cost_per_mtok": {"microdollars": 0},
+                "cache_read_cost_per_mtok": {"microdollars": 500000}
+              }
+            ],
+            "application": {
+              "base_request_count": 14,
+              "aggregate_row_count": 0,
+              "bands": [
+                {"above_input_tokens": 272000, "request_count": 2}
+              ]
+            }
           }
-        ],
-        "application": {
-          "base_request_count": 14,
-          "aggregate_row_count": 0,
-          "bands": [
-            {"above_input_tokens": 272000, "request_count": 2}
-          ]
-        }
+        ]
       }
     }
   },

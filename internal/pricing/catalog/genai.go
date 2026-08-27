@@ -684,19 +684,24 @@ func genAIModelPricing(
 	input, hasInput := prices["input_mtok"]
 	output, hasOutput := prices["output_mtok"]
 	cacheWrite, hasCacheWrite := prices["cache_write_mtok"]
+	cacheWrite1h, hasCacheWrite1h := prices["cache_write_1h_mtok"]
 	cacheRead, hasCacheRead := prices["cache_read_mtok"]
-	if !hasInput && !hasOutput && !hasCacheWrite && !hasCacheRead {
+	if !hasInput && !hasOutput && !hasCacheWrite && !hasCacheWrite1h &&
+		!hasCacheRead {
 		return ModelPricing{}, false
 	}
 	rates := ModelPricing{
-		ModelPattern:         pattern,
-		InputPerMTok:         input.base,
-		OutputPerMTok:        output.base,
-		CacheCreationPerMTok: cacheWrite.base,
-		CacheReadPerMTok:     cacheRead.base,
+		ModelPattern:           pattern,
+		InputPerMTok:           input.base,
+		OutputPerMTok:          output.base,
+		CacheCreationPerMTok:   cacheWrite.base,
+		CacheCreation1hPerMTok: cacheWrite1h.base,
+		CacheReadPerMTok:       cacheRead.base,
 	}
 	thresholds := make(map[int]struct{})
-	for _, rate := range []genAIRate{input, output, cacheWrite, cacheRead} {
+	for _, rate := range []genAIRate{
+		input, output, cacheWrite, cacheWrite1h, cacheRead,
+	} {
 		for _, tier := range rate.tiers {
 			thresholds[tier.start] = struct{}{}
 		}
@@ -708,11 +713,12 @@ func genAIModelPricing(
 	slices.Sort(ordered)
 	for _, threshold := range ordered {
 		rates.Bands = append(rates.Bands, PricingBand{
-			AboveInputTokens:     threshold,
-			InputPerMTok:         input.at(threshold),
-			OutputPerMTok:        output.at(threshold),
-			CacheCreationPerMTok: cacheWrite.at(threshold),
-			CacheReadPerMTok:     cacheRead.at(threshold),
+			AboveInputTokens:       threshold,
+			InputPerMTok:           input.at(threshold),
+			OutputPerMTok:          output.at(threshold),
+			CacheCreationPerMTok:   cacheWrite.at(threshold),
+			CacheCreation1hPerMTok: cacheWrite1h.at(threshold),
+			CacheReadPerMTok:       cacheRead.at(threshold),
 		})
 	}
 	return rates, true

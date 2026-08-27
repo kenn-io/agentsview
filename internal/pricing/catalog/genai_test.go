@@ -60,6 +60,7 @@ func TestParseGenAIPricesResolvesMatchingConditionsAndTiers(t *testing.T) {
 						"input_mtok": {"base": 1, "tiers": [{"start": 272000, "price": 2}]},
 						"output_mtok": 6,
 						"cache_write_mtok": 1.25,
+						"cache_write_1h_mtok": 2,
 						"cache_read_mtok": 0.1,
 						"input_audio_mtok": 99
 					}},
@@ -67,6 +68,7 @@ func TestParseGenAIPricesResolvesMatchingConditionsAndTiers(t *testing.T) {
 						"input_mtok": {"base": 0.2, "tiers": [{"start": 272000, "price": 0.4}]},
 						"output_mtok": {"base": 1.2, "tiers": [{"start": 272000, "price": 1.8}]},
 						"cache_write_mtok": 0.25,
+						"cache_write_1h_mtok": {"base": 0.4, "tiers": [{"start": 272000, "price": 0.8}]},
 						"cache_read_mtok": 0.02
 					}}
 				]
@@ -97,6 +99,7 @@ func TestParseGenAIPricesResolvesMatchingConditionsAndTiers(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, money.MustParseDollars("1"), before.InputPerMTok)
 	assert.Equal(t, money.MustParseDollars("6"), before.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("2"), before.CacheCreation1hPerMTok)
 	require.Len(t, before.Bands, 1)
 	assert.Equal(t, 272000, before.Bands[0].AboveInputTokens)
 	assert.Equal(t, money.MustParseDollars("2"), before.Bands[0].InputPerMTok)
@@ -109,9 +112,12 @@ func TestParseGenAIPricesResolvesMatchingConditionsAndTiers(t *testing.T) {
 	require.True(t, ok, "Azure finds the OpenAI model through its fallback provider")
 	assert.Equal(t, money.MustParseDollars("0.2"), after.InputPerMTok)
 	assert.Equal(t, money.MustParseDollars("1.2"), after.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.4"), after.CacheCreation1hPerMTok)
 	require.Len(t, after.Bands, 1)
 	assert.Equal(t, money.MustParseDollars("0.4"), after.Bands[0].InputPerMTok)
 	assert.Equal(t, money.MustParseDollars("1.8"), after.Bands[0].OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.8"),
+		after.Bands[0].CacheCreation1hPerMTok)
 }
 
 func TestGenAIPricesConditionalPrecedenceAndUTCTimeOfDay(t *testing.T) {

@@ -90,6 +90,7 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
+	seedUsageParity1hCacheFixture(t, local)
 
 	syncer, err := New(
 		pgURL, schema, local, "parity-machine", true, SyncOptions{},
@@ -106,26 +107,30 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	want := usageParitySnapshot{
 		Daily: usageParityDaily{
 			Dates:       []string{"2026-08-12"},
-			InputTokens: 57, OutputTokens: 18,
-			CacheCreationTokens: 2, CacheReadTokens: 3,
-			CostMicrodollars: 260_040,
-			Models:           []string{"model-priced", "model-reported", "model-unpriced"},
+			InputTokens: 59, OutputTokens: 80,
+			CacheCreationTokens: 8_991, CacheReadTokens: 15_895,
+			CostMicrodollars: 458_832,
+			Models: []string{
+				"model-1h-cache", "model-priced",
+				"model-reported", "model-unpriced",
+			},
 			SessionCounts: db.UsageSessionCounts{
-				Total:   3,
-				ByAgent: map[string]int{"claude": 2, "hermes": 1},
+				Total:   4,
+				ByAgent: map[string]int{"claude": 3, "hermes": 1},
 			},
 		},
 		Top: []usageParityTopSession{
 			{SessionID: "reported", InputTokens: 30, OutputTokens: 5, TotalTokens: 40, CostMicrodollars: 250_000},
+			{SessionID: "cache-1h", InputTokens: 2, OutputTokens: 62, TotalTokens: 24_945, CostMicrodollars: 198_792},
 			{SessionID: "snapshot-loser", InputTokens: 20, OutputTokens: 10, TotalTokens: 30, CostMicrodollars: 10_040},
 			{SessionID: "blank-timestamp", InputTokens: 7, OutputTokens: 3, TotalTokens: 10},
 		},
 		Counts: db.UsageSessionCounts{
-			Total:     3,
-			ByProject: map[string]int{"project-a": 1, "project-c": 1, "project-d": 1},
-			ByAgent:   map[string]int{"claude": 2, "hermes": 1},
+			Total:     4,
+			ByProject: map[string]int{"project-a": 1, "project-c": 1, "project-d": 1, "project-g": 1},
+			ByAgent:   map[string]int{"claude": 3, "hermes": 1},
 		},
-		MatchingSessionCount: 4,
+		MatchingSessionCount: 5,
 		Session: usageParitySession{
 			SessionID: "snapshot-winner", TotalOutputTokens: 10,
 			PeakContextTokens: 20, HasTokenData: true,
@@ -374,6 +379,34 @@ func seedUsageParityFixture(t testing.TB, local *db.DB) {
 		CacheCreationInputTokens: 2, CacheReadInputTokens: 3, Cost: &reportedCost,
 		OccurredAt: "2026-08-12T11:05:00Z", DedupKey: "reported-usage",
 	}}), "seed reported usage")
+}
+
+// seedUsageParity1hCacheFixture adds issue #1452's first sample request:
+// the nested cache_creation TTL split must price 1h writes at the 1h rate
+// identically on every backend.
+func seedUsageParity1hCacheFixture(t testing.TB, local *db.DB) {
+	t.Helper()
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:           "model-1h-cache",
+		InputPerMTok:           money.Money{Microdollars: 10_000_000},
+		OutputPerMTok:          money.Money{Microdollars: 50_000_000},
+		CacheCreationPerMTok:   money.Money{Microdollars: 12_500_000},
+		CacheCreation1hPerMTok: money.Money{Microdollars: 20_000_000},
+		CacheReadPerMTok:       money.Money{Microdollars: 1_000_000},
+	}}), "seed 1h pricing")
+	session := usageParitySessionFixture(
+		"cache-1h", "project-g", "claude", "2026-08-12T12:30:00Z", 62, 20)
+	require.NoError(t, local.UpsertSession(session), "seed session cache-1h")
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: "cache-1h", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-12T12:31:00Z", Model: "model-1h-cache",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":2,"output_tokens":62,` +
+				`"cache_creation_input_tokens":8989,` +
+				`"cache_read_input_tokens":15892,` +
+				`"cache_creation":{"ephemeral_1h_input_tokens":8989,` +
+				`"ephemeral_5m_input_tokens":0}}`),
+	}}), "seed 1h message")
 }
 
 func usageParitySessionFixture(

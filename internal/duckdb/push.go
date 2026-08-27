@@ -288,15 +288,16 @@ func duckPricingBandInsertStatement(bands []duckModelPricingBand) (string, []any
 	b.WriteString(`INSERT INTO model_pricing_bands (
 		model_pattern, above_input_tokens,
 		input_microdollars_per_mtok, output_microdollars_per_mtok,
-		cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok,
-		updated_at
+		cache_creation_microdollars_per_mtok,
+		cache_creation_1h_microdollars_per_mtok,
+		cache_read_microdollars_per_mtok, updated_at
 	) VALUES `)
-	args := make([]any, 0, len(bands)*7)
+	args := make([]any, 0, len(bands)*8)
 	for i, item := range bands {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		b.WriteString("(?, ?, ?, ?, ?, ?, ?)")
+		b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?)")
 		updatedAt := item.band.UpdatedAt
 		if updatedAt == "" {
 			updatedAt = item.updatedAt
@@ -307,6 +308,7 @@ func duckPricingBandInsertStatement(bands []duckModelPricingBand) (string, []any
 			item.band.InputPerMTok.Microdollars,
 			item.band.OutputPerMTok.Microdollars,
 			item.band.CacheCreationPerMTok.Microdollars,
+			item.band.CacheCreation1hPerMTok.Microdollars,
 			item.band.CacheReadPerMTok.Microdollars,
 			updatedAt,
 		)
@@ -320,19 +322,21 @@ func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
 	var b strings.Builder
 	b.WriteString(`INSERT INTO model_pricing (
 		model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-		cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
+		cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok,
+		cache_read_microdollars_per_mtok, updated_at
 	) VALUES `)
-	args := make([]any, 0, len(prices)*6)
+	args := make([]any, 0, len(prices)*7)
 	for i, p := range prices {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		b.WriteString("(?, ?, ?, ?, ?, ?)")
+		b.WriteString("(?, ?, ?, ?, ?, ?, ?)")
 		args = append(args,
 			p.ModelPattern,
 			p.InputPerMTok.Microdollars,
 			p.OutputPerMTok.Microdollars,
 			p.CacheCreationPerMTok.Microdollars,
+			p.CacheCreation1hPerMTok.Microdollars,
 			p.CacheReadPerMTok.Microdollars,
 			p.UpdatedAt,
 		)
@@ -342,6 +346,7 @@ func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
 		input_microdollars_per_mtok = excluded.input_microdollars_per_mtok,
 		output_microdollars_per_mtok = excluded.output_microdollars_per_mtok,
 		cache_creation_microdollars_per_mtok = excluded.cache_creation_microdollars_per_mtok,
+		cache_creation_1h_microdollars_per_mtok = excluded.cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok = excluded.cache_read_microdollars_per_mtok,
 		updated_at = excluded.updated_at`)
 	return b.String(), args
@@ -352,10 +357,12 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 		ctx,
 		`SELECT p.model_pattern, p.input_microdollars_per_mtok,
 			p.output_microdollars_per_mtok, p.cache_creation_microdollars_per_mtok,
+			p.cache_creation_1h_microdollars_per_mtok,
 			p.cache_read_microdollars_per_mtok, p.updated_at,
 			b.above_input_tokens, b.input_microdollars_per_mtok,
 			b.output_microdollars_per_mtok,
 			b.cache_creation_microdollars_per_mtok,
+			b.cache_creation_1h_microdollars_per_mtok,
 			b.cache_read_microdollars_per_mtok, b.updated_at
 		 FROM model_pricing p
 		 LEFT JOIN model_pricing_bands b ON b.model_pattern = p.model_pattern
@@ -370,19 +377,22 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 	byPattern := make(map[string]int)
 	for rows.Next() {
 		var p db.ModelPricing
-		var threshold, input, output, cacheCreation, cacheRead sql.NullInt64
+		var threshold, input, output, cacheCreation, cacheCreation1h,
+			cacheRead sql.NullInt64
 		var bandUpdatedAt sql.NullString
 		if err := rows.Scan(
 			&p.ModelPattern,
 			&p.InputPerMTok,
 			&p.OutputPerMTok,
 			&p.CacheCreationPerMTok,
+			&p.CacheCreation1hPerMTok,
 			&p.CacheReadPerMTok,
 			&p.UpdatedAt,
 			&threshold,
 			&input,
 			&output,
 			&cacheCreation,
+			&cacheCreation1h,
 			&cacheRead,
 			&bandUpdatedAt,
 		); err != nil {
@@ -403,12 +413,13 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 				)
 			}
 			out[i].Bands = append(out[i].Bands, db.PricingBand{
-				AboveInputTokens:     aboveInputTokens,
-				InputPerMTok:         money.Money{Microdollars: input.Int64},
-				OutputPerMTok:        money.Money{Microdollars: output.Int64},
-				CacheCreationPerMTok: money.Money{Microdollars: cacheCreation.Int64},
-				CacheReadPerMTok:     money.Money{Microdollars: cacheRead.Int64},
-				UpdatedAt:            bandUpdatedAt.String,
+				AboveInputTokens:       aboveInputTokens,
+				InputPerMTok:           money.Money{Microdollars: input.Int64},
+				OutputPerMTok:          money.Money{Microdollars: output.Int64},
+				CacheCreationPerMTok:   money.Money{Microdollars: cacheCreation.Int64},
+				CacheCreation1hPerMTok: money.Money{Microdollars: cacheCreation1h.Int64},
+				CacheReadPerMTok:       money.Money{Microdollars: cacheRead.Int64},
+				UpdatedAt:              bandUpdatedAt.String,
 			})
 		}
 	}
@@ -746,22 +757,24 @@ func duckFallbackPricingRows() []db.ModelPricing {
 		bands := make([]db.PricingBand, len(p.Bands))
 		for j, band := range p.Bands {
 			bands[j] = db.PricingBand{
-				AboveInputTokens:     band.AboveInputTokens,
-				InputPerMTok:         band.InputPerMTok,
-				OutputPerMTok:        band.OutputPerMTok,
-				CacheCreationPerMTok: band.CacheCreationPerMTok,
-				CacheReadPerMTok:     band.CacheReadPerMTok,
-				UpdatedAt:            now,
+				AboveInputTokens:       band.AboveInputTokens,
+				InputPerMTok:           band.InputPerMTok,
+				OutputPerMTok:          band.OutputPerMTok,
+				CacheCreationPerMTok:   band.CacheCreationPerMTok,
+				CacheCreation1hPerMTok: band.CacheCreation1hPerMTok,
+				CacheReadPerMTok:       band.CacheReadPerMTok,
+				UpdatedAt:              now,
 			}
 		}
 		out[i] = db.ModelPricing{
-			ModelPattern:         p.ModelPattern,
-			InputPerMTok:         p.InputPerMTok,
-			OutputPerMTok:        p.OutputPerMTok,
-			CacheCreationPerMTok: p.CacheCreationPerMTok,
-			CacheReadPerMTok:     p.CacheReadPerMTok,
-			UpdatedAt:            now,
-			Bands:                bands,
+			ModelPattern:           p.ModelPattern,
+			InputPerMTok:           p.InputPerMTok,
+			OutputPerMTok:          p.OutputPerMTok,
+			CacheCreationPerMTok:   p.CacheCreationPerMTok,
+			CacheCreation1hPerMTok: p.CacheCreation1hPerMTok,
+			CacheReadPerMTok:       p.CacheReadPerMTok,
+			UpdatedAt:              now,
+			Bands:                  bands,
 		}
 	}
 	return out

@@ -338,6 +338,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     input_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     output_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
+    cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT ''
 );
@@ -349,6 +350,7 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
     input_microdollars_per_mtok BIGINT NOT NULL,
     output_microdollars_per_mtok BIGINT NOT NULL,
     cache_creation_microdollars_per_mtok BIGINT NOT NULL,
+    cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_read_microdollars_per_mtok BIGINT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (model_pattern, above_input_tokens)
@@ -931,6 +933,16 @@ func EnsureSchema(
 
 	// Idempotent column additions for forward compatibility.
 	alters := []columnMigration{
+		{
+			"model_pricing", "cache_creation_1h_microdollars_per_mtok",
+			`cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0`,
+			"adding model_pricing.cache_creation_1h_microdollars_per_mtok",
+		},
+		{
+			"model_pricing_bands", "cache_creation_1h_microdollars_per_mtok",
+			`cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0`,
+			"adding model_pricing_bands.cache_creation_1h_microdollars_per_mtok",
+		},
 		{
 			"sessions", "transcript_revision",
 			`transcript_revision TEXT NOT NULL DEFAULT '0'`,
@@ -2560,6 +2572,7 @@ func CheckSchemaCompat(
 		`SELECT input_microdollars_per_mtok,
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
+			cache_creation_1h_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok
 		 FROM model_pricing LIMIT 0`)
 	if err != nil {
@@ -2579,6 +2592,7 @@ func CheckSchemaCompat(
 			`SELECT model_pattern, above_input_tokens,
 				input_microdollars_per_mtok, output_microdollars_per_mtok,
 				cache_creation_microdollars_per_mtok,
+				cache_creation_1h_microdollars_per_mtok,
 				cache_read_microdollars_per_mtok, updated_at
 			 FROM model_pricing_bands LIMIT 0`)
 		if err != nil {

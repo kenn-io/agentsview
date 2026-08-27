@@ -115,18 +115,20 @@ func (c *usageProbeConn) QueryContext(
 				"input_microdollars_per_mtok",
 				"output_microdollars_per_mtok",
 				"cache_creation_microdollars_per_mtok",
+				"cache_creation_1h_microdollars_per_mtok",
 				"cache_read_microdollars_per_mtok",
 				"updated_at",
 				"above_input_tokens",
 				"band_input_microdollars_per_mtok",
 				"band_output_microdollars_per_mtok",
 				"band_cache_creation_microdollars_per_mtok",
+				"band_cache_creation_1h_microdollars_per_mtok",
 				"band_cache_read_microdollars_per_mtok",
 				"band_updated_at",
 			},
 			values: [][]driver.Value{{
-				"claude-sonnet", int64(3000000), int64(15000000), int64(3750000), int64(300000), "2026-06-08",
-				nil, nil, nil, nil, nil, nil,
+				"claude-sonnet", int64(3000000), int64(15000000), int64(3750000), int64(0), int64(300000), "2026-06-08",
+				nil, nil, nil, nil, nil, nil, nil,
 			}},
 		}, nil
 	}

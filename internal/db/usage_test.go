@@ -1211,6 +1211,172 @@ func TestGetDailyUsage_CacheSavingsUsesPerModelRates(t *testing.T) {
 		"CacheSavings looks like single-rate path; expected per-model math")
 }
 
+// TestGetDailyUsage_Claude1hCacheWritesUseThe1hRate replays issue #1452's
+// sample session: Claude Code persists a nested cache_creation TTL split,
+// and 1h writes bill at the 1h rate (2x input), not the 5m rate.
+func TestGetDailyUsage_Claude1hCacheWritesUseThe1hRate(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:           "claude-fable-5",
+		InputPerMTok:           money.MustParseDollars("10.0"),
+		OutputPerMTok:          money.MustParseDollars("50.0"),
+		CacheCreationPerMTok:   money.MustParseDollars("12.50"),
+		CacheCreation1hPerMTok: money.MustParseDollars("20.0"),
+		CacheReadPerMTok:       money.MustParseDollars("1.00"),
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "s-1h", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-08-13T11:59:00Z")
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "s-1h", Ordinal: 0,
+			Role: "assistant", Timestamp: "2026-08-13T12:00:05Z",
+			Model: "claude-fable-5",
+			TokenUsage: jsontext.Value(
+				`{"input_tokens":2,"output_tokens":62,` +
+					`"cache_creation_input_tokens":8989,` +
+					`"cache_read_input_tokens":15892,` +
+					`"cache_creation":{"ephemeral_1h_input_tokens":8989,` +
+					`"ephemeral_5m_input_tokens":0}}`),
+		},
+		Message{
+			SessionID: "s-1h", Ordinal: 1,
+			Role: "assistant", Timestamp: "2026-08-13T12:01:00Z",
+			Model: "claude-fable-5",
+			TokenUsage: jsontext.Value(
+				`{"input_tokens":2,"output_tokens":6,` +
+					`"cache_creation_input_tokens":77,` +
+					`"cache_read_input_tokens":24881,` +
+					`"cache_creation":{"ephemeral_1h_input_tokens":77,` +
+					`"ephemeral_5m_input_tokens":0}}`),
+		},
+	)
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-08-01", To: "2026-08-31",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+
+	// Request 1: 2x10 + 62x50 + 8989x20 + 15892x1 = $0.198792.
+	// Request 2: 2x10 + 6x50 + 77x20 + 24881x1 = $0.026741.
+	// Total matches Claude Code's own total_cost_usd: $0.225533.
+	assert.Equal(t, money.Money{Microdollars: 225_533},
+		result.Totals.TotalCost, "Totals.TotalCost")
+	// The 5m-rate misprice would read $0.157539; make sure a regression
+	// to the flat rate cannot pass.
+	assert.NotEqual(t, money.Money{Microdollars: 157_539},
+		result.Totals.TotalCost,
+		"cost matches the 5m rate; 1h writes must bill at the 1h rate")
+
+	usage, err := d.GetSessionUsage(ctx, "s-1h", false)
+	requireNoError(t, err, "GetSessionUsage")
+	assert.Equal(t, money.Money{Microdollars: 225_533}, usage.Cost,
+		"per-session cost")
+}
+
+// TestGetDailyUsage_1hCacheWritesSurviveTheExceptionTier shares one Claude
+// message/request identity across two sessions so the dedup group cannot be
+// finalized into daily rollups and must resolve through the
+// usage_rollup_exceptions tier. The surviving fact still bills its 1h
+// cache-write subset at the 1h rate.
+func TestGetDailyUsage_1hCacheWritesSurviveTheExceptionTier(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:           "claude-fable-5",
+		InputPerMTok:           money.MustParseDollars("10.0"),
+		OutputPerMTok:          money.MustParseDollars("50.0"),
+		CacheCreationPerMTok:   money.MustParseDollars("12.50"),
+		CacheCreation1hPerMTok: money.MustParseDollars("20.0"),
+		CacheReadPerMTok:       money.MustParseDollars("1.00"),
+	}}), "UpsertModelPricing")
+
+	usage := jsontext.Value(
+		`{"input_tokens":2,"output_tokens":62,` +
+			`"cache_creation_input_tokens":8989,` +
+			`"cache_read_input_tokens":15892,` +
+			`"cache_creation":{"ephemeral_1h_input_tokens":8989,` +
+			`"ephemeral_5m_input_tokens":0}}`)
+	for i, id := range []string{"s-exc-a", "s-exc-b"} {
+		insertSession(t, d, id, "proj", func(s *Session) {
+			s.Agent = "claude"
+			s.StartedAt = new("2026-08-13T11:59:00Z")
+		})
+		insertMessages(t, d, Message{
+			SessionID: id, Ordinal: 0,
+			Role: "assistant", Timestamp: "2026-08-13T12:00:05Z",
+			Model: "claude-fable-5", TokenUsage: usage,
+			ClaudeMessageID: "shared-1h-message",
+			ClaudeRequestID: "shared-1h-request",
+		})
+		_ = i
+	}
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-08-01", To: "2026-08-31",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+
+	// The replayed snapshot dedups to one billed request:
+	// 2x10 + 62x50 + 8989x20 + 15892x1 = $0.198792.
+	assert.Equal(t, money.Money{Microdollars: 198_792},
+		result.Totals.TotalCost, "Totals.TotalCost")
+	assert.NotEqual(t, money.Money{Microdollars: 131_375},
+		result.Totals.TotalCost,
+		"cost matches the 5m rate; exception-tier facts lost the 1h split")
+}
+
+// TestGetDailyUsage_MixedTTLCacheWritesSplitTheRates prices each TTL
+// portion of one request at its own rate.
+func TestGetDailyUsage_MixedTTLCacheWritesSplitTheRates(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:           "claude-fable-5",
+		InputPerMTok:           money.MustParseDollars("10.0"),
+		OutputPerMTok:          money.MustParseDollars("50.0"),
+		CacheCreationPerMTok:   money.MustParseDollars("12.50"),
+		CacheCreation1hPerMTok: money.MustParseDollars("20.0"),
+		CacheReadPerMTok:       money.MustParseDollars("1.00"),
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "s-mixed", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-08-13T11:59:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "s-mixed", Ordinal: 0,
+		Role: "assistant", Timestamp: "2026-08-13T12:00:05Z",
+		Model: "claude-fable-5",
+		TokenUsage: jsontext.Value(
+			`{"input_tokens":0,"output_tokens":0,` +
+				`"cache_creation_input_tokens":250000,` +
+				`"cache_read_input_tokens":0,` +
+				`"cache_creation":{"ephemeral_1h_input_tokens":100000,` +
+				`"ephemeral_5m_input_tokens":150000}}`),
+	})
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-08-01", To: "2026-08-31",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+
+	// 150k x 12.50 + 100k x 20 per MTok = 1.875 + 2.0 = $3.875.
+	assert.Equal(t, money.MustParseDollars("3.875"),
+		result.Totals.TotalCost, "Totals.TotalCost")
+
+	// Savings treat each portion against the input rate:
+	// 5m: (10 - 12.50) x 0.15 = -0.375; 1h: (10 - 20) x 0.1 = -1.0.
+	assert.Equal(t, money.MustParseDollars("-1.375"),
+		result.Totals.CacheSavings, "Totals.CacheSavings")
+}
+
 func TestGetDailyUsageAgentFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

@@ -236,7 +236,8 @@ The activity report includes the shared report-level `pricing` and `projects`
 blocks. `pricing.models` is keyed by reported model names. Each entry contains
 an aggregate `cost_source` and explicit `resolutions` with `priced_model` and
 effective rate fields such as `input_cost_per_mtok`, `output_cost_per_mtok`,
-`cache_write_cost_per_mtok`, and `cache_read_cost_per_mtok`, plus available
+`cache_write_cost_per_mtok`, `cache_write_1h_cost_per_mtok`, and
+`cache_read_cost_per_mtok`, plus available
 `bands` and report-specific `application` counts. Every project-bearing report
 row contains an opaque `project_key`. `projects` is keyed by that value and
 carries the presentation-only `display_label`; unknown project identity is

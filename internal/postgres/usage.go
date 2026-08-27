@@ -1153,6 +1153,8 @@ func pgDailyUsageAmounts(
 ) {
 	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
 		pgDailyUsageRowTokens(r)
+	cacheCr1hTok := pgUsageRowCacheCreation1hTokens(
+		r.usageSource, r.tokenJSON, cacheCrTok)
 
 	pricedModel, lookup := pricing.ResolveAt(
 		r.model, pgUsageLookupModel(r.model, r.pricingTS),
@@ -1166,7 +1168,8 @@ func pgDailyUsageAmounts(
 	} else {
 		cost, err = rates.CostForTokensScoped(
 			requestScoped,
-			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
+			inputTok, outputTok, reasoningTok, cacheCrTok, cacheCr1hTok,
+			cacheRdTok)
 		if err != nil {
 			return 0, 0, 0, 0, money.Money{}, money.Money{},
 				fmt.Errorf("pricing pg usage row for model %q: %w", r.model, err)
@@ -1200,9 +1203,16 @@ func pgDailyUsageAmounts(
 		return 0, 0, 0, 0, money.Money{}, money.Money{},
 			fmt.Errorf("deriving pg cache creation rate for model %q: %w", r.model, err)
 	}
+	creation1hRate, err := money.Sub(
+		selectedRates.InputPerMTok, selectedRates.EffectiveCacheWrite1hPerMTok())
+	if err != nil {
+		return 0, 0, 0, 0, money.Money{}, money.Money{},
+			fmt.Errorf("deriving pg 1h cache creation rate for model %q: %w", r.model, err)
+	}
 	savings, err = money.SignedCostPerMillion([]money.RatedTokens{
 		{Tokens: int64(cacheRdTok), Rate: readRate},
-		{Tokens: int64(cacheCrTok), Rate: creationRate},
+		{Tokens: int64(cacheCrTok - cacheCr1hTok), Rate: creationRate},
+		{Tokens: int64(cacheCr1hTok), Rate: creation1hRate},
 	})
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{},
@@ -1231,6 +1241,23 @@ func pgDailyUsageRowTokens(
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 	return
+}
+
+// pgUsageRowCacheCreation1hTokens returns the clamped 1h-TTL subset of a
+// message row's cache-write tokens from the nested cache_creation
+// breakdown. Usage events never carry the breakdown. It mirrors
+// db.clampedCacheCreation1hTokens: the flat counter stays authoritative,
+// so the subset never exceeds it.
+func pgUsageRowCacheCreation1hTokens(
+	usageSource, tokenJSON string, cacheCrTok int,
+) int {
+	if usageSource != "message" {
+		return 0
+	}
+	cr1h := pgTokenJSONCount(
+		gjson.Parse(tokenJSON),
+		"cache_creation.ephemeral_1h_input_tokens")
+	return min(cr1h, cacheCrTok)
 }
 
 func pgUsageRowIsRequestScoped(
@@ -1309,6 +1336,8 @@ func pgSessionRowCostWithWebSearchRequests(
 			r.inputTokens, r.outputTokens,
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
+	cr1hTok := pgUsageRowCacheCreation1hTokens(
+		r.usageSource, r.tokenJSON, crTok)
 	pricedModel, lookup := pricing.ResolveAt(
 		r.model, pgUsageLookupModel(r.model, r.pricingTS),
 		pgUsagePricingTimestamp(r.pricingTS),
@@ -1333,7 +1362,7 @@ func pgSessionRowCostWithWebSearchRequests(
 	requestScoped := pgUsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(
 		requestScoped,
-		inTok, outTok, reasoningTok, crTok, rdTok)
+		inTok, outTok, reasoningTok, crTok, cr1hTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing pg session usage for model %q: %w", r.model, err)

@@ -528,7 +528,10 @@ type CustomModelRate struct {
 	InputMicrodollarsPerMTok         int64 `json:"input_microdollars_per_mtok" toml:"input_microdollars_per_mtok"`
 	OutputMicrodollarsPerMTok        int64 `json:"output_microdollars_per_mtok" toml:"output_microdollars_per_mtok"`
 	CacheCreationMicrodollarsPerMTok int64 `json:"cache_creation_microdollars_per_mtok,omitempty" toml:"cache_creation_microdollars_per_mtok"`
-	CacheReadMicrodollarsPerMTok     int64 `json:"cache_read_microdollars_per_mtok,omitempty" toml:"cache_read_microdollars_per_mtok"`
+	// Zero means no separate 1h rate: 1h-TTL cache writes then bill at
+	// cache_creation_microdollars_per_mtok.
+	CacheCreation1hMicrodollarsPerMTok int64 `json:"cache_creation_1h_microdollars_per_mtok,omitempty" toml:"cache_creation_1h_microdollars_per_mtok"`
+	CacheReadMicrodollarsPerMTok       int64 `json:"cache_read_microdollars_per_mtok,omitempty" toml:"cache_read_microdollars_per_mtok"`
 }
 
 func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
@@ -544,7 +547,7 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 			continue
 		}
 		return nil, fmt.Errorf(
-			"%s: unsupported pricing field; use input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
+			"%s: unsupported pricing field; use input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
 			key.String(),
 		)
 	}
@@ -552,6 +555,7 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 		if rate.InputMicrodollarsPerMTok < 0 ||
 			rate.OutputMicrodollarsPerMTok < 0 ||
 			rate.CacheCreationMicrodollarsPerMTok < 0 ||
+			rate.CacheCreation1hMicrodollarsPerMTok < 0 ||
 			rate.CacheReadMicrodollarsPerMTok < 0 {
 			return nil, fmt.Errorf(
 				"custom_model_pricing.%s: rates must not be negative", model)

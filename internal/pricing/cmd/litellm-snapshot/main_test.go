@@ -49,6 +49,32 @@ func TestAppendModelOverlay_DoesNotOverwriteExisting(t *testing.T) {
 	require.Equal(t, 1, count, "no duplicate entries for existing model")
 }
 
+func TestAppendModelOverlay_Carries1hCacheWriteRates(t *testing.T) {
+	byPattern := make(map[string]catalog.ModelPricing)
+	for _, p := range appendModelOverlay(nil) {
+		byPattern[p.ModelPattern] = p
+	}
+
+	// Anthropic bills 1h cache writes at 2x input; every overlaid Claude
+	// model with a 5m rate must carry the matching 1h rate so a
+	// regenerated snapshot prices 1h writes correctly even for models
+	// absent from the upstream catalog.
+	for model, price := range byPattern {
+		if !strings.HasPrefix(model, "claude-") {
+			continue
+		}
+		if price.CacheCreationPerMTok.Microdollars == 0 {
+			continue
+		}
+		assert.Equal(t,
+			2*price.InputPerMTok.Microdollars,
+			price.CacheCreation1hPerMTok.Microdollars,
+			"%s 1h cache-write rate", model)
+	}
+	require.Equal(t, int64(20_000_000),
+		byPattern["claude-fable-5"].CacheCreation1hPerMTok.Microdollars)
+}
+
 func TestComputeVersion_Deterministic(t *testing.T) {
 	data := []byte(`[{"ModelPattern":"test","InputPerMTok":{"microdollars":1000000}}]`)
 	v1 := computeVersion(data)

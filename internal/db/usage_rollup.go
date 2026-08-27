@@ -130,7 +130,9 @@ func writeUsageRatesHash(digest hash.Hash, rates export.ModelRates) {
 	}
 	for _, value := range []int64{
 		rates.InputPerMTok.Microdollars, rates.OutputPerMTok.Microdollars,
-		rates.CacheWritePerMTok.Microdollars, rates.CacheReadPerMTok.Microdollars,
+		rates.CacheWritePerMTok.Microdollars,
+		rates.CacheWrite1hPerMTok.Microdollars,
+		rates.CacheReadPerMTok.Microdollars,
 		int64(len(rates.Bands)),
 	} {
 		writeUsageHashInt64(digest, value)
@@ -144,6 +146,7 @@ func writeUsageRatesHash(digest hash.Hash, rates export.ModelRates) {
 		for _, value := range []int64{
 			int64(band.AboveInputTokens), band.InputPerMTok.Microdollars,
 			band.OutputPerMTok.Microdollars, band.CacheWritePerMTok.Microdollars,
+			band.CacheWrite1hPerMTok.Microdollars,
 			band.CacheReadPerMTok.Microdollars,
 		} {
 			writeUsageHashInt64(digest, value)
@@ -156,8 +159,9 @@ func usageBandRates(rates export.ModelRates) []export.ModelRates {
 	for _, band := range rates.Bands {
 		result = append(result, export.ModelRates{
 			InputPerMTok: band.InputPerMTok, OutputPerMTok: band.OutputPerMTok,
-			CacheWritePerMTok: band.CacheWritePerMTok,
-			CacheReadPerMTok:  band.CacheReadPerMTok,
+			CacheWritePerMTok:   band.CacheWritePerMTok,
+			CacheWrite1hPerMTok: band.CacheWrite1hPerMTok,
+			CacheReadPerMTok:    band.CacheReadPerMTok,
 		})
 	}
 	return result
@@ -166,7 +170,9 @@ func usageBandRates(rates export.ModelRates) []export.ModelRates {
 func validateNonnegativeUsageRates(rates export.ModelRates) error {
 	for _, item := range append([]export.ModelRates{rates}, usageBandRates(rates)...) {
 		if item.InputPerMTok.Microdollars < 0 || item.OutputPerMTok.Microdollars < 0 ||
-			item.CacheWritePerMTok.Microdollars < 0 || item.CacheReadPerMTok.Microdollars < 0 {
+			item.CacheWritePerMTok.Microdollars < 0 ||
+			item.CacheWrite1hPerMTok.Microdollars < 0 ||
+			item.CacheReadPerMTok.Microdollars < 0 {
 			return money.ErrNegative
 		}
 	}
@@ -610,13 +616,14 @@ func installUsageRollupRows(
 	for _, row := range build.Exceptions {
 		fact := row.Fact
 		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions VALUES(
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			installID, row.GroupKind, row.GroupKey, fact.CachedSessionID,
 			fact.FactIndex, fact.SourceSessionID, fact.LocalDate, fact.Fact.Source,
 			fact.Fact.MessageOrdinal, fact.Fact.TimestampMillis, fact.Fact.TimestampNanos,
 			fact.Fact.RawTimestamp, boolInt(fact.Fact.UsesSessionStart), fact.Model,
 			fact.Fact.InputTokens, fact.Fact.OutputTokens, fact.Fact.ReasoningTokens,
-			fact.Fact.CacheCreationTokens, fact.Fact.CacheReadTokens,
+			fact.Fact.CacheCreationTokens, fact.Fact.CacheCreation1hTokens,
+			fact.Fact.CacheReadTokens,
 			fact.Fact.WebSearchRequests, fact.Fact.ReportedCostMicrodollars,
 			fact.Fact.CostSource, boolInt(fact.Fact.RequestScoped), boolInt(fact.IsHeadless),
 			fact.Fact.ClaudeMessageID, fact.Fact.ClaudeRequestID,

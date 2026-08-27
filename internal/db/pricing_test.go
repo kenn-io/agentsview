@@ -46,6 +46,7 @@ func TestMigrationCreatesModelPricingBandsTable(t *testing.T) {
 		"input_microdollars_per_mtok",
 		"output_microdollars_per_mtok",
 		"cache_creation_microdollars_per_mtok",
+		"cache_creation_1h_microdollars_per_mtok",
 		"cache_read_microdollars_per_mtok",
 		"updated_at",
 	}, columns)
@@ -150,6 +151,55 @@ func TestUpsertModelPricing(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("3.75"), got.CacheCreationPerMTok)
 	assert.Equal(t, money.MustParseDollars("0.30"), got.CacheReadPerMTok)
 	assert.NotEmpty(t, got.UpdatedAt, "expected UpdatedAt to be set")
+}
+
+func TestUpsertModelPricingRoundTrips1hCacheCreationRate(t *testing.T) {
+	d := testDB(t)
+
+	prices := []ModelPricing{{
+		ModelPattern:           "claude-fable-5",
+		InputPerMTok:           money.MustParseDollars("10.0"),
+		OutputPerMTok:          money.MustParseDollars("50.0"),
+		CacheCreationPerMTok:   money.MustParseDollars("12.50"),
+		CacheCreation1hPerMTok: money.MustParseDollars("20.0"),
+		CacheReadPerMTok:       money.MustParseDollars("1.00"),
+		Bands: []PricingBand{{
+			AboveInputTokens:       200_000,
+			InputPerMTok:           money.MustParseDollars("20.0"),
+			OutputPerMTok:          money.MustParseDollars("100.0"),
+			CacheCreationPerMTok:   money.MustParseDollars("25.0"),
+			CacheCreation1hPerMTok: money.MustParseDollars("40.0"),
+			CacheReadPerMTok:       money.MustParseDollars("2.00"),
+		}},
+	}}
+	require.NoError(t, d.UpsertModelPricing(prices), "UpsertModelPricing")
+
+	got, err := d.GetModelPricing("claude-fable-5")
+	require.NoError(t, err, "GetModelPricing")
+	require.NotNil(t, got, "expected pricing")
+	assert.Equal(t, money.MustParseDollars("20.0"), got.CacheCreation1hPerMTok)
+	require.Len(t, got.Bands, 1)
+	assert.Equal(t, money.MustParseDollars("40.0"),
+		got.Bands[0].CacheCreation1hPerMTok)
+}
+
+func TestFilterChangedModelPricingDetects1hRateOnlyChange(t *testing.T) {
+	existing := []ModelPricing{{
+		ModelPattern:         "model",
+		InputPerMTok:         money.MustParseDollars("1"),
+		CacheCreationPerMTok: money.MustParseDollars("1.25"),
+	}}
+	desired := []ModelPricing{{
+		ModelPattern:           "model",
+		InputPerMTok:           money.MustParseDollars("1"),
+		CacheCreationPerMTok:   money.MustParseDollars("1.25"),
+		CacheCreation1hPerMTok: money.MustParseDollars("2"),
+	}}
+
+	summary, changed := FilterChangedModelPricing(existing, desired)
+
+	assert.Equal(t, PricingChangeSummary{Total: 1, Changed: 1}, summary)
+	assert.Equal(t, desired, changed)
 }
 
 func TestUpsertModelPricingOverwrites(t *testing.T) {

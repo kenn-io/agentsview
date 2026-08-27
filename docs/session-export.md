@@ -51,6 +51,7 @@ JSON output is one document:
             "input_cost_per_mtok": {"microdollars": 2000000},
             "output_cost_per_mtok": {"microdollars": 8000000},
             "cache_write_cost_per_mtok": {"microdollars": 3000000},
+            "cache_write_1h_cost_per_mtok": {"microdollars": 0},
             "cache_read_cost_per_mtok": {"microdollars": 500000},
             "cost_source": "computed",
             "bands": null,
@@ -289,13 +290,13 @@ reported-to-priced-model resolutions with complete request-pricing bands and
 application counts. Version 5 selects complete Claude snapshots before generic
 deduplication across pagination and session filters, retains earliest-session
 attribution, and includes the maximum observed web-search count in pricing. The
-two transitional releases must not be treated as v1-compatible. There is no
-flag to request an earlier output version.
-Additive fields do not require a bump, but row semantic changes, field type
-changes, sort order changes, cursor semantics changes, required-field meaning
-changes, field removal, pricing digest canonicalization changes, project key
-derivation changes, remote normalization changes, path fallback normalization
-changes, and new closed-enum values require a bump.
+two transitional releases must not be treated as v1-compatible. There is no flag
+to request an earlier output version. Additive fields do not require a bump, but
+row semantic changes, field type changes, sort order changes, cursor semantics
+changes, required-field meaning changes, field removal, pricing digest
+canonicalization changes, project key derivation changes, remote normalization
+changes, path fallback normalization changes, and new closed-enum values require
+a bump.
 
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.

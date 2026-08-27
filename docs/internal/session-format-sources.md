@@ -53,12 +53,19 @@ cost implementation.
 
 Agentsview recognizes the anchored standard field shape
 `input_cost_per_token_above_<N>[k]_tokens`, including the published 200K and
-272K bands, and reads output, cache-creation, and cache-read companions with the
-same suffix. A band applies only when whole-request input is strictly greater
-than its threshold; when several bands exist, the highest eligible threshold
-wins. Additional suffixes for Batch, Flex, Priority, regional, or other service
-tiers are deliberately excluded because stored usage does not identify those
-variants.
+272K bands, and reads output, cache-creation, 1h cache-creation, and cache-read
+companions with the same suffix. The base
+`cache_creation_input_token_cost_above_1hr` key is the 1-hour-TTL cache-write
+rate (2x input for Anthropic models), not a request-pricing band; its own banded
+variants such as `cache_creation_input_token_cost_above_1hr_above_200k_tokens`
+follow the companion-suffix shape. Reverified 2026-08-25 against the pinned
+catalog: `claude-fable-5` publishes `cache_creation_input_token_cost` 1.25e-05
+and `cache_creation_input_token_cost_above_1hr` 2e-05 per token.
+
+A band applies only when whole-request input is strictly greater than its
+threshold; when several bands exist, the highest eligible threshold wins.
+Additional suffixes for Batch, Flex, Priority, regional, or other service tiers
+are deliberately excluded because stored usage does not identify those variants.
 
 Claude and Codex session artifacts provide normalized input, output,
 cache-creation, and cache-read token categories, but they do not supply this
@@ -112,6 +119,18 @@ add an archived or maintained mirror without replacing the original identity.
 - **Usage and cost:** Assistant messages persist input, output, cache-creation,
   and cache-read tokens. Model IDs are present. No authoritative persisted USD
   cost field is consumed; Agentsview prices the tokens from its catalog.
+  Claude Code also persists Anthropic's nested cache-write TTL breakdown
+  verbatim: `message.usage.cache_creation` carries `ephemeral_1h_input_tokens`
+  and `ephemeral_5m_input_tokens`, whose sum matches the flat
+  `cache_creation_input_tokens` counter. Verified 2026-08-25 against Claude
+  Code 2.1.231 transcripts with 1h prompt caching:
+  `claude -p --output-format json` `total_cost_usd` matches hand math only
+  when the `ephemeral_1h_input_tokens` subset bills at the catalog's 1h
+  cache-write rate (2x input), so Agentsview prices that subset at
+  `cache_creation_input_token_cost_above_1hr` and the remainder at the 5m
+  rate. The flat counter stays authoritative: the nested subset is clamped to
+  it, and an absent or malformed breakdown falls back to the 5m rate for the
+  whole write total (issue #1452).
 - **Server tool use (web search):** Anthropic bills server-side web search at
   $10 per 1,000 requests on top of tokens and reports the count in
   `message.usage.server_tool_use.web_search_requests`, which Claude Code
@@ -1293,17 +1312,17 @@ add an archived or maintained mirror without replacing the original identity.
 - **Format:** Legacy JSONL plus companion metadata JSON, and newer SQLite
   session databases.
 
-  The issue-reported current layout uses
-  `~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl` or the direct
-  `sess_<id>/messages.jsonl` form, with optional `session.json`. Agentsview
-  admits only these exact producer-relative shapes: one workspace segment,
-  no `.history` or `snapshots` workspace, a valid `sess_<id>` directory, and
-  no nested session directory. It preserves the literal `sess_<id>` identity
-  and maps user, assistant, tool-call, and tool-result envelope fields;
-  unknown and malformed records are ignored. This observed layout has no
-  pinned producer schema source. For duplicate IDs, SQLite outranks current
-  JSONL, current outranks legacy JSONL, configured root order breaks ties
-  within a class, and recency then canonical path provide deterministic ties.
+    The issue-reported current layout uses
+    `~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl` or the direct
+    `sess_<id>/messages.jsonl` form, with optional `session.json`. Agentsview
+    admits only these exact producer-relative shapes: one workspace segment, no
+    `.history` or `snapshots` workspace, a valid `sess_<id>` directory, and no
+    nested session directory. It preserves the literal `sess_<id>` identity and
+    maps user, assistant, tool-call, and tool-result envelope fields; unknown
+    and malformed records are ignored. This observed layout has no pinned
+    producer schema source. For duplicate IDs, SQLite outranks current JSONL,
+    current outranks legacy JSONL, configured root order breaks ties within a
+    class, and recency then canonical path provide deterministic ties.
 
 - **Evidence:** `documentation`.
 

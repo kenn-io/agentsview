@@ -1327,11 +1327,12 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 		r.model, usageLookupModel(r.model, r.pricingTS),
 		usagePricingTimestamp(r.pricingTS),
 	)
-	var inTok, outTok, crTok, rdTok int
+	var inTok, outTok, crTok, cr1hTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
 		inTok, outTok, crTok, rdTok, reasoningTok =
 			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		cr1hTok = clampedCacheCreation1hTokens(r.tokenJSON)
 	} else {
 		inTok, outTok, crTok, rdTok = usageEventRowTokens(
 			r.usageSource,
@@ -1358,7 +1359,7 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(
 		requestScoped,
-		inTok, outTok, reasoningTok, crTok, rdTok)
+		inTok, outTok, reasoningTok, crTok, cr1hTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)

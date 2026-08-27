@@ -93,6 +93,67 @@ func TestParseTokenUsage(t *testing.T) {
 			raw:  `{"reasoning_tokens":17}`,
 			want: ParsedTokenUsage{ReasoningTokens: 17},
 		},
+		{
+			name: "nested cache creation 1h breakdown",
+			raw: `{"input_tokens":2,"output_tokens":62,` +
+				`"cache_creation_input_tokens":8989,` +
+				`"cache_read_input_tokens":15892,` +
+				`"cache_creation":{"ephemeral_1h_input_tokens":8989,` +
+				`"ephemeral_5m_input_tokens":0}}`,
+			want: ParsedTokenUsage{
+				InputTokens: 2, OutputTokens: 62,
+				CacheCreationTokens: 8989, CacheCreation1hTokens: 8989,
+				CacheReadTokens: 15892,
+			},
+		},
+		{
+			name: "mixed cache creation TTLs",
+			raw: `{"cache_creation_input_tokens":250,` +
+				`"cache_creation":{"ephemeral_5m_input_tokens":150,` +
+				`"ephemeral_1h_input_tokens":100}}`,
+			want: ParsedTokenUsage{
+				CacheCreationTokens: 250, CacheCreation1hTokens: 100,
+			},
+		},
+		{
+			name: "1h breakdown clamped to the flat total",
+			raw: `{"cache_creation":{"ephemeral_1h_input_tokens":500},` +
+				`"cache_creation_input_tokens":250}`,
+			want: ParsedTokenUsage{
+				CacheCreationTokens: 250, CacheCreation1hTokens: 250,
+			},
+		},
+		{
+			name: "1h breakdown without a flat total reads as zero",
+			raw:  `{"cache_creation":{"ephemeral_1h_input_tokens":500}}`,
+			want: ParsedTokenUsage{},
+		},
+		{
+			name: "5m-only breakdown leaves the 1h count zero",
+			raw: `{"cache_creation_input_tokens":77,` +
+				`"cache_creation":{"ephemeral_5m_input_tokens":77}}`,
+			want: ParsedTokenUsage{CacheCreationTokens: 77},
+		},
+		{
+			name: "negative and string 1h counts",
+			raw: `{"cache_creation_input_tokens":50,` +
+				`"cache_creation":{"ephemeral_1h_input_tokens":"-3"}}`,
+			want: ParsedTokenUsage{CacheCreationTokens: 50},
+		},
+		{
+			name: "string-number 1h count is accepted",
+			raw: `{"cache_creation_input_tokens":50,` +
+				`"cache_creation":{"ephemeral_1h_input_tokens":"20"}}`,
+			want: ParsedTokenUsage{
+				CacheCreationTokens: 50, CacheCreation1hTokens: 20,
+			},
+		},
+		{
+			name: "truncated nested breakdown is ignored",
+			raw: `{"cache_creation_input_tokens":50,` +
+				`"cache_creation":{"ephemeral_1h_input_tokens":20`,
+			want: ParsedTokenUsage{CacheCreationTokens: 50},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -104,7 +165,9 @@ func TestParseTokenUsage(t *testing.T) {
 func TestFromMessage(t *testing.T) {
 	fact, ok := FromMessage(MessageInput{
 		Ordinal: 4, Role: "assistant", Timestamp: "2024-01-01T00:00:00Z",
-		Model: "claude-test", TokenUsage: `{"input_tokens":10,"reasoning_tokens":2}`,
+		Model: "claude-test", TokenUsage: `{"input_tokens":10,"reasoning_tokens":2,` +
+			`"cache_creation_input_tokens":30,` +
+			`"cache_creation":{"ephemeral_1h_input_tokens":12}}`,
 		ClaudeMessageID: "msg-1", ClaudeRequestID: "req-1", SourceUUID: "source-1",
 	})
 	require.True(t, ok)
@@ -117,6 +180,7 @@ func TestFromMessage(t *testing.T) {
 		RawTimestamp: "2024-01-01T00:00:00Z",
 		Model:        "claude-test",
 		InputTokens:  10, ReasoningTokens: 2,
+		CacheCreationTokens: 30, CacheCreation1hTokens: 12,
 		RequestScoped:   true,
 		ClaudeMessageID: "msg-1", ClaudeRequestID: "req-1",
 		SourceUUID: "source-1", TokenEligible: true, ActivityEligible: true,

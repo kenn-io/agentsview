@@ -479,20 +479,22 @@ func fallbackPricingRates(
 		bands := make([]export.PricingBand, len(p.Bands))
 		for i, band := range p.Bands {
 			bands[i] = export.PricingBand{
-				AboveInputTokens:  band.AboveInputTokens,
-				InputPerMTok:      band.InputPerMTok,
-				OutputPerMTok:     band.OutputPerMTok,
-				CacheWritePerMTok: band.CacheCreationPerMTok,
-				CacheReadPerMTok:  band.CacheReadPerMTok,
+				AboveInputTokens:    band.AboveInputTokens,
+				InputPerMTok:        band.InputPerMTok,
+				OutputPerMTok:       band.OutputPerMTok,
+				CacheWritePerMTok:   band.CacheCreationPerMTok,
+				CacheWrite1hPerMTok: band.CacheCreation1hPerMTok,
+				CacheReadPerMTok:    band.CacheReadPerMTok,
 			}
 		}
 		rates[p.ModelPattern] = export.ModelRates{
-			InputPerMTok:      p.InputPerMTok,
-			OutputPerMTok:     p.OutputPerMTok,
-			CacheWritePerMTok: p.CacheCreationPerMTok,
-			CacheReadPerMTok:  p.CacheReadPerMTok,
-			Source:            export.PricingRowSourceEmbedded,
-			Bands:             bands,
+			InputPerMTok:        p.InputPerMTok,
+			OutputPerMTok:       p.OutputPerMTok,
+			CacheWritePerMTok:   p.CacheCreationPerMTok,
+			CacheWrite1hPerMTok: p.CacheCreation1hPerMTok,
+			CacheReadPerMTok:    p.CacheReadPerMTok,
+			Source:              export.PricingRowSourceEmbedded,
+			Bands:               bands,
 		}
 	}
 	for model, rate := range custom {
@@ -505,6 +507,9 @@ func fallbackPricingRates(
 			},
 			CacheWritePerMTok: money.Money{
 				Microdollars: rate.CacheCreationMicrodollarsPerMTok,
+			},
+			CacheWrite1hPerMTok: money.Money{
+				Microdollars: rate.CacheCreation1hMicrodollarsPerMTok,
 			},
 			CacheReadPerMTok: money.Money{
 				Microdollars: rate.CacheReadMicrodollarsPerMTok,

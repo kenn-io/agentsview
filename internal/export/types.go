@@ -46,24 +46,28 @@ type ModelPricingProvenance struct {
 }
 
 type EffectiveModelRate struct {
-	PricedModel           string             `json:"priced_model"`
-	MatchedPattern        *string            `json:"matched_pattern"`
-	InputCostPerMTok      money.Money        `json:"input_cost_per_mtok"`
-	OutputCostPerMTok     money.Money        `json:"output_cost_per_mtok"`
-	CacheWriteCostPerMTok money.Money        `json:"cache_write_cost_per_mtok"`
-	CacheReadCostPerMTok  money.Money        `json:"cache_read_cost_per_mtok"`
-	CostSource            CostSource         `json:"cost_source"`
-	Bands                 []PricingBand      `json:"bands"`
-	Application           PricingApplication `json:"application"`
+	PricedModel           string      `json:"priced_model"`
+	MatchedPattern        *string     `json:"matched_pattern"`
+	InputCostPerMTok      money.Money `json:"input_cost_per_mtok"`
+	OutputCostPerMTok     money.Money `json:"output_cost_per_mtok"`
+	CacheWriteCostPerMTok money.Money `json:"cache_write_cost_per_mtok"`
+	// Zero means no separate 1h cache-write rate; 1h writes bill at
+	// cache_write_cost_per_mtok.
+	CacheWrite1hCostPerMTok money.Money        `json:"cache_write_1h_cost_per_mtok"`
+	CacheReadCostPerMTok    money.Money        `json:"cache_read_cost_per_mtok"`
+	CostSource              CostSource         `json:"cost_source"`
+	Bands                   []PricingBand      `json:"bands"`
+	Application             PricingApplication `json:"application"`
 }
 
 type PricingBand struct {
-	AboveInputTokens  int         `json:"above_input_tokens"`
-	InputPerMTok      money.Money `json:"input_cost_per_mtok"`
-	OutputPerMTok     money.Money `json:"output_cost_per_mtok"`
-	CacheWritePerMTok money.Money `json:"cache_write_cost_per_mtok"`
-	CacheReadPerMTok  money.Money `json:"cache_read_cost_per_mtok"`
-	UpdatedAt         *time.Time  `json:"-"`
+	AboveInputTokens    int         `json:"above_input_tokens"`
+	InputPerMTok        money.Money `json:"input_cost_per_mtok"`
+	OutputPerMTok       money.Money `json:"output_cost_per_mtok"`
+	CacheWritePerMTok   money.Money `json:"cache_write_cost_per_mtok"`
+	CacheWrite1hPerMTok money.Money `json:"cache_write_1h_cost_per_mtok"`
+	CacheReadPerMTok    money.Money `json:"cache_read_cost_per_mtok"`
+	UpdatedAt           *time.Time  `json:"-"`
 }
 
 type PricingApplication struct {

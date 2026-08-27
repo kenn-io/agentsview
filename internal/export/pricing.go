@@ -21,14 +21,27 @@ const (
 	PricingRowSourceEmbedded PricingRowSource = "embedded"
 )
 
+// ModelRates prices one model. CacheWrite1hPerMTok bills the 1-hour-TTL
+// subset of cache writes; zero means no separate 1h rate is published and
+// 1h writes bill at CacheWritePerMTok.
 type ModelRates struct {
-	InputPerMTok      money.Money
-	OutputPerMTok     money.Money
-	CacheWritePerMTok money.Money
-	CacheReadPerMTok  money.Money
-	UpdatedAt         *time.Time
-	Source            PricingRowSource
-	Bands             []PricingBand
+	InputPerMTok        money.Money
+	OutputPerMTok       money.Money
+	CacheWritePerMTok   money.Money
+	CacheWrite1hPerMTok money.Money
+	CacheReadPerMTok    money.Money
+	UpdatedAt           *time.Time
+	Source              PricingRowSource
+	Bands               []PricingBand
+}
+
+// EffectiveCacheWrite1hPerMTok returns the rate that 1h-TTL cache writes
+// bill at: the published 1h rate, or the base write rate when none exists.
+func (r ModelRates) EffectiveCacheWrite1hPerMTok() money.Money {
+	if r.CacheWrite1hPerMTok.Microdollars != 0 {
+		return r.CacheWrite1hPerMTok
+	}
+	return r.CacheWritePerMTok
 }
 
 func (r ModelRates) RatesForTokens(
@@ -43,18 +56,20 @@ func (r ModelRates) RatesForTokens(
 		updatedAt = band.UpdatedAt
 	}
 	return ModelRates{
-		InputPerMTok:      band.InputPerMTok,
-		OutputPerMTok:     band.OutputPerMTok,
-		CacheWritePerMTok: band.CacheWritePerMTok,
-		CacheReadPerMTok:  band.CacheReadPerMTok,
-		UpdatedAt:         updatedAt,
-		Source:            r.Source,
-		Bands:             r.Bands,
+		InputPerMTok:        band.InputPerMTok,
+		OutputPerMTok:       band.OutputPerMTok,
+		CacheWritePerMTok:   band.CacheWritePerMTok,
+		CacheWrite1hPerMTok: band.CacheWrite1hPerMTok,
+		CacheReadPerMTok:    band.CacheReadPerMTok,
+		UpdatedAt:           updatedAt,
+		Source:              r.Source,
+		Bands:               r.Bands,
 	}
 }
 
 func (r ModelRates) CostForTokens(
-	inputTokens, outputTokens, reasoningTokens, cacheWriteTokens, cacheReadTokens int,
+	inputTokens, outputTokens, reasoningTokens,
+	cacheWriteTokens, cacheWrite1hTokens, cacheReadTokens int,
 ) (money.Money, error) {
 	return r.CostForTokensScoped(
 		true,
@@ -62,13 +77,15 @@ func (r ModelRates) CostForTokens(
 		outputTokens,
 		reasoningTokens,
 		cacheWriteTokens,
+		cacheWrite1hTokens,
 		cacheReadTokens,
 	)
 }
 
 func (r ModelRates) CostForTokensScoped(
 	requestScoped bool,
-	inputTokens, outputTokens, reasoningTokens, cacheWriteTokens, cacheReadTokens int,
+	inputTokens, outputTokens, reasoningTokens,
+	cacheWriteTokens, cacheWrite1hTokens, cacheReadTokens int,
 ) (money.Money, error) {
 	if requestScoped {
 		r = r.RatesForTokens(inputTokens, cacheWriteTokens, cacheReadTokens)
@@ -79,10 +96,16 @@ func (r ModelRates) CostForTokensScoped(
 	if billableOutputTokens == 0 {
 		billableOutputTokens = reasoningTokens
 	}
+	// cacheWrite1hTokens is a TTL breakdown of cacheWriteTokens, never
+	// additional billable volume.
+	if cacheWrite1hTokens > cacheWriteTokens {
+		cacheWrite1hTokens = cacheWriteTokens
+	}
 	return money.CostPerMillion([]money.RatedTokens{
 		{Tokens: int64(inputTokens), Rate: r.InputPerMTok},
 		{Tokens: int64(billableOutputTokens), Rate: r.OutputPerMTok},
-		{Tokens: int64(cacheWriteTokens), Rate: r.CacheWritePerMTok},
+		{Tokens: int64(cacheWriteTokens - cacheWrite1hTokens), Rate: r.CacheWritePerMTok},
+		{Tokens: int64(cacheWrite1hTokens), Rate: r.EffectiveCacheWrite1hPerMTok()},
 		{Tokens: int64(cacheReadTokens), Rate: r.CacheReadPerMTok},
 	})
 }
@@ -145,12 +168,13 @@ type pricingRecord struct {
 }
 
 type pricingRecordKey struct {
-	pricedModel                          string
-	pattern                              string
-	ok                                   bool
-	source                               PricingRowSource
-	input, output, cacheWrite, cacheRead int64
-	bands                                string
+	pricedModel                         string
+	pattern                             string
+	ok                                  bool
+	source                              PricingRowSource
+	input, output                       int64
+	cacheWrite, cacheWrite1h, cacheRead int64
+	bands                               string
 }
 
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
@@ -284,13 +308,14 @@ func (r *PricingResolver) resolveGenAI(
 			}
 			return candidate.priced, PricingLookup{
 				Rates: ModelRates{
-					InputPerMTok:      resolved.InputPerMTok,
-					OutputPerMTok:     resolved.OutputPerMTok,
-					CacheWritePerMTok: resolved.CacheCreationPerMTok,
-					CacheReadPerMTok:  resolved.CacheReadPerMTok,
-					UpdatedAt:         r.genAIUpdatedAt,
-					Source:            r.genAISource,
-					Bands:             genAIPricingBands(resolved.Bands),
+					InputPerMTok:        resolved.InputPerMTok,
+					OutputPerMTok:       resolved.OutputPerMTok,
+					CacheWritePerMTok:   resolved.CacheCreationPerMTok,
+					CacheWrite1hPerMTok: resolved.CacheCreation1hPerMTok,
+					CacheReadPerMTok:    resolved.CacheReadPerMTok,
+					UpdatedAt:           r.genAIUpdatedAt,
+					Source:              r.genAISource,
+					Bands:               genAIPricingBands(resolved.Bands),
 				},
 				Pattern: resolved.ModelPattern,
 				OK:      true,
@@ -312,11 +337,12 @@ func genAIPricingBands(bands []pricingpkg.PricingBand) []PricingBand {
 	out := make([]PricingBand, len(bands))
 	for i, band := range bands {
 		out[i] = PricingBand{
-			AboveInputTokens:  band.AboveInputTokens,
-			InputPerMTok:      band.InputPerMTok,
-			OutputPerMTok:     band.OutputPerMTok,
-			CacheWritePerMTok: band.CacheCreationPerMTok,
-			CacheReadPerMTok:  band.CacheReadPerMTok,
+			AboveInputTokens:    band.AboveInputTokens,
+			InputPerMTok:        band.InputPerMTok,
+			OutputPerMTok:       band.OutputPerMTok,
+			CacheWritePerMTok:   band.CacheCreationPerMTok,
+			CacheWrite1hPerMTok: band.CacheCreation1hPerMTok,
+			CacheReadPerMTok:    band.CacheReadPerMTok,
 		}
 	}
 	return out
@@ -428,15 +454,16 @@ func (r *PricingResolver) record(
 		r.recorded[reportedModel] = byPricedModel
 	}
 	key := pricingRecordKey{
-		pricedModel: pricedModel,
-		pattern:     lookup.Pattern,
-		ok:          lookup.OK,
-		source:      lookup.Rates.Source,
-		input:       lookup.Rates.InputPerMTok.Microdollars,
-		output:      lookup.Rates.OutputPerMTok.Microdollars,
-		cacheWrite:  lookup.Rates.CacheWritePerMTok.Microdollars,
-		cacheRead:   lookup.Rates.CacheReadPerMTok.Microdollars,
-		bands:       r.recordedBandsKey(lookup.Rates.Bands),
+		pricedModel:  pricedModel,
+		pattern:      lookup.Pattern,
+		ok:           lookup.OK,
+		source:       lookup.Rates.Source,
+		input:        lookup.Rates.InputPerMTok.Microdollars,
+		output:       lookup.Rates.OutputPerMTok.Microdollars,
+		cacheWrite:   lookup.Rates.CacheWritePerMTok.Microdollars,
+		cacheWrite1h: lookup.Rates.CacheWrite1hPerMTok.Microdollars,
+		cacheRead:    lookup.Rates.CacheReadPerMTok.Microdollars,
+		bands:        r.recordedBandsKey(lookup.Rates.Bands),
 	}
 	rec := byPricedModel[key]
 	if rec == nil {
@@ -505,6 +532,7 @@ func pricingBandEqual(a, b PricingBand) bool {
 		a.InputPerMTok != b.InputPerMTok ||
 		a.OutputPerMTok != b.OutputPerMTok ||
 		a.CacheWritePerMTok != b.CacheWritePerMTok ||
+		a.CacheWrite1hPerMTok != b.CacheWrite1hPerMTok ||
 		a.CacheReadPerMTok != b.CacheReadPerMTok {
 		return false
 	}
@@ -516,6 +544,7 @@ func pricingLookupEqual(a, b PricingLookup) bool {
 		a.Rates.InputPerMTok != b.Rates.InputPerMTok ||
 		a.Rates.OutputPerMTok != b.Rates.OutputPerMTok ||
 		a.Rates.CacheWritePerMTok != b.Rates.CacheWritePerMTok ||
+		a.Rates.CacheWrite1hPerMTok != b.Rates.CacheWrite1hPerMTok ||
 		a.Rates.CacheReadPerMTok != b.Rates.CacheReadPerMTok ||
 		a.Rates.Source != b.Rates.Source ||
 		!pricingTimeEqual(a.Rates.UpdatedAt, b.Rates.UpdatedAt) ||
@@ -574,12 +603,13 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 			modelComputed = modelComputed || rec.computed
 			modelReported = modelReported || rec.reported
 			rate := EffectiveModelRate{
-				PricedModel:           key.pricedModel,
-				InputCostPerMTok:      rec.lookup.Rates.InputPerMTok,
-				OutputCostPerMTok:     rec.lookup.Rates.OutputPerMTok,
-				CacheWriteCostPerMTok: rec.lookup.Rates.CacheWritePerMTok,
-				CacheReadCostPerMTok:  rec.lookup.Rates.CacheReadPerMTok,
-				CostSource:            source,
+				PricedModel:             key.pricedModel,
+				InputCostPerMTok:        rec.lookup.Rates.InputPerMTok,
+				OutputCostPerMTok:       rec.lookup.Rates.OutputPerMTok,
+				CacheWriteCostPerMTok:   rec.lookup.Rates.CacheWritePerMTok,
+				CacheWrite1hCostPerMTok: rec.lookup.Rates.CacheWrite1hPerMTok,
+				CacheReadCostPerMTok:    rec.lookup.Rates.CacheReadPerMTok,
+				CostSource:              source,
 				Bands: append(
 					[]PricingBand(nil), rec.lookup.Rates.Bands...),
 				Application: pricingApplicationForRecord(rec),
@@ -635,6 +665,7 @@ func comparePricingRecordKey(a, b pricingRecordKey) int {
 		cmp.Compare(a.input, b.input),
 		cmp.Compare(a.output, b.output),
 		cmp.Compare(a.cacheWrite, b.cacheWrite),
+		cmp.Compare(a.cacheWrite1h, b.cacheWrite1h),
 		cmp.Compare(a.cacheRead, b.cacheRead),
 		strings.Compare(a.bands, b.bands),
 	} {

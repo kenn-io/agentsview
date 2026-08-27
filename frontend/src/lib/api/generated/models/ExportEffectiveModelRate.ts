@@ -9,6 +9,7 @@ export type ExportEffectiveModelRate = {
   application: ExportPricingApplication;
   bands: Array<ExportPricingBand> | null;
   cache_read_cost_per_mtok: MoneyMoney;
+  cache_write_1h_cost_per_mtok: MoneyMoney;
   cache_write_cost_per_mtok: MoneyMoney;
   cost_source: string;
   input_cost_per_mtok: MoneyMoney;

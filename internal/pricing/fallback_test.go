@@ -26,6 +26,7 @@ func assertFlatPricing(t *testing.T, want, got ModelPricing) {
 	assert.Equal(t, want.InputPerMTok, got.InputPerMTok)
 	assert.Equal(t, want.OutputPerMTok, got.OutputPerMTok)
 	assert.Equal(t, want.CacheCreationPerMTok, got.CacheCreationPerMTok)
+	assert.Equal(t, want.CacheCreation1hPerMTok, got.CacheCreation1hPerMTok)
 	assert.Equal(t, want.CacheReadPerMTok, got.CacheReadPerMTok)
 	assert.Empty(t, got.Bands)
 }
@@ -43,11 +44,12 @@ func TestFallbackPricing_Opus46Rates(t *testing.T) {
 
 	// Source: https://claude.com/pricing — Opus 4.5/4.6 tier.
 	want := ModelPricing{
-		ModelPattern:         "claude-opus-4-6",
-		InputPerMTok:         testRate("5"),
-		OutputPerMTok:        testRate("25"),
-		CacheCreationPerMTok: testRate("6.25"),
-		CacheReadPerMTok:     testRate("0.50"),
+		ModelPattern:           "claude-opus-4-6",
+		InputPerMTok:           testRate("5"),
+		OutputPerMTok:          testRate("25"),
+		CacheCreationPerMTok:   testRate("6.25"),
+		CacheCreation1hPerMTok: testRate("10"),
+		CacheReadPerMTok:       testRate("0.50"),
 	}
 	assertFlatPricing(t, want, *got)
 }
@@ -67,11 +69,12 @@ func TestFallbackPricing_Opus47Rates(t *testing.T) {
 	// it, but the fallback ships it too so offline and fresh-seed
 	// pricing covers the whole current Opus generation.
 	want := ModelPricing{
-		ModelPattern:         "claude-opus-4-7",
-		InputPerMTok:         testRate("5"),
-		OutputPerMTok:        testRate("25"),
-		CacheCreationPerMTok: testRate("6.25"),
-		CacheReadPerMTok:     testRate("0.50"),
+		ModelPattern:           "claude-opus-4-7",
+		InputPerMTok:           testRate("5"),
+		OutputPerMTok:          testRate("25"),
+		CacheCreationPerMTok:   testRate("6.25"),
+		CacheCreation1hPerMTok: testRate("10"),
+		CacheReadPerMTok:       testRate("0.50"),
 	}
 	assertFlatPricing(t, want, *got)
 }
@@ -91,11 +94,12 @@ func TestFallbackPricing_Opus48Rates(t *testing.T) {
 	// not yet in the LiteLLM catalog, so the shipped fallback must
 	// price it at the current Opus tier.
 	want := ModelPricing{
-		ModelPattern:         "claude-opus-4-8",
-		InputPerMTok:         testRate("5"),
-		OutputPerMTok:        testRate("25"),
-		CacheCreationPerMTok: testRate("6.25"),
-		CacheReadPerMTok:     testRate("0.50"),
+		ModelPattern:           "claude-opus-4-8",
+		InputPerMTok:           testRate("5"),
+		OutputPerMTok:          testRate("25"),
+		CacheCreationPerMTok:   testRate("6.25"),
+		CacheCreation1hPerMTok: testRate("10"),
+		CacheReadPerMTok:       testRate("0.50"),
 	}
 	assertFlatPricing(t, want, *got)
 }
@@ -115,11 +119,12 @@ func TestFallbackPricing_Fable5Rates(t *testing.T) {
 	// Fable 5 launched at double the Opus 4.8 rates and is not yet in
 	// the LiteLLM catalog, so the shipped fallback must price it.
 	want := ModelPricing{
-		ModelPattern:         "claude-fable-5",
-		InputPerMTok:         testRate("10"),
-		OutputPerMTok:        testRate("50"),
-		CacheCreationPerMTok: testRate("12.50"),
-		CacheReadPerMTok:     testRate("1"),
+		ModelPattern:           "claude-fable-5",
+		InputPerMTok:           testRate("10"),
+		OutputPerMTok:          testRate("50"),
+		CacheCreationPerMTok:   testRate("12.50"),
+		CacheCreation1hPerMTok: testRate("20"),
+		CacheReadPerMTok:       testRate("1"),
 	}
 	assertFlatPricing(t, want, *got)
 }
@@ -285,6 +290,33 @@ func TestDecodeFallbackSnapshotFromFS(t *testing.T) {
 	require.Len(t, got.Models, 2)
 	assert.Equal(t, "a-model", got.Models[0].ModelPattern)
 	assert.Equal(t, "z-model", got.Models[1].ModelPattern)
+}
+
+func TestDecodeFallbackSnapshotFromFS_Preserves1hCacheWriteRate(t *testing.T) {
+	snapshot := []byte(`{
+		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
+		"models": [{
+			"ModelPattern": "claude-fable-5",
+			"InputPerMTok": {"microdollars": 10000000},
+			"OutputPerMTok": {"microdollars": 50000000},
+			"CacheCreationPerMTok": {"microdollars": 12500000},
+			"CacheCreation1hPerMTok": {"microdollars": 20000000},
+			"CacheReadPerMTok": {"microdollars": 1000000}
+		}]
+	}`)
+	fsys := fstest.MapFS{
+		"snapshot/litellm_snapshot.json.gz": &fstest.MapFile{
+			Data: gzipData(t, snapshot),
+		},
+	}
+
+	got, err := decodeFallbackSnapshotFromFS(fsys)
+	require.NoError(t, err)
+	require.Len(t, got.Models, 1)
+	assert.Equal(t, int64(20_000_000),
+		got.Models[0].CacheCreation1hPerMTok.Microdollars,
+		"a regenerated snapshot's 1h cache-write rate must survive decode")
 }
 
 func TestDecodeFallbackSnapshotFromFS_SortsPricingBands(t *testing.T) {

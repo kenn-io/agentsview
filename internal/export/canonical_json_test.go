@@ -176,6 +176,19 @@ func TestEffectivePricingDigestChangesWhenPricingBandChanges(t *testing.T) {
 	assert.NotEqual(t, digest, changedDigest)
 }
 
+func TestEffectivePricingDigestChangesWhen1hCacheWriteRateSet(t *testing.T) {
+	rows := digestFixtureRows(t)
+	changed := digestFixtureRows(t)
+	changed[0].Rates.CacheWrite1hPerMTok = money.MustParseDollars("6")
+
+	digest, err := EffectivePricingDigest(rows)
+	require.NoError(t, err)
+	changedDigest, err := EffectivePricingDigest(changed)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, digest, changedDigest)
+}
+
 func TestEffectivePricingDigestFixture(t *testing.T) {
 	rows := digestFixtureRows(t)
 	canonical, err := canonicalPricingJSON(canonicalPricingRows(rows))

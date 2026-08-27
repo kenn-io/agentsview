@@ -396,6 +396,7 @@ output_microdollars_per_mtok = 800_000
 | `input_microdollars_per_mtok`          | Integer microdollars per million input tokens (defaults to `0` if omitted)  |
 | `output_microdollars_per_mtok`         | Integer microdollars per million output tokens (defaults to `0` if omitted) |
 | `cache_creation_microdollars_per_mtok` | Integer microdollars per million cache-creation tokens (optional)           |
+| `cache_creation_1h_microdollars_per_mtok` | Integer microdollars per million 1-hour-TTL cache-creation tokens (optional; when omitted or `0`, 1h writes bill at `cache_creation_microdollars_per_mtok`) |
 | `cache_read_microdollars_per_mtok`     | Integer microdollars per million cache-read tokens (optional)               |
 
 The table key is the model name as it appears in your session data (match the
@@ -630,6 +631,7 @@ to X" still works.
             "input_cost_per_mtok": {"microdollars": 2500000},
             "output_cost_per_mtok": {"microdollars": 15000000},
             "cache_write_cost_per_mtok": {"microdollars": 0},
+            "cache_write_1h_cost_per_mtok": {"microdollars": 0},
             "cache_read_cost_per_mtok": {"microdollars": 250000},
             "cost_source": "computed",
             "bands": [
@@ -638,6 +640,7 @@ to X" still works.
                 "input_cost_per_mtok": {"microdollars": 5000000},
                 "output_cost_per_mtok": {"microdollars": 22500000},
                 "cache_write_cost_per_mtok": {"microdollars": 0},
+                "cache_write_1h_cost_per_mtok": {"microdollars": 0},
                 "cache_read_cost_per_mtok": {"microdollars": 500000}
               }
             ],
@@ -762,8 +765,11 @@ distinct model names reported in payload rows, not by canonical pricing names or
 every row in the pricing table. Each reported-model entry has an aggregate
 `cost_source` and a `resolutions` array. A resolution reports `priced_model`,
 `matched_pattern`, `input_cost_per_mtok`, `output_cost_per_mtok`,
-`cache_write_cost_per_mtok`, `cache_read_cost_per_mtok`, `cost_source`, `bands`,
-and `application`. Resolutions are sorted by `priced_model` and then
+`cache_write_cost_per_mtok`, `cache_write_1h_cost_per_mtok`,
+`cache_read_cost_per_mtok`, `cost_source`, `bands`, and `application`.
+`cache_write_1h_cost_per_mtok` is the 1-hour-TTL cache-write rate; zero means
+the catalog publishes no separate 1h rate and 1h writes bill at
+`cache_write_cost_per_mtok`. Resolutions are sorted by `priced_model` and then
 `matched_pattern`.
 
 Each `bands` item is a complete rate tuple with an exclusive

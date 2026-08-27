@@ -151,10 +151,12 @@ func (c *pricingProbeConn) QueryContext(
 			"model_pattern", "input_microdollars_per_mtok",
 			"output_microdollars_per_mtok",
 			"cache_creation_microdollars_per_mtok",
+			"cache_creation_1h_microdollars_per_mtok",
 			"cache_read_microdollars_per_mtok", "updated_at",
 			"above_input_tokens", "band_input_microdollars_per_mtok",
 			"band_output_microdollars_per_mtok",
 			"band_cache_creation_microdollars_per_mtok",
+			"band_cache_creation_1h_microdollars_per_mtok",
 			"band_cache_read_microdollars_per_mtok", "band_updated_at",
 		},
 		values: values,
@@ -325,7 +327,7 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 	block := make(chan struct{})
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 		}},
 		block: block,
 	}
@@ -366,8 +368,8 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 
 func TestLoadPricingMapUsesFallbackForSentinelOnlyCatalog(t *testing.T) {
 	state := &pricingProbeState{rows: [][]driver.Value{{
-		"_fallback_version", int64(0), int64(0), int64(0), int64(0), "v1",
-		nil, nil, nil, nil, nil, nil,
+		"_fallback_version", int64(0), int64(0), int64(0), int64(0), int64(0), "v1",
+		nil, nil, nil, nil, nil, nil, nil,
 	}}}
 	store := &Store{pg: newPricingProbeDB(t, state)}
 
@@ -404,7 +406,7 @@ func TestLoadPricingMapUsesEmbeddedGenAIWhenTableMissing(t *testing.T) {
 func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 		}},
 	}
 	pg := newPricingProbeDB(t, state)
@@ -426,7 +428,7 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 	defer unblock()
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 		}},
 		block: block,
 	}
@@ -474,7 +476,7 @@ func TestLoadPricingMapCancelsDBRowsWithCaller(t *testing.T) {
 	defer close(block)
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 		}},
 		block: block,
 		done:  make(chan struct{}),
@@ -511,7 +513,7 @@ func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
 	defer close(releaseCanceledQuery)
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 		}},
 		block:            block,
 		afterCancelBlock: releaseCanceledQuery,
@@ -550,7 +552,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 	defer close(block)
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 		}},
 		block: block,
 	}
@@ -586,7 +588,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 		}},
 	}
 	pg := newPricingProbeDB(t, state)
@@ -595,7 +597,7 @@ func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	first, err := store.loadPricingMap(context.Background())
 	require.NoError(t, err, "first loadPricingMap")
 	state.setRows([][]driver.Value{{
-		"db-model", int64(7000000), int64(2000000), int64(3000000), int64(4000000), "2026-06-08",
+		"db-model", int64(7000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 	}})
 	second, err := store.loadPricingMap(context.Background())
 	require.NoError(t, err, "second loadPricingMap")
@@ -655,19 +657,19 @@ func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
 	}, "call-time")
 
 	assert.Contains(t, query,
-		"VALUES ($1, $2, $3, $4, $5, $6), "+
-			"($7, $8, $9, $10, $11, $12)")
+		"VALUES ($1, $2, $3, $4, $5, $6, $7), "+
+			"($8, $9, $10, $11, $12, $13, $14)")
 	assert.Contains(t, query,
 		"model_pricing.input_microdollars_per_mtok IS DISTINCT FROM")
 	assert.Contains(t, query, "EXCLUDED.input_microdollars_per_mtok")
 	assert.NotContains(t, query,
 		"model_pricing.updated_at IS DISTINCT FROM")
 	assert.Contains(t, query, "RETURNING model_pattern")
-	require.Len(t, args, 12)
+	require.Len(t, args, 14)
 	assert.Equal(t, "model-a", args[0])
-	assert.Equal(t, "call-time", args[5])
-	assert.Equal(t, "model-b", args[6])
-	assert.Equal(t, "source-time", args[11])
+	assert.Equal(t, "call-time", args[6])
+	assert.Equal(t, "model-b", args[7])
+	assert.Equal(t, "source-time", args[13])
 }
 
 func TestPGPricingFilterMatchesUpsertSemantics(t *testing.T) {
@@ -753,7 +755,7 @@ func TestPGPricingMetaUpsertStatement(t *testing.T) {
 		{ModelPattern: "_fallback_version", UpdatedAt: "v3"},
 	})
 
-	assert.Contains(t, query, "VALUES ($1, 0, 0, 0, 0, $2), ($3, 0, 0, 0, 0, $4)")
+	assert.Contains(t, query, "VALUES ($1, 0, 0, 0, 0, 0, $2), ($3, 0, 0, 0, 0, 0, $4)")
 	assert.Contains(t, query, "DO UPDATE SET\n\t\tupdated_at = EXCLUDED.updated_at")
 	assert.NotContains(t, query, "timestamptz",
 		"sentinel values are opaque and must not be cast")
@@ -791,7 +793,7 @@ func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
 
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"same-model", int64(1000000), int64(2000000), int64(3000000), int64(4000000), "old",
+			"same-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "old",
 		}},
 		genAIRows: [][]driver.Value{{
 			"genai-prices-test", "upstream-ref", db.GenAIPricingSourceFetched,

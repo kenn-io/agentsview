@@ -392,20 +392,22 @@ func dbModelPricing(prices []pricing.ModelPricing) []db.ModelPricing {
 		bands := make([]db.PricingBand, len(price.Bands))
 		for j, band := range price.Bands {
 			bands[j] = db.PricingBand{
-				AboveInputTokens:     band.AboveInputTokens,
-				InputPerMTok:         band.InputPerMTok,
-				OutputPerMTok:        band.OutputPerMTok,
-				CacheCreationPerMTok: band.CacheCreationPerMTok,
-				CacheReadPerMTok:     band.CacheReadPerMTok,
+				AboveInputTokens:       band.AboveInputTokens,
+				InputPerMTok:           band.InputPerMTok,
+				OutputPerMTok:          band.OutputPerMTok,
+				CacheCreationPerMTok:   band.CacheCreationPerMTok,
+				CacheCreation1hPerMTok: band.CacheCreation1hPerMTok,
+				CacheReadPerMTok:       band.CacheReadPerMTok,
 			}
 		}
 		dbPrices[i] = db.ModelPricing{
-			ModelPattern:         price.ModelPattern,
-			InputPerMTok:         price.InputPerMTok,
-			OutputPerMTok:        price.OutputPerMTok,
-			CacheCreationPerMTok: price.CacheCreationPerMTok,
-			CacheReadPerMTok:     price.CacheReadPerMTok,
-			Bands:                bands,
+			ModelPattern:           price.ModelPattern,
+			InputPerMTok:           price.InputPerMTok,
+			OutputPerMTok:          price.OutputPerMTok,
+			CacheCreationPerMTok:   price.CacheCreationPerMTok,
+			CacheCreation1hPerMTok: price.CacheCreation1hPerMTok,
+			CacheReadPerMTok:       price.CacheReadPerMTok,
+			Bands:                  bands,
 		}
 	}
 	return dbPrices

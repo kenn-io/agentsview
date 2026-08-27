@@ -80,6 +80,7 @@ func TestPricingBlockJSONShape(t *testing.T) {
 					"input_cost_per_mtok": {"microdollars": 3000000},
 					"output_cost_per_mtok": {"microdollars": 15000000},
 					"cache_write_cost_per_mtok": {"microdollars": 3750000},
+					"cache_write_1h_cost_per_mtok": {"microdollars": 0},
 					"cache_read_cost_per_mtok": {"microdollars": 300000},
 					"cost_source": "computed",
 					"bands": [{
@@ -87,6 +88,7 @@ func TestPricingBlockJSONShape(t *testing.T) {
 						"input_cost_per_mtok": {"microdollars": 6000000},
 						"output_cost_per_mtok": {"microdollars": 22500000},
 						"cache_write_cost_per_mtok": {"microdollars": 7500000},
+						"cache_write_1h_cost_per_mtok": {"microdollars": 0},
 						"cache_read_cost_per_mtok": {"microdollars": 600000}
 					}],
 					"application": {

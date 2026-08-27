@@ -36,10 +36,12 @@ func listModelPricingFrom(
 		`SELECT p.model_pattern, p.input_microdollars_per_mtok,
 			p.output_microdollars_per_mtok,
 			p.cache_creation_microdollars_per_mtok,
+			p.cache_creation_1h_microdollars_per_mtok,
 			p.cache_read_microdollars_per_mtok, p.updated_at,
 			b.above_input_tokens, b.input_microdollars_per_mtok,
 			b.output_microdollars_per_mtok,
 			b.cache_creation_microdollars_per_mtok,
+			b.cache_creation_1h_microdollars_per_mtok,
 			b.cache_read_microdollars_per_mtok, b.updated_at
 		 FROM model_pricing p
 		 LEFT JOIN model_pricing_bands b ON b.model_pattern = p.model_pattern
@@ -56,19 +58,22 @@ func listModelPricingFrom(
 	byPattern := make(map[string]int)
 	for rows.Next() {
 		var p ModelPricing
-		var threshold, input, output, cacheCreation, cacheRead sql.NullInt64
+		var threshold, input, output, cacheCreation, cacheCreation1h,
+			cacheRead sql.NullInt64
 		var bandUpdatedAt sql.NullString
 		if err := rows.Scan(
 			&p.ModelPattern,
 			&p.InputPerMTok,
 			&p.OutputPerMTok,
 			&p.CacheCreationPerMTok,
+			&p.CacheCreation1hPerMTok,
 			&p.CacheReadPerMTok,
 			&p.UpdatedAt,
 			&threshold,
 			&input,
 			&output,
 			&cacheCreation,
+			&cacheCreation1h,
 			&cacheRead,
 			&bandUpdatedAt,
 		); err != nil {
@@ -91,12 +96,13 @@ func listModelPricingFrom(
 				)
 			}
 			out[i].Bands = append(out[i].Bands, PricingBand{
-				AboveInputTokens:     aboveInputTokens,
-				InputPerMTok:         money.Money{Microdollars: input.Int64},
-				OutputPerMTok:        money.Money{Microdollars: output.Int64},
-				CacheCreationPerMTok: money.Money{Microdollars: cacheCreation.Int64},
-				CacheReadPerMTok:     money.Money{Microdollars: cacheRead.Int64},
-				UpdatedAt:            bandUpdatedAt.String,
+				AboveInputTokens:       aboveInputTokens,
+				InputPerMTok:           money.Money{Microdollars: input.Int64},
+				OutputPerMTok:          money.Money{Microdollars: output.Int64},
+				CacheCreationPerMTok:   money.Money{Microdollars: cacheCreation.Int64},
+				CacheCreation1hPerMTok: money.Money{Microdollars: cacheCreation1h.Int64},
+				CacheReadPerMTok:       money.Money{Microdollars: cacheRead.Int64},
+				UpdatedAt:              bandUpdatedAt.String,
 			})
 		}
 	}

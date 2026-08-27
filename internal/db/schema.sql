@@ -1158,6 +1158,9 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     input_microdollars_per_mtok   INTEGER NOT NULL DEFAULT 0,
     output_microdollars_per_mtok  INTEGER NOT NULL DEFAULT 0,
     cache_creation_microdollars_per_mtok INTEGER NOT NULL DEFAULT 0,
+    -- 1-hour-TTL cache-write rate; 0 means none published and 1h writes
+    -- bill at cache_creation_microdollars_per_mtok.
+    cache_creation_1h_microdollars_per_mtok INTEGER NOT NULL DEFAULT 0,
     cache_read_microdollars_per_mtok     INTEGER NOT NULL DEFAULT 0,
     updated_at       TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -1170,6 +1173,7 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
     input_microdollars_per_mtok INTEGER NOT NULL,
     output_microdollars_per_mtok INTEGER NOT NULL,
     cache_creation_microdollars_per_mtok INTEGER NOT NULL,
+    cache_creation_1h_microdollars_per_mtok INTEGER NOT NULL DEFAULT 0,
     cache_read_microdollars_per_mtok INTEGER NOT NULL,
     updated_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

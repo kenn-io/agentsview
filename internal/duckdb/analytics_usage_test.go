@@ -243,8 +243,8 @@ func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
 
 	cost, _, priced, contributes, err := duckUsageAggregateCost(
 		"mixed-model",
-		1000, 2000, 3000, 4000,
-		100, 200, 300, 400, 500,
+		1000, 2000, 3000, 0, 4000,
+		100, 200, 300, 400, 0, 500,
 		0,
 		250_000,
 		true,
@@ -272,8 +272,8 @@ func TestDuckUsageAggregateCostRecordsWebSearchOnlyComputed(t *testing.T) {
 
 	_, _, priced, contributes, err := duckUsageAggregateCost(
 		"mixed-model",
-		0, 0, 0, 0,
 		0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0,
 		0,
 		30_000,
 		true,
@@ -286,8 +286,8 @@ func TestDuckUsageAggregateCostRecordsWebSearchOnlyComputed(t *testing.T) {
 
 	cost, _, priced, contributes, err := duckUsageAggregateCost(
 		"mixed-model",
-		0, 0, 0, 0,
 		0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0,
 		2,
 		0,
 		false,
@@ -345,8 +345,8 @@ func TestDuckUsageAggregateCostPricingBandRequestScope(t *testing.T) {
 
 			cost, savings, priced, contributes, err := duckUsageAggregateCost(
 				"banded-model",
-				100_001, 0, 0, 100_000,
 				100_001, 0, 0, 0, 100_000,
+				100_001, 0, 0, 0, 0, 100_000,
 				0,
 				0,
 				false,
@@ -388,8 +388,8 @@ func TestDuckUsageAggregateCostReportedRowUsesBandForSavingsOnly(t *testing.T) {
 
 	cost, savings, priced, contributes, err := duckUsageAggregateCost(
 		"banded-model",
-		100_001, 0, 0, 100_000,
-		0, 0, 0, 0, 0,
+		100_001, 0, 0, 0, 100_000,
+		0, 0, 0, 0, 0, 0,
 		0,
 		75_000,
 		true,
@@ -414,8 +414,8 @@ func TestDuckUsageAggregateCostKeepsMixedUnpricedComputedTokensUnpriced(t *testi
 
 	cost, _, priced, contributes, err := duckUsageAggregateCost(
 		"unknown-model",
-		1000, 2000, 0, 0,
 		1000, 2000, 0, 0, 0,
+		1000, 2000, 0, 0, 0, 0,
 		0,
 		250_000,
 		true,
@@ -450,8 +450,8 @@ func TestDuckUsageAggregateCostIncludesReasoningOnlyRows(t *testing.T) {
 
 	cost, _, priced, contributes, err := duckUsageAggregateCost(
 		"reasoning-model",
-		0, 0, 0, 0,
-		0, 0, 300, 0, 0,
+		0, 0, 0, 0, 0,
+		0, 0, 300, 0, 0, 0,
 		0,
 		0,
 		false,
@@ -482,8 +482,8 @@ func TestDuckUsageAggregateCostRecordsZeroTokenModelProvenance(t *testing.T) {
 
 	cost, _, priced, contributes, err := duckUsageAggregateCost(
 		"zero-model",
-		0, 0, 0, 0,
 		0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0,
 		0,
 		0,
 		false,
@@ -523,8 +523,8 @@ func TestDuckUsageAggregateCostPrefersExactCustomKimiAlias(t *testing.T) {
 	cost, _, priced, contributes, err := duckUsageAggregateResolvedCost(
 		"kimi-for-coding", pricingpkg.KimiK3Canonical,
 		time.Time{},
-		1_000_000, 0, 0, 0,
-		1_000_000, 0, 0, 0, 0, 0,
+		1_000_000, 0, 0, 0, 0,
+		1_000_000, 0, 0, 0, 0, 0, 0,
 		0, false, true, resolver,
 	)
 

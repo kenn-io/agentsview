@@ -35,13 +35,18 @@ type EventInput struct {
 }
 
 // ParsedTokenUsage is the sanitized token and billable tool-use payload.
+// CacheCreation1hTokens is the 1-hour-TTL subset of CacheCreationTokens,
+// taken from Anthropic's nested cache_creation breakdown; the flat
+// cache_creation_input_tokens counter stays authoritative, so the subset
+// never exceeds it.
 type ParsedTokenUsage struct {
-	InputTokens         int64
-	OutputTokens        int64
-	ReasoningTokens     int64
-	CacheCreationTokens int64
-	CacheReadTokens     int64
-	WebSearchRequests   int64
+	InputTokens           int64
+	OutputTokens          int64
+	ReasoningTokens       int64
+	CacheCreationTokens   int64
+	CacheCreation1hTokens int64
+	CacheReadTokens       int64
+	WebSearchRequests     int64
 }
 
 // Fact is one normalized, unpriced usage or activity row.
@@ -57,6 +62,7 @@ type Fact struct {
 	OutputTokens             int64
 	ReasoningTokens          int64
 	CacheCreationTokens      int64
+	CacheCreation1hTokens    int64
 	CacheReadTokens          int64
 	WebSearchRequests        int64
 	ReportedCostMicrodollars *int64
@@ -86,15 +92,16 @@ func FromMessage(in MessageInput) (Fact, bool) {
 		TimestampMillis: millis, TimestampNanos: nanos, RawTimestamp: raw,
 		UsesSessionStart: fallback, Model: in.Model,
 		InputTokens: parsed.InputTokens, OutputTokens: parsed.OutputTokens,
-		ReasoningTokens:     parsed.ReasoningTokens,
-		CacheCreationTokens: parsed.CacheCreationTokens,
-		CacheReadTokens:     parsed.CacheReadTokens,
-		WebSearchRequests:   parsed.WebSearchRequests,
-		RequestScoped:       true,
-		ClaudeMessageID:     in.ClaudeMessageID,
-		ClaudeRequestID:     in.ClaudeRequestID,
-		SourceUUID:          in.SourceUUID,
-		TokenEligible:       tokenEligible, ActivityEligible: activityEligible,
+		ReasoningTokens:       parsed.ReasoningTokens,
+		CacheCreationTokens:   parsed.CacheCreationTokens,
+		CacheCreation1hTokens: parsed.CacheCreation1hTokens,
+		CacheReadTokens:       parsed.CacheReadTokens,
+		WebSearchRequests:     parsed.WebSearchRequests,
+		RequestScoped:         true,
+		ClaudeMessageID:       in.ClaudeMessageID,
+		ClaudeRequestID:       in.ClaudeRequestID,
+		SourceUUID:            in.SourceUUID,
+		TokenEligible:         tokenEligible, ActivityEligible: activityEligible,
 	}, true
 }
 
@@ -204,6 +211,19 @@ func ParseTokenUsage(tokenJSON string) ParsedTokenUsage {
 			continue
 		}
 		i = skipJSONSpace(tokenJSON, i+1)
+		if key == "cache_creation" {
+			valueNext, valid := skipJSONValue(tokenJSON, i)
+			if !valid {
+				break
+			}
+			value, ok := objectInt(
+				tokenJSON[i:valueNext], "ephemeral_1h_input_tokens")
+			if ok && value > 0 {
+				result.CacheCreation1hTokens = clampTokens(value)
+			}
+			i = valueNext
+			continue
+		}
 		if isTokenCounterKey(key) {
 			value, valueNext, valid := parseTokenInt(tokenJSON, i)
 			if valid {
@@ -233,6 +253,9 @@ func ParseTokenUsage(tokenJSON string) ParsedTokenUsage {
 			break
 		}
 		i = valueNext
+	}
+	if result.CacheCreation1hTokens > result.CacheCreationTokens {
+		result.CacheCreation1hTokens = result.CacheCreationTokens
 	}
 	result.WebSearchRequests = parseWebSearchRequests(tokenJSON)
 	return result

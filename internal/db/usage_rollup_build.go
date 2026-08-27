@@ -117,7 +117,7 @@ func priceUsageFact(
 		result.Cost, err = selectedRates.CostForTokensScoped(
 			false, int(input.Fact.InputTokens), int(input.Fact.OutputTokens),
 			int(input.Fact.ReasoningTokens), int(input.Fact.CacheCreationTokens),
-			int(input.Fact.CacheReadTokens))
+			int(input.Fact.CacheCreation1hTokens), int(input.Fact.CacheReadTokens))
 		if err != nil {
 			return usagePriceResult{}, fmt.Errorf("pricing usage row for model %q: %w", model, err)
 		}
@@ -147,9 +147,17 @@ func priceUsageFact(
 	if err != nil {
 		return usagePriceResult{}, fmt.Errorf("deriving cache creation rate for model %q: %w", model, err)
 	}
+	write1hRate, err := money.Sub(
+		selectedRates.InputPerMTok, selectedRates.EffectiveCacheWrite1hPerMTok())
+	if err != nil {
+		return usagePriceResult{}, fmt.Errorf("deriving 1h cache creation rate for model %q: %w", model, err)
+	}
+	cache1hTokens := min(
+		input.Fact.CacheCreation1hTokens, input.Fact.CacheCreationTokens)
 	result.Savings, err = money.SignedCostPerMillion([]money.RatedTokens{
 		{Tokens: input.Fact.CacheReadTokens, Rate: readRate},
-		{Tokens: input.Fact.CacheCreationTokens, Rate: writeRate},
+		{Tokens: input.Fact.CacheCreationTokens - cache1hTokens, Rate: writeRate},
+		{Tokens: cache1hTokens, Rate: write1hRate},
 	})
 	if err != nil {
 		return usagePriceResult{}, fmt.Errorf("pricing cache savings for model %q: %w", model, err)
@@ -303,6 +311,7 @@ func loadUsageRollupFacts(
 		cs.session_id, f.source, f.message_ordinal, f.timestamp_ms, f.timestamp_ns,
 		f.raw_timestamp, f.uses_session_start, f.model, f.input_tokens,
 		f.output_tokens, f.reasoning_tokens, f.cache_creation_tokens,
+		f.cache_creation_1h_tokens,
 		f.cache_read_tokens, f.web_search_requests, f.reported_cost_microdollars,
 		f.cost_source, f.request_scoped, f.claude_message_id, f.claude_request_id,
 		f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible
@@ -324,7 +333,8 @@ func loadUsageRollupFacts(
 			&item.Fact.Source, &ordinal, &millis, &nanos, &item.Fact.RawTimestamp,
 			&usesStart, &item.Fact.Model, &item.Fact.InputTokens,
 			&item.Fact.OutputTokens, &item.Fact.ReasoningTokens,
-			&item.Fact.CacheCreationTokens, &item.Fact.CacheReadTokens,
+			&item.Fact.CacheCreationTokens, &item.Fact.CacheCreation1hTokens,
+			&item.Fact.CacheReadTokens,
 			&item.Fact.WebSearchRequests, &reported, &item.Fact.CostSource,
 			&requestScoped, &item.Fact.ClaudeMessageID, &item.Fact.ClaudeRequestID,
 			&item.Fact.SourceUUID, &item.Fact.UsageDedupKey,

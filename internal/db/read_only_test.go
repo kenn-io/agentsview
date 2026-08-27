@@ -316,6 +316,7 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 		{"worktree mapping", "worktree_project_mappings", "updated_at"},
 		{"pg sync state", "pg_sync_state", "value"},
 		{"model pricing", "model_pricing", "updated_at"},
+		{"pricing 1h rate", "model_pricing", "cache_creation_1h_microdollars_per_mtok"},
 		{"pricing band", "model_pricing_bands", "input_microdollars_per_mtok"},
 		{"GenAI pricing", "genai_pricing", "data_json"},
 		{"secret finding", "secret_findings", "rules_version"},

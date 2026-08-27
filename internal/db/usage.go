@@ -1489,6 +1489,14 @@ func parseUsageWebSearchRequests(tokenJSON string) int {
 	return int(usagefacts.ParseTokenUsage(tokenJSON).WebSearchRequests)
 }
 
+// clampedCacheCreation1hTokens returns the clamped 1h-TTL subset of a
+// message row's cache-write tokens. Usage events never carry the nested
+// breakdown, so event rows always price at the base write rate.
+func clampedCacheCreation1hTokens(tokenJSON string) int {
+	return int(usagefacts.ClampPlausibleTokens(
+		usagefacts.ParseTokenUsage(tokenJSON).CacheCreation1hTokens))
+}
+
 // usageRowWebSearchRequests returns how many billed Anthropic server-side
 // web searches a usage row reports. Only per-message rows carry a usage
 // blob; usage events never report server tool use.
@@ -1948,6 +1956,9 @@ func (db *DB) loadPricingMapFrom(
 			CacheWritePerMTok: money.Money{
 				Microdollars: cp.CacheCreationMicrodollarsPerMTok,
 			},
+			CacheWrite1hPerMTok: money.Money{
+				Microdollars: cp.CacheCreation1hMicrodollarsPerMTok,
+			},
 			CacheReadPerMTok: money.Money{
 				Microdollars: cp.CacheReadMicrodollarsPerMTok,
 			},
@@ -2013,12 +2024,13 @@ func fallbackRateMap() map[string]export.ModelRates {
 	out := make(map[string]export.ModelRates, len(fallback))
 	for _, p := range fallback {
 		rates := export.ModelRates{
-			InputPerMTok:      p.InputPerMTok,
-			OutputPerMTok:     p.OutputPerMTok,
-			CacheWritePerMTok: p.CacheCreationPerMTok,
-			CacheReadPerMTok:  p.CacheReadPerMTok,
-			Source:            export.PricingRowSourceEmbedded,
-			Bands:             catalogPricingBands(p.Bands),
+			InputPerMTok:        p.InputPerMTok,
+			OutputPerMTok:       p.OutputPerMTok,
+			CacheWritePerMTok:   p.CacheCreationPerMTok,
+			CacheWrite1hPerMTok: p.CacheCreation1hPerMTok,
+			CacheReadPerMTok:    p.CacheReadPerMTok,
+			Source:              export.PricingRowSourceEmbedded,
+			Bands:               catalogPricingBands(p.Bands),
 		}
 		out[p.ModelPattern] = rates
 	}
@@ -2034,12 +2046,13 @@ func modelPricingRates(p ModelPricing) export.ModelRates {
 		}
 	}
 	return export.ModelRates{
-		InputPerMTok:      p.InputPerMTok,
-		OutputPerMTok:     p.OutputPerMTok,
-		CacheWritePerMTok: p.CacheCreationPerMTok,
-		CacheReadPerMTok:  p.CacheReadPerMTok,
-		UpdatedAt:         updatedAt,
-		Bands:             storedPricingBands(p.Bands),
+		InputPerMTok:        p.InputPerMTok,
+		OutputPerMTok:       p.OutputPerMTok,
+		CacheWritePerMTok:   p.CacheCreationPerMTok,
+		CacheWrite1hPerMTok: p.CacheCreation1hPerMTok,
+		CacheReadPerMTok:    p.CacheReadPerMTok,
+		UpdatedAt:           updatedAt,
+		Bands:               storedPricingBands(p.Bands),
 	}
 }
 
@@ -2047,11 +2060,12 @@ func catalogPricingBands(bands []pricingpkg.PricingBand) []export.PricingBand {
 	out := make([]export.PricingBand, len(bands))
 	for i, band := range bands {
 		out[i] = export.PricingBand{
-			AboveInputTokens:  band.AboveInputTokens,
-			InputPerMTok:      band.InputPerMTok,
-			OutputPerMTok:     band.OutputPerMTok,
-			CacheWritePerMTok: band.CacheCreationPerMTok,
-			CacheReadPerMTok:  band.CacheReadPerMTok,
+			AboveInputTokens:    band.AboveInputTokens,
+			InputPerMTok:        band.InputPerMTok,
+			OutputPerMTok:       band.OutputPerMTok,
+			CacheWritePerMTok:   band.CacheCreationPerMTok,
+			CacheWrite1hPerMTok: band.CacheCreation1hPerMTok,
+			CacheReadPerMTok:    band.CacheReadPerMTok,
 		}
 	}
 	return out
@@ -2066,12 +2080,13 @@ func storedPricingBands(bands []PricingBand) []export.PricingBand {
 			updatedAt = &t
 		}
 		out[i] = export.PricingBand{
-			AboveInputTokens:  band.AboveInputTokens,
-			InputPerMTok:      band.InputPerMTok,
-			OutputPerMTok:     band.OutputPerMTok,
-			CacheWritePerMTok: band.CacheCreationPerMTok,
-			CacheReadPerMTok:  band.CacheReadPerMTok,
-			UpdatedAt:         updatedAt,
+			AboveInputTokens:    band.AboveInputTokens,
+			InputPerMTok:        band.InputPerMTok,
+			OutputPerMTok:       band.OutputPerMTok,
+			CacheWritePerMTok:   band.CacheCreationPerMTok,
+			CacheWrite1hPerMTok: band.CacheCreation1hPerMTok,
+			CacheReadPerMTok:    band.CacheReadPerMTok,
+			UpdatedAt:           updatedAt,
 		}
 	}
 	return out
@@ -2084,6 +2099,7 @@ func modelPricingSource(
 		rates.InputPerMTok == p.InputPerMTok &&
 		rates.OutputPerMTok == p.OutputPerMTok &&
 		rates.CacheWritePerMTok == p.CacheCreationPerMTok &&
+		rates.CacheWrite1hPerMTok == p.CacheCreation1hPerMTok &&
 		rates.CacheReadPerMTok == p.CacheReadPerMTok &&
 		exportPricingBandsEqual(rates.Bands, storedPricingBands(p.Bands)) {
 		return export.PricingRowSourceEmbedded
@@ -2100,6 +2116,7 @@ func exportPricingBandsEqual(a, b []export.PricingBand) bool {
 			a[i].InputPerMTok != b[i].InputPerMTok ||
 			a[i].OutputPerMTok != b[i].OutputPerMTok ||
 			a[i].CacheWritePerMTok != b[i].CacheWritePerMTok ||
+			a[i].CacheWrite1hPerMTok != b[i].CacheWrite1hPerMTok ||
 			a[i].CacheReadPerMTok != b[i].CacheReadPerMTok {
 			return false
 		}
@@ -3049,11 +3066,12 @@ func sessionRowCost(
 func sessionRowCostWithWebSearchRequests(
 	r usageScanRow, webSearches int, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
-	var inTok, outTok, crTok, rdTok int
+	var inTok, outTok, crTok, cr1hTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
 		inTok, outTok, crTok, rdTok, reasoningTok =
 			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		cr1hTok = clampedCacheCreation1hTokens(r.tokenJSON)
 	} else {
 		inTok, outTok, crTok, rdTok = usageEventRowTokens(
 			r.usageSource,
@@ -3084,7 +3102,7 @@ func sessionRowCostWithWebSearchRequests(
 	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(
 		requestScoped,
-		inTok, outTok, reasoningTok, crTok, rdTok)
+		inTok, outTok, reasoningTok, crTok, cr1hTok, rdTok)
 	if err != nil {
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing session usage for model %q: %w", r.model, err)

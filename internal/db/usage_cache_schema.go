@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	usageCacheFormatVersion = 3
+	// Version 4 adds cache_creation_1h_tokens to version 3's historical-rate
+	// facts and prices the 1h-TTL cache-write subset at the catalog's 1h rate.
+	usageCacheFormatVersion = 4
 	usageCacheApplicationID = 0x41565543
 	usageCacheKind          = "agentsview-usage-facts"
 
@@ -57,6 +59,7 @@ CREATE TABLE usage_facts (
     output_tokens INTEGER NOT NULL,
     reasoning_tokens INTEGER NOT NULL,
     cache_creation_tokens INTEGER NOT NULL,
+    cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL,
     web_search_requests INTEGER NOT NULL,
     reported_cost_microdollars INTEGER,
@@ -183,6 +186,7 @@ CREATE TABLE usage_rollup_exceptions (
     output_tokens INTEGER NOT NULL,
     reasoning_tokens INTEGER NOT NULL,
     cache_creation_tokens INTEGER NOT NULL,
+    cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL,
     web_search_requests INTEGER NOT NULL,
     reported_cost_microdollars INTEGER,
@@ -661,7 +665,8 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		`SELECT cached_session_id, fact_index, source, message_ordinal,
 		        timestamp_ms, timestamp_ns, raw_timestamp, uses_session_start, model,
 		        input_tokens, output_tokens, reasoning_tokens,
-		        cache_creation_tokens, cache_read_tokens, web_search_requests,
+		        cache_creation_tokens, cache_creation_1h_tokens,
+		        cache_read_tokens, web_search_requests,
 		        reported_cost_microdollars, cost_source, request_scoped,
 		        claude_message_id, claude_request_id, source_uuid,
 		        usage_dedup_key, token_eligible, activity_eligible
@@ -696,7 +701,8 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        fact_index, source_session_id, local_date, source,
 		        message_ordinal, timestamp_ms, timestamp_ns, raw_timestamp,
 		        uses_session_start, model, input_tokens, output_tokens,
-		        reasoning_tokens, cache_creation_tokens, cache_read_tokens,
+		        reasoning_tokens, cache_creation_tokens,
+		        cache_creation_1h_tokens, cache_read_tokens,
 		        web_search_requests, reported_cost_microdollars, cost_source,
 		        request_scoped, is_headless, claude_message_id, claude_request_id,
 		        source_uuid, usage_dedup_key

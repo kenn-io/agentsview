@@ -238,7 +238,8 @@ func readUsageRollupExceptions(
 		e.source_session_id, e.local_date, e.source, e.message_ordinal,
 		e.timestamp_ms, e.timestamp_ns, e.raw_timestamp, e.uses_session_start,
 		e.model, e.input_tokens, e.output_tokens, e.reasoning_tokens,
-		e.cache_creation_tokens, e.cache_read_tokens, e.web_search_requests,
+		e.cache_creation_tokens, e.cache_creation_1h_tokens,
+		e.cache_read_tokens, e.web_search_requests,
 		e.reported_cost_microdollars, e.cost_source, e.request_scoped,
 		e.is_headless, e.claude_message_id, e.claude_request_id, e.source_uuid,
 		e.usage_dedup_key, COUNT(*) OVER ()
@@ -266,6 +267,7 @@ func readUsageRollupExceptions(
 			&millis, &nanos, &fact.Fact.RawTimestamp, &usesStart, &fact.Model,
 			&fact.Fact.InputTokens, &fact.Fact.OutputTokens,
 			&fact.Fact.ReasoningTokens, &fact.Fact.CacheCreationTokens,
+			&fact.Fact.CacheCreation1hTokens,
 			&fact.Fact.CacheReadTokens, &fact.Fact.WebSearchRequests, &reported,
 			&fact.Fact.CostSource, &requestScoped, &isHeadless,
 			&fact.Fact.ClaudeMessageID,

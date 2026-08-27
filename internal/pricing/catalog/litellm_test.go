@@ -49,6 +49,69 @@ func TestParseLiteLLMPricingBandsNormalizesSupportedThresholdFields(t *testing.T
 	}, prices[0].Bands)
 }
 
+func TestParseLiteLLMPricingReads1hCacheCreationRate(t *testing.T) {
+	data := []byte(`{
+		"claude-fable-5": {
+			"input_cost_per_token": 0.00001,
+			"output_cost_per_token": 0.00005,
+			"cache_creation_input_token_cost": 0.0000125,
+			"cache_creation_input_token_cost_above_1hr": 0.00002,
+			"cache_read_input_token_cost": 0.000001
+		}
+	}`)
+
+	prices, err := ParseLiteLLMPricing(data)
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	assert.Equal(t, money.Money{Microdollars: 12_500_000},
+		prices[0].CacheCreationPerMTok)
+	assert.Equal(t, money.Money{Microdollars: 20_000_000},
+		prices[0].CacheCreation1hPerMTok)
+}
+
+func TestParseLiteLLMPricingBands1hCacheCreationCompanion(t *testing.T) {
+	data := []byte(`{
+		"banded-model": {
+			"input_cost_per_token": 0.000001,
+			"output_cost_per_token": 0.000002,
+			"cache_creation_input_token_cost": 0.0000005,
+			"cache_creation_input_token_cost_above_1hr": 0.0000008,
+			"input_cost_per_token_above_200k_tokens": 0.000002,
+			"cache_creation_input_token_cost_above_1hr_above_200k_tokens": 0.0000016
+		}
+	}`)
+
+	prices, err := ParseLiteLLMPricing(data)
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	require.Len(t, prices[0].Bands, 1)
+	band := prices[0].Bands[0]
+	assert.Equal(t, money.Money{Microdollars: 500_000},
+		band.CacheCreationPerMTok,
+		"band inherits the base 5m rate when no companion overrides it")
+	assert.Equal(t, money.Money{Microdollars: 1_600_000},
+		band.CacheCreation1hPerMTok)
+}
+
+func TestParseLiteLLMPricingBands1hCacheCreationInherited(t *testing.T) {
+	data := []byte(`{
+		"banded-model": {
+			"input_cost_per_token": 0.000001,
+			"output_cost_per_token": 0.000002,
+			"cache_creation_input_token_cost_above_1hr": 0.0000008,
+			"input_cost_per_token_above_200k_tokens": 0.000002
+		}
+	}`)
+
+	prices, err := ParseLiteLLMPricing(data)
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	require.Len(t, prices[0].Bands, 1)
+	assert.Equal(t, money.Money{Microdollars: 800_000},
+		prices[0].Bands[0].CacheCreation1hPerMTok,
+		"band inherits the base 1h rate")
+}
+
 func TestParseLiteLLMPricingBandsIgnoresUnanchoredPricingMetadata(t *testing.T) {
 	data := []byte(`{
 		"flat-model": {
