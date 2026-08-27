@@ -362,17 +362,20 @@ func (s *Store) CompleteUnchangedCapture(
 		return fmt.Errorf("rawcheckpoint: invalid unchanged capture")
 	}
 	return s.withImmediateWrite(ctx, "complete unchanged capture", func(conn *sql.Conn) error {
-		var reservationRoot string
+		var reservationProvider, reservationRoot, reservationSourceKey string
 		err := conn.QueryRowContext(ctx,
-			`SELECT configured_root_id FROM outbox_reservations WHERE id = ?`, reservationID,
-		).Scan(&reservationRoot)
+			`SELECT provider, configured_root_id, source_key
+			FROM outbox_reservations WHERE id = ?`, reservationID,
+		).Scan(&reservationProvider, &reservationRoot, &reservationSourceKey)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrReservationMissing
 		}
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: complete unchanged capture: read reservation: %w", err)
 		}
-		if reservationRoot != source.ConfiguredRootID {
+		if !reservationMatchesSource(
+			reservationProvider, reservationRoot, reservationSourceKey, source,
+		) {
 			return ErrCaptureConflict
 		}
 		if _, err := conn.ExecContext(ctx,
@@ -482,22 +485,21 @@ func (s *Store) CommitCapture(
 		return err
 	}
 	return s.withImmediateWrite(ctx, "commit capture", func(conn *sql.Conn) error {
-		var reservationRoot, reservationProvider string
+		var reservationProvider, reservationRoot, reservationSourceKey string
 		var reservedBytes int64
-		err := conn.QueryRowContext(ctx, `SELECT reservation.configured_root_id,
-			reservation.reserved_bytes, root.provider
-			FROM outbox_reservations AS reservation
-			JOIN configured_roots AS root ON root.id = reservation.configured_root_id
-			WHERE reservation.id = ?`, reservationID,
-		).Scan(&reservationRoot, &reservedBytes, &reservationProvider)
+		err := conn.QueryRowContext(ctx, `SELECT provider, configured_root_id,
+			source_key, reserved_bytes
+			FROM outbox_reservations WHERE id = ?`, reservationID,
+		).Scan(&reservationProvider, &reservationRoot, &reservationSourceKey, &reservedBytes)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrReservationMissing
 		}
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: commit capture: read reservation: %w", err)
 		}
-		if reservationRoot != validated.Source.ConfiguredRootID ||
-			reservationProvider != string(validated.Source.Provider) {
+		if !reservationMatchesSource(
+			reservationProvider, reservationRoot, reservationSourceKey, validated.Source,
+		) {
 			return ErrCaptureConflict
 		}
 
@@ -577,6 +579,17 @@ func (s *Store) CommitCapture(
 		}
 		return nil
 	})
+}
+
+func reservationMatchesSource(
+	provider string,
+	configuredRootID string,
+	sourceKey string,
+	source SourceIdentity,
+) bool {
+	return provider == string(source.Provider) &&
+		configuredRootID == source.ConfiguredRootID &&
+		(sourceKey == "" || sourceKey == source.SourceKey)
 }
 
 // CaptureBase returns the newest queued generation for append planning.

@@ -701,6 +701,48 @@ func TestSuccessfulCaptureClearsItsOwnSourceCoverageFailure(t *testing.T) {
 	assert.NotNil(t, coverage.RecoveredAt)
 }
 
+func TestCompleteUnchangedCaptureRejectsReservationForAnotherSource(t *testing.T) {
+	store, root := openOutboxTestStore(t, 2000)
+	sourceA := SourceIdentity{
+		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-a",
+	}
+	sourceB := SourceIdentity{
+		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-b",
+	}
+	_, err := store.ReserveSourceCapture(t.Context(), sourceB, 2001)
+	require.ErrorIs(t, err, ErrOutboxFull)
+	reservation, err := store.ReserveSourceCapture(t.Context(), sourceA, 128)
+	require.NoError(t, err)
+
+	err = store.CompleteUnchangedCapture(t.Context(), reservation.ID, sourceB)
+
+	assert.ErrorIs(t, err, ErrCaptureConflict)
+	usage, readErr := store.OutboxUsage(t.Context())
+	require.NoError(t, readErr)
+	assert.Equal(t, int64(128), usage.ReservedBytes)
+	coverage, ok, readErr := store.Coverage(t.Context(), root.Provider, root.ID)
+	require.NoError(t, readErr)
+	require.True(t, ok)
+	assert.Equal(t, CoverageDegraded, coverage.State)
+	assert.Equal(t, "outbox_full", coverage.Reason)
+}
+
+func TestCompleteUnchangedCaptureAcceptsRootScopedReservation(t *testing.T) {
+	store, root := openOutboxTestStore(t, 2000)
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 128)
+	require.NoError(t, err)
+	source := SourceIdentity{
+		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-a",
+	}
+
+	err = store.CompleteUnchangedCapture(t.Context(), reservation.ID, source)
+
+	require.NoError(t, err)
+	usage, err := store.OutboxUsage(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, usage.ReservedBytes)
+}
+
 func TestCommitCaptureQueuesOfflineGenerationsAndChargesDuplicateObjectOnce(t *testing.T) {
 	store, root := openOutboxTestStore(t, 1<<20)
 	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
@@ -753,6 +795,29 @@ func TestCommitCaptureRejectsProviderThatDoesNotOwnReservedRoot(t *testing.T) {
 	err = store.CommitCapture(t.Context(), reservation.ID, generation)
 
 	require.ErrorIs(t, err, ErrCaptureConflict)
+	_, ok, readErr := store.NextGeneration(t.Context())
+	require.NoError(t, readErr)
+	assert.False(t, ok)
+}
+
+func TestCommitCaptureRejectsReservationForAnotherSource(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
+	installOutboxTestObject(t, store, ref, []byte("abc"))
+	reservationSource := SourceIdentity{
+		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-a",
+	}
+	reservation, err := store.ReserveSourceCapture(t.Context(), reservationSource, 1795)
+	require.NoError(t, err)
+	generation := testCapturedGeneration(1, root, "", ref)
+	generation.Source.SourceKey = "source-b"
+
+	err = store.CommitCapture(t.Context(), reservation.ID, generation)
+
+	assert.ErrorIs(t, err, ErrCaptureConflict)
+	usage, readErr := store.OutboxUsage(t.Context())
+	require.NoError(t, readErr)
+	assert.Equal(t, int64(1795), usage.ReservedBytes)
 	_, ok, readErr := store.NextGeneration(t.Context())
 	require.NoError(t, readErr)
 	assert.False(t, ok)
