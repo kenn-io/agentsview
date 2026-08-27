@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -891,7 +892,7 @@ func (s openCodeFormatSourceSet) reconciliationContainer(
 func reconciliationOpenCodeContainerPath(root, path string, f openCodeFormat) (string, bool) {
 	name := trimSQLiteSidecarSuffix(filepath.Base(path))
 	canonical := filepath.Join(root, f.dbName)
-	if strings.EqualFold(name, f.dbName) {
+	if isCanonicalOpenCodeSQLiteName(f, name) {
 		if !reconciliationScopeSamePath(
 			cleanReconciliationScopeRoot(canonical),
 			cleanReconciliationScopeRoot(filepath.Join(root, name)),
@@ -2064,11 +2065,14 @@ func isRecognizedOpenCodeContainerPath(root, path string, f openCodeFormat) bool
 }
 
 func isOpenCodeSQLiteContainerNameFolded(f openCodeFormat, name string) bool {
+	if f.agent != AgentOpenCode {
+		return name == f.dbName
+	}
+	if runtime.GOOS != "windows" {
+		return isOpenCodeSQLiteContainerName(f, name)
+	}
 	if strings.EqualFold(name, f.dbName) {
 		return true
-	}
-	if f.agent != AgentOpenCode {
-		return false
 	}
 	const prefix, suffix = "opencode-", ".db"
 	lower := strings.ToLower(name)

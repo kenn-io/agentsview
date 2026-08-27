@@ -79,10 +79,14 @@ func TestOpenCodeReconciliationAcceptsCaseVariantChannelContainer(t *testing.T) 
 	sources := newOpenCodeFormatSourceSet(
 		[]string{root}, openCodeProviderSpecForAgent(AgentOpenCode), nil,
 	)
-	requested := filepath.Join(root, "OpenCode-Local.db#ses-1")
+	name := "opencode-LOCAL.db"
+	if runtime.GOOS == "windows" {
+		name = "OpenCode-Local.db"
+	}
+	requested := filepath.Join(root, name+"#ses-1")
 	container, ok := sources.reconciliationContainer(requested)
 	assert.True(t, ok)
-	assert.Equal(t, filepath.Join(root, "OpenCode-Local.db"), container)
+	assert.Equal(t, filepath.Join(root, name), container)
 }
 
 func TestOpenCodeReconciliationAcceptsCaseVariantChannelSidecars(t *testing.T) {
@@ -90,11 +94,15 @@ func TestOpenCodeReconciliationAcceptsCaseVariantChannelSidecars(t *testing.T) {
 	sources := newOpenCodeFormatSourceSet(
 		[]string{root}, openCodeProviderSpecForAgent(AgentOpenCode), nil,
 	)
+	name := "opencode-LOCAL.db"
+	if runtime.GOOS == "windows" {
+		name = "OpenCode-Local.db"
+	}
 	for _, suffix := range []string{"-WAL", "-SHM"} {
-		requested := filepath.Join(root, "OpenCode-Local.db"+suffix+"#ses-1")
+		requested := filepath.Join(root, name+suffix+"#ses-1")
 		container, ok := sources.reconciliationContainer(requested)
 		assert.True(t, ok, suffix)
-		assert.Equal(t, filepath.Join(root, "OpenCode-Local.db"), container)
+		assert.Equal(t, filepath.Join(root, name), container)
 	}
 }
 

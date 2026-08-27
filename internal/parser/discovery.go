@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -127,7 +128,8 @@ func isOpenCodeSQLiteContainerName(f openCodeFormat, name string) bool {
 
 func isCanonicalOpenCodeSQLiteName(f openCodeFormat, name string) bool {
 	return name == f.dbName ||
-		(f.agent == AgentOpenCode && strings.EqualFold(name, f.dbName))
+		(f.agent == AgentOpenCode && runtime.GOOS == "windows" &&
+			strings.EqualFold(name, f.dbName))
 }
 
 func openCodeSQLiteContainerPaths(f openCodeFormat, root string) []string {
@@ -143,6 +145,7 @@ func openCodeSQLiteContainerPathsWithError(
 		return nil, err
 	}
 	var names []string
+	var enumerationErr error
 	for _, entry := range entries {
 		name := entry.Name()
 		recognized := isOpenCodeSQLiteContainerName(f, name)
@@ -154,7 +157,8 @@ func openCodeSQLiteContainerPathsWithError(
 		}
 		info, err := os.Stat(filepath.Join(root, name))
 		if err != nil {
-			return nil, err
+			enumerationErr = errors.Join(enumerationErr, err)
+			continue
 		}
 		if !info.Mode().IsRegular() {
 			continue
@@ -179,7 +183,7 @@ func openCodeSQLiteContainerPathsWithError(
 	for i, name := range names {
 		paths[i] = filepath.Join(root, name)
 	}
-	return paths, nil
+	return paths, enumerationErr
 }
 
 var (

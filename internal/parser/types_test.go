@@ -881,7 +881,11 @@ func TestResolveOpenCodeSourceChannelOnly(t *testing.T) {
 
 func TestOpenCodePathClassifiersAcceptCaseVariantChannel(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "OpenCode-Local.db")
+	name := "opencode-LOCAL.db"
+	if runtime.GOOS == "windows" {
+		name = "OpenCode-Local.db"
+	}
+	path := filepath.Join(root, name)
 	assert.True(t, IsOpenCodeSQLiteContainerPath(root, path))
 	container, ok := OpenCodeSQLiteContainerPathForEvent(root, path+"-wal")
 	assert.True(t, ok)
