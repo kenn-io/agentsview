@@ -25,6 +25,8 @@ class DataStore {
   #inventoryRead = new LatestRead();
   #loadVersion = 0;
   #mutationRefreshes = 0;
+  #mutationRefreshTail: Promise<void> = Promise.resolve();
+  #eventRefreshPending = false;
 
   /**
    * The inventory row matching selectedProjectKey, or null when there is no
@@ -59,8 +61,12 @@ class DataStore {
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
-        if (projectWorkspaceEnabled && this.#mutationRefreshes === 0) {
-          void this.load({ background: true });
+        if (projectWorkspaceEnabled) {
+          if (this.#mutationRefreshes === 0) {
+            void this.load({ background: true });
+          } else {
+            this.#eventRefreshPending = true;
+          }
         }
         if (this.view === "rules") this.rulesRefreshVersion++;
       }, DATA_REFRESH_DEBOUNCE_MS);
@@ -211,16 +217,28 @@ class DataStore {
   }
 
   /**
-   * Refresh after a committed mutation without letting its matching data event
-   * start a competing inventory read. The mutation refresh already covers that
-   * event; later events can schedule their own background load normally.
+   * Refresh after a committed mutation without letting event-driven or other
+   * mutation refreshes start a competing inventory read. Events that arrive
+   * while mutations are queued trigger one background load after the queue.
    */
   async loadAfterMutation(): Promise<boolean> {
     this.#mutationRefreshes++;
+    const previous = this.#mutationRefreshTail;
+    let release!: () => void;
+    this.#mutationRefreshTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await previous;
     try {
       return await this.load({ background: true });
     } finally {
+      release();
       this.#mutationRefreshes--;
+      if (this.#mutationRefreshes === 0 && this.#eventRefreshPending) {
+        this.#eventRefreshPending = false;
+        void this.load({ background: true });
+      }
     }
   }
 }
