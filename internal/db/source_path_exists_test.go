@@ -14,6 +14,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "sessions%_用户")
 	activePath := filepath.Join(base, "nested", "active.jsonl")
 	deletedPath := filepath.Join(base, "deleted", "gone.jsonl")
+	sourceMissingPath := filepath.Join(base, "source-missing", "gone.jsonl")
 	siblingPath := base + "-sibling" + string(filepath.Separator) + "other.jsonl"
 	otherAgentDir := filepath.Join(base, "only-other-agent")
 	otherAgentPath := filepath.Join(otherAgentDir, "session.jsonl")
@@ -23,6 +24,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 	}{
 		{id: "active", agent: "codex", path: activePath},
 		{id: "deleted", agent: "codex", path: deletedPath},
+		{id: "source-missing", agent: "codex", path: sourceMissingPath},
 		{id: "sibling", agent: "codex", path: siblingPath},
 		{id: "other-agent", agent: "claude", path: otherAgentPath},
 	} {
@@ -33,6 +35,12 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 		})
 	}
 	require.NoError(t, database.SoftDeleteSession("deleted"))
+	baselineSessionSource(t, database, defaultMachine, "codex", sourceMissingPath)
+	changed, err := database.MarkSessionSourceMissing(
+		t.Context(), defaultMachine, "codex", "source-missing", sourceMissingPath,
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
 
 	tests := []struct {
 		name, agent, path string
@@ -40,6 +48,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 	}{
 		{name: "active descendant", agent: "codex", path: base, want: true},
 		{name: "deleted descendant", agent: "codex", path: filepath.Join(base, "deleted")},
+		{name: "source-missing descendant", agent: "codex", path: filepath.Join(base, "source-missing")},
 		{name: "sibling prefix", agent: "codex", path: base + "-sib"},
 		{name: "other agent", agent: "codex", path: otherAgentDir},
 		{name: "path itself is not below", agent: "codex", path: activePath},

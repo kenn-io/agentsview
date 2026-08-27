@@ -16,6 +16,7 @@ const hasActiveSessionSourceBelowQuery = `
 	  AND file_path < ?
 	  AND file_path IS NOT NULL
 	  AND deleted_at IS NULL
+	  AND source_missing_at IS NULL
 	LIMIT 1`
 
 // HasActiveSessionSourceBelow reports whether the local archive contains an
