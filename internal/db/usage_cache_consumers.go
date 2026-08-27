@@ -228,7 +228,7 @@ func (db *DB) GetUsageMatchingSessionCount(
 func (db *DB) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*SessionUsage, error) {
-	return db.getSessionUsageLegacy(ctx, sessionID, includeBreakdown)
+	return db.BunStore.GetSessionUsage(ctx, sessionID, includeBreakdown)
 }
 
 func (db *DB) getSessionUsageLegacy(

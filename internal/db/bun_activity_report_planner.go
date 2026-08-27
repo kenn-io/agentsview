@@ -134,6 +134,7 @@ terminal_events AS (
 		AND terminal.status IN ('completed', 'errored')
 		AND ` + bunNullableTimestamp("terminal.timestamp") + ` IS NOT NULL
 		AND ` + terminalTimestamp + ` >= ` + orderedBound("?1") + `
+		AND ` + terminalTimestamp + ` < ` + orderedBound("?3") + `
 ),
 terminal_sessions AS (
 	SELECT DISTINCT session_id FROM terminal_events
@@ -277,6 +278,9 @@ ORDER BY ` + orderedTimestamp("start_timestamp") + `,
 				-time.Duration(q.GapCapSeconds)*time.Second,
 			)),
 			bunmodel.NewTimestamp(q.EffectiveEnd),
+			bunmodel.NewTimestamp(q.EffectiveEnd.Add(
+				time.Duration(q.GapCapSeconds)*time.Second,
+			)),
 		).String()
 		rows, err := store.QueryContext(ctx, formatted)
 		if err != nil {

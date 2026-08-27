@@ -204,6 +204,29 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 	assert.InDelta(t, 1.0, *report.BySession[0].AgentMinutes, 1e-9)
 }
 
+func TestGetActivityReport_DistantToolCompletionLeavesFinalMessageUntimed(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "distant-completion", "tools", func(s *Session) {
+		s.Agent = "grok"
+		s.StartedAt = Ptr("2026-06-16T23:59:00Z")
+		s.EndedAt = Ptr("2026-06-20T10:01:00Z")
+	})
+	seedMessage(t, d, "distant-completion", 0, "assistant",
+		"2026-06-16T23:59:00Z", "model-x")
+	timingInsertToolResultEvent(t, d, "distant-completion", 0, 0,
+		"sample-call", "completed", "2026-06-20T10:01:00Z", 1)
+
+	report, err := d.GetActivityReport(
+		t.Context(), AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"),
+	)
+	require.NoError(t, err)
+	require.Len(t, report.BySession, 1)
+	assert.Nil(t, report.BySession[0].AgentMinutes,
+		"a completion days later cannot time the final in-range message")
+	assert.Zero(t, report.Totals.AgentMinutes)
+}
+
 func TestGetActivityReport_FutureToolCompletionDoesNotScopeOldSession(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "future-completion", "tools", func(s *Session) {

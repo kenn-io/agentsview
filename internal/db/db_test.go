@@ -5614,6 +5614,14 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	require.NoError(t,
 		srcDB.SetPricingMeta("_fallback_version", "v42"),
 		"SetPricingMeta")
+	_, err := srcDB.getWriter().Exec(`
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('_openrouter_models', 0, 0, 0, 0, '["legacy-model"]')`)
+	require.NoError(t, err, "insert legacy pricing metadata sentinel")
 	srcDB.Close()
 
 	// Destination DB with a stale row for the same pattern.
@@ -5623,6 +5631,9 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	require.NoError(t, dstDB.UpsertModelPricing([]ModelPricing{
 		{ModelPattern: "claude-opus-4-8", InputPerMTok: money.MustParseDollars("1")},
 	}), "UpsertModelPricing stale row")
+	require.NoError(t,
+		dstDB.SetPricingMeta("_openrouter_models", `["destination-stale"]`),
+		"SetPricingMeta stale destination metadata")
 
 	require.NoError(t, dstDB.CopyModelPricingFrom(srcPath),
 		"CopyModelPricingFrom")
@@ -5640,6 +5651,13 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	meta, err := dstDB.GetPricingMeta("_fallback_version")
 	require.NoError(t, err, "GetPricingMeta")
 	assert.Equal(t, "v42", meta, "sentinel meta row copied")
+	legacyMeta, err := dstDB.GetPricingMeta("_openrouter_models")
+	require.NoError(t, err, "GetPricingMeta legacy sentinel")
+	assert.Equal(t, `["legacy-model"]`, legacyMeta,
+		"legacy sentinel value copied into pricing metadata")
+	legacyPricing, err := dstDB.GetModelPricing("_openrouter_models")
+	require.NoError(t, err, "GetModelPricing legacy sentinel")
+	assert.Nil(t, legacyPricing, "legacy sentinel must not become a model price")
 }
 
 func TestCopyModelPricingFromRollsBackParentWhenBandCopyFails(t *testing.T) {
