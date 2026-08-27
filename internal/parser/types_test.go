@@ -833,6 +833,43 @@ func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {
 	require.Equal(t, filepath.Join(root, "storage", "session"), got.SessionRoot, "SessionRoot")
 }
 
+func TestOpenCodeSQLiteContainerNameContract(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{
+		"opencode.db", "opencode-local.db", "opencode-beta.1_x.db",
+		"opencode-.db", "opencode.db-wal", "opencode.sqlite",
+		"opencode-local.db-backup",
+	} {
+		path := filepath.Join(root, name)
+		if name == "opencode-local.db-backup" {
+			require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
+			continue
+		}
+		if name == "opencode-.db" || name == "opencode.sqlite" || name == "opencode.db-wal" {
+			require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
+			continue
+		}
+		require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
+	}
+	require.NoError(t, os.Mkdir(filepath.Join(root, "opencode-extra.db"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "nested", "opencode-nested.db"), []byte("x"), 0o644))
+	assert.Equal(t, []string{filepath.Join(root, "opencode.db"), filepath.Join(root, "opencode-beta.1_x.db"), filepath.Join(root, "opencode-local.db")}, openCodeSQLiteContainerPaths(openCodeFmt, root))
+	for _, f := range []openCodeFormat{kiloFmt, mimoFmt, icodemateFmt} {
+		assert.False(t, isOpenCodeSQLiteContainerName(f, f.dbName+"-local.db"))
+	}
+}
+
+func TestResolveOpenCodeSourceChannelOnly(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "opencode-local.db")
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
+	src := ResolveOpenCodeSource(root)
+	assert.Equal(t, OpenCodeSourceSQLite, src.Mode)
+	assert.Equal(t, []string{path}, src.DBPaths)
+	assert.Equal(t, path, src.DBPath)
+}
+
 func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "storage", "session_diff", "global")

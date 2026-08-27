@@ -434,6 +434,9 @@ var perSessionDBVirtualSourceBases = []string{
 }
 
 func isPerSessionDBVirtualSource(agent parser.AgentType, path string) bool {
+	if agent == parser.AgentOpenCode && parser.IsOpenCodeSQLiteVirtualPath(path) {
+		return true
+	}
 	if _, _, ok := parser.ParseVirtualSourcePathForBase(
 		path, parser.WindsurfStateDBName,
 	); ok {
@@ -454,6 +457,9 @@ func isPerSessionDBVirtualSource(agent parser.AgentType, path string) bool {
 // Copilot appends to its shared trace file, and the "#runIdx" suffix aider
 // appends to its shared history file.
 func stripVirtualSourceSuffix(path string) string {
+	if dbPath, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
+		return dbPath
+	}
 	if dbPath, _, ok := parser.ParseVirtualSourcePath(path); ok {
 		return dbPath
 	}

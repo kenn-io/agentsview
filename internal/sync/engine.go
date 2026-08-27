@@ -18022,6 +18022,9 @@ func isOpenCodeFormatSQLiteVirtualPath(
 	if !isOpenCodeFormatStorageAgent(agent) {
 		return false
 	}
+	if agent == parser.AgentOpenCode {
+		return parser.IsOpenCodeSQLiteVirtualPath(path)
+	}
 	_, _, ok := parser.ParseVirtualSourcePathForBase(
 		path, openCodeFormatDBName(agent),
 	)

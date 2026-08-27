@@ -606,7 +606,7 @@ func isVirtualSessionPath(path string) bool {
 	if _, _, ok := parser.ParseVirtualSourcePathForBase(path, "data.sqlite3"); ok {
 		return true
 	}
-	if _, _, ok := parser.ParseVirtualSourcePathForBase(path, "opencode.db"); ok {
+	if parser.IsOpenCodeSQLiteVirtualPath(path) {
 		return true
 	}
 	return false

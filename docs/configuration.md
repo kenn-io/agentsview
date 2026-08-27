@@ -528,7 +528,9 @@ file is used. Detection is automatic and requires no configuration. In storage
 mode, the file watcher scopes itself to the `storage/` subtree rather than the
 entire OpenCode directory, so unrelated OpenCode state like binaries, logs, and
 caches no longer trigger sync events. In SQLite mode, it watches the
-`opencode.db` parent.
+`opencode.db` parent. OpenCode release and channel databases are discovered
+under the root as `opencode.db` and `opencode-<channel>.db` files; storage JSON
+continues to take precedence over SQLite duplicates.
 
 Kilo and MiMoCode use the same OpenCode-format storage reader. Kilo reads from
 `storage/session`, while MiMoCode reads from `storage/session_diff` when

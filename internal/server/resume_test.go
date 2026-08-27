@@ -15,7 +15,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
+
+func TestIsVirtualSessionPathRecognizesOpenCodeChannelDatabase(t *testing.T) {
+	assert.True(t, isVirtualSessionPath(parser.OpenCodeSQLiteVirtualPath(
+		filepath.Join(t.TempDir(), "opencode-local.db"), "ses-1",
+	)))
+}
 
 func canonicalTestDir(path string) string {
 	if path == "" {

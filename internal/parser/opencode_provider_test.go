@@ -15,6 +15,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOpenCodeProviderDiscoversChannelSuffixedContainers(t *testing.T) {
+	root := t.TempDir()
+	canonical := filepath.Join(root, "opencode.db")
+	channel := filepath.Join(root, "opencode-local.db")
+	seedHybridSQLiteDB(t, canonical, "ses-shared")
+	seedHybridSQLiteDB(t, channel, "ses-channel")
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	paths := make([]string, 0, len(sources))
+	for _, source := range sources {
+		paths = append(paths, source.DisplayPath)
+	}
+	assert.Contains(t, paths, OpenCodeSQLiteVirtualPath(channel, "ses-channel"))
+	assert.Contains(t, paths, OpenCodeSQLiteVirtualPath(canonical, "ses-shared"))
+	assert.NotContains(t, paths, OpenCodeSQLiteVirtualPath(channel, "ses-shared"))
+}
+
+func TestOpenCodeProviderSkipsCorruptAdditionalChannelContainer(t *testing.T) {
+	root := t.TempDir()
+	canonical := filepath.Join(root, "opencode.db")
+	channel := filepath.Join(root, "opencode-local.db")
+	seedHybridSQLiteDB(t, canonical, "ses-healthy")
+	require.NoError(t, os.WriteFile(channel, []byte("not sqlite"), 0o600))
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, OpenCodeSQLiteVirtualPath(canonical, "ses-healthy"), sources[0].DisplayPath)
+}
+
 func TestOpenCodeHybridStreamingDiscoveryReportsIncompleteSQLiteFailure(
 	t *testing.T,
 ) {
@@ -406,7 +439,7 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{
-		"opencode.db", "opencode.db-wal",
+		"opencode.db", "opencode.db-wal", "opencode-*.db", "opencode-*.db-wal",
 	}, plan.Roots[0].IncludeGlobs)
 	assert.Equal(t, filepath.Join(root, "storage"), plan.Roots[1].Path)
 	assert.True(t, plan.Roots[1].Recursive)
@@ -890,7 +923,7 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{
-		"*.json", "opencode.db", "opencode.db-wal",
+		"*.json", "opencode.db", "opencode.db-wal", "opencode-*.db", "opencode-*.db-wal",
 	}, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(context.Background())

@@ -614,6 +614,19 @@ add an archived or maintained mirror without replacing the original identity.
 
 - **Format:** Current SQLite-backed session/message/part records and the legacy
   JSON storage tree.
+- **Database naming:** OpenCode release channels (`latest`, `beta`, and `prod`)
+  use `opencode.db`; other channels use `opencode-<sanitized-channel>.db`,
+  where the producer admits `[A-Za-z0-9._-]` and replaces other characters
+  with `-`. An unset channel defaults to `local`. AgentsView enumerates direct
+  regular files matching those names, with `opencode.db` taking precedence
+  over channel databases for duplicate session IDs. Storage JSON remains
+  authoritative over every SQLite container. Verified against OpenCode commit
+  `6568a824553200254e30e5a49c2831d1fb5f62e2` in the producer's
+  `packages/core/src/database/database.ts` and
+  `packages/core/src/installation/version.ts`.
+- **Configuration boundary:** `OPENCODE_DB` may select an explicit absolute,
+  relative, or in-memory producer path, but AgentsView does not implicitly
+  discover arbitrary `OPENCODE_DB` paths.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/anomalyco/opencode.git` at
   `67caf894e0843ee370e72839e8265e483233479b`; see
