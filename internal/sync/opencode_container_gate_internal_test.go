@@ -373,6 +373,20 @@ func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *tes
 	assert.Equal(t, []string{filepath.Clean(firstDB)}, statPaths)
 }
 
+func TestOpenCodeChannelContainerGateRoutesVirtualPath(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opencode-local.db")
+	virtual := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses-channel")
+
+	gotDB, gotID, ok := sqliteContainerSourceForFile(parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode,
+		Path:  virtual,
+	})
+	require.True(t, ok)
+	assert.Equal(t, dbPath, gotDB)
+	assert.Equal(t, "ses-channel", gotID)
+	assert.Equal(t, dbPath, sqliteContainerPathForResultPath(virtual))
+}
+
 // TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch pins the pass's
 // recapture check: a container that changed between the pre-discovery
 // capture and pass begin must neither gate-skip nor be promoted. The

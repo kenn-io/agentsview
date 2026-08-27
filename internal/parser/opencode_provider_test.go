@@ -20,7 +20,15 @@ func TestOpenCodeProviderDiscoversChannelSuffixedContainers(t *testing.T) {
 	canonical := filepath.Join(root, "opencode.db")
 	channel := filepath.Join(root, "opencode-local.db")
 	seedHybridSQLiteDB(t, canonical, "ses-shared")
-	seedHybridSQLiteDB(t, channel, "ses-channel")
+	seedHybridSQLiteDB(t, channel, "ses-shared")
+	db, err := sql.Open("sqlite3", channel)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.Exec(
+		`INSERT INTO session (id, project_id, time_created, time_updated)
+		 VALUES (?, ?, ?, ?)`, "ses-channel", "prj_seed", int64(3), int64(4),
+	)
+	require.NoError(t, err)
 	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())

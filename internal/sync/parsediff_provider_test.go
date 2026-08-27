@@ -54,6 +54,14 @@ func TestParseDiffDiscoversProviderSources(t *testing.T) {
 	}
 }
 
+func TestOpenCodeChannelVirtualSourceRouting(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opencode-local.db")
+	virtual := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses-channel")
+
+	assert.True(t, isPerSessionDBVirtualSource(parser.AgentOpenCode, virtual))
+	assert.Equal(t, dbPath, stripVirtualSourceSuffix(virtual))
+}
+
 func TestParseDiffSupportedAgentsAreDiscoverable(t *testing.T) {
 	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
 	for _, agent := range []parser.AgentType{

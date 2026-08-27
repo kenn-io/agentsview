@@ -570,22 +570,22 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 ) (continuable bool, retErr error) {
 	src := s.resolve(root)
 	hasSQLite := len(src.DBPaths) > 0
-	var storageIDs *discoveryDiskMap
-	if src.Mode == OpenCodeSourceStorage && hasSQLite {
+	var discoveredIDs *discoveryDiskMap
+	if hasSQLite {
 		var err error
-		storageIDs, err = newDiscoveryDiskMapForContext(ctx)
+		discoveredIDs, err = newDiscoveryDiskMapForContext(ctx)
 		if err != nil {
 			return false, err
 		}
 		defer func() {
-			if cleanupErr := storageIDs.close(); cleanupErr != nil {
+			if cleanupErr := discoveredIDs.close(); cleanupErr != nil {
 				continuable = false
 				retErr = errors.Join(retErr, cleanupErr)
 			}
 		}()
 	}
 	if src.Mode == OpenCodeSourceStorage {
-		if err := s.discoverStorageEach(ctx, root, src, storageIDs, yield); err != nil {
+		if err := s.discoverStorageEach(ctx, root, src, discoveredIDs, yield); err != nil {
 			if _, ok := errors.AsType[openCodeDiscoveryMapError](err); ok {
 				return false, err
 			}
@@ -599,7 +599,6 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 	}
 	var callbackErr error
 	var membershipErr error
-	seenSQLiteIDs := make(map[string]struct{})
 	// A container the engine's gate will skip wholesale streams the bounded
 	// watermark listing: computing every session's child digest for a pass
 	// that verifies nothing would be archive-sized work nothing reads (see
@@ -610,8 +609,8 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 			stream = s.spec.streamSQLiteWatermark
 		}
 		err := stream(ctx, dbPath, func(meta OpenCodeSessionMeta) error {
-			if storageIDs != nil {
-				_, exists, err := storageIDs.get(ctx, meta.SessionID)
+			if discoveredIDs != nil {
+				_, exists, err := discoveredIDs.get(ctx, meta.SessionID)
 				if err != nil {
 					membershipErr = err
 					return err
@@ -624,10 +623,18 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 			if !ok {
 				return nil
 			}
-			if _, exists := seenSQLiteIDs[meta.SessionID]; exists {
-				return nil
+			if discoveredIDs != nil {
+				added, err := discoveredIDs.putIfAbsent(
+					ctx, meta.SessionID, meta.SessionID,
+				)
+				if err != nil {
+					membershipErr = err
+					return err
+				}
+				if !added {
+					return nil
+				}
 			}
-			seenSQLiteIDs[meta.SessionID] = struct{}{}
 			callbackErr = yield(source)
 			return callbackErr
 		})
@@ -1301,7 +1308,11 @@ func (s openCodeFormatSourceSet) withPrecedingSQLiteIDs(
 		if strings.EqualFold(filepath.Clean(candidate), filepath.Clean(dbPath)) {
 			break
 		}
-		metas, err := s.spec.listSQLite(candidate)
+		lister := s.spec.listSQLite
+		if s.spec.listSQLiteWatermark != nil {
+			lister = s.spec.listSQLiteWatermark
+		}
+		metas, err := lister(candidate)
 		if err != nil {
 			continue
 		}
@@ -1898,6 +1909,9 @@ func isRecognizedOpenCodeContainerPath(root, path string, f openCodeFormat) bool
 	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
 	if !ok || filepath.Dir(rel) != "." {
 		return false
+	}
+	if f.agent != AgentOpenCode {
+		return isOpenCodeSQLiteContainerName(f, filepath.Base(path))
 	}
 	return isOpenCodeSQLiteContainerNameFolded(f, filepath.Base(path))
 }

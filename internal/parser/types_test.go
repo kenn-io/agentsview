@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -857,6 +858,9 @@ func TestOpenCodeSQLiteContainerNameContract(t *testing.T) {
 	assert.Equal(t, []string{filepath.Join(root, "opencode.db"), filepath.Join(root, "opencode-beta.1_x.db"), filepath.Join(root, "opencode-local.db")}, openCodeSQLiteContainerPaths(openCodeFmt, root))
 	for _, f := range []openCodeFormat{kiloFmt, mimoFmt, icodemateFmt} {
 		assert.False(t, isOpenCodeSQLiteContainerName(f, f.dbName+"-local.db"))
+		assert.False(t, isRecognizedOpenCodeContainerPath(
+			root, filepath.Join(root, strings.ToUpper(f.dbName)), f,
+		))
 	}
 }
 
