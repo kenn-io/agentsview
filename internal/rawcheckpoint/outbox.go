@@ -254,7 +254,8 @@ func CaptureMetadataCharge(entries, objectReferences int) int64 {
 }
 
 // ReserveCapture atomically reserves root-scoped capacity. A root-scoped
-// failure remains degraded until a later full-root reconciliation.
+// failure remains degraded until CompleteRootReconciliation records a
+// successful full-root pass.
 func (s *Store) ReserveCapture(
 	ctx context.Context,
 	configuredRootID string,
@@ -379,6 +380,35 @@ func (s *Store) CompleteUnchangedCapture(
 			return fmt.Errorf("rawcheckpoint: complete unchanged capture: release reservation: %w", err)
 		}
 		return clearSourceCoverageFailureConn(ctx, conn, source, s.now().UTC())
+	})
+}
+
+// CompleteRootReconciliation clears a root-wide coverage failure after a full
+// source reconciliation.
+func (s *Store) CompleteRootReconciliation(
+	ctx context.Context,
+	configuredRootID string,
+) error {
+	if configuredRootID == "" {
+		return fmt.Errorf("rawcheckpoint: invalid root reconciliation")
+	}
+	return s.withImmediateWrite(ctx, "complete root reconciliation", func(conn *sql.Conn) error {
+		var provider string
+		if err := conn.QueryRowContext(ctx,
+			`SELECT provider FROM configured_roots WHERE id = ?`, configuredRootID,
+		).Scan(&provider); err != nil {
+			return fmt.Errorf(
+				"rawcheckpoint: complete root reconciliation: read configured root: %w", err,
+			)
+		}
+		if _, err := conn.ExecContext(ctx, `DELETE FROM raw_coverage_failures
+			WHERE provider = ? AND configured_root_id = ? AND source_key = ''`,
+			provider, configuredRootID); err != nil {
+			return fmt.Errorf("rawcheckpoint: clear root coverage failure: %w", err)
+		}
+		return refreshCoverageFromFailuresConn(
+			ctx, conn, parser.AgentType(provider), configuredRootID, s.now().UTC(),
+		)
 	})
 }
 
@@ -1132,19 +1162,31 @@ func clearSourceCoverageFailureConn(
 		string(source.Provider), source.ConfiguredRootID, source.SourceKey); err != nil {
 		return fmt.Errorf("rawcheckpoint: clear source coverage failure: %w", err)
 	}
+	return refreshCoverageFromFailuresConn(
+		ctx, conn, source.Provider, source.ConfiguredRootID, now,
+	)
+}
+
+func refreshCoverageFromFailuresConn(
+	ctx context.Context,
+	conn *sql.Conn,
+	provider parser.AgentType,
+	configuredRootID string,
+	now time.Time,
+) error {
 	var reason string
 	err := conn.QueryRowContext(ctx, `SELECT reason FROM raw_coverage_failures
 		WHERE provider = ? AND configured_root_id = ?
 		ORDER BY degraded_at, source_key LIMIT 1`,
-		string(source.Provider), source.ConfiguredRootID).Scan(&reason)
+		string(provider), configuredRootID).Scan(&reason)
 	if errors.Is(err, sql.ErrNoRows) {
-		return setCoverageConn(ctx, conn, source.Provider, source.ConfiguredRootID,
+		return setCoverageConn(ctx, conn, provider, configuredRootID,
 			CoverageComplete, "", now)
 	}
 	if err != nil {
 		return fmt.Errorf("rawcheckpoint: inspect remaining coverage failures: %w", err)
 	}
-	return setCoverageConn(ctx, conn, source.Provider, source.ConfiguredRootID,
+	return setCoverageConn(ctx, conn, provider, configuredRootID,
 		CoverageDegraded, reason, now)
 }
 

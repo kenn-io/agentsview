@@ -278,7 +278,7 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestOpenWithOptionsPreservesVersionFourRootCoverageGap(t *testing.T) {
+func TestOpenWithOptionsReconcilesVersionFourRootCoverageGap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "checkpoint.db")
 	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, false))
 	require.NoError(t, err)
@@ -324,6 +324,24 @@ func TestOpenWithOptionsPreservesVersionFourRootCoverageGap(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, CoverageDegraded, coverage.State)
+
+	require.NoError(t, store.CompleteRootReconciliation(t.Context(), "root-a"))
+	coverage, ok, err = store.Coverage(t.Context(), parser.AgentClaude, "root-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, CoverageComplete, coverage.State)
+
+	source := SourceIdentity{
+		Provider: parser.AgentClaude, ConfiguredRootID: "root-a", SourceKey: "source-a",
+	}
+	_, err = store.ReserveSourceCapture(t.Context(), source, 1<<20+1)
+	require.ErrorIs(t, err, ErrOutboxFull)
+	require.NoError(t, store.CompleteRootReconciliation(t.Context(), "root-a"))
+	coverage, ok, err = store.Coverage(t.Context(), parser.AgentClaude, "root-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, CoverageDegraded, coverage.State)
+	assert.Equal(t, "outbox_full", coverage.Reason)
 }
 
 func TestOpenWithOptionsHoldsCheckpointAndSpoolProcessLocksUntilClose(t *testing.T) {
