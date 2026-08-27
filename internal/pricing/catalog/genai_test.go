@@ -16,11 +16,11 @@ func TestParseGenAIRateRejectsNegativePrices(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{name: "scalar", raw: `-0.1`},
-		{name: "tier base", raw: `{"base": -0.1, "tiers": []}`},
+		{name: "scalar", raw: `-0.0000004`},
+		{name: "tier base", raw: `{"base": -0.0000004, "tiers": []}`},
 		{
 			name: "tier price",
-			raw:  `{"base": 0, "tiers": [{"start": 0, "price": -0.1}]}`,
+			raw:  `{"base": 0, "tiers": [{"start": 0, "price": -0.0000004}]}`,
 		},
 	}
 	for _, tt := range tests {

@@ -420,12 +420,9 @@ func parseGenAIRate(raw jsontext.Value) (genAIRate, error) {
 		return genAIRate{}, fmt.Errorf("price must be a non-negative number")
 	}
 	if !strings.HasPrefix(value, "{") {
-		base, err := money.ParseDollars(value)
+		base, err := parseNonnegativeGenAIPrice(value)
 		if err != nil {
 			return genAIRate{}, err
-		}
-		if base.Microdollars < 0 {
-			return genAIRate{}, fmt.Errorf("price must be non-negative")
 		}
 		return genAIRate{base: base}, nil
 	}
@@ -433,12 +430,11 @@ func parseGenAIRate(raw jsontext.Value) (genAIRate, error) {
 	if err := json.Unmarshal(raw, &tiered); err != nil {
 		return genAIRate{}, err
 	}
-	base, err := money.ParseDollars(strings.TrimSpace(string(tiered.Base)))
+	base, err := parseNonnegativeGenAIPrice(
+		strings.TrimSpace(string(tiered.Base)),
+	)
 	if err != nil {
 		return genAIRate{}, fmt.Errorf("invalid base price: %w", err)
-	}
-	if base.Microdollars < 0 {
-		return genAIRate{}, fmt.Errorf("base price must be non-negative")
 	}
 	tiers := make([]genAITier, len(tiered.Tiers))
 	for i, tier := range tiered.Tiers {
@@ -447,14 +443,11 @@ func parseGenAIRate(raw jsontext.Value) (genAIRate, error) {
 				"pricing threshold must be non-negative",
 			)
 		}
-		price, parseErr := money.ParseDollars(
+		price, parseErr := parseNonnegativeGenAIPrice(
 			strings.TrimSpace(string(tier.Price)),
 		)
 		if parseErr != nil {
 			return genAIRate{}, fmt.Errorf("invalid tier price: %w", parseErr)
-		}
-		if price.Microdollars < 0 {
-			return genAIRate{}, fmt.Errorf("tier price must be non-negative")
 		}
 		tiers[i] = genAITier{start: tier.Start, price: price}
 	}
@@ -462,6 +455,23 @@ func parseGenAIRate(raw jsontext.Value) (genAIRate, error) {
 		return a.start - b.start
 	})
 	return genAIRate{base: base, tiers: tiers}, nil
+}
+
+func parseNonnegativeGenAIPrice(value string) (money.Money, error) {
+	price, err := money.ParseDollars(value)
+	if err != nil {
+		return money.Money{}, err
+	}
+
+	mantissa := value
+	if exponent := strings.IndexAny(mantissa, "eE"); exponent >= 0 {
+		mantissa = mantissa[:exponent]
+	}
+	if strings.HasPrefix(mantissa, "-") &&
+		strings.ContainsAny(mantissa, "123456789") {
+		return money.Money{}, fmt.Errorf("price must be non-negative")
+	}
+	return price, nil
 }
 
 func parseOptionalGenAIMatch(raw jsontext.Value) (genAIMatch, error) {
