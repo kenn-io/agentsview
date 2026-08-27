@@ -927,6 +927,12 @@ func TestShouldAbortResyncSwap(t *testing.T) {
 			want:            true,
 		},
 		{
+			name:            "provider discovery failure aborts",
+			stats:           SyncStats{providerFailures: 1, Synced: 5},
+			oldFileSessions: 5,
+			want:            true,
+		},
+		{
 			name:            "empty discovery with old data aborts",
 			stats:           SyncStats{},
 			oldFileSessions: 3,

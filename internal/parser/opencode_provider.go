@@ -631,13 +631,21 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 		}()
 	}
 	if src.Mode == OpenCodeSourceStorage {
+		storageIncomplete := false
 		if err := s.discoverStorageEach(ctx, root, src, discoveredIDs, yield); err != nil {
 			if _, ok := errors.AsType[openCodeDiscoveryMapError](err); ok {
 				return false, err
 			}
-			return true, incompleteDiscoveryError(
+			if ctx.Err() != nil {
+				return false, err
+			}
+			incomplete = errors.Join(incomplete, incompleteDiscoveryError(
 				s.spec.agent, "stream storage "+src.SessionRoot, err,
-			)
+			))
+			storageIncomplete = true
+		}
+		if storageIncomplete {
+			return true, incomplete
 		}
 	}
 	if !hasSQLite {
@@ -717,12 +725,14 @@ func (s openCodeFormatSourceSet) discoverStorageEach(
 	yield func(SourceRef) error,
 ) error {
 	var callbackErr error
+	var traversalErr error
 	err := streamDirectoryEntries(ctx, src.SessionRoot, func(project os.DirEntry) error {
 		isProjectDir, dirErr := streamingDirCandidateOrIncomplete(
 			s.spec.agent, "project directory", project, src.SessionRoot,
 		)
 		if dirErr != nil {
-			return dirErr
+			traversalErr = errors.Join(traversalErr, dirErr)
+			return nil
 		}
 		if !isProjectDir {
 			return nil
@@ -734,6 +744,13 @@ func (s openCodeFormatSourceSet) discoverStorageEach(
 			}
 			path := filepath.Join(projectDir, entry.Name())
 			s.indexStorageSession(root, path)
+			regular, fileErr := openCodeRegularSessionFile(path)
+			if fileErr != nil {
+				return fileErr
+			}
+			if !regular {
+				return nil
+			}
 			source, ok := s.sourceRef(root, path, false)
 			if !ok {
 				return nil
@@ -754,7 +771,14 @@ func (s openCodeFormatSourceSet) discoverStorageEach(
 			return callbackErr
 		}
 		if err != nil {
-			return err
+			if _, ok := errors.AsType[openCodeDiscoveryMapError](err); ok {
+				return err
+			}
+			if ctx.Err() != nil {
+				return err
+			}
+			traversalErr = errors.Join(traversalErr, err)
+			return nil
 		}
 		s.markProjectMetadataIndexed(root, project.Name())
 		return nil
@@ -765,7 +789,7 @@ func (s openCodeFormatSourceSet) discoverStorageEach(
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	return err
+	return errors.Join(err, traversalErr)
 }
 
 func (s openCodeFormatSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
@@ -1067,9 +1091,21 @@ func (s openCodeFormatSourceSet) canonicalVirtualSource(
 	}
 	src := s.resolve(root)
 	if src.Mode == OpenCodeSourceStorage {
+		if src.containerPathsErr != nil {
+			return SourceRef{}, false, incompleteDiscoveryError(
+				s.spec.agent, "enumerate SQLite containers "+root,
+				src.containerPathsErr,
+			)
+		}
 		var found SourceRef
 		err := streamDirectoryEntries(ctx, src.SessionRoot, func(project os.DirEntry) error {
-			if !isDirOrSymlink(project, src.SessionRoot) {
+			isProjectDir, err := streamingDirCandidateOrIncomplete(
+				s.spec.agent, "project directory", project, src.SessionRoot,
+			)
+			if err != nil {
+				return err
+			}
+			if !isProjectDir {
 				return nil
 			}
 			path := filepath.Join(src.SessionRoot, project.Name(), sessionID+".json")
@@ -1084,6 +1120,8 @@ func (s openCodeFormatSourceSet) canonicalVirtualSource(
 			return found, true, nil
 		case ctx.Err() != nil:
 			return SourceRef{}, false, ctx.Err()
+		case err != nil:
+			return SourceRef{}, false, err
 		}
 	}
 	source, ok := s.sourceRef(root, virtualPath, true)
@@ -1442,6 +1480,14 @@ func (s openCodeFormatSourceSet) addOpenCodeStorageSessionIDs(
 		projectDir := filepath.Join(src.SessionRoot, project.Name())
 		return streamDirectoryEntries(ctx, projectDir, func(entry os.DirEntry) error {
 			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				return nil
+			}
+			path := filepath.Join(projectDir, entry.Name())
+			regular, err := openCodeRegularSessionFile(path)
+			if err != nil {
+				return err
+			}
+			if !regular {
 				return nil
 			}
 			id := strings.TrimSuffix(entry.Name(), ".json")
@@ -2020,11 +2066,11 @@ func (s openCodeFormatSourceSet) sqliteChangeRelevance(
 		return ChangedPathUnclassified, false
 	}
 	switch {
-	case hasFoldedSuffix(filepath.Base(path), "-shm"):
+	case hasSQLiteSidecarSuffix(filepath.Base(path), "-shm"):
 		// SHM is only SQLite's WAL index. WAL frames or the checkpointed main
 		// database carry the source changes, so SHM events are redundant.
 		return ChangedPathNonData, true
-	case hasFoldedSuffix(filepath.Base(path), "-wal"):
+	case hasSQLiteSidecarSuffix(filepath.Base(path), "-wal"):
 		// A read-only connection can create an empty WAL while inspecting a
 		// quiet database. Ignore it, as well as WAL removal after a checkpoint;
 		// the corresponding main-database write is watched separately.
@@ -2039,14 +2085,20 @@ func (s openCodeFormatSourceSet) sqliteChangeRelevance(
 	}
 }
 
-func hasFoldedSuffix(value, suffix string) bool {
-	return len(value) >= len(suffix) &&
-		strings.EqualFold(value[len(value)-len(suffix):], suffix)
+func hasSQLiteSidecarSuffix(value, suffix string) bool {
+	if len(value) < len(suffix) {
+		return false
+	}
+	value = value[len(value)-len(suffix):]
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(value, suffix)
+	}
+	return value == suffix
 }
 
 func trimSQLiteSidecarSuffix(path string) string {
 	for _, suffix := range []string{"-wal", "-shm"} {
-		if hasFoldedSuffix(path, suffix) {
+		if hasSQLiteSidecarSuffix(path, suffix) {
 			return path[:len(path)-len(suffix)]
 		}
 	}

@@ -617,10 +617,12 @@ add an archived or maintained mirror without replacing the original identity.
 - **Database naming:** OpenCode release channels (`latest`, `beta`, and `prod`)
   use `opencode.db`; other channels use `opencode-<sanitized-channel>.db`,
   where the producer admits `[A-Za-z0-9._-]` and replaces other characters
-  with `-`. An unset channel defaults to `local`. AgentsView enumerates direct
-  regular files matching those names, with `opencode.db` taking precedence
-  over channel databases for duplicate session IDs. Storage JSON remains
-  authoritative over every SQLite container. Verified against OpenCode commit
+  with `-`. An unset channel defaults to `local`. The producer also falls back
+  to `opencode.db` when `OPENCODE_DISABLE_CHANNEL_DB` is `1` or `true`.
+  AgentsView enumerates direct regular files matching those names, with
+  `opencode.db` taking precedence over channel databases for duplicate session
+  IDs. Storage JSON remains authoritative over every SQLite container. Verified
+  against OpenCode commit
   `5f5ea53afb2630227ead917f1a0ddf784c33150c` in the producer's
   `packages/core/src/database/database.ts` and
   `packages/core/src/installation/version.ts`.

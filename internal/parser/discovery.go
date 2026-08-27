@@ -268,18 +268,25 @@ func discoverOpenCodeFormatSessionsWithError(
 	}
 
 	var files []DiscoveredFile
+	var enumerationErr error
 	entries, err := os.ReadDir(src.SessionRoot)
 	if err != nil {
 		return nil, err
 	}
 	for _, entry := range entries {
-		if !isDirOrSymlink(entry, src.SessionRoot) {
+		isProjectDir, dirErr := streamingDirOrSymlinkCandidate(entry, src.SessionRoot)
+		if dirErr != nil {
+			enumerationErr = errors.Join(enumerationErr, dirErr)
+			continue
+		}
+		if !isProjectDir {
 			continue
 		}
 		projectDir := filepath.Join(src.SessionRoot, entry.Name())
 		sessionEntries, err := os.ReadDir(projectDir)
 		if err != nil {
-			return files, err
+			enumerationErr = errors.Join(enumerationErr, err)
+			continue
 		}
 		for _, sessionEntry := range sessionEntries {
 			if sessionEntry.IsDir() ||
@@ -287,6 +294,14 @@ func discoverOpenCodeFormatSessionsWithError(
 				continue
 			}
 			path := filepath.Join(projectDir, sessionEntry.Name())
+			regular, fileErr := openCodeRegularSessionFile(path)
+			if fileErr != nil {
+				enumerationErr = errors.Join(enumerationErr, fileErr)
+				continue
+			}
+			if !regular {
+				continue
+			}
 			files = append(files, DiscoveredFile{
 				Path:    path,
 				Project: openCodeSessionProject(path),
@@ -298,7 +313,21 @@ func discoverOpenCodeFormatSessionsWithError(
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
-	return files, nil
+	return files, enumerationErr
+}
+
+func openCodeRegularSessionFile(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if _, err := os.Stat(path); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	return info.Mode().IsRegular(), nil
 }
 
 func findOpenCodeFormatSourceFile(

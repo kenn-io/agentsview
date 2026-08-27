@@ -98,7 +98,11 @@ func TestOpenCodeReconciliationAcceptsCaseVariantChannelSidecars(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		name = "OpenCode-Local.db"
 	}
-	for _, suffix := range []string{"-WAL", "-SHM"} {
+	suffixes := []string{"-wal", "-shm"}
+	if runtime.GOOS == "windows" {
+		suffixes = []string{"-WAL", "-SHM"}
+	}
+	for _, suffix := range suffixes {
 		requested := filepath.Join(root, name+suffix+"#ses-1")
 		container, ok := sources.reconciliationContainer(requested)
 		assert.True(t, ok, suffix)

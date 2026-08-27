@@ -2582,6 +2582,7 @@ func shouldAbortResyncSwap(
 		stats.cwdFilteredSessions > 0 &&
 		stats.filesOK == stats.cwdFilteredFiles+stats.parserExcludedFiles
 	return stats.Aborted ||
+		stats.providerFailures > 0 ||
 		emptyDiscovery ||
 		(stats.Synced == 0 &&
 			stats.TotalSessions > 0 &&

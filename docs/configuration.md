@@ -525,6 +525,8 @@ layouts. If a `storage/session/` directory exists under the OpenCode root,
 sessions are parsed from the per-file JSON layout (`storage/session`,
 `storage/message`, `storage/part`); otherwise recognized SQLite containers
 under the root are used, including `opencode.db` and `opencode-<channel>.db`.
+OpenCode's `OPENCODE_DISABLE_CHANNEL_DB=1` or `true` setting routes all
+channels to `opencode.db`.
 Detection is automatic and requires no configuration. In storage mode, the
 file watcher recursively scopes JSON files to the `storage/` subtree and adds
 a shallow root watch when SQLite containers are present, so unrelated
