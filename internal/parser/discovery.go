@@ -152,7 +152,7 @@ func openCodeSQLiteContainerPathsWithError(
 		if f.agent == AgentOpenCode && runtime.GOOS == "windows" {
 			recognized = isOpenCodeSQLiteContainerNameFolded(f, name)
 		}
-		if entry.IsDir() || !recognized {
+		if !recognized {
 			continue
 		}
 		info, err := os.Lstat(filepath.Join(root, name))
@@ -161,6 +161,10 @@ func openCodeSQLiteContainerPathsWithError(
 			continue
 		}
 		if !info.Mode().IsRegular() {
+			enumerationErr = errors.Join(
+				enumerationErr,
+				fmt.Errorf("recognized OpenCode SQLite container is not regular: %s", filepath.Join(root, name)),
+			)
 			continue
 		}
 		names = append(names, entry.Name())

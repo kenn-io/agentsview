@@ -906,6 +906,21 @@ func TestOpenCodeSQLiteContainerPathsRejectSymlinks(t *testing.T) {
 		require.NoError(t, os.Symlink(target, filepath.Join(root, name)))
 	}
 	assert.Empty(t, openCodeSQLiteContainerPaths(openCodeFmt, root))
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	_, err := provider.Discover(t.Context())
+	var incomplete DiscoveryIncompleteError
+	assert.ErrorAs(t, err, &incomplete)
+}
+
+func TestOpenCodeDiscoveryReportsNonRegularContainer(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "opencode-local.db"), 0o755))
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	_, err := provider.Discover(t.Context())
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete)
 }
 
 func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {

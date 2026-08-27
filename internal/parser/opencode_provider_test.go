@@ -113,6 +113,34 @@ func TestOpenCodeReconciliationFallsBackToHealthySQLiteAfterStorageScanError(t *
 	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses-sqlite"), source.DisplayPath)
 }
 
+func TestOpenCodeReconciliationKeepsVirtualPathWithinItsConfiguredRoot(t *testing.T) {
+	storageRoot := t.TempDir()
+	writeOpenCodeProviderStorageSession(
+		t, storageRoot, "session", "ses-shared", "project", "Storage",
+	)
+	sqliteRoot := t.TempDir()
+	dbPath, seeder, db := newTestDBAt(
+		t, filepath.Join(sqliteRoot, "opencode.db"),
+	)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	seeder.AddProject("prj_1", "/workspace/sqlite")
+	seeder.AddSession(
+		"ses-shared", "prj_1", "", "SQLite", 1700000000000, 1700000010000,
+	)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+		Roots: []string{storageRoot, sqliteRoot},
+	})
+	require.True(t, ok)
+	resolver, ok := provider.(ReconciliationSourceResolver)
+	require.True(t, ok)
+	source, found, err := resolver.SourceForReconciliation(
+		t.Context(), OpenCodeSQLiteVirtualPath(dbPath, "ses-shared"), "",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses-shared"), source.DisplayPath)
+}
+
 func TestOpenCodeReconciliationAcceptsCaseVariantChannelContainer(t *testing.T) {
 	root := t.TempDir()
 	sources := newOpenCodeFormatSourceSet(
