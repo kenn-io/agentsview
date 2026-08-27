@@ -370,6 +370,46 @@ func TestOpenWithOptionsHoldsCheckpointAndSpoolProcessLocksUntilClose(t *testing
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 }
 
+func TestOpenWithOptionsRejectsChangedSpoolBeforeRecovery(t *testing.T) {
+	base := t.TempDir()
+	checkpointPath := filepath.Join(base, "checkpoint.db")
+	spoolDir := filepath.Join(base, "spool")
+	store, err := OpenWithOptions(t.Context(), checkpointPath, Options{
+		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
+	})
+	require.NoError(t, err)
+	sourceRoot := filepath.Join(base, "sources")
+	require.NoError(t, os.MkdirAll(sourceRoot, 0o755))
+	root, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, sourceRoot)
+	require.NoError(t, err)
+	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
+	installOutboxTestObject(t, store, ref, []byte("abc"))
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
+	require.NoError(t, err)
+	generation := testCapturedGeneration(1, root, "", ref)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	require.NoError(t, store.Close())
+
+	mismatched, err := OpenWithOptions(t.Context(), checkpointPath, Options{
+		SpoolDir: filepath.Join(base, "other-spool"), MaxOutboxBytes: 1 << 20,
+	})
+	if mismatched != nil {
+		require.NoError(t, mismatched.Close())
+	}
+	require.ErrorIs(t, err, ErrSpoolMismatch)
+
+	reopened, err := OpenWithOptions(t.Context(), checkpointPath, Options{
+		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	queued, ok, err := reopened.NextGeneration(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, generation.CaptureID, queued.CaptureID)
+	assert.FileExists(t, reopened.ObjectPath(ref))
+}
+
 func TestOpenWithOptionsRejectsCheckpointAndSpoolContentionAcrossProcesses(t *testing.T) {
 	if os.Getenv("AGENTSVIEW_RAWCHECKPOINT_LOCK_HELPER") == "1" {
 		_, err := OpenWithOptions(t.Context(), os.Getenv("AGENTSVIEW_RAWCHECKPOINT_PATH"), Options{

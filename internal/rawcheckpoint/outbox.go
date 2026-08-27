@@ -114,6 +114,9 @@ type Options struct {
 	Now            func() time.Time
 }
 
+var ErrSpoolMismatch = errors.New(
+	"rawcheckpoint: checkpoint is bound to a different object spool")
+
 // ConfiguredRoot is the stable local mapping used in remote source identity.
 type ConfiguredRoot struct {
 	ID        string
@@ -150,6 +153,11 @@ func OpenWithOptions(ctx context.Context, path string, options Options) (*Store,
 		return nil, fmt.Errorf("rawcheckpoint: create temporary spool: %s",
 			checkpointFilesystemError(err))
 	}
+	spoolDir, err = filepath.EvalSymlinks(spoolDir)
+	if err != nil {
+		return nil, fmt.Errorf("rawcheckpoint: resolve object spool: %s",
+			checkpointFilesystemError(err))
+	}
 	processLocks, err := acquireStoreLocks(ctx, path, spoolDir)
 	if err != nil {
 		return nil, err
@@ -172,12 +180,40 @@ func OpenWithOptions(ctx context.Context, path string, options Options) (*Store,
 		_ = releaseStoreLocks(processLocks)
 		return nil, err
 	}
+	if err := store.bindSpool(ctx); err != nil {
+		db.Close()
+		_ = releaseStoreLocks(processLocks)
+		return nil, err
+	}
 	if _, err := store.Recover(ctx); err != nil {
 		db.Close()
 		_ = releaseStoreLocks(processLocks)
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Store) bindSpool(ctx context.Context) error {
+	return s.withImmediateWrite(ctx, "bind object spool", func(conn *sql.Conn) error {
+		var bound string
+		err := conn.QueryRowContext(ctx,
+			`SELECT spool_path FROM outbox_config WHERE id = 1`).Scan(&bound)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if _, err := conn.ExecContext(ctx,
+				`INSERT INTO outbox_config (id, spool_path) VALUES (1, ?)`,
+				s.spoolDir); err != nil {
+				return fmt.Errorf("rawcheckpoint: bind object spool: %w", err)
+			}
+			return nil
+		case err != nil:
+			return fmt.Errorf("rawcheckpoint: read object spool binding: %w", err)
+		case bound != s.spoolDir:
+			return ErrSpoolMismatch
+		default:
+			return nil
+		}
+	})
 }
 
 // ResolveConfiguredRoot returns the persistent opaque identity for a provider

@@ -88,6 +88,10 @@ var versionOneSchemaStatements = []string{
 
 var versionTwoMigrationStatements = []string{
 	`ALTER TABLE raw_sources ADD COLUMN latest_capture_id TEXT NOT NULL DEFAULT ''`,
+	`CREATE TABLE outbox_config (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		spool_path TEXT NOT NULL
+	)`,
 	`CREATE TABLE configured_roots (
 		id TEXT PRIMARY KEY,
 		provider TEXT NOT NULL,
