@@ -204,6 +204,28 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 	assert.InDelta(t, 1.0, *report.BySession[0].AgentMinutes, 1e-9)
 }
 
+func TestGetActivityReport_ToolCompletionAtGapCapClosesFinalMessage(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "completion-at-gap-cap", "tools", func(s *Session) {
+		s.Agent = "grok"
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:05:00Z")
+	})
+	seedMessage(t, d, "completion-at-gap-cap", 0, "assistant",
+		"2026-06-16T10:00:00Z", "model-x")
+	timingInsertToolResultEvent(t, d, "completion-at-gap-cap", 0, 0,
+		"sample-call", "completed", "2026-06-16T10:05:00Z", 1)
+
+	report, err := d.GetActivityReport(
+		t.Context(), AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"),
+	)
+	require.NoError(t, err)
+	require.Len(t, report.BySession, 1)
+	require.NotNil(t, report.BySession[0].AgentMinutes)
+	assert.InDelta(t, 5.0, *report.BySession[0].AgentMinutes, 1e-9)
+}
+
 func TestGetActivityReport_DistantToolCompletionLeavesFinalMessageUntimed(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "distant-completion", "tools", func(s *Session) {

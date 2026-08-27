@@ -70,8 +70,9 @@ func (sqliteBunAnalyticsDialect) ISOWeekday(operand BunSQLFragment) BunSQLFragme
 func (sqliteBunAnalyticsDialect) DurationSeconds(
 	start, end BunSQLFragment,
 ) BunSQLFragment {
-	return BunSQL("((JULIANDAY("+end.SQL+") - JULIANDAY("+start.SQL+
-		")) * 86400.0)", append(append([]any(nil), end.Args...), start.Args...)...)
+	return BunSQL("((agentsview_timestamp_unix_micro(COALESCE("+end.SQL+", '')) - "+
+		"agentsview_timestamp_unix_micro(COALESCE("+start.SQL+", ''))) / 1000000.0)",
+		append(append([]any(nil), end.Args...), start.Args...)...)
 }
 
 func (postgresBunAnalyticsDialect) LocalTimestamp(

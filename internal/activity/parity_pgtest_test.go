@@ -176,7 +176,7 @@ func parityFixture() []parityFixtureSession {
 			events: []parityEvent{
 				{role: "user", ts: parityDate + "T15:00:00Z"},
 				{role: "assistant", ts: parityDate + "T15:01:00Z",
-					toolCompletedAt: parityDate + "T15:02:00Z"},
+					toolCompletedAt: parityDate + "T15:06:00Z"},
 			},
 		},
 		{
@@ -613,7 +613,7 @@ func assertCandidateParity(
 		StartOrdinal: 1,
 		EndOrdinal:   1,
 		Start:        time.Date(2026, 6, 14, 15, 1, 0, 0, time.UTC),
-		End:          time.Date(2026, 6, 14, 15, 2, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 14, 15, 6, 0, 0, time.UTC),
 		ClosingRole:  "tool",
 		PriorModel:   "model-x",
 	}, activity.IntervalCandidate{
@@ -735,6 +735,9 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 		"the later fractional duplicate is dropped")
 	require.Equal(t, "model-x", bySession["parity-f"].PrimaryModel,
 		"zero-cost usage still reports its known model as primary")
+	require.NotNil(t, bySession["parity-tool"].AgentMinutes)
+	require.InDelta(t, 6.0, *bySession["parity-tool"].AgentMinutes, 1e-9,
+		"an exact gap-cap completion remains active across every backend")
 	require.NotNil(t, bySession["parity-tool-inline"].AgentMinutes)
 	require.InDelta(t, 7.0, *bySession["parity-tool-inline"].AgentMinutes, 1e-9,
 		"inline completion resets the gap cap before the final message")
