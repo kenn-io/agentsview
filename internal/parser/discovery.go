@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -145,13 +146,13 @@ func openCodeSQLiteContainerPathsWithError(
 	for _, entry := range entries {
 		name := entry.Name()
 		recognized := isOpenCodeSQLiteContainerName(f, name)
-		if f.agent == AgentOpenCode {
+		if f.agent == AgentOpenCode && runtime.GOOS == "windows" {
 			recognized = isOpenCodeSQLiteContainerNameFolded(f, name)
 		}
 		if entry.IsDir() || !recognized {
 			continue
 		}
-		info, err := entry.Info()
+		info, err := os.Stat(filepath.Join(root, name))
 		if err != nil {
 			return nil, err
 		}
@@ -250,15 +251,22 @@ func resolveOpenCodeFormatSource(
 func discoverOpenCodeFormatSessions(
 	f openCodeFormat, root string,
 ) []DiscoveredFile {
+	files, _ := discoverOpenCodeFormatSessionsWithError(f, root)
+	return files
+}
+
+func discoverOpenCodeFormatSessionsWithError(
+	f openCodeFormat, root string,
+) ([]DiscoveredFile, error) {
 	src := resolveOpenCodeFormatSource(f, root)
 	if src.Mode != OpenCodeSourceStorage {
-		return nil
+		return nil, nil
 	}
 
 	var files []DiscoveredFile
 	entries, err := os.ReadDir(src.SessionRoot)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	for _, entry := range entries {
 		if !isDirOrSymlink(entry, src.SessionRoot) {
@@ -267,7 +275,7 @@ func discoverOpenCodeFormatSessions(
 		projectDir := filepath.Join(src.SessionRoot, entry.Name())
 		sessionEntries, err := os.ReadDir(projectDir)
 		if err != nil {
-			continue
+			return files, err
 		}
 		for _, sessionEntry := range sessionEntries {
 			if sessionEntry.IsDir() ||
@@ -286,7 +294,7 @@ func discoverOpenCodeFormatSessions(
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
-	return files
+	return files, nil
 }
 
 func findOpenCodeFormatSourceFile(

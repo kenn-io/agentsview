@@ -7605,7 +7605,6 @@ func (e *Engine) discoverProviderSources(
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
-			continue
 		}
 		if agentType == parser.AgentKiro {
 			sources = filterProviderSourcesToScope(sources, scope)

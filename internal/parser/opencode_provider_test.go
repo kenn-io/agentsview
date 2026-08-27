@@ -118,7 +118,7 @@ func TestOpenCodePrecedingSQLiteArbitrationPreservesCaseDistinctPaths(t *testing
 		DBPath:  earlier,
 	}
 
-	skip, err := sources.withPrecedingSQLiteIDs(t.Context(), root, later, nil)
+	skip, err := sources.withPrecedingSQLiteIDs(t.Context(), root, later)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, skip.close()) })
 	_, found, err := skip.get(t.Context(), "ses-earlier")
