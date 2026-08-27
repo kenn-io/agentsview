@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     deleted_at         TIMESTAMPTZ,
     source_deleted_at  TIMESTAMPTZ,
     deletion_cause     TEXT,
+    source_missing_at  TIMESTAMPTZ,
     message_count      INT NOT NULL DEFAULT 0,
     user_message_count INT NOT NULL DEFAULT 0,
     parent_session_id  TEXT,
@@ -985,6 +986,11 @@ func EnsureSchema(
 			"sessions", "deletion_cause",
 			`deletion_cause TEXT`,
 			"adding sessions.deletion_cause",
+		},
+		{
+			"sessions", "source_missing_at",
+			`source_missing_at TIMESTAMPTZ`,
+			"adding sessions.source_missing_at",
 		},
 		{
 			"sessions", "parser_parent_session_id",

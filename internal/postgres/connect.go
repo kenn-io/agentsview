@@ -70,6 +70,7 @@ var pgSessionSourceOwnedColumns = map[string]struct{}{
 	"is_truncated": {}, "termination_status": {}, "file_path": {},
 	"file_size": {}, "file_mtime": {}, "file_inode": {}, "file_device": {},
 	"file_hash": {}, "transcript_revision": {}, "created_at": {},
+	"source_missing_at": {},
 	"source_archive_id": {}, "source_database_generation": {},
 }
 
