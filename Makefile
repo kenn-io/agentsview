@@ -408,12 +408,11 @@ test-ssh-ci: pricing-snapshot ensure-embed-dir
 
 # Run Playwright E2E tests
 e2e:
-	cd frontend && PROJECT_MAPPING_WORKSPACE_E2E_ENABLED=true npx playwright test
+	cd frontend && npx playwright test
 
 # Run focused Playwright smoke tests against duckdb serve.
 e2e-duckdb:
-	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb \
-		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED=true npx playwright test \
+	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb npx playwright test \
 		e2e/duckdb-backend.spec.ts e2e/data-mode.spec.ts \
 		e2e/session-list.spec.ts --project=chromium
 

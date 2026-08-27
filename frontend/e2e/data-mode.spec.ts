@@ -225,7 +225,9 @@ test.describe("Data mode project reclassification", () => {
     await row.click();
 
     const ws = workspace(page);
-    await expect(ws.getByText("Folder suggestions")).toBeVisible();
+    await expect(
+      ws.getByRole("button", { name: "Folder suggestions" }),
+    ).toBeVisible();
     await expect(
       ws.getByRole("button", { name: worktreeRoot }),
     ).toBeVisible();
