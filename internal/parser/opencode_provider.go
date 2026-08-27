@@ -599,6 +599,7 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 	}
 	var callbackErr error
 	var membershipErr error
+	seenSQLiteIDs := make(map[string]struct{})
 	// A container the engine's gate will skip wholesale streams the bounded
 	// watermark listing: computing every session's child digest for a pass
 	// that verifies nothing would be archive-sized work nothing reads (see
@@ -623,6 +624,10 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 			if !ok {
 				return nil
 			}
+			if _, exists := seenSQLiteIDs[meta.SessionID]; exists {
+				return nil
+			}
+			seenSQLiteIDs[meta.SessionID] = struct{}{}
 			callbackErr = yield(source)
 			return callbackErr
 		})
@@ -843,7 +848,7 @@ func reconciliationOpenCodeContainerPath(root, path string, f openCodeFormat) (s
 		}
 		return "", false
 	}
-	if !isOpenCodeSQLiteContainerName(f, name) {
+	if !isOpenCodeSQLiteContainerNameFolded(f, name) {
 		return "", false
 	}
 	container := filepath.Join(root, name)
@@ -1867,11 +1872,29 @@ func isRecognizedOpenCodeContainerPath(root, path string, f openCodeFormat) bool
 	return isOpenCodeSQLiteContainerName(f, filepath.Base(path))
 }
 
-func recognizedOpenCodeContainerFromPath(root, path string, f openCodeFormat) (string, bool) {
-	if !isRecognizedOpenCodeContainerPath(root, path, f) {
-		return "", false
+func isOpenCodeSQLiteContainerNameFolded(f openCodeFormat, name string) bool {
+	if strings.EqualFold(name, f.dbName) {
+		return true
 	}
-	return filepath.Clean(path), true
+	if f.agent != AgentOpenCode {
+		return false
+	}
+	const prefix, suffix = "opencode-", ".db"
+	lower := strings.ToLower(name)
+	if !strings.HasPrefix(lower, prefix) || !strings.HasSuffix(lower, suffix) {
+		return false
+	}
+	channel := name[len(prefix) : len(name)-len(suffix)]
+	if channel == "" {
+		return false
+	}
+	for _, r := range channel {
+		if !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') &&
+			!(r >= '0' && r <= '9') && r != '.' && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func sqliteWALHasFrames(path string) bool {

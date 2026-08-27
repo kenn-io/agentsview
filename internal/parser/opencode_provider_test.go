@@ -32,6 +32,31 @@ func TestOpenCodeProviderDiscoversChannelSuffixedContainers(t *testing.T) {
 	assert.Contains(t, paths, OpenCodeSQLiteVirtualPath(channel, "ses-channel"))
 	assert.Contains(t, paths, OpenCodeSQLiteVirtualPath(canonical, "ses-shared"))
 	assert.NotContains(t, paths, OpenCodeSQLiteVirtualPath(channel, "ses-shared"))
+	var streamed []SourceRef
+	require.NoError(t, provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	))
+	streamedPaths := make([]string, 0, len(streamed))
+	for _, source := range streamed {
+		streamedPaths = append(streamedPaths, source.DisplayPath)
+	}
+	assert.Contains(t, streamedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-channel"))
+	assert.Contains(t, streamedPaths, OpenCodeSQLiteVirtualPath(canonical, "ses-shared"))
+	assert.NotContains(t, streamedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-shared"))
+}
+
+func TestOpenCodeReconciliationAcceptsCaseVariantChannelContainer(t *testing.T) {
+	root := t.TempDir()
+	sources := newOpenCodeFormatSourceSet(
+		[]string{root}, openCodeProviderSpecForAgent(AgentOpenCode), nil,
+	)
+	requested := filepath.Join(root, "OpenCode-Local.db#ses-1")
+	container, ok := sources.reconciliationContainer(requested)
+	assert.True(t, ok)
+	assert.Equal(t, filepath.Join(root, "OpenCode-Local.db"), container)
 }
 
 func TestOpenCodeProviderSkipsCorruptAdditionalChannelContainer(t *testing.T) {
