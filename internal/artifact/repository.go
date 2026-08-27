@@ -12,7 +12,7 @@ import (
 	"sync"
 
 	"go.kenn.io/docbank"
-	docsqlite "go.kenn.io/docbank/pkg/sqlite"
+	docsqlite "go.kenn.io/docbank/sqlite"
 )
 
 const (
