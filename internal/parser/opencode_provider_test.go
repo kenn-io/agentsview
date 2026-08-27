@@ -46,6 +46,16 @@ func TestOpenCodeProviderDiscoversChannelSuffixedContainers(t *testing.T) {
 	assert.Contains(t, streamedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-channel"))
 	assert.Contains(t, streamedPaths, OpenCodeSQLiteVirtualPath(canonical, "ses-shared"))
 	assert.NotContains(t, streamedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-shared"))
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: channel, EventKind: "write", WatchRoot: root,
+	})
+	require.NoError(t, err)
+	changedPaths := make([]string, 0, len(changed))
+	for _, source := range changed {
+		changedPaths = append(changedPaths, source.DisplayPath)
+	}
+	assert.Contains(t, changedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-channel"))
+	assert.NotContains(t, changedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-shared"))
 }
 
 func TestOpenCodeReconciliationAcceptsCaseVariantChannelContainer(t *testing.T) {

@@ -870,6 +870,18 @@ func TestResolveOpenCodeSourceChannelOnly(t *testing.T) {
 	assert.Equal(t, path, src.DBPath)
 }
 
+func TestOpenCodePathClassifiersAcceptCaseVariantChannel(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "OpenCode-Local.db")
+	assert.True(t, IsOpenCodeSQLiteContainerPath(root, path))
+	container, ok := OpenCodeSQLiteContainerPathForEvent(root, path+"-wal")
+	assert.True(t, ok)
+	assert.Equal(t, path, container)
+	assert.True(t, IsOpenCodeSQLiteVirtualPath(
+		OpenCodeSQLiteVirtualPath(path, "ses-1"),
+	))
+}
+
 func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "storage", "session_diff", "global")
@@ -1093,6 +1105,21 @@ func TestResolveOpenCodeWatchRootsHybrid(t *testing.T) {
 	want := []string{root}
 	assert.Truef(t, slices.Equal(got, want),
 		"ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
+}
+
+func TestResolveOpenCodeWatchRootsHybridChannelOnly(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(root, "storage", "session", "global"),
+		0o755,
+	), "mkdir session dir")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "opencode-local.db"), []byte("x"), 0o644,
+	), "write channel db marker")
+
+	got := ResolveOpenCodeWatchRoots(root)
+	assert.Truef(t, slices.Equal(got, []string{root}),
+		"ResolveOpenCodeWatchRoots() = %v, want %v", got, []string{root})
 }
 
 // A fresh opencode install may only have storage/session at startup;

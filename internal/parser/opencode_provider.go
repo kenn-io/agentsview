@@ -1292,6 +1292,35 @@ func (s openCodeFormatSourceSet) sqliteSources(
 	return sources, nil
 }
 
+func (s openCodeFormatSourceSet) withPrecedingSQLiteIDs(
+	root, dbPath string, storageIDs map[string]struct{},
+) map[string]struct{} {
+	src := s.resolve(root)
+	var skip map[string]struct{}
+	for _, candidate := range src.DBPaths {
+		if strings.EqualFold(filepath.Clean(candidate), filepath.Clean(dbPath)) {
+			break
+		}
+		metas, err := s.spec.listSQLite(candidate)
+		if err != nil {
+			continue
+		}
+		if skip == nil {
+			skip = make(map[string]struct{}, len(storageIDs)+len(metas))
+			for id := range storageIDs {
+				skip[id] = struct{}{}
+			}
+		}
+		for _, meta := range metas {
+			skip[meta.SessionID] = struct{}{}
+		}
+	}
+	if skip == nil {
+		return storageIDs
+	}
+	return skip
+}
+
 // changedWatermarkSources answers a shared-container change event with only
 // the members whose carried session-row watermark is not already covered by
 // the caller's stored freshness. The watermark listing streams in ascending
@@ -1449,6 +1478,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 		if s.resolve(root).Mode == OpenCodeSourceStorage {
 			storageIDs = s.spec.storageIDs(root)
 		}
+		storageIDs = s.withPrecedingSQLiteIDs(root, dbPath, storageIDs)
 		if req.AllowWatermarkOnlySources &&
 			req.StoredMemberFreshnessPage != nil &&
 			s.spec.streamSQLiteWatermark != nil {
@@ -1869,7 +1899,7 @@ func isRecognizedOpenCodeContainerPath(root, path string, f openCodeFormat) bool
 	if !ok || filepath.Dir(rel) != "." {
 		return false
 	}
-	return isOpenCodeSQLiteContainerName(f, filepath.Base(path))
+	return isOpenCodeSQLiteContainerNameFolded(f, filepath.Base(path))
 }
 
 func isOpenCodeSQLiteContainerNameFolded(f openCodeFormat, name string) bool {

@@ -348,9 +348,10 @@ func resolveOpenCodeFormatWatchRoots(
 	src := resolveOpenCodeFormatSource(f, root)
 	switch src.Mode {
 	case OpenCodeSourceStorage:
-		if info, err := os.Stat(src.DBPath); err == nil &&
-			!info.IsDir() {
-			return []string{root}
+		for _, dbPath := range src.DBPaths {
+			if info, err := os.Stat(dbPath); err == nil && !info.IsDir() {
+				return []string{root}
+			}
 		}
 		return []string{filepath.Join(root, "storage")}
 	case OpenCodeSourceSQLite:
@@ -376,7 +377,7 @@ func parseOpenCodeFormatVirtualPath(
 	sessionID = sourcePath[idx+1:]
 	if filepath.Base(dbPath) != dbName &&
 		!(dbName == openCodeFmt.dbName &&
-			isOpenCodeSQLiteContainerName(openCodeFmt, filepath.Base(dbPath))) {
+			isOpenCodeSQLiteContainerNameFolded(openCodeFmt, filepath.Base(dbPath))) {
 		return "", "", false
 	}
 	return dbPath, sessionID, true
@@ -390,7 +391,7 @@ func IsOpenCodeSQLiteContainerPath(root, path string) bool {
 	if !ok || filepath.Dir(rel) != "." {
 		return false
 	}
-	return isOpenCodeSQLiteContainerName(openCodeFmt, filepath.Base(path))
+	return isOpenCodeSQLiteContainerNameFolded(openCodeFmt, filepath.Base(path))
 }
 
 // ParseOpenCodeSQLiteVirtualPath parses a virtual session locator for any
@@ -401,7 +402,7 @@ func ParseOpenCodeSQLiteVirtualPath(path string) (string, string, bool) {
 		return "", "", false
 	}
 	dbPath := path[:idx]
-	if !isOpenCodeSQLiteContainerName(openCodeFmt, filepath.Base(dbPath)) {
+	if !isOpenCodeSQLiteContainerNameFolded(openCodeFmt, filepath.Base(dbPath)) {
 		return "", "", false
 	}
 	return dbPath, path[idx+1:], true
