@@ -1411,6 +1411,7 @@ func TestCollectAndBatchBaselinesHealthySourceBesideFailedSource(t *testing.T) {
 type manyStreamingProvider struct {
 	parser.ProviderBase
 	sources       []parser.SourceRef
+	reconciled    map[string]parser.SourceRef
 	parseOutcome  *parser.ParseOutcome
 	parseOutcomes map[string]parser.ParseOutcome
 	discoverCalls atomic.Int32
@@ -1445,6 +1446,10 @@ func (provider *manyStreamingProvider) SourceForReconciliation(
 	if err := ctx.Err(); err != nil {
 		return parser.SourceRef{}, false, err
 	}
+	if source, ok := provider.reconciled[path]; ok {
+		source.ProjectHint = project
+		return source, true, nil
+	}
 	for _, source := range provider.sources {
 		if source.DisplayPath == path {
 			source.ProjectHint = project
@@ -1452,6 +1457,38 @@ func (provider *manyStreamingProvider) SourceForReconciliation(
 		}
 	}
 	return parser.SourceRef{}, false, nil
+}
+
+func TestRehydrateReconciliationPageUsesResolvedProviderPath(t *testing.T) {
+	root := t.TempDir()
+	candidatePath := filepath.Join(root, "opencode-local.db#ses-1")
+	canonicalPath := filepath.Join(root, "opencode.db#ses-1")
+	provider := &manyStreamingProvider{
+		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentOpenCode}},
+		reconciled: map[string]parser.SourceRef{
+			candidatePath: {
+				Provider:       parser.AgentOpenCode,
+				DisplayPath:    canonicalPath,
+				Key:            canonicalPath,
+				FingerprintKey: canonicalPath,
+			},
+		},
+	}
+	page := []reconciliationCandidate{{
+		Provider: parser.AgentOpenCode,
+		Identity: "ses-1",
+		Path:     candidatePath,
+	}}
+	files, err := (&Engine{}).rehydrateReconciliationPage(
+		t.Context(), page,
+		map[parser.AgentType]parser.Provider{parser.AgentOpenCode: provider},
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Equal(t, canonicalPath, files[0].Path)
+	require.NotNil(t, files[0].ProviderSource)
+	assert.Equal(t, canonicalPath, files[0].ProviderSource.DisplayPath)
 }
 
 func (*manyStreamingProvider) WatchPlan(context.Context) (parser.WatchPlan, error) {

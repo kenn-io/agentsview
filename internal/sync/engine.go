@@ -6092,8 +6092,12 @@ func (e *Engine) rehydrateReconciliationPage(
 				return nil, fmt.Errorf("rehydrate %s source %s: %w", candidate.Provider, candidate.Path, err)
 			}
 			if found && reconciliationSourceIdentity(candidate.Provider, source) == candidate.Identity {
+				path := providerDiscoveredPath(source)
+				if path == "" {
+					return nil, fmt.Errorf("rehydrate %s source %s: resolved source path is empty", candidate.Provider, candidate.Path)
+				}
 				files = append(files, parser.DiscoveredFile{
-					Path: candidate.Path, Project: source.ProjectHint,
+					Path: path, Project: source.ProjectHint,
 					Agent: candidate.Provider, ForceParse: forceCandidate,
 					Machine:        candidate.Machine,
 					ProviderSource: &source, ProviderProcess: true,
@@ -6119,8 +6123,12 @@ func (e *Engine) rehydrateReconciliationPage(
 			return nil, fmt.Errorf("rehydrate %s source %s: canonical source not found", candidate.Provider, candidate.Path)
 		}
 		source := *matched
+		path := providerDiscoveredPath(source)
+		if path == "" {
+			return nil, fmt.Errorf("rehydrate %s source %s: resolved source path is empty", candidate.Provider, candidate.Path)
+		}
 		files = append(files, parser.DiscoveredFile{
-			Path: candidate.Path, Project: source.ProjectHint,
+			Path: path, Project: source.ProjectHint,
 			Agent: candidate.Provider, ForceParse: forceCandidate,
 			// Carry the candidate's stored attribution: recomputing it from the
 			// physical path is wrong for providers whose source can sit outside

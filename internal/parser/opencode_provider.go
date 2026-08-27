@@ -1113,6 +1113,9 @@ func (s openCodeFormatSourceSet) canonicalVirtualSource(
 		case ctx.Err() != nil:
 			return SourceRef{}, false, ctx.Err()
 		case err != nil:
+			if source, ok := s.sourceRef(root, virtualPath, true); ok {
+				return source, true, nil
+			}
 			return SourceRef{}, false, err
 		}
 	}
@@ -1132,7 +1135,8 @@ func (s openCodeFormatSourceSet) FindSource(
 			continue
 		}
 		for _, root := range s.roots {
-			if source, ok := s.sourceRef(root, path, true); ok {
+			preferStored := req.PreferStoredSource && path == req.StoredFilePath
+			if source, ok := s.sourceRef(root, path, !preferStored); ok {
 				return source, true, nil
 			}
 		}

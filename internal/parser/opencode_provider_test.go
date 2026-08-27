@@ -72,6 +72,45 @@ func TestOpenCodeProviderDiscoversChannelSuffixedContainers(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, OpenCodeSQLiteVirtualPath(canonical, "ses-shared"), reconciled.DisplayPath)
+	stored, found, err := provider.FindSource(t.Context(), FindSourceRequest{
+		StoredFilePath:     OpenCodeSQLiteVirtualPath(channel, "ses-shared"),
+		RequireFreshSource: true,
+		PreferStoredSource: true,
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, OpenCodeSQLiteVirtualPath(channel, "ses-shared"), stored.DisplayPath)
+}
+
+func TestOpenCodeReconciliationFallsBackToHealthySQLiteAfterStorageScanError(t *testing.T) {
+	root := t.TempDir()
+	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	seeder.AddProject("prj_1", "/workspace/sqlite")
+	seeder.AddSession(
+		"ses-sqlite", "prj_1", "", "SQLite", 1700000000000, 1700000010000,
+	)
+	storageRoot := filepath.Join(root, "storage", "session")
+	require.NoError(t, os.MkdirAll(storageRoot, 0o755))
+	discoveryErr := errors.New("storage scan failed")
+	ctx := withStreamingDirectoryReader(t.Context(), func(
+		ctx context.Context, dir string, yield func(os.DirEntry) error,
+	) error {
+		if samePath(dir, storageRoot) {
+			return discoveryErr
+		}
+		return streamDirectoryEntriesDirect(ctx, dir, yield)
+	})
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	resolver, ok := provider.(ReconciliationSourceResolver)
+	require.True(t, ok)
+	source, found, err := resolver.SourceForReconciliation(
+		ctx, OpenCodeSQLiteVirtualPath(dbPath, "ses-sqlite"), "",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses-sqlite"), source.DisplayPath)
 }
 
 func TestOpenCodeReconciliationAcceptsCaseVariantChannelContainer(t *testing.T) {
