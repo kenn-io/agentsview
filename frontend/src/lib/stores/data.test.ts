@@ -359,7 +359,7 @@ describe("unknownProjectKey", () => {
 });
 
 describe("refreshAfterApply", () => {
-  it("keeps an event refresh from superseding the post-apply selection refresh", async () => {
+  it("queues an event refresh that expires during the post-apply refresh", async () => {
     vi.useFakeTimers();
     data.selectedProjectKey = "k1";
     (routerMod.router as unknown as { params: Record<string, string> }).params = {
@@ -367,13 +367,21 @@ describe("refreshAfterApply", () => {
     };
     detach = data.attach(true);
 
-    let resolveLoad!: (inventory: DbProjectInventory) => void;
-    api.getApiV1DataProjects.mockImplementationOnce(
-      () =>
-        new Promise<DbProjectInventory>((resolve) => {
-          resolveLoad = resolve;
-        }),
-    );
+    let resolveMutationRefresh!: (inventory: DbProjectInventory) => void;
+    let resolveEventRefresh!: (inventory: DbProjectInventory) => void;
+    api.getApiV1DataProjects
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbProjectInventory>((resolve) => {
+            resolveMutationRefresh = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbProjectInventory>((resolve) => {
+            resolveEventRefresh = resolve;
+          }),
+      );
 
     const pending = data.refreshAfterApply("k1", "Merged Target");
     emitDataChanged?.({ scope: "sessions" });
@@ -381,7 +389,7 @@ describe("refreshAfterApply", () => {
 
     expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1);
 
-    resolveLoad(
+    resolveMutationRefresh(
       makeInventory([
         makeRow({ project_key: "k2", label: "Beta" }),
         makeRow({ project_key: "k3", label: "Merged Target" }),
@@ -390,6 +398,50 @@ describe("refreshAfterApply", () => {
 
     await expect(pending).resolves.toBe(true);
     expect(data.selectedProjectKey).toBe("k3");
+    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(2);
+
+    const latest = makeInventory([
+      makeRow({ project_key: "k3", label: "Merged Target" }),
+      makeRow({ project_key: "k4", label: "Later Project" }),
+    ]);
+    resolveEventRefresh(latest);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(data.inventory).toEqual(latest);
+  });
+
+  it("serializes concurrent mutation refreshes", async () => {
+    let resolveFirst!: (inventory: DbProjectInventory) => void;
+    let resolveSecond!: (inventory: DbProjectInventory) => void;
+    api.getApiV1DataProjects
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbProjectInventory>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbProjectInventory>((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    const first = data.loadAfterMutation();
+    const second = data.loadAfterMutation();
+
+    await vi.waitFor(() => expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1));
+
+    const firstInventory = makeInventory([makeRow({ project_key: "first" })]);
+    resolveFirst(firstInventory);
+    await expect(first).resolves.toBe(true);
+    expect(data.inventory).toEqual(firstInventory);
+    expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(2);
+
+    const secondInventory = makeInventory([makeRow({ project_key: "second" })]);
+    resolveSecond(secondInventory);
+    await expect(second).resolves.toBe(true);
+    expect(data.inventory).toEqual(secondInventory);
   });
 
   it("keeps the selection when the original key still exists", async () => {
@@ -468,6 +520,7 @@ describe("refreshAfterApply", () => {
     spy.mockClear();
 
     const pending = data.refreshAfterApply("k1", "Merged Target");
+    await vi.waitFor(() => expect(api.getApiV1DataProjects).toHaveBeenCalledTimes(1));
     data.clearSelection();
     spy.mockClear();
 
