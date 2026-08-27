@@ -118,7 +118,8 @@ func TestOpenCodeReconciliationKeepsVirtualPathWithinItsConfiguredRoot(t *testin
 	writeOpenCodeProviderStorageSession(
 		t, storageRoot, "session", "ses-shared", "project", "Storage",
 	)
-	sqliteRoot := t.TempDir()
+	sqliteRoot := filepath.Join(storageRoot, "nested")
+	require.NoError(t, os.MkdirAll(sqliteRoot, 0o755))
 	dbPath, seeder, db := newTestDBAt(
 		t, filepath.Join(sqliteRoot, "opencode.db"),
 	)

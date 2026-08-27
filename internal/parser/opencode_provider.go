@@ -1035,11 +1035,16 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 		return SourceRef{}, false, err
 	}
 	dbPath, _, virtual := s.spec.parseVirtual(path)
-	for _, root := range s.roots {
+	roots := s.roots
+	if virtual {
+		root, ok := s.mostSpecificRootFor(dbPath)
+		if !ok {
+			return SourceRef{}, false, nil
+		}
+		roots = []string{root}
+	}
+	for _, root := range roots {
 		if virtual {
-			if _, under := relUnder(root, dbPath); !under {
-				continue
-			}
 			source, ok, err := s.canonicalVirtualSource(ctx, root, path)
 			if err != nil || !ok {
 				if err != nil {
