@@ -106,7 +106,7 @@ func (s *Store) FinalizeNextManifest(
 			AND (generation.predecessor_capture_id IS NULL
 				OR predecessor.state = 'acknowledged')
 			ORDER BY generation.captured_at, generation.capture_id LIMIT 1`,
-			s.now().UTC().Format(time.RFC3339Nano),
+			checkpointTimestamp(s.now()),
 		).Scan(&manifest.CaptureID, &provider, &manifest.ConfiguredRootID,
 			&manifest.SourceKey, &capturedAt, &kind, &state, &expectedParent)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -126,7 +126,7 @@ func (s *Store) FinalizeNextManifest(
 			).Scan(&expectedParent); err != nil {
 				return fmt.Errorf("rawcheckpoint: finalize manifest: read source head: %w", err)
 			}
-			now := s.now().UTC().Format(time.RFC3339Nano)
+			now := checkpointTimestamp(s.now())
 			if _, err := conn.ExecContext(ctx, `UPDATE outbox_generations SET
 				state = 'finalized', expected_parent_receipt = ?, updated_at = ?
 				WHERE capture_id = ? AND state = 'queued'`,
@@ -162,7 +162,7 @@ func (s *Store) RecordGenerationFailure(
 		if retryAt.IsZero() {
 			return ErrGenerationFailureConflict
 		}
-		retryStamp = retryAt.UTC().Format(time.RFC3339Nano)
+		retryStamp = checkpointTimestamp(retryAt)
 	case GenerationFailureParentReceiptConflict:
 		if !retryAt.IsZero() {
 			return ErrGenerationFailureConflict
@@ -177,8 +177,9 @@ func (s *Store) RecordGenerationFailure(
 		}
 		result, err := conn.ExecContext(ctx, `UPDATE outbox_generations SET
 			retry_at = ?, error_class = ?, blocked = ?, updated_at = ?
-			WHERE capture_id = ? AND state = 'finalized'`, retryStamp, string(class),
-			blocked, s.now().UTC().Format(time.RFC3339Nano), captureID)
+			WHERE capture_id = ? AND state = 'finalized'
+				AND (blocked = 0 OR ? = 1)`, retryStamp, string(class),
+			blocked, checkpointTimestamp(s.now()), captureID, blocked)
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: record generation failure: %w", err)
 		}
@@ -460,6 +461,10 @@ func loadCapturedEntriesConn(
 				return nil, fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
 			}
 			entries[i].Objects = append(entries[i].Objects, ref)
+		}
+		if err := objectRows.Err(); err != nil {
+			objectRows.Close()
+			return nil, fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
 		}
 		if err := objectRows.Close(); err != nil {
 			return nil, fmt.Errorf("rawcheckpoint: load captured objects: %w", err)

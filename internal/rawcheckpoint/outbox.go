@@ -711,6 +711,10 @@ func loadAcknowledgedBase(
 			}
 			entries[i].Objects = append(entries[i].Objects, ref)
 		}
+		if err := objectRows.Err(); err != nil {
+			objectRows.Close()
+			return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+		}
 		if err := objectRows.Close(); err != nil {
 			return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
 		}
@@ -733,7 +737,7 @@ func (s *Store) NextGeneration(
 		AND (generation.retry_at = '' OR generation.retry_at <= ?)
 		AND (generation.predecessor_capture_id IS NULL OR predecessor.state = 'acknowledged')
 		ORDER BY generation.captured_at, generation.capture_id LIMIT 1`,
-		s.now().UTC().Format(time.RFC3339Nano),
+		checkpointTimestamp(s.now()),
 	).Scan(&captureID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CapturedGeneration{}, false, nil
@@ -816,6 +820,10 @@ func loadGenerationEntries(
 			}
 			entries[i].Objects = append(entries[i].Objects, ref)
 		}
+		if err := objectRows.Err(); err != nil {
+			objectRows.Close()
+			return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+		}
 		if err := objectRows.Close(); err != nil {
 			return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
 		}
@@ -846,6 +854,10 @@ func (s *Store) CollectGarbage(ctx context.Context) (GarbageCollectionReport, er
 				return fmt.Errorf("rawcheckpoint: list garbage: %w", err)
 			}
 			refs = append(refs, ref)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("rawcheckpoint: list garbage: %w", err)
 		}
 		if err := rows.Close(); err != nil {
 			return fmt.Errorf("rawcheckpoint: list garbage: %w", err)

@@ -157,3 +157,22 @@ func TestVerifyObjectPerformsExplicitFullDigestCheck(t *testing.T) {
 
 	require.ErrorIs(t, err, rawsync.ErrInvalid)
 }
+
+func TestRecoverWaitsForActiveObjectPublication(t *testing.T) {
+	store, _ := openOutboxTestStore(t, 1<<20)
+	finishPublication := store.BeginObjectPublication()
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.Recover(t.Context())
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		require.Failf(t, "recovery returned during publication", "error: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	finishPublication()
+
+	require.NoError(t, <-result)
+}

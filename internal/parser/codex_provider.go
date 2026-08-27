@@ -264,6 +264,8 @@ func (p *codexProvider) PlanRawCapture(
 	captureRoot := filepath.Clean(src.Root)
 	indexPath := codexSessionIndexPath(src.Path)
 	if indexPath != "" {
+		// The provider reads this named sibling as session metadata, so raw
+		// capture widens only far enough to preserve the same parse inputs.
 		captureRoot = filepath.Dir(indexPath)
 	}
 	rel, err := filepath.Rel(captureRoot, src.Path)

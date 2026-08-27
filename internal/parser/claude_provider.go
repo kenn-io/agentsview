@@ -95,20 +95,54 @@ func (p *claudeProvider) PlanRawCapture(
 			"resolve claude source path: %s", rawCaptureFilesystemError(err),
 		)
 	}
+	entries := []RawCaptureEntry{{
+		Path:       filepath.ToSlash(rel),
+		LocalPath:  src.Path,
+		Appendable: true,
+	}}
+	for _, dir := range claudeToolResultDirs(src.Path) {
+		children, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return RawCapturePlan{}, invalidRawCapturePlan(
+				"read Claude tool results: %s", rawCaptureFilesystemError(err),
+			)
+		}
+		for _, child := range children {
+			path := filepath.Join(dir, child.Name())
+			info, err := os.Stat(path)
+			if err != nil {
+				return RawCapturePlan{}, invalidRawCapturePlan(
+					"stat Claude tool result: %s", rawCaptureFilesystemError(err),
+				)
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			rel, err := filepath.Rel(src.Root, path)
+			if err != nil {
+				return RawCapturePlan{}, invalidRawCapturePlan(
+					"resolve Claude tool result: %s", rawCaptureFilesystemError(err),
+				)
+			}
+			entries = append(entries, RawCaptureEntry{
+				Path: filepath.ToSlash(rel), LocalPath: path,
+			})
+		}
+	}
 	return RawCapturePlan{
 		ConfiguredRoot: src.Root,
 		CaptureRoot:    src.Root,
 		SourceKey:      source.Key,
-		Entries: []RawCaptureEntry{{
-			Path:       filepath.ToSlash(rel),
-			LocalPath:  src.Path,
-			Appendable: true,
-		}},
+		Entries:        entries,
 	}, nil
 }
 
 // ComputeMultiFileStatHash implements parser.MultiFileStatHasher for the
-// single-file Claude transcript. Claude has no sibling companions; the
+// Claude transcript. Tool-result companions are immutable and do not affect
+// the transcript freshness gate; raw capture enumerates them separately.
 // digest exists so stat-verified freshness persists in provider_freshness
 // across process restarts, sparing a fresh engine (daemon restart or a
 // one-shot CLI sync) the full-content hash that Fingerprint performs for

@@ -36,20 +36,22 @@ func (c *Client) MissingObjects(
 	objects []rawsync.ObjectRef,
 ) ([]rawsync.ObjectRef, error) {
 	positions := make(map[rawsync.ObjectRef]int, len(objects))
-	for i, object := range objects {
+	unique := make([]rawsync.ObjectRef, 0, len(objects))
+	for _, object := range objects {
 		canonical, err := rawsync.NewObjectRef(object.SHA256, object.Length)
 		if err != nil || canonical != object {
 			return nil, fmt.Errorf("rawclient: invalid missing object request")
 		}
 		if _, duplicate := positions[object]; duplicate {
-			return nil, fmt.Errorf("rawclient: invalid missing object request: duplicate object")
+			continue
 		}
-		positions[object] = i
+		positions[object] = len(unique)
+		unique = append(unique, object)
 	}
 	body := struct {
 		Provider parser.AgentType    `json:"provider"`
 		Objects  []rawsync.ObjectRef `json:"objects"`
-	}{Provider: provider, Objects: objects}
+	}{Provider: provider, Objects: unique}
 	resp, err := c.do(ctx, http.MethodPost, "/api/v1/raw-sync/objects/missing", nil, body)
 	if err != nil {
 		return nil, err

@@ -37,6 +37,12 @@ type Store struct {
 	processLocks   []*flock.Flock
 }
 
+const checkpointTimeLayout = "2006-01-02T15:04:05.000000000Z"
+
+func checkpointTimestamp(value time.Time) string {
+	return value.UTC().Format(checkpointTimeLayout)
+}
+
 // BeginObjectPublication serializes the interval in which a capturer can
 // install unpublished objects and either commit or discard them.
 func (s *Store) BeginObjectPublication() func() {
@@ -124,7 +130,7 @@ func (s *Store) SetDevice(ctx context.Context, deviceID string) error {
 		case errors.Is(err, sql.ErrNoRows):
 			if _, err := conn.ExecContext(ctx,
 				`INSERT INTO device_config (id, device_id, created_at) VALUES (1, ?, ?)`,
-				deviceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+				deviceID, checkpointTimestamp(s.now())); err != nil {
 				return fmt.Errorf("rawcheckpoint: set device: %w", err)
 			}
 		case err != nil:
@@ -135,7 +141,7 @@ func (s *Store) SetDevice(ctx context.Context, deviceID string) error {
 			reset = true
 			if _, err := conn.ExecContext(ctx,
 				`UPDATE device_config SET device_id = ?, created_at = ? WHERE id = 1`,
-				deviceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+				deviceID, checkpointTimestamp(s.now())); err != nil {
 				return fmt.Errorf("rawcheckpoint: set device: %w", err)
 			}
 			if _, err := conn.ExecContext(ctx,
@@ -265,7 +271,7 @@ func (s *Store) AdvanceHead(
 				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 				string(provider), configuredRootID, sourceKey,
 				commit.ManifestID, commit.Receipt, commit.Generation,
-				time.Now().UTC().Format(time.RFC3339Nano))
+				checkpointTimestamp(s.now()))
 			if err != nil {
 				return fmt.Errorf("rawcheckpoint: advance head: %w", err)
 			}
@@ -287,7 +293,7 @@ func (s *Store) AdvanceHead(
 			head_manifest_id = ?, head_receipt = ?, head_generation = ?, updated_at = ?
 			WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
 			commit.ManifestID, commit.Receipt, commit.Generation,
-			time.Now().UTC().Format(time.RFC3339Nano),
+			checkpointTimestamp(s.now()),
 			string(provider), configuredRootID, sourceKey)
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: advance head: %w", err)

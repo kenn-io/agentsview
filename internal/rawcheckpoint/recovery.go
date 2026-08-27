@@ -29,6 +29,17 @@ type RecoveryReport struct {
 // behind any missing or wrong-sized referenced object. Acknowledged heads and
 // their retained append metadata never advance during recovery.
 func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
+	s.publicationMu.Lock()
+	report, err := s.recoverObjectSpool(ctx)
+	s.publicationMu.Unlock()
+	if err != nil {
+		return report, err
+	}
+	report.Garbage, err = s.CollectGarbage(ctx)
+	return report, err
+}
+
+func (s *Store) recoverObjectSpool(ctx context.Context) (RecoveryReport, error) {
 	s.objectMu.Lock()
 	var report RecoveryReport
 	entries, err := os.ReadDir(s.CaptureTempDir())
@@ -178,8 +189,7 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 	if err != nil {
 		return report, err
 	}
-	report.Garbage, err = s.CollectGarbage(ctx)
-	return report, err
+	return report, nil
 }
 
 // VerifyObject performs explicit full-digest verification for one retained

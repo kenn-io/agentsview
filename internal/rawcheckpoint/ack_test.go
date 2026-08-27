@@ -363,11 +363,43 @@ func TestTransientFailureIsNotFinalizableBeforeRetryTime(t *testing.T) {
 	_, ok, err = store.FinalizeNextManifest(t.Context(), "device-a")
 	require.NoError(t, err)
 	assert.False(t, ok)
-	store.now = func() time.Time { return retryAt.Add(time.Second) }
+	store.now = func() time.Time { return retryAt.Add(500 * time.Millisecond) }
 	retried, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, generation.CaptureID, retried.CaptureID)
+}
+
+func TestParentConflictCannotBeClearedByLateTransientFailure(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	ref := rawsync.ObjectRef{SHA256: validCheckpointDigest(10), Length: 1}
+	installOutboxTestObject(t, store, ref, []byte{1})
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1793)
+	require.NoError(t, err)
+	generation := testCapturedGeneration(1, root, "", ref)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	_, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, store.RecordGenerationFailure(
+		t.Context(), "device-a", generation.CaptureID,
+		GenerationFailureParentReceiptConflict, time.Time{},
+	))
+
+	err = store.RecordGenerationFailure(
+		t.Context(), "device-a", generation.CaptureID,
+		GenerationFailureTransient, time.Now().Add(time.Minute),
+	)
+
+	require.ErrorIs(t, err, ErrGenerationFailureConflict)
+	var class string
+	var blocked int
+	require.NoError(t, store.db.QueryRow(`SELECT error_class, blocked
+		FROM outbox_generations WHERE capture_id = ?`, generation.CaptureID,
+	).Scan(&class, &blocked))
+	assert.Equal(t, string(GenerationFailureParentReceiptConflict), class)
+	assert.Equal(t, 1, blocked)
 }
 
 func TestResumeGenerationRequeuesAgainstReconciledServerHead(t *testing.T) {

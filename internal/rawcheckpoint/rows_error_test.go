@@ -100,6 +100,13 @@ func (c *rowErrorConn) QueryContext(
 			err:     errInjectedRowIteration,
 		}, nil
 	case strings.Contains(query, "state = 'garbage_pending'"):
+		if c.scenario.mode == "garbage_objects" {
+			return &rowErrorRows{
+				columns: []string{"sha256", "length"},
+				values:  [][]driver.Value{{validCheckpointDigest(1), int64(1)}},
+				err:     errInjectedRowIteration,
+			}, nil
+		}
 		return &rowErrorRows{columns: []string{"sha256", "length"}}, nil
 	default:
 		return nil, fmt.Errorf("unexpected query for %s: %s", c.scenario.mode, query)
@@ -215,4 +222,18 @@ func TestReleaseGenerationObjectsStopsBeforeUpdatesOnIterationError(t *testing.T
 
 	assert.ErrorIs(t, err, errInjectedRowIteration)
 	assert.Zero(t, scenario.objectUpdates.Load())
+}
+
+func TestCollectGarbageStopsBeforeFileRemovalOnIterationError(t *testing.T) {
+	db, _ := openRowErrorDB(t, "garbage_objects")
+	store := &Store{db: db, spoolDir: t.TempDir()}
+	ref := rawsync.ObjectRef{SHA256: validCheckpointDigest(1), Length: 1}
+	path := store.ObjectPath(ref)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte{1}, 0o600))
+
+	_, err := store.CollectGarbage(t.Context())
+
+	assert.ErrorIs(t, err, errInjectedRowIteration)
+	assert.FileExists(t, path)
 }

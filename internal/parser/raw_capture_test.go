@@ -274,11 +274,14 @@ func TestResolveRawCapturePlanRejectsUnknownAppendPolicy(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidRawCapturePlan)
 }
 
-func TestClaudeProviderPlansSingleAppendableTranscript(t *testing.T) {
+func TestClaudeProviderPlansTranscriptWithToolResults(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "project", "session.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
 	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o600))
+	toolResultPath := filepath.Join(root, "project", "session", "tool-results", "result.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(toolResultPath), 0o755))
+	require.NoError(t, os.WriteFile(toolResultPath, []byte("result\n"), 0o600))
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
@@ -292,10 +295,13 @@ func TestClaudeProviderPlansSingleAppendableTranscript(t *testing.T) {
 	assert.Equal(t, canonicalRawCaptureTestPath(t, root), plan.ConfiguredRoot)
 	assert.Equal(t, canonicalRawCaptureTestPath(t, root), plan.CaptureRoot)
 	assert.Equal(t, sources[0].Key, plan.SourceKey)
-	require.Len(t, plan.Entries, 1)
+	require.Len(t, plan.Entries, 2)
 	assert.Equal(t, "project/session.jsonl", plan.Entries[0].Path)
 	assert.Equal(t, canonicalRawCaptureTestPath(t, sourcePath), plan.Entries[0].LocalPath)
 	assert.True(t, plan.Entries[0].Appendable)
+	assert.Equal(t, "project/session/tool-results/result.txt", plan.Entries[1].Path)
+	assert.Equal(t, canonicalRawCaptureTestPath(t, toolResultPath), plan.Entries[1].LocalPath)
+	assert.False(t, plan.Entries[1].Appendable)
 }
 
 func TestCodexProviderPlansTranscriptWithOptionalIndex(t *testing.T) {

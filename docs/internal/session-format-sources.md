@@ -242,7 +242,12 @@ add an archived or maintained mirror without replacing the original identity.
   cannot hide missing delegated input or cache usage. Reverified 2026-08-22
   that an incomplete category breakdown, malformed included transcript, or
   unfinished included session withholds computed or mixed cost;
-  provider-reported cost remains authoritative.
+  provider-reported cost remains authoritative. Reverified 2026-08-27 that
+  raw-capture membership mirrors persisted tool output resolution: it includes
+  direct regular files in the session's `tool-results/` directory and, for
+  subagents, the enclosing parent session's `tool-results/` directory. These
+  immutable companions are captured with the appendable transcript so a
+  reconstructed tree preserves the parser's physical inputs.
 
 ## OpenClaude (`openclaude`)
 
@@ -1490,11 +1495,11 @@ add an archived or maintained mirror without replacing the original identity.
   against the samples reported in
   [#1466](https://github.com/kenn-io/agentsview/issues/1466): the parser folds
   the persisted cache-write remainder into uncached input only for recognized
-  GLM, Gemma, and Kimi model families. Missing and unrecognized model identities
-  preserve Posit Assistant's original buckets, and full context remains the
-  sum of the persisted input, cache-read, and cache-write fields. Data version
-  91 reparses existing Posit Assistant archives through the normal
-  non-destructive resync path.
+  GLM, Gemma, and Kimi model families. Missing and unrecognized model
+  identities preserve Posit Assistant's original buckets, and full context
+  remains the sum of the persisted input, cache-read, and cache-write fields.
+  Data version 91 reparses existing Posit Assistant archives through the
+  normal non-destructive resync path.
 
 ## Z Code (`zcode`)
 

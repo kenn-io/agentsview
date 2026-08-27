@@ -58,8 +58,9 @@ func TestMissingObjectsRoundTrip(t *testing.T) {
 	t.Cleanup(server.Close)
 	client := newTestClient(t, server.URL, time.Minute)
 
+	object := rawsync.ObjectRef{SHA256: digest, Length: 3}
 	missing, err := client.MissingObjects(t.Context(), parser.AgentClaude,
-		[]rawsync.ObjectRef{{SHA256: digest, Length: 3}})
+		[]rawsync.ObjectRef{object, object})
 	require.NoError(t, err)
 	require.Len(t, missing, 1)
 	assert.Equal(t, digest, missing[0].SHA256)

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -986,6 +987,78 @@ func TestCapturerRequiresFullReservationAfterAppendVerificationFallsBack(t *test
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, first.CaptureID, base.CaptureID)
+}
+
+func TestCapturerDoesNotReturnDegradedStatusWithCleanupError(t *testing.T) {
+	const maxBytes = int64(1 << 20)
+	store, _ := openCapturerTestStore(t, maxBytes)
+	provider, source, sourcePath := captureFileProvider(t, "one\n")
+	capturer := New(store)
+	first, err := capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	usage, err := store.OutboxUsage(t.Context())
+	require.NoError(t, err)
+	const provisionalBytes = int64(1792)
+	_, err = store.ReserveCapture(
+		t.Context(), first.Source.ConfiguredRootID,
+		maxBytes-usage.UsedBytes-provisionalBytes,
+	)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(sourcePath, []byte("two\n"), 0o600))
+	cleanupErr := errors.New("injected cleanup failure")
+	capturer.discardObjects = func(context.Context, []rawsync.ObjectRef) error {
+		return cleanupErr
+	}
+
+	result, err := capturer.Capture(t.Context(), provider, source)
+
+	require.ErrorIs(t, err, cleanupErr)
+	assert.Empty(t, result)
+}
+
+func TestCapturerPreservesAndSanitizesObservationIOErrors(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	provider, source, sourcePath := captureFileProvider(t, "one\n")
+	capturer := New(store)
+	capturer.files.stat = func(path string) (os.FileInfo, error) {
+		if path == sourcePath {
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.EIO}
+		}
+		return os.Stat(path)
+	}
+
+	_, err := capturer.Capture(t.Context(), provider, source)
+
+	require.ErrorIs(t, err, syscall.EIO)
+	assert.NotErrorIs(t, err, ErrSourceChanged)
+	assert.NotContains(t, err.Error(), sourcePath)
+	assert.Contains(t, err.Error(), `project/session.jsonl`)
+}
+
+func TestAssessCaptureSanitizesOpenFileErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("one\n"), 0o600))
+	file, err := os.Open(path)
+	require.NoError(t, err)
+	info, err := file.Stat()
+	require.NoError(t, err)
+	identity := stableFileIdentity(file, info)
+	require.NotEmpty(t, identity)
+	require.NoError(t, file.Close())
+	observed := []observedCaptureEntry{{
+		planned: parser.RawCaptureEntry{Path: "session.jsonl", Appendable: true},
+		file:    file, info: info, identity: identity,
+	}}
+	base := rawcheckpoint.CaptureBaseState{Entries: []rawcheckpoint.CapturedEntry{{
+		Path: "session.jsonl", Length: info.Size(), FileIdentity: identity,
+		PrefixSHA256: strings.Repeat("a", 64), Appendable: true,
+	}}}
+
+	_, err = (&Capturer{}).assessCapture(t.Context(), observed, info.Size(), base, true)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), `session.jsonl`)
 }
 
 func TestCapturerRejectsMutationDuringSuffixRead(t *testing.T) {

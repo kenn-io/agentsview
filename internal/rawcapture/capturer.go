@@ -123,6 +123,9 @@ func (c *Capturer) Capture(
 	}
 	defer func() {
 		resultErr = errors.Join(resultErr, scope.Close())
+		if resultErr != nil {
+			result = Result{}
+		}
 	}()
 	root, err := c.store.ResolveConfiguredRoot(ctx, source.Provider, plan.ConfiguredRoot)
 	if err != nil {
@@ -373,18 +376,30 @@ func (c *Capturer) observePlan(
 		pathInfo, err := c.files.stat(entry.planned.LocalPath)
 		if err != nil {
 			closeObservedEntries(observed)
-			return nil, 0, ErrSourceChanged
+			if sourcePathChangedError(err) {
+				return nil, 0, ErrSourceChanged
+			}
+			return nil, 0, fmt.Errorf(
+				"rawcapture: stat %q: %w", entry.planned.Path, sanitizeFilesystemError(err),
+			)
 		}
 		file, err := entry.root.Open(entry.relative)
 		if err != nil {
 			closeObservedEntries(observed)
-			return nil, 0, ErrSourceChanged
+			if sourcePathChangedError(err) {
+				return nil, 0, ErrSourceChanged
+			}
+			return nil, 0, fmt.Errorf(
+				"rawcapture: open %q: %w", entry.planned.Path, sanitizeFilesystemError(err),
+			)
 		}
 		info, err := file.Stat()
 		if err != nil {
 			file.Close()
 			closeObservedEntries(observed)
-			return nil, 0, fmt.Errorf("rawcapture: stat %q: filesystem error", entry.planned.Path)
+			return nil, 0, fmt.Errorf(
+				"rawcapture: stat %q: %w", entry.planned.Path, sanitizeFilesystemError(err),
+			)
 		}
 		if !info.Mode().IsRegular() || info.Size() < 0 ||
 			!pathInfo.Mode().IsRegular() || !os.SameFile(pathInfo, info) ||
@@ -406,6 +421,11 @@ func (c *Capturer) observePlan(
 		})
 	}
 	return observed, sourceBytes, nil
+}
+
+func sourcePathChangedError(err error) bool {
+	return errors.Is(err, os.ErrNotExist) ||
+		sanitizeFilesystemError(err).Error() == "path escapes from parent"
 }
 
 func (c *Capturer) assessCapture(
@@ -441,7 +461,10 @@ func (c *Capturer) assessCapture(
 				ctx, current.file, previous.Length,
 			)
 			if err != nil {
-				return captureAssessment{}, err
+				return captureAssessment{}, fmt.Errorf(
+					"rawcapture: hash %q: %w", current.planned.Path,
+					sanitizeFilesystemError(err),
+				)
 			}
 			if length != previous.Length || digest != previous.PrefixSHA256 {
 				return full, nil
@@ -459,7 +482,10 @@ func (c *Capturer) assessCapture(
 		}
 		digest, length, err := hashOpenFileContext(ctx, current.file)
 		if err != nil {
-			return captureAssessment{}, err
+			return captureAssessment{}, fmt.Errorf(
+				"rawcapture: hash %q: %w", current.planned.Path,
+				sanitizeFilesystemError(err),
+			)
 		}
 		if length != previous.Length || digest != previous.PrefixSHA256 {
 			return full, nil
