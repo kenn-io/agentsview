@@ -77,8 +77,8 @@ func (db *DB) UpsertGenAIPricing(
 	return db.writeGenAIPricing(ctx, document, false)
 }
 
-// InsertMissingGenAIPricing installs the embedded document without replacing
-// a newer document fetched by an earlier process.
+// InsertMissingGenAIPricing installs the embedded document, replacing an older
+// embedded copy without replacing a document fetched by an earlier process.
 func (db *DB) InsertMissingGenAIPricing(
 	ctx context.Context, document GenAIPricingDocument,
 ) error {
@@ -111,7 +111,17 @@ func (db *DB) writeGenAIPricing(
 		OR genai_pricing.source IS NOT excluded.source
 		OR genai_pricing.data_json IS NOT excluded.data_json`
 	if missingOnly {
-		conflict = "DO NOTHING"
+		conflict = `DO UPDATE SET
+			version = excluded.version,
+			source_ref = excluded.source_ref,
+			source = excluded.source,
+			data_json = excluded.data_json,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE genai_pricing.source = 'embedded'
+			AND excluded.source = 'embedded'
+			AND (genai_pricing.version IS NOT excluded.version
+				OR genai_pricing.source_ref IS NOT excluded.source_ref
+				OR genai_pricing.data_json IS NOT excluded.data_json)`
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
