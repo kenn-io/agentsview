@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -2139,12 +2138,6 @@ func (db *DB) loadPricingMapFrom(
 	if err != nil {
 		return nil, err
 	}
-	db.pricingMu.RLock()
-	custom := maps.Clone(db.pricing.custom)
-	effective := cloneModelRates(db.pricing.effective)
-	emptyCatalog := cloneModelRates(db.pricing.emptyCatalog)
-	db.pricingMu.RUnlock()
-
 	fallback := fallbackRateMap()
 	out := make(map[string]export.ModelRates)
 	for _, p := range prices {
@@ -2156,34 +2149,7 @@ func (db *DB) loadPricingMapFrom(
 		out[p.ModelPattern] = rates
 	}
 
-	if len(out) == 0 {
-		for model, rates := range emptyCatalog {
-			rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
-			out[model] = rates
-		}
-	}
-	for model, cp := range custom {
-		rates := export.ModelRates{
-			InputPerMTok: money.Money{
-				Microdollars: cp.InputMicrodollarsPerMTok,
-			},
-			OutputPerMTok: money.Money{
-				Microdollars: cp.OutputMicrodollarsPerMTok,
-			},
-			CacheWritePerMTok: money.Money{
-				Microdollars: cp.CacheCreationMicrodollarsPerMTok,
-			},
-			CacheReadPerMTok: money.Money{
-				Microdollars: cp.CacheReadMicrodollarsPerMTok,
-			},
-		}
-		rates.Source = customPricingSource()
-		out[model] = rates
-	}
-	for model, rates := range effective {
-		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
-		out[model] = rates
-	}
+	db.mergePricingState(out)
 
 	return pricingMapRows(out), nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/ccoveille/go-safecast/v2"
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/schema"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
@@ -19,6 +19,27 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
+
+const pricingRevisionLayout = "2006-01-02T15:04:05.000000Z07:00"
+
+type pricingRevision struct {
+	bunmodel.Timestamp
+}
+
+func (revision pricingRevision) AppendQuery(
+	gen schema.QueryGen, query []byte,
+) ([]byte, error) {
+	value := timeutil.NormalizePostgresTimestampPrecision(revision.Time)
+	if dialect, ok := gen.Dialect().(interface {
+		AppendCanonicalTimestamp([]byte, time.Time) []byte
+	}); ok {
+		return dialect.AppendCanonicalTimestamp(query, value), nil
+	}
+	query = append(query, '\'')
+	query = value.AppendFormat(query, pricingRevisionLayout)
+	query = append(query, '\'')
+	return query, nil
+}
 
 // CanonicalModelPricingRows converts public pricing records and their bands
 // into the common persistence models used by every adapter.
@@ -479,7 +500,7 @@ func upsertModelPricingRowBatch(
 			row.OutputMicrodollarsPerMTok,
 			row.CacheCreationMicrodollarsPerMTok,
 			row.CacheReadMicrodollarsPerMTok,
-			row.UpdatedAt,
+			pricingRevision{Timestamp: row.UpdatedAt},
 		)
 	}
 	query.WriteString(` ON CONFLICT (model_pattern) DO UPDATE SET
@@ -592,7 +613,7 @@ func insertModelPricingBandRowBatch(
 			row.OutputMicrodollarsPerMTok,
 			row.CacheCreationMicrodollarsPerMTok,
 			row.CacheReadMicrodollarsPerMTok,
-			row.UpdatedAt,
+			pricingRevision{Timestamp: row.UpdatedAt},
 		)
 	}
 	_, err := store.NewRaw(query.String(), args...).Exec(ctx)
@@ -633,12 +654,6 @@ func (s *BunStore) loadPricingMapFrom(
 		}
 	}
 
-	s.pricingMu.RLock()
-	custom := maps.Clone(s.pricing.custom)
-	effective := cloneModelRates(s.pricing.effective)
-	emptyCatalog := cloneModelRates(s.pricing.emptyCatalog)
-	s.pricingMu.RUnlock()
-
 	fallback := fallbackRateMap()
 	out := make(map[string]export.ModelRates)
 	for _, price := range prices {
@@ -646,10 +661,25 @@ func (s *BunStore) loadPricingMapFrom(
 		rates.Source = modelPricingSource(price, fallback)
 		out[price.ModelPattern] = rates
 	}
-	if len(out) == 0 {
-		maps.Copy(out, emptyCatalog)
+	s.mergePricingState(out)
+	genAI, err := bunGenAIEffectivePricingRow(ctx, store)
+	if err != nil {
+		return nil, err
 	}
-	for model, rate := range custom {
+	return append(pricingMapRows(out), genAI), nil
+}
+
+func (s *BunStore) mergePricingState(out map[string]export.ModelRates) {
+	s.pricingMu.RLock()
+	defer s.pricingMu.RUnlock()
+
+	if len(out) == 0 {
+		for model, rates := range s.pricing.emptyCatalog {
+			rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+			out[model] = rates
+		}
+	}
+	for model, rate := range s.pricing.custom {
 		out[model] = export.ModelRates{
 			InputPerMTok: money.Money{
 				Microdollars: rate.InputMicrodollarsPerMTok,
@@ -666,12 +696,10 @@ func (s *BunStore) loadPricingMapFrom(
 			Source: customPricingSource(),
 		}
 	}
-	maps.Copy(out, effective)
-	genAI, err := bunGenAIEffectivePricingRow(ctx, store)
-	if err != nil {
-		return nil, err
+	for model, rates := range s.pricing.effective {
+		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+		out[model] = rates
 	}
-	return append(pricingMapRows(out), genAI), nil
 }
 
 func bunGenAIEffectivePricingRow(

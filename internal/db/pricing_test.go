@@ -246,13 +246,18 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 
 func TestUpsertModelPricingAdvancesCollidingRevisionByOneMicrosecond(t *testing.T) {
 	database := testDB(t)
-	revision := "2099-01-01T00:00:00.123456Z"
+	revision := "2099-01-01T00:00:00.123450Z"
 	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "revision-collision",
 		InputPerMTok: money.MustParseDollars("1"),
 		UpdatedAt:    revision,
 	}}))
-	_, err := database.getWriter().Exec(`
+	first, err := database.GetModelPricing("revision-collision")
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	assert.Equal(t, revision, first.UpdatedAt)
+
+	_, err = database.getWriter().Exec(`
 		UPDATE model_pricing SET updated_at = ? WHERE model_pattern = ?`,
 		revision, "revision-collision")
 	require.NoError(t, err)
@@ -266,7 +271,8 @@ func TestUpsertModelPricingAdvancesCollidingRevisionByOneMicrosecond(t *testing.
 	stored, err := database.GetModelPricing("revision-collision")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Equal(t, "2099-01-01T00:00:00.123457Z", stored.UpdatedAt)
+	assert.Equal(t, "2099-01-01T00:00:00.123451Z", stored.UpdatedAt)
+	assert.Greater(t, stored.UpdatedAt, first.UpdatedAt)
 }
 
 func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) {
