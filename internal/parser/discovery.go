@@ -85,11 +85,12 @@ const (
 // OpenCodeSource describes the resolved storage backend for an
 // OpenCode root.
 type OpenCodeSource struct {
-	Mode        OpenCodeSourceMode
-	Root        string
-	SessionRoot string
-	DBPath      string
-	DBPaths     []string
+	Mode              OpenCodeSourceMode
+	Root              string
+	SessionRoot       string
+	DBPath            string
+	DBPaths           []string
+	containerPathsErr error
 }
 
 // openCodeFormat parameterizes the shared OpenCode storage format by
@@ -129,9 +130,16 @@ func isCanonicalOpenCodeSQLiteName(f openCodeFormat, name string) bool {
 }
 
 func openCodeSQLiteContainerPaths(f openCodeFormat, root string) []string {
+	paths, _ := openCodeSQLiteContainerPathsWithError(f, root)
+	return paths
+}
+
+func openCodeSQLiteContainerPathsWithError(
+	f openCodeFormat, root string,
+) ([]string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var names []string
 	for _, entry := range entries {
@@ -144,12 +152,21 @@ func openCodeSQLiteContainerPaths(f openCodeFormat, root string) []string {
 			continue
 		}
 		info, err := entry.Info()
-		if err != nil || !info.Mode().IsRegular() {
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
 			continue
 		}
 		names = append(names, entry.Name())
 	}
 	sort.Slice(names, func(i, j int) bool {
+		if names[i] == f.dbName {
+			return names[j] != f.dbName
+		}
+		if names[j] == f.dbName {
+			return false
+		}
 		canonicalI := isCanonicalOpenCodeSQLiteName(f, names[i])
 		canonicalJ := isCanonicalOpenCodeSQLiteName(f, names[j])
 		if canonicalI != canonicalJ {
@@ -161,7 +178,7 @@ func openCodeSQLiteContainerPaths(f openCodeFormat, root string) []string {
 	for i, name := range names {
 		paths[i] = filepath.Join(root, name)
 	}
-	return paths
+	return paths, nil
 }
 
 var (
@@ -189,38 +206,45 @@ func resolveOpenCodeFormatSource(
 	}
 
 	sessionRoot := filepath.Join(root, "storage", f.sessionSubdir)
+	dbPaths, dbPathsErr := openCodeSQLiteContainerPathsWithError(f, root)
+	_, rootStatErr := os.Stat(root)
+	if os.IsNotExist(rootStatErr) {
+		dbPathsErr = nil
+	}
 	if info, err := os.Stat(sessionRoot); err == nil && info.IsDir() {
 		return OpenCodeSource{
-			Mode:        OpenCodeSourceStorage,
-			Root:        root,
-			SessionRoot: sessionRoot,
-			DBPath:      filepath.Join(root, f.dbName),
-			DBPaths:     openCodeSQLiteContainerPaths(f, root),
+			Mode:              OpenCodeSourceStorage,
+			Root:              root,
+			SessionRoot:       sessionRoot,
+			DBPath:            filepath.Join(root, f.dbName),
+			DBPaths:           dbPaths,
+			containerPathsErr: dbPathsErr,
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		storageRoot := filepath.Join(root, "storage")
 		if info, serr := os.Stat(storageRoot); serr == nil && info.IsDir() {
 			return OpenCodeSource{
-				Mode:        OpenCodeSourceStorage,
-				Root:        root,
-				SessionRoot: sessionRoot,
-				DBPath:      filepath.Join(root, f.dbName),
-				DBPaths:     openCodeSQLiteContainerPaths(f, root),
+				Mode:              OpenCodeSourceStorage,
+				Root:              root,
+				SessionRoot:       sessionRoot,
+				DBPath:            filepath.Join(root, f.dbName),
+				DBPaths:           dbPaths,
+				containerPathsErr: dbPathsErr,
 			}
 		}
 	}
 
-	dbPaths := openCodeSQLiteContainerPaths(f, root)
 	if len(dbPaths) > 0 {
 		return OpenCodeSource{
-			Mode:    OpenCodeSourceSQLite,
-			Root:    root,
-			DBPath:  dbPaths[0],
-			DBPaths: dbPaths,
+			Mode:              OpenCodeSourceSQLite,
+			Root:              root,
+			DBPath:            dbPaths[0],
+			DBPaths:           dbPaths,
+			containerPathsErr: dbPathsErr,
 		}
 	}
 
-	return OpenCodeSource{Root: root}
+	return OpenCodeSource{Root: root, containerPathsErr: dbPathsErr}
 }
 
 func discoverOpenCodeFormatSessions(

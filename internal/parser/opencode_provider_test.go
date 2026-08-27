@@ -103,6 +103,7 @@ func TestOpenCodePrecedingSQLiteArbitrationPreservesCaseDistinctPaths(t *testing
 	earlier := filepath.Join(root, "opencode-LOCAL.db")
 	later := filepath.Join(root, "opencode-local.db")
 	spec := openCodeProviderSpecForAgent(AgentOpenCode)
+	spec.streamSQLiteWatermark = nil
 	spec.listSQLiteWatermark = nil
 	spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
 		if path == earlier {
@@ -117,8 +118,12 @@ func TestOpenCodePrecedingSQLiteArbitrationPreservesCaseDistinctPaths(t *testing
 		DBPath:  earlier,
 	}
 
-	skip := sources.withPrecedingSQLiteIDs(root, later, nil)
-	assert.Contains(t, skip, "ses-earlier")
+	skip, err := sources.withPrecedingSQLiteIDs(t.Context(), root, later, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, skip.close()) })
+	_, found, err := skip.get(t.Context(), "ses-earlier")
+	require.NoError(t, err)
+	assert.True(t, found)
 }
 
 func TestOpenCodeProviderReportsCorruptAdditionalChannelContainer(t *testing.T) {
@@ -162,6 +167,44 @@ func TestOpenCodeStreamingDiscoveryContinuesHealthyChannelsAfterUnreadableCanoni
 	assert.Equal(t, []string{
 		OpenCodeSQLiteVirtualPath(channel, "ses-channel"),
 	}, paths)
+}
+
+func TestOpenCodeDiscoveryReportsContainerEnumerationFailure(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(root, []byte("root"), 0o600))
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.Error(t, err)
+	assert.Empty(t, discovered)
+	var incomplete DiscoveryIncompleteError
+	assert.ErrorAs(t, err, &incomplete)
+
+	err = provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(SourceRef) error { return nil },
+	)
+	require.Error(t, err)
+	assert.ErrorAs(t, err, &incomplete)
+}
+
+func TestOpenCodeChangedChannelPathReportsUnreadablePredecessor(t *testing.T) {
+	root := t.TempDir()
+	canonical := filepath.Join(root, "opencode.db")
+	channel := filepath.Join(root, "opencode-local.db")
+	require.NoError(t, os.WriteFile(canonical, []byte("not sqlite"), 0o600))
+	_, seeder, db := newTestDBAt(t, channel)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	seeder.AddProject("prj_1", "/workspace/channel")
+	seeder.AddSession(
+		"ses-channel", "prj_1", "", "Channel", 1700000000000, 1700000010000,
+	)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	_, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path: channel, EventKind: "write", WatchRoot: root,
+	})
+	require.Error(t, err)
 }
 
 func TestOpenCodeHybridStreamingDiscoveryReportsIncompleteSQLiteFailure(

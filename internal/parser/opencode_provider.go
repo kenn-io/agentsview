@@ -482,6 +482,12 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 			return nil, err
 		}
 		src := s.resolve(root)
+		if src.containerPathsErr != nil {
+			incomplete = errors.Join(incomplete, incompleteDiscoveryError(
+				s.spec.agent, "enumerate SQLite containers "+root,
+				src.containerPathsErr,
+			))
+		}
 		storageIDs := map[string]struct{}{}
 		seenSQLiteIDs := make(map[string]struct{})
 		if src.Mode == OpenCodeSourceStorage {
@@ -497,9 +503,15 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 			s.markDiscoveredProjectMetadata(root)
 			storageIDs = s.spec.storageIDs(root)
 		}
+		knownStorageID := func(_ context.Context, id string) (bool, error) {
+			_, exists := storageIDs[id]
+			return exists, nil
+		}
 		for _, dbPath := range src.DBPaths {
 			trusted := s.containerTrusted != nil && s.containerTrusted(dbPath)
-			dbSources, err := s.sqliteSources(ctx, root, dbPath, storageIDs, trusted)
+			dbSources, err := s.sqliteSources(
+				ctx, root, dbPath, knownStorageID, trusted,
+			)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil, err
@@ -570,6 +582,13 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 	ctx context.Context, root string, yield func(SourceRef) error,
 ) (continuable bool, retErr error) {
 	src := s.resolve(root)
+	var incomplete error
+	if src.containerPathsErr != nil {
+		incomplete = incompleteDiscoveryError(
+			s.spec.agent, "enumerate SQLite containers "+root,
+			src.containerPathsErr,
+		)
+	}
 	hasSQLite := len(src.DBPaths) > 0
 	var discoveredIDs *discoveryDiskMap
 	if hasSQLite {
@@ -596,6 +615,9 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 		}
 	}
 	if !hasSQLite {
+		if incomplete != nil {
+			return true, incomplete
+		}
 		return false, nil
 	}
 	var callbackErr error
@@ -604,7 +626,6 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 	// watermark listing: computing every session's child digest for a pass
 	// that verifies nothing would be archive-sized work nothing reads (see
 	// ProviderConfig.SQLiteContainerUnchangedSinceTrust).
-	var incomplete error
 	for _, dbPath := range src.DBPaths {
 		stream := s.spec.streamSQLite
 		if s.containerTrusted != nil && s.containerTrusted(dbPath) && s.spec.streamSQLiteWatermark != nil {
@@ -846,6 +867,12 @@ func reconciliationOpenCodeContainerPath(root, path string, f openCodeFormat) (s
 	name := trimSQLiteSidecarSuffix(filepath.Base(path))
 	canonical := filepath.Join(root, f.dbName)
 	if strings.EqualFold(name, f.dbName) {
+		if !reconciliationScopeSamePath(
+			cleanReconciliationScopeRoot(canonical),
+			cleanReconciliationScopeRoot(filepath.Join(root, name)),
+		) {
+			canonical = filepath.Join(root, name)
+		}
 		for _, alias := range []string{canonical, canonical + "-wal", canonical + "-shm"} {
 			if reconciliationScopeSamePath(cleanReconciliationScopeRoot(alias), cleanReconciliationScopeRoot(path)) {
 				return canonical, true
@@ -1277,7 +1304,7 @@ func (s openCodeFormatSourceSet) sqliteSources(
 	ctx context.Context,
 	root string,
 	dbPath string,
-	storageIDs map[string]struct{},
+	knownSessionID func(context.Context, string) (bool, error),
 	watermarkOnly bool,
 ) ([]SourceRef, error) {
 	if err := ctx.Err(); err != nil {
@@ -1293,7 +1320,11 @@ func (s openCodeFormatSourceSet) sqliteSources(
 	}
 	sources := make([]SourceRef, 0, len(metas))
 	for _, meta := range metas {
-		if _, exists := storageIDs[meta.SessionID]; exists {
+		exists, err := knownSessionID(ctx, meta.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
 			continue
 		}
 		// meta was just read from this DB, so the session row is known to
@@ -1311,36 +1342,53 @@ func (s openCodeFormatSourceSet) sqliteSources(
 }
 
 func (s openCodeFormatSourceSet) withPrecedingSQLiteIDs(
-	root, dbPath string, storageIDs map[string]struct{},
-) map[string]struct{} {
+	ctx context.Context,
+	root, dbPath string,
+	storageIDs map[string]struct{},
+) (*discoveryDiskMap, error) {
+	index, err := newDiscoveryDiskMapForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	closeOnError := func(cause error) (*discoveryDiskMap, error) {
+		return nil, errors.Join(cause, index.close())
+	}
+	for id := range storageIDs {
+		if err := index.put(ctx, id, id, false); err != nil {
+			return closeOnError(err)
+		}
+	}
 	src := s.resolve(root)
-	var skip map[string]struct{}
 	for _, candidate := range src.DBPaths {
 		if sameSQLiteContainerPath(candidate, dbPath) {
 			break
 		}
-		lister := s.spec.listSQLite
-		if s.spec.listSQLiteWatermark != nil {
-			lister = s.spec.listSQLiteWatermark
+		if s.spec.streamSQLiteWatermark != nil {
+			err := s.spec.streamSQLiteWatermark(
+				ctx, candidate, func(meta OpenCodeSessionMeta) error {
+					return index.put(ctx, meta.SessionID, meta.SessionID, false)
+				},
+			)
+			if err != nil {
+				return closeOnError(err)
+			}
+			continue
+		}
+		lister := s.spec.listSQLiteWatermark
+		if lister == nil {
+			lister = s.spec.listSQLite
 		}
 		metas, err := lister(candidate)
 		if err != nil {
-			continue
-		}
-		if skip == nil {
-			skip = make(map[string]struct{}, len(storageIDs)+len(metas))
-			for id := range storageIDs {
-				skip[id] = struct{}{}
-			}
+			return closeOnError(err)
 		}
 		for _, meta := range metas {
-			skip[meta.SessionID] = struct{}{}
+			if err := index.put(ctx, meta.SessionID, meta.SessionID, false); err != nil {
+				return closeOnError(err)
+			}
 		}
 	}
-	if skip == nil {
-		return storageIDs
-	}
-	return skip
+	return index, nil
 }
 
 func sameSQLiteContainerPath(candidate, dbPath string) bool {
@@ -1373,13 +1421,17 @@ func (s openCodeFormatSourceSet) changedWatermarkSources(
 	ctx context.Context,
 	root string,
 	dbPath string,
-	storageIDs map[string]struct{},
+	knownSessionID func(context.Context, string) (bool, error),
 	freshness StoredMemberFreshnessPager,
 ) ([]SourceRef, error) {
 	cursor := storedMemberFreshnessCursor{pager: freshness}
 	var sources []SourceRef
 	err := s.spec.streamSQLiteWatermark(ctx, dbPath, func(meta OpenCodeSessionMeta) error {
-		if _, exists := storageIDs[meta.SessionID]; exists {
+		exists, err := knownSessionID(ctx, meta.SessionID)
+		if err != nil {
+			return err
+		}
+		if exists {
 			return nil
 		}
 		if meta.WatermarkOnly && !cursor.failed {
@@ -1511,19 +1563,27 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 		if s.resolve(root).Mode == OpenCodeSourceStorage {
 			storageIDs = s.spec.storageIDs(root)
 		}
-		storageIDs = s.withPrecedingSQLiteIDs(root, dbPath, storageIDs)
+		knownIDs, err := s.withPrecedingSQLiteIDs(ctx, root, dbPath, storageIDs)
+		if err != nil {
+			return nil, true, err
+		}
+		knownSessionID := func(ctx context.Context, id string) (bool, error) {
+			_, exists, err := knownIDs.get(ctx, id)
+			return exists, err
+		}
+		var sources []SourceRef
 		if req.AllowWatermarkOnlySources &&
 			req.StoredMemberFreshnessPage != nil &&
 			s.spec.streamSQLiteWatermark != nil {
-			sources, err := s.changedWatermarkSources(
-				ctx, root, dbPath, storageIDs, req.StoredMemberFreshnessPage,
+			sources, err = s.changedWatermarkSources(
+				ctx, root, dbPath, knownSessionID, req.StoredMemberFreshnessPage,
 			)
-			return sources, true, err
+		} else {
+			sources, err = s.sqliteSources(
+				ctx, root, dbPath, knownSessionID, req.AllowWatermarkOnlySources,
+			)
 		}
-		sources, err := s.sqliteSources(
-			ctx, root, dbPath, storageIDs, req.AllowWatermarkOnlySources,
-		)
-		return sources, true, err
+		return sources, true, errors.Join(err, knownIDs.close())
 	}
 	src := s.resolve(root)
 	if src.Mode != OpenCodeSourceStorage {
