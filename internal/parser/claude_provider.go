@@ -100,37 +100,22 @@ func (p *claudeProvider) PlanRawCapture(
 		LocalPath:  src.Path,
 		Appendable: true,
 	}}
-	for _, dir := range claudeToolResultDirs(src.Path) {
-		children, err := os.ReadDir(dir)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+	sidecars, err := claudeLayoutSidecarFiles(ctx, src.Path)
+	if err != nil {
+		return RawCapturePlan{}, invalidRawCapturePlan(
+			"read Claude tool results: %s", rawCaptureFilesystemError(err),
+		)
+	}
+	for _, path := range sidecars {
+		rel, err := filepath.Rel(src.Root, path)
 		if err != nil {
 			return RawCapturePlan{}, invalidRawCapturePlan(
-				"read Claude tool results: %s", rawCaptureFilesystemError(err),
+				"resolve Claude tool result: %s", rawCaptureFilesystemError(err),
 			)
 		}
-		for _, child := range children {
-			path := filepath.Join(dir, child.Name())
-			info, err := os.Stat(path)
-			if err != nil {
-				return RawCapturePlan{}, invalidRawCapturePlan(
-					"stat Claude tool result: %s", rawCaptureFilesystemError(err),
-				)
-			}
-			if !info.Mode().IsRegular() {
-				continue
-			}
-			rel, err := filepath.Rel(src.Root, path)
-			if err != nil {
-				return RawCapturePlan{}, invalidRawCapturePlan(
-					"resolve Claude tool result: %s", rawCaptureFilesystemError(err),
-				)
-			}
-			entries = append(entries, RawCaptureEntry{
-				Path: filepath.ToSlash(rel), LocalPath: path,
-			})
-		}
+		entries = append(entries, RawCaptureEntry{
+			Path: filepath.ToSlash(rel), LocalPath: path,
+		})
 	}
 	return RawCapturePlan{
 		ConfiguredRoot: src.Root,

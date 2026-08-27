@@ -244,9 +244,9 @@ add an archived or maintained mirror without replacing the original identity.
   unfinished included session withholds computed or mixed cost;
   provider-reported cost remains authoritative. Reverified 2026-08-27 that
   raw-capture membership mirrors persisted tool output resolution: it includes
-  direct regular files in the session's `tool-results/` directory and, for
-  subagents, the enclosing parent session's `tool-results/` directory. These
-  immutable companions are captured with the appendable transcript so a
+  regular files at any depth in the session's `tool-results/` directory and,
+  for subagents, the enclosing parent session's `tool-results/` directory.
+  These immutable companions are captured with the appendable transcript so a
   reconstructed tree preserves the parser's physical inputs.
 
 ## OpenClaude (`openclaude`)

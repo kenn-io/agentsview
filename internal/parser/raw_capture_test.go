@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -274,14 +275,27 @@ func TestResolveRawCapturePlanRejectsUnknownAppendPolicy(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidRawCapturePlan)
 }
 
-func TestClaudeProviderPlansTranscriptWithToolResults(t *testing.T) {
+func TestClaudeProviderPlansAndParsesNestedToolResults(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "project", "session.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
-	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o600))
-	toolResultPath := filepath.Join(root, "project", "session", "tool-results", "result.txt")
+	toolResultPath := filepath.Join(
+		root, "project", "session", "tool-results", "batches", "result.txt",
+	)
 	require.NoError(t, os.MkdirAll(filepath.Dir(toolResultPath), 0o755))
-	require.NoError(t, os.WriteFile(toolResultPath, []byte("result\n"), 0o600))
+	fullOutput := "full nested output\n"
+	require.NoError(t, os.WriteFile(toolResultPath, []byte(fullOutput), 0o600))
+	resultPathJSON := mustJSONString(t, toolResultPath)
+	persistedContentJSON := mustJSONString(t,
+		"<persisted-output>\n"+
+			"Output too large. Full output saved to: "+toolResultPath+
+			"\n\nPreview (first 2KB):\npreview only\n</persisted-output>")
+	content := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"},"cwd":"/tmp/project"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + persistedContentJSON + `,"is_error":false}]},"toolUseResult":{"persistedOutputPath":` + resultPathJSON + `,"persistedOutputSize":19}}`,
+	}, "\n")
+	require.NoError(t, os.WriteFile(sourcePath, []byte(content), 0o600))
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
@@ -299,9 +313,17 @@ func TestClaudeProviderPlansTranscriptWithToolResults(t *testing.T) {
 	assert.Equal(t, "project/session.jsonl", plan.Entries[0].Path)
 	assert.Equal(t, canonicalRawCaptureTestPath(t, sourcePath), plan.Entries[0].LocalPath)
 	assert.True(t, plan.Entries[0].Appendable)
-	assert.Equal(t, "project/session/tool-results/result.txt", plan.Entries[1].Path)
+	assert.Equal(t, "project/session/tool-results/batches/result.txt", plan.Entries[1].Path)
 	assert.Equal(t, canonicalRawCaptureTestPath(t, toolResultPath), plan.Entries[1].LocalPath)
 	assert.False(t, plan.Entries[1].Appendable)
+
+	parsed, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, parsed.Results, 1)
+	messages := parsed.Results[0].Result.Messages
+	require.Len(t, messages, 3)
+	require.Len(t, messages[2].ToolResults, 1)
+	assert.Equal(t, fullOutput, DecodeContent(messages[2].ToolResults[0].ContentRaw))
 }
 
 func TestCodexProviderPlansTranscriptWithOptionalIndex(t *testing.T) {

@@ -307,7 +307,14 @@ func claudeLayoutSidecarFiles(
 			if err != nil {
 				return err
 			}
-			if !entry.IsDir() {
+			if entry.IsDir() {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if info.Mode().IsRegular() {
 				files = append(files, path)
 			}
 			return nil
