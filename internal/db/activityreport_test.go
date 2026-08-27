@@ -227,7 +227,30 @@ func TestGetActivityReport_DistantToolCompletionLeavesFinalMessageUntimed(t *tes
 	assert.Zero(t, report.Totals.AgentMinutes)
 }
 
-func TestGetActivityReport_FutureToolCompletionDoesNotScopeOldSession(t *testing.T) {
+func TestGetActivityReport_PaddedToolCompletionLeavesOldFinalMessageUntimed(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "padded-completion", "tools", func(s *Session) {
+		s.Agent = "grok"
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-17T00:04:00Z")
+	})
+	seedMessage(t, d, "padded-completion", 0, "assistant",
+		"2026-06-16T10:00:00Z", "model-x")
+	timingInsertToolResultEvent(t, d, "padded-completion", 0, 0,
+		"sample-call", "completed", "2026-06-17T00:04:00Z", 1)
+
+	report, err := d.GetActivityReport(
+		t.Context(), AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"),
+	)
+	require.NoError(t, err)
+	require.Len(t, report.BySession, 1)
+	assert.Nil(t, report.BySession[0].AgentMinutes,
+		"an upper-padding completion cannot time a message hours earlier")
+	assert.Zero(t, report.Totals.AgentMinutes)
+}
+
+func TestGetActivityReport_PaddedToolCompletionDoesNotScopeOldSession(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "future-completion", "tools", func(s *Session) {
 		s.Agent = "grok"
@@ -237,7 +260,7 @@ func TestGetActivityReport_FutureToolCompletionDoesNotScopeOldSession(t *testing
 	seedMessage(t, d, "future-completion", 0, "assistant",
 		"2026-06-15T10:00:00Z", "model-x")
 	timingInsertToolResultEvent(t, d, "future-completion", 0, 0,
-		"sample-call", "completed", "2026-06-20T10:01:00Z", 1)
+		"sample-call", "completed", "2026-06-17T00:04:00Z", 1)
 
 	report, err := d.GetActivityReport(
 		t.Context(), AnalyticsFilter{Timezone: "UTC"},
@@ -245,7 +268,7 @@ func TestGetActivityReport_FutureToolCompletionDoesNotScopeOldSession(t *testing
 	)
 	require.NoError(t, err)
 	assert.Empty(t, report.BySession,
-		"a completion days later cannot pull an old session into the report")
+		"a stale completion inside upper padding cannot scope an old session")
 }
 
 func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {

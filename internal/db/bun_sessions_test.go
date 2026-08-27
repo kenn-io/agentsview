@@ -29,7 +29,7 @@ func (*replayingReadBackend) Name() string { return "replaying-read" }
 func (*replayingReadBackend) ReadOnly() bool { return true }
 
 func (*replayingReadBackend) Capabilities() BackendCapabilities {
-	return BackendCapabilities{}
+	return BackendCapabilities{AnalyticsDialect: SQLiteBunAnalyticsDialect()}
 }
 
 func (*replayingReadBackend) TimestampOrderExpr(column string) string {

@@ -201,6 +201,15 @@ func parityFixture() []parityFixtureSession {
 			},
 		},
 		{
+			// Upper-bound padding admits this completion to the query, but its
+			// message is too old for the completion to create timed activity.
+			id: "parity-tool-stale-padding", project: "tools", model: "model-x",
+			events: []parityEvent{
+				{role: "assistant", ts: parityDate + "T10:00:00Z",
+					toolCompletedAt: "2026-06-15T00:04:00Z"},
+			},
+		},
+		{
 			// Subagent of parity-a: a usage-only single message. Its tokens
 			// must count in every backend (the report includes subagent
 			// sessions so its cost matches daily usage) and its session row
@@ -681,7 +690,7 @@ func assertParityForCase(
 }
 
 // assertDayMinuteFixtureSanity checks the day-minute report actually exercises
-// the fixture: a full day with peak concurrency 2, thirteen sessions, non-zero
+// the fixture: a full day with peak concurrency 2, fourteen sessions, non-zero
 // cost, and exactly 22550 output tokens. The token total proves the
 // synthetic-model usage row (9999 tokens) is excluded, the dedup pair
 // keeps its complete 9000-token snapshot with earlier attribution, the
@@ -693,7 +702,7 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")
 	require.Equal(t, 2, r.Peak.Agents, "fixture must reach peak concurrency 2")
-	require.Equal(t, 13, r.Totals.Sessions, "fixture session count")
+	require.Equal(t, 14, r.Totals.Sessions, "fixture session count")
 	require.Positive(t, r.Totals.Cost.Microdollars, "fixture must exercise cost")
 	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
 	// excluded) + 9000 (parity-d receives parity-e's complete snapshot) +
@@ -732,4 +741,7 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	require.NotNil(t, bySession["parity-tool-boundary"].AgentMinutes)
 	require.InDelta(t, 1.0, *bySession["parity-tool-boundary"].AgentMinutes, 1e-9,
 		"post-range completion closes the final in-range message")
+	require.Contains(t, bySession, "parity-tool-stale-padding")
+	require.Nil(t, bySession["parity-tool-stale-padding"].AgentMinutes,
+		"a stale completion inside upper padding cannot time an old message")
 }

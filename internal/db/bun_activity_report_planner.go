@@ -49,6 +49,10 @@ func (s *BunStore) bunActivityReportScopeFrom(
 	startBound := s.backend.TimestampOrderExpr("?")
 	endBound := s.backend.TimestampOrderExpr("?")
 	terminalEndBound := s.backend.TimestampOrderExpr("?")
+	terminalGap := builder.dialect.DurationSeconds(
+		BunSQL(latestMessage),
+		BunSQL(bunNullableTimestamp("terminal.timestamp")),
+	)
 	ctes := renderBunCTEs(filtered, BunCTEFragment{
 		Name: "activity_report_sessions",
 		Query: BunSQL(`SELECT session.*
@@ -63,13 +67,16 @@ func (s *BunStore) bunActivityReportScopeFrom(
 				AND `+s.backend.TimestampOrderExpr(
 			bunNullableTimestamp("terminal.timestamp"))+` >= `+startBound+`
 				AND `+s.backend.TimestampOrderExpr(
-			bunNullableTimestamp("terminal.timestamp"))+` < `+terminalEndBound+`))
+			bunNullableTimestamp("terminal.timestamp"))+` < `+terminalEndBound+`
+				AND `+terminalGap.SQL+` > 0
+				AND `+terminalGap.SQL+` <= ?))
 		AND `+s.backend.TimestampOrderExpr(activityStart)+` < `+endBound,
 			bunmodel.NewTimestamp(q.RangeStart),
 			bunmodel.NewTimestamp(q.RangeStart),
 			bunmodel.NewTimestamp(q.EffectiveEnd.Add(
 				time.Duration(q.GapCapSeconds)*time.Second,
 			)),
+			q.GapCapSeconds,
 			bunmodel.NewTimestamp(q.RangeEnd)),
 	})
 	query := `WITH ` + ctes.SQL + `
@@ -123,6 +130,10 @@ func (s *BunStore) bunActivityReportCandidateSourceFrom(
 		lastMessageTimestamp := orderedTimestamp("lm.timestamp")
 		messageTimestamp := orderedTimestamp("m.timestamp")
 		successorTimestamp := orderedTimestamp("next.timestamp")
+		tailGap := s.backend.Capabilities().AnalyticsDialect.DurationSeconds(
+			BunSQL(bunNullableTimestamp("lm.timestamp")),
+			BunSQL(bunNullableTimestamp("te.timestamp")),
+		)
 		query := `WITH
 terminal_events AS (
 	SELECT terminal.session_id,
@@ -188,6 +199,7 @@ first_tail_events AS (
 	FROM last_messages AS lm
 	JOIN terminal_events AS te ON te.session_id = lm.session_id
 	WHERE ` + orderedTerminalTimestamp + ` > ` + lastMessageTimestamp + `
+		AND ` + tailGap.SQL + ` <= ?4
 ),
 terminal_candidates AS (
 	SELECT twm.session_id, twm.ordinal AS start_ordinal,
@@ -281,6 +293,7 @@ ORDER BY ` + orderedTimestamp("start_timestamp") + `,
 			bunmodel.NewTimestamp(q.EffectiveEnd.Add(
 				time.Duration(q.GapCapSeconds)*time.Second,
 			)),
+			q.GapCapSeconds,
 		).String()
 		rows, err := store.QueryContext(ctx, formatted)
 		if err != nil {
