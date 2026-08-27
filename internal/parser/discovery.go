@@ -118,8 +118,8 @@ func isOpenCodeSQLiteContainerName(f openCodeFormat, name string) bool {
 	}
 	channel := strings.TrimSuffix(strings.TrimPrefix(name, "opencode-"), ".db")
 	for _, r := range channel {
-		if !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') &&
-			!(r >= '0' && r <= '9') && r != '.' && r != '_' && r != '-' {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') &&
+			(r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
 			return false
 		}
 	}
@@ -373,43 +373,6 @@ func findOpenCodeFormatSourceFile(
 	}
 }
 
-func openCodeFormatStorageSessionIDs(
-	f openCodeFormat, root string,
-) map[string]struct{} {
-	src := resolveOpenCodeFormatSource(f, root)
-	if src.Mode != OpenCodeSourceStorage {
-		return nil
-	}
-	entries, err := os.ReadDir(src.SessionRoot)
-	if err != nil {
-		return nil
-	}
-	ids := make(map[string]struct{})
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, src.SessionRoot) {
-			continue
-		}
-		projectDir := filepath.Join(src.SessionRoot, entry.Name())
-		sessionEntries, err := os.ReadDir(projectDir)
-		if err != nil {
-			continue
-		}
-		for _, sessionEntry := range sessionEntries {
-			name := sessionEntry.Name()
-			if sessionEntry.IsDir() ||
-				!strings.HasSuffix(name, ".json") {
-				continue
-			}
-			id := strings.TrimSuffix(name, ".json")
-			if id == "" {
-				continue
-			}
-			ids[id] = struct{}{}
-		}
-	}
-	return ids
-}
-
 func resolveOpenCodeFormatWatchRoots(
 	f openCodeFormat, root string,
 ) []string {
@@ -446,12 +409,13 @@ func parseOpenCodeFormatVirtualPath(
 	}
 	dbPath = sourcePath[:idx]
 	sessionID = sourcePath[idx+1:]
-	if filepath.Base(dbPath) != dbName &&
-		!(dbName == openCodeFmt.dbName &&
-			isOpenCodeSQLiteContainerNameFolded(openCodeFmt, filepath.Base(dbPath))) {
-		return "", "", false
+	base := filepath.Base(dbPath)
+	if base == dbName ||
+		(dbName == openCodeFmt.dbName &&
+			isOpenCodeSQLiteContainerNameFolded(openCodeFmt, base)) {
+		return dbPath, sessionID, true
 	}
-	return dbPath, sessionID, true
+	return "", "", false
 }
 
 // IsOpenCodeSQLiteContainerPath reports whether path names a recognized

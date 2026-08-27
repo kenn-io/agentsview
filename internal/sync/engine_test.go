@@ -1464,7 +1464,6 @@ func TestRehydrateReconciliationPageUsesResolvedProviderPath(t *testing.T) {
 	candidatePath := filepath.Join(root, "opencode-local.db#ses-1")
 	canonicalPath := filepath.Join(root, "opencode.db#ses-1")
 	provider := &manyStreamingProvider{
-		ProviderBase: parser.ProviderBase{Def: parser.AgentDef{Type: parser.AgentOpenCode}},
 		reconciled: map[string]parser.SourceRef{
 			candidatePath: {
 				Provider:       parser.AgentOpenCode,
@@ -1474,6 +1473,7 @@ func TestRehydrateReconciliationPageUsesResolvedProviderPath(t *testing.T) {
 			},
 		},
 	}
+	provider.Def = parser.AgentDef{Type: parser.AgentOpenCode}
 	page := []reconciliationCandidate{{
 		Provider: parser.AgentOpenCode,
 		Identity: "ses-1",

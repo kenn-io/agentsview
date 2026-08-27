@@ -624,8 +624,9 @@ add an archived or maintained mirror without replacing the original identity.
   IDs. Storage JSON remains authoritative over every SQLite container. Verified
   against OpenCode commit
   `5f5ea53afb2630227ead917f1a0ddf784c33150c` in the producer's
-  `packages/core/src/database/database.ts` and
-  `packages/core/src/installation/version.ts`.
+  [database.ts](https://github.com/anomalyco/opencode/blob/5f5ea53afb2630227ead917f1a0ddf784c33150c/packages/core/src/database/database.ts)
+  and
+  [version.ts](https://github.com/anomalyco/opencode/blob/5f5ea53afb2630227ead917f1a0ddf784c33150c/packages/core/src/installation/version.ts).
 - **Configuration boundary:** `OPENCODE_DB` may select an explicit absolute,
   relative, or in-memory producer path, but AgentsView does not implicitly
   discover arbitrary `OPENCODE_DB` paths.

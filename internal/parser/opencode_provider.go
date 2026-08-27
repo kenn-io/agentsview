@@ -322,12 +322,6 @@ func (spec openCodeProviderSpec) resolve(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(spec.format, root)
 }
 
-// discover lists file-backed storage session JSON files under a root.
-func (spec openCodeProviderSpec) discover(root string) []DiscoveredFile {
-	files, _ := spec.discoverWithError(root)
-	return files
-}
-
 func (spec openCodeProviderSpec) discoverWithError(
 	root string,
 ) ([]DiscoveredFile, error) {
@@ -338,12 +332,6 @@ func (spec openCodeProviderSpec) discoverWithError(
 // path) by raw session ID under a root.
 func (spec openCodeProviderSpec) find(root, sessionID string) string {
 	return findOpenCodeFormatSourceFile(spec.format, root, sessionID)
-}
-
-// storageIDs returns the set of session IDs present as storage JSON
-// under a root, used to skip duplicate SQLite metas in hybrid roots.
-func (spec openCodeProviderSpec) storageIDs(root string) map[string]struct{} {
-	return openCodeFormatStorageSessionIDs(spec.format, root)
 }
 
 // parseVirtual splits an opencode-format SQLite virtual path
@@ -2129,8 +2117,8 @@ func isOpenCodeSQLiteContainerNameFolded(f openCodeFormat, name string) bool {
 	}
 	channel := name[len(prefix) : len(name)-len(suffix)]
 	for _, r := range channel {
-		if !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') &&
-			!(r >= '0' && r <= '9') && r != '.' && r != '_' && r != '-' {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') &&
+			(r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
 			return false
 		}
 	}
