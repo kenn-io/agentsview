@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
@@ -35,6 +36,8 @@ StreamableHTTP, exposing read-only tools for searching and reading
 recorded agent sessions: search_sessions, list_sessions,
 get_session_overview, get_messages, search_content, and
 get_usage_summary, plus query_recall for distilled session knowledge.
+Focused report tools expose analytics, activity, trends, pins, insights,
+and recent edits.
 
 The server reads through the daemon path. By default each tool call talks to
 the local agentsview daemon, starting it when needed so a long-lived MCP server
@@ -176,6 +179,80 @@ func resolveMCPService(
 type mcpDaemonService struct {
 	mu  sync.Mutex
 	cfg config.Config
+}
+
+func (s *mcpDaemonService) daemonReports(
+	ctx context.Context,
+) (service.ReportService, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reports, ok := svc.(service.ReportService)
+	if !ok {
+		return nil, errors.New("daemon does not support report tools")
+	}
+	return reports, nil
+}
+
+func (s *mcpDaemonService) AnalyticsReport(
+	ctx context.Context, filter service.ReportFilter,
+) (*db.AnalyticsSummary, error) {
+	reports, err := s.daemonReports(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return reports.AnalyticsReport(ctx, filter)
+}
+
+func (s *mcpDaemonService) ActivityReport(
+	ctx context.Context, request service.ActivityReportRequest,
+) (*activity.Report, error) {
+	reports, err := s.daemonReports(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return reports.ActivityReport(ctx, request)
+}
+
+func (s *mcpDaemonService) Trends(
+	ctx context.Context, request service.TrendsRequest,
+) (*db.TrendsTermsResponse, error) {
+	reports, err := s.daemonReports(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return reports.Trends(ctx, request)
+}
+
+func (s *mcpDaemonService) ListPins(
+	ctx context.Context, project string,
+) ([]db.PinnedMessage, error) {
+	reports, err := s.daemonReports(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return reports.ListPins(ctx, project)
+}
+
+func (s *mcpDaemonService) ListInsights(
+	ctx context.Context, request service.InsightsRequest,
+) ([]db.Insight, error) {
+	reports, err := s.daemonReports(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return reports.ListInsights(ctx, request)
+}
+
+func (s *mcpDaemonService) ListRecentEdits(
+	ctx context.Context, request db.RecentEditsParams,
+) (*db.RecentEditsResult, error) {
+	reports, err := s.daemonReports(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return reports.ListRecentEdits(ctx, request)
 }
 
 func newMCPDaemonService(cfg config.Config) service.SessionService {

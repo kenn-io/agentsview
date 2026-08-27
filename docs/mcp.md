@@ -17,6 +17,7 @@ Use the MCP server when you want a coding assistant to answer questions such as:
 - "Find prior sessions in this repository about the deploy pipeline."
 - "Open the relevant messages around this search hit."
 - "Summarize recent token usage for this project."
+- "Show this month's activity, trends, insights, pins, or recent edits."
 
 The tools are read-only. They expose session history and usage data, but they do
 not mutate the archive or resync files directly.
@@ -39,14 +40,25 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                   | Purpose                                                            |
-| ---------------------- | ------------------------------------------------------------------ |
-| `search_sessions`      | Full-text search across recorded sessions                          |
-| `list_sessions`        | List recent or filtered sessions                                   |
-| `get_session_overview` | Fetch metadata and a compact message preview                       |
-| `get_messages`         | Read paginated message bodies from one session                     |
-| `search_content`       | Substring, regex, semantic, or hybrid search over raw session text |
-| `get_usage_summary`    | Aggregate token and cost usage                                     |
+| Tool                     | Purpose                                                            |
+| ------------------------ | ------------------------------------------------------------------ |
+| `search_sessions`        | Full-text search across recorded sessions                          |
+| `list_sessions`          | List recent or filtered sessions                                   |
+| `get_session_overview`   | Fetch metadata and a compact message preview                       |
+| `get_messages`           | Read paginated message bodies from one session                     |
+| `search_content`         | Substring, regex, semantic, or hybrid search over raw session text |
+| `get_usage_summary`      | Aggregate token and cost usage                                     |
+| `get_analytics_report`   | Summarize session volume, tokens, projects, and agents             |
+| `get_activity_report`    | Report concurrency, active time, output tokens, and cost           |
+| `get_trends`             | Track up to 12 terms over daily, weekly, or monthly buckets        |
+| `list_pins`              | List pinned transcript messages and notes                          |
+| `list_insights`          | List saved activity and agent-analysis insights                    |
+| `list_recent_edits`      | List files recently changed by agent tool calls                    |
+
+`list_sessions` accepts the same main filters as the session API, including
+date ranges, branches, message thresholds, outcomes, health grades,
+termination state, secret findings, stars, child and automated sessions, and
+multi-key sorting.
 
 `search_content` accepts a `mode` of `substring` (default), `regex`, `semantic`,
 or `hybrid`, plus a `scope` of `top`, `all` (default), or `subordinate` that is

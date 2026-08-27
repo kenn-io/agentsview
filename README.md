@@ -41,6 +41,7 @@ agentsview daemon start    # start the writable SQLite daemon
 agentsview daemon status   # show daemon status
 agentsview daemon restart  # restart from current configuration
 agentsview daemon stop     # stop the writable daemon
+agentsview tui             # open the full-screen terminal interface
 agentsview session list    # read from the daemon if warm, otherwise SQLite
 agentsview usage daily     # print daily cost summary
 ```
