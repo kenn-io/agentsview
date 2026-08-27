@@ -895,6 +895,19 @@ func TestOpenCodePathClassifiersAcceptCaseVariantChannel(t *testing.T) {
 	))
 }
 
+func TestOpenCodeSQLiteContainerPathsRejectSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated Windows privileges")
+	}
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "outside.db")
+	require.NoError(t, os.WriteFile(target, []byte("db"), 0o600))
+	for _, name := range []string{"opencode.db", "opencode-local.db"} {
+		require.NoError(t, os.Symlink(target, filepath.Join(root, name)))
+	}
+	assert.Empty(t, openCodeSQLiteContainerPaths(openCodeFmt, root))
+}
+
 func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "storage", "session_diff", "global")

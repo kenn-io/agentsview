@@ -155,7 +155,7 @@ func openCodeSQLiteContainerPathsWithError(
 		if entry.IsDir() || !recognized {
 			continue
 		}
-		info, err := os.Stat(filepath.Join(root, name))
+		info, err := os.Lstat(filepath.Join(root, name))
 		if err != nil {
 			enumerationErr = errors.Join(enumerationErr, err)
 			continue
