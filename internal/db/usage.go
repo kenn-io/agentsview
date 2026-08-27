@@ -419,6 +419,7 @@ SELECT
 	m.ordinal AS message_ordinal,
 	'message' AS usage_source,
 	COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') AS ts,
+	COALESCE(m.timestamp, '') AS pricing_ts,
 	m.model,
 	m.provider_id,
 	m.token_usage,
@@ -457,6 +458,7 @@ SELECT
 	ue.message_ordinal,
 	ue.source AS usage_source,
 	COALESCE(ue.occurred_at, s.started_at, '') AS ts,
+	COALESCE(ue.occurred_at, '') AS pricing_ts,
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
@@ -504,6 +506,7 @@ SELECT
 	m.ordinal AS message_ordinal,
 	'message' AS usage_source,
 	COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') AS ts,
+	COALESCE(m.timestamp, '') AS pricing_ts,
 	m.model,
 	m.provider_id,
 	m.token_usage,
@@ -535,6 +538,7 @@ SELECT
 	ue.message_ordinal,
 	ue.source AS usage_source,
 	COALESCE(ue.occurred_at, s.started_at, '') AS ts,
+	COALESCE(ue.occurred_at, '') AS pricing_ts,
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
@@ -565,6 +569,7 @@ SELECT
 	m.ordinal AS message_ordinal,
 	'message' AS usage_source,
 	COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') AS ts,
+	COALESCE(m.timestamp, '') AS pricing_ts,
 	m.model,
 	m.provider_id,
 	m.token_usage,
@@ -595,6 +600,7 @@ SELECT
 	ue.message_ordinal,
 	ue.source AS usage_source,
 	COALESCE(ue.occurred_at, s.started_at, '') AS ts,
+	COALESCE(ue.occurred_at, '') AS pricing_ts,
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
@@ -789,6 +795,7 @@ SELECT
 	u.message_ordinal,
 	u.usage_source,
 	u.ts,
+	u.pricing_ts,
 	u.model,
 	u.provider_id,
 	u.token_usage,
@@ -886,6 +893,7 @@ SELECT
 	u.message_ordinal,
 	u.usage_source,
 	u.ts,
+	u.pricing_ts,
 	u.model,
 	u.provider_id,
 	u.token_usage,
@@ -1076,6 +1084,7 @@ SELECT
 	NULL AS message_ordinal,
 	'cursor' AS usage_source,
 	cu.occurred_at AS ts,
+	cu.occurred_at AS pricing_ts,
 	cu.model,
 	'' AS provider_id,
 	'' AS token_usage,
@@ -1420,6 +1429,7 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 		&r.messageOrdinal,
 		&r.usageSource,
 		&r.ts,
+		&r.pricingTS,
 		&r.model,
 		&r.providerID,
 		&r.tokenJSON,
@@ -1448,6 +1458,9 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 	if err == nil {
 		r.ts, err = canonicalStoredMessageTimestamp(r.ts)
 	}
+	if err == nil {
+		r.pricingTS, err = canonicalStoredMessageTimestamp(r.pricingTS)
+	}
 	return r, err
 }
 
@@ -1459,11 +1472,13 @@ func scanDailyUsageRowWithMachine(
 	rows *sql.Rows, includeMachine bool,
 ) (dailyUsageScanRow, error) {
 	var r dailyUsageScanRow
+	var pricingTS string
 	dest := []any{
 		&r.sessionID,
 		&r.messageOrdinal,
 		&r.usageSource,
 		&r.ts,
+		&pricingTS,
 		&r.model,
 		&r.providerID,
 		&r.tokenJSON,
@@ -1488,6 +1503,13 @@ func scanDailyUsageRowWithMachine(
 	err := rows.Scan(dest...)
 	if err == nil {
 		r.ts, err = canonicalStoredMessageTimestamp(r.ts)
+	}
+	if err == nil {
+		pricingTS, err = canonicalStoredMessageTimestamp(pricingTS)
+	}
+	if err == nil {
+		r.usageTime = usagePricingTimestamp(r.ts)
+		r.pricingTime = usagePricingTimestamp(pricingTS)
 	}
 	return r, err
 }
@@ -2128,30 +2150,7 @@ func paddedUTCBound(ts string, hours int) string {
 func (db *DB) loadPricingMap(
 	ctx context.Context,
 ) ([]export.EffectivePricingRow, error) {
-	return db.loadPricingMapFrom(ctx, db.getReader())
-}
-
-func (db *DB) loadPricingMapFrom(
-	ctx context.Context, q sessionExportQuerier,
-) ([]export.EffectivePricingRow, error) {
-	prices, err := listModelPricingFrom(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	fallback := fallbackRateMap()
-	out := make(map[string]export.ModelRates)
-	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
-		rates := modelPricingRates(p)
-		rates.Source = modelPricingSource(p, fallback)
-		out[p.ModelPattern] = rates
-	}
-
-	db.mergePricingState(out)
-
-	return pricingMapRows(out), nil
+	return db.LoadPricingMap(ctx)
 }
 
 // getDailyUsageLegacy is the wide-row test oracle for the facts-backed path.

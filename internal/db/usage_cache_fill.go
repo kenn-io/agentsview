@@ -690,6 +690,13 @@ func (w *usageFactSpoolWriter) Flush() error {
 	return nil
 }
 
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 const usageFillMessageFactsSQL = `
 	SELECT m.session_id, m.ordinal, m.role, COALESCE(m.timestamp, ''),
 	       m.model, m.provider_id, m.token_usage, m.claude_message_id,

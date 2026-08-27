@@ -142,41 +142,6 @@ func scanDuckGenAIPricing(
 	return &document, nil
 }
 
-func duckGenAIEffectivePricingRow(
-	document *db.GenAIPricingDocument,
-) (export.EffectivePricingRow, error) {
-	if document == nil {
-		embedded := pricingpkg.EmbeddedGenAIDocument()
-		return export.EffectivePricingRow{
-			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
-			GenAISource: export.PricingRowSourceEmbedded,
-		}, nil
-	}
-	parsed, err := pricingpkg.ParseGenAIDocument(
-		document.Data, document.Version, document.SourceRef,
-	)
-	if err != nil {
-		return export.EffectivePricingRow{}, fmt.Errorf(
-			"parsing duckdb GenAI pricing document: %w", err,
-		)
-	}
-	var updatedAt *time.Time
-	if parsedTime, parseErr := time.Parse(
-		time.RFC3339Nano, document.UpdatedAt,
-	); parseErr == nil {
-		utc := parsedTime.UTC()
-		updatedAt = &utc
-	}
-	source := export.PricingRowSourceFetched
-	if document.Source == db.GenAIPricingSourceEmbedded {
-		source = export.PricingRowSourceEmbedded
-	}
-	return export.EffectivePricingRow{
-		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
-		GenAISource: source, GenAIUpdatedAt: updatedAt,
-	}, nil
-}
-
 func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 	document, err := s.local.GetGenAIPricing(ctx)
 	if err != nil {

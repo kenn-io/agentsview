@@ -1960,13 +1960,6 @@ func usageValuesMatch(value string, values []string, include bool) bool {
 	return !matched
 }
 
-func usageProjectionTimestamp(row bunUsageProjection) string {
-	if value := formatUsageTimestamp(row.UsageTimestamp); value != "" {
-		return value
-	}
-	return formatUsageTimestamp(row.SessionStartedAt)
-}
-
 func usageProjectionTime(row bunUsageProjection) time.Time {
 	if row.UsageTimestamp != nil && !row.UsageTimestamp.IsZero() {
 		return row.UsageTimestamp.Time

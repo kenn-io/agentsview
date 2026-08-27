@@ -7270,7 +7270,7 @@ func TestWriteBatchLateDataVersionFailureRollsBackCompleteSession(t *testing.T) 
 			Agent: string(parser.AgentQwenPaw), FilePath: path,
 		}},
 	))
-	changed, err := database.SoftDeleteSessionSourceOwnership(
+	changed, err := database.MarkSessionSourceMissing(
 		t.Context(), "local", string(parser.AgentQwenPaw), sessionID, path,
 	)
 	require.NoError(t, err)
@@ -7283,19 +7283,21 @@ func TestWriteBatchLateDataVersionFailureRollsBackCompleteSession(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, raw.Close()) })
 	type sessionState struct {
-		project, fileHash, deletedAt, deletionCause string
-		messageCount, dataVersion, toolFailures     int
+		project, fileHash, deletedAt, deletionCause, sourceMissingAt string
+		messageCount, dataVersion, toolFailures                      int
 	}
 	readSessionState := func() sessionState {
 		t.Helper()
 		var state sessionState
 		require.NoError(t, raw.QueryRow(`
 			SELECT project, COALESCE(file_hash, ''), COALESCE(deleted_at, ''),
-			       COALESCE(deletion_cause, ''), message_count, data_version,
+			       COALESCE(deletion_cause, ''), COALESCE(source_missing_at, ''),
+			       message_count, data_version,
 			       tool_failure_signal_count
 			FROM sessions WHERE id = ?`, sessionID).Scan(
 			&state.project, &state.fileHash, &state.deletedAt,
-			&state.deletionCause, &state.messageCount, &state.dataVersion,
+			&state.deletionCause, &state.sourceMissingAt,
+			&state.messageCount, &state.dataVersion,
 			&state.toolFailures,
 		))
 		return state
@@ -7378,7 +7380,8 @@ func TestWriteBatchLateDataVersionFailureRollsBackCompleteSession(t *testing.T) 
 	assert.Equal(t, beforePins, afterPins)
 	assert.Equal(t, beforeRecall, afterRecall)
 	assert.Equal(t, beforeArtifactGeneration, readArtifactGeneration())
-	assert.Equal(t, "source_missing", beforeSession.deletionCause)
+	assert.Empty(t, beforeSession.deletionCause)
+	assert.NotEmpty(t, beforeSession.sourceMissingAt)
 	assert.Equal(t, oldVersion, beforeSession.dataVersion)
 }
 

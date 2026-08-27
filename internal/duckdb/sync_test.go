@@ -1451,7 +1451,7 @@ func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 		canonicalTime := "2026-03-11T12:00:01.123456Z"
 		for _, field := range []**string{
 			&s.StartedAt, &s.EndedAt, &s.SignalsPendingSince,
-			&s.DeletedAt, &s.LocalModifiedAt,
+			&s.DeletedAt, &s.SourceMissingAt, &s.LocalModifiedAt,
 		} {
 			if *field != nil {
 				*field = &canonicalTime
@@ -1502,7 +1502,7 @@ func encodeDuckSessionFingerprint(t *testing.T, session db.Session) string {
 	canonicalTime := "2026-03-11T12:00:01.123456Z"
 	for _, field := range []**string{
 		&session.StartedAt, &session.EndedAt, &session.SignalsPendingSince,
-		&session.DeletedAt, &session.LocalModifiedAt,
+		&session.DeletedAt, &session.SourceMissingAt, &session.LocalModifiedAt,
 	} {
 		if *field != nil {
 			*field = &canonicalTime

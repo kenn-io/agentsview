@@ -88,7 +88,7 @@ func RunUsageContract(t *testing.T, backend UsageBackend) {
 			},
 		})
 		assertUsagePricingState(t, store, filter, usagePricingExpectation{
-			name: "custom", source: "custom", totalCost: 99,
+			name: "custom", source: "custom+embedded", totalCost: 99,
 			contractCost: 80, bandCost: 25, aggregateCost: 25, baseCost: 13,
 			topOrder:     []string{usageAggregateID, usageBandID, usageReportedID, usageBaseID},
 			baseRequests: 3, aggregateRows: 2,

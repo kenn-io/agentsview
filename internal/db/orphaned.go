@@ -1194,9 +1194,9 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 
 	// Copy user-managed metadata from the quiesced old DB. User-owned
-	// deleted_at is copied for all rows. Legacy source_missing deletion state
-	// must not re-hide a row that the fresh sync revived after its source
-	// reappeared. display_name is overlaid ONLY for
+	// deleted_at and deletion_cause are copied for all rows. Source availability
+	// is independent and remains owned by source_missing_at. display_name is
+	// overlaid ONLY for
 	// user-owned rows: the fresh DB already holds re-parsed session_name
 	// values, so agent-owned and cleared rows must keep the fresh value.
 	// Probe columns first so older source DBs don't abort.
@@ -1207,16 +1207,8 @@ func (d *DB) CopySessionMetadataFrom(
 	if hasDeletedAt && hasDeletionCause {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
-			SET deleted_at = CASE
-					WHEN old_s.deletion_cause = '`+legacyDeletionCauseSourceMissing+`'
-					THEN main.sessions.deleted_at
-					ELSE old_s.deleted_at
-				END,
-				deletion_cause = CASE
-					WHEN old_s.deletion_cause = '`+legacyDeletionCauseSourceMissing+`'
-					THEN main.sessions.deletion_cause
-					ELSE old_s.deletion_cause
-				END
+			SET deleted_at = old_s.deleted_at,
+				deletion_cause = old_s.deletion_cause
 			FROM old_db.sessions old_s
 			WHERE main.sessions.id = old_s.id`); err != nil {
 			return fmt.Errorf("copying deletion state: %w", err)

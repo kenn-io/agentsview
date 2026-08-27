@@ -1956,14 +1956,14 @@ func runSchemaDataRepairsPG(ctx context.Context, db bun.IDB) error {
 // repairLegacySourceMissingDeletionPG restores mirror rows written while
 // source absence was represented as deletion. Source availability is local
 // SQLite sync state; PostgreSQL retains only user-owned deletion state.
-func repairLegacySourceMissingDeletionPG(ctx context.Context, pg *sql.DB) error {
-	_, err := pg.ExecContext(ctx, `
+func repairLegacySourceMissingDeletionPG(ctx context.Context, pg bun.IDB) error {
+	_, err := pg.NewRaw(`
 		UPDATE sessions
 		SET deleted_at = NULL,
 		    source_deleted_at = NULL,
 		    deletion_cause = NULL,
 		    updated_at = NOW()
-		WHERE deletion_cause = 'source_missing'`)
+		WHERE deletion_cause = 'source_missing'`).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("repairing legacy PG source-missing deletions: %w", err)
 	}
