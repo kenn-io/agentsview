@@ -521,6 +521,10 @@ func releaseGenerationObjectsConn(ctx context.Context, conn *sql.Conn, captureID
 		}
 		refs = append(refs, item)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("rawcheckpoint: release generation objects: %w", err)
+	}
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("rawcheckpoint: release generation objects: %w", err)
 	}

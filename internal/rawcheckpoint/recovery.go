@@ -71,6 +71,11 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 			broken = append(broken, ref)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		s.objectMu.Unlock()
+		return report, fmt.Errorf("rawcheckpoint: list recovery objects: %w", err)
+	}
 	if err := rows.Close(); err != nil {
 		s.objectMu.Unlock()
 		return report, fmt.Errorf("rawcheckpoint: list recovery objects: %w", err)
@@ -113,6 +118,10 @@ func (s *Store) Recover(ctx context.Context) (RecoveryReport, error) {
 				return fmt.Errorf("rawcheckpoint: recover: list stale reservations: %w", err)
 			}
 			interrupted = append(interrupted, source)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("rawcheckpoint: recover: list stale reservations: %w", err)
 		}
 		if err := rows.Close(); err != nil {
 			return fmt.Errorf("rawcheckpoint: recover: list stale reservations: %w", err)
@@ -225,6 +234,10 @@ func invalidGenerationSuffixConn(
 				return nil, fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
 			}
 			invalid[captureID] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
 		}
 		if err := rows.Close(); err != nil {
 			return nil, fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
