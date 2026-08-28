@@ -620,6 +620,32 @@ func TestIssue1492UnreadableCuratedRootFailsResolution(t *testing.T) {
 	})
 }
 
+// A curated file whose stat fails for any reason other than absence
+// must fail resolution instead of being silently omitted, or the next
+// manifest would evict the client's cached copy.
+func TestIssue1492UnreadableCuratedFilePropagatesStatError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory-permission read failures are not portable to Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	path := filepath.Join(sub, "session.json")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("{}"), 0o644))
+	regular, err := regularCuratedFile(root, path)
+	require.NoError(t, err)
+	assert.True(t, regular)
+
+	require.NoError(t, os.Chmod(sub, 0o000))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(sub, 0o755)) })
+	_, err = regularCuratedFile(root, path)
+	require.Error(t, err, "an unreadable curated file must not be silently omitted")
+	assert.ErrorIs(t, err, os.ErrPermission)
+}
+
 // A corrupt Zed database must not block the whole sync: the archive
 // database preserves already-imported sessions, so the unreadable file
 // degrades to a missing manifest entry (the mirror evicts its cached

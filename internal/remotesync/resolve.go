@@ -174,7 +174,14 @@ func resolveEditorTarget(agent parser.AgentType, root string) (string, []string,
 	var files []string
 	for _, source := range sources {
 		path := providerDiscoveredPath(source)
-		if path == "" || !regularCuratedFile(root, path) {
+		if path == "" {
+			continue
+		}
+		regular, err := regularCuratedFile(root, path)
+		if err != nil {
+			return "", nil, err
+		}
+		if !regular {
 			continue
 		}
 		if _, exists := seen[path]; !exists {
@@ -194,7 +201,11 @@ func resolveEditorTarget(agent parser.AgentType, root string) (string, []string,
 			continue
 		}
 		workspace := filepath.Join(root, "workspaceStorage", parts[1], "workspace.json")
-		if regularCuratedFile(root, workspace) {
+		regular, err = regularCuratedFile(root, workspace)
+		if err != nil {
+			return "", nil, err
+		}
+		if regular {
 			if _, exists := seen[workspace]; !exists {
 				seen[workspace] = struct{}{}
 				files = append(files, workspace)
@@ -494,12 +505,23 @@ func resolveRooCodeTarget(root string) (string, []string, error) {
 	var files []string
 	for _, source := range sources {
 		historyPath := providerDiscoveredPath(source)
-		if historyPath == "" || !regularRemoteSyncFile(historyPath) {
+		if historyPath == "" {
+			continue
+		}
+		regular, err := statRegularRemoteSyncFile(historyPath)
+		if err != nil {
+			return "", nil, err
+		}
+		if !regular {
 			continue
 		}
 		files = append(files, historyPath)
 		msgPath := filepath.Join(filepath.Dir(historyPath), "ui_messages.json")
-		if regularRemoteSyncFile(msgPath) {
+		regular, err = statRegularRemoteSyncFile(msgPath)
+		if err != nil {
+			return "", nil, err
+		}
+		if regular {
 			files = append(files, msgPath)
 		}
 	}
@@ -534,7 +556,14 @@ func resolveKiloLegacyTarget(root string) (string, []string, error) {
 	var files []string
 	for _, source := range sources {
 		metadataPath := providerDiscoveredPath(source)
-		if metadataPath == "" || !regularRemoteSyncFile(metadataPath) {
+		if metadataPath == "" {
+			continue
+		}
+		regular, err := statRegularRemoteSyncFile(metadataPath)
+		if err != nil {
+			return "", nil, err
+		}
+		if !regular {
 			continue
 		}
 		files = append(files, metadataPath)
@@ -544,7 +573,11 @@ func resolveKiloLegacyTarget(root string) (string, []string, error) {
 			"api_conversation_history.json",
 		} {
 			sibPath := filepath.Join(taskDir, name)
-			if regularRemoteSyncFile(sibPath) {
+			regular, err := statRegularRemoteSyncFile(sibPath)
+			if err != nil {
+				return "", nil, err
+			}
+			if regular {
 				files = append(files, sibPath)
 			}
 		}
@@ -584,13 +617,28 @@ func statCuratedDir(root string) (bool, error) {
 	return info.IsDir(), nil
 }
 
-func regularCuratedFile(root, path string) bool {
+func regularCuratedFile(root, path string) (bool, error) {
 	path = filepath.Clean(path)
 	rel, err := filepath.Rel(root, path)
 	if err != nil || !filepath.IsLocal(rel) || symlinkEscapesRoot(root, path) {
-		return false
+		return false, nil
 	}
-	return regularRemoteSyncFile(path)
+	return statRegularRemoteSyncFile(path)
+}
+
+// statRegularRemoteSyncFile applies the curated-resolver error
+// contract to one selected file: a missing file is an omitted target,
+// while any other stat failure propagates so it cannot silently
+// shrink the curated set and evict the client's mirror copies.
+func statRegularRemoteSyncFile(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat remote sync target %q: %w", path, err)
+	}
+	return info.Mode().IsRegular(), nil
 }
 
 func resolveZedTarget(root string) (string, []string, error) {
