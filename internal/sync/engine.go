@@ -7412,7 +7412,9 @@ func (e *Engine) syncAllLocked(
 		dbProgress.SessionsDone += total
 		dbProgress.MessagesIndexed += indexedMessages
 		stats.messagesIndexed = dbProgress.MessagesIndexed
-		e.reportProgress(onProgress, dbProgress)
+		if writeMode != syncWriteBulk {
+			e.reportProgress(onProgress, dbProgress)
+		}
 	}
 
 	if ctx.Err() != nil {

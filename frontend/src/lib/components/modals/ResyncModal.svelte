@@ -106,18 +106,22 @@
     <div class="progress-view">
       <Spinner />
       <p class="progress-label">
-        {#if sync.progress}
+        {#if sync.progress?.sessions_total}
           {m.resync_syncing_progress({ done: sync.progress.sessions_done, total: sync.progress.sessions_total })}
+        {:else if sync.progress?.detail}
+          {sync.progress.detail}
         {:else}
           {m.resync_preparing()}
         {/if}
       </p>
-      <div class="progress-bar-track">
-        <div
-          class="progress-bar-fill"
-          style="width: {progressPct}%"
-        ></div>
-      </div>
+      {#if sync.progress?.sessions_total}
+        <div class="progress-bar-track">
+          <div
+            class="progress-bar-fill"
+            style="width: {progressPct}%"
+          ></div>
+        </div>
+      {/if}
     </div>
 
   {:else if view === "done"}

@@ -4683,7 +4683,9 @@ func TestSyncEngineCodexSubagentLineage(t *testing.T) {
 }
 
 func TestSyncEngineProgress(t *testing.T) {
-	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentPiebald)
+	env := setupFocusedTestEnv(
+		t, parser.AgentClaude, parser.AgentForge, parser.AgentPiebald,
+	)
 
 	msg := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg").
@@ -4700,6 +4702,14 @@ func TestSyncEngineProgress(t *testing.T) {
 	}
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChat(t, 42, "Piebald", "Prompt.", "Answer.", "2026-05-01T10:05:00Z")
+	forge := createForgeDB(t, env.forgeDir)
+	forge.addConversation(
+		t, "progress-forge", "Forge Progress",
+		forgeTestContext("Forge prompt.", "Forge answer."),
+		"2026-05-02 09:58:15.741021507",
+		"2026-05-02 10:00:16.848497543",
+		`{"input_tokens":100,"output_tokens":10,"cached_input_tokens":20}`,
+	)
 
 	var progressCalls int
 	var firstTotal int
@@ -4725,9 +4735,9 @@ func TestSyncEngineProgress(t *testing.T) {
 	assert.NotZero(t, progressCalls, "expected progress callbacks")
 	assert.Equal(t, 3, firstTotal,
 		"the initial total contains file sources before streamed DB discovery")
-	assert.Equal(t, 4, last.SessionsDone, "last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
-	assert.Equal(t, 4, last.SessionsTotal, "last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
-	requireProgressDoneOnce(t, events, 4)
+	assert.Equal(t, 5, last.SessionsDone, "last progress = %d/%d, want 5/5", last.SessionsDone, last.SessionsTotal)
+	assert.Equal(t, 5, last.SessionsTotal, "last progress = %d/%d, want 5/5", last.SessionsDone, last.SessionsTotal)
+	requireProgressDoneOnce(t, events, 5)
 	require.NotEmpty(t, seenCurrent.Phase, "expected progress to be observed")
 	_, ok := env.engine.CurrentProgress()
 	assert.False(t, ok, "CurrentProgress should be cleared after sync")
@@ -4748,9 +4758,9 @@ func TestSyncEngineProgress(t *testing.T) {
 	assert.NotZero(t, progressCalls, "expected progress callbacks on second sync")
 	assert.Equal(t, 3, firstTotal,
 		"the initial total contains file sources before streamed DB discovery")
-	assert.Equal(t, 4, last.SessionsDone, "second last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
-	assert.Equal(t, 4, last.SessionsTotal, "second last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
-	requireProgressDoneOnce(t, events, 4)
+	assert.Equal(t, 5, last.SessionsDone, "second last progress = %d/%d, want 5/5", last.SessionsDone, last.SessionsTotal)
+	assert.Equal(t, 5, last.SessionsTotal, "second last progress = %d/%d, want 5/5", last.SessionsDone, last.SessionsTotal)
+	requireProgressDoneOnce(t, events, 5)
 
 	env.engine.SyncPaths([]string{firstClaudePath})
 	_, ok = env.engine.CurrentProgress()
@@ -4762,10 +4772,16 @@ func TestSyncEngineProgress(t *testing.T) {
 	})
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
 	var finalizingDetails []string
+	finalizingStarted := false
 	for _, event := range resyncEvents {
+		if finalizingStarted {
+			assert.NotEqual(t, sync.PhaseSyncing, event.Phase,
+				"bulk provider progress must not replace finalization status")
+		}
 		if event.Phase != sync.PhaseFinalizing {
 			continue
 		}
+		finalizingStarted = true
 		assert.True(t, event.Resync)
 		assert.Zero(t, event.SessionsTotal)
 		assert.Zero(t, event.SessionsDone)
