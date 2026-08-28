@@ -802,10 +802,6 @@ func parsePositAssistantConversation(
 			messages = append(messages, msg)
 		}
 	}
-	if len(messages) == 0 {
-		return nil, nil, nil, nil
-	}
-
 	if firstMessage == "" {
 		firstMessage = truncate(strings.ReplaceAll(
 			firstNonEmptyJSONLString(
@@ -839,6 +835,9 @@ func parsePositAssistantConversation(
 		return nil, nil, nil, err
 	}
 	malformed += eventMalformed
+	if len(messages) == 0 && len(events) == 0 {
+		return nil, nil, nil, nil
+	}
 
 	sess := &ParsedSession{
 		ID:               sessionID,

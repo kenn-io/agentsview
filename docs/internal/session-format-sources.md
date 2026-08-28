@@ -1565,7 +1565,8 @@ add an archived or maintained mirror without replacing the original identity.
   model-family token normalization; the sidecar participates in the composite
   fingerprint and changed-path classification so keepalive appends on
   otherwise idle sessions trigger resync. Data version 92 reparses existing
-  archives to pick up sidecar spend.
+  archives to pick up sidecar spend. Conversations with valid sidecar usage
+  are retained even when they have no renderable transcript messages.
 
 ## Z Code (`zcode`)
 

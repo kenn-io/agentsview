@@ -807,6 +807,48 @@ func TestPositAssistantProviderParseUsageEventsSidecar(t *testing.T) {
 	assert.Equal(t, 110, sess.PeakContextTokens)
 }
 
+func TestPositAssistantProviderPreservesUsageOnlySession(t *testing.T) {
+	root := t.TempDir()
+	conversationID := "88888888-8888-4888-8888-888888888888"
+	convDir := filepath.Join(root, "ws1", conversationID)
+	writeSourceFile(t, filepath.Join(convDir, "conversation.json"), `{
+		"schemaVersion": "3",
+		"root": {
+			"id": "88888888-8888-4888-8888-888888888888",
+			"timestamp": 1735689600000,
+			"metadata": {"kind": "main"}
+		},
+		"messages": []
+	}`)
+	writeSourceFile(t, filepath.Join(convDir, "usage-events.jsonl"),
+		`{"type":"usage","kind":"classifier","timestamp":1735689900000,"providerId":"positai","modelId":"claude-haiku-4-5","inputTokens":400,"outputTokens":10,"totalTokens":410,"cacheReadTokens":0,"cacheWriteTokens":0}`+"\n")
+
+	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: discovered[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+
+	assert.Equal(t, positAssistantIDPrefix+conversationID, result.Session.ID)
+	assert.Zero(t, result.Session.MessageCount)
+	assert.Empty(t, result.Messages)
+	require.Len(t, result.UsageEvents, 1)
+	assert.Equal(t, "posit-assistant-classifier", result.UsageEvents[0].Source)
+	assert.Equal(t, "claude-haiku-4-5", result.UsageEvents[0].Model)
+	assert.Equal(t, 400, result.UsageEvents[0].InputTokens)
+	assert.Equal(t, 10, result.UsageEvents[0].OutputTokens)
+	assert.Equal(t, "2025-01-01T00:05:00Z", result.UsageEvents[0].OccurredAt)
+}
+
 func TestPositAssistantProviderFingerprintTracksUsageEventsSidecar(t *testing.T) {
 	root := t.TempDir()
 	convDir := filepath.Join(root, "ws1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
