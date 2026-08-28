@@ -523,16 +523,12 @@ directory shape, never pasted tokens, OAuth files, or other secrets.
 **OpenCode storage backend:** As of 0.24.0, AgentsView reads both of OpenCode's
 layouts. If a `storage/session/` directory exists under the OpenCode root,
 sessions are parsed from the per-file JSON layout (`storage/session`,
-`storage/message`, `storage/part`); otherwise recognized SQLite containers
-under the root are used, including `opencode.db` and `opencode-<channel>.db`.
-OpenCode's `OPENCODE_DISABLE_CHANNEL_DB=1` or `true` setting routes all
-channels to `opencode.db`.
-Detection is automatic and requires no configuration. In storage mode, the
-file watcher recursively scopes JSON files to the `storage/` subtree and adds
-a shallow root watch when SQLite containers are present, so unrelated
-OpenCode state like binaries, logs, and caches no longer trigger sync events.
-In SQLite-only mode, it watches the container parent. Storage JSON continues
-to take precedence over SQLite duplicates.
+`storage/message`, `storage/part`); otherwise the legacy `opencode.db` SQLite
+file is used. Detection is automatic and requires no configuration. In storage
+mode, the file watcher scopes itself to the `storage/` subtree rather than the
+entire OpenCode directory, so unrelated OpenCode state like binaries, logs, and
+caches no longer trigger sync events. In SQLite mode, it watches the
+`opencode.db` parent.
 
 Kilo and MiMoCode use the same OpenCode-format storage reader. Kilo reads from
 `storage/session`, while MiMoCode reads from `storage/session_diff` when

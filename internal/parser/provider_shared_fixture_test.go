@@ -192,7 +192,7 @@ func openCodeSQLiteProviderReadFixture(
 		}
 		registerSharedParserFixtureRoot(root)
 
-		dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+		dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode-local.db"))
 		defer db.Close()
 		seeder.AddProject("prj_1", "/home/user/code/sqlite-app")
 

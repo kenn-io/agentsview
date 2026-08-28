@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -834,95 +833,6 @@ func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {
 	require.Equal(t, filepath.Join(root, "storage", "session"), got.SessionRoot, "SessionRoot")
 }
 
-func TestOpenCodeSQLiteContainerNameContract(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{
-		"opencode.db", "opencode-local.db", "opencode-beta.1_x.db",
-		"opencode-.db", "opencode.db-wal", "opencode.sqlite",
-		"opencode-local.db-backup",
-	} {
-		path := filepath.Join(root, name)
-		if name == "opencode-local.db-backup" {
-			require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
-			continue
-		}
-		if name == "opencode-.db" || name == "opencode.sqlite" || name == "opencode.db-wal" {
-			require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
-			continue
-		}
-		require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
-	}
-	require.NoError(t, os.Mkdir(filepath.Join(root, "opencode-extra.db"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "nested"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "nested", "opencode-nested.db"), []byte("x"), 0o644))
-	assert.Equal(t, []string{
-		filepath.Join(root, "opencode.db"),
-		filepath.Join(root, "opencode-.db"),
-		filepath.Join(root, "opencode-beta.1_x.db"),
-		filepath.Join(root, "opencode-local.db"),
-	}, openCodeSQLiteContainerPaths(openCodeFmt, root))
-	for _, f := range []openCodeFormat{kiloFmt, mimoFmt, icodemateFmt} {
-		assert.False(t, isOpenCodeSQLiteContainerName(f, f.dbName+"-local.db"))
-		assert.False(t, isRecognizedOpenCodeContainerPath(
-			root, filepath.Join(root, strings.ToUpper(f.dbName)), f,
-		))
-	}
-}
-
-func TestResolveOpenCodeSourceChannelOnly(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "opencode-local.db")
-	require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
-	src := ResolveOpenCodeSource(root)
-	assert.Equal(t, OpenCodeSourceSQLite, src.Mode)
-	assert.Equal(t, []string{path}, src.DBPaths)
-	assert.Equal(t, path, src.DBPath)
-}
-
-func TestOpenCodePathClassifiersAcceptCaseVariantChannel(t *testing.T) {
-	root := t.TempDir()
-	name := "opencode-LOCAL.db"
-	if runtime.GOOS == "windows" {
-		name = "OpenCode-Local.db"
-	}
-	path := filepath.Join(root, name)
-	assert.True(t, IsOpenCodeSQLiteContainerPath(root, path))
-	container, ok := OpenCodeSQLiteContainerPathForEvent(root, path+"-wal")
-	assert.True(t, ok)
-	assert.Equal(t, path, container)
-	assert.True(t, IsOpenCodeSQLiteVirtualPath(
-		OpenCodeSQLiteVirtualPath(path, "ses-1"),
-	))
-}
-
-func TestOpenCodeSQLiteContainerPathsRejectSymlinks(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation requires elevated Windows privileges")
-	}
-	root := t.TempDir()
-	target := filepath.Join(t.TempDir(), "outside.db")
-	require.NoError(t, os.WriteFile(target, []byte("db"), 0o600))
-	for _, name := range []string{"opencode.db", "opencode-local.db"} {
-		require.NoError(t, os.Symlink(target, filepath.Join(root, name)))
-	}
-	assert.Empty(t, openCodeSQLiteContainerPaths(openCodeFmt, root))
-	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	_, err := provider.Discover(t.Context())
-	var incomplete DiscoveryIncompleteError
-	assert.ErrorAs(t, err, &incomplete)
-}
-
-func TestOpenCodeDiscoveryReportsNonRegularContainer(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, "opencode-local.db"), 0o755))
-	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	_, err := provider.Discover(t.Context())
-	var incomplete DiscoveryIncompleteError
-	require.ErrorAs(t, err, &incomplete)
-}
-
 func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "storage", "session_diff", "global")
@@ -1146,21 +1056,6 @@ func TestResolveOpenCodeWatchRootsHybrid(t *testing.T) {
 	want := []string{root}
 	assert.Truef(t, slices.Equal(got, want),
 		"ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
-}
-
-func TestResolveOpenCodeWatchRootsHybridChannelOnly(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(
-		filepath.Join(root, "storage", "session", "global"),
-		0o755,
-	), "mkdir session dir")
-	require.NoError(t, os.WriteFile(
-		filepath.Join(root, "opencode-local.db"), []byte("x"), 0o644,
-	), "write channel db marker")
-
-	got := ResolveOpenCodeWatchRoots(root)
-	assert.Truef(t, slices.Equal(got, []string{root}),
-		"ResolveOpenCodeWatchRoots() = %v, want %v", got, []string{root})
 }
 
 // A fresh opencode install may only have storage/session at startup;

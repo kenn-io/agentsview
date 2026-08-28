@@ -2582,7 +2582,6 @@ func shouldAbortResyncSwap(
 		stats.cwdFilteredSessions > 0 &&
 		stats.filesOK == stats.cwdFilteredFiles+stats.parserExcludedFiles
 	return stats.Aborted ||
-		stats.providerFailures > 0 ||
 		emptyDiscovery ||
 		(stats.Synced == 0 &&
 			stats.TotalSessions > 0 &&
@@ -6092,12 +6091,8 @@ func (e *Engine) rehydrateReconciliationPage(
 				return nil, fmt.Errorf("rehydrate %s source %s: %w", candidate.Provider, candidate.Path, err)
 			}
 			if found && reconciliationSourceIdentity(candidate.Provider, source) == candidate.Identity {
-				path := providerDiscoveredPath(source)
-				if path == "" {
-					return nil, fmt.Errorf("rehydrate %s source %s: resolved source path is empty", candidate.Provider, candidate.Path)
-				}
 				files = append(files, parser.DiscoveredFile{
-					Path: path, Project: source.ProjectHint,
+					Path: candidate.Path, Project: source.ProjectHint,
 					Agent: candidate.Provider, ForceParse: forceCandidate,
 					Machine:        candidate.Machine,
 					ProviderSource: &source, ProviderProcess: true,
@@ -6123,12 +6118,8 @@ func (e *Engine) rehydrateReconciliationPage(
 			return nil, fmt.Errorf("rehydrate %s source %s: canonical source not found", candidate.Provider, candidate.Path)
 		}
 		source := *matched
-		path := providerDiscoveredPath(source)
-		if path == "" {
-			return nil, fmt.Errorf("rehydrate %s source %s: resolved source path is empty", candidate.Provider, candidate.Path)
-		}
 		files = append(files, parser.DiscoveredFile{
-			Path: path, Project: source.ProjectHint,
+			Path: candidate.Path, Project: source.ProjectHint,
 			Agent: candidate.Provider, ForceParse: forceCandidate,
 			// Carry the candidate's stored attribution: recomputing it from the
 			// physical path is wrong for providers whose source can sit outside
@@ -7614,6 +7605,7 @@ func (e *Engine) discoverProviderSources(
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
+			continue
 		}
 		if agentType == parser.AgentKiro {
 			sources = filterProviderSourcesToScope(sources, scope)
@@ -18031,7 +18023,8 @@ func isOpenCodeFormatSQLiteVirtualPath(
 		return false
 	}
 	if agent == parser.AgentOpenCode {
-		return parser.IsOpenCodeSQLiteVirtualPath(path)
+		_, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path)
+		return ok
 	}
 	_, _, ok := parser.ParseVirtualSourcePathForBase(
 		path, openCodeFormatDBName(agent),

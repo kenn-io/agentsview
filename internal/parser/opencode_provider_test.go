@@ -15,284 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOpenCodeProviderDiscoversChannelSuffixedContainers(t *testing.T) {
-	root := t.TempDir()
-	canonical := filepath.Join(root, "opencode.db")
-	channel := filepath.Join(root, "opencode-local.db")
-	seedHybridSQLiteDB(t, canonical, "ses-shared")
-	seedHybridSQLiteDB(t, channel, "ses-shared")
-	db, err := sql.Open("sqlite3", channel)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	_, err = db.Exec(
-		`INSERT INTO session (id, project_id, time_created, time_updated)
-		 VALUES (?, ?, ?, ?)`, "ses-channel", "prj_seed", int64(3), int64(4),
-	)
-	require.NoError(t, err)
-	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	paths := make([]string, 0, len(sources))
-	for _, source := range sources {
-		paths = append(paths, source.DisplayPath)
-	}
-	assert.Contains(t, paths, OpenCodeSQLiteVirtualPath(channel, "ses-channel"))
-	assert.Contains(t, paths, OpenCodeSQLiteVirtualPath(canonical, "ses-shared"))
-	assert.NotContains(t, paths, OpenCodeSQLiteVirtualPath(channel, "ses-shared"))
-	var streamed []SourceRef
-	require.NoError(t, provider.(StreamingDiscoverer).DiscoverEach(
-		t.Context(), func(source SourceRef) error {
-			streamed = append(streamed, source)
-			return nil
-		},
-	))
-	streamedPaths := make([]string, 0, len(streamed))
-	for _, source := range streamed {
-		streamedPaths = append(streamedPaths, source.DisplayPath)
-	}
-	assert.Contains(t, streamedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-channel"))
-	assert.Contains(t, streamedPaths, OpenCodeSQLiteVirtualPath(canonical, "ses-shared"))
-	assert.NotContains(t, streamedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-shared"))
-	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
-		Path: channel, EventKind: "write", WatchRoot: root,
-	})
-	require.NoError(t, err)
-	changedPaths := make([]string, 0, len(changed))
-	for _, source := range changed {
-		changedPaths = append(changedPaths, source.DisplayPath)
-	}
-	assert.Contains(t, changedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-channel"))
-	assert.NotContains(t, changedPaths, OpenCodeSQLiteVirtualPath(channel, "ses-shared"))
-	resolver, ok := provider.(ReconciliationSourceResolver)
-	require.True(t, ok)
-	reconciled, found, err := resolver.SourceForReconciliation(
-		t.Context(), OpenCodeSQLiteVirtualPath(channel, "ses-shared"), "",
-	)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, OpenCodeSQLiteVirtualPath(canonical, "ses-shared"), reconciled.DisplayPath)
-	stored, found, err := provider.FindSource(t.Context(), FindSourceRequest{
-		StoredFilePath:     OpenCodeSQLiteVirtualPath(channel, "ses-shared"),
-		RequireFreshSource: true,
-		PreferStoredSource: true,
-	})
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, OpenCodeSQLiteVirtualPath(channel, "ses-shared"), stored.DisplayPath)
-}
-
-func TestOpenCodeReconciliationFallsBackToHealthySQLiteAfterStorageScanError(t *testing.T) {
-	root := t.TempDir()
-	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	seeder.AddProject("prj_1", "/workspace/sqlite")
-	seeder.AddSession(
-		"ses-sqlite", "prj_1", "", "SQLite", 1700000000000, 1700000010000,
-	)
-	storageRoot := filepath.Join(root, "storage", "session")
-	require.NoError(t, os.MkdirAll(storageRoot, 0o755))
-	discoveryErr := errors.New("storage scan failed")
-	ctx := withStreamingDirectoryReader(t.Context(), func(
-		ctx context.Context, dir string, yield func(os.DirEntry) error,
-	) error {
-		if samePath(dir, storageRoot) {
-			return discoveryErr
-		}
-		return streamDirectoryEntriesDirect(ctx, dir, yield)
-	})
-	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	resolver, ok := provider.(ReconciliationSourceResolver)
-	require.True(t, ok)
-	source, found, err := resolver.SourceForReconciliation(
-		ctx, OpenCodeSQLiteVirtualPath(dbPath, "ses-sqlite"), "",
-	)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses-sqlite"), source.DisplayPath)
-}
-
-func TestOpenCodeReconciliationKeepsVirtualPathWithinItsConfiguredRoot(t *testing.T) {
-	storageRoot := t.TempDir()
-	writeOpenCodeProviderStorageSession(
-		t, storageRoot, "session", "ses-shared", "project", "Storage",
-	)
-	sqliteRoot := filepath.Join(storageRoot, "nested")
-	require.NoError(t, os.MkdirAll(sqliteRoot, 0o755))
-	dbPath, seeder, db := newTestDBAt(
-		t, filepath.Join(sqliteRoot, "opencode.db"),
-	)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	seeder.AddProject("prj_1", "/workspace/sqlite")
-	seeder.AddSession(
-		"ses-shared", "prj_1", "", "SQLite", 1700000000000, 1700000010000,
-	)
-	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
-		Roots: []string{storageRoot, sqliteRoot},
-	})
-	require.True(t, ok)
-	resolver, ok := provider.(ReconciliationSourceResolver)
-	require.True(t, ok)
-	source, found, err := resolver.SourceForReconciliation(
-		t.Context(), OpenCodeSQLiteVirtualPath(dbPath, "ses-shared"), "",
-	)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses-shared"), source.DisplayPath)
-	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
-		Path: OpenCodeSQLiteVirtualPath(dbPath, "ses-shared"), EventKind: "write",
-	})
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, OpenCodeSQLiteVirtualPath(dbPath, "ses-shared"), changed[0].DisplayPath)
-}
-
-func TestOpenCodeReconciliationAcceptsCaseVariantChannelContainer(t *testing.T) {
-	root := t.TempDir()
-	sources := newOpenCodeFormatSourceSet(
-		[]string{root}, openCodeProviderSpecForAgent(AgentOpenCode), nil,
-	)
-	name := "opencode-LOCAL.db"
-	if runtime.GOOS == "windows" {
-		name = "OpenCode-Local.db"
-	}
-	requested := filepath.Join(root, name+"#ses-1")
-	container, ok := sources.reconciliationContainer(requested)
-	assert.True(t, ok)
-	assert.Equal(t, filepath.Join(root, name), container)
-}
-
-func TestOpenCodeReconciliationAcceptsCaseVariantChannelSidecars(t *testing.T) {
-	root := t.TempDir()
-	sources := newOpenCodeFormatSourceSet(
-		[]string{root}, openCodeProviderSpecForAgent(AgentOpenCode), nil,
-	)
-	name := "opencode-LOCAL.db"
-	if runtime.GOOS == "windows" {
-		name = "OpenCode-Local.db"
-	}
-	suffixes := []string{"-wal", "-shm"}
-	if runtime.GOOS == "windows" {
-		suffixes = []string{"-WAL", "-SHM"}
-	}
-	for _, suffix := range suffixes {
-		requested := filepath.Join(root, name+suffix+"#ses-1")
-		container, ok := sources.reconciliationContainer(requested)
-		assert.True(t, ok, suffix)
-		assert.Equal(t, filepath.Join(root, name), container)
-	}
-}
-
-func TestOpenCodePrecedingSQLiteArbitrationPreservesCaseDistinctPaths(t *testing.T) {
-	root := t.TempDir()
-	earlier := filepath.Join(root, "opencode-LOCAL.db")
-	later := filepath.Join(root, "opencode-local.db")
-	spec := openCodeProviderSpecForAgent(AgentOpenCode)
-	spec.streamSQLiteWatermark = nil
-	spec.listSQLiteWatermark = nil
-	spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
-		if path == earlier {
-			return []OpenCodeSessionMeta{{SessionID: "ses-earlier"}}, nil
-		}
-		return nil, nil
-	}
-	sources := newOpenCodeFormatSourceSet([]string{root}, spec, nil)
-	sources.resolvedSources[filepath.Clean(root)] = OpenCodeSource{
-		Mode:    OpenCodeSourceSQLite,
-		DBPaths: []string{earlier, later},
-		DBPath:  earlier,
-	}
-
-	skip, err := sources.withPrecedingSQLiteIDs(t.Context(), root, later)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, skip.close()) })
-	_, found, err := skip.get(t.Context(), "ses-earlier")
-	require.NoError(t, err)
-	assert.True(t, found)
-}
-
-func TestOpenCodeProviderReportsCorruptAdditionalChannelContainer(t *testing.T) {
-	root := t.TempDir()
-	canonical := filepath.Join(root, "opencode.db")
-	channel := filepath.Join(root, "opencode-local.db")
-	seedHybridSQLiteDB(t, canonical, "ses-healthy")
-	require.NoError(t, os.WriteFile(channel, []byte("not sqlite"), 0o600))
-	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.Error(t, err)
-	requireSourcePathsMatch(t, sources, []string{
-		OpenCodeSQLiteVirtualPath(canonical, "ses-healthy"),
-	})
-}
-
-func TestOpenCodeStreamingDiscoveryContinuesHealthyChannelsAfterUnreadableCanonical(
-	t *testing.T,
-) {
-	root := t.TempDir()
-	canonical := filepath.Join(root, "opencode.db")
-	channel := filepath.Join(root, "opencode-local.db")
-	require.NoError(t, os.WriteFile(canonical, []byte("not sqlite"), 0o600))
-	_, seeder, db := newTestDBAt(t, channel)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	seeder.AddProject("prj_1", "/workspace/channel")
-	seeder.AddSession(
-		"ses-channel", "prj_1", "", "Channel", 1700000000000, 1700000010000,
-	)
-	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	var paths []string
-	err := provider.(StreamingDiscoverer).DiscoverEach(
-		t.Context(), func(source SourceRef) error {
-			paths = append(paths, source.DisplayPath)
-			return nil
-		},
-	)
-	require.Error(t, err)
-	assert.Equal(t, []string{
-		OpenCodeSQLiteVirtualPath(channel, "ses-channel"),
-	}, paths)
-}
-
-func TestOpenCodeDiscoveryReportsContainerEnumerationFailure(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "not-a-directory")
-	require.NoError(t, os.WriteFile(root, []byte("root"), 0o600))
-	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-
-	discovered, err := provider.Discover(t.Context())
-	require.Error(t, err)
-	assert.Empty(t, discovered)
-	var incomplete DiscoveryIncompleteError
-	assert.ErrorAs(t, err, &incomplete)
-
-	err = provider.(StreamingDiscoverer).DiscoverEach(
-		t.Context(), func(SourceRef) error { return nil },
-	)
-	require.Error(t, err)
-	assert.ErrorAs(t, err, &incomplete)
-}
-
-func TestOpenCodeChangedChannelPathReportsUnreadablePredecessor(t *testing.T) {
-	root := t.TempDir()
-	canonical := filepath.Join(root, "opencode.db")
-	channel := filepath.Join(root, "opencode-local.db")
-	require.NoError(t, os.WriteFile(canonical, []byte("not sqlite"), 0o600))
-	_, seeder, db := newTestDBAt(t, channel)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	seeder.AddProject("prj_1", "/workspace/channel")
-	seeder.AddSession(
-		"ses-channel", "prj_1", "", "Channel", 1700000000000, 1700000010000,
-	)
-	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	_, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
-		Path: channel, EventKind: "write", WatchRoot: root,
-	})
-	require.Error(t, err)
-}
-
 func TestOpenCodeHybridStreamingDiscoveryReportsIncompleteSQLiteFailure(
 	t *testing.T,
 ) {
@@ -307,7 +29,7 @@ func TestOpenCodeHybridStreamingDiscoveryReportsIncompleteSQLiteFailure(
 	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.Error(t, err)
+	require.NoError(t, err)
 	requireSourcePathsMatch(t, discovered, []string{storagePath})
 	var streamed []SourceRef
 	err = provider.(StreamingDiscoverer).DiscoverEach(
@@ -684,7 +406,7 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{
-		"opencode.db", "opencode.db-wal", "opencode-*.db", "opencode-*.db-wal",
+		"opencode*.db", "opencode*.db-wal",
 	}, plan.Roots[0].IncludeGlobs)
 	assert.Equal(t, filepath.Join(root, "storage"), plan.Roots[1].Path)
 	assert.True(t, plan.Roots[1].Recursive)
@@ -1168,7 +890,7 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{
-		"*.json", "opencode.db", "opencode.db-wal", "opencode-*.db", "opencode-*.db-wal",
+		"*.json", "opencode*.db", "opencode*.db-wal",
 	}, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(context.Background())
@@ -1724,8 +1446,8 @@ func TestOpenCodeProviderDiscoveryToleratesCorruptSQLiteDB(t *testing.T) {
 	storagePath := writeOpenCodeProviderStorageSession(
 		t, root, "session", "ses_valid", "storage-app", "Valid Session",
 	)
-	// A present-but-corrupt optional DB must not suppress the valid
-	// storage-backed session, but discovery must remain incomplete.
+	// A present-but-corrupt optional DB must not abort discovery of the valid
+	// storage-backed session that lives in the same root.
 	require.NoError(t, os.WriteFile(
 		filepath.Join(root, "opencode.db"), []byte("not a sqlite database"), 0o644,
 	))
@@ -1734,7 +1456,7 @@ func TestOpenCodeProviderDiscoveryToleratesCorruptSQLiteDB(t *testing.T) {
 	require.True(t, ok)
 
 	discovered, err := provider.Discover(context.Background())
-	require.Error(t, err)
+	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, storagePath, discovered[0].DisplayPath)
 }

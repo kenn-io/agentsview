@@ -5,12 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -87,12 +85,50 @@ const (
 // OpenCodeSource describes the resolved storage backend for an
 // OpenCode root.
 type OpenCodeSource struct {
-	Mode              OpenCodeSourceMode
-	Root              string
-	SessionRoot       string
-	DBPath            string
-	DBPaths           []string
-	containerPathsErr error
+	Mode        OpenCodeSourceMode
+	Root        string
+	SessionRoot string
+	DBPath      string
+	DBPaths     []string
+}
+
+func (f openCodeFormat) matchesDBName(name string) bool {
+	if name == f.dbName {
+		return true
+	}
+	if f.agent != AgentOpenCode || !strings.HasPrefix(name, "opencode-") ||
+		!strings.HasSuffix(name, ".db") {
+		return false
+	}
+	channel := strings.TrimSuffix(strings.TrimPrefix(name, "opencode-"), ".db")
+	return channel != "" && strings.IndexFunc(channel, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) &&
+			r != '.' && r != '_' && r != '-'
+	}) == -1
+}
+
+func (f openCodeFormat) dbPaths(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var canonical string
+	var channels []string
+	for _, entry := range entries {
+		if entry.IsDir() || !f.matchesDBName(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		if entry.Name() == f.dbName {
+			canonical = path
+		} else {
+			channels = append(channels, path)
+		}
+	}
+	if canonical != "" {
+		return append([]string{canonical}, channels...)
+	}
+	return channels
 }
 
 // openCodeFormat parameterizes the shared OpenCode storage format by
@@ -106,88 +142,6 @@ type openCodeFormat struct {
 	agent         AgentType
 	dbName        string
 	sessionSubdir string
-}
-
-func isOpenCodeSQLiteContainerName(f openCodeFormat, name string) bool {
-	if name == f.dbName {
-		return true
-	}
-	if f.agent != AgentOpenCode || !strings.HasPrefix(name, "opencode-") ||
-		!strings.HasSuffix(name, ".db") {
-		return false
-	}
-	channel := strings.TrimSuffix(strings.TrimPrefix(name, "opencode-"), ".db")
-	for _, r := range channel {
-		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') &&
-			(r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
-			return false
-		}
-	}
-	return true
-}
-
-func isCanonicalOpenCodeSQLiteName(f openCodeFormat, name string) bool {
-	return name == f.dbName ||
-		(f.agent == AgentOpenCode && runtime.GOOS == "windows" &&
-			strings.EqualFold(name, f.dbName))
-}
-
-func openCodeSQLiteContainerPaths(f openCodeFormat, root string) []string {
-	paths, _ := openCodeSQLiteContainerPathsWithError(f, root)
-	return paths
-}
-
-func openCodeSQLiteContainerPathsWithError(
-	f openCodeFormat, root string,
-) ([]string, error) {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	var enumerationErr error
-	for _, entry := range entries {
-		name := entry.Name()
-		recognized := isOpenCodeSQLiteContainerName(f, name)
-		if f.agent == AgentOpenCode && runtime.GOOS == "windows" {
-			recognized = isOpenCodeSQLiteContainerNameFolded(f, name)
-		}
-		if !recognized {
-			continue
-		}
-		info, err := os.Lstat(filepath.Join(root, name))
-		if err != nil {
-			enumerationErr = errors.Join(enumerationErr, err)
-			continue
-		}
-		if !info.Mode().IsRegular() {
-			enumerationErr = errors.Join(
-				enumerationErr,
-				fmt.Errorf("recognized OpenCode SQLite container is not regular: %s", filepath.Join(root, name)),
-			)
-			continue
-		}
-		names = append(names, entry.Name())
-	}
-	sort.Slice(names, func(i, j int) bool {
-		if names[i] == f.dbName {
-			return names[j] != f.dbName
-		}
-		if names[j] == f.dbName {
-			return false
-		}
-		canonicalI := isCanonicalOpenCodeSQLiteName(f, names[i])
-		canonicalJ := isCanonicalOpenCodeSQLiteName(f, names[j])
-		if canonicalI != canonicalJ {
-			return canonicalI
-		}
-		return names[i] < names[j]
-	})
-	paths := make([]string, len(names))
-	for i, name := range names {
-		paths[i] = filepath.Join(root, name)
-	}
-	return paths, enumerationErr
 }
 
 var (
@@ -215,81 +169,64 @@ func resolveOpenCodeFormatSource(
 	}
 
 	sessionRoot := filepath.Join(root, "storage", f.sessionSubdir)
-	dbPaths, dbPathsErr := openCodeSQLiteContainerPathsWithError(f, root)
-	_, rootStatErr := os.Stat(root)
-	if os.IsNotExist(rootStatErr) {
-		dbPathsErr = nil
+	dbPaths := f.dbPaths(root)
+	dbPath := ""
+	if len(dbPaths) > 0 {
+		dbPath = dbPaths[0]
 	}
 	if info, err := os.Stat(sessionRoot); err == nil && info.IsDir() {
 		return OpenCodeSource{
-			Mode:              OpenCodeSourceStorage,
-			Root:              root,
-			SessionRoot:       sessionRoot,
-			DBPath:            filepath.Join(root, f.dbName),
-			DBPaths:           dbPaths,
-			containerPathsErr: dbPathsErr,
+			Mode:        OpenCodeSourceStorage,
+			Root:        root,
+			SessionRoot: sessionRoot,
+			DBPath:      dbPath,
+			DBPaths:     dbPaths,
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		storageRoot := filepath.Join(root, "storage")
 		if info, serr := os.Stat(storageRoot); serr == nil && info.IsDir() {
 			return OpenCodeSource{
-				Mode:              OpenCodeSourceStorage,
-				Root:              root,
-				SessionRoot:       sessionRoot,
-				DBPath:            filepath.Join(root, f.dbName),
-				DBPaths:           dbPaths,
-				containerPathsErr: dbPathsErr,
+				Mode:        OpenCodeSourceStorage,
+				Root:        root,
+				SessionRoot: sessionRoot,
+				DBPath:      dbPath,
+				DBPaths:     dbPaths,
 			}
 		}
 	}
 
-	if len(dbPaths) > 0 {
+	if dbPath != "" {
 		return OpenCodeSource{
-			Mode:              OpenCodeSourceSQLite,
-			Root:              root,
-			DBPath:            dbPaths[0],
-			DBPaths:           dbPaths,
-			containerPathsErr: dbPathsErr,
+			Mode:    OpenCodeSourceSQLite,
+			Root:    root,
+			DBPath:  dbPath,
+			DBPaths: dbPaths,
 		}
 	}
 
-	return OpenCodeSource{Root: root, containerPathsErr: dbPathsErr}
+	return OpenCodeSource{Root: root}
 }
 
 func discoverOpenCodeFormatSessions(
 	f openCodeFormat, root string,
 ) []DiscoveredFile {
-	files, _ := discoverOpenCodeFormatSessionsWithError(f, root)
-	return files
-}
-
-func discoverOpenCodeFormatSessionsWithError(
-	f openCodeFormat, root string,
-) ([]DiscoveredFile, error) {
 	src := resolveOpenCodeFormatSource(f, root)
 	if src.Mode != OpenCodeSourceStorage {
-		return nil, nil
+		return nil
 	}
 
 	var files []DiscoveredFile
-	var enumerationErr error
 	entries, err := os.ReadDir(src.SessionRoot)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 	for _, entry := range entries {
-		isProjectDir, dirErr := streamingDirOrSymlinkCandidate(entry, src.SessionRoot)
-		if dirErr != nil {
-			enumerationErr = errors.Join(enumerationErr, dirErr)
-			continue
-		}
-		if !isProjectDir {
+		if !isDirOrSymlink(entry, src.SessionRoot) {
 			continue
 		}
 		projectDir := filepath.Join(src.SessionRoot, entry.Name())
 		sessionEntries, err := os.ReadDir(projectDir)
 		if err != nil {
-			enumerationErr = errors.Join(enumerationErr, err)
 			continue
 		}
 		for _, sessionEntry := range sessionEntries {
@@ -298,14 +235,6 @@ func discoverOpenCodeFormatSessionsWithError(
 				continue
 			}
 			path := filepath.Join(projectDir, sessionEntry.Name())
-			regular, fileErr := openCodeRegularSessionFile(path)
-			if fileErr != nil {
-				enumerationErr = errors.Join(enumerationErr, fileErr)
-				continue
-			}
-			if !regular {
-				continue
-			}
 			files = append(files, DiscoveredFile{
 				Path:    path,
 				Project: openCodeSessionProject(path),
@@ -317,21 +246,7 @@ func discoverOpenCodeFormatSessionsWithError(
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
-	return files, enumerationErr
-}
-
-func openCodeRegularSessionFile(path string) (bool, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return false, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		if _, err := os.Stat(path); err != nil {
-			return false, err
-		}
-		return false, nil
-	}
-	return info.Mode().IsRegular(), nil
+	return files
 }
 
 func findOpenCodeFormatSourceFile(
@@ -377,6 +292,43 @@ func findOpenCodeFormatSourceFile(
 	}
 }
 
+func openCodeFormatStorageSessionIDs(
+	f openCodeFormat, root string,
+) map[string]struct{} {
+	src := resolveOpenCodeFormatSource(f, root)
+	if src.Mode != OpenCodeSourceStorage {
+		return nil
+	}
+	entries, err := os.ReadDir(src.SessionRoot)
+	if err != nil {
+		return nil
+	}
+	ids := make(map[string]struct{})
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, src.SessionRoot) {
+			continue
+		}
+		projectDir := filepath.Join(src.SessionRoot, entry.Name())
+		sessionEntries, err := os.ReadDir(projectDir)
+		if err != nil {
+			continue
+		}
+		for _, sessionEntry := range sessionEntries {
+			name := sessionEntry.Name()
+			if sessionEntry.IsDir() ||
+				!strings.HasSuffix(name, ".json") {
+				continue
+			}
+			id := strings.TrimSuffix(name, ".json")
+			if id == "" {
+				continue
+			}
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
 func resolveOpenCodeFormatWatchRoots(
 	f openCodeFormat, root string,
 ) []string {
@@ -386,10 +338,8 @@ func resolveOpenCodeFormatWatchRoots(
 	src := resolveOpenCodeFormatSource(f, root)
 	switch src.Mode {
 	case OpenCodeSourceStorage:
-		for _, dbPath := range src.DBPaths {
-			if info, err := os.Stat(dbPath); err == nil && !info.IsDir() {
-				return []string{root}
-			}
+		if len(src.DBPaths) > 0 {
+			return []string{root}
 		}
 		return []string{filepath.Join(root, "storage")}
 	case OpenCodeSourceSQLite:
@@ -413,55 +363,12 @@ func parseOpenCodeFormatVirtualPath(
 	}
 	dbPath = sourcePath[:idx]
 	sessionID = sourcePath[idx+1:]
-	base := filepath.Base(dbPath)
-	if base == dbName ||
-		(dbName == openCodeFmt.dbName &&
-			isOpenCodeSQLiteContainerNameFolded(openCodeFmt, base)) {
-		return dbPath, sessionID, true
-	}
-	return "", "", false
-}
-
-// IsOpenCodeSQLiteContainerPath reports whether path names a recognized
-// direct OpenCode SQLite container beneath root.
-func IsOpenCodeSQLiteContainerPath(root, path string) bool {
-	path = filepath.Clean(path)
-	rel, ok := relUnder(filepath.Clean(root), path)
-	if !ok || filepath.Dir(rel) != "." {
-		return false
-	}
-	return isOpenCodeSQLiteContainerNameFolded(openCodeFmt, filepath.Base(path))
-}
-
-// ParseOpenCodeSQLiteVirtualPath parses a virtual session locator for any
-// recognized OpenCode SQLite container.
-func ParseOpenCodeSQLiteVirtualPath(path string) (string, string, bool) {
-	idx := strings.LastIndex(path, "#")
-	if idx <= 0 || idx >= len(path)-1 {
+	name := filepath.Base(dbPath)
+	if name != dbName &&
+		(dbName != openCodeFmt.dbName || !openCodeFmt.matchesDBName(name)) {
 		return "", "", false
 	}
-	dbPath := path[:idx]
-	if !isOpenCodeSQLiteContainerNameFolded(openCodeFmt, filepath.Base(dbPath)) {
-		return "", "", false
-	}
-	return dbPath, path[idx+1:], true
-}
-
-func IsOpenCodeSQLiteVirtualPath(path string) bool {
-	_, _, ok := ParseOpenCodeSQLiteVirtualPath(path)
-	return ok
-}
-
-// OpenCodeSQLiteContainerPathForEvent returns the physical container named by
-// a direct database, WAL, or SHM event, including a container removed before
-// reconciliation enumerates the directory.
-func OpenCodeSQLiteContainerPathForEvent(root, path string) (string, bool) {
-	path = filepath.Clean(path)
-	path = trimSQLiteSidecarSuffix(path)
-	if !IsOpenCodeSQLiteContainerPath(root, path) {
-		return "", false
-	}
-	return path, true
+	return dbPath, sessionID, true
 }
 
 // ResolveOpenCodeSource detects whether an OpenCode root is using
@@ -487,6 +394,10 @@ func OpenCodeSQLiteVirtualPath(
 	dbPath, sessionID string,
 ) string {
 	return dbPath + "#" + sessionID
+}
+
+func ParseOpenCodeSQLiteVirtualPath(path string) (string, string, bool) {
+	return parseOpenCodeFormatVirtualPath(openCodeFmt.dbName, path)
 }
 
 func openCodeSessionProject(path string) string {

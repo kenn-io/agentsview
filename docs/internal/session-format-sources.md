@@ -614,28 +614,13 @@ add an archived or maintained mirror without replacing the original identity.
 
 - **Format:** Current SQLite-backed session/message/part records and the legacy
   JSON storage tree.
-- **Database naming:** OpenCode release channels (`latest`, `beta`, and `prod`)
-  use `opencode.db`; other channels use `opencode-<sanitized-channel>.db`,
-  where the producer admits `[A-Za-z0-9._-]` and replaces other characters
-  with `-`. An unset channel defaults to `local`. The producer also falls back
-  to `opencode.db` when `OPENCODE_DISABLE_CHANNEL_DB` is `1` or `true`.
-  AgentsView enumerates direct regular files matching those names, with
-  `opencode.db` taking precedence over channel databases for duplicate session
-  IDs. Storage JSON remains authoritative over every SQLite container. Verified
-  against OpenCode commit
-  `5f5ea53afb2630227ead917f1a0ddf784c33150c` in the producer's
-  [database.ts](https://github.com/anomalyco/opencode/blob/5f5ea53afb2630227ead917f1a0ddf784c33150c/packages/core/src/database/database.ts)
-  and
-  [version.ts](https://github.com/anomalyco/opencode/blob/5f5ea53afb2630227ead917f1a0ddf784c33150c/packages/core/src/installation/version.ts).
-- **Configuration boundary:** `OPENCODE_DB` may select an explicit absolute,
-  relative, or in-memory producer path, but AgentsView does not implicitly
-  discover arbitrary `OPENCODE_DB` paths.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/anomalyco/opencode.git` at
   `67caf894e0843ee370e72839e8265e483233479b`; see
   [message-v2.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/message-v2.ts)
   and
   [session.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/session.ts).
+  Channel database naming was reverified 2026-08-27 against `database.ts`.
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
   cache-write tokens, plus model/provider identity. Agentsview computes price
   from those tokens rather than consuming a persisted USD total.
@@ -669,11 +654,9 @@ add an archived or maintained mirror without replacing the original identity.
   counts as a failure, matching the existing `exit status N` heuristic, and a
   timed-out command records `timeout: true` with no `exit` key, so it is not
   detected here. See #1256.
-- **Change detection (SQLite layout):** every session in one SQLite container
-  shares that container's physical database, so the container's own size and
-  mtime move whenever any single session is written and cannot discriminate
-  between sessions. A root can contain the canonical and channel-specific
-  containers described above, and each container is fingerprinted separately.
+- **Change detection (SQLite layout):** every session in a root shares one
+  physical `opencode.db`, so the container's own size and mtime move whenever
+  any single session is written and cannot discriminate between sessions.
   Agentsview instead builds a per-session composite from
   `session.time_updated`, `project.time_updated`, `MAX(message.time_updated)`,
   and `MAX(part.time_updated)` (`openCodeCompositeMtimeExpr`), and omits the

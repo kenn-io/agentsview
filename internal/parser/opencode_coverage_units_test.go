@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,7 +42,7 @@ func TestOpenCodeWatchPlanKeepsTheContainerOffTheRecursiveBudget(t *testing.T) {
 	assert.Equal(t, root, container.Path)
 	assert.False(t, container.Recursive,
 		"the container unit must never enter the recursive budget")
-	assert.Equal(t, []string{"opencode.db", "opencode.db-wal", "opencode-*.db", "opencode-*.db-wal"}, container.IncludeGlobs)
+	assert.Equal(t, []string{"opencode*.db", "opencode*.db-wal"}, container.IncludeGlobs)
 
 	storage := plan.Roots[1]
 	assert.Equal(t, filepath.Join(root, "storage"), storage.Path)
@@ -52,22 +51,6 @@ func TestOpenCodeWatchPlanKeepsTheContainerOffTheRecursiveBudget(t *testing.T) {
 
 	assert.NotEqual(t, container.DebounceKey, storage.DebounceKey,
 		"units sharing a configured root need independent debounce keys")
-}
-
-func TestOpenCodeFormatWatchPathRelevanceIncludesChannelContainers(t *testing.T) {
-	root := t.TempDir()
-	provider := openCodeUnitProvider(t, root)
-	for _, name := range []string{"opencode-local.db", "opencode-local.db-shm", "opencode-local.db-wal"} {
-		relevance, err := ResolveChangedPathRelevance(context.Background(), provider, ChangedPathRequest{
-			Path: filepath.Join(root, name), EventKind: "write", WatchRoot: root,
-		})
-		require.NoError(t, err)
-		if strings.HasSuffix(name, "-shm") || strings.HasSuffix(name, "-wal") {
-			assert.Equal(t, ChangedPathNonData, relevance)
-		} else {
-			assert.Equal(t, ChangedPathDataBearing, relevance)
-		}
-	}
 }
 
 // TestOpenCodeWatchPlanStaysWholeWhileStorageIsAbsent keeps the plan from

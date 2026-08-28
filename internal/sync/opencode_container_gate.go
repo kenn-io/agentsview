@@ -57,11 +57,11 @@ func sqliteContainerSourceForFile(
 // container. Result paths arrive without an agent, so every family DB name is
 // tried.
 func sqliteContainerPathForResultPath(path string) string {
+	if dbPath, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
+		return dbPath
+	}
 	for _, agent := range openCodeFamilySQLiteAgents {
 		if agent == parser.AgentOpenCode {
-			if dbPath, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
-				return dbPath
-			}
 			continue
 		}
 		dbPath, _, ok := parser.ParseVirtualSourcePathForBase(
@@ -369,12 +369,6 @@ func openCodeContainerPathForEvent(
 	root string,
 	path string,
 ) string {
-	if agent == parser.AgentOpenCode {
-		if container, ok := parser.OpenCodeSQLiteContainerPathForEvent(root, path); ok {
-			return container
-		}
-		return ""
-	}
 	path = filepath.Clean(path)
 	for _, dbPath := range resolveOpenCodeFormatSource(agent, filepath.Clean(root)).DBPaths {
 		if path == dbPath || path == dbPath+"-wal" || path == dbPath+"-shm" {
