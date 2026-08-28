@@ -1673,10 +1673,10 @@ func usageRowIsRequestScoped(
 
 // UsageSourceIsRequestScoped reports whether a usage source represents one
 // provider request even when the provider cannot attach it to a message.
+// The policy lives in usagefacts so fact construction and row scanning
+// cannot drift apart.
 func UsageSourceIsRequestScoped(source string) bool {
-	return source == "message" ||
-		source == "goose-request" ||
-		source == "deepseek-harness"
+	return usagefacts.SourceIsRequestScoped(source)
 }
 
 func recordComputedUsagePricing(

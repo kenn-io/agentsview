@@ -18544,8 +18544,8 @@ func providerSourcePathNeedsFingerprint(path string) bool {
 
 func providerSourceMtimeNeedsFingerprint(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentQoder:
-		// Qoder stores a sidecar whose mtime the plain path stat misses.
+	case parser.AgentPositAssistant, parser.AgentQoder:
+		// These providers store sidecars whose mtimes the plain path stat misses.
 		return true
 	default:
 		// RooCode is deliberately absent: its fingerprint content-hashes

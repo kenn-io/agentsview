@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,9 +26,15 @@ const (
 	positAssistantConversationFile = "conversation.json"
 	positAssistantLMMessagesFile   = "lm-messages.jsonl"
 	positAssistantUIMessagesFile   = "ui-messages.jsonl"
+	positAssistantUsageEventsFile  = "usage-events.jsonl"
 	positAssistantWorkspaceFile    = "workspace.json"
 	positAssistantSubagentsDir     = "subagents"
 	positAssistantIDPrefix         = "posit-assistant:"
+	// positAssistantUsageSourcePrefix prefixes the usage-event Source with
+	// the sidecar line's kind (keepalive, classifier). Every sidecar line
+	// records one provider request, so db.UsageSourceIsRequestScoped
+	// matches this prefix.
+	positAssistantUsageSourcePrefix = "posit-assistant-"
 )
 
 // positAssistantSummaryTagRe strips the assistant's inline bookkeeping tags
@@ -119,7 +126,7 @@ func (p *positAssistantProvider) Parse(
 		src.Project = req.Source.ProjectHint
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, err := parsePositAssistantConversation(src, machine)
+	sess, msgs, events, err := parsePositAssistantConversation(src, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -141,8 +148,9 @@ func (p *positAssistantProvider) Parse(
 	return ParseOutcome{
 		Results: []ParseResultOutcome{{
 			Result: ParseResult{
-				Session:  *sess,
-				Messages: msgs,
+				Session:     *sess,
+				Messages:    msgs,
+				UsageEvents: events,
 			},
 			DataVersion: DataVersionCurrent,
 		}},
@@ -449,6 +457,13 @@ func (s positAssistantSourceSet) Fingerprint(
 			fingerprint.MTimeNS = mtime
 		}
 	}
+	uePath := filepath.Join(filepath.Dir(src.Path), positAssistantUsageEventsFile)
+	if ueInfo, err := os.Stat(uePath); err == nil {
+		fingerprint.Size += ueInfo.Size()
+		if mtime := ueInfo.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
+			fingerprint.MTimeNS = mtime
+		}
+	}
 	wsPath := s.workspaceManifestForSource(src)
 	if wsPath != "" {
 		if wsInfo, err := os.Stat(wsPath); err == nil {
@@ -458,7 +473,7 @@ func (s positAssistantSourceSet) Fingerprint(
 			}
 		}
 	}
-	fingerprint.Hash, err = positAssistantSourceHash(src.Path, lmPath, wsPath)
+	fingerprint.Hash, err = positAssistantSourceHash(src.Path, lmPath, uePath, wsPath)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -485,11 +500,13 @@ func (s positAssistantSourceSet) workspaceManifestForSource(
 	return manifest
 }
 
-// positAssistantSourceHash combines the conversation tree, transcript, and
-// workspace manifest hashes. The manifest is included because it supplies the
-// session's project and cwd, so editing or creating it must invalidate the
-// skip cache and freshness checks, not just re-emit sources.
-func positAssistantSourceHash(convPath, lmPath, wsPath string) (string, error) {
+// positAssistantSourceHash combines the conversation tree, transcript,
+// usage-event sidecar, and workspace manifest hashes. The manifest is
+// included because it supplies the session's project and cwd, so editing or
+// creating it must invalidate the skip cache and freshness checks, not just
+// re-emit sources. The sidecar is included because idle sessions receive
+// keepalive appends with no transcript change.
+func positAssistantSourceHash(convPath, lmPath, uePath, wsPath string) (string, error) {
 	hash, err := hashJSONLSourceFile(convPath)
 	if err != nil {
 		return "", err
@@ -502,6 +519,14 @@ func positAssistantSourceHash(convPath, lmPath, wsPath string) (string, error) {
 			return "", err
 		}
 		combined += "\x00lm\x00" + lmHash
+		composite = true
+	}
+	if IsRegularFile(uePath) {
+		ueHash, err := hashJSONLSourceFile(uePath)
+		if err != nil {
+			return "", err
+		}
+		combined += "\x00usage\x00" + ueHash
 		composite = true
 	}
 	if wsPath != "" && IsRegularFile(wsPath) {
@@ -561,7 +586,8 @@ func (s positAssistantSourceSet) sourceRefForChangedPath(
 ) (SourceRef, bool) {
 	switch filepath.Base(filepath.Clean(path)) {
 	case positAssistantConversationFile,
-		positAssistantLMMessagesFile:
+		positAssistantLMMessagesFile,
+		positAssistantUsageEventsFile:
 	default:
 		return SourceRef{}, false
 	}
@@ -719,24 +745,24 @@ type positAssistantTreeNode struct {
 func parsePositAssistantConversation(
 	src positAssistantSource,
 	machine string,
-) (*ParsedSession, []ParsedMessage, error) {
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(src.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
-		return nil, nil, fmt.Errorf("stat %s: %w", src.Path, err)
+		return nil, nil, nil, fmt.Errorf("stat %s: %w", src.Path, err)
 	}
 	data, err := os.ReadFile(src.Path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", src.Path, err)
+		return nil, nil, nil, fmt.Errorf("read %s: %w", src.Path, err)
 	}
 	if len(data) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	var conv positAssistantConversation
 	if err := json.Unmarshal(data, &conv); err != nil {
-		return nil, nil, fmt.Errorf("unmarshal %s: %w", src.Path, err)
+		return nil, nil, nil, fmt.Errorf("unmarshal %s: %w", src.Path, err)
 	}
 
 	convDir := filepath.Dir(src.Path)
@@ -744,11 +770,12 @@ func parsePositAssistantConversation(
 		filepath.Join(convDir, positAssistantLMMessagesFile),
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	var messages []ParsedMessage
 	firstMessage := ""
+	nodeOrdinals := make(map[string]int)
 	for _, node := range conv.Messages {
 		if !node.IsActive {
 			continue
@@ -769,11 +796,14 @@ func parsePositAssistantConversation(
 					strings.ReplaceAll(msg.Content, "\n", " "), 300,
 				)
 			}
+			if _, ok := nodeOrdinals[node.ID]; !ok {
+				nodeOrdinals[node.ID] = msg.Ordinal
+			}
 			messages = append(messages, msg)
 		}
 	}
 	if len(messages) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	if firstMessage == "" {
@@ -800,9 +830,18 @@ func parsePositAssistantConversation(
 		}
 	}
 
-	sessionID := filepath.Base(convDir)
+	sessionID := positAssistantIDPrefix + filepath.Base(convDir)
+	events, eventMalformed, err := readPositAssistantUsageEvents(
+		filepath.Join(convDir, positAssistantUsageEventsFile),
+		sessionID, nodeOrdinals, endedAt,
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	malformed += eventMalformed
+
 	sess := &ParsedSession{
-		ID:               positAssistantIDPrefix + sessionID,
+		ID:               sessionID,
 		Project:          src.Project,
 		Machine:          machine,
 		Agent:            AgentPositAssistant,
@@ -825,8 +864,11 @@ func parsePositAssistantConversation(
 		sess.ParentSessionID = positAssistantIDPrefix + conv.Root.Metadata.ParentTreeID
 		sess.RelationshipType = RelSubagent
 	}
+	// Sidecar events are supplementary to per-message usage, so session
+	// token totals stay message-derived; the events reach cost accounting
+	// through the usage_events table.
 	accumulateMessageTokenUsage(sess, messages)
-	return sess, messages, nil
+	return sess, messages, events, nil
 }
 
 // readPositAssistantLMMessages loads lm-messages.jsonl into a map keyed by
@@ -870,6 +912,109 @@ func readPositAssistantLMMessages(
 		return nil, 0, fmt.Errorf("read %s: %w", path, err)
 	}
 	return lines, malformed, nil
+}
+
+// readPositAssistantUsageEvents loads the usage-events.jsonl sidecar, where
+// Posit Assistant records auxiliary per-request usage — cache-keepalive pings
+// and classifier calls — that never appears in the lm-messages transcript.
+// The sidecar is supplementary to the per-message usage, so events are
+// emitted only from sidecar lines (never derived from message aggregates),
+// keeping the additive messages-plus-usage-events cost queries free of
+// double counting. A missing sidecar yields no events.
+func readPositAssistantUsageEvents(
+	path, sessionID string,
+	nodeOrdinals map[string]int,
+	fallbackTime time.Time,
+) ([]ParsedUsageEvent, int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, 0, nil
+		}
+		return nil, 0, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+
+	var events []ParsedUsageEvent
+	malformed := 0
+	lineNo := 0
+	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
+	for {
+		line, ok := lr.next()
+		if !ok {
+			break
+		}
+		lineNo++
+		if !gjson.Valid(line) {
+			malformed++
+			continue
+		}
+		parsed := gjson.Parse(line)
+		kind := parsed.Get("kind").Str
+		if parsed.Get("type").Str != "usage" || kind == "" {
+			malformed++
+			continue
+		}
+		events = append(events, positAssistantUsageEvent(
+			parsed, kind, sessionID, lineNo, nodeOrdinals, fallbackTime,
+		))
+	}
+	if err := lr.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read %s: %w", path, err)
+	}
+	return events, malformed, nil
+}
+
+// positAssistantUsageEvent converts one sidecar line into a request-scoped
+// usage event. Token buckets get the same family normalization as message
+// usage. Sidecar lines carry no identifiers, and the file is re-read whole on
+// each parse, so the dedup key is synthesized from the session, the line's
+// position in the append-only file, and its billing fields.
+func positAssistantUsageEvent(
+	parsed gjson.Result,
+	kind, sessionID string,
+	lineNo int,
+	nodeOrdinals map[string]int,
+	fallbackTime time.Time,
+) ParsedUsageEvent {
+	model := parsed.Get("modelId").Str
+	input := int(parsed.Get("inputTokens").Int())
+	output := int(parsed.Get("outputTokens").Int())
+	cacheRead := int(parsed.Get("cacheReadTokens").Int())
+	cacheWrite := int(parsed.Get("cacheWriteTokens").Int())
+	if positAssistantFoldsCacheWriteIntoInput(model) {
+		input += cacheWrite
+		cacheWrite = 0
+	}
+	timestamp := parsed.Get("timestamp").Int()
+	event := ParsedUsageEvent{
+		SessionID:                sessionID,
+		Source:                   positAssistantUsageSourcePrefix + kind,
+		Model:                    model,
+		InputTokens:              input,
+		OutputTokens:             output,
+		CacheCreationInputTokens: cacheWrite,
+		CacheReadInputTokens:     cacheRead,
+		OccurredAt: timeString(
+			positAssistantTime(timestamp), fallbackTime,
+		),
+		DedupKey: strings.Join([]string{
+			"session:" + sessionID,
+			"line=" + strconv.Itoa(lineNo),
+			"kind=" + kind,
+			"timestamp=" + strconv.FormatInt(timestamp, 10),
+			"model=" + model,
+			"input_tokens=" + strconv.Itoa(input),
+			"output_tokens=" + strconv.Itoa(output),
+			"cache_read_tokens=" + strconv.Itoa(cacheRead),
+			"cache_write_tokens=" + strconv.Itoa(cacheWrite),
+		}, "|"),
+	}
+	if ordinal, ok := nodeOrdinals[parsed.Get("anchorMessageId").Str]; ok {
+		event.MessageOrdinal = &ordinal
+	}
+	return event
 }
 
 // positAssistantMessageFromLM converts one Vercel AI SDK ModelMessage into a
@@ -1112,6 +1257,7 @@ func positAssistantProviderCapabilities() Capabilities {
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,
 			PerMessageTokenUsage: CapabilitySupported,
+			AggregateUsageEvents: CapabilitySupported,
 			MalformedLineCount:   CapabilitySupported,
 			Model:                CapabilitySupported,
 		},

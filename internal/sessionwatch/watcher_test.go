@@ -113,3 +113,87 @@ func TestCheckDBForChanges_FileHashChange(t *testing.T) {
 	assert.True(t, changed,
 		"file_hash-only rewrites must refresh session watchers")
 }
+
+func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	const conversationID = "11111111-1111-4111-8111-111111111111"
+	conversationDir := filepath.Join(root, "workspace-1", conversationID)
+	workspacePath := filepath.Join(root, "workspace-1", "workspace.json")
+	conversationPath := filepath.Join(conversationDir, "conversation.json")
+	lmMessagesPath := filepath.Join(conversationDir, "lm-messages.jsonl")
+	usageEventsPath := filepath.Join(conversationDir, "usage-events.jsonl")
+
+	dbtest.WriteTestFile(t, workspacePath, []byte(`{"path":"/work/example"}`))
+	dbtest.WriteTestFile(t, conversationPath, []byte(`{
+		"schemaVersion":"3",
+		"root":{"id":"`+conversationID+`","timestamp":1735689600000,"metadata":{"kind":"main"}},
+		"messages":[{"id":"node-1","parentId":"`+conversationID+`","isActive":true,"lmMessageIds":[0,1],"timestamp":1735689600000}],
+		"files":[]
+	}`))
+	dbtest.WriteTestFile(t, lmMessagesPath, []byte(
+		`{"id":0,"message":{"role":"user","content":"Inspect the project."}}`+"\n"+
+			`{"id":1,"message":{"role":"assistant","content":[{"type":"text","text":"Looking."}],"providerOptions":{"providerMetadata":{"positai":{"timestamp":1735689601000,"modelId":"claude-sonnet-4-6","providerId":"anthropic","usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":0,"cacheWriteTokens":100}}}}}}`+"\n",
+	))
+	baseTime := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	for _, path := range []string{workspacePath, conversationPath, lmMessagesPath} {
+		require.NoError(t, os.Chtimes(path, baseTime, baseTime))
+	}
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPositAssistant: {root},
+		},
+		Machine: "test",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	const sessionID = "posit-assistant:" + conversationID
+	lastCount, lastDBVersion, ok := database.GetSessionVersion(sessionID)
+	require.True(t, ok)
+	sourcePath := engine.FindSourceFile(sessionID)
+	require.Equal(t, conversationPath, sourcePath)
+	lastFileMtime := engine.SourceMtime(sessionID)
+	require.Equal(t, baseTime.UnixNano(), lastFileMtime)
+
+	dbtest.WriteTestFile(t, usageEventsPath, []byte(
+		`{"type":"usage","kind":"keepalive","timestamp":1735693200000,"anchorMessageId":"node-1","providerId":"anthropic","modelId":"claude-sonnet-4-6","inputTokens":2,"outputTokens":1,"totalTokens":24642,"cacheReadTokens":24639,"cacheWriteTokens":0}`+"\n",
+	))
+	sidecarTime := baseTime.Add(time.Minute)
+	require.NoError(t, os.Chtimes(usageEventsPath, sidecarTime, sidecarTime))
+
+	watcher := New(database, engine)
+	var fileMtimeChangedAt time.Time
+	changed := watcher.checkDBForChanges(
+		sessionID,
+		&lastCount,
+		&lastDBVersion,
+		&sourcePath,
+		&lastFileMtime,
+		&fileMtimeChangedAt,
+	)
+	assert.False(t, changed, "the fallback delay must elapse before direct sync")
+	require.False(t, fileMtimeChangedAt.IsZero(),
+		"the sidecar mtime must start the fallback timer")
+	assert.Equal(t, sidecarTime.UnixNano(), lastFileMtime)
+
+	fileMtimeChangedAt = time.Now().Add(-SyncFallbackDelay)
+	changed = watcher.checkDBForChanges(
+		sessionID,
+		&lastCount,
+		&lastDBVersion,
+		&sourcePath,
+		&lastFileMtime,
+		&fileMtimeChangedAt,
+	)
+	require.True(t, changed, "the elapsed fallback must sync the sidecar")
+
+	usageEvents, err := database.GetUsageEvents(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, usageEvents, 1)
+	assert.Equal(t, "posit-assistant-keepalive", usageEvents[0].Source)
+	assert.Equal(t, 24639, usageEvents[0].CacheReadInputTokens)
+}

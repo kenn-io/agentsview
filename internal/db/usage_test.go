@@ -71,6 +71,17 @@ func TestDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 			},
 		},
 		{
+			name:        "Posit Assistant sidecar event uses band without message ordinal",
+			usageSource: "posit-assistant-keepalive",
+			wantCost:    600_000,
+			wantApplication: export.PricingApplication{
+				Bands: []export.AppliedPricingBand{{
+					AboveInputTokens: 200_000,
+					RequestCount:     1,
+				}},
+			},
+		},
+		{
 			name:        "DeepSeek Harness compaction uses band without message ordinal",
 			usageSource: "deepseek-harness",
 			wantCost:    600_000,

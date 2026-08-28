@@ -129,7 +129,7 @@ func FromEvent(in EventInput) (Fact, bool) {
 		CacheReadTokens:          clamp(in.CacheReadTokens),
 		ReportedCostMicrodollars: in.ReportedCostMicrodollars,
 		CostSource:               in.CostSource,
-		RequestScoped:            in.MessageOrdinal != nil || sourceIsRequestScoped(in.Source),
+		RequestScoped:            in.MessageOrdinal != nil || SourceIsRequestScoped(in.Source),
 		UsageDedupKey:            in.DedupKey,
 		TokenEligible:            eligible, ActivityEligible: eligible,
 	}, true
@@ -284,9 +284,15 @@ func floorTokens(value int64) int64 {
 	return value
 }
 
-func sourceIsRequestScoped(source string) bool {
+// SourceIsRequestScoped reports whether a usage source represents one
+// provider request even when the provider cannot attach it to a message.
+// Posit Assistant sidecar events ("posit-assistant-" + kind, e.g.
+// posit-assistant-keepalive, posit-assistant-classifier) each record one
+// provider request, so the whole prefix is request-scoped.
+func SourceIsRequestScoped(source string) bool {
 	return source == "message" || source == "goose-request" ||
-		source == "deepseek-harness"
+		source == "deepseek-harness" ||
+		strings.HasPrefix(source, "posit-assistant-")
 }
 
 func isTokenCounterKey(key string) bool {

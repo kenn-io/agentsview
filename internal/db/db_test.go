@@ -1036,6 +1036,11 @@ func TestCurrentDataVersionPositAssistantCacheAccounting(t *testing.T) {
 		"version 91 is the data-version boundary for Posit Assistant cache accounting")
 }
 
+func TestCurrentDataVersionPositAssistantUsageEventsSidecar(t *testing.T) {
+	assert.Equal(t, 93, CurrentDataVersion(),
+		"Posit Assistant usage-events sidecar ingestion requires a sequential backfill")
+}
+
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")

@@ -432,7 +432,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // the raw workspace path from history.jsonl as the project; re-parsing routes
 // it through the shared cwd normalizer so sessions from different git
 // worktrees of the same repo group under one project.)
-const dataVersion = 92
+// (93: Posit Assistant usage-events sidecar ingestion. Existing sessions
+// need re-parsing so keepalive and classifier spend recorded in
+// usage-events.jsonl reaches the usage_events table.)
+const dataVersion = 93
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

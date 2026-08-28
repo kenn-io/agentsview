@@ -1523,7 +1523,8 @@ add an archived or maintained mirror without replacing the original identity.
 ## Posit Assistant (`posit-assistant`)
 
 - **Format:** Workspace conversation directories containing `conversation.json`,
-  `lm-messages.jsonl`, and `ui-messages.jsonl`.
+  `lm-messages.jsonl`, `ui-messages.jsonl`, and an optional
+  `usage-events.jsonl` sidecar of auxiliary per-request usage.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Posit's product documentation and the
   [posit-dev GitHub organization](https://github.com/posit-dev) were searched
@@ -1543,7 +1544,13 @@ add an archived or maintained mirror without replacing the original identity.
   families do not expose a separately billed cache-write category in the
   pricing catalog. Claude records retain real cache-write semantics.
   Agentsview catalog-prices these values; no provider-reported USD total is
-  consumed.
+  consumed. Auxiliary usage that never appears in the transcript —
+  cache-keepalive pings and classifier calls — is appended to
+  `usage-events.jsonl` as
+  `{"type":"usage","kind":"keepalive"|"classifier", "timestamp":…,"anchorMessageId":…,"providerId":…,"modelId":…, "inputTokens":…,"outputTokens":…,"totalTokens":…,"cacheReadTokens":…, "cacheWriteTokens":…}`
+  lines; subagent conversations carry their own sidecar. Observed on real
+  idle sessions: repeated keepalive pings whose spend is invisible in
+  `lm-messages.jsonl`.
 - **Agentsview:** `internal/parser/posit_assistant_provider.go`; current schema
   details are based on observed files and fixtures. Reverified 2026-08-22
   against the samples reported in
@@ -1553,7 +1560,12 @@ add an archived or maintained mirror without replacing the original identity.
   identities preserve Posit Assistant's original buckets, and full context
   remains the sum of the persisted input, cache-read, and cache-write fields.
   Data version 91 reparses existing Posit Assistant archives through the
-  normal non-destructive resync path.
+  normal non-destructive resync path. `usage-events.jsonl` lines are ingested
+  as request-scoped usage events (`posit-assistant-` + kind) with the same
+  model-family token normalization; the sidecar participates in the composite
+  fingerprint and changed-path classification so keepalive appends on
+  otherwise idle sessions trigger resync. Data version 92 reparses existing
+  archives to pick up sidecar spend.
 
 ## Z Code (`zcode`)
 

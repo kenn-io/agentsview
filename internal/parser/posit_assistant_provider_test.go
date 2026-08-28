@@ -149,6 +149,11 @@ func TestPositAssistantProviderClassifiesChangedPaths(t *testing.T) {
 			wantPaths: []string{mainConvPath},
 		},
 		{
+			name:      "usage-events append maps to its conversation",
+			path:      filepath.Join(mainConvDir, "usage-events.jsonl"),
+			wantPaths: []string{mainConvPath},
+		},
+		{
 			name:      "ui-messages write does not affect stored session data",
 			path:      filepath.Join(mainConvDir, "ui-messages.jsonl"),
 			wantPaths: nil,
@@ -709,4 +714,149 @@ func TestPositAssistantProviderFingerprintTracksWorkspaceManifest(t *testing.T) 
 	require.NoError(t, err)
 	assert.NotEqual(t, created.Hash, edited.Hash,
 		"editing workspace.json must change the composite fingerprint")
+}
+
+func TestPositAssistantProviderParseUsageEventsSidecar(t *testing.T) {
+	root := t.TempDir()
+	convDir := filepath.Join(root, "ws1", "99999999-9999-4999-8999-999999999999")
+	writeSourceFile(t, filepath.Join(convDir, "conversation.json"), `{
+		"schemaVersion": "3",
+		"root": {"id": "99999999-9999-4999-8999-999999999999",
+			"timestamp": 1735689600000, "metadata": {"kind": "main"}},
+		"messages": [
+			{"id": "n1", "parentId": "root", "isActive": true,
+				"lmMessageIds": [0, 1], "timestamp": 1735689600000}
+		],
+		"files": []
+	}`)
+	writeSourceFile(t, filepath.Join(convDir, "lm-messages.jsonl"),
+		`{"id":0,"message":{"role":"user","content":"hi"}}`+"\n"+
+			`{"id":1,"message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"providerOptions":{"providerMetadata":{"positai":{"timestamp":1735689601000,"modelId":"claude-sonnet-4-5","usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":0,"cacheWriteTokens":100}}}}}}`+"\n")
+	writeSourceFile(t, filepath.Join(convDir, "usage-events.jsonl"),
+		`{"type":"usage","kind":"keepalive","timestamp":1735689900000,"anchorMessageId":"n1","providerId":"anthropic","modelId":"claude-sonnet-4-5","inputTokens":3,"outputTokens":2,"totalTokens":24655,"cacheReadTokens":24600,"cacheWriteTokens":50,"cacheWrite5mTokens":50}`+"\n"+
+			`{"type":"usage","kind":"classifier","timestamp":1735689910000,"anchorMessageId":"missing-node","providerId":"positai","modelId":"claude-haiku-4-5","inputTokens":400,"outputTokens":10,"totalTokens":410,"cacheReadTokens":0,"cacheWriteTokens":0}`+"\n"+
+			`{"type":"usage","kind":"keepalive","timestamp":1735689920000,"anchorMessageId":"n1","providerId":"positai","modelId":"zai-org/GLM-4.7","inputTokens":0,"outputTokens":1,"totalTokens":901,"cacheReadTokens":600,"cacheWriteTokens":300}`+"\n"+
+			`{"type":"usage","kind":"classifier","timestamp":0,"anchorMessageId":"n1","providerId":"anthropic","modelId":"claude-haiku-4-5","inputTokens":7,"outputTokens":1,"totalTokens":8,"cacheReadTokens":0,"cacheWriteTokens":0}`+"\n"+
+			"not json\n")
+
+	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	assert.Equal(t, CapabilitySupported,
+		provider.Capabilities().Content.AggregateUsageEvents)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: discovered[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+
+	events := result.UsageEvents
+	require.Len(t, events, 4)
+
+	keepalive := events[0]
+	assert.Equal(t,
+		"posit-assistant:99999999-9999-4999-8999-999999999999",
+		keepalive.SessionID)
+	assert.Equal(t, "posit-assistant-keepalive", keepalive.Source)
+	assert.Equal(t, "claude-sonnet-4-5", keepalive.Model)
+	assert.Equal(t, 3, keepalive.InputTokens)
+	assert.Equal(t, 2, keepalive.OutputTokens)
+	assert.Equal(t, 50, keepalive.CacheCreationInputTokens)
+	assert.Equal(t, 24600, keepalive.CacheReadInputTokens)
+	require.NotNil(t, keepalive.MessageOrdinal)
+	assert.Equal(t, 0, *keepalive.MessageOrdinal,
+		"anchorMessageId must map to the anchor node's first message ordinal")
+	assert.Equal(t, "2025-01-01T00:05:00Z", keepalive.OccurredAt)
+	assert.Nil(t, keepalive.Cost, "cost is catalog-priced downstream")
+
+	classifier := events[1]
+	assert.Equal(t, "posit-assistant-classifier", classifier.Source)
+	assert.Equal(t, "claude-haiku-4-5", classifier.Model)
+	assert.Nil(t, classifier.MessageOrdinal,
+		"unknown anchor nodes must not fabricate an ordinal")
+
+	glm := events[2]
+	assert.Equal(t, 300, glm.InputTokens,
+		"auto-cache families fold the cache-write remainder into input")
+	assert.Zero(t, glm.CacheCreationInputTokens)
+	assert.Equal(t, 600, glm.CacheReadInputTokens)
+
+	assert.Equal(t, "2025-01-01T00:00:01Z", events[3].OccurredAt,
+		"missing event timestamps fall back to the session end")
+
+	seen := make(map[string]struct{}, len(events))
+	for _, event := range events {
+		require.NotEmpty(t, event.DedupKey)
+		_, dup := seen[event.DedupKey]
+		require.False(t, dup, "dedup keys must be unique per sidecar line")
+		seen[event.DedupKey] = struct{}{}
+	}
+
+	sess := result.Session
+	assert.Equal(t, 1, sess.MalformedLines,
+		"unparseable sidecar lines must be counted")
+	assert.Equal(t, 5, sess.TotalOutputTokens,
+		"sidecar events are supplementary; session totals stay message-derived")
+	assert.Equal(t, 110, sess.PeakContextTokens)
+}
+
+func TestPositAssistantProviderFingerprintTracksUsageEventsSidecar(t *testing.T) {
+	root := t.TempDir()
+	convDir := filepath.Join(root, "ws1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	uePath := filepath.Join(convDir, "usage-events.jsonl")
+	writeSourceFile(t, filepath.Join(convDir, "conversation.json"),
+		`{"schemaVersion":"3","root":{},"messages":[]}`)
+	writeSourceFile(t, filepath.Join(convDir, "lm-messages.jsonl"),
+		`{"id":0,"message":{"role":"user","content":"hi"}}`+"\n")
+
+	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	// Creating the sidecar after the fact must invalidate freshness: idle
+	// sessions receive keepalive appends without any transcript change.
+	before, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	writeSourceFile(t, uePath,
+		`{"type":"usage","kind":"keepalive","timestamp":1735689900000,"anchorMessageId":"n1","providerId":"anthropic","modelId":"claude-sonnet-4-5","inputTokens":3,"outputTokens":2,"totalTokens":5,"cacheReadTokens":0,"cacheWriteTokens":0}`+"\n")
+	created, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, created.Hash,
+		"creating usage-events.jsonl must change the composite fingerprint")
+	assert.Greater(t, created.Size, before.Size)
+
+	f, err := os.OpenFile(uePath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(
+		`{"type":"usage","kind":"keepalive","timestamp":1735689960000,"anchorMessageId":"n1","providerId":"anthropic","modelId":"claude-sonnet-4-5","inputTokens":3,"outputTokens":2,"totalTokens":5,"cacheReadTokens":0,"cacheWriteTokens":0}` + "\n",
+	)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	appended, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	assert.NotEqual(t, created.Hash, appended.Hash,
+		"appending to usage-events.jsonl must change the composite fingerprint")
+	assert.Greater(t, appended.Size, created.Size)
+
+	// The engine's incremental-sync cutoff reads MTimeNS, so the sidecar's
+	// mtime must drive the composite even when no other file changes —
+	// otherwise fallback polling would never resync a sidecar-only append.
+	future := time.Now().Add(2 * time.Hour)
+	require.NoError(t, os.Chtimes(uePath, future, future))
+	touched, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	assert.Equal(t, future.UnixNano(), touched.MTimeNS,
+		"sidecar mtime must drive the composite fingerprint MTimeNS")
 }
