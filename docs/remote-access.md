@@ -231,6 +231,39 @@ each sync while the rest of the host remains eligible for delta transfer. The
 Windsurf content in the mirror is the sanitized export, not a byte-for-byte copy
 of the remote state database.
 
+### Curated Provider Exports
+
+Most providers export their configured directories as-is. Providers whose
+configured root is a broad application-data directory export a curated file
+list instead, so caches, extension state, and credential files stored near the
+sessions never enter the manifest, the archive, or the mirror:
+
+- **Cursor** exports only the transcript files its parser discovers under each
+  project's `agent-transcripts/` directory.
+- **VS Code Copilot** exports only chat session files under
+  `workspaceStorage/<hash>/chatSessions/` and
+  `globalStorage/{emptyWindowChatSessions,transferredChatSessions}/`, plus each
+  exporting workspace's `workspace.json` for project attribution.
+- **Zed** exports `threads/threads.db` as a consistent SQLite snapshot taken
+  with the online backup API, so committed write-ahead-log data arrives as one
+  standalone database without `-wal` or `-shm` sidecars. Hermes state databases
+  use the same snapshot mechanism.
+- **RooCode** and **Kilo Legacy** export only their discovered per-task session
+  files, **Poolside** narrows its root to `trajectories/`, and **Windsurf**
+  exports the sanitized copy described above.
+
+Budget mirror disk for the curated session files only, not for the full
+application-data directories those editors keep around them. When the last
+session under a curated Cursor or VS Code Copilot root disappears, the root
+stays advertised with an empty file list so the next sync empties the mirror
+instead of failing.
+
+An unreadable snapshot database is treated as missing: the sync continues, the
+mirror drops its cached copy, and the file transfers again once the remote
+application repairs it. Sessions already imported into the AgentsView database
+remain available throughout. Any other read failure during target resolution
+fails that host's sync without touching the mirror.
+
 ### When AgentsView Downloads A Full Archive
 
 A full HTTP transfer occurs in these cases:
