@@ -476,8 +476,9 @@ func resolveWindsurfTarget(root string) (string, []string) {
 // ui_messages.json siblings are exported.
 func resolveRooCodeTarget(root string) (string, []string, error) {
 	targetRoot := filepath.Clean(root)
-	if info, err := os.Stat(targetRoot); err != nil || !info.IsDir() {
-		return "", nil, nil
+	ok, err := statCuratedDir(targetRoot)
+	if err != nil || !ok {
+		return "", nil, err
 	}
 	provider, ok := parser.NewProvider(parser.AgentRooCode, parser.ProviderConfig{
 		Roots: []string{targetRoot},
@@ -515,8 +516,9 @@ func resolveRooCodeTarget(root string) (string, []string, error) {
 // API credentials, caches, and other unrelated data.
 func resolveKiloLegacyTarget(root string) (string, []string, error) {
 	targetRoot := filepath.Clean(root)
-	if info, err := os.Stat(targetRoot); err != nil || !info.IsDir() {
-		return "", nil, nil
+	ok, err := statCuratedDir(targetRoot)
+	if err != nil || !ok {
+		return "", nil, err
 	}
 	provider, ok := parser.NewProvider(parser.AgentKiloLegacy, parser.ProviderConfig{
 		Roots: []string{targetRoot},
@@ -566,6 +568,20 @@ func curatedRoot(root string) (bool, error) {
 		return false, fmt.Errorf("stat remote sync root %q: %w", root, err)
 	}
 	return info.IsDir() && info.Mode()&os.ModeSymlink == 0, nil
+}
+
+// statCuratedDir is curatedRoot for resolvers that historically follow
+// symlinked roots (RooCode, Kilo Legacy): same error contract, but the
+// symlink target's type decides.
+func statCuratedDir(root string) (bool, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat remote sync root %q: %w", root, err)
+	}
+	return info.IsDir(), nil
 }
 
 func regularCuratedFile(root, path string) bool {
@@ -706,7 +722,11 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		allowedDirs := allowed.Dirs[agent]
 		fileScoped := allowed.isFileScoped(agent)
 		if fileScoped {
-			if _, hasRequestedFiles := requested.Files[agent]; !hasRequestedFiles {
+			// A request that names the directory without any curated
+			// files would select an empty manifest and evict the
+			// client's mirror even while sessions exist. Accept it
+			// only when the fresh curated scope is itself empty.
+			if requestedFiles, ok := requested.Files[agent]; !ok || len(requestedFiles) == 0 {
 				emptyScope := emptyFileScopeAgent(agent) &&
 					len(allowed.Files[agent]) == 0
 				if !emptyScope {

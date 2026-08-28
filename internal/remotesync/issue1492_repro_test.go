@@ -470,6 +470,14 @@ func TestSelectAllowedTargetsDirectoryOnlyRequestRequiresCurrentCuratedFiles(t *
 		}
 		_, ok := SelectAllowedTargets(allowed, requested)
 		assert.False(t, ok, "%s directory-only request must not discard current curated files", tc.agent)
+
+		requestedEmpty := TargetSet{
+			Dirs:  map[parser.AgentType][]string{tc.agent: {root}},
+			Files: map[parser.AgentType][]string{tc.agent: {}},
+		}
+		_, ok = SelectAllowedTargets(allowed, requestedEmpty)
+		assert.False(t, ok,
+			"%s explicitly empty file request must not discard current curated files", tc.agent)
 	}
 }
 
@@ -569,6 +577,27 @@ func TestIssue1492UnreadableCuratedRootFailsResolution(t *testing.T) {
 		_, err := ResolveTargets(cfg)
 		require.Error(t, err,
 			"an unreadable editor root must not resolve to an empty target set")
+		assert.ErrorIs(t, err, os.ErrPermission)
+	})
+
+	t.Run("roocode root stat error", func(t *testing.T) {
+		parent := t.TempDir()
+		root := filepath.Join(parent, "roo")
+		task := filepath.Join(root, "tasks", "task-1")
+		require.NoError(t, os.MkdirAll(task, 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(task, "history_item.json"), []byte("{}"), 0o644))
+		cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+			parser.AgentRooCode: {root},
+		}}
+		targets := resolveTargetsForTest(t, cfg)
+		require.NotEmpty(t, targets.Files[parser.AgentRooCode])
+
+		require.NoError(t, os.Chmod(parent, 0o000))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0o755)) })
+		_, err := ResolveTargets(cfg)
+		require.Error(t, err,
+			"an unreadable RooCode root must not resolve to an empty target set")
 		assert.ErrorIs(t, err, os.ErrPermission)
 	})
 
