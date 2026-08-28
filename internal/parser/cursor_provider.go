@@ -329,11 +329,16 @@ func (s cursorSourceSet) streamingSourceRefWithCache(
 ) (SourceRef, bool, error) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
-	info, err := os.Stat(path)
+	// A transcript listed by the walk can vanish before this stat — a
+	// routine deletion race, not a discovery failure; the next
+	// enumeration simply no longer lists it. Genuine read errors and
+	// dangling symlinks still propagate, matching
+	// cursorFindSourceFileInProjectStrict.
+	regular, err := streamingRegularFileCandidate(path)
 	if err != nil {
 		return SourceRef{}, false, fmt.Errorf("stat cursor transcript %s: %w", path, err)
 	}
-	if !info.Mode().IsRegular() {
+	if !regular {
 		return SourceRef{}, false, nil
 	}
 	rawID, ok := cursorRawSessionIDFromPath(root, path)
