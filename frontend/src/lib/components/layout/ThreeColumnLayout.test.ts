@@ -29,8 +29,10 @@ const contentSnippet = createRawSnippet(() => ({
   render: () => '<div data-testid="content-slot">Content</div>',
 }));
 
-const RESIZE_HANDLE_WIDTH = 12;
+// Rendered width of kit-ui's .kit-split-resize-handle.
+const RESIZE_HANDLE_WIDTH = 4;
 const SIDEBAR_BORDER_WIDTH = 1;
+const KEYBOARD_RESIZE_STEP = 24;
 
 let component: ReturnType<typeof mount> | undefined;
 let restoreMeasuredLayoutWidth:
@@ -71,7 +73,7 @@ function getSidebar() {
 
 function getHandle() {
   return document.querySelector<HTMLElement>(
-    '[data-testid="sidebar-resize-handle"]',
+    ".layout [role='separator']",
   );
 }
 
@@ -151,52 +153,25 @@ function mockLayoutWidthOnRender(width: number) {
   };
 }
 
-function createPointerMouseEvent(
+function pointerEvent(
   type: string,
-  options: {
-    clientX: number;
-    buttons?: number;
-    pointerId: number;
-  },
+  clientX: number,
 ) {
-  const event = new MouseEvent(type, {
+  return new PointerEvent(type, {
     bubbles: true,
-    clientX: options.clientX,
-    buttons: options.buttons,
+    clientX,
+    pointerId: 1,
   });
-
-  Object.defineProperty(event, "pointerId", {
-    configurable: true,
-    value: options.pointerId,
-  });
-
-  return event;
 }
 
 async function dragHandle(startX: number, endX: number) {
   const handle = getHandle();
   expect(handle).not.toBeNull();
 
-  handle!.dispatchEvent(
-    new MouseEvent("pointerdown", {
-      bubbles: true,
-      clientX: startX,
-    }),
-  );
-  window.dispatchEvent(
-    new MouseEvent("pointermove", {
-      bubbles: true,
-      clientX: endX,
-      buttons: 1,
-    }),
-  );
+  handle!.dispatchEvent(pointerEvent("pointerdown", startX));
+  handle!.dispatchEvent(pointerEvent("pointermove", endX));
   await tick();
-  window.dispatchEvent(
-    new MouseEvent("pointerup", {
-      bubbles: true,
-      clientX: endX,
-    }),
-  );
+  handle!.dispatchEvent(pointerEvent("pointerup", endX));
   await tick();
 }
 
@@ -387,22 +362,14 @@ describe("ThreeColumnLayout", () => {
 
     mockLayoutWidth(1280);
 
-    const layout = getLayout();
     const handle = getHandle();
     expect(handle).not.toBeNull();
 
     handle!.dispatchEvent(
-      new MouseEvent("pointerdown", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT,
-      }),
+      pointerEvent("pointerdown", SIDEBAR_WIDTH_DEFAULT),
     );
-    window.dispatchEvent(
-      new MouseEvent("pointermove", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 80,
-        buttons: 1,
-      }),
+    handle!.dispatchEvent(
+      pointerEvent("pointermove", SIDEBAR_WIDTH_DEFAULT + 80),
     );
     await tick();
 
@@ -410,22 +377,15 @@ describe("ThreeColumnLayout", () => {
     expect(getSidebar().style.width).toBe(
       `${SIDEBAR_WIDTH_DEFAULT + 80}px`,
     );
-    expect(layout.classList.contains("is-resizing")).toBe(true);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      true,
-    );
 
-    window.dispatchEvent(
-      new MouseEvent("pointerup", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 80,
-      }),
+    handle!.dispatchEvent(
+      pointerEvent("pointerup", SIDEBAR_WIDTH_DEFAULT + 80),
     );
     await tick();
 
-    expect(layout.classList.contains("is-resizing")).toBe(false);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      false,
+    expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 80);
+    expect(getSidebar().style.width).toBe(
+      `${SIDEBAR_WIDTH_DEFAULT + 80}px`,
     );
   });
 
@@ -481,16 +441,10 @@ describe("ThreeColumnLayout", () => {
     expect(handle).not.toBeNull();
 
     handle!.dispatchEvent(
-      new MouseEvent("pointerdown", {
-        bubbles: true,
-        clientX: expectedWidth,
-      }),
+      pointerEvent("pointerdown", expectedWidth),
     );
-    window.dispatchEvent(
-      new MouseEvent("pointerup", {
-        bubbles: true,
-        clientX: expectedWidth,
-      }),
+    handle!.dispatchEvent(
+      pointerEvent("pointerup", expectedWidth),
     );
     await tick();
 
@@ -517,30 +471,7 @@ describe("ThreeColumnLayout", () => {
     renderLayout();
     await tick();
 
-    const handle = getHandle();
-    expect(handle).not.toBeNull();
-
-    handle!.dispatchEvent(
-      new MouseEvent("pointerdown", {
-        bubbles: true,
-        clientX: expectedWidth,
-      }),
-    );
-    window.dispatchEvent(
-      new MouseEvent("pointermove", {
-        bubbles: true,
-        clientX: expectedWidth + 120,
-        buttons: 1,
-      }),
-    );
-    await tick();
-    window.dispatchEvent(
-      new MouseEvent("pointerup", {
-        bubbles: true,
-        clientX: expectedWidth + 120,
-      }),
-    );
-    await tick();
+    await dragHandle(expectedWidth, expectedWidth + 120);
 
     expect(getSidebar().style.width).toBe(
       `${expectedWidth}px`,
@@ -576,45 +507,7 @@ describe("ThreeColumnLayout", () => {
     ).toBe(480);
   });
 
-  it("ignores non-primary mouse buttons on the resize handle", async () => {
-    setViewportWidth(1280);
-    ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
-
-    renderLayout();
-    await tick();
-
-    mockLayoutWidth(1280);
-
-    const handle = getHandle();
-    const layout = getLayout();
-    expect(handle).not.toBeNull();
-
-    handle!.dispatchEvent(
-      new MouseEvent("pointerdown", {
-        bubbles: true,
-        button: 2,
-        buttons: 2,
-        clientX: SIDEBAR_WIDTH_DEFAULT,
-      }),
-    );
-    window.dispatchEvent(
-      new MouseEvent("pointermove", {
-        bubbles: true,
-        button: 2,
-        buttons: 2,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 100,
-      }),
-    );
-    await tick();
-
-    expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
-    expect(layout.classList.contains("is-resizing")).toBe(false);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      false,
-    );
-  });
-
-  it("stops an active resize when the sidebar closes mid-drag", async () => {
+  it("removes the handle and keeps the dragged width when the sidebar closes mid-drag", async () => {
     setViewportWidth(1280);
     ui.sidebarOpen = true;
     ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
@@ -624,206 +517,33 @@ describe("ThreeColumnLayout", () => {
 
     mockLayoutWidth(1280);
 
-    const layout = getLayout();
     const handle = getHandle();
     expect(handle).not.toBeNull();
 
     handle!.dispatchEvent(
-      new MouseEvent("pointerdown", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT,
-      }),
+      pointerEvent("pointerdown", SIDEBAR_WIDTH_DEFAULT),
     );
-    window.dispatchEvent(
-      new MouseEvent("pointermove", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 60,
-        buttons: 1,
-      }),
+    handle!.dispatchEvent(
+      pointerEvent("pointermove", SIDEBAR_WIDTH_DEFAULT + 60),
     );
     await tick();
 
-    expect(layout.classList.contains("is-resizing")).toBe(true);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      true,
-    );
+    expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 60);
 
     ui.sidebarOpen = false;
     await tick();
 
     expect(getHandle()).toBeNull();
-    expect(layout.classList.contains("is-resizing")).toBe(false);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      false,
-    );
-
-    const widthAfterClose = ui.sidebarWidth;
-    window.dispatchEvent(
-      new MouseEvent("pointermove", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 140,
-        buttons: 1,
-      }),
-    );
-    await tick();
-
-    expect(ui.sidebarWidth).toBe(widthAfterClose);
-  });
-
-  it("stops an active drag when a later pointermove reports no buttons pressed", async () => {
-    setViewportWidth(1280);
-    ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
-
-    renderLayout();
-    await tick();
-
-    mockLayoutWidth(1280);
-
-    const layout = getLayout();
-    const handle = getHandle();
-    expect(handle).not.toBeNull();
 
     handle!.dispatchEvent(
-      new MouseEvent("pointerdown", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT,
-      }),
-    );
-    window.dispatchEvent(
-      new MouseEvent("pointermove", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 60,
-        buttons: 1,
-      }),
+      pointerEvent("pointermove", SIDEBAR_WIDTH_DEFAULT + 140),
     );
     await tick();
 
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_DEFAULT + 60,
-    );
-    expect(layout.classList.contains("is-resizing")).toBe(true);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      true,
-    );
-
-    window.dispatchEvent(
-      new MouseEvent("pointermove", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 120,
-        buttons: 0,
-      }),
-    );
-    await tick();
-
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_DEFAULT + 60,
-    );
-    expect(layout.classList.contains("is-resizing")).toBe(false);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      false,
-    );
-
-    window.dispatchEvent(
-      new MouseEvent("pointermove", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 180,
-        buttons: 0,
-      }),
-    );
-    await tick();
-
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_DEFAULT + 60,
-    );
-    expect(layout.classList.contains("is-resizing")).toBe(false);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      false,
-    );
+    expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 60);
   });
 
-  it("ignores non-owning pointer events while resizing", async () => {
-    setViewportWidth(1280);
-    ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
-
-    renderLayout();
-    await tick();
-
-    mockLayoutWidth(1280);
-
-    const layout = getLayout();
-    const handle = getHandle();
-    expect(handle).not.toBeNull();
-
-    handle!.dispatchEvent(
-      createPointerMouseEvent("pointerdown", {
-        clientX: SIDEBAR_WIDTH_DEFAULT,
-        pointerId: 1,
-      }),
-    );
-    window.dispatchEvent(
-      createPointerMouseEvent("pointermove", {
-        clientX: SIDEBAR_WIDTH_DEFAULT + 60,
-        buttons: 1,
-        pointerId: 1,
-      }),
-    );
-    await tick();
-
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_DEFAULT + 60,
-    );
-    expect(layout.classList.contains("is-resizing")).toBe(true);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      true,
-    );
-
-    window.dispatchEvent(
-      createPointerMouseEvent("pointermove", {
-        clientX: SIDEBAR_WIDTH_DEFAULT + 180,
-        buttons: 1,
-        pointerId: 2,
-      }),
-    );
-    window.dispatchEvent(
-      createPointerMouseEvent("pointerup", {
-        clientX: SIDEBAR_WIDTH_DEFAULT + 180,
-        pointerId: 2,
-      }),
-    );
-    window.dispatchEvent(
-      createPointerMouseEvent("pointercancel", {
-        clientX: SIDEBAR_WIDTH_DEFAULT + 180,
-        pointerId: 2,
-      }),
-    );
-    await tick();
-
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_DEFAULT + 60,
-    );
-    expect(layout.classList.contains("is-resizing")).toBe(true);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      true,
-    );
-
-    window.dispatchEvent(
-      createPointerMouseEvent("pointerup", {
-        clientX: SIDEBAR_WIDTH_DEFAULT + 60,
-        pointerId: 1,
-      }),
-    );
-    await tick();
-
-    expect(layout.classList.contains("is-resizing")).toBe(false);
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      false,
-    );
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_DEFAULT + 60,
-    );
-  });
-
-  it("cleans up active drag listeners and body state on unmount", async () => {
+  it("resizes and persists the width from arrow keys on the handle", async () => {
     setViewportWidth(1280);
     ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
 
@@ -836,44 +556,28 @@ describe("ThreeColumnLayout", () => {
     expect(handle).not.toBeNull();
 
     handle!.dispatchEvent(
-      new MouseEvent("pointerdown", {
+      new KeyboardEvent("keydown", {
         bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT,
-      }),
-    );
-    await tick();
-
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      true,
-    );
-
-    unmount(component!);
-    component = undefined;
-    await tick();
-
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      false,
-    );
-
-    window.dispatchEvent(
-      new MouseEvent("pointermove", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 120,
-      }),
-    );
-    window.dispatchEvent(
-      new MouseEvent("pointerup", {
-        bubbles: true,
-        clientX: SIDEBAR_WIDTH_DEFAULT + 120,
+        key: "ArrowRight",
       }),
     );
     await tick();
 
     expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_DEFAULT,
+      SIDEBAR_WIDTH_DEFAULT + KEYBOARD_RESIZE_STEP,
     );
-    expect(document.body.classList.contains("sidebar-resizing")).toBe(
-      false,
+    expect(getSidebar().style.width).toBe(
+      `${SIDEBAR_WIDTH_DEFAULT + KEYBOARD_RESIZE_STEP}px`,
     );
+
+    handle!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowLeft",
+      }),
+    );
+    await tick();
+
+    expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
   });
 });

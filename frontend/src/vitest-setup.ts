@@ -77,6 +77,23 @@ export function installFallbackResizeObserver(): void {
   });
 }
 
+/** jsdom has no pointer capture; kit-ui's SplitResizeHandle captures the
+ * pointer on drag start. Inert stubs keep drags dispatchable in tests —
+ * events are delivered by plain dispatch on the handle, so capture-based
+ * retargeting is not needed. */
+export function installFallbackPointerCapture(): void {
+  const proto = globalThis.Element?.prototype;
+  if (!proto || typeof proto.setPointerCapture === "function") return;
+
+  Object.assign(proto, {
+    setPointerCapture(): void {},
+    releasePointerCapture(): void {},
+    hasPointerCapture(): boolean {
+      return false;
+    },
+  });
+}
+
 /** Svelte motion reads prefers-reduced-motion during module initialization.
  * jsdom does not implement matchMedia, so provide the inert browser shape. */
 export function installFallbackMatchMedia(): void {
@@ -100,5 +117,6 @@ export function installFallbackMatchMedia(): void {
 
 installFallbackStorage("localStorage");
 installFallbackResizeObserver();
+installFallbackPointerCapture();
 installFallbackMatchMedia();
 initI18n();
