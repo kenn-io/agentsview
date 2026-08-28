@@ -95,6 +95,15 @@ func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 	defer os.RemoveAll(tmpDir)
 	snapshotPath := filepath.Join(tmpDir, "state.db")
 	if err := writeSQLiteSnapshotFile(snapshotPath, stateDB); err != nil {
+		// The source can vanish or turn unreadable between the identity
+		// probe above and the online backup. Re-probe it: an unusable
+		// source is an omitted archive entry, exactly as if the probe
+		// had failed first, so the next manifest evicts the mirror's
+		// stale copy. A still-usable source means the failure was local
+		// (temp dir, destination write) and must propagate.
+		if _, _, stillUsable := sqliteSnapshotIdentity(stateDB); !stillUsable {
+			return nil
+		}
 		return fmt.Errorf("snapshot sqlite database %q: %w", stateDB, err)
 	}
 	if err := os.Chtimes(snapshotPath, modTime, modTime); err != nil {
