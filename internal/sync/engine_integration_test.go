@@ -4761,6 +4761,27 @@ func TestSyncEngineProgress(t *testing.T) {
 		resyncEvents = append(resyncEvents, p)
 	})
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
+	var finalizingDetails []string
+	for _, event := range resyncEvents {
+		if event.Phase != sync.PhaseFinalizing {
+			continue
+		}
+		assert.True(t, event.Resync)
+		assert.Zero(t, event.SessionsTotal)
+		assert.Zero(t, event.SessionsDone)
+		assert.Zero(t, event.MessagesIndexed)
+		finalizingDetails = append(finalizingDetails, event.Detail)
+	}
+	assert.Equal(t, []string{
+		"Finalizing sync: committing session writes",
+		"Finalizing sync: saving session source state",
+		"Finalizing sync: linking file-backed subagent sessions",
+		"Finalizing sync: repairing subagent relationships",
+		"Finalizing sync: releasing parsed-session memory",
+		"Finalizing sync: checking database-backed sessions",
+		"Finalizing sync: linking all subagent sessions",
+		"Finalizing sync: saving the skip cache",
+	}, finalizingDetails)
 
 	if env.db.HasFTS() {
 		var fts sync.Progress

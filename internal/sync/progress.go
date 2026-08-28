@@ -14,6 +14,7 @@ const (
 	PhaseDiscovering      Phase = "discovering"
 	PhasePreparingResync  Phase = "preparing_resync"
 	PhaseSyncing          Phase = "syncing"
+	PhaseFinalizing       Phase = "finalizing"
 	PhaseCopyingMetadata  Phase = "copying_metadata"
 	PhaseCopyingOrphans   Phase = "copying_orphans"
 	PhaseReclassifying    Phase = "reclassifying"

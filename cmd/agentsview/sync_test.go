@@ -1384,6 +1384,12 @@ func TestResyncProgressPrinterWritesPhaseTimingsOnNewLines(t *testing.T) {
 	})
 	now = now.Add(350 * time.Millisecond)
 	printer.Print(agentsync.Progress{
+		Phase:  agentsync.PhaseFinalizing,
+		Detail: "Finalizing sync: committing session writes",
+		Resync: true,
+	})
+	now = now.Add(500 * time.Millisecond)
+	printer.Print(agentsync.Progress{
 		Phase:  agentsync.PhaseRebuildingSearch,
 		Detail: "Rebuilding search index",
 		Hint:   "Rebuilding the search index may take a while on large archives.",
@@ -1401,6 +1407,12 @@ func TestResyncProgressPrinterWritesPhaseTimingsOnNewLines(t *testing.T) {
 	assert.Contains(t, got, "  Preparing full resync completed in 150ms\n")
 	assert.Contains(t, got, "\r  Syncing sessions into rebuilt database: 10/10 sessions (100%) · 100 messages\x1b[K")
 	assert.Contains(t, got, "\n  Syncing sessions into rebuilt database completed in 2.35s\n")
+	assert.Contains(t, got,
+		"  Finalizing sync: committing session writes...\n")
+	assert.Contains(t, got,
+		"  Finalizing sync: committing session writes completed in 500ms\n")
+	assert.NotContains(t, got,
+		"\r  Finalizing sync: committing session writes")
 	assert.Contains(t, got, "  Rebuilding search index - Rebuilding the search index may take a while on large archives...\n")
 	assert.Contains(t, got, "  Rebuilding search index completed in 3s\n")
 	assert.NotContains(t, got, "\r  Rebuilding search index",

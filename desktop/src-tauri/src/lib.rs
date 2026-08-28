@@ -3844,6 +3844,21 @@ agentsview running at http://127.0.0.1:18082
             extract_startup_status("\r  Swapping rebuilt database into place"),
             Some("Swapping rebuilt database into place".to_string())
         );
+        for detail in [
+            "Finalizing sync: committing session writes",
+            "Finalizing sync: saving session source state",
+            "Finalizing sync: linking file-backed subagent sessions",
+            "Finalizing sync: repairing subagent relationships",
+            "Finalizing sync: releasing parsed-session memory",
+            "Finalizing sync: checking database-backed sessions",
+            "Finalizing sync: linking all subagent sessions",
+            "Finalizing sync: saving the skip cache",
+        ] {
+            assert_eq!(
+                extract_startup_status(&format!("\r  {detail}")),
+                Some(detail.to_string())
+            );
+        }
 
         // Unrelated output is ignored
         assert_eq!(extract_startup_status("some random log line\n"), None);

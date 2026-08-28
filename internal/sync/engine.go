@@ -43,6 +43,17 @@ const (
 	syncWriteBulk
 )
 
+const (
+	finalizingSessionWritesDetail = "Finalizing sync: committing session writes"
+	finalizingSourceStateDetail   = "Finalizing sync: saving session source state"
+	finalizingFileLinksDetail     = "Finalizing sync: linking file-backed subagent sessions"
+	finalizingParentRepairDetail  = "Finalizing sync: repairing subagent relationships"
+	finalizingMemoryDetail        = "Finalizing sync: releasing parsed-session memory"
+	finalizingDBBackedDetail      = "Finalizing sync: checking database-backed sessions"
+	finalizingAllLinksDetail      = "Finalizing sync: linking all subagent sessions"
+	finalizingSkipCacheDetail     = "Finalizing sync: saving the skip cache"
+)
+
 var errSessionPreserved = errors.New("session preserved")
 
 type reconciliationMetricsContextKey struct{}
@@ -1497,6 +1508,17 @@ func (e *Engine) reportProgress(
 	if onProgress != nil {
 		onProgress(p)
 	}
+}
+
+func (e *Engine) reportFinalizingProgress(
+	onProgress ProgressFunc, writeMode syncWriteMode, detail string,
+) {
+	if writeMode != syncWriteBulk {
+		return
+	}
+	e.reportProgress(onProgress, Progress{
+		Phase: PhaseFinalizing, Detail: detail,
+	})
 }
 
 func (e *Engine) clearCurrentProgress() {
@@ -3099,9 +3121,11 @@ func (e *Engine) resyncBuildLocked(
 			if contributor.Progress != nil {
 				p = contributor.Progress(p)
 			}
-			p.SessionsDone += stats.TotalSessions
-			p.SessionsTotal += stats.TotalSessions
-			p.MessagesIndexed += stats.messagesIndexed
+			if p.Phase != PhaseFinalizing {
+				p.SessionsDone += stats.TotalSessions
+				p.SessionsTotal += stats.TotalSessions
+				p.MessagesIndexed += stats.messagesIndexed
+			}
 			reportResyncProgress(p)
 		}
 		contributorStats := contributorEngine.syncAllLocked(
@@ -7395,6 +7419,9 @@ func (e *Engine) syncAllLocked(
 		stats.Aborted = true
 		return stats
 	}
+	e.reportFinalizingProgress(
+		onProgress, writeMode, finalizingDBBackedDetail,
+	)
 
 	// OpenCode-format sessions (OpenCode and its Kilo and MiMoCode
 	// forks) are provider-authoritative: discovery and parsing flow
@@ -7456,10 +7483,16 @@ func (e *Engine) syncAllLocked(
 	// LinkSubagentSessions is idempotent — its WHERE filter and partial index
 	// make it a cheap no-op when nothing new was written — so no guard is
 	// needed.
+	e.reportFinalizingProgress(
+		onProgress, writeMode, finalizingAllLinksDetail,
+	)
 	if err := e.db.LinkSubagentSessions(); err != nil {
 		log.Printf("link subagent sessions: %v", err)
 	}
 
+	e.reportFinalizingProgress(
+		onProgress, writeMode, finalizingSkipCacheDetail,
+	)
 	tPersist := time.Now()
 	skipCount := e.persistSkipCache()
 	if verbose {
@@ -9599,7 +9632,14 @@ func (e *Engine) collectAndBatchWithOptions(
 	}
 
 	budget := e.retentionBudget()
-	defer budget.scavengeIfNeeded()
+	defer func() {
+		if writeMode == syncWriteBulk && budget.scavengePending.Load() {
+			e.reportFinalizingProgress(
+				onProgress, writeMode, finalizingMemoryDetail,
+			)
+		}
+		budget.scavengeIfNeeded()
+	}()
 	for i := range total {
 		var r syncJob
 		for {
@@ -10010,10 +10050,18 @@ func (e *Engine) collectAndBatchWithOptions(
 	}
 
 flush:
+	if len(pending) > 0 {
+		e.reportFinalizingProgress(
+			onProgress, writeMode, finalizingSessionWritesDetail,
+		)
+	}
 	flushPending()
 	if ctx.Err() != nil && e.discardWritesOnCancel {
 		return stats
 	}
+	e.reportFinalizingProgress(
+		onProgress, writeMode, finalizingSourceStateDetail,
+	)
 	flushBaselineSources()
 	if ctx.Err() != nil && e.discardWritesOnCancel {
 		return stats
@@ -10053,18 +10101,24 @@ flush:
 	// tool_calls.subagent_session_id references. Run once
 	// after all batches to avoid repeated full-table scans.
 	if deferred, _ := ctx.Value(deferGlobalLinkContextKey{}).(bool); !deferred {
+		e.reportFinalizingProgress(
+			onProgress, writeMode, finalizingFileLinksDetail,
+		)
 		if err := e.linkSubagentSessions(postWriteCtx); err != nil {
 			log.Printf("link subagent sessions: %v", err)
 			stats.RecordFailed()
 		}
 	}
+	e.reportFinalizingProgress(
+		onProgress, writeMode, finalizingParentRepairDetail,
+	)
 	if err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx); err != nil {
 		log.Printf("repair queued subagent parents: %v", err)
 		stats.RecordFailed()
 	}
 
-	// PhaseDone is emitted by syncAllLocked after DB-backed
-	// agents finish, so this stage stays in PhaseSyncing.
+	// PhaseDone is emitted by syncAllLocked after the DB-backed
+	// agents and the remaining pass epilogue finish.
 	return stats
 }
 

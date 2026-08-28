@@ -103,6 +103,7 @@ func TestResyncContributorsRunInOrderWithCumulativeProgress(t *testing.T) {
 
 	order := []string{}
 	progressByContributor := map[string]Progress{}
+	finalizingByContributor := map[string][]Progress{}
 	labelProgress := func(name string) func(Progress) Progress {
 		return func(p Progress) Progress {
 			p.Detail = name
@@ -112,6 +113,11 @@ func TestResyncContributorsRunInOrderWithCumulativeProgress(t *testing.T) {
 	onProgress := func(p Progress) {
 		if p.Detail == "A" || p.Detail == "B" {
 			progressByContributor[p.Detail] = p
+			if p.Phase == PhaseFinalizing {
+				finalizingByContributor[p.Detail] = append(
+					finalizingByContributor[p.Detail], p,
+				)
+			}
 		}
 	}
 	ftsCalls := 0
@@ -168,6 +174,15 @@ func TestResyncContributorsRunInOrderWithCumulativeProgress(t *testing.T) {
 		Phase: PhaseDone, Detail: "B", Resync: true,
 		SessionsTotal: 3, SessionsDone: 3, MessagesIndexed: 3,
 	}, progressByContributor["B"])
+	for _, contributor := range []string{"A", "B"} {
+		events := finalizingByContributor[contributor]
+		require.NotEmpty(t, events)
+		for _, event := range events {
+			assert.Zero(t, event.SessionsTotal)
+			assert.Zero(t, event.SessionsDone)
+			assert.Zero(t, event.MessagesIndexed)
+		}
+	}
 }
 
 func TestResyncAbortsWhenContributorLosesHistoricalSource(t *testing.T) {

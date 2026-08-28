@@ -259,6 +259,162 @@ func TestCollectAndBatchRetainsParseLeaseThroughWrite(t *testing.T) {
 	<-done
 }
 
+func TestCollectAndBatchReportsFinalizingOnlyBeforeBulkTerminalFlush(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       syncWriteMode
+		jobs       int
+		wantPhase  Phase
+		wantDetail string
+	}{
+		{
+			name: "bulk terminal flush", mode: syncWriteBulk, jobs: 1,
+			wantPhase:  PhaseFinalizing,
+			wantDetail: "Finalizing sync: committing session writes",
+		},
+		{
+			name: "bulk mid-loop flush", mode: syncWriteBulk, jobs: batchSize,
+			wantPhase: PhaseSyncing,
+		},
+		{
+			name: "default terminal flush", mode: syncWriteDefault, jobs: 1,
+			wantPhase: PhaseSyncing,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+			t.Cleanup(engine.Close)
+			writeEntered := make(chan struct{})
+			allowWrite := make(chan struct{})
+			engine.writeBatchOverride = func(
+				batch []pendingWrite, _ syncWriteMode, _ bool,
+			) (int, int, int, int) {
+				close(writeEntered)
+				<-allowWrite
+				return len(batch), 0, 0, 0
+			}
+			results := make(chan syncJob, tt.jobs)
+			for i := range tt.jobs {
+				results <- syncJob{
+					path: fmt.Sprintf("/sessions/%03d.jsonl", i),
+					results: []parser.ParseResult{{Session: parser.ParsedSession{
+						ID: fmt.Sprintf("session-%03d", i), Agent: parser.AgentClaude,
+					}}},
+				}
+			}
+			close(results)
+			progress := make(chan Progress, tt.jobs+8)
+			done := make(chan struct{})
+			go func() {
+				engine.collectAndBatch(
+					t.Context(), results, tt.jobs, tt.jobs,
+					func(p Progress) { progress <- p }, tt.mode,
+				)
+				close(done)
+			}()
+			select {
+			case <-writeEntered:
+			case <-time.After(time.Second):
+				require.FailNow(t, "collector did not enter write")
+			}
+			var last Progress
+		drain:
+			for {
+				select {
+				case last = <-progress:
+				default:
+					break drain
+				}
+			}
+			assert.Equal(t, tt.wantPhase, last.Phase)
+			assert.Equal(t, tt.wantDetail, last.Detail)
+			close(allowWrite)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				require.FailNow(t, "collector did not finish")
+			}
+		})
+	}
+}
+
+func TestCollectAndBatchReportsOrderedBulkFinalization(t *testing.T) {
+	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	restore := engine.beginBulkRetentionPass()
+	defer restore()
+	budget := engine.retentionBudget()
+	lease, err := budget.acquire(t.Context(), 1)
+	require.NoError(t, err)
+
+	scavengeEntered := make(chan struct{})
+	allowScavenge := make(chan struct{})
+	budget.scavenge = func() {
+		close(scavengeEntered)
+		<-allowScavenge
+	}
+	engine.writeBatchOverride = func(
+		batch []pendingWrite, _ syncWriteMode, _ bool,
+	) (int, int, int, int) {
+		return len(batch), 0, 0, 0
+	}
+	results := make(chan syncJob, 1)
+	results <- syncJob{
+		path: "/sessions/one.jsonl", retentionLease: lease,
+		results: []parser.ParseResult{{Session: parser.ParsedSession{
+			ID: "one", Agent: parser.AgentClaude,
+		}}},
+	}
+	close(results)
+	progress := make(chan Progress, 16)
+	done := make(chan struct{})
+	go func() {
+		engine.collectAndBatch(
+			t.Context(), results, 1, 1,
+			func(p Progress) { progress <- p }, syncWriteBulk,
+		)
+		close(done)
+	}()
+	select {
+	case <-scavengeEntered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "collector did not enter memory scavenge")
+	}
+	var events []Progress
+drain:
+	for {
+		select {
+		case event := <-progress:
+			events = append(events, event)
+		default:
+			break drain
+		}
+	}
+	require.NotEmpty(t, events)
+	assert.Equal(t, "Finalizing sync: releasing parsed-session memory",
+		events[len(events)-1].Detail)
+	close(allowScavenge)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "collector did not finish after memory scavenge")
+	}
+	var details []string
+	for _, event := range events {
+		if event.Phase == PhaseFinalizing {
+			details = append(details, event.Detail)
+		}
+	}
+	assert.Equal(t, []string{
+		"Finalizing sync: committing session writes",
+		"Finalizing sync: saving session source state",
+		"Finalizing sync: linking file-backed subagent sessions",
+		"Finalizing sync: repairing subagent relationships",
+		"Finalizing sync: releasing parsed-session memory",
+	}, details)
+}
+
 func TestCollectAndBatchDiscardsPendingResultAfterCancellation(t *testing.T) {
 	engine := NewEngine(openTestDB(t), EngineConfig{
 		Machine:                      "local",
