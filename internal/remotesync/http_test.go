@@ -1013,7 +1013,7 @@ func (r *mirrorTestRemote) addWindsurfFileScopedAgent(t *testing.T) string {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
-	resolved := ResolveTargets(config.Config{
+	resolved := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentWindsurf: {userRoot},
 		},
@@ -2544,7 +2544,7 @@ func (r *mirrorTestRemote) addRooCodeAgent(
 	mcpSettings := filepath.Join(settingsDir, "mcp_settings.json")
 	require.NoError(t, os.WriteFile(mcpSettings,
 		[]byte(`{"mcpServers":{"s":{"env":{"API_KEY":"sk-secret"}}}}`), 0o644))
-	resolved := ResolveTargets(config.Config{
+	resolved := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentRooCode: {rooRoot},
 		},

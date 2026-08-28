@@ -15,25 +15,24 @@ import (
 func WriteArchive(w io.Writer, targets TargetSet) error {
 	tw := tar.NewWriter(w)
 	forbidden := newForbiddenRootMatcher(targets.ForbiddenRoots)
-	hermesSQLite := make(map[string]string)
-	snapshotAgents := sqliteSnapshotTargets(targets)
-	for stateDB := range snapshotAgents {
-		for _, path := range hermesSQLitePaths(stateDB) {
-			hermesSQLite[path] = stateDB
+	snapshotSQLite := make(map[string]string)
+	for stateDB := range sqliteSnapshotTargets(targets) {
+		for _, path := range sqliteSnapshotPaths(stateDB) {
+			snapshotSQLite[path] = stateDB
 		}
 	}
-	writtenHermesState := make(map[string]struct{})
+	writtenSnapshots := make(map[string]struct{})
 	writePath := func(path string, optional bool) error {
 		if forbidden.within(path) {
 			return nil
 		}
 		clean := filepath.Clean(path)
-		if stateDB, ok := hermesSQLite[clean]; ok {
-			if _, written := writtenHermesState[stateDB]; written {
+		if stateDB, ok := snapshotSQLite[clean]; ok {
+			if _, written := writtenSnapshots[stateDB]; written {
 				return nil
 			}
-			writtenHermesState[stateDB] = struct{}{}
-			return writeSQLiteStateDBSnapshot(tw, stateDB, snapshotAgents[stateDB])
+			writtenSnapshots[stateDB] = struct{}{}
+			return writeSQLiteStateDBSnapshot(tw, stateDB)
 		}
 		if optional {
 			return writeOptionalArchiveFile(tw, path)
@@ -84,40 +83,31 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 	return nil
 }
 
-func writeSQLiteStateDBSnapshot(
-	tw *tar.Writer, stateDB string, agent parser.AgentType,
-) error {
-	_, modTime, exists, err := sqliteSnapshotIdentityForAgent(stateDB, agent)
-	if err != nil {
-		return fmt.Errorf("identify sqlite snapshot %q: %w", stateDB, err)
-	}
+func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
+	_, modTime, exists := sqliteSnapshotIdentity(stateDB)
 	if !exists {
 		return nil
 	}
-	tmpDir, err := os.MkdirTemp("", "agentsview-hermes-snapshot-*")
+	tmpDir, err := os.MkdirTemp("", "agentsview-sqlite-snapshot-*")
 	if err != nil {
 		return fmt.Errorf("create sqlite snapshot dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 	snapshotPath := filepath.Join(tmpDir, "state.db")
-	if err := writeHermesSnapshotFile(snapshotPath, stateDB); err != nil {
-		label := "sqlite"
-		if agent == parser.AgentHermes {
-			label = "hermes"
-		}
-		return fmt.Errorf("snapshot %s database %q: %w", label, stateDB, err)
+	if err := writeSQLiteSnapshotFile(snapshotPath, stateDB); err != nil {
+		return fmt.Errorf("snapshot sqlite database %q: %w", stateDB, err)
 	}
 	if err := os.Chtimes(snapshotPath, modTime, modTime); err != nil {
-		return fmt.Errorf("stamp hermes database snapshot: %w", err)
+		return fmt.Errorf("stamp sqlite database snapshot: %w", err)
 	}
 	info, err := os.Stat(snapshotPath)
 	if err != nil {
-		return fmt.Errorf("stat hermes database snapshot: %w", err)
+		return fmt.Errorf("stat sqlite database snapshot: %w", err)
 	}
 	return writeArchiveFileAs(tw, stateDB, snapshotPath, info)
 }
 
-var writeHermesSnapshotFile = writeSQLiteSnapshot
+var writeSQLiteSnapshotFile = writeSQLiteSnapshot
 
 func writeWindsurfArchiveFiles(
 	tw *tar.Writer, files []string, forbidden forbiddenRootMatcher,
@@ -375,19 +365,19 @@ func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 	tw := tar.NewWriter(w)
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	allowedRoots := allowed.DeltaAllowedRoots()
-	snapshotAgents := sqliteSnapshotTargets(allowed)
-	writtenHermesState := make(map[string]struct{})
+	snapshotDBs := sqliteSnapshotTargets(allowed)
+	writtenSnapshots := make(map[string]struct{})
 	for _, path := range files {
 		local, ok := resolveDeltaFilePath(allowedRoots, forbidden, path)
 		if !ok {
 			continue
 		}
-		if stateDB, isHermesSQLite := sqliteSnapshotForArchivePath(local); isHermesSQLite {
+		if stateDB, isSnapshotSQLite := sqliteSnapshotForArchivePath(local); isSnapshotSQLite {
 			stateDB = filepath.Clean(stateDB)
-			if agent, allowed := snapshotAgents[stateDB]; allowed {
-				if _, written := writtenHermesState[stateDB]; !written {
-					writtenHermesState[stateDB] = struct{}{}
-					if err := writeSQLiteStateDBSnapshot(tw, stateDB, agent); err != nil {
+			if _, allowed := snapshotDBs[stateDB]; allowed {
+				if _, written := writtenSnapshots[stateDB]; !written {
+					writtenSnapshots[stateDB] = struct{}{}
+					if err := writeSQLiteStateDBSnapshot(tw, stateDB); err != nil {
 						return err
 					}
 				}

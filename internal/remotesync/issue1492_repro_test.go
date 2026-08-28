@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -34,6 +35,13 @@ func archiveEntries(t *testing.T, data []byte) map[string][]byte {
 		require.NoError(t, err)
 		entries[hdr.Name] = body
 	}
+}
+
+func resolveTargetsForTest(t *testing.T, cfg config.Config) TargetSet {
+	t.Helper()
+	targets, err := ResolveTargets(cfg)
+	require.NoError(t, err)
+	return targets
 }
 
 func manifestPaths(m Manifest) []string {
@@ -67,7 +75,7 @@ func TestIssue1492CuratesCursorAndVSCodeTargets(t *testing.T) {
 	require.NoError(t, os.WriteFile(globalChat, []byte("global chat"), 0o644))
 	require.NoError(t, os.WriteFile(vscodeDecoy, []byte("secret"), 0o644))
 
-	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentCursor:        {filepath.Join(root, "cursor")},
 		parser.AgentVSCodeCopilot: {vscodeRoot},
 	}})
@@ -103,7 +111,7 @@ func TestIssue1492ZedActiveWALIsOneStableStandaloneDatabase(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, walInfo.Size(), int64(32))
 
-	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentZed: {root},
 	}})
 	require.Equal(t, []string{dbPath}, targets.Files[parser.AgentZed])
@@ -148,7 +156,7 @@ func TestIssue1492VanishedCuratedFileIsOmittedAndDeltaIsConfined(t *testing.T) {
 	selected := filepath.Join(root, "project", "agent-transcripts", id+".jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(selected), 0o755))
 	require.NoError(t, os.WriteFile(selected, []byte("session"), 0o644))
-	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentCursor: {root},
 	}})
 	require.NoError(t, os.Remove(selected))
@@ -192,11 +200,11 @@ func TestIssue1492VanishedCursorAndVSCodeFilesRemainAuthorized(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 			require.NoError(t, os.WriteFile(path, []byte("session"), 0o644))
 			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{tt.agent: {root}}}
-			stale := ResolveTargets(cfg)
+			stale := resolveTargetsForTest(t, cfg)
 			require.Contains(t, stale.Files[tt.agent], path)
 			require.NoError(t, os.Remove(path))
 
-			fresh := ResolveTargets(cfg)
+			fresh := resolveTargetsForTest(t, cfg)
 			require.Contains(t, fresh.Dirs[tt.agent], root)
 			files, ok := SelectAllowedFiles(fresh, []string{path})
 			require.True(t, ok, "vanished %s file must remain authorized", tt.name)
@@ -224,9 +232,9 @@ func TestIssue1492AllCuratedEditorFilesVanishedRemainAuthorized(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 			require.NoError(t, os.WriteFile(path, []byte("session"), 0o644))
 			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{tt.agent: {root}}}
-			stale := ResolveTargets(cfg)
+			stale := resolveTargetsForTest(t, cfg)
 			require.NoError(t, os.Remove(path))
-			fresh := ResolveTargets(cfg)
+			fresh := resolveTargetsForTest(t, cfg)
 			selected, ok := SelectAllowedTargets(fresh, stale)
 			require.True(t, ok, "vanished %s target must remain authorized", tt.name)
 			manifest, err := BuildManifest(selected)
@@ -252,7 +260,7 @@ func TestIssue1492VanishedVSCodeWorkspaceIsEvictedFromMirror(t *testing.T) {
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentVSCodeCopilot: {root},
 	}}
-	initial := ResolveTargets(cfg)
+	initial := resolveTargetsForTest(t, cfg)
 	require.Contains(t, initial.Files[parser.AgentVSCodeCopilot], workspace)
 
 	mirror := t.TempDir()
@@ -261,7 +269,7 @@ func TestIssue1492VanishedVSCodeWorkspaceIsEvictedFromMirror(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(mirrorWorkspace), 0o755))
 	require.NoError(t, os.WriteFile(mirrorWorkspace, []byte("stale"), 0o644))
 	require.NoError(t, os.Remove(workspace))
-	fresh := ResolveTargets(cfg)
+	fresh := resolveTargetsForTest(t, cfg)
 	selected, ok := SelectAllowedFiles(fresh, []string{workspace})
 	require.True(t, ok, "vanished workspace.json must remain authorized")
 	var delta bytes.Buffer
@@ -284,7 +292,7 @@ func TestIssue1492VSCodeWorkspaceMetadataRequiresSelectedChat(t *testing.T) {
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentVSCodeCopilot: {root},
 	}}
-	allowed := ResolveTargets(cfg)
+	allowed := resolveTargetsForTest(t, cfg)
 	unauthorized := filepath.Join(root, "workspaceStorage", "other", "workspace.json")
 	_, ok := SelectAllowedFiles(allowed, []string{unauthorized})
 	assert.False(t, ok)
@@ -302,7 +310,7 @@ func TestIssue1492EmptyEditorRootsRetainEmptyFileTargets(t *testing.T) {
 	for _, dir := range []string{filepath.Join(root, "cursor"), filepath.Join(root, "vscode")} {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 	}
-	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentCursor:        {filepath.Join(root, "cursor")},
 		parser.AgentVSCodeCopilot: {filepath.Join(root, "vscode")},
 	}})
@@ -363,7 +371,7 @@ func TestIssue1492CuratedEditorRootsAccumulateFiles(t *testing.T) {
 		require.NoError(t, os.WriteFile(chat, []byte(`{"id":"chat"}`), 0o644))
 		require.NoError(t, os.WriteFile(filepath.Join(workspaceDir, "workspace.json"), []byte(`{"folder":"/repo"}`), 0o644))
 	}
-	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentCursor:        cursorRoots,
 		parser.AgentVSCodeCopilot: vscodeRoots,
 	}})
@@ -476,7 +484,7 @@ func TestIssue1492EmptyCuratedRootsProduceEmptyArchives(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, []byte("credential decoy"), 0o600))
 	}
-	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentCursor:        {cursorRoot},
 		parser.AgentVSCodeCopilot: {vscodeRoot},
 	}})
@@ -504,11 +512,11 @@ func TestIssue1492VanishedZedDatabaseRemainsEvictable(t *testing.T) {
 	configured := config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentZed: {root},
 	}}
-	initial := ResolveTargets(configured)
+	initial := resolveTargetsForTest(t, configured)
 	require.Equal(t, []string{dbPath}, initial.Files[parser.AgentZed])
 	require.NoError(t, os.Remove(dbPath))
 
-	fresh := ResolveTargets(configured)
+	fresh := resolveTargetsForTest(t, configured)
 	assert.Equal(t, []string{root}, fresh.Dirs[parser.AgentZed])
 	assert.Equal(t, []string{dbPath}, fresh.Files[parser.AgentZed])
 	manifest, err := BuildManifest(fresh)
@@ -531,23 +539,91 @@ func TestIssue1492VanishedZedDatabaseRemainsEvictable(t *testing.T) {
 	assert.Equal(t, []string{mirrorPath}, diff.Deletions)
 }
 
-func TestIssue1492ZedSnapshotErrorsPropagate(t *testing.T) {
+// A resolution error must fail the whole resolution instead of
+// silently dropping the agent: an agent absent from the advertised
+// targets is indistinguishable from an uninstalled one, so the client
+// would evict its entire mirror subtree over a transient read error.
+func TestIssue1492UnreadableCuratedRootFailsResolution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory-permission read failures are not portable to Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	id := "01234567-89ab-cdef-0123-456789abcdef"
+
+	t.Run("vscode discovery error", func(t *testing.T) {
+		root := t.TempDir()
+		chat := filepath.Join(root, "workspaceStorage", "hash", "chatSessions", id+".json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(chat), 0o755))
+		require.NoError(t, os.WriteFile(chat, []byte(`{"id":"chat"}`), 0o644))
+		cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCodeCopilot: {root},
+		}}
+		targets := resolveTargetsForTest(t, cfg)
+		require.Contains(t, targets.Files[parser.AgentVSCodeCopilot], chat)
+
+		storage := filepath.Join(root, "workspaceStorage")
+		require.NoError(t, os.Chmod(storage, 0o000))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(storage, 0o755)) })
+		_, err := ResolveTargets(cfg)
+		require.Error(t, err,
+			"an unreadable editor root must not resolve to an empty target set")
+		assert.ErrorIs(t, err, os.ErrPermission)
+	})
+
+	t.Run("zed root stat error", func(t *testing.T) {
+		parent := t.TempDir()
+		root := filepath.Join(parent, "zed")
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "threads"), 0o755))
+		cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+			parser.AgentZed: {root},
+		}}
+		targets := resolveTargetsForTest(t, cfg)
+		require.Contains(t, targets.Dirs[parser.AgentZed], root)
+
+		require.NoError(t, os.Chmod(parent, 0o000))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0o755)) })
+		_, err := ResolveTargets(cfg)
+		require.Error(t, err,
+			"an unreadable Zed root must not resolve to an empty target set")
+		assert.ErrorIs(t, err, os.ErrPermission)
+	})
+}
+
+// A corrupt Zed database must not block the whole sync: the archive
+// database preserves already-imported sessions, so the unreadable file
+// degrades to a missing manifest entry (the mirror evicts its cached
+// copy) while every other agent keeps syncing.
+func TestIssue1492CorruptZedDatabaseDoesNotBlockOtherAgents(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, parser.ZedThreadsDBRelPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 	require.NoError(t, os.WriteFile(dbPath, []byte("corrupt sqlite database"), 0o644))
+	cursorRoot := filepath.Join(root, "cursor")
+	cursorFile := filepath.Join(cursorRoot, "project", "agent-transcripts",
+		"01234567-89ab-cdef-0123-456789abcdef.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(cursorFile), 0o755))
+	require.NoError(t, os.WriteFile(cursorFile, []byte("cursor transcript"), 0o644))
 	targets := TargetSet{
-		Dirs:  map[parser.AgentType][]string{parser.AgentZed: {root}},
-		Files: map[parser.AgentType][]string{parser.AgentZed: {dbPath}},
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentZed:    {root},
+			parser.AgentCursor: {cursorRoot},
+		},
+		Files: map[parser.AgentType][]string{
+			parser.AgentZed:    {dbPath},
+			parser.AgentCursor: {cursorFile},
+		},
 	}
-	_, err := BuildManifest(targets)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "identify sqlite snapshot")
+	manifest, err := BuildManifest(targets)
+	require.NoError(t, err)
+	assert.Equal(t, []string{cursorFile}, manifestPaths(manifest))
 
 	var archive bytes.Buffer
-	err = WriteArchive(&archive, targets)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "identify sqlite snapshot")
+	require.NoError(t, WriteArchive(&archive, targets))
+	entries := archiveEntries(t, archive.Bytes())
+	require.Len(t, entries, 1)
+	assert.NotContains(t, strings.Join(keys(entries), "\n"), "threads.db")
 }
 
 func TestIssue1492ZedSnapshotDeltaUsesOnlineBackup(t *testing.T) {
@@ -559,7 +635,7 @@ func TestIssue1492ZedSnapshotDeltaUsesOnlineBackup(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, writer.Close()) })
 	_, err = writer.Exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('delta-thread')`)
 	require.NoError(t, err)
-	targets := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentZed: {root},
 	}})
 	files, ok := SelectAllowedFiles(targets, []string{dbPath})

@@ -20,6 +20,13 @@ import (
 	"go.kenn.io/agentsview/internal/ssh"
 )
 
+func resolveTargetsForTest(t *testing.T, cfg config.Config) remotesync.TargetSet {
+	t.Helper()
+	targets, err := remotesync.ResolveTargets(cfg)
+	require.NoError(t, err)
+	return targets
+}
+
 func TestResolveTargetsExcludesNonLocalStructuredSessionSources(t *testing.T) {
 	localMachine, err := os.Hostname()
 	require.NoError(t, err)
@@ -65,7 +72,7 @@ machine = %q
 	cfg, err := config.LoadMinimal()
 	require.NoError(t, err)
 	require.Equal(t, localMachine, cfg.LocalMachineName)
-	targets := remotesync.ResolveTargets(cfg)
+	targets := resolveTargetsForTest(t, cfg)
 
 	assert.ElementsMatch(t, []string{localRoot, localStructuredRoot},
 		targets.Dirs[parser.AgentCopilot])
@@ -115,7 +122,7 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	codexIndex := filepath.Join(root, ".codex", parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(codexIndex, []byte("{}\n"), 0o644))
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir, missingDir},
 			parser.AgentCodex:  {codexDir},
@@ -162,7 +169,7 @@ func TestResolveTargetsExcludesRemoteSyncExcludedAgentState(t *testing.T) {
 		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
 	))
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentTrae: {root},
 		},
@@ -181,7 +188,7 @@ func TestResolveTargetsExcludesTraeProfile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(traeRoot, 0o755))
 	require.NoError(t, os.MkdirAll(claudeRoot, 0o755))
 
-	targets := remotesync.ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentTrae:   {traeRoot},
 		parser.AgentClaude: {claudeRoot},
 	}})
@@ -203,7 +210,7 @@ func TestResolveTargetsOmitsAllowedTargetsInsideForbiddenRoots(t *testing.T) {
 	require.NoError(t, os.MkdirAll(nestedClaude, 0o755))
 	require.NoError(t, os.MkdirAll(outsideClaude, 0o755))
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentTrae:   {traeRoot},
 			parser.AgentClaude: {nestedClaude, outsideClaude},
@@ -239,7 +246,7 @@ func TestResolveTargetsDropsFileScopedAgentWhenSessionFilesForbidden(
 		[]byte(`{"id":"task-1","ts":1,"task":"t"}`), 0o644,
 	))
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentTrae:    {tasksDir},
 			parser.AgentRooCode: {rooRoot},
@@ -263,7 +270,7 @@ func TestResolveTargetsPoolsideNarrowsToTrajectories(t *testing.T) {
 	require.NoError(t, os.MkdirAll(trajectoriesDir, 0o755))
 	require.NoError(t, os.WriteFile(settingsFile, []byte(`{"api_key":"sk-secret"}`), 0o644))
 
-	targets := remotesync.ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentPoolside: {root},
 	}})
 
@@ -281,7 +288,7 @@ func TestResolveTargetsPoolsideNarrowsToTrajectories(t *testing.T) {
 func TestResolveTargetsPoolsideSkipsMissingTrajectories(t *testing.T) {
 	root := t.TempDir()
 
-	targets := remotesync.ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentPoolside: {root},
 	}})
 
@@ -296,7 +303,7 @@ func TestResolveTargetsPoolsideTrajectoriesRoot(t *testing.T) {
 	trajectoriesDir := filepath.Join(t.TempDir(), "trajectories")
 	require.NoError(t, os.MkdirAll(trajectoriesDir, 0o755))
 
-	targets := remotesync.ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{
+	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentPoolside: {trajectoriesDir},
 	}})
 
@@ -321,7 +328,7 @@ func TestResolveTargetsExpandsHermesProfilesWithDatabaseFiles(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("sqlite"), 0o644))
 	}
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {profilesRoot},
 		},
@@ -349,7 +356,7 @@ func TestResolveTargetsIncludesFlatCustomHermesRoot(t *testing.T) {
 		filepath.Join(root, "child.jsonl"), []byte("{}\n"), 0o644,
 	))
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {root},
 		},
@@ -372,7 +379,7 @@ func TestResolveTargetsSkipsSessionlessHermesProfileCredentials(t *testing.T) {
 		filepath.Join(profileRoot, "debug.jsonl"), []byte("not a session\n"), 0o600,
 	))
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {profileRoot},
 		},
@@ -392,7 +399,7 @@ func TestResolveTargetsSkipsAiderHomeRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(aiderHistory), 0o755))
 	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentAider: {home + string(filepath.Separator)},
 		},
@@ -546,7 +553,7 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	require.NoError(t, err, "ssh resolver output: %s", out)
 	sshDirs, sshFiles, sshExtra, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out))
 
-	goTargets := remotesync.ResolveTargets(config.Config{
+	goTargets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude:   {claudeDir},
 			parser.AgentCodex:    {codexDir},
@@ -752,7 +759,7 @@ func TestRooCodeRemoteSyncExportsOnlySessionFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(checkpointBlob, []byte("checkpoint"), 0o644))
 	require.NoError(t, os.WriteFile(cacheBlob, []byte("cache"), 0o644))
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentRooCode: {rooRoot},
 		},
@@ -865,13 +872,13 @@ func TestRooCodeRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 			parser.AgentRooCode: {rooRoot},
 		},
 	}
-	staleClientTargets := remotesync.ResolveTargets(cfg)
+	staleClientTargets := resolveTargetsForTest(t, cfg)
 	require.Contains(t, staleClientTargets.Files[parser.AgentRooCode],
 		task1Messages)
 
 	// The whole task vanishes on the remote before the next request.
 	require.NoError(t, os.RemoveAll(task1))
-	freshServerTargets := remotesync.ResolveTargets(cfg)
+	freshServerTargets := resolveTargetsForTest(t, cfg)
 	assert.NotContains(t, freshServerTargets.Files[parser.AgentRooCode],
 		task1Messages)
 
@@ -947,7 +954,7 @@ func TestRooCodeRemoteSyncSkipsRootWithoutSessions(t *testing.T) {
 		filepath.Join(settingsDir, "mcp_settings.json"),
 		[]byte(`{"mcpServers":{}}`), 0o644))
 
-	targets := remotesync.ResolveTargets(config.Config{
+	targets := resolveTargetsForTest(t, config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentRooCode: {rooRoot},
 		},

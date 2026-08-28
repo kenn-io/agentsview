@@ -89,52 +89,31 @@ func writeSQLiteSnapshot(dstPath, srcPath string) (err error) {
 	return nil
 }
 
-func sqliteSnapshotIdentity(path string) (int64, time.Time, bool, error) {
+// sqliteSnapshotIdentity treats an unusable database as an optional
+// missing archive component. The SQLite archive preserves imported
+// sessions even when their source files disappear, so omitting an
+// unreadable database from the manifest costs only the mirror's cached
+// copy, and a later sync retries after the writer repairs or replaces
+// it. Failing the manifest instead would block every other agent's
+// sync behind one bad file.
+func sqliteSnapshotIdentity(path string) (int64, time.Time, bool) {
 	info, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, time.Time{}, false, nil
-		}
-		return 0, time.Time{}, false, fmt.Errorf("stat sqlite database %q: %w", path, err)
-	}
-	if !info.Mode().IsRegular() {
-		return 0, time.Time{}, false, nil
+	if err != nil || !info.Mode().IsRegular() {
+		return 0, time.Time{}, false
 	}
 	conn, err := sql.Open("sqlite3", sqliteReadOnlyDSN(path))
 	if err != nil {
-		return 0, time.Time{}, false, fmt.Errorf("open sqlite database %q: %w", path, err)
+		return 0, time.Time{}, false
 	}
 	defer conn.Close()
 	var pageSize, pageCount int64
 	if err := conn.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
-		return 0, time.Time{}, false, fmt.Errorf("read sqlite page size %q: %w", path, err)
-	}
-	if err := conn.QueryRow(`PRAGMA page_count`).Scan(&pageCount); err != nil {
-		return 0, time.Time{}, false, fmt.Errorf("read sqlite page count %q: %w", path, err)
-	}
-	return pageSize * pageCount, sqliteSnapshotModTime(path, info.ModTime()), true, nil
-}
-
-// hermesSQLiteSnapshotIdentity treats an unusable state database as an
-// optional missing archive component. Hermes transcripts remain independently
-// useful, and a later sync can retry the database after the writer repairs or
-// replaces it.
-func hermesSQLiteSnapshotIdentity(path string) (int64, time.Time, bool) {
-	size, modTime, exists, err := sqliteSnapshotIdentity(path)
-	if err != nil {
 		return 0, time.Time{}, false
 	}
-	return size, modTime, exists
-}
-
-func sqliteSnapshotIdentityForAgent(
-	path string, agent parser.AgentType,
-) (int64, time.Time, bool, error) {
-	if agent == parser.AgentZed {
-		return sqliteSnapshotIdentity(path)
+	if err := conn.QueryRow(`PRAGMA page_count`).Scan(&pageCount); err != nil {
+		return 0, time.Time{}, false
 	}
-	size, modTime, exists := hermesSQLiteSnapshotIdentity(path)
-	return size, modTime, exists, nil
+	return pageSize * pageCount, sqliteSnapshotModTime(path, info.ModTime()), true
 }
 
 func sqliteSnapshotModTime(stateDB string, modTime time.Time) time.Time {
@@ -185,40 +164,20 @@ func hermesStateDBTargets(targets TargetSet) []string {
 	return paths
 }
 
-func sqliteSnapshotPathsForTargets(targets TargetSet) []string {
-	paths := hermesStateDBTargets(targets)
-	seen := make(map[string]struct{}, len(paths)+len(targets.Files[parser.AgentZed]))
-	for _, path := range paths {
-		seen[path] = struct{}{}
+// sqliteSnapshotTargets returns the set of databases (Hermes state.db,
+// Zed threads.db) whose manifest and archive entries are consistent
+// snapshots rather than raw file copies.
+func sqliteSnapshotTargets(targets TargetSet) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, path := range hermesStateDBTargets(targets) {
+		out[path] = struct{}{}
 	}
 	for _, path := range targets.Files[parser.AgentZed] {
 		if filepath.Base(filepath.Clean(path)) == "threads.db" {
-			seen[filepath.Clean(path)] = struct{}{}
-		}
-	}
-	paths = paths[:0]
-	for path := range seen {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	return paths
-}
-
-func sqliteSnapshotTargets(targets TargetSet) map[string]parser.AgentType {
-	out := make(map[string]parser.AgentType)
-	for _, path := range sqliteSnapshotPathsForTargets(targets) {
-		out[path] = parser.AgentHermes
-	}
-	for _, path := range targets.Files[parser.AgentZed] {
-		if filepath.Base(filepath.Clean(path)) == "threads.db" {
-			out[filepath.Clean(path)] = parser.AgentZed
+			out[filepath.Clean(path)] = struct{}{}
 		}
 	}
 	return out
-}
-
-func hermesSQLitePaths(stateDB string) []string {
-	return sqliteSnapshotPaths(stateDB)
 }
 
 func sqliteSnapshotPaths(stateDB string) []string {

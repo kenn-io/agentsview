@@ -113,18 +113,35 @@ func (t TargetSet) isFileScoped(agent parser.AgentType) bool {
 
 // verbatimFileScopedAgent reports whether a file-scoped agent's
 // curated files are exported byte-for-byte by WriteArchive. Verbatim
-// agents (RooCode) can ride the manifest/delta path: the manifest
-// advertises exactly the files the archive streams, so one changed
-// transcript transfers alone. Sanitizing agents (Windsurf rewrites
-// its state DB) must stay on the full-archive flow, and new
-// file-scoped agents default to sanitized until added here.
+// agents (RooCode, Kilo Legacy, Cursor, VS Code Copilot) can ride the
+// manifest/delta path: the manifest advertises exactly the files the
+// archive streams, so one changed transcript transfers alone.
+// Sanitizing agents (Windsurf rewrites its state DB) must stay on the
+// full-archive flow, and new file-scoped agents default to sanitized
+// until added here.
 func verbatimFileScopedAgent(agent parser.AgentType) bool {
 	return agent == parser.AgentRooCode || agent == parser.AgentKiloLegacy ||
 		agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot
 }
 
+// snapshotFileScopedAgent reports whether a file-scoped agent's
+// curated files are exported as consistent SQLite snapshots rather
+// than raw bytes. Snapshot agents ride the manifest/delta path like
+// verbatim agents; the manifest advertises the snapshot's logical
+// identity instead of the raw file's.
 func snapshotFileScopedAgent(agent parser.AgentType) bool {
 	return agent == parser.AgentZed
+}
+
+// emptyFileScopeAgent reports whether an agent's root stays
+// advertised with an explicitly empty curated file list when
+// discovery finds no sessions. Retaining the empty scope keeps a
+// stale client request authorized after the last session is deleted,
+// so the manifest can go empty and the client mirror evicts the
+// remaining copies instead of failing the sync. Agents without this
+// trait drop the root entirely when nothing is discovered.
+func emptyFileScopeAgent(agent parser.AgentType) bool {
+	return agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot
 }
 
 // HasSanitizedFileScopedAgents reports whether any agent's export is

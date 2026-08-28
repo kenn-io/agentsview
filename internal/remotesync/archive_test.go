@@ -341,13 +341,13 @@ func TestWriteArchivePropagatesAdvertisedHermesSnapshotFailure(t *testing.T) {
 	writeHermesImportStateDB(t, stateDB)
 
 	wantErr := errors.New("forced sqlite backup failure")
-	originalSnapshot := writeHermesSnapshotFile
-	writeHermesSnapshotFile = func(dstPath, srcPath string) error {
+	originalSnapshot := writeSQLiteSnapshotFile
+	writeSQLiteSnapshotFile = func(dstPath, srcPath string) error {
 		assert.NotEmpty(t, dstPath)
 		assert.Equal(t, stateDB, srcPath)
 		return wantErr
 	}
-	t.Cleanup(func() { writeHermesSnapshotFile = originalSnapshot })
+	t.Cleanup(func() { writeSQLiteSnapshotFile = originalSnapshot })
 
 	var archive bytes.Buffer
 	err := WriteArchive(&archive, TargetSet{
@@ -355,7 +355,7 @@ func TestWriteArchivePropagatesAdvertisedHermesSnapshotFailure(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wantErr)
-	assert.Contains(t, err.Error(), "snapshot hermes database")
+	assert.Contains(t, err.Error(), "snapshot sqlite database")
 }
 
 func hermesTestSidecars(stateDB string) []string {

@@ -43,9 +43,13 @@ func (s *Server) humaRemoteSyncTargets(
 	if _, ok := s.db.(*db.DB); !ok {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
+	targets, err := remotesync.ResolveTargets(s.ingestionConfig())
+	if err != nil {
+		return nil, apiError(http.StatusInternalServerError, err.Error())
+	}
 	return &remoteSyncTargetsOutput{
 		ProtocolVersion: strconv.Itoa(remotesync.ProtocolVersion),
-		Body:            remotesync.ResolveTargets(s.ingestionConfig()),
+		Body:            targets,
 	}, nil
 }
 
@@ -75,7 +79,11 @@ func (s *Server) remoteSyncManifestHTTP(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid manifest request", http.StatusBadRequest)
 		return
 	}
-	allowed := remotesync.ResolveTargets(s.ingestionConfig())
+	allowed, err := remotesync.ResolveTargets(s.ingestionConfig())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	manifestTargets, ok := remotesync.SelectAllowedTargets(allowed, req)
 	if !ok {
 		http.Error(w, "remote sync target is not allowed", http.StatusForbidden)
@@ -130,7 +138,11 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid archive request", http.StatusBadRequest)
 		return
 	}
-	allowed := remotesync.ResolveTargets(s.ingestionConfig())
+	allowed, err := remotesync.ResolveTargets(s.ingestionConfig())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	archiveTargets, ok := remotesync.SelectAllowedTargets(allowed, req.TargetSet)
 	if !ok {
 		http.Error(w, "remote sync target is not allowed", http.StatusForbidden)
@@ -156,7 +168,6 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 		gz = gzip.NewWriter(archiveWriter)
 		out = gz
 	}
-	var err error
 	if deltaMode {
 		err = remotesync.WriteArchiveFiles(out, allowed, files)
 	} else {
