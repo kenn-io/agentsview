@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -93,8 +94,12 @@ type OpenCodeSource struct {
 }
 
 func (f openCodeFormat) matchesDBName(name string) bool {
-	if name == f.dbName {
+	if name == f.dbName ||
+		runtime.GOOS == "windows" && strings.EqualFold(name, f.dbName) {
 		return true
+	}
+	if runtime.GOOS == "windows" {
+		name = strings.ToLower(name)
 	}
 	if f.agent != AgentOpenCode || !strings.HasPrefix(name, "opencode-") ||
 		!strings.HasSuffix(name, ".db") {
@@ -295,15 +300,15 @@ func findOpenCodeFormatSourceFile(
 func openCodeFormatStorageSessionIDs(
 	f openCodeFormat, root string,
 ) map[string]struct{} {
+	ids := make(map[string]struct{})
 	src := resolveOpenCodeFormatSource(f, root)
 	if src.Mode != OpenCodeSourceStorage {
-		return nil
+		return ids
 	}
 	entries, err := os.ReadDir(src.SessionRoot)
 	if err != nil {
-		return nil
+		return ids
 	}
-	ids := make(map[string]struct{})
 	for _, entry := range entries {
 		if !isDirOrSymlink(entry, src.SessionRoot) {
 			continue

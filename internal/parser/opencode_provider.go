@@ -1821,6 +1821,9 @@ func (spec openCodeProviderSpec) dbPathForEvent(root, path string) (string, bool
 	) || !spec.format.matchesDBName(name) {
 		return "", false
 	}
+	if strings.EqualFold(name, spec.format.dbName) {
+		name = spec.format.dbName
+	}
 	return filepath.Join(root, name), true
 }
 
