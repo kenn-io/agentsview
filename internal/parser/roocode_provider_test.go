@@ -10,6 +10,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The per-file stat inside the task walk follows the same contract as
+// the tasks-directory enumeration: an unreadable task directory must
+// propagate, not be silently skipped as if its session were deleted.
+func TestRooCodeDiscoveryUnreadableTaskDirFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory-permission read failures are not portable to Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	root := t.TempDir()
+	historyPath := writeRooCodeDiscoveryTask(t, root, "task-1")
+	taskDir := filepath.Dir(historyPath)
+	provider, ok := NewProvider(AgentRooCode, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	paths, err := rooCodeDiscoverPaths(t, provider)
+	require.NoError(t, err)
+	require.Equal(t, []string{historyPath}, paths)
+
+	require.NoError(t, os.Chmod(taskDir, 0o000))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(taskDir, 0o755)) })
+	paths, err = rooCodeDiscoverPaths(t, provider)
+	require.Error(t, err,
+		"an unreadable task directory must not be skipped as a deleted session")
+	assert.ErrorIs(t, err, os.ErrPermission)
+	assert.Empty(t, paths)
+}
+
 func writeRooCodeDiscoveryTask(t *testing.T, root, taskID string) string {
 	t.Helper()
 	taskDir := filepath.Join(root, "tasks", taskID)

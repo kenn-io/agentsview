@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,9 +23,7 @@ func newKiloLegacyProviderFactory(def AgentDef) ProviderFactory {
 			return NewSingleFileSourceSet(
 				def.Type,
 				cfg.Roots,
-				WithFileDiscovery(func(root string) []singleFileMatch {
-					return kiloLegacyDiscoverFiles(root)
-				}),
+				WithStreamingFileDiscovery(kiloLegacyDiscoverEach),
 				WithFileWatchRoots(func(roots []string) []WatchRoot {
 					return kiloLegacyWatchRoots(roots)
 				}),
@@ -50,44 +50,47 @@ func newKiloLegacyProviderFactory(def AgentDef) ProviderFactory {
 	)
 }
 
-// kiloLegacyDiscoverFiles finds all Kilo (legacy) session directories
+// kiloLegacyDiscoverEach streams the Kilo (legacy) session sources
 // under a root. root is the globalStorage directory (e.g.
 // ~/Library/.../kilocode.kilo-code). Sessions live under
 // <root>/tasks/<taskId>/, identified by the presence of
-// task_metadata.json.
-func kiloLegacyDiscoverFiles(root string) []singleFileMatch {
+// task_metadata.json. A missing tasks directory is a legitimately
+// empty scope, but any other traversal failure propagates so an
+// unreadable directory cannot present an authoritative empty
+// enumeration.
+func kiloLegacyDiscoverEach(
+	ctx context.Context, root string, yield func(singleFileMatch) error,
+) error {
 	tasksDir := filepath.Join(root, "tasks")
-	entries, err := os.ReadDir(tasksDir)
-	if err != nil {
-		return nil
-	}
-	var matches []singleFileMatch
-	for _, entry := range entries {
+	return streamDirectoryEntries(ctx, tasksDir, func(entry os.DirEntry) error {
 		if !entry.IsDir() {
-			continue
+			return nil
 		}
 		// Reject symlinked task directories. Symlinks can
 		// resolve outside the configured root, so remote sync
 		// must not archive files from an unexpected location.
 		if entry.Type()&os.ModeSymlink != 0 {
-			continue
+			return nil
 		}
 		// Skip _index.json and other underscore-prefixed
 		// metadata files. Sessions are timestamped UUIDs.
 		if strings.HasPrefix(entry.Name(), "_") ||
 			strings.HasPrefix(entry.Name(), ".") {
-			continue
+			return nil
 		}
-		taskDir := filepath.Join(tasksDir, entry.Name())
-		metadataPath := filepath.Join(taskDir, "task_metadata.json")
-		if !IsRegularFile(metadataPath) {
-			continue
+		metadataPath := filepath.Join(tasksDir, entry.Name(), "task_metadata.json")
+		info, err := os.Lstat(metadataPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("stat kilo legacy session %s: %w", metadataPath, err)
 		}
-		matches = append(matches, singleFileMatch{
-			Path: metadataPath,
-		})
-	}
-	return matches
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		return yield(singleFileMatch{Path: metadataPath})
+	})
 }
 
 // kiloLegacyWatchRoots returns the watch plan for the configured

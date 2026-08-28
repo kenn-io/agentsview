@@ -18,6 +18,69 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func kiloLegacyDiscoverMatchesForTest(t *testing.T, root string) []singleFileMatch {
+	t.Helper()
+	var matches []singleFileMatch
+	require.NoError(t, kiloLegacyDiscoverEach(t.Context(), root,
+		func(match singleFileMatch) error {
+			matches = append(matches, match)
+			return nil
+		}))
+	return matches
+}
+
+// TestKiloLegacyDiscoveryUnreadableDirsFail guards the same contract
+// as TestRooCodeDiscoveryUnreadableTasksDirFails: a traversal failure
+// must propagate instead of presenting an authoritative empty
+// enumeration, which would tombstone baselined sessions locally and
+// let remote sync evict valid mirror data.
+func TestKiloLegacyDiscoveryUnreadableDirsFail(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory-permission read failures are not portable to Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tasks", "task-1")
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+	metadataPath := filepath.Join(taskDir, "task_metadata.json")
+	require.NoError(t, os.WriteFile(metadataPath, []byte(`{}`), 0o644))
+	provider, ok := NewProvider(AgentKiloLegacy, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	matches := kiloLegacyDiscoverMatchesForTest(t, root)
+	require.Len(t, matches, 1)
+	require.Equal(t, metadataPath, matches[0].Path)
+
+	t.Run("unreadable task dir", func(t *testing.T) {
+		require.NoError(t, os.Chmod(taskDir, 0o000))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(taskDir, 0o755)) })
+		err := kiloLegacyDiscoverEach(t.Context(), root,
+			func(singleFileMatch) error { return nil })
+		require.Error(t, err)
+		assert.ErrorIs(t, err, os.ErrPermission)
+		_, err = provider.Discover(t.Context())
+		require.Error(t, err,
+			"an unreadable task directory must not collect an authoritative empty discovery")
+	})
+
+	t.Run("unreadable tasks root", func(t *testing.T) {
+		tasksDir := filepath.Join(root, "tasks")
+		require.NoError(t, os.Chmod(tasksDir, 0o000))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(tasksDir, 0o755)) })
+		err := kiloLegacyDiscoverEach(t.Context(), root,
+			func(singleFileMatch) error { return nil })
+		require.Error(t, err)
+		assert.ErrorIs(t, err, os.ErrPermission)
+		_, err = provider.Discover(t.Context())
+		require.Error(t, err,
+			"an unreadable tasks directory must not collect an authoritative empty discovery")
+	})
+}
+
 // writeKiloLegacyFixture creates a minimal Kilo (legacy) task directory
 // containing the three JSON files. Callers may overwrite
 // individual files by writing to the returned paths.
@@ -839,7 +902,7 @@ func TestKiloLegacyDiscoverAndClassifyPath(t *testing.T) {
 		filepath.Join(tasksDir, "_index"), 0o755,
 	))
 
-	matches := kiloLegacyDiscoverFiles(root)
+	matches := kiloLegacyDiscoverMatchesForTest(t, root)
 	require.Len(t, matches, 1)
 	assert.True(t,
 		filepath.IsAbs(matches[0].Path),
@@ -923,7 +986,7 @@ func TestKiloLegacyParseFileReturnsUsageFromUI(t *testing.T) {
 	}
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
 
-	matches := kiloLegacyDiscoverFiles(root)
+	matches := kiloLegacyDiscoverMatchesForTest(t, root)
 	require.Len(t, matches, 1)
 	results, _, err := kiloLegacyParseFile(
 		singleFileSource{Root: root, Path: matches[0].Path},
@@ -1339,7 +1402,7 @@ func TestKiloLegacyDiscoverRejectsSymlinkedTaskDir(t *testing.T) {
 	symlinkTask := filepath.Join(tasksDir, "symlink-task")
 	require.NoError(t, os.Symlink(outsideDir, symlinkTask))
 
-	matches := kiloLegacyDiscoverFiles(root)
+	matches := kiloLegacyDiscoverMatchesForTest(t, root)
 	require.Len(t, matches, 1,
 		"only the real task should be discovered; symlink should be rejected")
 	assert.Contains(t, matches[0].Path, "real-task",

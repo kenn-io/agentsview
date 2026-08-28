@@ -601,6 +601,27 @@ func TestIssue1492UnreadableCuratedRootFailsResolution(t *testing.T) {
 		assert.ErrorIs(t, err, os.ErrPermission)
 	})
 
+	t.Run("kilo legacy discovery error", func(t *testing.T) {
+		root := t.TempDir()
+		task := filepath.Join(root, "tasks", "task-1")
+		require.NoError(t, os.MkdirAll(task, 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(task, "task_metadata.json"), []byte("{}"), 0o644))
+		cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
+			parser.AgentKiloLegacy: {root},
+		}}
+		targets := resolveTargetsForTest(t, cfg)
+		require.NotEmpty(t, targets.Files[parser.AgentKiloLegacy])
+
+		tasksDir := filepath.Join(root, "tasks")
+		require.NoError(t, os.Chmod(tasksDir, 0o000))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(tasksDir, 0o755)) })
+		_, err := ResolveTargets(cfg)
+		require.Error(t, err,
+			"an unreadable Kilo Legacy tasks directory must not resolve to an empty target set")
+		assert.ErrorIs(t, err, os.ErrPermission)
+	})
+
 	t.Run("zed root stat error", func(t *testing.T) {
 		parent := t.TempDir()
 		root := filepath.Join(parent, "zed")

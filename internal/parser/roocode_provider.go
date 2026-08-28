@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,7 +57,14 @@ func rooCodeDiscoverEach(
 			return nil
 		}
 		historyPath := filepath.Join(tasksDir, entry.Name(), "history_item.json")
-		if !IsRegularFile(historyPath) {
+		info, err := os.Lstat(historyPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("stat roocode session %s: %w", historyPath, err)
+		}
+		if !info.Mode().IsRegular() {
 			return nil
 		}
 		return yield(singleFileMatch{Path: historyPath})
