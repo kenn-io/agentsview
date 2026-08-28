@@ -61,23 +61,42 @@
   const currentLayoutWidth = $derived(
     layoutWidth ?? viewportWidth,
   );
-  const clampedLayoutWidth = $derived(
-    isDesktop
-      ? Math.max(
-          0,
-          currentLayoutWidth -
-            RESIZE_HANDLE_WIDTH -
-            SIDEBAR_BORDER_WIDTH,
-        )
-      : currentLayoutWidth,
+  const vitalsVisible = $derived(
+    Boolean(vitals) &&
+      isDesktop &&
+      ui.vitalsOpen &&
+      sessions.activeSessionId !== null,
   );
+  // The two panes share one width budget with the content column. When space
+  // runs out, pane minimums win, then the content minimum, then preferred
+  // widths: the sidebar clamp reserves the vitals panel's minimum footprint,
+  // and the vitals clamp yields whatever the actual sidebar leaves over.
+  function sidebarLayoutWidth(layoutWidthNow: number): number {
+    const vitalsReservedWidth = vitalsVisible
+      ? VITALS_WIDTH_MIN + RESIZE_HANDLE_WIDTH + SIDEBAR_BORDER_WIDTH
+      : 0;
+
+    return Math.max(
+      0,
+      layoutWidthNow -
+        RESIZE_HANDLE_WIDTH -
+        SIDEBAR_BORDER_WIDTH -
+        vitalsReservedWidth,
+    );
+  }
   const sidebarWidth = $derived(
     isDesktop
       ? clampSidebarWidthForLayout(
           ui.sidebarWidth,
-          clampedLayoutWidth,
+          sidebarLayoutWidth(currentLayoutWidth),
         )
       : SIDEBAR_WIDTH_DEFAULT,
+  );
+  const sidebarMaxWidth = $derived(
+    clampSidebarWidthForLayout(
+      SIDEBAR_WIDTH_STORAGE_MAX,
+      sidebarLayoutWidth(currentLayoutWidth),
+    ),
   );
   const vitalsAvailableWidth = $derived(
     vitalsLayoutWidth(currentLayoutWidth),
@@ -89,6 +108,12 @@
           vitalsAvailableWidth,
         )
       : VITALS_WIDTH_DEFAULT,
+  );
+  const vitalsMaxWidth = $derived(
+    clampVitalsWidthForLayout(
+      VITALS_WIDTH_STORAGE_MAX,
+      vitalsAvailableWidth,
+    ),
   );
 
   // Width left for the content column and vitals panel once the sidebar,
@@ -137,12 +162,7 @@
   function handleResize(event: SplitResizeEvent) {
     const clampedWidth = clampSidebarWidthForLayout(
       resizeStartWidth + event.delta,
-      Math.max(
-        0,
-        measureLayoutWidth() -
-          RESIZE_HANDLE_WIDTH -
-          SIDEBAR_BORDER_WIDTH,
-      ),
+      sidebarLayoutWidth(measureLayoutWidth()),
     );
 
     // Skip persisting when the clamp lands on the rendered width so a wider
@@ -300,7 +320,7 @@
     <SplitResizeHandle
       ariaLabel={m.nav_resize_sidebar()}
       ariaValueMin={SIDEBAR_WIDTH_MIN}
-      ariaValueMax={SIDEBAR_WIDTH_STORAGE_MAX}
+      ariaValueMax={sidebarMaxWidth}
       ariaValueNow={sidebarWidth}
       onResizeStart={handleResizeStart}
       onResize={handleResize}
@@ -312,18 +332,18 @@
     {@render content()}
   </main>
 
-  {#if vitals && isDesktop && ui.vitalsOpen && sessions.activeSessionId}
+  {#if vitalsVisible}
     <SplitResizeHandle
       ariaLabel={m.session_vitals_resize()}
       ariaValueMin={VITALS_WIDTH_MIN}
-      ariaValueMax={VITALS_WIDTH_STORAGE_MAX}
+      ariaValueMax={vitalsMaxWidth}
       ariaValueNow={vitalsWidth}
       onResizeStart={handleVitalsResizeStart}
       onResize={handleVitalsResize}
       onResizeEnd={handleVitalsResize}
     />
     <aside class="vitals" style:width={`${vitalsWidth}px`}>
-      {@render vitals()}
+      {@render vitals?.()}
     </aside>
   {/if}
 </div>

@@ -727,4 +727,51 @@ describe("ThreeColumnLayout", () => {
     );
     expect(ui.vitalsWidth).toBe(560);
   });
+
+  it("reserves the vitals minimum when widening the sidebar with both panes open", async () => {
+    setViewportWidth(1280);
+    ui.vitalsOpen = true;
+    sessions.activeSessionId = "session-1";
+    ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
+    ui.setVitalsWidth(320);
+
+    renderLayout(true);
+    await tick();
+
+    mockLayoutWidth(1280);
+
+    await dragHandle(
+      SIDEBAR_WIDTH_DEFAULT,
+      SIDEBAR_WIDTH_DEFAULT + 400,
+    );
+
+    // 1280 minus both 4px handles and both 1px pane borders leaves 990 for
+    // the sidebar clamp once the vitals minimum footprint (280 + 5) is
+    // reserved; the 480 content minimum caps the sidebar at 510 and the
+    // vitals panel yields to 280, keeping the content column at exactly 480.
+    expect(ui.sidebarWidth).toBe(510);
+    expect(getSidebar().style.width).toBe("510px");
+    expect(getVitalsPanel().style.width).toBe("280px");
+  });
+
+  it("keeps the content minimum when both stored pane widths are maxed", async () => {
+    setViewportWidth(1280);
+    ui.vitalsOpen = true;
+    sessions.activeSessionId = "session-1";
+    ui.setSidebarWidth(SIDEBAR_WIDTH_STORAGE_MAX);
+    ui.setVitalsWidth(560);
+
+    renderLayout(true);
+    await tick();
+
+    expect(getSidebar().style.width).toBe("510px");
+    expect(getVitalsPanel().style.width).toBe("280px");
+
+    // The separators advertise the layout-effective maxima, not the
+    // storage caps the current window cannot grant.
+    expect(getHandle()!.getAttribute("aria-valuemax")).toBe("510");
+    expect(
+      getVitalsHandle()!.getAttribute("aria-valuemax"),
+    ).toBe("280");
+  });
 });
