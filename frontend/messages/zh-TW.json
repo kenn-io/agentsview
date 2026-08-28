@@ -1261,6 +1261,7 @@
   "session_vitals_title": "分析",
   "session_vitals_subtitle": "對話指標",
   "session_vitals_close": "關閉對話分析",
+  "session_vitals_resize": "調整對話分析面板大小",
   "session_vitals_session": "對話",
   "session_vitals_repository": "儲存庫",
   "session_vitals_worktree": "工作樹",

@@ -1320,6 +1320,7 @@
   "session_vitals_title": "Analyse",
   "session_vitals_subtitle": "Signes vitaux de la session",
   "session_vitals_close": "Fermer l'analyse de la session",
+  "session_vitals_resize": "Redimensionner le panneau d'analyse de la session",
   "session_vitals_session": "Session",
   "session_vitals_repository": "Dépôt",
   "session_vitals_worktree": "Arbre de travail",

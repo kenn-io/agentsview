@@ -1263,6 +1263,7 @@
   "session_vitals_title": "분석",
   "session_vitals_subtitle": "세션 바이탈 사인",
   "session_vitals_close": "세션 분석 닫기",
+  "session_vitals_resize": "세션 분석 패널 크기 조정",
   "session_vitals_session": "세션",
   "session_vitals_repository": "저장소",
   "session_vitals_worktree": "작업 트리",

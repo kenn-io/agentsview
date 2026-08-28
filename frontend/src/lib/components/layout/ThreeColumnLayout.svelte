@@ -10,7 +10,11 @@
     SIDEBAR_WIDTH_DEFAULT,
     SIDEBAR_WIDTH_MIN,
     SIDEBAR_WIDTH_STORAGE_MAX,
+    VITALS_WIDTH_DEFAULT,
+    VITALS_WIDTH_MIN,
+    VITALS_WIDTH_STORAGE_MAX,
     clampSidebarWidthForLayout,
+    clampVitalsWidthForLayout,
     isDesktopSidebarLayout,
   } from "./sidebar-width.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -49,6 +53,7 @@
       : window.innerWidth,
   );
   let resizeStartWidth = 0;
+  let vitalsResizeStartWidth = 0;
 
   const isDesktop = $derived(
     isDesktopSidebarLayout(viewportWidth),
@@ -74,6 +79,33 @@
         )
       : SIDEBAR_WIDTH_DEFAULT,
   );
+  const vitalsAvailableWidth = $derived(
+    vitalsLayoutWidth(currentLayoutWidth),
+  );
+  const vitalsWidth = $derived(
+    isDesktop
+      ? clampVitalsWidthForLayout(
+          ui.vitalsWidth,
+          vitalsAvailableWidth,
+        )
+      : VITALS_WIDTH_DEFAULT,
+  );
+
+  // Width left for the content column and vitals panel once the sidebar,
+  // its handle, and the pane borders are spoken for.
+  function vitalsLayoutWidth(layoutWidthNow: number): number {
+    const sidebarTotalWidth = ui.sidebarOpen
+      ? sidebarWidth + RESIZE_HANDLE_WIDTH + SIDEBAR_BORDER_WIDTH
+      : 0;
+
+    return Math.max(
+      0,
+      layoutWidthNow -
+        sidebarTotalWidth -
+        RESIZE_HANDLE_WIDTH -
+        SIDEBAR_BORDER_WIDTH,
+    );
+  }
   function handleBackdropClick() {
     ui.closeSidebar();
   }
@@ -117,6 +149,22 @@
     // stored preference survives drags inside the same clamp.
     if (clampedWidth === sidebarWidth) return;
     ui.setSidebarWidth(clampedWidth);
+  }
+
+  function handleVitalsResizeStart() {
+    vitalsResizeStartWidth = vitalsWidth;
+  }
+
+  function handleVitalsResize(event: SplitResizeEvent) {
+    // The handle sits on the panel's left edge, so moving it left (negative
+    // delta) widens the panel.
+    const clampedWidth = clampVitalsWidthForLayout(
+      vitalsResizeStartWidth - event.delta,
+      vitalsLayoutWidth(measureLayoutWidth()),
+    );
+
+    if (clampedWidth === vitalsWidth) return;
+    ui.setVitalsWidth(clampedWidth);
   }
 
   $effect(() => {
@@ -265,7 +313,16 @@
   </main>
 
   {#if vitals && isDesktop && ui.vitalsOpen && sessions.activeSessionId}
-    <aside class="vitals">
+    <SplitResizeHandle
+      ariaLabel={m.session_vitals_resize()}
+      ariaValueMin={VITALS_WIDTH_MIN}
+      ariaValueMax={VITALS_WIDTH_STORAGE_MAX}
+      ariaValueNow={vitalsWidth}
+      onResizeStart={handleVitalsResizeStart}
+      onResize={handleVitalsResize}
+      onResizeEnd={handleVitalsResize}
+    />
+    <aside class="vitals" style:width={`${vitalsWidth}px`}>
       {@render vitals()}
     </aside>
   {/if}
@@ -304,7 +361,6 @@
   }
 
   .vitals {
-    width: 320px;
     flex-shrink: 0;
     border-left: 1px solid var(--border-default);
     overflow: hidden;

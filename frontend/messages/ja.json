@@ -1485,6 +1485,7 @@
   "session_vitals_title": "分析",
   "session_vitals_subtitle": "セッションのバイタルサイン",
   "session_vitals_close": "セッション分析を閉じる",
+  "session_vitals_resize": "セッション分析パネルのサイズを変更する",
   "session_vitals_session": "セッション",
   "session_vitals_repository": "リポジトリ",
   "session_vitals_worktree": "ワークツリー",

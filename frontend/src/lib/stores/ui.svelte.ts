@@ -9,7 +9,10 @@ import {
 import {
   SIDEBAR_WIDTH_DEFAULT,
   SIDEBAR_WIDTH_KEY,
+  VITALS_WIDTH_DEFAULT,
+  VITALS_WIDTH_KEY,
   clampStoredSidebarWidth,
+  clampStoredVitalsWidth,
 } from "../components/layout/sidebar-width.js";
 
 type Theme = "light" | "dark";
@@ -232,6 +235,16 @@ function readStoredSidebarWidth(): number {
   }
 }
 
+function readStoredVitalsWidth(): number {
+  try {
+    return clampStoredVitalsWidth(
+      localStorage?.getItem(VITALS_WIDTH_KEY),
+    );
+  } catch {
+    return VITALS_WIDTH_DEFAULT;
+  }
+}
+
 function readStoredBool(key: string, fallback: boolean): boolean {
   try {
     const raw = localStorage?.getItem(key);
@@ -267,6 +280,7 @@ class UIStore {
     readStoredTranscriptMode(),
   );
   sidebarWidth: number = $state(readStoredSidebarWidth());
+  vitalsWidth: number = $state(readStoredVitalsWidth());
   activeModal: ModalType = $state(null);
   /** Whether the next gist publish should be secret instead of public. */
   publishSecret: boolean = $state(false);
@@ -328,6 +342,17 @@ class UIStore {
           localStorage?.setItem(
             SIDEBAR_WIDTH_KEY,
             String(this.sidebarWidth),
+          );
+        } catch {
+          // ignore
+        }
+      });
+
+      $effect(() => {
+        try {
+          localStorage?.setItem(
+            VITALS_WIDTH_KEY,
+            String(this.vitalsWidth),
           );
         } catch {
           // ignore
@@ -530,6 +555,10 @@ class UIStore {
 
   setSidebarWidth(width: number) {
     this.sidebarWidth = clampStoredSidebarWidth(width);
+  }
+
+  setVitalsWidth(width: number) {
+    this.vitalsWidth = clampStoredVitalsWidth(width);
   }
 
   setPublishTarget(target: Exclude<PublishTarget, null>) {

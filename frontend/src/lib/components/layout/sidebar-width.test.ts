@@ -6,8 +6,14 @@ import {
   SIDEBAR_WIDTH_KEY,
   SIDEBAR_WIDTH_MIN,
   SIDEBAR_WIDTH_STORAGE_MAX,
+  VITALS_WIDTH_DEFAULT,
+  VITALS_WIDTH_KEY,
+  VITALS_WIDTH_MIN,
+  VITALS_WIDTH_STORAGE_MAX,
   clampSidebarWidthForLayout,
   clampStoredSidebarWidth,
+  clampStoredVitalsWidth,
+  clampVitalsWidthForLayout,
   isDesktopSidebarLayout,
 } from "./sidebar-width.js";
 
@@ -60,5 +66,28 @@ describe("sidebar width helpers", () => {
   it("limits sidebar width by the available layout width", () => {
     expect(clampSidebarWidthForLayout(520, 700)).toBe(220);
     expect(clampSidebarWidthForLayout(520, 900)).toBe(420);
+  });
+
+  it("exports the expected vitals width constants", () => {
+    expect(VITALS_WIDTH_KEY).toBe("agentsview-vitals-width");
+    expect(VITALS_WIDTH_DEFAULT).toBe(320);
+    expect(VITALS_WIDTH_MIN).toBe(280);
+    expect(VITALS_WIDTH_STORAGE_MAX).toBe(560);
+  });
+
+  it("clamps stored vitals widths and falls back on invalid values", () => {
+    expect(clampStoredVitalsWidth(undefined)).toBe(VITALS_WIDTH_DEFAULT);
+    expect(clampStoredVitalsWidth("not-a-number")).toBe(
+      VITALS_WIDTH_DEFAULT,
+    );
+    expect(clampStoredVitalsWidth(100)).toBe(VITALS_WIDTH_MIN);
+    expect(clampStoredVitalsWidth("400")).toBe(400);
+    expect(clampStoredVitalsWidth(999)).toBe(VITALS_WIDTH_STORAGE_MAX);
+  });
+
+  it("limits vitals width by the available layout width", () => {
+    expect(clampVitalsWidthForLayout(560, 700)).toBe(280);
+    expect(clampVitalsWidthForLayout(560, 900)).toBe(420);
+    expect(clampVitalsWidthForLayout(320, 1200)).toBe(320);
   });
 });

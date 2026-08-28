@@ -1261,6 +1261,7 @@
   "session_vitals_title": "分析",
   "session_vitals_subtitle": "会话指标",
   "session_vitals_close": "关闭会话分析",
+  "session_vitals_resize": "调整会话分析面板大小",
   "session_vitals_session": "会话",
   "session_vitals_repository": "存储库",
   "session_vitals_worktree": "工作树",

@@ -1320,6 +1320,7 @@
   "session_vitals_title": "Analysis",
   "session_vitals_subtitle": "Session vital signs",
   "session_vitals_close": "Close session analysis",
+  "session_vitals_resize": "Resize session analysis panel",
   "session_vitals_session": "Session",
   "session_vitals_repository": "Repository",
   "session_vitals_worktree": "Worktree",

@@ -15,10 +15,13 @@ import {
   SIDEBAR_WIDTH_DEFAULT,
   SIDEBAR_WIDTH_MIN,
   SIDEBAR_WIDTH_STORAGE_MAX,
+  VITALS_WIDTH_DEFAULT,
   clampSidebarWidthForLayout,
+  clampVitalsWidthForLayout,
 } from "./sidebar-width.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 
 const sidebarSnippet = createRawSnippet(() => ({
@@ -27,6 +30,10 @@ const sidebarSnippet = createRawSnippet(() => ({
 
 const contentSnippet = createRawSnippet(() => ({
   render: () => '<div data-testid="content-slot">Content</div>',
+}));
+
+const vitalsSnippet = createRawSnippet(() => ({
+  render: () => '<div data-testid="vitals-slot">Vitals</div>',
 }));
 
 // Rendered width of kit-ui's .kit-split-resize-handle.
@@ -48,12 +55,13 @@ function setViewportWidth(width: number) {
   window.dispatchEvent(new Event("resize"));
 }
 
-function renderLayout() {
+function renderLayout(withVitals = false) {
   component = mount(ThreeColumnLayout, {
     target: document.body,
     props: {
       sidebar: sidebarSnippet,
       content: contentSnippet,
+      ...(withVitals ? { vitals: vitalsSnippet } : {}),
     },
   });
   return component;
@@ -73,8 +81,20 @@ function getSidebar() {
 
 function getHandle() {
   return document.querySelector<HTMLElement>(
-    ".layout [role='separator']",
+    `[aria-label="${m.nav_resize_sidebar()}"]`,
   );
+}
+
+function getVitalsHandle() {
+  return document.querySelector<HTMLElement>(
+    `[aria-label="${m.session_vitals_resize()}"]`,
+  );
+}
+
+function getVitalsPanel() {
+  const panel = document.querySelector<HTMLElement>(".vitals");
+  expect(panel).not.toBeNull();
+  return panel!;
 }
 
 function getClampedSidebarWidthForLayout(
@@ -187,6 +207,9 @@ afterEach(() => {
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
   ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
+  ui.vitalsOpen = false;
+  ui.setVitalsWidth(VITALS_WIDTH_DEFAULT);
+  sessions.activeSessionId = null;
   sync.serverVersion = null;
   settings.loaded = false;
   settings.readOnly = false;
@@ -579,5 +602,129 @@ describe("ThreeColumnLayout", () => {
     await tick();
 
     expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
+  });
+
+  it("renders a resizable vitals panel when open with an active session", async () => {
+    setViewportWidth(1280);
+    ui.vitalsOpen = true;
+    sessions.activeSessionId = "session-1";
+
+    renderLayout(true);
+    await tick();
+
+    expect(getVitalsHandle()).not.toBeNull();
+    expect(getVitalsPanel().style.width).toBe(
+      `${VITALS_WIDTH_DEFAULT}px`,
+    );
+  });
+
+  it("dragging the vitals handle left widens the panel and persists the width", async () => {
+    setViewportWidth(1280);
+    ui.vitalsOpen = true;
+    sessions.activeSessionId = "session-1";
+    ui.setVitalsWidth(VITALS_WIDTH_DEFAULT);
+
+    renderLayout(true);
+    await tick();
+
+    mockLayoutWidth(1280);
+
+    const handle = getVitalsHandle();
+    expect(handle).not.toBeNull();
+
+    handle!.dispatchEvent(pointerEvent("pointerdown", 900));
+    handle!.dispatchEvent(pointerEvent("pointermove", 820));
+    await tick();
+
+    expect(ui.vitalsWidth).toBe(VITALS_WIDTH_DEFAULT + 80);
+    expect(getVitalsPanel().style.width).toBe(
+      `${VITALS_WIDTH_DEFAULT + 80}px`,
+    );
+
+    handle!.dispatchEvent(pointerEvent("pointerup", 820));
+    await tick();
+
+    expect(ui.vitalsWidth).toBe(VITALS_WIDTH_DEFAULT + 80);
+  });
+
+  it("resizes the vitals panel from arrow keys, widening toward the content", async () => {
+    setViewportWidth(1280);
+    ui.vitalsOpen = true;
+    sessions.activeSessionId = "session-1";
+    ui.setVitalsWidth(VITALS_WIDTH_DEFAULT);
+
+    renderLayout(true);
+    await tick();
+
+    mockLayoutWidth(1280);
+
+    const handle = getVitalsHandle();
+    expect(handle).not.toBeNull();
+
+    handle!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowLeft",
+      }),
+    );
+    await tick();
+
+    expect(ui.vitalsWidth).toBe(
+      VITALS_WIDTH_DEFAULT + KEYBOARD_RESIZE_STEP,
+    );
+
+    handle!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "ArrowRight",
+      }),
+    );
+    await tick();
+
+    expect(ui.vitalsWidth).toBe(VITALS_WIDTH_DEFAULT);
+  });
+
+  it("clamps the vitals panel to the layout and keeps a wider stored preference", async () => {
+    const layoutWidth = 1100;
+    // Space left of the vitals panel: the sidebar, its handle, and both
+    // 1px pane borders plus the vitals handle.
+    const vitalsAvailable =
+      layoutWidth -
+      (SIDEBAR_WIDTH_DEFAULT +
+        RESIZE_HANDLE_WIDTH +
+        SIDEBAR_BORDER_WIDTH) -
+      RESIZE_HANDLE_WIDTH -
+      SIDEBAR_BORDER_WIDTH;
+    const expectedWidth = clampVitalsWidthForLayout(
+      560,
+      vitalsAvailable,
+    );
+
+    setViewportWidth(1280);
+    ui.vitalsOpen = true;
+    sessions.activeSessionId = "session-1";
+    ui.setVitalsWidth(560);
+    mockLayoutWidthOnRender(layoutWidth);
+
+    renderLayout(true);
+    await tick();
+
+    expect(getVitalsPanel().style.width).toBe(
+      `${expectedWidth}px`,
+    );
+
+    const handle = getVitalsHandle();
+    expect(handle).not.toBeNull();
+
+    handle!.dispatchEvent(pointerEvent("pointerdown", 900));
+    handle!.dispatchEvent(pointerEvent("pointermove", 780));
+    await tick();
+    handle!.dispatchEvent(pointerEvent("pointerup", 780));
+    await tick();
+
+    expect(getVitalsPanel().style.width).toBe(
+      `${expectedWidth}px`,
+    );
+    expect(ui.vitalsWidth).toBe(560);
   });
 });
