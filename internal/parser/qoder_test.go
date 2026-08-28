@@ -410,6 +410,8 @@ func TestQoderDefaultDirs(t *testing.T) {
 	// Legacy export paths retained.
 	assert.Contains(t, dirs, ".qoder/projects")
 	assert.Contains(t, dirs, ".qoderwork/projects")
+	// Qoder CLI CN stores the same project-scoped layout under a separate root.
+	assert.Contains(t, dirs, ".qoder-cn/projects")
 	// SharedClientCache paths for the three target platforms.
 	assert.Contains(t, dirs,
 		"Library/Application Support/Qoder/SharedClientCache/cli/projects")

@@ -1848,7 +1848,12 @@ add an archived or maintained mirror without replacing the original identity.
   `c40d46d16a32295da63221629293a000b0675df2` and inspect its pinned
   [Qoder source adapter](https://github.com/chenhg5/tape/blob/c40d46d16a32295da63221629293a000b0675df2/internal/source/qoder/qoder.go),
   which documents the transcript/metadata pair and shared Qwen `ChatRecord`
-  shape.
+  shape. Agentsview issue [#1405](https://github.com/kenn-io/agentsview/issues/1405),
+  checked 2026-08-28, reports Qoder CLI CN 1.1.21 storing the same
+  project-scoped JSONL family under `~/.qoder-cn/projects/<project-slug>/`,
+  including `<session-id>.jsonl`. This is a user-reported local observation,
+  not producer-side evidence, and does not establish storage behavior for all
+  Qoder CN releases or platforms.
 - **Usage and cost:** The consumed files provide transcript and model/session
   metadata but no authoritative token, cache, reasoning, credit, or USD events
   to Agentsview.

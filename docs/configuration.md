@@ -296,7 +296,7 @@ Omitting the key keeps its default directories.
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                   |
 | Positron Assistant    | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
 | QClaw                 | `~/.qclaw/assets/static/agents/`                                                 | JSONL per session                                                                                                               |
-| Qoder                 | Legacy export roots plus platform-specific `SharedClientCache` (see below)       | JSONL project transcripts plus sidecar metadata                                                                                 |
+| Qoder                 | Legacy export roots, Qoder CLI CN, plus platform-specific `SharedClientCache` (see below) | JSONL project transcripts plus sidecar metadata                                                                                 |
 | Qwen Code             | `~/.qwen/projects/`                                                              | JSONL per session                                                                                                               |
 | QwenPaw               | `~/.copaw/workspaces/`                                                           | JSON session files                                                                                                              |
 | Reasonix              | `~/.reasonix/` and `~/AppData/Roaming/reasonix/`                                 | JSONL sessions plus `.jsonl.meta` sidecars                                                                                      |
@@ -326,7 +326,10 @@ session store, so open the current Prime Agent once before syncing a legacy
 archive with AgentsView.
 
 **Qoder default directories** include the legacy `~/.qoder/projects/` and
-`~/.qoderwork/projects/` export roots plus the current IDE store:
+`~/.qoderwork/projects/` export roots, the Qoder CLI CN store, and the current
+IDE store:
+
+- **Qoder CLI CN:** `~/.qoder-cn/projects/`
 
 - **macOS:**
   `~/Library/Application Support/Qoder/SharedClientCache/cli/projects/`
