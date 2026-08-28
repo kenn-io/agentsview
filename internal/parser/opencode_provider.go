@@ -611,10 +611,15 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 			if !ok {
 				return nil
 			}
-			callbackErr = yield(source)
-			if callbackErr == nil && storageIDs != nil {
-				callbackErr = storageIDs.put(ctx, meta.SessionID, meta.SessionID, false)
+			if storageIDs != nil {
+				if err := storageIDs.put(
+					ctx, meta.SessionID, meta.SessionID, false,
+				); err != nil {
+					membershipErr = err
+					return err
+				}
 			}
+			callbackErr = yield(source)
 			return callbackErr
 		})
 		if callbackErr != nil {
@@ -1390,7 +1395,7 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 			storageIDs = s.spec.storageIDs(root)
 		}
 		for _, candidate := range s.spec.resolve(root).DBPaths {
-			if candidate == dbPath {
+			if reconciliationScopeSamePath(candidate, dbPath) {
 				break
 			}
 			metas, err := s.spec.listSQLite(candidate)
