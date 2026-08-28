@@ -9,13 +9,15 @@ accounts, everything local.
 
 ## Install
 
-### macOs/ Linux
+**macOS and Linux:**
+
 ```bash
 curl -fsSL https://agentsview.io/install.sh | bash
 ```
 
-### Windows
-```bash
+**Windows (PowerShell):**
+
+```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://agentsview.io/install.ps1 | iex"
 ```
 
@@ -255,7 +257,8 @@ compatibility and now also reports cost estimates.
 For one exact non-interactive `claude -p` or `codex exec --json` execution in
 CI, use `agentsview capture run`. It preserves the child streams and exit
 outcome, writes a separate versioned usage result, and starts no daemon, web
-server, or watcher. See [One-shot CI capture](https://agentsview.io/one-shot-capture/).
+server, or watcher. See
+[One-shot CI capture](https://agentsview.io/one-shot-capture/).
 
 ## Session Stats
 
