@@ -278,7 +278,7 @@ func runCurrent(
 
 // storeCatalog reconciles a fetched catalog with the stored table (see
 // pricing.Catalog.Reconcile) and writes rows, retirements, and the
-// OpenRouter ownership sentinel in one transaction, so a crash or a
+// online-marketplace ownership sentinel in one transaction, so a crash or a
 // concurrent push never sees rows without the metadata that retires them.
 //
 // The sentinel and stored patterns are read before that transaction, and
@@ -300,7 +300,9 @@ func storeCatalog(database *db.DB, catalog pricing.Catalog) error {
 			return err
 		}
 	}
-	if len(catalog.LiteLLM) == 0 && len(catalog.OpenRouter) == 0 {
+	if len(catalog.LiteLLM) == 0 &&
+		len(catalog.OpenRouter) == 0 &&
+		len(catalog.OrcaRouter) == 0 {
 		return nil
 	}
 	value, err := database.GetPricingMeta(pricing.OpenRouterModelsMetaKey)

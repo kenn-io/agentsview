@@ -29,9 +29,13 @@ func TestFetchCatalogDegradesWhenOpenRouterFails(t *testing.T) {
 	fetchOpenRouter := func(context.Context) ([]ModelPricing, error) {
 		return nil, openrouterErr
 	}
+	fetchOrcaRouter := func(context.Context) ([]ModelPricing, error) {
+		return nil, nil
+	}
 
 	catalog, err := fetchCatalog(
 		context.Background(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
+		fetchOrcaRouter,
 	)
 
 	assert.ErrorIs(t, err, openrouterErr)
@@ -48,13 +52,46 @@ func TestFetchCatalogFailsWhenLiteLLMFails(t *testing.T) {
 		t.Fatal("openrouter must not be fetched after a litellm failure")
 		return nil, nil
 	}
+	fetchOrcaRouter := func(context.Context) ([]ModelPricing, error) {
+		t.Fatal("orcarouter must not be fetched after a litellm failure")
+		return nil, nil
+	}
 
 	catalog, err := fetchCatalog(
 		context.Background(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
+		fetchOrcaRouter,
 	)
 
 	assert.ErrorIs(t, err, litellmErr)
 	assert.Equal(t, Catalog{}, catalog)
+}
+
+func TestFetchCatalogDegradesWhenOrcaRouterFails(t *testing.T) {
+	litellm := []ModelPricing{
+		{ModelPattern: "acme/model", InputPerMTok: rate("1")},
+	}
+	openrouter := []ModelPricing{
+		{ModelPattern: "openai/gpt-x", InputPerMTok: rate("4")},
+	}
+	fetchLiteLLM := func(context.Context) ([]ModelPricing, error) {
+		return litellm, nil
+	}
+	fetchOpenRouter := func(context.Context) ([]ModelPricing, error) {
+		return openrouter, nil
+	}
+	orcaRouterErr := errors.New("orcarouter down")
+	fetchOrcaRouter := func(context.Context) ([]ModelPricing, error) {
+		return nil, orcaRouterErr
+	}
+
+	catalog, err := fetchCatalog(
+		context.Background(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
+		fetchOrcaRouter,
+	)
+
+	assert.ErrorIs(t, err, orcaRouterErr)
+	assert.Equal(t, Catalog{LiteLLM: litellm, OpenRouter: openrouter}, catalog,
+		"LiteLLM and OpenRouter rows survive an OrcaRouter outage")
 }
 
 func TestCatalogReconcile(t *testing.T) {
@@ -100,6 +137,35 @@ func TestCatalogReconcile(t *testing.T) {
 	price, ok = Resolve(byPattern, "only-openrouter")
 	require.True(t, ok, "OpenRouter-only model resolves by bare name")
 	assert.Equal(t, rate("7"), price.InputPerMTok)
+}
+
+func TestCatalogReconcileOrcaRouterOutrankedByOpenRouter(t *testing.T) {
+	c := Catalog{
+		OpenRouter: []ModelPricing{
+			{ModelPattern: "openai/gpt-x", InputPerMTok: rate("4")},
+			{ModelPattern: "acme/only-openrouter", InputPerMTok: rate("7")},
+		},
+		OrcaRouter: []ModelPricing{
+			// Same canonical model as an OpenRouter row: OpenRouter wins.
+			{ModelPattern: "openai/gpt-x", InputPerMTok: rate("9")},
+			// Same canonical model under a provider prefix: covered.
+			{ModelPattern: "openai/GPT-X", InputPerMTok: rate("8")},
+			// Only OrcaRouter lists this model: it is stored and owned.
+			{ModelPattern: "orcarouter/fusion", InputPerMTok: rate("3")},
+		},
+	}
+
+	prices, owned, retired := c.Reconcile(nil, nil)
+
+	assert.Equal(t, []ModelPricing{
+		{ModelPattern: "openai/gpt-x", InputPerMTok: rate("4")},
+		{ModelPattern: "acme/only-openrouter", InputPerMTok: rate("7")},
+		{ModelPattern: "orcarouter/fusion", InputPerMTok: rate("3")},
+	}, prices)
+	assert.Equal(t, []string{
+		"acme/only-openrouter", "openai/gpt-x", "orcarouter/fusion",
+	}, owned)
+	assert.Empty(t, retired)
 }
 
 func TestCatalogReconcileRetiresShadowedPrevious(t *testing.T) {

@@ -28,24 +28,33 @@ func FetchOpenRouterPricingContext(
 func fetchOpenRouterPricing(
 	ctx context.Context, client *http.Client, url string,
 ) ([]ModelPricing, error) {
+	return fetchPricingCatalog(ctx, client, url)
+}
+
+// fetchPricingCatalog downloads an OpenRouter-shaped model catalog at url and
+// parses it into ModelPricing entries. OpenRouter and OrcaRouter publish the
+// same envelope and price fields, so the two sources share this fetch path.
+func fetchPricingCatalog(
+	ctx context.Context, client *http.Client, url string,
+) ([]ModelPricing, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("creating openrouter pricing request: %w", err)
+		return nil, fmt.Errorf("creating catalog pricing request: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching openrouter pricing: %w", err)
+		return nil, fmt.Errorf("fetching model catalog pricing: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf(
-			"fetching openrouter pricing: status %d", resp.StatusCode,
+			"fetching model catalog pricing: status %d", resp.StatusCode,
 		)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading openrouter response: %w", err)
+		return nil, fmt.Errorf("reading model catalog response: %w", err)
 	}
 	return ParseOpenRouterPricing(data)
 }

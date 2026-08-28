@@ -246,8 +246,8 @@ func (r *PricingResolver) Resolve(
 
 // ResolveAt applies custom pricing matched from the reported or canonical
 // model, then the timestamp-aware GenAI Prices document, then the existing
-// LiteLLM/OpenRouter rows. An exact custom rate for the reported model still
-// takes precedence over caller-supplied canonicalization.
+// LiteLLM/OpenRouter/OrcaRouter rows. An exact custom rate for the reported
+// model still takes precedence over caller-supplied canonicalization.
 func (r *PricingResolver) ResolveAt(
 	reportedModel, canonicalModel string, timestamp time.Time,
 ) (string, PricingLookup) {

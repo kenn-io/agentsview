@@ -229,6 +229,18 @@ without a redistribution decision. Neither the API reference nor the official
 to the catalog. That is not proof that redistribution is forbidden; it means
 this survey found no affirmative open license comparable with MIT or CC BY 4.0.
 
+## OrcaRouter
+
+The unauthenticated live
+[`GET /v1/models`](https://api.orcarouter.ai/v1/models) returned 204 models on
+2026-08-28. It uses the same envelope and price fields as OpenRouter
+(`{"data": [...]}` with per-token `prompt`/`completion` strings), so the
+existing OpenRouter parser handles it unchanged. Prices describe OrcaRouter
+routes, not necessarily first-party list prices. It omits `architecture`
+modality, which the parser treats as text output. The catalog is a live API
+without an attached open-data license, so like OpenRouter it is unsuitable as
+an embedded snapshot without a redistribution decision.
+
 ## Helicone
 
 At audited `main` commit
