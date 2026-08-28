@@ -838,6 +838,12 @@ func parsePositAssistantConversation(
 	if len(messages) == 0 && len(events) == 0 {
 		return nil, nil, nil, nil
 	}
+	for _, event := range events {
+		eventTime, err := time.Parse(time.RFC3339Nano, event.OccurredAt)
+		if err == nil && eventTime.After(endedAt) {
+			endedAt = eventTime
+		}
+	}
 
 	sess := &ParsedSession{
 		ID:               sessionID,

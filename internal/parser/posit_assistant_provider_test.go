@@ -847,6 +847,8 @@ func TestPositAssistantProviderPreservesUsageOnlySession(t *testing.T) {
 	assert.Equal(t, 400, result.UsageEvents[0].InputTokens)
 	assert.Equal(t, 10, result.UsageEvents[0].OutputTokens)
 	assert.Equal(t, "2025-01-01T00:05:00Z", result.UsageEvents[0].OccurredAt)
+	assert.Equal(t, "2025-01-01T00:05:00Z",
+		result.Session.EndedAt.Format(time.RFC3339Nano))
 }
 
 func TestPositAssistantProviderFingerprintTracksUsageEventsSidecar(t *testing.T) {
