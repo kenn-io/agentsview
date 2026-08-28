@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	// Version 4 adds cache_creation_1h_tokens to version 3's historical-rate
-	// facts and prices the 1h-TTL cache-write subset at the catalog's 1h rate.
-	usageCacheFormatVersion = 4
+	// Version 5 rebuilds version 4 facts and rollups so Posit Assistant
+	// sidecar events use request-scoped pricing semantics.
+	usageCacheFormatVersion = 5
 	usageCacheApplicationID = 0x41565543
 	usageCacheKind          = "agentsview-usage-facts"
 
