@@ -1,9 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// Spec for the Session Vital Signs panel. Replaces the old
-// ActivityMinimap spec — the minimap component is gone, and
-// the right column now shows the four-section vital-signs
-// panel rendered by SessionVitals.svelte.
+// Spec for the Session Vital Signs panel. The right column combines session
+// context, category totals, the interactive timing overview, and call detail.
 //
 // The fixture session `test-session-duration-showcase` is
 // seeded by cmd/testfixture and exercised by scripts/e2e-server.sh.
@@ -47,12 +45,11 @@ test.describe("Session Vital Signs", () => {
   test("renders all four sections", async ({ page }) => {
     await gotoShowcase(page);
 
-    // Section labels are not semantic headings, so match the compact
-    // section-header rows. Calls uses a disclosure button while the other
-    // sections keep text-only labels.
+    // Calls uses a disclosure button; the timing overview owns its own compact
+    // header because it also hosts selection and zoom actions.
     const headers = page
-      .locator(".v-section .v-h")
-      .filter({ hasText: /(Session|Time spent|Timeline|Calls)/ });
+      .locator(".v-section .v-h, .v-section .overview-header")
+      .filter({ hasText: /(Session|Time spent|Timing overview|Calls)/ });
     await expect(headers).toHaveCount(4);
 
     await expect(
@@ -62,10 +59,19 @@ test.describe("Session Vital Signs", () => {
       page.locator(".v-section .v-h", { hasText: "Time spent" }),
     ).toBeVisible();
     await expect(
-      page.locator(".v-section .v-h", { hasText: "Timeline" }),
+      page.locator(".overview-header", { hasText: "Timing overview" }),
     ).toBeVisible();
     await expect(
       page.locator(".v-section .v-h", { hasText: "Calls" }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-overview-span][data-lane="input"]').first(),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-overview-span][data-lane="model"]').first(),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-overview-span][data-lane="tools"]').first(),
     ).toBeVisible();
   });
 

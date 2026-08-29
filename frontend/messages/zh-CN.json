@@ -1164,16 +1164,6 @@
       }
     }
   ],
-  "activity_lane_activity": "活动",
-  "activity_lane_message_count": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "{countLabel} 条消息"
-      }
-    }
-  ],
   "session_recall_title": "记忆",
   "session_recall_loading": "正在加载提炼记忆…",
   "session_recall_empty": "此会话没有提炼记忆。",
@@ -1280,9 +1270,13 @@
   "session_vitals_time_spent": "耗时分布",
   "session_vitals_clear_category_filter": "清除分类筛选",
   "session_vitals_completed_turns_hint": "已完成回合 · 点击高亮显示",
-  "session_vitals_timeline": "时间线",
-  "session_vitals_click_marks_to_scroll": "点击标记滚动",
-  "session_vitals_jump_to_turn": "跳转到 {time} 的 {category} 回合",
+  "session_vitals_timeline": "时序概览",
+  "session_vitals_timeline_input": "输入",
+  "session_vitals_timeline_model": "模型",
+  "session_vitals_timeline_tools": "工具",
+  "session_vitals_timeline_hint": "拖动聚焦 · 滚轮缩放",
+  "session_vitals_timeline_reset_view": "重置视图",
+  "session_vitals_timeline_load_earlier": "加载更早消息",
   "session_vitals_calls": "调用",
   "session_vitals_calls_summary": [
     {

@@ -25,7 +25,6 @@
   import { isSystemMessage } from "../../utils/messages.js";
   import { resolveMessageLayout } from "../../utils/message-layout.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
-  import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
   import {
     getAlignedOffsetScrollAlign,
@@ -159,32 +158,6 @@
     };
   }
 
-  function publishVisibleTimestamp() {
-    const v = virtualizer.instance;
-    if (!v) return;
-    const items = v.getVirtualItems();
-    // Skip overscanned items above the viewport.
-    const scrollTop = v.scrollOffset ?? 0;
-    for (const vi of items) {
-      if (vi.end <= scrollTop) continue;
-      const item =
-        displayItemsAsc[
-          ui.sortNewestFirst
-            ? displayItemsAsc.length - 1 - vi.index
-            : vi.index
-        ];
-      if (!item) continue;
-      const ts =
-        item.kind === "message"
-          ? item.message.timestamp
-          : item.timestamp;
-      if (ts) {
-        sessionActivity.firstVisibleTimestamp = ts;
-        return;
-      }
-    }
-    sessionActivity.firstVisibleTimestamp = null;
-  }
 
   function recordVisibleProgress() {
     const v = virtualizer.instance;
@@ -314,16 +287,6 @@
     return ordinals;
   }
 
-  // Recompute visible timestamp when minimap opens or
-  // message content changes (e.g. SSE reload).
-  $effect(() => {
-    if (ui.vitalsOpen) {
-      // Track message array so the effect re-runs after
-      // content changes while the minimap is open.
-      void messages.messages.length;
-      publishVisibleTimestamp();
-    }
-  });
 
   let latestLoadedOrdinal = $derived(
     baseMessages[baseMessages.length - 1]?.ordinal ?? null,
@@ -422,9 +385,6 @@
         }
       }
 
-      if (ui.vitalsOpen) {
-        publishVisibleTimestamp();
-      }
 
       recordVisibleProgress();
 

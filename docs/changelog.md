@@ -18,6 +18,12 @@ description: Release history for AgentsView
   interface, so additional JSONL agents can opt in without repeating per-agent
   sync switches.
 
+- Replace the session activity lanes with an interactive **Input / Model /
+  Tools** timing overview. It prefers recorded tool execution events, marks
+  turn-level fallbacks as approximate, supports range focus and wheel zoom,
+  jumps directly to transcript messages, and loads omitted earlier history
+  without fabricating its timing.
+
 **Bug fixes**
 
 - Preserve Antigravity CLI 1.1.5 generation usage and Low/Medium/High model

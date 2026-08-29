@@ -46,7 +46,6 @@
   import SessionList from "./lib/components/sidebar/SessionList.svelte";
   import MessageList from "./lib/components/content/MessageList.svelte";
   import SessionVitals from "./lib/components/content/SessionVitals.svelte";
-  import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
   import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
   import CommandPalette from "./lib/components/command-palette/CommandPalette.svelte";
   import AboutModal from "./lib/components/modals/AboutModal.svelte";
@@ -134,7 +133,6 @@
       if (route !== "sessions") {
         sessions.cancelRouteReads();
         messages.cancelInFlight();
-        sessionActivity.cancelInFlight();
         sessionTiming.cancelInFlight();
         pins.cancelSessionPinsRead();
         sync.unwatchSession();
@@ -173,11 +171,6 @@
             messages.reload();
             sessions.refreshActiveSession();
             sessions.loadChildSessions(id);
-            if (ui.vitalsOpen) {
-              sessionActivity.reload(id);
-            } else {
-              sessionActivity.invalidate();
-            }
           },
           (t) => {
             sessionTiming.applyEvent(t);
@@ -185,7 +178,6 @@
         );
         pins.loadForSession(id);
       } else {
-        sessionActivity.clear();
         sessionTiming.reset();
         messages.clear();
         sessions.childSessions = new Map();

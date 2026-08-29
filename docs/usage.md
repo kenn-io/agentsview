@@ -877,10 +877,15 @@ It has five stacked sections when experimental Recall is available:
   `Glob`, `Task`, `Tool`, `Other`, plus a `Mixed` bucket for
   turns split across categories). Click a row to filter the rest
   of the panel to that category.
-- **Timeline** — turns lane plus per-category lanes plus an
-  activity lane, with a legend. Hover a turn segment to see its
-  primary category and duration (e.g. `Task · 2m`); click to
-  scroll the conversation to that turn.
+- **Timing overview** — a shared wall-clock projection with **Input**, **Model**,
+  and **Tools** lanes. Input events render as point markers; model spans cover
+  the interval from the preceding visible message to the recorded assistant
+  message; tool spans prefer execution start/completion events and use striped
+  turn-level bounds when exact call timing is unavailable. Hover for clock and
+  duration detail, click a span to jump to its transcript message, drag a range
+  to focus the first intersecting record, and use the wheel to zoom. An ellipsis
+  at the left edge loads one older message page without inventing timing for an
+  unloaded prefix.
 - **Calls** — chronological list of tool calls with horizontal
   duration bars. Parallel `tool_use` runs are bracketed as a
   single group. Call details start collapsed for quicker transcript navigation.
