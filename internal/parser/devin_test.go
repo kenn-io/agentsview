@@ -529,6 +529,92 @@ func TestParseDevinSessionMissingTranscriptFallsBackToMessageNodes(t *testing.T)
 	assert.Equal(t, ParsedToolResult{ToolUseID: "call-1", ContentLength: len("package main\n"), ContentRaw: `"package main\n"`}, msgs[2].ToolResults[0])
 }
 
+func TestParseDevinSessionSupportsSessionsTableWithoutMainChainID(t *testing.T) {
+	tests := []struct {
+		name       string
+		transcript string
+		wantFirst  string
+	}{
+		{
+			name: "exported transcript",
+			transcript: `{
+				"steps":[
+					{"source":"user","timestamp":"2024-01-01T10:00:01Z","message":"legacy transcript"},
+					{"source":"agent","timestamp":"2024-01-01T10:00:02Z","message":"answer"}
+				]
+			}`,
+			wantFirst: "legacy transcript",
+		},
+		{
+			name:      "message nodes fallback",
+			wantFirst: "legacy message nodes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const sessionID = "legacy-session"
+			root := t.TempDir()
+			cliDir := filepath.Join(root, "cli")
+			transcriptsDir := filepath.Join(cliDir, "transcripts")
+			require.NoError(t, os.MkdirAll(transcriptsDir, 0o755))
+			dbPath := filepath.Join(cliDir, devinDBFilename)
+
+			db, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			_, err = db.Exec(`
+				CREATE TABLE sessions (
+					id TEXT PRIMARY KEY,
+					title TEXT,
+					working_directory TEXT,
+					model TEXT,
+					created_at INTEGER,
+					last_activity_at INTEGER,
+					hidden INTEGER NOT NULL DEFAULT 0
+				);
+				CREATE TABLE message_nodes (
+					row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+					session_id TEXT NOT NULL,
+					node_id INTEGER NOT NULL,
+					parent_node_id INTEGER,
+					chat_message TEXT NOT NULL,
+					created_at INTEGER NOT NULL
+				);
+				INSERT INTO sessions (
+					id, title, working_directory, model,
+					created_at, last_activity_at
+				) VALUES (
+					'legacy-session', 'Legacy session', '/tmp/legacy',
+					'legacy-model', 1704103200, 1704103202
+				);
+			`)
+			require.NoError(t, err)
+			if tt.transcript == "" {
+				_, err = db.Exec(`
+					INSERT INTO message_nodes (
+						session_id, node_id, chat_message, created_at
+					) VALUES
+						('legacy-session', 1, '{"role":"user","content":"legacy message nodes"}', 1704103201),
+						('legacy-session', 2, '{"role":"assistant","content":"answer"}', 1704103202)
+				`)
+				require.NoError(t, err)
+			} else {
+				require.NoError(t, os.WriteFile(
+					filepath.Join(transcriptsDir, sessionID+".json"),
+					[]byte(tt.transcript), 0o644,
+				))
+			}
+			require.NoError(t, db.Close())
+
+			sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			require.Len(t, msgs, 2)
+			assert.Equal(t, tt.wantFirst, sess.FirstMessage)
+		})
+	}
+}
+
 func TestParseDevinSessionMessageNodesSumTokenMetricsAlongMainChain(t *testing.T) {
 	const sessionID = "session-node-metrics"
 	fixture := newDevinTestFixture(t, devinSessionRow{

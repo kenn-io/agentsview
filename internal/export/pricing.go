@@ -311,8 +311,16 @@ func (r *PricingResolver) resolveGenAI(
 	if pricedModel == "" {
 		pricedModel = reportedModel
 	}
+	baseModel := pricingpkg.EffortTierBaseModel(pricedModel)
+	if baseModel != pricedModel && baseModel != reportedModel &&
+		baseModel != canonicalModel {
+		models = append(models, modelAlias{
+			lookup: baseModel,
+			priced: pricedModel,
+		})
+	}
 	if fallbackModel != "" && fallbackModel != reportedModel &&
-		fallbackModel != canonicalModel {
+		fallbackModel != canonicalModel && fallbackModel != baseModel {
 		models = append(models, modelAlias{
 			lookup: fallbackModel,
 			priced: pricedModel,

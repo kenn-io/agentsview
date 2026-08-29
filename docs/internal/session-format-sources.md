@@ -1464,7 +1464,9 @@ add an archived or maintained mirror without replacing the original identity.
   `cache_creation_tokens`, any of which may be JSON null). `message_nodes` is
   a forest, so totals are summed only along the main chain
   (`sessions.main_chain_id` walked up via `parent_node_id`); summing every row
-  double-counts retries and edits. Verified against a live Devin CLI database.
+  double-counts retries and edits. Older databases that predate
+  `sessions.main_chain_id` keep that field invalid and fall back to all
+  message nodes in creation order. Verified against a live Devin CLI database.
   Each message-node request is attributed to the concrete model at
   `metadata.generation_model` (falling back to the session-level
   `sessions.model` alias), because the session column is often empty or a

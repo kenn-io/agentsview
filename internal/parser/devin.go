@@ -148,7 +148,8 @@ func getDevinSessionMeta(
 	var createdAt int64
 	var lastActivity sql.NullInt64
 	var updatedAt int64
-	err = db.QueryRow(`
+	const (
+		queryPrefix = `
 		SELECT id,
 		       COALESCE(title, ''),
 		       COALESCE(working_directory, ''),
@@ -156,20 +157,33 @@ func getDevinSessionMeta(
 		       COALESCE(created_at, 0),
 		       last_activity_at,
 		       COALESCE(last_activity_at, created_at, 0),
-		       main_chain_id
+		       `
+		querySuffix = `
 		  FROM sessions
 		 WHERE COALESCE(hidden, 0) <> 1
 		   AND id = ?
-	`, rawSessionID).Scan(
-		&meta.RawSessionID,
-		&meta.Title,
-		&meta.CWD,
-		&meta.Model,
-		&createdAt,
-		&lastActivity,
-		&updatedAt,
-		&meta.MainChainID,
+	`
+		currentQuery = queryPrefix + "main_chain_id" + querySuffix
+		legacyQuery  = queryPrefix + "NULL" + querySuffix
 	)
+	query := func(statement string) error {
+		return db.QueryRow(statement, rawSessionID).Scan(
+			&meta.RawSessionID,
+			&meta.Title,
+			&meta.CWD,
+			&meta.Model,
+			&createdAt,
+			&lastActivity,
+			&updatedAt,
+			&meta.MainChainID,
+		)
+	}
+	err = query(currentQuery)
+	if err != nil && err != sql.ErrNoRows &&
+		devinSessionsTablePredatesMainChainID(db) {
+		meta.MainChainID = sql.NullInt64{}
+		err = query(legacyQuery)
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -185,6 +199,28 @@ func getDevinSessionMeta(
 	meta.UpdatedAt = devinUnixSec(updatedAt)
 	meta.FileMtime = devinFileMtimeNS(updatedAt)
 	return &meta, nil
+}
+
+// devinSessionsTablePredatesMainChainID distinguishes the known legacy schema
+// from other query failures without relying on SQLite's error text. It runs
+// only after the current metadata query fails, so current databases keep the
+// single-query read path.
+func devinSessionsTablePredatesMainChainID(db *sql.DB) bool {
+	var tableExists, columnExists int
+	err := db.QueryRow(`
+		SELECT EXISTS (
+		           SELECT 1
+		             FROM sqlite_schema
+		            WHERE type = 'table'
+		              AND name = 'sessions'
+		       ),
+		       EXISTS (
+		           SELECT 1
+		             FROM pragma_table_info('sessions')
+		            WHERE name = 'main_chain_id'
+		       )
+	`).Scan(&tableExists, &columnExists)
+	return err == nil && tableExists == 1 && columnExists == 0
 }
 
 // devinMaxEpochSec is the largest epoch-second value whose nanosecond form
