@@ -278,8 +278,8 @@ func extractProjectFromCwdWithBranchPolicy(
 	if discoverFilesystem && filepath.IsAbs(cleaned) &&
 		!isForeignOSPath(cwd, cleaned, winPath) &&
 		probeGitRootForCwd(cleaned) {
-		if root, canonicalLinked := findGitRepoRoot(cleaned); root != "" &&
-			(canonicalLinked || anchoredProject == "") {
+		if root, linkedToRecordedPath := findGitRepoRoot(cleaned); root != "" &&
+			(linkedToRecordedPath || anchoredProject == "") {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
 				return ""
@@ -687,7 +687,7 @@ func findGitRepoRoot(cwd string) (string, bool) {
 			sibDir = parent
 		}
 		if root := repoRootFromSiblings(sibDir, cwd); root != "" {
-			return root, true
+			return root, deletedChildIsWorktree(sibDir, cwd, root)
 		}
 	}
 

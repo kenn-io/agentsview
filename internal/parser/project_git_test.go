@@ -117,6 +117,68 @@ func TestExtractProjectFromCwd_Git(t *testing.T) {
 	}
 }
 
+func TestExtractProjectFromCwd_MissingAnchoredPathRequiresAssociatedWorktree(
+	t *testing.T,
+) {
+	tests := []struct {
+		name               string
+		containerParts     []string
+		missingParts       []string
+		associatedWorktree string
+		want               string
+	}{
+		{
+			name:           "Superset",
+			containerParts: []string{".superset", "worktrees", "sample-service"},
+			missingParts:   []string{"missing-branch", "internal"},
+			want:           "sample_service",
+		},
+		{
+			name:           "Codex",
+			containerParts: []string{".codex", "worktrees", "worktree-id"},
+			missingParts:   []string{"sample-service", "internal"},
+			want:           "sample_service",
+		},
+		{
+			name:               "SupersetAssociated",
+			containerParts:     []string{".superset", "worktrees", "sample-service"},
+			missingParts:       []string{"missing-branch", "internal"},
+			associatedWorktree: "missing-branch",
+			want:               "canonical_repo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			canonicalRepo := filepath.Join(root, "canonical-repo")
+			worktreeGitDir := filepath.Join(
+				canonicalRepo, ".git", "worktrees", "existing",
+			)
+			container := filepath.Join(
+				append([]string{root}, tt.containerParts...)...,
+			)
+			sibling := filepath.Join(container, "existing")
+			mustMkdirAll(t, sibling)
+			mustMkdirAll(t, worktreeGitDir)
+			mustWriteFile(t, filepath.Join(sibling, ".git"),
+				"gitdir: "+worktreeGitDir+"\n")
+			mustWriteFile(t, filepath.Join(worktreeGitDir, "commondir"), "../..\n")
+			if tt.associatedWorktree != "" {
+				mustMkdirAll(t, filepath.Join(
+					canonicalRepo, ".git", "worktrees", tt.associatedWorktree,
+				))
+			}
+
+			cwd := filepath.Join(
+				append([]string{container}, tt.missingParts...)...,
+			)
+			assert.Equal(t, tt.want, ExtractProjectFromCwd(cwd),
+				"a sibling may override the anchor only when Git records the missing worktree")
+		})
+	}
+}
+
 func TestExtractProjectFromCwdWithBranchContext_GitWorktreeMainRoot(t *testing.T) {
 	skipIfNoGit(t)
 
