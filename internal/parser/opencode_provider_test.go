@@ -48,6 +48,30 @@ func TestOpenCodeHybridStreamingDiscoveryReportsIncompleteSQLiteFailure(
 		"incomplete streaming discovery must still expose valid storage sources")
 }
 
+func TestOpenCodeDiscoverContinuesAfterUnreadableDatabase(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "opencode.db"), []byte("not sqlite"), 0o600,
+	))
+	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode-local.db"))
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	seeder.AddProject("prj_1", "/workspace/healthy")
+	seeder.AddSession(
+		"ses_healthy", "prj_1", "", "Healthy", 1700000000000, 1700000010000,
+	)
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+
+	require.Error(t, err)
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	requireSourcePathsMatch(t, discovered, []string{
+		OpenCodeSQLiteVirtualPath(dbPath, "ses_healthy"),
+	})
+}
+
 func TestOpenCodeHybridStreamingIncompleteRootContinuesLaterRoots(t *testing.T) {
 	setup := func(t *testing.T) (Provider, string, string) {
 		t.Helper()

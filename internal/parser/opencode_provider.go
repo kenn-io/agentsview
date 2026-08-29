@@ -470,6 +470,7 @@ func newOpenCodeFormatSourceSet(
 
 func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
+	var incomplete error
 	seen := make(map[string]struct{})
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
@@ -502,7 +503,10 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 						s.spec.agent, dbPath, err)
 					continue
 				}
-				return nil, err
+				incomplete = errors.Join(incomplete, incompleteDiscoveryError(
+					s.spec.agent, "read SQLite "+dbPath, err,
+				))
+				continue
 			}
 			for _, source := range dbSources {
 				addJSONLSource(source, &sources, seen)
@@ -512,7 +516,7 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 		}
 	}
 	sortJSONLSources(sources)
-	return sources, nil
+	return sources, incomplete
 }
 
 func (s openCodeFormatSourceSet) DiscoverEach(
