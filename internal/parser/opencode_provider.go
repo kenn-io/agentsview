@@ -611,15 +611,12 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 			if !ok {
 				return nil
 			}
-			if storageIDs != nil {
-				if err := storageIDs.put(
-					ctx, meta.SessionID, meta.SessionID, false,
-				); err != nil {
-					membershipErr = err
-					return err
-				}
-			}
 			callbackErr = yield(source)
+			if callbackErr == nil && storageIDs != nil {
+				callbackErr = storageIDs.put(
+					ctx, meta.SessionID, meta.SessionID, false,
+				)
+			}
 			return callbackErr
 		})
 		if callbackErr != nil {
