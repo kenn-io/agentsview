@@ -4601,6 +4601,9 @@ func benchmarkDailyUsageSnapshotWindow(
 	want benchmarkDailyUsageExpectation,
 ) {
 	b.Helper()
+	origLog := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() { log.SetOutput(origLog) })
 	ctx := context.Background()
 	filter := UsageFilter{
 		From: from, To: "2024-07-30", Timezone: "UTC",
