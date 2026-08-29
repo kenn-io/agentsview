@@ -34,7 +34,7 @@ func (f antigravityCLIProviderFactory) NewProvider(cfg ProviderConfig) Provider 
 		Def:     cloneAgentDef(f.def),
 		Caps:    antigravityCLIProviderCapabilities(),
 		Config:  cfg,
-		sources: newAntigravityCLISourceSet(cfg.Roots),
+		sources: newAntigravityCLISourceSet(cfg),
 	}
 }
 
@@ -151,14 +151,23 @@ type antigravityCLISource struct {
 }
 
 type antigravityCLISourceSet struct {
-	roots []string
+	roots       []string
+	remote      bool
+	remoteRoots map[string]bool
 }
 
-func newAntigravityCLISourceSet(roots []string) antigravityCLISourceSet {
-	roots = cleanJSONLRoots(roots)
-	return antigravityCLISourceSet{
-		roots: roots,
+func newAntigravityCLISourceSet(cfg ProviderConfig) antigravityCLISourceSet {
+	s := antigravityCLISourceSet{
+		roots:       cleanJSONLRoots(cfg.Roots),
+		remote:      cfg.PathRewriter != nil,
+		remoteRoots: make(map[string]bool),
 	}
+	for root, machine := range cfg.SourceMachines {
+		if machine != "" && machine != cfg.Machine {
+			s.remoteRoots[filepath.Clean(root)] = true
+		}
+	}
+	return s
 }
 
 func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -614,7 +623,9 @@ func (s antigravityCLISourceSet) newSourceRef(
 ) SourceRef {
 	cwd := normalizeAntigravityCLIWorkspace(workspace)
 	resolution := SourceCwdResolution{}
-	if workspace != "" && cwd == "" {
+	if s.remote || s.remoteRoot(root) {
+		resolution.State = SourceCwdRemote
+	} else if workspace != "" && cwd == "" {
 		resolution.State = SourceCwdAmbiguous
 	} else if cwd != "" {
 		resolution = SourceCwdResolution{State: SourceCwdResolved, Path: cwd}
@@ -634,6 +645,19 @@ func (s antigravityCLISourceSet) newSourceRef(
 			Workspace: workspace,
 		},
 	}
+}
+
+func (s antigravityCLISourceSet) remoteRoot(root string) bool {
+	clean := filepath.Clean(root)
+	if s.remoteRoots[clean] {
+		return true
+	}
+	for configured := range s.remoteRoots {
+		if samePath(configured, clean) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s antigravityCLISourceSet) projectForID(root, id string) string {

@@ -327,6 +327,46 @@ func TestAntigravityCLIProviderUsesLastConversationsWorkspace(t *testing.T) {
 	assert.NotEqual(t, before.Hash, after.Hash)
 }
 
+func TestAntigravityCLIProviderMarksRemoteCwd(t *testing.T) {
+	tests := map[string]func(string) ProviderConfig{
+		"path rewriter": func(root string) ProviderConfig {
+			return ProviderConfig{
+				Roots:        []string{root},
+				Machine:      "localbox",
+				PathRewriter: func(path string) string { return "remote:" + path },
+			}
+		},
+		"foreign source machine": func(root string) ProviderConfig {
+			return ProviderConfig{
+				Roots:   []string{root},
+				Machine: "localbox",
+				SourceMachines: map[string]string{
+					root: "archivebox",
+				},
+			}
+		},
+	}
+
+	for name, config := range tests {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "44444444-5555-6666-7777-888888888888"
+			writeAntigravityCLIProviderFixture(t, root, id)
+
+			provider, ok := NewProvider(AgentAntigravityCLI, config(root))
+			require.True(t, ok)
+			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+				RawSessionID: id,
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, SourceCwdRemote, source.CwdResolution.State)
+			assert.Empty(t, source.CwdResolution.Path)
+			assert.Equal(t, "/tmp/db-proj", source.ProjectHint)
+		})
+	}
+}
+
 func TestAntigravityCLIProviderParseCanSkipRecordedWorkspaceDiscovery(t *testing.T) {
 	root := t.TempDir()
 	id := "44444444-5555-6666-7777-888888888888"
