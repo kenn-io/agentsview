@@ -588,6 +588,7 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 	if !hasSQLite {
 		return false, nil
 	}
+	var incomplete error
 	for _, dbPath := range src.DBPaths {
 		var callbackErr error
 		var membershipErr error
@@ -626,10 +627,16 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 			return false, membershipErr
 		}
 		if err != nil {
-			return true, incompleteDiscoveryError(
-				s.spec.agent, "stream SQLite "+dbPath, err,
+			incomplete = errors.Join(
+				incomplete,
+				incompleteDiscoveryError(
+					s.spec.agent, "stream SQLite "+dbPath, err,
+				),
 			)
 		}
+	}
+	if incomplete != nil {
+		return true, incomplete
 	}
 	return false, nil
 }
