@@ -124,7 +124,7 @@ func (f openCodeFormat) dbPaths(root string) []string {
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
-		if entry.Name() == f.dbName {
+		if reconciliationScopeSamePath(entry.Name(), f.dbName) {
 			canonical = path
 		} else {
 			channels = append(channels, path)

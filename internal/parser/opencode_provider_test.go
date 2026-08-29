@@ -1323,8 +1323,12 @@ func TestOpenCodeHybridStreamingRetainedHeapDoesNotScaleWithStorageArchive(
 			name := fmt.Sprintf(
 				"ses_%05d_%s.json", i, strings.Repeat("x", 160),
 			)
+			id := strings.TrimSuffix(name, ".json")
+			payload := []byte(fmt.Sprintf(
+				`{"id":%q,"directory":%q}`, id, root,
+			))
 			require.NoError(t, os.WriteFile(
-				filepath.Join(sessionDir, name), []byte("{}"), 0o600,
+				filepath.Join(sessionDir, name), payload, 0o600,
 			))
 		}
 		dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
