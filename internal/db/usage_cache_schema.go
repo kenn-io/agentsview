@@ -17,7 +17,13 @@ import (
 const (
 	// Version 5 rebuilds version 4 facts and rollups so Posit Assistant
 	// sidecar events use request-scoped pricing semantics.
-	usageCacheFormatVersion = 5
+	// Version 6 rebuilds version 5 facts and rollups because
+	// the pricing resolver now strips reasoning-effort/speed tiers (Devin's
+	// "-thinking"/"-high"/"-medium-fast"/... suffixes) to the base model, so
+	// the same facts and catalog produce costs that the EffectivePricingDigest
+	// (which hashes only catalog rows) cannot detect. A new generation forces
+	// cached rollups to rebuild with the corrected resolution.
+	usageCacheFormatVersion = 6
 	usageCacheApplicationID = 0x41565543
 	usageCacheKind          = "agentsview-usage-facts"
 

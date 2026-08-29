@@ -1456,7 +1456,25 @@ add an archived or maintained mirror without replacing the original identity.
 - **Usage and cost:** Message or aggregate metrics can persist prompt,
   completion, and cached tokens. The parser handles multiple observed field
   names; no authoritative provider-reported USD value is consumed, so pricing
-  is catalog-derived when model attribution is possible.
+  is catalog-derived when model attribution is possible. Transcript JSON is
+  written only by an explicit session export, so most sessions have none; for
+  those the parser reads per-assistant-message counters from the
+  `message_nodes` fallback at `chat_message -> metadata.metrics`
+  (`input_tokens`, `output_tokens`, `cache_read_tokens`,
+  `cache_creation_tokens`, any of which may be JSON null). `message_nodes` is
+  a forest, so totals are summed only along the main chain
+  (`sessions.main_chain_id` walked up via `parent_node_id`); summing every row
+  double-counts retries and edits. Verified against a live Devin CLI database.
+  Each message-node request is attributed to the concrete model at
+  `metadata.generation_model` (falling back to the session-level
+  `sessions.model` alias), because the session column is often empty or a
+  coarse alias. Devin reports the base model with a reasoning-effort or speed
+  tier appended (`-thinking`, `-high`, `-medium`, `-low`, `-xhigh`, `-max`,
+  and `-*-fast` combinations); those tiers do not change per-token price, so
+  the shared pricing resolver strips them to the base model as a last-resort
+  match (see `EffortTierBaseModel` in `internal/pricing/normalize.go`). Truly
+  opaque names (`adaptive`, `compactor`, `MODEL_PRIVATE_*`, Devin codenames
+  such as `claude-5-fable-*`) have no catalog entry and remain unpriced.
 - **Agentsview:** `internal/parser/devin.go` and
   `internal/parser/devin_provider.go`; metric aliases are implementation
   evidence because the upstream schema is unavailable.
@@ -1848,11 +1866,12 @@ add an archived or maintained mirror without replacing the original identity.
   `c40d46d16a32295da63221629293a000b0675df2` and inspect its pinned
   [Qoder source adapter](https://github.com/chenhg5/tape/blob/c40d46d16a32295da63221629293a000b0675df2/internal/source/qoder/qoder.go),
   which documents the transcript/metadata pair and shared Qwen `ChatRecord`
-  shape. Agentsview issue [#1405](https://github.com/kenn-io/agentsview/issues/1405),
-  checked 2026-08-28, reports Qoder CLI CN 1.1.21 storing the same
-  project-scoped JSONL family under `~/.qoder-cn/projects/<project-slug>/`,
-  including `<session-id>.jsonl`. This is a user-reported local observation,
-  not producer-side evidence, and does not establish storage behavior for all
+  shape. Agentsview issue
+  [#1405](https://github.com/kenn-io/agentsview/issues/1405), checked
+  2026-08-28, reports Qoder CLI CN 1.1.21 storing the same project-scoped JSONL
+  family under `~/.qoder-cn/projects/<project-slug>/`, including
+  `<session-id>.jsonl`. This is a user-reported local observation, not
+  producer-side evidence, and does not establish storage behavior for all
   Qoder CN releases or platforms.
 - **Usage and cost:** The consumed files provide transcript and model/session
   metadata but no authoritative token, cache, reasoning, credit, or USD events

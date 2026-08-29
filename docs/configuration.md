@@ -18,7 +18,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ~/.agentsview/
 ├── sessions.db      # SQLite database (WAL mode)
 ├── vectors.db       # Semantic-search vector index (when [vector] is enabled)
-├── usage-cache-v1-<id>.db # Disposable usage-aggregate cache
+├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
 ├── config.toml      # Configuration file
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
@@ -26,7 +26,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 └── uploads/         # Uploaded session files
 ```
 
-`usage-cache-v1-<id>.db` is a derived cache of usage aggregates, not user
+`usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user
 data. It is safe to delete when no AgentsView process is running; the next
 usage query rebuilds it automatically. `sessions.db` remains the only file
 that needs backing up.

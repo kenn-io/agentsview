@@ -1037,8 +1037,13 @@ func TestCurrentDataVersionPositAssistantCacheAccounting(t *testing.T) {
 }
 
 func TestCurrentDataVersionPositAssistantUsageEventsSidecar(t *testing.T) {
-	assert.Equal(t, 93, CurrentDataVersion(),
-		"Posit Assistant usage-events sidecar ingestion requires a sequential backfill")
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 93,
+		"version 93 is the data-version boundary for Posit Assistant usage-events")
+}
+
+func TestCurrentDataVersionDevinMessageNodeTokenUsage(t *testing.T) {
+	assert.Equal(t, 94, CurrentDataVersion(),
+		"Devin message_nodes token usage requires re-parsing fallback sessions")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

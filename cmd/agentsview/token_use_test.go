@@ -300,6 +300,7 @@ func TestResolveSessionID_DevinCanonicalID_OnDiskNotInDB(t *testing.T) {
 			model TEXT,
 			created_at INTEGER,
 			last_activity_at INTEGER,
+			main_chain_id INTEGER,
 			hidden INTEGER NOT NULL DEFAULT 0
 		);
 		INSERT INTO sessions

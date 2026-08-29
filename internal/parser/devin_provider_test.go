@@ -418,6 +418,42 @@ func TestDevinProviderFingerprintWithoutTranscriptChangesWhenMessageNodesChange(
 	assert.NotEqual(t, before.Hash, after.Hash)
 }
 
+func TestDevinProviderFingerprintWithoutTranscriptChangesWhenMainChainChanges(t *testing.T) {
+	const sessionID = "session-main-chain-change"
+	fixture := newDevinTestFixture(t,
+		devinSessionRow{
+			ID:               sessionID,
+			Title:            "DB messages",
+			WorkingDirectory: "/tmp/app",
+			Model:            "db-model",
+			CreatedAt:        new(int64(1704103200)),
+			LastActivityAt:   new(int64(1704103209)),
+			MainChainID:      new(int64(2)),
+		},
+	)
+	fixture.insertMessageNodes(t,
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"question"}`, CreatedAt: 1704103201},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"first branch"}`, CreatedAt: 1704103205},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 3, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"second branch"}`, CreatedAt: 1704103205},
+	)
+
+	provider, ok := NewProvider(AgentDevin, ProviderConfig{Roots: []string{fixture.Root}})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: sessionID})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	execDevinTestSQL(t, fixture.DBPath,
+		`UPDATE sessions SET main_chain_id = 3 WHERE id = 'session-main-chain-change'`)
+	after, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	assert.Equal(t, before.Key, after.Key)
+	assert.NotEqual(t, before.Hash, after.Hash)
+}
+
 func TestDevinProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 	const sessionID = "session-123"
 	fixture := newDevinTestFixture(t,

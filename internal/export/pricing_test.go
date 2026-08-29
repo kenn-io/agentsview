@@ -82,6 +82,33 @@ func TestPricingResolverUsesHistoricalGenAIPricesBeforeFlatFallback(t *testing.T
 	assert.Equal(t, PricingRowSourceCustom, customLookup.Rates.Source)
 }
 
+func TestPricingResolverUsesHistoricalGenAIPricesForEffortTierSuffix(t *testing.T) {
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{
+			ModelPattern: "gpt-5.6-luna",
+			Rates: ModelRates{
+				InputPerMTok: money.MustParseDollars("9"),
+				Source:       PricingRowSourceFetched,
+			},
+		},
+		{
+			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+			GenAISource: PricingRowSourceEmbedded,
+		},
+	})
+
+	pricedModel, lookup := resolver.ResolveAt(
+		"gpt-5-6-luna-high", "gpt-5-6-luna-high",
+		time.Date(2026, 7, 29, 23, 59, 59, 0, time.UTC),
+	)
+
+	require.True(t, lookup.OK)
+	assert.Equal(t, "gpt-5-6-luna-high", pricedModel)
+	assert.Equal(t, money.MustParseDollars("1"), lookup.Rates.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("6"), lookup.Rates.OutputPerMTok)
+}
+
 func TestPricingResolverBuildBlockUsesRecordedLookup(t *testing.T) {
 	updatedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 	resolver := NewPricingResolver([]EffectivePricingRow{{

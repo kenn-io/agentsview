@@ -441,6 +441,14 @@ func devinFingerprintHash(
 		return "", err
 	}
 	if transcriptInfo == nil {
+		if _, err := fmt.Fprintf(
+			h,
+			"main_chain_valid\x00%t\x00main_chain\x00%d\x00",
+			meta.MainChainID.Valid,
+			meta.MainChainID.Int64,
+		); err != nil {
+			return "", err
+		}
 		if err := devinAppendMessageNodesFingerprint(h, dbPath, meta.RawSessionID); err != nil {
 			return "", err
 		}

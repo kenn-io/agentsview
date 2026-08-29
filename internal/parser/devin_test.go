@@ -529,6 +529,149 @@ func TestParseDevinSessionMissingTranscriptFallsBackToMessageNodes(t *testing.T)
 	assert.Equal(t, ParsedToolResult{ToolUseID: "call-1", ContentLength: len("package main\n"), ContentRaw: `"package main\n"`}, msgs[2].ToolResults[0])
 }
 
+func TestParseDevinSessionMessageNodesSumTokenMetricsAlongMainChain(t *testing.T) {
+	const sessionID = "session-node-metrics"
+	fixture := newDevinTestFixture(t, devinSessionRow{
+		ID:               sessionID,
+		Title:            "Node metrics",
+		WorkingDirectory: "/tmp/node-metrics",
+		Model:            "claude-opus-4-8-medium",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103210)),
+		// Main chain leaf is node 4; the chain is 1 -> 2 -> 4. Node 3 is
+		// an abandoned retry branching off node 1 and must not be counted.
+		MainChainID: new(int64(4)),
+	})
+	fixture.insertMessageNodes(t,
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"question"}`, CreatedAt: 1704103201},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"first answer","metadata":{"metrics":{"input_tokens":10,"output_tokens":5,"cache_read_tokens":100,"cache_creation_tokens":20}}}`, CreatedAt: 1704103205},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 3, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"abandoned retry","metadata":{"metrics":{"input_tokens":999,"output_tokens":999,"cache_read_tokens":999,"cache_creation_tokens":999}}}`, CreatedAt: 1704103206},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 4, ParentNodeID: new(int64(2)), ChatMessage: `{"role":"assistant","content":"second answer","metadata":{"metrics":{"input_tokens":3,"output_tokens":7,"cache_read_tokens":null,"cache_creation_tokens":50}}}`, CreatedAt: 1704103207},
+	)
+
+	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Only the main chain (nodes 1, 2, 4) is reconstructed; the retry
+	// branch (node 3) is dropped entirely.
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "question", msgs[0].Content)
+	assert.Equal(t, "first answer", msgs[1].Content)
+	assert.Equal(t, "second answer", msgs[2].Content)
+
+	first := msgs[1]
+	assert.True(t, first.HasContextTokens)
+	assert.True(t, first.HasOutputTokens)
+	assert.Equal(t, 130, first.ContextTokens) // 10 + 100 + 20
+	assert.Equal(t, 5, first.OutputTokens)
+	require.NotEmpty(t, first.TokenUsage)
+	assert.Equal(t, int64(10), gjson.GetBytes(first.TokenUsage, "input_tokens").Int())
+	assert.Equal(t, int64(5), gjson.GetBytes(first.TokenUsage, "output_tokens").Int())
+	assert.Equal(t, int64(100), gjson.GetBytes(first.TokenUsage, "cache_read_input_tokens").Int())
+	assert.Equal(t, int64(20), gjson.GetBytes(first.TokenUsage, "cache_creation_input_tokens").Int())
+
+	// A null cache_read_tokens is treated as absent, not zero-present, so
+	// the key is omitted from the priced payload.
+	second := msgs[2]
+	assert.Equal(t, 53, second.ContextTokens) // 3 + 0 + 50
+	assert.Equal(t, 7, second.OutputTokens)
+	require.NotEmpty(t, second.TokenUsage)
+	assert.Equal(t, int64(3), gjson.GetBytes(second.TokenUsage, "input_tokens").Int())
+	assert.False(t, gjson.GetBytes(second.TokenUsage, "cache_read_input_tokens").Exists())
+	assert.Equal(t, int64(50), gjson.GetBytes(second.TokenUsage, "cache_creation_input_tokens").Int())
+
+	// Session totals sum output along the main chain and peak the context;
+	// node 3's inflated counters never contribute.
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 12, sess.TotalOutputTokens) // 5 + 7
+	assert.True(t, sess.HasPeakContextTokens)
+	assert.Equal(t, 130, sess.PeakContextTokens)
+	hasTotal, hasPeak := sess.AggregateTokenPresence()
+	assert.True(t, hasTotal)
+	assert.True(t, hasPeak)
+}
+
+func TestParseDevinSessionMessageNodesPreferGenerationModel(t *testing.T) {
+	const sessionID = "session-node-genmodel"
+	fixture := newDevinTestFixture(t, devinSessionRow{
+		ID:               sessionID,
+		Title:            "Generation model",
+		WorkingDirectory: "/tmp/node-genmodel",
+		// Coarse/empty session alias; the concrete model lives per message.
+		Model:          "adaptive",
+		CreatedAt:      new(int64(1704103200)),
+		LastActivityAt: new(int64(1704103210)),
+		MainChainID:    new(int64(2)),
+	})
+	fixture.insertMessageNodes(t,
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"hi"}`, CreatedAt: 1704103201},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"answer","metadata":{"generation_model":"claude-opus-4-6-thinking","metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103205},
+	)
+
+	_, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	// User node has no generation_model, so it falls back to the session model.
+	assert.Equal(t, "adaptive", msgs[0].Model)
+	// Assistant node's per-message generation_model wins over the session alias.
+	assert.Equal(t, "claude-opus-4-6-thinking", msgs[1].Model)
+}
+
+func TestParseDevinSessionMessageNodesDanglingMainChainFallsBackToAllNodes(t *testing.T) {
+	const sessionID = "session-node-dangling"
+	fixture := newDevinTestFixture(t, devinSessionRow{
+		ID:               sessionID,
+		Title:            "Dangling chain",
+		WorkingDirectory: "/tmp/node-dangling",
+		Model:            "claude-opus-4-8-medium",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103210)),
+		// Points at a node that does not exist; parsing must fall back to
+		// every node rather than dropping the session.
+		MainChainID: new(int64(9999)),
+	})
+	fixture.insertMessageNodes(t,
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"hi"}`, CreatedAt: 1704103201},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"answer","metadata":{"metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103205},
+	)
+
+	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 6, sess.TotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+	assert.Equal(t, 4, sess.PeakContextTokens)
+}
+
+func TestParseDevinSessionMessageNodesMissingParentFallsBackToAllNodes(t *testing.T) {
+	const sessionID = "session-node-missing-parent"
+	fixture := newDevinTestFixture(t, devinSessionRow{
+		ID:               sessionID,
+		Title:            "Missing parent",
+		WorkingDirectory: "/tmp/node-missing-parent",
+		Model:            "claude-opus-4-8-medium",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103210)),
+		MainChainID:      new(int64(3)),
+	})
+	fixture.insertMessageNodes(t,
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"hi"}`, CreatedAt: 1704103201},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"earlier answer","metadata":{"metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103205},
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 3, ParentNodeID: new(int64(9999)), ChatMessage: `{"role":"assistant","content":"orphaned leaf","metadata":{"metrics":{"input_tokens":7,"output_tokens":8}}}`, CreatedAt: 1704103207},
+	)
+
+	sess, msgs, err := parseDevinSession(fixture.DBPath, sessionID, "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "hi", msgs[0].Content)
+	assert.Equal(t, "earlier answer", msgs[1].Content)
+	assert.Equal(t, "orphaned leaf", msgs[2].Content)
+	assert.Equal(t, 14, sess.TotalOutputTokens)
+	assert.Equal(t, 7, sess.PeakContextTokens)
+}
+
 func TestParseDevinSessionTranscriptStillWinsOverMessageNodes(t *testing.T) {
 	const sessionID = "session-transcript-wins"
 	fixture := newDevinTestFixture(t, devinSessionRow{

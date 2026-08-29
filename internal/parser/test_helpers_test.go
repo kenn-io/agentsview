@@ -27,6 +27,7 @@ CREATE TABLE sessions (
 	last_activity_at INTEGER,
 	workspace_json TEXT,
 	metadata_json TEXT,
+	main_chain_id INTEGER,
 	hidden INTEGER NOT NULL DEFAULT 0
 );
 `
@@ -52,6 +53,7 @@ type devinSessionRow struct {
 	LastActivityAt   *int64
 	WorkspaceJSON    string
 	MetadataJSON     string
+	MainChainID      *int64
 	Hidden           bool
 }
 
@@ -120,8 +122,9 @@ func insertDevinSessionRow(t *testing.T, dbPath string, row devinSessionRow) {
 			last_activity_at,
 			workspace_json,
 			metadata_json,
+			main_chain_id,
 			hidden
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		row.ID,
 		row.Title,
@@ -131,6 +134,7 @@ func insertDevinSessionRow(t *testing.T, dbPath string, row devinSessionRow) {
 		devinNullableTimestamp(row.LastActivityAt),
 		devinNullableString(row.WorkspaceJSON),
 		devinNullableString(row.MetadataJSON),
+		devinNullableInt64(row.MainChainID),
 		row.Hidden,
 	)
 	require.NoError(t, err)

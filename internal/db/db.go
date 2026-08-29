@@ -435,7 +435,16 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (93: Posit Assistant usage-events sidecar ingestion. Existing sessions
 // need re-parsing so keepalive and classifier spend recorded in
 // usage-events.jsonl reaches the usage_events table.)
-const dataVersion = 93
+// (94: Devin message_nodes token usage. The Devin parser now reads the
+// per-assistant-message metrics recorded at chat_message ->
+// metadata.metrics in message_nodes, summed along the session main chain,
+// so token usage and cost surface for the ~80% of sessions that have no
+// exported transcript. Existing message-node-fallback rows carried no token
+// usage and need re-parsing; a fingerprint change alone cannot cover this,
+// because those sessions hash only raw epoch integers and content that are
+// byte-identical before and after the fix, so incremental sync would skip
+// the correction.)
+const dataVersion = 94
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

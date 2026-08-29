@@ -168,6 +168,76 @@ func TestResolveOverlappingQualifiedRows(t *testing.T) {
 	assert.Equal(t, 9, got)
 }
 
+func TestResolveEffortTierSuffixFallback(t *testing.T) {
+	rates := map[string]int{
+		"claude-opus-4-6":         1,
+		"claude-opus-4-8":         2,
+		"claude-opus-5":           3,
+		"gpt-5.6-luna":            4,
+		"grok-4":                  5,
+		"grok-9":                  6,
+		"mistral":                 7,
+		"mistral-medium":          8, // catalogued size variant, distinct price
+		"grok-4-fast":             9, // catalogued speed variant, distinct price
+		"openrouter/o3-mini-high": 10,
+	}
+
+	// Devin effort/speed tiers strip to the base model's rate.
+	for name, want := range map[string]int{
+		"claude-opus-4-6-thinking":    1,
+		"claude-opus-4-8-high":        2,
+		"claude-opus-4-8-medium-fast": 2,
+		"claude-opus-4-8-max-fast":    2,
+		"claude-opus-5-xhigh":         3,
+		"gpt-5-6-luna-medium":         4,
+	} {
+		got, ok := Resolve(rates, name)
+		require.True(t, ok, "effort-tier model %q should resolve to its base", name)
+		assert.Equal(t, want, got, "model %q", name)
+	}
+
+	// A catalogued name that genuinely ends in an effort/size word is matched
+	// exactly first and never reduced to a different base rate.
+	got, ok := Resolve(rates, "mistral-medium")
+	require.True(t, ok)
+	assert.Equal(t, 8, got, "mistral-medium must keep its own rate, not mistral's")
+
+	got, ok = Resolve(rates, "grok-4-fast")
+	require.True(t, ok)
+	assert.Equal(t, 9, got, "grok-4-fast must keep its own rate, not grok-4's")
+
+	got, ok = Resolve(rates, "o3-mini-high")
+	require.True(t, ok)
+	assert.Equal(t, 10, got, "catalogued -high model matches before stripping")
+
+	// A bare "-fast" (no effort tier before it) is a distinct SKU and must not
+	// be reduced to its base even when the base is priced.
+	_, ok = Resolve(rates, "grok-9-fast")
+	assert.False(t, ok, "bare -fast must not strip to the base model")
+
+	// An effort tier on an unknown base stays unresolved.
+	_, ok = Resolve(rates, "unknown-model-high")
+	assert.False(t, ok, "effort tier cannot conjure a price for an unknown base")
+}
+
+func TestEffortTierBaseModel(t *testing.T) {
+	cases := map[string]string{
+		"claude-opus-4-6-thinking":    "claude-opus-4-6",
+		"claude-opus-4-8-high":        "claude-opus-4-8",
+		"claude-opus-4-8-medium-fast": "claude-opus-4-8",
+		"claude-opus-4-8-max-fast":    "claude-opus-4-8",
+		"claude-opus-5-xhigh":         "claude-opus-5",
+		"gpt-5-6-luna-medium":         "gpt-5-6-luna",
+		"grok-4-fast":                 "grok-4-fast", // bare speed tier preserved
+		"claude-sonnet-4-6":           "claude-sonnet-4-6",
+		"swe-1-6":                     "swe-1-6",
+		"-high":                       "-high", // leading dash is not a separator
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, EffortTierBaseModel(in), "input %q", in)
+	}
+}
+
 func TestResolveRejectsArbitrarySubstrings(t *testing.T) {
 	rates := map[string]int{
 		"openai/gpt-5.5":   30,

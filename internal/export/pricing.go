@@ -271,8 +271,13 @@ func (r *PricingResolver) ResolveAt(
 		return pricedModel, flatLookup
 	}
 	if !timestamp.IsZero() {
+		var genAIFallbackModel string
+		if flatLookup.OK &&
+			pricingpkg.EffortTierBaseModel(pricedModel) != pricedModel {
+			genAIFallbackModel = flatLookup.Pattern
+		}
 		if pricedModel, rates, ok := r.resolveGenAI(
-			reportedModel, canonicalModel, timestamp,
+			reportedModel, canonicalModel, genAIFallbackModel, timestamp,
 		); ok {
 			return pricedModel, rates
 		}
@@ -281,22 +286,48 @@ func (r *PricingResolver) ResolveAt(
 }
 
 func (r *PricingResolver) resolveGenAI(
-	reportedModel, canonicalModel string, timestamp time.Time,
+	reportedModel, canonicalModel, fallbackModel string, timestamp time.Time,
 ) (string, PricingLookup, bool) {
 	if r.genAI == nil {
 		return "", PricingLookup{}, false
 	}
-	models := []string{reportedModel}
+	type modelAlias struct {
+		lookup string
+		priced string
+	}
+	type modelCandidate struct {
+		provider string
+		model    string
+		priced   string
+	}
+	models := []modelAlias{{lookup: reportedModel, priced: reportedModel}}
 	if canonicalModel != "" && canonicalModel != reportedModel {
-		models = []string{canonicalModel, reportedModel}
+		models = []modelAlias{
+			{lookup: canonicalModel, priced: canonicalModel},
+			{lookup: reportedModel, priced: reportedModel},
+		}
+	}
+	pricedModel := canonicalModel
+	if pricedModel == "" {
+		pricedModel = reportedModel
+	}
+	if fallbackModel != "" && fallbackModel != reportedModel &&
+		fallbackModel != canonicalModel {
+		models = append(models, modelAlias{
+			lookup: fallbackModel,
+			priced: pricedModel,
+		})
 	}
 	for _, model := range models {
-		provider, unqualified := genAIProviderAndModel(model)
-		for _, candidate := range []struct {
-			provider string
-			model    string
-			priced   string
-		}{{provider, unqualified, model}, {"", model, model}} {
+		provider, unqualified := genAIProviderAndModel(model.lookup)
+		candidates := []modelCandidate{{provider, unqualified, model.priced}}
+		if provider != "" || unqualified != model.lookup {
+			candidates = append(candidates, modelCandidate{
+				model:  model.lookup,
+				priced: model.priced,
+			})
+		}
+		for _, candidate := range candidates {
 			if candidate.model == "" {
 				continue
 			}
