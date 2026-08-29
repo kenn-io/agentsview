@@ -227,7 +227,7 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 			prepare: func(t *testing.T, store ArtifactStore) string {
 				return createHashedImportArtifact(
 					t, store, KindManifests, ".json",
-					[]byte(`{"origin":"contract-a1b2c3","v":4}`),
+					[]byte(`{"origin":"contract-a1b2c3","v":5}`),
 				)
 			},
 			wantManifest: manifestFormatVersion + 1,
@@ -242,7 +242,7 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 			name: "future segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
 				segment := []byte(
-					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":3}\n",
+					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":4}\n",
 				)
 				segmentHash := createHashedImportArtifact(
 					t, store, KindSegments, ".ndjson", segment,
@@ -359,7 +359,7 @@ func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 	sessionMap := map[string]string{
 		contractOrigin + "~000-future": createHashedImportArtifact(
 			t, store, KindManifests, ".json",
-			[]byte(`{"origin":"contract-a1b2c3","v":4}`),
+			[]byte(`{"origin":"contract-a1b2c3","v":5}`),
 		),
 	}
 	const supportedSessions = artifactImportDrainLimit + 1

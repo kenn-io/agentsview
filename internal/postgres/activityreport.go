@@ -223,6 +223,7 @@ func (s *Store) GetSessionUsageRows(
 			WebSearchRequests: pgUsageRowWebSearchRequests(
 				o.scan.usageSource, o.scan.tokenJSON),
 			Agent:           o.scan.agent,
+			ProviderID:      o.scan.providerID,
 			ClaudeMessageID: o.scan.claudeMessageID,
 			ClaudeRequestID: o.scan.claudeRequestID,
 			SourceUUID:      o.scan.sourceUUID,
@@ -318,6 +319,7 @@ func (s *Store) GetSessionUsageRows(
 			Priced:          priced,
 			Contributes:     contributes,
 			Agent:           r.agent,
+			ProviderID:      r.providerID,
 			ClaudeMessageID: r.claudeMessageID,
 			ClaudeRequestID: r.claudeRequestID,
 			SourceUUID:      r.sourceUUID,
@@ -796,6 +798,7 @@ func (s *Store) activityReportUsage(
 					Model:           r.model,
 					Timestamp:       startedAtString(r.ts),
 					Agent:           r.agent,
+					ProviderID:      r.providerID,
 					ClaudeMessageID: r.claudeMessageID,
 					ClaudeRequestID: r.claudeRequestID,
 					SourceUUID:      r.sourceUUID,
@@ -965,6 +968,12 @@ func pgActivityReportRowStatusWithWebSearchRequests(
 			return money.Money{}, false, false, feeErr
 		}
 		return fee, false, true, nil
+	}
+	pricedModel, lookup, err = pricing.ResolveBilledAt(
+		r.providerID, r.model, pgUsageLookupModel(r.model, r.pricingTS),
+		pgUsagePricingTimestamp(r.pricingTS))
+	if err != nil {
+		return money.Money{}, false, false, err
 	}
 	requestScoped := pgUsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(

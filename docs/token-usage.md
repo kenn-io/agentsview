@@ -409,6 +409,17 @@ another catalog. A custom row is flat and suppresses any fetched request bands
 for that model. Models without a custom entry continue to resolve through the
 stored catalog.
 
+### Posit Assistant Billing
+
+For usage rows whose stored provider ID is exactly `positai`, AgentsView
+estimates computed token costs and cache savings at 110% of the selected
+catalog rates. Model, timestamp, and request-band selection happen before the
+adjustment. Rows with empty or other provider IDs — including observed
+`anthropic` bring-your-own-provider rows in the same session — use base rates.
+
+Custom pricing overrides are not adjusted. Explicit reported costs remain
+authoritative, and fixed web-search fees remain at their published face value.
+
 ### Copilot CLI Token Metrics
 
 As of 0.32.0, Copilot CLI sessions contribute to usage and cost reports.
@@ -608,7 +619,7 @@ to X" still works.
 
 ```json
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
@@ -736,10 +747,13 @@ with request-pricing bands and application counts. Version 5 selects complete
 Claude snapshots before generic deduplication and charges the maximum observed
 server-side web-search count. Versions 4 and 5 are contract bumps because
 version 4 changed band-selection pricing semantics and digest canonicalization,
-while version 5 changes snapshot and server-tool accounting. The two
-transitional releases must not be treated as v1-compatible. The commands do not
-provide an earlier-version output mode. Consumers should require the expected
-`schema_version` and ignore unknown additive fields.
+while version 5 changes snapshot and server-tool accounting. Version 6 applies
+provider-specific billing identity to computed usage and preserves reported
+costs and custom pricing overrides; consumers must not treat v5 and v6 costs as
+interchangeable. The two transitional releases must not be treated as
+v1-compatible. The commands do not provide an earlier-version output mode.
+Consumers should require the expected `schema_version` and ignore unknown
+additive fields.
 
 | Change                                                                                | Requires `schema_version` bump? |
 | ------------------------------------------------------------------------------------- | ------------------------------- |

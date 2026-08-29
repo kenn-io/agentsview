@@ -589,7 +589,7 @@ func loadPushMessageTokenFingerprints(
 	out map[string]string,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id, ordinal, model, token_usage, context_tokens,
+		SELECT session_id, ordinal, model, provider_id, token_usage, context_tokens,
 			output_tokens, has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
 			source_type, source_subtype, prompt_source, source_uuid,
@@ -607,13 +607,13 @@ func loadPushMessageTokenFingerprints(
 	for rows.Next() {
 		var sessionID string
 		var ordinal, contextTokens, outputTokens int
-		var model, tokenUsage string
+		var model, providerID, tokenUsage string
 		var hasContextTokens, hasOutputTokens bool
 		var claudeMsgID, claudeReqID string
 		var srcType, srcSubtype, promptSource, srcUUID, srcParentUUID string
 		var isSidechain, isCompactBoundary bool
 		if err := rows.Scan(
-			&sessionID, &ordinal, &model, &tokenUsage, &contextTokens,
+			&sessionID, &ordinal, &model, &providerID, &tokenUsage, &contextTokens,
 			&outputTokens, &hasContextTokens, &hasOutputTokens,
 			&claudeMsgID, &claudeReqID,
 			&srcType, &srcSubtype, &promptSource, &srcUUID, &srcParentUUID,
@@ -628,10 +628,11 @@ func loadPushMessageTokenFingerprints(
 		}
 		fmt.Fprintf(
 			b,
-			"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
+			"%d|%d:%s|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
 				"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 			ordinal,
 			len(model), model,
+			len(providerID), providerID,
 			len(tokenUsage), tokenUsage,
 			contextTokens, outputTokens,
 			hasContextTokens, hasOutputTokens,
@@ -756,7 +757,7 @@ func loadPushUsageEventFingerprints(
 	out map[string]string,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id, message_ordinal, source, model,
+		SELECT session_id, message_ordinal, source, model, provider_id,
 			input_tokens, output_tokens,
 			cache_creation_input_tokens, cache_read_input_tokens,
 			reasoning_tokens, cost_microdollars, cost_status, cost_source,
@@ -774,7 +775,7 @@ func loadPushUsageEventFingerprints(
 	for rows.Next() {
 		var sessionID string
 		var ordinal sql.NullInt64
-		var source, model, costStatus, costSource string
+		var source, model, providerID, costStatus, costSource string
 		var inputTokens, outputTokens int
 		var cacheCreationInputTokens, cacheReadInputTokens int
 		var reasoningTokens int
@@ -782,7 +783,7 @@ func loadPushUsageEventFingerprints(
 		var occurredAt sql.NullTime
 		var dedupKey sql.NullString
 		if err := rows.Scan(
-			&sessionID, &ordinal, &source, &model,
+			&sessionID, &ordinal, &source, &model, &providerID,
 			&inputTokens, &outputTokens,
 			&cacheCreationInputTokens, &cacheReadInputTokens,
 			&reasoningTokens, &cost, &costStatus, &costSource,
@@ -801,11 +802,12 @@ func loadPushUsageEventFingerprints(
 		}
 		fmt.Fprintf(
 			b,
-			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
+			"%t|%d|%d:%s|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,
 			ordinal.Int64,
 			len(source), source,
 			len(model), model,
+			len(providerID), providerID,
 			inputTokens,
 			outputTokens,
 			cacheCreationInputTokens,

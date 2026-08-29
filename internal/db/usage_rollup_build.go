@@ -17,8 +17,8 @@ import (
 )
 
 type usagePriceInput struct {
-	Fact                     usagefacts.Fact
-	Timestamp, ReportedModel string
+	Fact                                 usagefacts.Fact
+	Timestamp, ReportedModel, ProviderID string
 }
 
 type usagePriceResult struct {
@@ -62,6 +62,7 @@ type usageDailyContribution struct {
 	ComputedAggregateCount                     int
 	ReportedCount, BaseRequestCount            int
 	DiscardedSnapshotOutputTokens              int64
+	ProviderID                                 string
 }
 
 type usageActivityContribution struct {
@@ -94,6 +95,16 @@ func priceUsageFact(
 		model, usageLookupModel(model, input.Timestamp),
 		usagePricingTimestamp(input.Timestamp),
 	)
+	reported := input.Fact.ReportedCostMicrodollars
+	if reported == nil || input.Fact.CostSource == CopilotReportedCostSource {
+		var err error
+		pricedModel, lookup, err = resolver.ResolveBilledAt(
+			input.ProviderID, model, usageLookupModel(model, input.Timestamp),
+			usagePricingTimestamp(input.Timestamp))
+		if err != nil {
+			return usagePriceResult{}, fmt.Errorf("pricing usage row for model %q: %w", model, err)
+		}
+	}
 	if err := validateNonnegativeUsageRates(lookup.Rates); err != nil {
 		return usagePriceResult{}, fmt.Errorf("pricing usage row for model %q: %w", model, err)
 	}
@@ -108,8 +119,27 @@ func priceUsageFact(
 		selectedRates, result.BandThreshold = usageRatesAndBandForFact(
 			lookup.Rates, input.Fact)
 	}
+	savingsRates := selectedRates
+	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource &&
+		(input.Fact.CacheReadTokens != 0 || input.Fact.CacheCreationTokens != 0) {
+		_, savingsLookup, err := resolver.ResolveBilledAt(
+			input.ProviderID, model, usageLookupModel(model, input.Timestamp),
+			usagePricingTimestamp(input.Timestamp))
+		if err != nil {
+			return usagePriceResult{}, fmt.Errorf(
+				"pricing reported usage cache savings for model %q: %w", model, err)
+		}
+		if err := validateNonnegativeUsageRates(savingsLookup.Rates); err != nil {
+			return usagePriceResult{}, fmt.Errorf(
+				"pricing reported usage cache savings for model %q: %w", model, err)
+		}
+		savingsRates = savingsLookup.Rates
+		if input.Fact.RequestScoped {
+			savingsRates, _ = usageRatesAndBandForFact(
+				savingsLookup.Rates, input.Fact)
+		}
+	}
 	var err error
-	reported := input.Fact.ReportedCostMicrodollars
 	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource {
 		result.Cost = money.Money{Microdollars: *reported}
 		result.Reported = 1
@@ -139,16 +169,16 @@ func priceUsageFact(
 			result.AuthoritativeCost = &value
 		}
 	}
-	readRate, err := money.Sub(selectedRates.InputPerMTok, selectedRates.CacheReadPerMTok)
+	readRate, err := money.Sub(savingsRates.InputPerMTok, savingsRates.CacheReadPerMTok)
 	if err != nil {
 		return usagePriceResult{}, fmt.Errorf("deriving cache read rate for model %q: %w", model, err)
 	}
-	writeRate, err := money.Sub(selectedRates.InputPerMTok, selectedRates.CacheWritePerMTok)
+	writeRate, err := money.Sub(savingsRates.InputPerMTok, savingsRates.CacheWritePerMTok)
 	if err != nil {
 		return usagePriceResult{}, fmt.Errorf("deriving cache creation rate for model %q: %w", model, err)
 	}
 	write1hRate, err := money.Sub(
-		selectedRates.InputPerMTok, selectedRates.EffectiveCacheWrite1hPerMTok())
+		savingsRates.InputPerMTok, savingsRates.EffectiveCacheWrite1hPerMTok())
 	if err != nil {
 		return usagePriceResult{}, fmt.Errorf("deriving 1h cache creation rate for model %q: %w", model, err)
 	}
@@ -189,9 +219,9 @@ func buildUsageDailyContributions(
 	survivors []usageRollupSurvivor, resolver *export.PricingResolver,
 ) ([]usageDailyContribution, error) {
 	type key struct {
-		session, date, model, priced, pattern, rateHash string
-		rateOK                                          bool
-		band                                            int
+		session, date, model, providerID, priced, pattern, rateHash string
+		rateOK                                                      bool
+		band                                                        int
 	}
 	rows := make(map[key]*usageDailyContribution)
 	for _, survivor := range survivors {
@@ -199,6 +229,7 @@ func buildUsageDailyContributions(
 		timestamp := fact.Fact.RawTimestamp
 		priced, err := priceUsageFact(usagePriceInput{
 			Fact: fact.Fact, Timestamp: timestamp, ReportedModel: fact.Model,
+			ProviderID: fact.Fact.ProviderID,
 		}, resolver)
 		if err != nil {
 			return nil, err
@@ -209,7 +240,8 @@ func buildUsageDailyContributions(
 		}
 		itemKey := key{
 			session: fact.AttributionSessionID, date: fact.LocalDate,
-			model: fact.Model, priced: priced.PricedModel,
+			model: fact.Model, providerID: fact.Fact.ProviderID,
+			priced:  priced.PricedModel,
 			pattern: priced.MatchedPattern, rateHash: priced.RateHash,
 			rateOK: priced.RateOK, band: band,
 		}
@@ -218,6 +250,7 @@ func buildUsageDailyContributions(
 			row = &usageDailyContribution{
 				AttributedSessionID: fact.AttributionSessionID,
 				LocalDate:           fact.LocalDate, ReportedModel: fact.Model,
+				ProviderID:  fact.Fact.ProviderID,
 				PricedModel: priced.PricedModel, MatchedPattern: priced.MatchedPattern,
 				PricingTimestamp: timestamp,
 				RateOK:           priced.RateOK, RateHash: priced.RateHash,
@@ -309,7 +342,7 @@ func loadUsageRollupFacts(
 	}
 	rows, err := conn.QueryContext(ctx, `SELECT f.cached_session_id, f.fact_index,
 		cs.session_id, f.source, f.message_ordinal, f.timestamp_ms, f.timestamp_ns,
-		f.raw_timestamp, f.uses_session_start, f.model, f.input_tokens,
+		f.raw_timestamp, f.uses_session_start, f.model, f.provider_id, f.input_tokens,
 		f.output_tokens, f.reasoning_tokens, f.cache_creation_tokens,
 		f.cache_creation_1h_tokens,
 		f.cache_read_tokens, f.web_search_requests, f.reported_cost_microdollars,
@@ -331,7 +364,7 @@ func loadUsageRollupFacts(
 		if err := rows.Scan(
 			&item.CachedSessionID, &item.FactIndex, &item.SourceSessionID,
 			&item.Fact.Source, &ordinal, &millis, &nanos, &item.Fact.RawTimestamp,
-			&usesStart, &item.Fact.Model, &item.Fact.InputTokens,
+			&usesStart, &item.Fact.Model, &item.Fact.ProviderID, &item.Fact.InputTokens,
 			&item.Fact.OutputTokens, &item.Fact.ReasoningTokens,
 			&item.Fact.CacheCreationTokens, &item.Fact.CacheCreation1hTokens,
 			&item.Fact.CacheReadTokens,
@@ -581,6 +614,7 @@ func compareUsageDailyContribution(left, right usageDailyContribution) int {
 	for _, values := range [][2]string{
 		{left.AttributedSessionID, right.AttributedSessionID},
 		{left.LocalDate, right.LocalDate}, {left.ReportedModel, right.ReportedModel},
+		{left.ProviderID, right.ProviderID},
 		{left.RateHash, right.RateHash},
 	} {
 		if order := cmp.Compare(values[0], values[1]); order != 0 {

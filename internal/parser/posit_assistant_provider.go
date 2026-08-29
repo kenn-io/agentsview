@@ -997,6 +997,7 @@ func positAssistantUsageEvent(
 		SessionID:                sessionID,
 		Source:                   positAssistantUsageSourcePrefix + kind,
 		Model:                    model,
+		ProviderID:               parsed.Get("providerId").Str,
 		InputTokens:              input,
 		OutputTokens:             output,
 		CacheCreationInputTokens: cacheWrite,
@@ -1014,6 +1015,7 @@ func positAssistantUsageEvent(
 			"output_tokens=" + strconv.Itoa(output),
 			"cache_read_tokens=" + strconv.Itoa(cacheRead),
 			"cache_write_tokens=" + strconv.Itoa(cacheWrite),
+			"provider_id=" + parsed.Get("providerId").Str,
 		}, "|"),
 	}
 	if ordinal, ok := nodeOrdinals[parsed.Get("anchorMessageId").Str]; ok {
@@ -1116,6 +1118,7 @@ func positAssistantFillAssistant(
 	msg.HasThinking = len(thinkingParts) > 0
 	msg.HasToolUse = len(msg.ToolCalls) > 0
 	msg.Model = positai.Get("modelId").Str
+	msg.ProviderID = positai.Get("providerId").Str
 	positAssistantFillTokenUsage(msg, positai.Get("usage"))
 }
 

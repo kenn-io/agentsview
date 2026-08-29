@@ -362,7 +362,6 @@ func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
@@ -388,4 +387,50 @@ func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, money.Money{Microdollars: 225_533}, usage.Cost,
 		"per-session cost")
+}
+
+func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
+	ctx := context.Background()
+	session := syncSession(
+		"duck-posit-billing", "posit", "Posit billing",
+		"2026-08-01T10:00:00Z", 1)
+	session.Agent = "posit-assistant"
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "duck-posit-model",
+		InputPerMTok: money.MustParseDollars("1"),
+	}}))
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: session,
+		Messages: []db.Message{{
+			SessionID: session.ID, Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-08-01T10:01:00Z", Model: "duck-posit-model",
+			ProviderID: "positai",
+			TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+		}},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	usage, err := store.GetSessionUsage(ctx, session.ID, true)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, money.MustParseDollars("1.1"), usage.Cost)
+	assert.Equal(t, "posit-assistant", usage.Agent)
+
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-08-01", To: "2026-08-01", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("1.1"), daily.Totals.TotalCost)
+
+	report, err := store.GetActivityReport(ctx,
+		db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-08-01", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("1.1"), report.Totals.Cost)
 }

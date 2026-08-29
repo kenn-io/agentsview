@@ -754,7 +754,7 @@ func TestExportSessionsJSONGolden(t *testing.T) {
 	assert.NotContains(t, stdout, `"machine":"golden-host"`)
 	assert.NotContains(t, stdout, `"root_path":"/`)
 
-	assertGoldenBytes(t, "session_export_v5.json", []byte(stdout))
+	assertGoldenBytes(t, "session_export_v6.json", []byte(stdout))
 }
 
 func TestExportSessionsNDJSONGolden(t *testing.T) {
@@ -769,7 +769,7 @@ func TestExportSessionsNDJSONGolden(t *testing.T) {
 	require.NoError(t, err, "export sessions ndjson golden")
 	require.Empty(t, stderr)
 
-	assertGoldenBytes(t, "session_export_v5.ndjson", []byte(stdout))
+	assertGoldenBytes(t, "session_export_v6.ndjson", []byte(stdout))
 }
 
 func firstExportSessionsCursor(t *testing.T) string {

@@ -345,6 +345,7 @@ func (m segmentMessage) dbMessage() db.Message {
 		HasToolUse:        m.HasToolUse,
 		ContentLength:     m.ContentLength,
 		Model:             m.Model,
+		ProviderID:        m.ProviderID,
 		TokenUsage:        m.TokenUsage,
 		ContextTokens:     m.ContextTokens,
 		OutputTokens:      m.OutputTokens,

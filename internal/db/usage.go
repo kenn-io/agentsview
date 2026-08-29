@@ -419,6 +419,7 @@ SELECT
 	COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') AS ts,
 	COALESCE(m.timestamp, '') AS pricing_ts,
 	m.model,
+	m.provider_id,
 	m.token_usage,
 	0 AS input_tokens,
 	0 AS output_tokens,
@@ -457,6 +458,7 @@ SELECT
 	COALESCE(ue.occurred_at, s.started_at, '') AS ts,
 	COALESCE(ue.occurred_at, '') AS pricing_ts,
 	ue.model,
+	ue.provider_id,
 	'' AS token_usage,
 	ue.input_tokens,
 	ue.output_tokens,
@@ -504,6 +506,7 @@ SELECT
 	COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') AS ts,
 	COALESCE(m.timestamp, '') AS pricing_ts,
 	m.model,
+	m.provider_id,
 	m.token_usage,
 	0 AS input_tokens,
 	0 AS output_tokens,
@@ -535,6 +538,7 @@ SELECT
 	COALESCE(ue.occurred_at, s.started_at, '') AS ts,
 	COALESCE(ue.occurred_at, '') AS pricing_ts,
 	ue.model,
+	ue.provider_id,
 	'' AS token_usage,
 	ue.input_tokens,
 	ue.output_tokens,
@@ -565,6 +569,7 @@ SELECT
 	COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') AS ts,
 	COALESCE(m.timestamp, '') AS pricing_ts,
 	m.model,
+	m.provider_id,
 	m.token_usage,
 	0 AS input_tokens,
 	0 AS output_tokens,
@@ -595,6 +600,7 @@ SELECT
 	COALESCE(ue.occurred_at, s.started_at, '') AS ts,
 	COALESCE(ue.occurred_at, '') AS pricing_ts,
 	ue.model,
+	ue.provider_id,
 	'' AS token_usage,
 	ue.input_tokens,
 	ue.output_tokens,
@@ -640,6 +646,7 @@ message_timestamp_rows AS MATERIALIZED (
 		m.ordinal,
 		NULLIF(m.timestamp, '') AS timestamp,
 		m.model,
+		m.provider_id,
 		m.token_usage,
 		m.claude_message_id,
 		m.claude_request_id,
@@ -655,6 +662,7 @@ usage_event_timestamp_rows AS MATERIALIZED (
 		ue.source,
 		ue.occurred_at,
 		ue.model,
+		ue.provider_id,
 		ue.input_tokens,
 			ue.output_tokens,
 			ue.cache_creation_input_tokens,
@@ -704,6 +712,7 @@ type usageScanRow struct {
 	ts                       string
 	pricingTS                string
 	model                    string
+	providerID               string
 	tokenJSON                string
 	inputTokens              int
 	outputTokens             int
@@ -735,6 +744,7 @@ type dailyUsageScanRow struct {
 	ts                       string
 	pricingTS                string
 	model                    string
+	providerID               string
 	tokenJSON                string
 	webSearchRequests        sql.NullInt64
 	inputTokens              int
@@ -769,6 +779,7 @@ SELECT
 	u.ts,
 	u.pricing_ts,
 	u.model,
+	u.provider_id,
 	u.token_usage,
 	u.input_tokens,
 	u.output_tokens,
@@ -870,6 +881,7 @@ SELECT
 	u.ts,
 	u.pricing_ts,
 	u.model,
+	u.provider_id,
 	u.token_usage,
 	` + cols.webSearch + ` AS web_search_requests,
 	u.input_tokens,
@@ -1060,6 +1072,7 @@ SELECT
 	cu.occurred_at AS ts,
 	cu.occurred_at AS pricing_ts,
 	cu.model,
+	'' AS provider_id,
 	'' AS token_usage,
 	cu.input_tokens,
 	cu.output_tokens,
@@ -1404,6 +1417,7 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 		&r.ts,
 		&r.pricingTS,
 		&r.model,
+		&r.providerID,
 		&r.tokenJSON,
 		&r.inputTokens,
 		&r.outputTokens,
@@ -1445,6 +1459,7 @@ func scanDailyUsageRowWithMachine(
 		&r.ts,
 		&r.pricingTS,
 		&r.model,
+		&r.providerID,
 		&r.tokenJSON,
 		&r.webSearchRequests,
 		&r.inputTokens,
@@ -1602,6 +1617,7 @@ func dailyUsageAmounts(
 	cacheRdTok = int(fact.CacheReadTokens)
 	priced, err := priceUsageFact(usagePriceInput{
 		Fact: fact, Timestamp: r.pricingTS, ReportedModel: r.model,
+		ProviderID: r.providerID,
 	}, pricing)
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{}, err
@@ -1613,6 +1629,12 @@ func dailyUsageAmounts(
 	if priced.Reported > 0 {
 		pricing.RecordResolvedReported(r.model, priced.PricedModel, lookup)
 	} else {
+		_, lookup, err = pricing.ResolveBilledAt(
+			r.providerID, r.model, usageLookupModel(r.model, r.pricingTS),
+			usagePricingTimestamp(r.pricingTS))
+		if err != nil {
+			return 0, 0, 0, 0, money.Money{}, money.Money{}, err
+		}
 		recordComputedUsagePricing(
 			pricing, r.model, priced.PricedModel, lookup, fact.RequestScoped,
 			inputTok, cacheCrTok, cacheRdTok,
@@ -1636,7 +1658,8 @@ func dailyUsageFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
 	if r.usageSource == "message" {
 		return usagefacts.FromMessage(usagefacts.MessageInput{
 			Ordinal: int(r.messageOrdinal.Int64), Role: "assistant",
-			Timestamp: r.pricingTS, Model: r.model, TokenUsage: r.tokenJSON,
+			Timestamp: r.pricingTS, Model: r.model, ProviderID: r.providerID,
+			TokenUsage:      r.tokenJSON,
 			ClaudeMessageID: r.claudeMessageID,
 			ClaudeRequestID: r.claudeRequestID,
 			SourceUUID:      r.sourceUUID,
@@ -1654,7 +1677,7 @@ func dailyUsageFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
 	}
 	return usagefacts.FromEvent(usagefacts.EventInput{
 		MessageOrdinal: ordinal, Source: r.usageSource,
-		Timestamp: r.pricingTS, Model: r.model,
+		Timestamp: r.pricingTS, Model: r.model, ProviderID: r.providerID,
 		CostSource: r.costSource, DedupKey: r.usageDedupKey,
 		InputTokens:              int64(r.inputTokens),
 		OutputTokens:             int64(r.outputTokens),
@@ -2268,6 +2291,7 @@ func (db *DB) getDailyUsageLegacy(
 		key := usageCostAllocationKey{
 			date: date, project: r.project,
 			agent: r.agent, machine: r.machine, model: r.model,
+			providerID: r.providerID,
 		}
 		b, ok := accum[key]
 		if !ok {
@@ -3098,6 +3122,12 @@ func sessionRowCostWithWebSearchRequests(
 			return money.Money{}, false, false, feeErr
 		}
 		return fee, false, true, nil
+	}
+	pricedModel, lookup, err = pricing.ResolveBilledAt(
+		r.providerID, r.model, usageLookupModel(r.model, r.pricingTS),
+		usagePricingTimestamp(r.pricingTS))
+	if err != nil {
+		return money.Money{}, false, false, err
 	}
 	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(

@@ -513,6 +513,7 @@ func messageTokenFingerprintTwin(msgs []db.Message) string {
 	var b strings.Builder
 	for _, m := range ordered {
 		model := db.SanitizeUTF8(m.Model)
+		providerID := db.SanitizeUTF8(m.ProviderID)
 		tokenUsage := db.SanitizeUTF8(string(m.TokenUsage))
 		claudeMsgID := db.SanitizeUTF8(m.ClaudeMessageID)
 		claudeReqID := db.SanitizeUTF8(m.ClaudeRequestID)
@@ -522,10 +523,11 @@ func messageTokenFingerprintTwin(msgs []db.Message) string {
 		srcUUID := db.SanitizeUTF8(m.SourceUUID)
 		srcParentUUID := db.SanitizeUTF8(m.SourceParentUUID)
 		fmt.Fprintf(&b,
-			"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
+			"%d|%d:%s|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
 				"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 			m.Ordinal,
 			len(model), model,
+			len(providerID), providerID,
 			len(tokenUsage), tokenUsage,
 			m.ContextTokens, m.OutputTokens,
 			m.HasContextTokens, m.HasOutputTokens,

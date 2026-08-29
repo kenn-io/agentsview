@@ -255,6 +255,30 @@ func TestPriceUsageFactPreservesReportedAndAuthoritativeCosts(t *testing.T) {
 	assert.Equal(t, 1, authoritative.ComputedAggregate)
 }
 
+func TestPriceUsageFactUsesBilledRatesForReportedCacheSavings(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "model-a",
+		Rates: export.ModelRates{
+			InputPerMTok:     money.MustParseDollars("1"),
+			CacheReadPerMTok: money.MustParseDollars("0.1"),
+		},
+	}})
+	reported := int64(77)
+
+	got, err := priceUsageFact(usagePriceInput{
+		ProviderID:    "positai",
+		ReportedModel: "model-a",
+		Fact: usagefacts.Fact{
+			Model: "model-a", CacheReadTokens: 1_000_000,
+			ReportedCostMicrodollars: &reported,
+			CostSource:               "provider-reported",
+		},
+	}, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, int64(77), got.Cost.Microdollars)
+	assert.Equal(t, int64(990_000), got.Savings.Microdollars)
+}
+
 func TestPriceUsageFactPricesReasoningAsOutputWhenOutputIsZero(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "model-a",

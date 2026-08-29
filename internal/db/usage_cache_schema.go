@@ -23,7 +23,9 @@ const (
 	// the same facts and catalog produce costs that the EffectivePricingDigest
 	// (which hashes only catalog rows) cannot detect. A new generation forces
 	// cached rollups to rebuild with the corrected resolution.
-	usageCacheFormatVersion = 6
+	// Version 7 rebuilds version 6 facts and rollups so provider-specific
+	// billing identity survives cache generation and rollup aggregation.
+	usageCacheFormatVersion = 7
 	usageCacheApplicationID = 0x41565543
 	usageCacheKind          = "agentsview-usage-facts"
 
@@ -61,6 +63,7 @@ CREATE TABLE usage_facts (
     raw_timestamp TEXT NOT NULL DEFAULT '',
     uses_session_start INTEGER NOT NULL CHECK (uses_session_start IN (0, 1)),
     model TEXT NOT NULL,
+    provider_id TEXT NOT NULL DEFAULT '',
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     reasoning_tokens INTEGER NOT NULL,
@@ -137,6 +140,7 @@ CREATE TABLE usage_daily_rollups (
         ON DELETE CASCADE,
     local_date TEXT NOT NULL,
     reported_model TEXT NOT NULL,
+    provider_id TEXT NOT NULL DEFAULT '',
     priced_model TEXT NOT NULL,
     matched_pattern TEXT NOT NULL,
     rate_ok INTEGER NOT NULL CHECK (rate_ok IN (0, 1)),
@@ -159,7 +163,7 @@ CREATE TABLE usage_daily_rollups (
     discarded_snapshot_output_tokens INTEGER NOT NULL,
     PRIMARY KEY (
         rollup_install_id, local_date, reported_model,
-        rate_hash, band_threshold
+        provider_id, rate_hash, band_threshold
     )
 ) WITHOUT ROWID;
 CREATE INDEX usage_daily_rollups_window
@@ -188,6 +192,7 @@ CREATE TABLE usage_rollup_exceptions (
     raw_timestamp TEXT NOT NULL,
     uses_session_start INTEGER NOT NULL CHECK (uses_session_start IN (0, 1)),
     model TEXT NOT NULL,
+    provider_id TEXT NOT NULL DEFAULT '',
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     reasoning_tokens INTEGER NOT NULL,

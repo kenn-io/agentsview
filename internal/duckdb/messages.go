@@ -27,6 +27,7 @@ func (s *Store) GetMessages(
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
+			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
@@ -90,6 +91,7 @@ func (s *Store) getMessagesLinearRoleFiltered(
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
+			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
@@ -127,6 +129,7 @@ func (s *Store) getMessagesAroundAnchor(
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
+			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
@@ -145,6 +148,7 @@ func (s *Store) getMessagesAroundAnchor(
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
+			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
@@ -158,6 +162,7 @@ func (s *Store) getMessagesAroundAnchor(
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
+			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
@@ -214,6 +219,7 @@ func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Mess
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
+			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain, is_compact_boundary
@@ -278,6 +284,7 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 			&m.ThinkingText, &ts, &m.HasThinking, &m.HasToolUse,
 			&m.ContentLength, &m.IsSystem, &m.Model, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,
+			&m.ProviderID,
 			&m.HasContextTokens, &m.HasOutputTokens,
 			&m.ClaudeMessageID, &m.ClaudeRequestID,
 			&m.SourceType, &m.SourceSubtype, &m.PromptSource, &m.SourceUUID,

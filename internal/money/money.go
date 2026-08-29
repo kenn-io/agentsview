@@ -38,20 +38,7 @@ func SignedCostPerMillion(parts []RatedTokens) (Money, error) {
 		total.Add(total, product)
 	}
 
-	negative := total.Sign() < 0
-	magnitude := new(big.Int).Abs(total)
-	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(magnitude, big.NewInt(microdollarsPerDollar), remainder)
-	if remainder.Cmp(big.NewInt(microdollarsPerDollar/2)) >= 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	if negative {
-		quotient.Neg(quotient)
-	}
-	if !quotient.IsInt64() {
-		return Money{}, ErrOverflow
-	}
-	return Money{Microdollars: quotient.Int64()}, nil
+	return roundedQuotient(total, microdollarsPerDollar)
 }
 
 // RatedTokens pairs a nonnegative token count with a nonnegative
@@ -122,13 +109,15 @@ func Divide(value Money, divisor int64) (Money, error) {
 	if divisor <= 0 {
 		return Money{}, ErrInvalidDecimal
 	}
-	numerator := big.NewInt(value.Microdollars)
+	return roundedQuotient(big.NewInt(value.Microdollars), divisor)
+}
+
+func roundedQuotient(numerator *big.Int, denominator int64) (Money, error) {
 	negative := numerator.Sign() < 0
 	magnitude := new(big.Int).Abs(numerator)
 	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(magnitude, big.NewInt(divisor), remainder)
-	twiceRemainder := new(big.Int).Lsh(remainder, 1)
-	if twiceRemainder.Cmp(big.NewInt(divisor)) >= 0 {
+	quotient.QuoRem(magnitude, big.NewInt(denominator), remainder)
+	if new(big.Int).Lsh(new(big.Int).Set(remainder), 1).Cmp(big.NewInt(denominator)) >= 0 {
 		quotient.Add(quotient, big.NewInt(1))
 	}
 	if negative {
@@ -138,6 +127,19 @@ func Divide(value Money, divisor int64) (Money, error) {
 		return Money{}, ErrOverflow
 	}
 	return Money{Microdollars: quotient.Int64()}, nil
+}
+
+// ScaleRatio scales a signed monetary value by a nonnegative numerator and a
+// positive denominator, rounding halves away from zero.
+func ScaleRatio(value Money, numerator, denominator int64) (Money, error) {
+	if denominator <= 0 {
+		return Money{}, ErrInvalidDecimal
+	}
+	if numerator < 0 {
+		return Money{}, ErrNegative
+	}
+	product := new(big.Int).Mul(big.NewInt(value.Microdollars), big.NewInt(numerator))
+	return roundedQuotient(product, denominator)
 }
 
 // CostPerMillion prices one usage row. Products are accumulated without

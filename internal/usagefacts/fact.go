@@ -16,22 +16,22 @@ const MaxPlausibleTokens = 2_000_000
 
 // MessageInput is the session-independent message shape used for extraction.
 type MessageInput struct {
-	Ordinal                            int
-	Role, Timestamp, Model, TokenUsage string
-	ClaudeMessageID, ClaudeRequestID   string
-	SourceUUID                         string
+	Ordinal                                        int
+	Role, Timestamp, Model, ProviderID, TokenUsage string
+	ClaudeMessageID, ClaudeRequestID               string
+	SourceUUID                                     string
 }
 
 // EventInput is the session-independent usage-event shape used for extraction.
 type EventInput struct {
-	MessageOrdinal            *int
-	Source, Timestamp, Model  string
-	CostSource, DedupKey      string
-	InputTokens, OutputTokens int64
-	ReasoningTokens           int64
-	CacheCreationTokens       int64
-	CacheReadTokens           int64
-	ReportedCostMicrodollars  *int64
+	MessageOrdinal                       *int
+	Source, Timestamp, Model, ProviderID string
+	CostSource, DedupKey                 string
+	InputTokens, OutputTokens            int64
+	ReasoningTokens                      int64
+	CacheCreationTokens                  int64
+	CacheReadTokens                      int64
+	ReportedCostMicrodollars             *int64
 }
 
 // ParsedTokenUsage is the sanitized token and billable tool-use payload.
@@ -58,6 +58,7 @@ type Fact struct {
 	RawTimestamp             string
 	UsesSessionStart         bool
 	Model                    string
+	ProviderID               string
 	InputTokens              int64
 	OutputTokens             int64
 	ReasoningTokens          int64
@@ -90,7 +91,7 @@ func FromMessage(in MessageInput) (Fact, bool) {
 	return Fact{
 		Source: "message", MessageOrdinal: &ordinal,
 		TimestampMillis: millis, TimestampNanos: nanos, RawTimestamp: raw,
-		UsesSessionStart: fallback, Model: in.Model,
+		UsesSessionStart: fallback, Model: in.Model, ProviderID: in.ProviderID,
 		InputTokens: parsed.InputTokens, OutputTokens: parsed.OutputTokens,
 		ReasoningTokens:       parsed.ReasoningTokens,
 		CacheCreationTokens:   parsed.CacheCreationTokens,
@@ -119,7 +120,7 @@ func FromEvent(in EventInput) (Fact, bool) {
 	return Fact{
 		Source: in.Source, MessageOrdinal: in.MessageOrdinal,
 		TimestampMillis: millis, TimestampNanos: nanos, RawTimestamp: raw,
-		UsesSessionStart: fallback, Model: in.Model,
+		UsesSessionStart: fallback, Model: in.Model, ProviderID: in.ProviderID,
 		InputTokens:  clamp(in.InputTokens),
 		OutputTokens: clamp(in.OutputTokens),
 		// Existing usage-event consumers normalize the four request counters

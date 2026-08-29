@@ -173,7 +173,7 @@ See [CLI Reference](/commands/#agentsview-activity-report) and
 ### JSON Contract
 
 `agentsview activity report --json` and `/api/v1/activity/report` share one
-versioned JSON contract. Schema version 6 contains a bounded first session page,
+versioned JSON contract. Schema version 7 contains a bounded first session page,
 `sessions_total`, `sessions_next_cursor`, and a signed self-describing
 `report_id`; it no longer contains the message-sized `intervals` array. The CLI
 and HTTP report use the same `schema_version` and move in lockstep; if the CLI
@@ -209,12 +209,16 @@ report and first page together, rather than mixing a new table with an old
 summary. Sync notifications continue to mark the dashboard stale and do not
 automatically reaggregate it.
 
+Version 7 applies provider-specific billing identity to computed usage and
+preserves reported cost rows and custom pricing overrides. Costs from v6 and v7
+must not be compared as the same billing semantics.
+
 Each project, branch, agent, or machine filter is limited to 1,024 UTF-8 bytes,
 with a 3,072-byte combined limit. The server also validates the fully encoded
 signed `report_id`, including JSON escaping and base64 expansion, before
 aggregation.
 
-Older CLIs do not validate `schema_version` and can decode a v6 plain-JSON
+Older CLIs do not validate `schema_version` and can decode a v7 plain-JSON
 response. The embedded first page deliberately preserves the prior default
 ordering—agent-minutes descending, untimed sessions last, session ID ascending
 as the final tie-break—so their five-row human summary remains compatible. They

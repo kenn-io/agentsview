@@ -239,6 +239,7 @@ func (db *DB) GetSessionUsageRows(
 			WebSearchRequests: usageRowWebSearchRequests(
 				o.scan.usageSource, o.scan.tokenJSON),
 			Agent:           o.scan.agent,
+			ProviderID:      o.scan.providerID,
 			ClaudeMessageID: o.scan.claudeMessageID,
 			ClaudeRequestID: o.scan.claudeRequestID,
 			SourceUUID:      o.scan.sourceUUID,
@@ -329,6 +330,7 @@ func (db *DB) GetSessionUsageRows(
 			Priced:          priced,
 			Contributes:     contributes,
 			Agent:           r.agent,
+			ProviderID:      r.providerID,
 			ClaudeMessageID: r.claudeMessageID,
 			ClaudeRequestID: r.claudeRequestID,
 			SourceUUID:      r.sourceUUID,
@@ -1073,6 +1075,7 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 					MessageOrdinal:  ord,
 					UsageSource:     r.usageSource,
 					Agent:           r.agent,
+					ProviderID:      r.providerID,
 					ClaudeMessageID: r.claudeMessageID,
 					ClaudeRequestID: r.claudeRequestID,
 					SourceUUID:      r.sourceUUID,
@@ -1355,6 +1358,12 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 			return money.Money{}, false, false, feeErr
 		}
 		return fee, false, true, nil
+	}
+	pricedModel, lookup, err = pricing.ResolveBilledAt(
+		r.providerID, r.model, usageLookupModel(r.model, r.pricingTS),
+		usagePricingTimestamp(r.pricingTS))
+	if err != nil {
+		return money.Money{}, false, false, err
 	}
 	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(

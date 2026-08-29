@@ -119,7 +119,7 @@ func (db *DB) MessageTokenFingerprints(
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
 		rows, err := db.getReader().Query(`
-			SELECT session_id, ordinal, model, token_usage, context_tokens,
+			SELECT session_id, ordinal, model, provider_id, token_usage, context_tokens,
 				output_tokens, has_context_tokens, has_output_tokens,
 				claude_message_id, claude_request_id,
 				source_type, source_subtype, prompt_source, source_uuid,
@@ -138,7 +138,7 @@ func (db *DB) MessageTokenFingerprints(
 			var sessionID string
 			var r tokenFingerprintRow
 			if err := rows.Scan(
-				&sessionID, &r.ordinal, &r.model, &r.tokenUsage,
+				&sessionID, &r.ordinal, &r.model, &r.providerID, &r.tokenUsage,
 				&r.contextTokens, &r.outputTokens,
 				&r.hasContextTokens, &r.hasOutputTokens,
 				&r.claudeMessageID, &r.claudeRequestID,
@@ -599,6 +599,7 @@ func (db *DB) PinnedMessagesBySession(
 type tokenFingerprintRow struct {
 	ordinal           int
 	model             string
+	providerID        string
 	tokenUsage        string
 	contextTokens     int
 	outputTokens      int
@@ -621,6 +622,7 @@ type tokenFingerprintRow struct {
 // session on every push.
 func (r tokenFingerprintRow) appendTo(b *strings.Builder) {
 	model := SanitizeUTF8(r.model)
+	providerID := SanitizeUTF8(r.providerID)
 	tokenUsage := SanitizeUTF8(r.tokenUsage)
 	claudeMsgID := SanitizeUTF8(r.claudeMessageID)
 	claudeReqID := SanitizeUTF8(r.claudeRequestID)
@@ -630,10 +632,11 @@ func (r tokenFingerprintRow) appendTo(b *strings.Builder) {
 	srcUUID := SanitizeUTF8(r.sourceUUID)
 	srcParentUUID := SanitizeUTF8(r.sourceParentUUID)
 	fmt.Fprintf(b,
-		"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
+		"%d|%d:%s|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
 			"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 		r.ordinal,
 		len(model), model,
+		len(providerID), providerID,
 		len(tokenUsage), tokenUsage,
 		r.contextTokens, r.outputTokens,
 		r.hasContextTokens, r.hasOutputTokens,

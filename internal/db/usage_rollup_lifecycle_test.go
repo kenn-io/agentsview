@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
@@ -220,6 +221,21 @@ func TestUsagePricingHashTracksPricingSemantics(t *testing.T) {
 			assert.NotEqual(t, original, got)
 		})
 	}
+}
+
+func TestUsagePricingIdentityIncludesPolicyAndCatalog(t *testing.T) {
+	rows := []export.EffectivePricingRow{{
+		ModelPattern: "policy-model",
+		Rates:        export.ModelRates{InputPerMTok: money.MustParseDollars("1")},
+	}}
+	original, err := usagePricingIdentity(rows)
+	require.NoError(t, err)
+	assert.Contains(t, original, pricingpkg.BillingPolicyVersion())
+	changed := cloneEffectivePricingRowsForTest(rows)
+	changed[0].Rates.InputPerMTok.Microdollars++
+	next, err := usagePricingIdentity(changed)
+	require.NoError(t, err)
+	assert.NotEqual(t, original, next)
 }
 
 func TestUsageQuerySnapshotPinsPricingRows(t *testing.T) {

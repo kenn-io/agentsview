@@ -209,6 +209,7 @@ CREATE TABLE IF NOT EXISTS messages (
     token_usage    TEXT NOT NULL DEFAULT '',
     context_tokens INT NOT NULL DEFAULT 0,
     output_tokens  INT NOT NULL DEFAULT 0,
+    provider_id    TEXT NOT NULL DEFAULT '',
     has_context_tokens BOOLEAN NOT NULL DEFAULT FALSE,
     has_output_tokens  BOOLEAN NOT NULL DEFAULT FALSE,
     claude_message_id  TEXT NOT NULL DEFAULT '',
@@ -238,6 +239,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     message_ordinal INT,
     source TEXT NOT NULL,
     model TEXT NOT NULL,
+    provider_id TEXT NOT NULL DEFAULT '',
     input_tokens INT NOT NULL DEFAULT 0,
     output_tokens INT NOT NULL DEFAULT 0,
     cache_creation_input_tokens INT NOT NULL DEFAULT 0,
@@ -1022,6 +1024,16 @@ func EnsureSchema(
 			"messages", "output_tokens",
 			`output_tokens INT NOT NULL DEFAULT 0`,
 			"adding messages.output_tokens",
+		},
+		{
+			"messages", "provider_id",
+			`provider_id TEXT NOT NULL DEFAULT ''`,
+			"adding messages.provider_id",
+		},
+		{
+			"usage_events", "provider_id",
+			`provider_id TEXT NOT NULL DEFAULT ''`,
+			"adding usage_events.provider_id",
 		},
 		{
 			"messages", "has_context_tokens",
@@ -2477,7 +2489,7 @@ func CheckSchemaCompat(
 		`SELECT session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, token_usage,
-			context_tokens, output_tokens,
+			context_tokens, output_tokens, provider_id,
 			has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
 			source_type, source_subtype, prompt_source, source_uuid,
@@ -2558,7 +2570,7 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT id, cost_microdollars FROM usage_events LIMIT 0`)
+		`SELECT id, provider_id, cost_microdollars FROM usage_events LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"usage_events table missing required columns: %w",

@@ -232,6 +232,7 @@ SELECT
 	COALESCE(m.timestamp, s.started_at) AS ts,
 	m.timestamp AS pricing_ts,
 	m.model,
+	m.provider_id,
 	m.token_usage,
 	0 AS input_tokens,
 	0 AS output_tokens,
@@ -266,6 +267,7 @@ SELECT
 	COALESCE(ue.occurred_at, s.started_at) AS ts,
 	ue.occurred_at AS pricing_ts,
 	ue.model,
+	ue.provider_id,
 	'' AS token_usage,
 	ue.input_tokens,
 	ue.output_tokens,
@@ -312,6 +314,7 @@ SELECT
 	COALESCE(m.timestamp, s.started_at) AS ts,
 	m.timestamp AS pricing_ts,
 	m.model,
+	m.provider_id,
 	m.token_usage,
 	0 AS input_tokens,
 	0 AS output_tokens,
@@ -340,6 +343,7 @@ SELECT
 	COALESCE(ue.occurred_at, s.started_at) AS ts,
 	ue.occurred_at AS pricing_ts,
 	ue.model,
+	ue.provider_id,
 	'' AS token_usage,
 	ue.input_tokens,
 	ue.output_tokens,
@@ -370,6 +374,7 @@ SELECT
 	COALESCE(m.timestamp, s.started_at) AS ts,
 	m.timestamp AS pricing_ts,
 	m.model,
+	m.provider_id,
 	m.token_usage,
 	0 AS input_tokens,
 	0 AS output_tokens,
@@ -397,6 +402,7 @@ SELECT
 	COALESCE(ue.occurred_at, s.started_at) AS ts,
 	ue.occurred_at AS pricing_ts,
 	ue.model,
+	ue.provider_id,
 	'' AS token_usage,
 	ue.input_tokens,
 	ue.output_tokens,
@@ -442,6 +448,7 @@ message_timestamp_rows AS MATERIALIZED (
 		m.ordinal,
 		m.timestamp,
 		m.model,
+		m.provider_id,
 		m.token_usage,
 		m.claude_message_id,
 		m.claude_request_id,
@@ -457,6 +464,7 @@ usage_event_timestamp_rows AS MATERIALIZED (
 		ue.source,
 		ue.occurred_at,
 		ue.model,
+		ue.provider_id,
 		ue.input_tokens,
 		ue.output_tokens,
 		ue.cache_creation_input_tokens,
@@ -506,6 +514,7 @@ type pgUsageScanRow struct {
 	ts                       sql.NullTime
 	pricingTS                sql.NullTime
 	model                    string
+	providerID               string
 	tokenJSON                string
 	inputTokens              int
 	outputTokens             int
@@ -536,6 +545,7 @@ type pgDailyUsageScanRow struct {
 	ts                       sql.NullTime
 	pricingTS                sql.NullTime
 	model                    string
+	providerID               string
 	tokenJSON                string
 	webSearchRequests        sql.NullInt64
 	inputTokens              int
@@ -570,6 +580,7 @@ SELECT
 	u.ts,
 	u.pricing_ts,
 	u.model,
+	u.provider_id,
 	u.token_usage,
 	u.input_tokens,
 	u.output_tokens,
@@ -658,11 +669,12 @@ SELECT
 	u.ts,
 	u.pricing_ts,
 	u.model,
+	u.provider_id,
 	u.token_usage,
 	` + webSearchColumn + ` AS web_search_requests,
 	u.input_tokens,
-		u.output_tokens,
-		u.cache_creation_input_tokens,
+	u.output_tokens,
+	u.cache_creation_input_tokens,
 	u.cache_read_input_tokens,
 	u.reasoning_tokens,
 	u.cost_microdollars,
@@ -806,6 +818,7 @@ SELECT
 	cu.occurred_at AS ts,
 	cu.occurred_at AS pricing_ts,
 	cu.model,
+	'' AS provider_id,
 	'' AS token_usage,
 	cu.input_tokens,
 	cu.output_tokens,
@@ -1001,6 +1014,7 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 		&r.ts,
 		&r.pricingTS,
 		&r.model,
+		&r.providerID,
 		&r.tokenJSON,
 		&r.inputTokens,
 		&r.outputTokens,
@@ -1041,6 +1055,7 @@ func scanPGDailyUsageRowWithMachine(
 		&r.ts,
 		&r.pricingTS,
 		&r.model,
+		&r.providerID,
 		&r.tokenJSON,
 		&r.webSearchRequests,
 		&r.inputTokens,
@@ -1166,6 +1181,13 @@ func pgDailyUsageAmounts(
 		cost = money.Money{Microdollars: r.cost.Int64}
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 	} else {
+		_, lookup, err = pricing.ResolveBilledAt(
+			r.providerID, r.model, pgUsageLookupModel(r.model, r.pricingTS),
+			pgUsagePricingTimestamp(r.pricingTS))
+		if err != nil {
+			return 0, 0, 0, 0, money.Money{}, money.Money{}, err
+		}
+		rates = lookup.Rates
 		cost, err = rates.CostForTokensScoped(
 			requestScoped,
 			inputTok, outputTok, reasoningTok, cacheCrTok, cacheCr1hTok,
@@ -1191,20 +1213,35 @@ func pgDailyUsageAmounts(
 	if requestScoped {
 		selectedRates = rates.RatesForTokens(inputTok, cacheCrTok, cacheRdTok)
 	}
+	savingsRates := selectedRates
+	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource &&
+		(cacheCrTok != 0 || cacheRdTok != 0) {
+		_, savingsLookup, err := pricing.ResolveBilledAt(
+			r.providerID, r.model, pgUsageLookupModel(r.model, r.pricingTS),
+			pgUsagePricingTimestamp(r.pricingTS))
+		if err != nil {
+			return 0, 0, 0, 0, money.Money{}, money.Money{},
+				fmt.Errorf("pricing pg reported usage cache savings for model %q: %w", r.model, err)
+		}
+		savingsRates = savingsLookup.Rates
+		if requestScoped {
+			savingsRates = savingsRates.RatesForTokens(inputTok, cacheCrTok, cacheRdTok)
+		}
+	}
 	readRate, err := money.Sub(
-		selectedRates.InputPerMTok, selectedRates.CacheReadPerMTok)
+		savingsRates.InputPerMTok, savingsRates.CacheReadPerMTok)
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{},
 			fmt.Errorf("deriving pg cache read rate for model %q: %w", r.model, err)
 	}
 	creationRate, err := money.Sub(
-		selectedRates.InputPerMTok, selectedRates.CacheWritePerMTok)
+		savingsRates.InputPerMTok, savingsRates.CacheWritePerMTok)
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{},
 			fmt.Errorf("deriving pg cache creation rate for model %q: %w", r.model, err)
 	}
 	creation1hRate, err := money.Sub(
-		selectedRates.InputPerMTok, selectedRates.EffectiveCacheWrite1hPerMTok())
+		savingsRates.InputPerMTok, savingsRates.EffectiveCacheWrite1hPerMTok())
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{},
 			fmt.Errorf("deriving pg 1h cache creation rate for model %q: %w", r.model, err)
@@ -1358,6 +1395,12 @@ func pgSessionRowCostWithWebSearchRequests(
 			return money.Money{}, false, false, feeErr
 		}
 		return fee, false, true, nil
+	}
+	pricedModel, lookup, err = pricing.ResolveBilledAt(
+		r.providerID, r.model, pgUsageLookupModel(r.model, r.pricingTS),
+		pgUsagePricingTimestamp(r.pricingTS))
+	if err != nil {
+		return money.Money{}, false, false, err
 	}
 	requestScoped := pgUsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(
@@ -1717,11 +1760,12 @@ func (s *Store) GetDailyUsage(
 	defer rows.Close()
 
 	type accumKey struct {
-		date    string
-		project string
-		agent   string
-		machine string
-		model   string
+		date       string
+		project    string
+		agent      string
+		machine    string
+		model      string
+		providerID string
 	}
 	type bucket struct {
 		inputTok  int
@@ -1795,6 +1839,7 @@ func (s *Store) GetDailyUsage(
 		key := accumKey{
 			date: date, project: r.project,
 			agent: r.agent, machine: r.machine, model: r.model,
+			providerID: r.providerID,
 		}
 		b, ok := accum[key]
 		if !ok {
@@ -1852,6 +1897,9 @@ func (s *Store) GetDailyUsage(
 				}
 				if a.machine != b.machine {
 					return a.machine < b.machine
+				}
+				if a.providerID != b.providerID {
+					return a.providerID < b.providerID
 				}
 				return a.model < b.model
 			})

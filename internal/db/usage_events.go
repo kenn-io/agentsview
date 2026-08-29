@@ -18,6 +18,7 @@ type UsageEvent struct {
 	MessageOrdinal           *int
 	Source                   string
 	Model                    string
+	ProviderID               string
 	InputTokens              int
 	OutputTokens             int
 	CacheCreationInputTokens int
@@ -38,6 +39,7 @@ func (db *DB) ensureUsageEventsSchemaLocked(w *writerHandle) error {
 			message_ordinal INTEGER,
 			source TEXT NOT NULL,
 			model TEXT NOT NULL,
+			provider_id TEXT NOT NULL DEFAULT '',
 			input_tokens INTEGER NOT NULL DEFAULT 0,
 			output_tokens INTEGER NOT NULL DEFAULT 0,
 			cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -58,6 +60,20 @@ func (db *DB) ensureUsageEventsSchemaLocked(w *writerHandle) error {
 			ON usage_events(occurred_at);
 	`); err != nil {
 		return fmt.Errorf("creating usage_events: %w", err)
+	}
+	var hasProviderID bool
+	if err := w.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM pragma_table_info('usage_events') WHERE name = ?)`,
+		"provider_id",
+	).Scan(&hasProviderID); err != nil {
+		return fmt.Errorf("checking usage_events.provider_id: %w", err)
+	}
+	if !hasProviderID {
+		if _, err := w.Exec(
+			`ALTER TABLE usage_events ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''`,
+		); err != nil {
+			return fmt.Errorf("adding usage_events.provider_id: %w", err)
+		}
 	}
 	return nil
 }
@@ -125,13 +141,13 @@ func replaceSessionUsageEventsTx(
 		if _, err := tx.Exec(`
 			INSERT INTO usage_events (
 				session_id, message_ordinal, source, model,
-				input_tokens, output_tokens,
+				input_tokens, output_tokens, provider_id,
 				cache_creation_input_tokens, cache_read_input_tokens,
 				reasoning_tokens, cost_microdollars, cost_status, cost_source,
 				occurred_at, dedup_key
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			ev.SessionID, ordinal, ev.Source, ev.Model,
-			ev.InputTokens, ev.OutputTokens,
+			ev.InputTokens, ev.OutputTokens, ev.ProviderID,
 			ev.CacheCreationInputTokens, ev.CacheReadInputTokens,
 			ev.ReasoningTokens, cost, ev.CostStatus, ev.CostSource,
 			occurredAt, ev.DedupKey,
@@ -211,7 +227,7 @@ func appendUsageEventFingerprints(
 	}
 	rows, err := q.QueryContext(ctx, `
 		SELECT session_id, message_ordinal, source, model,
-			input_tokens, output_tokens,
+			input_tokens, output_tokens, provider_id,
 			cache_creation_input_tokens, cache_read_input_tokens,
 			reasoning_tokens, cost_microdollars, cost_status, cost_source,
 			occurred_at, dedup_key
@@ -229,7 +245,7 @@ func appendUsageEventFingerprints(
 	for rows.Next() {
 		var sessionID string
 		var ordinal sql.NullInt64
-		var source, model, costStatus, costSource string
+		var source, model, providerID, costStatus, costSource string
 		var inputTokens, outputTokens int
 		var cacheCreationInputTokens, cacheReadInputTokens int
 		var reasoningTokens int
@@ -237,7 +253,7 @@ func appendUsageEventFingerprints(
 		var occurredAt, dedupKey sql.NullString
 		if err := rows.Scan(
 			&sessionID, &ordinal, &source, &model,
-			&inputTokens, &outputTokens,
+			&inputTokens, &outputTokens, &providerID,
 			&cacheCreationInputTokens, &cacheReadInputTokens,
 			&reasoningTokens, &cost, &costStatus, &costSource,
 			&occurredAt, &dedupKey,
@@ -258,15 +274,17 @@ func appendUsageEventFingerprints(
 		// at insert time (see SanitizeUTF8).
 		source = SanitizeUTF8(source)
 		model = SanitizeUTF8(model)
+		providerID = SanitizeUTF8(providerID)
 		costStatus = SanitizeUTF8(costStatus)
 		costSource = SanitizeUTF8(costSource)
 		dedupKey.String = SanitizeUTF8(dedupKey.String)
 		fmt.Fprintf(b,
-			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
+			"%t|%d|%d:%s|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,
 			ordinal.Int64,
 			len(source), source,
 			len(model), model,
+			len(providerID), providerID,
 			inputTokens,
 			outputTokens,
 			cacheCreationInputTokens,
@@ -309,7 +327,7 @@ func usageEventsWithQuerier(
 ) ([]UsageEvent, error) {
 	query := `
 		SELECT id, session_id, message_ordinal, source, model,
-			input_tokens, output_tokens,
+			input_tokens, output_tokens, provider_id,
 			cache_creation_input_tokens, cache_read_input_tokens,
 			reasoning_tokens, cost_microdollars, cost_status, cost_source,
 			occurred_at, dedup_key
@@ -336,7 +354,7 @@ func usageEventsWithQuerier(
 		if err := rows.Scan(
 			&ev.ID, &ev.SessionID, &ordinal, &ev.Source, &ev.Model,
 			&ev.InputTokens, &ev.OutputTokens,
-			&ev.CacheCreationInputTokens, &ev.CacheReadInputTokens,
+			&ev.ProviderID, &ev.CacheCreationInputTokens, &ev.CacheReadInputTokens,
 			&ev.ReasoningTokens, &cost, &ev.CostStatus,
 			&ev.CostSource, &occurred, &ev.DedupKey,
 		); err != nil {

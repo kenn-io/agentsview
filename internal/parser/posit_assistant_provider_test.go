@@ -271,6 +271,7 @@ func TestPositAssistantProviderParseMainConversation(t *testing.T) {
 	assert.True(t, first.HasThinking)
 	assert.True(t, first.HasToolUse)
 	assert.Equal(t, "claude-sonnet-4-6", first.Model)
+	assert.Equal(t, "positai", first.ProviderID)
 	assert.Equal(t, 212, first.ContextTokens)
 	assert.Equal(t, 34, first.OutputTokens)
 	assert.JSONEq(t,
@@ -766,6 +767,7 @@ func TestPositAssistantProviderParseUsageEventsSidecar(t *testing.T) {
 		keepalive.SessionID)
 	assert.Equal(t, "posit-assistant-keepalive", keepalive.Source)
 	assert.Equal(t, "claude-sonnet-4-5", keepalive.Model)
+	assert.Equal(t, "anthropic", keepalive.ProviderID)
 	assert.Equal(t, 3, keepalive.InputTokens)
 	assert.Equal(t, 2, keepalive.OutputTokens)
 	assert.Equal(t, 50, keepalive.CacheCreationInputTokens)
@@ -779,6 +781,7 @@ func TestPositAssistantProviderParseUsageEventsSidecar(t *testing.T) {
 	classifier := events[1]
 	assert.Equal(t, "posit-assistant-classifier", classifier.Source)
 	assert.Equal(t, "claude-haiku-4-5", classifier.Model)
+	assert.Equal(t, "positai", classifier.ProviderID)
 	assert.Nil(t, classifier.MessageOrdinal,
 		"unknown anchor nodes must not fabricate an ordinal")
 
@@ -787,6 +790,7 @@ func TestPositAssistantProviderParseUsageEventsSidecar(t *testing.T) {
 		"auto-cache families fold the cache-write remainder into input")
 	assert.Zero(t, glm.CacheCreationInputTokens)
 	assert.Equal(t, 600, glm.CacheReadInputTokens)
+	assert.Equal(t, "positai", glm.ProviderID)
 
 	assert.Equal(t, "2025-01-01T00:00:01Z", events[3].OccurredAt,
 		"missing event timestamps fall back to the session end")

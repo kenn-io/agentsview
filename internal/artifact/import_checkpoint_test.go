@@ -76,26 +76,26 @@ func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 
 	t.Run("manifest", func(t *testing.T) {
 		_, err := decodeManifestWithLimits(
-			[]byte(`{"origin":"contract-a1b2c3","v":4}`),
+			[]byte(`{"origin":"contract-a1b2c3","v":5}`),
 			productionArtifactLimits(),
 		)
 		require.ErrorIs(t, err, errFutureArtifactVersion)
 		var future *futureArtifactVersionError
 		require.ErrorAs(t, err, &future)
 		assert.Equal(t, Kind(KindManifests), future.Kind)
-		assert.Equal(t, 4, future.Version)
+		assert.Equal(t, 5, future.Version)
 	})
 
 	t.Run("segment", func(t *testing.T) {
 		_, err := decodeSegmentWithLimits(
-			[]byte("{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":3}\n"),
+			[]byte("{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":4}\n"),
 			productionArtifactLimits(),
 		)
 		require.ErrorIs(t, err, errFutureArtifactVersion)
 		var future *futureArtifactVersionError
 		require.ErrorAs(t, err, &future)
 		assert.Equal(t, Kind(KindSegments), future.Kind)
-		assert.Equal(t, 3, future.Version)
+		assert.Equal(t, 4, future.Version)
 	})
 }
 
@@ -105,7 +105,7 @@ func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
 	var body strings.Builder
 	for range productionArtifactLimits().segmentMessages + 1 {
 		body.WriteString(
-			"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":3}\n",
+			"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":4}\n",
 		)
 	}
 
@@ -116,7 +116,7 @@ func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
 	var future *futureArtifactVersionError
 	require.ErrorAs(t, err, &future)
 	assert.Equal(t, Kind(KindSegments), future.Kind)
-	assert.Equal(t, 3, future.Version)
+	assert.Equal(t, 4, future.Version)
 }
 
 func TestCurrentSegmentRecordLimitPrecedesLaterRecordDecode(t *testing.T) {

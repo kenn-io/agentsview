@@ -59,6 +59,7 @@ func TestPricingBlockJSONShape(t *testing.T) {
 	}
 
 	got := mustMarshalJSON(t, block)
+	t.Log("public pricing JSON shape matches the contract")
 	assert.JSONEq(t, `{
 		"source": "custom+embedded",
 		"table_version": "2026-07-03",

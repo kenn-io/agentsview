@@ -20,6 +20,7 @@ export type DbMessage = {
   ordinal: number;
   output_tokens: number;
   prompt_source?: string;
+  provider_id?: string;
   role: string;
   session_id: string;
   source_parent_uuid?: string;
@@ -31,4 +32,3 @@ export type DbMessage = {
   token_usage?: any;
   tool_calls?: any[] | null;
 };
-

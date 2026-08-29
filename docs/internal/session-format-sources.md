@@ -1010,11 +1010,11 @@ add an archived or maintained mirror without replacing the original identity.
 - **Upstream:** Clone `https://github.com/PrimeIntellect-ai/prime-agent.git` at
   `0e0d23391bcd879f1aea70dbda4d07dda7970b34`; see the pinned
 
-    [session format](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/docs/session-format.md),
+  [session format](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/docs/session-format.md),
 
-    [session types and persistence](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/src/core/session-manager.ts),
-    and
-    [configuration paths](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/src/config.ts).
+  [session types and persistence](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/src/core/session-manager.ts),
+  and
+  [configuration paths](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/src/config.ts).
 
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
   cache-write tokens with model IDs. `child_usage_attributed` entries replace
@@ -1056,9 +1056,9 @@ add an archived or maintained mirror without replacing the original identity.
   `39c95e5e29b1c8b082059f57421ce445c3dffdd4`; see
   [session-entries.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/session/session-entries.ts),
 
-    [session-persistence.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/session/session-persistence.ts),
-    and
-    [usage.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/ai/src/usage.ts).
+  [session-persistence.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/session/session-persistence.ts),
+  and
+  [usage.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/ai/src/usage.ts).
 
 - **Usage and cost:** Pi-family usage persists input, output, cache-read, and
   cache-write tokens with a model. Agentsview derives monetary cost from the
@@ -1138,23 +1138,23 @@ add an archived or maintained mirror without replacing the original identity.
   `47f943859bef60e4160492346772ded9b24f765a`. See the pinned
   [JSONL layout, header, and scanner](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/format.ts),
 
-    [multi-frame zstd backend](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/index.ts),
+  [multi-frame zstd backend](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/index.ts),
 
-    [packed chunk codec](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/chunk-rows.ts),
+  [packed chunk codec](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/chunk-rows.ts),
 
-    [session event and seed schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/types.ts),
+  [session event and seed schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/types.ts),
 
-    [turn and step production order](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/agent-loop/src/agent.ts#L245-L292),
+  [turn and step production order](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/agent-loop/src/agent.ts#L245-L292),
 
-    [turn and step invariants](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/invariant.ts),
+  [turn and step invariants](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/invariant.ts),
 
-    [agent preset reconstruction](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/preset/agent-presets/src/session.ts),
+  [agent preset reconstruction](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/preset/agent-presets/src/session.ts),
 
-    [compaction model-call facts](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/compaction/compaction/src/types.ts),
-    and the
-    [message/content schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/message.ts)
-    plus the
-    [usage schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/types.ts).
+  [compaction model-call facts](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/compaction/compaction/src/types.ts),
+  and the
+  [message/content schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/message.ts)
+  plus the
+  [usage schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/types.ts).
 
 - **Usage and cost:** Each model response and summarizing compaction can persist
   disjoint input, output, cache-read, cache-write, and reasoning token counts.
@@ -1230,9 +1230,9 @@ add an archived or maintained mirror without replacing the original identity.
   `4a550effdfcb29a25a5d325bf935296cc50cd417`; see
   [session.py](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/src/kimi_cli/session.py),
 
-    [wire-mode.md](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/docs/en/customization/wire-mode.md),
-    and the
-    [Kimi provider usage mapping](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/packages/kosong/src/kosong/chat_provider/kimi.py).
+  [wire-mode.md](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/docs/en/customization/wire-mode.md),
+  and the
+  [Kimi provider usage mapping](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/packages/kosong/src/kosong/chat_provider/kimi.py).
 
 - **Usage and cost:** Native usage distinguishes uncached/other input, output,
   cache read, and cache creation. The aggregate fallback exposes only output
@@ -1312,17 +1312,17 @@ add an archived or maintained mirror without replacing the original identity.
 - **Format:** Legacy JSONL plus companion metadata JSON, and newer SQLite
   session databases.
 
-    The issue-reported current layout uses
-    `~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl` or the direct
-    `sess_<id>/messages.jsonl` form, with optional `session.json`. Agentsview
-    admits only these exact producer-relative shapes: one workspace segment, no
-    `.history` or `snapshots` workspace, a valid `sess_<id>` directory, and no
-    nested session directory. It preserves the literal `sess_<id>` identity and
-    maps user, assistant, tool-call, and tool-result envelope fields; unknown
-    and malformed records are ignored. This observed layout has no pinned
-    producer schema source. For duplicate IDs, SQLite outranks current JSONL,
-    current outranks legacy JSONL, configured root order breaks ties within a
-    class, and recency then canonical path provide deterministic ties.
+  The issue-reported current layout uses
+  `~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl` or the direct
+  `sess_<id>/messages.jsonl` form, with optional `session.json`. Agentsview
+  admits only these exact producer-relative shapes: one workspace segment, no
+  `.history` or `snapshots` workspace, a valid `sess_<id>` directory, and no
+  nested session directory. It preserves the literal `sess_<id>` identity and
+  maps user, assistant, tool-call, and tool-result envelope fields; unknown
+  and malformed records are ignored. This observed layout has no pinned
+  producer schema source. For duplicate IDs, SQLite outranks current JSONL,
+  current outranks legacy JSONL, configured root order breaks ties within a
+  class, and recency then canonical path provide deterministic ties.
 
 - **Evidence:** `documentation`.
 
@@ -1340,11 +1340,11 @@ add an archived or maintained mirror without replacing the original identity.
   at `12375a273a289c131a45b4fd3eb1ad6483b4e9d4`; see its pinned
   [Kiro JSONL parser](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/core/adapters/inbound/agents/kirocli/parser.go),
 
-    [sidecar metrics reader](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/core/adapters/inbound/agents/kirocli/sidecar_metrics.go),
-    and recorded
-    [token-accounting assessment](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/replaydata/agents/kiro-cli/scenarios/5-1_token-accounting/metadata.json).
-    These are consumer observations, not Kiro producer authority, and they do
-    not cover the newer `conversations_v2` writer.
+  [sidecar metrics reader](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/core/adapters/inbound/agents/kirocli/sidecar_metrics.go),
+  and recorded
+  [token-accounting assessment](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/replaydata/agents/kiro-cli/scenarios/5-1_token-accounting/metadata.json).
+  These are consumer observations, not Kiro producer authority, and they do
+  not cover the newer `conversations_v2` writer.
 
 - **Usage and cost:** JSONL events contain no model, token, cache, credit, or
   USD fields. The companion state can contain model/window metadata, context
@@ -1510,9 +1510,9 @@ add an archived or maintained mirror without replacing the original identity.
   `69ce3728acae0b01c2f457b65a90c144664686aa`; see the pinned
   [agent conversation migration](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/migrations/2025-06-09-013710_create_agent_conversations_table/up.sql),
 
-    [persistence writer](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/app/src/persistence/agent.rs),
-    and
-    [conversation usage types](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/src/model.rs).
+  [persistence writer](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/app/src/persistence/agent.rs),
+  and
+  [conversation usage types](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/src/model.rs).
 
 - **Usage and cost:** The consumed metadata has aggregate `warp_tokens` and
   `byok_tokens` by model and category, plus custom-endpoint tokens and credit
@@ -1570,7 +1570,21 @@ add an archived or maintained mirror without replacing the original identity.
   `{"type":"usage","kind":"keepalive"|"classifier", "timestamp":…,"anchorMessageId":…,"providerId":…,"modelId":…, "inputTokens":…,"outputTokens":…,"totalTokens":…,"cacheReadTokens":…, "cacheWriteTokens":…}`
   lines; subagent conversations carry their own sidecar. Observed on real
   idle sessions: repeated keepalive pings whose spend is invisible in
-  `lm-messages.jsonl`.
+  `lm-messages.jsonl`. Assistant messages additionally carry a billing
+  provider identity at `providerOptions.providerMetadata.positai.providerId`,
+  and sidecar lines carry the same identity as their top-level `providerId`.
+  Observed values are `positai` for requests billed through the managed Posit
+  AI service and `anthropic` for bring-your-own-provider requests; both can
+  appear within one session. These serialized values are implementation
+  evidence from observed session artifacts, not published schema. Separately,
+  Posit's public [FAQ](https://docs.posit.co/posit-ai/user/faq/) states that
+  managed credit usage "is calculated at a 10% premium over model provider
+  rates" (checked 2026-08-29); the FAQ substantiates the premium but does not
+  define the `providerId` field. Agentsview applies the 11/10 billing
+  adjustment only to rows whose provider ID is exactly `positai`. Empty and
+  other values, including `anthropic`, price at base catalog rates, custom
+  pricing overrides are never adjusted, and explicit reported costs stay
+  authoritative.
 - **Agentsview:** `internal/parser/posit_assistant_provider.go`; current schema
   details are based on observed files and fixtures. Reverified 2026-08-22
   against the samples reported in
@@ -1587,7 +1601,9 @@ add an archived or maintained mirror without replacing the original identity.
   otherwise idle sessions trigger resync. Data version 92 reparses existing
   archives to pick up sidecar spend. Conversations with valid sidecar usage
   are retained even when they have no renderable transcript messages, and
-  newer sidecar timestamps extend the session end time.
+  newer sidecar timestamps extend the session end time. Data version 95 reparses
+  existing archives so message and usage-event rows persist the row-level
+  provider identity that drives the billing adjustment.
 
 ## Z Code (`zcode`)
 
@@ -1623,21 +1639,21 @@ add an archived or maintained mirror without replacing the original identity.
 - **Upstream:** Clone `https://github.com/aaif-goose/goose.git` at
   `5ab0e6df34e69444f6f2016de40717a9f54bf816`; see the pinned
 
-    [session manager](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/session/session_manager.rs),
+  [session manager](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/session/session_manager.rs),
 
-    [message model](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/message.rs),
+  [message model](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/message.rs),
 
-    [tool-result serialization](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/tool_result_serde.rs),
-    and
-    [path resolution](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/config/paths.rs).
+  [tool-result serialization](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/tool_result_serde.rs),
+  and
+  [path resolution](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/config/paths.rs).
 
-    `Paths::data_dir()` uses etcetera 0.11 `choose_app_strategy` (XDG on macOS and
-    Linux; the Windows strategy appends a `data` subfolder under
-    `%APPDATA%\Block\goose\`), and `GOOSE_PATH_ROOT` overrides it with
-    `<root>/data`. The first-party
-    [session-management guide](https://goose-docs.ai/docs/guides/sessions/session-management/)
-    and an isolated observed schema-version-15 database were also checked
-    2026-08-03.
+  `Paths::data_dir()` uses etcetera 0.11 `choose_app_strategy` (XDG on macOS and
+  Linux; the Windows strategy appends a `data` subfolder under
+  `%APPDATA%\Block\goose\`), and `GOOSE_PATH_ROOT` overrides it with
+  `<root>/data`. The first-party
+  [session-management guide](https://goose-docs.ai/docs/guides/sessions/session-management/)
+  and an isolated observed schema-version-15 database were also checked
+  2026-08-03.
 
 - **Usage and cost:** `usage_ledger` rows provide model, input, output,
   cache-read, cache-write, compaction, cost, and cost-source data without a

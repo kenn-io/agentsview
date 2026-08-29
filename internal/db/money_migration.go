@@ -261,6 +261,7 @@ CREATE TABLE usage_events (
     message_ordinal INTEGER,
     source TEXT NOT NULL,
     model TEXT NOT NULL,
+    provider_id TEXT NOT NULL DEFAULT '',
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -273,12 +274,12 @@ CREATE TABLE usage_events (
     dedup_key TEXT NOT NULL DEFAULT ''
 );
 INSERT INTO usage_events (
-    id, session_id, message_ordinal, source, model,
+    id, session_id, message_ordinal, source, model, provider_id,
     input_tokens, output_tokens, cache_creation_input_tokens,
     cache_read_input_tokens, reasoning_tokens, cost_microdollars,
     cost_status, cost_source, occurred_at, dedup_key
 )
-SELECT id, session_id, message_ordinal, source, model,
+SELECT id, session_id, message_ordinal, source, model, '' AS provider_id,
     input_tokens, output_tokens, cache_creation_input_tokens,
     cache_read_input_tokens, reasoning_tokens,
     CASE WHEN cost_usd IS NULL THEN NULL

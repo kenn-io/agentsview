@@ -71,6 +71,7 @@ func (db *DB) assembleDailyUsageFacts(
 		key := usageCostAllocationKey{
 			date: group.Date, project: group.Project, agent: group.Agent,
 			machine: group.Machine, model: group.Model,
+			providerID: group.ProviderID,
 		}
 		bucket := accum[key]
 		if bucket == nil {
@@ -108,7 +109,9 @@ func (db *DB) assembleDailyUsageFacts(
 		if group.Project != "" {
 			projectLabels[group.Project] = struct{}{}
 		}
-		recordUsageFactsPricing(resolver, group)
+		if err := recordUsageFactsPricing(resolver, group); err != nil {
+			return DailyUsageResult{}, fmt.Errorf("recording daily usage pricing: %w", err)
+		}
 	}
 
 	sessionIDs := make([]string, 0, len(sessionCosts))
@@ -173,21 +176,31 @@ func (db *DB) assembleDailyUsageFacts(
 
 func recordUsageFactsPricing(
 	resolver *export.PricingResolver, group usageFactsGroup,
-) {
-	_, lookup := resolver.ResolveAt(
+
+) error {
+	timestamp := usagePricingTimestamp(group.PricingTimestamp)
+	_, baseLookup := resolver.ResolveAt(
 		group.Model, group.PricedModel,
-		usagePricingTimestamp(group.PricingTimestamp),
+		timestamp,
 	)
 	for range group.ReportedCount {
-		resolver.RecordResolvedReported(group.Model, group.PricedModel, lookup)
-	}
-	for range group.ComputedAggregateCount {
-		resolver.RecordResolvedComputedAggregate(
-			group.Model, group.PricedModel, lookup)
+		resolver.RecordResolvedReported(group.Model, group.PricedModel, baseLookup)
 	}
 	requestCount := group.ComputedRequestCount
 	if group.BandThreshold == nil {
 		requestCount = group.BaseRequestCount
+	}
+	if group.ComputedAggregateCount == 0 && requestCount == 0 {
+		return nil
+	}
+	_, computedLookup, err := resolver.ResolveBilledAt(
+		group.ProviderID, group.Model, group.PricedModel, timestamp)
+	if err != nil {
+		return fmt.Errorf("resolving billed pricing for model %q: %w", group.Model, err)
+	}
+	for range group.ComputedAggregateCount {
+		resolver.RecordResolvedComputedAggregate(
+			group.Model, group.PricedModel, computedLookup)
 	}
 	inputTokens := 0
 	if group.BandThreshold != nil {
@@ -195,8 +208,9 @@ func recordUsageFactsPricing(
 	}
 	for range requestCount {
 		resolver.RecordResolvedComputedRequest(
-			group.Model, group.PricedModel, lookup, inputTokens, 0, 0)
+			group.Model, group.PricedModel, computedLookup, inputTokens, 0, 0)
 	}
+	return nil
 }
 
 func buildDailyUsageFactsEntries(

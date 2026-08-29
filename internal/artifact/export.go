@@ -901,6 +901,7 @@ func canonicalUsageEvents(events []db.UsageEvent) []artifactUsageEvent {
 			MessageOrdinal:           ev.MessageOrdinal,
 			Source:                   ev.Source,
 			Model:                    ev.Model,
+			ProviderID:               ev.ProviderID,
 			InputTokens:              ev.InputTokens,
 			OutputTokens:             ev.OutputTokens,
 			CacheCreationInputTokens: ev.CacheCreationInputTokens,

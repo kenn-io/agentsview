@@ -102,10 +102,10 @@ func TestCanonicalManifestGolden(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t,
-		"{\"data_version\":99,\"generation\":3,\"native_session_id\":\"sess-1\",\"origin\":\"laptop-a1b2c3\",\"raw_source\":{\"hash\":\"raw123\",\"media_type\":\"application/jsonl\",\"path\":\"claude/session.jsonl\",\"size\":4096},\"segments\":[\"seg222\",\"seg111\"],\"session\":{\"agent\":\"claude\",\"compaction_count\":0,\"consecutive_failure_max\":0,\"created_at\":\"2026-06-14T01:02:03Z\",\"edit_churn_count\":0,\"ended_at\":\"2026-06-14T01:03:03Z\",\"ended_with_role\":\"\",\"final_failure_streak\":0,\"first_message\":\"hello\",\"has_peak_context_tokens\":false,\"has_total_output_tokens\":false,\"id\":\"sess-1\",\"is_automated\":false,\"machine\":\"laptop-a1b2c3\",\"message_count\":2,\"mid_task_compaction_count\":0,\"outcome\":\"\",\"outcome_confidence\":\"\",\"parent_session_id\":\"parent-1\",\"peak_context_tokens\":0,\"project\":\"alpha\",\"relationship_type\":\"subagent\",\"secret_leak_count\":0,\"started_at\":\"2026-06-14T01:02:03Z\",\"tool_failure_signal_count\":0,\"tool_retry_count\":0,\"total_output_tokens\":42,\"user_message_count\":1},\"session_has_context_data\":true,\"session_has_tool_calls\":true,\"session_name\":\"Fixture\",\"session_quality_signals\":{\"duplicate_prompt_count\":6,\"missing_success_criteria_count\":4,\"missing_verification_count\":5,\"no_code_context_count\":7,\"runaway_tool_loop_count\":1,\"short_prompt_count\":2,\"unstructured_start\":true,\"version\":3},\"usage_events\":[{\"cost\":{\"microdollars\":31250},\"cost_source\":\"fixture\",\"cost_status\":\"known\",\"dedup_key\":\"usage-1\",\"input_tokens\":11,\"message_ordinal\":2,\"model\":\"claude-test\",\"occurred_at\":\"2026-06-14T01:02:04Z\",\"output_tokens\":7,\"source\":\"fixture\"}],\"v\":3}\n",
+		"{\"data_version\":99,\"generation\":3,\"native_session_id\":\"sess-1\",\"origin\":\"laptop-a1b2c3\",\"raw_source\":{\"hash\":\"raw123\",\"media_type\":\"application/jsonl\",\"path\":\"claude/session.jsonl\",\"size\":4096},\"segments\":[\"seg222\",\"seg111\"],\"session\":{\"agent\":\"claude\",\"compaction_count\":0,\"consecutive_failure_max\":0,\"created_at\":\"2026-06-14T01:02:03Z\",\"edit_churn_count\":0,\"ended_at\":\"2026-06-14T01:03:03Z\",\"ended_with_role\":\"\",\"final_failure_streak\":0,\"first_message\":\"hello\",\"has_peak_context_tokens\":false,\"has_total_output_tokens\":false,\"id\":\"sess-1\",\"is_automated\":false,\"machine\":\"laptop-a1b2c3\",\"message_count\":2,\"mid_task_compaction_count\":0,\"outcome\":\"\",\"outcome_confidence\":\"\",\"parent_session_id\":\"parent-1\",\"peak_context_tokens\":0,\"project\":\"alpha\",\"relationship_type\":\"subagent\",\"secret_leak_count\":0,\"started_at\":\"2026-06-14T01:02:03Z\",\"tool_failure_signal_count\":0,\"tool_retry_count\":0,\"total_output_tokens\":42,\"user_message_count\":1},\"session_has_context_data\":true,\"session_has_tool_calls\":true,\"session_name\":\"Fixture\",\"session_quality_signals\":{\"duplicate_prompt_count\":6,\"missing_success_criteria_count\":4,\"missing_verification_count\":5,\"no_code_context_count\":7,\"runaway_tool_loop_count\":1,\"short_prompt_count\":2,\"unstructured_start\":true,\"version\":3},\"usage_events\":[{\"cost\":{\"microdollars\":31250},\"cost_source\":\"fixture\",\"cost_status\":\"known\",\"dedup_key\":\"usage-1\",\"input_tokens\":11,\"message_ordinal\":2,\"model\":\"claude-test\",\"occurred_at\":\"2026-06-14T01:02:04Z\",\"output_tokens\":7,\"source\":\"fixture\"}],\"v\":4}\n",
 		string(data),
 	)
-	assert.Equal(t, "855d1a7ed086095582cc94136837bcb93d74f4ad0cf446b0a77177d1b31aba23", hashHex(data))
+	assert.Equal(t, "97a7dbc6ef1f7f42dec89eb2a18a4da0045ca20210b8e77cc9c4b718f8647988", hashHex(data))
 }
 
 func TestDecodeManifestRejectsUnsupportedOlderVersion(t *testing.T) {
@@ -221,13 +221,13 @@ func TestCanonicalMessageSegmentGolden(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t,
-		"{\"claude_message_id\":\"msg-1\",\"claude_request_id\":\"req-1\",\"content\":\"world\",\"content_length\":5,\"has_output_tokens\":true,\"has_tool_use\":true,\"model\":\"claude-test\",\"ordinal\":2,\"output_tokens\":2,\"role\":\"assistant\",\"source_parent_uuid\":\"uuid-parent\",\"source_subtype\":\"assistant\",\"source_type\":\"jsonl\",\"source_uuid\":\"uuid-msg-1\",\"timestamp\":\"2026-06-14T01:02:05Z\",\"token_usage\":{\"input\":1,\"output\":2},\"tool_calls\":[{\"call_index\":0,\"category\":\"file\",\"file_path\":\"README.md\",\"input_json\":\"{\\\"file_path\\\":\\\"README.md\\\"}\",\"result_content\":\"file content\",\"result_content_length\":12,\"result_events\":[{\"agent_id\":\"agent-1\",\"content\":\"done\",\"content_length\":4,\"event_index\":0,\"source\":\"tool_result\",\"status\":\"success\",\"subagent_session_id\":\"child-1\",\"timestamp\":\"2026-06-14T01:02:06Z\",\"tool_use_id\":\"tool-1\"}],\"subagent_session_id\":\"child-1\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-1\"}],\"v\":2}\n",
+		"{\"claude_message_id\":\"msg-1\",\"claude_request_id\":\"req-1\",\"content\":\"world\",\"content_length\":5,\"has_output_tokens\":true,\"has_tool_use\":true,\"model\":\"claude-test\",\"ordinal\":2,\"output_tokens\":2,\"role\":\"assistant\",\"source_parent_uuid\":\"uuid-parent\",\"source_subtype\":\"assistant\",\"source_type\":\"jsonl\",\"source_uuid\":\"uuid-msg-1\",\"timestamp\":\"2026-06-14T01:02:05Z\",\"token_usage\":{\"input\":1,\"output\":2},\"tool_calls\":[{\"call_index\":0,\"category\":\"file\",\"file_path\":\"README.md\",\"input_json\":\"{\\\"file_path\\\":\\\"README.md\\\"}\",\"result_content\":\"file content\",\"result_content_length\":12,\"result_events\":[{\"agent_id\":\"agent-1\",\"content\":\"done\",\"content_length\":4,\"event_index\":0,\"source\":\"tool_result\",\"status\":\"success\",\"subagent_session_id\":\"child-1\",\"timestamp\":\"2026-06-14T01:02:06Z\",\"tool_use_id\":\"tool-1\"}],\"subagent_session_id\":\"child-1\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-1\"}],\"v\":3}\n",
 		string(data),
 	)
 	assert.NotContains(t, string(data), `"id"`)
 	assert.NotContains(t, string(data), `"session_id"`)
 	assert.NotContains(t, string(data), `"message_id"`)
-	assert.Equal(t, "e45219604ab58bb9685ac3dfb0f5cc5e865705e29dc8a985ccebe1b748a6d396", hashHex(data))
+	assert.Equal(t, "23cd262c5cf846513a0adfe80b11fc7a94d01976f51c6600ac282b2229a3ee7b", hashHex(data))
 }
 
 func TestEncodeSegmentPreservesPromptSource(t *testing.T) {
@@ -256,6 +256,34 @@ func TestEncodeSegmentPreservesPromptSource(t *testing.T) {
 	restored := decoded.dbMessage()
 	assert.Equal(t, "typed", restored.PromptSource,
 		"import must carry prompt_source back into the db message")
+}
+
+func TestArtifactRoundTripPreservesProviderID(t *testing.T) {
+	t.Parallel()
+
+	data, err := encodeSegment([]db.Message{{
+		Ordinal:    0,
+		Role:       "assistant",
+		Content:    "hi",
+		Model:      "claude-sonnet-4-6",
+		ProviderID: "positai",
+	}})
+	require.NoError(t, err)
+	decoded, err := decodeSegmentWithLimits(data, productionArtifactLimits())
+	require.NoError(t, err)
+	require.Len(t, decoded, 1)
+	assert.Equal(t, "positai", decoded[0].ProviderID,
+		"import must carry the billing provider back into the db message")
+
+	events := canonicalUsageEvents([]db.UsageEvent{{
+		Source:     "posit-assistant-keepalive",
+		Model:      "claude-sonnet-4-6",
+		ProviderID: "positai",
+	}})
+	restored := importedUsageEvents(events, "sess-1")
+	require.Len(t, restored, 1)
+	assert.Equal(t, "positai", restored[0].ProviderID,
+		"import must carry the billing provider back into the usage event")
 }
 
 func TestCanonicalMetadataEventGolden(t *testing.T) {

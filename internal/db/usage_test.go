@@ -523,6 +523,7 @@ func TestUsageEventsReplaceAndList(t *testing.T) {
 		MessageOrdinal:           &ordinal,
 		Source:                   "session",
 		Model:                    "gpt-5.4",
+		ProviderID:               "positai",
 		InputTokens:              100,
 		OutputTokens:             50,
 		CacheCreationInputTokens: 7,
@@ -550,6 +551,7 @@ func TestUsageEventsReplaceAndList(t *testing.T) {
 		"CacheReadInputTokens (token fields not round-tripped: %#v)", got[0])
 	require.Equal(t, 13, got[0].ReasoningTokens,
 		"ReasoningTokens (token fields not round-tripped: %#v)", got[0])
+	require.Equal(t, "positai", got[0].ProviderID, "ProviderID")
 	require.NotNil(t, got[0].MessageOrdinal, "MessageOrdinal want 3")
 	require.Equal(t, 3, *got[0].MessageOrdinal, "MessageOrdinal")
 	require.NotNil(t, got[0].Cost, "Cost want %v", cost)

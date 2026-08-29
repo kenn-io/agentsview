@@ -346,6 +346,7 @@ func newUsageFactSpool() (*usageFactSpool, error) {
 			source TEXT NOT NULL, message_ordinal INTEGER,
 			timestamp_ms INTEGER, timestamp_ns INTEGER, raw_timestamp TEXT NOT NULL,
 			uses_session_start INTEGER NOT NULL, model TEXT NOT NULL,
+			provider_id TEXT NOT NULL,
 			input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
 			reasoning_tokens INTEGER NOT NULL,
 			cache_creation_tokens INTEGER NOT NULL,
@@ -459,7 +460,7 @@ func extractUsageMessageFacts(
 		var input usagefacts.MessageInput
 		if err := rows.Scan(
 			&sessionID, &input.Ordinal, &input.Role, &input.Timestamp,
-			&input.Model, &input.TokenUsage, &input.ClaudeMessageID,
+			&input.Model, &input.ProviderID, &input.TokenUsage, &input.ClaudeMessageID,
 			&input.ClaudeRequestID, &input.SourceUUID,
 		); err != nil {
 			return err
@@ -489,7 +490,7 @@ func extractUsageActivityFacts(
 		var input usagefacts.MessageInput
 		if err := rows.Scan(
 			&sessionID, &input.Ordinal, &input.Role, &input.Timestamp,
-			&input.Model,
+			&input.Model, &input.ProviderID,
 		); err != nil {
 			return err
 		}
@@ -521,6 +522,7 @@ func extractUsageEventFacts(
 		var input usagefacts.EventInput
 		if err := rows.Scan(
 			&eventID, &sessionID, &ordinal, &input.Source, &input.Model,
+			&input.ProviderID,
 			&input.InputTokens, &input.OutputTokens, &input.CacheCreationTokens,
 			&input.CacheReadTokens, &input.ReasoningTokens, &cost,
 			&input.CostSource, &input.Timestamp, &rawDedupKey,
@@ -582,16 +584,16 @@ func (w *usageFactSpoolWriter) Flush() error {
 	const prefix = `INSERT INTO facts(
 		session_id, fact_index, source, message_ordinal, timestamp_ms, timestamp_ns,
 		raw_timestamp, uses_session_start, model, input_tokens, output_tokens,
-		reasoning_tokens, cache_creation_tokens, cache_creation_1h_tokens,
+		reasoning_tokens, provider_id, cache_creation_tokens, cache_creation_1h_tokens,
 		cache_read_tokens, web_search_requests, reported_cost_microdollars,
 		cost_source, request_scoped, claude_message_id, claude_request_id,
 		source_uuid, usage_dedup_key, token_eligible, activity_eligible
 	) VALUES `
-	const placeholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	const placeholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	var query strings.Builder
 	query.Grow(len(prefix) + len(w.rows)*(len(placeholders)+1))
 	query.WriteString(prefix)
-	args := make([]any, 0, len(w.rows)*25)
+	args := make([]any, 0, len(w.rows)*26)
 	for rowIndex, row := range w.rows {
 		if rowIndex > 0 {
 			query.WriteByte(',')
@@ -602,7 +604,7 @@ func (w *usageFactSpoolWriter) Flush() error {
 			row.sessionID, row.index, fact.Source, fact.MessageOrdinal,
 			fact.TimestampMillis, fact.TimestampNanos, fact.RawTimestamp,
 			boolInt(fact.UsesSessionStart),
-			fact.Model, fact.InputTokens, fact.OutputTokens, fact.ReasoningTokens,
+			fact.Model, fact.InputTokens, fact.OutputTokens, fact.ReasoningTokens, fact.ProviderID,
 			fact.CacheCreationTokens, fact.CacheCreation1hTokens,
 			fact.CacheReadTokens, fact.WebSearchRequests,
 			fact.ReportedCostMicrodollars, fact.CostSource,
@@ -628,7 +630,7 @@ func boolInt(value bool) int {
 
 const usageFillMessageFactsSQL = `
 	SELECT m.session_id, m.ordinal, m.role, COALESCE(m.timestamp, ''),
-	       m.model, m.token_usage, m.claude_message_id,
+	       m.model, m.provider_id, m.token_usage, m.claude_message_id,
 	       m.claude_request_id, m.source_uuid
 	FROM usage_fill_sessions f
 	CROSS JOIN messages m INDEXED BY idx_messages_usage_session_covering
@@ -637,7 +639,7 @@ const usageFillMessageFactsSQL = `
 	ORDER BY m.timestamp, m.session_id, m.ordinal`
 
 const usageFillActivityFactsSQL = `
-	SELECT m.session_id, m.ordinal, m.role, COALESCE(m.timestamp, ''), m.model
+	SELECT m.session_id, m.ordinal, m.role, COALESCE(m.timestamp, ''), m.model, m.provider_id
 	FROM usage_fill_sessions f
 	CROSS JOIN messages m INDEXED BY idx_messages_session_role
 	  ON m.session_id = f.session_id
@@ -646,7 +648,7 @@ const usageFillActivityFactsSQL = `
 	ORDER BY m.session_id, m.ordinal`
 
 const usageFillEventFactsSQL = `
-	SELECT e.id, e.session_id, e.message_ordinal, e.source, e.model,
+	SELECT e.id, e.session_id, e.message_ordinal, e.source, e.model, e.provider_id,
 	       e.input_tokens, e.output_tokens, e.cache_creation_input_tokens,
 	       e.cache_read_input_tokens, e.reasoning_tokens,
 	       e.cost_microdollars, e.cost_source, COALESCE(e.occurred_at, ''),
@@ -950,7 +952,7 @@ func installSpoolSessions(
 	if _, err := cacheConn.ExecContext(ctx, `INSERT INTO usage_facts(
 		cached_session_id, fact_index, source, message_ordinal, timestamp_ms,
 		timestamp_ns, raw_timestamp, uses_session_start, model, input_tokens, output_tokens,
-		reasoning_tokens, cache_creation_tokens, cache_creation_1h_tokens,
+		reasoning_tokens, provider_id, cache_creation_tokens, cache_creation_1h_tokens,
 		cache_read_tokens, web_search_requests, reported_cost_microdollars,
 		cost_source, request_scoped, claude_message_id, claude_request_id,
 		source_uuid, usage_dedup_key, token_eligible, activity_eligible
@@ -958,7 +960,7 @@ func installSpoolSessions(
 	SELECT cached.id, facts.fact_index, facts.source, facts.message_ordinal,
 	       facts.timestamp_ms, facts.timestamp_ns,
 	       raw_timestamp, uses_session_start, model, input_tokens, output_tokens,
-	       reasoning_tokens, cache_creation_tokens, cache_creation_1h_tokens,
+	       reasoning_tokens, provider_id, cache_creation_tokens, cache_creation_1h_tokens,
 	       cache_read_tokens, web_search_requests, reported_cost_microdollars,
 	       cost_source, request_scoped, claude_message_id, claude_request_id,
 	       source_uuid, usage_dedup_key, token_eligible, activity_eligible

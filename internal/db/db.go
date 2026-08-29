@@ -444,7 +444,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // because those sessions hash only raw epoch integers and content that are
 // byte-identical before and after the fix, so incremental sync would skip
 // the correction.)
-const dataVersion = 94
+// (95: Posit Assistant provider identity. Existing messages and usage events
+// need re-parsing so managed Posit AI and BYO provider rows price separately.)
+const dataVersion = 95
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -2274,6 +2276,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"messages", "provider_id",
+			"ALTER TABLE messages ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"sessions", "termination_status",
 			"ALTER TABLE sessions ADD COLUMN termination_status TEXT",
 		},
@@ -3362,7 +3368,7 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 
 var usageSessionCoveringIndexColumns = []string{
 	"session_id", "ordinal", "timestamp", "role", "model",
-	"claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+	"provider_id", "claude_message_id", "claude_request_id", "token_usage", "source_uuid",
 }
 
 func ensureUsageIndexesLocked(w *writerHandle) error {
@@ -3391,7 +3397,7 @@ func ensureUsageIndexesLocked(w *writerHandle) error {
 	if err := ensureUsageIndexColumnsLocked(
 		w, "idx_messages_usage_session_covering", usageSessionCoveringIndexColumns,
 		`CREATE INDEX IF NOT EXISTS idx_messages_usage_session_covering
-		 ON messages(session_id, ordinal, timestamp, role, model,
+		 ON messages(session_id, ordinal, timestamp, role, model, provider_id,
 		             claude_message_id, claude_request_id, token_usage, source_uuid)
 		 WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`,
 	); err != nil {

@@ -136,9 +136,10 @@ type EffectivePricingRow struct {
 }
 
 type PricingLookup struct {
-	Rates   ModelRates
-	Pattern string
-	OK      bool
+	Rates      ModelRates
+	Pattern    string
+	OK         bool
+	Adjustment string
 }
 
 type PricingResolver struct {
@@ -175,6 +176,7 @@ type pricingRecordKey struct {
 	input, output                       int64
 	cacheWrite, cacheWrite1h, cacheRead int64
 	bands                               string
+	adjustment                          string
 }
 
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
@@ -233,6 +235,68 @@ func (r *PricingResolver) Lookup(model string) PricingLookup {
 func clonePricingLookup(lookup PricingLookup) PricingLookup {
 	lookup.Rates.Bands = append([]PricingBand(nil), lookup.Rates.Bands...)
 	return lookup
+}
+
+// ResolveBilled resolves model pricing without a usage timestamp, then applies
+// one exact provider adjustment.
+func (r *PricingResolver) ResolveBilled(providerID, reportedModel, canonicalModel string) (string, PricingLookup, error) {
+	return r.ResolveBilledAt(providerID, reportedModel, canonicalModel, time.Time{})
+}
+
+// ResolveBilledAt selects model, historical, band, and cache rates at
+// timestamp before applying one exact provider adjustment.
+func (r *PricingResolver) ResolveBilledAt(providerID, reportedModel, canonicalModel string, timestamp time.Time) (string, PricingLookup, error) {
+	pricedModel, lookup := r.ResolveAt(reportedModel, canonicalModel, timestamp)
+	policy, ok := pricingpkg.BillingPolicyFor(providerID)
+	if !ok || !lookup.OK || lookup.Rates.Source == PricingRowSourceCustom {
+		return pricedModel, lookup, nil
+	}
+	rates, err := scaleModelRates(lookup.Rates, policy.Numerator, policy.Denominator)
+	if err != nil {
+		return "", PricingLookup{}, err
+	}
+	lookup.Rates = rates
+	lookup.Adjustment = policy.Service + "@" + policy.Version
+	return pricedModel, lookup, nil
+}
+
+func scaleModelRates(r ModelRates, numerator, denominator int64) (ModelRates, error) {
+	scale := func(v money.Money) (money.Money, error) { return money.ScaleRatio(v, numerator, denominator) }
+	var err error
+	if r.InputPerMTok, err = scale(r.InputPerMTok); err != nil {
+		return ModelRates{}, err
+	}
+	if r.OutputPerMTok, err = scale(r.OutputPerMTok); err != nil {
+		return ModelRates{}, err
+	}
+	if r.CacheWritePerMTok, err = scale(r.CacheWritePerMTok); err != nil {
+		return ModelRates{}, err
+	}
+	if r.CacheWrite1hPerMTok, err = scale(r.CacheWrite1hPerMTok); err != nil {
+		return ModelRates{}, err
+	}
+	if r.CacheReadPerMTok, err = scale(r.CacheReadPerMTok); err != nil {
+		return ModelRates{}, err
+	}
+	r.Bands = append([]PricingBand(nil), r.Bands...)
+	for i := range r.Bands {
+		if r.Bands[i].InputPerMTok, err = scale(r.Bands[i].InputPerMTok); err != nil {
+			return ModelRates{}, err
+		}
+		if r.Bands[i].OutputPerMTok, err = scale(r.Bands[i].OutputPerMTok); err != nil {
+			return ModelRates{}, err
+		}
+		if r.Bands[i].CacheWritePerMTok, err = scale(r.Bands[i].CacheWritePerMTok); err != nil {
+			return ModelRates{}, err
+		}
+		if r.Bands[i].CacheWrite1hPerMTok, err = scale(r.Bands[i].CacheWrite1hPerMTok); err != nil {
+			return ModelRates{}, err
+		}
+		if r.Bands[i].CacheReadPerMTok, err = scale(r.Bands[i].CacheReadPerMTok); err != nil {
+			return ModelRates{}, err
+		}
+	}
+	return r, nil
 }
 
 // Resolve selects the effective priced model while preserving the model name
@@ -503,6 +567,7 @@ func (r *PricingResolver) record(
 		cacheWrite1h: lookup.Rates.CacheWrite1hPerMTok.Microdollars,
 		cacheRead:    lookup.Rates.CacheReadPerMTok.Microdollars,
 		bands:        r.recordedBandsKey(lookup.Rates.Bands),
+		adjustment:   lookup.Adjustment,
 	}
 	rec := byPricedModel[key]
 	if rec == nil {
@@ -579,7 +644,7 @@ func pricingBandEqual(a, b PricingBand) bool {
 }
 
 func pricingLookupEqual(a, b PricingLookup) bool {
-	if a.Pattern != b.Pattern || a.OK != b.OK ||
+	if a.Pattern != b.Pattern || a.OK != b.OK || a.Adjustment != b.Adjustment ||
 		a.Rates.InputPerMTok != b.Rates.InputPerMTok ||
 		a.Rates.OutputPerMTok != b.Rates.OutputPerMTok ||
 		a.Rates.CacheWritePerMTok != b.Rates.CacheWritePerMTok ||
@@ -699,6 +764,7 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 func comparePricingRecordKey(a, b pricingRecordKey) int {
 	for _, comparison := range []int{
 		strings.Compare(a.pricedModel, b.pricedModel),
+		strings.Compare(a.adjustment, b.adjustment),
 		strings.Compare(a.pattern, b.pattern),
 		strings.Compare(string(a.source), string(b.source)),
 		cmp.Compare(a.input, b.input),

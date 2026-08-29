@@ -338,6 +338,7 @@ func importedUsageEvents(
 		out[i] = db.UsageEvent{
 			SessionID: sessionID, MessageOrdinal: event.MessageOrdinal,
 			Source: event.Source, Model: event.Model,
+			ProviderID:  event.ProviderID,
 			InputTokens: event.InputTokens, OutputTokens: event.OutputTokens,
 			CacheCreationInputTokens: event.CacheCreationInputTokens,
 			CacheReadInputTokens:     event.CacheReadInputTokens,

@@ -593,11 +593,12 @@ func allocateReportingUsageCosts(
 			continue
 		}
 		key := usageCostAllocationKey{
-			date:    localDate(row.Timestamp, time.UTC),
-			project: row.Project,
-			agent:   row.Agent,
-			machine: row.Machine,
-			model:   row.Model,
+			date:       localDate(row.Timestamp, time.UTC),
+			project:    row.Project,
+			agent:      row.Agent,
+			machine:    row.Machine,
+			model:      row.Model,
+			providerID: row.ProviderID,
 		}
 		selected.indices[key] = append(selected.indices[key], i)
 	}

@@ -59,6 +59,7 @@ type UsageRow struct {
 	SessionID           string // session receiving attribution
 	SourceSessionID     string // transcript that supplied the surviving row
 	Model               string
+	ProviderID          string
 	Timestamp           string // ts, RFC3339 or ""
 	Project             string
 	Machine             string

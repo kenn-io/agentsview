@@ -372,7 +372,7 @@ func TestDuckUsageAggregateCostPricingBandRequestScope(t *testing.T) {
 	}
 }
 
-func TestDuckUsageAggregateCostReportedRowUsesBandForSavingsOnly(t *testing.T) {
+func TestDuckUsageAggregateCostPositPremiumsBandAndSavings(t *testing.T) {
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "banded-model",
 		Rates: export.ModelRates{
@@ -386,8 +386,36 @@ func TestDuckUsageAggregateCostReportedRowUsesBandForSavingsOnly(t *testing.T) {
 		},
 	}})
 
-	cost, savings, priced, contributes, err := duckUsageAggregateCost(
-		"banded-model",
+	cost, savings, priced, contributes, err := duckUsageAggregateResolvedCost(
+		"banded-model", "banded-model", "positai", time.Time{},
+		100_001, 0, 0, 0, 100_000,
+		100_001, 0, 0, 0, 0, 100_000,
+		0, 0, false, true, resolver)
+	require.NoError(t, err)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+	assert.Equal(t, money.Money{Microdollars: 242_002}, cost)
+	assert.Equal(t, money.Money{Microdollars: 198_000}, savings)
+	t.Logf("observed Posit band cost: %d microdollars; savings: %d microdollars",
+		cost.Microdollars, savings.Microdollars)
+}
+
+func TestDuckUsageAggregateCostReportedRowUsesBilledBandForSavings(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "banded-model",
+		Rates: export.ModelRates{
+			InputPerMTok:     money.MustParseDollars("1"),
+			CacheReadPerMTok: money.MustParseDollars("0.1"),
+			Bands: []export.PricingBand{{
+				AboveInputTokens: 200_000,
+				InputPerMTok:     money.MustParseDollars("2"),
+				CacheReadPerMTok: money.MustParseDollars("0.2"),
+			}},
+		},
+	}})
+
+	cost, savings, priced, contributes, err := duckUsageAggregateResolvedCost(
+		"banded-model", "banded-model", "positai", time.Time{},
 		100_001, 0, 0, 0, 100_000,
 		0, 0, 0, 0, 0, 0,
 		0,
@@ -400,7 +428,7 @@ func TestDuckUsageAggregateCostReportedRowUsesBandForSavingsOnly(t *testing.T) {
 	assert.True(t, priced)
 	assert.True(t, contributes)
 	assert.Equal(t, money.Money{Microdollars: 75_000}, cost)
-	assert.Equal(t, money.Money{Microdollars: 180_000}, savings)
+	assert.Equal(t, money.Money{Microdollars: 198_000}, savings)
 	block, err := resolver.BuildBlock()
 	require.NoError(t, err)
 	provenance := block.Models["banded-model"]
@@ -522,10 +550,10 @@ func TestDuckUsageAggregateCostPrefersExactCustomKimiAlias(t *testing.T) {
 
 	cost, _, priced, contributes, err := duckUsageAggregateResolvedCost(
 		"kimi-for-coding", pricingpkg.KimiK3Canonical,
-		time.Time{},
+		"", time.Time{},
 		1_000_000, 0, 0, 0, 0,
-		1_000_000, 0, 0, 0, 0, 0, 0,
-		0, false, true, resolver,
+		1_000_000, 0, 0, 0, 0, 0,
+		0, 0, false, true, resolver,
 	)
 
 	require.NoError(t, err)

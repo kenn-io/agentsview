@@ -29,19 +29,11 @@ func (s *Store) GetMessages(
 	}
 
 	query := fmt.Sprintf(`
-		SELECT session_id, ordinal, role, content, thinking_text,
-			timestamp, has_thinking, has_tool_use,
-			content_length, is_system, model, token_usage,
-			context_tokens, output_tokens,
-			has_context_tokens, has_output_tokens,
-			claude_message_id, claude_request_id,
-			source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain,
-			is_compact_boundary
+		SELECT %s
 		FROM messages
 		WHERE session_id = $1 AND ordinal %s $2
 		ORDER BY ordinal %s
-		LIMIT $3`, op, dir)
+		LIMIT $3`, pgMessageCols, op, dir)
 
 	rows, err := s.pg.QueryContext(
 		ctx, query, sessionID, from, limit,
@@ -66,7 +58,7 @@ func (s *Store) GetMessages(
 const pgMessageCols = `session_id, ordinal, role, content, thinking_text,
 	timestamp, has_thinking, has_tool_use,
 	content_length, is_system, model, token_usage,
-	context_tokens, output_tokens,
+	context_tokens, output_tokens, provider_id,
 	has_context_tokens, has_output_tokens,
 	claude_message_id, claude_request_id,
 	source_type, source_subtype, prompt_source, source_uuid,
@@ -219,19 +211,11 @@ func pgRoleFilterClause(roles []string, startAt int) (string, []any) {
 func (s *Store) GetAllMessages(
 	ctx context.Context, sessionID string,
 ) ([]db.Message, error) {
-	rows, err := s.pg.QueryContext(ctx, `
-		SELECT session_id, ordinal, role, content, thinking_text,
-			timestamp, has_thinking, has_tool_use,
-			content_length, is_system, model, token_usage,
-			context_tokens, output_tokens,
-			has_context_tokens, has_output_tokens,
-			claude_message_id, claude_request_id,
-			source_type, source_subtype, prompt_source, source_uuid,
-			source_parent_uuid, is_sidechain,
-			is_compact_boundary
+	rows, err := s.pg.QueryContext(ctx, fmt.Sprintf(`
+		SELECT %s
 		FROM messages
 		WHERE session_id = $1
-		ORDER BY ordinal ASC`, sessionID)
+		ORDER BY ordinal ASC`, pgMessageCols), sessionID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"querying all messages: %w", err,
@@ -747,6 +731,7 @@ func scanPGMessages(rows interface {
 			&m.HasToolUse, &m.ContentLength, &m.IsSystem,
 			&m.Model, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,
+			&m.ProviderID,
 			&m.HasContextTokens, &m.HasOutputTokens,
 			&m.ClaudeMessageID, &m.ClaudeRequestID,
 			&m.SourceType, &m.SourceSubtype, &m.PromptSource, &m.SourceUUID,

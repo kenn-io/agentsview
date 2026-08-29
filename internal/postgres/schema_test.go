@@ -737,6 +737,36 @@ func TestCheckSchemaCompatRequiresUsageEventMicrodollars(t *testing.T) {
 		"usage_events table missing required columns")
 }
 
+func TestCheckSchemaCompatRequiresMessageProviderID(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "provider_id",
+		err: errors.New(
+			`ERROR: column "provider_id" does not exist (SQLSTATE 42703)`),
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"messages table missing required columns")
+}
+
+func TestCheckSchemaCompatRequiresUsageEventProviderID(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "id, provider_id, cost_microdollars",
+		err: errors.New(
+			`ERROR: column "provider_id" does not exist (SQLSTATE 42703)`),
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"usage_events table missing required columns")
+}
+
 func TestCheckSchemaCompatRequiresModelPricingMicrodollarsWhenPresent(
 	t *testing.T,
 ) {
@@ -1136,11 +1166,12 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 
 	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
 
-	// Three tables have missing columns (sessions: termination_status;
+	// Four tables have missing columns (sessions: termination_status;
 	// messages: source_parent_uuid, is_sidechain, is_compact_boundary,
-	// thinking_text; source_project_identity_observations: repository/worktree/
-	// checkout/remote context). Per-table batching means one ALTER each. tool_calls
+	// thinking_text; usage_events: provider_id;
+	// source_project_identity_observations: repository/worktree/checkout/remote
+	// context). Per-table batching means one ALTER each. tool_calls
 	// lists all its migration columns (call_index, file_path) as present, so
 	// it contributes no ALTER.
-	assert.Equal(t, 3, state.alterTableExecCount(), "ALTER TABLE execs")
+	assert.Equal(t, 4, state.alterTableExecCount(), "ALTER TABLE execs")
 }

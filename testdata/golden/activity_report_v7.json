@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",

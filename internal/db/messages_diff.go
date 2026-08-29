@@ -3,6 +3,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -23,7 +24,7 @@ func messageInsertArgs(m Message) []any {
 		m.Timestamp, m.HasThinking, m.HasToolUse,
 		m.ContentLength, m.IsSystem,
 		m.Model, string(m.TokenUsage),
-		m.ContextTokens, m.OutputTokens,
+		m.ContextTokens, m.OutputTokens, m.ProviderID,
 		m.HasContextTokens, m.HasOutputTokens,
 		m.ClaudeMessageID, m.ClaudeRequestID,
 		m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
@@ -47,11 +48,24 @@ var messageUpdateSetClause = func() string {
 // Both sides go through the same resolve helpers the insert path
 // uses, so equality is defined on exactly the persisted tuples.
 func messageRowEqual(a, b Message) bool {
-	aArgs, bArgs := messageInsertArgs(a), messageInsertArgs(b)
-	for i := range aArgs {
-		if aArgs[i] != bArgs[i] {
-			return false
-		}
+	if a.SessionID != b.SessionID || a.Ordinal != b.Ordinal ||
+		a.Role != b.Role || a.Content != b.Content ||
+		a.ThinkingText != b.ThinkingText || a.Timestamp != b.Timestamp ||
+		a.HasThinking != b.HasThinking || a.HasToolUse != b.HasToolUse ||
+		a.ContentLength != b.ContentLength || a.IsSystem != b.IsSystem ||
+		a.Model != b.Model || !bytes.Equal(a.TokenUsage, b.TokenUsage) ||
+		a.ContextTokens != b.ContextTokens || a.OutputTokens != b.OutputTokens ||
+		a.ProviderID != b.ProviderID ||
+		a.HasContextTokens != b.HasContextTokens ||
+		a.HasOutputTokens != b.HasOutputTokens ||
+		a.ClaudeMessageID != b.ClaudeMessageID ||
+		a.ClaudeRequestID != b.ClaudeRequestID ||
+		a.SourceType != b.SourceType || a.SourceSubtype != b.SourceSubtype ||
+		a.PromptSource != b.PromptSource || a.SourceUUID != b.SourceUUID ||
+		a.SourceParentUUID != b.SourceParentUUID ||
+		a.IsSidechain != b.IsSidechain ||
+		a.IsCompactBoundary != b.IsCompactBoundary {
+		return false
 	}
 
 	aCalls := resolveToolCalls([]Message{a}, []int64{0})

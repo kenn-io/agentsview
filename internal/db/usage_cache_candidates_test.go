@@ -64,7 +64,7 @@ func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 		assert.NotEmpty(t, version.TranscriptRevision)
 	}
 	assert.Equal(t,
-		"false|0|7:session|7:model-x|1|2|0|0|0|false|0|0:|0:|20:2026-08-10T12:00:00Z|2:e1;",
+		"false|0|7:session|7:model-x|0:|1|2|0|0|0|false|0|0:|0:|20:2026-08-10T12:00:00Z|2:e1;",
 		versionByID["event"].UsageEventFingerprint)
 	assert.Empty(t, versionByID["inside-message"].UsageEventFingerprint)
 

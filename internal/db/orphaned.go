@@ -1911,7 +1911,7 @@ func copySessionDataForIDs(
 	}
 	for _, c := range []string{
 		"model", "token_usage", "context_tokens",
-		"output_tokens", "has_context_tokens",
+		"output_tokens", "provider_id", "has_context_tokens",
 		"has_output_tokens",
 		"claude_message_id", "claude_request_id",
 		"source_type", "source_subtype", "prompt_source",
@@ -1932,20 +1932,25 @@ func copySessionDataForIDs(
 	}
 
 	if oldDBHasTable(ctx, tx, "usage_events") {
+		usageEventCols := "session_id, message_ordinal, source, model"
+		usageEventSelect := usageEventCols
+		if oldDBHasColumn(ctx, tx, "usage_events", "provider_id") {
+			usageEventCols += ", provider_id"
+			usageEventSelect += ", provider_id"
+		}
+		usageEventCols += `,
+				input_tokens, output_tokens,
+				cache_creation_input_tokens, cache_read_input_tokens,
+				reasoning_tokens, cost_microdollars, cost_status, cost_source,
+				occurred_at, dedup_key`
+		usageEventSelect += `,
+				input_tokens, output_tokens,
+				cache_creation_input_tokens, cache_read_input_tokens,
+				reasoning_tokens, cost_microdollars, cost_status, cost_source,
+				occurred_at, dedup_key`
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO usage_events (
-				session_id, message_ordinal, source, model,
-				input_tokens, output_tokens,
-				cache_creation_input_tokens, cache_read_input_tokens,
-				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key
-			)
-			SELECT
-				session_id, message_ordinal, source, model,
-				input_tokens, output_tokens,
-				cache_creation_input_tokens, cache_read_input_tokens,
-				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key
+			INSERT INTO usage_events (`+usageEventCols+`)
+			SELECT `+usageEventSelect+`
 			FROM old_db.usage_events
 			WHERE session_id IN (
 				SELECT id FROM `+tempIDsTable+`

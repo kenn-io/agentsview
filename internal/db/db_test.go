@@ -1042,8 +1042,13 @@ func TestCurrentDataVersionPositAssistantUsageEventsSidecar(t *testing.T) {
 }
 
 func TestCurrentDataVersionDevinMessageNodeTokenUsage(t *testing.T) {
-	assert.Equal(t, 94, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 94,
 		"Devin message_nodes token usage requires re-parsing fallback sessions")
+}
+
+func TestCurrentDataVersionPositAssistantProviderIdentity(t *testing.T) {
+	assert.Equal(t, 95, CurrentDataVersion(),
+		"Posit Assistant provider identity requires re-parsing usage rows")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
