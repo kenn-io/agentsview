@@ -1276,7 +1276,7 @@
   "session_vitals_timeline_tools": "工具",
   "session_vitals_timeline_hint": "拖动聚焦 · 滚轮缩放",
   "session_vitals_timeline_reset_view": "重置视图",
-  "session_vitals_timeline_load_earlier": "加载更早消息",
+  "session_vitals_timeline_load_earlier": "加载更早历史",
   "session_vitals_calls": "调用",
   "session_vitals_calls_summary": [
     {

@@ -3,6 +3,7 @@ import type { Message } from "../api/types.js";
 import type { SessionTiming } from "../api/types/timing.js";
 import {
   deriveTimingOverview,
+  projectTimingOverview,
   nearestTimingOverviewSpan,
   orderedTimingOverviewRange,
   timingOverviewFocusOrdinals,
@@ -131,6 +132,31 @@ describe("deriveTimingOverview", () => {
       approximate: false,
       errored: false,
     });
+  });
+
+  it("switches between idle-compressed duration and equal-width sequence space", () => {
+    const source = deriveTimingOverview(
+      [
+        message({ ordinal: 0 }),
+        message({
+          id: 2,
+          ordinal: 1,
+          role: "assistant",
+          timestamp: "2026-08-30T10:00:02.000Z",
+          has_tool_use: true,
+        }),
+      ],
+      timing(),
+      { sessionEndedAt: "2026-08-30T10:00:10.000Z" },
+    )!;
+
+    const duration = projectTimingOverview(source, "duration");
+    expect(duration.endMs - duration.startMs).toBe(6_000);
+    expect(duration.spans[1]?.recordedStartMs).toBe(Date.parse("2026-08-30T10:00:00.000Z"));
+
+    const sequence = projectTimingOverview(source, "sequence");
+    expect(sequence).toMatchObject({ startMs: 0, endMs: 3 });
+    expect(sequence.spans.every((span) => span.endMs - span.startMs === 1)).toBe(true);
   });
 
   it("marks turn-level tool bounds as approximate without inventing running time", () => {

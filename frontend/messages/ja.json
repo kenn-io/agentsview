@@ -1493,7 +1493,7 @@
   "session_vitals_timeline_tools": "ツール",
   "session_vitals_timeline_hint": "ドラッグで絞り込み · ホイールでズーム",
   "session_vitals_timeline_reset_view": "表示をリセット",
-  "session_vitals_timeline_load_earlier": "以前のメッセージを読み込む",
+  "session_vitals_timeline_load_earlier": "以前の履歴を読み込む",
   "session_vitals_calls": "呼び出し",
   "session_vitals_calls_summary": [
     {

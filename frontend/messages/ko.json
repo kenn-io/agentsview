@@ -1278,7 +1278,7 @@
   "session_vitals_timeline_tools": "도구",
   "session_vitals_timeline_hint": "드래그하여 범위 선택 · 휠로 확대/축소",
   "session_vitals_timeline_reset_view": "보기 초기화",
-  "session_vitals_timeline_load_earlier": "이전 메시지 불러오기",
+  "session_vitals_timeline_load_earlier": "이전 기록 불러오기",
   "session_vitals_calls": "호출",
   "session_vitals_calls_summary": [
     {

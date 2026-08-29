@@ -1334,7 +1334,7 @@
   "session_vitals_timeline_tools": "Outils",
   "session_vitals_timeline_hint": "faites glisser pour cibler · molette pour zoomer",
   "session_vitals_timeline_reset_view": "Réinitialiser la vue",
-  "session_vitals_timeline_load_earlier": "Charger les messages précédents",
+  "session_vitals_timeline_load_earlier": "Charger l’historique antérieur",
   "session_vitals_calls": "Appels",
   "session_vitals_calls_summary": [
     {

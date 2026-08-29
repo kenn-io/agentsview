@@ -856,13 +856,25 @@ small empty state instead of a score. See
 
 ### Session Vital Signs
 
-The right column of an open session shows a **Session Vital
-Signs** panel with timing data derived from the message
-timestamps. Toggle it from the session header.
+An open session shows a **Timing overview** directly above the transcript. It
+stays visible independently of the optional Session Vital Signs column, so the
+timeline uses the full conversation width.
 
-![Session Vital Signs in context](/assets/generated/screenshots/session-vital-signs.png)
+The overview projects **Input**, **Model**, and **Tools** onto one shared domain.
+Input events render as point markers; model spans cover the interval from the
+preceding visible message to the recorded assistant message; tool spans prefer
+execution start/completion events and use striped turn-level bounds when exact
+call timing is unavailable. **Duration** switches between idle-compressed
+recorded time and equal-width operation order. **Turns** toggles focused
+transcript mode, **Calls** toggles tool detail, and the search field highlights
+matching timeline records. Hover for exact clock and duration detail, click a
+span to jump to its transcript message, drag a range to focus the first
+intersecting record, and use the wheel to zoom. The history control loads one
+older message page without inventing timing for an unloaded prefix.
 
-It has five stacked sections when experimental Recall is available:
+The right column shows **Session Vital Signs** derived from the message
+timestamps. Toggle it from the session header. It has four stacked sections
+when experimental Recall is available:
 
 - **Session summary** — repository and worktree context recorded by the trace,
   total wall-clock, turn count, tool call count, sub-agent count, and the
@@ -877,15 +889,6 @@ It has five stacked sections when experimental Recall is available:
   `Glob`, `Task`, `Tool`, `Other`, plus a `Mixed` bucket for
   turns split across categories). Click a row to filter the rest
   of the panel to that category.
-- **Timing overview** — a shared wall-clock projection with **Input**, **Model**,
-  and **Tools** lanes. Input events render as point markers; model spans cover
-  the interval from the preceding visible message to the recorded assistant
-  message; tool spans prefer execution start/completion events and use striped
-  turn-level bounds when exact call timing is unavailable. Hover for clock and
-  duration detail, click a span to jump to its transcript message, drag a range
-  to focus the first intersecting record, and use the wheel to zoom. An ellipsis
-  at the left edge loads one older message page without inventing timing for an
-  unloaded prefix.
 - **Calls** — chronological list of tool calls with horizontal
   duration bars. Parallel `tool_use` runs are bracketed as a
   single group. Call details start collapsed for quicker transcript navigation.

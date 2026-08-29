@@ -1334,7 +1334,7 @@
   "session_vitals_timeline_tools": "Tools",
   "session_vitals_timeline_hint": "drag to focus · wheel to zoom",
   "session_vitals_timeline_reset_view": "Reset view",
-  "session_vitals_timeline_load_earlier": "Load earlier messages",
+  "session_vitals_timeline_load_earlier": "Load earlier history",
   "session_vitals_calls": "Calls",
   "session_vitals_calls_summary": [
     {

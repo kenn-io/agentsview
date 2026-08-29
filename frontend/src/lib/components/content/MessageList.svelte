@@ -4,6 +4,7 @@
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
   import { messages } from "../../stores/messages.svelte.js";
+  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { readProgress } from "../../stores/read-progress.svelte.js";
@@ -26,6 +27,7 @@
   import { resolveMessageLayout } from "../../utils/message-layout.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
+  import TimingOverview from "./TimingOverview.svelte";
   import {
     getAlignedOffsetScrollAlign,
     getLatestDisplayIndex,
@@ -50,6 +52,13 @@
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
   );
+
+  let overviewTiming = $derived.by(() => {
+    const timing = sessionTiming.timing;
+    const sessionId = sessions.activeSessionId;
+    if (!timing || timing.session_id !== sessionId) return null;
+    return timing;
+  });
 
   let baseDisplayItemsAsc = $derived(
     buildDisplayItems(baseMessages),
@@ -113,6 +122,24 @@
       return displayItemsAsc[mapped];
     }
     return displayItemsAsc[index];
+  }
+
+  async function loadEarlierOverviewMessages(): Promise<void> {
+    await messages.loadOlder();
+  }
+
+  function scrollFromOverview(ordinal: number): void {
+    ui.scrollToOrdinal(ordinal);
+  }
+
+  function toggleOverviewTurns(): void {
+    ui.setTranscriptMode(
+      ui.transcriptMode === "focused" ? "normal" : "focused",
+    );
+  }
+
+  function toggleOverviewCalls(): void {
+    ui.setBlockVisible("tool", !ui.isBlockVisible("tool"));
   }
 
   const virtualizer = createVirtualizer(() => {
@@ -800,6 +827,22 @@
 {:else if messages.loading && messages.messages.length === 0}
   <EmptyState title={m.message_list_loading()} />
 {:else}
+  {#if overviewTiming}
+    <TimingOverview
+      messages={messages.messages}
+      timing={overviewTiming}
+      sessionStartedAt={sessions.activeSession?.started_at}
+      sessionEndedAt={sessions.activeSession?.ended_at}
+      hasEarlierMessages={messages.hasOlder}
+      loadingEarlierMessages={messages.loadingOlder}
+      onLoadEarlier={loadEarlierOverviewMessages}
+      onNavigate={scrollFromOverview}
+      turnsCollapsed={ui.transcriptMode === "focused"}
+      callsCollapsed={!ui.isBlockVisible("tool")}
+      onToggleTurns={toggleOverviewTurns}
+      onToggleCalls={toggleOverviewCalls}
+    />
+  {/if}
   <SessionFindBar />
   <div
     class="message-list-scroll layout-{effectiveLayout}"

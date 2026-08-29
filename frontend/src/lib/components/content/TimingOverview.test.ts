@@ -132,6 +132,41 @@ describe("TimingOverview", () => {
     expect(onNavigate).toHaveBeenCalledWith(1);
   });
 
+  it("switches projection, transcript folding, call folding, and local search", async () => {
+    const onToggleTurns = vi.fn();
+    const onToggleCalls = vi.fn();
+    const data = fixture();
+    render(TimingOverview, {
+      ...data,
+      turnsCollapsed: true,
+      callsCollapsed: false,
+      onToggleTurns,
+      onToggleCalls,
+      onNavigate: vi.fn(),
+    });
+
+    const duration = screen.getByRole("button", { name: m.analytics_duration() });
+    expect(duration.getAttribute("aria-pressed")).toBe("true");
+    await fireEvent.click(duration);
+    expect(duration.getAttribute("aria-pressed")).toBe("false");
+
+    const turns = screen.getByRole("button", { name: m.session_vitals_turns() });
+    const calls = screen.getByRole("button", { name: m.session_vitals_calls() });
+    expect(turns.getAttribute("aria-pressed")).toBe("true");
+    expect(calls.getAttribute("aria-pressed")).toBe("false");
+    await fireEvent.click(turns);
+    await fireEvent.click(calls);
+    expect(onToggleTurns).toHaveBeenCalledOnce();
+    expect(onToggleCalls).toHaveBeenCalledOnce();
+
+    const search = screen.getByRole("searchbox", {
+      name: m.session_find_search_query(),
+    });
+    await fireEvent.input(search, { target: { value: "Bash" } });
+    expect(document.querySelector('[data-lane="model"]')?.classList).toContain("dimmed");
+    expect(document.querySelector('[data-lane="tools"]')?.classList).not.toContain("dimmed");
+  });
+
   it("focuses the selected interval and exposes a clear action", async () => {
     const onNavigate = vi.fn();
     const data = fixture();

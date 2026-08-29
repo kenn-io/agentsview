@@ -3,7 +3,6 @@
   import { onDestroy } from "svelte";
   import { CopyButton, Tooltip } from "@kenn-io/kit-ui";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
-  import { messages } from "../../stores/messages.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import { fetchSessionTiming } from "../../api/timing.js";
   import { isAbortError } from "../../api/runtime.js";
@@ -18,7 +17,6 @@
     SessionTiming,
     TurnTiming,
   } from "../../api/types/timing.js";
-  import TimingOverview from "./TimingOverview.svelte";
   import RecallPanel from "./RecallPanel.svelte";
   import CallRow from "./CallRow.svelte";
   import CallGroup from "./CallGroup.svelte";
@@ -244,13 +242,6 @@
     );
   }
 
-  async function loadEarlierOverviewMessages(): Promise<void> {
-    await messages.loadOlder();
-  }
-
-  function scrollToOverviewOrdinal(ordinal: number): void {
-    ui.scrollToOrdinal(ordinal);
-  }
 </script>
 
 <div class="vital">
@@ -426,21 +417,6 @@
       </section>
     {/if}
 
-    {#if messages.messages.length > 0}
-      <section class="v-section">
-        <TimingOverview
-          messages={messages.messages}
-          {timing}
-          sessionStartedAt={session?.started_at}
-          sessionEndedAt={session?.ended_at}
-          hasEarlierMessages={messages.hasOlder}
-          loadingEarlierMessages={messages.loadingOlder}
-          {categoryFilter}
-          onLoadEarlier={loadEarlierOverviewMessages}
-          onNavigate={scrollToOverviewOrdinal}
-        />
-      </section>
-    {/if}
 
     {#if timing.turns.length > 0}
       <section class="v-section">

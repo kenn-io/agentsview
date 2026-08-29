@@ -1,14 +1,15 @@
 <script lang="ts">
-  import { Button } from "@kenn-io/kit-ui";
+  import { Button, SearchInput } from "@kenn-io/kit-ui";
   import type { Message } from "../../api/types.js";
   import type { SessionTiming } from "../../api/types/timing.js";
   import { formatDateTime, m } from "../../i18n/index.js";
-  import { liveTick } from "../../stores/liveTick.svelte.js";
+  import { ClockIcon, ListCollapseIcon, SquareTerminalIcon } from "../../icons.js";
   import { categoryToken } from "../../utils/categoryToken.js";
   import { formatDuration } from "../../utils/duration.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
   import {
     deriveTimingOverview,
+    projectTimingOverview,
     nearestTimingOverviewSpan,
     orderedTimingOverviewRange,
     timingOverviewFocusOrdinals,
@@ -28,6 +29,10 @@
     categoryFilter?: string | null;
     onLoadEarlier?: () => void | Promise<void>;
     onNavigate: (ordinal: number) => void;
+    turnsCollapsed?: boolean;
+    callsCollapsed?: boolean;
+    onToggleTurns?: () => void;
+    onToggleCalls?: () => void;
   }
 
   let {
@@ -40,6 +45,10 @@
     categoryFilter = null,
     onLoadEarlier,
     onNavigate,
+    turnsCollapsed = false,
+    callsCollapsed = false,
+    onToggleTurns,
+    onToggleCalls,
   }: Props = $props();
 
   const MINIMUM_DRAG_PX = 3;
@@ -51,6 +60,8 @@
   let draftSelection = $state<TimingOverviewRange | null>(null);
   let viewport = $state<TimingOverviewRange | null>(null);
   let hoverFraction = $state<number | null>(null);
+  let actualDuration = $state(true);
+  let searchQuery = $state("");
   let gesture = $state<{
     pointerId: number;
     button: number;
@@ -61,11 +72,19 @@
   } | null>(null);
   let activeSessionId: string | null = null;
 
-  let model = $derived(deriveTimingOverview(messages, timing, {
+  let sourceModel = $derived(deriveTimingOverview(messages, timing, {
     sessionStartedAt,
     sessionEndedAt,
     hasEarlierMessages,
   }));
+  let model = $derived(
+    sourceModel
+      ? projectTimingOverview(
+        sourceModel,
+        actualDuration ? "duration" : "sequence",
+      )
+      : null,
+  );
 
   $effect(() => {
     const sessionId = timing.session_id;
@@ -78,15 +97,10 @@
     selection = null;
     draftSelection = null;
     viewport = null;
+    searchQuery = "";
   });
 
-  let modelEndMs = $derived(
-    model
-      ? timing.running
-        ? Math.max(model.endMs, liveTick.now)
-        : model.endMs
-      : 1,
-  );
+  let modelEndMs = $derived(model?.endMs ?? 1);
 
   $effect(() => {
     if (!model || !viewport) return;
@@ -102,6 +116,7 @@
   let domainEndMs = $derived(viewport?.endMs ?? modelEndMs);
   let domainDurationMs = $derived(Math.max(1, domainEndMs - domainStartMs));
   let activeSelection = $derived(draftSelection ?? selection);
+  let normalizedSearch = $derived(searchQuery.trim().toLocaleLowerCase());
   let selectedOrdinals = $derived(
     model && selection
       ? timingOverviewFocusOrdinals(model, selection)
@@ -173,7 +188,7 @@
       })
       : span.label;
     const heading = label ? `${lane} · ${label}` : lane;
-    const start = formatDateTime(span.startMs, {
+    const start = formatDateTime(span.recordedStartMs, {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
@@ -182,15 +197,15 @@
     if (span.running) {
       return `${heading}\n${start} · ${m.session_vitals_running()}`;
     }
-    if (span.endMs <= span.startMs) return `${heading}\n${start}`;
-    const end = formatDateTime(span.endMs, {
+    if (span.recordedEndMs <= span.recordedStartMs) return `${heading}\n${start}`;
+    const end = formatDateTime(span.recordedEndMs, {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
       fractionalSecondDigits: 3,
     });
     const duration = `${span.approximate ? "≤" : ""}${formatDuration(
-      span.endMs - span.startMs,
+      span.recordedEndMs - span.recordedStartMs,
     )}`;
     return `${heading}\n${start} → ${end} · ${duration}`;
   }
@@ -202,6 +217,12 @@
 
   function resetView(): void {
     viewport = null;
+  }
+
+  function toggleDurationProjection(): void {
+    actualDuration = !actualDuration;
+    clearSelection();
+    resetView();
   }
 
   function focusRange(range: TimingOverviewRange): void {
@@ -339,6 +360,9 @@
     if (activeSelection && !timingOverviewSpanIntersects(span, activeSelection)) {
       return true;
     }
+    if (normalizedSearch && !span.searchText.toLocaleLowerCase().includes(normalizedSearch)) {
+      return true;
+    }
     return categoryFilter !== null &&
       span.lane === "tools" &&
       span.category !== categoryFilter;
@@ -346,9 +370,46 @@
 </script>
 
 <section class="overview" aria-label={m.session_vitals_timeline()}>
-  <header class="overview-header">
-    <span>{m.session_vitals_timeline()}</span>
-    <span class="overview-actions">
+  <header
+    class="overview-toolbar"
+    role="toolbar"
+    aria-label={m.session_vitals_timeline()}
+  >
+    <div class="overview-toggle-group">
+      <button
+        type="button"
+        class="overview-toggle"
+        aria-pressed={actualDuration}
+        title={m.analytics_duration()}
+        onclick={toggleDurationProjection}
+      >
+        <ClockIcon size="12" strokeWidth="1.6" aria-hidden="true" />
+        {m.analytics_duration()}
+      </button>
+      <button
+        type="button"
+        class="overview-toggle"
+        aria-pressed={turnsCollapsed}
+        title={m.session_vitals_turns()}
+        disabled={!onToggleTurns}
+        onclick={() => onToggleTurns?.()}
+      >
+        <ListCollapseIcon size="12" strokeWidth="1.6" aria-hidden="true" />
+        {m.session_vitals_turns()}
+      </button>
+      <button
+        type="button"
+        class="overview-toggle"
+        aria-pressed={callsCollapsed}
+        title={m.session_vitals_calls()}
+        disabled={!onToggleCalls}
+        onclick={() => onToggleCalls?.()}
+      >
+        <SquareTerminalIcon size="12" strokeWidth="1.6" aria-hidden="true" />
+        {m.session_vitals_calls()}
+      </button>
+    </div>
+    <div class="overview-state-actions">
       {#if selection}
         <span class="selection-count">
           {m.sidebar_selected_count({ countLabel: String(selectedOrdinals.length) })}
@@ -366,12 +427,16 @@
           label={m.session_vitals_timeline_reset_view()}
           onclick={resetView}
         />
-      {:else}
-        <span class="overview-hint">
-          {m.session_vitals_timeline_hint()}
-        </span>
       {/if}
-    </span>
+    </div>
+    <SearchInput
+      class="overview-search"
+      size="sm"
+      bind:value={searchQuery}
+      placeholder={m.session_find_placeholder()}
+      ariaLabel={m.session_find_search_query()}
+      clearLabel={m.settings_search_clear()}
+    />
   </header>
 
   {#if model}
@@ -422,23 +487,6 @@
             aria-hidden="true"
           ></span>
         {/if}
-        {#if hasEarlierMessages && domainStartMs <= model.startMs}
-          <button
-            type="button"
-            class="earlier"
-            data-overview-control
-            disabled={loadingEarlierMessages || !onLoadEarlier}
-            title={loadingEarlierMessages
-              ? m.sidebar_loading()
-              : m.session_vitals_timeline_load_earlier()}
-            aria-label={loadingEarlierMessages
-              ? m.sidebar_loading()
-              : m.session_vitals_timeline_load_earlier()}
-            onclick={() => {
-              void onLoadEarlier?.();
-            }}
-          >…</button>
-        {/if}
         {#each laneOrder as lane, laneIndex (lane)}
           {#each visibleSpans.filter((span) => span.lane === lane) as span (span.key)}
             {@const geometry = spanGeometry(span)}
@@ -466,60 +514,103 @@
         {/each}
       </div>
     </div>
-    <div class="overview-axis" aria-hidden="true">
-      <span>{formatDuration(domainStartMs - model.startMs)}</span>
-      <span>{formatDuration((domainStartMs + domainEndMs) / 2 - model.startMs)}</span>
-      <span>{formatDuration(domainEndMs - model.startMs)}</span>
-    </div>
+    {#if hasEarlierMessages}
+      <button
+        type="button"
+        class="load-history"
+        disabled={loadingEarlierMessages || !onLoadEarlier}
+        onclick={() => {
+          void onLoadEarlier?.();
+        }}
+      >
+        {loadingEarlierMessages
+          ? m.sidebar_loading()
+          : m.session_vitals_timeline_load_earlier()}
+      </button>
+    {/if}
   {/if}
 </section>
 
 <style>
   .overview {
+    flex: none;
     min-width: 0;
+    padding: 0 8px 6px;
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-surface);
   }
 
-  .overview-header {
-    min-height: 22px;
-    margin-bottom: 6px;
+  .overview-toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    width: 100%;
+    height: 32px;
     gap: 8px;
-    color: var(--text-muted);
-    font-size: 9px;
-    font-weight: 500;
-    letter-spacing: 0.6px;
-    text-transform: uppercase;
   }
 
-  .overview-actions {
-    min-width: 0;
+  .overview-toggle-group,
+  .overview-state-actions {
     display: inline-flex;
     align-items: center;
-    justify-content: flex-end;
-    gap: 6px;
+    gap: 2px;
   }
 
-  .overview-actions :global(.kit-button) {
+  .overview-toggle {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 6px;
+    gap: 4px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: capitalize;
+    cursor: pointer;
+  }
+
+  .overview-toggle:hover:not(:disabled),
+  .overview-toggle[aria-pressed="true"] {
+    color: var(--text-primary);
+    background: var(--bg-surface-hover);
+  }
+
+  .overview-toggle:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
+  }
+
+  .overview-toggle:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+
+  .overview-state-actions {
+    min-width: 0;
+    margin-left: 4px;
+  }
+
+  .overview-state-actions :global(.kit-button) {
     min-height: 20px;
     padding-block: 1px;
     font-size: 9px;
-    letter-spacing: 0;
-    text-transform: none;
   }
 
-  .overview-hint,
   .selection-count {
     overflow: hidden;
     color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: 9px;
-    font-weight: 400;
-    letter-spacing: 0;
     text-overflow: ellipsis;
-    text-transform: none;
     white-space: nowrap;
+  }
+
+  .overview-toolbar :global(.overview-search) {
+    width: min(164px, 28vw);
+    min-width: 96px;
+    margin-left: auto;
   }
 
   .overview-plot {
@@ -652,44 +743,48 @@
     pointer-events: none;
   }
 
-  .earlier {
-    position: absolute;
-    z-index: 5;
-    inset-block: 0;
-    left: 0;
-    width: 24px;
-    padding: 0 0 0 3px;
+  .load-history {
+    display: block;
+    width: 100%;
+    height: 28px;
+    padding: 0;
     border: 0;
-    background: linear-gradient(
-      to right,
-      var(--bg-inset) 0 42%,
-      transparent 100%
-    );
+    background: transparent;
     color: var(--text-muted);
     font-family: var(--font-mono);
-    text-align: left;
+    font-size: 9px;
     cursor: pointer;
   }
 
-  .earlier:hover:not(:disabled),
-  .earlier:focus-visible {
+  .load-history:hover:not(:disabled),
+  .load-history:focus-visible {
     color: var(--text-primary);
+    background: var(--bg-surface-hover);
     outline: none;
   }
 
-  .earlier:disabled {
+  .load-history:disabled {
     cursor: default;
     opacity: 0.5;
   }
 
-  .overview-axis {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 1px 0 45px;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    font-size: 8px;
-    font-variant-numeric: tabular-nums;
+  @media (max-width: 700px) {
+    .overview {
+      padding-inline: 4px;
+    }
+
+    .overview-toolbar {
+      gap: 4px;
+    }
+
+    .overview-toggle {
+      padding-inline: 4px;
+    }
+
+    .overview-toolbar :global(.overview-search) {
+      width: 112px;
+      min-width: 84px;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
