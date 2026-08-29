@@ -367,6 +367,39 @@ func TestAntigravityCLIProviderMarksRemoteCwd(t *testing.T) {
 	}
 }
 
+func TestAntigravityCLIProviderForeignMachineSkipsLocalProjectDiscovery(t *testing.T) {
+	root := t.TempDir()
+	id := "44444444-5555-6666-7777-888888888888"
+	writeAntigravityCLIProviderFixture(t, root, id)
+
+	workspaceRoot := t.TempDir()
+	localRepo := filepath.Join(workspaceRoot, "conflicting-local-repo")
+	workspace := filepath.Join(localRepo, "recorded-project")
+	mustMkdir(t, filepath.Join(localRepo, ".git"))
+	mustMkdir(t, workspace)
+	cachePath := filepath.Join(root, "cache", "last_conversations.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(cachePath), 0o755))
+	mustWrite(t, cachePath, []byte(fmt.Sprintf(`{%q:%q}`, workspace, id)))
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "localbox",
+		SourceMachines: map[string]string{
+			root: "archivebox",
+		},
+	})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID: id,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	parsed, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, parsed.Results, 1)
+	assert.Equal(t, "recorded_project", parsed.Results[0].Result.Session.Project)
+}
+
 func TestAntigravityCLIProviderParseCanSkipRecordedWorkspaceDiscovery(t *testing.T) {
 	root := t.TempDir()
 	id := "44444444-5555-6666-7777-888888888888"

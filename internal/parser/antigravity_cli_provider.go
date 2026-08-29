@@ -103,6 +103,9 @@ func (p *antigravityCLIProvider) Parse(
 	if req.Source.CwdResolution.State == SourceCwdResolved {
 		cwd = req.Source.CwdResolution.Path
 	}
+	if req.Source.CwdResolution.State == SourceCwdRemote {
+		ctx = WithoutFilesystemProjectDiscovery(ctx)
+	}
 	sess, msgs, usageEvents, status, err := p.parseSessionWithStatus(
 		ctx,
 		src.Path,
