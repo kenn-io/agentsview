@@ -648,6 +648,10 @@ func awaitQuiescentSources(
 		}
 		roots, err := locateRoot(ctx, state.manifest)
 		if err != nil {
+			if errors.Is(err, context.Canceled) ||
+				errors.Is(err, context.DeadlineExceeded) {
+				return nil, finalizationError(foundRoot, missingRoot, err)
+			}
 			return nil, err
 		}
 		if len(roots) > 1 {

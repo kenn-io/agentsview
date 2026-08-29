@@ -14,6 +14,55 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+type deadlineOnSecondErrContext struct {
+	context.Context
+	checks int
+}
+
+func (c *deadlineOnSecondErrContext) Err() error {
+	c.checks++
+	if c.checks >= 2 {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestAwaitQuiescentSourcesClassifiesDeadlineDuringLookup(t *testing.T) {
+	tests := []struct {
+		name           string
+		sourceObserved bool
+		wantReason     ReasonCode
+	}{
+		{name: "no source", wantReason: ReasonNoSession},
+		{
+			name: "source observed", sourceObserved: true,
+			wantReason: ReasonFinalizationTimeout,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := &captureState{manifest: manifest{
+				Provider:          string(ProviderClaude),
+				ProviderRoot:      t.TempDir(),
+				ProviderWorkDir:   t.TempDir(),
+				ProviderSessionID: "11111111-1111-4111-8111-111111111111",
+				SourceObserved:    test.sourceObserved,
+				Limits:            testLimits(),
+			}}
+			ctx := &deadlineOnSecondErrContext{Context: context.Background()}
+
+			_, err := awaitQuiescentSources(
+				ctx, state, time.Now().Add(time.Minute))
+
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Equal(
+				t, test.wantReason,
+				reasonForError(err, ReasonFinalizationTimeout),
+			)
+		})
+	}
+}
+
 func TestOversizedResultWritesBoundedFailureAndKeepsPriorFailure(t *testing.T) {
 	tests := []struct {
 		name        string
