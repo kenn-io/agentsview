@@ -38,6 +38,33 @@ type rawCaptureUndeclaredProvider struct {
 	ProviderBase
 }
 
+type streamingRawCaptureTestProvider struct {
+	rawCaptureTestProvider
+	sources     []SourceRef
+	complete    bool
+	streamCalls int
+}
+
+func (p *streamingRawCaptureTestProvider) DiscoverRawCaptureSourcesEach(
+	_ context.Context,
+	yield func(SourceRef) error,
+) (bool, error) {
+	p.streamCalls++
+	for _, source := range p.sources {
+		if err := yield(source); err != nil {
+			return false, err
+		}
+	}
+	return p.complete, nil
+}
+
+func (p *streamingRawCaptureTestProvider) RawCaptureSourcesForChangedPath(
+	context.Context,
+	ChangedPathRequest,
+) ([]SourceRef, error) {
+	return nil, nil
+}
+
 func (p *rawCaptureUndeclaredProvider) Parse(
 	context.Context,
 	ParseRequest,
@@ -52,6 +79,53 @@ func rawCaptureTestCapabilities() Capabilities {
 		Append:   RawCaptureAppendOne,
 		Snapshot: RawCaptureSnapshotNone,
 	}}
+}
+
+func TestStreamRawCaptureSourcesUsesProviderStreamWithoutCollecting(t *testing.T) {
+	provider := &streamingRawCaptureTestProvider{
+		sources: []SourceRef{
+			{Provider: AgentClaude, Key: "a"},
+			{Provider: AgentClaude, Key: "b"},
+		},
+		complete: true,
+	}
+	provider.Def = AgentDef{Type: AgentClaude}
+	provider.Caps = rawCaptureTestCapabilities()
+	var got []string
+
+	complete, err := StreamRawCaptureSources(
+		t.Context(), provider, func(source SourceRef) error {
+			got = append(got, source.Key)
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, complete)
+	assert.Equal(t, []string{"a", "b"}, got)
+	assert.Equal(t, 1, provider.streamCalls)
+}
+
+func TestDiscoverRawCaptureSourcesCollectsProviderStream(t *testing.T) {
+	provider := &streamingRawCaptureTestProvider{
+		sources: []SourceRef{
+			{Provider: AgentClaude, Key: "a"},
+			{Provider: AgentClaude, Key: "b"},
+		},
+		complete: true,
+	}
+	provider.Def = AgentDef{Type: AgentClaude}
+	provider.Caps = rawCaptureTestCapabilities()
+
+	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+
+	require.NoError(t, err)
+	assert.True(t, discovery.Complete)
+	assert.Equal(t, []SourceRef{
+		{Provider: AgentClaude, Key: "a"},
+		{Provider: AgentClaude, Key: "b"},
+	}, discovery.Sources)
+	assert.Equal(t, 1, provider.streamCalls)
 }
 
 func canonicalRawCaptureTestPath(t *testing.T, path string) string {

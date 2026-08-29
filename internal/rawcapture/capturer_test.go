@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -223,6 +224,92 @@ func TestCapturerReturnsUnchangedWithoutAnotherGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, first.CaptureID, base.CaptureID)
+}
+
+func TestCapturerReplacesPermanentFailureWhenSourceIsUnchanged(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	provider, source, sourcePath := captureFileProvider(t, "one\n")
+	capturer := New(store)
+	first, err := capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	require.NoError(t, appendFile(sourcePath, "two\n"))
+	second, err := capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	_, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NoError(t, store.RecordGenerationFailure(
+		t.Context(), "device-a", first.CaptureID,
+		rawcheckpoint.GenerationFailurePermanent, time.Time{},
+	))
+
+	base, ok, err := store.CaptureBase(t.Context(), second.Source)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, second.CaptureID, base.CaptureID,
+		"replacement must compare the newest rejected suffix content")
+	assert.True(t, base.PermanentlyRejected)
+	var rejectedRefs []rawsync.ObjectRef
+	for _, entry := range base.Entries {
+		rejectedRefs = append(rejectedRefs, entry.Objects...)
+	}
+
+	replacement, err := capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, replacement.Status)
+	assert.NotEqual(t, second.CaptureID, replacement.CaptureID)
+	manifest, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, replacement.CaptureID, manifest.CaptureID)
+	require.Len(t, manifest.Entries, 1)
+	assert.Len(t, manifest.Entries[0].Objects, 1,
+		"a source revision must replace the rejected generation with a full snapshot")
+	replacementRef := manifest.Entries[0].Objects[0]
+	for _, ref := range rejectedRefs {
+		if ref != replacementRef {
+			assert.NoFileExists(t, store.ObjectPath(ref))
+		}
+	}
+	usage, err := store.OutboxUsage(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t,
+		replacementRef.Length+rawcheckpoint.CaptureMetadataCharge(1, 1),
+		usage.UsedBytes,
+	)
+	status, err := store.ClientStatus(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, status.PermanentFailures)
+}
+
+func TestCapturerReplacesPermanentFailureWithinOneGenerationCapacity(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 2000)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	provider, source, sourcePath := captureFileProvider(t, "one\n")
+	capturer := New(store)
+	first, err := capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	_, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NoError(t, store.RecordGenerationFailure(
+		t.Context(), "device-a", first.CaptureID,
+		rawcheckpoint.GenerationFailurePermanent, time.Time{},
+	))
+	require.NoError(t, appendFile(sourcePath, "two\n"))
+
+	replacement, err := capturer.Capture(t.Context(), provider, source)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, replacement.Status)
+	manifest, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, replacement.CaptureID, manifest.CaptureID)
+	usage, err := store.OutboxUsage(t.Context())
+	require.NoError(t, err)
+	assert.LessOrEqual(t, usage.UsedBytes, int64(2000))
 }
 
 func TestCapturerRejectsSameSizeMutationBeforeUnchangedDecision(t *testing.T) {
@@ -569,15 +656,218 @@ func TestCapturerHonorsCancellation(t *testing.T) {
 	assert.Zero(t, usage.ReservedBytes)
 }
 
-func TestCapturerRejectsSQLiteSnapshotRequirement(t *testing.T) {
+func TestCapturerSnapshotsSQLiteWithOnlineBackup(t *testing.T) {
 	store, _ := openCapturerTestStore(t, 1<<20)
-	provider, source, _ := captureFileProvider(t, "one\n")
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "live.db")
+	db, err := sql.Open(sqliteSnapshotDriverName, dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	db.SetMaxOpenConns(2)
+	_, err = db.Exec(`PRAGMA journal_mode=WAL`)
+	require.NoError(t, err)
+	_, err = db.Exec(`PRAGMA wal_autocheckpoint=0`)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE items (value TEXT NOT NULL)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO items (value) VALUES ('committed')`)
+	require.NoError(t, err)
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	_, err = tx.Exec(`INSERT INTO items (value) VALUES ('uncommitted')`)
+	require.NoError(t, err)
+
+	provider := &captureTestProvider{
+		Def: parser.AgentDef{Type: parser.AgentForge},
+		Caps: parser.Capabilities{RawCapture: parser.RawCaptureCapabilities{
+			Support:  parser.CapabilitySupported,
+			Shape:    parser.RawCaptureShapeSQLite,
+			Append:   parser.RawCaptureAppendReplaceOnly,
+			Snapshot: parser.RawCaptureSnapshotOnlineBackup,
+		}},
+		plan: parser.RawCapturePlan{
+			ConfiguredRoot: root,
+			CaptureRoot:    root,
+			SourceKey:      "live.db",
+			Entries: []parser.RawCaptureEntry{{
+				Path: "live.db", LocalPath: dbPath,
+			}},
+		},
+	}
+	source := parser.SourceRef{Provider: parser.AgentForge, Key: "live.db"}
 	provider.Caps.RawCapture.Shape = parser.RawCaptureShapeSQLite
 	provider.Caps.RawCapture.Snapshot = parser.RawCaptureSnapshotOnlineBackup
 
-	_, err := New(store).Capture(t.Context(), provider, source)
+	result, err := New(store).Capture(t.Context(), provider, source)
 
-	require.ErrorIs(t, err, ErrUnsupportedSnapshot)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
+	generation, ok, err := store.NextGeneration(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, generation.Entries, 1)
+	assert.Equal(t, "live.db", generation.Entries[0].Path)
+	require.Len(t, generation.Entries[0].Objects, 1)
+	snapshot, err := sql.Open(
+		sqliteSnapshotDriverName, store.ObjectPath(generation.Entries[0].Objects[0]),
+	)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	var values string
+	err = snapshot.QueryRow(`SELECT group_concat(value, ',') FROM items`).Scan(&values)
+	require.NoError(t, err)
+	assert.Equal(t, "committed", values)
+	temporary, err := os.ReadDir(store.CaptureTempDir())
+	require.NoError(t, err)
+	assert.Empty(t, temporary)
+
+	unchanged, err := New(store).Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	assert.Equal(t, StatusUnchanged, unchanged.Status)
+	require.NoError(t, tx.Rollback())
+	_, err = db.Exec(`INSERT INTO items (value) VALUES ('later')`)
+	require.NoError(t, err)
+	changed, err := New(store).Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, changed.Status)
+	assert.NotEqual(t, result.CaptureID, changed.CaptureID)
+	base, ok, err := store.CaptureBase(t.Context(), changed.Source)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, changed.CaptureID, base.CaptureID)
+}
+
+func TestCapturerRejectsSQLiteSymlinkSwapAfterPlanValidation(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "live.db")
+	writeSQLiteCaptureTestDB(t, dbPath, "validated")
+	outOfRootPath := filepath.Join(t.TempDir(), "outside.db")
+	writeSQLiteCaptureTestDB(t, outOfRootPath, "outside")
+	provider := &captureTestProvider{
+		Def: parser.AgentDef{Type: parser.AgentForge},
+		Caps: parser.Capabilities{RawCapture: parser.RawCaptureCapabilities{
+			Support: parser.CapabilitySupported, Shape: parser.RawCaptureShapeSQLite,
+			Append:   parser.RawCaptureAppendReplaceOnly,
+			Snapshot: parser.RawCaptureSnapshotOnlineBackup,
+		}},
+		plan: parser.RawCapturePlan{
+			ConfiguredRoot: root, CaptureRoot: root, SourceKey: "live.db",
+			Entries: []parser.RawCaptureEntry{{Path: "live.db", LocalPath: dbPath}},
+		},
+	}
+	source := parser.SourceRef{Provider: parser.AgentForge, Key: "live.db"}
+	capturer := New(store)
+	swapped := false
+	capturer.capturePhase = func(phase capturePhase, path string) {
+		if swapped || phase != capturePhaseBeforeRead || path == "" {
+			return
+		}
+		swapped = true
+		relocated := path + ".validated"
+		require.NoError(t, os.Rename(path, relocated))
+		if err := os.Symlink(outOfRootPath, path); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+	}
+
+	_, err := capturer.Capture(t.Context(), provider, source)
+
+	require.True(t, swapped)
+	require.ErrorIs(t, err, ErrSourceChanged)
+	_, ok, readErr := store.NextGeneration(t.Context())
+	require.NoError(t, readErr)
+	assert.False(t, ok)
+	usage, readErr := store.OutboxUsage(t.Context())
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.UsedBytes)
+	assert.Zero(t, usage.ReservedBytes)
+}
+
+func TestCapturerReservesSQLiteSnapshotCapacityBeforeBackup(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 2048)
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "live.db")
+	db, err := sql.Open(sqliteSnapshotDriverName, dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE items (value BLOB NOT NULL)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO items (value) VALUES (zeroblob(16384))`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	provider := &captureTestProvider{
+		Def: parser.AgentDef{Type: parser.AgentForge},
+		Caps: parser.Capabilities{RawCapture: parser.RawCaptureCapabilities{
+			Support: parser.CapabilitySupported, Shape: parser.RawCaptureShapeSQLite,
+			Append:   parser.RawCaptureAppendReplaceOnly,
+			Snapshot: parser.RawCaptureSnapshotOnlineBackup,
+		}},
+		plan: parser.RawCapturePlan{
+			ConfiguredRoot: root, CaptureRoot: root, SourceKey: "live.db",
+			Entries: []parser.RawCaptureEntry{{Path: "live.db", LocalPath: dbPath}},
+		},
+	}
+	source := parser.SourceRef{Provider: parser.AgentForge, Key: "live.db"}
+	capturer := New(store)
+	backupStarted := false
+	capturer.sqliteBackup = func(context.Context, *sql.Conn, string, int64) error {
+		backupStarted = true
+		return errors.New("backup must not start")
+	}
+
+	result, err := capturer.Capture(t.Context(), provider, source)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusDegraded, result.Status)
+	assert.False(t, backupStarted)
+	temporary, err := os.ReadDir(store.CaptureTempDir())
+	require.NoError(t, err)
+	assert.Empty(t, temporary)
+}
+
+func TestCapturerKeepsCommittedSQLiteCaptureWhenSnapshotCleanupFails(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "live.db")
+	writeSQLiteCaptureTestDB(t, dbPath, "captured")
+	provider := &captureTestProvider{
+		Def: parser.AgentDef{Type: parser.AgentForge},
+		Caps: parser.Capabilities{RawCapture: parser.RawCaptureCapabilities{
+			Support: parser.CapabilitySupported, Shape: parser.RawCaptureShapeSQLite,
+			Append:   parser.RawCaptureAppendReplaceOnly,
+			Snapshot: parser.RawCaptureSnapshotOnlineBackup,
+		}},
+		plan: parser.RawCapturePlan{
+			ConfiguredRoot: root, CaptureRoot: root, SourceKey: "live.db",
+			Entries: []parser.RawCaptureEntry{{Path: "live.db", LocalPath: dbPath}},
+		},
+	}
+	capturer := New(store)
+	capturer.files.removeAll = func(string) error { return errors.New("cleanup failed") }
+
+	result, err := capturer.Capture(
+		t.Context(), provider,
+		parser.SourceRef{Provider: parser.AgentForge, Key: "live.db"},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
+	generation, ok, err := store.NextGeneration(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, result.CaptureID, generation.CaptureID)
+}
+
+func writeSQLiteCaptureTestDB(t *testing.T, path, value string) {
+	t.Helper()
+	database, err := sql.Open(sqliteSnapshotDriverName, path)
+	require.NoError(t, err)
+	_, err = database.Exec(`CREATE TABLE items (value TEXT NOT NULL)`)
+	require.NoError(t, err)
+	_, err = database.Exec(`INSERT INTO items (value) VALUES (?)`, value)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
 }
 
 func TestCapturerStoresOnlySuffixObjectForVerifiedAppend(t *testing.T) {
@@ -657,8 +947,8 @@ func TestCapturerAppendsFromAcknowledgedBaseAfterLocalObjectGC(t *testing.T) {
 		Generation: 1,
 		Created:    true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", first.CaptureID, commit.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", first.CaptureID, commit,
 	))
 	_, err = store.AcknowledgeGeneration(t.Context(), "device-a", first.CaptureID, commit)
 	require.NoError(t, err)
@@ -940,8 +1230,8 @@ func TestCapturerReservesOnlyVerifiedSuffixForAcknowledgedLargeSource(t *testing
 		ManifestID: strings.Repeat("a", 64), Receipt: strings.Repeat("b", 64),
 		Generation: 1, Created: true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", manifest.CaptureID, commit.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", manifest.CaptureID, commit,
 	))
 	_, err = store.AcknowledgeGeneration(t.Context(), "device-a", manifest.CaptureID, commit)
 	require.NoError(t, err)

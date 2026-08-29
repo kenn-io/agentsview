@@ -90,7 +90,7 @@ func TestOpenWithOptionsMigratesVersionOneAndEnforcesForeignKeys(t *testing.T) {
 	var version, foreignKeys int
 	require.NoError(t, store.db.QueryRow("PRAGMA user_version").Scan(&version))
 	require.NoError(t, store.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys))
-	assert.Equal(t, 5, version)
+	assert.Equal(t, schemaVersion, version)
 	assert.Equal(t, 1, foreignKeys)
 
 	_, err = store.db.Exec(`INSERT INTO outbox_entries
@@ -98,6 +98,75 @@ func TestOpenWithOptionsMigratesVersionOneAndEnforcesForeignKeys(t *testing.T) {
 		 file_identity, prefix_sha256, appendable)
 		VALUES ('missing-capture', 0, 'session.jsonl', 1, 0, '', '', 1)`)
 	require.Error(t, err, "foreign keys must reject an orphaned outbox entry")
+}
+
+func TestOpenWithOptionsRequeuesManifestOnlyFinalizedGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.db")
+	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, false))
+	require.NoError(t, err)
+	for _, statements := range [][]string{
+		versionOneSchemaStatements,
+		versionTwoMigrationStatements,
+		versionThreeMigrationStatements,
+		versionFourMigrationStatements,
+		versionFiveMigrationStatements,
+	} {
+		for _, statement := range statements {
+			_, err = db.Exec(statement)
+			require.NoError(t, err)
+		}
+	}
+	const (
+		captureID = "00000000000000000000000000000001"
+		timestamp = "2026-08-25T00:00:00Z"
+	)
+	manifestID := validCheckpointDigest(1)
+	_, err = db.Exec(`INSERT INTO device_config (id, device_id, created_at)
+		VALUES (1, 'device-a', ?)`, timestamp)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO configured_roots
+		(id, provider, local_root, created_at, updated_at)
+		VALUES ('root-a', 'claude', '/capture', ?, ?)`, timestamp, timestamp)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO raw_sources
+		(provider, configured_root_id, source_key, head_manifest_id,
+		 head_receipt, head_generation, latest_capture_id, updated_at)
+		VALUES ('claude', 'root-a', 'source-a', '', '', 0, ?, ?)`,
+		captureID, timestamp)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO outbox_generations
+		(capture_id, provider, configured_root_id, source_key, captured_at,
+		 kind, state, manifest_id, metadata_bytes, created_at, updated_at)
+		VALUES (?, 'claude', 'root-a', 'source-a', ?, 'snapshot', 'finalized',
+		 ?, 1024, ?, ?)`, captureID, timestamp, manifestID, timestamp, timestamp)
+	require.NoError(t, err)
+	_, err = db.Exec(`PRAGMA user_version = 5`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	store, err := OpenWithOptions(t.Context(), path, Options{
+		SpoolDir: filepath.Join(t.TempDir(), "spool"), MaxOutboxBytes: 1 << 20,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	stored, found, err := store.FinalizedCommit(t.Context(), "device-a", captureID)
+
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Empty(t, stored.ManifestID)
+	commit := rawsync.CommitResult{
+		ManifestID: manifestID, Receipt: validCheckpointDigest(2), Generation: 1,
+	}
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", captureID, commit,
+	))
+	stored, found, err = store.FinalizedCommit(t.Context(), "device-a", captureID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, commit.ManifestID, stored.ManifestID)
+	assert.Equal(t, commit.Receipt, stored.Receipt)
+	assert.Equal(t, commit.Generation, stored.Generation)
 }
 
 func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
@@ -506,6 +575,55 @@ func TestResolveConfiguredRootPersistsCanonicalProviderIdentity(t *testing.T) {
 	assert.Equal(t, first, persisted)
 }
 
+func TestConfiguredRootSourcesPageReturnsBoundedCircularPages(t *testing.T) {
+	base := t.TempDir()
+	store, err := OpenWithOptions(t.Context(), filepath.Join(base, "checkpoint.db"), Options{
+		SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	rootPath := filepath.Join(base, "sessions")
+	require.NoError(t, os.Mkdir(rootPath, 0o700))
+	root, err := store.ResolveConfiguredRoot(
+		t.Context(), parser.AgentClaude, rootPath,
+	)
+	require.NoError(t, err)
+	for _, key := range []string{"a", "b", "c", "d", "e"} {
+		_, err := store.db.ExecContext(t.Context(), `INSERT INTO raw_sources
+			(provider, configured_root_id, source_key, updated_at)
+			VALUES (?, ?, ?, ?)`, parser.AgentClaude, root.ID, key,
+			checkpointTimestamp(time.Now()))
+		require.NoError(t, err)
+	}
+
+	first, err := store.ConfiguredRootSourcesPage(
+		t.Context(), parser.AgentClaude, root.ID, "", 2,
+	)
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	assert.Equal(t, []string{"a", "b"}, []string{
+		first[0].Source.SourceKey, first[1].Source.SourceKey,
+	})
+
+	second, err := store.ConfiguredRootSourcesPage(
+		t.Context(), parser.AgentClaude, root.ID, first[1].Source.SourceKey, 2,
+	)
+	require.NoError(t, err)
+	require.Len(t, second, 2)
+	assert.Equal(t, []string{"c", "d"}, []string{
+		second[0].Source.SourceKey, second[1].Source.SourceKey,
+	})
+
+	wrapped, err := store.ConfiguredRootSourcesPage(
+		t.Context(), parser.AgentClaude, root.ID, second[1].Source.SourceKey, 2,
+	)
+	require.NoError(t, err)
+	require.Len(t, wrapped, 2)
+	assert.Equal(t, []string{"e", "a"}, []string{
+		wrapped[0].Source.SourceKey, wrapped[1].Source.SourceKey,
+	})
+}
+
 func TestResolveConfiguredRootDoesNotExposeLocalPathInFilesystemError(t *testing.T) {
 	store, _ := openOutboxTestStore(t, 1<<20)
 	privateRoot := filepath.Join(t.TempDir(), "private", "missing")
@@ -754,7 +872,7 @@ func TestCompleteUnchangedCaptureRejectsReservationForAnotherSource(t *testing.T
 	reservation, err := store.ReserveSourceCapture(t.Context(), sourceA, 128)
 	require.NoError(t, err)
 
-	err = store.CompleteUnchangedCapture(t.Context(), reservation.ID, sourceB)
+	err = store.CompleteUnchangedCapture(t.Context(), reservation.ID, sourceB, "", 0)
 
 	assert.ErrorIs(t, err, ErrCaptureConflict)
 	usage, readErr := store.OutboxUsage(t.Context())
@@ -775,7 +893,7 @@ func TestCompleteUnchangedCaptureAcceptsRootScopedReservation(t *testing.T) {
 		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-a",
 	}
 
-	err = store.CompleteUnchangedCapture(t.Context(), reservation.ID, source)
+	err = store.CompleteUnchangedCapture(t.Context(), reservation.ID, source, "", 0)
 
 	require.NoError(t, err)
 	usage, err := store.OutboxUsage(t.Context())

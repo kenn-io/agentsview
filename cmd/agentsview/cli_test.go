@@ -115,6 +115,27 @@ func TestPGStatusHelpShowsProjectFlags(t *testing.T) {
 	}
 }
 
+func TestRawSyncCommandsKeepCredentialOutOfArguments(t *testing.T) {
+	help, err := executeCommand(newRootCommand(), "raw-sync", "watch", "--help")
+	require.NoError(t, err)
+	for _, want := range []string{
+		"--server", "--device-id", "--allow-insecure-http", "--debounce", "--interval",
+		"AGENTSVIEW_RAW_SYNC_CREDENTIAL",
+	} {
+		assert.Contains(t, help, want)
+	}
+	assert.NotContains(t, help, "--credential")
+	_, err = executeCommand(
+		newRootCommand(), "raw-sync", "watch", "--credential=private-value",
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown flag: --credential")
+	assert.NotContains(t, err.Error(), "private-value")
+	status, err := executeCommand(newRootCommand(), "raw-sync", "status", "--help")
+	require.NoError(t, err)
+	assert.Contains(t, status, "Show durable laptop raw-sync status")
+}
+
 func TestDuckDBQuackServeHelpShowsSafetyFlags(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "duckdb", "quack", "serve", "--help")
 	require.NoError(t, err, "Execute")

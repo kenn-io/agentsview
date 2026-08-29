@@ -18,10 +18,11 @@ import (
 )
 
 type fileOperations struct {
-	stat    func(string) (os.FileInfo, error)
-	rename  func(string, string) error
-	remove  func(string) error
-	syncDir func(string) error
+	stat      func(string) (os.FileInfo, error)
+	rename    func(string, string) error
+	remove    func(string) error
+	removeAll func(string) error
+	syncDir   func(string) error
 }
 
 type scopedCaptureEntry struct {
@@ -114,7 +115,8 @@ func (s *capturePlanScope) MatchesRoots(plan parser.RawCapturePlan) bool {
 
 func defaultFileOperations() fileOperations {
 	return fileOperations{
-		stat: os.Stat, rename: os.Rename, remove: os.Remove, syncDir: syncDirectory,
+		stat: os.Stat, rename: os.Rename, remove: os.Remove,
+		removeAll: os.RemoveAll, syncDir: syncDirectory,
 	}
 }
 

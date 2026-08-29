@@ -23,6 +23,7 @@ type GenerationFailureClass string
 const (
 	GenerationFailureTransient             GenerationFailureClass = "transient"
 	GenerationFailureParentReceiptConflict GenerationFailureClass = "parent_receipt_conflict"
+	GenerationFailurePermanent             GenerationFailureClass = "permanent"
 )
 
 // AcknowledgeResult reports whether an acknowledgement was replayed and what
@@ -32,45 +33,55 @@ type AcknowledgeResult struct {
 	Garbage  GarbageCollectionReport
 }
 
-// BindFinalizedManifestID durably associates the canonical manifest ID
-// returned for a specific finalized upload with its local capture. This
-// separate fence prevents a later acknowledgement from applying a result that
-// belongs to another manifest at the same server generation.
-func (s *Store) BindFinalizedManifestID(
+// BindFinalizedCommit durably records the full server result for a finalized
+// generation before the local acknowledgement advances its source head. A
+// later drain can then finish acknowledgement without committing the manifest
+// again.
+func (s *Store) BindFinalizedCommit(
 	ctx context.Context,
-	deviceID, captureID, manifestID string,
+	deviceID, captureID string,
+	commit rawsync.CommitResult,
 ) error {
 	if captureID == "" {
 		return ErrAcknowledgeConflict
 	}
-	if _, err := rawsync.NewObjectRef(manifestID, 0); err != nil {
-		return fmt.Errorf("rawcheckpoint: invalid finalized manifest ID: %w", err)
+	if err := rawsync.ValidateCommitResult(commit); err != nil {
+		return fmt.Errorf("rawcheckpoint: invalid finalized commit: %w", err)
 	}
-	return s.withImmediateWrite(ctx, "bind finalized manifest ID", func(conn *sql.Conn) error {
+	return s.withImmediateWrite(ctx, "bind finalized commit", func(conn *sql.Conn) error {
 		if err := requireConfiguredDeviceConn(ctx, conn, deviceID); err != nil {
 			return err
 		}
-		var state, stored string
-		err := conn.QueryRowContext(ctx, `SELECT state, manifest_id
-			FROM outbox_generations WHERE capture_id = ?`, captureID).Scan(&state, &stored)
+		var state, manifestID, receipt string
+		var generation int64
+		err := conn.QueryRowContext(ctx, `SELECT state, manifest_id, ack_receipt, ack_generation
+			FROM outbox_generations WHERE capture_id = ?`, captureID,
+		).Scan(&state, &manifestID, &receipt, &generation)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrAcknowledgeConflict
 		}
 		if err != nil {
-			return fmt.Errorf("rawcheckpoint: bind finalized manifest ID: %w", err)
+			return fmt.Errorf("rawcheckpoint: bind finalized commit: %w", err)
 		}
-		if state != "finalized" || (stored != "" && stored != manifestID) {
+		if state != "finalized" {
 			return ErrAcknowledgeConflict
 		}
-		if stored == manifestID {
+		if manifestID == commit.ManifestID && receipt == commit.Receipt &&
+			generation == commit.Generation {
 			return nil
 		}
+		if manifestID != "" || receipt != "" || generation != 0 {
+			return ErrAcknowledgeConflict
+		}
 		result, err := conn.ExecContext(ctx, `UPDATE outbox_generations
-			SET manifest_id = ?, updated_at = ?
-			WHERE capture_id = ? AND state = 'finalized' AND manifest_id = ''`,
-			manifestID, s.now().UTC().Format(time.RFC3339Nano), captureID)
+			SET manifest_id = ?, ack_receipt = ?, ack_generation = ?, updated_at = ?
+			WHERE capture_id = ? AND state = 'finalized'
+				AND manifest_id = '' AND ack_receipt = '' AND ack_generation = 0`,
+			commit.ManifestID, commit.Receipt, commit.Generation,
+			s.now().UTC().Format(time.RFC3339Nano), captureID,
+		)
 		if err != nil {
-			return fmt.Errorf("rawcheckpoint: bind finalized manifest ID: %w", err)
+			return fmt.Errorf("rawcheckpoint: bind finalized commit: %w", err)
 		}
 		changed, err := result.RowsAffected()
 		if err != nil || changed != 1 {
@@ -78,6 +89,49 @@ func (s *Store) BindFinalizedManifestID(
 		}
 		return nil
 	})
+}
+
+// FinalizedCommit returns a server result durably recorded for a finalized
+// generation. The bool is false when the generation still needs committing.
+func (s *Store) FinalizedCommit(
+	ctx context.Context,
+	deviceID, captureID string,
+) (rawsync.CommitResult, bool, error) {
+	if captureID == "" {
+		return rawsync.CommitResult{}, false, ErrAcknowledgeConflict
+	}
+	var commit rawsync.CommitResult
+	found := false
+	err := s.withImmediateWrite(ctx, "read finalized commit", func(conn *sql.Conn) error {
+		if err := requireConfiguredDeviceConn(ctx, conn, deviceID); err != nil {
+			return err
+		}
+		var state string
+		err := conn.QueryRowContext(ctx, `SELECT state, manifest_id, ack_receipt, ack_generation
+			FROM outbox_generations WHERE capture_id = ?`, captureID,
+		).Scan(&state, &commit.ManifestID, &commit.Receipt, &commit.Generation)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrAcknowledgeConflict
+		}
+		if err != nil {
+			return fmt.Errorf("rawcheckpoint: read finalized commit: %w", err)
+		}
+		if state != "finalized" {
+			return ErrAcknowledgeConflict
+		}
+		if commit.ManifestID == "" && commit.Receipt == "" && commit.Generation == 0 {
+			return nil
+		}
+		if err := rawsync.ValidateCommitResult(commit); err != nil {
+			return fmt.Errorf("rawcheckpoint: invalid stored finalized commit: %w", err)
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return rawsync.CommitResult{}, false, err
+	}
+	return commit, found, nil
 }
 
 // FinalizeNextManifest returns the oldest uploadable generation and durably
@@ -156,6 +210,7 @@ func (s *Store) RecordGenerationFailure(
 	retryAt time.Time,
 ) error {
 	blocked := 0
+	attemptIncrement := 0
 	retryStamp := ""
 	switch class {
 	case GenerationFailureTransient:
@@ -163,7 +218,13 @@ func (s *Store) RecordGenerationFailure(
 			return ErrGenerationFailureConflict
 		}
 		retryStamp = checkpointTimestamp(retryAt)
+		attemptIncrement = 1
 	case GenerationFailureParentReceiptConflict:
+		if !retryAt.IsZero() {
+			return ErrGenerationFailureConflict
+		}
+		blocked = 1
+	case GenerationFailurePermanent:
 		if !retryAt.IsZero() {
 			return ErrGenerationFailureConflict
 		}
@@ -176,10 +237,11 @@ func (s *Store) RecordGenerationFailure(
 			return err
 		}
 		result, err := conn.ExecContext(ctx, `UPDATE outbox_generations SET
-			retry_at = ?, error_class = ?, blocked = ?, updated_at = ?
+			retry_at = ?, error_class = ?, blocked = ?,
+			attempt_count = attempt_count + ?, updated_at = ?
 			WHERE capture_id = ? AND state = 'finalized'
 				AND (blocked = 0 OR ? = 1)`, retryStamp, string(class),
-			blocked, checkpointTimestamp(s.now()), captureID, blocked)
+			blocked, attemptIncrement, checkpointTimestamp(s.now()), captureID, blocked)
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: record generation failure: %w", err)
 		}
@@ -191,8 +253,121 @@ func (s *Store) RecordGenerationFailure(
 	})
 }
 
-// ResumeGeneration reconciles a parent-receipt conflict to the reported
-// server head and requeues the local generation to freeze that new parent.
+// GenerationAttempts returns the durable transient failure count for one
+// finalized generation, fenced to the configured device.
+func (s *Store) GenerationAttempts(
+	ctx context.Context,
+	deviceID, captureID string,
+) (int, error) {
+	var attempts int
+	err := s.withImmediateWrite(ctx, "read generation attempts", func(conn *sql.Conn) error {
+		if err := requireConfiguredDeviceConn(ctx, conn, deviceID); err != nil {
+			return err
+		}
+		if err := conn.QueryRowContext(ctx, `SELECT attempt_count
+			FROM outbox_generations WHERE capture_id = ? AND state = 'finalized'`,
+			captureID,
+		).Scan(&attempts); errors.Is(err, sql.ErrNoRows) {
+			return ErrGenerationFailureConflict
+		} else if err != nil {
+			return fmt.Errorf("rawcheckpoint: read generation attempts: %w", err)
+		}
+		return nil
+	})
+	return attempts, err
+}
+
+// DiscardRejectedGeneration removes a permanently rejected generation and
+// every unacknowledged descendant, then resets the source to its last durable
+// server head so a later audit can create a fresh replacement generation.
+func (s *Store) DiscardRejectedGeneration(
+	ctx context.Context,
+	deviceID, captureID string,
+) (GarbageCollectionReport, error) {
+	if captureID == "" {
+		return GarbageCollectionReport{}, ErrGenerationFailureConflict
+	}
+	err := s.withImmediateWrite(ctx, "discard rejected generation", func(conn *sql.Conn) error {
+		if err := requireConfiguredDeviceConn(ctx, conn, deviceID); err != nil {
+			return err
+		}
+		return discardRejectedGenerationConn(ctx, conn, captureID, s)
+	})
+	if err != nil {
+		return GarbageCollectionReport{}, err
+	}
+	return s.CollectGarbage(ctx)
+}
+
+func discardRejectedGenerationConn(
+	ctx context.Context,
+	conn *sql.Conn,
+	captureID string,
+	store *Store,
+) error {
+	rows, err := conn.QueryContext(ctx, `WITH RECURSIVE suffix(capture_id) AS (
+			SELECT capture_id FROM outbox_generations
+			WHERE capture_id = ? AND state = 'finalized'
+			UNION ALL
+			SELECT generation.capture_id FROM outbox_generations AS generation
+			JOIN suffix ON generation.predecessor_capture_id = suffix.capture_id
+			WHERE generation.state != 'acknowledged'
+		)
+		SELECT capture_id FROM suffix`, captureID)
+	if err != nil {
+		return fmt.Errorf("rawcheckpoint: discard rejected generation: %w", err)
+	}
+	var discarded []string
+	for rows.Next() {
+		var current string
+		if err := rows.Scan(&current); err != nil {
+			rows.Close()
+			return fmt.Errorf("rawcheckpoint: discard rejected generation: %w", err)
+		}
+		discarded = append(discarded, current)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("rawcheckpoint: discard rejected generation: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("rawcheckpoint: discard rejected generation: %w", err)
+	}
+	if len(discarded) == 0 {
+		return ErrGenerationFailureConflict
+	}
+	for _, current := range discarded {
+		if err := releaseGenerationObjectsConn(ctx, conn, current); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx,
+			`DELETE FROM outbox_entries WHERE capture_id = ?`, current); err != nil {
+			return fmt.Errorf("rawcheckpoint: discard rejected entries: %w", err)
+		}
+	}
+	if err := resetInvalidSourcesConn(
+		ctx, conn, discarded, store, "server_rejected",
+	); err != nil {
+		return err
+	}
+	for _, current := range discarded {
+		if _, err := conn.ExecContext(ctx,
+			`DELETE FROM outbox_generations WHERE capture_id = ?`, current); err != nil {
+			return fmt.Errorf("rawcheckpoint: discard rejected generation: %w", err)
+		}
+	}
+	if _, err := conn.ExecContext(ctx, `UPDATE outbox_objects
+			SET state = 'garbage_pending'
+			WHERE ref_count = 0 AND state != 'remote'`); err != nil {
+		return fmt.Errorf("rawcheckpoint: discard rejected objects: %w", err)
+	}
+	return nil
+}
+
+// ResumeGeneration atomically reconciles a parent-receipt conflict to the
+// reported server head and requeues the local generation to freeze that new
+// parent. It accepts an untouched finalized generation, a transiently failed
+// generation without a durable commit result, or an older blocked conflict.
 func (s *Store) ResumeGeneration(
 	ctx context.Context,
 	deviceID, captureID string,
@@ -206,21 +381,27 @@ func (s *Store) ResumeGeneration(
 			return err
 		}
 		var source SourceIdentity
-		var state, failureClass string
+		var state, failureClass, manifestID, receipt string
+		var generation int64
 		var blocked int
 		err := conn.QueryRowContext(ctx, `SELECT provider, configured_root_id,
-			source_key, state, error_class, blocked FROM outbox_generations
+			source_key, state, error_class, blocked, manifest_id, ack_receipt,
+			ack_generation FROM outbox_generations
 			WHERE capture_id = ?`, captureID,
 		).Scan(&source.Provider, &source.ConfiguredRootID, &source.SourceKey,
-			&state, &failureClass, &blocked)
+			&state, &failureClass, &blocked, &manifestID, &receipt, &generation)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrGenerationFailureConflict
 		}
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: resume generation: read state: %w", err)
 		}
-		if state != "finalized" ||
-			failureClass != string(GenerationFailureParentReceiptConflict) || blocked != 1 {
+		cleanFinalized := failureClass == "" && blocked == 0
+		transientFailure := failureClass == string(GenerationFailureTransient) &&
+			blocked == 0 && manifestID == "" && receipt == "" && generation == 0
+		blockedConflict := failureClass == string(GenerationFailureParentReceiptConflict) &&
+			blocked == 1
+		if state != "finalized" || (!cleanFinalized && !transientFailure && !blockedConflict) {
 			return ErrGenerationFailureConflict
 		}
 		now := s.now().UTC().Format(time.RFC3339Nano)
@@ -239,9 +420,15 @@ func (s *Store) ResumeGeneration(
 		}
 		result, err := conn.ExecContext(ctx, `UPDATE outbox_generations SET
 			state = 'queued', expected_parent_receipt = '', manifest_id = '',
-			retry_at = '', error_class = '', blocked = 0, updated_at = ?
+			ack_receipt = '', ack_generation = 0,
+			retry_at = '', error_class = '', blocked = 0, attempt_count = 0,
+			updated_at = ?
 			WHERE capture_id = ? AND state = 'finalized'
-			AND error_class = ? AND blocked = 1`, now, captureID,
+			AND ((error_class = '' AND blocked = 0)
+				OR (error_class = ? AND blocked = 0
+					AND manifest_id = '' AND ack_receipt = '' AND ack_generation = 0)
+				OR (error_class = ? AND blocked = 1))`, now, captureID,
+			string(GenerationFailureTransient),
 			string(GenerationFailureParentReceiptConflict))
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: resume generation: %w", err)
@@ -326,7 +513,10 @@ func (s *Store) AcknowledgeGeneration(
 			return ErrAcknowledgeConflict
 		}
 		if state != "finalized" || storedManifestID == "" ||
-			storedManifestID != commit.ManifestID || expectedParent != current.Receipt ||
+			storedManifestID != commit.ManifestID ||
+			((storedReceipt != "" || storedGeneration != 0) &&
+				(storedReceipt != commit.Receipt || storedGeneration != commit.Generation)) ||
+			expectedParent != current.Receipt ||
 			commit.Generation != current.Generation+1 {
 			return ErrAcknowledgeConflict
 		}

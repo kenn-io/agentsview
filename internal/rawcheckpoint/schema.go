@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const schemaVersion = 5
+const schemaVersion = 8
 
 func (s *Store) init(ctx context.Context) error {
 	var version int
@@ -55,6 +55,27 @@ func (s *Store) init(ctx context.Context) error {
 		for _, statement := range versionFiveMigrationStatements {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("rawcheckpoint: migrate schema to version 5: %w", err)
+			}
+		}
+	}
+	if version < 6 {
+		for _, statement := range versionSixMigrationStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("rawcheckpoint: migrate schema to version 6: %w", err)
+			}
+		}
+	}
+	if version < 7 {
+		for _, statement := range versionSevenMigrationStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("rawcheckpoint: migrate schema to version 7: %w", err)
+			}
+		}
+	}
+	if version < 8 {
+		for _, statement := range versionEightMigrationStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("rawcheckpoint: migrate schema to version 8: %w", err)
 			}
 		}
 	}
@@ -289,4 +310,25 @@ var versionFiveMigrationStatements = []string{
 		SELECT provider, configured_root_id, '', reason,
 			COALESCE(degraded_at, updated_at), updated_at
 		FROM raw_coverage WHERE state = 'degraded'`,
+}
+
+var versionSixMigrationStatements = []string{
+	`ALTER TABLE outbox_config
+		ADD COLUMN max_outbox_bytes INTEGER NOT NULL DEFAULT 1073741824
+		CHECK (max_outbox_bytes > 0)`,
+}
+
+var versionSevenMigrationStatements = []string{
+	`ALTER TABLE outbox_generations
+		ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0
+		CHECK (attempt_count >= 0)`,
+}
+
+var versionEightMigrationStatements = []string{
+	`ALTER TABLE raw_sources
+		ADD COLUMN observation_revision INTEGER NOT NULL DEFAULT 0
+		CHECK (observation_revision >= 0)`,
+	`UPDATE outbox_generations SET manifest_id = ''
+		WHERE state = 'finalized' AND manifest_id != ''
+			AND ack_receipt = '' AND ack_generation = 0`,
 }

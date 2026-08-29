@@ -16,6 +16,8 @@ var _ Provider = (*codexProvider)(nil)
 var _ ActivityHintProvider = (*codexProvider)(nil)
 var _ S3Provider = (*codexProvider)(nil)
 var _ RawCaptureProvider = (*codexProvider)(nil)
+var _ RawCaptureSourceProvider = (*codexProvider)(nil)
+var _ StreamingRawCaptureSourceProvider = (*codexProvider)(nil)
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
 // implementation for Codex and its TraeX fork. Both reuse the same
@@ -112,6 +114,67 @@ func (p *codexProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 
 func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	return p.sources.DiscoverEach(ctx, yield)
+}
+
+func (p *codexProvider) DiscoverRawCaptureSourcesEach(
+	ctx context.Context,
+	yield func(SourceRef) error,
+) (bool, error) {
+	ctx = withRawCaptureStreamingTraversal(ctx)
+	var incomplete error
+	for _, root := range p.sources.roots {
+		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
+			return false, err
+		}
+		if isS3URI(root) {
+			continue
+		}
+		err := p.sources.discoverEachRoot(ctx, root, yield)
+		if err == nil {
+			continue
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		rootErr, ok := rawCaptureIncompleteRootError(p.Def.Type, root, err)
+		if !ok {
+			return false, err
+		}
+		incomplete = errors.Join(incomplete, rootErr)
+	}
+	return incomplete == nil, incomplete
+}
+
+func (p *codexProvider) RawCaptureSourcesForChangedPath(
+	ctx context.Context,
+	req ChangedPathRequest,
+) ([]SourceRef, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if p.sources.ownsCodexSidecars() &&
+		filepath.Base(req.Path) == CodexSessionIndexFilename {
+		return nil, nil
+	}
+	roots := p.sources.roots
+	if req.WatchRoot != "" {
+		roots = nil
+		for _, root := range p.sources.roots {
+			if samePath(root, req.WatchRoot) {
+				roots = append(roots, root)
+			}
+		}
+	}
+	for _, root := range roots {
+		source, ok := p.sources.sourceRef(root, req.Path, true)
+		if !ok {
+			source, ok = p.sources.directPathSource(root, req.Path, true)
+		}
+		if ok {
+			return []SourceRef{source}, nil
+		}
+	}
+	return nil, nil
 }
 
 func (p *codexProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -524,40 +587,47 @@ func (s codexSourceSet) DiscoverEach(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if strings.HasPrefix(root, "s3://") {
-			if !s.ownsCodexSidecars() {
-				continue
-			}
-			for _, file := range s3PrefixScan(root, codexS3Scanner()) {
-				if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-		err := streamDirectoryTree(ctx, root, func(path string, entry os.DirEntry) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if !isCodexSessionFilename(entry.Name()) {
-				return nil
-			}
-			source, ok := s.sourceRef(root, path, true)
-			if !ok {
-				if _, _, supported := CodexSessionPathInfo(root, path); supported {
-					source, ok = s.directPathSource(root, path, true)
-				}
-			}
-			if !ok {
-				return nil
-			}
-			return yield(source)
-		})
-		if err != nil {
+		if err := s.discoverEachRoot(ctx, root, yield); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s codexSourceSet) discoverEachRoot(
+	ctx context.Context,
+	root string,
+	yield func(SourceRef) error,
+) error {
+	if strings.HasPrefix(root, "s3://") {
+		if !s.ownsCodexSidecars() {
+			return nil
+		}
+		for _, file := range s3PrefixScan(root, codexS3Scanner()) {
+			if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return streamDirectoryTree(ctx, root, func(path string, entry os.DirEntry) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !isCodexSessionFilename(entry.Name()) {
+			return nil
+		}
+		source, ok := s.sourceRef(root, path, true)
+		if !ok {
+			if _, _, supported := CodexSessionPathInfo(root, path); supported {
+				source, ok = s.directPathSource(root, path, true)
+			}
+		}
+		if !ok {
+			return nil
+		}
+		return yield(source)
+	})
 }
 
 func (s codexSourceSet) discover(
@@ -960,7 +1030,8 @@ func (s codexSourceSet) canonicalSource(
 	if !ok || src.UUID == "" {
 		return source, true, nil
 	}
-	best := source
+	var best SourceRef
+	foundExisting := false
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, false, err
@@ -973,9 +1044,13 @@ func (s codexSourceSet) canonicalSource(
 		if !ok {
 			continue
 		}
-		if preferCodexSource(candidate, best) {
+		if !foundExisting || preferCodexSource(candidate, best) {
 			best = candidate
+			foundExisting = true
 		}
+	}
+	if !foundExisting {
+		return source, true, nil
 	}
 	return best, true, nil
 }

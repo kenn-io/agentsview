@@ -114,3 +114,38 @@ func TestStreamDirectoryEntriesStopsAfterMidTraversalCancellation(t *testing.T) 
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, streamingDirectoryBatchSize+1, count)
 }
+
+func TestStreamDirectoryEntriesRejectsReplacementWhilePaused(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sessions")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	for _, name := range []string{"a.jsonl", "b.jsonl"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), nil, 0o600))
+	}
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	first := true
+	ctx := WithRawCaptureDiscoveryProgress(t.Context(), func() error {
+		if first {
+			first = false
+			close(paused)
+			<-resume
+		}
+		return nil
+	})
+	ctx = withRawCaptureStreamingTraversal(ctx)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- streamDirectoryEntries(ctx, dir, func(os.DirEntry) error {
+			return nil
+		})
+	}()
+
+	<-paused
+	moved := dir + "-moved"
+	require.NoError(t, os.Rename(dir, moved))
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "replacement.jsonl"), nil, 0o600))
+	close(resume)
+
+	assert.ErrorIs(t, <-errCh, errStreamingDirectoryChanged)
+}

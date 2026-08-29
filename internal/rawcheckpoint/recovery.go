@@ -168,7 +168,9 @@ func (s *Store) recoverObjectSpool(ctx context.Context) (RecoveryReport, error) 
 				}
 			}
 			report.InvalidGenerations = len(invalid)
-			if err := resetInvalidSourcesConn(ctx, conn, invalid, s); err != nil {
+			if err := resetInvalidSourcesConn(
+				ctx, conn, invalid, s, "missing_object",
+			); err != nil {
 				return err
 			}
 			for _, captureID := range invalid {
@@ -266,6 +268,7 @@ func resetInvalidSourcesConn(
 	conn *sql.Conn,
 	invalid []string,
 	store *Store,
+	reason string,
 ) error {
 	seen := make(map[SourceIdentity]struct{})
 	for _, captureID := range invalid {
@@ -295,8 +298,9 @@ func resetInvalidSourcesConn(
 			string(source.Provider), source.ConfiguredRootID, source.SourceKey); err != nil {
 			return fmt.Errorf("rawcheckpoint: recover: reset capture base: %w", err)
 		}
-		if err := setSourceCoverageDegradedConn(ctx, conn, source,
-			"missing_object", store.now().UTC()); err != nil {
+		if err := setSourceCoverageDegradedConn(
+			ctx, conn, source, reason, store.now().UTC(),
+		); err != nil {
 			return err
 		}
 	}

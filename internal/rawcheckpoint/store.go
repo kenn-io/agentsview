@@ -20,10 +20,10 @@ import (
 
 // SourceHead is the last server-acknowledged head of one logical source.
 type SourceHead struct {
-	ManifestID string
-	Receipt    string
-	Generation int64
-	UpdatedAt  time.Time
+	ManifestID string    `json:"manifest_id"`
+	Receipt    string    `json:"receipt"`
+	Generation int64     `json:"generation"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Store is the durable checkpoint database.
@@ -104,6 +104,22 @@ func openCheckpointDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
+// OpenReadOnly opens an existing checkpoint for concurrent status reads. It
+// neither acquires the writer/spool process locks nor runs schema migrations
+// or recovery, so a status command can inspect a live watcher without taking
+// ownership of its durable state.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, true))
+	if err != nil {
+		return nil, fmt.Errorf("rawcheckpoint: open read-only: %w", err)
+	}
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("rawcheckpoint: open read-only: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
 // Close releases the database handle.
 func (s *Store) Close() error {
 	dbErr := s.db.Close()
@@ -172,6 +188,35 @@ func (s *Store) SetDevice(ctx context.Context, deviceID string) error {
 	}
 	_, err = s.CollectGarbage(ctx)
 	return err
+}
+
+// EnsureDevice initializes an empty checkpoint for deviceID or verifies that
+// an existing checkpoint belongs to that same immutable device. It never
+// reprovisions or clears durable transport state on a mismatch.
+func (s *Store) EnsureDevice(ctx context.Context, deviceID string) error {
+	if deviceID == "" {
+		return fmt.Errorf("rawcheckpoint: device ID is required")
+	}
+	return s.withImmediateWrite(ctx, "ensure device", func(conn *sql.Conn) error {
+		var current string
+		err := conn.QueryRowContext(ctx,
+			`SELECT device_id FROM device_config WHERE id = 1`).Scan(&current)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if _, err := conn.ExecContext(ctx,
+				`INSERT INTO device_config (id, device_id, created_at) VALUES (1, ?, ?)`,
+				deviceID, checkpointTimestamp(s.now())); err != nil {
+				return fmt.Errorf("rawcheckpoint: ensure device: %w", err)
+			}
+			return nil
+		case err != nil:
+			return fmt.Errorf("rawcheckpoint: ensure device: %w", err)
+		case current != deviceID:
+			return ErrDeviceMismatch
+		default:
+			return nil
+		}
+	})
 }
 
 // Device returns the recorded device identity and whether one has been set.

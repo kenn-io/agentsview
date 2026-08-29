@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -370,8 +371,23 @@ func TestVerifiedSourceGateRechecksAfterStatAndWatcherInvalidation(t *testing.T)
 
 	info, err := os.Stat(file.Path)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(file.Path, []byte("changed\n"), 0o600))
-	require.NoError(t, os.Chtimes(file.Path, info.ModTime(), info.ModTime()))
+	baselineChangeTime, ok := fileChangeTime(file.Path, info)
+	require.True(t, ok, "native change time unavailable")
+	changeTime := baselineChangeTime
+	deadline := time.Now().Add(2 * time.Second)
+	for changeTime == baselineChangeTime && time.Now().Before(deadline) {
+		require.NoError(t, os.WriteFile(file.Path, []byte("changed\n"), 0o600))
+		require.NoError(t, os.Chtimes(file.Path, info.ModTime(), info.ModTime()))
+		changedInfo, statErr := os.Stat(file.Path)
+		require.NoError(t, statErr)
+		changeTime, ok = fileChangeTime(file.Path, changedInfo)
+		require.True(t, ok, "native change time unavailable after rewrite")
+		if changeTime == baselineChangeTime {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	require.NotEqual(t, baselineChangeTime, changeTime,
+		"fixture must cross a native change-time tick")
 	runVerifiedSourcePass(t, engine, files)
 	assert.Equal(t, 2, provider.fingerprintCalls,
 		"same-size rewrite with restored mtime must deep-verify")

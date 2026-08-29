@@ -11,6 +11,7 @@ import (
 const streamingDirectoryBatchSize = 64
 
 var errStopStreamingDiscovery = errors.New("stop streaming discovery")
+var errStreamingDirectoryChanged = errors.New("streaming directory changed during discovery")
 
 // DiscoveryIncompleteError reports a bounded traversal that stopped before it
 // could authoritatively enumerate its configured scope. Callers must retain the
@@ -252,11 +253,27 @@ func streamDirectoryEntries(
 func streamDirectoryEntriesDirect(
 	ctx context.Context, dir string, yield func(os.DirEntry) error,
 ) error {
-	file, err := os.Open(dir)
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
+		return err
+	}
+	file, err := root.Open(".")
+	if err != nil {
+		_ = root.Close()
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	// Root.Open on Windows establishes the directory file with delete sharing,
+	// while OpenRoot's traversal handle itself does not. Once the directory
+	// file is open, retaining the root handle adds no confinement and would
+	// prevent a paused bounded audit from allowing that directory to be renamed.
+	if err := root.Close(); err != nil {
+		_ = file.Close()
 		return err
 	}
 	defer file.Close()
@@ -283,6 +300,42 @@ func streamDirectoryEntriesDirect(
 			return readErr
 		}
 	}
+}
+
+func withRawCaptureStreamingTraversal(ctx context.Context) context.Context {
+	reader := streamingDirectoryReader(streamDirectoryEntriesDirect)
+	if configured, ok := ctx.Value(
+		streamingDirectoryReaderContextKey{},
+	).(streamingDirectoryReader); ok {
+		reader = configured
+	}
+	return withStreamingDirectoryReader(ctx, func(
+		readerCtx context.Context,
+		dir string,
+		yield func(os.DirEntry) error,
+	) error {
+		openedInfo, err := os.Stat(dir)
+		if err != nil {
+			return err
+		}
+		err = reader(readerCtx, dir, func(entry os.DirEntry) error {
+			if err := ReportRawCaptureDiscoveryProgress(readerCtx); err != nil {
+				return err
+			}
+			return yield(entry)
+		})
+		if err != nil {
+			return err
+		}
+		currentInfo, err := os.Stat(dir)
+		if err != nil {
+			return errors.Join(errStreamingDirectoryChanged, err)
+		}
+		if !os.SameFile(openedInfo, currentInfo) {
+			return errStreamingDirectoryChanged
+		}
+		return nil
+	})
 }
 
 // streamDirectoryTree walks a directory without filepath.WalkDir's

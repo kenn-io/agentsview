@@ -1622,7 +1622,7 @@ func TestCodexProviderParseIncrementalHonorsContext(t *testing.T) {
 	assert.Equal(t, IncrementalUnsupported, status)
 }
 
-func TestCodexProviderDiscoverDedupesLiveAndArchivedByUUID(t *testing.T) {
+func TestCodexProviderRawDiscoveryKeepsLiveAndArchivedPhysicalSources(t *testing.T) {
 	base := t.TempDir()
 	liveRoot := filepath.Join(base, "sessions")
 	archivedRoot := filepath.Join(base, "archived_sessions")
@@ -1631,6 +1631,16 @@ func TestCodexProviderDiscoverDedupesLiveAndArchivedByUUID(t *testing.T) {
 	archivedPath := writeCodexProviderArchivedSession(
 		t, archivedRoot, uuid, "archived",
 	)
+	sharedMeta := testjsonl.CodexSessionMetaJSON(
+		uuid, "/home/user/code/api", "codex_cli_rs", "2026-06-11T12:44:06Z",
+	) + "\n"
+	require.NoError(t, os.WriteFile(livePath, []byte(sharedMeta), 0o644))
+	require.NoError(t, os.WriteFile(archivedPath, []byte(sharedMeta), 0o644))
+	renamedArchivedPath := filepath.Join(
+		archivedRoot, "rollout-2026-06-12T08-00-00-"+uuid+".jsonl",
+	)
+	require.NoError(t, os.Rename(archivedPath, renamedArchivedPath))
+	archivedPath = renamedArchivedPath
 
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{
 		Roots: []string{archivedRoot, liveRoot},
@@ -1641,6 +1651,13 @@ func TestCodexProviderDiscoverDedupesLiveAndArchivedByUUID(t *testing.T) {
 	require.Len(t, discovered, 1)
 	assert.Equal(t, livePath, discovered[0].DisplayPath)
 	assert.NotEqual(t, archivedPath, discovered[0].DisplayPath)
+
+	rawDiscovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+	require.NoError(t, err)
+	require.True(t, rawDiscovery.Complete)
+	require.Len(t, rawDiscovery.Sources, 2)
+	assert.ElementsMatch(t, []string{archivedPath, livePath},
+		sourceDisplayPaths(rawDiscovery.Sources))
 }
 
 func TestCodexProviderDiscoverEachYieldsDuplicateCandidates(t *testing.T) {
@@ -1664,6 +1681,35 @@ func TestCodexProviderDiscoverEachYieldsDuplicateCandidates(t *testing.T) {
 	}))
 
 	assert.ElementsMatch(t, []string{archivedPath, livePath}, paths)
+}
+
+func TestCodexRawCaptureDiscoveryContinuesAfterIncompleteRoot(t *testing.T) {
+	unreadableRoot := t.TempDir()
+	healthyRoot := t.TempDir()
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e5"
+	healthyPath := writeCodexProviderSession(t, healthyRoot, uuid, "healthy")
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{
+		Roots: []string{unreadableRoot, healthyRoot},
+	})
+	require.True(t, ok)
+	ctx := withStreamingDirectoryReader(t.Context(), func(
+		ctx context.Context,
+		dir string,
+		yield func(os.DirEntry) error,
+	) error {
+		if dir == unreadableRoot {
+			return os.ErrPermission
+		}
+		return streamDirectoryEntriesDirect(ctx, dir, yield)
+	})
+
+	discovery, err := DiscoverRawCaptureSources(ctx, provider)
+	require.Error(t, err)
+	_, incomplete := errors.AsType[DiscoveryIncompleteError](err)
+	require.True(t, incomplete)
+	assert.False(t, discovery.Complete)
+	require.Len(t, discovery.Sources, 1)
+	assert.Equal(t, healthyPath, discovery.Sources[0].DisplayPath)
 }
 
 func TestCodexProviderDiscoverEachIncludesNoncanonicalRollout(t *testing.T) {
@@ -1901,6 +1947,14 @@ func TestCodexProviderChangedPathPinsArchivedDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, archivedPath, changed[0].DisplayPath)
+
+	rawChanged, err := RawCaptureSourcesForChangedPath(
+		t.Context(), provider,
+		ChangedPathRequest{Path: archivedPath, EventKind: "write"},
+	)
+	require.NoError(t, err)
+	require.Len(t, rawChanged, 1)
+	assert.Equal(t, archivedPath, rawChanged[0].DisplayPath)
 }
 
 func TestCodexProviderChangedPathClassifiesRemovedTranscript(t *testing.T) {
@@ -1941,6 +1995,30 @@ func TestCodexProviderIndexPathClassifiesAllSiblingSources(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{firstPath, secondPath}, sourceDisplayPaths(changed))
+}
+
+func TestCodexProviderRawIndexPathDefersToBoundedAudit(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "sessions")
+	writeCodexProviderSession(
+		t, root, "019eb791-cf7d-75c1-8439-9ed74c1229e9", "first",
+	)
+	writeCodexProviderSession(
+		t, root, "019eb791-cf7d-75c1-8439-9ed74c1229ea", "second",
+	)
+	indexPath := filepath.Join(base, CodexSessionIndexFilename)
+	require.NoError(t, os.WriteFile(indexPath, []byte("{}\n"), 0o644))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := RawCaptureSourcesForChangedPath(
+		t.Context(), provider, ChangedPathRequest{
+			Path: indexPath, EventKind: "write", WatchRoot: base,
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 }
 
 func writeCodexProviderSession(

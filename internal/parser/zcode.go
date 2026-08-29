@@ -30,7 +30,7 @@ func (f zcodeProviderFactory) Definition() AgentDef {
 }
 
 func (f zcodeProviderFactory) Capabilities() Capabilities {
-	return zcodeProviderCapabilities()
+	return withDBBackedRawCapture(zcodeProviderCapabilities())
 }
 
 func (f zcodeProviderFactory) NewProvider(cfg ProviderConfig) Provider {
@@ -39,7 +39,7 @@ func (f zcodeProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	spec := zcodeProviderSpec()
 	return &dbBackedProvider{
 		Def:     cloneAgentDef(f.def),
-		Caps:    spec.caps,
+		Caps:    withDBBackedRawCapture(spec.caps),
 		Config:  cfg,
 		spec:    spec,
 		sources: newDBBackedSourceSet(spec, cfg.Roots),

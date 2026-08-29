@@ -29,8 +29,8 @@ func TestRecoverInvalidatesBrokenOfflineSuffixAndResetsAcknowledgedBase(t *testi
 		ManifestID: validCheckpointDigest(1), Receipt: validCheckpointDigest(2),
 		Generation: 1, Created: true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", first.CaptureID, commit.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", first.CaptureID, commit,
 	))
 	_, err = store.AcknowledgeGeneration(t.Context(), "device-a", first.CaptureID, commit)
 	require.NoError(t, err)

@@ -41,13 +41,13 @@ const (
 
 // CoverageState records a persistent gap interval for one configured root.
 type CoverageState struct {
-	Provider         parser.AgentType
-	ConfiguredRootID string
-	State            CoverageStatus
-	Reason           string
-	DegradedAt       *time.Time
-	RecoveredAt      *time.Time
-	UpdatedAt        time.Time
+	Provider         parser.AgentType `json:"provider"`
+	ConfiguredRootID string           `json:"configured_root_id"`
+	State            CoverageStatus   `json:"state"`
+	Reason           string           `json:"reason,omitempty"`
+	DegradedAt       *time.Time       `json:"degraded_at,omitempty"`
+	RecoveredAt      *time.Time       `json:"recovered_at,omitempty"`
+	UpdatedAt        time.Time        `json:"updated_at"`
 }
 
 // Reservation fences outbox capacity while a capturer writes temporary files.
@@ -65,6 +65,14 @@ type SourceIdentity struct {
 	SourceKey        string
 }
 
+// SourceCheckpoint fences reconciliation work to the source generation that
+// was current when the source page was read.
+type SourceCheckpoint struct {
+	Source              SourceIdentity
+	CaptureID           string
+	ObservationRevision int64
+}
+
 // CapturedEntry is one complete logical file in a captured generation.
 type CapturedEntry struct {
 	Path         string
@@ -78,26 +86,30 @@ type CapturedEntry struct {
 
 // CapturedGeneration is an immutable local source generation.
 type CapturedGeneration struct {
-	CaptureID            string
-	Source               SourceIdentity
-	PredecessorCaptureID string
-	CapturedAt           time.Time
-	Kind                 rawsync.ManifestKind
-	Entries              []CapturedEntry
+	CaptureID                   string
+	Source                      SourceIdentity
+	PredecessorCaptureID        string
+	CapturedAt                  time.Time
+	Kind                        rawsync.ManifestKind
+	Entries                     []CapturedEntry
+	ExpectedObservationRevision *int64
 }
 
 // CaptureBaseState is the newest acknowledged or locally queued generation.
 type CaptureBaseState struct {
-	CaptureID string
-	Head      SourceHead
-	Entries   []CapturedEntry
+	CaptureID           string
+	ObservationRevision int64
+	Kind                rawsync.ManifestKind
+	Head                SourceHead
+	Entries             []CapturedEntry
+	PermanentlyRejected bool
 }
 
 // OutboxUsage reports charged and reserved bytes against the configured bound.
 type OutboxUsage struct {
-	UsedBytes     int64
-	ReservedBytes int64
-	LimitBytes    int64
+	UsedBytes     int64 `json:"used_bytes"`
+	ReservedBytes int64 `json:"reserved_bytes"`
+	LimitBytes    int64 `json:"limit_bytes"`
 }
 
 // GarbageCollectionReport describes normal-operation spool reclamation.
@@ -196,13 +208,15 @@ func OpenWithOptions(ctx context.Context, path string, options Options) (*Store,
 func (s *Store) bindSpool(ctx context.Context) error {
 	return s.withImmediateWrite(ctx, "bind object spool", func(conn *sql.Conn) error {
 		var bound string
+		var boundLimit int64
 		err := conn.QueryRowContext(ctx,
-			`SELECT spool_path FROM outbox_config WHERE id = 1`).Scan(&bound)
+			`SELECT spool_path, max_outbox_bytes FROM outbox_config WHERE id = 1`,
+		).Scan(&bound, &boundLimit)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			if _, err := conn.ExecContext(ctx,
-				`INSERT INTO outbox_config (id, spool_path) VALUES (1, ?)`,
-				s.spoolDir); err != nil {
+				`INSERT INTO outbox_config (id, spool_path, max_outbox_bytes)
+				VALUES (1, ?, ?)`, s.spoolDir, s.maxOutboxBytes); err != nil {
 				return fmt.Errorf("rawcheckpoint: bind object spool: %w", err)
 			}
 			return nil
@@ -211,6 +225,13 @@ func (s *Store) bindSpool(ctx context.Context) error {
 		case bound != s.spoolDir:
 			return ErrSpoolMismatch
 		default:
+			if boundLimit == s.maxOutboxBytes {
+				return nil
+			}
+			if _, err := conn.ExecContext(ctx, `UPDATE outbox_config
+				SET max_outbox_bytes = ? WHERE id = 1`, s.maxOutboxBytes); err != nil {
+				return fmt.Errorf("rawcheckpoint: update outbox limit: %w", err)
+			}
 			return nil
 		}
 	})
@@ -297,7 +318,9 @@ func (s *Store) ReserveCapture(
 	configuredRootID string,
 	bytes int64,
 ) (Reservation, error) {
-	return s.reserveCapture(ctx, SourceIdentity{ConfiguredRootID: configuredRootID}, bytes)
+	return s.reserveCapture(
+		ctx, SourceIdentity{ConfiguredRootID: configuredRootID}, bytes,
+	)
 }
 
 // ReserveSourceCapture atomically reserves the caller's worst-case object and
@@ -338,7 +361,15 @@ func (s *Store) reserveCapture(
 		if err != nil {
 			return err
 		}
-		if bytes > s.maxOutboxBytes-usage.UsedBytes-usage.ReservedBytes {
+		recyclable, err := recyclablePermanentFailureBytesConn(ctx, conn, source)
+		if err != nil {
+			return err
+		}
+		effectiveUsed := usage.UsedBytes - recyclable
+		if effectiveUsed < 0 {
+			return fmt.Errorf("rawcheckpoint: recyclable outbox capacity exceeds usage")
+		}
+		if bytes > s.maxOutboxBytes-effectiveUsed-usage.ReservedBytes {
 			now := s.now().UTC()
 			if err := setSourceCoverageDegradedConn(
 				ctx, conn, source, "outbox_full", now,
@@ -372,6 +403,93 @@ func (s *Store) reserveCapture(
 	return reservation, err
 }
 
+// RecordSourceObservation durably invalidates older absence scans after the
+// caller has positively opened a tracked source.
+func (s *Store) RecordSourceObservation(
+	ctx context.Context,
+	source SourceIdentity,
+) error {
+	return s.withImmediateWrite(ctx, "record source observation", func(conn *sql.Conn) error {
+		return recordSourceObservationConn(ctx, conn, source)
+	})
+}
+
+func recordSourceObservationConn(
+	ctx context.Context,
+	conn *sql.Conn,
+	source SourceIdentity,
+) error {
+	if _, err := conn.ExecContext(ctx, `UPDATE raw_sources
+		SET observation_revision = observation_revision + 1
+		WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
+		string(source.Provider), source.ConfiguredRootID, source.SourceKey); err != nil {
+		return fmt.Errorf("rawcheckpoint: record source observation: %w", err)
+	}
+	return nil
+}
+
+func recyclablePermanentFailureBytesConn(
+	ctx context.Context,
+	conn *sql.Conn,
+	source SourceIdentity,
+) (int64, error) {
+	if source.Provider == "" || source.SourceKey == "" {
+		return 0, nil
+	}
+	var reserved int
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM outbox_reservations
+		WHERE provider = ? AND configured_root_id = ? AND source_key = ?
+	)`, string(source.Provider), source.ConfiguredRootID, source.SourceKey).Scan(&reserved); err != nil {
+		return 0, fmt.Errorf("rawcheckpoint: inspect recyclable reservation: %w", err)
+	}
+	if reserved != 0 {
+		return 0, nil
+	}
+	latest, found, err := latestCaptureIDConn(ctx, conn, source)
+	if err != nil || !found || latest == "" {
+		return 0, err
+	}
+	permanentRoot, err := permanentFailureAncestorConn(ctx, conn, latest)
+	if err != nil || permanentRoot == "" {
+		return 0, err
+	}
+	var generationBytes, objectBytes int64
+	if err := conn.QueryRowContext(ctx, `WITH RECURSIVE suffix(capture_id) AS (
+		SELECT capture_id FROM outbox_generations WHERE capture_id = ?
+		UNION ALL
+		SELECT generation.capture_id FROM outbox_generations AS generation
+		JOIN suffix ON generation.predecessor_capture_id = suffix.capture_id
+	)
+	SELECT coalesce(sum(generation.metadata_bytes), 0)
+	FROM outbox_generations AS generation
+	JOIN suffix ON suffix.capture_id = generation.capture_id`, permanentRoot,
+	).Scan(&generationBytes); err != nil {
+		return 0, fmt.Errorf("rawcheckpoint: read recyclable generation capacity: %w", err)
+	}
+	if err := conn.QueryRowContext(ctx, `WITH RECURSIVE suffix(capture_id) AS (
+		SELECT capture_id FROM outbox_generations WHERE capture_id = ?
+		UNION ALL
+		SELECT generation.capture_id FROM outbox_generations AS generation
+		JOIN suffix ON generation.predecessor_capture_id = suffix.capture_id
+	), suffix_refs(sha256, length, references_in_suffix) AS (
+		SELECT entry_object.sha256, entry_object.length, count(*)
+		FROM outbox_entry_objects AS entry_object
+		JOIN suffix ON suffix.capture_id = entry_object.capture_id
+		GROUP BY entry_object.sha256, entry_object.length
+	)
+	SELECT coalesce(sum(object.length), 0)
+	FROM outbox_objects AS object
+	JOIN suffix_refs AS suffix_ref
+		ON suffix_ref.sha256 = object.sha256 AND suffix_ref.length = object.length
+	WHERE object.state != 'remote'
+		AND object.ref_count = suffix_ref.references_in_suffix`, permanentRoot,
+	).Scan(&objectBytes); err != nil {
+		return 0, fmt.Errorf("rawcheckpoint: read recyclable object capacity: %w", err)
+	}
+	return generationBytes + objectBytes, nil
+}
+
 // ReleaseReservation idempotently releases unused reserved capacity.
 func (s *Store) ReleaseReservation(ctx context.Context, reservationID string) error {
 	if reservationID == "" {
@@ -392,6 +510,8 @@ func (s *Store) CompleteUnchangedCapture(
 	ctx context.Context,
 	reservationID string,
 	source SourceIdentity,
+	expectedCaptureID string,
+	expectedObservationRevision int64,
 ) error {
 	if reservationID == "" || source.Provider == "" ||
 		source.ConfiguredRootID == "" || source.SourceKey == "" {
@@ -413,6 +533,24 @@ func (s *Store) CompleteUnchangedCapture(
 			reservationProvider, reservationRoot, reservationSourceKey, source,
 		) {
 			return ErrCaptureConflict
+		}
+		if expectedCaptureID != "" {
+			result, err := conn.ExecContext(ctx, `UPDATE raw_sources
+				SET observation_revision = observation_revision + 1
+				WHERE provider = ? AND configured_root_id = ? AND source_key = ?
+					AND latest_capture_id = ? AND observation_revision = ?`,
+				string(source.Provider), source.ConfiguredRootID, source.SourceKey,
+				expectedCaptureID, expectedObservationRevision)
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: complete unchanged capture: record observation: %w", err)
+			}
+			updated, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: complete unchanged capture: record observation: %w", err)
+			}
+			if updated != 1 {
+				return ErrCaptureConflict
+			}
 		}
 		if _, err := conn.ExecContext(ctx,
 			`DELETE FROM outbox_reservations WHERE id = ?`, reservationID); err != nil {
@@ -464,6 +602,12 @@ func (s *Store) OutboxUsage(ctx context.Context) (OutboxUsage, error) {
 		return OutboxUsage{}, fmt.Errorf("rawcheckpoint: read outbox usage: %w", err)
 	}
 	usage.LimitBytes = s.maxOutboxBytes
+	if usage.LimitBytes == 0 {
+		if err := s.db.QueryRowContext(ctx, `SELECT max_outbox_bytes
+			FROM outbox_config WHERE id = 1`).Scan(&usage.LimitBytes); err != nil {
+			return OutboxUsage{}, fmt.Errorf("rawcheckpoint: read outbox limit: %w", err)
+		}
+	}
 	return usage, nil
 }
 
@@ -546,6 +690,26 @@ func (s *Store) CommitCapture(
 		if latest != validated.PredecessorCaptureID {
 			return ErrCaptureConflict
 		}
+		if validated.ExpectedObservationRevision != nil {
+			var observationRevision int64
+			err := conn.QueryRowContext(ctx, `SELECT observation_revision
+				FROM raw_sources
+				WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
+				string(validated.Source.Provider), validated.Source.ConfiguredRootID,
+				validated.Source.SourceKey,
+			).Scan(&observationRevision)
+			if errors.Is(err, sql.ErrNoRows) ||
+				err == nil && observationRevision != *validated.ExpectedObservationRevision {
+				return ErrCaptureConflict
+			}
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: commit capture: read source observation: %w", err)
+			}
+		}
+		permanentRoot, err := permanentFailureAncestorConn(ctx, conn, latest)
+		if err != nil {
+			return err
+		}
 		newObjectBytes, err := missingObjectBytesConn(ctx, conn, uniqueObjects)
 		if err != nil {
 			return err
@@ -555,20 +719,27 @@ func (s *Store) CommitCapture(
 		}
 
 		now := s.now().UTC().Format(time.RFC3339Nano)
-		var predecessor any
-		if validated.PredecessorCaptureID != "" {
-			var headCaptureID string
-			if found {
-				if err := conn.QueryRowContext(ctx, `SELECT head_capture_id FROM raw_sources
+		var headCaptureID string
+		if found {
+			if err := conn.QueryRowContext(ctx, `SELECT head_capture_id FROM raw_sources
 					WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
-					string(validated.Source.Provider), validated.Source.ConfiguredRootID,
-					validated.Source.SourceKey).Scan(&headCaptureID); err != nil {
-					return fmt.Errorf("rawcheckpoint: commit capture: read source head: %w", err)
-				}
+				string(validated.Source.Provider), validated.Source.ConfiguredRootID,
+				validated.Source.SourceKey).Scan(&headCaptureID); err != nil {
+				return fmt.Errorf("rawcheckpoint: commit capture: read source head: %w", err)
 			}
-			if validated.PredecessorCaptureID != headCaptureID {
-				predecessor = validated.PredecessorCaptureID
+		}
+		predecessorCaptureID := validated.PredecessorCaptureID
+		if permanentRoot != "" {
+			if err := discardRejectedGenerationConn(
+				ctx, conn, permanentRoot, s,
+			); err != nil {
+				return err
 			}
+			predecessorCaptureID = headCaptureID
+		}
+		var predecessor any
+		if predecessorCaptureID != "" && predecessorCaptureID != headCaptureID {
+			predecessor = predecessorCaptureID
 		}
 		if _, err := conn.ExecContext(ctx, `INSERT INTO outbox_generations
 			(capture_id, provider, configured_root_id, source_key,
@@ -577,7 +748,7 @@ func (s *Store) CommitCapture(
 			VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
 			validated.CaptureID, string(validated.Source.Provider),
 			validated.Source.ConfiguredRootID, validated.Source.SourceKey,
-			predecessor, validated.CapturedAt.Format(time.RFC3339Nano),
+			predecessor, checkpointTimestamp(validated.CapturedAt),
 			string(validated.Kind), metadataBytes, now, now); err != nil {
 			return fmt.Errorf("rawcheckpoint: commit capture: insert generation: %w", err)
 		}
@@ -589,7 +760,8 @@ func (s *Store) CommitCapture(
 		}
 		if found {
 			if _, err := conn.ExecContext(ctx, `UPDATE raw_sources SET
-				latest_capture_id = ?, updated_at = ?
+				latest_capture_id = ?, observation_revision = observation_revision + 1,
+				updated_at = ?
 				WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
 				validated.CaptureID, now, string(validated.Source.Provider),
 				validated.Source.ConfiguredRootID, validated.Source.SourceKey); err != nil {
@@ -597,8 +769,9 @@ func (s *Store) CommitCapture(
 			}
 		} else {
 			if _, err := conn.ExecContext(ctx, `INSERT INTO raw_sources
-				(provider, configured_root_id, source_key, updated_at, latest_capture_id)
-				VALUES (?, ?, ?, ?, ?)`, string(validated.Source.Provider),
+				(provider, configured_root_id, source_key, updated_at, latest_capture_id,
+				 observation_revision)
+				VALUES (?, ?, ?, ?, ?, 1)`, string(validated.Source.Provider),
 				validated.Source.ConfiguredRootID, validated.Source.SourceKey,
 				now, validated.CaptureID); err != nil {
 				return fmt.Errorf("rawcheckpoint: commit capture: insert source: %w", err)
@@ -615,6 +788,90 @@ func (s *Store) CommitCapture(
 		}
 		return nil
 	})
+}
+
+// QueueTombstone durably appends one deletion after the newest local source
+// generation. Repeated deletion observations are idempotent unless the newest
+// tombstone was permanently rejected and must be replaced.
+func (s *Store) QueueTombstone(
+	ctx context.Context,
+	source SourceIdentity,
+) (string, bool, error) {
+	return s.queueTombstone(ctx, source, "", 0, false)
+}
+
+// QueueTombstoneIfLatest queues a deletion only while expectedCaptureID is
+// still the source's newest local generation. A concurrent capture makes the
+// stale absence observation a no-op.
+func (s *Store) QueueTombstoneIfLatest(
+	ctx context.Context,
+	source SourceIdentity,
+	expectedCaptureID string,
+	expectedObservationRevision int64,
+) (string, bool, error) {
+	return s.queueTombstone(
+		ctx, source, expectedCaptureID, expectedObservationRevision, true,
+	)
+}
+
+func (s *Store) queueTombstone(
+	ctx context.Context,
+	source SourceIdentity,
+	expectedCaptureID string,
+	expectedObservationRevision int64,
+	fenced bool,
+) (string, bool, error) {
+	base, found, err := s.CaptureBase(ctx, source)
+	if err != nil || !found {
+		return "", false, err
+	}
+	if fenced && base.CaptureID != expectedCaptureID {
+		return "", false, nil
+	}
+	if base.Kind == rawsync.ManifestTombstone && !base.PermanentlyRejected {
+		return "", false, nil
+	}
+	reservation, err := s.ReserveSourceCapture(
+		ctx, source, CaptureMetadataCharge(0, 0),
+	)
+	if err != nil {
+		return "", false, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = s.ReleaseReservation(context.Background(), reservation.ID)
+		}
+	}()
+	captureID, err := randomCheckpointID()
+	if err != nil {
+		return "", false, err
+	}
+	var expectedRevision *int64
+	if fenced {
+		expectedRevision = &expectedObservationRevision
+	}
+	err = s.CommitCapture(ctx, reservation.ID, CapturedGeneration{
+		CaptureID:                   captureID,
+		Source:                      source,
+		PredecessorCaptureID:        base.CaptureID,
+		CapturedAt:                  s.now().UTC(),
+		Kind:                        rawsync.ManifestTombstone,
+		ExpectedObservationRevision: expectedRevision,
+	})
+	if fenced && errors.Is(err, ErrCaptureConflict) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	committed = true
+	if base.PermanentlyRejected {
+		if _, err := s.CollectGarbage(ctx); err != nil {
+			return "", false, err
+		}
+	}
+	return captureID, true, nil
 }
 
 func reservationMatchesSource(
@@ -652,6 +909,102 @@ func (s *Store) CaptureBase(
 	return base, found, nil
 }
 
+// ConfiguredRootSources lists source chains already known beneath one local
+// configured root. It contains identity only, never source content.
+func (s *Store) ConfiguredRootSources(
+	ctx context.Context,
+	provider parser.AgentType,
+	configuredRootID string,
+) ([]SourceIdentity, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT source_key FROM raw_sources
+		WHERE provider = ? AND configured_root_id = ? ORDER BY source_key`,
+		string(provider), configuredRootID)
+	if err != nil {
+		return nil, fmt.Errorf("rawcheckpoint: list configured-root sources: %w", err)
+	}
+	defer rows.Close()
+	var sources []SourceIdentity
+	for rows.Next() {
+		var source SourceIdentity
+		source.Provider = provider
+		source.ConfiguredRootID = configuredRootID
+		if err := rows.Scan(&source.SourceKey); err != nil {
+			return nil, fmt.Errorf("rawcheckpoint: list configured-root sources: %w", err)
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rawcheckpoint: list configured-root sources: %w", err)
+	}
+	return sources, nil
+}
+
+// ConfiguredRootSourcesPage returns at most limit source checkpoints after
+// afterKey, wrapping to the beginning so repeated bounded calls rotate through
+// a root.
+func (s *Store) ConfiguredRootSourcesPage(
+	ctx context.Context,
+	provider parser.AgentType,
+	configuredRootID string,
+	afterKey string,
+	limit int,
+) ([]SourceCheckpoint, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	sources, err := s.configuredRootSourcesRange(
+		ctx, provider, configuredRootID, afterKey, ">", limit,
+	)
+	if err != nil || len(sources) == limit || afterKey == "" {
+		return sources, err
+	}
+	wrapped, err := s.configuredRootSourcesRange(
+		ctx, provider, configuredRootID, afterKey, "<=", limit-len(sources),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return append(sources, wrapped...), nil
+}
+
+func (s *Store) configuredRootSourcesRange(
+	ctx context.Context,
+	provider parser.AgentType,
+	configuredRootID string,
+	afterKey string,
+	comparison string,
+	limit int,
+) ([]SourceCheckpoint, error) {
+	query := `SELECT source_key, latest_capture_id, observation_revision FROM raw_sources
+		WHERE provider = ? AND configured_root_id = ? AND source_key ` + comparison + ` ?
+		ORDER BY source_key LIMIT ?`
+	rows, err := s.db.QueryContext(
+		ctx, query, string(provider), configuredRootID, afterKey, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("rawcheckpoint: page configured-root sources: %w", err)
+	}
+	defer rows.Close()
+	sources := make([]SourceCheckpoint, 0, limit)
+	for rows.Next() {
+		source := SourceCheckpoint{
+			Source: SourceIdentity{
+				Provider: provider, ConfiguredRootID: configuredRootID,
+			},
+		}
+		if err := rows.Scan(
+			&source.Source.SourceKey, &source.CaptureID, &source.ObservationRevision,
+		); err != nil {
+			return nil, fmt.Errorf("rawcheckpoint: page configured-root sources: %w", err)
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rawcheckpoint: page configured-root sources: %w", err)
+	}
+	return sources, nil
+}
+
 type checkpointQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
@@ -665,13 +1018,14 @@ func captureBaseSnapshot(
 	var captureID string
 	var headCaptureID string
 	var head SourceHead
+	var observationRevision int64
 	var updatedAt string
 	err := queryer.QueryRowContext(ctx, `SELECT latest_capture_id, head_capture_id, head_manifest_id,
-		head_receipt, head_generation, updated_at FROM raw_sources
+		head_receipt, head_generation, observation_revision, updated_at FROM raw_sources
 		WHERE provider = ? AND configured_root_id = ? AND source_key = ?`,
 		string(source.Provider), source.ConfiguredRootID, source.SourceKey,
 	).Scan(&captureID, &headCaptureID, &head.ManifestID, &head.Receipt,
-		&head.Generation, &updatedAt)
+		&head.Generation, &observationRevision, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) || captureID == "" {
 		return CaptureBaseState{}, false, nil
 	}
@@ -684,20 +1038,70 @@ func captureBaseSnapshot(
 		if err != nil {
 			return CaptureBaseState{}, false, err
 		}
-		if len(generation.Entries) != 0 {
-			return CaptureBaseState{
-				CaptureID: captureID, Head: head, Entries: generation.Entries,
-			}, true, nil
+		permanentRoot, err := permanentFailureAncestor(ctx, queryer, captureID)
+		if err != nil {
+			return CaptureBaseState{}, false, err
 		}
+		return CaptureBaseState{
+			CaptureID: captureID, ObservationRevision: observationRevision,
+			Kind: generation.Kind,
+			Head: head, Entries: generation.Entries,
+			PermanentlyRejected: permanentRoot != "",
+		}, true, nil
 	}
 	entries, err := loadAcknowledgedBase(ctx, queryer, source)
 	if err != nil {
 		return CaptureBaseState{}, false, err
 	}
+	kind := rawsync.ManifestSnapshot
 	if len(entries) == 0 {
-		return CaptureBaseState{}, false, nil
+		kind = rawsync.ManifestTombstone
 	}
-	return CaptureBaseState{CaptureID: captureID, Head: head, Entries: entries}, true, nil
+	return CaptureBaseState{
+		CaptureID: captureID, ObservationRevision: observationRevision,
+		Kind: kind, Head: head, Entries: entries,
+	}, true, nil
+}
+
+func permanentFailureAncestor(
+	ctx context.Context,
+	queryer checkpointQueryer,
+	captureID string,
+) (string, error) {
+	var permanentCaptureID string
+	err := queryer.QueryRowContext(ctx, `WITH RECURSIVE ancestors(
+		capture_id, predecessor_capture_id, error_class, blocked
+	) AS (
+		SELECT capture_id, predecessor_capture_id, error_class, blocked
+		FROM outbox_generations WHERE capture_id = ?
+		UNION ALL
+		SELECT generation.capture_id, generation.predecessor_capture_id,
+			generation.error_class, generation.blocked
+		FROM outbox_generations AS generation
+		JOIN ancestors ON generation.capture_id = ancestors.predecessor_capture_id
+	)
+	SELECT capture_id FROM ancestors
+	WHERE blocked = 1 AND error_class = ? LIMIT 1`,
+		captureID, string(GenerationFailurePermanent),
+	).Scan(&permanentCaptureID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("rawcheckpoint: read permanent failure ancestor: %w", err)
+	}
+	return permanentCaptureID, nil
+}
+
+func permanentFailureAncestorConn(
+	ctx context.Context,
+	conn *sql.Conn,
+	captureID string,
+) (string, error) {
+	if captureID == "" {
+		return "", nil
+	}
+	return permanentFailureAncestor(ctx, conn, captureID)
 }
 
 func loadAcknowledgedBase(
@@ -974,8 +1378,19 @@ func validateCapturedGeneration(
 ) (CapturedGeneration, int64, map[string]rawsync.ObjectRef, error) {
 	if generation.CaptureID == "" || generation.Source.Provider == "" ||
 		generation.Source.ConfiguredRootID == "" || generation.Source.SourceKey == "" ||
-		generation.CapturedAt.IsZero() || generation.Kind != rawsync.ManifestSnapshot ||
-		len(generation.Entries) == 0 {
+		generation.CapturedAt.IsZero() {
+		return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured generation")
+	}
+	switch generation.Kind {
+	case rawsync.ManifestSnapshot:
+		if len(generation.Entries) == 0 {
+			return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured generation")
+		}
+	case rawsync.ManifestTombstone:
+		if len(generation.Entries) != 0 {
+			return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured generation")
+		}
+	default:
 		return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured generation")
 	}
 	validated := generation

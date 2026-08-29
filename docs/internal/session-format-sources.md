@@ -430,7 +430,10 @@ add an archived or maintained mirror without replacing the original identity.
   includes an unterminated invalid final record after `task_complete`;
   ordinary live parsing still defers that tail while its writer can complete
   it. This bounded lookup is deliberately separate from the provider's general
-  full-archive UUID discovery.
+  full-archive UUID discovery. Hosted raw discovery and event-driven capture
+  preserve each physical transcript under its configured root; duplicate
+  ranking remains limited to normalized discovery. Reverified 2026-08-29 with
+  live and archived copies sharing one UUID.
 
 ## TraeX (`traex`)
 

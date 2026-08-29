@@ -32,6 +32,42 @@ behavior, failure codes, and a complete GitHub Actions job.
 
 ______________________________________________________________________
 
+### `agentsview raw-sync`
+
+Capture supported local provider sources and upload their raw generations to
+hosted custody:
+
+```bash
+export AGENTSVIEW_RAW_SYNC_URL=https://agents.example.com
+export AGENTSVIEW_RAW_SYNC_DEVICE_ID=device-id
+export AGENTSVIEW_RAW_SYNC_CREDENTIAL=device-credential
+agentsview raw-sync watch
+agentsview raw-sync status
+```
+
+`raw-sync watch` runs an initial bounded audit, watches for filesystem changes,
+and retries interrupted uploads from its durable local checkpoint. The device
+credential is accepted only through `AGENTSVIEW_RAW_SYNC_CREDENTIAL`, never as a
+command-line flag. `--server` and `--device-id` override their corresponding
+environment variables.
+
+| Flag                    | Default      | Description                                      |
+| ----------------------- | ------------ | ------------------------------------------------ |
+| `--server`              | environment  | Raw-sync server URL                              |
+| `--device-id`           | environment  | Provisioned device ID                            |
+| `--allow-insecure-http` | `false`      | Allow HTTP for a loopback server only            |
+| `--debounce`            | `2s`         | Coalescing window for filesystem changes         |
+| `--interval`            | `15m`        | Interval between bounded provider audits         |
+| `--audit-limit`         | `128`        | Maximum source work in each provider audit       |
+
+`raw-sync status` reads the checkpoint without creating one and prints
+path-free JSON containing capture, queue, retry, failure, and coverage state.
+S3 roots are not captured. This remains an in-development raw-custody path:
+device enrollment and server-side session derivation are not yet available.
+See [Hosted Raw Sync](/hosted-raw-sync/) for the current boundary.
+
+______________________________________________________________________
+
 ### `agentsview daemon`
 
 Manage the detached writable SQLite server:

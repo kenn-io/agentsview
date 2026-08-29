@@ -69,9 +69,147 @@ type RawCapturePlan struct {
 	Entries        []RawCaptureEntry
 }
 
+// RawCaptureDiscovery reports physical sources and whether every configured
+// root was enumerated successfully. Incomplete results may still be captured,
+// but callers must not infer deletions from omitted sources.
+type RawCaptureDiscovery struct {
+	Sources  []SourceRef
+	Complete bool
+}
+
 // RawCaptureProvider is the optional provider-owned physical source contract.
 type RawCaptureProvider interface {
 	PlanRawCapture(context.Context, SourceRef) (RawCapturePlan, error)
+}
+
+// RawCaptureSourceProvider optionally exposes physical raw sources separately
+// from the provider's normalized per-session discovery surface.
+type RawCaptureSourceProvider interface {
+	RawCaptureSourcesForChangedPath(
+		context.Context, ChangedPathRequest,
+	) ([]SourceRef, error)
+}
+
+// StreamingRawCaptureSourceProvider emits physical raw sources without
+// retaining the provider's complete discovery result in memory.
+type StreamingRawCaptureSourceProvider interface {
+	DiscoverRawCaptureSourcesEach(
+		context.Context, func(SourceRef) error,
+	) (complete bool, err error)
+}
+
+type rawCaptureDiscoveryProgressContextKey struct{}
+
+// WithRawCaptureDiscoveryProgress installs the periodic auditor's bounded
+// traversal handshake. Raw-capture providers report each filesystem entry or
+// configured root before examining it so the auditor can suspend the scan.
+func WithRawCaptureDiscoveryProgress(
+	ctx context.Context,
+	progress func() error,
+) context.Context {
+	return context.WithValue(ctx, rawCaptureDiscoveryProgressContextKey{}, progress)
+}
+
+// ReportRawCaptureDiscoveryProgress reports one physical discovery step when
+// a bounded traversal handshake is installed. Other discovery callers pay no
+// callback cost beyond the context lookup.
+func ReportRawCaptureDiscoveryProgress(ctx context.Context) error {
+	progress, _ := ctx.Value(rawCaptureDiscoveryProgressContextKey{}).(func() error)
+	if progress == nil {
+		return nil
+	}
+	return progress()
+}
+
+// StreamRawCaptureSources discovers physical raw sources through the bounded
+// callback surface required by raw-capture providers.
+func StreamRawCaptureSources(
+	ctx context.Context,
+	provider Provider,
+	yield func(SourceRef) error,
+) (bool, error) {
+	if streaming, ok := provider.(StreamingRawCaptureSourceProvider); ok {
+		return streaming.DiscoverRawCaptureSourcesEach(ctx, yield)
+	}
+	return false, UnsupportedProviderFeatureError{
+		Provider: provider.Definition().Type,
+		Feature:  ProviderFeatureRawCapture,
+	}
+}
+
+// DiscoverRawCaptureSources discovers physical raw sources without parsing.
+func DiscoverRawCaptureSources(
+	ctx context.Context,
+	provider Provider,
+) (RawCaptureDiscovery, error) {
+	if _, ok := provider.(StreamingRawCaptureSourceProvider); ok {
+		var sources []SourceRef
+		complete, err := StreamRawCaptureSources(ctx, provider, func(source SourceRef) error {
+			sources = append(sources, source)
+			return nil
+		})
+		sortJSONLSources(sources)
+		return RawCaptureDiscovery{Sources: sources, Complete: complete}, err
+	}
+	if provider.Capabilities().RawCapture.Support == CapabilitySupported {
+		return RawCaptureDiscovery{}, UnsupportedProviderFeatureError{
+			Provider: provider.Definition().Type,
+			Feature:  ProviderFeatureRawCapture,
+		}
+	}
+	if streaming, ok := provider.(StreamingDiscoverer); ok {
+		return collectRawCaptureDiscovery(ctx, streaming.DiscoverEach)
+	}
+	sources, err := provider.Discover(ctx)
+	return RawCaptureDiscovery{Sources: sources, Complete: err == nil}, err
+}
+
+func collectRawCaptureDiscovery(
+	ctx context.Context,
+	discover func(context.Context, func(SourceRef) error) error,
+) (RawCaptureDiscovery, error) {
+	var sources []SourceRef
+	seen := make(map[string]struct{})
+	err := discover(ctx, func(source SourceRef) error {
+		addJSONLSource(source, &sources, seen)
+		return nil
+	})
+	sortJSONLSources(sources)
+	return RawCaptureDiscovery{Sources: sources, Complete: err == nil}, err
+}
+
+func rawCaptureIncompleteRootError(
+	provider AgentType,
+	root string,
+	err error,
+) (error, bool) {
+	if _, ok := errors.AsType[DiscoveryIncompleteError](err); ok {
+		return err, true
+	}
+	if errors.Is(err, errStreamingDirectoryChanged) {
+		return incompleteDiscoveryError(
+			provider, "discover raw capture root "+root, err,
+		), true
+	}
+	if _, ok := errors.AsType[*os.PathError](err); ok {
+		return incompleteDiscoveryError(
+			provider, "discover raw capture root "+root, err,
+		), true
+	}
+	return err, false
+}
+
+// RawCaptureSourcesForChangedPath maps a watcher event to physical raw
+// sources without routing database events through per-session discovery.
+func RawCaptureSourcesForChangedPath(
+	ctx context.Context,
+	provider Provider,
+	req ChangedPathRequest,
+) ([]SourceRef, error) {
+	if physical, ok := provider.(RawCaptureSourceProvider); ok {
+		return physical.RawCaptureSourcesForChangedPath(ctx, req)
+	}
+	return provider.SourcesForChangedPath(ctx, req)
 }
 
 // ResolveRawCapturePlan returns and validates a provider-owned raw source plan.
@@ -113,8 +251,13 @@ func validateRawCapturePlan(
 	source SourceRef,
 	plan RawCapturePlan,
 ) (RawCapturePlan, error) {
-	if capabilities.Shape != RawCaptureShapeFiles ||
-		capabilities.Snapshot != RawCaptureSnapshotNone {
+	switch {
+	case capabilities.Shape == RawCaptureShapeFiles &&
+		capabilities.Snapshot == RawCaptureSnapshotNone:
+	case capabilities.Shape == RawCaptureShapeSQLite &&
+		capabilities.Snapshot == RawCaptureSnapshotOnlineBackup &&
+		capabilities.Append == RawCaptureAppendReplaceOnly:
+	default:
 		return RawCapturePlan{}, invalidRawCapturePlan("unsupported source shape or snapshot requirement")
 	}
 	if plan.SourceKey == "" || plan.SourceKey != source.Key {
@@ -184,6 +327,9 @@ func validateRawCapturePlan(
 		}
 	default:
 		return RawCapturePlan{}, invalidRawCapturePlan("unknown append policy %d", capabilities.Append)
+	}
+	if capabilities.Shape == RawCaptureShapeSQLite && len(entries) != 1 {
+		return RawCapturePlan{}, invalidRawCapturePlan("SQLite source must have exactly one entry")
 	}
 	slices.SortFunc(entries, func(a, b RawCaptureEntry) int {
 		return strings.Compare(a.Path, b.Path)

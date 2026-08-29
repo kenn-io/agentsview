@@ -37,14 +37,14 @@ func (f dbBackedProviderFactory) Definition() AgentDef {
 }
 
 func (f dbBackedProviderFactory) Capabilities() Capabilities {
-	return f.spec.caps
+	return withDBBackedRawCapture(f.spec.caps)
 }
 
 func (f dbBackedProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &dbBackedProvider{
 		Def:     cloneAgentDef(f.def),
-		Caps:    f.spec.caps,
+		Caps:    withDBBackedRawCapture(f.spec.caps),
 		Config:  cfg,
 		spec:    f.spec,
 		sources: newDBBackedSourceSet(f.spec, cfg.Roots),
@@ -55,6 +55,133 @@ type dbBackedProvider struct {
 	ProviderBase
 	spec    dbBackedProviderSpec
 	sources dbBackedSourceSet
+}
+
+var _ StreamingRawCaptureSourceProvider = (*dbBackedProvider)(nil)
+
+type dbBackedRawSource struct {
+	Root   string
+	DBPath string
+}
+
+func withDBBackedRawCapture(capabilities Capabilities) Capabilities {
+	capabilities.RawCapture = RawCaptureCapabilities{
+		Support:  CapabilitySupported,
+		Shape:    RawCaptureShapeSQLite,
+		Append:   RawCaptureAppendReplaceOnly,
+		Snapshot: RawCaptureSnapshotOnlineBackup,
+	}
+	return capabilities
+}
+
+func (p *dbBackedProvider) DiscoverRawCaptureSourcesEach(
+	ctx context.Context,
+	yield func(SourceRef) error,
+) (bool, error) {
+	complete := true
+	for _, root := range p.sources.roots {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
+			return false, err
+		}
+		dbPath := p.spec.findDB(root)
+		if dbPath == "" {
+			complete = complete && rawCaptureDBRootComplete(root, p.spec.dbName)
+			continue
+		}
+		if !rawCaptureDBPathRegular(dbPath) {
+			complete = false
+			continue
+		}
+		if err := yield(p.newRawCaptureSource(root, dbPath)); err != nil {
+			return false, err
+		}
+	}
+	return complete, nil
+}
+
+func rawCaptureDBPathRegular(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode().IsRegular()
+}
+
+func rawCaptureDBRootComplete(root, dbName string) bool {
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	dbInfo, err := os.Lstat(filepath.Join(root, dbName))
+	if err == nil {
+		return dbInfo.Mode().IsRegular()
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	return true
+}
+
+func (p *dbBackedProvider) RawCaptureSourcesForChangedPath(
+	ctx context.Context,
+	req ChangedPathRequest,
+) ([]SourceRef, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, root := range p.sources.roots {
+		if req.WatchRoot != "" && !samePath(req.WatchRoot, root) {
+			continue
+		}
+		dbPath, ok := p.sources.dbPathForEvent(root, req.Path)
+		if !ok || !IsRegularFile(dbPath) {
+			continue
+		}
+		return []SourceRef{p.newRawCaptureSource(root, dbPath)}, nil
+	}
+	return nil, nil
+}
+
+func (p *dbBackedProvider) PlanRawCapture(
+	ctx context.Context,
+	source SourceRef,
+) (RawCapturePlan, error) {
+	if err := ctx.Err(); err != nil {
+		return RawCapturePlan{}, err
+	}
+	raw, ok := source.Opaque.(dbBackedRawSource)
+	if !ok || raw.Root == "" || raw.DBPath == "" {
+		return RawCapturePlan{}, invalidRawCapturePlan("database source path unavailable")
+	}
+	if source.Provider != p.spec.agent || source.Key != p.spec.dbName ||
+		!samePath(raw.DBPath, filepath.Join(raw.Root, p.spec.dbName)) ||
+		!IsRegularFile(raw.DBPath) {
+		return RawCapturePlan{}, invalidRawCapturePlan("database source does not match provider root")
+	}
+	return RawCapturePlan{
+		ConfiguredRoot: raw.Root,
+		CaptureRoot:    raw.Root,
+		SourceKey:      source.Key,
+		Entries: []RawCaptureEntry{{
+			Path:      p.spec.dbName,
+			LocalPath: raw.DBPath,
+		}},
+	}, nil
+}
+
+func (p *dbBackedProvider) newRawCaptureSource(root, dbPath string) SourceRef {
+	return SourceRef{
+		Provider:       p.spec.agent,
+		Key:            p.spec.dbName,
+		DisplayPath:    dbPath,
+		FingerprintKey: dbPath,
+		Opaque: dbBackedRawSource{
+			Root: root, DBPath: dbPath,
+		},
+	}
 }
 
 func (p *dbBackedProvider) Discover(ctx context.Context) ([]SourceRef, error) {

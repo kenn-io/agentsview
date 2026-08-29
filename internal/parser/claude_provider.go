@@ -12,6 +12,8 @@ import (
 var _ Provider = (*claudeProvider)(nil)
 var _ S3Provider = (*claudeProvider)(nil)
 var _ RawCaptureProvider = (*claudeProvider)(nil)
+var _ RawCaptureSourceProvider = (*claudeProvider)(nil)
+var _ StreamingRawCaptureSourceProvider = (*claudeProvider)(nil)
 
 type claudeProviderFactory struct {
 	def AgentDef
@@ -50,6 +52,52 @@ func (p *claudeProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 
 func (p *claudeProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	return p.sources.DiscoverEach(ctx, yield)
+}
+
+func (p *claudeProvider) DiscoverRawCaptureSourcesEach(
+	ctx context.Context,
+	yield func(SourceRef) error,
+) (bool, error) {
+	ctx = withRawCaptureStreamingTraversal(ctx)
+	var incomplete error
+	for rootIndex, root := range p.sources.roots {
+		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
+			return false, err
+		}
+		if isS3URI(root) {
+			continue
+		}
+		err := p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
+			for _, earlierRoot := range p.sources.roots[:rootIndex] {
+				earlier, ok := p.sources.sourceRefFromPath(
+					earlierRoot, source.DisplayPath,
+				)
+				if ok && earlier.Key == source.Key {
+					return nil
+				}
+			}
+			return yield(source)
+		})
+		if err == nil {
+			continue
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		rootErr, ok := rawCaptureIncompleteRootError(p.Def.Type, root, err)
+		if !ok {
+			return false, err
+		}
+		incomplete = errors.Join(incomplete, rootErr)
+	}
+	return incomplete == nil, incomplete
+}
+
+func (p *claudeProvider) RawCaptureSourcesForChangedPath(
+	ctx context.Context,
+	req ChangedPathRequest,
+) ([]SourceRef, error) {
+	return p.SourcesForChangedPath(ctx, req)
 }
 
 func (p *claudeProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -388,23 +436,30 @@ func (s claudeSourceSet) DiscoverEach(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if strings.HasPrefix(root, "s3://") {
-			for _, file := range s.spec.listFiles(root) {
-				source, ok := s.discoveredSourceRef(root, file)
-				if ok {
-					if err := yield(source); err != nil {
-						return err
-					}
-				}
-			}
-			continue
-		}
-		err := s.streamLocalRoot(ctx, root, yield)
-		if err != nil {
+		if err := s.discoverEachRoot(ctx, root, yield); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s claudeSourceSet) discoverEachRoot(
+	ctx context.Context,
+	root string,
+	yield func(SourceRef) error,
+) error {
+	if strings.HasPrefix(root, "s3://") {
+		for _, file := range s.spec.listFiles(root) {
+			source, ok := s.discoveredSourceRef(root, file)
+			if ok {
+				if err := yield(source); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return s.streamLocalRoot(ctx, root, yield)
 }
 
 func (s claudeSourceSet) streamLocalRoot(

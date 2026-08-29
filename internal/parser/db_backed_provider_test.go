@@ -98,6 +98,154 @@ func TestForgeProviderSourceMethodsAndParse(t *testing.T) {
 	assert.Len(t, result.Result.Messages, 4)
 }
 
+type rawCaptureSourceDiscoverer interface {
+	RawCaptureSourcesForChangedPath(
+		context.Context, ChangedPathRequest,
+	) ([]SourceRef, error)
+}
+
+func TestDBBackedProviderRawCaptureUsesOnePhysicalDatabaseSource(t *testing.T) {
+	dbPath, seeder, db := newForgeTestDB(t)
+	defer db.Close()
+	seedForgeConversation(t, seeder)
+	seeder.AddConversation(
+		"conv-002", "Second", 123,
+		`{"conversation_id":"conv-002","messages":[]}`,
+		"2026-05-03 09:58:15.000000000",
+		"2026-05-03 10:00:16.000000000", "",
+	)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discoverer, ok := provider.(rawCaptureSourceDiscoverer)
+	require.True(t, ok, "db-backed providers must expose physical raw sources")
+	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+	require.NoError(t, err)
+	require.True(t, discovery.Complete)
+	sources := discovery.Sources
+	require.Len(t, sources, 1)
+	assert.Equal(t, ForgeDBFilename, sources[0].Key)
+	assert.Equal(t, dbPath, sources[0].DisplayPath)
+
+	changed, err := discoverer.RawCaptureSourcesForChangedPath(
+		t.Context(), ChangedPathRequest{
+			Path:      dbPath + "-wal",
+			EventKind: "write",
+			WatchRoot: root,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, sources, changed)
+
+	capabilities := provider.Capabilities().RawCapture
+	assert.Equal(t, RawCaptureCapabilities{
+		Support:  CapabilitySupported,
+		Shape:    RawCaptureShapeSQLite,
+		Append:   RawCaptureAppendReplaceOnly,
+		Snapshot: RawCaptureSnapshotOnlineBackup,
+	}, capabilities)
+	planner, ok := provider.(RawCaptureProvider)
+	require.True(t, ok)
+	plan, err := planner.PlanRawCapture(t.Context(), sources[0])
+	require.NoError(t, err)
+	assert.Equal(t, root, plan.ConfiguredRoot)
+	assert.Equal(t, root, plan.CaptureRoot)
+	assert.Equal(t, ForgeDBFilename, plan.SourceKey)
+	require.Len(t, plan.Entries, 1)
+	assert.Equal(t, RawCaptureEntry{
+		Path: ForgeDBFilename, LocalPath: dbPath,
+	}, plan.Entries[0])
+}
+
+func TestDBBackedProviderRawCaptureReportsDiscoveryCompleteness(t *testing.T) {
+	dbPath, _, db := newForgeTestDB(t)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	healthyRoot := filepath.Dir(dbPath)
+	nonRegularRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(nonRegularRoot, ForgeDBFilename), 0o755))
+
+	tests := []struct {
+		name       string
+		secondRoot string
+		complete   bool
+	}{
+		{
+			name:       "configured root unavailable",
+			secondRoot: filepath.Join(t.TempDir(), "missing"),
+			complete:   false,
+		},
+		{
+			name:       "database absent from accessible root",
+			secondRoot: t.TempDir(),
+			complete:   true,
+		},
+		{
+			name:       "database path is not a regular file",
+			secondRoot: nonRegularRoot,
+			complete:   false,
+		},
+	}
+	danglingRoot := t.TempDir()
+	if err := os.Symlink(
+		filepath.Join(danglingRoot, "missing.db"),
+		filepath.Join(danglingRoot, ForgeDBFilename),
+	); err == nil {
+		tests = append(tests, struct {
+			name       string
+			secondRoot string
+			complete   bool
+		}{
+			name:       "database path is a dangling symlink",
+			secondRoot: danglingRoot,
+			complete:   false,
+		})
+	} else {
+		t.Logf("dangling symlink coverage unavailable: %v", err)
+	}
+	linkedDatabaseRoot := t.TempDir()
+	if err := os.Symlink(
+		dbPath, filepath.Join(linkedDatabaseRoot, ForgeDBFilename),
+	); err == nil {
+		tests = append(tests, struct {
+			name       string
+			secondRoot string
+			complete   bool
+		}{
+			name:       "database path is a symlink to a regular file",
+			secondRoot: linkedDatabaseRoot,
+			complete:   false,
+		})
+	} else {
+		t.Logf("regular symlink coverage unavailable: %v", err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, ok := NewProvider(AgentForge, ProviderConfig{
+				Roots: []string{healthyRoot, tt.secondRoot},
+			})
+			require.True(t, ok)
+			discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+			require.NoError(t, err)
+			assert.Equal(t, tt.complete, discovery.Complete)
+			require.Len(t, discovery.Sources, 1)
+			assert.Equal(t, dbPath, discovery.Sources[0].DisplayPath)
+
+			var streamed []SourceRef
+			complete, err := StreamRawCaptureSources(
+				t.Context(), provider, func(source SourceRef) error {
+					streamed = append(streamed, source)
+					return nil
+				},
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tt.complete, complete)
+			require.Len(t, streamed, 1)
+			assert.Equal(t, dbPath, streamed[0].DisplayPath)
+		})
+	}
+}
+
 func TestPiebaldProviderSourceMethodsAndParse(t *testing.T) {
 	dbPath := newPiebaldTestDB(t)
 	seedPiebaldProviderBasicChat(t, dbPath)

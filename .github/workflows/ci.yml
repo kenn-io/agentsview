@@ -136,7 +136,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -195,6 +195,12 @@ jobs:
           )
           $packages = $packages | Where-Object { $_ -notin $isolatedPackages }
           go test -tags "fts5" $packages -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Run raw capture tests (macOS)
+        if: runner.os == 'macOS'
+        run: go test -tags "fts5" ./internal/rawcapture -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 

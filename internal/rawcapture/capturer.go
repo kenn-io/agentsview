@@ -5,6 +5,7 @@ package rawcapture
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -41,12 +42,13 @@ const (
 )
 
 type observedCaptureEntry struct {
-	planned  parser.RawCaptureEntry
-	root     *os.Root
-	relative string
-	file     *os.File
-	info     os.FileInfo
-	identity string
+	planned            parser.RawCaptureEntry
+	root               *os.Root
+	relative           string
+	file               *os.File
+	info               os.FileInfo
+	identity           string
+	checkpointIdentity string
 }
 
 type capturedFileState struct {
@@ -83,6 +85,7 @@ type Capturer struct {
 	store          *rawcheckpoint.Store
 	files          fileOperations
 	manifestLimits rawsync.ManifestLimits
+	sqliteBackup   func(context.Context, *sql.Conn, string, int64) error
 	capturePhase   func(capturePhase, string)
 	discardObjects func(context.Context, []rawsync.ObjectRef) error
 }
@@ -92,6 +95,7 @@ func New(store *rawcheckpoint.Store) *Capturer {
 	return &Capturer{
 		store: store, files: defaultFileOperations(),
 		manifestLimits: rawsync.DefaultManifestLimits(),
+		sqliteBackup:   sqliteOnlineBackup,
 		discardObjects: store.DiscardUnreferencedObjects,
 	}
 }
@@ -106,10 +110,6 @@ func (c *Capturer) Capture(
 		return Result{}, err
 	}
 	capabilities := provider.Capabilities().RawCapture
-	if capabilities.Snapshot != parser.RawCaptureSnapshotNone ||
-		capabilities.Shape == parser.RawCaptureShapeSQLite {
-		return Result{}, ErrUnsupportedSnapshot
-	}
 	plan, supported, err := parser.ResolveRawCapturePlan(ctx, provider, source)
 	if err != nil {
 		return Result{}, err
@@ -117,17 +117,8 @@ func (c *Capturer) Capture(
 	if !supported {
 		return Result{}, ErrUnsupportedProvider
 	}
-	scope, err := openCapturePlanScope(plan)
-	if err != nil {
-		return Result{}, err
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, scope.Close())
-		if resultErr != nil {
-			result = Result{}
-		}
-	}()
-	root, err := c.store.ResolveConfiguredRoot(ctx, source.Provider, plan.ConfiguredRoot)
+	originalPlan := plan
+	root, err := c.store.ResolveConfiguredRoot(ctx, source.Provider, originalPlan.ConfiguredRoot)
 	if err != nil {
 		return Result{}, err
 	}
@@ -136,24 +127,7 @@ func (c *Capturer) Capture(
 		ConfiguredRootID: root.ID,
 		SourceKey:        plan.SourceKey,
 	}
-	base, hasBase, err := c.store.CaptureBase(ctx, identity)
-	if err != nil {
-		return Result{}, err
-	}
-	observed, sourceBytes, err := c.observePlan(scope)
-	if err != nil {
-		return Result{}, err
-	}
-	defer closeObservedEntries(observed)
-	provisional := c.provisionalAssessment(observed, sourceBytes, base, hasBase)
-	reservationBytes := captureReservationBytes(provisional)
-	reservation, err := c.store.ReserveSourceCapture(ctx, identity, reservationBytes)
-	if errors.Is(err, rawcheckpoint.ErrOutboxFull) {
-		return Result{Status: StatusDegraded, Source: identity}, nil
-	}
-	if err != nil {
-		return Result{}, err
-	}
+	var reservation rawcheckpoint.Reservation
 	committed := false
 	cleanupIncomplete := false
 	var installed []rawsync.ObjectRef
@@ -169,16 +143,148 @@ func (c *Capturer) Capture(
 				)
 			}
 			resultErr = errors.Join(resultErr, cleanupErr)
+			if resultErr != nil {
+				result = Result{}
+			}
 		}
 		finishPublication()
 	}()
+	snapshot := false
+	observationRecorded := false
+	var removeSnapshot func() error
+	switch {
+	case capabilities.Shape == parser.RawCaptureShapeFiles &&
+		capabilities.Snapshot == parser.RawCaptureSnapshotNone:
+	case capabilities.Shape == parser.RawCaptureShapeSQLite &&
+		capabilities.Snapshot == parser.RawCaptureSnapshotOnlineBackup:
+		sourcePath := plan.Entries[0].LocalPath
+		if c.capturePhase != nil {
+			c.capturePhase(capturePhaseBeforeRead, sourcePath)
+		}
+		sourceScope, scopeErr := openCapturePlanScope(plan)
+		if scopeErr != nil {
+			return Result{}, scopeErr
+		}
+		defer func() {
+			resultErr = errors.Join(resultErr, sourceScope.Close())
+			if resultErr != nil {
+				result = Result{}
+			}
+		}()
+		sourceObserved, _, observeErr := c.observePlan(sourceScope)
+		if observeErr != nil {
+			return Result{}, observeErr
+		}
+		defer closeObservedEntries(sourceObserved)
+		if len(sourceObserved) != 1 {
+			return Result{}, ErrSourceChanged
+		}
+		sqliteSource, openErr := openSQLiteSnapshotSource(
+			ctx, sourcePath, sourceObserved[0].info,
+		)
+		if openErr != nil {
+			return Result{}, openErr
+		}
+		defer func() {
+			resultErr = errors.Join(resultErr, sqliteSource.Close())
+			if resultErr != nil {
+				result = Result{}
+			}
+		}()
+		snapshotBytes, sizeErr := sqliteOnlineBackupSize(ctx, sqliteSource.connection)
+		if sizeErr != nil {
+			return Result{}, sizeErr
+		}
+		if err := c.store.RecordSourceObservation(ctx, identity); err != nil {
+			return Result{}, err
+		}
+		observationRecorded = true
+		reservationBytes := sqliteSnapshotReservationBytes(snapshotBytes)
+		reservation, err = c.store.ReserveSourceCapture(ctx, identity, reservationBytes)
+		if errors.Is(err, rawcheckpoint.ErrOutboxFull) {
+			return Result{Status: StatusDegraded, Source: identity}, nil
+		}
+		if err != nil {
+			return Result{}, err
+		}
+		plan, removeSnapshot, err = c.snapshotSQLitePlan(
+			ctx, plan, sqliteSource.connection, snapshotBytes,
+		)
+		if errors.Is(err, rawcheckpoint.ErrOutboxFull) {
+			return Result{Status: StatusDegraded, Source: identity}, nil
+		}
+		if err != nil {
+			return Result{}, err
+		}
+		defer func() {
+			cleanupErr := removeSnapshot()
+			if committed {
+				return
+			}
+			resultErr = errors.Join(resultErr, cleanupErr)
+			if resultErr != nil {
+				result = Result{}
+			}
+		}()
+		if err := sqliteSource.verifyCurrent(); err != nil {
+			return Result{}, err
+		}
+		snapshot = true
+	default:
+		return Result{}, ErrUnsupportedSnapshot
+	}
+	scope, err := openCapturePlanScope(plan)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, scope.Close())
+		if resultErr != nil {
+			result = Result{}
+		}
+	}()
+	observed, sourceBytes, err := c.observePlan(scope)
+	if err != nil {
+		return Result{}, err
+	}
+	defer closeObservedEntries(observed)
+	if !observationRecorded {
+		if err := c.store.RecordSourceObservation(ctx, identity); err != nil {
+			return Result{}, err
+		}
+	}
+	base, hasBase, err := c.store.CaptureBase(ctx, identity)
+	if err != nil {
+		return Result{}, err
+	}
+	if snapshot {
+		for i := range observed {
+			observed[i].checkpointIdentity = "sqlite-online-backup:" + observed[i].planned.Path
+		}
+	}
+	provisional := c.provisionalAssessment(observed, sourceBytes, base, hasBase)
+	if base.PermanentlyRejected {
+		provisional = c.fullAssessment(observed, sourceBytes)
+	}
+	reservationBytes := captureReservationBytes(provisional)
+	if reservation.ID == "" {
+		reservation, err = c.store.ReserveSourceCapture(ctx, identity, reservationBytes)
+		if errors.Is(err, rawcheckpoint.ErrOutboxFull) {
+			return Result{Status: StatusDegraded, Source: identity}, nil
+		}
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	assessment, err := c.assessCapture(ctx, observed, sourceBytes, base, hasBase)
 	if err != nil {
 		return Result{}, err
 	}
-	if assessment.unchanged {
-		if err := validateCapturePlanStillCurrent(ctx, provider, source, plan, scope); err != nil {
-			return Result{}, err
+	if assessment.unchanged && !base.PermanentlyRejected {
+		if !snapshot {
+			if err := validateCapturePlanStillCurrent(ctx, provider, source, originalPlan, scope); err != nil {
+				return Result{}, err
+			}
 		}
 		for i := range observed {
 			if err := c.verifyCapturedFile(ctx, observed[i], capturedFileState{
@@ -190,11 +296,16 @@ func (c *Capturer) Capture(
 				return Result{}, err
 			}
 		}
-		if err := c.store.CompleteUnchangedCapture(ctx, reservation.ID, identity); err != nil {
+		if err := c.store.CompleteUnchangedCapture(
+			ctx, reservation.ID, identity, base.CaptureID, base.ObservationRevision,
+		); err != nil {
 			return Result{}, err
 		}
 		committed = true
 		return Result{Status: StatusUnchanged, Source: identity}, nil
+	}
+	if base.PermanentlyRejected {
+		assessment = c.fullAssessment(observed, sourceBytes)
 	}
 	captureID, err := newCaptureID()
 	if err != nil {
@@ -251,11 +362,13 @@ func (c *Capturer) Capture(
 			cleanupIncomplete = errors.Is(err, errCleanupIncomplete)
 			return Result{}, err
 		}
+		capturedIdentity := entry.FileIdentity
+		entry.FileIdentity = observed[i].checkpointIdentity
 		entries = append(entries, entry)
 		capturedFiles = append(capturedFiles, capturedFileState{
 			length:       entry.Length,
 			modTimeNS:    entry.ModTimeNS,
-			fileIdentity: entry.FileIdentity,
+			fileIdentity: capturedIdentity,
 			prefixSHA256: entry.PrefixSHA256,
 		})
 	}
@@ -264,8 +377,10 @@ func (c *Capturer) Capture(
 			return Result{}, err
 		}
 	}
-	if err := validateCapturePlanStillCurrent(ctx, provider, source, plan, scope); err != nil {
-		return Result{}, err
+	if !snapshot {
+		if err := validateCapturePlanStillCurrent(ctx, provider, source, originalPlan, scope); err != nil {
+			return Result{}, err
+		}
 	}
 	if err := c.validateForUpload(identity, captureID, capturedAt, entries); err != nil {
 		return Result{}, err
@@ -286,6 +401,13 @@ func (c *Capturer) Capture(
 		return Result{}, err
 	}
 	committed = true
+	finishPublication()
+	finishPublication = func() {}
+	if base.PermanentlyRejected {
+		if _, err := c.store.CollectGarbage(ctx); err != nil {
+			return Result{}, err
+		}
+	}
 	return Result{
 		Status: StatusCaptured, CaptureID: captureID, Source: identity,
 	}, nil
@@ -310,7 +432,7 @@ func (c *Capturer) provisionalAssessment(
 	for _, current := range observed {
 		previous, ok := byPath[current.planned.Path]
 		if !ok || previous.Appendable != current.planned.Appendable ||
-			previous.FileIdentity != current.identity {
+			previous.FileIdentity != captureCheckpointIdentity(current) {
 			return full
 		}
 		entry := cloneCapturedEntry(previous)
@@ -383,6 +505,11 @@ func (c *Capturer) observePlan(
 				"rawcapture: stat %q: %w", entry.planned.Path, sanitizeFilesystemError(err),
 			)
 		}
+		rootedInfo, err := entry.root.Lstat(entry.relative)
+		if err != nil || !rootedInfo.Mode().IsRegular() {
+			closeObservedEntries(observed)
+			return nil, 0, ErrSourceChanged
+		}
 		file, err := entry.root.Open(entry.relative)
 		if err != nil {
 			closeObservedEntries(observed)
@@ -401,7 +528,10 @@ func (c *Capturer) observePlan(
 				"rawcapture: stat %q: %w", entry.planned.Path, sanitizeFilesystemError(err),
 			)
 		}
+		currentInfo, err := entry.root.Lstat(entry.relative)
 		if !info.Mode().IsRegular() || info.Size() < 0 ||
+			err != nil || !currentInfo.Mode().IsRegular() ||
+			!os.SameFile(rootedInfo, info) || !os.SameFile(currentInfo, info) ||
 			!pathInfo.Mode().IsRegular() || !os.SameFile(pathInfo, info) ||
 			sourceBytes > int64(^uint64(0)>>1)-info.Size() {
 			file.Close()
@@ -417,7 +547,7 @@ func (c *Capturer) observePlan(
 		sourceBytes += info.Size()
 		observed = append(observed, observedCaptureEntry{
 			planned: entry.planned, root: entry.root, relative: entry.relative,
-			file: file, info: info, identity: identity,
+			file: file, info: info, identity: identity, checkpointIdentity: identity,
 		})
 	}
 	return observed, sourceBytes, nil
@@ -449,7 +579,7 @@ func (c *Capturer) assessCapture(
 	for _, current := range observed {
 		previous, ok := byPath[current.planned.Path]
 		if !ok || previous.Appendable != current.planned.Appendable ||
-			previous.FileIdentity != current.identity {
+			previous.FileIdentity != captureCheckpointIdentity(current) {
 			return full, nil
 		}
 		appendBases = append(appendBases, cloneCapturedEntry(previous))
@@ -511,13 +641,20 @@ func (c *Capturer) fullAssessment(
 			Path:         current.planned.Path,
 			Length:       current.info.Size(),
 			ModTimeNS:    current.info.ModTime().UnixNano(),
-			FileIdentity: current.identity,
+			FileIdentity: captureCheckpointIdentity(current),
 			PrefixSHA256: placeholderObjectRef(i, current.info.Size()).SHA256,
 			Appendable:   current.planned.Appendable,
 			Objects:      []rawsync.ObjectRef{placeholderObjectRef(i, current.info.Size())},
 		})
 	}
 	return captureAssessment{mode: captureFull, objectBytes: sourceBytes, entries: entries}
+}
+
+func captureCheckpointIdentity(entry observedCaptureEntry) string {
+	if entry.checkpointIdentity != "" {
+		return entry.checkpointIdentity
+	}
+	return entry.identity
 }
 
 func placeholderObjectRef(index int, length int64) rawsync.ObjectRef {

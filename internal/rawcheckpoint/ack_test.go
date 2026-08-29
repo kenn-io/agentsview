@@ -2,6 +2,7 @@ package rawcheckpoint
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,8 +47,8 @@ func TestFinalizeAndAcknowledgeOfflineChainInOrder(t *testing.T) {
 		Generation: 1,
 		Created:    true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generations[0].CaptureID, firstCommit.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", generations[0].CaptureID, firstCommit,
 	))
 	ack, err := store.AcknowledgeGeneration(
 		t.Context(), "device-a", generations[0].CaptureID, firstCommit,
@@ -68,8 +69,8 @@ func TestFinalizeAndAcknowledgeOfflineChainInOrder(t *testing.T) {
 		Generation: 2,
 		Created:    true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generations[1].CaptureID, secondCommit.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", generations[1].CaptureID, secondCommit,
 	))
 	_, err = store.AcknowledgeGeneration(
 		t.Context(), "device-a", generations[1].CaptureID, secondCommit,
@@ -88,6 +89,187 @@ func TestFinalizeAndAcknowledgeOfflineChainInOrder(t *testing.T) {
 	assert.True(t, replayed.Replayed)
 }
 
+func TestFinalizeNextManifestOrdersExactSecondBeforeLaterFraction(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	baseTime := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	for sequence, capturedAt := range []time.Time{
+		baseTime,
+		baseTime.Add(100 * time.Millisecond),
+	} {
+		ref := rawsync.ObjectRef{
+			SHA256: validCheckpointDigest(byte(sequence + 10)), Length: 1,
+		}
+		installOutboxTestObject(t, store, ref, []byte{byte(sequence)})
+		generation := testCapturedGeneration(sequence+1, root, "", ref)
+		generation.Source.SourceKey = fmt.Sprintf("source-%d", sequence)
+		generation.CapturedAt = capturedAt
+		reservation, err := store.ReserveSourceCapture(
+			t.Context(), generation.Source, 1793,
+		)
+		require.NoError(t, err)
+		require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	}
+
+	manifest, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, fmt.Sprintf("%032x", 1), manifest.CaptureID)
+}
+
+func TestBindFinalizedCommitPersistsResultForRetry(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	ref := rawsync.ObjectRef{SHA256: validCheckpointDigest(10), Length: 1}
+	installOutboxTestObject(t, store, ref, []byte{1})
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1793)
+	require.NoError(t, err)
+	generation := testCapturedGeneration(1, root, "", ref)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	_, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	commit := rawsync.CommitResult{
+		ManifestID: validCheckpointDigest(1),
+		Receipt:    validCheckpointDigest(2),
+		Generation: 1,
+		Created:    true,
+	}
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", generation.CaptureID, commit,
+	))
+	stored, found, err := store.FinalizedCommit(t.Context(), "device-a", generation.CaptureID)
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, commit.ManifestID, stored.ManifestID)
+	assert.Equal(t, commit.Receipt, stored.Receipt)
+	assert.Equal(t, commit.Generation, stored.Generation)
+}
+
+func TestQueueTombstoneWaitsForSnapshotAndIsIdempotent(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
+	installOutboxTestObject(t, store, ref, []byte("abc"))
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
+	require.NoError(t, err)
+	snapshot := testCapturedGeneration(1, root, "", ref)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, snapshot))
+
+	tombstoneID, queued, err := store.QueueTombstone(t.Context(), snapshot.Source)
+	require.NoError(t, err)
+	require.True(t, queued)
+	assert.NotEmpty(t, tombstoneID)
+	_, queued, err = store.QueueTombstone(t.Context(), snapshot.Source)
+	require.NoError(t, err)
+	assert.False(t, queued)
+
+	first, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, snapshot.CaptureID, first.CaptureID)
+	retry, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, snapshot.CaptureID, retry.CaptureID,
+		"tombstone must wait for the snapshot receipt")
+
+	firstCommit := rawsync.CommitResult{
+		ManifestID: validCheckpointDigest(1),
+		Receipt:    validCheckpointDigest(2),
+		Generation: 1,
+		Created:    true,
+	}
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", snapshot.CaptureID, firstCommit,
+	))
+	_, err = store.AcknowledgeGeneration(
+		t.Context(), "device-a", snapshot.CaptureID, firstCommit,
+	)
+	require.NoError(t, err)
+
+	deleted, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, tombstoneID, deleted.CaptureID)
+	assert.Equal(t, rawsync.ManifestTombstone, deleted.Kind)
+	assert.Equal(t, firstCommit.Receipt, deleted.ExpectedParentReceipt)
+	assert.Empty(t, deleted.Entries)
+
+	base, ok, err := store.CaptureBase(t.Context(), snapshot.Source)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, tombstoneID, base.CaptureID)
+	assert.Equal(t, rawsync.ManifestTombstone, base.Kind)
+	assert.Empty(t, base.Entries)
+}
+
+func TestQueueTombstoneReplacesPermanentlyRejectedTombstone(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
+	installOutboxTestObject(t, store, ref, []byte("abc"))
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
+	require.NoError(t, err)
+	snapshot := testCapturedGeneration(1, root, "", ref)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, snapshot))
+	manifest, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	snapshotCommit := rawsync.CommitResult{
+		ManifestID: validCheckpointDigest(1),
+		Receipt:    validCheckpointDigest(2),
+		Generation: 1,
+		Created:    true,
+	}
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", manifest.CaptureID, snapshotCommit,
+	))
+	_, err = store.AcknowledgeGeneration(
+		t.Context(), "device-a", manifest.CaptureID, snapshotCommit,
+	)
+	require.NoError(t, err)
+	rejectedID, queued, err := store.QueueTombstone(t.Context(), snapshot.Source)
+	require.NoError(t, err)
+	require.True(t, queued)
+	rejected, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rejectedID, rejected.CaptureID)
+	require.NoError(t, store.RecordGenerationFailure(
+		t.Context(), "device-a", rejectedID,
+		GenerationFailurePermanent, time.Time{},
+	))
+	status, err := store.ClientStatus(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, status.PermanentFailures)
+
+	replacementID, queued, err := store.QueueTombstone(t.Context(), snapshot.Source)
+
+	require.NoError(t, err)
+	require.True(t, queued)
+	assert.NotEqual(t, rejectedID, replacementID)
+	replacement, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, replacementID, replacement.CaptureID)
+	assert.Equal(t, rawsync.ManifestTombstone, replacement.Kind)
+	assert.Equal(t, snapshotCommit.Receipt, replacement.ExpectedParentReceipt)
+	var rejectedRows int
+	require.NoError(t, store.db.QueryRow(
+		`SELECT count(*) FROM outbox_generations WHERE capture_id = ?`, rejectedID,
+	).Scan(&rejectedRows))
+	assert.Zero(t, rejectedRows)
+	status, err = store.ClientStatus(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, status.PermanentFailures)
+	_, queued, err = store.QueueTombstone(t.Context(), snapshot.Source)
+	require.NoError(t, err)
+	assert.False(t, queued, "the healthy replacement remains idempotent")
+}
+
 func TestAcknowledgeGenerationRejectsStaleInputsWithoutAdvancing(t *testing.T) {
 	store, root := openOutboxTestStore(t, 1<<20)
 	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
@@ -104,11 +286,14 @@ func TestAcknowledgeGenerationRejectsStaleInputsWithoutAdvancing(t *testing.T) {
 		ManifestID: validCheckpointDigest(1), Receipt: validCheckpointDigest(2),
 		Generation: 1, Created: true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generation.CaptureID, valid.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", generation.CaptureID, valid,
 	))
-	require.ErrorIs(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generation.CaptureID, validCheckpointDigest(9),
+	require.ErrorIs(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", generation.CaptureID, rawsync.CommitResult{
+			ManifestID: validCheckpointDigest(9), Receipt: valid.Receipt,
+			Generation: valid.Generation,
+		},
 	), ErrAcknowledgeConflict)
 
 	for _, tc := range []struct {
@@ -157,8 +342,8 @@ func TestAcknowledgedCaptureBaseRetainsObjectReferencesAfterLocalGC(t *testing.T
 		ManifestID: validCheckpointDigest(1), Receipt: validCheckpointDigest(2),
 		Generation: 1, Created: true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generation.CaptureID, commit.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", generation.CaptureID, commit,
 	))
 	_, err = store.AcknowledgeGeneration(t.Context(), "device-a", generation.CaptureID, commit)
 	require.NoError(t, err)
@@ -189,8 +374,8 @@ func TestCaptureBaseSnapshotRemainsCoherentDuringAcknowledgement(t *testing.T) {
 		ManifestID: validCheckpointDigest(1), Receipt: validCheckpointDigest(2),
 		Generation: 1, Created: true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generation.CaptureID, commit.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", generation.CaptureID, commit,
 	))
 
 	tx, err := store.db.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
@@ -234,8 +419,8 @@ func TestAcknowledgedGenerationCompactsToBoundedHeadReplayState(t *testing.T) {
 		ManifestID: validCheckpointDigest(1), Receipt: validCheckpointDigest(2),
 		Generation: 1, Created: true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generation.CaptureID, commit.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", generation.CaptureID, commit,
 	))
 	_, err = store.AcknowledgeGeneration(t.Context(), "device-a", generation.CaptureID, commit)
 	require.NoError(t, err)
@@ -276,8 +461,8 @@ func TestAcknowledgementReplayFinishesPendingGarbageCollection(t *testing.T) {
 		ManifestID: validCheckpointDigest(1), Receipt: validCheckpointDigest(2),
 		Generation: 1, Created: true,
 	}
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generation.CaptureID, commit.ManifestID,
+	require.NoError(t, store.BindFinalizedCommit(
+		t.Context(), "device-a", generation.CaptureID, commit,
 	))
 	objectPath := store.ObjectPath(ref)
 	require.NoError(t, os.Remove(objectPath))
@@ -340,6 +525,63 @@ func TestParentConflictBlocksOnlyItsSourceChain(t *testing.T) {
 	).Scan(&errorClass, &blocked))
 	assert.Equal(t, string(GenerationFailureParentReceiptConflict), errorClass)
 	assert.Equal(t, 1, blocked)
+}
+
+func TestPermanentReplacementRecyclesCapacityAndCollectsRejectedObjects(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1793)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	rejectedRef := rawsync.ObjectRef{SHA256: validCheckpointDigest(20), Length: 1}
+	installOutboxTestObject(t, store, rejectedRef, []byte{1})
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1793)
+	require.NoError(t, err)
+	rejected := testCapturedGeneration(1, root, "", rejectedRef)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, rejected))
+	_, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NoError(t, store.RecordGenerationFailure(
+		t.Context(), "device-a", rejected.CaptureID,
+		GenerationFailurePermanent, time.Time{},
+	))
+
+	replacementRef := rawsync.ObjectRef{SHA256: validCheckpointDigest(21), Length: 1}
+	installOutboxTestObject(t, store, replacementRef, []byte{2})
+	replacementReservation, err := store.ReserveSourceCapture(
+		t.Context(), rejected.Source, 1793,
+	)
+	require.NoError(t, err)
+	_, err = store.ReserveSourceCapture(t.Context(), rejected.Source, 1)
+	require.ErrorIs(t, err, ErrOutboxFull,
+		"recyclable capacity must be credited to only one active reservation")
+	replacement := testCapturedGeneration(2, root, rejected.CaptureID, replacementRef)
+	require.NoError(t, store.CommitCapture(
+		t.Context(), replacementReservation.ID, replacement,
+	))
+	_, err = store.CollectGarbage(t.Context())
+	require.NoError(t, err)
+
+	var rejectedRows int
+	require.NoError(t, store.db.QueryRow(`SELECT count(*) FROM outbox_objects
+		WHERE sha256 = ? AND length = ?`, rejectedRef.SHA256, rejectedRef.Length,
+	).Scan(&rejectedRows))
+	assert.Zero(t, rejectedRows)
+	assert.NoFileExists(t, store.ObjectPath(rejectedRef))
+	var replacementRefs int
+	var replacementState string
+	require.NoError(t, store.db.QueryRow(`SELECT ref_count, state FROM outbox_objects
+		WHERE sha256 = ? AND length = ?`, replacementRef.SHA256, replacementRef.Length,
+	).Scan(&replacementRefs, &replacementState))
+	assert.Equal(t, 1, replacementRefs)
+	assert.Equal(t, "live", replacementState)
+	assert.FileExists(t, store.ObjectPath(replacementRef))
+	var generations int
+	require.NoError(t, store.db.QueryRow(
+		`SELECT count(*) FROM outbox_generations`,
+	).Scan(&generations))
+	assert.Equal(t, 1, generations)
+	usage, err := store.OutboxUsage(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1793), usage.UsedBytes)
 }
 
 func TestTransientFailureIsNotFinalizableBeforeRetryTime(t *testing.T) {
@@ -414,9 +656,6 @@ func TestResumeGenerationRequeuesAgainstReconciledServerHead(t *testing.T) {
 	_, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generation.CaptureID, validCheckpointDigest(3),
-	))
 	require.NoError(t, store.RecordGenerationFailure(
 		t.Context(), "device-a", generation.CaptureID,
 		GenerationFailureParentReceiptConflict, time.Time{},
@@ -444,6 +683,40 @@ func TestResumeGenerationRequeuesAgainstReconciledServerHead(t *testing.T) {
 	assert.Empty(t, manifestID)
 }
 
+func TestResumeGenerationAtomicallyReconcilesUnblockedConflict(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	ref := rawsync.ObjectRef{SHA256: validCheckpointDigest(10), Length: 1}
+	installOutboxTestObject(t, store, ref, []byte{1})
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1793)
+	require.NoError(t, err)
+	generation := testCapturedGeneration(1, root, "", ref)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	_, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+	reconciled := SourceHead{
+		ManifestID: validCheckpointDigest(4), Receipt: validCheckpointDigest(5),
+		Generation: 1,
+	}
+
+	require.NoError(t, store.ResumeGeneration(
+		t.Context(), "device-a", generation.CaptureID, reconciled,
+	))
+	retried, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
+
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, reconciled.Receipt, retried.ExpectedParentReceipt)
+	var failureClass string
+	var blocked int
+	require.NoError(t, store.db.QueryRow(`SELECT error_class, blocked
+		FROM outbox_generations WHERE capture_id = ?`, generation.CaptureID,
+	).Scan(&failureClass, &blocked))
+	assert.Empty(t, failureClass)
+	assert.Zero(t, blocked)
+}
+
 func TestResumeGenerationRequeuesAgainstEmptyServerHead(t *testing.T) {
 	store, root := openOutboxTestStore(t, 1<<20)
 	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
@@ -456,9 +729,6 @@ func TestResumeGenerationRequeuesAgainstEmptyServerHead(t *testing.T) {
 	_, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.NoError(t, store.BindFinalizedManifestID(
-		t.Context(), "device-a", generation.CaptureID, validCheckpointDigest(3),
-	))
 	require.NoError(t, store.RecordGenerationFailure(
 		t.Context(), "device-a", generation.CaptureID,
 		GenerationFailureParentReceiptConflict, time.Time{},
@@ -502,8 +772,8 @@ func TestRepeatedAcknowledgementsReuseBoundedOutboxCapacity(t *testing.T) {
 			Generation: int64(sequence),
 			Created:    true,
 		}
-		require.NoError(t, store.BindFinalizedManifestID(
-			t.Context(), "device-a", manifest.CaptureID, commit.ManifestID,
+		require.NoError(t, store.BindFinalizedCommit(
+			t.Context(), "device-a", manifest.CaptureID, commit,
 		))
 		_, err = store.AcknowledgeGeneration(
 			t.Context(), "device-a", manifest.CaptureID, commit,
