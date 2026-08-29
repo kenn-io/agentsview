@@ -1281,7 +1281,7 @@ func TestCollectWatchRootsUsesGeminiProviderMetadataRoot(t *testing.T) {
 
 func TestCollectWatchRootsUsesAntigravityCLIHistoryRoot(t *testing.T) {
 	root := t.TempDir()
-	for _, subdir := range []string{"brain", "conversations", "implicit"} {
+	for _, subdir := range []string{"brain", "cache", "conversations", "implicit"} {
 		require.NoError(t, os.Mkdir(filepath.Join(root, subdir), 0o755))
 	}
 	cfg := config.Config{
@@ -1296,6 +1296,9 @@ func TestCollectWatchRootsUsesAntigravityCLIHistoryRoot(t *testing.T) {
 	historyRoot, ok := findCollectedWatchRoot(roots, root)
 	require.True(t, ok, "antigravity cli history.jsonl root not collected")
 	assert.False(t, historyRoot.recursive)
+	cache, ok := findCollectedWatchRoot(roots, filepath.Join(root, "cache"))
+	require.True(t, ok, "antigravity cli workspace cache root not collected")
+	assert.False(t, cache.recursive)
 	conversations, ok := findCollectedWatchRoot(
 		roots, filepath.Join(root, "conversations"),
 	)

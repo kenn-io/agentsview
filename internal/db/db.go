@@ -446,7 +446,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // the correction.)
 // (95: Posit Assistant provider identity. Existing messages and usage events
 // need re-parsing so managed Posit AI and BYO provider rows price separately.)
-const dataVersion = 95
+// (96: Antigravity CLI sessions recover CWD from history and the exact
+// cache/last_conversations.json workspace mapping. Existing rows need
+// re-parsing to receive the exact approved workspace and prefer linked Git
+// identity when normalizing worktree project labels.)
+const dataVersion = 96
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -1047,8 +1047,13 @@ func TestCurrentDataVersionDevinMessageNodeTokenUsage(t *testing.T) {
 }
 
 func TestCurrentDataVersionPositAssistantProviderIdentity(t *testing.T) {
-	assert.Equal(t, 95, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 95,
 		"Posit Assistant provider identity requires re-parsing usage rows")
+}
+
+func TestCurrentDataVersionAntigravityCLICwdAndWorktreeProject(t *testing.T) {
+	assert.Equal(t, 96, CurrentDataVersion(),
+		"Antigravity CLI cwd and worktree project recovery require a sequential backfill")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

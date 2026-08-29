@@ -114,7 +114,10 @@ func TestSyncEngineAntigravityCLI_HappyPath(t *testing.T) {
 	// Verify database ingestion. The stored project is normalized through
 	// the shared cwd/worktree resolver, so the raw workspace path collapses
 	// to its basename with dashes folded to underscores.
-	assertSessionProject(t, env.db, "antigravity-cli:"+uuid, "my_cli_project")
+	assertSessionProjectAndCwd(
+		t, env.db, "antigravity-cli:"+uuid,
+		"my_cli_project", "/home/user/my-cli-project",
+	)
 	// Expected messages:
 	// 1. User: "Check workspace status"
 	// 2. Assistant: "listing files now" (with tool calls and thoughts)
@@ -666,11 +669,13 @@ func TestSyncEngineAntigravityCLI_InferredProjectWithoutConversationID(t *testin
 		name        string
 		rowTime     time.Time
 		wantProject string
+		wantCwd     string
 	}{
 		{
 			name:        "normalized match within window infers project",
 			rowTime:     base.Add(10 * time.Second),
 			wantProject: "inferred_project",
+			wantCwd:     workspace,
 		},
 		{
 			name:        "match outside 60s window leaves project empty",
@@ -695,7 +700,9 @@ func TestSyncEngineAntigravityCLI_InferredProjectWithoutConversationID(t *testin
 				Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 			})
 
-			assertSessionProject(t, env.db, sessionID, tt.wantProject)
+			assertSessionProjectAndCwd(
+				t, env.db, sessionID, tt.wantProject, tt.wantCwd,
+			)
 			assertSessionMessageCount(t, env.db, sessionID, 1)
 			msgs := fetchMessages(t, env.db, sessionID)
 			require.Len(t, msgs, 1)
@@ -719,7 +726,10 @@ func TestSyncSingleSessionAntigravityCLI_InferredProjectWithoutConversationID(t 
 	// The file-watcher path must persist the inferred project too.
 	require.NoError(t, env.engine.SyncSingleSession(sessionID))
 
-	assertSessionProject(t, env.db, sessionID, "inferred_project_single")
+	assertSessionProjectAndCwd(
+		t, env.db, sessionID,
+		"inferred_project_single", "/home/user/inferred-project-single",
+	)
 	assertSessionMessageCount(t, env.db, sessionID, 1)
 }
 
@@ -754,7 +764,9 @@ func TestSyncPathsAntigravityCLIHistoryOnlyUpdateRefreshesProject(t *testing.T) 
 
 	env.engine.SyncPaths([]string{historyPath})
 
-	assertSessionProject(t, env.db, sessionID, "history_arrived")
+	assertSessionProjectAndCwd(
+		t, env.db, sessionID, "history_arrived", "/home/user/history-arrived",
+	)
 	assertSessionMessageCount(t, env.db, sessionID, 1)
 }
 
@@ -793,8 +805,12 @@ func TestSyncPathsAntigravityCLIHistoryRetagClearsRemovedProject(t *testing.T) {
 		Skipped:       0,
 		Anomalies:     agyCLIUnknownSchemaAnomaly(2),
 	})
-	assertSessionProject(t, env.db, removedSessionID, "removed")
-	assertSessionProject(t, env.db, retaggedSessionID, "retagged")
+	assertSessionProjectAndCwd(
+		t, env.db, removedSessionID, "removed", "/home/user/removed",
+	)
+	assertSessionProjectAndCwd(
+		t, env.db, retaggedSessionID, "retagged", "/home/user/retagged",
+	)
 
 	updated := base.Add(time.Minute)
 	retaggedHistory := fmt.Sprintf(
@@ -806,8 +822,10 @@ func TestSyncPathsAntigravityCLIHistoryRetagClearsRemovedProject(t *testing.T) {
 
 	env.engine.SyncPaths([]string{historyPath})
 
-	assertSessionProject(t, env.db, removedSessionID, "")
-	assertSessionProject(t, env.db, retaggedSessionID, "retagged_now")
+	assertSessionProjectAndCwd(t, env.db, removedSessionID, "", "")
+	assertSessionProjectAndCwd(
+		t, env.db, retaggedSessionID, "retagged_now", "/home/user/retagged-now",
+	)
 	assertSessionMessageCount(t, env.db, removedSessionID, 1)
 	assertSessionMessageCount(t, env.db, retaggedSessionID, 1)
 }

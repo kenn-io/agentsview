@@ -1798,7 +1798,15 @@ add an archived or maintained mirror without replacing the original identity.
   provider USD cost is consumed.
 - **Agentsview:** `internal/parser/antigravity_cli.go`,
   `internal/parser/antigravity_crypto.go`, and
-  `internal/parser/antigravity_cli_provider.go`.
+  `internal/parser/antigravity_cli_provider.go`. The CLI `history.jsonl`
+  `workspace` value and the current CLI's `cache/last_conversations.json`
+  workspace-to-conversation mapping are authoritative session CWD sources when
+  the workspace is an absolute path. Agentsview prefers the first valid
+  current-cache folder for an exact conversation ID, retains the strict
+  prompt/time fallback for older untagged history rows, and leaves CWD empty
+  when the value is missing or relative. The exact absolute workspace remains
+  the CWD. The project label is derived from the path text without probing the
+  recorded folder when filesystem discovery is disabled.
 
 ## iFlow CLI (`iflow`)
 

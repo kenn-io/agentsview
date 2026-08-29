@@ -57,6 +57,16 @@ func assertSessionProject(t *testing.T, database *db.DB, sessionID string, want 
 	})
 }
 
+func assertSessionProjectAndCwd(
+	t *testing.T, database *db.DB, sessionID, wantProject, wantCwd string,
+) {
+	t.Helper()
+	assertSessionState(t, database, sessionID, func(sess *db.Session) {
+		assert.Equal(t, wantProject, sess.Project, "session %q project", sessionID)
+		assert.Equal(t, wantCwd, sess.Cwd, "session %q cwd", sessionID)
+	})
+}
+
 func runSyncAndAssert(t *testing.T, engine *sync.Engine, want sync.SyncStats) sync.SyncStats {
 	t.Helper()
 	stats := engine.SyncAll(context.Background(), nil)

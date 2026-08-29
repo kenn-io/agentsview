@@ -268,13 +268,7 @@ func extractProjectFromCwdWithBranchPolicy(
 		norm = strings.ReplaceAll(cwd, "\\", "/")
 	}
 	cleaned := filepath.Clean(norm)
-
-	// Recognize tool-anchored worktree manager layouts before walking git
-	// roots. These layouts encode the owning project in the path even when
-	// the git root basename is a branch or generated worktree id.
-	if p := projectFromAnchoredWorktreeLayout(cleaned); p != "" {
-		return NormalizeName(p)
-	}
+	anchoredProject := projectFromAnchoredWorktreeLayout(cleaned)
 
 	// Skip the git-root walk when the cwd cannot resolve to a
 	// real local filesystem location. On macOS a bulk walk under
@@ -284,13 +278,21 @@ func extractProjectFromCwdWithBranchPolicy(
 	if discoverFilesystem && filepath.IsAbs(cleaned) &&
 		!isForeignOSPath(cwd, cleaned, winPath) &&
 		probeGitRootForCwd(cleaned) {
-		if root := findGitRepoRoot(cleaned); root != "" {
+		if root, canonicalLinked := findGitRepoRoot(cleaned); root != "" &&
+			(canonicalLinked || anchoredProject == "") {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
 				return ""
 			}
 			return NormalizeName(name)
 		}
+	}
+
+	// Tool-anchored layouts own standalone repositories created inside their
+	// branch directories. Only validated linked-worktree metadata may override
+	// the lexical project with the canonical main checkout name.
+	if anchoredProject != "" {
+		return NormalizeName(anchoredProject)
 	}
 
 	// Generic hosting layouts are intentionally a fallback after live Git
@@ -647,9 +649,9 @@ func isInvalidPathBase(name string) bool {
 // and linked worktrees/submodules (.git file). When cwd no longer
 // exists on disk, sibling directories are checked for worktree
 // .git files that can reveal the true repo root.
-func findGitRepoRoot(cwd string) string {
+func findGitRepoRoot(cwd string) (string, bool) {
 	if cwd == "" {
-		return ""
+		return "", false
 	}
 
 	dir := cwd
@@ -661,7 +663,7 @@ func findGitRepoRoot(cwd string) string {
 	} else {
 		// Avoid treating non-path strings as cwd.
 		if !strings.ContainsRune(dir, filepath.Separator) {
-			return ""
+			return "", false
 		}
 		cwdMissing = true
 		dir = filepath.Dir(dir)
@@ -685,48 +687,50 @@ func findGitRepoRoot(cwd string) string {
 			sibDir = parent
 		}
 		if root := repoRootFromSiblings(sibDir, cwd); root != "" {
-			return root
+			return root, true
 		}
 	}
 
-	root, _ := findGitRepoRootLocal(dir)
-	return root
+	root, _, canonicalLinked := findGitRepoRootLocal(dir)
+	return root, canonicalLinked
 }
 
-func findGitRepoRootLocal(dir string) (root string, conservative bool) {
+func findGitRepoRootLocal(
+	dir string,
+) (root string, conservative, canonicalLinked bool) {
 	for {
 		gitPath := filepath.Join(dir, ".git")
 		info, err := statGitEntry(gitPath)
 		if errors.Is(err, errRefusedGitEntry) {
 			// A .git symlink into a refused location marks a repo
 			// boundary we must not look through.
-			return dir, false
+			return dir, false, false
 		}
 		if err == nil {
 			if info.IsDir() {
-				return dir, false
+				return dir, false, false
 			}
 			if info.Mode().IsRegular() {
 				if !gitFileTargetsProbeable(dir, gitPath) {
 					// The gitfile targets a directory the protected-path
 					// policy refuses. Stop at the worktree itself.
-					return dir, false
+					return dir, false, false
 				}
 				if root := repoRootFromGitFile(dir, gitPath); root != "" {
 					if root == dir {
-						return root, true
+						return root, true, false
 					}
-					return root, false
+					return root, false, true
 				}
 				// Keep conservative fallback for gitfile repos
 				// when metadata cannot be parsed.
-				return dir, true
+				return dir, true, false
 			}
 		}
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", false
+			return "", false, false
 		}
 		dir = parent
 	}
