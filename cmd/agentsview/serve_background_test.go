@@ -1183,6 +1183,52 @@ func TestWaitForBackgroundServeReadyTimesOutWithoutNewStartupProgress(t *testing
 	assert.Less(t, time.Since(startedAt), 200*time.Millisecond)
 }
 
+func TestWaitForBackgroundServeReadyReprobesRuntimeAtTimeout(t *testing.T) {
+	setStartProbeTickForTest(t, 300*time.Millisecond)
+	dir := runtimeTestDir(t)
+	observed := make(chan struct{}, 1)
+	resultCh := make(chan *DaemonRuntime, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		rt, waitErr := waitForBackgroundServeReadyWithPolicy(
+			context.Background(), dir, "", make(chan error), 500*time.Millisecond,
+			backgroundServeReadyWaitPolicy{
+				Observe: func(*startupState, time.Duration) {
+					select {
+					case observed <- struct{}{}:
+					default:
+					}
+				},
+			},
+		)
+		resultCh <- rt
+		errCh <- waitErr
+	}()
+
+	for range 2 {
+		select {
+		case <-observed:
+		case <-time.After(time.Second):
+			t.Fatal("readiness wait did not reach its final poll before timeout")
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	host, port := testPingServer(t)
+	_, err := WriteDaemonRuntime(dir, host, port, version, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+		rt := <-resultCh
+		require.NotNil(t, rt)
+		assert.Equal(t, port, rt.Port)
+	case <-time.After(time.Second):
+		t.Fatal("readiness wait did not return runtime published before timeout")
+	}
+}
+
 func TestWaitForBackgroundServeReadyAttachedChildExitAndCancellation(t *testing.T) {
 	setStartProbeTickForTest(t, 10*time.Millisecond)
 

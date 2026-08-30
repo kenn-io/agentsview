@@ -1037,6 +1037,10 @@ func waitForBackgroundServeReadyWithPolicy(
 			return nil, ctx.Err()
 		case <-ticker.C:
 		case <-timeoutC:
+			if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
+				!rt.ReadOnly {
+				return rt, nil
+			}
 			var latest *startupState
 			if IsDaemonStarting(dataDir) {
 				latest = readStartupState(dataDir)
