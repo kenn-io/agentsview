@@ -1088,6 +1088,110 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 	}
 }
 
+func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T) {
+	setStartProbeTickForTest(t, 5*time.Millisecond)
+	dir := runtimeTestDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	updatedAt := time.Now()
+	writeState := func(detail string, update time.Time) {
+		data, err := json.Marshal(startupState{
+			PID:       321,
+			StartedAt: updatedAt,
+			Phase:     "initial sync",
+			Detail:    detail,
+			UpdatedAt: update,
+		})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
+	}
+	writeState("1/2 sessions", updatedAt)
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+
+	initialObserved := make(chan struct{}, 1)
+	progressObserved := make(chan struct{}, 1)
+	resultCh := make(chan *DaemonRuntime, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		rt, waitErr := waitForBackgroundServeReadyWithPolicy(
+			context.Background(), dir, "", make(chan error), 100*time.Millisecond,
+			backgroundServeReadyWaitPolicy{
+				Observe: func(st *startupState, _ time.Duration) {
+					if st == nil {
+						return
+					}
+					if st.Detail == "2/2 sessions" {
+						select {
+						case progressObserved <- struct{}{}:
+						default:
+						}
+						return
+					}
+					select {
+					case initialObserved <- struct{}{}:
+					default:
+					}
+				},
+			},
+		)
+		resultCh <- rt
+		errCh <- waitErr
+	}()
+
+	select {
+	case <-initialObserved:
+	case <-time.After(time.Second):
+		t.Fatal("readiness wait did not observe initial startup state")
+	}
+	time.Sleep(60 * time.Millisecond)
+	writeState("2/2 sessions", updatedAt.Add(time.Second))
+	select {
+	case <-progressObserved:
+	case <-time.After(time.Second):
+		t.Fatal("readiness wait did not observe advancing startup state")
+	}
+	time.Sleep(60 * time.Millisecond)
+	host, port := testPingServer(t)
+	_, err := WriteDaemonRuntime(dir, host, port, version, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+		rt := <-resultCh
+		require.NotNil(t, rt)
+		assert.Equal(t, port, rt.Port)
+	case <-time.After(time.Second):
+		t.Fatal("readiness wait did not return authoritative runtime")
+	}
+}
+
+func TestWaitForBackgroundServeReadyTimesOutWithoutNewStartupProgress(t *testing.T) {
+	setStartProbeTickForTest(t, 5*time.Millisecond)
+	dir := runtimeTestDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	data, err := json.Marshal(startupState{
+		PID:       321,
+		StartedAt: time.Now(),
+		Phase:     "initial sync",
+		Detail:    "1/2 sessions",
+		UpdatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+
+	startedAt := time.Now()
+	rt, err := waitForBackgroundServeReady(
+		context.Background(), dir, "", make(chan error), 40*time.Millisecond,
+	)
+	require.NoError(t, err)
+	assert.Nil(t, rt)
+	assert.Less(t, time.Since(startedAt), 200*time.Millisecond)
+}
+
 func TestWaitForBackgroundServeReadyAttachedChildExitAndCancellation(t *testing.T) {
 	setStartProbeTickForTest(t, 10*time.Millisecond)
 
