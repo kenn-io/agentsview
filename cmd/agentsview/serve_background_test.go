@@ -1089,7 +1089,7 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 }
 
 func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T) {
-	setStartProbeTickForTest(t, 5*time.Millisecond)
+	setStartProbeTickForTest(t, 110*time.Millisecond)
 	dir := runtimeTestDir(t)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	updatedAt := time.Now()
@@ -1114,7 +1114,7 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 	errCh := make(chan error, 1)
 	go func() {
 		rt, waitErr := waitForBackgroundServeReadyWithPolicy(
-			context.Background(), dir, "", make(chan error), 100*time.Millisecond,
+			context.Background(), dir, "", make(chan error), 200*time.Millisecond,
 			backgroundServeReadyWaitPolicy{
 				Observe: func(st *startupState, _ time.Duration) {
 					if st == nil {
@@ -1143,14 +1143,18 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 	case <-time.After(time.Second):
 		t.Fatal("readiness wait did not observe initial startup state")
 	}
-	time.Sleep(60 * time.Millisecond)
+	select {
+	case <-initialObserved:
+	case <-time.After(time.Second):
+		t.Fatal("readiness wait did not reach its final poll before timeout")
+	}
 	writeState("2/2 sessions", updatedAt.Add(time.Second))
 	select {
 	case <-progressObserved:
 	case <-time.After(time.Second):
 		t.Fatal("readiness wait did not observe advancing startup state")
 	}
-	time.Sleep(60 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntime(dir, host, port, version, false)
 	require.NoError(t, err)

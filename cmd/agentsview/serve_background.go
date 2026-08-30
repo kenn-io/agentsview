@@ -1021,13 +1021,7 @@ func waitForBackgroundServeReadyWithPolicy(
 		if timer != nil && snapshot != nil &&
 			snapshot.UpdatedAt.After(lastStartupUpdate) {
 			lastStartupUpdate = snapshot.UpdatedAt
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(timeout)
+			resetTimer(timer, timeout)
 		}
 		if policy.Observe != nil {
 			policy.Observe(snapshot, startupSnapshotElapsed(snapshot, startedAt, time.Now()))
@@ -1043,6 +1037,15 @@ func waitForBackgroundServeReadyWithPolicy(
 			return nil, ctx.Err()
 		case <-ticker.C:
 		case <-timeoutC:
+			var latest *startupState
+			if IsDaemonStarting(dataDir) {
+				latest = readStartupState(dataDir)
+			}
+			if latest != nil && latest.UpdatedAt.After(lastStartupUpdate) {
+				lastStartupUpdate = latest.UpdatedAt
+				resetTimer(timer, timeout)
+				continue
+			}
 			return nil, nil
 		}
 	}

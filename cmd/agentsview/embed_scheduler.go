@@ -303,11 +303,9 @@ func stopTimer(t *time.Timer) {
 	}
 }
 
-// resetTimer stops and drains t before rearming it for d, the safe
-// stop-then-reset sequence for a timer whose channel may already hold an
-// unread tick.
+// resetTimer rearms t for d. Go 1.23 and later guarantee that Reset prevents a
+// subsequent receive from observing a stale value from the prior settings.
 func resetTimer(t *time.Timer, d time.Duration) {
-	stopTimer(t)
 	t.Reset(d)
 }
 
