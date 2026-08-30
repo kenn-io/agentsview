@@ -171,6 +171,16 @@ function isCancelable<T>(value: Promise<T>): value is CancelableLike<T> {
   return typeof (value as { cancel?: unknown }).cancel === "function";
 }
 
+// Matches 404s from both error classes: callGenerated rethrows the
+// runtime ApiError, while direct generated-service calls (e.g. via
+// withAbort) surface the generated one.
+export function isNotFoundError(err: unknown): boolean {
+  return (
+    (err instanceof ApiError || err instanceof GeneratedApiError) &&
+    err.status === 404
+  );
+}
+
 export function isAbortError(err: unknown): boolean {
   if (err instanceof DOMException && err.name === "AbortError") {
     return true;

@@ -35,6 +35,14 @@ vi.mock("../api/runtime.js", () => ({
   },
 }));
 
+const sessionsStore = vi.hoisted(() => ({
+  markActiveSessionMissing: vi.fn(),
+}));
+
+vi.mock("./sessions.svelte.js", () => ({
+  sessions: sessionsStore,
+}));
+
 vi.mock("../api/generated/index", () => ({
   SessionsService: {
     getApiV1SessionsId: vi.fn(({ id }) => api.getSession(id)),
@@ -130,6 +138,27 @@ describe("MessagesStore", () => {
     readProgress.reset();
     vi.clearAllMocks();
     runtimeMocks.signals.length = 0;
+  });
+
+  it("reports a failed metadata fetch to the sessions store", async () => {
+    const err = new Error("session not found");
+    vi.mocked(api.getSession).mockRejectedValue(err);
+    vi.mocked(api.getMessages).mockResolvedValue(makeMessagesResponse([]));
+
+    await messages.loadSession("s1");
+
+    expect(sessionsStore.markActiveSessionMissing).toHaveBeenCalledWith(
+      "s1",
+      err,
+    );
+  });
+
+  it("does not report aborted metadata fetches", async () => {
+    vi.mocked(api.getSession).mockRejectedValue(generatedCancelError());
+
+    await messages.loadSession("s1");
+
+    expect(sessionsStore.markActiveSessionMissing).not.toHaveBeenCalled();
   });
 
   it('aborts in-flight reads without clearing cached messages', async () => {

@@ -1,14 +1,13 @@
-import { tick } from "svelte";
 import type { DataChangedEvent } from "../api/client.js";
 import {
   MetadataService,
   SessionsService,
 } from "../api/generated/index";
 import {
-  ApiError,
   callGenerated,
   configureGeneratedClient,
   isAbortError,
+  isNotFoundError,
 } from "../api/runtime.js";
 import type {
   Session,
@@ -300,6 +299,10 @@ class SessionsStore {
   activeSessionId: string | null = $state(null);
   // Lets the message pane explain a 404 instead of rendering blank.
   activeSessionNotFound: boolean = $state(false);
+  // Bumped when a not-found session recovers; per-session loaders
+  // keyed on (activeSessionId, activeSessionLoadVersion) re-run
+  // without the id changing.
+  activeSessionLoadVersion: number = $state(0);
   activeSessionUsageVersion: number = $state(0);
   childSessions: Map<string, Session> = $state(new Map());
   nextCursor: string | null = $state(null);
@@ -673,15 +676,18 @@ class SessionsStore {
           }
           cache.set(id, hydrated);
           this.mergeHydratedSession(hydrated);
+          this.markActiveSessionFound(id);
         } catch (err) {
           // Visible hydration is best-effort; the skinny row remains usable.
           // Except a 404 for the selected row: without the not-found
-          // flag the message pane would render blank.
+          // flag the message pane would render blank. Version and
+          // epoch guards keep a stale 404 from flagging a session a
+          // newer fetch already resolved.
           if (
-            err instanceof ApiError && err.status === 404 &&
-            this.activeSessionId === id
+            version === this.sidebarIndexVersion &&
+            epoch === (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
           ) {
-            this.activeSessionNotFound = true;
+            this.markActiveSessionMissing(id, err);
           }
         } finally {
           inflight.delete(id);
@@ -941,16 +947,13 @@ class SessionsStore {
           } else {
             this.sessions = [...this.sessions, session];
           }
-          this.activeSessionNotFound = false;
+          this.markActiveSessionFound(id);
         }
       } catch (err) {
         // Selection stands without metadata; flag a not-found
         // response so the message pane can say so.
-        if (
-          err instanceof ApiError && err.status === 404 &&
-          this.activeSessionId === id && this.navigateRead.isCurrent(signal)
-        ) {
-          this.activeSessionNotFound = true;
+        if (this.navigateRead.isCurrent(signal)) {
+          this.markActiveSessionMissing(id, err);
         }
       } finally {
         this.navigateRead.finish(signal);
@@ -964,17 +967,39 @@ class SessionsStore {
   }
 
   /**
-   * Re-run the full selection load path for the active session after
-   * a not-found. Deselecting and reselecting across a tick restarts
-   * the per-session effects (messages, watch, pins, timing) that key
-   * on the active session id, which a same-id refetch would not.
+   * Record a failed session-detail fetch: a 404 while the session
+   * is still selected marks it not-found so the message pane can
+   * offer a retry.
+   */
+  markActiveSessionMissing(id: string, err: unknown) {
+    if (this.activeSessionId === id && isNotFoundError(err)) {
+      this.activeSessionNotFound = true;
+    }
+  }
+
+  private markActiveSessionFound(id: string) {
+    if (this.activeSessionId !== id || !this.activeSessionNotFound) return;
+    this.activeSessionNotFound = false;
+    this.activeSessionLoadVersion++;
+  }
+
+  /**
+   * Re-attempt loading the active session after a not-found. The
+   * flag stays set until a detail fetch succeeds, so a retry that
+   * still fails keeps the retryable pane instead of blanking it;
+   * a success recovers through markActiveSessionFound.
    */
   async retryActiveSession() {
     const id = this.activeSessionId;
     if (!id) return;
-    this.setActiveSession(null);
-    await tick();
-    await this.navigateToSession(id);
+    const existing = this.sessions.find((s) => s.id === id);
+    if (!existing) {
+      await this.navigateToSession(id);
+    } else if (existing.is_index_only) {
+      await this.hydrateSelectedIndexOnlySession(id);
+    } else {
+      await this.refreshActiveSession();
+    }
   }
 
   private async hydrateSelectedIndexOnlySession(id: string) {
@@ -1010,8 +1035,15 @@ class SessionsStore {
       if (idx >= 0) {
         this.mergeHydratedSession(session);
       }
-    } catch {
+      this.markActiveSessionFound(id);
+    } catch (err) {
       // Session may have been deleted
+      if (
+        this.refreshVersion === version &&
+        this.refreshRead.isCurrent(signal)
+      ) {
+        this.markActiveSessionMissing(id, err);
+      }
     } finally {
       this.refreshRead.finish(signal);
     }

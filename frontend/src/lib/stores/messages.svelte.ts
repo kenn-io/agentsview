@@ -4,6 +4,7 @@ import { configureGeneratedClient, isAbortError, withAbort } from "../api/runtim
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModel } from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
+import { sessions } from "./sessions.svelte.js";
 
 const MESSAGE_PAGE_SIZE = 1000;
 const FULL_SESSION_MESSAGE_THRESHOLD = 3_000;
@@ -91,6 +92,10 @@ class MessagesStore {
         pendingToken = buildReadProgressToken(sess);
       } catch (err) {
         if (isAbortError(err)) return;
+        // This probe is the only detail fetch a plain click on an
+        // already-hydrated sidebar row makes, so it is what detects
+        // a session deleted behind a cached row.
+        sessions.markActiveSessionMissing(id, err);
         console.warn("Failed to fetch session metadata:", err);
       }
 
@@ -109,6 +114,7 @@ class MessagesStore {
     } catch (err) {
       if (isAbortError(err)) return;
       if (this.sessionId === id) this.historyComplete = false;
+      sessions.markActiveSessionMissing(id, err);
       console.warn("Failed to load session messages:", err);
     } finally {
       if (this.sessionId === id) {
