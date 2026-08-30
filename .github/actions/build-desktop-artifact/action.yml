@@ -81,26 +81,11 @@ runs:
         fi
         build_cmd+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
 
-        build_log=$(mktemp)
-        trap 'rm -f -- "$build_log"' EXIT
-        for attempt in 1 2; do
-          set +e
-          "${build_cmd[@]}" 2>&1 | tee "$build_log"
-          build_status=${PIPESTATUS[0]}
-          set -e
-
-          if [ "$build_status" -eq 0 ]; then
-            break
-          fi
-          if [ "$attempt" -eq 2 ] ||
-            ! grep -Eq 'http status: (408|429|5[0-9]{2})' "$build_log"; then
-            exit "$build_status"
-          fi
-
-          echo "::warning::Tauri bundler download failed; retrying once"
+        if ! "${build_cmd[@]}"; then
+          echo "::warning::Desktop bundle failed; retrying once"
           sleep 10
-          : > "$build_log"
-        done
+          "${build_cmd[@]}"
+        fi
         if [ "$BUNDLE" = "appimage" ]; then
           bash scripts/repair-appimage-diricon.sh \
             "../${ARTIFACT_DIR}"/*.AppImage

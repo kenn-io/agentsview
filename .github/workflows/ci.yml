@@ -430,47 +430,10 @@ jobs:
 
       # internal/duckdb is excluded from -race (CGo-heavy, race-insensitive,
       # and 7+ minutes on its own); it is still covered without -race by the
-      # main test job's ./... run. Capture and sync run in isolated race jobs
-      # below so their timing-sensitive integration tests do not compete with
-      # other race-instrumented packages.
-      # Match the Makefile's package fan-out limit. The race detector makes
-      # highly parallel package runs slow enough to exhaust test deadlines.
+      # main test job's ./... run. Limit package fan-out because the race
+      # detector makes highly parallel runs slow enough to exhaust deadlines.
       - name: Run Go tests (race detector)
-        run: |
-          mapfile -t packages < <(
-            go list ./... | grep -Ev '/internal/(capture|duckdb|sync)$'
-          )
-          go test -p 4 -tags "fts5" -race "${packages[@]}" -count=1 -timeout=20m
-        env:
-          CGO_ENABLED: "1"
-
-  test-race-isolated:
-    name: Go Test (race detector, ${{ matrix.name }})
-    runs-on: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'kenn-linux-x64-public' || 'ubuntu-latest' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Capture
-            package: ./internal/capture
-          - name: Sync
-            package: ./internal/sync
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: ${{ github.repository == 'kenn-io/agentsview' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository)) && 'false' || 'true' }}
-
-      - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
-
-      - name: Run ${{ matrix.name }} tests (race detector)
-        run: go test -tags "fts5" -race ${{ matrix.package }} -count=1 -timeout=20m
+        run: go list ./... | grep -v '/internal/duckdb$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
