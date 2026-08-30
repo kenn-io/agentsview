@@ -375,6 +375,10 @@ fn log_deep_link_event(handle: &AppHandle, message: &str) {
 fn dispatch_deep_link_route(handle: &AppHandle, route: String) {
     let deep_link_state = handle.state::<DeepLinkState>();
     let Ok(mut dispatch) = deep_link_state.dispatch.lock() else {
+        log_deep_link_event(
+            handle,
+            format!("dropping deep link route {route}: dispatch lock poisoned").as_str(),
+        );
         return;
     };
     if let Some((port, route)) = dispatch.route_for_navigation(route, current_backend_port(handle))
@@ -386,7 +390,13 @@ fn dispatch_deep_link_route(handle: &AppHandle, route: String) {
 
 fn take_pending_deep_link_route(handle: &AppHandle) -> Option<String> {
     let deep_link_state = handle.try_state::<DeepLinkState>()?;
-    let mut dispatch = deep_link_state.dispatch.lock().ok()?;
+    let Ok(mut dispatch) = deep_link_state.dispatch.lock() else {
+        log_deep_link_event(
+            handle,
+            "dropping any pending deep link route: dispatch lock poisoned",
+        );
+        return None;
+    };
     dispatch.take_pending()
 }
 
@@ -395,6 +405,12 @@ fn defer_deep_link_dispatch(app: &AppHandle) {
         return;
     };
     let Ok(mut dispatch) = deep_link_state.dispatch.lock() else {
+        // Skipping the defer reopens the publish/redirect race, so
+        // leave a trace even though poisoning is near-unreachable.
+        log_deep_link_event(
+            app,
+            "cannot defer deep link dispatch: dispatch lock poisoned",
+        );
         return;
     };
     dispatch.defer();
@@ -402,6 +418,10 @@ fn defer_deep_link_dispatch(app: &AppHandle) {
 
 fn navigate_main_window_to_route(handle: &AppHandle, port: u16, route: &str) {
     let Some(window) = handle.get_webview_window("main") else {
+        log_deep_link_event(
+            handle,
+            format!("dropping deep link route {route}: main window missing").as_str(),
+        );
         return;
     };
     let target = desktop_route_url(port, route);
@@ -1716,20 +1736,31 @@ fn recover_webview(window: &WebviewWindow, port: u16) {
 fn redirect_when_ready(window: WebviewWindow, port: u16) {
     thread::spawn(move || {
         if wait_for_server(port, READY_TIMEOUT) {
-            let target_url = match take_pending_deep_link_route(window.app_handle()) {
+            let deferred_route = take_pending_deep_link_route(window.app_handle());
+            let target_url = match deferred_route.as_deref() {
                 Some(route) => {
                     log_deep_link_event(
                         window.app_handle(),
                         format!("redirecting to deferred deep link route {route}").as_str(),
                     );
-                    desktop_route_url(port, route.as_str())
+                    desktop_route_url(port, route)
                 }
                 None => desktop_redirect_url(port),
             };
+            // Failures after a deferred route was consumed go to the
+            // desktop log: packaged builds discard stderr, and the
+            // "redirecting" line above would otherwise read as success.
             match Url::parse(target_url.as_str()) {
                 Ok(url) => {
                     if let Err(err) = window.navigate(url) {
-                        eprintln!("[agentsview] navigate failed: {err}");
+                        if deferred_route.is_some() {
+                            log_deep_link_event(
+                                window.app_handle(),
+                                format!("deferred deep link navigation failed: {err}").as_str(),
+                            );
+                        } else {
+                            eprintln!("[agentsview] navigate failed: {err}");
+                        }
                     }
                     // On Linux a failed WebKitGTK GPU/EGL init aborts the
                     // web content process, leaving a blank window while the
@@ -1740,7 +1771,15 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
                     spawn_webview_health_fallback(window.clone(), port);
                 }
                 Err(err) => {
-                    eprintln!("[agentsview] invalid redirect URL: {err}");
+                    if deferred_route.is_some() {
+                        log_deep_link_event(
+                            window.app_handle(),
+                            format!("invalid deferred deep link redirect URL {target_url}: {err}")
+                                .as_str(),
+                        );
+                    } else {
+                        eprintln!("[agentsview] invalid redirect URL: {err}");
+                    }
                 }
             }
             return;
