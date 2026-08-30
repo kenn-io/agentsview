@@ -65,12 +65,13 @@ func CanonicalModelPricingRows(
 			)
 		}
 		rows = append(rows, bunmodel.ModelPricing{
-			ModelPattern:                     pattern,
-			InputMicrodollarsPerMTok:         price.InputPerMTok.Microdollars,
-			OutputMicrodollarsPerMTok:        price.OutputPerMTok.Microdollars,
-			CacheCreationMicrodollarsPerMTok: price.CacheCreationPerMTok.Microdollars,
-			CacheReadMicrodollarsPerMTok:     price.CacheReadPerMTok.Microdollars,
-			UpdatedAt:                        updatedAt,
+			ModelPattern:                       pattern,
+			InputMicrodollarsPerMTok:           price.InputPerMTok.Microdollars,
+			OutputMicrodollarsPerMTok:          price.OutputPerMTok.Microdollars,
+			CacheCreationMicrodollarsPerMTok:   price.CacheCreationPerMTok.Microdollars,
+			CacheCreation1hMicrodollarsPerMTok: price.CacheCreation1hPerMTok.Microdollars,
+			CacheReadMicrodollarsPerMTok:       price.CacheReadPerMTok.Microdollars,
+			UpdatedAt:                          updatedAt,
 		})
 		for _, band := range price.Bands {
 			threshold, err := safecast.Convert[int64](band.AboveInputTokens)
@@ -99,11 +100,12 @@ func CanonicalModelPricingRows(
 			}
 			bands = append(bands, bunmodel.ModelPricingBand{
 				ModelPattern: pattern, AboveInputTokens: threshold,
-				InputMicrodollarsPerMTok:         band.InputPerMTok.Microdollars,
-				OutputMicrodollarsPerMTok:        band.OutputPerMTok.Microdollars,
-				CacheCreationMicrodollarsPerMTok: band.CacheCreationPerMTok.Microdollars,
-				CacheReadMicrodollarsPerMTok:     band.CacheReadPerMTok.Microdollars,
-				UpdatedAt:                        bandUpdatedAt,
+				InputMicrodollarsPerMTok:           band.InputPerMTok.Microdollars,
+				OutputMicrodollarsPerMTok:          band.OutputPerMTok.Microdollars,
+				CacheCreationMicrodollarsPerMTok:   band.CacheCreationPerMTok.Microdollars,
+				CacheCreation1hMicrodollarsPerMTok: band.CacheCreation1hPerMTok.Microdollars,
+				CacheReadMicrodollarsPerMTok:       band.CacheReadPerMTok.Microdollars,
+				UpdatedAt:                          bandUpdatedAt,
 			})
 		}
 	}
@@ -486,19 +488,21 @@ func upsertModelPricingRowBatch(
 		model_pattern, input_microdollars_per_mtok,
 		output_microdollars_per_mtok,
 		cache_creation_microdollars_per_mtok,
+		cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok, updated_at
 	) VALUES `)
-	args := make([]any, 0, len(rows)*6)
+	args := make([]any, 0, len(rows)*7)
 	for i, row := range rows {
 		if i > 0 {
 			query.WriteString(", ")
 		}
-		query.WriteString("(?, ?, ?, ?, ?, ?)")
+		query.WriteString("(?, ?, ?, ?, ?, ?, ?)")
 		args = append(args,
 			row.ModelPattern,
 			row.InputMicrodollarsPerMTok,
 			row.OutputMicrodollarsPerMTok,
 			row.CacheCreationMicrodollarsPerMTok,
+			row.CacheCreation1hMicrodollarsPerMTok,
 			row.CacheReadMicrodollarsPerMTok,
 			pricingRevision{Timestamp: row.UpdatedAt},
 		)
@@ -507,6 +511,7 @@ func upsertModelPricingRowBatch(
 		input_microdollars_per_mtok = EXCLUDED.input_microdollars_per_mtok,
 		output_microdollars_per_mtok = EXCLUDED.output_microdollars_per_mtok,
 		cache_creation_microdollars_per_mtok = EXCLUDED.cache_creation_microdollars_per_mtok,
+		cache_creation_1h_microdollars_per_mtok = EXCLUDED.cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok = EXCLUDED.cache_read_microdollars_per_mtok,
 		updated_at = EXCLUDED.updated_at`)
 	_, err := store.NewRaw(query.String(), args...).Exec(ctx)
@@ -520,6 +525,8 @@ func modelPricingValuesEqual(
 		left.OutputMicrodollarsPerMTok == right.OutputMicrodollarsPerMTok &&
 		left.CacheCreationMicrodollarsPerMTok ==
 			right.CacheCreationMicrodollarsPerMTok &&
+		left.CacheCreation1hMicrodollarsPerMTok ==
+			right.CacheCreation1hMicrodollarsPerMTok &&
 		left.CacheReadMicrodollarsPerMTok == right.CacheReadMicrodollarsPerMTok
 }
 
@@ -530,6 +537,8 @@ func modelPricingBandValuesEqual(
 		left.OutputMicrodollarsPerMTok == right.OutputMicrodollarsPerMTok &&
 		left.CacheCreationMicrodollarsPerMTok ==
 			right.CacheCreationMicrodollarsPerMTok &&
+		left.CacheCreation1hMicrodollarsPerMTok ==
+			right.CacheCreation1hMicrodollarsPerMTok &&
 		left.CacheReadMicrodollarsPerMTok == right.CacheReadMicrodollarsPerMTok
 }
 
@@ -598,20 +607,22 @@ func insertModelPricingBandRowBatch(
 		model_pattern, above_input_tokens,
 		input_microdollars_per_mtok, output_microdollars_per_mtok,
 		cache_creation_microdollars_per_mtok,
+		cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok, updated_at
 	) VALUES `)
-	args := make([]any, 0, len(rows)*7)
+	args := make([]any, 0, len(rows)*8)
 	for i, row := range rows {
 		if i > 0 {
 			query.WriteString(", ")
 		}
-		query.WriteString("(?, ?, ?, ?, ?, ?, ?)")
+		query.WriteString("(?, ?, ?, ?, ?, ?, ?, ?)")
 		args = append(args,
 			row.ModelPattern,
 			row.AboveInputTokens,
 			row.InputMicrodollarsPerMTok,
 			row.OutputMicrodollarsPerMTok,
 			row.CacheCreationMicrodollarsPerMTok,
+			row.CacheCreation1hMicrodollarsPerMTok,
 			row.CacheReadMicrodollarsPerMTok,
 			pricingRevision{Timestamp: row.UpdatedAt},
 		)
@@ -689,6 +700,9 @@ func (s *BunStore) mergePricingState(out map[string]export.ModelRates) {
 			},
 			CacheWritePerMTok: money.Money{
 				Microdollars: rate.CacheCreationMicrodollarsPerMTok,
+			},
+			CacheWrite1hPerMTok: money.Money{
+				Microdollars: rate.CacheCreation1hMicrodollarsPerMTok,
 			},
 			CacheReadPerMTok: money.Money{
 				Microdollars: rate.CacheReadMicrodollarsPerMTok,
@@ -792,6 +806,9 @@ func listBunModelPricing(
 			CacheCreationPerMTok: money.Money{
 				Microdollars: row.CacheCreationMicrodollarsPerMTok,
 			},
+			CacheCreation1hPerMTok: money.Money{
+				Microdollars: row.CacheCreation1hMicrodollarsPerMTok,
+			},
 			CacheReadPerMTok: money.Money{
 				Microdollars: row.CacheReadMicrodollarsPerMTok,
 			},
@@ -811,6 +828,9 @@ func listBunModelPricing(
 			CacheCreationPerMTok: money.Money{
 				Microdollars: row.CacheCreationMicrodollarsPerMTok,
 			},
+			CacheCreation1hPerMTok: money.Money{
+				Microdollars: row.CacheCreation1hMicrodollarsPerMTok,
+			},
 			CacheReadPerMTok: money.Money{
 				Microdollars: row.CacheReadMicrodollarsPerMTok,
 			},
@@ -827,6 +847,7 @@ type bunUsageProjection struct {
 	MessageOrdinal           *int                `bun:"message_ordinal"`
 	UsageTimestamp           *bunmodel.Timestamp `bun:"usage_timestamp"`
 	Model                    string              `bun:"model"`
+	ProviderID               string              `bun:"provider_id"`
 	TokenJSON                string              `bun:"token_json"`
 	InputTokens              int                 `bun:"input_tokens"`
 	OutputTokens             int                 `bun:"output_tokens"`
@@ -864,6 +885,7 @@ type bunDailyUsageProjection struct {
 	MessageOrdinal           sql.NullInt64       `bun:"message_ordinal"`
 	UsageTimestamp           bunmodel.Timestamp  `bun:"usage_timestamp"`
 	Model                    string              `bun:"model"`
+	ProviderID               string              `bun:"provider_id"`
 	TokenJSON                string              `bun:"token_json"`
 	InputTokens              int                 `bun:"input_tokens"`
 	OutputTokens             int                 `bun:"output_tokens"`
@@ -935,6 +957,7 @@ func bunMessageUsageColumns() string {
 	m.ordinal AS message_ordinal,
 	m.timestamp AS usage_timestamp,
 	m.model AS model,
+	m.provider_id AS provider_id,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
 	m.claude_request_id AS claude_request_id,
@@ -948,6 +971,7 @@ func bunEventUsageColumns() string {
 	ue.message_ordinal AS message_ordinal,
 	ue.occurred_at AS usage_timestamp,
 	ue.model AS model,
+	ue.provider_id AS provider_id,
 	ue.input_tokens AS input_tokens,
 	ue.output_tokens AS output_tokens,
 	ue.cache_creation_input_tokens AS cache_creation_input_tokens,
@@ -966,6 +990,7 @@ func bunDailyMessageUsageColumns() string {
 	m.ordinal AS message_ordinal,
 	m.timestamp AS usage_timestamp,
 	m.model AS model,
+	m.provider_id AS provider_id,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
 	m.claude_request_id AS claude_request_id,
@@ -979,6 +1004,7 @@ func bunDailyEventUsageColumns() string {
 	ue.message_ordinal AS message_ordinal,
 	ue.occurred_at AS usage_timestamp,
 	ue.model AS model,
+	ue.provider_id AS provider_id,
 	ue.input_tokens AS input_tokens,
 	ue.output_tokens AS output_tokens,
 	ue.cache_creation_input_tokens AS cache_creation_input_tokens,
@@ -1248,6 +1274,7 @@ func streamBunDailyUsageProjections(
 			&row.MessageOrdinal,
 			&row.UsageTimestamp,
 			&row.Model,
+			&row.ProviderID,
 			&row.TokenJSON,
 			&row.ClaudeMessageID,
 			&row.ClaudeRequestID,
@@ -1260,6 +1287,7 @@ func streamBunDailyUsageProjections(
 			&row.MessageOrdinal,
 			&row.UsageTimestamp,
 			&row.Model,
+			&row.ProviderID,
 			&row.InputTokens,
 			&row.OutputTokens,
 			&row.CacheCreationInputTokens,
@@ -1654,7 +1682,8 @@ func usageProjectionToDailyRow(row bunUsageProjection) dailyUsageScanRow {
 		sessionID: row.SessionID, messageOrdinal: nullableUsageOrdinal(row.MessageOrdinal),
 		usageSource: source, ts: formatRequiredUsageTime(usageTime),
 		usageTime: usageTime, pricingTime: pricingTime, model: row.Model,
-		tokenJSON: row.TokenJSON, inputTokens: row.InputTokens,
+		providerID: row.ProviderID,
+		tokenJSON:  row.TokenJSON, inputTokens: row.InputTokens,
 		outputTokens:             row.OutputTokens,
 		cacheCreationInputTokens: row.CacheCreationInputTokens,
 		cacheReadInputTokens:     row.CacheReadInputTokens,
@@ -1686,8 +1715,9 @@ func dailyUsageProjectionToRowMode(
 		sessionID: row.SessionID, messageOrdinal: row.MessageOrdinal,
 		usageSource: row.UsageSource,
 		ts:          timestamp, usageTime: usageTime, pricingTime: pricingTime,
-		model:     row.Model,
-		tokenJSON: row.TokenJSON, inputTokens: row.InputTokens,
+		model:      row.Model,
+		providerID: row.ProviderID,
+		tokenJSON:  row.TokenJSON, inputTokens: row.InputTokens,
 		outputTokens:             row.OutputTokens,
 		cacheCreationInputTokens: row.CacheCreationInputTokens,
 		cacheReadInputTokens:     row.CacheReadInputTokens,
@@ -1740,7 +1770,7 @@ func usageProjectionToFullRow(row bunUsageProjection) usageScanRow {
 		sessionID: daily.sessionID, messageOrdinal: daily.messageOrdinal,
 		usageSource: daily.usageSource, ts: daily.ts,
 		pricingTS: formatRequiredUsageTime(daily.pricingTime),
-		model:     daily.model,
+		model:     daily.model, providerID: daily.providerID,
 		tokenJSON: daily.tokenJSON, inputTokens: daily.inputTokens,
 		outputTokens:             daily.outputTokens,
 		cacheCreationInputTokens: daily.cacheCreationInputTokens,

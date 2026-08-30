@@ -1705,7 +1705,8 @@ func dailyUsageFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
 	if r.usageSource == "message" {
 		return usagefacts.FromMessage(usagefacts.MessageInput{
 			Ordinal: int(r.messageOrdinal.Int64), Role: "assistant",
-			Timestamp: r.pricingTS, Model: r.model, ProviderID: r.providerID,
+			Timestamp: formatRequiredUsageTime(r.pricingTime), Model: r.model,
+			ProviderID:      r.providerID,
 			TokenUsage:      r.tokenJSON,
 			ClaudeMessageID: r.claudeMessageID,
 			ClaudeRequestID: r.claudeRequestID,
@@ -1724,7 +1725,8 @@ func dailyUsageFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
 	}
 	return usagefacts.FromEvent(usagefacts.EventInput{
 		MessageOrdinal: ordinal, Source: r.usageSource,
-		Timestamp: r.pricingTS, Model: r.model, ProviderID: r.providerID,
+		Timestamp: formatRequiredUsageTime(r.pricingTime), Model: r.model,
+		ProviderID: r.providerID,
 		CostSource: r.costSource, DedupKey: r.usageDedupKey,
 		InputTokens:              int64(r.inputTokens),
 		OutputTokens:             int64(r.outputTokens),

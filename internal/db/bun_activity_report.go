@@ -57,6 +57,7 @@ func (s *BunStore) GetSessionUsageRows(
 				row: activity.UsageRow{
 					SessionID: row.sessionID, SourceSessionID: row.sessionID,
 					Model: row.model, Timestamp: row.ts,
+					ProviderID:     row.providerID,
 					MessageOrdinal: ordinal,
 					UsageSource:    row.usageSource, Agent: row.agent,
 					ClaudeMessageID: row.claudeMessageID,
@@ -111,6 +112,7 @@ func (s *BunStore) GetSessionUsageRows(
 				SessionID: candidate.scan.sessionID,
 				Timestamp: candidate.scan.ts, MessageOrdinal: candidate.ordinal,
 				UsageSource: candidate.scan.usageSource,
+				ProviderID:  candidate.scan.providerID,
 				InputTokens: inputTok, OutputTokens: outputTok,
 				CacheCreationTokens: cacheCrTok, CacheReadTokens: cacheRdTok,
 				WebSearchRequests: usageRowWebSearchRequests(
@@ -356,7 +358,8 @@ func (s *BunStore) bunActivityReportUsageFrom(
 			scan: row, ts: parsed, validTS: parseErr == nil, ordinal: ordinal,
 			row: activity.UsageRow{
 				SessionID: row.sessionID, Model: row.model, Timestamp: row.ts,
-				Project: row.project, Machine: row.machine, MessageOrdinal: ordinal,
+				ProviderID: row.providerID,
+				Project:    row.project, Machine: row.machine, MessageOrdinal: ordinal,
 				UsageSource: row.usageSource, Agent: row.agent,
 				ClaudeMessageID: row.claudeMessageID,
 				ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID,

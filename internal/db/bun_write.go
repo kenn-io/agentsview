@@ -432,6 +432,7 @@ func CanonicalUsageEventRows(events []UsageEvent) ([]bunmodel.UsageEvent, error)
 			ID:        event.ID,
 			SessionID: event.SessionID, MessageOrdinal: event.MessageOrdinal,
 			Source: SanitizeUTF8(event.Source), Model: SanitizeUTF8(event.Model),
+			ProviderID:  SanitizeUTF8(event.ProviderID),
 			InputTokens: event.InputTokens, OutputTokens: event.OutputTokens,
 			CacheCreationInputTokens: event.CacheCreationInputTokens,
 			CacheReadInputTokens:     event.CacheReadInputTokens,

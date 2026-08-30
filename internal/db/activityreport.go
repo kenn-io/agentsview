@@ -584,8 +584,7 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 		return fee, false, true, nil
 	}
 	pricedModel, lookup, err = pricing.ResolveBilledAt(
-		r.providerID, r.model, usageLookupModel(r.model, r.pricingTS),
-		usagePricingTimestamp(r.pricingTS))
+		r.providerID, r.model, dailyUsageLookupModel(r), r.pricingTime)
 	if err != nil {
 		return money.Money{}, false, false, err
 	}
