@@ -572,10 +572,11 @@
   });
 
   // Recover a not-found session that syncs in later: when the routed
-  // row appears in a refreshed sessions list while the not-found
-  // state is showing, re-run the selection load path so messages and
-  // the session watch restart. retryActiveSession clears the flag,
-  // so this cannot loop.
+  // row appears in a refreshed sessions list (or a stale index-only
+  // row hydrates; activeSession treats those as absent) while the
+  // not-found state is showing, re-run the selection load path so
+  // messages and the session watch restart. retryActiveSession
+  // clears the flag, so this cannot loop.
   $effect(() => {
     const notFound = sessions.activeSessionNotFound;
     const appeared = sessions.activeSession !== undefined;

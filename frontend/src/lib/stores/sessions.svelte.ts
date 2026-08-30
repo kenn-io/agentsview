@@ -673,8 +673,16 @@ class SessionsStore {
           }
           cache.set(id, hydrated);
           this.mergeHydratedSession(hydrated);
-        } catch {
+        } catch (err) {
           // Visible hydration is best-effort; the skinny row remains usable.
+          // Except a 404 for the selected row: without the not-found
+          // flag the message pane would render blank.
+          if (
+            err instanceof ApiError && err.status === 404 &&
+            this.activeSessionId === id
+          ) {
+            this.activeSessionNotFound = true;
+          }
         } finally {
           inflight.delete(id);
         }
