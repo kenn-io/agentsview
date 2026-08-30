@@ -1008,8 +1008,7 @@ func waitForBackgroundServeReadyWithPolicy(
 	var lastStartupUpdate time.Time
 
 	for {
-		if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
-			!rt.ReadOnly {
+		if rt := FindWritableDaemonRuntime(dataDir, authToken); rt != nil {
 			return rt, nil
 		}
 		var snapshot *startupState
@@ -1037,8 +1036,7 @@ func waitForBackgroundServeReadyWithPolicy(
 			return nil, ctx.Err()
 		case <-ticker.C:
 		case <-timeoutC:
-			if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
-				!rt.ReadOnly {
+			if rt := FindWritableDaemonRuntime(dataDir, authToken); rt != nil {
 				return rt, nil
 			}
 			var latest *startupState

@@ -147,8 +147,10 @@ agentsview serve restart
 agentsview serve stop
 ```
 
-The parent command starts a detached `agentsview serve` process, waits briefly
-for it to publish its runtime record, and prints the URL, PID, and log path.
+The parent command starts a detached `agentsview serve` process and waits for it
+to publish its runtime record. The five-second readiness window measures startup
+inactivity, so continuing startup progress can keep the parent waiting longer.
+It then prints the URL, PID, and log path.
 Background server output is written to `~/.agentsview/serve.log`. `serve status`
 reports the preferred managed process, URL, version, uptime, and read-only mode
 when available. `serve stop` retains its broad lifecycle scope: it gracefully
