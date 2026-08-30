@@ -1101,9 +1101,11 @@ fn save_sidecar(app: &AppHandle, child: CommandChild) -> Result<u64, DynError> {
 }
 
 fn save_sidecar_port(app: &AppHandle, port: u16) {
+    // Defer before publishing so a deep link cannot observe the new
+    // port and navigate ahead of the pending readiness redirect.
+    defer_deep_link_dispatch(app);
     let state = app.state::<SidecarState>();
     set_sidecar_port(&state, Some(port));
-    defer_deep_link_dispatch(app);
 }
 
 fn clear_sidecar_port(app: &AppHandle) {
