@@ -208,6 +208,9 @@ func (w *Worker) drainLocked(ctx context.Context) error {
 	for {
 		_, found, err := w.uploader.UploadNext(ctx)
 		if err != nil {
+			if errors.Is(err, rawupload.ErrPermanentFailure) {
+				continue
+			}
 			return fmt.Errorf("rawwatch: upload generation: %w", err)
 		}
 		if !found {

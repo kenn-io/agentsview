@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,13 +15,15 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
+	"go.kenn.io/agentsview/internal/rawclient"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/rawupload"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type recordingRawUploadTransport struct {
-	commits int
+	commits    int
+	commitErrs []error
 }
 
 func (t *recordingRawUploadTransport) MissingObjects(
@@ -45,12 +48,52 @@ func (t *recordingRawUploadTransport) CommitManifest(
 	_ rawsync.Manifest,
 ) (rawsync.CommitResult, error) {
 	t.commits++
+	if t.commits <= len(t.commitErrs) && t.commitErrs[t.commits-1] != nil {
+		return rawsync.CommitResult{}, t.commitErrs[t.commits-1]
+	}
 	return rawsync.CommitResult{
 		ManifestID: fmt.Sprintf("%064x", t.commits),
 		Receipt:    fmt.Sprintf("%064x", t.commits+100),
 		Generation: 1,
 		Created:    true,
 	}, nil
+}
+
+func TestWorkerDrainSkipsPermanentlyRejectedGeneration(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"first.jsonl", "second.jsonl"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+	}
+	base := t.TempDir()
+	store, err := rawcheckpoint.OpenWithOptions(
+		t.Context(), filepath.Join(base, "checkpoint.db"),
+		rawcheckpoint.Options{
+			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	provider := newAuditProvider(root)
+	capturer := rawcapture.New(store)
+	transport := &recordingRawUploadTransport{commitErrs: []error{
+		&rawclient.APIError{
+			Status: http.StatusBadRequest, Code: rawclient.CodeInvalidRequest,
+		},
+	}}
+	worker := NewWorker(
+		[]parser.Provider{provider}, capturer,
+		NewAuditor(store, capturer, 16), rawupload.New(store, transport, "device-a"),
+	)
+
+	err = worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, transport.commits,
+		"a rejected source must not prevent another source from uploading")
+	status, err := store.ClientStatus(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, status.PermanentFailures)
 }
 
 func (p *auditProvider) SourcesForChangedPath(

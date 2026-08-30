@@ -286,6 +286,7 @@ func TestUploaderPersistsPermanentRejectionAndSuppressesRetry(t *testing.T) {
 	_, found, err := New(store, transport, "device-a").UploadNext(t.Context())
 
 	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrPermanentFailure)
 	require.True(t, found)
 	require.NoError(t, store.Close())
 	store, err = rawcheckpoint.OpenWithOptions(

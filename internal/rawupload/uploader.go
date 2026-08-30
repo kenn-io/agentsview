@@ -26,6 +26,9 @@ const (
 	maximumRetryDelay   = time.Hour
 )
 
+// ErrPermanentFailure marks an upload rejection that was durably blocked.
+var ErrPermanentFailure = errors.New("rawupload: permanent upload failure")
+
 // Transport is the rawclient surface required by the outbox uploader.
 type Transport interface {
 	MissingObjects(
@@ -175,7 +178,7 @@ func (u *Uploader) recordFailure(
 		); err != nil {
 			return errors.Join(cause, err)
 		}
-		return cause
+		return errors.Join(ErrPermanentFailure, cause)
 	}
 	if err := u.store.RecordGenerationFailure(
 		ctx, u.deviceID, captureID, class, retryAt,
