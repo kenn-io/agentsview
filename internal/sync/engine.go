@@ -5972,13 +5972,20 @@ func (e *Engine) reconciliationCandidate(
 	if agent == parser.AgentAntigravityCLI {
 		preference2 = boolPreference(strings.HasSuffix(path, ".db"))
 	}
+	var sourceState parser.ReconciliationSourceState
+	if stateProvider, ok := provider.(parser.ReconciliationSourceStateProvider); ok {
+		if state, stateOK := stateProvider.ReconciliationSourceState(source); stateOK {
+			sourceState = state
+		}
+	}
 	return reconciliationCandidate{
 		Provider: agent, Identity: identity, Path: path,
 		StoredPath: canonicalReconciliationSourceIdentity(
 			e.effectiveSourcePath(path),
 		), MemberIdentity: source.ReconciliationIdentity, WatchRoot: root,
 		Machine: e.machineForProviderSource(agent, source, path),
-		Project: source.ProjectHint, Preference1: preference1,
+		Project: source.ProjectHint, SourceState: sourceState,
+		Preference1: preference1,
 		Preference2: preference2, Preference3: preference3,
 	}, true
 }
@@ -6117,6 +6124,23 @@ func (e *Engine) rehydrateReconciliationPage(
 				return nil, fmt.Errorf("rehydrate %s source %s: %w", candidate.Provider, candidate.Path, err)
 			}
 			if found && reconciliationSourceIdentity(candidate.Provider, source) == candidate.Identity {
+				if candidate.SourceState.Version != 0 {
+					stateProvider, ok := provider.(parser.ReconciliationSourceStateProvider)
+					if !ok {
+						return nil, fmt.Errorf(
+							"rehydrate %s source %s: source state provider unavailable",
+							candidate.Provider, candidate.Path,
+						)
+					}
+					if err := stateProvider.ApplyReconciliationSourceState(
+						&source, candidate.SourceState,
+					); err != nil {
+						return nil, fmt.Errorf(
+							"rehydrate %s source %s: apply source state: %w",
+							candidate.Provider, candidate.Path, err,
+						)
+					}
+				}
 				files = append(files, parser.DiscoveredFile{
 					Path: candidate.Path, Project: source.ProjectHint,
 					Agent: candidate.Provider, ForceParse: forceCandidate,
@@ -6144,6 +6168,23 @@ func (e *Engine) rehydrateReconciliationPage(
 			return nil, fmt.Errorf("rehydrate %s source %s: canonical source not found", candidate.Provider, candidate.Path)
 		}
 		source := *matched
+		if candidate.SourceState.Version != 0 {
+			stateProvider, ok := provider.(parser.ReconciliationSourceStateProvider)
+			if !ok {
+				return nil, fmt.Errorf(
+					"rehydrate %s source %s: source state provider unavailable",
+					candidate.Provider, candidate.Path,
+				)
+			}
+			if err := stateProvider.ApplyReconciliationSourceState(
+				&source, candidate.SourceState,
+			); err != nil {
+				return nil, fmt.Errorf(
+					"rehydrate %s source %s: apply source state: %w",
+					candidate.Provider, candidate.Path, err,
+				)
+			}
+		}
 		files = append(files, parser.DiscoveredFile{
 			Path: candidate.Path, Project: source.ProjectHint,
 			Agent: candidate.Provider, ForceParse: forceCandidate,

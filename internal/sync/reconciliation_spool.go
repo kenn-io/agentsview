@@ -17,6 +17,7 @@ import (
 )
 
 const reconciliationPageSize = 256
+const maxReconciliationSourceStateBytes = 4096
 
 type reconciliationCandidate struct {
 	Provider       parser.AgentType
@@ -27,6 +28,7 @@ type reconciliationCandidate struct {
 	WatchRoot      string
 	Machine        string
 	Project        string
+	SourceState    parser.ReconciliationSourceState
 	Preference1    int64
 	Preference2    int64
 	Preference3    int64
@@ -104,13 +106,14 @@ func (spool *reconciliationSpool) Candidate(
 	var providerName string
 	err := spool.db.QueryRowContext(ctx, `
 		SELECT provider, identity, path, stored_path, member_identity, watch_root, machine, project,
-		       preference_1, preference_2, preference_3
+		       source_state_version, source_state, preference_1, preference_2, preference_3
 		FROM candidates
 		WHERE provider = ? AND identity = ?
 	`, string(provider), identity).Scan(
 		&providerName, &candidate.Identity, &candidate.Path, &candidate.StoredPath,
 		&candidate.MemberIdentity,
 		&candidate.WatchRoot, &candidate.Machine, &candidate.Project,
+		&candidate.SourceState.Version, &candidate.SourceState.Payload,
 		&candidate.Preference1, &candidate.Preference2,
 		&candidate.Preference3,
 	)
@@ -249,6 +252,8 @@ func (spool *reconciliationSpool) initialize() error {
 			watch_root TEXT NOT NULL,
 			machine TEXT NOT NULL,
 			project TEXT NOT NULL,
+			source_state_version INTEGER NOT NULL,
+			source_state BLOB NOT NULL,
 			preference_1 INTEGER NOT NULL,
 			preference_2 INTEGER NOT NULL,
 			preference_3 INTEGER NOT NULL,
@@ -377,11 +382,23 @@ func (spool *reconciliationSpool) Add(
 	if sealed {
 		return errors.New("reconciliation spool is sealed")
 	}
+	stateVersion := candidate.SourceState.Version
+	statePayload := candidate.SourceState.Payload
+	if len(statePayload) > maxReconciliationSourceStateBytes {
+		// State is an optimization. An oversized payload must not make the
+		// authoritative reconciliation pass fail; omitting it makes rehydration
+		// resolve the source's full fingerprint instead.
+		stateVersion = 0
+		statePayload = []byte{}
+	} else if statePayload == nil {
+		statePayload = []byte{}
+	}
 	_, err := spool.db.ExecContext(ctx, `
 		INSERT INTO candidates (
 			provider, identity, path, stored_path, member_identity, watch_root, machine,
-			project, preference_1, preference_2, preference_3
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			project, source_state_version, source_state, preference_1, preference_2,
+			preference_3
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(provider, identity) DO UPDATE SET
 			path = excluded.path,
 			stored_path = excluded.stored_path,
@@ -389,6 +406,8 @@ func (spool *reconciliationSpool) Add(
 			watch_root = excluded.watch_root,
 			machine = excluded.machine,
 			project = excluded.project,
+			source_state_version = excluded.source_state_version,
+			source_state = excluded.source_state,
 			preference_1 = excluded.preference_1,
 			preference_2 = excluded.preference_2,
 			preference_3 = excluded.preference_3
@@ -404,8 +423,9 @@ func (spool *reconciliationSpool) Add(
 		       AND excluded.path < candidates.path)
 	`, string(candidate.Provider), candidate.Identity, candidate.Path,
 		candidate.StoredPath, candidate.MemberIdentity,
-		candidate.WatchRoot, candidate.Machine, candidate.Project, candidate.Preference1,
-		candidate.Preference2, candidate.Preference3)
+		candidate.WatchRoot, candidate.Machine, candidate.Project,
+		stateVersion, statePayload,
+		candidate.Preference1, candidate.Preference2, candidate.Preference3)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -429,7 +449,7 @@ func (spool *reconciliationSpool) Page(
 	}
 	rows, err := spool.db.QueryContext(ctx, `
 		SELECT provider, identity, path, stored_path, member_identity, watch_root, machine, project,
-		       preference_1, preference_2, preference_3
+		       source_state_version, source_state, preference_1, preference_2, preference_3
 		FROM candidates
 		WHERE provider > ? OR (provider = ? AND identity > ?)
 		ORDER BY provider, identity
@@ -451,6 +471,7 @@ func (spool *reconciliationSpool) Page(
 			&provider, &candidate.Identity, &candidate.Path, &candidate.StoredPath,
 			&candidate.MemberIdentity,
 			&candidate.WatchRoot, &candidate.Machine, &candidate.Project,
+			&candidate.SourceState.Version, &candidate.SourceState.Payload,
 			&candidate.Preference1, &candidate.Preference2,
 			&candidate.Preference3,
 		); err != nil {

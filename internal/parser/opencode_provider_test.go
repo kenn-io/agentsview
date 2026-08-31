@@ -1667,7 +1667,7 @@ func TestOpenCodeReconciliationRehydratesWatermarkMetadata(t *testing.T) {
 		"watermark rehydration must not resolve child digest")
 }
 
-func TestOpenCodeReconciliationReusesFullDiscoveryMetadata(t *testing.T) {
+func TestOpenCodeReconciliationSourceStateRoundTrips(t *testing.T) {
 	root := t.TempDir()
 	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
 	seeder.AddProject("prj_1", "/home/user/code/app")
@@ -1689,22 +1689,34 @@ func TestOpenCodeReconciliationReusesFullDiscoveryMetadata(t *testing.T) {
 			ChildDigest:    childDigest,
 		})
 	}
-	sources := newOpenCodeFormatSourceSet([]string{root}, spec, nil)
-	err := sources.DiscoverEach(t.Context(), func(SourceRef) error { return nil })
+	discoverySources := newOpenCodeFormatSourceSet([]string{root}, spec, nil)
+	var discovered SourceRef
+	err := discoverySources.DiscoverEach(t.Context(), func(source SourceRef) error {
+		discovered = source
+		return nil
+	})
 	require.NoError(t, err)
 
-	source, found, err := sources.SourceForReconciliation(
+	state, ok := discoverySources.reconciliationSourceState(discovered)
+	require.True(t, ok)
+	rehydrationSources := newOpenCodeFormatSourceSet(
+		[]string{root}, spec, nil,
+	)
+	source, found, err := rehydrationSources.SourceForReconciliation(
 		t.Context(), dbPath+"#ses_a", "",
 	)
 	require.NoError(t, err)
 	require.True(t, found)
+	require.NoError(t,
+		rehydrationSources.applyReconciliationSourceState(&source, state),
+	)
 	assert.Equal(t, childDigest, sourceCarriedChildDigest(source))
 
 	before := OpenCodeSessionChildLookups()
-	_, err = sources.Fingerprint(t.Context(), source)
+	_, err = rehydrationSources.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.Equal(t, before, OpenCodeSessionChildLookups(),
-		"full streamed reconciliation must reuse the discovery child digest")
+		"rehydration must reuse the discovery child digest")
 }
 
 func TestOpenCodeReconciliationKeepsStorageShadowSource(t *testing.T) {

@@ -264,6 +264,18 @@ func (p *icodemateProvider) SourceForReconciliation(
 	return p.allSources.SourceForReconciliation(ctx, path, project)
 }
 
+func (p *icodemateProvider) ReconciliationSourceState(
+	source SourceRef,
+) (ReconciliationSourceState, bool) {
+	return p.allSources.reconciliationSourceState(source)
+}
+
+func (p *icodemateProvider) ApplyReconciliationSourceState(
+	source *SourceRef, state ReconciliationSourceState,
+) error {
+	return p.allSources.applyReconciliationSourceState(source, state)
+}
+
 // ResolveReconciliationScopes preserves the OpenCode container topology for
 // the shared icodemate.db under every configured icodemate root (allSources)
 // while letting CLI projects roots fall through to the generic directory

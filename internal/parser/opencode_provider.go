@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -407,6 +408,11 @@ type openCodeFormatSource struct {
 	WatermarkOnly bool
 }
 
+const (
+	openCodeReconciliationSourceStateVersion = 1
+	openCodeReconciliationSourceStateHeader  = 8 + 1 + 2
+)
+
 type openCodeFormatSourceIndex struct {
 	projectMetadataSessions map[string]map[string]struct{}
 	projectMetadataIndexed  map[string]struct{}
@@ -439,11 +445,6 @@ type openCodeFormatSourceSet struct {
 	projectMetadataIndexed  map[string]struct{}
 	projectMetadataErrors   map[string]map[openCodeMetadataErrorPathKey]struct{}
 	projectMetadataMu       *sync.RWMutex
-	// discoveredSQLiteSources carries full discovery metadata into streamed
-	// reconciliation. The spool stores only paths, so without this handoff a
-	// due pass would resolve the child digest once per session again.
-	discoveredSQLiteSources   map[string]SourceRef
-	discoveredSQLiteSourcesMu *sync.RWMutex
 }
 
 func newOpenCodeFormatSourceSet(
@@ -467,13 +468,10 @@ func newOpenCodeFormatSourceSet(
 		projectMetadataIndexed:      index.projectMetadataIndexed,
 		projectMetadataErrors:       index.projectMetadataErrors,
 		projectMetadataMu:           index.projectMetadataMu,
-		discoveredSQLiteSources:     make(map[string]SourceRef),
-		discoveredSQLiteSourcesMu:   &sync.RWMutex{},
 	}
 }
 
 func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	s.resetDiscoveredSQLiteSources()
 	var sources []SourceRef
 	var incomplete error
 	seen := make(map[string]struct{})
@@ -530,7 +528,6 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 func (s openCodeFormatSourceSet) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
-	s.resetDiscoveredSQLiteSources()
 	var incomplete error
 	wrappedYield := func(source SourceRef) error {
 		if err := yield(source); err != nil {
@@ -950,9 +947,6 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 		}
 		sourcePath, sourcePathOK := s.pathFromSource(source)
 		if sourcePathOK {
-			if discovered, discoveredOK := s.discoveredSQLiteSource(sourcePath); discoveredOK {
-				source = discovered
-			}
 			if dbPath, sessionID, sqlite := s.spec.parseVirtual(sourcePath); sqlite &&
 				s.containerListsWatermarkOnly != nil &&
 				s.containerListsWatermarkOnly(dbPath) {
@@ -1464,37 +1458,105 @@ func (s openCodeFormatSourceSet) sqliteSourceRefFromMeta(
 		src.WatermarkOnly = meta.WatermarkOnly
 		ref.Opaque = src
 	}
-	s.rememberDiscoveredSQLiteSource(path, ref, meta.WatermarkOnly)
 	return ref, true
 }
 
-func (s openCodeFormatSourceSet) resetDiscoveredSQLiteSources() {
-	s.discoveredSQLiteSourcesMu.Lock()
-	s.discoveredSQLiteSources = make(map[string]SourceRef)
-	s.discoveredSQLiteSourcesMu.Unlock()
+func (p *openCodeFormatProvider) ReconciliationSourceState(
+	source SourceRef,
+) (ReconciliationSourceState, bool) {
+	return p.sources.reconciliationSourceState(source)
 }
 
-func (s openCodeFormatSourceSet) rememberDiscoveredSQLiteSource(
-	path string, source SourceRef, watermarkOnly bool,
-) {
-	path = filepath.Clean(path)
-	s.discoveredSQLiteSourcesMu.Lock()
-	defer s.discoveredSQLiteSourcesMu.Unlock()
-	if watermarkOnly {
-		if _, exists := s.discoveredSQLiteSources[path]; exists {
-			return
+func (p *openCodeFormatProvider) ApplyReconciliationSourceState(
+	source *SourceRef, state ReconciliationSourceState,
+) error {
+	return p.sources.applyReconciliationSourceState(source, state)
+}
+
+func (s openCodeFormatSourceSet) reconciliationSourceState(
+	source SourceRef,
+) (ReconciliationSourceState, bool) {
+	path, ok := s.pathFromSource(source)
+	if !ok {
+		return ReconciliationSourceState{}, false
+	}
+	if _, _, ok := s.spec.parseVirtual(path); !ok {
+		return ReconciliationSourceState{}, false
+	}
+	src, ok := openCodeSourceValue(source)
+	if !ok || len(src.ChildDigest) > 0xffff {
+		return ReconciliationSourceState{}, false
+	}
+	payload := make([]byte, openCodeReconciliationSourceStateHeader+len(src.ChildDigest))
+	binary.BigEndian.PutUint64(payload, uint64(src.MTimeNS))
+	var flags byte
+	if src.CompositeMTime {
+		flags |= 1 << 0
+	}
+	if src.WatermarkOnly {
+		flags |= 1 << 1
+	}
+	payload[8] = flags
+	binary.BigEndian.PutUint16(payload[9:], uint16(len(src.ChildDigest)))
+	copy(payload[openCodeReconciliationSourceStateHeader:], src.ChildDigest)
+	return ReconciliationSourceState{
+		Version: openCodeReconciliationSourceStateVersion,
+		Payload: payload,
+	}, true
+}
+
+func (s openCodeFormatSourceSet) applyReconciliationSourceState(
+	source *SourceRef, state ReconciliationSourceState,
+) error {
+	if source == nil || state.Version == 0 {
+		return nil
+	}
+	path, ok := s.pathFromSource(*source)
+	if !ok {
+		return fmt.Errorf("%s reconciliation source path unavailable", s.spec.agent)
+	}
+	if _, _, sqlite := s.spec.parseVirtual(path); !sqlite {
+		// Source resolution may have promoted the virtual member to its
+		// canonical storage shadow. SQLite-only state must not follow it.
+		return nil
+	}
+	if state.Version != openCodeReconciliationSourceStateVersion {
+		return fmt.Errorf("unsupported %s reconciliation source state version %d",
+			s.spec.agent, state.Version)
+	}
+	if len(state.Payload) < openCodeReconciliationSourceStateHeader {
+		return fmt.Errorf("invalid %s reconciliation source state", s.spec.agent)
+	}
+	digestLen := int(binary.BigEndian.Uint16(state.Payload[9:]))
+	if len(state.Payload) != openCodeReconciliationSourceStateHeader+digestLen {
+		return fmt.Errorf("invalid %s reconciliation source state length", s.spec.agent)
+	}
+	if state.Payload[8]&^(byte(1<<0)|byte(1<<1)) != 0 {
+		return fmt.Errorf("invalid %s reconciliation source state flags", s.spec.agent)
+	}
+	src, ok := openCodeSourceValue(*source)
+	if !ok {
+		return fmt.Errorf("%s reconciliation source state target unavailable", s.spec.agent)
+	}
+	src.MTimeNS = int64(binary.BigEndian.Uint64(state.Payload))
+	flags := state.Payload[8]
+	src.CompositeMTime = flags&(1<<0) != 0
+	src.WatermarkOnly = flags&(1<<1) != 0
+	src.ChildDigest = string(state.Payload[openCodeReconciliationSourceStateHeader:])
+	source.Opaque = src
+	return nil
+}
+
+func openCodeSourceValue(source SourceRef) (openCodeFormatSource, bool) {
+	switch src := source.Opaque.(type) {
+	case openCodeFormatSource:
+		return src, true
+	case *openCodeFormatSource:
+		if src != nil {
+			return *src, true
 		}
 	}
-	s.discoveredSQLiteSources[path] = source
-}
-
-func (s openCodeFormatSourceSet) discoveredSQLiteSource(
-	path string,
-) (SourceRef, bool) {
-	s.discoveredSQLiteSourcesMu.RLock()
-	source, ok := s.discoveredSQLiteSources[filepath.Clean(path)]
-	s.discoveredSQLiteSourcesMu.RUnlock()
-	return source, ok
+	return openCodeFormatSource{}, false
 }
 
 func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(

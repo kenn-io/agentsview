@@ -172,6 +172,25 @@ type ReconciliationSourceResolver interface {
 	) (SourceRef, bool, error)
 }
 
+// ReconciliationSourceState is a bounded provider-owned payload carried with
+// a streamed reconciliation candidate. It preserves discovery metadata across
+// the temporary sync spool without retaining provider sources in memory.
+type ReconciliationSourceState struct {
+	Version uint8
+	Payload []byte
+}
+
+// ReconciliationSourceStateProvider serializes and reapplies the bounded
+// discovery state needed after a candidate crosses the reconciliation spool.
+// A provider may ignore state when source resolution promotes a candidate to a
+// different representation, such as a storage shadow.
+type ReconciliationSourceStateProvider interface {
+	ReconciliationSourceState(SourceRef) (ReconciliationSourceState, bool)
+	ApplyReconciliationSourceState(
+		*SourceRef, ReconciliationSourceState,
+	) error
+}
+
 // ReconciliationSourceRank is compared lexicographically after configured-root
 // priority when authoritative discovery finds duplicate logical sources.
 type ReconciliationSourceRank struct {

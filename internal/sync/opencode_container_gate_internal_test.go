@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,89 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+type reconciliationSourceStateTestProvider struct {
+	parser.Provider
+	source  parser.SourceRef
+	state   parser.ReconciliationSourceState
+	applied parser.ReconciliationSourceState
+}
+
+func (p *reconciliationSourceStateTestProvider) Definition() parser.AgentDef {
+	return parser.AgentDef{Type: parser.AgentOpenCode}
+}
+
+func (p *reconciliationSourceStateTestProvider) SourceForReconciliation(
+	context.Context, string, string,
+) (parser.SourceRef, bool, error) {
+	return p.source, true, nil
+}
+
+func (p *reconciliationSourceStateTestProvider) ReconciliationSourceState(
+	parser.SourceRef,
+) (parser.ReconciliationSourceState, bool) {
+	return p.state, true
+}
+
+func (p *reconciliationSourceStateTestProvider) ApplyReconciliationSourceState(
+	_ *parser.SourceRef, state parser.ReconciliationSourceState,
+) error {
+	p.applied = state
+	return nil
+}
+
+func TestReconciliationCandidateCarriesStateAcrossSpool(t *testing.T) {
+	container, _ := newContainerTestDB(t)
+	root := filepath.Dir(container)
+	archive := openTestDB(t)
+	engine := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {root},
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	source := parser.SourceRef{
+		Provider:       parser.AgentOpenCode,
+		DisplayPath:    container + "#ses_a",
+		FingerprintKey: container + "#ses_a",
+		Key:            container + "#ses_a",
+	}
+	state := parser.ReconciliationSourceState{
+		Version: 1,
+		Payload: []byte("full-discovery-state"),
+	}
+	discoveryProvider := &reconciliationSourceStateTestProvider{
+		source: source,
+		state:  state,
+	}
+	candidate, ok := engine.reconciliationCandidate(
+		discoveryProvider, source, []string{root}, nil,
+	)
+	require.True(t, ok)
+
+	spool, err := newReconciliationSpool(archive.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, spool.CloseAndRemove()) })
+	require.NoError(t, spool.Add(t.Context(), candidate))
+	page, err := spool.Page(t.Context(), reconciliationCursor{}, 1)
+	require.NoError(t, err)
+	require.Len(t, page, 1)
+
+	rehydrationProvider := &reconciliationSourceStateTestProvider{
+		source: source,
+	}
+	files, err := engine.rehydrateReconciliationPage(
+		t.Context(), page,
+		map[parser.AgentType]parser.Provider{
+			parser.AgentOpenCode: rehydrationProvider,
+		},
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Equal(t, state, rehydrationProvider.applied)
+}
 
 // newContainerTestDB creates a real SQLite file named like an OpenCode
 // container, so the pass's post-discovery recapture has something to stat.
