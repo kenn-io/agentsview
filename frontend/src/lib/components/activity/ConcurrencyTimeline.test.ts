@@ -341,6 +341,105 @@ describe("ConcurrencyTimeline", () => {
     unmount(c);
   });
 
+  it("renders no hit target for future buckets and clamps keyboard nav to live ones", async () => {
+    // The last of the three minute buckets starts at the effective end, so it
+    // is entirely in the future: it must not be hoverable, tooltippable, or
+    // reachable, while its bar geometry still renders.
+    const report = minuteReport({
+      elapsed_bucket_count: 2,
+      partial: true,
+      as_of: "2026-06-16T00:10:00Z",
+      effective_end: "2026-06-16T00:10:00Z",
+    });
+    report.buckets![2] = {
+      ...report.buckets![2]!,
+      max_agents: 0,
+      agent_minutes: 0,
+      output_tokens: 0,
+    };
+    const onSelectRange = vi.fn();
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, {
+      target,
+      props: { report, onSelectRange },
+    });
+    await tick();
+
+    const hits = target.querySelectorAll(".slot-hit");
+    expect(hits.length).toBe(2);
+    expect(target.querySelector('[data-concurrency-bucket-index="2"]')).toBeNull();
+    // The future bucket keeps its (zero-height) bar segments.
+    expect(target.querySelectorAll(".concurrency-seg.interactive").length).toBe(3);
+
+    // Shift+ArrowRight from the last live slot clamps to the live range
+    // instead of extending the selection into the future bucket.
+    hits[1]!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+    await tick();
+    expect(onSelectRange).toHaveBeenCalledWith(expect.objectContaining({ start: 1, end: 2 }));
+
+    unmount(c);
+    target.remove();
+  });
+
+  it("clamps the hover tooltip inside the viewport at the top-left edge", async () => {
+    // jsdom reports zero-size boxes, so mock the tooltip's measured size. The
+    // hovered slot's rect is all zeros, anchoring the tooltip at x=0, y=-4.
+    // Hand-computed from viewport geometry (innerWidth 1024, pad 8): the
+    // unclamped box would sit at left -100, top -104; both clamp to 8.
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(100);
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    await tick();
+    const hit = target.querySelectorAll(".slot-hit")[2] as SVGRectElement;
+    hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    const tip = target.querySelector<HTMLDivElement>(".tooltip");
+    expect(tip).toBeTruthy();
+    expect(tip!.style.left).toBe("8px");
+    expect(tip!.style.top).toBe("8px");
+    unmount(c);
+    target.remove();
+  });
+
+  it("centers the tooltip above an anchor away from viewport edges", async () => {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(100);
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    await tick();
+    const hit = target.querySelectorAll(".slot-hit")[2] as SVGRectElement;
+    vi.spyOn(hit, "getBoundingClientRect").mockReturnValue({
+      left: 400,
+      top: 300,
+      width: 40,
+      height: 180,
+      right: 440,
+      bottom: 480,
+      x: 400,
+      y: 300,
+      toJSON: () => ({}),
+    } as DOMRect);
+    hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    const tip = target.querySelector<HTMLDivElement>(".tooltip");
+    // Anchor center x = 420, anchor y = 300 - 4 = 296; a 200x100 box centered
+    // above lands at left 320, top 196 with no clamping needed.
+    expect(tip!.style.left).toBe("320px");
+    expect(tip!.style.top).toBe("196px");
+    unmount(c);
+    target.remove();
+  });
+
   it("shows a tooltip on slot hover and clears it on leave", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);

@@ -38,7 +38,29 @@
   );
 
   let tooltip = $state<{ x: number; y: number; bucket: ActivityBucket } | null>(null);
+  let tooltipEl = $state<HTMLDivElement>();
+  let tooltipPos = $state<{ left: number; top: number } | null>(null);
   let keyboardAnchorIndex = $state<number | null>(null);
+
+  const TIP_PAD = 8;
+
+  // Clamp the measured tooltip box inside the viewport so it stays fully
+  // visible when the hovered bucket sits near a chart or window edge. The
+  // tooltip renders hidden for one frame while this measures it.
+  $effect(() => {
+    if (!tooltip || !tooltipEl) {
+      tooltipPos = null;
+      return;
+    }
+    const w = tooltipEl.offsetWidth;
+    const h = tooltipEl.offsetHeight;
+    const left = Math.min(
+      Math.max(tooltip.x - w / 2, TIP_PAD),
+      Math.max(window.innerWidth - w - TIP_PAD, TIP_PAD),
+    );
+    const top = Math.max(tooltip.y - h, TIP_PAD);
+    tooltipPos = { left, top };
+  });
 
   // Format bucket boundaries in the report's own timezone. Bucket start/end are
   // UTC instants of local calendar boundaries, so rendering them in the report
@@ -160,7 +182,7 @@
     const next = Math.max(
       0,
       Math.min(
-        buckets.length - 1,
+        liveBars.length - 1,
         idx + (e.key === "ArrowRight" ? 1 : -1),
       ),
     );
@@ -205,19 +227,19 @@
   }
 
   function moveRangeDrag(event: PointerEvent) {
-    if (dragStart === null || !containerEl || bars.length === 0) return;
+    if (dragStart === null || !containerEl || liveBars.length === 0) return;
     const x = event.clientX - containerEl.getBoundingClientRect().left;
-    const first = bars[0]!;
-    const last = bars.at(-1)!;
+    const first = liveBars[0]!;
+    const last = liveBars.at(-1)!;
     if (x <= first.cellX) {
       dragEnd = 0;
       return;
     }
     if (x >= last.cellX + last.cellW) {
-      dragEnd = bars.length - 1;
+      dragEnd = liveBars.length - 1;
       return;
     }
-    const idx = bars.findIndex((bar) => x < bar.cellX + bar.cellW);
+    const idx = liveBars.findIndex((bar) => x < bar.cellX + bar.cellW);
     if (idx >= 0) dragEnd = idx;
   }
 
@@ -523,6 +545,14 @@
     Math.max(((rangeEndMs - futureStartMs) / rangeSpanMs) * plotWidth, 0),
   );
 
+  // Buckets that start at or after the effective end are entirely in the
+  // future. They get no hit target, so they cannot be hovered, focused,
+  // tooltipped, or selected. Buckets are chronological, so this is a prefix
+  // of bars and slot indexes stay aligned.
+  const liveBars = $derived(
+    bars.filter((bar) => Date.parse(buckets[bar.idx]!.start) < futureStartMs),
+  );
+
   const svgH = $derived(CHART_H + STRIP_GAP + STRIP_H + X_LABEL_H);
   const stripY = $derived(CHART_H + STRIP_GAP);
 
@@ -713,7 +743,7 @@
           />
         {/if}
 
-        {#each bars as bar (bar.idx)}
+        {#each liveBars as bar (bar.idx)}
           {@const b = buckets[bar.idx]}
           <Rect
             class="slot-hit"
@@ -738,7 +768,13 @@
     </Chart>
 
     {#if tooltip}
-      <div class="tooltip" style="left: {tooltip.x}px; top: {tooltip.y}px;">
+      <div
+        bind:this={tooltipEl}
+        class="tooltip"
+        style={tooltipPos
+          ? `left: ${tooltipPos.left}px; top: ${tooltipPos.top}px;`
+          : "visibility: hidden;"}
+      >
         <div class="tooltip-date">{fmtBucketRange(tooltip.bucket)}</div>
         <dl class="tooltip-metrics">
           <div>
@@ -957,7 +993,6 @@
 
   .tooltip {
     position: fixed;
-    transform: translateX(-50%) translateY(-100%);
     min-width: 168px;
     padding: 8px 10px;
     background: var(--text-primary);
