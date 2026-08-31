@@ -398,6 +398,34 @@ func TestOpenCodeStorageStreamingDiscoveryPropagatesProjectSymlinkErrors(t *test
 	})
 }
 
+// TestOpenCodeStorageReconciliationRejectsSymlinkedSessionFile pins
+// reconciliation's storage-session resolution to discovery's validation: a
+// symlinked session file must not resolve, or reconciliation would ingest
+// content outside the configured source root.
+func TestOpenCodeStorageReconciliationRejectsSymlinkedSessionFile(t *testing.T) {
+	root := t.TempDir()
+	sessionPath := writeOpenCodeProviderStorageSession(
+		t, root, "session", "ses_real", "project", "Real",
+	)
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	require.NoError(t, os.WriteFile(
+		outside, []byte(`{"id":"ses_linked"}`), 0o600,
+	))
+	link := filepath.Join(root, "storage", "session", "global", "ses_linked.json")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	spec := openCodeProviderSpecForAgent(AgentOpenCode)
+	sources := newOpenCodeFormatSourceSet([]string{root}, spec, nil)
+	assert.Empty(t,
+		sources.storageSessionPathForReconciliation(root, "ses_linked"),
+		"a symlinked storage session file must not resolve for reconciliation")
+	assert.Equal(t, sessionPath,
+		sources.storageSessionPathForReconciliation(root, "ses_real"),
+		"a regular storage session file resolves for reconciliation")
+}
+
 func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 
 	root := t.TempDir()

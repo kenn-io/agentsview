@@ -1034,7 +1034,10 @@ func (s openCodeFormatSourceSet) storageSessionPathForReconciliation(
 			continue
 		}
 		path := filepath.Join(src.SessionRoot, entry.Name(), sessionID+".json")
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		// Same validation as discovery's isStorageSessionPath: a symlinked
+		// session file must not resolve, or reconciliation would ingest
+		// content outside the configured source root.
+		if IsRegularFile(path) {
 			return path
 		}
 	}
