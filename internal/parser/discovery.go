@@ -264,8 +264,20 @@ func findOpenCodeFormatSourceFile(
 	src := resolveOpenCodeFormatSource(f, root)
 	switch src.Mode {
 	case OpenCodeSourceStorage:
-		if path := findOpenCodeFormatStorageSessionFile(f, root, sessionID); path != "" {
-			return path
+		if entries, err := os.ReadDir(src.SessionRoot); err == nil {
+			for _, entry := range entries {
+				if !isDirOrSymlink(entry, src.SessionRoot) {
+					continue
+				}
+				path := filepath.Join(
+					src.SessionRoot, entry.Name(),
+					sessionID+".json",
+				)
+				if info, err := os.Stat(path); err == nil &&
+					!info.IsDir() {
+					return path
+				}
+			}
 		}
 		for _, dbPath := range src.DBPaths {
 			if OpenCodeSQLiteSessionExists(dbPath, sessionID) {
@@ -283,29 +295,6 @@ func findOpenCodeFormatSourceFile(
 	default:
 		return ""
 	}
-}
-
-func findOpenCodeFormatStorageSessionFile(
-	f openCodeFormat, root, sessionID string,
-) string {
-	src := resolveOpenCodeFormatSource(f, root)
-	if src.Mode != OpenCodeSourceStorage {
-		return ""
-	}
-	entries, err := os.ReadDir(src.SessionRoot)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, src.SessionRoot) {
-			continue
-		}
-		path := filepath.Join(src.SessionRoot, entry.Name(), sessionID+".json")
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path
-		}
-	}
-	return ""
 }
 
 func openCodeFormatStorageSessionIDs(

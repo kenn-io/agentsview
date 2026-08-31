@@ -1007,9 +1007,7 @@ func (s openCodeFormatSourceSet) sourceRefForReconciliationState(
 		if _, under := relUnder(root, dbPath); !under {
 			return SourceRef{}, false
 		}
-		if selected := findOpenCodeFormatStorageSessionFile(
-			s.spec.format, root, sessionID,
-		); selected != "" {
+		if selected := s.storageSessionPathForReconciliation(root, sessionID); selected != "" {
 			return s.sourceRefFromStoragePath(root, selected)
 		}
 		return s.newSourceRef(root, path, ""), true
@@ -1018,6 +1016,29 @@ func (s openCodeFormatSourceSet) sourceRefForReconciliationState(
 		return SourceRef{}, false
 	}
 	return s.newSourceRef(root, path, openCodeSessionProject(path)), true
+}
+
+func (s openCodeFormatSourceSet) storageSessionPathForReconciliation(
+	root, sessionID string,
+) string {
+	src := s.spec.resolve(root)
+	if src.Mode != OpenCodeSourceStorage {
+		return ""
+	}
+	entries, err := os.ReadDir(src.SessionRoot)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, src.SessionRoot) {
+			continue
+		}
+		path := filepath.Join(src.SessionRoot, entry.Name(), sessionID+".json")
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path
+		}
+	}
+	return ""
 }
 
 // openCodeSQLiteSessionWatermarkOnly carries the same session/project
