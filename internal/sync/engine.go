@@ -6266,6 +6266,9 @@ func (e *Engine) applyReconciliationSourceStateIfValid(
 	agent parser.AgentType,
 	path string,
 ) bool {
+	if source == nil {
+		return false
+	}
 	if state.Version == 0 {
 		return true
 	}
