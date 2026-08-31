@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -36,6 +37,11 @@ var openCodeFamilySQLiteAgents = []parser.AgentType{
 }
 
 var statSQLiteContainerState = parser.StatSQLiteContainerState
+
+var (
+	openCodeContainerDigestVerifyInterval = 5 * time.Minute
+	openCodeContainerDigestVerifyNow      = time.Now
+)
 
 // sqliteContainerSourceForFile maps a discovered file to its shared SQLite
 // container path and session ID, or ok=false when the file is not one of the
@@ -89,11 +95,12 @@ type trustedSQLiteContainer struct {
 // are touched only by the single collectAndBatch goroutine, so no locking
 // is needed during the pass.
 type sqliteContainerPass struct {
-	captured   map[string]parser.SQLiteContainerState
-	discovered map[string]int
-	completed  map[string]int
-	failed     map[string]bool
-	poisoned   bool
+	captured         map[string]parser.SQLiteContainerState
+	discovered       map[string]int
+	completed        map[string]int
+	failed           map[string]bool
+	fullDigestListed map[string]bool
+	poisoned         bool
 }
 
 // captureSQLiteContainerStates snapshots every configured OpenCode-family
@@ -337,18 +344,14 @@ func storedSessionRowWatermarkNS(
 	return member.MTimeNS
 }
 
-// sqliteContainerTrustedForDiscovery returns discovery's trust probe: it
-// reports containers whose pre-discovery capture matches the last fully
-// verified state, meaning every member will gate-skip before fingerprinting
-// and the full child digest would be computed for nothing. The probe is
-// keyed to the pass's own pre-discovery captures so a container that
-// changes between capture and listing can never look trusted with a newer
-// session set (the gate separately fails such containers for the pass).
-// Nil when nothing was captured or every parse is forced.
-func (e *Engine) sqliteContainerTrustedForDiscovery(
+// sqliteContainerListsWatermarkOnly returns discovery's bounded listing policy.
+// A recently digest-verified container may use its complete-membership
+// watermark listing after a write; due verification, missing state, and
+// replacement containers fall back to the full composite listing.
+func (e *Engine) sqliteContainerListsWatermarkOnly(
 	preStates map[string]parser.SQLiteContainerState,
 ) func(string) bool {
-	if len(preStates) == 0 || e.forceParse {
+	if len(preStates) == 0 || e.forceParse || e.forceFullParse {
 		return nil
 	}
 	return func(dbPath string) bool {
@@ -359,9 +362,30 @@ func (e *Engine) sqliteContainerTrustedForDiscovery(
 		}
 		e.containerMu.Lock()
 		trusted, ok := e.trustedSQLiteContainers[dbPath]
+		verifiedAt, verified := e.digestVerifiedAt[dbPath]
 		e.containerMu.Unlock()
-		return ok && trusted.state == state
+		if !ok || sqliteContainerStateReplaced(trusted.state, state) {
+			return false
+		}
+		return verified && openCodeContainerDigestVerificationCurrent(
+			verifiedAt, openCodeContainerDigestVerifyNow(),
+		)
 	}
+}
+
+func openCodeContainerDigestVerificationCurrent(verifiedAt, now time.Time) bool {
+	return !verifiedAt.IsZero() && now.Sub(verifiedAt) >= 0 &&
+		now.Sub(verifiedAt) < openCodeContainerDigestVerifyInterval
+}
+
+func sqliteContainerStateReplaced(
+	previous, current parser.SQLiteContainerState,
+) bool {
+	if previous.DBInode == 0 || current.DBInode == 0 {
+		return false
+	}
+	return previous.DBInode != current.DBInode ||
+		previous.DBDevice != current.DBDevice
 }
 
 func openCodeContainerPathForEvent(
@@ -420,10 +444,11 @@ func (e *Engine) beginStreamingSQLiteContainerPass(
 		return
 	}
 	pass := &sqliteContainerPass{
-		captured:   make(map[string]parser.SQLiteContainerState, len(preStates)),
-		discovered: make(map[string]int),
-		completed:  make(map[string]int),
-		failed:     make(map[string]bool),
+		captured:         make(map[string]parser.SQLiteContainerState, len(preStates)),
+		discovered:       make(map[string]int),
+		completed:        make(map[string]int),
+		failed:           make(map[string]bool),
+		fullDigestListed: make(map[string]bool),
 	}
 	maps.Copy(pass.captured, preStates)
 	e.containerMu.Lock()
@@ -443,6 +468,10 @@ func (e *Engine) noteSQLiteContainerDiscovery(file parser.DiscoveredFile) {
 		return
 	}
 	pass.discovered[dbPath]++
+	if file.ProviderSource != nil &&
+		parser.SourceUsesOpenCodeCompositeMTime(*file.ProviderSource) {
+		pass.fullDigestListed[dbPath] = true
+	}
 	if _, captured := pass.captured[dbPath]; !captured {
 		pass.failed[dbPath] = true
 	}
@@ -635,24 +664,37 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 	pass := e.containerPass
 	e.containerPass = nil
 	if incomplete {
+		if pass != nil {
+			for dbPath := range pass.captured {
+				delete(e.digestVerifiedAt, dbPath)
+			}
+		}
 		return
 	}
 	if fullDiscovery {
 		for dbPath := range e.trustedSQLiteContainers {
 			if pass == nil || pass.discovered[dbPath] == 0 {
 				delete(e.trustedSQLiteContainers, dbPath)
+				delete(e.digestVerifiedAt, dbPath)
 			}
 		}
 	}
 	if pass == nil || pass.poisoned {
+		if pass != nil {
+			for dbPath := range pass.captured {
+				delete(e.digestVerifiedAt, dbPath)
+			}
+		}
 		return
 	}
 	for dbPath, state := range pass.captured {
 		if pass.failed[dbPath] {
+			delete(e.digestVerifiedAt, dbPath)
 			continue
 		}
 		if pass.discovered[dbPath] == 0 ||
 			pass.completed[dbPath] != pass.discovered[dbPath] {
+			delete(e.digestVerifiedAt, dbPath)
 			continue
 		}
 		if e.trustedSQLiteContainers == nil {
@@ -661,6 +703,12 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 		}
 		e.trustedSQLiteContainers[dbPath] = trustedSQLiteContainer{
 			state: state,
+		}
+		if pass.fullDigestListed[dbPath] {
+			if e.digestVerifiedAt == nil {
+				e.digestVerifiedAt = make(map[string]time.Time)
+			}
+			e.digestVerifiedAt[dbPath] = openCodeContainerDigestVerifyNow()
 		}
 	}
 }
@@ -672,5 +720,6 @@ func (e *Engine) clearTrustedSQLiteContainers() {
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()
 	e.trustedSQLiteContainers = nil
+	e.digestVerifiedAt = nil
 	e.containerPass = nil
 }

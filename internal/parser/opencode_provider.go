@@ -69,7 +69,7 @@ func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider 
 		Caps:   openCodeFormatProviderCapabilities(),
 		Config: cfg,
 		sources: newOpenCodeFormatSourceSet(
-			cfg.Roots, f.spec, cfg.SQLiteContainerUnchangedSinceTrust, f.index,
+			cfg.Roots, f.spec, cfg.SQLiteContainerListsWatermarkOnly, f.index,
 		),
 	}
 }
@@ -429,13 +429,9 @@ func newOpenCodeFormatSourceIndex() *openCodeFormatSourceIndex {
 type openCodeFormatSourceSet struct {
 	roots []string
 	spec  openCodeProviderSpec
-	// containerTrusted, when non-nil, reports that a shared container is
-	// byte-identical to the last fully verified pass (see
-	// ProviderConfig.SQLiteContainerUnchangedSinceTrust). Discover answers
-	// with the bounded watermark-only listing for such containers: the
-	// engine's container gate skips every member before fingerprinting, so
-	// the full child digest would be archive-sized work nothing reads.
-	containerTrusted func(dbPath string) bool
+	// containerListsWatermarkOnly, when non-nil, authorizes a shared container
+	// to use the complete-membership watermark listing for the current pass.
+	containerListsWatermarkOnly func(dbPath string) bool
 	// projectMetadataSessions indexes only sessions whose cwd resolution uses
 	// project metadata, so project events do not rescan concrete sessions.
 	projectMetadataSessions map[string]map[string]struct{}
@@ -447,7 +443,7 @@ type openCodeFormatSourceSet struct {
 func newOpenCodeFormatSourceSet(
 	roots []string,
 	spec openCodeProviderSpec,
-	containerTrusted func(dbPath string) bool,
+	containerListsWatermarkOnly func(dbPath string) bool,
 	sharedIndex ...*openCodeFormatSourceIndex,
 ) openCodeFormatSourceSet {
 	index := (*openCodeFormatSourceIndex)(nil)
@@ -458,13 +454,13 @@ func newOpenCodeFormatSourceSet(
 		index = newOpenCodeFormatSourceIndex()
 	}
 	return openCodeFormatSourceSet{
-		roots:                   cleanJSONLRoots(roots),
-		spec:                    spec,
-		containerTrusted:        containerTrusted,
-		projectMetadataSessions: index.projectMetadataSessions,
-		projectMetadataIndexed:  index.projectMetadataIndexed,
-		projectMetadataErrors:   index.projectMetadataErrors,
-		projectMetadataMu:       index.projectMetadataMu,
+		roots:                       cleanJSONLRoots(roots),
+		spec:                        spec,
+		containerListsWatermarkOnly: containerListsWatermarkOnly,
+		projectMetadataSessions:     index.projectMetadataSessions,
+		projectMetadataIndexed:      index.projectMetadataIndexed,
+		projectMetadataErrors:       index.projectMetadataErrors,
+		projectMetadataMu:           index.projectMetadataMu,
 	}
 }
 
@@ -492,8 +488,11 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 			storageIDs = s.spec.storageIDs(root)
 		}
 		for _, dbPath := range src.DBPaths {
-			trusted := s.containerTrusted != nil && s.containerTrusted(dbPath)
-			dbSources, err := s.sqliteSources(ctx, root, dbPath, storageIDs, trusted)
+			watermarkOnly := s.containerListsWatermarkOnly != nil &&
+				s.containerListsWatermarkOnly(dbPath)
+			dbSources, err := s.sqliteSources(
+				ctx, root, dbPath, storageIDs, watermarkOnly,
+			)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil, err
@@ -597,7 +596,8 @@ func (s openCodeFormatSourceSet) discoverRootEach(
 		var callbackErr error
 		var membershipErr error
 		stream := s.spec.streamSQLite
-		if s.containerTrusted != nil && s.containerTrusted(dbPath) &&
+		if s.containerListsWatermarkOnly != nil &&
+			s.containerListsWatermarkOnly(dbPath) &&
 			s.spec.streamSQLiteWatermark != nil {
 			stream = s.spec.streamSQLiteWatermark
 		}
@@ -1251,6 +1251,20 @@ func (s openCodeFormatSourceSet) sqliteSources(
 		sources = append(sources, source)
 	}
 	return sources, nil
+}
+
+// SourceUsesOpenCodeCompositeMTime reports whether a discovered SQLite source
+// carries the full composite watermark. The sync owner uses this fidelity bit
+// to stamp verification only after a digest-listed pass.
+func SourceUsesOpenCodeCompositeMTime(source SourceRef) bool {
+	switch src := source.Opaque.(type) {
+	case openCodeFormatSource:
+		return src.CompositeMTime && !src.WatermarkOnly
+	case *openCodeFormatSource:
+		return src != nil && src.CompositeMTime && !src.WatermarkOnly
+	default:
+		return false
+	}
 }
 
 // changedWatermarkSources answers a shared-container change event with only

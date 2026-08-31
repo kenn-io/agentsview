@@ -710,20 +710,21 @@ add an archived or maintained mirror without replacing the original identity.
   session or project row that advances past its own stored metadata watermark
   is always a candidate, wherever other sessions' watermarks or its own child
   timestamps sit. Periodic full passes and streamed reconciliation passes over
-  a container whose captured state still matches the last fully verified pass
-  also list the watermark form (`SQLiteContainerUnchangedSinceTrust`): every
+  a container whose last complete digest verification is less than five minutes
+  old may list the watermark form (`SQLiteContainerListsWatermarkOnly`): every
   member gate-skips before fingerprinting, so the child identity scan would be
-  archive-sized work nothing reads; any write breaks that trust and the next
-  pass carries the complete digest again. Watermark-only skips additionally
+  archive-sized work nothing reads. A changed container may continue using
+  this form during that bounded interval; after the interval, the next pass
+  carries the complete digest again. Watermark-only skips additionally
   require the pass's container capture to still be valid
   (`sqliteContainerPassCaptureValid`) — a container that changes between
   listing and the recapture check resolves full per-session digests instead,
   so a concurrent child-only write cannot hide beneath an unchanged metadata
   watermark. The trade is explicit: any child-only write that leaves the
   session and project rows untouched — wherever its timestamps land relative
-  to the stored composite — is invisible to a watcher pass and is reconciled
-  by the next full-discovery pass over the now-untrusted container, whose
-  digest still catches it; on the production container above, 96% of sessions
+  to the stored composite — is invisible to watermark-only discovery and is
+  reconciled by the next full digest pass, at most five minutes after the last
+  successful digest verification; on the production container above, 96% of sessions
   carry a session/project timestamp at or above every child, and actively
   watched sessions bypass this entirely via the per-session composite poll.
   Per-event work is bounded by the changed batch plus one O(session-count)

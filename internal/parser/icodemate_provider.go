@@ -52,7 +52,7 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 			sources: newOpenCodeFormatSourceSet(
 				opencodeRoots,
 				openCodeProviderSpecForAgent(AgentIcodemate),
-				cfg.SQLiteContainerUnchangedSinceTrust,
+				cfg.SQLiteContainerListsWatermarkOnly,
 			),
 		},
 		cli:      newIcodemateCLISourceSet(cliRoots),
@@ -66,7 +66,7 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		allSources: newOpenCodeFormatSourceSet(
 			cfg.Roots,
 			openCodeProviderSpecForAgent(AgentIcodemate),
-			cfg.SQLiteContainerUnchangedSinceTrust,
+			cfg.SQLiteContainerListsWatermarkOnly,
 		),
 	}
 	provider.ProviderBase = ProviderBase{

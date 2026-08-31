@@ -1838,3 +1838,240 @@ func TestOpenCodeChangedPathWatermarkMergeMaterializesOnlyChangedBatch(
 	assert.Equal(t, small, large,
 		"the emitted batch must not scale with container size")
 }
+
+func testOpenCodeProviderMeta(dbPath string, watermarkOnly bool) OpenCodeSessionMeta {
+	return OpenCodeSessionMeta{
+		SessionID:      "ses-1",
+		VirtualPath:    dbPath + "#ses-1",
+		FileMtime:      1000 * 1_000_000,
+		CompositeMtime: true,
+		WatermarkOnly:  watermarkOnly,
+	}
+}
+
+func TestOpenCodeWatermarkListingPredicateReachesBothDiscoveryRoutes(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("fixture"), 0o600))
+	spec := openCodeProviderSpecForAgent(AgentOpenCode)
+	var fullList, watermarkList, fullStream, watermarkStream int
+	spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
+		fullList++
+		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, false)}, nil
+	}
+	spec.listSQLiteWatermark = func(path string) ([]OpenCodeSessionMeta, error) {
+		watermarkList++
+		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, true)}, nil
+	}
+	spec.streamSQLite = func(
+		ctx context.Context, path string, yield func(OpenCodeSessionMeta) error,
+	) error {
+		fullStream++
+		return yield(testOpenCodeProviderMeta(path, false))
+	}
+	spec.streamSQLiteWatermark = func(
+		ctx context.Context, path string, yield func(OpenCodeSessionMeta) error,
+	) error {
+		watermarkStream++
+		return yield(testOpenCodeProviderMeta(path, true))
+	}
+
+	sources := newOpenCodeFormatSourceSet(
+		[]string{root}, spec, func(string) bool { return true },
+	)
+	listed, err := sources.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	_, watermarkOnly := SourceWatermarkOnlyMTimeNS(listed[0])
+	assert.True(t, watermarkOnly)
+	assert.Equal(t, 0, fullList)
+	assert.Equal(t, 1, watermarkList)
+
+	var streamed []SourceRef
+	err = sources.DiscoverEach(t.Context(), func(source SourceRef) error {
+		streamed = append(streamed, source)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, streamed, 1)
+	_, watermarkOnly = SourceWatermarkOnlyMTimeNS(streamed[0])
+	assert.True(t, watermarkOnly)
+	assert.Equal(t, 0, fullStream)
+	assert.Equal(t, 1, watermarkStream)
+}
+
+func TestSQLiteContainerListsWatermarkOnlyNilKeepsFullFidelity(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("fixture"), 0o600))
+	spec := openCodeProviderSpecForAgent(AgentOpenCode)
+	var fullList, watermarkList, fullStream, watermarkStream int
+	spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
+		fullList++
+		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, false)}, nil
+	}
+	spec.listSQLiteWatermark = func(path string) ([]OpenCodeSessionMeta, error) {
+		watermarkList++
+		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, true)}, nil
+	}
+	spec.streamSQLite = func(
+		ctx context.Context, path string, yield func(OpenCodeSessionMeta) error,
+	) error {
+		fullStream++
+		return yield(testOpenCodeProviderMeta(path, false))
+	}
+	spec.streamSQLiteWatermark = func(
+		ctx context.Context, path string, yield func(OpenCodeSessionMeta) error,
+	) error {
+		watermarkStream++
+		return yield(testOpenCodeProviderMeta(path, true))
+	}
+
+	sources := newOpenCodeFormatSourceSet([]string{root}, spec, nil)
+	listed, err := sources.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	_, watermarkOnly := SourceWatermarkOnlyMTimeNS(listed[0])
+	assert.False(t, watermarkOnly)
+	assert.True(t, SourceUsesOpenCodeCompositeMTime(listed[0]))
+
+	var streamed []SourceRef
+	err = sources.DiscoverEach(t.Context(), func(source SourceRef) error {
+		streamed = append(streamed, source)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, streamed, 1)
+	_, watermarkOnly = SourceWatermarkOnlyMTimeNS(streamed[0])
+	assert.False(t, watermarkOnly)
+	assert.True(t, SourceUsesOpenCodeCompositeMTime(streamed[0]))
+	assert.Equal(t, 1, fullList)
+	assert.Equal(t, 0, watermarkList)
+	assert.Equal(t, 1, fullStream)
+	assert.Equal(t, 0, watermarkStream)
+}
+
+func TestOpenCodeFamilyVariantsHonorWatermarkListing(t *testing.T) {
+	for _, agent := range []AgentType{
+		AgentOpenCode, AgentKilo, AgentMiMoCode, AgentIcodemate,
+	} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			spec := openCodeProviderSpecForAgent(agent)
+			dbPath := filepath.Join(root, spec.dbName)
+			require.NoError(t, os.WriteFile(dbPath, []byte("fixture"), 0o600))
+			var fullList, watermarkList, fullStream, watermarkStream int
+			spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
+				fullList++
+				return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, false)}, nil
+			}
+			spec.listSQLiteWatermark = func(path string) ([]OpenCodeSessionMeta, error) {
+				watermarkList++
+				return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, true)}, nil
+			}
+			spec.streamSQLite = func(
+				ctx context.Context, path string,
+				yield func(OpenCodeSessionMeta) error,
+			) error {
+				fullStream++
+				return yield(testOpenCodeProviderMeta(path, false))
+			}
+			spec.streamSQLiteWatermark = func(
+				ctx context.Context, path string,
+				yield func(OpenCodeSessionMeta) error,
+			) error {
+				watermarkStream++
+				return yield(testOpenCodeProviderMeta(path, true))
+			}
+
+			sources := newOpenCodeFormatSourceSet(
+				[]string{root}, spec, func(string) bool { return true },
+			)
+			listed, err := sources.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, listed, 1)
+			assert.Equal(t, agent, listed[0].Provider)
+			_, watermarkOnly := SourceWatermarkOnlyMTimeNS(listed[0])
+			assert.True(t, watermarkOnly)
+
+			var streamed []SourceRef
+			err = sources.DiscoverEach(t.Context(), func(source SourceRef) error {
+				streamed = append(streamed, source)
+				return nil
+			})
+			require.NoError(t, err)
+			require.Len(t, streamed, 1)
+			_, watermarkOnly = SourceWatermarkOnlyMTimeNS(streamed[0])
+			assert.True(t, watermarkOnly)
+			assert.Equal(t, 0, fullList)
+			assert.Equal(t, 1, watermarkList)
+			assert.Equal(t, 0, fullStream)
+			assert.Equal(t, 1, watermarkStream)
+		})
+	}
+
+	t.Run("legacy schema stays full fidelity", func(t *testing.T) {
+		root := t.TempDir()
+		dbPath := filepath.Join(root, "opencode.db")
+		database, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		_, err = database.Exec(`
+			CREATE TABLE session (id TEXT PRIMARY KEY, time_updated INTEGER NOT NULL);
+			INSERT INTO session (id, time_updated) VALUES ('legacy', 1000)
+		`)
+		require.NoError(t, err)
+		require.NoError(t, database.Close())
+		provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+			Roots:                             []string{root},
+			SQLiteContainerListsWatermarkOnly: func(string) bool { return true },
+		})
+		require.True(t, ok)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		_, watermarkOnly := SourceWatermarkOnlyMTimeNS(sources[0])
+		assert.False(t, watermarkOnly)
+		assert.False(t, SourceUsesOpenCodeCompositeMTime(sources[0]))
+	})
+
+	t.Run("Icodemate CLI stays outside the predicate", func(t *testing.T) {
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		require.NoError(t, os.MkdirAll(project, 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(project, "session.jsonl"), []byte("{}\n"), 0o600,
+		))
+		calls := 0
+		provider, ok := NewProvider(AgentIcodemate, ProviderConfig{
+			Roots: []string{root},
+			SQLiteContainerListsWatermarkOnly: func(string) bool {
+				calls++
+				return true
+			},
+		})
+		require.True(t, ok)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Zero(t, calls)
+	})
+}
+
+func TestNonOpenCodeProvidersUnaffectedByContainerListingPolicy(t *testing.T) {
+	for _, agent := range []AgentType{AgentClaude, AgentZed} {
+		t.Run(string(agent), func(t *testing.T) {
+			calls := 0
+			provider, ok := NewProvider(agent, ProviderConfig{
+				Roots: []string{t.TempDir()},
+				SQLiteContainerListsWatermarkOnly: func(string) bool {
+					calls++
+					return true
+				},
+			})
+			require.True(t, ok)
+			_, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			assert.Zero(t, calls)
+		})
+	}
+}

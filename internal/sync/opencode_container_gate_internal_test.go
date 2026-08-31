@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -566,4 +567,236 @@ func TestSQLiteContainerFullPassDropsUndiscoveredTrust(t *testing.T) {
 		assert.Contains(t, e.trustedSQLiteContainers, "/data/opencode.db",
 			"an incomplete pass must not drop any trust")
 	})
+}
+
+func TestOpenCodeDigestVerificationStampedOnlyByDigestPass(t *testing.T) {
+	origNow := openCodeContainerDigestVerifyNow
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
+	now := time.Unix(100, 0)
+	openCodeContainerDigestVerifyNow = func() time.Time { return now }
+
+	const dbPath = "/data/opencode.db"
+	state := parser.SQLiteContainerState{}
+	file := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode,
+		Path:  dbPath + "#ses-1",
+	}
+
+	e := &Engine{}
+	e.beginStreamingSQLiteContainerPass(
+		map[string]parser.SQLiteContainerState{dbPath: state},
+	)
+	e.noteSQLiteContainerDiscovery(file)
+	e.containerPass.fullDigestListed[dbPath] = true
+	e.noteSQLiteContainerResult(file.Path, true)
+	e.finishSQLiteContainerPass(false, true)
+	verifiedAt, ok := e.digestVerifiedAt[dbPath]
+	require.True(t, ok, "a complete digest-listed pass must stamp verification")
+	assert.Equal(t, now, verifiedAt)
+
+	now = now.Add(time.Minute)
+	e.beginStreamingSQLiteContainerPass(
+		map[string]parser.SQLiteContainerState{dbPath: state},
+	)
+	e.noteSQLiteContainerDiscovery(file)
+	e.noteSQLiteContainerResult(file.Path, true)
+	e.finishSQLiteContainerPass(false, true)
+	assert.Equal(t, verifiedAt, e.digestVerifiedAt[dbPath],
+		"a watermark-listed pass must not refresh verification age")
+
+	e.beginStreamingSQLiteContainerPass(
+		map[string]parser.SQLiteContainerState{dbPath: state},
+	)
+	e.noteSQLiteContainerDiscovery(file)
+	e.containerPass.fullDigestListed[dbPath] = true
+	e.noteSQLiteContainerResult(file.Path, false)
+	e.finishSQLiteContainerPass(false, true)
+	assert.NotContains(t, e.digestVerifiedAt, dbPath,
+		"a failed digest pass must invalidate verification age")
+}
+
+func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
+	dbPath, conn := newCompositeContainerTestDB(t)
+	_, err := conn.Exec(`
+		INSERT INTO project (id, worktree, time_updated)
+		VALUES ('proj', '/workspace/app', 1000);
+		INSERT INTO session (id, project_id, time_created, time_updated)
+		VALUES ('ses-1', 'proj', 1000, 1000);
+		INSERT INTO message (id, session_id, data, time_created, time_updated)
+		VALUES ('msg-1', 'ses-1', '{}', 1000, 1000);
+		INSERT INTO part (id, session_id, message_id, data, time_created, time_updated)
+		VALUES ('part-1', 'ses-1', 'msg-1', '{}', 1000, 1000)
+	`)
+	require.NoError(t, err, "seed composite container")
+
+	provider, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
+		Roots: []string{filepath.Dir(dbPath)},
+	})
+	require.True(t, ok)
+	initial, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, initial, 1)
+
+	origNow := openCodeContainerDigestVerifyNow
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
+	verifiedAt := time.Unix(100, 0)
+	openCodeContainerDigestVerifyNow = func() time.Time { return verifiedAt }
+	e := &Engine{}
+	pre, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok)
+	e.beginSQLiteContainerPass(
+		[]parser.DiscoveredFile{{
+			Agent: parser.AgentOpenCode, Path: initial[0].DisplayPath,
+			ProviderSource: &initial[0],
+		}},
+		map[string]parser.SQLiteContainerState{dbPath: pre},
+	)
+	e.noteSQLiteContainerResult(initial[0].DisplayPath, true)
+	e.finishSQLiteContainerPass(false, true)
+
+	_, err = conn.Exec("UPDATE part SET data = '{\"changed\":true}' WHERE id = 'part-1'")
+	require.NoError(t, err, "apply child-only edit")
+	changed, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok)
+	predicate := e.sqliteContainerListsWatermarkOnly(
+		map[string]parser.SQLiteContainerState{dbPath: changed},
+	)
+	recent, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
+		Roots:                             []string{filepath.Dir(dbPath)},
+		SQLiteContainerListsWatermarkOnly: predicate,
+	})
+	require.True(t, ok)
+	scansBefore := parser.OpenCodeContainerChildScans()
+	watermarkSources, err := recent.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, watermarkSources, 1)
+	_, watermarkOnly := parser.SourceWatermarkOnlyMTimeNS(watermarkSources[0])
+	assert.True(t, watermarkOnly,
+		"a recent verification may defer a child-only edit")
+	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore)
+
+	openCodeContainerDigestVerifyNow = func() time.Time {
+		return verifiedAt.Add(openCodeContainerDigestVerifyInterval)
+	}
+	due, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
+		Roots:                             []string{filepath.Dir(dbPath)},
+		SQLiteContainerListsWatermarkOnly: predicate,
+	})
+	require.True(t, ok)
+	scansBefore = parser.OpenCodeContainerChildScans()
+	digestSources, err := due.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, digestSources, 1)
+	_, watermarkOnly = parser.SourceWatermarkOnlyMTimeNS(digestSources[0])
+	assert.False(t, watermarkOnly,
+		"the verification boundary must restore the full digest listing")
+	assert.True(t, parser.SourceUsesOpenCodeCompositeMTime(digestSources[0]))
+	assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scansBefore)
+}
+
+func TestOpenCodeFirstPassAfterProcessStartUsesDigestListing(t *testing.T) {
+	dbPath, _ := newContainerTestDB(t)
+	e := &Engine{
+		trustedSQLiteContainers: map[string]trustedSQLiteContainer{
+			dbPath: {state: parser.SQLiteContainerState{}},
+		},
+	}
+	predicate := e.sqliteContainerListsWatermarkOnly(
+		map[string]parser.SQLiteContainerState{dbPath: {}},
+	)
+	assert.False(t, predicate(dbPath),
+		"a fresh process has no digest verification timestamp")
+}
+
+func TestOpenCodeResyncClearsDigestVerification(t *testing.T) {
+	e := &Engine{
+		trustedSQLiteContainers: map[string]trustedSQLiteContainer{
+			"/data/opencode.db": {},
+		},
+		digestVerifiedAt: map[string]time.Time{
+			"/data/opencode.db": time.Unix(100, 0),
+		},
+	}
+	e.clearTrustedSQLiteContainers()
+	assert.Nil(t, e.trustedSQLiteContainers)
+	assert.Nil(t, e.digestVerifiedAt,
+		"resync must clear the container verification timestamps")
+}
+
+func TestOpenCodeCancelledPassDoesNotStampVerification(t *testing.T) {
+	const dbPath = "/data/opencode.db"
+	e := &Engine{}
+	file := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
+	}
+	e.beginStreamingSQLiteContainerPass(
+		map[string]parser.SQLiteContainerState{dbPath: {}},
+	)
+	e.noteSQLiteContainerDiscovery(file)
+	e.containerPass.fullDigestListed[dbPath] = true
+	e.noteSQLiteContainerResult(file.Path, true)
+	e.finishSQLiteContainerPass(true, true)
+	assert.NotContains(t, e.digestVerifiedAt, dbPath,
+		"a cancelled pass must not stamp verification")
+}
+
+func TestOpenCodeFailedPassesDoNotStampVerification(t *testing.T) {
+	for _, failure := range []string{
+		"failed member", "archive write", "baseline",
+	} {
+		t.Run(failure, func(t *testing.T) {
+			const dbPath = "/data/opencode.db"
+			file := parser.DiscoveredFile{
+				Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
+			}
+			e := &Engine{}
+			e.beginStreamingSQLiteContainerPass(
+				map[string]parser.SQLiteContainerState{dbPath: {}},
+			)
+			e.noteSQLiteContainerDiscovery(file)
+			e.containerPass.fullDigestListed[dbPath] = true
+			e.noteSQLiteContainerResult(file.Path, false)
+			e.finishSQLiteContainerPass(false, true)
+			assert.NotContains(t, e.digestVerifiedAt, dbPath,
+				"a failed pass must not stamp verification")
+		})
+	}
+}
+
+func TestOpenCodeReplacementCannotReuseVerification(t *testing.T) {
+	const dbPath = "/data/opencode.db"
+	previous := parser.SQLiteContainerState{DBInode: 10, DBDevice: 20}
+	replacement := parser.SQLiteContainerState{DBInode: 11, DBDevice: 20}
+	e := &Engine{
+		trustedSQLiteContainers: map[string]trustedSQLiteContainer{
+			dbPath: {state: previous},
+		},
+		digestVerifiedAt: map[string]time.Time{
+			dbPath: time.Unix(100, 0),
+		},
+	}
+	predicate := e.sqliteContainerListsWatermarkOnly(
+		map[string]parser.SQLiteContainerState{dbPath: replacement},
+	)
+	assert.False(t, predicate(dbPath),
+		"a replacement container must require a new digest verification")
+}
+
+func TestOpenCodeForcePathsAlwaysListDigestForm(t *testing.T) {
+	const dbPath = "/data/opencode.db"
+	pre := map[string]parser.SQLiteContainerState{dbPath: {}}
+	for _, tc := range []struct {
+		name  string
+		force func(*Engine)
+	}{
+		{name: "force parse", force: func(e *Engine) { e.forceParse = true }},
+		{name: "force full parse", force: func(e *Engine) { e.forceFullParse = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Engine{}
+			tc.force(e)
+			assert.Nil(t, e.sqliteContainerListsWatermarkOnly(pre),
+				"force paths must not authorize watermark-only listing")
+		})
+	}
 }

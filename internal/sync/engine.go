@@ -675,13 +675,14 @@ type Engine struct {
 
 	// containerMu guards the OpenCode-family shared-SQLite freshness
 	// gate (see opencode_container_gate.go). trustedSQLiteContainers
-	// maps a container DB path to its state and verified session-ID
-	// set at the end of the last pass that verified every one of its
-	// discovered sessions; containerPass is the bookkeeping for the
-	// pass currently running (nil outside passes). Both are in-memory
+	// maps a container DB path to its state at the end of the last
+	// completed pass; digestVerifiedAt records when that container last
+	// completed a full composite listing. containerPass is the bookkeeping
+	// for the pass currently running (nil outside passes). All are in-memory
 	// only: a restart re-verifies once.
 	containerMu             gosync.Mutex
 	trustedSQLiteContainers map[string]trustedSQLiteContainer
+	digestVerifiedAt        map[string]time.Time
 	containerPass           *sqliteContainerPass
 
 	// storageTrustMu guards the per-session freshness gate for
@@ -921,6 +922,7 @@ func NewEngine(
 		providerMigrationModes:  providerModes,
 		providerStatHashers: buildProviderStatHashers(
 			providerFactoryMap(providerFactories)),
+		digestVerifiedAt:        make(map[string]time.Time),
 		providerWatchRoots:      make(map[parser.AgentType][]parser.WatchRoot),
 		projectIdentityCache:    make(map[string]projectIdentityCacheEntry),
 		projectIdentityWritten:  make(map[string]struct{}),
@@ -4994,6 +4996,13 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	}()
 
 	preContainerStates := e.capturePlannedSQLiteContainerStates(plans, fullCoverage)
+	e.beginStreamingSQLiteContainerPass(preContainerStates)
+	defer func() {
+		e.finishSQLiteContainerPass(
+			retErr != nil || stats.Aborted || stats.Failed > 0 || stats.providerFailures > 0,
+			fullCoverage,
+		)
+	}()
 	providers, completedScopes, failedRoots,
 		failures, discoveryErr, err := e.streamReconciliationCandidates(
 		ctx, plans, spool, preContainerStates,
@@ -5008,6 +5017,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		cleaned = true
 		return stats, metrics, 0, eligibility, err
 	}
+	e.finishStreamingSQLiteContainerDiscovery()
 	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
 	for _, completed := range completedScopes {
 		authoritativeProviders[completed.agent] = struct{}{}
@@ -5022,15 +5032,6 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			authoritativeProviders[parser.AgentFreebuff] = struct{}{}
 		}
 	}
-	e.beginStreamingSQLiteContainerPass(preContainerStates)
-	e.finishStreamingSQLiteContainerDiscovery()
-	defer func() {
-		e.finishSQLiteContainerPass(
-			retErr != nil || stats.Aborted || stats.Failed > 0 || stats.providerFailures > 0,
-			fullCoverage,
-		)
-	}()
-
 	var verifiedPass uint64
 	if fullCoverage && e.pathRewriter == nil {
 		verifiedPass = e.beginVerifiedSourcePass()
@@ -5056,12 +5057,6 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 		if len(page) == 0 {
 			break
-		}
-		for _, candidate := range page {
-			e.noteSQLiteContainerDiscovery(parser.DiscoveredFile{
-				Agent: candidate.Provider,
-				Path:  candidate.Path,
-			})
 		}
 		files, err := e.rehydrateReconciliationPage(
 			ctx, page, providers, force,
@@ -5573,7 +5568,9 @@ func (e *Engine) streamReconciliationCandidates(
 	// nothing reads. The predicate is keyed to this pass's pre-discovery
 	// captures; a container that changes mid-stream fails its recapture
 	// check and its candidates resolve full fingerprints instead.
-	containerTrusted := e.sqliteContainerTrustedForDiscovery(preContainerStates)
+	containerListsWatermarkOnly := e.sqliteContainerListsWatermarkOnly(
+		preContainerStates,
+	)
 	for _, plan := range plans {
 		agent := plan.agent
 		if plan.err != nil {
@@ -5610,8 +5607,8 @@ func (e *Engine) streamReconciliationCandidates(
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: traversalRoots, Machine: e.machine, PathRewriter: e.pathRewriter,
-			SourceMachines:                     e.sourceMachines[agent],
-			SQLiteContainerUnchangedSinceTrust: containerTrusted,
+			SourceMachines:                    e.sourceMachines[agent],
+			SQLiteContainerListsWatermarkOnly: containerListsWatermarkOnly,
 		})
 		providers[agent] = provider
 		if provider.Capabilities().Source.StreamingDiscovery != parser.CapabilitySupported {
@@ -5643,9 +5640,9 @@ func (e *Engine) streamReconciliationCandidates(
 			}
 			scopeProvider := factory.NewProvider(parser.ProviderConfig{
 				Roots: discoveryRoots, Machine: e.machine,
-				SourceMachines:                     e.sourceMachines[agent],
-				PathRewriter:                       e.pathRewriter,
-				SQLiteContainerUnchangedSinceTrust: containerTrusted,
+				SourceMachines:                    e.sourceMachines[agent],
+				PathRewriter:                      e.pathRewriter,
+				SQLiteContainerListsWatermarkOnly: containerListsWatermarkOnly,
 			})
 			discoverer, ok := scopeProvider.(parser.StreamingDiscoverer)
 			if !ok {
@@ -5707,6 +5704,11 @@ func (e *Engine) streamReconciliationCandidates(
 						candidate.Path,
 					)
 				}
+				e.noteSQLiteContainerDiscovery(parser.DiscoveredFile{
+					Agent:          candidate.Provider,
+					Path:           candidate.Path,
+					ProviderSource: &source,
+				})
 				spoolErr = spool.Add(ctx, candidate)
 				return spoolErr
 			})
@@ -7572,7 +7574,9 @@ func (e *Engine) discoverProviderSources(
 ) ([]parser.DiscoveredFile, int) {
 	var files []parser.DiscoveredFile
 	var failures int
-	containerTrusted := e.sqliteContainerTrustedForDiscovery(preContainerStates)
+	containerListsWatermarkOnly := e.sqliteContainerListsWatermarkOnly(
+		preContainerStates,
+	)
 
 	agents := make([]parser.AgentType, 0, len(e.providerFactories))
 	for agent := range e.providerFactories {
@@ -7614,11 +7618,11 @@ func (e *Engine) discoverProviderSources(
 			providerRoots = roots
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:                              providerRoots,
-			Machine:                            e.machine,
-			SourceMachines:                     e.sourceMachines[agentType],
-			PathRewriter:                       e.pathRewriter,
-			SQLiteContainerUnchangedSinceTrust: containerTrusted,
+			Roots:                             providerRoots,
+			Machine:                           e.machine,
+			SourceMachines:                    e.sourceMachines[agentType],
+			PathRewriter:                      e.pathRewriter,
+			SQLiteContainerListsWatermarkOnly: containerListsWatermarkOnly,
 		})
 		// Shared-database providers are streamed source-by-source by their
 		// dedicated sync phase. Calling Discover here would build an archive-sized
