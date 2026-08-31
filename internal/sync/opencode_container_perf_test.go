@@ -601,7 +601,9 @@ func TestOpenCodeDeletedChildDetectedViaReconciliation(t *testing.T) {
 	require.NoError(t, env.engine.ReconcileWatchRoots(
 		context.Background(), []string{env.opencodeDir}, false,
 	))
-	env.engine.SyncAll(context.Background(), nil)
+	// A fresh engine has no recent verification watermark, so the final pass is
+	// due for full-digest discovery without waiting for the interval.
+	newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
 
 	// Assert the observable outcome rather than which pass did the write:
 	// the removed assistant turn must no longer be archived.

@@ -722,28 +722,39 @@ func (e *Engine) poisonSQLiteContainerPass() {
 // here also keeps the compact state map aligned with current discovery.
 func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 	e.containerMu.Lock()
-	defer e.containerMu.Unlock()
 	pass := e.containerPass
-	e.containerPass = nil
-	if incomplete {
+	if incomplete || pass == nil || pass.poisoned {
+		e.containerPass = nil
 		if pass != nil {
 			e.clearDigestVerificationForPass(pass)
 		}
+		e.containerMu.Unlock()
+		return
+	}
+	e.containerMu.Unlock()
+
+	digestFailures := e.sqliteContainerDigestRevalidationFailures(pass)
+
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	if e.containerPass != pass {
+		return
+	}
+	e.containerPass = nil
+	if pass.poisoned {
+		e.clearDigestVerificationForPass(pass)
 		return
 	}
 	if fullDiscovery {
 		for dbPath := range e.trustedSQLiteContainers {
-			if pass == nil || pass.discovered[dbPath] == 0 {
+			if pass.discovered[dbPath] == 0 {
 				delete(e.trustedSQLiteContainers, dbPath)
 				delete(e.digestVerifiedAt, dbPath)
 			}
 		}
 	}
-	if pass == nil || pass.poisoned {
-		if pass != nil {
-			e.clearDigestVerificationForPass(pass)
-		}
-		return
+	for dbPath := range digestFailures {
+		pass.failed[dbPath] = true
 	}
 	for dbPath := range pass.failed {
 		delete(e.digestVerifiedAt, dbPath)
@@ -771,6 +782,34 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 			e.digestVerifiedAt[dbPath] = openCodeContainerDigestVerifyNow()
 		}
 	}
+}
+
+// sqliteContainerDigestRevalidationFailures rechecks full-digest containers
+// without holding containerMu during filesystem I/O.
+func (e *Engine) sqliteContainerDigestRevalidationFailures(
+	pass *sqliteContainerPass,
+) map[string]struct{} {
+	e.containerMu.Lock()
+	captures := make(map[string]parser.SQLiteContainerState,
+		len(pass.fullDigestListed))
+	failures := make(map[string]struct{})
+	for dbPath := range pass.fullDigestListed {
+		state, ok := pass.captured[dbPath]
+		if !ok {
+			failures[dbPath] = struct{}{}
+			continue
+		}
+		captures[dbPath] = state
+	}
+	e.containerMu.Unlock()
+
+	for dbPath, captured := range captures {
+		current, ok := statSQLiteContainerState(dbPath)
+		if !ok || current != captured {
+			failures[dbPath] = struct{}{}
+		}
+	}
+	return failures
 }
 
 // clearDigestVerificationForPass clears verification age for every container

@@ -650,6 +650,67 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 	})
 }
 
+// TestSQLiteContainerPassRechecksDigestCaptureAtFinalization ensures a late
+// write invalidates only its own full-digest promotion.
+func TestSQLiteContainerPassRechecksDigestCaptureAtFinalization(t *testing.T) {
+	changedDB, changedConn := newContainerTestDB(t)
+	unchangedDB, _ := newContainerTestDB(t)
+	changedState, ok := parser.StatSQLiteContainerState(changedDB)
+	require.True(t, ok, "changed container state must be readable")
+	unchangedState, ok := parser.StatSQLiteContainerState(unchangedDB)
+	require.True(t, ok, "unchanged container state must be readable")
+
+	verifiedAt := time.Unix(100, 0)
+	now := time.Unix(200, 0)
+	origNow := openCodeContainerDigestVerifyNow
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
+	openCodeContainerDigestVerifyNow = func() time.Time { return now }
+
+	e := &Engine{
+		trustedSQLiteContainers: map[string]trustedSQLiteContainer{
+			changedDB:   {state: changedState},
+			unchangedDB: {state: unchangedState},
+		},
+		digestVerifiedAt: map[string]time.Time{
+			changedDB:   verifiedAt,
+			unchangedDB: verifiedAt,
+		},
+	}
+	files := []parser.DiscoveredFile{
+		{Agent: parser.AgentOpenCode, Path: changedDB + "#changed"},
+		{Agent: parser.AgentOpenCode, Path: unchangedDB + "#unchanged"},
+	}
+	e.beginStreamingSQLiteContainerPass(map[string]parser.SQLiteContainerState{
+		changedDB: changedState, unchangedDB: unchangedState,
+	})
+	for _, file := range files {
+		e.noteSQLiteContainerDiscovery(file)
+	}
+	e.containerPass.fullDigestListed[changedDB] = true
+	e.containerPass.fullDigestListed[unchangedDB] = true
+	e.finishStreamingSQLiteContainerDiscovery()
+
+	_, err := changedConn.Exec("INSERT INTO session (id) VALUES ('changed')")
+	require.NoError(t, err, "mutate changed container after discovery")
+	changedAfter, ok := parser.StatSQLiteContainerState(changedDB)
+	require.True(t, ok, "changed container state must be readable after mutation")
+	require.NotEqual(t, changedState, changedAfter,
+		"the mutation must change the container state")
+
+	for _, file := range files {
+		e.noteSQLiteContainerResult(file.Path, true)
+	}
+	e.finishSQLiteContainerPass(false, true)
+
+	assert.NotContains(t, e.digestVerifiedAt, changedDB,
+		"a changed full-digest container must lose verification")
+	assert.Equal(t, changedState, e.trustedSQLiteContainers[changedDB].state,
+		"a changed container must retain its previous trusted state")
+	assert.Equal(t, unchangedState, e.trustedSQLiteContainers[unchangedDB].state)
+	assert.Equal(t, now, e.digestVerifiedAt[unchangedDB],
+		"an unchanged sibling must still receive a verification stamp")
+}
+
 // TestSQLiteContainerGateParsesNewlyUnshadowedSession pins the hybrid-root
 // invariant: hybrid discovery drops SQLite rows shadowed by a same-ID
 // storage JSON, so the discoverable row set can grow — a storage JSON
@@ -813,8 +874,9 @@ func TestOpenCodeDigestVerificationStampedOnlyByDigestPass(t *testing.T) {
 	now := time.Unix(100, 0)
 	openCodeContainerDigestVerifyNow = func() time.Time { return now }
 
-	const dbPath = "/data/opencode.db"
-	state := parser.SQLiteContainerState{}
+	dbPath, _ := newContainerTestDB(t)
+	state, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok, "container state must be readable")
 	file := parser.DiscoveredFile{
 		Agent: parser.AgentOpenCode,
 		Path:  dbPath + "#ses-1",

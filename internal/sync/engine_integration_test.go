@@ -820,7 +820,6 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 	require.NotNil(t, before.LocalModifiedAt,
 		"local_modified_at before rewrite")
 
-	time.Sleep(20 * time.Millisecond)
 	// The session row's own time_updated deliberately stays at
 	// 1779012030000. Production OpenCode stamps time_updated on every child
 	// row it writes, so the replacement children carry a newer one; that is
@@ -833,7 +832,9 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 		1779012600000,
 	)
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	// A fresh engine has no recent verification watermark, so this pass is due
+	// for full-digest discovery without waiting for the interval.
+	stats = newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"same-mtime SQLite fingerprint changes must be rewritten")
@@ -927,7 +928,6 @@ func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
 	before, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat opencode.db")
 
-	time.Sleep(20 * time.Millisecond)
 	// Same-length replacement content keeps the SQLite file size stable, and
 	// the mtime is restored below, so only SQLite's internal change counter
 	// betrays the rewrite.
@@ -942,7 +942,9 @@ func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
 		"fixture must keep the container size stable for this test")
 	setFileMtime(t, dbPath, before.ModTime().UnixNano())
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	// A fresh engine has no recent verification watermark, so this pass is due
+	// for full-digest discovery without waiting for the interval.
+	stats = newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"stat-identical content change must still be re-emitted")
