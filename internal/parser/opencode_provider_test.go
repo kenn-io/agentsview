@@ -1785,6 +1785,30 @@ func TestOpenCodeReconciliationKeepsStorageShadowSource(t *testing.T) {
 		"a storage shadow must not carry SQLite watermark metadata")
 }
 
+func TestIcodemateReconciliationUsesSourceStateResolver(t *testing.T) {
+	root := t.TempDir()
+	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "icodemate.db"))
+	seeder.AddSession(
+		"ses_a", "prj_1", "", "A", 1700000000000, 1700000010000,
+	)
+	t.Cleanup(func() { _ = db.Close() })
+
+	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	resolver, ok := provider.(ReconciliationSourceStateResolver)
+	require.True(t, ok)
+	source, found, err := resolver.SourceForReconciliationWithState(
+		t.Context(), dbPath+"#ses_a", "",
+		ReconciliationSourceState{Version: 1, Payload: []byte("state")},
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, AgentIcodemate, source.Provider)
+	assert.Equal(t, dbPath+"#ses_a", source.DisplayPath)
+}
+
 // TestOpenCodeWatermarkOnlyQuerySkipsDigestScans pins that the mtime-only path
 // does not compute the digest aggregates. OpenCodeSourceMtime backs the session
 // watcher's 1.5s poll, so pulling the eight child COUNT/SUM/MIN/MAX subqueries

@@ -21,9 +21,10 @@ import (
 // roots fall through to the generic directory plan.
 
 var (
-	_ Provider                     = (*icodemateProvider)(nil)
-	_ StreamingDiscoverer          = (*icodemateProvider)(nil)
-	_ ChangedPathRelevanceProvider = (*icodemateProvider)(nil)
+	_ Provider                          = (*icodemateProvider)(nil)
+	_ StreamingDiscoverer               = (*icodemateProvider)(nil)
+	_ ChangedPathRelevanceProvider      = (*icodemateProvider)(nil)
+	_ ReconciliationSourceStateResolver = (*icodemateProvider)(nil)
 )
 
 type icodemateProviderFactory struct {
@@ -262,6 +263,14 @@ func (p *icodemateProvider) SourceForReconciliation(
 	ctx context.Context, path, project string,
 ) (SourceRef, bool, error) {
 	return p.allSources.SourceForReconciliation(ctx, path, project)
+}
+
+func (p *icodemateProvider) SourceForReconciliationWithState(
+	ctx context.Context, path, project string, state ReconciliationSourceState,
+) (SourceRef, bool, error) {
+	return p.allSources.SourceForReconciliationWithState(
+		ctx, path, project, state,
+	)
 }
 
 func (p *icodemateProvider) ReconciliationSourceState(
