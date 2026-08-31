@@ -145,6 +145,50 @@ func TestReconciliationMalformedStateFallsBackToAuthoritativeSource(t *testing.T
 		"malformed optional state must not be applied")
 }
 
+func TestReconciliationStateFallsBackAfterContainerChanges(t *testing.T) {
+	container, conn := newContainerTestDB(t)
+	source := parser.SourceRef{
+		Provider:       parser.AgentOpenCode,
+		DisplayPath:    container + "#ses_a",
+		FingerprintKey: container + "#ses_a",
+		Key:            container + "#ses_a",
+	}
+	provider := &reconciliationSourceStateTestProvider{
+		source: source,
+		state: parser.ReconciliationSourceState{
+			Version: 1,
+			Payload: []byte("discovery-state"),
+		},
+	}
+	before, ok := parser.StatSQLiteContainerState(container)
+	require.True(t, ok, "container state must be readable")
+	engine := &Engine{}
+	engine.beginStreamingSQLiteContainerPass(
+		map[string]parser.SQLiteContainerState{container: before},
+	)
+
+	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
+	require.NoError(t, err, "change container after discovery")
+	files, err := engine.rehydrateReconciliationPage(
+		t.Context(), []reconciliationCandidate{{
+			Provider:    parser.AgentOpenCode,
+			Identity:    "ses_a",
+			Path:        source.DisplayPath,
+			SourceState: provider.state,
+		}},
+		map[parser.AgentType]parser.Provider{
+			parser.AgentOpenCode: provider,
+		},
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Empty(t, provider.applied,
+		"stale discovery state must not be applied after container change")
+	assert.True(t, engine.containerPass.failed[container],
+		"changed container must fail the current reconciliation pass")
+}
+
 // newContainerTestDB creates a real SQLite file named like an OpenCode
 // container, so the pass's post-discovery recapture has something to stat.
 func newContainerTestDB(t *testing.T) (string, *sql.DB) {

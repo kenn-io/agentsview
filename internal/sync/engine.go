@@ -6109,6 +6109,7 @@ func (e *Engine) rehydrateReconciliationPage(
 	providers map[parser.AgentType]parser.Provider,
 	force bool,
 ) ([]parser.DiscoveredFile, error) {
+	e.refreshReconciliationPageContainerCaptures(page)
 	files := make([]parser.DiscoveredFile, 0, len(page))
 	for _, candidate := range page {
 		forceCandidate := force
@@ -6124,8 +6125,9 @@ func (e *Engine) rehydrateReconciliationPage(
 				return nil, fmt.Errorf("rehydrate %s source %s: %w", candidate.Provider, candidate.Path, err)
 			}
 			if found && reconciliationSourceIdentity(candidate.Provider, source) == candidate.Identity {
-				if applyReconciliationSourceStateIfValid(
+				if e.applyReconciliationSourceStateIfValid(
 					provider, &source, candidate.SourceState,
+					candidate.Provider, candidate.Path,
 				) {
 					files = append(files, parser.DiscoveredFile{
 						Path: candidate.Path, Project: source.ProjectHint,
@@ -6155,8 +6157,9 @@ func (e *Engine) rehydrateReconciliationPage(
 			return nil, fmt.Errorf("rehydrate %s source %s: canonical source not found", candidate.Provider, candidate.Path)
 		}
 		source := *matched
-		_ = applyReconciliationSourceStateIfValid(
+		_ = e.applyReconciliationSourceStateIfValid(
 			provider, &source, candidate.SourceState,
+			candidate.Provider, candidate.Path,
 		)
 		files = append(files, parser.DiscoveredFile{
 			Path: candidate.Path, Project: source.ProjectHint,
@@ -6171,16 +6174,72 @@ func (e *Engine) rehydrateReconciliationPage(
 	return files, nil
 }
 
+// refreshReconciliationPageContainerCaptures invalidates SQLite container
+// captures that changed after discovery and before a spool page was rehydrated.
+// This keeps a full child digest from becoming stale while it is still being
+// used to avoid per-member child lookups.
+func (e *Engine) refreshReconciliationPageContainerCaptures(
+	page []reconciliationCandidate,
+) {
+	e.containerMu.Lock()
+	pass := e.containerPass
+	if pass == nil {
+		e.containerMu.Unlock()
+		return
+	}
+	expected := make(map[string]parser.SQLiteContainerState)
+	for _, candidate := range page {
+		dbPath, _, ok := sqliteContainerSourceForFile(parser.DiscoveredFile{
+			Agent: candidate.Provider, Path: candidate.Path,
+		})
+		if !ok || pass.failed[dbPath] {
+			continue
+		}
+		state, captured := pass.captured[dbPath]
+		if !captured {
+			pass.failed[dbPath] = true
+			continue
+		}
+		expected[dbPath] = state
+	}
+	e.containerMu.Unlock()
+
+	for dbPath, before := range expected {
+		after, ok := statSQLiteContainerState(dbPath)
+		if ok && after == before {
+			continue
+		}
+		e.containerMu.Lock()
+		if e.containerPass == pass {
+			pass.failed[dbPath] = true
+		}
+		e.containerMu.Unlock()
+	}
+}
+
 // applyReconciliationSourceStateIfValid treats provider state as an optional
-// optimization. Missing or malformed state falls through to the authoritative
-// changed-path source resolution instead of aborting reconciliation.
-func applyReconciliationSourceStateIfValid(
+// optimization. Missing, malformed, or stale state falls through to the
+// authoritative changed-path source resolution instead of aborting
+// reconciliation.
+func (e *Engine) applyReconciliationSourceStateIfValid(
 	provider parser.Provider,
 	source *parser.SourceRef,
 	state parser.ReconciliationSourceState,
+	agent parser.AgentType,
+	path string,
 ) bool {
 	if state.Version == 0 {
 		return true
+	}
+	if dbPath, _, ok := sqliteContainerSourceForFile(parser.DiscoveredFile{
+		Agent: agent, Path: path,
+	}); ok {
+		e.containerMu.Lock()
+		passActive := e.containerPass != nil
+		e.containerMu.Unlock()
+		if passActive && !e.sqliteContainerPassCaptureValid(dbPath) {
+			return false
+		}
 	}
 	stateProvider, ok := provider.(parser.ReconciliationSourceStateProvider)
 	if !ok {
