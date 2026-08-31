@@ -939,23 +939,26 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 		if !ok {
 			continue
 		}
-		if dbPath, sessionID, sqlite := s.spec.parseVirtual(path); sqlite &&
-			s.containerListsWatermarkOnly != nil &&
-			s.containerListsWatermarkOnly(dbPath) {
-			watermark, composite, found, err :=
-				openCodeSQLiteSessionWatermarkOnly(ctx, dbPath, sessionID)
-			if err != nil {
-				return SourceRef{}, false, err
-			}
-			if !found {
-				return SourceRef{}, false, nil
-			}
-			if composite {
-				if src, ok := source.Opaque.(openCodeFormatSource); ok {
-					src.MTimeNS = watermark * 1_000_000
-					src.CompositeMTime = true
-					src.WatermarkOnly = true
-					source.Opaque = src
+		sourcePath, sourcePathOK := s.pathFromSource(source)
+		if sourcePathOK {
+			if dbPath, sessionID, sqlite := s.spec.parseVirtual(sourcePath); sqlite &&
+				s.containerListsWatermarkOnly != nil &&
+				s.containerListsWatermarkOnly(dbPath) {
+				watermark, composite, found, err :=
+					openCodeSQLiteSessionWatermarkOnly(ctx, dbPath, sessionID)
+				if err != nil {
+					return SourceRef{}, false, err
+				}
+				if !found {
+					return SourceRef{}, false, nil
+				}
+				if composite {
+					if src, ok := source.Opaque.(openCodeFormatSource); ok {
+						src.MTimeNS = watermark * 1_000_000
+						src.CompositeMTime = true
+						src.WatermarkOnly = true
+						source.Opaque = src
+					}
 				}
 			}
 		}
