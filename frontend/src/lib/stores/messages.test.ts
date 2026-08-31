@@ -161,6 +161,51 @@ describe("MessagesStore", () => {
     expect(sessionsStore.markActiveSessionMissing).not.toHaveBeenCalled();
   });
 
+  it("does not report a stale metadata 404 after a newer load for the same session", async () => {
+    const staleProbe = createDeferred<Session>();
+    vi.mocked(api.getSession).mockReturnValueOnce(staleProbe.promise);
+    const staleLoad = messages.loadSession("s1");
+    await Promise.resolve();
+    messages.cancelInFlight();
+
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession("s1", 1));
+    vi.mocked(api.getMessages).mockResolvedValue(
+      makeMessagesResponse([makeMessage(0)]),
+    );
+    await messages.loadSession("s1");
+    expect(messages.messages).toHaveLength(1);
+
+    staleProbe.reject(new Error("session not found"));
+    await staleLoad;
+
+    expect(sessionsStore.markActiveSessionMissing).not.toHaveBeenCalled();
+  });
+
+  it("does not report a stale message-load failure after a newer load for the same session", async () => {
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession("s1", 1));
+    const stalePage = createDeferred<MessagesResponse>();
+    vi.mocked(api.getMessages).mockReturnValueOnce(
+      stalePage.promise as ReturnType<typeof api.getMessages>,
+    );
+    const staleLoad = messages.loadSession("s1");
+    await vi.waitFor(() => {
+      expect(vi.mocked(api.getMessages)).toHaveBeenCalledTimes(1);
+    });
+    messages.cancelInFlight();
+
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession("s1", 1));
+    vi.mocked(api.getMessages).mockResolvedValue(
+      makeMessagesResponse([makeMessage(0)]),
+    );
+    await messages.loadSession("s1");
+    expect(messages.messages).toHaveLength(1);
+
+    stalePage.reject(new Error("session not found"));
+    await staleLoad;
+
+    expect(sessionsStore.markActiveSessionMissing).not.toHaveBeenCalled();
+  });
+
   it('aborts in-flight reads without clearing cached messages', async () => {
     await setupSession('s1', 1, [makeMessage(0)]);
     const cached = messages.messages;
