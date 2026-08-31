@@ -251,82 +251,6 @@ func TestReconciliationShadowPromotionSurvivesContainerChange(t *testing.T) {
 		"the promoted storage shadow source must be kept")
 }
 
-func TestFailedSQLiteContainerPassDropsCarriedProviderState(t *testing.T) {
-	container, _ := newContainerTestDB(t)
-	source := parser.SourceRef{
-		Provider:       parser.AgentOpenCode,
-		DisplayPath:    container + "#ses_a",
-		FingerprintKey: container + "#ses_a",
-		Key:            container + "#ses_a",
-	}
-	engine := &Engine{}
-	engine.beginStreamingSQLiteContainerPass(
-		map[string]parser.SQLiteContainerState{
-			container: {},
-		},
-	)
-	engine.containerPass.failed[container] = true
-	file := parser.DiscoveredFile{
-		Agent:          parser.AgentOpenCode,
-		Path:           source.DisplayPath,
-		ProviderSource: &source,
-	}
-
-	engine.discardStaleSQLiteProviderSource(&file)
-
-	assert.Nil(t, file.ProviderSource,
-		"failed container must re-resolve instead of using carried state")
-}
-
-// TestMidPassContainerWriteDropsCarriedProviderState pins the worker-boundary
-// recheck: a write landing after the post-discovery recapture invalidates the
-// carried full-digest source, so the changed session re-resolves live instead
-// of skipping on its pre-change digest.
-func TestMidPassContainerWriteDropsCarriedProviderState(t *testing.T) {
-	container, conn := newContainerTestDB(t)
-	source := parser.SourceRef{
-		Provider:       parser.AgentOpenCode,
-		DisplayPath:    container + "#ses_a",
-		FingerprintKey: container + "#ses_a",
-		Key:            container + "#ses_a",
-	}
-	pre, ok := parser.StatSQLiteContainerState(container)
-	require.True(t, ok, "container state must be readable")
-	engine := &Engine{}
-	engine.beginStreamingSQLiteContainerPass(
-		map[string]parser.SQLiteContainerState{container: pre},
-	)
-	file := parser.DiscoveredFile{
-		Agent:          parser.AgentOpenCode,
-		Path:           source.DisplayPath,
-		ProviderSource: &source,
-	}
-
-	engine.discardStaleSQLiteProviderSource(&file)
-	require.NotNil(t, file.ProviderSource,
-		"an unchanged capture keeps the carried source")
-
-	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
-	require.NoError(t, err, "write container after recapture")
-
-	engine.discardStaleSQLiteProviderSource(&file)
-	assert.Nil(t, file.ProviderSource,
-		"a mid-pass container write must drop the carried source")
-	assert.True(t, engine.containerPass.failed[container],
-		"the recheck must fail the container for the rest of the pass")
-
-	// A failure recorded by another worker after this file's recheck must
-	// still drop the carried source at the consumption boundary.
-	late := parser.DiscoveredFile{
-		Agent:          parser.AgentOpenCode,
-		Path:           source.DisplayPath,
-		ProviderSource: &source,
-	}
-	engine.discardFailedSQLiteProviderSource(&late)
-	assert.Nil(t, late.ProviderSource,
-		"a recorded container failure must drop carried sources without a stat")
-}
-
 // newContainerTestDB creates a real SQLite file named like an OpenCode
 // container, so the pass's post-discovery recapture has something to stat.
 func newContainerTestDB(t *testing.T) (string, *sql.DB) {
@@ -616,54 +540,6 @@ func TestDiscoveredFileWatermarkCutoffRequiresLiveCapture(t *testing.T) {
 		"a live capture lets the carried watermark decide the cutoff")
 }
 
-// TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures pins the gate's
-// ordering invariant: the state promoted to trusted must have been captured
-// BEFORE discovery listed the container's sessions. Discovery reads the
-// session rows first, so a state captured afterwards can be newer than the
-// discovered set — a session written in between would then be gate-skipped
-// forever without ever being parsed. Containers with no pre-discovery
-// capture must therefore never be promoted, and promoted states must be
-// exactly the pre-discovery ones.
-func TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures(t *testing.T) {
-	t.Run("missing pre-discovery capture blocks promotion", func(t *testing.T) {
-		e := &Engine{}
-		files := []parser.DiscoveredFile{
-			{Agent: parser.AgentOpenCode, Path: "/data/opencode.db#ses-1"},
-			{Agent: parser.AgentOpenCode, Path: "/data/opencode.db#ses-2"},
-		}
-		e.beginSQLiteContainerPass(
-			files, map[string]parser.SQLiteContainerState{},
-		)
-		e.noteSQLiteContainerResult("/data/opencode.db#ses-1", true)
-		e.noteSQLiteContainerResult("/data/opencode.db#ses-2", true)
-		e.finishSQLiteContainerPass(false, true)
-		assert.Empty(t, e.trustedSQLiteContainers,
-			"a container without a pre-discovery capture must not be trusted")
-	})
-
-	t.Run("promoted state is the pre-discovery capture", func(t *testing.T) {
-		e := &Engine{}
-		dbPath, _ := newContainerTestDB(t)
-		pre, ok := parser.StatSQLiteContainerState(dbPath)
-		require.True(t, ok, "container state must be readable")
-		files := []parser.DiscoveredFile{
-			{Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1"},
-			{Agent: parser.AgentOpenCode, Path: dbPath + "#ses-2"},
-		}
-		e.beginSQLiteContainerPass(
-			files,
-			map[string]parser.SQLiteContainerState{dbPath: pre},
-		)
-		e.noteSQLiteContainerResult(dbPath+"#ses-1", true)
-		e.noteSQLiteContainerResult(dbPath+"#ses-2", true)
-		e.finishSQLiteContainerPass(false, true)
-		require.Contains(t, e.trustedSQLiteContainers, dbPath)
-		trusted := e.trustedSQLiteContainers[dbPath]
-		assert.Equal(t, pre, trusted.state,
-			"trusted state must be exactly the pre-discovery capture")
-	})
-}
-
 func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *testing.T) {
 	firstDB, _ := newContainerTestDB(t)
 	secondDB, _ := newContainerTestDB(t)
@@ -690,126 +566,448 @@ func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *tes
 	assert.Equal(t, []string{filepath.Clean(firstDB)}, statPaths)
 }
 
-// TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch pins the pass's
-// recapture check: a container that changed between the pre-discovery
-// capture and pass begin must neither gate-skip nor be promoted. The
-// discovered session set may already include the change, so gating against
-// the pre-discovery state — which still matches the trusted state — would
-// skip the changed sessions for the whole pass.
-func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
-	e := &Engine{}
-	dbPath, conn := newContainerTestDB(t)
-	pre, ok := parser.StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "container state must be readable")
-	// The container is trusted at the pre-discovery state, as after a
-	// fully verified idle pass.
-	e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
-		dbPath: {state: pre},
-	}
-	e.digestVerifiedAt = map[string]time.Time{
-		dbPath: time.Unix(100, 0),
-	}
-
-	// The container changes inside the capture-discovery window.
-	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses-1')")
-	require.NoError(t, err, "write session inside the window")
-
-	file := parser.DiscoveredFile{
-		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
-	}
-	e.beginSQLiteContainerPass(
-		[]parser.DiscoveredFile{file},
-		map[string]parser.SQLiteContainerState{dbPath: pre},
+// TestSQLiteContainerTrustLifecycle drives the gate's one trust invariant
+// through a matrix: trust — promotion, verification stamps, gate skips,
+// carried provider sources — is granted only by a pass that observed the
+// container's current bytes, and failures, mismatches, changes,
+// replacements, and resyncs clear exactly the affected containers.
+//
+// Prior trust is seeded with a sentinel state distinct from every capture, so
+// "kept the prior state" and "promoted the capture" are distinguishable
+// outcomes. Every row also scripts a sibling container where the invariant is
+// per-container: attributed evidence clears only its own container, while a
+// poisoned pass clears every captured one.
+func TestSQLiteContainerTrustLifecycle(t *testing.T) {
+	type captureKind int
+	const (
+		captureLive captureKind = iota
+		captureStale
+		captureMissing
+	)
+	type resultKind int
+	const (
+		resultComplete resultKind = iota
+		resultFailed
+		resultPoisoned
+	)
+	type finishKind int
+	const (
+		finishFull finishKind = iota
+		finishScoped
+		finishIncomplete
+	)
+	type stateWant int
+	const (
+		wantAbsent stateWant = iota
+		wantPrior
+		wantFresh
 	)
 
-	assert.False(t, e.sqliteContainerSourceFresh(file),
-		"a mismatched container must not gate-skip its sessions")
-
-	e.noteSQLiteContainerResult(file.Path, true)
-	e.finishSQLiteContainerPass(false, true)
-	assert.Equal(t, pre, e.trustedSQLiteContainers[dbPath].state,
-		"a mismatched container must not be promoted past its trusted state")
-	assert.NotContains(t, e.digestVerifiedAt, dbPath,
-		"a mismatched capture must invalidate verification age")
-
-	t.Run("missing pre-discovery capture invalidates old verification", func(t *testing.T) {
-		e := &Engine{
-			trustedSQLiteContainers: map[string]trustedSQLiteContainer{
-				dbPath: {state: pre},
-			},
-			digestVerifiedAt: map[string]time.Time{
-				dbPath: time.Unix(100, 0),
-			},
-		}
-		e.beginSQLiteContainerPass(
-			[]parser.DiscoveredFile{file}, map[string]parser.SQLiteContainerState{},
-		)
-		e.noteSQLiteContainerResult(file.Path, true)
-		e.finishSQLiteContainerPass(false, true)
-		assert.NotContains(t, e.digestVerifiedAt, dbPath,
-			"a missing capture must invalidate verification age")
-	})
-}
-
-// TestSQLiteContainerPassRechecksDigestCaptureAtFinalization ensures a late
-// write invalidates only its own full-digest promotion.
-func TestSQLiteContainerPassRechecksDigestCaptureAtFinalization(t *testing.T) {
-	changedDB, changedConn := newContainerTestDB(t)
-	unchangedDB, _ := newContainerTestDB(t)
-	changedState, ok := parser.StatSQLiteContainerState(changedDB)
-	require.True(t, ok, "changed container state must be readable")
-	unchangedState, ok := parser.StatSQLiteContainerState(unchangedDB)
-	require.True(t, ok, "unchanged container state must be readable")
-
-	verifiedAt := time.Unix(100, 0)
+	prior := time.Unix(100, 0)
 	now := time.Unix(200, 0)
 	origNow := openCodeContainerDigestVerifyNow
 	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
 	openCodeContainerDigestVerifyNow = func() time.Time { return now }
 
-	e := &Engine{
-		trustedSQLiteContainers: map[string]trustedSQLiteContainer{
-			changedDB:   {state: changedState},
-			unchangedDB: {state: unchangedState},
+	for _, tc := range []struct {
+		name       string
+		priorTrust bool
+		// priorTrustCapture seeds trust with the capture itself, so a gate
+		// probe cannot pass on mere state inequality.
+		priorTrustCapture bool
+		priorStamp        bool
+		capture           captureKind
+		digestList        bool
+		// lateWrite mutates the container after discovery's recapture, so
+		// only finalization revalidation can observe it.
+		lateWrite bool
+		result    resultKind
+		finish    finishKind
+		// sibling adds a second captured, stamped container; discovered
+		// siblings are digest-listed and complete cleanly.
+		sibling           bool
+		siblingDiscovered bool
+		probeMemberStale  bool
+		wantTrust         stateWant
+		wantStamp         stateWant
+		wantSiblingTrust  stateWant
+		wantSiblingStamp  stateWant
+	}{
+		{
+			// A capture taken after discovery could be newer than the listed
+			// session set; promoting it would gate-skip an unparsed write.
+			name:      "complete full pass without a capture earns no trust",
+			capture:   captureMissing,
+			wantTrust: wantAbsent,
 		},
-		digestVerifiedAt: map[string]time.Time{
-			changedDB:   verifiedAt,
-			unchangedDB: verifiedAt,
+		{
+			name:      "clean complete full pass promotes exactly the pre-discovery capture",
+			capture:   captureLive,
+			wantTrust: wantFresh,
 		},
+		{
+			name:       "digest-listed clean pass stamps verification",
+			capture:    captureLive,
+			digestList: true,
+			wantTrust:  wantFresh,
+			wantStamp:  wantFresh,
+		},
+		{
+			name:       "watermark-listed pass never refreshes the stamp",
+			priorStamp: true,
+			capture:    captureLive,
+			wantTrust:  wantFresh,
+			wantStamp:  wantPrior,
+		},
+		{
+			// The discovered session set may already include the change, so
+			// gating against the pre-discovery state would skip it while it
+			// still matches the trusted state.
+			name:             "capture-discovery mismatch fails the container for the pass",
+			priorTrust:       true,
+			priorStamp:       true,
+			capture:          captureStale,
+			probeMemberStale: true,
+			wantTrust:        wantPrior,
+			wantStamp:        wantAbsent,
+		},
+		{
+			// With trust equal to the capture, only the mismatch-failed flag
+			// can block the gate skip, so this row pins the guard itself; the
+			// sentinel row above pins state retention. The retained trust
+			// equals the capture here, so wantFresh reads as retention.
+			name:              "capture-discovery mismatch blocks gate skip under matching trust",
+			priorTrustCapture: true,
+			capture:           captureStale,
+			probeMemberStale:  true,
+			wantTrust:         wantFresh,
+			wantStamp:         wantAbsent,
+		},
+		{
+			name:       "missing capture invalidates prior verification",
+			priorTrust: true,
+			priorStamp: true,
+			capture:    captureMissing,
+			wantTrust:  wantPrior,
+			wantStamp:  wantAbsent,
+		},
+		{
+			name:              "post-discovery write is caught at finalization, per container",
+			priorTrust:        true,
+			priorStamp:        true,
+			capture:           captureLive,
+			digestList:        true,
+			lateWrite:         true,
+			sibling:           true,
+			siblingDiscovered: true,
+			wantTrust:         wantPrior,
+			wantStamp:         wantAbsent,
+			wantSiblingTrust:  wantFresh,
+			wantSiblingStamp:  wantFresh,
+		},
+		{
+			name:       "failed digest pass clears the stamp",
+			priorTrust: true,
+			priorStamp: true,
+			capture:    captureLive,
+			digestList: true,
+			result:     resultFailed,
+			wantTrust:  wantPrior,
+			wantStamp:  wantAbsent,
+		},
+		{
+			name:       "clean incomplete pass preserves verification without promoting",
+			priorStamp: true,
+			capture:    captureLive,
+			finish:     finishIncomplete,
+			wantTrust:  wantAbsent,
+			wantStamp:  wantPrior,
+		},
+		{
+			name:             "attributed failure clears only its own container",
+			priorStamp:       true,
+			capture:          captureLive,
+			result:           resultFailed,
+			finish:           finishIncomplete,
+			sibling:          true,
+			wantStamp:        wantAbsent,
+			wantSiblingStamp: wantPrior,
+		},
+		{
+			name:             "poisoned incomplete pass clears every captured verification",
+			priorStamp:       true,
+			capture:          captureLive,
+			result:           resultPoisoned,
+			finish:           finishIncomplete,
+			sibling:          true,
+			wantStamp:        wantAbsent,
+			wantSiblingStamp: wantAbsent,
+		},
+		{
+			name:             "poisoned complete pass clears instead of promoting",
+			priorStamp:       true,
+			capture:          captureLive,
+			digestList:       true,
+			result:           resultPoisoned,
+			finish:           finishFull,
+			sibling:          true,
+			wantTrust:        wantAbsent,
+			wantStamp:        wantAbsent,
+			wantSiblingStamp: wantAbsent,
+		},
+		{
+			name:             "clean scoped pass preserves uncovered verification",
+			priorStamp:       true,
+			capture:          captureLive,
+			finish:           finishScoped,
+			sibling:          true,
+			wantTrust:        wantFresh,
+			wantStamp:        wantPrior,
+			wantSiblingTrust: wantAbsent,
+			wantSiblingStamp: wantPrior,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath, conn := newContainerTestDB(t)
+			capture, ok := parser.StatSQLiteContainerState(dbPath)
+			require.True(t, ok, "container state must be readable")
+			if tc.capture == captureStale {
+				_, err := conn.Exec("INSERT INTO session (id) VALUES ('w1')")
+				require.NoError(t, err,
+					"write inside the capture-discovery window")
+			}
+			sentinel := capture
+			sentinel.DBChangeCounter += 100
+
+			e := &Engine{}
+			if tc.priorTrust {
+				e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
+					dbPath: {state: sentinel},
+				}
+			}
+			if tc.priorTrustCapture {
+				e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
+					dbPath: {state: capture},
+				}
+			}
+			if tc.priorStamp {
+				e.digestVerifiedAt = map[string]time.Time{dbPath: prior}
+			}
+			states := map[string]parser.SQLiteContainerState{}
+			if tc.capture != captureMissing {
+				states[dbPath] = capture
+			}
+			var siblingPath string
+			if tc.sibling {
+				siblingPath, _ = newContainerTestDB(t)
+				siblingState, ok := parser.StatSQLiteContainerState(siblingPath)
+				require.True(t, ok, "sibling state must be readable")
+				states[siblingPath] = siblingState
+				if e.digestVerifiedAt == nil {
+					e.digestVerifiedAt = map[string]time.Time{}
+				}
+				e.digestVerifiedAt[siblingPath] = prior
+			}
+
+			fileA := parser.DiscoveredFile{
+				Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
+			}
+			files := []parser.DiscoveredFile{fileA}
+			fileB := parser.DiscoveredFile{
+				Agent: parser.AgentOpenCode, Path: siblingPath + "#ses-1",
+			}
+			if tc.siblingDiscovered {
+				files = append(files, fileB)
+			}
+			e.beginSQLiteContainerPass(files, states)
+			if tc.digestList {
+				e.containerPass.fullDigestListed[dbPath] = true
+			}
+			if tc.siblingDiscovered {
+				e.containerPass.fullDigestListed[siblingPath] = true
+			}
+			if tc.probeMemberStale {
+				assert.False(t, e.sqliteContainerSourceFresh(fileA),
+					"an unobserved container must not gate-skip its sessions")
+			}
+			if tc.lateWrite {
+				_, err := conn.Exec("INSERT INTO session (id) VALUES ('w2')")
+				require.NoError(t, err, "write after discovery")
+			}
+			switch tc.result {
+			case resultComplete:
+				e.noteSQLiteContainerResult(fileA.Path, true)
+			case resultFailed:
+				e.noteSQLiteContainerResult(fileA.Path, false)
+			case resultPoisoned:
+				e.noteSQLiteContainerResult(fileA.Path, true)
+				e.poisonSQLiteContainerPass()
+			}
+			if tc.siblingDiscovered {
+				e.noteSQLiteContainerResult(fileB.Path, true)
+			}
+			switch tc.finish {
+			case finishFull:
+				e.finishSQLiteContainerPass(false, true)
+			case finishScoped:
+				e.finishSQLiteContainerPass(false, false)
+			case finishIncomplete:
+				e.finishSQLiteContainerPass(true, false)
+			}
+
+			assertTrust := func(path string, want stateWant, label string) {
+				t.Helper()
+				got, ok := e.trustedSQLiteContainers[path]
+				switch want {
+				case wantAbsent:
+					assert.False(t, ok, "%s: trust must be absent", label)
+				case wantPrior:
+					require.True(t, ok, "%s: trust must survive", label)
+					assert.Equal(t, sentinel, got.state,
+						"%s: trust must stay the prior state", label)
+				case wantFresh:
+					require.True(t, ok, "%s: trust must be promoted", label)
+					assert.Equal(t, states[path], got.state,
+						"%s: trust must be exactly the pre-discovery capture",
+						label)
+				}
+			}
+			assertStamp := func(path string, want stateWant, label string) {
+				t.Helper()
+				got, ok := e.digestVerifiedAt[path]
+				switch want {
+				case wantAbsent:
+					assert.False(t, ok, "%s: stamp must be cleared", label)
+				case wantPrior:
+					require.True(t, ok, "%s: stamp must survive", label)
+					assert.Equal(t, prior, got,
+						"%s: stamp must keep its prior age", label)
+				case wantFresh:
+					require.True(t, ok, "%s: stamp must be written", label)
+					assert.Equal(t, now, got,
+						"%s: stamp must be refreshed", label)
+				}
+			}
+			assertTrust(dbPath, tc.wantTrust, "container")
+			assertStamp(dbPath, tc.wantStamp, "container")
+			if tc.sibling {
+				assertTrust(siblingPath, tc.wantSiblingTrust, "sibling")
+				assertStamp(siblingPath, tc.wantSiblingStamp, "sibling")
+			}
+		})
 	}
-	files := []parser.DiscoveredFile{
-		{Agent: parser.AgentOpenCode, Path: changedDB + "#changed"},
-		{Agent: parser.AgentOpenCode, Path: unchangedDB + "#unchanged"},
-	}
-	e.beginStreamingSQLiteContainerPass(map[string]parser.SQLiteContainerState{
-		changedDB: changedState, unchangedDB: unchangedState,
+
+	t.Run("replacement admission", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "opencode.db")
+		previous := parser.SQLiteContainerState{
+			DBInode: 10, DBDevice: 20, DBChangeCounter: 10,
+		}
+		admits := func(trusted, current parser.SQLiteContainerState) bool {
+			e := &Engine{
+				trustedSQLiteContainers: map[string]trustedSQLiteContainer{
+					dbPath: {state: trusted},
+				},
+				digestVerifiedAt: map[string]time.Time{dbPath: now},
+			}
+			return e.sqliteContainerListsWatermarkOnly(
+				map[string]parser.SQLiteContainerState{dbPath: current},
+			)(dbPath)
+		}
+		newIdentity := previous
+		newIdentity.DBInode = 11
+		noIdentity := previous
+		noIdentity.DBInode, noIdentity.DBDevice = 0, 0
+		rolledBack := previous
+		rolledBack.DBChangeCounter--
+		advanced := previous
+		advanced.DBChangeCounter++
+		assert.False(t, admits(previous, newIdentity),
+			"a replacement container must require a new digest verification")
+		assert.False(t, admits(noIdentity, noIdentity),
+			"unavailable identity must fail closed to full digest listing")
+		assert.False(t, admits(previous, rolledBack),
+			"a change-counter rollback is a restore and must re-verify")
+		assert.True(t, admits(previous, advanced),
+			"a normal in-place transaction may retain the fast path")
 	})
-	for _, file := range files {
-		e.noteSQLiteContainerDiscovery(file)
-	}
-	e.containerPass.fullDigestListed[changedDB] = true
-	e.containerPass.fullDigestListed[unchangedDB] = true
-	e.finishStreamingSQLiteContainerDiscovery()
 
-	_, err := changedConn.Exec("INSERT INTO session (id) VALUES ('changed')")
-	require.NoError(t, err, "mutate changed container after discovery")
-	changedAfter, ok := parser.StatSQLiteContainerState(changedDB)
-	require.True(t, ok, "changed container state must be readable after mutation")
-	require.NotEqual(t, changedState, changedAfter,
-		"the mutation must change the container state")
+	// A write landing after the post-discovery recapture invalidates the
+	// carried full-digest source, so the changed session re-resolves live
+	// instead of skipping on its pre-change digest; once the failure is
+	// recorded, both discard paths drop later carried sources without
+	// another stat.
+	t.Run("carried source drops on container evidence", func(t *testing.T) {
+		container, conn := newContainerTestDB(t)
+		pre, ok := parser.StatSQLiteContainerState(container)
+		require.True(t, ok, "container state must be readable")
+		e := &Engine{}
+		e.beginStreamingSQLiteContainerPass(
+			map[string]parser.SQLiteContainerState{container: pre},
+		)
+		carried := func() parser.DiscoveredFile {
+			source := parser.SourceRef{
+				Provider:       parser.AgentOpenCode,
+				DisplayPath:    container + "#ses_a",
+				FingerprintKey: container + "#ses_a",
+				Key:            container + "#ses_a",
+			}
+			return parser.DiscoveredFile{
+				Agent:          parser.AgentOpenCode,
+				Path:           source.DisplayPath,
+				ProviderSource: &source,
+			}
+		}
 
-	for _, file := range files {
-		e.noteSQLiteContainerResult(file.Path, true)
-	}
-	e.finishSQLiteContainerPass(false, true)
+		file := carried()
+		e.discardStaleSQLiteProviderSource(&file)
+		require.NotNil(t, file.ProviderSource,
+			"an unchanged capture keeps the carried source")
 
-	assert.NotContains(t, e.digestVerifiedAt, changedDB,
-		"a changed full-digest container must lose verification")
-	assert.Equal(t, changedState, e.trustedSQLiteContainers[changedDB].state,
-		"a changed container must retain its previous trusted state")
-	assert.Equal(t, unchangedState, e.trustedSQLiteContainers[unchangedDB].state)
-	assert.Equal(t, now, e.digestVerifiedAt[unchangedDB],
-		"an unchanged sibling must still receive a verification stamp")
+		_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
+		require.NoError(t, err, "write container after recapture")
+		e.discardStaleSQLiteProviderSource(&file)
+		assert.Nil(t, file.ProviderSource,
+			"a mid-pass container write must drop the carried source")
+		assert.True(t, e.containerPass.failed[container],
+			"the recheck must fail the container for the rest of the pass")
+
+		// The recorded failure alone must decide both discard paths: a
+		// forbidden-stat stub proves neither one re-stats the container.
+		origStat := statSQLiteContainerState
+		t.Cleanup(func() { statSQLiteContainerState = origStat })
+		statCalls := 0
+		statSQLiteContainerState = func(
+			path string,
+		) (parser.SQLiteContainerState, bool) {
+			statCalls++
+			return origStat(path)
+		}
+		next := carried()
+		e.discardStaleSQLiteProviderSource(&next)
+		assert.Nil(t, next.ProviderSource,
+			"a recorded failure must short-circuit the stat-based recheck")
+		late := carried()
+		e.discardFailedSQLiteProviderSource(&late)
+		assert.Nil(t, late.ProviderSource,
+			"a recorded failure must drop carried sources without a stat")
+		assert.Zero(t, statCalls,
+			"a recorded failure must be honored before any stat")
+	})
+
+	t.Run("resync clears all trust", func(t *testing.T) {
+		e := &Engine{
+			trustedSQLiteContainers: map[string]trustedSQLiteContainer{
+				"/data/opencode.db": {},
+			},
+			digestVerifiedAt: map[string]time.Time{
+				"/data/opencode.db": prior,
+			},
+		}
+		e.clearTrustedSQLiteContainers()
+		assert.Nil(t, e.trustedSQLiteContainers)
+		assert.Nil(t, e.digestVerifiedAt,
+			"resync must clear the container verification timestamps")
+	})
 }
 
 // TestSQLiteContainerGateParsesNewlyUnshadowedSession pins the hybrid-root
@@ -969,128 +1167,6 @@ func TestSQLiteContainerFullPassDropsUndiscoveredTrust(t *testing.T) {
 	})
 }
 
-// TestSQLiteContainerPassClearsVerificationOnlyOnEvidence ensures the
-// bounded watermark-only window survives passes that never observed the
-// container changing: a clean partial pass and an uncovered container in
-// a clean scoped pass keep their verification age, while an attributed
-// failure clears only its container and a poisoned pass clears every
-// captured one.
-func TestSQLiteContainerPassClearsVerificationOnlyOnEvidence(t *testing.T) {
-	dbPath, _ := newContainerTestDB(t)
-	state, ok := parser.StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "container state must be readable")
-	siblingPath, _ := newContainerTestDB(t)
-	siblingState, ok := parser.StatSQLiteContainerState(siblingPath)
-	require.True(t, ok, "sibling container state must be readable")
-	file := parser.DiscoveredFile{
-		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
-	}
-	verified := time.Unix(100, 0)
-
-	newEngine := func() *Engine {
-		e := &Engine{digestVerifiedAt: map[string]time.Time{
-			dbPath:      verified,
-			siblingPath: verified,
-		}}
-		e.beginSQLiteContainerPass(
-			[]parser.DiscoveredFile{file},
-			map[string]parser.SQLiteContainerState{
-				dbPath:      state,
-				siblingPath: siblingState,
-			},
-		)
-		return e
-	}
-
-	t.Run("clean partial pass preserves verification without promoting", func(t *testing.T) {
-		e := newEngine()
-		e.noteSQLiteContainerResult(file.Path, true)
-		e.finishSQLiteContainerPass(true, false)
-		assert.Equal(t, verified, e.digestVerifiedAt[dbPath],
-			"a clean partial pass must keep the bounded verification window")
-		assert.NotContains(t, e.trustedSQLiteContainers, dbPath,
-			"a partial pass must never promote trust")
-	})
-
-	t.Run("failed container clears only its own verification", func(t *testing.T) {
-		e := newEngine()
-		e.noteSQLiteContainerResult(file.Path, false)
-		e.finishSQLiteContainerPass(true, false)
-		assert.NotContains(t, e.digestVerifiedAt, dbPath,
-			"an attributed failure must clear its container")
-		assert.Equal(t, verified, e.digestVerifiedAt[siblingPath],
-			"an attributed failure must not clear unaffected containers")
-	})
-
-	t.Run("poisoned pass clears every captured verification", func(t *testing.T) {
-		e := newEngine()
-		e.noteSQLiteContainerResult(file.Path, true)
-		e.poisonSQLiteContainerPass()
-		e.finishSQLiteContainerPass(true, false)
-		assert.NotContains(t, e.digestVerifiedAt, dbPath,
-			"a poisoned pass must clear captured verification")
-		assert.NotContains(t, e.digestVerifiedAt, siblingPath,
-			"a poisoned pass must clear captured verification")
-	})
-
-	t.Run("clean scoped pass preserves uncovered verification", func(t *testing.T) {
-		e := newEngine()
-		e.noteSQLiteContainerResult(file.Path, true)
-		e.finishSQLiteContainerPass(false, false)
-		assert.Equal(t, verified, e.digestVerifiedAt[siblingPath],
-			"an uncovered container in a clean pass must keep its window")
-		assert.NotContains(t, e.trustedSQLiteContainers, siblingPath,
-			"an uncovered container must not be promoted")
-	})
-}
-
-func TestOpenCodeDigestVerificationStampedOnlyByDigestPass(t *testing.T) {
-	origNow := openCodeContainerDigestVerifyNow
-	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
-	now := time.Unix(100, 0)
-	openCodeContainerDigestVerifyNow = func() time.Time { return now }
-
-	dbPath, _ := newContainerTestDB(t)
-	state, ok := parser.StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "container state must be readable")
-	file := parser.DiscoveredFile{
-		Agent: parser.AgentOpenCode,
-		Path:  dbPath + "#ses-1",
-	}
-
-	e := &Engine{}
-	e.beginStreamingSQLiteContainerPass(
-		map[string]parser.SQLiteContainerState{dbPath: state},
-	)
-	e.noteSQLiteContainerDiscovery(file)
-	e.containerPass.fullDigestListed[dbPath] = true
-	e.noteSQLiteContainerResult(file.Path, true)
-	e.finishSQLiteContainerPass(false, true)
-	verifiedAt, ok := e.digestVerifiedAt[dbPath]
-	require.True(t, ok, "a complete digest-listed pass must stamp verification")
-	assert.Equal(t, now, verifiedAt)
-
-	now = now.Add(time.Minute)
-	e.beginStreamingSQLiteContainerPass(
-		map[string]parser.SQLiteContainerState{dbPath: state},
-	)
-	e.noteSQLiteContainerDiscovery(file)
-	e.noteSQLiteContainerResult(file.Path, true)
-	e.finishSQLiteContainerPass(false, true)
-	assert.Equal(t, verifiedAt, e.digestVerifiedAt[dbPath],
-		"a watermark-listed pass must not refresh verification age")
-
-	e.beginStreamingSQLiteContainerPass(
-		map[string]parser.SQLiteContainerState{dbPath: state},
-	)
-	e.noteSQLiteContainerDiscovery(file)
-	e.containerPass.fullDigestListed[dbPath] = true
-	e.noteSQLiteContainerResult(file.Path, false)
-	e.finishSQLiteContainerPass(false, true)
-	assert.NotContains(t, e.digestVerifiedAt, dbPath,
-		"a failed digest pass must invalidate verification age")
-}
-
 func TestOpenCodeContainerDiscoveryReplacementMovesAdmission(t *testing.T) {
 	const (
 		oldDB = "/data/opencode.db"
@@ -1223,234 +1299,230 @@ func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
 		"the due pass must perform the full container child scan")
 }
 
-// TestOpenCodeQuickSyncCutoffExemptsLapsedVerification pins the quick-sync
-// cutoff exemption: once a container's verification stamp lapses, a cutoff
-// pass processes the full digest listing it already paid for, so a
-// backdated child-only edit reconciles and the stamp refreshes. A container
-// with no stamp stays subject to the cutoff.
-func TestOpenCodeQuickSyncCutoffExemptsLapsedVerification(t *testing.T) {
-	dbPath, conn := newCompositeContainerTestDB(t)
-	origStat := statSQLiteContainerState
-	t.Cleanup(func() { statSQLiteContainerState = origStat })
-	statSQLiteContainerState = func(path string) (parser.SQLiteContainerState, bool) {
-		state, ok := parser.StatSQLiteContainerState(path)
-		if ok {
-			state.DBInode = 1
-			state.DBDevice = 1
-		}
-		return state, ok
-	}
-	_, err := conn.Exec(`
-		INSERT INTO project (id, worktree, time_updated)
-		VALUES ('proj', '/home/user/code/app', 1779012000000);
-		INSERT INTO session
-			(id, project_id, time_created, time_updated)
-		VALUES ('ses-1', 'proj', 1779012000000, 1779012000000);
-		INSERT INTO message
-			(id, session_id, data, time_created, time_updated)
-		VALUES ('msg-1', 'ses-1', '{"role":"user"}', 1779012000000, 1779012000000);
-		INSERT INTO part
-			(id, session_id, message_id, data, time_created, time_updated)
-		VALUES ('part-1', 'ses-1', 'msg-1',
-			'{"type":"text","text":"original prompt"}',
-			1779012000000, 1779012000000)
-	`)
-	require.NoError(t, err, "seed composite container")
-
-	// Every row timestamp sits below this cutoff, so the ordinary quick-sync
-	// filter would drop the session.
-	cutoff := time.UnixMilli(1_779_100_000_000)
-
-	archive := openTestDB(t)
-	e := NewEngine(archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentOpenCode: {filepath.Dir(dbPath)},
-		},
-		Machine: "local",
-	})
-	t.Cleanup(e.Close)
-	assertContent := func(want string) {
-		messages, err := archive.GetAllMessages(t.Context(), "opencode:ses-1")
-		require.NoError(t, err, "read archived messages")
-		require.Len(t, messages, 1)
-		assert.Equal(t, want, messages[0].Content)
-	}
-
-	origNow := openCodeContainerDigestVerifyNow
-	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
-	verifyNow := time.Unix(100, 0)
-	openCodeContainerDigestVerifyNow = func() time.Time { return verifyNow }
-	initial := e.SyncAll(t.Context(), nil)
-	require.False(t, initial.Aborted, "initial sync aborted: %+v", initial)
-	require.Equal(t, 1, initial.Synced)
-	assertContent("original prompt")
-
-	// Backdated child-only edit: content and identity change, every
-	// timestamp stays put, so the composite mtime stays below the cutoff.
-	_, err = conn.Exec(`
-		UPDATE part SET
-			id = 'part-1-v2',
-			data = '{"type":"text","text":"changed prompt"}'
-		WHERE id = 'part-1'
-	`)
-	require.NoError(t, err, "apply backdated child-only edit")
-
-	recent := e.SyncAllSince(t.Context(), cutoff, nil)
-	require.False(t, recent.Aborted, "recent quick sync aborted: %+v", recent)
-	assert.Zero(t, recent.Synced,
-		"inside the window a quick sync defers the child-only edit")
-	assertContent("original prompt")
-
-	verifyNow = verifyNow.Add(openCodeContainerDigestVerifyInterval)
-	due := e.SyncAllSince(t.Context(), cutoff, nil)
-	require.False(t, due.Aborted, "due quick sync aborted: %+v", due)
-	assert.Equal(t, 1, due.Synced,
-		"a lapsed container's sessions must bypass the cutoff")
-	assertContent("changed prompt")
-	assert.Equal(t, verifyNow, e.digestVerifiedAt[dbPath],
-		"the completed due pass must refresh the verification stamp")
-
-	// A fresh engine has no stamp, so the same quick sync keeps the cutoff:
-	// the backdated session is listed, filtered, and never parsed.
-	fresh := NewEngine(openTestDB(t), EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentOpenCode: {filepath.Dir(dbPath)},
-		},
-		Machine: "local",
-	})
-	t.Cleanup(fresh.Close)
-	unstamped := fresh.SyncAllSince(t.Context(), cutoff, nil)
-	require.False(t, unstamped.Aborted, "fresh quick sync aborted: %+v", unstamped)
-	assert.Zero(t, unstamped.Synced,
-		"an unstamped container's old sessions stay behind the cutoff")
-	assert.Empty(t, fresh.digestVerifiedAt,
-		"an incomplete cutoff pass must not stamp verification")
-}
-
-// TestLapsedVerificationExemptionRequiresDigestListing pins the exemption to
-// discovery's listing form: an expired stamp alone must not exempt a
-// container whose pass listed watermark-only, as when the interval boundary
-// falls between discovery and the cutoff filter.
-func TestLapsedVerificationExemptionRequiresDigestListing(t *testing.T) {
-	dbPath, _ := newContainerTestDB(t)
-	state, ok := parser.StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "container state must be readable")
-	origNow := openCodeContainerDigestVerifyNow
-	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
+// TestOpenCodeDigestListingForm pins, in one matrix, which paths must
+// produce the full digest listing form instead of the bounded watermark
+// form, what a lapsed verification stamp requires of discovery, and what it
+// buys a quick-sync cutoff pass.
+func TestOpenCodeDigestListingForm(t *testing.T) {
 	now := time.Unix(1000, 0)
-	openCodeContainerDigestVerifyNow = func() time.Time { return now }
-
-	file := parser.DiscoveredFile{
-		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
-	}
-	e := &Engine{digestVerifiedAt: map[string]time.Time{
-		dbPath: now.Add(-2 * openCodeContainerDigestVerifyInterval),
-	}}
-	e.beginSQLiteContainerPass(
-		[]parser.DiscoveredFile{file},
-		map[string]parser.SQLiteContainerState{dbPath: state},
-	)
-	assert.Empty(t,
-		e.lapsedDigestVerificationContainers([]parser.DiscoveredFile{file}),
-		"a watermark-listed pass must not exempt an expired stamp")
-
-	e.containerPass.fullDigestListed[dbPath] = true
-	assert.Equal(t, map[string]bool{dbPath: true},
-		e.lapsedDigestVerificationContainers([]parser.DiscoveredFile{file}),
-		"a digest-listed pass exempts the expired stamp")
-}
-
-func TestOpenCodeFirstPassAfterProcessStartUsesDigestListing(t *testing.T) {
-	dbPath, _ := newContainerTestDB(t)
-	e := &Engine{
-		trustedSQLiteContainers: map[string]trustedSQLiteContainer{
-			dbPath: {state: parser.SQLiteContainerState{}},
-		},
-	}
-	predicate := e.sqliteContainerListsWatermarkOnly(
-		map[string]parser.SQLiteContainerState{dbPath: {}},
-	)
-	assert.False(t, predicate(dbPath),
-		"a fresh process has no digest verification timestamp")
-}
-
-func TestOpenCodeResyncClearsDigestVerification(t *testing.T) {
-	e := &Engine{
-		trustedSQLiteContainers: map[string]trustedSQLiteContainer{
-			"/data/opencode.db": {},
-		},
-		digestVerifiedAt: map[string]time.Time{
-			"/data/opencode.db": time.Unix(100, 0),
-		},
-	}
-	e.clearTrustedSQLiteContainers()
-	assert.Nil(t, e.trustedSQLiteContainers)
-	assert.Nil(t, e.digestVerifiedAt,
-		"resync must clear the container verification timestamps")
-}
-
-func TestOpenCodeReplacementCannotReuseVerification(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "opencode.db")
 	origNow := openCodeContainerDigestVerifyNow
 	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
-	now := time.Unix(100, 0)
 	openCodeContainerDigestVerifyNow = func() time.Time { return now }
 
-	previous := parser.SQLiteContainerState{
-		DBInode: 10, DBDevice: 20, DBChangeCounter: 10,
-	}
-	watermarkAdmission := func(
-		trusted, current parser.SQLiteContainerState,
-	) bool {
-		e := &Engine{
-			trustedSQLiteContainers: map[string]trustedSQLiteContainer{
-				dbPath: {state: trusted},
-			},
-			digestVerifiedAt: map[string]time.Time{dbPath: now},
+	t.Run("discovery listing predicate", func(t *testing.T) {
+		// A native path: the predicate cleans its argument before the map
+		// lookup, so a foreign-separator literal would never match.
+		dbPath := filepath.Join(t.TempDir(), "opencode.db")
+		state := parser.SQLiteContainerState{
+			DBInode: 1, DBDevice: 1, DBChangeCounter: 1,
 		}
-		return e.sqliteContainerListsWatermarkOnly(
-			map[string]parser.SQLiteContainerState{dbPath: current},
-		)(dbPath)
-	}
-
-	t.Run("new file identity", func(t *testing.T) {
-		replacement := previous
-		replacement.DBInode = 11
-		assert.False(t, watermarkAdmission(previous, replacement),
-			"a replacement container must require a new digest verification")
+		trust := func(e *Engine, stampAge time.Duration) {
+			e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
+				dbPath: {state: state},
+			}
+			e.digestVerifiedAt = map[string]time.Time{
+				dbPath: now.Add(-stampAge),
+			}
+		}
+		for _, tc := range []struct {
+			name  string
+			setup func(e *Engine)
+			// wantNil: force paths must disable the callback entirely, not
+			// merely answer false per container.
+			wantNil       bool
+			wantWatermark bool
+		}{
+			{name: "a current stamp lists watermark-only", setup: func(e *Engine) {
+				trust(e, 0)
+			}, wantWatermark: true},
+			{name: "a fresh process has no stamp", setup: func(e *Engine) {
+				e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
+					dbPath: {state: state},
+				}
+			}},
+			{name: "an expired stamp is due for the digest form", setup: func(e *Engine) {
+				trust(e, 2*openCodeContainerDigestVerifyInterval)
+			}},
+			{name: "force parse overrides a current stamp", setup: func(e *Engine) {
+				trust(e, 0)
+				e.forceParse = true
+			}, wantNil: true},
+			{name: "force full parse overrides a current stamp", setup: func(e *Engine) {
+				trust(e, 0)
+				e.forceFullParse = true
+			}, wantNil: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				e := &Engine{}
+				tc.setup(e)
+				fn := e.sqliteContainerListsWatermarkOnly(
+					map[string]parser.SQLiteContainerState{dbPath: state},
+				)
+				if tc.wantNil {
+					assert.Nil(t, fn,
+						"this path must not authorize watermark-only listing at all")
+					return
+				}
+				require.NotNil(t, fn)
+				assert.Equal(t, tc.wantWatermark, fn(dbPath))
+			})
+		}
 	})
 
-	t.Run("identity unavailable", func(t *testing.T) {
-		unavailable := previous
-		unavailable.DBInode = 0
-		unavailable.DBDevice = 0
-		assert.False(t, watermarkAdmission(unavailable, unavailable),
-			"unavailable identity must fail closed to full digest listing")
+	// The exemption must match discovery's listing form: an expired stamp
+	// alone must not exempt a container whose pass listed watermark-only, as
+	// when the interval boundary falls between discovery and the cutoff
+	// filter — that pass has no digest findings to process.
+	t.Run("lapsed exemption requires the digest listing", func(t *testing.T) {
+		dbPath, _ := newContainerTestDB(t)
+		state, ok := parser.StatSQLiteContainerState(dbPath)
+		require.True(t, ok, "container state must be readable")
+		file := parser.DiscoveredFile{
+			Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
+		}
+		e := &Engine{digestVerifiedAt: map[string]time.Time{
+			dbPath: now.Add(-2 * openCodeContainerDigestVerifyInterval),
+		}}
+		e.beginSQLiteContainerPass(
+			[]parser.DiscoveredFile{file},
+			map[string]parser.SQLiteContainerState{dbPath: state},
+		)
+		assert.Empty(t,
+			e.lapsedDigestVerificationContainers([]parser.DiscoveredFile{file}),
+			"a watermark-listed pass must not exempt an expired stamp")
+
+		e.containerPass.fullDigestListed[dbPath] = true
+		assert.Equal(t, map[string]bool{dbPath: true},
+			e.lapsedDigestVerificationContainers([]parser.DiscoveredFile{file}),
+			"a digest-listed pass exempts the expired stamp")
 	})
 
-	t.Run("normal in-place transaction", func(t *testing.T) {
-		advanced := previous
-		advanced.DBChangeCounter++
-		assert.True(t, watermarkAdmission(previous, advanced),
-			"a normal in-place transaction may retain the fast path")
-	})
-}
+	// End to end through SyncAllSince: a backdated child-only edit keeps
+	// every timestamp below the cutoff, so only a lapsed stamp's exemption
+	// can let the paid-for digest listing reconcile it and refresh the
+	// stamp. A live stamp defers the edit; no stamp keeps the cutoff.
+	t.Run("quick-sync cutoff", func(t *testing.T) {
+		for _, tc := range []struct {
+			name        string
+			stamped     bool
+			age         time.Duration
+			wantSynced  int
+			wantContent string
+			wantStamp   bool
+			// wantScans pins the listing form the quick sync paid for: a
+			// deferring watermark pass must not aggregate child tables, and
+			// a digest pass must do so exactly once.
+			wantScans int64
+		}{
+			{
+				name: "a live stamp defers the child-only edit", stamped: true,
+				age: time.Second, wantSynced: 0,
+				wantContent: "original prompt", wantStamp: true, wantScans: 0,
+			},
+			{
+				name: "a lapsed stamp bypasses the cutoff and restamps", stamped: true,
+				age: openCodeContainerDigestVerifyInterval, wantSynced: 1,
+				wantContent: "changed prompt", wantStamp: true, wantScans: 1,
+			},
+			{
+				name: "no stamp keeps the cutoff", stamped: false,
+				wantSynced: 0, wantStamp: false, wantScans: 1,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				dbPath, conn := newCompositeContainerTestDB(t)
+				origStat := statSQLiteContainerState
+				t.Cleanup(func() { statSQLiteContainerState = origStat })
+				statSQLiteContainerState = func(
+					path string,
+				) (parser.SQLiteContainerState, bool) {
+					state, ok := parser.StatSQLiteContainerState(path)
+					if ok {
+						state.DBInode = 1
+						state.DBDevice = 1
+					}
+					return state, ok
+				}
+				_, err := conn.Exec(`
+					INSERT INTO project (id, worktree, time_updated)
+					VALUES ('proj', '/home/user/code/app', 1779012000000);
+					INSERT INTO session
+						(id, project_id, time_created, time_updated)
+					VALUES ('ses-1', 'proj', 1779012000000, 1779012000000);
+					INSERT INTO message
+						(id, session_id, data, time_created, time_updated)
+					VALUES ('msg-1', 'ses-1', '{"role":"user"}',
+						1779012000000, 1779012000000);
+					INSERT INTO part
+						(id, session_id, message_id, data, time_created, time_updated)
+					VALUES ('part-1', 'ses-1', 'msg-1',
+						'{"type":"text","text":"original prompt"}',
+						1779012000000, 1779012000000)
+				`)
+				require.NoError(t, err, "seed composite container")
+				// Every row timestamp sits below this cutoff, so the
+				// ordinary quick-sync filter would drop the session.
+				cutoff := time.UnixMilli(1_779_100_000_000)
 
-func TestOpenCodeForcePathsAlwaysListDigestForm(t *testing.T) {
-	const dbPath = "/data/opencode.db"
-	pre := map[string]parser.SQLiteContainerState{dbPath: {}}
-	for _, tc := range []struct {
-		name  string
-		force func(*Engine)
-	}{
-		{name: "force parse", force: func(e *Engine) { e.forceParse = true }},
-		{name: "force full parse", force: func(e *Engine) { e.forceFullParse = true }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			e := &Engine{}
-			tc.force(e)
-			assert.Nil(t, e.sqliteContainerListsWatermarkOnly(pre),
-				"force paths must not authorize watermark-only listing")
-		})
-	}
+				archive := openTestDB(t)
+				e := NewEngine(archive, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{
+						parser.AgentOpenCode: {filepath.Dir(dbPath)},
+					},
+					Machine: "local",
+				})
+				t.Cleanup(e.Close)
+
+				verifyNow := now
+				openCodeContainerDigestVerifyNow = func() time.Time {
+					return verifyNow
+				}
+				if tc.stamped {
+					initial := e.SyncAll(t.Context(), nil)
+					require.False(t, initial.Aborted,
+						"initial sync aborted: %+v", initial)
+					require.Equal(t, 1, initial.Synced)
+				}
+
+				// Backdated child-only edit: content and identity change,
+				// every timestamp stays put, so the composite mtime stays
+				// below the cutoff.
+				_, err = conn.Exec(`
+					UPDATE part SET
+						id = 'part-1-v2',
+						data = '{"type":"text","text":"changed prompt"}'
+					WHERE id = 'part-1'
+				`)
+				require.NoError(t, err, "apply backdated child-only edit")
+
+				verifyNow = verifyNow.Add(tc.age)
+				scansBefore := parser.OpenCodeContainerChildScans()
+				stats := e.SyncAllSince(t.Context(), cutoff, nil)
+				require.False(t, stats.Aborted,
+					"quick sync aborted: %+v", stats)
+				assert.Equal(t, tc.wantSynced, stats.Synced)
+				assert.Equal(t, tc.wantScans,
+					parser.OpenCodeContainerChildScans()-scansBefore,
+					"the quick sync must use the row's listing form")
+				if tc.wantContent != "" {
+					messages, err := archive.GetAllMessages(
+						t.Context(), "opencode:ses-1",
+					)
+					require.NoError(t, err, "read archived messages")
+					require.Len(t, messages, 1)
+					assert.Equal(t, tc.wantContent, messages[0].Content)
+				}
+				if !tc.wantStamp {
+					assert.Empty(t, e.digestVerifiedAt,
+						"an incomplete cutoff pass must not stamp verification")
+				} else if tc.wantSynced > 0 {
+					assert.Equal(t, verifyNow, e.digestVerifiedAt[dbPath],
+						"the completed due pass must refresh the stamp")
+				} else {
+					assert.Equal(t, now, e.digestVerifiedAt[dbPath],
+						"a deferring pass must keep the stamp's prior age")
+				}
+			})
+		}
+	})
 }

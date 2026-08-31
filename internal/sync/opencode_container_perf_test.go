@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -536,164 +537,162 @@ func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
 	)
 }
 
-// TestOpenCodeDeletedChildIsDetected pins deletion sensitivity. The composite
-// mtime is a MAX over session/project/child timestamps, so when the session or
-// project row already holds the higher value — the common case on a real
-// container — deleting a message or part does not move the max at all. Without
-// a deletion-sensitive component the session looks fresh and the removed
-// content stays archived indefinitely.
-func TestOpenCodeDeletedChildIsDetected(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/app")
-	// Session row timestamp is deliberately far ahead of every child, so a
-	// deleted child cannot lower the composite.
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "del-session",
-		1779012000000, 1779099999000,
-		"keep prompt", "drop answer",
-	)
-
-	stats := env.engine.SyncAll(context.Background(), nil)
-	require.False(t, stats.Aborted)
-	require.Equal(t, 1, stats.Synced)
-	assertMessageContent(
-		t, env.db, "opencode:del-session", "keep prompt", "drop answer",
-	)
-
-	// Remove the assistant message and its parts, leaving session and project
-	// timestamps untouched.
-	oc.mustExec(t, "delete assistant parts",
-		"DELETE FROM part WHERE session_id = ? AND message_id LIKE ?",
-		"del-session", "%assistant%")
-	oc.mustExec(t, "delete assistant message",
-		"DELETE FROM message WHERE session_id = ? AND id LIKE ?",
-		"del-session", "%assistant%")
-
-	stats = newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
-	require.False(t, stats.Aborted)
-	assert.Equal(t, 1, stats.Synced,
-		"a deleted child must not be hidden behind an unchanged composite max")
-}
-
-// TestOpenCodeDeletedChildDetectedViaReconciliation covers the same deletion
-// hole on the reconciliation path. Sources rebuilt by FindSource rather than
-// carried from discovery metadata have no child digest, so the fingerprint hash
-// is empty and the freshness gate treats it as no constraint.
-func TestOpenCodeDeletedChildDetectedViaReconciliation(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/app")
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "recon-del",
-		1779012000000, 1779099999000,
-		"keep prompt", "drop answer",
-	)
-	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
-
-	oc.mustExec(t, "delete assistant parts",
-		"DELETE FROM part WHERE session_id = ? AND message_id LIKE ?",
-		"recon-del", "%assistant%")
-	oc.mustExec(t, "delete assistant message",
-		"DELETE FROM message WHERE session_id = ? AND id LIKE ?",
-		"recon-del", "%assistant%")
-
-	require.NoError(t, env.engine.ReconcileWatchRoots(
-		context.Background(), []string{env.opencodeDir}, false,
-	))
-	// A fresh engine has no recent verification watermark, so the final pass is
-	// due for full-digest discovery without waiting for the interval.
-	newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
-
-	// Assert the observable outcome rather than which pass did the write:
-	// the removed assistant turn must no longer be archived.
-	for _, m := range fetchMessages(t, env.db, "opencode:recon-del") {
-		assert.NotContains(t, m.Content, "drop answer",
-			"deleted child content must not remain archived")
+// TestOpenCodeHiddenChildChangesAreDetected drives the child digest's
+// detection duties through one table. Every mutation here is invisible to
+// the composite watermark — the session or project row already holds the
+// highest timestamp, and counts or extrema are preserved where noted — so
+// only the complete child identity carried in the stored digest can catch
+// it on the next ordinary full pass (run on a fresh engine, whose missing
+// verification stamp makes the digest listing due immediately).
+func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
+	deleteAssistant := func(t *testing.T, oc *openCodeTestDB) {
+		oc.mustExec(t, "delete assistant parts",
+			"DELETE FROM part WHERE session_id = ? AND message_id LIKE ?",
+			"probe", "%assistant%")
+		oc.mustExec(t, "delete assistant message",
+			"DELETE FROM message WHERE session_id = ? AND id LIKE ?",
+			"probe", "%assistant%")
 	}
-}
+	for _, tc := range []struct {
+		name string
+		// seed builds session "probe"; nil seeds one text session whose
+		// session row sits far above every child timestamp, so no later
+		// child mutation can move the composite MAX.
+		seed   func(t *testing.T, oc *openCodeTestDB)
+		mutate func(t *testing.T, oc *openCodeTestDB)
+		// viaReconcile routes the mutation through a reconciliation pass
+		// first: sources rebuilt by FindSource carry no child digest, so
+		// the empty fingerprint hash must read as no constraint, not as
+		// fresh.
+		viaReconcile bool
+		// wantAbsent asserts removed content is gone; rows without it
+		// assert the session re-parses (Synced == 1).
+		wantAbsent string
+	}{
+		{
+			// Deleting a child cannot lower the composite MAX, so without a
+			// deletion-sensitive digest component the removed content would
+			// stay archived indefinitely.
+			name:       "deleted child under an unchanged composite max",
+			mutate:     deleteAssistant,
+			wantAbsent: "drop answer",
+		},
+		{
+			name:         "deleted child via reconciliation",
+			mutate:       deleteAssistant,
+			viaReconcile: true,
+			wantAbsent:   "drop answer",
+		},
+		{
+			// Same number of messages and parts, timestamps still below the
+			// session row's watermark, but different rows and content.
+			name: "same-count child replacement below the watermark",
+			mutate: func(t *testing.T, oc *openCodeTestDB) {
+				oc.replaceTextContent(
+					t, "probe", "swapped prompt", "swapped answer",
+					1779012500000,
+				)
+			},
+		},
+		{
+			// The children hold the highest timestamp, so a project rename
+			// below it leaves MAX(...) unchanged; the digest has to carry
+			// the session and project timestamps in their own right.
+			name: "project rename below the child watermark",
+			seed: func(t *testing.T, oc *openCodeTestDB) {
+				oc.addProject(t, "proj", "/home/user/code/original-app")
+				seedOpenCodeSQLiteTextSession(
+					t, oc, "proj", "probe",
+					1779012000000, 1779012030000,
+					"stable prompt", "stable answer",
+				)
+				oc.mustExec(t, "raise child watermark",
+					"UPDATE part SET time_updated = ? WHERE session_id = ?",
+					1779099999000, "probe")
+			},
+			mutate: func(t *testing.T, oc *openCodeTestDB) {
+				oc.updateProjectWorktree(
+					t, "proj", "/home/user/code/renamed-app", 1779013000000,
+				)
+			},
+		},
+		{
+			// The swapped middle row keeps every aggregate a digest could
+			// reduce to — counts, timestamp sums, and min/max ids — so only
+			// a complete child identity can tell the two states apart.
+			name: "middle-row replacement preserving counts, sums and extrema",
+			seed: func(t *testing.T, oc *openCodeTestDB) {
+				oc.addProject(t, "proj", "/home/user/code/app")
+				oc.addSession(t, "probe", "proj", 1779012000000, 1779099999000)
+				oc.addMessage(t, "probe-msg-a", "probe", "user", 1779012000000)
+				oc.addTextPart(t, "probe-part-a", "probe", "probe-msg-a",
+					"alpha", 1779012000000)
+				oc.addTextPart(t, "probe-part-m", "probe", "probe-msg-a",
+					"middle", 1779012000001)
+				oc.addTextPart(t, "probe-part-z", "probe", "probe-msg-a",
+					"zulu", 1779012000002)
+			},
+			mutate: func(t *testing.T, oc *openCodeTestDB) {
+				oc.mustExec(t, "delete middle part",
+					"DELETE FROM part WHERE id = ?", "probe-part-m")
+				oc.addTextPart(t, "probe-part-n", "probe", "probe-msg-a",
+					"replaced", 1779012000001)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+			oc := createOpenCodeDB(t, env.opencodeDir)
+			if tc.seed != nil {
+				tc.seed(t, oc)
+			} else {
+				oc.addProject(t, "proj", "/home/user/code/app")
+				seedOpenCodeSQLiteTextSession(
+					t, oc, "proj", "probe",
+					1779012000000, 1779099999000,
+					"keep prompt", "drop answer",
+				)
+			}
+			initial := env.engine.SyncAll(context.Background(), nil)
+			require.False(t, initial.Aborted, "initial sync aborted: %+v", initial)
+			require.Equal(t, 1, initial.Synced)
+			if tc.wantAbsent != "" {
+				// The absence assertion below is only meaningful if the
+				// content was archived before the mutation removed it.
+				archived := false
+				for _, m := range fetchMessages(t, env.db, "opencode:probe") {
+					archived = archived ||
+						strings.Contains(m.Content, tc.wantAbsent)
+				}
+				require.True(t, archived,
+					"the baseline must archive the soon-deleted content")
+			}
 
-// TestOpenCodeSameCountChildReplacementIsDetected covers a replacement that
-// preserves both child counts and leaves every new timestamp below the session
-// row's already-higher watermark, so neither the watermark nor the counts move.
-func TestOpenCodeSameCountChildReplacementIsDetected(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/app")
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "swap-session",
-		1779012000000, 1779099999000,
-		"original prompt", "original answer",
-	)
-	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+			tc.mutate(t, oc)
 
-	// Same number of messages and parts, timestamps still below the session
-	// row's watermark, but different rows and different content.
-	oc.replaceTextContent(
-		t, "swap-session", "swapped prompt", "swapped answer", 1779012500000,
-	)
-
-	stats := newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
-	assert.Equal(t, 1, stats.Synced,
-		"a same-count child replacement below the session watermark must "+
-			"still change the fingerprint")
-}
-
-// TestOpenCodeMetadataUpdateBelowWatermarkIsDetected covers a project worktree
-// rename whose timestamp lands below an already-higher child watermark. The
-// composite MAX cannot move in that case, so the digest has to carry the
-// session and project timestamps in their own right.
-func TestOpenCodeMetadataUpdateBelowWatermarkIsDetected(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/original-app")
-	// Children hold the highest timestamp, so a later project rename below
-	// that value leaves MAX(...) unchanged.
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "below-watermark",
-		1779012000000, 1779012030000,
-		"stable prompt", "stable answer",
-	)
-	oc.mustExec(t, "raise child watermark",
-		"UPDATE part SET time_updated = ? WHERE session_id = ?",
-		1779099999000, "below-watermark")
-	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
-
-	// Rename below the child watermark.
-	oc.updateProjectWorktree(
-		t, "proj", "/home/user/code/renamed-app", 1779013000000,
-	)
-
-	stats := newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
-	assert.Equal(t, 1, stats.Synced,
-		"a metadata update below the child watermark must still be detected")
-}
-
-// TestOpenCodeMiddleRowReplacementIsDetected covers a replacement that keeps
-// every aggregate the digest currently reduces to: same counts, same timestamp
-// sums, and the same min/max ids because the swapped row sorts strictly between
-// the extrema. Only a complete child identity can tell these apart.
-func TestOpenCodeMiddleRowReplacementIsDetected(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/app")
-	oc.addSession(t, "mid", "proj", 1779012000000, 1779099999000)
-	oc.addMessage(t, "mid-msg-a", "mid", "user", 1779012000000)
-	// Three parts: a, m, z. The middle one gets swapped for a different id
-	// carrying an identical timestamp, so count, sum and extrema all hold.
-	oc.addTextPart(t, "mid-part-a", "mid", "mid-msg-a", "alpha", 1779012000000)
-	oc.addTextPart(t, "mid-part-m", "mid", "mid-msg-a", "middle", 1779012000001)
-	oc.addTextPart(t, "mid-part-z", "mid", "mid-msg-a", "zulu", 1779012000002)
-	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
-
-	oc.mustExec(t, "delete middle part",
-		"DELETE FROM part WHERE id = ?", "mid-part-m")
-	oc.addTextPart(
-		t, "mid-part-n", "mid", "mid-msg-a", "replaced", 1779012000001,
-	)
-
-	stats := newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
-	assert.Equal(t, 1, stats.Synced,
-		"a middle-row replacement preserving counts, sums and extrema must "+
-			"still change the fingerprint")
+			if tc.viaReconcile {
+				require.NoError(t, env.engine.ReconcileWatchRoots(
+					context.Background(), []string{env.opencodeDir}, false,
+				))
+			}
+			stats := newOpenCodeTestEngine(t, env).SyncAll(
+				context.Background(), nil,
+			)
+			require.False(t, stats.Aborted, "full pass aborted: %+v", stats)
+			if !tc.viaReconcile {
+				// The reconcile pass may already have done the write, so the
+				// count only binds on the direct rows.
+				assert.Equal(t, 1, stats.Synced,
+					"a hidden child change must re-parse the session")
+			}
+			if tc.wantAbsent != "" {
+				// Assert the observable outcome rather than which pass did
+				// the write: the removed content must no longer be archived.
+				for _, m := range fetchMessages(t, env.db, "opencode:probe") {
+					assert.NotContains(t, m.Content, tc.wantAbsent,
+						"deleted child content must not remain archived")
+				}
+			}
+		})
+	}
 }
