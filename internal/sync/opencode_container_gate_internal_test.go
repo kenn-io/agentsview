@@ -853,6 +853,31 @@ func TestOpenCodeDigestVerificationStampedOnlyByDigestPass(t *testing.T) {
 		"a failed digest pass must invalidate verification age")
 }
 
+func TestOpenCodeContainerDiscoveryReplacementMovesAdmission(t *testing.T) {
+	const (
+		oldDB = "/data/opencode.db"
+		newDB = "/data/opencode-legacy.db"
+	)
+	e := &Engine{}
+	e.beginStreamingSQLiteContainerPass(map[string]parser.SQLiteContainerState{
+		oldDB: {}, newDB: {},
+	})
+	oldFile := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode,
+		Path:  oldDB + "#session",
+	}
+	newFile := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode,
+		Path:  newDB + "#session",
+	}
+	e.noteSQLiteContainerDiscovery(oldFile)
+	e.unNoteSQLiteContainerDiscovery(oldFile)
+	e.noteSQLiteContainerDiscovery(newFile)
+
+	assert.Zero(t, e.containerPass.discovered[oldDB])
+	assert.Equal(t, 1, e.containerPass.discovered[newDB])
+}
+
 func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
 	dbPath, conn := newCompositeContainerTestDB(t)
 	origStat := statSQLiteContainerState

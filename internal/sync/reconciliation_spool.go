@@ -72,11 +72,13 @@ type reconciliationSpool struct {
 	path string
 	db   *sql.DB
 
-	mu         sync.Mutex
-	closed     bool
-	sealed     bool
-	lastAddWon bool
-	metrics    ReconciliationMetrics
+	mu                sync.Mutex
+	closed            bool
+	sealed            bool
+	lastAddWon        bool
+	lastAddReplaced   reconciliationCandidate
+	lastAddReplacedOK bool
+	metrics           ReconciliationMetrics
 }
 
 type reconciliationSpoolStore interface {
@@ -89,6 +91,7 @@ type reconciliationSpoolStore interface {
 	ContainsNonAuthoritativeScope(context.Context, parser.AgentType, string) (bool, error)
 	Page(context.Context, reconciliationCursor, int) ([]reconciliationCandidate, error)
 	LastAddWon() bool
+	LastAddReplaced() (reconciliationCandidate, bool)
 	Metrics() ReconciliationMetrics
 	CloseAndRemove() error
 }
@@ -381,6 +384,8 @@ func (spool *reconciliationSpool) Add(
 	spool.mu.Lock()
 	sealed := spool.sealed
 	spool.lastAddWon = false
+	spool.lastAddReplaced = reconciliationCandidate{}
+	spool.lastAddReplacedOK = false
 	spool.mu.Unlock()
 	if sealed {
 		return errors.New("reconciliation spool is sealed")
@@ -396,10 +401,14 @@ func (spool *reconciliationSpool) Add(
 	} else if statePayload == nil {
 		statePayload = []byte{}
 	}
-	var existing int
+	var existing reconciliationCandidate
 	err := spool.db.QueryRowContext(ctx, `
-		SELECT 1 FROM candidates WHERE provider = ? AND identity = ? LIMIT 1
-	`, string(candidate.Provider), candidate.Identity).Scan(&existing)
+		SELECT path, preference_1, preference_2, preference_3
+		FROM candidates WHERE provider = ? AND identity = ?
+	`, string(candidate.Provider), candidate.Identity).Scan(
+		&existing.Path, &existing.Preference1, &existing.Preference2,
+		&existing.Preference3,
+	)
 	existed := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -446,8 +455,12 @@ func (spool *reconciliationSpool) Add(
 		}
 		return fmt.Errorf("write reconciliation candidate: %w", err)
 	}
+	existing.Provider = candidate.Provider
+	existing.Identity = candidate.Identity
 	spool.mu.Lock()
 	spool.lastAddWon = !existed
+	spool.lastAddReplaced = existing
+	spool.lastAddReplacedOK = existed && reconciliationCandidatePreferred(candidate, existing)
 	spool.mu.Unlock()
 	return nil
 }
@@ -456,6 +469,12 @@ func (spool *reconciliationSpool) LastAddWon() bool {
 	spool.mu.Lock()
 	defer spool.mu.Unlock()
 	return spool.lastAddWon
+}
+
+func (spool *reconciliationSpool) LastAddReplaced() (reconciliationCandidate, bool) {
+	spool.mu.Lock()
+	defer spool.mu.Unlock()
+	return spool.lastAddReplaced, spool.lastAddReplacedOK
 }
 
 func (spool *reconciliationSpool) Page(

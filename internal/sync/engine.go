@@ -5705,12 +5705,21 @@ func (e *Engine) streamReconciliationCandidates(
 					)
 				}
 				spoolErr = spool.Add(ctx, candidate)
-				if spoolErr == nil && spool.LastAddWon() {
-					e.noteSQLiteContainerDiscovery(parser.DiscoveredFile{
-						Agent:          candidate.Provider,
-						Path:           candidate.Path,
-						ProviderSource: &source,
-					})
+				if spoolErr == nil {
+					replaced, replacedOK := spool.LastAddReplaced()
+					if replacedOK {
+						e.unNoteSQLiteContainerDiscovery(parser.DiscoveredFile{
+							Agent: replaced.Provider,
+							Path:  replaced.Path,
+						})
+					}
+					if spool.LastAddWon() || replacedOK {
+						e.noteSQLiteContainerDiscovery(parser.DiscoveredFile{
+							Agent:          candidate.Provider,
+							Path:           candidate.Path,
+							ProviderSource: &source,
+						})
+					}
 				}
 				return spoolErr
 			})

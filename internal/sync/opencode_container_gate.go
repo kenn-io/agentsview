@@ -489,6 +489,20 @@ func (e *Engine) noteSQLiteContainerDiscovery(file parser.DiscoveredFile) {
 	}
 }
 
+func (e *Engine) unNoteSQLiteContainerDiscovery(file parser.DiscoveredFile) {
+	dbPath, _, ok := sqliteContainerSourceForFile(file)
+	if !ok {
+		return
+	}
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	pass := e.containerPass
+	if pass == nil || pass.discovered[dbPath] == 0 {
+		return
+	}
+	pass.discovered[dbPath]--
+}
+
 func (e *Engine) finishStreamingSQLiteContainerDiscovery() {
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()

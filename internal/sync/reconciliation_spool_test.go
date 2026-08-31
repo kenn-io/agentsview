@@ -34,6 +34,9 @@ func TestReconciliationSpoolSelectsPreferredCandidateInSQL(t *testing.T) {
 	}))
 	assert.False(t, spool.LastAddWon(),
 		"a winner replacement must not count as a new discovered identity")
+	replaced, ok := spool.LastAddReplaced()
+	require.True(t, ok)
+	assert.Equal(t, "/sessions/old.jsonl", replaced.Path)
 	require.NoError(t, spool.Add(ctx, reconciliationCandidate{
 		Provider: parser.AgentCodex, Identity: "uuid", Path: "/archived/rollout-uuid.jsonl",
 		Preference1: 0,
