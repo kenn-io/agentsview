@@ -167,8 +167,18 @@ func TestReconciliationStateFallsBackAfterContainerChanges(t *testing.T) {
 		map[string]parser.SQLiteContainerState{container: before},
 	)
 
-	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
-	require.NoError(t, err, "change container after discovery")
+	origStat := statSQLiteContainerState
+	t.Cleanup(func() { statSQLiteContainerState = origStat })
+	statCalls := 0
+	statSQLiteContainerState = func(path string) (parser.SQLiteContainerState, bool) {
+		state, ok := origStat(path)
+		statCalls++
+		if statCalls == 1 {
+			_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
+			require.NoError(t, err, "change container after page refresh")
+		}
+		return state, ok
+	}
 	files, err := engine.rehydrateReconciliationPage(
 		t.Context(), []reconciliationCandidate{{
 			Provider:    parser.AgentOpenCode,

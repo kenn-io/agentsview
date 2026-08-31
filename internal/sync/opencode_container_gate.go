@@ -627,6 +627,34 @@ func (e *Engine) sqliteContainerPassCaptureValid(dbPath string) bool {
 	return ok
 }
 
+// sqliteContainerPassCaptureStillCurrent rechecks the pre-discovery capture at
+// a reconciliation source-state boundary. Page refresh happens before source
+// resolution, so this second check closes the window in which a container can
+// change after refresh but before its carried digest is applied.
+func (e *Engine) sqliteContainerPassCaptureStillCurrent(dbPath string) bool {
+	e.containerMu.Lock()
+	pass := e.containerPass
+	if pass == nil || pass.failed[dbPath] {
+		e.containerMu.Unlock()
+		return false
+	}
+	before, ok := pass.captured[dbPath]
+	e.containerMu.Unlock()
+	if !ok {
+		return false
+	}
+	after, ok := statSQLiteContainerState(dbPath)
+	if ok && after == before {
+		return true
+	}
+	e.containerMu.Lock()
+	if e.containerPass == pass {
+		pass.failed[dbPath] = true
+	}
+	e.containerMu.Unlock()
+	return false
+}
+
 // noteSQLiteContainerResult records a processed file's outcome for
 // promotion bookkeeping. Skips count as completions: a skipped session was
 // either gate-skipped against an already-trusted state or individually

@@ -6237,7 +6237,7 @@ func (e *Engine) applyReconciliationSourceStateIfValid(
 		e.containerMu.Lock()
 		passActive := e.containerPass != nil
 		e.containerMu.Unlock()
-		if passActive && !e.sqliteContainerPassCaptureValid(dbPath) {
+		if passActive && !e.sqliteContainerPassCaptureStillCurrent(dbPath) {
 			return false
 		}
 	}
