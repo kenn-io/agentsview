@@ -1719,6 +1719,41 @@ func TestOpenCodeReconciliationSourceStateRoundTrips(t *testing.T) {
 		"rehydration must reuse the discovery child digest")
 }
 
+func TestOpenCodeReconciliationRejectsInvalidSourceState(t *testing.T) {
+	sources := newOpenCodeFormatSourceSet(
+		[]string{t.TempDir()}, openCodeProviderSpecForAgent(AgentOpenCode), nil,
+	)
+	source := SourceRef{
+		Opaque: openCodeFormatSource{Path: "/data/opencode.db#ses_a"},
+	}
+	validPayload := make([]byte, openCodeReconciliationSourceStateHeader)
+	validPayload[8] = 1 << 0
+	watermarkPayload := append([]byte(nil), validPayload...)
+	watermarkPayload[8] = 1 << 1
+	for _, test := range []struct {
+		name  string
+		state ReconciliationSourceState
+	}{
+		{
+			name: "unsupported version",
+			state: ReconciliationSourceState{
+				Version: 2, Payload: validPayload,
+			},
+		},
+		{
+			name: "watermark without composite mtime",
+			state: ReconciliationSourceState{
+				Version: 1,
+				Payload: watermarkPayload,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Error(t, sources.applyReconciliationSourceState(&source, test.state))
+		})
+	}
+}
+
 func TestOpenCodeReconciliationKeepsStorageShadowSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))

@@ -1534,6 +1534,9 @@ func (s openCodeFormatSourceSet) applyReconciliationSourceState(
 	if state.Payload[8]&^(byte(1<<0)|byte(1<<1)) != 0 {
 		return fmt.Errorf("invalid %s reconciliation source state flags", s.spec.agent)
 	}
+	if state.Payload[8]&(1<<1) != 0 && state.Payload[8]&(1<<0) == 0 {
+		return fmt.Errorf("invalid %s reconciliation source state flags", s.spec.agent)
+	}
 	src, ok := openCodeSourceValue(*source)
 	if !ok {
 		return fmt.Errorf("%s reconciliation source state target unavailable", s.spec.agent)
