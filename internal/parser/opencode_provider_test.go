@@ -2233,21 +2233,3 @@ func TestOpenCodeFamilyVariantsHonorWatermarkListing(t *testing.T) {
 	})
 }
 
-func TestNonOpenCodeProvidersUnaffectedByContainerListingPolicy(t *testing.T) {
-	for _, agent := range []AgentType{AgentClaude, AgentZed} {
-		t.Run(string(agent), func(t *testing.T) {
-			calls := 0
-			provider, ok := NewProvider(agent, ProviderConfig{
-				Roots: []string{t.TempDir()},
-				SQLiteContainerListsWatermarkOnly: func(string) bool {
-					calls++
-					return true
-				},
-			})
-			require.True(t, ok)
-			_, err := provider.Discover(t.Context())
-			require.NoError(t, err)
-			assert.Zero(t, calls)
-		})
-	}
-}

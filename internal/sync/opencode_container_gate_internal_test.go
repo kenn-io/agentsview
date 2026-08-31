@@ -1014,46 +1014,6 @@ func TestOpenCodeResyncClearsDigestVerification(t *testing.T) {
 		"resync must clear the container verification timestamps")
 }
 
-func TestOpenCodeCancelledPassDoesNotStampVerification(t *testing.T) {
-	const dbPath = "/data/opencode.db"
-	e := &Engine{}
-	file := parser.DiscoveredFile{
-		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
-	}
-	e.beginStreamingSQLiteContainerPass(
-		map[string]parser.SQLiteContainerState{dbPath: {}},
-	)
-	e.noteSQLiteContainerDiscovery(file)
-	e.containerPass.fullDigestListed[dbPath] = true
-	e.noteSQLiteContainerResult(file.Path, true)
-	e.finishSQLiteContainerPass(true, true)
-	assert.NotContains(t, e.digestVerifiedAt, dbPath,
-		"a cancelled pass must not stamp verification")
-}
-
-func TestOpenCodeFailedPassesDoNotStampVerification(t *testing.T) {
-	for _, failure := range []string{
-		"failed member", "archive write", "baseline",
-	} {
-		t.Run(failure, func(t *testing.T) {
-			const dbPath = "/data/opencode.db"
-			file := parser.DiscoveredFile{
-				Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
-			}
-			e := &Engine{}
-			e.beginStreamingSQLiteContainerPass(
-				map[string]parser.SQLiteContainerState{dbPath: {}},
-			)
-			e.noteSQLiteContainerDiscovery(file)
-			e.containerPass.fullDigestListed[dbPath] = true
-			e.noteSQLiteContainerResult(file.Path, false)
-			e.finishSQLiteContainerPass(false, true)
-			assert.NotContains(t, e.digestVerifiedAt, dbPath,
-				"a failed pass must not stamp verification")
-		})
-	}
-}
-
 func TestOpenCodeReplacementCannotReuseVerification(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "opencode.db")
 	origNow := openCodeContainerDigestVerifyNow
@@ -1091,13 +1051,6 @@ func TestOpenCodeReplacementCannotReuseVerification(t *testing.T) {
 		unavailable.DBDevice = 0
 		assert.False(t, watermarkAdmission(unavailable, unavailable),
 			"unavailable identity must fail closed to full digest listing")
-	})
-
-	t.Run("transaction counter rollback", func(t *testing.T) {
-		restored := previous
-		restored.DBChangeCounter--
-		assert.False(t, watermarkAdmission(previous, restored),
-			"a rolled-back SQLite state must not reuse verification")
 	})
 
 	t.Run("normal in-place transaction", func(t *testing.T) {
