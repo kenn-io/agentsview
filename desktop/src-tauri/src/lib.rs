@@ -91,9 +91,14 @@ struct DeepLinkState {
 
 // Routes stay Deferred until the next backend redirect so a deep
 // link that arrives before the server answers rides
-// redirect_when_ready instead of racing it.
+// redirect_when_ready instead of racing it. Redirecting covers the
+// window between the redirect thread consuming the deferred route
+// and its navigation landing: a route dispatched there would lose
+// to the still-in-flight redirect, so it queues until
+// finish_redirect replays it.
 enum DeepLinkDispatch {
     Deferred(Option<String>),
+    Redirecting(Option<String>),
     Live,
 }
 
@@ -101,7 +106,7 @@ impl DeepLinkDispatch {
     // Some((port, route)) means the caller should navigate now.
     fn route_for_navigation(&mut self, route: String, port: Option<u16>) -> Option<(u16, String)> {
         match self {
-            DeepLinkDispatch::Deferred(pending) => {
+            DeepLinkDispatch::Deferred(pending) | DeepLinkDispatch::Redirecting(pending) => {
                 *pending = Some(route);
                 None
             }
@@ -117,9 +122,30 @@ impl DeepLinkDispatch {
     }
 
     fn take_pending(&mut self) -> Option<String> {
-        match std::mem::replace(self, DeepLinkDispatch::Live) {
-            DeepLinkDispatch::Deferred(pending) => pending,
+        match self {
+            DeepLinkDispatch::Deferred(pending) | DeepLinkDispatch::Redirecting(pending) => {
+                let route = pending.take();
+                *self = DeepLinkDispatch::Redirecting(None);
+                route
+            }
             DeepLinkDispatch::Live => None,
+        }
+    }
+
+    // Returns a route queued while the startup redirect was in
+    // flight; it is newer than the redirect target, so the caller
+    // must navigate to it. After a defer() (backend restarting) the
+    // state is Deferred again and a queued route rides the next
+    // redirect instead, so a late-finishing redirect thread changes
+    // nothing.
+    fn finish_redirect(&mut self) -> Option<String> {
+        match self {
+            DeepLinkDispatch::Redirecting(pending) => {
+                let route = pending.take();
+                *self = DeepLinkDispatch::Live;
+                route
+            }
+            DeepLinkDispatch::Deferred(_) | DeepLinkDispatch::Live => None,
         }
     }
 
@@ -127,8 +153,13 @@ impl DeepLinkDispatch {
     // dispatched in that window would be clobbered by the pending
     // redirect's fallback root navigation; hold routes until it runs.
     fn defer(&mut self) {
-        if matches!(self, DeepLinkDispatch::Live) {
-            *self = DeepLinkDispatch::Deferred(None);
+        match self {
+            DeepLinkDispatch::Live => *self = DeepLinkDispatch::Deferred(None),
+            DeepLinkDispatch::Redirecting(pending) => {
+                let route = pending.take();
+                *self = DeepLinkDispatch::Deferred(route);
+            }
+            DeepLinkDispatch::Deferred(_) => {}
         }
     }
 }
@@ -398,6 +429,18 @@ fn take_pending_deep_link_route(handle: &AppHandle) -> Option<String> {
         return None;
     };
     dispatch.take_pending()
+}
+
+fn finish_deep_link_redirect(handle: &AppHandle) -> Option<String> {
+    let deep_link_state = handle.try_state::<DeepLinkState>()?;
+    let Ok(mut dispatch) = deep_link_state.dispatch.lock() else {
+        log_deep_link_event(
+            handle,
+            "dropping any deep link route queued during redirect: dispatch lock poisoned",
+        );
+        return None;
+    };
+    dispatch.finish_redirect()
 }
 
 fn defer_deep_link_dispatch(app: &AppHandle) {
@@ -1781,6 +1824,14 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
                         eprintln!("[agentsview] invalid redirect URL: {err}");
                     }
                 }
+            }
+            if let Some(route) = finish_deep_link_redirect(window.app_handle()) {
+                log_deep_link_event(
+                    window.app_handle(),
+                    format!("navigating to deep link route {route} queued during startup redirect")
+                        .as_str(),
+                );
+                navigate_main_window_to_route(window.app_handle(), port, route.as_str());
             }
             return;
         }
@@ -5101,6 +5152,7 @@ agentsview running at http://127.0.0.1:18082
     fn deep_link_dispatch_navigates_directly_once_live() {
         let mut dispatch = DeepLinkDispatch::Deferred(None);
         dispatch.take_pending();
+        assert_eq!(dispatch.finish_redirect(), None);
         assert_eq!(
             dispatch.route_for_navigation("/sessions/a".to_string(), Some(18080)),
             Some((18080, "/sessions/a".to_string()))
@@ -5108,9 +5160,43 @@ agentsview running at http://127.0.0.1:18082
     }
 
     #[test]
+    fn deep_link_dispatch_queues_route_during_startup_redirect() {
+        // Between take_pending and the redirect's navigation landing,
+        // a newer route must queue and replay after the redirect
+        // instead of navigating first and losing to it.
+        let mut dispatch = DeepLinkDispatch::Deferred(Some("/sessions/a".to_string()));
+        assert_eq!(dispatch.take_pending().as_deref(), Some("/sessions/a"));
+        assert_eq!(
+            dispatch.route_for_navigation("/sessions/b".to_string(), Some(18080)),
+            None
+        );
+        assert_eq!(dispatch.finish_redirect().as_deref(), Some("/sessions/b"));
+        assert_eq!(
+            dispatch.route_for_navigation("/sessions/c".to_string(), Some(18080)),
+            Some((18080, "/sessions/c".to_string()))
+        );
+    }
+
+    #[test]
+    fn deep_link_dispatch_defer_during_redirect_holds_queued_route() {
+        let mut dispatch = DeepLinkDispatch::Deferred(None);
+        dispatch.take_pending();
+        assert_eq!(
+            dispatch.route_for_navigation("/sessions/a".to_string(), Some(18080)),
+            None
+        );
+        dispatch.defer();
+        // The redirect thread finishing after the defer must not flip
+        // the re-deferred dispatch to Live or steal the queued route.
+        assert_eq!(dispatch.finish_redirect(), None);
+        assert_eq!(dispatch.take_pending().as_deref(), Some("/sessions/a"));
+    }
+
+    #[test]
     fn deep_link_dispatch_re_defers_live_route_when_port_unknown() {
         let mut dispatch = DeepLinkDispatch::Deferred(None);
         dispatch.take_pending();
+        dispatch.finish_redirect();
         assert_eq!(
             dispatch.route_for_navigation("/sessions/a".to_string(), None),
             None
@@ -5124,6 +5210,7 @@ agentsview running at http://127.0.0.1:18082
         // after defer() must wait for the redirect, not navigate.
         let mut dispatch = DeepLinkDispatch::Deferred(None);
         dispatch.take_pending();
+        dispatch.finish_redirect();
         dispatch.defer();
         assert_eq!(
             dispatch.route_for_navigation("/sessions/a".to_string(), Some(18080)),
