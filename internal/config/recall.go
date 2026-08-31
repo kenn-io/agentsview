@@ -135,8 +135,6 @@ func (c RecallExtractConfig) ResolvedServer() (string, RecallExtractServerConfig
 	return name, s, nil
 }
 
-// Validate checks the extraction config for internal consistency. It is a
-// no-op when the section is disabled.
 // Values for RecallExtractConfig.CandidateFindings.
 const (
 	RecallCandidateFindingsBlock = "block"
@@ -150,7 +148,18 @@ func (c RecallExtractConfig) AllowCandidateFindings() bool {
 	return c.CandidateFindings == RecallCandidateFindingsAllow
 }
 
+// Validate checks the extraction config for internal consistency. When the
+// section is disabled, it validates only CandidateFindings because the
+// reconcile-only daemon path still applies that policy to a serving corpus.
 func (c RecallExtractConfig) Validate() error {
+	switch c.CandidateFindings {
+	case "", RecallCandidateFindingsBlock, RecallCandidateFindingsAllow:
+	default:
+		return fmt.Errorf(
+			"[recall.extract] candidate_findings must be %q or %q, got %q",
+			RecallCandidateFindingsBlock, RecallCandidateFindingsAllow,
+			c.CandidateFindings)
+	}
 	if !c.Enabled {
 		return nil
 	}
@@ -181,14 +190,6 @@ func (c RecallExtractConfig) Validate() error {
 		if err := c.Servers[name].validate(name); err != nil {
 			return err
 		}
-	}
-	switch c.CandidateFindings {
-	case "", RecallCandidateFindingsBlock, RecallCandidateFindingsAllow:
-	default:
-		return fmt.Errorf(
-			"[recall.extract] candidate_findings must be %q or %q, got %q",
-			RecallCandidateFindingsBlock, RecallCandidateFindingsAllow,
-			c.CandidateFindings)
 	}
 	if c.MaxWindowChars <= 0 {
 		return fmt.Errorf(

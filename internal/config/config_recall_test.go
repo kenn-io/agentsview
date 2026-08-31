@@ -43,6 +43,13 @@ func TestRecallExtractConfigValidate(t *testing.T) {
 			mutate: func(c *RecallExtractConfig) { *c = RecallExtractConfig{} },
 		},
 		{
+			name: "disabled rejects unknown candidate_findings",
+			mutate: func(c *RecallExtractConfig) {
+				*c = RecallExtractConfig{CandidateFindings: "maybe"}
+			},
+			wantErr: "candidate_findings must be",
+		},
+		{
 			name:    "enabled missing model",
 			mutate:  func(c *RecallExtractConfig) { c.Model = "" },
 			wantErr: "model is required",

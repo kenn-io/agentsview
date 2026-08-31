@@ -146,6 +146,8 @@ func setupRecallExtraction(
 	cfg config.Config, database *db.DB, idle *server.IdleTracker,
 ) (*extractScheduler, error) {
 	if !cfg.Recall.Extract.Enabled {
+		database.SetExtractCandidateFindingsAllowed(
+			cfg.Recall.Extract.AllowCandidateFindings())
 		return setupExtractReconcileOnly(database, idle)
 	}
 	dist, err := resolveExtractDistillation(cfg.Recall.Extract)

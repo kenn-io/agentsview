@@ -56,12 +56,12 @@ links use `/recall?tab=generated&insight=<id>`.
 Generated insights use the configured OpenAI-compatible endpoint when
 `[insights]` has both an `endpoint` and `model`; when `[insights]` is absent,
 they use the selected agent CLI on your machine. Partial endpoint configuration
-is rejected during configuration validation. Endpoint mode sends one non-streaming
-`POST /chat/completions` request with the generated prompt as a user message.
-It accepts the first choice's `assistant` message with string `message.content`
-and optional response `model`. It does not support streaming, `/responses`, legacy completions,
-tool calls, or content-part arrays. An endpoint failure returns an error and
-does not retry through a CLI.
+is rejected during configuration validation. Endpoint mode sends one
+non-streaming `POST /chat/completions` request with the generated prompt as a
+user message. It accepts the first choice's `assistant` message with string
+`message.content` and optional response `model`. It does not support streaming,
+`/responses`, legacy completions, tool calls, or content-part arrays. An
+endpoint failure returns an error and does not retry through a CLI.
 
 ```toml
 [insights]
@@ -71,14 +71,14 @@ api_key_env = "OPENAI_API_KEY" # optional; the value is read at runtime
 # allow_http = true            # required for non-loopback HTTP endpoints
 ```
 
-Loopback HTTP endpoints are allowed for local models. Remote endpoints must
-use HTTPS unless `allow_http = true` explicitly opts into plaintext transport.
-The endpoint receives transcript-derived content, so review the provider's
-privacy and retention behavior. API keys stay in the environment and are sent
-only as a bearer header; they are not stored in the AgentsView configuration.
-Canned insight cache keys include the effective backend, model, and a safe
-endpoint identity, so changing `[insights]` after restarting the server selects
-a separate cached report. Changes to credentials or transport opt-ins do not
+Loopback HTTP endpoints are allowed for local models. Remote endpoints must use
+HTTPS unless `allow_http = true` explicitly opts into plaintext transport. The
+endpoint receives transcript-derived content, so review the provider's privacy
+and retention behavior. API keys stay in the environment and are sent only as a
+bearer header; they are not stored in the AgentsView configuration. Canned
+insight cache keys include the effective backend, model, and a safe endpoint
+identity, so changing `[insights]` after restarting the server selects a
+separate cached report. Changes to credentials or transport opt-ins do not
 change that identity; use force refresh when those changes should regenerate a
 report under the same endpoint and model.
 
@@ -199,10 +199,11 @@ names, and even a same-origin allowance can be steered elsewhere by re-resolving
 the hostname. Configure the endpoint with its final URL.
 
 Sessions are only ever extracted when they are not automated, not trashed, and
-have a clean, current **full** secret scan — a session with secret findings of
-any confidence, one never scanned, or one covered only by the fast inline sync
-scan never reaches the model. Run `agentsview secrets scan --backfill` to make
-sessions eligible. Session content is sent only to the endpoints you configure.
+have a clean, current **full** secret scan. By default, a session with secret
+findings of any confidence, one never scanned, or one covered only by the fast
+inline sync scan never reaches the model. Run
+`agentsview secrets scan --backfill` to make sessions eligible. Session content
+is sent only to the endpoints you configure.
 
 One knob narrows that boundary deliberately: `candidate_findings = "allow"`
 under `[recall.extract]`. Candidate-confidence findings — the false-positive-
@@ -212,8 +213,8 @@ longer exclude a session; only definite findings do, in discovery, in the
 pre-send transcript check, at commit, and in reconciliation. The default,
 `"block"`, keeps every recorded finding blocking. Consider `"allow"` when the
 endpoint is a machine you own and the archive is full of paths and identifiers
-that trip the entropy heuristic; keep the default for any endpoint you would
-not send a suspected secret to.
+that trip the entropy heuristic; keep the default for any endpoint you would not
+send a suspected secret to.
 
 Each distillation configuration (model, prompts, segmentation, request shape) is
 fingerprinted as a *generation*; changing the configuration builds a new corpus
