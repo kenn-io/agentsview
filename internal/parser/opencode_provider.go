@@ -976,6 +976,50 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 	return SourceRef{}, false, nil
 }
 
+func (s openCodeFormatSourceSet) SourceForReconciliationWithState(
+	ctx context.Context, path, project string, state ReconciliationSourceState,
+) (SourceRef, bool, error) {
+	if state.Version == 0 {
+		return s.SourceForReconciliation(ctx, path, project)
+	}
+	if err := ctx.Err(); err != nil {
+		return SourceRef{}, false, err
+	}
+	for _, root := range s.roots {
+		source, ok := s.sourceRefForReconciliationState(root, path)
+		if !ok {
+			continue
+		}
+		if project != "" {
+			source.ProjectHint = project
+		}
+		return source, true, nil
+	}
+	return SourceRef{}, false, nil
+}
+
+func (s openCodeFormatSourceSet) sourceRefForReconciliationState(
+	root, path string,
+) (SourceRef, bool) {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if dbPath, sessionID, ok := s.spec.parseVirtual(path); ok {
+		if _, under := relUnder(root, dbPath); !under {
+			return SourceRef{}, false
+		}
+		if selected := findOpenCodeFormatStorageSessionFile(
+			s.spec.format, root, sessionID,
+		); selected != "" {
+			return s.sourceRefFromStoragePath(root, selected)
+		}
+		return s.newSourceRef(root, path, ""), true
+	}
+	if !s.isStorageSessionPath(root, path, true) {
+		return SourceRef{}, false
+	}
+	return s.newSourceRef(root, path, openCodeSessionProject(path)), true
+}
+
 // openCodeSQLiteSessionWatermarkOnly carries the same session/project
 // watermark as a watermark discovery row without resolving child tables.
 // Streamed reconciliation rehydrates sources from their paths, so it needs
@@ -1465,6 +1509,12 @@ func (p *openCodeFormatProvider) ReconciliationSourceState(
 	source SourceRef,
 ) (ReconciliationSourceState, bool) {
 	return p.sources.reconciliationSourceState(source)
+}
+
+func (p *openCodeFormatProvider) SourceForReconciliationWithState(
+	ctx context.Context, path, project string, state ReconciliationSourceState,
+) (SourceRef, bool, error) {
+	return p.sources.SourceForReconciliationWithState(ctx, path, project, state)
 }
 
 func (p *openCodeFormatProvider) ApplyReconciliationSourceState(

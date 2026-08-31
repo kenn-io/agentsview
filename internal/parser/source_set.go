@@ -172,6 +172,16 @@ func (p *SourceSetProvider) SourceForReconciliation(
 	return resolver.SourceForReconciliation(ctx, path, project)
 }
 
+func (p *SourceSetProvider) SourceForReconciliationWithState(
+	ctx context.Context, path, project string, state ReconciliationSourceState,
+) (SourceRef, bool, error) {
+	resolver, ok := p.sources.(ReconciliationSourceStateResolver)
+	if !ok {
+		return p.SourceForReconciliation(ctx, path, project)
+	}
+	return resolver.SourceForReconciliationWithState(ctx, path, project, state)
+}
+
 func (p *SourceSetProvider) ReconciliationMemberIdentity(
 	fullSessionID string,
 ) string {

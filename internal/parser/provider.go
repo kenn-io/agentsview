@@ -172,6 +172,15 @@ type ReconciliationSourceResolver interface {
 	) (SourceRef, bool, error)
 }
 
+// ReconciliationSourceStateResolver is the fast source resolver for candidates
+// that carry provider-owned discovery state. It may use that state to avoid
+// reopening a shared container while still resolving storage shadows.
+type ReconciliationSourceStateResolver interface {
+	SourceForReconciliationWithState(
+		context.Context, string, string, ReconciliationSourceState,
+	) (SourceRef, bool, error)
+}
+
 // ReconciliationSourceState is a bounded provider-owned payload carried with
 // a streamed reconciliation candidate. It preserves discovery metadata across
 // the temporary sync spool without retaining provider sources in memory.

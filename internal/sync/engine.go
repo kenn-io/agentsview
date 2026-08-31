@@ -6118,9 +6118,19 @@ func (e *Engine) rehydrateReconciliationPage(
 			return nil, fmt.Errorf("rehydrate %s source: provider unavailable", candidate.Provider)
 		}
 		if resolver, ok := provider.(parser.ReconciliationSourceResolver); ok {
-			source, found, err := resolver.SourceForReconciliation(
-				ctx, candidate.Path, candidate.Project,
-			)
+			var source parser.SourceRef
+			var found bool
+			var err error
+			if stateResolver, stateOK := provider.(parser.ReconciliationSourceStateResolver); stateOK &&
+				candidate.SourceState.Version != 0 {
+				source, found, err = stateResolver.SourceForReconciliationWithState(
+					ctx, candidate.Path, candidate.Project, candidate.SourceState,
+				)
+			} else {
+				source, found, err = resolver.SourceForReconciliation(
+					ctx, candidate.Path, candidate.Project,
+				)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("rehydrate %s source %s: %w", candidate.Provider, candidate.Path, err)
 			}

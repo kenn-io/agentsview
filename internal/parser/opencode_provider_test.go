@@ -1702,8 +1702,8 @@ func TestOpenCodeReconciliationSourceStateRoundTrips(t *testing.T) {
 	rehydrationSources := newOpenCodeFormatSourceSet(
 		[]string{root}, spec, nil,
 	)
-	source, found, err := rehydrationSources.SourceForReconciliation(
-		t.Context(), dbPath+"#ses_a", "",
+	source, found, err := rehydrationSources.SourceForReconciliationWithState(
+		t.Context(), dbPath+"#ses_a", "", state,
 	)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -1771,10 +1771,11 @@ func TestOpenCodeReconciliationKeepsStorageShadowSource(t *testing.T) {
 		SQLiteContainerListsWatermarkOnly: func(string) bool { return true },
 	})
 	require.True(t, ok)
-	resolver, ok := provider.(ReconciliationSourceResolver)
+	stateResolver, ok := provider.(ReconciliationSourceStateResolver)
 	require.True(t, ok)
-	source, found, err := resolver.SourceForReconciliation(
+	source, found, err := stateResolver.SourceForReconciliationWithState(
 		t.Context(), dbPath+"#ses_a", "",
+		ReconciliationSourceState{Version: 1, Payload: []byte("state")},
 	)
 	require.NoError(t, err)
 	require.True(t, found)
