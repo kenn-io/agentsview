@@ -6254,7 +6254,11 @@ func (e *Engine) refreshReconciliationPageContainerCaptures(
 // applyReconciliationSourceStateIfValid treats provider state as an optional
 // optimization. Missing, malformed, or stale state falls through to the
 // authoritative changed-path source resolution instead of aborting
-// reconciliation.
+// reconciliation. The container capture check keys on the RESOLVED source
+// representation, not the candidate path: resolution may have promoted a
+// virtual SQLite member to its canonical storage shadow, whose parse does
+// not depend on the container, and rejecting it here would send it to a
+// path-matching fallback that cannot match the promoted path.
 func (e *Engine) applyReconciliationSourceStateIfValid(
 	provider parser.Provider,
 	source *parser.SourceRef,
@@ -6265,8 +6269,12 @@ func (e *Engine) applyReconciliationSourceStateIfValid(
 	if state.Version == 0 {
 		return true
 	}
+	resolvedPath := providerDiscoveredPath(*source)
+	if resolvedPath == "" {
+		resolvedPath = path
+	}
 	if dbPath, _, ok := sqliteContainerSourceForFile(parser.DiscoveredFile{
-		Agent: agent, Path: path,
+		Agent: agent, Path: resolvedPath,
 	}); ok {
 		e.containerMu.Lock()
 		passActive := e.containerPass != nil

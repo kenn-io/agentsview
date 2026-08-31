@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -197,6 +198,57 @@ func TestReconciliationStateFallsBackAfterContainerChanges(t *testing.T) {
 		"stale discovery state must not be applied after container change")
 	assert.True(t, engine.containerPass.failed[container],
 		"changed container must fail the current reconciliation pass")
+}
+
+// TestReconciliationShadowPromotionSurvivesContainerChange pins the capture
+// check to the resolved source representation: a candidate promoted to its
+// storage shadow does not depend on the SQLite container, so a container
+// change mid-pass must not reject its state application into the
+// path-matching fallback, which cannot match the promoted path.
+func TestReconciliationShadowPromotionSurvivesContainerChange(t *testing.T) {
+	container, conn := newContainerTestDB(t)
+	shadowPath := filepath.Join(t.TempDir(), "ses_a.json")
+	require.NoError(t, os.WriteFile(shadowPath, []byte("{}"), 0o600))
+	source := parser.SourceRef{
+		Provider:       parser.AgentOpenCode,
+		DisplayPath:    shadowPath,
+		FingerprintKey: shadowPath,
+		Key:            shadowPath,
+	}
+	provider := &reconciliationSourceStateTestProvider{
+		source: source,
+		state: parser.ReconciliationSourceState{
+			Version: 1,
+			Payload: []byte("discovery-state"),
+		},
+	}
+	before, ok := parser.StatSQLiteContainerState(container)
+	require.True(t, ok, "container state must be readable")
+	engine := &Engine{}
+	engine.beginStreamingSQLiteContainerPass(
+		map[string]parser.SQLiteContainerState{container: before},
+	)
+	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
+	require.NoError(t, err, "change container before rehydration")
+
+	files, err := engine.rehydrateReconciliationPage(
+		t.Context(), []reconciliationCandidate{{
+			Provider:    parser.AgentOpenCode,
+			Identity:    "ses_a",
+			Path:        container + "#ses_a",
+			SourceState: provider.state,
+		}},
+		map[parser.AgentType]parser.Provider{
+			parser.AgentOpenCode: provider,
+		},
+		false,
+	)
+	require.NoError(t, err,
+		"a shadow-promoted candidate must survive a container change")
+	require.Len(t, files, 1)
+	require.NotNil(t, files[0].ProviderSource)
+	assert.Equal(t, shadowPath, files[0].ProviderSource.DisplayPath,
+		"the promoted storage shadow source must be kept")
 }
 
 func TestFailedSQLiteContainerPassDropsCarriedProviderState(t *testing.T) {
