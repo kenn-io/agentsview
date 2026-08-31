@@ -10903,6 +10903,13 @@ func (e *Engine) processProviderFile(
 		PathRewriter:          e.pathRewriter,
 	})
 
+	// Re-apply the pass-failure check at the moment carried metadata is
+	// about to be trusted: another worker can fail the container after this
+	// file's capture recheck above, and the locked read keeps that mark
+	// from racing the fingerprint skip. A write landing after both checks
+	// is caught by finalization revalidation, which blocks promotion and
+	// clears verification so the next pass reconciles it.
+	e.discardFailedSQLiteProviderSource(&file)
 	source, found, err := e.providerSourceForDiscoveredFile(ctx, provider, file)
 	if err != nil {
 		return processResult{err: err}, true
@@ -14162,10 +14169,14 @@ func (e *Engine) stampProviderFileIdentity(
 	}
 }
 
-// discardStaleSQLiteProviderSource removes discovery-carried metadata after a
-// container pass failed its recapture. The provider must resolve the current
-// source before any freshness gate can inspect its fingerprint; otherwise a
-// full-digest source can continue carrying the pre-change child digest.
+// discardStaleSQLiteProviderSource removes discovery-carried metadata when
+// the container pass no longer holds a live capture: the pass failed its
+// recapture, or the container changed after it. The recheck stats the live
+// container, so a write landing between the post-discovery recapture and
+// this worker cannot leave a stale full-digest source whose pre-change
+// child digest matches the archived fingerprint and skips the changed
+// session. The provider must resolve the current source before any
+// freshness gate can inspect its fingerprint.
 func (e *Engine) discardStaleSQLiteProviderSource(file *parser.DiscoveredFile) {
 	if file == nil || file.ProviderSource == nil {
 		return
@@ -14175,9 +14186,30 @@ func (e *Engine) discardStaleSQLiteProviderSource(file *parser.DiscoveredFile) {
 		return
 	}
 	e.containerMu.Lock()
-	stale := e.containerPass != nil && e.containerPass.failed[dbPath]
+	passActive := e.containerPass != nil
 	e.containerMu.Unlock()
-	if stale {
+	if passActive && !e.sqliteContainerPassCaptureStillCurrent(dbPath) {
+		file.ProviderSource = nil
+	}
+}
+
+// discardFailedSQLiteProviderSource drops carried metadata for a container
+// the pass has recorded as failed, under the container lock, without a
+// fresh stat. It backs the stat-based recheck above for consumers that run
+// after it: the failure may be recorded by any worker at any point in the
+// pass, and carried digests must not outlive it.
+func (e *Engine) discardFailedSQLiteProviderSource(file *parser.DiscoveredFile) {
+	if file == nil || file.ProviderSource == nil {
+		return
+	}
+	dbPath, _, ok := sqliteContainerSourceForFile(*file)
+	if !ok {
+		return
+	}
+	e.containerMu.Lock()
+	failed := e.containerPass != nil && e.containerPass.failed[dbPath]
+	e.containerMu.Unlock()
+	if failed {
 		file.ProviderSource = nil
 	}
 }

@@ -226,6 +226,55 @@ func TestFailedSQLiteContainerPassDropsCarriedProviderState(t *testing.T) {
 		"failed container must re-resolve instead of using carried state")
 }
 
+// TestMidPassContainerWriteDropsCarriedProviderState pins the worker-boundary
+// recheck: a write landing after the post-discovery recapture invalidates the
+// carried full-digest source, so the changed session re-resolves live instead
+// of skipping on its pre-change digest.
+func TestMidPassContainerWriteDropsCarriedProviderState(t *testing.T) {
+	container, conn := newContainerTestDB(t)
+	source := parser.SourceRef{
+		Provider:       parser.AgentOpenCode,
+		DisplayPath:    container + "#ses_a",
+		FingerprintKey: container + "#ses_a",
+		Key:            container + "#ses_a",
+	}
+	pre, ok := parser.StatSQLiteContainerState(container)
+	require.True(t, ok, "container state must be readable")
+	engine := &Engine{}
+	engine.beginStreamingSQLiteContainerPass(
+		map[string]parser.SQLiteContainerState{container: pre},
+	)
+	file := parser.DiscoveredFile{
+		Agent:          parser.AgentOpenCode,
+		Path:           source.DisplayPath,
+		ProviderSource: &source,
+	}
+
+	engine.discardStaleSQLiteProviderSource(&file)
+	require.NotNil(t, file.ProviderSource,
+		"an unchanged capture keeps the carried source")
+
+	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
+	require.NoError(t, err, "write container after recapture")
+
+	engine.discardStaleSQLiteProviderSource(&file)
+	assert.Nil(t, file.ProviderSource,
+		"a mid-pass container write must drop the carried source")
+	assert.True(t, engine.containerPass.failed[container],
+		"the recheck must fail the container for the rest of the pass")
+
+	// A failure recorded by another worker after this file's recheck must
+	// still drop the carried source at the consumption boundary.
+	late := parser.DiscoveredFile{
+		Agent:          parser.AgentOpenCode,
+		Path:           source.DisplayPath,
+		ProviderSource: &source,
+	}
+	engine.discardFailedSQLiteProviderSource(&late)
+	assert.Nil(t, late.ProviderSource,
+		"a recorded container failure must drop carried sources without a stat")
+}
+
 // newContainerTestDB creates a real SQLite file named like an OpenCode
 // container, so the pass's post-discovery recapture has something to stat.
 func newContainerTestDB(t *testing.T) (string, *sql.DB) {
