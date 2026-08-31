@@ -199,6 +199,33 @@ func TestReconciliationStateFallsBackAfterContainerChanges(t *testing.T) {
 		"changed container must fail the current reconciliation pass")
 }
 
+func TestFailedSQLiteContainerPassDropsCarriedProviderState(t *testing.T) {
+	container, _ := newContainerTestDB(t)
+	source := parser.SourceRef{
+		Provider:       parser.AgentOpenCode,
+		DisplayPath:    container + "#ses_a",
+		FingerprintKey: container + "#ses_a",
+		Key:            container + "#ses_a",
+	}
+	engine := &Engine{}
+	engine.beginStreamingSQLiteContainerPass(
+		map[string]parser.SQLiteContainerState{
+			container: {},
+		},
+	)
+	engine.containerPass.failed[container] = true
+	file := parser.DiscoveredFile{
+		Agent:          parser.AgentOpenCode,
+		Path:           source.DisplayPath,
+		ProviderSource: &source,
+	}
+
+	engine.discardStaleSQLiteProviderSource(&file)
+
+	assert.Nil(t, file.ProviderSource,
+		"failed container must re-resolve instead of using carried state")
+}
+
 // newContainerTestDB creates a real SQLite file named like an OpenCode
 // container, so the pass's post-discovery recapture has something to stat.
 func newContainerTestDB(t *testing.T) (string, *sql.DB) {

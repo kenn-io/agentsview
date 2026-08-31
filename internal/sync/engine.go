@@ -10832,6 +10832,7 @@ func (e *Engine) processProviderFile(
 	if file.ProviderSource != nil && !file.ProviderProcess && !usesProvider {
 		return processResult{}, false
 	}
+	e.discardStaleSQLiteProviderSource(&file)
 
 	// OpenCode-family shared-SQLite gate: when the whole container
 	// provably has not changed since the last fully verified pass, none
@@ -14124,6 +14125,26 @@ func (e *Engine) stampProviderFileIdentity(
 		}
 		results[i].Session.File.Inode = inode
 		results[i].Session.File.Device = device
+	}
+}
+
+// discardStaleSQLiteProviderSource removes discovery-carried metadata after a
+// container pass failed its recapture. The provider must resolve the current
+// source before any freshness gate can inspect its fingerprint; otherwise a
+// full-digest source can continue carrying the pre-change child digest.
+func (e *Engine) discardStaleSQLiteProviderSource(file *parser.DiscoveredFile) {
+	if file == nil || file.ProviderSource == nil {
+		return
+	}
+	dbPath, _, ok := sqliteContainerSourceForFile(*file)
+	if !ok {
+		return
+	}
+	e.containerMu.Lock()
+	stale := e.containerPass != nil && e.containerPass.failed[dbPath]
+	e.containerMu.Unlock()
+	if stale {
+		file.ProviderSource = nil
 	}
 }
 
