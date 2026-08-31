@@ -1122,6 +1122,143 @@ func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
 		"the due pass must perform the full container child scan")
 }
 
+// TestOpenCodeQuickSyncCutoffExemptsLapsedVerification pins the quick-sync
+// cutoff exemption: once a container's verification stamp lapses, a cutoff
+// pass processes the full digest listing it already paid for, so a
+// backdated child-only edit reconciles and the stamp refreshes. A container
+// with no stamp stays subject to the cutoff.
+func TestOpenCodeQuickSyncCutoffExemptsLapsedVerification(t *testing.T) {
+	dbPath, conn := newCompositeContainerTestDB(t)
+	origStat := statSQLiteContainerState
+	t.Cleanup(func() { statSQLiteContainerState = origStat })
+	statSQLiteContainerState = func(path string) (parser.SQLiteContainerState, bool) {
+		state, ok := parser.StatSQLiteContainerState(path)
+		if ok {
+			state.DBInode = 1
+			state.DBDevice = 1
+		}
+		return state, ok
+	}
+	_, err := conn.Exec(`
+		INSERT INTO project (id, worktree, time_updated)
+		VALUES ('proj', '/home/user/code/app', 1779012000000);
+		INSERT INTO session
+			(id, project_id, time_created, time_updated)
+		VALUES ('ses-1', 'proj', 1779012000000, 1779012000000);
+		INSERT INTO message
+			(id, session_id, data, time_created, time_updated)
+		VALUES ('msg-1', 'ses-1', '{"role":"user"}', 1779012000000, 1779012000000);
+		INSERT INTO part
+			(id, session_id, message_id, data, time_created, time_updated)
+		VALUES ('part-1', 'ses-1', 'msg-1',
+			'{"type":"text","text":"original prompt"}',
+			1779012000000, 1779012000000)
+	`)
+	require.NoError(t, err, "seed composite container")
+
+	// Every row timestamp sits below this cutoff, so the ordinary quick-sync
+	// filter would drop the session.
+	cutoff := time.UnixMilli(1_779_100_000_000)
+
+	archive := openTestDB(t)
+	e := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {filepath.Dir(dbPath)},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(e.Close)
+	assertContent := func(want string) {
+		messages, err := archive.GetAllMessages(t.Context(), "opencode:ses-1")
+		require.NoError(t, err, "read archived messages")
+		require.Len(t, messages, 1)
+		assert.Equal(t, want, messages[0].Content)
+	}
+
+	origNow := openCodeContainerDigestVerifyNow
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
+	verifyNow := time.Unix(100, 0)
+	openCodeContainerDigestVerifyNow = func() time.Time { return verifyNow }
+	initial := e.SyncAll(t.Context(), nil)
+	require.False(t, initial.Aborted, "initial sync aborted: %+v", initial)
+	require.Equal(t, 1, initial.Synced)
+	assertContent("original prompt")
+
+	// Backdated child-only edit: content and identity change, every
+	// timestamp stays put, so the composite mtime stays below the cutoff.
+	_, err = conn.Exec(`
+		UPDATE part SET
+			id = 'part-1-v2',
+			data = '{"type":"text","text":"changed prompt"}'
+		WHERE id = 'part-1'
+	`)
+	require.NoError(t, err, "apply backdated child-only edit")
+
+	recent := e.SyncAllSince(t.Context(), cutoff, nil)
+	require.False(t, recent.Aborted, "recent quick sync aborted: %+v", recent)
+	assert.Zero(t, recent.Synced,
+		"inside the window a quick sync defers the child-only edit")
+	assertContent("original prompt")
+
+	verifyNow = verifyNow.Add(openCodeContainerDigestVerifyInterval)
+	due := e.SyncAllSince(t.Context(), cutoff, nil)
+	require.False(t, due.Aborted, "due quick sync aborted: %+v", due)
+	assert.Equal(t, 1, due.Synced,
+		"a lapsed container's sessions must bypass the cutoff")
+	assertContent("changed prompt")
+	assert.Equal(t, verifyNow, e.digestVerifiedAt[dbPath],
+		"the completed due pass must refresh the verification stamp")
+
+	// A fresh engine has no stamp, so the same quick sync keeps the cutoff:
+	// the backdated session is listed, filtered, and never parsed.
+	fresh := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {filepath.Dir(dbPath)},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(fresh.Close)
+	unstamped := fresh.SyncAllSince(t.Context(), cutoff, nil)
+	require.False(t, unstamped.Aborted, "fresh quick sync aborted: %+v", unstamped)
+	assert.Zero(t, unstamped.Synced,
+		"an unstamped container's old sessions stay behind the cutoff")
+	assert.Empty(t, fresh.digestVerifiedAt,
+		"an incomplete cutoff pass must not stamp verification")
+}
+
+// TestLapsedVerificationExemptionRequiresDigestListing pins the exemption to
+// discovery's listing form: an expired stamp alone must not exempt a
+// container whose pass listed watermark-only, as when the interval boundary
+// falls between discovery and the cutoff filter.
+func TestLapsedVerificationExemptionRequiresDigestListing(t *testing.T) {
+	dbPath, _ := newContainerTestDB(t)
+	state, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok, "container state must be readable")
+	origNow := openCodeContainerDigestVerifyNow
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
+	now := time.Unix(1000, 0)
+	openCodeContainerDigestVerifyNow = func() time.Time { return now }
+
+	file := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
+	}
+	e := &Engine{digestVerifiedAt: map[string]time.Time{
+		dbPath: now.Add(-2 * openCodeContainerDigestVerifyInterval),
+	}}
+	e.beginSQLiteContainerPass(
+		[]parser.DiscoveredFile{file},
+		map[string]parser.SQLiteContainerState{dbPath: state},
+	)
+	assert.Empty(t,
+		e.lapsedDigestVerificationContainers([]parser.DiscoveredFile{file}),
+		"a watermark-listed pass must not exempt an expired stamp")
+
+	e.containerPass.fullDigestListed[dbPath] = true
+	assert.Equal(t, map[string]bool{dbPath: true},
+		e.lapsedDigestVerificationContainers([]parser.DiscoveredFile{file}),
+		"a digest-listed pass exempts the expired stamp")
+}
+
 func TestOpenCodeFirstPassAfterProcessStartUsesDigestListing(t *testing.T) {
 	dbPath, _ := newContainerTestDB(t)
 	e := &Engine{

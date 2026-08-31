@@ -378,6 +378,76 @@ func openCodeContainerDigestVerificationCurrent(verifiedAt, now time.Time) bool 
 		now.Sub(verifiedAt) < openCodeContainerDigestVerifyInterval
 }
 
+// filterQuickSyncFiles applies the quick-sync mtime cutoff, exempting the
+// sessions of containers whose digest verification has lapsed. A lapsed
+// container's due pass already paid the full digest listing, and the stamp
+// can only refresh when every discovered session completes; filtering its
+// old-composite sessions would discard the listing's findings and leave the
+// container due again on every subsequent quick sync. The exemption costs at
+// most one full-gated pass over the container per verification interval.
+func (e *Engine) filterQuickSyncFiles(
+	ctx context.Context,
+	files []parser.DiscoveredFile,
+	cutoff time.Time,
+) []parser.DiscoveredFile {
+	due := e.lapsedDigestVerificationContainers(files)
+	if len(due) == 0 {
+		return e.filterFilesByMtime(ctx, files, cutoff)
+	}
+	kept := make([]parser.DiscoveredFile, 0, len(files))
+	filterable := make([]parser.DiscoveredFile, 0, len(files))
+	for _, f := range files {
+		if dbPath, _, ok := sqliteContainerSourceForFile(f); ok && due[dbPath] {
+			kept = append(kept, f)
+			continue
+		}
+		filterable = append(filterable, f)
+	}
+	return append(kept, e.filterFilesByMtime(ctx, filterable, cutoff)...)
+}
+
+// lapsedDigestVerificationContainers returns the containers among the
+// discovered files whose verification stamp exists but has aged past the
+// interval, and whose current pass carried the full digest listing. The
+// listing requirement keeps the exemption consistent with what discovery
+// produced: a pass that crossed the interval boundary after listing
+// watermark-only has no digest findings to process and could not refresh
+// the stamp, so its sessions stay behind the cutoff until the next pass
+// lists the digest form. A container with no stamp stays subject to the
+// cutoff: a fresh engine has no verification window to restore, and
+// exempting it would turn every quick sync into container-sized work.
+func (e *Engine) lapsedDigestVerificationContainers(
+	files []parser.DiscoveredFile,
+) map[string]bool {
+	var due map[string]bool
+	now := openCodeContainerDigestVerifyNow()
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	pass := e.containerPass
+	if pass == nil {
+		return nil
+	}
+	for _, f := range files {
+		dbPath, _, ok := sqliteContainerSourceForFile(f)
+		if !ok {
+			continue
+		}
+		if !pass.fullDigestListed[dbPath] {
+			continue
+		}
+		verifiedAt, stamped := e.digestVerifiedAt[dbPath]
+		if !stamped ||
+			openCodeContainerDigestVerificationCurrent(verifiedAt, now) {
+			continue
+		}
+		if due == nil {
+			due = make(map[string]bool)
+		}
+		due[dbPath] = true
+	}
+	return due
+}
+
 func sqliteContainerStateReplaced(
 	previous, current parser.SQLiteContainerState,
 ) bool {
