@@ -1633,6 +1633,40 @@ func TestOpenCodeSingleSessionMtimeDoesNotScanContainer(t *testing.T) {
 	}
 }
 
+func TestOpenCodeReconciliationRehydratesWatermarkMetadata(t *testing.T) {
+	root := t.TempDir()
+	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	seeder.AddProject("prj_1", "/home/user/code/app")
+	seeder.AddSession(
+		"ses_a", "prj_1", "", "A", 1700000000000, 1700000010000,
+	)
+	seeder.AddMessage(
+		"msg_a", "ses_a", 1700000000000, 1700000000000,
+		`{"role":"user"}`,
+	)
+	seeder.AddPart(
+		"part_a", "msg_a", "ses_a", 1700000000000, 1700000000000,
+		`{"type":"text","text":"answer"}`,
+	)
+	t.Cleanup(func() { _ = db.Close() })
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+		Roots:                             []string{root},
+		SQLiteContainerListsWatermarkOnly: func(string) bool { return true },
+	})
+	require.True(t, ok)
+	before := OpenCodeSessionChildLookups()
+	source, found, err := provider.(ReconciliationSourceResolver).
+		SourceForReconciliation(t.Context(), dbPath+"#ses_a", "")
+	require.NoError(t, err)
+	require.True(t, found)
+	watermark, watermarkOnly := SourceWatermarkOnlyMTimeNS(source)
+	assert.True(t, watermarkOnly)
+	assert.Equal(t, int64(1700000010000)*1_000_000, watermark)
+	assert.Equal(t, before, OpenCodeSessionChildLookups(),
+		"watermark rehydration must not resolve child digest")
+}
+
 // TestOpenCodeWatermarkOnlyQuerySkipsDigestScans pins that the mtime-only path
 // does not compute the digest aggregates. OpenCodeSourceMtime backs the session
 // watcher's 1.5s poll, so pulling the eight child COUNT/SUM/MIN/MAX subqueries

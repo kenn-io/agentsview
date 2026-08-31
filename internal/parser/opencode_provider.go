@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -938,12 +939,71 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 		if !ok {
 			continue
 		}
+		if dbPath, sessionID, sqlite := s.spec.parseVirtual(path); sqlite &&
+			s.containerListsWatermarkOnly != nil &&
+			s.containerListsWatermarkOnly(dbPath) {
+			watermark, composite, found, err :=
+				openCodeSQLiteSessionWatermarkOnly(ctx, dbPath, sessionID)
+			if err != nil {
+				return SourceRef{}, false, err
+			}
+			if !found {
+				return SourceRef{}, false, nil
+			}
+			if composite {
+				if src, ok := source.Opaque.(openCodeFormatSource); ok {
+					src.MTimeNS = watermark * 1_000_000
+					src.CompositeMTime = true
+					src.WatermarkOnly = true
+					source.Opaque = src
+				}
+			}
+		}
 		if project != "" {
 			source.ProjectHint = project
 		}
 		return source, true, nil
 	}
 	return SourceRef{}, false, nil
+}
+
+// openCodeSQLiteSessionWatermarkOnly carries the same session/project
+// watermark as a watermark discovery row without resolving child tables.
+// Streamed reconciliation rehydrates sources from their paths, so it needs
+// this bounded form to preserve the discovery decision before the freshness
+// gate decides whether a child digest is necessary.
+func openCodeSQLiteSessionWatermarkOnly(
+	ctx context.Context, dbPath, sessionID string,
+) (watermark int64, composite, found bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, false, false, err
+	}
+	db, err := openOpenCodeDB(dbPath)
+	if err != nil {
+		return 0, false, false, err
+	}
+	defer db.Close()
+	composite, err = openCodeCompositeMtimeSupportedCached(db, dbPath)
+	if err != nil {
+		return 0, false, false, err
+	}
+	query := "SELECT s.time_updated FROM session s WHERE s.id = ?"
+	if composite {
+		query = "SELECT " + openCodeSessionRowWatermarkExpr +
+			" FROM session s" + openCodeSessionCompositeMtimeJoins +
+			" WHERE s.id = ?"
+	}
+	err = db.QueryRowContext(ctx, query, sessionID).Scan(&watermark)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, composite, false, nil
+	}
+	if err != nil {
+		return 0, composite, false, fmt.Errorf(
+			"loading opencode session watermark %s#%s: %w",
+			dbPath, sessionID, err,
+		)
+	}
+	return watermark, composite, true, nil
 }
 
 var errOpenCodeCanonicalSourceFound = errors.New("opencode canonical source found")

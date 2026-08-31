@@ -76,6 +76,45 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 	)
 }
 
+func TestOpenCodeChangedContainerStreamRehydratesWatermarkMetadata(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file identity is unavailable; container fast path is disabled")
+	}
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/app")
+	for i := range 123 {
+		seedOpenCodeSQLiteTextSession(
+			t, oc, "proj", fmt.Sprintf("ses%05d", i),
+			1779012000000, 1779012030000, "prompt", "answer",
+		)
+	}
+	require.Equal(t, 123, env.engine.SyncAll(context.Background(), nil).Synced)
+
+	oc.updateSessionTime(t, "ses00000", 1779015630000)
+	oc.replaceTextContent(
+		t, "ses00000", "changed prompt", "changed answer", 1779015600000,
+	)
+	scansBefore := parser.OpenCodeContainerChildScans()
+	lookupsBefore := parser.OpenCodeSessionChildLookups()
+	require.NoError(t, env.engine.ReconcileProviderRoots(
+		t.Context(), parser.AgentOpenCode, []string{env.opencodeDir},
+	))
+	stats := env.engine.LastSyncStats()
+	assert.Equal(t, 1, stats.Synced)
+	assert.Equal(t, 122, stats.Skipped)
+	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
+		"streamed changed-container reconciliation must avoid a full child scan")
+	assert.LessOrEqual(t,
+		parser.OpenCodeSessionChildLookups()-lookupsBefore, int64(1),
+		"only the changed streamed member may resolve its child digest")
+	assertMessageContent(
+		t, env.db, "opencode:ses00000", "changed prompt", "changed answer",
+	)
+}
+
 // TestOpenCodeSharedContainerChangeIsPerSessionBounded pins the "background
 // sync work is bounded by the changed batch, not total archive size" rule for
 // shared SQLite containers.
