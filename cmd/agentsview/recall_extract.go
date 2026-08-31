@@ -134,6 +134,8 @@ func buildExtractManager(
 		Identity:       dist.Identity,
 		QuietPeriod:    dist.Quiet,
 		FailureBackoff: dist.Backoff,
+
+		AllowCandidateFindings: cfg.AllowCandidateFindings(),
 	})
 }
 
@@ -530,6 +532,11 @@ func newRecallExtractDoctorCommand() *cobra.Command {
 			fmt.Fprintf(out, "Profile: %s\n", dist.Profile)
 			fmt.Fprintf(out, "Segmenter: %s (max_window_chars=%d)\n",
 				dist.Segmenter.Name(), dist.Segmenter.MaxWindowChars)
+			candidateGate := config.RecallCandidateFindingsBlock
+			if cfg.Recall.Extract.AllowCandidateFindings() {
+				candidateGate = config.RecallCandidateFindingsAllow
+			}
+			fmt.Fprintf(out, "Candidate findings: %s\n", candidateGate)
 			fmt.Fprintf(out, "Fingerprint: %s\n", fingerprint)
 
 			ctx, cancel := context.WithTimeout(cmd.Context(),

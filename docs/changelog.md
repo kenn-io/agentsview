@@ -7,6 +7,14 @@ description: Release history for AgentsView
 
 **New features**
 
+- Add `[recall.extract] candidate_findings = "allow"` to let recall extraction
+  gate sessions on definite-confidence secret findings only. Candidate-tier
+  matches (high-entropy assignments, JWT-shaped tokens, basic-auth URLs) stay
+  recorded for `secrets list --confidence candidate` but no longer exclude a
+  session from discovery, the pre-send transcript check, commit guards, or
+  reconciliation. The default `"block"` keeps the previous behavior; `recall
+  extract doctor` prints the active policy. (#1404)
+
 - Add automation-only one-shot capture for exact `claude -p` and
   `codex exec --json` executions, with isolated accounting, recoverable retries,
   exclusively created and protected local evidence, preserved child streams

@@ -663,6 +663,12 @@ type DB struct {
 	// ErrWriterClosed instead of the generic read-only error.
 	writerClosed atomic.Bool
 	dataStale    atomic.Bool // set by Open when user_version < dataVersion
+	// extractAllowCandidateFindings narrows the recall-extraction secret
+	// gate to definite-confidence findings. Set by the extraction manager
+	// from [recall.extract] candidate_findings; false (every recorded
+	// finding blocks) until then, so read-only tools and archives without
+	// extraction keep the strict boundary.
+	extractAllowCandidateFindings atomic.Bool
 
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
@@ -5012,4 +5018,19 @@ func (db *DB) GetOrCreateSyncState(key, defaultValue string) (string, error) {
 		"SELECT value FROM pg_sync_state WHERE key = ?", key,
 	).Scan(&value)
 	return value, err
+}
+
+// SetExtractCandidateFindingsAllowed selects the secret-findings tier that
+// gates recall extraction on this archive: false (default) excludes a session
+// on any recorded finding, true on definite-confidence findings only. The
+// extraction manager sets it from configuration; the eligibility, guard,
+// activation and reconciliation queries all read it.
+func (db *DB) SetExtractCandidateFindingsAllowed(allow bool) {
+	db.extractAllowCandidateFindings.Store(allow)
+}
+
+// ExtractCandidateFindingsAllowed reports the current policy; see
+// SetExtractCandidateFindingsAllowed.
+func (db *DB) ExtractCandidateFindingsAllowed() bool {
+	return db.extractAllowCandidateFindings.Load()
 }

@@ -223,6 +223,7 @@ func (db *DB) ActivateExtractGeneration(
 
 	if err := verifyExtractActivationCoverageTx(
 		ctx, tx, fingerprint, scanVersions, quietCutoff,
+		db.ExtractCandidateFindingsAllowed(),
 	); err != nil {
 		return err
 	}
@@ -286,7 +287,8 @@ func (db *DB) ActivateExtractGeneration(
 		return `NOT EXISTS (SELECT 1 FROM sessions s
 			WHERE s.id = ` + idColumn + `
 			  AND ` +
-			fmt.Sprintf(extractEligibleSessionSQL, versionMarks) + `)`
+			fmt.Sprintf(extractEligibleSessionSQL, versionMarks,
+				extractFindingsGateSQL(db.ExtractCandidateFindingsAllowed())) + `)`
 	}
 	staleArgs := make([]any, 0, len(scanVersions)+2)
 	staleArgs = append(staleArgs, fingerprint)
@@ -370,8 +372,9 @@ func (db *DB) ActivateExtractGeneration(
 // pass removes them.
 func verifyExtractActivationCoverageTx(
 	ctx context.Context, tx *sql.Tx, fingerprint string,
-	scanVersions []string, quietCutoff time.Time,
+	scanVersions []string, quietCutoff time.Time, allowCandidates bool,
 ) error {
+	gate := extractFindingsGateSQL(allowCandidates)
 	versionMarks := strings.TrimSuffix(
 		strings.Repeat("?,", len(scanVersions)), ",")
 	// Full eligibility, not merely "not hard-ineligible": a pending or
@@ -395,7 +398,7 @@ func verifyExtractActivationCoverageTx(
 		SELECT COUNT(*) FROM recall_extract_progress p
 		JOIN sessions s ON s.id = p.session_id
 		WHERE p.generation_fingerprint = ? AND p.state IN (?, ?)
-		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks),
+		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks, gate),
 		buildingArgs...,
 	).Scan(&building); err != nil {
 		return fmt.Errorf("counting unfinished coverage: %w", err)
@@ -421,7 +424,7 @@ func verifyExtractActivationCoverageTx(
 		SELECT COUNT(*) FROM recall_extract_progress p
 		JOIN sessions s ON s.id = p.session_id
 		WHERE p.generation_fingerprint = ? AND p.state = ?
-		  AND NOT (`+extractSessionIneligibleSQL+`)
+		  AND NOT (`+extractSessionIneligibleSQL(allowCandidates)+`)
 		  AND (
 			((s.local_modified_at IS NULL AND p.content_stamped_at = '')
 				OR s.local_modified_at >= p.content_stamped_at)
@@ -456,7 +459,7 @@ func verifyExtractActivationCoverageTx(
 		SELECT COUNT(*) FROM recall_extract_progress p
 		JOIN sessions s ON s.id = p.session_id
 		WHERE p.generation_fingerprint = ? AND p.state = ?
-		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks)+`
+		  AND `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks, gate)+`
 		  AND ((s.local_modified_at IS NULL AND p.content_stamped_at = '')
 			OR s.local_modified_at >= p.content_stamped_at)
 		  AND EXISTS (
@@ -485,7 +488,7 @@ func verifyExtractActivationCoverageTx(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM sessions s
-			WHERE `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks)+`
+			WHERE `+fmt.Sprintf(extractEligibleSessionSQL, versionMarks, gate)+`
 			  AND NOT EXISTS (
 				SELECT 1 FROM recall_extract_progress p
 				WHERE p.session_id = s.id
@@ -1171,18 +1174,35 @@ type ExtractCandidateQuery struct {
 	// revisit unrestricted; ignored unless IncludeDone is set.
 	DoneChangedSince time.Time
 	Limit            int
+	// allowCandidateFindings mirrors DB.ExtractCandidateFindingsAllowed at
+	// query time; ExtractCandidates sets it, tests may leave it zero.
+	allowCandidateFindings bool
+}
+
+// extractFindingsGateSQL is the secret_findings predicate shared by every
+// extraction boundary (aliases: sessions s, secret_findings sf). By default
+// any recorded finding excludes the session; when candidate findings are
+// allowed (see DB.SetExtractCandidateFindingsAllowed) only definite-tier
+// findings do, and the candidate tier stays recorded for review.
+func extractFindingsGateSQL(allowCandidates bool) string {
+	if allowCandidates {
+		return "sf.session_id = s.id AND sf.confidence = 'definite'"
+	}
+	return "sf.session_id = s.id"
 }
 
 // extractEligibleSessionSQL is the extraction privacy boundary over one
 // sessions row aliased s. Every arm of the candidates query applies it, so
 // the discovery and progress paths can never disagree about eligibility. It
-// consumes len(ScanVersions)+1 args: the versions, then the quiet cutoff.
+// takes two format arguments — the scan-version placeholders and the
+// findings gate from extractFindingsGateSQL — and consumes
+// len(ScanVersions)+1 query args: the versions, then the quiet cutoff.
 const extractEligibleSessionSQL = `s.deleted_at IS NULL
 	AND s.is_automated = 0
 	AND s.secret_leak_count = 0
 	AND s.secrets_rules_version IN (%s)
 	AND NOT EXISTS (
-		SELECT 1 FROM secret_findings sf WHERE sf.session_id = s.id
+		SELECT 1 FROM secret_findings sf WHERE %s
 	)
 	AND s.message_count > 0
 	AND s.ended_at IS NOT NULL
@@ -1214,7 +1234,8 @@ func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
 	}
 	versionMarks := strings.Repeat("?,", len(q.ScanVersions))
 	versionMarks = versionMarks[:len(versionMarks)-1]
-	eligible := fmt.Sprintf(extractEligibleSessionSQL, versionMarks)
+	eligible := fmt.Sprintf(extractEligibleSessionSQL, versionMarks,
+		extractFindingsGateSQL(q.allowCandidateFindings))
 	eligibleArgs := make([]any, 0, len(q.ScanVersions)+1)
 	for _, version := range q.ScanVersions {
 		eligibleArgs = append(eligibleArgs, version)
@@ -1323,6 +1344,7 @@ func (db *DB) ExtractCandidates(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	q.allowCandidateFindings = db.ExtractCandidateFindingsAllowed()
 	query, args, err := extractCandidateSQL(q)
 	if err != nil {
 		return nil, err
@@ -1453,12 +1475,13 @@ func (db *DB) CommitExtractedUnit(
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := verifyExtractSessionGuardTx(ctx, tx, ExtractSessionGuard{
-		SessionID:          u.SessionID,
-		ScanVersions:       u.ScanVersions,
-		MessageCount:       u.MessageCount,
-		TranscriptRevision: u.TranscriptRevision,
-		LocalModifiedAt:    u.LocalModifiedAt,
-		EndedAt:            u.EndedAt,
+		AllowCandidateFindings: db.ExtractCandidateFindingsAllowed(),
+		SessionID:              u.SessionID,
+		ScanVersions:           u.ScanVersions,
+		MessageCount:           u.MessageCount,
+		TranscriptRevision:     u.TranscriptRevision,
+		LocalModifiedAt:        u.LocalModifiedAt,
+		EndedAt:                u.EndedAt,
 	}); err != nil {
 		return 0, err
 	}
@@ -1512,12 +1535,15 @@ func (db *DB) CommitExtractedUnit(
 // derived from; verification refuses the write when the stored row has
 // moved or the session is no longer eligible.
 type ExtractSessionGuard struct {
-	SessionID          string
-	ScanVersions       []string
-	MessageCount       int
-	TranscriptRevision *string
-	LocalModifiedAt    *string
-	EndedAt            *string
+	// AllowCandidateFindings narrows the commit-time findings check to
+	// definite-confidence findings (see DB.SetExtractCandidateFindingsAllowed).
+	AllowCandidateFindings bool
+	SessionID              string
+	ScanVersions           []string
+	MessageCount           int
+	TranscriptRevision     *string
+	LocalModifiedAt        *string
+	EndedAt                *string
 }
 
 func verifyExtractSessionGuardTx(
@@ -1575,10 +1601,11 @@ func verifyExtractSessionGuardTx(
 			u.SessionID)
 	}
 	var findings int
-	if err := tx.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM secret_findings WHERE session_id = ?",
-		u.SessionID,
-	).Scan(&findings); err != nil {
+	findingsSQL := "SELECT COUNT(*) FROM secret_findings WHERE session_id = ?"
+	if u.AllowCandidateFindings {
+		findingsSQL += " AND confidence = 'definite'"
+	}
+	if err := tx.QueryRowContext(ctx, findingsSQL, u.SessionID).Scan(&findings); err != nil {
 		return fmt.Errorf(
 			"counting findings for session %s: %w", u.SessionID, err)
 	}
@@ -1657,10 +1684,15 @@ func bindExtractedEvidenceTx(
 // qualify — they are transient (every transcript write clears the stamp
 // until rescan) and retracting on them would rebuild the corpus on every
 // sync.
-const extractSessionIneligibleSQL = `s.deleted_at IS NOT NULL
+func extractSessionIneligibleSQL(allowCandidates bool) string {
+	return `s.deleted_at IS NOT NULL
 	OR s.is_automated != 0
 	OR s.secret_leak_count > 0
-	OR EXISTS (SELECT 1 FROM secret_findings sf WHERE sf.session_id = s.id)`
+	OR EXISTS (
+		SELECT 1 FROM secret_findings sf WHERE ` +
+		extractFindingsGateSQL(allowCandidates) + `
+	)`
+}
 
 // ReconcileIneligibleExtractSessions removes the generated corpus of
 // sessions that lost extraction eligibility after extraction. It is
@@ -1694,7 +1726,7 @@ func (db *DB) ReconcileIneligibleExtractSessions(
 	defer func() { _ = tx.Rollback() }()
 	ineligible := `
 		SELECT s.id FROM sessions s
-		WHERE (` + extractSessionIneligibleSQL + `)`
+		WHERE (` + extractSessionIneligibleSQL(db.ExtractCandidateFindingsAllowed()) + `)`
 	var bound []any
 	if !changedSince.IsZero() {
 		ineligible += `
@@ -1999,12 +2031,13 @@ func (db *DB) RefreshExtractedSessionCoverage(
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := verifyExtractSessionGuardTx(ctx, tx, ExtractSessionGuard{
-		SessionID:          u.Session.ID,
-		ScanVersions:       u.ScanVersions,
-		MessageCount:       u.Session.MessageCount,
-		TranscriptRevision: u.Session.TranscriptRevision,
-		LocalModifiedAt:    u.Session.LocalModifiedAt,
-		EndedAt:            u.Session.EndedAt,
+		AllowCandidateFindings: db.ExtractCandidateFindingsAllowed(),
+		SessionID:              u.Session.ID,
+		ScanVersions:           u.ScanVersions,
+		MessageCount:           u.Session.MessageCount,
+		TranscriptRevision:     u.Session.TranscriptRevision,
+		LocalModifiedAt:        u.Session.LocalModifiedAt,
+		EndedAt:                u.Session.EndedAt,
 	}); err != nil {
 		return zero, err
 	}

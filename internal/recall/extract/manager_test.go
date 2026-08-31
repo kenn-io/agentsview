@@ -2882,3 +2882,112 @@ func TestManagerRunPassDiscardsEntriesWhenRevisitFindsSecrets(t *testing.T) {
 	assert.Equal(t, db.ExtractProgressFailed, progress.State)
 	assert.Contains(t, progress.LastError, "secrets scan --backfill")
 }
+
+func TestManagerAllowCandidateFindingsExtractsCandidateOnlySessions(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	// A full scan recorded only a candidate-confidence match (a high-entropy
+	// path, a JWT-shaped identifier): leak count zero. With
+	// candidate_findings = "allow" that must not keep the session out.
+	seedSession(t, d, "sess-candidate", turnMessages("a", "b"), nil)
+	if err := d.ReplaceSessionSecretFindings(
+		"sess-candidate",
+		[]db.SecretFinding{{
+			SessionID:     "sess-candidate",
+			RuleName:      "high-entropy-assignment",
+			Confidence:    "candidate",
+			LocationKind:  "message",
+			RedactedMatch: "…AHm",
+		}},
+		0, secrets.RulesVersion(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(t, d, server.URL, func(c *ManagerConfig) {
+		c.AllowCandidateFindings = true
+	})
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 1 || result.Failed != 0 || log.count() == 0 {
+		t.Fatalf("candidate-only session must be extracted when candidate "+
+			"findings are allowed: %+v, %d calls", result, log.count())
+	}
+	if _, err := m.RunPass(ctx, PassOptions{SessionID: "sess-candidate"}); err != nil {
+		t.Fatalf("explicit run on a candidate-only session must be accepted: %v", err)
+	}
+}
+
+func TestManagerAllowCandidateFindingsStillRefusesDefinite(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	// The relaxed policy narrows the gate to definite findings; it must not
+	// open it. A definite finding (leak count 1) keeps the session out.
+	seedSession(t, d, "sess-definite", turnMessages("a", "b"), nil)
+	if err := d.ReplaceSessionSecretFindings(
+		"sess-definite",
+		[]db.SecretFinding{{
+			SessionID:     "sess-definite",
+			RuleName:      "aws-access-key-id",
+			Confidence:    "definite",
+			LocationKind:  "message",
+			RedactedMatch: "AKIA…",
+		}},
+		1, secrets.RulesVersion(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(t, d, server.URL, func(c *ManagerConfig) {
+		c.AllowCandidateFindings = true
+	})
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Sessions != 0 || log.count() != 0 {
+		t.Fatalf("definite finding must still exclude the session: %+v, "+
+			"%d calls", result, log.count())
+	}
+	if _, err := m.RunPass(ctx, PassOptions{SessionID: "sess-definite"}); err == nil {
+		t.Fatal("explicit run on a session with a definite finding must be refused")
+	}
+	if log.count() != 0 {
+		t.Fatal("refusal must happen before any model call")
+	}
+}
+
+func TestManagerAllowCandidateFindingsPreSendScanIgnoresCandidateText(t *testing.T) {
+	d := newTestArchive(t)
+	ctx := context.Background()
+	server, log := modelServer(t, alwaysEntries(t, "x"))
+	// The transcript itself contains candidate-tier material (a high-entropy
+	// assignment) that the pre-send re-scan would normally reject "despite a
+	// current scan stamp". Under the relaxed policy the re-scan applies
+	// definite rules only, so the unit reaches the model.
+	seedSession(t, d, "sess-entropy", turnMessages(
+		"set GDRIVE_FOLDER=1a4UzQ9x7LmP3nR8vT2wY5bC6dE0fG1hJ4kL7mNAHm and sync",
+		"done",
+	), nil)
+	if err := d.ReplaceSessionSecretFindings(
+		"sess-entropy", nil, 0, secrets.RulesVersion(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	m := newManager(t, d, server.URL, func(c *ManagerConfig) {
+		c.AllowCandidateFindings = true
+	})
+
+	result, err := m.RunPass(ctx, PassOptions{})
+	if err != nil {
+		t.Fatalf("RunPass: %v", err)
+	}
+	if result.Failed != 0 || result.Sessions != 1 || log.count() == 0 {
+		t.Fatalf("candidate-tier text must not fail the pre-send scan when "+
+			"candidate findings are allowed: %+v, %d calls", result, log.count())
+	}
+}

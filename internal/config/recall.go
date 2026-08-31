@@ -54,9 +54,16 @@ type RecallExtractConfig struct {
 	BackstopInterval string `toml:"backstop_interval" json:"backstop_interval"`
 	// FailureBackoff is how long a failed session waits before being
 	// retried. Default "1h".
-	FailureBackoff string                     `toml:"failure_backoff" json:"failure_backoff"`
-	Prompts        RecallExtractPromptsConfig `toml:"prompts" json:"prompts"`
-	Request        RecallExtractRequestConfig `toml:"request" json:"request"`
+	FailureBackoff string `toml:"failure_backoff" json:"failure_backoff"`
+	// CandidateFindings selects how candidate-confidence secret findings
+	// (high-entropy assignments, JWT-shaped tokens, basic-auth URLs — the
+	// heuristics `secrets list` hides by default) gate extraction: "block"
+	// (default) excludes a session on any recorded finding; "allow" lets
+	// definite findings alone decide, so candidate matches are recorded for
+	// review without keeping the session out of the corpus.
+	CandidateFindings string                     `toml:"candidate_findings" json:"candidate_findings,omitempty"`
+	Prompts           RecallExtractPromptsConfig `toml:"prompts" json:"prompts"`
+	Request           RecallExtractRequestConfig `toml:"request" json:"request"`
 }
 
 // RecallExtractServerConfig is one named extraction endpoint: transport
@@ -130,6 +137,19 @@ func (c RecallExtractConfig) ResolvedServer() (string, RecallExtractServerConfig
 
 // Validate checks the extraction config for internal consistency. It is a
 // no-op when the section is disabled.
+// Values for RecallExtractConfig.CandidateFindings.
+const (
+	RecallCandidateFindingsBlock = "block"
+	RecallCandidateFindingsAllow = "allow"
+)
+
+// AllowCandidateFindings reports whether candidate-confidence secret
+// findings are excluded from the extraction gate (candidate_findings =
+// "allow"). The default keeps every recorded finding blocking.
+func (c RecallExtractConfig) AllowCandidateFindings() bool {
+	return c.CandidateFindings == RecallCandidateFindingsAllow
+}
+
 func (c RecallExtractConfig) Validate() error {
 	if !c.Enabled {
 		return nil
@@ -161,6 +181,14 @@ func (c RecallExtractConfig) Validate() error {
 		if err := c.Servers[name].validate(name); err != nil {
 			return err
 		}
+	}
+	switch c.CandidateFindings {
+	case "", RecallCandidateFindingsBlock, RecallCandidateFindingsAllow:
+	default:
+		return fmt.Errorf(
+			"[recall.extract] candidate_findings must be %q or %q, got %q",
+			RecallCandidateFindingsBlock, RecallCandidateFindingsAllow,
+			c.CandidateFindings)
 	}
 	if c.MaxWindowChars <= 0 {
 		return fmt.Errorf(
@@ -410,6 +438,9 @@ func (c *Config) mergeRecallExtractTOML(file RecallConfig, meta toml.MetaData) {
 	}
 	if file.Extract.FailureBackoff != "" {
 		extract.FailureBackoff = file.Extract.FailureBackoff
+	}
+	if file.Extract.CandidateFindings != "" {
+		extract.CandidateFindings = file.Extract.CandidateFindings
 	}
 	if file.Extract.Prompts.Profile != "" {
 		extract.Prompts.Profile = file.Extract.Prompts.Profile

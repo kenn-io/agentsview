@@ -185,7 +185,8 @@ Optional keys: `deployment` (labels which serving instance produced the corpus),
 `server` (selects among multiple named servers), `quiet_period` (default `"30m"`
 — how long a session must have been ended before extraction),
 `backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
-`max_window_chars` (default 50000), `max_tokens`, per-server `api_key_env`, a
+`max_window_chars` (default 50000), `max_tokens`, `candidate_findings`
+(`"block"` default, or `"allow"` — see below), per-server `api_key_env`, a
 `[recall.extract.prompts]` table (`profile`, `dir`), and a
 `[recall.extract.request]` table (`temperature`, `extra_body`).
 
@@ -201,8 +202,18 @@ Sessions are only ever extracted when they are not automated, not trashed, and
 have a clean, current **full** secret scan — a session with secret findings of
 any confidence, one never scanned, or one covered only by the fast inline sync
 scan never reaches the model. Run `agentsview secrets scan --backfill` to make
-sessions eligible. These filters are not configurable. Session content is sent
-only to the endpoints you configure.
+sessions eligible. Session content is sent only to the endpoints you configure.
+
+One knob narrows that boundary deliberately: `candidate_findings = "allow"`
+under `[recall.extract]`. Candidate-confidence findings — the false-positive-
+prone heuristics (`high-entropy-assignment`, JWT-shaped tokens, basic-auth URLs)
+that `secrets list` hides unless asked — then stay recorded for review but no
+longer exclude a session; only definite findings do, in discovery, in the
+pre-send transcript check, at commit, and in reconciliation. The default,
+`"block"`, keeps every recorded finding blocking. Consider `"allow"` when the
+endpoint is a machine you own and the archive is full of paths and identifiers
+that trip the entropy heuristic; keep the default for any endpoint you would
+not send a suspected secret to.
 
 Each distillation configuration (model, prompts, segmentation, request shape) is
 fingerprinted as a *generation*; changing the configuration builds a new corpus
