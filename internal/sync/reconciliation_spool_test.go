@@ -40,6 +40,13 @@ func TestReconciliationSpoolSelectsPreferredCandidateInSQL(t *testing.T) {
 		Provider: parser.AgentCodex, Identity: "uuid", Path: "/sessions/2026/07/14/rollout-uuid.jsonl",
 		Preference1: 1,
 	}))
+	require.NoError(t, spool.Add(ctx, reconciliationCandidate{
+		Provider: parser.AgentClaude, Identity: "same", Path: "/sessions/old.jsonl",
+		StoredPath: "remote:/sessions/old.jsonl", Machine: "old-machine",
+		Preference1: 100, Preference2: 1,
+	}))
+	assert.False(t, spool.LastAddWon(),
+		"a lower-ranked duplicate must not count as a discovered winner")
 
 	page, err := spool.Page(ctx, reconciliationCursor{}, reconciliationPageSize)
 	require.NoError(t, err)

@@ -5704,12 +5704,14 @@ func (e *Engine) streamReconciliationCandidates(
 						candidate.Path,
 					)
 				}
-				e.noteSQLiteContainerDiscovery(parser.DiscoveredFile{
-					Agent:          candidate.Provider,
-					Path:           candidate.Path,
-					ProviderSource: &source,
-				})
 				spoolErr = spool.Add(ctx, candidate)
+				if spoolErr == nil && spool.LastAddWon() {
+					e.noteSQLiteContainerDiscovery(parser.DiscoveredFile{
+						Agent:          candidate.Provider,
+						Path:           candidate.Path,
+						ProviderSource: &source,
+					})
+				}
 				return spoolErr
 			})
 			if err == nil && agent == parser.AgentKiro {

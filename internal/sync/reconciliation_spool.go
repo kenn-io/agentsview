@@ -72,10 +72,11 @@ type reconciliationSpool struct {
 	path string
 	db   *sql.DB
 
-	mu      sync.Mutex
-	closed  bool
-	sealed  bool
-	metrics ReconciliationMetrics
+	mu         sync.Mutex
+	closed     bool
+	sealed     bool
+	lastAddWon bool
+	metrics    ReconciliationMetrics
 }
 
 type reconciliationSpoolStore interface {
@@ -87,6 +88,7 @@ type reconciliationSpoolStore interface {
 	HasNonAuthoritativeScopes(context.Context, parser.AgentType) (bool, error)
 	ContainsNonAuthoritativeScope(context.Context, parser.AgentType, string) (bool, error)
 	Page(context.Context, reconciliationCursor, int) ([]reconciliationCandidate, error)
+	LastAddWon() bool
 	Metrics() ReconciliationMetrics
 	CloseAndRemove() error
 }
@@ -378,6 +380,7 @@ func (spool *reconciliationSpool) Add(
 	}
 	spool.mu.Lock()
 	sealed := spool.sealed
+	spool.lastAddWon = false
 	spool.mu.Unlock()
 	if sealed {
 		return errors.New("reconciliation spool is sealed")
@@ -393,7 +396,7 @@ func (spool *reconciliationSpool) Add(
 	} else if statePayload == nil {
 		statePayload = []byte{}
 	}
-	_, err := spool.db.ExecContext(ctx, `
+	result, err := spool.db.ExecContext(ctx, `
 		INSERT INTO candidates (
 			provider, identity, path, stored_path, member_identity, watch_root, machine,
 			project, source_state_version, source_state, preference_1, preference_2,
@@ -432,7 +435,20 @@ func (spool *reconciliationSpool) Add(
 		}
 		return fmt.Errorf("write reconciliation candidate: %w", err)
 	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count reconciliation candidate write: %w", err)
+	}
+	spool.mu.Lock()
+	spool.lastAddWon = rows > 0
+	spool.mu.Unlock()
 	return nil
+}
+
+func (spool *reconciliationSpool) LastAddWon() bool {
+	spool.mu.Lock()
+	defer spool.mu.Unlock()
+	return spool.lastAddWon
 }
 
 func (spool *reconciliationSpool) Page(
