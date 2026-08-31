@@ -2025,55 +2025,35 @@ func testOpenCodeProviderMeta(dbPath string, watermarkOnly bool) OpenCodeSession
 	}
 }
 
-func TestOpenCodeWatermarkListingPredicateReachesBothDiscoveryRoutes(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "opencode.db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("fixture"), 0o600))
-	spec := openCodeProviderSpecForAgent(AgentOpenCode)
-	var fullList, watermarkList, fullStream, watermarkStream int
+// openCodeRouteCounters records which listing route each discovery form
+// took after stubOpenCodeSpecRoutes replaces a spec's four SQLite routes.
+type openCodeRouteCounters struct {
+	fullList, watermarkList, fullStream, watermarkStream int
+}
+
+func stubOpenCodeSpecRoutes(spec *openCodeProviderSpec) *openCodeRouteCounters {
+	c := &openCodeRouteCounters{}
 	spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
-		fullList++
+		c.fullList++
 		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, false)}, nil
 	}
 	spec.listSQLiteWatermark = func(path string) ([]OpenCodeSessionMeta, error) {
-		watermarkList++
+		c.watermarkList++
 		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, true)}, nil
 	}
 	spec.streamSQLite = func(
 		ctx context.Context, path string, yield func(OpenCodeSessionMeta) error,
 	) error {
-		fullStream++
+		c.fullStream++
 		return yield(testOpenCodeProviderMeta(path, false))
 	}
 	spec.streamSQLiteWatermark = func(
 		ctx context.Context, path string, yield func(OpenCodeSessionMeta) error,
 	) error {
-		watermarkStream++
+		c.watermarkStream++
 		return yield(testOpenCodeProviderMeta(path, true))
 	}
-
-	sources := newOpenCodeFormatSourceSet(
-		[]string{root}, spec, func(string) bool { return true },
-	)
-	listed, err := sources.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, listed, 1)
-	_, watermarkOnly := SourceWatermarkOnlyMTimeNS(listed[0])
-	assert.True(t, watermarkOnly)
-	assert.Equal(t, 0, fullList)
-	assert.Equal(t, 1, watermarkList)
-
-	var streamed []SourceRef
-	err = sources.DiscoverEach(t.Context(), func(source SourceRef) error {
-		streamed = append(streamed, source)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, streamed, 1)
-	_, watermarkOnly = SourceWatermarkOnlyMTimeNS(streamed[0])
-	assert.True(t, watermarkOnly)
-	assert.Equal(t, 0, fullStream)
-	assert.Equal(t, 1, watermarkStream)
+	return c
 }
 
 func TestSQLiteContainerListsWatermarkOnlyNilKeepsFullFidelity(t *testing.T) {
@@ -2081,27 +2061,7 @@ func TestSQLiteContainerListsWatermarkOnlyNilKeepsFullFidelity(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	require.NoError(t, os.WriteFile(dbPath, []byte("fixture"), 0o600))
 	spec := openCodeProviderSpecForAgent(AgentOpenCode)
-	var fullList, watermarkList, fullStream, watermarkStream int
-	spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
-		fullList++
-		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, false)}, nil
-	}
-	spec.listSQLiteWatermark = func(path string) ([]OpenCodeSessionMeta, error) {
-		watermarkList++
-		return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, true)}, nil
-	}
-	spec.streamSQLite = func(
-		ctx context.Context, path string, yield func(OpenCodeSessionMeta) error,
-	) error {
-		fullStream++
-		return yield(testOpenCodeProviderMeta(path, false))
-	}
-	spec.streamSQLiteWatermark = func(
-		ctx context.Context, path string, yield func(OpenCodeSessionMeta) error,
-	) error {
-		watermarkStream++
-		return yield(testOpenCodeProviderMeta(path, true))
-	}
+	routes := stubOpenCodeSpecRoutes(&spec)
 
 	sources := newOpenCodeFormatSourceSet([]string{root}, spec, nil)
 	listed, err := sources.Discover(t.Context())
@@ -2121,10 +2081,7 @@ func TestSQLiteContainerListsWatermarkOnlyNilKeepsFullFidelity(t *testing.T) {
 	_, watermarkOnly = SourceWatermarkOnlyMTimeNS(streamed[0])
 	assert.False(t, watermarkOnly)
 	assert.True(t, SourceUsesOpenCodeCompositeMTime(streamed[0]))
-	assert.Equal(t, 1, fullList)
-	assert.Equal(t, 0, watermarkList)
-	assert.Equal(t, 1, fullStream)
-	assert.Equal(t, 0, watermarkStream)
+	assert.Equal(t, openCodeRouteCounters{fullList: 1, fullStream: 1}, *routes)
 }
 
 func TestOpenCodeFamilyVariantsHonorWatermarkListing(t *testing.T) {
@@ -2136,29 +2093,7 @@ func TestOpenCodeFamilyVariantsHonorWatermarkListing(t *testing.T) {
 			spec := openCodeProviderSpecForAgent(agent)
 			dbPath := filepath.Join(root, spec.dbName)
 			require.NoError(t, os.WriteFile(dbPath, []byte("fixture"), 0o600))
-			var fullList, watermarkList, fullStream, watermarkStream int
-			spec.listSQLite = func(path string) ([]OpenCodeSessionMeta, error) {
-				fullList++
-				return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, false)}, nil
-			}
-			spec.listSQLiteWatermark = func(path string) ([]OpenCodeSessionMeta, error) {
-				watermarkList++
-				return []OpenCodeSessionMeta{testOpenCodeProviderMeta(path, true)}, nil
-			}
-			spec.streamSQLite = func(
-				ctx context.Context, path string,
-				yield func(OpenCodeSessionMeta) error,
-			) error {
-				fullStream++
-				return yield(testOpenCodeProviderMeta(path, false))
-			}
-			spec.streamSQLiteWatermark = func(
-				ctx context.Context, path string,
-				yield func(OpenCodeSessionMeta) error,
-			) error {
-				watermarkStream++
-				return yield(testOpenCodeProviderMeta(path, true))
-			}
+			routes := stubOpenCodeSpecRoutes(&spec)
 
 			sources := newOpenCodeFormatSourceSet(
 				[]string{root}, spec, func(string) bool { return true },
@@ -2179,10 +2114,9 @@ func TestOpenCodeFamilyVariantsHonorWatermarkListing(t *testing.T) {
 			require.Len(t, streamed, 1)
 			_, watermarkOnly = SourceWatermarkOnlyMTimeNS(streamed[0])
 			assert.True(t, watermarkOnly)
-			assert.Equal(t, 0, fullList)
-			assert.Equal(t, 1, watermarkList)
-			assert.Equal(t, 0, fullStream)
-			assert.Equal(t, 1, watermarkStream)
+			assert.Equal(t,
+				openCodeRouteCounters{watermarkList: 1, watermarkStream: 1},
+				*routes)
 		})
 	}
 
@@ -2232,4 +2166,3 @@ func TestOpenCodeFamilyVariantsHonorWatermarkListing(t *testing.T) {
 		assert.Zero(t, calls)
 	})
 }
-
