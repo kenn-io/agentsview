@@ -396,7 +396,18 @@ func (spool *reconciliationSpool) Add(
 	} else if statePayload == nil {
 		statePayload = []byte{}
 	}
-	result, err := spool.db.ExecContext(ctx, `
+	var existing int
+	err := spool.db.QueryRowContext(ctx, `
+		SELECT 1 FROM candidates WHERE provider = ? AND identity = ? LIMIT 1
+	`, string(candidate.Provider), candidate.Identity).Scan(&existing)
+	existed := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return fmt.Errorf("check reconciliation candidate: %w", err)
+	}
+	_, err = spool.db.ExecContext(ctx, `
 		INSERT INTO candidates (
 			provider, identity, path, stored_path, member_identity, watch_root, machine,
 			project, source_state_version, source_state, preference_1, preference_2,
@@ -435,12 +446,8 @@ func (spool *reconciliationSpool) Add(
 		}
 		return fmt.Errorf("write reconciliation candidate: %w", err)
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("count reconciliation candidate write: %w", err)
-	}
 	spool.mu.Lock()
-	spool.lastAddWon = rows > 0
+	spool.lastAddWon = !existed
 	spool.mu.Unlock()
 	return nil
 }
