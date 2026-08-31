@@ -185,8 +185,14 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 			}
 		}
 	}
-	e.finishSQLiteContainerPass(true, false)
 	e.anomalies.applyTo(&stats)
+	// Pass-level failures cannot be attributed to one container, so they
+	// poison the whole capture; a clean plan subset keeps its verification
+	// age and, being partial, never promotes.
+	if ctx.Err() != nil || processErr != nil || !stats.ProcessingComplete() {
+		e.poisonSQLiteContainerPass()
+	}
+	e.finishSQLiteContainerPass(true, false)
 	if !e.ephemeral {
 		e.persistSkipCache()
 	}

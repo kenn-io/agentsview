@@ -868,6 +868,81 @@ func TestSQLiteContainerFullPassDropsUndiscoveredTrust(t *testing.T) {
 	})
 }
 
+// TestSQLiteContainerPassClearsVerificationOnlyOnEvidence ensures the
+// bounded watermark-only window survives passes that never observed the
+// container changing: a clean partial pass and an uncovered container in
+// a clean scoped pass keep their verification age, while an attributed
+// failure clears only its container and a poisoned pass clears every
+// captured one.
+func TestSQLiteContainerPassClearsVerificationOnlyOnEvidence(t *testing.T) {
+	dbPath, _ := newContainerTestDB(t)
+	state, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok, "container state must be readable")
+	siblingPath, _ := newContainerTestDB(t)
+	siblingState, ok := parser.StatSQLiteContainerState(siblingPath)
+	require.True(t, ok, "sibling container state must be readable")
+	file := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
+	}
+	verified := time.Unix(100, 0)
+
+	newEngine := func() *Engine {
+		e := &Engine{digestVerifiedAt: map[string]time.Time{
+			dbPath:      verified,
+			siblingPath: verified,
+		}}
+		e.beginSQLiteContainerPass(
+			[]parser.DiscoveredFile{file},
+			map[string]parser.SQLiteContainerState{
+				dbPath:      state,
+				siblingPath: siblingState,
+			},
+		)
+		return e
+	}
+
+	t.Run("clean partial pass preserves verification without promoting", func(t *testing.T) {
+		e := newEngine()
+		e.noteSQLiteContainerResult(file.Path, true)
+		e.finishSQLiteContainerPass(true, false)
+		assert.Equal(t, verified, e.digestVerifiedAt[dbPath],
+			"a clean partial pass must keep the bounded verification window")
+		assert.NotContains(t, e.trustedSQLiteContainers, dbPath,
+			"a partial pass must never promote trust")
+	})
+
+	t.Run("failed container clears only its own verification", func(t *testing.T) {
+		e := newEngine()
+		e.noteSQLiteContainerResult(file.Path, false)
+		e.finishSQLiteContainerPass(true, false)
+		assert.NotContains(t, e.digestVerifiedAt, dbPath,
+			"an attributed failure must clear its container")
+		assert.Equal(t, verified, e.digestVerifiedAt[siblingPath],
+			"an attributed failure must not clear unaffected containers")
+	})
+
+	t.Run("poisoned pass clears every captured verification", func(t *testing.T) {
+		e := newEngine()
+		e.noteSQLiteContainerResult(file.Path, true)
+		e.poisonSQLiteContainerPass()
+		e.finishSQLiteContainerPass(true, false)
+		assert.NotContains(t, e.digestVerifiedAt, dbPath,
+			"a poisoned pass must clear captured verification")
+		assert.NotContains(t, e.digestVerifiedAt, siblingPath,
+			"a poisoned pass must clear captured verification")
+	})
+
+	t.Run("clean scoped pass preserves uncovered verification", func(t *testing.T) {
+		e := newEngine()
+		e.noteSQLiteContainerResult(file.Path, true)
+		e.finishSQLiteContainerPass(false, false)
+		assert.Equal(t, verified, e.digestVerifiedAt[siblingPath],
+			"an uncovered container in a clean pass must keep its window")
+		assert.NotContains(t, e.trustedSQLiteContainers, siblingPath,
+			"an uncovered container must not be promoted")
+	})
+}
+
 func TestOpenCodeDigestVerificationStampedOnlyByDigestPass(t *testing.T) {
 	origNow := openCodeContainerDigestVerifyNow
 	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })

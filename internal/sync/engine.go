@@ -1658,20 +1658,29 @@ func (e *Engine) applyChangedPathSyncLocked(
 		ctx, results, len(prepared.files), len(prepared.files), nil,
 		syncWriteDefault,
 	)
-	e.finishSQLiteContainerPass(true, false)
 	e.anomalies.applyTo(&stats)
 	e.persistSkipCache()
 	complete := prepared.classificationErr == nil && ctx.Err() == nil &&
 		stats.ProcessingComplete()
 	tombstoned := 0
+	var tombstoneErr error
 	if complete && len(prepared.missingPaths) > 0 {
-		var err error
-		tombstoned, err = e.tombstoneMissingWatchSourcesLocked(
+		tombstoned, tombstoneErr = e.tombstoneMissingWatchSourcesLocked(
 			ctx, prepared.missingPaths, nil,
 		)
-		if err != nil {
-			return stats, tombstoned, fmt.Errorf("watcher source reconciliation: %w", err)
-		}
+	}
+	// The pass stays open through tombstoning so a late pass-level failure
+	// still reaches finalization. Such failures cannot be attributed to a
+	// container, so they poison the whole capture; a clean subset keeps its
+	// verification age and, being partial, never promotes.
+	if !complete || tombstoneErr != nil {
+		e.poisonSQLiteContainerPass()
+	}
+	e.finishSQLiteContainerPass(true, false)
+	if tombstoneErr != nil {
+		return stats, tombstoned, fmt.Errorf(
+			"watcher source reconciliation: %w", tombstoneErr,
+		)
 	}
 	e.mu.Lock()
 	e.lastSync = time.Now()
@@ -4998,10 +5007,14 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	preContainerStates := e.capturePlannedSQLiteContainerStates(plans, fullCoverage)
 	e.beginStreamingSQLiteContainerPass(preContainerStates)
 	defer func() {
-		e.finishSQLiteContainerPass(
-			retErr != nil || stats.Aborted || stats.Failed > 0 || stats.providerFailures > 0,
-			fullCoverage,
-		)
+		// Failures here cannot be attributed to one container, so they
+		// poison the whole captured set; a clean pass finalizes normally
+		// with promotion gated per container.
+		if retErr != nil || stats.Aborted || stats.Failed > 0 ||
+			stats.providerFailures > 0 {
+			e.poisonSQLiteContainerPass()
+		}
+		e.finishSQLiteContainerPass(false, fullCoverage)
 	}()
 	providers, completedScopes, failedRoots,
 		failures, discoveryErr, err := e.streamReconciliationCandidates(
@@ -7500,13 +7513,13 @@ func (e *Engine) syncAllLocked(
 		stats.RecordFailed()
 	}
 	// Discovery failures cannot be attributed to a provider here, so any
-	// failure conservatively blocks every container promotion this pass.
-	// Only unscoped passes discovered every root, so only they may drop
-	// trusted entries for containers that produced no sources.
-	e.finishSQLiteContainerPass(
-		stats.Aborted || ctx.Err() != nil || providerFailures > 0,
-		scope == nil,
-	)
+	// failure conservatively poisons every captured verification this
+	// pass. Only unscoped passes discovered every root, so only they may
+	// drop trusted entries for containers that produced no sources.
+	if stats.Aborted || ctx.Err() != nil || providerFailures > 0 {
+		e.poisonSQLiteContainerPass()
+	}
+	e.finishSQLiteContainerPass(false, scope == nil)
 	if verifiedPass != 0 {
 		e.finishVerifiedSourcePass(
 			verifiedPass,

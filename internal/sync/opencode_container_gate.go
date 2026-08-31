@@ -694,6 +694,9 @@ func (e *Engine) noteSQLiteContainerResult(path string, ok bool) {
 // poisonSQLiteContainerPass blocks every promotion for the current pass.
 // Used when a batched DB write fails, because batch failures cannot be
 // attributed to individual sessions.
+// poisonSQLiteContainerPass marks the active pass invalidated by a failure
+// that cannot be attributed to one container; finalization then clears
+// every captured verification instead of promoting.
 func (e *Engine) poisonSQLiteContainerPass() {
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()
@@ -710,8 +713,18 @@ func (e *Engine) poisonSQLiteContainerPass() {
 // so an out-of-scope container ends the pass at completed == discovered ==
 // 0 having verified nothing — trusting its freshly captured state would
 // gate-skip changes that were never parsed. incomplete marks passes that
-// must never promote (aborted, cancelled, or discovery failures whose
-// provider cannot be attributed).
+// must never promote (changed-path subsets, whose discovery covers only
+// the changed sessions).
+//
+// digestVerifiedAt clears only on evidence against a container: an entry
+// in pass.failed (a failed session, or a capture that changed under the
+// pass), or a poisoned pass, whose failure cannot be attributed to a
+// container and so invalidates every captured verification. A clean pass
+// that merely did not cover a container keeps its verification age: the
+// timestamp is written only by the full-digest promotion below, so a
+// preserved timestamp can never extend child-only-edit staleness past the
+// bounded verification window, while clearing it forces a full composite
+// child scan the next discovery would otherwise skip.
 //
 // fullDiscovery marks passes whose discovery covered every configured
 // root (full syncs, as opposed to changed-path or scoped-root passes).
@@ -726,7 +739,13 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 	if incomplete || pass == nil || pass.poisoned {
 		e.containerPass = nil
 		if pass != nil {
-			e.clearDigestVerificationForPass(pass)
+			if pass.poisoned {
+				e.clearDigestVerificationForPass(pass)
+			} else {
+				for dbPath := range pass.failed {
+					delete(e.digestVerifiedAt, dbPath)
+				}
+			}
 		}
 		e.containerMu.Unlock()
 		return
@@ -765,7 +784,8 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 		}
 		if pass.discovered[dbPath] == 0 ||
 			pass.completed[dbPath] != pass.discovered[dbPath] {
-			delete(e.digestVerifiedAt, dbPath)
+			// Out of scope, cutoff-filtered, or deferred: promotion is
+			// unearned, but nothing observed the container changing.
 			continue
 		}
 		if e.trustedSQLiteContainers == nil {
