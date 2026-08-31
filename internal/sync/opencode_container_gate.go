@@ -381,11 +381,23 @@ func openCodeContainerDigestVerificationCurrent(verifiedAt, now time.Time) bool 
 func sqliteContainerStateReplaced(
 	previous, current parser.SQLiteContainerState,
 ) bool {
-	if previous.DBInode == 0 || current.DBInode == 0 {
-		return false
+	// Without both identity components, a replacement cannot be
+	// distinguished from an in-place transaction. Fail closed rather than
+	// allowing a stale verification timestamp to authorize watermark-only
+	// discovery on platforms whose path stat has no stable identity.
+	if previous.DBInode == 0 || previous.DBDevice == 0 ||
+		current.DBInode == 0 || current.DBDevice == 0 {
+		return true
 	}
-	return previous.DBInode != current.DBInode ||
-		previous.DBDevice != current.DBDevice
+	if previous.DBInode != current.DBInode ||
+		previous.DBDevice != current.DBDevice {
+		return true
+	}
+	// A rollback of SQLite's transaction counter is evidence of an in-place
+	// restore. Normal committed writes advance it, so retain the fast path for
+	// ordinary in-place changes while rejecting stale verification after a
+	// restore that preserved the file identity.
+	return current.DBChangeCounter < previous.DBChangeCounter
 }
 
 func openCodeContainerPathForEvent(
@@ -509,12 +521,21 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 		return false
 	}
 	e.containerMu.Lock()
-	if e.containerPass == nil {
+	pass := e.containerPass
+	if pass == nil {
 		e.containerMu.Unlock()
 		return false
 	}
-	current, ok := e.containerPass.captured[dbPath]
+	current, ok := pass.captured[dbPath]
 	if !ok {
+		e.containerMu.Unlock()
+		return false
+	}
+	// A full digest listing is the authoritative verification for this pass.
+	// It must reach the per-session fingerprint path even when a prior
+	// watermark pass promoted the same container state to trusted; otherwise
+	// child-only edits remain hidden behind the container-level skip.
+	if pass.fullDigestListed[dbPath] {
 		e.containerMu.Unlock()
 		return false
 	}

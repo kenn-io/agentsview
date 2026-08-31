@@ -724,7 +724,11 @@ add an archived or maintained mirror without replacing the original identity.
   session and project rows untouched — wherever its timestamps land relative
   to the stored composite — is invisible to watermark-only discovery and is
   reconciled by the next full digest pass, at most five minutes after the last
-  successful digest verification; on the production container above, 96% of sessions
+  successful digest verification. That due pass bypasses the container-level
+  trusted-state skip so every session reaches the authoritative digest comparison;
+  when the platform cannot provide stable file identity, the policy fails closed
+  to this full digest form rather than authorizing a stale verification timestamp;
+  on the production container above, 96% of sessions
   carry a session/project timestamp at or above every child, and actively
   watched sessions bypass this entirely via the per-session composite poll.
   Per-event work is bounded by the changed batch plus one O(session-count)

@@ -44,6 +44,8 @@ func newCompositeContainerTestDB(t *testing.T) (string, *sql.DB) {
 		CREATE TABLE session (
 			id TEXT PRIMARY KEY,
 			project_id TEXT NOT NULL,
+			parent_id TEXT,
+			title TEXT,
 			time_created INTEGER NOT NULL,
 			time_updated INTEGER NOT NULL
 		);
@@ -617,81 +619,109 @@ func TestOpenCodeDigestVerificationStampedOnlyByDigestPass(t *testing.T) {
 
 func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
 	dbPath, conn := newCompositeContainerTestDB(t)
+	origStat := statSQLiteContainerState
+	t.Cleanup(func() { statSQLiteContainerState = origStat })
+	statSQLiteContainerState = func(path string) (parser.SQLiteContainerState, bool) {
+		state, ok := parser.StatSQLiteContainerState(path)
+		if ok {
+			// The Windows path-stat implementation intentionally reports no
+			// stable identity. This test exercises the available-identity
+			// interval contract; the unavailable-identity fail-closed policy
+			// is covered separately below.
+			state.DBInode = 1
+			state.DBDevice = 1
+		}
+		return state, ok
+	}
 	_, err := conn.Exec(`
 		INSERT INTO project (id, worktree, time_updated)
-		VALUES ('proj', '/workspace/app', 1000);
-		INSERT INTO session (id, project_id, time_created, time_updated)
-		VALUES ('ses-1', 'proj', 1000, 1000);
-		INSERT INTO message (id, session_id, data, time_created, time_updated)
-		VALUES ('msg-1', 'ses-1', '{}', 1000, 1000);
-		INSERT INTO part (id, session_id, message_id, data, time_created, time_updated)
-		VALUES ('part-1', 'ses-1', 'msg-1', '{}', 1000, 1000)
+		VALUES ('proj', '/home/user/code/app', 1779012000000);
+		INSERT INTO session
+			(id, project_id, time_created, time_updated)
+		VALUES ('ses-1', 'proj', 1779012000000, 1779099999000);
+		INSERT INTO message
+			(id, session_id, data, time_created, time_updated)
+		VALUES
+			('msg-user', 'ses-1', '{"role":"user"}', 1779012000000, 1779012500000),
+			('msg-assistant', 'ses-1', '{"role":"assistant"}', 1779012000001, 1779012500001);
+		INSERT INTO part
+			(id, session_id, message_id, data, time_created, time_updated)
+		VALUES
+			('part-user', 'ses-1', 'msg-user',
+			 '{"type":"text","text":"original prompt"}',
+			 1779012000000, 1779012500000),
+			('part-assistant', 'ses-1', 'msg-assistant',
+			 '{"type":"text","text":"original answer"}',
+			 1779012000001, 1779012500001)
 	`)
 	require.NoError(t, err, "seed composite container")
 
-	provider, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
-		Roots: []string{filepath.Dir(dbPath)},
+	archive := openTestDB(t)
+	e := NewEngine(archive, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {filepath.Dir(dbPath)},
+		},
+		Machine: "local",
 	})
-	require.True(t, ok)
-	initial, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, initial, 1)
+	t.Cleanup(e.Close)
+	assertContent := func(want ...string) {
+		messages, err := archive.GetAllMessages(t.Context(), "opencode:ses-1")
+		require.NoError(t, err, "read archived messages")
+		require.Len(t, messages, len(want))
+		for i, content := range want {
+			assert.Equal(t, content, messages[i].Content, "messages[%d]", i)
+		}
+	}
 
 	origNow := openCodeContainerDigestVerifyNow
 	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
 	verifiedAt := time.Unix(100, 0)
 	openCodeContainerDigestVerifyNow = func() time.Time { return verifiedAt }
-	e := &Engine{}
-	pre, ok := parser.StatSQLiteContainerState(dbPath)
-	require.True(t, ok)
-	e.beginSQLiteContainerPass(
-		[]parser.DiscoveredFile{{
-			Agent: parser.AgentOpenCode, Path: initial[0].DisplayPath,
-			ProviderSource: &initial[0],
-		}},
-		map[string]parser.SQLiteContainerState{dbPath: pre},
-	)
-	e.noteSQLiteContainerResult(initial[0].DisplayPath, true)
-	e.finishSQLiteContainerPass(false, true)
+	initial := e.SyncAll(t.Context(), nil)
+	require.False(t, initial.Aborted, "initial sync aborted: %+v", initial)
+	assert.Equal(t, 1, initial.Synced)
+	assertContent("original prompt", "original answer")
 
-	_, err = conn.Exec("UPDATE part SET data = '{\"changed\":true}' WHERE id = 'part-1'")
+	_, err = conn.Exec(`
+		UPDATE message SET id = CASE id
+			WHEN 'msg-user' THEN 'msg-user-v2'
+			WHEN 'msg-assistant' THEN 'msg-assistant-v2'
+		END
+		WHERE id IN ('msg-user', 'msg-assistant');
+		UPDATE part SET
+			id = CASE id
+				WHEN 'part-user' THEN 'part-user-v2'
+				WHEN 'part-assistant' THEN 'part-assistant-v2'
+			END,
+			message_id = CASE message_id
+				WHEN 'msg-user' THEN 'msg-user-v2'
+				WHEN 'msg-assistant' THEN 'msg-assistant-v2'
+			END,
+			data = CASE id
+				WHEN 'part-user' THEN '{"type":"text","text":"changed prompt"}'
+				WHEN 'part-assistant' THEN '{"type":"text","text":"changed answer"}'
+			END
+		WHERE id IN ('part-user', 'part-assistant')
+	`)
 	require.NoError(t, err, "apply child-only edit")
-	changed, ok := parser.StatSQLiteContainerState(dbPath)
-	require.True(t, ok)
-	predicate := e.sqliteContainerListsWatermarkOnly(
-		map[string]parser.SQLiteContainerState{dbPath: changed},
-	)
-	recent, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
-		Roots:                             []string{filepath.Dir(dbPath)},
-		SQLiteContainerListsWatermarkOnly: predicate,
-	})
-	require.True(t, ok)
 	scansBefore := parser.OpenCodeContainerChildScans()
-	watermarkSources, err := recent.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, watermarkSources, 1)
-	_, watermarkOnly := parser.SourceWatermarkOnlyMTimeNS(watermarkSources[0])
-	assert.True(t, watermarkOnly,
-		"a recent verification may defer a child-only edit")
-	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore)
+	recent := e.SyncAll(t.Context(), nil)
+	require.False(t, recent.Aborted, "recent sync aborted: %+v", recent)
+	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
+		"a recent watermark pass must avoid the container child scan")
+	assert.Zero(t, recent.Synced,
+		"a child-only edit may remain deferred inside the verification interval")
+	assertContent("original prompt", "original answer")
 
-	openCodeContainerDigestVerifyNow = func() time.Time {
-		return verifiedAt.Add(openCodeContainerDigestVerifyInterval)
-	}
-	due, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
-		Roots:                             []string{filepath.Dir(dbPath)},
-		SQLiteContainerListsWatermarkOnly: predicate,
-	})
-	require.True(t, ok)
+	verifiedAt = verifiedAt.Add(openCodeContainerDigestVerifyInterval)
 	scansBefore = parser.OpenCodeContainerChildScans()
-	digestSources, err := due.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, digestSources, 1)
-	_, watermarkOnly = parser.SourceWatermarkOnlyMTimeNS(digestSources[0])
-	assert.False(t, watermarkOnly,
-		"the verification boundary must restore the full digest listing")
-	assert.True(t, parser.SourceUsesOpenCodeCompositeMTime(digestSources[0]))
-	assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scansBefore)
+	due := e.SyncAll(t.Context(), nil)
+	require.False(t, due.Aborted, "due sync aborted: %+v", due)
+	assert.Equal(t, 1, due.Synced,
+		"the due full digest pass must reconcile the child-only edit")
+	assertContent("changed prompt", "changed answer")
+	assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scansBefore,
+		"the due pass must perform the full container child scan")
 }
 
 func TestOpenCodeFirstPassAfterProcessStartUsesDigestListing(t *testing.T) {
@@ -764,22 +794,57 @@ func TestOpenCodeFailedPassesDoNotStampVerification(t *testing.T) {
 }
 
 func TestOpenCodeReplacementCannotReuseVerification(t *testing.T) {
-	const dbPath = "/data/opencode.db"
-	previous := parser.SQLiteContainerState{DBInode: 10, DBDevice: 20}
-	replacement := parser.SQLiteContainerState{DBInode: 11, DBDevice: 20}
-	e := &Engine{
-		trustedSQLiteContainers: map[string]trustedSQLiteContainer{
-			dbPath: {state: previous},
-		},
-		digestVerifiedAt: map[string]time.Time{
-			dbPath: time.Unix(100, 0),
-		},
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	origNow := openCodeContainerDigestVerifyNow
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
+	now := time.Unix(100, 0)
+	openCodeContainerDigestVerifyNow = func() time.Time { return now }
+
+	previous := parser.SQLiteContainerState{
+		DBInode: 10, DBDevice: 20, DBChangeCounter: 10,
 	}
-	predicate := e.sqliteContainerListsWatermarkOnly(
-		map[string]parser.SQLiteContainerState{dbPath: replacement},
-	)
-	assert.False(t, predicate(dbPath),
-		"a replacement container must require a new digest verification")
+	watermarkAdmission := func(
+		trusted, current parser.SQLiteContainerState,
+	) bool {
+		e := &Engine{
+			trustedSQLiteContainers: map[string]trustedSQLiteContainer{
+				dbPath: {state: trusted},
+			},
+			digestVerifiedAt: map[string]time.Time{dbPath: now},
+		}
+		return e.sqliteContainerListsWatermarkOnly(
+			map[string]parser.SQLiteContainerState{dbPath: current},
+		)(dbPath)
+	}
+
+	t.Run("new file identity", func(t *testing.T) {
+		replacement := previous
+		replacement.DBInode = 11
+		assert.False(t, watermarkAdmission(previous, replacement),
+			"a replacement container must require a new digest verification")
+	})
+
+	t.Run("identity unavailable", func(t *testing.T) {
+		unavailable := previous
+		unavailable.DBInode = 0
+		unavailable.DBDevice = 0
+		assert.False(t, watermarkAdmission(unavailable, unavailable),
+			"unavailable identity must fail closed to full digest listing")
+	})
+
+	t.Run("transaction counter rollback", func(t *testing.T) {
+		restored := previous
+		restored.DBChangeCounter--
+		assert.False(t, watermarkAdmission(previous, restored),
+			"a rolled-back SQLite state must not reuse verification")
+	})
+
+	t.Run("normal in-place transaction", func(t *testing.T) {
+		advanced := previous
+		advanced.DBChangeCounter++
+		assert.True(t, watermarkAdmission(previous, advanced),
+			"a normal in-place transaction may retain the fast path")
+	})
 }
 
 func TestOpenCodeForcePathsAlwaysListDigestForm(t *testing.T) {

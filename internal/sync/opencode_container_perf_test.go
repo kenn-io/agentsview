@@ -3,13 +3,27 @@ package sync_test
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/sync"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newOpenCodeTestEngine(t *testing.T, env *testEnv) *sync.Engine {
+	t.Helper()
+	engine := sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {env.opencodeDir},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	return engine
+}
 
 // TestOpenCodeSessionPrefilterIssue1557 reproduces the archive-wide child scan
 // caused by one changed session in a changed OpenCode container.
@@ -48,8 +62,13 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 		"the changed session must be archived")
 	assert.Equal(t, 122, second.Skipped,
 		"unchanged sessions must be skipped")
-	assert.Zero(t, scans,
-		"a changed full pass must not scan every child row")
+	if runtime.GOOS == "windows" {
+		assert.Equal(t, int64(1), scans,
+			"unavailable file identity must fail closed to full digest listing")
+	} else {
+		assert.Zero(t, scans,
+			"a changed full pass must not scan every child row")
+	}
 	assert.LessOrEqual(t, lookups, int64(1),
 		"the changed session's child lookup must stay bounded")
 	assertMessageContent(
@@ -383,6 +402,9 @@ func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
 // remain deferred during the verification interval; the force pass below
 // represents the next complete digest verification.
 func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file identity is unavailable; idle passes require full digest listing")
+	}
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj", "/home/user/code/app")
@@ -430,9 +452,12 @@ func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
 // tables at all: the container gate will skip every member before
 // fingerprinting, so discovery lists the bounded watermark form instead of
 // computing archive-sized child identities nothing reads. Child-only edits
-// remain deferred during the interval, and a force pass below carries the
-// complete digest immediately.
+// remain deferred during the interval. A fresh ordinary engine below has no
+// verification timestamp, so its full digest pass reconciles the edit.
 func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file identity is unavailable; idle passes require full digest listing")
+	}
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj", "/home/user/code/app")
@@ -458,14 +483,14 @@ func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
 	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
 		"an idle full pass must not pay per-session child lookups")
 
-	// A child-only replacement below every watermark is handled by an explicit
-	// force pass here; ordinary passes defer it until verification is due.
+	// A child-only replacement below every watermark is deferred by an ordinary
+	// pass until the verification boundary.
 	oc.replaceTextContent(
 		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
 	)
-	stats = env.engine.SyncAllForceParse(context.Background(), nil)
-	assert.Equal(t, 5, stats.Synced,
-		"a write breaks container trust and full discovery reconciles it")
+	stats = newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, stats.Synced,
+		"the ordinary full digest pass must reconcile the child-only edit")
 	assertMessageContent(
 		t, env.db, "opencode:ses00000",
 		"swapped prompt", "swapped answer",
@@ -506,7 +531,7 @@ func TestOpenCodeDeletedChildIsDetected(t *testing.T) {
 		"DELETE FROM message WHERE session_id = ? AND id LIKE ?",
 		"del-session", "%assistant%")
 
-	stats = env.engine.SyncAllForceParse(context.Background(), nil)
+	stats = newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
 	require.False(t, stats.Aborted)
 	assert.Equal(t, 1, stats.Synced,
 		"a deleted child must not be hidden behind an unchanged composite max")
@@ -567,7 +592,7 @@ func TestOpenCodeSameCountChildReplacementIsDetected(t *testing.T) {
 		t, "swap-session", "swapped prompt", "swapped answer", 1779012500000,
 	)
 
-	stats := env.engine.SyncAllForceParse(context.Background(), nil)
+	stats := newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
 	assert.Equal(t, 1, stats.Synced,
 		"a same-count child replacement below the session watermark must "+
 			"still change the fingerprint")
@@ -598,7 +623,7 @@ func TestOpenCodeMetadataUpdateBelowWatermarkIsDetected(t *testing.T) {
 		t, "proj", "/home/user/code/renamed-app", 1779013000000,
 	)
 
-	stats := env.engine.SyncAllForceParse(context.Background(), nil)
+	stats := newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
 	assert.Equal(t, 1, stats.Synced,
 		"a metadata update below the child watermark must still be detected")
 }
@@ -626,7 +651,7 @@ func TestOpenCodeMiddleRowReplacementIsDetected(t *testing.T) {
 		t, "mid-part-n", "mid", "mid-msg-a", "replaced", 1779012000001,
 	)
 
-	stats := env.engine.SyncAllForceParse(context.Background(), nil)
+	stats := newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
 	assert.Equal(t, 1, stats.Synced,
 		"a middle-row replacement preserving counts, sums and extrema must "+
 			"still change the fingerprint")
