@@ -439,6 +439,11 @@ type openCodeFormatSourceSet struct {
 	projectMetadataIndexed  map[string]struct{}
 	projectMetadataErrors   map[string]map[openCodeMetadataErrorPathKey]struct{}
 	projectMetadataMu       *sync.RWMutex
+	// discoveredSQLiteSources carries full discovery metadata into streamed
+	// reconciliation. The spool stores only paths, so without this handoff a
+	// due pass would resolve the child digest once per session again.
+	discoveredSQLiteSources   map[string]SourceRef
+	discoveredSQLiteSourcesMu *sync.RWMutex
 }
 
 func newOpenCodeFormatSourceSet(
@@ -462,10 +467,13 @@ func newOpenCodeFormatSourceSet(
 		projectMetadataIndexed:      index.projectMetadataIndexed,
 		projectMetadataErrors:       index.projectMetadataErrors,
 		projectMetadataMu:           index.projectMetadataMu,
+		discoveredSQLiteSources:     make(map[string]SourceRef),
+		discoveredSQLiteSourcesMu:   &sync.RWMutex{},
 	}
 }
 
 func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
+	s.resetDiscoveredSQLiteSources()
 	var sources []SourceRef
 	var incomplete error
 	seen := make(map[string]struct{})
@@ -522,6 +530,7 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 func (s openCodeFormatSourceSet) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
+	s.resetDiscoveredSQLiteSources()
 	var incomplete error
 	wrappedYield := func(source SourceRef) error {
 		if err := yield(source); err != nil {
@@ -941,6 +950,9 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 		}
 		sourcePath, sourcePathOK := s.pathFromSource(source)
 		if sourcePathOK {
+			if discovered, discoveredOK := s.discoveredSQLiteSource(sourcePath); discoveredOK {
+				source = discovered
+			}
 			if dbPath, sessionID, sqlite := s.spec.parseVirtual(sourcePath); sqlite &&
 				s.containerListsWatermarkOnly != nil &&
 				s.containerListsWatermarkOnly(dbPath) {
@@ -1452,7 +1464,37 @@ func (s openCodeFormatSourceSet) sqliteSourceRefFromMeta(
 		src.WatermarkOnly = meta.WatermarkOnly
 		ref.Opaque = src
 	}
+	s.rememberDiscoveredSQLiteSource(path, ref, meta.WatermarkOnly)
 	return ref, true
+}
+
+func (s openCodeFormatSourceSet) resetDiscoveredSQLiteSources() {
+	s.discoveredSQLiteSourcesMu.Lock()
+	s.discoveredSQLiteSources = make(map[string]SourceRef)
+	s.discoveredSQLiteSourcesMu.Unlock()
+}
+
+func (s openCodeFormatSourceSet) rememberDiscoveredSQLiteSource(
+	path string, source SourceRef, watermarkOnly bool,
+) {
+	path = filepath.Clean(path)
+	s.discoveredSQLiteSourcesMu.Lock()
+	defer s.discoveredSQLiteSourcesMu.Unlock()
+	if watermarkOnly {
+		if _, exists := s.discoveredSQLiteSources[path]; exists {
+			return
+		}
+	}
+	s.discoveredSQLiteSources[path] = source
+}
+
+func (s openCodeFormatSourceSet) discoveredSQLiteSource(
+	path string,
+) (SourceRef, bool) {
+	s.discoveredSQLiteSourcesMu.RLock()
+	source, ok := s.discoveredSQLiteSources[filepath.Clean(path)]
+	s.discoveredSQLiteSourcesMu.RUnlock()
+	return source, ok
 }
 
 func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(

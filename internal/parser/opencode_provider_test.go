@@ -1667,6 +1667,46 @@ func TestOpenCodeReconciliationRehydratesWatermarkMetadata(t *testing.T) {
 		"watermark rehydration must not resolve child digest")
 }
 
+func TestOpenCodeReconciliationReusesFullDiscoveryMetadata(t *testing.T) {
+	root := t.TempDir()
+	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	seeder.AddProject("prj_1", "/home/user/code/app")
+	seeder.AddSession(
+		"ses_a", "prj_1", "", "A", 1700000000000, 1700000010000,
+	)
+	t.Cleanup(func() { _ = db.Close() })
+
+	spec := openCodeProviderSpecForAgent(AgentOpenCode)
+	const childDigest = "discovery-child-digest"
+	spec.streamSQLite = func(
+		ctx context.Context, path string, yield func(OpenCodeSessionMeta) error,
+	) error {
+		return yield(OpenCodeSessionMeta{
+			SessionID:      "ses_a",
+			VirtualPath:    path + "#ses_a",
+			FileMtime:      1700000010000 * 1_000_000,
+			CompositeMtime: true,
+			ChildDigest:    childDigest,
+		})
+	}
+	sources := newOpenCodeFormatSourceSet([]string{root}, spec, nil)
+	err := sources.DiscoverEach(t.Context(), func(SourceRef) error { return nil })
+	require.NoError(t, err)
+
+	source, found, err := sources.SourceForReconciliation(
+		t.Context(), dbPath+"#ses_a", "",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, childDigest, sourceCarriedChildDigest(source))
+
+	before := OpenCodeSessionChildLookups()
+	_, err = sources.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	assert.Equal(t, before, OpenCodeSessionChildLookups(),
+		"full streamed reconciliation must reuse the discovery child digest")
+}
+
 func TestOpenCodeReconciliationKeepsStorageShadowSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
