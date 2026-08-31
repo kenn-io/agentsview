@@ -6124,30 +6124,17 @@ func (e *Engine) rehydrateReconciliationPage(
 				return nil, fmt.Errorf("rehydrate %s source %s: %w", candidate.Provider, candidate.Path, err)
 			}
 			if found && reconciliationSourceIdentity(candidate.Provider, source) == candidate.Identity {
-				if candidate.SourceState.Version != 0 {
-					stateProvider, ok := provider.(parser.ReconciliationSourceStateProvider)
-					if !ok {
-						return nil, fmt.Errorf(
-							"rehydrate %s source %s: source state provider unavailable",
-							candidate.Provider, candidate.Path,
-						)
-					}
-					if err := stateProvider.ApplyReconciliationSourceState(
-						&source, candidate.SourceState,
-					); err != nil {
-						return nil, fmt.Errorf(
-							"rehydrate %s source %s: apply source state: %w",
-							candidate.Provider, candidate.Path, err,
-						)
-					}
+				if applyReconciliationSourceStateIfValid(
+					provider, &source, candidate.SourceState,
+				) {
+					files = append(files, parser.DiscoveredFile{
+						Path: candidate.Path, Project: source.ProjectHint,
+						Agent: candidate.Provider, ForceParse: forceCandidate,
+						Machine:        candidate.Machine,
+						ProviderSource: &source, ProviderProcess: true,
+					})
+					continue
 				}
-				files = append(files, parser.DiscoveredFile{
-					Path: candidate.Path, Project: source.ProjectHint,
-					Agent: candidate.Provider, ForceParse: forceCandidate,
-					Machine:        candidate.Machine,
-					ProviderSource: &source, ProviderProcess: true,
-				})
-				continue
 			}
 		}
 		sources, err := provider.SourcesForChangedPath(ctx, parser.ChangedPathRequest{
@@ -6168,23 +6155,9 @@ func (e *Engine) rehydrateReconciliationPage(
 			return nil, fmt.Errorf("rehydrate %s source %s: canonical source not found", candidate.Provider, candidate.Path)
 		}
 		source := *matched
-		if candidate.SourceState.Version != 0 {
-			stateProvider, ok := provider.(parser.ReconciliationSourceStateProvider)
-			if !ok {
-				return nil, fmt.Errorf(
-					"rehydrate %s source %s: source state provider unavailable",
-					candidate.Provider, candidate.Path,
-				)
-			}
-			if err := stateProvider.ApplyReconciliationSourceState(
-				&source, candidate.SourceState,
-			); err != nil {
-				return nil, fmt.Errorf(
-					"rehydrate %s source %s: apply source state: %w",
-					candidate.Provider, candidate.Path, err,
-				)
-			}
-		}
+		_ = applyReconciliationSourceStateIfValid(
+			provider, &source, candidate.SourceState,
+		)
 		files = append(files, parser.DiscoveredFile{
 			Path: candidate.Path, Project: source.ProjectHint,
 			Agent: candidate.Provider, ForceParse: forceCandidate,
@@ -6196,6 +6169,24 @@ func (e *Engine) rehydrateReconciliationPage(
 		})
 	}
 	return files, nil
+}
+
+// applyReconciliationSourceStateIfValid treats provider state as an optional
+// optimization. Missing or malformed state falls through to the authoritative
+// changed-path source resolution instead of aborting reconciliation.
+func applyReconciliationSourceStateIfValid(
+	provider parser.Provider,
+	source *parser.SourceRef,
+	state parser.ReconciliationSourceState,
+) bool {
+	if state.Version == 0 {
+		return true
+	}
+	stateProvider, ok := provider.(parser.ReconciliationSourceStateProvider)
+	if !ok {
+		return false
+	}
+	return stateProvider.ApplyReconciliationSourceState(source, state) == nil
 }
 
 func canonicalReconciliationSourceIdentity(value string) string {

@@ -499,7 +499,6 @@ func (e *Engine) finishStreamingSQLiteContainerDiscovery() {
 				post == pre {
 				continue
 			}
-			delete(pass.captured, dbPath)
 			pass.failed[dbPath] = true
 		}
 	}
@@ -527,7 +526,7 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 		return false
 	}
 	current, ok := pass.captured[dbPath]
-	if !ok {
+	if !ok || pass.failed[dbPath] {
 		e.containerMu.Unlock()
 		return false
 	}
@@ -686,9 +685,7 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 	e.containerPass = nil
 	if incomplete {
 		if pass != nil {
-			for dbPath := range pass.captured {
-				delete(e.digestVerifiedAt, dbPath)
-			}
+			e.clearDigestVerificationForPass(pass)
 		}
 		return
 	}
@@ -702,15 +699,15 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 	}
 	if pass == nil || pass.poisoned {
 		if pass != nil {
-			for dbPath := range pass.captured {
-				delete(e.digestVerifiedAt, dbPath)
-			}
+			e.clearDigestVerificationForPass(pass)
 		}
 		return
 	}
+	for dbPath := range pass.failed {
+		delete(e.digestVerifiedAt, dbPath)
+	}
 	for dbPath, state := range pass.captured {
 		if pass.failed[dbPath] {
-			delete(e.digestVerifiedAt, dbPath)
 			continue
 		}
 		if pass.discovered[dbPath] == 0 ||
@@ -731,6 +728,18 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 			}
 			e.digestVerifiedAt[dbPath] = openCodeContainerDigestVerifyNow()
 		}
+	}
+}
+
+// clearDigestVerificationForPass clears verification age for every container
+// whose capture or discovery was invalid during the pass. Failed discoveries
+// may have no captured entry, so both maps are part of the invalidation set.
+func (e *Engine) clearDigestVerificationForPass(pass *sqliteContainerPass) {
+	for dbPath := range pass.captured {
+		delete(e.digestVerifiedAt, dbPath)
+	}
+	for dbPath := range pass.failed {
+		delete(e.digestVerifiedAt, dbPath)
 	}
 }
 

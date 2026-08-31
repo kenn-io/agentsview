@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,9 +17,10 @@ import (
 
 type reconciliationSourceStateTestProvider struct {
 	parser.Provider
-	source  parser.SourceRef
-	state   parser.ReconciliationSourceState
-	applied parser.ReconciliationSourceState
+	source   parser.SourceRef
+	state    parser.ReconciliationSourceState
+	applied  parser.ReconciliationSourceState
+	applyErr error
 }
 
 func (p *reconciliationSourceStateTestProvider) Definition() parser.AgentDef {
@@ -37,9 +39,18 @@ func (p *reconciliationSourceStateTestProvider) ReconciliationSourceState(
 	return p.state, true
 }
 
+func (p *reconciliationSourceStateTestProvider) SourcesForChangedPath(
+	context.Context, parser.ChangedPathRequest,
+) ([]parser.SourceRef, error) {
+	return []parser.SourceRef{p.source}, nil
+}
+
 func (p *reconciliationSourceStateTestProvider) ApplyReconciliationSourceState(
 	_ *parser.SourceRef, state parser.ReconciliationSourceState,
 ) error {
+	if p.applyErr != nil {
+		return p.applyErr
+	}
 	p.applied = state
 	return nil
 }
@@ -95,6 +106,43 @@ func TestReconciliationCandidateCarriesStateAcrossSpool(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 	assert.Equal(t, state, rehydrationProvider.applied)
+}
+
+func TestReconciliationMalformedStateFallsBackToAuthoritativeSource(t *testing.T) {
+	source := parser.SourceRef{
+		Provider:       parser.AgentOpenCode,
+		DisplayPath:    "/data/opencode.db#ses_a",
+		FingerprintKey: "/data/opencode.db#ses_a",
+		Key:            "/data/opencode.db#ses_a",
+	}
+	provider := &reconciliationSourceStateTestProvider{
+		source: source,
+		state: parser.ReconciliationSourceState{
+			Version: 1,
+			Payload: []byte("malformed"),
+		},
+		applyErr: errors.New("invalid state"),
+	}
+	candidate := reconciliationCandidate{
+		Provider:    parser.AgentOpenCode,
+		Identity:    "ses_a",
+		Path:        source.DisplayPath,
+		SourceState: provider.state,
+	}
+
+	files, err := (&Engine{}).rehydrateReconciliationPage(
+		t.Context(), []reconciliationCandidate{candidate},
+		map[parser.AgentType]parser.Provider{
+			parser.AgentOpenCode: provider,
+		},
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.NotNil(t, files[0].ProviderSource)
+	assert.Equal(t, source.DisplayPath, files[0].ProviderSource.DisplayPath)
+	assert.Empty(t, provider.applied,
+		"malformed optional state must not be applied")
 }
 
 // newContainerTestDB creates a real SQLite file named like an OpenCode
@@ -476,6 +524,9 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 	e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
 		dbPath: {state: pre},
 	}
+	e.digestVerifiedAt = map[string]time.Time{
+		dbPath: time.Unix(100, 0),
+	}
 
 	// The container changes inside the capture-discovery window.
 	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses-1')")
@@ -496,6 +547,26 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 	e.finishSQLiteContainerPass(false, true)
 	assert.Equal(t, pre, e.trustedSQLiteContainers[dbPath].state,
 		"a mismatched container must not be promoted past its trusted state")
+	assert.NotContains(t, e.digestVerifiedAt, dbPath,
+		"a mismatched capture must invalidate verification age")
+
+	t.Run("missing pre-discovery capture invalidates old verification", func(t *testing.T) {
+		e := &Engine{
+			trustedSQLiteContainers: map[string]trustedSQLiteContainer{
+				dbPath: {state: pre},
+			},
+			digestVerifiedAt: map[string]time.Time{
+				dbPath: time.Unix(100, 0),
+			},
+		}
+		e.beginSQLiteContainerPass(
+			[]parser.DiscoveredFile{file}, map[string]parser.SQLiteContainerState{},
+		)
+		e.noteSQLiteContainerResult(file.Path, true)
+		e.finishSQLiteContainerPass(false, true)
+		assert.NotContains(t, e.digestVerifiedAt, dbPath,
+			"a missing capture must invalidate verification age")
+	})
 }
 
 // TestSQLiteContainerGateParsesNewlyUnshadowedSession pins the hybrid-root
