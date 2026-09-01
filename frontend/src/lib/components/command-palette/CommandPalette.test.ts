@@ -219,6 +219,47 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it("dismisses on an overlay press released on the overlay", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+
+    const overlay = document.querySelector<HTMLElement>(".palette-overlay")!;
+    overlay.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    overlay.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+
+    expect(mockUi.activeModal).toBeNull();
+
+    unmount(component);
+  });
+
+  it("stays open when a drag starts in the palette and ends on the overlay", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    const overlay = document.querySelector<HTMLElement>(".palette-overlay")!;
+    input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    overlay.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+
+    expect(mockUi.activeModal).toBe("commandPalette");
+
+    unmount(component);
+  });
+
+  it("stays open when a drag starts on the overlay and ends in the palette", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    const overlay = document.querySelector<HTMLElement>(".palette-overlay")!;
+    overlay.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    input.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+
+    expect(mockUi.activeModal).toBe("commandPalette");
+
+    unmount(component);
+  });
+
   it("calls clear() and resetSort() on unmount via onDestroy", async () => {
     const component = mount(CommandPalette, {
       target: document.body,
