@@ -3045,7 +3045,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "cursor_usage_events") {
 		return false
 	}
-	// bulkInsertCursorUsageEvents dedups via a targetless ON CONFLICT
+	// AppendCursorUsageEventRows dedups via a targetless ON CONFLICT
 	// DO NOTHING, which only suppresses duplicates when this partial
 	// unique index exists. Fall back to EnsureSchema when it is missing
 	// so repeated pushes cannot duplicate cursor usage rows.

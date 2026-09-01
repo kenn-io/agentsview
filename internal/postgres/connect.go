@@ -17,6 +17,23 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// pgTargetWriteContractVersion invalidates persisted push state when the
+// PostgreSQL projection or ownership contract changes. The canonical session
+// row is source-owned except for target curation: PostgreSQL preserves a local
+// display-name override, deleted_at/deletion_cause override, and
+// local_modified_at. source_display_name and source_deleted_at retain the last
+// committed source baselines used to distinguish those overrides;
+// owner_marker, exclusions, and aliases remain PostgreSQL replication policy.
+//
+// Bump this version whenever that committed projection or ownership split
+// changes. A mismatch clears the saved watermark and fingerprints, forcing a
+// complete retry. The new fingerprint is persisted only after a successful
+// push, so failures retry the same backfill; running an older binary after a
+// newer one likewise sees a mismatch and rewrites its own complete contract.
+// v2 backfills the canonical Bun session row instead of allowing old matching
+// fingerprints to leave newly source-owned columns empty indefinitely.
+const pgTargetWriteContractVersion = "v2-canonical-session"
+
 // RedactDSN returns the host portion of the DSN for diagnostics,
 // stripping credentials, query parameters, and path components
 // that may contain secrets.
@@ -200,6 +217,14 @@ func Open(
 }
 
 func pgTargetFingerprint(dsn, schema string) (string, error) {
+	return pgTargetFingerprintForContract(
+		dsn, schema, pgTargetWriteContractVersion,
+	)
+}
+
+func pgTargetFingerprintForContract(
+	dsn, schema, writeContractVersion string,
+) (string, error) {
 	if dsn == "" {
 		return "", fmt.Errorf("postgres URL is required")
 	}
@@ -209,7 +234,7 @@ func pgTargetFingerprint(dsn, schema string) (string, error) {
 	}
 
 	fields := []string{
-		"v1",
+		writeContractVersion,
 		cfg.Database,
 		cfg.User,
 		schema,

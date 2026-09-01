@@ -385,17 +385,12 @@ func (s *Sync) pushEverything(
 	result.Diagnostics.LocalSessionCount = len(sessions)
 	result.Diagnostics.CandidateSessions = countPushSessions(sessions)
 
-	fingerprints, err := s.sessionFingerprints(ctx, sessions)
-	if err != nil {
-		return result, err
-	}
-
 	pushed := make([]db.Session, 0, len(sessions))
 	for batchStart := 0; batchStart < len(sessions); batchStart += duckSessionPushBatchSize {
 		end := min(batchStart+duckSessionPushBatchSize, len(sessions))
 		if err := s.pushSessionBatchForMode(
 			ctx, sessions[batchStart:end], batchStart, len(sessions),
-			&result, &pushed, onProgress, fingerprints,
+			&result, &pushed, onProgress,
 		); err != nil {
 			return result, err
 		}
