@@ -209,7 +209,7 @@
         <div class="stat-row">
           <div class="stat"><span class="stat-value">60+</span><span class="stat-label">agent formats parsed</span></div>
           <div class="stat"><span class="stat-value">1</span><span class="stat-label">binary, zero accounts</span></div>
-          <div class="stat"><span class="stat-value">80&ndash;220&times;</span><span class="stat-label">faster than ccusage on large archives</span></div>
+          <div class="stat"><span class="stat-value">SQLite</span><span class="stat-label">archive of record</span></div>
         </div>
       </section>
 
@@ -235,7 +235,7 @@
             <p class="section-index">03 / Account</p>
             <h2 id="account-title">Know what every agent costs.</h2>
           </div>
-          <p>Token and cost reports read from the pre-indexed archive, so they return in well under a second even on histories with tens of thousands of sessions: 80&ndash;220&times; faster than <code>npx ccusage</code> on a 22,000-session database. Pricing tracks LiteLLM and OpenRouter rates with an offline fallback, and cache-aware accounting covers prompt-cache creation and reads.</p>
+          <p>Token and cost reports read from the pre-indexed archive instead of reparsing every raw session file for each report. Pricing tracks LiteLLM and OpenRouter rates with an offline fallback, and cache-aware accounting covers prompt-cache creation and reads.</p>
         </div>
         <div class="split-layout">
           <figure class="capture">

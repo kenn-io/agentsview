@@ -187,11 +187,9 @@ reverse proxy.
 
 ## Token Usage and Cost Tracking
 
-`agentsview usage` is a fast, local replacement for ccusage and similar tools.
-It tracks token consumption and compute costs across **all** your coding agents
--- not just Claude Code. Because session data is already indexed in SQLite,
-queries are over 100x faster than tools that re-parse raw session files on every
-run.
+`agentsview usage` tracks token consumption and compute costs across **all**
+your coding agents -- not just Claude Code. Reports read from the same local
+SQLite archive that powers the UI.
 
 ```bash
 # Daily cost summary (default: last 30 days)

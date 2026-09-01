@@ -2706,8 +2706,8 @@ ______________________________________________________________________
   commands that report token usage and estimated cost by day or for the
   current day, scoped to Claude Code and Codex sessions. Pricing is pulled
   from the LiteLLM catalog with an embedded fallback for offline use. See
-  [Token Usage & Costs](/docs/token-usage/) for the full write-up, including
-  benchmarks against `ccusage`.
+  [Token Usage & Costs](/docs/token-usage/) for the full reporting model and
+  coverage details.
 - Add [OpenHands CLI](/docs/configuration/#session-discovery) session support.
   Local OpenHands conversations under `~/.openhands/conversations` are
   discovered, synced, and rendered alongside other agents. A new shallow-watch

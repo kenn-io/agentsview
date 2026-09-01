@@ -49,7 +49,7 @@ ROUTES = ["/", "/guide/", "/docs/"] + [f"/docs/{page}/" for page in DOCS_PAGES]
 
 REQUIRED_FRAGMENTS = [
     "/docs/configuration/#session-discovery",
-    "/docs/token-usage/#how-it-compares-to-ccusage",
+    "/docs/token-usage/#reporting-model",
     "/docs/session-api/#agentsview-session-usage",
 ]
 

@@ -13,10 +13,7 @@ agent activity, see the [Activity](/docs/activity/) dashboard.
 
 If you've used [`ccusage`](https://github.com/ryoppippi/ccusage) this will feel
 familiar. AgentsView covers the same core job — "how much did I spend on AI
-coding yesterday?" — across multiple coding agents from one archive. Because it
-reads from pre-indexed SQLite instead of re-parsing JSONL on every invocation,
-it's also dramatically faster on large histories (see
-[benchmarks](#how-it-compares-to-ccusage) below).
+coding yesterday?" — across multiple coding agents from one archive.
 
 !!! warning "Experimental"
 
@@ -540,43 +537,15 @@ Note that recent Amp versions keep complete threads server-side and leave only
 stub files on disk. AgentsView reports usage for whatever complete threads are
 present locally; threads that exist only as stubs have nothing to read.
 
-## How It Compares to `ccusage`
+## Reporting Model
 
-`ccusage` re-walks every Claude Code JSONL file and re-parses from scratch on
-every invocation. `agentsview usage` queries pre-indexed SQLite with an
-in-memory pricing join, so the cost of reporting drops dramatically as history
-grows.
+`agentsview usage` reads token and cost facts from the same SQLite archive as
+the UI, then joins them with the applicable pricing data.
 
 Version 0.42.0 also keeps an exact daily rollup cache for repeated reports. The
 cache is disposable rather than authoritative: AgentsView rebuilds any missing
-or stale day from the archived usage rows before returning it. This keeps large
-reports fast without trading away exact results.
-
-Measured on a real 22,000-session database (~310,000 token-bearing messages) on
-an M5 Max, median of 5 steady-state runs:
-
-| Command                                                  |    Time | Speedup vs `ccusage` |
-| -------------------------------------------------------- | ------: | -------------------: |
-| `npx ccusage@latest daily --json --offline`              | 44.59 s |                   1× |
-| `agentsview usage daily --json --all --offline`          |  0.53 s |              **84×** |
-| `agentsview usage daily --json --offline` (default 30 d) |  0.41 s |             **109×** |
-| `agentsview usage daily --json --offline --no-sync`      |  0.20 s |             **223×** |
-
-!!! note
-
-    These numbers are from a large local database (22k sessions, 310k token-bearing
-    messages). The speedup scales with session count — smaller databases will see
-    smaller absolute differences because `ccusage` has less JSONL to re-parse, but
-    AgentsView stays in the sub-second range either way. The ratios above are an
-    upper bound, not a universal guarantee.
-
-Apples-to-apples: `ccusage` scans all history by default, so the `--all` row is
-the matched comparison. The default 30-day window is faster still because most
-invocations don't need four months of history, and `--no-sync` skips the
-refresh-recent-files pass entirely (useful when you just want to re-render an
-existing report).
-
-Beyond raw speed, `agentsview usage`:
+or stale day from the archived usage rows before returning it. The reporting
+workflow also:
 
 - **Works beyond Claude Code** — coverage includes Claude Code, Codex, Copilot
   CLI, OpenCode-format tools, Pi, Prime Agent, Gemini, Qwen Code,
@@ -590,7 +559,7 @@ Beyond raw speed, `agentsview usage`:
 - **Includes on-demand sync** — when no AgentsView server is running, `usage`
   does a quick incremental sync scoped to files modified since the last sync
   start time so reports always reflect current state. Skip with `--no-sync`
-  for the fastest path.
+  when you want to report only from the existing archive.
 
 ## `agentsview usage daily`
 

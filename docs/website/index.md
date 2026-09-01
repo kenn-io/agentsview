@@ -37,7 +37,7 @@ RooCode, Trae, Windsurf, and dozens more. Every supported source is listed in
 
 - **60+** agent formats parsed
 - **1** binary, zero accounts
-- **80–220×** faster than ccusage on large archives
+- **SQLite** archive of record
 
 ## See when your agents are actually working
 
@@ -49,11 +49,10 @@ machine. Live sync streams new messages into the UI as sessions run.
 
 ## Know what every agent costs
 
-[Token and cost reports](/docs/token-usage/) read from the pre-indexed archive,
-so they return in well under a second even on histories with tens of thousands
-of sessions: 80–220× faster than `npx ccusage` on a 22,000-session database.
-Pricing tracks LiteLLM and OpenRouter rates with an offline fallback, and
-cache-aware accounting covers prompt-cache creation and reads.
+[Token and cost reports](/docs/token-usage/) read from the pre-indexed archive
+instead of reparsing every raw session file for each report. Pricing tracks
+LiteLLM and OpenRouter rates with an offline fallback, and cache-aware
+accounting covers prompt-cache creation and reads.
 
 ```bash
 agentsview usage daily          # last 30 days, terminal table

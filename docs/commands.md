@@ -451,7 +451,7 @@ ______________________________________________________________________
 
 Report token usage and estimated cost aggregated by local-time day, scoped to
 the last 30 days by default. See [Token Usage & Costs](/docs/token-usage/) for a
-full write-up, including benchmarks against `ccusage`.
+full write-up on reporting behavior and agent coverage.
 
 ```bash
 agentsview usage daily [flags]
