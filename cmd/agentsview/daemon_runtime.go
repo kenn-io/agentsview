@@ -62,6 +62,7 @@ type DaemonRuntime struct {
 	Data             int
 	RuntimeFallback  bool
 	RuntimeError     string
+	startedByEnsure  bool // transient attribution; never persisted
 }
 
 func runtimeStore(dataDir string) daemon.RuntimeStore {

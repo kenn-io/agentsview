@@ -27,6 +27,7 @@ type model struct {
 	loading                                            bool
 	generation                                         uint64
 	status, errText                                    string
+	startupSettingsErr, startupSyncErr                 string
 	inputMode                                          string
 	input                                              textinput.Model
 	help                                               bool
@@ -140,6 +141,7 @@ type pageLoadedMsg struct {
 	updates    <-chan pageUpdate
 }
 type mutationDoneMsg struct {
+	kind    string
 	message string
 	err     error
 }
@@ -314,9 +316,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case settingsLoadedMsg:
 		if msg.err != nil {
-			m.errText = msg.err.Error()
+			m.startupSettingsErr = msg.err.Error()
 			return m, nil
 		}
+		m.startupSettingsErr = ""
 		if msg.settings != nil {
 			m.readOnly = msg.settings.ReadOnly
 		}
@@ -355,6 +358,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errText = ""
 		if msg.data.Settings != nil {
 			m.readOnly = msg.data.Settings.ReadOnly
+			m.startupSettingsErr = ""
 		}
 		if !done {
 			return m, waitPageUpdateCmd(msg.generation, msg.page, msg.updates)
@@ -362,9 +366,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case mutationDoneMsg:
 		m.loading = false
+		if msg.kind == "startup-sync" {
+			if msg.err != nil {
+				m.startupSyncErr = msg.err.Error()
+				return m, nil
+			}
+			m.startupSyncErr = ""
+			m.status = msg.message
+			return m, m.loadCurrent()
+		}
 		if msg.err != nil {
 			m.errText = msg.err.Error()
 			return m, nil
+		}
+		if msg.kind == "sync" || msg.kind == "resync" {
+			m.startupSyncErr = ""
 		}
 		m.status, m.errText = msg.message, ""
 		if looksLikeLocation(msg.message) && m.open != nil {
@@ -1238,7 +1254,9 @@ func (m *model) mutate(mutation Mutation) tea.Cmd {
 		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Minute)
 		defer cancel()
 		message, err := m.client.Mutate(ctx, mutation)
-		return mutationDoneMsg{message: message, err: err}
+		return mutationDoneMsg{
+			kind: mutation.Kind, message: message, err: err,
+		}
 	}
 }
 
@@ -1257,6 +1275,16 @@ func (m *model) loadSettings() tea.Cmd {
 		settings, err := client.Settings(ctx)
 		return settingsLoadedMsg{settings: settings, err: err}
 	}
+}
+
+func (m *model) visibleError() string {
+	if m.errText != "" {
+		return m.errText
+	}
+	if m.startupSettingsErr != "" {
+		return m.startupSettingsErr
+	}
+	return m.startupSyncErr
 }
 
 func connectEventsCmd(ctx context.Context, client DataClient) tea.Cmd {

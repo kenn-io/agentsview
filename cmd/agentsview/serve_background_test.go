@@ -746,6 +746,7 @@ func TestEnsureBackgroundServeExistingDaemon(t *testing.T) {
 	require.NotNil(t, rt)
 	assert.Equal(t, host, rt.Host)
 	assert.Equal(t, port, rt.Port)
+	assert.False(t, rt.startedByEnsure)
 }
 
 func TestEnsureBackgroundServeGeneratesAuthTokenForRemoteSync(t *testing.T) {
@@ -779,6 +780,7 @@ func TestEnsureBackgroundServeGeneratesAuthTokenForRemoteSync(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, rt)
+	assert.True(t, rt.startedByEnsure)
 	require.NotEmpty(t, gotCfg.AuthToken)
 	assert.Equal(t, gotCfg.AuthToken, cfg.AuthToken)
 	assert.False(t, gotCfg.RequireAuth)

@@ -628,7 +628,9 @@ probeDaemon:
 			waitTimeout, logPath,
 		)
 	}
-	return rt, nil
+	started := *rt
+	started.startedByEnsure = true
+	return &started, nil
 }
 
 func waitForExternalServeStartup(

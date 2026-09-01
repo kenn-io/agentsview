@@ -106,8 +106,8 @@ func (m *model) renderFooter(width int) string {
 	if m.loading {
 		right = m.strings.Loading
 	}
-	if m.errText != "" {
-		right = errorStyle.Render(m.strings.Error + ": " + safe(m.errText))
+	if errText := m.visibleError(); errText != "" {
+		right = errorStyle.Render(m.strings.Error + ": " + safe(errText))
 	}
 	if right == "" {
 		return truncateWidth(mutedStyle.Render(left), width)

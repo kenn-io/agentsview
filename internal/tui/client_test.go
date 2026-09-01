@@ -84,6 +84,47 @@ func TestClientStartupSyncDoesNotResyncOrdinaryConflict(t *testing.T) {
 	assert.Equal(t, 1, requests)
 }
 
+func TestClientReadOnlyStateSupportsConcurrentSettingsAndMutations(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/settings" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"read_only":false}`)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	client := NewClient(server.URL, "", false)
+
+	const workers = 64
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Add(1)
+		go func(resolveSettings bool) {
+			defer wg.Done()
+			<-start
+			if resolveSettings {
+				_, err := client.Settings(t.Context())
+				errs <- err
+				return
+			}
+			_, err := client.Mutate(
+				t.Context(), Mutation{Kind: "rename", SessionID: "session"},
+			)
+			errs <- err
+		}(i%2 == 0)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+}
+
 func TestClientKeepsProvisionedAuthenticationToken(t *testing.T) {
 	var request int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

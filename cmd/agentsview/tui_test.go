@@ -35,37 +35,55 @@ func TestTUICommandPassesExplicitDaemonConfiguration(t *testing.T) {
 	assert.False(t, got.StartupSync)
 }
 
-func TestTUIAutostartServesBeforeForegroundSync(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
-	originalStart := startBackgroundServeForTransport
-	originalRun := runTUI
-	t.Cleanup(func() {
-		startBackgroundServeForTransport = originalStart
-		runTUI = originalRun
-	})
+func TestTUIAutostartSyncFollowsLaunchAttribution(t *testing.T) {
+	for _, tt := range []struct {
+		name, reason string
+		started      bool
+	}{
+		{
+			name: "caller launched daemon", started: true,
+			reason: "the launching TUI must drive its deferred sync",
+		},
+		{
+			name: "concurrent caller launched daemon", started: false,
+			reason: "a launch race loser must not start a duplicate sync",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+			originalStart := startBackgroundServeForTransport
+			originalRun := runTUI
+			t.Cleanup(func() {
+				startBackgroundServeForTransport = originalStart
+				runTUI = originalRun
+			})
 
-	var skippedInitialSync bool
-	startBackgroundServeForTransport = func(
-		_ context.Context, cfg *config.Config, _ time.Duration,
-	) (*DaemonRuntime, error) {
-		skippedInitialSync = cfg.SkipInitialSync
-		return &DaemonRuntime{Host: "127.0.0.1", Port: 9090}, nil
+			var skippedInitialSync bool
+			startBackgroundServeForTransport = func(
+				_ context.Context, cfg *config.Config, _ time.Duration,
+			) (*DaemonRuntime, error) {
+				skippedInitialSync = cfg.SkipInitialSync
+				return &DaemonRuntime{
+					Host: "127.0.0.1", Port: 9090,
+					startedByEnsure: tt.started,
+				}, nil
+			}
+			var got tuiterm.Options
+			runTUI = func(_ context.Context, opts tuiterm.Options) error {
+				got = opts
+				return nil
+			}
+
+			cmd := newTUICommand()
+			err := cmd.Execute()
+
+			require.NoError(t, err)
+			assert.True(t, skippedInitialSync,
+				"daemon readiness must not wait for the archive-wide startup sync")
+			assert.Equal(t, tt.started, got.StartupSync, tt.reason)
+			assert.False(t, got.ResolveReadOnly)
+		})
 	}
-	var got tuiterm.Options
-	runTUI = func(_ context.Context, opts tuiterm.Options) error {
-		got = opts
-		return nil
-	}
-
-	cmd := newTUICommand()
-	err := cmd.Execute()
-
-	require.NoError(t, err)
-	assert.True(t, skippedInitialSync,
-		"daemon readiness must not wait for the archive-wide startup sync")
-	assert.True(t, got.StartupSync,
-		"the live TUI must drive the deferred sync after it starts")
-	assert.False(t, got.ResolveReadOnly)
 }
 
 func TestRootCommandIncludesTUI(t *testing.T) {

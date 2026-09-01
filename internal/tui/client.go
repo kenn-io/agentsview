@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -178,7 +179,7 @@ type ServerEvent struct {
 type Client struct {
 	baseURL  string
 	token    string
-	readOnly bool
+	readOnly atomic.Bool
 	http     *http.Client
 	stream   *http.Client
 	sessions service.SessionService
@@ -186,14 +187,15 @@ type Client struct {
 
 func NewClient(baseURL, token string, readOnly bool) *Client {
 	baseURL = strings.TrimRight(baseURL, "/")
-	return &Client{
+	client := &Client{
 		baseURL:  baseURL,
 		token:    token,
-		readOnly: readOnly,
 		http:     &http.Client{Timeout: 30 * time.Second},
 		stream:   &http.Client{},
 		sessions: service.NewHTTPBackend(baseURL, token, readOnly),
 	}
+	client.readOnly.Store(readOnly)
+	return client
 }
 
 func (c *Client) Settings(ctx context.Context) (*Settings, error) {
@@ -201,7 +203,7 @@ func (c *Client) Settings(ctx context.Context) (*Settings, error) {
 	if err := c.get(ctx, "/api/v1/settings", nil, &settings); err != nil {
 		return nil, err
 	}
-	c.readOnly = settings.ReadOnly
+	c.readOnly.Store(settings.ReadOnly)
 	return &settings, nil
 }
 
@@ -627,7 +629,7 @@ func splitTerms(raw string) []string {
 }
 
 func (c *Client) Mutate(ctx context.Context, m Mutation) (string, error) {
-	if c.readOnly {
+	if c.readOnly.Load() {
 		return "", errors.New("daemon is read-only")
 	}
 	sid := url.PathEscape(m.SessionID)

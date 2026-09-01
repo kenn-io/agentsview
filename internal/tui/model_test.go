@@ -218,6 +218,33 @@ func TestInitListsSessionsWhileStartupWorkContinues(t *testing.T) {
 	close(release)
 }
 
+func TestSettingsFailureSurvivesSuccessfulSessionLoad(t *testing.T) {
+	m := newModel(t.Context(), &fakeDataClient{}, Options{})
+	m.generation = 1
+
+	_, _ = m.Update(settingsLoadedMsg{err: errors.New("settings unavailable")})
+	_, _ = m.Update(sessionsLoadedMsg{
+		generation: 1,
+		page:       &service.SessionList{},
+	})
+
+	assert.Contains(t, m.renderFooter(120), "settings unavailable")
+}
+
+func TestStartupSyncFailureSurvivesSuccessfulPageLoad(t *testing.T) {
+	m := newModel(t.Context(), &fakeDataClient{}, Options{})
+	m.generation = 1
+
+	_, _ = m.Update(mutationDoneMsg{
+		kind: "startup-sync", err: errors.New("startup sync failed"),
+	})
+	_, _ = m.Update(pageLoadedMsg{
+		generation: 1, page: PageDashboard, data: PageData{}, done: true,
+	})
+
+	assert.Contains(t, m.renderFooter(120), "startup sync failed")
+}
+
 func TestModelIgnoresStaleSessionPage(t *testing.T) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
 	m.generation = 4

@@ -250,7 +250,7 @@ func ensureTransportContext(
 			if err != nil {
 				return transport{}, err
 			}
-			return transportFromStartedRuntime(rt), nil
+			return transportFromAutostartRuntime(rt), nil
 		}
 		return tr, nil
 	}
@@ -270,7 +270,7 @@ func ensureTransportContext(
 			if err != nil {
 				return transport{}, err
 			}
-			return transportFromStartedRuntime(rt), nil
+			return transportFromAutostartRuntime(rt), nil
 		}
 	}
 	if intent == transportIntentRead {
@@ -300,7 +300,7 @@ func ensureTransportContext(
 		if err != nil {
 			return transport{}, err
 		}
-		return transportFromStartedRuntime(rt), nil
+		return transportFromAutostartRuntime(rt), nil
 	}
 	if daemonAutostartDisabled() {
 		return tr, nil
@@ -321,7 +321,7 @@ func ensureTransportContext(
 	if err != nil {
 		return transport{}, err
 	}
-	return transportFromStartedRuntime(rt), nil
+	return transportFromAutostartRuntime(rt), nil
 }
 
 func waitForBackgroundLaunchBeforeArchiveWrite(
@@ -431,9 +431,9 @@ func transportFromRuntime(rt *DaemonRuntime) transport {
 	}
 }
 
-func transportFromStartedRuntime(rt *DaemonRuntime) transport {
+func transportFromAutostartRuntime(rt *DaemonRuntime) transport {
 	tr := transportFromRuntime(rt)
-	tr.Started = true
+	tr.Started = rt.startedByEnsure
 	return tr
 }
 
