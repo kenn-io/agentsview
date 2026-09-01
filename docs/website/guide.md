@@ -6,9 +6,9 @@ stops, five minutes.
 
 ## 01 — Capture every session
 
-The daemon discovers the session directories that Claude Code, Codex, Cursor,
-Copilot, Gemini, and more than 50 other agents already write, and syncs them
-into one local SQLite archive with full-text indexes. It keeps watching, so the
+The daemon discovers the session directories behind more than 60 agent formats,
+including Claude Code, Codex, Cursor, Copilot, and Gemini, and syncs them into
+one local SQLite archive with full-text indexes. It keeps watching, so the
 archive stays current while you work. [Quick start](/docs/quickstart/).
 
 ## 02 — Browse the full conversation
@@ -64,11 +64,11 @@ tried before repeating it. [MCP server](/docs/mcp/) ·
 
 ## 09 — Extend beyond one machine
 
-Push each machine's archive to PostgreSQL for a merged team view with
-per-machine labels, mirror into DuckDB for analytical queries, or sync raw
-session directories through the filesystem or S3. SQLite on your disk remains
-the archive of record. [PostgreSQL sync](/docs/pg-sync/) ·
-[DuckDB mirror](/docs/duckdb/).
+Push each machine's archive to PostgreSQL for a merged team view, mirror into
+DuckDB for analytical queries, read source files through the filesystem or S3,
+or keep original files in hosted raw custody. SQLite on your disk remains the
+local archive of record. [PostgreSQL sync](/docs/pg-sync/) ·
+[DuckDB mirror](/docs/duckdb/) · [Hosted raw sync](/docs/hosted-raw-sync/).
 
 ## Next
 

@@ -50,7 +50,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 - [DuckDB Mirror](https://agentsview.io/docs/duckdb.md): Mirror the SQLite archive into DuckDB, locally or over the Quack remote protocol.
 - [Filesystem Session Sync](https://agentsview.io/docs/filesystem-sync.md): View sessions from multiple machines by transporting native session directories.
 - [Artifact Folder Sync](https://agentsview.io/docs/artifact-sync.md): Exchange normalized sessions between archives through a trusted folder.
-- [Hosted Raw Sync](https://agentsview.io/docs/hosted-raw-sync.md): Architecture, security boundaries, and delivery status for raw-first hosted sync (in development).
+- [Hosted Raw Sync](https://agentsview.io/docs/hosted-raw-sync.md): Keep original provider files from several devices in one hosted archive with authenticated, resumable uploads.
 - [Remote Access](https://agentsview.io/docs/remote-access.md): Access AgentsView from other devices on your network.
 
 ## Project

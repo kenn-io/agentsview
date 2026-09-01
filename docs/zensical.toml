@@ -38,7 +38,7 @@ nav = [
   {"Artifact Folder Sync" = "artifact-sync.md"},
   {"Filesystem Session Sync" = "filesystem-sync.md"},
   {"PostgreSQL Sync" = "pg-sync.md"},
-  {"Hosted Raw Sync (In Development)" = "hosted-raw-sync.md"},
+  {"Hosted Raw Sync" = "hosted-raw-sync.md"},
   {"DuckDB Mirror" = "duckdb.md"},
 ]
 

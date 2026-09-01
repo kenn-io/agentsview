@@ -11,8 +11,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 !!! note
 
     `AGENT_VIEWER_DATA_DIR` is still accepted as a legacy fallback when
-    `AGENTSVIEW_DATA_DIR` is unset, but new setups should use
-    `AGENTSVIEW_DATA_DIR`.
+    `AGENTSVIEW_DATA_DIR` is unset, but new setups should use `AGENTSVIEW_DATA_DIR`.
 
 ```
 ~/.agentsview/
@@ -26,10 +25,10 @@ AgentsView stores all persistent data under a single directory, defaulting to
 └── uploads/         # Uploaded session files
 ```
 
-`usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user
-data. It is safe to delete when no AgentsView process is running; the next
-usage query rebuilds it automatically. `sessions.db` remains the only file
-that needs backing up.
+`usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user data.
+It is safe to delete when no AgentsView process is running; the next usage query
+rebuilds it automatically. `sessions.db` remains the only file that needs
+backing up.
 
 The desktop app and CLI share a detached local daemon for fresh reads and
 writes. A running daemon owns local SQLite writes for this data directory and
@@ -51,9 +50,9 @@ stores persistent settings that survive restarts.
 
 !!! note
 
-    The config format changed from JSON to TOML. Existing `config.json` files
-    are automatically migrated to `config.toml` on first run (the JSON file is
-    renamed to `config.json.bak`).
+    The config format changed from JSON to TOML. Existing `config.json` files are
+    automatically migrated to `config.toml` on first run (the JSON file is renamed
+    to `config.json.bak`).
 
 ```toml
 cursor_secret = "base64-encoded-secret"
@@ -63,33 +62,33 @@ daemon_idle_timeout = "20m"
 chart_palette = "agentsview"
 ```
 
-| Field                               | Description                                                                                                                                                                                                                                          |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cursor_secret`                     | Auto-generated HMAC key for pagination cursor signing                                                                                                                                                                                                |
-| `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview usage cursor`                                                                                                                                                                                               |
-| `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                                                                                                                                                           |
-| `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                         |
-| `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                      |
-| `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`)                                                                                                                                                                     |
-| `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`                                                                                                                                               |
-| `require_auth`                      | Require bearer-token authentication for API access                                                                                                                                                                                                   |
-| `auth_token`                        | Auto-generated 256-bit bearer token for remote access; can be overridden with `AGENTSVIEW_AUTH_TOKEN`                                                                                                                                                |
-| `public_url`                        | Public URL for hostname/proxy access and origin validation                                                                                                                                                                                           |
-| `public_origins`                    | Array of additional trusted CORS origins                                                                                                                                                                                                             |
-| `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                         |
-| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                  |
-| `disabled_agents`                   | Session providers to exclude from local filesystem scanning; changes require a daemon restart — see [Disabling Session Providers](#disabling-session-providers)                                                                                     |
+| Field                               | Description                                                                                                                                                                                                                                               |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cursor_secret`                     | Auto-generated HMAC key for pagination cursor signing                                                                                                                                                                                                     |
+| `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview usage cursor`                                                                                                                                                                                                    |
+| `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                                                                                                                                                                |
+| `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                              |
+| `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                           |
+| `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`)                                                                                                                                                                          |
+| `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`                                                                                                                                                    |
+| `require_auth`                      | Require bearer-token authentication for API access                                                                                                                                                                                                        |
+| `auth_token`                        | Auto-generated 256-bit bearer token for remote access; can be overridden with `AGENTSVIEW_AUTH_TOKEN`                                                                                                                                                     |
+| `public_url`                        | Public URL for hostname/proxy access and origin validation                                                                                                                                                                                                |
+| `public_origins`                    | Array of additional trusted CORS origins                                                                                                                                                                                                                  |
+| `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                              |
+| `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                       |
+| `disabled_agents`                   | Session providers to exclude from local filesystem scanning; changes require a daemon restart — see [Disabling Session Providers](#disabling-session-providers)                                                                                           |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                             |
-| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                           |
-| `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders, accepting one consent prompt per folder — see [macOS Protected Folders](#macos-protected-folders)                                                                                        |
+| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                                |
+| `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders, accepting one consent prompt per folder — see [macOS Protected Folders](#macos-protected-folders)                                                                                             |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/docs/pg-sync/)                                                                                                                                                                                     |
 | `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/docs/duckdb/)                                                                                                                                                                                          |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)           |
-| `[insights]`                        | Optional generated-insights endpoint and model; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface) |
+| `[insights]`                        | Optional generated-insights endpoint and model; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                             |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                 |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine labels — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                  |
-| `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                  |
+| `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                       |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/docs/token-usage/#custom-model-pricing)                                                                                                                                         |
 
 The `cursor_secret` is generated automatically on first run. For Gist
@@ -99,7 +98,8 @@ requests, if no token is saved, it then tries `AGENTSVIEW_GITHUB_TOKEN` and then
 `gh auth login`. For remote or proxied access, save a `github_token` via the web
 UI Settings page or the API endpoint `POST /api/v1/config/github` when you want
 AgentsView to publish gists. Remote access fields can be configured via the
-Settings page or CLI flags — see [Remote Access](/docs/remote-access/) for details.
+Settings page or CLI flags — see [Remote Access](/docs/remote-access/) for
+details.
 
 `agentsview daemon start` and `agentsview daemon restart` load the normal
 effective configuration from this file and supported environment variables; they
@@ -113,8 +113,8 @@ both are set.
 
 !!! note
 
-    Older configs may still contain `remote_access = true`. AgentsView still
-    reads that legacy key for backward compatibility, but new setups should use
+    Older configs may still contain `remote_access = true`. AgentsView still reads
+    that legacy key for backward compatibility, but new setups should use
     `require_auth = true`.
 
 ## Remote Hosts
@@ -152,12 +152,12 @@ deltas when fewer than half of the manifest files need fetching; see
 [Remote Access — Incremental Sync](/docs/remote-access/#incremental-sync).
 
 When a full or automatic data-version rebuild includes local sources, configured
-HTTP hosts join the same temporary-database bulk ingest and atomic swap. `--full`
-reparses the complete local and remote corpus without retransferring unchanged
-files from manifest-capable spokes. HTTP remote sync requires the collector and
-remote daemon to use the same remote-sync protocol version. After upgrading
-either host, upgrade the other before syncing again; incompatible peers fail
-before targets or archive data are exchanged.
+HTTP hosts join the same temporary-database bulk ingest and atomic swap.
+`--full` reparses the complete local and remote corpus without retransferring
+unchanged files from manifest-capable spokes. HTTP remote sync requires the
+collector and remote daemon to use the same remote-sync protocol version. After
+upgrading either host, upgrade the other before syncing again; incompatible
+peers fail before targets or archive data are exchanged.
 
 Each `remote_hosts.host` value must be unique and stable. It namespaces imported
 session IDs, the database skip cache, and the persistent mirror; changing it for
@@ -167,9 +167,8 @@ can reuse stale state. A configured HTTP host can be selected later with
 without a matching configured host, `--host` remains an SSH remote sync. HTTP
 remote sync is the recommended transport. SSH remote sync is deprecated and
 receives only critical fixes. HTTP failures are summarized with actionable
-messages for common cases such as token
-rejection, missing remote archive endpoints, connection refusal, DNS failures,
-and timeouts.
+messages for common cases such as token rejection, missing remote archive
+endpoints, connection refusal, DNS failures, and timeouts.
 
 Set `interval` to a positive duration such as `"5m"` to have a running collector
 daemon sync that host periodically. Zero or omitted disables the per-host
@@ -244,74 +243,77 @@ server-side and leave only local stubs; historical local Amp thread JSON files
 can still be parsed.
 
 The matching environment variable and `*_dirs` configuration key override an
-agent's default directories. Environment variables take precedence when both
-are set. An explicit empty `*_dirs` array, such as `grok_dirs = []`, clears that
+agent's default directories. Environment variables take precedence when both are
+set. An explicit empty `*_dirs` array, such as `grok_dirs = []`, clears that
 agent's default local directories, so local discovery finds nothing there.
 Matching `session_sources` entries for that agent still apply. Provider-wide
-exclusion is documented under [Disabling Session Providers](#disabling-session-providers).
-Omitting the key keeps its default directories.
+exclusion is documented under
+[Disabling Session Providers](#disabling-session-providers). Omitting the key
+keeps its default directories.
 
-| Agent                 | Default Directory                                                                | File Format                                                                                                                     |
-| --------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Aider                 | No default; opt in with `AIDER_DIR` or `aider_dirs`                              | `.aider.chat.history.md` Markdown history files                                                                                 |
-| Amp (deprecated)      | `~/.local/share/amp/threads/`                                                    | Historical local JSON thread files                                                                                              |
-| Antigravity (IDE)     | `~/.gemini/antigravity/`                                                         | SQLite database per session                                                                                                     |
-| Antigravity CLI       | `~/.gemini/antigravity-cli/`                                                     | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl` |
-| Claude Code           | `~/.claude/projects/`                                                            | JSONL per session                                                                                                               |
-| OpenClaude            | `~/.openclaude/projects/`                                                        | JSONL per session                                                                                                               |
-| Claude Cowork         | (platform-specific, see below)                                                   | Claude Desktop cowork sessions                                                                                                  |
-| Codebuff / Freebuff   | `~/.config/manicode/projects/`                                                   | Per-session `chat-messages.json` + `run-state.json` with subagent transcripts                                                  |
-| Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                           | JSONL per session                                                                                                               |
-| Command Code          | `~/.commandcode/projects/`                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                |
-| Copilot CLI           | `~/.copilot/`                                                                    | JSONL per session under `session-state/`                                                                                        |
-| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS)  | Local CLI data rooted at the directory that contains `cli/`; session data is discovered under `<root>/cli/...`                  |
-| Cortex Code           | `~/.snowflake/cortex/conversations/`                                             | JSON / JSONL per session                                                                                                        |
-| Cursor                | `~/.cursor/projects/`                                                            | JSONL or plain-text transcripts                                                                                                 |
-| DeepSeek TUI          | `~/.codewhale/sessions/` and `~/.deepseek/sessions/`                             | JSON per session                                                                                                                |
-| DeepSeek Harness      | `~/.dsh/sessions/` (or `$DSH_HOME/sessions/`)                                    | Plain or multi-frame zstd JSONL per session                                                                                     |
-| Forge                 | `~/.forge/`                                                                      | SQLite database (`.forge.db`)                                                                                                   |
-| Gemini CLI            | `~/.gemini/`                                                                     | JSONL in `tmp/` subdirectory                                                                                                    |
-| Goose                 | (platform-specific, see below)                                                   | SQLite `sessions.db` with transcripts, tool activity, relationships, usage, and recorded costs                                  |
-| gptme                 | `~/.local/share/gptme/logs/`                                                     | JSONL logs                                                                                                                      |
-| Grok                  | `~/.grok/sessions/`                                                              | `summary.json` + optional `signals.json` + `chat_history.jsonl` transcript when present                                         |
-| Hermes Agent          | `~/.hermes/sessions/`                                                            | JSONL / JSON per session                                                                                                        |
-| iFlow                 | `~/.iflow/projects/`                                                             | JSONL per session                                                                                                               |
-| Kilo                  | `~/.local/share/kilo/`                                                           | SQLite DB or `storage/` JSON files                                                                                              |
-| Kimi                  | `~/.kimi/sessions/` and `~/.kimi-code/sessions/`                                 | JSONL per session                                                                                                               |
-| Kimi Work             | (platform-specific, see below)                                                   | JSONL per session (kimi-code kernel wire logs)                                                                                  |
-| Kiro CLI              | `~/.kiro/sessions/cli/` and `~/.local/share/kiro-cli/`                           | JSONL per session and SQLite database                                                                                           |
-| Kiro IDE              | (platform-specific, see below)                                                   | JSON / chat files                                                                                                               |
-| Kilo (legacy)         | (platform-specific, see below)                                                   | `tasks/<uuid>/{task_metadata.json,ui_messages.json,api_conversation_history.json}`                                              |
-| MiMoCode              | `~/.local/share/mimocode/`                                                       | SQLite DB or `storage/` JSON files                                                                                              |
-| Mistral Vibe          | `~/.vibe/logs/session/`                                                          | Per-session `messages.jsonl` plus `meta.json`                                                                                   |
-| OhMyPi                | `~/.omp/agent/sessions/`                                                         | JSONL per session                                                                                                               |
-| OpenClaw              | `~/.openclaw/assets/static/agents/` and `~/.kimi_openclaw/assets/static/agents/` | JSONL per session                                                                                                               |
-| OpenCode              | `~/.local/share/opencode/`                                                       | SQLite DB or `storage/` JSON files                                                                                              |
-| OpenHands CLI         | `~/.openhands/conversations/`                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                            |
-| Omnigent              | `~/.omnigent/`                                                                   | SQLite `chat.db`, one session per conversation                                                                                  |
-| Pi                    | `~/.pi/agent/sessions/`                                                          | JSONL per session                                                                                                               |
-| Prime Agent           | `~/.prime/agent/sessions/`                                                       | Flat Pi-family JSONL sessions                                                                                                   |
-| Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/state/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) | NDJSON trajectory files                                                                                                         |
-| Piebald               | `~/.local/share/piebald/`                                                        | SQLite database (`app.db`)                                                                                                      |
-| Posit Assistant       | `~/.posit/assistant/workspaces/`                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                   |
-| Positron Assistant    | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
-| QClaw                 | `~/.qclaw/assets/static/agents/`                                                 | JSONL per session                                                                                                               |
-| Qoder                 | Legacy export roots, Qoder CLI CN, plus platform-specific `SharedClientCache` (see below) | JSONL project transcripts plus sidecar metadata                                                                                 |
-| Qwen Code             | `~/.qwen/projects/`                                                              | JSONL per session                                                                                                               |
-| QwenPaw               | `~/.copaw/workspaces/`                                                           | JSON session files                                                                                                              |
-| Reasonix              | `~/.reasonix/` and `~/AppData/Roaming/reasonix/`                                 | JSONL sessions plus `.jsonl.meta` sidecars                                                                                      |
-| RooCode               | (platform-specific, see below)                                                   | `history_item.json` + `ui_messages.json` per task                                                                              |
-| Shelley               | `~/.config/shelley/`                                                             | SQLite database (`shelley.db`)                                                                                                  |
-| Visual Studio Copilot | (platform-specific, see below)                                                   | Trace JSONL files                                                                                                               |
-| VS Code Copilot       | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
-| Windsurf              | (platform-specific, see below)                                                   | SQLite `workspaceStorage/<hash>/state.vscdb` workspace chat data                                                                |
-| Trae                  | (platform-specific, see below)                                                   | Legacy inline chat data in SQLite `workspaceStorage/<hash>/state.vscdb` and `globalStorage/state.vscdb`; modern encrypted layouts are detected as unsupported |
-| TraeX (TRAE CLI)      | `~/.trae/cli/sessions/` and `~/.trae/cli/archived_sessions/`                     | Codex-compatible rollout JSONL per session                                                                                      |
-| Warp                  | (platform-specific, see below)                                                   | SQLite database                                                                                                                 |
-| WorkBuddy             | `~/.workbuddy/projects/`                                                         | JSONL per session                                                                                                               |
-| ZCode                 | `~/.zcode/cli/db/` or `~/.zcode/cli/`                                            | SQLite database (`db.sqlite`) with usage rows                                                                                   |
-| Zed                   | (platform-specific, see below)                                                   | SQLite database (`threads/threads.db`)                                                                                          |
-| Zencoder              | `~/.zencoder/sessions/`                                                          | JSONL per session                                                                                                               |
+| Agent                 | Default Directory                                                                                                                                                | File Format                                                                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Aider                 | No default; opt in with `AIDER_DIR` or `aider_dirs`                                                                                                              | `.aider.chat.history.md` Markdown history files                                                                                                               |
+| Amp (deprecated)      | `~/.local/share/amp/threads/`                                                                                                                                    | Historical local JSON thread files                                                                                                                            |
+| Antigravity (IDE)     | `~/.gemini/antigravity/`                                                                                                                                         | SQLite database per session                                                                                                                                   |
+| Antigravity CLI       | `~/.gemini/antigravity-cli/`                                                                                                                                     | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl`                               |
+| Claude Code           | `~/.claude/projects/`                                                                                                                                            | JSONL per session                                                                                                                                             |
+| OpenClaude            | `~/.openclaude/projects/`                                                                                                                                        | JSONL per session                                                                                                                                             |
+| Claude Cowork         | (platform-specific, see below)                                                                                                                                   | Claude Desktop cowork sessions                                                                                                                                |
+| Codebuff / Freebuff   | `~/.config/manicode/projects/`                                                                                                                                   | Per-session `chat-messages.json` + `run-state.json` with subagent transcripts                                                                                 |
+| Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                                                                                                           | JSONL per session                                                                                                                                             |
+| Command Code          | `~/.commandcode/projects/`                                                                                                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                                              |
+| Copilot CLI           | `~/.copilot/`                                                                                                                                                    | JSONL per session under `session-state/`                                                                                                                      |
+| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS)                                                                                  | Local CLI data rooted at the directory that contains `cli/`; session data is discovered under `<root>/cli/...`                                                |
+| Cortex Code           | `~/.snowflake/cortex/conversations/`                                                                                                                             | JSON / JSONL per session                                                                                                                                      |
+| Cursor                | `~/.cursor/projects/`                                                                                                                                            | JSONL or plain-text transcripts                                                                                                                               |
+| Cursor IDE            | (platform-specific, see below)                                                                                                                                   | Shared VS Code-style `globalStorage/state.vscdb` database, one session per Composer                                                                           |
+| DeepSeek TUI          | `~/.codewhale/sessions/` and `~/.deepseek/sessions/`                                                                                                             | JSON per session                                                                                                                                              |
+| DeepSeek Harness      | `~/.dsh/sessions/` (or `$DSH_HOME/sessions/`)                                                                                                                    | Plain or multi-frame zstd JSONL per session                                                                                                                   |
+| Forge                 | `~/.forge/`                                                                                                                                                      | SQLite database (`.forge.db`)                                                                                                                                 |
+| Gemini CLI            | `~/.gemini/`                                                                                                                                                     | JSONL in `tmp/` subdirectory                                                                                                                                  |
+| Goose                 | (platform-specific, see below)                                                                                                                                   | SQLite `sessions.db` with transcripts, tool activity, relationships, usage, and recorded costs                                                                |
+| gptme                 | `~/.local/share/gptme/logs/`                                                                                                                                     | JSONL logs                                                                                                                                                    |
+| Grok                  | `~/.grok/sessions/`                                                                                                                                              | `summary.json` + optional `signals.json` + `chat_history.jsonl` transcript when present                                                                       |
+| Hermes Agent          | `~/.hermes/sessions/`                                                                                                                                            | JSONL / JSON per session                                                                                                                                      |
+| iFlow                 | `~/.iflow/projects/`                                                                                                                                             | JSONL per session                                                                                                                                             |
+| IcodeMate             | `~/.local/share/icodemate/` and `~/.icodemate/cli/projects/`                                                                                                     | OpenCode-family storage, including per-session usage events                                                                                                   |
+| Kilo                  | `~/.local/share/kilo/`                                                                                                                                           | SQLite DB or `storage/` JSON files                                                                                                                            |
+| Kimi                  | `~/.kimi/sessions/` and `~/.kimi-code/sessions/`                                                                                                                 | JSONL per session                                                                                                                                             |
+| Kimi Work             | (platform-specific, see below)                                                                                                                                   | JSONL per session (kimi-code kernel wire logs)                                                                                                                |
+| Kiro CLI              | `~/.kiro/sessions/cli/` and `~/.local/share/kiro-cli/`                                                                                                           | JSONL per session and SQLite database                                                                                                                         |
+| Kiro IDE              | (platform-specific, see below)                                                                                                                                   | JSON / chat files                                                                                                                                             |
+| Kilo (legacy)         | (platform-specific, see below)                                                                                                                                   | `tasks/<uuid>/{task_metadata.json,ui_messages.json,api_conversation_history.json}`                                                                            |
+| MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
+| Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                          | Per-session `messages.jsonl` plus `meta.json`                                                                                                                 |
+| OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                         | JSONL per session                                                                                                                                             |
+| OpenClaw              | `~/.openclaw/assets/static/agents/` and `~/.kimi_openclaw/assets/static/agents/`                                                                                 | JSONL per session                                                                                                                                             |
+| OpenCode              | `~/.local/share/opencode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
+| OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                                                          |
+| Omnigent              | `~/.omnigent/`                                                                                                                                                   | SQLite `chat.db`, one session per conversation                                                                                                                |
+| Pi                    | `~/.pi/agent/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
+| Prime Agent           | `~/.prime/agent/sessions/`                                                                                                                                       | Flat Pi-family JSONL sessions                                                                                                                                 |
+| Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/state/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) | NDJSON trajectory files                                                                                                                                       |
+| Piebald               | `~/.local/share/piebald/`                                                                                                                                        | SQLite database (`app.db`)                                                                                                                                    |
+| Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                                                 |
+| Positron Assistant    | (platform-specific, see below)                                                                                                                                   | JSON / JSONL per session                                                                                                                                      |
+| QClaw                 | `~/.qclaw/assets/static/agents/`                                                                                                                                 | JSONL per session                                                                                                                                             |
+| Qoder                 | Legacy export roots, Qoder CLI CN, plus platform-specific `SharedClientCache` (see below)                                                                        | JSONL project transcripts plus sidecar metadata                                                                                                               |
+| Qwen Code             | `~/.qwen/projects/`                                                                                                                                              | JSONL per session                                                                                                                                             |
+| QwenPaw               | `~/.copaw/workspaces/`                                                                                                                                           | JSON session files                                                                                                                                            |
+| Reasonix              | `~/.reasonix/` and `~/AppData/Roaming/reasonix/`                                                                                                                 | JSONL sessions plus `.jsonl.meta` sidecars                                                                                                                    |
+| RooCode               | (platform-specific, see below)                                                                                                                                   | `history_item.json` + `ui_messages.json` per task                                                                                                             |
+| Shelley               | `~/.config/shelley/`                                                                                                                                             | SQLite database (`shelley.db`)                                                                                                                                |
+| Visual Studio Copilot | (platform-specific, see below)                                                                                                                                   | Trace JSONL files                                                                                                                                             |
+| VS Code Copilot       | (platform-specific, see below)                                                                                                                                   | JSON / JSONL per session                                                                                                                                      |
+| Windsurf              | (platform-specific, see below)                                                                                                                                   | SQLite `workspaceStorage/<hash>/state.vscdb` workspace chat data                                                                                              |
+| Trae                  | (platform-specific, see below)                                                                                                                                   | Legacy inline chat data in SQLite `workspaceStorage/<hash>/state.vscdb` and `globalStorage/state.vscdb`; modern encrypted layouts are detected as unsupported |
+| TraeX (TRAE CLI)      | `~/.trae/cli/sessions/` and `~/.trae/cli/archived_sessions/`                                                                                                     | Codex-compatible rollout JSONL per session                                                                                                                    |
+| Warp                  | (platform-specific, see below)                                                                                                                                   | SQLite database                                                                                                                                               |
+| WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                         | JSONL per session                                                                                                                                             |
+| ZCode                 | `~/.zcode/cli/db/` or `~/.zcode/cli/`                                                                                                                            | SQLite database (`db.sqlite`) with usage rows                                                                                                                 |
+| Zed                   | (platform-specific, see below)                                                                                                                                   | SQLite database (`threads/threads.db`)                                                                                                                        |
+| Zencoder              | `~/.zencoder/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
 
 DeepSeek Harness sessions are read from its default JSONL persistence backend,
 including plain `session.jsonl` and multi-frame `session.jsonl.zstd` files.
@@ -321,9 +323,9 @@ directly at one or more session roots. The optional SQLite persistence backend
 is not supported.
 
 Prime Agent support targets the current flat session layout in v0.7.0. That
-release migrates the older per-project layout when Prime Agent opens its
-session store, so open the current Prime Agent once before syncing a legacy
-archive with AgentsView.
+release migrates the older per-project layout when Prime Agent opens its session
+store, so open the current Prime Agent once before syncing a legacy archive with
+AgentsView.
 
 **Qoder default directories** include the legacy `~/.qoder/projects/` and
 `~/.qoderwork/projects/` export roots, the Qoder CLI CN store, and the current
@@ -333,17 +335,19 @@ IDE store:
 
 - **macOS:**
   `~/Library/Application Support/Qoder/SharedClientCache/cli/projects/`
+
 - **Linux:** `~/.config/Qoder/SharedClientCache/cli/projects/`
+
 - **Windows:** `%APPDATA%\Qoder\SharedClientCache\cli\projects\`
 
 Set `QODER_PROJECTS_DIR` or `qoder_project_dirs` to replace these defaults with
 one or more explicit roots.
 
 Grok sessions are read from `summary.json` (title, timestamps, project),
-optional `signals.json` (token counters), and `chat_history.jsonl` when
-present for the full transcript (user turns, assistant replies, thinking,
-and tool calls). If `chat_history.jsonl` is missing, AgentsView falls back
-to summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
+optional `signals.json` (token counters), and `chat_history.jsonl` when present
+for the full transcript (user turns, assistant replies, thinking, and tool
+calls). If `chat_history.jsonl` is missing, AgentsView falls back to
+summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
 directory.
 
 **Goose default directories** are:
@@ -353,18 +357,18 @@ directory.
 
 `GOOSE_PATH_ROOT` follows Goose's own path-root convention and resolves
 `<root>/data/sessions/sessions.db`. A `goose_dirs` entry may instead point
-directly to that sessions directory, its parent data directory, or the
-database file.
+directly to that sessions directory, its parent data directory, or the database
+file.
 
 Omnigent sessions are read from `~/.omnigent/chat.db`. Set `OMNIGENT_DIR` or
 `omnigent_dirs` to override the default directory. AgentsView creates one
-session per conversation and supports the split text-ID and current
-binary-UUID schema generations; the older single-table schema is detected and
-reported as unsupported without losing sessions already synced from it.
-Remote HTTP and SSH sync stay disabled for Omnigent because `chat.db`
-co-locates transcripts with authentication secrets. A metadata-only edit made
-directly in `chat.db` can be deferred by the immediate filesystem-event sync;
-the next scheduled reconciliation pass or an explicit resync picks it up.
+session per conversation and supports the split text-ID and current binary-UUID
+schema generations; the older single-table schema is detected and reported as
+unsupported without losing sessions already synced from it. Remote HTTP and SSH
+sync stay disabled for Omnigent because `chat.db` co-locates transcripts with
+authentication secrets. A metadata-only edit made directly in `chat.db` can be
+deferred by the immediate filesystem-event sync; the next scheduled
+reconciliation pass or an explicit resync picks it up.
 
 **VS Code Copilot default directories** vary by platform:
 
@@ -395,31 +399,35 @@ Windsurf stores workspace chats in `workspaceStorage/<hash>/state.vscdb`.
 
 **Trae default directories** vary by platform:
 
-- **macOS:** `~/Library/Application Support/Trae/User/`, `Trae CN/User/`, and `TRAE SOLO CN/User/`
+- **macOS:** `~/Library/Application Support/Trae/User/`, `Trae CN/User/`, and
+  `TRAE SOLO CN/User/`
 - **Linux:** `~/.config/Trae/User/`, `Trae CN/User/`, and `TRAE SOLO CN/User/`
 - **Windows:** `%APPDATA%/Trae/User/`, `Trae CN/User/`, and `TRAE SOLO CN/User/`
 
 Trae stores chats in `workspaceStorage/<hash>/state.vscdb` and
 `globalStorage/state.vscdb`. Override these roots with `TRAE_DIR` or the
-`trae_dirs` configuration key.
-AgentsView watches `workspaceStorage` and `globalStorage`, then reads chat
-records from those SQLite stores.
+`trae_dirs` configuration key. AgentsView watches `workspaceStorage` and
+`globalStorage`, then reads chat records from those SQLite stores.
 
 Trae legacy inline-message parsing is supported. Modern encrypted transcript
 layouts are detected and reported as unsupported. Remote HTTP and SSH target
-resolution is still disabled. A Trae root is a full user profile, and AgentsView does not
-archive or ship that profile wholesale. The follow-up path is Windsurf-style
-curated file targets only: `state.vscdb`, `state.vscdb-wal`, and
+resolution is still disabled. A Trae root is a full user profile, and AgentsView
+does not archive or ship that profile wholesale. The follow-up path is
+Windsurf-style curated file targets only: `state.vscdb`, `state.vscdb-wal`, and
 `workspace.json` for each supported workspace store.
 
 **Kimi Work default directories** vary by platform. Kimi Work is the
 kimi-desktop app (the "daimon" runtime); it stores conversations as kimi-code
-kernel wire logs under `<root>/wd_<workspace>_<hash>/<session>/agents/<agent>/wire.jsonl`:
+kernel wire logs under
+`<root>/wd_<workspace>_<hash>/<session>/agents/<agent>/wire.jsonl`:
 
-- **macOS:** `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`
-- **Linux:** `~/.config/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`
+- **macOS:**
+  `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`
+- **Linux:**
+  `~/.config/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`
   (or `~/.local/share/...` on some installs)
-- **Windows:** `%APPDATA%/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`
+- **Windows:**
+  `%APPDATA%/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/`
 
 Only `conv-*` session directories are user conversations; auxiliary internal
 sessions (`ctitle-*`, `sklsum-*`, `dvlt-*`) are excluded from discovery. Set
@@ -445,6 +453,15 @@ transcript; subagent runs nest under a `subagents/` subdirectory of their parent
 conversation. All Posit Assistant hosts (Positron/VS Code extension, standalone,
 desktop, TUI) share this location. Set `POSIT_ASSISTANT_DIR` or
 `posit_assistant_dirs` if your installation stores its workspaces elsewhere.
+
+**Cursor IDE** is the graphical editor, distinct from the Cursor command-line
+agent above. AgentsView reads Composer sessions from Cursor's shared
+`globalStorage/state.vscdb` database. The default follows Cursor's normal user
+data directory on macOS, Linux, and Windows; set `CURSOR_IDE_DIR` or
+`cursor_ide_dirs` to override it. This database also contains authentication and
+extension state, so Cursor IDE is deliberately excluded from remote source-file
+sync. Parsed sessions still stay in the local archive and can be shared through
+the normal PostgreSQL or DuckDB paths.
 
 **Claude Cowork default directories** follow Claude Desktop's Electron user-data
 location:
@@ -472,28 +489,25 @@ independently.
 
 Subagent tool calls (basher, code-searcher, file-picker, code-reviewer, etc.)
 are parsed from the AI message blocks and displayed inline in the transcript
-view. The agent template (e.g. `base2-free-deepseek`, `base2-free-mimo`) is
-read from run-state.json's `agentType` field and shown in the session
-detail header. This is the classification label used server-side to pick
-the per-step LLM; the literal LLM is not persisted by the CLI and is
-not visible in the UI.
-Project names are derived from the session's working directory via git-root
-detection.
+view. The agent template (e.g. `base2-free-deepseek`, `base2-free-mimo`) is read
+from run-state.json's `agentType` field and shown in the session detail header.
+This is the classification label used server-side to pick the per-step LLM; the
+literal LLM is not persisted by the CLI and is not visible in the UI. Project
+names are derived from the session's working directory via git-root detection.
 
-Codebuff and Freebuff sessions report cost only. The CLI's on-disk
-format does not persist per-message input/output/cache tokens, so the
-daily usage model breakdown shows the cost-attributed agent template
-(e.g. `base2-deepseek`, `base2-free-minimax-m3`) without per-message
-token figures. Reported-cost rows ride as microdollars on `money.Money`
-like every other agent, and per-model rates for `base2-*` templates are
-not in the embedded pricing tables, so cache savings for these rows
-resolve to zero by design rather than an aggregator bug.
+Codebuff and Freebuff sessions report cost only. The CLI's on-disk format does
+not persist per-message input/output/cache tokens, so the daily usage model
+breakdown shows the cost-attributed agent template (e.g. `base2-deepseek`,
+`base2-free-minimax-m3`) without per-message token figures. Reported-cost rows
+ride as microdollars on `money.Money` like every other agent, and per-model
+rates for `base2-*` templates are not in the embedded pricing tables, so cache
+savings for these rows resolve to zero by design rather than an aggregator bug.
 
 Freebuff does not have its own environment variable or config key — it shares
-the Codebuff provider for discovery and the parser auto-classifies sessions.
-Set `CODEBUFF_DIR` or `codebuff_dirs` when manicode stores its projects
-directory somewhere other than `~/.config/manicode/projects`; this covers both
-Codebuff and Freebuff sessions.
+the Codebuff provider for discovery and the parser auto-classifies sessions. Set
+`CODEBUFF_DIR` or `codebuff_dirs` when manicode stores its projects directory
+somewhere other than `~/.config/manicode/projects`; this covers both Codebuff
+and Freebuff sessions.
 
 **OpenHands CLI shallow watch:** OpenHands stores each conversation in its own
 subdirectory, which would consume one recursive file watch per session and can
@@ -572,17 +586,18 @@ names and per-request token usage.
 - **macOS:**
   `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/`
 - **Linux:** `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/`
-- **Windows:** `~/AppData/Roaming/Code/User/globalStorage/rooveterinaryinc.roo-cline/`
+- **Windows:**
+  `~/AppData/Roaming/Code/User/globalStorage/rooveterinaryinc.roo-cline/`
 
-RooCode (rooveterinaryinc.roo-cline) is a VSCode extension that stores
-sessions under `tasks/<taskId>/` in VSCode's globalStorage directory. Each task
-directory contains `history_item.json` (metadata including task description,
-model name, workspace path, token counts, and recorded cost) and
-`ui_messages.json` (the Cline-format transcript with user prompts, assistant
-responses, reasoning blocks, and tool calls). AgentsView parses the
-`apiConfigName` field from `history_item.json` as the session model, extracts
-project names from the workspace path via git-root detection, and emits the
-recorded `totalCost` as a usage event for cost tracking.
+RooCode (rooveterinaryinc.roo-cline) is a VSCode extension that stores sessions
+under `tasks/<taskId>/` in VSCode's globalStorage directory. Each task directory
+contains `history_item.json` (metadata including task description, model name,
+workspace path, token counts, and recorded cost) and `ui_messages.json` (the
+Cline-format transcript with user prompts, assistant responses, reasoning
+blocks, and tool calls). AgentsView parses the `apiConfigName` field from
+`history_item.json` as the session model, extracts project names from the
+workspace path via git-root detection, and emits the recorded `totalCost` as a
+usage event for cost tracking.
 
 RooCode was shut down on May 15, 2026. ZooCode (Zoo-CodeInc.zoo-cline) is the
 active community fork and will be supported separately. Set `ROOCODE_DIR` or
@@ -592,7 +607,8 @@ active community fork and will be supported separately. Set `ROOCODE_DIR` or
 canonical lowercase `kilocode.kilo-code` global storage directory that VSCode
 writes on disk:
 
-- **macOS:** `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/`
+- **macOS:**
+  `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/`
 - **Linux:** `~/.config/Code/User/globalStorage/kilocode.kilo-code/`
 - **Windows:** `%APPDATA%/Code/User/globalStorage/kilocode.kilo-code/`
 
@@ -606,16 +622,15 @@ a reparse. Sessions are parsed through RooCode-descended Cline message handling
 linking). Set `KILO_LEGACY_DIR` or `kilo_legacy_dirs` when the legacy extension
 stores its data outside the standard locations.
 
-**Kilo (legacy) vs Kilo.** These are two different agents. *Kilo* (the
-`kilo` agent) is the OpenCode-based core at `~/.local/share/kilo/`; it
-covers both the Kilo CLI and the rebuilt Kilo Code VS Code extension,
-which share that same `kilo.db`. *Kilo (legacy)* (the `kilo-legacy` agent)
-is the legacy RooCode-derived VS Code extension that wrote per-task JSON
-under `kilocode.kilo-code/tasks/` and stopped receiving new sessions after
-Kilo rebuilt the extension on OpenCode (public beta 2026-03-10, GA
-2026-04-02). The `kilo-legacy` agent is frozen at that legacy format and
-only archives older sessions; newer Kilo VS Code activity appears under
-`kilo`.
+**Kilo (legacy) vs Kilo.** These are two different agents. *Kilo* (the `kilo`
+agent) is the OpenCode-based core at `~/.local/share/kilo/`; it covers both the
+Kilo CLI and the rebuilt Kilo Code VS Code extension, which share that same
+`kilo.db`. *Kilo (legacy)* (the `kilo-legacy` agent) is the legacy
+RooCode-derived VS Code extension that wrote per-task JSON under
+`kilocode.kilo-code/tasks/` and stopped receiving new sessions after Kilo
+rebuilt the extension on OpenCode (public beta 2026-03-10, GA 2026-04-02). The
+`kilo-legacy` agent is frozen at that legacy format and only archives older
+sessions; newer Kilo VS Code activity appears under `kilo`.
 
 **Antigravity CLI transcript sources:** Antigravity CLI has used both SQLite
 databases and AES-encrypted `.pb` files. AgentsView reads whichever source is
@@ -624,21 +639,21 @@ richest, in this order:
 1. **Decrypted trajectory sidecar.** For either format, if a
    `<uuid>.trajectory.json` file sits next to the source `.db` or `.pb` file
    (under `conversations/` or `implicit/`) and covers the session, AgentsView
-   uses it as the source of truth for the full structured transcript — messages,
-   tool calls, tool results, reasoning, and diffs. This is the highest-fidelity
-   source for both formats. These sidecars are written out-of-process by
-   [agy-reader](https://github.com/mjacobs/agy-reader), which performs the
-   decryption; AgentsView reads the resulting plain JSON as untrusted input and
-   needs no `ANTIGRAVITY_KEY` in this mode.
+   uses it as the source of truth for the full structured transcript —
+   messages, tool calls, tool results, reasoning, and diffs. This is the
+   highest-fidelity source for both formats. These sidecars are written
+   out-of-process by [agy-reader](https://github.com/mjacobs/agy-reader),
+   which performs the decryption; AgentsView reads the resulting plain JSON as
+   untrusted input and needs no `ANTIGRAVITY_KEY` in this mode.
 1. **SQLite trajectory database.** Newer Antigravity CLI releases write
    `conversations/<uuid>.db`. Without a covering sidecar (above), AgentsView
-   opens the database read-only and decodes the trajectory steps directly. This
-   direct decode is heuristic: it recovers prompts and tool-call names but not
-   full structured tool results, reasoning, or diffs — a degraded **summary
-   mode** transcript. If both `conversations/<uuid>.db` and
+   opens the database read-only and decodes the trajectory steps directly.
+   This direct decode is heuristic: it recovers prompts and tool-call names
+   but not full structured tool results, reasoning, or diffs — a degraded
+   **summary mode** transcript. If both `conversations/<uuid>.db` and
    `conversations/<uuid>.pb` exist, the SQLite database wins. Change detection
-   also factors in `<uuid>.db-wal` and `<uuid>.db-shm` so active sessions resync
-   as SQLite sidecar files move.
+   also factors in `<uuid>.db-wal` and `<uuid>.db-shm` so active sessions
+   resync as SQLite sidecar files move.
 1. **In-process `.pb` decryption.** With no sidecar present, set
    `ANTIGRAVITY_KEY` (base64-encoded AES key, 16/24/32 bytes after decoding)
    before starting AgentsView and it decrypts the `.pb` payloads itself,
@@ -765,22 +780,23 @@ codex_sessions_dirs = [
 
 The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `antigravity_cli_dirs`, `claude_project_dirs`, `openclaude_project_dirs`,
-`cowork_dirs`, `devin_dirs`, `codebuff_dirs`, `codex_sessions_dirs`, `commandcode_project_dirs`,
-`copilot_dirs`, `cortex_dirs`, `cursor_project_dirs`,
-`deepseek_harness_sessions_dirs`, `deepseek_tui_sessions_dirs`, `forge_dirs`,
-`gemini_dirs`, `goose_dirs`,
+`cowork_dirs`, `devin_dirs`, `codebuff_dirs`, `codex_sessions_dirs`,
+`commandcode_project_dirs`, `copilot_dirs`, `cortex_dirs`,
+`cursor_project_dirs`, `deepseek_harness_sessions_dirs`,
+`deepseek_tui_sessions_dirs`, `forge_dirs`, `gemini_dirs`, `goose_dirs`,
 `gptme_dirs`, `grok_dirs`, `hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`,
 `kilo_legacy_dirs`, `kimi_dirs`, `kimi_work_dirs`, `kiro_dirs`, `kiro_ide_dirs`,
 `mimocode_dirs`, `vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`,
-`opencode_dirs`, `openhands_dirs`, `pi_dirs`, `prime_agent_dirs`, `piebald_dirs`,
-`posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`, `qoder_project_dirs`,
-`qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `roocode_dirs`,
-`shelley_dirs`, `traex_sessions_dirs`, `visualstudio_copilot_dirs`,
-`vscode_copilot_dirs`, `windsurf_dirs`, `warp_dirs`,
-`workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and `zencoder_dirs`. Each
-accepts an array of paths. Environment variables take precedence over these
-arrays when both are set; otherwise, a non-empty array replaces the default
-path and an explicit empty array clears the default local directory.
+`opencode_dirs`, `openhands_dirs`, `pi_dirs`, `prime_agent_dirs`,
+`piebald_dirs`, `posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`,
+`qoder_project_dirs`, `qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`,
+`roocode_dirs`, `shelley_dirs`, `traex_sessions_dirs`,
+`visualstudio_copilot_dirs`, `vscode_copilot_dirs`, `windsurf_dirs`,
+`warp_dirs`, `workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and
+`zencoder_dirs`. Each accepts an array of paths. Environment variables take
+precedence over these arrays when both are set; otherwise, a non-empty array
+replaces the default path and an explicit empty array clears the default local
+directory.
 
 All listed directories are discovered, watched, and synced independently.
 
@@ -801,21 +817,22 @@ the per-agent arrays, defaults, and environment variables above. Equivalent
 roots are deduplicated; a structured entry supplies the machine label when it
 duplicates a shorthand root. An omitted `machine` uses the local hostname.
 
-Machine attribution is captured when each session is first ingested. Changing
-an entry's `machine` value affects newly discovered sessions but does not
-relabel existing sessions during ordinary syncs or `agentsview sync --full`.
-Changing attribution for existing sessions is not currently supported.
+Machine attribution is captured when each session is first ingested. Changing an
+entry's `machine` value affects newly discovered sessions but does not relabel
+existing sessions during ordinary syncs or `agentsview sync --full`. Changing
+attribution for existing sessions is not currently supported.
 
-See [Filesystem Session Sync](/docs/filesystem-sync/) for multi-machine examples,
-transport safety, ID deduplication, watcher behavior, and the comparison with
-PostgreSQL.
+See [Filesystem Session Sync](/docs/filesystem-sync/) for multi-machine
+examples, transport safety, ID deduplication, watcher behavior, and the
+comparison with PostgreSQL.
 
 ### S3-Compatible Session Sources
 
-Claude, Codex, and Cursor session roots can also be `s3://` URIs. This is
-useful when several machines push their raw session files to object storage
-and one central AgentsView instance reads them without SSH access to those
-machines.
+Claude, Codex, Cursor, and IcodeMate session roots can also be `s3://` URIs.
+These are the providers whose current formats can be discovered and parsed as
+individual objects; future providers opt in through the same capability. This is
+useful when several machines push their raw session files to object storage and
+one central AgentsView instance reads them without SSH access to those machines.
 
 ```toml
 claude_project_dirs = [
@@ -831,6 +848,11 @@ codex_sessions_dirs = [
 cursor_project_dirs = [
   "~/.cursor/projects",
   "s3://agent-archive/laptop/raw/cursor",
+]
+
+icodemate_dirs = [
+  "~/.local/share/icodemate",
+  "s3://agent-archive/laptop/raw/icodemate",
 ]
 ```
 
@@ -864,6 +886,7 @@ s3://bucket/.../<machine>/raw/claude/<project>/<uuid>.jsonl
 s3://bucket/.../<machine>/raw/claude/<project>/subagents/.../agent-*.jsonl
 s3://bucket/.../<machine>/raw/codex/2026/06/24/rollout-*.jsonl
 s3://bucket/.../<machine>/raw/cursor/<project>/<uuid>.jsonl
+s3://bucket/.../<machine>/raw/icodemate/<project>/<session>.jsonl
 ```
 
 The machine name is derived from the path segment immediately before `raw`. If
@@ -885,19 +908,18 @@ manual sync, and the periodic directory scan.
 The parser infers a session's project from its `cwd`. It recognizes common
 worktree manager layouts, including the generic
 `worktrees/github.com/<owner>/<repository>/<worktree>` convention, where the
-repository segment becomes the project. Layouts it does not recognize — such
-as `~/code/{project}.worktrees/feat/<branch>/` — otherwise group sessions
-under `<branch>` rather than `{project}`. For those, register manual
-**path-prefix → project** rules from the **Rules** view on the
-[Data page](/docs/data/#rules), or let the
-[mapping editor](/docs/data/#create-a-project-mapping) create one from a project's
-observed session folders:
+repository segment becomes the project. Layouts it does not recognize — such as
+`~/code/{project}.worktrees/feat/<branch>/` — otherwise group sessions under
+`<branch>` rather than `{project}`. For those, register manual **path-prefix →
+project** rules from the **Rules** view on the [Data page](/docs/data/#rules),
+or let the [mapping editor](/docs/data/#create-a-project-mapping) create one
+from a project's observed session folders:
 
 ![Worktree mapping rules on the Data page](/docs/assets/generated/screenshots/worktree-mappings.png)
 
 - Mappings are explicit; there is no auto-discovery.
-- Each rule is scoped to one machine. The machine selector manages rules for
-  the local machine and for any remotely synced machine. Rules live in the
+- Each rule is scoped to one machine. The machine selector manages rules for the
+  local machine and for any remotely synced machine. Rules live in the
   writable archive that ingests that machine's sessions, which may be the
   source machine's local SQLite archive or a separate collector archive.
 - Each rule applies whenever a session's `cwd` falls under the configured
@@ -911,8 +933,8 @@ observed session folders:
   the first path segment under the prefix when it is named `<repo>.worktrees`,
   so a path like `/code/agentsview.worktrees/feature/frontend` resolves to
   project `agentsview`.
-- Rules created from the Data mapping editor record the mislabeled
-  project they corrected, shown as the rule's **original label**. The value is
+- Rules created from the Data mapping editor record the mislabeled project they
+  corrected, shown as the rule's **original label**. The value is
   informational and set once; to manually revert a reclassification, edit the
   rule's target back to that original label and apply again.
 - Disabling or deleting a rule does not rewrite sessions by itself. Sessions
@@ -1026,17 +1048,15 @@ native watcher and periodic-sync freshness behavior. AgentsView reads only
 session identity and timestamp metadata from accepted hint records and neither
 stores nor logs submitted prompt text.
 
-For each configured local Codex session root, AgentsView probes
-`history.jsonl` in the cleaned root's parent. For example, a custom
-`/data/custom/sessions` root probes `/data/custom/history.jsonl`. It does not
-search ancestors or the rollout archive for another history file. Missing hint
-files remain cheap probes.
+For each configured local Codex session root, AgentsView probes `history.jsonl`
+in the cleaned root's parent. For example, a custom `/data/custom/sessions` root
+probes `/data/custom/history.jsonl`. It does not search ancestors or the rollout
+archive for another history file. Missing hint files remain cheap probes.
 
 The initial daemon poll bootstraps at most the newest 4 MiB of each history file
 and accepts records at most 24 hours old. If AgentsView restarts during a long
 autonomous run whose last persisted prompt is outside either bound, that rollout
-uses native-watcher freshness until another persisted prompt makes it hot
-again.
+uses native-watcher freshness until another persisted prompt makes it hot again.
 
 For `s3://` Claude, Codex, and Cursor roots, change detection uses object size,
 `LastModified`, and available object fingerprints such as ETag, version ID, and
@@ -1188,19 +1208,22 @@ curl http://127.0.0.1:8080/api/v1/sync/status
 
 ## Privacy and Telemetry
 
-By default, all session data stays on your local machine in SQLite. AgentsView
-never sends session content, project names, prompts, file paths, or hostnames
-anywhere.
+By default, all session data stays on your local machine in SQLite. Normal
+browsing, search, and reports do not send session content, project names,
+prompts, file paths, or hostnames anywhere.
 
 Optional features that send data externally when you enable them:
 
-- [PostgreSQL sync](/docs/pg-sync/) (`pg push`) sends session data to a PostgreSQL
-  database you configure.
-- The [DuckDB mirror](/docs/duckdb/) writes a local DuckDB file by default; data only
-  leaves the machine if you expose the mirror over a remote Quack endpoint.
-- [Generated insights](/docs/recall/#current-surface) sends scoped session content to
-  the configured endpoint when `[insights]` is set, or to the selected agent
-  CLI when it is absent.
+- [Hosted Raw Sync](/docs/hosted-raw-sync/) sends original provider files to a
+  hosted custody service configured by your deployment operator.
+- [PostgreSQL sync](/docs/pg-sync/) (`pg push`) sends session data to a
+  PostgreSQL database you configure.
+- The [DuckDB mirror](/docs/duckdb/) writes a local DuckDB file by default; data
+  only leaves the machine if you expose the mirror over a remote Quack
+  endpoint.
+- [Generated insights](/docs/recall/#current-surface) sends scoped session
+  content to the configured endpoint when `[insights]` is set, or to the
+  selected agent CLI when it is absent.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
 The automatic outbound requests are update checks and an anonymous daemon ping:

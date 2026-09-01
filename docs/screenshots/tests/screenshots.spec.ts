@@ -159,7 +159,7 @@ test.describe('Dashboard', () => {
     const timeline = page.locator('.timeline-container');
     if (await timeline.count() > 0) {
       await timeline.scrollIntoViewIfNeeded();
-      await page.waitForSelector('.timeline-svg', {
+      await timeline.locator('.timeline-chart').waitFor({
         timeout: 10_000,
       });
       await page.waitForTimeout(500);

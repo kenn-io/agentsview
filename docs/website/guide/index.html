@@ -118,7 +118,7 @@
         <li class="guide-stop" id="capture">
           <div class="guide-copy">
             <h2>Capture every session</h2>
-            <p>The daemon discovers the session directories that Claude Code, Codex, Cursor, Copilot, Gemini, and more than 50 other agents already write, and syncs them into one local SQLite archive with full-text indexes. It keeps watching, so the archive stays current while you work.</p>
+            <p>The daemon discovers the session directories behind more than 60 agent formats, including Claude Code, Codex, Cursor, Copilot, and Gemini, and syncs them into one local SQLite archive with full-text indexes. It keeps watching, so the archive stays current while you work.</p>
             <a href="/docs/quickstart/">Quick start</a>
           </div>
           <div class="guide-media">
@@ -248,7 +248,7 @@
         <li class="guide-stop" id="sync">
           <div class="guide-copy">
             <h2>Extend beyond one machine</h2>
-            <p>Push each machine's archive to PostgreSQL for a merged team view with per-machine labels, mirror into DuckDB for analytical queries, or sync raw session directories through the filesystem or S3. SQLite on your disk remains the archive of record.</p>
+            <p>Push each machine's archive to PostgreSQL for a merged team view, mirror into DuckDB for analytical queries, read source files through the filesystem or S3, or keep original files in hosted raw custody. SQLite on your disk remains the local archive of record.</p>
             <a href="/docs/pg-sync/">PostgreSQL sync</a> · <a href="/docs/duckdb/">DuckDB mirror</a>
           </div>
           <div class="guide-media">
@@ -280,7 +280,7 @@
     </main>
 
     <footer class="site-footer">
-      <p>Session data stays on your machine.</p>
+      <p>Local by default. Shared only through features you choose.</p>
       <nav class="footer-links" aria-label="Footer navigation">
         <a href="/">Product</a>
         <a href="/guide.md">Markdown</a>
