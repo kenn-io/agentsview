@@ -877,6 +877,7 @@ func retireUsageCacheGeneration(
 	lease := flock.New(
 		usageCacheLeasePath(path), flock.SetPermissions(0o600),
 	)
+	defer func() { _ = lease.Close() }()
 	locked, err := lease.TryLock()
 	if err != nil {
 		return false, fmt.Errorf("acquiring usage cache retirement lease for %s: %w",
@@ -885,8 +886,6 @@ func retireUsageCacheGeneration(
 	if !locked {
 		return false, nil
 	}
-	defer func() { _ = lease.Close() }()
-
 	probe := probeUsageCache(ctx, path)
 	if probe.Err != nil {
 		return false, probe.Err
