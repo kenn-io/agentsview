@@ -276,6 +276,17 @@ main {
   padding-bottom: clamp(3rem, 7vw, 5rem);
 }
 
+.hero-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: clamp(2rem, 5vw, 4rem);
+  align-items: center;
+}
+
+.hero-capture > a {
+  box-shadow: 0 24px 60px rgb(0 0 0 / 45%), 0 0 40px rgb(91 155 245 / 8%);
+}
+
 .eyebrow,
 .section-index,
 .proof-tag {
@@ -809,6 +820,7 @@ dialog img {
 @media (max-width: 900px) {
   .section-heading,
   .split-layout,
+  .hero-layout,
   .guide-stop {
     grid-template-columns: 1fr;
   }

@@ -98,16 +98,25 @@
 
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
-        <h1 id="hero-title">The system of record for your AI coding agents.</h1>
-        <p class="lede">AgentsView is a local-first daemon that captures every session from more than 50 coding agents into one searchable archive. Browse transcripts, monitor activity, track cost, measure quality, and feed what you learn back to your agents. Session data stays on your machine.</p>
-        <div class="install-command" data-install-command data-command="curl -fsSL https://agentsview.io/install.sh | bash">
-          <code>curl -fsSL https://agentsview.io/install.sh | bash</code>
-          <button class="button install-copy" type="button" data-install-copy>Copy</button>
-        </div>
-        <p class="install-hint">macOS and Linux · <a href="/docs/quickstart/">Windows, desktop app, pip, and Docker installs</a><span data-install-status aria-live="polite"></span></p>
-        <div class="actions">
-          <a class="button primary" href="/guide/">See how it works</a>
-          <a class="button" href="/docs/">Read the docs</a>
+        <div class="hero-layout">
+          <div class="hero-copy">
+            <h1 id="hero-title">The system of record for your AI coding agents.</h1>
+            <p class="lede">AgentsView is a local-first daemon that captures every session from more than 50 coding agents into one searchable archive. Browse transcripts, monitor activity, track cost, measure quality, and feed what you learn back to your agents. Session data stays on your machine.</p>
+            <div class="install-command" data-install-command data-command="curl -fsSL https://agentsview.io/install.sh | bash">
+              <code>curl -fsSL https://agentsview.io/install.sh | bash</code>
+              <button class="button install-copy" type="button" data-install-copy>Copy</button>
+            </div>
+            <p class="install-hint">macOS and Linux · <a href="/docs/quickstart/">Windows, desktop app, pip, and Docker installs</a><span data-install-status aria-live="polite"></span></p>
+            <div class="actions">
+              <a class="button primary" href="/guide/">See how it works</a>
+              <a class="button" href="/docs/">Read the docs</a>
+            </div>
+          </div>
+          <figure class="capture hero-capture">
+            <a href="/docs/assets/generated/screenshots/dashboard.png" data-lightbox>
+              <img src="/docs/assets/generated/screenshots/dashboard.png" alt="AgentsView dashboard summarizing sessions, cost, and activity across agents" loading="eager" fetchpriority="high">
+            </a>
+          </figure>
         </div>
         <p class="hero-meta">Local-first · MIT · Single Go binary · Desktop · Web · CLI · MCP · SQLite / PostgreSQL / DuckDB</p>
       </section>
