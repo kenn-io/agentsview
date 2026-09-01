@@ -520,6 +520,18 @@ func TestExecuteCommandChangesFilters(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestUnchangedNavigationFilterSkipsReload(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.filter.Project, m.query.Project = "agentsview", "agentsview"
+
+	next, command := m.executeCommand("project agentsview")
+
+	require.Same(t, m, next)
+	assert.Nil(t, command)
+	assert.False(t, m.loading)
+	assert.Zero(t, m.generation)
+}
+
 func TestNavigationFiltersAreKeyboardEditable(t *testing.T) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
 	m.filter.Project, m.query.Project = "old-project", "old-project"

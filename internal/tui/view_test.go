@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
@@ -278,6 +279,32 @@ func TestUsageRendersCompletedRankingWhileSummaryLoads(t *testing.T) {
 	assert.Contains(t, report, "fast result")
 	assert.NotContains(t, report, m.strings.Loading)
 }
+func TestFilterEditorReusesRenderedBody(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.width, m.height, m.focus = 160, 50, 2
+	m.detail = &service.SessionDetail{Session: db.Session{
+		ID: "session", DisplayName: new("Session"), MessageCount: 100,
+	}}
+	m.messages = make([]db.Message, 100)
+	for i := range m.messages {
+		m.messages[i] = db.Message{
+			ID: int64(i + 1), SessionID: "session", Ordinal: i,
+			Role: "assistant", Content: strings.Repeat("cached transcript ", 128),
+		}
+	}
+	_ = m.View()
+
+	fullRenderAllocs := testing.AllocsPerRun(3, func() {
+		m.inputMode = ""
+		benchmarkViewContent = m.View().Content
+	})
+	m.inputMode = "filter-project"
+	cachedRenderAllocs := testing.AllocsPerRun(3, func() {
+		benchmarkViewContent = m.View().Content
+	})
+
+	assert.Less(t, cachedRenderAllocs, fullRenderAllocs/10)
+}
 
 func BenchmarkModelViewLongTranscript(b *testing.B) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
@@ -366,4 +393,70 @@ func BenchmarkModelViewCachedActivityReport(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkFilterInteraction(b *testing.B) {
+	makeModel := func(statePath string) *model {
+		m := newModel(
+			context.Background(), &fakeDataClient{},
+			Options{StatePath: statePath},
+		)
+		m.width, m.height = 160, 50
+		m.navIndex = len(pages)
+		m.detail = &service.SessionDetail{Session: db.Session{
+			ID: "large-session", DisplayName: new("Large session"), MessageCount: 100,
+		}}
+		m.messages = make([]db.Message, 100)
+		for i := range m.messages {
+			m.messages[i] = db.Message{
+				ID: int64(i + 1), SessionID: "large-session", Ordinal: i,
+				Role: "assistant", Content: strings.Repeat("cached transcript ", 128),
+			}
+		}
+		_ = m.View()
+		return m
+	}
+
+	b.Run("enter-editor", func(b *testing.B) {
+		m := makeModel("")
+		key := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			m.inputMode = ""
+			_, _ = m.updateKey(key)
+			benchmarkViewContent = m.View().Content
+		}
+	})
+
+	b.Run("apply-unchanged", func(b *testing.B) {
+		m := makeModel(b.TempDir() + "/state.json")
+		m.filter.Project, m.query.Project = "agentsview", "agentsview"
+		key := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			m.inputMode = "filter-project"
+			m.input.SetValue("agentsview")
+			_, _ = m.updateKey(key)
+			benchmarkViewContent = m.View().Content
+		}
+	})
+
+	b.Run("apply-changed", func(b *testing.B) {
+		m := makeModel(b.TempDir() + "/state.json")
+		key := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := range b.N {
+			value := "project-a"
+			if i%2 != 0 {
+				value = "project-b"
+			}
+			m.inputMode = "filter-project"
+			m.input.SetValue(value)
+			_, _ = m.updateKey(key)
+			benchmarkViewContent = m.View().Content
+		}
+	})
 }

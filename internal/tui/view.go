@@ -57,14 +57,23 @@ func (m *model) render(width, height int) string {
 	header := m.renderHeader(width)
 	footer := m.renderFooter(width)
 	bodyHeight := max(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
-	var body string
-	if m.help {
-		body = m.renderHelp(width, bodyHeight)
-	} else if m.confirm != nil {
-		body = m.renderConfirm(width, bodyHeight)
-	} else {
-		body = m.renderPage(width, bodyHeight)
+	body := m.renderedBody
+	reuseBody := (m.inputMode != "" || m.reuseRenderedBodyOnce) &&
+		!m.renderedBodyDirty
+	if !reuseBody || body == "" ||
+		m.renderedBodyWidth != width || m.renderedBodyHeight != bodyHeight {
+		if m.help {
+			body = m.renderHelp(width, bodyHeight)
+		} else if m.confirm != nil {
+			body = m.renderConfirm(width, bodyHeight)
+		} else {
+			body = m.renderPage(width, bodyHeight)
+		}
+		m.renderedBody = body
+		m.renderedBodyWidth, m.renderedBodyHeight = width, bodyHeight
 	}
+	m.renderedBodyDirty = false
+	m.reuseRenderedBodyOnce = false
 	return fitHeight(header+"\n"+body+"\n"+footer, height)
 }
 
@@ -167,7 +176,7 @@ func (m *model) renderNavigation(width, height int) string {
 		}
 		lines = append(lines, truncateWidth(label, width-2))
 	}
-	lines = append(lines, "", mutedStyle.Render("Filters (Enter)"))
+	lines = append(lines, "", mutedStyle.Render("Filters: Enter"))
 	filterLines := []string{
 		"project  " + dash(m.filter.Project),
 		"agent    " + dash(m.filter.Agent),

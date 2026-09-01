@@ -50,6 +50,10 @@ type model struct {
 	pageData                                           PageData
 	pageCache                                          map[Page]PageData
 	reportCache                                        map[Page]renderedReport
+	renderedBody                                       string
+	renderedBodyWidth, renderedBodyHeight              int
+	reuseRenderedBodyOnce                              bool
+	renderedBodyDirty                                  bool
 	open                                               func(string) error
 	theme, messageLayout                               string
 	highContrast                                       bool
@@ -233,6 +237,11 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg.(type) {
+	case sessionsLoadedMsg, sessionLoadedMsg, sessionExtrasLoadedMsg,
+		settingsLoadedMsg, findLoadedMsg, pageLoadedMsg, mutationDoneMsg:
+		m.renderedBodyDirty = true
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -544,6 +553,7 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
+		m.reuseRenderedBodyOnce = true
 		m.inputMode = ""
 		m.input.EchoMode = textinput.EchoNormal
 		m.input.Blur()
@@ -600,21 +610,33 @@ func (m *model) beginInputValue(mode, value string) tea.Cmd {
 }
 
 func (m *model) activateNavigationFilter(index int) (tea.Model, tea.Cmd) {
-	switch navigationFilters[index] {
+	name := navigationFilters[index]
+	if value, ok := m.navigationFilterValue(name); ok {
+		return m, m.beginInputValue("filter-"+name, value)
+	}
+	return m.executeCommand(name)
+}
+
+func (m *model) navigationFilterValue(name string) (string, bool) {
+	switch name {
 	case "project":
-		return m, m.beginInputValue("filter-project", m.filter.Project)
+		return m.filter.Project, true
 	case "agent":
-		return m, m.beginInputValue("filter-agent", m.filter.Agent)
+		return m.filter.Agent, true
 	case "machine":
-		return m, m.beginInputValue("filter-machine", m.filter.Machine)
+		return m.filter.Machine, true
 	default:
-		return m.executeCommand(navigationFilters[index])
+		return "", false
 	}
 }
 
 func (m *model) executeCommand(command string) (tea.Model, tea.Cmd) {
 	name, value, _ := strings.Cut(command, " ")
 	value = strings.TrimSpace(value)
+	if current, ok := m.navigationFilterValue(name); ok && current == value {
+		m.reuseRenderedBodyOnce = true
+		return m, nil
+	}
 	switch name {
 	case "q", "quit":
 		m.persist()
@@ -879,6 +901,7 @@ func (m *model) executeCommand(command string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if isFilterCommand(name) {
+		m.reuseRenderedBodyOnce = true
 		m.resetPagination()
 	}
 	m.persist()
