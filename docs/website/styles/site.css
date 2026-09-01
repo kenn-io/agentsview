@@ -255,21 +255,8 @@ main {
 }
 
 .hero {
-  position: relative;
   padding: clamp(4.5rem, 11vw, 8rem) 0 clamp(4rem, 9vw, 6.5rem);
   border-bottom: 1px solid var(--rule);
-}
-
-.hero::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(44rem 26rem at 16% 4%, rgb(91 155 245 / 8%), transparent 70%);
-  pointer-events: none;
-}
-
-.hero > * {
-  position: relative;
 }
 
 .hero.compact {
@@ -284,7 +271,7 @@ main {
 }
 
 .hero-capture > a {
-  box-shadow: 0 24px 60px rgb(0 0 0 / 45%), 0 0 40px rgb(91 155 245 / 8%);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 45%);
 }
 
 .eyebrow,

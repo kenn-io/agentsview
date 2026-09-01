@@ -32,7 +32,7 @@ include Claude Code, OpenClaude, Codex, Gemini, Copilot (CLI, VS Code, and
 Visual Studio), Cursor, Qwen Code, DeepSeek TUI and Harness, Mistral Vibe, Zed,
 Warp, OpenCode, Positron, Posit Assistant, Claude Cowork, Aider, Antigravity,
 gptme, Kilo, Kimi, Kiro, OpenHands, Goose, Grok, RooCode, Trae, Windsurf, and
-dozens more — 56 harnesses in total, listed in
+dozens more. All 56 harnesses are listed in
 [session discovery](/docs/configuration/#session-discovery).
 
 - **56** agent harnesses parsed
@@ -43,7 +43,7 @@ dozens more — 56 harnesses in total, listed in
 
 The [Activity dashboard](/docs/activity/) turns timestamped session data into an
 operational picture: peak concurrency and the exact moment it happened, active
-versus idle time, agent-minutes across parallel sessions, and cost — scoped to
+versus idle time, agent-minutes across parallel sessions, and cost, scoped to
 any day, week, month, or custom range and filterable by project, agent, and
 machine. Live sync streams new messages into the UI as sessions run.
 
@@ -51,7 +51,7 @@ machine. Live sync streams new messages into the UI as sessions run.
 
 [Token and cost reports](/docs/token-usage/) read from the pre-indexed archive,
 so they return in well under a second even on histories with tens of thousands
-of sessions — 80–220× faster than `npx ccusage` on a 22,000-session database.
+of sessions: 80–220× faster than `npx ccusage` on a 22,000-session database.
 Pricing tracks LiteLLM and OpenRouter rates with an offline fallback, and
 cache-aware accounting covers prompt-cache creation and reads.
 
@@ -80,7 +80,7 @@ reports over an explicit session scope.
 
 ## Your agents can read it too
 
-AgentsView is not just a viewer. The same archive is available to your agents:
+The same archive you browse is available to your agents:
 
 - **CLI:** scriptable reports and session queries.
 - **REST:** programmatic [session and usage access](/docs/session-api/).

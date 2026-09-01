@@ -6,8 +6,8 @@ stops, five minutes.
 
 ## 01 — Capture every session
 
-The daemon discovers the session directories your agents already write — Claude
-Code, Codex, Cursor, Copilot, Gemini, and more than 50 others — and syncs them
+The daemon discovers the session directories that Claude Code, Codex, Cursor,
+Copilot, Gemini, and more than 50 other agents already write, and syncs them
 into one local SQLite archive with full-text indexes. It keeps watching, so the
 archive stays current while you work. [Quick start](/docs/quickstart/).
 
