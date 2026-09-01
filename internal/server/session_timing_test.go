@@ -27,6 +27,23 @@ func TestHandleSessionTiming_OK(t *testing.T) {
 	assert.Equal(t, int64(29_000), *got.Turns[0].DurationMs)
 }
 
+func TestHandleSessionTimingSummaryOmitsTurnDetail(t *testing.T) {
+	te := setup(t)
+	seedTimingFixture(t, te.db, "timing-summary-ok")
+
+	w := te.get(t, "/api/v1/sessions/timing-summary-ok/timing-summary")
+	assertStatus(t, w, http.StatusOK)
+
+	got := decode[db.SessionTimingSummary](t, w)
+	assert.Equal(t, "timing-summary-ok", got.SessionID)
+	assert.Equal(t, int64(30_000), got.TotalDurationMs)
+	assert.Equal(t, int64(29_000), got.ToolDurationMs)
+	assert.Equal(t, 1, got.TurnCount)
+	assert.Equal(t, 1, got.ToolCallCount)
+	assert.NotContains(t, w.Body.String(), `"turns"`)
+	assert.NotContains(t, w.Body.String(), `"input_preview"`)
+}
+
 func TestHandleSessionTiming_NotFound(t *testing.T) {
 	te := setup(t)
 

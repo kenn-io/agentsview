@@ -412,13 +412,14 @@ type ListFilter struct {
 // From/Direction (see directBackend.Messages). Roles filters the result to
 // the given roles (empty = all roles) in either mode.
 type MessageFilter struct {
-	From      *int     `json:"from,omitempty"`
-	Limit     int      `json:"limit,omitempty"`
-	Direction string   `json:"direction,omitempty"` // "asc" (default) or "desc"
-	Around    *int     `json:"around,omitempty"`
-	Before    *int     `json:"before,omitempty"` // default 5 when Around set
-	After     *int     `json:"after,omitempty"`  // default 5 when Around set
-	Roles     []string `json:"roles,omitempty"`
+	From        *int     `json:"from,omitempty"`
+	Limit       int      `json:"limit,omitempty"`
+	Direction   string   `json:"direction,omitempty"` // "asc" (default) or "desc"
+	Around      *int     `json:"around,omitempty"`
+	Before      *int     `json:"before,omitempty"` // default 5 when Around set
+	After       *int     `json:"after,omitempty"`  // default 5 when Around set
+	Roles       []string `json:"roles,omitempty"`
+	ToolContent *bool    `json:"tool_content,omitempty"`
 }
 
 // MessageList mirrors {messages, count}. FirstOrdinal/LastOrdinal report the

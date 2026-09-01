@@ -646,7 +646,7 @@ func sessionMessagesTx(
 	if closeErr != nil {
 		return nil, closeErr
 	}
-	if err := attachToolCallsWithQuerier(ctx, tx, msgs); err != nil {
+	if err := attachToolCallsWithQuerier(ctx, tx, msgs, true); err != nil {
 		return nil, err
 	}
 	return msgs, nil

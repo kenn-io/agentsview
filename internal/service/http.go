@@ -280,6 +280,9 @@ func (b *httpBackend) Messages(
 	if len(f.Roles) > 0 {
 		q.Set("roles", strings.Join(f.Roles, ","))
 	}
+	if f.ToolContent != nil {
+		q.Set("tool_content", strconv.FormatBool(*f.ToolContent))
+	}
 	path := "/api/v1/sessions/" + url.PathEscape(id) +
 		"/messages?" + q.Encode()
 	var out MessageList

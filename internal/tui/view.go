@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
@@ -229,7 +230,7 @@ func (m *model) renderTranscript(width, height int) string {
 	}
 	lines = append(lines, m.sessionVitalLines(width)...)
 	lines = append(lines, "")
-	lineLimit := max(1, height*2)
+	lineLimit := max(1, height-2)
 	if m.transcriptLoading {
 		lines = append(lines, m.strings.Loading)
 	}
@@ -247,8 +248,10 @@ func (m *model) renderTranscript(width, height int) string {
 		if len(lines) >= lineLimit {
 			break
 		}
-		content := m.renderMessage(i, message, max(20, width-6))
-		lines = appendTextLines(lines, content, lineLimit)
+		content := m.renderMessageLines(
+			i, message, max(20, width-6), lineLimit-len(lines),
+		)
+		lines = append(lines, content...)
 		if m.showTools {
 			lines = append(lines, m.toolCallLines(message, width, lineLimit-len(lines))...)
 		}
@@ -270,11 +273,97 @@ func (m *model) renderTranscript(width, height int) string {
 	return panel(windowLines(lines, max(1, height-2), 0), width, height, m.focus == 2)
 }
 
-func appendTextLines(lines []string, value string, limit int) []string {
-	if len(lines) >= limit {
-		return lines
+const (
+	renderMinimumPrefixBytes = 4 << 10
+	renderCacheMaxBytes      = 4 << 20
+	renderCacheEntryOverhead = 128
+	rendererCacheMaxEntries  = 8
+)
+
+func (m *model) renderMessageLines(
+	index int, message db.Message, width, lineBudget int,
+) []string {
+	if lineBudget <= 0 {
+		return nil
 	}
-	for line := range strings.SplitSeq(strings.TrimSpace(value), "\n") {
+	raw := message.Content
+	if m.messageLayout == "skim" {
+		raw = firstLine(raw)
+	}
+	key := renderedMessageKey{
+		loadGeneration: m.sessionLoadGeneration,
+		messageID:      message.ID,
+		index:          index,
+		width:          width,
+		lineBudget:     lineBudget,
+		theme:          m.theme,
+		layout:         m.messageLayout,
+	}
+	if cached, ok := m.cachedRenderedMessage(key, raw); ok {
+		return cached.lines
+	}
+	rendered := m.renderAdaptiveMarkdown(raw, width, lineBudget)
+	m.cacheRenderedMessage(key, raw, rendered)
+	return rendered.lines
+}
+
+func (m *model) renderAdaptiveMarkdown(
+	raw string, width, lineBudget int,
+) renderedMessage {
+	prefixBytes := min(
+		len(raw),
+		max(renderMinimumPrefixBytes, width*(lineBudget+1)),
+	)
+	for {
+		sourceBytes := utf8PrefixLen(raw, prefixBytes)
+		prefix := terminaltext.Sanitize(raw[:sourceBytes])
+		rendered := prefix
+		if renderer, err := m.markdownRenderer(width, m.theme); err == nil {
+			if value, renderErr := renderer.Render(prefix); renderErr == nil {
+				rendered = value
+			}
+		}
+		lines := firstTextLines(rendered, lineBudget+1)
+		sourceComplete := sourceBytes == len(raw)
+		if sourceComplete && len(lines) <= lineBudget {
+			return renderedMessage{
+				lines: lines, sourceBytes: sourceBytes, complete: true,
+			}
+		}
+		if len(lines) > lineBudget ||
+			(len(lines) == lineBudget && !sourceComplete) {
+			return continuedRenderedMessage(lines, sourceBytes, lineBudget)
+		}
+		if sourceComplete {
+			return renderedMessage{
+				lines: lines, sourceBytes: sourceBytes, complete: true,
+			}
+		}
+		prefixBytes = min(len(raw), max(prefixBytes+1, prefixBytes*2))
+	}
+}
+
+func continuedRenderedMessage(
+	lines []string, sourceBytes, lineBudget int,
+) renderedMessage {
+	continuation := mutedStyle.Render("… message continues")
+	if lineBudget == 1 {
+		lines = []string{continuation}
+	} else {
+		lines = append(lines[:min(len(lines), lineBudget-1)], continuation)
+	}
+	return renderedMessage{
+		lines: lines, sourceBytes: sourceBytes, complete: false,
+	}
+}
+
+func firstTextLines(value string, limit int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" || limit <= 0 {
+		return nil
+	}
+	lines := make([]string, 0, min(limit, 16))
+	for line := range strings.SplitSeq(value, "\n") {
 		lines = append(lines, line)
 		if len(lines) >= limit {
 			break
@@ -283,23 +372,106 @@ func appendTextLines(lines []string, value string, limit int) []string {
 	return lines
 }
 
-func (m *model) renderMessage(index int, message db.Message, width int) string {
-	raw := message.Content
-	if m.messageLayout == "skim" {
-		raw = firstLine(raw)
+func utf8PrefixLen(value string, limit int) int {
+	if limit >= len(value) {
+		return len(value)
 	}
-	if cached, ok := m.renderedMessages[index]; ok &&
-		cached.content == raw && cached.width == width && cached.theme == m.theme && cached.layout == m.messageLayout {
-		return cached.rendered
+	limit = max(limit, 0)
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
+		limit--
 	}
-	rendered := renderMarkdown(raw, width, m.theme)
+	return limit
+}
+
+func (m *model) markdownRenderer(
+	width int, theme string,
+) (*glamour.TermRenderer, error) {
+	key := markdownRendererKey{width: width, theme: theme}
+	if renderer := m.markdownRenderers[key]; renderer != nil {
+		return renderer, nil
+	}
+	style := "dark"
+	if theme == "light" {
+		style = "light"
+	}
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle(style),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(m.markdownRenderers) >= rendererCacheMaxEntries {
+		clear(m.markdownRenderers)
+	}
+	if m.markdownRenderers == nil {
+		m.markdownRenderers = make(
+			map[markdownRendererKey]*glamour.TermRenderer,
+		)
+	}
+	m.markdownRenderers[key] = renderer
+	return renderer, nil
+}
+
+func (m *model) cachedRenderedMessage(
+	key renderedMessageKey, content string,
+) (renderedMessage, bool) {
+	cached, ok := m.renderedMessages[key]
+	if !ok {
+		return renderedMessage{}, false
+	}
+	if cached.content != content {
+		delete(m.renderedMessages, key)
+		m.renderedMessageBytes -= cached.sizeBytes
+		return renderedMessage{}, false
+	}
+	m.renderedMessageTick++
+	cached.lastUsed = m.renderedMessageTick
+	m.renderedMessages[key] = cached
+	return cached, true
+}
+
+func (m *model) cacheRenderedMessage(
+	key renderedMessageKey, content string, rendered renderedMessage,
+) {
 	if m.renderedMessages == nil {
-		m.renderedMessages = make(map[int]renderedMessage)
+		m.renderedMessages = make(map[renderedMessageKey]renderedMessage)
 	}
-	m.renderedMessages[index] = renderedMessage{
-		content: raw, rendered: rendered, width: width, theme: m.theme, layout: m.messageLayout,
+	if old, ok := m.renderedMessages[key]; ok {
+		m.renderedMessageBytes -= old.sizeBytes
 	}
-	return rendered
+	rendered.content = content
+	rendered.sizeBytes = renderCacheEntryOverhead
+	for _, line := range rendered.lines {
+		rendered.sizeBytes += len(line)
+	}
+	m.renderedMessageTick++
+	rendered.lastUsed = m.renderedMessageTick
+	m.renderedMessages[key] = rendered
+	m.renderedMessageBytes += rendered.sizeBytes
+	m.evictRenderedMessages()
+}
+
+func (m *model) evictRenderedMessages() {
+	for m.renderedMessageBytes > renderCacheMaxBytes &&
+		len(m.renderedMessages) > 0 {
+		var oldestKey renderedMessageKey
+		var oldest renderedMessage
+		first := true
+		for key, candidate := range m.renderedMessages {
+			if first || candidate.lastUsed < oldest.lastUsed {
+				oldestKey, oldest, first = key, candidate, false
+			}
+		}
+		delete(m.renderedMessages, oldestKey)
+		m.renderedMessageBytes -= oldest.sizeBytes
+	}
+}
+
+func (m *model) clearRenderedMessages() {
+	m.renderedMessages = nil
+	m.renderedMessageBytes = 0
+	m.renderedMessageTick = 0
 }
 
 func (m *model) toolCallLines(message db.Message, width, limit int) []string {
@@ -336,26 +508,73 @@ func (m *model) toolCallLines(message db.Message, width, limit int) []string {
 	return lines
 }
 
-func (m *model) toolPayloadLines(label, value string, width, limit int) []string {
+const (
+	toolPayloadMinimumBytes = 256
+	toolPayloadBytesPerCell = 16
+)
+
+func (m *model) toolPayloadLines(
+	label, value string, width, limit int,
+) []string {
 	if limit <= 0 {
 		return nil
 	}
+	contentWidth := max(1, width-8)
+	maxBytes := max(
+		toolPayloadMinimumBytes,
+		contentWidth*toolPayloadBytesPerCell,
+	)
 	if m.messageLayout == "compact" || m.messageLayout == "skim" {
+		line, _, truncated := nextBoundedLine(value, maxBytes)
 		return []string{mutedStyle.Render(truncateWidth(
-			"  "+label+": "+terminaltext.Sanitize(firstLine(value)), width-4,
+			"  "+label+": "+sanitizeBoundedLine(line, contentWidth, truncated),
+			width-4,
 		))}
 	}
 	lines := []string{mutedStyle.Render("  " + label + ":")}
-	if len(lines) >= limit {
-		return lines
-	}
-	for line := range strings.SplitSeq(value, "\n") {
-		lines = append(lines, mutedStyle.Render(truncateWidth("    "+terminaltext.Sanitize(line), width-4)))
-		if len(lines) >= limit {
+	remaining := value
+	for len(lines) < limit && remaining != "" {
+		line, rest, truncated := nextBoundedLine(remaining, maxBytes)
+		lines = append(lines, mutedStyle.Render(truncateWidth(
+			"    "+sanitizeBoundedLine(line, contentWidth, truncated),
+			width-4,
+		)))
+		if truncated {
 			break
 		}
+		remaining = rest
 	}
 	return lines
+}
+
+func nextBoundedLine(
+	value string, maxBytes int,
+) (line, rest string, truncated bool) {
+	search := value
+	if len(search) > maxBytes {
+		search = search[:maxBytes]
+	}
+	if newline := strings.IndexByte(search, '\n'); newline >= 0 {
+		return search[:newline], value[newline+1:], false
+	}
+	if len(value) > len(search) {
+		return search, "", true
+	}
+	return search, "", false
+}
+
+func sanitizeBoundedLine(
+	value string, width int, sourceTruncated bool,
+) string {
+	safe, sanitizedTruncated := terminaltext.SanitizePrefix(
+		value,
+		max(toolPayloadMinimumBytes, width*toolPayloadBytesPerCell),
+	)
+	truncated := sourceTruncated || sanitizedTruncated
+	if truncated && ansi.StringWidth(safe) < width {
+		safe += "…"
+	}
+	return truncateWidth(safe, width)
 }
 
 func (m *model) sessionVitalLines(width int) []string {

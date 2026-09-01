@@ -36,6 +36,7 @@ func (s *Server) registerSessionRoutes() {
 	s.get(group, "/sessions/{id}/activity", "Get session activity", s.humaGetSessionActivity)
 	s.get(group, "/sessions/{id}/timing", "Get session timing", s.humaSessionTiming)
 	s.get(group, "/sessions/{id}/usage", "Get session usage", s.humaSessionUsage)
+	s.get(group, "/sessions/{id}/timing-summary", "Get session timing summary", s.humaSessionTimingSummary)
 	s.stream(group, http.MethodGet, "/sessions/{id}/watch", "Watch session events", s.humaWatchSession)
 	s.stream(group, http.MethodGet, "/events", "Watch server events", s.humaEvents)
 	s.raw(group, http.MethodGet, "/sessions/{id}/export", "Export session as HTML", s.humaExportSession)
@@ -90,14 +91,15 @@ type sessionFilterInput struct {
 }
 
 type messageListInput struct {
-	ID        string           `path:"id" required:"true" doc:"Session ID"`
-	Limit     int              `query:"limit" minimum:"0" doc:"Maximum number of messages"`
-	Direction messageDirection `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
-	From      optionalIntParam `query:"from" minimum:"0" doc:"Starting message ordinal"`
-	Around    optionalIntParam `query:"around" minimum:"0" doc:"Center a symmetric window on this ordinal (mutually exclusive with from/direction)"`
-	Before    optionalIntParam `query:"before" minimum:"0" doc:"Messages before the around anchor (default 5)"`
-	After     optionalIntParam `query:"after" minimum:"0" doc:"Messages after the around anchor (default 5)"`
-	Roles     string           `query:"roles" doc:"Comma-separated roles to include, e.g. user,assistant"`
+	ID          string            `path:"id" required:"true" doc:"Session ID"`
+	Limit       int               `query:"limit" minimum:"0" doc:"Maximum number of messages"`
+	Direction   messageDirection  `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
+	From        optionalIntParam  `query:"from" minimum:"0" doc:"Starting message ordinal"`
+	Around      optionalIntParam  `query:"around" minimum:"0" doc:"Center a symmetric window on this ordinal (mutually exclusive with from/direction)"`
+	Before      optionalIntParam  `query:"before" minimum:"0" doc:"Messages before the around anchor (default 5)"`
+	After       optionalIntParam  `query:"after" minimum:"0" doc:"Messages after the around anchor (default 5)"`
+	Roles       string            `query:"roles" doc:"Comma-separated roles to include, e.g. user,assistant"`
+	ToolContent optionalBoolParam `query:"tool_content" doc:"Include full tool input and result content (default true)"`
 }
 
 type searchSessionInput struct {
@@ -309,6 +311,9 @@ func (s *Server) humaGetMessages(
 	if in.Roles != "" {
 		filter.Roles = splitTrimmedNonEmpty(in.Roles)
 	}
+	if in.ToolContent.IsSet {
+		filter.ToolContent = &in.ToolContent.Value
+	}
 	list, err := s.sessions.Messages(ctx, in.ID, filter)
 	if err != nil {
 		if errors.Is(err, service.ErrAroundMutuallyExclusive) ||
@@ -369,6 +374,22 @@ func (s *Server) humaSessionTiming(
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
 	return &jsonOutput[*db.SessionTiming]{Body: timing}, nil
+}
+
+func (s *Server) humaSessionTimingSummary(
+	ctx context.Context,
+	in *idPathInput,
+) (*jsonOutput[*db.SessionTimingSummary], error) {
+	timing, err := s.db.GetSessionTiming(ctx, in.ID)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	if timing == nil {
+		return nil, apiError(http.StatusNotFound, "session not found")
+	}
+	return &jsonOutput[*db.SessionTimingSummary]{
+		Body: db.SummarizeSessionTiming(timing),
+	}, nil
 }
 
 type sessionUsageResponse struct {

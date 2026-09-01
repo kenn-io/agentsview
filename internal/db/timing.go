@@ -26,6 +26,35 @@ type SessionTiming struct {
 	Running         bool            `json:"running"`
 }
 
+// SessionTimingSummary is the aggregate-only timing payload used by clients
+// that do not need per-category, turn, or call detail.
+type SessionTimingSummary struct {
+	SessionID       string `json:"session_id"`
+	TotalDurationMs int64  `json:"total_duration_ms"`
+	ToolDurationMs  int64  `json:"tool_duration_ms"`
+	TurnCount       int    `json:"turn_count"`
+	ToolCallCount   int    `json:"tool_call_count"`
+	SubagentCount   int    `json:"subagent_count"`
+	Running         bool   `json:"running"`
+}
+
+// SummarizeSessionTiming projects a detailed timing response without changing
+// the existing timing endpoint's response shape.
+func SummarizeSessionTiming(timing *SessionTiming) *SessionTimingSummary {
+	if timing == nil {
+		return nil
+	}
+	return &SessionTimingSummary{
+		SessionID:       timing.SessionID,
+		TotalDurationMs: timing.TotalDurationMs,
+		ToolDurationMs:  timing.ToolDurationMs,
+		TurnCount:       timing.TurnCount,
+		ToolCallCount:   timing.ToolCallCount,
+		SubagentCount:   timing.SubagentCount,
+		Running:         timing.Running,
+	}
+}
+
 type CategoryTotal struct {
 	Category   string `json:"category"`
 	DurationMs int64  `json:"duration_ms"`

@@ -14,6 +14,13 @@ import (
 func (s *Store) GetMessages(
 	ctx context.Context, sessionID string, from, limit int, asc bool,
 ) ([]db.Message, error) {
+	return s.getMessages(ctx, sessionID, from, limit, asc, true)
+}
+
+func (s *Store) getMessages(
+	ctx context.Context,
+	sessionID string, from, limit int, asc, toolContent bool,
+) ([]db.Message, error) {
 	if limit <= 0 || limit > db.MaxMessageLimit {
 		limit = db.DefaultMessageLimit
 	}
@@ -44,7 +51,7 @@ func (s *Store) GetMessages(
 	if err != nil {
 		return nil, err
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, toolContent); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -66,15 +73,24 @@ func (s *Store) GetMessagesWindow(
 	if w.From != nil {
 		from = *w.From
 	}
-	if len(w.Roles) == 0 {
-		return s.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
+	toolContent := true
+	if w.ToolContent != nil {
+		toolContent = *w.ToolContent
 	}
-	return s.getMessagesLinearRoleFiltered(ctx, sessionID, from, w.Limit, w.Asc, w.Roles)
+	if len(w.Roles) == 0 {
+		return s.getMessages(
+			ctx, sessionID, from, w.Limit, w.Asc, toolContent,
+		)
+	}
+	return s.getMessagesLinearRoleFiltered(
+		ctx, sessionID, from, w.Limit, w.Asc, w.Roles, toolContent,
+	)
 }
 
 func (s *Store) getMessagesLinearRoleFiltered(
 	ctx context.Context,
 	sessionID string, from, limit int, asc bool, roles []string,
+	toolContent bool,
 ) ([]db.Message, error) {
 	if limit <= 0 || limit > db.MaxMessageLimit {
 		limit = db.DefaultMessageLimit
@@ -109,7 +125,7 @@ func (s *Store) getMessagesLinearRoleFiltered(
 	if err != nil {
 		return nil, err
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, toolContent); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -175,7 +191,11 @@ func (s *Store) getMessagesAroundAnchor(
 	msgs = append(msgs, before...)
 	msgs = append(msgs, anchorMsgs...)
 	msgs = append(msgs, after...)
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	toolContent := true
+	if w.ToolContent != nil {
+		toolContent = *w.ToolContent
+	}
+	if err := s.attachToolCalls(ctx, msgs, toolContent); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -230,7 +250,7 @@ func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Mess
 	if err != nil {
 		return nil, err
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, true); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -292,7 +312,9 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 	return msgs, rows.Err()
 }
 
-func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
+func (s *Store) attachToolCalls(
+	ctx context.Context, msgs []db.Message, toolContent bool,
+) error {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -301,11 +323,16 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 	for i, msg := range msgs {
 		index[msg.Ordinal] = i
 	}
+	inputExpr := "COALESCE(tc.input_json, '')"
+	resultExpr := "COALESCE(tc.result_content, '')"
+	if !toolContent {
+		inputExpr, resultExpr = "''", "''"
+	}
 	rows, err := s.queryContext(ctx, `
 		SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
-			COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
+			COALESCE(tc.tool_use_id, ''), `+inputExpr+`,
 			COALESCE(tc.skill_name, ''), COALESCE(tc.result_content_length, 0),
-			COALESCE(tc.result_content, ''),
+			`+resultExpr+`,
 			COALESCE(tc.subagent_session_id, ''),
 			COALESCE(tc.file_path, '')
 		FROM tool_calls tc
@@ -342,17 +369,24 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return s.attachToolResultEvents(ctx, msgs, index, sessionID)
+	return s.attachToolResultEvents(
+		ctx, msgs, index, sessionID, toolContent,
+	)
 }
 
 func (s *Store) attachToolResultEvents(
-	ctx context.Context, msgs []db.Message, index map[int]int, sessionID string,
+	ctx context.Context, msgs []db.Message, index map[int]int,
+	sessionID string, toolContent bool,
 ) error {
+	contentExpr := "content"
+	if !toolContent {
+		contentExpr = "''"
+	}
 	rows, err := s.queryContext(ctx, `
 		SELECT tool_call_message_ordinal, call_index,
 			COALESCE(tool_use_id, ''), COALESCE(agent_id, ''),
 			COALESCE(subagent_session_id, ''), source, status,
-			content, content_length, timestamp, event_index
+			`+contentExpr+`, content_length, timestamp, event_index
 		FROM tool_result_events
 		WHERE session_id = ?
 		ORDER BY tool_call_message_ordinal, call_index, event_index`,

@@ -27,3 +27,17 @@ func TestSanitize(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizePrefixBoundsWorkAndDropsPartialRune(t *testing.T) {
+	got, truncated := SanitizePrefix("safe\x1b界rest", 7)
+
+	assert.Equal(t, "safe", got)
+	assert.True(t, truncated)
+}
+
+func TestSanitizePrefixReturnsCompleteInput(t *testing.T) {
+	got, truncated := SanitizePrefix("héllo", 32)
+
+	assert.Equal(t, "héllo", got)
+	assert.False(t, truncated)
+}

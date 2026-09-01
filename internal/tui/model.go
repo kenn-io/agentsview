@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -52,7 +53,10 @@ type model struct {
 	theme, messageLayout                               string
 	highContrast                                       bool
 	showThinking, showTools                            bool
-	renderedMessages                                   map[int]renderedMessage
+	renderedMessages                                   map[renderedMessageKey]renderedMessage
+	renderedMessageBytes                               int
+	renderedMessageTick                                uint64
+	markdownRenderers                                  map[markdownRendererKey]*glamour.TermRenderer
 	transcriptLoading                                  bool
 	sessionLoadFailed                                  bool
 	sessionLoadGeneration                              uint64
@@ -61,9 +65,24 @@ type model struct {
 	cancelPageLoad                                     context.CancelFunc
 }
 
+type renderedMessageKey struct {
+	loadGeneration           uint64
+	messageID                int64
+	index, width, lineBudget int
+	theme, layout            string
+}
+
 type renderedMessage struct {
-	content, rendered, theme, layout string
-	width                            int
+	content                string
+	lines                  []string
+	sourceBytes, sizeBytes int
+	complete               bool
+	lastUsed               uint64
+}
+
+type markdownRendererKey struct {
+	width int
+	theme string
 }
 
 type renderedReport struct {
@@ -243,7 +262,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messages = append(m.messages, msg.messages.Messages...)
 			} else {
 				m.messages = msg.messages.Messages
-				m.renderedMessages = nil
+				m.clearRenderedMessages()
 			}
 			m.nextMessageOrdinal = nextMessageFrom(msg.messages, msg.pageSize)
 			if !msg.append {
@@ -1004,6 +1023,16 @@ func (m *model) stopPageLoad() {
 
 const initialMessageLimit = 50
 
+func (m *model) transcriptMessageFilter(
+	filter service.MessageFilter,
+) service.MessageFilter {
+	if !m.showTools {
+		include := false
+		filter.ToolContent = &include
+	}
+	return filter
+}
+
 func (m *model) loadSelectedSession() tea.Cmd {
 	id := m.selectedSessionID()
 	if id == "" {
@@ -1014,7 +1043,13 @@ func (m *model) loadSelectedSession() tea.Cmd {
 		m.sessionLoadFailed = false
 		return nil
 	}
-	return m.loadSession(id, service.MessageFilter{Limit: initialMessageLimit}, nil)
+	return m.loadSession(
+		id,
+		m.transcriptMessageFilter(service.MessageFilter{
+			Limit: initialMessageLimit,
+		}),
+		nil,
+	)
 }
 
 func (m *model) loadSession(id string, filter service.MessageFilter, anchor *int) tea.Cmd {
@@ -1076,7 +1111,7 @@ func (m *model) prepareSessionPreview(id string) {
 	m.messageSelected, m.scroll = 0, 0
 	m.nextMessageOrdinal = nil
 	m.findMatches, m.findIndex = nil, 0
-	m.renderedMessages = nil
+	m.clearRenderedMessages()
 	m.transcriptLoading = true
 	m.sessionLoadFailed = false
 	m.errText = ""
@@ -1097,9 +1132,11 @@ func (m *model) openReferencedSession(id string, ordinal int) (tea.Model, tea.Cm
 	m.query.Search = ""
 	m.generation++
 	m.persist()
-	return m, m.loadSession(id, service.MessageFilter{
-		Around: &ordinal, Before: new(50), After: new(50),
-	}, &ordinal)
+	return m, m.loadSession(id, m.transcriptMessageFilter(
+		service.MessageFilter{
+			Around: &ordinal, Before: new(50), After: new(50),
+		},
+	), &ordinal)
 }
 
 func (m *model) loadMoreMessages() tea.Cmd {
@@ -1107,11 +1144,14 @@ func (m *model) loadMoreMessages() tea.Cmd {
 		return nil
 	}
 	id, from, gen, load := m.detail.ID, *m.nextMessageOrdinal, m.generation, m.sessionLoadGeneration
+	const pageSize = 200
+	filter := m.transcriptMessageFilter(service.MessageFilter{
+		From: &from, Limit: pageSize,
+	})
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
 		defer cancel()
-		const pageSize = 200
-		messages, err := m.client.Messages(ctx, id, service.MessageFilter{From: &from, Limit: pageSize})
+		messages, err := m.client.Messages(ctx, id, filter)
 		return sessionLoadedMsg{
 			generation: gen, load: load, sessionID: id, messages: messages,
 			append: true, pageSize: pageSize, err: err,
@@ -1142,12 +1182,13 @@ func (m *model) loadMessageWindow(ordinal int) tea.Cmd {
 		return nil
 	}
 	id, gen, load := m.detail.ID, m.generation, m.sessionLoadGeneration
+	filter := m.transcriptMessageFilter(service.MessageFilter{
+		Around: &ordinal, Before: new(25), After: new(25),
+	})
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
 		defer cancel()
-		messages, err := m.client.Messages(ctx, id, service.MessageFilter{
-			Around: &ordinal, Before: new(25), After: new(25),
-		})
+		messages, err := m.client.Messages(ctx, id, filter)
 		return sessionLoadedMsg{generation: gen, load: load, sessionID: id, messages: messages, anchor: &ordinal, err: err}
 	}
 }

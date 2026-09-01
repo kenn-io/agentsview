@@ -620,6 +620,51 @@ func TestHTTPBackend_Messages_Roundtrip(t *testing.T) {
 	assert.Equal(t, "bye", list.Messages[2].Content)
 }
 
+func TestHTTPBackend_MessagesCanOmitToolContent(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	const sid = "msg-tools-lightweight"
+	dbtest.SeedSessionWithMessages(t, env.DB, sid, "p1", []db.Message{{
+		SessionID: sid, Ordinal: 0, Role: "assistant", Content: "done",
+		HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolName: "Read", Category: "read", InputJSON: `{"path":"large"}`,
+			ResultContent: "full result", ResultContentLength: len("full result"),
+			ResultEvents: []db.ToolResultEvent{{
+				Source: "tool", Status: "completed", Content: "event result",
+				ContentLength: len("event result"),
+			}},
+		}},
+	}}, dbtest.WithMessageCount(1))
+	svc := env.Backend("", false)
+
+	full, err := svc.Messages(
+		context.Background(), sid, service.MessageFilter{Limit: 10},
+	)
+	require.NoError(t, err)
+	require.Len(t, full.Messages, 1)
+	require.Len(t, full.Messages[0].ToolCalls, 1)
+	assert.Equal(t, `{"path":"large"}`, full.Messages[0].ToolCalls[0].InputJSON)
+	assert.Equal(t, "full result", full.Messages[0].ToolCalls[0].ResultContent)
+	require.Len(t, full.Messages[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "event result", full.Messages[0].ToolCalls[0].ResultEvents[0].Content)
+
+	include := false
+	lightweight, err := svc.Messages(context.Background(), sid,
+		service.MessageFilter{Limit: 10, ToolContent: &include})
+	require.NoError(t, err)
+	require.Len(t, lightweight.Messages, 1)
+	require.Len(t, lightweight.Messages[0].ToolCalls, 1)
+	call := lightweight.Messages[0].ToolCalls[0]
+	assert.Equal(t, "Read", call.ToolName)
+	assert.Equal(t, len("full result"), call.ResultContentLength)
+	assert.Empty(t, call.InputJSON)
+	assert.Empty(t, call.ResultContent)
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, len("event result"), call.ResultEvents[0].ContentLength)
+	assert.Empty(t, call.ResultEvents[0].Content)
+}
+
 func TestHTTPBackend_Messages_DescDirection(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)

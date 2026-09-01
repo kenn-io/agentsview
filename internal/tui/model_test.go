@@ -266,7 +266,7 @@ func TestSelectedSessionDisplaysMessagesBeforeSlowMetadata(t *testing.T) {
 	}
 	fake.sessionExtrasFn = func(ctx context.Context, _ string) (SessionExtras, error) {
 		err := wait(ctx, "extras")
-		return SessionExtras{Timing: &db.SessionTiming{}}, err
+		return SessionExtras{Timing: &db.SessionTimingSummary{}}, err
 	}
 	m := newModel(context.Background(), fake, Options{})
 	m.sessions = []db.Session{{ID: "session", Agent: "codex"}}
@@ -316,6 +316,18 @@ func TestSelectedSessionDisplaysMessagesBeforeSlowMetadata(t *testing.T) {
 	next, _ = m.Update(<-extrasResult)
 	m = next.(*model)
 	assert.NotNil(t, m.extras.Timing)
+}
+
+func TestTranscriptMessageFilterOmitsToolContentWhenToolsHidden(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+
+	visible := m.transcriptMessageFilter(service.MessageFilter{Limit: 50})
+	assert.Nil(t, visible.ToolContent)
+
+	m.showTools = false
+	hidden := m.transcriptMessageFilter(service.MessageFilter{Limit: 50})
+	require.NotNil(t, hidden.ToolContent)
+	assert.False(t, *hidden.ToolContent)
 }
 
 func TestEnterFocusesLoadedSessionWithoutReloading(t *testing.T) {

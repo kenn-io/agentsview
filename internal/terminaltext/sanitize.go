@@ -32,6 +32,16 @@ func Sanitize(s string) string {
 	return b.String()
 }
 
+// SanitizePrefix strips terminal control characters from at most maxBytes of s.
+// It reports whether bytes were omitted. An incomplete UTF-8 rune at the
+// boundary is dropped by Sanitize.
+func SanitizePrefix(s string, maxBytes int) (string, bool) {
+	if maxBytes < 0 || len(s) <= maxBytes {
+		return Sanitize(s), false
+	}
+	return Sanitize(s[:maxBytes]), true
+}
+
 func hasControlBytes(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]

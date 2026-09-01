@@ -152,6 +152,13 @@ func (db *DB) GetMessages(
 	ctx context.Context,
 	sessionID string, from, limit int, asc bool,
 ) ([]Message, error) {
+	return db.getMessages(ctx, sessionID, from, limit, asc, true)
+}
+
+func (db *DB) getMessages(
+	ctx context.Context,
+	sessionID string, from, limit int, asc, toolContent bool,
+) ([]Message, error) {
 	if limit <= 0 || limit > MaxMessageLimit {
 		limit = DefaultMessageLimit
 	}
@@ -181,7 +188,7 @@ func (db *DB) GetMessages(
 	if err != nil {
 		return nil, err
 	}
-	if err := db.attachToolCalls(ctx, msgs); err != nil {
+	if err := db.attachToolCalls(ctx, msgs, toolContent); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -190,13 +197,14 @@ func (db *DB) GetMessages(
 // MessageWindow parameterises GetMessagesWindow. Exactly one retrieval
 // mode: Around non-nil = symmetric window; otherwise linear from/limit.
 type MessageWindow struct {
-	From   *int
-	Limit  int
-	Asc    bool
-	Around *int
-	Before int // used only with Around; default handled by caller
-	After  int
-	Roles  []string // empty = all roles
+	From        *int
+	Limit       int
+	Asc         bool
+	Around      *int
+	Before      int // used only with Around; default handled by caller
+	After       int
+	Roles       []string // empty = all roles
+	ToolContent *bool    // nil defaults to true
 }
 
 // GetMessagesWindow returns messages for a session using either linear
@@ -216,11 +224,17 @@ func (db *DB) GetMessagesWindow(
 	if w.From != nil {
 		from = *w.From
 	}
+	toolContent := true
+	if w.ToolContent != nil {
+		toolContent = *w.ToolContent
+	}
 	if len(w.Roles) == 0 {
-		return db.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
+		return db.getMessages(
+			ctx, sessionID, from, w.Limit, w.Asc, toolContent,
+		)
 	}
 	return db.getMessagesLinearRoleFiltered(
-		ctx, sessionID, from, w.Limit, w.Asc, w.Roles,
+		ctx, sessionID, from, w.Limit, w.Asc, w.Roles, toolContent,
 	)
 }
 
@@ -229,6 +243,7 @@ func (db *DB) GetMessagesWindow(
 func (db *DB) getMessagesLinearRoleFiltered(
 	ctx context.Context,
 	sessionID string, from, limit int, asc bool, roles []string,
+	toolContent bool,
 ) ([]Message, error) {
 	if limit <= 0 || limit > MaxMessageLimit {
 		limit = DefaultMessageLimit
@@ -258,7 +273,7 @@ func (db *DB) getMessagesLinearRoleFiltered(
 	if err != nil {
 		return nil, err
 	}
-	if err := db.attachToolCalls(ctx, msgs); err != nil {
+	if err := db.attachToolCalls(ctx, msgs, toolContent); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -312,7 +327,11 @@ func (db *DB) getMessagesAroundAnchor(
 	msgs = append(msgs, before...)
 	msgs = append(msgs, anchorMsgs...)
 	msgs = append(msgs, after...)
-	if err := db.attachToolCalls(ctx, msgs); err != nil {
+	toolContent := true
+	if w.ToolContent != nil {
+		toolContent = *w.ToolContent
+	}
+	if err := db.attachToolCalls(ctx, msgs, toolContent); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -363,7 +382,7 @@ func (db *DB) GetAllMessages(
 	if err != nil {
 		return nil, err
 	}
-	if err := db.attachToolCalls(ctx, msgs); err != nil {
+	if err := db.attachToolCalls(ctx, msgs, true); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -1831,9 +1850,11 @@ func restoreLegacyPinByRankTx(
 // attachToolCalls loads tool_calls for the given messages
 // and attaches them to each message's ToolCalls field.
 func (db *DB) attachToolCalls(
-	ctx context.Context, msgs []Message,
+	ctx context.Context, msgs []Message, toolContent bool,
 ) error {
-	return attachToolCallsWithQuerier(ctx, db.getReader(), msgs)
+	return attachToolCallsWithQuerier(
+		ctx, db.getReader(), msgs, toolContent,
+	)
 }
 
 type messageRowsQuerier interface {
@@ -1844,6 +1865,7 @@ type messageRowsQuerier interface {
 
 func attachToolCallsWithQuerier(
 	ctx context.Context, q messageRowsQuerier, msgs []Message,
+	toolContent bool,
 ) error {
 	if len(msgs) == 0 {
 		return nil
@@ -1859,12 +1881,12 @@ func attachToolCallsWithQuerier(
 	for i := 0; i < len(ids); i += attachToolCallBatchSize {
 		end := min(i+attachToolCallBatchSize, len(ids))
 		if err := attachToolCallsBatch(
-			ctx, q, msgs, idToIdx, ids[i:end],
+			ctx, q, msgs, idToIdx, ids[i:end], toolContent,
 		); err != nil {
 			return err
 		}
 	}
-	if err := attachToolResultEvents(ctx, q, msgs); err != nil {
+	if err := attachToolResultEvents(ctx, q, msgs, toolContent); err != nil {
 		return err
 	}
 	return nil
@@ -1876,6 +1898,7 @@ func attachToolCallsBatch(
 	msgs []Message,
 	idToIdx map[int64]int,
 	batch []int64,
+	toolContent bool,
 ) error {
 	if len(batch) == 0 {
 		return nil
@@ -1888,15 +1911,19 @@ func attachToolCallsBatch(
 		placeholders[i] = "?"
 	}
 
+	inputExpr, resultExpr := "input_json", "result_content"
+	if !toolContent {
+		inputExpr, resultExpr = "NULL", "NULL"
+	}
 	query := fmt.Sprintf(`
 		SELECT message_id, session_id, tool_name, category,
-			tool_use_id, input_json, skill_name,
-			result_content_length, result_content, subagent_session_id,
+			tool_use_id, %s, skill_name,
+			result_content_length, %s, subagent_session_id,
 			file_path, call_index
 		FROM tool_calls
 		WHERE message_id IN (%s)
 		ORDER BY message_id, call_index`,
-		strings.Join(placeholders, ","))
+		inputExpr, resultExpr, strings.Join(placeholders, ","))
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1956,6 +1983,7 @@ func attachToolCallsBatch(
 
 func attachToolResultEvents(
 	ctx context.Context, q messageRowsQuerier, msgs []Message,
+	toolContent bool,
 ) error {
 	if len(msgs) == 0 {
 		return nil
@@ -1972,6 +2000,7 @@ func attachToolResultEvents(
 		end := min(i+attachToolCallBatchSize, len(ordinals))
 		if err := attachToolResultEventsBatch(
 			ctx, q, msgs, ordToIdx, sessionID, ordinals[i:end],
+			toolContent,
 		); err != nil {
 			return err
 		}
@@ -1986,6 +2015,7 @@ func attachToolResultEventsBatch(
 	ordToIdx map[int]int,
 	sessionID string,
 	ordinals []int,
+	toolContent bool,
 ) error {
 	if len(ordinals) == 0 {
 		return nil
@@ -1998,15 +2028,19 @@ func attachToolResultEventsBatch(
 		placeholders[i] = "?"
 	}
 
+	contentExpr := "content"
+	if !toolContent {
+		contentExpr = "''"
+	}
 	query := fmt.Sprintf(`
 		SELECT tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id,
-			source, status, content, content_length,
+			source, status, %s, content_length,
 			timestamp, event_index
 		FROM tool_result_events
 		WHERE session_id = ? AND tool_call_message_ordinal IN (%s)
 		ORDER BY tool_call_message_ordinal, call_index, event_index`,
-		strings.Join(placeholders, ","))
+		contentExpr, strings.Join(placeholders, ","))
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {

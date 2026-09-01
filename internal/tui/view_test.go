@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
@@ -69,6 +70,129 @@ func TestViewRefreshesCachedMessageContent(t *testing.T) {
 	assert.Contains(t, first, "first")
 	assert.Contains(t, second, "replacement")
 	assert.NotContains(t, second, "first")
+}
+
+func TestAdaptiveMarkdownShowsContinuationForLargeMessage(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.width, m.height, m.focus = 100, 24, 2
+	m.detail = &service.SessionDetail{Session: db.Session{
+		ID: "session", MessageCount: 1,
+	}}
+	m.messages = []db.Message{{
+		ID: 1, SessionID: "session", Role: "assistant",
+		Content: "## Result\n\n" + strings.Repeat("visible content ", 1<<16) +
+			"\nEND-OF-LARGE-MESSAGE",
+	}}
+
+	view := m.View().Content
+
+	assert.Contains(t, view, "Result")
+	assert.Contains(t, view, "message continues")
+	assert.NotContains(t, view, "END-OF-LARGE-MESSAGE")
+}
+
+func TestAdaptiveMarkdownKeepsCompleteSmallMessage(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	message := db.Message{
+		ID: 1, SessionID: "session", Role: "assistant",
+		Content: "## Complete\n\nAll content is visible.",
+	}
+
+	lines := m.renderMessageLines(0, message, 80, 20)
+	rendered := strings.Join(lines, "\n")
+
+	assert.Contains(t, rendered, "All content is")
+	assert.Contains(t, rendered, "visible.")
+	assert.NotContains(t, rendered, "message continues")
+	require.Len(t, m.renderedMessages, 1)
+	for _, cached := range m.renderedMessages {
+		assert.True(t, cached.complete)
+	}
+}
+
+func TestAdaptiveMarkdownAllocationsAreBoundedByViewport(t *testing.T) {
+	makeModel := func(size int) *model {
+		m := newModel(context.Background(), &fakeDataClient{}, Options{})
+		m.width, m.height, m.focus = 100, 30, 2
+		m.detail = &service.SessionDetail{Session: db.Session{
+			ID: "session", MessageCount: 1,
+		}}
+		m.messages = []db.Message{{
+			ID: 1, SessionID: "session", Role: "assistant",
+			Content: "## Result\n\n" + strings.Repeat("word ", size/5),
+		}}
+		_ = m.View()
+		return m
+	}
+	allocations := func(m *model) float64 {
+		return testing.AllocsPerRun(3, func() {
+			m.clearRenderedMessages()
+			benchmarkViewContent = m.View().Content
+		})
+	}
+	small := allocations(makeModel(12 << 10))
+	large := allocations(makeModel(1 << 20))
+
+	assert.Less(t, large, small*2,
+		"1 MiB transcript must not allocate twice as much as 12 KiB")
+}
+
+func TestRenderedMessageCacheIsByteBounded(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	line := strings.Repeat("x", 64<<10)
+	for i := range 100 {
+		key := renderedMessageKey{messageID: int64(i + 1), index: i}
+		m.cacheRenderedMessage(key, line, renderedMessage{
+			lines: []string{line}, complete: true,
+		})
+	}
+
+	assert.LessOrEqual(t, m.renderedMessageBytes, renderCacheMaxBytes)
+	assert.Less(t, len(m.renderedMessages), 100)
+}
+
+func TestRenderedMessageCacheSeparatesRenderInputs(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	message := db.Message{
+		ID: 7, SessionID: "session", Role: "assistant",
+		Content: strings.Repeat("content ", 100),
+	}
+	m.sessionLoadGeneration = 1
+	_ = m.renderMessageLines(0, message, 80, 5)
+	_ = m.renderMessageLines(0, message, 81, 5)
+	_ = m.renderMessageLines(0, message, 81, 6)
+	m.theme = "light"
+	_ = m.renderMessageLines(0, message, 81, 6)
+	m.messageLayout = "compact"
+	_ = m.renderMessageLines(0, message, 81, 6)
+	m.sessionLoadGeneration = 2
+	_ = m.renderMessageLines(0, message, 81, 6)
+
+	assert.Len(t, m.renderedMessages, 6)
+}
+func TestSingleLineToolPayloadWorkIsBoundedByViewport(t *testing.T) {
+	makeModel := func(result string) *model {
+
+		m := newModel(context.Background(), &fakeDataClient{}, Options{})
+		m.width, m.height, m.focus, m.showTools = 100, 30, 2, true
+		m.detail = &service.SessionDetail{Session: db.Session{
+			ID: "session", MessageCount: 1,
+		}}
+		m.messages = []db.Message{{
+			ID: 1, SessionID: "session", Role: "assistant", Content: "done",
+			ToolCalls: []db.ToolCall{{
+				ToolName: "Read", ResultContent: result,
+			}},
+		}}
+		return m
+	}
+	small := makeModel(strings.Repeat("x", 1<<10))
+	large := makeModel(strings.Repeat("x", 1<<20))
+	smallAllocs := testing.AllocsPerRun(3, func() { _ = small.View() })
+	largeAllocs := testing.AllocsPerRun(3, func() { _ = large.View() })
+
+	assert.Less(t, largeAllocs, smallAllocs*2,
+		"single-line tool payload work must not scale with hidden bytes")
 }
 
 func TestTranscriptRenderWorkIsBoundedByViewport(t *testing.T) {
@@ -178,6 +302,29 @@ func BenchmarkModelViewLongTranscript(b *testing.B) {
 	}
 }
 
+func BenchmarkModelViewAdaptiveMarkdown(b *testing.B) {
+	for _, size := range []int{12 << 10, 100 << 10, 1 << 20} {
+		b.Run(fmt.Sprintf("bytes-%d", size), func(b *testing.B) {
+			m := newModel(context.Background(), &fakeDataClient{}, Options{})
+			m.width, m.height, m.focus = 100, 30, 2
+			m.detail = &service.SessionDetail{Session: db.Session{
+				ID: "session", MessageCount: 1,
+			}}
+			m.messages = []db.Message{{
+				ID: 1, SessionID: "session", Role: "assistant",
+				Content: "## Result\n\n" + strings.Repeat("word ", size/5),
+			}}
+			_ = m.View()
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				m.clearRenderedMessages()
+				benchmarkViewContent = m.View().Content
+			}
+		})
+	}
+}
 func BenchmarkModelViewToolResult(b *testing.B) {
 	for _, lineCount := range []int{100, 10_000} {
 		b.Run(fmt.Sprintf("lines-%d", lineCount), func(b *testing.B) {

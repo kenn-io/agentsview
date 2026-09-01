@@ -242,9 +242,9 @@ func TestClientLoadsSessionExtrasConcurrently(t *testing.T) {
 
 	require.NoError(t, <-errs)
 	assert.Equal(t, map[string]bool{
-		"/api/v1/sessions/s1/activity": true,
-		"/api/v1/sessions/s1/timing":   true,
-		"/api/v1/sessions/s1/usage":    true,
+		"/api/v1/sessions/s1/activity":       true,
+		"/api/v1/sessions/s1/timing-summary": true,
+		"/api/v1/sessions/s1/usage":          true,
 	}, seen)
 	assert.NotNil(t, extras.Activity)
 	assert.NotNil(t, extras.Timing)

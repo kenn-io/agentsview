@@ -93,7 +93,7 @@ type OrdinalsResponse struct {
 // SessionExtras contains the detail panels loaded with a transcript.
 type SessionExtras struct {
 	Activity *db.SessionActivityResponse
-	Timing   *db.SessionTiming
+	Timing   *db.SessionTimingSummary
 	Usage    *db.SessionUsage
 }
 
@@ -214,7 +214,7 @@ func (c *Client) GetSession(ctx context.Context, id string) (*service.SessionDet
 func (c *Client) SessionExtras(ctx context.Context, id string) (SessionExtras, error) {
 	sid := url.PathEscape(id)
 	var activityResponse db.SessionActivityResponse
-	var timing db.SessionTiming
+	var timing db.SessionTimingSummary
 	var usage db.SessionUsage
 	var activityErr, timingErr, usageErr error
 	var wg sync.WaitGroup
@@ -225,7 +225,7 @@ func (c *Client) SessionExtras(ctx context.Context, id string) (SessionExtras, e
 	}()
 	go func() {
 		defer wg.Done()
-		timingErr = c.get(ctx, "/api/v1/sessions/"+sid+"/timing", nil, &timing)
+		timingErr = c.get(ctx, "/api/v1/sessions/"+sid+"/timing-summary", nil, &timing)
 	}()
 	go func() {
 		defer wg.Done()
