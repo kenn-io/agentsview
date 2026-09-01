@@ -7,7 +7,7 @@
 {% endif %}
 <header class="{{ class }}" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="{{ lang.t('header') }}">
-    <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}" class="md-header__button md-logo agentsview-logo-link" aria-label="{{ config.site_name }}" data-md-component="logo">
+    <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}" class="md-header__button md-logo agentsview-logo-link" aria-label="{{ config.site_name }}" data-md-component="logo" data-preview="">
       <span class="agentsview-logo-mark" aria-hidden="true">AV</span>
     </a>
     <label class="md-header__button md-icon" for="__drawer" aria-label="{{ lang.t('nav') }}">
