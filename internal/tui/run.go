@@ -15,12 +15,14 @@ import (
 
 // Options configures a TUI process after the command resolves its daemon.
 type Options struct {
-	BaseURL   string
-	Token     string
-	ReadOnly  bool
-	StatePath string
-	Timezone  string
-	Open      func(string) error
+	BaseURL         string
+	Token           string
+	ReadOnly        bool
+	ResolveReadOnly bool
+	StartupSync     bool
+	StatePath       string
+	Timezone        string
+	Open            func(string) error
 }
 
 // Run starts the interactive terminal interface.
@@ -42,14 +44,6 @@ func Run(ctx context.Context, opts Options) error {
 		opts.Open = openLocation
 	}
 	client := NewClient(opts.BaseURL, opts.Token, opts.ReadOnly)
-	settingsCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	settings, err := client.Settings(settingsCtx)
-	cancel()
-	if err != nil {
-		return fmt.Errorf("load daemon settings: %w", err)
-	}
-	opts.ReadOnly = settings.ReadOnly
-	client.readOnly = settings.ReadOnly
 	program := tea.NewProgram(newModel(ctx, client, opts), tea.WithContext(ctx))
 	_, err = program.Run()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) {

@@ -29,6 +29,7 @@ import (
 type APIError struct {
 	Status  int
 	Message string
+	Headers http.Header
 }
 
 func (e *APIError) Error() string {
@@ -200,6 +201,7 @@ func (c *Client) Settings(ctx context.Context) (*Settings, error) {
 	if err := c.get(ctx, "/api/v1/settings", nil, &settings); err != nil {
 		return nil, err
 	}
+	c.readOnly = settings.ReadOnly
 	return &settings, nil
 }
 
@@ -653,6 +655,16 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (string, error) {
 		return m.Kind + "ned message", c.do(ctx, method, path, map[string]any{"note": nullableString(m.Value)}, nil)
 	case "sync", "resync":
 		return m.Kind + " complete", c.do(ctx, http.MethodPost, "/api/v1/"+m.Kind, map[string]any{}, nil)
+	case "startup-sync":
+		err := c.do(ctx, http.MethodPost, "/api/v1/sync", map[string]any{}, nil)
+		var apiErr *APIError
+		if errors.As(err, &apiErr) &&
+			apiErr.Headers.Get("X-Agentsview-Resync-Required") != "" {
+			err = c.do(
+				ctx, http.MethodPost, "/api/v1/resync", map[string]any{}, nil,
+			)
+		}
+		return "sync complete", err
 	case "publish-session":
 		var out PublishResult
 		path := "/api/v1/sessions/" + sid + "/publish?secret=" + strconv.FormatBool(m.Flag)
@@ -930,7 +942,10 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		return &APIError{Status: resp.StatusCode, Message: apiMessage(b)}
+		return &APIError{
+			Status: resp.StatusCode, Message: apiMessage(b),
+			Headers: resp.Header.Clone(),
+		}
 	}
 	if resp.StatusCode == http.StatusNoContent {
 		return nil

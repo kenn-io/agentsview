@@ -20,7 +20,7 @@ type model struct {
 	client                                             DataClient
 	statePath                                          string
 	strings                                            stringsTable
-	readOnly                                           bool
+	readOnly, resolveReadOnly, startupSync             bool
 	page                                               Page
 	navIndex, focus, selected, messageSelected, scroll int
 	width, height                                      int
@@ -120,6 +120,11 @@ type sessionExtrasLoadedMsg struct {
 	err        error
 }
 
+type settingsLoadedMsg struct {
+	settings *Settings
+	err      error
+}
+
 type findLoadedMsg struct {
 	generation uint64
 	ordinals   []int
@@ -161,7 +166,9 @@ func newModel(ctx context.Context, client DataClient, opts Options) *model {
 	}
 	m := &model{
 		ctx: ctx, client: client, statePath: opts.StatePath, strings: systemStrings(),
-		readOnly: opts.ReadOnly, page: state.Page, navIndex: nav, selected: 0,
+		readOnly: opts.ReadOnly, resolveReadOnly: opts.ResolveReadOnly,
+		startupSync: opts.StartupSync,
+		page:        state.Page, navIndex: nav, selected: 0,
 		query: PageQuery{
 			Project: state.Project, Agent: state.Agent, Machine: state.Machine,
 			From: state.From, To: state.To, Terms: state.Terms, Timezone: opts.Timezone,
@@ -206,7 +213,17 @@ func newModel(ctx context.Context, client DataClient, opts Options) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.loadCurrent(), connectEventsCmd(m.ctx, m.client))
+	commands := []tea.Cmd{
+		m.loadCurrent(),
+		connectEventsCmd(m.ctx, m.client),
+	}
+	if m.resolveReadOnly {
+		commands = append(commands, m.loadSettings())
+	}
+	if m.startupSync {
+		commands = append(commands, m.mutate(Mutation{Kind: "startup-sync"}))
+	}
+	return tea.Batch(commands...)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -294,6 +311,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.extras = msg.extras
+		return m, nil
+	case settingsLoadedMsg:
+		if msg.err != nil {
+			m.errText = msg.err.Error()
+			return m, nil
+		}
+		if msg.settings != nil {
+			m.readOnly = msg.settings.ReadOnly
+		}
 		return m, nil
 	case findLoadedMsg:
 		if msg.generation != m.generation {
@@ -1213,6 +1239,23 @@ func (m *model) mutate(mutation Mutation) tea.Cmd {
 		defer cancel()
 		message, err := m.client.Mutate(ctx, mutation)
 		return mutationDoneMsg{message: message, err: err}
+	}
+}
+
+func (m *model) loadSettings() tea.Cmd {
+	client, ok := m.client.(interface {
+		Settings(context.Context) (*Settings, error)
+	})
+	if !ok {
+		return func() tea.Msg {
+			return settingsLoadedMsg{err: errors.New("daemon settings unavailable")}
+		}
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
+		defer cancel()
+		settings, err := client.Settings(ctx)
+		return settingsLoadedMsg{settings: settings, err: err}
 	}
 }
 

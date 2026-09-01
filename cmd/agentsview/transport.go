@@ -72,6 +72,7 @@ type transport struct {
 	DirectIncompatible bool // live daemon owns DB but cannot serve this client
 	DirectReason       string
 	Runtime            *DaemonRuntime
+	Started            bool // this resolution launched or replaced the daemon
 }
 
 type customPricingStore interface {
@@ -249,7 +250,7 @@ func ensureTransportContext(
 			if err != nil {
 				return transport{}, err
 			}
-			return transportFromRuntime(rt), nil
+			return transportFromStartedRuntime(rt), nil
 		}
 		return tr, nil
 	}
@@ -269,7 +270,7 @@ func ensureTransportContext(
 			if err != nil {
 				return transport{}, err
 			}
-			return transportFromRuntime(rt), nil
+			return transportFromStartedRuntime(rt), nil
 		}
 	}
 	if intent == transportIntentRead {
@@ -299,7 +300,7 @@ func ensureTransportContext(
 		if err != nil {
 			return transport{}, err
 		}
-		return transportFromRuntime(rt), nil
+		return transportFromStartedRuntime(rt), nil
 	}
 	if daemonAutostartDisabled() {
 		return tr, nil
@@ -320,7 +321,7 @@ func ensureTransportContext(
 	if err != nil {
 		return transport{}, err
 	}
-	return transportFromRuntime(rt), nil
+	return transportFromStartedRuntime(rt), nil
 }
 
 func waitForBackgroundLaunchBeforeArchiveWrite(
@@ -428,6 +429,12 @@ func transportFromRuntime(rt *DaemonRuntime) transport {
 		ReadOnly: rt.ReadOnly,
 		Runtime:  rt,
 	}
+}
+
+func transportFromStartedRuntime(rt *DaemonRuntime) transport {
+	tr := transportFromRuntime(rt)
+	tr.Started = true
+	return tr
 }
 
 // urlFromDaemonRuntime returns the HTTP URL a CLI client should use

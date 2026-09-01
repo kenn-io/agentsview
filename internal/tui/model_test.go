@@ -27,11 +27,20 @@ type fakeDataClient struct {
 	sessionExtrasFn func(context.Context, string) (SessionExtras, error)
 	messagesFn      func(context.Context, string, service.MessageFilter) (*service.MessageList, error)
 	loadPageFn      func(context.Context, Page, PageQuery) (PageData, error)
+	settingsFn      func(context.Context) (*Settings, error)
+	mutateFn        func(context.Context, Mutation) (string, error)
 	pageUpdates     <-chan pageUpdate
 }
 
 func (f *fakeDataClient) ListSessions(context.Context, service.ListFilter) (*service.SessionList, error) {
 	return f.list, nil
+}
+
+func (f *fakeDataClient) Settings(ctx context.Context) (*Settings, error) {
+	if f.settingsFn != nil {
+		return f.settingsFn(ctx)
+	}
+	return &Settings{}, nil
 }
 
 func (f *fakeDataClient) GetSession(ctx context.Context, id string) (*service.SessionDetail, error) {
@@ -127,7 +136,12 @@ func (f *fakeDataClient) LoadPageUpdates(
 ) (<-chan pageUpdate, bool) {
 	return f.pageUpdates, f.pageUpdates != nil
 }
-func (f *fakeDataClient) Mutate(_ context.Context, mutation Mutation) (string, error) {
+func (f *fakeDataClient) Mutate(
+	ctx context.Context, mutation Mutation,
+) (string, error) {
+	if f.mutateFn != nil {
+		return f.mutateFn(ctx, mutation)
+	}
 	f.mutations = append(f.mutations, mutation)
 	return "done", nil
 }
@@ -135,6 +149,73 @@ func (*fakeDataClient) WatchEvents(context.Context) (<-chan ServerEvent, error) 
 	events := make(chan ServerEvent)
 	close(events)
 	return events, nil
+}
+
+func TestInitListsSessionsWhileStartupWorkContinues(t *testing.T) {
+	settingsStarted := make(chan struct{})
+	syncStarted := make(chan Mutation, 1)
+	release := make(chan struct{})
+	fake := &fakeDataClient{
+		list: &service.SessionList{Sessions: []db.Session{{ID: "visible"}}},
+		settingsFn: func(ctx context.Context) (*Settings, error) {
+			close(settingsStarted)
+			select {
+			case <-release:
+				return &Settings{}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+		mutateFn: func(ctx context.Context, mutation Mutation) (string, error) {
+			syncStarted <- mutation
+			select {
+			case <-release:
+				return "sync complete", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+	}
+	m := newModel(t.Context(), fake, Options{
+		ResolveReadOnly: true,
+		StartupSync:     true,
+	})
+
+	command := m.Init()
+	batch, ok := command().(tea.BatchMsg)
+	require.True(t, ok)
+	require.Len(t, batch, 4)
+	results := make(chan tea.Msg, len(batch))
+	for _, load := range batch {
+		go func(cmd tea.Cmd) { results <- cmd() }(load)
+	}
+
+	select {
+	case <-settingsStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "settings request did not start")
+	}
+	select {
+	case mutation := <-syncStarted:
+		assert.Equal(t, Mutation{Kind: "startup-sync"}, mutation)
+	case <-time.After(time.Second):
+		require.FailNow(t, "startup sync did not start")
+	}
+	var listed bool
+	for range 2 {
+		select {
+		case result := <-results:
+			if msg, ok := result.(sessionsLoadedMsg); ok {
+				require.NotNil(t, msg.page)
+				assert.Equal(t, "visible", msg.page.Sessions[0].ID)
+				listed = true
+			}
+		case <-time.After(time.Second):
+			require.FailNow(t, "session list waited for startup work")
+		}
+	}
+	assert.True(t, listed)
+	close(release)
 }
 
 func TestModelIgnoresStaleSessionPage(t *testing.T) {

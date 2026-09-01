@@ -44,10 +44,11 @@ func runTUICommand(cmd *cobra.Command) error {
 		}
 		return runTUI(cmd.Context(), tuiterm.Options{
 			BaseURL: strings.TrimRight(remote, "/"), Token: token,
-			StatePath: statePath,
+			ReadOnly: true, ResolveReadOnly: true, StatePath: statePath,
 		})
 	}
 
+	cfg.SkipInitialSync = !cfg.NoSync
 	tr, err := ensureTransportContext(
 		cmd.Context(), &cfg, transportIntentArchiveWrite, 0,
 	)
@@ -59,6 +60,7 @@ func runTUICommand(cmd *cobra.Command) error {
 	}
 	return runTUI(cmd.Context(), tuiterm.Options{
 		BaseURL: tr.URL, Token: cfg.AuthToken, ReadOnly: tr.ReadOnly,
-		StatePath: statePath,
+		StartupSync: tr.Started && !cfg.NoSync && !tr.ReadOnly,
+		StatePath:   statePath,
 	})
 }

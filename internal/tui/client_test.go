@@ -39,6 +39,51 @@ func TestClientMutationAuthenticatesAndSetsOrigin(t *testing.T) {
 	assert.Equal(t, "Bearer secret-token", gotAuth)
 }
 
+func TestClientStartupSyncRetriesRequiredResync(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/v1/sync":
+			w.Header().Set("X-Agentsview-Resync-Required", "true")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"error":"archive data version changed"}`)
+		case "/api/v1/resync":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	message, err := NewClient(server.URL, "", false).Mutate(
+		context.Background(), Mutation{Kind: "startup-sync"},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "sync complete", message)
+	assert.Equal(t, []string{"/api/v1/sync", "/api/v1/resync"}, paths)
+}
+
+func TestClientStartupSyncDoesNotResyncOrdinaryConflict(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, `{"error":"sync already running"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := NewClient(server.URL, "", false).Mutate(
+		context.Background(), Mutation{Kind: "startup-sync"},
+	)
+
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, "sync already running", apiErr.Message)
+	assert.Equal(t, 1, requests)
+}
+
 func TestClientKeepsProvisionedAuthenticationToken(t *testing.T) {
 	var request int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
