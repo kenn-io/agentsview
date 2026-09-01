@@ -8,7 +8,8 @@ if [[ "$command_name" != "build" && "$command_name" != "serve" ]]; then
 fi
 shift || true
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Physical path so the output-directory guard compares canonical paths.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 docs_root="$script_dir"
 site_dir="${AGENTSVIEW_DOCS_SITE_DIR:-site}"
 site_output_dir="$docs_root/$site_dir"
