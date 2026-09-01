@@ -304,9 +304,9 @@ h3 {
 h1 {
   max-width: 21ch;
   margin-bottom: 1.5rem;
-  font-size: clamp(2.6rem, 7vw, 5.25rem);
+  font-size: clamp(1.8rem, 4.9vw, 3.7rem);
   font-weight: 500;
-  letter-spacing: -0.05em;
+  letter-spacing: -0.04em;
 }
 
 h2 {
@@ -854,7 +854,7 @@ dialog img {
   }
 
   h1 {
-    font-size: clamp(2.3rem, 12vw, 3.6rem);
+    font-size: clamp(1.6rem, 8.4vw, 2.5rem);
   }
 
   .proof-grid,
