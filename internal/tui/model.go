@@ -415,6 +415,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reconnectMsg:
 		return m, connectEventsCmd(m.ctx, m.client)
 	}
+	if m.inputMode != "" {
+		var command tea.Cmd
+		m.input, command = m.input.Update(msg)
+		return m, command
+	}
 	return m, nil
 }
 

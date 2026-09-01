@@ -279,7 +279,7 @@ func TestUsageRendersCompletedRankingWhileSummaryLoads(t *testing.T) {
 	assert.Contains(t, report, "fast result")
 	assert.NotContains(t, report, m.strings.Loading)
 }
-func TestFilterEditorReusesRenderedBody(t *testing.T) {
+func TestFilterEditorAvoidsRenderingPageBody(t *testing.T) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
 	m.width, m.height, m.focus = 160, 50, 2
 	m.detail = &service.SessionDetail{Session: db.Session{
@@ -299,11 +299,11 @@ func TestFilterEditorReusesRenderedBody(t *testing.T) {
 		benchmarkViewContent = m.View().Content
 	})
 	m.inputMode = "filter-project"
-	cachedRenderAllocs := testing.AllocsPerRun(3, func() {
+	editorRenderAllocs := testing.AllocsPerRun(3, func() {
 		benchmarkViewContent = m.View().Content
 	})
 
-	assert.Less(t, cachedRenderAllocs, fullRenderAllocs/10)
+	assert.Less(t, editorRenderAllocs, fullRenderAllocs/5)
 }
 
 func BenchmarkModelViewLongTranscript(b *testing.B) {

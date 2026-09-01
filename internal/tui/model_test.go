@@ -534,6 +534,7 @@ func TestUnchangedNavigationFilterSkipsReload(t *testing.T) {
 
 func TestNavigationFiltersAreKeyboardEditable(t *testing.T) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.width, m.height = 100, 30
 	m.filter.Project, m.query.Project = "old-project", "old-project"
 	m.navIndex = len(pages) - 1
 
@@ -547,6 +548,10 @@ func TestNavigationFiltersAreKeyboardEditable(t *testing.T) {
 	require.NotNil(t, command)
 	assert.Equal(t, "filter-project", m.inputMode)
 	assert.Equal(t, "old-project", m.input.Value())
+	rendered := m.View().Content
+	assert.Contains(t, rendered, "Edit project filter")
+	assert.Contains(t, rendered, "old-project")
+	assert.Contains(t, rendered, "Enter applies the value")
 
 	m.input.SetValue("new-project")
 	next, command = m.updateKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -562,6 +567,15 @@ func TestNavigationFiltersAreKeyboardEditable(t *testing.T) {
 	require.NotNil(t, command)
 	assert.True(t, m.filter.IncludeOneShot)
 	assert.True(t, m.query.IncludeOneShot)
+}
+
+func TestFilterEditorAcceptsPasteMessages(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	_ = m.beginInputValue("filter-project", "")
+
+	next, _ := m.Update(tea.PasteMsg{Content: "agentsview"})
+
+	assert.Equal(t, "agentsview", next.(*model).input.Value())
 }
 
 func TestWindowLoadSelectsAnchorOrdinal(t *testing.T) {

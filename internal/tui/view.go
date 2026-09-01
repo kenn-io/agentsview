@@ -57,22 +57,28 @@ func (m *model) render(width, height int) string {
 	header := m.renderHeader(width)
 	footer := m.renderFooter(width)
 	bodyHeight := max(3, height-lipgloss.Height(header)-lipgloss.Height(footer))
-	body := m.renderedBody
-	reuseBody := (m.inputMode != "" || m.reuseRenderedBodyOnce) &&
-		!m.renderedBodyDirty
-	if !reuseBody || body == "" ||
-		m.renderedBodyWidth != width || m.renderedBodyHeight != bodyHeight {
-		if m.help {
-			body = m.renderHelp(width, bodyHeight)
-		} else if m.confirm != nil {
-			body = m.renderConfirm(width, bodyHeight)
-		} else {
-			body = m.renderPage(width, bodyHeight)
+	filterName, filterEditor := strings.CutPrefix(m.inputMode, "filter-")
+	var body string
+	if filterEditor {
+		body = m.renderFilterEditor(filterName, width, bodyHeight)
+	} else {
+		body = m.renderedBody
+		reuseBody := (m.inputMode != "" || m.reuseRenderedBodyOnce) &&
+			!m.renderedBodyDirty
+		if !reuseBody || body == "" ||
+			m.renderedBodyWidth != width || m.renderedBodyHeight != bodyHeight {
+			if m.help {
+				body = m.renderHelp(width, bodyHeight)
+			} else if m.confirm != nil {
+				body = m.renderConfirm(width, bodyHeight)
+			} else {
+				body = m.renderPage(width, bodyHeight)
+			}
+			m.renderedBody = body
+			m.renderedBodyWidth, m.renderedBodyHeight = width, bodyHeight
+			m.renderedBodyDirty = false
 		}
-		m.renderedBody = body
-		m.renderedBodyWidth, m.renderedBodyHeight = width, bodyHeight
 	}
-	m.renderedBodyDirty = false
 	m.reuseRenderedBodyOnce = false
 	return fitHeight(header+"\n"+body+"\n"+footer, height)
 }
@@ -103,11 +109,15 @@ func (m *model) renderHeader(width int) string {
 
 func (m *model) renderFooter(width int) string {
 	if m.inputMode != "" {
+		if _, filterEditor := strings.CutPrefix(m.inputMode, "filter-"); filterEditor {
+			return truncateWidth(
+				mutedStyle.Render("Enter apply  Esc cancel  empty value clears filter"),
+				width,
+			)
+		}
 		prefix := ":"
 		if m.inputMode == "search" {
 			prefix = "/"
-		} else if name, ok := strings.CutPrefix(m.inputMode, "filter-"); ok {
-			prefix = name + ":"
 		}
 		m.input.SetWidth(max(1, width-lipgloss.Width(prefix)-1))
 		return truncateWidth(activeStyle.Render(prefix)+" "+m.input.View(), width)
@@ -125,6 +135,18 @@ func (m *model) renderFooter(width int) string {
 	}
 	available := max(0, width-lipgloss.Width(right)-2)
 	return truncateWidth(mutedStyle.Render(truncateWidth(left, available))+"  "+right, width)
+}
+
+func (m *model) renderFilterEditor(name string, width, height int) string {
+	m.input.SetWidth(max(1, width-8))
+	lines := []string{
+		titleStyle.Render("Edit " + safe(name) + " filter"),
+		"",
+		m.input.View(),
+		"",
+		mutedStyle.Render("Enter applies the value. Esc cancels. An empty value clears the filter."),
+	}
+	return panel(strings.Join(lines, "\n"), width, height, true)
 }
 
 func (m *model) renderPage(width, height int) string {
