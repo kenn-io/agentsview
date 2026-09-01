@@ -15,8 +15,13 @@ RUN npm run build
 
 FROM golang:1.27.0-bookworm AS build
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential ca-certificates \
+COPY docker/debian-*.list /etc/apt/mirrors/
+RUN sed -i \
+      -e 's#URIs: http://deb.debian.org/debian$#URIs: mirror+file:/etc/apt/mirrors/debian-mirrors.list#' \
+      -e 's#URIs: http://deb.debian.org/debian-security$#URIs: mirror+file:/etc/apt/mirrors/debian-security-mirrors.list#' \
+      /etc/apt/sources.list.d/debian.sources \
+    && timeout 90s apt-get -o Acquire::http::Timeout=10 update \
+    && timeout 90s apt-get -o Acquire::http::Timeout=10 install -y --no-install-recommends build-essential ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -55,8 +60,13 @@ RUN /out/agentsview --version
 
 FROM debian:bookworm-slim
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+COPY docker/debian-*.list /etc/apt/mirrors/
+RUN sed -i \
+      -e 's#URIs: http://deb.debian.org/debian$#URIs: mirror+file:/etc/apt/mirrors/debian-mirrors.list#' \
+      -e 's#URIs: http://deb.debian.org/debian-security$#URIs: mirror+file:/etc/apt/mirrors/debian-security-mirrors.list#' \
+      /etc/apt/sources.list.d/debian.sources \
+    && timeout 90s apt-get -o Acquire::http::Timeout=10 update \
+    && timeout 90s apt-get -o Acquire::http::Timeout=10 install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data /agents
 

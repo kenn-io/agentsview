@@ -1,0 +1,8 @@
+http://debian-archive.trafficmanager.net/debian/	priority:1
+http://deb.debian.org/debian/	priority:2
+http://ftp.us.debian.org/debian/	priority:3
+http://debian.csail.mit.edu/debian/	priority:3
+http://mirror.us.oneandone.net/debian/	priority:3
+http://mirrors.ocf.berkeley.edu/debian/	priority:3
+http://mirrors.accretive-networks.net/debian/	priority:3
+http://repo.ialab.dsu.edu/debian/	priority:3

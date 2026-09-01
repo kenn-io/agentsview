@@ -1,0 +1,7 @@
+http://debian-archive.trafficmanager.net/debian-security/	priority:1
+http://security.debian.org/debian-security/	priority:2
+http://debian.csail.mit.edu/debian-security/	priority:3
+http://mirror.us.oneandone.net/debian-security/	priority:3
+http://mirrors.ocf.berkeley.edu/debian-security/	priority:3
+http://mirrors.accretive-networks.net/debian-security/	priority:3
+http://repo.ialab.dsu.edu/debian-security/	priority:3
