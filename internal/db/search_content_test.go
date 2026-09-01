@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
@@ -23,10 +24,13 @@ func seedSearchSession(t *testing.T, d *DB, id, project string, msgs [][2]string
 		s.UserMessageCount = 2
 	})
 	var out []Message
+	baseTimestamp := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
 	for i, rc := range msgs {
 		out = append(out, Message{
 			SessionID: id, Ordinal: i, Role: rc[0],
-			Content: rc[1], Timestamp: "2026-05-20T12:00:0" + itoa(i) + "Z",
+			Content: rc[1],
+			Timestamp: baseTimestamp.Add(time.Duration(i) * time.Second).
+				Format(time.RFC3339),
 		})
 	}
 	require.NoError(t, d.ReplaceSessionMessages(id, out), "ReplaceSessionMessages")
@@ -50,6 +54,44 @@ func TestSearchContentSubstringMessages(t *testing.T) {
 	assert.Equal(t, 0, m.Ordinal, "Ordinal")
 	assert.Equal(t, "user", m.Role, "Role")
 	assert.Contains(t, m.Snippet, "DATABASE_URL", "snippet")
+}
+
+func TestSearchContentReceivesCanonicalProviderTimestamps(t *testing.T) {
+	tests := []struct {
+		name, timestamp, want string
+	}{
+		{"canonical", "2026-08-09T10:01:00Z", "2026-08-09T10:01:00Z"},
+		{"empty", "", ""},
+		{"malformed", "not-a-timestamp", ""},
+		{"date only", "2026-08-09", ""},
+		{"time only", "10:01:00", ""},
+		{"numeric", "2451545", ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			d := testDB(t)
+			seedSearchSession(t, d, "timestamp-search", "proj", [][2]string{
+				{"user", "find the timestamp row"},
+				{"assistant", "done"},
+			})
+			messages, err := d.GetAllMessages(t.Context(), "timestamp-search")
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			messages[0].Timestamp = test.timestamp
+			require.NoError(
+				t, d.ReplaceSessionMessages("timestamp-search", messages),
+			)
+
+			result, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "timestamp row", Mode: "substring",
+				Sources: []string{"messages"}, Limit: 50,
+			})
+
+			require.NoError(t, err)
+			require.Len(t, result.Matches, 1)
+			assert.Equal(t, test.want, result.Matches[0].Timestamp)
+		})
+	}
 }
 
 // TestSearchContentRedactsStraddlingSecret pins the default (non-reveal)

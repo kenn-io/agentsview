@@ -29,7 +29,7 @@ func (*replayingReadBackend) Name() string { return "replaying-read" }
 func (*replayingReadBackend) ReadOnly() bool { return true }
 
 func (*replayingReadBackend) Capabilities() BackendCapabilities {
-	return BackendCapabilities{}
+	return BackendCapabilities{AnalyticsDialect: SQLiteBunAnalyticsDialect()}
 }
 
 func (*replayingReadBackend) TimestampOrderExpr(column string) string {
@@ -103,6 +103,7 @@ func (*sessionContractBackend) Update(
 
 type countingQueryHook struct {
 	selects       int
+	deletes       int
 	queries       []string
 	insertQueries []string
 }
@@ -122,6 +123,9 @@ func (h *countingQueryHook) AfterQuery(
 	}
 	if event.Operation() == "INSERT" {
 		h.insertQueries = append(h.insertQueries, event.Query)
+	}
+	if event.Operation() == "DELETE" {
+		h.deletes++
 	}
 }
 
@@ -265,6 +269,7 @@ func TestBunStoreListSessionsIncludesSourceOnlyWhenRequested(t *testing.T) {
 	sourcePath := "/sessions/source.jsonl"
 	_, err = store.NewInsert().Model(&bunmodel.Session{
 		ID: "source-session", Project: "alpha", Machine: "host", Agent: "codex",
+		MessageCount: 1, UserMessageCount: 1,
 		CreatedAt: bunmodel.NewTimestamp(
 			time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC),
 		),

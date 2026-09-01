@@ -203,10 +203,10 @@ test.describe("Usage page", () => {
     const trigger = page
       .locator(".usage-toolbar .kit-filter-dropdown__btn")
       .first();
-    await trigger.click();
-    await expect(
-      page.locator(".usage-toolbar .kit-filter-dropdown__item").first(),
-    ).toBeVisible();
+		await trigger.click();
+		await expect(
+			page.locator(".usage-toolbar .kit-filter-dropdown__item").first(),
+		).toBeVisible();
 
     // Click "Deselect all".
     await page

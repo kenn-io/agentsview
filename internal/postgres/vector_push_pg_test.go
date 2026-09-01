@@ -1024,6 +1024,7 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	require.NoError(t, markSessionAliasBackfillDone(state))
 	require.NoError(t, markSessionProvenanceBackfillDone(state))
 	require.NoError(t, markTranscriptRevisionBackfillDone(sync.effectiveSyncState()))
+	require.NoError(t, state.SetSyncState(timestampNormalizationBackfillStateKey, "1"))
 
 	sync.vectorSource = &fakeVectorSource{
 		gen:    VectorGenerationInfo{Fingerprint: "fp-rt", Model: "m", Dimension: 4},

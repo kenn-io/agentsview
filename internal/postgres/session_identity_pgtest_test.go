@@ -96,7 +96,8 @@ func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
 	})
 	require.NoError(t, err, "ListSessions")
 	require.Len(t, page.Sessions, 1, "expected one listed session")
-	assert.Nil(t, page.Sessions[0].FilePath)
+	require.NotNil(t, page.Sessions[0].FilePath)
+	assert.Equal(t, filePath, *page.Sessions[0].FilePath)
 
 	visible, err := store.GetSession(ctx, sess.ID)
 	require.NoError(t, err, "GetSession")

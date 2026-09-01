@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 type PricingRowSource string
@@ -970,7 +971,7 @@ func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 			}
 		}
 		if row.Rates.UpdatedAt != nil {
-			t := row.Rates.UpdatedAt.UTC()
+			t := timeutil.NormalizePostgresTimestampPrecision(*row.Rates.UpdatedAt)
 			if latest == nil || t.After(*latest) {
 				latest = &t
 			}
@@ -979,7 +980,7 @@ func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 			if band.UpdatedAt == nil {
 				continue
 			}
-			t := band.UpdatedAt.UTC()
+			t := timeutil.NormalizePostgresTimestampPrecision(*band.UpdatedAt)
 			if latest == nil || t.After(*latest) {
 				latest = &t
 			}

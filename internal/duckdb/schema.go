@@ -23,8 +23,10 @@ import (
 // must be rebuilt with 'agentsview duckdb push --full'. v12 adds the 1h
 // cache-write rate columns, v13 adds row-level provider identity, and v14
 // combines the raw GenAI pricing document, canonical Bun physical keys, and
-// an opaque mirror generation token for coherent multi-query Quack reads.
-const SchemaVersion = 14
+// an opaque mirror generation token for coherent multi-query Quack reads. v15
+// rebuilds pricing timestamps written before canonical PostgreSQL-compatible
+// microsecond normalization.
+const SchemaVersion = 15
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 

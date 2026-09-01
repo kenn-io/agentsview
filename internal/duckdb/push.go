@@ -18,6 +18,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/db"
+	dbbunmodel "go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
@@ -39,24 +40,65 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	prices, removePatterns, err := db.PlanModelPricingSync(existing, prices)
+	targetOwnership, err := db.ReadSyncMetadata(
+		ctx, s.bun, pricingpkg.OpenRouterModelsMetaKey,
+	)
+	if err != nil {
+		return err
+	}
+	localOwnership, err := s.local.GetPricingMeta(pricingpkg.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	prices, removePatterns, ownership, err := db.PlanModelPricingSync(
+		existing, prices, targetOwnership, localOwnership,
+	)
 	if err != nil {
 		return fmt.Errorf("planning duckdb pricing sync: %w", err)
 	}
-	if len(prices) == 0 && len(removePatterns) == 0 {
+	if len(prices) == 0 && len(removePatterns) == 0 && ownership.Key == "" {
 		return s.syncGenAIPricing(ctx)
 	}
-
-	rows, bands, err := db.CanonicalModelPricingRows(prices)
-	if err != nil {
-		return fmt.Errorf("converting duckdb pricing rows: %w", err)
+	if err := s.removeDuckModelPricing(ctx, removePatterns); err != nil {
+		return err
 	}
-	if err := db.ReconcileModelPricingRows(
-		ctx, s.bun, rows, bands, removePatterns,
-	); err != nil {
-		return fmt.Errorf("syncing duckdb pricing rows: %w", err)
+	if len(prices) > 0 {
+		rows, bands, err := db.CanonicalModelPricingRows(prices)
+		if err != nil {
+			return fmt.Errorf("converting duckdb pricing rows: %w", err)
+		}
+		if err := db.UpsertModelPricingRows(ctx, s.bun, rows, bands); err != nil {
+			return fmt.Errorf("syncing duckdb pricing rows: %w", err)
+		}
+	}
+	if err := db.WriteSyncMetadata(ctx, s.bun, ownership); err != nil {
+		return fmt.Errorf("syncing duckdb pricing ownership: %w", err)
 	}
 	return s.syncGenAIPricing(ctx)
+}
+
+// DuckDB requires child and parent pricing deletes to commit separately.
+func (s *Sync) removeDuckModelPricing(
+	ctx context.Context, patterns []string,
+) error {
+	if len(patterns) == 0 {
+		return nil
+	}
+	for _, model := range []any{
+		(*dbbunmodel.ModelPricingBand)(nil),
+		(*dbbunmodel.ModelPricing)(nil),
+	} {
+		if err := s.bun.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			if _, err := tx.NewDelete().Model(model).
+				Where("model_pattern IN (?)", bun.List(patterns)).Exec(ctx); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("deleting retired duckdb pricing rows: %w", err)
+		}
+	}
+	return nil
 }
 
 type duckGenAIPricingQuerier interface {
@@ -98,41 +140,6 @@ func scanDuckGenAIPricing(
 		return nil, fmt.Errorf("reading duckdb GenAI pricing document: %w", err)
 	}
 	return &document, nil
-}
-
-func duckGenAIEffectivePricingRow(
-	document *db.GenAIPricingDocument,
-) (export.EffectivePricingRow, error) {
-	if document == nil {
-		embedded := pricingpkg.EmbeddedGenAIDocument()
-		return export.EffectivePricingRow{
-			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
-			GenAISource: export.PricingRowSourceEmbedded,
-		}, nil
-	}
-	parsed, err := pricingpkg.ParseGenAIDocument(
-		document.Data, document.Version, document.SourceRef,
-	)
-	if err != nil {
-		return export.EffectivePricingRow{}, fmt.Errorf(
-			"parsing duckdb GenAI pricing document: %w", err,
-		)
-	}
-	var updatedAt *time.Time
-	if parsedTime, parseErr := time.Parse(
-		time.RFC3339Nano, document.UpdatedAt,
-	); parseErr == nil {
-		utc := parsedTime.UTC()
-		updatedAt = &utc
-	}
-	source := export.PricingRowSourceFetched
-	if document.Source == db.GenAIPricingSourceEmbedded {
-		source = export.PricingRowSourceEmbedded
-	}
-	return export.EffectivePricingRow{
-		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
-		GenAISource: source, GenAIUpdatedAt: updatedAt,
-	}, nil
 }
 
 func (s *Sync) syncGenAIPricing(ctx context.Context) error {

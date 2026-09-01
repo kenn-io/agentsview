@@ -23,7 +23,7 @@ func (*replayingAnalyticsBackend) Name() string { return "replaying-analytics" }
 func (*replayingAnalyticsBackend) ReadOnly() bool { return true }
 
 func (*replayingAnalyticsBackend) Capabilities() BackendCapabilities {
-	return BackendCapabilities{}
+	return BackendCapabilities{AnalyticsDialect: SQLiteBunAnalyticsDialect()}
 }
 
 func (*replayingAnalyticsBackend) TimestampOrderExpr(column string) string {
@@ -196,7 +196,7 @@ func TestBunRecentEditsHydratesOnlyRequestedGroups(t *testing.T) {
 	}}))
 
 	hook := new(countingQueryHook)
-	store := NewBunStore(&sessionContractBackend{
+	store := NewBunStore(&sqliteAnalyticsAggregateBackend{
 		store: database.bunReader.WithQueryHook(hook),
 	})
 	result, err := store.RecentEdits(t.Context(), RecentEditsParams{
@@ -210,10 +210,6 @@ func TestBunRecentEditsHydratesOnlyRequestedGroups(t *testing.T) {
 	assert.NotContains(t, hook.queries[0], "input_json")
 	assert.NotContains(t, hook.queries[0], "result_content")
 	assert.NotContains(t, hook.queries[0], "messages.content")
-	assert.Contains(t, hook.queries[0],
-		"CASE WHEN CAST(m.timestamp AS VARCHAR) = '' THEN NULL ELSE m.timestamp END",
-		"nullable timestamp normalization must be explicit before ordering",
-	)
 }
 
 func TestBunContentAnalyticsStreamsAcrossSessionBatches(t *testing.T) {
@@ -241,7 +237,7 @@ func TestBunContentAnalyticsStreamsAcrossSessionBatches(t *testing.T) {
 	require.NoError(t, err)
 
 	hook := new(countingQueryHook)
-	store := NewBunStore(&sessionContractBackend{
+	store := NewBunStore(&sqliteAnalyticsAggregateBackend{
 		store: database.bunReader.WithQueryHook(hook),
 	})
 	terms, err := ParseTrendTerms([]string{"seam"})

@@ -457,7 +457,7 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		// privileged role provisioned. Raw custody is server-side only,
 		// so skip it here rather than failing every push; the full
 		// EnsureSchema bootstrap path still requires it.
-		if err := ensureRawIngestSchemaPG(ctx, s.pg); err != nil {
+		if err := ensureRawIngestSchemaPG(ctx, s.bunDB()); err != nil {
 			if !isInsufficientPrivilege(err) {
 				return err
 			}

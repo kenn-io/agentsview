@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -12,16 +11,35 @@ import (
 
 	"github.com/ccoveille/go-safecast/v2"
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/schema"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
-const bunPricingWriteBatchSize = 500
+const pricingRevisionLayout = "2006-01-02T15:04:05.000000Z07:00"
 
-const bunCursorUsageWriteBatchSize = 50
+type pricingRevision struct {
+	bunmodel.Timestamp
+}
+
+func (revision pricingRevision) AppendQuery(
+	gen schema.QueryGen, query []byte,
+) ([]byte, error) {
+	value := timeutil.NormalizePostgresTimestampPrecision(revision.Time)
+	if dialect, ok := gen.Dialect().(interface {
+		AppendCanonicalTimestamp([]byte, time.Time) []byte
+	}); ok {
+		return dialect.AppendCanonicalTimestamp(query, value), nil
+	}
+	query = append(query, '\'')
+	query = value.AppendFormat(query, pricingRevisionLayout)
+	query = append(query, '\'')
+	return query, nil
+}
 
 // CanonicalModelPricingRows converts public pricing records and their bands
 // into the common persistence models used by every adapter.
@@ -42,14 +60,18 @@ func CanonicalModelPricingRows(
 					"converting model pricing timestamp for %q: %w", pattern, err,
 				)
 			}
+			updatedAt.Time = timeutil.NormalizePostgresTimestampPrecision(
+				updatedAt.Time,
+			)
 		}
 		rows = append(rows, bunmodel.ModelPricing{
-			ModelPattern:                     pattern,
-			InputMicrodollarsPerMTok:         price.InputPerMTok.Microdollars,
-			OutputMicrodollarsPerMTok:        price.OutputPerMTok.Microdollars,
-			CacheCreationMicrodollarsPerMTok: price.CacheCreationPerMTok.Microdollars,
-			CacheReadMicrodollarsPerMTok:     price.CacheReadPerMTok.Microdollars,
-			UpdatedAt:                        updatedAt,
+			ModelPattern:                       pattern,
+			InputMicrodollarsPerMTok:           price.InputPerMTok.Microdollars,
+			OutputMicrodollarsPerMTok:          price.OutputPerMTok.Microdollars,
+			CacheCreationMicrodollarsPerMTok:   price.CacheCreationPerMTok.Microdollars,
+			CacheCreation1hMicrodollarsPerMTok: price.CacheCreation1hPerMTok.Microdollars,
+			CacheReadMicrodollarsPerMTok:       price.CacheReadPerMTok.Microdollars,
+			UpdatedAt:                          updatedAt,
 		})
 		for _, band := range price.Bands {
 			threshold, err := safecast.Convert[int64](band.AboveInputTokens)
@@ -72,14 +94,18 @@ func CanonicalModelPricingRows(
 						pattern, err,
 					)
 				}
+				bandUpdatedAt.Time = timeutil.NormalizePostgresTimestampPrecision(
+					bandUpdatedAt.Time,
+				)
 			}
 			bands = append(bands, bunmodel.ModelPricingBand{
 				ModelPattern: pattern, AboveInputTokens: threshold,
-				InputMicrodollarsPerMTok:         band.InputPerMTok.Microdollars,
-				OutputMicrodollarsPerMTok:        band.OutputPerMTok.Microdollars,
-				CacheCreationMicrodollarsPerMTok: band.CacheCreationPerMTok.Microdollars,
-				CacheReadMicrodollarsPerMTok:     band.CacheReadPerMTok.Microdollars,
-				UpdatedAt:                        bandUpdatedAt,
+				InputMicrodollarsPerMTok:           band.InputPerMTok.Microdollars,
+				OutputMicrodollarsPerMTok:          band.OutputPerMTok.Microdollars,
+				CacheCreationMicrodollarsPerMTok:   band.CacheCreationPerMTok.Microdollars,
+				CacheCreation1hMicrodollarsPerMTok: band.CacheCreation1hPerMTok.Microdollars,
+				CacheReadMicrodollarsPerMTok:       band.CacheReadPerMTok.Microdollars,
+				UpdatedAt:                          bandUpdatedAt,
 			})
 		}
 	}
@@ -103,6 +129,111 @@ func (s *BunStore) UpsertModelPricingContext(
 	return s.update(ctx, WriteArchive, func(store bun.IDB) error {
 		return UpsertModelPricingRows(ctx, store, rows, bands)
 	})
+}
+
+// ReconcileModelPricing atomically removes retired pricing, writes the desired
+// catalog, and advances SQLite-local refresh metadata through Bun.
+func (s *BunStore) ReconcileModelPricing(
+	prices []ModelPricing, removePatterns []string, meta PricingMeta,
+) error {
+	rows, bands, err := CanonicalModelPricingRows(prices)
+	if err != nil {
+		return err
+	}
+	patterns, err := validateModelPricingRows(rows, bands)
+	if err != nil {
+		return err
+	}
+	removePatterns = append([]string(nil), removePatterns...)
+	for index := range removePatterns {
+		removePatterns[index] = SanitizeUTF8(removePatterns[index])
+	}
+	meta.Key = SanitizeUTF8(meta.Key)
+	meta.Value = SanitizeUTF8(meta.Value)
+
+	ctx := context.Background()
+	return s.update(ctx, WriteArchive, func(store bun.IDB) error {
+		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			if err := deleteModelPricingRows(ctx, tx, removePatterns); err != nil {
+				return err
+			}
+			if len(rows) > 0 {
+				if err := upsertModelPricingRowsTx(
+					ctx, tx, rows, bands, patterns,
+				); err != nil {
+					return err
+				}
+			}
+			if meta.Key != "" {
+				if _, err := tx.NewRaw(`
+					INSERT INTO pricing_metadata (key, value)
+					VALUES (?, ?)
+					ON CONFLICT (key) DO UPDATE SET
+						value = EXCLUDED.value,
+						updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+					meta.Key, meta.Value,
+				).Exec(ctx); err != nil {
+					return fmt.Errorf("setting pricing meta %q: %w", meta.Key, err)
+				}
+			}
+			return nil
+		})
+	})
+}
+
+// GetPricingMeta reads SQLite-local pricing refresh state through the guarded
+// Bun view. Missing keys return an empty value.
+func (s *BunStore) GetPricingMeta(key string) (string, error) {
+	return s.GetPricingMetaContext(context.Background(), key)
+}
+
+// GetPricingMetaContext is GetPricingMeta with caller cancellation.
+func (s *BunStore) GetPricingMetaContext(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.view(ctx, func(store bun.IDB) error {
+		return store.NewSelect().Table("pricing_metadata").Column("value").
+			Where("key = ?", key).Scan(ctx, &value)
+	})
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading pricing meta %q: %w", key, err)
+	}
+	return value, nil
+}
+
+// ReadSyncMetadata reads adapter-local synchronization state through Bun.
+func ReadSyncMetadata(
+	ctx context.Context, store bun.IDB, key string,
+) (string, error) {
+	var value string
+	err := store.NewSelect().Table("sync_metadata").Column("value").
+		Where("key = ?", key).Scan(ctx, &value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading sync metadata %q: %w", key, err)
+	}
+	return value, nil
+}
+
+// WriteSyncMetadata upserts adapter-local synchronization state through Bun.
+func WriteSyncMetadata(
+	ctx context.Context, store bun.IDB, meta PricingMeta,
+) error {
+	if meta.Key == "" {
+		return nil
+	}
+	if _, err := store.NewRaw(`
+		INSERT INTO sync_metadata (key, value) VALUES (?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		SanitizeUTF8(meta.Key), SanitizeUTF8(meta.Value),
+	).Exec(ctx); err != nil {
+		return fmt.Errorf("writing sync metadata %q: %w", meta.Key, err)
+	}
+	return nil
 }
 
 // CanonicalCursorUsageEventRows converts append-only Cursor usage into
@@ -149,15 +280,13 @@ func CanonicalCursorUsageEventRows(
 func AppendCursorUsageEventRows(
 	ctx context.Context, store bun.IDB, rows []bunmodel.CursorUsageEvent,
 ) error {
-	for start := 0; start < len(rows); start += bunCursorUsageWriteBatchSize {
-		end := min(start+bunCursorUsageWriteBatchSize, len(rows))
-		batch := rows[start:end]
+	return writeCanonicalBatches(rows, func(batch []bunmodel.CursorUsageEvent) error {
 		if _, err := store.NewInsert().Model(&batch).ExcludeColumn("id").
 			On("CONFLICT DO NOTHING").Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("appending cursor usage rows: %w", err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // UpsertModelPricingRows writes canonical base prices and replaces the bands
@@ -168,14 +297,69 @@ func UpsertModelPricingRows(
 	prices []bunmodel.ModelPricing,
 	bands []bunmodel.ModelPricingBand,
 ) error {
+	patterns, err := validateModelPricingRows(prices, bands)
+	if err != nil {
+		return err
+	}
+	if len(prices) == 0 {
+		return nil
+	}
+
+	return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		return upsertModelPricingRowsTx(ctx, tx, prices, bands, patterns)
+	})
+}
+
+// ReconcileModelPricingRows atomically removes retired rows and writes the
+// desired canonical catalog on backends that support both operations in one
+// transaction.
+func ReconcileModelPricingRows(
+	ctx context.Context,
+	store bun.IDB,
+	prices []bunmodel.ModelPricing,
+	bands []bunmodel.ModelPricingBand,
+	removePatterns []string,
+) error {
+	return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		return ApplyModelPricingRows(ctx, tx, prices, bands, removePatterns)
+	})
+}
+
+// ApplyModelPricingRows applies one pricing plan to an existing Bun
+// transaction. Adapters use it when pricing rows and ownership metadata must
+// commit under the same target-side lock.
+func ApplyModelPricingRows(
+	ctx context.Context,
+	store bun.IDB,
+	prices []bunmodel.ModelPricing,
+	bands []bunmodel.ModelPricingBand,
+	removePatterns []string,
+) error {
+	patterns, err := validateModelPricingRows(prices, bands)
+	if err != nil {
+		return err
+	}
+	if err := deleteModelPricingRows(ctx, store, removePatterns); err != nil {
+		return err
+	}
+	if len(prices) == 0 {
+		return nil
+	}
+	return upsertModelPricingRowsTx(ctx, store, prices, bands, patterns)
+}
+
+func validateModelPricingRows(
+	prices []bunmodel.ModelPricing,
+	bands []bunmodel.ModelPricingBand,
+) ([]string, error) {
 	patterns := make([]string, 0, len(prices))
 	allowed := make(map[string]struct{}, len(prices))
 	for _, price := range prices {
 		if price.ModelPattern == "" {
-			return fmt.Errorf("upserting model pricing rows: empty model pattern")
+			return nil, fmt.Errorf("upserting model pricing rows: empty model pattern")
 		}
 		if _, exists := allowed[price.ModelPattern]; exists {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"upserting model pricing rows: duplicate model pattern %q",
 				price.ModelPattern,
 			)
@@ -185,90 +369,115 @@ func UpsertModelPricingRows(
 	}
 	for _, band := range bands {
 		if _, ok := allowed[band.ModelPattern]; !ok {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"upserting model pricing rows: band model %q has no base row",
 				band.ModelPattern,
 			)
 		}
 	}
-	if len(prices) == 0 {
+	return patterns, nil
+}
+
+func upsertModelPricingRowsTx(
+	ctx context.Context,
+	tx bun.IDB,
+	prices []bunmodel.ModelPricing,
+	bands []bunmodel.ModelPricingBand,
+	patterns []string,
+) error {
+	prices = append([]bunmodel.ModelPricing(nil), prices...)
+	bands = append([]bunmodel.ModelPricingBand(nil), bands...)
+	var existingPrices []bunmodel.ModelPricing
+	if err := tx.NewSelect().Model(&existingPrices).
+		Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
+		return fmt.Errorf("reading model pricing revisions: %w", err)
+	}
+	existingPriceByPattern := make(
+		map[string]bunmodel.ModelPricing, len(existingPrices),
+	)
+	for _, existing := range existingPrices {
+		existingPriceByPattern[existing.ModelPattern] = existing
+	}
+	defaultRevision := bunmodel.NewTimestamp(
+		timeutil.NormalizePostgresTimestampPrecision(time.Now()),
+	)
+	var existingBands []bunmodel.ModelPricingBand
+	if len(patterns) > 0 {
+		if err := tx.NewSelect().Model(&existingBands).
+			Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
+			return fmt.Errorf("reading model pricing band revisions: %w", err)
+		}
+	}
+	type bandKey struct {
+		pattern   string
+		threshold int64
+	}
+	existingBandByKey := make(
+		map[bandKey]bunmodel.ModelPricingBand, len(existingBands),
+	)
+	incomingBandKeys := make(map[bandKey]struct{}, len(bands))
+	bandContentChanged := make(map[string]bool, len(patterns))
+	for _, existing := range existingBands {
+		existingBandByKey[bandKey{
+			existing.ModelPattern, existing.AboveInputTokens,
+		}] = existing
+	}
+	for i := range bands {
+		key := bandKey{bands[i].ModelPattern, bands[i].AboveInputTokens}
+		incomingBandKeys[key] = struct{}{}
+		existing, ok := existingBandByKey[key]
+		if ok && modelPricingBandValuesEqual(existing, bands[i]) {
+			bands[i].UpdatedAt = existing.UpdatedAt
+			continue
+		}
+		bandContentChanged[bands[i].ModelPattern] = true
+		bands[i].UpdatedAt = nextPricingRevision(
+			existing.UpdatedAt, bands[i].UpdatedAt, defaultRevision,
+		)
+	}
+	for key := range existingBandByKey {
+		if _, ok := incomingBandKeys[key]; !ok {
+			bandContentChanged[key.pattern] = true
+		}
+	}
+	for i := range prices {
+		existing, ok := existingPriceByPattern[prices[i].ModelPattern]
+		if ok && modelPricingValuesEqual(existing, prices[i]) &&
+			!bandContentChanged[prices[i].ModelPattern] {
+			prices[i].UpdatedAt = existing.UpdatedAt
+			continue
+		}
+		prices[i].UpdatedAt = nextPricingRevision(
+			existing.UpdatedAt,
+			prices[i].UpdatedAt, defaultRevision,
+		)
+	}
+	if err := writeCanonicalBatches(prices, func(batch []bunmodel.ModelPricing) error {
+		if err := upsertModelPricingRowBatch(ctx, tx, batch); err != nil {
+			return fmt.Errorf("upserting model pricing rows: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return ReplaceModelPricingBandRows(ctx, tx, patterns, bands)
+}
+
+func deleteModelPricingRows(
+	ctx context.Context, store bun.IDB, patterns []string,
+) error {
+	if len(patterns) == 0 {
 		return nil
 	}
-
-	return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		prices = append([]bunmodel.ModelPricing(nil), prices...)
-		bands = append([]bunmodel.ModelPricingBand(nil), bands...)
-		var existingPrices []bunmodel.ModelPricing
-		if err := tx.NewSelect().Model(&existingPrices).
-			Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
-			return fmt.Errorf("reading model pricing revisions: %w", err)
-		}
-		existingPriceByPattern := make(
-			map[string]bunmodel.ModelPricing, len(existingPrices),
-		)
-		for _, existing := range existingPrices {
-			existingPriceByPattern[existing.ModelPattern] = existing
-		}
-		defaultRevision := bunmodel.NewTimestamp(time.Now())
-		var existingBands []bunmodel.ModelPricingBand
-		if len(patterns) > 0 {
-			if err := tx.NewSelect().Model(&existingBands).
-				Where("model_pattern IN (?)", bun.List(patterns)).Scan(ctx); err != nil {
-				return fmt.Errorf("reading model pricing band revisions: %w", err)
-			}
-		}
-		type bandKey struct {
-			pattern   string
-			threshold int64
-		}
-		existingBandByKey := make(
-			map[bandKey]bunmodel.ModelPricingBand, len(existingBands),
-		)
-		incomingBandKeys := make(map[bandKey]struct{}, len(bands))
-		bandContentChanged := make(map[string]bool, len(patterns))
-		for _, existing := range existingBands {
-			existingBandByKey[bandKey{
-				existing.ModelPattern, existing.AboveInputTokens,
-			}] = existing
-		}
-		for i := range bands {
-			key := bandKey{bands[i].ModelPattern, bands[i].AboveInputTokens}
-			incomingBandKeys[key] = struct{}{}
-			existing, ok := existingBandByKey[key]
-			if ok && modelPricingBandValuesEqual(existing, bands[i]) {
-				bands[i].UpdatedAt = existing.UpdatedAt
-				continue
-			}
-			bandContentChanged[bands[i].ModelPattern] = true
-			bands[i].UpdatedAt = nextPricingRevision(
-				existing.UpdatedAt, bands[i].UpdatedAt, defaultRevision,
-			)
-		}
-		for key := range existingBandByKey {
-			if _, ok := incomingBandKeys[key]; !ok {
-				bandContentChanged[key.pattern] = true
-			}
-		}
-		for i := range prices {
-			existing, ok := existingPriceByPattern[prices[i].ModelPattern]
-			if ok && modelPricingValuesEqual(existing, prices[i]) &&
-				!bandContentChanged[prices[i].ModelPattern] {
-				prices[i].UpdatedAt = existing.UpdatedAt
-				continue
-			}
-			prices[i].UpdatedAt = nextPricingRevision(
-				existing.UpdatedAt,
-				prices[i].UpdatedAt, defaultRevision,
-			)
-		}
-		for start := 0; start < len(prices); start += bunPricingWriteBatchSize {
-			end := min(start+bunPricingWriteBatchSize, len(prices))
-			if err := upsertModelPricingRowBatch(ctx, tx, prices[start:end]); err != nil {
-				return fmt.Errorf("upserting model pricing rows: %w", err)
-			}
-		}
-		return ReplaceModelPricingBandRows(ctx, tx, patterns, bands)
-	})
+	if _, err := store.NewDelete().Model((*bunmodel.ModelPricingBand)(nil)).
+		Where("model_pattern IN (?)", bun.List(patterns)).Exec(ctx); err != nil {
+		return fmt.Errorf("deleting model pricing bands: %w", err)
+	}
+	if _, err := store.NewDelete().Model((*bunmodel.ModelPricing)(nil)).
+		Where("model_pattern IN (?)", bun.List(patterns)).Exec(ctx); err != nil {
+		return fmt.Errorf("deleting model pricing rows: %w", err)
+	}
+	return nil
 }
 
 func upsertModelPricingRowBatch(
@@ -279,27 +488,30 @@ func upsertModelPricingRowBatch(
 		model_pattern, input_microdollars_per_mtok,
 		output_microdollars_per_mtok,
 		cache_creation_microdollars_per_mtok,
+		cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok, updated_at
 	) VALUES `)
-	args := make([]any, 0, len(rows)*6)
+	args := make([]any, 0, len(rows)*7)
 	for i, row := range rows {
 		if i > 0 {
 			query.WriteString(", ")
 		}
-		query.WriteString("(?, ?, ?, ?, ?, ?)")
+		query.WriteString("(?, ?, ?, ?, ?, ?, ?)")
 		args = append(args,
 			row.ModelPattern,
 			row.InputMicrodollarsPerMTok,
 			row.OutputMicrodollarsPerMTok,
 			row.CacheCreationMicrodollarsPerMTok,
+			row.CacheCreation1hMicrodollarsPerMTok,
 			row.CacheReadMicrodollarsPerMTok,
-			row.UpdatedAt,
+			pricingRevision{Timestamp: row.UpdatedAt},
 		)
 	}
 	query.WriteString(` ON CONFLICT (model_pattern) DO UPDATE SET
 		input_microdollars_per_mtok = EXCLUDED.input_microdollars_per_mtok,
 		output_microdollars_per_mtok = EXCLUDED.output_microdollars_per_mtok,
 		cache_creation_microdollars_per_mtok = EXCLUDED.cache_creation_microdollars_per_mtok,
+		cache_creation_1h_microdollars_per_mtok = EXCLUDED.cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok = EXCLUDED.cache_read_microdollars_per_mtok,
 		updated_at = EXCLUDED.updated_at`)
 	_, err := store.NewRaw(query.String(), args...).Exec(ctx)
@@ -313,6 +525,8 @@ func modelPricingValuesEqual(
 		left.OutputMicrodollarsPerMTok == right.OutputMicrodollarsPerMTok &&
 		left.CacheCreationMicrodollarsPerMTok ==
 			right.CacheCreationMicrodollarsPerMTok &&
+		left.CacheCreation1hMicrodollarsPerMTok ==
+			right.CacheCreation1hMicrodollarsPerMTok &&
 		left.CacheReadMicrodollarsPerMTok == right.CacheReadMicrodollarsPerMTok
 }
 
@@ -323,12 +537,17 @@ func modelPricingBandValuesEqual(
 		left.OutputMicrodollarsPerMTok == right.OutputMicrodollarsPerMTok &&
 		left.CacheCreationMicrodollarsPerMTok ==
 			right.CacheCreationMicrodollarsPerMTok &&
+		left.CacheCreation1hMicrodollarsPerMTok ==
+			right.CacheCreation1hMicrodollarsPerMTok &&
 		left.CacheReadMicrodollarsPerMTok == right.CacheReadMicrodollarsPerMTok
 }
 
 func nextPricingRevision(
 	existing, proposed, fallback bunmodel.Timestamp,
 ) bunmodel.Timestamp {
+	existing.Time = timeutil.NormalizePostgresTimestampPrecision(existing.Time)
+	proposed.Time = timeutil.NormalizePostgresTimestampPrecision(proposed.Time)
+	fallback.Time = timeutil.NormalizePostgresTimestampPrecision(fallback.Time)
 	if proposed.IsZero() {
 		proposed = fallback
 	}
@@ -372,13 +591,12 @@ func ReplaceModelPricingBandRows(
 		Where("model_pattern IN (?)", bun.List(modelPatterns)).Exec(ctx); err != nil {
 		return fmt.Errorf("deleting model pricing bands: %w", err)
 	}
-	for start := 0; start < len(bands); start += bunPricingWriteBatchSize {
-		end := min(start+bunPricingWriteBatchSize, len(bands))
-		if err := insertModelPricingBandRowBatch(ctx, store, bands[start:end]); err != nil {
+	return writeCanonicalBatches(bands, func(batch []bunmodel.ModelPricingBand) error {
+		if err := insertModelPricingBandRowBatch(ctx, store, batch); err != nil {
 			return fmt.Errorf("inserting model pricing bands: %w", err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func insertModelPricingBandRowBatch(
@@ -389,22 +607,24 @@ func insertModelPricingBandRowBatch(
 		model_pattern, above_input_tokens,
 		input_microdollars_per_mtok, output_microdollars_per_mtok,
 		cache_creation_microdollars_per_mtok,
+		cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok, updated_at
 	) VALUES `)
-	args := make([]any, 0, len(rows)*7)
+	args := make([]any, 0, len(rows)*8)
 	for i, row := range rows {
 		if i > 0 {
 			query.WriteString(", ")
 		}
-		query.WriteString("(?, ?, ?, ?, ?, ?, ?)")
+		query.WriteString("(?, ?, ?, ?, ?, ?, ?, ?)")
 		args = append(args,
 			row.ModelPattern,
 			row.AboveInputTokens,
 			row.InputMicrodollarsPerMTok,
 			row.OutputMicrodollarsPerMTok,
 			row.CacheCreationMicrodollarsPerMTok,
+			row.CacheCreation1hMicrodollarsPerMTok,
 			row.CacheReadMicrodollarsPerMTok,
-			row.UpdatedAt,
+			pricingRevision{Timestamp: row.UpdatedAt},
 		)
 	}
 	_, err := store.NewRaw(query.String(), args...).Exec(ctx)
@@ -445,12 +665,6 @@ func (s *BunStore) loadPricingMapFrom(
 		}
 	}
 
-	s.pricingMu.RLock()
-	custom := maps.Clone(s.pricing.custom)
-	effective := cloneModelRates(s.pricing.effective)
-	emptyCatalog := cloneModelRates(s.pricing.emptyCatalog)
-	s.pricingMu.RUnlock()
-
 	fallback := fallbackRateMap()
 	out := make(map[string]export.ModelRates)
 	for _, price := range prices {
@@ -458,10 +672,25 @@ func (s *BunStore) loadPricingMapFrom(
 		rates.Source = modelPricingSource(price, fallback)
 		out[price.ModelPattern] = rates
 	}
-	if len(out) == 0 {
-		maps.Copy(out, emptyCatalog)
+	s.mergePricingState(out)
+	genAI, err := bunGenAIEffectivePricingRow(ctx, store)
+	if err != nil {
+		return nil, err
 	}
-	for model, rate := range custom {
+	return append(pricingMapRows(out), genAI), nil
+}
+
+func (s *BunStore) mergePricingState(out map[string]export.ModelRates) {
+	s.pricingMu.RLock()
+	defer s.pricingMu.RUnlock()
+
+	if len(out) == 0 {
+		for model, rates := range s.pricing.emptyCatalog {
+			rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+			out[model] = rates
+		}
+	}
+	for model, rate := range s.pricing.custom {
 		out[model] = export.ModelRates{
 			InputPerMTok: money.Money{
 				Microdollars: rate.InputMicrodollarsPerMTok,
@@ -472,18 +701,19 @@ func (s *BunStore) loadPricingMapFrom(
 			CacheWritePerMTok: money.Money{
 				Microdollars: rate.CacheCreationMicrodollarsPerMTok,
 			},
+			CacheWrite1hPerMTok: money.Money{
+				Microdollars: rate.CacheCreation1hMicrodollarsPerMTok,
+			},
 			CacheReadPerMTok: money.Money{
 				Microdollars: rate.CacheReadMicrodollarsPerMTok,
 			},
 			Source: customPricingSource(),
 		}
 	}
-	maps.Copy(out, effective)
-	genAI, err := bunGenAIEffectivePricingRow(ctx, store)
-	if err != nil {
-		return nil, err
+	for model, rates := range s.pricing.effective {
+		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
+		out[model] = rates
 	}
-	return append(pricingMapRows(out), genAI), nil
 }
 
 func bunGenAIEffectivePricingRow(
@@ -576,6 +806,9 @@ func listBunModelPricing(
 			CacheCreationPerMTok: money.Money{
 				Microdollars: row.CacheCreationMicrodollarsPerMTok,
 			},
+			CacheCreation1hPerMTok: money.Money{
+				Microdollars: row.CacheCreation1hMicrodollarsPerMTok,
+			},
 			CacheReadPerMTok: money.Money{
 				Microdollars: row.CacheReadMicrodollarsPerMTok,
 			},
@@ -595,6 +828,9 @@ func listBunModelPricing(
 			CacheCreationPerMTok: money.Money{
 				Microdollars: row.CacheCreationMicrodollarsPerMTok,
 			},
+			CacheCreation1hPerMTok: money.Money{
+				Microdollars: row.CacheCreation1hMicrodollarsPerMTok,
+			},
 			CacheReadPerMTok: money.Money{
 				Microdollars: row.CacheReadMicrodollarsPerMTok,
 			},
@@ -611,6 +847,7 @@ type bunUsageProjection struct {
 	MessageOrdinal           *int                `bun:"message_ordinal"`
 	UsageTimestamp           *bunmodel.Timestamp `bun:"usage_timestamp"`
 	Model                    string              `bun:"model"`
+	ProviderID               string              `bun:"provider_id"`
 	TokenJSON                string              `bun:"token_json"`
 	InputTokens              int                 `bun:"input_tokens"`
 	OutputTokens             int                 `bun:"output_tokens"`
@@ -643,10 +880,12 @@ type bunUsageProjection struct {
 
 type bunDailyUsageProjection struct {
 	ID                       int64               `bun:"id"`
+	CandidateCount           int                 `bun:"candidate_count"`
 	SessionID                string              `bun:"session_id"`
 	MessageOrdinal           sql.NullInt64       `bun:"message_ordinal"`
 	UsageTimestamp           bunmodel.Timestamp  `bun:"usage_timestamp"`
 	Model                    string              `bun:"model"`
+	ProviderID               string              `bun:"provider_id"`
 	TokenJSON                string              `bun:"token_json"`
 	InputTokens              int                 `bun:"input_tokens"`
 	OutputTokens             int                 `bun:"output_tokens"`
@@ -712,25 +951,27 @@ const bunDailyUsageSessionColumns = `
 	s.created_at AS session_created_at,
 	s.termination_status AS termination_status`
 
-func bunMessageUsageColumns(timestampOrder func(string) string) string {
+func bunMessageUsageColumns() string {
 	return `
 	m.session_id AS session_id,
 	m.ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "m.timestamp") + ` AS usage_timestamp,
+	m.timestamp AS usage_timestamp,
 	m.model AS model,
+	m.provider_id AS provider_id,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
 	m.claude_request_id AS claude_request_id,
 	m.source_uuid AS source_uuid`
 }
 
-func bunEventUsageColumns(timestampOrder func(string) string) string {
+func bunEventUsageColumns() string {
 	return `
 	ue.id AS id,
 	ue.session_id AS session_id,
 	ue.message_ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "ue.occurred_at") + ` AS usage_timestamp,
+	ue.occurred_at AS usage_timestamp,
 	ue.model AS model,
+	ue.provider_id AS provider_id,
 	ue.input_tokens AS input_tokens,
 	ue.output_tokens AS output_tokens,
 	ue.cache_creation_input_tokens AS cache_creation_input_tokens,
@@ -743,32 +984,27 @@ func bunEventUsageColumns(timestampOrder func(string) string) string {
 	ue.dedup_key AS dedup_key`
 }
 
-func bunUsageTimestampColumn(
-	timestampOrder func(string) string, column string,
-) string {
-	return "CASE WHEN " + timestampOrder(bunNullableTimestamp(column)) +
-		" IS NULL THEN NULL ELSE " + column + " END"
-}
-
-func bunDailyMessageUsageColumns(timestampOrder func(string) string) string {
+func bunDailyMessageUsageColumns() string {
 	return `
 	m.session_id AS session_id,
 	m.ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "m.timestamp") + ` AS usage_timestamp,
+	m.timestamp AS usage_timestamp,
 	m.model AS model,
+	m.provider_id AS provider_id,
 	m.token_usage AS token_json,
 	m.claude_message_id AS claude_message_id,
 	m.claude_request_id AS claude_request_id,
 	m.source_uuid AS source_uuid`
 }
 
-func bunDailyEventUsageColumns(timestampOrder func(string) string) string {
+func bunDailyEventUsageColumns() string {
 	return `
 	ue.id AS id,
 	ue.session_id AS session_id,
 	ue.message_ordinal AS message_ordinal,
-	` + bunUsageTimestampColumn(timestampOrder, "ue.occurred_at") + ` AS usage_timestamp,
+	ue.occurred_at AS usage_timestamp,
 	ue.model AS model,
+	ue.provider_id AS provider_id,
 	ue.input_tokens AS input_tokens,
 	ue.output_tokens AS output_tokens,
 	ue.cache_creation_input_tokens AS cache_creation_input_tokens,
@@ -841,14 +1077,14 @@ func (s *BunStore) loadBunSessionUsageRows(
 		// is then attributed to its earliest session.
 		queryFilter = usageSnapshotInputFilter(filter)
 	}
+	if !matching {
+		return s.loadBunNormalizedDailyUsageRows(ctx, store, queryFilter, filter)
+	}
 	projections, err := s.loadBunDailyUsageProjections(
-		ctx, store, queryFilter, matching,
+		ctx, store, queryFilter, true,
 	)
 	if err != nil {
 		return nil, err
-	}
-	if !matching {
-		return normalizeBunDailyUsageProjections(projections, filter), nil
 	}
 	rows := make([]dailyUsageScanRow, 0, len(projections))
 	for _, row := range projections {
@@ -860,68 +1096,129 @@ func (s *BunStore) loadBunSessionUsageRows(
 func (s *BunStore) loadBunDailyUsageProjections(
 	ctx context.Context, store bun.IDB, filter UsageFilter, matching bool,
 ) ([]bunDailyUsageProjection, error) {
-	messageQuery, eventQuery := s.bunDailyUsageQueries(store, filter, matching)
-	var messages []bunDailyUsageProjection
-	if err := messageQuery.Scan(ctx, &messages); err != nil {
+	messageQuery, eventQuery := s.bunDailyUsageQueries(
+		store, filter, matching, time.Now().UTC(),
+	)
+	rows := make([]bunDailyUsageProjection, 0)
+	if err := streamBunDailyUsageProjections(
+		ctx, messageQuery, true, false,
+		func(row bunDailyUsageProjection) error {
+			rows = append(rows, row)
+			return nil
+		},
+	); err != nil {
 		return nil, fmt.Errorf("querying daily usage messages: %w", err)
 	}
-
-	var events []bunDailyUsageProjection
-	if err := eventQuery.Scan(ctx, &events); err != nil {
+	if err := streamBunDailyUsageProjections(
+		ctx, eventQuery, false, false,
+		func(row bunDailyUsageProjection) error {
+			rows = append(rows, row)
+			return nil
+		},
+	); err != nil {
 		return nil, fmt.Errorf("querying daily usage events: %w", err)
-	}
-
-	rows := make([]bunDailyUsageProjection, 0, len(messages)+len(events))
-	for _, row := range messages {
-		row.UsageSource = "message"
-		rows = append(rows, row)
-	}
-	for _, row := range events {
-		row.UsageDedupKey = dailyUsageEventProjectionDedupKey(row)
-		rows = append(rows, row)
 	}
 	return rows, nil
 }
 
-func normalizeBunDailyUsageProjections(
-	projections []bunDailyUsageProjection, filter UsageFilter,
-) []dailyUsageScanRow {
+func (s *BunStore) loadBunNormalizedDailyUsageRows(
+	ctx context.Context, store bun.IDB, queryFilter, filter UsageFilter,
+) ([]dailyUsageScanRow, error) {
 	loc := filter.location()
 	bounded := usageBoundsForFilter(filter).bounded()
-	eligible := make([]bunDailyUsageProjection, 0, len(projections))
-	for _, row := range projections {
-		daily := dailyUsageProjectionToRow(row)
-		if bounded {
-			date := dailyUsageLocalDate(daily, loc)
-			if date == "" || filter.From != "" && date < filter.From ||
-				filter.To != "" && date > filter.To {
-				continue
-			}
+	referenceTime := time.Now().UTC()
+	messageQuery, eventQuery := s.bunDailyUsageQueries(
+		store, filter, false, referenceTime,
+	)
+	messageQuery = messageQuery.
+		Where("(m.claude_message_id = ? OR m.claude_request_id = ?)", "", "").
+		ColumnExpr("COUNT(*) OVER() AS candidate_count")
+	eventQuery = eventQuery.ColumnExpr("COUNT(*) OVER() AS candidate_count")
+	claudeMessageQuery, _ := s.bunDailyUsageQueries(
+		store, queryFilter, false, referenceTime,
+	)
+	claudeMessageQuery = claudeMessageQuery.
+		Where("m.claude_message_id != ?", "").
+		Where("m.claude_request_id != ?", "")
+	rows := make([]dailyUsageScanRow, 0)
+	claudeRows := make([]bunDailyUsageProjection, 0)
+	snapshotRows := make([]activity.UsageRow, 0)
+	metadata := make(map[string]bunDailyUsageProjection)
+	withinBounds := func(daily dailyUsageScanRow) bool {
+		if !bounded {
+			return true
 		}
-		eligible = append(eligible, row)
+		date := dailyUsageLocalDate(daily, loc)
+		return date != "" && (filter.From == "" || date >= filter.From) &&
+			(filter.To == "" || date <= filter.To)
 	}
-
-	snapshotRows := make([]activity.UsageRow, len(eligible))
-	metadata := make(map[string]bunDailyUsageProjection, len(eligible))
-	for i, row := range eligible {
+	consumeOrdinary := func(row bunDailyUsageProjection) error {
 		daily := dailyUsageProjectionToRow(row)
+		if !withinBounds(daily) {
+			return nil
+		}
+		if usageSourceMatches(row.Model, filter) &&
+			bunDailyUsageSessionMatches(row, filter, referenceTime) {
+			rows = append(rows, daily)
+		}
+		return nil
+	}
+	consumeClaude := func(row bunDailyUsageProjection) error {
+		daily := dailyUsageProjectionToRow(row)
+		if !withinBounds(daily) {
+			return nil
+		}
 		metadata[row.SessionID] = row
 		_, outputTokens, _, _, _ := dailyUsageRowTokens(daily)
-		snapshotRows[i] = activity.UsageRow{
-			SessionID: row.SessionID, Timestamp: daily.ts,
+		claudeRows = append(claudeRows, row)
+		snapshotRows = append(snapshotRows, activity.UsageRow{
+			SessionID:      row.SessionID,
+			Timestamp:      dailyUsageProjectionSnapshotTimestamp(row),
 			MessageOrdinal: usageRowMessageOrdinal(daily.messageOrdinal),
 			OutputTokens:   outputTokens,
 			WebSearchRequests: usageRowWebSearchRequests(
 				daily.usageSource, daily.tokenJSON),
 			ClaudeMessageID: row.ClaudeMessageID,
 			ClaudeRequestID: row.ClaudeRequestID,
-		}
+		})
+		return nil
 	}
+
+	messageCapacityPrepared := false
+	if err := streamBunDailyUsageProjections(
+		ctx, messageQuery, true, true,
+		func(row bunDailyUsageProjection) error {
+			if !messageCapacityPrepared {
+				rows = slices.Grow(rows, row.CandidateCount)
+				messageCapacityPrepared = true
+			}
+			return consumeOrdinary(row)
+		},
+	); err != nil {
+		return nil, fmt.Errorf("querying daily usage messages: %w", err)
+	}
+	eventCapacityPrepared := false
+	if err := streamBunDailyUsageProjections(
+		ctx, eventQuery, false, true,
+		func(row bunDailyUsageProjection) error {
+			if !eventCapacityPrepared {
+				rows = slices.Grow(rows, row.CandidateCount)
+				eventCapacityPrepared = true
+			}
+			return consumeOrdinary(row)
+		},
+	); err != nil {
+		return nil, fmt.Errorf("querying daily usage events: %w", err)
+	}
+	if err := streamBunDailyUsageProjections(
+		ctx, claudeMessageQuery, true, false, consumeClaude,
+	); err != nil {
+		return nil, fmt.Errorf("querying Claude daily usage messages: %w", err)
+	}
+
 	mask, attribution, webSearchRequests :=
 		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
-	referenceTime := time.Now().UTC()
-	rows := make([]dailyUsageScanRow, 0, len(eligible))
-	for i, row := range eligible {
+	for i, row := range claudeRows {
 		if !mask[i] {
 			continue
 		}
@@ -939,7 +1236,99 @@ func normalizeBunDailyUsageProjections(
 		rows = append(rows, daily)
 	}
 	sortDailyUsageRows(rows)
-	return rows
+	return rows, nil
+}
+
+func streamBunDailyUsageProjections(
+	ctx context.Context,
+	query *bun.SelectQuery,
+	message bool,
+	withCandidateCount bool,
+	consume func(bunDailyUsageProjection) error,
+) error {
+	rows, err := query.Rows(ctx)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var row bunDailyUsageProjection
+	var sessionEndedAt bunmodel.Timestamp
+	var terminationStatus sql.NullString
+	sessionColumns := []any{
+		&row.Project,
+		&row.Agent,
+		&row.Machine,
+		&row.GitBranch,
+		&row.UserMessageCount,
+		&row.IsAutomated,
+		&row.SessionStartedAt,
+		&sessionEndedAt,
+		&row.SessionCreatedAt,
+		&terminationStatus,
+	}
+	var dest []any
+	if message {
+		dest = []any{
+			&row.SessionID,
+			&row.MessageOrdinal,
+			&row.UsageTimestamp,
+			&row.Model,
+			&row.ProviderID,
+			&row.TokenJSON,
+			&row.ClaudeMessageID,
+			&row.ClaudeRequestID,
+			&row.SourceUUID,
+		}
+	} else {
+		dest = []any{
+			&row.ID,
+			&row.SessionID,
+			&row.MessageOrdinal,
+			&row.UsageTimestamp,
+			&row.Model,
+			&row.ProviderID,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.CacheCreationInputTokens,
+			&row.CacheReadInputTokens,
+			&row.ReasoningTokens,
+			&row.CostMicrodollars,
+			&row.CostSource,
+			&row.UsageSource,
+			&row.DedupKey,
+		}
+	}
+	dest = append(dest, sessionColumns...)
+	if withCandidateCount {
+		dest = append(dest, &row.CandidateCount)
+	}
+
+	for rows.Next() {
+		row = bunDailyUsageProjection{}
+		sessionEndedAt = bunmodel.Timestamp{}
+		terminationStatus = sql.NullString{}
+		if err := rows.Scan(dest...); err != nil {
+			return err
+		}
+		if message {
+			row.UsageSource = "message"
+		} else {
+			row.UsageDedupKey = dailyUsageEventProjectionDedupKey(row)
+		}
+		if !sessionEndedAt.IsZero() {
+			value := sessionEndedAt
+			row.SessionEndedAt = &value
+		}
+		if terminationStatus.Valid {
+			value := terminationStatus.String
+			row.TerminationStatus = &value
+		}
+		if err := consume(row); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func bunDailyUsageProjectionWithSessionMetadata(
@@ -974,12 +1363,14 @@ func bunDailyUsageSessionMatches(
 }
 
 func (s *BunStore) bunDailyUsageQueries(
-	store bun.IDB, filter UsageFilter, matching bool,
+	store bun.IDB, filter UsageFilter, matching bool, referenceTime time.Time,
 ) (*bun.SelectQuery, *bun.SelectQuery) {
-	referenceTime := time.Now().UTC()
 	timestampOrder := s.backend.TimestampOrderExpr
+	messageTimestampValue := func(column string) string {
+		return column
+	}
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
-		ColumnExpr(bunDailyMessageUsageColumns(timestampOrder) + "," +
+		ColumnExpr(bunDailyMessageUsageColumns() + "," +
 			bunDailyUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = m.session_id").
 		Where("s.deleted_at IS NULL")
@@ -994,10 +1385,11 @@ func (s *BunStore) bunDailyUsageQueries(
 		messageQuery, filter, "m.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	messageQuery = appendBunUsageBounds(
-		messageQuery, filter, "m.timestamp", true, s.backend.TimestampOrderExpr,
+		messageQuery, filter, "m.timestamp", true,
+		messageTimestampValue, s.backend.TimestampOrderExpr,
 	)
 	messageTimestamp := "COALESCE(" +
-		timestampOrder(bunNullableTimestamp("m.timestamp")) + ", " +
+		timestampOrder(messageTimestampValue("m.timestamp")) + ", " +
 		timestampOrder(bunNullableTimestamp("s.started_at")) + ", " +
 		timestampOrder("s.created_at") + ")"
 	messageQuery = messageQuery.
@@ -1006,7 +1398,7 @@ func (s *BunStore) bunDailyUsageQueries(
 		OrderExpr("m.ordinal ASC")
 
 	eventQuery := store.NewSelect().TableExpr("usage_events AS ue").
-		ColumnExpr(bunDailyEventUsageColumns(timestampOrder)+","+
+		ColumnExpr(bunDailyEventUsageColumns()+","+
 			bunDailyUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = ue.session_id").
 		Where("s.deleted_at IS NULL").Where("ue.model != ?", "")
@@ -1014,7 +1406,8 @@ func (s *BunStore) bunDailyUsageQueries(
 		eventQuery, filter, "ue.model", s.backend.TimestampOrderExpr, referenceTime,
 	)
 	eventQuery = appendBunUsageBounds(
-		eventQuery, filter, "ue.occurred_at", true, s.backend.TimestampOrderExpr,
+		eventQuery, filter, "ue.occurred_at", true,
+		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
 	eventTimestamp := "COALESCE(" +
 		timestampOrder(bunNullableTimestamp("ue.occurred_at")) + ", " +
@@ -1050,10 +1443,12 @@ func (s *BunStore) loadBunUsageProjections(
 	matching bool, sessionIDs []string,
 ) ([]bunUsageProjection, error) {
 	referenceTime := time.Now().UTC()
-	timestampOrder := s.backend.TimestampOrderExpr
+	messageTimestampValue := func(column string) string {
+		return column
+	}
 	var messages []bunUsageProjection
 	messageQuery := store.NewSelect().TableExpr("messages AS m").
-		ColumnExpr(bunMessageUsageColumns(timestampOrder) + "," + bunUsageSessionColumns).
+		ColumnExpr(bunMessageUsageColumns() + "," + bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = m.session_id").
 		Where("s.deleted_at IS NULL")
 	if matching {
@@ -1073,7 +1468,7 @@ func (s *BunStore) loadBunUsageProjections(
 	)
 	messageQuery = appendBunUsageBounds(
 		messageQuery, filter, "m.timestamp", true,
-		s.backend.TimestampOrderExpr,
+		messageTimestampValue, s.backend.TimestampOrderExpr,
 	)
 	if err := messageQuery.Scan(ctx, &messages); err != nil {
 		return nil, fmt.Errorf("querying usage messages: %w", err)
@@ -1085,7 +1480,7 @@ func (s *BunStore) loadBunUsageProjections(
 
 	var events []bunUsageProjection
 	eventQuery := store.NewSelect().TableExpr("usage_events AS ue").
-		ColumnExpr(bunEventUsageColumns(timestampOrder)+","+bunUsageSessionColumns).
+		ColumnExpr(bunEventUsageColumns()+","+bunUsageSessionColumns).
 		Join("JOIN sessions AS s ON s.id = ue.session_id").
 		Where("s.deleted_at IS NULL").Where("ue.model != ?", "")
 	if len(sessionIDs) > 0 {
@@ -1098,7 +1493,7 @@ func (s *BunStore) loadBunUsageProjections(
 	)
 	eventQuery = appendBunUsageBounds(
 		eventQuery, filter, "ue.occurred_at", true,
-		s.backend.TimestampOrderExpr,
+		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
 	if err := eventQuery.Scan(ctx, &events); err != nil {
 		return nil, fmt.Errorf("querying usage events: %w", err)
@@ -1126,12 +1521,12 @@ func (s *BunStore) loadBunUsageProjections(
 
 func appendBunUsageBounds(
 	query *bun.SelectQuery, filter UsageFilter, timestampColumn string,
-	withSessionFallback bool, timestampOrder func(string) string,
+	withSessionFallback bool, timestampValue, timestampOrder func(string) string,
 ) *bun.SelectQuery {
 	bounds := usageBoundsForFilter(filter)
-	expr := timestampOrder(bunNullableTimestamp(timestampColumn))
+	expr := timestampOrder(timestampValue(timestampColumn))
 	if withSessionFallback {
-		expr = "COALESCE(" + timestampOrder(bunNullableTimestamp(timestampColumn)) +
+		expr = "COALESCE(" + timestampOrder(timestampValue(timestampColumn)) +
 			", " + timestampOrder(bunNullableTimestamp("s.started_at")) +
 			", " + timestampOrder("s.created_at") + ")"
 	}
@@ -1287,7 +1682,8 @@ func usageProjectionToDailyRow(row bunUsageProjection) dailyUsageScanRow {
 		sessionID: row.SessionID, messageOrdinal: nullableUsageOrdinal(row.MessageOrdinal),
 		usageSource: source, ts: formatRequiredUsageTime(usageTime),
 		usageTime: usageTime, pricingTime: pricingTime, model: row.Model,
-		tokenJSON: row.TokenJSON, inputTokens: row.InputTokens,
+		providerID: row.ProviderID,
+		tokenJSON:  row.TokenJSON, inputTokens: row.InputTokens,
 		outputTokens:             row.OutputTokens,
 		cacheCreationInputTokens: row.CacheCreationInputTokens,
 		cacheReadInputTokens:     row.CacheReadInputTokens,
@@ -1319,8 +1715,9 @@ func dailyUsageProjectionToRowMode(
 		sessionID: row.SessionID, messageOrdinal: row.MessageOrdinal,
 		usageSource: row.UsageSource,
 		ts:          timestamp, usageTime: usageTime, pricingTime: pricingTime,
-		model:     row.Model,
-		tokenJSON: row.TokenJSON, inputTokens: row.InputTokens,
+		model:      row.Model,
+		providerID: row.ProviderID,
+		tokenJSON:  row.TokenJSON, inputTokens: row.InputTokens,
 		outputTokens:             row.OutputTokens,
 		cacheCreationInputTokens: row.CacheCreationInputTokens,
 		cacheReadInputTokens:     row.CacheReadInputTokens,
@@ -1350,6 +1747,16 @@ func dailyUsageProjectionTime(row bunDailyUsageProjection) time.Time {
 	return time.Time{}
 }
 
+func dailyUsageProjectionSnapshotTimestamp(row bunDailyUsageProjection) string {
+	if !row.UsageTimestamp.IsZero() {
+		return formatRequiredUsageTimestamp(row.UsageTimestamp)
+	}
+	if !row.SessionStartedAt.IsZero() {
+		return formatRequiredUsageTimestamp(row.SessionStartedAt)
+	}
+	return ""
+}
+
 func formatRequiredUsageTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
@@ -1363,7 +1770,7 @@ func usageProjectionToFullRow(row bunUsageProjection) usageScanRow {
 		sessionID: daily.sessionID, messageOrdinal: daily.messageOrdinal,
 		usageSource: daily.usageSource, ts: daily.ts,
 		pricingTS: formatRequiredUsageTime(daily.pricingTime),
-		model:     daily.model,
+		model:     daily.model, providerID: daily.providerID,
 		tokenJSON: daily.tokenJSON, inputTokens: daily.inputTokens,
 		outputTokens:             daily.outputTokens,
 		cacheCreationInputTokens: daily.cacheCreationInputTokens,
@@ -1426,7 +1833,8 @@ func (s *BunStore) loadBunCursorUsageRows(
 		query = query.Where("cu.is_headless = ?", true)
 	}
 	query = appendBunUsageBounds(
-		query, filter, "cu.occurred_at", false, s.backend.TimestampOrderExpr,
+		query, filter, "cu.occurred_at", false,
+		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
 	if err := query.Scan(ctx, &rows); err != nil {
 		return nil, fmt.Errorf("querying cursor usage events: %w", err)
@@ -1580,13 +1988,6 @@ func usageValuesMatch(value string, values []string, include bool) bool {
 		return matched
 	}
 	return !matched
-}
-
-func usageProjectionTimestamp(row bunUsageProjection) string {
-	if value := formatUsageTimestamp(row.UsageTimestamp); value != "" {
-		return value
-	}
-	return formatUsageTimestamp(row.SessionStartedAt)
 }
 
 func usageProjectionTime(row bunUsageProjection) time.Time {

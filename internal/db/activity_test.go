@@ -105,7 +105,7 @@ func TestGetSessionActivity_SingleMessage(t *testing.T) {
 	assert.Equal(t, 1, resp.Buckets[0].UserCount, "user count")
 }
 
-func TestGetSessionActivity_MalformedTimestamps(t *testing.T) {
+func TestGetSessionActivity_RepairsMalformedProviderTimestamp(t *testing.T) {
 	d := testDB(t)
 	sid := "test-malformed-ts"
 
@@ -121,7 +121,7 @@ func TestGetSessionActivity_MalformedTimestamps(t *testing.T) {
 	resp, err := d.GetSessionActivity(context.Background(), sid)
 	require.NoError(t, err)
 
-	// Malformed timestamp excluded from buckets; valid ones bucketed.
+	// The repaired unavailable timestamp is excluded; valid ones are bucketed.
 	require.NotEmpty(t, resp.Buckets, "expected at least 1 bucket")
 	// Both valid user messages (ord 0 and 2) are within 30s,
 	// so they land in the same bucket.

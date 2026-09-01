@@ -322,10 +322,9 @@ func DeleteWorktreeProjectMappingRows(
 	archiveID string,
 	keys []WorktreeMappingKey,
 ) error {
-	for start := 0; start < len(keys); start += canonicalWriteBatchSize {
-		end := min(start+canonicalWriteBatchSize, len(keys))
-		tuples := make([][]any, 0, end-start)
-		for _, key := range keys[start:end] {
+	return writeCanonicalBatches(keys, func(batch []WorktreeMappingKey) error {
+		tuples := make([][]any, 0, len(batch))
+		for _, key := range batch {
 			tuples = append(tuples, []any{key.Machine, key.PathPrefix})
 		}
 		if _, err := store.NewDelete().
@@ -334,8 +333,8 @@ func DeleteWorktreeProjectMappingRows(
 			Where("(machine, path_prefix) IN ?", bun.Tuple(tuples)).Exec(ctx); err != nil {
 			return fmt.Errorf("deleting canonical worktree mappings: %w", err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // ClearWorktreeProjectMappingRows clears one archive's mapping publication.

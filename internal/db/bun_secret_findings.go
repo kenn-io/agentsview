@@ -89,14 +89,12 @@ func (s *BunStore) ListSecretFindings(
 		findings := make([]SecretFindingRow, len(rows))
 		for i, row := range rows {
 			findings[i] = SecretFindingRow{
-				SecretFinding: SecretFinding{
-					SessionID: row.SessionID, RuleName: row.RuleName,
-					Confidence: row.Confidence, LocationKind: row.LocationKind,
-					MessageOrdinal: row.MessageOrdinal, CallIndex: row.CallIndex,
-					EventIndex: row.EventIndex, MatchStart: row.MatchStart,
-					MatchEnd: row.MatchEnd, MatchIndex: row.MatchIndex,
-					RedactedMatch: row.RedactedMatch, RulesVersion: row.RulesVersion,
-				},
+				SessionID: row.SessionID, RuleName: row.RuleName,
+				Confidence: row.Confidence, LocationKind: row.LocationKind,
+				MessageOrdinal: row.MessageOrdinal, CallIndex: row.CallIndex,
+				EventIndex: row.EventIndex, MatchStart: row.MatchStart,
+				MatchEnd: row.MatchEnd, MatchIndex: row.MatchIndex,
+				RedactedMatch: row.RedactedMatch, RulesVersion: row.RulesVersion,
 				Project: row.Project, Agent: row.Agent,
 			}
 		}

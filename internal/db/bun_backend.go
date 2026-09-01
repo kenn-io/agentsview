@@ -57,6 +57,7 @@ const (
 // BackendCapabilities describes features that cannot be inferred from a
 // store's coarse public ReadOnly value.
 type BackendCapabilities struct {
+	AnalyticsDialect BunAnalyticsDialect
 	Recall           bool
 	FullText         FullTextCapability
 	SessionSearch    SessionSearchCapability
@@ -74,6 +75,9 @@ type BackendCapabilities struct {
 type ArchiveWriteAdapter interface {
 	UpsertSession(Session) error
 	ReplaceSessionMessages(string, []Message) error
+	WriteSessionAtomic(
+		SessionBatchWrite, ...func() error,
+	) (SessionBatchResult, error)
 	WriteSessionBatchAtomic(
 		[]SessionBatchWrite, ...func() error,
 	) (SessionBatchResult, error)
@@ -106,7 +110,8 @@ func (b *sqliteBunBackend) ReadOnly() bool { return b.store.readOnly }
 func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	if b.store.readOnly {
 		return BackendCapabilities{
-			Recall: true, FullText: sqliteFullTextCapability{store: b.store},
+			AnalyticsDialect: SQLiteBunAnalyticsDialect(),
+			Recall:           true, FullText: sqliteFullTextCapability{store: b.store},
 			SessionSearch: sqliteFullTextCapability{store: b.store},
 			ContentSearch: sqliteFullTextCapability{store: b.store},
 			HybridLexical: sqliteFullTextCapability{store: b.store},
@@ -118,12 +123,13 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 		}
 	}
 	return BackendCapabilities{
-		Recall:        true,
-		FullText:      sqliteFullTextCapability{store: b.store},
-		SessionSearch: sqliteFullTextCapability{store: b.store},
-		ContentSearch: sqliteFullTextCapability{store: b.store},
-		HybridLexical: sqliteFullTextCapability{store: b.store},
-		SearchDialect: SQLiteBunSearchDialect(),
+		AnalyticsDialect: SQLiteBunAnalyticsDialect(),
+		Recall:           true,
+		FullText:         sqliteFullTextCapability{store: b.store},
+		SessionSearch:    sqliteFullTextCapability{store: b.store},
+		ContentSearch:    sqliteFullTextCapability{store: b.store},
+		HybridLexical:    sqliteFullTextCapability{store: b.store},
+		SearchDialect:    SQLiteBunSearchDialect(),
 		Semantic: NewVectorSemanticCapability(
 			b.store.getVectorSearcher,
 			func() error { return ErrSemanticUnavailable },
@@ -169,6 +175,14 @@ func (a sqliteArchiveWriteAdapter) WriteSessionBatchAtomic(
 	writes []SessionBatchWrite, beforeCommit ...func() error,
 ) (SessionBatchResult, error) {
 	return a.store.writeArchiveSessionBatchAtomic(writes, beforeCommit...)
+}
+
+func (a sqliteArchiveWriteAdapter) WriteSessionAtomic(
+	write SessionBatchWrite, beforeCommit ...func() error,
+) (SessionBatchResult, error) {
+	return a.store.writeArchiveSessionBatchAtomic(
+		[]SessionBatchWrite{write}, beforeCommit...,
+	)
 }
 
 type sqliteSessionMutationAdapter struct{}

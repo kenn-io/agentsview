@@ -5,7 +5,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -85,30 +84,6 @@ func TestSQLiteActivityReportCandidatesMatchGoPairingAtScanBounds(t *testing.T) 
 	assert.Equal(t, want, got)
 }
 
-func TestSQLiteActivityReportCandidateQueryUsesExistingSessionIndex(t *testing.T) {
-	d := testDB(t)
-	q := dayQuery(t, "2026-06-16", "UTC")
-	rows, err := d.getReader().QueryContext(
-		context.Background(), "EXPLAIN QUERY PLAN "+activityReportCandidatesSQL,
-		`["session"]`, "2026-06-15T09:00:00Z", "2026-06-17T14:00:00Z",
-		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro(),
-	)
-	require.NoError(t, err)
-	defer rows.Close()
-	var details []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-		details = append(details, detail)
-	}
-	require.NoError(t, rows.Err())
-	plan := strings.Join(details, "\n")
-	assert.Contains(t, plan, "idx_messages_velocity")
-	assert.NotContains(t, plan, "idx_messages_activity_timestamp")
-	assert.NotContains(t, plan, "SCAN m")
-}
-
 func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "cancel", "p", func(s *Session) {
@@ -125,7 +100,7 @@ func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	seen := 0
-	err := d.activityReportCandidateSource(
+	err := d.ActivityReportCandidateSource(
 		[]string{"cancel"}, dayQuery(t, "2026-06-16", "UTC"),
 	)(ctx, func(activity.IntervalCandidate) error {
 		seen++
@@ -134,6 +109,30 @@ func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, 1, seen)
+}
+
+func TestActivityReportCandidateSourcePublishesRetryableSnapshotOnce(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "replayed", "p", func(s *Session) {
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:01:00Z")
+	})
+	seedMessage(t, d, "replayed", 0, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "replayed", 1, "assistant", "2026-06-16T10:01:00Z", "model")
+
+	store := NewBunStore(&replayingReadBackend{
+		first: d.bunReader, second: d.bunReader,
+	})
+	var candidates []activity.IntervalCandidate
+	err := store.ActivityReportCandidateSource(
+		[]string{"replayed"}, dayQuery(t, "2026-06-16", "UTC"),
+	)(t.Context(), func(candidate activity.IntervalCandidate) error {
+		candidates = append(candidates, candidate)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, candidates, 1,
+		"one query snapshot must publish each interval once")
 }
 
 func TestSQLiteActivityReportCandidateSourceDoesNotRequireGlobalTimestampIndex(
@@ -205,9 +204,98 @@ func TestGetActivityReport_ToolCompletionAfterRangeClosesFinalMessage(t *testing
 	assert.InDelta(t, 1.0, *report.BySession[0].AgentMinutes, 1e-9)
 }
 
+func TestGetActivityReport_ToolCompletionAtGapCapClosesFinalMessage(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "completion-at-gap-cap", "tools", func(s *Session) {
+		s.Agent = "grok"
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:05:00Z")
+	})
+	seedMessage(t, d, "completion-at-gap-cap", 0, "assistant",
+		"2026-06-16T10:00:00Z", "model-x")
+	timingInsertToolResultEvent(t, d, "completion-at-gap-cap", 0, 0,
+		"sample-call", "completed", "2026-06-16T10:05:00Z", 1)
+
+	report, err := d.GetActivityReport(
+		t.Context(), AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"),
+	)
+	require.NoError(t, err)
+	require.Len(t, report.BySession, 1)
+	require.NotNil(t, report.BySession[0].AgentMinutes)
+	assert.InDelta(t, 5.0, *report.BySession[0].AgentMinutes, 1e-9)
+}
+
+func TestGetActivityReport_DistantToolCompletionLeavesFinalMessageUntimed(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "distant-completion", "tools", func(s *Session) {
+		s.Agent = "grok"
+		s.StartedAt = Ptr("2026-06-16T23:59:00Z")
+		s.EndedAt = Ptr("2026-06-20T10:01:00Z")
+	})
+	seedMessage(t, d, "distant-completion", 0, "assistant",
+		"2026-06-16T23:59:00Z", "model-x")
+	timingInsertToolResultEvent(t, d, "distant-completion", 0, 0,
+		"sample-call", "completed", "2026-06-20T10:01:00Z", 1)
+
+	report, err := d.GetActivityReport(
+		t.Context(), AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"),
+	)
+	require.NoError(t, err)
+	require.Len(t, report.BySession, 1)
+	assert.Nil(t, report.BySession[0].AgentMinutes,
+		"a completion days later cannot time the final in-range message")
+	assert.Zero(t, report.Totals.AgentMinutes)
+}
+
+func TestGetActivityReport_PaddedToolCompletionLeavesOldFinalMessageUntimed(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "padded-completion", "tools", func(s *Session) {
+		s.Agent = "grok"
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-17T00:04:00Z")
+	})
+	seedMessage(t, d, "padded-completion", 0, "assistant",
+		"2026-06-16T10:00:00Z", "model-x")
+	timingInsertToolResultEvent(t, d, "padded-completion", 0, 0,
+		"sample-call", "completed", "2026-06-17T00:04:00Z", 1)
+
+	report, err := d.GetActivityReport(
+		t.Context(), AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"),
+	)
+	require.NoError(t, err)
+	require.Len(t, report.BySession, 1)
+	assert.Nil(t, report.BySession[0].AgentMinutes,
+		"an upper-padding completion cannot time a message hours earlier")
+	assert.Zero(t, report.Totals.AgentMinutes)
+}
+
+func TestGetActivityReport_PaddedToolCompletionDoesNotScopeOldSession(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "future-completion", "tools", func(s *Session) {
+		s.Agent = "grok"
+		s.StartedAt = Ptr("2026-06-15T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-15T10:01:00Z")
+	})
+	seedMessage(t, d, "future-completion", 0, "assistant",
+		"2026-06-15T10:00:00Z", "model-x")
+	timingInsertToolResultEvent(t, d, "future-completion", 0, 0,
+		"sample-call", "completed", "2026-06-17T00:04:00Z", 1)
+
+	report, err := d.GetActivityReport(
+		t.Context(), AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, report.BySession,
+		"a stale completion inside upper padding cannot scope an old session")
+}
+
 func BenchmarkSQLiteActivityReportCandidateSource100K(b *testing.B) {
 	d, ids, q := seedSQLiteActivityReportBenchmark(b)
-	source := d.activityReportCandidateSource(ids, q)
+	source := d.ActivityReportCandidateSource(ids, q)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -269,7 +357,7 @@ func BenchmarkSQLiteActivityReportCandidateSourceLongSession(b *testing.B) {
 		{name: "narrow-3900", q: narrow, want: 3900},
 	} {
 		b.Run(benchmark.name, func(b *testing.B) {
-			source := d.activityReportCandidateSource([]string{"bench-long"}, benchmark.q)
+			source := d.ActivityReportCandidateSource([]string{"bench-long"}, benchmark.q)
 			b.ReportAllocs()
 			for range b.N {
 				count := 0

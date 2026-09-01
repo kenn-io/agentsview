@@ -16059,7 +16059,7 @@ func setupSingleSessionParentRepairRetry(
 	return env, orchaPath
 }
 
-func TestSyncSingleSessionWriteFailureStillRepairsFormerChild(t *testing.T) {
+func TestSyncSingleSessionWriteFailurePreservesFormerChildRelationship(t *testing.T) {
 	env, _ := setupSingleSessionParentRepairRetry(t)
 	raw, err := sql.Open("sqlite3", env.db.Path())
 	require.NoError(t, err)
@@ -16076,8 +16076,8 @@ func TestSyncSingleSessionWriteFailureStillRepairsFormerChild(t *testing.T) {
 	syncErr := env.engine.SyncSingleSession("agent-orcha")
 
 	require.ErrorContains(t, syncErr, "injected post-replacement failure")
-	assert.Equal(t, "agent-orchb", parentSessionIDOf(t, env, "agent-kid"),
-		"a later write failure must not skip repair after removing an edge")
+	assert.Equal(t, "agent-orcha", parentSessionIDOf(t, env, "agent-kid"),
+		"the failed atomic write must preserve the prior edge and parent")
 }
 
 func TestSyncSingleSessionRepairFailurePersistsFormerChildForRetry(t *testing.T) {

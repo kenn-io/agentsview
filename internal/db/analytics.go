@@ -1510,6 +1510,13 @@ func (db *DB) queryVelocityMsgs(
 				"scanning velocity msg: %w", err,
 			)
 		}
+		ts, err = canonicalStoredMessageTimestamp(ts)
+		if err != nil {
+			return fmt.Errorf(
+				"reading velocity message %s ordinal %d timestamp: %w",
+				sid, ordinal, err,
+			)
+		}
 		t, ok := localTime(ts, loc)
 		sessionMsgs[sid] = append(sessionMsgs[sid],
 			velocityMsg{
@@ -1547,19 +1554,6 @@ type VelocityResponse struct {
 	Overall      VelocityOverview    `json:"overall"`
 	ByAgent      []VelocityBreakdown `json:"by_agent"`
 	ByComplexity []VelocityBreakdown `json:"by_complexity"`
-}
-
-// complexityBucket returns the complexity label based on
-// message count.
-func complexityBucket(mc int) string {
-	switch {
-	case mc <= 15:
-		return "1-15"
-	case mc <= 60:
-		return "16-60"
-	default:
-		return "61+"
-	}
 }
 
 // velocityAccumulator collects raw values for a velocity group.

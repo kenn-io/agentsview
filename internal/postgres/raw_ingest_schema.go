@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/uptrace/bun"
 )
 
 // Source keys and entry paths may be up to 4096 bytes, which exceeds the
@@ -314,11 +315,11 @@ func CanWriteRawSyncSchema(
 	return writable, nil
 }
 
-func ensureRawIngestSchemaPG(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, rawIngestDDL); err != nil {
+func ensureRawIngestSchemaPG(ctx context.Context, db bun.IDB) error {
+	if _, err := db.NewRaw(rawIngestDDL).Exec(ctx); err != nil {
 		return fmt.Errorf("creating raw ingest schema: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, rawIngestAppendOnlyDDL); err != nil {
+	if _, err := db.NewRaw(rawIngestAppendOnlyDDL).Exec(ctx); err != nil {
 		if !rawIngestAppendOnlyUnsupported(err) {
 			return fmt.Errorf("installing raw ingest append-only guards: %w", err)
 		}

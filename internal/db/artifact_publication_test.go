@@ -1950,7 +1950,8 @@ func TestArtifactPublicationQueueIgnoresSessionBookkeepingUpdates(t *testing.T) 
 		UPDATE sessions SET
 			file_path = '/tmp/local', file_size = 42, file_mtime = 43,
 			next_ordinal = 9, last_entry_uuid = 'uuid', file_inode = 44,
-			file_device = 45, file_hash = 'hash', local_modified_at = 'now',
+			file_device = 45, file_hash = 'hash',
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 			last_write_incremental = 1, secrets_rules_version = 'rules',
 			secret_leak_count = 2, sync_marker = 'marker'
 		WHERE id = 'session'`)

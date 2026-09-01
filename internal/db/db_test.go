@@ -1064,8 +1064,13 @@ func TestCurrentDataVersionPositAssistantProviderIdentity(t *testing.T) {
 }
 
 func TestCurrentDataVersionAntigravityCLICwdAndWorktreeProject(t *testing.T) {
-	assert.Equal(t, 96, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 96,
 		"Antigravity CLI cwd and worktree project recovery require a sequential backfill")
+}
+
+func TestCurrentDataVersionCanonicalTimestamps(t *testing.T) {
+	assert.Equal(t, 97, CurrentDataVersion(),
+		"canonical timestamp repair requires a sequential backfill")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
@@ -3653,23 +3658,6 @@ func TestToolCallsMixedSessionsOverlappingOrdinals(t *testing.T) {
 	assert.Equal(t, "s1", got[1].msgSession, "Read msgSession")
 }
 
-func TestResolveToolCallsPanicsOnLengthMismatch(t *testing.T) {
-	defer func() {
-		r := recover()
-		require.NotNil(t, r, "expected panic, got none")
-		msg, ok := r.(string)
-		assert.True(t, ok && strings.Contains(msg, "resolveToolCalls"),
-			"unexpected panic value: %v", r)
-	}()
-
-	msgs := []Message{
-		{SessionID: "s1", Ordinal: 0, Role: "user"},
-		{SessionID: "s1", Ordinal: 1, Role: "assistant"},
-	}
-	ids := []int64{1} // length mismatch
-	resolveToolCalls(msgs, ids)
-}
-
 func TestToolCallNewColumns(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
@@ -5005,6 +4993,14 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	require.NoError(t,
 		srcDB.SetPricingMeta("_fallback_version", "v42"),
 		"SetPricingMeta")
+	_, err := srcDB.getWriter().Exec(`
+		INSERT INTO model_pricing (
+			model_pattern, input_microdollars_per_mtok,
+			output_microdollars_per_mtok,
+			cache_creation_microdollars_per_mtok,
+			cache_read_microdollars_per_mtok, updated_at
+		) VALUES ('_openrouter_models', 0, 0, 0, 0, '["legacy-model"]')`)
+	require.NoError(t, err, "insert legacy pricing metadata sentinel")
 	srcDB.Close()
 
 	// Destination DB with a stale row for the same pattern.
@@ -5014,6 +5010,9 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	require.NoError(t, dstDB.UpsertModelPricing([]ModelPricing{
 		{ModelPattern: "claude-opus-4-8", InputPerMTok: money.MustParseDollars("1")},
 	}), "UpsertModelPricing stale row")
+	require.NoError(t,
+		dstDB.SetPricingMeta("_openrouter_models", `["destination-stale"]`),
+		"SetPricingMeta stale destination metadata")
 
 	require.NoError(t, dstDB.CopyModelPricingFrom(srcPath),
 		"CopyModelPricingFrom")
@@ -5031,6 +5030,13 @@ func TestCopyModelPricingFrom(t *testing.T) {
 	meta, err := dstDB.GetPricingMeta("_fallback_version")
 	require.NoError(t, err, "GetPricingMeta")
 	assert.Equal(t, "v42", meta, "sentinel meta row copied")
+	legacyMeta, err := dstDB.GetPricingMeta("_openrouter_models")
+	require.NoError(t, err, "GetPricingMeta legacy sentinel")
+	assert.Equal(t, `["legacy-model"]`, legacyMeta,
+		"legacy sentinel value copied into pricing metadata")
+	legacyPricing, err := dstDB.GetModelPricing("_openrouter_models")
+	require.NoError(t, err, "GetModelPricing legacy sentinel")
+	assert.Nil(t, legacyPricing, "legacy sentinel must not become a model price")
 }
 
 func TestCopyModelPricingFromRollsBackParentWhenBandCopyFails(t *testing.T) {
@@ -5143,8 +5149,7 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 		`UPDATE sessions SET transcript_revision = '7' WHERE id = 's2'`,
 	)
 	requireNoError(t, err, "set orphan transcript revision")
-	// Insert tool_calls for s1 via raw SQL since
-	// insertToolCallsTx is unexported.
+	// Seed the legacy physical tool-call shape for orphan-copy coverage.
 	_, err = srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category)
@@ -8414,7 +8419,7 @@ func TestResolveToolCallsDerivesPositionalCallIndex(t *testing.T) {
 		ID: "ci", Project: "p", Machine: "local", Agent: "cursor",
 	}), "upsert")
 	// Three tool calls in one message with no explicit CallIndex, mirroring
-	// the importer write path. resolveToolCalls must number them by position.
+	// the importer write path. The canonical converter must number them by position.
 	require.NoError(t, d.InsertMessages([]Message{
 		{
 			SessionID: "ci", Ordinal: 0, Role: "assistant", Content: "tools",
@@ -8892,9 +8897,14 @@ func TestCopySessionMetadataKeepsFreshProjectIdentityObservationOnConflict(t *te
 	ctx := context.Background()
 	oldPath := filepath.Join(dir, "old.db")
 	root := filepath.Join(dir, "repo")
+	stableSalt := strings.Repeat("a", 64)
+	temporarySalt := strings.Repeat("b", 64)
 
 	oldDB, err := Open(oldPath)
 	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.SetArchiveIdentityForTest(
+		ctx, "stable-archive", stableSalt,
+	), "set old archive identity")
 	requireNoError(t, oldDB.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:          "alpha",
@@ -8907,6 +8917,9 @@ func TestCopySessionMetadataKeepsFreshProjectIdentityObservationOnConflict(t *te
 	requireNoError(t, oldDB.Close(), "close old")
 
 	fresh := testDB(t)
+	requireNoError(t, fresh.SetArchiveIdentityForTest(
+		ctx, "temporary-archive", temporarySalt,
+	), "set fresh archive identity")
 	requireNoError(t, fresh.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:          "alpha",
@@ -8925,6 +8938,8 @@ func TestCopySessionMetadataKeepsFreshProjectIdentityObservationOnConflict(t *te
 	require.Len(t, observations, 1)
 	assert.Equal(t, root, observations[0].WorktreeRootPath)
 	assert.Equal(t, filepath.Base(root), observations[0].WorktreeName)
+	assert.Equal(t, "stable-archive", observations[0].SourceArchiveID)
+	assert.Equal(t, stableSalt, observations[0].SourceArchiveSalt)
 }
 
 func TestCopySessionMetadataKeepsIdentityRevisionMonotonic(t *testing.T) {

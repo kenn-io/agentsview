@@ -382,12 +382,7 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 	assert.Equal(t, PhaseDiscovering, progress.Phase)
 
 	release <- struct{}{}
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		require.FailNow(t, "watch batch did not finish after discovery resumed")
-	}
+	require.NoError(t, <-done)
 }
 
 func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(

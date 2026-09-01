@@ -14,7 +14,6 @@ import (
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/duckdb/bundialect"
 	"go.kenn.io/agentsview/internal/jsonutil"
 )
@@ -988,15 +987,6 @@ func (s *Sync) sessionFingerprints(
 	for _, sess := range sessions {
 		snapshot, err := s.local.ReadSessionReplicationSnapshot(ctx, sess.ID)
 		if err != nil {
-			if errors.Is(err, bunmodel.ErrUnsupportedTimestamp) {
-				// Canonical writes always use a 64-character SHA-256 hex
-				// fingerprint. This non-canonical marker can therefore never
-				// compare equal to a mirrored session: the transactional push
-				// will retry the row, reject its malformed timestamp, and count
-				// the session-local error without advancing mirror metadata.
-				out[sess.ID] = "invalid-message-timestamp"
-				continue
-			}
 			return nil, fmt.Errorf("session fingerprint snapshot %s: %w", sess.ID, err)
 		}
 		s.stampReplicationSnapshot(&snapshot)

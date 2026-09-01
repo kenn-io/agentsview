@@ -37,15 +37,15 @@ const fullAutomationCandidatesPG = `SELECT
  FROM sessions s`
 
 func backfillIsAutomatedPGWithProgress(
-	ctx context.Context, pg bun.IConn,
+	ctx context.Context, pg bun.IDB,
 ) (automatedAuditPGProgress, error) {
 	var progress automatedAuditPGProgress
 	current := db.ClassifierHash()
 	var stored string
-	err := pg.QueryRowContext(ctx,
+	err := pg.NewRaw(
 		`SELECT value FROM sync_metadata WHERE key = ?0`,
 		db.ClassifierHashKey,
-	).Scan(&stored)
+	).Scan(ctx, &stored)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return progress, fmt.Errorf(
 			"probing PG classifier hash: %w", err,
@@ -81,13 +81,13 @@ func backfillIsAutomatedPGWithProgress(
 		)
 	}
 
-	if _, err := pg.ExecContext(ctx,
+	if _, err := pg.NewRaw(
 		`INSERT INTO sync_metadata (key, value)
 		 VALUES (?0, ?1)
 		 ON CONFLICT (key) DO UPDATE
 		 SET value = EXCLUDED.value`,
 		db.ClassifierHashKey, current,
-	); err != nil {
+	).Exec(ctx); err != nil {
 		return progress, fmt.Errorf(
 			"storing PG classifier hash: %w", err,
 		)
@@ -97,11 +97,11 @@ func backfillIsAutomatedPGWithProgress(
 
 func auditAutomatedFullPG(
 	ctx context.Context,
-	pg bun.IConn,
+	pg bun.IDB,
 	classifier db.AutomationClassifier,
 	progress *automatedAuditPGProgress,
 ) (setIDs, clearIDs []string, err error) {
-	rows, err := pg.QueryContext(ctx, fullAutomationCandidatesPG)
+	rows, err := pg.QueryContext(ctx, pg.NewRaw(fullAutomationCandidatesPG).String())
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"querying PG automated backfill candidates: %w", err,
@@ -119,14 +119,14 @@ func auditAutomatedFullPG(
 
 func auditAutomatedMatchingHashPG(
 	ctx context.Context,
-	pg bun.IConn,
+	pg bun.IDB,
 	classifier db.AutomationClassifier,
 	progress *automatedAuditPGProgress,
 ) (setIDs, clearIDs []string, err error) {
 	// Fetch bytea prefixes because the classifier's evidence limit is bytes,
 	// not characters. This also avoids affected PostgreSQL minors rejecting
 	// valid multibyte text when text substring operates on compressed TOAST.
-	rows, err := pg.QueryContext(ctx,
+	query := pg.NewRaw(
 		`SELECT
 			s.id,
 			s.agent,
@@ -165,7 +165,8 @@ func auditAutomatedMatchingHashPG(
 			LIMIT 1
 		 ) first_user ON s.user_message_count <= 1`,
 		db.AutomationEvidencePrefixBytes,
-	)
+	).String()
+	rows, err := pg.QueryContext(ctx, query)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"querying bounded PG automated audit candidates: %w", err,
@@ -239,12 +240,12 @@ func auditAutomatedMatchingHashPG(
 		for i, id := range batch {
 			placeholders[i] = pb.add(id)
 		}
-		fullRows, err := pg.QueryContext(
-			ctx,
+		query := pg.NewRaw(
 			fullAutomationCandidatesPG+
 				" WHERE s.id IN ("+strings.Join(placeholders, ",")+")",
 			pb.args...,
-		)
+		).String()
+		fullRows, err := pg.QueryContext(ctx, query)
 		if err != nil {
 			return nil, nil, fmt.Errorf(
 				"querying unresolved PG automated audit candidates: %w", err,

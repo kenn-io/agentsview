@@ -137,15 +137,15 @@ func (db *DB) WriteSessionBatchContext(
 	var writtenUsageIDs []string
 
 	for i, write := range writes {
-		write, err = sanitizeSessionBatchWriteContext(ctx, write)
-		if err != nil {
-			return result, err
-		}
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := ctxTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
 				"creating savepoint %s: %w", savepoint, err,
 			)
+		}
+		write, sanitization, err := sanitizeSessionBatchWriteContext(ctx, write)
+		if err != nil {
+			return result, err
 		}
 
 		var sessionRecallRevocations recallEvidenceRevocationEvents
@@ -154,6 +154,7 @@ func (db *DB) WriteSessionBatchContext(
 			write,
 			&sessionRecallRevocations,
 		)
+		sanitization.release()
 		switch {
 		case err == nil:
 			if _, err := ctxTx.Exec("RELEASE SAVEPOINT " + savepoint); err != nil {
@@ -237,12 +238,13 @@ func (db *DB) writeArchiveSessionBatchAtomic(
 	var writtenUsageIDs []string
 
 	for i, write := range writes {
-		write = sanitizeSessionBatchWrite(write)
+		write, sanitization := sanitizeSessionBatchWrite(write)
 		messagesWritten, err := writeOneSessionBatchTx(
 			ctx, rawTx, rawTx, tx,
 			write,
 			&pendingRecallRevocations,
 		)
+		sanitization.release()
 		if err != nil {
 			result.WrittenSessions = 0
 			result.WrittenMessages = 0
@@ -284,40 +286,58 @@ func (db *DB) writeArchiveSessionBatchAtomic(
 	return result, nil
 }
 
-func sanitizeSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
-	sanitized, _ := sanitizeSessionBatchWriteContext(context.Background(), write)
-	return sanitized
+func sanitizeSessionBatchWrite(
+	write SessionBatchWrite,
+) (SessionBatchWrite, sessionBatchSanitization) {
+	sanitized, sanitization, _ := sanitizeSessionBatchWriteContext(
+		context.Background(), write,
+	)
+	return sanitized, sanitization
 }
 
 func sanitizeSessionBatchWriteContext(
 	ctx context.Context, write SessionBatchWrite,
-) (SessionBatchWrite, error) {
-	messages := write.Messages
-	write.Messages = make([]Message, len(messages))
-	for i := range write.Messages {
-		if err := ctx.Err(); err != nil {
-			return SessionBatchWrite{}, err
+) (sanitized SessionBatchWrite, sanitization sessionBatchSanitization, err error) {
+	defer func() {
+		if err != nil {
+			sanitization.release()
 		}
-		write.Messages[i] = messages[i]
+	}()
+
+	if len(write.Messages) > 0 {
+		sanitization.messages = sanitizedMessagePool.acquire(len(write.Messages))
+		for i := range write.Messages {
+			if err = ctx.Err(); err != nil {
+				return SessionBatchWrite{}, sanitization, err
+			}
+			sanitization.messages.rows[i] = write.Messages[i]
+		}
+		write.Messages = sanitization.messages.rows
+	} else {
+		write.Messages = nil
 	}
-	usageEvents := write.UsageEvents
-	write.UsageEvents = make([]UsageEvent, len(usageEvents))
-	for i := range write.UsageEvents {
-		if err := ctx.Err(); err != nil {
-			return SessionBatchWrite{}, err
+	if len(write.UsageEvents) > 0 {
+		sanitization.usage = sanitizedUsagePool.acquire(len(write.UsageEvents))
+		for i := range write.UsageEvents {
+			if err = ctx.Err(); err != nil {
+				return SessionBatchWrite{}, sanitization, err
+			}
+			sanitization.usage.rows[i] = write.UsageEvents[i]
 		}
-		write.UsageEvents[i] = usageEvents[i]
+		write.UsageEvents = sanitization.usage.rows
+	} else {
+		write.UsageEvents = nil
 	}
 
 	msgTotal, msgHasOut, msgPeak, msgHasCtx, err :=
 		batchMessageTokenTotalsContext(ctx, write.Messages)
 	if err != nil {
-		return SessionBatchWrite{}, err
+		return SessionBatchWrite{}, sanitization, err
 	}
 	evtTotal, evtHasOut, evtPeak, evtHasCtx, err :=
 		batchUsageEventTokenTotalsContext(ctx, write.UsageEvents)
 	if err != nil {
-		return SessionBatchWrite{}, err
+		return SessionBatchWrite{}, sanitization, err
 	}
 	totalFromMsgs := write.Session.HasTotalOutputTokens == msgHasOut &&
 		write.Session.TotalOutputTokens == msgTotal
@@ -328,17 +348,18 @@ func sanitizeSessionBatchWriteContext(
 	peakFromEvts := write.Session.HasPeakContextTokens == evtHasCtx &&
 		write.Session.PeakContextTokens == evtPeak
 
-	if _, err := ValidateAndSanitizeContext(
+	if _, err = ValidateAndSanitizeContext(
 		ctx, &write.Session, write.Messages, write.UsageEvents,
 	); err != nil {
-		return SessionBatchWrite{}, err
+		return SessionBatchWrite{}, sanitization, err
 	}
 
 	if totalFromMsgs || peakFromMsgs {
-		total, hasTotal, peak, hasPeak, err :=
+		total, hasTotal, peak, hasPeak, totalsErr :=
 			batchMessageTokenTotalsContext(ctx, write.Messages)
-		if err != nil {
-			return SessionBatchWrite{}, err
+		if totalsErr != nil {
+			err = totalsErr
+			return SessionBatchWrite{}, sanitization, err
 		}
 		if totalFromMsgs {
 			write.Session.TotalOutputTokens = total
@@ -352,10 +373,11 @@ func sanitizeSessionBatchWriteContext(
 	eventTotalNeeded := totalFromEvts && !totalFromMsgs
 	eventPeakNeeded := peakFromEvts && !peakFromMsgs
 	if eventTotalNeeded || eventPeakNeeded {
-		total, hasTotal, peak, hasPeak, err :=
+		total, hasTotal, peak, hasPeak, totalsErr :=
 			batchUsageEventTokenTotalsContext(ctx, write.UsageEvents)
-		if err != nil {
-			return SessionBatchWrite{}, err
+		if totalsErr != nil {
+			err = totalsErr
+			return SessionBatchWrite{}, sanitization, err
 		}
 		if eventTotalNeeded {
 			write.Session.TotalOutputTokens = total
@@ -366,9 +388,8 @@ func sanitizeSessionBatchWriteContext(
 			write.Session.HasPeakContextTokens = hasPeak
 		}
 	}
-	return write, nil
+	return write, sanitization, nil
 }
-
 func batchMessageTokenTotalsContext(
 	ctx context.Context, msgs []Message,
 ) (totalOut int, hasOut bool, peakCtx int, hasCtx bool, err error) {
@@ -436,7 +457,7 @@ func writeOneSessionBatchTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	queries transactionQueries,
-	bunTx bun.IDB,
+	bunTx bun.Tx,
 	write SessionBatchWrite,
 	pendingRecallRevocations *recallEvidenceRevocationEvents,
 ) (int, error) {
@@ -459,9 +480,7 @@ func writeOneSessionBatchTx(
 		write.IdentityObservation = normalized
 	}
 
-	upsertResult, err := upsertArchiveSessionRow(
-		ctx, bunTx, write.Session, true,
-	)
+	upsertResult, err := upsertArchiveSessionRow(ctx, bunTx, write.Session)
 	if err != nil {
 		return 0, err
 	}
@@ -475,6 +494,8 @@ func writeOneSessionBatchTx(
 	}
 	sessionExists := !upsertResult.inserted
 	replacementTranscriptChanged := false
+	var replacementPlan messageDiffPlan
+	useMessageDiff := false
 	if replaceMessages && sessionExists {
 		stored, err := sessionMessagesTx(
 			ctx, tx, write.Session.ID,
@@ -493,7 +514,22 @@ func writeOneSessionBatchTx(
 		replacementTranscriptChanged = !transcriptMessagesEqual(
 			stored, write.Messages,
 		)
+		replacementPlan, useMessageDiff = planSessionMessageDiff(
+			stored, write.Messages,
+		)
+		if useMessageDiff {
+			needsPinRemap, err := messageDiffNeedsPinRemap(
+				ctx, bunTx, replacementPlan,
+			)
+			if err != nil {
+				return 0, err
+			}
+			if needsPinRemap {
+				useMessageDiff = false
+			}
+		}
 	}
+	fullMessageReplace := replaceMessages && !useMessageDiff
 
 	if write.IdentityObservation.Project != "" {
 		if write.IdentitySnapshotProject == nil {
@@ -539,7 +575,7 @@ func writeOneSessionBatchTx(
 
 	msgs := write.Messages
 	var pins []savedPin
-	if replaceMessages && sessionExists {
+	if fullMessageReplace && sessionExists {
 		pins, err = savePinsTx(queries, write.Session.ID)
 		if err != nil {
 			return 0, err
@@ -551,7 +587,7 @@ func writeOneSessionBatchTx(
 		if err := deleteSessionMessagesTx(queries, write.Session.ID); err != nil {
 			return 0, err
 		}
-	} else {
+	} else if !replaceMessages {
 		maxOrd, err := maxOrdinalTx(queries, write.Session.ID)
 		if err != nil {
 			return 0, err
@@ -562,26 +598,19 @@ func writeOneSessionBatchTx(
 	if replaceMessages && sessionExists {
 		transcriptChanged = replacementTranscriptChanged
 	}
+	messagesWritten := len(msgs)
 
-	if len(msgs) > 0 {
-		messageRows, callRows, resultRows, err := CanonicalMessageRows(msgs)
-		if err != nil {
+	if useMessageDiff {
+		if err := applySessionMessageDiffTx(
+			ctx, bunTx, write.Session.ID, replacementPlan,
+		); err != nil {
 			return 0, err
 		}
-		if replaceMessages {
-			if err := ReplaceMessageRows(ctx, bunTx, write.Session.ID, messageRows); err != nil {
-				return 0, err
-			}
-			if err := ReplaceToolRows(ctx, bunTx, write.Session.ID, callRows, resultRows); err != nil {
-				return 0, err
-			}
-		} else {
-			if err := AppendMessageRows(ctx, bunTx, write.Session.ID, messageRows); err != nil {
-				return 0, err
-			}
-			if err := AppendToolRows(ctx, bunTx, write.Session.ID, callRows, resultRows); err != nil {
-				return 0, err
-			}
+	} else if len(msgs) > 0 {
+		if err := appendCanonicalMessageGraph(
+			ctx, bunTx, write.Session.ID, msgs,
+		); err != nil {
+			return 0, err
 		}
 	} else if replaceMessages {
 		if err := ReplaceMessageRows(ctx, bunTx, write.Session.ID, nil); err != nil {
@@ -597,7 +626,10 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if replaceMessages && sessionExists {
+	if !replaceMessages && len(msgs) > 0 ||
+		fullMessageReplace && sessionExists ||
+		useMessageDiff && (len(replacementPlan.updates) > 0 ||
+			len(replacementPlan.inserts) > 0) {
 		if err := reconcileRecallEvidenceForSessionTx(
 			ctx,
 			tx,
@@ -608,10 +640,10 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if replaceMessages {
-		if err := restorePinsTx(
-			queries, write.Session.ID, pins,
-		); err != nil {
-			return 0, err
+		if fullMessageReplace {
+			if err := restorePinsTx(queries, write.Session.ID, pins); err != nil {
+				return 0, err
+			}
 		}
 		// A full message replacement re-normalizes every row, so this row is
 		// no longer incremental-append skew. The append-only branch
@@ -646,18 +678,9 @@ func writeOneSessionBatchTx(
 		if err := updateSessionSignalsTx(queries, write.Session.ID, write.Signals); err != nil {
 			return 0, err
 		}
-		for i := range write.Findings {
-			write.Findings[i].SessionID = write.Session.ID
-			write.Findings[i].RulesVersion = write.Signals.SecretsRulesVersion
-		}
-		if err := ReplaceSecretFindingRows(
-			ctx, bunTx, write.Session.ID, CanonicalSecretFindingRows(write.Findings),
-		); err != nil {
-			return 0, err
-		}
-		if err := updateSessionSecretSummaryTx(
-			queries, write.Session.ID, write.Signals.SecretLeakCount,
-			write.Signals.SecretsRulesVersion,
+		if err := replaceSessionSecretFindingsBunTx(
+			ctx, bunTx, write.Session.ID, write.Findings,
+			write.Signals.SecretLeakCount, write.Signals.SecretsRulesVersion,
 		); err != nil {
 			return 0, err
 		}
@@ -668,7 +691,7 @@ func writeOneSessionBatchTx(
 		return 0, err
 	}
 
-	return len(msgs), nil
+	return messagesWritten, nil
 }
 
 func sessionMessagesTx(

@@ -14,11 +14,11 @@ import (
 // against the merge base, so a reintroduced O(session-history)
 // rewrite or per-row JSON parse fails the PR instead of shipping:
 //
-//   - BenchmarkReplaceSessionMessagesStreamingMerge: a one-row tail
-//     change must take the in-place diff path (one UPDATE) rather
-//     than delete+reinserting every row and rewriting the FTS index
-//     (regressed pre-#954: streaming chunk merges rewrote whole
-//     sessions on every appended chunk).
+//   - BenchmarkWriteSessionAtomicStreamingMerge: a one-row tail change through
+//     the production complete-session writer must take the in-place diff path
+//     rather than delete+reinserting every row and rewriting the FTS index
+//     (regressed pre-#954: streaming chunk merges rewrote whole sessions on
+//     every appended chunk).
 //   - BenchmarkInsertMessagesBatch: bulk ingest must keep multi-row
 //     batched inserts (#411).
 //
@@ -81,17 +81,22 @@ func seedBenchSession(
 	return msgs
 }
 
-// BenchmarkReplaceSessionMessagesStreamingMerge measures the
-// streaming chunk-merge shape: replacing a stored session where only
-// the tail message's content changed. The diff planner must apply a
-// single in-place UPDATE; cost must not scale with the number of
-// unchanged stored rows being rewritten.
-func BenchmarkReplaceSessionMessagesStreamingMerge(b *testing.B) {
+// BenchmarkWriteSessionAtomicStreamingMerge measures the production
+// complete-session writer when only the streaming tail changed. The batch core
+// must apply a scoped repair instead of rebuilding FTS for unchanged history.
+func BenchmarkWriteSessionAtomicStreamingMerge(b *testing.B) {
 	silenceBenchmarkLogs(b)
 	const stored = 1000
 	d := testDB(b)
 	msgs := seedBenchSession(b, d, "bench-replace", stored)
 	last := len(msgs) - 1
+	session, err := d.GetSessionFull(b.Context(), "bench-replace")
+	if err != nil {
+		b.Fatalf("get session: %v", err)
+	}
+	if session == nil {
+		b.Fatal("get session: missing benchmark session")
+	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -102,8 +107,13 @@ func BenchmarkReplaceSessionMessagesStreamingMerge(b *testing.B) {
 		)
 		msgs[last].Content = content
 		msgs[last].ContentLength = len(content)
-		if err := d.ReplaceSessionMessages("bench-replace", msgs); err != nil {
-			b.Fatalf("replace: %v", err)
+		if _, err := d.WriteSessionAtomic(SessionBatchWrite{
+			Session:         *session,
+			Messages:        msgs,
+			DataVersion:     CurrentDataVersion(),
+			ReplaceMessages: true,
+		}); err != nil {
+			b.Fatalf("write session: %v", err)
 		}
 	}
 }

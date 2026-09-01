@@ -149,6 +149,13 @@ func (db *DB) activityReportActivityFrom(
 				return fmt.Errorf(
 					"scanning activity report activity: %w", err)
 			}
+			e.Timestamp, err = canonicalStoredMessageTimestamp(e.Timestamp)
+			if err != nil {
+				return fmt.Errorf(
+					"reading activity report message %s ordinal %d timestamp: %w",
+					e.SessionID, e.Ordinal, err,
+				)
+			}
 			out = append(out, e)
 		}
 		return rows.Err()
@@ -183,7 +190,7 @@ func (db *DB) activityReportCandidates(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.IntervalCandidate, error) {
 	var out []activity.IntervalCandidate
-	err := db.activityReportCandidateSource(ids, q)(
+	err := db.BunStore.ActivityReportCandidateSource(ids, q)(
 		ctx, func(candidate activity.IntervalCandidate) error {
 			out = append(out, candidate)
 			return nil
@@ -192,127 +199,13 @@ func (db *DB) activityReportCandidates(
 	return out, err
 }
 
-const activityReportCandidatesSQL = `SELECT
-	m.session_id, m.ordinal, successor.ordinal,
-	m.timestamp, successor.timestamp,
-	successor.role, successor.model,
-	COALESCE((
-		SELECT prior.model
-		FROM messages prior
-		WHERE prior.session_id = m.session_id
-			AND prior.ordinal <= m.ordinal
-			AND prior.role = 'assistant'
-			AND prior.model != ''
-			AND prior.timestamp IS NOT NULL
-			AND prior.timestamp != ''
-			AND agentsview_timestamp_unix_micro(prior.timestamp) IS NOT NULL
-			AND agentsview_timestamp_unix_micro(prior.timestamp) > (
-				SELECT agentsview_timestamp_unix_micro(prior_previous.timestamp)
-				FROM messages prior_previous
-				WHERE prior_previous.session_id = prior.session_id
-					AND prior_previous.ordinal < prior.ordinal
-					AND prior_previous.timestamp IS NOT NULL
-					AND prior_previous.timestamp != ''
-					AND agentsview_timestamp_unix_micro(
-						prior_previous.timestamp) IS NOT NULL
-				ORDER BY prior_previous.ordinal DESC
-				LIMIT 1
-			)
-		ORDER BY prior.ordinal DESC
-		LIMIT 1
-	), 'unknown')
-FROM messages m INDEXED BY idx_messages_velocity
-JOIN messages successor ON successor.id = (
-	SELECT next.id
-	FROM messages next
-	WHERE next.session_id = m.session_id
-		AND next.ordinal > m.ordinal
-		AND next.timestamp IS NOT NULL
-		AND next.timestamp != ''
-		AND agentsview_timestamp_unix_micro(next.timestamp) IS NOT NULL
-	ORDER BY next.ordinal
-	LIMIT 1
-)
-WHERE m.session_id IN (SELECT value FROM json_each(?))
-	AND m.timestamp IS NOT NULL
-	AND m.timestamp != ''
-	AND m.timestamp >= ?
-	AND m.timestamp < ?
-	AND agentsview_timestamp_unix_micro(m.timestamp) IS NOT NULL
-	AND agentsview_timestamp_unix_micro(m.timestamp) >= ?
-	AND agentsview_timestamp_unix_micro(m.timestamp) < ?
-ORDER BY agentsview_timestamp_unix_micro(m.timestamp),
-	m.session_id, m.ordinal`
-
-func (db *DB) activityReportCandidateSource(
-	ids []string, q activity.Query,
-) activity.CandidateSource {
-	return func(
-		ctx context.Context,
-		yield func(activity.IntervalCandidate) error,
-	) error {
-		if len(ids) == 0 {
-			return nil
-		}
-		encodedIDs, err := json.Marshal(ids)
-		if err != nil {
-			return fmt.Errorf("encoding activity report session IDs: %w", err)
-		}
-		gapCap := time.Duration(q.GapCapSeconds) * time.Second
-		lowerTime := q.RangeStart.Add(-gapCap).UTC()
-		upperTime := q.EffectiveEnd.UTC()
-		lower := lowerTime.UnixMicro()
-		upper := upperTime.UnixMicro()
-		paddedLower := paddedUTCBound(lowerTime.Format(time.RFC3339), -14)
-		paddedUpper := paddedUTCBound(upperTime.Format(time.RFC3339), 14)
-		args := []any{string(encodedIDs), paddedLower, paddedUpper, lower, upper}
-		rows, err := db.getReader().QueryContext(
-			ctx, activityReportCandidatesSQL, args...,
-		)
-		if err != nil {
-			return fmt.Errorf("querying activity report candidates: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			var candidate activity.IntervalCandidate
-			var start, end string
-			if err := rows.Scan(
-				&candidate.SessionID, &candidate.StartOrdinal,
-				&candidate.EndOrdinal, &start, &end,
-				&candidate.ClosingRole, &candidate.ClosingModel,
-				&candidate.PriorModel,
-			); err != nil {
-				return fmt.Errorf("scanning activity report candidate: %w", err)
-			}
-			var err error
-			candidate.Start, err = time.Parse(time.RFC3339Nano, start)
-			if err != nil {
-				return fmt.Errorf("parsing activity candidate start: %w", err)
-			}
-			candidate.End, err = time.Parse(time.RFC3339Nano, end)
-			if err != nil {
-				return fmt.Errorf("parsing activity candidate end: %w", err)
-			}
-			candidate.Start = candidate.Start.UTC()
-			candidate.End = candidate.End.UTC()
-			if err := yield(candidate); err != nil {
-				return err
-			}
-		}
-		return rows.Err()
-	}
-}
-
 // ActivityReportCandidateSource exposes the backend's mechanical pairing
 // stream for cross-backend contract tests. Activity semantics remain in the
 // shared aggregator.
 func (db *DB) ActivityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
-	return db.activityReportCandidateSource(ids, q)
+	return db.BunStore.ActivityReportCandidateSource(ids, q)
 }
 
 // activityReportUsageCandidate retains the scanned source fields until the
@@ -520,11 +413,12 @@ func (db *BunStore) activityReportUsageCandidatesFrom(
 		webSearchRequests = make([]int, len(candidates))
 	}
 	return materializeActivityReportUsageCandidates(
-		candidates, nil, nil, webSearchRequests, rateResolver,
+		ctx, candidates, nil, nil, webSearchRequests, rateResolver,
 	)
 }
 
 func materializeActivityReportUsageCandidates(
+	ctx context.Context,
 	candidates []activityReportUsageCandidate,
 	mask []bool,
 	attribution []string,
@@ -532,7 +426,7 @@ func materializeActivityReportUsageCandidates(
 	rateResolver *export.PricingResolver,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out, err := materializeActivityReportUsageRows(
-		candidates, mask, attribution, webSearchRequests, rateResolver,
+		ctx, candidates, mask, attribution, webSearchRequests, rateResolver,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -545,6 +439,7 @@ func materializeActivityReportUsageCandidates(
 }
 
 func materializeActivityReportUsageRows(
+	ctx context.Context,
 	candidates []activityReportUsageCandidate,
 	mask []bool,
 	attribution []string,
@@ -553,6 +448,9 @@ func materializeActivityReportUsageRows(
 ) ([]activity.UsageRow, error) {
 	out := make([]activity.UsageRow, 0, len(candidates))
 	for i, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if mask != nil && !mask[i] {
 			continue
 		}
@@ -685,8 +583,7 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 		return fee, false, true, nil
 	}
 	pricedModel, lookup, err = pricing.ResolveBilledAt(
-		r.providerID, r.model, usageLookupModel(r.model, r.pricingTS),
-		usagePricingTimestamp(r.pricingTS))
+		r.providerID, r.model, dailyUsageLookupModel(r), r.pricingTime)
 	if err != nil {
 		return money.Money{}, false, false, err
 	}

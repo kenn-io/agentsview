@@ -135,7 +135,9 @@ func TestBackfillIsAutomatedPGPreservesDurableClassification(t *testing.T) {
 	)
 	require.NoError(t, err, "insert durably classified session")
 
-	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()), "backfill automation")
+	require.NoError(t, backfillIsAutomatedPG(
+		ctx, bun.NewDB(ps.DB(), pgdialect.New()),
+	), "backfill automation")
 
 	var got bool
 	require.NoError(t, ps.DB().QueryRowContext(ctx,

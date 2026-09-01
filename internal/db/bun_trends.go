@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -54,8 +53,7 @@ func streamBunTrendMessages(
 		sessionIDs, bunAnalyticsContentSessionBatchSize,
 		func(chunk []string) error {
 			rows, err := store.NewSelect().Table("messages").
-				Column("session_id", "ordinal", "role", "model", "is_system", "content").
-				ColumnExpr("CAST(timestamp AS VARCHAR) AS timestamp").
+				Column("session_id", "ordinal", "role", "model", "is_system", "content", "timestamp").
 				Where("session_id IN (?)", bun.List(chunk)).
 				OrderExpr("session_id ASC, ordinal ASC").Rows(ctx)
 			if err != nil {
@@ -63,7 +61,7 @@ func streamBunTrendMessages(
 			}
 			for rows.Next() {
 				var message bunmodel.Message
-				var timestamp sql.NullString
+				var timestamp bunmodel.Timestamp
 				if err := rows.Scan(
 					&message.SessionID, &message.Ordinal, &message.Role, &message.Model,
 					&message.IsSystem, &message.Content, &timestamp,
@@ -71,7 +69,9 @@ func streamBunTrendMessages(
 					_ = rows.Close()
 					return fmt.Errorf("scanning Bun trend message: %w", err)
 				}
-				message.Timestamp = parseBunAnalyticsTimestamp(timestamp)
+				if !timestamp.IsZero() {
+					message.Timestamp = &timestamp
+				}
 				if err := consume(message); err != nil {
 					_ = rows.Close()
 					return err

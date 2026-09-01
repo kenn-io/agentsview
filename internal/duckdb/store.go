@@ -61,9 +61,10 @@ func (*duckBunBackend) ReadOnly() bool { return true }
 
 func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	return db.BackendCapabilities{
-		FullText:      duckFullTextCapability{},
-		SessionSearch: duckFullTextCapability{},
-		SearchDialect: db.DuckDBBunSearchDialect(),
+		AnalyticsDialect: db.DuckDBBunAnalyticsDialect(),
+		FullText:         duckFullTextCapability{},
+		SessionSearch:    duckFullTextCapability{},
+		SearchDialect:    db.DuckDBBunSearchDialect(),
 		Semantic: db.NewVectorSemanticCapability(
 			func() db.VectorSearcher { return nil },
 			func() error {
@@ -75,7 +76,9 @@ func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	}
 }
 
-func (*duckBunBackend) TimestampOrderExpr(column string) string { return column }
+func (*duckBunBackend) TimestampOrderExpr(column string) string {
+	return "CAST(" + column + " AS TIMESTAMP)"
+}
 
 func (*duckBunBackend) SessionVersion(
 	ctx context.Context, store bun.IDB, id string,
