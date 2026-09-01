@@ -435,6 +435,11 @@ func (m *usageCacheManager) openPersistentGeneration(
 			return nil, err
 		}
 		if published {
+			if cache == nil {
+				return nil, fmt.Errorf(
+					"published usage cache is unavailable: %s", path,
+				)
+			}
 			cache.lease = lease
 			releaseLease = false
 			return cache, nil
