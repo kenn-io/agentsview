@@ -18,6 +18,30 @@ case "$site_dir" in
     ;;
 esac
 
+resolve_output_dir() {
+  local path="$1"
+  if [[ -d "$path" ]]; then
+    (cd "$path" && pwd -P)
+    return
+  fi
+  local parent
+  parent="$(dirname "$path")"
+  if [[ ! -d "$parent" ]]; then
+    printf 'site output parent directory does not exist: %s\n' "$parent" >&2
+    return 1
+  fi
+  printf '%s/%s\n' "$(cd "$parent" && pwd -P)" "$(basename "$path")"
+}
+
+# The build deletes the output directory before rendering, so refuse any
+# path that resolves to the docs sources or one of their ancestors.
+site_output_dir="$(resolve_output_dir "$site_output_dir")"
+if [[ "$site_output_dir" == "/" || "$docs_root/" == "$site_output_dir/"* ]]; then
+  printf 'refusing site output directory %s: it contains the docs sources\n' \
+    "$site_output_dir" >&2
+  exit 2
+fi
+
 if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/zensical" ]]; then
   zensical_bin="$VIRTUAL_ENV/bin/zensical"
 elif [[ -x "$docs_root/.venv/bin/zensical" ]]; then
