@@ -1222,17 +1222,6 @@
       }
     }
   ],
-  "activity_lane_activity": "activité",
-  "activity_lane_message_count": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} message",
-        "countPlural=other": "{countLabel} messages"
-      }
-    }
-  ],
   "session_recall_title": "Mémoire",
   "session_recall_loading": "Chargement des mémoires distillées…",
   "session_recall_empty": "Aucune mémoire distillée pour cette session.",
@@ -1339,9 +1328,13 @@
   "session_vitals_time_spent": "Temps passé",
   "session_vitals_clear_category_filter": "effacer le filtre de catégorie",
   "session_vitals_completed_turns_hint": "tours terminés · cliquez pour surligner",
-  "session_vitals_timeline": "Chronologie",
-  "session_vitals_click_marks_to_scroll": "cliquez sur les marques pour faire défiler",
-  "session_vitals_jump_to_turn": "Aller au tour {category} à {time}",
+  "session_vitals_timeline": "Vue chronologique",
+  "session_vitals_timeline_input": "Entrée",
+  "session_vitals_timeline_model": "Modèle",
+  "session_vitals_timeline_tools": "Outils",
+  "session_vitals_timeline_hint": "faites glisser pour cibler · molette pour zoomer",
+  "session_vitals_timeline_reset_view": "Réinitialiser la vue",
+  "session_vitals_timeline_load_earlier": "Charger l’historique antérieur",
   "session_vitals_calls": "Appels",
   "session_vitals_calls_summary": [
     {

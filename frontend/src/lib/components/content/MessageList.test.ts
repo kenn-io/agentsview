@@ -9,7 +9,9 @@ import {
 } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import type { Message } from "../../api/types.js";
+import type { SessionTiming } from "../../api/types/timing.js";
 import { messages } from "../../stores/messages.svelte.js";
+import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { readProgress } from "../../stores/read-progress.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
@@ -98,6 +100,7 @@ describe("MessageList follow cancellation", () => {
     virtualizerMock.scrollOffset = 0;
     virtualizerMock.scrollRect.height = 200;
     messages.clear();
+    sessionTiming.reset();
     sessions.activeSessionId = "s1";
     messages.sessionId = "s1";
     messages.messages = [makeMessage(10)];
@@ -130,6 +133,7 @@ describe("MessageList follow cancellation", () => {
     }
     rafSpy.mockRestore();
     messages.clear();
+    sessionTiming.reset();
     sessions.activeSessionId = null;
     ui.followLatest = false;
     readProgress.reset();
@@ -159,6 +163,33 @@ describe("MessageList follow cancellation", () => {
     await tick();
 
     expect(document.body.textContent).toContain("正在加载消息...");
+  });
+
+  it("renders the full-width overview when timing arrives after mount", async () => {
+    messages.messages = [makeMessage(0), makeMessage(1)];
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    expect(document.querySelector(".overview")).toBeNull();
+
+    const timing: SessionTiming = {
+      session_id: "s1",
+      total_duration_ms: 1_000,
+      tool_duration_ms: 0,
+      turn_count: 0,
+      tool_call_count: 0,
+      subagent_count: 0,
+      slowest_call: null,
+      by_category: [],
+      turns: [],
+      running: false,
+    };
+    sessionTiming.timing = timing;
+    await tick();
+
+    expect(document.querySelector(".overview")).not.toBeNull();
+    expect(
+      document.querySelector(".overview")?.nextElementSibling?.classList,
+    ).toContain("message-list-scroll");
   });
 
   it("keeps delayed ordinal navigation alive after follow latest is disabled", async () => {

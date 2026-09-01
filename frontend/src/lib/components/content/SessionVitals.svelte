@@ -17,7 +17,6 @@
     SessionTiming,
     TurnTiming,
   } from "../../api/types/timing.js";
-  import ActivityLane from "./ActivityLane.svelte";
   import RecallPanel from "./RecallPanel.svelte";
   import CallRow from "./CallRow.svelte";
   import CallGroup from "./CallGroup.svelte";
@@ -243,46 +242,6 @@
     );
   }
 
-  // Timeline-lane geometry. Both endpoints are in epoch-ms; the duration
-  // window includes any in-flight running time so live marks reach the
-  // right edge of the track.
-  let sessionStartMs = $derived.by(() => {
-    if (!timing || timing.turns.length === 0) return 0;
-    return new Date(timing.turns[0]!.started_at).getTime();
-  });
-
-  let sessionEndMs = $derived.by(() => {
-    if (!timing) return sessionStartMs;
-    return sessionStartMs + Math.max(timing.total_duration_ms, 1);
-  });
-
-  function turnLeftPct(turn: TurnTiming): number {
-    const span = Math.max(sessionEndMs - sessionStartMs, 1);
-    const t = new Date(turn.started_at).getTime();
-    return ((t - sessionStartMs) / span) * 100;
-  }
-
-  function turnWidthPct(turn: TurnTiming): number {
-    const span = Math.max(sessionEndMs - sessionStartMs, 1);
-    if (turn.duration_ms == null) {
-      // Running turn: stretch to the right edge so it reads as in-flight.
-      const t = new Date(turn.started_at).getTime();
-      return Math.max(0.5, ((sessionEndMs - t) / span) * 100);
-    }
-    return Math.max(0.3, (turn.duration_ms / span) * 100);
-  }
-
-  function turnTitle(turn: TurnTiming): string {
-    const dur =
-      turn.duration_ms != null
-        ? formatDuration(turn.duration_ms)
-        : m.session_vitals_running();
-    return `${turn.primary_category} · ${dur}`;
-  }
-
-  function scrollToTurn(turn: TurnTiming) {
-    ui.scrollToOrdinal(turn.ordinal);
-  }
 </script>
 
 <div class="vital">
@@ -458,84 +417,6 @@
       </section>
     {/if}
 
-    {#if timing.turns.length > 0}
-      <section class="v-section">
-        <header class="v-h">
-          <span>{m.session_vitals_timeline()}</span>
-          <span class="v-meta">{m.session_vitals_click_marks_to_scroll()}</span>
-        </header>
-
-        <div class="lane-row">
-          <span class="lane-label">{m.session_vitals_turns()}</span>
-          <span class="lane-track">
-            {#each timing.turns as t (t.message_id)}
-              {@const isLive = t.duration_ms == null}
-              <button
-                class="lane-mark"
-                class:live={isLive}
-                class:dimmed={categoryFilter !== null && t.primary_category !== categoryFilter}
-                style="left: {turnLeftPct(t)}%; width: {turnWidthPct(t)}%; {isLive
-                  ? ''
-                  : `background: ${categoryToken(t.primary_category)};`}"
-                title={turnTitle(t)}
-                onclick={() => scrollToTurn(t)}
-                type="button"
-                aria-label={m.session_vitals_jump_to_turn({
-                  category: t.primary_category,
-                  time: t.started_at,
-                })}
-              ></button>
-            {/each}
-          </span>
-        </div>
-
-        <div class="lane-spacer"></div>
-
-        {#each timing.by_category as cat (cat.category)}
-          <div
-            class="lane-row"
-            class:dimmed={categoryFilter !== null && cat.category !== categoryFilter}
-          >
-            <span class="lane-label">{cat.category}</span>
-            <span class="lane-track">
-              {#each timing.turns.filter((tt) => tt.primary_category === cat.category) as t (t.message_id)}
-                {@const isLive = t.duration_ms == null}
-                <button
-                  class="lane-mark"
-                  class:live={isLive}
-                  style="left: {turnLeftPct(t)}%; width: {turnWidthPct(t)}%; {isLive
-                    ? ''
-                    : `background: ${categoryToken(cat.category)};`}"
-                  title={turnTitle(t)}
-                  onclick={() => scrollToTurn(t)}
-                  type="button"
-                  aria-label={m.session_vitals_jump_to_turn({
-                    category: cat.category,
-                    time: t.started_at,
-                  })}
-                ></button>
-              {/each}
-            </span>
-          </div>
-        {/each}
-
-        <div class="lane-spacer"></div>
-
-        <ActivityLane {sessionId} />
-
-        <div class="legend">
-          {#each timing.by_category as cat (cat.category)}
-            <span>
-              <span
-                class="legend-dot"
-                style="background: {categoryToken(cat.category)};"
-              ></span>
-              {cat.category}
-            </span>
-          {/each}
-        </div>
-      </section>
-    {/if}
 
     {#if timing.turns.length > 0}
       <section class="v-section">
@@ -934,76 +815,6 @@
     flex-shrink: 0;
   }
 
-  /* Timeline lanes ----------------------------------------------------- */
-  .lane-row {
-    display: grid;
-    grid-template-columns: 48px 1fr;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
-    transition: opacity 0.18s;
-  }
-  .lane-row.dimmed {
-    opacity: 0.40;
-  }
-  .lane-label {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-muted);
-  }
-  .lane-track {
-    height: 12px;
-    background: var(--bg-inset, rgba(255, 255, 255, 0.04));
-    border-radius: 2px;
-    position: relative;
-  }
-  /* `.lane-track.activity` lives in ActivityLane.svelte (Svelte scopes
-     styles per component, so it owns its own rule). */
-  .lane-mark {
-    position: absolute;
-    top: 1px;
-    bottom: 1px;
-    border-radius: 1px;
-    cursor: pointer;
-    border: 0;
-    padding: 0;
-    transition: opacity 0.18s, filter 0.12s;
-  }
-  .lane-mark:hover {
-    filter: brightness(1.3);
-  }
-  .lane-mark.dimmed {
-    opacity: 0.40;
-  }
-  .lane-mark.live {
-    background: linear-gradient(
-      90deg,
-      var(--running-fg, #6ad0a8),
-      color-mix(in srgb, var(--running-fg, #6ad0a8) 65%, #000)
-    );
-    animation: duration-pulse 1.6s ease-in-out infinite;
-  }
-  .lane-spacer {
-    height: 8px;
-  }
-
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 12px;
-    margin-top: 10px;
-    font-size: 9px;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-  }
-  .legend-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 1px;
-    margin-right: 4px;
-    vertical-align: -1px;
-  }
 
   /* Calls section --------------------------------------------------- */
   /* Adapted from the session-duration UX mockup, with the raw colors mapped to

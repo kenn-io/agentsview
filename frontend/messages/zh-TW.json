@@ -1164,16 +1164,6 @@
       }
     }
   ],
-  "activity_lane_activity": "活動",
-  "activity_lane_message_count": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "{countLabel} 則訊息"
-      }
-    }
-  ],
   "session_recall_title": "記憶",
   "session_recall_loading": "正在載入提煉記憶…",
   "session_recall_empty": "此工作階段沒有提煉記憶。",
@@ -1280,9 +1270,13 @@
   "session_vitals_time_spent": "耗時分布",
   "session_vitals_clear_category_filter": "清除分類篩選",
   "session_vitals_completed_turns_hint": "已完成回合 · 點擊高亮顯示",
-  "session_vitals_timeline": "時間線",
-  "session_vitals_click_marks_to_scroll": "點擊標記滾動",
-  "session_vitals_jump_to_turn": "跳轉到 {time} 的 {category} 回合",
+  "session_vitals_timeline": "時序概覽",
+  "session_vitals_timeline_input": "輸入",
+  "session_vitals_timeline_model": "模型",
+  "session_vitals_timeline_tools": "工具",
+  "session_vitals_timeline_hint": "拖曳聚焦 · 滾輪縮放",
+  "session_vitals_timeline_reset_view": "重設檢視",
+  "session_vitals_timeline_load_earlier": "載入更早歷史",
   "session_vitals_calls": "調用",
   "session_vitals_calls_summary": [
     {

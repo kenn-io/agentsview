@@ -1,9 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// Spec for the Session Vital Signs panel. Replaces the old
-// ActivityMinimap spec — the minimap component is gone, and
-// the right column now shows the four-section vital-signs
-// panel rendered by SessionVitals.svelte.
+// Spec for the full-width session timing overview and the optional Session
+// Vital Signs analysis column.
 //
 // The fixture session `test-session-duration-showcase` is
 // seeded by cmd/testfixture and exercised by scripts/e2e-server.sh.
@@ -44,29 +42,37 @@ async function gotoShowcase(page: Page) {
 }
 
 test.describe("Session Vital Signs", () => {
-  test("renders all four sections", async ({ page }) => {
+  test("renders the overview above the transcript, independent of analysis", async ({ page }) => {
     await gotoShowcase(page);
 
-    // Section labels are not semantic headings, so match the compact
-    // section-header rows. Calls uses a disclosure button while the other
-    // sections keep text-only labels.
-    const headers = page
-      .locator(".v-section .v-h")
-      .filter({ hasText: /(Session|Time spent|Timeline|Calls)/ });
-    await expect(headers).toHaveCount(4);
+    const overview = page.locator("main.content > .overview");
+    await expect(overview).toBeVisible();
+    await expect(page.locator("aside.vitals .overview")).toHaveCount(0);
+    await expect(
+      overview.getByRole("button", { name: "Duration" }),
+    ).toBeVisible();
+    await expect(
+      overview.getByRole("button", { name: "Turns" }),
+    ).toBeVisible();
+    await expect(
+      overview.getByRole("button", { name: "Calls" }),
+    ).toBeVisible();
+    await expect(overview.getByRole("searchbox")).toBeVisible();
+    await expect(
+      overview.locator('[data-overview-span][data-lane="input"]').first(),
+    ).toBeVisible();
+    await expect(
+      overview.locator('[data-overview-span][data-lane="model"]').first(),
+    ).toBeVisible();
+    await expect(
+      overview.locator('[data-overview-span][data-lane="tools"]').first(),
+    ).toBeVisible();
 
-    await expect(
-      page.locator(".v-section .v-h", { hasText: "Session" }),
-    ).toBeVisible();
-    await expect(
-      page.locator(".v-section .v-h", { hasText: "Time spent" }),
-    ).toBeVisible();
-    await expect(
-      page.locator(".v-section .v-h", { hasText: "Timeline" }),
-    ).toBeVisible();
-    await expect(
-      page.locator(".v-section .v-h", { hasText: "Calls" }),
-    ).toBeVisible();
+    const widthWithAnalysis = (await overview.boundingBox())!.width;
+    await page.getByRole("button", { name: "Close session analysis" }).click();
+    await expect(page.locator("aside.vitals")).toHaveCount(0);
+    await expect(overview).toBeVisible();
+    expect((await overview.boundingBox())!.width).toBeGreaterThan(widthWithAnalysis);
   });
 
   test("keeps an absolute mixed-direction worktree path ordered", async ({

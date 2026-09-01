@@ -1222,17 +1222,6 @@
       }
     }
   ],
-  "activity_lane_activity": "activity",
-  "activity_lane_message_count": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} message",
-        "countPlural=other": "{countLabel} messages"
-      }
-    }
-  ],
   "session_recall_title": "Recall",
   "session_recall_loading": "Loading distilled recall…",
   "session_recall_empty": "No distilled recall for this session.",
@@ -1339,9 +1328,13 @@
   "session_vitals_time_spent": "Time spent",
   "session_vitals_clear_category_filter": "clear category filter",
   "session_vitals_completed_turns_hint": "completed turns · click to highlight",
-  "session_vitals_timeline": "Timeline",
-  "session_vitals_click_marks_to_scroll": "click marks to scroll",
-  "session_vitals_jump_to_turn": "Jump to {category} turn at {time}",
+  "session_vitals_timeline": "Timing overview",
+  "session_vitals_timeline_input": "Input",
+  "session_vitals_timeline_model": "Model",
+  "session_vitals_timeline_tools": "Tools",
+  "session_vitals_timeline_hint": "drag to focus · wheel to zoom",
+  "session_vitals_timeline_reset_view": "Reset view",
+  "session_vitals_timeline_load_earlier": "Load earlier history",
   "session_vitals_calls": "Calls",
   "session_vitals_calls_summary": [
     {

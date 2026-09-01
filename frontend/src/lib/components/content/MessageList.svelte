@@ -4,6 +4,7 @@
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
   import { messages } from "../../stores/messages.svelte.js";
+  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { readProgress } from "../../stores/read-progress.svelte.js";
@@ -25,8 +26,8 @@
   import { isSystemMessage } from "../../utils/messages.js";
   import { resolveMessageLayout } from "../../utils/message-layout.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
-  import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
+  import TimingOverview from "./TimingOverview.svelte";
   import {
     getAlignedOffsetScrollAlign,
     getLatestDisplayIndex,
@@ -51,6 +52,13 @@
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
   );
+
+  let overviewTiming = $derived.by(() => {
+    const timing = sessionTiming.timing;
+    const sessionId = sessions.activeSessionId;
+    if (!timing || timing.session_id !== sessionId) return null;
+    return timing;
+  });
 
   let baseDisplayItemsAsc = $derived(
     buildDisplayItems(baseMessages),
@@ -116,6 +124,24 @@
     return displayItemsAsc[index];
   }
 
+  async function loadEarlierOverviewMessages(): Promise<void> {
+    await messages.loadOlder();
+  }
+
+  function scrollFromOverview(ordinal: number): void {
+    ui.scrollToOrdinal(ordinal);
+  }
+
+  function toggleOverviewTurns(): void {
+    ui.setTranscriptMode(
+      ui.transcriptMode === "focused" ? "normal" : "focused",
+    );
+  }
+
+  function toggleOverviewCalls(): void {
+    ui.setBlockVisible("tool", !ui.isBlockVisible("tool"));
+  }
+
   const virtualizer = createVirtualizer(() => {
     const count = displayItemsAsc.length;
     const el = containerRef ?? null;
@@ -159,32 +185,6 @@
     };
   }
 
-  function publishVisibleTimestamp() {
-    const v = virtualizer.instance;
-    if (!v) return;
-    const items = v.getVirtualItems();
-    // Skip overscanned items above the viewport.
-    const scrollTop = v.scrollOffset ?? 0;
-    for (const vi of items) {
-      if (vi.end <= scrollTop) continue;
-      const item =
-        displayItemsAsc[
-          ui.sortNewestFirst
-            ? displayItemsAsc.length - 1 - vi.index
-            : vi.index
-        ];
-      if (!item) continue;
-      const ts =
-        item.kind === "message"
-          ? item.message.timestamp
-          : item.timestamp;
-      if (ts) {
-        sessionActivity.firstVisibleTimestamp = ts;
-        return;
-      }
-    }
-    sessionActivity.firstVisibleTimestamp = null;
-  }
 
   function recordVisibleProgress() {
     const v = virtualizer.instance;
@@ -314,16 +314,6 @@
     return ordinals;
   }
 
-  // Recompute visible timestamp when minimap opens or
-  // message content changes (e.g. SSE reload).
-  $effect(() => {
-    if (ui.vitalsOpen) {
-      // Track message array so the effect re-runs after
-      // content changes while the minimap is open.
-      void messages.messages.length;
-      publishVisibleTimestamp();
-    }
-  });
 
   let latestLoadedOrdinal = $derived(
     baseMessages[baseMessages.length - 1]?.ordinal ?? null,
@@ -422,9 +412,6 @@
         }
       }
 
-      if (ui.vitalsOpen) {
-        publishVisibleTimestamp();
-      }
 
       recordVisibleProgress();
 
@@ -840,6 +827,22 @@
 {:else if messages.loading && messages.messages.length === 0}
   <EmptyState title={m.message_list_loading()} />
 {:else}
+  {#if overviewTiming}
+    <TimingOverview
+      messages={messages.messages}
+      timing={overviewTiming}
+      sessionStartedAt={sessions.activeSession?.started_at}
+      sessionEndedAt={sessions.activeSession?.ended_at}
+      hasEarlierMessages={messages.hasOlder}
+      loadingEarlierMessages={messages.loadingOlder}
+      onLoadEarlier={loadEarlierOverviewMessages}
+      onNavigate={scrollFromOverview}
+      turnsCollapsed={ui.transcriptMode === "focused"}
+      callsCollapsed={!ui.isBlockVisible("tool")}
+      onToggleTurns={toggleOverviewTurns}
+      onToggleCalls={toggleOverviewCalls}
+    />
+  {/if}
   <SessionFindBar />
   <div
     class="message-list-scroll layout-{effectiveLayout}"

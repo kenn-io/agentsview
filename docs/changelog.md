@@ -26,6 +26,12 @@ description: Release history for AgentsView
   interface, so additional JSONL agents can opt in without repeating per-agent
   sync switches.
 
+- Pin an interactive **Input / Model / Tools** timing overview above every open
+  transcript. Its DSH-style toolbar switches duration projection and transcript
+  detail, searches timeline records, and keeps the overview independent of the
+  optional analysis column. Exact tool execution events take precedence;
+  striped turn-level fallbacks and progressive history avoid fabricated timing.
+
 **Bug fixes**
 
 - Preserve Antigravity CLI 1.1.5 generation usage and Low/Medium/High model
