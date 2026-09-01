@@ -37,6 +37,10 @@ description: Release history for AgentsView
 
 - Build and lint with Go 1.27 and golangci-lint 2.13.0. Source builds now
   require Go 1.27+, and the Go code now uses `encoding/json/v2` semantics.
+- Retire inactive usage-cache generations after every lease-aware process has
+  released them. Retirement revalidates cache ownership and generation identity
+  under an exclusive cross-process lease; active, legacy, and mismatched files
+  remain untouched.
 
 ---
 

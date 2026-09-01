@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/gofrs/flock"
 )
 
 const (
@@ -25,9 +27,14 @@ const (
 	// cached rollups to rebuild with the corrected resolution.
 	// Version 7 rebuilds version 6 facts and rollups so provider-specific
 	// billing identity survives cache generation and rollup aggregation.
-	usageCacheFormatVersion = 7
-	usageCacheApplicationID = 0x41565543
-	usageCacheKind          = "agentsview-usage-facts"
+	// Version 8 introduces a cross-process generation lease. Older binaries
+	// select version 7 and therefore cannot open a leased generation without
+	// participating in its retirement protocol.
+	usageCacheFormatVersion             = 8
+	usageCacheApplicationID             = 0x41565543
+	usageCacheKind                      = "agentsview-usage-facts"
+	usageCacheRetirementProtocolVersion = 1
+	usageCacheRetirementProtocolFormat  = 8
 
 	usageCacheMetadataKind                = "cache_kind"
 	usageCacheMetadataFormatVersion       = "format_version"
@@ -37,6 +44,7 @@ const (
 	usageCacheMetadataDeletionRevision    = "deletion_revision"
 	usageCacheMetadataCursorHighWaterMark = "cursor_high_water_mark"
 	usageCacheMetadataBackfillCompletedAt = "backfill_completed_at"
+	usageCacheMetadataRetirementProtocol  = "retirement_protocol_version"
 )
 
 const usageCacheSchemaSQL = `
@@ -225,6 +233,7 @@ type usageCache struct {
 	fill       *usageFillCoordinator
 	rollup     *usageRollupCoordinator
 	cancel     context.CancelFunc
+	lease      *flock.Flock
 
 	lifecycleMu sync.Mutex
 	users       int
@@ -233,12 +242,13 @@ type usageCache struct {
 }
 
 type usageCacheProbe struct {
-	Exists           bool
-	Recognized       bool
-	Compatible       bool
-	FormatVersion    int
-	SourceDatabaseID string
-	Err              error
+	Exists                    bool
+	Recognized                bool
+	Compatible                bool
+	FormatVersion             int
+	SourceDatabaseID          string
+	RetirementProtocolVersion int
+	Err                       error
 }
 
 type usageCacheManager struct {
@@ -325,6 +335,13 @@ func (m *usageCacheManager) Generation(
 		cache.fill = newUsageFillCoordinator(cacheContext, m.archive, cache)
 		cache.rollup = newUsageRollupCoordinator(cacheContext, m.archive, cache)
 	}
+	if !cache.temporary {
+		if err := retireStaleUsageCacheGenerations(
+			ctx, m.archivePath, cache.path,
+		); err != nil {
+			log.Printf("warning: retiring stale usage cache generations: %v", err)
+		}
+	}
 	return cache, nil
 }
 
@@ -398,6 +415,16 @@ func (m *usageCacheManager) openPersistentGeneration(
 	path := usageCacheGenerationPath(
 		m.archivePath, usageCacheFormatVersion, databaseID,
 	)
+	lease, err := acquireUsageCacheLease(path)
+	if err != nil {
+		return nil, err
+	}
+	releaseLease := true
+	defer func() {
+		if releaseLease {
+			_ = lease.Close()
+		}
+	}()
 	probe := probeUsageCache(ctx, path)
 	if probe.Err != nil {
 		return nil, probe.Err
@@ -408,6 +435,8 @@ func (m *usageCacheManager) openPersistentGeneration(
 			return nil, err
 		}
 		if published {
+			cache.lease = lease
+			releaseLease = false
 			return cache, nil
 		}
 		probe = probeUsageCacheWithBusyTimeout(ctx, path, 5000)
@@ -422,9 +451,29 @@ func (m *usageCacheManager) openPersistentGeneration(
 		return nil, fmt.Errorf("usage cache source database id mismatch at %s", path)
 	}
 	if probe.Compatible {
-		return openUsageCache(ctx, path, databaseID, false)
+		cache, err := openUsageCache(ctx, path, databaseID, false)
+		if err != nil {
+			return nil, err
+		}
+		cache.lease = lease
+		releaseLease = false
+		return cache, nil
 	}
 	return nil, fmt.Errorf("usage cache generation is incompatible: %s", path)
+}
+
+func usageCacheLeasePath(path string) string {
+	return path + ".lease"
+}
+
+func acquireUsageCacheLease(path string) (*flock.Flock, error) {
+	lease := flock.New(
+		usageCacheLeasePath(path), flock.SetPermissions(0o600),
+	)
+	if err := lease.RLock(); err != nil {
+		return nil, fmt.Errorf("acquiring usage cache lease for %s: %w", path, err)
+	}
+	return lease, nil
 }
 
 func publishUsageCache(
@@ -526,6 +575,8 @@ func initializeUsageCache(
 		{usageCacheMetadataDeletionRevision, "0"},
 		{usageCacheMetadataCursorHighWaterMark, "0"},
 		{usageCacheMetadataBackfillCompletedAt, ""},
+		{usageCacheMetadataRetirementProtocol,
+			strconv.Itoa(usageCacheRetirementProtocolVersion)},
 	}
 	for _, item := range metadata {
 		if _, err := tx.ExecContext(ctx,
@@ -650,8 +701,21 @@ func probeUsageCacheWithBusyTimeout(
 		probe.Err = fmt.Errorf("reading usage cache source database id: %w", sourceErr)
 		return probe
 	}
+	var retirementProtocolText string
+	retirementProtocolErr := database.QueryRowContext(ctx,
+		`SELECT value FROM usage_cache_metadata WHERE key = ?`,
+		usageCacheMetadataRetirementProtocol,
+	).Scan(&retirementProtocolText)
+	if retirementProtocolErr != nil && !errors.Is(retirementProtocolErr, sql.ErrNoRows) {
+		probe.Err = fmt.Errorf(
+			"reading usage cache retirement protocol: %w", retirementProtocolErr)
+		return probe
+	}
+	probe.RetirementProtocolVersion, _ = strconv.Atoi(retirementProtocolText)
 	probe.Compatible = probe.FormatVersion == usageCacheFormatVersion &&
-		probe.SourceDatabaseID != "" && usageCacheSchemaComplete(ctx, database)
+		probe.SourceDatabaseID != "" &&
+		probe.RetirementProtocolVersion == usageCacheRetirementProtocolVersion &&
+		usageCacheSchemaComplete(ctx, database)
 	return probe
 }
 
@@ -664,8 +728,8 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 			'source_database_id', 'next_install_revision',
 			'next_rollup_install_revision',
 			'deletion_revision', 'cursor_high_water_mark',
-			'backfill_completed_at'
-		)`).Scan(&metadataCount); err != nil || metadataCount != 8 {
+			'backfill_completed_at', 'retirement_protocol_version'
+		)`).Scan(&metadataCount); err != nil || metadataCount != 9 {
 		return false
 	}
 	queries := []string{
@@ -754,7 +818,99 @@ func removeUsageCacheFiles(path string) error {
 	return errors.Join(errs...)
 }
 
-func retireUsageCaches(caches []*usageCache) error {
+func isUsageCacheGenerationFilename(name string) bool {
+	const prefix = "usage-cache-v"
+	const suffix = ".db"
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		return false
+	}
+	identity := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
+	separator := strings.LastIndexByte(identity, '-')
+	if separator <= 0 || separator == len(identity)-1 {
+		return false
+	}
+	version, err := strconv.Atoi(identity[:separator])
+	if err != nil || version <= 0 {
+		return false
+	}
+	digest := identity[separator+1:]
+	if len(digest) != 32 {
+		return false
+	}
+	for _, character := range digest {
+		if !((character >= '0' && character <= '9') ||
+			(character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func retireStaleUsageCacheGenerations(
+	ctx context.Context, archivePath, currentPath string,
+) error {
+	entries, err := os.ReadDir(filepath.Dir(archivePath))
+	if err != nil {
+		return err
+	}
+	currentPath = filepath.Clean(currentPath)
+	var errs []error
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 ||
+			!isUsageCacheGenerationFilename(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(filepath.Dir(archivePath), entry.Name())
+		if filepath.Clean(path) == currentPath {
+			continue
+		}
+		if _, err := retireUsageCacheGeneration(ctx, archivePath, path); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func retireUsageCacheGeneration(
+	ctx context.Context, archivePath, path string,
+) (bool, error) {
+	lease := flock.New(
+		usageCacheLeasePath(path), flock.SetPermissions(0o600),
+	)
+	locked, err := lease.TryLock()
+	if err != nil {
+		return false, fmt.Errorf("acquiring usage cache retirement lease for %s: %w",
+			path, err)
+	}
+	if !locked {
+		return false, nil
+	}
+	defer func() { _ = lease.Close() }()
+
+	probe := probeUsageCache(ctx, path)
+	if probe.Err != nil {
+		return false, probe.Err
+	}
+	if !probe.Recognized || probe.SourceDatabaseID == "" ||
+		probe.FormatVersion < usageCacheRetirementProtocolFormat ||
+		probe.RetirementProtocolVersion != usageCacheRetirementProtocolVersion {
+		return false, nil
+	}
+	expectedPath := usageCacheGenerationPath(
+		archivePath, probe.FormatVersion, probe.SourceDatabaseID,
+	)
+	if filepath.Clean(expectedPath) != filepath.Clean(path) {
+		return false, nil
+	}
+	if err := removeUsageCacheFiles(path); err != nil {
+		return false, fmt.Errorf("removing retired usage cache %s: %w", path, err)
+	}
+	return true, nil
+}
+
+func retireUsageCaches(
+	caches []*usageCache, archivePath string, removePersistent bool,
+) error {
 	retired := make([]<-chan struct{}, len(caches))
 	for index, cache := range caches {
 		retired[index] = cache.beginRetirement()
@@ -765,11 +921,23 @@ func retireUsageCaches(caches []*usageCache) error {
 		if cache.fill != nil {
 			cache.fill.Close()
 		}
+		var closeErr error
 		if cache.db != nil {
-			errs = append(errs, cache.db.Close())
+			closeErr = cache.db.Close()
+			errs = append(errs, closeErr)
+		}
+		var leaseErr error
+		if cache.lease != nil {
+			leaseErr = cache.lease.Close()
+			errs = append(errs, leaseErr)
 		}
 		if cache.temporary {
 			errs = append(errs, removeUsageCacheFiles(cache.path))
+		} else if removePersistent && closeErr == nil && leaseErr == nil {
+			_, err := retireUsageCacheGeneration(
+				context.Background(), archivePath, cache.path,
+			)
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
@@ -793,7 +961,7 @@ func (m *usageCacheManager) Reset() error {
 	m.currentID = ""
 	caches := m.detachAllLocked()
 	m.mu.Unlock()
-	return retireUsageCaches(caches)
+	return retireUsageCaches(caches, m.archivePath, true)
 }
 
 func (m *usageCacheManager) RetireExcept(databaseID string) error {
@@ -812,7 +980,7 @@ func (m *usageCacheManager) RetireExcept(databaseID string) error {
 		delete(m.generations, cachedID)
 	}
 	m.mu.Unlock()
-	return retireUsageCaches(caches)
+	return retireUsageCaches(caches, m.archivePath, true)
 }
 
 func (m *usageCacheManager) Close() error {
@@ -825,5 +993,5 @@ func (m *usageCacheManager) Close() error {
 	m.cancel()
 	caches := m.detachAllLocked()
 	m.mu.Unlock()
-	return retireUsageCaches(caches)
+	return retireUsageCaches(caches, m.archivePath, false)
 }
