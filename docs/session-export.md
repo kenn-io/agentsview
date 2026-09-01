@@ -189,7 +189,7 @@ directory basename.
 
 The report-level `projects` catalog uses the same identities, but remote-backed
 catalog entries omit the session-specific `root_key`. See
-[Project Identity](/token-usage/#project-identity) for key prefixes,
+[Project Identity](/docs/token-usage/#project-identity) for key prefixes,
 normalization, shared-store scope, and privacy guarantees.
 
 ## Filters And Limits
@@ -308,7 +308,7 @@ Closed enums established in version 2 and unchanged in version 6 include project
 (`interactive`, `automated`), and `cost_source` (`computed`, `reported`,
 `mixed`).
 
-See [Token Usage & Costs](/token-usage/#pricing-provenance) for the shared
+See [Token Usage & Costs](/docs/token-usage/#pricing-provenance) for the shared
 pricing provenance contract and
-[Token Usage & Costs](/token-usage/#project-identity) for the shared project
-identity contract.
+[Token Usage & Costs](/docs/token-usage/#project-identity) for the shared
+project identity contract.

@@ -107,7 +107,7 @@ state. Changing only `url` is fine when the same logical machine moves.
 The daemon on the remote machine must bind a non-loopback interface (set
 `host = "0.0.0.0"` with `require_auth = true` in its config.toml) or every sync
 fails with a connection-refused error. See
-[Remote Hosts](/configuration/#remote-hosts) for the full remote-side setup,
+[Remote Hosts](/docs/configuration/#remote-hosts) for the full remote-side setup,
 including keeping detached daemons alive.
 
 Use `require_auth = true` on remote nodes when practical, or at minimum keep
@@ -149,7 +149,7 @@ alive until their supervisor stops them.
 Run `agentsview sync` on the collector to sync local sessions and every
 configured host. Set `interval` on a `[[remote_hosts]]` entry when a running
 collector daemon should sync that host periodically; omit it or set it to `0s`
-for manual sync only. See [`agentsview sync`](/commands/#agentsview-sync) for
+for manual sync only. See [`agentsview sync`](/docs/commands/#agentsview-sync) for
 single-host selection and failure behavior.
 
 ## Incremental Sync
@@ -495,7 +495,7 @@ Access** section lets you:
 - view the auto-generated auth token
 - connect the frontend to another AgentsView server by URL and token
 
-![Settings remote access](/assets/generated/screenshots/settings-remote.png)
+![Settings remote access](/docs/assets/generated/screenshots/settings-remote.png)
 
 Changes that affect bind or auth behavior may require a server restart.
 

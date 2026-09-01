@@ -552,6 +552,9 @@ docs-build:
 docs-serve:
 	cd docs && bash assets/hydrate-assets.sh && uv run bash ./zensical-docs.sh serve
 
+docs-preview:
+	python3 -m http.server 8000 --directory docs/site
+
 docs-check:
 	bash scripts/check-docs.sh
 

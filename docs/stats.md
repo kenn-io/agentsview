@@ -36,7 +36,7 @@ The command pulls together several categories of information:
   totals for repos enclosing session working directories
 - **Session outcomes** — aggregate counts, grade distribution,
   retry rate, compactions per session, and edit churn. The raw
-  [four outcomes](/session-intelligence/#outcome-classification)
+  [four outcomes](/docs/session-intelligence/#outcome-classification)
   (`completed`, `abandoned`, `errored`, `unknown`) are rolled up
   here into three buckets: `success` (= `completed`), `failure`
   (= `abandoned` or `errored`), and `unknown` (= `unknown` plus
@@ -197,7 +197,7 @@ This distinction matters in JSON output: a missing PR field means
 
 ## Relationship To Session Intelligence
 
-[`Session Intelligence`](/session-intelligence/) is the per-session
+[`Session Intelligence`](/docs/session-intelligence/) is the per-session
 surface for health scores, outcomes, and signal inspection.
 
 `agentsview stats` is the aggregate surface: it summarizes the whole

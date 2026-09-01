@@ -17,7 +17,8 @@ if [[ -e "vercel.json" ]]; then
 fi
 
 tracked_media="$(
-  git ls-files docs 2>/dev/null | grep -E '\.(png|svg|jpg|jpeg|webp|gif)$' || true
+  git ls-files docs 2>/dev/null | grep -E '\.(png|svg|jpg|jpeg|webp|gif)$' \
+    | grep -v '^docs/website/favicon\.svg$' || true
 )"
 if [[ -n "$tracked_media" ]]; then
   printf 'docs image media must live in docs asset branches, not main:\n%s\n' "$tracked_media" >&2

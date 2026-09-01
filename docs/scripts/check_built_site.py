@@ -12,47 +12,64 @@ import xml.etree.ElementTree as ET
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SITE = ROOT / "site"
 
-ROUTES = [
-    "/",
-    "/quickstart/",
-    "/usage/",
-    "/activity/",
-    "/recent-edits/",
-    "/session-intelligence/",
-    "/mcp/",
-    "/token-usage/",
-    "/chat-import/",
-    "/quality/",
-    "/recall/",
-    "/commands/",
-    "/stats/",
-    "/session-api/",
-    "/configuration/",
-    "/remote-access/",
-    "/pg-sync/",
-    "/duckdb/",
-    "/changelog/",
+SITE_ORIGIN = "https://agentsview.io"
+
+DOCS_PAGES = [
+    "quickstart",
+    "changelog",
+    "contributing",
+    "configuration",
+    "usage",
+    "activity",
+    "data",
+    "recent-edits",
+    "session-intelligence",
+    "mcp",
+    "token-usage",
+    "one-shot-capture",
+    "chat-import",
+    "quality",
+    "commands",
+    "session-export",
+    "reporting-export",
+    "stats",
+    "session-api",
+    "semantic-search",
+    "semantic-search-internals",
+    "recall",
+    "remote-access",
+    "artifact-sync",
+    "filesystem-sync",
+    "pg-sync",
+    "hosted-raw-sync",
+    "duckdb",
 ]
 
+ROUTES = ["/", "/guide/", "/docs/"] + [f"/docs/{page}/" for page in DOCS_PAGES]
+
 REQUIRED_FRAGMENTS = [
-    "/configuration/#session-discovery",
-    "/token-usage/#how-it-compares-to-ccusage",
-    "/session-api/#agentsview-session-usage",
+    "/docs/configuration/#session-discovery",
+    "/docs/token-usage/#how-it-compares-to-ccusage",
+    "/docs/session-api/#agentsview-session-usage",
 ]
 
 REQUIRED_META = {
-    ("property", "og:image"): "https://agentsview.io/assets/static/og-image.png",
+    ("property", "og:image"): "https://agentsview.io/docs/assets/static/og-image.png",
     ("property", "og:image:width"): "1200",
     ("property", "og:image:height"): "630",
     ("property", "og:type"): "website",
     ("property", "og:site_name"): "AgentsView",
     ("name", "twitter:card"): "summary_large_image",
-    ("name", "twitter:image"): "https://agentsview.io/assets/static/og-image.png",
+    ("name", "twitter:image"): "https://agentsview.io/docs/assets/static/og-image.png",
 }
 
 REQUIRED_SITEMAP_URLS = [
     "https://agentsview.io/",
+    "https://agentsview.io/guide/",
+    "https://agentsview.io/docs/",
 ]
+
+LLMS_MD_LINK_RE = re.compile(r"https://agentsview\.io(/[^)\s]+\.md)")
 
 COMPACT_SVG_MAX_HEIGHTS: dict[str, float] = {}
 
@@ -161,6 +178,7 @@ class LinkParser(html.parser.HTMLParser):
         self.style_attrs: list[str] = []
         self.style_blocks: list[str] = []
         self.meta: list[dict[str, str]] = []
+        self.head_links: list[dict[str, str]] = []
         self.svg_use_hrefs: list[str] = []
         self._in_style = False
 
@@ -177,6 +195,8 @@ class LinkParser(html.parser.HTMLParser):
             self.assets.extend(srcset_urls(attr["srcset"]))
         if tag == "video" and "poster" in attr:
             self.assets.append(attr["poster"])
+        if tag == "link":
+            self.head_links.append(attr)
         if tag == "link" and "href" in attr and is_fetched_link_resource(attr):
             self.assets.append(attr["href"])
         if tag == "meta":
@@ -203,10 +223,16 @@ def route_to_file(route: str) -> pathlib.Path:
     return SITE / route.strip("/") / "index.html"
 
 
-def route_to_markdown_file(route: str) -> pathlib.Path:
+def route_to_markdown_path(route: str) -> str:
     if route == "/":
-        return SITE / "index.md"
-    return SITE / f"{route.strip('/')}.md"
+        return "/index.md"
+    if route == "/docs/":
+        return "/docs/index.md"
+    return f"/{route.strip('/')}.md"
+
+
+def route_to_markdown_file(route: str) -> pathlib.Path:
+    return SITE / route_to_markdown_path(route).lstrip("/")
 
 
 def is_local_file_path(path: str) -> bool:
@@ -311,6 +337,34 @@ def check_no_svg_use_href(current: pathlib.Path, parser: LinkParser) -> None:
         )
 
 
+def check_markdown_alternate_link(route: str, parser: LinkParser) -> None:
+    expected = SITE_ORIGIN + route_to_markdown_path(route)
+    found = any(
+        rel_tokens(link.get("rel", "")) == {"alternate"}
+        and link.get("type") == "text/markdown"
+        and link.get("href") == expected
+        for link in parser.head_links
+    )
+    if not found:
+        fail(f"missing markdown alternate link {expected} on route {route}")
+
+
+def check_llms_txt() -> None:
+    llms_path = SITE / "llms.txt"
+    if not llms_path.is_file():
+        fail("missing llms.txt at the site root")
+    text = llms_path.read_text(encoding="utf-8")
+
+    listed = set(LLMS_MD_LINK_RE.findall(text))
+    expected = {route_to_markdown_path(route) for route in ROUTES}
+    missing = expected - listed
+    if missing:
+        fail(f"llms.txt is missing markdown pages: {', '.join(sorted(missing))}")
+    unknown = listed - expected
+    if unknown:
+        fail(f"llms.txt lists unpublished markdown pages: {', '.join(sorted(unknown))}")
+
+
 def check_discord_header_link(current: pathlib.Path, parser: LinkParser) -> None:
     found = any(
         link.get("href") == "https://discord.gg/fDnmxB8Wkq"
@@ -403,6 +457,14 @@ def main() -> None:
         check_global_metadata(current, parser)
         check_discord_header_link(current, parser)
         check_no_svg_use_href(current, parser)
+
+    for route in ROUTES:
+        parser = parsed_by_file.get(route_to_file(route).resolve())
+        if parser is None:
+            fail(f"missing parsed page for route {route}")
+        check_markdown_alternate_link(route, parser)
+
+    check_llms_txt()
 
     for spec in REQUIRED_FRAGMENTS:
         parsed = urllib.parse.urlparse(spec)

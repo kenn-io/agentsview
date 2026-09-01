@@ -4,13 +4,13 @@ description: Deterministic quality signals and recommendations computed from ses
 ---
 
 Quality summarizes observable patterns in your session archive. Unlike
-[Generated insights](/recall/#current-surface), every score, count, and
+[Generated insights](/docs/recall/#current-surface), every score, count, and
 recommendation on this page is computed directly from stored session data; the
 page does not call a model.
 
 Open **Quality** from the header or navigate to `/quality`.
 
-![Quality page](/assets/generated/screenshots/quality.png)
+![Quality page](/docs/assets/generated/screenshots/quality.png)
 
 ## Scope
 

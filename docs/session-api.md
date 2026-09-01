@@ -59,7 +59,7 @@ for a writable local archive owner.
   when that remote daemon requires auth.
 - If no explicit server is set and a local daemon is running, read
   and write commands proxy to it over HTTP.
-- If a [`pg serve`](/pg-sync/#agentsview-pg-serve) daemon is
+- If a [`pg serve`](/docs/pg-sync/#agentsview-pg-serve) daemon is
   running (read-only), read commands proxy to it but
   `session sync` refuses with a clear error.
 - If both a writable local daemon and a `pg serve` daemon
@@ -219,7 +219,7 @@ heuristically.
 `secret_leak_count` (added in 0.30.0) counts definite-tier
 findings from [secret scanning](#secret-scanning) and is stamped
 inline during sync. Candidate-tier findings only show up after
-an explicit [`agentsview secrets scan --backfill`](/commands/#agentsview-secrets)
+an explicit [`agentsview secrets scan --backfill`](/docs/commands/#agentsview-secrets)
 and do not contribute to this count.
 
 ---
@@ -322,7 +322,7 @@ page" for descending; an explicit `--from 0` means "start at ordinal
 0" in both directions. `--direction` is validated to `asc` or `desc`.
 
 Window and role flags (see
-[Semantic Search](/semantic-search/#cursor-follow-from-a-hit-to-its-surrounding-conversation)
+[Semantic Search](/docs/semantic-search/#cursor-follow-from-a-hit-to-its-surrounding-conversation)
 for the cursor-follow workflow they support):
 
 | Flag       | HTTP param | Notes                                                        |
@@ -522,7 +522,7 @@ there.
   or starts a detached daemon when no compatible daemon is running.
   It then proxies to `POST /api/v1/sessions/sync` so parsing and
   signal computation remain daemon-owned.
-- If a [`pg serve`](/pg-sync/#agentsview-pg-serve) daemon is
+- If a [`pg serve`](/docs/pg-sync/#agentsview-pg-serve) daemon is
   running (read-only), sync refuses with a clear error.
 - If `AGENTSVIEW_NO_DAEMON=1` is set, the CLI runs the sync
   in-process only after acquiring the local write-owner lock.
@@ -592,8 +592,8 @@ default; opt back in with `--include-one-shot`,
 |-----------------------|---------------------|--------------------------------------------------------|
 | `--regex`             | `mode=regex`        | Treat pattern as an RE2 regex                          |
 | `--fts`               | `mode=fts`          | Tokenized FTS5 search; messages-only                   |
-| `--semantic`          | `mode=semantic`     | Vector search over user/assistant messages; messages-only — see [Semantic Search](/semantic-search/) |
-| `--hybrid`            | `mode=hybrid`       | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/semantic-search/) |
+| `--semantic`          | `mode=semantic`     | Vector search over user/assistant messages; messages-only — see [Semantic Search](/docs/semantic-search/) |
+| `--hybrid`            | `mode=hybrid`       | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/) |
 | `--scope`             | `scope`             | `top`, `all` (default), or `subordinate` — semantic/hybrid only; supersedes `include_children` in those modes |
 | `--context`           | `context`           | int — N messages of context before/after each match (max 10) |
 | `--in`                | `in`                | Comma-separated: `messages,tool_input,tool_result` (default all) |
@@ -621,12 +621,12 @@ searches message bodies; substring (the default) and regex modes
 also walk `tool_calls.input_json`, `tool_calls.result_content`,
 and the `tool_result_events` rows. `--semantic` and `--hybrid`
 require an embedding index and return a single ranked page
-(`--cursor` is rejected) — see [Semantic Search](/semantic-search/)
+(`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/)
 for setup, scoring, and limitations.
 
 Every match, in every mode, carries the conversation-unit
 citation described in
-[Hit shape](/semantic-search/#hit-shape-ranges-and-anchors):
+[Hit shape](/docs/semantic-search/#hit-shape-ranges-and-anchors):
 `ordinal_range` — `[start, end]` of the conversation unit
 containing the match, always present, `[ordinal, ordinal]` when
 the match is its own unit — plus the lineage fields
@@ -810,7 +810,7 @@ GET /api/v1/sessions/{id}/usage
 
 The response uses the same JSON fields shown above and is
 available from both local SQLite-backed `agentsview serve` and
-read-only [`agentsview pg serve`](/pg-sync/#agentsview-pg-serve).
+read-only [`agentsview pg serve`](/docs/pg-sync/#agentsview-pg-serve).
 HTTP responses set `server_running: true`. As of 0.37.1, pass
 `?breakdown=true` to include the per-step `breakdown` rows;
 without it `breakdown` is `[]` while `breakdown_count` still
@@ -820,7 +820,7 @@ output always includes the rows; it also passes `subagents=true`
 unless `--own-only` was given, so the three backends return the
 same document. The session detail header uses
 this endpoint to render its
-[per-step usage breakdown](/usage/#token-usage). Existing sessions
+[per-step usage breakdown](/docs/usage/#token-usage). Existing sessions
 return `200 OK` even when token or cost data is absent; inspect
 `has_token_data`, `has_cost`, and `unpriced_models` to decide
 how to present that state. Missing sessions return `404` with:
@@ -865,9 +865,9 @@ usage from the shared PostgreSQL store. With `--server`, it calls
 `--pg`, it reads usage from the shared PostgreSQL store.
 
 Pricing comes from the same `model_pricing` table and
-[custom pricing overrides](/token-usage/#custom-model-pricing)
+[custom pricing overrides](/docs/token-usage/#custom-model-pricing)
 that back `agentsview usage daily`. Replaces the older
-[`agentsview token-use`](/commands/#agentsview-token-use), which
+[`agentsview token-use`](/docs/commands/#agentsview-token-use), which
 remains as a deprecated alias.
 
 ---
@@ -875,7 +875,7 @@ remains as a deprecated alias.
 ## Activity Report
 
 The Activity report endpoint powers the top-level
-[Activity](/activity/) page and the `agentsview activity report`
+[Activity](/docs/activity/) page and the `agentsview activity report`
 CLI command. It returns one resolved range with concurrency buckets,
 summary totals, breakdowns, and contributing sessions.
 
@@ -1103,7 +1103,7 @@ definite finding. The candidate tier does not contribute to
 
 ### CLI
 
-The [`agentsview secrets`](/commands/#agentsview-secrets) command
+The [`agentsview secrets`](/docs/commands/#agentsview-secrets) command
 group wraps the scan and list operations. The fast path is:
 
 ```bash
@@ -1117,7 +1117,7 @@ agentsview secrets list --reveal
 
 ### PostgreSQL parity
 
-When [PostgreSQL sync](/pg-sync/) is enabled, the
+When [PostgreSQL sync](/docs/pg-sync/) is enabled, the
 `secret_findings` table, the session-level `secret_leak_count`,
 and the `--has-secret` filter all mirror to the shared
 database. Substring and regex content search work the same way

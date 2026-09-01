@@ -79,18 +79,18 @@ chart_palette = "agentsview"
 | `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                         |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default) or `"matplotlib"`; also configurable under **Settings > Appearance**                                                                                                                  |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning; changes require a daemon restart — see [Disabling Session Providers](#disabling-session-providers)                                                                                     |
-| `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/remote-access/)                                                                                                                                                                             |
+| `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                             |
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                           |
 | `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders, accepting one consent prompt per folder — see [macOS Protected Folders](#macos-protected-folders)                                                                                        |
-| `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/pg-sync/)                                                                                                                                                                                     |
-| `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/duckdb/)                                                                                                                                                                                          |
-| `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/semantic-search/#enabling-vector) for every key |
-| `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/recall/#automatic-extraction)           |
-| `[insights]`                        | Optional generated-insights endpoint and model; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/recall/#current-surface) |
-| `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/commands/#agentsview-sync)                                                                                                                                                 |
-| `[[session_sources]]`               | Additional filesystem session roots with per-root machine labels — see [Filesystem Session Sync](/filesystem-sync/)                                                                                                                                  |
+| `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/docs/pg-sync/)                                                                                                                                                                                     |
+| `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/docs/duckdb/)                                                                                                                                                                                          |
+| `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key |
+| `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)           |
+| `[insights]`                        | Optional generated-insights endpoint and model; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface) |
+| `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                 |
+| `[[session_sources]]`               | Additional filesystem session roots with per-root machine labels — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                  |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                  |
-| `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing)                                                                                                                                         |
+| `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/docs/token-usage/#custom-model-pricing)                                                                                                                                         |
 
 The `cursor_secret` is generated automatically on first run. For Gist
 publishing, AgentsView first uses a saved `github_token`. For local browser
@@ -99,7 +99,7 @@ requests, if no token is saved, it then tries `AGENTSVIEW_GITHUB_TOKEN` and then
 `gh auth login`. For remote or proxied access, save a `github_token` via the web
 UI Settings page or the API endpoint `POST /api/v1/config/github` when you want
 AgentsView to publish gists. Remote access fields can be configured via the
-Settings page or CLI flags — see [Remote Access](/remote-access/) for details.
+Settings page or CLI flags — see [Remote Access](/docs/remote-access/) for details.
 
 `agentsview daemon start` and `agentsview daemon restart` load the normal
 effective configuration from this file and supported environment variables; they
@@ -149,7 +149,7 @@ per-host `token` is required and must match the remote daemon's `auth_token`. Do
 not reuse the collector daemon's own `auth_token` for untrusted remote
 endpoints. HTTP transfers use a persistent per-host mirror and request file
 deltas when fewer than half of the manifest files need fetching; see
-[Remote Access — Incremental Sync](/remote-access/#incremental-sync).
+[Remote Access — Incremental Sync](/docs/remote-access/#incremental-sync).
 
 When a full or automatic data-version rebuild includes local sources, configured
 HTTP hosts join the same temporary-database bulk ingest and atomic swap. `--full`
@@ -806,7 +806,7 @@ an entry's `machine` value affects newly discovered sessions but does not
 relabel existing sessions during ordinary syncs or `agentsview sync --full`.
 Changing attribution for existing sessions is not currently supported.
 
-See [Filesystem Session Sync](/filesystem-sync/) for multi-machine examples,
+See [Filesystem Session Sync](/docs/filesystem-sync/) for multi-machine examples,
 transport safety, ID deduplication, watcher behavior, and the comparison with
 PostgreSQL.
 
@@ -889,11 +889,11 @@ repository segment becomes the project. Layouts it does not recognize — such
 as `~/code/{project}.worktrees/feat/<branch>/` — otherwise group sessions
 under `<branch>` rather than `{project}`. For those, register manual
 **path-prefix → project** rules from the **Rules** view on the
-[Data page](/data/#rules), or let the
-[mapping editor](/data/#create-a-project-mapping) create one from a project's
+[Data page](/docs/data/#rules), or let the
+[mapping editor](/docs/data/#create-a-project-mapping) create one from a project's
 observed session folders:
 
-![Worktree mapping rules on the Data page](/assets/generated/screenshots/worktree-mappings.png)
+![Worktree mapping rules on the Data page](/docs/assets/generated/screenshots/worktree-mappings.png)
 
 - Mappings are explicit; there is no auto-discovery.
 - Each rule is scoped to one machine. The machine selector manages rules for
@@ -1194,14 +1194,14 @@ anywhere.
 
 Optional features that send data externally when you enable them:
 
-- [PostgreSQL sync](/pg-sync/) (`pg push`) sends session data to a PostgreSQL
+- [PostgreSQL sync](/docs/pg-sync/) (`pg push`) sends session data to a PostgreSQL
   database you configure.
-- The [DuckDB mirror](/duckdb/) writes a local DuckDB file by default; data only
+- The [DuckDB mirror](/docs/duckdb/) writes a local DuckDB file by default; data only
   leaves the machine if you expose the mirror over a remote Quack endpoint.
-- [Generated insights](/recall/#current-surface) sends scoped session content to
+- [Generated insights](/docs/recall/#current-surface) sends scoped session content to
   the configured endpoint when `[insights]` is set, or to the selected agent
   CLI when it is absent.
-- [Publish to Gist](/usage/#publish-to-gist) uploads a session to GitHub.
+- [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
 The automatic outbound requests are update checks and an anonymous daemon ping:
 

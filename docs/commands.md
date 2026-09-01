@@ -27,7 +27,7 @@ agentsview capture report \
 adapters. It leaves child standard input, output, error, and exit outcome
 intact. The result always uses a separate file; recovery-only `capture report`
 may use `--result -` for standard output. See
-[One-shot CI capture](/one-shot-capture/) for the result contract, retry
+[One-shot CI capture](/docs/one-shot-capture/) for the result contract, retry
 behavior, failure codes, and a complete GitHub Actions job.
 
 ______________________________________________________________________
@@ -64,7 +64,7 @@ environment variables.
 path-free JSON containing capture, queue, retry, failure, and coverage state.
 S3 roots are not captured. This remains an in-development raw-custody path:
 device enrollment and server-side session derivation are not yet available.
-See [Hosted Raw Sync](/hosted-raw-sync/) for the current boundary.
+See [Hosted Raw Sync](/docs/hosted-raw-sync/) for the current boundary.
 
 ______________________________________________________________________
 
@@ -146,7 +146,7 @@ Running plain `agentsview` shows help instead of starting the web UI.
 | `--allowed-subnet`  |             | Client CIDR allowlist (repeatable/comma-separated)       |
 
 The server auto-discovers an available port if `8080` is busy. See
-[Remote Access](/remote-access/) for details on the remote access and proxy
+[Remote Access](/docs/remote-access/) for details on the remote access and proxy
 flags.
 
 **Examples:**
@@ -270,7 +270,7 @@ agentsview sync --host buildbox.local --user wes --port 2222
 
 After syncing, a summary of session and message counts is printed to stdout.
 With `--target`, AgentsView then performs one bounded normalized-artifact
-exchange. See [Artifact Folder Sync](/artifact-sync/) for the trust model,
+exchange. See [Artifact Folder Sync](/docs/artifact-sync/) for the trust model,
 first-use requirements, and exclusions. `--target` cannot be combined with
 `--host`.
 
@@ -289,7 +289,7 @@ then run `agentsview sync` normally. This is not SSH remote sync: object
 storage is treated as a read-only session source, using object size and
 `LastModified` metadata to skip unchanged sessions and downloading only objects
 that need parsing. See
-[Configuration — S3-Compatible Session Sources](/configuration/#s3-compatible-session-sources).
+[Configuration — S3-Compatible Session Sources](/docs/configuration/#s3-compatible-session-sources).
 
 #### Configured Remote Hosts
 
@@ -328,7 +328,7 @@ the combined rebuild. Other HTTP preparation or contributor failures abort the
 combined rebuild without replacing the active archive or running SSH. Ordinary
 incremental and post-swap SSH failures retain per-host reporting, and the
 command exits non-zero for any failure other than an unavailable configured
-HTTP host. See [Incremental Sync](/remote-access/#incremental-sync).
+HTTP host. See [Incremental Sync](/docs/remote-access/#incremental-sync).
 
 `agentsview sync --host X` syncs one host, not the whole configured list. When
 the local daemon knows a configured host with that identity, it uses the stored
@@ -449,7 +449,7 @@ ______________________________________________________________________
 ### `agentsview usage daily`
 
 Report token usage and estimated cost aggregated by local-time day, scoped to
-the last 30 days by default. See [Token Usage & Costs](/token-usage/) for a full
+the last 30 days by default. See [Token Usage & Costs](/docs/token-usage/) for a full
 write-up, including benchmarks against `ccusage`.
 
 ```bash
@@ -515,7 +515,7 @@ $ agentsview usage statusline --json
 }
 ```
 
-See [Token Usage & Costs](/token-usage/#agentsview-usage-statusline) for
+See [Token Usage & Costs](/docs/token-usage/#agentsview-usage-statusline) for
 integration examples (Starship, tmux).
 
 ______________________________________________________________________
@@ -546,7 +546,7 @@ agentsview usage cursor --since 2026-05-01 --until 2026-05-31
 agentsview usage cursor --all --email you@example.com
 ```
 
-See [Cursor Admin Usage Events](/token-usage/#cursor-admin-usage-events) for
+See [Cursor Admin Usage Events](/docs/token-usage/#cursor-admin-usage-events) for
 setup and reporting behavior.
 
 ______________________________________________________________________
@@ -555,7 +555,7 @@ ______________________________________________________________________
 
 Report active time, concurrency, cost, token, breakdown, and session rows for a
 resolved date range. The command uses the same report model as the web UI's
-[Activity](/activity/) page.
+[Activity](/docs/activity/) page.
 
 ```bash
 agentsview activity report [flags]
@@ -599,7 +599,7 @@ ______________________________________________________________________
 !!! note "Deprecated"
 
     As of 0.30.0, `agentsview token-use` is a deprecated alias for
-    [`agentsview session usage`](/session-api/#agentsview-session-usage). Both
+    [`agentsview session usage`](/docs/session-api/#agentsview-session-usage). Both
     commands accept the same `<session-id>` argument. `token-use` always emits the
     same JSON shape that `session usage --format json` emits (now extended with a
     cost estimate). New scripts should use `agentsview session usage`.
@@ -651,14 +651,14 @@ agentsview token-use 550e8400-e29b-41d4-a716-446655440000
 and will be removed in a future release; new consumers should read
 `cost.microdollars` directly.
 
-See [`agentsview session usage`](/session-api/#agentsview-session-usage) for the
+See [`agentsview session usage`](/docs/session-api/#agentsview-session-usage) for the
 full field reference and exit-code contract.
 
 ______________________________________________________________________
 
 ### `agentsview pg push`
 
-Sync sessions from local SQLite to PostgreSQL. See [PostgreSQL Sync](/pg-sync/)
+Sync sessions from local SQLite to PostgreSQL. See [PostgreSQL Sync](/docs/pg-sync/)
 for full documentation.
 
 ```bash
@@ -677,7 +677,7 @@ agentsview pg push [target] [flags]
 | `--debounce`         | `30s`   | Coalesce window after a change before pushing (`--watch` only) |
 | `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                  |
 
-See [PostgreSQL Sync — Project Filtering](/pg-sync/#project-filtering) for
+See [PostgreSQL Sync — Project Filtering](/docs/pg-sync/#project-filtering) for
 details on how filtering interacts with the push watermark.
 
 ______________________________________________________________________
@@ -703,7 +703,7 @@ ______________________________________________________________________
 
 Start a read-only session web UI backed by PostgreSQL. On a writable PostgreSQL
 schema, the same server also registers the partial [hosted raw-sync control
-plane](/hosted-raw-sync/#http-control-plane). See [PostgreSQL Sync](/pg-sync/)
+plane](/docs/hosted-raw-sync/#http-control-plane). See [PostgreSQL Sync](/docs/pg-sync/)
 for full server documentation.
 
 ```bash
@@ -714,7 +714,7 @@ Accepts the same serve flags (`--host`, `--port`, `--proxy`, etc.) plus
 PostgreSQL configuration from `config.toml`. When the host's `[vector]` config
 matches a generation pushed to PostgreSQL, semantic and hybrid search are served
 from pgvector — see
-[Semantic Search — PostgreSQL](/semantic-search/#postgresql).
+[Semantic Search — PostgreSQL](/docs/semantic-search/#postgresql).
 
 ______________________________________________________________________
 
@@ -723,7 +723,7 @@ ______________________________________________________________________
 Install and manage the PostgreSQL auto-push service, which runs
 `agentsview pg push --watch` in the background. Supported service managers are
 launchd on macOS and `systemd --user` on Linux. See
-[PostgreSQL Sync — `agentsview pg service`](/pg-sync/#agentsview-pg-service) for
+[PostgreSQL Sync — `agentsview pg service`](/docs/pg-sync/#agentsview-pg-service) for
 setup notes.
 
 ```bash
@@ -749,7 +749,7 @@ ______________________________________________________________________
 ### `agentsview pg vectors`
 
 Inspect and drop semantic-search embedding generations stored in PostgreSQL.
-See [Semantic Search — Maintenance](/semantic-search/#maintenance) for details.
+See [Semantic Search — Maintenance](/docs/semantic-search/#maintenance) for details.
 
 ```bash
 agentsview pg vectors list [flags]
@@ -771,7 +771,7 @@ ______________________________________________________________________
 ### `agentsview duckdb`
 
 Mirror the local SQLite archive into DuckDB and serve from it, locally or over
-the Quack remote protocol. See [DuckDB Mirror](/duckdb/) for full documentation.
+the Quack remote protocol. See [DuckDB Mirror](/docs/duckdb/) for full documentation.
 
 ```bash
 agentsview duckdb push          # mirror SQLite into sessions.duckdb
@@ -821,7 +821,7 @@ ______________________________________________________________________
 ### `agentsview health`
 
 Inspect session intelligence in a human-friendly CLI view. See
-[Session Intelligence](/session-intelligence/) for the scoring and signal model.
+[Session Intelligence](/docs/session-intelligence/) for the scoring and signal model.
 
 ```bash
 agentsview health [session-id] [flags]
@@ -851,7 +851,7 @@ ______________________________________________________________________
 ### `agentsview stats`
 
 Experimental window-scoped workspace analytics across sessions and git activity.
-See [Stats](/stats/) for the full write-up.
+See [Stats](/docs/stats/) for the full write-up.
 
 ```bash
 agentsview stats [flags]
@@ -963,7 +963,7 @@ ______________________________________________________________________
 ### `agentsview import`
 
 Import Claude.ai, ChatGPT, or Gemini Apps conversations into the local database. See
-[Chat Import](/chat-import/) for full documentation.
+[Chat Import](/docs/chat-import/) for full documentation.
 
 ```bash
 agentsview import --type <type> <path>
@@ -991,7 +991,7 @@ ______________________________________________________________________
 ### `agentsview export sessions`
 
 Export content-free session summaries from the local archive. See
-[Session Export](/session-export/) for the full JSON/NDJSON contract, cursor
+[Session Export](/docs/session-export/) for the full JSON/NDJSON contract, cursor
 semantics, pricing provenance, and project identity rules.
 
 ```bash
@@ -1039,7 +1039,7 @@ agentsview export sessions --all --format ndjson --project agentsview
 The JSON top level has `schema_version`, `database_id`, `cursor`, `pricing`,
 `projects`, and `sessions`. NDJSON writes the same metadata as the first line,
 then one session row per following line. Current builds emit
-`schema_version: 6`; see [Session Export](/session-export/#versioning) for the
+`schema_version: 6`; see [Session Export](/docs/session-export/#versioning) for the
 v1 and transitional 0.38 release history. The default and maximum page size is
 `db.MaxSessionLimit`, currently 500.
 
@@ -1057,7 +1057,7 @@ ______________________________________________________________________
 
 Export canonical UTC-hour activity and usage documents, coherent UTC-day
 snapshots, or compact date-range digests from the local archive. See
-[Reporting Export](/reporting-export/) for the v2 wire schema, quiet-hour
+[Reporting Export](/docs/reporting-export/) for the v2 wire schema, quiet-hour
 semantics, snapshot guarantee, and digest rules.
 
 ```bash
@@ -1077,7 +1077,7 @@ ______________________________________________________________________
 ### `agentsview session`
 
 Programmatic access to session data for scripts, automation agents, and CI jobs.
-See [Session API](/session-api/) for full documentation, including stability
+See [Session API](/docs/session-api/) for full documentation, including stability
 guarantees, transport auto-detection, and every subcommand.
 
 ```bash
@@ -1102,7 +1102,7 @@ cost. `--own-only` restores the older own-session output.
 and `--hybrid` modes. Semantic and hybrid results can be scoped with
 `--scope top|all|subordinate` (default `all`) to include or exclude sidechain
 and subagent content — see
-[Semantic Search](/semantic-search/#scoping-results-scope).
+[Semantic Search](/docs/semantic-search/#scoping-results-scope).
 The human-readable table includes an `AGE` column derived from each match's
 timestamp, so recent evidence is visible without opening the session. Matches
 without a usable timestamp show `—`.
@@ -1127,7 +1127,7 @@ commands such as `session sync` and local-only raw source export continue to use
 the local archive.
 
 Use [`agentsview health`](#agentsview-health) for a human-first signal view and
-[Session API](/session-api/) for the full programmatic contract, including
+[Session API](/docs/session-api/) for the full programmatic contract, including
 daemon-first transport behavior and markdown export details.
 
 `agentsview session list` renders a resume-oriented human table by default,
@@ -1141,7 +1141,7 @@ ______________________________________________________________________
 ### `agentsview embeddings`
 
 Manage the local semantic search embedding index. Requires `[vector]` to be
-enabled in config. See [Semantic Search](/semantic-search/) for full
+enabled in config. See [Semantic Search](/docs/semantic-search/) for full
 documentation, including configuration and the search surface.
 
 ```bash
@@ -1158,7 +1158,7 @@ ______________________________________________________________________
 Inspect the experimental durable-knowledge layer over the local session
 archive. Recall is active research and its corpus may require rebuilding as the
 schema, scoring, and trust policy evolve. See
-[Recall (Experimental)](/recall/) for its current guarantees and limitations.
+[Recall (Experimental)](/docs/recall/) for its current guarantees and limitations.
 
 ```bash
 agentsview recall list
@@ -1176,7 +1176,7 @@ agentsview recall import <accepted-recall.jsonl> --dry-run
 ```
 
 Model-backed extraction requires an enabled `[recall.extract]` config section
-— see [Recall](/recall/#automatic-extraction). `preview` replaces the earlier
+— see [Recall](/docs/recall/#automatic-extraction). `preview` replaces the earlier
 `extract --session <id> --dry-run` form, which still works as a fallback. The
 extraction subcommands operate on the local archive only and refuse
 `--server`; while a daemon owns the archive, it runs extraction passes itself
@@ -1199,7 +1199,7 @@ ______________________________________________________________________
 Run a read-only Model Context Protocol server for assistant clients that can
 call MCP tools. The server exposes session search, listing, overview, message
 retrieval, content search, and usage-summary tools over the same service layer
-used by the CLI and HTTP API. See [MCP Server](/mcp/) for setup examples and
+used by the CLI and HTTP API. See [MCP Server](/docs/mcp/) for setup examples and
 operational guidance.
 
 ```bash
@@ -1222,7 +1222,7 @@ opening the local SQLite archive directly.
 Use `--server <url>` to point at an explicit running daemon. When the daemon
 requires auth, provide `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>`. Use `--pg` to read from configured PostgreSQL
-directly, or run [`agentsview pg serve`](/pg-sync/#agentsview-pg-serve) and pass
+directly, or run [`agentsview pg serve`](/docs/pg-sync/#agentsview-pg-serve) and pass
 its URL with `--server`.
 
 | Flag                         | Default | Description                                         |
@@ -1238,7 +1238,7 @@ ______________________________________________________________________
 ### `agentsview secrets`
 
 Scan for and list detected secret leaks across sessions, with matches redacted
-by default. See [Secret Scanning](/session-api/#secret-scanning) for the full
+by default. See [Secret Scanning](/docs/session-api/#secret-scanning) for the full
 detector set, storage shape, and HTTP API.
 
 ```bash
@@ -1278,7 +1278,7 @@ ______________________________________________________________________
 
 Install or list the bundled skill files that teach coding-agent harnesses
 (Claude Code, Codex, and other `.agents/skills` readers) to search AgentsView
-history. See [Semantic Search](/semantic-search/#skills-for-coding-agents) for
+history. See [Semantic Search](/docs/semantic-search/#skills-for-coding-agents) for
 what the skill does and when to re-run it.
 
 ```bash
@@ -1353,7 +1353,7 @@ agentsview help
 | `POSIT_ASSISTANT_DIR`             | `~/.posit/assistant/workspaces`                      | Posit Assistant workspaces directory                                                                |
 | `POSITRON_DIR`                    | (platform-specific)                                  | Positron Assistant user directory                                                                   |
 | `QCLAW_DIR`                       | `~/.qclaw/agents`                                    | QClaw agents directory                                                                              |
-| `QODER_PROJECTS_DIR`              | Legacy and platform-specific roots                   | Qoder projects directory; see [Session Discovery](/configuration/#session-discovery)                 |
+| `QODER_PROJECTS_DIR`              | Legacy and platform-specific roots                   | Qoder projects directory; see [Session Discovery](/docs/configuration/#session-discovery)                 |
 | `QWEN_PROJECTS_DIR`               | `~/.qwen/projects`                                   | Qwen Code projects directory                                                                        |
 | `QWENPAW_DIR`                     | `~/.copaw/workspaces`                                | QwenPaw workspaces directory                                                                        |
 | `REASONIX_DIR`                    | `~/.reasonix` and `~/AppData/Roaming/reasonix`       | Reasonix data directory                                                                             |
@@ -1381,7 +1381,7 @@ agentsview help
 | `AGENTSVIEW_DISABLE_UPDATE_CHECK` |                                                      | Set to `1` to disable the update check                                                              |
 | `AGENTSVIEW_NO_DAEMON`            |                                                      | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start                                 |
 | `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`  | `20m`                                                | Override idle self-shutdown duration for detached background daemons                                |
-| `AGENTSVIEW_TELEMETRY_ENABLED`    |                                                      | Set to `0` to disable [anonymous daemon telemetry](/configuration/#anonymous-daemon-telemetry)      |
+| `AGENTSVIEW_TELEMETRY_ENABLED`    |                                                      | Set to `0` to disable [anonymous daemon telemetry](/docs/configuration/#anonymous-daemon-telemetry)      |
 
 Environment variables override the built-in defaults. Set them in your shell
 profile or pass them inline:

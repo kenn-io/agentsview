@@ -13,7 +13,7 @@ When you open AgentsView with no session selected, you see the
 analytics dashboard. It provides a high-level overview of your
 agent activity across all projects.
 
-![Analytics dashboard](/assets/generated/screenshots/dashboard.png)
+![Analytics dashboard](/docs/assets/generated/screenshots/dashboard.png)
 
 The dashboard header includes:
 
@@ -24,7 +24,7 @@ The dashboard header includes:
 - **Search bar** — opens the command palette (`Cmd+K`)
 - **Sync button** — triggers a manual sync of session files
 - **Theme toggle** — switch between light and dark mode
-- **Import button** — opens the [Chat Import](/chat-import/)
+- **Import button** — opens the [Chat Import](/docs/chat-import/)
   dialog for importing Claude.ai or ChatGPT conversations
 - **Shortcuts button** (`?`) — shows all keyboard shortcuts
 
@@ -41,14 +41,14 @@ on its own. Click refresh, or change the date range, to pull the
 latest numbers.
 
 For range-based concurrency and agent-minutes reporting, use the
-top-level [Activity](/activity/) page.
+top-level [Activity](/docs/activity/) page.
 
 ### Summary Cards
 
 Six cards at the top of the dashboard show key metrics for the
 selected date range:
 
-![Summary cards](/assets/generated/screenshots/summary-cards.png)
+![Summary cards](/docs/assets/generated/screenshots/summary-cards.png)
 
 | Card | Description |
 |------|-------------|
@@ -65,11 +65,11 @@ Quick presets for 7 days, 30 days, 90 days, 1 year, and All,
 plus custom start/end date inputs. The **All** preset shows
 every session regardless of age. All charts update when the
 range changes. The same range picker is used on the dashboard,
-the [Usage](/token-usage/#usage-dashboard) page, and the
-[Activity](/activity/) page so presets and behavior stay
+the [Usage](/docs/token-usage/#usage-dashboard) page, and the
+[Activity](/docs/activity/) page so presets and behavior stay
 consistent across panels.
 
-![Date range picker](/assets/generated/screenshots/date-range.png)
+![Date range picker](/docs/assets/generated/screenshots/date-range.png)
 
 Preset ranges are **rolling** by default: a page left open across midnight rolls
 the window forward at the next refresh tick, sync event, or manual refresh,
@@ -98,7 +98,7 @@ The dashboard toolbar includes a **Model** dropdown that scopes
 every panel to one or more AI models. By default the button reads
 **Model: All** and nothing is filtered.
 
-![Dashboard model filter](/assets/generated/screenshots/analytics-model-filter.png)
+![Dashboard model filter](/docs/assets/generated/screenshots/analytics-model-filter.png)
 
 Open the dropdown for a searchable list of the models found in
 your sessions, then click models to include them. The button then
@@ -130,9 +130,9 @@ model's messages.
 
 !!! note "Dashboard-only scope"
     The model filter applies only to the analytics dashboard. The
-    [Generated insights](/recall/?tab=generated) and the session list are
+    [Generated insights](/docs/recall/?tab=generated) and the session list are
     not scoped by it, so a model selected here does not silently
-    narrow those views. The [Usage](/token-usage/) page keeps its
+    narrow those views. The [Usage](/docs/token-usage/) page keeps its
     own separate model filter.
 
 ### Activity Heatmap
@@ -140,7 +140,7 @@ model's messages.
 A GitHub-style contribution graph showing daily activity. Toggle
 between message count and session count.
 
-![Activity heatmap](/assets/generated/screenshots/heatmap.png)
+![Activity heatmap](/docs/assets/generated/screenshots/heatmap.png)
 
 #### Click-to-Filter
 
@@ -149,7 +149,7 @@ to that single day. The selected cell gets a highlighted border,
 and an active filter chip appears in the toolbar. Click the same
 cell again (or dismiss the filter chip) to deselect.
 
-![Heatmap filtered to a single day](/assets/generated/screenshots/heatmap-filtered.png)
+![Heatmap filtered to a single day](/docs/assets/generated/screenshots/heatmap-filtered.png)
 
 ### Hour of Week Heatmap
 
@@ -157,7 +157,7 @@ A 7x24 grid showing when you use agents most. Rows are days of
 the week, columns are hours. Color intensity represents message
 volume.
 
-![Hour of week heatmap](/assets/generated/screenshots/hour-of-week.png)
+![Hour of week heatmap](/docs/assets/generated/screenshots/hour-of-week.png)
 
 ### Activity Timeline
 
@@ -165,7 +165,7 @@ A stacked chart showing messages, sessions, tool calls, and
 thinking blocks over time. Toggle between daily, weekly, and
 monthly granularity. Includes breakdown by agent.
 
-![Activity timeline](/assets/generated/screenshots/activity-timeline.png)
+![Activity timeline](/docs/assets/generated/screenshots/activity-timeline.png)
 
 ### Top Sessions
 
@@ -173,7 +173,7 @@ A ranked list of your longest sessions by message count or
 duration. Click any session to jump directly to it in the
 session viewer.
 
-![Top sessions](/assets/generated/screenshots/top-sessions.png)
+![Top sessions](/docs/assets/generated/screenshots/top-sessions.png)
 
 ### Project Breakdown
 
@@ -182,7 +182,7 @@ Shows average and median messages per session for each project.
 Click any project bar to filter the dashboard and session list
 to that project.
 
-![Project breakdown](/assets/generated/screenshots/project-breakdown.png)
+![Project breakdown](/docs/assets/generated/screenshots/project-breakdown.png)
 
 ### Session Shape Distribution
 
@@ -192,7 +192,7 @@ Three histograms showing the distribution of:
 2. **Session duration** — time in minutes
 3. **Session autonomy** — ratio of tool calls to conversation turns
 
-![Session shape](/assets/generated/screenshots/session-shape.png)
+![Session shape](/docs/assets/generated/screenshots/session-shape.png)
 
 ### Tool Usage
 
@@ -200,7 +200,7 @@ Total tool call count with breakdowns by category (Read, Edit,
 Write, Bash, Search, Web, Task) and by agent. Includes a trend
 chart showing tool usage over time.
 
-![Tool usage](/assets/generated/screenshots/tool-usage.png)
+![Tool usage](/docs/assets/generated/screenshots/tool-usage.png)
 
 ### Top Skills
 
@@ -217,9 +217,9 @@ reads a `SKILL.md` file through a read-like tool call. It appears
 when your local transcripts include either explicit skill metadata
 or enough `SKILL.md` reads for AgentsView to infer the skill name.
 
-![Top Skills](/assets/generated/screenshots/top-skills.png)
+![Top Skills](/docs/assets/generated/screenshots/top-skills.png)
 
-![Skill usage trends](/assets/generated/screenshots/skill-trends.png)
+![Skill usage trends](/docs/assets/generated/screenshots/skill-trends.png)
 
 ### Velocity Metrics
 
@@ -230,7 +230,7 @@ Performance metrics including:
 - Messages, characters, and tool calls per active minute
 - Breakdown by agent and by session complexity
 
-![Velocity metrics](/assets/generated/screenshots/velocity.png)
+![Velocity metrics](/docs/assets/generated/screenshots/velocity.png)
 
 ### Agent Comparison
 
@@ -238,7 +238,7 @@ Side-by-side metrics across agents: session count, total
 messages, average response time, tool usage patterns, and
 concentration metrics.
 
-![Agent comparison](/assets/generated/screenshots/agent-comparison.png)
+![Agent comparison](/docs/assets/generated/screenshots/agent-comparison.png)
 
 ### Session Health
 
@@ -255,9 +255,9 @@ the new session-intelligence signals. It shows:
 - score trend over time
 - by-agent and by-project score tables
 
-![Session Health section on the dashboard](/assets/generated/screenshots/session-health.png)
+![Session Health section on the dashboard](/docs/assets/generated/screenshots/session-health.png)
 
-See [Session Intelligence](/session-intelligence/#outcome-classification)
+See [Session Intelligence](/docs/session-intelligence/#outcome-classification)
 for the full four-outcome model that both this section and
 `agentsview stats` derive from.
 
@@ -276,7 +276,7 @@ using Claude, Codex, Copilot, Gemini, or Kiro. Open **Recall → Generated
 insights** to choose the date range, project, session agent, automated-session
 scope, template, generator, and optional focus.
 
-See [Recall](/recall/#current-surface) for generation, archive, and privacy
+See [Recall](/docs/recall/#current-surface) for generation, archive, and privacy
 details.
 
 ---
@@ -289,7 +289,7 @@ term per line into the textarea, hit **Refresh**, and AgentsView
 counts how often each term appears in user and assistant message
 content over the selected window.
 
-![Trends page](/assets/generated/screenshots/trends.png)
+![Trends page](/docs/assets/generated/screenshots/trends.png)
 
 Use Trends to track topics or technologies as your work shifts
 over time — for example, plotting `rust`, `typescript`, and
@@ -340,7 +340,7 @@ shareable and bookmarkable.
 The same data is available through the
 `GET /api/v1/trends/terms` endpoint for scripting, and works
 under both local `agentsview serve` and shared
-[`pg serve`](/pg-sync/) deployments.
+[`pg serve`](/docs/pg-sync/) deployments.
 
 ---
 
@@ -359,7 +359,7 @@ endpoint and hydrates the visible rows on demand, so large
 refresh storms (e.g. after a bulk import or `resync`) no
 longer freeze the list while the full payloads arrive.
 
-![Session list](/assets/generated/screenshots/session-list.png)
+![Session list](/docs/assets/generated/screenshots/session-list.png)
 
 Each session item shows:
 
@@ -392,7 +392,7 @@ Each session item shows:
   so they survive server restarts.
 - **Agent tag** — agent name on the right side, tinted with the
   agent's accent color.
-- **Machine label** — when using [PostgreSQL sync](/pg-sync/),
+- **Machine label** — when using [PostgreSQL sync](/docs/pg-sync/),
   sessions from other machines show a machine name tag. Only
   visible in shared multi-host deployments.
 - **Project name** — abbreviated, right-aligned
@@ -454,7 +454,7 @@ show a disclosure triangle; click to expand and see child
 agents nested underneath. This makes complex multi-agent
 workflows easier to navigate without leaving the session list.
 
-![Sub-agent tree view](/assets/generated/screenshots/subagent-tree.png)
+![Sub-agent tree view](/docs/assets/generated/screenshots/subagent-tree.png)
 
 ### Forks and Subagent Sessions
 
@@ -478,17 +478,17 @@ result content stored beside the transcript.
 Click the filter icon next to the session count to open a
 dropdown with several filter categories that can be combined:
 
-![Session filter dropdown](/assets/generated/screenshots/session-filters.png)
+![Session filter dropdown](/docs/assets/generated/screenshots/session-filters.png)
 
 - **Starred** — toggle to show only starred sessions
 - **Recently Active** — toggle to show only sessions updated
   within the last 24 hours
 - **Agent** — searchable multi-select of
-  [supported agents](/configuration/#session-discovery). Click an
+  [supported agents](/docs/configuration/#session-discovery). Click an
   agent to toggle its selection; multiple agents can be active
   at once.
 - **Machine** — searchable multi-select of machine names.
-  Surfaces in shared [PostgreSQL sync](/pg-sync/) deployments
+  Surfaces in shared [PostgreSQL sync](/docs/pg-sync/) deployments
   when more than five machines have pushed sessions.
 - **Status** — three-pill multi-select of the
   [status](#session-status-indicator) recency tiers (**Active**,
@@ -503,7 +503,7 @@ dropdown with several filter categories that can be combined:
 - **Include automated** — toggle to include sessions classified
   as automation (roborev runs, title generation, AgentsView's own
   internal prompts, and any patterns you've added to
-  [`[automated] prefixes`](/configuration/#automated-session-detection))
+  [`[automated] prefixes`](/docs/configuration/#automated-session-detection))
 - **Hide unknown** — toggle to hide sessions whose project
   could not be determined
 
@@ -531,7 +531,7 @@ detail header to copy the link, or use the URL bar directly:
 ```
 
 Session URLs work as bookmarks and can be shared with teammates
-when using [PostgreSQL sync](/pg-sync/) for shared deployments.
+when using [PostgreSQL sync](/docs/pg-sync/) for shared deployments.
 
 ### URL Filters
 
@@ -570,7 +570,7 @@ Selecting a session opens the message viewer in the main content
 area. Messages display in a scrollable list with virtual
 rendering for large sessions.
 
-![Message viewer](/assets/generated/screenshots/message-viewer.png)
+![Message viewer](/docs/assets/generated/screenshots/message-viewer.png)
 
 The session detail header shows the session name, agent, project, a
 health grade badge, and a copyable **Session ID**. Click the ID to
@@ -612,7 +612,7 @@ and partial assistant messages, showing only user prompts and
 final assistant responses. This makes long sessions easier to
 read as a clean conversation transcript.
 
-![Focused transcript mode](/assets/generated/screenshots/focused-transcript.png)
+![Focused transcript mode](/docs/assets/generated/screenshots/focused-transcript.png)
 
 Toggle between Normal and Focused mode using the transcript
 mode button in the session header. The header adjusts
@@ -665,7 +665,7 @@ without a structured preview, the header falls back to the
 first line of content, the `command`/`cmd` (Bash), or the
 `file_path`/`pattern` (Read, Edit, Write, Glob).
 
-![Tool blocks](/assets/generated/screenshots/tool-blocks.png)
+![Tool blocks](/docs/assets/generated/screenshots/tool-blocks.png)
 
 When expanded, tool blocks display structured metadata tags
 extracted from the tool call input. For task management tools
@@ -682,12 +682,12 @@ headings, lists, tables, and highlighted fenced code; HTML is sanitized before
 display. The mode changes presentation only—the stored result and copy button
 continue to use the raw output.
 
-![Formatted tool output](/assets/generated/screenshots/tool-output-formatted.png)
+![Formatted tool output](/docs/assets/generated/screenshots/tool-output-formatted.png)
 
 Hover or focus a tool block to reveal copy buttons for the
 structured input and, when present, the tool output.
 
-![Copy buttons on a tool block](/assets/generated/screenshots/tool-block-copy-btn.png)
+![Copy buttons on a tool block](/docs/assets/generated/screenshots/tool-block-copy-btn.png)
 
 Codex tool calls receive special formatting: bash commands,
 write_stdin operations, and apply_patch calls display with
@@ -717,7 +717,7 @@ Consecutive tool-only assistant messages are grouped into
 compact "N tool calls" sections with a gear icon and timestamp.
 Click to expand individual tool blocks within the group.
 
-![Tool call groups](/assets/generated/screenshots/tool-groups.png)
+![Tool call groups](/docs/assets/generated/screenshots/tool-groups.png)
 
 ### Code Blocks
 
@@ -744,7 +744,7 @@ the escaped diagram source readable in the message. When
 in-session search is active, Mermaid fences render as source code
 so matches can be highlighted.
 
-![Copy button on a code block](/assets/generated/screenshots/code-block-copy-btn.png)
+![Copy button on a code block](/docs/assets/generated/screenshots/code-block-copy-btn.png)
 
 ### Block-Type Filtering
 
@@ -787,7 +787,7 @@ current session. Type to find matching text across all visible
 messages. The match count and current position are shown in the
 search bar.
 
-![In-session search](/assets/generated/screenshots/in-session-search.png)
+![In-session search](/docs/assets/generated/screenshots/in-session-search.png)
 
 Use the arrow buttons or `Enter` / `Shift+Enter` to jump
 between matches. The matching message scrolls into view and the
@@ -800,11 +800,11 @@ showing input and output token counts for the session. This
 gives a quick view of how much context the agent consumed
 and how much it generated.
 
-![Token usage display](/assets/generated/screenshots/token-usage.png)
+![Token usage display](/docs/assets/generated/screenshots/token-usage.png)
 
 As of 0.33.0, the header also shows the session's **estimated
 cost** next to the token summary, computed from the same data
-as [`agentsview session usage`](/session-api/#agentsview-session-usage).
+as [`agentsview session usage`](/docs/session-api/#agentsview-session-usage).
 Costs under a cent display as `<$0.01`, costs up to $100 with
 two decimals, and larger costs as whole dollars. The badge is
 hidden when the session has no token data or its models have
@@ -824,18 +824,18 @@ the model that served it, its context size (input tokens plus
 cache reads and writes), its output tokens, and a per-step cost
 estimate when the model is priced. The rows come from the same
 session usage API with `?breakdown=true` — see
-[`agentsview session usage`](/session-api/#agentsview-session-usage).
+[`agentsview session usage`](/docs/session-api/#agentsview-session-usage).
 
 For aggregate token usage and estimated cost reports across
 all sessions, see the
-[Token Usage & Costs](/token-usage/) page and the
-[`agentsview usage daily`](/commands/#agentsview-usage-daily)
+[Token Usage & Costs](/docs/token-usage/) page and the
+[`agentsview usage daily`](/docs/commands/#agentsview-usage-daily)
 CLI command.
 
 For a scriptable report on the current session, use
-[`agentsview session usage <id>`](/session-api/#agentsview-session-usage)
+[`agentsview session usage <id>`](/docs/session-api/#agentsview-session-usage)
 or the matching
-[`GET /api/v1/sessions/{id}/usage`](/session-api/#agentsview-session-usage)
+[`GET /api/v1/sessions/{id}/usage`](/docs/session-api/#agentsview-session-usage)
 REST endpoint.
 
 ### Signal Panel
@@ -852,7 +852,7 @@ signal panel for the current session. The panel shows:
 
 When a session does not have enough usable data, the panel shows a
 small empty state instead of a score. See
-[Session Intelligence](/session-intelligence/) for the full model.
+[Session Intelligence](/docs/session-intelligence/) for the full model.
 
 ### Session Vital Signs
 
@@ -860,7 +860,7 @@ The right column of an open session shows a **Session Vital
 Signs** panel with timing data derived from the message
 timestamps. Toggle it from the session header.
 
-![Session Vital Signs in context](/assets/generated/screenshots/session-vital-signs.png)
+![Session Vital Signs in context](/docs/assets/generated/screenshots/session-vital-signs.png)
 
 It has five stacked sections when experimental Recall is available:
 
@@ -886,7 +886,7 @@ It has five stacked sections when experimental Recall is available:
   single group. Call details start collapsed for quicker transcript navigation.
   Sub-agent rows expand inline to show the child session's calls.
 
-![Vital Signs panel detail](/assets/generated/screenshots/vital-signs-panel.png)
+![Vital Signs panel detail](/docs/assets/generated/screenshots/vital-signs-panel.png)
 
 Inline in the conversation column, each `ToolBlock` header gets
 a duration badge, and each assistant message gets a turn-summary
@@ -928,7 +928,7 @@ The toggle is also handy after a sync that rebuilt the
 session — it snaps back to the latest message once the
 re-rendered list settles.
 
-![Follow latest toggle in the session header](/assets/generated/screenshots/follow-latest-toggle.png)
+![Follow latest toggle in the session header](/docs/assets/generated/screenshots/follow-latest-toggle.png)
 
 Cancellation is automatic: scrolling up by hand or clicking a
 specific message turns follow mode off. Clicking the toggle
@@ -943,7 +943,7 @@ opened in follow mode comes back in follow mode.
 Press `Cmd+K` (or `Ctrl+K`) to open the command palette — a
 full-screen search overlay.
 
-![Command palette](/assets/generated/screenshots/command-palette.png)
+![Command palette](/docs/assets/generated/screenshots/command-palette.png)
 
 ### Recent Sessions
 
@@ -968,13 +968,13 @@ and browser sessions. Results update after a 300ms typing pause.
 !!! tip
     For deeper searches across full transcripts — including tool
     inputs, tool result content, and regex patterns — use the
-    [`agentsview session search`](/session-api/#agentsview-session-search)
+    [`agentsview session search`](/docs/session-api/#agentsview-session-search)
     CLI or the `GET /api/v1/search/content` HTTP endpoint added
     in 0.30.0. The command palette indexes message bodies via
     FTS5 for fast scoring; the content-search endpoints add
     substring and regex modes and cover tool I/O as well.
 
-![Search results](/assets/generated/screenshots/search-results.png)
+![Search results](/docs/assets/generated/screenshots/search-results.png)
 
 Results are grouped by session — each session shows its best
 matching result. This prevents a single long session from
@@ -1075,7 +1075,7 @@ Desktop opener is detected, it remains available as a separate resume target.
 Desktop deep links are intentionally hidden for remote sessions because a local
 desktop app cannot open another machine's transcript or directory.
 
-![Session resume menu](/assets/generated/screenshots/session-resume-menu.png)
+![Session resume menu](/docs/assets/generated/screenshots/session-resume-menu.png)
 
 The `agentsview session list --resume` and `--active` CLI modes use
 the same recent-activity signal to produce a compact terminal table
@@ -1143,7 +1143,7 @@ GitHub Gist. As of 0.33.0, the publish button is a dropdown
 with two entries: **Publish public Gist** and **Publish secret
 Gist**. The `p` shortcut publishes publicly.
 
-![Publish modal](/assets/generated/screenshots/publish-modal.png)
+![Publish modal](/docs/assets/generated/screenshots/publish-modal.png)
 
 AgentsView prefers your existing GitHub CLI login for local
 publishing. If no token is saved in AgentsView and
@@ -1225,7 +1225,7 @@ always works.
 Click the gear icon in the header to open the Settings page.
 Settings are organized into sections:
 
-![Settings page](/assets/generated/screenshots/settings.png)
+![Settings page](/docs/assets/generated/screenshots/settings.png)
 
 | Section | What You Can Configure |
 |---------|----------------------|
@@ -1238,11 +1238,11 @@ Settings are organized into sections:
 | GitHub | Personal access token for Gist publishing |
 | Remote Access | Remote connections toggle, auth token, connect to remote server |
 
-![Embedding build progress](/assets/generated/screenshots/settings-embeddings.png)
+![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)
 
-![Settings remote access section](/assets/generated/screenshots/settings-remote.png)
+![Settings remote access section](/docs/assets/generated/screenshots/settings-remote.png)
 
-![Chart color palette setting](/assets/generated/screenshots/settings-chart-colors.png)
+![Chart color palette setting](/docs/assets/generated/screenshots/settings-chart-colors.png)
 
 Language, theme, high contrast, message layout, text size, block visibility,
 desktop zoom, and Date ranges preferences are stored in the browser. **Chart
@@ -1250,8 +1250,8 @@ colors** are the exception within Appearance: the selected palette is saved
 server-wide as `chart_palette` in `~/.agentsview/config.toml`. Agent directory
 overrides, terminal settings, the saved GitHub token, and the local server's
 remote-access authentication settings also use that file. Worktree mapping
-rules moved to the [Data page](/data/#rules) and live in the local archive
-database. See [Remote Access](/remote-access/) for details on the remote access
+rules moved to the [Data page](/docs/data/#rules) and live in the local archive
+database. See [Remote Access](/docs/remote-access/) for details on the remote access
 settings.
 
 ---
@@ -1263,7 +1263,7 @@ from the header menu to open the About dialog. It shows the
 current version, build date, git commit, and links to the
 changelog and GitHub repository.
 
-![About dialog](/assets/generated/screenshots/about-dialog.png)
+![About dialog](/docs/assets/generated/screenshots/about-dialog.png)
 
 ---
 
@@ -1282,9 +1282,9 @@ Click the theme toggle in the header or go to Settings >
 Appearance to switch between light and dark mode. The
 preference is saved and persists across sessions.
 
-![Light theme](/assets/generated/screenshots/theme-light.png)
+![Light theme](/docs/assets/generated/screenshots/theme-light.png)
 
-![Dark theme](/assets/generated/screenshots/theme-dark.png)
+![Dark theme](/docs/assets/generated/screenshots/theme-dark.png)
 
 Settings > Appearance also offers a **high-contrast** mode for
 greater legibility and a **text size** control (90–130%) that
@@ -1333,7 +1333,7 @@ the frontend and backend versions differ. Click it to reload.
 
 ### Full Resync
 
-![Resync modal](/assets/generated/screenshots/resync-modal.png)
+![Resync modal](/docs/assets/generated/screenshots/resync-modal.png)
 
 Click the **gear icon** in the header to open the Full Resync
 modal. This re-parses all session files from scratch using a

@@ -15,6 +15,311 @@
       "source": "/install.ps1",
       "destination": "https://raw.githubusercontent.com/kenn-io/agentsview/main/scripts/install.ps1",
       "permanent": false
+    },
+    {
+      "source": "/quickstart/",
+      "destination": "/docs/quickstart/",
+      "permanent": true
+    },
+    {
+      "source": "/quickstart.md",
+      "destination": "/docs/quickstart.md",
+      "permanent": true
+    },
+    {
+      "source": "/changelog/",
+      "destination": "/docs/changelog/",
+      "permanent": true
+    },
+    {
+      "source": "/changelog.md",
+      "destination": "/docs/changelog.md",
+      "permanent": true
+    },
+    {
+      "source": "/contributing/",
+      "destination": "/docs/contributing/",
+      "permanent": true
+    },
+    {
+      "source": "/contributing.md",
+      "destination": "/docs/contributing.md",
+      "permanent": true
+    },
+    {
+      "source": "/configuration/",
+      "destination": "/docs/configuration/",
+      "permanent": true
+    },
+    {
+      "source": "/configuration.md",
+      "destination": "/docs/configuration.md",
+      "permanent": true
+    },
+    {
+      "source": "/usage/",
+      "destination": "/docs/usage/",
+      "permanent": true
+    },
+    {
+      "source": "/usage.md",
+      "destination": "/docs/usage.md",
+      "permanent": true
+    },
+    {
+      "source": "/activity/",
+      "destination": "/docs/activity/",
+      "permanent": true
+    },
+    {
+      "source": "/activity.md",
+      "destination": "/docs/activity.md",
+      "permanent": true
+    },
+    {
+      "source": "/data/",
+      "destination": "/docs/data/",
+      "permanent": true
+    },
+    {
+      "source": "/data.md",
+      "destination": "/docs/data.md",
+      "permanent": true
+    },
+    {
+      "source": "/recent-edits/",
+      "destination": "/docs/recent-edits/",
+      "permanent": true
+    },
+    {
+      "source": "/recent-edits.md",
+      "destination": "/docs/recent-edits.md",
+      "permanent": true
+    },
+    {
+      "source": "/session-intelligence/",
+      "destination": "/docs/session-intelligence/",
+      "permanent": true
+    },
+    {
+      "source": "/session-intelligence.md",
+      "destination": "/docs/session-intelligence.md",
+      "permanent": true
+    },
+    {
+      "source": "/mcp/",
+      "destination": "/docs/mcp/",
+      "permanent": true
+    },
+    {
+      "source": "/mcp.md",
+      "destination": "/docs/mcp.md",
+      "permanent": true
+    },
+    {
+      "source": "/token-usage/",
+      "destination": "/docs/token-usage/",
+      "permanent": true
+    },
+    {
+      "source": "/token-usage.md",
+      "destination": "/docs/token-usage.md",
+      "permanent": true
+    },
+    {
+      "source": "/one-shot-capture/",
+      "destination": "/docs/one-shot-capture/",
+      "permanent": true
+    },
+    {
+      "source": "/one-shot-capture.md",
+      "destination": "/docs/one-shot-capture.md",
+      "permanent": true
+    },
+    {
+      "source": "/chat-import/",
+      "destination": "/docs/chat-import/",
+      "permanent": true
+    },
+    {
+      "source": "/chat-import.md",
+      "destination": "/docs/chat-import.md",
+      "permanent": true
+    },
+    {
+      "source": "/quality/",
+      "destination": "/docs/quality/",
+      "permanent": true
+    },
+    {
+      "source": "/quality.md",
+      "destination": "/docs/quality.md",
+      "permanent": true
+    },
+    {
+      "source": "/commands/",
+      "destination": "/docs/commands/",
+      "permanent": true
+    },
+    {
+      "source": "/commands.md",
+      "destination": "/docs/commands.md",
+      "permanent": true
+    },
+    {
+      "source": "/session-export/",
+      "destination": "/docs/session-export/",
+      "permanent": true
+    },
+    {
+      "source": "/session-export.md",
+      "destination": "/docs/session-export.md",
+      "permanent": true
+    },
+    {
+      "source": "/reporting-export/",
+      "destination": "/docs/reporting-export/",
+      "permanent": true
+    },
+    {
+      "source": "/reporting-export.md",
+      "destination": "/docs/reporting-export.md",
+      "permanent": true
+    },
+    {
+      "source": "/stats/",
+      "destination": "/docs/stats/",
+      "permanent": true
+    },
+    {
+      "source": "/stats.md",
+      "destination": "/docs/stats.md",
+      "permanent": true
+    },
+    {
+      "source": "/session-api/",
+      "destination": "/docs/session-api/",
+      "permanent": true
+    },
+    {
+      "source": "/session-api.md",
+      "destination": "/docs/session-api.md",
+      "permanent": true
+    },
+    {
+      "source": "/semantic-search/",
+      "destination": "/docs/semantic-search/",
+      "permanent": true
+    },
+    {
+      "source": "/semantic-search.md",
+      "destination": "/docs/semantic-search.md",
+      "permanent": true
+    },
+    {
+      "source": "/semantic-search-internals/",
+      "destination": "/docs/semantic-search-internals/",
+      "permanent": true
+    },
+    {
+      "source": "/semantic-search-internals.md",
+      "destination": "/docs/semantic-search-internals.md",
+      "permanent": true
+    },
+    {
+      "source": "/recall/",
+      "destination": "/docs/recall/",
+      "permanent": true
+    },
+    {
+      "source": "/recall.md",
+      "destination": "/docs/recall.md",
+      "permanent": true
+    },
+    {
+      "source": "/remote-access/",
+      "destination": "/docs/remote-access/",
+      "permanent": true
+    },
+    {
+      "source": "/remote-access.md",
+      "destination": "/docs/remote-access.md",
+      "permanent": true
+    },
+    {
+      "source": "/artifact-sync/",
+      "destination": "/docs/artifact-sync/",
+      "permanent": true
+    },
+    {
+      "source": "/artifact-sync.md",
+      "destination": "/docs/artifact-sync.md",
+      "permanent": true
+    },
+    {
+      "source": "/filesystem-sync/",
+      "destination": "/docs/filesystem-sync/",
+      "permanent": true
+    },
+    {
+      "source": "/filesystem-sync.md",
+      "destination": "/docs/filesystem-sync.md",
+      "permanent": true
+    },
+    {
+      "source": "/pg-sync/",
+      "destination": "/docs/pg-sync/",
+      "permanent": true
+    },
+    {
+      "source": "/pg-sync.md",
+      "destination": "/docs/pg-sync.md",
+      "permanent": true
+    },
+    {
+      "source": "/hosted-raw-sync/",
+      "destination": "/docs/hosted-raw-sync/",
+      "permanent": true
+    },
+    {
+      "source": "/hosted-raw-sync.md",
+      "destination": "/docs/hosted-raw-sync.md",
+      "permanent": true
+    },
+    {
+      "source": "/duckdb/",
+      "destination": "/docs/duckdb/",
+      "permanent": true
+    },
+    {
+      "source": "/duckdb.md",
+      "destination": "/docs/duckdb.md",
+      "permanent": true
+    },
+    {
+      "source": "/assets/static/:path*",
+      "destination": "/docs/assets/static/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/assets/generated/:path*",
+      "destination": "/docs/assets/generated/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/postgresql/",
+      "destination": "/docs/pg-sync/",
+      "permanent": true
+    },
+    {
+      "source": "/insights/",
+      "destination": "/docs/recall/",
+      "permanent": true
+    },
+    {
+      "source": "/architecture/",
+      "destination": "/",
+      "permanent": true
     }
   ]
 }

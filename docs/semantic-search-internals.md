@@ -3,10 +3,10 @@ title: Semantic Search Internals
 description: Architecture and invariants behind the vector index — storage, generations, build pipeline, concurrency, and search path
 ---
 
-This page documents the internal design of [Semantic Search](/semantic-search/)
-for maintainers extending or debugging the vector index. It assumes the
-user-facing behavior described there and does not repeat configuration or CLI
-usage.
+This page documents the internal design of
+[Semantic Search](/docs/semantic-search/) for maintainers extending or debugging
+the vector index. It assumes the user-facing behavior described there and does
+not repeat configuration or CLI usage.
 
 ## Storage layout
 
@@ -179,20 +179,20 @@ retired**. A generation's fingerprint is derived from `model` + `dimension` +
 the params map
 `{max_input_chars, doc_unit_scheme: "run_v1", chunk_overlap_chars}`
 (`vectorGeneration` in `cmd/agentsview/embeddings.go`), plus `query_prefix`,
-`document_prefix`, `input_suffix`, and `request_dimensions` when configured —
-an unset value is omitted from the map rather than included as `""`/`false`, so
+`document_prefix`, `input_suffix`, and `request_dimensions` when configured — an
+unset value is omitted from the map rather than included as `""`/`false`, so
 configs written before those keys existed keep their fingerprints.
 `chunk_overlap_chars` is computed by `vector.ChunkOverlap` —
 `max_input_chars * 15 / 100` — the same function `Open` uses for kit's
-`SplitOptions`, so the split behavior and its fingerprint can never drift
-apart. Changing any input — the model, the dimension, whether reduced output
-dimensions are requested, the chunking cap, either role prefix, the input
-suffix, the overlap formula, or the document-unit scheme — produces a
-different fingerprint and cuts a new generation. Which
-`[vector.embeddings.servers.<name>]` entry encoded a document is deliberately
-*not* a fingerprint input: every server serves the same globally-configured
-model, so their vectors are interchangeable and a build may switch servers
-(`embeddings build --using <name>`) without invalidating the generation.
+`SplitOptions`, so the split behavior and its fingerprint can never drift apart.
+Changing any input — the model, the dimension, whether reduced output dimensions
+are requested, the chunking cap, either role prefix, the input suffix, the
+overlap formula, or the document-unit scheme — produces a different fingerprint
+and cuts a new generation. Which `[vector.embeddings.servers.<name>]` entry
+encoded a document is deliberately *not* a fingerprint input: every server
+serves the same globally-configured model, so their vectors are interchangeable
+and a build may switch servers (`embeddings build --using <name>`) without
+invalidating the generation.
 
 - `embeddings build` (incremental): mirror refresh, then fill whatever the
   active generation is missing.
@@ -376,7 +376,7 @@ Generation activation always happens under the single writer. Search opens
   over-fetches `max(limit × 4, 200)` candidates, then filters and truncates to
   the requested limit. At small corpora or narrow filters this can return
   fewer than `--limit` results even though more exist — a known v1 tradeoff
-  (see [Limitations](/semantic-search/#limitations)).
+  (see [Limitations](/docs/semantic-search/#limitations)).
 
 ## Conversation-unit citations
 
@@ -513,7 +513,7 @@ construction — is exported from `internal/db` and reused rather than duplicate
 so semantic/hybrid parity between backends holds by construction. The
 user-facing behavior (fingerprint gate, graceful 501 degradation, shared
 generations) is described in
-[Semantic Search — PostgreSQL](/semantic-search/#postgresql); this section
+[Semantic Search — PostgreSQL](/docs/semantic-search/#postgresql); this section
 covers the invariants.
 
 ### Schema shape
@@ -637,7 +637,7 @@ covers the invariants.
   `ResolveMessageUnits` point lookups against `vector_documents`, and feeds
   the shared RRF merge — everything after candidate selection matches the
   SQLite contract, with the BM25-vs-recency leg-ranking difference documented
-  in the [user-facing docs](/semantic-search/#hybrid-keyword-leg).
+  in the [user-facing docs](/docs/semantic-search/#hybrid-keyword-leg).
 
 ## Error taxonomy
 
@@ -657,26 +657,27 @@ stale-fingerprint case.
 The distinction matters for callers: 501 means the feature will not work until
 something is configured or built; 503 means it should work and is worth
 retrying. CLI and MCP surface the same cause-specific remediation text described
-in the [user-facing error taxonomy](/semantic-search/#error-taxonomy).
+in the [user-facing error taxonomy](/docs/semantic-search/#error-taxonomy).
 
 ## Skill generation
 
 `internal/skills` renders the `agentsview-finding-history` skill (see
-[Skills for coding agents](/semantic-search/#skills-for-coding-agents)) from a
-single embedded template, `internal/skills/templates/finding-history.md.tmpl`
-via `go:embed` — the same pattern `internal/web` uses for the frontend — with no
-per-harness copies checked in. `Render` fills in a harness-specific delegation
-phrase (whether the harness can dispatch a search subagent or must run the
-bounded probes itself) and inserts a `generated-by` header — carrying the CLI
-version and a sha256 hash of the pure template render — as a YAML comment on
-line two, just inside the frontmatter fence, so the file still begins with `---`
-and frontmatter-based skill discovery keeps working. Staleness and tamper
-detection are hash-authoritative, not version-authoritative: `Classify` compares
-a file's recorded hash against its own body hash to detect modification, and
-against a fresh render's hash to detect staleness, and never consults the
-version string, because dev builds all report version `"dev"` and would
-otherwise be indistinguishable from one another. There is deliberately no Claude
-Code plugin/marketplace packaging: that would tie distribution to one harness's
+[Skills for coding agents](/docs/semantic-search/#skills-for-coding-agents))
+from a single embedded template,
+`internal/skills/templates/finding-history.md.tmpl` via `go:embed` — the same
+pattern `internal/web` uses for the frontend — with no per-harness copies
+checked in. `Render` fills in a harness-specific delegation phrase (whether the
+harness can dispatch a search subagent or must run the bounded probes itself)
+and inserts a `generated-by` header — carrying the CLI version and a sha256 hash
+of the pure template render — as a YAML comment on line two, just inside the
+frontmatter fence, so the file still begins with `---` and frontmatter-based
+skill discovery keeps working. Staleness and tamper detection are
+hash-authoritative, not version-authoritative: `Classify` compares a file's
+recorded hash against its own body hash to detect modification, and against a
+fresh render's hash to detect staleness, and never consults the version string,
+because dev builds all report version `"dev"` and would otherwise be
+indistinguishable from one another. There is deliberately no Claude Code
+plugin/marketplace packaging: that would tie distribution to one harness's
 install mechanism, whereas the goal is a single `SKILL.md` artifact that any
 `.agents/skills`-reading harness can consume the same way, installed directly by
 the `agentsview` binary rather than a separate package manager.

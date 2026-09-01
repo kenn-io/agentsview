@@ -27,9 +27,9 @@ data after loss.
     parsing, or server-owned embeddings. An operator-provisioned device can test raw
     custody, but no supported command enables hosted raw sync end to end.
 
-    The existing [`agentsview pg push`](/pg-sync/) workflow remains supported and
-    unchanged. It parses sessions locally and can build embeddings locally before
-    pushing derived rows and vectors to PostgreSQL.
+    The existing [`agentsview pg push`](/docs/pg-sync/) workflow remains supported
+    and unchanged. It parses sessions locally and can build embeddings locally
+    before pushing derived rows and vectors to PostgreSQL.
 
 The tracked delivery sequence and production acceptance criteria live in
 [GitHub issue #1352](https://github.com/kenn-io/agentsview/issues/1352).

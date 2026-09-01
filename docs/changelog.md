@@ -214,7 +214,7 @@ description: Release history for AgentsView
 - Add an experimental **Recall corpus browser** with extraction coverage,
   project/type/generation/review-state filters, expandable entries, and links
   from stored evidence to its source transcript. Recall remains local,
-  SQLite-only research functionality; see [Recall](/recall/) for its trust and
+  SQLite-only research functionality; see [Recall](/docs/recall/) for its trust and
   lifecycle limits.
 - Add an early, explicit **artifact folder transport** behind
   `agentsview sync --target`: participating archives can publish normalized,
@@ -222,7 +222,7 @@ description: Release history for AgentsView
   supported peer checkpoints. This is not a finished general-purpose sync
   service: it is manual, trusted-folder-only, excludes raw provider files and
   mutable curation, and has no continuous scheduler or hosted transport. See
-  [Artifact Folder Sync](/artifact-sync/) for the current boundaries.
+  [Artifact Folder Sync](/docs/artifact-sync/) for the current boundaries.
 - Add versioned `agentsview export hour`, `day`, and `digest` reporting
   contracts with canonical JSON, exact UTC-hour correction, and content digests
   for incremental reporting workflows.
@@ -323,7 +323,7 @@ description: Release history for AgentsView
 - Add experimental **Recall extraction** with opt-in, scheduled local-model
   processing, generation management, provenance checks, lexical/vector/hybrid
   retrieval, and a read-only session evidence panel. Recall remains an
-  experimental local-SQLite feature; see [Recall](/recall/) for its current
+  experimental local-SQLite feature; see [Recall](/docs/recall/) for its current
   limits.
 - Add **French localization** across the application.
 - Guide first-time **semantic search** setup directly in the command palette.
@@ -997,19 +997,19 @@ description: Release history for AgentsView
   shared PostgreSQL store.
 - Add a read-only **`agentsview mcp` server** for MCP-capable assistants to
   search sessions, inspect message windows, and summarize usage from the
-  AgentsView archive. See [MCP Server](/mcp/).
+  AgentsView archive. See [MCP Server](/docs/mcp/).
 - Add **Recent Edits**, a top-level feed for reviewing file edits across
   sessions and jumping back to the exact message that made each change. See
-  [Recent Edits](/recent-edits/).
+  [Recent Edits](/docs/recent-edits/).
 - Add **batch session selection and deletion** in the sidebar.
 - Add **S3-compatible object storage discovery** for Claude and Codex session
   roots, so a central AgentsView instance can sync raw session files from S3,
   MinIO, R2, OSS, and similar stores. See
-  [S3-Compatible Session Sources](/configuration/#s3-compatible-session-sources).
+  [S3-Compatible Session Sources](/docs/configuration/#s3-compatible-session-sources).
 - Add **Chinese localization** plus language settings across the frontend.
 - Add **UI text-size scaling** and **high-contrast** appearance mode.
 - Add an **Analytics dashboard model filter** that scopes dashboard panels to
-  selected models. See [Model Filter](/usage/#model-filter).
+  selected models. See [Model Filter](/docs/usage/#model-filter).
 - Add **export and publish actions for generated insights**.
 - Add **IcodeMate** agent support.
 - Add **Cursor admin usage ingestion** to the Usage board.
@@ -1253,7 +1253,7 @@ description: Release history for AgentsView
   cost, output tokens, projects, models, machine filters,
   automation filters, clickable concurrency buckets, session rows,
   project/model/agent breakdowns, and range-scoped Activity
-  Insights. See [Activity](/activity/).
+  Insights. See [Activity](/docs/activity/).
 - Add **session quality scoring and insight patterns**. Session
   intelligence now has a richer scoring basis for recurring quality
   patterns, and the Activity page can generate a daily or range
@@ -1262,19 +1262,19 @@ description: Release history for AgentsView
   calls by call count, sessions, recency, agent mix, project mix,
   and weekly trend. Skill names come from explicit tool metadata and
   are inferred from `SKILL.md` reads for agents (such as Codex and
-  Cursor) that do not record them. See [Top Skills](/usage/#top-skills).
+  Cursor) that do not record them. See [Top Skills](/docs/usage/#top-skills).
 - Add new session sources: **OhMyPi**, **Reasonix**, **aider**,
   **Mistral Vibe**, **Visual Studio Copilot**, **Shelley**,
   **QwenPaw**, **MiMoCode**, **Claude Cowork** sessions from Claude
   Desktop local-agent mode, **Kilo**, **DeepSeek TUI**, and
   **gptme**. Each source has a matching environment variable and
   `config.toml` directory-array key. See
-  [Session Discovery](/configuration/#session-discovery).
+  [Session Discovery](/docs/configuration/#session-discovery).
 - Add **background `serve` mode**. `agentsview serve --background`
   starts the web UI as a managed local service, writes logs to
   `~/.agentsview/serve.log`, and records enough runtime metadata for
   `agentsview serve status` and `agentsview serve stop` to inspect or
-  stop the daemon later. See [CLI Reference](/commands/#background-mode).
+  stop the daemon later. See [CLI Reference](/docs/commands/#background-mode).
 - Route `agentsview session` **read commands through PostgreSQL**.
   When `AGENTSVIEW_PG_URL` or `[pg].url` is configured, read-only
   session commands use the shared PostgreSQL store by default; pass
@@ -1283,19 +1283,19 @@ description: Release history for AgentsView
 - Target an **explicit session server** from the `agentsview session`
   CLI with `--server <url>`, authenticated by `AGENTSVIEW_SERVER_TOKEN`
   or `--server-token-file`; a discovered local daemon's token is never
-  sent to an explicit URL. See [Session API](/session-api/).
+  sent to an explicit URL. See [Session API](/docs/session-api/).
 - Add **session list sorting** to CLI and HTTP surfaces with
   `agentsview session list --sort`, `--reverse`, `order_by`,
   `descending`, and per-key direction suffixes such as
   `messages:desc,started:asc`. See
-  [Session API](/session-api/#agentsview-session-list).
+  [Session API](/docs/session-api/#agentsview-session-list).
 - Add `agentsview doctor sync`, a **sync diagnostics** report for
   checking database readability, data-version counts, agent roots,
-  and recent sync-debug lines. See [CLI Reference](/commands/#agentsview-doctor-sync).
+  and recent sync-debug lines. See [CLI Reference](/docs/commands/#agentsview-doctor-sync).
 - Add `agentsview parse-diff`, a parser QA report that re-parses
   source files from the current archive and reports differences from
   the stored SQLite rows without rewriting sessions. See
-  [CLI Reference](/commands/#agentsview-parse-diff).
+  [CLI Reference](/docs/commands/#agentsview-parse-diff).
 - Surface **Copilot AI credits** in usage reporting when
   Copilot-family sessions have priced usage.
 - Add **Copy source file path** to the session export menu when the
@@ -1322,7 +1322,7 @@ description: Release history for AgentsView
 - Extract **token usage and cost from VS Code Copilot** sessions when
   their persisted request metadata includes `promptTokens`,
   `outputTokens`, and resolved model names. See
-  [VS Code Copilot Token Metrics](/token-usage/#vs-code-copilot-token-metrics).
+  [VS Code Copilot Token Metrics](/docs/token-usage/#vs-code-copilot-token-metrics).
 - Improve **Antigravity** parsing: IDE role detection now recognizes
   newer step types, model-name extraction filters noisy prose and URLs,
   token extraction is more complete, and tool-call metadata is richer.
@@ -1430,7 +1430,7 @@ description: Release history for AgentsView
   history and keep their own identity.
 - Render **tool call groups** reliably when message identifiers
   repeat. Sessions read through the
-  [PostgreSQL backend](/pg-sync/)'s `pg serve` leave message
+  [PostgreSQL backend](/docs/pg-sync/)'s `pg serve` leave message
   IDs unset (its messages table keys on session and ordinal),
   so a tool call group holding more than one message produced
   duplicate render keys and tore down the message panel. Groups
@@ -1457,9 +1457,9 @@ description: Release history for AgentsView
   `agentsview duckdb quack serve` exposes the mirror over
   DuckDB's Quack remote protocol so another machine can serve
   from it. SQLite remains the source of truth for ingestion —
-  the mirror is one-way, like [PostgreSQL sync](/pg-sync/).
+  the mirror is one-way, like [PostgreSQL sync](/docs/pg-sync/).
   Configuration lives in a `[duckdb]` section of `config.toml`.
-  See [DuckDB Mirror](/duckdb/) for the full setup, including
+  See [DuckDB Mirror](/docs/duckdb/) for the full setup, including
   the Quack token and loopback safety defaults. The DuckDB
   driver is linked into every binary except `windows/arm64`,
   where the upstream bindings ship no prebuilt library —
@@ -1471,14 +1471,14 @@ description: Release history for AgentsView
   structured tool calls, tool results, and thinking blocks are
   parsed from the message content. Configure custom paths with
   `COMMANDCODE_PROJECTS_DIR` or `commandcode_project_dirs`. See
-  [Session Discovery](/configuration/#session-discovery).
+  [Session Discovery](/docs/configuration/#session-discovery).
 - Add **Zed** AI assistant session support. AgentsView reads
   Zed's `threads/threads.db` SQLite database from the
   platform data directory (`~/Library/Application Support/Zed`
   on macOS, `~/.local/share/zed` on Linux,
   `~/AppData/Local/Zed` on Windows), extracting messages, model
   names, and per-request token usage, so Zed sessions also
-  contribute to [usage and cost reports](/token-usage/).
+  contribute to [usage and cost reports](/docs/token-usage/).
   Configure custom paths with `ZED_DIR` or `zed_dirs`.
 - Allow publishing sessions as **secret GitHub gists**. The
   publish button in the session header is now a dropdown with
@@ -1487,15 +1487,15 @@ description: Release history for AgentsView
   endpoint. Note that secret gists are unlisted, not
   access-controlled — anyone with the URL can read them. The
   `p` shortcut still publishes publicly. See
-  [Publish to Gist](/usage/#publish-to-gist).
+  [Publish to Gist](/docs/usage/#publish-to-gist).
 - Ship **native Windows ARM64 builds**: release archives now
   include a native `windows_arm64` binary (built with the
   aarch64 llvm-mingw toolchain, with full CGO/FTS5 support) and
   PyPI gains a `win_arm64` wheel. The PowerShell installer
   prefers the native build automatically. See
-  [Quick Start](/quickstart/#install).
+  [Quick Start](/docs/quickstart/#install).
 - Add **configurable remote hosts** for
-  [`agentsview sync`](/commands/#agentsview-sync). Declare a
+  [`agentsview sync`](/docs/commands/#agentsview-sync). Declare a
   fleet of machines as `[[remote_hosts]]` entries in
   `config.toml` (each with `host` and optional `user` / `port`)
   and a bare `agentsview sync` runs the local sync, then syncs
@@ -1517,7 +1517,7 @@ description: Release history for AgentsView
   800 lines to keep large sessions fast, and the highlighter
   loads lazily in code-split chunks so it costs nothing until
   the first code fence renders. See
-  [Code Blocks](/usage/#code-blocks).
+  [Code Blocks](/docs/usage/#code-blocks).
 
 **Improvements**
 
@@ -1538,7 +1538,7 @@ description: Release history for AgentsView
   token counts from trajectory `gen_metadata` blobs and from
   sidecar `generatorMetadata` arrays, with precedence rules
   that prevent double-counting, so Antigravity CLI sessions
-  contribute to the [Usage dashboard](/token-usage/#usage-dashboard)
+  contribute to the [Usage dashboard](/docs/token-usage/#usage-dashboard)
   and `agentsview usage` after the 0.33.0 resync.
 - Prefer **agy-reader trajectory sidecars** when they are at
   least as complete as the raw Antigravity CLI source: for
@@ -1553,7 +1553,7 @@ description: Release history for AgentsView
   transcripts written under nested `subagents/` paths (as
   produced by workflow orchestration) are now found by a
   recursive walk instead of a flat directory listing, so they
-  appear in the [sub-agent tree](/usage/#sub-agent-tree).
+  appear in the [sub-agent tree](/docs/usage/#sub-agent-tree).
 - Keep the app usable when the **PostgreSQL sync backend is
   degraded**. A 5xx from the backend no longer forces a full
   page reload (which could loop while the database was down) —
@@ -1570,7 +1570,7 @@ description: Release history for AgentsView
   $50 output, $12.50 cache creation, $1 cache read per million
   tokens), so Fable 5 sessions are priced before the LiteLLM
   catalog catches up. See
-  [Pricing Source](/token-usage/#pricing-source).
+  [Pricing Source](/docs/token-usage/#pricing-source).
 - Fall back to the **system browser on Linux** when the desktop
   WebView cannot render. On GPU/driver/compositor combinations
   where WebKitGTK aborts with an EGL error and leaves a blank
@@ -1582,7 +1582,7 @@ description: Release history for AgentsView
   random per-machine install ID — no session data, paths,
   hostnames, or prompts). Disable it with
   `AGENTSVIEW_TELEMETRY_ENABLED=0`. See
-  [Privacy and Telemetry](/configuration/#privacy-and-telemetry).
+  [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
 **Bug fixes**
 
@@ -1634,7 +1634,7 @@ description: Release history for AgentsView
   heredocs, large `Write` payloads — were truncated at
   200 characters with no way to reach the rest, even
   though the complete text was already stored. The
-  collapsed [tool block](/usage/#tool-blocks) now previews
+  collapsed [tool block](/docs/usage/#tool-blocks) now previews
   the first 20 lines with a *Show more* / *Show less*
   toggle, Bash calls render their `description` and
   `command` fields in full, content is capped at 200 lines
@@ -1650,7 +1650,7 @@ description: Release history for AgentsView
   stats — are now dropped during parsing, while sessions
   that also contain a genuine prompt are kept.
 - Recognize **Codex code-review sessions** as
-  [automated activity](/configuration/#automated-session-detection).
+  [automated activity](/docs/configuration/#automated-session-detection).
   Codex re-emits the initial prompt verbatim when it
   continues a task across turns, which pushed the
   user-message count past the single-turn gate and left
@@ -1670,7 +1670,7 @@ description: Release history for AgentsView
   Some agents report model ids with dots (such as
   OpenCode's `claude-opus-4.7`) while the LiteLLM table
   keys them by the dashed API string (`claude-opus-4-7`),
-  so [`agentsview usage daily`](/token-usage/#agentsview-usage-daily)
+  so [`agentsview usage daily`](/docs/token-usage/#agentsview-usage-daily)
   priced those sessions at `$0.00`. Every cost lookup now
   falls back to the dot-to-dash form.
 - Speed up **sync project resolution** by avoiding
@@ -1703,22 +1703,22 @@ description: Release history for AgentsView
   updates resync reliably. The existing encrypted `.pb`,
   `agy-reader` sidecar, and plaintext summary flows remain in
   place for older Antigravity CLI sessions. See
-  [Session Discovery](/configuration/#session-discovery).
+  [Session Discovery](/docs/configuration/#session-discovery).
 - Add **Copilot CLI token usage tracking**. The parser now reads
   assistant output tokens from `assistant.message` events and
   model-level input, output, cache-read, cache-write, and
   reasoning totals from `session.shutdown` `modelMetrics`.
   Claude model IDs reported with dotted versions are normalized to
   the pricing-catalog form, so Copilot CLI rows now contribute to
-  the [Usage dashboard](/token-usage/#usage-dashboard),
+  the [Usage dashboard](/docs/token-usage/#usage-dashboard),
   `agentsview usage`, and per-session usage reports after the
   0.32.0 resync.
 - Add `GET /api/v1/sessions/{id}/usage`, a per-session usage
   REST endpoint that returns the same stable JSON fields as
-  [`agentsview session usage --format json`](/session-api/#agentsview-session-usage),
+  [`agentsview session usage --format json`](/docs/session-api/#agentsview-session-usage),
   including cost status, model lists, and unpriced models. The
   endpoint works under both local SQLite-backed `agentsview serve`
-  and read-only [`agentsview pg serve`](/pg-sync/#agentsview-pg-serve).
+  and read-only [`agentsview pg serve`](/docs/pg-sync/#agentsview-pg-serve).
 - Add an automatic PostgreSQL push daemon. Run
   `agentsview pg push --watch` for a foreground watcher that
   performs an initial catch-up push, coalesces file changes with
@@ -1727,7 +1727,7 @@ description: Release history for AgentsView
   `agentsview pg service` command installs and manages that
   watcher as a per-user launchd service on macOS or
   `systemd --user` service on Linux. See
-  [PostgreSQL Sync](/pg-sync/#automatic-push-watcher).
+  [PostgreSQL Sync](/docs/pg-sync/#automatic-push-watcher).
 - Ship fallback pricing for `claude-opus-4-7` at the current
   Opus 4.6 / 4.8 tier (`$5` input, `$25` output,
   `$6.25` cache creation, `$0.50` cache read per million tokens),
@@ -1757,7 +1757,7 @@ description: Release history for AgentsView
   returns a descriptive `403` body and logs a breadcrumb; the
   frontend Settings load surfaces the same actionable
   `--public-url` hint instead of a generic forbidden error. See
-  [Remote Access](/remote-access/#forwarded-dev-environments).
+  [Remote Access](/docs/remote-access/#forwarded-dev-environments).
 - Update `agy-reader` install documentation to the current module
   root command: `go install github.com/mjacobs/agy-reader@latest`.
 
@@ -1822,8 +1822,8 @@ description: Release history for AgentsView
   sidecar as untrusted input: unknown step types are skipped
   and reads are size-capped. The in-process `ANTIGRAVITY_KEY`
   decrypt path is preserved as a fallback. See
-  [Session Discovery](/configuration/#session-discovery).
-- Expand **[secret scanning](/session-api/#secret-scanning)**
+  [Session Discovery](/docs/configuration/#session-discovery).
+- Expand **[secret scanning](/docs/session-api/#secret-scanning)**
   with six more well-anchored vendor rules: OpenAI
   (`sk-proj-`, `sk-svcacct-`, `sk-admin-`), GitLab personal
   access tokens (`glpat-…`), npm tokens (`npm_…`), PyPI API
@@ -1831,14 +1831,14 @@ description: Release history for AgentsView
   and SendGrid keys (`SG.…`). The CLI summary now splits
   counts into definite vs. candidate findings —
   `N findings (X definite, Y candidate)` — and points you at
-  [`agentsview secrets list --confidence all`](/commands/#agentsview-secrets)
+  [`agentsview secrets list --confidence all`](/docs/commands/#agentsview-secrets)
   when candidate-tier matches exist. JSON consumers get the
   new count fields automatically.
 
 **Improvements**
 
 - Give the right-column
-  [Session Vital Signs](/usage/#session-vital-signs) panel a
+  [Session Vital Signs](/docs/usage/#session-vital-signs) panel a
   sticky **Analysis** title bar with an explicit close
   button, and make the header toggle read *Show / Hide
   session analysis* based on the panel's current state.
@@ -1880,7 +1880,7 @@ description: Release history for AgentsView
 **Bug fixes**
 
 - Refresh pricing from LiteLLM when
-  [`agentsview session usage`](/session-api/#agentsview-session-usage)
+  [`agentsview session usage`](/docs/session-api/#agentsview-session-usage)
   hits an unpriced model. The command previously reported
   `Cost: n/a (unpriced: <model>)` for a newly released model
   even when LiteLLM already had the rate — running
@@ -1920,15 +1920,15 @@ description: Release history for AgentsView
   private-key blocks) plus an opt-in candidate tier
   (basic-auth URLs, JWTs, high-entropy assignments).
   Definite findings are scored inline during sync; the new
-  [`agentsview secrets`](/commands/#agentsview-secrets)
+  [`agentsview secrets`](/docs/commands/#agentsview-secrets)
   command group lists them (redacted by default) and
   re-scans the archive for the candidate tier on demand.
   Sessions carry a `secret_leak_count` summary that surfaces
-  in [`session get`](/session-api/#agentsview-session-get)
+  in [`session get`](/docs/session-api/#agentsview-session-get)
   and a new
-  [`session list --has-secret`](/session-api/#agentsview-session-list)
+  [`session list --has-secret`](/docs/session-api/#agentsview-session-list)
   filter; the same shape is mirrored in PostgreSQL sync.
-- Add [`agentsview session usage <id>`](/session-api/#agentsview-session-usage),
+- Add [`agentsview session usage <id>`](/docs/session-api/#agentsview-session-usage),
   a per-session token-and-cost report. Prints output and
   peak-context totals plus a `~$X.XX` model-pricing
   estimate, with `--format json` for scripting. Reuses the
@@ -1972,7 +1972,7 @@ description: Release history for AgentsView
   state is shared across machines through the same push.
   Pinned messages are reconciled by `source_uuid`, so pins
   survive message-ordinal shifts after a re-parse.
-- Add [configurable insight agent binaries](/recall/#configuring-agent-binaries).
+- Add [configurable insight agent binaries](/docs/recall/#configuring-agent-binaries).
   Set `[agent.<name>] binary = "..."` in
   `~/.agentsview/config.toml` to point each insight-generation
   agent (Claude, Codex, Copilot, Gemini, Kiro) at a specific
@@ -1981,12 +1981,12 @@ description: Release history for AgentsView
 
 **Improvements**
 
-- Add a [follow latest message toggle](/usage/#follow-latest-message)
+- Add a [follow latest message toggle](/docs/usage/#follow-latest-message)
   to the session header. While active, the message list
   auto-scrolls to the newest message as updates stream in;
   clicking a specific message or scrolling up cancels the
   follow. The preference is persisted in localStorage.
-- Honor the [Normal and Focused transcript modes](/usage/#focused-transcript-mode)
+- Honor the [Normal and Focused transcript modes](/docs/usage/#focused-transcript-mode)
   in the standalone HTML export. The exported file now ships
   with a Normal / Focused radio toggle in the document
   header, so a recipient who only wants the user-and-final
@@ -2079,7 +2079,7 @@ description: Release history for AgentsView
   expansion works inline. Per-chat incremental sync only
   re-parses rows whose `updated_at` changed.
 - Add user-configurable
-  [worktree project mappings](/configuration/#worktree-project-mappings).
+  [worktree project mappings](/docs/configuration/#worktree-project-mappings).
   AgentsView normally infers a session's project from its `cwd`,
   which doesn't recognize custom worktree layouts like
   `~/code/{project}.worktrees/feat/<branch>/` — those sessions
@@ -2095,7 +2095,7 @@ description: Release history for AgentsView
 **Improvements**
 
 - Add Piebald to the
-  [supported-agents reference table](/configuration/#session-discovery)
+  [supported-agents reference table](/docs/configuration/#session-discovery)
   in the README and to the docs.
 - Fix sync progress accounting for database-backed agents
   (Piebald, OpenCode, Warp, Forge): the terminal `PhaseDone`
@@ -2159,7 +2159,7 @@ description: Release history for AgentsView
 **Improvements**
 
 - Preview common tool inputs in the collapsed
-  [tool block](/usage/#tool-blocks) header so the most
+  [tool block](/docs/usage/#tool-blocks) header so the most
   meaningful field shows without expanding. `TodoWrite`
   surfaces the in-progress todo (or last todo) with a `→`
   prefix; `TaskCreate` shows the subject; `TaskUpdate` shows
@@ -2174,7 +2174,7 @@ description: Release history for AgentsView
   message viewer works the same way for Codex sessions as it
   already did for Claude `Task` calls.
 - Make git outcome metrics opt-in for
-  [`agentsview stats`](/stats/). Outcome aggregation walks
+  [`agentsview stats`](/docs/stats/). Outcome aggregation walks
   every session's working directory and shells out to `git`,
   which is slow on large repos and brittle when the cwd has
   moved or the repo is unavailable. Add
@@ -2216,15 +2216,15 @@ description: Release history for AgentsView
   `docker-entrypoint.sh`, and a `docker-compose.prod.yaml` example.
   The same image runs both `agentsview serve` (default) and
   `agentsview pg serve` (set `PG_SERVE=1`). See the
-  [Quick Start](/quickstart/#docker) for usage.
-- Add a [session status indicator](/usage/#session-status-indicator)
+  [Quick Start](/docs/quickstart/#docker) for usage.
+- Add a [session status indicator](/docs/usage/#session-status-indicator)
   that classifies each session by recency and termination state and
   surfaces six visual states (working, waiting, idle, stale, unclean,
   quiet) on the sidebar dot and the dashboard's Top Sessions table.
   Backed by a new `termination_status` column on the `sessions` table
   populated by the Claude Code and Codex parsers from per-message
   stop reasons. Sessions can now be filtered by status from the
-  [filter dropdown](/usage/#session-filters) or via the new
+  [filter dropdown](/docs/usage/#session-filters) or via the new
   `?termination=` URL parameter.
 - Use Copilot CLI's `workspace.yaml` `name` field as the session
   title when present, falling back to the first user message
@@ -2265,7 +2265,7 @@ description: Release history for AgentsView
   so `agentsview usage daily --agent openclaw` reports actual cost
   and token totals instead of `$0.00`.
 - Synthesize `Message.ID` from the message ordinal in
-  [`pg serve`](/pg-sync/) responses. PG's `messages` table has a
+  [`pg serve`](/docs/pg-sync/) responses. PG's `messages` table has a
   composite primary key (`session_id`, `ordinal`) and no `id`
   column, which previously left every row with `id = 0` and broke
   Svelte's keyed `{#each}` rendering in the message viewer.
@@ -2308,15 +2308,15 @@ description: Release history for AgentsView
 
 **New features**
 
-- Add a [Trends page](/usage/#trends) for ad-hoc term-frequency line
+- Add a [Trends page](/docs/usage/#trends) for ad-hoc term-frequency line
   charts over your session history. Plot up to 12 terms — each with
   optional pipe-separated variants like `cat|cats` — at day, week, or
   month granularity, and optionally normalize counts by message
   volume. Backed by both SQLite and PostgreSQL, so the page works
-  under local `agentsview serve` and shared [`pg serve`](/pg-sync/)
+  under local `agentsview serve` and shared [`pg serve`](/docs/pg-sync/)
   deployments.
 - Replace the right-column activity minimap with a richer
-  [Session Vital Signs](/usage/#session-vital-signs) panel covering
+  [Session Vital Signs](/docs/usage/#session-vital-signs) panel covering
   total wall-clock, slowest call, per-category time spent, a
   per-category timeline, and a chronological calls list with parallel
   groups bracketed and sub-agents expandable inline. Each tool block
@@ -2344,7 +2344,7 @@ description: Release history for AgentsView
   single FTS rebuild on the temp database before the atomic swap. On
   a 26.7k-session workload, full-resync wall-clock improved from
   about 1m17s to about 34s.
-- Expand [Gemini ingestion](/configuration/#session-discovery) to
+- Expand [Gemini ingestion](/docs/configuration/#session-discovery) to
   discover and parse the newer streamed `session-*.jsonl` format
   alongside the legacy `.json` Gemini session files.
 - Render Claude Code `!cmd` bash shortcut wrappers (`<bash-input>`,
@@ -2368,7 +2368,7 @@ description: Release history for AgentsView
   embedded `dataVersion` bumps from 19 to 20 so existing databases
   re-parse on next startup and recover any previously missed
   mid-flight messages.
-- Run remote [SSH sync](/commands/#agentsview-sync) commands through
+- Run remote [SSH sync](/docs/commands/#agentsview-sync) commands through
   `sh -c` so command parsing is independent of the remote login
   shell and embedded single quotes are escaped safely.
 - Atomically swap the binary during self-update by staging the new
@@ -2391,7 +2391,7 @@ description: Release history for AgentsView
 
 **Improvements**
 
-- Use `is_automated` consistently across [`agentsview stats`](/stats/)
+- Use `is_automated` consistently across [`agentsview stats`](/docs/stats/)
   totals, archetypes, distributions, and agent portfolio metrics, so
   the stats report uses the stored automation classification instead
   of mixing in older user-message-count heuristics.
@@ -2424,12 +2424,12 @@ description: Release history for AgentsView
   layout (`storage/session`, `storage/message`, `storage/part`)
   and parses the JSON files directly. The legacy `opencode.db`
   SQLite backend is still read transparently when that's what's
-  present — see [Session Discovery](/configuration/#session-discovery).
-- Add [custom model pricing](/token-usage/#custom-model-pricing)
+  present — see [Session Discovery](/docs/configuration/#session-discovery).
+- Add [custom model pricing](/docs/token-usage/#custom-model-pricing)
   via `[custom_model_pricing.<model>]` tables in
   `~/.agentsview/config.toml`, for models not in the LiteLLM
   catalog or when you want to override the catalog's rates.
-- Add configurable [automation patterns](/configuration/#automated-session-detection)
+- Add configurable [automation patterns](/docs/configuration/#automated-session-detection)
   via `[automated] prefixes`, `substrings`, and `exact_matches` in
   `~/.agentsview/config.toml`, so single-turn sessions with
   first-message patterns unique to your own automation get filtered
@@ -2495,12 +2495,12 @@ description: Release history for AgentsView
 **New features**
 
 - Add live dashboard refresh via Server-Sent Events so the Sessions and Usage views update without a full page reload when new sync data lands.
-- Add [session intelligence](/session-intelligence/) with health signals, outcome classification, score/grade badges, a per-session signal panel, and aggregated dashboard health analytics.
-- Add the [`agentsview session`](/session-api/) CLI as a programmatic surface for listing, inspecting, exporting, syncing, and watching session data.
+- Add [session intelligence](/docs/session-intelligence/) with health signals, outcome classification, score/grade badges, a per-session signal panel, and aggregated dashboard health analytics.
+- Add the [`agentsview session`](/docs/session-api/) CLI as a programmatic surface for listing, inspecting, exporting, syncing, and watching session data.
 - Add markdown export for sessions via `/api/v1/sessions/{id}/md`, including optional child-session depth controls.
-- Add SSH remote sync to [`agentsview sync`](/commands/#agentsview-sync) so a local archive can pull session data from a remote machine over SSH.
-- Add PostgreSQL-backed usage reporting so the Usage dashboard and related endpoints work under [`agentsview pg serve`](/pg-sync/).
-- Add [`agentsview stats`](/stats/), an experimental window-scoped reporter for session, git, and outcome activity across the local archive.
+- Add SSH remote sync to [`agentsview sync`](/docs/commands/#agentsview-sync) so a local archive can pull session data from a remote machine over SSH.
+- Add PostgreSQL-backed usage reporting so the Usage dashboard and related endpoints work under [`agentsview pg serve`](/docs/pg-sync/).
+- Add [`agentsview stats`](/docs/stats/), an experimental window-scoped reporter for session, git, and outcome activity across the local archive.
 
 **Improvements**
 
@@ -2554,7 +2554,7 @@ description: Release history for AgentsView
 
 **Improvements**
 
-- Extend usage cost tracking to [OpenCode and Pi](/token-usage/#agent-coverage) sessions alongside Claude Code and Codex. Their token counts now flow into the [Usage dashboard](/token-usage/#usage-dashboard) and `agentsview usage` CLI reports.
+- Extend usage cost tracking to [OpenCode and Pi](/docs/token-usage/#agent-coverage) sessions alongside Claude Code and Codex. Their token counts now flow into the [Usage dashboard](/docs/token-usage/#usage-dashboard) and `agentsview usage` CLI reports.
 - Refine the Usage dashboard summary cards and cost-over-time chart for clearer cost reporting.
 
 **Bug fixes**
@@ -2569,7 +2569,7 @@ description: Release history for AgentsView
 
 **New features**
 
-- Add a [token usage dashboard](/token-usage/#usage-dashboard) to the web UI for exploring cost and token totals across your agent sessions. The new `/usage` page shows summary cards, a cost-over-time chart, a cost attribution treemap with project/model/agent toggles, top sessions by cost, and a cache efficiency panel. Filter by project, agent, model, and date range — filter state is written back to the URL so views are shareable and bookmarkable.
+- Add a [token usage dashboard](/docs/token-usage/#usage-dashboard) to the web UI for exploring cost and token totals across your agent sessions. The new `/usage` page shows summary cards, a cost-over-time chart, a cost attribution treemap with project/model/agent toggles, top sessions by cost, and a cache efficiency panel. Filter by project, agent, model, and date range — filter state is written back to the URL so views are shareable and bookmarkable.
 - Add backing API endpoints for the usage dashboard so scripts and external tools can fetch the same summary, time series, and attribution data the UI uses.
 
 **Bug fixes**
@@ -2584,10 +2584,10 @@ description: Release history for AgentsView
 
 **New features**
 
-- Add [`agentsview usage daily`](/token-usage/#agentsview-usage-daily) and [`agentsview usage statusline`](/token-usage/#agentsview-usage-statusline) commands that report token usage and estimated cost by day or for the current day, scoped to Claude Code and Codex sessions. Pricing is pulled from the LiteLLM catalog with an embedded fallback for offline use. See [Token Usage & Costs](/token-usage/) for the full write-up, including benchmarks against `ccusage`.
-- Add [OpenHands CLI](/configuration/#session-discovery) session support. Local OpenHands conversations under `~/.openhands/conversations` are discovered, synced, and rendered alongside other agents. A new shallow-watch mode is used for agents that store each conversation in its own subdirectory, so file watchers don't exhaust inotify limits.
-- Add [Positron Assistant](/configuration/#session-discovery) session support. Positron is a VS Code–based IDE; chat sessions under `workspaceStorage/*/chatSessions/` are parsed using the VSCode Copilot format. Built-in discovery covers macOS only in 0.20.0 — Linux and Windows users need to set `POSITRON_DIR` or `positron_dirs`.
-- Filter pinned messages by the currently selected project. The [Pinned](/usage/#pinned-messages) page only shows pins from the active project, the count badge reflects the filtered total, and a dedicated empty state is shown when the filter yields no results.
+- Add [`agentsview usage daily`](/docs/token-usage/#agentsview-usage-daily) and [`agentsview usage statusline`](/docs/token-usage/#agentsview-usage-statusline) commands that report token usage and estimated cost by day or for the current day, scoped to Claude Code and Codex sessions. Pricing is pulled from the LiteLLM catalog with an embedded fallback for offline use. See [Token Usage & Costs](/docs/token-usage/) for the full write-up, including benchmarks against `ccusage`.
+- Add [OpenHands CLI](/docs/configuration/#session-discovery) session support. Local OpenHands conversations under `~/.openhands/conversations` are discovered, synced, and rendered alongside other agents. A new shallow-watch mode is used for agents that store each conversation in its own subdirectory, so file watchers don't exhaust inotify limits.
+- Add [Positron Assistant](/docs/configuration/#session-discovery) session support. Positron is a VS Code–based IDE; chat sessions under `workspaceStorage/*/chatSessions/` are parsed using the VSCode Copilot format. Built-in discovery covers macOS only in 0.20.0 — Linux and Windows users need to set `POSITRON_DIR` or `positron_dirs`.
+- Filter pinned messages by the currently selected project. The [Pinned](/docs/usage/#pinned-messages) page only shows pins from the active project, the count badge reflects the filtered total, and a dedicated empty state is shown when the filter yields no results.
 
 **Improvements**
 
@@ -2599,7 +2599,7 @@ description: Release history for AgentsView
 - Auto-recover the macOS desktop app when WKWebView's content process is killed during sleep/wake. A Rust-side focus probe detects a dead WebView and force-reloads it; a JavaScript `visibilitychange` handler pings the backend and reloads if unreachable.
 - Honor `pi_dirs`, `cursor_project_dirs`, and `amp_dirs` from `config.toml`. These arrays were previously dropped by the loader because the registry entries for Pi, Cursor, and Amp were missing `ConfigKey`.
 - Claude Code streaming messages were being recorded multiple times by the parser, inflating historical input-token totals by roughly 2×. The parser now deduplicates them. After upgrading, the first `agentsview usage` invocation triggers a full resync so historical totals are recomputed with the fix.
-- Codex sessions now capture the per-request `token_count` events embedded in `event_msg` entries, so Codex messages populate token usage (and therefore show up in [`agentsview usage daily`](/token-usage/)) where they previously reported zero.
+- Codex sessions now capture the per-request `token_count` events embedded in `event_msg` entries, so Codex messages populate token usage (and therefore show up in [`agentsview usage daily`](/docs/token-usage/)) where they previously reported zero.
 
 **Acknowledgements**
 
@@ -2627,7 +2627,7 @@ description: Release history for AgentsView
 
 **Improvements**
 
-- Add [project filtering](/pg-sync/#project-filtering) to `pg push` with `--projects`, `--exclude-projects`, and `--all-projects` flags plus config file equivalents. A new [`agentsview projects`](/commands/#agentsview-projects) command lists all projects with session counts.
+- Add [project filtering](/docs/pg-sync/#project-filtering) to `pg push` with `--projects`, `--exclude-projects`, and `--all-projects` flags plus config file equivalents. A new [`agentsview projects`](/docs/commands/#agentsview-projects) command lists all projects with session counts.
 - Add an opt-out for the update check via `disable_update_check` in config, `AGENTSVIEW_DISABLE_UPDATE_CHECK=1` environment variable, or `--no-update-check` CLI flag.
 
 **Bug fixes**
@@ -2647,7 +2647,7 @@ description: Release history for AgentsView
 
 **New features**
 
-- Import [Claude.ai and ChatGPT conversations](/chat-import/) into AgentsView. Upload the zip file export from either service via the UI or CLI to bring your full conversation history — including ChatGPT images — into your local database alongside your agent coding sessions.
+- Import [Claude.ai and ChatGPT conversations](/docs/chat-import/) into AgentsView. Upload the zip file export from either service via the UI or CLI to bring your full conversation history — including ChatGPT images — into your local database alongside your agent coding sessions.
 - Show token usage metrics across sessions, analytics views, and exports. Session breadcrumbs display peak context and output tokens, the analytics dashboard includes output token summary cards and heatmap metrics, and CSV exports include token totals.
 
 **Improvements**

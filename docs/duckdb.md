@@ -7,7 +7,7 @@ As of 0.33.0, AgentsView can mirror its local SQLite archive into a DuckDB
 database and serve the read-only web UI from that mirror — either from the local
 file or remotely over DuckDB's Quack protocol. SQLite remains the source of
 truth for ingestion; the mirror is populated by `duckdb push` or
-`duckdb push --watch`, the same one-way model as [PostgreSQL sync](/pg-sync/).
+`duckdb push --watch`, the same one-way model as [PostgreSQL sync](/docs/pg-sync/).
 
 This is useful when you want a portable single-file analytics copy of your
 archive, or want to query your sessions with DuckDB directly, without standing
@@ -35,7 +35,7 @@ agentsview duckdb push --watch
 ```
 
 `duckdb push` accepts the same project-filter and foreground watcher flags as
-[`pg push`](/pg-sync/#project-filtering):
+[`pg push`](/docs/pg-sync/#project-filtering):
 
 | Flag                 | Default | Description                                                    |
 | -------------------- | ------- | -------------------------------------------------------------- |
@@ -66,7 +66,7 @@ expose a different mirror than the one used by `duckdb push`, `duckdb status`,
 and `duckdb serve`.
 
 `duckdb serve` accepts the same serve flags as
-[`pg serve`](/pg-sync/#agentsview-pg-serve) (`--host`, `--port`, `--base-path`,
+[`pg serve`](/docs/pg-sync/#agentsview-pg-serve) (`--host`, `--port`, `--base-path`,
 proxy and TLS flags) and is read-only in the same way — no uploads, file
 watching, or local sync.
 

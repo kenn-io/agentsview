@@ -51,10 +51,10 @@ client will see these tools:
 `search_content` accepts a `mode` of `substring` (default), `regex`, `semantic`,
 or `hybrid`, plus a `scope` of `top`, `all` (default), or `subordinate` that is
 only valid with the semantic and hybrid modes. The `semantic` and `hybrid` modes
-need the opt-in [semantic search](/semantic-search/) index on the local SQLite
-archive; without it they return a "not available" error. In every mode, each
-match carries a conversation-unit citation: an `ordinal_range` of `[start, end]`
-ordinals around the match, plus `subordinate`, `relationship`,
+need the opt-in [semantic search](/docs/semantic-search/) index on the local
+SQLite archive; without it they return a "not available" error. In every mode,
+each match carries a conversation-unit citation: an `ordinal_range` of
+`[start, end]` ordinals around the match, plus `subordinate`, `relationship`,
 `parent_session_id`, and `is_sidechain` fields that flag hits from sidechain
 runs and subagent or fork sessions.
 
@@ -148,7 +148,7 @@ agentsview pg serve --port 8085
 }
 ```
 
-See [PostgreSQL Sync](/pg-sync/) for configuring `pg push` and `pg serve`.
+See [PostgreSQL Sync](/docs/pg-sync/) for configuring `pg push` and `pg serve`.
 
 ## StreamableHTTP Mode
 
@@ -189,5 +189,5 @@ project names, and usage totals. Treat it like access to your session archive.
 - Remember that MCP tools are read-only, but the data they expose may still be
   sensitive.
 
-For every flag, see [`agentsview mcp`](/commands/#agentsview-mcp) in the CLI
-reference.
+For every flag, see [`agentsview mcp`](/docs/commands/#agentsview-mcp) in the
+CLI reference.

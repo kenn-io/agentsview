@@ -11,14 +11,14 @@ model or a hosted API.
 
 For the architecture behind this page — storage layout, generations,
 concurrency, and the search path — see
-[Semantic Search Internals](/semantic-search-internals/).
+[Semantic Search Internals](/docs/semantic-search-internals/).
 
 !!! note "Backends"
 
     Semantic and hybrid search run on the local SQLite archive and on
-    [PostgreSQL](#postgresql) via pgvector. The [DuckDB mirror](/duckdb/) has no
-    vector backend, so `--semantic`/`--hybrid` against a DuckDB-backed server return
-    the "not available" error described below.
+    [PostgreSQL](#postgresql) via pgvector. The [DuckDB mirror](/docs/duckdb/) has
+    no vector backend, so `--semantic`/`--hybrid` against a DuckDB-backed server
+    return the "not available" error described below.
 
 ## Enabling `[vector]`
 
@@ -99,8 +99,8 @@ the 128,000-token request that four truncated inputs could produce.
 
 `max_batch_tokens` must be at least `model_context_tokens`, and setting it
 requires `model_context_tokens`. Both default to zero (disabled), so existing
-server configurations retain their document-count batching until their model
-and provider limits are declared. These settings only shape build and repair
+server configurations retain their document-count batching until their model and
+provider limits are declared. These settings only shape build and repair
 requests; they do not alter input text or the vector-generation fingerprint.
 
 This split exists so you can encode search queries against a fast local server
@@ -489,7 +489,7 @@ the scan or embedding phase, model and dimension, chunk progress, throughput,
 elapsed time, estimated completion, and the generations already stored in
 `vectors.db`.
 
-![Embedding build progress](/assets/generated/screenshots/settings-embeddings.png)
+![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)
 
 When a writable local daemon is running, `build`/`activate`/`retire` proxy to it
 over HTTP so the daemon remains the sole writer of `vectors.db`; without a
@@ -536,7 +536,7 @@ starts the build through the local daemon and reports scanning, progress,
 throughput, and completion in place. The palette follows an already running
 build and retries the query after a successful build.
 
-![Guided semantic-search setup in the command palette](/assets/generated/screenshots/semantic-search-setup.png)
+![Guided semantic-search setup in the command palette](/docs/assets/generated/screenshots/semantic-search-setup.png)
 
 Setup and rebuild errors remain visible in the selected mode. To continue with
 Full text after an error, choose it explicitly—the UI never falls back

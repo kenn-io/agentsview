@@ -10,7 +10,48 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERCEL = ROOT / "vercel.json"
 
+# Every docs page that lived at the domain root before the site moved docs
+# under /docs/. Published URLs must keep working forever.
+LEGACY_ROOT_PAGES = [
+    "quickstart",
+    "changelog",
+    "contributing",
+    "configuration",
+    "usage",
+    "activity",
+    "data",
+    "recent-edits",
+    "session-intelligence",
+    "mcp",
+    "token-usage",
+    "one-shot-capture",
+    "chat-import",
+    "quality",
+    "commands",
+    "session-export",
+    "reporting-export",
+    "stats",
+    "session-api",
+    "semantic-search",
+    "semantic-search-internals",
+    "recall",
+    "remote-access",
+    "artifact-sync",
+    "filesystem-sync",
+    "pg-sync",
+    "hosted-raw-sync",
+    "duckdb",
+]
+
 PERMANENT: dict[str, str] = {}
+for _page in LEGACY_ROOT_PAGES:
+    PERMANENT[f"/{_page}/"] = f"/docs/{_page}/"
+    PERMANENT[f"/{_page}.md"] = f"/docs/{_page}.md"
+PERMANENT["/assets/static/:path*"] = "/docs/assets/static/:path*"
+PERMANENT["/assets/generated/:path*"] = "/docs/assets/generated/:path*"
+PERMANENT["/postgresql/"] = "/docs/pg-sync/"
+PERMANENT["/insights/"] = "/docs/recall/"
+PERMANENT["/architecture/"] = "/"
 
 TEMPORARY = {
     "/install.sh": "https://raw.githubusercontent.com/kenn-io/agentsview/main/scripts/install.sh",
@@ -285,6 +326,11 @@ def main() -> None:
             fail(f"missing temporary redirect {source}")
         if item.get("destination") != destination or item.get("permanent") is not False:
             fail(f"incorrect temporary redirect {source}")
+
+    unexpected = set(redirects) - set(PERMANENT) - set(TEMPORARY)
+    if unexpected:
+        sources = ", ".join(sorted(unexpected))
+        fail(f"unexpected redirects not in the reviewed table: {sources}")
 
     print("vercel redirect checks passed")
 

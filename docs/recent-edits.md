@@ -12,7 +12,7 @@ edit. Expand a row to see the individual edits that touched the file, newest
 first, and click any edit to jump to the exact message in the session that
 produced it.
 
-![Recent Edits feed](/assets/generated/screenshots/recent-edits.png)
+![Recent Edits feed](/docs/assets/generated/screenshots/recent-edits.png)
 
 ## What It Shows
 

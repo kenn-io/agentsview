@@ -1,0 +1,60 @@
+# AgentsView
+
+> AgentsView is a local-first system of record for AI coding agent sessions: a daemon syncs sessions from more than 50 agent harnesses into a searchable SQLite archive with transcripts, activity, token and cost reports, quality signals, and recall, served through a web UI, desktop app, CLI, REST API, and MCP server.
+
+Every public page is also published as raw Markdown at the route listed below.
+The Markdown pages are canonical for machine readers; the HTML routes drop the
+`.md` suffix and end with a trailing slash (for example `/docs/quickstart/`).
+
+## Product
+
+- [AgentsView](https://agentsview.io/index.md): The system of record for your AI coding agents.
+- [The session intelligence loop](https://agentsview.io/guide.md): A nine-stop tour from session capture to the agent feedback loop.
+
+## Start Here
+
+- [Documentation overview](https://agentsview.io/docs/index.md): Mental model and documentation map.
+- [Quick Start](https://agentsview.io/docs/quickstart.md): Get AgentsView running in under a minute.
+- [Configuration](https://agentsview.io/docs/configuration.md): Config file, default paths, and runtime settings.
+- [Usage Guide](https://agentsview.io/docs/usage.md): Complete guide to the AgentsView web interface.
+- [CLI Reference](https://agentsview.io/docs/commands.md): All AgentsView commands, flags, and environment variables.
+
+## Monitor and Account
+
+- [Activity](https://agentsview.io/docs/activity.md): Activity, concurrency, and session-time reporting.
+- [Token Usage & Costs](https://agentsview.io/docs/token-usage.md): Fast token usage and cost reports from the local database.
+- [One-shot CI Capture](https://agentsview.io/docs/one-shot-capture.md): Capture exact usage from one supported non-interactive agent execution.
+- [Stats](https://agentsview.io/docs/stats.md): Experimental workspace analytics via agentsview stats.
+- [Reporting Export](https://agentsview.io/docs/reporting-export.md): Canonical hourly activity and usage exports for reporting integrations.
+
+## Understand
+
+- [Session Intelligence](https://agentsview.io/docs/session-intelligence.md): Health scores, outcomes, and session-quality analytics.
+- [Quality](https://agentsview.io/docs/quality.md): Deterministic quality signals and recommendations computed from session data.
+- [Semantic Search](https://agentsview.io/docs/semantic-search.md): Vector search over session messages, plus hybrid search and cursor-based context retrieval.
+- [Semantic Search Internals](https://agentsview.io/docs/semantic-search-internals.md): Architecture and invariants behind the vector index.
+- [Recall](https://agentsview.io/docs/recall.md): Experimental, provenance-linked durable knowledge over the local session archive.
+- [Recent Edits](https://agentsview.io/docs/recent-edits.md): Browse the files your agents edited most recently across every session.
+- [Data](https://agentsview.io/docs/data.md): Project inventory and worktree mapping rules.
+
+## Automate and Integrate
+
+- [MCP Server](https://agentsview.io/docs/mcp.md): Connect assistant clients to your session history with MCP.
+- [Session API](https://agentsview.io/docs/session-api.md): Programmatic access to session data via the CLI and REST endpoints.
+- [Session Export](https://agentsview.io/docs/session-export.md): Content-free session summary exports for scripting and analytics.
+- [Chat Import](https://agentsview.io/docs/chat-import.md): Import Claude.ai, ChatGPT, and Gemini Apps conversations.
+
+## Sync and Share
+
+- [PostgreSQL Sync](https://agentsview.io/docs/pg-sync.md): Push sync, an auto-push service, and a read-only server for teams.
+- [DuckDB Mirror](https://agentsview.io/docs/duckdb.md): Mirror the SQLite archive into DuckDB, locally or over the Quack remote protocol.
+- [Filesystem Session Sync](https://agentsview.io/docs/filesystem-sync.md): View sessions from multiple machines by transporting native session directories.
+- [Artifact Folder Sync](https://agentsview.io/docs/artifact-sync.md): Exchange normalized sessions between archives through a trusted folder.
+- [Hosted Raw Sync](https://agentsview.io/docs/hosted-raw-sync.md): Architecture, security boundaries, and delivery status for raw-first hosted sync (in development).
+- [Remote Access](https://agentsview.io/docs/remote-access.md): Access AgentsView from other devices on your network.
+
+## Project
+
+- [Changelog](https://agentsview.io/docs/changelog.md): Release history for AgentsView.
+- [Contributing](https://agentsview.io/docs/contributing.md): Engineering standards and review workflow for contributions.
+- [Source repository](https://github.com/kenn-io/agentsview): Source, releases, and issue tracker.

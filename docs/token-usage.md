@@ -9,7 +9,7 @@ already knows the input, output, cache-creation, and cache-read tokens those
 agents have logged, and the `agentsview usage` commands turn that into daily
 cost reports and a one-line today's-spend summary without re-reading source
 files. To see that same cost attributed to specific time ranges and concurrent
-agent activity, see the [Activity](/activity/) dashboard.
+agent activity, see the [Activity](/docs/activity/) dashboard.
 
 If you've used [`ccusage`](https://github.com/ryoppippi/ccusage) this will feel
 familiar. AgentsView covers the same core job — "how much did I spend on AI
@@ -106,7 +106,7 @@ AgentsView includes a dedicated **Usage** page in the web UI, reachable from the
 **Usage** button in the header or directly at `/usage`. It's a focused view of
 cost and token totals, driven by the same data the CLI commands read.
 
-![Token usage dashboard](/assets/generated/screenshots/usage-page.png)
+![Token usage dashboard](/docs/assets/generated/screenshots/usage-page.png)
 
 The page is built around four panels: summary cards, a cost trend over time, a
 cost attribution treemap, and a bottom grid with top sessions by cost and a
@@ -145,13 +145,13 @@ Project-key exclusions are the exception. Shared-store project keys are scoped
 to the current aggregate archive set, so the page keeps those exclusions in
 memory and does not write or restore them through the URL.
 
-![Usage toolbar with filters](/assets/generated/screenshots/usage-toolbar.png)
+![Usage toolbar with filters](/docs/assets/generated/screenshots/usage-toolbar.png)
 
 Each filter dropdown supports multi-select with a search box, Select all /
 Deselect all shortcuts, and a colored dot for agents so you can tell them apart
 at a glance.
 
-![Model filter dropdown](/assets/generated/screenshots/usage-filter-dropdown.png)
+![Model filter dropdown](/docs/assets/generated/screenshots/usage-filter-dropdown.png)
 
 ### Summary Cards
 
@@ -161,7 +161,7 @@ peak day, cache hit rate, project and model counts, and active days. When
 Copilot-family sessions have priced usage, an additional **Copilot AI Credits**
 card shows the same spend converted at 100 credits per dollar.
 
-![Usage summary cards](/assets/generated/screenshots/usage-summary-cards.png)
+![Usage summary cards](/docs/assets/generated/screenshots/usage-summary-cards.png)
 
 ### Cost Over Time
 
@@ -170,7 +170,7 @@ or agent — toggle the grouping with the segment buttons in the panel header.
 Each series is colored consistently with the attribution panel below so you can
 cross-reference them.
 
-![Cost over time chart](/assets/generated/screenshots/usage-cost-trend.png)
+![Cost over time chart](/docs/assets/generated/screenshots/usage-cost-trend.png)
 
 ### Cost Attribution
 
@@ -181,7 +181,7 @@ readout. Click any cell (or row) to hide it from the chart above, which is the
 primary drill-down mechanic — hide the obvious outliers and the remaining
 breakdown tells you where the smaller spend is going.
 
-![Cost attribution treemap](/assets/generated/screenshots/usage-attribution.png)
+![Cost attribution treemap](/docs/assets/generated/screenshots/usage-attribution.png)
 
 ### Pairwise Cost Comparison
 
@@ -214,7 +214,7 @@ A ranked list of the most expensive sessions in the window, with the agent pill,
 session name, project, token total, and cost. Click any row to jump straight to
 that session in the message viewer.
 
-![Top sessions by cost](/assets/generated/screenshots/usage-top-sessions.png)
+![Top sessions by cost](/docs/assets/generated/screenshots/usage-top-sessions.png)
 
 ### Cache Efficiency
 
@@ -223,7 +223,7 @@ output tokens, plus a savings callout showing how much you saved (or overspent)
 versus a no-cache baseline. Useful for spotting prompts that are blowing through
 cache creation without earning the reads back.
 
-![Cache efficiency panel](/assets/generated/screenshots/usage-cache-efficiency.png)
+![Cache efficiency panel](/docs/assets/generated/screenshots/usage-cache-efficiency.png)
 
 The dashboard reads from the same `model_pricing` table that backs the CLI
 commands below, so the numbers line up exactly with what
@@ -232,7 +232,7 @@ commands below, so the numbers line up exactly with what
 ### PostgreSQL-Backed Usage
 
 As of 0.23.0, the Usage page and usage API also work when the UI is served from
-PostgreSQL via [`agentsview pg serve`](/pg-sync/). That means shared or
+PostgreSQL via [`agentsview pg serve`](/docs/pg-sync/). That means shared or
 multi-machine deployments can browse the same cost and token dashboards without
 relying on a local SQLite archive.
 
@@ -582,7 +582,7 @@ Beyond raw speed, `agentsview usage`:
   those sessions log token metadata. Filter with `--agent <name>` when you want
   a single-agent view.
 - **Shares one database with the UI** — the same data powers
-  [Analytics](/usage/#dashboard) and session detail views, so there's no second
+  [Analytics](/docs/usage/#dashboard) and session detail views, so there's no second
   index to keep fresh.
 - **Includes on-demand sync** — when no AgentsView server is running, `usage`
   does a quick incremental sync scoped to files modified since the last sync
@@ -1046,11 +1046,11 @@ fi
 ## Where the Data Lives
 
 Usage reports read from the same local SQLite database that powers the
-[web UI](/usage/) and [Analytics dashboard](/usage/#dashboard). Token usage is
+[web UI](/docs/usage/) and [Analytics dashboard](/docs/usage/#dashboard). Token usage is
 stored on each message row in the `messages` table; pricing is cached in a small
 `model_pricing` table that's refreshed on each `usage` invocation.
 
 Session data stays on your machine. The only outbound requests are the LiteLLM
 and OpenRouter pricing fetches, which you can disable with `--offline`. See
-[Privacy and Telemetry](/configuration/#privacy-and-telemetry) for the full
+[Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry) for the full
 picture.

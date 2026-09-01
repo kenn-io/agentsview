@@ -19,7 +19,7 @@ search, and, as of 0.23.0, the Usage dashboard as well.
 
 !!! note "Separate hosted raw-sync work"
 
-    [Hosted Raw Sync](/hosted-raw-sync/) is a separate, in-development path in
+    [Hosted Raw Sync](/docs/hosted-raw-sync/) is a separate, in-development path in
     which a hosted server retains original provider artifacts and performs
     parsing and embedding. Writable `pg serve` deployments now expose part of its
     authenticated HTTP control plane. This does not change `pg push`, `pg push
@@ -79,7 +79,7 @@ Opens the read-only web UI at `http://127.0.0.1:8080`, backed
 entirely by PostgreSQL. It does not use local SQLite or file watching, and its
 session UI and APIs do not accept session uploads. A writable deployment can
 also expose the separate, partial [hosted raw-sync control
-plane](/hosted-raw-sync/#http-control-plane).
+plane](/docs/hosted-raw-sync/#http-control-plane).
 
 ---
 
@@ -203,7 +203,7 @@ projects = ["alpha", "beta"]
 ```
 
 CLI flags override config values. Use
-[`agentsview projects`](/commands/#agentsview-projects) to list
+[`agentsview projects`](/docs/commands/#agentsview-projects) to list
 available project names.
 
 Filtered pushes keep their own local push watermark for each
@@ -237,11 +237,11 @@ any session resync.
 
 Curation tables are populated by the same `pg push` run; no
 separate command or flag is required. The
-[`agentsview secrets`](/commands/#agentsview-secrets) findings
+[`agentsview secrets`](/docs/commands/#agentsview-secrets) findings
 also push through this codepath, with the same parity
 guarantees as session content (`secret_findings` table,
 per-session `secret_leak_count`, and the
-[`has-secret`](/session-api/#agentsview-session-list) list
+[`has-secret`](/docs/session-api/#agentsview-session-list) list
 filter).
 
 #### Vector Push
@@ -255,7 +255,7 @@ with `--no-vectors`, or disable it persistently with
 `push_vectors = false` under `[pg]`. Databases without pgvector
 (for example CockroachDB) skip the phase and keep syncing session
 content. See
-[semantic search: PostgreSQL](/semantic-search/#postgresql) for
+[semantic search: PostgreSQL](/docs/semantic-search/#postgresql) for
 the full push, serve, and maintenance workflow.
 
 `pg vectors list` and `pg vectors drop <id>` inspect and remove
@@ -365,7 +365,7 @@ page from PostgreSQL-backed queries.
 
 When the PostgreSQL role can write the raw-sync tables and ingest-job sequence,
 `pg serve` also registers the partial [hosted raw-sync control
-plane](/hosted-raw-sync/#http-control-plane). Those routes can write raw custody
+plane](/docs/hosted-raw-sync/#http-control-plane). Those routes can write raw custody
 metadata and local raw-sync storage, but they do not make the session APIs
 writable. A PostgreSQL role without the required raw-sync write privileges omits
 the runtime routes.
@@ -386,7 +386,7 @@ the `EventSource` API cannot set custom headers.
 
 The raw-sync machine routes do not accept this shared bearer token. They use
 their own device credentials and operation-scoped tokens as described in the
-[hosted raw-sync security boundary](/hosted-raw-sync/#security-and-deployment-boundary).
+[hosted raw-sync security boundary](/docs/hosted-raw-sync/#security-and-deployment-boundary).
 
 For LAN access, combine `require_auth = true` with a non-loopback
 bind such as `agentsview pg serve --host 0.0.0.0`, or keep the
@@ -421,7 +421,7 @@ through a set-based predicate such as `session_id IN (SELECT
 ...)`, not a per-row `SECURITY DEFINER` call that runs once
 per scanned row. If shared-dataset aggregates still need more
 time, raise the API deadline with `--write-timeout`; the
-[Remote Access](/remote-access/#slow-aggregates-behind-a-proxy)
+[Remote Access](/docs/remote-access/#slow-aggregates-behind-a-proxy)
 page covers the flag and the larger troubleshooting path.
 
 When a reverse proxy reaches the backend by an internal
@@ -429,7 +429,7 @@ hostname or service name, keep `--public-url` on the browser
 origin and add the proxy's upstream origin with
 `--public-origin`. The forwarded-access contract and
 troubleshooting details live in
-[Remote Access](/remote-access/#public-url-and-trusted-origins).
+[Remote Access](/docs/remote-access/#public-url-and-trusted-origins).
 
 !!! warning
     Query-parameter tokens can leak through server logs, browser
@@ -450,7 +450,7 @@ separate managed-Caddy state, so both can coexist on one host.
     example binds off `127.0.0.1` or fronts a public proxy, so set
     `require_auth = true` in `~/.agentsview/config.toml` before
     starting the server. The same bearer-token mechanism described in
-    [Remote Access](/remote-access/#authentication) applies.
+    [Remote Access](/docs/remote-access/#authentication) applies.
 
 ```bash
 # Local development — loopback, no auth required
@@ -489,7 +489,7 @@ web UI, session items show a machine label when the session
 did not originate from the local machine. Use the multi-host
 filter in the sidebar to show sessions from specific machines.
 
-![Machine labels on session items](/assets/generated/screenshots/machine-labels.png)
+![Machine labels on session items](/docs/assets/generated/screenshots/machine-labels.png)
 
 ---
 
