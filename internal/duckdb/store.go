@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
@@ -76,9 +75,7 @@ func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	}
 }
 
-func (*duckBunBackend) SessionQueryDialect() db.QueryDialect {
-	return db.PortableBunSessionQueryDialect()
-}
+func (*duckBunBackend) TimestampOrderExpr(column string) string { return column }
 
 func (*duckBunBackend) SessionVersion(
 	ctx context.Context, store bun.IDB, id string,
@@ -228,10 +225,10 @@ func NewStoreFromDB(conn *sql.DB) *Store {
 	return store
 }
 
-// DB returns the current handle under a read lock. Callers that hold onto
-// the returned *sql.DB across a mirror replacement keep using the old
-// handle until they call DB() again; this is acceptable for the existing
-// callers, which only use DB() once at startup for compat checks.
+// DB exposes the current driver handle for adapter-owned compatibility probes
+// and mirror lifecycle setup. Application queries use the embedded BunStore.
+// Callers that hold the returned handle across a mirror replacement keep using
+// the old generation until they call DB again; startup probes do not retain it.
 func (s *Store) DB() *sql.DB {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
@@ -357,37 +354,13 @@ func (r duckSingleRow) Scan(dest ...any) error {
 	return r.rows.Err()
 }
 
-func (s *Store) ReadOnly() bool { return true }
-
-func formatDBTime(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return ""
-	case time.Time:
-		return t.UTC().Format(time.RFC3339Nano)
-	case string:
-		return t
-	case []byte:
-		return string(t)
-	default:
-		return fmt.Sprint(t)
-	}
-}
-
 type duckFullTextCapability struct{}
-
-type duckSearchHitProjection struct {
-	SessionID string  `bun:"session_id"`
-	Ordinal   int     `bun:"ordinal"`
-	Snippet   string  `bun:"snippet"`
-	Rank      float64 `bun:"rank"`
-}
 
 func (duckFullTextCapability) Available() bool { return true }
 
 func (duckFullTextCapability) Search(
 	ctx context.Context, store bun.IDB, f db.SearchFilter,
-) ([]db.SearchHit, error) {
+) ([]db.SearchResult, error) {
 	if f.Query == "" {
 		return nil, nil
 	}
@@ -488,7 +461,9 @@ func (duckFullTextCapability) Search(
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
 				` + nameProject + `
 		)
-		SELECT session_id, ordinal, snippet, rank
+		SELECT session_id, project, agent, name,
+			session_ended_at,
+			ordinal, snippet, rank
 		FROM (
 			SELECT * FROM msg_matches
 			UNION ALL
@@ -496,16 +471,9 @@ func (duckFullTextCapability) Search(
 		) combined
 		ORDER BY ` + orderBy + `
 		LIMIT ? OFFSET ?`
-	var rows []duckSearchHitProjection
-	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+	hits, err := db.ScanSearchResults(ctx, store.NewRaw(query, args...), f.Limit)
+	if err != nil {
 		return nil, fmt.Errorf("duckdb search: %w", err)
-	}
-	hits := make([]db.SearchHit, len(rows))
-	for i, row := range rows {
-		hits[i] = db.SearchHit{
-			SessionID: row.SessionID, Ordinal: row.Ordinal,
-			Snippet: row.Snippet, Rank: row.Rank,
-		}
 	}
 	return hits, nil
 }

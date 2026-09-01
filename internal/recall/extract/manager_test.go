@@ -2161,8 +2161,14 @@ func TestManagerAbortsPassOnEndpointScopedRejection(t *testing.T) {
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusUnauthorized, `{"error":"bad api key"}`
 	})
-	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
-	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), func(s *db.Session) {
+		ended := "2026-01-01T00:00:00.150Z"
+		s.EndedAt = &ended
+	})
+	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), func(s *db.Session) {
+		ended := "2026-01-01T00:00:00.154Z"
+		s.EndedAt = &ended
+	})
 	m := newManager(t, d, server.URL, nil)
 
 	_, err := m.RunPass(ctx, PassOptions{})

@@ -11,6 +11,159 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
+// GetSessionUsageRows loads the priced usage stream used by subagent rollups.
+// Filtering, ordering, deduplication, and pricing all execute inside one
+// guarded view so every adapter exposes the same allocation input.
+func (s *BunStore) GetSessionUsageRows(
+	ctx context.Context, ids []string,
+) (*activity.SessionUsageRows, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var result *activity.SessionUsageRows
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		pricing, err := s.loadPricingMapFrom(ctx, store)
+		if err != nil {
+			return fmt.Errorf("loading session usage pricing: %w", err)
+		}
+		projections, err := s.loadBunUsageProjections(
+			ctx, store, UsageFilter{}, false, ids,
+		)
+		if err != nil {
+			return err
+		}
+		sessionOrder := make(map[string]int, len(ids))
+		for index, id := range ids {
+			sessionOrder[id] = index
+		}
+		candidates := make([]activityReportUsageCandidate, 0, len(projections))
+		for _, projection := range projections {
+			row := usageProjectionToDailyRow(projection)
+			parsed, parseErr := parseTimestamp(row.ts)
+			ordinal := int64(-1)
+			if row.messageOrdinal.Valid {
+				ordinal = row.messageOrdinal.Int64
+			}
+			candidates = append(candidates, activityReportUsageCandidate{
+				scan: row, ts: parsed, validTS: parseErr == nil, ordinal: ordinal,
+				row: activity.UsageRow{
+					SessionID: row.sessionID, SourceSessionID: row.sessionID,
+					Model: row.model, Timestamp: row.ts,
+					MessageOrdinal: ordinal,
+					UsageSource:    row.usageSource, Agent: row.agent,
+					ClaudeMessageID: row.claudeMessageID,
+					ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID,
+					UsageDedupKey: row.usageDedupKey,
+				},
+			})
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			a, b := candidates[i], candidates[j]
+			if a.validTS && b.validTS && !a.ts.Equal(b.ts) {
+				return a.ts.Before(b.ts)
+			}
+			if a.validTS != b.validTS {
+				return a.validTS
+			}
+			ai, aRequested := sessionOrder[a.row.SessionID]
+			bi, bRequested := sessionOrder[b.row.SessionID]
+			if aRequested != bRequested {
+				return aRequested
+			}
+			if aRequested && ai != bi {
+				return ai < bi
+			}
+			if a.row.SessionID != b.row.SessionID {
+				return a.row.SessionID < b.row.SessionID
+			}
+			if a.ordinal != b.ordinal {
+				return a.ordinal < b.ordinal
+			}
+			if a.scan.usageSource != b.scan.usageSource {
+				return a.scan.usageSource < b.scan.usageSource
+			}
+			if a.scan.usageDedupKey != b.scan.usageDedupKey {
+				return a.scan.usageDedupKey < b.scan.usageDedupKey
+			}
+			return !a.validTS && a.row.Timestamp < b.row.Timestamp
+		})
+		snapshotRows := make([]activity.UsageRow, len(candidates))
+		rowContributes := make([]bool, len(candidates))
+		rawOutputTokensBySession := make(map[string]int)
+		for i, candidate := range candidates {
+			inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
+				dailyUsageRowTokens(candidate.scan)
+			snapshotRows[i] = activity.UsageRow{
+				SessionID: candidate.scan.sessionID,
+				Timestamp: candidate.scan.ts, MessageOrdinal: candidate.ordinal,
+				OutputTokens: outputTok,
+				WebSearchRequests: usageRowWebSearchRequests(
+					candidate.scan.usageSource, candidate.scan.tokenJSON),
+				ClaudeMessageID: candidate.scan.claudeMessageID,
+				ClaudeRequestID: candidate.scan.claudeRequestID,
+			}
+			rowContributes[i] = activity.UsageDataContributes(
+				candidate.scan.cost.Valid, inputTok, outputTok, reasoningTok,
+				cacheCrTok, cacheRdTok, snapshotRows[i].WebSearchRequests,
+			)
+			rawOutputTokensBySession[candidate.scan.sessionID] += outputTok
+		}
+		mask, attribution, webSearchRequests :=
+			activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
+		seen := make(map[usageDedupToken]struct{})
+		deduplicatedOutputTokens := make(map[string]int)
+		discardedContributingSessions := make(map[string]struct{})
+		for i, candidate := range candidates {
+			sourceSessionID := candidate.scan.sessionID
+			if !mask[i] {
+				deduplicatedOutputTokens[sourceSessionID] +=
+					snapshotRows[i].OutputTokens
+				if rowContributes[i] {
+					discardedContributingSessions[sourceSessionID] = struct{}{}
+				}
+				continue
+			}
+			if attribution[i] != sourceSessionID {
+				deduplicatedOutputTokens[sourceSessionID] +=
+					snapshotRows[i].OutputTokens
+				if rowContributes[i] {
+					discardedContributingSessions[sourceSessionID] = struct{}{}
+				}
+			}
+			row := candidate.scan
+			if key, ok := usageDedupTokenForRow(
+				row.usageSource, row.agent, row.claudeMessageID,
+				row.claudeRequestID, row.sourceUUID, row.usageDedupKey,
+			); ok {
+				if _, duplicate := seen[key]; duplicate {
+					mask[i] = false
+					deduplicatedOutputTokens[sourceSessionID] +=
+						snapshotRows[i].OutputTokens
+					if rowContributes[i] {
+						discardedContributingSessions[sourceSessionID] = struct{}{}
+					}
+					continue
+				}
+				seen[key] = struct{}{}
+			}
+		}
+		rows, err := materializeActivityReportUsageRows(
+			candidates, mask, attribution, webSearchRequests,
+			export.NewPricingResolver(pricing),
+		)
+		if err != nil {
+			return err
+		}
+		result = &activity.SessionUsageRows{
+			Rows: rows, RawOutputTokensBySession: rawOutputTokensBySession,
+			DeduplicatedOutputTokens:      deduplicatedOutputTokens,
+			DiscardedContributingSessions: discardedContributingSessions,
+		}
+		return nil
+	})
+	return result, err
+}
+
 func (s *BunStore) GetActivityReport(
 	ctx context.Context, f AnalyticsFilter, q activity.Query,
 ) (activity.Report, error) {
@@ -220,7 +373,7 @@ func (s *BunStore) bunActivityReportUsageFrom(
 		From:     q.RangeStart.In(loc).Format("2006-01-02"),
 		To:       q.RangeEnd.In(loc).Format("2006-01-02"),
 		Timezone: q.Timezone,
-	}, false, "")
+	}, false, nil)
 	if err != nil {
 		return nil, nil, err
 	}

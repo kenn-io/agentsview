@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
@@ -633,30 +632,6 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 	}, rowSet.CanonicalTokenCoverageBySession)
 }
 
-func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {
-	instant := time.Date(2026, 6, 16, 10, 0, 0, 0, time.UTC)
-	parent := sqliteSessionUsageOrderedRow{
-		scan: usageScanRow{
-			sessionID: "a-parent",
-			ts:        "2026-06-16T10:00:00Z",
-		},
-		ts:      instant,
-		validTS: true,
-	}
-	child := sqliteSessionUsageOrderedRow{
-		scan: usageScanRow{
-			sessionID: "z-child",
-			ts:        "2026-06-16T05:00:00-05:00",
-		},
-		ts:      instant,
-		validTS: true,
-	}
-	sessionOrder := map[string]int{"a-parent": 0, "z-child": 1}
-
-	assert.True(t, sqliteSessionUsageRowLess(parent, child, sessionOrder))
-	assert.False(t, sqliteSessionUsageRowLess(child, parent, sessionOrder))
-}
-
 func TestSQLiteActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -700,7 +675,7 @@ func TestSQLiteActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testi
 					usageSource: "provider",
 					model:       "daimon-kimi-code",
 					ts:          tt.timestamp,
-					pricingTS:   tt.timestamp,
+					pricingTime: mustBunTimestamp(t, tt.timestamp).Time,
 					inputTokens: 1_000_000,
 				},
 				resolver,
@@ -744,7 +719,7 @@ func TestSQLiteActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) 
 			usageSource: "provider",
 			model:       "daimon-kimi-code",
 			ts:          "2026-07-19T00:00:00Z",
-			pricingTS:   "2026-07-19T00:00:00Z",
+			pricingTime: mustBunTimestamp(t, "2026-07-19T00:00:00Z").Time,
 			inputTokens: 1_000_000,
 		},
 		resolver,
@@ -760,6 +735,36 @@ func TestSQLiteActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) 
 	resolutions := block.Models["daimon-kimi-code"].Resolutions
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, "daimon-kimi-code", resolutions[0].PricedModel)
+}
+
+func TestSQLiteActivityReportRowStatusUsesFlatRateForUntimedUsage(t *testing.T) {
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
+		{
+			ModelPattern: "gpt-5.6-luna",
+			Rates: export.ModelRates{
+				InputPerMTok: money.MustParseDollars("9"),
+				Source:       export.PricingRowSourceFetched,
+			},
+		},
+		{
+			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+			GenAISource: export.PricingRowSourceEmbedded,
+		},
+	})
+
+	cost, priced, contributes, err := sqliteActivityReportRowStatus(
+		dailyUsageScanRow{
+			usageSource: "provider", model: "gpt-5.6-luna",
+			ts: "2026-08-01T00:00:00Z", inputTokens: 1_000,
+		},
+		resolver,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+	assert.Equal(t, money.MustParseDollars("0.009"), cost)
 }
 
 func TestGetActivityReport_CopilotReportedCostReplacesSessionEstimates(t *testing.T) {
@@ -1460,48 +1465,11 @@ func TestGetActivityReport_AutomationFilterAndSessionSplit(t *testing.T) {
 	}
 }
 
-// forceReaderVarLimit pins the reader pool to a single connection and lowers
-// its SQLITE_LIMIT_VARIABLE_NUMBER to mimic older SQLite builds, whose limit is
-// the documented 999 rather than the modern default (32766). Every read through
-// d.getReader() then reuses this one constrained connection, so a query that
-// binds too many variables fails exactly as it would on those builds.
-func forceReaderVarLimit(t *testing.T, d *DB, limit int) {
-	t.Helper()
-	reader := d.rawReader()
-	reader.SetMaxOpenConns(1)
-	reader.SetMaxIdleConns(1)
-	conn, err := reader.Conn(context.Background())
-	require.NoError(t, err)
-	defer func() { require.NoError(t, conn.Close()) }()
-	require.NoError(t, conn.Raw(func(dc any) error {
-		sc, ok := dc.(*sqlite3.SQLiteConn)
-		if !ok {
-			return fmt.Errorf("reader conn is %T, want *sqlite3.SQLiteConn", dc)
-		}
-		sc.SetLimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
-		return nil
-	}))
-}
-
-// TestGetActivityReport_ManySessionsWithinSQLiteVarLimit reproduces the older
-// SQLite 999-variable limit on the reader pool, then builds a report whose
-// candidate set exceeds it. The usage fetch binds each id chunk twice (the
-// message-where and usage-event-where subqueries) plus two time bounds, so a
-// generic maxSQLVars chunk would emit 2*maxSQLVars+2 = 1002 variables and fail
-// on such builds. The fetch must instead chunk small enough to stay within the
-// limit while still aggregating usage across every chunk.
-func TestGetActivityReport_ManySessionsWithinSQLiteVarLimit(t *testing.T) {
+// TestGetActivityReportSupportsLargeCandidateSets keeps the observable
+// large-report contract after activity usage moved to the shared Bun stream.
+func TestGetActivityReportSupportsLargeCandidateSets(t *testing.T) {
 	d := openChunkedAnalyticsFixtureDB(t)
 	ctx := context.Background()
-
-	forceReaderVarLimit(t, d, 999)
-
-	// Guard: prove the lowered limit is live on the pool, so a setup that
-	// failed to constrain it cannot mask the regression checked below.
-	overLimitPh, overLimitArgs := inPlaceholders(make([]string, 1001))
-	_, probeErr := d.getReader().QueryContext(
-		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
-	require.Error(t, probeErr, "reader variable limit was not constrained")
 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
 		dayQuery(t, "2024-06-01", "UTC"))
@@ -1510,5 +1478,5 @@ func TestGetActivityReport_ManySessionsWithinSQLiteVarLimit(t *testing.T) {
 		chunkedAnalyticsFixtureSessionCount,
 		"every candidate session survives id chunking")
 	assert.Positive(t, r.Totals.OutputTokens,
-		"usage aggregated across all id chunks")
+		"usage aggregated across the complete candidate set")
 }

@@ -1658,6 +1658,17 @@ ______________________________________________________________________
 - Preserves SQLite batch atomicity/callback ordering, PostgreSQL push
   fingerprint/watermark behavior, and DuckDB whole-session replacement.
 
+- Identity observations and snapshots publish in 500-row batches, keeping the
+  widest canonical identity statement below PostgreSQL's parameter limit while
+  bounding full-publication statement count. Their complete portable payload
+  is replacement-owned by the source; only declared conflict keys and explicit
+  adapter-owned fields are excluded from registry-derived replacement columns.
+
+- PostgreSQL write-contract completion is represented jointly by the target
+  fingerprint, watermark, and boundary fingerprints. The target fingerprint
+  may persist after a partially successful push; failed session boundaries
+  remain retryable until their rows publish successfully.
+
 - [ ] **Step 1: Write failing cross-target write tests**
 
     Define a test-only `canonicalWriteFixture` with separate literal fields:
