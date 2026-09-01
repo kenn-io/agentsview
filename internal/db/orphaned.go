@@ -1461,6 +1461,7 @@ func (d *DB) CopySessionMetadataFrom(
 			FROM old_db.archive_metadata
 			WHERE key NOT IN (
 				'database_id',
+				'bun_common_schema_resync_pending_v1',
 				'project_identity_publication_revision',
 				'session_deletion_publication_revision',
 				'worktree_mapping_publication_revision'
@@ -1590,6 +1591,12 @@ func rekeyLocalArchiveRows(
 		); err != nil {
 			return fmt.Errorf("rekeying copied archive table %s: %w", table, err)
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM main.source_archives WHERE source_archive_id = ?`,
+		previousArchiveID,
+	); err != nil {
+		return fmt.Errorf("retiring replaced source archive: %w", err)
 	}
 	return nil
 }

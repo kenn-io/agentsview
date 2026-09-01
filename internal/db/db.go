@@ -20,8 +20,6 @@ import (
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -387,7 +385,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (80: Kimi Code tool-step usage reparse. Protocol-1.4 transcripts can persist
 // tool.result before step.end, so existing Kimi and Kimi Work rows may omit
 // per-message usage for tool-calling steps. Re-parsing attaches the trailing
-// step usage to the assistant tool-call message.)
+// step usage to the assistant tool-call message. The same release performs the
+// canonical Bun schema cutover, so this gate also prevents an older binary from
+// reopening the archive after its compatibility stamp is committed.)
 // (81: Pi-family flat cache-write usage reparse. Existing Pi and OMP rows can
 // persist cache creation under cacheWrite, which older parses ignored.
 // Re-parsing restores those tokens to per-message usage and computed cost.)
@@ -673,13 +673,6 @@ type DB struct {
 	writerClosed atomic.Bool
 	dataStale    atomic.Bool // set by Open when user_version < dataVersion
 
-	cursorMu     sync.RWMutex
-	cursorSecret []byte
-
-	customPricing       map[string]config.CustomModelRate
-	effectivePricing    map[string]export.ModelRates
-	emptyCatalogPricing map[string]export.ModelRates
-
 	checkpointMu   sync.Mutex
 	checkpointStop chan struct{}
 	checkpointDone chan struct{}
@@ -927,55 +920,6 @@ func (db *DB) requireWritable() error {
 	return nil
 }
 
-func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
-	if db.BunStore != nil {
-		db.BunStore.SetCustomPricing(p)
-	}
-	db.customPricing = p
-	db.effectivePricing = nil
-}
-
-// SetEffectivePricing installs in-memory pricing rows with explicit provenance
-// sources for read-only fallback paths that cannot seed model_pricing.
-func (db *DB) SetEffectivePricing(
-	p map[string]export.ModelRates,
-) {
-	if db.BunStore != nil {
-		db.BunStore.SetEffectivePricing(p)
-	}
-	db.customPricing = nil
-	db.effectivePricing = make(map[string]export.ModelRates, len(p))
-	for model, rates := range p {
-		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
-		db.effectivePricing[model] = rates
-	}
-}
-
-// SetEmptyCatalogPricing installs in-memory rates that are used only when the
-// query source loading pricing sees no stored catalog rows.
-func (db *DB) SetEmptyCatalogPricing(
-	p map[string]export.ModelRates,
-) {
-	if db.BunStore != nil {
-		db.BunStore.SetEmptyCatalogPricing(p)
-	}
-	db.emptyCatalogPricing = make(map[string]export.ModelRates, len(p))
-	for model, rates := range p {
-		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
-		db.emptyCatalogPricing[model] = rates
-	}
-}
-
-// SetCursorSecret updates the secret key used for cursor signing.
-func (db *DB) SetCursorSecret(secret []byte) {
-	if db.BunStore != nil {
-		db.BunStore.SetCursorSecret(secret)
-	}
-	db.cursorMu.Lock()
-	defer db.cursorMu.Unlock()
-	db.cursorSecret = append([]byte(nil), secret...)
-}
-
 // makeDSN builds a SQLite connection string with shared pragmas.
 //
 // Both branches emit a file: URI. mattn/go-sqlite3 forwards the `_`-prefixed
@@ -1143,7 +1087,6 @@ func open(ctx context.Context, path string, backgroundMaintenance bool) (*DB, er
 	if err := d.EnsureProjectIdentityBackfillQueued(ctx); err != nil {
 		return closeOnError(fmt.Errorf("queueing project identity backfill: %w", err))
 	}
-
 	if dataStale || schemaRepairNeeded {
 		d.dataStale.Store(true)
 		log.Printf(
@@ -1189,112 +1132,6 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshot_changes (
 );
 CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshot_changes_revision
     ON session_project_identity_snapshot_changes(revision);
-DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_insert;
-DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_update;
-DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_delete;
-DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_insert;
-DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_update;
-DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_delete;
-CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_insert
-AFTER INSERT ON project_identity_observations BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO project_identity_observation_changes (
-        project, machine, root_path, git_remote, revision, deleted
-    ) VALUES (
-        NEW.project, NEW.machine, NEW.root_path, NEW.git_remote,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 0
-    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-        revision = excluded.revision, deleted = 0;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_update
-AFTER UPDATE ON project_identity_observations BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO project_identity_observation_changes (
-        project, machine, root_path, git_remote, revision, deleted
-    ) VALUES (
-        OLD.project, OLD.machine, OLD.root_path, OLD.git_remote,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 1
-    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-        revision = excluded.revision, deleted = 1;
-    INSERT INTO project_identity_observation_changes (
-        project, machine, root_path, git_remote, revision, deleted
-    ) VALUES (
-        NEW.project, NEW.machine, NEW.root_path, NEW.git_remote,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 0
-    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-        revision = excluded.revision, deleted = 0;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_delete
-AFTER DELETE ON project_identity_observations BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO project_identity_observation_changes (
-        project, machine, root_path, git_remote, revision, deleted
-    ) VALUES (
-        OLD.project, OLD.machine, OLD.root_path, OLD.git_remote,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 1
-    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-        revision = excluded.revision, deleted = 1;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_insert
-AFTER INSERT ON session_project_identity_snapshots BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO session_project_identity_snapshot_changes (
-        session_id, project, revision, deleted
-    ) VALUES (
-        NEW.session_id, NEW.project,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 0
-    ) ON CONFLICT(session_id, project) DO UPDATE SET
-        revision = excluded.revision, deleted = 0;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_update
-AFTER UPDATE ON session_project_identity_snapshots BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO session_project_identity_snapshot_changes (
-        session_id, project, revision, deleted
-    ) VALUES (
-        OLD.session_id, OLD.project,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 1
-    ) ON CONFLICT(session_id, project) DO UPDATE SET
-        revision = excluded.revision, deleted = 1;
-    INSERT INTO session_project_identity_snapshot_changes (
-        session_id, project, revision, deleted
-    ) VALUES (
-        NEW.session_id, NEW.project,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 0
-    ) ON CONFLICT(session_id, project) DO UPDATE SET
-        revision = excluded.revision, deleted = 0;
-END;
-CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_delete
-AFTER DELETE ON session_project_identity_snapshots BEGIN
-    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-    INSERT INTO session_project_identity_snapshot_changes (
-        session_id, project, revision, deleted
-    ) VALUES (
-        OLD.session_id, OLD.project,
-        (SELECT CAST(value AS INTEGER) FROM archive_metadata
-         WHERE key = 'project_identity_publication_revision'), 1
-    ) ON CONFLICT(session_id, project) DO UPDATE SET
-        revision = excluded.revision, deleted = 1;
-END;
 `
 
 const projectIdentitySnapshotInvariantSchemaSQL = `
@@ -1598,14 +1435,14 @@ func OpenReadOnly(path string) (*DB, error) {
 	db.reader.Store(reader)
 	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
-	db.cursorSecret = make([]byte, 32)
-	if _, err := rand.Read(db.cursorSecret); err != nil {
+	cursorSecret := make([]byte, 32)
+	if _, err := rand.Read(cursorSecret); err != nil {
 		reader.Close()
 		return nil, fmt.Errorf(
 			"generating cursor secret: %w", err,
 		)
 	}
-	db.BunStore.SetCursorSecret(db.cursorSecret)
+	db.SetCursorSecret(cursorSecret)
 	return db, nil
 }
 
@@ -2884,15 +2721,6 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 			"creating project identity metadata: %w", err,
 		)
 	}
-	if _, err := w.ExecContext(ctx, projectIdentityRevisionSchemaSQL); err != nil {
-		return fmt.Errorf("creating project identity revision triggers: %w", err)
-	}
-	if _, err := w.ExecContext(ctx, projectIdentitySnapshotInvariantSchemaSQL); err != nil {
-		return fmt.Errorf("creating project identity snapshot trigger: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if err := db.convergeSQLiteCommonSchemaLocked(
 		ctx, nil,
 	); err != nil {
@@ -4105,15 +3933,15 @@ func openAndInit(
 	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
-	db.cursorSecret = make([]byte, 32)
-	if _, err := rand.Read(db.cursorSecret); err != nil {
+	cursorSecret := make([]byte, 32)
+	if _, err := rand.Read(cursorSecret); err != nil {
 		writer.Close()
 		reader.Close()
 		return nil, fmt.Errorf(
 			"generating cursor secret: %w", err,
 		)
 	}
-	db.BunStore.SetCursorSecret(db.cursorSecret)
+	db.SetCursorSecret(cursorSecret)
 	if schemaRepairNeeded {
 		if err := ctx.Err(); err != nil {
 			_ = db.CloseContext(ctx)

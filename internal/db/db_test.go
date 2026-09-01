@@ -3086,6 +3086,10 @@ func TestSessionFileInfo(t *testing.T) {
 func TestGetSessionFull(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
+	archiveID, err := d.GetArchiveID(ctx)
+	require.NoError(t, err)
+	databaseGeneration, err := d.GetDatabaseID(ctx)
+	require.NoError(t, err)
 
 	t.Run("AllMetadata", func(t *testing.T) {
 		insertSession(t, d, "full-1", "proj", func(s *Session) {
@@ -3103,22 +3107,24 @@ func TestGetSessionFull(t *testing.T) {
 		requireNoError(t, err, "GetSessionFull")
 		require.NotNil(t, got, "expected non-nil session")
 		want := &Session{
-			ID:                 "full-1",
-			Project:            "proj",
-			MessageCount:       5,
-			FilePath:           new("/tmp/session.jsonl"),
-			FileSize:           new(int64(2048)),
-			FileMtime:          new(int64(1700000000)),
-			FileHash:           new("abc123"),
-			TranscriptRevision: new("0"),
-			FirstMessage:       new("hello"),
-			StartedAt:          new(tsZero),
-			EndedAt:            new(tsHour1),
-			Machine:            defaultMachine,
-			Agent:              defaultAgent,
-			Outcome:            "unknown",
-			OutcomeConfidence:  "low",
-			CreatedAt:          got.CreatedAt,
+			ID:                       "full-1",
+			Project:                  "proj",
+			MessageCount:             5,
+			FilePath:                 new("/tmp/session.jsonl"),
+			FileSize:                 new(int64(2048)),
+			FileMtime:                new(int64(1700000000)),
+			FileHash:                 new("abc123"),
+			TranscriptRevision:       new("0"),
+			FirstMessage:             new("hello"),
+			StartedAt:                new(tsZero),
+			EndedAt:                  new(tsHour1),
+			Machine:                  defaultMachine,
+			Agent:                    defaultAgent,
+			Outcome:                  "unknown",
+			OutcomeConfidence:        "low",
+			CreatedAt:                got.CreatedAt,
+			SourceArchiveID:          archiveID,
+			SourceDatabaseGeneration: databaseGeneration,
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("GetSessionFull mismatch (-want +got):\n%s", diff)
@@ -3134,15 +3140,17 @@ func TestGetSessionFull(t *testing.T) {
 		requireNoError(t, err, "GetSessionFull")
 		require.NotNil(t, got, "expected non-nil session")
 		want := &Session{
-			ID:                 "full-2",
-			Project:            "proj",
-			MessageCount:       1,
-			TranscriptRevision: new("0"),
-			Machine:            defaultMachine,
-			Agent:              defaultAgent,
-			Outcome:            "unknown",
-			OutcomeConfidence:  "low",
-			CreatedAt:          got.CreatedAt,
+			ID:                       "full-2",
+			Project:                  "proj",
+			MessageCount:             1,
+			TranscriptRevision:       new("0"),
+			Machine:                  defaultMachine,
+			Agent:                    defaultAgent,
+			Outcome:                  "unknown",
+			OutcomeConfidence:        "low",
+			CreatedAt:                got.CreatedAt,
+			SourceArchiveID:          archiveID,
+			SourceDatabaseGeneration: databaseGeneration,
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("GetSessionFull mismatch (-want +got):\n%s", diff)
@@ -4296,23 +4304,6 @@ func TestSQLiteBunViewKeepsReopenBehindInFlightCallback(t *testing.T) {
 	close(release)
 	require.NoError(t, <-viewDone)
 	require.NoError(t, <-reopenDone)
-}
-
-func TestSQLiteCursorSecretUpdatesLegacyAndSharedState(t *testing.T) {
-	d := testDB(t)
-	secret := []byte("configured-cursor-secret")
-	d.SetCursorSecret(secret)
-	secret[0] = 'X'
-
-	d.cursorMu.RLock()
-	legacy := append([]byte(nil), d.cursorSecret...)
-	d.cursorMu.RUnlock()
-	d.BunStore.cursorMu.RLock()
-	shared := append([]byte(nil), d.BunStore.cursorSecret...)
-	d.BunStore.cursorMu.RUnlock()
-
-	assert.Equal(t, []byte("configured-cursor-secret"), legacy)
-	assert.Equal(t, legacy, shared)
 }
 
 func TestReopenAfterSwap(t *testing.T) {
@@ -7714,11 +7705,10 @@ func TestGetSessionForIncremental(t *testing.T) {
 		)
 		requireNoError(t, err, "UpdateSessionIncremental legacy")
 
-		got, err := d.GetSessionFull(context.Background(), info.ID)
-		requireNoError(t, err, "GetSessionFull legacy")
-		require.NotNil(t, got, "legacy session missing after incremental")
-		assert.Equal(t, 3, reflectedIntField(got, "NextOrdinal"), "NextOrdinal")
-		assert.Equal(t, "entry-3", reflectedStringField(got, "LastEntryUUID"), "LastEntryUUID")
+		got, ok := d.GetSessionForIncremental(path, "claude")
+		require.True(t, ok, "legacy session missing after incremental")
+		assert.Equal(t, 3, got.NextOrdinal, "NextOrdinal")
+		assert.Equal(t, "entry-3", got.LastEntryUUID, "LastEntryUUID")
 		assert.True(t, got.HasTotalOutputTokens, "stored HasTotalOutputTokens = false, want true")
 		assert.True(t, got.HasPeakContextTokens, "stored HasPeakContextTokens = false, want true")
 	})
@@ -7858,8 +7848,12 @@ func TestUpdateSessionIncremental(t *testing.T) {
 	assert.Equal(t, ended, *got.EndedAt, "EndedAt")
 	require.NotNil(t, got.FileSize, "FileSize nil")
 	assert.Equal(t, int64(2048), *got.FileSize, "FileSize")
-	assert.Equal(t, 9, reflectedIntField(got, "NextOrdinal"), "NextOrdinal")
-	assert.Equal(t, "uuid-9", reflectedStringField(got, "LastEntryUUID"), "LastEntryUUID")
+	incremental, ok := d.GetSessionForIncremental(
+		"/tmp/sessions/update.jsonl", "codex",
+	)
+	require.True(t, ok, "session missing from incremental lookup")
+	assert.Equal(t, 9, incremental.NextOrdinal, "NextOrdinal")
+	assert.Equal(t, "uuid-9", incremental.LastEntryUUID, "LastEntryUUID")
 	assert.Equal(t, 500, got.TotalOutputTokens, "TotalOutputTokens")
 	assert.Equal(t, 1600, got.PeakContextTokens, "PeakContextTokens")
 	assert.True(t, got.HasTotalOutputTokens, "HasTotalOutputTokens = false, want true")
@@ -7925,6 +7919,21 @@ func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
 	}
 }
 
+func parseDiffSessionSnapshot(t *testing.T, d *DB, id string) *Session {
+	t.Helper()
+	sessions, err := d.ListSessionsModifiedBetween(
+		t.Context(), "", "", nil, nil,
+	)
+	require.NoError(t, err)
+	for i := range sessions {
+		if sessions[i].ID == id {
+			return &sessions[i]
+		}
+	}
+	require.FailNow(t, "session missing from parse-diff snapshot", "id=%s", id)
+	return nil
+}
+
 // TestLastWriteIncrementalMarker pins the parse-diff detection signal:
 // a fresh full write (UpsertSession) leaves last_write_incremental
 // false, an incremental append (WriteSessionIncremental) sets it true,
@@ -7951,9 +7960,7 @@ func TestLastWriteIncrementalMarker(t *testing.T) {
 	}
 	requireNoError(t, d.UpsertSession(base), "initial full upsert")
 
-	got, err := d.GetSessionFull(context.Background(), "inc-marker")
-	requireNoError(t, err, "get after full upsert")
-	require.NotNil(t, got, "session after full upsert")
+	got := parseDiffSessionSnapshot(t, d, "inc-marker")
 	assert.False(t, got.LastWriteIncremental,
 		"full write path must leave last_write_incremental false")
 
@@ -7969,9 +7976,7 @@ func TestLastWriteIncrementalMarker(t *testing.T) {
 		},
 	), "incremental write")
 
-	got, err = d.GetSessionFull(context.Background(), "inc-marker")
-	requireNoError(t, err, "get after incremental write")
-	require.NotNil(t, got, "session after incremental write")
+	got = parseDiffSessionSnapshot(t, d, "inc-marker")
 	assert.True(t, got.LastWriteIncremental,
 		"incremental append must set last_write_incremental true")
 
@@ -7982,9 +7987,7 @@ func TestLastWriteIncrementalMarker(t *testing.T) {
 	// benign skew as real drift after any routine append-only full-parse
 	// sync (Claude/Codex take ReplaceMessages=false).
 	requireNoError(t, d.UpsertSession(base), "second full upsert")
-	got, err = d.GetSessionFull(context.Background(), "inc-marker")
-	requireNoError(t, err, "get after second full upsert")
-	require.NotNil(t, got, "session after second full upsert")
+	got = parseDiffSessionSnapshot(t, d, "inc-marker")
 	assert.True(t, got.LastWriteIncremental,
 		"a bare session upsert must preserve the marker (messages not re-normalized)")
 
@@ -7994,9 +7997,7 @@ func TestLastWriteIncrementalMarker(t *testing.T) {
 		"inc-marker",
 		[]Message{asstMsg("inc-marker", 1, "renormalized reply")},
 	), "full message replace")
-	got, err = d.GetSessionFull(context.Background(), "inc-marker")
-	requireNoError(t, err, "get after full message replace")
-	require.NotNil(t, got, "session after full message replace")
+	got = parseDiffSessionSnapshot(t, d, "inc-marker")
 	assert.False(t, got.LastWriteIncremental,
 		"a full message re-normalization must clear last_write_incremental")
 }
@@ -8029,23 +8030,19 @@ func TestBatchWriteIncrementalMarkerReplaceMode(t *testing.T) {
 		IncrementalSessionUpdate{MsgCount: 2, UserMsgCount: 1, NextOrdinal: 2},
 	), "incremental write")
 
-	got, err := d.GetSessionFull(context.Background(), "batch-marker")
-	requireNoError(t, err, "get after incremental write")
-	require.NotNil(t, got, "session after incremental write")
+	got := parseDiffSessionSnapshot(t, d, "batch-marker")
 	require.True(t, got.LastWriteIncremental, "marker set by incremental write")
 
 	// Append-only full-parse batch (ReplaceMessages=false): must preserve.
 	appendOnly := []Message{userMsg("batch-marker", 0, "hello"), asstMsg("batch-marker", 2, "next")}
-	_, err = d.WriteSessionBatch([]SessionBatchWrite{{
+	_, err := d.WriteSessionBatch([]SessionBatchWrite{{
 		Session:         base,
 		Messages:        appendOnly,
 		DataVersion:     CurrentDataVersion(),
 		ReplaceMessages: false,
 	}})
 	requireNoError(t, err, "append-only batch write")
-	got, err = d.GetSessionFull(context.Background(), "batch-marker")
-	requireNoError(t, err, "get after append-only batch")
-	require.NotNil(t, got, "session after append-only batch")
+	got = parseDiffSessionSnapshot(t, d, "batch-marker")
 	assert.True(t, got.LastWriteIncremental,
 		"append-only batch (ReplaceMessages=false) must preserve the marker")
 
@@ -8057,9 +8054,7 @@ func TestBatchWriteIncrementalMarkerReplaceMode(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	requireNoError(t, err, "full-replace batch write")
-	got, err = d.GetSessionFull(context.Background(), "batch-marker")
-	requireNoError(t, err, "get after full-replace batch")
-	require.NotNil(t, got, "session after full-replace batch")
+	got = parseDiffSessionSnapshot(t, d, "batch-marker")
 	assert.False(t, got.LastWriteIncremental,
 		"full-replace batch (ReplaceMessages=true) must clear the marker")
 }

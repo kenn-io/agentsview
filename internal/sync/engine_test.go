@@ -5874,6 +5874,8 @@ func TestProjectIdentityBackfillPreservesEvidenceAcrossSchemaUpgrade(
 	_, err = raw.Exec(`
 		DROP TABLE session_project_identity_snapshots;
 		DROP TABLE background_migrations;
+		DELETE FROM source_session_project_identity_snapshots
+		WHERE source_session_id = 'legacy-evidence';
 	`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())

@@ -67,6 +67,7 @@ type Session struct {
 
 	DeletedAt          *Timestamp `bun:"deleted_at,type:TIMESTAMPTZ,nullzero"`
 	DeletionCause      *string    `bun:"deletion_cause,nullzero"`
+	SourceMissingAt    *Timestamp `bun:"source_missing_at,type:TIMESTAMPTZ,nullzero"`
 	TerminationStatus  *string    `bun:"termination_status,nullzero"`
 	FilePath           *string    `bun:"file_path,nullzero"`
 	FileSize           *int64     `bun:"file_size,nullzero"`

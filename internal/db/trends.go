@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -43,140 +42,6 @@ type TrendsTermsResponse struct {
 	MessageCount int           `json:"message_count"`
 	Buckets      []TrendBucket `json:"buckets"`
 	Series       []TrendSeries `json:"series"`
-}
-
-func (db *DB) GetTrendsTerms(
-	ctx context.Context,
-	f AnalyticsFilter,
-	terms []TrendTermInput,
-	granularity string,
-) (TrendsTermsResponse, error) {
-	if granularity == "" {
-		granularity = "week"
-	}
-	loc := f.location()
-	buckets := TrendBucketRange(f.From, f.To, granularity)
-	bucketIndex := trendBucketIndex(buckets)
-	counts := make([][]int, len(terms))
-	for i := range counts {
-		counts[i] = make([]int, len(buckets))
-	}
-	messageCounts := make([]int, len(buckets))
-
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
-	sessionFilter.Model = ""
-	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
-	flt := f.messageScopeFilter()
-	modelFiltering := len(flt.Models) > 0
-	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), m.content, COALESCE(m.timestamp, ''),
-			COALESCE(s.started_at, ''), s.created_at
-		FROM sessions s
-		JOIN messages m ON m.session_id = s.id
-		WHERE ` + where + `
-			AND m.role IN ('user', 'assistant')
-			AND m.is_system = 0
-			AND ` + SystemPrefixSQL("m.content", "m.role") + `
-		ORDER BY m.session_id, m.ordinal`
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return TrendsTermsResponse{}, fmt.Errorf("querying trends terms: %w", err)
-	}
-	defer rows.Close()
-
-	type trendRow struct {
-		sessionID string
-		role      string
-		isSystem  bool
-		model     string
-		content   string
-		msgTS     string
-		startedAt string
-		createdAt string
-	}
-	processRow := func(row trendRow) {
-		msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
-		if !ok {
-			return
-		}
-		msgDate := msgTime.Format("2006-01-02")
-		if !inDateRange(msgDate, f.From, f.To) {
-			return
-		}
-		bucketDate := trendBucketDate(msgTime, loc, granularity)
-		bucket, ok := bucketIndex[bucketDate]
-		if !ok {
-			return
-		}
-		messageCounts[bucket]++
-		for i, term := range terms {
-			count := countTrendOccurrences(row.content, term)
-			if count > 0 {
-				counts[i][bucket] += count
-			}
-		}
-	}
-	rowStartedAt := make(map[string]string)
-	rowCreatedAt := make(map[string]string)
-	emit := func(m ScopedMessage) {
-		processRow(trendRow{
-			sessionID: m.SessionID,
-			role:      m.Role,
-			isSystem:  m.IsSystem,
-			content:   m.Content,
-			msgTS:     m.Timestamp,
-			startedAt: rowStartedAt[m.SessionID],
-			createdAt: rowCreatedAt[m.SessionID],
-		})
-	}
-	reducer := NewScopeReducer(flt, emit)
-
-	for rows.Next() {
-		var row trendRow
-		var ordinal int
-		if err := rows.Scan(
-			&row.sessionID, &ordinal, &row.role, &row.isSystem,
-			&row.model, &row.content, &row.msgTS, &row.startedAt,
-			&row.createdAt,
-		); err != nil {
-			return TrendsTermsResponse{}, fmt.Errorf("scanning trends term row: %w", err)
-		}
-		if !modelFiltering {
-			msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
-			if ok && flt.MatchesDayHour(msgTime, true) {
-				processRow(row)
-			}
-			continue
-		}
-		rowStartedAt[row.sessionID] = row.startedAt
-		rowCreatedAt[row.sessionID] = row.createdAt
-		msgTime, has := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
-		if err := reducer.Push(MessageInput{
-			SessionID:    row.sessionID,
-			Ordinal:      ordinal,
-			Role:         row.role,
-			Model:        row.model,
-			IsSystem:     row.isSystem,
-			Timestamp:    row.msgTS,
-			LocalTime:    msgTime,
-			HasLocalTime: has,
-			Content:      row.content,
-		}); err != nil {
-			return TrendsTermsResponse{}, err
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return TrendsTermsResponse{}, fmt.Errorf("iterating trends term rows: %w", err)
-	}
-
-	return BuildTrendsTermsResponse(
-		f.From, f.To, granularity, buckets, terms, counts, messageCounts,
-	), nil
 }
 
 func ParseTrendTerms(values []string) ([]TrendTermInput, error) {
@@ -371,20 +236,6 @@ func mergeCountSpans(spans []matchSpan) int {
 		}
 	}
 	return count
-}
-
-func trendMessageLocalTime(
-	messageTS string,
-	startedAt string,
-	createdAt string,
-	loc *time.Location,
-) (time.Time, bool) {
-	for _, ts := range []string{messageTS, startedAt, createdAt} {
-		if t, ok := localTime(ts, loc); ok {
-			return t, true
-		}
-	}
-	return time.Time{}, false
 }
 
 func trendBucketDate(t time.Time, loc *time.Location, granularity string) string {
