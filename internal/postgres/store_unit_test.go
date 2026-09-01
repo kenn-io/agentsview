@@ -25,6 +25,22 @@ func TestStoreHasSemanticFalse(t *testing.T) {
 	assert.False(t, s.HasSemantic(), "PostgreSQL HasSemantic")
 }
 
+func TestStoreBunBackendCapabilitiesFollowInsightProbe(t *testing.T) {
+	store := &Store{}
+	backend := &postgresBunBackend{store: store}
+
+	capabilities := backend.Capabilities()
+	assert.True(t, capabilities.AllowsWrite(db.WriteCuration))
+	assert.True(t, capabilities.AllowsWrite(db.WriteSessionManagement))
+	assert.False(t, capabilities.AllowsWrite(db.WriteArchive))
+	assert.False(t, capabilities.AllowsWrite(db.WriteRecall))
+	assert.False(t, capabilities.AllowsWrite(db.WriteInsight))
+	assert.False(t, capabilities.Recall)
+
+	store.setInsightGenerationAvailable(true)
+	assert.True(t, backend.Capabilities().AllowsWrite(db.WriteInsight))
+}
+
 // TestStoreSearchContentSemanticModesUnavailable pins that "semantic" and
 // "hybrid" are rejected with db.ErrSemanticUnavailable before any query runs
 // -- a zero-value Store (no live *sql.DB) is enough to prove that.

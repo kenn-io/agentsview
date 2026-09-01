@@ -67,7 +67,7 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 	assert.Equal(t, strconv.Itoa(SchemaVersion), version)
 }
 
-func TestUsageEventsDedupIndexAllowsRepeatedKeys(t *testing.T) {
+func TestUsageEventsDedupIndexAllowsRepeatedEmptyKeysAndRejectsDuplicates(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDuckDB(t)
 	require.NoError(t, createSchema(ctx, db), "createSchema")
@@ -84,7 +84,7 @@ func TestUsageEventsDedupIndexAllowsRepeatedKeys(t *testing.T) {
 		VALUES
 			(3, 's1', 'hermes', 'claude-test', 'same-key'),
 			(4, 's1', 'hermes', 'claude-test', 'same-key')`)
-	require.NoError(t, err)
+	require.Error(t, err)
 }
 
 func TestEnsureSchemaIsIdempotent(t *testing.T) {

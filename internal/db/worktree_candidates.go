@@ -262,12 +262,14 @@ func (db *DB) loadWorktreeCandidateSessions(
 		placeholders, args := inPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT s.id, s.project, s.machine, s.cwd,
-				COALESCE(snap.session_id, ''), COALESCE(snap.project, ''),
+				COALESCE(snap.source_session_id, ''), COALESCE(snap.project, ''),
 				COALESCE(snap.machine, ''), COALESCE(snap.root_path, ''),
 				COALESCE(snap.worktree_root_path, ''), COALESCE(snap.key_source, '')
 			FROM sessions s
-			LEFT JOIN session_project_identity_snapshots snap
-			  ON snap.session_id = s.id
+			LEFT JOIN source_session_project_identity_snapshots snap
+			  ON snap.source_archive_id = s.source_archive_id
+			 AND snap.source_database_generation = s.source_database_generation
+			 AND snap.source_session_id = s.id
 			WHERE s.id IN `+placeholders+` AND s.deleted_at IS NULL
 			ORDER BY s.id`, args...)
 		if err != nil {

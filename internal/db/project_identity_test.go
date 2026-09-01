@@ -250,8 +250,10 @@ func TestLoadProjectIdentityPublicationDeltaReturnsRowsAndTombstones(
 		},
 	))
 	_, err = d.rawWriter().ExecContext(ctx, `
-		DELETE FROM project_identity_observations
-		WHERE project = ? AND machine = ? AND root_path = ? AND git_remote = ?`,
+		DELETE FROM source_project_identity_observations
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND project = ? AND machine = ? AND root_path = ? AND git_remote = ?`,
 		"beta", "local", "/workspace/beta", "https://example.com/beta.git",
 	)
 	require.NoError(t, err)
@@ -378,12 +380,16 @@ func TestProjectIdentityObservationRoundTripsRepositoryContext(t *testing.T) {
 	}
 
 	require.NoError(t, d.UpsertProjectIdentityObservation(ctx, want))
+	wantArchiveID, err := d.GetArchiveID(ctx)
+	require.NoError(t, err)
+	wantArchiveSalt, err := d.GetArchiveSalt(ctx)
+	require.NoError(t, err)
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, want.RepositoryPath, got[0].RepositoryPath)
-	assert.Equal(t, want.SourceArchiveID, got[0].SourceArchiveID)
-	assert.Equal(t, want.SourceArchiveSalt, got[0].SourceArchiveSalt)
+	assert.Equal(t, wantArchiveID, got[0].SourceArchiveID)
+	assert.Equal(t, wantArchiveSalt, got[0].SourceArchiveSalt)
 	assert.Equal(t, want.WorktreeRelationship, got[0].WorktreeRelationship)
 	assert.Equal(t, want.CheckoutState, got[0].CheckoutState)
 	assert.Equal(t, want.RemoteResolution, got[0].RemoteResolution)
@@ -511,6 +517,9 @@ func TestProjectObservationMigrationStripsStoredGitRemoteCredentials(t *testing.
 	_, err = d.rawWriter().Exec(`DELETE FROM stats WHERE key = ?`,
 		projectIdentityRemoteScrubCompletedKey)
 	require.NoError(t, err)
+	_, err = d.rawWriter().Exec(`DELETE FROM archive_metadata WHERE key = ?`,
+		CommonSchemaCompatibilityMetadataKey)
+	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
 	reopened, err := Open(path)
@@ -583,21 +592,41 @@ func TestListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
 	// preserve the single-query (project, machine, ...) ordering.
 	const labelCount = maxSQLVars + 50
 	labels := make([]string, 0, 2*labelCount)
-	var sb strings.Builder
-	sb.WriteString(`INSERT INTO project_identity_observations
-		(project, machine, root_path, observed_at) VALUES `)
-	args := make([]any, 0, labelCount)
 	for i := range labelCount {
 		label := fmt.Sprintf("chunked-project-%04d", i)
 		labels = append(labels, label, label)
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		sb.WriteString("(?, 'host.example', '/srv/app', '2025-06-02T10:00:00Z')")
-		args = append(args, label)
 	}
-	_, err := d.getWriter().Exec(sb.String(), args...)
-	require.NoError(t, err, "seed chunked observations")
+	for start := 0; start < labelCount; start += 400 {
+		end := min(start+400, labelCount)
+		var sb strings.Builder
+		sb.WriteString(`INSERT INTO source_project_identity_observations (
+			source_archive_id, source_archive_salt,
+			project, machine, root_path, git_remote, git_remote_name,
+			repository_path, worktree_name, worktree_root_path,
+			worktree_relationship, checkout_state, git_branch,
+			remote_resolution, remote_candidate_count, observed_at,
+			normalized_remote, key_source, key
+		)
+		SELECT archive.value, salt.value, labels.project,
+			'host.example', '/srv/app', '', '', '', '', '',
+			'unknown', 'unknown', '', 'unknown', 0,
+			'2025-06-02T10:00:00Z', '', '', ''
+		FROM (`)
+		args := make([]any, 0, end-start)
+		for i := start; i < end; i++ {
+			if i == start {
+				sb.WriteString("SELECT ? AS project")
+			} else {
+				sb.WriteString(" UNION ALL SELECT ?")
+			}
+			args = append(args, fmt.Sprintf("chunked-project-%04d", i))
+		}
+		sb.WriteString(`) labels
+		JOIN archive_metadata archive ON archive.key = 'archive_id'
+		JOIN archive_metadata salt ON salt.key = 'archive_salt'`)
+		_, err := d.getWriter().Exec(sb.String(), args...)
+		require.NoError(t, err, "seed chunked observations")
+	}
 
 	// Reverse the (duplicated) label list to prove the lookup sorts it
 	// before partitioning into chunks.
@@ -1359,11 +1388,16 @@ func TestProjectObservationScrubDowngradesUnusableRemoteToFallback(t *testing.T)
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "repo")
 	_, err := d.getWriter().ExecContext(ctx, `
-		INSERT INTO project_identity_observations (
+		INSERT INTO source_project_identity_observations (
+			source_archive_id, source_archive_salt,
 			project, machine, root_path, git_remote, git_remote_name,
 			worktree_name, worktree_root_path, observed_at,
 			normalized_remote, key_source, key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		)
+		SELECT archive.value, salt.value, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		FROM archive_metadata archive
+		JOIN archive_metadata salt ON salt.key = 'archive_salt'
+		WHERE archive.key = 'archive_id'`,
 		"app", "laptop", root, "file:///tmp/app.git", "origin",
 		"", "", "2026-07-03T12:00:00Z", "", "", "",
 	)
@@ -1707,7 +1741,7 @@ func projectObservationRowCount(t *testing.T, d *DB) int {
 	t.Helper()
 	var n int
 	require.NoError(t, d.getReader().QueryRow(
-		`SELECT COUNT(*) FROM project_identity_observations`,
+		`SELECT COUNT(*) FROM source_project_identity_observations`,
 	).Scan(&n))
 	return n
 }
