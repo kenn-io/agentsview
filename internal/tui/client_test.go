@@ -84,6 +84,47 @@ func TestClientStartupSyncDoesNotResyncOrdinaryConflict(t *testing.T) {
 	assert.Equal(t, 1, requests)
 }
 
+func TestClientTreatsConcurrentSyncAsActiveStatus(t *testing.T) {
+	for _, kind := range []string{"sync", "resync", "startup-sync"} {
+		t.Run(kind, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w,
+						"event: error\n"+
+							`data: {"code":"sync_in_progress","error":"sync already in progress"}`+
+							"\n\n",
+					)
+				},
+			))
+			t.Cleanup(server.Close)
+
+			message, err := NewClient(server.URL, "", false).Mutate(
+				context.Background(), Mutation{Kind: kind},
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, "sync already in progress", message)
+		})
+	}
+}
+
+func TestClientDoesNotRequestTrendsWithoutTerms(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(
+		func(http.ResponseWriter, *http.Request) { requests++ },
+	))
+	t.Cleanup(server.Close)
+
+	data, err := NewClient(server.URL, "", false).LoadPage(
+		context.Background(), PageTrends, PageQuery{},
+	)
+
+	require.NoError(t, err)
+	assert.Nil(t, data.Trends)
+	assert.Zero(t, requests)
+}
+
 func TestClientReadOnlyStateSupportsConcurrentSettingsAndMutations(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/settings" {

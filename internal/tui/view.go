@@ -97,11 +97,13 @@ func (m *model) renderFooter(width int) string {
 		prefix := ":"
 		if m.inputMode == "search" {
 			prefix = "/"
+		} else if name, ok := strings.CutPrefix(m.inputMode, "filter-"); ok {
+			prefix = name + ":"
 		}
-		m.input.SetWidth(max(1, width-3))
+		m.input.SetWidth(max(1, width-lipgloss.Width(prefix)-1))
 		return truncateWidth(activeStyle.Render(prefix)+" "+m.input.View(), width)
 	}
-	left := "tab panes  j/k move  enter select  / search  : command  ? help  q quit"
+	left := "tab panes  j/k move  enter open/edit  / search  : command  ? help  q quit"
 	right := safe(m.status)
 	if m.loading {
 		right = m.strings.Loading
@@ -161,19 +163,26 @@ func (m *model) renderNavigation(width, height int) string {
 	for i, page := range pages {
 		label := "  " + m.strings.PageNames[page]
 		if i == m.navIndex {
-			label = activeStyle.Width(max(1, width-4)).Render("  " + m.strings.PageNames[page])
+			label = activeStyle.Width(max(1, width-4)).Render(label)
 		}
 		lines = append(lines, truncateWidth(label, width-2))
 	}
-	lines = append(lines, "", mutedStyle.Render("Filters"))
-	lines = append(lines,
-		truncateWidth("project  "+dash(m.filter.Project), width-2),
-		truncateWidth("agent    "+dash(m.filter.Agent), width-2),
-		truncateWidth("machine  "+dash(m.filter.Machine), width-2),
+	lines = append(lines, "", mutedStyle.Render("Filters (Enter)"))
+	filterLines := []string{
+		"project  " + dash(m.filter.Project),
+		"agent    " + dash(m.filter.Agent),
+		"machine  " + dash(m.filter.Machine),
 		fmt.Sprintf("one-shot %s", onOff(m.filter.IncludeOneShot)),
 		fmt.Sprintf("automated %s", onOff(m.filter.IncludeAutomated)),
 		fmt.Sprintf("children  %s", onOff(m.filter.IncludeChildren)),
-	)
+	}
+	for i, line := range filterLines {
+		line = truncateWidth(line, max(1, width-6))
+		if len(pages)+i == m.navIndex {
+			line = activeStyle.Width(max(1, width-4)).Render(line)
+		}
+		lines = append(lines, line)
+	}
 	return panel(strings.Join(lines, "\n"), width, height, m.focus == 0)
 }
 

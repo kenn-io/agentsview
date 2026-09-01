@@ -252,7 +252,7 @@ func (s *Server) humaTriggerSync(
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
-			stream.SendJSON("error", map[string]string{"error": err.Error()})
+			sendSyncStreamError(stream, err)
 			return
 		}
 		stream.SendJSON("done", stats)
@@ -263,6 +263,16 @@ func (s *Server) humaTriggerSync(
 // the CLI can retry through /api/v1/resync instead of surfacing a raw HTTP
 // error. The body remains the human-readable explanation.
 const ResyncRequiredHeader = "X-Agentsview-Resync-Required"
+
+const syncInProgressCode = "sync_in_progress"
+
+func sendSyncStreamError(stream *SSEStream, err error) {
+	event := map[string]string{"error": err.Error()}
+	if errors.Is(err, syncpkg.ErrSyncInProgress) {
+		event["code"] = syncInProgressCode
+	}
+	stream.SendJSON("error", event)
+}
 
 // rejectStaleArchiveForSync fails a worker-backed /sync when the archive's data
 // version changed, because the worker sync pass refuses to swap a stale archive
@@ -341,7 +351,7 @@ func (s *Server) humaTriggerResync(
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
-			stream.SendJSON("error", map[string]string{"error": err.Error()})
+			sendSyncStreamError(stream, err)
 			return
 		}
 		stream.SendJSON("done", stats)

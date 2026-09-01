@@ -1602,6 +1602,23 @@ func TestHumaTriggerSyncWorkerRunnerErrorRejectsStream(t *testing.T) {
 		"a failed worker pass must not be reported as a completed sync")
 }
 
+func TestHumaTriggerSyncInProgressReturnsMachineReadableStreamCode(t *testing.T) {
+	f := newSyncRouteFixture(t, withLocalSyncRunner(
+		func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+			return syncpkg.SyncStats{}, fmt.Errorf(
+				"foreground sync: %w", syncpkg.ErrSyncInProgress,
+			)
+		},
+	))
+
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync", nil)
+
+	body := w.Body.String()
+	assert.Contains(t, body, "event: error")
+	assert.Contains(t, body, `"code":"sync_in_progress"`)
+	assert.Contains(t, body, "sync already in progress")
+}
+
 func TestHumaTriggerResyncWorkerRunnerErrorRejectsStream(t *testing.T) {
 	f := newSyncRouteFixture(t, withLocalResyncRunner(
 		func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {

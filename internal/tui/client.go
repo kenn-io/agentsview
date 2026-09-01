@@ -37,6 +37,15 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("daemon returned HTTP %d: %s", e.Status, e.Message)
 }
 
+type mutationSSEError struct {
+	code    string
+	message string
+}
+
+func (e *mutationSSEError) Error() string {
+	return e.message
+}
+
 // Settings is the daemon settings payload used by the terminal settings page.
 type Settings struct {
 	AgentDirs        map[string][]string `json:"agent_dirs"`
@@ -289,12 +298,16 @@ func (c *Client) LoadPage(ctx context.Context, page Page, q PageQuery) (PageData
 		err := c.get(ctx, "/api/v1/activity/report", values, &out)
 		return PageData{Activity: &out}, err
 	case PageTrends:
+		terms := splitTerms(q.Terms)
+		if len(terms) == 0 {
+			return PageData{}, nil
+		}
 		granularity := q.TrendGranularity
 		if granularity == "" {
 			granularity = "week"
 		}
 		values.Set("granularity", granularity)
-		for _, term := range splitTerms(q.Terms) {
+		for _, term := range terms {
 			values.Add("term", term)
 		}
 		var out db.TrendsTermsResponse
@@ -656,7 +669,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (string, error) {
 		path := fmt.Sprintf("/api/v1/sessions/%s/messages/%d/pin", sid, m.MessageID)
 		return m.Kind + "ned message", c.do(ctx, method, path, map[string]any{"note": nullableString(m.Value)}, nil)
 	case "sync", "resync":
-		return m.Kind + " complete", c.do(ctx, http.MethodPost, "/api/v1/"+m.Kind, map[string]any{}, nil)
+		err := c.do(
+			ctx, http.MethodPost, "/api/v1/"+m.Kind, map[string]any{}, nil,
+		)
+		return syncMutationResult(m.Kind+" complete", err)
 	case "startup-sync":
 		err := c.do(ctx, http.MethodPost, "/api/v1/sync", map[string]any{}, nil)
 		var apiErr *APIError
@@ -666,7 +682,7 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (string, error) {
 				ctx, http.MethodPost, "/api/v1/resync", map[string]any{}, nil,
 			)
 		}
-		return "sync complete", err
+		return syncMutationResult("sync complete", err)
 	case "publish-session":
 		var out PublishResult
 		path := "/api/v1/sessions/" + sid + "/publish?secret=" + strconv.FormatBool(m.Flag)
@@ -904,6 +920,14 @@ func nullableString(value string) any {
 	return value
 }
 
+func syncMutationResult(message string, err error) (string, error) {
+	var streamErr *mutationSSEError
+	if errors.As(err, &streamErr) && streamErr.code == "sync_in_progress" {
+		return streamErr.message, nil
+	}
+	return message, err
+}
+
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
 	if len(q) > 0 {
 		path += "?" + q.Encode()
@@ -975,7 +999,7 @@ func consumeMutationSSE(reader io.Reader) error {
 		raw := data.String()
 		switch event {
 		case "error":
-			return errors.New(sseErrorMessage(raw))
+			return newMutationSSEError(raw)
 		case "done":
 			done = true
 			var result struct {
@@ -1037,6 +1061,14 @@ func consumeMutationSSE(reader io.Reader) error {
 		return errors.New("daemon response ended before completion")
 	}
 	return nil
+}
+
+func newMutationSSEError(raw string) error {
+	var body struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal([]byte(raw), &body)
+	return &mutationSSEError{code: body.Code, message: sseErrorMessage(raw)}
 }
 
 func sseErrorMessage(raw string) string {

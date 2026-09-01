@@ -520,6 +520,38 @@ func TestExecuteCommandChangesFilters(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestNavigationFiltersAreKeyboardEditable(t *testing.T) {
+	m := newModel(context.Background(), &fakeDataClient{}, Options{})
+	m.filter.Project, m.query.Project = "old-project", "old-project"
+	m.navIndex = len(pages) - 1
+
+	next, command := m.move(1)
+	m = next.(*model)
+	require.Nil(t, command)
+	assert.Equal(t, len(pages), m.navIndex)
+
+	next, command = m.updateKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = next.(*model)
+	require.NotNil(t, command)
+	assert.Equal(t, "filter-project", m.inputMode)
+	assert.Equal(t, "old-project", m.input.Value())
+
+	m.input.SetValue("new-project")
+	next, command = m.updateKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = next.(*model)
+	require.NotNil(t, command)
+	assert.Equal(t, "new-project", m.filter.Project)
+	assert.Equal(t, "new-project", m.query.Project)
+	assert.Empty(t, m.inputMode)
+
+	m.navIndex = len(pages) + 3
+	next, command = m.updateKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = next.(*model)
+	require.NotNil(t, command)
+	assert.True(t, m.filter.IncludeOneShot)
+	assert.True(t, m.query.IncludeOneShot)
+}
+
 func TestWindowLoadSelectsAnchorOrdinal(t *testing.T) {
 	m := newModel(context.Background(), &fakeDataClient{}, Options{})
 	m.generation = 2

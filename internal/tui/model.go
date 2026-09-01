@@ -155,6 +155,10 @@ type eventMsg struct {
 }
 type reconnectMsg struct{}
 
+var navigationFilters = [...]string{
+	"project", "agent", "machine", "one-shot", "automated", "children",
+}
+
 func newModel(ctx context.Context, client DataClient, opts Options) *model {
 	state := loadState(opts.StatePath)
 	if state.Page == "" {
@@ -471,7 +475,10 @@ func (m *model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.loadSelectedSession()
 	case "enter":
 		if m.focus == 0 {
-			return m.switchPage(pages[m.navIndex])
+			if m.navIndex < len(pages) {
+				return m.switchPage(pages[m.navIndex])
+			}
+			return m.activateNavigationFilter(m.navIndex - len(pages))
 		}
 		if m.page == PageSessions {
 			id := m.selectedSessionID()
@@ -551,6 +558,9 @@ func (m *model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if mode == "github-token" {
 			return m, m.mutate(Mutation{Kind: "github-token", Value: value})
 		}
+		if name, ok := strings.CutPrefix(mode, "filter-"); ok {
+			return m.executeCommand(name + " " + value)
+		}
 		if mode == "search" {
 			if m.page == PageSessions {
 				m.query.Search = value
@@ -575,13 +585,31 @@ func (m *model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) beginInput(mode string) tea.Cmd {
+	return m.beginInputValue(mode, "")
+}
+
+func (m *model) beginInputValue(mode, value string) tea.Cmd {
 	m.inputMode = mode
 	m.input.Reset()
+	m.input.SetValue(value)
 	m.input.EchoMode = textinput.EchoNormal
 	if mode == "github-token" {
 		m.input.EchoMode = textinput.EchoPassword
 	}
 	return m.input.Focus()
+}
+
+func (m *model) activateNavigationFilter(index int) (tea.Model, tea.Cmd) {
+	switch navigationFilters[index] {
+	case "project":
+		return m, m.beginInputValue("filter-project", m.filter.Project)
+	case "agent":
+		return m, m.beginInputValue("filter-agent", m.filter.Agent)
+	case "machine":
+		return m, m.beginInputValue("filter-machine", m.filter.Machine)
+	default:
+		return m.executeCommand(navigationFilters[index])
+	}
 }
 
 func (m *model) executeCommand(command string) (tea.Model, tea.Cmd) {
@@ -931,7 +959,9 @@ func parseIDAndForce(value string) (int64, bool, error) {
 
 func (m *model) move(delta int) (tea.Model, tea.Cmd) {
 	if m.focus == 0 {
-		m.navIndex = clamp(m.navIndex+delta, 0, len(pages)-1)
+		m.navIndex = clamp(
+			m.navIndex+delta, 0, len(pages)+len(navigationFilters)-1,
+		)
 		return m, nil
 	}
 	if m.page == PageSessions && m.focus == 2 {
