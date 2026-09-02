@@ -615,8 +615,8 @@ dialog img {
 .agent-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.35rem 0.65rem 0.35rem 0.4rem;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem 0.4rem 0.55rem;
   border: 1px solid var(--rule);
   border-radius: 6px;
   background: var(--panel);
@@ -636,11 +636,8 @@ dialog img {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  background: var(--ink);
+  width: 18px;
+  height: 18px;
   color: rgb(233 238 247 / 82%);
   font-family: var(--mono);
   font-size: 0.72rem;
@@ -649,13 +646,12 @@ dialog img {
 
 .agent-chip:hover .agent-chip-glyph,
 .agent-chip:focus-visible .agent-chip-glyph {
-  border-color: var(--blue);
   color: var(--blue-strong);
 }
 
 .agent-chip-glyph svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   fill: currentColor;
 }
 
