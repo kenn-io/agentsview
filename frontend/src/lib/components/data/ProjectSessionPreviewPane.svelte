@@ -446,7 +446,7 @@
   .assignment-heading {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--space-4);
   }
 
   .assignment-copy strong {

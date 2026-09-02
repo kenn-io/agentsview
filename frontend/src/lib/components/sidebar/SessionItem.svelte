@@ -593,7 +593,7 @@
 
 {#if projectEditor}
   <div
-    class="project-editor"
+    class="project-editor kit-popover-card"
     use:mountOverlay
     style="left: {projectEditor.x}px; top: {projectEditor.y}px;"
   >
@@ -981,10 +981,6 @@
     flex-direction: column;
     gap: 8px;
     padding: 10px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    background: var(--bg-surface);
-    box-shadow: var(--shadow-lg);
   }
 
   :global(.project-editor-header),
@@ -999,7 +995,7 @@
   }
 
   :global(.project-editor-header > div) {
-    gap: 7px;
+    gap: var(--space-4);
   }
 
   :global(.project-editor-header strong) {
