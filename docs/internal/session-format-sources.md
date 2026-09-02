@@ -1801,10 +1801,10 @@ add an archived or maintained mirror without replacing the original identity.
   specification, or authoritative protobuf schema was found. The independent
   CodeBurn evidence pinned in the `antigravity` entry also covers CLI
   discovery, live RPC metadata, and the shorter capture window, but not the
-  encrypted producer format. Reverified 2026-08-20 against Google's official
-  [Antigravity CLI 1.1.16 macOS ARM64 release](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.16),
+  encrypted producer format. Reverified 2026-09-02 against Google's official
+  [Antigravity CLI 1.1.24 macOS ARM64 release](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.24),
   asset SHA-256
-  `a902e8b24fdc53504e7daf658e18f7ba47ebb9cfcf058aa6c01e37c5e610d389`. Its Go
+  `189af288ed9527f567ab3a53b35a6da2fc0c3812c6245f266c75a2a3604bdec3`. Its Go
   binary embeds `FileDescriptorProto` records for
   `third_party/jetski/cortex_pb/cortex.proto` and
   `third_party/jetski/codeium_common_pb/codeium_common.proto`. These compiled
@@ -1814,9 +1814,10 @@ add an archived or maintained mirror without replacing the original identity.
   input, output, thinking-output, cache-read, and model fields; output already
   includes thinking. In CLI 1.1.5 SQLite,
   `CortexStepGeneratorMetadata.step_indices` (field 2) contains packed step
-  indices and `ChatModelMetadata.response_model` (field 19) can contain only
-  the base model slug. The matching `ExecutorMetadata.last_step_idx` range
-  carries the effort-qualified model at
+  indices and `ChatModelMetadata.response_model` (field 19) can contain the
+  base model slug, and in CLI 1.1.24 can contain an experimental serving
+  variant such as `gemini-3.7-flash-exp-b`. The matching
+  `ExecutorMetadata.last_step_idx` range carries the effort-qualified model at
   `cascade_config.planner_config.model_name` (fields 10, 1, and 28).
   `ChatModelMetadata.model_display_name` (field 21) remains the complete label
   when present. Agentsview avoids double counting and catalog-prices usage. No

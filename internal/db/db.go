@@ -458,7 +458,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (98: The Pi parser now attributes skill loads (SKILL.md
 // reads and skill:// URIs) so Pi tool calls count toward Top Skills.
 // Existing Pi rows need re-parsing to backfill the skill attribution.)
-const dataVersion = 98
+// (99: the Antigravity CLI parser normalizes observed experimental serving
+// variant suffixes (-exp-b) against the matching effort-qualified executor
+// model. Existing Antigravity rows need re-parsing so stored messages and
+// usage events reflect the intended effort-qualified model.)
+const dataVersion = 99
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

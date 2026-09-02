@@ -611,9 +611,6 @@ func executorModelForStep(
 			return executor.modelName
 		}
 	}
-	if len(executors) > 0 {
-		return executors[len(executors)-1].modelName
-	}
 	return ""
 }
 
@@ -934,24 +931,25 @@ func resolveAntigravityGenerationModel(
 	if hasDisplayLabel || executorModel == "" {
 		return generationModel
 	}
-	if antigravityBaseModel(executorModel) == antigravityBaseModel(generationModel) {
+	normalizedGeneration := stripAntigravityExperimentalVariant(generationModel)
+	if antigravityBaseModel(executorModel) == normalizedGeneration {
 		return executorModel
 	}
 	return generationModel
 }
 
 func antigravityBaseModel(model string) string {
-	suffixes := []string{"-low", "-medium", "-high", "-exp-b", "-exp"}
-	changed := true
-	for changed {
-		changed = false
-		for _, suffix := range suffixes {
-			if base, ok := strings.CutSuffix(model, suffix); ok {
-				model = base
-				changed = true
-				break
-			}
+	for _, suffix := range []string{"-low", "-medium", "-high"} {
+		if base, ok := strings.CutSuffix(model, suffix); ok {
+			return base
 		}
+	}
+	return model
+}
+
+func stripAntigravityExperimentalVariant(model string) string {
+	if base, ok := strings.CutSuffix(model, "-exp-b"); ok {
+		return base
 	}
 	return model
 }

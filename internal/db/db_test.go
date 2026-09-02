@@ -1090,6 +1090,11 @@ func TestCurrentDataVersionPiSkillAttribution(t *testing.T) {
 		"version 98 is the data-version boundary for Pi skill attribution")
 }
 
+func TestCurrentDataVersionAntigravityCLIExperimentalServingVariant(t *testing.T) {
+	assert.Equal(t, 99, CurrentDataVersion(),
+		"Antigravity CLI experimental serving variant normalization requires re-parsing usage events")
+}
+
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")
