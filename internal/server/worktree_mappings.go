@@ -78,6 +78,10 @@ type sessionProjectAssignmentInput struct {
 	Body      sessionProjectAssignmentRequest
 }
 
+type sessionProjectAssignmentPathInput struct {
+	SessionID string `path:"session_id" required:"true" doc:"Session ID"`
+}
+
 type sessionProjectAssignmentRequest struct {
 	Project string `json:"project"`
 }

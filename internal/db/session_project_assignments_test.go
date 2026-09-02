@@ -46,6 +46,61 @@ func TestAssignSessionProjectOverridesSyncAndFolderRules(t *testing.T) {
 	assert.True(t, stored.ProjectAssigned)
 }
 
+func TestClearSessionProjectAssignmentRestoresAutomaticFolderMapping(t *testing.T) {
+	database := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, database, "session-a", "temporary", func(session *Session) {
+		session.Machine = "host-a.example"
+		session.Cwd = "/work/project/run"
+	})
+	_, err := database.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+		Machine: "host-a.example", PathPrefix: "/work/project",
+		Project: "folder-project", Enabled: true,
+	})
+	require.NoError(t, err)
+
+	first, err := database.AssignSessionProject(ctx, "session-a", "first-project")
+	require.NoError(t, err)
+	assert.Equal(t, "temporary", first.OriginalProject)
+	second, err := database.AssignSessionProject(ctx, "session-a", "second-project")
+	require.NoError(t, err)
+	assert.Equal(t, "temporary", second.OriginalProject,
+		"reassigning must preserve the initial automatic project")
+
+	cleared, err := database.ClearSessionProjectAssignment(ctx, "session-a")
+	require.NoError(t, err)
+	assert.Equal(t, "folder_project", cleared.Project)
+	stored, err := database.GetSession(ctx, "session-a")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "folder_project", stored.Project)
+	assert.False(t, stored.ProjectAssigned)
+}
+
+func TestSessionProjectAssignmentMigrationBackfillsAutomaticProject(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	database, err := Open(path)
+	require.NoError(t, err)
+	insertSession(t, database, "session-a", "automatic_project", func(session *Session) {
+		session.Machine = "host-a.example"
+	})
+	_, err = database.AssignSessionProject(ctx, "session-a", "manual-project")
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	execRawSQLite(t, path,
+		`ALTER TABLE session_project_assignments DROP COLUMN original_project`)
+	database, err = Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+
+	cleared, err := database.ClearSessionProjectAssignment(ctx, "session-a")
+	require.NoError(t, err)
+	assert.Equal(t, "automatic_project", cleared.Project)
+}
+
 func TestAssignedSessionProvidesSiblingFolderEvidence(t *testing.T) {
 	database := testDB(t)
 	ctx := context.Background()
@@ -124,4 +179,7 @@ func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) 
 
 	insertSession(t, destination, "session-a", "reparsed")
 	assertSessionProject(t, destination, "session-a", "target_project")
+	cleared, err := destination.ClearSessionProjectAssignment(ctx, "session-a")
+	require.NoError(t, err)
+	assert.Equal(t, "temporary", cleared.Project)
 }

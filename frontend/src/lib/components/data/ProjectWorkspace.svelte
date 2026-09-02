@@ -109,7 +109,7 @@
   </div>
   <div class="project-session-pane">
     <ProjectSessionPreviewPane
-      projectLabel={row.label}
+      projectKey={row.project_key}
       {projects}
       {readOnly}
       onAssigned={(target) => onRefresh(workspaceKey, target)}

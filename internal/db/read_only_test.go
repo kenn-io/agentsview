@@ -347,6 +347,7 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 		{"stats", "key"},
 		{"usage_events", "id"},
 		{"pinned_messages", "id"},
+		{"session_project_assignments", "session_id"},
 		{"secret_findings", "id"},
 		{"pg_sync_state", "key"},
 		{"model_pricing", "model_pattern"},
