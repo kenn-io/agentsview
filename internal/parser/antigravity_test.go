@@ -2909,6 +2909,20 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 			executorModel:   "gemini-3.7-flash-medium",
 			wantModel:       "Gemini 3.7 Flash (High)",
 		},
+		{
+			name:            "empty executor preserves generation model",
+			generationModel: "gemini-3.7-flash-high",
+			modelField:      agChatModelMetadataResponseModelField,
+			executorModel:   "",
+			wantModel:       "gemini-3.7-flash-high",
+		},
+		{
+			name:            "mismatched executor preserves experimental generation model",
+			generationModel: "gemini-3.7-flash-exp-b",
+			modelField:      agChatModelMetadataResponseModelField,
+			executorModel:   "claude-sonnet-4-6",
+			wantModel:       "gemini-3.7-flash-exp-b",
+		},
 	}
 
 	for _, tt := range tests {

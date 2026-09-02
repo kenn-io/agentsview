@@ -931,13 +931,13 @@ func resolveAntigravityGenerationModel(
 ) string {
 	generationModel, hasDisplayLabel :=
 		extractAntigravityGenerationModel(data)
-	if hasDisplayLabel {
+	if hasDisplayLabel || executorModel == "" {
 		return generationModel
 	}
-	if executorModel != "" && antigravityBaseModel(executorModel) == antigravityBaseModel(generationModel) {
+	if antigravityBaseModel(executorModel) == antigravityBaseModel(generationModel) {
 		return executorModel
 	}
-	return antigravityBaseModel(generationModel)
+	return generationModel
 }
 
 func antigravityBaseModel(model string) string {
