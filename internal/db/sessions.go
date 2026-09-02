@@ -655,6 +655,7 @@ type SidebarSessionIndexRow struct {
 	ParentSessionID    *string `json:"parent_session_id,omitempty"`
 	RelationshipType   string  `json:"relationship_type,omitempty"`
 	Project            string  `json:"project"`
+	ProjectAssigned    bool    `json:"project_assigned,omitempty"`
 	Machine            string  `json:"machine"`
 	Agent              string  `json:"agent"`
 	AgentLabel         string  `json:"agent_label,omitempty"`
@@ -805,6 +806,10 @@ func (db *DB) GetSidebarSessionIndex(
 			parent_session_id,
 			relationship_type,
 			project,
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = sessions.id
+			) AS project_assigned,
 			machine,
 			agent,
 			agent_label,
@@ -846,6 +851,7 @@ func (db *DB) GetSidebarSessionIndex(
 			&row.ParentSessionID,
 			&row.RelationshipType,
 			&row.Project,
+			&row.ProjectAssigned,
 			&row.Machine,
 			&row.Agent,
 			&row.AgentLabel,
@@ -1062,6 +1068,10 @@ func (db *DB) getSidebarSessionIndexPage(
 			s.parent_session_id,
 			s.relationship_type,
 			s.project,
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = s.id
+			) AS project_assigned,
 			s.machine,
 			s.agent,
 			s.agent_label,
@@ -1098,6 +1108,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			&row.ParentSessionID,
 			&row.RelationshipType,
 			&row.Project,
+			&row.ProjectAssigned,
 			&row.Machine,
 			&row.Agent,
 			&row.AgentLabel,
