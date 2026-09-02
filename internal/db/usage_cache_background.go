@@ -124,11 +124,37 @@ func (db *DB) StopUsageCacheBackfill() {
 func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 	started := time.Now()
 	var lastErr error
+	deferred := make(map[string]bool)
+	var previous usageQuerySnapshot
+	havePrevious := false
 	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
-		lastErr = db.runUsageCacheBackfillPass(ctx, started)
+		snapshot, err := db.captureUsageQuery(
+			ctx, UsageFilter{}, usageQueryKindActivity)
+		if err != nil {
+			return err
+		}
+		if havePrevious {
+			if snapshot.DatabaseID != previous.DatabaseID {
+				clear(deferred)
+			} else {
+				for sessionID := range usageBackfillChangedSessions(previous, snapshot) {
+					deferred[sessionID] = true
+				}
+			}
+		}
+		deferChangingUsageBackfillSessions(&snapshot, deferred)
+		lastErr = db.runUsageCacheBackfillPass(ctx, started, snapshot)
 		if !errors.Is(lastErr, errUsageCacheSourceChanged) {
+			if lastErr == nil && len(deferred) > 0 {
+				log.Printf(
+					"usage cache backfill: deferred %d changing sessions to incremental updates",
+					len(deferred),
+				)
+			}
 			return lastErr
 		}
+		previous = snapshot
+		havePrevious = true
 	}
 	return fmt.Errorf(
 		"usage cache backfill could not stabilize after %d attempts: %w",
@@ -136,13 +162,8 @@ func (db *DB) runUsageCacheBackfill(ctx context.Context) error {
 }
 
 func (db *DB) runUsageCacheBackfillPass(
-	ctx context.Context, started time.Time,
+	ctx context.Context, started time.Time, snapshot usageQuerySnapshot,
 ) error {
-	snapshot, err := db.captureUsageQuery(
-		ctx, UsageFilter{}, usageQueryKindActivity)
-	if err != nil {
-		return err
-	}
 	cache, release, err := db.usageCache.acquireGeneration(ctx, snapshot.DatabaseID)
 	if err != nil {
 		return err
@@ -267,6 +288,60 @@ func (db *DB) runUsageCacheBackfillPass(
 		covered, deleted, dailyRows, exceptionRows, exceptionGroups,
 		time.Since(started).Round(time.Millisecond))
 	return nil
+}
+
+func usageBackfillChangedSessions(
+	previous, current usageQuerySnapshot,
+) map[string]bool {
+	currentVersions := make(map[string]usageSourceVersion, len(current.Versions))
+	for _, version := range current.Versions {
+		currentVersions[version.SessionID] = version
+	}
+	currentSessions := make(map[string]usageQuerySession, len(current.Sessions))
+	for _, session := range current.Sessions {
+		currentSessions[session.ID] = session
+	}
+	previousSessions := make(map[string]usageQuerySession, len(previous.Sessions))
+	for _, session := range previous.Sessions {
+		previousSessions[session.ID] = session
+	}
+	changed := make(map[string]bool)
+	for _, version := range previous.Versions {
+		currentVersion, exists := currentVersions[version.SessionID]
+		if !exists || !currentVersion.Equal(version) {
+			changed[version.SessionID] = true
+			continue
+		}
+		before := previousSessions[version.SessionID]
+		after, exists := currentSessions[version.SessionID]
+		if !exists || before.Agent != after.Agent ||
+			before.StartedAt != after.StartedAt {
+			changed[version.SessionID] = true
+		}
+	}
+	return changed
+}
+
+func deferChangingUsageBackfillSessions(
+	snapshot *usageQuerySnapshot, deferred map[string]bool,
+) {
+	if len(deferred) == 0 {
+		return
+	}
+	sessions := snapshot.Sessions[:0]
+	for _, session := range snapshot.Sessions {
+		if !deferred[session.ID] {
+			sessions = append(sessions, session)
+		}
+	}
+	versions := snapshot.Versions[:0]
+	for _, version := range snapshot.Versions {
+		if !deferred[version.SessionID] {
+			versions = append(versions, version)
+		}
+	}
+	snapshot.Sessions = sessions
+	snapshot.Versions = versions
 }
 
 func usageBackfillLocations(

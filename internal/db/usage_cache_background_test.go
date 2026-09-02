@@ -114,6 +114,75 @@ func TestUsageCacheBackfillRecapturesChangedSource(t *testing.T) {
 	assert.Equal(t, 9, daily.Totals.InputTokens)
 }
 
+func TestUsageCacheBackfillPublishesStableCoverageWhileNewestSessionChanges(
+	t *testing.T,
+) {
+	database := testDB(t)
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	newestID := fmt.Sprintf("moving-batch-%03d", usageCacheBackfillBatchSize)
+	messages := make([]Message, 0, usageCacheBackfillBatchSize+1)
+	for i := range usageCacheBackfillBatchSize + 1 {
+		id := fmt.Sprintf("moving-batch-%03d", i)
+		timestamp := base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
+		insertSession(t, database, id, "project", func(session *Session) {
+			session.StartedAt = &timestamp
+			session.EndedAt = &timestamp
+		})
+		messages = append(messages, Message{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Timestamp: timestamp, Model: "model",
+			TokenUsage: json.RawMessage(`{"input_tokens":1}`),
+		})
+	}
+	require.NoError(t, database.InsertMessages(messages))
+
+	snapshot, err := database.captureUsageQuery(
+		context.Background(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(
+		context.Background(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	var mutations atomic.Int32
+	var mutationErr atomic.Value
+	cache.rollup.observer.beforeEnsure = func() {
+		mutation := mutations.Add(1)
+		usage := fmt.Sprintf(`{"input_tokens":%d}`, 1+mutation)
+		_, updateErr := database.getWriter().Exec(
+			`UPDATE messages SET token_usage = ? WHERE session_id = ?`,
+			usage, newestID,
+		)
+		if updateErr == nil {
+			_, updateErr = database.getWriter().Exec(
+				`UPDATE sessions SET transcript_revision = ? WHERE id = ?`,
+				fmt.Sprintf("moving-%d", mutation), newestID,
+			)
+		}
+		if updateErr != nil {
+			mutationErr.Store(updateErr)
+		}
+	}
+
+	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+	cache.rollup.observer = usageRollupObserver{}
+	if stored := mutationErr.Load(); stored != nil {
+		require.NoError(t, stored.(error))
+	}
+	require.Positive(t, mutations.Load())
+
+	metadata := readUsageCacheMetadata(t, cache.db)
+	assert.NotEmpty(t, metadata[usageCacheMetadataBackfillCompletedAt])
+	daily, err := database.GetDailyUsage(context.Background(), UsageFilter{
+		From: "2026-08-01", To: "2026-08-01", Timezone: "UTC",
+		SkipSessionCounts: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t,
+		usageCacheBackfillBatchSize+int(mutations.Load())+1,
+		daily.Totals.InputTokens,
+	)
+}
+
 func TestUsageCacheBackfillBatchesNewestSessionsFirst(t *testing.T) {
 	database := testDB(t)
 	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
