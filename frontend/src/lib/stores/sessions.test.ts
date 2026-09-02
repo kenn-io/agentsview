@@ -126,6 +126,7 @@ type SkinnySessionRow = {
   parent_session_id?: string | null;
   relationship_type?: string | null;
   project: string;
+  project_assigned?: boolean;
   machine: string;
   agent: string;
   agent_label?: string | null;
@@ -656,11 +657,12 @@ describe("SessionsStore", () => {
       expect(sessions.nextCursor).toBe("next");
     });
 
-    it("keeps sidebar rows skinny and carries teammate classification", async () => {
+    it("keeps sidebar rows skinny and carries sidebar classifications", async () => {
       vi.mocked(api.getSidebarSessionIndex).mockResolvedValue({
         sessions: [
           makeSkinnyRow({
             id: "team",
+            project_assigned: true,
             is_teammate: true,
           }),
         ],
@@ -675,6 +677,7 @@ describe("SessionsStore", () => {
       expect(api.listSessions).not.toHaveBeenCalled();
       expect(sessions.sessions[0]).toMatchObject({
         id: "team",
+        project_assigned: true,
         is_teammate: true,
         is_index_only: true,
       });
