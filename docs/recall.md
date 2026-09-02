@@ -15,11 +15,11 @@ Recall is an experimental layer for durable, provenance-linked knowledge from
 past agent sessions. It stores compact facts, procedures, preferences, and
 warnings as entries that can be listed, queried, and packed into a task brief.
 
-This is different from [semantic search](/semantic-search/). Semantic search
-finds relevant passages in the transcript archive. Recall searches a separate
-set of distilled entries and keeps the transcript region supporting each entry
-as evidence. Recall queries support lexical, vector, and hybrid retrieval; the
-default remains lexical while this feature is experimental.
+This is different from [semantic search](/docs/semantic-search/). Semantic
+search finds relevant passages in the transcript archive. Recall searches a
+separate set of distilled entries and keeps the transcript region supporting
+each entry as evidence. Recall queries support lexical, vector, and hybrid
+retrieval; the default remains lexical while this feature is experimental.
 
 ## Current surface
 
@@ -49,9 +49,9 @@ The top-level **Recall** page has two tabs:
 Open Recall from the header or navigate directly to `/recall`. Generated-report
 links use `/recall?tab=generated&insight=<id>`.
 
-![Recall corpus browser](/assets/generated/screenshots/recall-corpus.png)
+![Recall corpus browser](/docs/assets/generated/screenshots/recall-corpus.png)
 
-![Generated insights](/assets/generated/screenshots/recall-generated-insights.png)
+![Generated insights](/docs/assets/generated/screenshots/recall-generated-insights.png)
 
 Generated insights use the configured OpenAI-compatible endpoint when
 `[insights]` has both an `endpoint` and `model`; when `[insights]` is absent,
@@ -145,8 +145,8 @@ one-time consent for that invocation.
 Vector and hybrid queries fail closed when the active Recall corpus is newer
 than its last completed vector build. Rebuild the Recall store, or continue
 using lexical mode while an automatic refresh catches up. See
-[Semantic Search](/semantic-search/#enabling-vector) for the shared embedding
-configuration and endpoint privacy considerations.
+[Semantic Search](/docs/semantic-search/#enabling-vector) for the shared
+embedding configuration and endpoint privacy considerations.
 
 ## Automatic extraction
 

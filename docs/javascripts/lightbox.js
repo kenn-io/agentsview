@@ -89,7 +89,7 @@ function closeLightbox() {
 function initLightbox() {
   var selector = [
     "[data-lightbox] img",
-    '.md-content img[src^="/assets/generated/screenshots/"]',
+    '.md-content img[src*="/docs/assets/generated/screenshots/"]',
   ].join(", ");
   var images = document.querySelectorAll(selector);
   if (!images.length) return;

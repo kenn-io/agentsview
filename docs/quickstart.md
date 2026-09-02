@@ -123,7 +123,7 @@ to switch to `agentsview pg serve` instead — the same image powers both modes.
 A containerized AgentsView only sees agent sessions from directories you
 explicitly bind-mount into the container. Mount each agent's session root
 read-only and point the matching
-[directory env var](/configuration/#session-discovery) at it. The data volume
+[directory env var](/docs/configuration/#session-discovery) at it. The data volume
 (`/data`) is owned by root inside the container, so prefer a named Docker volume
 over a host bind mount, or pre-create the host directory with the desired
 ownership.
@@ -138,7 +138,7 @@ docker compose -f docker-compose.prod.yaml up -d
 ```
 
 The example publishes the UI on loopback only. To expose it beyond the host,
-also enable bearer-token [authentication](/remote-access/#authentication) and
+also enable bearer-token [authentication](/docs/remote-access/#authentication) and
 publish the port intentionally.
 
 For a PostgreSQL-backed deployment, point the container at your shared database:
@@ -170,7 +170,7 @@ This will:
 
 1. Initialize the SQLite database at `~/.agentsview/sessions.db`
 1. Discover and sync sessions from all
-   [supported agents](/configuration/#session-discovery)
+   [supported agents](/docs/configuration/#session-discovery)
 1. Start watching session directories for changes
 1. Launch the web UI at `http://127.0.0.1:8080`
 
@@ -226,7 +226,7 @@ agentsview serve --background --no-sync  # One-off flag-driven background run
     A dashboard flash followed by a settings or API error usually means the
     server rejected the forwarded host or origin. It is not a missing auth
     token unless `/api/v1/settings` returns `401`. See
-    [Remote Access](/remote-access/#forwarded-dev-environments).
+    [Remote Access](/docs/remote-access/#forwarded-dev-environments).
 
 Point to custom session directories with environment variables. Aider has no
 default discovery root, so set `AIDER_DIR` to opt into scanning Aider logs:
@@ -297,7 +297,7 @@ cursor_project_dirs = ["s3://agent-archive/laptop/raw/cursor"]
 
 Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and optionally
 `AWS_S3_ENDPOINT` before starting AgentsView. See
-[S3-compatible session sources](/configuration/#s3-compatible-session-sources)
+[S3-compatible session sources](/docs/configuration/#s3-compatible-session-sources)
 for the expected object layout and sync behavior.
 
 ## What You'll See
@@ -316,4 +316,4 @@ Once running, the web UI provides:
 Beyond full-text search, opt-in semantic search lets
 `agentsview session search --semantic` (or `--hybrid`) match session content by
 meaning, backed by a local or hosted embeddings endpoint. See
-[Semantic Search](/semantic-search/) for setup.
+[Semantic Search](/docs/semantic-search/) for setup.

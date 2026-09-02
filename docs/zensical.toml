@@ -1,6 +1,6 @@
 [project]
 site_name = "AgentsView"
-site_url = "https://agentsview.io"
+site_url = "https://agentsview.io/docs/"
 site_description = "Local-first desktop and web app for AI agent sessions"
 site_author = "Kenn Software LLC"
 copyright = 'Copyright &copy; 2026 <a href="https://kenn.io">Kenn Software LLC</a>. MIT License.'
@@ -38,7 +38,7 @@ nav = [
   {"Artifact Folder Sync" = "artifact-sync.md"},
   {"Filesystem Session Sync" = "filesystem-sync.md"},
   {"PostgreSQL Sync" = "pg-sync.md"},
-  {"Hosted Raw Sync (In Development)" = "hosted-raw-sync.md"},
+  {"Hosted Raw Sync" = "hosted-raw-sync.md"},
   {"DuckDB Mirror" = "duckdb.md"},
 ]
 

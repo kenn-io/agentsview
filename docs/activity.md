@@ -8,7 +8,7 @@ actually active, how much work overlapped, and which projects, models, agents,
 machines, and sessions contributed to a time window. Open it from the
 **Activity** button in the header or directly at `/activity`.
 
-![Default daily Activity view](/assets/generated/screenshots/activity-page.png)
+![Default daily Activity view](/docs/assets/generated/screenshots/activity-page.png)
 
 The report is built from timestamped session activity and usage rows. It
 includes one-shot and automated sessions by default, then lets you narrow the
@@ -22,7 +22,7 @@ adopts and publishes shared ranges when **Settings > Date ranges > Link date
 ranges across pages** is enabled; a shared range wider than Activity can
 represent is not adopted.
 
-![Weekly Activity view](/assets/generated/screenshots/activity-week.png)
+![Weekly Activity view](/docs/assets/generated/screenshots/activity-week.png)
 
 Additional filters scope the report by:
 
@@ -64,7 +64,7 @@ The **Concurrency** chart shows active agents over the selected range. Blue
 segments represent interactive sessions, orange segments represent automated
 sessions, and the strip below the chart marks active versus idle buckets.
 
-![Weekly Activity concurrency chart](/assets/generated/screenshots/activity-concurrency.png)
+![Weekly Activity concurrency chart](/docs/assets/generated/screenshots/activity-concurrency.png)
 
 Hover a bucket to see its time range, peak agent count, agent-minutes, output
 tokens, and cost. The **Overlay** control can draw an additional **Tokens** or
@@ -82,7 +82,7 @@ The **Sessions** table lists every session that contributed to the report. Rows
 include the session title, model, project, agent, agent-minutes, cost, and
 active window.
 
-![Weekly Activity sessions table](/assets/generated/screenshots/activity-sessions.png)
+![Weekly Activity sessions table](/docs/assets/generated/screenshots/activity-sessions.png)
 
 Click a session title to open that session in the transcript viewer. Column
 headers for **Project**, **Agent**, **Agent-min**, **Cost**, and **Window** are
@@ -102,7 +102,7 @@ The **Breakdown** panel ranks activity by **Project**, **Model**, and **Agent**.
 Toggle between **Agent-min** and **Cost** to change the metric, and use the
 stacked bars to compare interactive and automated contributions.
 
-![Weekly Activity breakdowns](/assets/generated/screenshots/activity-breakdowns.png)
+![Weekly Activity breakdowns](/docs/assets/generated/screenshots/activity-breakdowns.png)
 
 Rows with no value for the selected metric are omitted from that view, so
 cost-only untimed sessions appear in **Cost** but not **Agent-min**.
@@ -117,10 +117,10 @@ model charges, but they still sum to the displayed total.
 
 Worktree layouts the parser does not recognize can surface a branch or worktree
 directory name as a project. Each row in the **Project** breakdown links to that
-project on the [Data page](/data/), where the mapping editor lists the project's
+project on the [Data page](/docs/data/), where the mapping editor lists the project's
 observed session folders, previews the full-archive impact of a folder-path →
 project rule, and applies a
-[worktree project mapping](/configuration/#worktree-project-mappings) rule in
+[worktree project mapping](/docs/configuration/#worktree-project-mappings) rule in
 one atomic step. Cleaning always evaluates the complete archive; the current
 Activity range and filters do not carry over.
 
@@ -131,10 +131,10 @@ At the bottom of the page, **Activity Insight** shows an existing global
 the server is writable, generate a new insight from the same panel using Claude,
 Codex, Copilot, Gemini, or Kiro.
 
-![Weekly Activity Insight panel](/assets/generated/screenshots/activity-insight.png)
+![Weekly Activity Insight panel](/docs/assets/generated/screenshots/activity-insight.png)
 
 The **Open in Generated insights** link opens the
-[Generated insights](/recall/?tab=generated) tab prefilled with the same range.
+[Generated insights](/docs/recall/?tab=generated) tab prefilled with the same range.
 Generation is disabled when the connected server cannot run an agent CLI.
 
 ## CLI And API
@@ -167,8 +167,8 @@ The same paging flags work with `--offline`; the signed direct-mode cursor
 carries the original resolved range and filters, then deterministically
 recomputes that generation before selecting the next page.
 
-See [CLI Reference](/commands/#agentsview-activity-report) and
-[Session API](/session-api/#activity-report) for flags and response shape.
+See [CLI Reference](/docs/commands/#agentsview-activity-report) and
+[Session API](/docs/session-api/#activity-report) for flags and response shape.
 
 ### JSON Contract
 
@@ -247,8 +247,8 @@ row contains an opaque `project_key`. `projects` is keyed by that value and
 carries the presentation-only `display_label`; unknown project identity is
 represented by an explicit `resolution` with `identity` omitted.
 
-See [Token Usage & Costs](/token-usage/#json-contract) for the shared bump
-rules, [Pricing Provenance](/token-usage/#pricing-provenance) for pricing digest
+See [Token Usage & Costs](/docs/token-usage/#json-contract) for the shared bump
+rules, [Pricing Provenance](/docs/token-usage/#pricing-provenance) for pricing digest
 and `cost_source` semantics, and
-[Project Identity](/token-usage/#project-identity) for key derivation and
+[Project Identity](/docs/token-usage/#project-identity) for key derivation and
 redaction notes.

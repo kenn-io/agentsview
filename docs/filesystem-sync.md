@@ -12,9 +12,9 @@ them. This supports a simple multi-machine topology without PostgreSQL:
 1. One primary AgentsView instance scans the received roots into its local
    SQLite archive.
 
-This is a **primary-viewer topology**. Use [PostgreSQL sync](/pg-sync/) instead
-when several viewers need a shared live database or a read-only database-backed
-endpoint.
+This is a **primary-viewer topology**. Use [PostgreSQL sync](/docs/pg-sync/)
+instead when several viewers need a shared live database or a read-only
+database-backed endpoint.
 
 ## Configure Session Sources
 
@@ -158,7 +158,7 @@ reliably; the periodic sync remains the backstop.
 - A newly transported or changed file is normally detected by the filesystem
   watcher. AgentsView also performs a full periodic sync every 15 minutes.
 - Roots that cannot be watched fall back to polling, as described under
-  [Large Watch Trees](/configuration/#large-watch-trees).
+  [Large Watch Trees](/docs/configuration/#large-watch-trees).
 - A machine label changes attribution, not source identity or conflict
   resolution. Do not intentionally place different sessions with the same
   native ID in separate roots.

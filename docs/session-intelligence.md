@@ -146,7 +146,7 @@ working context and had to recover.
 When a session has intelligence data, the session header shows a
 grade badge:
 
-![Grade badge in the session header](/assets/generated/screenshots/grade-badge.png)
+![Grade badge in the session header](/docs/assets/generated/screenshots/grade-badge.png)
 
 Clicking it opens the signal panel, which includes:
 
@@ -156,7 +156,7 @@ Clicking it opens the signal panel, which includes:
 - compaction chip with a mid-task indicator when applicable
 - penalty chips for the exact deductions applied
 
-![Signal panel with basis tags, compaction chip, and penalty chips](/assets/generated/screenshots/signal-panel.png)
+![Signal panel with basis tags, compaction chip, and penalty chips](/docs/assets/generated/screenshots/signal-panel.png)
 
 If a session does not have enough usable data, the panel renders a
 small empty-state message instead of a score.
@@ -173,7 +173,7 @@ same per-session signals into:
 - score trend over time
 - by-agent and by-project tables
 
-![Session Health section on the analytics dashboard](/assets/generated/screenshots/session-health.png)
+![Session Health section on the analytics dashboard](/docs/assets/generated/screenshots/session-health.png)
 
 This section is only shown when the current filter window contains
 scored or unscored signal-bearing sessions.
@@ -198,7 +198,7 @@ churn, failure streaks, compactions, and context pressure.
 
 ### `agentsview session`
 
-Use the [Session API](/session-api/) docs for the full programmatic
+Use the [Session API](/docs/session-api/) docs for the full programmatic
 surface. The most relevant commands for session intelligence are:
 
 ```bash
@@ -216,7 +216,7 @@ exposes health and outcome filters for automation-friendly scans.
 Session intelligence is **per-session** and powers the session UI,
 the session API, and the dashboard health section.
 
-[`agentsview stats`](/stats/) is different: it is an
+[`agentsview stats`](/docs/stats/) is different: it is an
 **aggregate reporting** command that summarizes windows of session
 activity, git activity, tool mix, model mix, and outcome metrics
 across the whole workspace.

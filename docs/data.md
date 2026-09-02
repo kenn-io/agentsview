@@ -8,11 +8,11 @@ the whole archive. It is the home of the worktree mapping rules that previously
 lived in the Settings **Worktree mappings** section.
 
 Open it from the **Data** tab in the header, or follow a project link from the
-[Activity breakdown](/activity/#breakdowns). Deep links are stable:
+[Activity breakdown](/docs/activity/#breakdowns). Deep links are stable:
 `/data?project_key=<key>` selects a project, and `/data?view=rules` opens the
 [Rules view](#rules).
 
-![Project inventory in the Data workspace](/assets/generated/screenshots/data-inventory.png)
+![Project inventory in the Data workspace](/docs/assets/generated/screenshots/data-inventory.png)
 
 ## Project Inventory
 
@@ -32,12 +32,13 @@ by classification rules.
 Selecting a row opens the project workspace. Unknown `project_key` deep links
 show the full inventory with a non-blocking notice.
 
-![Observed folders for a selected project](/assets/generated/screenshots/data-workspace.png)
+![Observed folders for a selected project](/docs/assets/generated/screenshots/data-workspace.png)
 
 ## Create A Project Mapping
 
 The workspace creates
-[worktree project mappings](/configuration/#worktree-project-mappings) directly:
+[worktree project mappings](/docs/configuration/#worktree-project-mappings)
+directly:
 
 - **Observed folders** lists every session folder associated with the selected
   project. Each folder stays visible instead of being hidden behind a worktree
@@ -65,11 +66,11 @@ required.
 The **Rules** toggle shows the worktree mapping rules for one machine at a time,
 with the same add, edit, apply, and delete controls that Settings previously
 offered — see
-[Worktree Project Mappings](/configuration/#worktree-project-mappings) for the
-full rule semantics. Each rule row also shows its **governed sessions** count
-(how many sessions the rule currently classifies) and the **original label**
-recorded when the rule was created through the mapping editor. Rule targets link
-back to the corresponding inventory row.
+[Worktree Project Mappings](/docs/configuration/#worktree-project-mappings) for
+the full rule semantics. Each rule row also shows its **governed sessions**
+count (how many sessions the rule currently classifies) and the **original
+label** recorded when the rule was created through the mapping editor. Rule
+targets link back to the corresponding inventory row.
 
 ## Read-Only Servers
 

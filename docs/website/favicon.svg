@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="12" fill="#070b12"/>
+  <rect x="1.5" y="1.5" width="61" height="61" rx="10.5" fill="none" stroke="#23324a" stroke-width="3"/>
+  <text x="32" y="43" text-anchor="middle" font-family="'JetBrains Mono', Menlo, monospace" font-size="28" font-weight="700" fill="#5b9bf5">AV</text>
+</svg>
