@@ -492,8 +492,9 @@ describe("ActivityPage calendar day rollover", () => {
     expect(activity.date).toBe("2026-06-19");
 
     expect(vi.getTimerCount()).toBeGreaterThan(0);
-    unmount(component);
+    await unmount(component);
     component = undefined;
+    await vi.runOnlyPendingTimersAsync();
     expect(vi.getTimerCount()).toBe(0);
   });
 

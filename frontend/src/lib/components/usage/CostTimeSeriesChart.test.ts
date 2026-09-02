@@ -429,18 +429,26 @@ describe("CostTimeSeriesChart", () => {
     const component = mountChart();
     await tick();
     const target = document.querySelector<HTMLElement>(".lc-tooltip-context")!;
+    Object.defineProperty(target, "offsetWidth", {
+      configurable: true,
+      value: OBSERVED_WIDTH,
+    });
+    Object.defineProperty(target, "offsetHeight", {
+      configurable: true,
+      value: 180,
+    });
     target.dispatchEvent(
       new MouseEvent("pointerenter", {
         bubbles: true,
-        clientX: 0,
-        clientY: 0,
+        clientX: 50,
+        clientY: 40,
       }),
     );
     target.dispatchEvent(
       new MouseEvent("pointermove", {
         bubbles: true,
-        clientX: 0,
-        clientY: 0,
+        clientX: 50,
+        clientY: 40,
       }),
     );
     await tick();
