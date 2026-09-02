@@ -94,7 +94,7 @@
     labels: Record<string, string>;
   } => {
     const summary = usage.timeSeriesSummary;
-    if (!summary) {
+    if (!summary || summary.daily.length === 0) {
       return { points: [], keys: [], maxY: 0, labels: {} };
     }
     const daily = fillMissingDailyEntries(summary);
