@@ -62,7 +62,7 @@
     return !usage.isModelExcluded(key);
   }
 
-  function dailyEntriesWithZeros(
+  function fillMissingDailyEntries(
     summary: UsageSummaryResponse,
   ): DailyUsageEntry[] {
     const entriesByDate = new Map(
@@ -96,7 +96,7 @@
     if (!summary) {
       return { points: [], keys: [], maxY: 0, labels: {} };
     }
-    const daily = dailyEntriesWithZeros(summary);
+    const daily = fillMissingDailyEntries(summary);
 
     // Sum the selected value per key across the whole range to find top N.
     const totals = new Map<string, number>();
