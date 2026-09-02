@@ -1569,14 +1569,25 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 	var projectChanges []copiedProjectChange
 	if oldDBHasTable(ctx, tx, "session_project_assignments") {
+		originalProjectExpr := "project"
+		if oldDBHasColumn(ctx, tx, "session_project_assignments", "original_project") {
+			originalProjectExpr = "original_project"
+		} else if oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+			originalProjectExpr = `COALESCE(NULLIF((
+				SELECT snapshot.project
+				FROM old_db.session_project_identity_snapshots snapshot
+				WHERE snapshot.session_id = session_project_assignments.session_id
+			), ''), project)`
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.session_project_assignments
-				(session_id, project, created_at, updated_at)
-			SELECT session_id, project, created_at, updated_at
+				(session_id, project, original_project, created_at, updated_at)
+			SELECT session_id, project, `+originalProjectExpr+`, created_at, updated_at
 			FROM old_db.session_project_assignments
 			WHERE session_id IN (SELECT id FROM main.sessions)
 			ON CONFLICT(session_id) DO UPDATE SET
 				project = excluded.project,
+				original_project = excluded.original_project,
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying session project assignments: %w", err)

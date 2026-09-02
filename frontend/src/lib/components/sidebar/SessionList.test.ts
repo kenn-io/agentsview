@@ -78,6 +78,7 @@ describe("SessionList filter dropdown", () => {
         return 1;
       });
     sessions.sessions = [];
+    sessions.projects = [];
     sessions.agents = [];
     sessions.machines = [];
     sessions.activeSessionId = null;
@@ -237,6 +238,7 @@ describe("SessionList filter dropdown", () => {
     await tick();
 
     expect(document.body.textContent).toContain("重命名");
+    expect(document.body.textContent).toContain("更改项目");
     expect(document.body.textContent).toContain("在新标签页打开");
     expect(document.body.textContent).toContain("删除");
 
@@ -286,6 +288,81 @@ describe("SessionList filter dropdown", () => {
       '[aria-label="Unread messages"]',
     );
     expect(indicators).toHaveLength(1);
+  });
+
+  it("assigns an individual session from its searchable project editor", async () => {
+    sessions.projects = [{ name: "destination", session_count: 4 }];
+    sessions.sessions = [makeSession({
+      id: "move-session",
+      display_name: "Move this session",
+      is_index_only: false,
+      project_assigned: false,
+    })];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue(undefined);
+    const assign = vi.spyOn(sessions, "assignSessionProject")
+      .mockResolvedValue("destination");
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+    document.querySelector<HTMLElement>(".session-item")!.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 12, clientY: 12 }),
+    );
+    await tick();
+    Array.from(document.querySelectorAll<HTMLButtonElement>(".context-menu-item"))
+      .find((button) => button.textContent?.includes("Change project"))!
+      .click();
+    await tick();
+
+    expect(document.body.textContent).toContain(m.data_session_assignment_automatic());
+    document.querySelector<HTMLButtonElement>(
+      `[title="${m.data_session_assignment_target()}"]`,
+    )!.click();
+    await tick();
+    document.querySelector<HTMLElement>('[role="option"]')!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    await tick();
+    Array.from(document.querySelectorAll<HTMLButtonElement>(".project-editor button"))
+      .find((button) => button.textContent?.includes(m.data_session_assignment_save()))!
+      .click();
+    await tick();
+
+    expect(assign).toHaveBeenCalledWith("move-session", "destination");
+  });
+
+  it("restores automatic assignment for a manually moved session", async () => {
+    sessions.sessions = [makeSession({
+      id: "manual-session",
+      display_name: "Manual session",
+      is_index_only: false,
+      project_assigned: true,
+    })];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue(undefined);
+    const clear = vi.spyOn(sessions, "clearSessionProjectAssignment")
+      .mockResolvedValue("proj");
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+    document.querySelector<HTMLElement>(".session-item")!.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 12, clientY: 12 }),
+    );
+    await tick();
+    Array.from(document.querySelectorAll<HTMLButtonElement>(".context-menu-item"))
+      .find((button) => button.textContent?.includes("Change project"))!
+      .click();
+    await tick();
+
+    expect(document.body.textContent).toContain(m.data_session_assignment_manual());
+    Array.from(document.querySelectorAll<HTMLButtonElement>(".project-editor button"))
+      .find((button) =>
+        button.textContent?.includes(m.data_session_assignment_use_automatic())
+      )!
+      .click();
+    await tick();
+
+    expect(clear).toHaveBeenCalledWith("manual-session");
   });
 });
 

@@ -2,6 +2,7 @@
   import { Button, IconButton, showFlash } from "@kenn-io/kit-ui";
   import { onDestroy, onMount } from "svelte";
   import {
+    DataService,
     SessionsService,
     SettingsService,
     type DbSession,
@@ -16,13 +17,13 @@
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
 
   interface Props {
-    projectLabel: string;
+    projectKey: string;
     projects: ProjectInfo[];
     readOnly: boolean;
     onAssigned: (target: string) => Promise<boolean>;
   }
 
-  let { projectLabel, projects, readOnly, onAssigned }: Props = $props();
+  let { projectKey, projects, readOnly, onAssigned }: Props = $props();
 
   let sessions = $state<DbSession[]>([]);
   let expanded = $state(true);
@@ -56,13 +57,8 @@
     loadError = "";
     try {
       const response = await callGenerated(
-        () => SessionsService.getApiV1Sessions({
-          project: projectLabel,
-          includeOneShot: true,
-          includeAutomated: true,
-          includeChildren: true,
-          limit: 20,
-          orderBy: "recent",
+        () => DataService.getApiV1DataProjectsProjectKeySessions({
+          projectKey,
         }),
         signal,
       );
@@ -128,6 +124,40 @@
       assignmentError = error instanceof Error
         ? error.message
         : m.data_session_assignment_failed();
+    } finally {
+      assigning = false;
+    }
+  }
+
+  async function clearActiveAssignment() {
+    const session = activeSession;
+    if (!session || !session.project_assigned || assigning) return;
+    assigning = true;
+    assignmentError = "";
+    assignmentRefreshError = "";
+    try {
+      const cleared = await callGenerated(() =>
+        SettingsService.deleteApiV1SettingsSessionProjectAssignmentsSessionId({
+          sessionId: session.id,
+        }),
+      );
+      let inventoryRefreshed = false;
+      try {
+        inventoryRefreshed = await onAssigned(cleared.project);
+      } catch {
+        inventoryRefreshed = false;
+      }
+      await loadSessions();
+      if (!inventoryRefreshed) {
+        assignmentRefreshError = m.data_session_assignment_refresh_failed();
+      }
+      showFlash(m.data_session_assignment_cleared({ project: cleared.project }), {
+        tone: "success",
+      });
+    } catch (error) {
+      assignmentError = error instanceof Error
+        ? error.message
+        : m.data_session_assignment_clear_failed();
     } finally {
       assigning = false;
     }
@@ -242,7 +272,14 @@
 
         <div class="session-assignment">
           <div class="assignment-copy">
-            <strong>{m.data_session_assignment_heading()}</strong>
+            <div class="assignment-heading">
+              <strong>{m.data_session_assignment_heading()}</strong>
+              <span class:manual={activeSession.project_assigned} class="assignment-status">
+                {activeSession.project_assigned
+                  ? m.data_session_assignment_manual()
+                  : m.data_session_assignment_automatic()}
+              </span>
+            </div>
             <span>{m.data_session_assignment_intro()}</span>
           </div>
           {#if readOnly}
@@ -268,19 +305,29 @@
                 disabled={!targetProject.trim() || assigning}
                 onclick={() => void assignActiveSession()}
               />
+              {#if activeSession.project_assigned}
+                <Button
+                  size="sm"
+                  label={assigning
+                    ? m.data_session_assignment_clearing()
+                    : m.data_session_assignment_use_automatic()}
+                  disabled={assigning}
+                  onclick={() => void clearActiveAssignment()}
+                />
+              {/if}
             </div>
             {#if assignmentError}
               <p class="preview-status error-text" role="alert">{assignmentError}</p>
-            {/if}
-            {#if assignmentRefreshError}
-              <p class="preview-status error-text" role="status">
-                {assignmentRefreshError}
-              </p>
             {/if}
           {/if}
         </div>
       </div>
     {/if}
+  {/if}
+  {#if assignmentRefreshError}
+    <p class="preview-status error-text" role="status">
+      {assignmentRefreshError}
+    </p>
   {/if}
 </section>
 
@@ -396,6 +443,12 @@
     gap: 2px;
   }
 
+  .assignment-heading {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
   .assignment-copy strong {
     color: var(--text-primary);
     font-size: 11px;
@@ -407,9 +460,19 @@
     line-height: 1.4;
   }
 
+  .assignment-copy .assignment-status {
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 550;
+  }
+
+  .assignment-copy .assignment-status.manual {
+    color: var(--accent-blue);
+  }
+
   .assignment-controls {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 8px;
   }

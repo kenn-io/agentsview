@@ -29,6 +29,9 @@ func (s *Server) registerSettingsRoutes() {
 		"Apply worktree project reclassification", s.humaReclassifyWorktreeProject)
 	s.put(group, "/session-project-assignments/{session_id}",
 		"Assign one session to a project", s.humaAssignSessionProject)
+	s.deleteRoute(group, "/session-project-assignments/{session_id}",
+		"Use automatic project assignment for one session",
+		s.humaClearSessionProjectAssignment)
 }
 
 type settingsInput struct {
@@ -399,6 +402,30 @@ func (s *Server) humaAssignSessionProject(
 		}
 	}
 	return &jsonOutput[db.SessionProjectAssignment]{Body: assignment}, nil
+}
+
+func (s *Server) humaClearSessionProjectAssignment(
+	ctx context.Context,
+	in *sessionProjectAssignmentPathInput,
+) (*jsonOutput[db.ClearedSessionProjectAssignment], error) {
+	localDB, _, err := s.localWorktreeMappingHumaDB()
+	if err != nil {
+		return nil, err
+	}
+	cleared, err := s.syncEngineForLocal(localDB).ClearSessionProjectAssignment(
+		ctx, in.SessionID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, apiError(http.StatusNotFound, "session assignment not found")
+		case strings.Contains(err.Error(), "required"):
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		default:
+			return nil, internalError("clear session project assignment", err)
+		}
+	}
+	return &jsonOutput[db.ClearedSessionProjectAssignment]{Body: cleared}, nil
 }
 
 func humaWorktreeReclassificationError(err error) error {

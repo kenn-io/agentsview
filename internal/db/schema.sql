@@ -780,10 +780,11 @@ CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_project
 -- of folder rules: temporary working directories often belong to a real
 -- project without being useful future mapping evidence.
 CREATE TABLE IF NOT EXISTS session_project_assignments (
-    session_id TEXT PRIMARY KEY,
-    project    TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    session_id       TEXT PRIMARY KEY,
+    project          TEXT NOT NULL,
+    original_project TEXT NOT NULL,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
 CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_project_assignment_insert

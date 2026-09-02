@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { ApplyWorktreeMappingsRequest } from '../models/ApplyWorktreeMappingsRequest';
 import type { ApplyWorktreeMappingsResponse } from '../models/ApplyWorktreeMappingsResponse';
+import type { DbClearedSessionProjectAssignment } from '../models/DbClearedSessionProjectAssignment';
 import type { DbSessionProjectAssignment } from '../models/DbSessionProjectAssignment';
 import type { DbWorktreeProjectMapping } from '../models/DbWorktreeProjectMapping';
 import type { DbWorktreeReclassificationPreview } from '../models/DbWorktreeReclassificationPreview';
@@ -57,6 +58,40 @@ export class SettingsService {
       url: '/api/v1/settings',
       body: requestBody,
       mediaType: 'application/json',
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Use automatic project assignment for one session
+   * @returns DbClearedSessionProjectAssignment OK
+   * @throws ApiError
+   */
+  public static deleteApiV1SettingsSessionProjectAssignmentsSessionId({
+    sessionId,
+  }: {
+    /**
+     * Session ID
+     */
+    sessionId: string,
+  }): CancelablePromise<DbClearedSessionProjectAssignment> {
+    return __request(OpenAPI, {
+      method: 'DELETE',
+      url: '/api/v1/settings/session-project-assignments/{session_id}',
+      path: {
+        'session_id': sessionId,
+      },
       errors: {
         400: `Bad Request`,
         401: `Unauthorized`,

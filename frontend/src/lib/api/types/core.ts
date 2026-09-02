@@ -22,6 +22,7 @@ export interface QualitySignals {
 export interface Session {
   id: string;
   project: string;
+  project_assigned?: boolean;
   machine: string;
   cwd?: string;
   agent: string;

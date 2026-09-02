@@ -512,7 +512,11 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
-	Project        string
+	Project string
+	// ProjectLabels carries exact internal project labels resolved from an
+	// opaque project key. A non-nil slice takes precedence over Project and is
+	// never parsed as user-facing transport input.
+	ProjectLabels  []string
 	ExcludeProject string // exclude sessions with this project name
 	Machine        string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).

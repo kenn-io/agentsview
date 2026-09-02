@@ -13,20 +13,22 @@ const api = vi.hoisted(() => ({
   preview: vi.fn(),
   apply: vi.fn(),
   assignSession: vi.fn(),
+  clearSession: vi.fn(),
 }));
 
 vi.mock("../../api/generated/index", () => ({
   DataService: {
     getApiV1DataProjectReclassificationCandidates: api.candidates,
+    getApiV1DataProjectsProjectKeySessions: api.listSessions,
   },
   SessionsService: {
-    getApiV1Sessions: api.listSessions,
     getApiV1SessionsIdMessages: api.listMessages,
   },
   SettingsService: {
     postApiV1SettingsWorktreeMappingsPreview: api.preview,
     postApiV1SettingsWorktreeMappingsReclassify: api.apply,
     putApiV1SettingsSessionProjectAssignmentsSessionId: api.assignSession,
+    deleteApiV1SettingsSessionProjectAssignmentsSessionId: api.clearSession,
   },
 }));
 vi.mock("../../api/runtime.js", () => ({
@@ -90,6 +92,7 @@ describe("ProjectWorkspace", () => {
     api.preview.mockReset();
     api.apply.mockReset();
     api.assignSession.mockReset();
+    api.clearSession.mockReset();
     api.candidates.mockResolvedValue({ candidates: [] });
     api.listSessions.mockResolvedValue({
       sessions: [
@@ -158,6 +161,10 @@ describe("ProjectWorkspace", () => {
       project: "target-project",
       created_at: "2026-03-09T18:35:00Z",
       updated_at: "2026-03-09T18:35:00Z",
+    });
+    api.clearSession.mockResolvedValue({
+      session_id: "session-1",
+      project: "wrong-project",
     });
   });
 
@@ -238,12 +245,7 @@ describe("ProjectWorkspace", () => {
     await flush();
 
     expect(api.listSessions).toHaveBeenCalledWith({
-      project: "wrong-project",
-      includeOneShot: true,
-      includeAutomated: true,
-      includeChildren: true,
-      limit: 20,
-      orderBy: "recent",
+      projectKey: "pl1:sha256:wrong",
     });
     expect(api.listMessages).toHaveBeenCalledWith({
       id: "session-1",
@@ -388,6 +390,51 @@ describe("ProjectWorkspace", () => {
     expect(api.assignSession).toHaveBeenCalledTimes(1);
     expect(api.listSessions).toHaveBeenCalledTimes(2);
     expect(screen.getByText(m.data_session_assignment_refresh_failed())).toBeTruthy();
+  });
+
+  it("keeps the refresh warning visible when reassignment empties the preview", async () => {
+    render({ onRefresh: vi.fn().mockResolvedValue(false) });
+    await flush();
+    await flush();
+    api.listSessions.mockResolvedValueOnce({ sessions: [], total: 0 });
+
+    await fireEvent.click(screen.getByTitle(m.data_session_assignment_target()));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await flush();
+    await fireEvent.click(screen.getByRole("button", { name: m.data_session_assignment_save() }));
+    await flush();
+
+    expect(screen.getByText(m.data_session_assignment_refresh_failed())).toBeTruthy();
+  });
+
+  it("shows assignment provenance and restores automatic classification", async () => {
+    api.listSessions.mockResolvedValueOnce({
+      sessions: [
+        {
+          id: "session-1",
+          project: "manual-project",
+          project_assigned: true,
+          cwd: "/srv/worktrees/example/repo",
+          display_name: "Fix project mapping",
+          first_message: "Work out which project this session belongs to",
+          agent: "codex",
+          started_at: "2026-03-09T18:30:00Z",
+          is_automated: false,
+        },
+      ],
+      total: 1,
+    });
+    render();
+    await flush();
+    await flush();
+
+    expect(screen.getByText(m.data_session_assignment_manual())).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", {
+      name: m.data_session_assignment_use_automatic(),
+    }));
+    await flush();
+
+    expect(api.clearSession).toHaveBeenCalledWith({ sessionId: "session-1" });
   });
 
   it("lets users pin a session to its currently inferred project", async () => {

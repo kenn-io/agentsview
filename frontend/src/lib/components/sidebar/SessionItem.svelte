@@ -22,10 +22,13 @@
     StarIcon,
     UserRoundIcon,
     UsersRoundIcon,
+    XIcon,
   } from "../../icons.js";
-  import { StatusDot } from "@kenn-io/kit-ui";
+  import { Button, IconButton, showFlash, StatusDot } from "@kenn-io/kit-ui";
   import { sessionStatusLabel } from "../../utils/sessionStatus.js";
   import { router } from "../../stores/router.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
+  import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
 
   interface Props {
     session: SessionGroupInput;
@@ -188,13 +191,17 @@
 
   // Context menu state
   let contextMenu: { x: number; y: number } | null = $state(null);
+  let projectEditor: { x: number; y: number } | null = $state(null);
+  let targetProject = $state("");
+  let projectSaving = $state(false);
+  let projectError = $state("");
 
   // Rename state
   let renaming = $state(false);
   let renameValue = $state("");
   let renameInput: HTMLInputElement | undefined = $state(undefined);
 
-  function portal(node: HTMLElement) {
+  function mountOverlay(node: HTMLElement) {
     document.body.appendChild(node);
     return {
       destroy() {
@@ -210,6 +217,55 @@
 
   function closeContextMenu() {
     contextMenu = null;
+  }
+
+  function startProjectEditor(e: MouseEvent) {
+    e.stopPropagation();
+    const origin = contextMenu;
+    if (!origin) return;
+    projectEditor = {
+      x: Math.max(8, Math.min(origin.x, window.innerWidth - 316)),
+      y: Math.max(8, Math.min(origin.y, window.innerHeight - 220)),
+    };
+    targetProject = "";
+    projectError = "";
+    closeContextMenu();
+    void sessions.loadProjects();
+  }
+
+  async function assignProject() {
+    const target = targetProject.trim();
+    if (!target || projectSaving) return;
+    projectSaving = true;
+    projectError = "";
+    try {
+      const project = await sessions.assignSessionProject(session.id, target);
+      projectEditor = null;
+      showFlash(m.data_session_assignment_saved({ project }), { tone: "success" });
+    } catch (error) {
+      projectError = error instanceof Error
+        ? error.message
+        : m.data_session_assignment_failed();
+    } finally {
+      projectSaving = false;
+    }
+  }
+
+  async function clearProjectAssignment() {
+    if (projectSaving) return;
+    projectSaving = true;
+    projectError = "";
+    try {
+      const project = await sessions.clearSessionProjectAssignment(session.id);
+      projectEditor = null;
+      showFlash(m.data_session_assignment_cleared({ project }), { tone: "success" });
+    } catch (error) {
+      projectError = error instanceof Error
+        ? error.message
+        : m.data_session_assignment_clear_failed();
+    } finally {
+      projectSaving = false;
+    }
   }
 
   function startRename() {
@@ -314,9 +370,12 @@
   });
 
   $effect(() => {
-    if (!contextMenu) return;
+    if (!contextMenu && !projectEditor) return;
     function handler(e: KeyboardEvent) {
-      if (e.key === "Escape") contextMenu = null;
+      if (e.key === "Escape") {
+        contextMenu = null;
+        projectEditor = null;
+      }
     }
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -498,12 +557,17 @@
 {#if contextMenu}
   <div
     class="context-menu"
-    use:portal
+    use:mountOverlay
     style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
   >
     <button class="context-menu-item" onclick={startRename}>
       {m.sidebar_row_rename()}
     </button>
+    {#if !sync.readOnly}
+      <button class="context-menu-item" onclick={startProjectEditor}>
+        {m.sidebar_row_change_project()}
+      </button>
+    {/if}
     <button
       class="context-menu-item"
       onclick={() => {
@@ -516,6 +580,67 @@
     <button class="context-menu-item danger" onclick={handleDelete}>
       {m.sidebar_row_delete()}
     </button>
+  </div>
+{/if}
+
+{#if projectEditor}
+  <div
+    class="project-editor"
+    use:mountOverlay
+    style="left: {projectEditor.x}px; top: {projectEditor.y}px;"
+  >
+    <div class="project-editor-header">
+      <div>
+        <strong>{m.data_session_assignment_heading()}</strong>
+        <span class:manual={session.project_assigned} class="project-assignment-status">
+          {session.project_assigned
+            ? m.data_session_assignment_manual()
+            : m.data_session_assignment_automatic()}
+        </span>
+      </div>
+      <IconButton
+        size="sm"
+        ariaLabel={m.data_workspace_close()}
+        onclick={() => (projectEditor = null)}
+      >
+        <XIcon size="13" aria-hidden="true" />
+      </IconButton>
+    </div>
+    <div class="project-editor-current">{session.project}</div>
+    <ProjectTypeahead
+      projects={sessions.projects}
+      value={targetProject}
+      onselect={(value) => (targetProject = value)}
+      onquery={() => (projectError = "")}
+      includeAll={false}
+      allowCustom={true}
+      customLabel={m.data_reclassify_use_custom_project({ query: "{query}" })}
+      placeholder={m.data_session_assignment_target()}
+      title={m.data_session_assignment_target()}
+    />
+    <div class="project-editor-actions">
+      <Button
+        size="sm"
+        label={projectSaving
+          ? m.data_session_assignment_saving()
+          : m.data_session_assignment_save()}
+        disabled={!targetProject.trim() || projectSaving}
+        onclick={() => void assignProject()}
+      />
+      {#if session.project_assigned}
+        <Button
+          size="sm"
+          label={projectSaving
+            ? m.data_session_assignment_clearing()
+            : m.data_session_assignment_use_automatic()}
+          disabled={projectSaving}
+          onclick={() => void clearProjectAssignment()}
+        />
+      {/if}
+    </div>
+    <p class:error-text={projectError} class="project-editor-feedback" role="status">
+      {projectError}
+    </p>
   </div>
 {/if}
 
@@ -833,6 +958,72 @@
 
   :global(.context-menu .context-menu-item.danger:hover) {
     background: color-mix(in srgb, var(--accent-red, #e55) 10%, transparent);
+  }
+
+  :global(.project-editor) {
+    position: fixed;
+    z-index: var(--z-popover);
+    display: flex;
+    width: 300px;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-lg);
+  }
+
+  :global(.project-editor-header),
+  :global(.project-editor-header > div),
+  :global(.project-editor-actions) {
+    display: flex;
+    align-items: center;
+  }
+
+  :global(.project-editor-header) {
+    justify-content: space-between;
+  }
+
+  :global(.project-editor-header > div) {
+    gap: 7px;
+  }
+
+  :global(.project-editor-header strong) {
+    color: var(--text-primary);
+    font-size: 12px;
+  }
+
+  :global(.project-assignment-status) {
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 550;
+  }
+
+  :global(.project-assignment-status.manual) {
+    color: var(--accent-blue);
+  }
+
+  :global(.project-editor-current) {
+    color: var(--text-secondary);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+
+  :global(.project-editor-actions) {
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  :global(.project-editor-feedback) {
+    min-height: 16px;
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
+  :global(.project-editor-feedback.error-text) {
+    color: var(--accent-red);
   }
 
   .select-checkbox {
