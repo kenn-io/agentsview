@@ -931,16 +931,23 @@ func resolveAntigravityGenerationModel(
 	if hasDisplayLabel || executorModel == "" {
 		return generationModel
 	}
-	if antigravityBaseModel(executorModel) == generationModel {
+	if antigravityBaseModel(executorModel) == antigravityBaseModel(generationModel) {
 		return executorModel
 	}
 	return generationModel
 }
 
 func antigravityBaseModel(model string) string {
-	for _, suffix := range []string{"-low", "-medium", "-high"} {
-		if base, ok := strings.CutSuffix(model, suffix); ok {
-			return base
+	suffixes := []string{"-low", "-medium", "-high", "-exp-b", "-exp"}
+	changed := true
+	for changed {
+		changed = false
+		for _, suffix := range suffixes {
+			if base, ok := strings.CutSuffix(model, suffix); ok {
+				model = base
+				changed = true
+				break
+			}
 		}
 	}
 	return model

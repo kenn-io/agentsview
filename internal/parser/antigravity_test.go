@@ -2889,6 +2889,13 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 			wantModel:       "gemini-3.7-flash-high",
 		},
 		{
+			name:            "experimental serving variant gains executor effort",
+			generationModel: "gemini-3.7-flash-exp-b",
+			modelField:      agChatModelMetadataResponseModelField,
+			executorModel:   "gemini-3.7-flash-high",
+			wantModel:       "gemini-3.7-flash-high",
+		},
+		{
 			name:            "different executor base is ignored",
 			generationModel: "claude-sonnet-4-6",
 			modelField:      agChatModelMetadataResponseModelField,
