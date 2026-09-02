@@ -2,12 +2,17 @@
   import { Area, Bar, Chart, Layer, Tooltip } from "layerchart";
   import { Button } from "@kenn-io/kit-ui";
   import { scaleBand, scalePoint } from "d3-scale";
-  import { curveStepAfter } from "d3-shape";
+  import { curveStep } from "d3-shape";
   import LargeChartFrame from "../shared/LargeChartFrame.svelte";
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
+  import { addDays } from "../../utils/dates.js";
+  import type {
+    DailyUsageEntry,
+    UsageSummaryResponse,
+  } from "../../api/types/usage.js";
 
   interface Props {
     colorMap: ReadonlyMap<string, string>;
@@ -58,16 +63,41 @@
     return usage.selectedModels.split(",").includes(key);
   }
 
+  function dailyEntriesWithZeros(
+    summary: UsageSummaryResponse,
+  ): DailyUsageEntry[] {
+    const entriesByDate = new Map(
+      summary.daily.map((entry) => [entry.date, entry]),
+    );
+    const daily: DailyUsageEntry[] = [];
+    for (let date = summary.from; date <= summary.to;) {
+      daily.push(entriesByDate.get(date) ?? {
+        date,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        totalCost: { microdollars: 0 },
+        modelsUsed: [],
+      });
+      const nextDate = addDays(date, 1);
+      if (!nextDate) break;
+      date = nextDate;
+    }
+    return daily;
+  }
+
   const seriesData = $derived.by((): {
     points: Point[];
     keys: string[];
     maxY: number;
     labels: Record<string, string>;
   } => {
-    const daily = usage.timeSeriesSummary?.daily;
-    if (!daily || daily.length === 0) {
+    const summary = usage.timeSeriesSummary;
+    if (!summary) {
       return { points: [], keys: [], maxY: 0, labels: {} };
     }
+    const daily = dailyEntriesWithZeros(summary);
 
     // Sum the selected value per key across the whole range to find top N.
     const totals = new Map<string, number>();
@@ -488,7 +518,7 @@
                 <Area
                   seriesKey={item.key}
                   fill={item.color}
-                  curve={curveStepAfter}
+                  curve={curveStep}
                 />
               {/if}
             {/each}

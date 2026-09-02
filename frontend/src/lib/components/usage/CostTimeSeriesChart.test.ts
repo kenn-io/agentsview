@@ -147,6 +147,12 @@ function mountChart() {
   });
 }
 
+function setSummaryRangeToDailyEntries() {
+  const daily = usage.summary!.daily;
+  usage.summary!.from = daily[0]!.date;
+  usage.summary!.to = daily.at(-1)!.date;
+}
+
 describe("CostTimeSeriesChart", () => {
   beforeEach(() => {
     globalThis.ResizeObserver = ImmediateResizeObserver as typeof ResizeObserver;
@@ -201,6 +207,7 @@ describe("CostTimeSeriesChart", () => {
   it("renders a visible stacked bar for a one-day range", async () => {
     usage.summary = usageSummary();
     usage.summary.daily = [dailyEntry(0)];
+    setSummaryRangeToDailyEntries();
 
     const component = mountChart();
     await tick();
@@ -214,9 +221,10 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("renders stepped stacked areas without dimming their colors", async () => {
+  it("renders centered stepped areas without dimming their colors", async () => {
     usage.summary = usageSummary();
     usage.summary.daily = usage.summary.daily.slice(0, 2);
+    setSummaryRangeToDailyEntries();
     usage.summary.daily[0]!.projectBreakdowns![0]!.cost = testMoney(10);
     usage.summary.daily[1]!.projectBreakdowns![0]!.cost = testMoney(20);
 
@@ -231,12 +239,31 @@ describe("CostTimeSeriesChart", () => {
       /[ML]([-+]?\d*\.?\d+(?:e[-+]?\d+)?),([-+]?\d*\.?\d+(?:e[-+]?\d+)?)/gi,
     )].map((match) => [Number(match[1]), Number(match[2])] as const);
 
-    expect(coordinates).toHaveLength(6);
+    expect(coordinates).toHaveLength(8);
+    expect(coordinates[1]![0]).toBe(
+      (coordinates[0]![0] + coordinates[3]![0]) / 2,
+    );
     for (let index = 1; index < coordinates.length; index++) {
       const [previousX, previousY] = coordinates[index - 1]!;
       const [x, y] = coordinates[index]!;
       expect(x === previousX || y === previousY).toBe(true);
     }
+
+    unmount(component);
+  });
+
+  it("renders a zero-usage day between populated dates", async () => {
+    usage.summary = usageSummary();
+    usage.summary.from = "2026-06-04";
+    usage.summary.to = "2026-06-06";
+    usage.summary.daily = [dailyEntry(0), dailyEntry(2)];
+
+    const component = mountChart();
+    await tick();
+
+    const labels = Array.from(document.querySelectorAll<SVGTextElement>("text.x-label"))
+      .map((label) => label.textContent?.trim());
+    expect(labels).toContain("Jun 5");
 
     unmount(component);
   });
@@ -347,6 +374,7 @@ describe("CostTimeSeriesChart", () => {
   it("keeps projects with the same display label as distinct series", async () => {
     usage.summary = usageSummary();
     usage.summary.daily = [dailyEntry(0)];
+    setSummaryRangeToDailyEntries();
     usage.summary.daily[0]!.projectBreakdowns = [
       { ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: testMoney(6) },
       {
@@ -377,6 +405,7 @@ describe("CostTimeSeriesChart", () => {
         { modelName: "claude-opus-4-8", cost: testMoney(2) },
       ]),
     ];
+    setSummaryRangeToDailyEntries();
 
     const component = mountChart();
     await tick();
@@ -399,6 +428,7 @@ describe("CostTimeSeriesChart", () => {
       modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
       modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
     ];
+    setSummaryRangeToDailyEntries();
 
     const component = mountChart();
     await tick();
@@ -418,6 +448,7 @@ describe("CostTimeSeriesChart", () => {
       cost: testMoney(11 - index),
     }));
     usage.summary.daily = [modelDailyEntry(0, models)];
+    setSummaryRangeToDailyEntries();
 
     const component = mountChart();
     await tick();
@@ -446,6 +477,7 @@ describe("CostTimeSeriesChart", () => {
         { modelName: "medium", cost: testMoney(8) },
       ]),
     ];
+    setSummaryRangeToDailyEntries();
 
     const component = mountChart();
     await tick();
@@ -499,6 +531,7 @@ describe("CostTimeSeriesChart", () => {
       modelDailyEntry(1, [{ modelName: "model", cost: testMoney(2) }]),
       modelDailyEntry(2, [{ modelName: "model", cost: testMoney(3) }]),
     ];
+    setSummaryRangeToDailyEntries();
 
     const component = mountChart();
     await tick();
@@ -571,6 +604,7 @@ describe("CostTimeSeriesChart", () => {
         { modelName: "claude-opus-5", cost: testMoney(2) },
       ]),
     ];
+    setSummaryRangeToDailyEntries();
 
     const component = mountChart();
     await tick();
