@@ -214,13 +214,30 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("renders stacked area colors without dimming them", async () => {
+  it("renders stepped stacked areas without dimming their colors", async () => {
+    usage.summary = usageSummary();
+    usage.summary.daily = usage.summary.daily.slice(0, 2);
+    usage.summary.daily[0]!.projectBreakdowns![0]!.cost = testMoney(10);
+    usage.summary.daily[1]!.projectBreakdowns![0]!.cost = testMoney(20);
+
     const component = mountChart();
     await tick();
 
     const area = document.querySelector<SVGPathElement>("path.lc-area-path");
     expect(area).not.toBeNull();
     expect(Number(area!.getAttribute("opacity") ?? 1)).toBe(1);
+    const path = area!.getAttribute("d")!;
+    const points = [...path.matchAll(/[-+]?\d*\.?\d+(?:e[-+]?\d+)?/gi)]
+      .map((match) => Number(match[0]));
+    const coordinates = Array.from(
+      { length: Math.floor(points.length / 2) },
+      (_, index) => [points[index * 2]!, points[index * 2 + 1]!] as const,
+    );
+
+    expect(coordinates[0]![0]).not.toBe(coordinates[1]![0]);
+    expect(coordinates[0]![1]).toBe(coordinates[1]![1]);
+    expect(coordinates[1]![0]).toBe(coordinates[2]![0]);
+    expect(coordinates[1]![1]).not.toBe(coordinates[2]![1]);
 
     unmount(component);
   });

@@ -2,6 +2,7 @@
   import { Area, Bar, Chart, Layer, Tooltip } from "layerchart";
   import { Button } from "@kenn-io/kit-ui";
   import { scaleBand, scalePoint } from "d3-scale";
+  import { curveStepAfter } from "d3-shape";
   import LargeChartFrame from "../shared/LargeChartFrame.svelte";
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
   import { formatDateTime, m } from "../../i18n/index.js";
@@ -487,6 +488,7 @@
                 <Area
                   seriesKey={item.key}
                   fill={item.color}
+                  curve={curveStepAfter}
                 />
               {/if}
             {/each}
