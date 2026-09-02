@@ -1,90 +1,59 @@
 # Full-Sync Memory Bound Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans
-> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for
-> tracking.
+> to implement this plan task-by-task.
 
-**Goal:** Bound parsed-session memory during full sync while keeping median
-wall-clock time within 10% of v0.42.0 on both bulk benchmark fixtures.
+**Goal:** Bound parsed-session memory during full sync while keeping wall-clock
+time within 10% of v0.42.0 on a production-scale workload.
 
-**Architecture:** Replace the unthrottled archive-pass admission object with a
-dedicated byte-weighted budget. Keep each lease from immediately before parse
-through the corresponding database write, and use the existing pressure signal
-to flush partial batches. Clear completed pointer-bearing collector slices
-before reuse. Select the internal capacity from measured 64 MiB, 128 MiB, and
-256 MiB candidates; do not expose configuration or compatibility paths.
+**Architecture:** Bound active and queued parses with a 128 MiB weighted
+semaphore. Transfer completed archive results to a separately bounded 512 MiB
+pending-write stage and release parse admission at that ownership boundary.
+Preserve the existing 100-session transaction batch when the pending byte bound
+allows it. Clear completed pointer-bearing collector slices before reuse.
 
 **Tech Stack:** Go 1.27, `golang.org/x/sync/semaphore`, SQLite/FTS5, Go
-benchmarks, Linux user-systemd cgroup measurements, GitHub CLI.
+benchmarks, Linux cgroup measurements, GitHub CLI.
 
-## Global Constraints
+## Global constraints
 
-- Use only generated synthetic archives for tracked tests and candidate
-  profiling. Keep corpus paths, stable identifiers, observations, databases,
-  profiles, and machine details out of Git and the pull request.
-- Treat peak memory and median wall-clock time as co-equal. Reject a candidate
-  when either benchmark fixture is more than 10% slower than v0.42.0.
+- Use generated synthetic archives for tracked tests. Keep corpus paths, stable
+  identifiers, observations, databases, profiles, and machine details out of
+  Git and the pull request.
+- Treat process memory and wall-clock time as co-equal. Reject a candidate that
+  is more than 10% slower than v0.42.0.
+- Record process heap, resident set size (RSS), anonymous memory, and file cache
+  separately. Do not treat reclaimable cache as a Go heap leak.
 - Keep parsing and database output unchanged. Do not add a user setting,
-  environment-controlled production behavior, fallback, or historical parser.
+  environment-controlled behavior, fallback, or historical parser.
 - Preserve the end-of-pass scavenge and make cancellation release waiters and
   retained capacity.
 - Use CGO and the `fts5` tag for Go tests. Do not poll GitHub Actions.
 
 ______________________________________________________________________
 
-### Task 1: Specify Bounded Bulk Admission in Tests
+## Task 1: Reproduce and locate retention
 
 **Files:**
 
+- Inspect: `internal/sync/engine.go`
+- Inspect: `internal/sync/parse_retention.go`
 - Modify: `internal/sync/parse_retention_test.go`
 
-**Interfaces:**
+1. Reproduce high heap during a synthetic archive-scale pass.
+1. Profile the pipeline boundaries: parser result, queued result, prepared
+   database rows, database write, and end-of-pass scavenge.
+1. Add a behavior test that keeps the collector alive after a write and proves a
+   flushed parsed payload becomes collectible.
+1. Confirm whether memory remains live after the existing final scavenge.
 
-- Consumes: `newBulkParseRetentionBudget`, `Engine.beginBulkRetentionPass`,
-  `Engine.startWorkers`, and `Engine.collectAndBatch`.
+Expected finding: concurrent parse results and a pending 100-session write batch
+are retained at the same time, prepared rows amplify that payload, and stale
+collector backing-array pointers extend completed-batch lifetimes. The final
+scavenge returns the released heap, so the symptom is transient retention rather
+than a permanent allocator leak.
 
-- Produces: observable contracts for exclusive large-source admission, partial
-  bulk flushes, one end scavenge, warm no-op behavior, and cancellation.
-
-- [ ] **Step 1: Replace the unthrottled budget assertion**
-
-    Replace `TestBulkParseRetentionBudgetNeverBlocks` with
-    `TestBulkParseRetentionBudgetBoundsConcurrentSourceWeight`. Construct a 64
-    MiB bulk budget, acquire one source whose weight consumes the capacity, and
-    start a second acquisition in a goroutine. Assert that the second
-    acquisition reports pressure and does not complete until the first lease is
-    released.
-
-- [ ] **Step 2: Make the full-pass test require a weighted budget**
-
-    Rename `TestFullSyncPassIsUnthrottledAndScavengesOnce` to
-    `TestFullSyncPassUsesBoundedRetentionAndScavengesOnce`. Assert that the
-    installed bulk budget has a non-nil weighted semaphore and the configured
-    bulk capacity, while retaining the existing parse-bearing and warm-pass
-    scavenge assertions.
-
-- [ ] **Step 3: Exercise admission-pressure flushing in both write modes**
-
-    Convert `TestStartWorkersFlushesBelowBatchUnderAdmissionPressure` to a table
-    over `syncWriteDefault` and `syncWriteBulk`. For the bulk case, install a
-    bulk retention pass around the two-worker run. Keep the two synthetic 20 MiB
-    files and require two writes: the first result must flush below `batchSize`
-    before the second exclusive parse can start.
-
-- [ ] **Step 4: Run the focused tests and record the expected failure**
-
-    Run:
-
-    ```bash
-    CGO_ENABLED=1 go test -tags fts5 ./internal/sync \
-      -run '^(TestFullSyncPassUsesBoundedRetentionAndScavengesOnce|TestBulkParseRetentionBudgetBoundsConcurrentSourceWeight|TestStartWorkersFlushesBelowBatchUnderAdmissionPressure)$' \
-      -count=1
-    ```
-
-    Expected: the new bulk-budget tests fail or time out under the current
-    unthrottled implementation, while the default-mode table case still passes.
-
-### Task 2: Implement the Dedicated Weighted Bulk Budget
+## Task 2: Add byte-aware bulk admission
 
 **Files:**
 
@@ -92,247 +61,102 @@ ______________________________________________________________________
 - Modify: `internal/sync/engine.go`
 - Modify: `internal/sync/parse_retention_test.go`
 
-**Interfaces:**
+1. Replace the unthrottled bulk budget with a weighted semaphore.
+1. Estimate retained bytes with the existing fixed allowance plus four times
+   source size.
+1. Make an oversized source acquire the active capacity exclusively.
+1. Count an unknown-size source conservatively rather than admitting it with a
+   zero estimate.
+1. Preserve one end-of-pass scavenge for each parse-bearing bulk pass, and skip
+   it for a warm no-op pass.
+1. Verify blocked acquisition and cancellation behavior with focused tests.
 
-- Consumes: the existing weighted admission, pressure channel, collector flush,
-  lease release, and end-of-pass scavenge machinery.
-
-- Produces: a bounded internal budget for full sync, resync rebuild, and remote
-  import processing.
-
-- [ ] **Step 1: Add the internal bulk capacity**
-
-    Add `defaultBulkParseRetentionBytes` beside `defaultParseRetentionBytes`.
-    Start at 64 MiB for correctness tests; the host measurements in Task 4
-    select the final value.
-
-- [ ] **Step 2: Build bulk admission on the weighted implementation**
-
-    Change `newBulkParseRetentionBudget` to accept a capacity and return
-    `newParseRetentionBudget(capacity)` with a bulk-only flag that requests one
-    scavenge for every successful parse acquisition. Remove the nil-semaphore
-    fast path from `acquire`; every budget must calculate a weight, signal
-    pressure when blocked, and return a releasing lease.
-
-- [ ] **Step 3: Preserve bulk scavenge semantics**
-
-    Update `noteKnownLargeSource` so the bulk-only flag sets `scavengePending` for
-    any parse-bearing pass, while the default budget still requests a scavenge
-    only for known sources at least 16 MiB. A warm pass must leave
-    `scavengePending` false.
-
-- [ ] **Step 4: Install the bounded bulk budget**
-
-    Update `beginBulkRetentionPass` to construct the bulk budget with
-    `defaultBulkParseRetentionBytes`. Rewrite its comments and the corresponding
-    `Engine` field comment to describe byte-bounded admission and partial-batch
-    pressure flushing rather than full parallelism.
-
-- [ ] **Step 5: Run the focused tests green**
-
-    Run:
-
-    ```bash
-    gofmt -w internal/sync/parse_retention.go \
-      internal/sync/parse_retention_test.go internal/sync/engine.go
-    CGO_ENABLED=1 go test -tags fts5 ./internal/sync \
-      -run '^(TestWarmNoopSyncAcquiresNoRetentionLeases|TestFullSyncPassUsesBoundedRetentionAndScavengesOnce|TestScopedSyncKeepsBoundedRetentionBudget|TestBulkParseRetentionBudgetBoundsConcurrentSourceWeight|TestBulkParseRetentionBudgetScavengesOncePerParseBearingPass|TestParseRetentionBudgetBoundsConcurrentSourceWeight|TestParseRetentionBudgetRunsOversizedSourceExclusively|TestCollectAndBatchRetainsParseLeaseThroughWrite|TestStartWorkersFlushesBelowBatchUnderAdmissionPressure|TestStartWorkersCancellationReleasesAdmissionWaiters)$' \
-      -count=1
-    ```
-
-    Expected: all selected retention, batching, scavenge, and cancellation tests
-    pass.
-
-- [ ] **Step 6: Release completed collector batches**
-
-    Add a failing behavior test that keeps the collector alive after a bulk flush
-    and verifies the completed parsed payload can be collected. Clear the
-    pending writes, leases, and cache-write entries before each backing array is
-    resliced, including the cancelled-write path.
-
-- [ ] **Step 7: Commit the correctness change**
-
-    Stage only the three sync files and commit with a message explaining that full
-    sync previously retained worker results plus a 100-session batch, and that
-    weighted admission releases capacity only after write completion.
-
-### Task 3: Check Broader Correctness Before Profiling
+## Task 3: Separate parse and pending-write ownership
 
 **Files:**
 
-- Verify: `internal/sync/`
+- Modify: `internal/sync/parse_retention.go`
+- Modify: `internal/sync/engine.go`
+- Modify: `internal/sync/parse_retention_test.go`
 
-**Interfaces:**
+1. Add an internal pending-result capacity separate from the active parse
+   capacity.
+1. In an archive-scale pass, release the parse lease when the collector
+   transfers a result into the pending database batch, independent of the
+   database write mode.
+1. Flush the existing batch before adding a result that would exceed the pending
+   bound. Flush after adding a result that reaches the bound.
+1. Keep incremental mode's lease-through-write and admission-pressure behavior
+   unchanged.
+1. Clear pending writes, leases, and cache writes after every completed or
+   cancelled flush.
+1. Add behavior tests that prove bulk admission remains available while a
+   database write is blocked, pending parsed bytes split batches at the limit,
+   and parser pressure does not fragment bulk transactions.
 
-- Consumes: all sync-engine behavior that shares the retention budget.
+Run:
 
-- Produces: a candidate safe enough for repeated local and remote profiling.
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./internal/sync \
+  -run '^(TestArchiveCollectorReleasesParseLeaseBeforeWrite|TestBulkCollectorBoundsPendingParsedBytesBetweenWrites|TestStartWorkersKeepsBulkBatchingIndependentOfParseAdmission|TestBulkCollectorReleasesFlushedParsedBatch)$' \
+  -count=1
+```
 
-- [ ] **Step 1: Run the full sync package**
+## Task 4: Select the capacities with memory and time measurements
 
-    Run:
+1. Build v0.42.0 and each candidate in disposable source copies. Do not install
+   over a live binary or point branch code at a live archive.
+1. Screen candidates with the generated cold-archive and resync benchmarks.
+1. Run the surviving architecture against an isolated production-scale clone on
+   a generic 16 GB machine. Keep raw data and diagnostics private.
+1. Compare a candidate with bracketing v0.42.0 runs to reduce sensitivity to
+   host I/O variation.
+1. Reject the shared lease-through-write design if parser backpressure creates
+   small database transactions or exceeds the wall-clock gate.
+1. Select the separate active and pending capacities that minimize memory while
+   preserving normal transaction batching.
+1. Complete and seal a fresh archive with the final candidate. Compare heap,
+   worker RSS, worker anonymous memory, target anonymous memory, transaction
+   count, and elapsed time.
 
-    ```bash
-    CGO_ENABLED=1 go test -tags fts5 ./internal/sync -count=1
-    ```
+Selection: 128 MiB active parse capacity and 512 MiB pending-result capacity.
+The production-scale candidate changed wall time by +0.49% against the midpoint
+of bracketing baselines while lowering peak worker anonymous memory by 19.3%.
 
-    Expected: the package passes without races, timeouts, or changed write counts.
+## Task 5: Check broader correctness
 
-- [ ] **Step 2: Run static checks**
+Run:
 
-    Run:
+```bash
+gofmt -w internal/sync/engine.go internal/sync/parse_retention.go \
+  internal/sync/parse_retention_test.go
+CGO_ENABLED=1 go test -tags fts5 ./internal/sync -count=1
+CGO_ENABLED=1 go test -race -tags fts5 ./internal/sync \
+  -run '^(TestBulkParseRetentionBudgetCountsUnknownSourceAtPendingLimit|TestArchiveCollectorReleasesParseLeaseBeforeWrite|TestBulkCollectorBoundsPendingParsedBytesBetweenWrites|TestStartWorkersKeepsBulkBatchingIndependentOfParseAdmission|TestBulkCollectorReleasesFlushedParsedBatch)$' \
+  -count=1
+CGO_ENABLED=1 go vet -tags fts5 ./...
+make pricing-snapshot
+make lint-ci
+git diff --check
+```
 
-    ```bash
-    make pricing-snapshot
-    gofmt -w internal/sync/parse_retention.go \
-      internal/sync/parse_retention_test.go internal/sync/engine.go
-    go vet -tags fts5 ./internal/sync/...
-    git diff --check
-    ```
+Review the final diff for changed parse or archive semantics, leaked leases,
+unbounded pending data, cancellation deadlocks, transaction fragmentation, and
+unrelated changes.
 
-    Expected: all commands pass and no unrelated file changes appear.
+## Task 6: Scrub and deliver
 
-### Task 4: Select Capacity With Paired Memory and Time Measurements
-
-**Files:**
-
-- Temporarily modify, then restore or finalize:
-  `internal/sync/parse_retention.go`
-- Record aggregate results in the pull request draft only after scrubbing.
-
-**Interfaces:**
-
-- Consumes: v0.42.0 and candidate builds at 64 MiB, 128 MiB, and 256 MiB.
-
-- Produces: the lowest-memory capacity whose median wall time stays within 10%
-  of v0.42.0 for both gated fixtures.
-
-- [ ] **Step 1: Prepare isolated candidate builds**
-
-    Build v0.42.0 and each capacity from separate disposable source copies. Do not
-    install over a live binary, write to a live database, or capture private
-    corpus data. Verify each binary or test executable identifies the intended
-    revision and capacity before running it.
-
-- [ ] **Step 2: Run the two synthetic benchmark paths locally**
-
-    Run both benchmarks with fixed fixtures before using the remote machine:
-
-    ```bash
-    AGENTSVIEW_BENCH_SYNC_SESSIONS=120 \
-    AGENTSVIEW_BENCH_SYNC_MESSAGES=5000 \
-    CGO_ENABLED=1 go test -tags fts5 ./internal/sync \
-      -run '^$' \
-      -bench '^(BenchmarkResyncBulkIngest|BenchmarkSyncAllColdArchive)$' \
-      -benchtime=1x -count=1
-    ```
-
-    Expected: both paths complete and validate all 120 sessions.
-
-- [ ] **Step 3: Alternate baseline and candidate runs on the 16 GB machine**
-
-    For each capacity and for both 120x5,000 and 120x10,000 fixtures, run at least
-    three measured baseline runs and three measured candidate runs in
-    alternating order. Put each run in an isolated user-owned cgroup. Capture
-    elapsed time, `memory.peak`, sampled anonymous memory, and sampled file
-    cache. Keep raw outputs and scratch databases on the machine.
-
-- [ ] **Step 4: Apply the selection rule**
-
-    Compute the median wall time and median/maximum cgroup peak for each
-    revision-fixture pair. Reject a capacity when either candidate median is
-    more than 10% slower than the matching v0.42.0 median. Among survivors,
-    select the capacity with the lowest peak. If none survives, stop and revise
-    the design rather than weakening the gate.
-
-- [ ] **Step 5: Finalize and reverify the selected constant**
-
-    Set `defaultBulkParseRetentionBytes` to the selected value, remove every
-    temporary profiling edit, rerun the Task 2 focused tests, and inspect the
-    diff. Commit the capacity decision with aggregate memory and timing evidence
-    in the commit body.
-
-### Task 5: Run the Complete Authorized Benchmark
-
-**Files:**
-
-- No tracked benchmark data or machine configuration changes.
-
-**Interfaces:**
-
-- Consumes: the final candidate and the existing operator-authorized benchmark
-  workload on the generic 16 GB machine.
-
-- Produces: the acceptance result for the below-8-GiB complete-workload target.
-
-- [ ] **Step 1: Run through the existing polled host harness**
-
-    Use the existing authorized benchmark mechanism. Do not add an inbound
-    webhook, self-hosted GitHub runner, credential, service change, or permanent
-    host installation. Ask the operator for the one necessary action if the
-    current SSH account cannot start the private workload.
-
-- [ ] **Step 2: Verify the final operational gate**
-
-    Require the complete workload to stay below 8 GiB cgroup peak and complete
-    successfully. Compare wall time to the last valid baseline. Keep all raw
-    corpus-linked measurements private; retain only aggregate peak and elapsed
-    values for review.
-
-### Task 6: Final Verification, Scrub, Push, and Pull Request
-
-**Files:**
-
-- Verify every file changed on `fix-full-sync-memory`.
-- Create: one public pull request against `main`.
-
-**Interfaces:**
-
-- Consumes: the approved design, implementation commits, unit evidence, paired
-  benchmark evidence, and complete-workload evidence.
-
-- Produces: one sanitized reviewable pull request; no merge.
-
-- [ ] **Step 1: Run repository verification**
-
-    Run:
-
-    ```bash
-    make pricing-snapshot
-    gofmt -w internal/sync/parse_retention.go \
-      internal/sync/parse_retention_test.go internal/sync/engine.go
-    CGO_ENABLED=1 go test -tags fts5 ./internal/sync -count=1
-    go vet -tags fts5 ./internal/sync/...
-    git diff --check origin/main...HEAD
-    ```
-
-    Expected: every command passes on the final commit candidate.
-
-- [ ] **Step 2: Review and scrub everything leaving private context**
-
-    Inspect the full commit range, diff, commit messages, new blob contents, and
-    proposed pull-request title/body. Reject private hostnames, absolute paths,
-    corpus identifiers, source paths, profiles, credentials, and stable session
-    identifiers. Refer only to a generic 16 GB machine and aggregate synthetic
-    or complete-workload measurements.
-
-- [ ] **Step 3: Commit any final documentation synchronization**
-
-    If the selected capacity or evidence changes the design document, update it so
-    it describes the final implementation, format it, scrub it, and create a new
-    commit. Do not amend, squash, or rebase existing commits.
-
-- [ ] **Step 4: Push and open one pull request**
-
-    Push `fix-full-sync-memory`, then open a pull request against `main`. Keep the
-    title and body synchronized with the current diff. Explain the retained
-    pipeline, weighted admission, measured memory reduction, and wall-clock
-    result in plain language. Do not include Test Plan, Validation, or
-    Verification sections, do not post a PR comment, and do not merge.
-
-- [ ] **Step 5: Report the exact handoff**
-
-    Provide the PR link, selected capacity, focused/full test commands and
-    outcomes, paired median wall times, memory peaks, and complete-workload
-    result. Clearly distinguish verified results from any remaining operational
-    limitation.
+1. Format the design and plan with the repository's Markdown formatter.
+1. Inspect the full branch range, commit metadata, paths, patches, and every
+   introduced blob. Scan the final commit message, pull request title, and
+   pull request body with the private-data denylist and structural heuristics.
+1. Commit only the synchronized design, implementation, and behavior tests. Do
+   not amend, squash, or rebase existing commits.
+1. Push `fix-full-sync-memory` and open one pull request against `main`.
+   Describe the final architecture and aggregate evidence only. Do not add a
+   test-plan section, post a pull request comment, or merge.
+1. Remove temporary diagnostics, scratch archives created for this
+   investigation, and the temporary sudo grant. Leave the benchmark worker
+   quarantined.
+1. Report the pull request link, selected capacities, test outcomes, aggregate
+   memory and wall-clock result, and the separate file-cache limitation.

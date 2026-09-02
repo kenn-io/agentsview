@@ -12,15 +12,17 @@ import (
 )
 
 const (
-	defaultParseRetentionBytes      = int64(64 << 20)
-	defaultBulkParseRetentionBytes  = int64(64 << 20)
-	parseRetentionFixedBytes        = int64(64 << 10)
-	parseRetentionMultiplier        = int64(4)
-	parseRetentionScavengeThreshold = int64(16 << 20)
+	defaultParseRetentionBytes       = int64(64 << 20)
+	defaultBulkParseRetentionBytes   = int64(128 << 20)
+	defaultBulkPendingRetentionBytes = int64(512 << 20)
+	parseRetentionFixedBytes         = int64(64 << 10)
+	parseRetentionMultiplier         = int64(4)
+	parseRetentionScavengeThreshold  = int64(16 << 20)
 )
 
 type parseRetentionBudget struct {
 	capacity             int64
+	pendingCapacity      int64
 	weighted             *semaphore.Weighted
 	pressure             chan struct{}
 	waiters              atomic.Int64
@@ -43,11 +45,14 @@ func newParseRetentionBudget(capacity int64) *parseRetentionBudget {
 }
 
 // newBulkParseRetentionBudget returns the byte-weighted budget archive-scale
-// passes use (full sync, resync rebuild, remote import processing). It keeps
-// the bulk pass's end-of-pass scavenge even when every admitted source is
-// smaller than the default budget's large-source threshold.
+// passes use (full sync, resync rebuild, remote import processing). Active and
+// queued parses use the weighted semaphore while completed results transfer to
+// a separately bounded collector batch. It keeps the bulk pass's end-of-pass
+// scavenge even when every admitted source is smaller than the default
+// budget's large-source threshold.
 func newBulkParseRetentionBudget(capacity int64) *parseRetentionBudget {
 	budget := newParseRetentionBudget(capacity)
+	budget.pendingCapacity = defaultBulkPendingRetentionBytes
 	budget.scavengeEveryAcquire = true
 	return budget
 }
@@ -56,10 +61,13 @@ func (budget *parseRetentionBudget) acquire(
 	ctx context.Context, sourceBytes int64,
 ) (*parseRetentionLease, error) {
 	weight := budget.weight(sourceBytes)
+	retainedBytes := budget.retainedBytes(sourceBytes)
 	if budget.weighted.TryAcquire(weight) {
 		budget.noteKnownLargeSource(sourceBytes)
 		budget.acquired.Add(1)
-		return &parseRetentionLease{budget: budget, weight: weight}, nil
+		return &parseRetentionLease{
+			budget: budget, weight: weight, retainedBytes: retainedBytes,
+		}, nil
 	}
 	budget.waiters.Add(1)
 	defer budget.waiters.Add(-1)
@@ -72,7 +80,9 @@ func (budget *parseRetentionBudget) acquire(
 	}
 	budget.noteKnownLargeSource(sourceBytes)
 	budget.acquired.Add(1)
-	return &parseRetentionLease{budget: budget, weight: weight}, nil
+	return &parseRetentionLease{
+		budget: budget, weight: weight, retainedBytes: retainedBytes,
+	}, nil
 }
 
 func (budget *parseRetentionBudget) noteKnownLargeSource(sourceBytes int64) {
@@ -100,11 +110,16 @@ func (budget *parseRetentionBudget) underPressure() bool {
 }
 
 func (budget *parseRetentionBudget) weight(sourceBytes int64) int64 {
+	return min(budget.retainedBytes(sourceBytes), budget.capacity)
+}
+
+func (budget *parseRetentionBudget) retainedBytes(sourceBytes int64) int64 {
+	limit := max(budget.capacity, budget.pendingCapacity)
 	if sourceBytes <= 0 {
-		return budget.capacity
+		return limit
 	}
-	if sourceBytes >= (budget.capacity-parseRetentionFixedBytes)/parseRetentionMultiplier {
-		return budget.capacity
+	if sourceBytes >= (limit-parseRetentionFixedBytes)/parseRetentionMultiplier {
+		return limit
 	}
 	return parseRetentionFixedBytes + sourceBytes*parseRetentionMultiplier
 }
@@ -112,7 +127,12 @@ func (budget *parseRetentionBudget) weight(sourceBytes int64) int64 {
 type parseRetentionLease struct {
 	budget *parseRetentionBudget
 	weight int64
-	once   gosync.Once
+	// retainedBytes estimates the parsed payload transferred to an archive-scale
+	// collector. It may exceed weight because an oversized source acquires the
+	// active parse budget exclusively but must still count at full cost against
+	// the collector's separate pending-data bound.
+	retainedBytes int64
+	once          gosync.Once
 }
 
 func (lease *parseRetentionLease) Release() {
