@@ -10,8 +10,9 @@ wall-clock time within 10% of v0.42.0 on both bulk benchmark fixtures.
 **Architecture:** Replace the unthrottled archive-pass admission object with a
 dedicated byte-weighted budget. Keep each lease from immediately before parse
 through the corresponding database write, and use the existing pressure signal
-to flush partial batches. Select the internal capacity from measured 64 MiB, 128
-MiB, and 256 MiB candidates; do not expose configuration or compatibility paths.
+to flush partial batches. Clear completed pointer-bearing collector slices
+before reuse. Select the internal capacity from measured 64 MiB, 128 MiB, and
+256 MiB candidates; do not expose configuration or compatibility paths.
 
 **Tech Stack:** Go 1.27, `golang.org/x/sync/semaphore`, SQLite/FTS5, Go
 benchmarks, Linux user-systemd cgroup measurements, GitHub CLI.
@@ -142,7 +143,14 @@ ______________________________________________________________________
     Expected: all selected retention, batching, scavenge, and cancellation tests
     pass.
 
-- [ ] **Step 6: Commit the correctness change**
+- [ ] **Step 6: Release completed collector batches**
+
+    Add a failing behavior test that keeps the collector alive after a bulk flush
+    and verifies the completed parsed payload can be collected. Clear the
+    pending writes, leases, and cache-write entries before each backing array is
+    resliced, including the cancelled-write path.
+
+- [ ] **Step 7: Commit the correctness change**
 
     Stage only the three sync files and commit with a message explaining that full
     sync previously retained worker results plus a 100-session batch, and that
@@ -224,10 +232,10 @@ ______________________________________________________________________
 - [ ] **Step 3: Alternate baseline and candidate runs on the 16 GB machine**
 
     For each capacity and for both 120x5,000 and 120x10,000 fixtures, run at least
-    five measured baseline runs and five measured candidate runs in alternating
-    order. Put each run in an isolated user-owned cgroup. Capture elapsed time,
-    `memory.peak`, sampled anonymous memory, and sampled file cache. Keep raw
-    outputs and scratch databases on the machine.
+    three measured baseline runs and three measured candidate runs in
+    alternating order. Put each run in an isolated user-owned cgroup. Capture
+    elapsed time, `memory.peak`, sampled anonymous memory, and sampled file
+    cache. Keep raw outputs and scratch databases on the machine.
 
 - [ ] **Step 4: Apply the selection rule**
 
