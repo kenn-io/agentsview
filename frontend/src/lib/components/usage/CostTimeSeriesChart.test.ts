@@ -242,6 +242,21 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  it("keeps the no-data state when the usage response has no daily entries", async () => {
+    usage.summary = usageSummary();
+    usage.summary.daily = [];
+
+    const component = mountChart();
+    await tick();
+
+    expect(document.querySelector(".empty")?.textContent).toContain(
+      "No data for this period",
+    );
+    expect(document.querySelector(".chart-svg")).toBeNull();
+
+    unmount(component);
+  });
+
   it("brushes a date range and exposes a clear-selection action", async () => {
     const component = mountChart();
     await tick();
