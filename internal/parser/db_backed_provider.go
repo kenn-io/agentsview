@@ -587,9 +587,12 @@ func (s dbBackedSourceSet) dbPathForEvent(root, path string) (string, bool) {
 	if strings.Contains(rel, string(filepath.Separator)) {
 		return "", false
 	}
-	if rel == s.spec.dbName ||
-		rel == s.spec.dbName+"-wal" ||
-		rel == s.spec.dbName+"-shm" {
+	// A bare "-shm" event never resolves to the container. Every write to a
+	// WAL-mode database lands in the main file or its -wal sibling; the -shm
+	// index is also rewritten by readers, including this process's own scan,
+	// so honoring it would make each scan schedule the next one. Omnigent and
+	// Cursor IDE apply the same rule through classifySQLiteContainerPath.
+	if rel == s.spec.dbName || rel == s.spec.dbName+"-wal" {
 		dbPath := filepath.Join(root, s.spec.dbName)
 		return dbPath, true
 	}

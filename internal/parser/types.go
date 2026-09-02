@@ -1167,6 +1167,10 @@ type FileInfo struct {
 	Inode  int64
 	Device int64
 	Hash   string
+	// ChangeTime is the change time captured from the same descriptor the
+	// parser read its snapshot from. Zero means the platform could not
+	// provide one; checkpoint consumers then rebuild conservatively.
+	ChangeTime int64
 }
 
 // ParsedSession holds session metadata extracted from a JSONL file.
@@ -1258,6 +1262,38 @@ type ParsedToolCall struct {
 	SkillName         string // skill name when ToolName is "Skill"
 	SubagentSessionID string // linked subagent session file (e.g. "agent-{task_id}")
 	ResultEvents      []ParsedToolResultEvent
+}
+
+// ParsedToolCallPosition identifies one emitted tool-call occurrence by its
+// stable normalized message ordinal and call index.
+type ParsedToolCallPosition struct {
+	MessageOrdinal int
+	CallIndex      int
+}
+
+// ParsedToolCallUpdate carries result events for a tool call that was parsed
+// before the current append-only chunk. TargetKnown is required for safe
+// incremental application when a provider reuses call IDs.
+type ParsedToolCallUpdate struct {
+	ToolUseID      string
+	MessageOrdinal int
+	CallIndex      int
+	TargetKnown    bool
+	ResultEvents   []ParsedToolResultEvent
+}
+
+// ParsedMessageTokenUsageUpdate carries token metadata for an assistant
+// message that was committed before the current append-only chunk. Codex
+// emits a token_count record immediately after a late tool result, so the
+// target assistant message may not be present in the incremental message
+// slice even though its ordinal is known from the stored transcript.
+type ParsedMessageTokenUsageUpdate struct {
+	Ordinal          int
+	TokenUsage       jsontext.Value
+	ContextTokens    int
+	OutputTokens     int
+	HasContextTokens bool
+	HasOutputTokens  bool
 }
 
 // ParsedToolResult holds metadata about a tool result block in a
@@ -1563,6 +1599,19 @@ type ParseResult struct {
 	Session     ParsedSession
 	Messages    []ParsedMessage
 	UsageEvents []ParsedUsageEvent
+	// Checkpoint is opaque provider continuation state (a parser
+	// checkpoint) that the sync engine persists after this result's
+	// session rows commit, so later appends can resume without rescanning
+	// the transcript prefix. Empty for providers without checkpoints.
+	Checkpoint []byte
+	// CheckpointHashState is the resumable SHA-256 state covering the
+	// parsed snapshot [0, Session.File.Size), captured on the same read
+	// pass as the parse. CheckpointAnchorDigest is the digest of the
+	// snapshot's trailing anchor window. Both are empty for providers
+	// without single-pass hashing; the engine persists them with the
+	// checkpoint so it never re-reads the source after a full parse.
+	CheckpointHashState    []byte
+	CheckpointAnchorDigest string
 }
 
 // InferRelationshipTypes sets RelationshipType on results that have

@@ -30,6 +30,8 @@ type SessionBatchWrite struct {
 	ReplaceMessages   bool
 	// RejectMessageCountDecrease prevents full replacement with fewer messages.
 	RejectMessageCountDecrease bool
+	Checkpoint                 *ParserCheckpoint
+	CheckpointBlobs            *ParserCheckpointBlobs
 }
 
 // SessionWouldShortenError reports a rejected message-count decrease.
@@ -613,6 +615,21 @@ func writeOneSessionBatchTx(
 		if err := replaceSecretFindingsTx(queries, write.Session.ID, write.Findings,
 			write.Signals.SecretLeakCount, write.Signals.SecretsRulesVersion); err != nil {
 			return 0, err
+		}
+	}
+	if write.ReplaceMessages {
+		if write.Checkpoint == nil || write.CheckpointBlobs == nil {
+			if err := deleteParserCheckpointTx(tx, write.Session.ID); err != nil {
+				return 0, err
+			}
+		} else {
+			checkpoint := *write.Checkpoint
+			blobs := *write.CheckpointBlobs
+			checkpoint.SessionID = write.Session.ID
+			blobs.SessionID = write.Session.ID
+			if err := upsertParserCheckpointTx(tx, checkpoint, blobs); err != nil {
+				return 0, err
+			}
 		}
 	}
 	if err := enqueueArtifactExportIfGenerationUnchangedTx(

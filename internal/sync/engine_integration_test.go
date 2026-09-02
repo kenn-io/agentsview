@@ -4795,7 +4795,9 @@ func TestSyncEngineProgress(t *testing.T) {
 		"Finalizing sync: saving session source state",
 		"Finalizing sync: linking file-backed subagent sessions",
 		"Finalizing sync: repairing subagent relationships",
-		"Finalizing sync: releasing parsed-session memory",
+		// The memory release phase is reported only when a source at or
+		// above parseRetentionScavengeThreshold was parsed; these fixtures
+		// are far smaller.
 		"Finalizing sync: checking database-backed sessions",
 		"Finalizing sync: linking all subagent sessions",
 		"Finalizing sync: saving the skip cache",
@@ -13740,7 +13742,7 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount)
 }
 
-func TestSyncPathsCodexSameStatInPlaceRewriteUsesContentHash(t *testing.T) {
+func TestSyncPathsCodexSameStatInPlaceRewriteRejectedByCheckpoint(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229f5"
@@ -13784,19 +13786,24 @@ func TestSyncPathsCodexSameStatInPlaceRewriteUsesContentHash(t *testing.T) {
 
 	env.engine.SyncPaths([]string{path})
 
+	// The stored change-time no longer matches after the rewrite, so the
+	// checkpoint no-op path must decline and the engine must re-parse the
+	// rewritten bytes.
 	msgs := fetchMessages(t, env.db, "codex:"+uuid)
 	require.Len(t, msgs, 1)
-	assert.Equal(t, "bravo request", msgs[0].Content)
+	assert.Equal(t, "bravo request", msgs[0].Content,
+		"a same-stat rewrite must be re-parsed, not trusted")
 	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.FileHash)
-	assert.False(t, after.LastWriteIncremental,
-		"same-size rewrite must use a full replacement")
-	assert.NotEqual(t, beforeHash, *after.FileHash)
-	wantHash, err := sync.ComputeFileHash(path)
+	assert.NotEqual(t, beforeHash, *after.FileHash,
+		"the re-parse must refresh the stored hash")
+	cp, ok, err := env.db.GetParserCheckpoint("codex:" + uuid)
 	require.NoError(t, err)
-	assert.Equal(t, wantHash, *after.FileHash)
+	require.True(t, ok)
+	assert.Equal(t, int64(len(original)), cp.Offset,
+		"the rewritten bytes keep the same length, so the offset stays")
 }
 
 func TestSyncAllCodexPathRewriterSameStatRewriteUsesContentHash(t *testing.T) {
@@ -14536,6 +14543,9 @@ func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 		"rollout-20240101-inc-cx-exec.jsonl", initial,
 	)
 	env.engine.SyncAll(context.Background(), nil)
+	before := fetchMessages(t, env.db, "codex:inc-cx-exec")
+	require.Len(t, before, 2)
+	toolMessageID := before[1].ID
 
 	appended := testjsonl.JoinJSONL(
 		testjsonl.CodexFunctionCallOutputJSON(
@@ -14554,9 +14564,31 @@ func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 
 	msgs := fetchMessages(t, env.db, "codex:inc-cx-exec")
 	require.Len(t, msgs, 2)
+	assert.Equal(t, toolMessageID, msgs[1].ID,
+		"result-only append must preserve the existing tool message")
 	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "exec_command", msgs[1].ToolCalls[0].ToolName, "tool name")
-	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent, "result_content")
+	call := msgs[1].ToolCalls[0]
+	assert.Equal(t, "exec_command", call.ToolName, "tool name")
+	assert.Equal(t, "done", call.ResultContent, "result_content")
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "function_call_output", call.ResultEvents[0].Source)
+	assert.Equal(t, "done", call.ResultEvents[0].Content)
+	afterIncremental, err := env.db.GetSessionFull(
+		context.Background(), "codex:inc-cx-exec",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, afterIncremental)
+	assert.True(t, afterIncremental.LastWriteIncremental)
+
+	env.engine.ResyncAll(context.Background(), nil)
+	fullMsgs := fetchMessages(t, env.db, "codex:inc-cx-exec")
+	require.Len(t, fullMsgs, 2)
+	require.Len(t, fullMsgs[1].ToolCalls, 1)
+	fullCall := fullMsgs[1].ToolCalls[0]
+	assert.Equal(t, call.ResultContent, fullCall.ResultContent)
+	assert.Equal(t, call.ResultContentLength, fullCall.ResultContentLength)
+	assert.Equal(t, call.ResultEvents, fullCall.ResultEvents,
+		"incremental and authoritative full parses must store the same events")
 }
 
 func TestIncrementalSync_CodexLateTokenCountRewritesStoredMessage(t *testing.T) {

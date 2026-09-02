@@ -3978,9 +3978,8 @@ func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
 		}},
 		BlockedResultCategories: map[string]bool{"Task": true},
 	}
-	require.NoError(t, d.WriteSessionIncremental(
-		"s1", nil, update,
-	), "incremental write")
+	_, werr := d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr, "incremental write")
 
 	var subagent, content string
 	var contentLen int
@@ -4000,8 +3999,8 @@ func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
 	require.NotNil(t, after.TranscriptRevision)
 	assert.Equal(t, "2", *after.TranscriptRevision)
 
-	require.NoError(t, d.WriteSessionIncremental("s1", nil, update),
-		"idempotent incremental write")
+	_, werr = d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr, "idempotent incremental write")
 	idempotent, err := d.GetSession(context.Background(), "s1")
 	require.NoError(t, err)
 	require.NotNil(t, idempotent)
@@ -4050,7 +4049,8 @@ func TestWriteSessionIncrementalResultOnlyLink(t *testing.T) {
 			HasResult:        true,
 		}},
 	}
-	require.NoError(t, d.WriteSessionIncremental("s1", nil, update))
+	_, werr := d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr)
 
 	var subagent, content string
 	var contentLen int
@@ -4073,6 +4073,613 @@ func TestWriteSessionIncrementalResultOnlyLink(t *testing.T) {
 	).Scan(&subagent))
 	assert.Equal(t, "agent-existing", subagent,
 		"result-only link must not disturb other calls")
+}
+
+func TestWriteSessionIncrementalToolCallResultUpdate(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command",
+			Category:  "Bash",
+			ToolUseID: "call_cmd",
+		}},
+	})
+
+	update := IncrementalSessionUpdate{
+		MsgCount:    1,
+		NextOrdinal: 1,
+		ToolCallResultUpdates: []ToolCallResultUpdate{{
+			ToolUseID: "call_cmd",
+			Position:  ToolCallPosition{MessageOrdinal: 0, CallIndex: 0},
+			Events: []ToolResultEvent{{
+				ToolUseID:     "call_cmd",
+				Source:        "function_call_output",
+				Content:       "command finished",
+				ContentLength: len("command finished"),
+				Timestamp:     "2026-08-02T09:00:00Z",
+			}},
+		}},
+	}
+	_, werr := d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr)
+
+	var result string
+	var resultLen int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COALESCE(result_content, ''), result_content_length
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&result, &resultLen))
+	assert.Equal(t, "command finished", result)
+	assert.Equal(t, len("command finished"), resultLen)
+
+	var source, content, timestamp string
+	var eventIndex, eventCount int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT source, content, COALESCE(timestamp, ''), event_index
+		FROM tool_result_events
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&source, &content, &timestamp, &eventIndex))
+	assert.Equal(t, "function_call_output", source)
+	assert.Equal(t, "command finished", content)
+	assert.Equal(t, "2026-08-02T09:00:00Z", timestamp)
+	assert.Zero(t, eventIndex)
+
+	_, werr = d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr,
+		"replaying an identical output must be idempotent")
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COUNT(*) FROM tool_result_events
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&eventCount))
+	assert.Equal(t, 1, eventCount)
+
+	sess, err := d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.TranscriptRevision)
+	assert.Equal(t, "2", *sess.TranscriptRevision,
+		"idempotent replay must not bump the transcript revision")
+}
+
+func TestWriteSessionIncrementalTargetsDuplicateCallIDOccurrence(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	for ordinal := range 2 {
+		insertMessages(t, d, Message{
+			SessionID:  "s1",
+			Ordinal:    ordinal,
+			Role:       "assistant",
+			HasToolUse: true,
+			ToolCalls: []ToolCall{{
+				SessionID: "s1",
+				ToolName:  "exec_command",
+				Category:  "Bash",
+				ToolUseID: "reused-call",
+			}},
+		})
+	}
+
+	write := func(position ToolCallPosition, content string) {
+		t.Helper()
+		_, err := d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+			MsgCount:    2,
+			NextOrdinal: 2,
+			ToolCallResultUpdates: []ToolCallResultUpdate{{
+				ToolUseID: "reused-call",
+				Position:  position,
+				Events: []ToolResultEvent{{
+					ToolUseID:     "reused-call",
+					Source:        "function_call_output",
+					Content:       content,
+					ContentLength: len(content),
+				}},
+			}},
+		})
+		require.NoError(t, err)
+	}
+
+	write(ToolCallPosition{MessageOrdinal: 1, CallIndex: 0}, "second")
+
+	rows, err := d.Reader().Query(`
+		SELECT m.ordinal, COALESCE(tc.result_content, '')
+		FROM tool_calls tc JOIN messages m ON m.id = tc.message_id
+		WHERE tc.session_id = ? AND tc.tool_use_id = ?
+		ORDER BY m.ordinal, tc.call_index`, "s1", "reused-call")
+	require.NoError(t, err)
+	defer rows.Close()
+	got := make(map[int]string)
+	for rows.Next() {
+		var ordinal int
+		var content string
+		require.NoError(t, rows.Scan(&ordinal, &content))
+		got[ordinal] = content
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[int]string{0: "", 1: "second"}, got)
+
+	var eventCount int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COUNT(*) FROM tool_result_events
+		WHERE session_id = ? AND tool_call_message_ordinal = ?
+		  AND call_index = ?`, "s1", 1, 0).Scan(&eventCount))
+	assert.Equal(t, 1, eventCount)
+
+	write(ToolCallPosition{MessageOrdinal: 0, CallIndex: 0}, "first")
+	var stateOccurrences int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COUNT(DISTINCT printf('%d/%d', message_ordinal, call_index))
+		FROM tool_call_occurrence_agent_state
+		WHERE session_id = ?`, "s1").Scan(&stateOccurrences))
+	assert.Equal(t, 2, stateOccurrences,
+		"reused provider IDs must keep independent per-occurrence state")
+}
+
+func TestWriteSessionIncrementalLateResultAndCommittedUsageAreAtomic(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command",
+			Category:  "Bash",
+			ToolUseID: "call_cmd",
+		}},
+	})
+
+	update := IncrementalSessionUpdate{
+		MsgCount:    1,
+		NextOrdinal: 1,
+		ToolCallResultUpdates: []ToolCallResultUpdate{{
+			ToolUseID: "call_cmd",
+			Position:  ToolCallPosition{MessageOrdinal: 0, CallIndex: 0},
+			Events: []ToolResultEvent{{
+				ToolUseID:     "call_cmd",
+				Source:        "function_call_output",
+				Content:       "command finished",
+				ContentLength: len("command finished"),
+			}},
+		}},
+		MessageTokenUsageUpdates: []MessageTokenUsageUpdate{{
+			Ordinal:          0,
+			TokenUsage:       jsontext.Value(`{"input_tokens":100000,"output_tokens":250}`),
+			ContextTokens:    100000,
+			OutputTokens:     250,
+			HasContextTokens: true,
+			HasOutputTokens:  true,
+		}},
+	}
+	_, werr := d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr)
+
+	var tokenUsage, result string
+	var contextTokens, outputTokens int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT token_usage, context_tokens, output_tokens
+		FROM messages WHERE session_id = ? AND ordinal = ?`,
+		"s1", 0,
+	).Scan(&tokenUsage, &contextTokens, &outputTokens))
+	assert.JSONEq(t, `{"input_tokens":100000,"output_tokens":250}`, tokenUsage)
+	assert.Equal(t, 100000, contextTokens)
+	assert.Equal(t, 250, outputTokens)
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COALESCE(result_content, '') FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&result))
+	assert.Equal(t, "command finished", result)
+
+	sess, err := d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.TranscriptRevision)
+	assert.Equal(t, "2", *sess.TranscriptRevision)
+
+	_, werr = d.WriteSessionIncremental("s1", nil, update)
+	require.NoError(t, werr, "identical late-result usage replay must be idempotent")
+	sess, err = d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.TranscriptRevision)
+	assert.Equal(t, "2", *sess.TranscriptRevision)
+}
+
+func TestWriteSessionIncrementalResultEventIndexesAreMonotonic(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command",
+			Category:  "Bash",
+			ToolUseID: "call_cmd",
+		}},
+	})
+
+	for _, content := range []string{"first output", "second output"} {
+		_, werr := d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+			MsgCount:    1,
+			NextOrdinal: 1,
+			ToolCallResultUpdates: []ToolCallResultUpdate{{
+				ToolUseID: "call_cmd",
+				Position:  ToolCallPosition{MessageOrdinal: 0, CallIndex: 0},
+				Events: []ToolResultEvent{{
+					ToolUseID:     "call_cmd",
+					Source:        "function_call_output",
+					Content:       content,
+					ContentLength: len(content),
+				}},
+			}},
+		})
+		require.NoError(t, werr)
+	}
+
+	var secondRows int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COUNT(*) FROM tool_result_events
+		WHERE session_id = ? AND tool_use_id = ? AND event_index = 1`,
+		"s1", "call_cmd",
+	).Scan(&secondRows))
+	assert.Equal(t, 1, secondRows,
+		"each late result event must get the next per-call event index")
+
+	var latestIndex int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT latest_event_index FROM tool_call_occurrence_agent_state
+		WHERE session_id = ? AND message_ordinal = ? AND call_index = ?
+		  AND agent_id = ''`,
+		"s1", 0, 0,
+	).Scan(&latestIndex))
+	assert.Equal(t, 1, latestIndex,
+		"the agent state must point at the newest event")
+
+	var result string
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COALESCE(result_content, '') FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&result))
+	assert.Equal(t, "second output", result)
+}
+
+func TestWriteSessionIncrementalBlockedResultKeepsLength(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command",
+			Category:  "Bash",
+			ToolUseID: "call_cmd",
+		}},
+	})
+
+	_, werr := d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+		MsgCount:                1,
+		NextOrdinal:             1,
+		BlockedResultCategories: map[string]bool{"Bash": true},
+		ToolCallResultUpdates: []ToolCallResultUpdate{{
+			ToolUseID: "call_cmd",
+			Position:  ToolCallPosition{MessageOrdinal: 0, CallIndex: 0},
+			Events: []ToolResultEvent{
+				{
+					AgentID:       "a",
+					ToolUseID:     "call_cmd",
+					Source:        "function_call_output",
+					Content:       "x",
+					ContentLength: 1,
+				},
+				{
+					AgentID:       "b",
+					ToolUseID:     "call_cmd",
+					Source:        "function_call_output",
+					Content:       "yy",
+					ContentLength: 2,
+				},
+			},
+		}},
+	})
+	require.NoError(t, werr)
+
+	var storedContent string
+	var storedLen int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COALESCE(result_content, ''), result_content_length
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&storedContent, &storedLen))
+	assert.Empty(t, storedContent, "blocked result content stays blank")
+	assert.Equal(t, 11, storedLen,
+		"blocked result length keeps agent labels and separators: "+
+			"\"a:\\nx\\n\\nb:\\nyy\"")
+}
+
+// TestWriteSessionIncrementalBlockedResultKeepsRawLengthWithControlChars
+// pins the length invariant blocked categories keep on the full-parse and
+// staged paths: sanitizing (which strips control/NUL bytes) must never run
+// against content this path is about to blank, or the stored length would
+// come up short by however many bytes sanitize removed instead of
+// reflecting the original raw output size.
+func TestWriteSessionIncrementalBlockedResultKeepsRawLengthWithControlChars(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command",
+			Category:  "Bash",
+			ToolUseID: "call_cmd",
+		}},
+	})
+
+	const raw = "before\x00after\x1b[31mred\u0085done"
+	_, werr := d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+		MsgCount:                1,
+		NextOrdinal:             1,
+		BlockedResultCategories: map[string]bool{"Bash": true},
+		ToolCallResultUpdates: []ToolCallResultUpdate{{
+			ToolUseID: "call_cmd",
+			Position:  ToolCallPosition{MessageOrdinal: 0, CallIndex: 0},
+			Events: []ToolResultEvent{{
+				ToolUseID:     "call_cmd",
+				Source:        "function_call_output",
+				Content:       raw,
+				ContentLength: len(raw),
+			}},
+		}},
+	})
+	require.NoError(t, werr)
+
+	var storedContent string
+	var storedLen int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COALESCE(result_content, ''), result_content_length
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&storedContent, &storedLen))
+	assert.Empty(t, storedContent, "blocked result content stays blank")
+	assert.Equal(t, len(raw), storedLen,
+		"blocked result length must be the original raw byte count, "+
+			"not the sanitized (control-stripped) count")
+
+	var eventLen int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT content_length FROM tool_result_events
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "call_cmd",
+	).Scan(&eventLen))
+	assert.Equal(t, len(raw), eventLen,
+		"the stored event's content_length must also be the raw byte count")
+}
+
+// TestWriteSessionIncrementalBlockedResultsDedupByLengthAcrossBatches pins
+// the blocked-category equivalence rule for late results arriving in
+// separate incremental writes. Every stored blocked row has an empty
+// content column, so equivalence must be decided by original length: two
+// outputs of different length for the same agent and status are distinct
+// events (the full parse keeps both), while a replay of the same length is
+// the same event and must not be stored twice.
+func TestWriteSessionIncrementalBlockedResultsDedupByLengthAcrossBatches(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command",
+			Category:  "Bash",
+			ToolUseID: "call_cmd",
+		}},
+	})
+	write := func(content string) {
+		t.Helper()
+		_, err := d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+			MsgCount:                1,
+			NextOrdinal:             1,
+			BlockedResultCategories: map[string]bool{"Bash": true},
+			ToolCallResultUpdates: []ToolCallResultUpdate{{
+				ToolUseID: "call_cmd",
+				Position:  ToolCallPosition{MessageOrdinal: 0, CallIndex: 0},
+				Events: []ToolResultEvent{{
+					ToolUseID:     "call_cmd",
+					Source:        "function_call_output",
+					Content:       content,
+					ContentLength: len(content),
+				}},
+			}},
+		})
+		require.NoError(t, err)
+	}
+	countEvents := func() int {
+		t.Helper()
+		var n int
+		require.NoError(t, d.Reader().QueryRow(`
+			SELECT COUNT(*) FROM tool_result_events
+			WHERE session_id = ? AND tool_use_id = ?`,
+			"s1", "call_cmd",
+		).Scan(&n))
+		return n
+	}
+
+	write("x")
+	write("yy")
+	assert.Equal(t, 2, countEvents(),
+		"blocked events of different length are distinct and must both be stored")
+
+	write("zz")
+	assert.Equal(t, 2, countEvents(),
+		"a blocked replay of an already-stored length is the same event")
+
+	var lengths []int
+	rows, err := d.Reader().Query(`
+		SELECT content_length FROM tool_result_events
+		WHERE session_id = ? AND tool_use_id = ? ORDER BY event_index`,
+		"s1", "call_cmd")
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var n int
+		require.NoError(t, rows.Scan(&n))
+		lengths = append(lengths, n)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []int{1, 2}, lengths)
+}
+
+func TestBackfillToolCallAgentStateTracksFirstAndLatest(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command",
+			Category:  "Bash",
+			ToolUseID: "call_cmd",
+		}},
+	})
+
+	tx, err := d.getWriter().BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	for i, content := range []string{"old", "mid", "new"} {
+		_, err := tx.Exec(`
+			INSERT INTO tool_result_events
+				(session_id, tool_call_message_ordinal, call_index, tool_use_id,
+				 agent_id, source, status, content, content_length, event_index)
+			 VALUES (?, 0, 0, ?, 'agent-a', 'function_call_output',
+			         'completed', ?, ?, ?)`,
+			"s1", "call_cmd", content, len(content), i,
+		)
+		require.NoError(t, err)
+	}
+	require.NoError(t, backfillToolCallAgentStateTx(
+		tx, "s1", ToolCallPosition{MessageOrdinal: 0, CallIndex: 0},
+	))
+	require.NoError(t, tx.Commit())
+
+	var first, latest int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT first_event_index, latest_event_index
+		FROM tool_call_occurrence_agent_state
+		WHERE session_id = ? AND message_ordinal = ? AND call_index = ?
+		  AND agent_id = 'agent-a'`,
+		"s1", 0, 0,
+	).Scan(&first, &latest))
+	assert.Equal(t, 0, first)
+	assert.Equal(t, 2, latest,
+		"backfill keeps the newest event index per agent")
+}
+
+func TestReplaceSessionContentDiffClearsStaleAgentState(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+
+	msgs := func(content string, events []ToolResultEvent) []Message {
+		return []Message{{
+			SessionID:  "s1",
+			Ordinal:    0,
+			Role:       "assistant",
+			Content:    content,
+			HasToolUse: true,
+			ToolCalls: []ToolCall{{
+				SessionID:    "s1",
+				ToolName:     "exec_command",
+				Category:     "Bash",
+				ToolUseID:    "call_1",
+				ResultEvents: events,
+			}},
+		}}
+	}
+	first := msgs("running", []ToolResultEvent{
+		{
+			ToolUseID:     "call_1",
+			AgentID:       "a",
+			Source:        "function_call_output",
+			Content:       "a1",
+			ContentLength: 2,
+		},
+		{
+			ToolUseID:     "call_1",
+			AgentID:       "b",
+			Source:        "function_call_output",
+			Content:       "b1",
+			ContentLength: 2,
+		},
+	})
+	require.NoError(t, d.ReplaceSessionContent(
+		"s1", first, SessionSignalUpdate{}, nil,
+	))
+
+	var before int
+	require.NoError(t, d.Reader().QueryRow(
+		`SELECT COUNT(*) FROM tool_call_occurrence_agent_state
+		 WHERE session_id = ? AND message_ordinal = ? AND call_index = ?`,
+		"s1", 0, 0,
+	).Scan(&before))
+	require.Equal(t, 2, before)
+
+	second := msgs("done", []ToolResultEvent{{
+		ToolUseID:     "call_1",
+		AgentID:       "a",
+		Source:        "function_call_output",
+		Content:       "a2",
+		ContentLength: 2,
+	}})
+	require.NoError(t, d.ReplaceSessionContent(
+		"s1", second, SessionSignalUpdate{}, nil,
+	))
+
+	rows, err := d.Reader().Query(
+		`SELECT agent_id FROM tool_call_occurrence_agent_state
+		 WHERE session_id = ? AND message_ordinal = ? AND call_index = ?`,
+		"s1", 0, 0,
+	)
+	require.NoError(t, err)
+	agents := make(map[string]bool)
+	for rows.Next() {
+		var agent string
+		require.NoError(t, rows.Scan(&agent))
+		agents[agent] = true
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	require.Len(t, agents, 1,
+		"a removed agent must not survive the diff rewrite")
+	require.True(t, agents["a"], "the surviving agent must be rebuilt")
 }
 
 // claude_linear_parse round-trips through upsert and the incremental
@@ -7871,7 +8478,7 @@ func TestLastWriteIncrementalMarker(t *testing.T) {
 	assert.False(t, got.LastWriteIncremental,
 		"full write path must leave last_write_incremental false")
 
-	requireNoError(t, d.WriteSessionIncremental(
+	_, werr := d.WriteSessionIncremental(
 		"inc-marker",
 		[]Message{asstMsg("inc-marker", 1, "appended reply")},
 		IncrementalSessionUpdate{
@@ -7881,7 +8488,8 @@ func TestLastWriteIncrementalMarker(t *testing.T) {
 			FileMtime:    200,
 			NextOrdinal:  2,
 		},
-	), "incremental write")
+	)
+	requireNoError(t, werr, "incremental write")
 
 	got, err = d.GetSessionFull(context.Background(), "inc-marker")
 	requireNoError(t, err, "get after incremental write")
@@ -7937,11 +8545,12 @@ func TestBatchWriteIncrementalMarkerReplaceMode(t *testing.T) {
 		UserMessageCount: 1,
 	}
 	requireNoError(t, d.UpsertSession(base), "initial upsert")
-	requireNoError(t, d.WriteSessionIncremental(
+	_, werr := d.WriteSessionIncremental(
 		"batch-marker",
 		[]Message{asstMsg("batch-marker", 1, "appended reply")},
 		IncrementalSessionUpdate{MsgCount: 2, UserMsgCount: 1, NextOrdinal: 2},
-	), "incremental write")
+	)
+	requireNoError(t, werr, "incremental write")
 
 	got, err := d.GetSessionFull(context.Background(), "batch-marker")
 	requireNoError(t, err, "get after incremental write")
@@ -8008,8 +8617,8 @@ func TestIncrementalWriteAtomicityRollsBackMessages(t *testing.T) {
 			reflect.ValueOf(msgsToWrite),
 			update,
 		})
-		if !results[0].IsNil() {
-			err = results[0].Interface().(error)
+		if !results[1].IsNil() {
+			err = results[1].Interface().(error)
 		} else {
 			err = nil
 		}

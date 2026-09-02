@@ -393,6 +393,20 @@ func deleteToolRowsForMessagesTx(
 		for _, id := range ids[start:end] {
 			idArgs = append(idArgs, id)
 		}
+		// Agent-state rows use stable message/call coordinates. Clear every
+		// occurrence owned by the messages being rebuilt so removed agents and
+		// reused provider IDs cannot leave stale summary state.
+		if _, err := tx.Exec(
+			"DELETE FROM tool_call_occurrence_agent_state WHERE session_id = ?"+
+				" AND message_ordinal IN ("+
+				"SELECT ordinal FROM messages WHERE id IN ("+
+				placeholderList(len(idArgs))+"))",
+			append([]any{sessionID}, idArgs...)...,
+		); err != nil {
+			return fmt.Errorf(
+				"deleting stale tool-call occurrence state: %w", err,
+			)
+		}
 		if _, err := tx.Exec(
 			"DELETE FROM tool_calls WHERE message_id IN ("+
 				placeholderList(len(idArgs))+")",

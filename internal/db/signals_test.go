@@ -277,13 +277,14 @@ func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
 		{
 			name: "WriteSessionIncremental",
 			write: func(t *testing.T, d *DB, id string) {
-				require.NoError(t, d.WriteSessionIncremental(id,
+				_, werr := d.WriteSessionIncremental(id,
 					[]Message{{SessionID: id, Ordinal: 1,
 						Role: "user", Content: "appended"}},
 					IncrementalSessionUpdate{
 						MsgCount: 2, UserMsgCount: 2, NextOrdinal: 2,
 					},
-				), "WriteSessionIncremental")
+				)
+				require.NoError(t, werr, "WriteSessionIncremental")
 			},
 		},
 		{

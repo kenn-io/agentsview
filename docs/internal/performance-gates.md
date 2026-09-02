@@ -17,6 +17,7 @@ contracts are documented in
 | Discovery O(sources) root work | Gemini rebuilt its project map per session; positron/vscode-copilot re-read `workspace.json` per session. A large store spent 2m47s in discovery.                                                       | #912                                           |
 | Unchanged sources reparsed     | The provider migration dropped pre-parse DB-freshness skips; every full sync reparsed and rewrote untouched sessions.                                                                                   | `providerSourceUnchangedInDB` (#883 follow-up) |
 | O(history) incremental appends | Every streamed line ran a full signal recompute (reload all messages, secret regex scan) and chunk merges delete+reinserted every message row. ~4,700 session updates/day each paid O(session history). | #954                                           |
+| O(file) warm Codex appends     | A warm append still hashed the full source for the fingerprint and re-hashed the committed prefix after every write; late tool outputs forced a full transcript reparse, and unchanged startup hashed every source before the DB freshness skip. | persisted parser checkpoints (this PR)         |
 | Bulk ingest throughput         | Full resync ran per-row inserts and rebuilt FTS incrementally; 26.7k sessions took 1m17s.                                                                                                               | #411                                           |
 | Event storms                   | One SSE emit per watcher flush drove ~1/s dashboard refetch; SQLite WAL sidecar events fanned out to every session in a shared DB.                                                                      | #367, #956                                     |
 | Per-row query shape            | `GetDailyUsage` ran 1.2M `json_extract` calls per scan and had no date pushdown.                                                                                                                        | #309                                           |
@@ -38,6 +39,26 @@ runner noise and fail loudly:
 - `TestWriteIncrementalDebouncesSignalRecompute` and the rest of
   `internal/sync/signal_schedule_test.go` — streaming appends must debounce
   the O(history) signal recompute.
+- `TestCodexCheckpoint*` in `internal/sync/checkpoint_test.go` — a full Codex
+  parse persists a checkpoint, an append resumes from it and advances it
+  atomically with the delta, truncation/anchor mismatch force an
+  authoritative rebuild, and an unchanged checkpointed source is trusted on
+  stat alone (append-trust; the audit path still catches rewrites).
+- `TestCodexCheckpointStaleCannotResumeFromNewerDBOffset`,
+  `TestCodexCheckpointHashStateBoundedToCommittedOffset`,
+  `TestCodexCheckpointColdRestartResumeParity`, and
+  `TestCodexCheckpointAuditRepairsSameStatRewrite`
+  (`internal/sync/checkpoint_review_test.go`) — a surviving checkpoint must
+  agree with the committed DB offset/ordinal/hash, hash state covers exactly
+  the committed prefix, cold restarts resume with parity, and the audit
+  repairs same-stat rewrites.
+- `TestParserCheckpointRoundTrip` and
+  `TestWriteSessionIncrementalPersistsCheckpointInSameTx` (`internal/db`) —
+  checkpoint rows round-trip and are committed in the same transaction as the
+  incremental delta.
+- `TestFullSyncPassIsByteBudgeted`, `TestBulkParseRetentionBudgetUsesWeightedAdmission`,
+  and `TestCollectAndBatchFlushesOnByteCap` (`internal/sync`) — bulk passes
+  and write batches are bounded by estimated bytes, not session count alone.
 - The count-based seam tests in `internal/parser`
   (`discovery_workspace_manifest_test.go`, gemini/antigravity provider tests)
   — root-derived project info is built once per root, not once per source.
@@ -55,10 +76,13 @@ runner noise and fail loudly:
   warm/cold parsing remains equivalent at safe offsets.
 - `TestIncrementalSync_CodexAppend`,
   `TestIncrementalSync_CodexLifecycleTailUpdatesTermination`, the partial-tail
-  tests, and the late-update/title tests in
+  tests, the late tool-result append test
+  (`TestIncrementalSync_CodexExecAppendRetainsEvents`), and the
+  late-update/title tests in
   `internal/sync/engine_integration_test.go` — safe Codex growth appends only
-  new rows while lifecycle metadata, incomplete records, title changes, and
-  retroactive updates preserve full-parse behavior.
+  new rows, late tool results update stored calls in place, and lifecycle
+  metadata, incomplete records, title changes, and other retroactive updates
+  preserve full-parse behavior.
 - `TestCountDuplicatePromptsAllocationGrowthStaysNearLinear`
   (`internal/signals/heuristics_test.go`) — session-quality analysis must not
   rebuild token sets for every pair of user prompts.
@@ -79,10 +103,29 @@ with `cmd/benchgate`:
   skip work only; also self-asserts nothing is re-synced or bulk-rewritten).
 - `BenchmarkSyncPathsIncrementalAppend` — absorb one appended line into a
   1,000-message session.
-- `BenchmarkCodexIncrementalSyncReads` — a warm Codex cursor append plus the
-  remaining full-source fingerprint and committed-prefix hash reads. See
+- `BenchmarkCodexCheckpointAppendResume` — the source-reading pipeline of a
+  checkpoint-resumed Codex append: checkpoint gate (stat + anchor digest +
+  fingerprint resume), seeded tail parse, committed-prefix resume hash, next
+  anchor digest, and next checkpoint assembly. Bounded by the anchor window
+  plus the tail — see
   [Background Sync Efficiency](background-sync-efficiency.md) for the
   cost-model boundary.
+- `BenchmarkCodexLateToolOutputDebouncedBurst` — a checkpoint-resumed Codex
+  append stream with the signal debounce stretched, so only the first
+  iteration pays the O(history) recompute and the rest are amortized. It
+  guards the late-result update path's per-append cost; it is deliberately
+  NOT the quiet-session gate (see the `BenchmarkCodexQuietAppendSignals*`
+  trio below).
+- `BenchmarkCodexQuietAppendSignals500` / `...5000` / `...15000` — the
+  non-amortized quiet-session append gate: every iteration appends a new
+  function_call plus the previous call's late output and pays the full
+  inline signal/secret maintenance (debounce disabled). The three sizes
+  prove per-append latency does not scale with stored history; each
+  self-asserts zero `GetAllMessages` calls in the timed loop.
+- `BenchmarkCodexColdFullSync` — a fresh database and engine ingesting the
+  transcript from scratch, including the single-pass checkpoint capture.
+  Per-op cost deliberately exceeds the micro-benchmark band; it exists to
+  catch a regression that adds a source read pass to the cold pipeline.
 - `BenchmarkSyncAllColdArchive` — first-sync ingest throughput through the
   default per-session write path.
 - `BenchmarkResyncBulkIngest` — the same archive through the resync bulk-write
@@ -203,6 +246,23 @@ The detailed architecture and oracle requirements are in
 prefix reconstruction with an exact warm cursor. It is diagnostic rather than
 PR-gated: `BENCH_GATE_PACKAGES` currently contains `./internal/sync`,
 `./internal/db`, `./internal/secrets`, and `./internal/signals`.
+
+### 3. Macro ratio gate (run manually, build tag `macrobench`)
+
+The 10MB-vs-1GB same-append p95 ratio (`< 2x`) is not a CI benchmark: the
+1GB fixture takes minutes per run. `internal/sync/codex_macro_bench_test.go`
+is excluded from the PR gate by the `macrobench` build tag:
+
+```bash
+cd internal/sync
+go test -tags 'fts5,macrobench' -run '^$' \
+  -bench 'BenchmarkMacroCodexQuietAppend' -benchmem -count=6 -benchtime=5x
+```
+
+The gate: the p95 `sec/op` of `BenchmarkMacroCodexQuietAppend1GB` must stay
+within 2x of `BenchmarkMacroCodexQuietAppend10MB` for the same
+quiet-append shape (call + late output, full inline signal/secret
+maintenance).
 
 ## Adding a benchmark to the gate
 

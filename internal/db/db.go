@@ -684,6 +684,17 @@ type DB struct {
 	vectorMu       sync.RWMutex
 	vectorSearcher VectorSearcher
 	recallSearcher RecallVectorSearcher
+
+	// messagesLoadCount counts GetAllMessages calls. Tests use it to gate
+	// the incremental signal path: a maintained delta must not load
+	// session history.
+	messagesLoadCount atomic.Int64
+}
+
+// MessagesLoadCount returns the total number of GetAllMessages calls the
+// database has served. Monotonic; used by the incremental-path gates.
+func (db *DB) MessagesLoadCount() int64 {
+	return db.messagesLoadCount.Load()
 }
 
 // Reader exposes guarded read-only query operations. It intentionally does
@@ -2724,6 +2735,15 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf(
 			"creating idx_tool_calls_file_path: %w", err,
+		)
+	}
+	if _, err := w.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_tool_calls_session_tool_use
+		 ON tool_calls(session_id, tool_use_id)
+		 WHERE tool_use_id IS NOT NULL`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating idx_tool_calls_session_tool_use: %w", err,
 		)
 	}
 
