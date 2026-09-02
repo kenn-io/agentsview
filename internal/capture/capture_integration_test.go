@@ -2126,6 +2126,36 @@ func TestCaptureDistinguishesAnObservedSourceThatDisappears(t *testing.T) {
 		}
 	})
 
+	// Wait for the manifest to record an observed source, but fail
+	// immediately with the run's actual error if the capture finishes
+	// first: an opaque Eventually timeout here has flaked on Windows CI
+	// and hides whether the run aborted early or is still in flight.
+	observeDeadline := time.NewTimer(20 * time.Second)
+	defer observeDeadline.Stop()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for observed := false; !observed; {
+		select {
+		case response := <-done:
+			t.Fatalf(
+				"capture run finished before the source was observed: exit=%d err=%v",
+				response.outcome.ExitCode, response.err,
+			)
+		case <-observeDeadline.C:
+			t.Fatal(
+				"timed out waiting for an observed source; capture run still in flight",
+			)
+		case <-poll.C:
+			data, err := os.ReadFile(filepath.Join(captureDir, manifestFileName))
+			if err != nil {
+				continue
+			}
+			var captured manifest
+			observed = json.Unmarshal(data, &captured) == nil &&
+				captured.SourceObserved
+		}
+	}
+
 	select {
 	case <-persisted:
 	case response := <-done:
