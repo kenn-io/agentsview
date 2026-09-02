@@ -140,7 +140,9 @@ func (p *antigravityProvider) parseSession(
 	// sidecar is absent, malformed, or fails the coverage gate the parser
 	// falls back to the heuristic decode exactly as before.
 	sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
-	tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
+	tRes, tErr := parseAntigravityCLITrajectory(
+		sidecarPath, dbResult.executors,
+	)
 	sidecarOK := tErr == nil &&
 		hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages)
 	sidecarCovers := dbResult.rawStepCount == 0 ||
@@ -251,8 +253,12 @@ func (p *antigravityProvider) parseSession(
 }
 
 type antigravityStepLoadResult struct {
-	messages     []ParsedMessage
-	usageEvents  []ParsedUsageEvent
+	messages    []ParsedMessage
+	usageEvents []ParsedUsageEvent
+	// executors is retained for preferred trajectory sidecars so their
+	// generatorMetadata uses the same range-qualified model attribution as
+	// SQLite gen_metadata.
+	executors    []antigravityExecutorMetadata
 	rawStepCount int
 	// hasGenMetadata reports whether the steps DB carried a non-empty
 	// gen_metadata table. Paired with an empty usageEvents slice it flags a
@@ -353,18 +359,20 @@ func loadAntigravityStepsWithRawCount(
 ) (antigravityStepLoadResult, error) {
 	generations := loadAntigravityGenerationMetadata(db)
 	executors := loadAntigravityExecutorMetadata(db)
+	result := antigravityStepLoadResult{
+		executors:      executors,
+		hasGenMetadata: len(generations) > 0,
+	}
 	rows, err := db.Query(
 		`SELECT idx, step_type, step_payload FROM steps ` +
 			`ORDER BY idx`,
 	)
 	if err != nil {
-		return antigravityStepLoadResult{}, fmt.Errorf("query steps: %w", err)
+		return result, fmt.Errorf("query steps: %w", err)
 	}
 	defer rows.Close()
 	steps := make([]antigravityLoadedStep, 0)
 	stepPositions := make(map[int]int)
-	var result antigravityStepLoadResult
-	result.hasGenMetadata = len(generations) > 0
 	for rows.Next() {
 		var (
 			idx      int
@@ -372,7 +380,7 @@ func loadAntigravityStepsWithRawCount(
 			payload  []byte
 		)
 		if err := rows.Scan(&idx, &stepType, &payload); err != nil {
-			return antigravityStepLoadResult{}, fmt.Errorf("scan step: %w", err)
+			return result, fmt.Errorf("scan step: %w", err)
 		}
 		parsedStep, parsed := newAntigravityStep(idx, stepType, payload)
 		var msg ParsedMessage
@@ -389,7 +397,7 @@ func loadAntigravityStepsWithRawCount(
 		result.rawStepCount++
 	}
 	if err := rows.Err(); err != nil {
-		return antigravityStepLoadResult{}, fmt.Errorf("iterate steps: %w", err)
+		return result, fmt.Errorf("iterate steps: %w", err)
 	}
 
 	for _, generation := range generations {
@@ -437,16 +445,20 @@ func (g antigravityGenerationMetadata) maxStepIndex() (int, bool) {
 	if !g.hasStepIndices {
 		return g.idx, true
 	}
-	if !g.stepIndicesValid || len(g.stepIndices) == 0 {
+	if !g.stepIndicesValid {
 		return 0, false
 	}
-	maxIdx := g.stepIndices[0]
-	for _, idx := range g.stepIndices[1:] {
+	return maxAntigravityStepIndex(g.stepIndices)
+}
+
+func maxAntigravityStepIndex(indices []int) (int, bool) {
+	maxIdx := -1
+	for _, idx := range indices {
 		if idx > maxIdx {
 			maxIdx = idx
 		}
 	}
-	return maxIdx, true
+	return maxIdx, maxIdx >= 0
 }
 
 type antigravityExecutorMetadata struct {
@@ -928,6 +940,14 @@ func resolveAntigravityGenerationModel(
 ) string {
 	generationModel, hasDisplayLabel :=
 		extractAntigravityGenerationModel(data)
+	return resolveAntigravityModelName(
+		generationModel, executorModel, hasDisplayLabel,
+	)
+}
+
+func resolveAntigravityModelName(
+	generationModel, executorModel string, hasDisplayLabel bool,
+) string {
 	if hasDisplayLabel || executorModel == "" {
 		return generationModel
 	}

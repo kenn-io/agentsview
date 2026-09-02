@@ -2567,6 +2567,78 @@ func TestAntigravityCLIDBWithoutGenMetadataGetsSidecarUsage(t *testing.T) {
 	assert.True(t, sess.HasPeakContextTokens)
 }
 
+func TestAntigravityCLISidecarModelUsesCoveringExecutorEffort(t *testing.T) {
+	tests := []struct {
+		name                  string
+		executorLastStepIndex int
+		wantModel             string
+	}{
+		{
+			name:                  "covered serving variant gains executor effort",
+			executorLastStepIndex: 1,
+			wantModel:             "gemini-3.7-flash-high",
+		},
+		{
+			name:                  "step outside executor range preserves serving variant",
+			executorLastStepIndex: 0,
+			wantModel:             "gemini-3.7-flash-exp-b",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "adadadad-bebe-cfcf-d0d0-e1e1e1e1e1e1"
+			mustMkdir(t, filepath.Join(root, "conversations"))
+
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			createAntigravityTestDB(t, dbPath)
+			db, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			mustExec(t, db, `CREATE TABLE executor_metadata (
+				idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+			executorData := createAntigravityMockExecutorMetadata(
+				tt.executorLastStepIndex, "gemini-3.7-flash-high",
+			)
+			mustExec(t, db,
+				`INSERT INTO executor_metadata (idx, data, size) VALUES (0, ?, ?)`,
+				executorData, len(executorData))
+			require.NoError(t, db.Close())
+
+			genJSON := `[{
+				"stepIndices": [1],
+				"chatModel": {
+					"model": "gemini-3.7-flash-exp-b",
+					"usage": {
+						"inputTokens": "1500",
+						"outputTokens": "77"
+					}
+				}
+			}]`
+			writeAntigravityTestSidecarWithGenMetadata(
+				t, root, id, 2, genJSON,
+			)
+
+			_, msgs, usageEvents, status, err :=
+				parseAntigravityCLITestSessionWithStatus(
+					t, dbPath, "", "test-machine",
+				)
+			require.NoError(t, err)
+			assert.False(t, status.NeedsRetry)
+			require.Len(t, msgs, 2)
+			assert.Equal(t, tt.wantModel, msgs[1].Model)
+			assert.Equal(t, 1500, msgs[1].ContextTokens)
+			assert.Equal(t, 77, msgs[1].OutputTokens)
+
+			require.Len(t, usageEvents, 1)
+			assert.Equal(t, "sidecar", usageEvents[0].Source)
+			assert.Equal(t, tt.wantModel, usageEvents[0].Model)
+			assert.Equal(t, 1500, usageEvents[0].InputTokens)
+			assert.Equal(t, 77, usageEvents[0].OutputTokens)
+		})
+	}
+}
+
 func TestAntigravityCLINonCoveringSidecarUsageRejected(t *testing.T) {
 	root := t.TempDir()
 	id := "acacacac-bdbd-cece-dfdf-565656565656"
