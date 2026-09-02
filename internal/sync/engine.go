@@ -9670,8 +9670,11 @@ func (e *Engine) collectAndBatchWithOptions(
 		}
 		if ctx.Err() != nil && e.discardWritesOnCancel {
 			releaseParseRetentionLeases(pendingLeases)
+			clear(pending)
 			pending = pending[:0]
+			clear(pendingLeases)
 			pendingLeases = pendingLeases[:0]
+			clear(pendingCacheWrites)
 			pendingCacheWrites = pendingCacheWrites[:0]
 			return
 		}
@@ -9793,8 +9796,16 @@ func (e *Engine) collectAndBatchWithOptions(
 			progress.MessagesIndexed += outcome.writtenMessages
 			stats.messagesIndexed = progress.MessagesIndexed
 		}()
+		// The collector reuses these backing arrays for the next batch. Clear
+		// pointer-bearing entries before reslicing so the completed batch's
+		// parsed messages and source metadata become collectible immediately,
+		// rather than remaining live until the next batch overwrites every slot
+		// or the whole pass returns.
+		clear(pending)
 		pending = pending[:0]
+		clear(pendingLeases)
 		pendingLeases = pendingLeases[:0]
+		clear(pendingCacheWrites)
 		pendingCacheWrites = pendingCacheWrites[:0]
 	}
 

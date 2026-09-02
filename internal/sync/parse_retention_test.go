@@ -2,9 +2,11 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -14,6 +16,10 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+type parseRetentionFinalizerMarker struct {
+	value bool
+}
 
 // newWarmBenchEngine builds a small already-synced Claude archive and
 // returns an engine watching it, mirroring the fixture shape
@@ -61,6 +67,76 @@ func TestWarmNoopSyncAcquiresNoRetentionLeases(t *testing.T) {
 	require.Equal(t, 0, stats.Synced)
 	assert.Equal(t, before, e.bulkRetentionBudget.acquired.Load(),
 		"warm no-op pass must not acquire parse-retention leases")
+}
+
+func TestBulkCollectorReleasesFlushedParsedBatch(t *testing.T) {
+	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+
+	flushed := make(chan struct{})
+	engine.writeBatchOverride = func(
+		pending []pendingWrite, _ syncWriteMode, _ bool,
+	) (int, int, int, int) {
+		close(flushed)
+		return len(pending), 0, 0, 0
+	}
+
+	results := make(chan syncJob, batchSize+1)
+	finalized := make(chan struct{})
+	func() {
+		marker := &parseRetentionFinalizerMarker{}
+		runtime.SetFinalizer(marker, func(*parseRetentionFinalizerMarker) {
+			close(finalized)
+		})
+		results <- syncJob{
+			results: []parser.ParseResult{{
+				Session: parser.ParsedSession{
+					ID: "first", Agent: parser.AgentClaude,
+					ClaudeLinearParse: &marker.value,
+				},
+			}}}
+	}()
+	for i := 1; i < batchSize; i++ {
+		results <- syncJob{
+			results: []parser.ParseResult{{
+				Session: parser.ParsedSession{
+					ID:    fmt.Sprintf("session-%d", i),
+					Agent: parser.AgentClaude,
+				},
+			}}}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		engine.collectAndBatch(
+			t.Context(), results, batchSize+1, batchSize+1,
+			nil, syncWriteBulk,
+		)
+	}()
+	select {
+	case <-flushed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("collector did not flush the full parsed batch")
+	}
+
+	for range 3 {
+		runtime.GC()
+		runtime.Gosched()
+	}
+	select {
+	case <-finalized:
+	case <-time.After(2 * time.Second):
+		t.Error("flushed parsed batch remained live while the collector awaited more results")
+	}
+
+	results <- syncJob{err: errors.New("finish")}
+	close(results)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("collector did not finish")
+	}
 }
 
 func TestFullSyncPassUsesBoundedRetentionAndScavengesOnce(t *testing.T) {
