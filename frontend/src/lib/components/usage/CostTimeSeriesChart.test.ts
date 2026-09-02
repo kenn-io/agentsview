@@ -227,17 +227,16 @@ describe("CostTimeSeriesChart", () => {
     expect(area).not.toBeNull();
     expect(Number(area!.getAttribute("opacity") ?? 1)).toBe(1);
     const path = area!.getAttribute("d")!;
-    const points = [...path.matchAll(/[-+]?\d*\.?\d+(?:e[-+]?\d+)?/gi)]
-      .map((match) => Number(match[0]));
-    const coordinates = Array.from(
-      { length: Math.floor(points.length / 2) },
-      (_, index) => [points[index * 2]!, points[index * 2 + 1]!] as const,
-    );
+    const coordinates = [...path.matchAll(
+      /[ML]([-+]?\d*\.?\d+(?:e[-+]?\d+)?),([-+]?\d*\.?\d+(?:e[-+]?\d+)?)/gi,
+    )].map((match) => [Number(match[1]), Number(match[2])] as const);
 
-    expect(coordinates[0]![0]).not.toBe(coordinates[1]![0]);
-    expect(coordinates[0]![1]).toBe(coordinates[1]![1]);
-    expect(coordinates[1]![0]).toBe(coordinates[2]![0]);
-    expect(coordinates[1]![1]).not.toBe(coordinates[2]![1]);
+    expect(coordinates).toHaveLength(6);
+    for (let index = 1; index < coordinates.length; index++) {
+      const [previousX, previousY] = coordinates[index - 1]!;
+      const [x, y] = coordinates[index]!;
+      expect(x === previousX || y === previousY).toBe(true);
+    }
 
     unmount(component);
   });
