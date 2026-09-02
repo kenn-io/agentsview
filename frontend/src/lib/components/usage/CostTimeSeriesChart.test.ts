@@ -215,7 +215,7 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("renders stacked areas without dimming their colors", async () => {
+  it("renders stacked area colors without dimming them", async () => {
     const component = mountChart();
     await tick();
 
