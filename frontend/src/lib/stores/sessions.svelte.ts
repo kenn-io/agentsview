@@ -1,5 +1,5 @@
 import type { DataChangedEvent } from "../api/client.js";
-import { MetadataService, SessionsService } from "../api/generated/index";
+import { MetadataService, SessionsService, SettingsService } from "../api/generated/index";
 import { callGenerated, isAbortError, isNotFoundError } from "../api/runtime.js";
 import type { Session, ProjectInfo, AgentInfo, SidebarSessionIndexRow } from "../api/types.js";
 import { sync } from "./sync.svelte.js";
@@ -32,6 +32,7 @@ export interface SessionGroupInput {
   parent_session_id?: string | null;
   relationship_type?: string | null;
   project: string;
+  project_assigned?: boolean;
   machine: string;
   agent: string;
   agent_label?: string | null;
@@ -1445,6 +1446,45 @@ class SessionsStore {
       }
       this.sessions[idx] = merged;
     }
+  }
+
+  async assignSessionProject(id: string, project: string) {
+    configureGeneratedClient();
+    const assignment = await SettingsService
+      .putApiV1SettingsSessionProjectAssignmentsSessionId({
+        sessionId: id,
+        requestBody: { project },
+      });
+    const idx = this.sessions.findIndex((session) => session.id === id);
+    if (idx !== -1) {
+      this.sessions[idx] = {
+        ...this.sessions[idx]!,
+        project: assignment.project,
+        project_assigned: true,
+      };
+    }
+    this.invalidateProjectCache();
+    await this.load({ force: true });
+    return assignment.project;
+  }
+
+  async clearSessionProjectAssignment(id: string) {
+    configureGeneratedClient();
+    const cleared = await SettingsService
+      .deleteApiV1SettingsSessionProjectAssignmentsSessionId({
+        sessionId: id,
+      });
+    const idx = this.sessions.findIndex((session) => session.id === id);
+    if (idx !== -1) {
+      this.sessions[idx] = {
+        ...this.sessions[idx]!,
+        project: cleared.project,
+        project_assigned: false,
+      };
+    }
+    this.invalidateProjectCache();
+    await this.load({ force: true });
+    return cleared.project;
   }
 
   private startLiveRefresh() {
