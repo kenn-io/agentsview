@@ -611,6 +611,9 @@ func executorModelForStep(
 			return executor.modelName
 		}
 	}
+	if len(executors) > 0 {
+		return executors[len(executors)-1].modelName
+	}
 	return ""
 }
 
@@ -928,13 +931,13 @@ func resolveAntigravityGenerationModel(
 ) string {
 	generationModel, hasDisplayLabel :=
 		extractAntigravityGenerationModel(data)
-	if hasDisplayLabel || executorModel == "" {
+	if hasDisplayLabel {
 		return generationModel
 	}
-	if antigravityBaseModel(executorModel) == antigravityBaseModel(generationModel) {
+	if executorModel != "" && antigravityBaseModel(executorModel) == antigravityBaseModel(generationModel) {
 		return executorModel
 	}
-	return generationModel
+	return antigravityBaseModel(generationModel)
 }
 
 func antigravityBaseModel(model string) string {
