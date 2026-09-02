@@ -13,21 +13,21 @@ import (
 
 const (
 	defaultParseRetentionBytes      = int64(64 << 20)
+	defaultBulkParseRetentionBytes  = int64(64 << 20)
 	parseRetentionFixedBytes        = int64(64 << 10)
 	parseRetentionMultiplier        = int64(4)
 	parseRetentionScavengeThreshold = int64(16 << 20)
 )
 
 type parseRetentionBudget struct {
-	capacity int64
-	// weighted is nil for the bulk budget, which admits every parse
-	// immediately so archive-scale passes run at full worker parallelism.
-	weighted        *semaphore.Weighted
-	pressure        chan struct{}
-	waiters         atomic.Int64
-	scavengePending atomic.Bool
-	scavenge        func()
-	acquired        atomic.Int64 // total successful acquisitions, for tests
+	capacity             int64
+	weighted             *semaphore.Weighted
+	pressure             chan struct{}
+	waiters              atomic.Int64
+	scavengeEveryAcquire bool
+	scavengePending      atomic.Bool
+	scavenge             func()
+	acquired             atomic.Int64 // total successful acquisitions, for tests
 }
 
 func newParseRetentionBudget(capacity int64) *parseRetentionBudget {
@@ -42,29 +42,19 @@ func newParseRetentionBudget(capacity int64) *parseRetentionBudget {
 	}
 }
 
-// newBulkParseRetentionBudget returns the budget archive-scale passes use
-// (full sync, resync rebuild, remote import processing). It never throttles
-// parse admission: peak memory during a bulk pass is bounded by worker
-// parallelism, not by a byte budget. Instead it releases the pass's retained
-// memory back to the OS in one scavenge once the pass completes, keeping the
-// long-running daemon's settled footprint low without serializing the pass.
-func newBulkParseRetentionBudget() *parseRetentionBudget {
-	return &parseRetentionBudget{
-		pressure: make(chan struct{}, 1),
-		scavenge: debug.FreeOSMemory,
-	}
+// newBulkParseRetentionBudget returns the byte-weighted budget archive-scale
+// passes use (full sync, resync rebuild, remote import processing). It keeps
+// the bulk pass's end-of-pass scavenge even when every admitted source is
+// smaller than the default budget's large-source threshold.
+func newBulkParseRetentionBudget(capacity int64) *parseRetentionBudget {
+	budget := newParseRetentionBudget(capacity)
+	budget.scavengeEveryAcquire = true
+	return budget
 }
 
 func (budget *parseRetentionBudget) acquire(
 	ctx context.Context, sourceBytes int64,
 ) (*parseRetentionLease, error) {
-	if budget.weighted == nil {
-		// Bulk pass: admit immediately and remember that parsed payloads
-		// were retained so the end-of-pass scavenge runs exactly once.
-		budget.scavengePending.Store(true)
-		budget.acquired.Add(1)
-		return &parseRetentionLease{}, nil
-	}
 	weight := budget.weight(sourceBytes)
 	if budget.weighted.TryAcquire(weight) {
 		budget.noteKnownLargeSource(sourceBytes)
@@ -86,7 +76,7 @@ func (budget *parseRetentionBudget) acquire(
 }
 
 func (budget *parseRetentionBudget) noteKnownLargeSource(sourceBytes int64) {
-	if sourceBytes >= parseRetentionScavengeThreshold {
+	if budget.scavengeEveryAcquire || sourceBytes >= parseRetentionScavengeThreshold {
 		budget.scavengePending.Store(true)
 	}
 }

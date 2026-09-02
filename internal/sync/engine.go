@@ -636,7 +636,7 @@ type Engine struct {
 	bulkRetentionBudget       *parseRetentionBudget
 	// activeRetention points at the budget the in-flight pass admits parses
 	// through. Bulk archive passes (full sync, resync rebuild, remote import)
-	// install the unthrottled bulk budget for their duration; when nil,
+	// install the byte-weighted bulk budget for their duration; when nil,
 	// incremental paths (watcher, scoped/periodic syncs, reconciliation
 	// pages, single-session syncs) use the bounded default budget.
 	activeRetention atomic.Pointer[parseRetentionBudget]
@@ -7394,9 +7394,9 @@ func (e *Engine) syncAllLocked(
 	defer func() { e.anomalies.applyTo(&stats) }()
 
 	// A whole-archive pass (resync rebuild, full/initial sync, remote
-	// import) is bulk work: it parses at full parallelism and frees its
-	// retained memory once at the end. Cutoff- or root-scoped passes are
-	// steady-state daemon churn and keep the bounded retention budget.
+	// import) is bulk work: it bounds parsed data by retained bytes and
+	// frees that memory once at the end. Cutoff- or root-scoped passes are
+	// steady-state daemon churn and keep the default retention budget.
 	if writeMode == syncWriteBulk || (since.IsZero() && scope == nil) {
 		defer e.beginBulkRetentionPass()()
 	}
@@ -9398,17 +9398,18 @@ func (e *Engine) retentionBudget() *parseRetentionBudget {
 	return e.parseRetentionBudget
 }
 
-// beginBulkRetentionPass installs the unthrottled bulk retention budget for
-// the duration of an archive-scale pass and returns the restore func the
-// caller must defer. Bulk passes (full sync, resync rebuild, remote import
-// processing) run at full worker parallelism; the memory they retain is
-// returned to the OS by the end-of-pass scavenge instead of being bounded
-// per source. The caller holds syncMu, so no other pass can observe the
-// switched budget.
+// beginBulkRetentionPass installs the byte-weighted bulk retention budget for
+// the duration of an archive-scale pass and returns the restore func the caller
+// must defer. Admission pressure makes the collector flush partial batches so
+// retained parse data stays within the budget until its database write
+// completes. The caller holds syncMu, so no other pass can observe the switched
+// budget.
 func (e *Engine) beginBulkRetentionPass() func() {
 	e.bulkRetentionOnce.Do(func() {
 		if e.bulkRetentionBudget == nil {
-			e.bulkRetentionBudget = newBulkParseRetentionBudget()
+			e.bulkRetentionBudget = newBulkParseRetentionBudget(
+				defaultBulkParseRetentionBytes,
+			)
 		}
 	})
 	e.activeRetention.Store(e.bulkRetentionBudget)
