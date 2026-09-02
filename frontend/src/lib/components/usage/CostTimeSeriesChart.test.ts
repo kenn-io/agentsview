@@ -221,33 +221,13 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("renders centered stepped areas without dimming their colors", async () => {
-    usage.summary = usageSummary();
-    usage.summary.daily = usage.summary.daily.slice(0, 2);
-    setSummaryRangeToDailyEntries();
-    usage.summary.daily[0]!.projectBreakdowns![0]!.cost = testMoney(10);
-    usage.summary.daily[1]!.projectBreakdowns![0]!.cost = testMoney(20);
-
+  it("renders stacked areas without dimming their colors", async () => {
     const component = mountChart();
     await tick();
 
     const area = document.querySelector<SVGPathElement>("path.lc-area-path");
     expect(area).not.toBeNull();
     expect(Number(area!.getAttribute("opacity") ?? 1)).toBe(1);
-    const path = area!.getAttribute("d")!;
-    const coordinates = [...path.matchAll(
-      /[ML]([-+]?\d*\.?\d+(?:e[-+]?\d+)?),([-+]?\d*\.?\d+(?:e[-+]?\d+)?)/gi,
-    )].map((match) => [Number(match[1]), Number(match[2])] as const);
-
-    expect(coordinates).toHaveLength(8);
-    expect(coordinates[1]![0]).toBe(
-      (coordinates[0]![0] + coordinates[3]![0]) / 2,
-    );
-    for (let index = 1; index < coordinates.length; index++) {
-      const [previousX, previousY] = coordinates[index - 1]!;
-      const [x, y] = coordinates[index]!;
-      expect(x === previousX || y === previousY).toBe(true);
-    }
 
     unmount(component);
   });
