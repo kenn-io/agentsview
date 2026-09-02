@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AgentsView — see what your AI coding agents did and what it cost</title>
+    <title>AgentsView: see what your AI coding agents did and what it cost</title>
     <meta name="description" content="See every AI coding session, search what happened, track cost and quality, and keep the archive local by default.">
     <link rel="canonical" href="https://agentsview.io/">
     <link rel="alternate" type="text/markdown" href="https://agentsview.io/index.md">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/styles/site.css">
     <meta property="og:type" content="website">
-    <meta property="og:title" content="See what your AI coding agents did — and what it cost.">
+    <meta property="og:title" content="See what your AI coding agents did, and what it cost.">
     <meta property="og:description" content="The local-first system of record for AI coding sessions, with search, activity, cost, quality, and recall.">
     <meta property="og:url" content="https://agentsview.io/">
     <meta property="og:site_name" content="AgentsView">
@@ -18,7 +18,7 @@
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="See what your AI coding agents did — and what it cost.">
+    <meta name="twitter:title" content="See what your AI coding agents did, and what it cost.">
     <meta name="twitter:description" content="The local-first system of record for AI coding sessions, with search, activity, cost, quality, and recall.">
     <meta name="twitter:image" content="https://agentsview.io/docs/assets/static/og-image.png">
   </head>
@@ -100,8 +100,8 @@
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-layout">
           <div class="hero-copy">
-            <h1 id="hero-title">See what your AI coding agents did — and what it cost.</h1>
-            <p class="lede">AgentsView is the local-first system of record for AI coding sessions. It turns more than 60 agent formats into one searchable archive for transcripts, activity, cost, quality, and recall. Your archive stays on your machine by default and leaves only through features you choose.</p>
+            <h1 id="hero-title">See what your AI coding agents did, and what it cost.</h1>
+            <p class="lede">AgentsView is the local-first system of record for AI coding sessions. It merges sessions from more than 60 agent formats into one searchable archive covering transcripts, activity, cost, quality, and recall. The archive stays on your machine unless you turn on a feature that shares it.</p>
             <div class="install-command" data-install-command data-command="curl -fsSL https://agentsview.io/install.sh | bash">
               <code>curl -fsSL https://agentsview.io/install.sh | bash</code>
               <button class="button install-copy" type="button" data-install-copy>Copy</button>
@@ -125,7 +125,7 @@
         <div class="section-heading">
           <div>
             <p class="section-index">01 / Record</p>
-            <h2 id="record-title">Every agent. Every session. One archive.</h2>
+            <h2 id="record-title">Every session from every agent, in one archive.</h2>
           </div>
           <p class="agent-section-lead">A background daemon watches the session directories your agents already write, parses each format, and syncs everything into a local SQLite archive with full-text indexes. Auto-discovered, nothing to configure. Start a session in one window and watch it stream into AgentsView in another.</p>
         </div>
@@ -255,7 +255,7 @@
             <p class="section-index">02 / Observe</p>
             <h2 id="observe-title">See when your agents are actually working.</h2>
           </div>
-          <p>The Activity dashboard turns timestamped session data into an operational picture: peak concurrency and the exact moment it happened, active versus idle time, agent-minutes across parallel sessions, and cost, scoped to any day, week, month, or custom range and filterable by project, agent, and machine. Live sync streams new messages into the UI as sessions run.</p>
+          <p>The Activity dashboard shows peak concurrency and the exact moment it happened, active versus idle time, agent-minutes across parallel sessions, and cost. Scope it to any day, week, month, or custom range, and filter by project, agent, and machine. Live sync streams new messages into the UI as sessions run.</p>
         </div>
         <figure class="capture">
           <a href="/docs/assets/generated/screenshots/activity-page.png" data-lightbox>
@@ -271,7 +271,7 @@
             <p class="section-index">03 / Account</p>
             <h2 id="account-title">Know what every agent costs.</h2>
           </div>
-          <p>Token and cost reports read from the pre-indexed archive instead of reparsing every raw session file for each report. Pricing tracks LiteLLM and OpenRouter rates with an offline fallback, and cache-aware accounting covers prompt-cache creation and reads.</p>
+          <p>Token and cost reports read from the pre-indexed archive instead of reparsing raw session files every time. Pricing tracks LiteLLM and OpenRouter rates with an offline fallback, and cache-aware accounting covers prompt-cache creation and reads.</p>
         </div>
         <div class="split-layout">
           <figure class="capture">
@@ -429,7 +429,7 @@
             <h2 id="start-title">Your agents are already writing the data.</h2>
           </div>
           <div>
-            <p>Install AgentsView and it finds the sessions that are already on your machine. The guide walks the whole loop in five minutes; the docs carry installation, workflows, and exact command behavior.</p>
+            <p>Install AgentsView and it finds the sessions that are already on your machine. The guide walks the whole loop in five minutes; the docs cover installation, workflows, and exact command behavior.</p>
             <div class="actions">
               <a class="button primary" href="/guide/">Follow the guide</a>
               <a class="button" href="/docs/quickstart/">Run the quickstart</a>

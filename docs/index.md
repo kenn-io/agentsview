@@ -11,8 +11,8 @@ archive on your machine, and serves them through a web UI, desktop app, CLI,
 REST API, and MCP server.
 
 New here? The [product overview](/) explains what AgentsView is for, and the
-[five-minute guide](/guide/) walks the whole loop with screenshots. This
-documentation is the comprehensive, task-oriented reference.
+[five-minute guide](/guide/) walks the whole loop with screenshots. The pages
+here go deeper: a task-oriented reference for every feature.
 
 <p class="hero-actions">
   <a class="md-button md-button--primary" href="/docs/quickstart/">Quick Start</a>

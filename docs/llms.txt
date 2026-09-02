@@ -1,6 +1,6 @@
 # AgentsView
 
-> AgentsView is a local-first system of record for AI coding agent sessions: a daemon syncs sessions from more than 50 agent harnesses into a searchable SQLite archive with transcripts, activity, token and cost reports, quality signals, and recall, served through a web UI, desktop app, CLI, REST API, and MCP server.
+> AgentsView is a local-first system of record for AI coding agent sessions: a daemon syncs sessions from more than 60 agent harnesses into a searchable SQLite archive with transcripts, activity, token and cost reports, quality signals, and recall, served through a web UI, desktop app, CLI, REST API, and MCP server.
 
 Every public page is also published as raw Markdown at the route listed below.
 The Markdown pages are canonical for machine readers; the HTML routes drop the

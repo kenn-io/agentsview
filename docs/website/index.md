@@ -1,9 +1,9 @@
-# See what your AI coding agents did — and what it cost
+# See what your AI coding agents did, and what it cost
 
-AgentsView is the local-first system of record for AI coding sessions. It turns
-more than 60 agent formats into one searchable archive for transcripts,
-activity, cost, quality, and recall. Your archive stays on your machine by
-default and leaves only through features you choose.
+AgentsView is the local-first system of record for AI coding sessions. It merges
+sessions from more than 60 agent formats into one searchable archive covering
+transcripts, activity, cost, quality, and recall. The archive stays on your
+machine unless you turn on a feature that shares it.
 
 ## Install
 
@@ -23,7 +23,7 @@ Desktop app, pip/uvx, and Docker installs are covered in the
 [quick start](/docs/quickstart/). Then [follow the guide](/guide/) or read the
 [documentation](/docs/).
 
-## Every agent. Every session. One archive.
+## Every session from every agent, in one archive
 
 A background daemon watches the session directories your agents already write,
 parses each format, and syncs everything into a local SQLite archive with
@@ -41,18 +41,18 @@ RooCode, Trae, Windsurf, and dozens more. Every supported source is listed in
 
 ## See when your agents are actually working
 
-The [Activity dashboard](/docs/activity/) turns timestamped session data into an
-operational picture: peak concurrency and the exact moment it happened, active
-versus idle time, agent-minutes across parallel sessions, and cost, scoped to
-any day, week, month, or custom range and filterable by project, agent, and
-machine. Live sync streams new messages into the UI as sessions run.
+The [Activity dashboard](/docs/activity/) shows peak concurrency and the exact
+moment it happened, active versus idle time, agent-minutes across parallel
+sessions, and cost. Scope it to any day, week, month, or custom range, and
+filter by project, agent, and machine. Live sync streams new messages into the
+UI as sessions run.
 
 ## Know what every agent costs
 
 [Token and cost reports](/docs/token-usage/) read from the pre-indexed archive
-instead of reparsing every raw session file for each report. Pricing tracks
-LiteLLM and OpenRouter rates with an offline fallback, and cache-aware
-accounting covers prompt-cache creation and reads.
+instead of reparsing raw session files every time. Pricing tracks LiteLLM and
+OpenRouter rates with an offline fallback, and cache-aware accounting covers
+prompt-cache creation and reads.
 
 ```bash
 agentsview usage daily          # last 30 days, terminal table
