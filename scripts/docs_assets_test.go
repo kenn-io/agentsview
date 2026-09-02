@@ -488,7 +488,7 @@ func writeMinimalBuiltDocsSite(t *testing.T, siteDir string) {
 		case "/docs/configuration/":
 			ids = append(ids, "session-discovery")
 		case "/docs/token-usage/":
-			ids = append(ids, "how-it-compares-to-ccusage")
+			ids = append(ids, "reporting-model")
 		case "/docs/session-api/":
 			ids = append(ids, "agentsview-session-usage")
 		}
