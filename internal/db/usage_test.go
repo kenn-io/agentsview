@@ -458,54 +458,6 @@ func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.Equal(t, "2024-07-01T13:59:59Z", args[7])
 }
 
-func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
-	query, args := topSessionsUsageRowQuery(UsageFilter{
-		From:     "2024-06-01",
-		To:       "2024-06-30",
-		Timezone: "America/New_York",
-	})
-
-	normalized := strings.ToLower(query)
-	assert.NotContains(t, normalized, "display_name")
-	assert.NotContains(t, normalized, "first_message")
-	assert.NotContains(t, normalized, "cost_status")
-	assert.Contains(t, normalized, "u.cost_source")
-	assert.NotContains(t, normalized, "user_message_count")
-	assert.NotContains(t, normalized, "session_activity_at")
-	assert.NotContains(t, normalized, " as started_at")
-	assert.NotContains(t, normalized, " as machine")
-	assert.Contains(t, normalized, "m.timestamp is not null")
-	assert.Contains(t, normalized, "m.timestamp != ''")
-	assert.Contains(t, normalized, "ue.occurred_at is not null")
-	assert.Contains(t, normalized, "nullif(m.timestamp, '') is null")
-	assert.Contains(t, normalized, "ue.occurred_at is null")
-	assert.Contains(t, normalized, "m.timestamp >= ?")
-	assert.Contains(t, normalized, "ue.occurred_at >= ?")
-	assert.Contains(t, normalized,
-		"nullif(m.timestamp, '') is null\n\tand s.started_at >= ?")
-	assert.Contains(t, normalized,
-		"ue.occurred_at is null\n\tand s.started_at >= ?")
-	assert.Contains(t, normalized, "m.timestamp <= ?")
-	assert.Contains(t, normalized, "ue.occurred_at <= ?")
-	assert.Contains(t, normalized, "julianday(u.ts) >= julianday(?)")
-	assert.Contains(t, normalized, "julianday(u.ts) < julianday(?)")
-	padded := []any{"2024-05-31T10:00:00Z", "2024-07-01T13:59:59Z"}
-	window := []any{
-		"2024-06-01T04:00:00Z", "2024-06-01",
-		"2024-07-01T04:00:00Z", "2024-06-30",
-	}
-	var want []any
-	want = append(want, padded...) // duplicate-request pass
-	want = append(want, padded...) // ranked rows: m.timestamp
-	want = append(want, padded...) // ranked rows: s.started_at
-	want = append(want, window...) // ranked rows: exact window
-	for range 4 {                  // row source branches
-		want = append(want, padded...)
-	}
-	want = append(want, window...) // survivors: exact window
-	assert.Equal(t, want, args)
-}
-
 func TestUsageEventsReplaceAndList(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

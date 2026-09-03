@@ -600,7 +600,7 @@ func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
 		},
 	})
 
-	rows, err := d.loadPricingMap(ctx)
+	rows, err := d.LoadPricingMap(ctx)
 	require.NoError(t, err, "loadPricingMap")
 	resolver := export.NewPricingResolver(rows)
 	lookup := resolver.Lookup("gpt-5.5")
@@ -670,7 +670,7 @@ func TestLoadPricingMapTreatsBandOnlyFallbackMismatchAsFetched(t *testing.T) {
 		CacheReadPerMTok:     fallback.CacheReadPerMTok,
 	}}))
 
-	rows, err := d.loadPricingMap(context.Background())
+	rows, err := d.LoadPricingMap(context.Background())
 	require.NoError(t, err)
 	lookup := export.NewPricingResolver(rows).Lookup("gpt-5.5")
 	require.True(t, lookup.OK)

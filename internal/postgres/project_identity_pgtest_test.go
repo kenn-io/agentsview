@@ -192,7 +192,7 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 		  AND git_remote = ''`).Scan(&ambiguousResolution))
 	assert.Equal(t, string(export.ProjectResolutionAmbiguous),
 		ambiguousResolution)
-	projects, err := (&Store{pg: pg}).BuildProjectIdentityMap(ctx, []string{"proj"})
+	projects, err := newStore(pg).BuildProjectIdentityMap(ctx, []string{"proj"})
 	require.NoError(t, err)
 	assert.Equal(t, export.ProjectResolutionAmbiguous,
 		projects["proj"].Resolution)
@@ -237,7 +237,7 @@ func TestPGProjectIdentityAggregatesSourceArchives(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	store := &Store{pg: pg}
+	store := newStore(pg)
 	projects, err := store.BuildProjectIdentityMap(ctx, []string{"app", "missing"})
 	require.NoError(t, err)
 	assert.Equal(t, export.ProjectResolutionAmbiguous, projects["app"].Resolution)
@@ -293,7 +293,7 @@ func TestPGListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
 		require.NoError(t, err, "seed chunked observations %d-%d", start, end)
 	}
 
-	store := &Store{pg: pg}
+	store := newStore(pg)
 	// Reverse the (duplicated) label list to prove the lookup sorts it
 	// before partitioning into chunks.
 	slices.Reverse(labels)
@@ -323,7 +323,7 @@ func TestPGProjectIdentityLegacySessionsUseDistinctFallbackKeys(t *testing.T) {
 			('legacy-beta', 'beta', 'host', 'codex')`)
 	require.NoError(t, err)
 
-	store := &Store{pg: pg}
+	store := newStore(pg)
 	first, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
 	require.NoError(t, err)
 	second, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
