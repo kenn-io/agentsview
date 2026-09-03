@@ -897,6 +897,7 @@ func retireUsageCacheGeneration(
 	}
 	if !probe.Recognized || probe.SourceDatabaseID == "" ||
 		probe.FormatVersion < usageCacheRetirementProtocolFormat ||
+		probe.FormatVersion > usageCacheFormatVersion ||
 		probe.RetirementProtocolVersion != usageCacheRetirementProtocolVersion {
 		return false, nil
 	}

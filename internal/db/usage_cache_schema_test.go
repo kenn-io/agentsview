@@ -397,6 +397,11 @@ func TestUsageCacheGenerationPreservesLegacyAndMismatchedCaches(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, foreign.Close())
 
+	newerPath := usageCacheGenerationPath(
+		archivePath, usageCacheFormatVersion+1, "newer-database-id")
+	seedRecognizedUsageCacheWithRetirementProtocol(
+		t, newerPath, usageCacheFormatVersion+1, "newer-database-id")
+
 	manager := newUsageCacheManager(archivePath)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })
 	_, err = manager.Generation(t.Context(), "current-database-id")
@@ -404,6 +409,8 @@ func TestUsageCacheGenerationPreservesLegacyAndMismatchedCaches(t *testing.T) {
 
 	assert.FileExists(t, legacyPath,
 		"pre-protocol generations may be open in an older process")
+	assert.FileExists(t, newerPath,
+		"a downgraded binary must not force the newer format to rebuild")
 	assert.FileExists(t, mismatchedPath,
 		"retirement requires metadata to match the exact generation path")
 	assert.FileExists(t, foreignPath,

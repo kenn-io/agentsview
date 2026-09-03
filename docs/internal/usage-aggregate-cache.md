@@ -139,7 +139,9 @@ rechecks the format and source database ID against the exact filename, and
 closes its own handles. Cache database, WAL, and shared-memory files are then
 removed together. The tiny lease file remains so a racing opener cannot lock a
 replacement inode. Pre-protocol generations and files with mismatched identity
-remain untouched because an older process may still hold them open.
+remain untouched because an older process may still hold them open. Generations
+newer than the running format also remain, so a downgraded binary does not force
+the newer one to rebuild.
 
 If the sibling directory is unwritable, the process uses the same schema and
 read path in a temporary database and warns that it will rebuild after restart.

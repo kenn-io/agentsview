@@ -80,9 +80,11 @@ exclusive lease plus a fresh application-ID, cache-kind, protocol-version,
 format-version, and source-database-ID check against the exact filename. Keep
 the lease file after retirement so a racing opener cannot lock a replacement
 inode. Preserve pre-protocol generations because an older binary may hold an
-idle handle without a lease. If persistent cache storage is unavailable or the
-current generation is incompatible, use the same schema and query path in a
-process-owned temporary file and warn that the cache will rebuild after restart.
+idle handle without a lease, and preserve generations newer than the running
+format so a downgraded binary does not force the newer one to rebuild. If
+persistent cache storage is unavailable or the current generation is
+incompatible, use the same schema and query path in a process-owned temporary
+file and warn that the cache will rebuild after restart.
 
 Usage reads are exact. A cold aggregate request fills facts, builds the required
 timezone rollups, then reads them in one pinned cache transaction. Verify every
