@@ -692,6 +692,11 @@ type Config struct {
 	SourceMachines       map[parser.AgentType]map[string]string `json:"-" toml:"-"`
 	sessionSourceConfigs []sessionSourceConfig
 
+	// agentHomes holds alternate agent home directories from the config
+	// file, keyed by agent. Each home derives the agent's native session
+	// roots during resolution and is additive to every other root source.
+	agentHomes map[parser.AgentType][]string
+
 	// agentDirSource tracks how each agent's dirs were
 	// set so loadFile doesn't override env-set values.
 	agentDirSource map[parser.AgentType]dirSource
@@ -1052,6 +1057,42 @@ func reRootDefaultDir(root, rel string) string {
 		return filepath.Join(root, tail)
 	}
 	return root
+}
+
+// decodeStringArray converts a raw TOML value into a string slice. It logs
+// and reports false when the value is not an array of strings.
+func decodeStringArray(key string, rawVal any) ([]string, bool) {
+	rawSlice, ok := rawVal.([]any)
+	if !ok {
+		log.Printf("config: %s: expected string array: got %T", key, rawVal)
+		return nil, false
+	}
+	values := make([]string, 0, len(rawSlice))
+	for _, v := range rawSlice {
+		s, ok := v.(string)
+		if !ok {
+			log.Printf(
+				"config: %s: expected string array: element is %T", key, v,
+			)
+			return nil, false
+		}
+		values = append(values, s)
+	}
+	return values, true
+}
+
+// AgentHomeDirs derives the native session roots that an agent keeps under
+// an alternate home directory, mirroring how DefaultRootEnvVar re-roots the
+// agent's default directories. It returns nil for agents without defaults.
+func AgentHomeDirs(def parser.AgentDef, home string) []string {
+	if len(def.DefaultDirs) == 0 {
+		return nil
+	}
+	dirs := make([]string, 0, len(def.DefaultDirs))
+	for _, rel := range def.DefaultDirs {
+		dirs = append(dirs, reRootDefaultDir(home, rel))
+	}
+	return dirs
 }
 
 // Load builds a Config by layering: defaults < config file < env < flags.
@@ -1624,6 +1665,24 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.sessionSourceConfigs = append([]sessionSourceConfig(nil), file.SessionSources...)
 	}
 
+	for _, def := range parser.Registry {
+		if def.HomeConfigKey == "" {
+			continue
+		}
+		rawVal, exists := raw[def.HomeConfigKey]
+		if !exists {
+			continue
+		}
+		homes, ok := decodeStringArray(def.HomeConfigKey, rawVal)
+		if !ok {
+			continue
+		}
+		if c.agentHomes == nil {
+			c.agentHomes = make(map[parser.AgentType][]string)
+		}
+		c.agentHomes[def.Type] = homes
+	}
+
 	// Parse config-file dir arrays for agents that have a
 	// ConfigKey. Only apply when not already set by env var.
 	for _, def := range parser.Registry {
@@ -1637,29 +1696,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		if c.agentDirSource[def.Type] == dirEnv {
 			continue
 		}
-		rawSlice, ok := rawVal.([]any)
-		if !ok {
-			log.Printf(
-				"config: %s: expected string array: got %T",
-				def.ConfigKey, rawVal,
-			)
-			continue
-		}
-		dirs := make([]string, 0, len(rawSlice))
-		valid := true
-		for _, v := range rawSlice {
-			s, ok := v.(string)
-			if !ok {
-				log.Printf(
-					"config: %s: expected string array: element is %T",
-					def.ConfigKey, v,
-				)
-				valid = false
-				break
-			}
-			dirs = append(dirs, s)
-		}
-		if valid {
+		if dirs, ok := decodeStringArray(def.ConfigKey, rawVal); ok {
 			c.AgentDirs[def.Type] = dirs
 			c.agentDirSource[def.Type] = dirFile
 		}
@@ -2155,6 +2192,39 @@ func (c *Config) resolveSessionSources() error {
 	}
 
 	var problems []string
+	for _, def := range parser.Registry {
+		homes := c.agentHomes[def.Type]
+		if len(homes) == 0 {
+			continue
+		}
+		seen := rootsByAgent[def.Type]
+		for i, rawHome := range homes {
+			home, err := normalizeAgentHomeDir(rawHome)
+			if err != nil {
+				problems = append(problems,
+					fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
+				continue
+			}
+			for _, dir := range AgentHomeDirs(def, home) {
+				key, err := sessionSourceComparisonKey(dir)
+				if err != nil {
+					problems = append(problems,
+						fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
+					continue
+				}
+				if _, duplicate := seen[key]; duplicate {
+					continue
+				}
+				seen[key] = rootState{dir: dir, machine: c.LocalMachineName}
+				c.AgentDirs[def.Type] = append(c.AgentDirs[def.Type], dir)
+			}
+			c.agentDirSource[def.Type] = dirFile
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("agent homes: %s", strings.Join(problems, "; "))
+	}
+
 	for i, input := range c.sessionSourceConfigs {
 		entry := i + 1
 		agent := parser.AgentType(strings.TrimSpace(strings.ToLower(input.Agent)))
@@ -2254,6 +2324,20 @@ func sessionSourceComparisonKey(dir string) (string, error) {
 		return dir, nil
 	}
 	return pathutil.LocalComparisonKey(dir)
+}
+
+// normalizeAgentHomeDir validates and expands one alternate agent home.
+// Homes are local directories only: the derived session roots must be
+// watched and read through the filesystem provider paths.
+func normalizeAgentHomeDir(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("home is required")
+	}
+	if strings.HasPrefix(strings.ToLower(value), "s3://") {
+		return "", fmt.Errorf("home %q is an S3 root; homes must be local directories, so configure S3 through the per-agent directory setting", raw)
+	}
+	return normalizeSessionSourceDir(value)
 }
 
 func normalizeSessionSourceDir(raw string) (string, error) {

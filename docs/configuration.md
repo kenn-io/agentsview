@@ -683,11 +683,13 @@ export AMP_DIR=~/custom/amp # historical local Amp threads only
 export ANTIGRAVITY_DIR=~/custom/antigravity
 export ANTIGRAVITY_CLI_DIR=~/custom/antigravity-cli
 export CLAUDE_PROJECTS_DIR=~/custom/claude
+export CLAUDE_CONFIG_DIR=~/custom/claude-home # re-roots the default projects/ path
 export OPENCLAUDE_PROJECTS_DIR=~/custom/openclaude/projects
 export OPENCLAUDE_CONFIG_DIR=~/custom/openclaude
 export COWORK_DIR=~/custom/cowork
 export CODEBUFF_DIR=~/custom/manicode/projects
 export CODEX_SESSIONS_DIR=~/custom/codex
+export CODEX_HOME=~/custom/codex-home # re-roots the default sessions/ paths
 export COMMANDCODE_PROJECTS_DIR=~/custom/commandcode
 export COPILOT_DIR=~/custom/copilot
 export DEVIN_DIR=~/Library/Application\ Support/devin
@@ -799,6 +801,36 @@ replaces the default path and an explicit empty array clears the default local
 directory.
 
 All listed directories are discovered, watched, and synced independently.
+
+### Alternate Claude and Codex Homes
+
+Claude Code honors `CLAUDE_CONFIG_DIR` and Codex honors `CODEX_HOME`, so one
+machine can run several instances that each keep their own home directory.
+Tools such as t3code do this when `homePath` is set. Those sessions land outside
+the default roots, so AgentsView cannot see them unless each home is
+registered.
+
+Set `claude_homes` or `codex_homes` to the home directories themselves. AgentsView
+derives the native session directories for each home, so you do not need to
+know the on-disk layout:
+
+```toml
+claude_homes = ["~/.claude-work", "~/.t3code/instances/alpha/claude"]
+codex_homes = ["~/.codex-work", "~/.t3code/instances/alpha/codex"]
+```
+
+For Claude, each home adds `<home>/projects`. For Codex, each home adds
+`<home>/sessions` and `<home>/archived_sessions`, and Codex activity hints are
+read from that home's `history.jsonl`. Homes are additive to the default
+directories, the environment variables above, the `*_dirs` arrays, and
+`[[session_sources]]`. Roots that resolve to the same directory are
+deduplicated, and a matching `[[session_sources]]` entry still supplies the
+machine label. Homes must be local directories; use the `*_dirs` arrays for
+`s3://` roots.
+
+Sessions from every home appear under the same Claude or Codex provider. Names,
+projects, and titles come from the native session files, not from the wrapping
+tool's own metadata.
 
 ### Machine-Labeled Filesystem Sources
 
