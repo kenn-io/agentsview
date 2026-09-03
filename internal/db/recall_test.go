@@ -1919,6 +1919,34 @@ func TestQueryRecallEntriesVectorExpandsPastFilteredCandidates(t *testing.T) {
 	assert.Equal(t, []int{SemanticOverfetchMin, SemanticOverfetchMin * 2}, searcher.limits)
 }
 
+func TestQueryRecallEntriesVectorStopsAtExhaustionBelowCandidateCeiling(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	hits := make([]RecallVectorHit, 0, SemanticOverfetchMin+1)
+	for i := range SemanticOverfetchMin + 1 {
+		id := fmt.Sprintf("excluded-%03d", i)
+		_, err := d.InsertRecallEntry(RecallEntry{
+			ID: id, Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Other project", Body: "Excluded before the candidate ceiling.",
+			Project: "other", SourceSessionID: "s1",
+		})
+		require.NoError(t, err)
+		hits = append(hits, RecallVectorHit{EntryID: id, Score: float32(1 - float64(i)/1000)})
+	}
+	searcher := &boundedRecallVectorSearcher{hits: hits, maxCandidates: 4096}
+	d.SetRecallVectorSearcher(searcher)
+
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "semantic policy", Mode: RecallQueryModeVector,
+		Project: "agentsview", Limit: 1,
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, page.RecallEntries)
+	assert.Equal(t, []int{SemanticOverfetchMin, SemanticOverfetchMin * 2}, searcher.limits)
+}
+
 func TestQueryRecallEntriesVectorStopsAtSearcherCandidateCeiling(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
