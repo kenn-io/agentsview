@@ -11,6 +11,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -319,6 +321,10 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 		{"pricing 1h rate", "model_pricing", "cache_creation_1h_microdollars_per_mtok"},
 		{"pricing band", "model_pricing_bands", "input_microdollars_per_mtok"},
 		{"GenAI pricing", "genai_pricing", "data_json"},
+		{"source archive", "source_archives", "source_archive_salt"},
+		{"source identity", "source_project_identity_observations", "key"},
+		{"source snapshot", "source_session_project_identity_snapshots", "key"},
+		{"source worktree mapping", "source_worktree_project_mappings", "updated_at"},
 		{"secret finding", "secret_findings", "rules_version"},
 		{"recall entry", "recall_entries", "uncertainty"},
 		{"recall evidence", "recall_evidence", "snippet"},
@@ -376,6 +382,8 @@ func TestReadOnlyRequiredSchemaDerivedFromSchemaDDL(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	_, err = conn.Exec(schemaSQL)
 	require.NoError(t, err)
+	store := bun.NewDB(conn, sqlitedialect.New())
+	require.NoError(t, CreateCommonSchema(t.Context(), store))
 
 	want := make(map[string][]string, len(readOnlyRequiredTables))
 	for _, table := range readOnlyRequiredTables {
@@ -414,6 +422,8 @@ func openReadOnlySchemaProbe(t *testing.T) *sql.DB {
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	_, err = conn.Exec(schemaSQL)
 	require.NoError(t, err)
+	store := bun.NewDB(conn, sqlitedialect.New())
+	require.NoError(t, CreateCommonSchema(t.Context(), store))
 	return conn
 }
 

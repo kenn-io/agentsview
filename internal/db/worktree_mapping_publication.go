@@ -78,9 +78,11 @@ func (db *DB) LoadWorktreeMappingPublicationDelta(
 		SELECT m.id, m.machine, m.path_prefix, m.layout, m.project,
 		       m.original_project, m.enabled, m.created_at, m.updated_at
 		FROM worktree_project_mapping_changes c
-		JOIN worktree_project_mappings m
+		JOIN source_worktree_project_mappings m
 		  ON m.machine = c.machine AND m.path_prefix = c.path_prefix
-		WHERE c.deleted = 0 AND c.revision > ? AND c.revision <= ?
+		WHERE m.source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND c.deleted = 0 AND c.revision > ? AND c.revision <= ?
 		ORDER BY m.machine, m.path_prefix`,
 		afterRevision, throughRevision)
 	if err != nil {
@@ -132,7 +134,10 @@ func (db *DB) ListAllWorktreeProjectMappings(
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project,
 		       original_project, enabled, created_at, updated_at
-		FROM worktree_project_mappings
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		)
 		ORDER BY machine, path_prefix`)
 	if err != nil {
 		return nil, fmt.Errorf("listing all worktree mappings: %w", err)
