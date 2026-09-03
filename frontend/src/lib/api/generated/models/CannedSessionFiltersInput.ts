@@ -2,14 +2,13 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type InsightCannedSessionFilters = {
+export type CannedSessionFiltersInput = {
   active_since?: string;
   agent?: string;
-  automated_scope: string;
-  include_one_shot: boolean;
+  automated_scope?: string;
+  include_one_shot?: boolean;
   machine?: string;
   min_user_messages?: number;
   termination?: string;
-  timezone: string;
+  timezone?: string;
 };
-

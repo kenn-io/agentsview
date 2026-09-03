@@ -521,6 +521,63 @@ func TestGenerateCannedInsight_RequiresExplicitOptIn(t *testing.T) {
 	assertBodyContains(t, w, "llm_opt_in")
 }
 
+func TestGenerateCannedInsight_AcceptsPartialSessionFilterPayload(t *testing.T) {
+	issueArtifact, err := os.ReadFile(
+		filepath.Join("..", "..", "..", ".claude", "pr-sweep", "bodies", "agentsview-issue-1596.json"),
+	)
+	require.NoError(t, err)
+	var issue struct {
+		Body string `json:"body"`
+	}
+	require.NoError(t, json.Unmarshal(issueArtifact, &issue))
+	assert.Contains(t, issue.Body, "sessionFilters:")
+	assert.Contains(t, issue.Body, "expected required property automated_scope to be present")
+
+	var calls atomic.Int32
+	var generatedPrompt string
+	stubGen := func(
+		_ context.Context, agent, prompt string, _ insight.LogFunc,
+	) (insight.Result, error) {
+		calls.Add(1)
+		require.Equal(t, "codex", agent)
+		generatedPrompt = prompt
+		return insight.Result{
+			Agent: "codex",
+			Model: "test-model",
+			Content: `{
+				"schema_version":"llm_insight.v1",
+				"kind":"model_cost_review",
+				"summary":"The filtered model cost aggregate is ready for review.",
+				"confidence":"medium",
+				"recommendations":[{
+					"title":"Review the selected agent's model costs",
+					"rationale":"The aggregate contains the requested session agent and normalized filter values.",
+					"actions":["Compare the selected agent's model usage"],
+					"evidence_refs":["aggregate:empty"],
+					"impact":"medium",
+					"effort":"low"
+				}],
+				"risks":[],
+				"evidence_refs":["aggregate:empty"]
+			}`,
+		}, nil
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithGenerateStreamFunc(stubGen),
+	})
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"llm_canned","kind":"model_cost_review","date_from":"2025-01-15","date_to":"2025-01-15","agent":"codex","llm_opt_in":true,"timezone":"America/New_York","automated_scope":"human","filters":{"agent":"claude"}}`)
+
+	assertStatus(t, w, http.StatusOK)
+	assertBodyContains(t, w, "event: done")
+	assert.Equal(t, int32(1), calls.Load())
+	assert.Contains(t, generatedPrompt, `"agent":"claude"`)
+	assert.Contains(t, generatedPrompt, `"timezone":"America/New_York"`)
+	assert.Contains(t, generatedPrompt, `"automated_scope":"human"`)
+	assert.Contains(t, generatedPrompt, `"include_one_shot":false`)
+}
+
 func TestGenerateCannedInsight_RejectsInvalidFilterTimezone(t *testing.T) {
 	te := setup(t)
 

@@ -2,13 +2,13 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { InsightCannedSessionFilters } from './InsightCannedSessionFilters';
+import type { CannedSessionFiltersInput } from './CannedSessionFiltersInput';
 export type GenerateInsightRequest = {
   agent?: string;
   automated_scope?: string;
   date_from: string;
   date_to: string;
-  filters?: InsightCannedSessionFilters;
+  filters?: CannedSessionFiltersInput;
   force_refresh?: boolean;
   kind?: string;
   llm_opt_in?: boolean;
