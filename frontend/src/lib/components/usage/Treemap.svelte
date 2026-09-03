@@ -73,35 +73,47 @@
             <clipPath id={clipId}>
               <rect x={node.x0} y={node.y0} width={tileWidth} height={tileHeight} />
             </clipPath>
-            <g
-              class="tile"
-              class:interactive={selectable}
-              clip-path={`url(#${clipId})`}
-              tabindex={selectable ? 0 : undefined}
-              role={selectable ? "button" : undefined}
-              aria-label={selectable ? ariaLabelFor(tile.id, tile.label) : undefined}
-              onclick={selectable ? () => onSelect?.(tile.id) : undefined}
-              onkeydown={selectable ? (event) => handleKey(event, tile.id) : undefined}
-            >
-              <title>{titleFor(tile.id, tile.label)}</title>
-              <Group x={node.x0} y={node.y0}>
-                <Rect
-                  width={tileWidth}
-                  height={tileHeight}
-                  rx={3}
-                  fill={tile.color}
-                />
-                {#if large}
-                  <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
-                  <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
-                  {#if tile.meta}
-                    <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+            {#if selectable}
+              <g
+                class="tile interactive"
+                clip-path={`url(#${clipId})`}
+                tabindex="0"
+                role="button"
+                aria-label={ariaLabelFor(tile.id, tile.label)}
+                onclick={() => onSelect?.(tile.id)}
+                onkeydown={(event) => handleKey(event, tile.id)}
+              >
+                <title>{titleFor(tile.id, tile.label)}</title>
+                <Group x={node.x0} y={node.y0}>
+                  <Rect width={tileWidth} height={tileHeight} rx={3} fill={tile.color} />
+                  {#if large}
+                    <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
+                    <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
+                    {#if tile.meta}
+                      <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+                    {/if}
+                  {:else if medium}
+                    <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
                   {/if}
-                {:else if medium}
-                  <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
-                {/if}
-              </Group>
-            </g>
+                </Group>
+              </g>
+            {:else}
+              <g class="tile" clip-path={`url(#${clipId})`}>
+                <title>{titleFor(tile.id, tile.label)}</title>
+                <Group x={node.x0} y={node.y0}>
+                  <Rect width={tileWidth} height={tileHeight} rx={3} fill={tile.color} />
+                  {#if large}
+                    <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
+                    <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
+                    {#if tile.meta}
+                      <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+                    {/if}
+                  {:else if medium}
+                    <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
+                  {/if}
+                </Group>
+              </g>
+            {/if}
           {/each}
         {/snippet}
       </LayerTreemap>

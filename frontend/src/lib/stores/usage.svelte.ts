@@ -19,6 +19,7 @@ import {
   portableBranchFilterValues,
   scopeBranchFilterValues,
 } from "../branchFilters.js";
+import { toggleListValue } from "../utils/lists.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
@@ -668,14 +669,18 @@ class UsageStore {
   // Toggle an item's exclusion. Clicking an included item
   // excludes it; clicking an excluded item re-includes it.
   toggleProject(name: string): void {
-    this.excludedProjects = this.toggleCsv(this.excludedProjects, name);
+    this.excludedProjects = toggleListValue(this.excludedProjects, name, ",");
     this.fetchAll();
   }
 
   toggleProjectKey(key: string, options: { preserveTimeRange?: boolean } = {}): void {
     const previous = this.excludedProjectKeys;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
-    this.excludedProjectKeys = this.toggleCsv(this.excludedProjectKeys, key);
+    this.excludedProjectKeys = toggleListValue(this.excludedProjectKeys, key, ",");
+    if (!options.preserveTimeRange) {
+      this.fetchAll();
+      return;
+    }
     const changed = this.excludedProjectKeys;
     void this.fetchAllWithResult(options).then((result) => {
       if (result !== "error" || !hadSelectedTimeRange || this.excludedProjectKeys !== changed)
@@ -688,7 +693,11 @@ class UsageStore {
   toggleAgent(name: string, options: { preserveTimeRange?: boolean } = {}): void {
     const previous = this.excludedAgents;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
-    this.excludedAgents = this.toggleCsv(this.excludedAgents, name);
+    this.excludedAgents = toggleListValue(this.excludedAgents, name, ",");
+    if (!options.preserveTimeRange) {
+      this.fetchAll();
+      return;
+    }
     const changed = this.excludedAgents;
     void this.fetchAllWithResult(options).then((result) => {
       if (result !== "error" || !hadSelectedTimeRange || this.excludedAgents !== changed) return;
@@ -701,8 +710,12 @@ class UsageStore {
     const previousSelected = this.selectedModels;
     const previousExcluded = this.excludedModels;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
-    this.selectedModels = this.toggleCsv(this.selectedModels, name);
+    this.selectedModels = toggleListValue(this.selectedModels, name, ",");
     this.excludedModels = "";
+    if (!options.preserveTimeRange) {
+      this.fetchAll();
+      return;
+    }
     const changed = this.selectedModels;
     void this.fetchAllWithResult(options).then((result) => {
       if (result !== "error" || !hadSelectedTimeRange || this.selectedModels !== changed) return;
@@ -712,7 +725,9 @@ class UsageStore {
     });
   }
 
-  toggleBranch(value: string): void {
+  toggleBranch(value: string, options: { preserveTimeRange?: boolean } = {}): void {
+    const previous = this.selectedGitBranch;
+    const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     const current = this.selectedGitBranch
       ? this.selectedGitBranch.split(BRANCH_LIST_SEP)
       : [];
@@ -723,7 +738,16 @@ class UsageStore {
         !branchFilterValuesEqual(selected, value)
       ).join(BRANCH_LIST_SEP)
       : [...current, value].join(BRANCH_LIST_SEP);
-    this.fetchAll();
+    if (!options.preserveTimeRange) {
+      this.fetchAll();
+      return;
+    }
+    const changed = this.selectedGitBranch;
+    void this.fetchAllWithResult(options).then((result) => {
+      if (result !== "error" || !hadSelectedTimeRange || this.selectedGitBranch !== changed) return;
+      this.selectedGitBranch = previous;
+      void this.fetchAll({ preserveTimeRange: true });
+    });
   }
 
   // An item is "excluded" if it appears in the excluded CSV.

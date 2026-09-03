@@ -307,6 +307,7 @@ type cliActivityCursorQuery struct {
 type cliActivityCursorFilter struct {
 	Timezone         string `json:"timezone"`
 	Project          string `json:"project,omitempty"`
+	GitBranch        string `json:"git_branch,omitempty"`
 	Agent            string `json:"agent,omitempty"`
 	Machine          string `json:"machine,omitempty"`
 	ExcludeOneShot   bool   `json:"exclude_one_shot"`
@@ -475,7 +476,7 @@ func resolveCLIActivitySelection(
 
 	gitBranch, err := branchFilterToken(cfg.Project, cfg.Branch)
 	if err != nil {
-		return activity.Report{}, err
+		return activity.Query{}, db.AnalyticsFilter{}, err
 	}
 	f := db.AnalyticsFilter{
 		Timezone:         tz,
@@ -524,7 +525,8 @@ func (cursor cliActivitySessionCursor) selection() (
 	}
 	f := db.AnalyticsFilter{
 		Timezone: cursor.Filter.Timezone, Project: cursor.Filter.Project,
-		Agent: cursor.Filter.Agent, Machine: cursor.Filter.Machine,
+		GitBranch: cursor.Filter.GitBranch,
+		Agent:     cursor.Filter.Agent, Machine: cursor.Filter.Machine,
 		ExcludeOneShot:   cursor.Filter.ExcludeOneShot,
 		ExcludeAutomated: cursor.Filter.ExcludeAutomated,
 	}
@@ -548,8 +550,8 @@ func newCLIActivitySessionCursor(
 			Bucket: q.Bucket, GapCapSeconds: q.GapCapSeconds,
 		},
 		Filter: cliActivityCursorFilter{
-			Timezone: f.Timezone, Project: f.Project, Agent: f.Agent,
-			Machine: f.Machine, ExcludeOneShot: f.ExcludeOneShot,
+			Timezone: f.Timezone, Project: f.Project, GitBranch: f.GitBranch,
+			Agent: f.Agent, Machine: f.Machine, ExcludeOneShot: f.ExcludeOneShot,
 			ExcludeAutomated: f.ExcludeAutomated,
 		},
 	}

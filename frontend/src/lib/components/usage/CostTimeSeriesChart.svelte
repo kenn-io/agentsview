@@ -527,6 +527,7 @@
                 <Area
                   seriesKey={item.key}
                   fill={item.color}
+                  opacity={groupBy === "branch" ? 0.7 : 1}
                 />
               {/if}
             {/each}

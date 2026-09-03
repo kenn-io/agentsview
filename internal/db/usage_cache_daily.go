@@ -14,6 +14,11 @@ type usageDailyFactsBucket struct {
 	cost                                 money.Money
 }
 
+type usageDailyBranchKey struct {
+	project string
+	branch  string
+}
+
 type usageDailyFactsSessionCost struct {
 	estimated     map[usageCostAllocationKey]money.Money
 	authoritative *money.Money
@@ -68,10 +73,16 @@ func (db *DB) assembleDailyUsageFacts(
 	var totalSavings money.Money
 
 	for _, group := range facts.Groups {
+		branchAttributed := filter.BranchBreakdowns && group.SessionID != ""
+		gitBranch := ""
+		if branchAttributed {
+			gitBranch = group.GitBranch
+		}
 		key := usageCostAllocationKey{
 			date: group.Date, project: group.Project, agent: group.Agent,
 			machine: group.Machine, model: group.Model,
-			providerID: group.ProviderID,
+			providerID: group.ProviderID, gitBranch: gitBranch,
+			branchAttributed: branchAttributed,
 		}
 		bucket := accum[key]
 		if bucket == nil {
@@ -141,7 +152,8 @@ func (db *DB) assembleDailyUsageFacts(
 		}
 	}
 
-	daily, totals, err := buildDailyUsageFactsEntries(accum, filter.Breakdowns)
+	daily, totals, err := buildDailyUsageFactsEntries(
+		accum, filter.Breakdowns, filter.BranchBreakdowns)
 	if err != nil {
 		return DailyUsageResult{}, err
 	}
@@ -215,10 +227,11 @@ func recordUsageFactsPricing(
 
 func buildDailyUsageFactsEntries(
 	accum map[usageCostAllocationKey]*usageDailyFactsBucket,
-	breakdowns bool,
+	breakdowns, branchBreakdowns bool,
 ) ([]DailyUsageEntry, UsageTotals, error) {
 	type dayFacts struct {
 		models, projects, agents, machines map[string]usageDailyFactsBucket
+		branches                           map[usageDailyBranchKey]usageDailyFactsBucket
 	}
 	days := make(map[string]*dayFacts)
 	for key, bucket := range accum {
@@ -229,6 +242,9 @@ func buildDailyUsageFactsEntries(
 				day.projects = make(map[string]usageDailyFactsBucket)
 				day.agents = make(map[string]usageDailyFactsBucket)
 				day.machines = make(map[string]usageDailyFactsBucket)
+			}
+			if breakdowns || branchBreakdowns {
+				day.branches = make(map[usageDailyBranchKey]usageDailyFactsBucket)
 			}
 			days[key.date] = day
 		}
@@ -248,6 +264,14 @@ func buildDailyUsageFactsEntries(
 				day.machines[key.machine], err = addUsageDailyFactsBucket(
 					day.machines[key.machine], *bucket)
 			}
+			if err != nil {
+				return nil, UsageTotals{}, err
+			}
+		}
+		if branchBreakdowns && key.branchAttributed {
+			branch := usageDailyBranchKey{project: key.project, branch: key.gitBranch}
+			day.branches[branch], err = addUsageDailyFactsBucket(
+				day.branches[branch], *bucket)
 			if err != nil {
 				return nil, UsageTotals{}, err
 			}
@@ -285,6 +309,9 @@ func buildDailyUsageFactsEntries(
 			entry.ProjectBreakdowns = usageDailyProjectBreakdowns(day.projects)
 			entry.AgentBreakdowns = usageDailyAgentBreakdowns(day.agents)
 			entry.MachineBreakdowns = usageDailyMachineBreakdowns(day.machines)
+		}
+		if breakdowns || branchBreakdowns {
+			entry.BranchBreakdowns = usageDailyBranchBreakdowns(day.branches)
 		}
 		var err error
 		totals.TotalCost, err = money.Add(totals.TotalCost, entry.TotalCost)
@@ -364,6 +391,22 @@ func usageDailyProjectBreakdowns(
 		}
 		return result[i].Project < result[j].Project
 	})
+	return result
+}
+
+func usageDailyBranchBreakdowns(
+	buckets map[usageDailyBranchKey]usageDailyFactsBucket,
+) []BranchBreakdown {
+	result := make([]BranchBreakdown, 0, len(buckets))
+	for key, bucket := range buckets {
+		result = append(result, BranchBreakdown{
+			Project: key.project, Branch: key.branch,
+			InputTokens: bucket.input, OutputTokens: bucket.output,
+			CacheCreationTokens: bucket.cacheWrite,
+			CacheReadTokens:     bucket.cacheRead, Cost: bucket.cost,
+		})
+	}
+	SortBranchBreakdowns(result)
 	return result
 }
 

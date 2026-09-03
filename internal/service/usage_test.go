@@ -890,15 +890,13 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	res, err := svc.UsagePairwiseComparison(
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				GitBranch:         "alpha/main",
-				ExcludeGitBranch:  "alpha\x1fdev",
-				ExcludeProjectKey: "pl1:sha256:hidden",
-			},
-			LeftDimension:  "project",
-			LeftValue:      "alpha",
-			RightDimension: "model",
-			RightValue:     "gpt-4o",
+			GitBranch:         "alpha/main",
+			ExcludeGitBranch:  "alpha\x1fdev",
+			ExcludeProjectKey: "pl1:sha256:hidden",
+			LeftDimension:     "project",
+			LeftValue:         "alpha",
+			RightDimension:    "model",
+			RightValue:        "gpt-4o",
 		},
 	)
 	require.NoError(t, err)

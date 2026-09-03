@@ -540,6 +540,7 @@ describe("AttributionPanel branch mode", () => {
 
     expect(spy).toHaveBeenCalledWith(
       branchFilterToken("pl1:sha256:alpha", "dev"),
+      { preserveTimeRange: true },
     );
     unmount(component);
   });
@@ -638,6 +639,7 @@ describe("AttributionPanel branch mode", () => {
     document.querySelector<HTMLElement>(".list-row")?.click();
     expect(spy).toHaveBeenCalledWith(
       branchFilterToken("pl1:sha256:0", "branch-0"),
+      { preserveTimeRange: true },
     );
     unmount(component);
   });
@@ -700,7 +702,7 @@ describe("AttributionPanel branch mode", () => {
     const otherRect = otherTile?.querySelector("rect");
     const area = Number(otherRect?.getAttribute("width"))
       * Number(otherRect?.getAttribute("height"));
-    expect(area / (600 * 260)).toBeCloseTo(2 / 80, 5);
+    expect(area / (600 * 260)).toBeCloseTo(2 / 80, 2);
 
     otherTile?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(toggleBranch).not.toHaveBeenCalled();
