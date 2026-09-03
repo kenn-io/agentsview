@@ -522,6 +522,33 @@ func TestUsageEventsReplaceAndList(t *testing.T) {
 	require.Len(t, got, 0, "usage events after clear =")
 }
 
+func TestGetUsageEventsOrdersOffsetTimestampsChronologically(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "usage-offset-order", "proj")
+	require.NoError(t, d.ReplaceSessionUsageEvents("usage-offset-order", []UsageEvent{
+		{
+			Source:     "session",
+			Model:      "earlier",
+			OccurredAt: "2026-01-01T00:30:00+01:00",
+		},
+		{
+			Source:     "session",
+			Model:      "later",
+			OccurredAt: "2025-12-31T23:45:00Z",
+		},
+	}))
+
+	events, err := d.GetUsageEvents(ctx, "usage-offset-order")
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, []string{"earlier", "later"}, []string{
+		events[0].Model,
+		events[1].Model,
+	})
+}
+
 func TestUsageEventsReplaceRejectsDuplicateDedupKeysAndRollsBack(t *testing.T) {
 	// A parser emitting two events with the same dedup key (e.g. Grok
 	// retry/replay lines sharing a prompt_id, before the parser-side
@@ -564,6 +591,26 @@ func TestUsageEventsReplaceRejectsDuplicateDedupKeysAndRollsBack(t *testing.T) {
 	require.NoError(t, err, "GetUsageEvents after failed replace")
 	require.Len(t, got, 1, "failed replace must roll back to the prior events")
 	assert.Equal(t, 1, got[0].InputTokens, "prior event must survive the rollback")
+}
+
+func TestUsageEventFingerprintPreservesExactMicrodollars(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "exact-money", "project")
+	event := UsageEvent{
+		SessionID: "exact-money", Source: "provider", Model: "model",
+		OccurredAt: "2026-07-22T12:00:00Z", DedupKey: "exact-cost",
+	}
+	first := money.Money{Microdollars: 9_007_199_254_740_992}
+	event.Cost = &first
+	require.NoError(t, d.ReplaceSessionUsageEvents("exact-money", []UsageEvent{event}))
+	firstFingerprint, err := d.UsageEventFingerprint("exact-money")
+	require.NoError(t, err)
+	second := money.Money{Microdollars: 9_007_199_254_740_993}
+	event.Cost = &second
+	require.NoError(t, d.ReplaceSessionUsageEvents("exact-money", []UsageEvent{event}))
+	secondFingerprint, err := d.UsageEventFingerprint("exact-money")
+	require.NoError(t, err)
+	assert.NotEqual(t, firstFingerprint, secondFingerprint)
 }
 
 func TestGetDailyUsageWithData(t *testing.T) {

@@ -393,20 +393,35 @@ func TestBunStoreSearchContentSubstringUsesCanonicalRows(t *testing.T) {
 	assert.Contains(t, page.Matches[0].Snippet, "needle")
 }
 
-func TestSQLiteBunStoreSearchContentSubstringPreservesNonASCIICase(t *testing.T) {
+func TestSQLiteBunStoreSearchContentSubstringFoldsNonASCIICase(t *testing.T) {
 	database := testDB(t)
 	seedSearchSession(t, database, "unicode-content", "alpha", [][2]string{
-		{"user", "identical uppercase CAFÉ content"},
+		{"user", "uppercase CAFÉ content"},
 	})
 
-	page, err := database.BunStore.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "CAFÉ", Sources: []string{"messages"},
+	page, err := database.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "café", Sources: []string{"messages"},
 		IncludeOneShot: true, Limit: 10,
 	})
 
 	require.NoError(t, err)
 	require.Len(t, page.Matches, 1)
 	assert.Equal(t, "unicode-content", page.Matches[0].SessionID)
+}
+
+func TestSQLiteBunStoreSearchContentSubstringFoldsASCIIToUnicode(t *testing.T) {
+	database := testDB(t)
+	seedSearchSession(t, database, "unicode-kelvin", "alpha", [][2]string{
+		{"user", "temperature uses Kelvin units"},
+	})
+
+	page, err := database.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "kelvin", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "unicode-kelvin", page.Matches[0].SessionID)
 }
 
 func TestSQLiteBunStoreSearchContentUsesCanonicalRows(t *testing.T) {
@@ -499,7 +514,7 @@ func TestSQLiteBunStoreSearchContentFTSOrdersByCanonicalRecency(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	page, err := database.BunStore.SearchContent(t.Context(), ContentSearchFilter{
+	page, err := database.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "needle", Mode: "fts", Sources: []string{"messages"},
 		IncludeOneShot: true, Limit: 1,
 	})

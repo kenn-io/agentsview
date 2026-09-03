@@ -8,6 +8,9 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
+
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // diffDeleteChunkSize bounds IN(...) parameter lists when clearing
@@ -168,6 +171,7 @@ func transcriptMessageEqual(a, b Message) bool {
 		msg.SourceType = ""
 		msg.SourceParentUUID = ""
 		msg.IsSidechain = false
+		msg.Timestamp = canonicalTranscriptTimestamp(msg.Timestamp)
 		msg.ToolCalls = append([]ToolCall(nil), msg.ToolCalls...)
 		for i := range msg.ToolCalls {
 			msg.ToolCalls[i].ResultContentLength = 0
@@ -177,6 +181,9 @@ func transcriptMessageEqual(a, b Message) bool {
 			)
 			for j := range msg.ToolCalls[i].ResultEvents {
 				msg.ToolCalls[i].ResultEvents[j].ContentLength = 0
+				msg.ToolCalls[i].ResultEvents[j].Timestamp = canonicalTranscriptTimestamp(
+					msg.ToolCalls[i].ResultEvents[j].Timestamp,
+				)
 			}
 		}
 		return msg
@@ -185,6 +192,14 @@ func transcriptMessageEqual(a, b Message) bool {
 		comparableTranscriptMessage(a),
 		comparableTranscriptMessage(b),
 	)
+}
+
+func canonicalTranscriptTimestamp(value string) string {
+	parsed, err := bunmodel.ParseTimestamp(value)
+	if err != nil {
+		return value
+	}
+	return parsed.Time.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 }
 
 // planSessionMessageDiff classifies incoming messages against stored

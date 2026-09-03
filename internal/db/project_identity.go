@@ -888,33 +888,29 @@ func (db *DB) upsertSessionWithProjectIdentity(
 	obs.SourceArchiveSalt = archiveSalt
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin()
+	tx, err := db.beginBunWriteTx(context.Background())
 	if err != nil {
 		return sessionUpsertResult{},
 			fmt.Errorf("beginning session identity upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := upsertSessionExec(
-		tx.Exec,
-		func(query string, args ...any) rowScanner {
-			return tx.QueryRow(query, args...)
-		},
-		s,
-		reviveSourceMissing,
+	result, err := upsertArchiveSessionRow(
+		context.Background(), tx, s, reviveSourceMissing,
 	)
 	if err != nil {
 		return sessionUpsertResult{}, err
 	}
+	rawTx := tx.Tx
 	if obs.Project != "" {
 		if err := upsertProjectIdentityObservationWithSnapshotProjectTx(
-			tx, obs, snapshotProject, result.inserted, true,
+			rawTx, obs, snapshotProject, result.inserted, true,
 		); err != nil {
 			return sessionUpsertResult{}, err
 		}
 	}
 	if !result.inserted && result.previousProject != result.currentProject {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			context.Background(), tx, s.ID,
+			context.Background(), rawTx, s.ID,
 			[]string{result.previousProject, result.currentProject},
 		); err != nil {
 			return sessionUpsertResult{}, err
