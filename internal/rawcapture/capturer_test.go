@@ -1468,7 +1468,8 @@ func uploadCanonicalBytes(
 	for _, entry := range entries {
 		manifestEntries = append(manifestEntries, rawsync.Entry{
 			Path: entry.Path, Type: "file", Length: entry.Length,
-			Objects: append([]rawsync.ObjectRef(nil), entry.Objects...),
+			ModTimeNS: entry.ModTimeNS,
+			Objects:   append([]rawsync.ObjectRef(nil), entry.Objects...),
 		})
 	}
 	identity, err := rawsync.NewAuthIdentity(strings.Repeat(`"`, 128), strings.Repeat(`"`, 128))

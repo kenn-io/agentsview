@@ -328,7 +328,7 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 		`GRANT INSERT ON ` + schema + `.raw_manifest_entries TO ` + role,
 		`GRANT INSERT ON ` + schema + `.raw_manifest_objects TO ` + role,
 		`GRANT SELECT, INSERT, UPDATE ON ` + schema + `.raw_source_heads TO ` + role,
-		`GRANT INSERT ON ` + schema + `.raw_ingest_jobs TO ` + role,
+		`GRANT SELECT, INSERT, UPDATE ON ` + schema + `.raw_ingest_jobs TO ` + role,
 		`GRANT USAGE ON SEQUENCE ` + schema + `.raw_ingest_jobs_id_seq TO ` + role,
 	} {
 		_, err = admin.Exec(grant)
@@ -367,7 +367,9 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 		{"raw_source_heads", "SELECT"},
 		{"raw_source_heads", "INSERT"},
 		{"raw_source_heads", "UPDATE"},
+		{"raw_ingest_jobs", "SELECT"},
 		{"raw_ingest_jobs", "INSERT"},
+		{"raw_ingest_jobs", "UPDATE"},
 	}
 	for _, required := range requiredTablePrivileges {
 		t.Run(required.table+"_"+strings.ToLower(required.privilege), func(t *testing.T) {

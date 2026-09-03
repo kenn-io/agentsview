@@ -184,7 +184,7 @@ func TestParseWarpSession_SingleConversation(t *testing.T) {
 	seedWarpConversation(t, seeder)
 
 	sess, msgs, err := parseWarpSession(
-		dbPath, "conv-001", "testmachine",
+		t.Context(), dbPath, "conv-001", "testmachine",
 	)
 	require.NoError(t, err, "parseWarpSession")
 	require.NotNil(t, sess, "expected non-nil session")

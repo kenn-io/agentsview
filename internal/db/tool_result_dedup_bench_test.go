@@ -31,6 +31,13 @@ func seedBenchToolResultSession(
 	b *testing.B, d *DB, sessionID string, msgs, callsPerMsg, eventsPerCall int,
 ) {
 	b.Helper()
+	// Silence the default logger for the whole benchmark. The
+	// insert below can exceed the 100ms slow-op advisory threshold
+	// on a loaded runner, and `go test` merges that log line into
+	// the benchmark capture between the printed benchmark name and
+	// its results — destroying the result line and losing the
+	// sample the bench gate compares. See silenceBenchmarkLogs.
+	silenceBenchmarkLogs(b)
 	if err := d.UpsertSession(Session{
 		ID: sessionID, Project: "bench", Machine: "local", Agent: "claude",
 	}); err != nil {

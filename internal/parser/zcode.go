@@ -35,7 +35,7 @@ func (f zcodeProviderFactory) Capabilities() Capabilities {
 
 func (f zcodeProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
-	cfg.Roots = normalizeZCodeRoots(cfg.Roots)
+	cfg.Roots = normalizeZCodeRoots(cfg.Roots, cfg.StableSourceSnapshots)
 	spec := zcodeProviderSpec()
 	return &dbBackedProvider{
 		Def:     cloneAgentDef(f.def),
@@ -79,8 +79,10 @@ func zcodeProviderSpec() dbBackedProviderSpec {
 		) (dbBackedSessionMeta, bool, error) {
 			return zcodeSessionMeta(ctx, dbPath, sessionID)
 		},
-		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
-			result, err := parseZCodeSession(dbPath, sessionID, machine)
+		parse: func(
+			ctx context.Context, dbPath, sessionID, machine string,
+		) ([]ParseResult, error) {
+			result, err := parseZCodeSession(ctx, dbPath, sessionID, machine)
 			if err != nil || result == nil {
 				return nil, err
 			}
@@ -90,12 +92,12 @@ func zcodeProviderSpec() dbBackedProviderSpec {
 	}
 }
 
-func normalizeZCodeRoots(roots []string) []string {
+func normalizeZCodeRoots(roots []string, directRoot bool) []string {
 	cleaned := cleanJSONLRoots(roots)
 	out := make([]string, 0, len(cleaned))
 	seen := make(map[string]struct{}, len(cleaned))
 	for _, root := range cleaned {
-		normalized := normalizeZCodeRoot(root)
+		normalized := normalizeZCodeRoot(root, directRoot)
 		if normalized == "" {
 			continue
 		}
@@ -108,10 +110,18 @@ func normalizeZCodeRoots(roots []string) []string {
 	return out
 }
 
-func normalizeZCodeRoot(root string) string {
+func normalizeZCodeRoot(root string, directRoot bool) string {
 	root = filepath.Clean(root)
 	if root == "" || root == "." {
 		return ""
+	}
+	// A materialized raw snapshot (stable source snapshots) places db.sqlite
+	// directly inside the snapshot root, so only that mode accepts a root that
+	// already contains the database. A configured root keeps its existing
+	// mapping: a stray top-level db.sqlite must never win over the established
+	// db/db.sqlite layout.
+	if directRoot && IsRegularFile(filepath.Join(root, zcodeDBName)) {
+		return root
 	}
 	if filepath.Base(root) == "db" {
 		return root
@@ -172,10 +182,14 @@ func forEachZCodeSessionMeta(
 			continue
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
+		mtime, err := zcodeSessionFileMtime(ctx, dbPath, db, row)
+		if err != nil {
+			return err
+		}
 		if err := yield(dbBackedSessionMeta{
 			SessionID:   row.id,
 			VirtualPath: ZCodeSQLiteVirtualPath(dbPath, row.id),
-			FileMtime:   zcodeSessionFileMtime(dbPath, db, row),
+			FileMtime:   mtime,
 		}); err != nil {
 			return err
 		}
@@ -194,7 +208,7 @@ func zcodeSessionMeta(
 		return dbBackedSessionMeta{}, false, err
 	}
 	defer db.Close()
-	row, err := loadZCodeSessionRow(db, sessionID)
+	row, err := loadZCodeSessionRow(ctx, db, sessionID)
 	if err == sql.ErrNoRows {
 		return dbBackedSessionMeta{}, false, nil
 	}
@@ -204,24 +218,30 @@ func zcodeSessionMeta(
 	if err := ctx.Err(); err != nil {
 		return dbBackedSessionMeta{}, false, err
 	}
+	mtime, err := zcodeSessionFileMtime(ctx, dbPath, db, row)
+	if err != nil {
+		return dbBackedSessionMeta{}, false, err
+	}
 	return dbBackedSessionMeta{
 		SessionID: row.id, VirtualPath: ZCodeSQLiteVirtualPath(dbPath, row.id),
-		FileMtime: zcodeSessionFileMtime(dbPath, db, row),
+		FileMtime: mtime,
 	}, true, nil
 }
 
-func parseZCodeSession(dbPath, sessionID, machine string) (*ParseResult, error) {
+func parseZCodeSession(
+	ctx context.Context, dbPath, sessionID, machine string,
+) (*ParseResult, error) {
 	db, err := openZCodeDB(dbPath)
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
 
-	row, err := loadZCodeSessionRow(db, sessionID)
+	row, err := loadZCodeSessionRow(ctx, db, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	result, err := buildZCodeParseResult(dbPath, machine, row, db)
+	result, err := buildZCodeParseResult(ctx, dbPath, machine, row, db)
 	if err != nil {
 		return nil, err
 	}
@@ -278,8 +298,10 @@ type zcodePartRow struct {
 	data        string
 }
 
-func loadZCodeSessionRow(db *sql.DB, sessionID string) (zcodeSessionRow, error) {
-	row := db.QueryRow(`
+func loadZCodeSessionRow(
+	ctx context.Context, db *sql.DB, sessionID string,
+) (zcodeSessionRow, error) {
+	row := db.QueryRowContext(ctx, `
 		SELECT id,
 		       project_id,
 		       workspace_id,
@@ -314,7 +336,7 @@ func scanZCodeSessionRow(rows *sql.Rows) (zcodeSessionRow, error) {
 }
 
 func buildZCodeParseResult(
-	dbPath, machine string,
+	ctx context.Context, dbPath, machine string,
 	row zcodeSessionRow,
 	db *sql.DB,
 ) (ParseResult, error) {
@@ -328,7 +350,7 @@ func buildZCodeParseResult(
 	}
 
 	directory := row.directory.String
-	project := ExtractProjectFromCwd(directory)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, directory, "")
 	if project == "" {
 		switch {
 		case row.projectID.Valid:
@@ -346,11 +368,11 @@ func buildZCodeParseResult(
 		firstMessage = truncate(strings.ReplaceAll(firstMessage, "\n", " "), 300)
 	}
 
-	msgs, err := loadZCodeMessages(db, row.id)
+	msgs, err := loadZCodeMessages(ctx, db, row.id)
 	if err != nil {
 		return ParseResult{}, err
 	}
-	parts, err := loadZCodeParts(db, row.id)
+	parts, err := loadZCodeParts(ctx, db, row.id)
 	if err != nil {
 		return ParseResult{}, err
 	}
@@ -381,9 +403,12 @@ func buildZCodeParseResult(
 	if info, err := os.Stat(dbPath); err == nil {
 		sess.File.Size = info.Size()
 	}
-	sess.File.Mtime = zcodeSessionFileMtime(dbPath, db, row)
+	sess.File.Mtime, err = zcodeSessionFileMtime(ctx, dbPath, db, row)
+	if err != nil {
+		return ParseResult{}, err
+	}
 
-	usageEvents, err := listZCodeUsageEvents(db, row.id, startedAt, endedAt)
+	usageEvents, err := listZCodeUsageEvents(ctx, db, row.id, startedAt, endedAt)
 	if err != nil {
 		return ParseResult{}, err
 	}
@@ -397,9 +422,9 @@ func buildZCodeParseResult(
 }
 
 func loadZCodeMessages(
-	db *sql.DB, sessionID string,
+	ctx context.Context, db *sql.DB, sessionID string,
 ) ([]zcodeMessageRow, error) {
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT id,
 		       COALESCE(data, '{}'),
 		       CAST(COALESCE(time_created, '') AS TEXT)
@@ -433,18 +458,18 @@ func loadZCodeMessages(
 }
 
 func loadZCodeParts(
-	db *sql.DB, sessionID string,
+	ctx context.Context, db *sql.DB, sessionID string,
 ) (map[string][]zcodePartRow, error) {
 	selectTime := `''`
 	orderBy := `id`
-	if has, err := zcodeTableHasColumn(db, "part", "time_created"); err != nil {
+	if has, err := zcodeTableHasColumn(ctx, db, "part", "time_created"); err != nil {
 		return nil, err
 	} else if has {
 		selectTime = `CAST(COALESCE(time_created, '') AS TEXT)`
 		orderBy = selectTime + `, id`
 	}
 
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT id,
 		       message_id,
 		       `+selectTime+`,
@@ -721,8 +746,10 @@ func zcodeParseToolResult(block gjson.Result) (ParsedToolResult, bool) {
 	return ParsedToolResult{}, false
 }
 
-func zcodeTableHasColumn(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+func zcodeTableHasColumn(
+	ctx context.Context, db *sql.DB, table, column string,
+) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return false, fmt.Errorf("listing zcode table info for %s: %w", table, err)
 	}
@@ -753,11 +780,12 @@ func zcodeTableHasColumn(db *sql.DB, table, column string) (bool, error) {
 }
 
 func listZCodeUsageEvents(
+	ctx context.Context,
 	db *sql.DB,
 	sessionID string,
 	startedAt, endedAt time.Time,
 ) ([]ParsedUsageEvent, error) {
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT session_id,
 		       CAST(turn_id AS TEXT),
 		       provider_id,
@@ -907,11 +935,15 @@ func zcodeUsageTime(raw string) time.Time {
 	return zcodeParseTime(raw)
 }
 
-func zcodeSessionFileMtime(dbPath string, db *sql.DB, row zcodeSessionRow) int64 {
+func zcodeSessionFileMtime(
+	ctx context.Context, dbPath string, db *sql.DB, row zcodeSessionRow,
+) (int64, error) {
 	maxMtime := zcodeTimeUnixNano(zcodeRowUpdatedAt(row))
-	if usageMtime, err := zcodeMaxUsageMtime(db, row.id); err == nil {
-		maxMtime = max(maxMtime, usageMtime)
+	usageMtime, err := zcodeMaxUsageMtime(ctx, db, row.id)
+	if err != nil {
+		return 0, err
 	}
+	maxMtime = max(maxMtime, usageMtime)
 	// The -shm index is excluded on purpose: readers rewrite it, this
 	// provider's own read connection included, so folding its mtime into the
 	// fingerprint made every scan report the whole container as changed.
@@ -921,11 +953,13 @@ func zcodeSessionFileMtime(dbPath string, db *sql.DB, row zcodeSessionRow) int64
 			maxMtime = max(maxMtime, info.ModTime().UnixNano())
 		}
 	}
-	return maxMtime
+	return maxMtime, nil
 }
 
-func zcodeMaxUsageMtime(db *sql.DB, sessionID string) (int64, error) {
-	rows, err := db.Query(`
+func zcodeMaxUsageMtime(
+	ctx context.Context, db *sql.DB, sessionID string,
+) (int64, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT CAST(COALESCE(completed_at, '') AS TEXT),
 		       CAST(COALESCE(started_at, '') AS TEXT)
 		  FROM model_usage

@@ -22,7 +22,7 @@ type dbBackedProviderSpec struct {
 	findDB       func(string) string
 	streamMeta   func(context.Context, string, func(dbBackedSessionMeta) error) error
 	metaForID    func(context.Context, string, string) (dbBackedSessionMeta, bool, error)
-	parse        func(string, string, string) ([]ParseResult, error)
+	parse        func(context.Context, string, string, string) ([]ParseResult, error)
 	normalizeRaw func(string) string
 	caps         Capabilities
 }
@@ -184,6 +184,39 @@ func (p *dbBackedProvider) newRawCaptureSource(root, dbPath string) SourceRef {
 	}
 }
 
+// RawSnapshotSessions enumerates every logical session inside one physical
+// database snapshot, preserving the session-scoped virtual sources the
+// provider's ordinary Fingerprint and Parse contract consumes.
+func (p *dbBackedProvider) RawSnapshotSessions(
+	ctx context.Context,
+	source SourceRef,
+) ([]SourceRef, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	raw, ok := source.Opaque.(dbBackedRawSource)
+	if !ok || raw.Root == "" || raw.DBPath == "" {
+		return nil, invalidRawCapturePlan("database source path unavailable")
+	}
+	if source.Provider != p.spec.agent || source.Key != p.spec.dbName ||
+		!samePath(raw.DBPath, filepath.Join(raw.Root, p.spec.dbName)) ||
+		!IsRegularFile(raw.DBPath) {
+		return nil, invalidRawCapturePlan("database source does not match provider root")
+	}
+	var sessions []SourceRef
+	seen := make(map[string]struct{})
+	err := p.spec.streamMeta(ctx, raw.DBPath, func(meta dbBackedSessionMeta) error {
+		ref := p.sources.newSourceRef(raw.Root, raw.DBPath, meta.SessionID, meta.VirtualPath)
+		ref.DiscoveryMTimeNS = meta.FileMtime
+		addJSONLSource(ref, &sessions, seen)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sessions, nil
+}
+
 func (p *dbBackedProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 	return p.sources.Discover(ctx)
 }
@@ -276,7 +309,16 @@ func (p *dbBackedProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	results, err := p.spec.parse(src.DBPath, src.SessionID, machine)
+	if p.Config.StableSourceSnapshots {
+		// A stable-snapshot config parses a materialized copy of another
+		// host's tree (hosted raw derivation or bounded capture), so working
+		// directories recorded inside the store are foreign metadata. Keep
+		// project attribution lexical so cwd helpers that never consult the
+		// context still cannot walk the local filesystem from an untrusted
+		// path.
+		ctx = WithoutFilesystemProjectDiscovery(ctx)
+	}
+	results, err := p.spec.parse(ctx, src.DBPath, src.SessionID, machine)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ParseOutcome{
 			ResultSetComplete: true,
@@ -462,7 +504,7 @@ func (s dbBackedSourceSet) FindSource(
 					continue
 				}
 				if req.RequireFreshSource {
-					fresh, err := s.sourceExists(src)
+					fresh, err := s.sourceExists(ctx, src)
 					if err != nil {
 						return SourceRef{}, false, err
 					}
@@ -493,11 +535,11 @@ func (s dbBackedSourceSet) FindSource(
 	return SourceRef{}, false, nil
 }
 
-func (s dbBackedSourceSet) sourceExists(src dbBackedSource) (bool, error) {
+func (s dbBackedSourceSet) sourceExists(ctx context.Context, src dbBackedSource) (bool, error) {
 	if !IsRegularFile(src.DBPath) {
 		return false, nil
 	}
-	_, found, err := s.spec.metaForID(context.Background(), src.DBPath, src.SessionID)
+	_, found, err := s.spec.metaForID(ctx, src.DBPath, src.SessionID)
 	if err != nil {
 		return false, err
 	}
@@ -648,8 +690,10 @@ func forgeProviderSpec() dbBackedProviderSpec {
 			meta, found, err := forgeSessionMeta(ctx, dbPath, id)
 			return dbBackedSessionMeta(meta), found, err
 		},
-		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
-			sess, msgs, err := parseForgeSession(dbPath, sessionID, machine)
+		parse: func(
+			ctx context.Context, dbPath, sessionID, machine string,
+		) ([]ParseResult, error) {
+			sess, msgs, err := parseForgeSession(ctx, dbPath, sessionID, machine)
 			if err != nil || sess == nil {
 				return nil, err
 			}
@@ -684,8 +728,10 @@ func piebaldProviderSpec() dbBackedProviderSpec {
 			meta, found, err := piebaldSessionMeta(ctx, dbPath, id)
 			return dbBackedSessionMeta(meta), found, err
 		},
-		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
-			return parsePiebaldSessionResults(dbPath, sessionID, machine)
+		parse: func(
+			ctx context.Context, dbPath, sessionID, machine string,
+		) ([]ParseResult, error) {
+			return parsePiebaldSessionResults(ctx, dbPath, sessionID, machine)
 		},
 		normalizeRaw: func(raw string) string {
 			chatID, _, _ := strings.Cut(raw, "-")
@@ -720,8 +766,10 @@ func warpProviderSpec() dbBackedProviderSpec {
 			meta, found, err := warpSessionMeta(ctx, dbPath, id)
 			return dbBackedSessionMeta(meta), found, err
 		},
-		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
-			sess, msgs, err := parseWarpSession(dbPath, sessionID, machine)
+		parse: func(
+			ctx context.Context, dbPath, sessionID, machine string,
+		) ([]ParseResult, error) {
+			sess, msgs, err := parseWarpSession(ctx, dbPath, sessionID, machine)
 			if err != nil || sess == nil {
 				return nil, err
 			}

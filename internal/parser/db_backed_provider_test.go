@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -244,6 +245,76 @@ func TestDBBackedProviderRawCaptureReportsDiscoveryCompleteness(t *testing.T) {
 			assert.Equal(t, dbPath, streamed[0].DisplayPath)
 		})
 	}
+}
+
+func TestDBBackedProviderRawSnapshotSessionsFanOutLogicalSessions(t *testing.T) {
+	dbPath, seeder, db := newForgeTestDB(t)
+	defer db.Close()
+	seedForgeConversation(t, seeder)
+	seeder.AddConversation(
+		"conv-002", "Second", 123,
+		`{"conversation_id":"conv-002","messages":[]}`,
+		"2026-05-03 09:58:15.000000000",
+		"2026-05-03 10:00:16.000000000", "",
+	)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+	require.NoError(t, err)
+	require.True(t, discovery.Complete)
+	require.Len(t, discovery.Sources, 1)
+
+	sessions, supported, err := ResolveRawSnapshotSessions(
+		t.Context(), provider, discovery.Sources[0],
+	)
+	require.NoError(t, err)
+	require.True(t, supported, "db-backed providers must fan raw snapshots out to sessions")
+	require.Len(t, sessions, 2)
+	assert.Equal(t, dbPath+"#conv-001", sessions[0].Key)
+	assert.Equal(t, dbPath+"#conv-001", sessions[0].DisplayPath)
+	assert.Equal(t, dbPath+"#conv-002", sessions[1].Key)
+	assert.Equal(t,
+		time.Date(2026, 5, 2, 10, 0, 16, 848497543, time.UTC).UnixNano(),
+		sessions[0].DiscoveryMTimeNS)
+
+	// The ordinary per-session contract must accept each enumerated session.
+	fingerprint, err := provider.Fingerprint(t.Context(), sessions[0])
+	require.NoError(t, err)
+	assert.Equal(t, dbPath+"#conv-001", fingerprint.Key)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
+		Source:      sessions[0],
+		Fingerprint: fingerprint,
+		Machine:     "hosted-worker",
+		ForceParse:  true,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, dbPath+"#conv-001", outcome.Results[0].Result.Session.File.Path)
+	assert.Equal(t, "forge:conv-001", outcome.Results[0].Result.Session.ID)
+
+	_, _, err = ResolveRawSnapshotSessions(t.Context(), provider, SourceRef{
+		Provider: AgentForge, Key: ForgeDBFilename,
+	})
+	assert.ErrorIs(t, err, ErrInvalidRawCapturePlan,
+		"a source without provider-owned raw state must not fan out")
+}
+
+func TestResolveRawSnapshotSessionsLeavesFileShapedProvidersAlone(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "session.jsonl"), []byte("{}\n"), 0o600,
+	))
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{dir}})
+	require.True(t, ok)
+
+	sessions, supported, err := ResolveRawSnapshotSessions(t.Context(), provider, SourceRef{
+		Provider: AgentClaude, Key: "session.jsonl",
+	})
+
+	require.NoError(t, err)
+	assert.False(t, supported)
+	assert.Empty(t, sessions)
 }
 
 func TestPiebaldProviderSourceMethodsAndParse(t *testing.T) {

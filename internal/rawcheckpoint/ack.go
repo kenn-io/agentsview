@@ -603,7 +603,8 @@ func loadManifestEntriesConn(
 	for _, entry := range captured {
 		entries = append(entries, rawsync.Entry{
 			Path: entry.Path, Type: "file", Length: entry.Length,
-			Objects: append([]rawsync.ObjectRef(nil), entry.Objects...),
+			ModTimeNS: entry.ModTimeNS,
+			Objects:   append([]rawsync.ObjectRef(nil), entry.Objects...),
 		})
 	}
 	return entries, nil

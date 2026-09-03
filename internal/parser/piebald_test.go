@@ -193,7 +193,7 @@ func parsePiebaldOneSession(
 	t *testing.T, dbPath, chatID, machine string,
 ) (*ParsedSession, []ParsedMessage) {
 	t.Helper()
-	results, err := parsePiebaldSessionResults(dbPath, chatID, machine)
+	results, err := parsePiebaldSessionResults(t.Context(), dbPath, chatID, machine)
 	require.NoError(t, err, "parsePiebaldSessionResults")
 	require.NotEmpty(t, results, "expected at least one parsed session")
 	return &results[0].Session, results[0].Messages
@@ -307,7 +307,7 @@ func TestParsePiebaldSessionResultsSplitsForks(t *testing.T) {
 		piebaldTextPartSeed{2001, 201, 0, "fork answer", false},
 	)
 
-	results, err := parsePiebaldSessionResults(dbPath, "42", "machine")
+	results, err := parsePiebaldSessionResults(t.Context(), dbPath, "42", "machine")
 	require.NoError(t, err, "parsePiebaldSessionResults")
 	require.Len(t, results, 2)
 	main := results[0]
@@ -366,7 +366,7 @@ func TestParsePiebaldSessionResultsHandlesNestedForks(t *testing.T) {
 		piebaldTextPartSeed{1301, 301, 0, "nested fork answer", false},
 	)
 
-	results, err := parsePiebaldSessionResults(dbPath, "42", "machine")
+	results, err := parsePiebaldSessionResults(t.Context(), dbPath, "42", "machine")
 	require.NoError(t, err, "parsePiebaldSessionResults")
 	require.Len(t, results, 3, "main + outer fork + nested fork")
 

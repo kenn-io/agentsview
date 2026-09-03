@@ -122,7 +122,9 @@ func forgeSessionMeta(
 }
 
 // parseForgeSession parses a single conversation by ID from the Forge database.
-func parseForgeSession(dbPath, conversationID, machine string) (*ParsedSession, []ParsedMessage, error) {
+func parseForgeSession(
+	ctx context.Context, dbPath, conversationID, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil, nil, fmt.Errorf("forge db not found: %s", dbPath)
 	}
@@ -133,11 +135,11 @@ func parseForgeSession(dbPath, conversationID, machine string) (*ParsedSession, 
 	}
 	defer db.Close()
 
-	c, err := loadOneForgeConversation(db, conversationID)
+	c, err := loadOneForgeConversation(ctx, db, conversationID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading forge conversation %s: %w", conversationID, err)
 	}
-	return buildForgeSession(c, dbPath, machine)
+	return buildForgeSession(ctx, c, dbPath, machine)
 }
 
 func openForgeDB(dbPath string) (*sql.DB, error) {
@@ -159,8 +161,10 @@ type forgeConversationRow struct {
 	metrics   string
 }
 
-func loadOneForgeConversation(db *sql.DB, conversationID string) (forgeConversationRow, error) {
-	row := db.QueryRow(`
+func loadOneForgeConversation(
+	ctx context.Context, db *sql.DB, conversationID string,
+) (forgeConversationRow, error) {
+	row := db.QueryRowContext(ctx, `
 		SELECT conversation_id,
 		       COALESCE(title, ''),
 		       COALESCE(context, ''),
@@ -176,7 +180,9 @@ func loadOneForgeConversation(db *sql.DB, conversationID string) (forgeConversat
 	return c, err
 }
 
-func buildForgeSession(c forgeConversationRow, dbPath, machine string) (*ParsedSession, []ParsedMessage, error) {
+func buildForgeSession(
+	ctx context.Context, c forgeConversationRow, dbPath, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
 	root := gjson.Parse(c.context)
 	messagesRoot := root.Get("messages")
 	if !messagesRoot.IsArray() {
@@ -302,7 +308,7 @@ func buildForgeSession(c forgeConversationRow, dbPath, machine string) (*ParsedS
 		return nil, nil, nil
 	}
 
-	project := ExtractProjectFromCwd(cwd)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	startedAt := parseForgeTimestamp(c.createdAt)
 	endedAt := parseForgeTimestamp(c.updatedAt)
 	if endedAt.IsZero() {

@@ -75,11 +75,14 @@ const (
 )
 
 // Entry describes one logical source file and its ordered object slices.
+// ModTimeNS is the captured source modification time in Unix nanoseconds;
+// zero means the generation predates mod-time capture.
 type Entry struct {
-	Path    string      `json:"path"`
-	Type    string      `json:"type"`
-	Length  int64       `json:"length"`
-	Objects []ObjectRef `json:"objects"`
+	Path      string      `json:"path"`
+	Type      string      `json:"type"`
+	Length    int64       `json:"length"`
+	ModTimeNS int64       `json:"mod_time_ns,omitzero"`
+	Objects   []ObjectRef `json:"objects"`
 }
 
 // Manifest declares one complete logical provider-source generation.
@@ -136,6 +139,50 @@ type canonicalEnvelope struct {
 	CapturedAt            time.Time        `json:"captured_at"`
 	Kind                  ManifestKind     `json:"kind"`
 	Entries               []Entry          `json:"entries,omitempty"`
+}
+
+// ParseCanonicalManifest reconstructs a canonical manifest only when the
+// stored envelope exactly matches its authenticated identity and digest.
+func ParseCanonicalManifest(
+	identity AuthIdentity,
+	manifestID string,
+	canonicalJSON []byte,
+	limits ManifestLimits,
+) (CanonicalManifest, error) {
+	if err := validateManifestLimits(limits); err != nil {
+		return CanonicalManifest{}, err
+	}
+	if !isCanonicalSHA256(manifestID) {
+		return CanonicalManifest{}, fmt.Errorf("%w: manifest digest must be lowercase SHA-256", ErrInvalid)
+	}
+	if len(canonicalJSON) == 0 || len(canonicalJSON) > limits.MaxCanonicalBytes {
+		return CanonicalManifest{}, fmt.Errorf("%w: canonical manifest size is invalid", ErrInvalid)
+	}
+	var envelope canonicalEnvelope
+	if err := json.Unmarshal(canonicalJSON, &envelope); err != nil {
+		return CanonicalManifest{}, fmt.Errorf("%w: decoding canonical raw manifest: %v", ErrInvalid, err)
+	}
+	if envelope.TenantID != identity.TenantID || envelope.DeviceID != identity.DeviceID {
+		return CanonicalManifest{}, fmt.Errorf("%w: canonical manifest identity does not match authentication", ErrInvalid)
+	}
+	validated, err := ValidateAndCanonicalize(identity, Manifest{
+		SchemaVersion:         envelope.SchemaVersion,
+		Provider:              envelope.Provider,
+		ConfiguredRootID:      envelope.ConfiguredRootID,
+		SourceKey:             envelope.SourceKey,
+		ExpectedParentReceipt: envelope.ExpectedParentReceipt,
+		CaptureID:             envelope.CaptureID,
+		CapturedAt:            envelope.CapturedAt,
+		Kind:                  envelope.Kind,
+		Entries:               envelope.Entries,
+	}, limits)
+	if err != nil {
+		return CanonicalManifest{}, err
+	}
+	if validated.ManifestID != manifestID || !bytes.Equal(validated.CanonicalJSON, canonicalJSON) {
+		return CanonicalManifest{}, fmt.Errorf("%w: canonical manifest envelope is inconsistent", ErrInvalid)
+	}
+	return validated, nil
 }
 
 // ValidateAndCanonicalize binds authentication to validated canonical bytes.
@@ -253,7 +300,7 @@ func manifestsEqual(a, b Manifest) bool {
 
 func entriesEqual(a, b Entry) bool {
 	return a.Path == b.Path && a.Type == b.Type && a.Length == b.Length &&
-		slices.Equal(a.Objects, b.Objects)
+		a.ModTimeNS == b.ModTimeNS && slices.Equal(a.Objects, b.Objects)
 }
 
 func validateManifestLimits(limits ManifestLimits) error {
@@ -348,16 +395,16 @@ func validateEntries(manifest Manifest, limits ManifestLimits) ([]ObjectRef, err
 		return nil, fmt.Errorf("%w: manifest entry limit exceeded", ErrInvalid)
 	}
 	byDigest := make(map[string]ObjectRef)
+	filePaths := make(map[string]string, len(manifest.Entries))
+	directoryPaths := make(map[string]string)
 	objectCount := 0
-	previousPath := ""
 	for _, entry := range manifest.Entries {
 		if err := validateEntryPath(entry.Path, limits.MaxPathBytes); err != nil {
 			return nil, err
 		}
-		if entry.Path == previousPath {
-			return nil, fmt.Errorf("%w: duplicate manifest path %q", ErrInvalid, entry.Path)
+		if err := claimEntryPath(entry.Path, filePaths, directoryPaths); err != nil {
+			return nil, err
 		}
-		previousPath = entry.Path
 		if entry.Type != "file" {
 			return nil, fmt.Errorf("%w: unsupported entry type %q", ErrInvalid, entry.Type)
 		}
@@ -408,6 +455,46 @@ func validateEntryPath(value string, maxBytes int) error {
 		return fmt.Errorf("%w: entry path: %v", ErrInvalid, err)
 	}
 	return nil
+}
+
+// claimEntryPath records one file entry path and rejects the collisions that
+// make a manifest unmaterializable: two entries claiming one logical
+// location, exactly or under case-insensitive platform comparison, and one
+// file path doubling as a parent directory of another. Detection works from
+// maps of already-claimed locations, so the outcome never depends on entry
+// order.
+func claimEntryPath(entryPath string, filePaths, directoryPaths map[string]string) error {
+	key := rawpath.PlatformKey(entryPath)
+	if other, ok := filePaths[key]; ok {
+		if other == entryPath {
+			return fmt.Errorf("%w: duplicate manifest path %q", ErrInvalid, entryPath)
+		}
+		return fmt.Errorf(
+			"%w: manifest path %q differs from %q only by letter case", ErrInvalid, entryPath, other,
+		)
+	}
+	if descendant, ok := directoryPaths[key]; ok {
+		return fmt.Errorf(
+			"%w: manifest file path %q is also a parent directory of %q",
+			ErrInvalid, entryPath, descendant,
+		)
+	}
+	filePaths[key] = entryPath
+	for ancestor := key; ; {
+		slash := strings.LastIndex(ancestor, "/")
+		if slash <= 0 {
+			return nil
+		}
+		ancestor = ancestor[:slash]
+		if file, ok := filePaths[ancestor]; ok {
+			return fmt.Errorf(
+				"%w: manifest file path %q is also a parent directory of %q", ErrInvalid, file, entryPath,
+			)
+		}
+		if _, ok := directoryPaths[ancestor]; !ok {
+			directoryPaths[ancestor] = entryPath
+		}
+	}
 }
 
 // validateProvider fails closed for providers the server cannot classify and

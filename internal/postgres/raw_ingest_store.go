@@ -114,7 +114,11 @@ func (s *RawIngestStore) MissingObjects(
 	return missing, nil
 }
 
-// CommitManifest atomically records a manifest, advances its head, and queues parsing.
+// CommitManifest atomically records a manifest, advances its head, queues
+// parsing, and supersedes one prior-head nonterminal parse job so stale
+// prefixes never accumulate behind the current head. Legacy duplicate
+// processing versions for the prior head stay nonterminal here and drain
+// through the bounded claim-time supersession fallback.
 func (s *RawIngestStore) CommitManifest(
 	ctx context.Context,
 	manifest rawsync.CanonicalManifest,
@@ -245,6 +249,38 @@ func (s *RawIngestStore) CommitManifest(
 	}
 	if affected != 1 {
 		return rawsync.CommitResult{}, fmt.Errorf("advancing raw source head affected %d rows", affected)
+	}
+	if head.ManifestID != "" {
+		// The unique key permits legacy rows with several processing versions
+		// per manifest, so supersede exactly one deterministic candidate per
+		// advance and leave the remaining duplicates to the bounded fallback.
+		// We intentionally rely on the outer UPDATE's nonterminal-state
+		// predicate rather than a FOR UPDATE lock: under READ COMMITTED, when
+		// this statement waits on the candidate's row lock, EvalPlanQual
+		// rechecks the WHERE clause against the newest committed version, so
+		// a candidate completed or failed by a concurrent lease transition is
+		// skipped instead of overwritten, and the remaining obsolete rows are
+		// handled by the bounded claim-time fallback.
+		if _, err := tx.ExecContext(ctx, `
+			WITH candidate AS (
+				SELECT job.id
+				FROM raw_ingest_jobs AS job
+				WHERE job.tenant_id = $1 AND job.manifest_id = $2
+					AND job.stage = 'parse'
+					AND job.state IN ('ready', 'retrying', 'leased')
+				ORDER BY job.id
+				LIMIT 1
+			)
+			UPDATE raw_ingest_jobs AS job
+			SET state = 'superseded', lease_owner = '', lease_expires_at = NULL,
+				updated_at = now()
+			FROM candidate
+			WHERE job.id = candidate.id
+				AND job.state IN ('ready', 'retrying', 'leased')`,
+			manifest.Identity.TenantID, head.ManifestID,
+		); err != nil {
+			return rawsync.CommitResult{}, fmt.Errorf("superseding prior raw parse job: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return rawsync.CommitResult{}, fmt.Errorf("committing raw manifest: %w", err)
