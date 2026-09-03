@@ -1704,6 +1704,53 @@ func (c *Config) applyConfigTOML(data string) error {
 	return nil
 }
 
+// ConfiguredAgentHomes returns the alternate home directories configured
+// for an agent, as written in the config file, or nil when none are set.
+func (c *Config) ConfiguredAgentHomes(agent parser.AgentType) []string {
+	homes := c.agentHomes[agent]
+	if len(homes) == 0 {
+		return nil
+	}
+	return append([]string(nil), homes...)
+}
+
+// NormalizeAgentHomes validates a settings update for alternate agent
+// homes. It rejects agents without home support and empty or S3 entries,
+// trims whitespace, and drops repeated spellings while keeping order.
+func NormalizeAgentHomes(
+	values map[string][]string,
+) (map[parser.AgentType][]string, error) {
+	normalized := make(map[parser.AgentType][]string, len(values))
+	for rawAgent, homes := range values {
+		agent := parser.AgentType(strings.ToLower(strings.TrimSpace(rawAgent)))
+		def, ok := parser.AgentByType(agent)
+		if !ok {
+			return nil, fmt.Errorf(
+				`agent_homes: unknown session provider %q`, rawAgent)
+		}
+		if def.HomeConfigKey == "" {
+			return nil, fmt.Errorf(
+				`agent_homes: %q does not support alternate homes`, agent)
+		}
+		seen := make(map[string]struct{}, len(homes))
+		cleaned := make([]string, 0, len(homes))
+		for i, raw := range homes {
+			home := strings.TrimSpace(raw)
+			if _, err := normalizeAgentHomeDir(home); err != nil {
+				return nil, fmt.Errorf(
+					"agent_homes: %s: entry %d: %w", def.HomeConfigKey, i+1, err)
+			}
+			if _, dup := seen[home]; dup {
+				continue
+			}
+			seen[home] = struct{}{}
+			cleaned = append(cleaned, home)
+		}
+		normalized[agent] = cleaned
+	}
+	return normalized, nil
+}
+
 func (c *Config) ensureCursorSecret() error {
 	if c.CursorSecret != "" {
 		return nil
@@ -3132,13 +3179,46 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		}
 		patch["disabled_agents"] = normalized
 	}
+	var agentHomes map[parser.AgentType][]string
+	if value, ok := patch["agent_homes"]; ok {
+		homes, ok := value.(map[parser.AgentType][]string)
+		if !ok {
+			return fmt.Errorf(
+				"agent_homes must use typed session provider values",
+			)
+		}
+		raw := make(map[string][]string, len(homes))
+		for agent, dirs := range homes {
+			raw[string(agent)] = dirs
+		}
+		normalized, err := NormalizeAgentHomes(raw)
+		if err != nil {
+			return err
+		}
+		agentHomes = normalized
+		delete(patch, "agent_homes")
+		for agent, dirs := range normalized {
+			def, _ := parser.AgentByType(agent)
+			if len(dirs) == 0 {
+				patch[def.HomeConfigKey] = nil
+				continue
+			}
+			patch[def.HomeConfigKey] = dirs
+		}
+	}
 	return c.withConfigLock(func() error {
 		existing, err := c.readConfigMap()
 		if err != nil {
 			return fmt.Errorf("reading config file: %w", err)
 		}
 
-		maps.Copy(existing, patch)
+		for key, value := range patch {
+			if value == nil {
+				delete(existing, key)
+				continue
+			}
+			existing[key] = value
+		}
 
 		// When require_auth is written, remove the legacy
 		// remote_access key so it cannot override on next load.
@@ -3190,6 +3270,16 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 			if agents, ok := v.([]parser.AgentType); ok {
 				c.DisabledAgents = append([]parser.AgentType(nil), agents...)
 			}
+		}
+		for agent, dirs := range agentHomes {
+			if c.agentHomes == nil {
+				c.agentHomes = make(map[parser.AgentType][]string)
+			}
+			if len(dirs) == 0 {
+				delete(c.agentHomes, agent)
+				continue
+			}
+			c.agentHomes[agent] = append([]string(nil), dirs...)
 		}
 		return nil
 	})

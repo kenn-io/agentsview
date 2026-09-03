@@ -23,11 +23,15 @@ beforeEach(() => {
       id: "claude",
       display_name: "Claude Code",
       dirs: ["/sessions/claude"],
+      homes_supported: true,
+      homes: ["~/.claude-work"],
     },
     {
       id: "gemini",
       display_name: "Gemini",
       dirs: ["/sessions/gemini"],
+      homes_supported: false,
+      homes: [],
     },
   ];
   settings.disabledAgents = ["gemini"];
@@ -107,6 +111,64 @@ describe("AgentDirSettings", () => {
 
     expect(providerSwitch("Enable Claude Code session sync").disabled).toBe(true);
     expect(providerSwitch("Enable Gemini session sync").disabled).toBe(true);
+    unmount(component);
+  });
+
+  it("adds an alternate home for providers that support it", async () => {
+    const save = vi.spyOn(settings, "save").mockImplementation(async (patch) => {
+      const homes = patch.agent_homes?.claude ?? [];
+      settings.sessionProviders = settings.sessionProviders.map((p) =>
+        p.id === "claude" ? { ...p, homes } : p,
+      );
+      return true;
+    });
+    const component = mount(AgentDirSettings, { target: document.body });
+    await tick();
+
+    expect(document.body.querySelector('[aria-label="New Gemini home directory"]')).toBeNull();
+    const input = document.body.querySelector<HTMLInputElement>(
+      'input[aria-label="New Claude Code home directory"]',
+    );
+    if (!input) throw new Error("missing home input");
+    input.value = " ~/.t3code/claude ";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+
+    expect(save).toHaveBeenCalledWith({
+      agent_homes: { claude: ["~/.claude-work", "~/.t3code/claude"] },
+    });
+    const homes = [...document.body.querySelectorAll("code")].map((el) => el.textContent);
+    expect(homes).toContain("~/.t3code/claude");
+    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("Restart");
+    unmount(component);
+  });
+
+  it("removes an alternate home", async () => {
+    const save = vi.spyOn(settings, "save").mockImplementation(async (patch) => {
+      const homes = patch.agent_homes?.claude ?? [];
+      settings.sessionProviders = settings.sessionProviders.map((p) =>
+        p.id === "claude" ? { ...p, homes } : p,
+      );
+      return true;
+    });
+    const component = mount(AgentDirSettings, { target: document.body });
+    await tick();
+
+    const remove = document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove Claude Code home ~/.claude-work"]',
+    );
+    if (!remove) throw new Error("missing remove button");
+    remove.click();
+    await tick();
+    await tick();
+
+    expect(save).toHaveBeenCalledWith({ agent_homes: { claude: [] } });
+    expect(
+      document.body.querySelector('button[aria-label="Remove Claude Code home ~/.claude-work"]'),
+    ).toBeNull();
     unmount(component);
   });
 });

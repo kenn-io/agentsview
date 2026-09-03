@@ -832,6 +832,11 @@ Sessions from every home appear under the same Claude or Codex provider. Names,
 projects, and titles come from the native session files, not from the wrapping
 tool's own metadata.
 
+The Session Providers section of the Settings page edits the same lists. Adding
+or removing a home there writes `claude_homes` or `codex_homes` to
+`config.toml`. Like the provider enable toggles, the change takes effect after
+the AgentsView daemon and any separate push-watch process restart.
+
 ### Machine-Labeled Filesystem Sources
 
 Use `[[session_sources]]` when a root was produced on another machine and

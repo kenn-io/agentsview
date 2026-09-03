@@ -186,3 +186,74 @@ func TestLoadFileAgentHomesDeduplicateSymlinkedRoots(t *testing.T) {
 		filepath.Join(alt, "archived_sessions"),
 	}, cfg.ResolveDirs(parser.AgentCodex))
 }
+
+func TestSaveSettingsPersistsAgentHomes(t *testing.T) {
+	dir := setupTestEnv(t)
+	cfg, err := Default()
+	require.NoError(t, err)
+	cfg.DataDir = dir
+
+	require.NoError(t, cfg.SaveSettings(map[string]any{
+		"agent_homes": map[parser.AgentType][]string{
+			parser.AgentCodex:  {" ~/.codex-work ", "~/.codex-work", "/srv/codex"},
+			parser.AgentClaude: {"~/.claude-work"},
+		},
+	}))
+	assert.Equal(t, []string{"~/.codex-work", "/srv/codex"},
+		cfg.ConfiguredAgentHomes(parser.AgentCodex))
+	assert.Equal(t, []string{"~/.claude-work"},
+		cfg.ConfiguredAgentHomes(parser.AgentClaude))
+
+	reloaded, err := LoadMinimal()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"~/.codex-work", "/srv/codex"},
+		reloaded.ConfiguredAgentHomes(parser.AgentCodex))
+	assert.Contains(t, reloaded.ResolveDirs(parser.AgentCodex),
+		filepath.Join("/srv/codex", "sessions"))
+
+	require.NoError(t, cfg.SaveSettings(map[string]any{
+		"agent_homes": map[parser.AgentType][]string{parser.AgentCodex: {}},
+	}))
+	assert.Nil(t, cfg.ConfiguredAgentHomes(parser.AgentCodex))
+	reloaded, err = LoadMinimal()
+	require.NoError(t, err)
+	assert.Nil(t, reloaded.ConfiguredAgentHomes(parser.AgentCodex))
+	assert.Equal(t, []string{"~/.claude-work"},
+		reloaded.ConfiguredAgentHomes(parser.AgentClaude))
+}
+
+func TestNormalizeAgentHomesRejectsUnsupportedInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   map[string][]string
+		wantErr string
+	}{
+		{
+			name:    "unknown agent",
+			input:   map[string][]string{"nope": {"/x"}},
+			wantErr: `unknown session provider "nope"`,
+		},
+		{
+			name:    "agent without home support",
+			input:   map[string][]string{"gemini": {"/x"}},
+			wantErr: `"gemini" does not support alternate homes`,
+		},
+		{
+			name:    "empty home",
+			input:   map[string][]string{"codex": {"/x", " "}},
+			wantErr: "codex_homes: entry 2: home is required",
+		},
+		{
+			name:    "s3 home",
+			input:   map[string][]string{"claude": {"s3://bucket/claude"}},
+			wantErr: "is an S3 root",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NormalizeAgentHomes(tt.input)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
