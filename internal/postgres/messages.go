@@ -754,9 +754,11 @@ func scanPGMessages(rows interface {
 		if ts != nil {
 			m.Timestamp = FormatISO8601(*ts)
 		}
-		if tokenUsage != "" {
-			m.TokenUsage = []byte(tokenUsage)
-		}
+		// A mirror pushed before the write-side guard existed can still
+		// hold a malformed usage blob, and pg serve reaches the same
+		// response encoder that panicked on it (see
+		// db.DecodeStoredTokenUsage).
+		m.TokenUsage = db.DecodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()

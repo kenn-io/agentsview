@@ -111,3 +111,30 @@ func TestSanitizeMessageTokenUsageIdempotent(t *testing.T) {
 	assert.Equal(t, 0, second.TokenUsageBlanked)
 	assert.Empty(t, string(m.TokenUsage))
 }
+
+// DecodeStoredTokenUsage is exported because every backend that serves
+// messages needs the identical guard (internal/postgres/messages.go,
+// internal/duckdb/messages.go), so its contract is pinned here.
+func TestDecodeStoredTokenUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "empty yields nil", raw: "", want: ""},
+		{name: "valid object preserved", raw: `{"input_tokens":4}`, want: `{"input_tokens":4}`},
+		{name: "valid array preserved", raw: `[1,2]`, want: `[1,2]`},
+		{name: "truncated object dropped", raw: `{"input_tokens":4`, want: ""},
+		{name: "trailing garbage dropped", raw: `{"a":1} x`, want: ""},
+		{name: "non-json dropped", raw: `nope`, want: ""},
+		{name: "bare whitespace dropped", raw: `   `, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DecodeStoredTokenUsage(tc.raw)
+			assert.Equal(t, tc.want, string(got))
+			if tc.want == "" {
+				assert.Nil(t, got, "dropped values must be nil, not empty non-nil")
+			}
+		})
+	}
+}

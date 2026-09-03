@@ -293,7 +293,11 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 			return nil, fmt.Errorf("scanning duckdb message: %w", err)
 		}
 		m.Timestamp = formatDBTime(ts)
-		m.TokenUsage = []byte(tokenUsage)
+		// A mirror built before the write-side guard existed can still
+		// hold a malformed usage blob, and duckdb serve reaches the same
+		// response encoder that panicked on it (see
+		// db.DecodeStoredTokenUsage).
+		m.TokenUsage = db.DecodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()

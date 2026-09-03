@@ -2139,7 +2139,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		if err != nil {
 			return nil, fmt.Errorf("scanning message: %w", err)
 		}
-		m.TokenUsage = decodeStoredTokenUsage(tokenUsage)
+		m.TokenUsage = DecodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
@@ -2742,7 +2742,7 @@ func (db *DB) GetMessageByOrdinal(
 	if err != nil {
 		return nil, err
 	}
-	m.TokenUsage = decodeStoredTokenUsage(tokenUsage)
+	m.TokenUsage = DecodeStoredTokenUsage(tokenUsage)
 	return &m, nil
 }
 
@@ -2834,7 +2834,7 @@ func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
 	return rows
 }
 
-// decodeStoredTokenUsage converts a stored token_usage column into a
+// DecodeStoredTokenUsage converts a stored token_usage column into a
 // jsontext.Value, dropping the value when it is not valid JSON.
 //
 // jsontext.Value defers parsing to marshal time, so a malformed blob is
@@ -2850,7 +2850,13 @@ func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
 // must not trust the column. Dropping only the unusable metadata keeps the
 // rest of the message intact, matching the sanitize-don't-drop policy in
 // validate.go.
-func decodeStoredTokenUsage(raw string) jsontext.Value {
+//
+// Exported because every backend that serves messages needs the identical
+// guard: a PostgreSQL or DuckDB mirror populated before the write-side fix
+// still holds the malformed blob, and pg serve / duckdb serve reach the
+// same response encoder. See internal/postgres/messages.go and
+// internal/duckdb/messages.go.
+func DecodeStoredTokenUsage(raw string) jsontext.Value {
 	if raw == "" {
 		return nil
 	}
