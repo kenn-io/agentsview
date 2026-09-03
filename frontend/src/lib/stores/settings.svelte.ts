@@ -21,12 +21,14 @@ interface AppSettings extends Omit<
   agent_dirs: Record<string, string[]>;
   session_providers: SessionProvider[];
   disabled_agents: string[];
+  agent_homes?: Record<string, string[]>;
   terminal: TerminalConfig;
   chart_palette: ChartPalette;
 }
 
-export interface SessionProvider extends Omit<SessionProviderResponse, "dirs"> {
+export interface SessionProvider extends Omit<SessionProviderResponse, "dirs" | "homes"> {
   dirs: string[];
+  homes: string[];
 }
 
 /** Build an actionable message for a 403 from the settings API. A

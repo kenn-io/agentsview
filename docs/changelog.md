@@ -12,7 +12,9 @@ description: Release history for AgentsView
   directories, so sessions from tools that set a custom home such as t3code
   appear alongside the default roots without hand-configuring low-level paths.
   `CODEX_HOME` now re-roots the default Codex directories the same way
-  `CLAUDE_CONFIG_DIR` already does for Claude Code. (#1611)
+  `CLAUDE_CONFIG_DIR` already does for Claude Code. The Session Providers
+  section of the Settings page can add and remove these homes, and roots that
+  reach the same directory through a symbolic link are scanned once. (#1611)
 
 **Improvements**
 
