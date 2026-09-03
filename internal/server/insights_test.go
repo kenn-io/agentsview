@@ -522,17 +522,6 @@ func TestGenerateCannedInsight_RequiresExplicitOptIn(t *testing.T) {
 }
 
 func TestGenerateCannedInsight_AcceptsPartialSessionFilterPayload(t *testing.T) {
-	issueArtifact, err := os.ReadFile(
-		filepath.Join("..", "..", "..", ".claude", "pr-sweep", "bodies", "agentsview-issue-1596.json"),
-	)
-	require.NoError(t, err)
-	var issue struct {
-		Body string `json:"body"`
-	}
-	require.NoError(t, json.Unmarshal(issueArtifact, &issue))
-	assert.Contains(t, issue.Body, "sessionFilters:")
-	assert.Contains(t, issue.Body, "expected required property automated_scope to be present")
-
 	var calls atomic.Int32
 	var generatedPrompt string
 	stubGen := func(
