@@ -36,6 +36,23 @@ func TestVectorOwnerIdentityOwns(t *testing.T) {
 	}
 }
 
+func TestCanonicalVectorDocumentRowNormalizesPortableFields(t *testing.T) {
+	row := canonicalVectorDocumentRow(VectorPushDoc{
+		DocKey: "doc", SessionID: "session", SourceUUID: "source\x00uuid",
+		Ordinal: 3, OrdinalEnd: 5, Subordinate: true,
+		Content: "content\x00", ContentHash: "hash",
+	})
+	assert.Equal(t, "doc", row.DocKey)
+	assert.Equal(t, "session", row.SessionID)
+	assert.Equal(t, "sourceuuid", row.SourceUUID)
+	assert.Equal(t, 3, row.Ordinal)
+	assert.Equal(t, 5, row.OrdinalEnd)
+	assert.True(t, row.Subordinate)
+	assert.Equal(t, "[]", row.Offsets)
+	assert.Equal(t, "content", row.Content)
+	assert.Equal(t, "hash", row.ContentHash)
+}
+
 // notReadyVectorSource reports a not-ready local index, as the vectors.db
 // adapter does while an embeddings build is rewriting the active generation.
 type notReadyVectorSource struct{}

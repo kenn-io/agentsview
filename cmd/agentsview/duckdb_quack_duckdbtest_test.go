@@ -158,7 +158,7 @@ func TestStartQuackServerServesAgentsviewMirror(t *testing.T) {
 	var count int
 	require.NoError(t,
 		client.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM remote_db.main.sessions`,
+			`SELECT COUNT(*) FROM remote_db.sessions`,
 		).Scan(&count),
 	)
 	assert.Equal(t, 1, count)

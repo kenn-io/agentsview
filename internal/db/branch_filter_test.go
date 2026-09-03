@@ -2,11 +2,21 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func encodeBranchFilterTokensForTest(branches ...BranchInfo) string {
+	tokens := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		tokens = append(tokens,
+			EncodeBranchFilterToken(branch.Project, branch.Branch))
+	}
+	return strings.Join(tokens, branchListSep)
+}
 
 func branchInfoForTest(project, branch string) BranchInfo {
 	return BranchInfo{
