@@ -783,6 +783,7 @@
                 y1="y1"
                 fill={layer.color}
                 curve={areaCurve}
+                opacity={groupBy === "branch" ? 0.7 : 1}
               />
             {/each}
           {/if}

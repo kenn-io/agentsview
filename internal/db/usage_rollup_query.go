@@ -801,6 +801,7 @@ func compareUsageFactsGroup(left, right usageFactsGroup) int {
 	for _, pair := range [][2]string{
 		{left.Date, right.Date},
 		{left.SessionID, right.SessionID},
+		{left.GitBranch, right.GitBranch},
 		{left.Model, right.Model},
 		{left.ProviderID, right.ProviderID},
 	} {
