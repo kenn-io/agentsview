@@ -823,8 +823,8 @@ For Claude, each home adds `<home>/projects`. For Codex, each home adds
 `<home>/sessions` and `<home>/archived_sessions`, and Codex activity hints are
 read from that home's `history.jsonl`. Homes are additive to the default
 directories, the environment variables above, the `*_dirs` arrays, and
-`[[session_sources]]`. Roots that resolve to the same directory are
-deduplicated, and a matching `[[session_sources]]` entry still supplies the
+`[[session_sources]]`. Roots that resolve to the same directory,
+including through symbolic links, are deduplicated, and a matching `[[session_sources]]` entry still supplies the
 machine label. Homes must be local directories; use the `*_dirs` arrays for
 `s3://` roots.
 

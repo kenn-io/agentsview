@@ -2323,7 +2323,9 @@ func sessionSourceComparisonKey(dir string) (string, error) {
 	if strings.HasPrefix(strings.ToLower(dir), "s3://") {
 		return dir, nil
 	}
-	return pathutil.LocalComparisonKey(dir)
+	// Resolve symlinks so alternate homes or session roots that link to the
+	// same directory register once instead of as duplicate roots.
+	return pathutil.ResolvedComparisonKey(dir)
 }
 
 // normalizeAgentHomeDir validates and expands one alternate agent home.

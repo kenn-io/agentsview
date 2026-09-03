@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -161,4 +162,27 @@ func TestResolveDirs_CodexHomeRootEnvVar(t *testing.T) {
 		filepath.Join(root, "archived_sessions"),
 	}, cfg.ResolveDirs(parser.AgentCodex))
 	assert.False(t, cfg.IsUserConfigured(parser.AgentCodex))
+}
+
+func TestLoadFileAgentHomesDeduplicateSymlinkedRoots(t *testing.T) {
+	f := newConfigFixture(t)
+	home := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	primary := filepath.Join(home, ".codex")
+	require.NoError(t, os.MkdirAll(filepath.Join(primary, "sessions"), 0o755))
+	alt := filepath.Join(home, ".codex-alt")
+	require.NoError(t, os.MkdirAll(alt, 0o755))
+	require.NoError(t, os.Symlink(
+		filepath.Join(primary, "sessions"), filepath.Join(alt, "sessions")))
+	f.WriteConfigText(t, "codex_homes = [\"~/.codex-alt\"]\n")
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{
+		filepath.Join(primary, "sessions"),
+		filepath.Join(primary, "archived_sessions"),
+		filepath.Join(alt, "archived_sessions"),
+	}, cfg.ResolveDirs(parser.AgentCodex))
 }
