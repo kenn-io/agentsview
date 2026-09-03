@@ -291,6 +291,11 @@ func newEvalTrajectorySession(
 func (db *DB) ingestEvalTrajectoryChunks(
 	ctx context.Context, session Session, entries []RecallEntry,
 ) (int, error) {
+	identity, err := db.localArchiveIdentity(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stampSessionArchiveIdentity(&session, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	tx, err := db.getWriter().BeginTx(ctx, nil)

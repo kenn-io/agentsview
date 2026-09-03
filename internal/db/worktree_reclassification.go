@@ -223,8 +223,10 @@ func loadWorktreeMappingsForMachineTx(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project, original_project,
 			enabled, created_at, updated_at
-		FROM worktree_project_mappings
-		WHERE machine = ?
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND machine = ?
 		ORDER BY id`, machine)
 	if err != nil {
 		return nil, fmt.Errorf("querying worktree mapping set: %w", err)
@@ -506,10 +508,27 @@ func upsertWorktreeReclassificationMappingTx(
 		enabled = 1
 	}
 	if existing == nil {
-		result, err := tx.ExecContext(ctx, `
-			INSERT INTO worktree_project_mappings
-				(machine, path_prefix, layout, project, original_project, enabled)
-			VALUES (?, ?, ?, ?, ?, ?)`,
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COALESCE(MAX(id), 0) + 1
+			FROM source_worktree_project_mappings
+			WHERE source_archive_id = (
+				SELECT value FROM archive_metadata WHERE key = 'archive_id'
+			)`,
+		).Scan(&draft.ID); err != nil {
+			return WorktreeProjectMapping{}, fmt.Errorf(
+				"allocating worktree reclassification mapping id: %w", err,
+			)
+		}
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO source_worktree_project_mappings (
+				id, source_archive_id, machine, path_prefix, layout,
+				project, original_project, enabled, created_at, updated_at
+			)
+			SELECT ?, value, ?, ?, ?, ?, ?, ?,
+				strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+				strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			FROM archive_metadata WHERE key = 'archive_id'`,
+			draft.ID,
 			draft.Machine, draft.PathPrefix, draft.Layout, draft.Project,
 			draft.OriginalProject, enabled,
 		)
@@ -518,17 +537,18 @@ func upsertWorktreeReclassificationMappingTx(
 				"creating worktree reclassification mapping: %w", err,
 			)
 		}
-		draft.ID, _ = result.LastInsertId()
 	} else {
 		draft.ID = existing.ID
 		_, err := tx.ExecContext(ctx, `
-			UPDATE worktree_project_mappings
+			UPDATE source_worktree_project_mappings
 			SET path_prefix = ?, layout = ?, project = ?,
 				original_project = CASE
 					WHEN original_project = '' THEN ? ELSE original_project END,
 				enabled = ?,
 				updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			WHERE id = ? AND machine = ?`,
+			WHERE source_archive_id = (
+				SELECT value FROM archive_metadata WHERE key = 'archive_id'
+			) AND id = ? AND machine = ?`,
 			draft.PathPrefix, draft.Layout, draft.Project,
 			draft.OriginalProject, enabled, draft.ID, draft.Machine,
 		)
@@ -541,7 +561,10 @@ func upsertWorktreeReclassificationMappingTx(
 	mapping, err := scanWorktreeMappingRow(tx.QueryRowContext(ctx, `
 		SELECT id, machine, path_prefix, layout, project, original_project,
 			enabled, created_at, updated_at
-		FROM worktree_project_mappings WHERE id = ? AND machine = ?`,
+		FROM source_worktree_project_mappings
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND id = ? AND machine = ?`,
 		draft.ID, draft.Machine))
 	if err != nil {
 		return WorktreeProjectMapping{}, fmt.Errorf(

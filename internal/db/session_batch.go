@@ -114,6 +114,13 @@ func (db *DB) WriteSessionBatchContext(
 	if len(writes) == 0 {
 		return result, nil
 	}
+	identity, err := db.localArchiveIdentity(context.Background())
+	if err != nil {
+		return result, err
+	}
+	for i := range writes {
+		stampSessionArchiveIdentity(&writes[i].Session, identity)
+	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -205,6 +212,13 @@ func (db *DB) WriteSessionBatchAtomic(
 	}
 	if len(writes) == 0 {
 		return result, nil
+	}
+	identity, err := db.localArchiveIdentity(context.Background())
+	if err != nil {
+		return result, err
+	}
+	for i := range writes {
+		stampSessionArchiveIdentity(&writes[i].Session, identity)
 	}
 
 	db.mu.Lock()

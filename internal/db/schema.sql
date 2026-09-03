@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     termination_status TEXT,
     secret_leak_count INTEGER NOT NULL DEFAULT 0,
     secrets_rules_version TEXT NOT NULL DEFAULT '',
+    source_archive_id TEXT NOT NULL DEFAULT '',
+    source_database_generation TEXT NOT NULL DEFAULT '',
     sync_marker TEXT
 );
 
@@ -326,7 +328,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     result_content        TEXT,
     subagent_session_id TEXT,
     file_path  TEXT,
-    call_index INTEGER
+    call_index INTEGER,
+    message_ordinal INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session
@@ -699,6 +702,7 @@ CREATE TABLE IF NOT EXISTS pinned_messages (
     session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
     ordinal     INTEGER NOT NULL,
+    source_uuid TEXT NOT NULL DEFAULT '',
     note        TEXT,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     UNIQUE(session_id, message_id)
@@ -1188,6 +1192,13 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
     source_ref TEXT NOT NULL DEFAULT '',
     source TEXT NOT NULL CHECK (source IN ('embedded', 'fetched')),
     data_json BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS pricing_metadata (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
     updated_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );

@@ -385,6 +385,14 @@ func (db *DB) importAcceptedRecallEntry(
 	if recall.Status == "" {
 		recall.Status = corerecall.StatusAccepted
 	}
+	var identity ArchiveIdentity
+	if !opts.RequireExistingSessions {
+		var err error
+		identity, err = db.localArchiveIdentity(ctx)
+		if err != nil {
+			return false, err
+		}
+	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -431,7 +439,7 @@ func (db *DB) importAcceptedRecallEntry(
 
 	if !opts.RequireExistingSessions {
 		recall.ProvenanceOK = false
-		if err := ensureRecallImportSessionTx(ctx, tx, item); err != nil {
+		if err := ensureRecallImportSessionTx(ctx, tx, item, identity); err != nil {
 			return false, fmt.Errorf("preparing source session: %w", err)
 		}
 	}
@@ -734,8 +742,10 @@ func ensureRecallImportSessionTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	m probeAcceptedRecallEntry,
+	identity ArchiveIdentity,
 ) error {
 	session := recallImportPlaceholderSession(m)
+	stampSessionArchiveIdentity(&session, identity)
 	if err := validateRecallImportPlaceholderSessionStateWithQueryer(
 		ctx, tx, session.ID,
 	); err != nil {
