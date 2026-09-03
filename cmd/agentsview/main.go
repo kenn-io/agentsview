@@ -1833,6 +1833,7 @@ func sanitizeBreakdownLines(s sync.SanitizeStats) []string {
 		{"tokens clamped", s.TokensClamped},
 		{"role coerced", s.RoleCoerced},
 		{"timestamps blanked", s.TimestampsBlanked},
+		{"token usage blanked", s.TokenUsageBlanked},
 	}
 	var out []string
 	for _, c := range cats {

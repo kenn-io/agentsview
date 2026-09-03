@@ -2139,9 +2139,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		if err != nil {
 			return nil, fmt.Errorf("scanning message: %w", err)
 		}
-		if tokenUsage != "" {
-			m.TokenUsage = jsontext.Value(tokenUsage)
-		}
+		m.TokenUsage = decodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
@@ -2744,9 +2742,7 @@ func (db *DB) GetMessageByOrdinal(
 	if err != nil {
 		return nil, err
 	}
-	if tokenUsage != "" {
-		m.TokenUsage = jsontext.Value(tokenUsage)
-	}
+	m.TokenUsage = decodeStoredTokenUsage(tokenUsage)
 	return &m, nil
 }
 
@@ -2836,4 +2832,31 @@ func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
 		}
 	}
 	return rows
+}
+
+// decodeStoredTokenUsage converts a stored token_usage column into a
+// jsontext.Value, dropping the value when it is not valid JSON.
+//
+// jsontext.Value defers parsing to marshal time, so a malformed blob is
+// stored without complaint and only fails when the API encodes the
+// response. internal/server installs no recover(), so that surfaced as an
+// unrecovered handler panic that dropped the connection
+// (ERR_EMPTY_RESPONSE) on GET /api/v1/sessions/{id}/messages, while the
+// HTML export of the same session still rendered because it never
+// marshals this field.
+//
+// ValidateAndSanitize now blanks invalid usage at the write seam, but rows
+// written before that guard existed are still on disk, so the read path
+// must not trust the column. Dropping only the unusable metadata keeps the
+// rest of the message intact, matching the sanitize-don't-drop policy in
+// validate.go.
+func decodeStoredTokenUsage(raw string) jsontext.Value {
+	if raw == "" {
+		return nil
+	}
+	v := jsontext.Value(raw)
+	if !v.IsValid() {
+		return nil
+	}
+	return v
 }
