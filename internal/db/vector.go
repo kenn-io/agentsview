@@ -118,6 +118,9 @@ type RecallVectorSearcher interface {
 		ctx context.Context, query string, limit int,
 	) (hits []RecallVectorHit, exhausted bool, snapshot RecallVectorSnapshot, err error)
 	ValidateRecallSnapshot(ctx context.Context, snapshot RecallVectorSnapshot) error
+	// MaxRecallSearchCandidates returns the largest accepted SearchRecall
+	// limit, or zero when the backend has no candidate ceiling.
+	MaxRecallSearchCandidates() int
 }
 
 // SetVectorSearcher wires (or, with nil, clears) the semantic search

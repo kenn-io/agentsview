@@ -25,22 +25,37 @@ type fakeRecallVectorSearcher struct {
 }
 
 type boundedRecallVectorSearcher struct {
-	hits   []RecallVectorHit
-	limits []int
+	hits              []RecallVectorHit
+	limits            []int
+	maxCandidates     int
+	forceNotExhausted bool
+	err               error
+	errAt             int
 }
 
 func (f *boundedRecallVectorSearcher) SearchRecall(
 	_ context.Context, _ string, limit int,
 ) ([]RecallVectorHit, bool, RecallVectorSnapshot, error) {
 	f.limits = append(f.limits, limit)
+	if f.err != nil && (f.errAt == 0 || limit >= f.errAt) {
+		return nil, false, RecallVectorSnapshot{}, f.err
+	}
+	exhausted := len(f.hits) <= limit
+	if f.forceNotExhausted {
+		exhausted = false
+	}
 	return append([]RecallVectorHit(nil), f.hits[:min(limit, len(f.hits))]...),
-		len(f.hits) <= limit, RecallVectorSnapshot{}, nil
+		exhausted, RecallVectorSnapshot{}, nil
 }
 
 func (f *boundedRecallVectorSearcher) ValidateRecallSnapshot(
 	context.Context, RecallVectorSnapshot,
 ) error {
 	return nil
+}
+
+func (f *boundedRecallVectorSearcher) MaxRecallSearchCandidates() int {
+	return f.maxCandidates
 }
 
 func (f *fakeRecallVectorSearcher) SearchRecall(
@@ -76,6 +91,29 @@ func (f *fakeRecallVectorSearcher) ValidateRecallSnapshot(
 		return NewSemanticUnavailableError("recall corpus changed during search")
 	}
 	return nil
+}
+
+func (f *fakeRecallVectorSearcher) MaxRecallSearchCandidates() int {
+	return 0
+}
+
+func TestClampRecallVectorCandidates(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		k       int
+		ceiling int
+		want    int
+	}{
+		{name: "unbounded", k: 8192, ceiling: 0, want: 8192},
+		{name: "below ceiling", k: 2048, ceiling: 4096, want: 2048},
+		{name: "at ceiling", k: 4096, ceiling: 4096, want: 4096},
+		{name: "above ceiling", k: 8192, ceiling: 4096, want: 4096},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				clampRecallVectorCandidates(tt.k, tt.ceiling))
+		})
+	}
 }
 
 func TestRecallEntriesSchemaIndexesSourceEpisode(t *testing.T) {
@@ -1873,6 +1911,121 @@ func TestQueryRecallEntriesVectorExpandsPastFilteredCandidates(t *testing.T) {
 	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "matching-project", page.RecallEntries[0].ID)
 	assert.Equal(t, []int{SemanticOverfetchMin, SemanticOverfetchMin * 2}, searcher.limits)
+}
+
+func TestQueryRecallEntriesVectorStopsAtSearcherCandidateCeiling(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	for _, entry := range []RecallEntry{
+		{
+			ID: "excluded", Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Other project status", Body: "Filtered status result.",
+			Project: "other", SourceSessionID: "s1",
+		},
+		{
+			ID: "matching", Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Matching project status", Body: "Eligible status result.",
+			Project: "agentsview", SourceSessionID: "s1",
+		},
+	} {
+		_, err := d.InsertRecallEntry(entry)
+		require.NoError(t, err)
+	}
+	searcher := &boundedRecallVectorSearcher{
+		hits: []RecallVectorHit{
+			{EntryID: "excluded", Score: 0.9},
+			{EntryID: "matching", Score: 0.8},
+		},
+		maxCandidates:     4096,
+		forceNotExhausted: true,
+	}
+	d.SetRecallVectorSearcher(searcher)
+
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "status", Mode: RecallQueryModeVector,
+		Project: "agentsview", Limit: 3,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "matching", page.RecallEntries[0].ID)
+	assert.Equal(t, []int{200, 400, 800, 1600, 3200, 4096}, searcher.limits)
+	for _, limit := range searcher.limits {
+		assert.LessOrEqual(t, limit, 4096)
+	}
+}
+
+func TestQueryRecallEntriesHybridReturnsPartialPageAtCandidateCeiling(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	for _, entry := range []RecallEntry{
+		{
+			ID: "excluded", Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Other project status", Body: "Filtered status result.",
+			Project: "other", SourceSessionID: "s1",
+		},
+		{
+			ID: "matching", Type: "fact", Scope: "project", Status: "accepted",
+			Title: "Matching project status", Body: "Eligible status result.",
+			Project: "agentsview", SourceSessionID: "s1",
+		},
+	} {
+		_, err := d.InsertRecallEntry(entry)
+		require.NoError(t, err)
+	}
+	searcher := &boundedRecallVectorSearcher{
+		hits: []RecallVectorHit{
+			{EntryID: "excluded", Score: 0.9},
+			{EntryID: "matching", Score: 0.8},
+		},
+		maxCandidates:     4096,
+		forceNotExhausted: true,
+	}
+	d.SetRecallVectorSearcher(searcher)
+
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "status", Mode: RecallQueryModeHybrid,
+		Project: "agentsview", Limit: 3,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "matching", page.RecallEntries[0].ID)
+	assert.Equal(t, []int{2000, 4000, 4096}, searcher.limits)
+	for _, limit := range searcher.limits {
+		assert.LessOrEqual(t, limit, 4096)
+	}
+}
+
+func TestQueryRecallEntriesVectorPreservesSearcherErrorAtCandidateCeiling(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID: "excluded", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "Other project status", Body: "Filtered status result.",
+		Project: "other", SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	wantErr := errors.New("searcher failed at candidate ceiling")
+	searcher := &boundedRecallVectorSearcher{
+		hits:              []RecallVectorHit{{EntryID: "excluded", Score: 0.9}},
+		maxCandidates:     4096,
+		forceNotExhausted: true,
+		err:               wantErr,
+		errAt:             4096,
+	}
+	d.SetRecallVectorSearcher(searcher)
+
+	_, err = d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "status", Mode: RecallQueryModeVector,
+		Project: "agentsview", Limit: 3,
+	})
+
+	assert.ErrorIs(t, err, wantErr)
+	assert.Equal(t, []int{200, 400, 800, 1600, 3200, 4096}, searcher.limits)
 }
 
 func TestQueryRecallEntriesHybridUsesReciprocalRankFusion(t *testing.T) {

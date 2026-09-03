@@ -35,6 +35,10 @@ func (f *fakeMCPRecallVectorSearcher) ValidateRecallSnapshot(
 	return nil
 }
 
+func (f *fakeMCPRecallVectorSearcher) MaxRecallSearchCandidates() int {
+	return 0
+}
+
 func newTestToolset(t *testing.T) (*toolset, *db.DB) {
 	t.Helper()
 	d := dbtest.OpenTestDB(t)

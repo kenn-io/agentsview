@@ -121,6 +121,26 @@ func TestSearchPageExhaustionUsesChunkCandidatesBeforeDocumentRollup(t *testing.
 	assert.True(t, exhausted)
 }
 
+func TestSearchRejectsCandidateCountAboveEngineKMax(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+
+	_, err := ix.Build(ctx, threeDocSearchSource(), fakeSearchEncoder(),
+		fakeGeneration("fake-model"), BuildOptions{})
+	require.NoError(t, err)
+
+	_, _, err = ix.SearchPage(
+		ctx, fakeSearchEncoder(), "alpha", MaxKNNCandidates,
+	)
+	require.NoError(t, err)
+
+	_, _, err = ix.SearchPage(
+		ctx, fakeSearchEncoder(), "alpha", MaxKNNCandidates+1,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "k value in knn query too large")
+}
+
 func TestSearchNoGenerationsReturnsErrNoActiveGeneration(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()

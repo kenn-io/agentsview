@@ -13,7 +13,10 @@ import (
 
 // snippetMaxRunes bounds the length of a Hit's Snippet; longer chunks are
 // truncated with a trailing ellipsis.
-const snippetMaxRunes = 200
+const (
+	snippetMaxRunes  = 200
+	MaxKNNCandidates = 4096 // sqlite-vec's vec0 KNN candidate ceiling.
+)
 
 // Hit is one unit-level semantic search result, anchored to a specific
 // message. For a run document Ordinal is the anchor: the member message
@@ -133,6 +136,12 @@ func (ix *Index) SearchPage(
 
 	hydrated, err := ix.hydrateHits(ctx, hits)
 	return hydrated, exhausted, err
+}
+
+// MaxSearchCandidates reports the largest KNN candidate count accepted by
+// the sqlite-vec engine backing this index.
+func (ix *Index) MaxSearchCandidates() int {
+	return MaxKNNCandidates
 }
 
 // noActiveGenerationError distinguishes an empty index (ErrNoActiveGeneration)

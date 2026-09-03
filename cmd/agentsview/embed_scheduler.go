@@ -454,6 +454,10 @@ func (a recallSearcherAdapter) ValidateRecallSnapshot(
 	return nil
 }
 
+func (a recallSearcherAdapter) MaxRecallSearchCandidates() int {
+	return a.ix.MaxSearchCandidates()
+}
+
 // newSearcherAdapter builds a searcherAdapter for gen's configured
 // embedding identity.
 func newSearcherAdapter(ix *vector.Index, enc kitvec.EncodeFunc, gen kitvec.Generation) searcherAdapter {
