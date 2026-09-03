@@ -31,6 +31,8 @@ type boundedRecallVectorSearcher struct {
 	forceNotExhausted bool
 	err               error
 	errAt             int
+	snapshotErr       error
+	snapshotErrAt     int
 }
 
 func (f *boundedRecallVectorSearcher) SearchRecall(
@@ -51,6 +53,10 @@ func (f *boundedRecallVectorSearcher) SearchRecall(
 func (f *boundedRecallVectorSearcher) ValidateRecallSnapshot(
 	context.Context, RecallVectorSnapshot,
 ) error {
+	if f.snapshotErr != nil && len(f.limits) > 0 &&
+		(f.snapshotErrAt == 0 || f.limits[len(f.limits)-1] >= f.snapshotErrAt) {
+		return f.snapshotErr
+	}
 	return nil
 }
 
@@ -1899,7 +1905,7 @@ func TestQueryRecallEntriesVectorExpandsPastFilteredCandidates(t *testing.T) {
 	})
 	require.NoError(t, err)
 	hits = append(hits, RecallVectorHit{EntryID: "matching-project", Score: 0.5})
-	searcher := &boundedRecallVectorSearcher{hits: hits}
+	searcher := &boundedRecallVectorSearcher{hits: hits, maxCandidates: 4096}
 	d.SetRecallVectorSearcher(searcher)
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
@@ -2016,6 +2022,35 @@ func TestQueryRecallEntriesVectorPreservesSearcherErrorAtCandidateCeiling(t *tes
 		forceNotExhausted: true,
 		err:               wantErr,
 		errAt:             4096,
+	}
+	d.SetRecallVectorSearcher(searcher)
+
+	_, err = d.QueryRecallEntries(ctx, RecallQuery{
+		Text: "status", Mode: RecallQueryModeVector,
+		Project: "agentsview", Limit: 3,
+	})
+
+	assert.ErrorIs(t, err, wantErr)
+	assert.Equal(t, []int{200, 400, 800, 1600, 3200, 4096}, searcher.limits)
+}
+
+func TestQueryRecallEntriesVectorPreservesSnapshotErrorAtCandidateCeiling(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID: "excluded", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "Other project status", Body: "Filtered status result.",
+		Project: "other", SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	wantErr := errors.New("snapshot changed at candidate ceiling")
+	searcher := &boundedRecallVectorSearcher{
+		hits:              []RecallVectorHit{{EntryID: "excluded", Score: 0.9}},
+		maxCandidates:     4096,
+		forceNotExhausted: true,
+		snapshotErr:       wantErr,
+		snapshotErrAt:     4096,
 	}
 	d.SetRecallVectorSearcher(searcher)
 

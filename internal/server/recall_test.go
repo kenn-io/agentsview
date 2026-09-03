@@ -192,8 +192,8 @@ func TestQueryRecallHybridWithFilterReturnsPartialAtVectorCandidateCeiling(t *te
 		return
 	}
 	r := decode[queryRecallEntriesResponse](t, w)
-	require.NotEmpty(t, r.RecallEntries)
-	assert.Equal(t, []string{"eligible"}, []string{r.RecallEntries[0].ID})
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "eligible", r.RecallEntries[0].ID)
 	assert.Equal(t, []int{2000, 4000, 4096}, searcher.limits)
 	for _, limit := range searcher.limits {
 		assert.LessOrEqual(t, limit, 4096)

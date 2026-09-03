@@ -151,7 +151,7 @@ embedding configuration and endpoint privacy considerations.
 Vector candidates are ranked before Recall filters are applied. The embedding
 backend bounds the candidate window, so a narrow project, cwd, or other filter
 can produce a short vector page when that boundary is reached. Hybrid search
-still ranks the full filtered corpus through its lexical leg, then fuses those
+still ranks the lexical candidates selected for the query, then fuses those
 results with the available vector candidates.
 
 ## Automatic extraction
