@@ -248,6 +248,21 @@ func TestOpenCaptureEngineRebuildsInterruptedScratchArchive(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(len("partial")))
 }
 
+func TestOpenCaptureEngineKeepsFallbackPricingInMemory(t *testing.T) {
+	state := &captureState{dir: t.TempDir(), manifest: manifest{
+		Provider: string(ProviderClaude),
+	}}
+
+	database, engine, err := openCaptureEngine(t.Context(), state, nil)
+	require.NoError(t, err)
+	t.Cleanup(engine.Close)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+
+	hasStoredPricing, err := database.HasModelPricingRows(t.Context())
+	require.NoError(t, err)
+	assert.False(t, hasStoredPricing)
+}
+
 func TestFinishIngestedResultBoundsArchiveCloseByFinalizationDeadline(
 	t *testing.T,
 ) {

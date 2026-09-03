@@ -16,7 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/service"
 	syncer "go.kenn.io/agentsview/internal/sync"
 )
@@ -454,12 +453,7 @@ func openCaptureEngine(
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
-	if err := pricingrefresh.SeedFallbackContext(ctx, database); err != nil {
-		return fail(err)
-	}
-	if err := ctx.Err(); err != nil {
-		return fail(err)
-	}
+	database.SetEmbeddedPricingForEmptyCatalog()
 	database.SetCustomPricing(customPricing)
 	agent := parser.AgentType(state.manifest.Provider)
 	disabled := make([]parser.AgentType, 0, len(parser.Registry)-1)

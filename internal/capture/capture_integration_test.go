@@ -1305,8 +1305,6 @@ func TestRunCodexMalformedRecordSealsPartialUsage(t *testing.T) {
 			root := t.TempDir()
 			resultPath := filepath.Join(t.TempDir(), "result.json")
 			producer := copyCaptureHelper(t, "codex")
-			limits := testLimits()
-			limits.FinalizationWait = 30 * time.Second
 			_, err := Run(context.Background(), RunOptions{
 				Provider: ProviderCodex, OccurrenceID: "codex-malformed-" + tc.name,
 				CaptureDir: filepath.Join(t.TempDir(), "capture"),
@@ -1314,7 +1312,7 @@ func TestRunCodexMalformedRecordSealsPartialUsage(t *testing.T) {
 				Command:     []string{producer, "exec", "--json", "prompt"},
 				Environment: helperEnvironment(root, tc.mode, 0),
 				Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
-				Limits:      limits, CustomPricing: testPricing(),
+				Limits:      testLimits(), CustomPricing: testPricing(),
 			})
 			require.NoError(t, err)
 
