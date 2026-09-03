@@ -959,12 +959,6 @@ func (db *DB) SetEmptyCatalogPricing(
 	}
 }
 
-// SetEmbeddedPricingForEmptyCatalog keeps the embedded fallback rates in
-// memory and uses them only when the stored pricing catalog is empty.
-func (db *DB) SetEmbeddedPricingForEmptyCatalog() {
-	db.SetEmptyCatalogPricing(fallbackRateMap())
-}
-
 // SetCursorSecret updates the secret key used for cursor signing.
 func (db *DB) SetCursorSecret(secret []byte) {
 	db.cursorMu.Lock()

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -28,12 +29,29 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+var (
+	captureHelperDir   string
+	captureHelperMu    sync.Mutex
+	captureHelperPaths = make(map[string]string)
+)
+
 func TestMain(m *testing.M) {
 	if os.Getenv("AGENTSVIEW_CAPTURE_TEST_HELPER") == "1" {
 		captureTestHelper()
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	dir, err := os.MkdirTemp("", "agentsview-capture-helper-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create capture test helper directory: %v\n", err)
+		os.Exit(1)
+	}
+	captureHelperDir = dir
+	code := m.Run()
+	if err := os.RemoveAll(dir); err != nil && code == 0 {
+		fmt.Fprintf(os.Stderr, "remove capture test helper directory: %v\n", err)
+		code = 1
+	}
+	os.Exit(code)
 }
 
 func TestRunClaudeProducesExactResultAndPreservesChildOutcome(t *testing.T) {
@@ -2163,18 +2181,33 @@ func copyCaptureHelper(t *testing.T, name string) string {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
+	captureHelperMu.Lock()
+	defer captureHelperMu.Unlock()
+	if path := captureHelperPaths[name]; path != "" {
+		return path
+	}
 	source, err := os.Executable()
 	require.NoError(t, err)
 	in, err := os.Open(source)
 	require.NoError(t, err)
 	defer in.Close()
-	path := filepath.Join(t.TempDir(), name)
+	path := filepath.Join(captureHelperDir, name)
 	out, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
 	require.NoError(t, err)
 	_, err = io.Copy(out, in)
 	require.NoError(t, err)
 	require.NoError(t, out.Close())
+	captureHelperPaths[name] = path
 	return path
+}
+
+func TestCopyCaptureHelperReusesExecutableByName(t *testing.T) {
+	first := copyCaptureHelper(t, "claude")
+	second := copyCaptureHelper(t, "claude")
+	codex := copyCaptureHelper(t, "codex")
+
+	assert.Equal(t, first, second)
+	assert.NotEqual(t, first, codex)
 }
 
 func helperEnvironment(root, mode string, exitCode int) []string {
