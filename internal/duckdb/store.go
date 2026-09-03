@@ -5,17 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb/bundialect"
-	"go.kenn.io/agentsview/internal/secrets"
 )
 
 // Compile-time check: *Store satisfies db.Store.
@@ -65,7 +61,19 @@ func (*duckBunBackend) Name() string { return "duckdb" }
 func (*duckBunBackend) ReadOnly() bool { return true }
 
 func (*duckBunBackend) Capabilities() db.BackendCapabilities {
-	return db.BackendCapabilities{}
+	return db.BackendCapabilities{
+		FullText:      duckFullTextCapability{},
+		SessionSearch: duckFullTextCapability{},
+		SearchDialect: db.DuckDBBunSearchDialect(),
+		Semantic: db.NewVectorSemanticCapability(
+			func() db.VectorSearcher { return nil },
+			func() error {
+				return db.NewSemanticUnavailableError(
+					"semantic search is not supported by the DuckDB backend",
+				)
+			},
+		),
+	}
 }
 
 func (*duckBunBackend) SessionQueryDialect() db.QueryDialect {
@@ -366,19 +374,34 @@ func formatDBTime(v any) string {
 	}
 }
 
-func (s *Store) HasFTS() bool { return true }
+type duckFullTextCapability struct{}
+
+type duckSearchHitProjection struct {
+	SessionID string  `bun:"session_id"`
+	Ordinal   int     `bun:"ordinal"`
+	Snippet   string  `bun:"snippet"`
+	Rank      float64 `bun:"rank"`
+}
+
+func (duckFullTextCapability) Available() bool { return true }
 
 // HasSemantic returns false: the DuckDB store has no VectorSearcher seam
 // yet, so SearchContent rejects "semantic"/"hybrid" modes up front with
 // db.ErrSemanticUnavailable.
-func (s *Store) HasSemantic() bool { return false }
+func (s *Store) HasSemantic() bool { return s.bunSearchStore().HasSemantic() }
 
-func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
-		f.Limit = db.DefaultSearchLimit
+func (s *Store) bunSearchStore() *db.BunStore {
+	if s.BunStore != nil {
+		return s.BunStore
 	}
+	return db.NewBunStore(&duckBunBackend{store: s})
+}
+
+func (duckFullTextCapability) Search(
+	ctx context.Context, store bun.IDB, f db.SearchFilter,
+) ([]db.SearchHit, error) {
 	if f.Query == "" {
-		return db.SearchPage{}, nil
+		return nil, nil
 	}
 	// plainTerm is the de-quoted query joined back into one string. It feeds the
 	// name-branch ILIKE (matching the typed text against the short session name)
@@ -392,7 +415,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	plainTerm := db.StripFTSQuotes(f.Query)
 	terms := db.FTSTerms(f.Query)
 	if plainTerm == "" || len(terms) == 0 {
-		return db.SearchPage{}, nil
+		return nil, nil
 	}
 	// firstTerm anchors INSTR-based ordering and snippet centering.
 	firstTerm := terms[0]
@@ -423,14 +446,14 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if f.Sort == "recency" {
 		orderBy = "session_ended_at DESC, session_id ASC"
 	}
-	args = append(args, f.Limit+1, f.Cursor)
-	rows, err := s.queryContext(ctx, `
+	args = append(args, f.Limit, f.Cursor)
+	query := `
 		WITH msg_ranked AS (
 			SELECT m.session_id, s.project, s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				m.ordinal, SUBSTRING(m.content, 1, 200) AS snippet,
-				1.0 AS rank, 1 AS match_priority,
+				CAST(1.0 AS DOUBLE) AS rank, 1 AS match_priority,
 				INSTR(LOWER(m.content), LOWER(?)) AS match_pos,
 				ROW_NUMBER() OVER (
 					PARTITION BY m.session_id
@@ -439,11 +462,11 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				) AS rn
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
-			WHERE `+msgTermPredicate+`
+			WHERE ` + msgTermPredicate + `
 				AND s.deleted_at IS NULL
 				AND m.is_system = FALSE
-				AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role")+`
-				`+project+`
+				AND ` + db.DuckDBSystemPrefixSQL("m.content", "m.role") + `
+				` + project + `
 		),
 		msg_matches AS (
 			SELECT session_id, project, agent, name, session_ended_at,
@@ -463,7 +486,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 						THEN COALESCE(s.first_message, '')
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
-				1.0 AS rank, 2 AS match_priority, 0 AS match_pos
+				CAST(1.0 AS DOUBLE) AS rank, 2 AS match_priority, 0 AS match_pos
 			FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
 				OR s.first_message ILIKE ? ESCAPE '\')
@@ -472,58 +495,48 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 					SELECT 1 FROM messages mx
 					WHERE mx.session_id = s.id
 						AND mx.is_system = FALSE
-						AND `+db.DuckDBSystemPrefixSQL("mx.content", "mx.role")+`
+						AND ` + db.DuckDBSystemPrefixSQL("mx.content", "mx.role") + `
 				)
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
-				`+nameProject+`
+				` + nameProject + `
 		)
-		SELECT session_id, project, agent, name,
-			session_ended_at, ordinal, snippet, rank
+		SELECT session_id, ordinal, snippet, rank
 		FROM (
 			SELECT * FROM msg_matches
 			UNION ALL
 			SELECT * FROM name_matches
 		) combined
-		ORDER BY `+orderBy+`
-		LIMIT ? OFFSET ?`,
-		args...,
-	)
-	if err != nil {
-		return db.SearchPage{}, fmt.Errorf("duckdb search: %w", err)
+		ORDER BY ` + orderBy + `
+		LIMIT ? OFFSET ?`
+	var rows []duckSearchHitProjection
+	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("duckdb search: %w", err)
 	}
-	defer rows.Close()
-	var results []db.SearchResult
-	for rows.Next() {
-		var r db.SearchResult
-		var ended any
-		if err := rows.Scan(&r.SessionID, &r.Project, &r.Agent, &r.Name,
-			&ended, &r.Ordinal, &r.Snippet, &r.Rank); err != nil {
-			return db.SearchPage{}, err
+	hits := make([]db.SearchHit, len(rows))
+	for i, row := range rows {
+		hits[i] = db.SearchHit{
+			SessionID: row.SessionID, Ordinal: row.Ordinal,
+			Snippet: row.Snippet, Rank: row.Rank,
 		}
-		r.SessionEndedAt = formatDBTime(ended)
-		results = append(results, r)
 	}
-	if err := rows.Err(); err != nil {
-		return db.SearchPage{}, err
-	}
-	page := db.SearchPage{Results: results}
-	if len(results) > f.Limit {
-		page.Results = results[:f.Limit]
-		page.NextCursor = f.Cursor + f.Limit
-	}
-	return page, nil
+	return hits, nil
 }
 
-func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]int, error) {
+func (duckFullTextCapability) SearchSession(
+	ctx context.Context, store bun.IDB, sessionID, query string,
+) ([]int, error) {
 	if query == "" {
 		return nil, nil
 	}
-	rows, err := s.queryContext(ctx, `
+	var rows []struct {
+		Ordinal int `bun:"ordinal"`
+	}
+	err := store.NewRaw(`
 		SELECT DISTINCT m.ordinal
 		FROM messages m
 		LEFT JOIN tool_calls tc
 			ON tc.session_id = m.session_id
-			AND tc.message_id = m.id
+			AND tc.message_ordinal = m.ordinal
 		LEFT JOIN tool_result_events tre
 			ON tre.session_id = tc.session_id
 			AND tre.tool_call_message_ordinal = m.ordinal
@@ -538,20 +551,15 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 		sessionID, "%"+db.EscapeLikePattern(query)+"%",
 		"%"+db.EscapeLikePattern(query)+"%",
 		"%"+db.EscapeLikePattern(query)+"%",
-	)
+	).Scan(ctx, &rows)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb session search: %w", err)
 	}
-	defer rows.Close()
-	var out []int
-	for rows.Next() {
-		var ordinal int
-		if err := rows.Scan(&ordinal); err != nil {
-			return nil, err
-		}
-		out = append(out, ordinal)
+	out := make([]int, len(rows))
+	for i, row := range rows {
+		out[i] = row.Ordinal
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error) {
@@ -568,489 +576,7 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	// internal/db's SearchContent so an empty Sources field is not defaulted
 	// out from under ValidateSemanticFilter's empty-or-messages-only check.
 	if f.Mode == "semantic" || f.Mode == "hybrid" {
-		// Validate input the same way SQLite's semantic/hybrid paths do
-		// before reporting the capability gate: an invalid request (bad
-		// cursor, non-messages source) must return the same 400
-		// SearchInputError on every backend rather than a 501 here and a
-		// 400 on SQLite (backend parity, see AGENTS.md).
-		if err := db.ValidateSemanticFilter(f); err != nil {
-			return db.ContentSearchPage{}, err
-		}
-		// No VectorSearcher seam on the DuckDB store yet (HasSemantic always
-		// false): gate after input validation.
-		return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
-			"semantic search is not supported by the DuckDB backend",
-		)
+		return s.bunSearchStore().SearchContent(ctx, f)
 	}
-
-	if len(f.Sources) == 0 {
-		f.Sources = []string{"messages", "tool_input", "tool_result"}
-	}
-	for _, source := range f.Sources {
-		if source != "messages" && source != "tool_input" && source != "tool_result" {
-			return db.ContentSearchPage{},
-				&db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
-		}
-	}
-	switch f.Mode {
-	case "", "substring", "regex":
-	case "fts":
-		f.Sources = []string{"messages"}
-	default:
-		return db.ContentSearchPage{},
-			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}
-	}
-	matches, err := s.collectContentMatches(ctx, f)
-	if err != nil {
-		return db.ContentSearchPage{}, err
-	}
-	page := db.ContentSearchPage{Matches: matches}
-	if len(matches) > f.Limit {
-		page.Matches = matches[:f.Limit]
-		page.NextCursor = f.Cursor + f.Limit
-	}
-	// Post-truncation derivation, O(page): every lexical match gets its
-	// conversation-unit OrdinalRange and lineage fields via the shared
-	// batched pass, matching the SQLite and PG backends.
-	if err := s.deriveLexicalUnitsDuck(ctx, page.Matches); err != nil {
-		return db.ContentSearchPage{}, err
-	}
-	return page, nil
-}
-
-func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFilter) ([]db.ContentMatch, error) {
-	if f.Mode != "regex" {
-		return s.collectContentSubstringMatches(ctx, f)
-	}
-	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(contentSessionFilter(f), db.DuckDBQueryDialect())
-	pattern := ""
-	if f.Mode != "regex" {
-		pattern = "%" + db.EscapeLikePattern(f.Pattern) + "%"
-	}
-	var all []duckContentCandidate
-	for _, source := range f.Sources {
-		matches, err := s.collectContentSource(ctx, source, scopeWhere, scopeArgs, pattern, f)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, matches...)
-	}
-	if f.Mode == "regex" {
-		re, err := regexp.Compile(f.Pattern)
-		if err != nil {
-			return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: invalid regex: %v", err)}
-		}
-		filtered := all[:0]
-		for _, m := range all {
-			loc := re.FindStringIndex(m.body)
-			if loc != nil {
-				m.match.Snippet = duckContentSnippet(f, m.body, loc[0], loc[1])
-				filtered = append(filtered, m)
-			}
-		}
-		all = filtered
-	}
-	sortContentCandidates(all)
-	if f.Cursor > 0 {
-		if f.Cursor >= len(all) {
-			return nil, nil
-		}
-		all = all[f.Cursor:]
-	}
-	if len(all) > f.Limit+1 {
-		all = all[:f.Limit+1]
-	}
-	return contentCandidateMatches(all), nil
-}
-
-func (s *Store) collectContentSubstringMatches(
-	ctx context.Context, f db.ContentSearchFilter,
-) ([]db.ContentMatch, error) {
-	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(contentSessionFilter(f), db.DuckDBQueryDialect())
-	var branches []string
-	var args []any
-	addSearchArgs := func(column string) string {
-		predicate := duckContentSearchPredicate(column, f, &args)
-		args = append(args, scopeArgs...)
-		return predicate
-	}
-	for _, source := range f.Sources {
-		switch source {
-		case "messages":
-			sysPred := "TRUE"
-			if f.ExcludeSystem {
-				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
-			}
-			contentPred := addSearchArgs("m.content")
-			branches = append(branches, `
-				SELECT m.session_id, s.project, s.agent, 'message' AS location,
-					m.role, '' AS tool_name, m.ordinal,
-					m.timestamp AS ts,
-					m.content AS body,
-					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-					0 AS src, COALESCE(m.id, 0) AS row_id,
-					0 AS call_index, 0 AS event_index
-				FROM messages m JOIN sessions s ON s.id = m.session_id
-				WHERE `+contentPred+`
-					AND `+sysPred+`
-					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
-		case "tool_input":
-			inputPred := addSearchArgs("tc.input_json")
-			branches = append(branches, `
-				SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
-					'assistant' AS role, tc.tool_name, m.ordinal,
-					m.timestamp AS ts,
-					tc.input_json AS body,
-					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-					1 AS src, COALESCE(tc.id, 0) AS row_id,
-					tc.call_index AS call_index, 0 AS event_index
-				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
-				JOIN messages m ON m.session_id = tc.session_id
-					AND m.id = tc.message_id
-				WHERE `+inputPred+`
-					AND tc.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
-		case "tool_result":
-			contentPred := addSearchArgs("tc.result_content")
-			branches = append(branches, `
-					SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
-						'assistant' AS role, tc.tool_name, m.ordinal,
-						m.timestamp AS ts,
-						tc.result_content AS body,
-						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-						2 AS src, COALESCE(tc.id, 0) AS row_id,
-						tc.call_index AS call_index, 0 AS event_index
-					FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
-					JOIN messages m ON m.session_id = tc.session_id
-						AND m.id = tc.message_id
-					WHERE `+contentPred+`
-						AND NOT EXISTS (
-							SELECT 1 FROM tool_result_events tre
-							WHERE tre.session_id = tc.session_id
-								AND tre.tool_use_id = tc.tool_use_id
-								AND tc.tool_use_id <> ''
-						)
-						AND tc.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
-			eventPred := addSearchArgs("tre.content")
-			branches = append(branches, `
-					SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
-						'assistant' AS role, '' AS tool_name,
-						tre.tool_call_message_ordinal AS ordinal,
-						tre.timestamp AS ts,
-						tre.content AS body,
-						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-						3 AS src, COALESCE(tre.id, 0) AS row_id,
-						tre.call_index AS call_index,
-						tre.event_index AS event_index
-					FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
-					WHERE `+eventPred+`
-						AND tre.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
-		default:
-			return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
-		}
-	}
-	if len(branches) == 0 {
-		return nil, nil
-	}
-	query := `
-		SELECT session_id, project, agent, location, role, tool_name,
-			ordinal, ts, body
-		FROM (` + strings.Join(branches, " UNION ALL ") + `)
-		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
-			src ASC, row_id ASC, call_index ASC, event_index ASC
-		LIMIT ? OFFSET ?`
-	args = append(args, f.Limit+1, f.Cursor)
-	return s.scanContentMatches(ctx, query, args, func(body string) string {
-		if f.Mode == "fts" {
-			start, end := db.FTSSnippetRange(f.Pattern, body)
-			return duckContentSnippet(f, body, start, end)
-		}
-		off := max(db.CaseInsensitiveIndex(body, f.Pattern), 0)
-		return duckContentSnippet(f, body, off, min(off+len(f.Pattern), len(body)))
-	})
-}
-
-func duckContentSearchPredicate(
-	column string, f db.ContentSearchFilter, args *[]any,
-) string {
-	if f.Mode != "fts" {
-		*args = append(*args, "%"+db.EscapeLikePattern(f.Pattern)+"%")
-		return column + ` ILIKE ? ESCAPE '\'`
-	}
-
-	terms := db.FTSTerms(db.PrepareFTSQuery(f.Pattern))
-	clauses := make([]string, 0, len(terms))
-	for _, term := range terms {
-		if term == "" {
-			continue
-		}
-		*args = append(*args, "%"+db.EscapeLikePattern(term)+"%")
-		clauses = append(clauses, column+` ILIKE ? ESCAPE '\'`)
-	}
-	if len(clauses) == 0 {
-		return "FALSE"
-	}
-	return strings.Join(clauses, " AND ")
-}
-
-func duckContentSnippet(f db.ContentSearchFilter, body string, start, end int) string {
-	lo, hi := duckSnippetBounds(body, start, end, 60)
-	if f.RevealSecrets {
-		return body[lo:hi]
-	}
-	return secrets.RedactWindow(body, lo, hi)
-}
-
-func duckSnippetBounds(text string, start, end, radius int) (int, int) {
-	lo := max(start-radius, 0)
-	hi := min(end+radius, len(text))
-	for lo < start && !utf8.RuneStart(text[lo]) {
-		lo++
-	}
-	for hi > end && hi < len(text) && !utf8.RuneStart(text[hi]) {
-		hi--
-	}
-	return lo, hi
-}
-
-type duckContentCandidate struct {
-	match      db.ContentMatch
-	body       string
-	sortTS     string
-	sortTime   time.Time
-	hasSort    bool
-	sourceRank int
-	rowID      int64
-	callIndex  int
-	eventIndex int
-}
-
-func sortContentCandidates(all []duckContentCandidate) {
-	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].hasSort && all[j].hasSort && !all[i].sortTime.Equal(all[j].sortTime) {
-			return all[i].sortTime.After(all[j].sortTime)
-		}
-		if all[i].hasSort != all[j].hasSort {
-			return all[i].hasSort
-		}
-		if all[i].sortTS != all[j].sortTS {
-			return all[i].sortTS > all[j].sortTS
-		}
-		if all[i].match.SessionID != all[j].match.SessionID {
-			return all[i].match.SessionID < all[j].match.SessionID
-		}
-		if all[i].match.Ordinal != all[j].match.Ordinal {
-			return all[i].match.Ordinal < all[j].match.Ordinal
-		}
-		if all[i].sourceRank != all[j].sourceRank {
-			return all[i].sourceRank < all[j].sourceRank
-		}
-		if all[i].rowID != all[j].rowID {
-			return all[i].rowID < all[j].rowID
-		}
-		if all[i].callIndex != all[j].callIndex {
-			return all[i].callIndex < all[j].callIndex
-		}
-		if all[i].eventIndex != all[j].eventIndex {
-			return all[i].eventIndex < all[j].eventIndex
-		}
-		if all[i].match.Location != all[j].match.Location {
-			return all[i].match.Location < all[j].match.Location
-		}
-		if all[i].match.ToolName != all[j].match.ToolName {
-			return all[i].match.ToolName < all[j].match.ToolName
-		}
-		if all[i].match.Role != all[j].match.Role {
-			return all[i].match.Role < all[j].match.Role
-		}
-		if all[i].match.Timestamp != all[j].match.Timestamp {
-			return all[i].match.Timestamp < all[j].match.Timestamp
-		}
-		if all[i].match.Project != all[j].match.Project {
-			return all[i].match.Project < all[j].match.Project
-		}
-		if all[i].match.Agent != all[j].match.Agent {
-			return all[i].match.Agent < all[j].match.Agent
-		}
-		return all[i].match.Snippet < all[j].match.Snippet
-	})
-}
-
-func contentCandidateMatches(candidates []duckContentCandidate) []db.ContentMatch {
-	out := make([]db.ContentMatch, len(candidates))
-	for i, candidate := range candidates {
-		out[i] = candidate.match
-	}
-	return out
-}
-
-func contentSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
-	return db.SessionFilter{
-		Project: f.Project, ExcludeProject: f.ExcludeProject,
-		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
-		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
-		Timezone:         f.Timezone,
-		ActiveSince:      f.ActiveSince,
-		ExcludeOneShot:   !f.IncludeOneShot,
-		ExcludeAutomated: !f.IncludeAutomated,
-		IncludeChildren:  f.IncludeChildren,
-	}
-}
-
-func (s *Store) collectContentSource(
-	ctx context.Context, source, scopeWhere string, scopeArgs []any,
-	pattern string, f db.ContentSearchFilter,
-) ([]duckContentCandidate, error) {
-	var query string
-	var orderBy string
-	args := append([]any{}, scopeArgs...)
-	switch source {
-	case "messages":
-		query = `SELECT m.session_id, s.project, s.agent, 'message',
-			m.role, '', m.ordinal, m.timestamp,
-			m.content,
-			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-			0 AS src, COALESCE(m.id, 0) AS row_id,
-			0 AS call_index, 0 AS event_index
-			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
-		if f.Mode != "regex" {
-			query += ` AND m.content ILIKE ? ESCAPE '\'`
-			args = append(args, pattern)
-		}
-		if f.ExcludeSystem {
-			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
-		}
-		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
-	case "tool_input":
-		query = `SELECT tc.session_id, s.project, s.agent, 'tool_input',
-				'assistant', tc.tool_name, m.ordinal, m.timestamp,
-				COALESCE(tc.input_json, ''),
-				COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-				1 AS src, COALESCE(tc.id, 0) AS row_id,
-				tc.call_index AS call_index, 0 AS event_index
-				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
-				JOIN messages m ON m.session_id = tc.session_id
-					AND m.id = tc.message_id
-				WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
-		if f.Mode != "regex" {
-			query += ` AND tc.input_json ILIKE ? ESCAPE '\'`
-			args = append(args, pattern)
-		}
-		orderBy = "tc.session_id, m.ordinal, COALESCE(tc.id, 0), tc.call_index"
-	case "tool_result":
-		args = append([]any{}, scopeArgs...)
-		contentPred := "TRUE"
-		eventPred := "TRUE"
-		if f.Mode != "regex" {
-			contentPred = `tc.result_content ILIKE ? ESCAPE '\'`
-			eventPred = `tre.content ILIKE ? ESCAPE '\'`
-		}
-		query = `SELECT session_id, project, agent, location, role,
-				tool_name, ordinal, ts, body, sort_ts, src, row_id, call_index, event_index
-				FROM (
-					SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
-						'assistant' AS role, tc.tool_name, m.ordinal,
-						m.timestamp AS ts,
-						COALESCE(tc.result_content, '') AS body,
-						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-						2 AS src,
-						COALESCE(tc.id, 0) AS row_id,
-						tc.call_index AS call_index, 0 AS event_index
-					FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
-					JOIN messages m ON m.session_id = tc.session_id
-						AND m.id = tc.message_id
-					WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
-						AND ` + contentPred + `
-						AND NOT EXISTS (
-							SELECT 1 FROM tool_result_events tre
-							WHERE tre.session_id = tc.session_id
-								AND tre.tool_use_id = tc.tool_use_id
-								AND tc.tool_use_id <> ''
-						)
-					UNION ALL
-					SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
-						'assistant' AS role, '' AS tool_name,
-						tre.tool_call_message_ordinal AS ordinal,
-						tre.timestamp AS ts,
-						tre.content AS body,
-						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-						3 AS src,
-						COALESCE(tre.id, 0) AS row_id,
-						tre.call_index AS call_index, tre.event_index
-					FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
-					WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
-						AND ` + eventPred + `
-				)`
-		if f.Mode != "regex" {
-			args = append(args, pattern)
-		}
-		args = append(args, scopeArgs...)
-		if f.Mode != "regex" {
-			args = append(args, pattern)
-		}
-		orderBy = "session_id, ordinal, src, row_id, call_index, event_index"
-	default:
-		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
-	}
-	query += ` ORDER BY ` + orderBy
-	rows, err := s.queryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("duckdb content search: %w", err)
-	}
-	return scanDuckContentCandidateRows(rows)
-}
-
-func (s *Store) scanContentMatches(
-	ctx context.Context, query string, args []any, makeSnippet func(string) string,
-) ([]db.ContentMatch, error) {
-	rows, err := s.queryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("duckdb content search: %w", err)
-	}
-	return scanDuckContentRows(rows, makeSnippet)
-}
-
-func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.ContentMatch, error) {
-	defer rows.Close()
-	var out []db.ContentMatch
-	for rows.Next() {
-		var m db.ContentMatch
-		var body string
-		var ts any
-		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&ts, &body); err != nil {
-			return nil, err
-		}
-		m.Timestamp = formatDBTime(ts)
-		m.Snippet = makeSnippet(body)
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
-func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error) {
-	defer rows.Close()
-	var out []duckContentCandidate
-	for rows.Next() {
-		var candidate duckContentCandidate
-		var sortTS any
-		var ts any
-		if err := rows.Scan(
-			&candidate.match.SessionID, &candidate.match.Project,
-			&candidate.match.Agent, &candidate.match.Location,
-			&candidate.match.Role, &candidate.match.ToolName,
-			&candidate.match.Ordinal, &ts,
-			&candidate.body, &sortTS, &candidate.sourceRank,
-			&candidate.rowID, &candidate.callIndex, &candidate.eventIndex,
-		); err != nil {
-			return nil, err
-		}
-		candidate.match.Timestamp = formatDBTime(ts)
-		candidate.sortTS = formatDBTime(sortTS)
-		candidate.sortTime, candidate.hasSort = parseDuckTime(candidate.sortTS)
-		candidate.match.Snippet = candidate.body
-		out = append(out, candidate)
-	}
-	return out, rows.Err()
+	return s.BunStore.SearchContent(ctx, f)
 }
