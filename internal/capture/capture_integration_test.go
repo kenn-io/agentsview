@@ -1404,7 +1404,6 @@ func TestRunCodexPersistsDiscoveredSubagentSources(t *testing.T) {
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
 	limits := testLimits()
-	limits.FinalizationWait = 5 * time.Second
 	_, err := Run(context.Background(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-delegated",
 		CaptureDir: captureDir, ResultPath: resultPath,

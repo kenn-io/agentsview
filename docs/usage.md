@@ -1017,7 +1017,7 @@ open "agentsview://sessions/<session-id>"
 An optional `?msg=<ordinal>` or `?msg=last` query scrolls to that message. If the
 app is already running, its window comes forward on the session; if not, the app
 starts and opens the session once the backend is ready. See the
-[Session API](/session-api/) guide for the full contract.
+[Session API](/docs/session-api/) guide for the full contract.
 
 ______________________________________________________________________
 
