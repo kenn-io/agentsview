@@ -433,28 +433,6 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 	assert.Equal(t, 1, byLabel["proj-b"].EnabledRulesTargeting,
 		"archive B's own rule attributes correctly to its own project")
 
-	// Directly exercise the (source_archive_id, machine) scope in
-	// projectInventoryCandidateRows: archive A's session must not become a
-	// governance candidate on the strength of archive B's enabled mapping
-	// on the same machine name.
-	candidates, err := duckStore.projectInventoryCandidateRows(ctx, nil)
-	require.NoError(t, err, "projectInventoryCandidateRows")
-	var candidateIDs []string
-	for _, c := range candidates {
-		candidateIDs = append(candidateIDs, c.SessionID)
-	}
-	assert.NotContains(t, candidateIDs, "a-session",
-		"archive A has no enabled mapping of its own; the (source_archive_id, "+
-			"machine) scope must not admit its session just because archive B "+
-			"has an enabled mapping on the same machine name")
-	assert.Contains(t, candidateIDs, "b-session",
-		"archive B's own session is a legitimate candidate under its own "+
-			"enabled mapping")
-	assert.NotContains(t, candidateIDs, "b-session-other-machine",
-		"archive B's mapping only covers duckPushMachine; the machine half of "+
-			"the (source_archive_id, machine) scope must not admit a same-archive "+
-			"session on a different machine just because it shares the archive "+
-			"id and cwd prefix")
 }
 
 // pushDataReadMirror populates an in-memory mirror the way a full rebuild

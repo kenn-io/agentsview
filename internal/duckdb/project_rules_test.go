@@ -111,8 +111,7 @@ func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
 // rules." SQLite's ListWorktreeProjectMappings filters with a literal
 // `WHERE machine = ?` bound to "" (confirmed directly: no
 // normalizeWorktreeMapping-created mapping row ever has an empty machine
-// column, so that query always returns nothing); the DuckDB mirror's shared
-// projectInventoryMappings/projectInventoryCandidateRows helpers must
+// column, so that query always returns nothing); the shared Bun loader must
 // reject the temptation to treat machine == "" as a magic "unrestricted"
 // sentinel, since that value is a completely ordinary (if never matched)
 // machine value here, and doing so previously leaked every archive's rules

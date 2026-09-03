@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -32,111 +33,6 @@ func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 	const boundLayout = "2006-01-02T15:04:05"
 	return q.RangeStart.UTC().Format(boundLayout),
 		q.RangeEnd.UTC().Format(boundLayout)
-}
-
-// GetActivityReport assembles a concurrency- and usage-oriented report
-// for the resolved range `q`. Sessions and activity are fetched from the
-// filtered candidate set. Usage loads candidate rows plus only the
-// cross-session Claude peers needed for complete-snapshot selection, keeping
-// the resulting streams consistent without materializing the whole window.
-//
-// The filter `f` is honored as-is: callers that want one-shot or
-// automated sessions included must pass them through with the
-// corresponding exclusions disabled. Subagent and fork sessions are
-// always counted so the cost totals match GetDailyUsage, which never
-// filters by relationship_type. Fork sessions hold only their own
-// rewound-branch messages (the parsers partition entries across
-// branches), so counting them adds no duplicate activity; any usage
-// rows that do recur across sessions collapse in the aggregator's
-// dedup, the same guarantee GetDailyUsage relies on.
-func (db *DB) GetActivityReport(
-	ctx context.Context, f AnalyticsFilter, q activity.Query,
-) (activity.Report, error) {
-	artifacts, err := db.BuildActivityReportArtifacts(ctx, f, q, nil)
-	if err != nil {
-		return activity.Report{}, err
-	}
-	artifacts.Report.BySession = artifacts.Sessions
-	artifacts.Report.SessionsTotal = len(artifacts.Sessions)
-	return artifacts.Report, nil
-}
-
-func (db *DB) BuildActivityReportArtifacts(
-	ctx context.Context,
-	f AnalyticsFilter,
-	q activity.Query,
-	onProgress activity.ProgressFunc,
-) (activity.CandidateArtifacts, error) {
-	reportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
-	f.IncludeSubagents = true
-	f.IncludeForks = true
-	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
-	lowerBound := paddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
-	upperBound := paddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-
-	sessions, ids, err := db.activityReportSessions(
-		ctx, f, rangeStartUTC, rangeEndUTC)
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	reportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
-	})
-
-	usage, pricing, err := db.activityReportUsage(ctx, ids, lowerBound, upperBound, q)
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-
-	rowsProcessed := int64(0)
-	source := db.activityReportCandidateSource(ids, q)
-	artifacts, err := activity.BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, activity.Params{
-		RangeStart:    q.RangeStart,
-		RangeEnd:      q.RangeEnd,
-		Loc:           q.Loc,
-		EffectiveEnd:  q.EffectiveEnd,
-		Partial:       q.Partial,
-		GapCapSeconds: q.GapCapSeconds,
-		Bucket:        q.Bucket,
-	}, sessions, func(
-		ctx context.Context, yield func(activity.IntervalCandidate) error,
-	) error {
-		reportProgress(onProgress, activity.Progress{
-			Phase: activity.ProgressScanningActivity, SessionsTotal: len(sessions),
-		})
-		return source(ctx, func(candidate activity.IntervalCandidate) error {
-			rowsProcessed++
-			reportProgress(onProgress, activity.Progress{
-				Phase:         activity.ProgressScanningActivity,
-				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
-			})
-			return yield(candidate)
-		})
-	}, usage)
-	if err != nil {
-		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating activity report: %w", err)
-	}
-	reportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
-	artifacts.Report.Pricing = pricing
-	projects, err := db.BuildProjectIdentityMap(ctx,
-		activityReportProjectLabels(sessions))
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	artifacts.Report.BySession = artifacts.Sessions
-	activity.SanitizeProjectLabels(&artifacts.Report, projects)
-	artifacts.Sessions = artifacts.Report.BySession
-	artifacts.Report.BySession = []activity.SessionRow{}
-	artifacts.Report.Projects = export.ProjectMapForWire(projects)
-	reportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	return artifacts, nil
 }
 
 func reportProgress(callback activity.ProgressFunc, progress activity.Progress) {
@@ -163,7 +59,7 @@ func (db *DB) GetSessionUsageRows(
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	pricing, err := db.loadPricingMap(ctx)
+	pricing, err := db.LoadPricingMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading pricing: %w", err)
 	}
@@ -482,28 +378,6 @@ func activityReportProjectLabels(
 	return sortedSetKeys(set)
 }
 
-// activityReportSessions returns the candidate sessions whose window
-// overlaps the exact range [rangeStartUTC, rangeEndUTC), plus their
-// IDs. The ID set defines the scope for the activity and usage fetches.
-// NULLIF guards the empty-string timestamp fallbacks SQLite stores so a
-// session with an empty ended_at but a valid started_at still falls back
-// correctly, matching the activity-expression convention elsewhere.
-//
-// The effective-end fallback for a session with no ended_at uses its
-// latest message timestamp before started_at, so a still-open or
-// partially-parsed session that began before the range but has messages
-// inside it is not dropped. COALESCE short-circuits, so the correlated
-// MAX subquery runs only for the rare sessions missing an ended_at.
-// A terminal tool event can outlive ended_at metadata, so it independently
-// keeps the session eligible when it reaches the report range.
-func (db *DB) activityReportSessions(
-	ctx context.Context, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
-) ([]activity.SessionMeta, []string, error) {
-	return db.activityReportSessionsFrom(
-		ctx, db.getReader(), f, rangeStartUTC, rangeEndUTC,
-	)
-}
-
 func (db *DB) activityReportSessionsFrom(
 	ctx context.Context,
 	q sessionExportQuerier,
@@ -511,7 +385,7 @@ func (db *DB) activityReportSessionsFrom(
 	rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
 	where, args := f.buildWhereWithDate("", false, "s.id")
-	args = append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
+	args = append(args, rangeStartUTC, rangeEndUTC)
 
 	// Each Title candidate is NULLIF'd independently (not a nested
 	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
@@ -528,20 +402,10 @@ func (db *DB) activityReportSessionsFrom(
 		COALESCE(s.is_automated, 0)
 	FROM sessions s
 	WHERE ` + where + `
-		AND (COALESCE(NULLIF(s.ended_at, ''),
-				(SELECT MAX(m.timestamp) FROM messages m
-					WHERE m.session_id = s.id AND m.timestamp != ''),
-				NULLIF(s.started_at, ''), s.created_at) >= ?
-			OR EXISTS (
-				SELECT 1 FROM tool_result_events tre
-				WHERE tre.session_id = s.id
-					AND tre.source = 'tool_execution'
-					AND tre.status IN ('completed', 'errored')
-					AND tre.timestamp IS NOT NULL
-					AND tre.timestamp != ''
-					AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
-					AND tre.timestamp >= ?
-			))
+		AND COALESCE(NULLIF(s.ended_at, ''),
+			(SELECT MAX(m.timestamp) FROM messages m
+				WHERE m.session_id = s.id AND m.timestamp != ''),
+			NULLIF(s.started_at, ''), s.created_at) >= ?
 		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?`
 
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -707,148 +571,6 @@ WHERE m.session_id IN (SELECT value FROM json_each(?))
 ORDER BY agentsview_timestamp_unix_micro(m.timestamp),
 	m.session_id, m.ordinal`
 
-const activityReportTerminalCandidatesSQL = `WITH
-	session_ids AS (
-		SELECT value AS session_id FROM json_each(?)
-	),
-	terminal_events AS (
-		SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
-			tre.call_index, tre.event_index, tre.timestamp
-		FROM tool_result_events tre
-		JOIN session_ids ids ON ids.session_id = tre.session_id
-		WHERE tre.source = 'tool_execution'
-			AND tre.status IN ('completed', 'errored')
-			AND tre.timestamp IS NOT NULL
-			AND tre.timestamp != ''
-			AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
-			AND agentsview_timestamp_unix_micro(tre.timestamp) >= ?
-	),
-	terminal_sessions AS (
-		SELECT DISTINCT session_id FROM terminal_events
-	),
-	ordered_terminal AS (
-		SELECT te.*,
-			LEAD(te.ordinal) OVER terminal_order AS next_terminal_ordinal,
-			LEAD(te.timestamp) OVER terminal_order AS next_terminal_timestamp
-		FROM terminal_events te
-		WINDOW terminal_order AS (
-			PARTITION BY te.session_id
-			ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
-				te.call_index, te.event_index
-		)
-	),
-	terminal_with_message AS (
-		SELECT ot.*, next_message.ordinal AS next_message_ordinal,
-			next_message.timestamp AS next_message_timestamp,
-			next_message.role AS next_message_role,
-			next_message.model AS next_message_model
-		FROM ordered_terminal ot
-		LEFT JOIN messages next_message ON next_message.id = (
-			SELECT next.id
-			FROM messages next INDEXED BY idx_messages_velocity
-			WHERE next.session_id = ot.session_id
-				AND next.ordinal > ot.ordinal
-				AND next.timestamp IS NOT NULL
-				AND next.timestamp != ''
-				AND agentsview_timestamp_unix_micro(next.timestamp) >
-					agentsview_timestamp_unix_micro(ot.timestamp)
-			ORDER BY next.ordinal
-			LIMIT 1
-		)
-	),
-	last_messages AS (
-		SELECT m.session_id, m.ordinal, m.timestamp
-		FROM terminal_sessions ts
-		JOIN messages m ON m.id = (
-			SELECT latest.id
-			FROM messages latest INDEXED BY idx_messages_velocity
-			WHERE latest.session_id = ts.session_id
-				AND latest.timestamp IS NOT NULL
-				AND latest.timestamp != ''
-				AND agentsview_timestamp_unix_micro(latest.timestamp) IS NOT NULL
-			ORDER BY latest.ordinal DESC
-			LIMIT 1
-		)
-	),
-	first_tail_events AS (
-		SELECT lm.session_id, lm.ordinal, lm.timestamp,
-			te.call_index, te.event_index, te.timestamp AS terminal_timestamp,
-			ROW_NUMBER() OVER (
-				PARTITION BY lm.session_id
-				ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
-					te.call_index, te.event_index
-			) AS row_num
-		FROM last_messages lm
-		JOIN terminal_events te ON te.session_id = lm.session_id
-		WHERE agentsview_timestamp_unix_micro(te.timestamp) >
-				agentsview_timestamp_unix_micro(lm.timestamp)
-	),
-	candidates AS (
-		SELECT twm.session_id, twm.ordinal AS start_ordinal,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN twm.next_terminal_ordinal
-				ELSE twm.next_message_ordinal
-			END AS end_ordinal,
-			twm.timestamp AS start_timestamp,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN twm.next_terminal_timestamp
-				ELSE twm.next_message_timestamp
-			END AS end_timestamp,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN 'tool'
-				ELSE twm.next_message_role
-			END AS closing_role,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN ''
-				ELSE twm.next_message_model
-			END AS closing_model,
-			twm.call_index, twm.event_index
-		FROM terminal_with_message twm
-
-		UNION ALL
-
-		SELECT fte.session_id, fte.ordinal, fte.ordinal,
-			fte.timestamp, fte.terminal_timestamp, 'tool', '',
-			fte.call_index, fte.event_index
-		FROM first_tail_events fte
-		WHERE fte.row_num = 1
-	)
-SELECT candidate.session_id, candidate.start_ordinal, candidate.end_ordinal,
-	candidate.start_timestamp, candidate.end_timestamp,
-	candidate.closing_role, candidate.closing_model,
-	COALESCE((
-		SELECT prior.model
-		FROM messages prior
-		WHERE prior.session_id = candidate.session_id
-			AND prior.ordinal <= candidate.start_ordinal
-			AND prior.role = 'assistant'
-			AND prior.model != ''
-		ORDER BY prior.ordinal DESC
-		LIMIT 1
-	), 'unknown')
-FROM candidates candidate
-WHERE candidate.end_timestamp IS NOT NULL
-	AND agentsview_timestamp_unix_micro(candidate.start_timestamp) < ?
-ORDER BY agentsview_timestamp_unix_micro(candidate.start_timestamp),
-	candidate.session_id, candidate.start_ordinal,
-	candidate.call_index, candidate.event_index`
-
 func (db *DB) activityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
@@ -870,87 +592,44 @@ func (db *DB) activityReportCandidateSource(
 		upper := upperTime.UnixMicro()
 		paddedLower := paddedUTCBound(lowerTime.Format(time.RFC3339), -14)
 		paddedUpper := paddedUTCBound(upperTime.Format(time.RFC3339), 14)
-		scanCandidate := func(
-			row interface{ Scan(dest ...any) error },
-		) (activity.IntervalCandidate, error) {
+		args := []any{string(encodedIDs), paddedLower, paddedUpper, lower, upper}
+		rows, err := db.getReader().QueryContext(
+			ctx, activityReportCandidatesSQL, args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying activity report candidates: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			var candidate activity.IntervalCandidate
 			var start, end string
-			if err := row.Scan(
+			if err := rows.Scan(
 				&candidate.SessionID, &candidate.StartOrdinal,
 				&candidate.EndOrdinal, &start, &end,
 				&candidate.ClosingRole, &candidate.ClosingModel,
 				&candidate.PriorModel,
 			); err != nil {
-				return candidate, fmt.Errorf(
-					"scanning activity report candidate: %w", err)
+				return fmt.Errorf("scanning activity report candidate: %w", err)
 			}
+			var err error
 			candidate.Start, err = time.Parse(time.RFC3339Nano, start)
 			if err != nil {
-				return candidate, fmt.Errorf(
-					"parsing activity candidate start: %w", err)
+				return fmt.Errorf("parsing activity candidate start: %w", err)
 			}
 			candidate.End, err = time.Parse(time.RFC3339Nano, end)
 			if err != nil {
-				return candidate, fmt.Errorf(
-					"parsing activity candidate end: %w", err)
+				return fmt.Errorf("parsing activity candidate end: %w", err)
 			}
 			candidate.Start = candidate.Start.UTC()
 			candidate.End = candidate.End.UTC()
-			return candidate, nil
-		}
-
-		terminalRows, err := db.getReader().QueryContext(
-			ctx, activityReportTerminalCandidatesSQL,
-			string(encodedIDs), lower, upper,
-		)
-		if err != nil {
-			return fmt.Errorf("querying activity report terminal candidates: %w", err)
-		}
-		var terminal []activity.IntervalCandidate
-		for terminalRows.Next() {
-			candidate, scanErr := scanCandidate(terminalRows)
-			if scanErr != nil {
-				terminalRows.Close()
-				return scanErr
+			if err := yield(candidate); err != nil {
+				return err
 			}
-			terminal = append(terminal, candidate)
 		}
-		if err := terminalRows.Err(); err != nil {
-			terminalRows.Close()
-			return err
-		}
-		if err := terminalRows.Close(); err != nil {
-			return err
-		}
-
-		messageSource := func(
-			ctx context.Context,
-			yield func(activity.IntervalCandidate) error,
-		) error {
-			rows, queryErr := db.getReader().QueryContext(
-				ctx, activityReportCandidatesSQL,
-				string(encodedIDs), paddedLower, paddedUpper, lower, upper,
-			)
-			if queryErr != nil {
-				return fmt.Errorf(
-					"querying activity report candidates: %w", queryErr)
-			}
-			defer rows.Close()
-			for rows.Next() {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				candidate, scanErr := scanCandidate(rows)
-				if scanErr != nil {
-					return scanErr
-				}
-				if err := yield(candidate); err != nil {
-					return err
-				}
-			}
-			return rows.Err()
-		}
-		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
+		return rows.Err()
 	}
 }
 
@@ -961,48 +640,6 @@ func (db *DB) ActivityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
 	return db.activityReportCandidateSource(ids, q)
-}
-
-// activityReportUsage selects complete snapshots across the padded range,
-// then keeps rows attributed to the candidate sessions. Rows are ordered on
-// parsed instants so mixed RFC3339 representations remain chronological.
-func (db *DB) activityReportUsage(
-	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return db.activityReportUsageFrom(
-		ctx, db.getReader(), ids, lowerBound, upperBound, q,
-	)
-}
-
-func (db *DB) activityReportUsageFrom(
-	ctx context.Context,
-	source sessionExportQuerier,
-	ids []string,
-	lowerBound, upperBound string,
-	q activity.Query,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
-	candidates, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
-		ctx, source, ids, lowerBound, upperBound, false,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	sortActivityReportUsageCandidates(candidates)
-	baseRows := make([]activity.UsageRow, len(candidates))
-	for i, candidate := range candidates {
-		row := candidate.row
-		_, row.OutputTokens, _, _, _ = dailyUsageRowTokens(candidate.scan)
-		row.WebSearchRequests = usageRowWebSearchRequests(
-			candidate.scan.usageSource, candidate.scan.tokenJSON)
-		baseRows[i] = row
-	}
-	mask, attribution, webSearchRequests :=
-		activity.UsageSurvivorSelectionForSessions(
-			q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-		)
-	return materializeActivityReportUsageCandidates(
-		candidates, mask, attribution, webSearchRequests, rateResolver,
-	)
 }
 
 // activityReportUsageCandidate retains the scanned source fields until the
@@ -1017,9 +654,9 @@ type activityReportUsageCandidate struct {
 	ordinal int64
 }
 
-func (db *DB) loadActivityReportUsageCandidatesFrom(
+func (db *BunStore) loadActivityReportUsageCandidatesFrom(
 	ctx context.Context,
-	source sessionExportQuerier,
+	source bun.IDB,
 	ids []string,
 	lowerBound, upperBound string,
 	restrictToIDs bool,
@@ -1192,9 +829,9 @@ func sortActivityReportUsageCandidates(
 // activityReportUsageCandidatesFrom returns normalized padded-range rows
 // without sorting or applying a survivor mask. Reporting export merges these
 // rows with standalone candidates before imposing either operation.
-func (db *DB) activityReportUsageCandidatesFrom(
+func (db *BunStore) activityReportUsageCandidatesFrom(
 	ctx context.Context,
-	source sessionExportQuerier,
+	source bun.IDB,
 	ids []string,
 	lowerBound, upperBound string,
 	includeWebSearch bool,

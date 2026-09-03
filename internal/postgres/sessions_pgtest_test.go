@@ -474,7 +474,7 @@ func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err, "Push")
 
-	store := &Store{pg: pg}
+	store := newStore(pg)
 	got, err := store.FindSessionIDsByPartial(ctx, "c_d", 10)
 	require.NoError(t, err, "underscore lookup")
 	assert.Equal(t, []string{"abc_def"}, got)

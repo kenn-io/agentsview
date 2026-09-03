@@ -225,3 +225,33 @@ func (db *DB) GetSessionUsage(
 ) (*SessionUsage, error) {
 	return db.getSessionUsageLegacy(ctx, sessionID, includeBreakdown)
 }
+
+func (db *DB) getSessionUsageLegacy(
+	ctx context.Context, sessionID string, includeBreakdown bool,
+) (*SessionUsage, error) {
+	return db.BunStore.GetSessionUsage(ctx, sessionID, includeBreakdown)
+}
+
+func (db *DB) getDailyUsageLegacy(
+	ctx context.Context, filter UsageFilter,
+) (DailyUsageResult, error) {
+	return db.BunStore.GetDailyUsage(ctx, filter)
+}
+
+func (db *DB) getTopSessionsByCostLegacy(
+	ctx context.Context, filter UsageFilter, limit int,
+) ([]TopSessionEntry, error) {
+	return db.BunStore.GetTopSessionsByCost(ctx, filter, limit)
+}
+
+func (db *DB) getUsageSessionCountsLegacy(
+	ctx context.Context, filter UsageFilter,
+) (UsageSessionCounts, error) {
+	return db.BunStore.GetUsageSessionCounts(ctx, filter)
+}
+
+func (db *DB) getUsageMatchingSessionCountLegacy(
+	ctx context.Context, filter UsageFilter,
+) (int, error) {
+	return db.BunStore.GetUsageMatchingSessionCount(ctx, filter)
+}

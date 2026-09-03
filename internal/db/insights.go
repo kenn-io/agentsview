@@ -2,9 +2,7 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"strings"
 )
 
 // Insight represents a row in the insights table.
@@ -39,161 +37,7 @@ type InsightFilter struct {
 	DateTo     string // YYYY-MM-DD, "" = no filter
 }
 
-const insightBaseCols = `id, type, date_from, date_to,
-	project, agent, model, prompt, content,
-	kind, schema_version, template_id, template_version,
-	aggregate_hash, cache_key, cache_status,
-	provenance_json, structured_json, created_at`
-
-func scanInsightRow(rs rowScanner) (Insight, error) {
-	var s Insight
-	err := rs.Scan(
-		&s.ID, &s.Type, &s.DateFrom, &s.DateTo,
-		&s.Project, &s.Agent,
-		&s.Model, &s.Prompt, &s.Content,
-		&s.Kind, &s.SchemaVersion, &s.TemplateID,
-		&s.TemplateVersion, &s.AggregateHash, &s.CacheKey,
-		&s.CacheStatus, &s.ProvenanceJSON, &s.StructuredJSON,
-		&s.CreatedAt,
-	)
-	return s, err
-}
-
-func buildInsightFilter(
-	f InsightFilter,
-) (string, []any) {
-	var preds []string
-	var args []any
-
-	if f.Type != "" {
-		preds = append(preds, "type = ?")
-		args = append(args, f.Type)
-	}
-	if f.GlobalOnly {
-		preds = append(preds, "project IS NULL")
-	} else if f.Project != "" {
-		preds = append(preds, "project = ?")
-		args = append(args, f.Project)
-	}
-	if f.DateFrom != "" {
-		preds = append(preds, "date_from >= ?")
-		args = append(args, f.DateFrom)
-	}
-	if f.DateTo != "" {
-		preds = append(preds, "date_to <= ?")
-		args = append(args, f.DateTo)
-	}
-
-	if len(preds) == 0 {
-		return "1=1", nil
-	}
-	return strings.Join(preds, " AND "), args
-}
-
-// InsertInsight inserts an insight and returns its ID.
-func (db *DB) InsertInsight(s Insight) (int64, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	res, err := db.getWriter().Exec(`
-		INSERT INTO insights (
-			type, date_from, date_to, project,
-			agent, model, prompt, content,
-			kind, schema_version, template_id,
-			template_version, aggregate_hash, cache_key,
-			cache_status, provenance_json, structured_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.Type, s.DateFrom, s.DateTo, s.Project,
-		s.Agent, s.Model, s.Prompt, s.Content,
-		s.Kind, s.SchemaVersion, s.TemplateID,
-		s.TemplateVersion, s.AggregateHash, s.CacheKey,
-		s.CacheStatus, s.ProvenanceJSON, s.StructuredJSON,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("inserting insight: %w", err)
-	}
-	return res.LastInsertId()
-}
-
-// GetCachedInsight returns the newest insight saved with cacheKey.
-// Returns nil, nil if no cache entry exists.
-func (db *DB) GetCachedInsight(
-	ctx context.Context, cacheKey string,
-) (*Insight, error) {
-	if strings.TrimSpace(cacheKey) == "" {
-		return nil, nil
-	}
-	row := db.getReader().QueryRowContext(
-		ctx,
-		"SELECT "+insightBaseCols+
-			" FROM insights WHERE cache_key = ?"+
-			" ORDER BY created_at DESC, id DESC LIMIT 1",
-		cacheKey,
-	)
-	s, err := scanInsightRow(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf(
-			"getting cached insight: %w", err,
-		)
-	}
-	return &s, nil
-}
-
 const maxInsights = 500
-
-// ListInsights returns insights matching the filter,
-// ordered by created_at DESC, capped at 500 rows.
-func (db *DB) ListInsights(
-	ctx context.Context, f InsightFilter,
-) ([]Insight, error) {
-	where, args := buildInsightFilter(f)
-	query := "SELECT " + insightBaseCols +
-		" FROM insights WHERE " + where +
-		" ORDER BY created_at DESC, id DESC" +
-		" LIMIT " + fmt.Sprintf("%d", maxInsights)
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying insights: %w", err)
-	}
-	defer rows.Close()
-
-	var insights []Insight
-	for rows.Next() {
-		s, err := scanInsightRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scanning insight: %w", err)
-		}
-		insights = append(insights, s)
-	}
-	return insights, rows.Err()
-}
-
-// GetInsight returns a single insight by ID.
-// Returns nil, nil if not found.
-func (db *DB) GetInsight(
-	ctx context.Context, id int64,
-) (*Insight, error) {
-	row := db.getReader().QueryRowContext(
-		ctx,
-		"SELECT "+insightBaseCols+
-			" FROM insights WHERE id = ?",
-		id,
-	)
-	s, err := scanInsightRow(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf(
-			"getting insight %d: %w", id, err,
-		)
-	}
-	return &s, nil
-}
 
 // CopyInsightsFrom copies all insights from the database at
 // sourcePath into this database using ATTACH/DETACH.
@@ -265,14 +109,4 @@ func (db *DB) CopyInsightsFrom(sourcePath string) error {
 		return fmt.Errorf("copying insights: %w", err)
 	}
 	return nil
-}
-
-// DeleteInsight removes an insight by ID.
-func (db *DB) DeleteInsight(id int64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
-		"DELETE FROM insights WHERE id = ?", id,
-	)
-	return err
 }
