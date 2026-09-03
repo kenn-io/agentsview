@@ -956,18 +956,6 @@ func (m *usageCacheManager) detachAllLocked() []*usageCache {
 	return caches
 }
 
-func (m *usageCacheManager) Reset() error {
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return nil
-	}
-	m.currentID = ""
-	caches := m.detachAllLocked()
-	m.mu.Unlock()
-	return retireUsageCaches(caches, m.archivePath, true)
-}
-
 func (m *usageCacheManager) RetireExcept(databaseID string) error {
 	m.mu.Lock()
 	if m.closed {
