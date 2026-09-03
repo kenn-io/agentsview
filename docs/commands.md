@@ -1399,10 +1399,12 @@ agentsview help
 | `ANTIGRAVITY_CLI_DIR`             | `~/.gemini/antigravity-cli`                          | Google Antigravity CLI sessions directory                                                           |
 | `ANTIGRAVITY_KEY`                 |                                                      | Optional key for decrypting Antigravity CLI `.pb` transcripts (defaults to summary mode without it) |
 | `CLAUDE_PROJECTS_DIR`             | `~/.claude/projects`                                 | Claude Code projects directory                                                                      |
+| `CLAUDE_CONFIG_DIR`               | unset                                                | Claude Code config home that re-roots the default `projects/` discovery path                        |
 | `OPENCLAUDE_PROJECTS_DIR`         | `~/.openclaude/projects`                             | OpenClaude projects directory                                                                       |
 | `OPENCLAUDE_CONFIG_DIR`           | unset                                                | OpenClaude config home that re-roots the default `projects/` discovery path                         |
 | `COWORK_DIR`                      | (platform-specific)                                  | Claude Desktop cowork sessions directory                                                            |
 | `CODEX_SESSIONS_DIR`              | `~/.codex/sessions`                                  | Codex sessions directory                                                                            |
+| `CODEX_HOME`                      | unset                                                | Codex home that re-roots the default `sessions/` and `archived_sessions/` discovery paths           |
 | `COMMANDCODE_PROJECTS_DIR`        | `~/.commandcode/projects`                            | Command Code projects directory                                                                     |
 | `COPILOT_DIR`                     | `~/.copilot`                                         | Copilot CLI sessions directory                                                                      |
 | `CORTEX_DIR`                      | `~/.snowflake/cortex/conversations`                  | Cortex Code conversations directory                                                                 |
