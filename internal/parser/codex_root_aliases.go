@@ -22,6 +22,9 @@ var codexRootAliases = struct {
 // SetCodexRootAliases replaces the alias table. Keys and values are session
 // roots (the sessions or archived_sessions directory), not homes. Passing nil
 // clears the table.
+//
+// The table is process-wide, so callers that do not own the local root
+// configuration must not call it; see the sync engine constructor.
 func SetCodexRootAliases(aliases map[string][]string) {
 	cleaned := make(map[string][]string, len(aliases))
 	for root, list := range aliases {
@@ -148,4 +151,15 @@ func loadCodexSessionIndexes(paths []string) (map[string]string, error) {
 		}
 	}
 	return merged, nil
+}
+
+// CodexRootAliases returns a copy of the current alias table.
+func CodexRootAliases() map[string][]string {
+	codexRootAliases.mu.RLock()
+	defer codexRootAliases.mu.RUnlock()
+	out := make(map[string][]string, len(codexRootAliases.roots))
+	for root, list := range codexRootAliases.roots {
+		out[root] = append([]string(nil), list...)
+	}
+	return out
 }
