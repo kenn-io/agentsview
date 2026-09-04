@@ -40,7 +40,7 @@
     "@tsconfig/svelte": "5.0.8",
     "@types/d3-hierarchy": "3.1.7",
     "@types/d3-scale": "4.0.9",
-    "jsdom": "29.1.1",
+    "jsdom": "30.0.1",
     "orval": "8.26.0",
     "svelte": "5.56.10",
     "svelte-check": "4.7.6",
