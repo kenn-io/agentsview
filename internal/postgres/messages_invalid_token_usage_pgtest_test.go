@@ -14,9 +14,10 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// Nothing validates token_usage on the way in, so a malformed blob in the
-// mirror reaches pg serve and the same response encoder that panics on
-// SQLite:
+// Nothing validates token_usage on the way in, so a malformed blob can sit
+// in the mirror. Without the guard this test pins, it would reach pg
+// serve's response encoder and fail there, the way it did on SQLite before
+// DecodeStoredTokenUsage:
 //
 //	json: cannot marshal from Go jsontext.Value: unexpected EOF within
 //	"/messages/0/token_usage"
