@@ -211,7 +211,7 @@ export const postApiV1SettingsWorktreeMappingsReclassify = async (
 export const getDeleteApiV1SettingsWorktreeMappingsByIdUrl = ({
   id,
 }: DeleteApiV1SettingsWorktreeMappingsByIdPathParameters) => {
-  return `/api/v1/settings/worktree-mappings/${id}`;
+  return `/api/v1/settings/worktree-mappings/${encodeURIComponent(String(id))}`;
 };
 
 /**
@@ -230,7 +230,7 @@ export const deleteApiV1SettingsWorktreeMappingsById = async (
 export const getPutApiV1SettingsWorktreeMappingsByIdUrl = ({
   id,
 }: PutApiV1SettingsWorktreeMappingsByIdPathParameters) => {
-  return `/api/v1/settings/worktree-mappings/${id}`;
+  return `/api/v1/settings/worktree-mappings/${encodeURIComponent(String(id))}`;
 };
 
 /**

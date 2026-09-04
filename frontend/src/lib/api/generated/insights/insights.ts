@@ -74,7 +74,7 @@ export const postApiV1InsightsGenerate = async (
 };
 
 export const getDeleteApiV1InsightsByIdUrl = ({ id }: DeleteApiV1InsightsByIdPathParameters) => {
-  return `/api/v1/insights/${id}`;
+  return `/api/v1/insights/${encodeURIComponent(String(id))}`;
 };
 
 /**
@@ -91,7 +91,7 @@ export const deleteApiV1InsightsById = async (
 };
 
 export const getGetApiV1InsightsByIdUrl = ({ id }: GetApiV1InsightsByIdPathParameters) => {
-  return `/api/v1/insights/${id}`;
+  return `/api/v1/insights/${encodeURIComponent(String(id))}`;
 };
 
 /**
@@ -110,7 +110,7 @@ export const getApiV1InsightsById = async (
 export const getGetApiV1InsightsByIdExportUrl = ({
   id,
 }: GetApiV1InsightsByIdExportPathParameters) => {
-  return `/api/v1/insights/${id}/export`;
+  return `/api/v1/insights/${encodeURIComponent(String(id))}/export`;
 };
 
 /**
@@ -127,7 +127,7 @@ export const getApiV1InsightsByIdExport = async (
 };
 
 export const getGetApiV1InsightsByIdMdUrl = ({ id }: GetApiV1InsightsByIdMdPathParameters) => {
-  return `/api/v1/insights/${id}/md`;
+  return `/api/v1/insights/${encodeURIComponent(String(id))}/md`;
 };
 
 /**
@@ -158,8 +158,8 @@ export const getPostApiV1InsightsByIdPublishUrl = (
   const stringifiedParams = normalizedParams.toString();
 
   return stringifiedParams.length > 0
-    ? `/api/v1/insights/${id}/publish?${stringifiedParams}`
-    : `/api/v1/insights/${id}/publish`;
+    ? `/api/v1/insights/${encodeURIComponent(String(id))}/publish?${stringifiedParams}`
+    : `/api/v1/insights/${encodeURIComponent(String(id))}/publish`;
 };
 
 /**

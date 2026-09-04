@@ -44,7 +44,7 @@ export const getDeleteApiV1SessionsByIdMessagesByMessageIdPinUrl = ({
   id,
   messageId,
 }: DeleteApiV1SessionsByIdMessagesByMessageIdPinPathParameters) => {
-  return `/api/v1/sessions/${id}/messages/${messageId}/pin`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/messages/${encodeURIComponent(String(messageId))}/pin`;
 };
 
 /**
@@ -64,7 +64,7 @@ export const getPostApiV1SessionsByIdMessagesByMessageIdPinUrl = ({
   id,
   messageId,
 }: PostApiV1SessionsByIdMessagesByMessageIdPinPathParameters) => {
-  return `/api/v1/sessions/${id}/messages/${messageId}/pin`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/messages/${encodeURIComponent(String(messageId))}/pin`;
 };
 
 /**
@@ -95,7 +95,7 @@ export const postApiV1SessionsByIdMessagesByMessageIdPin = async (
 };
 
 export const getGetApiV1SessionsByIdPinsUrl = ({ id }: GetApiV1SessionsByIdPinsPathParameters) => {
-  return `/api/v1/sessions/${id}/pins`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/pins`;
 };
 
 /**

@@ -55,8 +55,8 @@ export const getGetApiV1ActivityReportByReportIdSessionsUrl = (
   const stringifiedParams = normalizedParams.toString();
 
   return stringifiedParams.length > 0
-    ? `/api/v1/activity/report/${reportId}/sessions?${stringifiedParams}`
-    : `/api/v1/activity/report/${reportId}/sessions`;
+    ? `/api/v1/activity/report/${encodeURIComponent(String(reportId))}/sessions?${stringifiedParams}`
+    : `/api/v1/activity/report/${encodeURIComponent(String(reportId))}/sessions`;
 };
 
 /**

@@ -224,7 +224,7 @@ export const postApiV1SessionsUpload = async (
 };
 
 export const getDeleteApiV1SessionsByIdUrl = ({ id }: DeleteApiV1SessionsByIdPathParameters) => {
-  return `/api/v1/sessions/${id}`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}`;
 };
 
 /**
@@ -241,7 +241,7 @@ export const deleteApiV1SessionsById = async (
 };
 
 export const getGetApiV1SessionsByIdUrl = ({ id }: GetApiV1SessionsByIdPathParameters) => {
-  return `/api/v1/sessions/${id}`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}`;
 };
 
 /**
@@ -260,7 +260,7 @@ export const getApiV1SessionsById = async (
 export const getGetApiV1SessionsByIdActivityUrl = ({
   id,
 }: GetApiV1SessionsByIdActivityPathParameters) => {
-  return `/api/v1/sessions/${id}/activity`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/activity`;
 };
 
 /**
@@ -279,7 +279,7 @@ export const getApiV1SessionsByIdActivity = async (
 export const getGetApiV1SessionsByIdChildrenUrl = ({
   id,
 }: GetApiV1SessionsByIdChildrenPathParameters) => {
-  return `/api/v1/sessions/${id}/children`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/children`;
 };
 
 /**
@@ -298,7 +298,7 @@ export const getApiV1SessionsByIdChildren = async (
 export const getGetApiV1SessionsByIdDirectoryUrl = ({
   id,
 }: GetApiV1SessionsByIdDirectoryPathParameters) => {
-  return `/api/v1/sessions/${id}/directory`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/directory`;
 };
 
 /**
@@ -317,7 +317,7 @@ export const getApiV1SessionsByIdDirectory = async (
 export const getGetApiV1SessionsByIdExportUrl = ({
   id,
 }: GetApiV1SessionsByIdExportPathParameters) => {
-  return `/api/v1/sessions/${id}/export`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/export`;
 };
 
 /**
@@ -348,8 +348,8 @@ export const getGetApiV1SessionsByIdMdUrl = (
   const stringifiedParams = normalizedParams.toString();
 
   return stringifiedParams.length > 0
-    ? `/api/v1/sessions/${id}/md?${stringifiedParams}`
-    : `/api/v1/sessions/${id}/md`;
+    ? `/api/v1/sessions/${encodeURIComponent(String(id))}/md?${stringifiedParams}`
+    : `/api/v1/sessions/${encodeURIComponent(String(id))}/md`;
 };
 
 /**
@@ -381,8 +381,8 @@ export const getGetApiV1SessionsByIdMessagesUrl = (
   const stringifiedParams = normalizedParams.toString();
 
   return stringifiedParams.length > 0
-    ? `/api/v1/sessions/${id}/messages?${stringifiedParams}`
-    : `/api/v1/sessions/${id}/messages`;
+    ? `/api/v1/sessions/${encodeURIComponent(String(id))}/messages?${stringifiedParams}`
+    : `/api/v1/sessions/${encodeURIComponent(String(id))}/messages`;
 };
 
 /**
@@ -402,7 +402,7 @@ export const getApiV1SessionsByIdMessages = async (
 export const getPostApiV1SessionsByIdOpenUrl = ({
   id,
 }: PostApiV1SessionsByIdOpenPathParameters) => {
-  return `/api/v1/sessions/${id}/open`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/open`;
 };
 
 /**
@@ -432,7 +432,7 @@ export const postApiV1SessionsByIdOpen = async (
 export const getDeleteApiV1SessionsByIdPermanentUrl = ({
   id,
 }: DeleteApiV1SessionsByIdPermanentPathParameters) => {
-  return `/api/v1/sessions/${id}/permanent`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/permanent`;
 };
 
 /**
@@ -463,8 +463,8 @@ export const getPostApiV1SessionsByIdPublishUrl = (
   const stringifiedParams = normalizedParams.toString();
 
   return stringifiedParams.length > 0
-    ? `/api/v1/sessions/${id}/publish?${stringifiedParams}`
-    : `/api/v1/sessions/${id}/publish`;
+    ? `/api/v1/sessions/${encodeURIComponent(String(id))}/publish?${stringifiedParams}`
+    : `/api/v1/sessions/${encodeURIComponent(String(id))}/publish`;
 };
 
 /**
@@ -484,7 +484,7 @@ export const postApiV1SessionsByIdPublish = async (
 export const getPatchApiV1SessionsByIdRenameUrl = ({
   id,
 }: PatchApiV1SessionsByIdRenamePathParameters) => {
-  return `/api/v1/sessions/${id}/rename`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/rename`;
 };
 
 /**
@@ -514,7 +514,7 @@ export const patchApiV1SessionsByIdRename = async (
 export const getPostApiV1SessionsByIdRestoreUrl = ({
   id,
 }: PostApiV1SessionsByIdRestorePathParameters) => {
-  return `/api/v1/sessions/${id}/restore`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/restore`;
 };
 
 /**
@@ -533,7 +533,7 @@ export const postApiV1SessionsByIdRestore = async (
 export const getPostApiV1SessionsByIdResumeUrl = ({
   id,
 }: PostApiV1SessionsByIdResumePathParameters) => {
-  return `/api/v1/sessions/${id}/resume`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/resume`;
 };
 
 /**
@@ -575,8 +575,8 @@ export const getGetApiV1SessionsByIdSearchUrl = (
   const stringifiedParams = normalizedParams.toString();
 
   return stringifiedParams.length > 0
-    ? `/api/v1/sessions/${id}/search?${stringifiedParams}`
-    : `/api/v1/sessions/${id}/search`;
+    ? `/api/v1/sessions/${encodeURIComponent(String(id))}/search?${stringifiedParams}`
+    : `/api/v1/sessions/${encodeURIComponent(String(id))}/search`;
 };
 
 /**
@@ -596,7 +596,7 @@ export const getApiV1SessionsByIdSearch = async (
 export const getGetApiV1SessionsByIdTimingUrl = ({
   id,
 }: GetApiV1SessionsByIdTimingPathParameters) => {
-  return `/api/v1/sessions/${id}/timing`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/timing`;
 };
 
 /**
@@ -615,7 +615,7 @@ export const getApiV1SessionsByIdTiming = async (
 export const getGetApiV1SessionsByIdToolCallsUrl = ({
   id,
 }: GetApiV1SessionsByIdToolCallsPathParameters) => {
-  return `/api/v1/sessions/${id}/tool-calls`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/tool-calls`;
 };
 
 /**
@@ -646,8 +646,8 @@ export const getGetApiV1SessionsByIdUsageUrl = (
   const stringifiedParams = normalizedParams.toString();
 
   return stringifiedParams.length > 0
-    ? `/api/v1/sessions/${id}/usage?${stringifiedParams}`
-    : `/api/v1/sessions/${id}/usage`;
+    ? `/api/v1/sessions/${encodeURIComponent(String(id))}/usage?${stringifiedParams}`
+    : `/api/v1/sessions/${encodeURIComponent(String(id))}/usage`;
 };
 
 /**
@@ -667,7 +667,7 @@ export const getApiV1SessionsByIdUsage = async (
 export const getGetApiV1SessionsByIdWatchUrl = ({
   id,
 }: GetApiV1SessionsByIdWatchPathParameters) => {
-  return `/api/v1/sessions/${id}/watch`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/watch`;
 };
 
 /**

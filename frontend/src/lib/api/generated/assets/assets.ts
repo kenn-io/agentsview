@@ -8,7 +8,7 @@ import { orvalFetch } from "../../runtime.ts";
 export const getGetApiV1AssetsByFilenameUrl = ({
   filename,
 }: GetApiV1AssetsByFilenamePathParameters) => {
-  return `/api/v1/assets/${filename}`;
+  return `/api/v1/assets/${encodeURIComponent(String(filename))}`;
 };
 
 /**

@@ -13,7 +13,7 @@ import { orvalFetch } from "../../runtime.ts";
 export const getDeleteApiV1SessionsByIdStarUrl = ({
   id,
 }: DeleteApiV1SessionsByIdStarPathParameters) => {
-  return `/api/v1/sessions/${id}/star`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/star`;
 };
 
 /**
@@ -30,7 +30,7 @@ export const deleteApiV1SessionsByIdStar = async (
 };
 
 export const getPutApiV1SessionsByIdStarUrl = ({ id }: PutApiV1SessionsByIdStarPathParameters) => {
-  return `/api/v1/sessions/${id}/star`;
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/star`;
 };
 
 /**

@@ -90,8 +90,8 @@ export const getPostApiV1EmbeddingsGenerationsByIdActivateUrl = (
   const stringifiedParams = normalizedParams.toString();
 
   return stringifiedParams.length > 0
-    ? `/api/v1/embeddings/generations/${id}/activate?${stringifiedParams}`
-    : `/api/v1/embeddings/generations/${id}/activate`;
+    ? `/api/v1/embeddings/generations/${encodeURIComponent(String(id))}/activate?${stringifiedParams}`
+    : `/api/v1/embeddings/generations/${encodeURIComponent(String(id))}/activate`;
 };
 
 /**
@@ -134,8 +134,8 @@ export const getPostApiV1EmbeddingsGenerationsByIdRetireUrl = (
   const stringifiedParams = normalizedParams.toString();
 
   return stringifiedParams.length > 0
-    ? `/api/v1/embeddings/generations/${id}/retire?${stringifiedParams}`
-    : `/api/v1/embeddings/generations/${id}/retire`;
+    ? `/api/v1/embeddings/generations/${encodeURIComponent(String(id))}/retire?${stringifiedParams}`
+    : `/api/v1/embeddings/generations/${encodeURIComponent(String(id))}/retire`;
 };
 
 /**

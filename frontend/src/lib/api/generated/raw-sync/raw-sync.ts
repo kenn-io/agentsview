@@ -127,7 +127,7 @@ export const postApiV1RawSyncUploads = async (
 export const getHeadApiV1RawSyncUploadsByUploadIdUrl = ({
   uploadId,
 }: HeadApiV1RawSyncUploadsByUploadIdPathParameters) => {
-  return `/api/v1/raw-sync/uploads/${uploadId}`;
+  return `/api/v1/raw-sync/uploads/${encodeURIComponent(String(uploadId))}`;
 };
 
 /**
@@ -146,7 +146,7 @@ export const headApiV1RawSyncUploadsByUploadId = async (
 export const getPatchApiV1RawSyncUploadsByUploadIdUrl = ({
   uploadId,
 }: PatchApiV1RawSyncUploadsByUploadIdPathParameters) => {
-  return `/api/v1/raw-sync/uploads/${uploadId}`;
+  return `/api/v1/raw-sync/uploads/${encodeURIComponent(String(uploadId))}`;
 };
 
 /**
