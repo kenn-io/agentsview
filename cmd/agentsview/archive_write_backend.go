@@ -967,6 +967,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
 		AgentDirs:               b.appCfg.AgentDirs,
 		SourceMachines:          b.appCfg.SourceMachines,
+		RootAliases:             b.appCfg.RootAliases,
 		DisabledAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
@@ -1098,6 +1099,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
 		AgentDirs:               b.appCfg.AgentDirs,
 		SourceMachines:          b.appCfg.SourceMachines,
+		RootAliases:             b.appCfg.RootAliases,
 		DisabledAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,

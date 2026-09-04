@@ -688,8 +688,14 @@ type Config struct {
 
 	// SessionSources contains resolved structured sources. SourceMachines maps
 	// each effective configured root to its machine label for sync.
-	SessionSources       []SessionSource                        `json:"-" toml:"-"`
-	SourceMachines       map[parser.AgentType]map[string]string `json:"-" toml:"-"`
+	SessionSources []SessionSource                        `json:"-" toml:"-"`
+	SourceMachines map[parser.AgentType]map[string]string `json:"-" toml:"-"`
+	// RootAliases maps each effective root to configured roots that were
+	// folded into it because they resolve to the same directory, such as a
+	// second Codex home whose sessions directory links to the primary home.
+	// Providers scan the effective root once and read sidecar files from
+	// every alias.
+	RootAliases          map[parser.AgentType]map[string][]string `json:"-" toml:"-"`
 	sessionSourceConfigs []sessionSourceConfig
 
 	// agentHomes holds alternate agent home directories from the config
@@ -2236,6 +2242,19 @@ func (c *Config) resolveSessionSources() error {
 
 	resolved := make([]SessionSource, 0)
 	rootsByAgent := make(map[parser.AgentType]map[string]rootState, len(c.AgentDirs))
+	aliases := make(map[parser.AgentType]map[string][]string)
+	recordAlias := func(agent parser.AgentType, canonical, alias string) {
+		if filepath.Clean(canonical) == filepath.Clean(alias) {
+			return
+		}
+		if aliases[agent] == nil {
+			aliases[agent] = make(map[string][]string)
+		}
+		if slices.Contains(aliases[agent][canonical], alias) {
+			return
+		}
+		aliases[agent][canonical] = append(aliases[agent][canonical], alias)
+	}
 	for _, def := range parser.Registry {
 		seen := make(map[string]rootState)
 		dirs := make([]string, 0, len(c.AgentDirs[def.Type]))
@@ -2250,7 +2269,8 @@ func (c *Config) resolveSessionSources() error {
 					"resolve %s session source %q: %w", def.Type, value, err,
 				)
 			}
-			if _, ok := seen[key]; ok {
+			if existing, ok := seen[key]; ok {
+				recordAlias(def.Type, existing.dir, value)
 				continue
 			}
 			seen[key] = rootState{
@@ -2288,7 +2308,8 @@ func (c *Config) resolveSessionSources() error {
 						fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
 					continue
 				}
-				if _, duplicate := seen[key]; duplicate {
+				if existing, duplicate := seen[key]; duplicate {
+					recordAlias(def.Type, existing.dir, dir)
 					continue
 				}
 				seen[key] = rootState{dir: dir, machine: c.LocalMachineName}
@@ -2361,6 +2382,7 @@ func (c *Config) resolveSessionSources() error {
 		}
 		state, duplicate := seen[key]
 		if duplicate {
+			recordAlias(agent, state.dir, dir)
 			state.machine = machine
 			seen[key] = state
 		} else {
@@ -2392,6 +2414,7 @@ func (c *Config) resolveSessionSources() error {
 	}
 	c.SessionSources = resolved
 	c.SourceMachines = sourceMachines
+	c.RootAliases = aliases
 	return nil
 }
 

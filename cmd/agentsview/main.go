@@ -298,6 +298,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		engine = sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:               cfg.AgentDirs,
 			SourceMachines:          cfg.SourceMachines,
+			RootAliases:             cfg.RootAliases,
 			DisabledAgents:          cfg.DisabledAgents,
 			IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths:      cfg.ScanProtectedPaths,
