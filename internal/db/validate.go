@@ -37,19 +37,9 @@ import (
 //     blanked. Empty-string handling is preserved as-is so downstream
 //     localTime treats a blanked timestamp as invalid.
 //
-// Message.TokenUsage (jsontext.Value) is a raw provider payload, so it is
-// not run through the text contract below -- but it IS checked for JSON
-// validity and blanked when malformed. jsontext.Value defers parsing to
-// marshal time, so an invalid blob (e.g. a truncated gjson raw slice from a
-// torn read of a JSONL line still being written) is stored without
-// complaint and only fails much later, when the API marshals it. With no
-// recover() in internal/server that became an unrecovered handler panic and
-// a dropped connection on GET /api/v1/sessions/{id}/messages, while the
-// HTML export of the same session still rendered because it never marshals
-// the field. Blanking here follows the sanitize-don't-drop policy: the
-// message keeps its content and only the unusable metadata is cleared.
-// Transient ToolResults.ContentRaw remains outside this pass. It is a
-// raw provider payload, not persisted display text. Persisted result content
+// Message.TokenUsage (jsontext.Value) and transient
+// ToolResults.ContentRaw are intentionally not run through this pass. They are
+// raw provider payloads, not persisted display text. Persisted result content
 // (tool_calls.result_content and tool_result_events.content) follows the same
 // text contract as Message.Content, with length fields reduced by the
 // stripped-byte delta so re-ingest rewrites historical poison rows into the
@@ -111,7 +101,6 @@ type ValidationStats struct {
 	TokensClamped        int
 	RoleCoerced          int
 	TimestampsBlanked    int
-	TokenUsageBlanked    int
 }
 
 // add accumulates another stats value into the receiver.
@@ -121,7 +110,6 @@ func (s *ValidationStats) add(o ValidationStats) {
 	s.TokensClamped += o.TokensClamped
 	s.RoleCoerced += o.RoleCoerced
 	s.TimestampsBlanked += o.TimestampsBlanked
-	s.TokenUsageBlanked += o.TokenUsageBlanked
 }
 
 // ValidateAndSanitize applies the central validation contract in place
@@ -173,16 +161,6 @@ func SanitizeMessage(m *Message) ValidationStats {
 	if !validMessageRole(m.Role) {
 		m.Role = ""
 		stats.RoleCoerced++
-	}
-
-	// Parsers store the provider's raw usage object (e.g. gjson's .Raw in
-	// extractClaudeTokenFields) without validating it. jsontext.Value only
-	// re-parses at marshal time, so a malformed blob survives the write and
-	// detonates in the API response instead. Blank it here, at the shared
-	// write seam, so every agent and every write path is covered.
-	if len(m.TokenUsage) > 0 && !m.TokenUsage.IsValid() {
-		m.TokenUsage = nil
-		stats.TokenUsageBlanked++
 	}
 
 	// Adjust ContentLength by the DELTA of bytes the sanitizer removed

@@ -188,13 +188,12 @@ type SanitizeStats struct {
 	TokensClamped        int `json:"tokens_clamped,omitempty"`
 	RoleCoerced          int `json:"role_coerced,omitempty"`
 	TimestampsBlanked    int `json:"timestamps_blanked,omitempty"`
-	TokenUsageBlanked    int `json:"token_usage_blanked,omitempty"`
 }
 
 // Total returns the sum of all sanitize fix counts.
 func (s SanitizeStats) Total() int {
 	return s.ControlCharsStripped + s.ModelClamped + s.TokensClamped +
-		s.RoleCoerced + s.TimestampsBlanked + s.TokenUsageBlanked
+		s.RoleCoerced + s.TimestampsBlanked
 }
 
 // IsZero reports whether no sanitize fixes were recorded.
@@ -273,7 +272,6 @@ func (a *AnomalyStats) addSanitize(v validationStats) {
 	a.Sanitize.TokensClamped += v.TokensClamped
 	a.Sanitize.RoleCoerced += v.RoleCoerced
 	a.Sanitize.TimestampsBlanked += v.TimestampsBlanked
-	a.Sanitize.TokenUsageBlanked += v.TokenUsageBlanked
 }
 
 // merge folds another AnomalyStats into the receiver.
@@ -295,7 +293,6 @@ func (a *AnomalyStats) merge(o AnomalyStats) {
 	a.Sanitize.TokensClamped += o.Sanitize.TokensClamped
 	a.Sanitize.RoleCoerced += o.Sanitize.RoleCoerced
 	a.Sanitize.TimestampsBlanked += o.Sanitize.TimestampsBlanked
-	a.Sanitize.TokenUsageBlanked += o.Sanitize.TokenUsageBlanked
 }
 
 // anomalyAccumulator is the engine's per-run, concurrency-safe sink for

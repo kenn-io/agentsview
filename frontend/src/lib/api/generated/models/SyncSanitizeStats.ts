@@ -7,7 +7,6 @@ export type SyncSanitizeStats = {
   model_clamped?: number;
   role_coerced?: number;
   timestamps_blanked?: number;
-  token_usage_blanked?: number;
   tokens_clamped?: number;
 };
 
