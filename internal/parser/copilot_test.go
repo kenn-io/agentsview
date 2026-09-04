@@ -693,9 +693,8 @@ func TestLoadCopilotStoreUsage(t *testing.T) {
 	assert.Equal(t, 60, events[0].CacheReadInputTokens)
 	assert.Equal(t, 10, events[0].CacheCreationInputTokens)
 	assert.Equal(t, 4, events[0].ReasoningTokens)
-	require.NotNil(t, events[0].Cost)
-	assert.Equal(t, money.MustParseDollars("0.001251"), *events[0].Cost)
-	assert.Equal(t, copilotStoreCostSource, events[0].CostSource)
+	assert.Nil(t, events[0].Cost)
+	assert.Empty(t, events[0].CostSource)
 	assert.Equal(t, "2026-09-04T17:40:54.970Z", events[0].OccurredAt)
 	assert.Equal(t, "session-store:7", events[0].DedupKey)
 }
@@ -733,8 +732,7 @@ func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
 	assert.Equal(t, "session-store", usage[0].Source)
 	assert.Equal(t, 80, usage[0].InputTokens)
 	assert.Equal(t, 50, usage[0].OutputTokens)
-	require.NotNil(t, usage[0].Cost)
-	assert.Equal(t, money.MustParseDollars("0.0025"), *usage[0].Cost)
+	assert.Nil(t, usage[0].Cost)
 	assert.Equal(t, "session-store:42", usage[0].DedupKey)
 }
 

@@ -458,14 +458,15 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (98: The Pi parser now attributes skill loads (SKILL.md
 // reads and skill:// URIs) so Pi tool calls count toward Top Skills.
 // Existing Pi rows need re-parsing to backfill the skill attribution.)
+<<<<<<< HEAD
 // (99: the Antigravity CLI parser normalizes observed experimental serving
 // variant suffixes (-exp-b) against the matching effort-qualified executor
 // model. Existing Antigravity rows need re-parsing so stored messages and
 // usage events reflect the intended effort-qualified model.)
-// (100: Copilot CLI sessions without a usable session.shutdown model summary
-// now persist their model-bearing assistant output-token records as message
-// usage. Existing sessions need re-parsing for the Usage page to include this
-// partial accounting.)
+// (100: Copilot CLI sessions without a usable session.shutdown summary now
+// persist assistant output-token fallback usage and observed session-store token
+// data. Existing sessions need re-parsing for the Usage page to include this
+// enriched catalog-priced accounting.)
 const dataVersion = 100
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"

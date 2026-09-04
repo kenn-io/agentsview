@@ -462,13 +462,13 @@ it.
 
 ### Copilot Reported Billing
 
-Copilot CLI's local `session-store.db` records per-request `total_nano_aiu`
-billing totals. Copilot sessions starting on or after June 1, 2026 can report
-that exact cost (`total_nano_aiu / 1e11` USD), including while a session is
-active. AgentsView uses those complete store records when present. Older
-sessions remain catalog-priced because they were created under the
-premium-request pricing model. When the store is unavailable, a
-`session.shutdown.totalNanoAiu` total remains the authoritative fallback.
+Copilot CLI's local `session-store.db` contains observed per-request token
+data, which AgentsView uses when available. GitHub does not document this
+database's schema or billing semantics, so AgentsView catalog-prices those
+tokens rather than treating the store as an exact cost ledger. Older sessions
+remain catalog-priced because they were created under the premium-request
+pricing model. A `session.shutdown.totalNanoAiu` total remains the only
+authoritative reported-cost source.
 
 When the selected data contains this reported session cost, AgentsView
 suppresses every catalog-priced estimate for that session. This prevents double
