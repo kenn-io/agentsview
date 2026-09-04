@@ -2270,6 +2270,10 @@ func (c *Config) resolveSessionSources() error {
 			continue
 		}
 		seen := rootsByAgent[def.Type]
+		if seen == nil {
+			seen = make(map[string]rootState)
+			rootsByAgent[def.Type] = seen
+		}
 		for i, rawHome := range homes {
 			home, err := normalizeAgentHomeDir(rawHome)
 			if err != nil {
