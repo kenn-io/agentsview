@@ -28,6 +28,7 @@ const api = vi.hoisted(() => ({
   getProjects: vi.fn(),
   getAgents: vi.fn(),
   getMachines: vi.fn(),
+  getBranches: vi.fn(),
   deleteSession: vi.fn(),
   batchDeleteSessions: vi.fn(),
   restoreSession: vi.fn(),
@@ -92,6 +93,7 @@ vi.mock("../api/generated/index", () => ({
     getApiV1Projects: vi.fn((params) => api.getProjects(params)),
     getApiV1Agents: vi.fn((params) => api.getAgents(params)),
     getApiV1Machines: vi.fn((params) => api.getMachines(params)),
+    getApiV1Branches: vi.fn((params) => api.getBranches(params)),
     getApiV1Stats: vi.fn((params) => api.getStats(params)),
   },
 }));
@@ -1628,6 +1630,7 @@ describe("SessionsStore", () => {
       const f: Filters = {
         project: "myproj",
         machine: "host-a",
+        branch: "myproj\u001ffeature",
         agent: "claude",
         termination: "unclean",
         date: "2024-06-15",
@@ -1644,6 +1647,7 @@ describe("SessionsStore", () => {
       expect(filtersToParams(f)).toEqual({
         project: "myproj",
         machine: "host-a",
+        git_branch: "myproj\u001ffeature",
         agent: "claude",
         termination: "unclean",
         date: "2024-06-15",
@@ -1674,6 +1678,7 @@ describe("SessionsStore", () => {
       const original: Filters = {
         project: "myproj",
         machine: "host-a",
+        branch: "myproj\u001ffeature",
         agent: "claude",
         termination: "unclean",
         date: "2024-06-15",
@@ -2176,6 +2181,62 @@ describe("SessionsStore", () => {
 
       expect(sessions.filters.project).toBe("myproj");
       expect(sessions.hasActiveFilters).toBe(false);
+    });
+
+    it("counts each active dimension once", () => {
+      const cases: Array<{
+        name: string;
+        apply: () => void;
+        want: number;
+      }> = [
+        { name: "none", apply: () => {}, want: 0 },
+        {
+          name: "machine",
+          apply: () => {
+            sessions.filters.machine = "host-a";
+          },
+          want: 1,
+        },
+        {
+          name: "branch",
+          apply: () => {
+            sessions.filters.branch = "projmain";
+          },
+          want: 1,
+        },
+        {
+          name: "date trio counts once",
+          apply: () => {
+            sessions.filters.date = "2026-01-01";
+            sessions.filters.dateFrom = "2026-01-01";
+            sessions.filters.dateTo = "2026-01-31";
+          },
+          want: 1,
+        },
+        {
+          name: "project not counted",
+          apply: () => {
+            sessions.filters.project = "myproj";
+          },
+          want: 0,
+        },
+        {
+          name: "combined",
+          apply: () => {
+            sessions.filters.machine = "host-a";
+            sessions.filters.branch = "projmain";
+            sessions.filters.agent = "claude";
+            sessions.filters.minUserMessages = 3;
+            sessions.filters.includeAutomated = true;
+          },
+          want: 5,
+        },
+      ];
+      for (const c of cases) {
+        sessions.filters = parseFiltersFromParams({});
+        c.apply();
+        expect(sessions.activeFilterCount, c.name).toBe(c.want);
+      }
     });
 
     it("clears the date yoke before clearing the active session", () => {

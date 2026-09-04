@@ -11,6 +11,7 @@
     value: number;
     color: string;
     meta?: string;
+    selectable?: boolean;
   }
 
   interface Props {
@@ -18,6 +19,10 @@
     height?: number;
     onSelect?: (id: string) => void;
     formatValue?: (value: number) => string;
+    // Localized tooltip/aria copy can come from the caller because it
+    // depends on what selecting a tile does there (hide vs. filter).
+    titleFor?: (id: string, label: string) => string;
+    ariaLabelFor?: (id: string, label: string) => string;
   }
 
   const uid = $props.id();
@@ -31,6 +36,8 @@
     height = 260,
     onSelect,
     formatValue = formatCost,
+    titleFor = (_id, label) => m.usage_click_to_hide({ label }),
+    ariaLabelFor = (_id, label) => m.usage_hide_from_chart({ label }),
   }: Props = $props();
 
   const root = $derived.by(() =>
@@ -57,6 +64,7 @@
         {#snippet children({ nodes })}
           {#each nodes.filter((node) => node.depth === 1) as node, index ((node.data as TreemapItem).id)}
             {@const tile = node.data as TreemapItem}
+            {@const selectable = tile.selectable ?? true}
             {@const tileWidth = node.x1 - node.x0}
             {@const tileHeight = node.y1 - node.y0}
             {@const large = tileWidth > 60 && tileHeight > 40}
@@ -65,34 +73,47 @@
             <clipPath id={clipId}>
               <rect x={node.x0} y={node.y0} width={tileWidth} height={tileHeight} />
             </clipPath>
-            <g
-              class="tile"
-              clip-path={`url(#${clipId})`}
-              tabindex={0}
-              role="button"
-              aria-label={m.usage_hide_from_chart({ label: tile.label })}
-              onclick={() => onSelect?.(tile.id)}
-              onkeydown={(event) => handleKey(event, tile.id)}
-            >
-              <title>{m.usage_click_to_hide({ label: tile.label })}</title>
-              <Group x={node.x0} y={node.y0}>
-                <Rect
-                  width={tileWidth}
-                  height={tileHeight}
-                  rx={3}
-                  fill={tile.color}
-                />
-                {#if large}
-                  <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
-                  <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
-                  {#if tile.meta}
-                    <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+            {#if selectable}
+              <g
+                class="tile interactive"
+                clip-path={`url(#${clipId})`}
+                tabindex="0"
+                role="button"
+                aria-label={ariaLabelFor(tile.id, tile.label)}
+                onclick={() => onSelect?.(tile.id)}
+                onkeydown={(event) => handleKey(event, tile.id)}
+              >
+                <title>{titleFor(tile.id, tile.label)}</title>
+                <Group x={node.x0} y={node.y0}>
+                  <Rect width={tileWidth} height={tileHeight} rx={3} fill={tile.color} />
+                  {#if large}
+                    <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
+                    <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
+                    {#if tile.meta}
+                      <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+                    {/if}
+                  {:else if medium}
+                    <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
                   {/if}
-                {:else if medium}
-                  <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
-                {/if}
-              </Group>
-            </g>
+                </Group>
+              </g>
+            {:else}
+              <g class="tile" clip-path={`url(#${clipId})`}>
+                <title>{titleFor(tile.id, tile.label)}</title>
+                <Group x={node.x0} y={node.y0}>
+                  <Rect width={tileWidth} height={tileHeight} rx={3} fill={tile.color} />
+                  {#if large}
+                    <Text value={tile.label} x={6} y={16} width={tileWidth - 12} truncate class="tile-label" />
+                    <Text value={formatValue(tile.value)} x={6} y={30} width={tileWidth - 12} truncate class="tile-value" />
+                    {#if tile.meta}
+                      <Text value={tile.meta} x={6} y={42} width={tileWidth - 12} truncate class="tile-meta" />
+                    {/if}
+                  {:else if medium}
+                    <Text value={tile.label} x={4} y={14} width={tileWidth - 8} truncate class="tile-label-sm" />
+                  {/if}
+                </Group>
+              </g>
+            {/if}
           {/each}
         {/snippet}
       </LayerTreemap>
@@ -110,19 +131,19 @@
     display: block;
   }
 
-  .treemap-container :global(.tile) {
+  .treemap-container :global(.tile.interactive) {
     cursor: pointer;
   }
 
-  .treemap-container :global(.tile:hover rect) {
+  .treemap-container :global(.tile.interactive:hover rect) {
     opacity: 0.92;
   }
 
-  .treemap-container :global(.tile:focus-visible) {
+  .treemap-container :global(.tile.interactive:focus-visible) {
     outline: none;
   }
 
-  .treemap-container :global(.tile:focus-visible rect) {
+  .treemap-container :global(.tile.interactive:focus-visible rect) {
     stroke: white;
     stroke-width: 2;
   }

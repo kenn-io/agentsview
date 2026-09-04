@@ -2122,6 +2122,7 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	assert.Empty(t, result.SessionCounts.ByProject)
 	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
 	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
+	assert.Empty(t, result.Daily[0].BranchBreakdowns, "cursor-only usage has no branch attribution")
 }
 
 func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {

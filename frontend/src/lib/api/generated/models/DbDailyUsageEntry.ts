@@ -5,6 +5,7 @@
 import type { MoneyMoney } from './MoneyMoney';
 export type DbDailyUsageEntry = {
   agentBreakdowns: any[] | null;
+  branchBreakdowns: any[] | null;
   cacheCreationTokens: number;
   cacheReadTokens: number;
   date: string;

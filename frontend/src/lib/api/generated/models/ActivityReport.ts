@@ -13,6 +13,7 @@ export type ActivityReport = {
   bucket_unit: string;
   buckets: any[] | null;
   by_agent: any[] | null;
+  by_branch: any[] | null;
   by_model: any[] | null;
   by_project: any[] | null;
   by_session: any[] | null;

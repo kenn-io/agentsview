@@ -29,6 +29,7 @@ type ActivityReportConfig struct {
 	Timezone            string
 	Bucket              string
 	Project             string
+	Branch              string
 	Agent               string
 	Machine             string
 	JSON                bool
@@ -50,6 +51,10 @@ var activityReportNow = time.Now
 func runActivityReport(cfg ActivityReportConfig) {
 	cfg.ProgressWriter = os.Stderr
 	ctx := context.Background()
+	if _, err := branchFilterToken(cfg.Project, cfg.Branch); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
@@ -107,6 +112,11 @@ func fetchHTTPActivityReport(
 	setIfNotEmpty("project", cfg.Project)
 	setIfNotEmpty("agent", cfg.Agent)
 	setIfNotEmpty("machine", cfg.Machine)
+	gitBranch, err := branchFilterToken(cfg.Project, cfg.Branch)
+	if err != nil {
+		return activity.Report{}, err
+	}
+	setIfNotEmpty("git_branch", gitBranch)
 
 	endpoint := strings.TrimSuffix(tr.URL, "/") +
 		"/api/v1/activity/report?" + q.Encode()
@@ -297,6 +307,7 @@ type cliActivityCursorQuery struct {
 type cliActivityCursorFilter struct {
 	Timezone         string `json:"timezone"`
 	Project          string `json:"project,omitempty"`
+	GitBranch        string `json:"git_branch,omitempty"`
 	Agent            string `json:"agent,omitempty"`
 	Machine          string `json:"machine,omitempty"`
 	ExcludeOneShot   bool   `json:"exclude_one_shot"`
@@ -463,9 +474,14 @@ func resolveCLIActivitySelection(
 		return activity.Query{}, db.AnalyticsFilter{}, err
 	}
 
+	gitBranch, err := branchFilterToken(cfg.Project, cfg.Branch)
+	if err != nil {
+		return activity.Query{}, db.AnalyticsFilter{}, err
+	}
 	f := db.AnalyticsFilter{
 		Timezone:         tz,
 		Project:          cfg.Project,
+		GitBranch:        gitBranch,
 		Agent:            cfg.Agent,
 		Machine:          cfg.Machine,
 		ExcludeOneShot:   false,
@@ -509,7 +525,8 @@ func (cursor cliActivitySessionCursor) selection() (
 	}
 	f := db.AnalyticsFilter{
 		Timezone: cursor.Filter.Timezone, Project: cursor.Filter.Project,
-		Agent: cursor.Filter.Agent, Machine: cursor.Filter.Machine,
+		GitBranch: cursor.Filter.GitBranch,
+		Agent:     cursor.Filter.Agent, Machine: cursor.Filter.Machine,
 		ExcludeOneShot:   cursor.Filter.ExcludeOneShot,
 		ExcludeAutomated: cursor.Filter.ExcludeAutomated,
 	}
@@ -533,8 +550,8 @@ func newCLIActivitySessionCursor(
 			Bucket: q.Bucket, GapCapSeconds: q.GapCapSeconds,
 		},
 		Filter: cliActivityCursorFilter{
-			Timezone: f.Timezone, Project: f.Project, Agent: f.Agent,
-			Machine: f.Machine, ExcludeOneShot: f.ExcludeOneShot,
+			Timezone: f.Timezone, Project: f.Project, GitBranch: f.GitBranch,
+			Agent: f.Agent, Machine: f.Machine, ExcludeOneShot: f.ExcludeOneShot,
 			ExcludeAutomated: f.ExcludeAutomated,
 		},
 	}
@@ -575,6 +592,7 @@ func printActivityReport(r activity.Report) {
 	printKeyMinutes("By project", r.ByProject)
 	printKeyMinutes("By model", r.ByModel)
 	printKeyMinutes("By agent", r.ByAgent)
+	printBranchKeyMinutes("By branch", r.ByBranch)
 	printActivitySessions(r.BySession)
 }
 
@@ -607,9 +625,32 @@ func printKeyMinutes(label string, rows []activity.KeyMinutes) {
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	for _, row := range topKeyMinutes(rows, 5) {
+	for _, row := range firstN(rows, 5) {
 		fmt.Fprintf(w, "  %s\t%.1f min\n",
 			sanitizeTerminal(row.Key), row.AgentMinutes)
+	}
+	w.Flush()
+	fmt.Println()
+}
+
+func printBranchKeyMinutes(label string, rows []activity.BranchKeyMinutes) {
+	fmt.Printf("%s (top 5):\n", label)
+	if len(rows) == 0 {
+		fmt.Println("  (none)")
+		fmt.Println()
+		return
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	for _, row := range firstN(rows, 5) {
+		branch := row.Branch
+		if branch == "" {
+			branch = "(no branch)"
+		}
+		key := branch
+		if row.Project != "" {
+			key = row.Project + "/" + branch
+		}
+		fmt.Fprintf(w, "  %s\t%.1f min\n", sanitizeTerminal(key), row.AgentMinutes)
 	}
 	w.Flush()
 	fmt.Println()
@@ -624,8 +665,7 @@ func printActivitySessions(rows []activity.SessionRow) {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "  TITLE\tPROJECT\tAGENT\tMINUTES\tCOST")
-	limit := min(len(rows), 5)
-	for _, s := range rows[:limit] {
+	for _, s := range firstN(rows, 5) {
 		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n",
 			sanitizeTerminal(s.Title), sanitizeTerminal(s.Project),
 			sanitizeTerminal(s.Agent),
@@ -635,8 +675,7 @@ func printActivitySessions(rows []activity.SessionRow) {
 	w.Flush()
 }
 
-// topKeyMinutes returns the first n rows of rows (already sorted by the query).
-func topKeyMinutes(rows []activity.KeyMinutes, n int) []activity.KeyMinutes {
+func firstN[T any](rows []T, n int) []T {
 	return rows[:min(len(rows), n)]
 }
 

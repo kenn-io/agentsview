@@ -72,6 +72,19 @@ func TestUsageSummaryResponseEmitsEmptyProjectsMap(t *testing.T) {
 	assert.Contains(t, string(b), `"projects":{}`)
 }
 
+func TestUsageSummaryResponsePreservesBranchProjectKey(t *testing.T) {
+	response := usageSummaryResponseFromService(&service.UsageSummaryResult{
+		BranchTotals: []service.BranchTotal{{
+			ProjectKey: "pl1:sha256:alpha",
+			Project:    "alpha",
+			Branch:     "main",
+		}},
+	})
+
+	require.Len(t, response.BranchTotals, 1)
+	assert.Equal(t, "pl1:sha256:alpha", response.BranchTotals[0].ProjectKey)
+}
+
 // assertUsageQueryCalls verifies how many times the usage handler
 // queried the daily-usage and session-count store methods.
 func assertUsageQueryCalls(
@@ -141,6 +154,20 @@ func TestUsageSummaryDefaultsToBreakdowns(t *testing.T) {
 
 	require.Len(t, spy.filters, 1)
 	assert.True(t, spy.filters[0].Breakdowns)
+	assert.False(t, spy.filters[0].BranchBreakdowns)
+}
+
+func TestUsageSummaryCanIncludeBranchBreakdowns(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s,
+		"/api/v1/usage/summary?"+oneDayUsageRange+"&branch_breakdowns=true")
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.True(t, spy.filters[0].Breakdowns)
+	assert.True(t, spy.filters[0].BranchBreakdowns)
 }
 
 func TestUsageSummaryCanSkipBreakdowns(t *testing.T) {
@@ -184,10 +211,13 @@ func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
 
 	w := serveGet(t, s,
 		"/api/v1/usage/comparison?"+oneDayUsageRange+
-			"&current_microdollars=3000000")
+			"&current_microdollars=3000000&branch_breakdowns=true")
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	assertUsageQueryCalls(t, spy, 1, 0, 0)
+	require.Len(t, spy.filters, 1)
+	assert.False(t, spy.filters[0].Breakdowns)
+	assert.False(t, spy.filters[0].BranchBreakdowns)
 
 	var out Comparison
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
@@ -236,6 +266,19 @@ func TestUsageComparisonCopiesResolvedProjectExclusionToPriorPeriod(
 	require.Len(t, spy.filters, 1)
 	assert.Equal(t, []string{projectLabel},
 		spy.filters[0].ExcludeProjectLabels)
+}
+
+func TestUsageComparisonCopiesExcludeGitBranchFilterToPriorPeriod(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+	branch := db.EncodeBranchFilterToken("alpha", "main")
+
+	w := serveGet(t, s,
+		"/api/v1/usage/comparison?"+oneDayUsageRange+"&current_microdollars=3000000&exclude_git_branch="+url.QueryEscape(branch))
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.Equal(t, branch, spy.filters[0].ExcludeGitBranch)
 }
 
 func TestUsageComparisonRequiresCurrentCost(t *testing.T) {
@@ -422,7 +465,8 @@ func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
 	w := serveGet(t, s,
 		"/api/v1/usage/pairwise-comparison?"+oneDayUsageRange+
 			"&left_dimension=model&left_value=claude-sonnet-4-20250514"+
-			"&right_dimension=project&right_value=beta")
+			"&right_dimension=project&right_value=beta"+
+			"&branch_breakdowns=true")
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	assert.Equal(t, 2, spy.dailyCalls)
@@ -431,8 +475,11 @@ func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
 	assert.Equal(t, "", spy.filters[0].Project)
 	assert.Equal(t, "", spy.filters[1].Model)
 	assert.Equal(t, "beta", spy.filters[1].Project)
-	assert.False(t, spy.filters[0].SkipSessionCounts)
-	assert.False(t, spy.filters[1].SkipSessionCounts)
+	for _, filter := range spy.filters {
+		assert.False(t, filter.Breakdowns)
+		assert.False(t, filter.BranchBreakdowns)
+		assert.False(t, filter.SkipSessionCounts)
+	}
 }
 
 func TestUsagePairwiseComparisonOpenAPIRequiresSideParams(t *testing.T) {
