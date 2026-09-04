@@ -945,6 +945,19 @@ func resolveAntigravityGenerationModel(
 	)
 }
 
+// resolveAntigravityModelName reconciles the model reported by downstream LLM
+// RPC generation metadata with the user's intended effort-qualified model from
+// the covering executor range.
+//
+// Antigravity CLI does not record reasoning effort in generation metadata
+// (field 19 response_model), recording only the base model slug or an internal
+// serving canary identifier (e.g. "gemini-3.7-flash-exp-b"). The effort
+// qualification (-low, -medium, -high) is recorded only in the covering
+// ExecutorMetadata. If the generation model matches the executor's base model
+// after stripping known experimental serving variants, the effort-qualified
+// executor model is returned so dashboard usage accounting is not fragmented.
+// If hasDisplayLabel is true or the models do not match, generationModel is
+// preserved unchanged.
 func resolveAntigravityModelName(
 	generationModel, executorModel string, hasDisplayLabel bool,
 ) string {
@@ -967,6 +980,21 @@ func antigravityBaseModel(model string) string {
 	return model
 }
 
+// stripAntigravityExperimentalVariant strips internal backend serving
+// experiment / canary suffixes (such as "-exp-b") observed in Antigravity CLI
+// RPC responses so the model can be matched against covering executor ranges.
+//
+// Guidance for adding future suffixes:
+//   - Only add exact, observed serving canary suffixes here (e.g. "-exp-a",
+//     "-exp-c") once verified against upstream captures.
+//   - DO NOT strip generic "-exp": standalone models exist whose canonical
+//     name ends in "-exp" (e.g. "gemini-2.0-flash-exp"). Stripping generic
+//     "-exp" causes false-positive matches against -high/-medium/-low executors
+//     and incorrectly overrides the user's chosen model.
+//   - Adding or modifying suffixes alters historical session parsing: always
+//     bump dataVersion in internal/db/db.go, update the provenance notes in
+//     docs/internal/session-format-sources.md, and add regression tests in
+//     internal/parser/antigravity_test.go.
 func stripAntigravityExperimentalVariant(model string) string {
 	if base, ok := strings.CutSuffix(model, "-exp-b"); ok {
 		return base

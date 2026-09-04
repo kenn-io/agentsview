@@ -1819,6 +1819,9 @@ add an archived or maintained mirror without replacing the original identity.
   variant such as `gemini-3.7-flash-exp-b`. The matching
   `ExecutorMetadata.last_step_idx` range carries the effort-qualified model at
   `cascade_config.planner_config.model_name` (fields 10, 1, and 28).
+  Agentsview normalizes observed serving canary suffixes (such as `-exp-b`)
+  against the covering executor model, while preserving distinct product
+  models ending in generic `-exp` (such as `gemini-2.0-flash-exp`).
   `ChatModelMetadata.model_display_name` (field 21) remains the complete label
   when present. Agentsview avoids double counting and catalog-prices usage. No
   provider USD cost is consumed.
