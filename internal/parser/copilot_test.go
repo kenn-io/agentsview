@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/money"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // newCopilotTestProvider builds a concrete copilotProvider for the given roots
@@ -658,6 +661,81 @@ func TestParseCopilotSession_OutputTokens_Missing(t *testing.T) {
 	assert.False(t, sess.HasTotalOutputTokens, "HasTotalOutputTokens should be false when field absent")
 	assert.Equal(t, 0, sess.TotalOutputTokens, "TotalOutputTokens should be zero")
 	assert.False(t, msgs[1].HasOutputTokens, "msgs[1].HasOutputTokens should be false")
+}
+
+func TestLoadCopilotStoreUsage(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "session-store.db")
+	store, err := sql.Open("sqlite3", storePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.Exec(`
+		CREATE TABLE assistant_usage_events (
+			id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,
+			input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+			cache_write_tokens INTEGER, reasoning_tokens INTEGER,
+			total_nano_aiu INTEGER, created_at TEXT
+		);
+		INSERT INTO assistant_usage_events VALUES
+			(7, 'session-1', 'claude-sonnet-4.6', 100, 30, 60, 10, 4,
+			 125050000, '2026-09-04T17:40:54.970Z'),
+			(8, 'other-session', 'gpt-5.6-sol', 9, 8, 0, 0, 0,
+			 5000000, '2026-09-04T17:41:00Z');
+	`)
+	require.NoError(t, err)
+
+	events, err := loadCopilotStoreUsage(storePath, "session-1")
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "session-store", events[0].Source)
+	assert.Equal(t, "claude-sonnet-4-6", events[0].Model)
+	assert.Equal(t, 30, events[0].InputTokens)
+	assert.Equal(t, 30, events[0].OutputTokens)
+	assert.Equal(t, 60, events[0].CacheReadInputTokens)
+	assert.Equal(t, 10, events[0].CacheCreationInputTokens)
+	assert.Equal(t, 4, events[0].ReasoningTokens)
+	require.NotNil(t, events[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.001251"), *events[0].Cost)
+	assert.Equal(t, copilotStoreCostSource, events[0].CostSource)
+	assert.Equal(t, "2026-09-04T17:40:54.970Z", events[0].OccurredAt)
+	assert.Equal(t, "session-store:7", events[0].DedupKey)
+}
+
+func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "session-store.db")
+	store, err := sql.Open("sqlite3", storePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.Exec(`
+		CREATE TABLE assistant_usage_events (
+			id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,
+			input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+			cache_write_tokens INTEGER, reasoning_tokens INTEGER,
+			total_nano_aiu INTEGER, created_at TEXT
+		);
+		INSERT INTO assistant_usage_events VALUES
+			(42, 'store-wins', 'gpt-5.6-sol', 200, 50, 100, 20, 10,
+			 250000000, '2026-09-04T17:40:54.970Z');
+	`)
+	require.NoError(t, err)
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"store-wins"},"timestamp":"2026-09-04T17:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-sol","outputTokens":3},"timestamp":"2026-09-04T17:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":100000000,"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":10,"outputTokens":3}}}},"timestamp":"2026-09-04T17:00:03Z"}`,
+	)
+
+	sess, _, usage, err := newCopilotTestProvider(t).parseSessionWithStore(
+		path, "local", storePath,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, usage, 1)
+	assert.Equal(t, "session-store", usage[0].Source)
+	assert.Equal(t, 80, usage[0].InputTokens)
+	assert.Equal(t, 50, usage[0].OutputTokens)
+	require.NotNil(t, usage[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.0025"), *usage[0].Cost)
+	assert.Equal(t, "session-store:42", usage[0].DedupKey)
 }
 
 // parseCopilotFull calls ParseCopilotSession and returns all four values.
