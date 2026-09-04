@@ -95,6 +95,8 @@ with `cmd/benchgate`:
   rebuild through a contributor engine.
 - `BenchmarkSearchContentSubstringPage` / `BenchmarkSearchContentFTSPage` — one
   page of content search through the substring and FTS paths.
+- `BenchmarkGetStats` — the repeatedly polled sidebar totals over 10k sessions.
+  Computes all totals together so a refresh scans filtered sessions once.
 - `BenchmarkGetDailyUsage` — usage aggregation over 100k message rows. The usage
   aggregate implementation keeps this benchmark name so the gate compares it
   with the merge-base request path. Its warm cases must scan no normalized

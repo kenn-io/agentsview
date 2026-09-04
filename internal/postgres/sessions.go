@@ -1018,20 +1018,12 @@ func (s *Store) GetStats(
 	if excludeAutomated {
 		filter += " AND is_automated = FALSE"
 	}
-	query := fmt.Sprintf(`
-		SELECT
-			(SELECT COUNT(*) FROM sessions
-			 WHERE %s),
-			(SELECT COALESCE(SUM(message_count), 0)
-			 FROM sessions WHERE %s),
-			(SELECT COUNT(DISTINCT project) FROM sessions
-			 WHERE %s),
-			(SELECT COUNT(DISTINCT machine) FROM sessions
-			 WHERE %s),
-			(SELECT MIN(COALESCE(started_at, created_at))
-			 FROM sessions
-			 WHERE %s)`,
-		filter, filter, filter, filter, filter)
+	// Sidebar polling needs all totals for the same rows. Aggregate them
+	// together so each refresh visits the filtered sessions only once.
+	query := `SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+		COUNT(DISTINCT project), COUNT(DISTINCT machine),
+		MIN(COALESCE(started_at, created_at))
+		FROM sessions WHERE ` + filter
 
 	var st db.Stats
 	var earliest *time.Time
