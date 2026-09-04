@@ -458,7 +458,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (98: The Pi parser now attributes skill loads (SKILL.md
 // reads and skill:// URIs) so Pi tool calls count toward Top Skills.
 // Existing Pi rows need re-parsing to backfill the skill attribution.)
-const dataVersion = 98
+// (99: Cursor CLI Subagent tool category. Re-parsing maps existing Cursor
+// Subagent tool calls from Other to Task so delegation renders as a task call
+// and leaves the Other analytics bucket; subagent transcripts themselves are
+// new sources and need no re-parse.)
+const dataVersion = 99
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -10245,6 +10245,88 @@ func TestSyncPathsCursorNestedLayout(t *testing.T) {
 	)
 }
 
+func TestSyncCursorSubagentTranscriptLinksParentSession(t *testing.T) {
+	env := setupTestEnv(t)
+	project := "Users-alice-code-nested-proj"
+	env.writeNestedCursorSession(
+		t, env.cursorDir, project, "parent-sync", ".jsonl",
+		`{"role":"user","message":{"content":"<user_query>Delegate</user_query>"}}`+"\n"+
+			`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Subagent","id":null,"input":{"subagent_type":"explore","prompt":"Look around"}}]}}`+"\n",
+	)
+	env.writeSession(
+		t, env.cursorDir,
+		filepath.Join(project, "agent-transcripts", "parent-sync", "subagents", "child-sync.jsonl"),
+		`{"role":"user","message":{"content":"<user_query>Look around</user_query>"}}`+"\n"+
+			`{"role":"assistant","message":{"content":"Found it."}}`+"\n",
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2, Synced: 2, Skipped: 0,
+	})
+
+	child, err := env.db.GetSession(context.Background(), "cursor:child-sync")
+	require.NoError(t, err)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "cursor:parent-sync", *child.ParentSessionID)
+	assert.Equal(t, "subagent", child.RelationshipType)
+	assertSessionProject(t, env.db, "cursor:child-sync", "nested_proj")
+	assertSessionMessageCount(t, env.db, "cursor:child-sync", 2)
+
+	parent, err := env.db.GetSession(context.Background(), "cursor:parent-sync")
+	require.NoError(t, err)
+	assert.Nil(t, parent.ParentSessionID)
+
+	// A child written after the parent was synced arrives through the
+	// watcher's changed-path route rather than a full discovery pass.
+	later := env.writeSession(
+		t, env.cursorDir,
+		filepath.Join(project, "agent-transcripts", "parent-sync", "subagents", "later-sync.jsonl"),
+		`{"role":"user","message":{"content":"<user_query>Verify</user_query>"}}`+"\n"+
+			`{"role":"assistant","message":{"content":"Verified."}}`+"\n",
+	)
+	env.engine.SyncPaths([]string{later})
+
+	laterSess, err := env.db.GetSession(context.Background(), "cursor:later-sync")
+	require.NoError(t, err)
+	require.NotNil(t, laterSess.ParentSessionID)
+	assert.Equal(t, "cursor:parent-sync", *laterSess.ParentSessionID)
+	assert.Equal(t, "subagent", laterSess.RelationshipType)
+	assertSessionProject(t, env.db, "cursor:later-sync", "nested_proj")
+}
+
+func TestSyncCursorSubagentWithMissingParentTranscript(t *testing.T) {
+	env := setupTestEnv(t)
+	env.writeSession(
+		t, env.cursorDir,
+		filepath.Join(
+			"Users-alice-code-nested-proj", "agent-transcripts",
+			"gone-parent", "subagents", "orphan-child.jsonl",
+		),
+		`{"role":"user","message":{"content":"<user_query>Look around</user_query>"}}`+"\n"+
+			`{"role":"assistant","message":{"content":"Found it."}}`+"\n",
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1, Skipped: 0,
+	})
+
+	child, err := env.db.GetSession(context.Background(), "cursor:orphan-child")
+	require.NoError(t, err)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "cursor:gone-parent", *child.ParentSessionID)
+	assert.Equal(t, "subagent", child.RelationshipType)
+
+	// The sidebar promotes a child whose parent row is absent to a root, so
+	// the session stays reachable instead of hanging off a missing parent.
+	index, err := env.db.GetSidebarSessionIndex(context.Background(), db.SessionFilter{})
+	require.NoError(t, err)
+	ids := make([]string, 0, len(index.Sessions))
+	for _, row := range index.Sessions {
+		ids = append(ids, row.ID)
+	}
+	assert.Contains(t, ids, "cursor:orphan-child")
+}
+
 func TestSyncSingleSessionCursorNestedLayoutPreservesProject(
 	t *testing.T,
 ) {

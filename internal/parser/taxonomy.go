@@ -121,6 +121,8 @@ func NormalizeToolCategory(rawName string) string {
 		return "Edit"
 	case "LS":
 		return "Read"
+	case "Subagent":
+		return "Task"
 
 	// Amp tools (not already covered above)
 	// Note: "create_file" is also used by Pi.

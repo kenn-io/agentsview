@@ -7,6 +7,15 @@ description: Release history for AgentsView
 
 **Improvements**
 
+- Expand a **Cursor CLI** session in the sidebar to read the transcripts of
+  the subagents it delegated to. Transcripts stored in a parent session's
+  `subagents` directory are now discovered, synced, and linked to the
+  delegating session, including from S3 roots. Cursor's `Subagent` tool call
+  now counts as a Task call in transcripts and analytics, but it does not yet
+  link to the child session inline. Existing archives re-parse on the next
+  sync to apply the new category. A machine that only runs `agentsview usage`
+  needs one `agentsview sync` to pick up subagent transcripts that already
+  exist.
 - Generated API bindings now keep concrete collection element types and match
   the server's JSON v2 behavior. Ordinary Go slices are documented and encoded
   as arrays, including when their value is nil, so frontend code no longer

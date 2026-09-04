@@ -841,7 +841,10 @@ add an archived or maintained mirror without replacing the original identity.
 ## Cursor (`cursor`)
 
 - **Format:** Legacy text and newer JSONL transcripts under per-project
-  `agent-transcripts` directories.
+  `agent-transcripts` directories in three layouts: flat (`<id>.ext`), nested
+  (`<id>/<id>.ext`), and subagent (`<parent>/subagents/<id>.ext`), where a
+  delegated subagent's transcript sits one level below the session that
+  spawned it.
 - **Evidence:** `documentation`.
 - **Upstream:** Cursor's first-party
   [history documentation](https://docs.cursor.com/en/agent/chat/history)
@@ -852,13 +855,32 @@ add an archived or maintained mirror without replacing the original identity.
   characterization does not extend to Cursor IDE (the GUI editor, see below):
   for the GUI, `state.vscdb` is the only transcript store, not metadata beside
   one. Cursor's public GitHub organization was also searched 2026-07-19; no
-  transcript schema or producer source was found.
+  transcript schema or producer source was found. A forum thread reports the
+  same gap seen locally, tool inputs present but
+  [outputs absent](https://forum.cursor.com/t/accessing-the-full-agent-transcript-in-cursor/157311)
+  from the CLI JSONL; no first-party statement of that limitation was found.
+  The subagent layout comes from direct inspection of a live local
+  `~/.cursor/projects` tree (macOS, 2026-09-04): a delegating session records
+  a `Subagent` `tool_use` block whose input carries `description`, `prompt`,
+  `subagent_type`, and `run_in_background`; every observed `tool_use` block
+  has `"id": null` and no file contains a `tool_result` block, so directory
+  placement is the only parent link. In 835 of 933 checked children the
+  opening `<user_query>` equals a parent `Subagent` `prompt` byte for byte,
+  which corroborates that placement. Every user message opens with a
+  `<timestamp>` tag at minute resolution with a UTC offset, and every file
+  ends with a `{"type":"turn_ended","status":...}` record. Two independent
+  readers derive subagent parentage from the same path shape:
+  [agent-sessions](https://github.com/jazzyalex/agent-sessions/blob/7a3f1f402ed9a2cf6c47aa04c1ed87a0c35fa391/AgentSessions/Services/CursorSessionParser.swift)
+  and
+  [cc_transcript_viewer](https://github.com/tim-hua-01/cc_transcript_viewer/blob/4157ac3575c4c0e9d742048f494be7ee10c589fc/cursor_parser.py).
 - **Usage and cost:** The consumed text/JSONL transcripts have no reliable
   per-message token, cache, reasoning, credit, or monetary-cost fields.
 - **Agentsview:** `internal/parser/cursor.go`,
   `internal/parser/cursor_paths.go`, and `internal/parser/cursor_provider.go`;
-  workspace identity uses a filesystem-backed unique-match resolver, while
-  role and attribution boundaries are reconstructed from Markdown.
+  workspace identity uses a filesystem-backed unique-match resolver, role and
+  attribution boundaries are reconstructed from Markdown, and a subagent's
+  parent link is derived from its path at parse time. The `<timestamp>` tag is
+  not consumed yet, so session start and end times remain the file mtime.
 
 ## Cursor IDE (`cursor-ide`)
 
