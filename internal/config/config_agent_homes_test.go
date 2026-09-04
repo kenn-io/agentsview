@@ -124,11 +124,6 @@ func TestLoadFileAgentHomesValidation(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "empty home",
-			config:  `claude_homes = [" "]`,
-			wantErr: "agent homes: claude_homes: entry 1: home is required",
-		},
-		{
 			name:    "s3 home",
 			config:  `codex_homes = ["/ok", "s3://bucket/codex"]`,
 			wantErr: "codex_homes: entry 2: home \"s3://bucket/codex\" is an S3 root",
@@ -248,6 +243,11 @@ func TestNormalizeAgentHomesRejectsUnsupportedInput(t *testing.T) {
 			input:   map[string][]string{"claude": {"s3://bucket/claude"}},
 			wantErr: "is an S3 root",
 		},
+		{
+			name:    "aliased provider keys",
+			input:   map[string][]string{"codex": {"/a"}, " CODEX ": {"/b"}},
+			wantErr: `session provider "codex" is listed more than once`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -256,4 +256,16 @@ func TestNormalizeAgentHomesRejectsUnsupportedInput(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+func TestLoadFileAgentHomesDropRepeatedSpellings(t *testing.T) {
+	f := newConfigFixture(t)
+	setTestHome(t, t.TempDir())
+	t.Setenv("CODEX_HOME", "")
+	f.WriteConfigText(t, `codex_homes = ["/homes/a", " /homes/a ", "", "/homes/b"]`)
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{"/homes/a", "/homes/b"},
+		cfg.ConfiguredAgentHomes(parser.AgentCodex))
 }

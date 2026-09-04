@@ -1081,6 +1081,25 @@ func decodeStringArray(key string, rawVal any) ([]string, bool) {
 	return values, true
 }
 
+// dedupeTrimmedStrings trims each value and drops empty and repeated
+// entries while preserving first-seen order.
+func dedupeTrimmedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, dup := seen[value]; dup {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 // AgentHomeDirs derives the native session roots that an agent keeps under
 // an alternate home directory, mirroring how DefaultRootEnvVar re-roots the
 // agent's default directories. It returns nil for agents without defaults.
@@ -1680,7 +1699,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		if c.agentHomes == nil {
 			c.agentHomes = make(map[parser.AgentType][]string)
 		}
-		c.agentHomes[def.Type] = homes
+		// Repeated spellings would register the same roots twice and give
+		// the settings UI duplicate list keys; keep the first occurrence.
+		c.agentHomes[def.Type] = dedupeTrimmedStrings(homes)
 	}
 
 	// Parse config-file dir arrays for agents that have a
@@ -1731,6 +1752,10 @@ func NormalizeAgentHomes(
 		if def.HomeConfigKey == "" {
 			return nil, fmt.Errorf(
 				`agent_homes: %q does not support alternate homes`, agent)
+		}
+		if _, dup := normalized[agent]; dup {
+			return nil, fmt.Errorf(
+				`agent_homes: session provider %q is listed more than once`, agent)
 		}
 		seen := make(map[string]struct{}, len(homes))
 		cleaned := make([]string, 0, len(homes))
