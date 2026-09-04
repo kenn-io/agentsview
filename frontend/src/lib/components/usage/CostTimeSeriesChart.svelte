@@ -10,9 +10,9 @@
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
   import { addDays } from "../../utils/dates.js";
   import type {
-    DailyUsageEntry,
+    DbDailyUsageEntry,
     UsageSummaryResponse,
-  } from "../../api/types/usage.js";
+  } from "../../api/generated/index";
 
   interface Props {
     colorMap: ReadonlyMap<string, string>;
@@ -65,11 +65,11 @@
 
   function fillMissingDailyEntries(
     summary: UsageSummaryResponse,
-  ): DailyUsageEntry[] {
+  ): DbDailyUsageEntry[] {
     const entriesByDate = new Map(
       summary.daily.map((entry) => [entry.date, entry]),
     );
-    const daily: DailyUsageEntry[] = [];
+    const daily: DbDailyUsageEntry[] = [];
     for (let date = summary.from; date <= summary.to;) {
       daily.push(entriesByDate.get(date) ?? {
         date,
@@ -79,6 +79,10 @@
         cacheReadTokens: 0,
         totalCost: { microdollars: 0 },
         modelsUsed: [],
+        projectBreakdowns: [],
+        modelBreakdowns: [],
+        agentBreakdowns: [],
+        machineBreakdowns: [],
       });
       const nextDate = addDays(date, 1);
       if (!nextDate) break;
