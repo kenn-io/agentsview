@@ -754,9 +754,10 @@ func scanPGMessages(rows interface {
 		if ts != nil {
 			m.Timestamp = FormatISO8601(*ts)
 		}
-		// A mirror pushed before the write-side guard existed can still
-		// hold a malformed usage blob, and pg serve reaches the same
-		// response encoder that panicked on it (see
+		// Shares one guard with the other backends so they cannot drift:
+		// "" must yield nil, since a zero-length jsontext.Value fails to
+		// marshal and pg serve reaches the same response encoder.
+		// Validation happens only here, on read (see
 		// db.DecodeStoredTokenUsage).
 		m.TokenUsage = db.DecodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)

@@ -11,9 +11,8 @@ import (
 )
 
 // corruptTokenUsage writes a malformed token_usage blob straight to the
-// row, bypassing the sanitize pass. This reproduces a database that was
-// already populated before that pass validated the field -- the state a
-// user upgrading into the fix actually has on disk.
+// row. Nothing validates token_usage on the way in, so this is a state the
+// database can genuinely hold; the read path is what has to cope with it.
 func corruptTokenUsage(t *testing.T, d *DB, sessionID string, ordinal int, raw string) {
 	t.Helper()
 	_, err := d.getWriter().Exec(

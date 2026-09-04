@@ -442,9 +442,9 @@ func TestExportContinuesPastDeterministicRejection(t *testing.T) {
 }
 
 // Invalid token usage no longer costs a session its artifact export. The
-// db layer now blanks a malformed usage blob at the write seam
-// (ValidateAndSanitize) and again on read (scanMessages, which this export
-// path loads through), so the value can never reach the segment encoder.
+// db layer clears a malformed usage blob on read, in scanMessages, which
+// this export path loads through (artifact_export_load.go), so the value
+// can no longer reach the segment encoder.
 // Previously one truncated usage object -- the same corruption that
 // panicked GET /api/v1/sessions/{id}/messages -- rejected the whole
 // session here. Export continuing past a genuinely un-encodable session

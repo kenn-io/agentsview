@@ -13,15 +13,15 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// A DuckDB mirror built before the write-side guard existed still holds
-// whatever malformed token_usage blob was pushed into it, and duckdb serve
-// reaches the same response encoder that panicked on SQLite:
+// Nothing validates token_usage on the way in, so a malformed blob in the
+// mirror reaches duckdb serve and the same response encoder that panics on
+// SQLite:
 //
 //	json: cannot marshal from Go jsontext.Value: unexpected EOF within
 //	"/messages/0/token_usage"
 //
-// The mirror is corrupted directly here because the SQLite write path now
-// sanitizes the value before it could ever be pushed.
+// The mirror is corrupted directly rather than through a push so the read
+// path is exercised on its own, independent of what any parser emits.
 func TestDuckGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
 	ctx := context.Background()
 	store := newDuckWindowStore(t, func(local *db.DB) {

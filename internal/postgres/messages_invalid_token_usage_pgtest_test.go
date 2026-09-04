@@ -14,15 +14,15 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// A PostgreSQL mirror pushed before the write-side guard existed still
-// holds whatever malformed token_usage blob reached it, and pg serve
-// reaches the same response encoder that panicked on SQLite:
+// Nothing validates token_usage on the way in, so a malformed blob in the
+// mirror reaches pg serve and the same response encoder that panics on
+// SQLite:
 //
 //	json: cannot marshal from Go jsontext.Value: unexpected EOF within
 //	"/messages/0/token_usage"
 //
-// The row is written directly here because the SQLite write path now
-// sanitizes the value before it could ever be pushed.
+// The row is written directly rather than through a push so the read path
+// is exercised on its own, independent of what any parser emits.
 func TestPGGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
@@ -78,7 +78,7 @@ func TestPGGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
 }
 
 // seedInvalidUsageRow writes one session and one message carrying the given
-// raw token_usage text, bypassing every sanitize seam.
+// raw token_usage text, so the read path is what gets exercised.
 func seedInvalidUsageRow(t *testing.T, pg *sql.DB, sessionID, rawUsage string) {
 	t.Helper()
 	_, err := pg.Exec(`

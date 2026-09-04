@@ -22,8 +22,8 @@ func TestGetMessages_InvalidStoredTokenUsageDoesNotBreakResponse(t *testing.T) {
 	te.seedSession(t, "s1", "my-app", 3)
 	te.seedMessages(t, "s1", 3)
 
-	// Corrupt the row behind the DB layer's back, reproducing a database
-	// populated before the write-side guard existed.
+	// Write the malformed value straight to the row: nothing validates
+	// token_usage on the way in, so this is a state the DB can hold.
 	corruptStoredTokenUsage(t, filepath.Join(te.dataDir, "test.db"), "s1", 0,
 		`{"input_tokens":4,"cache_read_input_tokens":123`)
 

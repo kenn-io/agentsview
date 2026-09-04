@@ -2835,26 +2835,31 @@ func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
 }
 
 // DecodeStoredTokenUsage converts a stored token_usage column into a
-// jsontext.Value, dropping the value when it is not valid JSON.
+// jsontext.Value: "" and anything that is not valid JSON both yield nil.
 //
-// jsontext.Value defers parsing to marshal time, so a malformed blob is
-// stored without complaint and only fails when the API encodes the
-// response. internal/server installs no recover(), so that surfaced as an
+// token_usage is "TEXT NOT NULL DEFAULT ”", so nearly every row holds "".
+// Returning a NON-NIL, ZERO-LENGTH jsontext.Value for those rows is what
+// made every duckdb serve transcript blank: a zero-length value is not
+// valid JSON, omitempty does not skip it, and jsontext.Value defers parsing
+// to marshal time, so the failure surfaced only when the API encoded the
+// response. internal/server installs no recover(), so it became an
 // unrecovered handler panic that dropped the connection
 // (ERR_EMPTY_RESPONSE) on GET /api/v1/sessions/{id}/messages, while the
-// HTML export of the same session still rendered because it never
-// marshals this field.
+// HTML export of the same session still rendered because it never marshals
+// this field.
 //
-// ValidateAndSanitize now blanks invalid usage at the write seam, but rows
-// written before that guard existed are still on disk, so the read path
-// must not trust the column. Dropping only the unusable metadata keeps the
-// rest of the message intact, matching the sanitize-don't-drop policy in
-// validate.go.
+// Dropping values that are non-empty but invalid is belt-and-braces rather
+// than a fix for an observed failure: every parser produces valid usage by
+// construction (claude.go extracts from a line already checked with
+// gjson.ValidBytes; devin.go builds it with json.Marshal). There is
+// deliberately no write-time validation -- this is the only place stored
+// token_usage is checked -- so the guard sits where the consequence is,
+// since reaching the encoder with an invalid value panics the handler.
+// Clearing only the unusable metadata keeps the rest of the message intact.
 //
 // Exported because every backend that serves messages needs the identical
-// guard: a PostgreSQL or DuckDB mirror populated before the write-side fix
-// still holds the malformed blob, and pg serve / duckdb serve reach the
-// same response encoder. See internal/postgres/messages.go and
+// guard and must not drift: pg serve and duckdb serve reach the same
+// response encoder. See internal/postgres/messages.go and
 // internal/duckdb/messages.go.
 func DecodeStoredTokenUsage(raw string) jsontext.Value {
 	if raw == "" {
