@@ -2,6 +2,7 @@ package parser
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -146,9 +147,7 @@ func loadCodexSessionIndexes(paths []string) (map[string]string, error) {
 	})
 	merged := make(map[string]string)
 	for _, entry := range found {
-		for id, title := range entry.titles {
-			merged[id] = title
-		}
+		maps.Copy(merged, entry.titles)
 	}
 	return merged, nil
 }

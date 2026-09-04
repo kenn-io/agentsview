@@ -982,12 +982,7 @@ func (s codexSourceSet) sourcesForIndexPath(
 	}
 	indexDir := filepath.Dir(indexPath)
 	return s.discover(ctx, func(root string) bool {
-		for _, dir := range codexSidecarDirs(root) {
-			if dir == indexDir {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(codexSidecarDirs(root), indexDir)
 	})
 }
 
