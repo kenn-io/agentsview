@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"database/sql"
 	"encoding/json/jsontext"
 	"fmt"
 	"os"
@@ -26,6 +27,7 @@ const (
 	copilotEventModelChange     = "session.model_change"
 	copilotEventSessionShutdown = "session.shutdown"
 	copilotReportedCostSource   = "copilot-reported"
+	copilotStoreCostSource      = "copilot-session-store"
 )
 
 var copilotUsageBasedPricingStartedAt = time.Date(
@@ -395,6 +397,81 @@ func (b *copilotSessionBuilder) applyMessageUsageFallback() {
 	}
 }
 
+// loadCopilotStoreUsage reads the CLI's per-request accounting when available.
+// These rows are more current and complete than transcript shutdown summaries.
+func loadCopilotStoreUsage(
+	storePath, rawSessionID string,
+) ([]ParsedUsageEvent, error) {
+	if storePath == "" || rawSessionID == "" {
+		return nil, nil
+	}
+	if _, err := os.Stat(storePath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat copilot session store %s: %w", storePath, err)
+	}
+	store, err := sql.Open(
+		"sqlite3",
+		"file:"+sqliteURIPath(storePath)+"?mode=ro&_busy_timeout=3000",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("opening copilot session store %s: %w", storePath, err)
+	}
+	defer store.Close()
+
+	rows, err := store.Query(`
+		SELECT id, model, input_tokens, output_tokens, cache_read_tokens,
+		       cache_write_tokens, reasoning_tokens, total_nano_aiu, created_at
+		FROM assistant_usage_events
+		WHERE session_id = ?
+		ORDER BY id
+	`, rawSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("reading copilot session store %s: %w", storePath, err)
+	}
+	defer rows.Close()
+
+	var events []ParsedUsageEvent
+	for rows.Next() {
+		var id int64
+		var model, createdAt string
+		var input, output, cacheRead, cacheWrite, reasoning sql.NullInt64
+		var totalNanoAIU sql.NullInt64
+		if err := rows.Scan(
+			&id, &model, &input, &output, &cacheRead, &cacheWrite, &reasoning,
+			&totalNanoAIU, &createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning copilot session-store usage: %w", err)
+		}
+		if !totalNanoAIU.Valid || totalNanoAIU.Int64 < 0 {
+			continue
+		}
+		cost := money.Money{Microdollars: totalNanoAIU.Int64 / 100_000}
+		if totalNanoAIU.Int64%100_000 >= 50_000 {
+			cost.Microdollars++
+		}
+		events = append(events, ParsedUsageEvent{
+			Source:                   "session-store",
+			Model:                    normalizeCopilotModel(model),
+			InputTokens:              max(int(input.Int64-cacheRead.Int64-cacheWrite.Int64), 0),
+			OutputTokens:             int(output.Int64),
+			CacheCreationInputTokens: int(cacheWrite.Int64),
+			CacheReadInputTokens:     int(cacheRead.Int64),
+			ReasoningTokens:          int(reasoning.Int64),
+			Cost:                     &cost,
+			CostStatus:               "exact",
+			CostSource:               copilotStoreCostSource,
+			OccurredAt:               createdAt,
+			DedupKey:                 fmt.Sprintf("session-store:%d", id),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating copilot session-store usage: %w", err)
+	}
+	return events, nil
+}
+
 func formatCopilotToolCalls(
 	calls []ParsedToolCall,
 ) string {
@@ -458,6 +535,12 @@ func readCopilotWorkspaceName(eventsPath string) string {
 func (p *copilotProvider) parseSession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
+	return p.parseSessionWithStore(path, machine, "")
+}
+
+func (p *copilotProvider) parseSessionWithStore(
+	path, machine, storePath string,
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -503,13 +586,23 @@ func (p *copilotProvider) parseSession(
 	if !hasContent {
 		return nil, nil, nil, nil
 	}
+	rawSessionID := b.sessionID
+	if rawSessionID == "" {
+		rawSessionID = sessionIDFromPath(path)
+	}
+	if !b.startedAt.Before(copilotUsageBasedPricingStartedAt) {
+		storeUsage, err := loadCopilotStoreUsage(storePath, rawSessionID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if len(storeUsage) > 0 {
+			b.usageEvents = storeUsage
+			b.hasShutdownUsage = true
+		}
+	}
 	b.applyMessageUsageFallback()
 
-	sessionID := b.sessionID
-	if sessionID == "" {
-		sessionID = sessionIDFromPath(path)
-	}
-	sessionID = "copilot:" + sessionID
+	sessionID := "copilot:" + rawSessionID
 
 	// Prefer the workspace.yaml name (LLM-generated or user-set
 	// title) over the raw first user message. Falls back to the
@@ -551,12 +644,14 @@ func (p *copilotProvider) parseSession(
 	// several shutdown events) each get a distinct key.
 	for i := range b.usageEvents {
 		b.usageEvents[i].SessionID = sessionID
-		b.usageEvents[i].DedupKey = fmt.Sprintf(
-			"shutdown:%s:%s:%d",
-			sessionID,
-			b.usageEvents[i].Model,
-			i,
-		)
+		if b.usageEvents[i].DedupKey == "" {
+			b.usageEvents[i].DedupKey = fmt.Sprintf(
+				"shutdown:%s:%s:%d",
+				sessionID,
+				b.usageEvents[i].Model,
+				i,
+			)
+		}
 	}
 
 	return sess, b.messages, b.usageEvents, nil

@@ -90,7 +90,11 @@ func (p *copilotProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("copilot source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, usage, err := p.parseSession(path, machine)
+	storePath := ""
+	if source, ok := req.Source.Opaque.(copilotSource); ok {
+		storePath = filepath.Join(source.Root, "session-store.db")
+	}
+	sess, msgs, usage, err := p.parseSessionWithStore(path, machine, storePath)
 	if err != nil {
 		return ParseOutcome{}, err
 	}

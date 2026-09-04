@@ -486,12 +486,13 @@ add an archived or maintained mirror without replacing the original identity.
   [Copilot format notes](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/docs/providers/copilot.md)
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/copilot.ts).
-- **Usage and cost:** Assistant messages can persist model identity and output
-  tokens. Shutdown metrics can persist authoritative input, output, cache-read,
-  cache-write, and reasoning totals. When the latter are absent, Agentsview
-  records only known per-message output tokens; it does not infer input, cache,
-  reasoning, or credit totals. Copilot accounting is credit-oriented; Agentsview
-  does not treat credits as USD and does not infer a monetary cost.
+- **Usage and cost:** `session-store.db`'s `assistant_usage_events` records
+  per-request model, input, output, cache-read, cache-write, reasoning, and
+  `total_nano_aiu` billing data. For post-June 1, 2026 sessions, Agentsview
+  uses that source as exact per-request cost and token accounting. Transcript
+  shutdown metrics remain a fallback when the store is unavailable. Assistant
+  messages can persist model identity and output tokens; without either
+  authoritative source, Agentsview records only that known output usage.
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
   Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and

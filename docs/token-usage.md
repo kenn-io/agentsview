@@ -462,14 +462,13 @@ it.
 
 ### Copilot Reported Billing
 
-Copilot CLI `session.shutdown` events can include a `totalNanoAiu` billing
-total. Copilot sessions starting on or after June 1, 2026 can report an
-authoritative `totalNanoAiu` billing total. Older sessions remain catalog-priced
-because they were created under the premium-request pricing model. AgentsView
-converts that cumulative amount exactly (`totalNanoAiu / 1e11` USD) and stores
-the session-level value through the normal reported-cost fields, on one stable
-usage-event row. Later shutdowns supersede earlier totals, including an
-authoritative final zero.
+Copilot CLI's local `session-store.db` records per-request `total_nano_aiu`
+billing totals. Copilot sessions starting on or after June 1, 2026 can report
+that exact cost (`total_nano_aiu / 1e11` USD), including while a session is
+active. AgentsView uses those complete store records when present. Older
+sessions remain catalog-priced because they were created under the
+premium-request pricing model. When the store is unavailable, a
+`session.shutdown.totalNanoAiu` total remains the authoritative fallback.
 
 When the selected data contains this reported session cost, AgentsView
 suppresses every catalog-priced estimate for that session. This prevents double
