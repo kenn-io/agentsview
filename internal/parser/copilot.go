@@ -596,8 +596,6 @@ func (p *copilotProvider) parseSessionWithStore(
 			)
 		}
 		if len(storeUsage) > 0 {
-			// Keep the store timestamps for token-coverage boundaries before
-			// moving the shutdown timestamp to the reported-cost carrier.
 			for _, event := range storeUsage {
 				b.markUsageCoveredAt(parseTimestamp(event.OccurredAt))
 			}
@@ -608,10 +606,13 @@ func (p *copilotProvider) parseSessionWithStore(
 				}
 				// Store usage supplies richer observed tokens, but transcript
 				// shutdown remains the authoritative reported-cost source.
-				storeUsage[0].Cost = event.Cost
-				storeUsage[0].CostStatus = event.CostStatus
-				storeUsage[0].CostSource = event.CostSource
-				storeUsage[0].OccurredAt = event.OccurredAt
+				settlement := event
+				settlement.InputTokens = 0
+				settlement.OutputTokens = 0
+				settlement.CacheCreationInputTokens = 0
+				settlement.CacheReadInputTokens = 0
+				settlement.ReasoningTokens = 0
+				storeUsage = append(storeUsage, settlement)
 				break
 			}
 			b.usageEvents = storeUsage

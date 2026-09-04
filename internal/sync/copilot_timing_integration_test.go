@@ -76,3 +76,50 @@ func TestCopilotBlockedResultPreservesExecutionTiming(t *testing.T) {
 	require.NotNil(t, timing.Turns[0].DurationMs)
 	assert.Equal(t, int64(3_825), *timing.Turns[0].DurationMs)
 }
+
+func TestCopilotSyncReparsesSameSizeMtimeTranscriptRewrite(t *testing.T) {
+	root := t.TempDir()
+	eventsPath := filepath.Join(root, "session-state", "rewrite", "events.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(eventsPath), 0o755))
+	initialEvents := `{"type":"session.start","data":{"sessionId":"rewrite"},"timestamp":"2026-04-26T10:00:00Z"}
+{"type":"user.message","data":{"content":"Question"},"timestamp":"2026-04-26T10:00:01Z"}
+{"type":"assistant.message","data":{"content":"First","model":"gpt-5.6-sol","outputTokens":1},"timestamp":"2026-04-26T10:00:02Z"}
+`
+	updatedEvents := `{"type":"session.start","data":{"sessionId":"rewrite"},"timestamp":"2026-04-26T10:00:00Z"}
+{"type":"user.message","data":{"content":"Question"},"timestamp":"2026-04-26T10:00:01Z"}
+{"type":"assistant.message","data":{"content":"Other","model":"gpt-5.6-sol","outputTokens":1},"timestamp":"2026-04-26T10:00:02Z"}
+`
+	require.Equal(t, len(initialEvents), len(updatedEvents))
+	require.NoError(t, os.WriteFile(eventsPath, []byte(initialEvents), 0o644))
+	originalInfo, err := os.Stat(eventsPath)
+	require.NoError(t, err)
+
+	database := dbtest.OpenTestDB(t)
+	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCopilot: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	require.NoError(t, os.WriteFile(eventsPath, []byte(updatedEvents), 0o644))
+	require.NoError(t, os.Chtimes(
+		eventsPath, originalInfo.ModTime(), originalInfo.ModTime(),
+	))
+	updatedInfo, err := os.Stat(eventsPath)
+	require.NoError(t, err)
+	assert.Equal(t, originalInfo.Size(), updatedInfo.Size())
+	assert.Equal(t, originalInfo.ModTime(), updatedInfo.ModTime())
+
+	second := engine.SyncAll(t.Context(), nil)
+
+	require.Equal(t, 1, second.Synced)
+	messages, err := database.GetMessages(
+		t.Context(), "copilot:rewrite", 0, 100, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "Other", messages[1].Content)
+}
