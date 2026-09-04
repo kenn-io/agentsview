@@ -552,8 +552,10 @@ type Engine struct {
 	// non-interactive sessions (nil result). The file is
 	// retried when its mtime changes. S3 entries also keep an
 	// in-memory source fingerprint when one is available.
-	skipMu           gosync.RWMutex
-	skipCache        map[string]int64
+	skipMu    gosync.RWMutex
+	skipCache map[string]int64
+	// skipCacheDirty is protected by skipMu and cleared only for a persistence attempt.
+	skipCacheDirty   bool
 	skipFingerprints map[string]string
 	// retryUnsafeSkipPaths records sources whose successful processing changed
 	// exclusion or source-missing state in the current database. A rebuild that
@@ -906,6 +908,7 @@ func NewEngine(
 		homeDir:                 userHomeDirOrEmpty(),
 		goos:                    runtime.GOOS,
 		skipCache:               skipCache,
+		skipCacheDirty:          true,
 		skipFingerprints:        make(map[string]string),
 		skipHashKeys:            skipHashKeys,
 		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
@@ -934,7 +937,6 @@ func NewEngine(
 		reconciliationSpoolFactory: func(path string) (reconciliationSpoolStore, error) {
 			return newReconciliationSpool(path)
 		},
-		claudeProjectSessionFiles: parser.ClaudeProjectSessionFiles,
 	}
 	if len(cfg.InitialSkipCache) > 0 {
 		e.InjectSkipCache(cfg.InitialSkipCache)
@@ -2487,18 +2489,17 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 
 	out := files
 	for agent, ids := range sessionIDs {
-		listSessionFiles := parser.IcodemateCLIProjectSessionFiles
-		if agent == parser.AgentClaude {
-			listSessionFiles = e.claudeProjectSessionFiles
-			if listSessionFiles == nil {
-				listSessionFiles = parser.ClaudeProjectSessionFiles
-			}
-		}
 		for _, root := range e.agentDirs[agent] {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			for _, candidate := range listSessionFiles(root) {
+			var candidates []parser.DiscoveredFile
+			if agent == parser.AgentClaude && e.claudeProjectSessionFiles != nil {
+				candidates = e.claudeProjectSessionFiles(root)
+			} else {
+				candidates = parser.ProjectJSONLSessionCandidates(root, agent, ids)
+			}
+			for _, candidate := range candidates {
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
@@ -2794,6 +2795,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 			// archive there.
 			e.skipMu.Lock()
 			e.skipCache = preBuildSkipCache
+			e.skipCacheDirty = true
 			e.skipHashKeys = preBuildSkipHashKeys
 			e.skipMu.Unlock()
 			stats.Tombstoned = 0
@@ -2942,12 +2944,14 @@ func (e *Engine) resyncBuildLocked(
 	savedSkipCache := e.skipCache
 	savedSkipHashKeys := e.skipHashKeys
 	e.skipCache = make(map[string]int64)
+	e.skipCacheDirty = true
 	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
 
 	restoreSkipCache := func() {
 		e.skipMu.Lock()
 		e.skipCache = savedSkipCache
+		e.skipCacheDirty = true
 		e.skipHashKeys = savedSkipHashKeys
 		e.skipMu.Unlock()
 	}
@@ -3844,6 +3848,7 @@ func (e *Engine) ReloadSkipCache() error {
 
 	e.skipMu.Lock()
 	e.skipCache = skipCache
+	e.skipCacheDirty = true
 	e.skipHashKeys = skipHashKeys
 	e.skipFingerprints = make(map[string]string)
 	e.skipMu.Unlock()
@@ -13257,8 +13262,16 @@ func (e *Engine) cacheSkip(
 	path string, mtime int64, sourceFingerprint ...string,
 ) int {
 	e.skipMu.Lock()
+	old, exists := e.skipCache[path]
+	previousSize, previouslyDirty := len(e.skipCache), e.skipCacheDirty
 	work := e.removeSkipHashSiblingsLocked(path)
+	if !exists || old != mtime {
+		e.skipCacheDirty = true
+	}
 	e.skipCache[path] = mtime
+	if exists && old == mtime && len(e.skipCache) == previousSize {
+		e.skipCacheDirty = previouslyDirty
+	}
 	if base, _, hashed := strings.Cut(path, sourceHashSkipMarker); hashed {
 		e.skipHashKeys[base] = path
 	}
@@ -13291,6 +13304,7 @@ func (e *Engine) clearSkip(path string) int {
 func (e *Engine) clearSkipInMemory(path string) int {
 	e.skipMu.Lock()
 	defer e.skipMu.Unlock()
+	before := len(e.skipCache)
 	work := e.removeSkipHashSiblingsLocked(path)
 	delete(e.skipCache, path)
 	delete(e.skipFingerprints, path)
@@ -13300,6 +13314,7 @@ func (e *Engine) clearSkipInMemory(path string) int {
 		delete(e.skipCache, legacyPath)
 		delete(e.skipFingerprints, legacyPath)
 	}
+	e.skipCacheDirty = e.skipCacheDirty || len(e.skipCache) != before
 	return work
 }
 
@@ -13323,6 +13338,8 @@ func (e *Engine) clearSkipPersistent(path string) (int, error) {
 }
 
 func (e *Engine) removeSkipHashSiblingsLocked(path string) int {
+	before := len(e.skipCache)
+	defer func() { e.skipCacheDirty = e.skipCacheDirty || len(e.skipCache) != before }()
 	if e.skipHashKeys == nil {
 		e.skipHashKeys, _ = normalizeSourceHashSkipCache(
 			e.skipCache, e.skipFingerprints,
@@ -13353,6 +13370,7 @@ func (e *Engine) removeSkipHashSiblingsLocked(path string) int {
 func (e *Engine) clearWatcherOverflowCaches() {
 	e.skipMu.Lock()
 	e.skipCache = make(map[string]int64)
+	e.skipCacheDirty = true
 	e.skipFingerprints = make(map[string]string)
 	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
@@ -13386,6 +13404,9 @@ func (e *Engine) InjectSkipCache(entries map[string]int64) {
 	}
 	for path, mtime := range incoming {
 		e.removeSkipHashSiblingsLocked(path)
+		if old, exists := e.skipCache[path]; !exists || old != mtime {
+			e.skipCacheDirty = true
+		}
 		e.skipCache[path] = mtime
 		if base, _, hashed := strings.Cut(path, sourceHashSkipMarker); hashed {
 			e.skipHashKeys[base] = path
@@ -13447,12 +13468,23 @@ func (e *Engine) persistSkipCacheInto(target *db.DB) int {
 	if e.ephemeral {
 		return 0
 	}
-	e.skipMu.RLock()
+	e.skipMu.Lock()
+	if target == e.db && !e.skipCacheDirty {
+		count := len(e.skipCache)
+		e.skipMu.Unlock()
+		return count
+	}
 	snapshot := make(map[string]int64, len(e.skipCache))
 	maps.Copy(snapshot, e.skipCache)
-	e.skipMu.RUnlock()
+	if target == e.db {
+		e.skipCacheDirty = false
+	}
+	e.skipMu.Unlock()
 
 	if err := target.ReplaceSkippedFiles(snapshot); err != nil {
+		e.skipMu.Lock()
+		e.skipCacheDirty = true
+		e.skipMu.Unlock()
 		log.Printf("persisting skip cache: %v", err)
 	}
 	return len(snapshot)

@@ -95,6 +95,8 @@ with `cmd/benchgate`:
   rebuild through a contributor engine.
 - `BenchmarkSearchContentSubstringPage` / `BenchmarkSearchContentFTSPage` — one
   page of content search through the substring and FTS paths.
+- `BenchmarkPersistUnchangedSkipCache` — repeated persistence of an unchanged
+  10k-entry skip cache must avoid copying the map and rewriting its rows.
 - `BenchmarkGetStats` — the repeatedly polled sidebar totals over 10k sessions.
   Computes all totals together so a refresh scans filtered sessions once.
 - `BenchmarkGetDailyUsage` — usage aggregation over 100k message rows. The usage
@@ -253,3 +255,16 @@ reported without gating; it gates automatically once merged.
 1. If the benchmark's fixture grows across iterations, say so in its comment;
    the fixed `-benchtime=Nx` keeps both sides comparable, but readers need to
    know per-op cost depends on the iteration count.
+
+## Synthetic workload simulator
+
+`make perf-sim` runs the retained simulator in `cmd/perfsim`. See
+[the simulator guide](performance-simulator.md) for archive-size comparisons,
+append-only profiles, and analytic-query measurements. Its small correctness
+fixture runs in the normal Go suite. Large runs are opt-in; their process-wide
+allocation samples include background work and are not CI timing assertions.
+
+`BenchmarkCodexStreamingDiscovery` in `internal/parser` is a diagnostic
+benchmark, like `BenchmarkCodexIncrementalCursor`, outside the default gate
+package list. The sync candidate-lookup and unchanged-cache work regressions
+also run as deterministic tests in the regular suite.
