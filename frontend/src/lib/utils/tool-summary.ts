@@ -43,12 +43,7 @@ function parseParams(toolCall: ToolCall): Params | null {
 }
 
 function fileArg(p: Params): string | null {
-  return (
-    asString(p.file_path) ??
-    asString(p.path) ??
-    asString(p.filePath) ??
-    asString(p.file)
-  );
+  return asString(p.file_path) ?? asString(p.path) ?? asString(p.filePath) ?? asString(p.file);
 }
 
 function isSpecialSummaryTool(name: string, category: string | undefined): boolean {
@@ -76,17 +71,14 @@ export function summarizeToolCallPath(toolCall: ToolCall): string | null {
   if (!hasPathSummary) return null;
 
   const path = fileArg(p);
-  return path && isAbsolutePath(path) && pathDisplayValue(path) !== path
-    ? path
-    : null;
+  return path && isAbsolutePath(path) && pathDisplayValue(path) !== path ? path : null;
 }
 
 function todoSummary(p: Params): string | null {
   const todos = p.todos;
   if (!Array.isArray(todos) || todos.length === 0) return null;
   const items = todos as Array<{ content?: unknown; status?: unknown }>;
-  const target =
-    items.find((t) => t?.status === "in_progress") ?? items[items.length - 1];
+  const target = items.find((t) => t?.status === "in_progress") ?? items[items.length - 1];
   const text = asString(target?.content);
   return text ? `→ ${text}`.slice(0, MAX) : null;
 }
@@ -118,12 +110,7 @@ function specialSummary(name: string, p: Params): string | null {
 }
 
 function isTaskCall(name: string, cat: string | undefined): boolean {
-  return (
-    name === "Task" ||
-    name === "Agent" ||
-    cat === "Task" ||
-    name.includes("subagent")
-  );
+  return name === "Task" || name === "Agent" || cat === "Task" || name.includes("subagent");
 }
 
 /**
@@ -155,9 +142,7 @@ export function summarizeToolCall(toolCall: ToolCall): string | null {
   if (key === "Read") {
     const file = fileArg(p);
     if (!file) return null;
-    const lines = toolCall.result_content
-      ? countLines(toolCall.result_content)
-      : 0;
+    const lines = toolCall.result_content ? countLines(toolCall.result_content) : 0;
     const suffix = lines > 0 ? ` (${lines} lines)` : "";
     return `${pathDisplayValue(file)}${suffix}`;
   }

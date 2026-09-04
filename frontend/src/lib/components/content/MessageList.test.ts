@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import type { Message } from "../../api/types.js";
 import { messages } from "../../stores/messages.svelte.js";
@@ -35,9 +28,7 @@ const virtualizerMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
-  createVirtualizer: (
-    optsFn: () => { count: number },
-  ) => ({
+  createVirtualizer: (optsFn: () => { count: number }) => ({
     get instance() {
       virtualizerMock.options.count = optsFn().count;
       return virtualizerMock;
@@ -163,12 +154,10 @@ describe("MessageList follow cancellation", () => {
 
   it("keeps delayed ordinal navigation alive after follow latest is disabled", async () => {
     const loaded = deferred<void>();
-    const ensureSpy = vi
-      .spyOn(messages, "ensureOrdinalLoaded")
-      .mockImplementation(async () => {
-        await loaded.promise;
-        messages.messages = [makeMessage(0), makeMessage(10)];
-      });
+    const ensureSpy = vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      await loaded.promise;
+      messages.messages = [makeMessage(0), makeMessage(10)];
+    });
 
     component = mount(MessageList, { target: document.body });
     await tick();
@@ -194,12 +183,7 @@ describe("MessageList follow cancellation", () => {
   });
 
   it("renders an unknown revision divider at the earliest message", async () => {
-    messages.messages = [
-      makeMessage(0),
-      makeMessage(1),
-      makeMessage(2),
-      makeMessage(3),
-    ];
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2), makeMessage(3)];
     messages.messageCount = 4;
     messages.activeSessionToken = "current";
     setVirtualRows(4);
@@ -210,18 +194,11 @@ describe("MessageList follow cancellation", () => {
 
     const divider = document.querySelector(".read-progress-divider");
     expect(divider?.textContent).toContain("New messages");
-    expect(
-      divider?.closest(".virtual-row")?.getAttribute("data-index"),
-    ).toBe("0");
+    expect(divider?.closest(".virtual-row")?.getAttribute("data-index")).toBe("0");
   });
 
   it("suppresses the newest-first divider when no read history exists", async () => {
-    messages.messages = [
-      makeMessage(0),
-      makeMessage(1),
-      makeMessage(2),
-      makeMessage(3),
-    ];
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2), makeMessage(3)];
     messages.messageCount = 4;
     messages.activeSessionToken = "current";
     ui.sortNewestFirst = true;
@@ -252,8 +229,7 @@ describe("MessageList follow cancellation", () => {
 
     component = mount(MessageList, { target: document.body });
     await tick();
-    document.querySelector<HTMLElement>(".message-list-scroll")
-      ?.dispatchEvent(new Event("scroll"));
+    document.querySelector<HTMLElement>(".message-list-scroll")?.dispatchEvent(new Event("scroll"));
 
     await new Promise((resolve) => window.setTimeout(resolve, 20));
     expect(readProgress.get("s1")?.token).toBe("previous");
@@ -285,8 +261,7 @@ describe("MessageList follow cancellation", () => {
       { index: 0, key: "row-0", start: 0, end: 100 },
       { index: 4, key: "row-4", start: 100, end: 200 },
     ]);
-    document.querySelector<HTMLElement>(".message-list-scroll")
-      ?.dispatchEvent(new Event("scroll"));
+    document.querySelector<HTMLElement>(".message-list-scroll")?.dispatchEvent(new Event("scroll"));
     await new Promise((resolve) => window.setTimeout(resolve, 20));
 
     expect(readProgress.get("s1")?.token).toBe("current");
@@ -314,8 +289,7 @@ describe("MessageList follow cancellation", () => {
     expect(readProgress.get("s1")?.token).toBe("previous");
 
     virtualizerMock.scrollOffset = 200;
-    document.querySelector<HTMLElement>(".message-list-scroll")
-      ?.dispatchEvent(new Event("scroll"));
+    document.querySelector<HTMLElement>(".message-list-scroll")?.dispatchEvent(new Event("scroll"));
     await new Promise((resolve) => window.setTimeout(resolve, 20));
 
     expect(readProgress.get("s1")?.token).toBe("current");
@@ -326,8 +300,7 @@ describe("MessageList follow cancellation", () => {
       {
         ...makeMessage(0),
         role: "user",
-        content:
-          "<task-notification>\n<status>completed</status>\n</task-notification>",
+        content: "<task-notification>\n<status>completed</status>\n</task-notification>",
         is_system: true,
         source_subtype: "task_notification",
       },
@@ -337,9 +310,7 @@ describe("MessageList follow cancellation", () => {
 
     component = mount(MessageList, { target: document.body });
     await tick();
-    expect(
-      document.querySelector(".system-boundary"),
-    ).not.toBeNull();
+    expect(document.querySelector(".system-boundary")).not.toBeNull();
 
     ui.setBlockVisible("system", false);
     await tick();
@@ -406,11 +377,7 @@ describe("MessageList follow cancellation", () => {
   });
 
   it("does not acknowledge an earlier edit from the unchanged newest row", async () => {
-    messages.messages = [
-      makeMessage(0),
-      makeMessage(1),
-      makeMessage(2),
-    ];
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2)];
     messages.messageCount = 3;
     messages.activeSessionToken = "current";
     messages.activeSessionUnreadOrdinal = 0;
@@ -427,20 +394,14 @@ describe("MessageList follow cancellation", () => {
     virtualizerMock.getVirtualItems.mockReturnValue([
       { index: 2, key: "row-2", start: 0, end: 100 },
     ]);
-    document.querySelector<HTMLElement>(".message-list-scroll")
-      ?.dispatchEvent(new Event("scroll"));
+    document.querySelector<HTMLElement>(".message-list-scroll")?.dispatchEvent(new Event("scroll"));
     await new Promise((resolve) => window.setTimeout(resolve, 20));
 
     expect(readProgress.get("s1")?.token).toBe("current");
   });
 
   it("conservatively traverses history when a reopened revision also appends", async () => {
-    messages.messages = [
-      makeMessage(0),
-      makeMessage(1),
-      makeMessage(2),
-      makeMessage(3),
-    ];
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2), makeMessage(3)];
     messages.messageCount = 4;
     messages.activeSessionToken = "current";
     messages.activeSessionUnreadOrdinal = null;
@@ -459,8 +420,7 @@ describe("MessageList follow cancellation", () => {
     virtualizerMock.getVirtualItems.mockReturnValue([
       { index: 3, key: "row-3", start: 0, end: 100 },
     ]);
-    document.querySelector<HTMLElement>(".message-list-scroll")
-      ?.dispatchEvent(new Event("scroll"));
+    document.querySelector<HTMLElement>(".message-list-scroll")?.dispatchEvent(new Event("scroll"));
     await new Promise((resolve) => window.setTimeout(resolve, 20));
 
     expect(readProgress.get("s1")?.token).toBe("current");
@@ -511,11 +471,7 @@ describe("MessageList follow cancellation", () => {
   });
 
   it("skips a hidden system ordinal when inferring an appended boundary", async () => {
-    messages.messages = [
-      makeMessage(0),
-      { ...makeMessage(1), is_system: true },
-      makeMessage(2),
-    ];
+    messages.messages = [makeMessage(0), { ...makeMessage(1), is_system: true }, makeMessage(2)];
     messages.messageCount = 3;
     messages.activeSessionToken = "current";
     messages.activeSessionUnreadOrdinal = null;

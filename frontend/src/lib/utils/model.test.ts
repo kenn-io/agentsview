@@ -27,11 +27,7 @@ describe("computeMainModel", () => {
   });
 
   it("returns the single model", () => {
-    expect(
-      computeMainModel([
-        msg("assistant", "claude-sonnet-4.6"),
-      ]),
-    ).toBe("claude-sonnet-4.6");
+    expect(computeMainModel([msg("assistant", "claude-sonnet-4.6")])).toBe("claude-sonnet-4.6");
   });
 
   it("returns most frequent model", () => {
@@ -45,12 +41,9 @@ describe("computeMainModel", () => {
   });
 
   it("breaks ties alphabetically", () => {
-    expect(
-      computeMainModel([
-        msg("assistant", "b-model"),
-        msg("assistant", "a-model"),
-      ]),
-    ).toBe("a-model");
+    expect(computeMainModel([msg("assistant", "b-model"), msg("assistant", "a-model")])).toBe(
+      "a-model",
+    );
   });
 
   it("matches the resume mixed-model selection boundary", () => {
@@ -63,38 +56,26 @@ describe("computeMainModel", () => {
   });
 
   it("matches UTF-16 tie ordering for astral and BMP models", () => {
-    expect(
-      computeMainModel([
-        msg("assistant", "\uE000"),
-        msg("assistant", "\u{10000}"),
-      ]),
-    ).toBe("\u{10000}");
+    expect(computeMainModel([msg("assistant", "\uE000"), msg("assistant", "\u{10000}")])).toBe(
+      "\u{10000}",
+    );
   });
 
   it("ignores user messages", () => {
     expect(
-      computeMainModel([
-        msg("user", "some-model"),
-        msg("assistant", "claude-sonnet-4.6"),
-      ]),
+      computeMainModel([msg("user", "some-model"), msg("assistant", "claude-sonnet-4.6")]),
     ).toBe("claude-sonnet-4.6");
   });
 
   it("ignores empty model strings", () => {
-    expect(
-      computeMainModel([
-        msg("assistant", ""),
-        msg("assistant", "claude-sonnet-4.6"),
-      ]),
-    ).toBe("claude-sonnet-4.6");
+    expect(computeMainModel([msg("assistant", ""), msg("assistant", "claude-sonnet-4.6")])).toBe(
+      "claude-sonnet-4.6",
+    );
   });
 
   it("ignores synthetic-only histories", () => {
     expect(
-      computeMainModel([
-        msg("assistant", "<synthetic>"),
-        msg("assistant", "<synthetic>"),
-      ]),
+      computeMainModel([msg("assistant", "<synthetic>"), msg("assistant", "<synthetic>")]),
     ).toBe("");
   });
 
@@ -109,11 +90,6 @@ describe("computeMainModel", () => {
   });
 
   it("returns empty when no model data", () => {
-    expect(
-      computeMainModel([
-        msg("assistant", ""),
-        msg("user", ""),
-      ]),
-    ).toBe("");
+    expect(computeMainModel([msg("assistant", ""), msg("user", "")])).toBe("");
   });
 });

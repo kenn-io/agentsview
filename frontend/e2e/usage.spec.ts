@@ -5,48 +5,32 @@ test.describe("Usage page", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/usage");
     // Wait for the page shell to render.
-    await expect(
-      page.locator(".usage-page"),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".usage-page")).toBeVisible({ timeout: 10_000 });
   });
 
-  test("shows toolbar and summary cards with data", async ({
-    page,
-  }) => {
-    await expect(
-      page.locator(".usage-toolbar").first(),
-    ).toBeVisible();
+  test("shows toolbar and summary cards with data", async ({ page }) => {
+    await expect(page.locator(".usage-toolbar").first()).toBeVisible();
 
     // Summary cards should appear with at least one value.
-    await expect(
-      page.locator(".summary-cards"),
-    ).toBeVisible();
-    await expect(
-      page.locator(".card-value").first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".summary-cards")).toBeVisible();
+    await expect(page.locator(".card-value").first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("shows cost time series chart", async ({ page }) => {
     // Wait for summary data to load.
+    await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.locator(".chart-container")).toBeVisible();
     await expect(
-      page.locator(".summary-cards .card-value").first(),
-    ).toBeVisible({ timeout: 10_000 });
-    await expect(
-      page.locator(".chart-container"),
-    ).toBeVisible();
-    await expect(
-      page
-        .locator(".chart-container")
-        .getByRole("figure", { name: "Cost Over Time" }),
+      page.locator(".chart-container").getByRole("figure", { name: "Cost Over Time" }),
     ).toBeVisible();
   });
 
-  test("keeps summary cards and the chart fixed through brush selection", async ({
-    page,
-  }) => {
-    await expect(
-      page.locator(".summary-cards .card-value").first(),
-    ).toBeVisible({ timeout: 10_000 });
+  test("keeps summary cards and the chart fixed through brush selection", async ({ page }) => {
+    await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     const chart = page.locator(".chart-container").first();
     const plot = chart.locator("svg").first();
@@ -79,21 +63,12 @@ test.describe("Usage page", () => {
     if (!brushBounds) return;
 
     const y = brushBounds.y + brushBounds.height / 2;
-    await page.mouse.move(
-      brushBounds.x + brushBounds.width * 0.25,
-      y,
-    );
+    await page.mouse.move(brushBounds.x + brushBounds.width * 0.25, y);
     await page.mouse.down();
-    await page.mouse.move(
-      brushBounds.x + brushBounds.width * 0.65,
-      y,
-      { steps: 8 },
-    );
+    await page.mouse.move(brushBounds.x + brushBounds.width * 0.65, y, { steps: 8 });
     await page.mouse.up();
 
-    await expect(
-      chart.getByRole("button", { name: "Clear selection" }),
-    ).toBeVisible();
+    await expect(chart.getByRole("button", { name: "Clear selection" })).toBeVisible();
     const selectedLayout = await measureLayout();
     expect(selectedLayout.plot.y - selectedLayout.chart.y).toBe(
       beforeLayout.plot.y - beforeLayout.chart.y,
@@ -103,12 +78,8 @@ test.describe("Usage page", () => {
     expect(selectedLayout.chart.y).toBe(beforeLayout.chart.y);
     expect(selectedLayout.plot.y).toBe(beforeLayout.plot.y);
 
-    await chart
-      .getByRole("button", { name: "Clear selection" })
-      .click();
-    await expect(
-      chart.getByRole("button", { name: "Clear selection" }),
-    ).toBeHidden();
+    await chart.getByRole("button", { name: "Clear selection" }).click();
+    await expect(chart.getByRole("button", { name: "Clear selection" })).toBeHidden();
     const clearedLayout = await measureLayout();
     expect(clearedLayout.cardBoxes).toEqual(beforeLayout.cardBoxes);
     expect(clearedLayout.row.height).toBe(beforeLayout.row.height);
@@ -116,62 +87,42 @@ test.describe("Usage page", () => {
     expect(clearedLayout.plot.y).toBe(beforeLayout.plot.y);
   });
 
-  test("shows attribution panel with treemap", async ({
-    page,
-  }) => {
+  test("shows attribution panel with treemap", async ({ page }) => {
+    await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.locator(".attribution-panel")).toBeVisible();
     await expect(
-      page.locator(".summary-cards .card-value").first(),
-    ).toBeVisible({ timeout: 10_000 });
-    await expect(
-      page.locator(".attribution-panel"),
-    ).toBeVisible();
-    await expect(
-      page
-        .locator(".treemap-container")
-        .getByRole("figure", { name: "Treemap" }),
+      page.locator(".treemap-container").getByRole("figure", { name: "Treemap" }),
     ).toBeVisible();
   });
 
-  test("filter dropdown opens and shows items", async ({
-    page,
-  }) => {
+  test("filter dropdown opens and shows items", async ({ page }) => {
     // Wait for data so filter items are populated.
-    await expect(
-      page.locator(".summary-cards .card-value").first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     // Click the first filter dropdown (Project).
-    const trigger = page
-      .locator(".usage-toolbar .kit-filter-dropdown__btn")
-      .first();
+    const trigger = page.locator(".usage-toolbar .kit-filter-dropdown__btn").first();
     await trigger.click();
 
     // Dropdown panel should appear with rows.
-    await expect(
-      page.locator(".usage-toolbar .kit-filter-dropdown__panel").first(),
-    ).toBeVisible();
-    await expect(
-      page.locator(".usage-toolbar .kit-filter-dropdown__item").first(),
-    ).toBeVisible();
+    await expect(page.locator(".usage-toolbar .kit-filter-dropdown__panel").first()).toBeVisible();
+    await expect(page.locator(".usage-toolbar .kit-filter-dropdown__item").first()).toBeVisible();
   });
 
-  test("excluding a project updates total cost", async ({
-    page,
-  }) => {
+  test("excluding a project updates total cost", async ({ page }) => {
     // Wait for data to load.
-    await expect(
-      page.locator(".summary-cards .card-value").first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     // Grab the initial total cost text.
-    const totalCostBefore = await page
-      .locator(".card.featured .card-value")
-      .textContent();
+    const totalCostBefore = await page.locator(".card.featured .card-value").textContent();
 
     // Open the project filter and exclude the first item.
-    const trigger = page
-      .locator(".usage-toolbar .kit-filter-dropdown__btn")
-      .first();
+    const trigger = page.locator(".usage-toolbar .kit-filter-dropdown__btn").first();
     await trigger.click();
     await page
       .locator(".usage-toolbar .kit-filter-dropdown__item")
@@ -184,29 +135,21 @@ test.describe("Usage page", () => {
 
     // Total cost should change after refetch.
     await expect(async () => {
-      const after = await page
-        .locator(".card.featured .card-value")
-        .textContent();
+      const after = await page.locator(".card.featured .card-value").textContent();
       expect(after).not.toBe(totalCostBefore);
     }).toPass({ timeout: 5_000 });
   });
 
-  test("select all / deselect all buttons work", async ({
-    page,
-  }) => {
+  test("select all / deselect all buttons work", async ({ page }) => {
     // Wait for data so items populate.
-    await expect(
-      page.locator(".summary-cards .card-value").first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     // Open the project filter.
-    const trigger = page
-      .locator(".usage-toolbar .kit-filter-dropdown__btn")
-      .first();
+    const trigger = page.locator(".usage-toolbar .kit-filter-dropdown__btn").first();
     await trigger.click();
-    await expect(
-      page.locator(".usage-toolbar .kit-filter-dropdown__item").first(),
-    ).toBeVisible();
+    await expect(page.locator(".usage-toolbar .kit-filter-dropdown__item").first()).toBeVisible();
 
     // Click "Deselect all".
     await page
@@ -229,100 +172,82 @@ test.describe("Usage page", () => {
     await expect(trigger).toContainText("All");
   });
 
-  test("top nav shows Usage as the active destination", async ({
-    page,
-  }) => {
+  test("top nav shows Usage as the active destination", async ({ page }) => {
     await expectActiveNavTab(page, "Usage");
   });
 
-  test("switches between cost and token views with canonical URLs", async ({
-    page,
-  }) => {
+  test("switches between cost and token views with canonical URLs", async ({ page }) => {
     const metric = page.getByRole("radiogroup", {
       name: "Usage metric",
     });
 
     await metric.getByRole("radio", { name: "Tokens" }).click();
     await expect(page).toHaveURL(/\/usage\?.*view=tokens/);
-    await expect(
-      metric.getByRole("radio", { name: "Tokens" }),
-    ).toHaveAttribute("aria-checked", "true");
+    await expect(metric.getByRole("radio", { name: "Tokens" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
 
     await metric.getByRole("radio", { name: "Cost" }).click();
     await expect(page).toHaveURL(/\/usage(?:\?.*)?$/);
     expect(new URL(page.url()).searchParams.has("view")).toBe(false);
   });
 
-  test("ranks token panels by an Output-only selection", async ({
-    page,
-  }) => {
+  test("ranks token panels by an Output-only selection", async ({ page }) => {
     await page.getByRole("radio", { name: "Tokens" }).click();
-    const picker = page.locator(
-      '.usage-toolbar button[title="Token types"]',
-    );
-    await expect(picker).toHaveAttribute(
-      "aria-label",
-      "Token types: All",
-    );
+    const picker = page.locator('.usage-toolbar button[title="Token types"]');
+    await expect(picker).toHaveAttribute("aria-label", "Token types: All");
     await picker.click();
 
-    const menu = page.locator(
-      ".usage-toolbar .kit-filter-dropdown__panel",
-    );
+    const menu = page.locator(".usage-toolbar .kit-filter-dropdown__panel");
     await menu.locator("button", { hasText: "Input" }).click();
     await menu.locator("button", { hasText: "Cache Writes" }).click();
     const outputRequest = page.waitForRequest((request) => {
       const url = new URL(request.url());
-      return url.pathname.endsWith("/api/v1/usage/top-sessions")
-        && url.searchParams.get("token_types") === "output";
+      return (
+        url.pathname.endsWith("/api/v1/usage/top-sessions") &&
+        url.searchParams.get("token_types") === "output"
+      );
     });
     await menu.locator("button", { hasText: "Cached Read" }).click();
     await outputRequest;
 
-    await expect(picker).toHaveAttribute(
-      "aria-label",
-      "Token types: Output",
+    await expect(picker).toHaveAttribute("aria-label", "Token types: Output");
+    await expect(page).toHaveURL(
+      (url) =>
+        url.pathname === "/usage" &&
+        url.searchParams.get("view") === "tokens" &&
+        url.searchParams.get("token_types") === "output",
     );
-    await expect(page).toHaveURL((url) =>
-      url.pathname === "/usage"
-      && url.searchParams.get("view") === "tokens"
-      && url.searchParams.get("token_types") === "output"
+    await expect(page.locator(".top-sessions-container .chart-title")).toHaveText(
+      "Top Sessions by Output Tokens",
     );
-    await expect(
-      page.locator(".top-sessions-container .chart-title"),
-    ).toHaveText("Top Sessions by Output Tokens");
   });
 
-  test("normalizes legacy token links without dropping filters", async ({
-    page,
-  }) => {
-    await page.goto(
-      "/token-usage?window_days=90&project=project-delta",
-    );
+  test("normalizes legacy token links without dropping filters", async ({ page }) => {
+    await page.goto("/token-usage?window_days=90&project=project-delta");
 
-    await expect(page).toHaveURL((url) =>
-      url.pathname === "/usage"
-      && url.searchParams.get("view") === "tokens"
-      && url.searchParams.get("window_days") === "90"
-      && url.searchParams.get("project") === "project-delta"
+    await expect(page).toHaveURL(
+      (url) =>
+        url.pathname === "/usage" &&
+        url.searchParams.get("view") === "tokens" &&
+        url.searchParams.get("window_days") === "90" &&
+        url.searchParams.get("project") === "project-delta",
     );
-    await expect(
-      page.getByRole("radio", { name: "Tokens" }),
-    ).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("radio", { name: "Tokens" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
-  test("project filters use stable keys without writing them to the URL", async ({
-    page,
-  }) => {
+  test("project filters use stable keys without writing them to the URL", async ({ page }) => {
     // Wait for data.
-    await expect(
-      page.locator(".summary-cards .card-value").first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".summary-cards .card-value").first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     // Exclude a project.
-    const trigger = page
-      .locator(".usage-toolbar .kit-filter-dropdown__btn")
-      .first();
+    const trigger = page.locator(".usage-toolbar .kit-filter-dropdown__btn").first();
     await trigger.click();
     const projectOption = page
       .locator(".usage-toolbar .kit-filter-dropdown__item")
@@ -331,49 +256,44 @@ test.describe("Usage page", () => {
     await expect(projectOption).toBeVisible();
     const filteredRequest = page.waitForRequest((request) => {
       const url = new URL(request.url());
-      return url.pathname.endsWith("/api/v1/usage/summary") &&
-        !!url.searchParams.get("exclude_project_key");
+      return (
+        url.pathname.endsWith("/api/v1/usage/summary") &&
+        !!url.searchParams.get("exclude_project_key")
+      );
     });
     await projectOption.click();
     const requestUrl = new URL((await filteredRequest).url());
     await page.mouse.click(10, 10);
 
     expect(requestUrl.searchParams.get("exclude_project_key")).toBeTruthy();
-    await expect(page).toHaveURL((url) =>
-      url.pathname === "/usage" &&
-      !url.searchParams.has("exclude_project") &&
-      !url.searchParams.has("exclude_project_key")
+    await expect(page).toHaveURL(
+      (url) =>
+        url.pathname === "/usage" &&
+        !url.searchParams.has("exclude_project") &&
+        !url.searchParams.has("exclude_project_key"),
     );
   });
 
-  test("returning bare refreshes rolling bounds after midnight", async ({
-    page,
-  }) => {
+  test("returning bare refreshes rolling bounds after midnight", async ({ page }) => {
     await page.clock.setFixedTime(new Date("2026-07-09T23:59:00"));
     await page.goto("/usage?window_days=30");
     await expect(page.locator(".usage-page")).toBeVisible();
-    await expect(
-      page.locator(".kit-date-range-picker__trigger"),
-    ).toContainText("Last 30 days");
+    await expect(page.locator(".kit-date-range-picker__trigger")).toContainText("Last 30 days");
 
     await clickNavTab(page, "Sessions");
     await page.clock.setFixedTime(new Date("2026-07-10T00:01:00"));
     const requestPromise = page.waitForRequest((request) =>
-      new URL(request.url()).pathname.endsWith("/api/v1/usage/summary")
+      new URL(request.url()).pathname.endsWith("/api/v1/usage/summary"),
     );
     await clickNavTab(page, "Usage");
     const requestUrl = new URL((await requestPromise).url());
 
     expect(requestUrl.searchParams.get("from")).toBe("2026-06-11");
     expect(requestUrl.searchParams.get("to")).toBe("2026-07-10");
-    await expect(
-      page.locator(".kit-date-range-picker__trigger"),
-    ).toContainText("Last 30 days");
+    await expect(page.locator(".kit-date-range-picker__trigger")).toContainText("Last 30 days");
   });
 
-  test("adopts a retained Quality range after linking is enabled", async ({
-    page,
-  }) => {
+  test("adopts a retained Quality range after linking is enabled", async ({ page }) => {
     await page.goto("/quality");
     await expect(page.locator(".quality-page")).toBeVisible();
 
@@ -386,15 +306,11 @@ test.describe("Usage page", () => {
       .getByRole("navigation", { name: "Settings" })
       .locator("button", { hasText: "Date ranges" })
       .click();
-    await page
-      .getByRole("switch", { name: "Link date ranges across pages" })
-      .check();
+    await page.getByRole("switch", { name: "Link date ranges across pages" }).check();
 
     await clickNavTab(page, "Usage");
 
     await expect(page.locator(".usage-page")).toBeVisible();
-    await expect(
-      page.locator(".kit-date-range-picker__trigger"),
-    ).toContainText("Last 90 days");
+    await expect(page.locator(".kit-date-range-picker__trigger")).toContainText("Last 90 days");
   });
 });

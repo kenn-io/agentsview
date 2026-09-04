@@ -9,7 +9,6 @@
   import { SessionsService } from "../../api/generated/index";
   import {
     callGenerated,
-    configureGeneratedClient,
     isAbortError,
   } from "../../api/runtime.js";
   import { formatTokenUsage } from "../../utils/format.js";
@@ -64,19 +63,20 @@
       loading = true;
       error = null;
       try {
-        configureGeneratedClient();
         const [resp, meta] = await Promise.all([
           callGenerated(
-            () => SessionsService.getApiV1SessionsIdMessages({
-              id: sessionId,
-              limit: 1000,
-            }),
+            (options) =>
+              SessionsService.getApiV1SessionsByIdMessages(
+                { id: sessionId },
+                { limit: 1000 },
+                options,
+              ),
             signal,
-          ) as unknown as Promise<MessagesResponse>,
+          ),
           (callGenerated(
-            () => SessionsService.getApiV1SessionsId({ id: sessionId }),
+            (options) => SessionsService.getApiV1SessionsById({ id: sessionId }, options),
             signal,
-          ) as unknown as Promise<Session>).catch((e) => {
+          )).catch((e) => {
             if (isAbortError(e)) throw e;
             return null;
           }),

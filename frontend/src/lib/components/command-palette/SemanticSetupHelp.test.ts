@@ -18,8 +18,7 @@ vi.mock("../../api/runtime.js", async (importOriginal) => {
 });
 
 vi.mock("../../api/generated/index.js", async (importOriginal) => {
-  const orig =
-    await importOriginal<typeof import("../../api/generated/index.js")>();
+  const orig = await importOriginal<typeof import("../../api/generated/index.js")>();
   return {
     ...orig,
     EmbeddingsService: {
@@ -34,9 +33,7 @@ vi.mock("../../utils/clipboard.js", () => ({
 }));
 
 // @ts-ignore
-import SemanticSetupHelp, {
-  __resetResolvedBuildIds,
-} from "./SemanticSetupHelp.svelte";
+import SemanticSetupHelp, { __resetResolvedBuildIds } from "./SemanticSetupHelp.svelte";
 
 const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
@@ -142,9 +139,7 @@ describe("SemanticSetupHelp", () => {
     );
     (copyButtons[1] as HTMLButtonElement).click();
     await settle();
-    expect(mockCopyToClipboard).toHaveBeenCalledWith(
-      "agentsview embeddings build",
-    );
+    expect(mockCopyToClipboard).toHaveBeenCalledWith("agentsview embeddings build");
 
     unmount(component);
   });
@@ -153,9 +148,7 @@ describe("SemanticSetupHelp", () => {
     const reason =
       "vector serving is disabled for this daemon run: another process held " +
       "vectors.write.lock at startup; wait for it to finish, then restart the daemon";
-    embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
-      new ApiError(501, reason),
-    );
+    embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(new ApiError(501, reason));
 
     const { component } = mountHelp();
     await settle();
@@ -216,14 +209,10 @@ describe("SemanticSetupHelp", () => {
     embeddingsService.postApiV1EmbeddingsBuild.mockResolvedValueOnce({
       started: true,
     });
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
-      runningStatus(500, 1000),
-    );
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(runningStatus(500, 1000));
     build!.click();
     await settle();
-    expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({
-      requestBody: {},
-    });
+    expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
     expect(text()).toContain("Building embeddings index...");
 
     await settle(2000);
@@ -328,9 +317,7 @@ describe("SemanticSetupHelp", () => {
     embeddingsService.postApiV1EmbeddingsBuild.mockRejectedValueOnce(
       new ApiError(409, "an embeddings build is already running"),
     );
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
-      idleStatus(),
-    );
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
     const build = [...document.body.querySelectorAll("button")].find((b) =>
       b.textContent?.includes("Build embeddings"),
     );
@@ -345,9 +332,7 @@ describe("SemanticSetupHelp", () => {
   });
 
   it("jumps straight to progress when a build is already running at mount", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
-      runningStatus(250, 1000),
-    );
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(runningStatus(250, 1000));
 
     const { component } = mountHelp();
     await settle();
@@ -485,16 +470,12 @@ describe("SemanticSetupHelp", () => {
     await settle();
     // Retry starts a build even though the daemon still reports the old
     // last_error; re-probing alone could never clear it.
-    expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({
-      requestBody: {},
-    });
+    expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
     expect(text()).toContain("Building embeddings index...");
 
     // The new build finishes cleanly (a later build_id, no last_error), which
     // resolves despite the stale last_error that first put us in "failed".
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
-      idleStatus({ build_id: 5 }),
-    );
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus({ build_id: 5 }));
     await settle(2000);
     expect(onResolved).toHaveBeenCalledOnce();
 
@@ -502,9 +483,7 @@ describe("SemanticSetupHelp", () => {
   });
 
   it("re-probes rather than building when the failure came from the status call", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValueOnce(
-      new Error("network down"),
-    );
+    embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValueOnce(new Error("network down"));
 
     const { component } = mountHelp();
     await settle();

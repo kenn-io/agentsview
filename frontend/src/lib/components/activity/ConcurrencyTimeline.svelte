@@ -34,7 +34,7 @@
   // buckets/by_* are typed `any[] | null` by the codegen, so cast
   // to the generated element model for field-level type safety.
   const buckets = $derived(
-    (report.buckets ?? []) as ActivityBucket[],
+    report.buckets ?? [],
   );
 
   let tooltip = $state<{ x: number; y: number; bucket: ActivityBucket } | null>(null);

@@ -1,6 +1,6 @@
 import { SessionsService } from "../api/generated/index";
-import type { Message, MessagesResponse, Session } from "../api/types.js";
-import { configureGeneratedClient, isAbortError, withAbort } from "../api/runtime.js";
+import type { Message } from "../api/types.js";
+import { isAbortError } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModel } from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
@@ -60,8 +60,7 @@ class MessagesStore {
   }
 
   async loadSession(id: string) {
-    const resumesCancelledLoad =
-      this.sessionId === id && this.cancelledSessionId === id;
+    const resumesCancelledLoad = this.sessionId === id && this.cancelledSessionId === id;
     if (
       this.sessionId === id &&
       !resumesCancelledLoad &&
@@ -88,11 +87,7 @@ class MessagesStore {
       let countHint: number | null = null;
       let pendingToken: string | null = null;
       try {
-        configureGeneratedClient();
-        const sess = await withAbort(
-          SessionsService.getApiV1SessionsId({ id }) as unknown as Promise<Session>,
-          ac.signal,
-        );
+        const sess = await SessionsService.getApiV1SessionsById({ id }, { signal: ac.signal });
         countHint = sess.message_count ?? 0;
         pendingToken = buildReadProgressToken(sess);
       } catch (err) {
@@ -195,11 +190,7 @@ class MessagesStore {
       this.loadingOlder ||
       this.reloadPromise !== null ||
       this.loadOlderPromise !== null;
-    if (
-      hasInFlightRead &&
-      this.abortController &&
-      !this.abortController.signal.aborted
-    ) {
+    if (hasInFlightRead && this.abortController && !this.abortController.signal.aborted) {
       this.cancelledSessionId = this.sessionId;
       this.abortController.abort();
       this.abortController = null;
@@ -212,23 +203,19 @@ class MessagesStore {
     this.loadOlderPromise = null;
   }
 
-  private async fetchPages(
-    id: string,
-    opts: FetchPageOptions,
-  ): Promise<Message[]> {
+  private async fetchPages(id: string, opts: FetchPageOptions): Promise<Message[]> {
     const loaded: Message[] = [];
     let from = opts.from;
 
     for (;;) {
-      configureGeneratedClient();
-      const res = await withAbort(
-        SessionsService.getApiV1SessionsIdMessages({
-          id,
+      const res = await SessionsService.getApiV1SessionsByIdMessages(
+        { id },
+        {
           from,
           limit: opts.limit,
           direction: opts.direction,
-        }) as unknown as Promise<MessagesResponse>,
-        opts.signal,
+        },
+        { signal: opts.signal },
       );
       if (res.messages.length === 0) break;
 
@@ -254,15 +241,14 @@ class MessagesStore {
     let complete = false;
 
     for (;;) {
-      configureGeneratedClient();
-      const res = await withAbort(
-        SessionsService.getApiV1SessionsIdMessages({
-          id,
+      const res = await SessionsService.getApiV1SessionsByIdMessages(
+        { id },
+        {
           from,
           limit: MESSAGE_PAGE_SIZE,
           direction: "asc",
-        }) as unknown as Promise<MessagesResponse>,
-        signal,
+        },
+        { signal },
       );
       if (this.sessionId !== id) return;
       if (res.messages.length === 0) {
@@ -296,14 +282,13 @@ class MessagesStore {
   }
 
   private async loadProgressively(id: string, signal: AbortSignal) {
-    configureGeneratedClient();
-    const firstRes = await withAbort(
-      SessionsService.getApiV1SessionsIdMessages({
-        id,
+    const firstRes = await SessionsService.getApiV1SessionsByIdMessages(
+      { id },
+      {
         limit: MESSAGE_PAGE_SIZE,
         direction: "desc",
-      }) as unknown as Promise<MessagesResponse>,
-      signal,
+      },
+      { signal },
     );
     if (this.sessionId !== id) return;
 
@@ -364,15 +349,14 @@ class MessagesStore {
 
     this.loadingOlder = true;
     try {
-      configureGeneratedClient();
-      const res = await withAbort(
-        SessionsService.getApiV1SessionsIdMessages({
-          id,
+      const res = await SessionsService.getApiV1SessionsByIdMessages(
+        { id },
+        {
           from: oldest - 1,
           limit: MESSAGE_PAGE_SIZE,
           direction: "desc",
-        }) as unknown as Promise<MessagesResponse>,
-        signal,
+        },
+        { signal },
       );
       if (this.sessionId !== id) return;
       if (res.messages.length === 0) {
@@ -432,15 +416,14 @@ class MessagesStore {
       const chunks: Message[][] = [];
 
       while (from >= 0) {
-        configureGeneratedClient();
-        const res = await withAbort(
-          SessionsService.getApiV1SessionsIdMessages({
-            id,
+        const res = await SessionsService.getApiV1SessionsByIdMessages(
+          { id },
+          {
             from,
             limit: MESSAGE_PAGE_SIZE,
             direction: "desc",
-          }) as unknown as Promise<MessagesResponse>,
-          signal,
+          },
+          { signal },
         );
         if (this.sessionId !== id) return;
         if (res.messages.length === 0) {
@@ -490,11 +473,7 @@ class MessagesStore {
     const previousMessages = this.messages;
 
     try {
-      configureGeneratedClient();
-      const sess = await withAbort(
-        SessionsService.getApiV1SessionsId({ id }) as unknown as Promise<Session>,
-        signal,
-      );
+      const sess = await SessionsService.getApiV1SessionsById({ id }, { signal });
       if (this.sessionId !== id) return;
 
       const pendingToken = buildReadProgressToken(sess);

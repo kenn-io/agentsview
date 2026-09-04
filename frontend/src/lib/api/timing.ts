@@ -13,16 +13,13 @@ export async function fetchSessionTiming(
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  const res = await fetch(
-    `${getBase()}/sessions/${encodeURIComponent(sessionId)}/timing`,
-    { headers, signal },
-  );
+  const res = await fetch(`${getBase()}/sessions/${encodeURIComponent(sessionId)}/timing`, {
+    headers,
+    signal,
+  });
   if (!res.ok) {
     const body = await res.text();
-    throw new ApiError(
-      res.status,
-      body.trim() || `session timing ${res.status}`,
-    );
+    throw new ApiError(res.status, body.trim() || `session timing ${res.status}`);
   }
   return (await res.json()) as SessionTiming;
 }

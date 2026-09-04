@@ -22,15 +22,12 @@ describe("savingsState", () => {
     expect(savingsState(-0)).toBe("none");
   });
 
-  it(
-    "returns 'none' for sub-cent deltas that would render $0.00",
-    () => {
-      // These would format as "$0.00 more/saved than uncached"
-      // and look broken. Suppress the badge entirely instead.
-      expect(savingsState(1_000)).toBe("none");
-      expect(savingsState(4_000)).toBe("none");
-      expect(savingsState(-1_000)).toBe("none");
-      expect(savingsState(-4_999)).toBe("none");
-    },
-  );
+  it("returns 'none' for sub-cent deltas that would render $0.00", () => {
+    // These would format as "$0.00 more/saved than uncached"
+    // and look broken. Suppress the badge entirely instead.
+    expect(savingsState(1_000)).toBe("none");
+    expect(savingsState(4_000)).toBe("none");
+    expect(savingsState(-1_000)).toBe("none");
+    expect(savingsState(-4_999)).toBe("none");
+  });
 });

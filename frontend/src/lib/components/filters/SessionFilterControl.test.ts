@@ -27,9 +27,7 @@ describe("SessionFilterControl agent options", () => {
 
     const rows = document.querySelectorAll(".agent-select-row");
     expect(rows).toHaveLength(2);
-    expect(document.querySelectorAll(".agent-select-name")[1]?.textContent).toBe(
-      "Claude",
-    );
+    expect(document.querySelectorAll(".agent-select-name")[1]?.textContent).toBe("Claude");
 
     (rows[1] as HTMLButtonElement).click();
     flushSync();

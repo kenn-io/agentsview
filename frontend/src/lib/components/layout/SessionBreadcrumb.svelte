@@ -20,12 +20,12 @@
   import {
     OpenersService,
     SessionsService,
+    type Opener,
     type ResumeRequest,
     type ResumeResponse,
   } from "../../api/generated/index";
   import {
     callGenerated,
-    configureGeneratedClient,
     isAbortError,
   } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -83,17 +83,6 @@
   const costRead = new LatestRead();
   const breakdownRead = new LatestRead();
 
-  interface Opener {
-    id: string;
-    name: string;
-    kind: "editor" | "terminal" | "files" | "action";
-    bin: string;
-  }
-
-  interface OpenersResponse {
-    openers: Opener[];
-  }
-
   interface SessionDirectoryResponse {
     path: string;
   }
@@ -115,11 +104,10 @@
 
   onMount(() => {
     const signal = openersRead.begin();
-    configureGeneratedClient();
-    callGenerated(() => OpenersService.getApiV1Openers(), signal)
+    callGenerated((options) => OpenersService.getApiV1Openers(options), signal)
       .then((res) => {
         if (!openersRead.isCurrent(signal)) return;
-        openers = (res as unknown as OpenersResponse).openers;
+        openers = res.openers;
       })
       .catch((e) => {
         if (!isAbortError(e)) openers = [];
@@ -143,9 +131,8 @@
     const signal = directoryRead.begin();
     pendingSessionDirId = id;
     sessionDir = null;
-    configureGeneratedClient();
     callGenerated(
-      () => SessionsService.getApiV1SessionsIdDirectory({ id }),
+      (options) => SessionsService.getApiV1SessionsByIdDirectory({ id }, options),
       signal,
     )
       .then(({ path }) => {
@@ -254,9 +241,8 @@
     if (key === costFetchKey) return;
     const signal = costRead.begin();
     costSessionId = id;
-    configureGeneratedClient();
     callGenerated(
-      () => SessionsService.getApiV1SessionsIdUsage({ id, rollup: true }),
+      (options) => SessionsService.getApiV1SessionsByIdUsage({ id }, { rollup: true }, options),
       signal,
     )
       .then((res) => {
@@ -295,18 +281,16 @@
     if (key === breakdownFetchKey) return;
     const signal = breakdownRead.begin();
     usageBreakdownLoading = true;
-    configureGeneratedClient();
     callGenerated(
-      () => SessionsService.getApiV1SessionsIdUsage({ id, breakdown: true }),
+      (options) =>
+        SessionsService.getApiV1SessionsByIdUsage({ id }, { breakdown: true }, options),
       signal,
     )
       .then((res) => {
         if (!breakdownRead.isCurrent(signal)) return;
         breakdownFetchKey = key;
         usageBreakdownLoading = false;
-        sessionUsageBreakdown = Array.isArray(res.breakdown)
-          ? (res.breakdown as SessionUsageBreakdownEntry[])
-          : [];
+        sessionUsageBreakdown = Array.isArray(res.breakdown) ? res.breakdown : [];
       })
       .catch((e) => {
         if (isAbortError(e) || !breakdownRead.isCurrent(signal)) return;
@@ -503,14 +487,10 @@
     if (!session) return;
     showOpenMenu = false;
     try {
-      configureGeneratedClient();
-      const resp =
-        await SessionsService.postApiV1SessionsIdResume({
-          id: session.id,
-          requestBody: {
-            opener_id: opener.id,
-          } satisfies ResumeRequest,
-        }) as ResumeResponse;
+      const resp = await SessionsService.postApiV1SessionsByIdResume(
+        { id: session.id },
+        { opener_id: opener.id } satisfies ResumeRequest,
+      );
       if (resp.launched) {
         showFeedback(m.session_breadcrumb_resumed_in({
           target: resp.terminal ?? opener.name,
@@ -552,12 +532,10 @@
     if (!session) return;
     showOpenMenu = false;
     try {
-      configureGeneratedClient();
-      const resp =
-        await SessionsService.postApiV1SessionsIdResume({
-          id: session.id,
-          requestBody: { command_only: true } satisfies ResumeRequest,
-        }) as ResumeResponse;
+      const resp = await SessionsService.postApiV1SessionsByIdResume(
+        { id: session.id },
+        { command_only: true } satisfies ResumeRequest,
+      );
       if (resp.command) {
         const cmd = formatResumeResponseCommand(session.agent, resp);
         const ok = cmd ? await copyToClipboard(cmd) : false;
@@ -607,11 +585,10 @@
     if (!session) return;
     showOpenMenu = false;
     try {
-      configureGeneratedClient();
-      await SessionsService.postApiV1SessionsIdOpen({
-        id: session.id,
-        requestBody: { opener_id: opener.id },
-      });
+      await SessionsService.postApiV1SessionsByIdOpen(
+        { id: session.id },
+        { opener_id: opener.id },
+      );
       showFeedback(m.session_breadcrumb_opened_in({
         target: opener.name,
       }));
@@ -624,12 +601,7 @@
     if (!session) return;
     showOpenMenu = false;
     try {
-      configureGeneratedClient();
-      const resp =
-        await SessionsService.postApiV1SessionsIdResume({
-          id: session.id,
-          requestBody: {},
-        }) as ResumeResponse;
+      const resp = await SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {});
       if (resp.launched) {
         showFeedback(
           m.session_breadcrumb_resumed_in({

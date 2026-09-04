@@ -10,9 +10,7 @@ function call(partial: Partial<ToolCall>): ToolCall {
 describe("summarizeToolCall", () => {
   it("returns null for malformed input_json", () => {
     expect(
-      summarizeToolCall(
-        call({ tool_name: "Read", category: "Read", input_json: "{not json" }),
-      ),
+      summarizeToolCall(call({ tool_name: "Read", category: "Read", input_json: "{not json" })),
     ).toBeNull();
   });
 
@@ -22,9 +20,7 @@ describe("summarizeToolCall", () => {
 
   it("returns null when no structured fields are present", () => {
     expect(
-      summarizeToolCall(
-        call({ tool_name: "mystery", input_json: JSON.stringify({ foo: 1 }) }),
-      ),
+      summarizeToolCall(call({ tool_name: "mystery", input_json: JSON.stringify({ foo: 1 }) })),
     ).toBeNull();
   });
 
@@ -463,53 +459,78 @@ describe("summarizeToolCall", () => {
     });
 
     it("uses a trailing display form for long absolute paths", () => {
-      const path = "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
-      expect(summarizeToolCall(call({
-        tool_name: "custom",
-        category: "Other",
-        input_json: JSON.stringify({ file_path: path }),
-      }))).toBe("content/ToolBlock.svelte");
+      const path =
+        "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
+      expect(
+        summarizeToolCall(
+          call({
+            tool_name: "custom",
+            category: "Other",
+            input_json: JSON.stringify({ file_path: path }),
+          }),
+        ),
+      ).toBe("content/ToolBlock.svelte");
     });
 
     it("does not title a Grep summary from its path argument", () => {
-      expect(summarizeToolCallPath(call({
-        tool_name: "Grep",
-        category: "Grep",
-        input_json: JSON.stringify({ pattern: "TODO", path: "/workspace/packages/agentsview" }),
-      }))).toBeNull();
+      expect(
+        summarizeToolCallPath(
+          call({
+            tool_name: "Grep",
+            category: "Grep",
+            input_json: JSON.stringify({ pattern: "TODO", path: "/workspace/packages/agentsview" }),
+          }),
+        ),
+      ).toBeNull();
     });
 
     it("does not title special summaries from path-like extra fields", () => {
       for (const tool_name of ["Task", "Skill", "TodoWrite"]) {
-        expect(summarizeToolCallPath(call({
-          tool_name,
-          category: tool_name === "Task" ? "Task" : undefined,
-          input_json: JSON.stringify({
-            path: "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte",
-            description: "Inspect the task",
-            skill: "review-branch",
-            todos: [{ content: "Inspect the task", status: "in_progress" }],
-          }),
-        }))).toBeNull();
+        expect(
+          summarizeToolCallPath(
+            call({
+              tool_name,
+              category: tool_name === "Task" ? "Task" : undefined,
+              input_json: JSON.stringify({
+                path: "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte",
+                description: "Inspect the task",
+                skill: "review-branch",
+                todos: [{ content: "Inspect the task", status: "in_progress" }],
+              }),
+            }),
+          ),
+        ).toBeNull();
       }
     });
 
     it("caps long relative path summaries", () => {
       const path = "src/" + "nested/".repeat(30) + "file.ts";
-      expect(summarizeToolCall(call({
-        tool_name: "Read",
-        category: "Read",
-        input_json: JSON.stringify({ file_path: path }),
-      }))).toBe(path.slice(0, 100) + "…");
+      expect(
+        summarizeToolCall(
+          call({
+            tool_name: "Read",
+            category: "Read",
+            input_json: JSON.stringify({ file_path: path }),
+          }),
+        ),
+      ).toBe(path.slice(0, 100) + "…");
     });
 
     it("preserves short and root-marked absolute paths", () => {
-      for (const path of ["/" + "a".repeat(90), "C:\\" + "a".repeat(85), "\\\\server\\share\\" + "a".repeat(75)]) {
-        expect(summarizeToolCall(call({
-          tool_name: "Read",
-          category: "Read",
-          input_json: JSON.stringify({ file_path: path }),
-        }))).toBe(path);
+      for (const path of [
+        "/" + "a".repeat(90),
+        "C:\\" + "a".repeat(85),
+        "\\\\server\\share\\" + "a".repeat(75),
+      ]) {
+        expect(
+          summarizeToolCall(
+            call({
+              tool_name: "Read",
+              category: "Read",
+              input_json: JSON.stringify({ file_path: path }),
+            }),
+          ),
+        ).toBe(path);
       }
     });
   });

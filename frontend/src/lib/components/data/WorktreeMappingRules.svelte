@@ -11,8 +11,6 @@
   import {
     DataService,
     SettingsService,
-    type ApplyWorktreeMappingsResponse,
-    type DataProjectRulesResponse,
     type DbProjectRule,
     type WorktreeMappingRequest,
   } from "../../api/generated/index";
@@ -112,18 +110,18 @@
     error = "";
     try {
       const res = await callGenerated(
-        () =>
+        (options) =>
           DataService.getApiV1DataProjectRules({
             machine: requestedMachine || undefined,
-          }),
+          }, options),
         signal,
-      ) as DataProjectRulesResponse;
+      );
       if (!mappingsRead.isCurrent(signal)) return;
       localMachine = res.local_machine;
       machine = res.machine;
-      machines = Array.from(new Set([res.machine, ...((res.machines ?? []) as string[])]))
+      machines = Array.from(new Set([res.machine, ...(res.machines ?? [])]))
         .filter(Boolean);
-      mappings = (res.rules ?? []) as DbProjectRule[];
+      mappings = res.rules ?? [];
     } catch (err) {
       if (isAbortError(err) || !mappingsRead.isCurrent(signal)) return;
       error = err instanceof Error ? err.message : m.worktree_failed_load();
@@ -214,14 +212,11 @@
     try {
       if (id == null) {
         await callGenerated(() =>
-          SettingsService.postApiV1SettingsWorktreeMappings({ requestBody: input }),
+          SettingsService.postApiV1SettingsWorktreeMappings(input),
         );
       } else {
         await callGenerated(() =>
-          SettingsService.putApiV1SettingsWorktreeMappingsId({
-            id: String(id),
-            requestBody: input,
-          }),
+          SettingsService.putApiV1SettingsWorktreeMappingsById({ id: String(id) }, input),
         );
       }
       // The mutation committed even if the machine selection has since
@@ -250,7 +245,7 @@
     applyMessage = "";
     try {
       await callGenerated(() =>
-        SettingsService.deleteApiV1SettingsWorktreeMappingsId({
+        SettingsService.deleteApiV1SettingsWorktreeMappingsById({
           id: String(mapping.id),
         }),
       );
@@ -285,10 +280,8 @@
     applyMessage = "";
     try {
       const res = await callGenerated(() =>
-        SettingsService.postApiV1SettingsWorktreeMappingsApply({
-          requestBody: { machine: initiatingMachine },
-        }),
-      ) as ApplyWorktreeMappingsResponse;
+        SettingsService.postApiV1SettingsWorktreeMappingsApply({ machine: initiatingMachine }),
+      );
       onMutated?.();
       if (!isCurrentMachine(initiatingMachine, generation)) return;
       applyMessage = m.worktree_apply_result({

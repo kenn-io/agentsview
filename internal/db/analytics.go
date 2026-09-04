@@ -3975,7 +3975,7 @@ type SignalCalibration struct {
 // an aggregate signal, including the best available message excerpt.
 type SignalSessionsResponse struct {
 	Signal   string                 `json:"signal"`
-	Sessions []SignalSessionExample `json:"sessions" nullable:"false"`
+	Sessions []SignalSessionExample `json:"sessions"`
 }
 
 type SignalSessionExample struct {

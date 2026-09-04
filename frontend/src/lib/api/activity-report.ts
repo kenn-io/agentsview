@@ -1,15 +1,6 @@
 import type { Report, SessionRow } from "./types/activity.js";
-import {
-  ActivityService,
-  type ActivityReportSessionsResponse,
-} from "./generated/index";
-import {
-  ApiError,
-  authHeaders,
-  callGenerated,
-  getBase,
-  responseErrorMessage,
-} from "./runtime.js";
+import { ActivityService, type ActivityReportSessionsResponse } from "./generated/index";
+import { ApiError, authHeaders, callGenerated, getBase, responseErrorMessage } from "./runtime.js";
 
 export interface ActivityReportQuery {
   preset?: "day" | "week" | "month" | "custom";
@@ -26,20 +17,15 @@ export interface ActivityReportQuery {
 }
 
 export interface ActivityReportProgress {
-  phase:
-    | "loading_sessions"
-    | "loading_usage"
-    | "scanning_activity"
-    | "finalizing"
-    | "done";
+  phase: "loading_sessions" | "loading_usage" | "scanning_activity" | "finalizing" | "done";
   sessions_total?: number;
   sessions_processed?: number;
   rows_processed?: number;
 }
 
-type ActivitySessionRequest = Parameters<
-  typeof ActivityService.getApiV1ActivityReportReportIdSessions
->[0];
+type ActivitySessionRequest = NonNullable<
+  Parameters<typeof ActivityService.getApiV1ActivityReportByReportIdSessions>[1]
+>;
 
 export type ActivitySessionSort = NonNullable<ActivitySessionRequest["sort"]>;
 
@@ -56,10 +42,7 @@ export interface ActivitySessionPageOptions {
   bucketRange?: ActivityBucketRange | null;
 }
 
-export type ActivitySessionPage = Omit<
-  ActivityReportSessionsResponse,
-  "sessions" | "report"
-> & {
+export type ActivitySessionPage = Omit<ActivityReportSessionsResponse, "sessions" | "report"> & {
   sessions: SessionRow[];
   report?: Report;
 };
@@ -164,7 +147,7 @@ export async function fetchActivityReport(
     if (!res.body) throw new Error("Activity report response has no body");
     return readReportStream(res.body, onProgress);
   }
-  return await res.json() as Report;
+  return (await res.json()) as Report;
 }
 
 export async function fetchActivitySessions(
@@ -173,19 +156,23 @@ export async function fetchActivitySessions(
   signal?: AbortSignal,
 ): Promise<ActivitySessionPage> {
   const page = await callGenerated(
-    () => ActivityService.getApiV1ActivityReportReportIdSessions({
-      reportId: reportID,
-      limit: options.limit,
-      cursor: options.cursor,
-      sort: options.sort,
-      direction: options.direction,
-      bucketStart: options.bucketRange?.start,
-      bucketEnd: options.bucketRange?.end,
-    }),
+    (requestOptions) =>
+      ActivityService.getApiV1ActivityReportByReportIdSessions(
+        { reportId: reportID },
+        {
+          limit: options.limit,
+          cursor: options.cursor,
+          sort: options.sort,
+          direction: options.direction,
+          bucket_start: options.bucketRange?.start,
+          bucket_end: options.bucketRange?.end,
+        },
+        requestOptions,
+      ),
     signal,
   );
   return {
     ...page,
-    sessions: (page.sessions ?? []) as SessionRow[],
+    sessions: page.sessions ?? [],
   };
 }

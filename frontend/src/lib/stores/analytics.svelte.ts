@@ -1,18 +1,20 @@
 import type {
   AnalyticsSummary,
   ActivityResponse,
-  HeatmapResponse,
   ProjectsAnalyticsResponse,
   HourOfWeekResponse,
   SessionShapeResponse,
   VelocityResponse,
   ToolsAnalyticsResponse,
   SkillsAnalyticsResponse,
-  TopSessionsResponse,
   SignalsAnalyticsResponse,
   AutomatedScope,
 } from "../api/types.js";
-import { AnalyticsService } from "../api/generated/index";
+import {
+  AnalyticsService,
+  type DbHeatmapResponse,
+  type DbTopSessionsResponse,
+} from "../api/generated/index";
 import { callGenerated, isAbortError } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
@@ -20,10 +22,12 @@ import { rollingRange, today } from "../utils/dates.js";
 
 export const ANALYTICS_DEFAULT_WINDOW_DAYS = 365;
 
-type AnalyticsParams = Parameters<typeof AnalyticsService.getApiV1AnalyticsSummary>[0];
-type ActivityParams = Parameters<typeof AnalyticsService.getApiV1AnalyticsActivity>[0];
-type HeatmapParams = Parameters<typeof AnalyticsService.getApiV1AnalyticsHeatmap>[0];
-type TopSessionsParams = Parameters<typeof AnalyticsService.getApiV1AnalyticsTopSessions>[0];
+type AnalyticsParams = NonNullable<Parameters<typeof AnalyticsService.getApiV1AnalyticsSummary>[0]>;
+type ActivityParams = NonNullable<Parameters<typeof AnalyticsService.getApiV1AnalyticsActivity>[0]>;
+type HeatmapParams = NonNullable<Parameters<typeof AnalyticsService.getApiV1AnalyticsHeatmap>[0]>;
+type TopSessionsParams = NonNullable<
+  Parameters<typeof AnalyticsService.getApiV1AnalyticsTopSessions>[0]
+>;
 export type Granularity = NonNullable<ActivityParams["granularity"]>;
 export type HeatmapMetric = NonNullable<HeatmapParams["metric"]>;
 export type TopSessionsMetric = NonNullable<TopSessionsParams["metric"]>;
@@ -67,14 +71,14 @@ class AnalyticsStore {
 
   summary = $state<AnalyticsSummary | null>(null);
   activity = $state<ActivityResponse | null>(null);
-  heatmap = $state<HeatmapResponse | null>(null);
+  heatmap = $state<DbHeatmapResponse | null>(null);
   projects = $state<ProjectsAnalyticsResponse | null>(null);
   hourOfWeek = $state<HourOfWeekResponse | null>(null);
   sessionShape = $state<SessionShapeResponse | null>(null);
   velocity = $state<VelocityResponse | null>(null);
   tools = $state<ToolsAnalyticsResponse | null>(null);
   skills = $state<SkillsAnalyticsResponse | null>(null);
-  topSessions = $state<TopSessionsResponse | null>(null);
+  topSessions = $state<DbTopSessionsResponse | null>(null);
   signals = $state<SignalsAnalyticsResponse | null>(null);
   topMetric: TopSessionsMetric = $state("messages");
   lastUpdatedAt: number | null = $state(null);
@@ -394,14 +398,14 @@ class AnalyticsStore {
     if (includeModel && this.model) p.model = this.model;
     if (this.termination) p.termination = this.termination;
     if (this.minUserMessages > 0) {
-      p.minUserMessages = this.minUserMessages;
+      p.min_user_messages = this.minUserMessages;
     }
     if (this.includeOneShot) {
-      p.includeOneShot = true;
+      p.include_one_shot = true;
     }
-    p.automatedScope = this.effectiveAutomatedScope;
+    p.automated_scope = this.effectiveAutomatedScope;
     if (this.recentlyActive) {
-      p.activeSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      p.active_since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     }
     if (includeTime) {
       if (this.selectedDow !== null) p.dow = this.selectedDow;
@@ -439,7 +443,7 @@ class AnalyticsStore {
 
   private async executeFetch<T>(
     panel: Panel,
-    fetchRequest: () => Promise<T>,
+    fetchRequest: (options?: { signal?: AbortSignal }) => Promise<T>,
     onSuccess: (data: T) => void,
     hasExistingData: () => boolean = () => false,
   ): Promise<FetchResult> {
@@ -557,10 +561,7 @@ class AnalyticsStore {
   async fetchSummary(): Promise<FetchResult> {
     return await this.executeFetch(
       "summary",
-      () =>
-        AnalyticsService.getApiV1AnalyticsSummary(
-          this.filterParams(),
-        ) as unknown as Promise<AnalyticsSummary>,
+      (options) => AnalyticsService.getApiV1AnalyticsSummary(this.filterParams(), options),
       (data) => {
         this.summary = data;
       },
@@ -578,11 +579,14 @@ class AnalyticsStore {
     }
     return await this.executeFetch(
       "activity",
-      () =>
-        AnalyticsService.getApiV1AnalyticsActivity({
-          ...this.baseParams(),
-          granularity: this.granularity,
-        }) as unknown as Promise<ActivityResponse>,
+      (options) =>
+        AnalyticsService.getApiV1AnalyticsActivity(
+          {
+            ...this.baseParams(),
+            granularity: this.granularity,
+          },
+          options,
+        ),
       (data) => {
         this.activity = data;
         this.activityScope = scope;
@@ -594,11 +598,14 @@ class AnalyticsStore {
   async fetchHeatmap(): Promise<FetchResult> {
     return await this.executeFetch(
       "heatmap",
-      () =>
-        AnalyticsService.getApiV1AnalyticsHeatmap({
-          ...this.baseParams(),
-          metric: this.metric,
-        }) as unknown as Promise<HeatmapResponse>,
+      (options) =>
+        AnalyticsService.getApiV1AnalyticsHeatmap(
+          {
+            ...this.baseParams(),
+            metric: this.metric,
+          },
+          options,
+        ),
       (data) => {
         this.heatmap = data;
       },
@@ -612,10 +619,11 @@ class AnalyticsStore {
   async fetchProjects(): Promise<FetchResult> {
     return await this.executeFetch(
       "projects",
-      () =>
+      (options) =>
         AnalyticsService.getApiV1AnalyticsProjects(
           this.filterParams({ includeProject: false }),
-        ) as unknown as Promise<ProjectsAnalyticsResponse>,
+          options,
+        ),
       (data) => {
         this.projects = data;
       },
@@ -634,10 +642,7 @@ class AnalyticsStore {
     }
     return await this.executeFetch(
       "hourOfWeek",
-      () =>
-        AnalyticsService.getApiV1AnalyticsHourOfWeek(
-          requestParams,
-        ) as unknown as Promise<HourOfWeekResponse>,
+      (options) => AnalyticsService.getApiV1AnalyticsHourOfWeek(requestParams, options),
       (data) => {
         this.hourOfWeek = data;
       },
@@ -648,10 +653,7 @@ class AnalyticsStore {
   async fetchSessionShape(): Promise<FetchResult> {
     return await this.executeFetch(
       "sessionShape",
-      () =>
-        AnalyticsService.getApiV1AnalyticsSessions(
-          this.filterParams(),
-        ) as unknown as Promise<SessionShapeResponse>,
+      (options) => AnalyticsService.getApiV1AnalyticsSessions(this.filterParams(), options),
       (data) => {
         this.sessionShape = data;
       },
@@ -662,10 +664,7 @@ class AnalyticsStore {
   async fetchVelocity(): Promise<FetchResult> {
     return await this.executeFetch(
       "velocity",
-      () =>
-        AnalyticsService.getApiV1AnalyticsVelocity(
-          this.filterParams(),
-        ) as unknown as Promise<VelocityResponse>,
+      (options) => AnalyticsService.getApiV1AnalyticsVelocity(this.filterParams(), options),
       (data) => {
         this.velocity = data;
       },
@@ -676,10 +675,7 @@ class AnalyticsStore {
   async fetchTools(): Promise<FetchResult> {
     return await this.executeFetch(
       "tools",
-      () =>
-        AnalyticsService.getApiV1AnalyticsTools(
-          this.filterParams(),
-        ) as unknown as Promise<ToolsAnalyticsResponse>,
+      (options) => AnalyticsService.getApiV1AnalyticsTools(this.filterParams(), options),
       (data) => {
         this.tools = data;
       },
@@ -690,11 +686,14 @@ class AnalyticsStore {
   async fetchSkills(granularity: Granularity = this.skillsGranularity): Promise<FetchResult> {
     return await this.executeFetch(
       "skills",
-      () =>
-        AnalyticsService.getApiV1AnalyticsSkills({
-          ...this.filterParams(),
-          granularity,
-        }) as unknown as Promise<SkillsAnalyticsResponse>,
+      (options) =>
+        AnalyticsService.getApiV1AnalyticsSkills(
+          {
+            ...this.filterParams(),
+            granularity,
+          },
+          options,
+        ),
       (data) => {
         this.skills = data;
         this.skillsGranularity = granularity;
@@ -706,11 +705,14 @@ class AnalyticsStore {
   async fetchTopSessions(): Promise<FetchResult> {
     return await this.executeFetch(
       "topSessions",
-      () =>
-        AnalyticsService.getApiV1AnalyticsTopSessions({
-          ...this.filterParams(),
-          metric: this.topMetric,
-        }) as unknown as Promise<TopSessionsResponse>,
+      (options) =>
+        AnalyticsService.getApiV1AnalyticsTopSessions(
+          {
+            ...this.filterParams(),
+            metric: this.topMetric,
+          },
+          options,
+        ),
       (data) => {
         this.topSessions = data;
       },
@@ -741,10 +743,8 @@ class AnalyticsStore {
     this.signalsScope = scope;
     return await this.executeFetch(
       "signals",
-      () =>
-        AnalyticsService.getApiV1AnalyticsSignals(
-          this.filterParams({ includeModel }),
-        ) as unknown as Promise<SignalsAnalyticsResponse>,
+      (options) =>
+        AnalyticsService.getApiV1AnalyticsSignals(this.filterParams({ includeModel }), options),
       (data) => {
         this.signals = data;
       },

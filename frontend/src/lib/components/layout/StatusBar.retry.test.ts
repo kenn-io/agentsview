@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import StatusBar from "./StatusBar.svelte";
@@ -30,9 +23,7 @@ describe("StatusBar degraded backend retry", () => {
   });
 
   it("retries stats when sync-not-ready indicator is clicked", async () => {
-    const loadStats = vi
-      .spyOn(sync, "loadStats")
-      .mockResolvedValue(undefined);
+    const loadStats = vi.spyOn(sync, "loadStats").mockResolvedValue(undefined);
     const component = mount(StatusBar, {
       target: document.body,
     });

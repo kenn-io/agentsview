@@ -1,17 +1,10 @@
 import { describe, it, expect } from "vite-plus/test";
-import {
-  parseContent,
-  isToolOnly,
-  enrichSegments,
-  hasVisibleSegments,
-} from "./content-parser.js";
+import { parseContent, isToolOnly, enrichSegments, hasVisibleSegments } from "./content-parser.js";
 import type { Message, ToolCall } from "../api/types.js";
 
 let nextId = 1;
 
-function makeMsg(
-  overrides: Partial<Message> & { content: string },
-): Message {
+function makeMsg(overrides: Partial<Message> & { content: string }): Message {
   const defaults: Message = {
     id: nextId++,
     session_id: "s1",
@@ -39,30 +32,21 @@ describe("parseContent", () => {
 
   it("preserves leading whitespace in plain text", () => {
     const segments = parseContent("  - Indented list item");
-    expect(segments).toEqual([
-      { type: "text", content: "  - Indented list item" },
-    ]);
+    expect(segments).toEqual([{ type: "text", content: "  - Indented list item" }]);
   });
 
   it("removes trailing whitespace in plain text", () => {
-    const segments =
-      parseContent("Text with trailing space   \n");
-    expect(segments).toEqual([
-      { type: "text", content: "Text with trailing space" },
-    ]);
+    const segments = parseContent("Text with trailing space   \n");
+    expect(segments).toEqual([{ type: "text", content: "Text with trailing space" }]);
   });
 
   it("keeps blockquote markers in prose as one text segment", () => {
-    const content =
-      "blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5";
-    expect(parseContent(content)).toEqual([
-      { type: "text", content },
-    ]);
+    const content = "blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5";
+    expect(parseContent(content)).toEqual([{ type: "text", content }]);
   });
 
   it("preserves leading whitespace before blocks", () => {
-    const segments =
-      parseContent("  Indented text\n[Thinking]\n...");
+    const segments = parseContent("  Indented text\n[Thinking]\n...");
     expect(segments[0]).toEqual({
       type: "text",
       content: "  Indented text",
@@ -73,15 +57,11 @@ describe("parseContent", () => {
   it("handles whitespace in gaps between blocks", () => {
     const text = "[Thinking]\nfoo\n[Bash]\necho hi";
     const segments = parseContent(text);
-    expect(segments.map((s) => s.type)).toEqual([
-      "thinking",
-      "tool",
-    ]);
+    expect(segments.map((s) => s.type)).toEqual(["thinking", "tool"]);
   });
 
   it("preserves leading whitespace in tail text", () => {
-    const segments =
-      parseContent("```code\ncontent\n```\n  Trailing text");
+    const segments = parseContent("```code\ncontent\n```\n  Trailing text");
     expect(segments).toHaveLength(2);
     expect(segments[0]).toMatchObject({ type: "code" });
     expect(segments[1]).toEqual({
@@ -91,8 +71,7 @@ describe("parseContent", () => {
   });
 
   it("skips code blocks inside tool blocks", () => {
-    const text =
-      "[Bash]\n```sh\necho hi\n```\n\nsome text after";
+    const text = "[Bash]\n```sh\necho hi\n```\n\nsome text after";
     const segments = parseContent(text);
     const types = segments.map((s) => s.type);
     expect(types).not.toContain("code");
@@ -100,8 +79,7 @@ describe("parseContent", () => {
   });
 
   it("extracts code block language as label", () => {
-    const segments =
-      parseContent("```typescript\nconst x = 1;\n```");
+    const segments = parseContent("```typescript\nconst x = 1;\n```");
     expect(segments).toEqual([
       {
         type: "code",
@@ -113,27 +91,25 @@ describe("parseContent", () => {
 
   it("keeps nested shorter fences inside longer code blocks", () => {
     const content =
-      "````markdown\nSome context paragraph.\n\n```qmd\nauthor: \"Jane Doe\"\n```\n\nMore context here.\n````";
+      '````markdown\nSome context paragraph.\n\n```qmd\nauthor: "Jane Doe"\n```\n\nMore context here.\n````';
     const segments = parseContent(content);
     expect(segments).toEqual([
       {
         type: "code",
         content:
-          "Some context paragraph.\n\n```qmd\nauthor: \"Jane Doe\"\n```\n\nMore context here.\n",
+          'Some context paragraph.\n\n```qmd\nauthor: "Jane Doe"\n```\n\nMore context here.\n',
         label: "markdown",
       },
     ]);
   });
 
   it("keeps inline same-length backtick runs inside code blocks", () => {
-    const content =
-      "```javascript\nconst fence = \"```\";\n[Thinking]\nnot parsed\n```\nAfter";
+    const content = '```javascript\nconst fence = "```";\n[Thinking]\nnot parsed\n```\nAfter';
     const segments = parseContent(content);
     expect(segments).toEqual([
       {
         type: "code",
-        content:
-          "const fence = \"```\";\n[Thinking]\nnot parsed\n",
+        content: 'const fence = "```";\n[Thinking]\nnot parsed\n',
         label: "javascript",
       },
       {
@@ -183,10 +159,7 @@ describe("parseContent", () => {
     const text = "[Thinking]\nI think\n[Bash]\necho ok";
     const segments = parseContent(text);
     // Both blocks should parse without overlap
-    expect(segments.map((s) => s.type)).toEqual([
-      "thinking",
-      "tool",
-    ]);
+    expect(segments.map((s) => s.type)).toEqual(["thinking", "tool"]);
   });
 
   it("returns consistent results on repeated calls", () => {
@@ -199,8 +172,7 @@ describe("parseContent", () => {
 
 describe("parseContent - thinking blocks", () => {
   it("separates thinking from following text at blank line", () => {
-    const text =
-      "[Thinking]\nsome thoughts\n\nHere is my response";
+    const text = "[Thinking]\nsome thoughts\n\nHere is my response";
     const segments = parseContent(text, false);
     expect(segments).toHaveLength(2);
     expect(segments[0]).toMatchObject({
@@ -214,41 +186,31 @@ describe("parseContent - thinking blocks", () => {
   });
 
   it("merges consecutive thinking blocks into one", () => {
-    const text =
-      "[Thinking]\nfirst thought\n[Thinking]\nsecond thought";
+    const text = "[Thinking]\nfirst thought\n[Thinking]\nsecond thought";
     const segments = parseContent(text, false);
-    const thinking = segments.filter(
-      (s) => s.type === "thinking",
-    );
+    const thinking = segments.filter((s) => s.type === "thinking");
     expect(thinking).toHaveLength(1);
     expect(thinking[0]!.content).toContain("first thought");
     expect(thinking[0]!.content).toContain("second thought");
   });
 
   it("does not merge thinking blocks separated by text", () => {
-    const text =
-      "[Thinking]\nthought one\n\nSome text\n[Thinking]\nthought two";
+    const text = "[Thinking]\nthought one\n\nSome text\n[Thinking]\nthought two";
     const segments = parseContent(text, false);
-    const thinking = segments.filter(
-      (s) => s.type === "thinking",
-    );
+    const thinking = segments.filter((s) => s.type === "thinking");
     expect(thinking).toHaveLength(2);
   });
 
   it("shows response text when thinking is stripped", () => {
-    const text =
-      "[Thinking]\nanalysis\n\nThe answer is 42.";
+    const text = "[Thinking]\nanalysis\n\nThe answer is 42.";
     const segments = parseContent(text, false);
-    const textSegs = segments.filter(
-      (s) => s.type === "text",
-    );
+    const textSegs = segments.filter((s) => s.type === "text");
     expect(textSegs).toHaveLength(1);
     expect(textSegs[0]!.content).toBe("The answer is 42.");
   });
 
   it("uses [/Thinking] end marker to delimit content", () => {
-    const text =
-      "[Thinking]\nmy thoughts\n[/Thinking]\n\nResponse text";
+    const text = "[Thinking]\nmy thoughts\n[/Thinking]\n\nResponse text";
     const segments = parseContent(text, false);
     expect(segments).toHaveLength(2);
     expect(segments[0]).toMatchObject({
@@ -263,25 +225,19 @@ describe("parseContent - thinking blocks", () => {
 
   it("handles end marker with no blank line before text", () => {
     const text =
-      "[Thinking]\nthoughts\n[/Thinking]\n" +
-      "[Thinking]\nmore\n[/Thinking]\n\nResponse";
+      "[Thinking]\nthoughts\n[/Thinking]\n" + "[Thinking]\nmore\n[/Thinking]\n\nResponse";
     const segments = parseContent(text, false);
-    const thinking = segments.filter(
-      (s) => s.type === "thinking",
-    );
+    const thinking = segments.filter((s) => s.type === "thinking");
     expect(thinking).toHaveLength(1);
     expect(thinking[0]!.content).toContain("thoughts");
     expect(thinking[0]!.content).toContain("more");
-    const textSegs = segments.filter(
-      (s) => s.type === "text",
-    );
+    const textSegs = segments.filter((s) => s.type === "text");
     expect(textSegs).toHaveLength(1);
     expect(textSegs[0]!.content).toBe("Response");
   });
 
   it("preserves blank lines inside marked thinking block", () => {
-    const text =
-      "[Thinking]\npara1\n\npara2\n[/Thinking]";
+    const text = "[Thinking]\npara1\n\npara2\n[/Thinking]";
     const segments = parseContent(text, false);
     expect(segments).toHaveLength(1);
     expect(segments[0]!.type).toBe("thinking");
@@ -290,18 +246,12 @@ describe("parseContent - thinking blocks", () => {
   });
 
   it("preserves bracket lines inside marked thinking", () => {
-    const text =
-      "[Thinking]\nI see [Read: foo] in the code\n" +
-      "[/Thinking]\n\nResponse";
+    const text = "[Thinking]\nI see [Read: foo] in the code\n" + "[/Thinking]\n\nResponse";
     const segments = parseContent(text, false);
-    const thinking = segments.filter(
-      (s) => s.type === "thinking",
-    );
+    const thinking = segments.filter((s) => s.type === "thinking");
     expect(thinking).toHaveLength(1);
     expect(thinking[0]!.content).toContain("[Read: foo]");
-    const textSegs = segments.filter(
-      (s) => s.type === "text",
-    );
+    const textSegs = segments.filter((s) => s.type === "text");
     expect(textSegs).toHaveLength(1);
     expect(textSegs[0]!.content).toBe("Response");
   });
@@ -309,8 +259,7 @@ describe("parseContent - thinking blocks", () => {
 
 describe("parseContent - inline code spans", () => {
   it("does not match [Thinking] inside backtick code span", () => {
-    const text =
-      "handling of `[Thinking]`, `[Tool call]`, `[Tool result]`.";
+    const text = "handling of `[Thinking]`, `[Tool call]`, `[Tool result]`.";
     const segments = parseContent(text, true);
     expect(segments.every((s) => s.type === "text")).toBe(true);
     expect(segments[0]!.content).toContain("`[Thinking]`");
@@ -324,8 +273,7 @@ describe("parseContent - inline code spans", () => {
   });
 
   it("still matches real markers outside code spans", () => {
-    const text =
-      "Mentioned `[Thinking]` in docs.\n[Bash]\n$ echo hi";
+    const text = "Mentioned `[Thinking]` in docs.\n[Bash]\n$ echo hi";
     const segments = parseContent(text, true);
     const types = segments.map((s) => s.type);
     expect(types).toContain("text");
@@ -358,8 +306,7 @@ describe("parseContent - inline code spans", () => {
   });
 
   it("does not confuse fenced code blocks with inline spans", () => {
-    const text =
-      "```sh\necho [Bash]\n```\n\n[Bash]\n$ echo real";
+    const text = "```sh\necho [Bash]\n```\n\n[Bash]\n$ echo real";
     const segments = parseContent(text, true);
     const types = segments.map((s) => s.type);
     expect(types).toContain("code");
@@ -367,8 +314,7 @@ describe("parseContent - inline code spans", () => {
   });
 
   it("continues scanning after unmatched backtick run", () => {
-    const text =
-      "Some `` unmatched double then `[Thinking]` single";
+    const text = "Some `` unmatched double then `[Thinking]` single";
     const segments = parseContent(text, true);
     expect(segments.every((s) => s.type === "text")).toBe(true);
     expect(segments[0]!.content).toContain("`[Thinking]`");
@@ -436,7 +382,7 @@ describe("parseContent - hasToolUse flag", () => {
   it("skips tool blocks when hasToolUse is false", () => {
     const text = "Some text mentioning [Read: main.go] in prose";
     const segments = parseContent(text, false);
-    expect(segments.every(s => s.type !== "tool")).toBe(true);
+    expect(segments.every((s) => s.type !== "tool")).toBe(true);
     expect(segments[0]!.content).toContain("[Read: main.go]");
   });
 
@@ -445,8 +391,8 @@ describe("parseContent - hasToolUse flag", () => {
     const segments = parseContent(text, false);
     expect(segments[0]!.type).toBe("thinking");
     // The [Read: ...] should be plain text, not a tool block
-    const textSegs = segments.filter(s => s.type === "text");
-    expect(textSegs.some(s => s.content.includes("[Read: main.go]"))).toBe(true);
+    const textSegs = segments.filter((s) => s.type === "text");
+    expect(textSegs.some((s) => s.content.includes("[Read: main.go]"))).toBe(true);
   });
 
   it("still parses code blocks when hasToolUse is false", () => {
@@ -454,8 +400,8 @@ describe("parseContent - hasToolUse flag", () => {
     const segments = parseContent(text, false);
     expect(segments[0]!.type).toBe("code");
     // [Bash] should be plain text
-    const textSegs = segments.filter(s => s.type === "text");
-    expect(textSegs.some(s => s.content.includes("[Bash]"))).toBe(true);
+    const textSegs = segments.filter((s) => s.type === "text");
+    expect(textSegs.some((s) => s.content.includes("[Bash]"))).toBe(true);
   });
 
   it("parses tool blocks normally when hasToolUse is true (default)", () => {
@@ -482,9 +428,7 @@ describe("parseContent - hasToolUse flag", () => {
 
 describe("parseContent - Skill tool", () => {
   it("recognizes Skill as a tool block", () => {
-    const segments = parseContent(
-      "[Skill: superpowers:brainstorming]\nprompt text",
-    );
+    const segments = parseContent("[Skill: superpowers:brainstorming]\nprompt text");
     expect(segments[0]).toEqual({
       type: "tool",
       content: "prompt text",
@@ -559,13 +503,12 @@ describe("enrichSegments", () => {
   it("replaces truncated Bash content with full command", () => {
     // Simulate the \n\n truncation: regex stops at blank line
     const content =
-      '[Bash: Create commit]\n$ git commit -m "$(cat <<\'EOF\')\n   Commit message here.';
-    const orphaned =
-      '\n\n   Co-Authored-By: Claude <noreply@anthropic.com>\n   EOF\n   )"';
+      "[Bash: Create commit]\n$ git commit -m \"$(cat <<'EOF')\n   Commit message here.";
+    const orphaned = '\n\n   Co-Authored-By: Claude <noreply@anthropic.com>\n   EOF\n   )"';
     const segments = parseContent(content + orphaned);
 
     const fullCommand =
-      'git commit -m "$(cat <<\'EOF\')\n   Commit message here.\n\n   Co-Authored-By: Claude <noreply@anthropic.com>\n   EOF\n   )"';
+      "git commit -m \"$(cat <<'EOF')\n   Commit message here.\n\n   Co-Authored-By: Claude <noreply@anthropic.com>\n   EOF\n   )\"";
     const tc: ToolCall = {
       tool_name: "Bash",
       category: "Bash",
@@ -629,9 +572,7 @@ describe("enrichSegments", () => {
   });
 
   it("matches multiple tool calls in order", () => {
-    const segments = parseContent(
-      "[Read /foo.ts]\ncontents\n[Edit /foo.ts]\nchanges",
-    );
+    const segments = parseContent("[Read /foo.ts]\ncontents\n[Edit /foo.ts]\nchanges");
     const tc1: ToolCall = {
       tool_name: "Read",
       category: "Read",
@@ -648,9 +589,7 @@ describe("enrichSegments", () => {
   });
 
   it("skips non-tool segments when matching", () => {
-    const segments = parseContent(
-      "Some text\n[Bash]\n$ echo hi",
-    );
+    const segments = parseContent("Some text\n[Bash]\n$ echo hi");
     const tc: ToolCall = {
       tool_name: "Bash",
       category: "Bash",
@@ -686,7 +625,11 @@ describe("enrichSegments", () => {
     // Pi/omp sessions: content is plain text, tool calls are structured JSON
     const segments = parseContent("I'll read the file.");
     const tc1: ToolCall = { tool_name: "read", category: "Read", input_json: '{"path":"/foo.ts"}' };
-    const tc2: ToolCall = { tool_name: "write", category: "Write", input_json: '{"path":"/bar.ts","content":"x"}' };
+    const tc2: ToolCall = {
+      tool_name: "write",
+      category: "Write",
+      input_json: '{"path":"/bar.ts","content":"x"}',
+    };
     const result = enrichSegments(segments, [tc1, tc2]);
     const toolSegs = result.filter((s) => s.type === "tool");
     expect(toolSegs).toHaveLength(2);
@@ -1013,37 +956,23 @@ describe("parseContent + enrichSegments segment typing pipeline", () => {
 
 describe("hasVisibleSegments", () => {
   /** Helper: create a visibility predicate from a set of visible types */
-  function visibilityFrom(
-    visible: Set<string>,
-  ): (type: string) => boolean {
+  function visibilityFrom(visible: Set<string>): (type: string) => boolean {
     return (type: string) => visible.has(type);
   }
 
   const allBlocksVisible = visibilityFrom(
-    new Set([
-      "user",
-      "assistant",
-      "thinking",
-      "tool",
-      "code",
-      "system",
-    ]),
+    new Set(["user", "assistant", "thinking", "tool", "code", "system"]),
   );
 
   it("boundary card answers to the system filter, not its user role", () => {
     const m = makeMsg({
       role: "user",
-      content:
-        "<task-notification>\n<status>completed</status>\n</task-notification>",
+      content: "<task-notification>\n<status>completed</status>\n</task-notification>",
       is_system: true,
       source_subtype: "task_notification",
     });
-    const noSystem = visibilityFrom(
-      new Set(["user", "assistant", "thinking", "tool", "code"]),
-    );
-    const noUser = visibilityFrom(
-      new Set(["assistant", "thinking", "tool", "code", "system"]),
-    );
+    const noSystem = visibilityFrom(new Set(["user", "assistant", "thinking", "tool", "code"]));
+    const noUser = visibilityFrom(new Set(["assistant", "thinking", "tool", "code", "system"]));
 
     expect(hasVisibleSegments(m, noSystem)).toBe(false);
     expect(hasVisibleSegments(m, noUser)).toBe(true);
@@ -1051,9 +980,7 @@ describe("hasVisibleSegments", () => {
 
   it("boundary card ignores the filters its body would parse into", () => {
     const body = "```sh\nexit 2\n```";
-    const noCode = visibilityFrom(
-      new Set(["user", "assistant", "thinking", "tool", "system"]),
-    );
+    const noCode = visibilityFrom(new Set(["user", "assistant", "thinking", "tool", "system"]));
     // Control: the same body outside a boundary card is code-only, so the
     // code filter does hide it. The card itself renders a label and a
     // one-line preview, so that filter must not reach it.
@@ -1077,9 +1004,7 @@ describe("hasVisibleSegments", () => {
       is_compact_boundary: true,
       source_subtype: "compact_boundary",
     });
-    const noSystem = visibilityFrom(
-      new Set(["user", "assistant", "thinking", "tool", "code"]),
-    );
+    const noSystem = visibilityFrom(new Set(["user", "assistant", "thinking", "tool", "code"]));
 
     expect(hasVisibleSegments(m, noSystem)).toBe(true);
   });
@@ -1089,9 +1014,7 @@ describe("hasVisibleSegments", () => {
       content: "[Bash]\n$ echo hi",
       has_tool_use: true,
     });
-    const noTool = visibilityFrom(
-      new Set(["user", "assistant", "thinking", "code"]),
-    );
+    const noTool = visibilityFrom(new Set(["user", "assistant", "thinking", "code"]));
     expect(hasVisibleSegments(m, noTool)).toBe(false);
   });
 
@@ -1107,9 +1030,7 @@ describe("hasVisibleSegments", () => {
     const m = makeMsg({
       content: "Here is my response.",
     });
-    const noAssistant = visibilityFrom(
-      new Set(["user", "thinking", "tool", "code"]),
-    );
+    const noAssistant = visibilityFrom(new Set(["user", "thinking", "tool", "code"]));
     expect(hasVisibleSegments(m, noAssistant)).toBe(false);
   });
 
@@ -1118,9 +1039,7 @@ describe("hasVisibleSegments", () => {
       content: "Let me explain.\n\n[Bash]\n$ ls",
       has_tool_use: true,
     });
-    const noAssistant = visibilityFrom(
-      new Set(["user", "thinking", "tool", "code"]),
-    );
+    const noAssistant = visibilityFrom(new Set(["user", "thinking", "tool", "code"]));
     // The tool segment should keep the message visible
     expect(hasVisibleSegments(m, noAssistant)).toBe(true);
   });
@@ -1130,9 +1049,7 @@ describe("hasVisibleSegments", () => {
       content: "[Thinking]\ndeep thoughts\n[/Thinking]",
       has_thinking: true,
     });
-    const noThinking = visibilityFrom(
-      new Set(["user", "assistant", "tool", "code"]),
-    );
+    const noThinking = visibilityFrom(new Set(["user", "assistant", "tool", "code"]));
     expect(hasVisibleSegments(m, noThinking)).toBe(false);
   });
 
@@ -1149,9 +1066,7 @@ describe("hasVisibleSegments", () => {
       content: "Let me check.\n\n[Bash]\n$ ls",
       has_tool_use: true,
     });
-    const noTool = visibilityFrom(
-      new Set(["user", "assistant", "thinking", "code"]),
-    );
+    const noTool = visibilityFrom(new Set(["user", "assistant", "thinking", "code"]));
     // Text segment maps to "assistant" which is visible
     expect(hasVisibleSegments(m, noTool)).toBe(true);
   });
@@ -1161,9 +1076,7 @@ describe("hasVisibleSegments", () => {
       content: "Let me check.\n\n[Bash]\n$ ls",
       has_tool_use: true,
     });
-    const noAssistant = visibilityFrom(
-      new Set(["user", "thinking", "tool", "code"]),
-    );
+    const noAssistant = visibilityFrom(new Set(["user", "thinking", "tool", "code"]));
     // Tool segment is still visible
     expect(hasVisibleSegments(m, noAssistant)).toBe(true);
   });
@@ -1173,9 +1086,7 @@ describe("hasVisibleSegments", () => {
       role: "user",
       content: "Please help me with this.",
     });
-    const noUser = visibilityFrom(
-      new Set(["assistant", "thinking", "tool", "code"]),
-    );
+    const noUser = visibilityFrom(new Set(["assistant", "thinking", "tool", "code"]));
     expect(hasVisibleSegments(m, noUser)).toBe(false);
   });
 
@@ -1198,9 +1109,7 @@ describe("hasVisibleSegments", () => {
     const m = makeMsg({
       content: "",
     });
-    const noAssistant = visibilityFrom(
-      new Set(["user", "thinking", "tool", "code"]),
-    );
+    const noAssistant = visibilityFrom(new Set(["user", "thinking", "tool", "code"]));
     expect(hasVisibleSegments(m, noAssistant)).toBe(false);
   });
 
@@ -1231,9 +1140,7 @@ describe("hasVisibleSegments", () => {
       has_tool_use: true,
       has_thinking: true,
     });
-    const noThinkingNoTool = visibilityFrom(
-      new Set(["user", "assistant", "code"]),
-    );
+    const noThinkingNoTool = visibilityFrom(new Set(["user", "assistant", "code"]));
     expect(hasVisibleSegments(m, noThinkingNoTool)).toBe(false);
   });
 
@@ -1249,9 +1156,7 @@ describe("hasVisibleSegments", () => {
     const m = makeMsg({
       content: "```js\nconst x = 1;\n```",
     });
-    const noCode = visibilityFrom(
-      new Set(["user", "assistant", "thinking", "tool"]),
-    );
+    const noCode = visibilityFrom(new Set(["user", "assistant", "thinking", "tool"]));
     expect(hasVisibleSegments(m, noCode)).toBe(false);
   });
 
@@ -1277,9 +1182,7 @@ describe("hasVisibleSegments", () => {
     const m = makeMsg({
       content: "[Skill: commit]\nRunning commit skill\n[/Skill]",
     });
-    const noAssistant = visibilityFrom(
-      new Set(["user", "thinking", "tool", "code"]),
-    );
+    const noAssistant = visibilityFrom(new Set(["user", "thinking", "tool", "code"]));
     expect(hasVisibleSegments(m, noAssistant)).toBe(false);
   });
 
@@ -1295,9 +1198,7 @@ describe("hasVisibleSegments", () => {
       role: "user",
       content: "[Skill: commit]\nRunning commit skill\n[/Skill]",
     });
-    const noUser = visibilityFrom(
-      new Set(["assistant", "thinking", "tool", "code"]),
-    );
+    const noUser = visibilityFrom(new Set(["assistant", "thinking", "tool", "code"]));
     expect(hasVisibleSegments(m, noUser)).toBe(false);
   });
 
@@ -1305,9 +1206,7 @@ describe("hasVisibleSegments", () => {
     const m = makeMsg({
       content: "[Skill: commit]\nRunning commit skill\n[/Skill]",
     });
-    const noTool = visibilityFrom(
-      new Set(["user", "assistant", "thinking", "code"]),
-    );
+    const noTool = visibilityFrom(new Set(["user", "assistant", "thinking", "code"]));
     expect(hasVisibleSegments(m, noTool)).toBe(true);
   });
 
@@ -1316,9 +1215,7 @@ describe("hasVisibleSegments", () => {
       role: "user",
       content: "[Skill: commit]\nRunning commit skill\n[/Skill]",
     });
-    const noTool = visibilityFrom(
-      new Set(["user", "assistant", "thinking", "code"]),
-    );
+    const noTool = visibilityFrom(new Set(["user", "assistant", "thinking", "code"]));
     expect(hasVisibleSegments(m, noTool)).toBe(true);
   });
 });

@@ -31,11 +31,6 @@
     edits_truncated: boolean;
   }
 
-  interface Resp {
-    files: FileRow[];
-    has_more: boolean;
-  }
-
   const PAGE = 50;
   let files = $state<FileRow[]>([]);
   let hasMore = $state(false);
@@ -73,15 +68,15 @@
       files = [];
     }
     try {
-      const res = (await callGenerated(() =>
+      const res = (await callGenerated((options) =>
         RecentEditsService.getApiV1RecentEdits({
           limit: PAGE,
           offset: requestOffset,
           project,
           search: searchTerm,
-        }),
+        }, options),
         signal,
-      )) as unknown as Resp;
+      ));
       // A newer project change, refresh, or load-more supersedes this one.
       if (seq !== requestSeq || !pageRead.isCurrent(signal)) return;
       files = reset

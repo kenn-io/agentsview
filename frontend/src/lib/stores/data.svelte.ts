@@ -30,7 +30,7 @@ class DataStore {
    */
   get selectedRow(): DbProjectInventoryRow | null {
     if (!this.selectedProjectKey || !this.inventory) return null;
-    const rows = (this.inventory.projects ?? []) as DbProjectInventoryRow[];
+    const rows = this.inventory.projects ?? [];
     return rows.find((row) => row.project_key === this.selectedProjectKey) ?? null;
   }
 
@@ -116,7 +116,10 @@ class DataStore {
     if (!opts.background) this.loading = true;
     this.error = "";
     try {
-      const inventory = await callGenerated(() => DataService.getApiV1DataProjects(), signal);
+      const inventory = await callGenerated(
+        (options) => DataService.getApiV1DataProjects(options),
+        signal,
+      );
       if (!this.#inventoryRead.isCurrent(signal) || version !== this.#loadVersion) return false;
       this.inventory = inventory;
       return true;
@@ -192,7 +195,7 @@ class DataStore {
     const ok = await this.load({ background: true });
     if (!ok) return false;
     if (this.selectedProjectKey !== originalKey) return true;
-    const rows = (this.inventory?.projects ?? []) as DbProjectInventoryRow[];
+    const rows = this.inventory?.projects ?? [];
     if (rows.some((row) => row.project_key === originalKey)) return true;
     const target = rows.find((row) => row.label === appliedTargetLabel);
     this.selectedProjectKey = target ? target.project_key : "";

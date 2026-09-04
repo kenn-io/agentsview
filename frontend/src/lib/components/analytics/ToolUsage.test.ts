@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import ToolUsage from "./ToolUsage.svelte";

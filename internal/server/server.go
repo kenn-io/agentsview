@@ -617,7 +617,7 @@ func (humaArbitraryJSON) Schema(huma.Registry) *huma.Schema {
 }
 
 func (s *Server) routes() {
-	configureHumaErrors()
+	configureHuma()
 	s.api = humago.New(s.mux, s.humaConfig())
 	s.registerTypedAPIRoutes()
 

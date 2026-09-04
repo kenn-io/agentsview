@@ -37,21 +37,15 @@ describe("pathDisplayValue", () => {
 
 describe("extractToolParamMeta", () => {
   it("returns null for Task tool", () => {
-    expect(
-      extractToolParamMeta("Task", { prompt: "do stuff" }),
-    ).toBeNull();
+    expect(extractToolParamMeta("Task", { prompt: "do stuff" })).toBeNull();
   });
 
   it("returns null for TaskCreate tool", () => {
-    expect(
-      extractToolParamMeta("TaskCreate", { subject: "x" }),
-    ).toBeNull();
+    expect(extractToolParamMeta("TaskCreate", { subject: "x" })).toBeNull();
   });
 
   it("returns null for TaskUpdate tool", () => {
-    expect(
-      extractToolParamMeta("TaskUpdate", { taskId: "1" }),
-    ).toBeNull();
+    expect(extractToolParamMeta("TaskUpdate", { taskId: "1" })).toBeNull();
   });
 
   it("extracts Read params", () => {
@@ -94,9 +88,7 @@ describe("extractToolParamMeta", () => {
       file_path: "/src/new.ts",
       content: "export const x = 1;",
     });
-    expect(meta).toEqual([
-      { label: "file", value: "/src/new.ts" },
-    ]);
+    expect(meta).toEqual([{ label: "file", value: "/src/new.ts" }]);
   });
 
   it("extracts Grep params", () => {
@@ -140,77 +132,45 @@ describe("extractToolParamMeta", () => {
     const meta = extractToolParamMeta("Bash", {
       command: "ls -la",
     });
-    expect(meta).toEqual([
-      { label: "cmd", value: "ls -la" },
-    ]);
+    expect(meta).toEqual([{ label: "cmd", value: "ls -la" }]);
   });
 
   it("shows only first line of multiline Bash command", () => {
     const meta = extractToolParamMeta("Bash", {
       command: "echo hello\necho world",
     });
-    expect(meta).toEqual([
-      { label: "cmd", value: "echo hello" },
-    ]);
+    expect(meta).toEqual([{ label: "cmd", value: "echo hello" }]);
   });
 
   it("extracts Skill name", () => {
     const meta = extractToolParamMeta("Skill", {
       skill: "commit",
     });
-    expect(meta).toEqual([
-      { label: "skill", value: "commit" },
-    ]);
+    expect(meta).toEqual([{ label: "skill", value: "commit" }]);
   });
 
   it("dispatches on category for Gemini read_file", () => {
-    const meta = extractToolParamMeta(
-      "read_file",
-      { file_path: "/src/main.go" },
-      "Read",
-    );
-    expect(meta).toEqual([
-      { label: "file", value: "/src/main.go" },
-    ]);
+    const meta = extractToolParamMeta("read_file", { file_path: "/src/main.go" }, "Read");
+    expect(meta).toEqual([{ label: "file", value: "/src/main.go" }]);
   });
 
   it("dispatches on category for Gemini run_command", () => {
-    const meta = extractToolParamMeta(
-      "run_command",
-      { command: "go test ./..." },
-      "Bash",
-    );
-    expect(meta).toEqual([
-      { label: "cmd", value: "go test ./..." },
-    ]);
+    const meta = extractToolParamMeta("run_command", { command: "go test ./..." }, "Bash");
+    expect(meta).toEqual([{ label: "cmd", value: "go test ./..." }]);
   });
 
   it("dispatches on category for Gemini grep_search", () => {
-    const meta = extractToolParamMeta(
-      "grep_search",
-      { query: "TODO" },
-      "Grep",
-    );
-    expect(meta).toEqual([
-      { label: "pattern", value: "TODO" },
-    ]);
+    const meta = extractToolParamMeta("grep_search", { query: "TODO" }, "Grep");
+    expect(meta).toEqual([{ label: "pattern", value: "TODO" }]);
   });
 
   it("falls back to toolName when category is empty string", () => {
-    const meta = extractToolParamMeta(
-      "Read",
-      { file_path: "/src/app.ts" },
-      "",
-    );
-    expect(meta).toEqual([
-      { label: "file", value: "/src/app.ts" },
-    ]);
+    const meta = extractToolParamMeta("Read", { file_path: "/src/app.ts" }, "");
+    expect(meta).toEqual([{ label: "file", value: "/src/app.ts" }]);
   });
 
   it("returns null for unknown tool with no matching params", () => {
-    expect(
-      extractToolParamMeta("CustomTool", { foo: "bar" }),
-    ).toBeNull();
+    expect(extractToolParamMeta("CustomTool", { foo: "bar" })).toBeNull();
   });
 
   it("preserves zero-valued offset and limit", () => {
@@ -270,9 +230,7 @@ describe("extractToolParamMeta", () => {
 
 describe("generateFallbackContent", () => {
   it("returns null for Task tool", () => {
-    expect(
-      generateFallbackContent("Task", { prompt: "do stuff" }),
-    ).toBeNull();
+    expect(generateFallbackContent("Task", { prompt: "do stuff" })).toBeNull();
   });
 
   it("renders Cursor ApplyPatch patch text from input_json", () => {
@@ -292,9 +250,7 @@ describe("generateFallbackContent", () => {
       old_string: "const x = 1;",
       new_string: "const x = 2;",
     });
-    expect(result).toBe(
-      "@@ -1,1 +1,1 @@\n-const x = 1;\n+const x = 2;",
-    );
+    expect(result).toBe("@@ -1,1 +1,1 @@\n-const x = 1;\n+const x = 2;");
   });
 
   it("shows diff for Edit tool using pi old_str/new_str field names", () => {
@@ -303,9 +259,7 @@ describe("generateFallbackContent", () => {
       old_str: "const x = 1;",
       new_str: "const x = 2;",
     });
-    expect(result).toBe(
-      "@@ -1,1 +1,1 @@\n-const x = 1;\n+const x = 2;",
-    );
+    expect(result).toBe("@@ -1,1 +1,1 @@\n-const x = 1;\n+const x = 2;");
   });
 
   it("shows only new_string when old_string is empty", () => {
@@ -314,9 +268,7 @@ describe("generateFallbackContent", () => {
       old_string: "",
       new_string: "const x = 1;",
     });
-    expect(result).toBe(
-      "@@ -1,1 +1,1 @@\n-\n+const x = 1;",
-    );
+    expect(result).toBe("@@ -1,1 +1,1 @@\n-\n+const x = 1;");
   });
 
   it("shows diff for Edit tool using opencode camelCase field names", () => {
@@ -325,9 +277,7 @@ describe("generateFallbackContent", () => {
       oldString: ".foo { color: red; }",
       newString: ".foo { color: blue; }",
     });
-    expect(result).toBe(
-      "@@ -1,1 +1,1 @@\n-.foo { color: red; }\n+.foo { color: blue; }",
-    );
+    expect(result).toBe("@@ -1,1 +1,1 @@\n-.foo { color: red; }\n+.foo { color: blue; }");
   });
 
   it("shows pi edits array with set_line", () => {
@@ -389,9 +339,7 @@ describe("generateFallbackContent", () => {
         },
       ],
     });
-    expect(result).toBe(
-      "insert after 248:18\n.new-class { color: red; }",
-    );
+    expect(result).toBe("insert after 248:18\n.new-class { color: red; }");
   });
 
   it("shows pi edits insert_after with empty text", () => {
@@ -469,9 +417,7 @@ describe("generateFallbackContent", () => {
   });
 
   it("returns null for Edit with no recognized diff fields", () => {
-    expect(
-      generateFallbackContent("Edit", { file_path: "/src/app.ts" }),
-    ).toBeNull();
+    expect(generateFallbackContent("Edit", { file_path: "/src/app.ts" })).toBeNull();
   });
 
   it("shows full Edit strings without truncation", () => {
@@ -490,9 +436,7 @@ describe("generateFallbackContent", () => {
       file_path: "/src/new.ts",
       content: 'export const x = "hello";',
     });
-    expect(result).toBe(
-      '@@ -0,0 +1,1 @@\n+export const x = "hello";',
-    );
+    expect(result).toBe('@@ -0,0 +1,1 @@\n+export const x = "hello";');
   });
 
   it("shows full Write content without truncation", () => {
@@ -527,9 +471,7 @@ describe("generateFallbackContent", () => {
       file_path: "/src/app.ts",
       limit: 100,
     });
-    expect(result).toBe(
-      "file_path: /src/app.ts\nlimit: 100",
-    );
+    expect(result).toBe("file_path: /src/app.ts\nlimit: 100");
   });
 
   it("shows generic key-value for unknown tools", () => {
@@ -554,15 +496,11 @@ describe("generateFallbackContent", () => {
       arr: [1, 2, 3],
       obj: { nested: true },
     });
-    expect(result).toBe(
-      "arr: [1,2,3]\nobj: {\"nested\":true}",
-    );
+    expect(result).toBe('arr: [1,2,3]\nobj: {"nested":true}');
   });
 
   it("returns null when params are all empty", () => {
-    expect(
-      generateFallbackContent("CustomTool", {}),
-    ).toBeNull();
+    expect(generateFallbackContent("CustomTool", {})).toBeNull();
   });
 });
 
@@ -604,7 +542,7 @@ describe("generateFallbackContent - Bash", () => {
 
   it("shows full multiline heredoc command without truncation", () => {
     const heredoc = [
-      'cd /project && PYTHONIOENCODING=utf-8 python - <<\'PY\'',
+      "cd /project && PYTHONIOENCODING=utf-8 python - <<'PY'",
       "import json",
       'F="data.jsonl"',
       "rows=[json.loads(l) for l in open(F,encoding='utf-8')]",

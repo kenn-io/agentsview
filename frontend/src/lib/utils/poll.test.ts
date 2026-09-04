@@ -14,12 +14,9 @@ describe("sameValueZero", () => {
     ["undefined equals undefined", undefined, undefined, true],
     ["null vs undefined", null, undefined, false],
     ["same object reference", Object, Object, true],
-  ] as [string, unknown, unknown, boolean][])(
-    "%s",
-    (_name, a, b, expected) => {
-      expect(sameValueZero(a, b)).toBe(expected);
-    },
-  );
+  ] as [string, unknown, unknown, boolean][])("%s", (_name, a, b, expected) => {
+    expect(sameValueZero(a, b)).toBe(expected);
+  });
 
   it("returns false for distinct object instances", () => {
     expect(sameValueZero({}, {})).toBe(false);
@@ -74,9 +71,7 @@ describe("waitForStableValue", () => {
 
     const promise = waitForStableValue(fn, 50, 10, 200);
     // Attach rejection handler before advancing to avoid unhandled rejection
-    const rejection = expect(promise).rejects.toThrow(
-      /did not stabilize within 200ms/,
-    );
+    const rejection = expect(promise).rejects.toThrow(/did not stabilize within 200ms/);
     await vi.advanceTimersByTimeAsync(300);
     await rejection;
   });
@@ -84,18 +79,9 @@ describe("waitForStableValue", () => {
   it("uses custom isEqual comparator", async () => {
     let value = { x: 1 };
     const fn = vi.fn(async () => ({ ...value }));
-    const isEqual = (
-      a: { x: number },
-      b: { x: number },
-    ): boolean => a.x === b.x;
+    const isEqual = (a: { x: number }, b: { x: number }): boolean => a.x === b.x;
 
-    const promise = waitForStableValue(
-      fn,
-      50,
-      10,
-      500,
-      isEqual,
-    );
+    const promise = waitForStableValue(fn, 50, 10, 500, isEqual);
     await vi.advanceTimersByTimeAsync(200);
 
     const result = await promise;
@@ -105,18 +91,9 @@ describe("waitForStableValue", () => {
   it("custom comparator detects changes", async () => {
     let value = { x: 1 };
     const fn = vi.fn(async () => ({ ...value }));
-    const isEqual = (
-      a: { x: number },
-      b: { x: number },
-    ): boolean => a.x === b.x;
+    const isEqual = (a: { x: number }, b: { x: number }): boolean => a.x === b.x;
 
-    const promise = waitForStableValue(
-      fn,
-      50,
-      10,
-      2000,
-      isEqual,
-    );
+    const promise = waitForStableValue(fn, 50, 10, 2000, isEqual);
 
     await vi.advanceTimersByTimeAsync(10);
     value = { x: 2 };
@@ -144,9 +121,7 @@ describe("waitForStableValue", () => {
 
     const stableDurationMs = 100;
     const promise = waitForStableValue(fn, stableDurationMs, 10);
-    const rejection = expect(promise).rejects.toThrow(
-      /did not stabilize within 300ms/,
-    );
+    const rejection = expect(promise).rejects.toThrow(/did not stabilize within 300ms/);
     await vi.advanceTimersByTimeAsync(400);
     await rejection;
   });
@@ -196,16 +171,8 @@ describe("waitForStableValue", () => {
     const stableMs = 50;
     const pollMs = 10;
     const maxMs = 300;
-    const promise = waitForStableValue(
-      fn,
-      stableMs,
-      pollMs,
-      maxMs,
-      Object.is,
-    );
-    const rejection = expect(promise).rejects.toThrow(
-      /did not stabilize within 300ms/,
-    );
+    const promise = waitForStableValue(fn, stableMs, pollMs, maxMs, Object.is);
+    const rejection = expect(promise).rejects.toThrow(/did not stabilize within 300ms/);
     await vi.advanceTimersByTimeAsync(400);
     await rejection;
   });

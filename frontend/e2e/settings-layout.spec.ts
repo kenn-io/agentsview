@@ -18,9 +18,10 @@ async function openSettledSettings(page: Page) {
   await page.goto("/settings");
   await settingsLoaded;
   await page.evaluate(
-    () => new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    }),
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
   );
   await expect(page.locator(".settings-loading")).toHaveCount(0);
 }

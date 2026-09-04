@@ -6,10 +6,7 @@ const isDuckDBBackend = process.env.AGENTSVIEW_E2E_BACKEND === "duckdb";
 test.describe("DuckDB backend", () => {
   test.skip(!isDuckDBBackend, "runs only against duckdb serve");
 
-  test("serves fixture sessions in read-only mode", async ({
-    page,
-    request,
- }) => {
+  test("serves fixture sessions in read-only mode", async ({ page, request }) => {
     const version = await request.get("/api/v1/version");
     expect(version.ok()).toBeTruthy();
     expect(await version.json()).toMatchObject({ read_only: true });

@@ -36,9 +36,7 @@ describe("TrendsLineChart", () => {
     });
     await tick();
 
-    const hitTarget = document.querySelector<SVGPathElement>(
-      '[data-trend-hit="alpha"]',
-    );
+    const hitTarget = document.querySelector<SVGPathElement>('[data-trend-hit="alpha"]');
     expect(hitTarget).not.toBeNull();
     expect(Number(hitTarget!.getAttribute("stroke-width"))).toBe(16);
 
@@ -79,9 +77,9 @@ describe("TrendsLineChart", () => {
 
     const markers = document.querySelectorAll<SVGCircleElement>("circle");
     expect(markers).toHaveLength(2);
-    expect([...markers].every((marker) =>
-      marker.getAttribute("pointer-events") === "none"
-    )).toBe(true);
+    expect([...markers].every((marker) => marker.getAttribute("pointer-events") === "none")).toBe(
+      true,
+    );
 
     unmount(component);
   });

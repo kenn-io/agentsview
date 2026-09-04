@@ -1,8 +1,5 @@
-import type { UsageSummaryResponse } from "../api/types/usage.js";
-import {
-  orderedChartSeriesColorMap,
-  type ChartPalette,
-} from "./chartPalette.js";
+import type { UsageSummaryResponse } from "../api/generated/index";
+import { orderedChartSeriesColorMap, type ChartPalette } from "./chartPalette.js";
 
 export interface UsageChartColorMaps {
   project: ReadonlyMap<string, string>;
@@ -12,8 +9,9 @@ export interface UsageChartColorMaps {
 
 function rankedIds(costs: ReadonlyMap<string, number>): string[] {
   return [...costs.entries()]
-    .sort(([leftId, leftCost], [rightId, rightCost]) =>
-      rightCost - leftCost || leftId.localeCompare(rightId)
+    .sort(
+      ([leftId, leftCost], [rightId, rightCost]) =>
+        rightCost - leftCost || leftId.localeCompare(rightId),
     )
     .map(([id]) => id);
 }

@@ -1,13 +1,5 @@
 // @vitest-environment jsdom
-import {
-  describe,
-  it,
-  expect,
-  vi,
-  afterEach,
-  beforeEach,
-  type MockInstance,
-} from "vite-plus/test";
+import { describe, it, expect, vi, afterEach, beforeEach, type MockInstance } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 // @ts-ignore
 import TopSessions from "./TopSessions.svelte";
@@ -20,12 +12,8 @@ describe("TopSessions", () => {
   let navSpy: MockInstance;
 
   beforeEach(() => {
-    cacheSpy = vi
-      .spyOn(sessions, "invalidateFilterCaches")
-      .mockImplementation(() => {});
-    navSpy = vi
-      .spyOn(router, "navigateToSession")
-      .mockImplementation(() => {});
+    cacheSpy = vi.spyOn(sessions, "invalidateFilterCaches").mockImplementation(() => {});
+    navSpy = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
   });
 
   let savedLoading: typeof analytics.loading;
@@ -88,9 +76,7 @@ describe("TopSessions", () => {
   function clickRow() {
     const row = document.querySelector(".session-row");
     expect(row).toBeTruthy();
-    row!.dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
-    );
+    row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   }
 
   it("sets filter and navigates when analytics includeOneShot is enabled", async () => {
@@ -104,22 +90,14 @@ describe("TopSessions", () => {
 
     expect(sessions.filters.includeOneShot).toBe(true);
     expect(cacheSpy).toHaveBeenCalledOnce();
-    expect(navSpy).toHaveBeenCalledWith(
-      "sess-1",
-      undefined,
-      ["include_one_shot"],
-    );
+    expect(navSpy).toHaveBeenCalledWith("sess-1", undefined, ["include_one_shot"]);
 
     unmount(component);
   });
 
   it("drops stale one-shot URL state when opening a one-shot result", async () => {
     navSpy.mockRestore();
-    window.history.replaceState(
-      null,
-      "",
-      "/sessions?include_one_shot=false&window_days=14",
-    );
+    window.history.replaceState(null, "", "/sessions?include_one_shot=false&window_days=14");
     router.route = "sessions";
     router.sessionId = null;
     router.params = {
@@ -134,9 +112,7 @@ describe("TopSessions", () => {
     clickRow();
     await tick();
 
-    expect(window.location.pathname).toBe(
-      "/sessions/sess-1",
-    );
+    expect(window.location.pathname).toBe("/sessions/sess-1");
     expect(window.location.search).toContain("window_days=14");
     expect(window.location.search).not.toContain("include_one_shot=false");
 
@@ -145,11 +121,7 @@ describe("TopSessions", () => {
 
   it("preserves starred-only filtering when opening an analytics result", async () => {
     navSpy.mockRestore();
-    window.history.replaceState(
-      null,
-      "",
-      "/sessions?starred=true&window_days=14",
-    );
+    window.history.replaceState(null, "", "/sessions?starred=true&window_days=14");
     router.route = "sessions";
     router.sessionId = null;
     router.params = {
@@ -230,9 +202,9 @@ describe("TopSessions", () => {
     const component = mount(TopSessions, { target: document.body });
     await tick();
 
-    expect(
-      document.querySelector(".session-label")?.textContent?.trim(),
-    ).toBe("Renamed sidebar title");
+    expect(document.querySelector(".session-label")?.textContent?.trim()).toBe(
+      "Renamed sidebar title",
+    );
 
     unmount(component);
   });
@@ -268,9 +240,7 @@ describe("TopSessions", () => {
     const component = mount(TopSessions, { target: document.body });
     await tick();
 
-    expect(
-      document.querySelector(".session-metric")?.textContent?.trim(),
-    ).toBe("3m (2h total)");
+    expect(document.querySelector(".session-metric")?.textContent?.trim()).toBe("3m (2h total)");
 
     unmount(component);
   });
@@ -318,7 +288,6 @@ describe("TopSessions", () => {
             output_tokens: 0,
             duration_min: 0,
             active_duration_min: 0,
-            termination_status: null,
           },
         ],
       };
@@ -344,37 +313,27 @@ describe("TopSessions", () => {
       // the sessions in this fixture have no timestamps, so
       // age comparisons fail and they fall straight into the
       // unclean tier.
-      expect(
-        document.querySelectorAll(".kit-status-dot--unclean").length,
-      ).toBe(2);
+      expect(document.querySelectorAll(".kit-status-dot--unclean").length).toBe(2);
 
       // The clean and NULL sessions resolve to "quiet" — a
       // transparent dot is still rendered so the layout column
       // stays consistent.
-      expect(
-        document.querySelectorAll(".kit-status-dot--quiet").length,
-      ).toBe(2);
+      expect(document.querySelectorAll(".kit-status-dot--quiet").length).toBe(2);
 
       unmount(component);
     });
 
     it("shows the unclean count pill and triggers termination filter on click", async () => {
-      const setSpy = vi
-        .spyOn(sessions, "setTerminationFilter")
-        .mockImplementation(() => {});
+      const setSpy = vi.spyOn(sessions, "setTerminationFilter").mockImplementation(() => {});
 
       const component = mountWithFourStates();
       await tick();
 
-      const pill = document.querySelector(
-        ".status-count-pill",
-      ) as HTMLButtonElement | null;
+      const pill = document.querySelector(".status-count-pill") as HTMLButtonElement | null;
       expect(pill).toBeTruthy();
       expect(pill!.textContent?.trim()).toBe("2 unclean");
 
-      pill!.dispatchEvent(
-        new MouseEvent("click", { bubbles: true }),
-      );
+      pill!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await tick();
 
       expect(setSpy).toHaveBeenCalledWith("unclean");
@@ -415,9 +374,7 @@ describe("TopSessions", () => {
       });
       await tick();
 
-      expect(
-        document.querySelector(".status-count-pill"),
-      ).toBeNull();
+      expect(document.querySelector(".status-count-pill")).toBeNull();
 
       unmount(component);
     });

@@ -63,10 +63,7 @@ function normalizeHref(raw: string): string {
  * anchor checks, so dangerous hrefs are caught even when the DOM
  * parser strips or transforms them.
  */
-function assertNoAnchorScheme(
-  html: string,
-  scheme: RegExp,
-): void {
+function assertNoAnchorScheme(html: string, scheme: RegExp): void {
   const dom = parseHTML(html);
   const anchors = dom.querySelectorAll("a");
   for (const a of anchors) {
@@ -78,8 +75,7 @@ function assertNoAnchorScheme(
   // Always scan raw HTML for href values that the DOM parser
   // may not surface as <a> elements (e.g. stripped tags).
   // Matches quoted and unquoted href attribute values.
-  const hrefPattern =
-    /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  const hrefPattern = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
   let match: RegExpExecArray | null;
   while ((match = hrefPattern.exec(html)) !== null) {
     const value = match[1] ?? match[2] ?? match[3] ?? "";
@@ -112,9 +108,7 @@ describe("renderMarkdown", () => {
     });
 
     it("renders links", () => {
-      const dom = parseHTML(
-        renderMarkdown("[text](https://example.com)"),
-      );
+      const dom = parseHTML(renderMarkdown("[text](https://example.com)"));
       const a = dom.querySelector("p > a");
       expect(a).not.toBeNull();
       expect(a!.textContent).toBe("text");
@@ -131,9 +125,7 @@ describe("renderMarkdown", () => {
     });
 
     it("renders unordered lists", () => {
-      const dom = parseHTML(
-        renderMarkdown("- item one\n- item two"),
-      );
+      const dom = parseHTML(renderMarkdown("- item one\n- item two"));
       const items = dom.querySelectorAll("ul > li");
       expect(items).toHaveLength(2);
       expect(items[0]!.textContent).toBe("item one");
@@ -141,9 +133,7 @@ describe("renderMarkdown", () => {
     });
 
     it("renders ordered lists", () => {
-      const dom = parseHTML(
-        renderMarkdown("1. first\n2. second"),
-      );
+      const dom = parseHTML(renderMarkdown("1. first\n2. second"));
       const items = dom.querySelectorAll("ol > li");
       expect(items).toHaveLength(2);
       expect(items[0]!.textContent).toBe("first");
@@ -159,9 +149,7 @@ describe("renderMarkdown", () => {
 
     it("preserves prose around separated blockquotes", () => {
       const dom = parseHTML(
-        renderMarkdown(
-          "blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5",
-        ),
+        renderMarkdown("blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5"),
       );
       expect(dom.textContent).toContain("blabla1");
       expect(dom.textContent).toContain("blabla2");
@@ -190,9 +178,7 @@ describe("renderMarkdown", () => {
     });
 
     it("converts single newlines to <br>", () => {
-      const dom = parseHTML(
-        renderMarkdown("line one\nline two"),
-      );
+      const dom = parseHTML(renderMarkdown("line one\nline two"));
       const p = dom.querySelector("p");
       expect(p).not.toBeNull();
       expect(p!.querySelector("br")).not.toBeNull();
@@ -202,24 +188,18 @@ describe("renderMarkdown", () => {
 
   describe("security and sanitization", () => {
     it("strips script tags (XSS)", () => {
-      expect(renderMarkdown('<script>alert("xss")</script>')).toBe(
-        "",
-      );
+      expect(renderMarkdown('<script>alert("xss")</script>')).toBe("");
     });
 
     it("strips event handlers (XSS)", () => {
-      const dom = parseHTML(
-        renderMarkdown('<img src=x onerror="alert(1)">'),
-      );
+      const dom = parseHTML(renderMarkdown('<img src=x onerror="alert(1)">'));
       const img = dom.querySelector("img");
       expect(img).not.toBeNull();
       expect(img!.hasAttribute("onerror")).toBe(false);
     });
 
     it("strips javascript: URLs (XSS)", () => {
-      const dom = parseHTML(
-        renderMarkdown("[click](javascript:alert(1))"),
-      );
+      const dom = parseHTML(renderMarkdown("[click](javascript:alert(1))"));
       const a = dom.querySelector("a");
       expect(a).not.toBeNull();
       expect(a!.textContent).toBe("click");
@@ -264,16 +244,14 @@ describe("renderMarkdown", () => {
       },
       {
         name: "data: text/html payload",
-        input:
-          '[click](data:text/html,<script>alert(1)</script>)',
+        input: "[click](data:text/html,<script>alert(1)</script>)",
         assert(html) {
           assertNoAnchorScheme(html, /^data:/);
         },
       },
       {
         name: "data: base64 payload",
-        input:
-          "[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)",
+        input: "[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)",
         assert(html) {
           assertNoAnchorScheme(html, /^data:/);
         },
@@ -317,52 +295,41 @@ describe("renderMarkdown", () => {
       },
     ];
 
-    it.each(xssPayloads)(
-      "sanitizes $name",
-      ({ input, assert: assertFn }) => {
-        assertFn(renderMarkdown(input));
-      },
-    );
+    it.each(xssPayloads)("sanitizes $name", ({ input, assert: assertFn }) => {
+      assertFn(renderMarkdown(input));
+    });
   });
 
   describe("custom XML-style prompt tags", () => {
     it("preserves non-HTML prompt tags as literal text", () => {
       const dom = parseHTML(
-        renderMarkdown(
-          "<policy><rule importance=\"high\">keep tags</rule></policy>",
-        ),
+        renderMarkdown('<policy><rule importance="high">keep tags</rule></policy>'),
       );
       const p = dom.querySelector("p");
       expect(p).not.toBeNull();
       expect(p!.innerHTML).toContain("&lt;policy&gt;");
-      expect(p!.innerHTML).toContain("&lt;rule importance=\"high\"&gt;");
+      expect(p!.innerHTML).toContain('&lt;rule importance="high"&gt;');
       expect(p!.innerHTML).toContain("&lt;/rule&gt;");
       expect(p!.innerHTML).toContain("&lt;/policy&gt;");
-      expect(p!.textContent).toContain(
-        "<policy><rule importance=\"high\">keep tags</rule></policy>",
-      );
+      expect(p!.textContent).toContain('<policy><rule importance="high">keep tags</rule></policy>');
     });
 
     it("keeps standard HTML on the sanitize path", () => {
-      const dom = parseHTML(renderMarkdown("<img src=x onerror=\"alert(1)\">"));
+      const dom = parseHTML(renderMarkdown('<img src=x onerror="alert(1)">'));
       const img = dom.querySelector("img");
       expect(img).not.toBeNull();
       expect(img!.hasAttribute("onerror")).toBe(false);
     });
 
     it("does not escape custom tags inside inline code spans", () => {
-      const dom = parseHTML(
-        renderMarkdown("`<policy>keep tags</policy>`"),
-      );
+      const dom = parseHTML(renderMarkdown("`<policy>keep tags</policy>`"));
       const code = dom.querySelector("p > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe("<policy>keep tags</policy>");
     });
 
     it("does not escape custom tags inside fenced code blocks", () => {
-      const dom = parseHTML(
-        renderMarkdown("```\n<policy>keep tags</policy>\n```"),
-      );
+      const dom = parseHTML(renderMarkdown("```\n<policy>keep tags</policy>\n```"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe("<policy>keep tags</policy>\n");
@@ -377,9 +344,7 @@ describe("renderMarkdown", () => {
     });
 
     it("preserves namespaced prompt tags as literal text", () => {
-      const dom = parseHTML(
-        renderMarkdown("<foo:bar>keep tags</foo:bar>"),
-      );
+      const dom = parseHTML(renderMarkdown("<foo:bar>keep tags</foo:bar>"));
       const p = dom.querySelector("p");
       expect(p).not.toBeNull();
       expect(p!.innerHTML).toContain("&lt;foo:bar&gt;");
@@ -388,9 +353,7 @@ describe("renderMarkdown", () => {
     });
 
     it("keeps markdown links with custom-tag labels clickable", () => {
-      const dom = parseHTML(
-        renderMarkdown("[<policy>read</policy>](https://example.com)"),
-      );
+      const dom = parseHTML(renderMarkdown("[<policy>read</policy>](https://example.com)"));
       const link = dom.querySelector("p > a");
       expect(link).not.toBeNull();
       expect(link!.getAttribute("href")).toBe("https://example.com");
@@ -398,9 +361,7 @@ describe("renderMarkdown", () => {
     });
 
     it("preserves custom tags inside GFM table cells", () => {
-      const dom = parseHTML(
-        renderMarkdown("| A |\n| --- |\n| <policy>keep tags</policy> |"),
-      );
+      const dom = parseHTML(renderMarkdown("| A |\n| --- |\n| <policy>keep tags</policy> |"));
       const cell = dom.querySelector("tbody td");
       expect(cell).not.toBeNull();
       expect(cell!.innerHTML).toContain("&lt;policy&gt;");
@@ -411,9 +372,7 @@ describe("renderMarkdown", () => {
 
   describe("Claude Code shell shortcuts", () => {
     it("renders <bash-input> as a shell code block with ! prefix", () => {
-      const dom = parseHTML(
-        renderMarkdown("<bash-input>git pull origin main</bash-input>"),
-      );
+      const dom = parseHTML(renderMarkdown("<bash-input>git pull origin main</bash-input>"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe("!git pull origin main\n");
@@ -422,20 +381,14 @@ describe("renderMarkdown", () => {
     });
 
     it("preserves multi-line commands in <bash-input>", () => {
-      const dom = parseHTML(
-        renderMarkdown(
-          "<bash-input>cd /tmp\nls -la</bash-input>",
-        ),
-      );
+      const dom = parseHTML(renderMarkdown("<bash-input>cd /tmp\nls -la</bash-input>"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe("!cd /tmp\nls -la\n");
     });
 
     it("renders <bash-stdout> as an unlabelled code block", () => {
-      const dom = parseHTML(
-        renderMarkdown("<bash-stdout>hello world</bash-stdout>"),
-      );
+      const dom = parseHTML(renderMarkdown("<bash-stdout>hello world</bash-stdout>"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe("hello world\n");
@@ -443,9 +396,7 @@ describe("renderMarkdown", () => {
     });
 
     it("renders <bash-stderr> as an unlabelled code block", () => {
-      const dom = parseHTML(
-        renderMarkdown("<bash-stderr>oops</bash-stderr>"),
-      );
+      const dom = parseHTML(renderMarkdown("<bash-stderr>oops</bash-stderr>"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe("oops\n");
@@ -467,23 +418,16 @@ describe("renderMarkdown", () => {
 
     it("handles input with backticks by picking a longer fence", () => {
       const dom = parseHTML(
-        renderMarkdown(
-          "<bash-input>echo ```triple``` and ` single`</bash-input>",
-        ),
+        renderMarkdown("<bash-input>echo ```triple``` and ` single`</bash-input>"),
       );
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
-      expect(code!.textContent).toBe(
-        "!echo ```triple``` and ` single`\n",
-      );
+      expect(code!.textContent).toBe("!echo ```triple``` and ` single`\n");
     });
 
     it("handles consecutive input/stdout pair", () => {
       const dom = parseHTML(
-        renderMarkdown(
-          "<bash-input>echo hi</bash-input>" +
-            "<bash-stdout>hi\n</bash-stdout>",
-        ),
+        renderMarkdown("<bash-input>echo hi</bash-input>" + "<bash-stdout>hi\n</bash-stdout>"),
       );
       const codes = dom.querySelectorAll("pre > code");
       expect(codes.length).toBe(2);
@@ -496,54 +440,36 @@ describe("renderMarkdown", () => {
       // marked extension runs at the lexer level, so once the
       // fenced block consumes these characters they are never
       // re-tokenized as wrappers.
-      const dom = parseHTML(
-        renderMarkdown(
-          "```\n<bash-input>echo hi</bash-input>\n```",
-        ),
-      );
+      const dom = parseHTML(renderMarkdown("```\n<bash-input>echo hi</bash-input>\n```"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
-      expect(code!.textContent).toBe(
-        "<bash-input>echo hi</bash-input>\n",
-      );
+      expect(code!.textContent).toBe("<bash-input>echo hi</bash-input>\n");
     });
 
     it("leaves wrappers inside indented code blocks alone", () => {
-      const dom = parseHTML(
-        renderMarkdown(
-          "    <bash-input>echo hi</bash-input>",
-        ),
-      );
+      const dom = parseHTML(renderMarkdown("    <bash-input>echo hi</bash-input>"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe("<bash-input>echo hi</bash-input>\n");
     });
 
     it("leaves custom tags inside longer-closing fences alone", () => {
-      const dom = parseHTML(
-        renderMarkdown("~~~\n<policy>keep tags</policy>\n~~~~"),
-      );
+      const dom = parseHTML(renderMarkdown("~~~\n<policy>keep tags</policy>\n~~~~"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe("<policy>keep tags</policy>\n");
     });
 
     it("leaves custom tags inside unclosed fences alone", () => {
-      const dom = parseHTML(
-        renderMarkdown("~~~\n<policy>keep tags</policy>"),
-      );
+      const dom = parseHTML(renderMarkdown("~~~\n<policy>keep tags</policy>"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe("<policy>keep tags</policy>\n");
     });
 
     it("tags the input block with language-shell", () => {
-      const html = renderMarkdown(
-        "<bash-input>echo hi</bash-input>",
-      );
-      expect(html).toMatch(
-        /<code[^>]*class="language-shell"/,
-      );
+      const html = renderMarkdown("<bash-input>echo hi</bash-input>");
+      expect(html).toMatch(/<code[^>]*class="language-shell"/);
     });
 
     it("preserves leading whitespace and indentation in stdout", () => {
@@ -551,37 +477,25 @@ describe("renderMarkdown", () => {
       // (tree output, table layouts, log-line columns). Trimming
       // would corrupt the transcript.
       const dom = parseHTML(
-        renderMarkdown(
-          "<bash-stdout>  line one\n    nested\n  line two</bash-stdout>",
-        ),
+        renderMarkdown("<bash-stdout>  line one\n    nested\n  line two</bash-stdout>"),
       );
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
-      expect(code!.textContent).toBe(
-        "  line one\n    nested\n  line two\n",
-      );
+      expect(code!.textContent).toBe("  line one\n    nested\n  line two\n");
     });
 
     it("preserves leading and trailing blank lines in stdout", () => {
-      const dom = parseHTML(
-        renderMarkdown(
-          "<bash-stdout>\n\nbody\n\n</bash-stdout>",
-        ),
-      );
+      const dom = parseHTML(renderMarkdown("<bash-stdout>\n\nbody\n\n</bash-stdout>"));
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
       // marked normalizes the final newline but leading blanks
       // and the interior blank-line structure are preserved.
-      expect(code!.textContent).toMatch(
-        /^\n\nbody\n/,
-      );
+      expect(code!.textContent).toMatch(/^\n\nbody\n/);
     });
 
     it("leaves custom tags inside bash output literal", () => {
       const dom = parseHTML(
-        renderMarkdown(
-          "<bash-stdout><policy>keep tags</policy></bash-stdout>",
-        ),
+        renderMarkdown("<bash-stdout><policy>keep tags</policy></bash-stdout>"),
       );
       const code = dom.querySelector("pre > code");
       expect(code).not.toBeNull();
@@ -609,4 +523,3 @@ describe("renderMarkdown", () => {
     });
   });
 });
-

@@ -7,6 +7,11 @@ description: Release history for AgentsView
 
 **Improvements**
 
+- Generated API bindings now keep concrete collection element types and match
+  the server's JSON v2 behavior. Ordinary Go slices are documented and encoded
+  as arrays, including when their value is nil, so frontend code no longer
+  needs handwritten copies of those response types. The Orval client is split
+  into small files by API tag and schema.
 - Shrink large archives by storing each **tool result** once instead of also
   copying it into the call summary. Direct readers of
   `tool_calls.result_content` now find that text in `tool_result_events`.

@@ -1,10 +1,4 @@
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { setLocale } from "../i18n/index.js";
 import {
   createRefreshScheduler,
@@ -41,14 +35,10 @@ describe("formatRefreshAge", () => {
     setLocale("zh-CN");
 
     expect(formatRefreshAge(null, now)).toBe("未更新");
-    expect(formatRefreshAge(Date.parse("2026-06-16T12:09:45Z"), now))
-      .toBe("刚刚更新");
-    expect(formatRefreshAge(Date.parse("2026-06-16T12:08:00Z"), now))
-      .toBe("2 分钟前更新");
-    expect(formatRefreshAge(Date.parse("2026-06-16T10:00:00Z"), now))
-      .toBe("2 小时前更新");
-    expect(formatRefreshAge(Date.parse("2026-06-13T10:00:00Z"), now))
-      .toBe("3 天前更新");
+    expect(formatRefreshAge(Date.parse("2026-06-16T12:09:45Z"), now)).toBe("刚刚更新");
+    expect(formatRefreshAge(Date.parse("2026-06-16T12:08:00Z"), now)).toBe("2 分钟前更新");
+    expect(formatRefreshAge(Date.parse("2026-06-16T10:00:00Z"), now)).toBe("2 小时前更新");
+    expect(formatRefreshAge(Date.parse("2026-06-13T10:00:00Z"), now)).toBe("3 天前更新");
   });
 });
 

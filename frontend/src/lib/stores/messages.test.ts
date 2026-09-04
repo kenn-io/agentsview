@@ -14,8 +14,12 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  callGenerated: vi.fn(
+    (request: (options?: { signal?: AbortSignal }) => Promise<unknown>, signal?: AbortSignal) => {
+      if (signal) runtimeMocks.signals.push(signal);
+      return request(signal ? { signal } : undefined);
+    },
+  ),
   isAbortError: (err: unknown) => {
     if (err instanceof DOMException && err.name === "AbortError") {
       return true;
@@ -29,10 +33,6 @@ vi.mock("../api/runtime.js", () => ({
     };
     return candidate.isCancelled === true || candidate.name === "CancelError";
   },
-  withAbort: <T>(promise: Promise<T>, signal: AbortSignal) => {
-    runtimeMocks.signals.push(signal);
-    return promise;
-  },
 }));
 
 const sessionsStore = vi.hoisted(() => ({
@@ -45,16 +45,16 @@ vi.mock("./sessions.svelte.js", () => ({
 
 vi.mock("../api/generated/index", () => ({
   SessionsService: {
-    getApiV1SessionsId: vi.fn(({ id }) => api.getSession(id)),
-    getApiV1SessionsIdMessages: vi.fn((params) =>
+    getApiV1SessionsById: vi.fn(({ id }) => api.getSession(id)),
+    getApiV1SessionsByIdMessages: vi.fn((path, params, options) =>
       api.getMessages(
-        params.id,
+        path.id,
         {
           from: params.from,
           limit: params.limit,
           direction: params.direction,
         },
-        { signal: new AbortController().signal },
+        options,
       ),
     ),
   },
@@ -147,10 +147,7 @@ describe("MessagesStore", () => {
 
     await messages.loadSession("s1");
 
-    expect(sessionsStore.markActiveSessionMissing).toHaveBeenCalledWith(
-      "s1",
-      err,
-    );
+    expect(sessionsStore.markActiveSessionMissing).toHaveBeenCalledWith("s1", err);
   });
 
   it("does not report aborted metadata fetches", async () => {
@@ -169,9 +166,7 @@ describe("MessagesStore", () => {
     messages.cancelInFlight();
 
     vi.mocked(api.getSession).mockResolvedValueOnce(makeSession("s1", 1));
-    vi.mocked(api.getMessages).mockResolvedValue(
-      makeMessagesResponse([makeMessage(0)]),
-    );
+    vi.mocked(api.getMessages).mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
     await messages.loadSession("s1");
     expect(messages.messages).toHaveLength(1);
 
@@ -194,9 +189,7 @@ describe("MessagesStore", () => {
     messages.cancelInFlight();
 
     vi.mocked(api.getSession).mockResolvedValueOnce(makeSession("s1", 1));
-    vi.mocked(api.getMessages).mockResolvedValue(
-      makeMessagesResponse([makeMessage(0)]),
-    );
+    vi.mocked(api.getMessages).mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
     await messages.loadSession("s1");
     expect(messages.messages).toHaveLength(1);
 
@@ -206,25 +199,23 @@ describe("MessagesStore", () => {
     expect(sessionsStore.markActiveSessionMissing).not.toHaveBeenCalled();
   });
 
-  it('aborts in-flight reads without clearing cached messages', async () => {
-    await setupSession('s1', 1, [makeMessage(0)]);
+  it("aborts in-flight reads without clearing cached messages", async () => {
+    await setupSession("s1", 1, [makeMessage(0)]);
     const cached = messages.messages;
     const pending = createDeferred<Session>();
     vi.mocked(api.getSession).mockReturnValueOnce(pending.promise);
 
     void messages.reload();
     await Promise.resolve();
-    const signal = runtimeMocks.signals.at(-1)!;
+    const signal = vi.mocked(api.getMessages).mock.lastCall?.[2]?.signal;
     messages.cancelInFlight();
 
-    expect(signal.aborted).toBe(true);
+    expect(signal?.aborted).toBe(true);
     expect(messages.messages).toBe(cached);
 
-    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession('s1', 1));
-    vi.mocked(api.getMessages).mockResolvedValueOnce(
-      makeMessagesResponse([makeMessage(0)]),
-    );
-    const resumed = messages.loadSession('s1');
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession("s1", 1));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(makeMessagesResponse([makeMessage(0)]));
+    const resumed = messages.loadSession("s1");
     expect(messages.messages).toBe(cached);
     await resumed;
     expect(messages.messages).toHaveLength(1);

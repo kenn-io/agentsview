@@ -71,9 +71,9 @@ describe("RangePicker", () => {
     for (const t of ["Relative", "Calendar", "Custom"]) {
       expect(screen.getByRole("radio", { name: t })).toBeTruthy();
     }
-    expect(
-      screen.getByRole("radio", { name: "Relative" }).getAttribute("aria-checked"),
-    ).toBe("true");
+    expect(screen.getByRole("radio", { name: "Relative" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
   });
 
   it("emits a relative selection when a preset is clicked", async () => {
@@ -131,9 +131,7 @@ describe("RangePicker", () => {
     // Custom endpoint readouts stay canonical YYYY-MM-DD regardless of the
     // app locale. This only affects the seed; committed ranges still resolve
     // through the app's own resolveRange().
-    const endpoints = document.querySelectorAll(
-      ".kit-date-range-picker__endpoint-value",
-    );
+    const endpoints = document.querySelectorAll(".kit-date-range-picker__endpoint-value");
     expect(endpoints[0]?.textContent).toBe("2026-06-11");
     expect(endpoints[1]?.textContent).toBe("2026-06-17");
   });

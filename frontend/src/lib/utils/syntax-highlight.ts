@@ -23,10 +23,7 @@ const LANG_ALIASES: Record<string, string> = {
 // Each entry must be a literal import() string so Vite can statically analyze
 // and emit a separate lazy chunk per grammar. Template-literal imports are not
 // analyzable by Vite and would be omitted from the production dist/.
-const GRAMMAR_LOADERS: Record<
-  string,
-  () => Promise<{ default: LanguageRegistration[] }>
-> = {
+const GRAMMAR_LOADERS: Record<string, () => Promise<{ default: LanguageRegistration[] }>> = {
   javascript: () => import("shiki/langs/javascript.mjs"),
   typescript: () => import("shiki/langs/typescript.mjs"),
   python: () => import("shiki/langs/python.mjs"),
@@ -49,16 +46,13 @@ function getHighlighter(): Promise<HighlighterCore> {
   if (highlighterPromise !== null) return highlighterPromise;
 
   highlighterPromise = (async () => {
-    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme] =
-      await Promise.all([
-        import("shiki/core"),
-        import("shiki/engine/javascript"),
-        import("shiki/themes/catppuccin-mocha.mjs"),
-      ]);
+    const [{ createHighlighterCore }, { createJavaScriptRegexEngine }, theme] = await Promise.all([
+      import("shiki/core"),
+      import("shiki/engine/javascript"),
+      import("shiki/themes/catppuccin-mocha.mjs"),
+    ]);
 
-    const langModules = await Promise.all(
-      Object.values(GRAMMAR_LOADERS).map((load) => load()),
-    );
+    const langModules = await Promise.all(Object.values(GRAMMAR_LOADERS).map((load) => load()));
 
     const hl = await createHighlighterCore({
       themes: [theme.default ?? theme],
@@ -88,10 +82,7 @@ function resolveLanguage(lang: string): string | null {
  * Returns null for unknown languages, over-threshold content, or any error.
  * Callers insert the result via `{@html}` — Shiki escapes the code text itself.
  */
-export async function highlightToHtml(
-  code: string,
-  lang: string,
-): Promise<string | null> {
+export async function highlightToHtml(code: string, lang: string): Promise<string | null> {
   const resolved = resolveLanguage(lang);
   if (resolved === null) return null;
 

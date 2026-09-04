@@ -8,9 +8,7 @@ import {
 
 let nextId = 1;
 
-function msg(
-  overrides: Partial<Message> & { content: string },
-): Message {
+function msg(overrides: Partial<Message> & { content: string }): Message {
   return {
     id: nextId++,
     session_id: "s1",
@@ -34,18 +32,11 @@ function userMsg(ordinal: number, content = "user") {
   return msg({ ordinal, role: "user", content });
 }
 
-function assistantMsg(
-  ordinal: number,
-  content = "assistant",
-) {
+function assistantMsg(ordinal: number, content = "assistant") {
   return msg({ ordinal, role: "assistant", content });
 }
 
-function toolMsg(
-  ordinal: number,
-  tool = "Bash",
-  args = "$ ls",
-) {
+function toolMsg(ordinal: number, tool = "Bash", args = "$ ls") {
   return msg({
     ordinal,
     content: `[${tool}]\n${args}`,
@@ -53,28 +44,17 @@ function toolMsg(
   });
 }
 
-function ordinalsOf(
-  messages: Message[],
-  keepAnswerBeforeTrailingTools = false,
-) {
+function ordinalsOf(messages: Message[], keepAnswerBeforeTrailingTools = false) {
   const items = buildDisplayItems(messages);
-  return filterDisplayItemsByTranscriptMode(
-    items,
-    "focused",
-    { keepAnswerBeforeTrailingTools },
-  ).flatMap((item) => item.ordinals);
+  return filterDisplayItemsByTranscriptMode(items, "focused", {
+    keepAnswerBeforeTrailingTools,
+  }).flatMap((item) => item.ordinals);
 }
 
 describe("filterDisplayItemsByTranscriptMode", () => {
   it("returns items unchanged in normal mode", () => {
-    const items = buildDisplayItems([
-      userMsg(0),
-      assistantMsg(1),
-      toolMsg(2),
-    ]);
-    expect(
-      filterDisplayItemsByTranscriptMode(items, "normal"),
-    ).toEqual(items);
+    const items = buildDisplayItems([userMsg(0), assistantMsg(1), toolMsg(2)]);
+    expect(filterDisplayItemsByTranscriptMode(items, "normal")).toEqual(items);
   });
 
   it("keeps the final assistant before the next user", () => {
@@ -90,63 +70,32 @@ describe("filterDisplayItemsByTranscriptMode", () => {
   });
 
   it("drops assistant text that is followed only by tool work before the next user", () => {
-    expect(
-      ordinalsOf([
-        userMsg(0),
-        assistantMsg(1, "working"),
-        toolMsg(2),
-        userMsg(3),
-      ]),
-    ).toEqual([0, 3]);
+    expect(ordinalsOf([userMsg(0), assistantMsg(1, "working"), toolMsg(2), userMsg(3)])).toEqual([
+      0, 3,
+    ]);
   });
 
   it("keeps an answer when the provider supports post-answer tool work", () => {
     expect(
-      ordinalsOf(
-        [
-          userMsg(0),
-          assistantMsg(1, "answer"),
-          toolMsg(2),
-          userMsg(3),
-        ],
-        true,
-      ),
+      ordinalsOf([userMsg(0), assistantMsg(1, "answer"), toolMsg(2), userMsg(3)], true),
     ).toEqual([0, 1, 3]);
   });
 
   it("still shows nothing when post-answer tool work produced no text", () => {
-    expect(
-      ordinalsOf(
-        [userMsg(0), toolMsg(1), userMsg(2)],
-        true,
-      ),
-    ).toEqual([0, 2]);
+    expect(ordinalsOf([userMsg(0), toolMsg(1), userMsg(2)], true)).toEqual([0, 2]);
   });
 
   it("keeps the final non-tool assistant at session end", () => {
-    expect(
-      ordinalsOf([
-        userMsg(0),
-        toolMsg(1),
-        assistantMsg(2, "final"),
-      ]),
-    ).toEqual([0, 2]);
+    expect(ordinalsOf([userMsg(0), toolMsg(1), assistantMsg(2, "final")])).toEqual([0, 2]);
   });
 
   it("drops terminal tool-only stretches with no final assistant", () => {
-    expect(
-      ordinalsOf([userMsg(0), toolMsg(1)]),
-    ).toEqual([0]);
+    expect(ordinalsOf([userMsg(0), toolMsg(1)])).toEqual([0]);
   });
 
   it("keeps only the last assistant in consecutive assistant runs", () => {
     expect(
-      ordinalsOf([
-        userMsg(0),
-        assistantMsg(1, "first"),
-        assistantMsg(2, "second"),
-        userMsg(3),
-      ]),
+      ordinalsOf([userMsg(0), assistantMsg(1, "first"), assistantMsg(2, "second"), userMsg(3)]),
     ).toEqual([0, 2, 3]);
   });
 
@@ -157,14 +106,9 @@ describe("filterDisplayItemsByTranscriptMode", () => {
       content: "[compact summary]",
       is_compact_boundary: true,
     });
-    expect(
-      ordinalsOf([
-        userMsg(0),
-        assistantMsg(1, "answer"),
-        boundary,
-        userMsg(3),
-      ]),
-    ).toEqual([0, 1, 2, 3]);
+    expect(ordinalsOf([userMsg(0), assistantMsg(1, "answer"), boundary, userMsg(3)])).toEqual([
+      0, 1, 2, 3,
+    ]);
   });
 
   it("can pick the last assistant that still has visible segments", () => {
@@ -185,90 +129,54 @@ describe("filterDisplayItemsByTranscriptMode", () => {
 
 describe("shouldAutoSwitchTranscriptModeToNormal", () => {
   it("returns true when normal mode would reveal the hidden ordinal", () => {
-    const focusedItems = [userMsg(0), userMsg(3)].map(
-      (message) => ({
-        kind: "message" as const,
-        message,
-        ordinals: [message.ordinal],
-      }),
-    );
-    const normalItems = [
-      userMsg(0),
-      assistantMsg(1, "visible in normal"),
-      userMsg(3),
-    ].map((message) => ({
+    const focusedItems = [userMsg(0), userMsg(3)].map((message) => ({
       kind: "message" as const,
       message,
       ordinals: [message.ordinal],
     }));
-    expect(
-      shouldAutoSwitchTranscriptModeToNormal(
-        "focused",
-        1,
-        focusedItems,
-        normalItems,
-      ),
-    ).toBe(true);
+    const normalItems = [userMsg(0), assistantMsg(1, "visible in normal"), userMsg(3)].map(
+      (message) => ({
+        kind: "message" as const,
+        message,
+        ordinals: [message.ordinal],
+      }),
+    );
+    expect(shouldAutoSwitchTranscriptModeToNormal("focused", 1, focusedItems, normalItems)).toBe(
+      true,
+    );
   });
 
   it("returns false when the ordinal is already visible", () => {
-    const items = [userMsg(0), assistantMsg(1, "final")].map(
-      (message) => ({
-        kind: "message" as const,
-        message,
-        ordinals: [message.ordinal],
-      }),
-    );
-    expect(
-      shouldAutoSwitchTranscriptModeToNormal(
-        "focused",
-        1,
-        items,
-        items,
-      ),
-    ).toBe(false);
+    const items = [userMsg(0), assistantMsg(1, "final")].map((message) => ({
+      kind: "message" as const,
+      message,
+      ordinals: [message.ordinal],
+    }));
+    expect(shouldAutoSwitchTranscriptModeToNormal("focused", 1, items, items)).toBe(false);
   });
 
   it("returns false outside focused mode", () => {
-    const items = [userMsg(0), assistantMsg(1, "working")].map(
-      (message) => ({
-        kind: "message" as const,
-        message,
-        ordinals: [message.ordinal],
-      }),
-    );
-    expect(
-      shouldAutoSwitchTranscriptModeToNormal(
-        "normal",
-        1,
-        items,
-        items,
-      ),
-    ).toBe(false);
+    const items = [userMsg(0), assistantMsg(1, "working")].map((message) => ({
+      kind: "message" as const,
+      message,
+      ordinals: [message.ordinal],
+    }));
+    expect(shouldAutoSwitchTranscriptModeToNormal("normal", 1, items, items)).toBe(false);
   });
 
   it("returns false when normal mode would still not show the ordinal", () => {
-    const focusedItems = [userMsg(0), userMsg(3)].map(
-      (message) => ({
-        kind: "message" as const,
-        message,
-        ordinals: [message.ordinal],
-      }),
+    const focusedItems = [userMsg(0), userMsg(3)].map((message) => ({
+      kind: "message" as const,
+      message,
+      ordinals: [message.ordinal],
+    }));
+    const normalItems = [userMsg(0), userMsg(3)].map((message) => ({
+      kind: "message" as const,
+      message,
+      ordinals: [message.ordinal],
+    }));
+    expect(shouldAutoSwitchTranscriptModeToNormal("focused", 1, focusedItems, normalItems)).toBe(
+      false,
     );
-    const normalItems = [userMsg(0), userMsg(3)].map(
-      (message) => ({
-        kind: "message" as const,
-        message,
-        ordinals: [message.ordinal],
-      }),
-    );
-    expect(
-      shouldAutoSwitchTranscriptModeToNormal(
-        "focused",
-        1,
-        focusedItems,
-        normalItems,
-      ),
-    ).toBe(false);
   });
 });

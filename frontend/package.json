@@ -1,11 +1,8 @@
 {
   "name": "agentsview-frontend",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
-  "engines": {
-    "node": "^20.19.0 || ^22.18.0 || >=24.11.0"
-  },
   "scripts": {
     "dev": "vp dev",
     "build": "vp build",
@@ -44,7 +41,7 @@
     "@types/d3-hierarchy": "3.1.7",
     "@types/d3-scale": "4.0.9",
     "jsdom": "29.1.1",
-    "openapi-typescript-codegen": "^0.31.0",
+    "orval": "8.26.0",
     "svelte": "5.56.10",
     "svelte-check": "4.7.6",
     "typescript": "6.0.3",
@@ -54,6 +51,9 @@
   },
   "overrides": {
     "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0"
+  },
+  "engines": {
+    "node": ">=24.11.0"
   },
   "packageManager": "npm@12.0.2"
 }

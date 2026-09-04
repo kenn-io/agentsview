@@ -1,9 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
-import {
-  waitForStableValue,
-  waitForRowCountStable,
-} from "./helpers/virtual-list-helpers";
+import { waitForStableValue, waitForRowCountStable } from "./helpers/virtual-list-helpers";
 
 test.describe("Message loading", () => {
   test("clicking session shows messages", async ({ page }) => {
@@ -25,9 +22,7 @@ test.describe("Message loading", () => {
     await sp.selectFirstSession();
 
     // Wait for at least one message request to have fired
-    await expect
-      .poll(() => messageRequests.length, { timeout: 5_000 })
-      .toBeGreaterThan(0);
+    await expect.poll(() => messageRequests.length, { timeout: 5_000 }).toBeGreaterThan(0);
 
     // Wait for requests to stop firing
     await waitForStableValue(() => messageRequests.length, 500);
@@ -44,51 +39,40 @@ test.describe("Message loading", () => {
     await sp.selectLastSession();
   });
 
-  test(
-    "large session shows first page quickly",
-    async ({ page }) => {
-      const sp = new SessionsPage(page);
-      await sp.goto();
+  test("large session shows first page quickly", async ({ page }) => {
+    const sp = new SessionsPage(page);
+    await sp.goto();
 
-      // First session is the largest (5500 messages)
-      await sp.sessionItems.first().click();
+    // First session is the largest (5500 messages)
+    await sp.sessionItems.first().click();
 
-      // First page should render within 3s
-      await expect(sp.messageRows.first()).toBeVisible({
-        timeout: 3_000,
-      });
-    },
-  );
+    // First page should render within 3s
+    await expect(sp.messageRows.first()).toBeVisible({
+      timeout: 3_000,
+    });
+  });
 
-  test(
-    "scroll does not reset to top during loading",
-    async ({ page }) => {
-      const sp = new SessionsPage(page);
-      await sp.goto();
-      await sp.selectFirstSession();
+  test("scroll does not reset to top during loading", async ({ page }) => {
+    const sp = new SessionsPage(page);
+    await sp.goto();
+    await sp.selectFirstSession();
 
-      // Wait for progressive loading to finish by polling
-      // the message row count until it stabilizes.
-      await waitForRowCountStable(sp);
+    // Wait for progressive loading to finish by polling
+    // the message row count until it stabilizes.
+    await waitForRowCountStable(sp);
 
-      // Scroll down
-      await sp.scroller.evaluate((el) => {
-        el.scrollTop = 3000;
-      });
+    // Scroll down
+    await sp.scroller.evaluate((el) => {
+      el.scrollTop = 3000;
+    });
 
-      // Wait for scroll position to settle
-      await expect
-        .poll(
-          () => sp.scroller.evaluate((el) => el.scrollTop),
-          { timeout: 2_000 },
-        )
-        .toBeGreaterThan(500);
-    },
-  );
+    // Wait for scroll position to settle
+    await expect
+      .poll(() => sp.scroller.evaluate((el) => el.scrollTop), { timeout: 2_000 })
+      .toBeGreaterThan(500);
+  });
 
-  test("follow latest scrolls down and exits on manual wheel", async ({
-    page,
-  }) => {
+  test("follow latest scrolls down and exits on manual wheel", async ({ page }) => {
     const sp = new SessionsPage(page);
     await sp.goto();
     await sp.selectFirstSession();
@@ -101,27 +85,17 @@ test.describe("Message loading", () => {
       el.dispatchEvent(new Event("scroll"));
     });
     await expect
-      .poll(
-        () =>
-          sp.scroller.evaluate(
-            (el) =>
-              el.scrollHeight - el.clientHeight - el.scrollTop,
-          ),
-        { timeout: 2_000 },
-      )
+      .poll(() => sp.scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop), {
+        timeout: 2_000,
+      })
       .toBeLessThanOrEqual(8);
 
     await follow.click();
 
     await expect
-      .poll(
-        () =>
-          sp.scroller.evaluate(
-            (el) =>
-              el.scrollHeight - el.clientHeight - el.scrollTop,
-          ),
-        { timeout: 2_000 },
-      )
+      .poll(() => sp.scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop), {
+        timeout: 2_000,
+      })
       .toBeLessThanOrEqual(8);
     await expect(follow).toHaveAttribute("aria-pressed", "true");
 
@@ -131,9 +105,7 @@ test.describe("Message loading", () => {
     await expect(follow).toHaveAttribute("aria-pressed", "false");
   });
 
-  test("follow latest exits on pointer touch and keyboard scroll intent", async ({
-    page,
-  }) => {
+  test("follow latest exits on pointer touch and keyboard scroll intent", async ({ page }) => {
     const sp = new SessionsPage(page);
     await sp.goto();
     await sp.selectFirstSession();
@@ -143,10 +115,7 @@ test.describe("Message loading", () => {
 
     for (const item of cases) {
       await follow.click();
-      await expect(follow, item).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
+      await expect(follow, item).toHaveAttribute("aria-pressed", "true");
 
       await sp.scroller.evaluate((el, dispatchName) => {
         if (dispatchName === "pointerdown") {
@@ -157,9 +126,7 @@ test.describe("Message loading", () => {
             }),
           );
         } else if (dispatchName === "touchmove") {
-          el.dispatchEvent(
-            new Event("touchmove", { bubbles: true }),
-          );
+          el.dispatchEvent(new Event("touchmove", { bubbles: true }));
         } else {
           el.dispatchEvent(
             new KeyboardEvent("keydown", {
@@ -170,16 +137,11 @@ test.describe("Message loading", () => {
         }
       }, item);
 
-      await expect(follow, item).toHaveAttribute(
-        "aria-pressed",
-        "false",
-      );
+      await expect(follow, item).toHaveAttribute("aria-pressed", "false");
     }
   });
 
-  test("follow latest exits on pointer intent inside message rows", async ({
-    page,
-  }) => {
+  test("follow latest exits on pointer intent inside message rows", async ({ page }) => {
     const sp = new SessionsPage(page);
     await sp.goto();
     await sp.selectFirstSession();
@@ -196,9 +158,7 @@ test.describe("Message loading", () => {
     await expect(follow).toHaveAttribute("aria-pressed", "false");
   });
 
-  test("follow latest exits on global keyboard message navigation", async ({
-    page,
-  }) => {
+  test("follow latest exits on global keyboard message navigation", async ({ page }) => {
     const sp = new SessionsPage(page);
     await sp.goto();
     await sp.selectFirstSession();
@@ -222,56 +182,48 @@ test.describe("Message loading", () => {
       .toBeLessThan(1_000);
   });
 
-  test("follow latest settles after a tall final message is measured", async ({
-    page,
-  }) => {
-    await page.route(
-      "**/api/v1/sessions/test-session-xlarge-5500/messages*",
-      async (route) => {
-        const now = new Date().toISOString();
-        const messages = Array.from(
-          { length: 1000 },
-          (_, i) => {
-            const ordinal = 4500 + i;
-            const isLast = ordinal === 5499;
-            const content = isLast
-              ? Array.from(
-                  { length: 120 },
-                  (_, n) =>
-                    `Final response paragraph ${n}. This line makes the final message much taller than the virtualizer estimate.`,
-                ).join("\n\n")
-              : `Message ${ordinal}`;
-            return {
-              id: ordinal,
-              session_id: "test-session-xlarge-5500",
-              ordinal,
-              role: ordinal % 2 === 0 ? "user" : "assistant",
-              content,
-              timestamp: now,
-              has_thinking: false,
-              thinking_text: "",
-              has_tool_use: false,
-              content_length: content.length,
-              model: "",
-              token_usage: null,
-              context_tokens: 0,
-              output_tokens: 0,
-              has_context_tokens: false,
-              has_output_tokens: false,
-              tool_calls: [],
-              is_system: false,
-            };
-          },
-        );
+  test("follow latest settles after a tall final message is measured", async ({ page }) => {
+    await page.route("**/api/v1/sessions/test-session-xlarge-5500/messages*", async (route) => {
+      const now = new Date().toISOString();
+      const messages = Array.from({ length: 1000 }, (_, i) => {
+        const ordinal = 4500 + i;
+        const isLast = ordinal === 5499;
+        const content = isLast
+          ? Array.from(
+              { length: 120 },
+              (_, n) =>
+                `Final response paragraph ${n}. This line makes the final message much taller than the virtualizer estimate.`,
+            ).join("\n\n")
+          : `Message ${ordinal}`;
+        return {
+          id: ordinal,
+          session_id: "test-session-xlarge-5500",
+          ordinal,
+          role: ordinal % 2 === 0 ? "user" : "assistant",
+          content,
+          timestamp: now,
+          has_thinking: false,
+          thinking_text: "",
+          has_tool_use: false,
+          content_length: content.length,
+          model: "",
+          token_usage: null,
+          context_tokens: 0,
+          output_tokens: 0,
+          has_context_tokens: false,
+          has_output_tokens: false,
+          tool_calls: [],
+          is_system: false,
+        };
+      });
 
-        await route.fulfill({
-          json: {
-            messages: [...messages].reverse(),
-            count: messages.length,
-          },
-        });
-      },
-    );
+      await route.fulfill({
+        json: {
+          messages: [...messages].reverse(),
+          count: messages.length,
+        },
+      });
+    });
 
     const sp = new SessionsPage(page);
     await sp.goto();
@@ -280,20 +232,13 @@ test.describe("Message loading", () => {
     await page.getByLabel("Follow latest messages").click();
 
     await expect
-      .poll(
-        () =>
-          sp.scroller.evaluate(
-            (el) =>
-              el.scrollHeight - el.clientHeight - el.scrollTop,
-          ),
-        { timeout: 3_000 },
-      )
+      .poll(() => sp.scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop), {
+        timeout: 3_000,
+      })
       .toBeLessThanOrEqual(8);
   });
 
-  test("follow latest remains pinned when final content grows after load", async ({
-    page,
-  }) => {
+  test("follow latest remains pinned when final content grows after load", async ({ page }) => {
     await page.route("**/slow-follow-image.svg", async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 600));
       await route.fulfill({
@@ -305,49 +250,43 @@ test.describe("Message loading", () => {
       });
     });
 
-    await page.route(
-      "**/api/v1/sessions/test-session-xlarge-5500/messages*",
-      async (route) => {
-        const now = new Date().toISOString();
-        const messages = Array.from(
-          { length: 1000 },
-          (_, i) => {
-            const ordinal = 4500 + i;
-            const isLast = ordinal === 5499;
-            const content = isLast
-              ? "Final response before image.\n\n![slow final content](/slow-follow-image.svg)"
-              : `Message ${ordinal}`;
-            return {
-              id: ordinal,
-              session_id: "test-session-xlarge-5500",
-              ordinal,
-              role: ordinal % 2 === 0 ? "user" : "assistant",
-              content,
-              timestamp: now,
-              has_thinking: false,
-              thinking_text: "",
-              has_tool_use: false,
-              content_length: content.length,
-              model: "",
-              token_usage: null,
-              context_tokens: 0,
-              output_tokens: 0,
-              has_context_tokens: false,
-              has_output_tokens: false,
-              tool_calls: [],
-              is_system: false,
-            };
-          },
-        );
+    await page.route("**/api/v1/sessions/test-session-xlarge-5500/messages*", async (route) => {
+      const now = new Date().toISOString();
+      const messages = Array.from({ length: 1000 }, (_, i) => {
+        const ordinal = 4500 + i;
+        const isLast = ordinal === 5499;
+        const content = isLast
+          ? "Final response before image.\n\n![slow final content](/slow-follow-image.svg)"
+          : `Message ${ordinal}`;
+        return {
+          id: ordinal,
+          session_id: "test-session-xlarge-5500",
+          ordinal,
+          role: ordinal % 2 === 0 ? "user" : "assistant",
+          content,
+          timestamp: now,
+          has_thinking: false,
+          thinking_text: "",
+          has_tool_use: false,
+          content_length: content.length,
+          model: "",
+          token_usage: null,
+          context_tokens: 0,
+          output_tokens: 0,
+          has_context_tokens: false,
+          has_output_tokens: false,
+          tool_calls: [],
+          is_system: false,
+        };
+      });
 
-        await route.fulfill({
-          json: {
-            messages: [...messages].reverse(),
-            count: messages.length,
-          },
-        });
-      },
-    );
+      await route.fulfill({
+        json: {
+          messages: [...messages].reverse(),
+          count: messages.length,
+        },
+      });
+    });
 
     const sp = new SessionsPage(page);
     await sp.goto();
@@ -360,20 +299,13 @@ test.describe("Message loading", () => {
     });
 
     await expect
-      .poll(
-        () =>
-          sp.scroller.evaluate(
-            (el) =>
-              el.scrollHeight - el.clientHeight - el.scrollTop,
-          ),
-        { timeout: 3_000 },
-      )
+      .poll(() => sp.scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop), {
+        timeout: 3_000,
+      })
       .toBeLessThanOrEqual(8);
   });
 
-  test("follow latest stays enabled through non-user scroll drift", async ({
-    page,
-  }) => {
+  test("follow latest stays enabled through non-user scroll drift", async ({ page }) => {
     const sp = new SessionsPage(page);
     await sp.goto();
     await sp.selectFirstSession();
@@ -405,9 +337,7 @@ test.describe("Message loading", () => {
     await expect(follow).toHaveAttribute("aria-pressed", "false");
   });
 
-  test("follow latest toggle-off cancels queued scroll work", async ({
-    page,
-  }) => {
+  test("follow latest toggle-off cancels queued scroll work", async ({ page }) => {
     const sp = new SessionsPage(page);
     await sp.goto();
     await sp.selectFirstSession();
@@ -432,10 +362,8 @@ test.describe("Message loading", () => {
       const win = window as Window & {
         __followRaf?: HeldRaf;
       };
-      const originalRequest =
-        window.requestAnimationFrame.bind(window);
-      const originalCancel =
-        window.cancelAnimationFrame.bind(window);
+      const originalRequest = window.requestAnimationFrame.bind(window);
+      const originalCancel = window.cancelAnimationFrame.bind(window);
       let nextId = 1;
       const callbacks = new Map<number, FrameRequestCallback>();
 
@@ -453,9 +381,7 @@ test.describe("Message loading", () => {
           window.cancelAnimationFrame = originalCancel;
         },
       };
-      window.requestAnimationFrame = (
-        cb: FrameRequestCallback,
-      ) => {
+      window.requestAnimationFrame = (cb: FrameRequestCallback) => {
         const id = nextId;
         nextId += 1;
         callbacks.set(id, cb);
@@ -470,13 +396,12 @@ test.describe("Message loading", () => {
     await expect
       .poll(
         () =>
-          page.evaluate(
-            () =>
-              (
-                window as Window & {
-                  __followRaf: { pending: () => number };
-                }
-              ).__followRaf.pending(),
+          page.evaluate(() =>
+            (
+              window as Window & {
+                __followRaf: { pending: () => number };
+              }
+            ).__followRaf.pending(),
           ),
         { timeout: 2_000 },
       )

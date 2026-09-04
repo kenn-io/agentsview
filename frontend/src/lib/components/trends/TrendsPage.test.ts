@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { trends } from "../../stores/trends.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
@@ -19,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
 }));
@@ -33,10 +25,7 @@ vi.mock("../../api/generated/index", () => ({
 // @ts-ignore
 import TrendsPage from "./TrendsPage.svelte";
 
-function makeResponse(
-  from = "2024-01-01",
-  to = "2024-01-31",
-): TrendsTermsResponse {
+function makeResponse(from = "2024-01-01", to = "2024-01-31"): TrendsTermsResponse {
   return {
     granularity: "week",
     from,
@@ -95,11 +84,7 @@ describe("TrendsPage", () => {
   });
 
   it("refreshes with the changed date value", async () => {
-    window.history.replaceState(
-      null,
-      "",
-      "/trends?from=2024-01-02&to=2024-01-31",
-    );
+    window.history.replaceState(null, "", "/trends?from=2024-01-02&to=2024-01-31");
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
@@ -113,9 +98,7 @@ describe("TrendsPage", () => {
     await tick();
 
     const dayButton = (label: string) =>
-      document.querySelector<HTMLButtonElement>(
-        `.kit-calendar button[aria-label="${label}"]`,
-      );
+      document.querySelector<HTMLButtonElement>(`.kit-calendar button[aria-label="${label}"]`);
     const fromDay = dayButton("Jan 10, 2024");
     expect(fromDay).not.toBeNull();
     fromDay!.click();
@@ -126,7 +109,7 @@ describe("TrendsPage", () => {
     toDay!.click();
     await flushPromises();
 
-    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+    expect(mocks.getApiV1TrendsTerms.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-10", to: "2024-01-25" }),
     );
     expect(window.location.search).toContain("from=2024-01-10");
@@ -136,9 +119,9 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    const trigger = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((b) => b.textContent?.includes("Group by"));
+    const trigger = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((b) =>
+      b.textContent?.includes("Group by"),
+    );
     expect(trigger).not.toBeNull();
     trigger!.click();
     await tick();
@@ -150,7 +133,7 @@ describe("TrendsPage", () => {
     monthItem!.click();
     await flushPromises();
 
-    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+    expect(mocks.getApiV1TrendsTerms.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ granularity: "month" }),
     );
     expect(window.location.search).toContain("granularity=month");
@@ -172,7 +155,7 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+    expect(mocks.getApiV1TrendsTerms.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
         from: "2025-06-21",
         to: "2026-06-20",
@@ -233,7 +216,7 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+    expect(mocks.getApiV1TrendsTerms.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
         from: "2024-02-01",
         to: "2024-02-07",
@@ -246,17 +229,13 @@ describe("TrendsPage", () => {
   it("hydrates rolling window URLs before fixed date params", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-06-19T12:00:00"));
-    window.history.replaceState(
-      null,
-      "",
-      "/trends?window_days=30&from=2026-01-01&to=2026-01-31",
-    );
+    window.history.replaceState(null, "", "/trends?window_days=30&from=2026-01-01&to=2026-01-31");
     yokedDates.setEnabled(true);
 
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+    expect(mocks.getApiV1TrendsTerms.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
         from: "2026-05-21",
         to: "2026-06-19",
@@ -270,11 +249,7 @@ describe("TrendsPage", () => {
   });
 
   it("does not publish explicit URL dates while linking is disabled", async () => {
-    window.history.replaceState(
-      null,
-      "",
-      "/trends?window_days=30&from=2026-01-01&to=2026-01-31",
-    );
+    window.history.replaceState(null, "", "/trends?window_days=30&from=2026-01-01&to=2026-01-31");
 
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
@@ -287,25 +262,21 @@ describe("TrendsPage", () => {
   it("recomputes rolling windows before manual refresh", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-06-19T12:00:00"));
-    window.history.replaceState(
-      null,
-      "",
-      "/trends?window_days=30&from=2026-01-01&to=2026-01-31",
-    );
+    window.history.replaceState(null, "", "/trends?window_days=30&from=2026-01-01&to=2026-01-31");
     yokedDates.setEnabled(true);
 
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
     vi.setSystemTime(new Date("2026-06-20T12:00:00"));
-    const refresh = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((b) => b.textContent?.trim() === "Refresh");
+    const refresh = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (b) => b.textContent?.trim() === "Refresh",
+    );
     expect(refresh).not.toBeNull();
     refresh!.click();
     await flushPromises();
 
-    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+    expect(mocks.getApiV1TrendsTerms.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
         from: "2026-05-22",
         to: "2026-06-20",
@@ -324,24 +295,20 @@ describe("TrendsPage", () => {
   it("recomputes rolling windows before reset", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-06-19T12:00:00"));
-    window.history.replaceState(
-      null,
-      "",
-      "/trends?window_days=30&from=2026-01-01&to=2026-01-31",
-    );
+    window.history.replaceState(null, "", "/trends?window_days=30&from=2026-01-01&to=2026-01-31");
 
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
     vi.setSystemTime(new Date("2026-06-20T12:00:00"));
-    const reset = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((b) => b.textContent?.trim() === "Reset");
+    const reset = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (b) => b.textContent?.trim() === "Reset",
+    );
     expect(reset).not.toBeNull();
     reset!.click();
     await flushPromises();
 
-    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+    expect(mocks.getApiV1TrendsTerms.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
         from: "2026-05-22",
         to: "2026-06-20",
@@ -358,9 +325,7 @@ describe("TrendsPage", () => {
   });
 
   it("shows chart loading status while trends are computing", async () => {
-    let resolveFetch:
-      | ((response: TrendsTermsResponse) => void)
-      | undefined;
+    let resolveFetch: ((response: TrendsTermsResponse) => void) | undefined;
     mocks.getApiV1TrendsTerms.mockReturnValueOnce(
       new Promise<TrendsTermsResponse>((resolve) => {
         resolveFetch = resolve;
@@ -370,18 +335,14 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await tick();
 
-    const status = document.querySelector<HTMLElement>(
-      '[role="status"]',
-    );
+    const status = document.querySelector<HTMLElement>('[role="status"]');
     expect(status).not.toBeNull();
     expect(status!.textContent).toContain("Computing trends");
 
     resolveFetch!(makeResponse());
     await flushPromises();
 
-    expect(document.body.textContent).not.toContain(
-      "Computing trends",
-    );
+    expect(document.body.textContent).not.toContain("Computing trends");
   });
 
   it("surfaces explicit refresh errors after initial data loads", async () => {
@@ -392,23 +353,19 @@ describe("TrendsPage", () => {
     mocks.getApiV1TrendsTerms.mockRejectedValueOnce(
       new Error("at least one trend term is required"),
     );
-    const textarea = document.querySelector<HTMLTextAreaElement>(
-      "#trend-terms",
-    );
+    const textarea = document.querySelector<HTMLTextAreaElement>("#trend-terms");
     expect(textarea).not.toBeNull();
     textarea!.value = "";
     textarea!.dispatchEvent(new Event("input", { bubbles: true }));
 
-    const refreshButton = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((button) => button.textContent?.trim() === "Refresh");
+    const refreshButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Refresh",
+    );
     expect(refreshButton).not.toBeNull();
     refreshButton!.click();
     await flushPromises();
 
-    expect(document.body.textContent).toContain(
-      "at least one trend term is required",
-    );
+    expect(document.body.textContent).toContain("at least one trend term is required");
     warn.mockRestore();
   });
 
@@ -434,9 +391,7 @@ describe("TrendsPage", () => {
     expect(document.body.textContent).toContain("Count");
     expect(document.body.textContent).toContain("2");
 
-    const checkbox = document.querySelector<HTMLInputElement>(
-      'input[type="checkbox"]',
-    );
+    const checkbox = document.querySelector<HTMLInputElement>('input[type="checkbox"]');
     expect(checkbox).not.toBeNull();
     checkbox!.click();
     await tick();
@@ -449,16 +404,10 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    expect(document.body.textContent).toContain(
-      "Normalize by number of messages",
-    );
-    const normalize = document.querySelector<HTMLInputElement>(
-      'input[role="switch"]',
-    );
+    expect(document.body.textContent).toContain("Normalize by number of messages");
+    const normalize = document.querySelector<HTMLInputElement>('input[role="switch"]');
     expect(normalize).not.toBeNull();
-    expect(normalize?.closest("label")?.textContent).toContain(
-      "Normalize by number of messages",
-    );
+    expect(normalize?.closest("label")?.textContent).toContain("Normalize by number of messages");
   });
 
   it("shows a y-axis metric label", async () => {
@@ -500,9 +449,7 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    const swatches = Array.from(
-      document.querySelectorAll<HTMLElement>(".swatch"),
-    );
+    const swatches = Array.from(document.querySelectorAll<HTMLElement>(".swatch"));
     const styles = swatches.map((el) => el.getAttribute("style") ?? "");
     expect(styles.slice(0, 7)).toEqual([
       "background: var(--trend-blue);",
@@ -556,14 +503,11 @@ describe("TrendsPage", () => {
         '.chart path[fill="none"]:not([stroke="transparent"])',
       ),
     ).map((line) => line.getAttribute("stroke"));
-    const swatches = Array.from(
-      document.querySelectorAll<HTMLElement>(".swatch"),
-    ).map((swatch) => swatch.style.background);
+    const swatches = Array.from(document.querySelectorAll<HTMLElement>(".swatch")).map(
+      (swatch) => swatch.style.background,
+    );
     expect(strokes).toEqual(["#ff7f0e", "#1f77b4"]);
-    expect(swatches).toEqual([
-      "rgb(255, 127, 14)",
-      "rgb(31, 119, 180)",
-    ]);
+    expect(swatches).toEqual(["rgb(255, 127, 14)", "rgb(31, 119, 180)"]);
   });
 });
 

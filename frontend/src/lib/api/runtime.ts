@@ -1,9 +1,3 @@
-import {
-  ApiError as GeneratedApiError,
-  CancelError,
-  OpenAPI,
-} from "./generated/index";
-
 const SERVER_URL_KEY = "agentsview-server-url";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
 
@@ -109,108 +103,102 @@ export async function responseErrorMessage(res: Response): Promise<string> {
   return apiErrorMessage(res.status, body);
 }
 
-export function configureGeneratedClient(): void {
-  OpenAPI.BASE = getGeneratedBase();
-  OpenAPI.TOKEN = async () => getAuthToken();
-  OpenAPI.ENCODE_PATH = encodeURIComponent;
+function generatedHeaders(init?: HeadersInit): Headers {
+  const headers = new Headers(init);
+  const token = getAuthToken();
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return headers;
 }
 
-export function generatedErrorMessage(err: GeneratedApiError): string {
-  if (typeof err.body === "string") {
-    return apiErrorMessage(err.status, err.body);
+export function generatedErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) return err.message;
+  if (typeof err === "string") {
+    return err.trim() || "API error";
   }
   if (
-    err.body !== null &&
-    typeof err.body === "object" &&
-    "error" in err.body &&
-    typeof err.body.error === "string" &&
-    err.body.error
+    err !== null &&
+    typeof err === "object" &&
+    "error" in err &&
+    typeof err.error === "string" &&
+    err.error
   ) {
-    return err.body.error;
+    return err.error;
   }
-  return err.message || `API ${err.status}`;
+  return err instanceof Error ? err.message : "API error";
 }
 
-function generatedErrorCode(err: GeneratedApiError): string | undefined {
+function generatedErrorCode(err: unknown): string | undefined {
   if (
-    err.body !== null &&
-    typeof err.body === "object" &&
-    "code" in err.body &&
-    typeof err.body.code === "string" &&
-    err.body.code
+    err !== null &&
+    typeof err === "object" &&
+    "code" in err &&
+    typeof err.code === "string" &&
+    err.code
   ) {
-    return err.body.code;
+    return err.code;
   }
   return undefined;
 }
 
+export async function orvalRequest(url: string, options: RequestInit = {}): Promise<Response> {
+  const response = await fetch(`${getGeneratedBase()}${url}`, {
+    ...options,
+    headers: generatedHeaders(options.headers),
+  });
+  if (response.ok) return response;
+
+  const body = await response.text().catch(() => "");
+  let error: unknown = body;
+  try {
+    error = JSON.parse(body);
+  } catch {
+    // Plain-text error body.
+  }
+  throw new ApiError(
+    response.status,
+    generatedErrorMessage(error) || `API ${response.status}`,
+    generatedErrorCode(error),
+  );
+}
+
+export async function orvalFetch<T>(url: string, options: RequestInit): Promise<T> {
+  const response = await orvalRequest(url, options);
+  if ([204, 205, 304].includes(response.status)) return undefined as T;
+
+  const body = await response.text();
+  if (!body) return undefined as T;
+  if (response.headers.get("Content-Type")?.includes("json")) {
+    return JSON.parse(body);
+  }
+  return body as T;
+}
+
+type GeneratedRequestOptions = {
+  signal?: AbortSignal;
+};
+
 export async function callGenerated<T>(
-  request: () => Promise<T>,
+  request: (options?: GeneratedRequestOptions) => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
-  configureGeneratedClient();
-  try {
-    return await withAbort(request(), signal);
-  } catch (err) {
-    if (err instanceof GeneratedApiError) {
-      throw new ApiError(
-        err.status,
-        generatedErrorMessage(err),
-        generatedErrorCode(err),
-      );
-    }
-    throw err;
-  }
+  return request(signal ? { signal } : undefined);
 }
 
-export interface CancelableLike<T> extends Promise<T> {
-  cancel: () => void;
-}
-
-function isCancelable<T>(value: Promise<T>): value is CancelableLike<T> {
-  return typeof (value as { cancel?: unknown }).cancel === "function";
-}
-
-// Matches 404s from both error classes: callGenerated rethrows the
-// runtime ApiError, while direct generated-service calls (e.g. via
-// withAbort) surface the generated one.
 export function isNotFoundError(err: unknown): boolean {
-  return (
-    (err instanceof ApiError || err instanceof GeneratedApiError) &&
-    err.status === 404
-  );
+  return err instanceof ApiError && err.status === 404;
 }
 
 export function isAbortError(err: unknown): boolean {
   if (err instanceof DOMException && err.name === "AbortError") {
     return true;
   }
-  if (err instanceof CancelError) {
-    return true;
-  }
   if (err === null || typeof err !== "object") {
     return false;
   }
   const candidate = err as {
-    isCancelled?: unknown;
     name?: unknown;
   };
-  return candidate.isCancelled === true ||
-    candidate.name === "CancelError";
-}
-
-export function withAbort<T>(
-  promise: Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> {
-  if (!signal || !isCancelable(promise)) return promise;
-  if (signal.aborted) {
-    promise.cancel();
-    return promise;
-  }
-  const cancel = () => promise.cancel();
-  signal.addEventListener("abort", cancel, { once: true });
-  return promise.finally(() => {
-    signal.removeEventListener("abort", cancel);
-  });
+  return candidate.name === "AbortError";
 }

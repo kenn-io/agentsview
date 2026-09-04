@@ -7,7 +7,6 @@
   import { SessionsService } from "../../api/generated/index";
   import {
     callGenerated,
-    configureGeneratedClient,
     isAbortError,
   } from "../../api/runtime.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -31,11 +30,10 @@
     const signal = trashRead.begin();
     loading = true;
     try {
-      configureGeneratedClient();
       const res = await callGenerated(
-        () => SessionsService.getApiV1Trash(),
+        (options) => SessionsService.getApiV1Trash(options),
         signal,
-      ) as unknown as TrashResponse;
+      );
       if (!trashRead.isCurrent(signal)) return;
       trashedSessions = res.sessions ?? [];
     } catch (e) {
@@ -50,8 +48,7 @@
 
   async function restoreSession(id: string) {
     try {
-      configureGeneratedClient();
-      await SessionsService.postApiV1SessionsIdRestore({ id });
+      await SessionsService.postApiV1SessionsByIdRestore({ id });
       trashedSessions = trashedSessions.filter((s) => s.id !== id);
       sessions.clearRecentlyDeleted(id);
       sessions.invalidateFilterCaches();
@@ -63,8 +60,7 @@
 
   async function permanentDelete(id: string) {
     try {
-      configureGeneratedClient();
-      await SessionsService.deleteApiV1SessionsIdPermanent({ id });
+      await SessionsService.deleteApiV1SessionsByIdPermanent({ id });
       trashedSessions = trashedSessions.filter((s) => s.id !== id);
       sessions.clearRecentlyDeleted(id);
       sessions.invalidateFilterCaches();
@@ -76,7 +72,6 @@
   async function emptyAll() {
     emptying = true;
     try {
-      configureGeneratedClient();
       await SessionsService.deleteApiV1Trash();
       trashedSessions = [];
       sessions.clearRecentlyDeleted();

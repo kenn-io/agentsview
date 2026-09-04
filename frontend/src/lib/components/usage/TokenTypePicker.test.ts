@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
 import TokenTypePicker from "./TokenTypePicker.svelte";
@@ -38,9 +32,7 @@ describe("TokenTypePicker", () => {
     await tick();
 
     const items = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        ".kit-filter-dropdown__item",
-      ),
+      document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item"),
     );
     expect(items.map((item) => item.textContent?.trim())).toEqual([
       "Input",
@@ -63,14 +55,10 @@ describe("TokenTypePicker", () => {
     });
     await tick();
 
-    document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Token types: Output"]',
-    )!.click();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Token types: Output"]')!.click();
     await tick();
     const output = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        ".kit-filter-dropdown__item",
-      ),
+      document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item"),
     ).find((item) => item.textContent?.trim() === "Output");
 
     expect(output?.disabled).toBe(true);

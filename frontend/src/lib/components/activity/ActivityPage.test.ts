@@ -67,16 +67,18 @@ function projectReport(): Report {
       interactive_cost: testMoney(0),
       interactive_sessions: 1,
     },
-    by_project: [{
-      key: "wrong-project",
-      project_key: "pl1:sha256:wrong",
-      agent_minutes: 20,
-      cost: testMoney(0),
-      interactive_agent_minutes: 20,
-      automated_agent_minutes: 0,
-      interactive_cost: testMoney(0),
-      automated_cost: testMoney(0),
-    }],
+    by_project: [
+      {
+        key: "wrong-project",
+        project_key: "pl1:sha256:wrong",
+        agent_minutes: 20,
+        cost: testMoney(0),
+        interactive_agent_minutes: 20,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
+      },
+    ],
     by_model: [],
     by_agent: [],
     by_session: [],
@@ -111,9 +113,9 @@ describe("ActivityPage refresh control", () => {
     const refresh = document.body.querySelector(".activity-refresh");
     expect(refresh?.textContent).toContain("Processing activity… 120 rows");
     expect(refresh?.textContent).not.toContain("Updated 3m ago");
-    expect(
-      document.body.querySelector(".activity-content")?.textContent,
-    ).not.toContain("Processing activity");
+    expect(document.body.querySelector(".activity-content")?.textContent).not.toContain(
+      "Processing activity",
+    );
 
     activity.progress = { phase: "loading_usage" };
     await flushEffects();
@@ -153,14 +155,10 @@ describe("ActivityPage breakdown links", () => {
     component = mount(ActivityPage, { target: document.body });
     await flushEffects();
 
-    expect(
-      document.body.querySelector("button[aria-label^=\"Reclassify\"]"),
-    ).toBeNull();
+    expect(document.body.querySelector('button[aria-label^="Reclassify"]')).toBeNull();
     const link = document.body.querySelector("a.bar-label") as HTMLAnchorElement;
     expect(link).toBeTruthy();
-    expect(link.getAttribute("href")).toBe(
-      "/data?project_key=pl1%3Asha256%3Awrong",
-    );
+    expect(link.getAttribute("href")).toBe("/data?project_key=pl1%3Asha256%3Awrong");
     expect(link.getAttribute("title")).toBe("View wrong-project in Data");
   });
 });
@@ -223,16 +221,18 @@ describe("ActivityPage bucket drill-down", () => {
       report_id: "stable-report",
       bucket_count: 1,
       elapsed_bucket_count: 1,
-      buckets: [{
-        start: "2026-07-01T00:00:00Z",
-        end: "2026-07-01T01:00:00Z",
-        max_agents: 1,
-        interactive_at_peak: 1,
-        automated_at_peak: 0,
-        agent_minutes: 20,
-        output_tokens: 0,
-        cost: testMoney(0),
-      }],
+      buckets: [
+        {
+          start: "2026-07-01T00:00:00Z",
+          end: "2026-07-01T01:00:00Z",
+          max_agents: 1,
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
+          agent_minutes: 20,
+          output_tokens: 0,
+          cost: testMoney(0),
+        },
+      ],
     } as Report;
 
     component = mount(ActivityPage, { target: document.body });
@@ -255,16 +255,18 @@ describe("ActivityPage bucket drill-down", () => {
       report_id: "stable-report",
       bucket_count: 1,
       elapsed_bucket_count: 1,
-      buckets: [{
-        start: "2026-07-01T00:00:00Z",
-        end: "2026-07-01T01:00:00Z",
-        max_agents: 1,
-        interactive_at_peak: 1,
-        automated_at_peak: 0,
-        agent_minutes: 20,
-        output_tokens: 0,
-        cost: testMoney(0),
-      }],
+      buckets: [
+        {
+          start: "2026-07-01T00:00:00Z",
+          end: "2026-07-01T01:00:00Z",
+          max_agents: 1,
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
+          agent_minutes: 20,
+          output_tokens: 0,
+          cost: testMoney(0),
+        },
+      ],
     } as Report;
 
     component = mount(ActivityPage, { target: document.body });
@@ -277,24 +279,24 @@ describe("ActivityPage bucket drill-down", () => {
 
   it("keeps the active badge when clearing its page request fails", async () => {
     stubActivityPageCollaborators();
-    vi.spyOn(activity, "loadSessionPage")
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
+    vi.spyOn(activity, "loadSessionPage").mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     activity.report = {
       ...projectReport(),
       report_id: "stable-report",
       bucket_count: 1,
       elapsed_bucket_count: 1,
-      buckets: [{
-        start: "2026-07-01T00:00:00Z",
-        end: "2026-07-01T01:00:00Z",
-        max_agents: 1,
-        interactive_at_peak: 1,
-        automated_at_peak: 0,
-        agent_minutes: 20,
-        output_tokens: 0,
-        cost: testMoney(0),
-      }],
+      buckets: [
+        {
+          start: "2026-07-01T00:00:00Z",
+          end: "2026-07-01T01:00:00Z",
+          max_agents: 1,
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
+          agent_minutes: 20,
+          output_tokens: 0,
+          cost: testMoney(0),
+        },
+      ],
     } as Report;
 
     component = mount(ActivityPage, { target: document.body });

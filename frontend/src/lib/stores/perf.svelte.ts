@@ -77,9 +77,7 @@ class PerfStore {
     this.panelOpen = !this.panelOpen;
   }
 
-  private record(
-    entry: Omit<PerfEntry, "id" | "at">,
-  ): void {
+  private record(entry: Omit<PerfEntry, "id" | "at">): void {
     if (!this.enabled) return;
     this.entries = [
       {
@@ -151,10 +149,7 @@ function requestInfo(input: RequestInfo | URL): {
 
 function apiPath(url: string): string | null {
   try {
-    const base =
-      typeof window !== "undefined"
-        ? window.location.origin
-        : "http://localhost";
+    const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
     const parsed = new URL(url, base);
     return parsed.pathname.startsWith("/api/") ? parsed.pathname : null;
   } catch {
@@ -176,14 +171,10 @@ function contentLength(response: Response): number | undefined {
 }
 
 function apiName(path: string): string {
-  return path
-    .replace(/^\/api\/v1\//, "")
-    .replace(/\/[0-9a-f-]{16,}/gi, "/:id");
+  return path.replace(/^\/api\/v1\//, "").replace(/\/[0-9a-f-]{16,}/gi, "/:id");
 }
 
-export function createPerfStore(
-  options: PerfStoreOptions = {},
-): PerfStore {
+export function createPerfStore(options: PerfStoreOptions = {}): PerfStore {
   return new PerfStore(options);
 }
 

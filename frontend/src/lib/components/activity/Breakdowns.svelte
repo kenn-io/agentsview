@@ -17,7 +17,7 @@
   // by_* fields are typed `any[] | null` by the codegen; cast each
   // to the generated element model for field-level type safety.
   function asKeyMinutes(arr: any[] | null): ActivityKeyMinutes[] {
-    return (arr ?? []) as ActivityKeyMinutes[];
+    return arr ?? [];
   }
 
   function rowValue(row: ActivityKeyMinutes): number {

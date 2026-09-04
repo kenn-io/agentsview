@@ -23,8 +23,7 @@ export async function waitForStableValue<T>(
   isEqual: (a: T, b: T) => boolean = sameValueZero,
 ): Promise<T> {
   const interval = pollIntervalMs ?? 100;
-  const deadline =
-    Date.now() + (maxWaitMs ?? stableDurationMs * 3);
+  const deadline = Date.now() + (maxWaitMs ?? stableDurationMs * 3);
   let lastValue = await fn();
   let stableStart = Date.now();
 

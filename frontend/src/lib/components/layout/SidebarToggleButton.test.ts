@@ -34,9 +34,7 @@ describe("SidebarToggleButton keyboard focus", () => {
 
     expect(sidebarButton).not.toBeNull();
     expect(contentButton).not.toBeNull();
-    expect(sidebarButton?.getAttribute("aria-controls")).toBe(
-      "session-sidebar",
-    );
+    expect(sidebarButton?.getAttribute("aria-controls")).toBe("session-sidebar");
     expect(sidebarButton?.getAttribute("aria-expanded")).toBe("true");
 
     sidebarButton!.focus();

@@ -52,9 +52,7 @@ interface SessionDataSet {
  * Creates a route handler that serves paginated, filterable
  * session data from the provided data sets.
  */
-export function handleSessionsRoute(
-  dataSets: SessionDataSet[],
-) {
+export function handleSessionsRoute(dataSets: SessionDataSet[]) {
   return async (route: Route) => {
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/\/+$/, "");
@@ -97,9 +95,7 @@ export function handleSessionsRoute(
     const startIndex = cursor ? parseInt(cursor, 10) : 0;
     const slice = filtered.slice(startIndex, startIndex + limit);
     const nextCursor =
-      startIndex + limit < filtered.length
-        ? (startIndex + limit).toString()
-        : undefined;
+      startIndex + limit < filtered.length ? (startIndex + limit).toString() : undefined;
 
     await route.fulfill({
       json: {
@@ -111,23 +107,15 @@ export function handleSessionsRoute(
   };
 }
 
-export const sessionsRoutePattern =
-  /\/api\/v1\/sessions(?:\/[^?]*)?(?:\?.*)?$/;
+export const sessionsRoutePattern = /\/api\/v1\/sessions(?:\/[^?]*)?(?:\?.*)?$/;
 
-function filterSessions(
-  dataSets: SessionDataSet[],
-  project: string | null,
-): MockSession[] {
+function filterSessions(dataSets: SessionDataSet[], project: string | null): MockSession[] {
   const defaultSet = dataSets.find((d) => d.project === null);
-  const matchedSet = project
-    ? dataSets.find((d) => d.project === project)
-    : null;
+  const matchedSet = project ? dataSets.find((d) => d.project === project) : null;
 
   if (matchedSet) return matchedSet.sessions;
   if (!defaultSet) return [];
-  return project
-    ? defaultSet.sessions.filter((s) => s.project === project)
-    : defaultSet.sessions;
+  return project ? defaultSet.sessions.filter((s) => s.project === project) : defaultSet.sessions;
 }
 
 function allSessions(dataSets: SessionDataSet[]): MockSession[] {
@@ -154,8 +142,7 @@ function toSidebarIndexRow(session: MockSession) {
     created_at: session.created_at,
     termination_status: session.termination_status ?? null,
     message_count: session.message_count,
-    user_message_count:
-      session.user_message_count ?? session.message_count,
+    user_message_count: session.user_message_count ?? session.message_count,
     is_automated: session.is_automated ?? false,
     is_teammate: session.is_teammate ?? false,
   };

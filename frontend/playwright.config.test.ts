@@ -42,12 +42,9 @@ describe("Playwright e2e port configuration", () => {
     expect(config.webServer?.port).toBe(48123);
   });
 
-  it.each(["0", "-1", "65536", "1.5", "abc", " 80 "])(
-    "rejects invalid port %s",
-    async (port) => {
-      await expect(loadConfig(port)).rejects.toThrow(
-        /AGENTSVIEW_E2E_PORT must be an integer from 1 to 65535/,
-      );
-    },
-  );
+  it.each(["0", "-1", "65536", "1.5", "abc", " 80 "])("rejects invalid port %s", async (port) => {
+    await expect(loadConfig(port)).rejects.toThrow(
+      /AGENTSVIEW_E2E_PORT must be an integer from 1 to 65535/,
+    );
+  });
 });

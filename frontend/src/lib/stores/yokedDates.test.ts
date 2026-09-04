@@ -82,24 +82,21 @@ describe("YokedDatesStore", () => {
       },
     },
     { name: "malformed range", range: { from: "invalid" } },
-  ])(
-    "migrates a version 1 $name to disabled empty state",
-    ({ range }) => {
-      const storage = fakeStorage({
-        "yoked-dates": JSON.stringify({ version: 1, range }),
-      });
+  ])("migrates a version 1 $name to disabled empty state", ({ range }) => {
+    const storage = fakeStorage({
+      "yoked-dates": JSON.stringify({ version: 1, range }),
+    });
 
-      const store = new YokedDatesStore(storage);
+    const store = new YokedDatesStore(storage);
 
-      expect(store.enabled).toBe(false);
-      expect(store.range).toBeNull();
-      expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
-        version: 2,
-        enabled: false,
-        range: null,
-      });
-    },
-  );
+    expect(store.enabled).toBe(false);
+    expect(store.range).toBeNull();
+    expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
+      version: 2,
+      enabled: false,
+      range: null,
+    });
+  });
 
   it.each([
     {
@@ -112,28 +109,25 @@ describe("YokedDatesStore", () => {
       },
     },
     { name: "malformed range", range: { from: "invalid" } },
-  ])(
-    "normalizes a disabled version 2 $name to a null range",
-    ({ range }) => {
-      const storage = fakeStorage({
-        "yoked-dates": JSON.stringify({
-          version: 2,
-          enabled: false,
-          range,
-        }),
-      });
-
-      const store = new YokedDatesStore(storage);
-
-      expect(store.enabled).toBe(false);
-      expect(store.range).toBeNull();
-      expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
+  ])("normalizes a disabled version 2 $name to a null range", ({ range }) => {
+    const storage = fakeStorage({
+      "yoked-dates": JSON.stringify({
         version: 2,
         enabled: false,
-        range: null,
-      });
-    },
-  );
+        range,
+      }),
+    });
+
+    const store = new YokedDatesStore(storage);
+
+    expect(store.enabled).toBe(false);
+    expect(store.range).toBeNull();
+    expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
+      version: 2,
+      enabled: false,
+      range: null,
+    });
+  });
 
   it.each([
     "not json",
@@ -361,9 +355,7 @@ describe("yoked date adapters", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-06-19T12:00:00"));
-      expect(
-        sessionParamsToPanelDate({ date_from: "2026-06-01" }),
-      ).toEqual({
+      expect(sessionParamsToPanelDate({ date_from: "2026-06-01" })).toEqual({
         from: "2026-06-01",
         to: "2026-06-19",
         mode: "fixed",
@@ -375,10 +367,7 @@ describe("yoked date adapters", () => {
 
   it("maps a sessions upper date bound using an available earliest date", () => {
     expect(
-      sessionParamsToPanelDate(
-        { date_to: "2026-06-07" },
-        { earliest: "2026-05-01T14:30:00Z" },
-      ),
+      sessionParamsToPanelDate({ date_to: "2026-06-07" }, { earliest: "2026-05-01T14:30:00Z" }),
     ).toEqual({
       from: "2026-05-01",
       to: "2026-06-07",
@@ -397,12 +386,7 @@ describe("yoked date adapters", () => {
   it("rejects incomplete and inverted panel ranges", () => {
     expect(panelDateState("", "2026-06-07")).toBeNull();
     expect(panelDateState("2026-06-08", "2026-06-07")).toBeNull();
-    expect(
-      panelStateToRange(
-        { from: "2026-06-08", to: "2026-06-07" },
-        123,
-      ),
-    ).toBeNull();
+    expect(panelStateToRange({ from: "2026-06-08", to: "2026-06-07" }, 123)).toBeNull();
   });
 
   it("serializes same-day sessions ranges as date", () => {

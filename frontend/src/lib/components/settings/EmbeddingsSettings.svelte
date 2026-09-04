@@ -3,8 +3,7 @@
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
   import { EmbeddingsService } from "../../api/generated/index";
-  import type { VectorBuildStatus } from "../../api/generated/index";
-  import type { VectorGenerationInfo } from "../../api/generated/models/VectorGenerationInfo";
+  import type { VectorBuildStatus, VectorGenerationInfo } from "../../api/generated/index";
   import {
     ApiError,
     callGenerated,
@@ -81,8 +80,8 @@
   async function refresh(withGenerations: boolean): Promise<void> {
     const signal = statusRead.begin();
     try {
-      const next = await callGenerated(() =>
-        EmbeddingsService.getApiV1EmbeddingsStatus({}),
+      const next = await callGenerated((options) =>
+        EmbeddingsService.getApiV1EmbeddingsStatus({}, options),
         signal,
       );
       if (disposed || !statusRead.isCurrent(signal)) return;
@@ -121,12 +120,12 @@
   async function refreshGenerations(): Promise<void> {
     const signal = generationsRead.begin();
     try {
-      const res = await callGenerated(() =>
-        EmbeddingsService.getApiV1EmbeddingsGenerations({}),
+      const res = await callGenerated((options) =>
+        EmbeddingsService.getApiV1EmbeddingsGenerations({}, options),
         signal,
       );
       if (disposed || !generationsRead.isCurrent(signal)) return;
-      generations = (res.generations ?? []) as VectorGenerationInfo[];
+      generations = res.generations ?? [];
     } finally {
       generationsRead.finish(signal);
     }

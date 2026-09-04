@@ -35,9 +35,7 @@ export function setupVisibilityHealthCheck(
   // on_window_event focus. Skip the frontend handler to avoid racing
   // with Rust's navigate. Keep it enabled when a remote server is
   // configured since Tauri only probes the local sidecar.
-  const isDesktop = new URLSearchParams(window.location.search).has(
-    "desktop",
-  );
+  const isDesktop = new URLSearchParams(window.location.search).has("desktop");
   if (isDesktop && !isRemoteConnection()) return () => {};
 
   let lastCheck = 0;
@@ -71,9 +69,5 @@ export function setupVisibilityHealthCheck(
   }
 
   document.addEventListener("visibilitychange", onVisibilityChange);
-  return () =>
-    document.removeEventListener(
-      "visibilitychange",
-      onVisibilityChange,
-    );
+  return () => document.removeEventListener("visibilitychange", onVisibilityChange);
 }

@@ -15,7 +15,7 @@
 
   // `projects` is typed `any[] | null` by the codegen; cast to the generated
   // element model for field-level type safety.
-  const allRows = $derived((inventory.projects ?? []) as DbProjectInventoryRow[]);
+  const allRows = $derived(inventory.projects ?? []);
 
   let filterText = $state("");
 

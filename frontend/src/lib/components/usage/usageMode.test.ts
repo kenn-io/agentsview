@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  usageModeFromParams,
-  withUsageMode,
-} from "./usageMode.js";
+import { usageModeFromParams, withUsageMode } from "./usageMode.js";
 
 describe("usageModeFromParams", () => {
   it.each([
@@ -18,10 +15,7 @@ describe("usageModeFromParams", () => {
 
 describe("withUsageMode", () => {
   it("adds token mode without dropping filters", () => {
-    expect(withUsageMode(
-      { project: "demo", window_days: "30", desktop: "" },
-      "token",
-    )).toEqual({
+    expect(withUsageMode({ project: "demo", window_days: "30", desktop: "" }, "token")).toEqual({
       project: "demo",
       window_days: "30",
       desktop: "",
@@ -30,9 +24,8 @@ describe("withUsageMode", () => {
   });
 
   it("canonicalizes cost mode by removing view", () => {
-    expect(withUsageMode(
-      { project: "demo", view: "invalid" },
-      "cost",
-    )).toEqual({ project: "demo" });
+    expect(withUsageMode({ project: "demo", view: "invalid" }, "cost")).toEqual({
+      project: "demo",
+    });
   });
 });

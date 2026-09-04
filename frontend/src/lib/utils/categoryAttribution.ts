@@ -25,9 +25,7 @@ export function attributeTurn(t: TurnAttributionInput): TurnAttribution | null {
   let remainder = t.turnDurationMs;
   let subUnion = 0;
   if (subagents.length > 0) {
-    subUnion = unionDuration(
-      subagents.map((c) => c.subagentRange!),
-    );
+    subUnion = unionDuration(subagents.map((c) => c.subagentRange!));
     remainder = Math.max(0, t.turnDurationMs - subUnion);
   }
 
@@ -66,9 +64,7 @@ export function attributeTurn(t: TurnAttributionInput): TurnAttribution | null {
   };
 }
 
-function unionDuration(
-  ranges: Array<{ startedAtMs: number; endedAtMs: number }>,
-): number {
+function unionDuration(ranges: Array<{ startedAtMs: number; endedAtMs: number }>): number {
   if (ranges.length === 0) return 0;
   const sorted = [...ranges].sort((a, b) => a.startedAtMs - b.startedAtMs);
   let total = 0;

@@ -12,32 +12,20 @@ export async function clickNavTab(page: Page, label: string): Promise<void> {
   const tab = page.locator(".kit-top-bar__tabs .kit-top-bar__tab", {
     hasText: label,
   });
-  const trigger = page.locator(
-    ".kit-top-bar__nav-select .kit-select-dropdown__trigger",
-  );
+  const trigger = page.locator(".kit-top-bar__nav-select .kit-select-dropdown__trigger");
   await expect(tab.or(trigger)).toBeVisible();
   if (await tab.isVisible()) {
     await tab.click();
     return;
   }
   await trigger.click();
-  await page
-    .locator(".kit-select-dropdown__option", { hasText: label })
-    .click();
+  await page.locator(".kit-select-dropdown__option", { hasText: label }).click();
 }
 
 /** Assert `label` is the active TopBar destination in either nav mode. */
-export async function expectActiveNavTab(
-  page: Page,
-  label: string,
-): Promise<void> {
-  const activeTab = page.locator(
-    ".kit-top-bar__tabs .kit-top-bar__tab.active",
-    { hasText: label },
-  );
-  const value = page.locator(
-    ".kit-top-bar__nav-select .kit-select-dropdown__value",
-  );
+export async function expectActiveNavTab(page: Page, label: string): Promise<void> {
+  const activeTab = page.locator(".kit-top-bar__tabs .kit-top-bar__tab.active", { hasText: label });
+  const value = page.locator(".kit-top-bar__nav-select .kit-select-dropdown__value");
   await expect(activeTab.or(value)).toBeVisible();
   if (await value.isVisible()) {
     await expect(value).toHaveText(label);

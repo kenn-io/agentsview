@@ -47,9 +47,7 @@ describe("SystemBoundaryCard", () => {
     // <details> contains the full content; hidden until expanded.
     const details = document.body.querySelector("details");
     expect(details).toBeTruthy();
-    expect(details?.querySelector("pre")?.textContent).toBe(
-      "line one\nline two\nline three",
-    );
+    expect(details?.querySelector("pre")?.textContent).toBe("line one\nline two\nline three");
     unmount(c);
   });
 });

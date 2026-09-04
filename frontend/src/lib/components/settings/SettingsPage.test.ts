@@ -13,7 +13,6 @@ vi.mock("../../api/runtime.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../../api/runtime.js")>();
   return {
     ...orig,
-    configureGeneratedClient: vi.fn(),
     getAuthToken: vi.fn(() => ""),
     isRemoteConnection: vi.fn(() => false),
     setAuthToken: vi.fn(),
@@ -422,9 +421,7 @@ describe("SettingsPage", () => {
       require_auth: false,
       terminal: { mode: "auto" },
     });
-    settingsService.putApiV1Settings.mockRejectedValue(
-      new Error("settings endpoint unavailable"),
-    );
+    settingsService.putApiV1Settings.mockRejectedValue(new Error("settings endpoint unavailable"));
     const component = mount(SettingsPage, { target: document.body });
     await tick();
     await tick();

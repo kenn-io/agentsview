@@ -46,9 +46,7 @@ describe("CompactBoundaryDivider", () => {
     );
     expect(document.body.textContent).toContain("上下文已压缩");
     expect(document.body.textContent).toContain("显示完整摘要");
-    expect(document.body.textContent).toContain(
-      "Do not translate this compact summary",
-    );
+    expect(document.body.textContent).toContain("Do not translate this compact summary");
 
     unmount(c);
   });

@@ -23,9 +23,11 @@ function makeToolMessage(ordinal: number): Message {
     output_tokens: 0,
     has_context_tokens: false,
     has_output_tokens: false,
-    tool_calls: [{
-      tool_name: "bash",
-    }],
+    tool_calls: [
+      {
+        tool_name: "bash",
+      },
+    ],
     is_system: false,
   };
 }
@@ -48,9 +50,7 @@ describe("ToolCallGroup", () => {
 
     const divider = document.querySelector(".read-progress-divider");
     expect(divider?.textContent).toContain("New messages");
-    expect(
-      document.querySelector('[data-message-ordinal="2"]'),
-    ).not.toBeNull();
+    expect(document.querySelector('[data-message-ordinal="2"]')).not.toBeNull();
 
     unmount(component);
   });

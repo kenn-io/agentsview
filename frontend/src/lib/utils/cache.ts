@@ -7,9 +7,7 @@ export class LRUCache<K, V> {
 
   constructor(private capacity: number) {
     if (!Number.isInteger(capacity) || capacity < 1) {
-      throw new Error(
-        `LRUCache capacity must be a positive integer, got ${capacity}`,
-      );
+      throw new Error(`LRUCache capacity must be a positive integer, got ${capacity}`);
     }
   }
 

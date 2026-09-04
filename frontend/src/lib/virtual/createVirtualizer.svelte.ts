@@ -10,35 +10,26 @@ import {
   // kit-ui-check-ignore: local wrapper preserves TanStack scroll reconciliation and measurement-cache semantics used by MessageList; replacing it with kit-ui VirtualList is a separate migration.
 } from "@tanstack/virtual-core";
 
-type PartialKeys<T, K extends keyof T> = Omit<T, K> &
-  Partial<Pick<T, K>>;
+type PartialKeys<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 
 type ElementOpts = PartialKeys<
   VirtualizerOptions<HTMLElement, HTMLElement>,
-  | "observeElementOffset"
-  | "observeElementRect"
-  | "scrollToFn"
+  "observeElementOffset" | "observeElementRect" | "scrollToFn"
 > & { measureCacheKey?: unknown };
 
 type WindowOpts = PartialKeys<
   VirtualizerOptions<Window, HTMLElement>,
-  | "observeElementOffset"
-  | "observeElementRect"
-  | "scrollToFn"
-  | "getScrollElement"
+  "observeElementOffset" | "observeElementRect" | "scrollToFn" | "getScrollElement"
 > & { measureCacheKey?: unknown };
 
-type BaseOpts<
-  TScroll extends Element | Window,
-  TItem extends Element,
-> = VirtualizerOptions<TScroll, TItem> & {
+type BaseOpts<TScroll extends Element | Window, TItem extends Element> = VirtualizerOptions<
+  TScroll,
+  TItem
+> & {
   measureCacheKey?: unknown;
 };
 
-function createBaseVirtualizer<
-  TScroll extends Element | Window,
-  TItem extends Element,
->(
+function createBaseVirtualizer<TScroll extends Element | Window, TItem extends Element>(
   optsFn: () => BaseOpts<TScroll, TItem>,
   postUpdate?: (
     instance: Virtualizer<TScroll, TItem>,
@@ -46,9 +37,7 @@ function createBaseVirtualizer<
     reset: boolean,
   ) => void,
 ) {
-  let instance:
-    | Virtualizer<TScroll, TItem>
-    | undefined = undefined;
+  let instance: Virtualizer<TScroll, TItem> | undefined = undefined;
   let notifyPending = false;
   let lastMeasureCacheKey: unknown = undefined;
   let cacheKeyChanged = false;
@@ -65,18 +54,11 @@ function createBaseVirtualizer<
 
   $effect(() => {
     const opts = optsFn();
-    const willReset =
-      opts.measureCacheKey !== lastMeasureCacheKey &&
-      instance !== undefined;
+    const willReset = opts.measureCacheKey !== lastMeasureCacheKey && instance !== undefined;
     const resolvedOpts: VirtualizerOptions<TScroll, TItem> = {
       ...opts,
-      initialOffset: willReset
-        ? 0
-        : (instance?.scrollOffset ?? opts.initialOffset),
-      onChange: (
-        vInst: Virtualizer<TScroll, TItem>,
-        sync: boolean,
-      ) => {
+      initialOffset: willReset ? 0 : (instance?.scrollOffset ?? opts.initialOffset),
+      onChange: (vInst: Virtualizer<TScroll, TItem>, sync: boolean) => {
         instance = vInst;
         if (sync) {
           bumpVersion();
@@ -99,9 +81,11 @@ function createBaseVirtualizer<
 
     cacheKeyChanged = false;
     if (opts.measureCacheKey !== lastMeasureCacheKey) {
-      (instance as typeof instance & {
-        itemSizeCache: Map<unknown, unknown>;
-      }).itemSizeCache = new Map();
+      (
+        instance as typeof instance & {
+          itemSizeCache: Map<unknown, unknown>;
+        }
+      ).itemSizeCache = new Map();
       cacheKeyChanged = true;
     }
     lastMeasureCacheKey = opts.measureCacheKey;
@@ -125,9 +109,7 @@ function createBaseVirtualizer<
   };
 }
 
-export function createVirtualizer(
-  optsFn: () => ElementOpts,
-) {
+export function createVirtualizer(optsFn: () => ElementOpts) {
   return createBaseVirtualizer<HTMLElement, HTMLElement>(
     () => {
       const opts = optsFn();
@@ -164,9 +146,7 @@ export function createVirtualizer(
   );
 }
 
-export function createWindowVirtualizer(
-  optsFn: () => WindowOpts,
-) {
+export function createWindowVirtualizer(optsFn: () => WindowOpts) {
   return createBaseVirtualizer<Window, HTMLElement>(() => ({
     observeElementOffset: observeWindowOffset,
     observeElementRect: observeWindowRect,

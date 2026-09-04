@@ -32,13 +32,9 @@ describe("sidebar width helpers", () => {
   it("falls back to the default for invalid stored values", () => {
     expect(clampStoredSidebarWidth(undefined)).toBe(SIDEBAR_WIDTH_DEFAULT);
     expect(clampStoredSidebarWidth(null)).toBe(SIDEBAR_WIDTH_DEFAULT);
-    expect(clampStoredSidebarWidth("not-a-number")).toBe(
-      SIDEBAR_WIDTH_DEFAULT,
-    );
+    expect(clampStoredSidebarWidth("not-a-number")).toBe(SIDEBAR_WIDTH_DEFAULT);
     expect(clampStoredSidebarWidth(Number.NaN)).toBe(SIDEBAR_WIDTH_DEFAULT);
-    expect(clampStoredSidebarWidth(Number.POSITIVE_INFINITY)).toBe(
-      SIDEBAR_WIDTH_DEFAULT,
-    );
+    expect(clampStoredSidebarWidth(Number.POSITIVE_INFINITY)).toBe(SIDEBAR_WIDTH_DEFAULT);
   });
 
   it("clamps stored values to the supported minimum and maximum", () => {
@@ -77,9 +73,7 @@ describe("sidebar width helpers", () => {
 
   it("clamps stored vitals widths and falls back on invalid values", () => {
     expect(clampStoredVitalsWidth(undefined)).toBe(VITALS_WIDTH_DEFAULT);
-    expect(clampStoredVitalsWidth("not-a-number")).toBe(
-      VITALS_WIDTH_DEFAULT,
-    );
+    expect(clampStoredVitalsWidth("not-a-number")).toBe(VITALS_WIDTH_DEFAULT);
     expect(clampStoredVitalsWidth(100)).toBe(VITALS_WIDTH_MIN);
     expect(clampStoredVitalsWidth("400")).toBe(400);
     expect(clampStoredVitalsWidth(999)).toBe(VITALS_WIDTH_STORAGE_MAX);

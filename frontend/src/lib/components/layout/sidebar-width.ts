@@ -19,10 +19,7 @@ function clampStoredPaneWidth(
   minWidth: number,
   maxWidth: number,
 ): number {
-  const numericValue =
-    typeof value === "string" && value.trim() !== ""
-      ? Number(value)
-      : value;
+  const numericValue = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
 
   if (typeof numericValue !== "number" || !Number.isFinite(numericValue)) {
     return fallback;
@@ -59,18 +56,12 @@ function clampPaneWidthForLayout(
   minWidth: number,
   maxWidth: number,
 ): number {
-  const layoutMaxWidth = Math.max(
-    minWidth,
-    Math.min(maxWidth, layoutWidth - SIDEBAR_CONTENT_MIN),
-  );
+  const layoutMaxWidth = Math.max(minWidth, Math.min(maxWidth, layoutWidth - SIDEBAR_CONTENT_MIN));
 
   return Math.min(layoutMaxWidth, Math.max(minWidth, desiredWidth));
 }
 
-export function clampSidebarWidthForLayout(
-  desiredWidth: number,
-  layoutWidth: number,
-): number {
+export function clampSidebarWidthForLayout(desiredWidth: number, layoutWidth: number): number {
   return clampPaneWidthForLayout(
     desiredWidth,
     layoutWidth,
@@ -79,10 +70,7 @@ export function clampSidebarWidthForLayout(
   );
 }
 
-export function clampVitalsWidthForLayout(
-  desiredWidth: number,
-  layoutWidth: number,
-): number {
+export function clampVitalsWidthForLayout(desiredWidth: number, layoutWidth: number): number {
   return clampPaneWidthForLayout(
     desiredWidth,
     layoutWidth,

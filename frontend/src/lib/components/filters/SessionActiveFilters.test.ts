@@ -1,10 +1,4 @@
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { flushSync, mount, unmount } from "svelte";
 import SessionActiveFilters from "./SessionActiveFilters.svelte";
 import { sessions } from "../../stores/sessions.svelte.js";
@@ -21,9 +15,7 @@ afterEach(() => {
 
 describe("SessionActiveFilters clear all", () => {
   it("invokes every usage-level clear hook", () => {
-    vi.spyOn(sessions, "clearSessionFilters").mockImplementation(
-      () => {},
-    );
+    vi.spyOn(sessions, "clearSessionFilters").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockResolvedValue();
     sessions.filters.project = "alpha";
     const onClearProjects = vi.fn();
@@ -36,8 +28,7 @@ describe("SessionActiveFilters clear all", () => {
     });
     flushSync();
 
-    const clearAll =
-      document.querySelector<HTMLButtonElement>(".clear-all");
+    const clearAll = document.querySelector<HTMLButtonElement>(".clear-all");
     expect(clearAll).not.toBeNull();
     clearAll?.click();
     flushSync();

@@ -1,8 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
 const isCI = process.env.CI === "true";
-const isSelfHostedCI =
-  isCI && process.env.RUNNER_ENVIRONMENT === "self-hosted";
+const isSelfHostedCI = isCI && process.env.RUNNER_ENVIRONMENT === "self-hosted";
 
 function parseE2EPort(raw: string | undefined): number {
   if (raw === undefined || raw === "") {

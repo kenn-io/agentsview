@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { ui } from "../../stores/ui.svelte.js";
 // @ts-ignore
@@ -17,30 +10,24 @@ const services = vi.hoisted(() => {
   const state = {
     resolveConfig: (_config: Config) => {},
     configPromise: Promise.resolve({ configured: true }),
-    configureGeneratedClient: vi.fn(),
     getApiV1ConfigGithub: vi.fn(),
     postApiV1ConfigGithub: vi.fn(),
-    postApiV1InsightsIdPublish: vi.fn(),
-    postApiV1SessionsIdPublish: vi.fn(),
+    postApiV1InsightsByIdPublish: vi.fn(),
+    postApiV1SessionsByIdPublish: vi.fn(),
   };
 
   function deferConfig() {
     state.configPromise = new Promise<Config>((resolve) => {
       state.resolveConfig = resolve;
     });
-    state.getApiV1ConfigGithub.mockImplementation(
-      () => state.configPromise,
-    );
+    state.getApiV1ConfigGithub.mockImplementation(() => state.configPromise);
   }
 
   return {
-    configureGeneratedClient: state.configureGeneratedClient,
     getApiV1ConfigGithub: state.getApiV1ConfigGithub,
     postApiV1ConfigGithub: state.postApiV1ConfigGithub,
-    postApiV1InsightsIdPublish:
-      state.postApiV1InsightsIdPublish,
-    postApiV1SessionsIdPublish:
-      state.postApiV1SessionsIdPublish,
+    postApiV1InsightsByIdPublish: state.postApiV1InsightsByIdPublish,
+    postApiV1SessionsByIdPublish: state.postApiV1SessionsByIdPublish,
     resolveConfig(config: Config) {
       state.resolveConfig(config);
     },
@@ -55,7 +42,6 @@ const sessionState = vi.hoisted(() => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  configureGeneratedClient: services.configureGeneratedClient,
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
 }));
@@ -66,12 +52,10 @@ vi.mock("../../api/generated/index", () => ({
     postApiV1ConfigGithub: services.postApiV1ConfigGithub,
   },
   InsightsService: {
-    postApiV1InsightsIdPublish:
-      services.postApiV1InsightsIdPublish,
+    postApiV1InsightsByIdPublish: services.postApiV1InsightsByIdPublish,
   },
   SessionsService: {
-    postApiV1SessionsIdPublish:
-      services.postApiV1SessionsIdPublish,
+    postApiV1SessionsByIdPublish: services.postApiV1SessionsByIdPublish,
   },
 }));
 
@@ -89,17 +73,16 @@ describe("PublishModal", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
-    services.configureGeneratedClient.mockClear();
     services.getApiV1ConfigGithub.mockClear();
     services.postApiV1ConfigGithub.mockReset();
     services.postApiV1ConfigGithub.mockResolvedValue({});
-    services.postApiV1InsightsIdPublish.mockReset();
-    services.postApiV1InsightsIdPublish.mockResolvedValue({
+    services.postApiV1InsightsByIdPublish.mockReset();
+    services.postApiV1InsightsByIdPublish.mockResolvedValue({
       gist_url: "https://gist.github.com/insight",
       view_url: "https://gist.github.com/insight/view",
     });
-    services.postApiV1SessionsIdPublish.mockReset();
-    services.postApiV1SessionsIdPublish.mockResolvedValue({
+    services.postApiV1SessionsByIdPublish.mockReset();
+    services.postApiV1SessionsByIdPublish.mockResolvedValue({
       gist_url: "https://gist.github.com/session",
       view_url: "https://gist.github.com/session/view",
     });
@@ -139,11 +122,7 @@ describe("PublishModal", () => {
     services.resolveConfig({ configured: true });
     await flushAsync();
 
-    expect(
-      services.postApiV1InsightsIdPublish,
-    ).not.toHaveBeenCalled();
-    expect(
-      services.postApiV1SessionsIdPublish,
-    ).not.toHaveBeenCalled();
+    expect(services.postApiV1InsightsByIdPublish).not.toHaveBeenCalled();
+    expect(services.postApiV1SessionsByIdPublish).not.toHaveBeenCalled();
   });
 });
