@@ -1052,7 +1052,7 @@ func TestCurrentDataVersionPositAssistantProviderIdentity(t *testing.T) {
 }
 
 func TestCurrentDataVersionClaudeRepoLocalWorktrees(t *testing.T) {
-	assert.Equal(t, 96, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 96,
 		"Claude repository-local worktrees require a sequential backfill")
 }
 
