@@ -5,7 +5,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -1800,7 +1799,7 @@ func TestWatcherStopWaitsForRunningCallbackAndDiscardsPending(t *testing.T) {
 
 func TestWatcherSchedulerBackendErrorsRemainDrainable(t *testing.T) {
 	previousLogOutput := log.Writer()
-	log.SetOutput(io.Discard)
+	log.SetOutput(t.Output())
 	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
 
 	backend := newFakeWatchBackend()

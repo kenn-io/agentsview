@@ -335,22 +335,12 @@ BENCH_GATE_TIME ?= 20x
 # their millisecond-scale samples are what needs the averaging.
 BENCH_GATE_HEAVY ?= GetDailyUsage|UsageRollup|SQLiteActivityReport|SyncAllColdArchive|ResyncBulk
 BENCH_GATE_HEAVY_TIME ?= 5x
-# go test merges the test binary's stdout and stderr into one stream,
-# so a log line written while the testing package is midway through a
-# result line ("BenchmarkFoo-4 \t" is printed before the timed loop,
-# the numbers after) splits that result in two and benchgate rejects
-# the capture. The -exec wrapper holds the binary's stderr back until
-# it exits, so logs still appear in the output but never inside a
-# result line.
-BENCH_GATE_EXEC := $(CURDIR)/scripts/bench-gate-exec.sh
 bench-gate: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
-		-exec $(BENCH_GATE_EXEC) \
 		-bench . -skip '$(BENCH_GATE_HEAVY)' -benchmem \
 		-count $(BENCH_GATE_COUNT) -benchtime $(BENCH_GATE_TIME) \
 		-timeout 25m $(BENCH_GATE_PACKAGES)
 	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
-		-exec $(BENCH_GATE_EXEC) \
 		-bench '$(BENCH_GATE_HEAVY)' -benchmem \
 		-count $(BENCH_GATE_COUNT) -benchtime $(BENCH_GATE_HEAVY_TIME) \
 		-timeout 25m $(BENCH_GATE_PACKAGES)

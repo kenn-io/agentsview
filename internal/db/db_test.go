@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -305,12 +306,32 @@ const (
 
 func testDB(tb testing.TB) *DB {
 	tb.Helper()
+	routeBenchmarkLogs(tb)
 	dir := tb.TempDir()
 	path := filepath.Join(dir, "test.db")
 	d, err := openCopiedTestDB(path)
 	require.NoError(tb, err, "opening test db")
 	tb.Cleanup(func() { require.NoError(tb, d.Close()) })
 	return d
+}
+
+// routeBenchmarkLogs sends the package's global log output through the
+// benchmark's own output for its duration. go test prints a benchmark's
+// name before the timed loop and its numbers after, so a log line
+// written straight to stderr in between (the slow InsertMessages
+// warning during fixture seeding on a busy runner) splits the result
+// line and the bench gate rejects the capture. Output written through
+// b.Output is printed after the result line instead. Tests are left
+// alone: parallel tests share the one global logger, so a per-test swap
+// could point it at a test that has already finished.
+func routeBenchmarkLogs(tb testing.TB) {
+	b, ok := tb.(*testing.B)
+	if !ok {
+		return
+	}
+	prev := log.Writer()
+	log.SetOutput(b.Output())
+	b.Cleanup(func() { log.SetOutput(prev) })
 }
 
 func testDBAtPath(t *testing.T, path, label string) *DB {

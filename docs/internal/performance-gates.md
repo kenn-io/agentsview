@@ -146,20 +146,16 @@ captured without `-benchmem`), which would otherwise silently disable that gate
 for good. The reverse — a gated unit missing from the baseline, which may
 legitimately be older or partial — is reported as not gated.
 
-The capture itself guards against the one corruption source we have hit.
-`go test` gives the test binary a single merged stdout+stderr pipe, and the
-testing package prints a benchmark's name before the timed loop and its numbers
-after, so any log line the code under test writes to stderr in between (the slow
-`InsertMessages` warning during fixture seeding on a busy runner, for example)
-splits the result across two lines. benchfmt cannot parse either half, the
-sample disappears, and the gate fails on the corruption or on having too few
-samples. `make bench-gate` therefore runs every test binary through
-`scripts/bench-gate-exec.sh` via `go test -exec`, which holds the binary's
-stderr back and replays it after the binary exits. Logs, panics, and stack
-traces still reach the captured output, after the package's results instead of
-inside them, and benchfmt ignores them there. Silencing loggers inside a
-benchmark is no longer required for the gate, though it still keeps local
-`go test -bench` output readable.
+There is one corruption source we have actually hit. `go test` gives the test
+binary a single merged stdout+stderr pipe, and the testing package prints a
+benchmark's name before the timed loop and its numbers after, so any log line
+the code under test writes in between (the slow `InsertMessages` warning during
+fixture seeding on a busy runner, for example) splits the result across two
+lines. benchfmt cannot parse either half, the sample disappears, and the gate
+fails on the corruption or on having too few samples. Benchmarks therefore send
+the package logger through their own `b.Output()`, which the testing package
+prints after the result line: `testDB` does it for every `internal/db`
+benchmark, and the sync benchmarks call `routeBenchLogs`.
 
 The gate always runs with a fixed `-benchtime=Nx` iteration count (not a
 duration): two of the benchmarks grow their fixture as they iterate, so the
@@ -232,10 +228,11 @@ reported without gating; it gates automatically once merged.
 
 1. Write the benchmark next to the code it guards (`*_bench_test.go`,
    `b.ReportAllocs()`, self-assert the invariant it protects where possible).
-   The gate's capture keeps stderr out of result lines, so logging from the
-   code under test cannot corrupt it; silencing the logger (see
-   `silenceBenchLogs` in `internal/sync/engine_bench_test.go`) is optional and
-   only keeps local `go test -bench` output tidy.
+   Anything the code under test logs must go through the benchmark's own
+   output (`testDB` does this for `internal/db`; see `routeBenchLogs` in
+   `internal/sync/engine_bench_test.go` for the pattern). A log line written
+   straight to stderr mid-result corrupts the capture and benchgate fails on
+   it.
 1. If its package is not already gated, add it to `BENCH_GATE_PACKAGES` in the
    Makefile — a benchmark outside the gated packages silently never runs, so
    it looks gated while measuring nothing. CI picks the list up from the
