@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -282,16 +283,23 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 			if !isContainedIn(resolvedDir, resolvedRoot) {
 				return nil
 			}
-			return streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
+			topLevel := make(map[string]struct{})
+			var sessionDirs []string
+			err := streamDirectoryEntries(ctx, dir, func(entry os.DirEntry) error {
 				if !entry.IsDir() {
 					if !IsCursorTranscriptExt(entry.Name()) {
 						return nil
+					}
+					if entry.Type().IsRegular() {
+						name := entry.Name()
+						topLevel[strings.TrimSuffix(name, filepath.Ext(name))] = struct{}{}
 					}
 					return s.yieldIfCanonical(
 						root, filepath.Join(dir, entry.Name()), resolutionCache, yield,
 					)
 				}
 				sessionDir := filepath.Join(dir, entry.Name())
+				sessionDirs = append(sessionDirs, sessionDir)
 				base := filepath.Join(sessionDir, entry.Name())
 				jsonl, statErr := streamingRegularFileCandidate(base + ".jsonl")
 				if statErr != nil {
@@ -307,17 +315,18 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 				} else if txt {
 					path = base + ".txt"
 				}
-				if path != "" {
-					if err := s.yieldIfCanonical(
-						root, path, resolutionCache, yield,
-					); err != nil {
-						return err
-					}
+				if path == "" {
+					return nil
 				}
-				return s.streamSubagentTranscripts(
-					ctx, root, sessionDir, resolutionCache, yield,
-				)
+				topLevel[entry.Name()] = struct{}{}
+				return s.yieldIfCanonical(root, path, resolutionCache, yield)
 			})
+			if err != nil {
+				return err
+			}
+			return s.streamSubagentTranscripts(
+				ctx, root, sessionDirs, topLevel, resolutionCache, yield,
+			)
 		})
 		if err != nil {
 			return err
@@ -341,43 +350,64 @@ func (s cursorSourceSet) yieldIfCanonical(
 	return nil
 }
 
-// streamSubagentTranscripts skips a symlinked subagents folder like a
-// symlinked project directory, and lists the folder with one ReadDir: it
-// holds a handful of files, so the batched streamer that guards huge flat
-// archives costs more than it saves here.
+// streamSubagentTranscripts resolves a project's subagent files through the
+// same stem map as the batch walk, so a child stem under two parents yields
+// one source in both walks and a top-level transcript always shadows it. The
+// map holds one entry per child, so streaming stays bounded. A symlinked
+// subagents folder is skipped like a symlinked project directory, and each
+// folder is read with one ReadDir: it holds a handful of files, so the batched
+// streamer that guards huge flat archives costs more than it saves here.
 func (s cursorSourceSet) streamSubagentTranscripts(
 	ctx context.Context,
-	root, sessionDir string,
+	root string,
+	sessionDirs []string,
+	topLevel map[string]struct{},
 	resolutionCache cursorResolutionCache,
 	yield func(SourceRef) error,
 ) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	subagentsDir := filepath.Join(sessionDir, cursorSubagentsDirName)
-	info, err := os.Lstat(subagentsDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("stat cursor subagents %s: %w", subagentsDir, err)
-	}
-	if !info.IsDir() {
-		return nil
-	}
-	entries, err := os.ReadDir(subagentsDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read cursor subagents %s: %w", subagentsDir, err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !IsCursorTranscriptExt(entry.Name()) {
+	// The streamer reports entries in filesystem order; the batch walk's
+	// os.ReadDir sorts, so sort here too or "first parent wins" diverges.
+	sort.Strings(sessionDirs)
+	subagentSeen := make(map[string]string)
+	for _, sessionDir := range sessionDirs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		subagentsDir := filepath.Join(sessionDir, cursorSubagentsDirName)
+		info, err := os.Lstat(subagentsDir)
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+		if err != nil {
+			return fmt.Errorf("stat cursor subagents %s: %w", subagentsDir, err)
+		}
+		if !info.IsDir() {
+			continue
+		}
+		entries, err := os.ReadDir(subagentsDir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read cursor subagents %s: %w", subagentsDir, err)
+		}
+		for _, entry := range entries {
+			if !entry.Type().IsRegular() || !IsCursorTranscriptExt(entry.Name()) {
+				continue
+			}
+			cursorAddSeen(subagentSeen, entry.Name(), filepath.Join(subagentsDir, entry.Name()))
+		}
+	}
+	stems := make([]string, 0, len(subagentSeen))
+	for stem := range subagentSeen {
+		if _, shadowed := topLevel[stem]; !shadowed {
+			stems = append(stems, stem)
+		}
+	}
+	sort.Strings(stems)
+	for _, stem := range stems {
 		if err := s.yieldIfCanonical(
-			root, filepath.Join(subagentsDir, entry.Name()), resolutionCache, yield,
+			root, subagentSeen[stem], resolutionCache, yield,
 		); err != nil {
 			return err
 		}

@@ -892,3 +892,48 @@ func TestCursorDiscoverySkipsSymlinkedSubagentTranscriptInBothWalks(t *testing.T
 		})
 	}
 }
+
+func TestCursorDiscoveryDeduplicatesChildStemAcrossParentsInBothWalks(t *testing.T) {
+	root := t.TempDir()
+	transcriptsDir := filepath.Join(root, "Users-demo", "agent-transcripts")
+	parentA := cursorProviderWriteJSONLTranscript(t, transcriptsDir, filepath.Join("aaa", "aaa.jsonl"), "a")
+	parentB := cursorProviderWriteJSONLTranscript(t, transcriptsDir, filepath.Join("bbb", "bbb.jsonl"), "b")
+	// Same child stem under two parents: the first parent in directory order
+	// wins for equal extensions, and a .jsonl copy beats a .txt copy anywhere.
+	firstParentCopy := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("aaa", "subagents", "same.jsonl"), "from a",
+	)
+	cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("bbb", "subagents", "same.jsonl"), "from b",
+	)
+	cursorProviderWriteTranscript(
+		t, transcriptsDir, filepath.Join("aaa", "subagents", "mixed.txt"), "legacy from a",
+	)
+	upgraded := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("bbb", "subagents", "mixed.jsonl"), "from b",
+	)
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	var streamed []SourceRef
+	require.NoError(t, provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	))
+	want := []string{parentA, parentB, firstParentCopy, upgraded}
+	for name, sources := range map[string][]SourceRef{
+		"batch": discovered, "streaming": streamed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := make([]string, 0, len(sources))
+			for _, source := range sources {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.ElementsMatch(t, want, paths)
+		})
+	}
+}
