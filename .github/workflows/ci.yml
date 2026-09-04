@@ -127,6 +127,7 @@ jobs:
         run: |
           bash scripts/install_test.sh
           bash scripts/retry_test.sh
+          bash scripts/bench-gate-exec_test.sh
           bash scripts/e2e-server_test.sh
           bash desktop/scripts/test-repair-appimage-diricon.sh
 

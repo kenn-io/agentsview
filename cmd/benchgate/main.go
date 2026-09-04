@@ -9,11 +9,17 @@
 // and a failing exit code for CI.
 //
 // It is the comparison step of the bench-gate CI workflow: allocs/op
-// and B/op are deterministic for the same code on the same machine,
-// so they get tight ratio thresholds that catch O(archive)-instead-
-// of-O(delta) work regressions regardless of sample count; time
-// (sec/op) is noisy on shared runners, so it gets a loose threshold
-// and additionally must be a statistically significant difference
+// is deterministic for the same code on the same machine, so it gets
+// a tight ratio threshold that catches O(archive)-instead-of-O(delta)
+// work regressions regardless of sample count. B/op gets the same
+// tight threshold but must also be a statistically significant
+// difference: allocated bytes are not deterministic once the code
+// under test reuses pooled buffers (encoding/json's encoder pool, for
+// one), because a sync.Pool miss re-allocates the whole buffer and
+// pool hit rates depend on which P the goroutine lands on. That moves
+// B/op by tens of percent between identical runs while the allocation
+// count barely changes. Time (sec/op) is noisy on shared runners, so
+// it gets a loose threshold plus the same significance requirement
 // (Mann-Whitney U, as in benchstat) before it fails the gate.
 // Baselines below a per-metric floor are skipped entirely, since a
 // few extra allocations on a tiny benchmark is noise, not a
@@ -21,10 +27,10 @@
 //
 // Multiple runs of the same benchmark (-count=N) are kept as a
 // sample. The baseline is summarized by its median; the candidate is
-// gated on its median for time but on its WORST run for allocs/op
-// and B/op — those are deterministic, so a single outlier run there
-// is a real intermittent allocation path, not noise, and must fail.
-// Gating is per benchmark: any one benchmark over its threshold
+// gated on its median for time and B/op but on its WORST run for
+// allocs/op — that one is deterministic, so a single outlier run
+// there is a real intermittent allocation path, not noise, and must
+// fail. Gating is per benchmark: any one benchmark over its threshold
 // fails the gate; there is no cross-benchmark averaging. Benchmarks
 // present on only one side are reported but never fail the gate, so
 // adding or removing benchmarks in a PR does not wedge it. A gated
@@ -54,9 +60,10 @@ import (
 	"golang.org/x/perf/benchunit"
 )
 
-// minTimeSamples is the per-side sample count the sec/op
-// significance test needs before its verdict means anything.
-const minTimeSamples = 5
+// minSignificanceSamples is the per-side sample count a
+// significance-gated unit (sec/op, B/op) needs before the test's
+// verdict means anything.
+const minSignificanceSamples = 5
 
 // benchSamples collects every measured value per benchmark and unit:
 // benchmark key -> tidied unit (sec/op, B/op, allocs/op, ...) ->
@@ -73,7 +80,7 @@ type benchSamples map[string]map[string][]float64
 // outlier run is a real intermittent code path. With
 // needSignificance set, the samples must also differ significantly
 // under the benchmath comparison test — the benchstat noise guard,
-// used for wall-clock time.
+// used for wall-clock time and for allocated bytes.
 type gate struct {
 	unit             string
 	maxRatio         float64
@@ -179,21 +186,21 @@ func evalGate(
 			span, benchunit.Scale(g.floor, cls),
 		), nil, nil
 	}
-	if g.needSignificance && len(newVals) < minTimeSamples {
+	if g.needSignificance && len(newVals) < minSignificanceSamples {
 		issue := &configIssue{msg: fmt.Sprintf(
 			"%s needs at least %d candidate samples for significance gating, got %d",
-			g.unit, minTimeSamples, len(newVals),
+			g.unit, minSignificanceSamples, len(newVals),
 		)}
 		return span + " (too few candidate samples, not gated)",
 			nil, issue
 	}
-	if g.needSignificance && len(oldVals) < minTimeSamples {
+	if g.needSignificance && len(oldVals) < minSignificanceSamples {
 		// A short baseline is not a configuration error: the base
 		// run may legitimately be partial (e.g. it failed part-way
 		// and the workflow gates against what it produced).
 		return fmt.Sprintf(
 			"%s (baseline has only %d sample(s), significance needs %d, not gated)",
-			span, len(oldVals), minTimeSamples,
+			span, len(oldVals), minSignificanceSamples,
 		), nil, nil
 	}
 
@@ -453,7 +460,9 @@ func parseFlags() flags {
 	)
 	maxBytesRatio := flag.Float64(
 		"max-bytes-ratio", 1.35,
-		"fail when candidate worst-run B/op exceeds baseline median by this factor",
+		"fail when candidate median B/op exceeds baseline median by this factor "+
+			"(only when the difference is statistically significant; needs at "+
+			"least 5 candidate samples)",
 	)
 	timeFloorNs := flag.Float64(
 		"time-floor-ns", 100_000,
@@ -485,10 +494,10 @@ func parseFlags() flags {
 				worstCase: true,
 			},
 			{
-				unit:      "B/op",
-				maxRatio:  *maxBytesRatio,
-				floor:     *bytesFloor,
-				worstCase: true,
+				unit:             "B/op",
+				maxRatio:         *maxBytesRatio,
+				floor:            *bytesFloor,
+				needSignificance: true,
 			},
 			{
 				unit:             "sec/op",

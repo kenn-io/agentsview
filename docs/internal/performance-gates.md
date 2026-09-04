@@ -113,19 +113,26 @@ with `cmd/benchgate`:
 tests significance (Mann-Whitney U). benchgate adds only the policy benchstat
 does not provide: thresholds, floors, and a failing exit code. Gating is per
 benchmark — any single benchmark over its threshold fails the PR; nothing is
-averaged across benchmarks. It gates hard on `allocs/op` (limit 1.25x) and
-`B/op` (1.35x), which are deterministic for the same code and iteration count —
-an O(archive)-instead-of-O(delta) regression always blows them up. Those two
-compare the candidate's *worst* `-count` run against the baseline median, so
-even an intermittent extra-allocation path fails. That is intentionally
-asymmetric: the baseline is treated as the historical reference, and candidate
-instability is what blocks the PR (failure lines include the baseline's worst
-run so pre-existing instability is visible). Time (`sec/op`) compares medians
-with a loose 2.0x limit and must additionally be a statistically significant
-difference before it fails, so a single slow run on a noisy runner cannot flake
-a PR but algorithmic blowups still do. Time gating requires at least 5 candidate
-samples; fewer is reported as a configuration error (the candidate run is under
-the workflow's control), while a baseline with fewer than 5 samples — a
+averaged across benchmarks. It gates hard on `allocs/op` (limit 1.25x), which is
+deterministic for the same code and iteration count — an
+O(archive)-instead-of-O(delta) regression always blows it up. It compares the
+candidate's *worst* `-count` run against the baseline median, so even an
+intermittent extra-allocation path fails. That is intentionally asymmetric: the
+baseline is treated as the historical reference, and candidate instability is
+what blocks the PR (failure lines include the baseline's worst run so
+pre-existing instability is visible). `B/op` keeps a tight 1.35x limit but
+compares medians and must be a statistically significant difference before it
+fails. Allocated bytes are not deterministic once the code under test reuses
+pooled buffers: `encoding/json` keeps its encoder buffers in a per-processor
+`sync.Pool`, so whether a `Marshal` call re-allocates a multi-hundred-kilobyte
+buffer depends on which processor the goroutine lands on. The recall evidence
+window benchmarks showed this in CI with identical code, spreading `B/op` from
+3.6 to 7.9 MiB across five runs while `allocs/op` moved by under one percent.
+Time (`sec/op`) compares medians with a loose 2.0x limit and the same
+significance requirement, so a single slow run on a noisy runner cannot flake a
+PR but algorithmic blowups still do. Significance gating requires at least 5
+candidate samples; fewer is reported as a configuration error (the candidate run
+is under the workflow's control), while a baseline with fewer than 5 samples — a
 legitimately partial base run — is reported and not gated. Baselines below a
 per-metric floor are not gated. Benchmarks that exist on only one side are
 reported but never fail, so adding or removing benchmarks cannot wedge a PR.
@@ -133,13 +140,26 @@ Only `allocs/op`, `B/op`, and `sec/op` are gated: custom `b.ReportMetric` units
 are collected and reported as ungated, never enforced.
 
 Two failure modes are treated as loud configuration errors (exit 2) rather than
-silent gaps: a capture whose result lines fail to parse (for example test log
-output interleaved into a `Benchmark...` line — the sync benchmarks silence the
-engine's logger for exactly this reason), and a gated unit present in the
-baseline but missing from the candidate (for example a candidate captured
-without `-benchmem`), which would otherwise silently disable that gate for good.
-The reverse — a gated unit missing from the baseline, which may legitimately be
-older or partial — is reported as not gated.
+silent gaps: a capture whose result lines fail to parse, and a gated unit
+present in the baseline but missing from the candidate (for example a candidate
+captured without `-benchmem`), which would otherwise silently disable that gate
+for good. The reverse — a gated unit missing from the baseline, which may
+legitimately be older or partial — is reported as not gated.
+
+The capture itself guards against the one corruption source we have hit.
+`go test` gives the test binary a single merged stdout+stderr pipe, and the
+testing package prints a benchmark's name before the timed loop and its numbers
+after, so any log line the code under test writes to stderr in between (the slow
+`InsertMessages` warning during fixture seeding on a busy runner, for example)
+splits the result across two lines. benchfmt cannot parse either half, the
+sample disappears, and the gate fails on the corruption or on having too few
+samples. `make bench-gate` therefore runs every test binary through
+`scripts/bench-gate-exec.sh` via `go test -exec`, which holds the binary's
+stderr back and replays it after the binary exits. Logs, panics, and stack
+traces still reach the captured output, after the package's results instead of
+inside them, and benchfmt ignores them there. Silencing loggers inside a
+benchmark is no longer required for the gate, though it still keeps local
+`go test -bench` output readable.
 
 The gate always runs with a fixed `-benchtime=Nx` iteration count (not a
 duration): two of the benchmarks grow their fixture as they iterate, so the
@@ -212,9 +232,10 @@ reported without gating; it gates automatically once merged.
 
 1. Write the benchmark next to the code it guards (`*_bench_test.go`,
    `b.ReportAllocs()`, self-assert the invariant it protects where possible).
-   If the code under test logs, silence the logger in the benchmark (see
-   `silenceBenchLogs` in `internal/sync/engine_bench_test.go`): interleaved
-   log output corrupts result lines and benchgate fails on the corruption.
+   The gate's capture keeps stderr out of result lines, so logging from the
+   code under test cannot corrupt it; silencing the logger (see
+   `silenceBenchLogs` in `internal/sync/engine_bench_test.go`) is optional and
+   only keeps local `go test -bench` output tidy.
 1. If its package is not already gated, add it to `BENCH_GATE_PACKAGES` in the
    Makefile — a benchmark outside the gated packages silently never runs, so
    it looks gated while measuring nothing. CI picks the list up from the
