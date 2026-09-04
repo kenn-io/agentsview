@@ -33,12 +33,19 @@ test.describe("DuckDB backend", () => {
 
   // The same failure at the API boundary, where it is unambiguous: a
   // dropped connection surfaces as a request error rather than a status.
-  test("serves session messages over the API", async ({ page, request }) => {
-    const sp = new SessionsPage(page);
-    await sp.goto();
-    await sp.selectFirstSession();
+  //
+  // This deliberately never loads the transcript. Taking the session id from
+  // the sessions API rather than the UI keeps the assertion below the first
+  // thing that can fail, so it reports the endpoint's own behavior instead of
+  // dying earlier on a UI expectation the transcript test already covers.
+  test("serves session messages over the API", async ({ request }) => {
+    const list = await request.get("/api/v1/sessions");
+    expect(list.status()).toBe(200);
+    const sessions = (await list.json()).sessions;
+    expect(Array.isArray(sessions)).toBe(true);
+    expect(sessions.length).toBeGreaterThan(0);
 
-    const id = await page.evaluate(() => location.pathname.split("/").pop());
+    const id = sessions[0].id;
     expect(id).toBeTruthy();
 
     const res = await request.get(`/api/v1/sessions/${id}/messages`);
