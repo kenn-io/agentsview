@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,6 +18,37 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestDaemonArchiveQueryBackendDefaultsMappedLocalTimezone(t *testing.T) {
+	t.Setenv("TZ", "America/New_York")
+	oldLocal := time.Local
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
+	t.Cleanup(func() { time.Local = oldLocal })
+
+	var queries []url.Values
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query())
+		writeJSONResponse(w, `{"timezone":"America/New_York"}`)
+	}))
+	t.Cleanup(ts.Close)
+	backend := daemonArchiveQueryBackend{tr: transport{URL: ts.URL}}
+
+	_, err := backend.ActivityReport(context.Background(), ActivityReportConfig{
+		Preset: "day",
+	})
+	require.NoError(t, err)
+	require.Len(t, queries, 1)
+	assert.Equal(t, "America/New_York", queries[0].Get("timezone"))
+	assert.Equal(t, todayIn("America/New_York"), queries[0].Get("date"))
+
+	_, err = backend.ActivityReport(context.Background(), ActivityReportConfig{
+		Preset: "day", Date: "2026-03-09", Timezone: "Europe/Berlin",
+	})
+	require.NoError(t, err)
+	require.Len(t, queries, 2)
+	assert.Equal(t, "Europe/Berlin", queries[1].Get("timezone"))
+	assert.Equal(t, "2026-03-09", queries[1].Get("date"))
+}
 
 func TestResolveArchiveQueryBackendNoSyncStartsNoSyncDaemon(t *testing.T) {
 	testDataDir(t)

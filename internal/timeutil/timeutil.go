@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/thlib/go-timezone-local/tzlocal"
 )
 
 // Ptr formats a time.Time to an RFC3339Nano string pointer
@@ -83,9 +85,10 @@ func sinceFormatError(s string) error {
 }
 
 func BestEffortLocalTimezone() string {
-	return bestEffortLocalTimezone(
+	return resolveLocalTimezone(
 		os.Getenv("TZ"),
 		time.Now().Location(),
+		tzlocal.LocalTZ,
 	)
 }
 
@@ -97,6 +100,48 @@ func bestEffortLocalTimezone(envTZ string, loc *time.Location) string {
 		return ""
 	}
 	return validatedTimezoneName(loc.String())
+}
+
+func resolveLocalTimezone(
+	envTZ string,
+	loc *time.Location,
+	systemLocal func() (string, error),
+) string {
+	if name := validatedTimezoneName(envTZ); name != "" {
+		return name
+	}
+	if loc != nil {
+		if name := validatedTimezoneName(loc.String()); name != "" {
+			return name
+		}
+	}
+	if systemLocal == nil {
+		return ""
+	}
+	name, err := systemLocal()
+	if err != nil {
+		return ""
+	}
+	return validatedTimezoneName(name)
+}
+
+func LocalTimezoneOrUTC() string {
+	if name := BestEffortLocalTimezone(); name != "" {
+		return name
+	}
+	return "UTC"
+}
+
+func LocalLocation() *time.Location {
+	name := BestEffortLocalTimezone()
+	if name == "" {
+		return time.Local
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return time.Local
+	}
+	return loc
 }
 
 func validatedTimezoneName(name string) string {

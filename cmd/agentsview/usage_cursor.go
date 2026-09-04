@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/cursorusage"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 var newCursorUsageClient = cursorusage.NewClient
@@ -82,10 +83,7 @@ func runUsageCursor(cfg UsageCursorConfig) error {
 		}
 	}
 
-	loc, err := time.LoadLocation(localTimezone())
-	if err != nil {
-		loc = time.Local
-	}
+	loc := timeutil.LocalLocation()
 
 	start, end, err := resolveCursorUsageWindow(cfg, loc)
 	if err != nil {

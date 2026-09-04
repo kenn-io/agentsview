@@ -27,6 +27,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 var goldenFixtureNow = time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
@@ -585,6 +586,106 @@ func TestFetchHTTPDailyUsage(t *testing.T) {
 	assert.Equal(t, 10, got.Totals.InputTokens)
 	assert.Equal(t, 20, got.Daily[0].OutputTokens)
 	assert.Equal(t, 1, got.SessionCounts.Total)
+}
+
+func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) {
+	t.Setenv("TZ", "America/New_York")
+	oldLocal := time.Local
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
+	t.Cleanup(func() { time.Local = oldLocal })
+
+	var gotTimezones []string
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		tz := r.URL.Query().Get("timezone")
+		gotTimezones = append(gotTimezones, tz)
+		if tz == "Eastern Standard Time" {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSONResponse(w, `{"error":"invalid timezone: Eastern Standard Time"}`)
+			return
+		}
+		if tz != "America/New_York" {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSONResponse(w, `{"error":"invalid timezone: `+tz+`"}`)
+			return
+		}
+		writeJSONResponse(w, sampleDailyUsageJSON)
+	}))
+	t.Cleanup(ts.Close)
+
+	base, err := fetchHTTPDailyUsage(context.Background(), transport{URL: ts.URL}, "",
+		dailyUsageQuery{Filter: db.UsageFilter{
+			Timezone: time.Now().Location().String(),
+		}, NoDefaultRange: true})
+	assert.Equal(t, db.DailyUsageResult{}, base)
+	require.EqualError(t, err,
+		`usage summary: HTTP 400: {"error":"invalid timezone: Eastern Standard Time"}`)
+	t.Logf("base: timezone=%q error=%v", gotTimezones[0], err)
+
+	head, err := fetchHTTPDailyUsage(context.Background(), transport{URL: ts.URL}, "",
+		dailyUsageQuery{Filter: db.UsageFilter{
+			Timezone: localTimezone(),
+		}, NoDefaultRange: true})
+	require.NoError(t, err)
+	require.Len(t, head.Daily, 1)
+	assert.Equal(t, "America/New_York", gotTimezones[1])
+	t.Logf("head: timezone=%q status=200 daily=%d", gotTimezones[1], len(head.Daily))
+}
+
+func TestRunUsageDailyDefaultsToMappedLocalTimezone(t *testing.T) {
+	t.Setenv("TZ", "America/New_York")
+	oldLocal := time.Local
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
+	t.Cleanup(func() { time.Local = oldLocal })
+	dataDir := newAgentDataDir(t)
+	var gotTimezone string
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotTimezone = r.URL.Query().Get("timezone")
+		writeJSONResponse(w, sampleDailyUsageJSON)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	captureStdout(t, func() {
+		runUsageDaily(UsageDailyConfig{JSON: true, Offline: false})
+	})
+	assert.Equal(t, "America/New_York", gotTimezone)
+}
+
+func TestRunUsageStatuslineDefaultsToMappedLocalTimezone(t *testing.T) {
+	t.Setenv("TZ", "America/New_York")
+	oldLocal := time.Local
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
+	t.Cleanup(func() { time.Local = oldLocal })
+	dataDir := newAgentDataDir(t)
+	var gotTimezone string
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotTimezone = r.URL.Query().Get("timezone")
+		writeJSONResponse(w, sampleDailyUsageJSON)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	captureStdout(t, func() {
+		runUsageStatusline(UsageStatuslineConfig{JSON: true})
+	})
+	assert.Equal(t, "America/New_York", gotTimezone)
+}
+
+func TestCursorUsageWindowUsesMappedLocalTimezone(t *testing.T) {
+	t.Setenv("TZ", "America/New_York")
+	oldLocal := time.Local
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
+	t.Cleanup(func() { time.Local = oldLocal })
+
+	loc := timeutil.LocalLocation()
+	assert.Equal(t, "America/New_York", loc.String())
+	start, end, err := resolveCursorUsageWindow(UsageCursorConfig{
+		Since: "2026-03-08", Until: "2026-03-08",
+	}, loc)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC), start)
+	assert.Equal(t,
+		time.Date(2026, 3, 9, 3, 59, 59, 999000000, time.UTC), end)
 }
 
 func TestFetchHTTPDailyUsageMissingProjectsDefaultsEmptyMap(t *testing.T) {
