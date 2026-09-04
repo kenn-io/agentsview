@@ -469,6 +469,13 @@ it does not by itself mean that the session is still open. In particular,
 current observed transcripts can contain assistant model and output-token data
 without a usable shutdown summary.
 
+The persisted format does not identify why a shutdown summary is absent. It can
+be consistent with a session that remains active or resumable, but it can also
+occur after completed assistant turns. AgentsView therefore does not infer
+session liveness, an ingestion failure, or zero usage from the absence of this
+event. It reports the available per-message or session-store token data instead,
+with the limitations described below.
+
 Copilot CLI's local `session-store.db` contains observed per-request token
 data, which AgentsView uses when available. GitHub does not document this
 database's schema or billing semantics, so AgentsView catalog-prices those
