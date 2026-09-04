@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -589,7 +590,18 @@ func TestFetchHTTPDailyUsage(t *testing.T) {
 }
 
 func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) {
-	t.Setenv("TZ", "America/New_York")
+	if runtime.GOOS != "windows" {
+		t.Skip("requires the Windows local timezone resolver")
+	}
+	previousTZ, hadTZ := os.LookupEnv("TZ")
+	require.NoError(t, os.Unsetenv("TZ"))
+	t.Cleanup(func() {
+		if hadTZ {
+			_ = os.Setenv("TZ", previousTZ)
+		} else {
+			_ = os.Unsetenv("TZ")
+		}
+	})
 	oldLocal := time.Local
 	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
 	t.Cleanup(func() { time.Local = oldLocal })

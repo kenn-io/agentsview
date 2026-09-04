@@ -323,11 +323,16 @@ func TestResolveLocalTimezone(t *testing.T) {
 }
 
 func TestLocalTimezoneOrUTC(t *testing.T) {
-	t.Setenv("TZ", "UTC")
-	assert.Equal(t, "UTC", LocalTimezoneOrUTC())
+	assert.Equal(t, "America/New_York", localTimezoneOrUTC(
+		func() string { return "America/New_York" }))
+	assert.Equal(t, "UTC", localTimezoneOrUTC(func() string { return "" }))
 }
 
 func TestLocalLocation(t *testing.T) {
-	t.Setenv("TZ", "America/New_York")
-	assert.Equal(t, "America/New_York", LocalLocation().String())
+	fallback := time.FixedZone("fallback", 0)
+	assert.Equal(t, "America/New_York", localLocation(
+		func() string { return "America/New_York" }, fallback).String())
+	assert.Same(t, fallback, localLocation(func() string { return "" }, fallback))
+	assert.Same(t, fallback, localLocation(
+		func() string { return "not/a-zone" }, fallback))
 }

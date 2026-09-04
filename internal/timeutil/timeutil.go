@@ -93,13 +93,7 @@ func BestEffortLocalTimezone() string {
 }
 
 func bestEffortLocalTimezone(envTZ string, loc *time.Location) string {
-	if name := validatedTimezoneName(envTZ); name != "" {
-		return name
-	}
-	if loc == nil {
-		return ""
-	}
-	return validatedTimezoneName(loc.String())
+	return resolveLocalTimezone(envTZ, loc, nil)
 }
 
 func resolveLocalTimezone(
@@ -125,21 +119,33 @@ func resolveLocalTimezone(
 	return validatedTimezoneName(name)
 }
 
+// LocalTimezoneOrUTC returns the best-effort local IANA timezone name, or UTC
+// when no loadable local timezone can be resolved.
 func LocalTimezoneOrUTC() string {
-	if name := BestEffortLocalTimezone(); name != "" {
+	return localTimezoneOrUTC(BestEffortLocalTimezone)
+}
+
+func localTimezoneOrUTC(resolve func() string) string {
+	if name := resolve(); name != "" {
 		return name
 	}
 	return "UTC"
 }
 
+// LocalLocation returns the resolved local timezone location, or time.Local
+// when no loadable local timezone can be resolved.
 func LocalLocation() *time.Location {
-	name := BestEffortLocalTimezone()
+	return localLocation(BestEffortLocalTimezone, time.Local)
+}
+
+func localLocation(resolve func() string, fallback *time.Location) *time.Location {
+	name := resolve()
 	if name == "" {
-		return time.Local
+		return fallback
 	}
 	loc, err := time.LoadLocation(name)
 	if err != nil {
-		return time.Local
+		return fallback
 	}
 	return loc
 }

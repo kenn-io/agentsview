@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -2128,10 +2129,69 @@ func TestReporterTimezone_Precedence(t *testing.T) {
 		reporterTimezone(StatsFilter{}),
 		"valid local name should pass through")
 
-	// No filter, no env, Local sentinel → emit empty fallback.
+	// No filter, no env, Local sentinel → use the platform resolver when it is
+	// available, otherwise retain the existing empty metadata fallback.
 	time.Local = time.FixedZone("Local", 0)
-	assert.Equal(t, "", reporterTimezone(StatsFilter{}),
-		"Local sentinel should not be published")
+	mapped := reporterTimezone(StatsFilter{})
+	if mapped != "" {
+		_, err := time.LoadLocation(mapped)
+		assert.NoError(t, err, "platform timezone must be loadable")
+	}
+}
+
+func TestReporterTimezoneUsesPlatformMapping(t *testing.T) {
+	previousTZ, hadTZ := os.LookupEnv("TZ")
+	require.NoError(t, os.Unsetenv("TZ"))
+	t.Cleanup(func() {
+		if hadTZ {
+			_ = os.Setenv("TZ", previousTZ)
+		} else {
+			_ = os.Unsetenv("TZ")
+		}
+	})
+	oldLocal := time.Local
+	time.Local = time.FixedZone("Local", 0)
+	t.Cleanup(func() { time.Local = oldLocal })
+
+	got := reporterTimezone(StatsFilter{})
+	if runtime.GOOS == "windows" {
+		require.NotEmpty(t, got)
+	}
+	if got != "" {
+		_, err := time.LoadLocation(got)
+		require.NoError(t, err)
+	}
+	t.Logf("platform reporter timezone: %q", got)
+}
+
+func TestGetSessionStatsReportsPlatformTimezone(t *testing.T) {
+	previousTZ, hadTZ := os.LookupEnv("TZ")
+	require.NoError(t, os.Unsetenv("TZ"))
+	t.Cleanup(func() {
+		if hadTZ {
+			_ = os.Setenv("TZ", previousTZ)
+		} else {
+			_ = os.Unsetenv("TZ")
+		}
+	})
+	oldLocal := time.Local
+	time.Local = time.FixedZone("Local", 0)
+	t.Cleanup(func() { time.Local = oldLocal })
+
+	stats, err := testDB(t).GetSessionStats(
+		context.Background(), StatsFilter{Since: "28d"})
+	require.NoError(t, err)
+	if runtime.GOOS == "windows" {
+		require.NotEmpty(t, stats.Temporal.ReporterTimezone)
+	}
+	if stats.Temporal.ReporterTimezone != "" {
+		_, err := time.LoadLocation(stats.Temporal.ReporterTimezone)
+		require.NoError(t, err)
+	}
+	raw, err := json.Marshal(stats.Temporal)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"reporter_timezone"`)
+	t.Logf("stats reporter timezone: %q", stats.Temporal.ReporterTimezone)
 }
 
 func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
