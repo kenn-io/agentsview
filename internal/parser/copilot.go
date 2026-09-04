@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json/jsontext"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,15 +35,16 @@ var copilotUsageBasedPricingStartedAt = time.Date(
 // copilotSessionBuilder accumulates state while scanning a
 // Copilot JSONL session file line by line.
 type copilotSessionBuilder struct {
-	messages     []ParsedMessage
-	usageEvents  []ParsedUsageEvent
-	firstMessage string
-	startedAt    time.Time
-	endedAt      time.Time
-	sessionID    string
-	project      string
-	ordinal      int
-	currentModel string
+	messages         []ParsedMessage
+	usageEvents      []ParsedUsageEvent
+	firstMessage     string
+	startedAt        time.Time
+	endedAt          time.Time
+	sessionID        string
+	project          string
+	ordinal          int
+	currentModel     string
+	hasShutdownUsage bool
 }
 
 func newCopilotSessionBuilder() *copilotSessionBuilder {
@@ -193,6 +195,10 @@ func (b *copilotSessionBuilder) handleAssistantMessage(
 
 	outputTokens := int(data.Get("outputTokens").Int())
 	hasOutputTokens := data.Get("outputTokens").Exists()
+	model := normalizeCopilotModel(data.Get("model").Str)
+	if model == "" {
+		model = b.currentModel
+	}
 
 	b.messages = append(b.messages, ParsedMessage{
 		Ordinal:         b.ordinal,
@@ -203,7 +209,7 @@ func (b *copilotSessionBuilder) handleAssistantMessage(
 		HasToolUse:      hasToolUse,
 		ContentLength:   len(displayContent),
 		ToolCalls:       toolCalls,
-		Model:           b.currentModel,
+		Model:           model,
 		OutputTokens:    outputTokens,
 		HasOutputTokens: hasOutputTokens,
 	})
@@ -343,6 +349,9 @@ func (b *copilotSessionBuilder) handleShutdown(
 			return true
 		},
 	)
+	if len(events) > 0 {
+		b.hasShutdownUsage = true
+	}
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Model < events[j].Model
 	})
@@ -368,6 +377,22 @@ func (b *copilotSessionBuilder) handleShutdown(
 		events[0].CostSource = copilotReportedCostSource
 	}
 	b.usageEvents = append(b.usageEvents, events...)
+}
+
+func (b *copilotSessionBuilder) applyMessageUsageFallback() {
+	if b.hasShutdownUsage {
+		return
+	}
+	for i := range b.messages {
+		message := &b.messages[i]
+		if message.Role != RoleAssistant || message.Model == "" ||
+			!message.HasOutputTokens {
+			continue
+		}
+		message.TokenUsage = jsontext.Value(
+			fmt.Sprintf(`{"output_tokens":%d}`, message.OutputTokens),
+		)
+	}
 }
 
 func formatCopilotToolCalls(
@@ -478,6 +503,7 @@ func (p *copilotProvider) parseSession(
 	if !hasContent {
 		return nil, nil, nil, nil
 	}
+	b.applyMessageUsageFallback()
 
 	sessionID := b.sessionID
 	if sessionID == "" {
