@@ -729,6 +729,8 @@ func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, usage, 1)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 50, sess.TotalOutputTokens)
 	assert.Equal(t, "session-store", usage[0].Source)
 	assert.Equal(t, 80, usage[0].InputTokens)
 	assert.Equal(t, 50, usage[0].OutputTokens)
@@ -767,6 +769,30 @@ func TestParseCopilotSession_IncompatibleStoreRetainsShutdownUsage(t *testing.T)
 	assertLogContains(t, logs, "copilot session store unavailable", "retaining transcript usage")
 }
 
+func TestParseCopilotSession_ResumedAfterShutdownFallsBackForUncoveredOutput(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"resumed"},"timestamp":"2026-09-04T17:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"First"},"timestamp":"2026-09-04T17:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"First answer","model":"gpt-5.6-sol","outputTokens":3},"timestamp":"2026-09-04T17:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":10,"outputTokens":3}}}},"timestamp":"2026-09-04T17:00:03Z"}`,
+		`{"type":"user.message","data":{"content":"Resume"},"timestamp":"2026-09-04T17:00:04Z"}`,
+		`{"type":"assistant.message","data":{"content":"Second answer","model":"gpt-5.6-sol","outputTokens":7},"timestamp":"2026-09-04T17:00:05Z"}`,
+	)
+
+	sess, messages, usage := parseCopilotFull(t, path, "local")
+
+	require.NotNil(t, sess)
+	require.Len(t, usage, 1)
+	assert.Equal(t, 3, usage[0].OutputTokens)
+	require.Len(t, messages, 4)
+	assert.Empty(t, messages[1].TokenUsage,
+		"shutdown accounting covers the first assistant response")
+	assert.Equal(t, `{"output_tokens":7}`, string(messages[3].TokenUsage),
+		"the resumed assistant response must retain its known output usage")
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 10, sess.TotalOutputTokens)
+}
+
 func TestCopilotProviderStoreChangeRefreshesSession(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "store-fresh"
@@ -780,17 +806,23 @@ func TestCopilotProviderStoreChangeRefreshesSession(t *testing.T) {
 	require.NoError(t, os.WriteFile(storePath, []byte("before"), 0o644))
 
 	provider := newCopilotTestProvider(t, root)
+	hasher, ok := any(provider).(MultiFileStatHasher)
+	require.True(t, ok)
+	assert.Equal(t, CapabilitySupported,
+		provider.Capabilities().Source.MultiFileStatHash)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	before, err := provider.Fingerprint(context.Background(), sources[0])
 	require.NoError(t, err)
+	beforeStatHash := hasher.ComputeMultiFileStatHash(eventsPath)
 
 	require.NoError(t, os.WriteFile(storePath, []byte("after store update"), 0o644))
 	after, err := provider.Fingerprint(context.Background(), sources[0])
 	require.NoError(t, err)
 
 	assert.NotEqual(t, before.Hash, after.Hash)
+	assert.NotEqual(t, beforeStatHash, hasher.ComputeMultiFileStatHash(eventsPath))
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)

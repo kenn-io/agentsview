@@ -1419,9 +1419,9 @@ func TestSyncCodebuffSingleSessionWritesProviderStatHash(t *testing.T) {
 //
 // The test does not depend on any Codebuff fixture; constructing an
 // engine with the default registry must produce a non-nil entry only
-// for the agents that opt in via the capability: Codebuff, plus the
-// content-hashing single-file providers (Claude, Codex, TraeX) whose
-// persisted stat digest spares a full-content fingerprint on every
+// for the agents that opt in via the capability: Codebuff and Copilot,
+// plus the content-hashing single-file providers (Claude, Codex, TraeX)
+// whose persisted stat digest spares a full-content fingerprint on every
 // fresh-process sweep.
 func TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated(t *testing.T) {
 	if testing.Short() {
@@ -1439,6 +1439,7 @@ func TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated(t *testing.T
 
 	for _, agent := range []parser.AgentType{
 		parser.AgentCodebuff,
+		parser.AgentCopilot,
 		parser.AgentClaude,
 		parser.AgentCodex,
 		parser.AgentTraeX,
@@ -1454,7 +1455,6 @@ func TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated(t *testing.T
 		parser.AgentRooCode,
 		parser.AgentKiloLegacy,
 		parser.AgentGemini,
-		parser.AgentCopilot,
 	} {
 		assert.Nil(t, engine.ProviderStatHasher(agent),
 			"%s does not declare Source.MultiFileStatHash and must "+
