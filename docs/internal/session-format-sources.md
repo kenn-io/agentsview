@@ -486,15 +486,21 @@ add an archived or maintained mirror without replacing the original identity.
   [Copilot format notes](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/docs/providers/copilot.md)
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/copilot.ts).
-- **Usage and cost:** Shutdown metrics can persist input, output, cache-read,
-  cache-write, and reasoning tokens. Copilot accounting is credit-oriented;
-  Agentsview does not treat credits as USD and does not infer a monetary cost.
+- **Usage and cost:** Assistant messages can persist model identity and output
+  tokens. Shutdown metrics can persist authoritative input, output, cache-read,
+  cache-write, and reasoning totals. When the latter are absent, Agentsview
+  records only known per-message output tokens; it does not infer input, cache,
+  reasoning, or credit totals. Copilot accounting is credit-oriented; Agentsview
+  does not treat credits as USD and does not infer a monetary cost.
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
   Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and
   `tool.execution_complete` carry the same `data.toolCallId` and independent
   RFC3339 `timestamp` values, providing an exact execution interval even when
   the next user message arrives after a long resumed-session idle gap.
+  Reverified 2026-09-04 against current local transcripts: an
+  `assistant.message` can carry `data.model` and `data.outputTokens` when no
+  usable `session.shutdown` metrics are present.
 
 ## Gemini CLI (`gemini`)
 

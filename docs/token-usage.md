@@ -421,11 +421,14 @@ authoritative, and fixed web-search fees remain at their published face value.
 As of 0.32.0, Copilot CLI sessions contribute to usage and cost reports.
 AgentsView reads per-message assistant output tokens from
 `assistant.message.outputTokens`, then reads model-level session totals from
-`session.shutdown.modelMetrics`. Fresh input tokens are computed as total input
-minus cache reads and cache writes; cache writes map to cache-creation tokens,
-and cache reads map to cache-read tokens. Copilot's Claude model IDs use dotted
-version numbers, so the parser normalizes names such as `claude-sonnet-4.6` to
-`claude-sonnet-4-6` before pricing lookup.
+`session.shutdown.modelMetrics`. When Copilot has not written a usable shutdown
+summary, known per-message output tokens still appear in usage reports. That
+partial fallback cannot report input, cache, reasoning, or Copilot AI Credit
+totals. Fresh input tokens are computed as total input minus cache reads and
+cache writes; cache writes map to cache-creation tokens, and cache reads map to
+cache-read tokens. Copilot's Claude model IDs use dotted version numbers, so the
+parser normalizes names such as `claude-sonnet-4.6` to `claude-sonnet-4-6`
+before pricing lookup.
 
 Upgrading to 0.32.0 bumps the parser data version so existing Copilot CLI
 sessions are re-indexed with the new usage rows.

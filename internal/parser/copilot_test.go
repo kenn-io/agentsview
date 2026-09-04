@@ -524,6 +524,18 @@ func TestParseCopilotSession_ModelChange(t *testing.T) {
 	assertEqual(t, "", msgs[0].Model, "msgs[0].Model")
 }
 
+func TestParseCopilotSession_AssistantModel(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"assistant-model"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi there","model":"claude-sonnet-4.6"},"timestamp":"2025-01-15T10:00:02Z"}`,
+	)
+
+	_, msgs := parseAndValidateHelper(t, path, "m", 2)
+
+	assert.Equal(t, "claude-sonnet-4-6", msgs[1].Model)
+}
+
 func TestParseCopilotSession_NoModel(t *testing.T) {
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"no-model"},"timestamp":"2025-01-15T10:00:00Z"}`,
@@ -894,9 +906,26 @@ func TestParseCopilotSession_NoShutdown_NoUsageEvents(t *testing.T) {
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"no-shut","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
 		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
-		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-terra","outputTokens":42},"timestamp":"2025-01-15T10:00:02Z"}`,
 	)
 
-	_, _, usage := parseCopilotFull(t, path, "m")
+	_, msgs, usage := parseCopilotFull(t, path, "m")
 	assert.Empty(t, usage, "no shutdown event should produce no usage events")
+	assert.Equal(t, "gpt-5.6-terra", msgs[1].Model)
+	assert.JSONEq(t, `{"output_tokens":42}`, string(msgs[1].TokenUsage))
+}
+
+func TestParseCopilotSession_ShutdownUsageSuppressesMessageFallback(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"shutdown-wins"},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-terra","outputTokens":42},"timestamp":"2026-06-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"gpt-5.6-terra":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"2026-06-15T10:01:00Z"}`,
+	)
+
+	_, msgs, usage := parseCopilotFull(t, path, "m")
+
+	require.Len(t, usage, 1)
+	assert.Equal(t, 50, usage[0].OutputTokens)
+	assert.Empty(t, msgs[1].TokenUsage)
 }
