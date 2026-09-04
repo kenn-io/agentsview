@@ -326,3 +326,33 @@ func TestRawSyncProvidersWatchAliasHomeIndexes(t *testing.T) {
 	assert.Contains(t, paths, alias,
 		"the alias home must be watched for its own session_index.jsonl")
 }
+
+func TestRawSyncProvidersAbsolutizeAliasPaths(t *testing.T) {
+	t.Cleanup(func() { parser.SetCodexRootAliases(nil) })
+	base := t.TempDir()
+	t.Chdir(base)
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "codex", "sessions"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "codex-alt"), 0o700))
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {filepath.Join("codex", "sessions")},
+		},
+		RootAliases: map[parser.AgentType]map[string][]string{
+			parser.AgentCodex: {
+				filepath.Join("codex", "sessions"): {filepath.Join("codex-alt", "sessions")},
+			},
+		},
+	}
+
+	_, roots, err := rawSyncProvidersAndRoots(t.Context(), cfg)
+	require.NoError(t, err)
+
+	wantAlias, err := filepath.Abs("codex-alt")
+	require.NoError(t, err)
+	paths := make([]string, 0, len(roots))
+	for _, root := range roots {
+		paths = append(paths, root.Path)
+	}
+	assert.Contains(t, paths, wantAlias,
+		"relative alias paths must be resolved like the roots they alias")
+}
