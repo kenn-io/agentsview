@@ -462,6 +462,13 @@ it.
 
 ### Copilot Reported Billing
 
+`session.shutdown` is a Copilot CLI event that can contain a cumulative
+session-level usage summary. It is written by Copilot, not by AgentsView.
+Its absence means that the transcript has no usable aggregate accounting record;
+it does not by itself mean that the session is still open. In particular,
+current observed transcripts can contain assistant model and output-token data
+without a usable shutdown summary.
+
 Copilot CLI's local `session-store.db` contains observed per-request token
 data, which AgentsView uses when available. GitHub does not document this
 database's schema or billing semantics, so AgentsView catalog-prices those
