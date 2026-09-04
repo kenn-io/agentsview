@@ -37,16 +37,17 @@ var copilotUsageBasedPricingStartedAt = time.Date(
 // copilotSessionBuilder accumulates state while scanning a
 // Copilot JSONL session file line by line.
 type copilotSessionBuilder struct {
-	messages         []ParsedMessage
-	usageEvents      []ParsedUsageEvent
-	firstMessage     string
-	startedAt        time.Time
-	endedAt          time.Time
-	sessionID        string
-	project          string
-	ordinal          int
-	currentModel     string
-	hasShutdownUsage bool
+	messages       []ParsedMessage
+	usageEvents    []ParsedUsageEvent
+	firstMessage   string
+	startedAt      time.Time
+	endedAt        time.Time
+	sessionID      string
+	project        string
+	ordinal        int
+	currentModel   string
+	usageCoveredAt time.Time
+	fallbackOutput int
 }
 
 func newCopilotSessionBuilder() *copilotSessionBuilder {
@@ -352,7 +353,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 		},
 	)
 	if len(events) > 0 {
-		b.hasShutdownUsage = true
+		b.markUsageCoveredAt(ts)
 	}
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Model < events[j].Model
@@ -382,18 +383,24 @@ func (b *copilotSessionBuilder) handleShutdown(
 }
 
 func (b *copilotSessionBuilder) applyMessageUsageFallback() {
-	if b.hasShutdownUsage {
-		return
-	}
 	for i := range b.messages {
 		message := &b.messages[i]
 		if message.Role != RoleAssistant || message.Model == "" ||
-			!message.HasOutputTokens {
+			!message.HasOutputTokens ||
+			(!message.Timestamp.IsZero() &&
+				!message.Timestamp.After(b.usageCoveredAt)) {
 			continue
 		}
 		message.TokenUsage = jsontext.Value(
 			fmt.Sprintf(`{"output_tokens":%d}`, message.OutputTokens),
 		)
+		b.fallbackOutput += message.OutputTokens
+	}
+}
+
+func (b *copilotSessionBuilder) markUsageCoveredAt(occurredAt time.Time) {
+	if occurredAt.After(b.usageCoveredAt) {
+		b.usageCoveredAt = occurredAt
 	}
 }
 
@@ -579,6 +586,7 @@ func (p *copilotProvider) parseSessionWithStore(
 	if rawSessionID == "" {
 		rawSessionID = sessionIDFromPath(path)
 	}
+	usesStoreUsage := false
 	if !b.startedAt.Before(copilotUsageBasedPricingStartedAt) {
 		storeUsage, err := loadCopilotStoreUsage(storePath, rawSessionID)
 		if err != nil {
@@ -601,7 +609,10 @@ func (p *copilotProvider) parseSessionWithStore(
 				break
 			}
 			b.usageEvents = storeUsage
-			b.hasShutdownUsage = true
+			usesStoreUsage = true
+			for _, event := range storeUsage {
+				b.markUsageCoveredAt(parseTimestamp(event.OccurredAt))
+			}
 		}
 	}
 	b.applyMessageUsageFallback()
@@ -641,6 +652,13 @@ func (p *copilotProvider) parseSessionWithStore(
 	}
 
 	accumulateMessageTokenUsage(sess, b.messages)
+	if usesStoreUsage {
+		applyUsageEventTokenTotals(sess, b.usageEvents)
+		if b.fallbackOutput > 0 {
+			sess.HasTotalOutputTokens = true
+			sess.TotalOutputTokens += b.fallbackOutput
+		}
+	}
 
 	// Stamp the session ID on usage events (not known until here).
 	// DedupKey encodes the event's position in the slice so that

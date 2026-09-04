@@ -78,6 +78,10 @@ func (p *copilotProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+func (p *copilotProvider) ComputeMultiFileStatHash(eventsPath string) uint64 {
+	return CopilotCompositeStatHash(eventsPath)
+}
+
 func (p *copilotProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,
@@ -361,37 +365,22 @@ func (s copilotSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	size := info.Size()
-	mtime := info.ModTime().UnixNano()
-	if workspace := copilotWorkspacePath(path); workspace != "" {
-		if wsInfo, err := os.Stat(workspace); err == nil {
-			size += wsInfo.Size()
-			if wsMtime := wsInfo.ModTime().UnixNano(); wsMtime > mtime {
-				mtime = wsMtime
-			}
-		}
-	}
+	size, mtime := CopilotCompositeFileStat(path, info)
 	h := sha256.New()
 	if err := addCopilotFingerprintPart(h, "events", path, info); err != nil {
 		return SourceFingerprint{}, err
 	}
-	if workspace := copilotWorkspacePath(path); workspace != "" {
-		if wsInfo, err := os.Stat(workspace); err == nil && !wsInfo.IsDir() {
-			if err := addCopilotFingerprintPart(h, "workspace", workspace, wsInfo); err != nil {
-				return SourceFingerprint{}, err
-			}
-		}
-	}
-	for _, storePath := range copilotStorePaths(source) {
-		storeInfo, err := os.Stat(storePath)
-		if err != nil || storeInfo.IsDir() {
+	for _, companion := range copilotCompositePaths(path) {
+		companionInfo, err := os.Stat(companion.path)
+		if err != nil || companionInfo.IsDir() {
 			continue
 		}
-		size += storeInfo.Size()
-		if storeMtime := storeInfo.ModTime().UnixNano(); storeMtime > mtime {
-			mtime = storeMtime
+		if companion.content {
+			err = addCopilotFingerprintPart(h, companion.label, companion.path, companionInfo)
+		} else {
+			err = addCopilotFingerprintToken(h, companion.label, companion.path, companionInfo)
 		}
-		if err := addCopilotFingerprintToken(h, "store", storePath, storeInfo); err != nil {
+		if err != nil {
 			return SourceFingerprint{}, err
 		}
 	}
@@ -504,21 +493,68 @@ func copilotWorkspacePath(eventsPath string) string {
 	return filepath.Join(filepath.Dir(eventsPath), "workspace.yaml")
 }
 
-func copilotStorePaths(source SourceRef) []string {
-	root := ""
-	switch src := source.Opaque.(type) {
-	case copilotSource:
-		root = src.Root
-	case *copilotSource:
-		if src != nil {
-			root = src.Root
-		}
+type copilotCompositePath struct {
+	label   string
+	path    string
+	content bool
+}
+
+func copilotCompositePaths(eventsPath string) []copilotCompositePath {
+	paths := make([]copilotCompositePath, 0, 3)
+	if workspace := copilotWorkspacePath(eventsPath); workspace != "" {
+		paths = append(paths, copilotCompositePath{
+			label: "workspace", path: workspace, content: true,
+		})
 	}
+	root := copilotRootForEventsPath(eventsPath)
 	if root == "" {
-		return nil
+		return paths
 	}
 	storePath := filepath.Join(root, "session-store.db")
-	return []string{storePath, storePath + "-wal"}
+	return append(paths,
+		copilotCompositePath{label: "store", path: storePath},
+		copilotCompositePath{label: "store-wal", path: storePath + "-wal"},
+	)
+}
+
+func copilotRootForEventsPath(eventsPath string) string {
+	stateDir := filepath.Dir(eventsPath)
+	if filepath.Base(eventsPath) == "events.jsonl" {
+		stateDir = filepath.Dir(stateDir)
+	}
+	if filepath.Base(stateDir) != copilotStateDir {
+		return ""
+	}
+	return filepath.Dir(stateDir)
+}
+
+// CopilotCompositeFileStat returns the stored freshness stat for a Copilot
+// transcript and its optional workspace and session-store companions.
+func CopilotCompositeFileStat(
+	eventsPath string,
+	info os.FileInfo,
+) (size, mtime int64) {
+	size = info.Size()
+	mtime = info.ModTime().UnixNano()
+	for _, companion := range copilotCompositePaths(eventsPath) {
+		companionInfo, err := os.Stat(companion.path)
+		if err != nil || companionInfo.IsDir() {
+			continue
+		}
+		size += companionInfo.Size()
+		if companionMtime := companionInfo.ModTime().UnixNano(); companionMtime > mtime {
+			mtime = companionMtime
+		}
+	}
+	return size, mtime
+}
+
+func CopilotCompositeStatHash(eventsPath string) uint64 {
+	paths := []string{eventsPath}
+	for _, companion := range copilotCompositePaths(eventsPath) {
+		paths = append(paths, companion.path)
+	}
+	return fileStatTupleDigest(0xC3, paths...)
 }
 
 func copilotStoreChangedPath(root, path string) bool {
@@ -586,6 +622,7 @@ func copilotProviderCapabilities() Capabilities {
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,
 			CompositeFingerprint: CapabilitySupported,
+			MultiFileStatHash:    CapabilitySupported,
 			IncrementalAppend:    CapabilityNotApplicable,
 			MultiSessionSource:   CapabilityNotApplicable,
 			PerSessionErrors:     CapabilityNotApplicable,

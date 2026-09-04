@@ -14100,9 +14100,9 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// instead (providerFingerprintHashRequiredForFreshness), which catches a
 	// resolved-project change even when size and mtime are unchanged.
 	case parser.AgentCopilot:
-		mtime := copilotEffectiveMtime(path, info)
+		size, mtime := parser.CopilotCompositeFileStat(path, info)
 		effectiveInfo := fakeSnapshotInfo{
-			fSize:  info.Size(),
+			fSize:  size,
 			fMtime: mtime,
 		}
 		if e.shouldSkipByPath(path, effectiveInfo) {
@@ -15162,19 +15162,8 @@ func kiloLegacyEffectiveStat(metadataPath string, info os.FileInfo) (int64, int6
 }
 
 func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
-	m := info.ModTime().UnixNano()
-	if filepath.Base(eventsPath) != "events.jsonl" {
-		return m
-	}
-	yamlPath := filepath.Join(
-		filepath.Dir(eventsPath), "workspace.yaml",
-	)
-	if yi, err := os.Stat(yamlPath); err == nil {
-		if ym := yi.ModTime().UnixNano(); ym > m {
-			m = ym
-		}
-	}
-	return m
+	_, mtime := parser.CopilotCompositeFileStat(eventsPath, info)
+	return mtime
 }
 
 // classifyReasonixPath handles Reasonix session classification as a dedicated
