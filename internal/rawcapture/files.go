@@ -36,6 +36,9 @@ type capturePlanScope struct {
 	roots          []*os.Root
 	captureInfo    os.FileInfo
 	configuredInfo os.FileInfo
+	// sidecarInfo records each opened sidecar root, in plan order, so
+	// plan-currentness checks notice a sidecar home being replaced.
+	sidecarInfo []os.FileInfo
 }
 
 func openCapturePlanScope(plan parser.RawCapturePlan) (*capturePlanScope, error) {
@@ -66,12 +69,34 @@ func openCapturePlanScope(plan parser.RawCapturePlan) (*capturePlanScope, error)
 			return nil, fmt.Errorf("rawcapture: stat configured root: filesystem error")
 		}
 	}
+	// Sidecar roots hold provider inputs that live outside both roots,
+	// such as a second Codex home's session_index.jsonl.
+	sidecarRoots := make([]*os.Root, 0, len(plan.SidecarRoots))
+	for _, sidecarPath := range plan.SidecarRoots {
+		sidecarRoot, err := os.OpenRoot(sidecarPath)
+		if err != nil {
+			_ = scope.Close()
+			return nil, fmt.Errorf("rawcapture: open sidecar root: filesystem error")
+		}
+		scope.roots = append(scope.roots, sidecarRoot)
+		info, err := sidecarRoot.Stat(".")
+		if err != nil {
+			_ = scope.Close()
+			return nil, fmt.Errorf("rawcapture: stat sidecar root: filesystem error")
+		}
+		scope.sidecarInfo = append(scope.sidecarInfo, info)
+		sidecarRoots = append(sidecarRoots, sidecarRoot)
+	}
 	for _, planned := range plan.Entries {
 		root := captureRoot
 		relative, ok := relativeWithinRoot(plan.CaptureRoot, planned.LocalPath)
 		if !ok {
 			root = configuredRoot
 			relative, ok = relativeWithinRoot(plan.ConfiguredRoot, planned.LocalPath)
+		}
+		for i := 0; !ok && i < len(sidecarRoots); i++ {
+			root = sidecarRoots[i]
+			relative, ok = relativeWithinRoot(plan.SidecarRoots[i], planned.LocalPath)
 		}
 		if !ok {
 			_ = scope.Close()
@@ -110,7 +135,19 @@ func (s *capturePlanScope) MatchesRoots(plan parser.RawCapturePlan) bool {
 		return false
 	}
 	configuredInfo, err := os.Stat(plan.ConfiguredRoot)
-	return err == nil && os.SameFile(s.configuredInfo, configuredInfo)
+	if err != nil || !os.SameFile(s.configuredInfo, configuredInfo) {
+		return false
+	}
+	if len(plan.SidecarRoots) != len(s.sidecarInfo) {
+		return false
+	}
+	for i, sidecarPath := range plan.SidecarRoots {
+		info, err := os.Stat(sidecarPath)
+		if err != nil || !os.SameFile(s.sidecarInfo[i], info) {
+			return false
+		}
+	}
+	return true
 }
 
 func defaultFileOperations() fileOperations {
