@@ -465,10 +465,12 @@ it.
 Copilot CLI's local `session-store.db` contains observed per-request token
 data, which AgentsView uses when available. GitHub does not document this
 database's schema or billing semantics, so AgentsView catalog-prices those
-tokens rather than treating the store as an exact cost ledger. Older sessions
-remain catalog-priced because they were created under the premium-request
-pricing model. A `session.shutdown.totalNanoAiu` total remains the only
-authoritative reported-cost source.
+tokens rather than treating the store as an exact cost ledger. Copilot sessions
+starting on or after June 1, 2026 can report an authoritative
+`session.shutdown.totalNanoAiu` billing total. Older sessions remain
+catalog-priced because they were created under the premium-request pricing
+model. A `session.shutdown.totalNanoAiu` total remains the only authoritative
+reported-cost source.
 
 When the selected data contains this reported session cost, AgentsView
 suppresses every catalog-priced estimate for that session. This prevents double

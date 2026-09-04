@@ -492,8 +492,9 @@ add an archived or maintained mirror without replacing the original identity.
   cross-session subset but not its schema or billing semantics, so Agentsview
   uses these fields as observed token data and catalog-prices them. Transcript
   `session.shutdown.totalNanoAiu` remains the only authoritative reported-cost
-  source. Assistant messages can persist model identity and output tokens;
-  without either richer source, Agentsview records only that known output usage.
+  source for sessions starting on or after June 1, 2026. Assistant messages can
+  persist model identity and output tokens; without either richer source,
+  Agentsview records only that known output usage.
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
   Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and
