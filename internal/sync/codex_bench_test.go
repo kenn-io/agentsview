@@ -30,6 +30,7 @@ var (
 // remains around a warm cursor append: Fingerprint hashes the full source and
 // ComputeFileHashPrefix hashes through the proposed committed offset.
 func BenchmarkCodexIncrementalSyncReads(b *testing.B) {
+	routeBenchLogs(b)
 	b.StopTimer()
 	ctx := context.Background()
 	root, path, prefix, tail, startOrdinal := writeCodexSyncBenchmarkTranscript(b)

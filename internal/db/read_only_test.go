@@ -25,7 +25,7 @@ func createClosedTestDB(
 	seed func(*DB),
 ) string {
 	t.Helper()
-	d, err := openCopiedTestDB(path)
+	d, err := openCopiedTestDB(t, path)
 	require.NoError(t, err)
 	if seed != nil {
 		seed(d)

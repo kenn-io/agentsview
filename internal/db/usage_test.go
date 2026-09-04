@@ -322,7 +322,7 @@ func buildDailyUsageFixtureTemplate(t *testing.T) (string, string) {
 	dir, err := os.MkdirTemp("", "agentsview-daily-usage-*")
 	require.NoError(t, err, "create daily usage fixture dir")
 	path := filepath.Join(dir, "test.db")
-	require.NoError(t, copyTestDBTemplate(path),
+	require.NoError(t, copyTestDBTemplate(t, path),
 		"copy base db template for daily usage fixture")
 
 	d, err := OpenPreparedTestDB(path)

@@ -95,7 +95,7 @@ func storeContractSQLiteTemplate(t *testing.T) (string, storeContractFixture) {
 		storeContractSQLiteTemplatePath = filepath.Join(
 			storeContractSQLiteTemplateDir, "test.db")
 		storeContractSQLiteTemplateErr = copyTestDBTemplate(
-			storeContractSQLiteTemplatePath)
+			t, storeContractSQLiteTemplatePath)
 		if storeContractSQLiteTemplateErr != nil {
 			return
 		}

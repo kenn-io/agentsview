@@ -93,7 +93,7 @@ func buildLargeSessionFixtureTemplate(
 	dir, err := os.MkdirTemp("", "agentsview-large-session-*")
 	require.NoError(t, err, "create large-session fixture dir")
 	path := filepath.Join(dir, "test.db")
-	require.NoError(t, copyTestDBTemplate(path),
+	require.NoError(t, copyTestDBTemplate(t, path),
 		"copy base db template for large-session fixture")
 
 	d, err := OpenPreparedTestDB(path)
