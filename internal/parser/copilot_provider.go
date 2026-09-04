@@ -645,5 +645,8 @@ func copilotProviderCapabilities() Capabilities {
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashRequiredForFreshness: true,
+		},
 	}
 }
