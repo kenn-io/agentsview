@@ -2414,8 +2414,77 @@ func (c *Config) resolveSessionSources() error {
 	}
 	c.SessionSources = resolved
 	c.SourceMachines = sourceMachines
-	c.RootAliases = aliases
+	c.RootAliases = expandHomeAliases(c.AgentDirs, aliases)
 	return nil
+}
+
+// expandHomeAliases widens root aliases from directories to homes. When any
+// directory of one home is the same place as a directory of another home,
+// the two homes share transcripts, so every effective root under either
+// home gains the other home's matching directory as an alias. A second
+// Codex home that links sessions/ but keeps its own archived_sessions/ then
+// still contributes its sidecars for archived transcripts, and the primary
+// home's sidecars apply to the second home's own archive. Homes with no
+// shared directory stay unrelated.
+func expandHomeAliases(
+	agentDirs map[parser.AgentType][]string,
+	aliases map[parser.AgentType]map[string][]string,
+) map[parser.AgentType]map[string][]string {
+	for agent, byRoot := range aliases {
+		// Union-find over homes joined by any alias pair.
+		parent := make(map[string]string)
+		find := func(home string) string {
+			for parent[home] != "" && parent[home] != home {
+				home = parent[home]
+			}
+			return home
+		}
+		union := func(a, b string) {
+			ra, rb := find(a), find(b)
+			if parent[ra] == "" {
+				parent[ra] = ra
+			}
+			if parent[rb] == "" {
+				parent[rb] = rb
+			}
+			if ra != rb {
+				parent[rb] = ra
+			}
+		}
+		for root, list := range byRoot {
+			for _, alias := range list {
+				union(filepath.Dir(filepath.Clean(root)), filepath.Dir(filepath.Clean(alias)))
+			}
+		}
+		if len(parent) == 0 {
+			continue
+		}
+		groups := make(map[string][]string)
+		for home := range parent {
+			leader := find(home)
+			groups[leader] = append(groups[leader], home)
+		}
+		for _, root := range agentDirs[agent] {
+			clean := filepath.Clean(root)
+			home := filepath.Dir(clean)
+			leader := find(home)
+			if parent[home] == "" {
+				continue
+			}
+			for _, other := range groups[leader] {
+				if other == home {
+					continue
+				}
+				candidate := filepath.Join(other, filepath.Base(clean))
+				if slices.Contains(byRoot[root], candidate) {
+					continue
+				}
+				byRoot[root] = append(byRoot[root], candidate)
+			}
+			sort.Strings(byRoot[root])
+		}
+	}
+	return aliases
 }
 
 func sessionSourceComparisonKey(dir string) (string, error) {

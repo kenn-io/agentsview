@@ -351,13 +351,22 @@ func (p *codexProvider) PlanRawCapture(
 		LocalPath:  src.Path,
 		Appendable: true,
 	}}
-	if indexPath != "" {
-		info, err := os.Stat(indexPath)
+	var sidecarRoots []string
+	for i, candidate := range codexSessionIndexPaths(src.Path) {
+		info, err := os.Stat(candidate)
 		switch {
 		case err == nil && info.Mode().IsRegular():
+			// The home's own index keeps its name; each alias home's index
+			// is captured under a distinct logical path so parse inputs
+			// that came from another home travel with the transcript.
+			logical := CodexSessionIndexFilename
+			if i > 0 {
+				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
+				sidecarRoots = append(sidecarRoots, filepath.Dir(candidate))
+			}
 			entries = append(entries, RawCaptureEntry{
-				Path:      CodexSessionIndexFilename,
-				LocalPath: indexPath,
+				Path:      logical,
+				LocalPath: candidate,
 			})
 		case errors.Is(err, os.ErrNotExist):
 		case err != nil:
@@ -373,6 +382,7 @@ func (p *codexProvider) PlanRawCapture(
 		CaptureRoot:    captureRoot,
 		SourceKey:      source.Key,
 		Entries:        entries,
+		SidecarRoots:   sidecarRoots,
 	}, nil
 }
 

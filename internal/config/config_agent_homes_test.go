@@ -180,8 +180,12 @@ func TestLoadFileAgentHomesDeduplicateSymlinkedRoots(t *testing.T) {
 		filepath.Join(primary, "archived_sessions"),
 		filepath.Join(alt, "archived_sessions"),
 	}, cfg.ResolveDirs(parser.AgentCodex))
+	// Sharing sessions/ links the two homes, so the separate archives alias
+	// each other as well and both homes' sidecars apply everywhere.
 	assert.Equal(t, map[string][]string{
-		filepath.Join(primary, "sessions"): {filepath.Join(alt, "sessions")},
+		filepath.Join(primary, "sessions"):          {filepath.Join(alt, "sessions")},
+		filepath.Join(primary, "archived_sessions"): {filepath.Join(alt, "archived_sessions")},
+		filepath.Join(alt, "archived_sessions"):     {filepath.Join(primary, "archived_sessions")},
 	}, cfg.RootAliases[parser.AgentCodex])
 }
 
@@ -271,4 +275,44 @@ func TestLoadFileAgentHomesDropRepeatedSpellings(t *testing.T) {
 
 	assert.Equal(t, []string{"/homes/a", "/homes/b"},
 		cfg.ConfiguredAgentHomes(parser.AgentCodex))
+}
+
+func TestRootAliasesWidenToWholeHome(t *testing.T) {
+	f := newConfigFixture(t)
+	home := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("CODEX_HOME", "")
+	primary := filepath.Join(home, ".codex")
+	alt := filepath.Join(home, ".codex-alt")
+	require.NoError(t, os.MkdirAll(filepath.Join(primary, "sessions"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(primary, "archived_sessions"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(alt, "archived_sessions"), 0o755))
+	// Only sessions/ is shared; each home keeps its own archive.
+	require.NoError(t, os.Symlink(
+		filepath.Join(primary, "sessions"), filepath.Join(alt, "sessions")))
+	f.WriteConfigText(t, "codex_homes = [\"~/.codex-alt\"]\n")
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, []string{
+		filepath.Join(primary, "sessions"),
+		filepath.Join(primary, "archived_sessions"),
+		filepath.Join(alt, "archived_sessions"),
+	}, cfg.ResolveDirs(parser.AgentCodex))
+	assert.Equal(t, map[string][]string{
+		filepath.Join(primary, "sessions"):          {filepath.Join(alt, "sessions")},
+		filepath.Join(primary, "archived_sessions"): {filepath.Join(alt, "archived_sessions")},
+		filepath.Join(alt, "archived_sessions"):     {filepath.Join(primary, "archived_sessions")},
+	}, cfg.RootAliases[parser.AgentCodex])
+}
+
+func TestRootAliasesStayEmptyForDisjointHomes(t *testing.T) {
+	f := newConfigFixture(t)
+	setTestHome(t, t.TempDir())
+	t.Setenv("CODEX_HOME", "")
+	f.WriteConfigText(t, "codex_homes = [\"/homes/work/.codex\"]\n")
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Empty(t, cfg.RootAliases[parser.AgentCodex])
 }

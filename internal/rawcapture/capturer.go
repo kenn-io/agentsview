@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -705,7 +706,8 @@ func cloneCapturedEntry(entry rawcheckpoint.CapturedEntry) rawcheckpoint.Capture
 
 func sameCapturePlan(a, b parser.RawCapturePlan) bool {
 	if a.ConfiguredRoot != b.ConfiguredRoot || a.CaptureRoot != b.CaptureRoot ||
-		a.SourceKey != b.SourceKey || len(a.Entries) != len(b.Entries) {
+		a.SourceKey != b.SourceKey || len(a.Entries) != len(b.Entries) ||
+		!slices.Equal(a.SidecarRoots, b.SidecarRoots) {
 		return false
 	}
 	for i := range a.Entries {

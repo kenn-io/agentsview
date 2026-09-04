@@ -67,6 +67,10 @@ type RawCapturePlan struct {
 	CaptureRoot    string
 	SourceKey      string
 	Entries        []RawCaptureEntry
+	// SidecarRoots lists additional local directories whose files a
+	// provider reads as inputs for this source, such as a second Codex
+	// home's session_index.jsonl. Entries may live under any of them.
+	SidecarRoots []string
 }
 
 // RawCaptureDiscovery reports physical sources and whether every configured
@@ -274,6 +278,14 @@ func validateRawCapturePlan(
 	if len(plan.Entries) == 0 {
 		return RawCapturePlan{}, invalidRawCapturePlan("source has no entries")
 	}
+	sidecarRoots := make([]string, 0, len(plan.SidecarRoots))
+	for _, root := range plan.SidecarRoots {
+		validated, err := validateRawCaptureRoot("sidecar", root)
+		if err != nil {
+			return RawCapturePlan{}, err
+		}
+		sidecarRoots = append(sidecarRoots, validated)
+	}
 
 	entries := append([]RawCaptureEntry(nil), plan.Entries...)
 	seen := make(map[string]struct{}, len(entries))
@@ -299,7 +311,10 @@ func validateRawCapturePlan(
 			)
 		}
 		if !rawCapturePathWithin(captureRoot, resolvedPath) &&
-			!rawCapturePathWithin(configuredRoot, resolvedPath) {
+			!rawCapturePathWithin(configuredRoot, resolvedPath) &&
+			!slices.ContainsFunc(sidecarRoots, func(root string) bool {
+				return rawCapturePathWithin(root, resolvedPath)
+			}) {
 			return RawCapturePlan{}, invalidRawCapturePlan("entry %q escapes provider roots", logical)
 		}
 		info, err := os.Stat(resolvedPath)
@@ -339,6 +354,7 @@ func validateRawCapturePlan(
 		CaptureRoot:    captureRoot,
 		SourceKey:      plan.SourceKey,
 		Entries:        entries,
+		SidecarRoots:   sidecarRoots,
 	}, nil
 }
 
