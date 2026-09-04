@@ -240,7 +240,7 @@ func (s copilotSourceSet) discoverSessionPaths(root string) []string {
 }
 
 func (s copilotSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
-	roots := make([]WatchRoot, 0, len(s.roots))
+	roots := make([]WatchRoot, 0, len(s.roots)*2)
 	for _, root := range s.roots {
 		stateDir := filepath.Join(root, copilotStateDir)
 		roots = append(roots, WatchRoot{
@@ -248,6 +248,11 @@ func (s copilotSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			Recursive:    true,
 			IncludeGlobs: []string{"*.jsonl", "workspace.yaml"},
 			DebounceKey:  string(AgentCopilot) + ":state:" + stateDir,
+		})
+		roots = append(roots, WatchRoot{
+			Path:         root,
+			IncludeGlobs: []string{"session-store.db", "session-store.db-wal"},
+			DebounceKey:  string(AgentCopilot) + ":store:" + root,
 		})
 	}
 	return WatchPlan{Roots: roots}, nil
@@ -261,6 +266,19 @@ func (s copilotSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	for _, root := range s.roots {
+		if copilotStoreChangedPath(root, req.Path) {
+			var sources []SourceRef
+			for _, path := range s.discoverSessionPaths(root) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if source, ok := s.sourceRef(root, path); ok {
+					sources = append(sources, source)
+				}
+			}
+			sortJSONLSources(sources)
+			return sources, nil
+		}
 		source, ok := s.sourceForChangedPath(root, req)
 		if ok {
 			return []SourceRef{source}, nil
@@ -353,11 +371,6 @@ func (s copilotSourceSet) Fingerprint(
 			}
 		}
 	}
-	fingerprint := SourceFingerprint{
-		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
-		Size:    size,
-		MTimeNS: mtime,
-	}
 	h := sha256.New()
 	if err := addCopilotFingerprintPart(h, "events", path, info); err != nil {
 		return SourceFingerprint{}, err
@@ -368,6 +381,24 @@ func (s copilotSourceSet) Fingerprint(
 				return SourceFingerprint{}, err
 			}
 		}
+	}
+	for _, storePath := range copilotStorePaths(source) {
+		storeInfo, err := os.Stat(storePath)
+		if err != nil || storeInfo.IsDir() {
+			continue
+		}
+		size += storeInfo.Size()
+		if storeMtime := storeInfo.ModTime().UnixNano(); storeMtime > mtime {
+			mtime = storeMtime
+		}
+		if err := addCopilotFingerprintToken(h, "store", storePath, storeInfo); err != nil {
+			return SourceFingerprint{}, err
+		}
+	}
+	fingerprint := SourceFingerprint{
+		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
+		Size:    size,
+		MTimeNS: mtime,
 	}
 	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
 	return fingerprint, nil
@@ -473,6 +504,35 @@ func copilotWorkspacePath(eventsPath string) string {
 	return filepath.Join(filepath.Dir(eventsPath), "workspace.yaml")
 }
 
+func copilotStorePaths(source SourceRef) []string {
+	root := ""
+	switch src := source.Opaque.(type) {
+	case copilotSource:
+		root = src.Root
+	case *copilotSource:
+		if src != nil {
+			root = src.Root
+		}
+	}
+	if root == "" {
+		return nil
+	}
+	storePath := filepath.Join(root, "session-store.db")
+	return []string{storePath, storePath + "-wal"}
+}
+
+func copilotStoreChangedPath(root, path string) bool {
+	if !samePath(filepath.Dir(path), root) {
+		return false
+	}
+	switch filepath.Base(path) {
+	case "session-store.db", "session-store.db-wal":
+		return true
+	default:
+		return false
+	}
+}
+
 func addCopilotFingerprintPart(
 	h hash.Hash,
 	label string,
@@ -498,6 +558,23 @@ func addCopilotFingerprintPart(
 		return fmt.Errorf("hash %s: %w", path, err)
 	}
 	return nil
+}
+
+func addCopilotFingerprintToken(
+	h hash.Hash,
+	label string,
+	path string,
+	info os.FileInfo,
+) error {
+	_, err := fmt.Fprintf(
+		h,
+		"%s\x00%s\x00%d\x00%d\x00",
+		label,
+		path,
+		info.Size(),
+		info.ModTime().UnixNano(),
+	)
+	return err
 }
 
 func copilotProviderCapabilities() Capabilities {

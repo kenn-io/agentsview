@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -581,9 +582,24 @@ func (p *copilotProvider) parseSessionWithStore(
 	if !b.startedAt.Before(copilotUsageBasedPricingStartedAt) {
 		storeUsage, err := loadCopilotStoreUsage(storePath, rawSessionID)
 		if err != nil {
-			return nil, nil, nil, err
+			log.Printf(
+				"copilot session store unavailable for %s: %v; retaining transcript usage",
+				storePath, err,
+			)
 		}
 		if len(storeUsage) > 0 {
+			for _, event := range b.usageEvents {
+				if event.Cost == nil ||
+					event.CostSource != copilotReportedCostSource {
+					continue
+				}
+				// Store usage supplies richer observed tokens, but transcript
+				// shutdown remains the authoritative reported-cost source.
+				storeUsage[0].Cost = event.Cost
+				storeUsage[0].CostStatus = event.CostStatus
+				storeUsage[0].CostSource = event.CostSource
+				break
+			}
 			b.usageEvents = storeUsage
 			b.hasShutdownUsage = true
 		}
