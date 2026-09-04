@@ -69,3 +69,49 @@ simulator currently excludes malformed records and watcher scheduling, so these
 results do not establish an idle-daemon CPU reduction or a long-duration
 memory-retention result. Add those workloads before using it to gate those
 behaviors.
+
+## OpenCode SQLite scans
+
+The retained OpenCode workload uses the producer's indexed session/message/part
+schema in WAL mode. Both runs below used 20 turns per session, two active
+sessions with 1,000 initial turns, and five iterations. Only archive size
+changed. These measurements preceded the virtual-event deletion-check fix.
+
+| Operation                            | 1,000 sessions | 10,000 sessions |
+| ------------------------------------ | -------------: | --------------: |
+| Session metadata scan                |        1.37 ms |        10.79 ms |
+| Full child-digest scan               |       52.13 ms |       523.47 ms |
+| Poll two active sessions after edits |        1.46 ms |         1.57 ms |
+| Unchanged container event            |        4.42 ms |        37.04 ms |
+| Append two long sessions             |      121.23 ms |       163.55 ms |
+| Archive two child-only edits         |      333.50 ms |     2,428.55 ms |
+| Unchanged reconciliation             |      388.49 ms |     4,260.64 ms |
+
+The profile attributed about 30% of total CPU samples to source-missing
+reconciliation. Its per-member provider lookups repeatedly opened the producer
+database to check session existence. Changed-path preparation treated virtual
+paths as missing filesystem entries even after the provider resolved them to
+existing sessions. Those apparent deletions triggered container-wide ownership
+and existence checks on active-session events.
+
+Preparation now removes successfully resolved OpenCode virtual members from the
+missing-path list. Actually missing members keep the deletion path. A regression
+compares 8 with 800 archived sessions, checks unchanged virtual-event work, then
+removes the target producer session and verifies source-missing state, retained
+archived messages, and an unaffected neighboring session. The previous
+implementation allocated 189,332 times for the larger unchanged event, failing
+the test's threefold scaling bound of 8,397.
+
+A matched 10,000-session comparison using identical final simulator code and an
+overlay of the previous engine measured **2,491.26 ms to 120.17 ms** for the
+two-session child-edit batch, about **20.7 times faster**. Median allocation
+fell from **596.72 MiB to 77.04 MiB**, and allocation count from 2,824,784 to
+327,523. The unchanged reconciliation path remained expensive at 4.10 seconds
+and 1.07 GiB after this fix; the improvement is specific to active virtual
+events, not full reconciliation or an idle-daemon measurement.
+
+Full reconciliation still performs these member-existence checks. Its measured
+10,000-session allocation was about 1.07 GiB per pass; that remains a separate
+optimization target. The 10,000-session analytical query medians were 166 ms for
+summary, 242 ms for activity, 360 ms for usage, and 753 ms for common-term
+search.

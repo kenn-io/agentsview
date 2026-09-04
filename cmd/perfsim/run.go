@@ -49,6 +49,9 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 	if err != nil {
 		return r, err
 	}
+	if sources[0].Store != nil {
+		defer sources[0].Store.Close()
+	}
 	database, err := db.OpenIsolated(filepath.Join(dir, "sessions.db"))
 	if err != nil {
 		return r, err
@@ -111,6 +114,16 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 			return r, err
 		}
 		if o.ReconcileEvery > 0 && i%o.ReconcileEvery == 0 {
+			if o.SourceFormat == "opencode" {
+				if err := measureSQLiteScans(ctx, &r, sources, o.Active); err != nil {
+					return r, err
+				}
+				if err := r.measure("warm", "container_event", func() error {
+					return engine.SyncPathsContext(ctx, []string{sources[0].Path})
+				}); err != nil {
+					return r, err
+				}
+			}
 			if err := r.measure("warm", "reconcile", func() error {
 				stats, _, err := engine.ReconcileWatchRootsWithStats(ctx, nil, true, nil)
 				if err != nil {
@@ -130,10 +143,17 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 			if err := s.appendTurns(1, o.ContentBytes); err != nil {
 				return r, err
 			}
-			changed = append(changed, s.Path)
+			if s.Store == nil || len(changed) == 0 {
+				changed = append(changed, s.Path)
+			}
 		}
 		if err := r.measure("active", "append", func() error { return engine.SyncPathsContext(ctx, changed) }); err != nil {
 			return r, err
+		}
+		if o.SourceFormat == "opencode" {
+			if err := syncSQLiteChildEdits(ctx, &r, engine, database, sources[:o.Active]); err != nil {
+				return r, err
+			}
 		}
 		if o.QueryEvery > 0 && i%o.QueryEvery == 0 {
 			for _, q := range queries {

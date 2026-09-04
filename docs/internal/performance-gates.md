@@ -268,3 +268,8 @@ allocation samples include background work and are not CI timing assertions.
 benchmark, like `BenchmarkCodexIncrementalCursor`, outside the default gate
 package list. The sync candidate-lookup and unchanged-cache work regressions
 also run as deterministic tests in the regular suite.
+
+The simulator's `--source-format opencode` mode covers SQLite metadata and
+full-digest scans, active-session polling, container events, and child-only part
+edits. `TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers` bounds unchanged
+virtual-event work as the archive grows and checks deletion behavior.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,9 +17,13 @@ type source struct {
 	Agent    parser.AgentType
 	Turns    int
 	Start    time.Time
+	Store    *sql.DB
 }
 
 func corpus(dir string, o options) ([]source, map[parser.AgentType][]string, error) {
+	if o.SourceFormat == "opencode" {
+		return openCodeCorpus(dir, o)
+	}
 	roots := map[parser.AgentType][]string{
 		parser.AgentClaude: {filepath.Join(dir, "claude")}, parser.AgentCodex: {filepath.Join(dir, "codex")},
 	}
@@ -60,6 +65,21 @@ func corpus(dir string, o options) ([]source, map[parser.AgentType][]string, err
 }
 
 func (s *source) appendTurns(n, contentBytes int) error {
+	if s.Store != nil {
+		tx, err := s.Store.Begin()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := s.writeSQLiteTurns(tx, n, contentBytes); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		s.Turns += n
+		return nil
+	}
 	b := testjsonl.NewSessionBuilder()
 	for j := range n {
 		turn := s.Turns + j

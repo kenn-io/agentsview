@@ -1621,6 +1621,20 @@ func (e *Engine) prepareChangedPathSync(
 	prepared.missingPaths = omitMissingPersistentContainerPaths(
 		prepared.missingPaths, prepared.files,
 	)
+	// OpenCode virtual paths never exist as filesystem entries. Its changed-
+	// path provider already checked that each returned SQLite member exists;
+	// do not turn a successful single-member classification into a container-
+	// wide absence scan. Missing members return no source and keep that scan.
+	resolvedVirtual := make(map[string]struct{})
+	for _, file := range prepared.files {
+		if file.ProviderSource != nil && isOpenCodeFormatSQLiteVirtualPath(file.Agent, file.Path) {
+			resolvedVirtual[filepath.Clean(file.Path)] = struct{}{}
+		}
+	}
+	prepared.missingPaths = slices.DeleteFunc(prepared.missingPaths, func(path string) bool {
+		_, resolved := resolvedVirtual[filepath.Clean(path)]
+		return resolved
+	})
 	return prepared
 }
 

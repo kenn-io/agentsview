@@ -637,6 +637,22 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## OpenCode (`opencode`)
 
+**Performance fixture check (2026-09-04):** Rechecked the pinned commit's
+[session tables](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/session/sql.ts),
+[project tables](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/project/sql.ts),
+[timestamp defaults](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/database/schema.sql.ts),
+and
+[event projector](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/session/projector.ts).
+The projector inserts/upserts JSON message and part data; updates stamp
+`time_updated` through the shared column definition. `cmd/perfsim` preserves the
+four provider-consumed tables and their indexes in a synthetic WAL database,
+writes usage-bearing messages, and edits text parts without advancing session
+metadata. Parsed message, usage, and edited-content assertions verify the
+fixture. This subset omits the newer `session_message` projection and does not
+establish support for that layout. A successfully resolved virtual member is no
+longer treated as a missing filesystem path during changed-path preparation;
+missing members still follow normal source-missing reconciliation.
+
 - **Format:** Current SQLite-backed session/message/part records and the legacy
   JSON storage tree.
 - **Evidence:** `source`.

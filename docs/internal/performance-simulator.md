@@ -1,9 +1,10 @@
 # Performance simulator
 
-`cmd/perfsim` creates synthetic Claude and Codex JSONL sources and feeds them
-through the real parsers, SQLite archive, sync engine, usage cache, and query
-implementations. It checks session/message totals after ingest and appends so a
-parser failure cannot look like a performance improvement.
+`cmd/perfsim` creates synthetic Claude/Codex JSONL sources or an OpenCode SQLite
+store and feeds them through the real parsers, SQLite archive, sync engine,
+usage cache, and query implementations. It checks session/message totals after
+ingest and appends so a parser failure cannot look like a performance
+improvement.
 
 Run the default workload:
 
@@ -28,14 +29,21 @@ make perf-sim PERF_SIM_FLAGS='--sessions 10000 --turns 20 --active-turns 1000 --
 
 # Isolate append work from periodic full reconciliation and analytics.
 make perf-sim PERF_SIM_FLAGS='--sessions 1000 --empty 10000 --iterations 25 --reconcile-every 0 --query-every 0'
+
+# SQLite container scans, long active sessions, and analytical queries.
+make perf-sim PERF_SIM_FLAGS='--source-format opencode --sessions 10000 --turns 20 --active-turns 1000 --iterations 5'
+
+# Larger part payloads to exercise SQLite overflow pages.
+make perf-sim PERF_SIM_FLAGS='--source-format opencode --sessions 1000 --message-bytes 16384 --iterations 5'
 ```
 
-Sessions alternate between Claude and Codex. `--active` selects how many of the
-first sessions receive a new user/assistant pair per iteration, default two.
-`--active-turns` changes their initial length without making every archived
-session long. `--message-bytes` controls approximate content size. `--empty`
-adds empty Claude source files; current parsers archive these as empty sessions,
-so they stress discovery and bookkeeping without adding analytical messages.
+The default `--source-format jsonl` alternates between Claude and Codex.
+`--active` selects how many of the first sessions receive a new user/assistant
+pair per iteration, default two. `--active-turns` changes their initial length
+without making every archived session long. `--message-bytes` controls
+approximate content size. `--empty` adds empty Claude source files; current
+parsers archive these as empty sessions, so they stress discovery and
+bookkeeping without adding analytical messages.
 
 The corpus uses fixed dates across June 2026, unique session/message/request
 IDs, and usage-bearing assistant turns. It does not contact model providers. The
@@ -97,3 +105,47 @@ append generation as well as sync; per-operation timings exclude generation. The
 corpus currently has no tool calls, forks, subagents, or malformed records. Use
 real-data clones or additional producer fixtures for those cases. Query content
 deliberately contains repeated search terms, stressing common-term FTS.
+
+## OpenCode SQLite workload
+
+`--source-format opencode` creates a separate producer database in WAL mode and
+keeps its writer open while Agentsview reads it. Only this synthetic database
+receives producer writes; the archive is populated through the normal provider.
+The fixture includes the session, project, message, and part table columns and
+indexes from the pinned upstream schema. It deliberately adds no timestamp
+indexes that would make production scans look cheaper. `--empty` applies only to
+JSONL and is rejected for this workload.
+
+Each append inserts a user/assistant pair and text parts in a transaction,
+advancing the session timestamp. The container path is then passed to the
+engine, exercising its session-metadata scan and stored-freshness comparison.
+Each active session also receives an in-place edit to the last assistant text
+part. That edit advances only the part timestamp. The simulator polls the
+session's virtual source, syncs it, and verifies that the archive contains the
+edited text. Thus a session-row-only detector cannot silently pass the workload.
+
+Additional observations distinguish the SQLite read paths:
+
+- `warm_metadata_scan`: streamed session/project watermarks.
+- `warm_full_digest_scan`: streamed metadata with child identity checks.
+- `warm_session_poll`: per-session composite timestamp reads for active
+  sessions.
+- `warm_container_event`: an unchanged container notification through the
+  engine.
+- `active_session_poll`: the same active-session reads after child-only edits.
+- `active_child_edit`: engine processing of those edited virtual sources.
+
+Warm scans and unchanged container events follow `--reconcile-every`; active
+polls and child edits run every iteration. Full digest scans are diagnostic
+provider calls, separate from the engine's five-minute verification schedule.
+They warm SQLite/filesystem caches, so compare equivalent workloads. Source
+writes and parsed-content validation are outside operation timings but inside
+the steady CPU profile. The normal analytical query suite runs for this format
+too. Session/message count and literal usage/content assertions cover both
+layouts in the normal Go suite.
+
+This is the OpenCode `message`/`part` layout consumed by Agentsview, not an
+OpenCode process or an exhaustive producer emulator. It omits the newer
+`session_message` projection, tools, concurrent writers, and deletions. Schema
+and write provenance are recorded in
+[session format sources](session-format-sources.md).

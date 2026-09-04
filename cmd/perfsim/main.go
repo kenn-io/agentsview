@@ -17,6 +17,7 @@ import (
 )
 
 type options struct {
+	SourceFormat   string `json:"source_format"`
 	Sessions       int    `json:"sessions"`
 	Turns          int    `json:"turns_per_session"`
 	ActiveTurns    int    `json:"active_session_turns"`
@@ -32,7 +33,8 @@ type options struct {
 
 func main() {
 	o := options{}
-	flag.IntVar(&o.Sessions, "sessions", 1000, "Sessions split between Claude and Codex")
+	flag.StringVar(&o.SourceFormat, "source-format", "jsonl", "Source layout: jsonl (Claude/Codex) or opencode (SQLite)")
+	flag.IntVar(&o.Sessions, "sessions", 1000, "Total sessions in the selected source format")
 	flag.IntVar(&o.Turns, "turns", 20, "User/assistant pairs per session")
 	flag.IntVar(&o.ActiveTurns, "active-turns", 0, "Initial turns in active sessions; 0 uses --turns")
 	flag.IntVar(&o.Active, "active", 2, "Sessions receiving one pair per iteration")
@@ -53,6 +55,12 @@ func main() {
 }
 
 func execute(ctx context.Context, o options) error {
+	if o.SourceFormat != "jsonl" && o.SourceFormat != "opencode" {
+		return fmt.Errorf("source-format must be jsonl or opencode")
+	}
+	if o.SourceFormat == "opencode" && o.Empty != 0 {
+		return fmt.Errorf("empty sources apply only to the jsonl workload")
+	}
 	if o.Sessions < 2 || o.Turns < 1 || o.ActiveTurns < 0 || o.Active < 1 || o.Active > o.Sessions || o.Iterations < 1 || o.Empty < 0 || o.ReconcileEvery < 0 || o.QueryEvery < 0 || o.ContentBytes < 1 {
 		return fmt.Errorf("sessions >= 2, turns/iterations/message-bytes >= 1, 1 <= active <= sessions, and active-turns/empty/reconcile-every/query-every >= 0 are required")
 	}
