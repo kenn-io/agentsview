@@ -1097,7 +1097,7 @@ func TestCurrentDataVersionAntigravityCLIExperimentalServingVariant(t *testing.T
 
 func TestCurrentDataVersionCopilotAssistantOutputFallback(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 100,
-		"version 100 is the data-version boundary for Copilot assistant output fallback")
+		"version 100 is the data-version boundary for Copilot fallback and session-store token data")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

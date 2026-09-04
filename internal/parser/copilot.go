@@ -27,7 +27,6 @@ const (
 	copilotEventModelChange     = "session.model_change"
 	copilotEventSessionShutdown = "session.shutdown"
 	copilotReportedCostSource   = "copilot-reported"
-	copilotStoreCostSource      = "copilot-session-store"
 )
 
 var copilotUsageBasedPricingStartedAt = time.Date(
@@ -397,8 +396,8 @@ func (b *copilotSessionBuilder) applyMessageUsageFallback() {
 	}
 }
 
-// loadCopilotStoreUsage reads the CLI's per-request accounting when available.
-// These rows are more current and complete than transcript shutdown summaries.
+// loadCopilotStoreUsage reads the CLI's observed per-request token data when
+// available. Billing semantics for this undocumented store are not assumed.
 func loadCopilotStoreUsage(
 	storePath, rawSessionID string,
 ) ([]ParsedUsageEvent, error) {
@@ -422,7 +421,7 @@ func loadCopilotStoreUsage(
 
 	rows, err := store.Query(`
 		SELECT id, model, input_tokens, output_tokens, cache_read_tokens,
-		       cache_write_tokens, reasoning_tokens, total_nano_aiu, created_at
+		       cache_write_tokens, reasoning_tokens, created_at
 		FROM assistant_usage_events
 		WHERE session_id = ?
 		ORDER BY id
@@ -437,19 +436,11 @@ func loadCopilotStoreUsage(
 		var id int64
 		var model, createdAt string
 		var input, output, cacheRead, cacheWrite, reasoning sql.NullInt64
-		var totalNanoAIU sql.NullInt64
 		if err := rows.Scan(
 			&id, &model, &input, &output, &cacheRead, &cacheWrite, &reasoning,
-			&totalNanoAIU, &createdAt,
+			&createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning copilot session-store usage: %w", err)
-		}
-		if !totalNanoAIU.Valid || totalNanoAIU.Int64 < 0 {
-			continue
-		}
-		cost := money.Money{Microdollars: totalNanoAIU.Int64 / 100_000}
-		if totalNanoAIU.Int64%100_000 >= 50_000 {
-			cost.Microdollars++
 		}
 		events = append(events, ParsedUsageEvent{
 			Source:                   "session-store",
@@ -459,9 +450,6 @@ func loadCopilotStoreUsage(
 			CacheCreationInputTokens: int(cacheWrite.Int64),
 			CacheReadInputTokens:     int(cacheRead.Int64),
 			ReasoningTokens:          int(reasoning.Int64),
-			Cost:                     &cost,
-			CostStatus:               "exact",
-			CostSource:               copilotStoreCostSource,
 			OccurredAt:               createdAt,
 			DedupKey:                 fmt.Sprintf("session-store:%d", id),
 		})
