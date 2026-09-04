@@ -180,6 +180,9 @@ func TestLoadFileAgentHomesDeduplicateSymlinkedRoots(t *testing.T) {
 		filepath.Join(primary, "archived_sessions"),
 		filepath.Join(alt, "archived_sessions"),
 	}, cfg.ResolveDirs(parser.AgentCodex))
+	assert.Equal(t, map[string][]string{
+		filepath.Join(primary, "sessions"): {filepath.Join(alt, "sessions")},
+	}, cfg.RootAliases[parser.AgentCodex])
 }
 
 func TestSaveSettingsPersistsAgentHomes(t *testing.T) {

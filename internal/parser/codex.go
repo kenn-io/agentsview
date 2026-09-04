@@ -1914,7 +1914,7 @@ func EvictAllCodexSessionIndexes() {
 // one Codex transcript. Explicit full-parse callers use this when an external
 // event says the sidecar changed even if its stat tuple did not.
 func EvictCodexSessionIndexForSession(sessionPath string) {
-	if indexPath := codexSessionIndexPath(sessionPath); indexPath != "" {
+	for _, indexPath := range codexSessionIndexPaths(sessionPath) {
 		EvictCodexSessionIndex(indexPath)
 	}
 }
@@ -1949,11 +1949,11 @@ func ReadCodexThreadNameEntry(
 	if strings.TrimSpace(sessionID) == "" {
 		return "", false, nil
 	}
-	indexPath := codexSessionIndexPath(sessionPath)
-	if indexPath == "" {
+	indexPaths := codexSessionIndexPaths(sessionPath)
+	if len(indexPaths) == 0 {
 		return "", false, nil
 	}
-	titles, err := loadCodexSessionIndex(indexPath)
+	titles, err := loadCodexSessionIndexes(indexPaths)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
 	}
@@ -1969,11 +1969,11 @@ func ReadCodexThreadNameEntry(
 // failures so callers cannot persist a freshness digest for unchecked title
 // metadata.
 func VerifyCodexSessionIndex(sessionPath string) error {
-	indexPath := codexSessionIndexPath(sessionPath)
-	if indexPath == "" {
+	indexPaths := codexSessionIndexPaths(sessionPath)
+	if len(indexPaths) == 0 {
 		return nil
 	}
-	_, err := loadCodexSessionIndex(indexPath)
+	_, err := loadCodexSessionIndexes(indexPaths)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -1983,10 +1983,10 @@ func VerifyCodexSessionIndex(sessionPath string) error {
 // CodexEffectiveMtime returns the effective mtime for a Codex session file,
 // incorporating session_index.jsonl so renames invalidate the cache.
 func CodexEffectiveMtime(sessionPath string, fileMtime int64) int64 {
-	if idxPath := codexSessionIndexPath(sessionPath); idxPath != "" {
+	for _, idxPath := range codexSessionIndexPaths(sessionPath) {
 		if si, err := os.Stat(idxPath); err == nil {
 			if idxMtime := si.ModTime().UnixNano(); idxMtime > fileMtime {
-				return idxMtime
+				fileMtime = idxMtime
 			}
 		}
 	}

@@ -823,10 +823,14 @@ For Claude, each home adds `<home>/projects`. For Codex, each home adds
 `<home>/sessions` and `<home>/archived_sessions`, and Codex activity hints are
 read from that home's `history.jsonl`. Homes are additive to the default
 directories, the environment variables above, the `*_dirs` arrays, and
-`[[session_sources]]`. Roots that resolve to the same directory,
-including through symbolic links, are deduplicated, and a matching `[[session_sources]]` entry still supplies the
-machine label. Homes must be local directories; use the `*_dirs` arrays for
-`s3://` roots.
+`[[session_sources]]`. Roots that resolve to the same directory, including
+through symbolic links, are scanned once, and a matching `[[session_sources]]`
+entry still supplies the machine label. A second Codex home whose `sessions/`
+links to the primary home but keeps its own `history.jsonl` or
+`session_index.jsonl` still contributes those files: activity hints and thread
+titles are read from every home, and when two homes name the same session the
+most recently written index wins. Homes must be local directories; use the
+`*_dirs` arrays for `s3://` roots.
 
 Sessions from every home appear under the same Claude or Codex provider. Names,
 projects, and titles come from the native session files, not from the wrapping

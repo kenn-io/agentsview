@@ -13,8 +13,10 @@ description: Release history for AgentsView
   appear alongside the default roots without hand-configuring low-level paths.
   `CODEX_HOME` now re-roots the default Codex directories the same way
   `CLAUDE_CONFIG_DIR` already does for Claude Code. The Session Providers
-  section of the Settings page can add and remove these homes, and roots that
-  reach the same directory through a symbolic link are scanned once. (#1611)
+  section of the Settings page can add and remove these homes. Roots that
+  reach the same directory through a symbolic link are scanned once, while
+  each home's own `history.jsonl` and `session_index.jsonl` are still read.
+  (#1611)
 
 **Improvements**
 

@@ -969,6 +969,7 @@ func coordinateLocalSync(
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs:               appCfg.AgentDirs,
 		SourceMachines:          appCfg.SourceMachines,
+		RootAliases:             appCfg.RootAliases,
 		DisabledAgents:          appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      appCfg.ScanProtectedPaths,

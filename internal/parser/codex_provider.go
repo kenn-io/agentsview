@@ -193,12 +193,21 @@ func (p *codexProvider) ActivityHintSources(
 		if strings.HasPrefix(root, "s3://") {
 			continue
 		}
-		path := filepath.Join(filepath.Dir(filepath.Clean(root)), "history.jsonl")
-		if _, ok := seen[path]; ok {
-			continue
+		// Alias homes share the transcripts but may keep their own hint
+		// log, so every sidecar directory contributes. Resolve links so a
+		// shared history.jsonl is read once.
+		for _, dir := range codexSidecarDirs(root) {
+			path := filepath.Join(dir, "history.jsonl")
+			key := path
+			if resolved, err := filepath.EvalSymlinks(path); err == nil {
+				key = resolved
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			sources = append(sources, ActivityHintSource{Path: path})
 		}
-		seen[path] = struct{}{}
-		sources = append(sources, ActivityHintSource{Path: path})
 	}
 	return sources, nil
 }
@@ -378,7 +387,11 @@ func (p *codexProvider) PlanRawCapture(
 // process restarts, sparing a fresh engine the full-content hash that
 // Fingerprint performs for every unchanged rollout.
 func (p *codexProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
-	return fileStatTupleDigest(0xC2, chatPath, codexSessionIndexPath(chatPath))
+	paths := append([]string{chatPath}, codexSessionIndexPaths(chatPath)...)
+	if len(paths) == 1 {
+		paths = append(paths, "")
+	}
+	return fileStatTupleDigest(0xC2, paths...)
 }
 
 func (p *codexProvider) Parse(
@@ -798,7 +811,11 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 		if !s.ownsCodexSidecars() {
 			continue
 		}
-		for _, shallow := range ResolveCodexShallowWatchRoots(root) {
+		shallowRoots := ResolveCodexShallowWatchRoots(root)
+		for _, alias := range codexAliasRoots(root) {
+			shallowRoots = append(shallowRoots, ResolveCodexShallowWatchRoots(alias)...)
+		}
+		for _, shallow := range shallowRoots {
 			shallow = filepath.Clean(shallow)
 			if _, ok := seenShallow[shallow]; ok {
 				continue
@@ -965,7 +982,12 @@ func (s codexSourceSet) sourcesForIndexPath(
 	}
 	indexDir := filepath.Dir(indexPath)
 	return s.discover(ctx, func(root string) bool {
-		return filepath.Dir(root) == indexDir
+		for _, dir := range codexSidecarDirs(root) {
+			if dir == indexDir {
+				return true
+			}
+		}
+		return false
 	})
 }
 
