@@ -804,42 +804,101 @@ All listed directories are discovered, watched, and synced independently.
 
 ### Alternate Claude and Codex Homes
 
-Claude Code honors `CLAUDE_CONFIG_DIR` and Codex honors `CODEX_HOME`, so one
-machine can run several instances that each keep their own home directory.
-Tools such as t3code do this when `homePath` is set. Those sessions land outside
-the default roots, so AgentsView cannot see them unless each home is
-registered.
+Claude Code honors `CLAUDE_CONFIG_DIR` and Codex honors `CODEX_HOME`. Point
+either at a different directory and that instance keeps its own settings,
+credentials, skills, and sessions there. People do this for a second account,
+a separate skill or settings profile, or because a wrapper such as t3code sets
+`homePath` per instance. Those sessions land outside the default roots, so
+AgentsView cannot see them unless each home is registered.
 
-Set `claude_homes` or `codex_homes` to the home directories themselves. AgentsView
-derives the native session directories for each home, so you do not need to
-know the on-disk layout:
+Set `claude_homes` or `codex_homes` to the home directories themselves.
+AgentsView derives the native session directories for each home, so you do not
+need to know the on-disk layout:
 
 ```toml
 claude_homes = ["~/.claude-work", "~/.t3code/instances/alpha/claude"]
 codex_homes = ["~/.codex-work", "~/.t3code/instances/alpha/codex"]
 ```
 
-For Claude, each home adds `<home>/projects`. For Codex, each home adds
-`<home>/sessions` and `<home>/archived_sessions`, and Codex activity hints are
-read from that home's `history.jsonl`. Homes are additive to the default
-directories, the environment variables above, the `*_dirs` arrays, and
-`[[session_sources]]`. Roots that resolve to the same directory, including
-through symbolic links, are scanned once, and a matching `[[session_sources]]`
-entry still supplies the machine label. A second Codex home whose `sessions/`
-links to the primary home but keeps its own `history.jsonl` or
-`session_index.jsonl` still contributes those files: activity hints and thread
-titles are read from every home, and when two homes name the same session the
-most recently written index wins. Homes must be local directories; use the
-`*_dirs` arrays for `s3://` roots.
+| Agent       | Home variable       | Transcripts scanned                             | Sidecars read from each home           |
+| ----------- | ------------------- | ----------------------------------------------- | -------------------------------------- |
+| Claude Code | `CLAUDE_CONFIG_DIR` | `<home>/projects/`                              | none                                   |
+| Codex       | `CODEX_HOME`        | `<home>/sessions/`, `<home>/archived_sessions/` | `history.jsonl`, `session_index.jsonl` |
 
-Sessions from every home appear under the same Claude or Codex provider. Names,
-projects, and titles come from the native session files, not from the wrapping
-tool's own metadata.
+Homes are additive to the default directories, the environment variables above,
+the `*_dirs` arrays, and `[[session_sources]]`. Homes must be local directories;
+use the `*_dirs` arrays for `s3://` roots. Sessions from every home appear under
+the same Claude or Codex provider, and names, projects, and titles come from the
+native session files, not from the wrapping tool's own metadata.
 
 The Session Providers section of the Settings page edits the same lists. Adding
 or removing a home there writes `claude_homes` or `codex_homes` to
 `config.toml`. Like the provider enable toggles, the change takes effect after
 the AgentsView daemon and any separate push-watch process restart.
+
+#### Choosing a layout
+
+There are two sensible ways to run a second home. Pick based on whether the
+transcripts should be shared.
+
+**Fully separate homes.** Each home owns its own transcripts. Use this when the
+instances must not see each other's history, such as a personal and a work
+account. Register every home and AgentsView scans each one:
+
+```bash
+mkdir -p ~/.codex-work
+CODEX_HOME=~/.codex-work codex login
+```
+
+```toml
+codex_homes = ["~/.codex-work"]
+```
+
+**Shared transcripts, separate profile.** The second home keeps its own
+`config.toml`, skills, and per-instance metadata, but its session directories
+are symbolic links into the primary home. Use this when you want different
+settings or skill profiles while keeping one searchable history. This is the
+recommended layout for profile switching, because nothing is copied and no
+session exists in two places:
+
+```bash
+primary=~/.codex
+alt=~/.codex-profile
+mkdir -p "$alt"
+ln -s "$primary/sessions" "$alt/sessions"
+ln -s "$primary/archived_sessions" "$alt/archived_sessions"
+ln -s "$primary/history.jsonl" "$alt/history.jsonl"
+# leave config.toml, skills, session_index.jsonl, and the *.sqlite state files
+# unlinked so the profile keeps its own settings and metadata
+CODEX_HOME="$alt" codex
+```
+
+```toml
+codex_homes = ["~/.codex-profile"]
+```
+
+Codex writes thread titles to `session_index.jsonl` in whichever home the
+rename happened in. Do not link that file; AgentsView reads every home's copy.
+
+The same shape works for Claude Code by linking `<alt>/projects` to
+`~/.claude/projects`. Claude keeps no title index, so there is nothing else to
+leave unlinked for AgentsView's sake.
+
+#### How links and duplicates are handled
+
+- Roots that resolve to the same directory, including through symbolic links,
+  are scanned once. The first configured spelling is the effective root; the
+  others become aliases of it. A matching `[[session_sources]]` entry still
+  supplies the machine label.
+- Codex sidecars are read from the effective root's home and from every alias
+  home. Activity hints come from each distinct `history.jsonl`; a linked copy is
+  read once. Thread titles concatenate every `session_index.jsonl`, and when two
+  homes name the same session the most recently written index wins.
+- Changing a title in an alias home is picked up live. Each home's directory is
+  watched for `session_index.jsonl` changes and mapped back to the shared
+  transcripts.
+- A home whose link target does not exist yet is kept by its configured path
+  and starts working once the target appears.
 
 ### Machine-Labeled Filesystem Sources
 
