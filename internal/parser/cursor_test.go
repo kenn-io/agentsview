@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -482,6 +483,106 @@ func TestDecodeCursorProjectDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			got := DecodeCursorProjectDir(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseCursorTranscriptRel(t *testing.T) {
+	join := func(parts ...string) string { return filepath.Join(parts...) }
+	tests := []struct {
+		name string
+		rel  string
+		want cursorTranscriptLocation
+		ok   bool
+	}{
+		{
+			name: "flat",
+			rel:  join("Users-demo", "agent-transcripts", "sess.jsonl"),
+			want: cursorTranscriptLocation{ProjectDir: "Users-demo", RawID: "sess"},
+			ok:   true,
+		},
+		{
+			name: "nested",
+			rel:  join("Users-demo", "agent-transcripts", "sess", "sess.txt"),
+			want: cursorTranscriptLocation{ProjectDir: "Users-demo", RawID: "sess"},
+			ok:   true,
+		},
+		{
+			name: "subagent",
+			rel:  join("Users-demo", "agent-transcripts", "parent", "subagents", "child.jsonl"),
+			want: cursorTranscriptLocation{
+				ProjectDir: "Users-demo", RawID: "child", ParentRawID: "parent",
+			},
+			ok: true,
+		},
+		{
+			name: "subagent legacy text",
+			rel:  join("Users-demo", "agent-transcripts", "parent", "subagents", "child.txt"),
+			want: cursorTranscriptLocation{
+				ProjectDir: "Users-demo", RawID: "child", ParentRawID: "parent",
+			},
+			ok: true,
+		},
+		{name: "nested stem mismatch", rel: join("Users-demo", "agent-transcripts", "sess", "other.jsonl")},
+		{name: "nested auxiliary file", rel: join("Users-demo", "agent-transcripts", "sess", "notes.txt")},
+		{name: "wrong extension", rel: join("Users-demo", "agent-transcripts", "sess.json")},
+		{name: "subagents without parent", rel: join("Users-demo", "agent-transcripts", "subagents", "child.jsonl")},
+		{name: "wrong child folder", rel: join("Users-demo", "agent-transcripts", "parent", "children", "child.jsonl")},
+		{name: "child named after parent", rel: join("Users-demo", "agent-transcripts", "parent", "subagents", "parent.jsonl")},
+		{name: "parent id invalid", rel: join("Users-demo", "agent-transcripts", "par ent", "subagents", "child.jsonl")},
+		{name: "grandchild", rel: join("Users-demo", "agent-transcripts", "p", "subagents", "c", "subagents", "g.jsonl")},
+		{name: "non transcript extension", rel: join("Users-demo", "agent-transcripts", "parent", "subagents", "notes.md")},
+		{name: "not under agent-transcripts", rel: join("Users-demo", "chats", "sess.jsonl")},
+		{name: "escapes root", rel: join("..", "agent-transcripts", "sess.jsonl")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseCursorTranscriptRel(tt.rel)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCursorTranscriptLocationFromPath(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		name string
+		path string
+		want cursorTranscriptLocation
+		ok   bool
+	}{
+		{
+			name: "subagent under any root",
+			path: filepath.Join(root, "demo", "agent-transcripts", "parent", "subagents", "child.jsonl"),
+			want: cursorTranscriptLocation{ProjectDir: "demo", RawID: "child", ParentRawID: "parent"},
+			ok:   true,
+		},
+		{
+			name: "top level has no parent",
+			path: filepath.Join(root, "demo", "agent-transcripts", "sess", "sess.jsonl"),
+			want: cursorTranscriptLocation{ProjectDir: "demo", RawID: "sess"},
+			ok:   true,
+		},
+		{
+			name: "materialized s3 layout keeps the parent",
+			path: filepath.Join(root, "raw", "cursor", "demo", "agent-transcripts", "parent", "subagents", "child.jsonl"),
+			want: cursorTranscriptLocation{ProjectDir: "demo", RawID: "child", ParentRawID: "parent"},
+			ok:   true,
+		},
+		{
+			name: "parent session named like the layout marker",
+			path: filepath.Join(root, "demo", "agent-transcripts", "agent-transcripts", "subagents", "child.jsonl"),
+			want: cursorTranscriptLocation{ProjectDir: "demo", RawID: "child", ParentRawID: "agent-transcripts"},
+			ok:   true,
+		},
+		{name: "unrelated path", path: filepath.Join(root, "uploads", "child.jsonl")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := cursorTranscriptLocationFromPath(tt.path)
+			assert.Equal(t, tt.ok, ok)
 			assert.Equal(t, tt.want, got)
 		})
 	}

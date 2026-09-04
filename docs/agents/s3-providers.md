@@ -48,7 +48,7 @@ custom implementations:
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Claude | Sidecar fold, subagent paths, transcript keep rules                                                                                                                                                                                                                |
 | Codex  | `rollout-*.jsonl` keep, `codex:` UUID IDs, sessions/archived rewrite, parent and `session_index` locate. TraeX shares the type and must not enable S3.                                                                                                             |
-| Cursor | Harvest `<project>/<id>.{jsonl,txt}` plus local `agent-transcripts` layouts; decode encoded project dirs only for the local layout; deduplicate a session stem across configured roots by source machine, preferring `.jsonl`, nested over flat, then lexical path |
+| Cursor | Harvest `<project>/<id>.{jsonl,txt}` plus local `agent-transcripts` layouts, including a parent session's `subagents` directory; decode encoded project dirs only for the local layout; deduplicate a session stem across configured roots by source machine, preferring a session's own nested or flat object over a copy in another session's `subagents` directory, then `.jsonl`, then nested over flat, then lexical path |
 
 `internal/parser/s3source.go` stays generic transport: client, list, fetch,
 stat, and `s3PrefixScan`. Agent policy does not belong there.

@@ -92,6 +92,7 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"EditFile", "Edit"},
 		{"RunTerminalCommand", "Bash"},
 		{"LaunchSubagent", "Task"},
+		{"Subagent", "Task"},
 		{"WebFetch", "Tool"},
 		{"WebSearch", "Tool"},
 		{"TodoWrite", "Tool"},

@@ -106,6 +106,13 @@ func (p *cursorProvider) parseSession(
 			Hash:  hash,
 		},
 	}
+	// A delegating transcript records only a Subagent tool_use block with a
+	// null id and no tool_result, so the subagents directory is the sole link
+	// from a child to the session that spawned it.
+	if loc, ok := cursorTranscriptLocationFromPath(path); ok && loc.ParentRawID != "" {
+		sess.ParentSessionID = cursorSessionIDPrefix + loc.ParentRawID
+		sess.RelationshipType = RelSubagent
+	}
 	return sess, messages, nil
 }
 
@@ -386,12 +393,14 @@ func isBlockBodyEnd(line string) bool {
 		line[0] != '\t'
 }
 
+const cursorSessionIDPrefix = "cursor:"
+
 // CursorSessionID derives a session ID from a transcript file
 // path by stripping whatever extension is present.
 func CursorSessionID(path string) string {
 	base := filepath.Base(path)
 	base = strings.TrimSuffix(base, filepath.Ext(base))
-	return "cursor:" + base
+	return cursorSessionIDPrefix + base
 }
 
 // isCursorJSONL returns true if the data looks like JSONL

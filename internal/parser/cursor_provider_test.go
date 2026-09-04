@@ -41,10 +41,13 @@ func TestCursorProviderSourceMethods(t *testing.T) {
 	nestedJSONL := cursorProviderWriteJSONLTranscript(
 		t, transcriptsDir, filepath.Join("nested", "nested.jsonl"), "new",
 	)
-	cursorProviderWriteJSONLTranscript(
+	childJSONL := cursorProviderWriteJSONLTranscript(
 		t, transcriptsDir, filepath.Join("nested", "subagents", "child.jsonl"), "child",
 	)
 	cursorProviderWriteJSONLTranscript(t, transcriptsDir, filepath.Join("mismatch", "other.jsonl"), "other")
+	orphan := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("subagents", "orphan.jsonl"), "orphan",
+	)
 
 	provider, ok := NewProvider(AgentCursor, ProviderConfig{
 		Roots:   []string{root},
@@ -62,10 +65,11 @@ func TestCursorProviderSourceMethods(t *testing.T) {
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	require.Len(t, discovered, 2)
-	assert.ElementsMatch(t, []string{flatJSONL, nestedJSONL}, []string{
+	require.Len(t, discovered, 3)
+	assert.ElementsMatch(t, []string{flatJSONL, nestedJSONL, childJSONL}, []string{
 		discovered[0].DisplayPath,
 		discovered[1].DisplayPath,
+		discovered[2].DisplayPath,
 	})
 	for _, source := range discovered {
 		assert.Equal(t, AgentCursor, source.Provider)
@@ -102,6 +106,13 @@ func TestCursorProviderSourceMethods(t *testing.T) {
 	assert.Positive(t, fingerprint.MTimeNS)
 	assert.NotEmpty(t, fingerprint.Hash)
 
+	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "child",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, childJSONL, found.DisplayPath)
+
 	for _, tc := range []struct {
 		name string
 		path string
@@ -111,6 +122,7 @@ func TestCursorProviderSourceMethods(t *testing.T) {
 		{name: "flat jsonl", path: flatJSONL, want: flatJSONL},
 		{name: "nested txt promotes to jsonl", path: nestedTxt, want: nestedJSONL},
 		{name: "nested jsonl", path: nestedJSONL, want: nestedJSONL},
+		{name: "subagent child", path: childJSONL, want: childJSONL},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			changed, err := provider.SourcesForChangedPath(
@@ -125,14 +137,11 @@ func TestCursorProviderSourceMethods(t *testing.T) {
 
 	ignored, err := provider.SourcesForChangedPath(
 		context.Background(),
-		ChangedPathRequest{
-			Path:      filepath.Join(transcriptsDir, "nested", "subagents", "child.jsonl"),
-			EventKind: "write",
-			WatchRoot: root,
-		},
+		ChangedPathRequest{Path: orphan, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
-	assert.Empty(t, ignored)
+	assert.Empty(t, ignored,
+		"a subagents directory directly under agent-transcripts has no parent session")
 
 	wrongRoot, err := provider.SourcesForChangedPath(
 		context.Background(),
@@ -597,4 +606,334 @@ func TestCursorProviderSourceMachineMakesResolutionRemote(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, SourceCwdRemote, changed[0].CwdResolution.State)
+}
+
+// cursorSubagentFixture adds two shapes Cursor never produces, which must
+// stay undiscovered: a subagents directory with no parent session, and a
+// subagent nested under another subagent.
+type cursorSubagentFixture struct {
+	root, projectDir, resolverRoot, resolvedWorkspace string
+	parentJSONL, childJSONL, childTxt, promotedJSONL  string
+	orphan, grandchild                                string
+}
+
+func newCursorSubagentFixture(t *testing.T) cursorSubagentFixture {
+	t.Helper()
+	root := t.TempDir()
+	projectDir := "Users-fiona-Documents-demo"
+	if filepath.Separator == '\\' {
+		projectDir = "C-Users-fiona-Documents-demo"
+	}
+	resolverRoot := filepath.Join(root, "resolver")
+	resolvedWorkspace := filepath.Join(resolverRoot, "Users", "fiona", "Documents", "demo")
+	require.NoError(t, os.MkdirAll(resolvedWorkspace, 0o755))
+	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
+	subagents := filepath.Join("parent", "subagents")
+	f := cursorSubagentFixture{
+		root: root, projectDir: projectDir,
+		resolverRoot: resolverRoot, resolvedWorkspace: resolvedWorkspace,
+	}
+	f.parentJSONL = cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("parent", "parent.jsonl"), "delegate this",
+	)
+	f.childJSONL = cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join(subagents, "child-a.jsonl"), "child a task",
+	)
+	f.childTxt = cursorProviderWriteTranscript(
+		t, transcriptsDir, filepath.Join(subagents, "child-b.txt"), "child b task",
+	)
+	cursorProviderWriteTranscript(
+		t, transcriptsDir, filepath.Join(subagents, "child-c.txt"), "child c legacy",
+	)
+	f.promotedJSONL = cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join(subagents, "child-c.jsonl"), "child c task",
+	)
+	f.orphan = cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("subagents", "orphan.jsonl"), "orphan",
+	)
+	f.grandchild = cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir,
+		filepath.Join(subagents, "child-a", "subagents", "grandchild.jsonl"),
+		"grandchild",
+	)
+	return f
+}
+
+func (f cursorSubagentFixture) expectedPaths() []string {
+	return []string{f.parentJSONL, f.childJSONL, f.childTxt, f.promotedJSONL}
+}
+
+func (f cursorSubagentFixture) newProvider(t *testing.T) Provider {
+	t.Helper()
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{
+		Roots:   []string{f.root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	setCursorTestResolver(t, provider, f.resolverRoot)
+	return provider
+}
+
+func TestCursorProviderDiscoversSubagentTranscriptsInBothWalks(t *testing.T) {
+	f := newCursorSubagentFixture(t)
+	provider := f.newProvider(t)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+
+	var streamed []SourceRef
+	err = provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+
+	for name, sources := range map[string][]SourceRef{
+		"batch": discovered, "streaming": streamed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := make([]string, 0, len(sources))
+			for _, source := range sources {
+				paths = append(paths, source.DisplayPath)
+				assert.Equal(t, DecodeCursorProjectDir(f.projectDir), source.ProjectHint,
+					"%s inherits the delegating session's project", source.DisplayPath)
+				assert.Equal(t, SourceCwdResolved, source.CwdResolution.State)
+				assert.Equal(t, normalizeCursorDir(f.resolvedWorkspace), source.CwdResolution.Path)
+			}
+			assert.ElementsMatch(t, f.expectedPaths(), paths)
+			assert.NotContains(t, paths, f.orphan)
+			assert.NotContains(t, paths, f.grandchild)
+		})
+	}
+}
+
+func TestCursorProviderParseLinksSubagentToParentSession(t *testing.T) {
+	f := newCursorSubagentFixture(t)
+	provider := f.newProvider(t)
+
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	byPath := make(map[string]SourceRef, len(sources))
+	for _, source := range sources {
+		byPath[source.DisplayPath] = source
+	}
+
+	parse := func(t *testing.T, path string) ParsedSession {
+		t.Helper()
+		source, ok := byPath[path]
+		require.True(t, ok, "discovered %s", path)
+		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 1)
+		return outcome.Results[0].Result.Session
+	}
+
+	parent := parse(t, f.parentJSONL)
+	assert.Equal(t, "cursor:parent", parent.ID)
+	assert.Empty(t, parent.ParentSessionID)
+	assert.Equal(t, RelNone, parent.RelationshipType)
+
+	for name, tc := range map[string]struct {
+		path, id, firstMessage string
+	}{
+		"jsonl child":  {path: f.childJSONL, id: "cursor:child-a", firstMessage: "child a task"},
+		"legacy child": {path: f.childTxt, id: "cursor:child-b", firstMessage: "child b task"},
+		"promoted":     {path: f.promotedJSONL, id: "cursor:child-c", firstMessage: "child c task"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			child := parse(t, tc.path)
+			assert.Equal(t, tc.id, child.ID)
+			assert.Equal(t, parent.ID, child.ParentSessionID)
+			assert.Equal(t, RelSubagent, child.RelationshipType)
+			assert.Equal(t, parent.Project, child.Project)
+			assert.Equal(t, parent.Cwd, child.Cwd)
+			assert.Equal(t, tc.firstMessage, child.FirstMessage)
+		})
+	}
+}
+
+func TestCursorDiscoveryPrefersTopLevelOverSubagentStem(t *testing.T) {
+	root := t.TempDir()
+	projectDir := "Users-fiona-Documents-demo"
+	if filepath.Separator == '\\' {
+		projectDir = "C-Users-fiona-Documents-demo"
+	}
+	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
+	// "aaa" sorts before "zzz.jsonl", so the subagent copy is listed first;
+	// the top-level copy must still win in both walks.
+	parent := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("aaa", "aaa.jsonl"), "parent",
+	)
+	cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("aaa", "subagents", "zzz.jsonl"), "child copy",
+	)
+	flat := cursorProviderWriteJSONLTranscript(t, transcriptsDir, "zzz.jsonl", "top-level copy")
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	var streamed []SourceRef
+	require.NoError(t, provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	))
+
+	for name, sources := range map[string][]SourceRef{
+		"batch": discovered, "streaming": streamed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := make([]string, 0, len(sources))
+			for _, source := range sources {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.ElementsMatch(t, []string{parent, flat}, paths)
+		})
+	}
+}
+
+func TestCursorTopLevelTranscriptOutranksSubagentCopyRegardlessOfExtension(t *testing.T) {
+	root := t.TempDir()
+	projectDir := "Users-fiona-Documents-demo"
+	if filepath.Separator == '\\' {
+		projectDir = "C-Users-fiona-Documents-demo"
+	}
+	transcriptsDir := filepath.Join(root, projectDir, "agent-transcripts")
+	parent := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("parent", "parent.jsonl"), "parent",
+	)
+	topLevelTxt := cursorProviderWriteTranscript(t, transcriptsDir, "child.txt", "top-level copy")
+	subagentJSONL := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("parent", "subagents", "child.jsonl"), "subagent copy",
+	)
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	var streamed []SourceRef
+	require.NoError(t, provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	))
+	for name, sources := range map[string][]SourceRef{
+		"batch": discovered, "streaming": streamed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := make([]string, 0, len(sources))
+			for _, source := range sources {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.ElementsMatch(t, []string{parent, topLevelTxt}, paths)
+		})
+	}
+
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "child"})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, topLevelTxt, found.DisplayPath, "find-by-ID follows the same tier rule")
+
+	// A watcher event on either copy resolves to the canonical top-level
+	// file, like a .txt event promoting to its .jsonl sibling.
+	for name, path := range map[string]string{
+		"top-level event": topLevelTxt, "subagent event": subagentJSONL,
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+				Path: path, EventKind: "write", WatchRoot: root,
+			})
+			require.NoError(t, err)
+			require.Len(t, changed, 1)
+			assert.Equal(t, topLevelTxt, changed[0].DisplayPath)
+		})
+	}
+}
+
+func TestCursorDiscoverySkipsSymlinkedSubagentTranscriptInBothWalks(t *testing.T) {
+	root := t.TempDir()
+	transcriptsDir := filepath.Join(root, "Users-demo", "agent-transcripts")
+	parent := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("parent", "parent.jsonl"), "parent",
+	)
+	target := cursorProviderWriteJSONLTranscript(t, filepath.Join(root, "elsewhere"), "real.jsonl", "real")
+	link := filepath.Join(transcriptsDir, "parent", "subagents", "child.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	var streamed []SourceRef
+	require.NoError(t, provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	))
+	for name, sources := range map[string][]SourceRef{
+		"batch": discovered, "streaming": streamed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := make([]string, 0, len(sources))
+			for _, source := range sources {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.Equal(t, []string{parent}, paths,
+				"a symlinked transcript cannot be opened by parseSession, so no walk may yield it")
+		})
+	}
+}
+
+func TestCursorDiscoveryDeduplicatesChildStemAcrossParentsInBothWalks(t *testing.T) {
+	root := t.TempDir()
+	transcriptsDir := filepath.Join(root, "Users-demo", "agent-transcripts")
+	parentA := cursorProviderWriteJSONLTranscript(t, transcriptsDir, filepath.Join("aaa", "aaa.jsonl"), "a")
+	parentB := cursorProviderWriteJSONLTranscript(t, transcriptsDir, filepath.Join("bbb", "bbb.jsonl"), "b")
+	// Same child stem under two parents: the first parent in directory order
+	// wins for equal extensions, and a .jsonl copy beats a .txt copy anywhere.
+	firstParentCopy := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("aaa", "subagents", "same.jsonl"), "from a",
+	)
+	cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("bbb", "subagents", "same.jsonl"), "from b",
+	)
+	cursorProviderWriteTranscript(
+		t, transcriptsDir, filepath.Join("aaa", "subagents", "mixed.txt"), "legacy from a",
+	)
+	upgraded := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("bbb", "subagents", "mixed.jsonl"), "from b",
+	)
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	var streamed []SourceRef
+	require.NoError(t, provider.(StreamingDiscoverer).DiscoverEach(
+		t.Context(), func(source SourceRef) error {
+			streamed = append(streamed, source)
+			return nil
+		},
+	))
+	want := []string{parentA, parentB, firstParentCopy, upgraded}
+	for name, sources := range map[string][]SourceRef{
+		"batch": discovered, "streaming": streamed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := make([]string, 0, len(sources))
+			for _, source := range sources {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.ElementsMatch(t, want, paths)
+		})
+	}
 }

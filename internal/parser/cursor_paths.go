@@ -527,32 +527,118 @@ func isCursorDriveComponent(part string) bool {
 	return len(part) == 1 && ((part[0] >= 'A' && part[0] <= 'Z') || (part[0] >= 'a' && part[0] <= 'z'))
 }
 
+// cursorTranscriptLocation is what a transcript path encodes in its layout:
+// the project directory, the session's raw ID, and the parent's raw ID when
+// the file sits in a parent session's subagents directory.
+type cursorTranscriptLocation struct {
+	ProjectDir  string
+	RawID       string
+	ParentRawID string
+}
+
+const cursorSubagentsDirName = "subagents"
+
 // ParseCursorTranscriptRelPath validates a path relative to a
 // Cursor projects dir and returns the encoded project directory
 // name for recognized transcript layouts.
 func ParseCursorTranscriptRelPath(rel string) (string, bool) {
-	rel = filepath.Clean(rel)
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) < 3 || parts[1] != "agent-transcripts" {
-		return "", false
-	}
+	loc, ok := parseCursorTranscriptRel(rel)
+	return loc.ProjectDir, ok
+}
 
-	switch len(parts) {
-	case 3:
-		if !IsCursorTranscriptExt(parts[2]) {
-			return "", false
-		}
-		return parts[0], true
-	case 4:
-		if !IsCursorTranscriptExt(parts[3]) {
-			return "", false
-		}
-		stem := strings.TrimSuffix(parts[3], filepath.Ext(parts[3]))
-		if stem != parts[2] {
-			return "", false
-		}
-		return parts[0], true
-	default:
-		return "", false
+// parseCursorTranscriptRel recognizes the layouts Cursor writes under
+// <project>/agent-transcripts/:
+//
+//	flat:     <id>.{txt,jsonl}
+//	nested:   <id>/<id>.{txt,jsonl}
+//	subagent: <parent>/subagents/<id>.{txt,jsonl}
+//
+// Cursor CLI nests subagents exactly one level deep.
+func parseCursorTranscriptRel(rel string) (cursorTranscriptLocation, bool) {
+	rel = filepath.Clean(rel)
+	return parseCursorTranscriptRelParts(
+		strings.Split(rel, string(filepath.Separator)),
+	)
+}
+
+func parseCursorTranscriptRelParts(parts []string) (cursorTranscriptLocation, bool) {
+	if len(parts) < 3 || len(parts) > 5 || parts[1] != "agent-transcripts" {
+		return cursorTranscriptLocation{}, false
 	}
+	if parts[0] == "" || parts[0] == "." || parts[0] == ".." {
+		return cursorTranscriptLocation{}, false
+	}
+	name := parts[len(parts)-1]
+	if !IsCursorTranscriptExt(name) {
+		return cursorTranscriptLocation{}, false
+	}
+	loc := cursorTranscriptLocation{
+		ProjectDir: parts[0],
+		RawID:      strings.TrimSuffix(name, filepath.Ext(name)),
+	}
+	switch len(parts) {
+	case 4:
+		if parts[2] != loc.RawID {
+			return cursorTranscriptLocation{}, false
+		}
+	case 5:
+		if parts[3] != cursorSubagentsDirName || !IsValidSessionID(parts[2]) ||
+			parts[2] == loc.RawID {
+			return cursorTranscriptLocation{}, false
+		}
+		loc.ParentRawID = parts[2]
+	}
+	return loc, true
+}
+
+func cursorTranscriptLocationInRoot(root, path string) (cursorTranscriptLocation, bool) {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return cursorTranscriptLocation{}, false
+	}
+	return parseCursorTranscriptRel(rel)
+}
+
+// cursorTranscriptLocationFromPath needs no projects root: parse receives
+// paths from discovery, watcher events, explicit finds, and S3
+// materializations that keep the object layout under a temporary root. Every
+// agent-transcripts component is tried from the end, so a session directory
+// that happens to carry that name does not mask the real layout marker.
+func cursorTranscriptLocationFromPath(path string) (cursorTranscriptLocation, bool) {
+	parts := splitCleanPath(path)
+	for i := len(parts) - 1; i >= 1; i-- {
+		if parts[i] != "agent-transcripts" {
+			continue
+		}
+		if loc, ok := parseCursorTranscriptRelParts(parts[i-1:]); ok {
+			return loc, true
+		}
+	}
+	return cursorTranscriptLocation{}, false
+}
+
+// cursorTranscriptCandidates orders a session's own nested and flat layouts,
+// .jsonl before .txt, ahead of the subagent directory named by loc. A
+// top-level copy therefore wins a stem tie regardless of extension, so the
+// changed-path route never has to search other sessions' directories.
+func cursorTranscriptCandidates(
+	transcriptsDir string, loc cursorTranscriptLocation,
+) []string {
+	exts := []string{".jsonl", ".txt"}
+	candidates := make([]string, 0, 6)
+	for _, ext := range exts {
+		target := loc.RawID + ext
+		candidates = append(candidates,
+			filepath.Join(transcriptsDir, loc.RawID, target),
+			filepath.Join(transcriptsDir, target),
+		)
+	}
+	if loc.ParentRawID != "" {
+		for _, ext := range exts {
+			candidates = append(candidates, filepath.Join(
+				transcriptsDir, loc.ParentRawID, cursorSubagentsDirName, loc.RawID+ext,
+			))
+		}
+	}
+	return candidates
 }

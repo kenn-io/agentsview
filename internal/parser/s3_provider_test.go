@@ -29,6 +29,14 @@ func TestDefaultS3ProviderSessionIDAndTempPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join("demo-proj", "abc.jsonl"), got)
 
+	got, err = p.S3TempRelPath(
+		"s3://bucket/laptop/raw/cursor/demo-proj/agent-transcripts/abc/subagents/def.jsonl",
+	)
+	require.NoError(t, err)
+	assert.Equal(t,
+		filepath.Join("demo-proj", "agent-transcripts", "abc", "subagents", "def.jsonl"),
+		got, "the materialized layout must keep the parent directory the parse derives the link from")
+
 	_, err = p.S3TempRelPath(
 		"s3://bucket/laptop/raw/cursor/demo-proj/../abc.jsonl",
 	)
