@@ -77,10 +77,12 @@ function dailyEntry(index: number): DbDailyUsageEntry {
   };
 }
 
-function usageSummary(): UsageSummaryResponse {
+function usageSummary(
+  daily = Array.from({ length: 15 }, (_, index) => dailyEntry(index)),
+): UsageSummaryResponse {
   return {
-    from: "2026-06-04",
-    to: "2026-06-18",
+    from: daily[0]!.date,
+    to: daily.at(-1)!.date,
     projects: {},
     totals: {
       inputTokens: 1500,
@@ -90,7 +92,7 @@ function usageSummary(): UsageSummaryResponse {
       totalCost: testMoney(150),
       cacheSavings: testMoney(0),
     },
-    daily: Array.from({ length: 15 }, (_, i) => dailyEntry(i)),
+    daily,
     projectTotals: [
       {
         project_key: "pl1:sha256:agentsview",
@@ -199,8 +201,7 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it("renders a visible stacked bar for a one-day range", async () => {
-    usage.summary = usageSummary();
-    usage.summary.daily = [dailyEntry(0)];
+    usage.summary = usageSummary([dailyEntry(0)]);
 
     const component = mountChart();
     await tick();
@@ -214,13 +215,44 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("renders stacked area colors without dimming them", async () => {
+  it("renders stacked areas without dimming their colors", async () => {
     const component = mountChart();
     await tick();
 
     const area = document.querySelector<SVGPathElement>("path.lc-area-path");
     expect(area).not.toBeNull();
     expect(Number(area!.getAttribute("opacity") ?? 1)).toBe(1);
+
+    unmount(component);
+  });
+
+  it("renders a zero-usage day between populated dates", async () => {
+    usage.summary = usageSummary();
+    usage.summary.from = "2026-06-04";
+    usage.summary.to = "2026-06-06";
+    usage.summary.daily = [dailyEntry(0), dailyEntry(2)];
+
+    const component = mountChart();
+    await tick();
+
+    const labels = Array.from(document.querySelectorAll<SVGTextElement>("text.x-label"))
+      .map((label) => label.textContent?.trim());
+    expect(labels).toContain("Jun 5");
+
+    unmount(component);
+  });
+
+  it("keeps the no-data state when the usage response has no daily entries", async () => {
+    usage.summary = usageSummary();
+    usage.summary.daily = [];
+
+    const component = mountChart();
+    await tick();
+
+    expect(document.querySelector(".empty")?.textContent).toContain(
+      "No data for this period",
+    );
+    expect(document.querySelector(".chart-svg")).toBeNull();
 
     unmount(component);
   });
@@ -329,8 +361,7 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it("keeps projects with the same display label as distinct series", async () => {
-    usage.summary = usageSummary();
-    usage.summary.daily = [dailyEntry(0)];
+    usage.summary = usageSummary([dailyEntry(0)]);
     usage.summary.daily[0]!.projectBreakdowns = [
       { ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: testMoney(6) },
       {
@@ -349,9 +380,8 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it("uses distinct active model colors for paths and legend dots", async () => {
-    usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
-    usage.summary.daily = [
+    usage.summary = usageSummary([
       modelDailyEntry(0, [
         { modelName: "claude-sonnet-5", cost: testMoney(6) },
         { modelName: "claude-opus-4-8", cost: testMoney(4) },
@@ -360,7 +390,7 @@ describe("CostTimeSeriesChart", () => {
         { modelName: "claude-sonnet-5", cost: testMoney(3) },
         { modelName: "claude-opus-4-8", cost: testMoney(2) },
       ]),
-    ];
+    ]);
 
     const component = mountChart();
     await tick();
@@ -377,12 +407,11 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it("assigns the first usage color to a single rendered model series", async () => {
-    usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
-    usage.summary.daily = [
+    usage.summary = usageSummary([
       modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
       modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
-    ];
+    ]);
 
     const component = mountChart();
     await tick();
@@ -395,13 +424,12 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it("renders ten named series before rolling the rest into Other", async () => {
-    usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
     const models = Array.from({ length: 11 }, (_, index) => ({
       modelName: `model-${index}`,
       cost: testMoney(11 - index),
     }));
-    usage.summary.daily = [modelDailyEntry(0, models)];
+    usage.summary = usageSummary([modelDailyEntry(0, models)]);
 
     const component = mountChart();
     await tick();
@@ -416,9 +444,8 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it("shows hovered series in descending value order", async () => {
-    usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
-    usage.summary.daily = [
+    usage.summary = usageSummary([
       modelDailyEntry(0, [
         { modelName: "small", cost: testMoney(1) },
         { modelName: "large", cost: testMoney(9) },
@@ -429,7 +456,7 @@ describe("CostTimeSeriesChart", () => {
         { modelName: "large", cost: testMoney(3) },
         { modelName: "medium", cost: testMoney(8) },
       ]),
-    ];
+    ]);
 
     const component = mountChart();
     await tick();
@@ -476,13 +503,12 @@ describe("CostTimeSeriesChart", () => {
       configurable: true,
       get: () => OBSERVED_WIDTH,
     });
-    usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
-    usage.summary.daily = [
+    usage.summary = usageSummary([
       modelDailyEntry(0, [{ modelName: "model", cost: testMoney(1) }]),
       modelDailyEntry(1, [{ modelName: "model", cost: testMoney(2) }]),
       modelDailyEntry(2, [{ modelName: "model", cost: testMoney(3) }]),
-    ];
+    ]);
 
     const component = mountChart();
     await tick();
@@ -543,9 +569,8 @@ describe("CostTimeSeriesChart", () => {
 
   it("uses aggregate-cost-ranked Matplotlib colors for model paths and legend dots", async () => {
     settings.chartPalette = "matplotlib";
-    usage.summary = usageSummary();
     usage.toggles.timeSeries.groupBy = "model";
-    usage.summary.daily = [
+    usage.summary = usageSummary([
       modelDailyEntry(0, [
         { modelName: "gpt-5.6-sol", cost: testMoney(8) },
         { modelName: "claude-opus-5", cost: testMoney(4) },
@@ -554,7 +579,7 @@ describe("CostTimeSeriesChart", () => {
         { modelName: "gpt-5.6-sol", cost: testMoney(3) },
         { modelName: "claude-opus-5", cost: testMoney(2) },
       ]),
-    ];
+    ]);
 
     const component = mountChart();
     await tick();

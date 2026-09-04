@@ -97,6 +97,8 @@ function tenModelUsageSummary(): UsageSummaryResponse {
         machineBreakdowns: [],
       },
     ],
+    from: "2026-07-01",
+    to: "2026-07-01",
     modelTotals: models.map((model, index) => ({
       model,
       inputTokens: 10,
