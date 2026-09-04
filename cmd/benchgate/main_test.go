@@ -10,21 +10,23 @@ import (
 	"golang.org/x/perf/benchfmt"
 )
 
-func parseString(t *testing.T, input string) (benchSamples, []string) {
+func parseString(t *testing.T, input string) (benchSamples, []string, int) {
 	t.Helper()
-	got, syntaxErrs, err := parseBench(
+	got, syntaxErrs, interleaved, err := parseBench(
 		benchfmt.NewReader(strings.NewReader(input), "test"),
+		strings.Split(input, "\n"),
 	)
 	require.NoError(t, err)
-	return got, syntaxErrs
+	return got, syntaxErrs, interleaved
 }
 
 func TestParseBench(t *testing.T) {
 	tests := []struct {
-		name       string
-		input      string
-		want       benchSamples
-		wantSyntax int
+		name            string
+		input           string
+		want            benchSamples
+		wantSyntax      int
+		wantInterleaved int
 	}{
 		{
 			name: "full benchmem line with tidied units",
@@ -73,8 +75,23 @@ func TestParseBench(t *testing.T) {
 			name: "result line corrupted by interleaved log output is a syntax error",
 			input: "BenchmarkSyncAllWarmNoop-18   \t2026/07/03 15:39:07 discovered 40 files in 0s\n" +
 				"       5\t   3581975 ns/op\t  212433 B/op\t    2760 allocs/op\n",
+			want:            benchSamples{},
+			wantSyntax:      1,
+			wantInterleaved: 1,
+		},
+		{
+			name:       "malformed result line without the log signature is corruption, not interleaving",
+			input:      "BenchmarkBroken-8   \tnot-an-iteration-count\n",
 			want:       benchSamples{},
 			wantSyntax: 1,
+		},
+		{
+			name: "unrelated log lines do not hide a malformed result line",
+			input: "2026/07/03 10:20:36 discovered 40 files in 0s\n" +
+				"BenchmarkBroken-8   \tnot-an-iteration-count\n",
+			want:            benchSamples{},
+			wantSyntax:      1,
+			wantInterleaved: 0,
 		},
 		{
 			name:  "custom ReportMetric units are kept",
@@ -89,8 +106,9 @@ func TestParseBench(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, syntaxErrs := parseString(t, tt.input)
+			got, syntaxErrs, interleaved := parseString(t, tt.input)
 			assert.Len(t, syntaxErrs, tt.wantSyntax)
+			assert.Equal(t, tt.wantInterleaved, interleaved)
 			require.Len(t, got, len(tt.want))
 			for name, wantUnits := range tt.want {
 				gotUnits, ok := got[name]
@@ -329,6 +347,100 @@ func TestCompareOutlierRunPolicy(t *testing.T) {
 	})
 }
 
+// TestCompareUnstableBaselineWaivesWorstCase pins the fallback for
+// metrics whose baseline samples disagree materially: the baseline
+// itself produced the outlier plateau that worst-run gating would
+// attribute to the candidate, so the unit compares medians instead.
+// The candidate below would fail the old candidate-worst vs
+// baseline-median comparison at 1.64x; with the waiver it passes at
+// a 1.19x median ratio. This mirrors the json.Marshal-dominated
+// recall-evidence benchmarks, whose pooled encoder buffers regrow
+// depending on GC survivorship.
+func TestCompareUnstableBaselineWaivesWorstCase(t *testing.T) {
+	old := benchSamples{
+		"BenchmarkRecall-4": {
+			"B/op": {3_300_000, 3_600_000, 3_600_000, 4_900_000, 5_600_000},
+		},
+	}
+	next := benchSamples{
+		"BenchmarkRecall-4": {
+			"B/op": {3_600_000, 3_950_000, 4_270_000, 4_920_000, 5_920_000},
+		},
+	}
+	report, violations, issues := compare(old, next, testGates())
+	assert.Empty(t, violations)
+	assert.Empty(t, issues)
+	assert.Contains(t, strings.Join(report, "\n"),
+		"baseline unstable: worst 5.341Mi is 1.56x its median")
+	assert.Contains(t, strings.Join(report, "\n"),
+		"worst-case gate waived")
+}
+
+// TestCompareUnstableBaselineStillGatesShiftedMedians pins that the
+// waiver only replaces the outlier policy: a candidate whose whole
+// distribution shifts beyond the limit still fails, judged by its
+// median because the baseline's own spread rules out worst-run
+// comparisons.
+func TestCompareUnstableBaselineStillGatesShiftedMedians(t *testing.T) {
+	old := benchSamples{
+		"BenchmarkRecall-4": {
+			"B/op": {20_000, 20_000, 20_000, 26_000, 27_000},
+		},
+	}
+	next := benchSamples{
+		"BenchmarkRecall-4": {
+			"B/op": {39_000, 40_000, 40_000, 40_000, 41_000},
+		},
+	}
+	_, violations, issues := compare(old, next, testGates())
+	require.Len(t, violations, 1)
+	assert.Empty(t, issues)
+	assert.Equal(t, "B/op", violations[0].unit)
+	assert.InDelta(t, 40_000, violations[0].new, 1e-9,
+		"the median, not the worst run, is gated for unstable baselines")
+	assert.InDelta(t, 2.0, violations[0].ratio, 1e-9)
+}
+
+// TestCompareUnstableBaselineShortSidesNotGated pins that a short
+// side on an already-waived unit is reported rather than treated as
+// a configuration error: the strict gate was waived by the
+// baseline's own instability, so a missing significance verdict
+// cannot manufacture one.
+func TestCompareUnstableBaselineShortSidesNotGated(t *testing.T) {
+	old := benchSamples{
+		"BenchmarkRecall-4": {"B/op": {20_000, 20_000, 27_000}},
+	}
+	next := benchSamples{
+		"BenchmarkRecall-4": {"B/op": {40_000, 40_000, 40_000, 40_000, 40_000}},
+	}
+	report, violations, issues := compare(old, next, testGates())
+	assert.Empty(t, violations)
+	assert.Empty(t, issues)
+	assert.Contains(t, strings.Join(report, "\n"),
+		"too few samples for the median comparison, not gated")
+}
+
+// TestCompareStableBaselineKeepsWorstCase pins that the instability
+// waiver does not leak into stable metrics: a baseline whose runs
+// agree still gates the candidate's single worst run, the documented
+// intermittent-allocation-path detection.
+func TestCompareStableBaselineKeepsWorstCase(t *testing.T) {
+	old := benchSamples{
+		"BenchmarkRecall-4": {"B/op": {20_000, 20_000, 20_000, 20_000, 20_000}},
+	}
+	next := benchSamples{
+		"BenchmarkRecall-4": {
+			"B/op": {20_000, 20_000, 20_000, 20_000, 28_000},
+		},
+	}
+	_, violations, issues := compare(old, next, testGates())
+	require.Len(t, violations, 1)
+	assert.Empty(t, issues)
+	assert.Equal(t, "B/op", violations[0].unit)
+	assert.InDelta(t, 28_000, violations[0].new, 1e-9,
+		"the worst run is still gated for a stable baseline")
+}
+
 // TestCompareMissingCandidateUnit pins the asymmetric missing-unit
 // policy: a gated unit the baseline has but the candidate lost
 // (e.g. -benchmem dropped from the candidate run) is a config error
@@ -415,6 +527,20 @@ func TestRender(t *testing.T) {
 			wantOut: []string{
 				"allocs/op regressed 2.00x",
 				"invalid benchmark configuration",
+			},
+		},
+		{
+			name: "interleaved log corruption is explained",
+			r: results{
+				newCount:       1,
+				newSyntax:      []string{"test:4: parsing iteration count: invalid syntax"},
+				newInterleaved: 1,
+			},
+			wantCode: 2,
+			wantOut: []string{
+				"candidate capture is corrupted",
+				"look like log output interleaved into a result line",
+				"Silence the default logger around benchmark setup",
 			},
 		},
 		{

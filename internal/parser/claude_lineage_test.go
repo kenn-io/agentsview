@@ -705,6 +705,100 @@ func TestClaudeBackgroundForkIncrementalAppendContinuesFromTrim(t *testing.T) {
 	assert.Equal(t, 2, msgs[0].Ordinal)
 }
 
+func TestClaudeLineageSniffCacheInvalidatedBySameSizeRewrite(t *testing.T) {
+	t.Parallel()
+	// The sniff memo keys entries by size and mtime. A same-length
+	// in-place rewrite with the original mtime restored must not be
+	// served from the stale entry: the re-parse has to observe the
+	// new head (bg stamp and root uuid) or fork siblings are omitted
+	// or misresolved. Each row proves one observable direction
+	// through a full parse.
+	origContent := lineageOriginalContent()
+	forkContent := lineageForkContent()
+	origAltRoot := strings.ReplaceAll(origContent, `"u1"`, `"z9"`)
+	forkNotBG := strings.ReplaceAll(
+		forkContent, `"sessionKind":"bg"`, `"sessionKind":"fg"`)
+
+	tests := []struct {
+		name       string
+		warmOrig   string
+		warmFork   string
+		warmParent string
+		rewrite    struct{ target, content string }
+		wantParent string
+		wantFirst  string
+		wantMsgs   int
+	}{
+		{
+			name:       "fork head rewritten without bg stamp",
+			warmOrig:   origContent,
+			warmFork:   forkContent,
+			warmParent: "orig-1111",
+			rewrite:    struct{ target, content string }{"fork", forkNotBG},
+			// The fork is no longer bg-marked: no trim, no link.
+			wantParent: "",
+			wantFirst:  "first question",
+			wantMsgs:   4,
+		},
+		{
+			name:       "sibling head rewritten to the fork root",
+			warmOrig:   origAltRoot,
+			warmFork:   forkContent,
+			warmParent: "",
+			rewrite:    struct{ target, content string }{"orig", origContent},
+			// The rewritten sibling now qualifies: the fork trims
+			// against it instead of keeping the duplicated replay.
+			wantParent: "orig-1111",
+			wantFirst:  "continued question",
+			wantMsgs:   2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			origPath, forkPath := writeLineageFixture(t,
+				"orig-1111.jsonl", tt.warmOrig,
+				"fork-2222.jsonl", tt.warmFork,
+			)
+
+			// Warm the memo and prove the warm-phase lineage state,
+			// so a stale hit has a wrong decision to serve.
+			warm, _, err := claudeParseFile(
+				forkPath, "my_app", "local",
+				claudeParseOptions{siblingLineage: true},
+			)
+			require.NoError(t, err)
+			require.Len(t, warm, 1)
+			assert.Equal(t, tt.warmParent, warm[0].Session.ParentSessionID)
+
+			target := origPath
+			if tt.rewrite.target == "fork" {
+				target = forkPath
+			}
+			info, err := os.Stat(target)
+			require.NoError(t, err)
+			require.Len(t, tt.rewrite.content, int(info.Size()))
+			require.NoError(t, os.WriteFile(target, []byte(tt.rewrite.content), 0o644))
+			require.NoError(t, os.Chtimes(target, info.ModTime(), info.ModTime()))
+			restored, err := os.Stat(target)
+			require.NoError(t, err)
+			require.Equal(t, info.ModTime().UnixNano(), restored.ModTime().UnixNano())
+
+			// The fork's lineage resolution is the observable: it is
+			// what consumes the rewritten head's sniff.
+			results, _, err := claudeParseFile(
+				forkPath, "my_app", "local",
+				claudeParseOptions{siblingLineage: true},
+			)
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, tt.wantParent, results[0].Session.ParentSessionID)
+			require.Len(t, results[0].Messages, tt.wantMsgs)
+			assert.Equal(t, tt.wantFirst, firstMessageContent(results[0].Messages))
+		})
+	}
+}
+
 func TestClaudeLineageSniffGivesUpAfterBoundedPreamble(t *testing.T) {
 	t.Parallel()
 	// A fork whose bg root sits past the sniff bound fails open: the

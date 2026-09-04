@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -371,6 +373,139 @@ func TestClaudeProviderParse(t *testing.T) {
 	assert.Equal(t, "abc123", result.Result.Session.File.Hash)
 	assert.Equal(t, "parse question", result.Result.Session.FirstMessage)
 	assert.Len(t, result.Result.Messages, 2)
+}
+
+func TestClaudeProviderParseResolvesPersistedToolResultsThroughStoredPathResolver(t *testing.T) {
+	root := t.TempDir()
+	projectDir := "demo-project"
+	sessionID := "session-persisted"
+	sourcePath := filepath.Join(root, projectDir, sessionID+".jsonl")
+	resultPath := filepath.Join(
+		root, projectDir, sessionID, "tool-results", "r1.txt",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
+	fullOutput := "resolved full output line 1\nresolved full output line 2\n"
+	require.NoError(t, os.WriteFile(resultPath, []byte(fullOutput), 0o644))
+	// The transcript references the companion through a canonical stored
+	// spelling that no longer matches the on-disk layout; only the caller's
+	// StoredPathResolver can map it back to the physical companion file.
+	storedPath := "devbox:" + resultPath
+	persistedNotice := "<persisted-output>\nOutput too large (35B). Full output saved to: " +
+		storedPath + "\n</persisted-output>"
+	content := strings.Join([]string{
+		`{"type":"user","timestamp":"2026-08-13T12:00:00Z","uuid":"u1","message":{"content":"run it"},"cwd":"/work/demo"}`,
+		`{"type":"assistant","timestamp":"2026-08-13T12:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make"}}]}}`,
+		`{"type":"user","timestamp":"2026-08-13T12:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + strconv.Quote(persistedNotice) + `,"is_error":false}]},"toolUseResult":{"persistedOutputPath":` + strconv.Quote(storedPath) + `,"persistedOutputSize":35}}`,
+	}, "\n") + "\n"
+	writeSourceFile(t, sourcePath, content)
+
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      sources[0],
+		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
+		Machine:     "devbox",
+		StoredPathResolver: func(path string) (string, bool) {
+			if unqualified, found := strings.CutPrefix(path, "devbox:"); found {
+				return unqualified, true
+			}
+			return "", false
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	messages := outcome.Results[0].Result.Messages
+	require.Len(t, messages, 3)
+	toolResults := messages[2].ToolResults
+	require.Len(t, toolResults, 1)
+	assert.Equal(t, len(fullOutput), toolResults[0].ContentLength)
+	assert.Equal(t, fullOutput, DecodeContent(toolResults[0].ContentRaw),
+		"a stored persisted-output path must resolve through ParseRequest.StoredPathResolver")
+}
+
+func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	origPath := filepath.Join(projectDir, "orig-1111.jsonl")
+	forkPath := filepath.Join(projectDir, "fork-2222.jsonl")
+	unrelatedPath := filepath.Join(projectDir, "unrelated-3333.jsonl")
+	require.NoError(t, os.WriteFile(origPath, []byte(lineageOriginalContent()), 0o644))
+	require.NoError(t, os.WriteFile(forkPath, []byte(lineageForkContent()), 0o644))
+	unrelated := strings.Join([]string{
+		lineageUserLine("z1", "", "2026-02-01T10:00:00Z", "unrelated-3333", "", "other root"),
+		lineageAssistantLine("z2", "z1", "2026-02-01T10:00:05Z", "unrelated-3333", "", "msg_z", "other answer", 3),
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(unrelatedPath, []byte(unrelated), 0o644))
+	subagentDir := filepath.Join(projectDir, "fork-2222", "subagents", "agent-4444")
+	require.NoError(t, os.MkdirAll(subagentDir, 0o755))
+	subagentPath := filepath.Join(subagentDir, "agent-4444.jsonl")
+	require.NoError(t, os.WriteFile(subagentPath, []byte(lineageForkContent()), 0o644))
+
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 4)
+	findSource := func(suffix string) SourceRef {
+		for _, source := range sources {
+			if strings.HasSuffix(source.Key, suffix) {
+				return source
+			}
+		}
+		t.Fatalf("source %s not discovered", suffix)
+		return SourceRef{}
+	}
+
+	// The bg fork replays the original's chain, so its capture plan must carry
+	// the original transcript as an immutable lineage input while the fork
+	// stays the only appendable entry.
+	forkPlan, supported, err := ResolveRawCapturePlan(context.Background(), provider, findSource("fork-2222.jsonl"))
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, forkPlan.Entries, 2)
+	assert.Equal(t, "demo-project/fork-2222.jsonl", forkPlan.Entries[0].Path)
+	assert.True(t, forkPlan.Entries[0].Appendable)
+	assert.Equal(t, "demo-project/orig-1111.jsonl", forkPlan.Entries[1].Path)
+	assert.False(t, forkPlan.Entries[1].Appendable,
+		"sibling lineage inputs are immutable within the fork's generation")
+	// Windows temp roots can surface the same physical file under both 8.3
+	// and expanded path spellings, so compare file identity, not strings.
+	assertSameFile := func(want, got string) {
+		wantInfo, err := os.Stat(want)
+		require.NoError(t, err)
+		gotInfo, err := os.Stat(got)
+		require.NoError(t, err)
+		assert.True(t, os.SameFile(wantInfo, gotInfo),
+			"expected LocalPath %q to refer to %q", got, want)
+	}
+	assertSameFile(forkPath, forkPlan.Entries[0].LocalPath)
+	assertSameFile(origPath, forkPlan.Entries[1].LocalPath)
+
+	// The interactive original never trims, so its plan must not carry
+	// siblings; the unrelated-root transcript and subagent transcripts never
+	// participate in lineage either.
+	origPlan, supported, err := ResolveRawCapturePlan(context.Background(), provider, findSource("orig-1111.jsonl"))
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, origPlan.Entries, 1)
+	assert.Equal(t, "demo-project/orig-1111.jsonl", origPlan.Entries[0].Path)
+	assert.True(t, origPlan.Entries[0].Appendable)
+
+	subagentPlan, supported, err := ResolveRawCapturePlan(
+		context.Background(), provider, findSource("agent-4444.jsonl"))
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, subagentPlan.Entries, 1)
+	assert.True(t, subagentPlan.Entries[0].Appendable)
 }
 
 func TestClaudeProviderParseIncremental(t *testing.T) {

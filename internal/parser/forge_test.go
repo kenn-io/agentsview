@@ -200,7 +200,7 @@ func TestParseForgeSession_SingleConversation(t *testing.T) {
 	defer db.Close()
 	seedForgeConversation(t, seeder)
 
-	sess, msgs, err := parseForgeSession(dbPath, "conv-001", "testmachine")
+	sess, msgs, err := parseForgeSession(t.Context(), dbPath, "conv-001", "testmachine")
 	require.NoError(t, err, "parseForgeSession")
 	require.NotNil(t, sess, "expected non-nil session")
 
@@ -266,7 +266,7 @@ func TestCollectForgeToolCalls_TaskSubagentIDPrefixed(t *testing.T) {
 		"2026-05-02 10:00:00", "2026-05-02 10:00:01", "",
 	)
 
-	sess, msgs, err := parseForgeSession(dbPath, "parent-conv", "m")
+	sess, msgs, err := parseForgeSession(t.Context(), dbPath, "parent-conv", "m")
 	require.NoError(t, err, "parseForgeSession")
 	require.NotNil(t, sess, "expected non-nil session")
 	require.NotEmpty(t, msgs, "expected messages")

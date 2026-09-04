@@ -475,6 +475,15 @@ func (s *recordingObjectStore) OpenObject(
 	return ObjectInfo{}, nil, errors.New("unexpected OpenObject call")
 }
 
+func (s *recordingObjectStore) CopyObject(
+	context.Context,
+	string,
+	ObjectRef,
+	io.Writer,
+) (ObjectInfo, error) {
+	return ObjectInfo{}, errors.New("unexpected CopyObject call")
+}
+
 func (s *recordingObjectStore) MissingObjects(
 	_ context.Context,
 	tenantID string,

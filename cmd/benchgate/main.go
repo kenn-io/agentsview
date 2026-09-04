@@ -9,22 +9,31 @@
 // and a failing exit code for CI.
 //
 // It is the comparison step of the bench-gate CI workflow: allocs/op
-// and B/op are deterministic for the same code on the same machine,
-// so they get tight ratio thresholds that catch O(archive)-instead-
-// of-O(delta) work regressions regardless of sample count; time
-// (sec/op) is noisy on shared runners, so it gets a loose threshold
-// and additionally must be a statistically significant difference
-// (Mann-Whitney U, as in benchstat) before it fails the gate.
-// Baselines below a per-metric floor are skipped entirely, since a
-// few extra allocations on a tiny benchmark is noise, not a
-// regression.
+// and B/op are expected to be deterministic for the same code on the
+// same machine, so they get tight ratio thresholds that catch
+// O(archive)-instead-of-O(delta) work regressions regardless of
+// sample count; time (sec/op) is noisy on shared runners, so it gets
+// a loose threshold and additionally must be a statistically
+// significant difference (Mann-Whitney U, as in benchstat) before it
+// fails the gate. Baselines below a per-metric floor are skipped
+// entirely, since a few extra allocations on a tiny benchmark is
+// noise, not a regression.
 //
 // Multiple runs of the same benchmark (-count=N) are kept as a
 // sample. The baseline is summarized by its median; the candidate is
 // gated on its median for time but on its WORST run for allocs/op
-// and B/op — those are deterministic, so a single outlier run there
+// and B/op — under the determinism presumption a single outlier run
 // is a real intermittent allocation path, not noise, and must fail.
-// Gating is per benchmark: any one benchmark over its threshold
+// That presumption is verified per benchmark against the baseline
+// itself: when the baseline's worst run exceeds its median by more
+// than worstCaseStabilityRatio, the metric is demonstrably
+// history-dependent on that machine (the known case is benchmarks
+// dominated by json.Marshal, whose pooled encoder buffers regrow
+// depending on GC survivorship), so candidate-worst vs
+// baseline-median would compare one draw from a distribution
+// against another; the unit instead compares medians under the same
+// Mann-Whitney noise guard the time gate uses. Gating is per
+// benchmark: any one benchmark over its threshold
 // fails the gate; there is no cross-benchmark averaging. Benchmarks
 // present on only one side are reported but never fail the gate, so
 // adding or removing benchmarks in a PR does not wedge it. A gated
@@ -43,9 +52,11 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -57,6 +68,15 @@ import (
 // minTimeSamples is the per-side sample count the sec/op
 // significance test needs before its verdict means anything.
 const minTimeSamples = 5
+
+// worstCaseStabilityRatio is the maximum ratio between a baseline's
+// worst run and its median for which worst-run gating is still
+// valid. Deterministic metrics repeat to a fraction of a percent
+// for identical code, so a baseline whose own runs disagree by more
+// than 5% already disproves the determinism the worst-case policy
+// presupposes; such units fall back to a median comparison guarded
+// by the Mann-Whitney significance test.
+const worstCaseStabilityRatio = 1.05
 
 // benchSamples collects every measured value per benchmark and unit:
 // benchmark key -> tidied unit (sec/op, B/op, allocs/op, ...) ->
@@ -109,21 +129,48 @@ func (v violation) String() string {
 	)
 }
 
+// interleavedLogRe matches a benchmark result line whose iteration
+// column was replaced by log output: `go test` merges the test
+// binary's stderr into its stdout, so a log write that lands between
+// the benchmark name (printed before the run) and the results
+// (printed after) destroys that result line and its sample.
+var interleavedLogRe = regexp.MustCompile(
+	`^Benchmark\S*\s+\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `,
+)
+
+// interleavedLogLine reports whether a corrupted capture line is a
+// benchmark name followed by a log timestamp — the signature of log
+// output interleaved into a result line, rather than a malformed
+// benchmark result.
+func interleavedLogLine(line string) bool {
+	return interleavedLogRe.MatchString(line)
+}
+
 // parseBench extracts benchmark samples from `go test -bench` output
 // using the official format parser. Values arrive tidied by
 // benchfmt: ns/op becomes sec/op, MB/s becomes B/s. Lines that look
 // like results but fail to parse are returned as syntax errors so a
 // corrupted capture is loud instead of silently missing benchmarks.
+// interleaveCount reports how many of those carry the interleaved-log
+// signature; lines holds the capture's source lines so the errors'
+// 1-based line numbers can be resolved.
 func parseBench(
-	reader *benchfmt.Reader,
-) (benchSamples, []string, error) {
+	reader *benchfmt.Reader, lines []string,
+) (benchSamples, []string, int, error) {
 	out := make(benchSamples)
 	var syntaxErrs []string
+	interleaveCount := 0
 	for reader.Scan() {
 		res, ok := reader.Result().(*benchfmt.Result)
 		if !ok {
-			if serr, isSyntax := reader.Result().(*benchfmt.SyntaxError); isSyntax {
-				syntaxErrs = append(syntaxErrs, serr.Error())
+			serr, isSyntax := reader.Result().(*benchfmt.SyntaxError)
+			if !isSyntax {
+				continue
+			}
+			syntaxErrs = append(syntaxErrs, serr.Error())
+			if serr.Line >= 1 && serr.Line <= len(lines) &&
+				interleavedLogLine(lines[serr.Line-1]) {
+				interleaveCount++
 			}
 			continue
 		}
@@ -141,9 +188,9 @@ func parseBench(
 		}
 	}
 	if err := reader.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	return out, syntaxErrs, nil
+	return out, syntaxErrs, interleaveCount, nil
 }
 
 // evalGate applies one gate to one benchmark's samples and returns
@@ -179,6 +226,19 @@ func evalGate(
 			span, benchunit.Scale(g.floor, cls),
 		), nil, nil
 	}
+	if g.worstCase {
+		// Samples are sorted ascending; the baseline's worst run is
+		// the last one. If the baseline disagrees with itself beyond
+		// worstCaseStabilityRatio, worst-run gating is comparing
+		// draws from a distribution, so fall back to medians with
+		// the significance guard.
+		oldWorst := oldSample.Values[len(oldSample.Values)-1]
+		if oldWorst > worstCaseStabilityRatio*oldCenter {
+			return evalUnstableBaselineGate(
+				g, oldCenter, oldWorst, oldSample, newSample,
+			)
+		}
+	}
 	if g.needSignificance && len(newVals) < minTimeSamples {
 		issue := &configIssue{msg: fmt.Sprintf(
 			"%s needs at least %d candidate samples for significance gating, got %d",
@@ -207,6 +267,63 @@ func evalGate(
 			unit: g.unit,
 			old:  oldCenter, new: newCenter,
 			ratio: ratio, maxRatio: g.maxRatio,
+		}
+	}
+	return detail, v, nil
+}
+
+// evalUnstableBaselineGate replaces worst-run gating for a unit
+// whose baseline samples disagree materially. The worst-case policy
+// reads a candidate outlier as a real intermittent allocation path
+// only because deterministic metrics never produce one; a baseline
+// that produces outliers itself voids that reading for this
+// benchmark. What remains meaningful is the center-vs-center
+// comparison with the Mann-Whitney noise guard, so a genuine
+// regression that shifts the whole distribution still fails while
+// draw-to-draw plateaus do not. A short side cannot support the
+// significance test; the strict gate was already waived, so this is
+// reported rather than failing the run as a configuration error.
+func evalUnstableBaselineGate(
+	g gate, oldCenter, oldWorst float64,
+	oldSample, newSample *benchmath.Sample,
+) (string, *violation, *configIssue) {
+	cls := benchunit.ClassOf(g.unit)
+	newCenter := benchmath.AssumeNothing.
+		Summary(newSample, 0.95).Center
+	span := fmt.Sprintf(
+		"%s %s -> %s", g.unit,
+		benchunit.Scale(oldCenter, cls),
+		benchunit.Scale(newCenter, cls),
+	)
+	waived := fmt.Sprintf(
+		"baseline unstable: worst %s is %.2fx its median, worst-case gate waived",
+		benchunit.Scale(oldWorst, cls), oldWorst/oldCenter,
+	)
+	if len(newSample.Values) < minTimeSamples ||
+		len(oldSample.Values) < minTimeSamples {
+		return fmt.Sprintf(
+			"%s (%s; too few samples for the median comparison, not gated)",
+			span, waived,
+		), nil, nil
+	}
+	cmp := benchmath.AssumeNothing.Compare(oldSample, newSample)
+	significant := cmp.P < cmp.Alpha
+	ratio := newCenter / oldCenter
+	detail := fmt.Sprintf(
+		"%s (%.2fx, limit %.2fx, %s; %s, medians compared)",
+		span, ratio, g.maxRatio, cmp, waived,
+	)
+	var v *violation
+	if ratio > g.maxRatio && !significant {
+		detail += " [not significant, not gated]"
+	}
+	if ratio > g.maxRatio && significant {
+		v = &violation{
+			unit:     g.unit,
+			old:      oldCenter,
+			new:      newCenter,
+			ratio:    ratio,
+			maxRatio: g.maxRatio,
 		}
 	}
 	return detail, v, nil
@@ -352,13 +469,15 @@ func compareUnits(
 	return parts, vs, is
 }
 
-func parseFile(path string) (benchSamples, []string, error) {
-	f, err := os.Open(path)
+func parseFile(path string) (benchSamples, []string, int, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	defer f.Close()
-	return parseBench(benchfmt.NewReader(f, path))
+	return parseBench(
+		benchfmt.NewReader(bytes.NewReader(data), path),
+		strings.Split(string(data), "\n"),
+	)
 }
 
 // results bundles everything render needs to produce the final
@@ -369,6 +488,9 @@ type results struct {
 	issues               []configIssue
 	newCount             int
 	oldSyntax, newSyntax []string
+	// oldInterleaved and newInterleaved count corrupted capture
+	// lines that carry the interleaved-log signature.
+	oldInterleaved, newInterleaved int
 }
 
 // render formats the human-readable outcome and picks the exit code:
@@ -389,8 +511,8 @@ func render(r results) (string, int) {
 			fmt.Fprintf(&b, "  %s\n", v)
 		}
 	}
-	renderSyntax(&b, "baseline", r.oldSyntax)
-	renderSyntax(&b, "candidate", r.newSyntax)
+	renderSyntax(&b, "baseline", r.oldSyntax, r.oldInterleaved)
+	renderSyntax(&b, "candidate", r.newSyntax, r.newInterleaved)
 	if len(r.issues) > 0 {
 		fmt.Fprintln(&b, "\nbenchgate: invalid benchmark configuration:")
 		for _, issue := range r.issues {
@@ -413,8 +535,12 @@ func render(r results) (string, int) {
 // renderSyntax reports unparseable result lines in one capture. A
 // benchmark whose result line is corrupted (e.g. by interleaved log
 // output) parses on neither side and would otherwise vanish from
-// the gate without a trace.
-func renderSyntax(b *strings.Builder, side string, errs []string) {
+// the gate without a trace. When the corrupted lines carry the
+// interleaved-log signature, the consequences and the remedy are
+// spelled out: those samples are lost to the comparison (a short
+// candidate capture then also starves the sec/op significance test),
+// and benchmark-side logging must be silenced to fix it.
+func renderSyntax(b *strings.Builder, side string, errs []string, interleaved int) {
 	if len(errs) == 0 {
 		return
 	}
@@ -426,6 +552,18 @@ func renderSyntax(b *strings.Builder, side string, errs []string) {
 	for _, e := range errs {
 		fmt.Fprintf(b, "  %s\n", e)
 	}
+	if interleaved == 0 {
+		return
+	}
+	fmt.Fprintf(
+		b,
+		"  (%d of those lines look like log output interleaved into a result line:\n"+
+			"  a log write landed between a benchmark name and its results, so the\n"+
+			"  sample is lost. Silence the default logger around benchmark setup —\n"+
+			"  log.SetOutput(io.Discard), restored on cleanup — so the capture\n"+
+			"  keeps every sample.)\n",
+		interleaved,
+	)
 }
 
 // flags holds the parsed command line.
@@ -502,12 +640,12 @@ func parseFlags() flags {
 
 func main() {
 	cfg := parseFlags()
-	oldRes, oldSyntax, err := parseFile(cfg.oldPath)
+	oldRes, oldSyntax, oldInter, err := parseFile(cfg.oldPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "benchgate: reading baseline: %v\n", err)
 		os.Exit(2)
 	}
-	newRes, newSyntax, err := parseFile(cfg.newPath)
+	newRes, newSyntax, newInter, err := parseFile(cfg.newPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "benchgate: reading candidate: %v\n", err)
 		os.Exit(2)
@@ -515,12 +653,14 @@ func main() {
 
 	report, violations, issues := compare(oldRes, newRes, cfg.gates)
 	out, code := render(results{
-		report:     report,
-		violations: violations,
-		issues:     issues,
-		newCount:   len(newRes),
-		oldSyntax:  oldSyntax,
-		newSyntax:  newSyntax,
+		report:         report,
+		violations:     violations,
+		issues:         issues,
+		newCount:       len(newRes),
+		oldSyntax:      oldSyntax,
+		newSyntax:      newSyntax,
+		oldInterleaved: oldInter,
+		newInterleaved: newInter,
 	})
 	fmt.Print(out)
 	os.Exit(code)

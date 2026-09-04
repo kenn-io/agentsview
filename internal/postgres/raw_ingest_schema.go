@@ -265,7 +265,9 @@ WITH required_table_privileges(table_name, privilege) AS (
         ('raw_source_heads', 'SELECT'),
         ('raw_source_heads', 'INSERT'),
         ('raw_source_heads', 'UPDATE'),
-        ('raw_ingest_jobs', 'INSERT')
+        ('raw_ingest_jobs', 'SELECT'),
+        ('raw_ingest_jobs', 'INSERT'),
+        ('raw_ingest_jobs', 'UPDATE')
 ), job_table(table_name, table_ref) AS (
     SELECT
         format('%I.%I', $1::text, 'raw_ingest_jobs'),

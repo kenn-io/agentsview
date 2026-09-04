@@ -671,7 +671,8 @@ func (c *Capturer) validateForUpload(
 	for _, entry := range entries {
 		manifestEntries = append(manifestEntries, rawsync.Entry{
 			Path: entry.Path, Type: "file", Length: entry.Length,
-			Objects: append([]rawsync.ObjectRef(nil), entry.Objects...),
+			ModTimeNS: entry.ModTimeNS,
+			Objects:   append([]rawsync.ObjectRef(nil), entry.Objects...),
 		})
 	}
 	return rawsync.ValidateManifestForUpload(rawsync.Manifest{

@@ -231,8 +231,10 @@ func gooseProviderSpec() dbBackedProviderSpec {
 		) (dbBackedSessionMeta, bool, error) {
 			return gooseSessionMeta(ctx, dbPath, sessionID)
 		},
-		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
-			result, err := parseGooseSession(dbPath, sessionID, machine)
+		parse: func(
+			ctx context.Context, dbPath, sessionID, machine string,
+		) ([]ParseResult, error) {
+			result, err := parseGooseSession(ctx, dbPath, sessionID, machine)
 			if err != nil || result == nil {
 				return nil, err
 			}

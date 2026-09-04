@@ -123,7 +123,9 @@ func piebaldSessionMeta(
 
 // parsePiebaldSessionResults parses a single Piebald chat and any large
 // message-DAG branches as fork child sessions.
-func parsePiebaldSessionResults(dbPath, chatID, machine string) ([]ParseResult, error) {
+func parsePiebaldSessionResults(
+	ctx context.Context, dbPath, chatID, machine string,
+) ([]ParseResult, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("piebald db not found: %s", dbPath)
 	}
@@ -134,11 +136,11 @@ func parsePiebaldSessionResults(dbPath, chatID, machine string) ([]ParseResult, 
 	}
 	defer db.Close()
 
-	c, err := loadOnePiebaldChat(db, chatID)
+	c, err := loadOnePiebaldChat(ctx, db, chatID)
 	if err != nil {
 		return nil, fmt.Errorf("loading piebald chat %s: %w", chatID, err)
 	}
-	return buildPiebaldSessionResults(db, c, dbPath, machine)
+	return buildPiebaldSessionResults(ctx, db, c, dbPath, machine)
 }
 
 func openPiebaldDB(dbPath string) (*sql.DB, error) {
@@ -163,8 +165,10 @@ type piebaldChatRow struct {
 	projectName      string
 }
 
-func loadOnePiebaldChat(db *sql.DB, chatID string) (piebaldChatRow, error) {
-	row := db.QueryRow(piebaldChatSelect(`
+func loadOnePiebaldChat(
+	ctx context.Context, db *sql.DB, chatID string,
+) (piebaldChatRow, error) {
+	row := db.QueryRowContext(ctx, piebaldChatSelect(`
 		WHERE c.id = ?
 		  AND COALESCE(c.is_deleted, 0) = 0
 	`), chatID)
@@ -237,8 +241,10 @@ type piebaldToolCallRow struct {
 	subAgentChatID    sql.NullInt64
 }
 
-func buildPiebaldSessionResults(db *sql.DB, c piebaldChatRow, dbPath, machine string) ([]ParseResult, error) {
-	messageRows, err := loadPiebaldMessages(db, c.id)
+func buildPiebaldSessionResults(
+	ctx context.Context, db *sql.DB, c piebaldChatRow, dbPath, machine string,
+) ([]ParseResult, error) {
+	messageRows, err := loadPiebaldMessages(ctx, db, c.id)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +260,7 @@ func buildPiebaldSessionResults(db *sql.DB, c piebaldChatRow, dbPath, machine st
 	var results []ParseResult
 	baseID := fmt.Sprintf("piebald:%d", c.id)
 	for i, b := range branches {
-		messages, firstMsg, realUserCount, err := buildPiebaldMessages(db, b.rows)
+		messages, firstMsg, realUserCount, err := buildPiebaldMessages(ctx, db, b.rows)
 		if err != nil {
 			return nil, err
 		}
@@ -293,14 +299,16 @@ func buildPiebaldSessionResults(db *sql.DB, c piebaldChatRow, dbPath, machine st
 	return results, nil
 }
 
-func buildPiebaldMessages(db *sql.DB, rows []piebaldMessageRow) ([]ParsedMessage, string, int, error) {
+func buildPiebaldMessages(
+	ctx context.Context, db *sql.DB, rows []piebaldMessageRow,
+) ([]ParsedMessage, string, int, error) {
 	var (
 		messages      []ParsedMessage
 		firstMsg      string
 		realUserCount int
 	)
 	for _, mr := range rows {
-		msg, ok, err := buildPiebaldMessage(db, mr, len(messages))
+		msg, ok, err := buildPiebaldMessage(ctx, db, mr, len(messages))
 		if err != nil {
 			return nil, "", 0, err
 		}
@@ -347,8 +355,10 @@ func buildPiebaldSessionMeta(c piebaldChatRow, dbPath, machine string) ParsedSes
 	}
 }
 
-func loadPiebaldMessages(db *sql.DB, chatID int64) ([]piebaldMessageRow, error) {
-	rows, err := db.Query(`
+func loadPiebaldMessages(
+	ctx context.Context, db *sql.DB, chatID int64,
+) ([]piebaldMessageRow, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT id,
 		       parent_chat_id,
 		       parent_message_id,
@@ -476,8 +486,10 @@ func (m piebaldMessageRow) enabled() bool {
 	return m.isEnabled != 0
 }
 
-func buildPiebaldMessage(db *sql.DB, mr piebaldMessageRow, ordinal int) (ParsedMessage, bool, error) {
-	parts, err := loadPiebaldMessageParts(db, mr.id)
+func buildPiebaldMessage(
+	ctx context.Context, db *sql.DB, mr piebaldMessageRow, ordinal int,
+) (ParsedMessage, bool, error) {
+	parts, err := loadPiebaldMessageParts(ctx, db, mr.id)
 	if err != nil {
 		return ParsedMessage{}, false, err
 	}
@@ -491,7 +503,7 @@ func buildPiebaldMessage(db *sql.DB, mr piebaldMessageRow, ordinal int) (ParsedM
 	for _, part := range parts {
 		switch part.partType {
 		case "text":
-			text, isThinking, err := loadPiebaldTextPart(db, part.id)
+			text, isThinking, err := loadPiebaldTextPart(ctx, db, part.id)
 			if err != nil {
 				return ParsedMessage{}, false, err
 			}
@@ -504,7 +516,7 @@ func buildPiebaldMessage(db *sql.DB, mr piebaldMessageRow, ordinal int) (ParsedM
 				contentParts = append(contentParts, text)
 			}
 		case "tool_call":
-			call, result, err := loadPiebaldToolCall(db, part.id)
+			call, result, err := loadPiebaldToolCall(ctx, db, part.id)
 			if err != nil {
 				return ParsedMessage{}, false, err
 			}
@@ -542,8 +554,10 @@ func buildPiebaldMessage(db *sql.DB, mr piebaldMessageRow, ordinal int) (ParsedM
 	return msg, true, nil
 }
 
-func loadPiebaldMessageParts(db *sql.DB, messageID int64) ([]piebaldPartRow, error) {
-	rows, err := db.Query(`
+func loadPiebaldMessageParts(
+	ctx context.Context, db *sql.DB, messageID int64,
+) ([]piebaldPartRow, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT id, part_type, part_index
 		FROM message_parts
 		WHERE parent_chat_message_id = ?
@@ -564,16 +578,18 @@ func loadPiebaldMessageParts(db *sql.DB, messageID int64) ([]piebaldPartRow, err
 	return parts, rows.Err()
 }
 
-func loadPiebaldTextPart(db *sql.DB, partID int64) (string, bool, error) {
+func loadPiebaldTextPart(
+	ctx context.Context, db *sql.DB, partID int64,
+) (string, bool, error) {
 	var isThinking bool
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(ctx, `
 		SELECT COALESCE(is_thinking, 0)
 		FROM message_part_text
 		WHERE message_part_id = ?
 	`, partID).Scan(&isThinking); err != nil {
 		return "", false, err
 	}
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT COALESCE(mnt.content, '')
 		FROM message_content_nodes mcn
 		JOIN message_node_text mnt ON mnt.node_id = mcn.id
@@ -596,8 +612,10 @@ func loadPiebaldTextPart(db *sql.DB, partID int64) (string, bool, error) {
 	return strings.Join(chunks, ""), isThinking, rows.Err()
 }
 
-func loadPiebaldToolCall(db *sql.DB, partID int64) (ParsedToolCall, ParsedToolResult, error) {
-	row := db.QueryRow(`
+func loadPiebaldToolCall(
+	ctx context.Context, db *sql.DB, partID int64,
+) (ParsedToolCall, ParsedToolResult, error) {
+	row := db.QueryRowContext(ctx, `
 		SELECT provider_tool_use_id,
 		       tool_name,
 		       COALESCE(tool_input, ''),

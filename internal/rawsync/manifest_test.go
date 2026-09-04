@@ -3,6 +3,7 @@ package rawsync
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,39 @@ func TestValidateAndCanonicalizeBindsAuthenticatedIdentity(t *testing.T) {
 	assert.Equal(t, first.ManifestID, again.ManifestID)
 	assert.Equal(t, first.CanonicalJSON, again.CanonicalJSON)
 	assert.NotEqual(t, first.ManifestID, otherTenant.ManifestID)
+}
+
+func TestParseCanonicalManifestAcceptsOnlyExactAuthenticatedEnvelope(t *testing.T) {
+	t.Parallel()
+
+	identity, err := NewAuthIdentity("tenant-a", "device-a")
+	require.NoError(t, err)
+	canonical, err := ValidateAndCanonicalize(identity, validManifest(), DefaultManifestLimits())
+	require.NoError(t, err)
+
+	parsed, err := ParseCanonicalManifest(
+		identity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, canonical, parsed)
+
+	otherIdentity, err := NewAuthIdentity("tenant-b", "device-a")
+	require.NoError(t, err)
+	_, err = ParseCanonicalManifest(
+		otherIdentity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
+	)
+	assert.ErrorIs(t, err, ErrInvalid)
+
+	noncanonical := append([]byte(" "), canonical.CanonicalJSON...)
+	_, err = ParseCanonicalManifest(
+		identity, canonical.ManifestID, noncanonical, DefaultManifestLimits(),
+	)
+	assert.ErrorIs(t, err, ErrInvalid)
+
+	_, err = ParseCanonicalManifest(
+		identity, strings.Repeat("0", 64), canonical.CanonicalJSON, DefaultManifestLimits(),
+	)
+	assert.ErrorIs(t, err, ErrInvalid)
 }
 
 func TestValidateAndCanonicalizeNormalizesCapturedInstantToUTC(t *testing.T) {
@@ -261,6 +295,46 @@ func TestValidateManifestForUploadReservesWorstCaseEscapedAuthenticationIDs(t *t
 	require.ErrorIs(t, err, ErrInvalid)
 }
 
+func TestValidateAndCanonicalizeCarriesEntryModTimeBackwardCompatibly(t *testing.T) {
+	t.Parallel()
+
+	identity, err := NewAuthIdentity("tenant-a", "device-a")
+	require.NoError(t, err)
+
+	// A canonical manifest written before entry modification times existed
+	// must parse and revalidate byte-for-byte.
+	legacyJSON := []byte(`{"schema_version":1,"tenant_id":"tenant-a","device_id":"device-a","provider":"codex","configured_root_id":"root-a","source_key":"sessions/demo.jsonl#main","capture_id":"capture-a","captured_at":"2026-08-13T12:34:56Z","kind":"snapshot","entries":[{"path":"a.jsonl","type":"file","length":3,"objects":[{"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","length":3}]}]}` + "\n")
+	legacyDigest := sha256.Sum256(legacyJSON)
+	legacy, err := ParseCanonicalManifest(
+		identity, hex.EncodeToString(legacyDigest[:]), legacyJSON, DefaultManifestLimits(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, ValidateCanonicalManifest(legacy))
+	require.Len(t, legacy.Manifest.Entries, 1)
+	assert.Equal(t, int64(0), legacy.Manifest.Entries[0].ModTimeNS)
+	assert.NotContains(t, string(legacy.CanonicalJSON), "mod_time_ns")
+
+	zeroValued, err := ValidateAndCanonicalize(identity, validManifest(), DefaultManifestLimits())
+	require.NoError(t, err)
+	assert.NotContains(t, string(zeroValued.CanonicalJSON), "mod_time_ns",
+		"zero-valued entry mod times must re-canonicalize to the legacy encoding")
+
+	manifest := validManifest()
+	manifest.Entries[0].ModTimeNS = 1691929296741012507
+	canonical, err := ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
+	require.NoError(t, err)
+	assert.Contains(t, string(canonical.CanonicalJSON), `"mod_time_ns":1691929296741012507`)
+	parsed, err := ParseCanonicalManifest(
+		identity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
+	)
+	require.NoError(t, err)
+	require.Len(t, parsed.Manifest.Entries, 2)
+	assert.Equal(t, "a.jsonl", parsed.Manifest.Entries[0].Path)
+	assert.Equal(t, int64(0), parsed.Manifest.Entries[0].ModTimeNS)
+	assert.Equal(t, "z.jsonl", parsed.Manifest.Entries[1].Path)
+	assert.Equal(t, int64(1691929296741012507), parsed.Manifest.Entries[1].ModTimeNS)
+}
+
 func validManifest() Manifest {
 	return Manifest{
 		SchemaVersion:    ManifestSchemaVersion,
@@ -302,6 +376,86 @@ func cloneManifest(source Manifest) Manifest {
 	return cloned
 }
 
+// manifestWithEntryPaths returns a snapshot manifest whose entries all carry
+// the single-object file entry from validManifest under the given paths.
+func manifestWithEntryPaths(paths ...string) Manifest {
+	manifest := validManifest()
+	file := manifest.Entries[1]
+	entries := make([]Entry, len(paths))
+	for i, path := range paths {
+		entries[i] = Entry{
+			Path: path, Type: file.Type, Length: file.Length, Objects: file.Objects,
+		}
+	}
+	manifest.Entries = entries
+	return manifest
+}
+
+func entryPaths(manifest CanonicalManifest) []string {
+	paths := make([]string, len(manifest.Manifest.Entries))
+	for i, entry := range manifest.Manifest.Entries {
+		paths[i] = entry.Path
+	}
+	return paths
+}
+
+func TestValidateAndCanonicalizeRejectsConflictingEntryPathsInAnyOrder(t *testing.T) {
+	t.Parallel()
+	identity, err := NewAuthIdentity("tenant-a", "device-a")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name  string
+		paths []string
+	}{
+		{name: "exact duplicate", paths: []string{"a.jsonl", "a.jsonl"}},
+		{name: "file path prefixes nested file", paths: []string{"a", "a/b.jsonl"}},
+		{name: "deep file path prefix", paths: []string{"a/b", "a/b/c.jsonl"}},
+		{name: "case-insensitive duplicate", paths: []string{"Session.jsonl", "session.jsonl"}},
+		{name: "case-insensitive prefix", paths: []string{"Logs", "logs/session.jsonl"}},
+		{name: "unicode case duplicate", paths: []string{"Séance.jsonl", "sÉANCE.jsonl"}},
+	} {
+		// The same collision must be rejected no matter which entry the
+		// caller lists first: canonicalization sorts, validation must not
+		// depend on the surviving order.
+		for order, permutation := range [][]int{{0, 1}, {1, 0}} {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, order), func(t *testing.T) {
+				t.Parallel()
+
+				manifest := manifestWithEntryPaths(
+					tc.paths[permutation[0]], tc.paths[permutation[1]],
+				)
+				_, err := ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
+				assert.ErrorIs(t, err, ErrInvalid)
+			})
+		}
+	}
+}
+
+func TestValidateAndCanonicalizeAcceptsDistinctSiblingAndNestedEntryPaths(t *testing.T) {
+	t.Parallel()
+	identity, err := NewAuthIdentity("tenant-a", "device-a")
+	require.NoError(t, err)
+
+	// "a.jsonl" shares no path component boundary with "a/b.jsonl": the
+	// near-miss between a file and a directory name must stay valid.
+	forward, err := ValidateAndCanonicalize(
+		identity, manifestWithEntryPaths("a.jsonl", "a/b.jsonl", "a/c/d.jsonl", "z.jsonl"),
+		DefaultManifestLimits(),
+	)
+	require.NoError(t, err)
+	reversed, err := ValidateAndCanonicalize(
+		identity, manifestWithEntryPaths("z.jsonl", "a/c/d.jsonl", "a/b.jsonl", "a.jsonl"),
+		DefaultManifestLimits(),
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, forward.ManifestID, reversed.ManifestID,
+		"entry ordering must not influence the canonical manifest")
+	assert.Equal(t, forward.CanonicalJSON, reversed.CanonicalJSON)
+	assert.Equal(t, []string{"a.jsonl", "a/b.jsonl", "a/c/d.jsonl", "z.jsonl"}, entryPaths(forward))
+}
+
 func TestValidateCanonicalManifestRejectsNoncanonicalValues(t *testing.T) {
 	t.Parallel()
 
@@ -333,6 +487,9 @@ func TestValidateCanonicalManifestRejectsNoncanonicalValues(t *testing.T) {
 		}},
 		{name: "wrong identity", mutate: func(m *CanonicalManifest) {
 			m.Identity.DeviceID = "device-b"
+		}},
+		{name: "tampered entry mod time", mutate: func(m *CanonicalManifest) {
+			m.Manifest.Entries[0].ModTimeNS = 7
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

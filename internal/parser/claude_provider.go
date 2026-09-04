@@ -148,6 +148,27 @@ func (p *claudeProvider) PlanRawCapture(
 		LocalPath:  src.Path,
 		Appendable: true,
 	}}
+	// Background-fork lineage resolution reads sibling top-level project
+	// transcripts, so a project-level capture must carry them as immutable
+	// inputs. Provider ownership stays here: no hosted parser or classifier
+	// duplicates this set.
+	if claudeSourceIsProjectLevel(source, src.Path) {
+		siblings, err := claudeLineageCaptureSiblings(ctx, src.Path)
+		if err != nil {
+			return RawCapturePlan{}, err
+		}
+		for _, sibling := range siblings {
+			siblingRel, err := filepath.Rel(src.Root, sibling)
+			if err != nil {
+				return RawCapturePlan{}, invalidRawCapturePlan(
+					"resolve Claude lineage sibling: %s", rawCaptureFilesystemError(err),
+				)
+			}
+			entries = append(entries, RawCaptureEntry{
+				Path: filepath.ToSlash(siblingRel), LocalPath: sibling,
+			})
+		}
+	}
 	sidecars, err := claudeLayoutSidecarFiles(ctx, src.Path)
 	if err != nil {
 		return RawCapturePlan{}, invalidRawCapturePlan(
@@ -198,9 +219,23 @@ func (p *claudeProvider) Parse(
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	project := claudeProviderProject(ctx, req.Source.ProjectHint, path)
+	var persistedOutputPathResolver func(string) (string, bool)
+	if req.StoredPathResolver != nil {
+		// Stored companions can carry a canonical machine-qualified
+		// spelling (remote mirrors) or the raw recorded path (hosted raw
+		// materializations); try both before falling back to the on-disk
+		// layout, mirroring the shared Claude-layout provider contract.
+		persistedOutputPathResolver = func(path string) (string, bool) {
+			if local, ok := req.StoredPathResolver(path); ok {
+				return local, true
+			}
+			return req.StoredPathResolver(machine + ":" + path)
+		}
+	}
 	opts := claudeParseOptions{
-		ctx:            ctx,
-		siblingLineage: claudeSourceIsProjectLevel(req.Source, path),
+		ctx:                         ctx,
+		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
+		persistedOutputPathResolver: persistedOutputPathResolver,
 	}
 	results, excludedIDs, err := claudeParseFile(path, project, machine, opts)
 	if err != nil {

@@ -309,7 +309,7 @@ func TestGooseUsesAccumulatedUsageWhenLedgerIsUnavailable(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	result, err := parseGooseSession(fixture.dbPath, "legacy", "devbox")
+	result, err := parseGooseSession(t.Context(), fixture.dbPath, "legacy", "devbox")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, result.UsageEvents, 1)
@@ -615,7 +615,7 @@ func TestGooseParsesSessionsSchemaWithoutOptionalColumns(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, fingerprint.Hash, 64)
 
-	result, err := parseGooseSession(dbPath, "bare", "devbox")
+	result, err := parseGooseSession(t.Context(), dbPath, "bare", "devbox")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "goose:bare", result.Session.ID)
@@ -635,7 +635,7 @@ func TestGooseUnknownToolResponseStatusIsNotAHumanMessage(t *testing.T) {
 		{"type":"toolResponse","id":"call-1","toolResult":{"status":"pending"}}
 	]`, 1_700_000_001)
 
-	result, err := parseGooseSession(fixture.dbPath, "session", "devbox")
+	result, err := parseGooseSession(t.Context(), fixture.dbPath, "session", "devbox")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, 1, result.Session.UserMessageCount,
@@ -659,7 +659,7 @@ func TestGooseLedgerModelFallsBackToSessionModel(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	result, err := parseGooseSession(fixture.dbPath, "session", "devbox")
+	result, err := parseGooseSession(t.Context(), fixture.dbPath, "session", "devbox")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, result.UsageEvents, 1)
