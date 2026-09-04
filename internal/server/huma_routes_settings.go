@@ -27,6 +27,11 @@ func (s *Server) registerSettingsRoutes() {
 		"Preview worktree project reclassification", s.humaPreviewWorktreeReclassification)
 	s.post(group, "/worktree-mappings/reclassify",
 		"Apply worktree project reclassification", s.humaReclassifyWorktreeProject)
+	s.put(group, "/session-project-assignments/{session_id}",
+		"Assign one session to a project", s.humaAssignSessionProject)
+	s.deleteRoute(group, "/session-project-assignments/{session_id}",
+		"Use automatic project assignment for one session",
+		s.humaClearSessionProjectAssignment)
 }
 
 type settingsInput struct {
@@ -162,12 +167,14 @@ func (s *Server) humaUpdateSettings(
 
 func (s *Server) localWorktreeMappingHumaDB() (*db.DB, string, error) {
 	localDB, ok := s.db.(*db.DB)
-	if !ok || localDB == nil || localDB.ReadOnly() || s.engine == nil {
+	if !ok || localDB == nil || localDB.ReadOnly() {
 		return nil, "", apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
-	machine := strings.TrimSpace(s.engine.Machine())
-	if machine == "" {
-		machine = s.cfg.LocalMachineName
+	machine := strings.TrimSpace(s.cfg.LocalMachineName)
+	if s.engine != nil {
+		if engineMachine := strings.TrimSpace(s.engine.Machine()); engineMachine != "" {
+			machine = engineMachine
+		}
 	}
 	return localDB, machine, nil
 }
@@ -309,14 +316,14 @@ func (s *Server) humaApplyWorktreeMappings(
 	ctx context.Context,
 	in *worktreeMappingApplyInput,
 ) (*jsonOutput[applyWorktreeMappingsResponse], error) {
-	_, machine, err := s.localWorktreeMappingHumaDB()
+	localDB, machine, err := s.localWorktreeMappingHumaDB()
 	if err != nil {
 		return nil, err
 	}
 	if in.Body.Machine != nil && strings.TrimSpace(*in.Body.Machine) != "" {
 		machine = strings.TrimSpace(*in.Body.Machine)
 	}
-	result, err := s.engine.ApplyWorktreeProjectMappings(ctx, machine)
+	result, err := s.syncEngineForLocal(localDB).ApplyWorktreeProjectMappings(ctx, machine)
 	if err != nil {
 		return nil, internalError("apply worktree mappings", err)
 	}
@@ -362,7 +369,7 @@ func (s *Server) humaReclassifyWorktreeProject(
 	if err != nil {
 		return nil, humaWorktreeReclassificationError(err)
 	}
-	mapping, result, err := s.engine.ApplyWorktreeReclassification(
+	mapping, result, err := s.syncEngineForLocal(localDB).ApplyWorktreeReclassification(
 		ctx, draft, in.Body.MappingToken, current.ExistingMappingID,
 	)
 	if err != nil {
@@ -371,6 +378,54 @@ func (s *Server) humaReclassifyWorktreeProject(
 	return &jsonOutput[worktreeReclassificationApplyResponse]{
 		Body: worktreeReclassificationApplyResponse{Mapping: mapping, Result: result},
 	}, nil
+}
+
+func (s *Server) humaAssignSessionProject(
+	ctx context.Context,
+	in *sessionProjectAssignmentInput,
+) (*jsonOutput[db.SessionProjectAssignment], error) {
+	localDB, _, err := s.localWorktreeMappingHumaDB()
+	if err != nil {
+		return nil, err
+	}
+	assignment, err := s.syncEngineForLocal(localDB).AssignSessionProject(
+		ctx, in.SessionID, in.Body.Project,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, apiError(http.StatusNotFound, "session not found")
+		case strings.Contains(err.Error(), "required"):
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		default:
+			return nil, internalError("assign session project", err)
+		}
+	}
+	return &jsonOutput[db.SessionProjectAssignment]{Body: assignment}, nil
+}
+
+func (s *Server) humaClearSessionProjectAssignment(
+	ctx context.Context,
+	in *sessionProjectAssignmentPathInput,
+) (*jsonOutput[db.ClearedSessionProjectAssignment], error) {
+	localDB, _, err := s.localWorktreeMappingHumaDB()
+	if err != nil {
+		return nil, err
+	}
+	cleared, err := s.syncEngineForLocal(localDB).ClearSessionProjectAssignment(
+		ctx, in.SessionID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, apiError(http.StatusNotFound, "session assignment not found")
+		case strings.Contains(err.Error(), "required"):
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		default:
+			return nil, internalError("clear session project assignment", err)
+		}
+	}
+	return &jsonOutput[db.ClearedSessionProjectAssignment]{Body: cleared}, nil
 }
 
 func humaWorktreeReclassificationError(err error) error {

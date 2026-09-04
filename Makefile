@@ -406,13 +406,21 @@ test-ssh: pricing-snapshot ensure-embed-dir ssh-up
 test-ssh-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
 
+# Local E2E builds enable the mapping workspace. Prebuilt servers must opt in
+# because their embedded frontend may not include the workspace yet.
+PROJECT_MAPPING_WORKSPACE_E2E_ENABLED ?= $(if $(E2E_PREBUILT_SERVER),,true)
+
 # Run Playwright E2E tests
 e2e:
-	cd frontend && npx playwright test
+	cd frontend && \
+		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED="$(PROJECT_MAPPING_WORKSPACE_E2E_ENABLED)" \
+		npx playwright test
 
 # Run focused Playwright smoke tests against duckdb serve.
 e2e-duckdb:
-	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb npx playwright test \
+	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb \
+		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED="$(PROJECT_MAPPING_WORKSPACE_E2E_ENABLED)" \
+		npx playwright test \
 		e2e/duckdb-backend.spec.ts e2e/data-mode.spec.ts \
 		e2e/session-list.spec.ts --project=chromium
 

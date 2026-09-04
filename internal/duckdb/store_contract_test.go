@@ -83,6 +83,8 @@ func TestClaudeProvenanceRoundTrip(t *testing.T) {
 		MessageCount:     1,
 		UserMessageCount: 1,
 	}), "upsert identity session")
+	_, err := local.AssignSessionProject(ctx, "duck-identity", "duck_identity")
+	require.NoError(t, err, "assign identity session project")
 	require.NoError(t, local.InsertMessages([]db.Message{{
 		SessionID:     "duck-identity",
 		Ordinal:       0,
@@ -94,12 +96,12 @@ func TestClaudeProvenanceRoundTrip(t *testing.T) {
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
-	_, err := syncer.pushEverything(ctx, nil)
+	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to DuckDB")
 	store := NewStoreFromDB(syncer.DB())
 
 	index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{
-		Project: "duck-identity",
+		Project: "duck_identity",
 	})
 	require.NoError(t, err)
 	require.Len(t, index.Sessions, 1)
@@ -107,6 +109,7 @@ func TestClaudeProvenanceRoundTrip(t *testing.T) {
 	assert.Equal(t, "Claude Triage", index.Sessions[0].AgentLabel)
 	assert.Equal(t, "sdk-cli", index.Sessions[0].Entrypoint)
 	assert.Equal(t, "bg", index.Sessions[0].SessionKind)
+	assert.True(t, index.Sessions[0].ProjectAssigned)
 	require.NotNil(t, index.Sessions[0].DisplayName)
 	assert.Equal(t, "Agent Title", *index.Sessions[0].DisplayName)
 

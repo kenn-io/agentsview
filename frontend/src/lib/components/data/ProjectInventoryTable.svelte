@@ -2,22 +2,24 @@
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatNumber } from "../../utils/format.js";
   import type { DbProjectInventory, DbProjectInventoryRow } from "../../api/generated/index";
-  import { TableHeaderCell, TextInput } from "@kenn-io/kit-ui";
+  import { Button, TableHeaderCell, TextInput } from "@kenn-io/kit-ui";
   import { displayProjectLabel } from "./project-label.js";
 
   interface Props {
     inventory: DbProjectInventory;
-    selectedKey: string;
-    onSelect: (key: string) => void;
+    selectedKeys: string[];
+    onSelect: (activeKey: string, keys: string[]) => void;
+    onClear: () => void;
   }
 
-  let { inventory, selectedKey, onSelect }: Props = $props();
+  let { inventory, selectedKeys, onSelect, onClear }: Props = $props();
 
   // `projects` is typed `any[] | null` by the codegen; cast to the generated
   // element model for field-level type safety.
   const allRows = $derived((inventory.projects ?? []) as DbProjectInventoryRow[]);
 
   let filterText = $state("");
+  let selectionAnchor = $state("");
 
   // export.SafeProjectDisplayLabel legitimately returns "" for absolute-path
   // and URL-scheme projects. Display-only copy also distinguishes the
@@ -30,9 +32,7 @@
     | "label"
     | "sessions"
     | "machines"
-    | "agents"
     | "distinct_cwds"
-    | "first_activity"
     | "last_activity"
     | "rules_targeting";
   type SortDir = "asc" | "desc";
@@ -59,12 +59,8 @@
         return a.sessions - b.sessions;
       case "machines":
         return a.machines - b.machines;
-      case "agents":
-        return a.agents - b.agents;
       case "distinct_cwds":
         return a.distinct_cwds - b.distinct_cwds;
-      case "first_activity":
-        return (a.first_activity ?? "").localeCompare(b.first_activity ?? "");
       case "last_activity":
         return (a.last_activity ?? "").localeCompare(b.last_activity ?? "");
       case "rules_targeting":
@@ -96,14 +92,30 @@
     return formatDateTime(d, { year: "numeric", month: "short", day: "numeric" });
   }
 
-  function selectRow(key: string) {
-    onSelect(key);
+  function selectRow(key: string, extend: boolean) {
+    const anchor = selectionAnchor || selectedKeys.at(-1) || "";
+    if (extend && anchor) {
+      const anchorIndex = sortedRows.findIndex((row) => row.project_key === anchor);
+      const keyIndex = sortedRows.findIndex((row) => row.project_key === key);
+      if (anchorIndex >= 0 && keyIndex >= 0) {
+        const start = Math.min(anchorIndex, keyIndex);
+        const end = Math.max(anchorIndex, keyIndex);
+        onSelect(key, sortedRows.slice(start, end + 1).map((row) => row.project_key));
+        return;
+      }
+    }
+    selectionAnchor = key;
+    onSelect(key, [key]);
   }
 
   function onRowKeydown(event: KeyboardEvent, key: string) {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
-    selectRow(key);
+    selectRow(key, event.shiftKey);
+  }
+
+  function onRowMousedown(event: MouseEvent) {
+    if (event.shiftKey) event.preventDefault();
   }
 
   interface Column {
@@ -115,9 +127,7 @@
   const columns: Column[] = $derived([
     { key: "sessions", label: m.data_col_sessions(), numeric: true },
     { key: "machines", label: m.data_col_machines(), numeric: true },
-    { key: "agents", label: m.data_col_agents(), numeric: true },
     { key: "distinct_cwds", label: m.data_col_cwds(), numeric: true },
-    { key: "first_activity", label: m.data_col_first_activity() },
     { key: "last_activity", label: m.data_col_last_activity() },
     { key: "rules_targeting", label: m.data_col_rules(), numeric: true },
   ]);
@@ -130,6 +140,15 @@
     placeholder={m.data_filter_projects()}
     bind:value={filterText}
   />
+
+  <div class="selection-help">
+    {#if selectedKeys.length > 1}
+      <strong>{m.data_selection_count({ count: selectedKeys.length })}</strong>
+      <Button size="sm" label={m.data_selection_clear()} onclick={onClear} />
+    {:else}
+      <span>{m.data_selection_hint()}</span>
+    {/if}
+  </div>
 
   {#if sortedRows.length > 0}
     <div class="table-scroll">
@@ -159,10 +178,11 @@
             <tr
               tabindex="0"
               class="project-row"
-              class:selected={row.project_key === selectedKey}
-              aria-selected={row.project_key === selectedKey}
+              class:selected={selectedKeys.includes(row.project_key)}
+              aria-selected={selectedKeys.includes(row.project_key)}
               data-project-key={row.project_key}
-              onclick={() => selectRow(row.project_key)}
+              onmousedown={onRowMousedown}
+              onclick={(event) => selectRow(row.project_key, event.shiftKey)}
               onkeydown={(e) => onRowKeydown(e, row.project_key)}
             >
               <td class="col-project" title={displayLabel(row)}>
@@ -179,9 +199,7 @@
               </td>
               <td class="col-num">{formatNumber(row.sessions)}</td>
               <td class="col-num">{formatNumber(row.machines)}</td>
-              <td class="col-num">{formatNumber(row.agents)}</td>
               <td class="col-num">{formatNumber(row.distinct_cwds)}</td>
-              <td>{fmtDate(row.first_activity)}</td>
               <td>{fmtDate(row.last_activity)}</td>
               <td class="col-num">
                 {row.enabled_rules_targeting > 0 ? formatNumber(row.enabled_rules_targeting) : "—"}
@@ -199,16 +217,33 @@
 <style>
   .inventory-table {
     display: flex;
+    height: 100%;
     flex-direction: column;
     gap: 8px;
     min-width: 0;
+    padding: 10px;
   }
 
   .table-scroll {
-    max-height: 480px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
+  }
+
+  .selection-help {
+    display: flex;
+    min-height: 22px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 2px;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
+  .selection-help strong {
+    color: var(--text-secondary);
+    font-weight: 600;
   }
 
   .table {
@@ -231,7 +266,7 @@
   }
 
   tbody td {
-    padding: 5px 8px;
+    padding: 7px 8px;
     border-bottom: 1px solid var(--border-muted);
     color: var(--text-secondary);
     white-space: nowrap;
@@ -247,7 +282,7 @@
   }
 
   .project-row.selected {
-    background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+    background: color-mix(in srgb, var(--accent-blue) 11%, var(--bg-surface));
   }
 
   .project-row:focus-visible {

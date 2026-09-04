@@ -420,6 +420,7 @@
   "sidebar_row_rename": "Renommer",
   "sidebar_row_open_in_new_tab": "Ouvrir dans un nouvel onglet",
   "sidebar_row_delete": "Supprimer",
+  "sidebar_row_change_project": "Changer de projet…",
   "shared_all_projects": "Tous les projets",
   "shared_project_filter_placeholder": "Filtrer les projets...",
   "shared_select_project": "Sélectionner un projet",
@@ -813,7 +814,7 @@
   "data_projects_heading": "Projets",
   "data_view_toggle_label": "Vue des données",
   "data_view_inventory": "Inventaire",
-  "data_view_rules": "Règles",
+  "data_view_rules": "Règles de correspondance des projets",
   "data_summary_projects": [
     {
       "declarations": [
@@ -842,6 +843,34 @@
       }
     }
   ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} machine",
+        "countPlural=other": "{countNumber} machines"
+      }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} suggestion de dossier",
+        "countPlural=other": "{countNumber} suggestions de dossier"
+      }
+    }
+  ],
   "data_summary_governed": [
     {
       "declarations": [
@@ -856,6 +885,58 @@
       }
     }
   ],
+  "data_selection_hint": "Cliquez sur un projet, puis Maj-cliquez pour sélectionner une plage.",
+  "data_selection_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} projet sélectionné",
+        "countPlural=other": "{countNumber} projets sélectionnés"
+      }
+    }
+  ],
+  "data_selection_clear": "Effacer",
+  "data_batch_workspace_label": "Correction groupée de projets",
+  "data_batch_heading": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} projet sélectionné",
+        "countPlural=other": "{countNumber} projets sélectionnés"
+      }
+    }
+  ],
+  "data_batch_label": "Groupé",
+  "data_batch_folders_heading": "Dossiers sélectionnés",
+  "data_batch_folders_intro": "Suggestions de dossiers pour les projets sélectionnés.",
+  "data_batch_correction_heading": "Correction groupée",
+  "data_batch_correction_intro": "Associez tous les dossiers disponibles ci-dessous à un seul projet.",
+  "data_batch_folder_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} dossier",
+        "countPlural=other": "{countNumber} dossiers"
+      }
+    }
+  ],
+  "data_batch_target_project": "Associer les dossiers sélectionnés à",
+  "data_batch_saving": "Enregistrement de la correction groupée…",
+  "data_batch_save": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Enregistrer {countNumber} correction",
+        "countPlural=other": "Enregistrer {countNumber} corrections"
+      }
+    }
+  ],
+  "data_batch_partial_save": "{saved} sur {count} enregistrées.",
+  "data_batch_saved": "Correction groupée enregistrée dans {project}",
   "data_filter_projects": "Filtrer les projets",
   "data_col_project": "Projet",
   "data_col_sessions": "Sessions",
@@ -890,8 +971,15 @@
   "data_reclassify_candidates_failed": "Impossible de trouver les dossiers de session",
   "data_reclassify_no_candidates": "Aucun dossier de session trouvé pour ce projet.",
   "data_reclassify_choose_worktree": "Choisir un dossier",
-  "data_mapping_observed_folders": "Dossiers observés",
-  "data_mapping_definition": "Correspondance",
+  "data_mapping_observed_folders": "Suggestions de dossiers",
+  "data_reclassify_suggestions_intro": "Chemins suggérés à partir des sessions de ce projet.",
+  "data_mapping_definition": "Correction du projet",
+  "data_reclassify_use_for_project": "Utiliser pour ce projet",
+  "data_reclassify_evidence_snapshot": "Instantané",
+  "data_reclassify_evidence_aggregate": "Agrégat",
+  "data_reclassify_evidence_exact_cwd": "Répertoire exact",
+  "data_reclassify_evidence_unavailable": "Aucun préfixe utilisable",
+  "data_reclassify_evidence_suggestion": "Suggestion",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -907,7 +995,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "Ce dossier ne peut pas être associé en toute sécurité, car il est indisponible ou représente la racine du système de fichiers.",
-  "data_reclassify_path_prefix": "Chemin du dossier",
+  "data_reclassify_path_prefix": "Préfixe du chemin",
   "data_reclassify_target_project": "Projet",
   "data_reclassify_use_custom_project": "Utiliser le projet « {query} »",
   "data_reclassify_path_unavailable": "Chemin indisponible",
@@ -972,18 +1060,64 @@
       }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} aperçu de session",
+        "countPlural=other": "{countNumber} aperçus de sessions"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "{current} sur {count}",
+  "data_reclassify_session_preview_previous": "Session précédente",
+  "data_reclassify_session_preview_next": "Session suivante",
+  "data_reclassify_session_preview_loading": "Chargement de l'aperçu de la session…",
+  "data_reclassify_session_preview_failed": "Impossible de charger l'aperçu de la session",
+  "data_reclassify_session_preview_no_message": "Aucun message de session disponible",
+  "data_reclassify_session_preview_current_project": "Projet actuel",
+  "data_reclassify_session_preview_next_project": "Après correction",
+  "data_reclassify_session_preview_folder": "Dossier de la session",
+  "data_session_assignment_heading": "Projet de la session",
+  "data_session_assignment_intro": "Modifie uniquement cette session. Son dossier et les règles de dossier restent inchangés.",
+  "data_session_assignment_target": "Déplacer cette session vers",
+  "data_session_assignment_save": "Affecter la session",
+  "data_session_assignment_saving": "Affectation…",
+  "data_session_assignment_failed": "Impossible d’affecter la session",
+  "data_session_assignment_saved": "Session affectée à {project}",
+  "data_session_assignment_refresh_failed": "La session a été affectée, mais l’inventaire des projets n’a pas pu être actualisé.",
+  "data_session_assignment_manual": "Remplacement manuel",
+  "data_session_assignment_automatic": "Automatique",
+  "data_session_assignment_use_automatic": "Utiliser l’attribution automatique",
+  "data_session_assignment_clearing": "Restauration…",
+  "data_session_assignment_cleared": "Session restaurée dans {project}",
+  "data_session_assignment_clear_failed": "Échec de la restauration de l’attribution automatique",
   "data_reclassify_zero_matches": "Ce préfixe ne correspond à aucune session de l’archive.",
   "data_reclassify_conflict": "Les correspondances ont changé depuis l’aperçu. L’impact a été actualisé ; vérifiez-le avant d’appliquer.",
-  "data_reclassify_apply": "Enregistrer et appliquer",
-  "data_reclassify_applying": "Enregistrement et application…",
-  "data_reclassify_apply_failed": "Impossible d’enregistrer et d’appliquer la correspondance",
+  "data_reclassify_replaces_rule": "Cette correction remplace une règle de correspondance de projet existante.",
+  "data_reclassify_review_impact": "Vérifier l’impact",
+  "data_reclassify_back": "Retour",
+  "data_reclassify_confirm_save": "Confirmer et enregistrer",
+  "data_reclassify_cancel": "Annuler",
+  "data_reclassify_apply": "Enregistrer la correction",
+  "data_reclassify_applying": "Enregistrement de la correction…",
+  "data_reclassify_apply_failed": "Impossible d’enregistrer la correction",
+  "data_reclassify_saved": "Correction du projet enregistrée pour {project}",
+  "data_flash_success_label": "Succès",
   "data_reclassify_applied_refresh_failed": "La correspondance est enregistrée, mais l’inventaire des projets n’a pas pu être actualisé. Relancez seulement l’actualisation.",
   "data_reclassify_retry_refresh": "Réessayer l’actualisation",
   "data_reclassify_refreshing": "Actualisation…",
-  "data_reclassify_read_only": "Ce magasin est en lecture seule. Gérez les règles de classification depuis l’archive accessible en écriture qui ingère les sessions de cette machine.",
-  "data_reclassify_managed_in_rules": "Les correspondances créées ici peuvent être modifiées dans la vue Règles.",
-  "data_reclassify_open_rules": "Ouvrir les règles",
+  "data_reclassify_read_only": "Les modifications ne sont pas disponibles ici. Ouvrez l’Agents View source pour gérer les règles de correspondance des projets.",
+  "data_reclassify_managed_in_rules": "Cette correction sera enregistrée comme règle de correspondance de projet.",
+  "data_reclassify_open_rules": "Ouvrir les règles de correspondance",
   "data_workspace_all_projects": "Tous les projets",
+  "data_workspace_map_whole_project": "Mapper tout le projet",
+  "data_workspace_correct_one_folder": "Corriger un dossier",
   "data_workspace_close": "Fermer les détails du projet",
   "data_workspace_activity": "Activité",
   "data_workspace_activity_range": "{first} – {last}",

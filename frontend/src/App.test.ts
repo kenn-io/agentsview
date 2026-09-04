@@ -30,6 +30,9 @@ import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import sourceRaw from "./App.svelte?raw";
 import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
 import { SessionsService } from "./lib/api/generated/index.js";
+vi.mock("./lib/feature-flags.js", () => ({
+  PROJECT_MAPPING_WORKSPACE_ENABLED: true,
+}));
 // @ts-ignore
 import App, { findUserPromptOrdinal } from "./App.svelte";
 

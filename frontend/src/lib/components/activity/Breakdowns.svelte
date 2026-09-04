@@ -4,12 +4,17 @@
   import type { Report } from "../../api/types.js";
   import type { ActivityKeyMinutes } from "../../api/generated/index";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
+  import { PROJECT_MAPPING_WORKSPACE_ENABLED } from "../../feature-flags.js";
 
   interface Props {
     report: Report;
+    projectWorkspaceEnabled?: boolean;
   }
 
-  let { report }: Props = $props();
+  let {
+    report,
+    projectWorkspaceEnabled = PROJECT_MAPPING_WORKSPACE_ENABLED,
+  }: Props = $props();
 
   type Metric = "minutes" | "cost";
   let metric = $state<Metric>("minutes");
@@ -185,7 +190,7 @@
                 onmouseenter={(e) => showTip(e, row, total)}
                 onmouseleave={hideTip}
               >
-                {#if panel.projectRows}
+                {#if panel.projectRows && projectWorkspaceEnabled}
                   <a
                     class="bar-label"
                     href={projectHref(row)}

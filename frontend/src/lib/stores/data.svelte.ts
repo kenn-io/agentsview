@@ -8,6 +8,7 @@ import { m } from "../i18n/index.js";
 import { router } from "./router.svelte.js";
 import { LatestRead } from "../utils/latest-read.js";
 import { events } from "./events.svelte.js";
+import { PROJECT_MAPPING_WORKSPACE_ENABLED } from "../feature-flags.js";
 
 export type DataView = "inventory" | "rules";
 const DATA_REFRESH_DEBOUNCE_MS = 300;
@@ -23,6 +24,9 @@ class DataStore {
 
   #inventoryRead = new LatestRead();
   #loadVersion = 0;
+  #mutationRefreshes = 0;
+  #mutationRefreshTail: Promise<void> = Promise.resolve();
+  #eventRefreshPending = false;
 
   /**
    * The inventory row matching selectedProjectKey, or null when there is no
@@ -44,11 +48,11 @@ class DataStore {
    * on screen, mirroring the activity store's attach pattern. Returns a detach
    * callback for the component's onMount cleanup.
    */
-  attach(): () => void {
-    this.hydrateFromUrl(router.params);
+  attach(projectWorkspaceEnabled = PROJECT_MAPPING_WORKSPACE_ENABLED): () => void {
+    this.hydrateFromUrl(router.params, projectWorkspaceEnabled);
     const onPop = () => {
-      this.hydrateFromUrl(router.params);
-      void this.load();
+      this.hydrateFromUrl(router.params, projectWorkspaceEnabled);
+      if (projectWorkspaceEnabled) void this.load();
     };
     window.addEventListener("popstate", onPop);
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -57,7 +61,13 @@ class DataStore {
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
-        void this.load({ background: true });
+        if (projectWorkspaceEnabled) {
+          if (this.#mutationRefreshes === 0) {
+            void this.load({ background: true });
+          } else {
+            this.#eventRefreshPending = true;
+          }
+        }
         if (this.view === "rules") this.rulesRefreshVersion++;
       }, DATA_REFRESH_DEBOUNCE_MS);
     });
@@ -80,7 +90,13 @@ class DataStore {
    * (including absent or unknown) falls back to the inventory view with the
    * `project_key` param, if any, selected.
    */
-  hydrateFromUrl(params: Record<string, string>) {
+  hydrateFromUrl(params: Record<string, string>, projectWorkspaceEnabled: boolean) {
+    if (!projectWorkspaceEnabled) {
+      this.view = "rules";
+      this.rulesMachine = params.view === "rules" ? (params.machine ?? "") : "";
+      this.selectedProjectKey = "";
+      return;
+    }
     if (params.view === "rules") {
       this.view = "rules";
       this.rulesMachine = params.machine ?? "";
@@ -189,7 +205,7 @@ class DataStore {
    * reload is in flight, that choice wins and the reselection is skipped.
    */
   async refreshAfterApply(originalKey: string, appliedTargetLabel: string): Promise<boolean> {
-    const ok = await this.load({ background: true });
+    const ok = await this.loadAfterMutation();
     if (!ok) return false;
     if (this.selectedProjectKey !== originalKey) return true;
     const rows = (this.inventory?.projects ?? []) as DbProjectInventoryRow[];
@@ -198,6 +214,32 @@ class DataStore {
     this.selectedProjectKey = target ? target.project_key : "";
     this.writeUrl();
     return true;
+  }
+
+  /**
+   * Refresh after a committed mutation without letting event-driven or other
+   * mutation refreshes start a competing inventory read. Events that arrive
+   * while mutations are queued trigger one background load after the queue.
+   */
+  async loadAfterMutation(): Promise<boolean> {
+    this.#mutationRefreshes++;
+    const previous = this.#mutationRefreshTail;
+    let release!: () => void;
+    this.#mutationRefreshTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await previous;
+    try {
+      return await this.load({ background: true });
+    } finally {
+      release();
+      this.#mutationRefreshes--;
+      if (this.#mutationRefreshes === 0 && this.#eventRefreshPending) {
+        this.#eventRefreshPending = false;
+        void this.load({ background: true });
+      }
+    }
   }
 }
 

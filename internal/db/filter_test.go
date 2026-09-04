@@ -1561,6 +1561,23 @@ func TestSidebarSessionIndexComputesIsTeammate(t *testing.T) {
 		"normal IsTeammate = true, want false")
 }
 
+func TestSidebarSessionIndexCarriesProjectAssignment(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	displayName := "Named sidebar session"
+	insertSession(t, d, "assigned", "automatic", func(s *Session) {
+		s.DisplayName = &displayName
+	})
+	_, err := d.AssignSessionProject(ctx, "assigned", "manual")
+	require.NoError(t, err)
+
+	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
+	require.NoError(t, err)
+	require.Len(t, index.Sessions, 1)
+	assert.Equal(t, "manual", index.Sessions[0].Project)
+	assert.True(t, index.Sessions[0].ProjectAssigned)
+}
+
 func requireSidebarIndexIDs(
 	t *testing.T, sessions []SidebarSessionIndexRow, wantIDs []string,
 ) {

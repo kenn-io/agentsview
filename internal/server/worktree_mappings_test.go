@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -255,6 +256,96 @@ func TestWorktreePreviewAPIUsesFullArchiveAndBoundsSamples(t *testing.T) {
 		"project": "canonical-example"
 	}`)
 	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestWorktreeReclassificationAPILocalNoSyncMode(t *testing.T) {
+	te := setupNoSyncMode(t)
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: "no-sync-session", Machine: "test", Agent: "codex",
+		Project: "branch-label", Cwd: "/srv/worktrees/example/feature",
+	}))
+
+	previewW := te.post(t, "/api/v1/settings/worktree-mappings/preview", `{
+		"machine": "test",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example",
+		"original_project": "branch-label"
+	}`)
+	assertStatus(t, previewW, http.StatusOK)
+	preview := decode[db.WorktreeReclassificationPreview](t, previewW)
+	require.NotEmpty(t, preview.MappingToken)
+
+	w := te.post(t, "/api/v1/settings/worktree-mappings/reclassify", `{
+		"machine": "test",
+		"path_prefix": "/srv/worktrees/example",
+		"project": "canonical-example",
+		"original_project": "branch-label",
+		"mapping_token": "`+preview.MappingToken+`"
+	}`)
+	assertStatus(t, w, http.StatusOK)
+	session, err := te.db.GetSession(context.Background(), "no-sync-session")
+	require.NoError(t, err)
+	assert.Equal(t, "canonical_example", session.Project)
+}
+
+func TestSessionProjectAssignmentAPILocalNoSyncMode(t *testing.T) {
+	te := setupNoSyncMode(t)
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: "temporary-session", Machine: "test", Agent: "codex",
+		Project: "temporary", Cwd: "/tmp/agent-run",
+	}))
+
+	w := te.put(t,
+		"/api/v1/settings/session-project-assignments/temporary-session",
+		`{"project":"real-project"}`,
+	)
+	assertStatus(t, w, http.StatusOK)
+	assignment := decode[db.SessionProjectAssignment](t, w)
+	assert.Equal(t, "temporary-session", assignment.SessionID)
+	assert.Equal(t, "real_project", assignment.Project)
+
+	session, err := te.db.GetSession(context.Background(), "temporary-session")
+	require.NoError(t, err)
+	assert.Equal(t, "real_project", session.Project)
+}
+
+func TestClearSessionProjectAssignmentAPILocalNoSyncMode(t *testing.T) {
+	te := setupNoSyncMode(t)
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: "temporary-session", Machine: "test", Agent: "codex",
+		Project: "temporary", Cwd: "/work/project/run",
+	}))
+	_, err := te.db.CreateWorktreeProjectMapping(context.Background(),
+		db.WorktreeProjectMapping{
+			Machine: "test", PathPrefix: "/work/project",
+			Project: "mapped-project", Enabled: true,
+		})
+	require.NoError(t, err)
+	w := te.put(t,
+		"/api/v1/settings/session-project-assignments/temporary-session",
+		`{"project":"manual-project"}`,
+	)
+	assertStatus(t, w, http.StatusOK)
+	events, unsubscribe := te.broadcaster.Subscribe()
+	defer unsubscribe()
+
+	w = te.del(t,
+		"/api/v1/settings/session-project-assignments/temporary-session")
+	assertStatus(t, w, http.StatusOK)
+	cleared := decode[db.ClearedSessionProjectAssignment](t, w)
+	assert.Equal(t, "temporary-session", cleared.SessionID)
+	assert.Equal(t, "mapped_project", cleared.Project)
+	session, err := te.db.GetSession(context.Background(), "temporary-session")
+	require.NoError(t, err)
+	assert.Equal(t, "mapped_project", session.Project)
+	assert.False(t, session.ProjectAssigned)
+
+	select {
+	case event := <-events:
+		assert.Equal(t, "sessions", event.Scope)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for sessions event")
+	}
 }
 
 func TestActivityProjectReclassificationAPIRejectsStaleToken(t *testing.T) {

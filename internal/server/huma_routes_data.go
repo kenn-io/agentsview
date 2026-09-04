@@ -13,6 +13,8 @@ import (
 func (s *Server) registerDataRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/data", "Data")
 	s.get(group, "/projects", "Get project inventory", s.humaDataProjects)
+	s.get(group, "/projects/{project_key}/sessions",
+		"List sessions for an opaque project identity", s.humaDataProjectSessions)
 	s.get(group, "/project-rules", "List project rules", s.humaDataProjectRules)
 	s.get(group, "/project-reclassification/candidates",
 		"List archive-wide reclassification candidates",
@@ -49,6 +51,10 @@ type dataCompactRequest struct {
 	KeepBackup *bool `json:"keep_backup,omitempty" doc:"Keep the original archive backup"`
 }
 
+type dataProjectSessionsInput struct {
+	ProjectKey string `path:"project_key" required:"true" doc:"Opaque project identity key"`
+}
+
 func (s *Server) humaDataProjects(
 	ctx context.Context, _ *emptyInput,
 ) (*jsonOutput[db.ProjectInventory], error) {
@@ -63,6 +69,42 @@ func (s *Server) humaDataProjects(
 		return nil, internalError("get project inventory error", err)
 	}
 	return &jsonOutput[db.ProjectInventory]{Body: inv}, nil
+}
+
+func (s *Server) humaDataProjectSessions(
+	ctx context.Context, in *dataProjectSessionsInput,
+) (*jsonOutput[db.SessionPage], error) {
+	projectKey := strings.TrimSpace(in.ProjectKey)
+	if projectKey == "" {
+		return nil, apiError(http.StatusBadRequest, "project_key is required")
+	}
+	labels, err := s.db.GetActiveProjectLabels(ctx)
+	if err != nil {
+		return nil, internalError("list project labels", err)
+	}
+	catalog, err := s.db.BuildProjectIdentityMap(ctx, labels)
+	if err != nil {
+		return nil, internalError("resolve project identities", err)
+	}
+	resolved := make([]string, 0, 1)
+	for label, entry := range catalog {
+		if entry.ProjectKey == projectKey {
+			resolved = append(resolved, label)
+		}
+	}
+	if len(resolved) == 0 {
+		return nil, apiError(http.StatusNotFound, "project not found")
+	}
+	page, err := s.db.ListSessions(ctx, db.SessionFilter{
+		ProjectLabels:   resolved,
+		IncludeChildren: true,
+		Limit:           20,
+		OrderBy:         "recent",
+	})
+	if err != nil {
+		return nil, internalError("list project sessions", err)
+	}
+	return &jsonOutput[db.SessionPage]{Body: page}, nil
 }
 
 func (s *Server) localMachineName() string {

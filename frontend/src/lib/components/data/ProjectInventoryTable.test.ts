@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { fireEvent, screen } from "@testing-library/svelte";
 import ProjectInventoryTable from "./ProjectInventoryTable.svelte";
@@ -59,7 +59,10 @@ function fixtureRows(): DbProjectInventoryRow[] {
 
 function makeInventory(rows: DbProjectInventoryRow[]): DbProjectInventory {
   return {
-    governed_sessions: rows.reduce((sum, r) => sum + (r.enabled_rules_targeting > 0 ? r.sessions : 0), 0),
+    governed_sessions: rows.reduce(
+      (sum, r) => sum + (r.enabled_rules_targeting > 0 ? r.sessions : 0),
+      0,
+    ),
     projects: rows,
     total_projects: rows.length,
     total_sessions: rows.reduce((sum, r) => sum + r.sessions, 0),
@@ -76,7 +79,7 @@ describe("ProjectInventoryTable", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   afterEach(() => {
-    if (component) unmount(component);
+    if (component) void unmount(component);
     component = undefined;
     document.body.innerHTML = "";
   });
@@ -85,7 +88,7 @@ describe("ProjectInventoryTable", () => {
     const inventory = makeInventory(fixtureRows());
     component = mount(ProjectInventoryTable, {
       target: document.body,
-      props: { inventory, selectedKey: "", onSelect: () => {} },
+      props: { inventory, selectedKeys: [], onSelect: () => {}, onClear: () => {} },
     });
     await tick();
 
@@ -96,7 +99,7 @@ describe("ProjectInventoryTable", () => {
     const inventory = makeInventory(fixtureRows());
     component = mount(ProjectInventoryTable, {
       target: document.body,
-      props: { inventory, selectedKey: "", onSelect: () => {} },
+      props: { inventory, selectedKeys: [], onSelect: () => {}, onClear: () => {} },
     });
     await tick();
 
@@ -112,7 +115,7 @@ describe("ProjectInventoryTable", () => {
     const inventory = makeInventory(fixtureRows());
     component = mount(ProjectInventoryTable, {
       target: document.body,
-      props: { inventory, selectedKey: "", onSelect: () => {} },
+      props: { inventory, selectedKeys: [], onSelect: () => {}, onClear: () => {} },
     });
     await tick();
 
@@ -129,25 +132,24 @@ describe("ProjectInventoryTable", () => {
     expect(document.body.textContent).toContain(m.data_no_matches());
   });
 
-  it("renders an em dash for null first/last activity", async () => {
+  it("renders an em dash for missing last activity", async () => {
     const inventory = makeInventory(fixtureRows());
     component = mount(ProjectInventoryTable, {
       target: document.body,
-      props: { inventory, selectedKey: "", onSelect: () => {} },
+      props: { inventory, selectedKeys: [], onSelect: () => {}, onClear: () => {} },
     });
     await tick();
 
     const betaRow = document.querySelector('.project-row[data-project-key="beta"]');
     const cells = betaRow?.querySelectorAll("td");
-    expect(cells?.[5]?.textContent?.trim()).toBe("—");
-    expect(cells?.[6]?.textContent?.trim()).toBe("—");
+    expect(cells?.[4]?.textContent?.trim()).toBe("—");
   });
 
   it("renders rule annotations with accessible titles", async () => {
     const inventory = makeInventory(fixtureRows());
     component = mount(ProjectInventoryTable, {
       target: document.body,
-      props: { inventory, selectedKey: "", onSelect: () => {} },
+      props: { inventory, selectedKeys: [], onSelect: () => {}, onClear: () => {} },
     });
     await tick();
 
@@ -170,7 +172,7 @@ describe("ProjectInventoryTable", () => {
     const inventory = makeInventory(fixtureRows());
     component = mount(ProjectInventoryTable, {
       target: document.body,
-      props: { inventory, selectedKey: "gamma", onSelect },
+      props: { inventory, selectedKeys: ["gamma"], onSelect, onClear: () => {} },
     });
     await tick();
 
@@ -182,7 +184,7 @@ describe("ProjectInventoryTable", () => {
     expect(betaRow?.getAttribute("aria-selected")).toBe("false");
 
     await fireEvent.click(betaRow as Element);
-    expect(onSelect).toHaveBeenCalledWith("beta");
+    expect(onSelect).toHaveBeenCalledWith("beta", ["beta"]);
   });
 
   it("renders a localized fallback for empty labels that stays filterable and selectable", async () => {
@@ -193,15 +195,13 @@ describe("ProjectInventoryTable", () => {
     ]);
     component = mount(ProjectInventoryTable, {
       target: document.body,
-      props: { inventory, selectedKey: "", onSelect },
+      props: { inventory, selectedKeys: [], onSelect, onClear: () => {} },
     });
     await tick();
 
     const blankRow = document.querySelector('.project-row[data-project-key="blank"]');
     expect(blankRow?.querySelector(".label-text")?.textContent).toBe(m.shared_unknown());
-    expect(blankRow?.querySelector(".col-project")?.getAttribute("title")).toBe(
-      m.shared_unknown(),
-    );
+    expect(blankRow?.querySelector(".col-project")?.getAttribute("title")).toBe(m.shared_unknown());
 
     const filterInput = screen.getByRole("textbox", { name: m.data_filter_projects() });
     await fireEvent.input(filterInput, { target: { value: m.shared_unknown() } });
@@ -212,7 +212,7 @@ describe("ProjectInventoryTable", () => {
     await fireEvent.click(
       document.querySelector('.project-row[data-project-key="blank"]') as Element,
     );
-    expect(onSelect).toHaveBeenCalledWith("blank");
+    expect(onSelect).toHaveBeenCalledWith("blank", ["blank"]);
   });
 
   it("presents the unknown sentinel as unclassified while preserving its key", async () => {
@@ -222,19 +222,15 @@ describe("ProjectInventoryTable", () => {
     ]);
     component = mount(ProjectInventoryTable, {
       target: document.body,
-      props: { inventory, selectedKey: "", onSelect },
+      props: { inventory, selectedKeys: [], onSelect, onClear: () => {} },
     });
     await tick();
 
-    const row = document.querySelector(
-      '.project-row[data-project-key="unknown-key"]',
-    );
-    expect(row?.querySelector(".label-text")?.textContent).toBe(
-      m.data_project_unclassified(),
-    );
+    const row = document.querySelector('.project-row[data-project-key="unknown-key"]');
+    expect(row?.querySelector(".label-text")?.textContent).toBe(m.data_project_unclassified());
 
     await fireEvent.click(row as Element);
-    expect(onSelect).toHaveBeenCalledWith("unknown-key");
+    expect(onSelect).toHaveBeenCalledWith("unknown-key", ["unknown-key"]);
   });
 
   it("is keyboard-activatable via Enter and Space", async () => {
@@ -242,17 +238,37 @@ describe("ProjectInventoryTable", () => {
     const inventory = makeInventory(fixtureRows());
     component = mount(ProjectInventoryTable, {
       target: document.body,
-      props: { inventory, selectedKey: "", onSelect },
+      props: { inventory, selectedKeys: [], onSelect, onClear: () => {} },
     });
     await tick();
 
     const betaRow = document.querySelector('.project-row[data-project-key="beta"]') as HTMLElement;
     await fireEvent.keyDown(betaRow, { key: "Enter" });
-    expect(onSelect).toHaveBeenCalledWith("beta");
+    expect(onSelect).toHaveBeenCalledWith("beta", ["beta"]);
 
     onSelect.mockClear();
-    const alphaRow = document.querySelector('.project-row[data-project-key="alpha"]') as HTMLElement;
+    const alphaRow = document.querySelector(
+      '.project-row[data-project-key="alpha"]',
+    ) as HTMLElement;
     await fireEvent.keyDown(alphaRow, { key: " " });
-    expect(onSelect).toHaveBeenCalledWith("alpha");
+    expect(onSelect).toHaveBeenCalledWith("alpha", ["alpha"]);
+  });
+
+  it("selects the visible range between a click and a Shift-click", async () => {
+    const onSelect = vi.fn();
+    const inventory = makeInventory(fixtureRows());
+    component = mount(ProjectInventoryTable, {
+      target: document.body,
+      props: { inventory, selectedKeys: [], onSelect, onClear: () => {} },
+    });
+    await tick();
+
+    const betaRow = document.querySelector('.project-row[data-project-key="beta"]');
+    const alphaRow = document.querySelector('.project-row[data-project-key="alpha"]');
+    await fireEvent.click(betaRow as Element);
+    expect(await fireEvent.mouseDown(alphaRow as Element, { shiftKey: true })).toBe(false);
+    await fireEvent.click(alphaRow as Element, { shiftKey: true });
+
+    expect(onSelect).toHaveBeenLastCalledWith("alpha", ["beta", "gamma", "alpha"]);
   });
 });

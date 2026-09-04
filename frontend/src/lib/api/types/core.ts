@@ -22,6 +22,7 @@ export interface QualitySignals {
 export interface Session {
   id: string;
   project: string;
+  project_assigned?: boolean;
   machine: string;
   cwd?: string;
   agent: string;
@@ -92,6 +93,7 @@ export interface SidebarSessionIndexRow {
   parent_session_id?: string | null;
   relationship_type?: string | null;
   project: string;
+  project_assigned?: boolean;
   machine: string;
   agent: string;
   agent_label?: string | null;

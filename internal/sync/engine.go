@@ -4533,6 +4533,43 @@ func (e *Engine) ApplyWorktreeProjectMappings(
 	return result, err
 }
 
+// AssignSessionProject serializes a one-session project override with parser
+// and watcher writes, then publishes the changed session inventory.
+func (e *Engine) AssignSessionProject(
+	ctx context.Context,
+	sessionID string,
+	project string,
+) (db.SessionProjectAssignment, error) {
+	var assignment db.SessionProjectAssignment
+	err := e.RunExclusive(func() error {
+		var err error
+		assignment, err = e.db.AssignSessionProject(ctx, sessionID, project)
+		return err
+	})
+	if err == nil {
+		e.emit("sessions")
+	}
+	return assignment, err
+}
+
+// ClearSessionProjectAssignment serializes removal of a one-session override
+// with parser and watcher writes, then publishes the changed session inventory.
+func (e *Engine) ClearSessionProjectAssignment(
+	ctx context.Context,
+	sessionID string,
+) (db.ClearedSessionProjectAssignment, error) {
+	var cleared db.ClearedSessionProjectAssignment
+	err := e.RunExclusive(func() error {
+		var err error
+		cleared, err = e.db.ClearSessionProjectAssignment(ctx, sessionID)
+		return err
+	})
+	if err == nil {
+		e.emit("sessions")
+	}
+	return cleared, err
+}
+
 // SyncAll discovers and syncs all session files from all agents.
 func (e *Engine) SyncAll(
 	ctx context.Context, onProgress ProgressFunc,

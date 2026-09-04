@@ -320,6 +320,7 @@ type worktreeLayout struct {
 	marker              string
 	projectPart         int
 	minParts            int
+	projectBeforeMarker bool
 	roborevCIBareLayout bool
 	gitFallbackOnly     bool
 }
@@ -352,6 +353,11 @@ func init() {
 		},
 		// ~/.codex/worktrees/$WORKTREE_ID/$REPO[/...]
 		{marker: sep + ".codex" + sep + "worktrees" + sep, projectPart: 1, minParts: 2},
+		// $REPO/.claude/worktrees/$WORKTREE_ID[/...]
+		{
+			marker:   sep + ".claude" + sep + "worktrees" + sep,
+			minParts: 1, projectBeforeMarker: true,
+		},
 		// roborev CI: ~/.roborev/ci-worktrees/$REPO/roborev-ci-<jobID>-<id>[/...].
 		// roborev nests the ephemeral worktree under a repo-named parent so the
 		// owning project survives the generated leaf name. Anchored to the
@@ -381,7 +387,7 @@ func projectFromWorktreeLayouts(path string, includeGitFallbacks bool) string {
 		if layout.gitFallbackOnly && !includeGitFallbacks {
 			continue
 		}
-		_, rest, found := strings.Cut(path, layout.marker)
+		before, rest, found := strings.Cut(path, layout.marker)
 		if !found {
 			continue
 		}
@@ -391,6 +397,13 @@ func projectFromWorktreeLayouts(path string, includeGitFallbacks bool) string {
 		}
 		if len(parts) < layout.minParts {
 			continue
+		}
+		if layout.projectBeforeMarker {
+			project := filepath.Base(before)
+			if isInvalidPathBase(project) || isInvalidPathBase(parts[0]) {
+				continue
+			}
+			return project
 		}
 		project := parts[layout.projectPart]
 		if isInvalidPathBase(project) {

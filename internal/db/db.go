@@ -450,6 +450,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // cache/last_conversations.json workspace mapping. Existing rows need
 // re-parsing to receive the exact approved workspace and prefer linked Git
 // identity when normalizing worktree project labels.)
+// (96: Claude repository-local worktrees. Existing sessions launched under
+// REPO/.claude/worktrees/<generated-name> need re-parsing so their project is
+// the owning repository rather than the generated worktree name.)
 // (97: Tool-result summaries a single result event already stores are no
 // longer written to tool_calls.result_content; result_content_length still
 // records the summary size and readers re-derive the text from the event.
@@ -1613,6 +1616,7 @@ var readOnlyRequiredTables = []string{
 	"starred_sessions",
 	"excluded_sessions",
 	"worktree_project_mappings",
+	"session_project_assignments",
 	"archive_metadata",
 	"background_migrations",
 	"project_identity_observations",
@@ -1948,6 +1952,14 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{
+			"session_project_assignments", "original_project",
+			"ALTER TABLE session_project_assignments ADD COLUMN original_project TEXT NOT NULL DEFAULT '';" +
+				" UPDATE session_project_assignments SET original_project = COALESCE(" +
+				"NULLIF((SELECT project FROM session_project_identity_snapshots " +
+				"WHERE session_id = session_project_assignments.session_id), ''), project) " +
+				"WHERE original_project = ''",
+		},
 		{
 			"model_pricing", "cache_creation_1h_microdollars_per_mtok",
 			"ALTER TABLE model_pricing ADD COLUMN cache_creation_1h_microdollars_per_mtok INTEGER NOT NULL DEFAULT 0",
@@ -2797,9 +2809,41 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 			ON worktree_project_mappings(machine, enabled, path_prefix);
 		CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_project
 			ON worktree_project_mappings(machine, project);
+		CREATE TABLE IF NOT EXISTS session_project_assignments (
+			session_id       TEXT PRIMARY KEY,
+			project          TEXT NOT NULL,
+			original_project TEXT NOT NULL,
+			created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+		CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_project_assignment_insert
+		AFTER INSERT ON sessions
+		WHEN EXISTS (
+			SELECT 1 FROM session_project_assignments WHERE session_id = NEW.id
+		)
+		BEGIN
+			UPDATE sessions
+			SET project = (
+				SELECT project FROM session_project_assignments WHERE session_id = NEW.id
+			)
+			WHERE id = NEW.id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_project_assignment_update
+		AFTER UPDATE OF project ON sessions
+		WHEN EXISTS (
+			SELECT 1 FROM session_project_assignments
+			WHERE session_id = NEW.id AND project != NEW.project
+		)
+		BEGIN
+			UPDATE sessions
+			SET project = (
+				SELECT project FROM session_project_assignments WHERE session_id = NEW.id
+			)
+			WHERE id = NEW.id;
+		END;
 	`); err != nil {
 		return fmt.Errorf(
-			"creating worktree_project_mappings: %w", err,
+			"creating project mapping tables: %w", err,
 		)
 	}
 	if _, err := w.ExecContext(ctx, `

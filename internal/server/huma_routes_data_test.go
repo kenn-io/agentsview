@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -59,6 +60,46 @@ func TestDataProjectRulesEndpoint(t *testing.T) {
 	require.Len(t, rules.Rules, 1)
 	assert.Equal(t, "/work", rules.Rules[0].PathPrefix)
 	assert.Equal(t, 1, rules.Rules[0].GovernedSessions)
+}
+
+func TestDataProjectSessionsEndpointUsesExactOpaqueIdentity(t *testing.T) {
+	te := setup(t)
+	const targetLabel = "https://one.example/project"
+	const otherLabel = "https://two.example/project"
+	te.seedSession(t, "target-root", targetLabel, 1, func(s *db.Session) {
+		s.Machine = "host-a.example"
+		s.Cwd = "/srv/projects/project-a"
+	})
+	te.seedSession(t, "target-child", targetLabel, 1, func(s *db.Session) {
+		s.Machine = "host-a.example"
+		s.Cwd = "/srv/projects/project-a"
+		s.ParentSessionID = new("target-root")
+		s.RelationshipType = "subagent"
+	})
+	te.seedSession(t, "other-child", otherLabel, 1, func(s *db.Session) {
+		s.Machine = "host-a.example"
+		s.Cwd = "/srv/projects/project-b"
+		s.ParentSessionID = new("target-root")
+		s.RelationshipType = "subagent"
+	})
+
+	projects, err := te.db.BuildProjectIdentityMap(
+		context.Background(), []string{targetLabel, otherLabel},
+	)
+	require.NoError(t, err)
+	require.Empty(t, export.SafeProjectDisplayLabel(targetLabel))
+	require.Empty(t, export.SafeProjectDisplayLabel(otherLabel),
+		"the transport labels deliberately collide after sanitization")
+
+	w := te.get(t, "/api/v1/data/projects/"+
+		url.PathEscape(projects[targetLabel].ProjectKey)+"/sessions")
+	assertStatus(t, w, http.StatusOK)
+	var page db.SessionPage
+	decodeInto(t, w, &page)
+	require.Len(t, page.Sessions, 2)
+	assert.ElementsMatch(t, []string{"target-root", "target-child"}, []string{
+		page.Sessions[0].ID, page.Sessions[1].ID,
+	})
 }
 
 func TestDataProjectRulesDefaultsToLocalMachine(t *testing.T) {

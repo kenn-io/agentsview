@@ -366,7 +366,7 @@ func TestStoreGetSidebarSessionIndexComputesIsTeammate(
 	assert.False(t, rows["normal"].IsTeammate, "normal IsTeammate")
 }
 
-func TestStoreGetSidebarSessionIndexReturnsDisplayName(
+func TestStoreGetSidebarSessionIndexReturnsDisplayNameAndProjectAssignment(
 	t *testing.T,
 ) {
 	pgURL := testPGURL(t)
@@ -379,6 +379,10 @@ func TestStoreGetSidebarSessionIndexReturnsDisplayName(
 	) {
 		s.displayName = &displayName
 	})
+	_, err := store.DB().Exec(
+		`UPDATE sessions SET project_assigned = TRUE WHERE id = $1`, "named",
+	)
+	require.NoError(t, err)
 
 	index, err := store.GetSidebarSessionIndex(
 		context.Background(), db.SessionFilter{},
@@ -388,6 +392,7 @@ func TestStoreGetSidebarSessionIndexReturnsDisplayName(
 	got := index.Sessions[0].DisplayName
 	require.NotNil(t, got)
 	assert.Equal(t, displayName, *got)
+	assert.True(t, index.Sessions[0].ProjectAssigned)
 }
 
 func TestStoreGetSidebarSessionIndexExcludeAutomated(

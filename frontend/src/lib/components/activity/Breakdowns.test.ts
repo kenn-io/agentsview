@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
+vi.mock("../../feature-flags.js", () => ({
+  PROJECT_MAPPING_WORKSPACE_ENABLED: true,
+}));
 import Breakdowns from "./Breakdowns.svelte";
 import { router } from "../../stores/router.svelte.js";
 import type { Report } from "../../api/types.js";
@@ -198,6 +201,23 @@ describe("Breakdowns", () => {
     // Model/agent panels render plain spans, and no action buttons remain.
     expect(target.querySelectorAll("span.bar-label")).toHaveLength(2);
     expect(target.querySelectorAll(".bar-row button")).toHaveLength(0);
+    unmount(component);
+  });
+
+  it("renders project rows as plain labels when the workspace is disabled", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, {
+      target,
+      props: { report: makeReport(), projectWorkspaceEnabled: false },
+    });
+    await tick();
+
+    expect(target.querySelectorAll("a.bar-label")).toHaveLength(0);
+    const labels = [...target.querySelectorAll("span.bar-label")].map(
+      (element) => element.textContent?.trim(),
+    );
+    expect(labels).toEqual(["alpha", "beta"]);
     unmount(component);
   });
 

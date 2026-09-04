@@ -68,7 +68,11 @@ const sessionBaseCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
-	deleted_at, termination_status, transcript_revision, created_at`
+	deleted_at, termination_status, transcript_revision, created_at,
+	EXISTS (
+		SELECT 1 FROM session_project_assignments spa
+		WHERE spa.session_id = sessions.id
+	) AS project_assigned`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -135,7 +139,11 @@ const sessionFullCols = `id, project, machine, agent,
 	termination_status, file_path, file_size, file_mtime,
 	next_ordinal, last_entry_uuid,
 	file_inode, file_device,
-	file_hash, local_modified_at, transcript_revision, created_at`
+	file_hash, local_modified_at, transcript_revision, created_at,
+	EXISTS (
+		SELECT 1 FROM session_project_assignments spa
+		WHERE spa.session_id = sessions.id
+	) AS project_assigned`
 
 const (
 	// DefaultSessionLimit is the default number of sessions returned.
@@ -189,7 +197,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus,
-		&s.TranscriptRevision, &s.CreatedAt,
+		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath)
@@ -348,6 +356,7 @@ type Session struct {
 	DataVersion                 int             `json:"-"`
 	Cwd                         string          `json:"cwd,omitempty"`
 	GitBranch                   string          `json:"git_branch,omitempty"`
+	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
 	SourceSessionID             string          `json:"source_session_id,omitempty"`
 	SourceVersion               string          `json:"source_version,omitempty"`
 	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
@@ -503,7 +512,11 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
-	Project        string
+	Project string
+	// ProjectLabels carries exact internal project labels resolved from an
+	// opaque project key. A non-nil slice takes precedence over Project and is
+	// never parsed as user-facing transport input.
+	ProjectLabels  []string
 	ExcludeProject string // exclude sessions with this project name
 	Machine        string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
@@ -637,6 +650,7 @@ type SidebarSessionIndexRow struct {
 	ParentSessionID    *string `json:"parent_session_id,omitempty"`
 	RelationshipType   string  `json:"relationship_type,omitempty"`
 	Project            string  `json:"project"`
+	ProjectAssigned    bool    `json:"project_assigned,omitempty"`
 	Machine            string  `json:"machine"`
 	Agent              string  `json:"agent"`
 	AgentLabel         string  `json:"agent_label,omitempty"`
@@ -787,6 +801,10 @@ func (db *DB) GetSidebarSessionIndex(
 			parent_session_id,
 			relationship_type,
 			project,
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = sessions.id
+			) AS project_assigned,
 			machine,
 			agent,
 			agent_label,
@@ -828,6 +846,7 @@ func (db *DB) GetSidebarSessionIndex(
 			&row.ParentSessionID,
 			&row.RelationshipType,
 			&row.Project,
+			&row.ProjectAssigned,
 			&row.Machine,
 			&row.Agent,
 			&row.AgentLabel,
@@ -1044,6 +1063,10 @@ func (db *DB) getSidebarSessionIndexPage(
 			s.parent_session_id,
 			s.relationship_type,
 			s.project,
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = s.id
+			) AS project_assigned,
 			s.machine,
 			s.agent,
 			s.agent_label,
@@ -1080,6 +1103,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			&row.ParentSessionID,
 			&row.RelationshipType,
 			&row.Project,
+			&row.ProjectAssigned,
 			&row.Machine,
 			&row.Agent,
 			&row.AgentLabel,
@@ -1202,7 +1226,7 @@ func (db *DB) getSessionFullUncoalesced(
 		&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 		&s.FileInode, &s.FileDevice,
 		&s.FileHash, &s.LocalModifiedAt,
-		&s.TranscriptRevision, &s.CreatedAt,
+		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -5738,7 +5762,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 			&s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt,
-			&s.TranscriptRevision, &s.CreatedAt,
+			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)
@@ -5847,7 +5871,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 			&s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt,
-			&s.TranscriptRevision, &s.CreatedAt,
+			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)
