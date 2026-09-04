@@ -732,8 +732,78 @@ func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
 	assert.Equal(t, "session-store", usage[0].Source)
 	assert.Equal(t, 80, usage[0].InputTokens)
 	assert.Equal(t, 50, usage[0].OutputTokens)
-	assert.Nil(t, usage[0].Cost)
+	require.NotNil(t, usage[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.001"), *usage[0].Cost)
+	assert.Equal(t, copilotReportedCostSource, usage[0].CostSource)
 	assert.Equal(t, "session-store:42", usage[0].DedupKey)
+}
+
+func TestParseCopilotSession_IncompatibleStoreRetainsShutdownUsage(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "session-store.db")
+	store, err := sql.Open("sqlite3", storePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.Exec(`CREATE TABLE unrelated (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"store-unavailable"},"timestamp":"2026-09-04T17:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-sol","outputTokens":3},"timestamp":"2026-09-04T17:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":100000000,"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":10,"outputTokens":3}}}},"timestamp":"2026-09-04T17:00:03Z"}`,
+	)
+	logs := captureLog(t)
+
+	sess, _, usage, err := newCopilotTestProvider(t).parseSessionWithStore(
+		path, "local", storePath,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, usage, 1)
+	assert.Equal(t, "shutdown", usage[0].Source)
+	require.NotNil(t, usage[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.001"), *usage[0].Cost)
+	assertLogContains(t, logs, "copilot session store unavailable", "retaining transcript usage")
+}
+
+func TestCopilotProviderStoreChangeRefreshesSession(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "store-fresh"
+	eventsPath := filepath.Join(root, copilotStateDir, sessionID, "events.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(eventsPath), 0o755))
+	require.NoError(t, os.WriteFile(eventsPath, []byte(
+		`{"type":"session.start","data":{"sessionId":"store-fresh"},"timestamp":"2026-09-04T17:00:00Z"}`+"\n"+
+			`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`+"\n",
+	), 0o644))
+	storePath := filepath.Join(root, "session-store.db")
+	require.NoError(t, os.WriteFile(storePath, []byte("before"), 0o644))
+
+	provider := newCopilotTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	before, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(storePath, []byte("after store update"), 0o644))
+	after, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	assert.NotEqual(t, before.Hash, after.Hash)
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 2)
+	assert.Equal(t, []string{"session-store.db", "session-store.db-wal"},
+		plan.Roots[1].IncludeGlobs)
+
+	for _, changedPath := range []string{storePath, storePath + "-wal"} {
+		changed, err := provider.SourcesForChangedPath(context.Background(),
+			ChangedPathRequest{Path: changedPath, EventKind: "write", WatchRoot: root})
+		require.NoError(t, err)
+		require.Len(t, changed, 1)
+		assert.Equal(t, eventsPath, changed[0].DisplayPath)
+	}
 }
 
 // parseCopilotFull calls ParseCopilotSession and returns all four values.

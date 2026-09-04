@@ -598,10 +598,14 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
+	require.Len(t, plan.Roots, 2)
 	assert.Equal(t, filepath.Join(root, copilotStateDir), plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"*.jsonl", "workspace.yaml"}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, root, plan.Roots[1].Path)
+	assert.False(t, plan.Roots[1].Recursive)
+	assert.Equal(t, []string{"session-store.db", "session-store.db-wal"},
+		plan.Roots[1].IncludeGlobs)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
