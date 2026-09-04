@@ -737,6 +737,7 @@ func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
 	require.NotNil(t, usage[0].Cost)
 	assert.Equal(t, money.MustParseDollars("0.001"), *usage[0].Cost)
 	assert.Equal(t, copilotReportedCostSource, usage[0].CostSource)
+	assert.Equal(t, "2026-09-04T17:00:03Z", usage[0].OccurredAt)
 	assert.Equal(t, "session-store:42", usage[0].DedupKey)
 }
 
@@ -804,6 +805,8 @@ func TestCopilotProviderStoreChangeRefreshesSession(t *testing.T) {
 	), 0o644))
 	storePath := filepath.Join(root, "session-store.db")
 	require.NoError(t, os.WriteFile(storePath, []byte("before"), 0o644))
+	storeInfo, err := os.Stat(storePath)
+	require.NoError(t, err)
 
 	provider := newCopilotTestProvider(t, root)
 	hasher, ok := any(provider).(MultiFileStatHasher)
@@ -817,12 +820,24 @@ func TestCopilotProviderStoreChangeRefreshesSession(t *testing.T) {
 	require.NoError(t, err)
 	beforeStatHash := hasher.ComputeMultiFileStatHash(eventsPath)
 
-	require.NoError(t, os.WriteFile(storePath, []byte("after store update"), 0o644))
+	require.NoError(t, os.WriteFile(storePath, []byte("after!"), 0o644))
+	require.NoError(t, os.Chtimes(
+		storePath, storeInfo.ModTime(), storeInfo.ModTime(),
+	))
+	afterStoreInfo, err := os.Stat(storePath)
+	require.NoError(t, err)
+	assert.Equal(t, storeInfo.Size(), afterStoreInfo.Size())
+	assert.Equal(t, storeInfo.ModTime(), afterStoreInfo.ModTime())
 	after, err := provider.Fingerprint(context.Background(), sources[0])
 	require.NoError(t, err)
 
-	assert.NotEqual(t, before.Hash, after.Hash)
-	assert.NotEqual(t, beforeStatHash, hasher.ComputeMultiFileStatHash(eventsPath))
+	afterStatHash := hasher.ComputeMultiFileStatHash(eventsPath)
+	if beforeStatHash != 0 {
+		assert.NotEqual(t, beforeStatHash, afterStatHash,
+			"a ctime-aware stat digest must detect a same-size, mtime-preserving store update")
+		assert.NotEqual(t, before.Hash, after.Hash,
+			"the final fingerprint must retain ctime-aware store changes")
+	}
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)

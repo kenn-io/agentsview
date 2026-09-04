@@ -384,6 +384,11 @@ func (s copilotSourceSet) Fingerprint(
 			return SourceFingerprint{}, err
 		}
 	}
+	if _, err := fmt.Fprintf(
+		h, "stat-digest\x00%x\x00", CopilotCompositeStatHash(path),
+	); err != nil {
+		return SourceFingerprint{}, err
+	}
 	fingerprint := SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
 		Size:    size,
