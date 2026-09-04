@@ -26,9 +26,8 @@ interface AppSettings extends Omit<
   chart_palette: ChartPalette;
 }
 
-export interface SessionProvider extends Omit<SessionProviderResponse, "dirs" | "homes"> {
+export interface SessionProvider extends Omit<SessionProviderResponse, "dirs"> {
   dirs: string[];
-  homes: string[];
 }
 
 /** Build an actionable message for a 403 from the settings API. A

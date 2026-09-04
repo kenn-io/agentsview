@@ -360,6 +360,7 @@ export * from "./setGithubConfigResponse.ts";
 export * from "./settingsResponse.ts";
 export * from "./settingsResponseAgentDirs.ts";
 export * from "./settingsUpdateRequest.ts";
+export * from "./settingsUpdateRequestAgentHomes.ts";
 export * from "./starredResponse.ts";
 export * from "./syncAnomalyStats.ts";
 export * from "./syncAnomalyStatsGenMetadataWithoutUsageByAgent.ts";
