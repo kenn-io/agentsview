@@ -237,13 +237,22 @@ type usageStatuslineReport struct {
 	Agent string      `json:"agent,omitempty"`
 }
 
+func usageDateForTimezone(now time.Time, timezone string) string {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	return now.In(loc).Format("2006-01-02")
+}
+
 func runUsageStatusline(cfg UsageStatuslineConfig) {
-	today := time.Now().Format("2006-01-02")
+	timezone := localTimezone()
+	today := usageDateForTimezone(time.Now(), timezone)
 	filter := db.UsageFilter{
 		From:     today,
 		To:       today,
 		Agent:    cfg.Agent,
-		Timezone: localTimezone(),
+		Timezone: timezone,
 	}
 
 	ctx := context.Background()

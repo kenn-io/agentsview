@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thlib/go-timezone-local/tzlocal"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/cursorusage"
 	"go.kenn.io/agentsview/internal/db"
@@ -605,6 +606,9 @@ func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) 
 	oldLocal := time.Local
 	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
 	t.Cleanup(func() { time.Local = oldLocal })
+	expected, err := tzlocal.LocalTZ()
+	require.NoError(t, err)
+	require.NotEmpty(t, expected)
 
 	var gotTimezones []string
 	ts := httptest.NewServer(http.HandlerFunc(func(
@@ -617,7 +621,7 @@ func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) 
 			writeJSONResponse(w, `{"error":"invalid timezone: Eastern Standard Time"}`)
 			return
 		}
-		if tz != "America/New_York" {
+		if tz != expected {
 			w.WriteHeader(http.StatusBadRequest)
 			writeJSONResponse(w, `{"error":"invalid timezone: `+tz+`"}`)
 			return
@@ -641,8 +645,15 @@ func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) 
 		}, NoDefaultRange: true})
 	require.NoError(t, err)
 	require.Len(t, head.Daily, 1)
-	assert.Equal(t, "America/New_York", gotTimezones[1])
+	assert.Equal(t, expected, gotTimezones[1])
 	t.Logf("head: timezone=%q status=200 daily=%d", gotTimezones[1], len(head.Daily))
+}
+
+func TestUsageDateForTimezoneFallsBackToUTC(t *testing.T) {
+	now := time.Date(2026, 7, 3, 22, 30, 0, 0, time.FixedZone("local", -5*60*60))
+	assert.Equal(t, "2026-07-03", usageDateForTimezone(now, "America/New_York"))
+	assert.Equal(t, "2026-07-04", usageDateForTimezone(now, "UTC"))
+	assert.Equal(t, "2026-07-04", usageDateForTimezone(now, "not/a-zone"))
 }
 
 func TestRunUsageDailyDefaultsToMappedLocalTimezone(t *testing.T) {
