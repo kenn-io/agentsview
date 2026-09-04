@@ -355,6 +355,11 @@ func rawSyncProvidersAndRoots(
 	var providers []parser.Provider
 	rootIndex := make(map[string]int)
 	var roots []syncpkg.WatchRoot
+	// raw-sync builds providers without a sync engine, so install the Codex
+	// root aliases here or a second home's sidecars are never watched.
+	if aliases := cfg.RootAliases[parser.AgentCodex]; len(aliases) > 0 {
+		parser.SetCodexRootAliases(aliases)
+	}
 	for _, factory := range cfg.LocalProviderFactories() {
 		if factory.Capabilities().RawCapture.Support != parser.CapabilitySupported {
 			continue

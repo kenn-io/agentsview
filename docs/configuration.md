@@ -890,6 +890,10 @@ leave unlinked for AgentsView's sake.
   are scanned once. The first configured spelling is the effective root; the
   others become aliases of it. A matching `[[session_sources]]` entry still
   supplies the machine label.
+- Sharing one directory links the whole home. If a second home links only
+  `sessions/` and keeps its own `archived_sessions/`, both homes' sidecars
+  still apply to every transcript, live or archived. Homes that share nothing
+  stay independent.
 - Codex sidecars are read from the effective root's home and from every alias
   home. Activity hints come from each distinct `history.jsonl`; a linked copy is
   read once. Thread titles concatenate every `session_index.jsonl`, and when two

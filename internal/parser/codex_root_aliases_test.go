@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -123,4 +125,44 @@ func TestCodexAliasHomesShareHintsAndWatchIndexes(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []string{primary, alias}, shallow)
+}
+
+func TestCodexRawCaptureIncludesAliasHomeIndexes(t *testing.T) {
+	primary, alias := aliasedCodexHomes(t)
+	const id = "019f0000-0000-7000-8000-000000000009"
+	rollout := filepath.Join(primary, "sessions", "2026", "09", "03",
+		"rollout-2026-09-03T10-00-00-"+id+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(rollout), 0o755))
+	require.NoError(t, os.WriteFile(rollout,
+		[]byte(`{"timestamp":"2026-09-03T10:00:00Z","type":"session_meta","payload":{"id":"`+id+`","cwd":"/work"}}`+"\n"),
+		0o600))
+	writeIndex(t, primary, `{"id":"`+id+`","thread_name":"primary"}`+"\n", time.Now())
+	writeIndex(t, alias, `{"id":"`+id+`","thread_name":"alias"}`+"\n", time.Now())
+
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{
+		Roots: []string{filepath.Join(primary, "sessions")},
+	})
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, id)
+
+	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, source)
+	require.NoError(t, err)
+	require.True(t, supported)
+	byLogical := make(map[string]string, len(plan.Entries))
+	for _, entry := range plan.Entries {
+		byLogical[entry.Path] = entry.LocalPath
+	}
+	assert.ElementsMatch(t, []string{
+		"sessions/2026/09/03/rollout-2026-09-03T10-00-00-" + id + ".jsonl",
+		CodexSessionIndexFilename,
+		"alias-homes/1/" + CodexSessionIndexFilename,
+	}, slices.Collect(maps.Keys(byLogical)))
+	// Validation resolves symlinks in local paths, so compare resolved forms.
+	wantAliasIndex, err := filepath.EvalSymlinks(filepath.Join(alias, CodexSessionIndexFilename))
+	require.NoError(t, err)
+	assert.Equal(t, wantAliasIndex, byLogical["alias-homes/1/"+CodexSessionIndexFilename])
+	require.Len(t, plan.SidecarRoots, 1)
+	gotRoot, err := filepath.EvalSymlinks(plan.SidecarRoots[0])
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Dir(wantAliasIndex), gotRoot)
 }
