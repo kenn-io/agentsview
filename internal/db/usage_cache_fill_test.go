@@ -214,7 +214,81 @@ func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
 	}
 	close(releaseOld)
 	require.NoError(t, <-newDone)
-	require.ErrorIs(t, <-oldDone, errUsageCacheSourceChanged)
+	// The requested version still keys the single-flight call, so the newer
+	// version cannot join the older one's in-flight fill. The older caller
+	// itself no longer fails: its extraction reads whatever the archive holds
+	// when its own read transaction opens, and it reports that version back.
+	require.NoError(t, <-oldDone)
+}
+
+func TestUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t *testing.T) {
+	database := usageCandidateFixture(t)
+	snapshot, err := database.captureUsageQuery(
+		t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	var oldVersion usageSourceVersion
+	for _, version := range snapshot.Versions {
+		if version.SessionID == "inside-message" {
+			oldVersion = version
+			break
+		}
+	}
+	require.Equal(t, "inside-message", oldVersion.SessionID)
+	oldExtracted := make(chan struct{})
+	releaseOld := make(chan struct{})
+	var oldExtractions atomic.Int32
+	cache.fill.observer.afterExtract = func(versions []usageSourceVersion) {
+		if versions[0].TranscriptRevision != oldVersion.TranscriptRevision {
+			return
+		}
+		if oldExtractions.Add(1) == 1 {
+			close(oldExtracted)
+			<-releaseOld
+		}
+	}
+	type fillOutcome struct {
+		results map[string]usageFillResult
+		err     error
+	}
+	oldDone := make(chan fillOutcome, 1)
+	go func() {
+		results, fillErr := cache.fill.Ensure(
+			t.Context(), []usageSourceVersion{oldVersion}, 0)
+		oldDone <- fillOutcome{results: results, err: fillErr}
+	}()
+	<-oldExtracted
+	tx, err := database.getWriter().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	_, err = tx.Exec(`UPDATE messages SET token_usage = '{"input_tokens":9}'
+		WHERE session_id = ?`, oldVersion.SessionID)
+	require.NoError(t, err)
+	_, err = tx.Exec(`UPDATE sessions SET transcript_revision = 'newer'
+		WHERE id = ?`, oldVersion.SessionID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	current, err := cache.fill.recheckSourceVersions(
+		t.Context(), []usageSourceVersion{{SessionID: oldVersion.SessionID}})
+	require.NoError(t, err)
+	newVersion := current[oldVersion.SessionID]
+	newResults, err := cache.fill.Ensure(
+		t.Context(), []usageSourceVersion{newVersion}, 0)
+	require.NoError(t, err)
+	close(releaseOld)
+	oldOutcome := <-oldDone
+	require.NoError(t, oldOutcome.err)
+
+	assert.Equal(t, newVersion, newResults[oldVersion.SessionID].source)
+	assert.Equal(t, newVersion, oldOutcome.results[oldVersion.SessionID].source)
+	assert.Equal(t, int32(2), oldExtractions.Load(),
+		"the older fill should re-extract after losing the cache race")
+	var inputTokens int64
+	require.NoError(t, cache.db.QueryRow(`SELECT f.input_tokens
+		FROM usage_facts f JOIN usage_cached_sessions s
+		  ON s.id = f.cached_session_id
+		WHERE s.session_id = ?`, oldVersion.SessionID).Scan(&inputTokens))
+	assert.Equal(t, int64(9), inputTokens)
 }
 
 func TestUsageFillRecheckRestoresReaderBusyTimeout(t *testing.T) {
@@ -248,9 +322,11 @@ func TestUsageCacheFillReportsDeletedSession(t *testing.T) {
 	require.NoError(t, err)
 	version := snapshot.Versions[0]
 
+	// Deletion is now observed by the fill's own archive read transaction, so
+	// the delete has to land before extraction rather than after it.
 	var deleteErr error
 	cache.fill.observer = usageFillObserver{
-		afterExtract: func([]usageSourceVersion) {
+		beforeExtract: func([]usageSourceVersion) {
 			_, deleteErr = database.getWriter().Exec(
 				`DELETE FROM sessions WHERE id = ?`, version.SessionID,
 			)
@@ -262,7 +338,11 @@ func TestUsageCacheFillReportsDeletedSession(t *testing.T) {
 	assert.True(t, results[version.SessionID].Deleted)
 }
 
-func TestUsageCacheFillRetriesChangedFingerprint(t *testing.T) {
+// A source change that lands after extraction used to force a retry and, when
+// it kept happening, fail the fill. The facts now come from a single archive
+// read transaction, so the fill installs that snapshot and reports the version
+// it read; the later write is picked up by its own notification fill.
+func TestUsageCacheFillInstallsExtractedSnapshotDespiteLaterWrite(t *testing.T) {
 	database := usageCandidateFixture(t)
 	snapshot, err := database.captureUsageQuery(
 		context.Background(), UsageFilter{}, usageQueryKindToken,
@@ -289,15 +369,20 @@ func TestUsageCacheFillRetriesChangedFingerprint(t *testing.T) {
 	results, err := cache.fill.Ensure(
 		context.Background(), []usageSourceVersion{version}, 0,
 	)
-	require.ErrorIs(t, err, errUsageCacheSourceChanged)
+	require.NoError(t, err)
 	if stored := mutationErr.Load(); stored != nil {
 		require.NoError(t, stored.(error))
 	}
-	assert.Equal(t, int32(2), mutations.Load())
-	assert.Nil(t, results)
+	assert.Equal(t, int32(1), mutations.Load(), "fill extracted more than once")
+	assert.False(t, results[version.SessionID].Deleted)
+	assert.Equal(t, version, results[version.SessionID].source)
 }
 
-func TestDailyUsageRecapturesChangedFillSource(t *testing.T) {
+// A write that lands after the request's archive snapshot no longer forces a
+// recapture. The answer is exact as of the snapshot the request opened with,
+// which is the intended bounded staleness: the session's own notification fill
+// makes the new state visible to the next request.
+func TestDailyUsageAnswersFromRequestSnapshot(t *testing.T) {
 	database := testDB(t)
 	started := "2026-08-10T08:00:00Z"
 	insertSession(t, database, "moving", "keep", func(session *Session) {
@@ -336,10 +421,13 @@ func TestDailyUsageRecapturesChangedFillSource(t *testing.T) {
 	if stored := mutationErr.Load(); stored != nil {
 		require.NoError(t, stored.(error))
 	}
-	assert.Zero(t, daily.Totals.InputTokens)
+	assert.Equal(t, 1, daily.Totals.InputTokens)
 }
 
-func TestUsageCacheFillBoundsMovingFingerprintRetries(t *testing.T) {
+// A source fingerprint that keeps moving used to exhaust the fill's retry
+// budget and fail. One archive read transaction is now always enough, so the
+// fill extracts once and succeeds no matter how often the session is written.
+func TestUsageCacheFillCompletesUnderContinuousWrites(t *testing.T) {
 	database := usageCandidateFixture(t)
 	snapshot, err := database.captureUsageQuery(
 		context.Background(), UsageFilter{}, usageQueryKindToken,
@@ -357,11 +445,11 @@ func TestUsageCacheFillBoundsMovingFingerprintRetries(t *testing.T) {
 				fmt.Sprintf("moving-%d", n), version.SessionID)
 		},
 	}
-	_, err = cache.fill.Ensure(context.Background(), []usageSourceVersion{version}, 0)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(),
-		"usage cache fill could not verify archive state after 3 attempts")
-	assert.Equal(t, int32(3), mutations.Load())
+	results, err := cache.fill.Ensure(
+		context.Background(), []usageSourceVersion{version}, 0)
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), mutations.Load())
+	assert.False(t, results[version.SessionID].Deleted)
 }
 
 func TestUsageCacheFillTwoHandlesRaceIdempotently(t *testing.T) {

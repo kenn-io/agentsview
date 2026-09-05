@@ -465,7 +465,7 @@ type UnitOffset struct {
 // since != "" restricts the scan to sessions with ended_at >= since (RFC3339
 // or RFC3339Nano) for incremental refresh, comparing parsed timestamps
 // rather than raw strings via SQLite's datetime() so mixed fractional-second
-// precision doesn't produce a wrong ordering (see optionalSinceClause); ""
+// precision doesn't produce a wrong ordering (see sinceSessionScopeClause); ""
 // scans every session. includeAutomated=false additionally excludes
 // automated sessions (sessions.is_automated = 1) using the exact predicate
 // sessionFilterPredicates' ExcludeAutomated scope applies
@@ -490,32 +490,13 @@ func (db *DB) ScanEmbeddableUnits(
 	ctx context.Context, since string, includeAutomated bool,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
-	preds := []string{
-		"m.role IN ('user', 'assistant')",
-		"m.is_system = 0",
-		"s.deleted_at IS NULL",
-		SystemPrefixSQL("m.content", "m.role"),
-	}
-	if !includeAutomated {
-		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
-	}
-
-	query := `
-		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
-		       m.is_sidechain, s.relationship_type, s.parent_session_id,
-		       s.ended_at
-		FROM messages m
-		JOIN sessions s ON s.id = m.session_id
-		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
-		` + optionalSinceClause(since) + `
-		ORDER BY m.session_id, m.ordinal`
-
 	args := []any{}
 	if since != "" {
 		args = append(args, since)
 	}
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := db.getReader().QueryContext(
+		ctx, embeddableUnitsQuery(since, includeAutomated), args...)
 	if err != nil {
 		return "", fmt.Errorf("scanning embeddable units: %w", err)
 	}
@@ -698,9 +679,49 @@ func runUnit(members []unitRow) EmbeddableUnit {
 	}
 }
 
-// optionalSinceClause returns the AND clause restricting the embeddable scan
-// to sessions with ended_at >= since (or ended_at IS NULL), or "" when since
-// is unset. It compares via SQLite's datetime() rather than raw string
+// embeddableUnitsQuery builds ScanEmbeddableUnits' statement. It takes one
+// bound argument (since) when since is set and none otherwise, and always
+// emits rows in (session_id, ordinal) order, which unitReducer depends on.
+func embeddableUnitsQuery(since string, includeAutomated bool) string {
+	preds := []string{
+		"m.role IN ('user', 'assistant')",
+		"m.is_system = 0",
+		"s.deleted_at IS NULL",
+		SystemPrefixSQL("m.content", "m.role"),
+	}
+	if !includeAutomated {
+		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
+	}
+	return `
+		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
+		       m.is_sidechain, s.relationship_type, s.parent_session_id,
+		       s.ended_at
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
+		` + sinceSessionScopeClause(since, includeAutomated) + `
+		ORDER BY m.session_id, m.ordinal`
+}
+
+// sinceSessionScopeClause returns the AND clause restricting the embeddable
+// scan to sessions with ended_at >= since (or ended_at IS NULL), or "" when
+// since is unset.
+//
+// The restriction is written as a session-id IN subquery rather than a
+// predicate on the joined sessions row so SQLite can drive the scan from
+// sessions, which is orders of magnitude smaller than messages. With the
+// predicate on the join, the planner had no indexed way to apply it and
+// scanned every message row (content included) through
+// idx_messages_session_ordinal before discarding almost all of them; an
+// incremental refresh touching eight sessions still read the whole corpus.
+// The IN form makes the candidate session list the outer loop and looks its
+// messages up with SEARCH ... (session_id=?) on that same index, which also
+// keeps the ORDER BY m.session_id, m.ordinal contract satisfied by the index
+// instead of a sort. The subquery repeats the caller's deleted_at and
+// automated-scope predicates so the candidate list stays as small as the
+// outer query's own filters allow.
+//
+// The since comparison uses SQLite's datetime() rather than raw string
 // ordering: RFC3339Nano's variable fractional-second precision (e.g.
 // ended_at values are sometimes stored with milliseconds, sometimes
 // without) makes lexicographic comparison wrong, since "...00.123Z" sorts
@@ -719,12 +740,19 @@ func runUnit(members []unitRow) EmbeddableUnit {
 // the same way via NULLIF(s.ended_at, ""): without it, "" is neither NULL
 // nor >= since, so a changed legacy session would never be rescanned again
 // once any watermark exists.
-func optionalSinceClause(since string) string {
+func sinceSessionScopeClause(since string, includeAutomated bool) string {
 	if since == "" {
 		return ""
 	}
-	return "AND (NULLIF(s.ended_at, '') IS NULL OR " +
-		"datetime(NULLIF(s.ended_at, '')) >= datetime(?))"
+	preds := []string{"es.deleted_at IS NULL"}
+	if !includeAutomated {
+		preds = append(preds, automatedScopePredicate("human", "es.is_automated"))
+	}
+	preds = append(preds, "(NULLIF(es.ended_at, '') IS NULL OR "+
+		"datetime(NULLIF(es.ended_at, '')) >= datetime(?))")
+	return `AND m.session_id IN (
+			SELECT es.id FROM sessions es
+			 WHERE ` + strings.Join(preds, "\n\t\t\t   AND ") + `)`
 }
 
 // endedAfter reports whether candidate is chronologically after current,
@@ -1895,6 +1923,9 @@ func attachToolCallsWithQuerier(
 	if err := attachToolResultEvents(ctx, q, msgs); err != nil {
 		return err
 	}
+	// A summary that only repeated its single event is not stored. Refill it
+	// here, once, so no consumer of a loaded message has to know that.
+	RestoreMessageResultContent(msgs)
 	return nil
 }
 
@@ -2458,22 +2489,55 @@ func (db *DB) SetToolCallSubagentSession(
 	return nil
 }
 
+// soleToolResultEventTx returns a one-element slice when the call
+// identified by (session, owning message ordinal, call index) has exactly
+// one stored result event, and nil for every other count, which never
+// dedups. The key is the same triple attachToolResultEvents and
+// ToolCallResultContentSQL use, so every site agrees on which event a
+// summary is compared against. MIN over the single row is its content.
+func soleToolResultEventTx(
+	tx *sql.Tx, sessionID string, messageOrdinal, callIndex int,
+) ([]ToolResultEvent, error) {
+	var count int
+	var content sql.NullString
+	if err := tx.QueryRow(
+		`SELECT COUNT(*), MIN(content) FROM tool_result_events
+		 WHERE session_id = ?
+		   AND tool_call_message_ordinal = ?
+		   AND call_index = ?`,
+		sessionID, messageOrdinal, callIndex,
+	).Scan(&count, &content); err != nil {
+		return nil, fmt.Errorf(
+			"counting tool result events for %s/%d/%d: %w",
+			sessionID, messageOrdinal, callIndex, err,
+		)
+	}
+	if count != 1 {
+		return nil, nil
+	}
+	return []ToolResultEvent{{Content: content.String}}, nil
+}
+
 func applyToolCallSubagentLinkTx(
 	tx *sql.Tx, sessionID string, link ToolCallSubagentLink,
 	blockedResultCategories map[string]bool,
 ) (bool, error) {
 	var toolName, category, currentSubagent, currentResultContent string
-	var currentResultContentLen int
+	var currentResultContentLen, messageOrdinal, callIndex int
 	if err := tx.QueryRow(
-		`SELECT tool_name, category, COALESCE(subagent_session_id, ''),
-		        COALESCE(result_content_length, 0),
-		        COALESCE(result_content, '')
-		 FROM tool_calls
-		 WHERE session_id = ? AND tool_use_id = ?`,
+		`SELECT tc.tool_name, tc.category,
+		        COALESCE(tc.subagent_session_id, ''),
+		        COALESCE(tc.result_content_length, 0),
+		        COALESCE(tc.result_content, ''),
+		        m.ordinal, COALESCE(tc.call_index, 0)
+		 FROM tool_calls tc
+		 JOIN messages m ON m.id = tc.message_id
+		 WHERE tc.session_id = ? AND tc.tool_use_id = ?`,
 		sessionID, link.ToolUseID,
 	).Scan(
 		&toolName, &category, &currentSubagent,
 		&currentResultContentLen, &currentResultContent,
+		&messageOrdinal, &callIndex,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
@@ -2501,11 +2565,25 @@ func applyToolCallSubagentLinkTx(
 		return err == nil, err
 	}
 	resultContent := link.ResultContent
+	resultContentLen := ResolveResultContentLength(
+		resultContent, link.ResultContentLen,
+	)
 	if blockedResultCategories[category] {
 		resultContent = ""
+	} else {
+		// A linked result carries no events of its own, but the call it
+		// targets may already have one stored. Re-storing a summary the
+		// event repeats would undo the dedup on every incremental pass.
+		sole, err := soleToolResultEventTx(
+			tx, sessionID, messageOrdinal, callIndex,
+		)
+		if err != nil {
+			return false, err
+		}
+		resultContent = DedupToolCallResultSummary(resultContent, sole)
 	}
 	if currentSubagent == storedSubagent &&
-		currentResultContentLen == link.ResultContentLen &&
+		currentResultContentLen == resultContentLen &&
 		currentResultContent == resultContent {
 		return false, nil
 	}
@@ -2514,7 +2592,7 @@ func applyToolCallSubagentLinkTx(
 		 SET subagent_session_id = ?, result_content_length = ?,
 		     result_content = ?
 		 WHERE session_id = ? AND tool_use_id = ?`,
-		nilIfEmpty(currentSubagent), link.ResultContentLen, resultContent,
+		nilIfEmpty(currentSubagent), resultContentLen, resultContent,
 		sessionID, link.ToolUseID,
 	)
 	return err == nil, err
@@ -2690,22 +2768,40 @@ func resolveToolCalls(
 	for i, m := range msgs {
 		for callIdx, tc := range m.ToolCalls {
 			calls = append(calls, ToolCall{
-				MessageID:           ids[i],
-				SessionID:           m.SessionID,
-				ToolName:            tc.ToolName,
-				Category:            tc.Category,
-				ToolUseID:           tc.ToolUseID,
-				InputJSON:           tc.InputJSON,
-				SkillName:           tc.SkillName,
-				ResultContentLength: tc.ResultContentLength,
-				ResultContent:       tc.ResultContent,
-				SubagentSessionID:   tc.SubagentSessionID,
-				FilePath:            tc.FilePath,
-				CallIndex:           callIdx,
+				MessageID: ids[i],
+				SessionID: m.SessionID,
+				ToolName:  tc.ToolName,
+				Category:  tc.Category,
+				ToolUseID: tc.ToolUseID,
+				InputJSON: tc.InputJSON,
+				SkillName: tc.SkillName,
+				ResultContentLength: ResolveResultContentLength(
+					tc.ResultContent, tc.ResultContentLength,
+				),
+				ResultContent: DedupToolCallResultSummary(
+					tc.ResultContent, tc.ResultEvents,
+				),
+				SubagentSessionID: tc.SubagentSessionID,
+				FilePath:          tc.FilePath,
+				CallIndex:         callIdx,
 			})
 		}
 	}
 	return calls
+}
+
+// ResolveResultContentLength returns the length to store for a tool-result
+// summary. Non-empty text is measured; a supplied length is kept only when
+// the text is empty, which is the withheld (blocked category) and deduped
+// (single event holds the text) cases where the length records how large
+// the summary was. The same rule applies to result events. It holds by
+// construction at every write path, so a caller can neither omit the length
+// nor store one that disagrees with the text.
+func ResolveResultContentLength(text string, supplied int) int {
+	if text != "" {
+		return len(text)
+	}
+	return supplied
 }
 
 type toolResultEventRow struct {
@@ -2721,9 +2817,9 @@ func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
 		for callIndex, tc := range m.ToolCalls {
 			for eventIndex, ev := range tc.ResultEvents {
 				ev.EventIndex = eventIndex
-				if ev.ContentLength == 0 {
-					ev.ContentLength = len(ev.Content)
-				}
+				ev.ContentLength = ResolveResultContentLength(
+					ev.Content, ev.ContentLength,
+				)
 				if ev.ToolUseID == "" {
 					ev.ToolUseID = tc.ToolUseID
 				}

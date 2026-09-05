@@ -103,14 +103,14 @@
     candidatesError = "";
     try {
       const response = await callGenerated(
-        () => DataService.getApiV1DataProjectReclassificationCandidates({
-          projectLabel,
-          projectKey,
-        }),
+        (options) => DataService.getApiV1DataProjectReclassificationCandidates({
+          project_label: projectLabel,
+          project_key: projectKey,
+        }, options),
         signal,
       );
       if (!candidatesRead.isCurrent(signal)) return;
-      candidates = (response.candidates ?? []) as DbWorktreeReclassificationCandidate[];
+      candidates = response.candidates ?? [];
       if (candidates.length === 1) selectCandidate(candidates[0]!.id);
     } catch (error) {
       if (isAbortError(error) || !candidatesRead.isCurrent(signal)) return;
@@ -195,7 +195,8 @@
     previewError = "";
     try {
       const result = await callGenerated(
-        () => SettingsService.postApiV1SettingsWorktreeMappingsPreview({ requestBody }),
+        (options) =>
+          SettingsService.postApiV1SettingsWorktreeMappingsPreview(requestBody, options),
         signal,
       );
       if (!previewRead.isCurrent(signal)) return;
@@ -224,7 +225,7 @@
     const target = preview?.normalized_project || requestBody.project;
     try {
       await callGenerated(() =>
-        SettingsService.postApiV1SettingsWorktreeMappingsReclassify({ requestBody }),
+        SettingsService.postApiV1SettingsWorktreeMappingsReclassify(requestBody),
       );
       if (disposed) {
         // The mutation committed even though the editor unmounted mid-flight;

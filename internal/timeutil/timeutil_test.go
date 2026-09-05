@@ -1,6 +1,7 @@
 package timeutil
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -237,4 +238,101 @@ func TestBestEffortLocalTimezone(t *testing.T) {
 				bestEffortLocalTimezone(tt.envTZ, tt.loc))
 		})
 	}
+}
+
+func TestResolveLocalTimezone(t *testing.T) {
+	la, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		envTZ      string
+		loc        *time.Location
+		systemName string
+		systemErr  error
+		want       string
+	}{
+		{
+			name:  "valid environment wins",
+			envTZ: "Europe/Berlin", loc: la,
+			systemName: "America/New_York", want: "Europe/Berlin",
+		},
+		{
+			name:  "accepted alias wins",
+			envTZ: "US/Eastern", loc: la,
+			systemName: "America/New_York", want: "US/Eastern",
+		},
+		{
+			name:  "invalid environment falls through",
+			envTZ: "not/a-zone", loc: berlin,
+			systemName: "America/New_York", want: "Europe/Berlin",
+		},
+		{
+			name:  "UTC is preserved",
+			envTZ: "UTC", loc: la,
+			systemName: "America/New_York", want: "UTC",
+		},
+		{
+			name: "valid local IANA name passes through",
+			loc:  berlin, systemName: "America/New_York", want: "Europe/Berlin",
+		},
+		{
+			name:       "Windows identity uses platform mapping",
+			loc:        time.FixedZone("Eastern Standard Time", -5*60*60),
+			systemName: "America/New_York", want: "America/New_York",
+		},
+		{
+			name:       "nil location uses platform mapping",
+			systemName: "America/New_York", want: "America/New_York",
+		},
+		{
+			name: "unknown platform identity is empty",
+			loc:  time.FixedZone("Local", 0), systemName: "Eastern Standard Time",
+		},
+		{
+			name: "platform error is empty",
+			loc:  time.FixedZone("Local", 0), systemErr: errors.New("unavailable"),
+		},
+		{
+			name: "invalid platform result is empty",
+			loc:  time.FixedZone("Local", 0), systemName: "not/a-zone",
+		},
+		{
+			name:       "offset identity is not guessed",
+			loc:        time.FixedZone("UTC-5", -5*60*60),
+			systemName: "Eastern Standard Time",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			got := resolveLocalTimezone(tt.envTZ, tt.loc, func() (string, error) {
+				calls++
+				return tt.systemName, tt.systemErr
+			})
+			assert.Equal(t, tt.want, got)
+			if tt.want != "" && (tt.envTZ != "" || tt.loc != nil &&
+				validatedTimezoneName(tt.loc.String()) != "") {
+				assert.Zero(t, calls, "platform resolver should not run")
+			}
+		})
+	}
+}
+
+func TestLocalTimezoneOrUTC(t *testing.T) {
+	assert.Equal(t, "America/New_York", localTimezoneOrUTC(
+		func() string { return "America/New_York" }))
+	assert.Equal(t, "UTC", localTimezoneOrUTC(func() string { return "" }))
+}
+
+func TestLocalLocation(t *testing.T) {
+	fallback := time.FixedZone("fallback", 0)
+	assert.Equal(t, "America/New_York", localLocation(
+		func() string { return "America/New_York" }, fallback).String())
+	assert.Same(t, fallback, localLocation(func() string { return "" }, fallback))
+	assert.Same(t, fallback, localLocation(
+		func() string { return "not/a-zone" }, fallback))
 }

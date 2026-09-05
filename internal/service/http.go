@@ -526,6 +526,11 @@ func (b *httpBackend) SearchContent(
 	if req.IncludeOneShot {
 		q.Set("include_one_shot", "true")
 	}
+	for _, id := range req.ExcludeSessionIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			q.Add("exclude_session", id)
+		}
+	}
 	if req.Limit > 0 {
 		q.Set("limit", strconv.Itoa(req.Limit))
 	}

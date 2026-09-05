@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
@@ -15,10 +9,7 @@ import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
 import { rollingRange } from "./lib/utils/dates.js";
 import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
-import {
-  createSessionsStore,
-  sessions,
-} from "./lib/stores/sessions.svelte.js";
+import { createSessionsStore, sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
@@ -44,16 +35,14 @@ async function flushEffects() {
 }
 
 async function selectRelativeRange(days: number) {
-  const trigger = document.querySelector<HTMLButtonElement>(
-    ".kit-date-range-picker__trigger",
-  );
+  const trigger = document.querySelector<HTMLButtonElement>(".kit-date-range-picker__trigger");
   expect(trigger).not.toBeNull();
   trigger!.click();
   await flushEffects();
 
-  const preset = [
-    ...document.querySelectorAll<HTMLButtonElement>("button"),
-  ].find((button) => button.textContent?.trim() === `${days}d`);
+  const preset = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === `${days}d`,
+  );
   expect(preset).not.toBeUndefined();
   preset!.click();
   await flushEffects();
@@ -154,6 +143,12 @@ describe("App Recall availability", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
+      if (url.includes("/api/v1/insights")) {
+        return new Response(JSON.stringify({ insights: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       return new Response(JSON.stringify({ entries: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -182,11 +177,7 @@ describe("App Recall availability", () => {
     await flushEffects();
 
     expect(document.body.textContent).toContain("Generated insights");
-    expect(
-      fetchSpy.mock.calls.some(([input]) =>
-        String(input).includes("/recall/"),
-      ),
-    ).toBe(false);
+    expect(fetchSpy.mock.calls.some(([input]) => String(input).includes("/recall/"))).toBe(false);
   });
 });
 
@@ -262,9 +253,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
-    const navigateToSession = vi
-      .spyOn(sessions, "navigateToSession")
-      .mockResolvedValue();
+    const navigateToSession = vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
 
     sessions.sessions = [];
     sessions.activeSessionId = "session-1";
@@ -357,9 +346,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
-    const navigateToSession = vi
-      .spyOn(sessions, "navigateToSession")
-      .mockResolvedValue();
+    const navigateToSession = vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
 
     router.route = "usage";
     component = mount(App, { target: document.body });
@@ -449,9 +436,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sessionTiming, "load").mockResolvedValue();
     vi.spyOn(pins, "loadForSession").mockResolvedValue();
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
-    const navigateToSession = vi
-      .spyOn(sessions, "navigateToSession")
-      .mockResolvedValue();
+    const navigateToSession = vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
 
     sessions.sessions = [
       {
@@ -531,10 +516,7 @@ describe("App session URL date state", () => {
     // next route initialization re-reads the concrete dates as an
     // explicit fixed range and the rolling intent is lost after one
     // reload.
-    sessions.applyPanelDateFilters(
-      { date_from: "2026-03-10", date_to: "2026-04-08" },
-      30,
-    );
+    sessions.applyPanelDateFilters({ date_from: "2026-03-10", date_to: "2026-04-08" }, 30);
     await tick();
     await tick();
     expect(router.params["window_days"]).toBe("30");
@@ -548,121 +530,67 @@ describe("App session URL date state", () => {
   it("preserves rolling window dates when writing sessions URLs", () => {
     expect(source).toContain("sessionRouteParamsForFilters(");
     expect(source).toContain("router.navigateFromSession(nextParams)");
-    expect(source).toContain(
-      "const newParams = sessionRouteParamsForFilters(",
-    );
-    expect(source).not.toContain(
-      "navigateFromSession(filtersToParams(sessions.filters))",
-    );
-    expect(source).not.toContain(
-      "const newParams = filtersToParams(sessions.filters);",
-    );
+    expect(source).toContain("const newParams = sessionRouteParamsForFilters(");
+    expect(source).not.toContain("navigateFromSession(filtersToParams(sessions.filters))");
+    expect(source).not.toContain("const newParams = filtersToParams(sessions.filters);");
   });
 
   it("preserves rolling window dates when entering session detail", () => {
     const syncUrlIndex = source.indexOf("// Sync active session to URL.");
-    const navigateFromSessionIndex = source.indexOf(
-      "router.navigateFromSession",
-      syncUrlIndex,
-    );
-    const activeSessionBranch = source.slice(
-      syncUrlIndex,
-      navigateFromSessionIndex,
-    );
+    const navigateFromSessionIndex = source.indexOf("router.navigateFromSession", syncUrlIndex);
+    const activeSessionBranch = source.slice(syncUrlIndex, navigateFromSessionIndex);
 
-    expect(activeSessionBranch).toContain(
-      "const nextParams = sessionRouteParamsForFilters(",
-    );
-    expect(activeSessionBranch).toContain(
-      "router.navigateToSession(activeId, nextParams)",
-    );
-    expect(activeSessionBranch).not.toContain(
-      "router.navigateToSession(activeId);",
-    );
+    expect(activeSessionBranch).toContain("const nextParams = sessionRouteParamsForFilters(");
+    expect(activeSessionBranch).toContain("router.navigateToSession(activeId, nextParams)");
+    expect(activeSessionBranch).not.toContain("router.navigateToSession(activeId);");
   });
 
   it("preserves direct detail URL params when leaving session detail", () => {
     const syncUrlIndex = source.indexOf("// Sync active session to URL.");
-    const navigateFromSessionIndex = source.indexOf(
-      "router.navigateFromSession",
-      syncUrlIndex,
-    );
+    const navigateFromSessionIndex = source.indexOf("router.navigateFromSession", syncUrlIndex);
     const inactiveSessionBranch = source.slice(
       navigateFromSessionIndex - 260,
       navigateFromSessionIndex + 80,
     );
 
     expect(source).toContain("sessionRouteParamsForDetailExit");
-    expect(inactiveSessionBranch).toContain(
-      ": sessionRouteParamsForDetailExit(",
-    );
-    expect(inactiveSessionBranch).toContain(
-      "router.navigateFromSession(nextParams)",
-    );
+    expect(inactiveSessionBranch).toContain(": sessionRouteParamsForDetailExit(");
+    expect(inactiveSessionBranch).toContain("router.navigateFromSession(nextParams)");
   });
 
   it("updates detail URL params after explicit filter changes", () => {
-    const syncUrlBlock = appSourceSlice(
-      "// Sync active session to URL.",
-      "// URL write-back",
-    );
+    const syncUrlBlock = appSourceSlice("// Sync active session to URL.", "// URL write-back");
 
-    expect(source).toContain(
-      "let lastDetailFilterParamsSignature: string | null = $state(null);",
-    );
-    expect(syncUrlBlock).toContain(
-      "const filterParams = sessionFilterRouteParams();",
-    );
-    expect(syncUrlBlock).toContain(
-      "lastDetailFilterParamsSignature !== null &&",
-    );
+    expect(source).toContain("let lastDetailFilterParamsSignature: string | null = $state(null);");
+    expect(syncUrlBlock).toContain("const filterParams = sessionFilterRouteParams();");
+    expect(syncUrlBlock).toContain("lastDetailFilterParamsSignature !== null &&");
     expect(syncUrlBlock).toContain("router.replaceParams(nextParams);");
-    expect(syncUrlBlock).toContain(
-      "lastDetailFilterParamsSignature = filterParamsSignature;",
-    );
+    expect(syncUrlBlock).toContain("lastDetailFilterParamsSignature = filterParamsSignature;");
   });
 
   it("does not preserve stale detail params after filter changes", () => {
-    const syncUrlBlock = appSourceSlice(
-      "// Sync active session to URL.",
-      "// URL write-back",
-    );
+    const syncUrlBlock = appSourceSlice("// Sync active session to URL.", "// URL write-back");
 
     expect(syncUrlBlock).toContain("const filterChangedOnDetail =");
     expect(syncUrlBlock).toContain(
       "filterChangedOnDetail\n          ? sessionRouteParamsForFilters(",
     );
-    expect(syncUrlBlock).toContain(
-      ": sessionRouteParamsForDetailExit(",
-    );
+    expect(syncUrlBlock).toContain(": sessionRouteParamsForDetailExit(");
   });
 
   it("clears stored yoke when session date params are removed while analytics is unmounted", () => {
-    const syncUrlBlock = appSourceSlice(
-      "// Sync active session to URL.",
-      "// URL write-back",
-    );
-    const writeBackBlock = appSourceSlice(
-      "// URL write-back",
-      "function showAbout",
-    );
+    const syncUrlBlock = appSourceSlice("// Sync active session to URL.", "// URL write-back");
+    const writeBackBlock = appSourceSlice("// URL write-back", "function showAbout");
 
     expect(source).toContain("function clearYokeForClearedSessionDates");
     expect(source).toContain("sessionDateIntentCleared(");
     expect(source).toContain("yokedDates.clear();");
-    expect(syncUrlBlock).toContain(
-      "clearYokeForClearedSessionDates(nextParams);",
-    );
-    expect(writeBackBlock).toContain(
-      "clearYokeForClearedSessionDates(newParams);",
-    );
+    expect(syncUrlBlock).toContain("clearYokeForClearedSessionDates(nextParams);");
+    expect(writeBackBlock).toContain("clearYokeForClearedSessionDates(newParams);");
   });
 
   it("clears detail filter signatures outside session detail routes", () => {
-    const syncUrlBlock = appSourceSlice(
-      "// Sync active session to URL.",
-      "// URL write-back",
-    );
+    const syncUrlBlock = appSourceSlice("// Sync active session to URL.", "// URL write-back");
 
     expect(syncUrlBlock).toContain(
       'if (router.route !== "sessions") {\n        lastDetailFilterParamsSignature = null;',
@@ -673,14 +601,9 @@ describe("App session URL date state", () => {
   });
 
   it("restores the full recently deleted batch from the undo toast", () => {
-    const undoBlock = appSourceSlice(
-      "{#if sessions.recentlyDeleted.length > 0}",
-      "</div>\n{/if}",
-    );
+    const undoBlock = appSourceSlice("{#if sessions.recentlyDeleted.length > 0}", "</div>\n{/if}");
 
-    expect(undoBlock).toContain(
-      "await sessions.restoreRecentlyDeleted(last);",
-    );
+    expect(undoBlock).toContain("await sessions.restoreRecentlyDeleted(last);");
     expect(undoBlock).not.toContain("await sessions.restoreSession(last.id);");
   });
 });
@@ -763,12 +686,11 @@ describe("App root Sessions landing", () => {
 
   it("persists defaults after starred-only is toggled in a root-derived detail", async () => {
     stubAppDependencies();
-    vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
-      .mockResolvedValue({
-        sessions: [],
-        total: 0,
-        next_cursor: null,
-      } as never);
+    vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex").mockResolvedValue({
+      sessions: [],
+      total: 0,
+      next_cursor: null,
+    } as never);
     vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
       sessions.activeSessionId = id;
     });
@@ -841,12 +763,11 @@ describe("App root Sessions landing", () => {
       to: "2026-06-30",
       mode: "fixed",
     });
-    expect(JSON.parse(localStorage.getItem("yoked-dates") ?? "{}").range)
-      .toMatchObject({
-        from: "2026-06-01",
-        to: "2026-06-30",
-        mode: "fixed",
-      });
+    expect(JSON.parse(localStorage.getItem("yoked-dates") ?? "{}").range).toMatchObject({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
   });
 
   it("keeps root URL, yoke, and saved filters through analytics refresh", async () => {
@@ -885,12 +806,11 @@ describe("App root Sessions landing", () => {
       mode: "fixed",
     });
     expect(localStorage.getItem("session-filters")).toBe(saved);
-    expect(JSON.parse(localStorage.getItem("yoked-dates") ?? "{}").range)
-      .toMatchObject({
-        from: "2026-06-01",
-        to: "2026-06-30",
-        mode: "fixed",
-      });
+    expect(JSON.parse(localStorage.getItem("yoked-dates") ?? "{}").range).toMatchObject({
+      from: "2026-06-01",
+      to: "2026-06-30",
+      mode: "fixed",
+    });
   });
 
   it("treats filter-bearing root URLs as explicit deep links", async () => {
@@ -1148,10 +1068,9 @@ describe("App root Sessions landing", () => {
     expect(router.isRootPath).toBe(true);
     expect(sessions.filters.dateFrom).toBe("");
     expect(sessions.filters.dateTo).toBe("");
-    expect(
-      document.querySelector(".kit-date-range-picker__trigger-label")
-        ?.textContent,
-    ).toBe("Last year");
+    expect(document.querySelector(".kit-date-range-picker__trigger-label")?.textContent).toBe(
+      "Last year",
+    );
     expect(analyticsFetchRanges).toEqual([
       {
         from: "2025-04-26",
@@ -1298,11 +1217,14 @@ describe("App root Sessions landing", () => {
     const actualAttachSidebar = sessions.attachSidebar.bind(sessions);
     const sidebarIndex = vi
       .spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
-      .mockImplementation(() => Promise.resolve({
-        sessions: [],
-        total: 0,
-        next_cursor: null,
-      }) as never);
+      .mockImplementation(
+        () =>
+          Promise.resolve({
+            sessions: [],
+            total: 0,
+            next_cursor: null,
+          }) as never,
+      );
     vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
       sessions.activeSessionId = id;
     });
@@ -1388,11 +1310,7 @@ describe("App root Sessions landing", () => {
   });
 });
 
-function message(
-  ordinal: number,
-  role: Message["role"],
-  isSystem = false,
-) {
+function message(ordinal: number, role: Message["role"], isSystem = false) {
   return {
     kind: "message" as const,
     ordinals: [ordinal],
@@ -1434,18 +1352,25 @@ describe("findUserPromptOrdinal", () => {
     } as Message;
     expect(hasVisibleSegments(codeOnlyUser, (type) => type === "code")).toBe(true);
 
-    expect(findUserPromptOrdinal([
-      message(1, "assistant"),
-      { kind: "message", ordinals: [5], message: codeOnlyUser },
-    ], 1, 1, false)).toBeUndefined();
+    expect(
+      findUserPromptOrdinal(
+        [message(1, "assistant"), { kind: "message", ordinals: [5], message: codeOnlyUser }],
+        1,
+        1,
+        false,
+      ),
+    ).toBeUndefined();
   });
 
   it("skips system boundaries with a user role", () => {
-    expect(findUserPromptOrdinal([
-      message(1, "user"),
-      message(2, "user", true),
-      message(3, "user"),
-    ], 1, 1, true)).toBe(3);
+    expect(
+      findUserPromptOrdinal(
+        [message(1, "user"), message(2, "user", true), message(3, "user")],
+        1,
+        1,
+        true,
+      ),
+    ).toBe(3);
   });
 });
 

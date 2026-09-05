@@ -196,7 +196,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 					folder_paths TEXT, folder_paths_order TEXT, created_at TEXT)`)
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
-				return root, path + "-shm", parser.ZedSQLiteVirtualPath(path, "deleted")
+				return root, path + "-wal", parser.ZedSQLiteVirtualPath(path, "deleted")
 			},
 		},
 		{
@@ -238,7 +238,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				_, err = store.Exec(`DELETE FROM conversations_v2 WHERE conversation_id = 'deleted'`)
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
-				return root, path + "-shm", parser.KiroSQLiteVirtualPath(path, "deleted")
+				return root, path + "-wal", parser.KiroSQLiteVirtualPath(path, "deleted")
 			},
 		},
 		{

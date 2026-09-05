@@ -196,7 +196,7 @@ func TestVectorGenerationParams(t *testing.T) {
 }
 
 func TestNewVectorEncoderWiresOllamaCPUFallback(t *testing.T) {
-	var cpuCalls atomic.Int32
+	var nativeCalls, cpuCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -207,11 +207,25 @@ func TestNewVectorEncoderWiresOllamaCPUFallback(t *testing.T) {
 				}},
 			}))
 		case "/api/embed":
+			nativeCalls.Add(1)
+			var request struct {
+				Options map[string]any `json:"options"`
+			}
+			require.NoError(t, json.UnmarshalRead(r.Body, &request))
+			if request.Options == nil {
+				require.NoError(t, json.MarshalWrite(w, map[string]any{
+					"model":      "test-model",
+					"embeddings": [][]float32{{0, 0, 0}},
+				}))
+				return
+			}
 			cpuCalls.Add(1)
 			require.NoError(t, json.MarshalWrite(w, map[string]any{
 				"model":      "test-model",
 				"embeddings": [][]float32{{1, 2, 3}},
 			}))
+		case "/api/ps":
+			require.NoError(t, json.MarshalWrite(w, map[string]any{"models": []any{}}))
 		default:
 			require.FailNow(t, "unexpected request path", r.URL.Path)
 		}
@@ -235,6 +249,7 @@ func TestNewVectorEncoderWiresOllamaCPUFallback(t *testing.T) {
 	out, err := enc(context.Background(), []string{"alpha"})
 	require.NoError(t, err)
 	assert.Equal(t, [][]float32{{1, 2, 3}}, out)
+	assert.Equal(t, int32(3), nativeCalls.Load())
 	assert.Equal(t, int32(1), cpuCalls.Load())
 }
 

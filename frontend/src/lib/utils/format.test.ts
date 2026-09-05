@@ -1,11 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { setLocale } from "../i18n/index.js";
 import { testMoney } from "../test/money.js";
 import {
@@ -69,24 +62,16 @@ describe("sanitizeSnippet", () => {
   });
 
   it.each([
-    [
-      "preserves <mark> tags",
-      "hello <mark>world</mark> end",
-      "hello <mark>world</mark> end",
-    ],
+    ["preserves <mark> tags", "hello <mark>world</mark> end", "hello <mark>world</mark> end"],
     [
       "escapes other HTML tags",
       '<script>alert("xss")</script>',
       '&lt;script&gt;alert("xss")&lt;/script&gt;',
     ],
-    [
-      "escapes img tags",
-      "<img src=x onerror=alert(1)>",
-      "&lt;img src=x onerror=alert(1)&gt;",
-    ],
+    ["escapes img tags", "<img src=x onerror=alert(1)>", "&lt;img src=x onerror=alert(1)&gt;"],
     [
       "handles mixed mark and other tags",
-      '<b>bold</b> <mark>highlighted</mark> <i>italic</i>',
+      "<b>bold</b> <mark>highlighted</mark> <i>italic</i>",
       "&lt;b&gt;bold&lt;/b&gt; <mark>highlighted</mark> &lt;i&gt;italic&lt;/i&gt;",
     ],
     [
@@ -99,21 +84,9 @@ describe("sanitizeSnippet", () => {
       "<mark>first</mark> gap <mark>second</mark>",
       "<mark>first</mark> gap <mark>second</mark>",
     ],
-    [
-      "returns empty string for empty input",
-      "",
-      "",
-    ],
-    [
-      "handles plain text without tags",
-      "no tags here",
-      "no tags here",
-    ],
-    [
-      "escapes angle brackets in content",
-      "x < y > z",
-      "x &lt; y &gt; z",
-    ],
+    ["returns empty string for empty input", "", ""],
+    ["handles plain text without tags", "no tags here", "no tags here"],
+    ["escapes angle brackets in content", "x < y > z", "x &lt; y &gt; z"],
     [
       "handles nested mark tags gracefully",
       "<mark>outer <mark>inner</mark></mark>",
@@ -190,17 +163,11 @@ describe("formatTokenUsage", () => {
   });
 
   it("formats both reported token metrics", () => {
-    expect(formatTokenUsage(2400, true, 180, true)).toBe(
-      "2.4k ctx / 180 out",
-    );
+    expect(formatTokenUsage(2400, true, 180, true)).toBe("2.4k ctx / 180 out");
   });
 
   it("renders an explicit placeholder for missing token metrics", () => {
-    expect(formatTokenUsage(0, false, 180, true)).toBe(
-      "— ctx / 180 out",
-    );
-    expect(formatTokenUsage(2400, true, 0, false)).toBe(
-      "2.4k ctx / — out",
-    );
+    expect(formatTokenUsage(0, false, 180, true)).toBe("— ctx / 180 out");
+    expect(formatTokenUsage(2400, true, 0, false)).toBe("2.4k ctx / — out");
   });
 });

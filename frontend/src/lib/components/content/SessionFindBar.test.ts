@@ -31,31 +31,23 @@ describe("SessionFindBar", () => {
     inSessionSearch.loading = false;
     await tick();
 
+    expect(document.querySelector('[role="search"]')?.getAttribute("aria-label")).toBe(
+      "在会话中查找",
+    );
     expect(
-      document.querySelector('[role="search"]')?.getAttribute("aria-label"),
-    ).toBe("在会话中查找");
-    expect(
-      document
-        .querySelector<HTMLInputElement>(".kit-find-bar__input")
-        ?.getAttribute("placeholder"),
+      document.querySelector<HTMLInputElement>(".kit-find-bar__input")?.getAttribute("placeholder"),
     ).toBe("在会话中查找...");
     expect(
-      document
-        .querySelector<HTMLInputElement>(".kit-find-bar__input")
-        ?.getAttribute("aria-label"),
+      document.querySelector<HTMLInputElement>(".kit-find-bar__input")?.getAttribute("aria-label"),
     ).toBe("搜索关键词");
-    expect(document.querySelector(".kit-find-bar__counter")?.textContent?.trim()).toBe(
-      "无结果",
-    );
+    expect(document.querySelector(".kit-find-bar__counter")?.textContent?.trim()).toBe("无结果");
     expect(
       document
         .querySelector<HTMLButtonElement>(".kit-find-bar__nav-btn")
         ?.getAttribute("aria-label"),
     ).toBe("上一个匹配项");
     expect(
-      document
-        .querySelector<HTMLButtonElement>(".kit-find-bar__close")
-        ?.getAttribute("aria-label"),
+      document.querySelector<HTMLButtonElement>(".kit-find-bar__close")?.getAttribute("aria-label"),
     ).toBe("关闭查找栏");
 
     unmount(component);

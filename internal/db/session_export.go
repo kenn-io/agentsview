@@ -44,6 +44,8 @@ type SessionExportOptions struct {
 
 type SessionExportResult struct {
 	SchemaVersion int                               `json:"schema_version"`
+	ArchiveID     string                            `json:"archive_id"`
+	DatabaseID    string                            `json:"database_id"`
 	Rows          []SessionSummaryRow               `json:"rows"`
 	NextCursor    string                            `json:"next_cursor,omitempty"`
 	Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
@@ -298,6 +300,13 @@ func (db *DB) exportSessionSummariesTx(
 			ErrSessionExportCursorReset, cursor.DatabaseID, databaseID,
 		)
 	}
+	archiveID, err := sessionExportMetadataValue(
+		ctx, tx, archiveMetadataArchiveIDKey, ErrArchiveIDMissing,
+		"archive id",
+	)
+	if err != nil {
+		return SessionExportResult{}, err
+	}
 
 	watermark := cursor.Watermark
 	watermarkSort := cursor.WatermarkSort
@@ -310,6 +319,8 @@ func (db *DB) exportSessionSummariesTx(
 	if watermark == "" {
 		return SessionExportResult{
 			SchemaVersion: export.SessionSummarySchemaVersion,
+			ArchiveID:     archiveID,
+			DatabaseID:    databaseID,
 			Rows:          []SessionSummaryRow{},
 			Projects:      map[string]export.ProjectMapEntry{},
 		}, nil
@@ -399,13 +410,6 @@ func (db *DB) exportSessionSummariesTx(
 	if err != nil {
 		return SessionExportResult{}, err
 	}
-	archiveID, err := sessionExportMetadataValue(
-		ctx, tx, archiveMetadataArchiveIDKey, ErrArchiveIDMissing,
-		"archive id",
-	)
-	if err != nil {
-		return SessionExportResult{}, err
-	}
 	archiveSalt, err := sessionExportMetadataValue(
 		ctx, tx, archiveMetadataArchiveSaltKey, ErrArchiveSaltMissing,
 		"archive salt",
@@ -448,6 +452,8 @@ func (db *DB) exportSessionSummariesTx(
 	}
 	return SessionExportResult{
 		SchemaVersion: export.SessionSummarySchemaVersion,
+		ArchiveID:     archiveID,
+		DatabaseID:    databaseID,
 		Rows:          resultRows,
 		NextCursor:    next,
 		Pricing:       pricing,

@@ -3978,7 +3978,9 @@ func bulkInsertToolCalls(
 				nilIfEmpty(r.tc.InputJSON),
 				nilIfEmpty(r.tc.SkillName),
 				nilIfZero(r.tc.ResultContentLength),
-				nilIfEmpty(r.tc.ResultContent),
+				nilIfEmpty(db.DedupToolCallResultSummary(
+					r.tc.ResultContent, r.tc.ResultEvents,
+				)),
 				nilIfEmpty(r.tc.SubagentSessionID),
 				r.ordinal,
 				nilIfEmpty(r.tc.FilePath),

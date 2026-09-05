@@ -113,7 +113,7 @@ func cursorIDEFingerprintSource(
 	if src.MemberID == "" {
 		mtime := info.ModTime().UnixNano()
 		if composite, err := sqliteDBCompositeMtime(
-			src.Container, cursorIDEDBMtimeSuffixes,
+			src.Container, sqliteDBJournalSuffixes,
 		); err == nil {
 			mtime = composite
 		}
@@ -149,12 +149,6 @@ func cursorIDEFingerprintSource(
 		Hash:    meta.digest,
 	}, nil
 }
-
-// cursorIDEDBMtimeSuffixes omits "-shm": Cursor IDE keeps its own read/write
-// connection open against state.vscdb, which continually touches the
-// shared-memory file, so including it would make every scan trigger the next
-// one (the same reasoning as omnigentDBMtimeSuffixes).
-var cursorIDEDBMtimeSuffixes = []string{"", "-wal"}
 
 // cursorIDESQLiteStateHash digests the parts of a SQLite database's on-disk
 // state that change with every committed transaction, without reading any

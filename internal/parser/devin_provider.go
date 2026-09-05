@@ -553,7 +553,10 @@ func (s devinSourceSet) dbPathForEvent(root, path string) (string, bool) {
 	if !ok || strings.Contains(rel, string(filepath.Separator)) {
 		return "", false
 	}
-	if rel == devinDBFilename || rel == devinDBFilename+"-wal" || rel == devinDBFilename+"-shm" {
+	// A bare "-shm" event is ignored: the provider's own read connections
+	// rewrite that index, and every committed write lands in the main file
+	// or the WAL.
+	if rel == devinDBFilename || rel == devinDBFilename+"-wal" {
 		return filepath.Join(cliRoot, devinDBFilename), true
 	}
 	return "", false

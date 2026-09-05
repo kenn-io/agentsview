@@ -35,6 +35,10 @@ type ContentSearchFilter struct {
 	Project, ExcludeProject, Machine, Agent           string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
+	// ExcludeSessionIDs drops matches from these session IDs before LIMIT,
+	// so a live conversation cannot fill the result page. Empty entries are
+	// ignored; unknown IDs are a no-op.
+	ExcludeSessionIDs []string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch string
 
@@ -139,7 +143,50 @@ func contentSessionFilter(f ContentSearchFilter) SessionFilter {
 // (no LIMIT in a SELECT id subquery), so they are left unset.
 func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 	where, args := buildSessionFilter(contentSessionFilter(f))
+	where, args = AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
+}
+
+// NormalizeExcludeSessionIDs trims, drops empty entries, and de-duplicates
+// session IDs while preserving first-seen order. An empty result means no
+// exclusion filter should be applied.
+func NormalizeExcludeSessionIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// AppendExcludeSessionIDs adds `<col> NOT IN (...)` to a WHERE clause using
+// `?` placeholders (SQLite and DuckDB). It is a no-op when ids is empty.
+func AppendExcludeSessionIDs(
+	where string, args []any, col string, ids []string,
+) (string, []any) {
+	ids = NormalizeExcludeSessionIDs(ids)
+	if len(ids) == 0 {
+		return where, args
+	}
+	ph, extra := inPlaceholders(ids)
+	out := make([]any, 0, len(args)+len(extra))
+	out = append(out, args...)
+	out = append(out, extra...)
+	return where + " AND " + col + " NOT IN " + ph, out
 }
 
 // semanticContentSessionFilter maps a ContentSearchFilter for the
@@ -161,6 +208,7 @@ func semanticContentSessionFilter(f ContentSearchFilter) SessionFilter {
 // to each session's own row.
 func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 	where, args := buildSessionBaseFilter(semanticContentSessionFilter(f))
+	where, args = AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
 
@@ -1295,6 +1343,7 @@ func (db *DB) semanticAllowedSessionIDs(
 		return nil, nil
 	}
 	where, filterArgs := buildSessionBaseFilter(semanticContentSessionFilter(f))
+	where, filterArgs = AppendExcludeSessionIDs(where, filterArgs, "id", f.ExcludeSessionIDs)
 	query := "SELECT id FROM sessions WHERE " + where + " AND id IN "
 
 	allowed := make(map[string]bool, len(ids))

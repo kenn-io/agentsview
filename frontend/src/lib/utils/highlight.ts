@@ -37,11 +37,7 @@ export function clearMarks(el: HTMLElement): void {
  * marks visually abut across span boundaries without crossing element
  * boundaries.
  */
-export function applyMarks(
-  el: HTMLElement,
-  q: string,
-  isCurrent: boolean,
-): void {
+export function applyMarks(el: HTMLElement, q: string, isCurrent: boolean): void {
   if (!q) return;
   const lq = q.toLowerCase();
 
@@ -49,7 +45,7 @@ export function applyMarks(
   interface Segment {
     node: Text;
     start: number; // offset in `full` where this node's text begins
-    end: number;   // exclusive end offset
+    end: number; // exclusive end offset
   }
 
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
@@ -115,8 +111,7 @@ export function applyMarks(
   }
 
   // --- Phase 4: rebuild each affected text node into a DocumentFragment ---
-  const markClass =
-    "search-highlight" + (isCurrent ? " search-highlight--current" : "");
+  const markClass = "search-highlight" + (isCurrent ? " search-highlight--current" : "");
 
   for (const [si, pieces] of segPieces) {
     const seg = segments[si as number];
@@ -135,8 +130,7 @@ export function applyMarks(
       cursor = piece.localEnd;
     }
 
-    if (cursor < txt.length)
-      frag.appendChild(document.createTextNode(txt.slice(cursor)));
+    if (cursor < txt.length) frag.appendChild(document.createTextNode(txt.slice(cursor)));
 
     seg.node.parentNode!.replaceChild(frag, seg.node);
   }

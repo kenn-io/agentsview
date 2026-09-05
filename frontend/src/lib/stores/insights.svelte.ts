@@ -1,6 +1,4 @@
 import type {
-  Insight,
-  InsightsResponse,
   InsightType,
   AgentName,
   CannedInsightKind,
@@ -8,15 +6,8 @@ import type {
   InsightGenerationFilters,
   Session,
 } from "../api/types.js";
-import {
-  ApiError as GeneratedApiError,
-  InsightsService,
-} from "../api/generated/index";
-import {
-  callGenerated,
-  configureGeneratedClient,
-  isAbortError,
-} from "../api/runtime.js";
+import { InsightsService, type DbInsight } from "../api/generated/index";
+import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
 import {
   generateInsight,
   type GenerateInsightHandle,
@@ -68,7 +59,7 @@ class InsightsStore {
   agent: AgentName = $state("claude");
   sessionAgent: string = $state("");
   automatedScope: AutomatedScope = $state("human");
-  items: Insight[] = $state([]);
+  items: DbInsight[] = $state([]);
   selectedId: number | null = $state(null);
   selectedTaskId: string | null = $state(null);
   loading = $state(false);
@@ -79,23 +70,17 @@ class InsightsStore {
   #version = 0;
   #listRead = new LatestRead();
 
-  get selectedItem(): Insight | undefined {
-    return this.items.find(
-      (s) => s.id === this.selectedId,
-    );
+  get selectedItem(): DbInsight | undefined {
+    return this.items.find((s) => s.id === this.selectedId);
   }
 
   get selectedTask(): InsightTask | undefined {
     if (this.selectedTaskId === null) return undefined;
-    return this.tasks.find(
-      (t) => t.clientId === this.selectedTaskId,
-    );
+    return this.tasks.find((t) => t.clientId === this.selectedTaskId);
   }
 
   get generatingCount(): number {
-    return this.tasks.filter(
-      (t) => t.status === "generating",
-    ).length;
+    return this.tasks.filter((t) => t.status === "generating").length;
   }
 
   async load() {
@@ -103,19 +88,13 @@ class InsightsStore {
     const signal = this.#listRead.begin();
     this.loading = true;
     try {
-      configureGeneratedClient();
       const res = await callGenerated(
-        () => InsightsService.getApiV1Insights({}),
+        (options) => InsightsService.getApiV1Insights({}, options),
         signal,
-      ) as unknown as InsightsResponse;
+      );
       if (this.#version === v && this.#listRead.isCurrent(signal)) {
         this.items = res.insights;
-        if (
-          this.selectedId !== null &&
-          !this.items.some(
-            (s) => s.id === this.selectedId,
-          )
-        ) {
+        if (this.selectedId !== null && !this.items.some((s) => s.id === this.selectedId)) {
           this.selectedId = null;
         }
       }
@@ -186,15 +165,12 @@ class InsightsStore {
       dateTo: this.dateTo,
       project: this.project,
       agent: this.agent,
-      kind: this.type === "llm_canned"
-        ? this.cannedKind
-        : undefined,
+      kind: this.type === "llm_canned" ? this.cannedKind : undefined,
       promptText: this.promptText,
       automatedScope: this.automatedScope,
       sessionId: undefined,
-      sessionFilters: this.type === "llm_canned" && this.sessionAgent
-        ? { agent: this.sessionAgent }
-        : undefined,
+      sessionFilters:
+        this.type === "llm_canned" && this.sessionAgent ? { agent: this.sessionAgent } : undefined,
     });
   }
 
@@ -235,9 +211,7 @@ class InsightsStore {
         promptText: task.promptText,
         automatedScope: task.automatedScope,
         sessionId: task.sessionId,
-        sessionFilters: task.sessionFilters
-          ? { ...task.sessionFilters }
-          : undefined,
+        sessionFilters: task.sessionFilters ? { ...task.sessionFilters } : undefined,
       },
       clientId,
       true,
@@ -260,9 +234,7 @@ class InsightsStore {
       promptText: snap.promptText,
       automatedScope: snap.automatedScope,
       sessionId: snap.sessionId,
-      sessionFilters: snap.sessionFilters
-        ? { ...snap.sessionFilters }
-        : undefined,
+      sessionFilters: snap.sessionFilters ? { ...snap.sessionFilters } : undefined,
       status: "generating",
       phase: "generating",
       error: null,
@@ -270,9 +242,7 @@ class InsightsStore {
       logs: [],
     };
     if (this.tasks.some((t) => t.clientId === clientId)) {
-      this.tasks = this.tasks.map((t) =>
-        t.clientId === clientId ? task : t,
-      );
+      this.tasks = this.tasks.map((t) => (t.clientId === clientId ? task : t));
     } else {
       this.tasks = [...this.tasks, task];
     }
@@ -292,20 +262,14 @@ class InsightsStore {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         agent: snap.agent,
         kind: snap.kind,
-        llm_opt_in: snap.type === "llm_canned"
-          ? true
-          : undefined,
+        llm_opt_in: snap.type === "llm_canned" ? true : undefined,
         automated_scope: snap.automatedScope,
         ...(snap.type === "llm_canned" && snap.sessionFilters
           ? { filters: snap.sessionFilters }
           : {}),
       },
       (phase) => {
-        this.tasks = this.tasks.map((t) =>
-          t.clientId === clientId
-            ? { ...t, phase }
-            : t,
-        );
+        this.tasks = this.tasks.map((t) => (t.clientId === clientId ? { ...t, phase } : t));
       },
       (logEvent) => {
         this.tasks = this.tasks.map((t) => {
@@ -325,17 +289,11 @@ class InsightsStore {
     handle.done
       .then((insight) => {
         this.#handles.delete(clientId);
-        this.tasks = this.tasks.filter(
-          (t) => t.clientId !== clientId,
-        );
+        this.tasks = this.tasks.filter((t) => t.clientId !== clientId);
 
-        const filtersMatch =
-          this.project === snap.project;
+        const filtersMatch = this.project === snap.project;
         if (filtersMatch) {
-          this.items = [
-            insight,
-            ...this.items.filter((s) => s.id !== insight.id),
-          ];
+          this.items = [insight, ...this.items.filter((s) => s.id !== insight.id)];
           this.selectedId = insight.id;
         } else {
           this.load();
@@ -343,23 +301,13 @@ class InsightsStore {
       })
       .catch((e) => {
         this.#handles.delete(clientId);
-        if (
-          e instanceof DOMException &&
-          e.name === "AbortError"
-        ) {
-          this.tasks = this.tasks.filter(
-            (t) => t.clientId !== clientId,
-          );
+        if (e instanceof DOMException && e.name === "AbortError") {
+          this.tasks = this.tasks.filter((t) => t.clientId !== clientId);
           return;
         }
-        const msg =
-          e instanceof Error
-            ? e.message
-            : "Generation failed";
+        const msg = e instanceof Error ? e.message : "Generation failed";
         this.tasks = this.tasks.map((t) =>
-          t.clientId === clientId
-            ? { ...t, status: "error" as const, error: msg }
-            : t,
+          t.clientId === clientId ? { ...t, status: "error" as const, error: msg } : t,
         );
         this.selectedTaskId = clientId;
         this.selectedId = null;
@@ -372,9 +320,7 @@ class InsightsStore {
 
   dismissTask(clientId: string) {
     this.#handles.delete(clientId);
-    this.tasks = this.tasks.filter(
-      (t) => t.clientId !== clientId,
-    );
+    this.tasks = this.tasks.filter((t) => t.clientId !== clientId);
     if (this.selectedTaskId === clientId) {
       this.selectedTaskId = null;
     }
@@ -382,10 +328,9 @@ class InsightsStore {
 
   async deleteItem(id: number) {
     try {
-      configureGeneratedClient();
-      await InsightsService.deleteApiV1InsightsId({ id });
+      await InsightsService.deleteApiV1InsightsById({ id });
     } catch (e) {
-      if (!(e instanceof GeneratedApiError && e.status === 404)) {
+      if (!(e instanceof ApiError && e.status === 404)) {
         return;
       }
     }
@@ -405,9 +350,6 @@ class InsightsStore {
 export const insights = new InsightsStore();
 
 function sessionInsightDate(session: Session): string {
-  const ts =
-    session.started_at ||
-    session.ended_at ||
-    session.created_at;
+  const ts = session.started_at || session.ended_at || session.created_at;
   return ts.slice(0, 10);
 }

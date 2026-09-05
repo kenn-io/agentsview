@@ -5,12 +5,31 @@ description: Release history for AgentsView
 
 ## Unreleased
 
+**Improvements**
+
+- Session exports now identify the logical archive separately from its database
+  generation, so analytics can recognize the same sessions after a full resync.
+  JSON and NDJSON add `archive_id` to session-summary schema v6; pricing,
+  usage, and cursor-reset behavior are unchanged.
+- Generated API bindings now keep concrete collection element types and match
+  the server's JSON v2 behavior. Ordinary Go slices are documented and encoded
+  as arrays, including when their value is nil, so frontend code no longer
+  needs handwritten copies of those response types. The Orval client is split
+  into small files by API tag and schema.
+- Shrink large archives by storing each **tool result** once instead of also
+  copying it into the call summary. Direct readers of
+  `tool_calls.result_content` now find that text in `tool_result_events`.
+  Existing archives resync on the next start, and a PostgreSQL mirror
+  re-pushes every session once.
+
 **Bug fixes**
 
 - Price Codex Luna Reserve turns that persist as `gpt-reserve` using the
   existing GPT-5.6 Luna catalog rates. Usage reports still list `gpt-reserve`
   as the reported model. Existing SQLite usage caches rebuild so previously
   unpriced Reserve rows pick up the correction. (#1636)
+
+---
 
 ## 0.42.0
 
@@ -40,6 +59,10 @@ description: Release history for AgentsView
   `[recall.extract] candidate_findings = "allow"`. Definite findings still
   block extraction, and the default `"block"` policy remains unchanged.
   (#1404)
+- Open sessions in the desktop app from other tools through the new
+  `agentsview://` URL scheme, with an optional `?msg` anchor that jumps to a
+  message. The web UI now also shows a retryable "session not found" state for
+  links to sessions that have not synced yet.
 
 **Improvements**
 
@@ -58,9 +81,18 @@ description: Release history for AgentsView
 - Make container builds less dependent on any one Debian mirror by distributing
   downloads and failing over automatically.
 - Build from source with Go 1.27 and use its JSON v2 behavior consistently.
+- Retire inactive usage-cache generations after every lease-aware process has
+  released them. Retirement revalidates cache ownership and generation identity
+  under an exclusive cross-process lease; active, legacy, and mismatched files
+  remain untouched.
 
 **Bug fixes**
 
+- Teach `session search` `--exclude-session` (repeatable) so identifier hunts
+  can drop the live conversation before `--limit` fills with its own echoes.
+  `skills install --server` / `AGENTSVIEW_SKILLS_SERVER` bakes remote-daemon
+  flags into the finding-history examples so they no longer silently query
+  local SQLite; `--server ""` un-bakes it again. (#1511)
 - Keep archived sessions available after their original source files disappear.
 - Finish full reconciliation even when a source must be deferred, and show
   progress while a full resync completes its final archive work.

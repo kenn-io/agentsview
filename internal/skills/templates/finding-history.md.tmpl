@@ -16,16 +16,28 @@ the archive crawl, then synthesizes and verifies.
 
 1. Translate the ask into a target behavior and desired evidence: likely
    projects, agents, time windows, vocabulary.
-2. Concept questions ("why did we…", "how did we handle…") start with
-   hybrid search. Exact identifiers (IDs, paths, commands, error strings,
-   tool names) start with plain substring search over tool inputs and results;
-   FTS searches messages only and cannot find identifiers stored only in tool
-   calls:
+2. Pick a mode, then search. `--fts`/`--hybrid`/`--semantic` search messages
+   only and reject `--in`. Identifiers usually live in tool calls, so those
+   hunts use plain substring search (no `--fts`). Pass this conversation's
+   session id with `--exclude-session` so live echoes cannot fill `--limit 8`:
+
+   | Hunting | Mode |
+   | --- | --- |
+   | prose, reasoning, "why did we…" | `--hybrid` (messages); `--fts` if embeddings are down |
+   | identifiers: IDs, paths, commands, errors, tool names | plain search + `--in tool_input,tool_result` |
 
    ```bash
-   agentsview session search "<concept query>" --hybrid --context 2 --json --limit 8
-   agentsview session search "<exact string>" --in tool_input,tool_result --json --limit 8
+   agentsview session search "<concept query>" --hybrid --context 2 --json --limit 8{{.ServerArgs}}
+   agentsview session search "<exact string>" --in tool_input,tool_result --exclude-session <this-session-id> --json --limit 8{{.ServerArgs}}
    ```
+{{if .ServerArgs}}
+   This install targets a remote daemon; keep the `--server` flags on every
+   command. Omitting them silently searches local SQLite.
+{{else}}
+   If the archive is a remote daemon, pass `--server <url>` (and
+   `--server-token-file` when that daemon requires auth) on every command.
+   There is no implicit default; omitting them silently searches local SQLite.
+{{end}}
 
 3. Narrow by recency when the ask implies it: `--since 14d`, `--since 3m`
    (h/d/w/m/y units; `m` is months, not minutes). Widen or drop `--since`
@@ -37,7 +49,7 @@ the archive crawl, then synthesizes and verifies.
    Deep-dive only the strongest candidates:
 
    ```bash
-   agentsview session messages <session-id> --around <ordinal> --before 8 --after 8 --role user,assistant --json
+   agentsview session messages <session-id> --around <ordinal> --before 8 --after 8 --role user,assistant --json{{.ServerArgs}}
    ```
 
 5. Give the search a mechanical budget: 4-6 probes, top 2-4 sessions, one
@@ -56,7 +68,7 @@ the archive crawl, then synthesizes and verifies.
   synonyms beat one long phrase:
 
   ```bash
-  agentsview session search "<two or three words>" --fts --json --limit 8
+  agentsview session search "<two or three words>" --fts --json --limit 8{{.ServerArgs}}
   ```
 
 - "temporarily unavailable" (HTTP 503): the embeddings endpoint is down.
@@ -87,7 +99,7 @@ the archive crawl, then synthesizes and verifies.
 | "One good snippet is enough." | Snippets are leads. Inspect a window before extracting a pattern. |
 | "A longer query is more semantic." | Hybrid works best with a focused phrase; FTS works best with 2-3 word probes. |
 | "FTS is best for exact identifiers." | FTS searches messages only. Use plain search with `--in tool_input,tool_result` for IDs, paths, commands, errors, and tool names. |
-| "This current session mentions it, so it counts." | Down-rank active-session echoes; historical evidence needs older sessions. |
+| "This current session mentions it, so it counts." | Pass `--exclude-session <this-session-id>`. If the id is unknown, raise `--limit` and drop the session that is this conversation. |
 | "A subordinate hit settles it." | Sidechain/subagent hits restate delegated work; confirm against the parent session before citing. |
 | "Keep searching until certain." | Return a bounded, evidence-backed pass and list follow-ups. |
 

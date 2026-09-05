@@ -1194,9 +1194,10 @@ func addMessageToCacheTotals(
 // the JSON output emits "hourly_utc": [] rather than null.
 //
 // ReporterTimezone reflects f.Timezone when set (honouring the CLI
-// --timezone flag), otherwise the best-effort local IANA name. When
-// the env/local fallback cannot be resolved safely, the field stays
-// empty so downstream fallback logic can take over.
+// --timezone flag), otherwise the best-effort local IANA name resolved
+// from TZ, the local location, or the OS-aware platform adapter. When
+// no loadable name can be resolved safely, the field stays empty so
+// downstream fallback logic can take over.
 func (db *DB) computeTemporal(
 	ctx context.Context, stats *SessionStats, f StatsFilter,
 	from, to time.Time, sessionIDs []string,
@@ -1310,9 +1311,10 @@ func (db *DB) accumulateHourlyUTC(
 // SessionStats.Temporal.ReporterTimezone. Precedence:
 //
 //  1. f.Timezone when non-empty — echoes the --timezone flag.
-//  2. Valid IANA names from TZ or the current local location.
-//  3. Empty string when the fallback name is only a sentinel or
-//     otherwise cannot be resolved safely.
+//  2. Valid IANA names from TZ or the current local location, followed
+//     by the OS-aware platform adapter for identities such as Windows
+//     registry names.
+//  3. Empty string when no loadable name can be resolved safely.
 func reporterTimezone(f StatsFilter) string {
 	if f.Timezone != "" {
 		return f.Timezone

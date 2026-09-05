@@ -391,7 +391,7 @@ describe("DataPage", () => {
     // one and only load for the new machine.
     expect(data.rulesMachine).toBe("machine-b");
     expect(api.getApiV1DataProjectRules).toHaveBeenCalledTimes(2);
-    expect(api.getApiV1DataProjectRules).toHaveBeenLastCalledWith({ machine: "machine-b" });
+    expect(api.getApiV1DataProjectRules.mock.lastCall?.[0]).toEqual({ machine: "machine-b" });
   });
 
   it("remounts the rules view with the new machine when the store's rules machine changes", async () => {
@@ -403,13 +403,13 @@ describe("DataPage", () => {
     await flush();
 
     expect(api.getApiV1DataProjectRules).toHaveBeenCalledTimes(1);
-    expect(api.getApiV1DataProjectRules).toHaveBeenCalledWith({ machine: undefined });
+    expect(api.getApiV1DataProjectRules.mock.lastCall?.[0]).toEqual({ machine: undefined });
 
     data.setRulesMachine("machine-b");
     await flush();
 
     expect(api.getApiV1DataProjectRules).toHaveBeenCalledTimes(2);
-    expect(api.getApiV1DataProjectRules).toHaveBeenLastCalledWith({ machine: "machine-b" });
+    expect(api.getApiV1DataProjectRules.mock.lastCall?.[0]).toEqual({ machine: "machine-b" });
   });
 
   it("reloads the mounted rules view when its refresh version changes", async () => {

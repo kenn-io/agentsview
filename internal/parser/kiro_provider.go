@@ -1351,6 +1351,12 @@ func kiroDBPathForEvent(root, path string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	// A bare "-shm" event is ignored: the provider's own read connections
+	// rewrite that index, and every committed write lands in the main file
+	// or a journal sibling.
+	if strings.HasSuffix(rel, "-shm") {
+		return "", false
+	}
 	if filepath.ToSlash(rel) == kiroSQLiteDBName ||
 		(filepath.Dir(rel) == "." &&
 			strings.HasPrefix(filepath.Base(rel), kiroSQLiteDBName+"-")) {

@@ -493,7 +493,10 @@ jobs:
           POSTGRES_DB: agentsview_test
         ports:
           - 5433:5432
+        # PG18 keeps its data under /var/lib/postgresql/18/docker. The suite
+        # repeatedly rebuilds schemas; keep this disposable cluster in memory.
         options: >-
+          --tmpfs /var/lib/postgresql:rw,size=4g
           --health-cmd "pg_isready -U agentsview_test -d agentsview_test"
           --health-interval 2s
           --health-timeout 5s

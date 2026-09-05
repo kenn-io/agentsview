@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import TopSkills from "./TopSkills.svelte";
@@ -130,9 +124,7 @@ describe("TopSkills", () => {
       ...analytics.errors,
       skills: "Failed to load",
     };
-    const retrySpy = vi
-      .spyOn(analytics, "fetchSkills")
-      .mockResolvedValue("ok");
+    const retrySpy = vi.spyOn(analytics, "fetchSkills").mockResolvedValue("ok");
     const component = mount(TopSkills, { target: document.body });
     await tick();
 

@@ -1,10 +1,4 @@
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   activateRecallExtractionGeneration,
   fetchRecallEntries,
@@ -18,15 +12,17 @@ afterEach(() => {
 
 describe("fetchRecallEntries", () => {
   it("sends every corpus-browser filter to the Recall API", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({
-        entries: [],
-        trusted_only: false,
-        next_cursor: "cursor-2",
-        result_cap: 500,
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    ));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          entries: [],
+          trusted_only: false,
+          next_cursor: "cursor-2",
+          result_cap: 500,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const page = await fetchRecallEntries({
@@ -39,8 +35,7 @@ describe("fetchRecallEntries", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const url = new URL(String(fetchMock.mock.calls[0]?.[0]),
-      window.location.origin);
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]), window.location.origin);
     expect(url.pathname).toBe("/api/v1/recall/entries");
     expect(Object.fromEntries(url.searchParams)).toEqual({
       limit: "75",
@@ -60,14 +55,16 @@ describe("fetchRecallEntries", () => {
 
 describe("fetchRecallExtractionProgress", () => {
   it("sends bounded generation, state, and cursor filters", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({
-        generation_fingerprint: "generation-a",
-        progress: [],
-        next_cursor: "progress-cursor-2",
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    ));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          generation_fingerprint: "generation-a",
+          progress: [],
+          next_cursor: "progress-cursor-2",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const page = await fetchRecallExtractionProgress({
@@ -78,8 +75,7 @@ describe("fetchRecallExtractionProgress", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const url = new URL(String(fetchMock.mock.calls[0]?.[0]),
-      window.location.origin);
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]), window.location.origin);
     expect(url.pathname).toBe("/api/v1/recall/extraction/progress");
     expect(Object.fromEntries(url.searchParams)).toEqual({
       limit: "25",
@@ -97,9 +93,11 @@ describe("fetchRecallExtractionProgress", () => {
 
 describe("Recall extraction generation actions", () => {
   it("activates the configured generation", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
-      status: 204,
-    }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 204,
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await activateRecallExtractionGeneration();
@@ -111,9 +109,11 @@ describe("Recall extraction generation actions", () => {
   });
 
   it("retires one generation without a force option", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
-      status: 204,
-    }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 204,
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await retireRecallExtractionGeneration("generation old");

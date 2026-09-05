@@ -24,22 +24,46 @@ var validInsightTypes = map[string]bool{
 }
 
 type generateInsightRequest struct {
-	Type           string                        `json:"type"`
-	DateFrom       string                        `json:"date_from"`
-	DateTo         string                        `json:"date_to"`
-	Project        string                        `json:"project,omitempty"`
-	Prompt         string                        `json:"prompt,omitempty"`
-	SessionID      string                        `json:"session_id,omitempty"`
-	Agent          string                        `json:"agent,omitempty"`
-	Kind           string                        `json:"kind,omitempty"`
-	LLMOptIn       bool                          `json:"llm_opt_in,omitempty"`
-	ForceRefresh   bool                          `json:"force_refresh,omitempty"`
-	AutomatedScope string                        `json:"automated_scope,omitempty"`
-	Filters        *insight.CannedSessionFilters `json:"filters,omitempty"`
+	Type           string                     `json:"type"`
+	DateFrom       string                     `json:"date_from"`
+	DateTo         string                     `json:"date_to"`
+	Project        string                     `json:"project,omitempty"`
+	Prompt         string                     `json:"prompt,omitempty"`
+	SessionID      string                     `json:"session_id,omitempty"`
+	Agent          string                     `json:"agent,omitempty"`
+	Kind           string                     `json:"kind,omitempty"`
+	LLMOptIn       bool                       `json:"llm_opt_in,omitempty"`
+	ForceRefresh   bool                       `json:"force_refresh,omitempty"`
+	AutomatedScope string                     `json:"automated_scope,omitempty"`
+	Filters        *cannedSessionFiltersInput `json:"filters,omitempty"`
 	// Timezone is the IANA zone the caller's date range is expressed in, so
 	// the attached activity summary covers the same local-day window as the
 	// activity dashboard the dates were derived from. Empty means UTC.
 	Timezone string `json:"timezone,omitempty"`
+}
+
+type cannedSessionFiltersInput struct {
+	Timezone        string `json:"timezone,omitempty"`
+	Machine         string `json:"machine,omitempty"`
+	Agent           string `json:"agent,omitempty"`
+	Termination     string `json:"termination,omitempty"`
+	MinUserMessages int    `json:"min_user_messages,omitempty"`
+	IncludeOneShot  bool   `json:"include_one_shot,omitempty"`
+	AutomatedScope  string `json:"automated_scope,omitempty"`
+	ActiveSince     string `json:"active_since,omitempty"`
+}
+
+func (f cannedSessionFiltersInput) toDomain() insight.CannedSessionFilters {
+	return insight.CannedSessionFilters{
+		Timezone:        f.Timezone,
+		Machine:         f.Machine,
+		Agent:           f.Agent,
+		Termination:     f.Termination,
+		MinUserMessages: f.MinUserMessages,
+		IncludeOneShot:  f.IncludeOneShot,
+		AutomatedScope:  f.AutomatedScope,
+		ActiveSince:     f.ActiveSince,
+	}
 }
 
 func normalizeInsightAutomatedScope(scope string) (string, bool) {
@@ -62,7 +86,7 @@ func normalizeCannedSessionFilters(
 		AutomatedScope: req.AutomatedScope,
 	}
 	if req.Filters != nil {
-		filters = *req.Filters
+		filters = req.Filters.toDomain()
 	}
 	filters.Timezone = strings.TrimSpace(filters.Timezone)
 	if filters.Timezone == "" {
@@ -165,9 +189,6 @@ func (s *Server) humaGenerateCannedInsight(
 	if !ok {
 		return nil, apiError(http.StatusBadRequest, message)
 	}
-	req.Filters = &filters
-	req.AutomatedScope = filters.AutomatedScope
-
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
@@ -175,7 +196,7 @@ func (s *Server) humaGenerateCannedInsight(
 				apiErrorResponse{Message: "streaming not supported"})
 			return
 		}
-		s.generateCannedInsight(hctx.Context(), stream, kind, req)
+		s.generateCannedInsight(hctx.Context(), stream, kind, req, filters)
 	}}, nil
 }
 
@@ -184,6 +205,7 @@ func (s *Server) generateCannedInsight(
 	stream *SSEStream,
 	kind insight.CannedKind,
 	req generateInsightRequest,
+	filters insight.CannedSessionFilters,
 ) {
 	sendJSON := func(event string, v any) bool {
 		return stream.SendJSON(event, v)
@@ -199,7 +221,7 @@ func (s *Server) generateCannedInsight(
 	}
 	generationOptions := s.currentInsightGenerateOptions(ctx)
 	payload, aggregateHash, cacheKey, err := s.buildCannedPayload(
-		ctx, kind, req, generationOptions,
+		ctx, kind, req, filters, generationOptions,
 	)
 	if err != nil {
 		log.Printf("canned insight payload error: %v", err)
@@ -397,15 +419,9 @@ func (s *Server) buildCannedPayload(
 	ctx context.Context,
 	kind insight.CannedKind,
 	req generateInsightRequest,
+	filters insight.CannedSessionFilters,
 	generationOptions insight.GenerateOptions,
 ) (insight.CannedAggregatePayload, string, string, error) {
-	filters := insight.CannedSessionFilters{
-		Timezone:       "UTC",
-		AutomatedScope: req.AutomatedScope,
-	}
-	if req.Filters != nil {
-		filters = *req.Filters
-	}
 	analyticsFilter := db.AnalyticsFilter{
 		From:            req.DateFrom,
 		To:              req.DateTo,
@@ -460,7 +476,7 @@ func (s *Server) buildCannedPayload(
 		ModelBreakdowns:     modelBreakdowns,
 		TopSessionsByCost:   topSessions,
 	}
-	coachSessions, err := s.listCannedCoachSessions(ctx, req)
+	coachSessions, err := s.listCannedCoachSessions(ctx, req, filters)
 	if err != nil {
 		return insight.CannedAggregatePayload{}, "", "", err
 	}
@@ -551,14 +567,8 @@ func foldCannedModelBreakdowns(
 func (s *Server) listCannedCoachSessions(
 	ctx context.Context,
 	req generateInsightRequest,
+	filters insight.CannedSessionFilters,
 ) ([]db.Session, error) {
-	filters := insight.CannedSessionFilters{
-		Timezone:       "UTC",
-		AutomatedScope: req.AutomatedScope,
-	}
-	if req.Filters != nil {
-		filters = *req.Filters
-	}
 	loc := cannedCoachLocation(filters.Timezone)
 	dateFrom, dateTo := cannedCoachUTCDateBounds(
 		req.DateFrom, req.DateTo, loc,

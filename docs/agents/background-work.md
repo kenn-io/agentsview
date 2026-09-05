@@ -37,10 +37,11 @@ long-running background work. Also read it before investigating memory growth.
   process-local timezone plus up to eight retained recently requested explicit
   timezones. Installed source and aggregate fingerprints, not a progress
   cursor, are the authoritative coverage records.
-- If a source fingerprint changes during a pass, recapture and restart the
-  snapshot pass at most three times. Already installed current fingerprints
-  make stable batches reusable; never pair facts from the newer source with
-  rollup metadata from the older snapshot.
+- A pass runs once and is never restarted because the archive was written while
+  it ran. Each session's facts and source version come from one archive read
+  transaction, so they are always paired correctly, and a session written during
+  the pass is refilled by its own mutation notification. Do not reintroduce a
+  restart loop over a moving source fingerprint.
 - Sweep the archive deletion journal before and after the pass and between
   install batches. Queries also inner-join current archive sessions before
   ranking, so tombstone processing is hygiene rather than a correctness

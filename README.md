@@ -685,7 +685,7 @@ ______________________________________________________________________
 
 ## Development
 
-Requires Go 1.27+ (CGO), Node.js 22+.
+Requires Go 1.27+ (CGO), Node.js 24.11+.
 
 ```bash
 make dev            # Go server (dev mode)

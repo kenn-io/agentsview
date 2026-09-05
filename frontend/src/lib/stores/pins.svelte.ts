@@ -1,19 +1,7 @@
 import type { PinnedMessage } from "../api/types.js";
 import { PinsService } from "../api/generated/index";
-import {
-  callGenerated,
-  configureGeneratedClient,
-  isAbortError,
-} from "../api/runtime.js";
+import { callGenerated, isAbortError } from "../api/runtime.js";
 import { LatestRead } from "../utils/latest-read.js";
-
-interface PinsResponse {
-  pins: PinnedMessage[];
-}
-
-interface PinMessageResponse {
-  id: number;
-}
 
 class PinsStore {
   /** All pins across all sessions (loaded for pinned tab). */
@@ -47,11 +35,10 @@ class PinsStore {
     const signal = this.#allPinsRead.begin();
     const mutVer = this.#mutationVersion;
     try {
-      configureGeneratedClient();
       const res = await callGenerated(
-        () => PinsService.getApiV1Pins({ project }),
+        (options) => PinsService.getApiV1Pins({ project }, options),
         signal,
-      ) as unknown as PinsResponse;
+      );
       // Apply only if this is the latest load AND no mutation
       // occurred since the request started (which would make
       // this response stale relative to the optimistic state).
@@ -85,19 +72,16 @@ class PinsStore {
       this.sessionPinIds = new Set();
     }
     try {
-      configureGeneratedClient();
       const res = await callGenerated(
-        () => PinsService.getApiV1SessionsIdPins({ id: sessionId }),
+        (options) => PinsService.getApiV1SessionsByIdPins({ id: sessionId }, options),
         signal,
-      ) as unknown as PinsResponse;
+      );
       if (
         this.#sessionPinsRead.isCurrent(signal) &&
         this.#loadVersion === loadVer &&
         this.#mutationVersion === mutVer
       ) {
-        this.sessionPinIds = new Set(
-          res.pins.map((p) => p.message_id),
-        );
+        this.sessionPinIds = new Set(res.pins.map((p) => p.message_id));
       }
     } catch (e) {
       if (isAbortError(e) || !this.#sessionPinsRead.isCurrent(signal)) return;
@@ -140,8 +124,7 @@ class PinsStore {
     this.#inflight.add(messageId);
     this.#mutationVersion++;
     try {
-      configureGeneratedClient();
-      await PinsService.deleteApiV1SessionsIdMessagesMessageidPin({
+      await PinsService.deleteApiV1SessionsByIdMessagesByMessageIdPin({
         id: sessionId,
         messageId,
       });
@@ -152,11 +135,7 @@ class PinsStore {
         this.sessionPinIds = next;
       }
       this.pins = this.pins.filter(
-        (p) =>
-          !(
-            p.session_id === sessionId &&
-            p.message_id === messageId
-          ),
+        (p) => !(p.session_id === sessionId && p.message_id === messageId),
       );
     } catch {
       // Silently ignore — refetch will reconcile state.
@@ -166,11 +145,7 @@ class PinsStore {
     }
   }
 
-  async togglePin(
-    sessionId: string,
-    messageId: number,
-    ordinal: number,
-  ) {
+  async togglePin(sessionId: string, messageId: number, ordinal: number) {
     if (this.#inflight.has(messageId)) return;
     if (this.sessionPinIds.has(messageId)) {
       await this.unpin(sessionId, messageId);
@@ -178,13 +153,10 @@ class PinsStore {
       this.#inflight.add(messageId);
       this.#mutationVersion++;
       try {
-        configureGeneratedClient();
-        const result =
-          await PinsService.postApiV1SessionsIdMessagesMessageidPin({
-            id: sessionId,
-            messageId,
-            requestBody: {},
-          }) as unknown as PinMessageResponse;
+        const result = await PinsService.postApiV1SessionsByIdMessagesByMessageIdPin(
+          { id: sessionId, messageId },
+          {},
+        );
         // Only update sessionPinIds if still viewing the same session.
         if (this.#currentSessionId === sessionId) {
           const next = new Set(this.sessionPinIds);
@@ -199,13 +171,7 @@ class PinsStore {
             ordinal,
             created_at: new Date().toISOString(),
           },
-          ...this.pins.filter(
-            (p) =>
-              !(
-                p.session_id === sessionId &&
-                p.message_id === messageId
-              ),
-          ),
+          ...this.pins.filter((p) => !(p.session_id === sessionId && p.message_id === messageId)),
         ];
       } catch {
         // Silently ignore — refetch will reconcile state.

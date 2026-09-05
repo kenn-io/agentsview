@@ -8,9 +8,7 @@ import {
   QUALITY_PATTERN_SEVERITY_THRESHOLDS,
 } from "./qualityPatterns.js";
 
-function makeSignals(
-  overrides: Partial<SignalsAnalyticsResponse> = {},
-): SignalsAnalyticsResponse {
+function makeSignals(overrides: Partial<SignalsAnalyticsResponse> = {}): SignalsAnalyticsResponse {
   return {
     scored_sessions: 5,
     unscored_sessions: 1,
@@ -111,12 +109,7 @@ describe("quality pattern transforms", () => {
     expect(summary.totalSessions).toBe(6);
     expect(summary.computedQualitySessions).toBe(4);
     expect(summary.lowQualitySessions).toBe(2);
-    expect(summary.scoreDistribution.map((b) => b.grade)).toEqual([
-      "A",
-      "B",
-      "D",
-      "F",
-    ]);
+    expect(summary.scoreDistribution.map((b) => b.grade)).toEqual(["A", "B", "D", "F"]);
   });
 
   it("builds prompt maturity from real Phase 3 quality health fields", () => {
@@ -312,9 +305,7 @@ describe("quality pattern transforms", () => {
       },
     });
 
-    expect(
-      buildRuleBasedRecommendations(buildQualityPatterns(signals)),
-    ).toEqual([]);
+    expect(buildRuleBasedRecommendations(buildQualityPatterns(signals))).toEqual([]);
   });
 
   it("uses documented severity threshold boundaries", () => {
@@ -348,8 +339,7 @@ describe("quality pattern transforms", () => {
         computed_sessions: 100,
         totals: {
           short_prompt_count: 0,
-          unstructured_start:
-            QUALITY_PATTERN_SEVERITY_THRESHOLDS.warningRatio * 100,
+          unstructured_start: QUALITY_PATTERN_SEVERITY_THRESHOLDS.warningRatio * 100,
           missing_success_criteria_count: 0,
           missing_verification_count: 0,
           duplicate_prompt_count: 0,
@@ -359,8 +349,7 @@ describe("quality pattern transforms", () => {
         },
         sessions_with_signal: {
           short_prompt_count: 0,
-          unstructured_start:
-            QUALITY_PATTERN_SEVERITY_THRESHOLDS.warningRatio * 100,
+          unstructured_start: QUALITY_PATTERN_SEVERITY_THRESHOLDS.warningRatio * 100,
           missing_success_criteria_count: 0,
           missing_verification_count: 0,
           duplicate_prompt_count: 0,
@@ -375,8 +364,7 @@ describe("quality pattern transforms", () => {
         computed_sessions: 100,
         totals: {
           short_prompt_count: 0,
-          unstructured_start:
-            QUALITY_PATTERN_SEVERITY_THRESHOLDS.criticalRatio * 100,
+          unstructured_start: QUALITY_PATTERN_SEVERITY_THRESHOLDS.criticalRatio * 100,
           missing_success_criteria_count: 0,
           missing_verification_count: 0,
           duplicate_prompt_count: 0,
@@ -386,8 +374,7 @@ describe("quality pattern transforms", () => {
         },
         sessions_with_signal: {
           short_prompt_count: 0,
-          unstructured_start:
-            QUALITY_PATTERN_SEVERITY_THRESHOLDS.criticalRatio * 100,
+          unstructured_start: QUALITY_PATTERN_SEVERITY_THRESHOLDS.criticalRatio * 100,
           missing_success_criteria_count: 0,
           missing_verification_count: 0,
           duplicate_prompt_count: 0,

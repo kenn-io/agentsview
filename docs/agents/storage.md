@@ -69,26 +69,44 @@ batch, or deletion changes the set of dedup identities a session (or the Cursor
 store) contributes, it must, in the same cache transaction, delete the timezone
 rollup installs of every other session holding a changed identity; rollup
 installation re-verifies inside its transaction that no finalized identity
-gained an outside member and retries as a moved source otherwise. A finalized
-daily row must never survive gaining a sibling.
+gained an outside member and, when one did, reclassifies against the newly
+committed facts rather than failing the caller. A finalized daily row must never
+survive gaining a sibling.
 
 Treat a usage-cache file as identifiable only after both its SQLite
 `application_id` and `usage_cache_metadata.cache_kind` match. Filename matching
-alone never permits deletion or replacement, and generations are not removed
-automatically because an SQLite transaction lock cannot prove that no other
-process holds an idle handle. If persistent cache storage is unavailable or the
-current generation is incompatible, use the same schema and query path in a
-process-owned temporary file and warn that the cache will rebuild after restart.
+alone never permits deletion or replacement. Lease-aware generations hold a
+shared cross-process lease for every open SQLite pool; retirement requires the
+exclusive lease plus a fresh application-ID, cache-kind, protocol-version,
+format-version, and source-database-ID check against the exact filename. Keep
+the lease file after retirement so a racing opener cannot lock a replacement
+inode. Preserve pre-protocol generations because an older binary may hold an
+idle handle without a lease, and preserve generations newer than the running
+format so a downgraded binary does not force the newer one to rebuild. If
+persistent cache storage is unavailable or the current generation is
+incompatible, use the same schema and query path in a process-owned temporary
+file and warn that the cache will rebuild after restart.
 
 Usage reads are exact. A cold aggregate request fills facts, builds the required
 timezone rollups, then reads them in one pinned cache transaction. Verify every
 candidate session's facts fingerprint, exact baked metadata, canonical pricing
-digest, resolved rate hashes, and Cursor high-water mark. Recheck each changed
-source session before installing it. A result is no older than the archive
-snapshot captured when the read began. A session confirmed deleted during fill
-is dropped from the request. Other fingerprint movement or archive-busy races
-are retried at most three times and then fail clearly rather than serving stale
-data. `cached_at` is diagnostic only.
+digest, resolved rate hashes, and Cursor high-water mark. A result is no older
+than the archive snapshot captured when the read began, and may be newer for a
+session whose facts were refilled meanwhile. A session confirmed deleted during
+fill is dropped from the request. `cached_at` is diagnostic only.
+
+The layers are kept apart so a live archive cannot veto a read. A fill reads one
+session's facts and that session's source version inside a single archive read
+transaction, installs both together, and reports the version it actually read,
+which may be newer than the one the caller asked for. Rollup aggregation then
+reads committed facts out of the usage cache only; it never touches the archive,
+so an append landing mid-build cannot abort it. An install is stale when the
+fact versions it was built from differ from the ones the cache now holds, and
+only those installs are rebuilt. Sessions written during a build are refilled by
+their own mutation notification and appear in the next aggregation, so staleness
+of a few seconds is expected and intended. Do not reintroduce a whole-snapshot
+recheck against the archive: validating a snapshot against a source that changes
+one session at a time livelocks the request.
 
 Timezone rollup identity includes both the resolved zone name and its rule
 fingerprint. Cache-generation retirement cancels detached work immediately but
@@ -97,8 +115,9 @@ query, backfill, fill, and rollup leases drain.
 
 `sync_marker` is a fingerprint component, not a monotonic version: its trigger
 recomputes the maximum of mutable timestamp fields, so it can decrease. A fill
-must recheck the full source fingerprint before installation. Do not replace
-that recheck with ordering comparisons.
+must read the full source fingerprint in the same transaction as the facts it
+installs. Do not compare fingerprints for ordering, and do not skip a refill
+because a cached fingerprint merely looks newer.
 
 ### Usage archive indexes
 
@@ -132,6 +151,22 @@ artifact, recall, PostgreSQL, and DuckDB refreshes. Full resync reconciliation
 must compare the same fields so incremental and resync paths agree. A no-op
 message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
+
+### Tool result summaries
+
+`tool_calls.result_content` is a display summary derived from the call's
+`tool_result_events` rows at sync time. When a call has exactly one event and
+the summary equals that event's content, the summary is not stored: the column
+is empty while `result_content_length` still records the summary's size. That
+pair, an empty column with a non-zero length, tells a reader to take the text
+from the single event. Multi-event summaries, single-event summaries that
+differ from their event, calls with no events, and blocked categories store
+exactly what the parser produced. Load tool calls through the message loaders,
+which refill the summary once events are attached; a query that selects the
+column directly must apply the same fallback, and PostgreSQL and DuckDB apply
+the same write rule so their tool-call fingerprints match SQLite. Anyone
+reading the archive or a mirror by hand sees the empty column and must join
+the events table to recover the text.
 
 ## DuckDB Mirror
 

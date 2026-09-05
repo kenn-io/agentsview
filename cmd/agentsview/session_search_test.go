@@ -146,6 +146,25 @@ func TestSessionSearchDocumentedIdentifierRecipeFindsToolInput(t *testing.T) {
 	assert.Contains(t, got.Matches[0].Snippet, identifier)
 }
 
+func TestSessionSearchExcludeSessionDropsMatches(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "keep", project: "p"},
+		sessionSeed{id: "drop", project: "p"},
+	)
+	seedSearchMessage(t, dataDir, "keep", "needle in keep")
+	seedSearchMessage(t, dataDir, "drop", "needle in drop")
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "search", "needle",
+		"--exclude-session", "drop", "--format", "json")
+	require.NoError(t, err)
+
+	got := decodeCLIJSON[service.ContentSearchResult](t, out)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "keep", got.Matches[0].SessionID)
+}
+
 func TestSessionSearchFTSWithToolSource(t *testing.T) {
 	cmd := newSessionSearchCommand()
 	cmd.SetArgs([]string{"needle", "--fts", "--in", "tool_result"})

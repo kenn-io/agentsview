@@ -360,6 +360,33 @@ func TestDBBackedProviderFingerprintIgnoresUnrelatedRows(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
+func TestDBBackedProviderIgnoresBareShmSiblingEvents(t *testing.T) {
+	// Opening a WAL-mode database as a reader rewrites its -shm index. If that
+	// event resolved to the container, every scan would schedule the next
+	// one and rewrite every member session in between.
+	dbPath, seeder, db := newForgeTestDB(t)
+	defer db.Close()
+	seedForgeConversation(t, seeder)
+	root := filepath.Dir(dbPath)
+
+	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath + "-shm", EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, changed, "-wal writes still resolve to the container")
+}
+
 func TestDBBackedProviderDeletedRowFingerprintsTombstoneAndSkips(t *testing.T) {
 	dbPath, seeder, db := newForgeTestDB(t)
 	defer db.Close()

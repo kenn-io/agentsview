@@ -22,10 +22,7 @@ export interface Insight {
   created_at: string;
 }
 
-export type InsightType =
-  | "daily_activity"
-  | "agent_analysis"
-  | "llm_canned";
+export type InsightType = "daily_activity" | "agent_analysis" | "llm_canned";
 
 export type CannedInsightKind =
   | "prompt_maturity_review"
@@ -39,12 +36,7 @@ export interface InsightsResponse {
   insights: Insight[];
 }
 
-export type AgentName =
-  | "claude"
-  | "codex"
-  | "copilot"
-  | "gemini"
-  | "kiro";
+export type AgentName = "claude" | "codex" | "copilot" | "gemini" | "kiro";
 
 export interface InsightGenerationFilters {
   timezone?: string;

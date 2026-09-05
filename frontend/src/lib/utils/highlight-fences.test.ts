@@ -10,9 +10,7 @@ function makeDiv(html: string): HTMLElement {
 }
 
 function marks(el: HTMLElement): string[] {
-  return Array.from(el.querySelectorAll("mark.search-highlight")).map(
-    (m) => m.textContent ?? "",
-  );
+  return Array.from(el.querySelectorAll("mark.search-highlight")).map((m) => m.textContent ?? "");
 }
 
 function styledSpans(el: HTMLElement): HTMLSpanElement[] {
@@ -178,9 +176,9 @@ describe("highlightCodeFences", () => {
           { timeout: 10_000 },
         );
         expect(styledSpans(codeEl).length).toBeGreaterThanOrEqual(1);
-        const codeMarks = Array.from(
-          codeEl.querySelectorAll("mark.search-highlight"),
-        ).map((m) => m.textContent ?? "");
+        const codeMarks = Array.from(codeEl.querySelectorAll("mark.search-highlight")).map(
+          (m) => m.textContent ?? "",
+        );
         expect(codeMarks).toContain("foo");
       } finally {
         fenceAction.destroy();
@@ -231,9 +229,7 @@ describe("highlightCodeFences", () => {
           { timeout: 10_000 },
         );
 
-        const codeMarks = Array.from(
-          codeEl.querySelectorAll("mark.search-highlight"),
-        );
+        const codeMarks = Array.from(codeEl.querySelectorAll("mark.search-highlight"));
         // The mark fragments across token boundaries must concatenate to the query.
         const combined = codeMarks.map((m) => m.textContent ?? "").join("");
         expect(combined).toBe("const foo");

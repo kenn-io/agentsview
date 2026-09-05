@@ -124,7 +124,7 @@ func TestDevinProviderDBEventsFanOutAndPreserveTombstones(t *testing.T) {
 	provider, ok := NewProvider(AgentDevin, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	for _, changedPath := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+	for _, changedPath := range []string{dbPath, dbPath + "-wal"} {
 		changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
 			Path:              changedPath,
 			EventKind:         "write",
@@ -187,6 +187,12 @@ func TestDevinProviderRejectsUnrelatedChangedPaths(t *testing.T) {
 	for _, req := range []ChangedPathRequest{
 		{
 			Path:      filepath.Join(root, "cli", "sessions.db-backup"),
+			EventKind: "write",
+			WatchRoot: filepath.Join(root, "cli"),
+		},
+		{
+			// The provider's own read connection rewrites the -shm index.
+			Path:      filepath.Join(root, "cli", devinDBFilename+"-shm"),
 			EventKind: "write",
 			WatchRoot: filepath.Join(root, "cli"),
 		},

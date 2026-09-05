@@ -349,7 +349,13 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return s.attachToolResultEvents(ctx, msgs, index, sessionID)
+	if err := s.attachToolResultEvents(ctx, msgs, index, sessionID); err != nil {
+		return err
+	}
+	// Mirrors the SQLite load boundary: a summary the call's single result
+	// event already carries is not stored, so refill it here.
+	db.RestoreMessageResultContent(msgs)
+	return nil
 }
 
 func (s *Store) attachToolResultEvents(

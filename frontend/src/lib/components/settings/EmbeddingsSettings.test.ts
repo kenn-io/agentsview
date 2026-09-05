@@ -16,8 +16,7 @@ vi.mock("../../api/runtime.js", async (importOriginal) => {
 });
 
 vi.mock("../../api/generated/index", async (importOriginal) => {
-  const orig =
-    await importOriginal<typeof import("../../api/generated/index")>();
+  const orig = await importOriginal<typeof import("../../api/generated/index")>();
   return {
     ...orig,
     EmbeddingsService: {
@@ -118,9 +117,7 @@ describe("EmbeddingsSettings", () => {
 
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
-    expect(document.body.textContent).toContain(
-      "Estimating time remaining...",
-    );
+    expect(document.body.textContent).toContain("Estimating time remaining...");
 
     unmount(component);
   });
@@ -134,9 +131,7 @@ describe("EmbeddingsSettings", () => {
     await settle();
 
     expect(document.body.textContent).toContain("Scanning");
-    expect(document.body.textContent).toContain(
-      "the total amount of work is not known yet",
-    );
+    expect(document.body.textContent).toContain("the total amount of work is not known yet");
     expect(document.body.querySelector('[role="progressbar"]')).toBeNull();
 
     unmount(component);
@@ -144,9 +139,7 @@ describe("EmbeddingsSettings", () => {
 
   it("switches to the completed summary and refetches generations when the build finishes", async () => {
     let current: VectorBuildStatus = runningStatus(900);
-    embeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() =>
-      Promise.resolve(current),
-    );
+    embeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() => Promise.resolve(current));
 
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
@@ -179,9 +172,7 @@ describe("EmbeddingsSettings", () => {
       },
     };
     embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
-      generations: [
-        { ...BUILDING_GENERATION, state: "active", embedded: 100, missing: 0 },
-      ],
+      generations: [{ ...BUILDING_GENERATION, state: "active", embedded: 100, missing: 0 }],
     });
     await settle(2000);
 
@@ -191,9 +182,9 @@ describe("EmbeddingsSettings", () => {
     expect(text).toContain("345");
     expect(text).toContain("Active");
     expect(text).toContain("100 embedded");
-    expect(
-      embeddingsService.getApiV1EmbeddingsGenerations.mock.calls.length,
-    ).toBeGreaterThan(generationCallsWhileRunning);
+    expect(embeddingsService.getApiV1EmbeddingsGenerations.mock.calls.length).toBeGreaterThan(
+      generationCallsWhileRunning,
+    );
 
     unmount(component);
   });
@@ -213,9 +204,7 @@ describe("EmbeddingsSettings", () => {
     await settle();
 
     expect(document.body.textContent).toContain("Failed");
-    expect(document.body.textContent).toContain(
-      "encode batch: connection refused",
-    );
+    expect(document.body.textContent).toContain("encode batch: connection refused");
 
     unmount(component);
   });
@@ -231,36 +220,27 @@ describe("EmbeddingsSettings", () => {
     expect(document.body.textContent).toContain(
       "Semantic search embeddings are not available on this server.",
     );
-    expect(document.body.textContent).toContain(
-      "vector serving disabled: vectors.write.lock held",
-    );
+    expect(document.body.textContent).toContain("vector serving disabled: vectors.write.lock held");
 
     const calls = embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
     await settle(10 * 60_000);
-    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(
-      calls,
-    );
+    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(calls);
 
     unmount(component);
   });
 
   it("polls fast while running, slowly while idle, and not at all when hidden or unmounted", async () => {
     let current: VectorBuildStatus = runningStatus(100);
-    embeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() =>
-      Promise.resolve(current),
-    );
+    embeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() => Promise.resolve(current));
 
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
-    const afterMount =
-      embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
+    const afterMount = embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
     expect(afterMount).toBe(1);
 
     // Active cadence: a running build is polled every 2s.
     await settle(2000);
-    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(
-      2,
-    );
+    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(2);
 
     // Idle cadence: after the build finishes, 2s ticks stop...
     current = {
@@ -272,17 +252,12 @@ describe("EmbeddingsSettings", () => {
       dimension: 256,
     };
     await settle(2000);
-    const idleBase =
-      embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
+    const idleBase = embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
     await settle(10_000);
-    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(
-      idleBase,
-    );
+    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(idleBase);
     // ...but a slow poll still notices externally started builds.
     await settle(60_000);
-    expect(
-      embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length,
-    ).toBeGreaterThan(idleBase);
+    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBeGreaterThan(idleBase);
 
     // Hidden page: polling stops entirely.
     Object.defineProperty(document, "hidden", {
@@ -290,12 +265,9 @@ describe("EmbeddingsSettings", () => {
       get: () => true,
     });
     document.dispatchEvent(new Event("visibilitychange"));
-    const hiddenBase =
-      embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
+    const hiddenBase = embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
     await settle(10 * 60_000);
-    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(
-      hiddenBase,
-    );
+    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(hiddenBase);
 
     // Visible again: an immediate refresh resumes the loop.
     Object.defineProperty(document, "hidden", {
@@ -304,17 +276,14 @@ describe("EmbeddingsSettings", () => {
     });
     document.dispatchEvent(new Event("visibilitychange"));
     await settle();
-    expect(
-      embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length,
-    ).toBeGreaterThan(hiddenBase);
+    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBeGreaterThan(
+      hiddenBase,
+    );
 
     // Unmount: no further polling.
     unmount(component);
-    const afterUnmount =
-      embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
+    const afterUnmount = embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length;
     await settle(10 * 60_000);
-    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(
-      afterUnmount,
-    );
+    expect(embeddingsService.getApiV1EmbeddingsStatus.mock.calls.length).toBe(afterUnmount);
   });
 });

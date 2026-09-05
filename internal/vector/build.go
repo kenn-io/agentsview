@@ -537,12 +537,7 @@ func (ix *Index) countPending(ctx context.Context, fp string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	rows, err := ix.db.QueryContext(ctx, `
-SELECT content FROM `+ix.spec.DocsTable+` d WHERE NOT EXISTS (
-    SELECT 1 FROM `+ix.spec.stampsTable()+` s WHERE s.ordinal = ? AND s.doc_key = d.doc_key
-      AND s.revision = d.content_hash)`,
-		ordinal,
-	)
+	rows, err := ix.db.QueryContext(ctx, ix.pendingContentQuery(), ordinal)
 	if err != nil {
 		return 0, fmt.Errorf("count pending documents: %w", err)
 	}
@@ -560,6 +555,27 @@ SELECT content FROM `+ix.spec.DocsTable+` d WHERE NOT EXISTS (
 		return 0, fmt.Errorf("iterating pending documents: %w", err)
 	}
 	return total, nil
+}
+
+// pendingContentQuery returns the content of every document not stamped at
+// its current revision for the bound generation ordinal.
+//
+// The pending CTE is materialized on purpose: it resolves doc_keys through
+// the mirror's (doc_key, content_hash) covering index alone, and the outer
+// join then reads content only for the documents that survive. Flattened
+// into one statement, SQLite reads every mirror row's content just to
+// discard the already-stamped ones, so an after-sync refresh with nothing
+// pending still paid for the whole corpus.
+func (ix *Index) pendingContentQuery() string {
+	return `
+WITH pending AS MATERIALIZED (
+    SELECT d.doc_key FROM ` + ix.spec.DocsTable + ` d WHERE NOT EXISTS (
+        SELECT 1 FROM ` + ix.spec.stampsTable() + ` s
+         WHERE s.ordinal = ? AND s.doc_key = d.doc_key
+           AND s.revision = d.content_hash)
+)
+SELECT d.content FROM pending p
+  JOIN ` + ix.spec.DocsTable + ` d ON d.doc_key = p.doc_key`
 }
 
 // ordinalForFingerprint looks up a generation's generations-table ordinal

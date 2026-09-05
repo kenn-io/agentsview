@@ -127,6 +127,43 @@ func TestCodexProviderUnresolvedParentNeedsRetry(t *testing.T) {
 	assert.Equal(t, "child answer", result.Result.Messages[1].Content)
 }
 
+func TestCodexProviderTurnlessParentResolvesWithoutRetry(t *testing.T) {
+	// Codex Desktop writes a rollout when a thread opens; forking before the
+	// first prompt produces a parent holding only session_meta and settings
+	// events. Such a parent is present and fully readable, so the fork must
+	// parse as current instead of being marked for a retry that can never
+	// succeed. Whether the child carries a copied parent session_meta is
+	// not a signal: real forks replay parent history with and without it.
+	root := t.TempDir()
+	const childID = "22222222-2222-4222-8222-222222222222"
+	const parentID = "11111111-1111-4111-8111-111111111111"
+	writeCodexProviderSessionContent(t, root, parentID, testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/workspace/project", "codex_cli_rs", tsEarly),
+	))
+	writeCodexProviderSessionContent(t, root, childID, testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(
+			childID, parentID, "/workspace/project", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "child-turn", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "child task", tsEarlyS1),
+		testjsonl.CodexMsgJSON("assistant", "child answer", tsEarlyS5),
+	))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, childID)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0]
+	assert.Equal(t, DataVersionCurrent, result.DataVersion)
+	assert.Empty(t, result.RetryReason)
+	require.Len(t, result.Result.Messages, 2)
+	assert.Equal(t, "child task", result.Result.Messages[0].Content)
+	assert.Equal(t, "child answer", result.Result.Messages[1].Content)
+}
+
 func TestCodexProviderUnresolvedParentWithoutFinalNewlineNeedsRetry(t *testing.T) {
 	root := t.TempDir()
 	const childID = "22222222-2222-4222-8222-222222222222"

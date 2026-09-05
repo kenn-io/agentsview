@@ -3,16 +3,11 @@ import { ui } from "../stores/ui.svelte.js";
 
 type SidebarControlPlacement = "sidebar" | "content";
 
-function focusedPlacement(
-  element: Element | null,
-): SidebarControlPlacement | null {
+function focusedPlacement(element: Element | null): SidebarControlPlacement | null {
   if (!element) return null;
 
   const sidebar = document.getElementById("session-sidebar");
-  if (
-    sidebar?.contains(element) ||
-    element.closest(".sidebar-panel-control--sidebar")
-  ) {
+  if (sidebar?.contains(element) || element.closest(".sidebar-panel-control--sidebar")) {
     return "sidebar";
   }
   if (
@@ -25,11 +20,8 @@ function focusedPlacement(
 }
 
 export async function toggleSidebarWithFocus(): Promise<void> {
-  const placementBeingHidden: SidebarControlPlacement = ui.sidebarOpen
-    ? "sidebar"
-    : "content";
-  const shouldMoveFocus =
-    focusedPlacement(document.activeElement) === placementBeingHidden;
+  const placementBeingHidden: SidebarControlPlacement = ui.sidebarOpen ? "sidebar" : "content";
+  const shouldMoveFocus = focusedPlacement(document.activeElement) === placementBeingHidden;
   const nextPlacement = ui.sidebarOpen ? "content" : "sidebar";
 
   ui.toggleSidebar();
@@ -41,7 +33,5 @@ export async function toggleSidebarWithFocus(): Promise<void> {
     ui.isMobileViewport && nextPlacement === "content"
       ? '[data-sidebar-focus-target="mobile"]'
       : `.sidebar-panel-control--${nextPlacement}`;
-  document
-    .querySelector<HTMLButtonElement>(focusTarget)
-    ?.focus();
+  document.querySelector<HTMLButtonElement>(focusTarget)?.focus();
 }

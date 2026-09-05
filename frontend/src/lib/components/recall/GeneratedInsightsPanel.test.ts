@@ -148,19 +148,16 @@ describe("GeneratedInsightsPanel", () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
 
-    expect(state.sessions.agents.map((agent) => agent.name)).toEqual([
-      "codex",
-      "claude",
-    ]);
+    expect(state.sessions.agents.map((agent) => agent.name)).toEqual(["codex", "claude"]);
   });
 
   it("generates from the scope retained in the insights store", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
 
-    const generate = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((button) => button.textContent?.trim() === "Generate");
+    const generate = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Generate",
+    );
     expect(generate).toBeDefined();
     generate!.click();
 
@@ -173,9 +170,7 @@ describe("GeneratedInsightsPanel", () => {
     await tick();
 
     const report = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        ".generated-list button",
-      ),
+      document.querySelectorAll<HTMLButtonElement>(".generated-list button"),
     ).find((button) => button.textContent?.includes("agentsview"));
     expect(report).toBeDefined();
     report!.click();
@@ -190,14 +185,10 @@ describe("GeneratedInsightsPanel", () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
 
-    const buttons = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    );
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
     buttons.find((button) => button.textContent?.trim() === "Export")!.click();
     buttons.find((button) => button.textContent?.trim() === "Publish")!.click();
-    buttons.find(
-      (button) => button.ariaLabel === "Delete generated insight",
-    )!.click();
+    buttons.find((button) => button.ariaLabel === "Delete generated insight")!.click();
     await tick();
 
     expect(mocks.downloadInsightExport).toHaveBeenCalledWith(42);

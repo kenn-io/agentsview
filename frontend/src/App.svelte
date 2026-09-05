@@ -122,12 +122,15 @@
     | undefined = $state(undefined);
 
   // Load active session's messages when selection changes.
-  // Only track activeSessionId — untrack the rest to prevent
-  // reactive loops from messages.loading / messages.messages.
+  // Only track activeSessionId and activeSessionLoadVersion (bumped
+  // when a not-found session recovers, so the same id reloads) —
+  // untrack the rest to prevent reactive loops from
+  // messages.loading / messages.messages.
   let lastMessageLoadSessionId: string | null = null;
   $effect(() => {
     const route = router.route;
     const id = sessions.activeSessionId;
+    void sessions.activeSessionLoadVersion;
     untrack(() => {
       const idChanged = id !== lastMessageLoadSessionId;
       lastMessageLoadSessionId = id;
@@ -206,6 +209,13 @@
     const thinkingVisible = ui.isBlockVisible("thinking");
     untrack(() => {
       if (ordinal === null || loading || !messageListRef) return;
+      // A missing session keeps the anchor armed: recovery reloads
+      // messages and re-runs this effect with them present.
+      if (
+        sessions.activeSessionNotFound && messages.messages.length === 0
+      ) {
+        return;
+      }
 
       const items = messageListRef.getDisplayItems();
       const normalItems =
@@ -548,8 +558,8 @@
   // than a URL change) act only while the routed session is still
   // the active one, so a newer local selection that has not synced
   // to the URL yet is never snapped back. navigateToSession dedupes
-  // in-flight requests, and a failed fetch changes no tracked
-  // state, so this cannot loop.
+  // in-flight requests, and a failed fetch changes no state this
+  // effect tracks, so this cannot loop.
   let lastRoutedSessionId: string | null = null;
   $effect(() => {
     const sid = router.sessionId;

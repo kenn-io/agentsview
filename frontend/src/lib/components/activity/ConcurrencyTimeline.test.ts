@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
 import ConcurrencyTimeline from "./ConcurrencyTimeline.svelte";
-import type { Report } from "../../api/types.js";
+import type { Bucket, Report } from "../../api/types.js";
 import { testMoney } from "../../test/money.js";
 
 class ResizeObserverMock {
@@ -12,7 +12,11 @@ class ResizeObserverMock {
   disconnect = vi.fn();
 }
 
-function makeReport(overrides: Partial<Report> = {}): Report {
+type PeakSplit = "interactive_at_peak" | "automated_at_peak";
+type BucketFixture = Omit<Bucket, PeakSplit> & Partial<Pick<Bucket, PeakSplit>>;
+type ReportOverrides = Partial<Omit<Report, "buckets">> & { buckets?: BucketFixture[] | null };
+
+function makeReport(overrides: ReportOverrides = {}): Report {
   // idx 2 (peak 3) carries a mixed split (2 interactive / 1 automated) for the
   // stacking and split-tooltip tests; idx 3 (peak 1) is all-interactive.
   const buckets = [
@@ -105,10 +109,10 @@ function makeReport(overrides: Partial<Report> = {}): Report {
   // Backfill the peak-automation split onto any bucket literal that omits it
   // (most fixtures only set max_agents), so the stacked bars get real geometry
   // instead of NaN. Unspecified buckets default to all-interactive.
-  report.buckets = (report.buckets ?? []).map((b) => ({
-    interactive_at_peak: b.max_agents,
-    automated_at_peak: 0,
+  report.buckets = (overrides.buckets ?? buckets).map((b) => ({
     ...b,
+    interactive_at_peak: b.interactive_at_peak ?? b.max_agents,
+    automated_at_peak: b.automated_at_peak ?? 0,
   }));
   return report;
 }

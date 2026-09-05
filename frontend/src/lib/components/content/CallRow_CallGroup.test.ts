@@ -60,9 +60,7 @@ function dumpHtml(filename: string, html: string) {
 // given tokens in order, with arbitrary other tokens (typically the scope
 // hash) interleaved.
 function hasClasses(...tokens: string[]): RegExp {
-  const inner = tokens
-    .map((t) => `\\b${t}\\b`)
-    .join("[^\"]*");
+  const inner = tokens.map((t) => `\\b${t}\\b`).join('[^"]*');
   return new RegExp(`class="[^"]*${inner}[^"]*"`);
 }
 
@@ -264,10 +262,12 @@ describe("CallGroup", () => {
     expect(html).toMatch(hasClasses("cg-members"));
     expect(html).toMatch(hasClasses("cg-header"));
     expect(html).toMatch(hasClasses("cg-h-label"));
-    expect(html).toContain(`${m.call_group_parallel_label()} · ${m.call_group_parallel_call_count({
-      count: 3,
-      countLabel: "3",
-    })}`);
+    expect(html).toContain(
+      `${m.call_group_parallel_label()} · ${m.call_group_parallel_call_count({
+        count: 3,
+        countLabel: "3",
+      })}`,
+    );
     expect(html).toMatch(hasClasses("cg-h-bar-wrap"));
     expect(html).toMatch(hasClasses("cg-h-bar"));
     expect(html).toContain("width: 70%");

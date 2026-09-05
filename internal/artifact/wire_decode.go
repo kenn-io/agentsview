@@ -393,6 +393,12 @@ func (m segmentMessage) dbMessage() db.Message {
 				}
 			}
 		}
+		// The archive drops a summary its single result event repeats, and
+		// the wire format carries the stored rows verbatim. Refill it so a
+		// decoded message matches a locally loaded one.
+		for i := range msg.ToolCalls {
+			db.RestoreToolCallResultContent(&msg.ToolCalls[i])
+		}
 	}
 	return msg
 }

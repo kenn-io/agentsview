@@ -39,6 +39,7 @@
     thinking: m.header_transcript_blocks_thinking(),
     tool: m.header_transcript_blocks_tool(),
     code: m.header_transcript_blocks_code(),
+    system: m.header_transcript_blocks_system(),
   });
 
   const FONT_SCALE_OPTIONS = $derived(

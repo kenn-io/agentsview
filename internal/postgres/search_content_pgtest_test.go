@@ -857,3 +857,24 @@ func TestPGSearchContentIncludeChildren(t *testing.T) {
 			"IncludeChildren=false: child session %q appeared in results", m.SessionID)
 	}
 }
+
+func TestPGSearchContentExcludeSession(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "keep", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSSession(t, store, "drop", "proj", "claude",
+		"2026-05-01T11:00:00Z", "2026-05-01T11:30:00Z")
+	insertCSMessage(t, store, "keep", 0, "user",
+		"needle in keep", "2026-05-01T10:00:00Z", false)
+	insertCSMessage(t, store, "drop", 0, "user",
+		"needle in drop", "2026-05-01T11:00:00Z", false)
+
+	got, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "needle", Mode: "substring",
+		Sources: []string{"messages"}, Limit: 1,
+		ExcludeSessionIDs: []string{"drop"},
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1, "excluded id must not consume the page")
+	assert.Equal(t, "keep", got.Matches[0].SessionID)
+}

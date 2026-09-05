@@ -667,11 +667,14 @@ from a single embedded template,
 `internal/skills/templates/finding-history.md.tmpl` via `go:embed` — the same
 pattern `internal/web` uses for the frontend — with no per-harness copies
 checked in. `Render` fills in a harness-specific delegation phrase (whether the
-harness can dispatch a search subagent or must run the bounded probes itself)
+harness can dispatch a search subagent or must run the bounded probes itself),
+optional `--server` / `--server-token-file` suffixes for remote-daemon installs,
 and inserts a `generated-by` header — carrying the CLI version and a sha256 hash
 of the pure template render — as a YAML comment on line two, just inside the
 frontmatter fence, so the file still begins with `---` and frontmatter-based
-skill discovery keeps working. Staleness and tamper detection are
+skill discovery keeps working. A following `# install-remote:` JSON comment
+records the baked remote so `skills list` and a flagless reinstall keep
+classifying the file as current. Staleness and tamper detection are
 hash-authoritative, not version-authoritative: `Classify` compares a file's
 recorded hash against its own body hash to detect modification, and against a
 fresh render's hash to detect staleness, and never consults the version string,

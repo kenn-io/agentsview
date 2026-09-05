@@ -44,7 +44,7 @@ func agentsSkillPath(home string) string {
 
 func freshClaudeSkill(t *testing.T) skills.Rendered {
 	t.Helper()
-	rendered, err := skills.Render(skills.HarnessClaude, version)
+	rendered, err := skills.Render(skills.HarnessClaude, version, skills.Remote{})
 	require.NoError(t, err)
 	return rendered
 }
@@ -368,6 +368,142 @@ func TestSkillsList_ProjectFlagReportsProjectLevel(t *testing.T) {
 		assert.Equal(t, "project", r.Level)
 		assert.True(t, strings.HasPrefix(r.Path, repo), "path %q must be under repo root %q", r.Path, repo)
 	}
+}
+
+func TestSkillsInstall_BakesServerFlags(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+
+	out, err := executeCommand(newRootCommand(),
+		"skills", "install", "--harness", "claude",
+		"--server", "https://example.invalid",
+		"--server-token-file", "token")
+	require.NoError(t, err, "output: %s", out)
+
+	body := readFileString(t, claudeSkillPath(home))
+	assert.Contains(t, body, "--server https://example.invalid")
+	assert.Contains(t, body, "--server-token-file token")
+	assert.Equal(t, skills.Remote{
+		Server: "https://example.invalid", TokenFile: "token",
+	}, skills.ParseRemote(body))
+
+	listOut, err := executeCommand(newRootCommand(),
+		"skills", "list", "--format", "json")
+	require.NoError(t, err, "output: %s", listOut)
+	assert.Contains(t, listOut, "\"state\":\"current\"")
+}
+
+func TestSkillsInstall_ReinstallWithoutFlagsKeepsBakedServer(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+
+	_, err := executeCommand(newRootCommand(),
+		"skills", "install", "--harness", "claude",
+		"--server", "https://example.invalid")
+	require.NoError(t, err)
+
+	out, err := executeCommand(newRootCommand(),
+		"skills", "install", "--harness", "claude")
+	require.NoError(t, err, "output: %s", out)
+	assert.Contains(t, out, "up to date")
+	assert.Contains(t, readFileString(t, claudeSkillPath(home)),
+		"--server https://example.invalid")
+}
+
+func TestSkillsInstall_TokenFileRequiresServer(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+
+	_, err := executeCommand(newRootCommand(),
+		"skills", "install", "--harness", "claude",
+		"--server-token-file", "token")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires --server")
+}
+
+func TestSkillsInstall_EnvBakesServer(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("AGENTSVIEW_SKILLS_SERVER", "https://example.invalid")
+
+	_, err := executeCommand(newRootCommand(),
+		"skills", "install", "--harness", "claude")
+	require.NoError(t, err)
+	assert.Contains(t, readFileString(t, claudeSkillPath(home)),
+		"--server https://example.invalid")
+}
+
+// TestSkillsInstall_ExplicitEmptyServerUnbakes pins the only escape hatch
+// back to a local-SQLite skill: an explicitly passed empty --server clears a
+// previously baked remote instead of falling through to the file or the
+// environment.
+func TestSkillsInstall_ExplicitEmptyServerUnbakes(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("AGENTSVIEW_SKILLS_SERVER", "https://env.invalid")
+
+	_, err := executeCommand(newRootCommand(),
+		"skills", "install", "--harness", "claude",
+		"--server", "https://example.invalid")
+	require.NoError(t, err)
+
+	out, err := executeCommand(newRootCommand(),
+		"skills", "install", "--harness", "claude", "--server", "")
+	require.NoError(t, err, "output: %s", out)
+
+	body := readFileString(t, claudeSkillPath(home))
+	assert.NotContains(t, body, "--server https://example.invalid")
+	assert.NotContains(t, body, "--server https://env.invalid")
+	assert.True(t, skills.ParseRemote(body).Empty())
+}
+
+// TestSkillsList_EnvDoesNotOverrideBakedRemote pins that an exported
+// AGENTSVIEW_SKILLS_SERVER cannot make an already-installed file look stale.
+// The baked remote is recorded intent; the environment is ambient.
+func TestSkillsList_EnvDoesNotOverrideBakedRemote(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+
+	_, err := executeCommand(newRootCommand(),
+		"skills", "install", "--harness", "claude")
+	require.NoError(t, err)
+
+	t.Setenv("AGENTSVIEW_SKILLS_SERVER", "https://env.invalid")
+	out, err := executeCommand(newRootCommand(),
+		"skills", "list", "--format", "json")
+	require.NoError(t, err, "output: %s", out)
+
+	var rows []skillListRow
+	require.NoError(t, json.Unmarshal([]byte(out), &rows), "output: %s", out)
+	require.NotEmpty(t, rows)
+	for _, r := range rows {
+		if r.Harness == string(skills.HarnessClaude) {
+			assert.Equal(t, "current", r.State,
+				"an ambient env var must not mark an installed skill stale")
+		}
+	}
+
+	assert.NotContains(t, readFileString(t, claudeSkillPath(home)),
+		"--server https://env.invalid")
+}
+
+// TestSkillsInstall_QuotesServerValuesWithSpaces pins that a token path with
+// a space stays a single shell word in the generated examples, which agents
+// are told to run verbatim.
+func TestSkillsInstall_QuotesServerValuesWithSpaces(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+
+	_, err := executeCommand(newRootCommand(),
+		"skills", "install", "--harness", "claude",
+		"--server", "https://example.invalid",
+		"--server-token-file", "/tmp/My Tokens/tok")
+	require.NoError(t, err)
+
+	body := readFileString(t, claudeSkillPath(home))
+	assert.Contains(t, body, `--server-token-file '/tmp/My Tokens/tok'`)
+	assert.Equal(t, "/tmp/My Tokens/tok", skills.ParseRemote(body).TokenFile,
+		"quoting must not leak into the recorded remote")
 }
 
 func TestSkillsInstall_ProjectFlagOutsideRepoFallsBackToCWD(t *testing.T) {

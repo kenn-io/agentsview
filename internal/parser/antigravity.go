@@ -140,7 +140,9 @@ func (p *antigravityProvider) parseSession(
 	// sidecar is absent, malformed, or fails the coverage gate the parser
 	// falls back to the heuristic decode exactly as before.
 	sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
-	tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
+	tRes, tErr := parseAntigravityCLITrajectory(
+		sidecarPath, dbResult.executors,
+	)
 	sidecarOK := tErr == nil &&
 		hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages)
 	sidecarCovers := dbResult.rawStepCount == 0 ||
@@ -251,8 +253,12 @@ func (p *antigravityProvider) parseSession(
 }
 
 type antigravityStepLoadResult struct {
-	messages     []ParsedMessage
-	usageEvents  []ParsedUsageEvent
+	messages    []ParsedMessage
+	usageEvents []ParsedUsageEvent
+	// executors is retained for preferred trajectory sidecars so their
+	// generatorMetadata uses the same range-qualified model attribution as
+	// SQLite gen_metadata.
+	executors    []antigravityExecutorMetadata
 	rawStepCount int
 	// hasGenMetadata reports whether the steps DB carried a non-empty
 	// gen_metadata table. Paired with an empty usageEvents slice it flags a
@@ -353,18 +359,20 @@ func loadAntigravityStepsWithRawCount(
 ) (antigravityStepLoadResult, error) {
 	generations := loadAntigravityGenerationMetadata(db)
 	executors := loadAntigravityExecutorMetadata(db)
+	result := antigravityStepLoadResult{
+		executors:      executors,
+		hasGenMetadata: len(generations) > 0,
+	}
 	rows, err := db.Query(
 		`SELECT idx, step_type, step_payload FROM steps ` +
 			`ORDER BY idx`,
 	)
 	if err != nil {
-		return antigravityStepLoadResult{}, fmt.Errorf("query steps: %w", err)
+		return result, fmt.Errorf("query steps: %w", err)
 	}
 	defer rows.Close()
 	steps := make([]antigravityLoadedStep, 0)
 	stepPositions := make(map[int]int)
-	var result antigravityStepLoadResult
-	result.hasGenMetadata = len(generations) > 0
 	for rows.Next() {
 		var (
 			idx      int
@@ -372,7 +380,7 @@ func loadAntigravityStepsWithRawCount(
 			payload  []byte
 		)
 		if err := rows.Scan(&idx, &stepType, &payload); err != nil {
-			return antigravityStepLoadResult{}, fmt.Errorf("scan step: %w", err)
+			return result, fmt.Errorf("scan step: %w", err)
 		}
 		parsedStep, parsed := newAntigravityStep(idx, stepType, payload)
 		var msg ParsedMessage
@@ -389,7 +397,7 @@ func loadAntigravityStepsWithRawCount(
 		result.rawStepCount++
 	}
 	if err := rows.Err(); err != nil {
-		return antigravityStepLoadResult{}, fmt.Errorf("iterate steps: %w", err)
+		return result, fmt.Errorf("iterate steps: %w", err)
 	}
 
 	for _, generation := range generations {
@@ -437,16 +445,20 @@ func (g antigravityGenerationMetadata) maxStepIndex() (int, bool) {
 	if !g.hasStepIndices {
 		return g.idx, true
 	}
-	if !g.stepIndicesValid || len(g.stepIndices) == 0 {
+	if !g.stepIndicesValid {
 		return 0, false
 	}
-	maxIdx := g.stepIndices[0]
-	for _, idx := range g.stepIndices[1:] {
+	return maxAntigravityStepIndex(g.stepIndices)
+}
+
+func maxAntigravityStepIndex(indices []int) (int, bool) {
+	maxIdx := -1
+	for _, idx := range indices {
 		if idx > maxIdx {
 			maxIdx = idx
 		}
 	}
-	return maxIdx, true
+	return maxIdx, maxIdx >= 0
 }
 
 type antigravityExecutorMetadata struct {
@@ -928,10 +940,32 @@ func resolveAntigravityGenerationModel(
 ) string {
 	generationModel, hasDisplayLabel :=
 		extractAntigravityGenerationModel(data)
+	return resolveAntigravityModelName(
+		generationModel, executorModel, hasDisplayLabel,
+	)
+}
+
+// resolveAntigravityModelName reconciles the model reported by downstream LLM
+// RPC generation metadata with the user's intended effort-qualified model from
+// the covering executor range.
+//
+// Antigravity CLI does not record reasoning effort in generation metadata
+// (field 19 response_model), recording only the base model slug or an internal
+// serving canary identifier (e.g. "gemini-3.7-flash-exp-b"). The effort
+// qualification (-low, -medium, -high) is recorded only in the covering
+// ExecutorMetadata. If the generation model matches the executor's base model
+// after stripping known experimental serving variants, the effort-qualified
+// executor model is returned so dashboard usage accounting is not fragmented.
+// If hasDisplayLabel is true or the models do not match, generationModel is
+// preserved unchanged.
+func resolveAntigravityModelName(
+	generationModel, executorModel string, hasDisplayLabel bool,
+) string {
 	if hasDisplayLabel || executorModel == "" {
 		return generationModel
 	}
-	if antigravityBaseModel(executorModel) == generationModel {
+	normalizedGeneration := stripAntigravityExperimentalVariant(generationModel)
+	if antigravityBaseModel(executorModel) == normalizedGeneration {
 		return executorModel
 	}
 	return generationModel
@@ -942,6 +976,28 @@ func antigravityBaseModel(model string) string {
 		if base, ok := strings.CutSuffix(model, suffix); ok {
 			return base
 		}
+	}
+	return model
+}
+
+// stripAntigravityExperimentalVariant strips internal backend serving
+// experiment / canary suffixes (such as "-exp-b") observed in Antigravity CLI
+// RPC responses so the model can be matched against covering executor ranges.
+//
+// Guidance for adding future suffixes:
+//   - Only add exact, observed serving canary suffixes here (e.g. "-exp-a",
+//     "-exp-c") once verified against upstream captures.
+//   - DO NOT strip generic "-exp": standalone models exist whose canonical
+//     name ends in "-exp" (e.g. "gemini-2.0-flash-exp"). Stripping generic
+//     "-exp" causes false-positive matches against -high/-medium/-low executors
+//     and incorrectly overrides the user's chosen model.
+//   - Adding or modifying suffixes alters historical session parsing: always
+//     bump dataVersion in internal/db/db.go, update the provenance notes in
+//     docs/internal/session-format-sources.md, and add regression tests in
+//     internal/parser/antigravity_test.go.
+func stripAntigravityExperimentalVariant(model string) string {
+	if base, ok := strings.CutSuffix(model, "-exp-b"); ok {
+		return base
 	}
 	return model
 }

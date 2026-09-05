@@ -21,10 +21,7 @@ export function today(): string {
  * dateRangeSelector.ts and kit-ui's RangePicker, which seeds and labels
  * ranges with the same semantics.
  */
-export function rollingRange(
-  days: number,
-  now: Date = new Date(),
-): { from: string; to: string } {
+export function rollingRange(days: number, now: Date = new Date()): { from: string; to: string } {
   const to = new Date(now);
   const from = new Date(to);
   from.setDate(from.getDate() - Math.max(0, days - 1));

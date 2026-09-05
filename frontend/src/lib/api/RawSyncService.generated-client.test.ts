@@ -1,44 +1,57 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { OpenAPI } from "./generated/core/OpenAPI";
-import { RawSyncService } from "./generated/services/RawSyncService";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { RawSyncService } from "./generated/index.js";
+import { getRawSyncUploadStatus } from "./raw-sync.js";
+import { setAuthToken } from "./runtime.js";
 
 describe("RawSyncService generated client", () => {
+  beforeEach(() => {
+    localStorage.setItem("agentsview-server-url", "http://localhost");
+  });
+
   afterEach(() => {
-    OpenAPI.TOKEN = undefined;
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 
   it("sends the operation credential instead of the shared API token", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
-    OpenAPI.TOKEN = "legacy-token";
+    setAuthToken("legacy-token");
 
-    await RawSyncService.postApiV1RawSyncTokens({
-      requestBody: { scopes: ["raw:write"] },
-      authorization: "Bearer device-credential",
-      xAgentsViewDeviceId: "device-a",
-    });
+    await RawSyncService.postApiV1RawSyncTokens(
+      { scopes: ["raw:write"] },
+      {
+        headers: {
+          Authorization: "Bearer device-credential",
+          "X-AgentsView-Device-ID": "device-a",
+        },
+      },
+    );
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(new Headers(request.headers).get("Authorization")).toBe("Bearer device-credential");
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer device-credential");
   });
 
   it("returns every authoritative raw upload status header", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
-      status: 200,
-      headers: {
-        "Upload-Offset": "7",
-        "Upload-Length": "11",
-        "Upload-Complete": "false",
-      },
-    }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: {
+          "Upload-Offset": "7",
+          "Upload-Length": "11",
+          "Upload-Complete": "false",
+        },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
-    const status = await RawSyncService.headApiV1RawSyncUploadsUploadId({
-      uploadId: "upl_AQEBAQEBAQEBAQEBAQEBAQ",
-      authorization: "Bearer upload-token",
-    });
+    const status = await getRawSyncUploadStatus(
+      "upl_AQEBAQEBAQEBAQEBAQEBAQ",
+      "Bearer upload-token",
+    );
 
     expect(status).toEqual({ offset: 7, length: 11, complete: false });
     expect(fetchMock).toHaveBeenCalledOnce();

@@ -20,7 +20,7 @@
   const dataReadOnly = $derived(sync.serverVersion === null || sync.readOnly);
 
   const inventoryProjects = $derived.by((): ProjectInfo[] => {
-    const rows = (data.inventory?.projects ?? []) as DbProjectInventoryRow[];
+    const rows = data.inventory?.projects ?? [];
     return rows.map((row) => ({ name: row.label, session_count: row.sessions }));
   });
 
@@ -30,7 +30,7 @@
   }
 
   function selectProjectByLabel(label: string) {
-    const rows = (data.inventory?.projects ?? []) as DbProjectInventoryRow[];
+    const rows = data.inventory?.projects ?? [];
     const row = rows.find((r) => r.label === label);
     if (row) {
       data.selectProject(row.project_key);

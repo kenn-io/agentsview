@@ -34,9 +34,7 @@ class FakeEventSource {
   }
 
   fireOpen() {
-    (this.listeners["open"] || []).forEach((cb) =>
-      cb(new Event("open") as MessageEvent),
-    );
+    (this.listeners["open"] || []).forEach((cb) => cb(new Event("open") as MessageEvent));
   }
 
   static reset() {
@@ -125,9 +123,7 @@ describe("events store", () => {
 
   it("self-heals a closed EventSource after a transient failure", async () => {
     vi.useFakeTimers();
-    const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import(
-      "./events.svelte.js"
-    );
+    const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import("./events.svelte.js");
     const received: string[] = [];
     const unsub = events.subscribe((e) => received.push(e.scope));
     const first = FakeEventSource.instances[0]!;
@@ -155,9 +151,7 @@ describe("events store", () => {
 
   it("does not heal after a permanent failure (never opened)", async () => {
     vi.useFakeTimers();
-    const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import(
-      "./events.svelte.js"
-    );
+    const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import("./events.svelte.js");
     const unsub = events.subscribe(() => {});
     const first = FakeEventSource.instances[0]!;
 
@@ -210,10 +204,7 @@ describe("events store", () => {
     vi.useFakeTimers();
     const { events } = await import("./events.svelte.js");
     const received: string[] = [];
-    const unsub = events.subscribeDebounced(
-      (e) => received.push(e.scope),
-      100,
-    );
+    const unsub = events.subscribeDebounced((e) => received.push(e.scope), 100);
     const es = FakeEventSource.instances[0]!;
     es.fire("data_changed", { scope: "messages" });
     es.fire("data_changed", { scope: "messages" });

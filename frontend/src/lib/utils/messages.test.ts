@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vite-plus/test";
-import {
-  isSystemMessage,
-  normalizeMessagePreview,
-  previewMessage,
-} from "./messages.js";
+import { isSystemMessage, normalizeMessagePreview, previewMessage } from "./messages.js";
 import type { Message } from "../api/types.js";
 
 function msg(overrides: Partial<Message>): Message {
@@ -33,21 +29,15 @@ describe("isSystemMessage", () => {
   });
 
   it("returns true for is_system regardless of role", () => {
-    expect(
-      isSystemMessage(msg({ is_system: true, role: "assistant" })),
-    ).toBe(true);
+    expect(isSystemMessage(msg({ is_system: true, role: "assistant" }))).toBe(true);
   });
 
   it("returns false for normal user message", () => {
-    expect(
-      isSystemMessage(msg({ role: "user", content: "fix the bug" })),
-    ).toBe(false);
+    expect(isSystemMessage(msg({ role: "user", content: "fix the bug" }))).toBe(false);
   });
 
   it("returns false for assistant message without is_system", () => {
-    expect(
-      isSystemMessage(msg({ role: "assistant", content: "sure" })),
-    ).toBe(false);
+    expect(isSystemMessage(msg({ role: "assistant", content: "sure" }))).toBe(false);
   });
 
   it.each([
@@ -59,10 +49,7 @@ describe("isSystemMessage", () => {
     ["local-command", "<local-command-output>ok</local-command-output>"],
     ["stop hook", "Stop hook feedback: blocked"],
     ["legacy goal context", "\n\t<goal_context>state</goal_context>"],
-    [
-      "codex internal goal context",
-      '  <codex_internal_context source="goal">state',
-    ],
+    ["codex internal goal context", '  <codex_internal_context source="goal">state'],
     [
       "codex internal goal context with attr before source",
       '<codex_internal_context foo="bar" source="goal">state',
@@ -76,22 +63,16 @@ describe("isSystemMessage", () => {
   });
 
   it("does not match partial prefix", () => {
-    expect(
-      isSystemMessage(msg({ content: "This session is great" })),
-    ).toBe(false);
+    expect(isSystemMessage(msg({ content: "This session is great" }))).toBe(false);
   });
 
   it("does not match a prefix-adjacent task notification", () => {
-    expect(
-      isSystemMessage(msg({ content: "<task-notification-status>ready" })),
-    ).toBe(false);
+    expect(isSystemMessage(msg({ content: "<task-notification-status>ready" }))).toBe(false);
   });
 
   it("hides reminder-only fallback content", () => {
     expect(
-      isSystemMessage(
-        msg({ content: "<system-reminder>remember this</system-reminder>" }),
-      ),
+      isSystemMessage(msg({ content: "<system-reminder>remember this</system-reminder>" })),
     ).toBe(true);
   });
 
@@ -99,8 +80,7 @@ describe("isSystemMessage", () => {
     expect(
       isSystemMessage(
         msg({
-          content:
-            "<system-reminder>remember this</system-reminder>\n\nreal prompt",
+          content: "<system-reminder>remember this</system-reminder>\n\nreal prompt",
         }),
       ),
     ).toBe(false);
@@ -109,66 +89,39 @@ describe("isSystemMessage", () => {
   it.each([
     "<system-reminder>a</system-reminder><task-notification>done</task-notification>",
     "<system-reminder>a</system-reminder><system-reminder>b</system-reminder>",
-    '<system-reminder>a</system-reminder><goal_context>state</goal_context>',
+    "<system-reminder>a</system-reminder><goal_context>state</goal_context>",
   ])("classifies the terminal remainder: %s", (content) => {
     expect(isSystemMessage(msg({ content }))).toBe(true);
   });
 
-  it.each([
-    "<system-reminder>a</system-reminder>real prompt",
-    "<system-reminder>a",
-  ])("keeps non-classified reminder content visible: %s", (content) => {
-    expect(isSystemMessage(msg({ content }))).toBe(false);
-  });
+  it.each(["<system-reminder>a</system-reminder>real prompt", "<system-reminder>a"])(
+    "keeps non-classified reminder content visible: %s",
+    (content) => {
+      expect(isSystemMessage(msg({ content }))).toBe(false);
+    },
+  );
 
   it("hides system reminders without making them visible cards", () => {
-    expect(
-      isSystemMessage(
-        msg({ is_system: true, source_subtype: "system_reminder" }),
-      ),
-    ).toBe(true);
+    expect(isSystemMessage(msg({ is_system: true, source_subtype: "system_reminder" }))).toBe(true);
   });
 
   it.each([
-    [
-      "non-goal internal context",
-      '<codex_internal_context source="other">state',
-    ],
-    [
-      "data-source attribute",
-      '<codex_internal_context data-source="goal">state',
-    ],
-    [
-      "missing closing tag delimiter",
-      '<codex_internal_context source="goal" state',
-    ],
+    ["non-goal internal context", '<codex_internal_context source="other">state'],
+    ["data-source attribute", '<codex_internal_context data-source="goal">state'],
+    ["missing closing tag delimiter", '<codex_internal_context source="goal" state'],
   ])("does not detect non-goal codex context: %s", (_label, content) => {
     expect(isSystemMessage(msg({ content }))).toBe(false);
   });
 
-  it.each([
-    "continuation",
-    "resume",
-    "interrupted",
-    "task_notification",
-    "stop_hook",
-  ])(
+  it.each(["continuation", "resume", "interrupted", "task_notification", "stop_hook"])(
     "keeps promoted subtype %s visible even with is_system=true",
     (subtype) => {
-      expect(
-        isSystemMessage(
-          msg({ is_system: true, source_subtype: subtype }),
-        ),
-      ).toBe(false);
+      expect(isSystemMessage(msg({ is_system: true, source_subtype: subtype }))).toBe(false);
     },
   );
 
   it("hides unknown source_subtype when is_system is true", () => {
-    expect(
-      isSystemMessage(
-        msg({ is_system: true, source_subtype: "future_subtype" }),
-      ),
-    ).toBe(true);
+    expect(isSystemMessage(msg({ is_system: true, source_subtype: "future_subtype" }))).toBe(true);
   });
 });
 
@@ -180,44 +133,28 @@ describe("normalizeMessagePreview", () => {
   });
 
   it("strips <bash-input> tags and prefixes with !", () => {
-    expect(
-      normalizeMessagePreview(
-        "<bash-input>git pull origin main</bash-input>",
-      ),
-    ).toBe("!git pull origin main");
+    expect(normalizeMessagePreview("<bash-input>git pull origin main</bash-input>")).toBe(
+      "!git pull origin main",
+    );
   });
 
   it("unwraps <bash-stdout> and <bash-stderr>", () => {
-    expect(
-      normalizeMessagePreview(
-        "<bash-stdout>hello</bash-stdout>",
-      ),
-    ).toBe("hello");
-    expect(
-      normalizeMessagePreview(
-        "<bash-stderr>oops</bash-stderr>",
-      ),
-    ).toBe("oops");
+    expect(normalizeMessagePreview("<bash-stdout>hello</bash-stdout>")).toBe("hello");
+    expect(normalizeMessagePreview("<bash-stderr>oops</bash-stderr>")).toBe("oops");
   });
 
   it("normalizes a sequence of input + stdout", () => {
     expect(
-      normalizeMessagePreview(
-        "<bash-input>echo hi</bash-input>\n<bash-stdout>hi</bash-stdout>",
-      ),
+      normalizeMessagePreview("<bash-input>echo hi</bash-input>\n<bash-stdout>hi</bash-stdout>"),
     ).toBe("!echo hi\nhi");
   });
 
   it("leaves plain prose untouched", () => {
-    expect(
-      normalizeMessagePreview("just a regular message"),
-    ).toBe("just a regular message");
+    expect(normalizeMessagePreview("just a regular message")).toBe("just a regular message");
   });
 
   it("trims whitespace inside the wrapper", () => {
-    expect(
-      normalizeMessagePreview("<bash-input>  ls -la  </bash-input>"),
-    ).toBe("!ls -la");
+    expect(normalizeMessagePreview("<bash-input>  ls -la  </bash-input>")).toBe("!ls -la");
   });
 });
 
@@ -229,9 +166,10 @@ describe("previewMessage", () => {
   });
 
   it("flags <bash-input> as shell and prefixes with !", () => {
-    expect(
-      previewMessage("<bash-input>git pull origin main</bash-input>"),
-    ).toEqual({ text: "!git pull origin main", isShell: true });
+    expect(previewMessage("<bash-input>git pull origin main</bash-input>")).toEqual({
+      text: "!git pull origin main",
+      isShell: true,
+    });
   });
 
   it("flags <bash-stdout> and <bash-stderr> as shell", () => {
@@ -246,9 +184,7 @@ describe("previewMessage", () => {
   });
 
   it("does not flag plain prose as shell", () => {
-    expect(
-      previewMessage("just a regular question about the codebase"),
-    ).toEqual({
+    expect(previewMessage("just a regular question about the codebase")).toEqual({
       text: "just a regular question about the codebase",
       isShell: false,
     });
@@ -265,9 +201,7 @@ describe("previewMessage", () => {
 
   it("flags shell when an input/stdout pair appears together", () => {
     expect(
-      previewMessage(
-        "<bash-input>echo hi</bash-input>\n<bash-stdout>hi</bash-stdout>",
-      ),
+      previewMessage("<bash-input>echo hi</bash-input>\n<bash-stdout>hi</bash-stdout>"),
     ).toEqual({ text: "!echo hi\nhi", isShell: true });
   });
 

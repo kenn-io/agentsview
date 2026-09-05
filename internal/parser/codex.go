@@ -1669,8 +1669,13 @@ func (p *codexProvider) codexParentResolution(
 	if parentID == "" || !resolutionNeeded {
 		return "", false
 	}
-	turnIDs, resolved := p.parentTurnResolver(ctx, childPath)(parentID)
-	return parentID, resolved && len(turnIDs) > 0
+	// A parent that was read is settled even when it holds no turn ids.
+	// Codex writes a rollout the moment a thread opens, so a fork taken
+	// before the first prompt names a parent with only session_meta and
+	// settings events; the fork replayed nothing and a retry could never
+	// learn more. Only a parent that cannot be read defers the child.
+	_, resolved := p.parentTurnResolver(ctx, childPath)(parentID)
+	return parentID, resolved
 }
 
 // CodexReplayParentID returns the explicit parent only when the rollout has a

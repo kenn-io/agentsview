@@ -959,6 +959,7 @@ func TestHTTPSearchContent(t *testing.T) {
 			if r.URL.Query().Get("timezone") != "America/New_York" {
 				t.Errorf("timezone = %s", r.URL.Query().Get("timezone"))
 			}
+			assert.Equal(t, []string{"live", "echo"}, r.URL.Query()["exclude_session"])
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"matches":[{"session_id":"s1","location":"message"}],"next_cursor":0}`))
 		}))
@@ -966,6 +967,7 @@ func TestHTTPSearchContent(t *testing.T) {
 	be := service.NewHTTPBackend(srv.URL, "", true)
 	res, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
 		Pattern: "needle", Timezone: "America/New_York", Limit: 50,
+		ExcludeSessionIDs: []string{"live", "echo"},
 	})
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)
@@ -1032,6 +1034,27 @@ func TestHTTPSearchContent_RealServer(t *testing.T) {
 	require.Len(t, res.Matches, 1)
 	assert.Equal(t, "cs-1", res.Matches[0].SessionID)
 	assert.Equal(t, "message", res.Matches[0].Location)
+}
+
+func TestHTTPSearchContent_ExcludeSession(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	dbtest.SeedSessionWithMessages(t, env.DB, "keep", "search-proj", []db.Message{
+		dbtest.UserMsg("keep", 0, "needle in keep"),
+		dbtest.AsstMsg("keep", 1, "here it is"),
+	}, dbtest.WithMessageCounts(3, 2))
+	dbtest.SeedSessionWithMessages(t, env.DB, "drop", "search-proj", []db.Message{
+		dbtest.UserMsg("drop", 0, "needle in drop"),
+		dbtest.AsstMsg("drop", 1, "here it is"),
+	}, dbtest.WithMessageCounts(3, 2))
+
+	svc := env.Backend("", true)
+	res, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "needle", Limit: 10, ExcludeSessionIDs: []string{"drop"},
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Matches, 1)
+	assert.Equal(t, "keep", res.Matches[0].SessionID)
 }
 
 // TestHTTPSearchContent_501PreservesCauseDetail asserts that a 501 response

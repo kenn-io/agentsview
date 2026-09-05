@@ -2,9 +2,11 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -14,6 +16,10 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+type parseRetentionFinalizerMarker struct {
+	value bool
+}
 
 // newWarmBenchEngine builds a small already-synced Claude archive and
 // returns an engine watching it, mirroring the fixture shape
@@ -63,16 +69,91 @@ func TestWarmNoopSyncAcquiresNoRetentionLeases(t *testing.T) {
 		"warm no-op pass must not acquire parse-retention leases")
 }
 
-func TestFullSyncPassIsUnthrottledAndScavengesOnce(t *testing.T) {
+func TestBulkCollectorReleasesFlushedParsedBatch(t *testing.T) {
+	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+
+	flushed := make(chan struct{})
+	engine.writeBatchOverride = func(
+		pending []pendingWrite, _ syncWriteMode, _ bool,
+	) (int, int, int, int) {
+		close(flushed)
+		return len(pending), 0, 0, 0
+	}
+
+	results := make(chan syncJob, batchSize+1)
+	finalized := make(chan struct{})
+	func() {
+		marker := &parseRetentionFinalizerMarker{}
+		runtime.SetFinalizer(marker, func(*parseRetentionFinalizerMarker) {
+			close(finalized)
+		})
+		results <- syncJob{
+			results: []parser.ParseResult{{
+				Session: parser.ParsedSession{
+					ID: "first", Agent: parser.AgentClaude,
+					ClaudeLinearParse: &marker.value,
+				},
+			}}}
+	}()
+	for i := 1; i < batchSize; i++ {
+		results <- syncJob{
+			results: []parser.ParseResult{{
+				Session: parser.ParsedSession{
+					ID:    fmt.Sprintf("session-%d", i),
+					Agent: parser.AgentClaude,
+				},
+			}}}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		engine.collectAndBatch(
+			t.Context(), results, batchSize+1, batchSize+1,
+			nil, syncWriteBulk,
+		)
+	}()
+	select {
+	case <-flushed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("collector did not flush the full parsed batch")
+	}
+
+	for range 3 {
+		runtime.GC()
+		runtime.Gosched()
+	}
+	select {
+	case <-finalized:
+	case <-time.After(2 * time.Second):
+		t.Error("flushed parsed batch remained live while the collector awaited more results")
+	}
+
+	results <- syncJob{err: errors.New("finish")}
+	close(results)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("collector did not finish")
+	}
+}
+
+func TestFullSyncPassUsesBoundedRetentionAndScavengesOnce(t *testing.T) {
 	e, ctx := newWarmBenchEngine(t)
 	var scavenges int
-	e.bulkRetentionBudget = newBulkParseRetentionBudget()
+	e.bulkRetentionBudget = newBulkParseRetentionBudget(
+		defaultBulkParseRetentionBytes,
+	)
 	e.bulkRetentionBudget.scavenge = func() { scavenges++ }
 
 	e.SyncAll(ctx, nil) // cold pass parses every source
 	acquired := e.bulkRetentionBudget.acquired.Load()
 	require.Positive(t, acquired,
 		"full pass must admit parses through the bulk budget")
+	require.NotNil(t, e.bulkRetentionBudget.weighted,
+		"full pass must use byte-weighted parse admission")
+	assert.Equal(t, defaultBulkParseRetentionBytes, e.bulkRetentionBudget.capacity)
 	if e.parseRetentionBudget != nil {
 		assert.Zero(t, e.parseRetentionBudget.acquired.Load(),
 			"full pass must not consume the bounded daemon budget")
@@ -101,21 +182,56 @@ func TestScopedSyncKeepsBoundedRetentionBudget(t *testing.T) {
 		"a cutoff-scoped pass must not create the bulk budget")
 }
 
-func TestBulkParseRetentionBudgetNeverBlocks(t *testing.T) {
-	budget := newBulkParseRetentionBudget()
+func TestBulkParseRetentionBudgetBoundsConcurrentSourceWeight(t *testing.T) {
+	budget := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
 	first, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
 	require.NoError(t, err)
-	second, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
-	require.NoError(t, err)
-	assert.False(t, budget.underPressure(),
-		"bulk admissions must never report pressure")
+	t.Cleanup(first.Release)
+
+	acquired := make(chan *parseRetentionLease, 1)
+	go func() {
+		second, acquireErr := budget.acquire(
+			t.Context(), defaultParseRetentionBytes,
+		)
+		if acquireErr == nil {
+			acquired <- second
+		}
+	}()
+
+	require.Eventually(t, budget.underPressure, time.Second, time.Millisecond,
+		"second bulk parse must wait for retained capacity")
+	select {
+	case second := <-acquired:
+		second.Release()
+		t.Fatal("second bulk parse admitted above the retention limit")
+	default:
+	}
+
 	first.Release()
-	second.Release()
+	select {
+	case second := <-acquired:
+		second.Release()
+	case <-time.After(time.Second):
+		t.Fatal("second bulk parse was not admitted after capacity was released")
+	}
 	assert.Equal(t, int64(2), budget.acquired.Load())
 }
 
+func TestBulkParseRetentionBudgetAdmitsWorkerPoolForMediumSources(t *testing.T) {
+	budget := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	for range maxWorkers {
+		lease, err := budget.acquire(ctx, 6<<20)
+		require.NoError(t, err,
+			"bulk admission must preserve the full worker pool for medium sources")
+		t.Cleanup(lease.Release)
+	}
+}
+
 func TestBulkParseRetentionBudgetScavengesOncePerParseBearingPass(t *testing.T) {
-	budget := newBulkParseRetentionBudget()
+	budget := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
 	var scavenges int
 	budget.scavenge = func() { scavenges++ }
 
@@ -129,6 +245,16 @@ func TestBulkParseRetentionBudgetScavengesOncePerParseBearingPass(t *testing.T) 
 	budget.scavengeIfNeeded()
 	assert.Equal(t, 1, scavenges,
 		"one parse-bearing pass needs exactly one end-of-pass scavenge")
+}
+
+func TestBulkParseRetentionBudgetCountsUnknownSourceAtPendingLimit(t *testing.T) {
+	budget := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
+	lease, err := budget.acquire(t.Context(), 0)
+	require.NoError(t, err)
+	t.Cleanup(lease.Release)
+
+	assert.Equal(t, defaultBulkPendingRetentionBytes, lease.retainedBytes,
+		"an unknown source must not undercount the pending parsed payload")
 }
 
 func TestParseRetentionBudgetBoundsConcurrentSourceWeight(t *testing.T) {
@@ -257,6 +383,113 @@ func TestCollectAndBatchRetainsParseLeaseThroughWrite(t *testing.T) {
 		t.Fatal("parse lease was not released after the database write completed")
 	}
 	<-done
+}
+
+func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
+	tests := []struct {
+		name string
+		mode syncWriteMode
+	}{
+		{name: "default-write", mode: syncWriteDefault},
+		{name: "bulk-write", mode: syncWriteBulk},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+			t.Cleanup(engine.Close)
+			restore := engine.beginBulkRetentionPass()
+			t.Cleanup(restore)
+			budget := engine.retentionBudget()
+			lease, err := budget.acquire(
+				t.Context(), defaultBulkParseRetentionBytes,
+			)
+			require.NoError(t, err)
+
+			writeEntered := make(chan struct{})
+			allowWrite := make(chan struct{})
+			engine.writeBatchOverride = func(
+				batch []pendingWrite, _ syncWriteMode, _ bool,
+			) (int, int, int, int) {
+				assert.Len(t, batch, 1)
+				close(writeEntered)
+				<-allowWrite
+				return len(batch), 0, 0, 0
+			}
+			results := make(chan syncJob, 1)
+			results <- syncJob{
+				path:           "/sessions/one.jsonl",
+				retentionLease: lease,
+				results: []parser.ParseResult{{
+					Session: parser.ParsedSession{
+						ID: "one", Agent: parser.AgentClaude,
+					},
+				}},
+			}
+			close(results)
+			done := make(chan struct{})
+			go func() {
+				engine.collectAndBatch(
+					t.Context(), results, 1, 1, nil, tt.mode,
+				)
+				close(done)
+			}()
+			<-writeEntered
+
+			acquireCtx, cancel := context.WithTimeout(
+				t.Context(), time.Second,
+			)
+			next, acquireErr := budget.acquire(acquireCtx, 1)
+			cancel()
+			if next != nil {
+				next.Release()
+			}
+			close(allowWrite)
+			<-done
+			assert.NoError(t, acquireErr,
+				"archive writes must not retain active parse admission")
+		})
+	}
+}
+
+func TestBulkCollectorBoundsPendingParsedBytesBetweenWrites(t *testing.T) {
+	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	engine.bulkRetentionBudget = newBulkParseRetentionBudget(128 << 20)
+	engine.bulkRetentionBudget.pendingCapacity = 100 << 20
+	restore := engine.beginBulkRetentionPass()
+	t.Cleanup(restore)
+	budget := engine.retentionBudget()
+
+	const sourceBytes = 15 << 20
+	first, err := budget.acquire(t.Context(), sourceBytes)
+	require.NoError(t, err)
+	second, err := budget.acquire(t.Context(), sourceBytes)
+	require.NoError(t, err)
+	results := make(chan syncJob, 2)
+	for i, lease := range []*parseRetentionLease{first, second} {
+		results <- syncJob{
+			path:           fmt.Sprintf("/sessions/%d.jsonl", i),
+			retentionLease: lease,
+			results: []parser.ParseResult{{Session: parser.ParsedSession{
+				ID: fmt.Sprintf("session-%d", i), Agent: parser.AgentClaude,
+			}}},
+		}
+	}
+	close(results)
+
+	var batchLengths []int
+	engine.writeBatchOverride = func(
+		batch []pendingWrite, _ syncWriteMode, _ bool,
+	) (int, int, int, int) {
+		batchLengths = append(batchLengths, len(batch))
+		return len(batch), 0, 0, 0
+	}
+	stats := engine.collectAndBatch(
+		t.Context(), results, 2, 2, nil, syncWriteBulk,
+	)
+
+	assert.Equal(t, []int{1, 1}, batchLengths)
+	assert.Equal(t, 2, stats.Synced)
 }
 
 func TestCollectAndBatchReportsFinalizingOnlyBeforeBulkTerminalFlush(t *testing.T) {
@@ -561,63 +794,81 @@ func TestCollectAndBatchKeepsFanoutUnderOneLeaseUntilOneWrite(t *testing.T) {
 	next.Release()
 }
 
-func TestStartWorkersFlushesBelowBatchUnderAdmissionPressure(t *testing.T) {
-	const agent parser.AgentType = "retention-test"
-	provider := &directStreamingProvider{
-		Def: parser.AgentDef{Type: agent},
-		parseOutcome: parser.ParseOutcome{
-			Results: []parser.ParseResultOutcome{{
-				Result: parser.ParseResult{Session: parser.ParsedSession{
-					ID: "retention-test:session", Agent: agent,
-				}},
-			}},
-			ResultSetComplete: true,
-		},
+func TestStartWorkersKeepsBulkBatchingIndependentOfParseAdmission(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       syncWriteMode
+		wantWrites int
+	}{
+		{name: "default", mode: syncWriteDefault, wantWrites: 2},
+		{name: "bulk", mode: syncWriteBulk, wantWrites: 1},
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
-		Machine:           "local",
-		ProviderFactories: []parser.ProviderFactory{directStreamingFactory{provider}},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			agent: parser.ProviderMigrationProviderAuthoritative,
-		},
-	})
-	t.Cleanup(engine.Close)
-	engine.workerCountOverride = 2
-	var writes int
-	engine.writeBatchOverride = func(
-		batch []pendingWrite, _ syncWriteMode, _ bool,
-	) (int, int, int, int) {
-		writes++
-		return len(batch), 0, 0, 0
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const agent parser.AgentType = "retention-test"
+			provider := &directStreamingProvider{
+				Def: parser.AgentDef{Type: agent},
+				parseOutcome: parser.ParseOutcome{
+					Results: []parser.ParseResultOutcome{{
+						Result: parser.ParseResult{Session: parser.ParsedSession{
+							ID: "retention-test:session", Agent: agent,
+						}},
+					}},
+					ResultSetComplete: true,
+				},
+			}
+			engine := NewEngine(openTestDB(t), EngineConfig{
+				Machine: "local",
+				ProviderFactories: []parser.ProviderFactory{
+					directStreamingFactory{provider},
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					agent: parser.ProviderMigrationProviderAuthoritative,
+				},
+			})
+			t.Cleanup(engine.Close)
+			if tt.mode == syncWriteBulk {
+				restore := engine.beginBulkRetentionPass()
+				t.Cleanup(restore)
+			}
+			engine.workerCountOverride = 2
+			var writes int
+			engine.writeBatchOverride = func(
+				batch []pendingWrite, _ syncWriteMode, _ bool,
+			) (int, int, int, int) {
+				writes++
+				return len(batch), 0, 0, 0
+			}
+
+			files := make([]parser.DiscoveredFile, 2)
+			for i := range files {
+				path := filepath.Join(t.TempDir(), fmt.Sprintf("large-%d.jsonl", i))
+				file, err := os.Create(path)
+				require.NoError(t, err)
+				require.NoError(t, file.Truncate(20<<20))
+				require.NoError(t, file.Close())
+				source := parser.SourceRef{
+					Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
+				}
+				files[i] = parser.DiscoveredFile{
+					Path: path, Agent: agent, ProviderSource: &source,
+					ProviderProcess: true, ForceParse: true,
+				}
+			}
+
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			stats := engine.collectAndBatch(
+				ctx, engine.startWorkers(ctx, files), len(files), len(files), nil,
+				tt.mode,
+			)
+
+			assert.False(t, stats.Aborted)
+			assert.Equal(t, 2, stats.Synced)
+			assert.Equal(t, tt.wantWrites, writes,
+				"bulk parse admission must not fragment the database batch")
+		})
 	}
-
-	files := make([]parser.DiscoveredFile, 2)
-	for i := range files {
-		path := filepath.Join(t.TempDir(), fmt.Sprintf("large-%d.jsonl", i))
-		file, err := os.Create(path)
-		require.NoError(t, err)
-		require.NoError(t, file.Truncate(20<<20))
-		require.NoError(t, file.Close())
-		source := parser.SourceRef{
-			Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
-		}
-		files[i] = parser.DiscoveredFile{
-			Path: path, Agent: agent, ProviderSource: &source,
-			ProviderProcess: true, ForceParse: true,
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	stats := engine.collectAndBatch(
-		ctx, engine.startWorkers(ctx, files), len(files), len(files), nil,
-		syncWriteDefault,
-	)
-
-	assert.False(t, stats.Aborted)
-	assert.Equal(t, 2, stats.Synced)
-	assert.Equal(t, 2, writes,
-		"each exclusive result must flush before the next parse is admitted")
 }
 
 func TestStartWorkersCancellationReleasesAdmissionWaiters(t *testing.T) {

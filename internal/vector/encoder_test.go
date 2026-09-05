@@ -91,6 +91,44 @@ func TestEmbeddingURLsPreserveEndpointComponents(t *testing.T) {
 	}
 }
 
+func TestOllamaModelNamesMatchProcessDisplayNames(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured string
+		loaded     string
+		want       bool
+	}{
+		{name: "exact", configured: "model:tag", loaded: "model:tag", want: true},
+		{name: "implicit latest", configured: "model", loaded: "model:latest", want: true},
+		{
+			name: "default registry and namespace", configured: "registry.ollama.ai/library/model:tag",
+			loaded: "model:tag", want: true,
+		},
+		{
+			name:       "protocol-qualified default registry",
+			configured: "https://registry.ollama.ai/library/model:tag",
+			loaded:     "model:tag", want: true,
+		},
+		{
+			name: "default registry", configured: "registry.ollama.ai/team/model:tag",
+			loaded: "team/model:tag", want: true,
+		},
+		{
+			name: "different registries", configured: "host-a.example/team/model:tag",
+			loaded: "host-b.example/team/model:tag", want: false,
+		},
+		{
+			name: "different namespaces", configured: "team-a/model:tag",
+			loaded: "team-b/model:tag", want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ollamaModelNamesMatch(tt.configured, tt.loaded))
+		})
+	}
+}
+
 func TestEncoderHappyPath(t *testing.T) {
 	var gotPath string
 	var gotAuth string
@@ -271,9 +309,74 @@ func TestEncoderRetriesInvalidEmbeddingResponse(t *testing.T) {
 	assert.Equal(t, [][]float32{{1, 2, 3}}, out)
 }
 
+func TestEncoderOllamaFallbackReloadsMetalBeforeCPU(t *testing.T) {
+	var nativeRequests []testOllamaEmbedRequest
+	var unloadChecks int
+	runnerLoaded := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/embeddings":
+			writeJSON(t, w, http.StatusOK, map[string]any{"data": []map[string]any{
+				{"index": 0, "embedding": base64Embedding([]float32{0, 0, 0})},
+			}})
+		case "/api/embed":
+			var request testOllamaEmbedRequest
+			require.NoError(t, json.UnmarshalRead(r.Body, &request))
+			nativeRequests = append(nativeRequests, request)
+			switch len(nativeRequests) {
+			case 1:
+				runnerLoaded = true
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"embeddings": [][]float32{{0, 0, 0}},
+				})
+			case 2:
+				if runnerLoaded {
+					writeJSON(t, w, http.StatusOK, map[string]any{
+						"embeddings": [][]float32{{0, 0, 0}},
+					})
+					return
+				}
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"embeddings": [][]float32{{4, 5, 6}},
+				})
+			default:
+				http.Error(w, "unexpected CPU fallback", http.StatusInternalServerError)
+			}
+		case "/api/ps":
+			unloadChecks++
+			if unloadChecks == 1 {
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"models": []map[string]any{{"model": "test-model"}},
+				})
+				return
+			}
+			runnerLoaded = false
+			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
+		default:
+			require.FailNow(t, "unexpected request path", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+		Timeout: time.Second, MaxRetries: 1, OllamaCPUFallback: true,
+	})
+	out, err := enc(context.Background(), []string{"alpha"})
+
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{4, 5, 6}}, out)
+	require.Len(t, nativeRequests, 2)
+	assert.Nil(t, nativeRequests[0].Options, "the unload request must stay on Metal")
+	assert.Equal(t, "0s", nativeRequests[0].KeepAlive)
+	assert.Nil(t, nativeRequests[1].Options, "the fresh retry must stay on Metal")
+	assert.Empty(t, nativeRequests[1].KeepAlive, "the fresh runner should remain loaded")
+	assert.Equal(t, 2, unloadChecks)
+}
+
 func TestEncoderOllamaCPUFallbackReplacesOnlyInvalidVectors(t *testing.T) {
-	var metalCalls, cpuCalls atomic.Int32
-	var gotCPU testOllamaEmbedRequest
+	var metalCalls, nativeCalls atomic.Int32
+	var gotNative []testOllamaEmbedRequest
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -286,13 +389,24 @@ func TestEncoderOllamaCPUFallbackReplacesOnlyInvalidVectors(t *testing.T) {
 					[]float32{1, float32(math.NaN()), 0})},
 			}})
 		case "/proxy/api/embed":
-			cpuCalls.Add(1)
+			call := nativeCalls.Add(1)
 			require.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
-			require.NoError(t, json.UnmarshalRead(r.Body, &gotCPU))
+			var request testOllamaEmbedRequest
+			require.NoError(t, json.UnmarshalRead(r.Body, &request))
+			gotNative = append(gotNative, request)
+			if call < 3 {
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"embeddings": [][]float32{{0, 0, 0}, {0, 0, 0}},
+				})
+				return
+			}
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"model":      "test-model",
 				"embeddings": [][]float32{{4, 5, 6}, {7, 8, 9}},
 			})
+		case "/proxy/api/ps":
+			require.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
+			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
 			require.FailNow(t, "unexpected request path", r.URL.Path)
 		}
@@ -310,19 +424,25 @@ func TestEncoderOllamaCPUFallbackReplacesOnlyInvalidVectors(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, [][]float32{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}}, out)
 	assert.Equal(t, int32(2), metalCalls.Load(), "normal retries run first")
-	assert.Equal(t, int32(1), cpuCalls.Load(), "CPU is attempted exactly once")
-	assert.Equal(t, "test-model", gotCPU.Model)
-	assert.Equal(t, []string{"pre:beta:suf", "pre:gamma:suf"}, gotCPU.Input)
-	require.NotNil(t, gotCPU.Truncate, "truncate must be present explicitly")
-	assert.False(t, *gotCPU.Truncate)
-	require.NotNil(t, gotCPU.Dimensions)
-	assert.Equal(t, 3, *gotCPU.Dimensions)
-	assert.EqualValues(t, 0, gotCPU.Options["num_gpu"])
-	assert.Equal(t, "0s", gotCPU.KeepAlive)
+	require.Len(t, gotNative, 3)
+	for _, request := range gotNative {
+		assert.Equal(t, "test-model", request.Model)
+		assert.Equal(t, []string{"pre:beta:suf", "pre:gamma:suf"}, request.Input)
+		require.NotNil(t, request.Truncate, "truncate must be present explicitly")
+		assert.False(t, *request.Truncate)
+		require.NotNil(t, request.Dimensions)
+		assert.Equal(t, 3, *request.Dimensions)
+	}
+	assert.Nil(t, gotNative[0].Options, "the unload request must stay on Metal")
+	assert.Equal(t, "0s", gotNative[0].KeepAlive)
+	assert.Nil(t, gotNative[1].Options, "the fresh retry must stay on Metal")
+	assert.Empty(t, gotNative[1].KeepAlive)
+	assert.EqualValues(t, 0, gotNative[2].Options["num_gpu"])
+	assert.Equal(t, "0s", gotNative[2].KeepAlive)
 }
 
 func TestEncoderOllamaCPUFallbackOmitsDimensionsWhenNotRequested(t *testing.T) {
-	var gotCPU testOllamaEmbedRequest
+	var gotNative []testOllamaEmbedRequest
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -331,11 +451,21 @@ func TestEncoderOllamaCPUFallbackOmitsDimensionsWhenNotRequested(t *testing.T) {
 				{"index": 0, "embedding": base64Embedding([]float32{0, 0, 0})},
 			}})
 		case "/api/embed":
-			require.NoError(t, json.UnmarshalRead(r.Body, &gotCPU))
+			var request testOllamaEmbedRequest
+			require.NoError(t, json.UnmarshalRead(r.Body, &request))
+			gotNative = append(gotNative, request)
+			if len(gotNative) < 3 {
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"embeddings": [][]float32{{0, 0, 0}},
+				})
+				return
+			}
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"model":      "test-model",
 				"embeddings": [][]float32{{1, 2, 3}},
 			})
+		case "/api/ps":
+			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
 			require.FailNow(t, "unexpected request path", r.URL.Path)
 		}
@@ -349,13 +479,16 @@ func TestEncoderOllamaCPUFallbackOmitsDimensionsWhenNotRequested(t *testing.T) {
 	out, err := enc(context.Background(), []string{"alpha"})
 	require.NoError(t, err)
 	assert.Equal(t, [][]float32{{1, 2, 3}}, out)
-	require.NotNil(t, gotCPU.Truncate, "truncate must be present explicitly")
-	assert.False(t, *gotCPU.Truncate)
-	assert.Nil(t, gotCPU.Dimensions, "dimensions must be omitted unless requested")
+	require.Len(t, gotNative, 3)
+	for _, request := range gotNative {
+		require.NotNil(t, request.Truncate, "truncate must be present explicitly")
+		assert.False(t, *request.Truncate)
+		assert.Nil(t, request.Dimensions, "dimensions must be omitted unless requested")
+	}
 }
 
 func TestEncoderOllamaCPUFallbackPreservesQueryOnBothRoutes(t *testing.T) {
-	var primaryCalls, cpuCalls atomic.Int32
+	var primaryCalls, nativeCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "local", r.URL.Query().Get("tenant"))
 		switch r.URL.Path {
@@ -365,10 +498,18 @@ func TestEncoderOllamaCPUFallbackPreservesQueryOnBothRoutes(t *testing.T) {
 				{"index": 0, "embedding": base64Embedding([]float32{0, 0, 0})},
 			}})
 		case "/proxy/api/embed":
-			cpuCalls.Add(1)
+			call := nativeCalls.Add(1)
+			if call < 3 {
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"embeddings": [][]float32{{0, 0, 0}},
+				})
+				return
+			}
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"embeddings": [][]float32{{1, 2, 3}},
 			})
+		case "/proxy/api/ps":
+			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
 			http.Error(w, "unexpected request path", http.StatusNotFound)
 		}
@@ -385,11 +526,11 @@ func TestEncoderOllamaCPUFallbackPreservesQueryOnBothRoutes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, [][]float32{{1, 2, 3}}, out)
 	assert.Equal(t, int32(1), primaryCalls.Load())
-	assert.Equal(t, int32(1), cpuCalls.Load())
+	assert.Equal(t, int32(3), nativeCalls.Load())
 }
 
 func TestEncoderOllamaCPUFallbackQuiescesSharedEndpointTraffic(t *testing.T) {
-	var primaryCalls atomic.Int32
+	var primaryCalls, nativeCalls atomic.Int32
 	cpuStarted := make(chan struct{})
 	releaseCPU := make(chan struct{})
 	secondPrimaryStarted := make(chan struct{}, 1)
@@ -409,11 +550,19 @@ func TestEncoderOllamaCPUFallbackQuiescesSharedEndpointTraffic(t *testing.T) {
 				{"index": 0, "embedding": base64Embedding([]float32{4, 5, 6})},
 			}})
 		case "/api/embed":
+			if nativeCalls.Add(1) < 3 {
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"embeddings": [][]float32{{0, 0, 0}},
+				})
+				return
+			}
 			close(cpuStarted)
 			<-releaseCPU
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"embeddings": [][]float32{{1, 2, 3}},
 			})
+		case "/api/ps":
+			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
 			require.FailNow(t, "unexpected request path", r.URL.Path)
 		}
@@ -461,7 +610,7 @@ func TestEncoderOllamaCPUFallbackQuiescesSharedEndpointTraffic(t *testing.T) {
 }
 
 func TestEncoderOllamaGatePrimaryWaitHonorsCancellation(t *testing.T) {
-	var primaryCalls atomic.Int32
+	var primaryCalls, nativeCalls atomic.Int32
 	cpuStarted := make(chan struct{})
 	releaseCPU := make(chan struct{})
 
@@ -473,11 +622,19 @@ func TestEncoderOllamaGatePrimaryWaitHonorsCancellation(t *testing.T) {
 				{"index": 0, "embedding": base64Embedding([]float32{0, 0, 0})},
 			}})
 		case "/api/embed":
+			if nativeCalls.Add(1) < 3 {
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"embeddings": [][]float32{{0, 0, 0}},
+				})
+				return
+			}
 			close(cpuStarted)
 			<-releaseCPU
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"embeddings": [][]float32{{1, 2, 3}},
 			})
+		case "/api/ps":
+			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
 			require.FailNow(t, "unexpected request path", r.URL.Path)
 		}
@@ -807,8 +964,18 @@ func TestEncoderOllamaCPUFallbackFailureLeavesBatchFailed(t *testing.T) {
 				case "/v1/embeddings":
 					writeJSON(t, w, http.StatusOK, map[string]any{"data": tt.primary})
 				case "/api/embed":
+					var request testOllamaEmbedRequest
+					require.NoError(t, json.UnmarshalRead(r.Body, &request))
+					if request.Options == nil {
+						writeJSON(t, w, http.StatusOK, map[string]any{
+							"embeddings": [][]float32{{0, 0, 0}},
+						})
+						return
+					}
 					cpuCalls.Add(1)
 					tt.respondCPU(t, w)
+				case "/api/ps":
+					writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 				default:
 					require.FailNow(t, "unexpected request path", r.URL.Path)
 				}

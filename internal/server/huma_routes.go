@@ -70,10 +70,13 @@ func apiErrorWithCode(status int, code, message string) error {
 	return &apiErrorResponse{Status: status, Code: code, Message: message}
 }
 
-var configureHumaErrorsOnce stdsync.Once
+var configureHumaOnce stdsync.Once
 
-func configureHumaErrors() {
-	configureHumaErrorsOnce.Do(func() {
+func configureHuma() {
+	configureHumaOnce.Do(func() {
+		// AgentsView uses encoding/json/v2, which encodes nil slices as empty
+		// arrays. Keep Huma's schemas aligned with that wire contract.
+		huma.DefaultArrayNullable = false
 		huma.NewError = func(status int, message string, errs ...error) huma.StatusError {
 			if status == http.StatusUnprocessableEntity {
 				status = http.StatusBadRequest

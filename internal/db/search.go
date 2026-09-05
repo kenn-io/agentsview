@@ -561,19 +561,26 @@ func (db *DB) SearchSession(
 	// SQLite LIKE is case-insensitive for ASCII by default.
 	// LEFT JOIN tool_calls so that a hit in result_content also surfaces
 	// the parent message ordinal; DISTINCT collapses multiple tool calls
-	// on the same message into a single result.
+	// on the same message into a single result. tool_result_events joins in
+	// alongside it because a summary its single event repeats is not stored
+	// on the call, and the frontend renders the event content either way.
 	like := "%" + escapeLike(query) + "%"
 	rows, err := db.getReader().QueryContext(ctx,
 		`SELECT DISTINCT m.ordinal
 		 FROM messages m
 		 LEFT JOIN tool_calls tc ON tc.message_id = m.id
+		 LEFT JOIN tool_result_events tre
+		   ON tre.session_id = tc.session_id
+		   AND tre.tool_call_message_ordinal = m.ordinal
+		   AND tre.call_index = COALESCE(tc.call_index, 0)
 		 WHERE m.session_id = ?
 		   AND m.is_system = 0
 		   AND `+SystemPrefixSQL("m.content", "m.role")+`
 		   AND (m.content LIKE ? ESCAPE '\'
-		        OR tc.result_content LIKE ? ESCAPE '\')
+		        OR tc.result_content LIKE ? ESCAPE '\'
+		        OR tre.content LIKE ? ESCAPE '\')
 		 ORDER BY m.ordinal ASC`,
-		sessionID, like, like,
+		sessionID, like, like, like,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("session search: %w", err)

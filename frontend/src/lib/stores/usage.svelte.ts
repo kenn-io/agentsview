@@ -1,18 +1,17 @@
-import type {
-  UsageComparison,
-  UsagePairwiseComparisonResponse,
-  UsagePairwiseDimension,
-  UsageSummaryResponse,
-  TopUsageSessionsResponse,
-} from "../api/types/usage.js";
-import { UsageService } from "../api/generated/index";
+import type { UsagePairwiseDimension } from "../api/types/usage.js";
+import {
+  UsageService,
+  type DbTopSessionEntry,
+  type ServiceUsagePairwiseComparisonResponse,
+  type UsageSummaryResponse,
+} from "../api/generated/index";
 import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
 import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
 
-type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
+type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
 type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions";
 type FetchResult = "ok" | "error" | "aborted";
@@ -290,6 +289,9 @@ function summaryForDateRange(
       cacheCreationTokens,
       cacheReadTokens,
       totalCost: { microdollars: totalMicrodollars },
+      // Daily entries carry no per-day savings, so a derived range cannot
+      // recompute them; the UI does not read this field for derived ranges.
+      cacheSavings: { microdollars: 0 },
     },
     projectTotals: [...projectTotals.values()].sort(
       (a, b) => byCost(a, b) || a.project_key.localeCompare(b.project_key),
@@ -344,9 +346,9 @@ class UsageStore {
   summary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
   isTimeRangeSummaryProvisional = $state(false);
-  pairwiseComparison = $state<UsagePairwiseComparisonResponse | null>(null);
+  pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
-  topSessions = $state<TopUsageSessionsResponse | null>(null);
+  topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
   hasNewData: boolean = $state(false);
 
@@ -400,24 +402,24 @@ class UsageStore {
       machine: sessionFilters.machine || undefined,
       agent: sessionFilters.agent || undefined,
       termination: sessionFilters.termination || undefined,
-      minUserMessages:
+      min_user_messages:
         sessionFilters.minUserMessages > 0 ? sessionFilters.minUserMessages : undefined,
-      includeOneShot: sessionFilters.includeOneShot,
-      includeAutomated: sessionFilters.includeAutomated || undefined,
-      activeSince: sessionFilters.recentlyActive
+      include_one_shot: sessionFilters.includeOneShot,
+      include_automated: sessionFilters.includeAutomated || undefined,
+      active_since: sessionFilters.recentlyActive
         ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
         : undefined,
     };
     if (sessionFilters.hideUnknownProject && sessionFilters.project !== "unknown") {
-      p.excludeProject = joinCsvParts(this.excludedProjects, "unknown");
+      p.exclude_project = joinCsvParts(this.excludedProjects, "unknown");
     } else if (this.excludedProjects) {
-      p.excludeProject = this.excludedProjects;
+      p.exclude_project = this.excludedProjects;
     }
     if (this.excludedProjectKeys) {
-      p.excludeProjectKey = this.excludedProjectKeys;
+      p.exclude_project_key = this.excludedProjectKeys;
     }
     if (this.excludedAgents) {
-      p.excludeAgent = this.excludedAgents;
+      p.exclude_agent = this.excludedAgents;
     }
     if (this.selectedModels) {
       p.model = this.selectedModels;
@@ -916,15 +918,18 @@ class UsageStore {
       let data: UsageSummaryResponse;
       let contextData: UsageSummaryResponse | null = null;
       if (contextParams) {
-        [data, contextData] = (await Promise.all([
-          callGenerated(() => UsageService.getApiV1UsageSummary(params), signal),
-          callGenerated(() => UsageService.getApiV1UsageSummary(contextParams), signal),
-        ])) as [UsageSummaryResponse, UsageSummaryResponse];
+        [data, contextData] = await Promise.all([
+          callGenerated((options) => UsageService.getApiV1UsageSummary(params, options), signal),
+          callGenerated(
+            (options) => UsageService.getApiV1UsageSummary(contextParams, options),
+            signal,
+          ),
+        ]);
       } else {
-        data = (await callGenerated(
-          () => UsageService.getApiV1UsageSummary(params),
+        data = await callGenerated(
+          (options) => UsageService.getApiV1UsageSummary(params, options),
           signal,
-        )) as unknown as UsageSummaryResponse;
+        );
       }
       if (this.versions.summary === v) {
         this.summary = data;
@@ -1025,14 +1030,17 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = (await callGenerated(
-        () =>
-          UsageService.getApiV1UsageComparison({
-            ...params,
-            currentMicrodollars: summary.totals.totalCost.microdollars,
-          }),
+      const comparison = await callGenerated(
+        (options) =>
+          UsageService.getApiV1UsageComparison(
+            {
+              ...params,
+              current_microdollars: summary.totals.totalCost.microdollars,
+            },
+            options,
+          ),
         signal,
-      )) as unknown as UsageComparison;
+      );
       if (this.versions.summary === summaryVersion) {
         this.summary = { ...summary, comparison };
         return "ok";
@@ -1066,10 +1074,10 @@ class UsageStore {
     }
     return {
       ...params,
-      leftDimension: selection.left.dimension,
-      leftValue: selection.left.value,
-      rightDimension: selection.right.dimension,
-      rightValue: selection.right.value,
+      left_dimension: selection.left.dimension,
+      left_value: selection.left.value,
+      right_dimension: selection.right.dimension,
+      right_value: selection.right.value,
     };
   }
 
@@ -1091,10 +1099,10 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = (await callGenerated(
-        () => UsageService.getApiV1UsagePairwiseComparison(request),
+      const comparison = await callGenerated(
+        (options) => UsageService.getApiV1UsagePairwiseComparison(request, options),
         signal,
-      )) as unknown as UsagePairwiseComparisonResponse;
+      );
       if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         this.pairwiseComparison = comparison;
         this.errors.pairwise = null;
@@ -1138,18 +1146,21 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const data = (await callGenerated(
-        () =>
-          UsageService.getApiV1UsageTopSessions({
-            ...(params ?? this.baseParams()),
-            sort: this.mode === "token" ? "tokens" : "cost",
-            tokenTypes:
-              this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
-                ? this.selectedTokenTypes.join(",")
-                : undefined,
-          }),
+      const data = await callGenerated(
+        (options) =>
+          UsageService.getApiV1UsageTopSessions(
+            {
+              ...(params ?? this.baseParams()),
+              sort: this.mode === "token" ? "tokens" : "cost",
+              token_types:
+                this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
+                  ? this.selectedTokenTypes.join(",")
+                  : undefined,
+            },
+            options,
+          ),
         signal,
-      )) as unknown as TopUsageSessionsResponse;
+      );
       if (this.versions.topSessions === v) {
         this.topSessions = data;
         this.errors.topSessions = null;

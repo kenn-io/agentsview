@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/thlib/go-timezone-local/tzlocal"
 )
 
 // Ptr formats a time.Time to an RFC3339Nano string pointer
@@ -83,20 +85,69 @@ func sinceFormatError(s string) error {
 }
 
 func BestEffortLocalTimezone() string {
-	return bestEffortLocalTimezone(
+	return resolveLocalTimezone(
 		os.Getenv("TZ"),
 		time.Now().Location(),
+		tzlocal.LocalTZ,
 	)
 }
 
 func bestEffortLocalTimezone(envTZ string, loc *time.Location) string {
+	return resolveLocalTimezone(envTZ, loc, nil)
+}
+
+func resolveLocalTimezone(
+	envTZ string,
+	loc *time.Location,
+	systemLocal func() (string, error),
+) string {
 	if name := validatedTimezoneName(envTZ); name != "" {
 		return name
 	}
-	if loc == nil {
+	if loc != nil {
+		if name := validatedTimezoneName(loc.String()); name != "" {
+			return name
+		}
+	}
+	if systemLocal == nil {
 		return ""
 	}
-	return validatedTimezoneName(loc.String())
+	name, err := systemLocal()
+	if err != nil {
+		return ""
+	}
+	return validatedTimezoneName(name)
+}
+
+// LocalTimezoneOrUTC returns the best-effort local IANA timezone name, or UTC
+// when no loadable local timezone can be resolved.
+func LocalTimezoneOrUTC() string {
+	return localTimezoneOrUTC(BestEffortLocalTimezone)
+}
+
+func localTimezoneOrUTC(resolve func() string) string {
+	if name := resolve(); name != "" {
+		return name
+	}
+	return "UTC"
+}
+
+// LocalLocation returns the resolved local timezone location, or time.Local
+// when no loadable local timezone can be resolved.
+func LocalLocation() *time.Location {
+	return localLocation(BestEffortLocalTimezone, time.Local)
+}
+
+func localLocation(resolve func() string, fallback *time.Location) *time.Location {
+	name := resolve()
+	if name == "" {
+		return fallback
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return fallback
+	}
+	return loc
 }
 
 func validatedTimezoneName(name string) string {

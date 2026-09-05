@@ -5,10 +5,7 @@ export { formatMoney as formatCost } from "../money.js";
 // These four helpers are byte-identical to kit-ui's implementations; the
 // locale-aware / app-specific formatters below stay local. Note kit-ui keeps
 // `truncate` in its time module, not format.
-export {
-  formatNumber,
-  formatTokenCount,
-} from "@kenn-io/kit-ui/utils/format";
+export { formatNumber, formatTokenCount } from "@kenn-io/kit-ui/utils/format";
 export { truncate } from "@kenn-io/kit-ui/utils/time";
 
 const MINUTE = 60;
@@ -17,9 +14,7 @@ const DAY = 86400;
 const WEEK = 604800;
 
 /** Formats an ISO timestamp as a human-friendly relative time */
-export function formatRelativeTime(
-  isoString: string | null | undefined,
-): string {
+export function formatRelativeTime(isoString: string | null | undefined): string {
   if (!isoString) return "—";
 
   const date = new Date(isoString);
@@ -49,9 +44,7 @@ export function formatRelativeTime(
 }
 
 /** Formats an ISO timestamp as a readable date/time string */
-export function formatTimestamp(
-  isoString: string | null | undefined,
-): string {
+export function formatTimestamp(isoString: string | null | undefined): string {
   if (!isoString) return "—";
   const d = new Date(isoString);
   return formatDateTime(d, {
@@ -63,9 +56,7 @@ export function formatTimestamp(
 }
 
 /** Formats an agent name for display */
-export function formatAgentName(
-  agent: string | null | undefined,
-): string {
+export function formatAgentName(agent: string | null | undefined): string {
   if (!agent) return "Unknown";
   // Capitalize first letter
   return agent.charAt(0).toUpperCase() + agent.slice(1);
@@ -79,12 +70,8 @@ export function formatTokenUsage(
 ): string | null {
   if (!hasContextTokens && !hasOutputTokens) return null;
 
-  const contextLabel = hasContextTokens
-    ? `${formatTokenCount(contextTokens)} ctx`
-    : "— ctx";
-  const outputLabel = hasOutputTokens
-    ? `${formatTokenCount(outputTokens)} out`
-    : "— out";
+  const contextLabel = hasContextTokens ? `${formatTokenCount(contextTokens)} ctx` : "— ctx";
+  const outputLabel = hasOutputTokens ? `${formatTokenCount(outputTokens)} out` : "— out";
 
   return `${contextLabel} / ${outputLabel}`;
 }

@@ -871,7 +871,9 @@ differ between the backends.
 
 `agentsview skills install` writes a bundled skill file that teaches a
 coding-agent harness the search workflow described on this page: when to reach
-for `--hybrid` versus `--fts`, how to react to the
+for `--hybrid` versus `--fts`, when to use plain substring search over
+`tool_input`/`tool_result` for identifiers, how to pass `--exclude-session` so
+the live conversation does not fill the page, how to react to the
 [error taxonomy](#error-taxonomy), and how to walk from a hit into its
 surrounding conversation with
 [`session messages --around`](#cursor-follow-from-a-hit-to-its-surrounding-conversation).
@@ -880,6 +882,7 @@ surrounding conversation with
 agentsview skills install                    # both harnesses, user level
 agentsview skills install --harness claude   # one harness only
 agentsview skills install --project          # install under the current git root
+agentsview skills install --server URL       # bake remote-daemon flags into examples
 agentsview skills list                       # show install state per harness
 ```
 

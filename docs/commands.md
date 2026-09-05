@@ -1100,7 +1100,7 @@ agentsview export sessions --format ndjson --limit 100
 agentsview export sessions --all --format ndjson --project agentsview
 ```
 
-The JSON top level has `schema_version`, `database_id`, `cursor`, `pricing`,
+The JSON top level has `schema_version`, `archive_id`, `database_id`, `cursor`, `pricing`,
 `projects`, and `sessions`. NDJSON writes the same metadata as the first line,
 then one session row per following line. Current builds emit
 `schema_version: 6`; see [Session Export](/docs/session-export/#versioning) for
@@ -1163,7 +1163,8 @@ spawned it, so a parent that delegated most of its work still reports the full
 cost. `--own-only` restores the older own-session output.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
-and `--hybrid` modes. Semantic and hybrid results can be scoped with
+and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
+those sessions before `--limit`. Semantic and hybrid results can be scoped with
 `--scope top|all|subordinate` (default `all`) to include or exclude sidechain
 and subagent content — see
 [Semantic Search](/docs/semantic-search/#scoping-results-scope). The
@@ -1348,7 +1349,9 @@ for what the skill does and when to re-run it.
 
 ```bash
 agentsview skills install [--harness claude|agents] [--project] [--force]
+    [--server URL] [--server-token-file PATH]
 agentsview skills list [--project] [--format json]
+    [--server URL] [--server-token-file PATH]
 ```
 
 `install` renders the embedded `agentsview-finding-history` skill for each
@@ -1360,6 +1363,21 @@ unmodified generated file, refuses a hand-edited or foreign file unless
 `--force` is passed, and exits non-zero on any refusal. `list` reports HARNESS,
 LEVEL, STATE (`missing`, `current`, `stale`, `modified`, `foreign`), and PATH
 for every harness.
+
+`--server` / `--server-token-file` (or `AGENTSVIEW_SKILLS_SERVER` /
+`AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE`) bake those flags into every example
+command so a remote-daemon install does not teach the local SQLite default.
+Values are shell-quoted, so a token path with a space stays one argument.
+
+Precedence is explicit flags, then whatever the installed file already bakes,
+then the environment. An installed file therefore decides even when it bakes
+no remote, so exporting `AGENTSVIEW_SKILLS_SERVER` never marks existing skills
+stale in `list`; the variables only seed a file that is not installed yet. Pass
+`--server ""` to un-bake a remote and go back to a local-SQLite skill.
+
+These variables are skills-only and named apart from `AGENTSVIEW_SERVER_TOKEN`
+on purpose: they do not change the CLI's default read path, and `session
+search` still needs `--server` unless the baked examples supply it.
 
 ______________________________________________________________________
 
@@ -1435,6 +1453,8 @@ agentsview help
 | `ZENCODER_DIR`                    | `~/.zencoder/sessions`                               | Zencoder sessions directory                                                                         |
 | `AGENTSVIEW_DATA_DIR`             | `~/.agentsview`                                      | Data directory (database, config)                                                                   |
 | `AGENTSVIEW_AUTH_TOKEN`           |                                                      | Bearer token for `require_auth`; overrides `auth_token` in `config.toml`                            |
+| `AGENTSVIEW_SKILLS_SERVER`        |                                                      | Remote daemon URL baked into `skills install` examples; not a default for `session` commands        |
+| `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE` |                                                  | Token file path baked into `skills install` examples with `AGENTSVIEW_SKILLS_SERVER`                |
 | `AGENTSVIEW_PG_URL`               |                                                      | PostgreSQL connection URL                                                                           |
 | `AGENTSVIEW_PG_MACHINE`           |                                                      | Machine name for PG push sync                                                                       |
 | `AGENTSVIEW_PG_SCHEMA`            | `agentsview`                                         | PostgreSQL schema name                                                                              |

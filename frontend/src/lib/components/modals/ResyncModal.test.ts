@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { sync } from "../../stores/sync.svelte.js";
 // @ts-ignore
@@ -36,10 +29,8 @@ describe("ResyncModal", () => {
   async function openProgress() {
     component = mount(ResyncModal, { target: document.body });
     await tick();
-    const startButton = Array.from(
-      document.querySelectorAll("button"),
-    ).find((button) =>
-      button.textContent?.includes("Start Full Resync")
+    const startButton = Array.from(document.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Start Full Resync"),
     );
     expect(startButton).toBeDefined();
     startButton!.click();
@@ -63,9 +54,7 @@ describe("ResyncModal", () => {
     expect(document.body.textContent).toContain(
       "Finalizing sync: checking database-backed sessions",
     );
-    expect(document.body.textContent).not.toContain(
-      "Syncing 0 / 0 sessions",
-    );
+    expect(document.body.textContent).not.toContain("Syncing 0 / 0 sessions");
     expect(document.querySelector(".progress-bar-track")).toBeNull();
   });
 
@@ -83,9 +72,7 @@ describe("ResyncModal", () => {
 
     await openProgress();
 
-    expect(document.body.textContent).toContain(
-      "Syncing 4 / 10 sessions",
-    );
+    expect(document.body.textContent).toContain("Syncing 4 / 10 sessions");
     expect(document.querySelector(".progress-bar-track")).not.toBeNull();
   });
 });

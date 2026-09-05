@@ -26,6 +26,15 @@ var registerVecOnce sync.Once
 // ordinal for single-message (user) documents. subordinate and offsets
 // default to the "no run grouping yet" shape so a row inserted without
 // them (see mirror.go) is still valid.
+//
+// The (doc_key, content_hash) index covers the stamp anti-join that
+// countPending and generationCoverageQuery run, so SQLite can answer "which
+// documents are not stamped at their current revision" from the index alone
+// instead of reading every mirror row's content. It is additive, and
+// prepareMirrorSchema replays MirrorDDL on every write-path open, so
+// existing vectors.db files gain it on their next build without bumping
+// MirrorSchemaVersion; a bump would drop and re-embed the whole corpus for
+// what is only an index addition.
 const messageMirrorDDL = `
 CREATE TABLE IF NOT EXISTS vector_messages (
     doc_key      TEXT PRIMARY KEY,
@@ -41,6 +50,8 @@ CREATE TABLE IF NOT EXISTS vector_messages (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_messages_session_ordinal
     ON vector_messages(session_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_vector_messages_revision
+    ON vector_messages(doc_key, content_hash);
 CREATE TABLE IF NOT EXISTS vector_meta (
     key TEXT PRIMARY KEY, value TEXT NOT NULL
 );
@@ -61,6 +72,8 @@ CREATE TABLE IF NOT EXISTS vector_recall_entries (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_recall_entries_identity
     ON vector_recall_entries(session_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_vector_recall_entries_revision
+    ON vector_recall_entries(doc_key, content_hash);
 CREATE TABLE IF NOT EXISTS vector_recall_meta (
     key TEXT PRIMARY KEY, value TEXT NOT NULL
 );

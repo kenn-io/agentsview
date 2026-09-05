@@ -146,6 +146,8 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	ctx context.Context, f db.ContentSearchFilter, k, offset int,
 ) ([]pgHybridDisplay, error) {
 	scopeWhere, scopeArgs := buildPGSessionBaseFilter(semanticPGSessionFilter(f))
+	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
+		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
 
 	kf := f

@@ -279,11 +279,16 @@ func (s *Store) SearchSession(
 		LEFT JOIN tool_calls tc
 			ON tc.session_id = m.session_id
 			AND tc.message_ordinal = m.ordinal
+		LEFT JOIN tool_result_events tre
+			ON tre.session_id = tc.session_id
+			AND tre.tool_call_message_ordinal = m.ordinal
+			AND tre.call_index = tc.call_index
 		WHERE m.session_id = $1
 			AND m.is_system = FALSE
 			AND `+db.PostgresSystemPrefixSQL("m.content", "m.role")+`
 			AND (m.content ILIKE $2
-				OR tc.result_content ILIKE $2)
+				OR tc.result_content ILIKE $2
+				OR tre.content ILIKE $2)
 		ORDER BY m.ordinal ASC`,
 		sessionID, like,
 	)
@@ -543,6 +548,9 @@ func (s *Store) attachToolCalls(
 	); err != nil {
 		return err
 	}
+	// Mirrors the SQLite load boundary: a summary the call's single result
+	// event already carries is not stored, so refill it here.
+	db.RestoreMessageResultContent(msgs)
 	return nil
 }
 

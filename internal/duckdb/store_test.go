@@ -389,6 +389,16 @@ func TestStoreSearchesMessagesContentAndSecrets(t *testing.T) {
 	assert.Equal(t, "tool_result", content.Matches[0].Location)
 	assert.Equal(t, fixture.alphaID, content.Matches[0].SessionID)
 
+	excluded, err := store.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern:           "duck result",
+		Sources:           []string{"tool_result"},
+		IncludeOneShot:    true,
+		ExcludeSessionIDs: []string{fixture.alphaID},
+		Limit:             10,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, excluded.Matches)
+
 	findings, err := store.ListSecretFindings(ctx, db.SecretFindingFilter{
 		Project: "alpha",
 		Limit:   10,

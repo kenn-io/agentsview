@@ -1,16 +1,20 @@
 package scripts
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const windowsStatusDLLInitFailed = uint32(0xc0000142)
 
 func TestHydrateAssetsForceFetchesRemoteAssetBranches(t *testing.T) {
 	tempDir := t.TempDir()
@@ -57,9 +61,7 @@ func TestHydrateAssetsForceFetchesRemoteAssetBranches(t *testing.T) {
 	scriptPath := filepath.Join(docsAssetsDir, "hydrate-assets.sh")
 	require.NoError(t, os.WriteFile(scriptPath, script, 0o755))
 
-	cmd := exec.Command("bash", scriptPath)
-	cmd.Dir = localRepo
-	output, err := cmd.CombinedOutput()
+	output, err := runBash(t, localRepo, nil, scriptPath)
 	require.NoError(t, err, string(output))
 
 	logo, err := os.ReadFile(filepath.Join(localRepo, "docs", "assets", "static", "og-image.png"))
@@ -110,9 +112,7 @@ func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(sourceDir, ".env.local"), []byte("TOKEN=secret\n"), 0o600))
 
 			scriptPath := installScript(t, repo, tc.scriptRel)
-			cmd := exec.Command("bash", scriptPath, "--source", sourceDir)
-			cmd.Dir = repo
-			output, err := cmd.CombinedOutput()
+			output, err := runBash(t, repo, nil, scriptPath, "--source", sourceDir)
 
 			require.Error(t, err, string(output))
 			assert.Contains(t, string(output), "unexpected")
@@ -133,9 +133,7 @@ func TestGeneratedAssetPublisherAcceptsSemanticSetupScreenshot(t *testing.T) {
 		t, repo,
 		filepath.Join("docs", "screenshots", "update-generated-assets-branch.sh"),
 	)
-	cmd := exec.Command("bash", scriptPath, "--source", sourceDir)
-	cmd.Dir = repo
-	output, err := cmd.CombinedOutput()
+	output, err := runBash(t, repo, nil, scriptPath, "--source", sourceDir)
 	require.NoError(t, err, string(output))
 
 	show := exec.Command(
@@ -174,11 +172,9 @@ func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
 		0o644,
 	))
 
-	cmd := exec.Command("bash", checkScript)
-	cmd.Dir = repo
 	pythonPath := requireRunnablePython3(t)
-	cmd.Env = append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH=/usr/bin:/bin")
-	output, err := cmd.CombinedOutput()
+	env := append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH=/usr/bin:/bin")
+	output, err := runBash(t, repo, env, checkScript)
 
 	require.Error(t, err, string(output))
 	assert.Contains(t, string(output), "docs markdown")
@@ -212,15 +208,11 @@ func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
 		0o644,
 	))
 
-	bashPath, err := exec.LookPath("bash")
-	require.NoError(t, err)
-	cmd := exec.Command(bashPath, checkScript)
-	cmd.Dir = repo
 	pythonPath := requireRunnablePython3(t)
 	emptyBin := filepath.Join(tempDir, "empty-bin")
 	require.NoError(t, os.MkdirAll(emptyBin, 0o755))
-	cmd.Env = append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH="+emptyBin)
-	output, err := cmd.CombinedOutput()
+	env := append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH="+emptyBin)
+	output, err := runBash(t, repo, env, checkScript)
 
 	require.Error(t, err, string(output))
 	assert.Contains(t, string(output), "rg not found")
@@ -351,9 +343,7 @@ cp -R "$public_docs"/. site/docs/
 printf '<urlset></urlset>\n' > site/docs/sitemap.xml
 `), 0o755))
 
-	cmd := exec.Command("bash", scriptPath, "build")
-	cmd.Dir = docsDir
-	output, err := cmd.CombinedOutput()
+	output, err := runBash(t, docsDir, nil, scriptPath, "build")
 	require.NoError(t, err, string(output))
 	assert.FileExists(t, filepath.Join(docsDir, "site", "docs", "index.md"))
 	assert.FileExists(t, filepath.Join(
@@ -409,6 +399,40 @@ func installScript(t *testing.T, repo, scriptRel string) string {
 	require.NoError(t, os.MkdirAll(filepath.Dir(scriptPath), 0o755))
 	require.NoError(t, os.WriteFile(scriptPath, script, 0o755))
 	return scriptPath
+}
+
+func runBash(
+	t *testing.T, dir string, env []string, args ...string,
+) ([]byte, error) {
+	t.Helper()
+	bashPath, err := exec.LookPath("bash")
+	require.NoError(t, err)
+	var output []byte
+	for attempt := range 3 {
+		cmd := exec.Command(bashPath, args...)
+		cmd.Dir = dir
+		if env != nil {
+			cmd.Env = env
+		}
+		output, err = cmd.CombinedOutput()
+		if !windowsDLLInitializationFailure(err) {
+			return output, err
+		}
+		if attempt < 2 {
+			time.Sleep(time.Second)
+		}
+	}
+	return output, err
+}
+
+// Git for Windows can occasionally terminate MSYS Bash before the script runs.
+// Retry only the Windows loader failure; script failures remain single-attempt.
+func windowsDLLInitializationFailure(err error) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	exitErr, ok := errors.AsType[*exec.ExitError](err)
+	return ok && uint32(exitErr.ExitCode()) == windowsStatusDLLInitFailed
 }
 
 func requireRunnablePython3(t *testing.T) string {

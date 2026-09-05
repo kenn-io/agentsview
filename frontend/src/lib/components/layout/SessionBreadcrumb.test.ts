@@ -44,10 +44,10 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
       getApiV1Openers: vi.fn(),
     },
     SessionsService: {
-      getApiV1SessionsIdDirectory: vi.fn(),
-      getApiV1SessionsIdUsage: vi.fn(),
-      postApiV1SessionsIdResume: vi.fn(),
-      postApiV1SessionsIdOpen: vi.fn(),
+      getApiV1SessionsByIdDirectory: vi.fn(),
+      getApiV1SessionsByIdUsage: vi.fn(),
+      postApiV1SessionsByIdResume: vi.fn(),
+      postApiV1SessionsByIdOpen: vi.fn(),
     },
   };
 });
@@ -57,9 +57,9 @@ const openersService = OpenersService as unknown as {
 };
 
 const sessionsService = SessionsService as unknown as {
-  getApiV1SessionsIdDirectory: ReturnType<typeof vi.fn>;
-  getApiV1SessionsIdUsage: ReturnType<typeof vi.fn>;
-  postApiV1SessionsIdResume: ReturnType<typeof vi.fn>;
+  getApiV1SessionsByIdDirectory: ReturnType<typeof vi.fn>;
+  getApiV1SessionsByIdUsage: ReturnType<typeof vi.fn>;
+  postApiV1SessionsByIdResume: ReturnType<typeof vi.fn>;
 };
 
 type SessionWithTokenFlags = Session & {
@@ -192,9 +192,9 @@ beforeEach(() => {
   generateForSession.mockReset();
   vi.mocked(copyToClipboard).mockReset().mockResolvedValue(true);
   openersService.getApiV1Openers.mockReset().mockResolvedValue({ openers: [] });
-  sessionsService.getApiV1SessionsIdDirectory.mockReset().mockResolvedValue({ path: "" });
-  sessionsService.getApiV1SessionsIdUsage.mockReset().mockResolvedValue(makeUsage());
-  sessionsService.postApiV1SessionsIdResume.mockReset();
+  sessionsService.getApiV1SessionsByIdDirectory.mockReset().mockResolvedValue({ path: "" });
+  sessionsService.getApiV1SessionsByIdUsage.mockReset().mockResolvedValue(makeUsage());
+  sessionsService.postApiV1SessionsByIdResume.mockReset();
   sessions.activeSessionId = null;
   sessions.activeSessionUsageVersion = 0;
   sessions.childSessions = new Map();
@@ -222,15 +222,11 @@ describe("SessionBreadcrumb", () => {
     });
     await tick();
 
-    const controls = document.querySelector<HTMLElement>(
-      ".sidebar-controls",
-    );
+    const controls = document.querySelector<HTMLElement>(".sidebar-controls");
     const expandButton = controls?.querySelector<HTMLButtonElement>(
       'button[aria-label="Open sidebar"]',
     );
-    const filterButton = controls?.querySelector<HTMLButtonElement>(
-      ".filter-btn",
-    );
+    const filterButton = controls?.querySelector<HTMLButtonElement>(".filter-btn");
 
     expect(controls).not.toBeNull();
     expect(expandButton).not.toBeNull();
@@ -259,9 +255,7 @@ describe("SessionBreadcrumb", () => {
     await tick();
 
     expect(document.querySelector(".sidebar-controls")).toBeNull();
-    expect(
-      document.querySelector('button[aria-label="Open sidebar"]'),
-    ).toBeNull();
+    expect(document.querySelector('button[aria-label="Open sidebar"]')).toBeNull();
 
     await unmount(component);
   });
@@ -278,7 +272,7 @@ describe("SessionBreadcrumb", () => {
         },
       ],
     });
-    sessionsService.getApiV1SessionsIdDirectory.mockResolvedValue({
+    sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({
       path: "/tmp/project",
     });
 
@@ -333,7 +327,7 @@ describe("SessionBreadcrumb", () => {
 
   it("shows clipboard failures as errors when copying the directory path", async () => {
     vi.mocked(copyToClipboard).mockResolvedValue(false);
-    sessionsService.getApiV1SessionsIdDirectory.mockResolvedValue({
+    sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({
       path: "/tmp/project",
     });
 
@@ -349,9 +343,14 @@ describe("SessionBreadcrumb", () => {
 
     await vi.waitFor(() => {
       expect(document.querySelector(".resume-btn")).toBeTruthy();
+      expect(sessionsService.getApiV1SessionsByIdDirectory).toHaveBeenCalled();
     });
+    await flushPromises();
     document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
     await tick();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="claude-code-link"]')).toBeTruthy();
+    });
 
     const copyPathButton = Array.from(
       document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
@@ -372,7 +371,7 @@ describe("SessionBreadcrumb", () => {
   });
 
   it("keeps whole-session resume request bodies unchanged", async () => {
-    sessionsService.postApiV1SessionsIdResume.mockResolvedValue({
+    sessionsService.postApiV1SessionsByIdResume.mockResolvedValue({
       launched: false,
       command: "claude --resume run:123456789abcdef",
       cwd: "/tmp/project",
@@ -402,10 +401,10 @@ describe("SessionBreadcrumb", () => {
     await Promise.resolve();
     await tick();
 
-    expect(sessionsService.postApiV1SessionsIdResume).toHaveBeenCalledWith({
-      id: "run:123456789abcdef",
-      requestBody: {},
-    });
+    expect(sessionsService.postApiV1SessionsByIdResume).toHaveBeenCalledWith(
+      { id: "run:123456789abcdef" },
+      {},
+    );
 
     unmount(component);
   });
@@ -415,7 +414,7 @@ describe("SessionBreadcrumb", () => {
     messages.sessionId = "run:123456789abcdef";
     messages.messages = [makeAssistantMessage("claude sonnet")];
     messages.historyComplete = true;
-    sessionsService.postApiV1SessionsIdResume.mockResolvedValue({
+    sessionsService.postApiV1SessionsByIdResume.mockResolvedValue({
       launched: false,
       command: "claude --resume run:123456789abcdef",
       cwd: "/tmp/project",
@@ -451,7 +450,7 @@ describe("SessionBreadcrumb", () => {
     messages.sessionId = "run:123456789abcdef";
     messages.messages = [makeAssistantMessage("claude sonnet")];
     messages.historyComplete = true;
-    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(new Error("backend unavailable"));
+    sessionsService.postApiV1SessionsByIdResume.mockRejectedValue(new Error("backend unavailable"));
 
     const component = mount(SessionBreadcrumb, {
       target: document.body,
@@ -484,7 +483,7 @@ describe("SessionBreadcrumb", () => {
     messages.messages = [makeAssistantMessage("claude sonnet")];
     messages.historyComplete = false;
     messages.hasOlder = true;
-    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(new Error("backend unavailable"));
+    sessionsService.postApiV1SessionsByIdResume.mockRejectedValue(new Error("backend unavailable"));
 
     const component = mount(SessionBreadcrumb, {
       target: document.body,
@@ -515,7 +514,7 @@ describe("SessionBreadcrumb", () => {
     messages.sessionId = "run:123456789abcdef";
     messages.loading = true;
     (messages as any)._stableMainModel = "claude sonnet";
-    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(new Error("backend unavailable"));
+    sessionsService.postApiV1SessionsByIdResume.mockRejectedValue(new Error("backend unavailable"));
 
     const component = mount(SessionBreadcrumb, {
       target: document.body,
@@ -556,7 +555,7 @@ describe("SessionBreadcrumb", () => {
         },
       ],
     });
-    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(new Error("backend unavailable"));
+    sessionsService.postApiV1SessionsByIdResume.mockRejectedValue(new Error("backend unavailable"));
 
     const component = mount(SessionBreadcrumb, {
       target: document.body,
@@ -576,9 +575,9 @@ describe("SessionBreadcrumb", () => {
       ).find((button) => button.textContent?.includes("Test Terminal"));
       expect(opener).toBeTruthy();
     });
-    const opener = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
-    ).find((button) => button.textContent?.includes("Test Terminal"));
+    const opener = Array.from(document.querySelectorAll<HTMLButtonElement>(".open-menu-item")).find(
+      (button) => button.textContent?.includes("Test Terminal"),
+    );
     opener!.click();
     await vi.waitFor(() => {
       expect(copyToClipboard).toHaveBeenCalledWith(
@@ -604,7 +603,7 @@ describe("SessionBreadcrumb", () => {
         },
       ],
     });
-    sessionsService.postApiV1SessionsIdResume.mockResolvedValue({
+    sessionsService.postApiV1SessionsByIdResume.mockResolvedValue({
       launched: false,
       command: "claude --resume run:123456789abcdef",
       cwd: "/tmp/project",
@@ -618,7 +617,10 @@ describe("SessionBreadcrumb", () => {
       },
     });
 
-    await tick();
+    await vi.waitFor(() => {
+      expect(openersService.getApiV1Openers).toHaveBeenCalled();
+    });
+    await flushPromises();
     document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
     await tick();
     const opener = Array.from(document.querySelectorAll<HTMLButtonElement>(".open-menu-item")).find(
@@ -638,7 +640,7 @@ describe("SessionBreadcrumb", () => {
     messages.sessionId = "run:123456789abcdef";
     messages.messages = [makeAssistantMessage("claude sonnet")];
     messages.historyComplete = true;
-    sessionsService.postApiV1SessionsIdResume.mockRejectedValue(new Error("backend unavailable"));
+    sessionsService.postApiV1SessionsByIdResume.mockRejectedValue(new Error("backend unavailable"));
 
     const component = mount(SessionBreadcrumb, {
       target: document.body,
@@ -669,7 +671,7 @@ describe("SessionBreadcrumb", () => {
     vi.mocked(copyToClipboard).mockClear();
     messages.sessionId = "run:123456789abcdef";
     messages.messages = [makeAssistantMessage("claude sonnet")];
-    sessionsService.postApiV1SessionsIdResume.mockResolvedValue({
+    sessionsService.postApiV1SessionsByIdResume.mockResolvedValue({
       launched: false,
       command: "claude --resume run:123456789abcdef",
       cwd: "/tmp/project",
@@ -746,7 +748,7 @@ describe("SessionBreadcrumb", () => {
   });
 
   it("offers a Claude Code deep link using the session directory", async () => {
-    sessionsService.getApiV1SessionsIdDirectory.mockResolvedValue({
+    sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({
       path: "/tmp/claude project",
     });
 
@@ -775,9 +777,7 @@ describe("SessionBreadcrumb", () => {
 
   it("keeps the directory read across same-session metadata refreshes", async () => {
     const directory = deferred<{ path: string }>();
-    sessionsService.getApiV1SessionsIdDirectory.mockReturnValue(
-      directory.promise,
-    );
+    sessionsService.getApiV1SessionsByIdDirectory.mockReturnValue(directory.promise);
 
     const component = createClassComponent({
       component: SessionBreadcrumb,
@@ -798,9 +798,7 @@ describe("SessionBreadcrumb", () => {
     });
     await flushPromises();
 
-    expect(
-      sessionsService.getApiV1SessionsIdDirectory,
-    ).toHaveBeenCalledOnce();
+    expect(sessionsService.getApiV1SessionsByIdDirectory).toHaveBeenCalledOnce();
 
     directory.resolve({ path: "/tmp/refreshed-session" });
     await flushPromises();
@@ -850,9 +848,7 @@ describe("SessionBreadcrumb", () => {
     await tick();
     const badges = Array.from(document.querySelectorAll(".agent-badge"));
     expect(badges[0]?.textContent?.trim()).toBe("triage");
-    expect(
-      document.querySelector(".entrypoint-badge")?.textContent?.trim(),
-    ).toBe("sdk-cli");
+    expect(document.querySelector(".entrypoint-badge")?.textContent?.trim()).toBe("sdk-cli");
 
     unmount(component);
   });
@@ -1233,7 +1229,7 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("renders the session cost when usage reports a priced cost", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
         makeUsage({ has_cost: true, cost: testMoney(1.234) }),
       );
 
@@ -1254,7 +1250,7 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("renders a total badge for a complete subagent rollup", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
         makeUsage({
           has_cost: true,
           cost: testMoney(1),
@@ -1276,15 +1272,15 @@ describe("SessionBreadcrumb", () => {
         "Total cost including 2 subagents",
       );
       expect(document.querySelector(".cost-badge")?.textContent).toContain("Total");
-      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledWith({
-        id: "run:123456789abcdef",
-        rollup: true,
-      });
+      expect(sessionsService.getApiV1SessionsByIdUsage.mock.lastCall?.slice(0, 2)).toEqual([
+        { id: "run:123456789abcdef" },
+        { rollup: true },
+      ]);
       unmount(component);
     });
 
     it("keeps the root cost when the rollup is incomplete", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
         makeUsage({
           has_cost: true,
           cost: testMoney(1),
@@ -1306,7 +1302,7 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("renders the cost badge between the token badges and the model badge", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
         makeUsage({ has_cost: true, cost: testMoney(4.12) }),
       );
       messages.sessionId = "run:123456789abcdef";
@@ -1350,7 +1346,7 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("renders no cost badge when the session has no priced cost", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
         makeUsage({ has_cost: false, cost: testMoney(0) }),
       );
 
@@ -1364,7 +1360,7 @@ describe("SessionBreadcrumb", () => {
 
       await flushPromises();
       await vi.waitFor(() => {
-        expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalled();
+        expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalled();
       });
       await flushPromises();
       expect(document.querySelector(".cost-badge")).toBeNull();
@@ -1373,7 +1369,7 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("renders no cost badge when the usage request fails", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockRejectedValue(new Error("boom"));
+      sessionsService.getApiV1SessionsByIdUsage.mockRejectedValue(new Error("boom"));
 
       const component = mount(SessionBreadcrumb, {
         target: document.body,
@@ -1385,7 +1381,7 @@ describe("SessionBreadcrumb", () => {
 
       await flushPromises();
       await vi.waitFor(() => {
-        expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalled();
+        expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalled();
       });
       await flushPromises();
       expect(document.querySelector(".cost-badge")).toBeNull();
@@ -1423,8 +1419,8 @@ describe("SessionBreadcrumb", () => {
           has_cost: true,
         },
       ];
-      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
-        ({ breakdown }: { id: string; breakdown?: boolean }) =>
+      sessionsService.getApiV1SessionsByIdUsage.mockImplementation(
+        (_path: { id: string }, { breakdown }: { breakdown?: boolean }) =>
           Promise.resolve(
             makeUsage({
               has_cost: true,
@@ -1454,17 +1450,17 @@ describe("SessionBreadcrumb", () => {
         );
       });
       expect(document.querySelectorAll(".usage-breakdown-row")).toHaveLength(0);
-      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledTimes(1);
-      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledWith({
-        id: "run:123456789abcdef",
-        rollup: true,
-      });
+      expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalledTimes(1);
+      expect(sessionsService.getApiV1SessionsByIdUsage.mock.calls[0]?.slice(0, 2)).toEqual([
+        { id: "run:123456789abcdef" },
+        { rollup: true },
+      ]);
 
       await openUsageBreakdown();
-      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledWith({
-        id: "run:123456789abcdef",
-        breakdown: true,
-      });
+      expect(sessionsService.getApiV1SessionsByIdUsage.mock.lastCall?.slice(0, 2)).toEqual([
+        { id: "run:123456789abcdef" },
+        { breakdown: true },
+      ]);
       const renderedRows = Array.from(document.querySelectorAll(".usage-breakdown-row"));
       expect(renderedRows).toHaveLength(2);
       const first = renderedRows[0]!;
@@ -1480,7 +1476,9 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("renders no usage breakdown when the usage response counts no rows", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(makeUsage({ breakdown_count: 0 }));
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
+        makeUsage({ breakdown_count: 0 }),
+      );
 
       const component = mount(SessionBreadcrumb, {
         target: document.body,
@@ -1492,7 +1490,7 @@ describe("SessionBreadcrumb", () => {
 
       await flushPromises();
       await vi.waitFor(() => {
-        expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalled();
+        expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalled();
       });
       expect(document.querySelector(".usage-breakdown")).toBeNull();
 
@@ -1500,8 +1498,8 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("renders every breakdown row in the scrollable menu", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
-        ({ breakdown }: { id: string; breakdown?: boolean }) =>
+      sessionsService.getApiV1SessionsByIdUsage.mockImplementation(
+        (_path: { id: string }, { breakdown }: { breakdown?: boolean }) =>
           Promise.resolve(
             makeUsage({
               breakdown_count: 8,
@@ -1545,8 +1543,8 @@ describe("SessionBreadcrumb", () => {
 
     it("shows a loading placeholder until breakdown rows arrive", async () => {
       const rowsFetch = deferred<SessionUsage>();
-      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
-        ({ breakdown }: { id: string; breakdown?: boolean }) =>
+      sessionsService.getApiV1SessionsByIdUsage.mockImplementation(
+        (_path: { id: string }, { breakdown }: { breakdown?: boolean }) =>
           breakdown ? rowsFetch.promise : Promise.resolve(makeUsage({ breakdown_count: 1 })),
       );
 
@@ -1597,8 +1595,8 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("shows a failure placeholder when the breakdown fetch fails", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
-        ({ breakdown }: { id: string; breakdown?: boolean }) =>
+      sessionsService.getApiV1SessionsByIdUsage.mockImplementation(
+        (_path: { id: string }, { breakdown }: { breakdown?: boolean }) =>
           breakdown
             ? Promise.reject(new Error("boom"))
             : Promise.resolve(makeUsage({ breakdown_count: 3 })),
@@ -1626,8 +1624,8 @@ describe("SessionBreadcrumb", () => {
 
     it("ignores a stale usage response after switching sessions", async () => {
       const first = deferred<SessionUsage>();
-      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
-        ({ id, breakdown }: { id: string; breakdown?: boolean }) => {
+      sessionsService.getApiV1SessionsByIdUsage.mockImplementation(
+        ({ id }: { id: string }, { breakdown }: { breakdown?: boolean }) => {
           if (id === "run:aaa") return first.promise;
           return Promise.resolve(
             makeUsage({
@@ -1698,7 +1696,7 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("refetches when a resync changes context tokens without output movement", async () => {
-      sessionsService.getApiV1SessionsIdUsage
+      sessionsService.getApiV1SessionsByIdUsage
         .mockResolvedValueOnce(makeUsage({ has_cost: true, cost: testMoney(1) }))
         .mockResolvedValueOnce(makeUsage({ has_cost: true, cost: testMoney(1.75) }));
 
@@ -1724,7 +1722,7 @@ describe("SessionBreadcrumb", () => {
         const badge = document.querySelector(".cost-badge");
         expect(badge?.textContent?.trim()).toBe("$1.75");
       });
-      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledTimes(2);
+      expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalledTimes(2);
 
       component.$destroy();
     });
@@ -1732,7 +1730,7 @@ describe("SessionBreadcrumb", () => {
     it("refetches on return navigation and rejects the other session's late response", async () => {
       const bRequest = deferred<SessionUsage>();
       const aRefetch = deferred<SessionUsage>();
-      sessionsService.getApiV1SessionsIdUsage
+      sessionsService.getApiV1SessionsByIdUsage
         .mockResolvedValueOnce(
           makeUsage({
             session_id: "run:aaa",
@@ -1766,7 +1764,7 @@ describe("SessionBreadcrumb", () => {
         session: makeSession("claude", { id: "run:aaa" }),
       });
       await flushPromises();
-      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledTimes(3);
+      expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalledTimes(3);
 
       // B's late response must not be shown on A.
       bRequest.resolve(
@@ -1798,7 +1796,7 @@ describe("SessionBreadcrumb", () => {
     it("keeps the newer cost when same-session responses resolve out of order", async () => {
       const first = deferred<SessionUsage>();
       const second = deferred<SessionUsage>();
-      sessionsService.getApiV1SessionsIdUsage
+      sessionsService.getApiV1SessionsByIdUsage
         .mockReturnValueOnce(first.promise)
         .mockReturnValueOnce(second.promise);
 
@@ -1818,7 +1816,7 @@ describe("SessionBreadcrumb", () => {
         session: makeSession("claude", { message_count: 3 }),
       });
       await flushPromises();
-      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledTimes(2);
+      expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalledTimes(2);
 
       second.resolve(makeUsage({ has_cost: true, cost: testMoney(3.5) }));
       await vi.waitFor(() => {
@@ -1834,7 +1832,7 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("refetches rollup cost when active session usage freshness changes", async () => {
-      sessionsService.getApiV1SessionsIdUsage
+      sessionsService.getApiV1SessionsByIdUsage
         .mockResolvedValueOnce(
           makeUsage({
             has_cost: true,
@@ -1875,13 +1873,13 @@ describe("SessionBreadcrumb", () => {
       await vi.waitFor(() => {
         expect(document.querySelector(".cost-badge")?.textContent).toContain("$5.00");
       });
-      expect(sessionsService.getApiV1SessionsIdUsage).toHaveBeenCalledTimes(2);
+      expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalledTimes(2);
 
       component.$destroy();
     });
 
     it("uses singular total-cost copy for one subagent", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
         makeUsage({
           has_cost: true,
           cost: testMoney(1),

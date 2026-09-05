@@ -636,7 +636,7 @@ type Engine struct {
 	bulkRetentionBudget       *parseRetentionBudget
 	// activeRetention points at the budget the in-flight pass admits parses
 	// through. Bulk archive passes (full sync, resync rebuild, remote import)
-	// install the unthrottled bulk budget for their duration; when nil,
+	// install the byte-weighted bulk budget for their duration; when nil,
 	// incremental paths (watcher, scoped/periodic syncs, reconciliation
 	// pages, single-session syncs) use the bounded default budget.
 	activeRetention atomic.Pointer[parseRetentionBudget]
@@ -7394,9 +7394,9 @@ func (e *Engine) syncAllLocked(
 	defer func() { e.anomalies.applyTo(&stats) }()
 
 	// A whole-archive pass (resync rebuild, full/initial sync, remote
-	// import) is bulk work: it parses at full parallelism and frees its
-	// retained memory once at the end. Cutoff- or root-scoped passes are
-	// steady-state daemon churn and keep the bounded retention budget.
+	// import) is bulk work: it bounds parsed data by retained bytes and
+	// frees that memory once at the end. Cutoff- or root-scoped passes are
+	// steady-state daemon churn and keep the default retention budget.
 	if writeMode == syncWriteBulk || (since.IsZero() && scope == nil) {
 		defer e.beginBulkRetentionPass()()
 	}
@@ -9398,17 +9398,18 @@ func (e *Engine) retentionBudget() *parseRetentionBudget {
 	return e.parseRetentionBudget
 }
 
-// beginBulkRetentionPass installs the unthrottled bulk retention budget for
-// the duration of an archive-scale pass and returns the restore func the
-// caller must defer. Bulk passes (full sync, resync rebuild, remote import
-// processing) run at full worker parallelism; the memory they retain is
-// returned to the OS by the end-of-pass scavenge instead of being bounded
-// per source. The caller holds syncMu, so no other pass can observe the
-// switched budget.
+// beginBulkRetentionPass installs the byte-weighted bulk retention budget for
+// the duration of an archive-scale pass and returns the restore func the caller
+// must defer. The budget bounds active and queued parse results; once the
+// collector owns a result, a separate byte limit bounds pending database
+// writes without coupling parser admission to transaction size. The caller
+// holds syncMu, so no other pass can observe the switched budget.
 func (e *Engine) beginBulkRetentionPass() func() {
 	e.bulkRetentionOnce.Do(func() {
 		if e.bulkRetentionBudget == nil {
-			e.bulkRetentionBudget = newBulkParseRetentionBudget()
+			e.bulkRetentionBudget = newBulkParseRetentionBudget(
+				defaultBulkParseRetentionBytes,
+			)
 		}
 	})
 	e.activeRetention.Store(e.bulkRetentionBudget)
@@ -9465,6 +9466,7 @@ func (e *Engine) collectAndBatchWithOptions(
 	var pending []pendingWrite
 	var pendingLeases []*parseRetentionLease
 	var pendingCacheWrites []skipCacheWrite
+	var pendingRetentionBytes int64
 	baselineCacheWrites := make(
 		map[machineSessionSource]map[string]skipCacheWrite,
 	)
@@ -9669,9 +9671,13 @@ func (e *Engine) collectAndBatchWithOptions(
 		}
 		if ctx.Err() != nil && e.discardWritesOnCancel {
 			releaseParseRetentionLeases(pendingLeases)
+			clear(pending)
 			pending = pending[:0]
+			clear(pendingLeases)
 			pendingLeases = pendingLeases[:0]
+			clear(pendingCacheWrites)
 			pendingCacheWrites = pendingCacheWrites[:0]
+			pendingRetentionBytes = 0
 			return
 		}
 		func() {
@@ -9792,12 +9798,23 @@ func (e *Engine) collectAndBatchWithOptions(
 			progress.MessagesIndexed += outcome.writtenMessages
 			stats.messagesIndexed = progress.MessagesIndexed
 		}()
+		// The collector reuses these backing arrays for the next batch. Clear
+		// pointer-bearing entries before reslicing so the completed batch's
+		// parsed messages and source metadata become collectible immediately,
+		// rather than remaining live until the next batch overwrites every slot
+		// or the whole pass returns.
+		clear(pending)
 		pending = pending[:0]
+		clear(pendingLeases)
 		pendingLeases = pendingLeases[:0]
+		clear(pendingCacheWrites)
 		pendingCacheWrites = pendingCacheWrites[:0]
+		pendingRetentionBytes = 0
 	}
 
 	budget := e.retentionBudget()
+	archiveRetention := budget.pendingCapacity > 0
+	pendingRetentionLimit := budget.pendingCapacity
 	defer func() {
 		if writeMode == syncWriteBulk && budget.scavengePending.Load() {
 			e.reportFinalizingProgress(
@@ -9810,7 +9827,7 @@ func (e *Engine) collectAndBatchWithOptions(
 		var r syncJob
 		for {
 			var pressure <-chan struct{}
-			if len(pending) > 0 {
+			if !archiveRetention && len(pending) > 0 {
 				pressure = budget.pressureSignal()
 			}
 			select {
@@ -9836,6 +9853,10 @@ func (e *Engine) collectAndBatchWithOptions(
 			r.releaseRetention()
 			drainResults(results, total-i-1)
 			goto flush
+		}
+		resultRetentionBytes := int64(0)
+		if archiveRetention && r.retentionLease != nil {
+			resultRetentionBytes = r.retentionLease.retainedBytes
 		}
 
 		if r.err != nil {
@@ -10145,6 +10166,14 @@ func (e *Engine) collectAndBatchWithOptions(
 			r.releaseRetention()
 		} else {
 			sourceNeedsRetry := presenceProofWithheld
+			if resultRetentionBytes > 0 && len(pending) > 0 &&
+				(pendingRetentionBytes >= pendingRetentionLimit ||
+					resultRetentionBytes > pendingRetentionLimit-pendingRetentionBytes) {
+				flushPending()
+			}
+			if archiveRetention {
+				r.releaseRetention()
+			}
 			for i, pr := range allowed {
 				sessionNeedsRetry := r.providerWideFailureCount > 0 ||
 					r.needsRetryForSession(pr.Session.ID)
@@ -10182,7 +10211,12 @@ func (e *Engine) collectAndBatchWithOptions(
 					runtimeMetrics.pendingWrites(len(pending))
 				}
 			}
-			if r.retentionLease != nil {
+			if archiveRetention && len(allowed) > 0 {
+				pendingRetentionBytes = min(
+					pendingRetentionLimit,
+					pendingRetentionBytes+resultRetentionBytes,
+				)
+			} else if r.retentionLease != nil {
 				pendingLeases = append(pendingLeases, r.retentionLease)
 				r.retentionLease = nil
 			}
@@ -10194,7 +10228,10 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceFingerprint: r.sourceFingerprint,
 				})
 			}
-			if len(pending) >= batchSize || budget.underPressure() {
+			if len(pending) >= batchSize ||
+				(archiveRetention &&
+					pendingRetentionBytes >= pendingRetentionLimit) ||
+				(!archiveRetention && budget.underPressure()) {
 				flushPending()
 			}
 			// A Kiro SQLite store is discovered as one container source
@@ -10621,12 +10658,13 @@ type processResult struct {
 	storageTrustPath  string
 	storageTrustState string
 	storageTrustSnap  storageTrustSnapshot
-	// retentionLease bounds the memory retained by this result's parsed
-	// data. It is acquired at the parse seams (provider parse, incremental
-	// parse, legacy/S3 parse) and only ever set on a result carrying parsed
-	// data; skip results carry none. The worker loop copies it onto
-	// syncJob.retentionLease, which is released exactly once via
-	// releaseRetention or the pendingLeases flush.
+	// retentionLease bounds the memory retained by this result's parsed data.
+	// It is acquired at the parse seams (provider parse, incremental parse,
+	// legacy/S3 parse) and only ever set on a result carrying parsed data; skip
+	// results carry none. The worker loop copies it onto syncJob.retentionLease.
+	// Archive-scale collectors release it when transferring the result into
+	// their separately bounded pending batch; other collectors hold it through
+	// the database write. Every path releases it exactly once.
 	retentionLease *parseRetentionLease
 	// sourceCwdResolution carries parser-owned source authority to the generic
 	// write seam. It is deliberately independent of transcript fingerprints.
@@ -20038,9 +20076,15 @@ func pairToolResultsContext(
 				return err
 			}
 			if tc, ok := idx[tr.ToolUseID]; ok {
+				// A withheld result keeps the parser's size; a stored one
+				// is measured, matching the archive's write rule so change
+				// detection never sees a parser-side rounding difference.
 				tc.ResultContentLength = tr.ContentLength
 				if !blocked[tc.Category] {
 					tc.ResultContent = parser.DecodeContent(tr.ContentRaw)
+					tc.ResultContentLength = db.ResolveResultContentLength(
+						tc.ResultContent, tr.ContentLength,
+					)
 				}
 			}
 		}

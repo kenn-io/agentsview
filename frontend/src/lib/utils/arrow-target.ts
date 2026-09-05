@@ -8,11 +8,7 @@ function isRendered(element: HTMLElement | null): element is HTMLElement {
   if (!element?.isConnected) return false;
 
   const view = element.ownerDocument.defaultView;
-  for (
-    let current: HTMLElement | null = element;
-    current;
-    current = current.parentElement
-  ) {
+  for (let current: HTMLElement | null = element; current; current = current.parentElement) {
     const style = view?.getComputedStyle(current);
     if (
       current.hidden ||

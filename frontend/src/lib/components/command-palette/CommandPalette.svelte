@@ -187,8 +187,23 @@
     ui.activeModal = null;
   }
 
-  function handleOverlayClick(e: MouseEvent) {
-    if ((e.target as HTMLElement).classList.contains("palette-overlay")) {
+  // A click event targets the common ancestor of its mousedown and mouseup, so a
+  // drag crossing the palette edge (selecting the query text, say) targets the
+  // overlay. Dismiss only when press and release both land on the overlay.
+  let pressedOverlay = false;
+
+  function isOverlay(e: MouseEvent) {
+    return (e.target as HTMLElement).classList.contains("palette-overlay");
+  }
+
+  function handleOverlayMousedown(e: MouseEvent) {
+    pressedOverlay = isOverlay(e);
+  }
+
+  function handleOverlayMouseup(e: MouseEvent) {
+    const pressed = pressedOverlay;
+    pressedOverlay = false;
+    if (pressed && isOverlay(e)) {
       close();
     }
   }
@@ -216,7 +231,8 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="palette-overlay"
-  onclick={handleOverlayClick}
+  onmousedown={handleOverlayMousedown}
+  onmouseup={handleOverlayMouseup}
   onkeydown={handleKeydown}
 >
   <div class="palette">

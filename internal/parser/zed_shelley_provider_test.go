@@ -557,7 +557,7 @@ func TestShelleyProviderSourceMethods(t *testing.T) {
 
 	changed, err := provider.SourcesForChangedPath(
 		context.Background(),
-		ChangedPathRequest{Path: dbPath + "-shm", EventKind: "write", WatchRoot: root},
+		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
@@ -882,4 +882,111 @@ func TestShelleyProviderIgnoresUnrelatedSidecarBasename(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, changed)
+}
+
+func TestZedProviderIgnoresBareShmSiblingEvents(t *testing.T) {
+	// The provider's own read connection rewrites the -shm index, so a bare
+	// -shm event must not resolve to the container or every scan would
+	// schedule the next one.
+	root := t.TempDir()
+	dbPath := filepath.Join(root, zedThreadsDBRelPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	createZedThreadsDBAt(t, dbPath, []zedTestThread{{
+		id:        "10431c84-c47b-4e6c-b2df-f9f3b9ad025b",
+		summary:   "Provider thread",
+		updatedAt: "2026-06-08T09:14:10Z",
+		dataType:  "json",
+		data:      []byte(`{"messages":[{"User":{"content":[{"Text":"Hello Zed"}]}}]}`),
+	}})
+
+	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath + "-shm", EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, changed, "-wal writes still resolve to the container")
+}
+
+func TestZedProviderFingerprintIgnoresShmSibling(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, zedThreadsDBRelPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	createZedThreadsDBAt(t, dbPath, []zedTestThread{{
+		id:        "10431c84-c47b-4e6c-b2df-f9f3b9ad025b",
+		summary:   "Provider thread",
+		updatedAt: "2026-06-08T09:14:10Z",
+		dataType:  "json",
+		data:      []byte(`{"messages":[{"User":{"content":[{"Text":"Hello Zed"}]}}]}`),
+	}})
+
+	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	before, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	shmPath := dbPath + "-shm"
+	writeSourceFile(t, shmPath, "shm")
+	shmTime := time.Unix(0, before.MTimeNS+int64(time.Hour))
+	require.NoError(t, os.Chtimes(shmPath, shmTime, shmTime))
+	after, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	assert.Equal(t, before.MTimeNS, after.MTimeNS)
+}
+
+func TestShelleyProviderIgnoresBareShmSiblingEvents(t *testing.T) {
+	root, dbPath, db := newShelleyTestDB(t)
+	seedShelleyMainConversation(t, db)
+
+	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath + "-shm", EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, changed, "-wal writes still resolve to the container")
+}
+
+func TestShelleyProviderFingerprintIgnoresShmSibling(t *testing.T) {
+	root, dbPath, db := newShelleyTestDB(t)
+	seedShelleyMainConversation(t, db)
+
+	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	before, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	shmPath := dbPath + "-shm"
+	writeSourceFile(t, shmPath, "shm")
+	shmTime := time.Unix(0, before.MTimeNS+int64(time.Hour))
+	require.NoError(t, os.Chtimes(shmPath, shmTime, shmTime))
+	after, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	assert.Equal(t, before.MTimeNS, after.MTimeNS)
 }

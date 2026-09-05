@@ -131,7 +131,17 @@ The filename contains the cache schema version and archive `database_id`. Schema
 or database-ID changes select a fresh generation rather than migrating the
 archive. Before deleting or replacing any generation, both SQLite
 `application_id` and `usage_cache_metadata.cache_kind` must identify it as an
-agentsview usage cache; a filename match is insufficient.
+agentsview usage cache; a filename match is insufficient. Version 8 and newer
+generations also carry a retirement-protocol marker and hold a shared
+cross-process lease for the lifetime of every open SQLite pool. An opener may
+remove another recognized generation only after it takes the exclusive lease,
+rechecks the format and source database ID against the exact filename, and
+closes its own handles. Cache database, WAL, and shared-memory files are then
+removed together. The tiny lease file remains so a racing opener cannot lock a
+replacement inode. Pre-protocol generations and files with mismatched identity
+remain untouched because an older process may still hold them open. Generations
+newer than the running format also remain, so a downgraded binary does not force
+the newer one to rebuild.
 
 If the sibling directory is unwritable, the process uses the same schema and
 read path in a temporary database and warns that it will rebuild after restart.

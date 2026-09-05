@@ -1143,6 +1143,8 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 		return s.collectContentSubstringMatches(ctx, f)
 	}
 	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(contentSessionFilter(f), db.DuckDBQueryDialect())
+	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
+		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	pattern := ""
 	if f.Mode != "regex" {
 		pattern = "%" + db.EscapeLikePattern(f.Pattern) + "%"
@@ -1187,6 +1189,8 @@ func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
 ) ([]db.ContentMatch, error) {
 	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(contentSessionFilter(f), db.DuckDBQueryDialect())
+	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
+		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	var branches []string
 	var args []any
 	addSearchArgs := func(column string) string {

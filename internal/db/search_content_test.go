@@ -948,3 +948,49 @@ func TestSearchContentFTSDerivedRange(t *testing.T) {
 		assert.False(t, m.Subordinate, "top-level run")
 	}
 }
+
+func TestNormalizeExcludeSessionIDs(t *testing.T) {
+	assert.Nil(t, NormalizeExcludeSessionIDs(nil))
+	assert.Nil(t, NormalizeExcludeSessionIDs([]string{"", "  "}))
+	assert.Equal(t, []string{"keep", "other"},
+		NormalizeExcludeSessionIDs([]string{" keep ", "", "keep", "other"}))
+}
+
+func TestAppendExcludeSessionIDs(t *testing.T) {
+	where, args := AppendExcludeSessionIDs("message_count > 0", nil, "id", nil)
+	assert.Equal(t, "message_count > 0", where)
+	assert.Nil(t, args)
+
+	where, args = AppendExcludeSessionIDs("message_count > 0", []any{"p"}, "id",
+		[]string{"live", "live", " other "})
+	assert.Equal(t, "message_count > 0 AND id NOT IN (?,?)", where)
+	assert.Equal(t, []any{"p", "live", "other"}, args)
+}
+
+func TestSearchContentExcludeSessionIDs(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "keep", "proj", [][2]string{
+		{"user", "needle in keep"},
+		{"assistant", "ok"},
+	})
+	seedSearchSession(t, d, "drop", "proj", [][2]string{
+		{"user", "needle in drop"},
+		{"assistant", "ok"},
+	})
+
+	all, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "needle", Mode: "substring",
+		Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, all.Matches, 2)
+
+	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "needle", Mode: "substring",
+		Sources: []string{"messages"}, Limit: 1,
+		ExcludeSessionIDs: []string{"drop", " drop "},
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1, "excluded id must not consume the page")
+	assert.Equal(t, "keep", got.Matches[0].SessionID)
+}

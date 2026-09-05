@@ -1151,3 +1151,41 @@ func kiroIDEProviderOldFixture(question string) string {
 func kiroIDEProviderNewFixture(question string) string {
 	return `{"sessionId":"new-session","title":"New title","workspaceDirectory":"/home/user/dev/new-app","history":[{"message":{"role":"user","content":"` + question + `","id":"m1"}},{"message":{"role":"assistant","content":"New IDE answer","id":"m2"}}]}` + "\n"
 }
+
+func TestKiroProviderIgnoresBareShmSibling(t *testing.T) {
+	// The provider's own read connection rewrites the -shm index, so neither
+	// a bare -shm event nor the -shm mtime may move the physical database
+	// source, or every scan would schedule the next one.
+	root := t.TempDir()
+	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
+	seedKiroSQLiteSession(
+		t, db, "/home/user/code/kiro-app", "sqlite-session",
+		readKiroFixture(t, "standard_payload.json"),
+		1779012000000, 1779012030000,
+	)
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath + "-shm", EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, sources)
+	require.Equal(t, dbPath, sources[0].DisplayPath)
+	before, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	shmPath := dbPath + "-shm"
+	writeSourceFile(t, shmPath, "shm")
+	shmTime := time.Unix(0, before.MTimeNS+int64(time.Hour))
+	require.NoError(t, os.Chtimes(shmPath, shmTime, shmTime))
+	after, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+	assert.Equal(t, before.MTimeNS, after.MTimeNS)
+}

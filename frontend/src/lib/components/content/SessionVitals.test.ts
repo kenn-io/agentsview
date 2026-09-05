@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import type { Session } from "../../api/types/core.js";
@@ -64,19 +57,22 @@ describe("SessionVitals", () => {
 
   beforeEach(() => {
     mocks.fetchSessionTiming.mockReset().mockResolvedValue(mocks.timing);
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/v1/recall/entries?")) {
-        return new Response(
-          JSON.stringify({ entries: [], trusted_only: false }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return new Response(
-        JSON.stringify({ error: "not mocked" }),
-        { status: 500, headers: { "Content-Type": "application/json" } },
-      );
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/v1/recall/entries?")) {
+          return new Response(JSON.stringify({ entries: [], trusted_only: false }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ error: "not mocked" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
     sessionTiming.reset();
     ui.vitalsOpen = true;
     ui.vitalsCallsExpanded = true;
@@ -134,12 +130,8 @@ describe("SessionVitals", () => {
     expect(rows[1]?.querySelector(".context-label")?.textContent?.trim()).toBe(
       m.session_vitals_worktree(),
     );
-    expect(rows[1]?.querySelector(".context-value")?.textContent?.trim()).toBe(
-      traceSession.cwd,
-    );
-    expect(
-      document.querySelector('[title="agentsview"]'),
-    ).not.toBeNull();
+    expect(rows[1]?.querySelector(".context-value")?.textContent?.trim()).toBe(traceSession.cwd);
+    expect(document.querySelector('[title="agentsview"]')).not.toBeNull();
   });
 
   it("reveals the full worktree path in a tooltip", async () => {
@@ -150,26 +142,18 @@ describe("SessionVitals", () => {
     await tick();
     await tick();
 
-    const worktreeValue = document.querySelector<HTMLElement>(
-      ".context-value--path",
-    );
+    const worktreeValue = document.querySelector<HTMLElement>(".context-value--path");
     expect(worktreeValue).not.toBeNull();
 
-    const trigger = worktreeValue!.closest<HTMLElement>(
-      ".kit-tooltip-trigger",
-    );
+    const trigger = worktreeValue!.closest<HTMLElement>(".kit-tooltip-trigger");
     expect(trigger).not.toBeNull();
     await fireEvent.mouseEnter(trigger!);
 
-    expect(
-      (await screen.findByRole("tooltip")).textContent?.trim(),
-    ).toBe(traceSession.cwd);
+    expect((await screen.findByRole("tooltip")).textContent?.trim()).toBe(traceSession.cwd);
   });
 
   it("keeps trace context visible when timing fails to load", async () => {
-    mocks.fetchSessionTiming.mockRejectedValueOnce(
-      new Error("timing unavailable"),
-    );
+    mocks.fetchSessionTiming.mockRejectedValueOnce(new Error("timing unavailable"));
     component = mount(SessionVitals, {
       target: document.body,
       props: { sessionId: traceSession.id, session: traceSession },
@@ -215,36 +199,42 @@ describe("SessionVitals", () => {
   });
 
   it("shows distilled recall and jumps to its transcript evidence", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({
-        entries: [{
-          id: "recall-1",
-          type: "fact",
-          scope: "project",
-          status: "accepted",
-          review_state: "unreviewed_auto",
-          title: "Retry bounded background work",
-          body: "Background retries stop after one delayed attempt.",
-          source_session_id: "sess-1",
-          source_run_id: "generation-2026-07-23",
-          extractor_method: "turns-v1",
-          transferable: false,
-          provenance_ok: true,
-          created_at: "2026-07-23T10:00:00Z",
-          updated_at: "2026-07-23T10:00:00Z",
-          evidence: [{
-            id: 1,
-            entry_id: "recall-1",
-            session_id: "sess-1",
-            message_start_ordinal: 12,
-            message_end_ordinal: 14,
-            snippet: "Bound the retry lifecycle.",
-          }],
-        }],
-        trusted_only: false,
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    ));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          entries: [
+            {
+              id: "recall-1",
+              type: "fact",
+              scope: "project",
+              status: "accepted",
+              review_state: "unreviewed_auto",
+              title: "Retry bounded background work",
+              body: "Background retries stop after one delayed attempt.",
+              source_session_id: "sess-1",
+              source_run_id: "generation-2026-07-23",
+              extractor_method: "turns-v1",
+              transferable: false,
+              provenance_ok: true,
+              created_at: "2026-07-23T10:00:00Z",
+              updated_at: "2026-07-23T10:00:00Z",
+              evidence: [
+                {
+                  id: 1,
+                  entry_id: "recall-1",
+                  session_id: "sess-1",
+                  message_start_ordinal: 12,
+                  message_end_ordinal: 14,
+                  snippet: "Bound the retry lifecycle.",
+                },
+              ],
+            },
+          ],
+          trusted_only: false,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const scroll = vi.spyOn(ui, "scrollToOrdinal");
     component = mount(SessionVitals, {
@@ -254,16 +244,12 @@ describe("SessionVitals", () => {
 
     await vi.waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "/api/v1/recall/entries?source_session_id=sess-1",
-        ),
+        expect.stringContaining("/api/v1/recall/entries?source_session_id=sess-1"),
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
     await vi.waitFor(() => {
-      expect(document.body.textContent).toContain(
-        "Retry bounded background work",
-      );
+      expect(document.body.textContent).toContain("Retry bounded background work");
     });
     expect(document.body.textContent).toContain(
       "Background retries stop after one delayed attempt.",
@@ -272,9 +258,9 @@ describe("SessionVitals", () => {
     expect(document.body.textContent).toContain("unreviewed_auto");
     expect(document.body.textContent).toContain("generation-2026-07-23");
 
-    const evidenceButton = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((button) => button.textContent?.includes("12–14"));
+    const evidenceButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("12–14"),
+    );
     expect(evidenceButton).toBeDefined();
     evidenceButton!.click();
 
@@ -283,36 +269,42 @@ describe("SessionVitals", () => {
   });
 
   it("labels revoked recall provenance and does not link its evidence", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({
-        entries: [{
-          id: "recall-revoked",
-          type: "fact",
-          scope: "project",
-          status: "accepted",
-          review_state: "unreviewed_auto",
-          title: "Outdated transcript claim",
-          body: "This entry no longer has valid source provenance.",
-          source_session_id: "sess-1",
-          source_run_id: "generation-revoked",
-          extractor_method: "turns-v1",
-          transferable: false,
-          provenance_ok: false,
-          created_at: "2026-07-23T10:00:00Z",
-          updated_at: "2026-07-23T10:00:00Z",
-          evidence: [{
-            id: 2,
-            entry_id: "recall-revoked",
-            session_id: "sess-1",
-            message_start_ordinal: 21,
-            message_end_ordinal: 23,
-            snippet: "This source range was revoked.",
-          }],
-        }],
-        trusted_only: false,
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    ));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          entries: [
+            {
+              id: "recall-revoked",
+              type: "fact",
+              scope: "project",
+              status: "accepted",
+              review_state: "unreviewed_auto",
+              title: "Outdated transcript claim",
+              body: "This entry no longer has valid source provenance.",
+              source_session_id: "sess-1",
+              source_run_id: "generation-revoked",
+              extractor_method: "turns-v1",
+              transferable: false,
+              provenance_ok: false,
+              created_at: "2026-07-23T10:00:00Z",
+              updated_at: "2026-07-23T10:00:00Z",
+              evidence: [
+                {
+                  id: 2,
+                  entry_id: "recall-revoked",
+                  session_id: "sess-1",
+                  message_start_ordinal: 21,
+                  message_end_ordinal: 23,
+                  snippet: "This source range was revoked.",
+                },
+              ],
+            },
+          ],
+          trusted_only: false,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
     component = mount(SessionVitals, {
       target: document.body,
@@ -324,9 +316,9 @@ describe("SessionVitals", () => {
     });
     expect(document.body.textContent).toContain("Provenance revoked");
     expect(document.body.textContent).toContain("Messages 21–23");
-    const evidenceButton = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((button) => button.textContent?.includes("21–23"));
+    const evidenceButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("21–23"),
+    );
     expect(evidenceButton).toBeUndefined();
   });
 
@@ -337,9 +329,7 @@ describe("SessionVitals", () => {
     });
 
     await vi.waitFor(() => {
-      expect(document.body.textContent).toContain(
-        m.session_recall_empty(),
-      );
+      expect(document.body.textContent).toContain(m.session_recall_empty());
     });
   });
 
@@ -352,13 +342,9 @@ describe("SessionVitals", () => {
     await tick();
     await tick();
 
-    const disclosure = document.querySelector<HTMLButtonElement>(
-      'button[aria-expanded="true"]',
-    );
+    const disclosure = document.querySelector<HTMLButtonElement>('button[aria-expanded="true"]');
     expect(disclosure).not.toBeNull();
-    expect(disclosure?.textContent).toContain(
-      m.session_vitals_calls(),
-    );
+    expect(disclosure?.textContent).toContain(m.session_vitals_calls());
     expect(document.querySelector(".scale-axis")).not.toBeNull();
     expect(document.querySelector(".calls")).not.toBeNull();
 
@@ -386,13 +372,11 @@ describe("SessionVitals", () => {
 
   it("aborts a pending sub-agent timing read when collapsed", async () => {
     const signals: AbortSignal[] = [];
-    mocks.fetchSessionTiming.mockImplementation(
-      (sessionId: string, signal?: AbortSignal) => {
-        if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
-        if (signal) signals.push(signal);
-        return new Promise<SessionTiming>(() => {});
-      },
-    );
+    mocks.fetchSessionTiming.mockImplementation((sessionId: string, signal?: AbortSignal) => {
+      if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
+      if (signal) signals.push(signal);
+      return new Promise<SessionTiming>(() => {});
+    });
     component = mount(SessionVitals, {
       target: document.body,
       props: { sessionId: "sess-1", session: undefined },
@@ -419,13 +403,11 @@ describe("SessionVitals", () => {
 
   it("aborts a pending sub-agent timing read when unmounted", async () => {
     const signals: AbortSignal[] = [];
-    mocks.fetchSessionTiming.mockImplementation(
-      (sessionId: string, signal?: AbortSignal) => {
-        if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
-        if (signal) signals.push(signal);
-        return new Promise<SessionTiming>(() => {});
-      },
-    );
+    mocks.fetchSessionTiming.mockImplementation((sessionId: string, signal?: AbortSignal) => {
+      if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
+      if (signal) signals.push(signal);
+      return new Promise<SessionTiming>(() => {});
+    });
     component = mount(SessionVitals, {
       target: document.body,
       props: { sessionId: "sess-1", session: undefined },
@@ -452,15 +434,13 @@ describe("SessionVitals", () => {
 
   it("aborts a pending sub-agent timing read when the parent changes", async () => {
     const signals: AbortSignal[] = [];
-    mocks.fetchSessionTiming.mockImplementation(
-      (sessionId: string, signal?: AbortSignal) => {
-        if (sessionId.startsWith("sess-")) {
-          return Promise.resolve(mocks.timing);
-        }
-        if (signal) signals.push(signal);
-        return new Promise<SessionTiming>(() => {});
-      },
-    );
+    mocks.fetchSessionTiming.mockImplementation((sessionId: string, signal?: AbortSignal) => {
+      if (sessionId.startsWith("sess-")) {
+        return Promise.resolve(mocks.timing);
+      }
+      if (signal) signals.push(signal);
+      return new Promise<SessionTiming>(() => {});
+    });
     const view = render(SessionVitals, {
       sessionId: "sess-1",
       session: undefined,

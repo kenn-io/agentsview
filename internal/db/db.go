@@ -450,7 +450,19 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // cache/last_conversations.json workspace mapping. Existing rows need
 // re-parsing to receive the exact approved workspace and prefer linked Git
 // identity when normalizing worktree project labels.)
-const dataVersion = 96
+// (97: Tool-result summaries a single result event already stores are no
+// longer written to tool_calls.result_content; result_content_length still
+// records the summary size and readers re-derive the text from the event.
+// Existing rows need re-parsing to drop the duplicate copy, which was about
+// 40% of a large archive.)
+// (98: The Pi parser now attributes skill loads (SKILL.md
+// reads and skill:// URIs) so Pi tool calls count toward Top Skills.
+// Existing Pi rows need re-parsing to backfill the skill attribution.)
+// (99: the Antigravity CLI parser normalizes observed experimental serving
+// variant suffixes (-exp-b) against the matching effort-qualified executor
+// model. Existing Antigravity rows need re-parsing so stored messages and
+// usage events reflect the intended effort-qualified model.)
+const dataVersion = 99
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

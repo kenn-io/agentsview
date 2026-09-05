@@ -716,32 +716,33 @@ add an archived or maintained mirror without replacing the original identity.
   session or project row that advances past its own stored metadata watermark
   is always a candidate, wherever other sessions' watermarks or its own child
   timestamps sit. Periodic full passes and streamed reconciliation passes over
-  a container whose last complete digest verification is less than five minutes
-  old may list the watermark form (`SQLiteContainerListsWatermarkOnly`): every
-  member gate-skips before fingerprinting, so the child identity scan would be
-  archive-sized work nothing reads. A changed container may continue using
-  this form during that bounded interval; after the interval, the next pass
-  carries the complete digest again. Watermark-only skips additionally
-  require the pass's container capture to still be valid
-  (`sqliteContainerPassCaptureValid`) — a container that changes between
-  listing and the recapture check resolves full per-session digests instead,
-  so a concurrent child-only write cannot hide beneath an unchanged metadata
-  watermark. The trade is explicit: any child-only write that leaves the
-  session and project rows untouched — wherever its timestamps land relative
-  to the stored composite — is invisible to watermark-only discovery and is
-  reconciled by the next full digest pass, at most five minutes after the last
-  successful digest verification. That due pass bypasses the container-level
-  trusted-state skip so every session reaches the authoritative digest comparison;
-  when the platform cannot provide stable file identity, the policy fails closed
-  to this full digest form rather than authorizing a stale verification timestamp;
-  on the production container above, 96% of sessions
-  carry a session/project timestamp at or above every child, and actively
-  watched sessions bypass this entirely via the per-session composite poll.
-  Per-event work is bounded by the changed batch plus one O(session-count)
-  scan of small fixed-width rows (the session table and the paged
-  stored-member reads); that floor is irreducible without a watermark index,
-  which OpenCode's schema does not have and which is not agentsview's to add —
-  but only the changed batch and one stored page are ever held in memory.
+  a container whose last complete digest verification is less than five
+  minutes old may list the watermark form
+  (`SQLiteContainerListsWatermarkOnly`): every member gate-skips before
+  fingerprinting, so the child identity scan would be archive-sized work
+  nothing reads. A changed container may continue using this form during that
+  bounded interval; after the interval, the next pass carries the complete
+  digest again. Watermark-only skips additionally require the pass's container
+  capture to still be valid (`sqliteContainerPassCaptureValid`) — a container
+  that changes between listing and the recapture check resolves full per-session
+  digests instead, so a concurrent child-only write cannot hide beneath an
+  unchanged metadata watermark. The trade is explicit: any child-only write that
+  leaves the session and project rows untouched — wherever its timestamps land
+  relative to the stored composite — is invisible to watermark-only discovery
+  and is reconciled by the next full digest pass, at most five minutes after
+  the last successful digest verification. That due pass bypasses the
+  container-level trusted-state skip so every session reaches the
+  authoritative digest comparison; when the platform cannot provide stable
+  file identity, the policy fails closed to this full digest form rather than
+  authorizing a stale verification timestamp; on the production container
+  above, 96% of sessions carry a session/project timestamp at or above every
+  child, and actively watched sessions bypass this entirely via the
+  per-session composite poll. Per-event work is bounded by the changed batch
+  plus one O(session-count) scan of small fixed-width rows (the session table
+  and the paged stored-member reads); that floor is irreducible without a
+  watermark index, which OpenCode's schema does not have and which is not
+  agentsview's to add — but only the changed batch and one stored page are
+  ever held in memory.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
@@ -1058,7 +1059,11 @@ add an archived or maintained mirror without replacing the original identity.
   `f1c587dde39025c75d7397bc14532d8fa5c001d9`; see the pinned
   [session format](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/docs/session-format.md)
   and
-  [session manager](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/src/core/session-manager.ts).
+  [session manager](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/src/core/session-manager.ts),
+  plus the
+  [skill documentation](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/docs/skills.md)
+  and
+  [skill loader](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/src/core/skills.ts).
 - **Usage and cost:** Assistant messages persist input and output tokens plus
   cache-read and cache-write/creation values in nested or historical flat
   shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
@@ -1066,7 +1071,10 @@ add an archived or maintained mirror without replacing the original identity.
   `cacheWrite` spelling.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
-  conversation.
+  conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
+  parser attributed 1,316 `read` calls whose `path` or `file_path` named a
+  concrete `SKILL.md`, while shell commands that only mentioned the filename
+  without reading it stayed unattributed.
 
 ## Prime Agent (`prime-agent`)
 
@@ -1078,11 +1086,11 @@ add an archived or maintained mirror without replacing the original identity.
 - **Upstream:** Clone `https://github.com/PrimeIntellect-ai/prime-agent.git` at
   `0e0d23391bcd879f1aea70dbda4d07dda7970b34`; see the pinned
 
-  [session format](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/docs/session-format.md),
+    [session format](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/docs/session-format.md),
 
-  [session types and persistence](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/src/core/session-manager.ts),
-  and
-  [configuration paths](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/src/config.ts).
+    [session types and persistence](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/src/core/session-manager.ts),
+    and
+    [configuration paths](https://github.com/PrimeIntellect-ai/prime-agent/blob/0e0d23391bcd879f1aea70dbda4d07dda7970b34/packages/coding-agent/src/config.ts).
 
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
   cache-write tokens with model IDs. `child_usage_attributed` entries replace
@@ -1124,16 +1132,24 @@ add an archived or maintained mirror without replacing the original identity.
   `39c95e5e29b1c8b082059f57421ce445c3dffdd4`; see
   [session-entries.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/session/session-entries.ts),
 
-  [session-persistence.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/session/session-persistence.ts),
-  and
-  [usage.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/ai/src/usage.ts).
+    [session-persistence.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/session/session-persistence.ts),
+    and
+    [usage.ts](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/ai/src/usage.ts).
+    Skill attribution follows the pinned
+    [skill protocol](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/internal-urls/skill-protocol.ts)
+    and
+    [shell URL resolver](https://github.com/can1357/oh-my-pi/blob/39c95e5e29b1c8b082059f57421ce445c3dffdd4/packages/coding-agent/src/tools/bash-skill-urls.ts).
 
 - **Usage and cost:** Pi-family usage persists input, output, cache-read, and
   cache-write tokens with a model. Agentsview derives monetary cost from the
   catalog; provider reporting notes are not treated as exact persisted USD.
 
 - **Agentsview:** Oh My Pi is registered through the Pi-family provider in
-  `internal/parser/pi.go` and `internal/parser/pi_provider.go`.
+  `internal/parser/pi.go` and `internal/parser/pi_provider.go`. Reverified
+  2026-09-03 that OMP exposes on-demand skill content through `read` calls
+  with a `skill://<name>` path, percent-decodes namespaced skill names, and
+  accepts a relative resource path after the name. Agentsview attributes only
+  the URI in the Pi-family read path and decodes the name before storing it.
 
 ## Qwen Code (`qwen`)
 
@@ -1206,23 +1222,23 @@ add an archived or maintained mirror without replacing the original identity.
   `47f943859bef60e4160492346772ded9b24f765a`. See the pinned
   [JSONL layout, header, and scanner](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/format.ts),
 
-  [multi-frame zstd backend](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/index.ts),
+    [multi-frame zstd backend](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/index.ts),
 
-  [packed chunk codec](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/chunk-rows.ts),
+    [packed chunk codec](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/chunk-rows.ts),
 
-  [session event and seed schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/types.ts),
+    [session event and seed schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/types.ts),
 
-  [turn and step production order](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/agent-loop/src/agent.ts#L245-L292),
+    [turn and step production order](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/agent-loop/src/agent.ts#L245-L292),
 
-  [turn and step invariants](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/invariant.ts),
+    [turn and step invariants](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/core/session/src/invariant.ts),
 
-  [agent preset reconstruction](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/preset/agent-presets/src/session.ts),
+    [agent preset reconstruction](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/preset/agent-presets/src/session.ts),
 
-  [compaction model-call facts](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/compaction/compaction/src/types.ts),
-  and the
-  [message/content schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/message.ts)
-  plus the
-  [usage schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/types.ts).
+    [compaction model-call facts](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/compaction/compaction/src/types.ts),
+    and the
+    [message/content schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/message.ts)
+    plus the
+    [usage schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/types.ts).
 
 - **Usage and cost:** Each model response and summarizing compaction can persist
   disjoint input, output, cache-read, cache-write, and reasoning token counts.
@@ -1298,9 +1314,9 @@ add an archived or maintained mirror without replacing the original identity.
   `4a550effdfcb29a25a5d325bf935296cc50cd417`; see
   [session.py](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/src/kimi_cli/session.py),
 
-  [wire-mode.md](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/docs/en/customization/wire-mode.md),
-  and the
-  [Kimi provider usage mapping](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/packages/kosong/src/kosong/chat_provider/kimi.py).
+    [wire-mode.md](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/docs/en/customization/wire-mode.md),
+    and the
+    [Kimi provider usage mapping](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/packages/kosong/src/kosong/chat_provider/kimi.py).
 
 - **Usage and cost:** Native usage distinguishes uncached/other input, output,
   cache read, and cache creation. The aggregate fallback exposes only output
@@ -1380,17 +1396,17 @@ add an archived or maintained mirror without replacing the original identity.
 - **Format:** Legacy JSONL plus companion metadata JSON, and newer SQLite
   session databases.
 
-  The issue-reported current layout uses
-  `~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl` or the direct
-  `sess_<id>/messages.jsonl` form, with optional `session.json`. Agentsview
-  admits only these exact producer-relative shapes: one workspace segment, no
-  `.history` or `snapshots` workspace, a valid `sess_<id>` directory, and no
-  nested session directory. It preserves the literal `sess_<id>` identity and
-  maps user, assistant, tool-call, and tool-result envelope fields; unknown
-  and malformed records are ignored. This observed layout has no pinned
-  producer schema source. For duplicate IDs, SQLite outranks current JSONL,
-  current outranks legacy JSONL, configured root order breaks ties within a
-  class, and recency then canonical path provide deterministic ties.
+    The issue-reported current layout uses
+    `~/.kiro/sessions/<workspace>/sess_<id>/messages.jsonl` or the direct
+    `sess_<id>/messages.jsonl` form, with optional `session.json`. Agentsview
+    admits only these exact producer-relative shapes: one workspace segment, no
+    `.history` or `snapshots` workspace, a valid `sess_<id>` directory, and no
+    nested session directory. It preserves the literal `sess_<id>` identity and
+    maps user, assistant, tool-call, and tool-result envelope fields; unknown
+    and malformed records are ignored. This observed layout has no pinned
+    producer schema source. For duplicate IDs, SQLite outranks current JSONL,
+    current outranks legacy JSONL, configured root order breaks ties within a
+    class, and recency then canonical path provide deterministic ties.
 
 - **Evidence:** `documentation`.
 
@@ -1408,11 +1424,11 @@ add an archived or maintained mirror without replacing the original identity.
   at `12375a273a289c131a45b4fd3eb1ad6483b4e9d4`; see its pinned
   [Kiro JSONL parser](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/core/adapters/inbound/agents/kirocli/parser.go),
 
-  [sidecar metrics reader](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/core/adapters/inbound/agents/kirocli/sidecar_metrics.go),
-  and recorded
-  [token-accounting assessment](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/replaydata/agents/kiro-cli/scenarios/5-1_token-accounting/metadata.json).
-  These are consumer observations, not Kiro producer authority, and they do
-  not cover the newer `conversations_v2` writer.
+    [sidecar metrics reader](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/core/adapters/inbound/agents/kirocli/sidecar_metrics.go),
+    and recorded
+    [token-accounting assessment](https://github.com/ingo-eichhorst/Irrlicht/blob/12375a273a289c131a45b4fd3eb1ad6483b4e9d4/replaydata/agents/kiro-cli/scenarios/5-1_token-accounting/metadata.json).
+    These are consumer observations, not Kiro producer authority, and they do
+    not cover the newer `conversations_v2` writer.
 
 - **Usage and cost:** JSONL events contain no model, token, cache, credit, or
   USD fields. The companion state can contain model/window metadata, context
@@ -1578,9 +1594,9 @@ add an archived or maintained mirror without replacing the original identity.
   `69ce3728acae0b01c2f457b65a90c144664686aa`; see the pinned
   [agent conversation migration](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/migrations/2025-06-09-013710_create_agent_conversations_table/up.sql),
 
-  [persistence writer](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/app/src/persistence/agent.rs),
-  and
-  [conversation usage types](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/src/model.rs).
+    [persistence writer](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/app/src/persistence/agent.rs),
+    and
+    [conversation usage types](https://github.com/warpdotdev/warp/blob/69ce3728acae0b01c2f457b65a90c144664686aa/crates/persistence/src/model.rs).
 
 - **Usage and cost:** The consumed metadata has aggregate `warp_tokens` and
   `byok_tokens` by model and category, plus custom-endpoint tokens and credit
@@ -1707,21 +1723,21 @@ add an archived or maintained mirror without replacing the original identity.
 - **Upstream:** Clone `https://github.com/aaif-goose/goose.git` at
   `5ab0e6df34e69444f6f2016de40717a9f54bf816`; see the pinned
 
-  [session manager](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/session/session_manager.rs),
+    [session manager](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/session/session_manager.rs),
 
-  [message model](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/message.rs),
+    [message model](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/message.rs),
 
-  [tool-result serialization](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/tool_result_serde.rs),
-  and
-  [path resolution](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/config/paths.rs).
+    [tool-result serialization](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose-provider-types/src/conversation/tool_result_serde.rs),
+    and
+    [path resolution](https://github.com/aaif-goose/goose/blob/5ab0e6df34e69444f6f2016de40717a9f54bf816/crates/goose/src/config/paths.rs).
 
-  `Paths::data_dir()` uses etcetera 0.11 `choose_app_strategy` (XDG on macOS and
-  Linux; the Windows strategy appends a `data` subfolder under
-  `%APPDATA%\Block\goose\`), and `GOOSE_PATH_ROOT` overrides it with
-  `<root>/data`. The first-party
-  [session-management guide](https://goose-docs.ai/docs/guides/sessions/session-management/)
-  and an isolated observed schema-version-15 database were also checked
-  2026-08-03.
+    `Paths::data_dir()` uses etcetera 0.11 `choose_app_strategy` (XDG on macOS and
+    Linux; the Windows strategy appends a `data` subfolder under
+    `%APPDATA%\Block\goose\`), and `GOOSE_PATH_ROOT` overrides it with
+    `<root>/data`. The first-party
+    [session-management guide](https://goose-docs.ai/docs/guides/sessions/session-management/)
+    and an isolated observed schema-version-15 database were also checked
+    2026-08-03.
 
 - **Usage and cost:** `usage_ledger` rows provide model, input, output,
   cache-read, cache-write, compaction, cost, and cost-source data without a
@@ -1791,10 +1807,10 @@ add an archived or maintained mirror without replacing the original identity.
   specification, or authoritative protobuf schema was found. The independent
   CodeBurn evidence pinned in the `antigravity` entry also covers CLI
   discovery, live RPC metadata, and the shorter capture window, but not the
-  encrypted producer format. Reverified 2026-08-20 against Google's official
-  [Antigravity CLI 1.1.16 macOS ARM64 release](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.16),
+  encrypted producer format. Reverified 2026-09-02 against Google's official
+  [Antigravity CLI 1.1.24 macOS ARM64 release](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.24),
   asset SHA-256
-  `a902e8b24fdc53504e7daf658e18f7ba47ebb9cfcf058aa6c01e37c5e610d389`. Its Go
+  `189af288ed9527f567ab3a53b35a6da2fc0c3812c6245f266c75a2a3604bdec3`. Its Go
   binary embeds `FileDescriptorProto` records for
   `third_party/jetski/cortex_pb/cortex.proto` and
   `third_party/jetski/codeium_common_pb/codeium_common.proto`. These compiled
@@ -1804,10 +1820,14 @@ add an archived or maintained mirror without replacing the original identity.
   input, output, thinking-output, cache-read, and model fields; output already
   includes thinking. In CLI 1.1.5 SQLite,
   `CortexStepGeneratorMetadata.step_indices` (field 2) contains packed step
-  indices and `ChatModelMetadata.response_model` (field 19) can contain only
-  the base model slug. The matching `ExecutorMetadata.last_step_idx` range
-  carries the effort-qualified model at
+  indices and `ChatModelMetadata.response_model` (field 19) can contain the
+  base model slug, and in CLI 1.1.24 can contain an experimental serving
+  variant such as `gemini-3.7-flash-exp-b`. The matching
+  `ExecutorMetadata.last_step_idx` range carries the effort-qualified model at
   `cascade_config.planner_config.model_name` (fields 10, 1, and 28).
+  Agentsview normalizes observed serving canary suffixes (such as `-exp-b`)
+  against the covering executor model, while preserving distinct product
+  models ending in generic `-exp` (such as `gemini-2.0-flash-exp`).
   `ChatModelMetadata.model_display_name` (field 21) remains the complete label
   when present. Agentsview avoids double counting and catalog-prices usage. No
   provider USD cost is consumed.

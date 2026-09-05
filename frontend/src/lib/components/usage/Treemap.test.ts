@@ -28,9 +28,7 @@ describe("Treemap", () => {
     });
     await tick();
 
-    expect(document.querySelector(".tile title")?.textContent).toBe(
-      "Click to hide Alpha",
-    );
+    expect(document.querySelector(".tile title")?.textContent).toBe("Click to hide Alpha");
     const tile = document.querySelector<SVGGElement>(".tile");
     const clipPath = tile?.getAttribute("clip-path");
     expect(typeof clipPath).toBe("string");

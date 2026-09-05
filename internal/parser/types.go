@@ -96,6 +96,9 @@ type AgentDef struct {
 	ShallowWatch      bool     // true = watch root only, rely on periodic sync for subdirs
 	FileBased         bool     // false for DB-backed agents
 	Usage             UsageCapabilities
+	// PostAnswerToolWork marks transcript formats that may emit their
+	// user-facing answer before later tool calls in the same turn.
+	PostAnswerToolWork bool
 
 	// PeriodicReconcile opts the agent into scheduled scoped reconciliation
 	// when its declared watcher coverage is deliberately non-authoritative,
@@ -175,6 +178,7 @@ var Registry = []AgentDef{
 		IDPrefix:              "codex:",
 		FileBased:             true,
 		ShallowWatchRootsFunc: ResolveCodexShallowWatchRoots,
+		PostAnswerToolWork:    true,
 	},
 	{
 		// TRAE CLI 2.0 is a closed-source fork of codex-rs and writes
@@ -193,8 +197,9 @@ var Registry = []AgentDef{
 			// this flat directory, exactly as `codex archive` does.
 			".trae/cli/archived_sessions",
 		},
-		IDPrefix:  "traex:",
-		FileBased: true,
+		IDPrefix:           "traex:",
+		FileBased:          true,
+		PostAnswerToolWork: true,
 		// No ShallowWatchRootsFunc: that hook exists for Codex's sibling
 		// session_index.jsonl, which TraeX never writes. Watching
 		// ~/.trae/cli shallowly would deliver nothing but churn from the
@@ -1003,6 +1008,13 @@ func AgentByType(t AgentType) (AgentDef, bool) {
 func RemoteSyncExcludedAgent(agent AgentType) bool {
 	def, ok := AgentByType(agent)
 	return ok && def.RemoteSyncExcluded
+}
+
+// AgentHasPostAnswerToolWork reports whether the agent may continue calling
+// tools after emitting its user-facing answer. Unknown agents return false.
+func AgentHasPostAnswerToolWork(agent AgentType) bool {
+	def, ok := AgentByType(agent)
+	return ok && def.PostAnswerToolWork
 }
 
 // AgentNameLacksPerMessageTokenData reports whether the named agent

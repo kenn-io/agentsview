@@ -59,7 +59,10 @@ function fixtureRows(): DbProjectInventoryRow[] {
 
 function makeInventory(rows: DbProjectInventoryRow[]): DbProjectInventory {
   return {
-    governed_sessions: rows.reduce((sum, r) => sum + (r.enabled_rules_targeting > 0 ? r.sessions : 0), 0),
+    governed_sessions: rows.reduce(
+      (sum, r) => sum + (r.enabled_rules_targeting > 0 ? r.sessions : 0),
+      0,
+    ),
     projects: rows,
     total_projects: rows.length,
     total_sessions: rows.reduce((sum, r) => sum + r.sessions, 0),
@@ -199,9 +202,7 @@ describe("ProjectInventoryTable", () => {
 
     const blankRow = document.querySelector('.project-row[data-project-key="blank"]');
     expect(blankRow?.querySelector(".label-text")?.textContent).toBe(m.shared_unknown());
-    expect(blankRow?.querySelector(".col-project")?.getAttribute("title")).toBe(
-      m.shared_unknown(),
-    );
+    expect(blankRow?.querySelector(".col-project")?.getAttribute("title")).toBe(m.shared_unknown());
 
     const filterInput = screen.getByRole("textbox", { name: m.data_filter_projects() });
     await fireEvent.input(filterInput, { target: { value: m.shared_unknown() } });
@@ -226,12 +227,8 @@ describe("ProjectInventoryTable", () => {
     });
     await tick();
 
-    const row = document.querySelector(
-      '.project-row[data-project-key="unknown-key"]',
-    );
-    expect(row?.querySelector(".label-text")?.textContent).toBe(
-      m.data_project_unclassified(),
-    );
+    const row = document.querySelector('.project-row[data-project-key="unknown-key"]');
+    expect(row?.querySelector(".label-text")?.textContent).toBe(m.data_project_unclassified());
 
     await fireEvent.click(row as Element);
     expect(onSelect).toHaveBeenCalledWith("unknown-key");
@@ -251,7 +248,9 @@ describe("ProjectInventoryTable", () => {
     expect(onSelect).toHaveBeenCalledWith("beta");
 
     onSelect.mockClear();
-    const alphaRow = document.querySelector('.project-row[data-project-key="alpha"]') as HTMLElement;
+    const alphaRow = document.querySelector(
+      '.project-row[data-project-key="alpha"]',
+    ) as HTMLElement;
     await fireEvent.keyDown(alphaRow, { key: " " });
     expect(onSelect).toHaveBeenCalledWith("alpha");
   });

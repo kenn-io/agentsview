@@ -79,7 +79,10 @@ func (s *Server) humaGetSettings(
 		}
 		dirs[string(def.Type)] = d
 		providers = append(providers, sessionProviderResponse{
-			ID: def.Type, DisplayName: def.DisplayName, Dirs: d,
+			ID:                 def.Type,
+			DisplayName:        def.DisplayName,
+			Dirs:               d,
+			PostAnswerToolWork: def.PostAnswerToolWork,
 		})
 	}
 	tc := s.cfg.Terminal

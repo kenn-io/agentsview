@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 type exportSessionsDocument struct {
 	Type          string                 `json:"type"`
 	SchemaVersion int                    `json:"schema_version"`
+	ArchiveID     string                 `json:"archive_id"`
 	DatabaseID    string                 `json:"database_id"`
 	Cursor        exportSessionsCursor   `json:"cursor"`
 	Pricing       map[string]any         `json:"pricing"`
@@ -39,6 +41,42 @@ type exportSessionsDocument struct {
 
 type exportSessionsCursor struct {
 	Next string `json:"next"`
+}
+
+func TestExportSessionsPublishesArchiveIdentity(t *testing.T) {
+	for _, format := range []string{"json", "ndjson"} {
+		for _, empty := range []bool{false, true} {
+			t.Run(format+"/empty="+strconv.FormatBool(empty), func(t *testing.T) {
+				database := seedExportSessionsArchive(t)
+				require.NoError(t, database.SetArchiveIdentityForTest(
+					t.Context(), "stable-archive", strings.Repeat("a", 64),
+				))
+				args := []string{"export", "sessions", "--format", format, "--limit", "1"}
+				if empty {
+					args = append(args, "--project", "absent")
+				}
+				stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), args...)
+				require.NoError(t, err)
+				require.Empty(t, stderr)
+				if format == "ndjson" {
+					stdout, _, _ = strings.Cut(stdout, "\n")
+				}
+				doc := decodeExportSessionsDocument(t, stdout)
+				assert.Equal(t, "stable-archive", doc.ArchiveID)
+				assert.Equal(t, "export-sessions-test-db", doc.DatabaseID)
+				if !empty {
+					require.NotEmpty(t, doc.Cursor.Next)
+					stdout, stderr, err = executeExportSessionsCommand(newRootCommand(),
+						"export", "sessions", "--cursor", doc.Cursor.Next)
+					require.NoError(t, err)
+					require.Empty(t, stderr)
+					resumed := decodeExportSessionsDocument(t, stdout)
+					assert.Equal(t, "stable-archive", resumed.ArchiveID)
+					assert.Equal(t, doc.DatabaseID, resumed.DatabaseID)
+				}
+			})
+		}
+	}
 }
 
 func TestExportSessionsJSONEmitsOneDocument(t *testing.T) {
@@ -235,7 +273,7 @@ func TestBuildExportSessionsOutputMarksCrossPageProjectConflictAmbiguous(t *test
 		}}
 	}
 
-	got := buildExportSessionsOutput("database", []db.SessionExportResult{
+	got := buildExportSessionsOutput([]db.SessionExportResult{
 		page("p1:sha256:first"), page("p1:sha256:second"),
 	})
 

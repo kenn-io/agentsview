@@ -1,7 +1,4 @@
-import type {
-  DisplayItem,
-  MessageItem,
-} from "./display-items.js";
+import type { DisplayItem, MessageItem } from "./display-items.js";
 import type { Message } from "../api/types.js";
 
 export function filterDisplayItemsByTranscriptMode(
@@ -9,17 +6,19 @@ export function filterDisplayItemsByTranscriptMode(
   mode: "normal" | "focused",
   options?: {
     isMessageVisible?: (message: Message) => boolean;
+    keepAnswerBeforeTrailingTools?: boolean;
   },
 ): DisplayItem[] {
   if (mode === "normal") return items;
 
+  const keepAnswerBeforeTrailingTools = options?.keepAnswerBeforeTrailingTools === true;
   const filtered: DisplayItem[] = [];
   let pendingAssistant: MessageItem | null = null;
   let toolAfterPendingAssistant = false;
 
   for (const item of items) {
     if (item.kind === "tool-group") {
-      if (pendingAssistant) {
+      if (pendingAssistant && !keepAnswerBeforeTrailingTools) {
         toolAfterPendingAssistant = true;
       }
       continue;
@@ -53,10 +52,7 @@ export function filterDisplayItemsByTranscriptMode(
       continue;
     }
 
-    if (
-      options?.isMessageVisible &&
-      !options.isMessageVisible(item.message)
-    ) {
+    if (options?.isMessageVisible && !options.isMessageVisible(item.message)) {
       continue;
     }
 
@@ -79,12 +75,8 @@ export function shouldAutoSwitchTranscriptModeToNormal(
 ): boolean {
   if (mode !== "focused" || ordinal === null) return false;
 
-  const visible = visibleItems.some((item) =>
-    item.ordinals.includes(ordinal),
-  );
+  const visible = visibleItems.some((item) => item.ordinals.includes(ordinal));
   if (visible) return false;
 
-  return normalVisibleItems.some((item) =>
-    item.ordinals.includes(ordinal),
-  );
+  return normalVisibleItems.some((item) => item.ordinals.includes(ordinal));
 }

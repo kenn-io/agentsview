@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vite-plus/test';
-import { mount, unmount, tick } from 'svelte';
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { mount, unmount, tick } from "svelte";
 // @ts-ignore
-import CacheTestWrapper from './CacheTestWrapper.svelte';
+import CacheTestWrapper from "./CacheTestWrapper.svelte";
 
 interface MockInstance {
   options: Record<string, unknown>;
@@ -13,19 +13,16 @@ interface MockInstance {
 
 type TestController = {
   initialOptions: { measureCacheKey: string; count: number };
-  updateOptions: (
-    opts: { measureCacheKey: string; count: number }
-  ) => void;
+  updateOptions: (opts: { measureCacheKey: string; count: number }) => void;
 };
 
 const { createdInstances } = vi.hoisted(() => ({
   createdInstances: [] as MockInstance[],
 }));
 
-vi.mock('@tanstack/virtual-core', async () => {
-  const original = await vi.importActual<
-    typeof import('@tanstack/virtual-core')
-  >('@tanstack/virtual-core');
+vi.mock("@tanstack/virtual-core", async () => {
+  const original =
+    await vi.importActual<typeof import("@tanstack/virtual-core")>("@tanstack/virtual-core");
 
   class MockVirtualizer implements MockInstance {
     options: Record<string, unknown>;
@@ -55,7 +52,7 @@ vi.mock('@tanstack/virtual-core', async () => {
   };
 });
 
-describe('createVirtualizer cache invalidation', () => {
+describe("createVirtualizer cache invalidation", () => {
   let activeComponent: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
@@ -70,14 +67,11 @@ describe('createVirtualizer cache invalidation', () => {
     }
   });
 
-  async function setupTest(
-    type: 'element' | 'window',
-    initialKey: string,
-  ) {
+  async function setupTest(type: "element" | "window", initialKey: string) {
     const controller: TestController = {
       initialOptions: { measureCacheKey: initialKey, count: 10 },
       updateOptions: () => {
-        throw new Error('Not yet bound by component');
+        throw new Error("Not yet bound by component");
       },
     };
 
@@ -93,43 +87,37 @@ describe('createVirtualizer cache invalidation', () => {
 
     // Simulate measurement accumulation
     instance.itemSizeCache = new Map([
-      ['0', 50],
-      ['1', 60],
+      ["0", 50],
+      ["1", 60],
     ]);
 
     return { controller, instance };
   }
 
-  const types = ['element', 'window'] as const;
+  const types = ["element", "window"] as const;
 
   types.forEach((type) => {
     describe(`${type} virtualizer`, () => {
-      it('preserves cache when measureCacheKey stays the same', async () => {
-        const { controller, instance } = await setupTest(
-          type,
-          'session-1',
-        );
+      it("preserves cache when measureCacheKey stays the same", async () => {
+        const { controller, instance } = await setupTest(type, "session-1");
 
         controller.updateOptions({
-          measureCacheKey: 'session-1',
+          measureCacheKey: "session-1",
           count: 20,
         });
         await tick();
 
         expect(createdInstances).toHaveLength(1);
         expect(instance.options.count).toBe(20);
-        expect(instance.itemSizeCache?.get('0')).toBe(50);
-        expect(instance.itemSizeCache?.get('1')).toBe(60);
+        expect(instance.itemSizeCache?.get("0")).toBe(50);
+        expect(instance.itemSizeCache?.get("1")).toBe(60);
       });
 
-      it('clears cache when measureCacheKey changes', async () => {
-        const { controller, instance } = await setupTest(
-          type,
-          'session-1',
-        );
+      it("clears cache when measureCacheKey changes", async () => {
+        const { controller, instance } = await setupTest(type, "session-1");
 
         controller.updateOptions({
-          measureCacheKey: 'session-2',
+          measureCacheKey: "session-2",
           count: 10,
         });
         await tick();

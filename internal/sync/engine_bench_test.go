@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -49,16 +48,16 @@ const (
 	benchLargeSessionLines        = 1000
 )
 
-// silenceBenchLogs discards the engine's global log output for the
-// duration of the benchmark. Log lines interleave with `go test
-// -bench` result lines on stdout, which corrupts them so benchfmt
-// cannot parse the benchmark — benchgate fails on such corruption,
-// and before it did, the corrupted benchmarks silently vanished
-// from the gate on both sides.
-func silenceBenchLogs(b *testing.B) {
+// routeBenchLogs sends the engine's global log output through the
+// benchmark's own output for its duration. go test prints a benchmark's
+// name before the timed loop and its numbers after, so a log line
+// written straight to stderr in between splits the result line and the
+// bench gate rejects the capture. Output written through b.Output is
+// printed after the result line instead.
+func routeBenchLogs(b *testing.B) {
 	b.Helper()
 	prev := log.Writer()
-	log.SetOutput(io.Discard)
+	log.SetOutput(b.Output())
 	b.Cleanup(func() { log.SetOutput(prev) })
 }
 
@@ -183,7 +182,7 @@ func openBenchEngine(b *testing.B, dir string) (*Engine, *db.DB) {
 // benchmark exists to protect — a warm no-op pass must not reparse
 // or rewrite anything.
 func BenchmarkSyncAllWarmNoop(b *testing.B) {
-	silenceBenchLogs(b)
+	routeBenchLogs(b)
 	sessions := benchIntFromEnv(
 		"AGENTSVIEW_BENCH_SYNC_SESSIONS", defaultBenchSyncSessions,
 	)
@@ -245,7 +244,7 @@ func BenchmarkSyncPathsIncrementalAppendUsage(b *testing.B) {
 }
 
 func benchSyncPathsIncrementalAppend(b *testing.B, withUsage bool) {
-	silenceBenchLogs(b)
+	routeBenchLogs(b)
 	dir := b.TempDir()
 	writeArchive := writeBenchClaudeArchive
 	if withUsage {
@@ -353,7 +352,7 @@ func benchColdArchive(
 	verify func(*Engine, SyncStats, int),
 ) {
 	b.Helper()
-	silenceBenchLogs(b)
+	routeBenchLogs(b)
 	defaultSessions, defaultMessages := defaultBenchSyncSessions,
 		defaultBenchSyncMessages
 	writeArchive := writeBenchClaudeArchive

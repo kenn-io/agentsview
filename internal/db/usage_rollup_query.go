@@ -159,6 +159,9 @@ func verifyUsageRollupInstall(
 		}
 		return err
 	}
+	// The write sequence identifies the exact rows whose source and baked
+	// metadata Ensure checked. A different sequence can belong to a build from
+	// an older archive snapshot, even when its number is higher.
 	if revision != required.InstallRevision || pricingHash != required.PricingHash {
 		return fmt.Errorf("%w: usage rollup session %s changed before read",
 			errUsageCacheSourceChanged, sessionID)

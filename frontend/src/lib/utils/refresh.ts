@@ -12,10 +12,7 @@ const DAY_MS = 24 * HOUR_MS;
  */
 export const DEFAULT_REFRESH_INTERVAL_MS = 5 * MINUTE_MS;
 
-export function formatRefreshAge(
-  updatedAt: number | null | undefined,
-  now = Date.now(),
-): string {
+export function formatRefreshAge(updatedAt: number | null | undefined, now = Date.now()): string {
   if (updatedAt == null) return m.shared_refresh_not_updated();
 
   const ageMs = Math.max(0, now - updatedAt);
@@ -35,10 +32,7 @@ export function formatRefreshAge(
   });
 }
 
-export function createRefreshScheduler(
-  refresh: () => void | Promise<void>,
-  intervalMs: number,
-) {
+export function createRefreshScheduler(refresh: () => void | Promise<void>, intervalMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   function stop() {

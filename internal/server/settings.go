@@ -21,9 +21,10 @@ type settingsResponse struct {
 }
 
 type sessionProviderResponse struct {
-	ID          parser.AgentType `json:"id"`
-	DisplayName string           `json:"display_name"`
-	Dirs        []string         `json:"dirs"`
+	ID                 parser.AgentType `json:"id"`
+	DisplayName        string           `json:"display_name"`
+	Dirs               []string         `json:"dirs"`
+	PostAnswerToolWork bool             `json:"post_answer_tool_work,omitzero"`
 }
 
 // terminalResponse mirrors config.TerminalConfig for JSON output.

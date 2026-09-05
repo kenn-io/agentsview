@@ -30,6 +30,11 @@ type usageFillResult struct {
 	source          usageSourceVersion
 }
 
+type usageFillInstallExpectation struct {
+	InstallRevision int64
+	Exists          bool
+}
+
 type usageFillCall struct {
 	done   chan struct{}
 	result usageFillResult
@@ -141,15 +146,10 @@ func (c *usageFillCoordinator) Ensure(
 			results[id] = call.result
 		}
 	}
-	for _, version := range versions {
-		result, ok := results[version.SessionID]
-		if ok && !result.Deleted && !result.source.Equal(version) {
-			return nil, fmt.Errorf(
-				"%w while filling session %s",
-				errUsageCacheSourceChanged, version.SessionID,
-			)
-		}
-	}
+	// A fill installs the facts its own archive read transaction saw and
+	// reports the exact source version they belong to. That version can be
+	// newer than the one the caller asked for, which is a valid answer, so
+	// there is no post-hoc comparison against the caller's snapshot here.
 	if cursorHighWater > 0 {
 		if err := c.ensureCursor(ctx, cursorHighWater); err != nil {
 			return nil, err
@@ -216,32 +216,52 @@ func (c *usageFillCoordinator) fillSessionsDetached(
 	ctx context.Context,
 	versions []usageSourceVersion,
 ) (map[string]usageFillResult, error) {
-	pending := append([]usageSourceVersion(nil), versions...)
 	results := make(map[string]usageFillResult, len(versions))
-	var spool *usageFactSpool
-	for attempt := 1; len(pending) > 0 && attempt <= usageFillMaxAttempts; attempt++ {
-		if spool == nil {
-			if c.observer.beforeExtract != nil {
-				c.observer.beforeExtract(append([]usageSourceVersion(nil), pending...))
+	if len(versions) == 0 {
+		return results, nil
+	}
+	pending := slices.Clone(versions)
+	for sourceAttempt := 1; sourceAttempt <= usageFillMaxAttempts; sourceAttempt++ {
+		expected, err := c.captureFillInstallExpectations(pending)
+		if err != nil {
+			return nil, err
+		}
+		if c.observer.beforeExtract != nil {
+			c.observer.beforeExtract(slices.Clone(pending))
+		}
+		// One archive read transaction yields both the facts and the source
+		// version they belong to, so the install never has to consult the
+		// archive again. The cache expectation prevents an older concurrent
+		// extraction from replacing facts installed after this attempt began.
+		spool, extracted, err := c.extractSessions(ctx, pending)
+		if err != nil {
+			return nil, err
+		}
+		if c.observer.afterExtract != nil {
+			c.observer.afterExtract(slices.Clone(pending))
+		}
+		stable := make([]usageSourceVersion, 0, len(pending))
+		var deleted []string
+		for _, requested := range pending {
+			if version, ok := extracted[requested.SessionID]; ok {
+				stable = append(stable, version)
+				continue
 			}
-			var err error
-			spool, err = c.extractSessions(ctx, pending)
-			if err != nil {
-				return nil, err
-			}
-			if c.observer.afterExtract != nil {
-				c.observer.afterExtract(append([]usageSourceVersion(nil), pending...))
-			}
+			deleted = append(deleted, requested.SessionID)
 		}
 		if c.observer.beforeInstall != nil {
-			c.observer.beforeInstall(append([]usageSourceVersion(nil), pending...))
+			c.observer.beforeInstall(slices.Clone(stable))
 		}
-		installed, retry, err := c.installSpool(ctx, spool, pending)
-		if err != nil && isUsageCacheBusy(err) {
-			continue
+		var installed map[string]usageFillResult
+		var lost []string
+		for installAttempt := 1; installAttempt <= usageFillMaxAttempts; installAttempt++ {
+			installed, lost, err = c.installSpool(
+				ctx, spool, stable, deleted, expected)
+			if err == nil || !isUsageCacheBusy(err) {
+				break
+			}
 		}
 		closeErr := spool.Close()
-		spool = nil
 		if err != nil {
 			return nil, errors.Join(err, closeErr)
 		}
@@ -249,18 +269,41 @@ func (c *usageFillCoordinator) fillSessionsDetached(
 			return nil, closeErr
 		}
 		maps.Copy(results, installed)
-		pending = retry
+		if len(lost) == 0 {
+			return results, nil
+		}
+		lostSet := make(map[string]bool, len(lost))
+		for _, sessionID := range lost {
+			lostSet[sessionID] = true
+		}
+		next := make([]usageSourceVersion, 0, len(lost))
+		for _, version := range pending {
+			if lostSet[version.SessionID] {
+				next = append(next, version)
+			}
+		}
+		pending = next
 	}
-	if spool != nil {
-		_ = spool.Close()
+	return nil, fmt.Errorf(
+		"%w: usage cache facts kept changing during fill",
+		errUsageCacheSourceChanged)
+}
+
+func (c *usageFillCoordinator) captureFillInstallExpectations(
+	versions []usageSourceVersion,
+) (map[string]usageFillInstallExpectation, error) {
+	expected := make(map[string]usageFillInstallExpectation, len(versions))
+	for _, version := range versions {
+		cached, ok, err := c.cachedSession(version.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		expected[version.SessionID] = usageFillInstallExpectation{
+			InstallRevision: cached.InstallRevision,
+			Exists:          ok,
+		}
 	}
-	if len(pending) != 0 {
-		return nil, fmt.Errorf(
-			"usage cache fill could not verify archive state after %d attempts for %d sessions",
-			usageFillMaxAttempts, len(pending),
-		)
-	}
-	return results, nil
+	return expected, nil
 }
 
 // FillBackground performs cancellable, non-single-flight work for the daemon
@@ -371,12 +414,17 @@ func (s *usageFactSpool) Close() error {
 	return errors.Join(s.db.Close(), removeUsageCacheFiles(s.path))
 }
 
+// extractSessions reads the requested sessions' usage facts and their source
+// versions inside one archive read transaction. WAL gives that transaction a
+// consistent snapshot, so the returned versions describe exactly the facts in
+// the spool. Sessions missing from the returned map were deleted as of the
+// snapshot.
 func (c *usageFillCoordinator) extractSessions(
 	ctx context.Context, versions []usageSourceVersion,
-) (*usageFactSpool, error) {
+) (*usageFactSpool, map[string]usageSourceVersion, error) {
 	spool, err := newUsageFactSpool()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	fail := true
 	defer func() {
@@ -386,64 +434,85 @@ func (c *usageFillCoordinator) extractSessions(
 	}()
 	conn, err := c.archive.getReader().Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("pinning archive usage fill connection: %w", err)
+		return nil, nil, fmt.Errorf("pinning archive usage fill connection: %w", err)
 	}
 	defer conn.Close()
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, fmt.Errorf("starting archive usage fill snapshot: %w", err)
+		return nil, nil, fmt.Errorf("starting archive usage fill snapshot: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var databaseID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT value FROM archive_metadata WHERE key = ?`,
+		archiveMetadataDatabaseIDKey,
+	).Scan(&databaseID); err != nil {
+		return nil, nil, err
+	}
+	if databaseID != c.cache.databaseID {
+		return nil, nil, fmt.Errorf("%w during session fill", errUsageCacheSourceChanged)
+	}
+	ids := make([]string, 0, len(versions))
+	for _, version := range versions {
+		ids = append(ids, version.SessionID)
+	}
+	extracted, err := loadUsageSourceVersions(ctx, tx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`CREATE TEMP TABLE IF NOT EXISTS usage_fill_sessions(
 			session_id TEXT PRIMARY KEY
 		) WITHOUT ROWID;
 		DELETE FROM usage_fill_sessions`,
 	); err != nil {
-		return nil, fmt.Errorf("creating usage fill session set: %w", err)
+		return nil, nil, fmt.Errorf("creating usage fill session set: %w", err)
 	}
 	insert, err := tx.PrepareContext(ctx,
 		`INSERT INTO usage_fill_sessions(session_id) VALUES (?)`)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	for _, version := range versions {
-		if _, err := insert.ExecContext(ctx, version.SessionID); err != nil {
+	for _, id := range ids {
+		if _, ok := extracted[id]; !ok {
+			continue
+		}
+		if _, err := insert.ExecContext(ctx, id); err != nil {
 			_ = insert.Close()
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if err := insert.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	spoolTx, err := spool.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = spoolTx.Rollback() }()
 	indexes := make(map[string]int, len(versions))
 	spoolWriter := usageFactSpoolWriter{ctx: ctx, tx: spoolTx}
 	if err := extractUsageMessageFacts(ctx, tx, &spoolWriter, indexes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := extractUsageActivityFacts(ctx, tx, &spoolWriter, indexes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := extractUsageEventFacts(ctx, tx, &spoolWriter, indexes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := spoolWriter.Flush(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := spoolTx.Commit(); err != nil {
-		return nil, fmt.Errorf("committing usage fact spool: %w", err)
+		return nil, nil, fmt.Errorf("committing usage fact spool: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("closing archive usage fill snapshot: %w", err)
+		return nil, nil, fmt.Errorf("closing archive usage fill snapshot: %w", err)
 	}
 	fail = false
-	return spool, nil
+	return spool, extracted, nil
 }
 
 func extractUsageMessageFacts(
@@ -660,30 +729,43 @@ const usageFillEventFactsSQL = `
 	ORDER BY e.session_id, COALESCE(e.occurred_at, ''), e.id`
 
 func (c *usageFillCoordinator) installSpool(
-	ctx context.Context, spool *usageFactSpool, versions []usageSourceVersion,
-) (map[string]usageFillResult, []usageSourceVersion, error) {
-	installed := make(map[string]usageFillResult, len(versions))
-	var retry []usageSourceVersion
-	for start := 0; start < len(versions); start += usageFillInstallBatchSize {
-		end := min(start+usageFillInstallBatchSize, len(versions))
-		batchInstalled, batchRetry, err := c.installSpoolBatch(
-			ctx, spool, versions[start:end],
+	ctx context.Context, spool *usageFactSpool,
+	stable []usageSourceVersion, deleted []string,
+	expected map[string]usageFillInstallExpectation,
+) (map[string]usageFillResult, []string, error) {
+	installed := make(map[string]usageFillResult, len(stable))
+	if len(stable) == 0 && len(deleted) == 0 {
+		return installed, nil, nil
+	}
+	var lost []string
+	// The loop body runs at least once so a batch that only removes deleted
+	// sessions still commits.
+	for start := 0; start == 0 || start < len(stable); start += usageFillInstallBatchSize {
+		end := min(start+usageFillInstallBatchSize, len(stable))
+		// Deletions belong to the first transaction only.
+		batchDeleted := deleted
+		if start > 0 {
+			batchDeleted = nil
+		}
+		batchInstalled, batchLost, err := c.installSpoolBatch(
+			ctx, spool, stable[start:end], batchDeleted, expected,
 		)
 		if err != nil {
-			return nil, versions, err
+			return nil, nil, err
 		}
 		maps.Copy(installed, batchInstalled)
-		retry = append(retry, batchRetry...)
-		if end < len(versions) {
+		lost = append(lost, batchLost...)
+		if end < len(stable) {
 			c.maintainBetweenInstallBatches(ctx)
 		}
 	}
-	return installed, retry, nil
+	return installed, lost, nil
 }
 
 func (c *usageFillCoordinator) installSpoolBatch(
-	ctx context.Context, spool *usageFactSpool, versions []usageSourceVersion,
-) (map[string]usageFillResult, []usageSourceVersion, error) {
+	ctx context.Context, spool *usageFactSpool, stable []usageSourceVersion,
+	deleted []string, expected map[string]usageFillInstallExpectation,
+) (map[string]usageFillResult, []string, error) {
 	conn, err := c.cache.db.Conn(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -699,7 +781,7 @@ func (c *usageFillCoordinator) installSpoolBatch(
 			`DETACH DATABASE usage_fill_spool`)
 	}()
 	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		return nil, versions, fmt.Errorf("locking usage cache for fill: %w", err)
+		return nil, nil, fmt.Errorf("locking usage cache for fill: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -708,60 +790,87 @@ func (c *usageFillCoordinator) installSpoolBatch(
 		}
 	}()
 
-	results := make(map[string]usageFillResult, len(versions))
-	var retry []usageSourceVersion
-	var deleted []string
-	stable := make([]usageSourceVersion, 0, len(versions))
-	currentVersions, err := c.recheckSourceVersions(ctx, versions)
-	if err != nil {
-		return nil, versions, err
-	}
-	for _, observed := range versions {
-		current, exists := currentVersions[observed.SessionID]
-		if !exists {
-			deleted = append(deleted, observed.SessionID)
-			results[observed.SessionID] = usageFillResult{Deleted: true}
-			continue
-		}
-		if !current.Equal(observed) {
-			retry = append(retry, current)
-			continue
-		}
-		stable = append(stable, current)
-	}
-	affected := append([]string(nil), deleted...)
+	eligibleStable := make([]usageSourceVersion, 0, len(stable))
+	eligibleDeleted := make([]string, 0, len(deleted))
+	var lost []string
 	for _, version := range stable {
+		matches, matchErr := fillInstallExpectationMatches(
+			ctx, conn, version.SessionID, expected[version.SessionID])
+		if matchErr != nil {
+			return nil, nil, matchErr
+		}
+		if matches {
+			eligibleStable = append(eligibleStable, version)
+		} else {
+			lost = append(lost, version.SessionID)
+		}
+	}
+	for _, sessionID := range deleted {
+		matches, matchErr := fillInstallExpectationMatches(
+			ctx, conn, sessionID, expected[sessionID])
+		if matchErr != nil {
+			return nil, nil, matchErr
+		}
+		if matches {
+			eligibleDeleted = append(eligibleDeleted, sessionID)
+		} else {
+			lost = append(lost, sessionID)
+		}
+	}
+	results := make(map[string]usageFillResult,
+		len(eligibleStable)+len(eligibleDeleted))
+	for _, sessionID := range eligibleDeleted {
+		results[sessionID] = usageFillResult{Deleted: true}
+	}
+	affected := append([]string(nil), eligibleDeleted...)
+	for _, version := range eligibleStable {
 		affected = append(affected, version.SessionID)
 	}
 	oldIdentities, err := usageFactIdentitiesForSessions(ctx, conn, affected)
 	if err != nil {
-		return nil, versions, err
+		return nil, nil, err
 	}
-	for _, sessionID := range deleted {
+	for _, sessionID := range eligibleDeleted {
 		for _, query := range []string{
 			`DELETE FROM usage_rollup_installs WHERE session_id = ?`,
 			`DELETE FROM usage_cached_sessions WHERE session_id = ?`,
 		} {
 			if _, err := conn.ExecContext(ctx, query, sessionID); err != nil {
-				return nil, versions, err
+				return nil, nil, err
 			}
 		}
 	}
-	stableResults, err := installSpoolSessions(ctx, conn, stable)
+	stableResults, err := installSpoolSessions(ctx, conn, eligibleStable)
 	if err != nil {
-		return nil, versions, err
+		return nil, nil, err
 	}
 	maps.Copy(results, stableResults)
 	if err := c.invalidateChangedIdentitySharers(
-		ctx, conn, oldIdentities, stable, affected,
+		ctx, conn, oldIdentities, eligibleStable, affected,
 	); err != nil {
-		return nil, versions, err
+		return nil, nil, err
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return nil, versions, fmt.Errorf("committing usage cache fill: %w", err)
+		return nil, nil, fmt.Errorf("committing usage cache fill: %w", err)
 	}
 	committed = true
-	return results, retry, nil
+	return results, lost, nil
+}
+
+func fillInstallExpectationMatches(
+	ctx context.Context, conn *sql.Conn, sessionID string,
+	expected usageFillInstallExpectation,
+) (bool, error) {
+	var revision int64
+	err := conn.QueryRowContext(ctx, `SELECT install_revision
+		FROM usage_cached_sessions WHERE session_id = ?`, sessionID).Scan(&revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return !expected.Exists, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return expected.Exists && revision == expected.InstallRevision, nil
 }
 
 // invalidateChangedIdentitySharers compares the dedup identities a fill
@@ -792,6 +901,10 @@ func (c *usageFillCoordinator) invalidateChangedIdentitySharers(
 	return invalidateUsageDedupSharers(ctx, conn, changed, excluded)
 }
 
+// recheckSourceVersions resolves the archive's current source versions for the
+// given sessions. It backs the mutation-notification path, which has to decide
+// which sessions to refill or delete; fills and rollup builds read their own
+// consistent snapshot instead and never call it.
 func (c *usageFillCoordinator) recheckSourceVersions(
 	ctx context.Context, observed []usageSourceVersion,
 ) (map[string]usageSourceVersion, error) {
@@ -831,6 +944,22 @@ func (c *usageFillCoordinator) recheckSourceVersions(
 	for _, version := range observed {
 		ids = append(ids, version.SessionID)
 	}
+	current, err := loadUsageSourceVersions(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return current, nil
+}
+
+// loadUsageSourceVersions reads the current source version of each requested
+// session inside the caller's archive read transaction. Sessions absent from
+// the result are deleted as of that transaction's snapshot.
+func loadUsageSourceVersions(
+	ctx context.Context, tx *sql.Tx, ids []string,
+) (map[string]usageSourceVersion, error) {
 	current := make(map[string]usageSourceVersion, len(ids))
 	if err := queryChunked(ids, func(chunk []string) error {
 		placeholders, args := inPlaceholders(chunk)
@@ -861,18 +990,13 @@ func (c *usageFillCoordinator) recheckSourceVersions(
 			foundIDs = append(foundIDs, id)
 		}
 	}
-	fingerprints, err := usageEventFingerprintsWithQuerier(
-		ctx, tx, foundIDs,
-	)
+	fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, foundIDs)
 	if err != nil {
 		return nil, err
 	}
 	for id, version := range current {
 		version.UsageEventFingerprint = fingerprints[id]
 		current[id] = version
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 	return current, nil
 }

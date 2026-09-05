@@ -142,6 +142,7 @@ func (s *Store) semanticAllowedSessionIDsPG(
 		return nil, nil
 	}
 	where, args := buildPGSessionBaseFilter(semanticPGSessionFilter(f))
+	where, args = appendExcludeSessionIDsPG(where, args, "id", f.ExcludeSessionIDs)
 	query := fmt.Sprintf(
 		"SELECT id FROM sessions WHERE %s AND id = ANY($%d)", where, len(args)+1)
 	args = append(args, ids)

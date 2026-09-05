@@ -88,10 +88,12 @@ func zedWatchRoots(roots []string) []WatchRoot {
 // zedClassifyPath maps a stored or changed path to its database container and
 // thread, reproducing the legacy strict sourceRef / lenient
 // sourceRefForChangedPath split: allowMissing relaxes the regular-file check so
-// a database delete (or its WAL/SHM sibling) still classifies for tombstones.
+// a database delete (or its WAL sibling) still classifies for tombstones. A
+// bare "-shm" sibling event is rejected: the provider's own read connections
+// rewrite that file, so honoring it would make every scan schedule the next.
 func zedClassifyPath(root, path string, allowMissing bool) (multiSessionMatch, bool) {
 	return classifySQLiteContainerPath(
-		root, path, zedThreadsDBRelPath, allowMissing, false, parseZedVirtualPath,
+		root, path, zedThreadsDBRelPath, allowMissing, true, parseZedVirtualPath,
 	)
 }
 
@@ -242,12 +244,13 @@ func zedParseContainer(
 	return results, nil
 }
 
-// sqliteDBJournalSuffixes is the default sibling-file suffix list for
-// sqliteDBCompositeMtime: the database file itself plus its WAL and
-// shared-memory files. Omnigent uses a narrower list (see
-// omnigentDBMtimeSuffixes) because it opens its own read connections against
-// the database, which touch the shared-memory file.
-var sqliteDBJournalSuffixes = []string{"", "-wal", "-shm"}
+// sqliteDBJournalSuffixes is the sibling-file suffix list for
+// sqliteDBCompositeMtime: the database file itself plus its WAL. The "-shm"
+// index is left out on purpose. Every committed write lands in the main file
+// or the WAL, while readers, including this process's own scan connections,
+// rewrite the shared-memory file, so folding its mtime in would make every
+// scan report the container as changed and schedule the next scan.
+var sqliteDBJournalSuffixes = []string{"", "-wal"}
 
 // sqliteDBCompositeMtime returns the freshest mtime across a SQLite database
 // file and the listed sibling suffixes (e.g. "-wal", "-shm").

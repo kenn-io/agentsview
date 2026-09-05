@@ -1,7 +1,7 @@
 import { debounce } from "@kenn-io/kit-ui";
 import { SearchService } from "../api/generated/index.js";
 import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
-import type { SearchResponse, SearchResult } from "../api/types.js";
+import type { SearchResult } from "../api/types.js";
 
 export type SearchMode = "fulltext" | "semantic" | "hybrid";
 export type SearchSort = "relevance" | "recency";
@@ -34,10 +34,6 @@ interface ContentSearchMatch {
   score?: number;
 }
 
-interface ContentSearchResponse {
-  matches: ContentSearchMatch[] | null;
-}
-
 type SearchModeStorage = Pick<Storage, "getItem" | "setItem">;
 
 export const SEARCH_MODE_STORAGE_KEY = "agentsview-search-mode";
@@ -57,9 +53,7 @@ function availableStorage(): SearchModeStorage | null {
 function loadMode(storage: SearchModeStorage | null): SearchMode {
   try {
     const value = storage?.getItem(SEARCH_MODE_STORAGE_KEY);
-    return SEARCH_MODES.includes(value as SearchMode)
-      ? value as SearchMode
-      : "fulltext";
+    return SEARCH_MODES.includes(value as SearchMode) ? (value as SearchMode) : "fulltext";
   } catch {
     return "fulltext";
   }
@@ -110,8 +104,7 @@ function errorDetail(error: unknown): string | null {
 }
 
 function isTimeoutDetail(detail: string | null): boolean {
-  return detail !== null &&
-    /(?:timed out|timeout|deadline exceeded)/i.test(detail);
+  return detail !== null && /(?:timed out|timeout|deadline exceeded)/i.test(detail);
 }
 
 // failureKind classifies semantic/hybrid failures the palette can act on.
@@ -143,12 +136,9 @@ export class SearchStore {
   private abortController: AbortController | null = null;
   private requestVersion = 0;
 
-  private debouncedSearch = debounce(
-    (query: string, project: string) => {
-      void this.executeSearch(query, project);
-    },
-    SEARCH_DEBOUNCE_MS,
-  );
+  private debouncedSearch = debounce((query: string, project: string) => {
+    void this.executeSearch(query, project);
+  }, SEARCH_DEBOUNCE_MS);
 
   constructor(storage: SearchModeStorage | null = availableStorage()) {
     this.storage = storage;
@@ -236,26 +226,36 @@ export class SearchStore {
       let results: PaletteSearchResult[];
       if (mode === "fulltext") {
         const response = await callGenerated(
-          () => SearchService.getApiV1Search({
-            q: query,
-            project: project || undefined,
-            limit: PALETTE_RESULT_LIMIT,
-            sort: this.sort,
-          }) as unknown as Promise<SearchResponse>,
+          (options) =>
+            SearchService.getApiV1Search(
+              {
+                q: query,
+                project: project || undefined,
+                limit: PALETTE_RESULT_LIMIT,
+                sort: this.sort,
+              },
+              options,
+            ),
           signal,
         );
         results = normalizeFullText(response.results ?? []);
       } else {
         const response = await callGenerated(
-          () => SearchService.getApiV1SearchContent({
-            pattern: query.trim(),
-            mode,
-            project: project || undefined,
-            limit: CONTENT_SEARCH_LIMIT,
-            xAgentsViewSearchIntent: "semantic",
-            includeOneShot: true,
-            includeAutomated: true,
-          }) as unknown as Promise<ContentSearchResponse>,
+          (options) =>
+            SearchService.getApiV1SearchContent(
+              {
+                pattern: query.trim(),
+                mode,
+                project: project || undefined,
+                limit: CONTENT_SEARCH_LIMIT,
+                include_one_shot: true,
+                include_automated: true,
+              },
+              {
+                ...options,
+                headers: { "X-AgentsView-Search-Intent": "semantic" },
+              },
+            ),
           signal,
         );
         results = normalizeContent(response.matches ?? []);
@@ -265,11 +265,7 @@ export class SearchStore {
       this.results = results;
       this.error = null;
     } catch (error: unknown) {
-      if (
-        requestVersion !== this.requestVersion ||
-        signal.aborted ||
-        isAbortError(error)
-      ) {
+      if (requestVersion !== this.requestVersion || signal.aborted || isAbortError(error)) {
         return;
       }
       this.results = [];

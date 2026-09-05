@@ -1,14 +1,9 @@
 // @vitest-environment jsdom
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-} from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { usage } from "../../stores/usage.svelte.js";
 import { testMoney } from "../../test/money.js";
-import type { UsageSummaryResponse } from "../../api/types/usage.js";
+import type { UsageSummaryResponse } from "../../api/generated/index";
 import UsageSummaryCards from "./UsageSummaryCards.svelte";
 
 let component: ReturnType<typeof mount> | undefined;
@@ -17,22 +12,30 @@ function summary(): UsageSummaryResponse {
   return {
     from: "2026-07-01",
     to: "2026-07-01",
+    projects: {},
     totals: {
       inputTokens: 100,
       cacheCreationTokens: 40,
       cacheReadTokens: 800,
       outputTokens: 25,
       totalCost: testMoney(1),
+      cacheSavings: testMoney(0),
     },
-    daily: [{
-      date: "2026-07-01",
-      inputTokens: 100,
-      cacheCreationTokens: 40,
-      cacheReadTokens: 800,
-      outputTokens: 25,
-      totalCost: testMoney(1),
-      modelsUsed: ["model"],
-    }],
+    daily: [
+      {
+        date: "2026-07-01",
+        inputTokens: 100,
+        cacheCreationTokens: 40,
+        cacheReadTokens: 800,
+        outputTokens: 25,
+        totalCost: testMoney(1),
+        modelsUsed: ["model"],
+        modelBreakdowns: [],
+        projectBreakdowns: [],
+        agentBreakdowns: [],
+        machineBreakdowns: [],
+      },
+    ],
     projectTotals: [],
     modelTotals: [],
     agentTotals: [],
@@ -63,12 +66,7 @@ afterEach(() => {
   usage.cancelInFlightReads();
   usage.summary = null;
   usage.mode = "cost";
-  usage.setSelectedTokenTypes([
-    "input",
-    "cache_write",
-    "cache_read",
-    "output",
-  ]);
+  usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
   document.body.innerHTML = "";
 });
 
@@ -83,19 +81,14 @@ describe("UsageSummaryCards", () => {
     });
     await tick();
 
-    expect(
-      document.querySelector(".featured .card-value")
-        ?.textContent?.trim(),
-    ).toBe("25");
-    const labels = Array.from(
-      document.querySelectorAll<HTMLElement>(".card-label"),
-    );
-    const dailyBurn = labels.find(
-      (label) => label.textContent?.trim() === "Daily Burn",
-    )?.previousElementSibling?.textContent?.trim();
-    const peakDay = labels.find(
-      (label) => label.textContent?.trim() === "Peak Day",
-    )?.previousElementSibling?.textContent?.trim();
+    expect(document.querySelector(".featured .card-value")?.textContent?.trim()).toBe("25");
+    const labels = Array.from(document.querySelectorAll<HTMLElement>(".card-label"));
+    const dailyBurn = labels
+      .find((label) => label.textContent?.trim() === "Daily Burn")
+      ?.previousElementSibling?.textContent?.trim();
+    const peakDay = labels
+      .find((label) => label.textContent?.trim() === "Peak Day")
+      ?.previousElementSibling?.textContent?.trim();
     expect(dailyBurn).toBe("25");
     expect(peakDay).toBe("25");
   });

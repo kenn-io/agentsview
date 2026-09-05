@@ -2,7 +2,7 @@ import type { AgentInfo, ProjectInfo } from "../api/types.js";
 import type { Report } from "../api/types/activity.js";
 import { m } from "../i18n/index.js";
 import { MetadataService } from "../api/generated/index";
-import { callGenerated, configureGeneratedClient, isAbortError } from "../api/runtime.js";
+import { callGenerated, isAbortError } from "../api/runtime.js";
 import {
   fetchActivityReport,
   fetchActivitySessions,
@@ -179,15 +179,11 @@ class ActivityStore {
     this.progress = null;
     this.error = null;
     try {
-      const res = await fetchActivityReport(
-        this.queryParams(),
-        signal,
-        (progress) => {
-          if (v === this.loadVersion && this.reportRead.isCurrent(signal)) {
-            this.progress = progress;
-          }
-        },
-      );
+      const res = await fetchActivityReport(this.queryParams(), signal, (progress) => {
+        if (v === this.loadVersion && this.reportRead.isCurrent(signal)) {
+          this.progress = progress;
+        }
+      });
       if (v !== this.loadVersion || !this.reportRead.isCurrent(signal)) return false;
       this.sessionsRead.cancel();
       this.sessionsLoading = false;
@@ -228,19 +224,24 @@ class ActivityStore {
     const signal = this.sessionsRead.begin();
     const sort = options.sort ?? this.sessionsSort;
     const direction = options.direction ?? this.sessionsDirection;
-    const bucketRange = options.bucketRange === undefined
-      ? this.sessionsBucketRange ?? undefined
-      : options.bucketRange;
+    const bucketRange =
+      options.bucketRange === undefined
+        ? (this.sessionsBucketRange ?? undefined)
+        : options.bucketRange;
     this.sessionsLoading = true;
     this.sessionsError = null;
     try {
-      const page = await fetchActivitySessions(report.report_id, {
-        limit: options.limit ?? 200,
-        cursor: options.cursor,
-        sort,
-        direction,
-        bucketRange,
-      }, signal);
+      const page = await fetchActivitySessions(
+        report.report_id,
+        {
+          limit: options.limit ?? 200,
+          cursor: options.cursor,
+          sort,
+          direction,
+          bucketRange,
+        },
+        signal,
+      );
       if (!this.sessionsRead.isCurrent(signal) || this.report?.report_id !== report.report_id) {
         return false;
       }
@@ -298,16 +299,15 @@ class ActivityStore {
     if (this.#filterOptionsPromise) return this.#filterOptionsPromise;
     const ver = this.#filterOptionsVersion;
     const signal = this.filterOptionsRead.begin();
-    const opts = { includeOneShot: true, includeAutomated: true };
+    const opts = { include_one_shot: true, include_automated: true };
     let request!: Promise<boolean>;
     request = (async () => {
-      configureGeneratedClient();
       let ok = true;
       try {
-        const res = (await callGenerated(
-          () => MetadataService.getApiV1Projects(opts),
+        const res = await callGenerated(
+          (options) => MetadataService.getApiV1Projects(opts, options),
           signal,
-        )) as unknown as { projects: ProjectInfo[] };
+        );
         if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
           this.projects = res.projects;
       } catch (e) {
@@ -315,10 +315,10 @@ class ActivityStore {
         ok = false; // keep the current list; retry on the next call
       }
       try {
-        const res = (await callGenerated(
-          () => MetadataService.getApiV1Agents(opts),
+        const res = await callGenerated(
+          (options) => MetadataService.getApiV1Agents(opts, options),
           signal,
-        )) as unknown as { agents: AgentInfo[] };
+        );
         if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
           this.agents = res.agents;
       } catch (e) {
@@ -326,17 +326,18 @@ class ActivityStore {
         ok = false;
       }
       try {
-        const res = (await callGenerated(
-          () => MetadataService.getApiV1Machines(opts),
+        const res = await callGenerated(
+          (options) => MetadataService.getApiV1Machines(opts, options),
           signal,
-        )) as unknown as { machines: string[] };
+        );
         if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
           this.machines = res.machines;
       } catch (e) {
         if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return false;
         ok = false;
       }
-      const current = ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal);
+      const current =
+        ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal);
       if (current) {
         // Cache only a fully successful load so a transient failure is
         // retried rather than frozen as a permanent empty list.

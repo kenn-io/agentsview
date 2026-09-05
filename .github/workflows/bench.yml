@@ -15,10 +15,13 @@ name: Bench Gate
 # Both sides run `make bench-gate` — the Makefile is the single
 # source of truth for the gated package list, sample count, and
 # per-tier iteration counts — and cmd/benchgate compares the outputs. It gates
-# on allocs/op and B/op (deterministic on a given machine, tight
-# thresholds) and on ns/op with a loose 2x threshold that only
-# catches algorithmic blowups; both sides run on the same runner
-# within one job, so the comparison is apples to apples.
+# on allocs/op (deterministic on a given machine, tight threshold,
+# worst run), on B/op (tight threshold on the median, but only when
+# the difference is statistically significant, because pooled
+# buffers make allocated bytes vary run to run), and on ns/op with a
+# loose 2x threshold that only catches algorithmic blowups; both
+# sides run on the same runner within one job, so the comparison is
+# apples to apples.
 #
 # Benchmarks that only exist on one side are reported but never fail
 # the gate: a benchmark added by a PR has no baseline and is reported

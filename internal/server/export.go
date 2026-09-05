@@ -643,7 +643,7 @@ func generateExportHTML(
 		Messages:     make([]exportMessage, len(msgs)),
 	}
 
-	focusedVisible := focusedExportOrdinals(msgs)
+	focusedVisible := focusedExportOrdinals(msgs, session.Agent)
 	for i, m := range msgs {
 		roleClass := "unknown"
 		if m.Role == "user" || m.Role == "assistant" {
@@ -744,7 +744,12 @@ func isThinkingOnly(content string) bool {
 	return strings.TrimSpace(without) == ""
 }
 
-func focusedExportOrdinals(msgs []db.Message) map[int]bool {
+func focusedExportOrdinals(
+	msgs []db.Message, agent string,
+) map[int]bool {
+	keepAnswerBeforeTrailingTools := parser.AgentHasPostAnswerToolWork(
+		parser.AgentType(agent),
+	)
 	visible := make(map[int]bool, len(msgs))
 	pendingOrdinal := 0
 	hasPendingAssistant := false
@@ -771,7 +776,7 @@ func focusedExportOrdinals(msgs []db.Message) map[int]bool {
 		}
 
 		if isExportToolOnly(m) {
-			if hasPendingAssistant {
+			if hasPendingAssistant && !keepAnswerBeforeTrailingTools {
 				toolAfterPendingAssistant = true
 			}
 			continue

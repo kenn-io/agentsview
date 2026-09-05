@@ -1,8 +1,6 @@
 import type { UsageMode } from "../../stores/usage.svelte.js";
 
-export function usageModeFromParams(
-  params: Record<string, string>,
-): UsageMode {
+export function usageModeFromParams(params: Record<string, string>): UsageMode {
   return params.view === "tokens" ? "token" : "cost";
 }
 

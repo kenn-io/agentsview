@@ -26,9 +26,7 @@ const MERMAID_THEME_VARS: Record<string, string> = {
   "--mermaid-note-border": "#d4a72c",
 };
 
-function fakeMermaidApi(
-  run: MarkdownMermaidAPI["run"],
-): MarkdownMermaidAPI {
+function fakeMermaidApi(run: MarkdownMermaidAPI["run"]): MarkdownMermaidAPI {
   return {
     version: "11.15.0",
     initialize: vi.fn(),
@@ -36,10 +34,7 @@ function fakeMermaidApi(
   };
 }
 
-async function waitFor(
-  predicate: () => boolean,
-  timeoutMs = 1000,
-): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
     if (Date.now() - start > timeoutMs) {
@@ -77,9 +72,7 @@ describe("MermaidBlock", () => {
 
     const pre = document.querySelector("pre.mermaid");
     expect(pre).not.toBeNull();
-    expect(pre?.textContent).toBe(
-      'graph TD\nA["<img src=x onerror=alert(1)>"]-->B',
-    );
+    expect(pre?.textContent).toBe('graph TD\nA["<img src=x onerror=alert(1)>"]-->B');
     expect(document.querySelector("img")).toBeNull();
 
     unmount(component);
@@ -100,19 +93,13 @@ describe("MermaidBlock", () => {
     });
     flushSync();
 
-    await waitFor(
-      () => document.querySelector("pre.mermaid.kit-mermaid-viewer") !== null,
-    );
+    await waitFor(() => document.querySelector("pre.mermaid.kit-mermaid-viewer") !== null);
 
     const viewer = document.querySelector("pre.mermaid.kit-mermaid-viewer");
     expect(viewer?.querySelector("svg")).not.toBeNull();
+    expect(viewer?.querySelector('button[aria-label="Copy Mermaid source"]')).not.toBeNull();
     expect(
-      viewer?.querySelector('button[aria-label="Copy Mermaid source"]'),
-    ).not.toBeNull();
-    expect(
-      viewer?.querySelector(
-        'button[aria-label="Open diagram in expanded view"]',
-      ),
+      viewer?.querySelector('button[aria-label="Open diagram in expanded view"]'),
     ).not.toBeNull();
     expect(api.initialize).toHaveBeenCalled();
 
@@ -120,9 +107,7 @@ describe("MermaidBlock", () => {
   });
 
   it("keeps the source readable when the mermaid runtime fails to load", async () => {
-    const consoleError = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const source = "graph TD\nA-->B";
     const component = mount(MermaidBlock, {
       target: document.body,

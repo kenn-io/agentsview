@@ -78,6 +78,35 @@ func (*readOnlyRecallQueryStore) ReadOnly() bool { return true }
 
 type recallErrorSearcher struct{ err error }
 
+type issueRecallVectorSearcher struct {
+	hits   []db.RecallVectorHit
+	limits []int
+}
+
+func (s *issueRecallVectorSearcher) SearchRecall(
+	_ context.Context, _ string, limit int,
+) ([]db.RecallVectorHit, bool, db.RecallVectorSnapshot, error) {
+	s.limits = append(s.limits, limit)
+	if limit > 4096 {
+		return nil, false, db.RecallVectorSnapshot{}, fmt.Errorf(
+			"search: k value in knn query too large, provided %d and the limit is 4096",
+			limit,
+		)
+	}
+	return append([]db.RecallVectorHit(nil), s.hits...), false,
+		db.RecallVectorSnapshot{}, nil
+}
+
+func (s *issueRecallVectorSearcher) ValidateRecallSnapshot(
+	context.Context, db.RecallVectorSnapshot,
+) error {
+	return nil
+}
+
+func (s *issueRecallVectorSearcher) MaxRecallSearchCandidates() int {
+	return 4096
+}
+
 type recallExtractionStatusProvider struct {
 	status recallextract.Status
 	err    error
@@ -119,6 +148,56 @@ func (s recallErrorSearcher) ValidateRecallSnapshot(
 	context.Context, db.RecallVectorSnapshot,
 ) error {
 	return s.err
+}
+
+func (s recallErrorSearcher) MaxRecallSearchCandidates() int {
+	return 0
+}
+
+func TestQueryRecallHybridWithFilterReturnsPartialAtVectorCandidateCeiling(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "eligible",
+		Title:           "Status recovery",
+		Body:            "Check status before retrying the operation.",
+		Project:         "agentsview",
+		SourceSessionID: "recall-session",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "filtered",
+		Title:           "Status from another project",
+		Body:            "This result should be removed by the project filter.",
+		Project:         "other",
+		SourceSessionID: "other-session",
+	})
+	searcher := &issueRecallVectorSearcher{hits: []db.RecallVectorHit{
+		{EntryID: "filtered", Score: 0.9},
+		{EntryID: "eligible", Score: 0.8},
+	}}
+	te.db.SetRecallVectorSearcher(searcher)
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query":"status",
+		"project":"agentsview",
+		"mode":"hybrid",
+		"limit":3
+	}`)
+
+	if !assert.Equal(t, http.StatusOK, w.Code) {
+		t.Logf("observed response: HTTP %d body=%s", w.Code, w.Body.String())
+		assertBodyContains(t, w,
+			"search: k value in knn query too large, provided 8000 and the limit is 4096")
+		assert.Equal(t, []int{2000, 4000, 8000}, searcher.limits)
+		return
+	}
+	r := decode[queryRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "eligible", r.RecallEntries[0].ID)
+	assert.Equal(t, []int{2000, 4000, 4096}, searcher.limits)
+	for _, limit := range searcher.limits {
+		assert.LessOrEqual(t, limit, 4096)
+	}
 }
 
 func TestQueryRecallMapsSemanticAvailabilityErrors(t *testing.T) {

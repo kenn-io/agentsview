@@ -34,12 +34,8 @@ describe("SessionItem identity", () => {
     });
     flushSync();
 
-    expect(document.querySelector(".agent-tag")?.textContent).toBe(
-      "Claude Triage",
-    );
-    expect(document.querySelector(".entrypoint-tag")?.textContent).toBe(
-      "sdk-cli",
-    );
+    expect(document.querySelector(".agent-tag")?.textContent).toBe("Claude Triage");
+    expect(document.querySelector(".entrypoint-tag")?.textContent).toBe("sdk-cli");
   });
 
   it("suppresses the default cli entrypoint badge", () => {

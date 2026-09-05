@@ -343,7 +343,7 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 	}
 	if src.MemberID == "" {
 		if compositeMtime, err := sqliteDBCompositeMtime(
-			src.Container, omnigentDBMtimeSuffixes,
+			src.Container, sqliteDBJournalSuffixes,
 		); err == nil {
 			fingerprint.MTimeNS = compositeMtime
 		}
@@ -904,12 +904,6 @@ func (t *omnigentChangeTracker) parseContainer(
 	}
 	return results, nil
 }
-
-// omnigentDBMtimeSuffixes tracks content-bearing SQLite files only, omitting
-// "-shm": opening a read connection can update the shared-memory file, so
-// including it would turn the provider's own reads into apparent source
-// changes and keep the scheduled fingerprint pass reparsing forever.
-var omnigentDBMtimeSuffixes = []string{"", "-wal"}
 
 func omnigentMemberPresent(src multiSessionSource) bool {
 	if src.MemberID == "" {

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -28,12 +29,29 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+var (
+	captureHelperDir   string
+	captureHelperMu    sync.Mutex
+	captureHelperPaths = make(map[string]string)
+)
+
 func TestMain(m *testing.M) {
 	if os.Getenv("AGENTSVIEW_CAPTURE_TEST_HELPER") == "1" {
 		captureTestHelper()
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	dir, err := os.MkdirTemp("", "agentsview-capture-helper-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create capture test helper directory: %v\n", err)
+		os.Exit(1)
+	}
+	captureHelperDir = dir
+	code := m.Run()
+	if err := os.RemoveAll(dir); err != nil && code == 0 {
+		fmt.Fprintf(os.Stderr, "remove capture test helper directory: %v\n", err)
+		code = 1
+	}
+	os.Exit(code)
 }
 
 func TestRunClaudeProducesExactResultAndPreservesChildOutcome(t *testing.T) {
@@ -1305,8 +1323,6 @@ func TestRunCodexMalformedRecordSealsPartialUsage(t *testing.T) {
 			root := t.TempDir()
 			resultPath := filepath.Join(t.TempDir(), "result.json")
 			producer := copyCaptureHelper(t, "codex")
-			limits := testLimits()
-			limits.FinalizationWait = 30 * time.Second
 			_, err := Run(context.Background(), RunOptions{
 				Provider: ProviderCodex, OccurrenceID: "codex-malformed-" + tc.name,
 				CaptureDir: filepath.Join(t.TempDir(), "capture"),
@@ -1314,7 +1330,7 @@ func TestRunCodexMalformedRecordSealsPartialUsage(t *testing.T) {
 				Command:     []string{producer, "exec", "--json", "prompt"},
 				Environment: helperEnvironment(root, tc.mode, 0),
 				Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
-				Limits:      limits, CustomPricing: testPricing(),
+				Limits:      testLimits(), CustomPricing: testPricing(),
 			})
 			require.NoError(t, err)
 
@@ -1404,7 +1420,6 @@ func TestRunCodexPersistsDiscoveredSubagentSources(t *testing.T) {
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
 	limits := testLimits()
-	limits.FinalizationWait = 5 * time.Second
 	_, err := Run(context.Background(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-delegated",
 		CaptureDir: captureDir, ResultPath: resultPath,
@@ -1480,54 +1495,47 @@ func TestRunCodexRetriesWhenChildChangesDuringFinalization(t *testing.T) {
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
 	limits := testLimits()
-	limits.FinalizationWait = 10 * time.Second
-	type runResponse struct {
-		outcome RunOutcome
-		err     error
-	}
-	done := make(chan runResponse, 1)
-	go func() {
-		outcome, runErr := Run(context.Background(), RunOptions{
-			Provider: ProviderCodex, OccurrenceID: "codex-changing-child",
-			CaptureDir: captureDir, ResultPath: resultPath,
-			ProviderRoot: root, WorkDir: t.TempDir(),
-			Command:     []string{producer, "exec", "--json", "prompt"},
-			Environment: helperEnvironment(root, "codex-changing-subagent", 0),
-			Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
-			Limits:      limits, CustomPricing: testPricing(),
-		})
-		done <- runResponse{outcome: outcome, err: runErr}
-	}()
 
 	childID := "22222222-2222-4222-8222-222222222222"
-	rootID := "11111111-1111-4111-8111-111111111111"
 	day := filepath.FromSlash(time.Now().UTC().Format("2006/01/02"))
 	childPath := filepath.Join(
 		root, day,
 		"rollout-child-"+childID+".jsonl",
 	)
-	rootCopyPath := filepath.Join(
-		captureDir, sourcesDirName, filepath.FromSlash(bundleSourcePrefix(ProviderCodex)),
-		day, "rollout-test-"+rootID+".jsonl",
-	)
-	require.Eventually(t, func() bool {
-		info, err := os.Lstat(rootCopyPath)
-		return err == nil && info.Mode().IsRegular()
-	}, 20*time.Second, 10*time.Millisecond)
-	changed := time.Now().Add(2 * time.Second)
-	require.NoError(t, os.Chtimes(childPath, changed, changed))
-
-	response := <-done
-	require.NoError(t, response.err)
-	assert.Zero(t, response.outcome.ExitCode)
+	changedDuringFinalization := false
+	outcome, err := runWithHooks(context.Background(), RunOptions{
+		Provider: ProviderCodex, OccurrenceID: "codex-changing-child",
+		CaptureDir: captureDir, ResultPath: resultPath,
+		ProviderRoot: root, WorkDir: t.TempDir(),
+		Command:     []string{producer, "exec", "--json", "prompt"},
+		Environment: helperEnvironment(root, "codex-changing-subagent", 0),
+		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
+		Limits:      limits, CustomPricing: testPricing(),
+	}, &captureHooks{
+		afterPersistedSources: func() {
+			child, openErr := os.OpenFile(childPath, os.O_APPEND|os.O_WRONLY, 0)
+			require.NoError(t, openErr)
+			_, writeErr := io.WriteString(child, testjsonl.JoinJSONL(
+				testjsonl.CodexMsgJSON(
+					"assistant", "updated child answer", "2026-08-16T10:00:05.9Z",
+				),
+				testjsonl.CodexTokenCountJSON("2026-08-16T10:00:06Z", 7, 3, 0),
+			))
+			require.NoError(t, errors.Join(writeErr, child.Close()))
+			changedDuringFinalization = true
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, changedDuringFinalization)
+	assert.Zero(t, outcome.ExitCode)
 	data, err := os.ReadFile(resultPath)
 	require.NoError(t, err)
 	result, err := DecodeResult(bytes.NewReader(data))
 	require.NoError(t, err)
 	assert.Equal(t, ReportingComplete, result.Reporting.Outcome)
 	require.NotNil(t, result.Usage)
-	assertIntPointer(t, result.Usage.InputTokens, 45)
-	assertIntPointer(t, result.Usage.OutputTokens, 12)
+	assertIntPointer(t, result.Usage.InputTokens, 52)
+	assertIntPointer(t, result.Usage.OutputTokens, 15)
 }
 
 func TestRunCodexConflictingMarkersReportCorrelationConflict(t *testing.T) {
@@ -2093,8 +2101,6 @@ func TestCaptureDistinguishesAnObservedSourceThatDisappears(t *testing.T) {
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
 	limits := testLimits()
-	limits.FinalizationWait = 5 * time.Second
-	limits.Quiescence = 2 * time.Second
 	type runResponse struct {
 		outcome RunOutcome
 		err     error
@@ -2174,18 +2180,33 @@ func copyCaptureHelper(t *testing.T, name string) string {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
+	captureHelperMu.Lock()
+	defer captureHelperMu.Unlock()
+	if path := captureHelperPaths[name]; path != "" {
+		return path
+	}
 	source, err := os.Executable()
 	require.NoError(t, err)
 	in, err := os.Open(source)
 	require.NoError(t, err)
 	defer in.Close()
-	path := filepath.Join(t.TempDir(), name)
+	path := filepath.Join(captureHelperDir, name)
 	out, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
 	require.NoError(t, err)
 	_, err = io.Copy(out, in)
 	require.NoError(t, err)
 	require.NoError(t, out.Close())
+	captureHelperPaths[name] = path
 	return path
+}
+
+func TestCopyCaptureHelperReusesExecutableByName(t *testing.T) {
+	first := copyCaptureHelper(t, "claude")
+	second := copyCaptureHelper(t, "claude")
+	codex := copyCaptureHelper(t, "codex")
+
+	assert.Equal(t, first, second)
+	assert.NotEqual(t, first, codex)
 }
 
 func helperEnvironment(root, mode string, exitCode int) []string {
@@ -2371,14 +2392,14 @@ func captureTestHelper() {
 		}
 		_ = os.WriteFile(path, data, 0o600)
 		if mode == "codex-subagent-malformed" {
-			writeCodexChildHelperOnDay(root, time.Now().UTC(), false, true)
+			writeCodexChildHelperOnDay(root, time.Now().UTC(), true)
 		}
 		if mode == "codex-late-subagent" {
 			writeCodexChildHelperOnDay(
-				root, time.Now().UTC().AddDate(0, 0, 3), false, false)
+				root, time.Now().UTC().AddDate(0, 0, 3), false)
 		}
 		if mode == "codex-changing-subagent" {
-			writeCodexChildHelperOnDay(root, time.Now().UTC(), true, false)
+			writeCodexChildHelperOnDay(root, time.Now().UTC(), false)
 		}
 		if mode == "codex-multiple" {
 			_ = os.WriteFile(
@@ -2393,11 +2414,11 @@ func captureTestHelper() {
 }
 
 func writeCodexChildHelper(root string) {
-	writeCodexChildHelperOnDay(root, time.Now().UTC(), false, false)
+	writeCodexChildHelperOnDay(root, time.Now().UTC(), false)
 }
 
 func writeCodexChildHelperOnDay(
-	root string, day time.Time, large, malformed bool,
+	root string, day time.Time, malformed bool,
 ) {
 	parentID := "11111111-1111-4111-8111-111111111111"
 	childID := "22222222-2222-4222-8222-222222222222"
@@ -2415,13 +2436,6 @@ func writeCodexChildHelperOnDay(
 	}
 	if malformed {
 		lines = append(lines[:1], append([]string{`{"type":"event_msg"`}, lines[1:]...)...)
-	}
-	if large {
-		padding := strings.Repeat("x", 8<<10)
-		for range 4096 {
-			lines = append(lines, fmt.Sprintf(
-				`{"type":"capture_test_padding","padding":%q}`, padding))
-		}
 	}
 	_ = os.WriteFile(
 		filepath.Join(dir, "rollout-child-"+childID+".jsonl"),

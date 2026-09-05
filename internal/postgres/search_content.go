@@ -96,12 +96,30 @@ func pgSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
 	}
 }
 
+// appendExcludeSessionIDsPG adds `NOT (col = ANY($n))` using a Postgres text
+// array bind. Empty IDs are a no-op so callers can thread ContentSearchFilter
+// through without a nil check.
+func appendExcludeSessionIDsPG(
+	where string, args []any, col string, ids []string,
+) (string, []any) {
+	ids = db.NormalizeExcludeSessionIDs(ids)
+	if len(ids) == 0 {
+		return where, args
+	}
+	out := make([]any, 0, len(args)+1)
+	out = append(out, args...)
+	out = append(out, ids)
+	return where + fmt.Sprintf(" AND NOT (%s = ANY($%d))", col, len(out)), out
+}
+
 // searchContentSubstringPG runs ILIKE-based UNION ALL across the selected
 // sources, scoped to qualifying sessions via a WITH scoped CTE.
 func (s *Store) searchContentSubstringPG(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
 	scopeWhere, scopeArgs := buildPGSessionFilter(pgSessionFilter(f))
+	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
+		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	escapedPat := escapeLike(f.Pattern)
 
 	pb := &paramBuilder{
@@ -400,6 +418,8 @@ func (s *Store) pgRegexCandidateRows(
 	ctx context.Context, f db.ContentSearchFilter, lit string,
 ) (*sql.Rows, error) {
 	scopeWhere, scopeArgs := buildPGSessionFilter(pgSessionFilter(f))
+	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
+		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 
 	pb := &paramBuilder{
 		n:    len(scopeArgs),

@@ -6,8 +6,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -324,7 +322,7 @@ func buildDailyUsageFixtureTemplate(t *testing.T) (string, string) {
 	dir, err := os.MkdirTemp("", "agentsview-daily-usage-*")
 	require.NoError(t, err, "create daily usage fixture dir")
 	path := filepath.Join(dir, "test.db")
-	require.NoError(t, copyTestDBTemplate(path),
+	require.NoError(t, copyTestDBTemplate(t, path),
 		"copy base db template for daily usage fixture")
 
 	d, err := OpenPreparedTestDB(path)
@@ -4111,9 +4109,6 @@ func TestExcludeModelFilter(t *testing.T) {
 func BenchmarkGetDailyUsage(b *testing.B) {
 	d := testDB(b)
 	ctx := context.Background()
-	origLog := log.Writer()
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(origLog)
 
 	if err := d.UpsertModelPricing([]ModelPricing{
 		{ModelPattern: "claude-sonnet-4-20250514",
@@ -4196,9 +4191,9 @@ func BenchmarkGetDailyUsage(b *testing.B) {
 	if _, err := d.GetDailyUsage(ctx, filter); err != nil {
 		b.Fatalf("warming GetDailyUsage: %v", err)
 	}
-	// Logs stay discarded through the timed loop: a slow-request log
-	// line interleaving with the benchmark result line corrupts the
-	// bench-gate capture (see silenceBenchLogs in internal/sync).
+	// Logs go through b.Output for the whole benchmark (testDB): a
+	// slow-request log line written straight to stderr would split the
+	// benchmark result line and corrupt the bench-gate capture.
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -4270,12 +4265,6 @@ func BenchmarkGetDailyUsageSnapshotAutomaticIndexOff(b *testing.B) {
 }
 
 func BenchmarkUsageRollup(b *testing.B) {
-	// Cold sub-benchmarks exceed the slow-request threshold on CI
-	// runners; the resulting log line would interleave with benchmark
-	// result lines and corrupt the bench-gate capture.
-	origLog := log.Writer()
-	log.SetOutput(io.Discard)
-	b.Cleanup(func() { log.SetOutput(origLog) })
 	database := testDB(b)
 	seedDailyUsageSnapshotBenchmark(b, database)
 	seedLongLivedUsageBenchmark(b, database)
@@ -4601,9 +4590,6 @@ func benchmarkDailyUsageSnapshotWindow(
 	want benchmarkDailyUsageExpectation,
 ) {
 	b.Helper()
-	origLog := log.Writer()
-	log.SetOutput(io.Discard)
-	b.Cleanup(func() { log.SetOutput(origLog) })
 	ctx := context.Background()
 	filter := UsageFilter{
 		From: from, To: "2024-07-30", Timezone: "UTC",
@@ -4633,9 +4619,6 @@ func benchmarkDailyUsageSnapshotWindow(
 // lower-output snapshots across 500 sessions and 60 days.
 func seedDailyUsageSnapshotBenchmark(tb testing.TB, d *DB) {
 	tb.Helper()
-	origLog := log.Writer()
-	log.SetOutput(io.Discard)
-	defer log.SetOutput(origLog)
 
 	require.NoError(tb, d.UpsertModelPricing([]ModelPricing{
 		{ModelPattern: "claude-sonnet-4-20250514",

@@ -98,9 +98,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   { name: "freebuff", color: "var(--accent-sky)", label: "Freebuff" },
 ];
 
-const agentColorMap = new Map(
-  KNOWN_AGENTS.map((a) => [a.name, a.color]),
-);
+const agentColorMap = new Map(KNOWN_AGENTS.map((a) => [a.name, a.color]));
 
 const defaultFillColor = "var(--accent-blue)";
 const accentForegroundMap = new Map([

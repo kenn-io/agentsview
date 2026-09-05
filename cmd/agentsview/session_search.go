@@ -28,6 +28,7 @@ func newSessionSearchCommand() *cobra.Command {
 		activeSince, since                       string
 		includeChildren, includeAutomated        bool
 		includeOneShot                           bool
+		excludeSession                           []string
 		limit, cursor, contextN                  int
 	)
 	cmd := &cobra.Command{
@@ -61,26 +62,27 @@ func newSessionSearchCommand() *cobra.Command {
 			defer cleanup()
 
 			res, err := svc.SearchContent(cmd.Context(), service.ContentSearchRequest{
-				Pattern:          args[0],
-				Mode:             mode,
-				Sources:          sources,
-				ExcludeSystem:    excludeSystem,
-				Reveal:           reveal,
-				Project:          project,
-				ExcludeProject:   excludeProject,
-				Machine:          machine,
-				Agent:            agent,
-				Date:             date,
-				DateFrom:         dateFrom,
-				DateTo:           dateTo,
-				ActiveSince:      activeSince,
-				IncludeChildren:  includeChildren,
-				IncludeAutomated: includeAutomated,
-				IncludeOneShot:   includeOneShot,
-				Scope:            scope,
-				Limit:            limit,
-				Cursor:           cursor,
-				Context:          contextN,
+				Pattern:           args[0],
+				Mode:              mode,
+				Sources:           sources,
+				ExcludeSystem:     excludeSystem,
+				Reveal:            reveal,
+				Project:           project,
+				ExcludeProject:    excludeProject,
+				Machine:           machine,
+				Agent:             agent,
+				Date:              date,
+				DateFrom:          dateFrom,
+				DateTo:            dateTo,
+				ActiveSince:       activeSince,
+				IncludeChildren:   includeChildren,
+				IncludeAutomated:  includeAutomated,
+				IncludeOneShot:    includeOneShot,
+				ExcludeSessionIDs: excludeSession,
+				Scope:             scope,
+				Limit:             limit,
+				Cursor:            cursor,
+				Context:           contextN,
 			})
 			if err != nil {
 				return err
@@ -123,6 +125,8 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.BoolVar(&includeChildren, "include-children", false, "Include subagent sessions")
 	flags.BoolVar(&includeAutomated, "include-automated", false, "Include automated sessions")
 	flags.BoolVar(&includeOneShot, "include-one-shot", false, "Include one-shot sessions")
+	flags.StringArrayVar(&excludeSession, "exclude-session", nil,
+		"Session ID to exclude from results (repeatable)")
 	flags.IntVar(&limit, "limit", 0, "Max results (default 50, max 500)")
 	flags.IntVar(&cursor, "cursor", 0, "Pagination cursor from a previous response")
 	flags.IntVar(&contextN, "context", 0,

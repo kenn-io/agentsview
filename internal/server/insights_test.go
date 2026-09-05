@@ -521,6 +521,52 @@ func TestGenerateCannedInsight_RequiresExplicitOptIn(t *testing.T) {
 	assertBodyContains(t, w, "llm_opt_in")
 }
 
+func TestGenerateCannedInsight_AcceptsPartialSessionFilterPayload(t *testing.T) {
+	var calls atomic.Int32
+	var generatedPrompt string
+	stubGen := func(
+		_ context.Context, agent, prompt string, _ insight.LogFunc,
+	) (insight.Result, error) {
+		calls.Add(1)
+		require.Equal(t, "codex", agent)
+		generatedPrompt = prompt
+		return insight.Result{
+			Agent: "codex",
+			Model: "test-model",
+			Content: `{
+				"schema_version":"llm_insight.v1",
+				"kind":"model_cost_review",
+				"summary":"The filtered model cost aggregate is ready for review.",
+				"confidence":"medium",
+				"recommendations":[{
+					"title":"Review the selected agent's model costs",
+					"rationale":"The aggregate contains the requested session agent and normalized filter values.",
+					"actions":["Compare the selected agent's model usage"],
+					"evidence_refs":["aggregate:empty"],
+					"impact":"medium",
+					"effort":"low"
+				}],
+				"risks":[],
+				"evidence_refs":["aggregate:empty"]
+			}`,
+		}, nil
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithGenerateStreamFunc(stubGen),
+	})
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"llm_canned","kind":"model_cost_review","date_from":"2025-01-15","date_to":"2025-01-15","agent":"codex","llm_opt_in":true,"timezone":"America/New_York","automated_scope":"human","filters":{"agent":"claude"}}`)
+
+	assertStatus(t, w, http.StatusOK)
+	assertBodyContains(t, w, "event: done")
+	assert.Equal(t, int32(1), calls.Load())
+	assert.Contains(t, generatedPrompt, `"agent":"claude"`)
+	assert.Contains(t, generatedPrompt, `"timezone":"America/New_York"`)
+	assert.Contains(t, generatedPrompt, `"automated_scope":"human"`)
+	assert.Contains(t, generatedPrompt, `"include_one_shot":false`)
+}
+
 func TestGenerateCannedInsight_RejectsInvalidFilterTimezone(t *testing.T) {
 	te := setup(t)
 
@@ -529,6 +575,41 @@ func TestGenerateCannedInsight_RejectsInvalidFilterTimezone(t *testing.T) {
 
 	assertStatus(t, w, http.StatusBadRequest)
 	assertBodyContains(t, w, "invalid timezone: Fake/Zone")
+}
+
+func TestGenerateCannedInsight_RejectsInvalidPartialSessionFilterValues(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "automated scope",
+			body: `{"automated_scope":"bogus"}`,
+			want: "automated_scope must be human, all, or automated",
+		},
+		{
+			name: "minimum user messages",
+			body: `{"min_user_messages":-1}`,
+			want: "min_user_messages must be >= 0",
+		},
+		{
+			name: "active since",
+			body: `{"active_since":"not-a-timestamp"}`,
+			want: "active_since must be RFC3339 timestamp",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			te := setup(t)
+			w := te.post(t, "/api/v1/insights/generate", fmt.Sprintf(
+				`{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude","llm_opt_in":true,"filters":%s}`,
+				tc.body,
+			))
+
+			assertStatus(t, w, http.StatusBadRequest)
+			assertBodyContains(t, w, tc.want)
+		})
+	}
 }
 
 func TestGenerateCannedInsight_ReturnsValidationDetail(t *testing.T) {

@@ -37,7 +37,6 @@ func TestInterruptedChildStillSealsRecoverableUsage(t *testing.T) {
 	}
 	done := make(chan response, 1)
 	limits := testLimits()
-	limits.FinalizationWait = 3 * time.Second
 	go func() {
 		outcome, err := Run(context.Background(), RunOptions{
 			Provider: ProviderClaude, OccurrenceID: "interrupted",
@@ -56,7 +55,7 @@ func TestInterruptedChildStillSealsRecoverableUsage(t *testing.T) {
 	var got response
 	select {
 	case got = <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(limits.FinalizationWait + 5*time.Second):
 		t.Fatal("capture did not finish after forwarding SIGTERM")
 	}
 	require.NoError(t, got.err)
@@ -189,7 +188,7 @@ func TestForwardSignalsDeliversSignalBufferedBeforeChildAvailable(t *testing.T) 
 
 func waitForCaptureSignalMarker(t *testing.T, marker string) int {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(20 * time.Second)
 	for {
 		if data, err := os.ReadFile(marker); err == nil {
 			group, parseErr := strconv.Atoi(string(data))

@@ -148,6 +148,12 @@ using lexical mode while an automatic refresh catches up. See
 [Semantic Search](/docs/semantic-search/#enabling-vector) for the shared
 embedding configuration and endpoint privacy considerations.
 
+Vector candidates are ranked before Recall filters are applied. The embedding
+backend bounds the candidate window, so a narrow project, cwd, or other filter
+can produce a short vector page when that boundary is reached. Hybrid search
+still ranks the lexical candidates selected for the query, then fuses those
+results with the available vector candidates.
+
 ## Automatic extraction
 
 Extraction is opt-in and off by default. When `[recall.extract]` is enabled, a

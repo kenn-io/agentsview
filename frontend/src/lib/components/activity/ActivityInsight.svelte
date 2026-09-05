@@ -1,10 +1,9 @@
 <script lang="ts">
   import { EmptyState, Spinner, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
-  import { InsightsService } from "../../api/generated/index";
+  import { InsightsService, type DbInsight } from "../../api/generated/index";
   import {
     callGenerated,
-    configureGeneratedClient,
     isAbortError,
   } from "../../api/runtime.js";
   import {
@@ -16,7 +15,7 @@
   import { router } from "../../stores/router.svelte.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
-  import type { Insight, InsightsResponse, AgentName } from "../../api/types.js";
+  import type { AgentName } from "../../api/types.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
   import { LatestRead } from "../../utils/latest-read.js";
 
@@ -26,7 +25,7 @@
     timezone = "",
   }: { dateFrom: string; dateTo: string; timezone?: string } = $props();
 
-  let insight: Insight | null = $state(null);
+  let insight: DbInsight | null = $state(null);
   let loading = $state(false);
   let generating = $state(false);
   let phase = $state("");
@@ -100,13 +99,12 @@
     generating = false;
     loading = true;
 
-    configureGeneratedClient();
     callGenerated(
-      () => InsightsService.getApiV1Insights({
+      (options) => InsightsService.getApiV1Insights({
         type: "daily_activity",
-        dateFrom: from,
-        dateTo: to,
-      }),
+        date_from: from,
+        date_to: to,
+      }, options),
       signal,
     )
       .then((res) => {
@@ -116,7 +114,7 @@
         // (e.g. a single day) and project-scoped ones. This panel shows the
         // global insight for the exact range, so match both bounds and drop
         // project-scoped rows before taking the newest.
-        const list = (res as unknown as InsightsResponse).insights.filter(
+        const list = res.insights.filter(
           (i) => !i.project && i.date_from === from && i.date_to === to,
         );
         insight = list[0] ?? null;

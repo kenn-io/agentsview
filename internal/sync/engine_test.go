@@ -4515,7 +4515,10 @@ func TestPairToolResultsContent(t *testing.T) {
 			want: []db.Message{
 				{ToolCalls: []db.ToolCall{
 					{ToolUseID: "t1", ToolName: "Bash", Category: "Bash",
-						ResultContentLength: 42, ResultContent: "output text"},
+						// A stored result is measured; the parser's 42 is
+						// kept only when the text is withheld.
+						ResultContentLength: len("output text"),
+						ResultContent:       "output text"},
 				}},
 				{ToolResults: []db.ToolResult{
 					{ToolUseID: "t1", ContentLength: 42, ContentRaw: `"output text"`},
@@ -4557,7 +4560,8 @@ func TestPairToolResultsContent(t *testing.T) {
 			want: []db.Message{
 				{ToolCalls: []db.ToolCall{
 					{ToolUseID: "t1", ToolName: "Read", Category: "Read",
-						ResultContentLength: 100, ResultContent: "file content"},
+						ResultContentLength: len("file content"),
+						ResultContent:       "file content"},
 				}},
 				{ToolResults: []db.ToolResult{
 					{ToolUseID: "t1", ContentLength: 100, ContentRaw: `"file content"`},

@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  fetchActivityReport,
-  fetchActivitySessions,
-} from "./activity-report.js";
+import { fetchActivityReport, fetchActivitySessions } from "./activity-report.js";
+import { setServerUrl } from "./runtime.js";
 
 function streamResponse(frames: string[]): Response {
   const encoder = new TextEncoder();
@@ -25,10 +23,14 @@ describe("activity report API", () => {
   });
 
   it("streams progress before returning the terminal report", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(streamResponse([
-      'event: progress\ndata: {"phase":"loading_sessions","processed":12}\n\n',
-      'event: report\ndata: {"report_id":"signed","sessions_total":301}\n\n',
-    ]));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        streamResponse([
+          'event: progress\ndata: {"phase":"loading_sessions","processed":12}\n\n',
+          'event: report\ndata: {"report_id":"signed","sessions_total":301}\n\n',
+        ]),
+      );
     vi.stubGlobal("fetch", fetchMock);
     const progress: unknown[] = [];
 
@@ -38,24 +40,26 @@ describe("activity report API", () => {
       (value) => progress.push(value),
     );
 
-    expect(progress).toEqual([
-      { phase: "loading_sessions", processed: 12 },
-    ]);
+    expect(progress).toEqual([{ phase: "loading_sessions", processed: 12 }]);
     expect(report).toMatchObject({ report_id: "signed", sessions_total: 301 });
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain("/api/v1/activity/report?preset=month");
-    expect((init.headers as Headers).get("Accept")).toBe(
-      "text/event-stream, application/json",
-    );
+    expect((init.headers as Headers).get("Accept")).toBe("text/event-stream, application/json");
   });
 
   it("requests a deterministic server page with bucket range and sort state", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      report_id: "signed",
-      sessions: [{ session_id: "s2" }],
-      next_cursor: "next",
-      total: 8,
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    setServerUrl("http://localhost");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          report_id: "signed",
+          sessions: [{ session_id: "s2" }],
+          next_cursor: "next",
+          total: 8,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const page = await fetchActivitySessions("signed", {
@@ -67,7 +71,7 @@ describe("activity report API", () => {
     });
 
     expect(page).toMatchObject({ next_cursor: "next", total: 8 });
-    const requested = new URL(String(fetchMock.mock.calls[0]![0]), window.location.href);
+    const requested = new URL(String(fetchMock.mock.calls[0]![0]));
     expect(requested.pathname).toBe("/api/v1/activity/report/signed/sessions");
     expect(Object.fromEntries(requested.searchParams)).toEqual({
       limit: "200",

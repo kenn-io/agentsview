@@ -3686,9 +3686,10 @@ func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
 	w := put(`{"disabled_agents":["gemini","claude","gemini"]}`)
 	assertStatus(t, w, http.StatusOK)
 	type sessionProvider struct {
-		ID          parser.AgentType `json:"id"`
-		DisplayName string           `json:"display_name"`
-		Dirs        []string         `json:"dirs"`
+		ID                 parser.AgentType `json:"id"`
+		DisplayName        string           `json:"display_name"`
+		Dirs               []string         `json:"dirs"`
+		PostAnswerToolWork bool             `json:"post_answer_tool_work"`
 	}
 	var got struct {
 		SessionProviders []sessionProvider  `json:"session_providers"`
@@ -3703,6 +3704,13 @@ func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
 	assert.Equal(t, parser.AgentClaude, got.SessionProviders[0].ID)
 	assert.Equal(t, "Claude Code", got.SessionProviders[0].DisplayName)
 	assert.Equal(t, []string{"/sessions/claude"}, got.SessionProviders[0].Dirs)
+	assert.False(t, got.SessionProviders[0].PostAnswerToolWork)
+	codexIndex := slices.IndexFunc(got.SessionProviders,
+		func(provider sessionProvider) bool {
+			return provider.ID == parser.AgentCodex
+		})
+	require.NotEqual(t, -1, codexIndex)
+	assert.True(t, got.SessionProviders[codexIndex].PostAnswerToolWork)
 	geminiIndex := slices.IndexFunc(got.SessionProviders,
 		func(provider sessionProvider) bool {
 			return provider.ID == parser.AgentGemini

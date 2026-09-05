@@ -1404,7 +1404,10 @@ func insertToolCalls(
 				m.ID, m.SessionID, tc.ToolName, tc.Category,
 				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
 				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
-				nilEmpty(tc.ResultContent), nilEmpty(tc.SubagentSessionID),
+				nilEmpty(db.DedupToolCallResultSummary(
+					tc.ResultContent, tc.ResultEvents,
+				)),
+				nilEmpty(tc.SubagentSessionID),
 				nilEmpty(tc.FilePath),
 			); err != nil {
 				return fmt.Errorf("inserting duckdb tool_call %s/%d/%d: %w",

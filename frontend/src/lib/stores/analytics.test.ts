@@ -18,7 +18,6 @@ import type {
 } from "../api/types.js";
 
 vi.mock("../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
 }));
@@ -323,11 +322,11 @@ describe("AnalyticsStore.selectDate", () => {
   it("should pass selected date as from/to for filtered panels", () => {
     analytics.selectDate("2024-01-15");
 
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-15", to: "2024-01-15" }),
     );
     expect(analyticsService.getApiV1AnalyticsActivity).not.toHaveBeenCalled();
-    expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-15", to: "2024-01-15" }),
     );
   });
@@ -343,10 +342,10 @@ describe("AnalyticsStore.selectDate", () => {
       to: "2024-01-31",
     });
     expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalled();
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(expected);
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(expected);
     expect(analyticsService.getApiV1AnalyticsActivity).not.toHaveBeenCalled();
     expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenCalled();
-    expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenLastCalledWith(expected);
+    expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).toEqual(expected);
   });
 });
 
@@ -374,15 +373,15 @@ describe("AnalyticsStore.setDateRange", () => {
       from: "2024-02-01",
       to: "2024-02-28",
     });
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(expected);
-    expect(analyticsService.getApiV1AnalyticsActivity).toHaveBeenLastCalledWith(expected);
-    expect(analyticsService.getApiV1AnalyticsHeatmap).toHaveBeenLastCalledWith(expected);
-    expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenLastCalledWith(expected);
-    expect(analyticsService.getApiV1AnalyticsHourOfWeek).toHaveBeenLastCalledWith(expected);
-    expect(analyticsService.getApiV1AnalyticsSessions).toHaveBeenLastCalledWith(expected);
-    expect(analyticsService.getApiV1AnalyticsVelocity).toHaveBeenLastCalledWith(expected);
-    expect(analyticsService.getApiV1AnalyticsTools).toHaveBeenLastCalledWith(expected);
-    expect(analyticsService.getApiV1AnalyticsSkills).toHaveBeenLastCalledWith(expected);
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(expected);
+    expect(analyticsService.getApiV1AnalyticsActivity.mock.lastCall?.[0]).toEqual(expected);
+    expect(analyticsService.getApiV1AnalyticsHeatmap.mock.lastCall?.[0]).toEqual(expected);
+    expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).toEqual(expected);
+    expect(analyticsService.getApiV1AnalyticsHourOfWeek.mock.lastCall?.[0]).toEqual(expected);
+    expect(analyticsService.getApiV1AnalyticsSessions.mock.lastCall?.[0]).toEqual(expected);
+    expect(analyticsService.getApiV1AnalyticsVelocity.mock.lastCall?.[0]).toEqual(expected);
+    expect(analyticsService.getApiV1AnalyticsTools.mock.lastCall?.[0]).toEqual(expected);
+    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]).toEqual(expected);
   });
 });
 
@@ -400,7 +399,7 @@ describe("AnalyticsStore.setSkillsGranularity", () => {
 
     expect(analytics.skillsGranularity).toBe("week");
     expect(analytics.querying.skills).toBe(true);
-    expect(analyticsService.getApiV1AnalyticsSkills).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsSkills.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ granularity: "month" }),
     );
 
@@ -428,20 +427,14 @@ describe("AnalyticsStore freshness state", () => {
   it("records Quality freshness without changing dashboard freshness", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
-      analytics.lastUpdatedAt = new Date(
-        "2026-06-15T14:55:00Z",
-      ).getTime();
+      analytics.lastUpdatedAt = new Date("2026-06-15T14:55:00Z").getTime();
       analytics.hasNewData = true;
       vi.setSystemTime(new Date("2026-06-15T15:00:00Z"));
 
       await analytics.fetchSignalsForQuality();
 
-      expect(analytics.qualityLastUpdatedAt).toBe(
-        new Date("2026-06-15T15:00:00Z").getTime(),
-      );
-      expect(analytics.lastUpdatedAt).toBe(
-        new Date("2026-06-15T14:55:00Z").getTime(),
-      );
+      expect(analytics.qualityLastUpdatedAt).toBe(new Date("2026-06-15T15:00:00Z").getTime());
+      expect(analytics.lastUpdatedAt).toBe(new Date("2026-06-15T14:55:00Z").getTime());
       expect(analytics.hasNewData).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -502,7 +495,7 @@ describe("AnalyticsStore heatmap uses full range", () => {
 
     await analytics.fetchHeatmap();
 
-    expect(analyticsService.getApiV1AnalyticsHeatmap).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsHeatmap.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
     );
   });
@@ -517,7 +510,7 @@ describe("AnalyticsStore hour-of-week range context", () => {
 
     await analytics.fetchAll();
 
-    expect(analyticsService.getApiV1AnalyticsHourOfWeek).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsHourOfWeek.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
     );
   });
@@ -527,7 +520,7 @@ describe("AnalyticsStore token metrics", () => {
   it("passes output_tokens heatmap metric through to the API", () => {
     analytics.setMetric("output_tokens");
 
-    expect(analyticsService.getApiV1AnalyticsHeatmap).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsHeatmap.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ metric: "output_tokens" }),
     );
   });
@@ -535,7 +528,7 @@ describe("AnalyticsStore token metrics", () => {
   it("passes output_tokens top-session metric through to the API", () => {
     analytics.setTopMetric("output_tokens");
 
-    expect(analyticsService.getApiV1AnalyticsTopSessions).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsTopSessions.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ metric: "output_tokens" }),
     );
   });
@@ -548,7 +541,7 @@ describe("AnalyticsStore activity uses full range", () => {
 
     await analytics.fetchActivity();
 
-    expect(analyticsService.getApiV1AnalyticsActivity).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsActivity.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
     );
   });
@@ -579,7 +572,7 @@ describe("AnalyticsStore activity range selection", () => {
     expect(sessions.filters.dateFrom).toBe("2024-01-10");
     expect(sessions.filters.dateTo).toBe("2024-01-12");
     expect(loadSessions).toHaveBeenCalledOnce();
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-10", to: "2024-01-12" }),
     );
     expect(analyticsService.getApiV1AnalyticsActivity).not.toHaveBeenCalled();
@@ -597,7 +590,7 @@ describe("AnalyticsStore activity range selection", () => {
     expect(analytics.selectedActivityRange).toBeNull();
     expect(sessions.filters.dateFrom).toBe("2024-01-01");
     expect(sessions.filters.dateTo).toBe("2024-01-31");
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
     );
   });
@@ -615,7 +608,7 @@ describe("AnalyticsStore activity range selection", () => {
       from: "2024-01-10",
       to: "2024-01-12",
     });
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-10", to: "2024-01-12" }),
     );
   });
@@ -634,7 +627,7 @@ describe("AnalyticsStore activity range selection", () => {
     expect(sessions.filters.dateTo).toBe("2024-01-31");
     expect(loadSessions).toHaveBeenCalledOnce();
     expect(analyticsService.getApiV1AnalyticsHourOfWeek).toHaveBeenCalledOnce();
-    expect(analyticsService.getApiV1AnalyticsHourOfWeek).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsHourOfWeek.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
     );
   });
@@ -684,8 +677,8 @@ describe("AnalyticsStore.clearDate", () => {
       from: "2024-01-01",
       to: "2024-01-31",
     });
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(expected);
-    expect(analyticsService.getApiV1AnalyticsProjects).toHaveBeenLastCalledWith(expected);
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(expected);
+    expect(analyticsService.getApiV1AnalyticsProjects.mock.lastCall?.[0]).toEqual(expected);
   });
 
   it("keeps the parent hour-of-week data when the date is cleared", () => {
@@ -812,8 +805,8 @@ describe("AnalyticsStore automated scope params", () => {
 
     analytics.fetchSummary();
 
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
-      expect.objectContaining({ automatedScope: "all" }),
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ automated_scope: "all" }),
     );
   });
 
@@ -822,8 +815,8 @@ describe("AnalyticsStore automated scope params", () => {
 
     analytics.fetchSummary();
 
-    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
-      expect.objectContaining({ automatedScope: "automated" }),
+    expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ automated_scope: "automated" }),
     );
   });
 });
@@ -867,7 +860,7 @@ describe("AnalyticsStore model filter", () => {
 
     await analytics.fetchSignalsForQuality();
 
-    expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenCalledWith(
+    expect(analyticsService.getApiV1AnalyticsSignals.mock.lastCall?.[0]).toEqual(
       expect.not.objectContaining({ model: expect.anything() }),
     );
     // The Quality page has no model control; the selected model stays put for
@@ -1247,13 +1240,13 @@ describe("AnalyticsStore rolling default date range", () => {
     expect(analytics.selectedActivityRange).toBeNull();
     expect(analytics.selectedDow).toBeNull();
     expect(analytics.selectedHour).toBeNull();
-    expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenCalledWith(
+    expect(analyticsService.getApiV1AnalyticsSignals.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
         from: "2026-04-01",
         to: "2026-04-30",
       }),
     );
-    expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenCalledWith(
+    expect(analyticsService.getApiV1AnalyticsSignals.mock.lastCall?.[0]).toEqual(
       expect.not.objectContaining({
         dow: expect.anything(),
         hour: expect.anything(),
@@ -1271,7 +1264,7 @@ describe("AnalyticsStore rolling default date range", () => {
 
     expect(analytics.from).toBe("2026-04-20");
     expect(analytics.to).toBe("2026-04-26");
-    expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenLastCalledWith(
+    expect(analyticsService.getApiV1AnalyticsSignals.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
         from: "2026-04-20",
         to: "2026-04-26",

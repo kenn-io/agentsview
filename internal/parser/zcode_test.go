@@ -825,6 +825,42 @@ func TestZCodeFingerprintTracksDBMtimeForUsageOnlyChanges(t *testing.T) {
 	assert.Equal(t, dbMtime.UnixNano(), fingerprint.MTimeNS)
 }
 
+func TestZCodeFingerprintIgnoresShmIndexMtime(t *testing.T) {
+	// Readers rewrite the -shm index, this provider's own connection
+	// included, so its mtime must not move the fingerprint or every scan
+	// would report the whole container as changed.
+	fixture := newZCodeTestFixture(t)
+	fixture.insertSession(
+		t,
+		"session-shm",
+		"/Users/alice/code/acme-app",
+		"SHM",
+		"2026-07-06T13:00:01Z",
+		"2026-07-06T13:10:00Z",
+		"",
+		"",
+	)
+	dbMtime := time.Date(2026, 7, 6, 13, 20, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(fixture.DBPath, dbMtime, dbMtime))
+	shmPath := fixture.DBPath + "-shm"
+	require.NoError(t, os.WriteFile(shmPath, make([]byte, 32), 0o644))
+	shmMtime := dbMtime.Add(time.Hour)
+	require.NoError(t, os.Chtimes(shmPath, shmMtime, shmMtime))
+
+	provider, ok := NewProvider(AgentZCode, ProviderConfig{
+		Roots:   []string{fixture.CLIRoot},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+	assert.Equal(t, dbMtime.UnixNano(), fingerprint.MTimeNS)
+}
+
 func TestZCodeFallsBackToDBMtimeWhenTimestampsAreMissing(t *testing.T) {
 	fixture := newZCodeTestFixture(t)
 	fixture.insertSession(

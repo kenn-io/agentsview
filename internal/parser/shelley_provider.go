@@ -77,14 +77,16 @@ func shelleyWatchRoots(roots []string) []WatchRoot {
 
 // shelleyClassifyPath maps a stored or changed path to its database container
 // and conversation. allowMissing relaxes the regular-file requirement so a
-// database delete (or its WAL/SHM sibling) still classifies for changed-path
+// database delete (or its WAL sibling) still classifies for changed-path
 // tombstones, reproducing the legacy strict sourceRef / lenient
-// sourceRefForChangedPath split.
+// sourceRefForChangedPath split. A bare "-shm" sibling event is rejected: the
+// provider's own read connections rewrite that file, so honoring it would make
+// every scan schedule the next.
 func shelleyClassifyPath(
 	root, path string, allowMissing bool,
 ) (multiSessionMatch, bool) {
 	return classifySQLiteContainerPath(
-		root, path, shelleyDBName, allowMissing, false, parseShelleyVirtualPath,
+		root, path, shelleyDBName, allowMissing, true, parseShelleyVirtualPath,
 	)
 }
 

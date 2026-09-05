@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"encoding/json/v2"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -74,9 +75,105 @@ const frontmatterFence = "---\n"
 
 var tmpl = template.Must(template.ParseFS(templatesFS, "templates/finding-history.md.tmpl"))
 
+// Remote is the optional remote-daemon targeting baked into generated
+// examples so `skills install` on a shared archive does not teach the
+// local SQLite default.
+type Remote struct {
+	Server    string `json:"server,omitempty"`
+	TokenFile string `json:"token_file,omitempty"`
+}
+
+// Empty reports whether no remote targeting should be baked in.
+func (r Remote) Empty() bool {
+	return strings.TrimSpace(r.Server) == "" && strings.TrimSpace(r.TokenFile) == ""
+}
+
+// Validate rejects values that cannot survive the round trip into a skill
+// file: a control character would break the single-line `# install-remote:`
+// comment and the generated Markdown. URL shape is deliberately not checked,
+// because no other `--server` in the CLI validates it and Args shell-quotes
+// the value anyway.
+func (r Remote) Validate() error {
+	for _, f := range []struct{ name, value string }{
+		{"server", r.Server},
+		{"token file", r.TokenFile},
+	} {
+		if i := strings.IndexFunc(f.value, func(c rune) bool {
+			return c < 0x20 || c == 0x7f
+		}); i >= 0 {
+			return fmt.Errorf(
+				"skills: %s contains a control character at byte %d", f.name, i)
+		}
+	}
+	return nil
+}
+
+// shellSafe reports whether c can appear unquoted in a POSIX shell word.
+func shellSafe(c rune) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	return strings.ContainsRune("@%+=:,./-_~", c)
+}
+
+// shellQuote returns s as a single shell word, quoting only when needed so
+// the common case stays readable. Generated examples are meant to be run
+// verbatim, so a token path with a space must survive as one argument.
+func shellQuote(s string) string {
+	if s != "" && strings.IndexFunc(s, func(c rune) bool { return !shellSafe(c) }) < 0 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// Args returns the leading-space CLI flags to append to example commands,
+// or empty when no remote is configured.
+func (r Remote) Args() string {
+	var b strings.Builder
+	if s := strings.TrimSpace(r.Server); s != "" {
+		b.WriteString(" --server ")
+		b.WriteString(shellQuote(s))
+	}
+	if f := strings.TrimSpace(r.TokenFile); f != "" {
+		b.WriteString(" --server-token-file ")
+		b.WriteString(shellQuote(f))
+	}
+	return b.String()
+}
+
+const installRemotePrefix = "# install-remote: "
+
+// ParseRemote reads a baked remote from an installed skill file. Missing or
+// malformed remote lines yield an empty Remote rather than an error so list
+// and reinstall keep working on older files.
+func ParseRemote(content string) Remote {
+	if !strings.HasPrefix(content, frontmatterFence) {
+		return Remote{}
+	}
+	rest := strings.TrimPrefix(content, frontmatterFence)
+	_, rest, ok := strings.Cut(rest, "\n")
+	if !ok {
+		return Remote{}
+	}
+	line, _, _ := strings.Cut(rest, "\n")
+	if !strings.HasPrefix(line, installRemotePrefix) {
+		return Remote{}
+	}
+	var remote Remote
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(line, installRemotePrefix)), &remote); err != nil {
+		return Remote{}
+	}
+	if remote.Validate() != nil {
+		return Remote{}
+	}
+	return remote
+}
+
 // templateData is the data passed to the finding-history template.
 type templateData struct {
-	Delegate string
+	Delegate   string
+	ServerArgs string
 }
 
 // Rendered is one skill file ready to install.
@@ -87,17 +184,22 @@ type Rendered struct {
 }
 
 // Render produces the skill for a harness. version is the CLI version
-// string, recorded in the header for humans (hash is authoritative). The
-// generated-by header is inserted as line two, inside the frontmatter
-// fence, so the rendered file still begins with "---".
-func Render(h Harness, version string) (Rendered, error) {
+// string, recorded in the header for humans (hash is authoritative). remote
+// is baked into example commands and an `# install-remote:` JSON comment so
+// list/reinstall can round-trip it. The generated-by header is inserted as
+// line two, inside the frontmatter fence, so the rendered file still begins
+// with "---".
+func Render(h Harness, version string, remote Remote) (Rendered, error) {
 	delegate, ok := delegatePhrases[h]
 	if !ok {
 		return Rendered{}, fmt.Errorf("skills: unknown harness %q", h)
 	}
+	if err := remote.Validate(); err != nil {
+		return Rendered{}, err
+	}
 
 	var body bytes.Buffer
-	data := templateData{Delegate: delegate}
+	data := templateData{Delegate: delegate, ServerArgs: remote.Args()}
 	if err := tmpl.ExecuteTemplate(&body, "finding-history.md.tmpl", data); err != nil {
 		return Rendered{}, fmt.Errorf("skills: render %s template: %w", h, err)
 	}
@@ -106,10 +208,19 @@ func Render(h Harness, version string) (Rendered, error) {
 			"skills: %s template must start with a %q frontmatter fence", h, "---")
 	}
 
-	hash := bodyHash(body.String())
+	rest := strings.TrimPrefix(body.String(), frontmatterFence)
+	var remoteLine string
+	if !remote.Empty() {
+		payload, err := json.Marshal(remote)
+		if err != nil {
+			return Rendered{}, fmt.Errorf("skills: encode remote: %w", err)
+		}
+		remoteLine = installRemotePrefix + string(payload) + "\n"
+	}
+	hashed := frontmatterFence + remoteLine + rest
+	hash := bodyHash(hashed)
 	header := fmt.Sprintf(headerFormat, version, hash)
-	content := frontmatterFence + header + "\n" +
-		strings.TrimPrefix(body.String(), frontmatterFence)
+	content := frontmatterFence + header + "\n" + remoteLine + rest
 
 	return Rendered{
 		Name:    skillName,

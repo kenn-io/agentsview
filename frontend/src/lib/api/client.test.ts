@@ -14,9 +14,7 @@ import type { SyncProgress } from "./types.js";
  * Create a ReadableStream that yields the given chunks as
  * Uint8Array values, then closes.
  */
-function makeSSEStream(
-  chunks: string[],
-): ReadableStream<Uint8Array> {
+function makeSSEStream(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   let i = 0;
   return new ReadableStream({
@@ -31,14 +29,15 @@ function makeSSEStream(
   });
 }
 
-function mockFetchWithStream(
-  chunks: string[],
-): void {
+function mockFetchWithStream(chunks: string[]): void {
   const stream = makeSSEStream(chunks);
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-    ok: true,
-    body: stream,
-  }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      body: stream,
+    }),
+  );
 }
 
 describe("triggerSync SSE parsing", () => {
@@ -54,9 +53,7 @@ describe("triggerSync SSE parsing", () => {
     activeHandles = [];
   });
 
-  function startSync(
-    chunks: string[],
-  ): { handle: SyncHandle; progress: SyncProgress[] } {
+  function startSync(chunks: string[]): { handle: SyncHandle; progress: SyncProgress[] } {
     mockFetchWithStream(chunks);
     const progress: SyncProgress[] = [];
     const handle = triggerSync((p) => progress.push(p));
@@ -66,8 +63,8 @@ describe("triggerSync SSE parsing", () => {
 
   it("should parse CRLF-terminated SSE frames", async () => {
     const { handle, progress } = startSync([
-      "event: progress\r\ndata: {\"phase\":\"scanning\",\"projects_total\":1,\"projects_done\":0,\"sessions_total\":0,\"sessions_done\":0,\"messages_indexed\":0}\r\n\r\n",
-      "event: done\r\ndata: {\"total_sessions\":5,\"synced\":3,\"skipped\":2,\"failed\":0}\r\n\r\n",
+      'event: progress\r\ndata: {"phase":"scanning","projects_total":1,"projects_done":0,"sessions_total":0,"sessions_done":0,"messages_indexed":0}\r\n\r\n',
+      'event: done\r\ndata: {"total_sessions":5,"synced":3,"skipped":2,"failed":0}\r\n\r\n',
     ]);
 
     const stats = await handle.done;
@@ -132,17 +129,18 @@ describe("triggerSync SSE parsing", () => {
       'event: error\ndata: {"error":"sync worker pass reported failed"}\n\n',
     ]);
 
-    await expect(handle.done).rejects.toThrow(
-      "sync worker pass reported failed",
-    );
+    await expect(handle.done).rejects.toThrow("sync worker pass reported failed");
   });
 
   it("should reject for non-ok responses", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      body: null,
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        body: null,
+      }),
+    );
 
     const handle = triggerSync();
     activeHandles.push(handle);
@@ -221,9 +219,7 @@ describe("generateInsight SSE parsing", () => {
   });
 
   it("throws on error event", async () => {
-    mockStream([
-      `event: error\ndata: {"message":"CLI not found"}\n\n`,
-    ]);
+    mockStream([`event: error\ndata: {"message":"CLI not found"}\n\n`]);
 
     const { generateInsight } = await import("./client.js");
     const handle = generateInsight({
@@ -233,15 +229,11 @@ describe("generateInsight SSE parsing", () => {
     });
     activeHandles.push(handle);
 
-    await expect(handle.done).rejects.toThrow(
-      "CLI not found",
-    );
+    await expect(handle.done).rejects.toThrow("CLI not found");
   });
 
   it("throws when stream ends without done", async () => {
-    mockStream([
-      `event: status\ndata: {"phase":"generating"}\n\n`,
-    ]);
+    mockStream([`event: status\ndata: {"phase":"generating"}\n\n`]);
 
     const { generateInsight } = await import("./client.js");
     const handle = generateInsight({
@@ -251,9 +243,7 @@ describe("generateInsight SSE parsing", () => {
     });
     activeHandles.push(handle);
 
-    await expect(handle.done).rejects.toThrow(
-      "without done event",
-    );
+    await expect(handle.done).rejects.toThrow("without done event");
   });
 
   it("dispatches log events", async () => {
@@ -285,7 +275,7 @@ describe("generateInsight SSE parsing", () => {
 
     await handle.done;
     expect(logs).toEqual([
-      { stream: "stdout", line: "{\"type\":\"system\"}" },
+      { stream: "stdout", line: '{"type":"system"}' },
       { stream: "stderr", line: "rate limited" },
     ]);
   });
@@ -352,8 +342,7 @@ describe("generateInsight SSE parsing", () => {
         text: () =>
           Promise.resolve(
             JSON.stringify({
-              error:
-                "insight generation is not available in read-only mode",
+              error: "insight generation is not available in read-only mode",
             }),
           ),
       }),
@@ -443,28 +432,20 @@ describe("watchEvents", () => {
   it("appends ?token= when an auth token is set", () => {
     localStorage.setItem("agentsview-auth-token", "secret");
     watchEvents(() => {});
-    expect(FakeEventSource.instances[0]!.url).toBe(
-      "/api/v1/events?token=secret",
-    );
+    expect(FakeEventSource.instances[0]!.url).toBe("/api/v1/events?token=secret");
   });
 
   it("invokes onEvent with parsed scope for valid data_changed frames", () => {
     const received: string[] = [];
     watchEvents((e) => received.push(e.scope));
-    FakeEventSource.instances[0]!.fireRaw(
-      "data_changed",
-      JSON.stringify({ scope: "messages" }),
-    );
+    FakeEventSource.instances[0]!.fireRaw("data_changed", JSON.stringify({ scope: "messages" }));
     expect(received).toEqual(["messages"]);
   });
 
   it("falls back to { scope: 'sync' } for malformed payloads", () => {
     const received: string[] = [];
     watchEvents((e) => received.push(e.scope));
-    FakeEventSource.instances[0]!.fireRaw(
-      "data_changed",
-      "not valid json",
-    );
+    FakeEventSource.instances[0]!.fireRaw("data_changed", "not valid json");
     expect(received).toEqual(["sync"]);
   });
 
@@ -488,9 +469,7 @@ describe("watchEvents", () => {
     localStorage.setItem("agentsview-server-url", server);
     localStorage.setItem(`agentsview-auth-token::${server}`, "remote-token");
     watchEvents(() => {});
-    expect(FakeEventSource.instances[0]!.url).toBe(
-      `${server}/api/v1/events?token=remote-token`,
-    );
+    expect(FakeEventSource.instances[0]!.url).toBe(`${server}/api/v1/events?token=remote-token`);
   });
 
   it("URL-encodes reserved characters in the token query parameter", () => {
@@ -574,9 +553,7 @@ describe("watchSession", () => {
     }
 
     fireOpen() {
-      (this.listeners["open"] || []).forEach((cb) =>
-        cb(new Event("open") as MessageEvent),
-      );
+      (this.listeners["open"] || []).forEach((cb) => cb(new Event("open") as MessageEvent));
     }
 
     fireUpdate() {
