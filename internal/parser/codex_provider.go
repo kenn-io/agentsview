@@ -193,12 +193,21 @@ func (p *codexProvider) ActivityHintSources(
 		if strings.HasPrefix(root, "s3://") {
 			continue
 		}
-		path := filepath.Join(filepath.Dir(filepath.Clean(root)), "history.jsonl")
-		if _, ok := seen[path]; ok {
-			continue
+		// Alias homes share the transcripts but may keep their own hint
+		// log, so every sidecar directory contributes. Resolve links so a
+		// shared history.jsonl is read once.
+		for _, dir := range codexSidecarDirs(root) {
+			path := filepath.Join(dir, "history.jsonl")
+			key := path
+			if resolved, err := filepath.EvalSymlinks(path); err == nil {
+				key = resolved
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			sources = append(sources, ActivityHintSource{Path: path})
 		}
-		seen[path] = struct{}{}
-		sources = append(sources, ActivityHintSource{Path: path})
 	}
 	return sources, nil
 }
@@ -342,13 +351,22 @@ func (p *codexProvider) PlanRawCapture(
 		LocalPath:  src.Path,
 		Appendable: true,
 	}}
-	if indexPath != "" {
-		info, err := os.Stat(indexPath)
+	var sidecarRoots []string
+	for i, candidate := range codexSessionIndexPaths(src.Path) {
+		info, err := os.Stat(candidate)
 		switch {
 		case err == nil && info.Mode().IsRegular():
+			// The home's own index keeps its name; each alias home's index
+			// is captured under a distinct logical path so parse inputs
+			// that came from another home travel with the transcript.
+			logical := CodexSessionIndexFilename
+			if i > 0 {
+				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
+				sidecarRoots = append(sidecarRoots, filepath.Dir(candidate))
+			}
 			entries = append(entries, RawCaptureEntry{
-				Path:      CodexSessionIndexFilename,
-				LocalPath: indexPath,
+				Path:      logical,
+				LocalPath: candidate,
 			})
 		case errors.Is(err, os.ErrNotExist):
 		case err != nil:
@@ -364,6 +382,7 @@ func (p *codexProvider) PlanRawCapture(
 		CaptureRoot:    captureRoot,
 		SourceKey:      source.Key,
 		Entries:        entries,
+		SidecarRoots:   sidecarRoots,
 	}, nil
 }
 
@@ -378,7 +397,11 @@ func (p *codexProvider) PlanRawCapture(
 // process restarts, sparing a fresh engine the full-content hash that
 // Fingerprint performs for every unchanged rollout.
 func (p *codexProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
-	return fileStatTupleDigest(0xC2, chatPath, codexSessionIndexPath(chatPath))
+	paths := append([]string{chatPath}, codexSessionIndexPaths(chatPath)...)
+	if len(paths) == 1 {
+		paths = append(paths, "")
+	}
+	return fileStatTupleDigest(0xC2, paths...)
 }
 
 func (p *codexProvider) Parse(
@@ -798,7 +821,11 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 		if !s.ownsCodexSidecars() {
 			continue
 		}
-		for _, shallow := range ResolveCodexShallowWatchRoots(root) {
+		shallowRoots := ResolveCodexShallowWatchRoots(root)
+		for _, alias := range codexAliasRoots(root) {
+			shallowRoots = append(shallowRoots, ResolveCodexShallowWatchRoots(alias)...)
+		}
+		for _, shallow := range shallowRoots {
 			shallow = filepath.Clean(shallow)
 			if _, ok := seenShallow[shallow]; ok {
 				continue
@@ -965,7 +992,7 @@ func (s codexSourceSet) sourcesForIndexPath(
 	}
 	indexDir := filepath.Dir(indexPath)
 	return s.discover(ctx, func(root string) bool {
-		return filepath.Dir(root) == indexDir
+		return slices.Contains(codexSidecarDirs(root), indexDir)
 	})
 }
 

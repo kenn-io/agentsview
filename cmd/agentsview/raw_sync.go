@@ -355,6 +355,29 @@ func rawSyncProvidersAndRoots(
 	var providers []parser.Provider
 	rootIndex := make(map[string]int)
 	var roots []syncpkg.WatchRoot
+	// raw-sync builds providers without a sync engine, so install the Codex
+	// root aliases here or a second home's sidecars are never watched.
+	// Roots below are made absolute before providers see them, so the alias
+	// table must use the same absolute spelling or its keys never match.
+	if aliases := cfg.RootAliases[parser.AgentCodex]; len(aliases) > 0 {
+		absolute := make(map[string][]string, len(aliases))
+		for root, list := range aliases {
+			absRoot, err := filepath.Abs(root)
+			if err != nil {
+				return nil, nil, fmt.Errorf("raw-sync resolve alias root: %w", err)
+			}
+			for _, alias := range list {
+				absAlias, err := filepath.Abs(alias)
+				if err != nil {
+					return nil, nil, fmt.Errorf("raw-sync resolve alias root: %w", err)
+				}
+				absolute[absRoot] = append(absolute[absRoot], absAlias)
+			}
+		}
+		syncpkg.InstallRootAliases(map[parser.AgentType]map[string][]string{
+			parser.AgentCodex: absolute,
+		})
+	}
 	for _, factory := range cfg.LocalProviderFactories() {
 		if factory.Capabilities().RawCapture.Support != parser.CapabilitySupported {
 			continue

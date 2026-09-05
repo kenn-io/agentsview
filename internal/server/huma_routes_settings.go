@@ -78,11 +78,17 @@ func (s *Server) humaGetSettings(
 			d = []string{}
 		}
 		dirs[string(def.Type)] = d
+		homes := s.cfg.ConfiguredAgentHomes(def.Type)
+		if homes == nil {
+			homes = []string{}
+		}
 		providers = append(providers, sessionProviderResponse{
 			ID:                 def.Type,
 			DisplayName:        def.DisplayName,
 			Dirs:               d,
 			PostAnswerToolWork: def.PostAnswerToolWork,
+			HomesSupported:     def.HomeConfigKey != "",
+			Homes:              homes,
 		})
 	}
 	tc := s.cfg.Terminal
@@ -139,6 +145,13 @@ func (s *Server) humaUpdateSettings(
 			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		patch["disabled_agents"] = disabled
+	}
+	if in.Body.AgentHomes != nil {
+		homes, err := config.NormalizeAgentHomes(*in.Body.AgentHomes)
+		if err != nil {
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		}
+		patch["agent_homes"] = homes
 	}
 	if in.Body.AuthToken != nil {
 		patch["auth_token"] = *in.Body.AuthToken

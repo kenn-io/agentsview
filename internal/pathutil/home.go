@@ -41,3 +41,20 @@ func LocalComparisonKey(path string) (string, error) {
 	}
 	return key, nil
 }
+
+// ResolvedComparisonKey is LocalComparisonKey with symbolic links resolved.
+// Paths that do not exist yet fall back to the unresolved absolute key, so a
+// root that is created later still compares by its configured location.
+func ResolvedComparisonKey(path string) (string, error) {
+	key, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving path %q: %w", path, err)
+	}
+	if resolved, err := filepath.EvalSymlinks(key); err == nil {
+		key = resolved
+	}
+	if runtime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	return key, nil
+}

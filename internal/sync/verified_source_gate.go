@@ -1,7 +1,9 @@
 package sync
 
 import (
+	"encoding/binary"
 	"errors"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +26,10 @@ type verifiedSourceSignature struct {
 	sidecarInode      int64
 	sidecarDevice     int64
 	sidecarChangeTime int64
+	// sidecarAliases digests the stat signatures of every alias-home
+	// session_index.jsonl that title lookups merge with the primary index.
+	// Zero when no alias index exists.
+	sidecarAliases uint64
 }
 
 // verifiedSourceRecord deliberately combines trust, invalidation, and pass
@@ -195,30 +201,12 @@ func (e *Engine) verifiedProviderSourceState(
 	inode, device := getFileIdentity(path, info)
 	mtime := info.ModTime().UnixNano()
 	sidecar := verifiedSourceSignature{}
+	latestIndexMtime := int64(0)
 	if provider.Definition().Type == parser.AgentCodex {
-		indexPath := parser.CodexSessionIndexPath(path)
-		if indexPath != "" {
-			indexInfo, indexErr := os.Stat(indexPath)
-			switch {
-			case indexErr == nil:
-				if !indexInfo.Mode().IsRegular() {
-					return verifiedSourceCapture{}, 0, false, false
-				}
-				indexChangeTime, reliable := fileChangeTime(
-					indexPath, indexInfo,
-				)
-				if !reliable {
-					return verifiedSourceCapture{}, 0, false, false
-				}
-				indexInode, indexDevice := getFileIdentity(indexPath, indexInfo)
-				sidecar.sidecarSize = indexInfo.Size()
-				sidecar.sidecarMtime = indexInfo.ModTime().UnixNano()
-				sidecar.sidecarInode = indexInode
-				sidecar.sidecarDevice = indexDevice
-				sidecar.sidecarChangeTime = indexChangeTime
-			case !errors.Is(indexErr, os.ErrNotExist):
-				return verifiedSourceCapture{}, 0, false, false
-			}
+		var ok bool
+		sidecar, latestIndexMtime, ok = codexSidecarSignature(path)
+		if !ok {
+			return verifiedSourceCapture{}, 0, false, false
 		}
 	}
 	agent := provider.Definition().Type
@@ -233,9 +221,14 @@ func (e *Engine) verifiedProviderSourceState(
 		sidecarInode:      sidecar.sidecarInode,
 		sidecarDevice:     sidecar.sidecarDevice,
 		sidecarChangeTime: sidecar.sidecarChangeTime,
+		sidecarAliases:    sidecar.sidecarAliases,
 	})
-	if sidecar.sidecarMtime > mtime {
-		mtime = sidecar.sidecarMtime
+	// Stored rows carry CodexEffectiveMtime, the newest of the transcript
+	// and every index it reads, so the trusted mtime must use the same
+	// rule or an alias index that is newer than the primary would reject
+	// warm trust on every sync.
+	if latestIndexMtime > mtime {
+		mtime = latestIndexMtime
 	}
 	return capture, mtime, fresh, true
 }
@@ -311,4 +304,59 @@ func (e *Engine) invalidateVerifiedDiscoveredSource(file parser.DiscoveredFile) 
 		return
 	}
 	e.invalidateVerifiedSource(file.Agent, filepath.Clean(file.Path))
+}
+
+// codexSidecarSignature stats every session_index.jsonl that a Codex
+// transcript's title lookup reads. The primary index fills the sidecar
+// fields directly; alias-home indexes fold into one digest so a title
+// written in a second home invalidates the trusted source like a rename in
+// the primary home. A missing index contributes nothing; an index that is
+// not a regular file or has no reliable change time fails closed. The
+// second result is the newest mtime across every index, matching
+// parser.CodexEffectiveMtime.
+func codexSidecarSignature(path string) (verifiedSourceSignature, int64, bool) {
+	sig := verifiedSourceSignature{}
+	indexPaths := parser.CodexSessionIndexPaths(path)
+	if len(indexPaths) == 0 {
+		return sig, 0, true
+	}
+	aliasDigest := fnv.New64a()
+	aliasSeen := false
+	latest := int64(0)
+	for i, indexPath := range indexPaths {
+		info, err := os.Stat(indexPath)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil || !info.Mode().IsRegular() {
+			return verifiedSourceSignature{}, 0, false
+		}
+		changeTime, reliable := fileChangeTime(indexPath, info)
+		if !reliable {
+			return verifiedSourceSignature{}, 0, false
+		}
+		inode, device := getFileIdentity(indexPath, info)
+		latest = max(latest, info.ModTime().UnixNano())
+		if i == 0 {
+			sig.sidecarSize = info.Size()
+			sig.sidecarMtime = info.ModTime().UnixNano()
+			sig.sidecarInode = inode
+			sig.sidecarDevice = device
+			sig.sidecarChangeTime = changeTime
+			continue
+		}
+		aliasSeen = true
+		var buf [8 * 5]byte
+		for j, v := range []int64{
+			info.Size(), info.ModTime().UnixNano(), inode, device, changeTime,
+		} {
+			binary.LittleEndian.PutUint64(buf[j*8:], uint64(v))
+		}
+		_, _ = aliasDigest.Write([]byte(indexPath))
+		_, _ = aliasDigest.Write(buf[:])
+	}
+	if aliasSeen {
+		sig.sidecarAliases = aliasDigest.Sum64()
+	}
+	return sig, latest, true
 }

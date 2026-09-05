@@ -5,6 +5,8 @@
 export interface SessionProviderResponse {
   dirs: string[];
   display_name: string;
+  homes: string[];
+  homes_supported: boolean;
   id: string;
   post_answer_tool_work?: boolean;
 }

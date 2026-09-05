@@ -688,9 +688,20 @@ type Config struct {
 
 	// SessionSources contains resolved structured sources. SourceMachines maps
 	// each effective configured root to its machine label for sync.
-	SessionSources       []SessionSource                        `json:"-" toml:"-"`
-	SourceMachines       map[parser.AgentType]map[string]string `json:"-" toml:"-"`
+	SessionSources []SessionSource                        `json:"-" toml:"-"`
+	SourceMachines map[parser.AgentType]map[string]string `json:"-" toml:"-"`
+	// RootAliases maps each effective root to configured roots that were
+	// folded into it because they resolve to the same directory, such as a
+	// second Codex home whose sessions directory links to the primary home.
+	// Providers scan the effective root once and read sidecar files from
+	// every alias.
+	RootAliases          map[parser.AgentType]map[string][]string `json:"-" toml:"-"`
 	sessionSourceConfigs []sessionSourceConfig
+
+	// agentHomes holds alternate agent home directories from the config
+	// file, keyed by agent. Each home derives the agent's native session
+	// roots during resolution and is additive to every other root source.
+	agentHomes map[parser.AgentType][]string
 
 	// agentDirSource tracks how each agent's dirs were
 	// set so loadFile doesn't override env-set values.
@@ -1052,6 +1063,61 @@ func reRootDefaultDir(root, rel string) string {
 		return filepath.Join(root, tail)
 	}
 	return root
+}
+
+// decodeStringArray converts a raw TOML value into a string slice. It logs
+// and reports false when the value is not an array of strings.
+func decodeStringArray(key string, rawVal any) ([]string, bool) {
+	rawSlice, ok := rawVal.([]any)
+	if !ok {
+		log.Printf("config: %s: expected string array: got %T", key, rawVal)
+		return nil, false
+	}
+	values := make([]string, 0, len(rawSlice))
+	for _, v := range rawSlice {
+		s, ok := v.(string)
+		if !ok {
+			log.Printf(
+				"config: %s: expected string array: element is %T", key, v,
+			)
+			return nil, false
+		}
+		values = append(values, s)
+	}
+	return values, true
+}
+
+// dedupeTrimmedStrings trims each value and drops empty and repeated
+// entries while preserving first-seen order.
+func dedupeTrimmedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, dup := seen[value]; dup {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+// AgentHomeDirs derives the native session roots that an agent keeps under
+// an alternate home directory, mirroring how DefaultRootEnvVar re-roots the
+// agent's default directories. It returns nil for agents without defaults.
+func AgentHomeDirs(def parser.AgentDef, home string) []string {
+	if len(def.DefaultDirs) == 0 {
+		return nil
+	}
+	dirs := make([]string, 0, len(def.DefaultDirs))
+	for _, rel := range def.DefaultDirs {
+		dirs = append(dirs, reRootDefaultDir(home, rel))
+	}
+	return dirs
 }
 
 // Load builds a Config by layering: defaults < config file < env < flags.
@@ -1624,6 +1690,26 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.sessionSourceConfigs = append([]sessionSourceConfig(nil), file.SessionSources...)
 	}
 
+	for _, def := range parser.Registry {
+		if def.HomeConfigKey == "" {
+			continue
+		}
+		rawVal, exists := raw[def.HomeConfigKey]
+		if !exists {
+			continue
+		}
+		homes, ok := decodeStringArray(def.HomeConfigKey, rawVal)
+		if !ok {
+			continue
+		}
+		if c.agentHomes == nil {
+			c.agentHomes = make(map[parser.AgentType][]string)
+		}
+		// Repeated spellings would register the same roots twice and give
+		// the settings UI duplicate list keys; keep the first occurrence.
+		c.agentHomes[def.Type] = dedupeTrimmedStrings(homes)
+	}
+
 	// Parse config-file dir arrays for agents that have a
 	// ConfigKey. Only apply when not already set by env var.
 	for _, def := range parser.Registry {
@@ -1637,34 +1723,63 @@ func (c *Config) applyConfigTOML(data string) error {
 		if c.agentDirSource[def.Type] == dirEnv {
 			continue
 		}
-		rawSlice, ok := rawVal.([]any)
-		if !ok {
-			log.Printf(
-				"config: %s: expected string array: got %T",
-				def.ConfigKey, rawVal,
-			)
-			continue
-		}
-		dirs := make([]string, 0, len(rawSlice))
-		valid := true
-		for _, v := range rawSlice {
-			s, ok := v.(string)
-			if !ok {
-				log.Printf(
-					"config: %s: expected string array: element is %T",
-					def.ConfigKey, v,
-				)
-				valid = false
-				break
-			}
-			dirs = append(dirs, s)
-		}
-		if valid {
+		if dirs, ok := decodeStringArray(def.ConfigKey, rawVal); ok {
 			c.AgentDirs[def.Type] = dirs
 			c.agentDirSource[def.Type] = dirFile
 		}
 	}
 	return nil
+}
+
+// ConfiguredAgentHomes returns the alternate home directories configured
+// for an agent, as written in the config file, or nil when none are set.
+func (c *Config) ConfiguredAgentHomes(agent parser.AgentType) []string {
+	homes := c.agentHomes[agent]
+	if len(homes) == 0 {
+		return nil
+	}
+	return append([]string(nil), homes...)
+}
+
+// NormalizeAgentHomes validates a settings update for alternate agent
+// homes. It rejects agents without home support and empty or S3 entries,
+// trims whitespace, and drops repeated spellings while keeping order.
+func NormalizeAgentHomes(
+	values map[string][]string,
+) (map[parser.AgentType][]string, error) {
+	normalized := make(map[parser.AgentType][]string, len(values))
+	for rawAgent, homes := range values {
+		agent := parser.AgentType(strings.ToLower(strings.TrimSpace(rawAgent)))
+		def, ok := parser.AgentByType(agent)
+		if !ok {
+			return nil, fmt.Errorf(
+				`agent_homes: unknown session provider %q`, rawAgent)
+		}
+		if def.HomeConfigKey == "" {
+			return nil, fmt.Errorf(
+				`agent_homes: %q does not support alternate homes`, agent)
+		}
+		if _, dup := normalized[agent]; dup {
+			return nil, fmt.Errorf(
+				`agent_homes: session provider %q is listed more than once`, agent)
+		}
+		seen := make(map[string]struct{}, len(homes))
+		cleaned := make([]string, 0, len(homes))
+		for i, raw := range homes {
+			home := strings.TrimSpace(raw)
+			if _, err := normalizeAgentHomeDir(home); err != nil {
+				return nil, fmt.Errorf(
+					"agent_homes: %s: entry %d: %w", def.HomeConfigKey, i+1, err)
+			}
+			if _, dup := seen[home]; dup {
+				continue
+			}
+			seen[home] = struct{}{}
+			cleaned = append(cleaned, home)
+		}
+		normalized[agent] = cleaned
+	}
+	return normalized, nil
 }
 
 func (c *Config) ensureCursorSecret() error {
@@ -2127,6 +2242,19 @@ func (c *Config) resolveSessionSources() error {
 
 	resolved := make([]SessionSource, 0)
 	rootsByAgent := make(map[parser.AgentType]map[string]rootState, len(c.AgentDirs))
+	aliases := make(map[parser.AgentType]map[string][]string)
+	recordAlias := func(agent parser.AgentType, canonical, alias string) {
+		if filepath.Clean(canonical) == filepath.Clean(alias) {
+			return
+		}
+		if aliases[agent] == nil {
+			aliases[agent] = make(map[string][]string)
+		}
+		if slices.Contains(aliases[agent][canonical], alias) {
+			return
+		}
+		aliases[agent][canonical] = append(aliases[agent][canonical], alias)
+	}
 	for _, def := range parser.Registry {
 		seen := make(map[string]rootState)
 		dirs := make([]string, 0, len(c.AgentDirs[def.Type]))
@@ -2141,7 +2269,8 @@ func (c *Config) resolveSessionSources() error {
 					"resolve %s session source %q: %w", def.Type, value, err,
 				)
 			}
-			if _, ok := seen[key]; ok {
+			if existing, ok := seen[key]; ok {
+				recordAlias(def.Type, existing.dir, value)
 				continue
 			}
 			seen[key] = rootState{
@@ -2155,6 +2284,44 @@ func (c *Config) resolveSessionSources() error {
 	}
 
 	var problems []string
+	for _, def := range parser.Registry {
+		homes := c.agentHomes[def.Type]
+		if len(homes) == 0 {
+			continue
+		}
+		seen := rootsByAgent[def.Type]
+		if seen == nil {
+			seen = make(map[string]rootState)
+			rootsByAgent[def.Type] = seen
+		}
+		for i, rawHome := range homes {
+			home, err := normalizeAgentHomeDir(rawHome)
+			if err != nil {
+				problems = append(problems,
+					fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
+				continue
+			}
+			for _, dir := range AgentHomeDirs(def, home) {
+				key, err := sessionSourceComparisonKey(dir)
+				if err != nil {
+					problems = append(problems,
+						fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
+					continue
+				}
+				if existing, duplicate := seen[key]; duplicate {
+					recordAlias(def.Type, existing.dir, dir)
+					continue
+				}
+				seen[key] = rootState{dir: dir, machine: c.LocalMachineName}
+				c.AgentDirs[def.Type] = append(c.AgentDirs[def.Type], dir)
+			}
+			c.agentDirSource[def.Type] = dirFile
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("agent homes: %s", strings.Join(problems, "; "))
+	}
+
 	for i, input := range c.sessionSourceConfigs {
 		entry := i + 1
 		agent := parser.AgentType(strings.TrimSpace(strings.ToLower(input.Agent)))
@@ -2215,6 +2382,7 @@ func (c *Config) resolveSessionSources() error {
 		}
 		state, duplicate := seen[key]
 		if duplicate {
+			recordAlias(agent, state.dir, dir)
 			state.machine = machine
 			seen[key] = state
 		} else {
@@ -2246,14 +2414,100 @@ func (c *Config) resolveSessionSources() error {
 	}
 	c.SessionSources = resolved
 	c.SourceMachines = sourceMachines
+	c.RootAliases = expandHomeAliases(c.AgentDirs, aliases)
 	return nil
+}
+
+// expandHomeAliases widens root aliases from directories to homes. When any
+// directory of one home is the same place as a directory of another home,
+// the two homes share transcripts, so every effective root under either
+// home gains the other home's matching directory as an alias. A second
+// Codex home that links sessions/ but keeps its own archived_sessions/ then
+// still contributes its sidecars for archived transcripts, and the primary
+// home's sidecars apply to the second home's own archive. Homes with no
+// shared directory stay unrelated.
+func expandHomeAliases(
+	agentDirs map[parser.AgentType][]string,
+	aliases map[parser.AgentType]map[string][]string,
+) map[parser.AgentType]map[string][]string {
+	for agent, byRoot := range aliases {
+		// Union-find over homes joined by any alias pair.
+		parent := make(map[string]string)
+		find := func(home string) string {
+			for parent[home] != "" && parent[home] != home {
+				home = parent[home]
+			}
+			return home
+		}
+		union := func(a, b string) {
+			ra, rb := find(a), find(b)
+			if parent[ra] == "" {
+				parent[ra] = ra
+			}
+			if parent[rb] == "" {
+				parent[rb] = rb
+			}
+			if ra != rb {
+				parent[rb] = ra
+			}
+		}
+		for root, list := range byRoot {
+			for _, alias := range list {
+				union(filepath.Dir(filepath.Clean(root)), filepath.Dir(filepath.Clean(alias)))
+			}
+		}
+		if len(parent) == 0 {
+			continue
+		}
+		groups := make(map[string][]string)
+		for home := range parent {
+			leader := find(home)
+			groups[leader] = append(groups[leader], home)
+		}
+		for _, root := range agentDirs[agent] {
+			clean := filepath.Clean(root)
+			home := filepath.Dir(clean)
+			leader := find(home)
+			if parent[home] == "" {
+				continue
+			}
+			for _, other := range groups[leader] {
+				if other == home {
+					continue
+				}
+				candidate := filepath.Join(other, filepath.Base(clean))
+				if slices.Contains(byRoot[root], candidate) {
+					continue
+				}
+				byRoot[root] = append(byRoot[root], candidate)
+			}
+			sort.Strings(byRoot[root])
+		}
+	}
+	return aliases
 }
 
 func sessionSourceComparisonKey(dir string) (string, error) {
 	if strings.HasPrefix(strings.ToLower(dir), "s3://") {
 		return dir, nil
 	}
-	return pathutil.LocalComparisonKey(dir)
+	// Resolve symlinks so alternate homes or session roots that link to the
+	// same directory register once instead of as duplicate roots.
+	return pathutil.ResolvedComparisonKey(dir)
+}
+
+// normalizeAgentHomeDir validates and expands one alternate agent home.
+// Homes are local directories only: the derived session roots must be
+// watched and read through the filesystem provider paths.
+func normalizeAgentHomeDir(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("home is required")
+	}
+	if strings.HasPrefix(strings.ToLower(value), "s3://") {
+		return "", fmt.Errorf("home %q is an S3 root; homes must be local directories, so configure S3 through the per-agent directory setting", raw)
+	}
+	return normalizeSessionSourceDir(value)
 }
 
 func normalizeSessionSourceDir(raw string) (string, error) {
@@ -3046,13 +3300,46 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		}
 		patch["disabled_agents"] = normalized
 	}
+	var agentHomes map[parser.AgentType][]string
+	if value, ok := patch["agent_homes"]; ok {
+		homes, ok := value.(map[parser.AgentType][]string)
+		if !ok {
+			return fmt.Errorf(
+				"agent_homes must use typed session provider values",
+			)
+		}
+		raw := make(map[string][]string, len(homes))
+		for agent, dirs := range homes {
+			raw[string(agent)] = dirs
+		}
+		normalized, err := NormalizeAgentHomes(raw)
+		if err != nil {
+			return err
+		}
+		agentHomes = normalized
+		delete(patch, "agent_homes")
+		for agent, dirs := range normalized {
+			def, _ := parser.AgentByType(agent)
+			if len(dirs) == 0 {
+				patch[def.HomeConfigKey] = nil
+				continue
+			}
+			patch[def.HomeConfigKey] = dirs
+		}
+	}
 	return c.withConfigLock(func() error {
 		existing, err := c.readConfigMap()
 		if err != nil {
 			return fmt.Errorf("reading config file: %w", err)
 		}
 
-		maps.Copy(existing, patch)
+		for key, value := range patch {
+			if value == nil {
+				delete(existing, key)
+				continue
+			}
+			existing[key] = value
+		}
 
 		// When require_auth is written, remove the legacy
 		// remote_access key so it cannot override on next load.
@@ -3104,6 +3391,16 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 			if agents, ok := v.([]parser.AgentType); ok {
 				c.DisabledAgents = append([]parser.AgentType(nil), agents...)
 			}
+		}
+		for agent, dirs := range agentHomes {
+			if c.agentHomes == nil {
+				c.agentHomes = make(map[parser.AgentType][]string)
+			}
+			if len(dirs) == 0 {
+				delete(c.agentHomes, agent)
+				continue
+			}
+			c.agentHomes[agent] = append([]string(nil), dirs...)
 		}
 		return nil
 	})

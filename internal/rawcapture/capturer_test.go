@@ -1499,3 +1499,53 @@ func appendFile(path, content string) error {
 	}
 	return file.Close()
 }
+
+func TestCapturerReadsEntriesUnderSidecarRoots(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	provider, source, _ := captureFileProvider(t, "one\n")
+	sidecar := t.TempDir()
+	sidecarIndex := filepath.Join(sidecar, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(sidecarIndex, []byte("{}\n"), 0o600))
+	var err error
+	sidecar, err = filepath.EvalSymlinks(sidecar)
+	require.NoError(t, err)
+	sidecarIndex, err = filepath.EvalSymlinks(sidecarIndex)
+	require.NoError(t, err)
+	provider.plan.SidecarRoots = []string{sidecar}
+	provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
+		Path:      "alias-homes/1/session_index.jsonl",
+		LocalPath: sidecarIndex,
+	})
+	capturer := New(store)
+
+	result, err := capturer.Capture(t.Context(), provider, source)
+
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
+	queued, ok, err := store.NextGeneration(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	paths := make([]string, 0, len(queued.Entries))
+	for _, entry := range queued.Entries {
+		paths = append(paths, entry.Path)
+	}
+	assert.ElementsMatch(t, []string{
+		"project/session.jsonl", "alias-homes/1/session_index.jsonl",
+	}, paths)
+}
+
+func TestCapturerRejectsSidecarEntryWithoutDeclaredRoot(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	provider, source, _ := captureFileProvider(t, "one\n")
+	outside := filepath.Join(t.TempDir(), "session_index.jsonl")
+	require.NoError(t, os.WriteFile(outside, []byte("{}\n"), 0o600))
+	provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
+		Path:      "alias-homes/1/session_index.jsonl",
+		LocalPath: outside,
+	})
+	capturer := New(store)
+
+	_, err := capturer.Capture(t.Context(), provider, source)
+
+	require.Error(t, err)
+}

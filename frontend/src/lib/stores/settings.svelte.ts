@@ -21,6 +21,7 @@ interface AppSettings extends Omit<
   agent_dirs: Record<string, string[]>;
   session_providers: SessionProvider[];
   disabled_agents: string[];
+  agent_homes?: Record<string, string[]>;
   terminal: TerminalConfig;
   chart_palette: ChartPalette;
 }
