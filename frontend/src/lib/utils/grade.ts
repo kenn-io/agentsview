@@ -65,7 +65,7 @@ const penaltyLabels: Record<string, string> = {
   missing_success_criteria: "missing success criteria",
   stuck_repeated_prompts: "stuck repeated prompts",
   repeated_prompts: "stuck repeated prompts",
-  };
+};
 
 export function getPenaltyLabel(key: string): string {
   return penaltyLabels[key] ?? key;

@@ -50,9 +50,9 @@
     "date_from",
     "date_to",
   ] as const;
-  type AnalyticsParams = Parameters<
+  type AnalyticsParams = NonNullable<Parameters<
     typeof AnalyticsService.getApiV1AnalyticsSignals
-  >[0];
+  >[0]>;
 
   let unsubEvents: (() => void) | undefined;
   let selectedSignalId: string | null = $state(null);
@@ -316,11 +316,11 @@
     signalExamplesError = null;
     try {
       const response = await callGenerated(
-        () => AnalyticsService.getApiV1AnalyticsSignalSessions({
+        (options) => AnalyticsService.getApiV1AnalyticsSignalSessions({
           ...params,
           signal,
           limit: 8,
-        }),
+        }, options),
         requestSignal,
       );
       if (

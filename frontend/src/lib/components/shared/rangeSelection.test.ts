@@ -51,21 +51,24 @@ describe("resolveRange", () => {
 
   it("resolves the all-time window to the earliest session", () => {
     vi.setSystemTime(new Date("2026-04-25T12:00:00Z"));
-    expect(
-      resolveRange({ mode: "relative", days: 0 }, "2024-02-03T00:00:00Z"),
-    ).toEqual({ from: "2024-02-03", to: "2026-04-25" });
+    expect(resolveRange({ mode: "relative", days: 0 }, "2024-02-03T00:00:00Z")).toEqual({
+      from: "2024-02-03",
+      to: "2026-04-25",
+    });
   });
 
   it("resolves a calendar week to its bounds", () => {
-    expect(
-      resolveRange({ mode: "calendar", unit: "week", anchor: "2026-06-17" }),
-    ).toEqual({ from: "2026-06-15", to: "2026-06-21" });
+    expect(resolveRange({ mode: "calendar", unit: "week", anchor: "2026-06-17" })).toEqual({
+      from: "2026-06-15",
+      to: "2026-06-21",
+    });
   });
 
   it("passes a custom range through unchanged", () => {
-    expect(
-      resolveRange({ mode: "custom", from: "2026-01-01", to: "2026-01-31" }),
-    ).toEqual({ from: "2026-01-01", to: "2026-01-31" });
+    expect(resolveRange({ mode: "custom", from: "2026-01-01", to: "2026-01-31" })).toEqual({
+      from: "2026-01-01",
+      to: "2026-01-31",
+    });
   });
 });
 

@@ -15,33 +15,19 @@ describe("message scroll helpers", () => {
   });
 
   it("detects the latest edge at the bottom in oldest-first order", () => {
-    expect(
-      isAtLatestEdge(
-        { scrollTop: 395, scrollHeight: 500, clientHeight: 100 },
-        false,
-      ),
-    ).toBe(true);
-    expect(
-      isAtLatestEdge(
-        { scrollTop: 300, scrollHeight: 500, clientHeight: 100 },
-        false,
-      ),
-    ).toBe(false);
+    expect(isAtLatestEdge({ scrollTop: 395, scrollHeight: 500, clientHeight: 100 }, false)).toBe(
+      true,
+    );
+    expect(isAtLatestEdge({ scrollTop: 300, scrollHeight: 500, clientHeight: 100 }, false)).toBe(
+      false,
+    );
   });
 
   it("detects the latest edge at the top in newest-first order", () => {
-    expect(
-      isAtLatestEdge(
-        { scrollTop: 3, scrollHeight: 500, clientHeight: 100 },
-        true,
-      ),
-    ).toBe(true);
-    expect(
-      isAtLatestEdge(
-        { scrollTop: 20, scrollHeight: 500, clientHeight: 100 },
-        true,
-      ),
-    ).toBe(false);
+    expect(isAtLatestEdge({ scrollTop: 3, scrollHeight: 500, clientHeight: 100 }, true)).toBe(true);
+    expect(isAtLatestEdge({ scrollTop: 20, scrollHeight: 500, clientHeight: 100 }, true)).toBe(
+      false,
+    );
   });
 
   it("uses direct offset semantics for already-aligned offsets", () => {

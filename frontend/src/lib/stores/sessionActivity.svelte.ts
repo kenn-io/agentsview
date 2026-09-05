@@ -1,13 +1,6 @@
 import { SessionsService } from "../api/generated/index";
-import {
-  callGenerated,
-  configureGeneratedClient,
-  isAbortError,
-} from "../api/runtime.js";
-import type {
-  SessionActivityBucket,
-  SessionActivityResponse,
-} from "../api/types/session-activity.js";
+import { callGenerated, isAbortError } from "../api/runtime.js";
+import type { SessionActivityBucket } from "../api/types/session-activity.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 export function findActiveBucketIndex(
@@ -43,17 +36,11 @@ class SessionActivityStore {
   }
 
   get activeBucketIndex(): number | null {
-    return findActiveBucketIndex(
-      this.buckets,
-      this.firstVisibleTimestamp,
-    );
+    return findActiveBucketIndex(this.buckets, this.firstVisibleTimestamp);
   }
 
   async load(sessionId: string) {
-    if (
-      this.cachedSessionId === sessionId &&
-      this.loaded
-    ) {
+    if (this.cachedSessionId === sessionId && this.loaded) {
       return;
     }
     // Clear stale data from a different session before
@@ -68,31 +55,21 @@ class SessionActivityStore {
     this.error = null;
     this.firstVisibleTimestamp = null;
     try {
-      configureGeneratedClient();
       const resp = await callGenerated(
-        () => SessionsService.getApiV1SessionsIdActivity({ id: sessionId }),
+        (options) => SessionsService.getApiV1SessionsByIdActivity({ id: sessionId }, options),
         signal,
-      ) as unknown as SessionActivityResponse;
+      );
       // Ignore stale responses from previous sessions.
-      if (
-        version !== this.loadVersion ||
-        !this.activityRead.isCurrent(signal)
-      ) return;
+      if (version !== this.loadVersion || !this.activityRead.isCurrent(signal)) return;
       this.buckets = resp.buckets;
       this.intervalSeconds = resp.interval_seconds;
       this.totalMessages = resp.total_messages;
       this.cachedSessionId = sessionId;
       this.loaded = true;
     } catch (e) {
-      if (
-        isAbortError(e) ||
-        version !== this.loadVersion ||
-        !this.activityRead.isCurrent(signal)
-      ) return;
-      this.error =
-        e instanceof Error
-          ? e.message
-          : "Failed to load activity";
+      if (isAbortError(e) || version !== this.loadVersion || !this.activityRead.isCurrent(signal))
+        return;
+      this.error = e instanceof Error ? e.message : "Failed to load activity";
       this.buckets = [];
       this.cachedSessionId = sessionId;
       this.loaded = true;

@@ -6,32 +6,22 @@ import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import SubagentInline from "./SubagentInline.svelte";
 
-const {
-  getMessages,
-  getSession,
-  childSessions,
-  callGenerated,
-} = vi.hoisted(() => ({
+const { getMessages, getSession, childSessions, callGenerated } = vi.hoisted(() => ({
   getMessages: vi.fn(),
   getSession: vi.fn(),
   childSessions: new Map<string, Session>(),
-  callGenerated: vi.fn(
-    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
-  ),
+  callGenerated: vi.fn((request: () => Promise<unknown>, _signal?: AbortSignal) => request()),
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
   callGenerated,
   isAbortError: vi.fn(() => false),
 }));
 
 vi.mock("../../api/generated/index", () => ({
   SessionsService: {
-    getApiV1SessionsIdMessages: vi.fn(({ id, limit }) =>
-      getMessages(id, { limit })
-    ),
-    getApiV1SessionsId: vi.fn(({ id }) => getSession(id)),
+    getApiV1SessionsByIdMessages: vi.fn(({ id }, params) => getMessages(id, params)),
+    getApiV1SessionsById: vi.fn(({ id }) => getSession(id)),
   },
 }));
 
@@ -51,9 +41,7 @@ vi.mock("../../stores/router.svelte.js", () => ({
   },
 }));
 
-function makeSession(
-  overrides: Partial<Session> = {},
-): Session {
+function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: "subagent-session-id",
     project: "proj-a",
@@ -80,8 +68,8 @@ afterEach(() => {
   getMessages.mockReset();
   getSession.mockReset();
   callGenerated.mockReset();
-  callGenerated.mockImplementation(
-    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  callGenerated.mockImplementation((request: () => Promise<unknown>, _signal?: AbortSignal) =>
+    request(),
   );
   document.body.innerHTML = "";
 });
@@ -100,9 +88,7 @@ describe("SubagentInline", () => {
       props: { sessionId: "subagent-session-id" },
     });
     await tick();
-    const toggle = document.querySelector<HTMLButtonElement>(
-      ".subagent-toggle",
-    )!;
+    const toggle = document.querySelector<HTMLButtonElement>(".subagent-toggle")!;
 
     toggle.click();
     await tick();
@@ -116,10 +102,7 @@ describe("SubagentInline", () => {
 
   it("renders subagent controls in Simplified Chinese", async () => {
     setLocale("zh-CN");
-    childSessions.set(
-      "subagent-session-id",
-      makeSession({ message_count: 2 }),
-    );
+    childSessions.set("subagent-session-id", makeSession({ message_count: 2 }));
     getMessages.mockResolvedValue({
       messages: [],
       count: 0,
@@ -134,9 +117,7 @@ describe("SubagentInline", () => {
     await tick();
     expect(document.body.textContent).toContain("Subagent 会话");
     expect(document.body.textContent).toContain("2 条消息");
-    const openLink = document.querySelector<HTMLAnchorElement>(
-      ".open-session-link",
-    );
+    const openLink = document.querySelector<HTMLAnchorElement>(".open-session-link");
     expect(openLink?.textContent).toContain("打开会话");
     expect(openLink?.getAttribute("title")).toBe("作为完整会话打开");
 
@@ -149,10 +130,7 @@ describe("SubagentInline", () => {
   });
 
   it("prefers fetched session metadata for the token summary when available", async () => {
-    childSessions.set(
-      "subagent-session-id",
-      makeSession(),
-    );
+    childSessions.set("subagent-session-id", makeSession());
     getMessages.mockResolvedValue({
       messages: [],
       count: 0,
@@ -170,15 +148,11 @@ describe("SubagentInline", () => {
     });
 
     await tick();
-    expect(
-      document.querySelector(".toggle-tokens")?.textContent,
-    ).toContain("— ctx / 180 out");
+    expect(document.querySelector(".toggle-tokens")?.textContent).toContain("— ctx / 180 out");
 
     document.querySelector<HTMLButtonElement>(".subagent-toggle")?.click();
     await vi.waitFor(() => {
-      expect(
-        document.querySelector(".toggle-tokens")?.textContent,
-      ).toContain("2.4k ctx / 180 out");
+      expect(document.querySelector(".toggle-tokens")?.textContent).toContain("2.4k ctx / 180 out");
     });
 
     unmount(component);

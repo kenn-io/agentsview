@@ -3,8 +3,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"io"
-	"log"
 	"testing"
 )
 
@@ -44,9 +42,6 @@ const (
 // instead of filling with outside-run hits.
 func seedContentSearchBench(b *testing.B, d *DB) {
 	b.Helper()
-	origLog := log.Writer()
-	log.SetOutput(io.Discard)
-	b.Cleanup(func() { log.SetOutput(origLog) })
 	for i := range benchContentSessions {
 		sessionID := fmt.Sprintf("bench-search-%03d", i)
 		if err := d.UpsertSession(Session{

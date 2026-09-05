@@ -3,7 +3,6 @@
   import { m } from "../../i18n/index.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { ConfigService } from "../../api/generated/index";
-  import { configureGeneratedClient } from "../../api/runtime.js";
 
   let tokenInput: string = $state("");
   let saving: boolean = $state(false);
@@ -17,10 +16,7 @@
     success = null;
     try {
       await settings.runMutation(async () => {
-        configureGeneratedClient();
-        await ConfigService.postApiV1ConfigGithub({
-          requestBody: { token: tokenInput.trim() },
-        });
+        await ConfigService.postApiV1ConfigGithub({ token: tokenInput.trim() });
         tokenInput = "";
         success = m.settings_github_token_saved();
         await settings.load();

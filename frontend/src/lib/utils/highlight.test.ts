@@ -9,15 +9,13 @@ function makeDiv(html: string): HTMLElement {
 }
 
 function marks(el: HTMLElement): string[] {
-  return Array.from(el.querySelectorAll("mark.search-highlight")).map(
-    (m) => m.textContent ?? "",
-  );
+  return Array.from(el.querySelectorAll("mark.search-highlight")).map((m) => m.textContent ?? "");
 }
 
 function currentMarks(el: HTMLElement): string[] {
-  return Array.from(
-    el.querySelectorAll("mark.search-highlight--current"),
-  ).map((m) => m.textContent ?? "");
+  return Array.from(el.querySelectorAll("mark.search-highlight--current")).map(
+    (m) => m.textContent ?? "",
+  );
 }
 
 describe("applyHighlight", () => {
@@ -164,8 +162,7 @@ describe("applyMarks cross-text-node matching", () => {
   it("marks a phrase that spans sibling <span> elements", () => {
     // Shiki splits "const foo" across three token spans.
     const div = document.createElement("div");
-    div.innerHTML =
-      "<span>const</span><span> </span><span>foo</span>";
+    div.innerHTML = "<span>const</span><span> </span><span>foo</span>";
 
     applyMarks(div, "const foo", false);
 
@@ -174,9 +171,7 @@ describe("applyMarks cross-text-node matching", () => {
     const combined = markEls.map((m) => m.textContent ?? "").join("");
     expect(combined).toBe("const foo");
     // No --current class since isCurrent is false.
-    expect(
-      div.querySelectorAll("mark.search-highlight--current"),
-    ).toHaveLength(0);
+    expect(div.querySelectorAll("mark.search-highlight--current")).toHaveLength(0);
   });
 
   it("marks a phrase spanning exactly two adjacent text nodes", () => {
@@ -210,9 +205,7 @@ describe("applyMarks cross-text-node matching", () => {
 
     applyMarks(div, "const foo", true);
 
-    const markEls = Array.from(
-      div.querySelectorAll("mark.search-highlight--current"),
-    );
+    const markEls = Array.from(div.querySelectorAll("mark.search-highlight--current"));
     const combined = markEls.map((m) => m.textContent ?? "").join("");
     expect(combined).toBe("const foo");
     expect(markEls.length).toBeGreaterThanOrEqual(1);

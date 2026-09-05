@@ -1,8 +1,5 @@
 import type { Message } from "../api/types.js";
-import {
-  extractToolParamMeta,
-  generateFallbackContent,
-} from "./tool-params.js";
+import { extractToolParamMeta, generateFallbackContent } from "./tool-params.js";
 
 /**
  * Format a message for clipboard copy, including tool call content.
@@ -26,9 +23,7 @@ export function formatMessageForCopy(message: Message): string {
       }
       const meta = extractToolParamMeta(tc.category ?? "", params) ?? [];
       const metaStr = meta.map((m) => `${m.label}: ${m.value}`).join(" | ");
-      const header = metaStr
-        ? `[${tc.tool_name}] ${metaStr}`
-        : `[${tc.tool_name}]`;
+      const header = metaStr ? `[${tc.tool_name}] ${metaStr}` : `[${tc.tool_name}]`;
 
       parts.push(header);
 

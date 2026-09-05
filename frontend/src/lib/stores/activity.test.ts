@@ -30,7 +30,6 @@ vi.mock("../api/activity-report.js", () => ({
   fetchActivitySessions: api.getActivitySessions,
 }));
 vi.mock("../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
   callGenerated: apiRuntimeMocks.callGenerated,
   isAbortError: vi.fn(() => false),
 }));
@@ -415,10 +414,10 @@ describe("loadFilterOptions", () => {
 
     await activity.loadFilterOptions();
 
-    const full = { includeOneShot: true, includeAutomated: true };
-    expect(api.getProjects).toHaveBeenCalledWith(full);
-    expect(api.getAgents).toHaveBeenCalledWith(full);
-    expect(api.getMachines).toHaveBeenCalledWith(full);
+    const full = { include_one_shot: true, include_automated: true };
+    expect(api.getProjects.mock.lastCall?.[0]).toEqual(full);
+    expect(api.getAgents.mock.lastCall?.[0]).toEqual(full);
+    expect(api.getMachines.mock.lastCall?.[0]).toEqual(full);
 
     expect(activity.projects).toEqual([{ name: "proj-a", count: 1 }]);
     expect(activity.agents).toEqual([{ name: "claude", count: 2 }]);

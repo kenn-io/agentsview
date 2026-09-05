@@ -58,10 +58,7 @@ class EventsStore {
   /** Subscribe with a trailing-edge debounce. The callback fires
    * once, `delayMs` after the last event in a burst, with the
    * most recent event's payload. Returns unsubscribe. */
-  subscribeDebounced(
-    fn: Listener,
-    delayMs = 300,
-  ): () => void {
+  subscribeDebounced(fn: Listener, delayMs = 300): () => void {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let latest: DataChangedEvent | null = null;
 
@@ -172,10 +169,7 @@ class EventsStore {
   // subscribe so module import has no global side effect.
   private installVisibilityHandler() {
     if (this.visibilityHandlerInstalled) return;
-    if (
-      typeof document === "undefined" ||
-      typeof document.addEventListener !== "function"
-    ) {
+    if (typeof document === "undefined" || typeof document.addEventListener !== "function") {
       return;
     }
     this.visibilityHandlerInstalled = true;

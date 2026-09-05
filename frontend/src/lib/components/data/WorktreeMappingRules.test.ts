@@ -7,8 +7,7 @@ import WorktreeMappingRules from "./WorktreeMappingRules.svelte";
 import { DataService, SettingsService } from "../../api/generated/index";
 
 vi.mock("../../api/runtime.js", async (importOriginal) => {
-  const orig =
-    await importOriginal<typeof import("../../api/runtime.js")>();
+  const orig = await importOriginal<typeof import("../../api/runtime.js")>();
   return {
     ...orig,
     callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
@@ -16,8 +15,7 @@ vi.mock("../../api/runtime.js", async (importOriginal) => {
 });
 
 vi.mock("../../api/generated/index", async (importOriginal) => {
-  const orig =
-    await importOriginal<typeof import("../../api/generated/index")>();
+  const orig = await importOriginal<typeof import("../../api/generated/index")>();
   return {
     ...orig,
     DataService: {
@@ -25,8 +23,8 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
     },
     SettingsService: {
       postApiV1SettingsWorktreeMappings: vi.fn(),
-      putApiV1SettingsWorktreeMappingsId: vi.fn(),
-      deleteApiV1SettingsWorktreeMappingsId: vi.fn(),
+      putApiV1SettingsWorktreeMappingsById: vi.fn(),
+      deleteApiV1SettingsWorktreeMappingsById: vi.fn(),
       postApiV1SettingsWorktreeMappingsApply: vi.fn(),
     },
   };
@@ -38,8 +36,8 @@ const dataService = DataService as unknown as {
 
 const settingsService = SettingsService as unknown as {
   postApiV1SettingsWorktreeMappings: ReturnType<typeof vi.fn>;
-  putApiV1SettingsWorktreeMappingsId: ReturnType<typeof vi.fn>;
-  deleteApiV1SettingsWorktreeMappingsId: ReturnType<typeof vi.fn>;
+  putApiV1SettingsWorktreeMappingsById: ReturnType<typeof vi.fn>;
+  deleteApiV1SettingsWorktreeMappingsById: ReturnType<typeof vi.fn>;
   postApiV1SettingsWorktreeMappingsApply: ReturnType<typeof vi.fn>;
 };
 
@@ -105,8 +103,8 @@ describe("WorktreeMappingRules", () => {
     vi.clearAllMocks();
     dataService.getApiV1DataProjectRules.mockReset();
     settingsService.postApiV1SettingsWorktreeMappings.mockReset();
-    settingsService.putApiV1SettingsWorktreeMappingsId.mockReset();
-    settingsService.deleteApiV1SettingsWorktreeMappingsId.mockReset();
+    settingsService.putApiV1SettingsWorktreeMappingsById.mockReset();
+    settingsService.deleteApiV1SettingsWorktreeMappingsById.mockReset();
     settingsService.postApiV1SettingsWorktreeMappingsApply.mockReset();
     onMachineChange = vi.fn<(machine: string) => void>();
     onSelectProject = vi.fn<(label: string) => void>();
@@ -119,9 +117,7 @@ describe("WorktreeMappingRules", () => {
   });
 
   it("renders the rules as a table with the seven columns", async () => {
-    dataService.getApiV1DataProjectRules.mockResolvedValue(
-      response("remote-host", [rule()]),
-    );
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
 
     component = mountRules();
     await flush();
@@ -153,14 +149,12 @@ describe("WorktreeMappingRules", () => {
   });
 
   it("still loads and renders the table read-only with mutations unavailable", async () => {
-    dataService.getApiV1DataProjectRules.mockResolvedValue(
-      response("remote-host", [rule()]),
-    );
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
 
     component = mountRules({ readOnly: true });
     await flush();
 
-    expect(dataService.getApiV1DataProjectRules).toHaveBeenCalledWith({
+    expect(dataService.getApiV1DataProjectRules.mock.lastCall?.[0]).toEqual({
       machine: undefined,
     });
     expect(document.querySelector("table")).not.toBeNull();
@@ -173,8 +167,8 @@ describe("WorktreeMappingRules", () => {
     expect(screen.queryByRole("button", { name: "Add mapping" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Apply mappings" })).toBeNull();
     expect(settingsService.postApiV1SettingsWorktreeMappings).not.toHaveBeenCalled();
-    expect(settingsService.putApiV1SettingsWorktreeMappingsId).not.toHaveBeenCalled();
-    expect(settingsService.deleteApiV1SettingsWorktreeMappingsId).not.toHaveBeenCalled();
+    expect(settingsService.putApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();
+    expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();
     expect(settingsService.postApiV1SettingsWorktreeMappingsApply).not.toHaveBeenCalled();
   });
 
@@ -233,7 +227,7 @@ describe("WorktreeMappingRules", () => {
     await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
     await flush();
 
-    expect(dataService.getApiV1DataProjectRules).toHaveBeenNthCalledWith(2, {
+    expect(dataService.getApiV1DataProjectRules.mock.calls[1]?.[0]).toEqual({
       machine: "remote-host",
     });
     expect(document.body.textContent).toContain("remote-project");
@@ -272,7 +266,7 @@ describe("WorktreeMappingRules", () => {
     component = mountRules();
     await flush();
 
-    expect(dataService.getApiV1DataProjectRules).toHaveBeenCalledWith({
+    expect(dataService.getApiV1DataProjectRules.mock.lastCall?.[0]).toEqual({
       machine: undefined,
     });
     const typeahead = screen.getByRole("button", { name: "Select machine" });
@@ -280,16 +274,14 @@ describe("WorktreeMappingRules", () => {
   });
 
   it("preselects the machine named by the machine prop", async () => {
-    dataService.getApiV1DataProjectRules.mockResolvedValue(
-      response("remote-host", [rule()]),
-    );
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
 
     component = mountRules({ machine: "remote-host" });
     await flush();
 
-    expect(dataService.getApiV1DataProjectRules).toHaveBeenCalledWith(
-      { machine: "remote-host" },
-    );
+    expect(dataService.getApiV1DataProjectRules.mock.lastCall?.[0]).toEqual({
+      machine: "remote-host",
+    });
     expect(document.body.textContent).toContain("canonical-project");
   });
 
@@ -297,7 +289,9 @@ describe("WorktreeMappingRules", () => {
     let resolveRemote!: (value: unknown) => void;
     let resolveLocal!: (value: unknown) => void;
     dataService.getApiV1DataProjectRules
-      .mockResolvedValueOnce(response("local-host", [rule({ machine: "local-host", project: "local-project" })]))
+      .mockResolvedValueOnce(
+        response("local-host", [rule({ machine: "local-host", project: "local-project" })]),
+      )
       .mockReturnValueOnce(new Promise((resolve) => (resolveRemote = resolve)))
       .mockReturnValueOnce(new Promise((resolve) => (resolveLocal = resolve)));
 
@@ -312,10 +306,10 @@ describe("WorktreeMappingRules", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "local-host" }));
 
-    expect(dataService.getApiV1DataProjectRules).toHaveBeenNthCalledWith(2, {
+    expect(dataService.getApiV1DataProjectRules.mock.calls[1]?.[0]).toEqual({
       machine: "remote-host",
     });
-    expect(dataService.getApiV1DataProjectRules).toHaveBeenNthCalledWith(3, {
+    expect(dataService.getApiV1DataProjectRules.mock.calls[2]?.[0]).toEqual({
       machine: "local-host",
     });
 
@@ -342,7 +336,7 @@ describe("WorktreeMappingRules", () => {
       created_at: "2026-07-04T00:00:00.000Z",
       updated_at: "2026-07-04T00:00:00.000Z",
     });
-    settingsService.putApiV1SettingsWorktreeMappingsId.mockResolvedValue({
+    settingsService.putApiV1SettingsWorktreeMappingsById.mockResolvedValue({
       id: 1,
       machine: "test",
       path_prefix: "/tmp/service",
@@ -376,21 +370,17 @@ describe("WorktreeMappingRules", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Add mapping" }));
     await flush();
 
-    expect(
-      settingsService.postApiV1SettingsWorktreeMappings,
-    ).toHaveBeenCalledWith({
-      requestBody: {
-        path_prefix: "/tmp/service",
-        layout: "repo_dot_worktrees",
-        project: "",
-        enabled: true,
-        machine: "remote-host",
-      },
+    expect(settingsService.postApiV1SettingsWorktreeMappings).toHaveBeenCalledWith({
+      path_prefix: "/tmp/service",
+      layout: "repo_dot_worktrees",
+      project: "",
+      enabled: true,
+      machine: "remote-host",
     });
 
     await fireEvent.click(screen.getByRole("button", { name: "Apply mappings" }));
     expect(settingsService.postApiV1SettingsWorktreeMappingsApply).toHaveBeenCalledWith({
-      requestBody: { machine: "remote-host" },
+      machine: "remote-host",
     });
   });
 
@@ -427,10 +417,12 @@ describe("WorktreeMappingRules", () => {
 
     expect(dataService.getApiV1DataProjectRules).toHaveBeenCalledTimes(2);
     expect(document.body.textContent).toContain("remote-project");
-    expect((screen.getByRole("textbox", { name: "Path prefix" }) as HTMLInputElement).value)
-      .toBe("/worktrees/remote");
-    expect((screen.getByRole("textbox", { name: "Project" }) as HTMLInputElement).value)
-      .toBe("remote-draft");
+    expect((screen.getByRole("textbox", { name: "Path prefix" }) as HTMLInputElement).value).toBe(
+      "/worktrees/remote",
+    );
+    expect((screen.getByRole("textbox", { name: "Project" }) as HTMLInputElement).value).toBe(
+      "remote-draft",
+    );
     expect(document.body.textContent).not.toContain("local-project");
   });
 
@@ -454,8 +446,9 @@ describe("WorktreeMappingRules", () => {
 
     expect(document.body.textContent).toContain("remote-project");
     expect(document.body.textContent).not.toContain("local apply failed");
-    expect((screen.getByRole("button", { name: "Apply mappings" }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Apply mappings" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   it("does not show a stale apply result after the selected machine changes", async () => {
@@ -513,7 +506,7 @@ describe("WorktreeMappingRules", () => {
     dataService.getApiV1DataProjectRules
       .mockResolvedValueOnce(response("local-host", [rule({ machine: "local-host" })]))
       .mockResolvedValueOnce(response("remote-host", [rule({ project: "remote-project" })]));
-    settingsService.deleteApiV1SettingsWorktreeMappingsId.mockReturnValue(deletion.promise);
+    settingsService.deleteApiV1SettingsWorktreeMappingsById.mockReturnValue(deletion.promise);
 
     component = mountRules({ onMachineChange: undefined });
     await flush();
@@ -533,9 +526,7 @@ describe("WorktreeMappingRules", () => {
 
   it("notifies onMutated after a successful save and apply, but not on a failed save", async () => {
     const onMutated = vi.fn();
-    dataService.getApiV1DataProjectRules.mockResolvedValue(
-      response("remote-host", [rule()]),
-    );
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
     settingsService.postApiV1SettingsWorktreeMappings
       .mockRejectedValueOnce(new Error("save failed"))
       .mockResolvedValueOnce(rule({ id: 2, path_prefix: "/srv/new" }));
@@ -572,28 +563,28 @@ describe("WorktreeMappingRules", () => {
   });
 
   it("shows remembered original labels and confirms delete", async () => {
-    dataService.getApiV1DataProjectRules.mockResolvedValue(
-      response("remote-host", [rule()]),
-    );
-    settingsService.deleteApiV1SettingsWorktreeMappingsId.mockResolvedValue(undefined);
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
+    settingsService.deleteApiV1SettingsWorktreeMappingsById.mockResolvedValue(undefined);
     component = mountRules();
     await flush();
 
     expect(document.body.textContent).toContain("branch-label");
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(settingsService.deleteApiV1SettingsWorktreeMappingsId).not.toHaveBeenCalled();
+    expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog").textContent).toContain("source files still exist");
     expect(screen.getByRole("dialog").textContent).toContain("Orphaned sessions");
 
     await fireEvent.click(screen.getByRole("button", { name: "Delete mapping" }));
-    expect(settingsService.deleteApiV1SettingsWorktreeMappingsId).toHaveBeenCalledWith({ id: "1" });
+    expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).toHaveBeenCalledWith({
+      id: "1",
+    });
   });
 
   it("confirms an enabled-to-disabled save before updating", async () => {
-    dataService.getApiV1DataProjectRules.mockResolvedValue(
-      response("remote-host", [rule()]),
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
+    settingsService.putApiV1SettingsWorktreeMappingsById.mockResolvedValue(
+      rule({ enabled: false }),
     );
-    settingsService.putApiV1SettingsWorktreeMappingsId.mockResolvedValue(rule({ enabled: false }));
     component = mountRules();
     await flush();
 
@@ -601,18 +592,18 @@ describe("WorktreeMappingRules", () => {
     await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
     await fireEvent.click(screen.getByRole("button", { name: "Save mapping" }));
 
-    expect(settingsService.putApiV1SettingsWorktreeMappingsId).not.toHaveBeenCalled();
+    expect(settingsService.putApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "Disable mapping?" })).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Disable mapping" }));
-    expect(settingsService.putApiV1SettingsWorktreeMappingsId).toHaveBeenCalledWith({
-      id: "1",
-      requestBody: {
+    expect(settingsService.putApiV1SettingsWorktreeMappingsById).toHaveBeenCalledWith(
+      { id: "1" },
+      {
         enabled: false,
         layout: "explicit",
         machine: "remote-host",
         path_prefix: "/srv/worktrees/example",
         project: "canonical-project",
       },
-    });
+    );
   });
 });

@@ -23,10 +23,7 @@ describe("PerfStore", () => {
       status: "ok",
     });
 
-    expect(perf.entries.map((entry) => entry.kind)).toEqual([
-      "panel",
-      "api",
-    ]);
+    expect(perf.entries.map((entry) => entry.kind)).toEqual(["panel", "api"]);
     expect(perf.entries[0]).toMatchObject({
       kind: "panel",
       route: "usage",
@@ -46,11 +43,7 @@ describe("PerfStore", () => {
       });
     }
 
-    expect(perf.entries.map((entry) => entry.name)).toEqual([
-      "panel-4",
-      "panel-3",
-      "panel-2",
-    ]);
+    expect(perf.entries.map((entry) => entry.name)).toEqual(["panel-4", "panel-3", "panel-2"]);
 
     perf.clear();
     expect(perf.entries).toEqual([]);

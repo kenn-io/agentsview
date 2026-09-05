@@ -1,8 +1,4 @@
-import {
-  daysAgo,
-  localDateStr,
-  today,
-} from "../../utils/dates.js";
+import { daysAgo, localDateStr, today } from "../../utils/dates.js";
 
 export interface DateRange {
   from: string;
@@ -41,10 +37,7 @@ export function allFromDate(earliestSession: string | null | undefined): string 
  * tab and labels presets with the same semantics, and rollingRange() in
  * utils/dates.ts.
  */
-export function presetRange(
-  days: number,
-  earliestSession: string | null | undefined,
-): DateRange {
+export function presetRange(days: number, earliestSession: string | null | undefined): DateRange {
   return {
     from: days === 0 ? allFromDate(earliestSession) : daysAgo(days - 1),
     to: todayStr(),

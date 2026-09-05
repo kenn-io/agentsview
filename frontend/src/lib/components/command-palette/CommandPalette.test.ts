@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  describe,
-  it,
-  expect,
-  vi,
-  beforeEach,
-} from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 import { ApiError } from "../../api/runtime.js";
 import { registerShortcuts } from "../../utils/keyboard.js";
@@ -17,59 +11,55 @@ const {
   mockRouter,
   mockCopyToClipboard,
   mockEmbeddingsService,
-} = vi.hoisted(
-  () => ({
-    mockUi: {
-      activeModal: "commandPalette" as
-        | "commandPalette"
-        | null,
-      scrollToOrdinal: vi.fn(),
-      clearSelection: vi.fn(),
-      clearScrollState: vi.fn(),
-    },
-    mockSessions: {
-      activeSessionId: null as string | null,
-      sessions: [] as Array<{
-        id: string;
-        project: string;
-        machine: string;
-        agent: string;
-        first_message: string | null;
-        started_at: string | null;
-        ended_at: string | null;
-        message_count: number;
-        user_message_count: number;
-        created_at: string;
-      }>,
-      filters: { project: "" },
-      deselectSession: vi.fn(),
-    },
-    mockSearchStore: {
-      results: [] as Array<unknown>,
-      isSearching: false,
-      error: null as {
-        detail: string | null;
-        kind: "generic" | "timeout" | "semantic-unavailable";
-      } | null,
-      mode: "fulltext" as "fulltext" | "semantic" | "hybrid",
-      sort: "relevance" as "relevance" | "recency",
-      search: vi.fn(),
-      clear: vi.fn(),
-      resetSort: vi.fn(),
-      retry: vi.fn(),
-      setMode: vi.fn(),
-      setSort: vi.fn(),
-    },
-    mockRouter: {
-      navigateToSession: vi.fn(),
-    },
-    mockCopyToClipboard: vi.fn(),
-    mockEmbeddingsService: {
-      getApiV1EmbeddingsStatus: vi.fn(),
-      postApiV1EmbeddingsBuild: vi.fn(),
-    },
-  }),
-);
+} = vi.hoisted(() => ({
+  mockUi: {
+    activeModal: "commandPalette" as "commandPalette" | null,
+    scrollToOrdinal: vi.fn(),
+    clearSelection: vi.fn(),
+    clearScrollState: vi.fn(),
+  },
+  mockSessions: {
+    activeSessionId: null as string | null,
+    sessions: [] as Array<{
+      id: string;
+      project: string;
+      machine: string;
+      agent: string;
+      first_message: string | null;
+      started_at: string | null;
+      ended_at: string | null;
+      message_count: number;
+      user_message_count: number;
+      created_at: string;
+    }>,
+    filters: { project: "" },
+    deselectSession: vi.fn(),
+  },
+  mockSearchStore: {
+    results: [] as Array<unknown>,
+    isSearching: false,
+    error: null as {
+      detail: string | null;
+      kind: "generic" | "timeout" | "semantic-unavailable";
+    } | null,
+    mode: "fulltext" as "fulltext" | "semantic" | "hybrid",
+    sort: "relevance" as "relevance" | "recency",
+    search: vi.fn(),
+    clear: vi.fn(),
+    resetSort: vi.fn(),
+    retry: vi.fn(),
+    setMode: vi.fn(),
+    setSort: vi.fn(),
+  },
+  mockRouter: {
+    navigateToSession: vi.fn(),
+  },
+  mockCopyToClipboard: vi.fn(),
+  mockEmbeddingsService: {
+    getApiV1EmbeddingsStatus: vi.fn(),
+    postApiV1EmbeddingsBuild: vi.fn(),
+  },
+}));
 
 vi.mock("../../stores/ui.svelte.js", () => ({
   ui: mockUi,
@@ -100,8 +90,7 @@ vi.mock("../../utils/clipboard.js", () => ({
 // exercise the wiring without embeddings API behavior (covered in
 // SemanticSetupHelp.test.ts).
 vi.mock("../../api/generated/index.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../api/generated/index.js")>();
+  const actual = await importOriginal<typeof import("../../api/generated/index.js")>();
   return {
     ...actual,
     EmbeddingsService: mockEmbeddingsService,
@@ -116,18 +105,13 @@ import CommandPalette from "./CommandPalette.svelte";
  * Svelte 5's microtask scheduler requires explicit tick() calls to flush DOM
  * updates in jsdom — setTimeout-based waitFor() retries don't drive it.
  */
-async function tickUntil(
-  selector: string,
-  maxTicks = 20,
-): Promise<HTMLElement> {
+async function tickUntil(selector: string, maxTicks = 20): Promise<HTMLElement> {
   for (let i = 0; i < maxTicks; i++) {
     await tick();
     const el = document.querySelector<HTMLElement>(selector);
     if (el) return el;
   }
-  throw new Error(
-    `"${selector}" not found after ${maxTicks} tick() calls`,
-  );
+  throw new Error(`"${selector}" not found after ${maxTicks} tick() calls`);
 }
 
 function makeSession(id: string, agent: string) {
@@ -147,9 +131,7 @@ function makeSession(id: string, agent: string) {
   };
 }
 
-function makeSearchResult(
-  overrides: Record<string, unknown> = {},
-) {
+function makeSearchResult(overrides: Record<string, unknown> = {}) {
   return {
     session_id: "codex:search123",
     project: "proj-a",
@@ -182,9 +164,7 @@ describe("CommandPalette", () => {
     mockSearchStore.mode = "fulltext";
     mockSearchStore.sort = "relevance";
     mockEmbeddingsService.getApiV1EmbeddingsStatus.mockReset();
-    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockImplementation(
-      () => new Promise(() => {}),
-    );
+    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() => new Promise(() => {}));
     mockEmbeddingsService.postApiV1EmbeddingsBuild.mockReset();
     mockSessions.activeSessionId = null;
     mockSessions.deselectSession.mockImplementation(() => {
@@ -192,10 +172,7 @@ describe("CommandPalette", () => {
     });
     mockUi.activeModal = "commandPalette";
     mockSessions.filters.project = "";
-    mockSessions.sessions = [
-      makeSession("s1", "cursor"),
-      makeSession("s2", "unknown"),
-    ];
+    mockSessions.sessions = [makeSession("s1", "cursor"), makeSession("s2", "unknown")];
   });
 
   it("uses agentColor for recent-session dots including fallback", async () => {
@@ -205,16 +182,10 @@ describe("CommandPalette", () => {
 
     await tick();
 
-    const dots = Array.from(
-      document.querySelectorAll<HTMLElement>(".item-dot"),
-    );
+    const dots = Array.from(document.querySelectorAll<HTMLElement>(".item-dot"));
     expect(dots).toHaveLength(2);
-    expect(dots[0]?.getAttribute("style")).toContain(
-      "var(--accent-black)",
-    );
-    expect(dots[1]?.getAttribute("style")).toContain(
-      "var(--accent-blue)",
-    );
+    expect(dots[0]?.getAttribute("style")).toContain("var(--accent-black)");
+    expect(dots[1]?.getAttribute("style")).toContain("var(--accent-blue)");
 
     unmount(component);
   });
@@ -362,8 +333,7 @@ describe("CommandPalette", () => {
     function typeChar(char: string) {
       const start = input.selectionStart ?? input.value.length;
       const end = input.selectionEnd ?? input.value.length;
-      input.value =
-        input.value.slice(0, start) + char + input.value.slice(end);
+      input.value = input.value.slice(0, start) + char + input.value.slice(end);
       input.setSelectionRange(start + 1, start + 1);
       input.dispatchEvent(
         new InputEvent("input", { bubbles: true, inputType: "insertText", data: char }),
@@ -388,9 +358,7 @@ describe("CommandPalette", () => {
   });
 
   it("search result click navigates to the session route", async () => {
-    mockSearchStore.results = [
-      makeSearchResult(),
-    ];
+    mockSearchStore.results = [makeSearchResult()];
 
     const component = mount(CommandPalette, { target: document.body });
     await tick();
@@ -430,9 +398,7 @@ describe("CommandPalette", () => {
     const group = controls.querySelector<HTMLElement>(
       '[role="radiogroup"][aria-label="Search mode"]',
     );
-    const radios = Array.from(
-      controls.querySelectorAll<HTMLElement>('[role="radio"]'),
-    );
+    const radios = Array.from(controls.querySelectorAll<HTMLElement>('[role="radio"]'));
 
     expect(inputWrap.nextElementSibling).toBe(controls);
     expect(group).not.toBeNull();
@@ -457,17 +423,11 @@ describe("CommandPalette", () => {
     await enterSearchQuery();
 
     const controls = document.querySelector<HTMLElement>(".palette-controls")!;
-    const radios = Array.from(
-      controls.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
-    );
+    const radios = Array.from(controls.querySelectorAll<HTMLButtonElement>('[role="radio"]'));
     radios[1]?.click();
-    radios[0]?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
-    );
+    radios[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
     for (const key of ["Enter", " "]) {
-      radios[0]?.dispatchEvent(
-        new KeyboardEvent("keydown", { key, bubbles: true }),
-      );
+      radios[0]?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
     }
     await tick();
 
@@ -476,9 +436,7 @@ describe("CommandPalette", () => {
     expect(mockSearchStore.retry).not.toHaveBeenCalled();
     expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 
-    radios[0]?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-    );
+    radios[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await tick();
     expect(mockUi.activeModal).toBeNull();
 
@@ -589,9 +547,7 @@ describe("CommandPalette", () => {
 
     const error = document.querySelector(".palette-error");
     expect(error?.querySelector("strong")?.textContent).toBe("Search unavailable");
-    expect(error?.querySelector("span")?.textContent).toBe(
-      "Search failed. Please try again.",
-    );
+    expect(error?.querySelector("span")?.textContent).toBe("Search failed. Please try again.");
 
     unmount(component);
   });
@@ -606,17 +562,15 @@ describe("CommandPalette", () => {
     await enterSearchQuery();
 
     const error = document.querySelector(".palette-error");
-    expect(error?.querySelector("strong")?.textContent).toBe(
-      "Search took too long",
-    );
+    expect(error?.querySelector("strong")?.textContent).toBe("Search took too long");
     expect(error?.querySelector("span")?.textContent).toBe(
       "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
     );
     expect(error?.textContent).not.toContain("request timed out");
 
-    const retry = Array.from(
-      error?.querySelectorAll<HTMLButtonElement>("button") ?? [],
-    ).find((button) => button.textContent?.trim() === "Retry");
+    const retry = Array.from(error?.querySelectorAll<HTMLButtonElement>("button") ?? []).find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
     expect(retry).toBeDefined();
     retry?.click();
     expect(mockSearchStore.retry).toHaveBeenCalledOnce();
@@ -644,28 +598,31 @@ describe("CommandPalette", () => {
   it.each([
     [
       "Build",
-      () => mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
-        running: false,
-        done: 0,
-        total: 0,
-        eta_milliseconds: 0,
-      }),
+      () =>
+        mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+          running: false,
+          done: 0,
+          total: 0,
+          eta_milliseconds: 0,
+        }),
       "button",
       "Build embeddings",
     ],
     [
       "Retry",
-      () => mockEmbeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
-        new Error("status probe failed"),
-      ),
+      () =>
+        mockEmbeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
+          new Error("status probe failed"),
+        ),
       "button",
       "Retry",
     ],
     [
       "Copy",
-      () => mockEmbeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
-        new ApiError(501, "embeddings manager not available"),
-      ),
+      () =>
+        mockEmbeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
+          new ApiError(501, "embeddings manager not available"),
+        ),
       "button.kit-copy-btn",
       "",
     ],
@@ -683,9 +640,9 @@ describe("CommandPalette", () => {
       await enterSearchQuery();
 
       const controls = await tickUntil(".semantic-setup");
-      const control = Array.from(
-        controls.querySelectorAll<HTMLButtonElement>(selector),
-      ).find((button) => !label || button.textContent?.includes(label));
+      const control = Array.from(controls.querySelectorAll<HTMLButtonElement>(selector)).find(
+        (button) => !label || button.textContent?.includes(label),
+      );
       expect(control).toBeDefined();
       control!.focus();
       expect(document.activeElement).toBe(control);

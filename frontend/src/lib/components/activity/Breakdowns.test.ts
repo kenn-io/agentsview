@@ -10,12 +10,21 @@ function makeReport(): Report {
   return {
     peak: { agents: 0, at: null },
     totals: {
-      active_minutes: 0, idle_minutes: 0, agent_minutes: 0, sessions: 0,
-      untimed_sessions: 0, distinct_projects: 0, distinct_models: 0,
-      output_tokens: 0, cost: testMoney(0),
-      automated_agent_minutes: 0, interactive_agent_minutes: 0,
-      automated_cost: testMoney(0), interactive_cost: testMoney(0),
-      automated_sessions: 0, interactive_sessions: 0,
+      active_minutes: 0,
+      idle_minutes: 0,
+      agent_minutes: 0,
+      sessions: 0,
+      untimed_sessions: 0,
+      distinct_projects: 0,
+      distinct_models: 0,
+      output_tokens: 0,
+      cost: testMoney(0),
+      automated_agent_minutes: 0,
+      interactive_agent_minutes: 0,
+      automated_cost: testMoney(0),
+      interactive_cost: testMoney(0),
+      automated_sessions: 0,
+      interactive_sessions: 0,
     },
     partial: false,
     as_of: null,
@@ -30,14 +39,24 @@ function makeReport(): Report {
     buckets: [],
     by_project: [
       {
-        key: "alpha", project_key: "pl1:sha256:alpha", agent_minutes: 30, cost: testMoney(0),
-        interactive_agent_minutes: 20, automated_agent_minutes: 10,
-        interactive_cost: testMoney(0), automated_cost: testMoney(0),
+        key: "alpha",
+        project_key: "pl1:sha256:alpha",
+        agent_minutes: 30,
+        cost: testMoney(0),
+        interactive_agent_minutes: 20,
+        automated_agent_minutes: 10,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
       },
       {
-        key: "beta", project_key: "pl1:sha256:beta", agent_minutes: 10, cost: testMoney(0),
-        interactive_agent_minutes: 10, automated_agent_minutes: 0,
-        interactive_cost: testMoney(0), automated_cost: testMoney(0),
+        key: "beta",
+        project_key: "pl1:sha256:beta",
+        agent_minutes: 10,
+        cost: testMoney(0),
+        interactive_agent_minutes: 10,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(0),
+        automated_cost: testMoney(0),
       },
     ],
     by_model: [],
@@ -103,14 +122,22 @@ describe("Breakdowns", () => {
     // usage; they must not render as empty "0" bars in the minutes view.
     report.by_project = [
       {
-        key: "timed", agent_minutes: 30, cost: testMoney(1),
-        interactive_agent_minutes: 30, automated_agent_minutes: 0,
-        interactive_cost: testMoney(1), automated_cost: testMoney(0),
+        key: "timed",
+        agent_minutes: 30,
+        cost: testMoney(1),
+        interactive_agent_minutes: 30,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(1),
+        automated_cost: testMoney(0),
       },
       {
-        key: "costonly", agent_minutes: 0, cost: testMoney(5),
-        interactive_agent_minutes: 0, automated_agent_minutes: 0,
-        interactive_cost: testMoney(5), automated_cost: testMoney(0),
+        key: "costonly",
+        agent_minutes: 0,
+        cost: testMoney(5),
+        interactive_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(5),
+        automated_cost: testMoney(0),
       },
     ] as Report["by_project"];
     const target = document.createElement("div");
@@ -130,14 +157,22 @@ describe("Breakdowns", () => {
     const report = makeReport();
     report.by_project = [
       {
-        key: "timed", agent_minutes: 30, cost: testMoney(1),
-        interactive_agent_minutes: 30, automated_agent_minutes: 0,
-        interactive_cost: testMoney(1), automated_cost: testMoney(0),
+        key: "timed",
+        agent_minutes: 30,
+        cost: testMoney(1),
+        interactive_agent_minutes: 30,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(1),
+        automated_cost: testMoney(0),
       },
       {
-        key: "costonly", agent_minutes: 0, cost: testMoney(5),
-        interactive_agent_minutes: 0, automated_agent_minutes: 0,
-        interactive_cost: testMoney(5), automated_cost: testMoney(0),
+        key: "costonly",
+        agent_minutes: 0,
+        cost: testMoney(5),
+        interactive_agent_minutes: 0,
+        automated_agent_minutes: 0,
+        interactive_cost: testMoney(5),
+        automated_cost: testMoney(0),
       },
     ] as Report["by_project"];
     const target = document.createElement("div");
@@ -182,8 +217,8 @@ describe("Breakdowns", () => {
 
   it("links project rows to Data and leaves other panels plain", async () => {
     const report = makeReport();
-    report.by_model = [{ ...report.by_project![0], key: "model-a" }];
-    report.by_agent = [{ ...report.by_project![0], key: "agent-a" }];
+    report.by_model = [{ ...report.by_project![0]!, key: "model-a" }];
+    report.by_agent = [{ ...report.by_project![0]!, key: "agent-a" }];
     const target = document.createElement("div");
     document.body.appendChild(target);
     const component = mount(Breakdowns, { target, props: { report } });
@@ -191,9 +226,7 @@ describe("Breakdowns", () => {
 
     const links = target.querySelectorAll("a.bar-label");
     expect(links).toHaveLength(2);
-    expect(links[0]!.getAttribute("href")).toBe(
-      "/data?project_key=pl1%3Asha256%3Aalpha",
-    );
+    expect(links[0]!.getAttribute("href")).toBe("/data?project_key=pl1%3Asha256%3Aalpha");
     expect(links[0]!.getAttribute("title")).toBe("View alpha in Data");
     // Model/agent panels render plain spans, and no action buttons remain.
     expect(target.querySelectorAll("span.bar-label")).toHaveLength(2);
@@ -212,9 +245,7 @@ describe("Breakdowns", () => {
 
     try {
       const link = target.querySelector("a.bar-label") as HTMLAnchorElement;
-      expect(link.getAttribute("href")).toBe(
-        "/data?desktop=&project_key=pl1%3Asha256%3Aalpha",
-      );
+      expect(link.getAttribute("href")).toBe("/data?desktop=&project_key=pl1%3Asha256%3Aalpha");
     } finally {
       unmount(component);
       window.history.replaceState(null, "", "/");

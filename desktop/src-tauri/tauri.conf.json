@@ -48,6 +48,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["agentsview"]
+      }
+    },
     "updater": {
       "pubkey": "NOT_SET",
       "endpoints": [

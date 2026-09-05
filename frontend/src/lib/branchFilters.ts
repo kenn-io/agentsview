@@ -15,19 +15,12 @@ function splitBranchFilterToken(token: string): {
     : { project: token.slice(0, i), branch: token.slice(i + 1) };
 }
 
-export function branchLabel(
-  project: string,
-  branch: string,
-  noBranchLabel: string,
-): string {
+export function branchLabel(project: string, branch: string, noBranchLabel: string): string {
   const label = branch || noBranchLabel;
   return project ? `${project}/${label}` : label;
 }
 
-export function branchTokenLabel(
-  token: string,
-  noBranchLabel: string,
-): string {
+export function branchTokenLabel(token: string, noBranchLabel: string): string {
   const { project, branch } = splitBranchFilterToken(token);
   return branchLabel(project, branch, noBranchLabel);
 }

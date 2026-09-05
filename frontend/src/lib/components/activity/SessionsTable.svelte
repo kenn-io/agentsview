@@ -35,7 +35,7 @@
   // by_session is typed `any[] | null` by the codegen; cast to the
   // generated element model for field-level type safety.
   const rows = $derived(
-    (report.by_session ?? []) as ActivitySessionRow[],
+    report.by_session ?? [],
   );
 
   function setSort(key: ActivitySessionSort) {

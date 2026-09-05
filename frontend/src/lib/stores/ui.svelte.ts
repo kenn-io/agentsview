@@ -33,13 +33,7 @@ type ModalType =
   | null;
 
 /** Block types that can be toggled visible/hidden. */
-export type BlockType =
-  | "user"
-  | "assistant"
-  | "thinking"
-  | "tool"
-  | "code"
-  | "system";
+export type BlockType = "user" | "assistant" | "thinking" | "tool" | "code" | "system";
 
 export const ALL_BLOCK_TYPES: BlockType[] = [
   "user",
@@ -53,8 +47,7 @@ export const ALL_BLOCK_TYPES: BlockType[] = [
 const BLOCK_FILTER_KEY = "agentsview-block-filters";
 const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
 const VITALS_KEY = "agentsview-session-vitals";
-const VITALS_CALLS_EXPANDED_KEY =
-  "agentsview-session-vitals-calls-expanded";
+const VITALS_CALLS_EXPANDED_KEY = "agentsview-session-vitals-calls-expanded";
 const SIGNAL_PANEL_KEY = "agentsview-signal-panel";
 const FOLLOW_LATEST_KEY = "agentsview-follow-latest";
 
@@ -65,9 +58,7 @@ export function parseBlockFilters(raw: string | null): Set<BlockType> {
 }
 
 /** Serializes the visible block types for storage. */
-export function serializeBlockFilters(
-  visible: Set<BlockType>,
-): string {
+export function serializeBlockFilters(visible: Set<BlockType>): string {
   return JSON.stringify({
     hidden: ALL_BLOCK_TYPES.filter((type) => !visible.has(type)),
   });
@@ -87,16 +78,12 @@ function parseHiddenBlocks(raw: string | null): Set<BlockType> {
 }
 
 function knownBlockTypes(values: unknown[]): BlockType[] {
-  return values.filter((value): value is BlockType =>
-    ALL_BLOCK_TYPES.includes(value as BlockType),
-  );
+  return values.filter((value): value is BlockType => ALL_BLOCK_TYPES.includes(value as BlockType));
 }
 
 function readBlockFilters(): Set<BlockType> {
   try {
-    return parseBlockFilters(
-      localStorage?.getItem(BLOCK_FILTER_KEY) ?? null,
-    );
+    return parseBlockFilters(localStorage?.getItem(BLOCK_FILTER_KEY) ?? null);
   } catch {
     return new Set(ALL_BLOCK_TYPES);
   }
@@ -104,20 +91,12 @@ function readBlockFilters(): Set<BlockType> {
 
 const LAYOUT_KEY = "agentsview-message-layout";
 const ZOOM_KEY = "agentsview-zoom-level";
-const VALID_TRANSCRIPT_MODES: TranscriptMode[] = [
-  "normal",
-  "focused",
-];
+const VALID_TRANSCRIPT_MODES: TranscriptMode[] = ["normal", "focused"];
 
 const IS_DESKTOP =
-  typeof window !== "undefined" &&
-  new URLSearchParams(window.location.search).has(
-    "desktop",
-  );
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("desktop");
 
-const ZOOM_STEPS = [
-  67, 75, 80, 90, 100, 110, 125, 150, 175, 200,
-];
+const ZOOM_STEPS = [67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
 const ZOOM_DEFAULT = 100;
 const FONT_SCALE_KEY = "agentsview-font-scale";
 const HIGH_CONTRAST_KEY = "agentsview-high-contrast";
@@ -134,13 +113,9 @@ type DesktopTauriBridge = {
   };
 };
 
-function currentDesktopWebviewWindow():
-  | DesktopTauriWebviewWindow
-  | undefined {
+function currentDesktopWebviewWindow(): DesktopTauriWebviewWindow | undefined {
   if (!IS_DESKTOP || typeof window === "undefined") return;
-  const tauri =
-    (window as Window & { __TAURI__?: DesktopTauriBridge })
-      .__TAURI__;
+  const tauri = (window as Window & { __TAURI__?: DesktopTauriBridge }).__TAURI__;
   return tauri?.webviewWindow?.getCurrentWebviewWindow?.();
 }
 
@@ -153,9 +128,7 @@ function syncDesktopZoom(scaleFactor: number): boolean {
   return true;
 }
 
-function composedRootZoom(
-  fontScale: number, zoomLevel: number,
-): string {
+function composedRootZoom(fontScale: number, zoomLevel: number): string {
   let scale = fontScale / 100;
   if (IS_DESKTOP && !currentDesktopWebviewWindow()) {
     scale *= zoomLevel / 100;
@@ -190,12 +163,7 @@ function readStoredFontScale(): number {
   return FONT_SCALE_DEFAULT;
 }
 
-const VALID_LAYOUTS: MessageLayout[] = [
-  "default",
-  "compact",
-  "stream",
-  "skim",
-];
+const VALID_LAYOUTS: MessageLayout[] = ["default", "compact", "stream", "skim"];
 // Theme state lives in kit-ui's theme store (mode/high-contrast persistence,
 // root class management, and OS-preference tracking in "system" mode). Reuse
 // the app's historical "theme" storage key — its stored "light"/"dark" values
@@ -225,10 +193,7 @@ initTheme({ storageKey: "theme" });
 function readStoredLayout(): MessageLayout {
   try {
     const raw = localStorage?.getItem(LAYOUT_KEY);
-    if (
-      raw &&
-      VALID_LAYOUTS.includes(raw as MessageLayout)
-    ) {
+    if (raw && VALID_LAYOUTS.includes(raw as MessageLayout)) {
       return raw as MessageLayout;
     }
   } catch {
@@ -240,10 +205,7 @@ function readStoredLayout(): MessageLayout {
 function readStoredTranscriptMode(): TranscriptMode {
   try {
     const raw = localStorage?.getItem(TRANSCRIPT_MODE_KEY);
-    if (
-      raw &&
-      VALID_TRANSCRIPT_MODES.includes(raw as TranscriptMode)
-    ) {
+    if (raw && VALID_TRANSCRIPT_MODES.includes(raw as TranscriptMode)) {
       return raw as TranscriptMode;
     }
   } catch {
@@ -254,9 +216,7 @@ function readStoredTranscriptMode(): TranscriptMode {
 
 function readStoredSidebarWidth(): number {
   try {
-    return clampStoredSidebarWidth(
-      localStorage?.getItem(SIDEBAR_WIDTH_KEY),
-    );
+    return clampStoredSidebarWidth(localStorage?.getItem(SIDEBAR_WIDTH_KEY));
   } catch {
     return SIDEBAR_WIDTH_DEFAULT;
   }
@@ -264,9 +224,7 @@ function readStoredSidebarWidth(): number {
 
 function readStoredVitalsWidth(): number {
   try {
-    return clampStoredVitalsWidth(
-      localStorage?.getItem(VITALS_WIDTH_KEY),
-    );
+    return clampStoredVitalsWidth(localStorage?.getItem(VITALS_WIDTH_KEY));
   } catch {
     return VITALS_WIDTH_DEFAULT;
   }
@@ -303,9 +261,7 @@ class UIStore {
 
   sortNewestFirst: boolean = $state(false);
   messageLayout: MessageLayout = $state(readStoredLayout());
-  transcriptMode: TranscriptMode = $state(
-    readStoredTranscriptMode(),
-  );
+  transcriptMode: TranscriptMode = $state(readStoredTranscriptMode());
   sidebarWidth: number = $state(readStoredSidebarWidth());
   vitalsWidth: number = $state(readStoredVitalsWidth());
   activeModal: ModalType = $state(null);
@@ -321,18 +277,10 @@ class UIStore {
 
   sidebarOpen: boolean = $state(true);
   isMobileViewport: boolean = $state(false);
-  vitalsOpen: boolean = $state(
-    readStoredBool(VITALS_KEY, false),
-  );
-  vitalsCallsExpanded: boolean = $state(
-    readStoredBool(VITALS_CALLS_EXPANDED_KEY, true),
-  );
-  signalPanelOpen: boolean = $state(
-    readStoredBool(SIGNAL_PANEL_KEY, false),
-  );
-  followLatest: boolean = $state(
-    readStoredBool(FOLLOW_LATEST_KEY, false),
-  );
+  vitalsOpen: boolean = $state(readStoredBool(VITALS_KEY, false));
+  vitalsCallsExpanded: boolean = $state(readStoredBool(VITALS_CALLS_EXPANDED_KEY, true));
+  signalPanelOpen: boolean = $state(readStoredBool(SIGNAL_PANEL_KEY, false));
+  followLatest: boolean = $state(readStoredBool(FOLLOW_LATEST_KEY, false));
   followLatestRequest: number = $state(0);
 
   /** Set of block types currently visible. */
@@ -344,10 +292,7 @@ class UIStore {
       // theme store (initTheme above); no effects needed here.
       $effect(() => {
         try {
-          localStorage?.setItem(
-            LAYOUT_KEY,
-            this.messageLayout,
-          );
+          localStorage?.setItem(LAYOUT_KEY, this.messageLayout);
         } catch {
           // ignore
         }
@@ -355,10 +300,7 @@ class UIStore {
 
       $effect(() => {
         try {
-          localStorage?.setItem(
-            TRANSCRIPT_MODE_KEY,
-            this.transcriptMode,
-          );
+          localStorage?.setItem(TRANSCRIPT_MODE_KEY, this.transcriptMode);
         } catch {
           // ignore
         }
@@ -366,10 +308,7 @@ class UIStore {
 
       $effect(() => {
         try {
-          localStorage?.setItem(
-            SIDEBAR_WIDTH_KEY,
-            String(this.sidebarWidth),
-          );
+          localStorage?.setItem(SIDEBAR_WIDTH_KEY, String(this.sidebarWidth));
         } catch {
           // ignore
         }
@@ -377,10 +316,7 @@ class UIStore {
 
       $effect(() => {
         try {
-          localStorage?.setItem(
-            VITALS_WIDTH_KEY,
-            String(this.vitalsWidth),
-          );
+          localStorage?.setItem(VITALS_WIDTH_KEY, String(this.vitalsWidth));
         } catch {
           // ignore
         }
@@ -389,13 +325,8 @@ class UIStore {
       // Apply the root font scale in the document; desktop zoom
       // falls back to CSS when the native webview bridge is absent.
       $effect(() => {
-        (
-          document.documentElement.style as unknown as
-            Record<string, string>
-        ).zoom = composedRootZoom(
-          this.fontScale,
-          this.zoomLevel,
-        );
+        (document.documentElement.style as unknown as Record<string, string>).zoom =
+          composedRootZoom(this.fontScale, this.zoomLevel);
       });
 
       // Persist the desktop window zoom (desktop only).
@@ -403,10 +334,7 @@ class UIStore {
         if (IS_DESKTOP) {
           syncDesktopZoom(this.zoomLevel / 100);
           try {
-            localStorage?.setItem(
-              ZOOM_KEY,
-              String(this.zoomLevel),
-            );
+            localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
           } catch {
             // ignore
           }
@@ -416,10 +344,7 @@ class UIStore {
       // Persist the font scale (web and desktop).
       $effect(() => {
         try {
-          localStorage?.setItem(
-            FONT_SCALE_KEY,
-            String(this.fontScale),
-          );
+          localStorage?.setItem(FONT_SCALE_KEY, String(this.fontScale));
         } catch {
           // ignore
         }
@@ -427,10 +352,7 @@ class UIStore {
 
       $effect(() => {
         try {
-          localStorage?.setItem(
-            VITALS_KEY,
-            String(this.vitalsOpen),
-          );
+          localStorage?.setItem(VITALS_KEY, String(this.vitalsOpen));
         } catch {
           // ignore
         }
@@ -438,10 +360,7 @@ class UIStore {
 
       $effect(() => {
         try {
-          localStorage?.setItem(
-            VITALS_CALLS_EXPANDED_KEY,
-            String(this.vitalsCallsExpanded),
-          );
+          localStorage?.setItem(VITALS_CALLS_EXPANDED_KEY, String(this.vitalsCallsExpanded));
         } catch {
           // ignore
         }
@@ -449,10 +368,7 @@ class UIStore {
 
       $effect(() => {
         try {
-          localStorage?.setItem(
-            SIGNAL_PANEL_KEY,
-            String(this.signalPanelOpen),
-          );
+          localStorage?.setItem(SIGNAL_PANEL_KEY, String(this.signalPanelOpen));
         } catch {
           // ignore
         }
@@ -460,10 +376,7 @@ class UIStore {
 
       $effect(() => {
         try {
-          localStorage?.setItem(
-            FOLLOW_LATEST_KEY,
-            String(this.followLatest),
-          );
+          localStorage?.setItem(FOLLOW_LATEST_KEY, String(this.followLatest));
         } catch {
           // ignore
         }
@@ -553,10 +466,7 @@ class UIStore {
 
   private persistBlockFilters() {
     try {
-      localStorage?.setItem(
-        BLOCK_FILTER_KEY,
-        serializeBlockFilters(this.visibleBlocks),
-      );
+      localStorage?.setItem(BLOCK_FILTER_KEY, serializeBlockFilters(this.visibleBlocks));
     } catch {
       // ignore
     }
@@ -568,8 +478,7 @@ class UIStore {
 
   cycleLayout() {
     const idx = VALID_LAYOUTS.indexOf(this.messageLayout);
-    this.messageLayout =
-      VALID_LAYOUTS[(idx + 1) % VALID_LAYOUTS.length]!;
+    this.messageLayout = VALID_LAYOUTS[(idx + 1) % VALID_LAYOUTS.length]!;
   }
 
   setLayout(layout: MessageLayout) {

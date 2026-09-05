@@ -4,8 +4,7 @@ const isDuckDBBackend = process.env.AGENTSVIEW_E2E_BACKEND === "duckdb";
 const wrongProject = "wrong_branch_label";
 const targetProject = "sample_service";
 const machine = "remote-example-host";
-const worktreeRoot =
-  "/srv/worktrees/github.com/example-org/sample-service/example-worktree";
+const worktreeRoot = "/srv/worktrees/github.com/example-org/sample-service/example-worktree";
 const broaderPrefix = "/srv/worktrees/github.com/example-org/sample-service";
 
 function workspace(page: Page) {
@@ -59,9 +58,7 @@ test.describe("Data mode project reclassification", () => {
     await expect(ws.getByRole("heading", { name: wrongProject })).toBeVisible();
     await expect(ws.getByText(`Current project: ${wrongProject}`)).toBeVisible();
     await expect(ws.getByText("Observed folders")).toBeVisible();
-    await expect(
-      ws.getByRole("button", { name: worktreeRoot }),
-    ).toBeVisible();
+    await expect(ws.getByRole("button", { name: worktreeRoot })).toBeVisible();
     await expect(ws.getByText(machine)).toBeVisible();
     await expect(ws.getByText("2 sessions", { exact: true })).toBeVisible();
 
@@ -72,37 +69,24 @@ test.describe("Data mode project reclassification", () => {
     await ws.getByRole("button", { name: "Project", exact: true }).click();
     const targetInput = ws.getByRole("combobox");
     await targetInput.fill(targetProject);
-    await page
-      .getByRole("option", { name: `Use project "${targetProject}"` })
-      .click();
+    await page.getByRole("option", { name: `Use project "${targetProject}"` }).click();
 
     await expect.poll(() => previewRequests).toBe(1);
     await expect(ws.getByText("Full archive impact")).toBeVisible();
-    await expect(
-      ws.getByText("2 sessions matched", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      ws.getByText("2 sessions will change", { exact: true }),
-    ).toBeVisible();
+    await expect(ws.getByText("2 sessions matched", { exact: true })).toBeVisible();
+    await expect(ws.getByText("2 sessions will change", { exact: true })).toBeVisible();
     await expect(ws.getByText("1 project", { exact: true })).toBeVisible();
 
     await ws.getByRole("button", { name: "Save and apply mapping" }).click();
 
     // Explicit inventory reload; selection follows the applied target.
-    await expect(
-      ws.getByRole("heading", { name: targetProject }),
-    ).toBeVisible();
+    await expect(ws.getByRole("heading", { name: targetProject })).toBeVisible();
     expect(reclassifyMutations).toBe(1);
     await expect(page.getByRole("row", { name: targetProject })).toBeVisible();
     await expect(page.getByRole("row", { name: wrongProject })).toHaveCount(0);
 
-    await page
-      .locator('[aria-label="Data view"]')
-      .getByText("Rules", { exact: true })
-      .click();
-    await expect(
-      page.getByRole("heading", { name: "Worktree mappings" }),
-    ).toBeVisible();
+    await page.locator('[aria-label="Data view"]').getByText("Rules", { exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Worktree mappings" })).toBeVisible();
     await page.getByRole("button", { name: "Select machine" }).click();
     await page.getByRole("option", { name: machine, exact: true }).click();
 
@@ -116,18 +100,13 @@ test.describe("Data mode project reclassification", () => {
     expect(legacyCandidateRequests).toEqual([]);
   });
 
-  test("stops at the editor read-only notice without offering mutations", async ({
-    page,
-  }) => {
+  test("stops at the editor read-only notice without offering mutations", async ({ page }) => {
     test.skip(!isDuckDBBackend, "runs only against duckdb serve");
 
     const mutationRequests: string[] = [];
     page.on("request", (request) => {
       const pathname = new URL(request.url()).pathname;
-      if (
-        request.method() !== "GET" &&
-        pathname.startsWith("/api/v1/settings/worktree-mappings")
-      ) {
+      if (request.method() !== "GET" && pathname.startsWith("/api/v1/settings/worktree-mappings")) {
         mutationRequests.push(`${request.method()} ${pathname}`);
       }
     });
@@ -136,8 +115,7 @@ test.describe("Data mode project reclassification", () => {
     // sync.serverVersion is still null, so the assertions below must run
     // against the backend's real read_only flag, not the pre-hydration state.
     const versionPromise = page.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname === "/api/v1/version" && response.ok(),
+      (response) => new URL(response.url()).pathname === "/api/v1/version" && response.ok(),
     );
     await page.goto("/data");
     const versionResponse = await versionPromise;
@@ -150,53 +128,30 @@ test.describe("Data mode project reclassification", () => {
     const ws = workspace(page);
     await expect(ws.getByText(`Current project: ${wrongProject}`)).toBeVisible();
     await expect(ws.getByText("Observed folders")).toBeVisible();
-    await expect(
-      ws.getByRole("button", { name: worktreeRoot }),
-    ).toBeVisible();
-    await expect(ws.getByRole("note")).toContainText(
-      "This store is read-only.",
-    );
-    await expect(
-      ws.getByRole("textbox", { name: "Folder path" }),
-    ).toHaveCount(0);
-    await expect(
-      ws.getByRole("button", { name: "Project", exact: true }),
-    ).toHaveCount(0);
-    await expect(
-      ws.getByRole("button", { name: "Save and apply mapping" }),
-    ).toHaveCount(0);
+    await expect(ws.getByRole("button", { name: worktreeRoot })).toBeVisible();
+    await expect(ws.getByRole("note")).toContainText("This store is read-only.");
+    await expect(ws.getByRole("textbox", { name: "Folder path" })).toHaveCount(0);
+    await expect(ws.getByRole("button", { name: "Project", exact: true })).toHaveCount(0);
+    await expect(ws.getByRole("button", { name: "Save and apply mapping" })).toHaveCount(0);
 
     expect(mutationRequests).toEqual([]);
   });
 
-  test("rules view is read-only without actions or the mapping form", async ({
-    page,
-  }) => {
+  test("rules view is read-only without actions or the mapping form", async ({ page }) => {
     test.skip(!isDuckDBBackend, "runs only against duckdb serve");
 
     // Same version-hydration gate as above: the read-only notice must come
     // from the backend's read_only flag, not the null pre-hydration state.
     const versionPromise = page.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname === "/api/v1/version" && response.ok(),
+      (response) => new URL(response.url()).pathname === "/api/v1/version" && response.ok(),
     );
     await page.goto("/data?view=rules");
     const versionResponse = await versionPromise;
     expect(await versionResponse.json()).toMatchObject({ read_only: true });
-    await expect(
-      page.getByRole("heading", { name: "Worktree mappings" }),
-    ).toBeVisible();
-    await expect(page.getByRole("note")).toContainText(
-      "This store is read-only.",
-    );
-    await expect(
-      page.getByRole("button", { name: "Add mapping" }),
-    ).toHaveCount(0);
-    await expect(
-      page.getByRole("columnheader", { name: "Actions" }),
-    ).toHaveCount(0);
-    await expect(
-      page.getByText("No worktree mappings configured."),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Worktree mappings" })).toBeVisible();
+    await expect(page.getByRole("note")).toContainText("This store is read-only.");
+    await expect(page.getByRole("button", { name: "Add mapping" })).toHaveCount(0);
+    await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(0);
+    await expect(page.getByText("No worktree mappings configured.")).toBeVisible();
   });
 });

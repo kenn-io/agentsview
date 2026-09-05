@@ -1,37 +1,19 @@
 import type { DataChangedEvent } from "../api/client.js";
-import {
-  MetadataService,
-  SessionsService,
-} from "../api/generated/index";
-import {
-  callGenerated,
-  configureGeneratedClient,
-  isAbortError,
-} from "../api/runtime.js";
-import type {
-  Session,
-  ProjectInfo,
-  AgentInfo,
-  SidebarSessionIndexResponse,
-  SidebarSessionIndexRow,
-} from "../api/types.js";
+import { MetadataService, SessionsService } from "../api/generated/index";
+import { callGenerated, isAbortError, isNotFoundError } from "../api/runtime.js";
+import type { Session, ProjectInfo, AgentInfo, SidebarSessionIndexRow } from "../api/types.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
-import {
-  SESSION_ANALYTICS_WINDOW_PARAM,
-  parseWindowDaysParam,
-} from "./sessionRouteParams.js";
+import { SESSION_ANALYTICS_WINDOW_PARAM, parseWindowDaysParam } from "./sessionRouteParams.js";
 import { rollingRange } from "../utils/dates.js";
 import { LatestRead } from "../utils/latest-read.js";
 
-type SidebarIndexParams = Parameters<
-  typeof SessionsService.getApiV1SessionsSidebarIndex
->[0];
-type MetadataParams = Parameters<
-  typeof MetadataService.getApiV1Projects
->[0];
+type SidebarIndexParams = NonNullable<
+  Parameters<typeof SessionsService.getApiV1SessionsSidebarIndex>[0]
+>;
+type MetadataParams = NonNullable<Parameters<typeof MetadataService.getApiV1Projects>[0]>;
 type ClearSessionFiltersOptions = {
   clearDateYoke?: boolean;
 };
@@ -144,9 +126,10 @@ function loadSavedFilters(): SavedFilters {
   try {
     const raw = localStorage.getItem(SESSION_FILTERS_KEY);
     if (raw) {
-      const { version, windowDays, ...saved } = JSON.parse(
-        raw,
-      ) as Partial<Filters> & { version?: unknown; windowDays?: unknown };
+      const { version, windowDays, ...saved } = JSON.parse(raw) as Partial<Filters> & {
+        version?: unknown;
+        windowDays?: unknown;
+      };
       const filters = { ...defaultFilters(), ...saved };
       // Deliberately `!==`, not `<`: an entry written by a newer (or older)
       // format is not trusted either way — dropping date bounds is the
@@ -183,10 +166,7 @@ function saveFilters(f: Filters, windowDays: number | null = null): void {
   // on load; the materialized dates themselves are session-scoped. Storing
   // them verbatim would pin the window to the day it was saved, silently
   // hiding newer sessions (#1086).
-  const toSave =
-    windowDays !== null
-      ? { ...f, date: "", dateFrom: "", dateTo: "", windowDays }
-      : f;
+  const toSave = windowDays !== null ? { ...f, date: "", dateFrom: "", dateTo: "", windowDays } : f;
   try {
     localStorage.setItem(
       SESSION_FILTERS_KEY,
@@ -199,9 +179,7 @@ function saveFilters(f: Filters, windowDays: number | null = null): void {
 
 /** Serialize a Filters object into URL query params.
  *  Default-valued fields are omitted so the URL stays clean. */
-export function filtersToParams(
-  f: Filters,
-): Record<string, string> {
+export function filtersToParams(f: Filters): Record<string, string> {
   const p: Record<string, string> = {};
   if (f.project) p["project"] = f.project;
   if (f.machine) p["machine"] = f.machine;
@@ -226,9 +204,7 @@ function hasDateFilters(f: Filters): boolean {
   return !!(f.date || f.dateFrom || f.dateTo);
 }
 
-export function splitExcludeProjectParam(
-  raw: string | undefined,
-): {
+export function splitExcludeProjectParam(raw: string | undefined): {
   hideUnknownProject: boolean;
   usageExcludedProjects: string;
 } {
@@ -254,23 +230,19 @@ export function splitExcludeProjectParam(
 
 /** Parse URL query params into a typed Filters object.
  *  Unknown/missing params fall back to defaults. */
-export function parseFiltersFromParams(
-  params: Record<string, string>,
-): Filters {
+export function parseFiltersFromParams(params: Record<string, string>): Filters {
   const minMsgs = parseInt(params["min_messages"] ?? "", 10);
   const maxMsgs = parseInt(params["max_messages"] ?? "", 10);
   const minUserMsgs = parseInt(params["min_user_messages"] ?? "", 10);
 
-  const { hideUnknownProject: hideUnknown } =
-    splitExcludeProjectParam(params["exclude_project"]);
+  const { hideUnknownProject: hideUnknown } = splitExcludeProjectParam(params["exclude_project"]);
   let project = params["project"] ?? "";
   if (hideUnknown && project === "unknown") {
     project = "";
   }
 
   const oneShotParam = params["include_one_shot"];
-  const includeOneShot =
-    oneShotParam === undefined ? true : oneShotParam === "true";
+  const includeOneShot = oneShotParam === undefined ? true : oneShotParam === "true";
 
   return {
     project,
@@ -296,6 +268,12 @@ class SessionsStore {
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
   activeSessionId: string | null = $state(null);
+  // Lets the message pane explain a 404 instead of rendering blank.
+  activeSessionNotFound: boolean = $state(false);
+  // Bumped when a not-found session recovers; per-session loaders
+  // keyed on (activeSessionId, activeSessionLoadVersion) re-run
+  // without the id changing.
+  activeSessionLoadVersion: number = $state(0);
   activeSessionUsageVersion: number = $state(0);
   childSessions: Map<string, Session> = $state(new Map());
   nextCursor: string | null = $state(null);
@@ -307,9 +285,7 @@ class SessionsStore {
   /** Rolling window (in days) behind the current date bounds, or null when
    *  the bounds were chosen explicitly. Persisted as intent and
    *  rematerialized on load so the window keeps rolling forward (#1086). */
-  dateFiltersWindowDays: number | null = $state(
-    this.#savedFilters.windowDays,
-  );
+  dateFiltersWindowDays: number | null = $state(this.#savedFilters.windowDays);
 
   private signalDetailCache = new Map<
     string,
@@ -318,10 +294,7 @@ class SessionsStore {
       penalties: Record<string, number> | null;
     }
   >();
-  private signalDetailInflight = new Map<
-    string,
-    Promise<void>
-  >();
+  private signalDetailInflight = new Map<string, Promise<void>>();
   signalDetailLoading = $state(false);
 
   private loadVersion: number = 0;
@@ -336,10 +309,7 @@ class SessionsStore {
   private machinesLoaded: boolean = false;
   private machinesPromise: Promise<void> | null = null;
   private machinesVersion: number = 0;
-  private sidebarHydrationInflightByVersion = new Map<
-    number,
-    Map<string, Promise<void>>
-  >();
+  private sidebarHydrationInflightByVersion = new Map<number, Map<string, Promise<void>>>();
   private sidebarHydrationEpochByVersion = new Map<number, number>();
   private sidebarHydrationQueue: Array<() => void> = [];
   private sidebarHydrationActive = 0;
@@ -369,33 +339,25 @@ class SessionsStore {
   private get apiParams(): SidebarIndexParams {
     const f = this.filters;
     // Don't exclude "unknown" when explicitly viewing it.
-    const exclude =
-      f.hideUnknownProject && f.project !== "unknown"
-        ? "unknown"
-        : undefined;
+    const exclude = f.hideUnknownProject && f.project !== "unknown" ? "unknown" : undefined;
     return {
       project: f.project || undefined,
-      excludeProject: exclude,
+      exclude_project: exclude,
       machine: f.machine || undefined,
       agent: f.agent || undefined,
       termination: f.termination || undefined,
       date: f.date || undefined,
-      dateFrom: f.dateFrom || undefined,
-      dateTo: f.dateTo || undefined,
+      date_from: f.dateFrom || undefined,
+      date_to: f.dateTo || undefined,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      activeSince: f.recentlyActive
-        ? new Date(
-            Date.now() - 24 * 60 * 60 * 1000,
-          ).toISOString()
+      active_since: f.recentlyActive
+        ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
         : undefined,
-      minMessages:
-        f.minMessages > 0 ? f.minMessages : undefined,
-      maxMessages:
-        f.maxMessages > 0 ? f.maxMessages : undefined,
-      minUserMessages:
-        f.minUserMessages > 0 ? f.minUserMessages : undefined,
-      includeOneShot: f.includeOneShot || undefined,
-      includeAutomated: f.includeAutomated || undefined,
+      min_messages: f.minMessages > 0 ? f.minMessages : undefined,
+      max_messages: f.maxMessages > 0 ? f.maxMessages : undefined,
+      min_user_messages: f.minUserMessages > 0 ? f.minUserMessages : undefined,
+      include_one_shot: f.includeOneShot || undefined,
+      include_automated: f.includeAutomated || undefined,
       starred: starred.filterOnly || undefined,
     };
   }
@@ -470,10 +432,7 @@ class SessionsStore {
   /** Set date filters materialized from a panel date state. `windowDays`
    *  carries the rolling intent behind the bounds (null for explicitly
    *  chosen fixed ranges). */
-  applyPanelDateFilters(
-    dateParams: Record<string, string>,
-    windowDays: number | null,
-  ): void {
+  applyPanelDateFilters(dateParams: Record<string, string>, windowDays: number | null): void {
     this.filters.date = dateParams["date"] ?? "";
     this.filters.dateFrom = dateParams["date_from"] ?? "";
     this.filters.dateTo = dateParams["date_to"] ?? "";
@@ -489,13 +448,10 @@ class SessionsStore {
     const prevAutomated = this.filters.includeAutomated;
     const next = parseFiltersFromParams(params);
     this.filters = next;
-    this.dateFiltersWindowDays = parseWindowDaysParam(
-      params[SESSION_ANALYTICS_WINDOW_PARAM],
-    );
+    this.dateFiltersWindowDays = parseWindowDaysParam(params[SESSION_ANALYTICS_WINDOW_PARAM]);
     starred.filterOnly = params["starred"] === "true";
     this.filterPersistenceHeld = false;
-    if (prevOneShot !== next.includeOneShot ||
-        prevAutomated !== next.includeAutomated) {
+    if (prevOneShot !== next.includeOneShot || prevAutomated !== next.includeAutomated) {
       this.invalidateFilterCaches();
     }
     this.setActiveSession(null);
@@ -541,10 +497,7 @@ class SessionsStore {
     void this.load();
   }
 
-  private async loadSidebarPage(
-    params: SidebarIndexParams,
-    signal: AbortSignal,
-  ) {
+  private async loadSidebarPage(params: SidebarIndexParams, signal: AbortSignal) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
     // Keep the existing list visible during reloads, but mark
@@ -561,21 +514,18 @@ class SessionsStore {
     };
     try {
       const index = await callGenerated(
-        () => SessionsService.getApiV1SessionsSidebarIndex(params),
+        (options) => SessionsService.getApiV1SessionsSidebarIndex(params, options),
         signal,
-      ) as unknown as SidebarSessionIndexResponse;
+      );
       if (this.loadVersion !== version) return;
 
       this.sidebarIndexVersion = indexVersion;
       this.hydratedSessionsByVersion.set(indexVersion, new Map());
       this.sidebarHydrationEpochByVersion.set(indexVersion, 0);
       this.pruneSidebarHydrationVersions(indexVersion);
-      const existing = new Map(this.sessions.map((session) => [
-        session.id,
-        session,
-      ]));
+      const existing = new Map(this.sessions.map((session) => [session.id, session]));
       this.sessions = index.sessions.map((row) =>
-        sidebarIndexRowToSession(row, existing.get(row.id))
+        sidebarIndexRowToSession(row, existing.get(row.id)),
       );
       this.sidebarIndexIds = new Set(index.sessions.map((row) => row.id));
       // Keep the active session's hydrated row when the new index
@@ -613,8 +563,7 @@ class SessionsStore {
   // this.sessions outside this set were appended out of position
   // (see loadSidebarPage / loadMore).
   private sidebarIndexIds: Set<string> = new Set();
-  hydratedSessionsByVersion: Map<number, Map<string, Session>> =
-    $state(new Map());
+  hydratedSessionsByVersion: Map<number, Map<string, Session>> = $state(new Map());
 
   private pruneSidebarHydrationVersions(retainVersion: number) {
     for (const version of this.hydratedSessionsByVersion.keys()) {
@@ -634,50 +583,58 @@ class SessionsStore {
     }
   }
 
-  async hydrateVisibleSessions(
-    ids: string[],
-    version: number = this.sidebarIndexVersion,
-  ) {
+  async hydrateVisibleSessions(ids: string[], version: number = this.sidebarIndexVersion) {
     const uniqueIds = [...new Set(ids)];
-    const cache =
-      this.hydratedSessionsByVersion.get(version) ?? new Map<string, Session>();
+    const cache = this.hydratedSessionsByVersion.get(version) ?? new Map<string, Session>();
     this.hydratedSessionsByVersion.set(version, cache);
-    const inflight = this.sidebarHydrationInflightByVersion.get(version) ??
-      new Map<string, Promise<void>>();
+    const inflight =
+      this.sidebarHydrationInflightByVersion.get(version) ?? new Map<string, Promise<void>>();
     this.sidebarHydrationInflightByVersion.set(version, inflight);
     const epoch = this.sidebarHydrationEpochByVersion.get(version) ?? 0;
     const signal = this.routeSignal();
 
-    await Promise.all(uniqueIds.map((id) => {
-      if (cache.has(id)) return;
-      const existing = inflight.get(id);
-      if (existing) return existing;
+    await Promise.all(
+      uniqueIds.map((id) => {
+        if (cache.has(id)) return;
+        const existing = inflight.get(id);
+        if (existing) return existing;
 
-      const promise = this.runSidebarHydration(async () => {
-        if (signal.aborted) return;
-        try {
-          configureGeneratedClient();
-          const hydrated = await callGenerated(
-            () => SessionsService.getApiV1SessionsId({ id }),
-            signal,
-          ) as unknown as Session;
-          if (
-            version !== this.sidebarIndexVersion ||
-            epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
-          ) {
-            return;
+        const promise = this.runSidebarHydration(async () => {
+          if (signal.aborted) return;
+          try {
+            const hydrated = await callGenerated(
+              (options) => SessionsService.getApiV1SessionsById({ id }, options),
+              signal,
+            );
+            if (
+              version !== this.sidebarIndexVersion ||
+              epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
+            ) {
+              return;
+            }
+            cache.set(id, hydrated);
+            this.mergeHydratedSession(hydrated);
+            this.markActiveSessionFound(id);
+          } catch (err) {
+            // Visible hydration is best-effort; the skinny row remains usable.
+            // Except a 404 for the selected row: without the not-found
+            // flag the message pane would render blank. Version and
+            // epoch guards keep a stale 404 from flagging a session a
+            // newer fetch already resolved.
+            if (
+              version === this.sidebarIndexVersion &&
+              epoch === (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
+            ) {
+              this.markActiveSessionMissing(id, err);
+            }
+          } finally {
+            inflight.delete(id);
           }
-          cache.set(id, hydrated);
-          this.mergeHydratedSession(hydrated);
-        } catch {
-          // Visible hydration is best-effort; the skinny row remains usable.
-        } finally {
-          inflight.delete(id);
-        }
-      });
-      inflight.set(id, promise);
-      return promise;
-    }));
+        });
+        inflight.set(id, promise);
+        return promise;
+      }),
+    );
   }
 
   private async runSidebarHydration(task: () => Promise<void>): Promise<void> {
@@ -728,39 +685,35 @@ class SessionsStore {
     const signal = this.routeSignal();
     this.loading = true;
     try {
-      configureGeneratedClient();
       const index = await callGenerated(
-        () => SessionsService.getApiV1SessionsSidebarIndex({
-          ...this.apiParams,
-          cursor: this.nextCursor!,
-          limit: SESSION_PAGE_SIZE,
-        }),
+        (options) =>
+          SessionsService.getApiV1SessionsSidebarIndex(
+            {
+              ...this.apiParams,
+              cursor: this.nextCursor!,
+              limit: SESSION_PAGE_SIZE,
+            },
+            options,
+          ),
         signal,
-      ) as unknown as SidebarSessionIndexResponse;
+      );
       if (this.loadVersion !== version) return;
       // Merge index-page order first, appended rows last. Rows outside
       // sidebarIndexIds were appended out of position (the active
       // session kept by loadSidebarPage, navigateToSession targets);
       // they stay at the tail until pagination reaches their real
       // position, then merge in place carrying their hydrated fields.
-      const existingById = new Map(
-        this.sessions.map((session) => [session.id, session]),
-      );
+      const existingById = new Map(this.sessions.map((session) => [session.id, session]));
       for (const row of index.sessions) {
         this.sidebarIndexIds.add(row.id);
       }
       const paged = this.sessions.filter(
-        (s) => this.sidebarIndexIds.has(s.id) &&
-          !index.sessions.some((row) => row.id === s.id),
+        (s) => this.sidebarIndexIds.has(s.id) && !index.sessions.some((row) => row.id === s.id),
       );
-      const appended = this.sessions.filter(
-        (s) => !this.sidebarIndexIds.has(s.id),
-      );
+      const appended = this.sessions.filter((s) => !this.sidebarIndexIds.has(s.id));
       this.sessions = [
         ...paged,
-        ...index.sessions.map((row) =>
-          sidebarIndexRowToSession(row, existingById.get(row.id))
-        ),
+        ...index.sessions.map((row) => sidebarIndexRowToSession(row, existingById.get(row.id))),
         ...appended,
       ];
       this.nextCursor = index.next_cursor ?? null;
@@ -805,10 +758,7 @@ class SessionsStore {
     const ver = this.projectsVersion;
     this.projectsPromise = (async () => {
       try {
-        configureGeneratedClient();
-        const res = await MetadataService.getApiV1Projects(
-          this.metadataParams,
-        ) as unknown as { projects: ProjectInfo[] };
+        const res = await MetadataService.getApiV1Projects(this.metadataParams);
         if (ver === this.projectsVersion) {
           this.projects = res.projects;
           this.projectsLoaded = true;
@@ -830,10 +780,7 @@ class SessionsStore {
     const ver = this.agentsVersion;
     this.agentsPromise = (async () => {
       try {
-        configureGeneratedClient();
-        const res = await MetadataService.getApiV1Agents(
-          this.metadataParams,
-        ) as unknown as { agents: AgentInfo[] };
+        const res = await MetadataService.getApiV1Agents(this.metadataParams);
         if (ver === this.agentsVersion) {
           this.agents = res.agents;
           this.agentsLoaded = true;
@@ -855,10 +802,7 @@ class SessionsStore {
     const ver = this.machinesVersion;
     this.machinesPromise = (async () => {
       try {
-        configureGeneratedClient();
-        const res = await MetadataService.getApiV1Machines(
-          this.metadataParams,
-        ) as unknown as { machines: string[] };
+        const res = await MetadataService.getApiV1Machines(this.metadataParams);
         if (ver === this.machinesVersion) {
           this.machines = res.machines;
           this.machinesLoaded = true;
@@ -880,6 +824,7 @@ class SessionsStore {
     this.refreshRead.cancel();
     this.childSessionsRead.cancel();
     this.activeSessionId = id;
+    this.activeSessionNotFound = false;
     this.activeSessionUsageVersion = 0;
     this.refreshVersion++;
     this.childSessionsVersion++;
@@ -890,8 +835,7 @@ class SessionsStore {
     void this.hydrateSelectedIndexOnlySession(id);
   }
 
-  private navigateInFlight: { id: string; promise: Promise<void> } | null =
-    null;
+  private navigateInFlight: { id: string; promise: Promise<void> } | null = null;
 
   /**
    * Navigate to a session by ID, loading it into the sessions list if
@@ -914,23 +858,25 @@ class SessionsStore {
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
-        configureGeneratedClient();
         const session = await callGenerated(
-          () => SessionsService.getApiV1SessionsId({ id }),
+          (options) => SessionsService.getApiV1SessionsById({ id }, options),
           signal,
-        ) as unknown as Session;
-        if (
-          this.activeSessionId === id && this.navigateRead.isCurrent(signal)
-        ) {
+        );
+        if (this.activeSessionId === id && this.navigateRead.isCurrent(signal)) {
           const idx = this.sessions.findIndex((s) => s.id === id);
           if (idx >= 0) {
             this.mergeHydratedSession(session);
           } else {
             this.sessions = [...this.sessions, session];
           }
+          this.markActiveSessionFound(id);
         }
-      } catch {
-        // Session not found — selection stands without metadata
+      } catch (err) {
+        // Selection stands without metadata; flag a not-found
+        // response so the message pane can say so.
+        if (this.navigateRead.isCurrent(signal)) {
+          this.markActiveSessionMissing(id, err);
+        }
       } finally {
         this.navigateRead.finish(signal);
         if (this.navigateInFlight === entry) {
@@ -940,6 +886,42 @@ class SessionsStore {
     })();
     this.navigateInFlight = entry;
     return entry.promise;
+  }
+
+  /**
+   * Record a failed session-detail fetch: a 404 while the session
+   * is still selected marks it not-found so the message pane can
+   * offer a retry.
+   */
+  markActiveSessionMissing(id: string, err: unknown) {
+    if (this.activeSessionId === id && isNotFoundError(err)) {
+      this.activeSessionNotFound = true;
+    }
+  }
+
+  private markActiveSessionFound(id: string) {
+    if (this.activeSessionId !== id || !this.activeSessionNotFound) return;
+    this.activeSessionNotFound = false;
+    this.activeSessionLoadVersion++;
+  }
+
+  /**
+   * Re-attempt loading the active session after a not-found. The
+   * flag stays set until a detail fetch succeeds, so a retry that
+   * still fails keeps the retryable pane instead of blanking it;
+   * a success recovers through markActiveSessionFound.
+   */
+  async retryActiveSession() {
+    const id = this.activeSessionId;
+    if (!id) return;
+    const existing = this.sessions.find((s) => s.id === id);
+    if (!existing) {
+      await this.navigateToSession(id);
+    } else if (existing.is_index_only) {
+      await this.hydrateSelectedIndexOnlySession(id);
+    } else {
+      await this.refreshActiveSession();
+    }
   }
 
   private async hydrateSelectedIndexOnlySession(id: string) {
@@ -959,11 +941,10 @@ class SessionsStore {
     const version = ++this.refreshVersion;
     const signal = this.refreshRead.begin();
     try {
-      configureGeneratedClient();
       const session = await callGenerated(
-        () => SessionsService.getApiV1SessionsId({ id }),
+        (options) => SessionsService.getApiV1SessionsById({ id }, options),
         signal,
-      ) as unknown as Session;
+      );
       if (
         this.refreshVersion !== version ||
         this.activeSessionId !== id ||
@@ -975,8 +956,12 @@ class SessionsStore {
       if (idx >= 0) {
         this.mergeHydratedSession(session);
       }
-    } catch {
+      this.markActiveSessionFound(id);
+    } catch (err) {
       // Session may have been deleted
+      if (this.refreshVersion === version && this.refreshRead.isCurrent(signal)) {
+        this.markActiveSessionMissing(id, err);
+      }
     } finally {
       this.refreshRead.finish(signal);
     }
@@ -986,11 +971,10 @@ class SessionsStore {
     const version = ++this.childSessionsVersion;
     const signal = this.childSessionsRead.begin();
     try {
-      configureGeneratedClient();
       const children = await callGenerated(
-        () => SessionsService.getApiV1SessionsIdChildren({ id: parentId }),
+        (options) => SessionsService.getApiV1SessionsByIdChildren({ id: parentId }, options),
         signal,
-      ) as unknown as Session[];
+      );
       if (
         this.childSessionsVersion !== version ||
         this.activeSessionId !== parentId ||
@@ -1004,10 +988,7 @@ class SessionsStore {
       }
       this.childSessions = map;
     } catch {
-      if (
-        this.childSessionsVersion !== version ||
-        this.activeSessionId !== parentId
-      ) {
+      if (this.childSessionsVersion !== version || this.activeSessionId !== parentId) {
         return;
       }
       this.childSessions = new Map();
@@ -1035,8 +1016,7 @@ class SessionsStore {
       if (this.signalDetailInflight.get(id) === promise) {
         this.signalDetailInflight.delete(id);
       }
-      this.signalDetailLoading =
-        this.signalDetailInflight.size > 0;
+      this.signalDetailLoading = this.signalDetailInflight.size > 0;
     }
   }
 
@@ -1044,11 +1024,10 @@ class SessionsStore {
     const signal = this.routeSignal();
     this.signalDetailLoading = true;
     try {
-      configureGeneratedClient();
       const session = await callGenerated(
-        () => SessionsService.getApiV1SessionsId({ id }),
+        (options) => SessionsService.getApiV1SessionsById({ id }, options),
         signal,
-      ) as unknown as Session;
+      );
       if (signal.aborted) return;
       this.signalDetailCache.set(id, {
         basis: session.health_score_basis ?? null,
@@ -1063,15 +1042,10 @@ class SessionsStore {
   private mergeDetailIntoList(id: string) {
     const detail = this.signalDetailCache.get(id);
     if (!detail) return;
-    const idx = this.sessions.findIndex(
-      (s) => s.id === id,
-    );
+    const idx = this.sessions.findIndex((s) => s.id === id);
     if (idx >= 0) {
       const s = this.sessions[idx]!;
-      if (
-        s.health_score_basis === undefined &&
-        detail.basis != null
-      ) {
+      if (s.health_score_basis === undefined && detail.basis != null) {
         this.sessions[idx] = {
           ...s,
           health_score_basis: detail.basis,
@@ -1082,9 +1056,7 @@ class SessionsStore {
   }
 
   navigateSession(delta: number, filter?: (s: Session) => boolean) {
-    const list = filter
-      ? this.sessions.filter(filter)
-      : this.sessions;
+    const list = filter ? this.sessions.filter(filter) : this.sessions;
     if (list.length === 0) return;
     const idx = list.findIndex((s) => s.id === this.activeSessionId);
     if (idx === -1) {
@@ -1112,8 +1084,10 @@ class SessionsStore {
     this.filters = { ...defaultFilters(), project, agent: prev.agent };
     this.dateFiltersWindowDays = null;
     this.setActiveSession(null);
-    if (prev.includeOneShot !== this.filters.includeOneShot ||
-        prev.includeAutomated !== this.filters.includeAutomated) {
+    if (
+      prev.includeOneShot !== this.filters.includeOneShot ||
+      prev.includeAutomated !== this.filters.includeAutomated
+    ) {
       this.invalidateFilterCaches();
     }
     this.load();
@@ -1126,9 +1100,7 @@ class SessionsStore {
   }
 
   toggleMachineFilter(machine: string) {
-    const current = this.filters.machine
-      ? this.filters.machine.split(",")
-      : [];
+    const current = this.filters.machine ? this.filters.machine.split(",") : [];
     const idx = current.indexOf(machine);
     if (idx >= 0) {
       current.splice(idx, 1);
@@ -1161,9 +1133,7 @@ class SessionsStore {
   }
 
   toggleAgentFilter(agent: string) {
-    const current = this.filters.agent
-      ? this.filters.agent.split(",")
-      : [];
+    const current = this.filters.agent ? this.filters.agent.split(",") : [];
     const idx = current.indexOf(agent);
     if (idx >= 0) {
       current.splice(idx, 1);
@@ -1229,11 +1199,7 @@ class SessionsStore {
   /** Add or remove a status from the comma-separated termination
    * filter. Empty list means "no filter". */
   toggleTerminationStatus(status: string) {
-    const set = new Set(
-      this.filters.termination
-        .split(",")
-        .filter((s) => s.length > 0),
-    );
+    const set = new Set(this.filters.termination.split(",").filter((s) => s.length > 0));
     if (set.has(status)) set.delete(status);
     else set.add(status);
     this.setTerminationFilter([...set].join(","));
@@ -1243,9 +1209,7 @@ class SessionsStore {
    * the given status. Used by the multi-select pill UI. */
   hasTerminationStatus(status: string): boolean {
     if (!this.filters.termination) return false;
-    return this.filters.termination
-      .split(",")
-      .includes(status);
+    return this.filters.termination.split(",").includes(status);
   }
 
   get hasActiveFilters(): boolean {
@@ -1287,9 +1251,7 @@ class SessionsStore {
 
   private newRecentlyDeletedTimer(key: number) {
     return setTimeout(() => {
-      this.recentlyDeleted = this.recentlyDeleted.filter(
-        (d) => d.key !== key,
-      );
+      this.recentlyDeleted = this.recentlyDeleted.filter((d) => d.key !== key);
     }, RECENTLY_DELETED_TTL_MS);
   }
 
@@ -1297,10 +1259,7 @@ class SessionsStore {
     if (ids.length === 0) return;
     const key = this.recentlyDeletedNextKey++;
     const timer = this.newRecentlyDeletedTimer(key);
-    this.recentlyDeleted = [
-      ...this.recentlyDeleted,
-      { key, ids: [...ids], timer },
-    ];
+    this.recentlyDeleted = [...this.recentlyDeleted, { key, ids: [...ids], timer }];
   }
 
   /** Multi-select state for batch operations. */
@@ -1333,8 +1292,7 @@ class SessionsStore {
   }
 
   async deleteSession(id: string) {
-    configureGeneratedClient();
-    await SessionsService.deleteApiV1SessionsId({ id });
+    await SessionsService.deleteApiV1SessionsById({ id });
     if (this.activeSessionId === id) {
       this.setActiveSession(null);
     }
@@ -1345,10 +1303,7 @@ class SessionsStore {
 
   async batchDeleteSessions(ids: string[]) {
     if (ids.length === 0) return;
-    configureGeneratedClient();
-    await SessionsService.postApiV1SessionsBatchDelete({
-      requestBody: { session_ids: ids },
-    });
+    await SessionsService.postApiV1SessionsBatchDelete({ session_ids: ids });
     const idSet = new Set(ids);
     if (this.activeSessionId && idSet.has(this.activeSessionId)) {
       this.setActiveSession(null);
@@ -1361,8 +1316,7 @@ class SessionsStore {
   }
 
   async restoreSession(id: string) {
-    configureGeneratedClient();
-    await SessionsService.postApiV1SessionsIdRestore({ id });
+    await SessionsService.postApiV1SessionsByIdRestore({ id });
     this.clearRecentlyDeleted(id);
     this.invalidateFilterCaches();
     await this.load();
@@ -1371,12 +1325,11 @@ class SessionsStore {
   async restoreRecentlyDeleted(deleted: RecentlyDeletedSessions) {
     const ids = [...deleted.ids];
     if (ids.length === 0) return;
-    configureGeneratedClient();
     clearTimeout(deleted.timer);
     const failed: string[] = [];
     for (const id of ids) {
       try {
-        await SessionsService.postApiV1SessionsIdRestore({ id });
+        await SessionsService.postApiV1SessionsByIdRestore({ id });
       } catch {
         failed.push(id);
       }
@@ -1392,8 +1345,8 @@ class SessionsStore {
 
   private get metadataParams(): MetadataParams {
     return {
-      includeOneShot: this.filters.includeOneShot || undefined,
-      includeAutomated: this.filters.includeAutomated || undefined,
+      include_one_shot: this.filters.includeOneShot || undefined,
+      include_automated: this.filters.includeAutomated || undefined,
     };
   }
 
@@ -1435,10 +1388,7 @@ class SessionsStore {
     }
   }
 
-  private updateRecentlyDeletedBatch(
-    deleted: RecentlyDeletedSessions,
-    ids: string[],
-  ) {
+  private updateRecentlyDeletedBatch(deleted: RecentlyDeletedSessions, ids: string[]) {
     this.recentlyDeleted = this.recentlyDeleted.flatMap((d) => {
       if (d.key !== deleted.key) return [d];
       if (ids.length === 0) {
@@ -1456,11 +1406,10 @@ class SessionsStore {
   }
 
   async renameSession(id: string, displayName: string | null) {
-    configureGeneratedClient();
-    const updated = await SessionsService.patchApiV1SessionsIdRename({
-      id,
-      requestBody: { display_name: displayName },
-    }) as unknown as Session;
+    const updated = await SessionsService.patchApiV1SessionsByIdRename(
+      { id },
+      { display_name: displayName },
+    );
     const idx = this.sessions.findIndex((s) => s.id === id);
     if (idx !== -1) {
       const merged = { ...this.sessions[idx]!, ...updated };
@@ -1481,14 +1430,11 @@ class SessionsStore {
     this.unsubEvents = events.subscribe((event) => {
       this.handleLiveRefreshEvent(event);
     });
-    this.safetyNetTimer = setInterval(
-      () => {
-        this.load();
-        this.refreshActiveChildSessions();
-        this.bumpActiveSessionUsageVersion();
-      },
-      SAFETY_NET_REFRESH_MS,
-    );
+    this.safetyNetTimer = setInterval(() => {
+      this.load();
+      this.refreshActiveChildSessions();
+      this.bumpActiveSessionUsageVersion();
+    }, SAFETY_NET_REFRESH_MS);
   }
 
   private handleLiveRefreshEvent(event: DataChangedEvent) {
@@ -1582,10 +1528,7 @@ export function createSessionsStore(): SessionsStore {
   return new SessionsStore();
 }
 
-function sidebarIndexRowToSession(
-  row: SidebarSessionIndexRow,
-  existing?: Session,
-): Session {
+function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Session): Session {
   const skinny: Session = {
     id: row.id,
     project: row.project,
@@ -1675,13 +1618,7 @@ setInterval(() => {
   now = Date.now();
 }, 30_000);
 
-export type SessionStatus =
-  | "working"
-  | "waiting"
-  | "idle"
-  | "stale"
-  | "unclean"
-  | "quiet";
+export type SessionStatus = "working" | "waiting" | "idle" | "stale" | "unclean" | "quiet";
 
 /** Combine wall-clock recency with the parser's structural fact
  * (termination_status) into a single user-facing status.
@@ -1782,9 +1719,7 @@ function findRoot(
   return cur;
 }
 
-export function buildSessionGroups(
-  sessions: SessionGroupInput[],
-): SessionGroup[] {
+export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[] {
   const byId = new Map<string, SessionGroupInput>();
   for (const s of sessions) {
     byId.set(s.id, s);
@@ -1937,15 +1872,10 @@ export function buildSessionGroups(
 
     // For groups containing subagent children, the root session
     // should always be the main entry (not the most recent child).
-    const hasSubagents = group.sessions.some(
-      (s) => s.relationship_type === "subagent",
-    );
+    const hasSubagents = group.sessions.some((s) => s.relationship_type === "subagent");
     if (hasSubagents) {
       const rootIdx = group.sessions.findIndex((s) => s.id === group.key);
-      group.primarySessionId =
-        rootIdx >= 0
-          ? group.sessions[rootIdx]!.id
-          : group.sessions[0]!.id;
+      group.primarySessionId = rootIdx >= 0 ? group.sessions[rootIdx]!.id : group.sessions[0]!.id;
     } else {
       // For continuation chains, use the most recently active session.
       let bestIdx = 0;
@@ -1961,9 +1891,7 @@ export function buildSessionGroups(
     }
   }
 
-  const ordered = insertionOrder
-    .filter((k) => !keysToRemove.has(k))
-    .map((k) => groupMap.get(k)!);
+  const ordered = insertionOrder.filter((k) => !keysToRemove.has(k)).map((k) => groupMap.get(k)!);
 
   // Two-key sort:
   //   1. status priority — working → waiting → idle → stale →
@@ -1989,9 +1917,7 @@ export function buildSessionGroups(
 }
 
 function statusSortKey(group: SessionGroup): number {
-  const primary =
-    group.sessions.find((s) => s.id === group.primarySessionId) ??
-    group.sessions[0]!;
+  const primary = group.sessions.find((s) => s.id === group.primarySessionId) ?? group.sessions[0]!;
   const status = getSessionStatus(primary, group.sessions);
   switch (status) {
     case "working":

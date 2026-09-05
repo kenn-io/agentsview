@@ -6,9 +6,7 @@ import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import MessageContent from "./MessageContent.svelte";
 
-const copyToClipboardMock = vi.hoisted(() =>
-  vi.fn().mockResolvedValue(true),
-);
+const copyToClipboardMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const initMermaidRenderingMock = vi.hoisted(() =>
   vi.fn(() => ({ renderNow: vi.fn(), disconnect: vi.fn() })),
 );
@@ -54,25 +52,23 @@ vi.mock("../../stores/sync.svelte.js", () => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
   isRemoteConnection: () => runtimeState.isRemote,
 }));
 
 vi.mock("../../api/generated/index", async (importOriginal) => {
-  const orig =
-    await importOriginal<typeof import("../../api/generated/index")>();
+  const orig = await importOriginal<typeof import("../../api/generated/index")>();
   return {
     ...orig,
     SessionsService: {
-      postApiV1SessionsIdResume: forkSessionMock,
+      postApiV1SessionsByIdResume: forkSessionMock,
     },
   };
 });
 
 vi.mock("../../utils/highlight.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../utils/highlight.js")
-  >("../../utils/highlight.js");
+  const actual = await vi.importActual<typeof import("../../utils/highlight.js")>(
+    "../../utils/highlight.js",
+  );
   return {
     ...actual,
     applyHighlight: () => {},
@@ -102,9 +98,7 @@ type MessageWithTokenFlags = Message & {
   has_output_tokens?: boolean;
 };
 
-function makeMessage(
-  overrides: Partial<MessageWithTokenFlags> = {},
-): MessageWithTokenFlags {
+function makeMessage(overrides: Partial<MessageWithTokenFlags> = {}): MessageWithTokenFlags {
   return {
     id: 1,
     session_id: "session-1",
@@ -125,9 +119,7 @@ function makeMessage(
   };
 }
 
-function makeSession(
-  overrides: Partial<Session> = {},
-): Session {
+function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: "session-1",
     agent: "claude",
@@ -146,10 +138,7 @@ function makeSession(
   } as Session;
 }
 
-async function renderRole(
-  message: MessageWithTokenFlags,
-  props: Record<string, unknown> = {},
-) {
+async function renderRole(message: MessageWithTokenFlags, props: Record<string, unknown> = {}) {
   const component = mount(MessageContent, {
     target: document.body,
     props: { message, ...props },
@@ -190,12 +179,8 @@ Batch D (browser/picker/tabs/media-monitor) is done...
       }),
     );
 
-    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
-      "Teammate",
-    );
-    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
-      "T",
-    );
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe("Teammate");
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe("T");
     unmount(component);
   });
 
@@ -205,12 +190,8 @@ Batch D (browser/picker/tabs/media-monitor) is done...
       makeMessage({ id: 11, role: "user", content: "Please summarize this." }),
     );
 
-    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
-      "User",
-    );
-    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
-      "U",
-    );
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe("User");
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe("U");
     unmount(component);
   });
 
@@ -225,12 +206,8 @@ Batch D (browser/picker/tabs/media-monitor) is done...
       makeMessage({ id: 12, role: "user", session_id: "teammate-session" }),
     );
 
-    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
-      "Teammate",
-    );
-    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
-      "T",
-    );
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe("Teammate");
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe("T");
     unmount(component);
   });
 
@@ -252,17 +229,14 @@ Batch D (browser/picker/tabs/media-monitor) is done...
       }),
     );
 
-    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
-      "Agent",
-    );
-    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
-      "S",
-    );
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe("Agent");
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe("S");
     unmount(component);
   });
 
   it("does not relabel teammate wrappers inside fenced code blocks", async () => {
-    const content = "```xml\n<teammate-message teammate_id=\"batch-d-browser\">\nreply\n</teammate-message>\n```";
+    const content =
+      '```xml\n<teammate-message teammate_id="batch-d-browser">\nreply\n</teammate-message>\n```';
     sessionsState.sessions = [makeSession()];
     const component = await renderRole(
       makeMessage({
@@ -273,12 +247,8 @@ Batch D (browser/picker/tabs/media-monitor) is done...
       }),
     );
 
-    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
-      "User",
-    );
-    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
-      "U",
-    );
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe("User");
+    expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe("U");
     unmount(component);
   });
 
@@ -319,7 +289,7 @@ Batch D (browser/picker/tabs/media-monitor) is done...
         icon: "S",
       },
       {
-        content: "```xml\n<teammate-message teammate_id=\"t\">reply</teammate-message>\n```",
+        content: '```xml\n<teammate-message teammate_id="t">reply</teammate-message>\n```',
         session: makeSession(),
         props: {},
         label: "User",
@@ -340,12 +310,8 @@ Batch D (browser/picker/tabs/media-monitor) is done...
         }),
         testCase.props,
       );
-      expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
-        testCase.label,
-      );
-      expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(
-        testCase.icon,
-      );
+      expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(testCase.label);
+      expect(document.querySelector(".role-icon")?.textContent?.trim()).toBe(testCase.icon);
       unmount(component);
     }
   });
@@ -364,22 +330,16 @@ Batch D (browser/picker/tabs/media-monitor) is done...
 
     await tick();
 
-    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
-      "用户",
-    );
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe("用户");
     expect(document.querySelector(".role-icon")?.getAttribute("style")).toContain(
       "var(--accent-blue-foreground)",
     );
-    const copyButton = document.querySelector<HTMLButtonElement>(
-      "button.kit-copy-btn",
-    );
+    const copyButton = document.querySelector<HTMLButtonElement>("button.kit-copy-btn");
     expect(copyButton?.getAttribute("aria-label")).toBe("复制消息");
     expect(copyButton?.getAttribute("title")).toBe("复制消息");
-    expect(
-      document.querySelector<HTMLButtonElement>(".pin-btn")?.getAttribute(
-        "title",
-      ),
-    ).toBe("固定消息");
+    expect(document.querySelector<HTMLButtonElement>(".pin-btn")?.getAttribute("title")).toBe(
+      "固定消息",
+    );
     expect(document.body.textContent).toContain("Do not translate this prompt.");
 
     unmount(component);
@@ -403,12 +363,8 @@ Batch D (browser/picker/tabs/media-monitor) is done...
 
     await tick();
 
-    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
-      "助手",
-    );
-    expect(document.querySelector(".thinking-label")?.textContent?.trim()).toBe(
-      "思考",
-    );
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe("助手");
+    expect(document.querySelector(".thinking-label")?.textContent?.trim()).toBe("思考");
     expect(document.body.textContent).toContain("Visible response.");
 
     unmount(component);
@@ -429,9 +385,7 @@ Batch D (browser/picker/tabs/media-monitor) is done...
 
     await tick();
     const tokenMeta = document.querySelector(".message-tokens");
-    expect(tokenMeta?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "2.4k ctx / 180 out",
-    );
+    expect(tokenMeta?.textContent?.replace(/\s+/g, " ").trim()).toBe("2.4k ctx / 180 out");
 
     unmount(component);
   });
@@ -468,9 +422,7 @@ Batch D (browser/picker/tabs/media-monitor) is done...
 
     await tick();
     const tokenMeta = document.querySelector(".message-tokens");
-    expect(tokenMeta?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "— ctx / 180 out",
-    );
+    expect(tokenMeta?.textContent?.replace(/\s+/g, " ").trim()).toBe("— ctx / 180 out");
 
     unmount(component);
   });
@@ -501,9 +453,7 @@ Batch D (browser/picker/tabs/media-monitor) is done...
     await tick();
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(code);
-    expect(copyButton!.getAttribute("aria-label")).toBe(
-      "Copied code block",
-    );
+    expect(copyButton!.getAttribute("aria-label")).toBe("Copied code block");
     expect(copyButton!.querySelector("svg")).not.toBeNull();
     expect(copyButton!.textContent?.trim()).toBe("");
 
@@ -540,21 +490,23 @@ Batch D (browser/picker/tabs/media-monitor) is done...
   });
 
   it("forks a Claude session from the selected message ordinal", async () => {
-    sessionsState.sessions = [{
-      id: "session-1",
-      agent: "claude",
-      project: "proj-a",
-      machine: "test",
-      first_message: "hello",
-      started_at: "2026-02-20T12:30:00Z",
-      ended_at: "2026-02-20T12:31:00Z",
-      message_count: 3,
-      user_message_count: 2,
-      total_output_tokens: 0,
-      peak_context_tokens: 0,
-      is_automated: false,
-      created_at: "2026-02-20T12:30:00Z",
-    } as Session];
+    sessionsState.sessions = [
+      {
+        id: "session-1",
+        agent: "claude",
+        project: "proj-a",
+        machine: "test",
+        first_message: "hello",
+        started_at: "2026-02-20T12:30:00Z",
+        ended_at: "2026-02-20T12:31:00Z",
+        message_count: 3,
+        user_message_count: 2,
+        total_output_tokens: 0,
+        peak_context_tokens: 0,
+        is_automated: false,
+        created_at: "2026-02-20T12:30:00Z",
+      } as Session,
+    ];
     forkSessionMock.mockResolvedValueOnce({
       launched: false,
       command: "claude < '/tmp/agentsview/claude-message-points/session-1-ordinal-1.txt'",
@@ -575,21 +527,19 @@ Batch D (browser/picker/tabs/media-monitor) is done...
 
     await tick();
 
-    const forkButton = document.querySelector<HTMLButtonElement>(
-      "button.fork-btn",
-    );
+    const forkButton = document.querySelector<HTMLButtonElement>("button.fork-btn");
     expect(forkButton).not.toBeNull();
     forkButton!.click();
     await Promise.resolve();
     await tick();
 
-    expect(forkSessionMock).toHaveBeenCalledWith({
-      id: "session-1",
-      requestBody: {
+    expect(forkSessionMock).toHaveBeenCalledWith(
+      { id: "session-1" },
+      {
         from_ordinal: 1,
         fork_session: true,
       },
-    });
+    );
     expect(copyToClipboardMock).toHaveBeenCalledWith(
       "claude < '/tmp/agentsview/claude-message-points/session-1-ordinal-1.txt'",
     );
@@ -657,21 +607,23 @@ Batch D (browser/picker/tabs/media-monitor) is done...
 
   it("requests command-only message forks in local read-only mode", async () => {
     syncState.readOnly = true;
-    sessionsState.sessions = [{
-      id: "session-1",
-      agent: "claude",
-      project: "proj-a",
-      machine: "test",
-      first_message: "hello",
-      started_at: "2026-02-20T12:30:00Z",
-      ended_at: "2026-02-20T12:31:00Z",
-      message_count: 3,
-      user_message_count: 2,
-      total_output_tokens: 0,
-      peak_context_tokens: 0,
-      is_automated: false,
-      created_at: "2026-02-20T12:30:00Z",
-    } as Session];
+    sessionsState.sessions = [
+      {
+        id: "session-1",
+        agent: "claude",
+        project: "proj-a",
+        machine: "test",
+        first_message: "hello",
+        started_at: "2026-02-20T12:30:00Z",
+        ended_at: "2026-02-20T12:31:00Z",
+        message_count: 3,
+        user_message_count: 2,
+        total_output_tokens: 0,
+        peak_context_tokens: 0,
+        is_automated: false,
+        created_at: "2026-02-20T12:30:00Z",
+      } as Session,
+    ];
     forkSessionMock.mockResolvedValueOnce({
       launched: false,
       command: "claude < '/tmp/agentsview/claude-message-points/session-1-ordinal-1.txt'",
@@ -696,14 +648,14 @@ Batch D (browser/picker/tabs/media-monitor) is done...
     await Promise.resolve();
     await tick();
 
-    expect(forkSessionMock).toHaveBeenCalledWith({
-      id: "session-1",
-      requestBody: {
+    expect(forkSessionMock).toHaveBeenCalledWith(
+      { id: "session-1" },
+      {
         command_only: true,
         from_ordinal: 1,
         fork_session: true,
       },
-    });
+    );
 
     unmount(component);
   });
@@ -711,21 +663,23 @@ Batch D (browser/picker/tabs/media-monitor) is done...
   it("hides the fork action in remote read-only mode", async () => {
     syncState.readOnly = true;
     runtimeState.isRemote = true;
-    sessionsState.sessions = [{
-      id: "session-1",
-      agent: "claude",
-      project: "proj-a",
-      machine: "test",
-      first_message: "hello",
-      started_at: "2026-02-20T12:30:00Z",
-      ended_at: "2026-02-20T12:31:00Z",
-      message_count: 3,
-      user_message_count: 2,
-      total_output_tokens: 0,
-      peak_context_tokens: 0,
-      is_automated: false,
-      created_at: "2026-02-20T12:30:00Z",
-    } as Session];
+    sessionsState.sessions = [
+      {
+        id: "session-1",
+        agent: "claude",
+        project: "proj-a",
+        machine: "test",
+        first_message: "hello",
+        started_at: "2026-02-20T12:30:00Z",
+        ended_at: "2026-02-20T12:31:00Z",
+        message_count: 3,
+        user_message_count: 2,
+        total_output_tokens: 0,
+        peak_context_tokens: 0,
+        is_automated: false,
+        created_at: "2026-02-20T12:30:00Z",
+      } as Session,
+    ];
 
     const component = mount(MessageContent, {
       target: document.body,
@@ -785,14 +739,7 @@ Batch D (browser/picker/tabs/media-monitor) is done...
   });
 
   it("routes mermaid fences through MermaidBlock", async () => {
-    const content = [
-      "Mermaid diagram:",
-      "",
-      "```mermaid",
-      "graph TD",
-      "A-->B",
-      "```",
-    ].join("\n");
+    const content = ["Mermaid diagram:", "", "```mermaid", "graph TD", "A-->B", "```"].join("\n");
 
     const component = mount(MessageContent, {
       target: document.body,
@@ -840,9 +787,7 @@ Batch D (browser/picker/tabs/media-monitor) is done...
     await tick();
 
     expect(initMermaidRenderingMock).not.toHaveBeenCalled();
-    expect(document.querySelector(".code-content")?.textContent).toContain(
-      "A-->SearchTarget",
-    );
+    expect(document.querySelector(".code-content")?.textContent).toContain("A-->SearchTarget");
     expect(document.querySelector(".code-lang")?.textContent).toBe("mermaid");
 
     unmount(component);

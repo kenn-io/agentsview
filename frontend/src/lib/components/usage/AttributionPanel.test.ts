@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
-import type { UsageSummaryResponse } from "../../api/types/usage.js";
+import type { UsageSummaryResponse } from "../../api/generated/index";
 import { testMoney } from "../../test/money.js";
 
 const usageServiceMocks = vi.hoisted(() => ({
@@ -11,7 +11,6 @@ const usageServiceMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
 }));
@@ -29,12 +28,14 @@ function summaryWithAgents(agents: string[]): UsageSummaryResponse {
   return {
     from: "2024-01-01",
     to: "2024-01-31",
+    projects: {},
     totals: {
       inputTokens: 100,
       outputTokens: 50,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
       totalCost: testMoney(12),
+      cacheSavings: testMoney(0),
     },
     daily: [],
     projectTotals: [],
@@ -150,8 +151,8 @@ describe("AttributionPanel agent exclusion", () => {
     rows[1]!.click(); // exclude "codex"
 
     await vi.waitFor(() =>
-      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
-        expect.objectContaining({ excludeAgent: "codex" }),
+      expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({ exclude_agent: "codex" }),
       ),
     );
     unmount(component);
@@ -194,7 +195,7 @@ describe("AttributionPanel agent exclusion", () => {
         (params) =>
           params.from === "2024-01-08" &&
           params.to === "2024-01-14" &&
-          params.excludeAgent === undefined,
+          params.exclude_agent === undefined,
       );
     expect(restoredSelectionParams).toEqual(
       expect.objectContaining({
@@ -232,9 +233,9 @@ describe("AttributionPanel project identity", () => {
     rows[1]!.click();
 
     await vi.waitFor(() =>
-      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
         expect.objectContaining({
-          excludeProjectKey: "pl1:sha256:second",
+          exclude_project_key: "pl1:sha256:second",
         }),
       ),
     );

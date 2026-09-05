@@ -19,9 +19,7 @@ test.describe("Session count consistency", () => {
     await sp.goto();
   });
 
-  test("navigation counts agree and analytics counts subagents on top", async ({
-    page,
-  }) => {
+  test("navigation counts agree and analytics counts subagents on top", async ({ page }) => {
     // 1. Session list header count
     const headerText = await sp.sessionListHeader.textContent();
     const listMatch = headerText?.match(/(\d[\d,]*)\s+sessions/);
@@ -45,20 +43,11 @@ test.describe("Session count consistency", () => {
     const sessionsCard = summaryCards
       .locator(".card")
       .filter({ has: page.locator(".card-label", { hasText: /^Sessions$/ }) });
-    await expect(
-      sessionsCard.locator(".card-value"),
-    ).not.toHaveText("--", { timeout: 10_000 });
-    await expect(
-      sessionsCard.locator(".skeleton-value"),
-    ).toHaveCount(0, { timeout: 5_000 });
+    await expect(sessionsCard.locator(".card-value")).not.toHaveText("--", { timeout: 10_000 });
+    await expect(sessionsCard.locator(".skeleton-value")).toHaveCount(0, { timeout: 5_000 });
 
-    const cardValue = await sessionsCard
-      .locator(".card-value")
-      .textContent();
-    const analyticsCount = parseInt(
-      cardValue?.replace(/,/g, "") ?? "0",
-      10,
-    );
+    const cardValue = await sessionsCard.locator(".card-value").textContent();
+    const analyticsCount = parseInt(cardValue?.replace(/,/g, "") ?? "0", 10);
 
     // Navigation surfaces (list, status bar) show only root sessions
     // and must agree. The analytics summary counts subagents on top, so
@@ -66,8 +55,6 @@ test.describe("Session count consistency", () => {
     // sessions stay excluded everywhere.
     expect(listCount, "session list").toBe(EXPECTED_ROOT_SESSIONS);
     expect(statsCount, "status bar").toBe(EXPECTED_ROOT_SESSIONS);
-    expect(analyticsCount, "analytics summary").toBe(
-      EXPECTED_ANALYTICS_SESSIONS,
-    );
+    expect(analyticsCount, "analytics summary").toBe(EXPECTED_ANALYTICS_SESSIONS);
   });
 });

@@ -6,9 +6,7 @@ import { mount, unmount, tick } from "svelte";
 import type { ToolCall } from "../../api/types.js";
 import { setLocale } from "../../i18n/index.js";
 
-const copyToClipboardMock = vi.hoisted(() =>
-  vi.fn().mockResolvedValue(true),
-);
+const copyToClipboardMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
 vi.mock("./SubagentInline.svelte", () => ({
   default: {},
@@ -140,8 +138,9 @@ describe("ToolBlock output section", () => {
     await tick();
     expect(document.querySelector(".output-mode")).not.toBeNull();
     expect(document.querySelector(".formatted-output")).toBeNull();
-    const formatted = Array.from(document.querySelectorAll<HTMLButtonElement>(".output-mode button"))
-      .find((button) => button.textContent?.trim() === "Formatted");
+    const formatted = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".output-mode button"),
+    ).find((button) => button.textContent?.trim() === "Formatted");
     expect(formatted).not.toBeNull();
     formatted!.click();
     await tick();
@@ -150,7 +149,8 @@ describe("ToolBlock output section", () => {
   });
 
   it("keeps canonical path metadata accessible without labelling ordinary metadata", async () => {
-    const longPath = "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
+    const longPath =
+      "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
     const toolCall: ToolCall = {
       tool_name: "Read",
       category: "Read",
@@ -246,9 +246,7 @@ describe("ToolBlock output section", () => {
     document.querySelector<HTMLButtonElement>(".output-header")!.click();
     await tick();
 
-    expect(document.querySelector(".output-content")?.textContent).toBe(
-      resultText,
-    );
+    expect(document.querySelector(".output-content")?.textContent).toBe(resultText);
   });
 
   it("renders history after expanding the tool block when result_events are set", async () => {
@@ -309,22 +307,16 @@ describe("ToolBlock output section", () => {
     document.querySelector<HTMLButtonElement>(".history-header")!.click();
     await tick();
 
-    expect(document.querySelector(".output-header .output-label")?.textContent)
-      .toBe("输出");
-    expect(document.querySelector(".history-header .output-label")?.textContent)
-      .toBe("历史");
+    expect(document.querySelector(".output-header .output-label")?.textContent).toBe("输出");
+    expect(document.querySelector(".history-header .output-label")?.textContent).toBe("历史");
     expect(
-      Array.from(document.querySelectorAll(".meta-label"))
-        .map((node) => node.textContent),
+      Array.from(document.querySelectorAll(".meta-label")).map((node) => node.textContent),
     ).toEqual(["状态：", "来源：", "agent："]);
   });
 
   it("localizes long content expansion controls", async () => {
     setLocale("zh-CN");
-    const content = Array.from(
-      { length: 22 },
-      (_, i) => `line ${i + 1}`,
-    ).join("\n");
+    const content = Array.from({ length: 22 }, (_, i) => `line ${i + 1}`).join("\n");
     component = mount(ToolBlock, {
       target: document.body,
       props: { content },
@@ -340,8 +332,7 @@ describe("ToolBlock output section", () => {
     showMore!.click();
     await tick();
 
-    expect(document.querySelector(".show-more-btn")?.textContent?.trim())
-      .toBe("收起");
+    expect(document.querySelector(".show-more-btn")?.textContent?.trim()).toBe("收起");
   });
 
   it("expands event history and shows chronological event content", async () => {
@@ -426,10 +417,7 @@ describe("ToolBlock copy affordances", () => {
   });
 
   it("copies full raw Bash fallback before show-all expansion", async () => {
-    const longCommand = Array.from(
-      { length: 230 },
-      (_, i) => `echo hidden-line-${i}`,
-    ).join("\n");
+    const longCommand = Array.from({ length: 230 }, (_, i) => `echo hidden-line-${i}`).join("\n");
     const expectedCopy = `command: ${longCommand}`;
     const toolCall: ToolCall = {
       tool_name: "Bash",
@@ -445,9 +433,7 @@ describe("ToolBlock copy affordances", () => {
     document.querySelector<HTMLButtonElement>(".tool-header")!.click();
     await tick();
 
-    expect(document.querySelector(".tool-content")?.textContent).not.toContain(
-      "hidden-line-229",
-    );
+    expect(document.querySelector(".tool-content")?.textContent).not.toContain("hidden-line-229");
 
     const copyButton = document.querySelector<HTMLButtonElement>(
       'button.kit-copy-btn[aria-label="Copy input"]',
@@ -459,9 +445,7 @@ describe("ToolBlock copy affordances", () => {
     await tick();
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(expectedCopy);
-    expect(document.querySelector(".tool-content")?.textContent).not.toContain(
-      "hidden-line-229",
-    );
+    expect(document.querySelector(".tool-content")?.textContent).not.toContain("hidden-line-229");
   });
 });
 
@@ -733,10 +717,7 @@ describe("ToolBlock show-more for long content", () => {
   });
 
   it("auto-expands hidden Bash fallback content on search match", async () => {
-    const longCommand = Array.from(
-      { length: 30 },
-      (_, i) => `echo hidden-line-${i}`,
-    ).join("\n");
+    const longCommand = Array.from({ length: 30 }, (_, i) => `echo hidden-line-${i}`).join("\n");
     const toolCall: ToolCall = {
       tool_name: "Bash",
       category: "Bash",
@@ -755,9 +736,7 @@ describe("ToolBlock show-more for long content", () => {
     const toolContent = document.querySelector(".tool-content");
     expect(toolContent).not.toBeNull();
     expect(toolContent!.textContent).toContain("hidden-line-29");
-    expect(document.querySelector(".show-more-btn")!.textContent).toContain(
-      "show less",
-    );
+    expect(document.querySelector(".show-more-btn")!.textContent).toContain("show less");
   });
 });
 
@@ -1005,9 +984,7 @@ describe("ToolBlock collapsed preview", () => {
     await tick();
 
     const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe(
-      "#29 · in_progress · Rebuild Companies list table columns",
-    );
+    expect(preview!.textContent).toBe("#29 · in_progress · Rebuild Companies list table columns");
   });
 
   it("shows just task id and status for TaskUpdate without subject", async () => {

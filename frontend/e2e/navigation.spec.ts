@@ -31,7 +31,9 @@ test.describe("Navigation", () => {
     await expect(sp.exportBtn).toContainText("Export CSV");
   });
 
-  test("search result for an unlisted session keeps the breadcrumb project (#1190)", async ({ page }) => {
+  test("search result for an unlisted session keeps the breadcrumb project (#1190)", async ({
+    page,
+  }) => {
     // The target stays off the sidebar index page, as with a paginated
     // or filtered index in production. Search still finds it; opening
     // the result hydrates it by ID, and the index reload that entering
@@ -42,9 +44,7 @@ test.describe("Navigation", () => {
     await page.route("**/api/v1/sessions/sidebar-index**", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
-      body.sessions = body.sessions.filter(
-        (s: { id: string }) => s.id !== sessionId,
-      );
+      body.sessions = body.sessions.filter((s: { id: string }) => s.id !== sessionId);
       await new Promise((resolve) => setTimeout(resolve, 500));
       await route.fulfill({ response, json: body });
     });
@@ -54,18 +54,18 @@ test.describe("Navigation", () => {
     await expect(input).toBeVisible();
     await input.fill("synchronous DB read");
 
-    const result = page.locator(".palette-item", {
-      hasText: "synchronous DB read",
-    }).first();
+    const result = page
+      .locator(".palette-item", {
+        hasText: "synchronous DB read",
+      })
+      .first();
     await expect(result).toBeVisible();
     const indexReloaded = page.waitForResponse("**/api/v1/sessions/sidebar-index**");
     await result.click();
 
     await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}`));
     await indexReloaded;
-    await expect(page.locator(".breadcrumb-current")).toHaveText(
-      /project-duration/,
-    );
+    await expect(page.locator(".breadcrumb-current")).toHaveText(/project-duration/);
   });
 
   test("subagent cost rollup", async ({ page }, testInfo) => {
@@ -116,9 +116,9 @@ test.describe("Navigation", () => {
     }
 
     await page.setViewportSize({ width: 1280, height: 800 });
-    const fallback = page.locator(
-      '.session-item:visible:not([data-session-id="test-session-mixed-content-7"])',
-    ).first();
+    const fallback = page
+      .locator('.session-item:visible:not([data-session-id="test-session-mixed-content-7"])')
+      .first();
     await fallback.click();
     await expect(page.locator(".cost-badge")).toContainText("$1.00");
     await expect(page.locator(".cost-badge")).not.toContainText("Total");

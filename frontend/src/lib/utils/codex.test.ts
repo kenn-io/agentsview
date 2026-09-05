@@ -3,15 +3,11 @@ import { codexDesktopLink } from "./codex.js";
 
 describe("codexDesktopLink", () => {
   it("removes the storage prefix from local Codex sessions", () => {
-    expect(codexDesktopLink("codex", "codex:thread-123")).toBe(
-      "codex://threads/thread-123",
-    );
+    expect(codexDesktopLink("codex", "codex:thread-123")).toBe("codex://threads/thread-123");
   });
 
   it("encodes the thread ID as a URL path segment", () => {
-    expect(codexDesktopLink("codex", "codex:thread/123")).toBe(
-      "codex://threads/thread%2F123",
-    );
+    expect(codexDesktopLink("codex", "codex:thread/123")).toBe("codex://threads/thread%2F123");
   });
 
   it("does not create links for remote or non-Codex sessions", () => {

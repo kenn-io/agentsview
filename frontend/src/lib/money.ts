@@ -1,4 +1,4 @@
-import type { MoneyMoney } from "./api/generated/models/MoneyMoney.js";
+import type { MoneyMoney } from "./api/generated/index.js";
 import { getLocale } from "./i18n/index.js";
 
 export type Money = MoneyMoney;

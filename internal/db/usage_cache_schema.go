@@ -333,7 +333,7 @@ func (m *usageCacheManager) Generation(
 	m.generations[databaseID] = cache
 	if m.archive != nil {
 		cache.fill = newUsageFillCoordinator(cacheContext, m.archive, cache)
-		cache.rollup = newUsageRollupCoordinator(cacheContext, m.archive, cache)
+		cache.rollup = newUsageRollupCoordinator(cacheContext, cache)
 	}
 	if !cache.temporary {
 		if err := retireStaleUsageCacheGenerations(

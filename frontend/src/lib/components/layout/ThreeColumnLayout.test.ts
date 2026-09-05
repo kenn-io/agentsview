@@ -1,11 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import {
-  createRawSnippet,
-  mount,
-  tick,
-  unmount,
-} from "svelte";
+import { createRawSnippet, mount, tick, unmount } from "svelte";
 // @ts-ignore
 import ThreeColumnLayout from "./ThreeColumnLayout.svelte";
 import { m } from "../../i18n/index.js";
@@ -42,9 +37,7 @@ const SIDEBAR_BORDER_WIDTH = 1;
 const KEYBOARD_RESIZE_STEP = 24;
 
 let component: ReturnType<typeof mount> | undefined;
-let restoreMeasuredLayoutWidth:
-  | (() => void)
-  | undefined;
+let restoreMeasuredLayoutWidth: (() => void) | undefined;
 
 function setViewportWidth(width: number) {
   Object.defineProperty(window, "innerWidth", {
@@ -80,15 +73,11 @@ function getSidebar() {
 }
 
 function getHandle() {
-  return document.querySelector<HTMLElement>(
-    `[aria-label="${m.nav_resize_sidebar()}"]`,
-  );
+  return document.querySelector<HTMLElement>(`[aria-label="${m.nav_resize_sidebar()}"]`);
 }
 
 function getVitalsHandle() {
-  return document.querySelector<HTMLElement>(
-    `[aria-label="${m.session_vitals_resize()}"]`,
-  );
+  return document.querySelector<HTMLElement>(`[aria-label="${m.session_vitals_resize()}"]`);
 }
 
 function getVitalsPanel() {
@@ -97,15 +86,10 @@ function getVitalsPanel() {
   return panel!;
 }
 
-function getClampedSidebarWidthForLayout(
-  desiredWidth: number,
-  layoutWidth: number,
-) {
+function getClampedSidebarWidthForLayout(desiredWidth: number, layoutWidth: number) {
   return clampSidebarWidthForLayout(
     desiredWidth,
-    layoutWidth -
-      RESIZE_HANDLE_WIDTH -
-      SIDEBAR_BORDER_WIDTH,
+    layoutWidth - RESIZE_HANDLE_WIDTH - SIDEBAR_BORDER_WIDTH,
   );
 }
 
@@ -129,54 +113,39 @@ function mockLayoutWidth(width: number) {
 }
 
 function mockLayoutWidthOnRender(width: number) {
-  const original =
-    HTMLElement.prototype.getBoundingClientRect;
+  const original = HTMLElement.prototype.getBoundingClientRect;
 
-  Object.defineProperty(
-    HTMLElement.prototype,
-    "getBoundingClientRect",
-    {
-      configurable: true,
-      value: function () {
-        if (
-          this instanceof HTMLElement &&
-          this.classList.contains("layout")
-        ) {
-          return {
-            width,
-            height: 0,
-            top: 0,
-            right: width,
-            bottom: 0,
-            left: 0,
-            x: 0,
-            y: 0,
-            toJSON: () => ({}),
-          };
-        }
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value: function () {
+      if (this instanceof HTMLElement && this.classList.contains("layout")) {
+        return {
+          width,
+          height: 0,
+          top: 0,
+          right: width,
+          bottom: 0,
+          left: 0,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        };
+      }
 
-        return original.call(this);
-      },
+      return original.call(this);
     },
-  );
+  });
 
   restoreMeasuredLayoutWidth = () => {
-    Object.defineProperty(
-      HTMLElement.prototype,
-      "getBoundingClientRect",
-      {
-        configurable: true,
-        value: original,
-      },
-    );
+    Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+      configurable: true,
+      value: original,
+    });
     restoreMeasuredLayoutWidth = undefined;
   };
 }
 
-function pointerEvent(
-  type: string,
-  clientX: number,
-) {
+function pointerEvent(type: string, clientX: number) {
   return new PointerEvent(type, {
     bubbles: true,
     clientX,
@@ -231,15 +200,11 @@ describe("ThreeColumnLayout", () => {
     await tick();
 
     const recall = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        ".mobile-nav .mobile-nav-btn",
-      ),
+      document.querySelectorAll<HTMLButtonElement>(".mobile-nav .mobile-nav-btn"),
     ).find((button) => button.textContent?.trim() === m.nav_recall());
     expect(recall).not.toBeUndefined();
 
-    const navigate = vi
-      .spyOn(router, "navigate")
-      .mockImplementation(() => true);
+    const navigate = vi.spyOn(router, "navigate").mockImplementation(() => true);
     recall!.click();
     expect(navigate).toHaveBeenCalledWith("recall");
     expect(ui.sidebarOpen).toBe(false);
@@ -259,9 +224,7 @@ describe("ThreeColumnLayout", () => {
     await tick();
 
     const labels = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        ".mobile-nav .mobile-nav-btn",
-      ),
+      document.querySelectorAll<HTMLButtonElement>(".mobile-nav .mobile-nav-btn"),
     ).map((button) => button.textContent?.trim());
     expect(labels).toContain(m.nav_recall());
     expect(labels).toContain("Quality");
@@ -272,19 +235,13 @@ describe("ThreeColumnLayout", () => {
     await tick();
 
     const navButtons = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        ".mobile-nav .mobile-nav-btn",
-      ),
+      document.querySelectorAll<HTMLButtonElement>(".mobile-nav .mobile-nav-btn"),
     );
-    const recentEdits = navButtons.find(
-      (btn) => btn.textContent?.trim() === m.nav_recent_edits(),
-    );
+    const recentEdits = navButtons.find((btn) => btn.textContent?.trim() === m.nav_recent_edits());
     expect(recentEdits).not.toBeUndefined();
 
     // The header More menu that also hosts Recent Edits is display:none under    // the medium breakpoint, so the mobile nav button is the only way mobile users reach it.
-    const navigate = vi
-      .spyOn(router, "navigate")
-      .mockImplementation(() => true);
+    const navigate = vi.spyOn(router, "navigate").mockImplementation(() => true);
     recentEdits!.click();
     expect(navigate).toHaveBeenCalledWith("recent-edits");
     navigate.mockRestore();
@@ -295,28 +252,19 @@ describe("ThreeColumnLayout", () => {
     await tick();
 
     const navButtons = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        ".mobile-nav .mobile-nav-btn",
-      ),
+      document.querySelectorAll<HTMLButtonElement>(".mobile-nav .mobile-nav-btn"),
     );
-    const data = navButtons.find(
-      (btn) => btn.textContent?.trim() === m.nav_data(),
-    );
+    const data = navButtons.find((btn) => btn.textContent?.trim() === m.nav_data());
     expect(data).not.toBeUndefined();
 
-    const navigate = vi
-      .spyOn(router, "navigate")
-      .mockImplementation(() => true);
+    const navigate = vi.spyOn(router, "navigate").mockImplementation(() => true);
     data!.click();
     expect(navigate).toHaveBeenCalledWith("data");
     navigate.mockRestore();
   });
 
   it("renders the resize handle at the desktop layout breakpoint", async () => {
-    const expectedWidth = getClampedSidebarWidthForLayout(
-      320,
-      SIDEBAR_DESKTOP_BREAKPOINT,
-    );
+    const expectedWidth = getClampedSidebarWidthForLayout(320, SIDEBAR_DESKTOP_BREAKPOINT);
 
     setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT);
     ui.sidebarOpen = true;
@@ -326,9 +274,7 @@ describe("ThreeColumnLayout", () => {
     await tick();
 
     expect(getHandle()).not.toBeNull();
-    expect(getSidebar().style.width).toBe(
-      `${expectedWidth}px`,
-    );
+    expect(getSidebar().style.width).toBe(`${expectedWidth}px`);
   });
 
   it("renders handle on desktop layouts", async () => {
@@ -355,11 +301,7 @@ describe("ThreeColumnLayout", () => {
 
   it("renders a clamped width on mount while preserving the stored preference", async () => {
     const layoutWidth = 760;
-    const expectedWidth =
-      getClampedSidebarWidthForLayout(
-        SIDEBAR_WIDTH_STORAGE_MAX,
-        layoutWidth,
-      );
+    const expectedWidth = getClampedSidebarWidthForLayout(SIDEBAR_WIDTH_STORAGE_MAX, layoutWidth);
 
     setViewportWidth(1280);
     ui.setSidebarWidth(SIDEBAR_WIDTH_STORAGE_MAX);
@@ -368,12 +310,8 @@ describe("ThreeColumnLayout", () => {
     renderLayout();
     await tick();
 
-    expect(getSidebar().style.width).toBe(
-      `${expectedWidth}px`,
-    );
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_STORAGE_MAX,
-    );
+    expect(getSidebar().style.width).toBe(`${expectedWidth}px`);
+    expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_STORAGE_MAX);
   });
 
   it("dragging updates ui.sidebarWidth", async () => {
@@ -388,28 +326,18 @@ describe("ThreeColumnLayout", () => {
     const handle = getHandle();
     expect(handle).not.toBeNull();
 
-    handle!.dispatchEvent(
-      pointerEvent("pointerdown", SIDEBAR_WIDTH_DEFAULT),
-    );
-    handle!.dispatchEvent(
-      pointerEvent("pointermove", SIDEBAR_WIDTH_DEFAULT + 80),
-    );
+    handle!.dispatchEvent(pointerEvent("pointerdown", SIDEBAR_WIDTH_DEFAULT));
+    handle!.dispatchEvent(pointerEvent("pointermove", SIDEBAR_WIDTH_DEFAULT + 80));
     await tick();
 
     expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 80);
-    expect(getSidebar().style.width).toBe(
-      `${SIDEBAR_WIDTH_DEFAULT + 80}px`,
-    );
+    expect(getSidebar().style.width).toBe(`${SIDEBAR_WIDTH_DEFAULT + 80}px`);
 
-    handle!.dispatchEvent(
-      pointerEvent("pointerup", SIDEBAR_WIDTH_DEFAULT + 80),
-    );
+    handle!.dispatchEvent(pointerEvent("pointerup", SIDEBAR_WIDTH_DEFAULT + 80));
     await tick();
 
     expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 80);
-    expect(getSidebar().style.width).toBe(
-      `${SIDEBAR_WIDTH_DEFAULT + 80}px`,
-    );
+    expect(getSidebar().style.width).toBe(`${SIDEBAR_WIDTH_DEFAULT + 80}px`);
   });
 
   it("dragging clamps to the computed minimum/max using mocked layout width", async () => {
@@ -423,35 +351,22 @@ describe("ThreeColumnLayout", () => {
 
     mockLayoutWidth(layoutWidth);
 
-    await dragHandle(
-      SIDEBAR_WIDTH_DEFAULT,
-      SIDEBAR_WIDTH_DEFAULT + 240,
-    );
+    await dragHandle(SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT + 240);
 
     expect(ui.sidebarWidth).toBe(
-      getClampedSidebarWidthForLayout(
-        SIDEBAR_WIDTH_DEFAULT + 240,
-        layoutWidth,
-      ),
+      getClampedSidebarWidthForLayout(SIDEBAR_WIDTH_DEFAULT + 240, layoutWidth),
     );
 
     await dragHandle(280, -200);
 
     expect(ui.sidebarWidth).toBe(
-      getClampedSidebarWidthForLayout(
-        SIDEBAR_WIDTH_MIN - 420,
-        layoutWidth,
-      ),
+      getClampedSidebarWidthForLayout(SIDEBAR_WIDTH_MIN - 420, layoutWidth),
     );
   });
 
   it("does not persist a clamped width for a click without drag movement", async () => {
     const layoutWidth = 700;
-    const expectedWidth =
-      getClampedSidebarWidthForLayout(
-        SIDEBAR_WIDTH_STORAGE_MAX,
-        layoutWidth,
-      );
+    const expectedWidth = getClampedSidebarWidthForLayout(SIDEBAR_WIDTH_STORAGE_MAX, layoutWidth);
 
     setViewportWidth(1280);
     ui.setSidebarWidth(SIDEBAR_WIDTH_STORAGE_MAX);
@@ -463,29 +378,17 @@ describe("ThreeColumnLayout", () => {
     const handle = getHandle();
     expect(handle).not.toBeNull();
 
-    handle!.dispatchEvent(
-      pointerEvent("pointerdown", expectedWidth),
-    );
-    handle!.dispatchEvent(
-      pointerEvent("pointerup", expectedWidth),
-    );
+    handle!.dispatchEvent(pointerEvent("pointerdown", expectedWidth));
+    handle!.dispatchEvent(pointerEvent("pointerup", expectedWidth));
     await tick();
 
-    expect(getSidebar().style.width).toBe(
-      `${expectedWidth}px`,
-    );
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_STORAGE_MAX,
-    );
+    expect(getSidebar().style.width).toBe(`${expectedWidth}px`);
+    expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_STORAGE_MAX);
   });
 
   it("preserves the stored preferred width when a drag stays inside the same clamp", async () => {
     const layoutWidth = 760;
-    const expectedWidth =
-      getClampedSidebarWidthForLayout(
-        SIDEBAR_WIDTH_STORAGE_MAX,
-        layoutWidth,
-      );
+    const expectedWidth = getClampedSidebarWidthForLayout(SIDEBAR_WIDTH_STORAGE_MAX, layoutWidth);
 
     setViewportWidth(1280);
     ui.setSidebarWidth(SIDEBAR_WIDTH_STORAGE_MAX);
@@ -496,21 +399,13 @@ describe("ThreeColumnLayout", () => {
 
     await dragHandle(expectedWidth, expectedWidth + 120);
 
-    expect(getSidebar().style.width).toBe(
-      `${expectedWidth}px`,
-    );
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_STORAGE_MAX,
-    );
+    expect(getSidebar().style.width).toBe(`${expectedWidth}px`);
+    expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_STORAGE_MAX);
   });
 
   it("accounts for the resize handle gutter when clamping near the content minimum", async () => {
     const layoutWidth = 1000;
-    const expectedWidth =
-      getClampedSidebarWidthForLayout(
-        SIDEBAR_WIDTH_STORAGE_MAX,
-        layoutWidth,
-      );
+    const expectedWidth = getClampedSidebarWidthForLayout(SIDEBAR_WIDTH_STORAGE_MAX, layoutWidth);
 
     setViewportWidth(1280);
     ui.setSidebarWidth(SIDEBAR_WIDTH_STORAGE_MAX);
@@ -519,15 +414,8 @@ describe("ThreeColumnLayout", () => {
     renderLayout();
     await tick();
 
-    expect(getSidebar().style.width).toBe(
-      `${expectedWidth}px`,
-    );
-    expect(
-      layoutWidth -
-        expectedWidth -
-        RESIZE_HANDLE_WIDTH -
-        SIDEBAR_BORDER_WIDTH,
-    ).toBe(480);
+    expect(getSidebar().style.width).toBe(`${expectedWidth}px`);
+    expect(layoutWidth - expectedWidth - RESIZE_HANDLE_WIDTH - SIDEBAR_BORDER_WIDTH).toBe(480);
   });
 
   it("removes the handle and keeps the dragged width when the sidebar closes mid-drag", async () => {
@@ -543,12 +431,8 @@ describe("ThreeColumnLayout", () => {
     const handle = getHandle();
     expect(handle).not.toBeNull();
 
-    handle!.dispatchEvent(
-      pointerEvent("pointerdown", SIDEBAR_WIDTH_DEFAULT),
-    );
-    handle!.dispatchEvent(
-      pointerEvent("pointermove", SIDEBAR_WIDTH_DEFAULT + 60),
-    );
+    handle!.dispatchEvent(pointerEvent("pointerdown", SIDEBAR_WIDTH_DEFAULT));
+    handle!.dispatchEvent(pointerEvent("pointermove", SIDEBAR_WIDTH_DEFAULT + 60));
     await tick();
 
     expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 60);
@@ -558,9 +442,7 @@ describe("ThreeColumnLayout", () => {
 
     expect(getHandle()).toBeNull();
 
-    handle!.dispatchEvent(
-      pointerEvent("pointermove", SIDEBAR_WIDTH_DEFAULT + 140),
-    );
+    handle!.dispatchEvent(pointerEvent("pointermove", SIDEBAR_WIDTH_DEFAULT + 140));
     await tick();
 
     expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 60);
@@ -586,12 +468,8 @@ describe("ThreeColumnLayout", () => {
     );
     await tick();
 
-    expect(ui.sidebarWidth).toBe(
-      SIDEBAR_WIDTH_DEFAULT + KEYBOARD_RESIZE_STEP,
-    );
-    expect(getSidebar().style.width).toBe(
-      `${SIDEBAR_WIDTH_DEFAULT + KEYBOARD_RESIZE_STEP}px`,
-    );
+    expect(ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + KEYBOARD_RESIZE_STEP);
+    expect(getSidebar().style.width).toBe(`${SIDEBAR_WIDTH_DEFAULT + KEYBOARD_RESIZE_STEP}px`);
 
     handle!.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -613,9 +491,7 @@ describe("ThreeColumnLayout", () => {
     await tick();
 
     expect(getVitalsHandle()).not.toBeNull();
-    expect(getVitalsPanel().style.width).toBe(
-      `${VITALS_WIDTH_DEFAULT}px`,
-    );
+    expect(getVitalsPanel().style.width).toBe(`${VITALS_WIDTH_DEFAULT}px`);
   });
 
   it("dragging the vitals handle left widens the panel and persists the width", async () => {
@@ -637,9 +513,7 @@ describe("ThreeColumnLayout", () => {
     await tick();
 
     expect(ui.vitalsWidth).toBe(VITALS_WIDTH_DEFAULT + 80);
-    expect(getVitalsPanel().style.width).toBe(
-      `${VITALS_WIDTH_DEFAULT + 80}px`,
-    );
+    expect(getVitalsPanel().style.width).toBe(`${VITALS_WIDTH_DEFAULT + 80}px`);
 
     handle!.dispatchEvent(pointerEvent("pointerup", 820));
     await tick();
@@ -669,9 +543,7 @@ describe("ThreeColumnLayout", () => {
     );
     await tick();
 
-    expect(ui.vitalsWidth).toBe(
-      VITALS_WIDTH_DEFAULT + KEYBOARD_RESIZE_STEP,
-    );
+    expect(ui.vitalsWidth).toBe(VITALS_WIDTH_DEFAULT + KEYBOARD_RESIZE_STEP);
 
     handle!.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -690,15 +562,10 @@ describe("ThreeColumnLayout", () => {
     // 1px pane borders plus the vitals handle.
     const vitalsAvailable =
       layoutWidth -
-      (SIDEBAR_WIDTH_DEFAULT +
-        RESIZE_HANDLE_WIDTH +
-        SIDEBAR_BORDER_WIDTH) -
+      (SIDEBAR_WIDTH_DEFAULT + RESIZE_HANDLE_WIDTH + SIDEBAR_BORDER_WIDTH) -
       RESIZE_HANDLE_WIDTH -
       SIDEBAR_BORDER_WIDTH;
-    const expectedWidth = clampVitalsWidthForLayout(
-      560,
-      vitalsAvailable,
-    );
+    const expectedWidth = clampVitalsWidthForLayout(560, vitalsAvailable);
 
     setViewportWidth(1280);
     ui.vitalsOpen = true;
@@ -709,9 +576,7 @@ describe("ThreeColumnLayout", () => {
     renderLayout(true);
     await tick();
 
-    expect(getVitalsPanel().style.width).toBe(
-      `${expectedWidth}px`,
-    );
+    expect(getVitalsPanel().style.width).toBe(`${expectedWidth}px`);
 
     const handle = getVitalsHandle();
     expect(handle).not.toBeNull();
@@ -722,9 +587,7 @@ describe("ThreeColumnLayout", () => {
     handle!.dispatchEvent(pointerEvent("pointerup", 780));
     await tick();
 
-    expect(getVitalsPanel().style.width).toBe(
-      `${expectedWidth}px`,
-    );
+    expect(getVitalsPanel().style.width).toBe(`${expectedWidth}px`);
     expect(ui.vitalsWidth).toBe(560);
   });
 
@@ -740,10 +603,7 @@ describe("ThreeColumnLayout", () => {
 
     mockLayoutWidth(1280);
 
-    await dragHandle(
-      SIDEBAR_WIDTH_DEFAULT,
-      SIDEBAR_WIDTH_DEFAULT + 400,
-    );
+    await dragHandle(SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT + 400);
 
     // 1280 minus both 4px handles and both 1px pane borders leaves 990 for
     // the sidebar clamp once the vitals minimum footprint (280 + 5) is
@@ -770,8 +630,6 @@ describe("ThreeColumnLayout", () => {
     // The separators advertise the layout-effective maxima, not the
     // storage caps the current window cannot grant.
     expect(getHandle()!.getAttribute("aria-valuemax")).toBe("510");
-    expect(
-      getVitalsHandle()!.getAttribute("aria-valuemax"),
-    ).toBe("280");
+    expect(getVitalsHandle()!.getAttribute("aria-valuemax")).toBe("280");
   });
 });

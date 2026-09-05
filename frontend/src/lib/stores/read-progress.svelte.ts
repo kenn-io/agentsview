@@ -37,8 +37,7 @@ function storage(): StorageLike | null {
 }
 
 function isOrdinal(value: unknown): value is number | null {
-  return value === null ||
-    (Number.isInteger(value) && (value as number) >= 0);
+  return value === null || (Number.isInteger(value) && (value as number) >= 0);
 }
 
 function isTouchedAt(value: unknown): value is number {
@@ -47,13 +46,15 @@ function isTouchedAt(value: unknown): value is number {
 
 function isMarker(value: unknown): value is ReadProgressMarker {
   const candidate = value as Record<string, unknown> | null;
-  return !!value &&
+  return (
+    !!value &&
     typeof value === "object" &&
     candidate !== null &&
     typeof candidate.token === "string" &&
     candidate.token.length > 0 &&
     isOrdinal(candidate.ordinal) &&
-    isTouchedAt(candidate.touched_at);
+    isTouchedAt(candidate.touched_at)
+  );
 }
 
 function pruneMarkers(
@@ -63,9 +64,7 @@ function pruneMarkers(
   const entries = Object.entries(markers);
   if (entries.length <= maxEntries) return markers;
   return Object.fromEntries(
-    entries
-      .sort((a, b) => b[1].touched_at - a[1].touched_at)
-      .slice(0, maxEntries),
+    entries.sort((a, b) => b[1].touched_at - a[1].touched_at).slice(0, maxEntries),
   );
 }
 
@@ -86,9 +85,7 @@ function readStoredMarkers(maxEntries: number): Record<string, ReadProgressMarke
       return {};
     }
     const sessions = Object.fromEntries(
-      Object.entries(stored.sessions).filter(([, value]) =>
-        isMarker(value)
-      ),
+      Object.entries(stored.sessions).filter(([, value]) => isMarker(value)),
     ) as Record<string, ReadProgressMarker>;
     return pruneMarkers(sessions, maxEntries);
   } catch {
@@ -116,11 +113,7 @@ export class ReadProgressStore {
     return !!marker && !!currentToken && marker.token !== currentToken;
   }
 
-  baseline(
-    sessionId: string,
-    currentToken: string | null,
-    ordinal: number | null,
-  ) {
+  baseline(sessionId: string, currentToken: string | null, ordinal: number | null) {
     if (!sessionId || !currentToken || this.markers[sessionId]) return;
     this.set(sessionId, currentToken, ordinal);
   }
@@ -132,19 +125,16 @@ export class ReadProgressStore {
     this.set(sessionId, marker.token, ordinal);
   }
 
-  markRead(
-    sessionId: string,
-    currentToken: string | null,
-    ordinal: number | null,
-  ) {
+  markRead(sessionId: string, currentToken: string | null, ordinal: number | null) {
     if (!sessionId || !currentToken) return;
     const marker = this.markers[sessionId];
-    const nextOrdinal = marker?.ordinal !== null &&
-        marker?.ordinal !== undefined &&
-        ordinal !== null &&
-        ordinal < marker.ordinal
-      ? marker.ordinal
-      : ordinal;
+    const nextOrdinal =
+      marker?.ordinal !== null &&
+      marker?.ordinal !== undefined &&
+      ordinal !== null &&
+      ordinal < marker.ordinal
+        ? marker.ordinal
+        : ordinal;
     this.set(sessionId, currentToken, nextOrdinal ?? marker?.ordinal ?? null);
   }
 

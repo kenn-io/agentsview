@@ -1,10 +1,4 @@
-import {
-  describe,
-  it,
-  expect,
-  vi,
-  beforeEach,
-} from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
 import type { SyncStats, UpdateCheck } from "../api/types.js";
 
@@ -36,7 +30,7 @@ vi.mock("../api/client.js", () => ({
 }));
 
 vi.mock("../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
+  ApiError: api.ApiError,
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isRemoteConnection: api.isRemoteConnection,
 }));
@@ -112,21 +106,48 @@ describe("commitsDisagree", () => {
 
     // Matches
     { expected: false, hash1: "abc1234", hash2: "abc1234", scenario: "identical short hashes" },
-    { expected: false, hash1: "abc1234", hash2: "abc1234def5678", scenario: "short matches full SHA prefix" },
-    { expected: false, hash1: "abc1234aaaaaaaaaaaa", hash2: "abc1234aaaaaaaaaaaa", scenario: "identical full SHAs" },
-    { expected: false, hash1: "abc12", hash2: "abc1234def5678", scenario: "short abbreviation matching prefix" },
+    {
+      expected: false,
+      hash1: "abc1234",
+      hash2: "abc1234def5678",
+      scenario: "short matches full SHA prefix",
+    },
+    {
+      expected: false,
+      hash1: "abc1234aaaaaaaaaaaa",
+      hash2: "abc1234aaaaaaaaaaaa",
+      scenario: "identical full SHAs",
+    },
+    {
+      expected: false,
+      hash1: "abc12",
+      hash2: "abc1234def5678",
+      scenario: "short abbreviation matching prefix",
+    },
 
     // Mismatches
     { expected: true, hash1: "abc1234", hash2: "def5678", scenario: "different hashes" },
-    { expected: true, hash1: "abc1234aaaaaaaaaaaa", hash2: "def5678bbbbbbbbbbb", scenario: "full SHAs differ" },
-    { expected: true, hash1: "abc1234aaaaaaaaaaaa", hash2: "abc1234bbbbbbbbbbb", scenario: "full SHAs share 7-char prefix" },
-    { expected: true, hash1: "xyz99", hash2: "abc1234def5678", scenario: "short abbreviation not matching" },
-  ])(
-    "returns $expected when $scenario",
-    ({ expected, hash1, hash2 }) => {
-      expect(commitsDisagree(hash1, hash2)).toBe(expected);
+    {
+      expected: true,
+      hash1: "abc1234aaaaaaaaaaaa",
+      hash2: "def5678bbbbbbbbbbb",
+      scenario: "full SHAs differ",
     },
-  );
+    {
+      expected: true,
+      hash1: "abc1234aaaaaaaaaaaa",
+      hash2: "abc1234bbbbbbbbbbb",
+      scenario: "full SHAs share 7-char prefix",
+    },
+    {
+      expected: true,
+      hash1: "xyz99",
+      hash2: "abc1234def5678",
+      scenario: "short abbreviation not matching",
+    },
+  ])("returns $expected when $scenario", ({ expected, hash1, hash2 }) => {
+    expect(commitsDisagree(hash1, hash2)).toBe(expected);
+  });
 });
 
 describe("SyncStore.loadStats", () => {
@@ -169,7 +190,7 @@ describe("SyncStore.loadStats", () => {
       );
 
     // Start first request (include one-shot).
-    const p1 = sync.loadStats({ includeOneShot: true });
+    const p1 = sync.loadStats({ include_one_shot: true });
     // Start second request (exclude one-shot) before first resolves.
     const p2 = sync.loadStats({});
 
@@ -208,7 +229,7 @@ describe("SyncStore.loadStats", () => {
         }),
       );
 
-    const p1 = sync.loadStats({ includeOneShot: true });
+    const p1 = sync.loadStats({ include_one_shot: true });
     const p2 = sync.loadStats({});
 
     resolveNewer(newer);
@@ -323,9 +344,7 @@ describe("SyncStore.triggerResync", () => {
     await vi.waitFor(() => {
       expect(onError).toHaveBeenCalled();
     });
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Sync failed" }),
-    );
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "Sync failed" }));
     expect(sync.syncing).toBe(false);
   });
 
@@ -378,8 +397,7 @@ describe("SyncStore.triggerResync", () => {
     expect(api.triggerResync).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining({
-        message:
-          "Full resync is unavailable for read-only backends.",
+        message: "Full resync is unavailable for read-only backends.",
       }),
     );
   });
@@ -421,9 +439,7 @@ describe("SyncStore.checkForUpdate", () => {
       current_version: "v0.9.0",
       latest_version: "v1.0.0",
     };
-    vi.mocked(api.checkForUpdate).mockResolvedValue(
-      mockResult,
-    );
+    vi.mocked(api.checkForUpdate).mockResolvedValue(mockResult);
 
     const s = sync as unknown as Record<string, unknown>;
     const original = s.isDesktop;
@@ -459,9 +475,7 @@ describe("SyncStore.remoteUnreachable", () => {
 
   it("flags unreachable when a remote load fails", async () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
-    vi.mocked(api.getSyncStatus).mockRejectedValue(
-      new TypeError("Failed to fetch"),
-    );
+    vi.mocked(api.getSyncStatus).mockRejectedValue(new TypeError("Failed to fetch"));
 
     await sync.loadStatus();
 
@@ -638,9 +652,7 @@ describe("SyncStore.remoteUnreachable", () => {
 
   it("does not flag unreachable for local connections", async () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(false);
-    vi.mocked(api.getSyncStatus).mockRejectedValue(
-      new TypeError("Failed to fetch"),
-    );
+    vi.mocked(api.getSyncStatus).mockRejectedValue(new TypeError("Failed to fetch"));
 
     await sync.loadStatus();
 
@@ -649,9 +661,7 @@ describe("SyncStore.remoteUnreachable", () => {
 
   it("flags backend degraded instead of unreachable on 5xx", async () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
-    vi.mocked(api.getSyncStatus).mockRejectedValue(
-      new api.ApiError(503, "pg unavailable"),
-    );
+    vi.mocked(api.getSyncStatus).mockRejectedValue(new api.ApiError(503, "pg unavailable"));
 
     await sync.loadStatus();
 
@@ -669,9 +679,7 @@ describe("SyncStore.remoteUnreachable", () => {
       last_sync: "",
       stats: MOCK_STATS,
     });
-    vi.mocked(api.getStats).mockRejectedValue(
-      new api.ApiError(503, "pg unavailable"),
-    );
+    vi.mocked(api.getStats).mockRejectedValue(new api.ApiError(503, "pg unavailable"));
 
     await sync.loadStatus();
 
@@ -759,9 +767,7 @@ describe("SyncStore.remoteUnreachable", () => {
       last_sync: "",
       stats: MOCK_STATS,
     });
-    vi.mocked(api.getVersion).mockRejectedValue(
-      new Error("version still unavailable"),
-    );
+    vi.mocked(api.getVersion).mockRejectedValue(new Error("version still unavailable"));
 
     await sync.loadStatus();
 
@@ -794,9 +800,7 @@ describe("SyncStore.remoteUnreachable", () => {
     const s = sync as unknown as Record<string, unknown>;
     s.backendDegraded = true;
     s.backendDegradedMessage = "sync not ready";
-    vi.mocked(api.getSyncStatus).mockRejectedValue(
-      new TypeError("Failed to fetch"),
-    );
+    vi.mocked(api.getSyncStatus).mockRejectedValue(new TypeError("Failed to fetch"));
 
     await sync.loadStatus();
 

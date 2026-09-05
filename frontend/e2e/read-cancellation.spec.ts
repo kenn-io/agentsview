@@ -1,9 +1,4 @@
-import {
-  expect,
-  test,
-  type Page,
-  type Request,
-} from "@playwright/test";
+import { expect, test, type Page, type Request } from "@playwright/test";
 import { clickNavTab } from "./helpers/nav";
 
 async function holdFirstRoute(page: Page, pattern: string) {
@@ -43,18 +38,14 @@ async function holdFirstRoute(page: Page, pattern: string) {
   };
 }
 
-test("switching top-level tabs aborts the hidden activity read", async ({
-  page,
-}) => {
+test("switching top-level tabs aborts the hidden activity read", async ({ page }) => {
   const held = await holdFirstRoute(page, "**/api/v1/activity/report*");
   try {
     await page.goto("/activity");
     const activityRequest = await held.started;
-    const failed = page.waitForEvent("requestfailed", (request) =>
-      request === activityRequest
-    );
+    const failed = page.waitForEvent("requestfailed", (request) => request === activityRequest);
     const usageStarted = page.waitForRequest((request) =>
-      new URL(request.url()).pathname.endsWith("/api/v1/usage/summary")
+      new URL(request.url()).pathname.endsWith("/api/v1/usage/summary"),
     );
 
     await clickNavTab(page, "Usage");
@@ -72,13 +63,13 @@ test("changing grouping aborts the obsolete trends read", async ({ page }) => {
   try {
     await page.goto("/trends");
     const firstRequest = await held.started;
-    const failed = page.waitForEvent("requestfailed", (request) =>
-      request === firstRequest
-    );
+    const failed = page.waitForEvent("requestfailed", (request) => request === firstRequest);
     const replacementStarted = page.waitForRequest((request) => {
       const url = new URL(request.url());
-      return url.pathname.endsWith("/api/v1/trends/terms") &&
-        url.searchParams.get("granularity") === "month";
+      return (
+        url.pathname.endsWith("/api/v1/trends/terms") &&
+        url.searchParams.get("granularity") === "month"
+      );
     });
 
     await page.locator(".group-trigger").click();
@@ -87,10 +78,7 @@ test("changing grouping aborts the obsolete trends read", async ({ page }) => {
     await replacementStarted;
     expect((await failed).failure()).not.toBeNull();
     held.release();
-    await expect(page.locator(".chart-panel")).toHaveAttribute(
-      "aria-busy",
-      "false",
-    );
+    await expect(page.locator(".chart-panel")).toHaveAttribute("aria-busy", "false");
   } finally {
     held.release();
   }

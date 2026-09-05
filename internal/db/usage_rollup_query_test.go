@@ -454,7 +454,7 @@ func TestUsageRollupSeededRandomParitySweep(t *testing.T) {
 	}
 }
 
-func TestUsageRollupQueryRecapturesAfterConcurrentInstall(t *testing.T) {
+func TestUsageRollupQueryRejectsDifferentInstallOrPricing(t *testing.T) {
 	database := testDB(t)
 	seedUsageSnapshotSession(t, database, "session-a", "project-a",
 		"2026-08-10T09:00:00Z", 0, 10, "model-a")
@@ -473,6 +473,12 @@ func TestUsageRollupQueryRecapturesAfterConcurrentInstall(t *testing.T) {
 		SET install_revision = install_revision + 1 WHERE id = ?`, required.ID)
 	require.NoError(t, err)
 
+	_, err = cache.usageRollupQuery(t.Context(), snapshot, filter, installs, resolver)
+	assert.ErrorIs(t, err, errUsageCacheSourceChanged)
+	_, err = cache.db.Exec(`UPDATE usage_rollup_installs
+		SET install_revision = ? WHERE id = ?`,
+		required.InstallRevision-1, required.ID)
+	require.NoError(t, err)
 	_, err = cache.usageRollupQuery(t.Context(), snapshot, filter, installs, resolver)
 	assert.ErrorIs(t, err, errUsageCacheSourceChanged)
 	_, err = cache.db.Exec(`UPDATE usage_rollup_installs

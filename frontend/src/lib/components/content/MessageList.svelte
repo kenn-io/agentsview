@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { EmptyState } from "@kenn-io/kit-ui";
+  import { Button, EmptyState } from "@kenn-io/kit-ui";
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
   import { messages } from "../../stores/messages.svelte.js";
@@ -8,7 +8,7 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { readProgress } from "../../stores/read-progress.svelte.js";
-  import { MessageSquareIcon } from "../../icons.js";
+  import { CircleQuestionMarkIcon, MessageSquareIcon } from "../../icons.js";
   import { createVirtualizer } from "../../virtual/createVirtualizer.svelte.js";
   import MessageContent from "./MessageContent.svelte";
   import CompactBoundaryDivider from "./CompactBoundaryDivider.svelte";
@@ -851,6 +851,18 @@
   </EmptyState>
 {:else if messages.loading && messages.messages.length === 0}
   <EmptyState title={m.message_list_loading()} />
+{:else if sessions.activeSessionNotFound && messages.messages.length === 0}
+  <EmptyState
+    title={m.message_list_session_not_found()}
+    description={m.message_list_session_not_found_hint()}
+  >
+    {#snippet icon()}
+      <CircleQuestionMarkIcon size="36" strokeWidth="1.5" aria-hidden="true" />
+    {/snippet}
+    <Button size="sm" onclick={() => void sessions.retryActiveSession()}>
+      {m.message_list_session_not_found_retry()}
+    </Button>
+  </EmptyState>
 {:else}
   <SessionFindBar />
   <div

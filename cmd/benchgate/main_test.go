@@ -109,7 +109,10 @@ func TestParseBench(t *testing.T) {
 func testGates() []gate {
 	return []gate{
 		{unit: "allocs/op", maxRatio: 1.25, floor: 64, worstCase: true},
-		{unit: "B/op", maxRatio: 1.35, floor: 16_384, worstCase: true},
+		{
+			unit: "B/op", maxRatio: 1.35, floor: 16_384,
+			needSignificance: true,
+		},
 		{
 			unit: "sec/op", maxRatio: 2.0, floor: 100_000e-9,
 			needSignificance: true,
@@ -139,18 +142,46 @@ func TestCompare(t *testing.T) {
 			old: benchSamples{
 				"BenchmarkFoo-8": {
 					"sec/op":    noisy(1e-3, 6),
-					"B/op":      {100_000},
+					"B/op":      noisy(100_000, 6),
 					"allocs/op": {1000},
 				},
 			},
 			new: benchSamples{
 				"BenchmarkFoo-8": {
 					"sec/op":    noisy(1.5e-3, 6),
-					"B/op":      {120_000},
+					"B/op":      noisy(120_000, 6),
 					"allocs/op": {1100},
 				},
 			},
 			wantUnits: nil,
+		},
+		{
+			name: "significant bytes blowup fails",
+			old: benchSamples{
+				"BenchmarkFoo-8": {"B/op": noisy(100_000, 6)},
+			},
+			new: benchSamples{
+				"BenchmarkFoo-8": {"B/op": noisy(500_000, 6)},
+			},
+			wantUnits: []string{"B/op"},
+		},
+		{
+			// The failure shape seen in CI for a benchmark whose
+			// path reuses pooled encoder buffers: identical code,
+			// B/op samples spread 3.6-6.3 MiB across five runs.
+			name: "pooled-buffer bytes noise over the limit is not significant, not gated",
+			old: benchSamples{
+				"BenchmarkFoo-8": {
+					"B/op": {3_615_000, 3_948_000, 4_082_000, 4_280_000, 4_715_000},
+				},
+			},
+			new: benchSamples{
+				"BenchmarkFoo-8": {
+					"B/op": {3_615_616, 3_947_882, 5_609_021, 5_609_060, 6_273_645},
+				},
+			},
+			wantUnits:  nil,
+			wantReport: []string{"B/op", "not significant, not gated"},
 		},
 		{
 			name: "alloc regression fails even with a single run",
@@ -258,14 +289,14 @@ func TestCompare(t *testing.T) {
 			old: benchSamples{
 				"BenchmarkFoo-8": {
 					"sec/op":    noisy(1e-3, 6),
-					"B/op":      {100_000},
+					"B/op":      noisy(100_000, 6),
 					"allocs/op": {1000},
 				},
 			},
 			new: benchSamples{
 				"BenchmarkFoo-8": {
 					"sec/op":    noisy(9e-3, 6),
-					"B/op":      {900_000},
+					"B/op":      noisy(900_000, 6),
 					"allocs/op": {9000},
 				},
 			},
@@ -297,9 +328,10 @@ func TestCompare(t *testing.T) {
 // outlier among repeated -count runs of one benchmark. allocs/op is
 // deterministic for identical code and iteration counts, so one
 // outlier run means a real intermittent allocation path and must
-// fail even though the median is unchanged. Wall-clock time is
-// summarized by its median, so one slow run on a noisy runner cannot
-// fail the gate on its own.
+// fail even though the median is unchanged. Wall-clock time and
+// allocated bytes are summarized by their medians and gated only on a
+// significant difference, so one slow run on a noisy runner or one
+// pooled-buffer miss cannot fail the gate on its own.
 func TestCompareOutlierRunPolicy(t *testing.T) {
 	t.Run("alloc outlier run fails", func(t *testing.T) {
 		old := benchSamples{
@@ -322,6 +354,18 @@ func TestCompareOutlierRunPolicy(t *testing.T) {
 		}
 		next := benchSamples{
 			"BenchmarkFoo-8": {"sec/op": append(noisy(1e-3, 5), 9e-3)},
+		}
+		_, violations, issues := compare(old, next, testGates())
+		assert.Empty(t, issues)
+		assert.Empty(t, violations)
+	})
+
+	t.Run("bytes outlier run does not fail", func(t *testing.T) {
+		old := benchSamples{
+			"BenchmarkFoo-8": {"B/op": noisy(100_000, 6)},
+		}
+		next := benchSamples{
+			"BenchmarkFoo-8": {"B/op": append(noisy(100_000, 5), 900_000)},
 		}
 		_, violations, issues := compare(old, next, testGates())
 		assert.Empty(t, issues)
@@ -365,6 +409,15 @@ func TestCompareTimeGateSampleCounts(t *testing.T) {
 		assert.Empty(t, violations)
 		require.Len(t, issues, 1)
 		assert.Contains(t, issues[0].msg, "at least 5 candidate samples")
+	})
+
+	t.Run("too few candidate bytes samples is a config issue", func(t *testing.T) {
+		old := benchSamples{"BenchmarkFoo-8": {"B/op": noisy(100_000, 6)}}
+		next := benchSamples{"BenchmarkFoo-8": {"B/op": {200_000}}}
+		_, violations, issues := compare(old, next, testGates())
+		assert.Empty(t, violations)
+		require.Len(t, issues, 1)
+		assert.Contains(t, issues[0].msg, "B/op needs at least 5 candidate samples")
 	})
 
 	t.Run("short baseline is reported, not a config issue", func(t *testing.T) {

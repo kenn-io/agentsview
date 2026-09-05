@@ -28,12 +28,8 @@ function isIPv4LoopbackLiteral(hostname: string): boolean {
 
 function isLoopbackHostname(hostname: string): boolean {
   const lower = hostname.toLowerCase();
-  const unbracketed = lower.startsWith("[") && lower.endsWith("]")
-    ? lower.slice(1, -1)
-    : lower;
-  return lower === "localhost" ||
-    isIPv4LoopbackLiteral(unbracketed) ||
-    unbracketed === "::1";
+  const unbracketed = lower.startsWith("[") && lower.endsWith("]") ? lower.slice(1, -1) : lower;
+  return lower === "localhost" || isIPv4LoopbackLiteral(unbracketed) || unbracketed === "::1";
 }
 
 function requestOriginMatchesLoopbackDevServer(
@@ -44,8 +40,7 @@ function requestOriginMatchesLoopbackDevServer(
   try {
     const originURL = new URL(origin);
     const hostURL = new URL(`${originURL.protocol}//${host}`);
-    return originURL.host === hostURL.host &&
-      isLoopbackHostname(originURL.hostname);
+    return originURL.host === hostURL.host && isLoopbackHostname(originURL.hostname);
   } catch {
     return false;
   }
@@ -54,9 +49,7 @@ function requestOriginMatchesLoopbackDevServer(
 export default defineConfig({
   fmt: {},
   lint: {
-    jsPlugins: [
-      { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
-    ],
+    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
     },
@@ -80,9 +73,7 @@ export default defineConfig({
     }),
   ],
   define: {
-    "import.meta.env.VITE_BUILD_COMMIT": JSON.stringify(
-      gitCommit(),
-    ),
+    "import.meta.env.VITE_BUILD_COMMIT": JSON.stringify(gitCommit()),
   },
   resolve: {
     conditions: ["browser"],

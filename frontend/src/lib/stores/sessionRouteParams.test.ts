@@ -105,34 +105,40 @@ describe("session route params", () => {
   });
 
   it("detects removed session date intent", () => {
-    expect(sessionDateIntentCleared(
-      {
-        date_from: "2026-05-21",
-        date_to: "2026-06-20",
-        window_days: "30",
-      },
-      { project: "agentsview" },
-    )).toBe(true);
-    expect(sessionDateIntentCleared(
-      { window_days: "30" },
-      { window_days: "30", project: "agentsview" },
-    )).toBe(false);
-    expect(sessionDateIntentCleared(
-      { project: "agentsview" },
-      { project: "agentsview" },
-    )).toBe(false);
+    expect(
+      sessionDateIntentCleared(
+        {
+          date_from: "2026-05-21",
+          date_to: "2026-06-20",
+          window_days: "30",
+        },
+        { project: "agentsview" },
+      ),
+    ).toBe(true);
+    expect(
+      sessionDateIntentCleared({ window_days: "30" }, { window_days: "30", project: "agentsview" }),
+    ).toBe(false);
+    expect(sessionDateIntentCleared({ project: "agentsview" }, { project: "agentsview" })).toBe(
+      false,
+    );
   });
 
   it("only treats window_days as session date intent on sessions routes", () => {
-    expect(hasSessionRouteDateIntent("sessions", {
-      window_days: "30",
-    })).toBe(true);
-    expect(hasSessionRouteDateIntent("usage", {
-      window_days: "30",
-    })).toBe(false);
-    expect(hasSessionRouteDateIntent("quality", {
-      window_days: "30",
-    })).toBe(false);
+    expect(
+      hasSessionRouteDateIntent("sessions", {
+        window_days: "30",
+      }),
+    ).toBe(true);
+    expect(
+      hasSessionRouteDateIntent("usage", {
+        window_days: "30",
+      }),
+    ).toBe(false);
+    expect(
+      hasSessionRouteDateIntent("quality", {
+        window_days: "30",
+      }),
+    ).toBe(false);
   });
 
   it("prefers direct detail URL params over saved filters on exit", () => {

@@ -7,8 +7,7 @@ import { settings } from "../../stores/settings.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 
 vi.mock("../../api/generated/index", async (importOriginal) => {
-  const orig =
-    await importOriginal<typeof import("../../api/generated/index")>();
+  const orig = await importOriginal<typeof import("../../api/generated/index")>();
   return {
     ...orig,
     SettingsService: {
@@ -43,9 +42,7 @@ describe("AppearanceSettings", () => {
     for (const pct of [90, 100, 110, 120, 130]) {
       expect(getByRole("radio", { name: `${pct}%` })).toBeTruthy();
     }
-    expect(
-      getByRole("radio", { name: "110%" }).getAttribute("aria-checked"),
-    ).toBe("true");
+    expect(getByRole("radio", { name: "110%" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("changes the font scale when an option is clicked", async () => {
@@ -77,25 +74,16 @@ describe("AppearanceSettings", () => {
     await fireEvent.click(getByRole("radio", { name: "Matplotlib" }));
 
     expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({
-      requestBody: { chart_palette: "matplotlib" },
+      chart_palette: "matplotlib",
     });
-    expect(
-      getByRole("radio", { name: "Matplotlib" })
-        .getAttribute("aria-checked"),
-    ).toBe("true");
+    expect(getByRole("radio", { name: "Matplotlib" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("disables chart palette controls in read-only mode", () => {
     settings.readOnly = true;
     const { getByRole } = render(AppearanceSettings);
 
-    expect(
-      (getByRole("radio", { name: "Agentsview" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
-    expect(
-      (getByRole("radio", { name: "Matplotlib" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    expect((getByRole("radio", { name: "Agentsview" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((getByRole("radio", { name: "Matplotlib" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

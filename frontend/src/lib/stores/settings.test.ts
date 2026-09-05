@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { settings } from "./settings.svelte.js";
-import { ApiError, SettingsService } from "../api/generated/index";
+import { SettingsService } from "../api/generated/index";
+import { ApiError } from "../api/runtime.js";
 import { DEFAULT_CHART_PALETTE } from "../utils/chartPalette.js";
 
 const runtime = vi.hoisted(() => ({
@@ -12,7 +13,6 @@ vi.mock("../api/runtime.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../api/runtime.js")>();
   return {
     ...orig,
-    configureGeneratedClient: vi.fn(),
     callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
     setAuthToken: runtime.setAuthToken,
     isRemoteConnection: runtime.isRemoteConnection,
@@ -36,17 +36,7 @@ const settingsService = SettingsService as unknown as {
 };
 
 function apiError(status: number, message: string): ApiError {
-  return new ApiError(
-    { method: "GET", url: "/api/v1/settings" },
-    {
-      url: "/api/v1/settings",
-      ok: false,
-      status,
-      statusText: message,
-      body: message,
-    },
-    message,
-  );
+  return new ApiError(status, message);
 }
 
 beforeEach(() => {

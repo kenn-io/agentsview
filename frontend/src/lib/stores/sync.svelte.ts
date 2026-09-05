@@ -1,26 +1,8 @@
-import {
-  triggerResync,
-  triggerSync,
-  watchSession,
-  type SyncHandle,
-} from "../api/client.js";
-import {
-  ApiError as GeneratedApiError,
-  MetadataService,
-  SyncService,
-} from "../api/generated/index";
-import {
-  configureGeneratedClient,
-  isRemoteConnection,
-} from "../api/runtime.js";
+import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
+import { MetadataService, SyncService } from "../api/generated/index";
+import { ApiError, isRemoteConnection } from "../api/runtime.js";
 import { events } from "./events.svelte.js";
-import type {
-  SyncProgress,
-  SyncStats,
-  Stats,
-  VersionInfo,
-  UpdateCheck,
-} from "../api/types.js";
+import type { SyncProgress, SyncStats, Stats, VersionInfo } from "../api/types.js";
 import type { SessionTiming } from "../api/types/timing.js";
 
 type SyncCompleteListener = () => void;
@@ -33,10 +15,7 @@ const POLL_INTERVAL_MS = 10_000;
  * Uses prefix comparison only when one hash is shorter
  * than the other (i.e. an abbreviation).
  */
-export function commitsDisagree(
-  a: string | undefined,
-  b: string | undefined,
-): boolean {
+export function commitsDisagree(a: string | undefined, b: string | undefined): boolean {
   if (!a || !b) return false;
   if (a === "unknown" || b === "unknown") return false;
   if (a === b) return false;
@@ -64,23 +43,20 @@ class SyncStore {
   backendDegradedMessage: string | null = $state(null);
   updateAvailable: boolean = $state(false);
   latestVersion: string | null = $state(null);
-  readonly buildCommit: string =
-    import.meta.env.VITE_BUILD_COMMIT;
+  readonly buildCommit: string = import.meta.env.VITE_BUILD_COMMIT;
   readonly isDesktop: boolean =
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).has("desktop");
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).has("desktop");
 
   get readOnly(): boolean {
     return this.serverVersion?.read_only === true;
   }
 
   private watchEventSource: EventSource | null = null;
-  private pollTimer: ReturnType<typeof setInterval> | null =
-    null;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastStatsParams: {
-    includeOneShot?: boolean;
-    includeAutomated?: boolean;
-  } = { includeOneShot: true };
+    include_one_shot?: boolean;
+    include_automated?: boolean;
+  } = { include_one_shot: true };
   private statsVersion = 0;
   private syncCompleteListeners: SyncCompleteListener[] = [];
   private statusHydrated = false;
@@ -126,10 +102,7 @@ class SyncStore {
   }
 
   private markBackendFailure(error: unknown) {
-    if (
-      error instanceof GeneratedApiError &&
-      error.status >= 500
-    ) {
+    if (error instanceof ApiError && error.status >= 500) {
       this.markBackendDegraded();
       return;
     }
@@ -138,7 +111,6 @@ class SyncStore {
 
   async loadStatus() {
     try {
-      configureGeneratedClient();
       const status = await SyncService.getApiV1SyncStatus();
       this.markRemoteReachable(true);
       if (this.serverVersion === null) {
@@ -147,13 +119,10 @@ class SyncStore {
       const newLastSync = status.last_sync || null;
       const isInitial = !this.statusHydrated;
       this.statusHydrated = true;
-      const changed =
-        newLastSync !== null && newLastSync !== this.lastSync;
+      const changed = newLastSync !== null && newLastSync !== this.lastSync;
       this.lastSync = newLastSync;
-      this.lastSyncStats = status.stats as unknown as SyncStats | null;
-      const statusProgress =
-        (status as unknown as { progress?: SyncProgress | null })
-          .progress ?? null;
+      this.lastSyncStats = status.stats ?? null;
+      const statusProgress = status.progress ?? null;
       let statusProgressCompleted = false;
       if (statusProgress) {
         this.statusProgressActive = true;
@@ -190,10 +159,7 @@ class SyncStore {
 
   startPolling() {
     this.stopPolling();
-    this.pollTimer = setInterval(
-      () => this.loadStatus(),
-      POLL_INTERVAL_MS,
-    );
+    this.pollTimer = setInterval(() => this.loadStatus(), POLL_INTERVAL_MS);
   }
 
   stopPolling() {
@@ -203,21 +169,13 @@ class SyncStore {
     }
   }
 
-  async loadStats(
-    params?: {
-      includeOneShot?: boolean;
-      includeAutomated?: boolean;
-    },
-  ) {
+  async loadStats(params?: { include_one_shot?: boolean; include_automated?: boolean }) {
     if (params !== undefined) {
       this.lastStatsParams = params;
     }
     const version = ++this.statsVersion;
     try {
-      configureGeneratedClient();
-      const result = await MetadataService.getApiV1Stats(
-        this.lastStatsParams,
-      ) as unknown as Stats;
+      const result = await MetadataService.getApiV1Stats(this.lastStatsParams);
       if (this.statsVersion === version) {
         this.stats = result;
         this.clearBackendDegraded();
@@ -230,20 +188,13 @@ class SyncStore {
     }
   }
 
-  async loadVersion(
-    opts: { updateBackendHealth?: boolean } = {},
-  ) {
+  async loadVersion(opts: { updateBackendHealth?: boolean } = {}) {
     const updateBackendHealth = opts.updateBackendHealth ?? true;
     try {
-      configureGeneratedClient();
-      this.serverVersion =
-        await MetadataService.getApiV1Version() as VersionInfo;
+      this.serverVersion = await MetadataService.getApiV1Version();
       events.setAvailable(this.serverVersion.read_only !== true);
       this.markRemoteReachable(true);
-      this.versionMismatch = commitsDisagree(
-        this.buildCommit,
-        this.serverVersion.commit,
-      );
+      this.versionMismatch = commitsDisagree(this.buildCommit, this.serverVersion.commit);
     } catch (error) {
       if (updateBackendHealth) {
         this.markBackendFailure(error);
@@ -258,9 +209,7 @@ class SyncStore {
     // is irrelevant and potentially wrong for forks.
     if (this.isDesktop) return;
     try {
-      configureGeneratedClient();
-      const result =
-        await MetadataService.getApiV1UpdateCheck() as UpdateCheck;
+      const result = await MetadataService.getApiV1UpdateCheck();
       this.updateAvailable = result.update_available;
       this.latestVersion = result.latest_version ?? null;
     } catch (error) {
@@ -276,28 +225,15 @@ class SyncStore {
     this.runSync(triggerSync, onComplete);
   }
 
-  triggerResync(
-    onComplete?: () => void,
-    onError?: (err: Error) => void,
-  ): boolean {
+  triggerResync(onComplete?: () => void, onError?: (err: Error) => void): boolean {
     if (this.readOnly) {
-      onError?.(
-        new Error(
-          "Full resync is unavailable for read-only backends.",
-        ),
-      );
+      onError?.(new Error("Full resync is unavailable for read-only backends."));
       return false;
     }
-    return this.runSync(
-      triggerResync,
-      onComplete,
-      onError,
-    );
+    return this.runSync(triggerResync, onComplete, onError);
   }
 
-  private async refreshReadOnly(
-    onComplete?: () => void,
-  ): Promise<boolean> {
+  private async refreshReadOnly(onComplete?: () => void): Promise<boolean> {
     if (this.syncing) return false;
     this.syncing = true;
     this.progress = null;
@@ -315,9 +251,7 @@ class SyncStore {
   }
 
   private runSync(
-    syncFn: (
-      onProgress?: (p: SyncProgress) => void,
-    ) => SyncHandle,
+    syncFn: (onProgress?: (p: SyncProgress) => void) => SyncHandle,
     onComplete?: () => void,
     onError?: (err: Error) => void,
   ): boolean {
@@ -349,10 +283,7 @@ class SyncStore {
         onComplete?.();
       })
       .catch((err: unknown) => {
-        if (
-          err instanceof DOMException &&
-          err.name === "AbortError"
-        ) {
+        if (err instanceof DOMException && err.name === "AbortError") {
           return;
         }
         finalizeSync();
@@ -366,17 +297,9 @@ class SyncStore {
     return true;
   }
 
-  watchSession(
-    sessionId: string,
-    onUpdate: () => void,
-    onTiming?: (t: SessionTiming) => void,
-  ) {
+  watchSession(sessionId: string, onUpdate: () => void, onTiming?: (t: SessionTiming) => void) {
     this.unwatchSession();
-    this.watchEventSource = watchSession(
-      sessionId,
-      onUpdate,
-      onTiming,
-    );
+    this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
   }
 
   unwatchSession() {

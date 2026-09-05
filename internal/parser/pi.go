@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,7 +196,7 @@ func parsePiLikeSession(
 				sourceParentUUID := resolveVisibleAncestor(parentID)
 				msg := parsePiAssistantMessage(
 					line, ordinal, currentModel, entryID,
-					sourceParentUUID,
+					sourceParentUUID, cwd,
 				)
 				if msg == nil {
 					continue
@@ -431,7 +432,7 @@ func parsePiUserMessage(
 // model_change entry), used when this message has no inline model.
 func parsePiAssistantMessage(
 	line string, ordinal int, fallbackModel, sourceUUID,
-	sourceParentUUID string,
+	sourceParentUUID, sessionCwd string,
 ) *ParsedMessage {
 	var (
 		parts       []string
@@ -475,6 +476,9 @@ func parsePiAssistantMessage(
 					ToolName:  name,
 					Category:  NormalizeToolCategory(name),
 					InputJSON: argsRaw,
+					SkillName: inferPiSkillName(
+						name, argsRaw, sessionCwd,
+					),
 				})
 				parts = append(parts, formatPiToolUse(
 					name, argsRaw,
@@ -502,6 +506,61 @@ func parsePiAssistantMessage(
 	}
 	applyPiTokenUsage(pm, line, fallbackModel)
 	return pm
+}
+
+// inferPiSkillName attributes a Pi tool call to a skill when the call
+// is a skill load. Pi has no dedicated skill tool: a native skill load
+// is emitted as an ordinary `read` tool call whose path argument points
+// at the skill's SKILL.md (Pi resolves skills from many roots:
+// ~/.pi/agent/skills, project .pi/skills, .agents/skills, package
+// skills/, --skill <path>), or, in newer OMP builds, at a
+// skill://<name> URI in that read path. Without attribution these calls
+// inflate the Read tool count and leave the Skills dimension empty.
+// Relative SKILL.md paths resolve against the session working directory
+// (sessionCwd).
+func inferPiSkillName(toolName, inputJSON, sessionCwd string) string {
+	if isCursorSkillReadTool(toolName) {
+		// Pi's read input carries no cwd/workdir key, so
+		// inferSkillNameFromJSONPaths can't resolve relative SKILL.md
+		// paths; try the path keys directly against the session working
+		// directory first, mirroring the OpenCode parser.
+		for _, key := range []string{"path", "file_path"} {
+			fp := gjson.Get(inputJSON, key).Str
+			if skill, ok := piSkillURISkillName(fp); ok {
+				return skill
+			}
+			if fp != "" && sessionCwd != "" {
+				if name := skillNameFromPath(fp, sessionCwd); name != "" {
+					return name
+				}
+			}
+		}
+		return inferSkillNameFromJSONPaths(inputJSON)
+	}
+	return inferCodexSkillNameWithBase(toolName, inputJSON, sessionCwd)
+}
+
+// piSkillURISkillName extracts the decoded skill name from the
+// skill://<name> URI used as a Pi-family read path. ok is false when
+// path is not a valid skill URI, leaving attribution to the SKILL.md
+// path heuristic.
+func piSkillURISkillName(path string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "skill://") {
+		return "", false
+	}
+	rest := path[len("skill://"):]
+	if end := strings.IndexAny(rest, "/?# \t\n\r"); end >= 0 {
+		rest = rest[:end]
+	}
+	if rest == "" {
+		return "", false
+	}
+	name, err := url.PathUnescape(rest)
+	if err != nil || name == "" {
+		return "", false
+	}
+	return name, true
 }
 
 // applyPiTokenUsage extracts the assistant message's model and

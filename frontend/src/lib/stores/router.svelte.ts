@@ -38,7 +38,6 @@ export function getBasePath(): string {
   return href.replace(/\/+$/, "");
 }
 
-
 export function parsePath(): {
   route: Route;
   sessionId: string | null;
@@ -53,13 +52,9 @@ export function parsePath(): {
   if (!pathname.startsWith("/")) pathname = "/" + pathname;
   const isRootPath = pathname === "/";
 
-  const segments = pathname
-    .split("/")
-    .filter((s) => s.length > 0);
+  const segments = pathname.split("/").filter((s) => s.length > 0);
   const routeStr = segments[0] ?? "";
-  const route: Route = VALID_ROUTES.has(routeStr)
-    ? (routeStr as Route)
-    : DEFAULT_ROUTE;
+  const route: Route = VALID_ROUTES.has(routeStr) ? (routeStr as Route) : DEFAULT_ROUTE;
 
   let sessionId: string | null = null;
   if (route === "sessions" && segments.length >= 2) {
@@ -70,9 +65,7 @@ export function parsePath(): {
     }
   }
 
-  const params = Object.fromEntries(
-    new URLSearchParams(window.location.search),
-  );
+  const params = Object.fromEntries(new URLSearchParams(window.location.search));
 
   return { route, sessionId, params, isRootPath };
 }
@@ -114,10 +107,7 @@ export class RouterStore {
   }
 
   destroy() {
-    window.removeEventListener(
-      "popstate",
-      this.#onPopState,
-    );
+    window.removeEventListener("popstate", this.#onPopState);
   }
 
   /** Update sticky params that are explicitly present in params. */
@@ -140,10 +130,7 @@ export class RouterStore {
     }
   }
 
-  #buildUrl(
-    path: string,
-    params: Record<string, string> = {},
-  ): string {
+  #buildUrl(path: string, params: Record<string, string> = {}): string {
     const basePath = getBasePath();
     const merged = { ...this.#stickyParams, ...params };
     const qs = new URLSearchParams(merged).toString();
@@ -177,33 +164,18 @@ export class RouterStore {
   }
 
   /** Build an href for a route link (includes sticky params). */
-  buildHref(
-    route: Route,
-    params: Record<string, string> = {},
-  ): string {
+  buildHref(route: Route, params: Record<string, string> = {}): string {
     return this.#buildUrl(`/${route}`, params);
   }
 
   /** Build an href for a session link (includes sticky params). */
-  buildSessionHref(
-    id: string,
-    params?: Record<string, string>,
-  ): string {
-    return this.#buildUrl(
-      `/sessions/${encodeURIComponent(id)}`,
-      this.#sessionEntryParams(params),
-    );
+  buildSessionHref(id: string, params?: Record<string, string>): string {
+    return this.#buildUrl(`/sessions/${encodeURIComponent(id)}`, this.#sessionEntryParams(params));
   }
 
-  navigate(
-    route: Route,
-    params: Record<string, string> = {},
-  ): boolean {
+  navigate(route: Route, params: Record<string, string> = {}): boolean {
     const url = this.#buildUrl(`/${route}`, params);
-    if (
-      url ===
-      window.location.pathname + window.location.search
-    ) {
+    if (url === window.location.pathname + window.location.search) {
       return false;
     }
     this.#updateSticky(params);
@@ -215,10 +187,7 @@ export class RouterStore {
     return true;
   }
 
-  replace(
-    route: Route,
-    params: Record<string, string> = {},
-  ): void {
+  replace(route: Route, params: Record<string, string> = {}): void {
     const url = this.#buildUrl(`/${route}`, params);
     this.#updateSticky(params);
     this.route = route;
@@ -232,10 +201,7 @@ export class RouterStore {
     params: Record<string, string> = {},
     clearParams: Iterable<string> = [],
   ): boolean {
-    return this.navigate(
-      "sessions",
-      this.#sessionEntryParams(params, clearParams),
-    );
+    return this.navigate("sessions", this.#sessionEntryParams(params, clearParams));
   }
 
   navigateToSession(
@@ -244,10 +210,7 @@ export class RouterStore {
     clearParams: Iterable<string> = [],
   ) {
     const nextParams = this.#sessionEntryParams(params, clearParams);
-    const url = this.#buildUrl(
-      `/sessions/${encodeURIComponent(id)}`,
-      nextParams,
-    );
+    const url = this.#buildUrl(`/sessions/${encodeURIComponent(id)}`, nextParams);
     this.#updateSticky(nextParams);
     this.route = "sessions";
     this.params = { ...this.#stickyParams, ...nextParams };
@@ -256,9 +219,7 @@ export class RouterStore {
     window.history.pushState(null, "", url);
   }
 
-  navigateFromSession(
-    params: Record<string, string> = {},
-  ) {
+  navigateFromSession(params: Record<string, string> = {}) {
     const url = this.#buildUrl("/sessions", params);
     this.#updateSticky(params);
     this.route = "sessions";

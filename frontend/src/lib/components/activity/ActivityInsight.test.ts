@@ -24,7 +24,6 @@ vi.mock("../../api/generated/index", () => ({
   InsightsService: { getApiV1Insights: mocks.getInsights },
 }));
 vi.mock("../../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
 }));
@@ -88,10 +87,10 @@ describe("ActivityInsight", () => {
   it("fetches insights with both date bounds (full identity)", async () => {
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();
-    expect(mocks.getInsights).toHaveBeenCalledWith({
+    expect(mocks.getInsights.mock.lastCall?.[0]).toEqual({
       type: "daily_activity",
-      dateFrom: "2026-06-15",
-      dateTo: "2026-06-21",
+      date_from: "2026-06-15",
+      date_to: "2026-06-21",
     });
   });
 

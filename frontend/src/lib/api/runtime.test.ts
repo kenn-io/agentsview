@@ -1,100 +1,65 @@
-import { describe, expect, it, vi } from "vite-plus/test";
-import {
-  ApiError,
-  callGenerated,
-  configureGeneratedClient,
-} from "./runtime.js";
-import {
-  ApiError as GeneratedApiError,
-  CancelablePromise,
-  OpenAPI,
-} from "./generated/index";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { ApiError, callGenerated, orvalFetch, setAuthToken } from "./runtime.js";
 
-describe("configureGeneratedClient", () => {
-  it("encodes generated path parameters as individual segments", () => {
-    configureGeneratedClient();
+describe("orvalFetch", () => {
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
 
-    expect(OpenAPI.ENCODE_PATH?.("deepseek-harness:child%7E/%25?#")).toBe(
-      "deepseek-harness%3Achild%257E%2F%2525%3F%23",
+  it("sends the selected server token with generated requests", async () => {
+    localStorage.setItem("agentsview-server-url", "https://example.test");
+    setAuthToken("secret");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("{}", {
+          headers: { "Content-Type": "application/json" },
+        }),
     );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await orvalFetch("/api/v1/usage/summary", {});
+
+    const [input, init] = fetchMock.mock.calls[0]!;
+    expect(String(input)).toBe("https://example.test/api/v1/usage/summary");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer secret");
   });
 });
 
 describe("callGenerated", () => {
-  it("detaches abort handling after the transport settles", async () => {
-    const cancelTransport = vi.fn();
-    const request = Object.assign(Promise.resolve("done"), {
-      cancel: cancelTransport,
-    });
-    const controller = new AbortController();
-
-    await expect(
-      callGenerated(() => request, controller.signal),
-    ).resolves.toBe("done");
-    controller.abort();
-
-    expect(cancelTransport).not.toHaveBeenCalled();
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
   });
 
-  it("cancels the generated transport when its signal aborts", async () => {
-    const cancelTransport = vi.fn();
-    const request = new CancelablePromise<never>(
-      (_resolve, _reject, onCancel) => {
-        onCancel(cancelTransport);
-      },
+  it("passes its abort signal to the generated request", async () => {
+    const controller = new AbortController();
+    const request = vi.fn(async () => "done");
+
+    await expect(callGenerated(request, controller.signal)).resolves.toBe("done");
+
+    expect(request).toHaveBeenCalledWith({ signal: controller.signal });
+  });
+
+  it("normalizes generated API error bodies and codes", async () => {
+    localStorage.setItem("agentsview-server-url", "http://localhost");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            code: "unknown_project_key",
+            error: "unknown project key",
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
     );
-    const controller = new AbortController();
 
-    const result = callGenerated(() => request, controller.signal);
-    controller.abort();
-
-    await expect(result).rejects.toMatchObject({
-      name: "CancelError",
-    });
-    expect(cancelTransport).toHaveBeenCalledOnce();
-  });
-
-  it("normalizes generated API error bodies", async () => {
     await expect(
-      callGenerated(async () => {
-        throw new GeneratedApiError(
-          { method: "GET", url: "/api/v1/usage/summary" },
-          {
-            url: "/api/v1/usage/summary",
-            ok: false,
-            status: 400,
-            statusText: "Bad Request",
-            body: { error: "invalid timezone: Fake/Zone" },
-          },
-          "Bad Request",
-        );
-      }),
+      callGenerated(() => orvalFetch("/api/v1/usage/summary", {})),
     ).rejects.toMatchObject({
       name: "ApiError",
-      status: 400,
-      message: "invalid timezone: Fake/Zone",
-    } satisfies Partial<ApiError>);
-  });
-
-  it("preserves machine-readable generated API error codes", async () => {
-    await expect(
-      callGenerated(async () => {
-        throw new GeneratedApiError(
-          { method: "GET", url: "/api/v1/usage/summary" },
-          {
-            url: "/api/v1/usage/summary",
-            ok: false,
-            status: 400,
-            statusText: "Bad Request",
-            body: {
-              code: "unknown_project_key",
-              error: "unknown project key",
-            },
-          },
-          "Bad Request",
-        );
-      }),
-    ).rejects.toMatchObject({
       status: 400,
       code: "unknown_project_key",
       message: "unknown project key",

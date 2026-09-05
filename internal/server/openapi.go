@@ -25,7 +25,7 @@ func OpenAPISpec(version VersionInfo, opts ...Option) *huma.OpenAPI {
 		opt(s)
 	}
 
-	configureHumaErrors()
+	configureHuma()
 	s.api = humago.New(s.mux, s.humaConfig())
 	s.registerTypedAPIRoutes()
 	return s.api.OpenAPI()

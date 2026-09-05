@@ -7,6 +7,11 @@ description: Release history for AgentsView
 
 **Improvements**
 
+- Generated API bindings now keep concrete collection element types and match
+  the server's JSON v2 behavior. Ordinary Go slices are documented and encoded
+  as arrays, including when their value is nil, so frontend code no longer
+  needs handwritten copies of those response types. The Orval client is split
+  into small files by API tag and schema.
 - Shrink large archives by storing each **tool result** once instead of also
   copying it into the call summary. Direct readers of
   `tool_calls.result_content` now find that text in `tool_result_events`.
@@ -43,6 +48,10 @@ description: Release history for AgentsView
   `[recall.extract] candidate_findings = "allow"`. Definite findings still
   block extraction, and the default `"block"` policy remains unchanged.
   (#1404)
+- Open sessions in the desktop app from other tools through the new
+  `agentsview://` URL scheme, with an optional `?msg` anchor that jumps to a
+  message. The web UI now also shows a retryable "session not found" state for
+  links to sessions that have not synced yet.
 
 **Improvements**
 

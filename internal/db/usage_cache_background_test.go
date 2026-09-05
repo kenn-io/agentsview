@@ -66,7 +66,10 @@ func TestUsageCacheBackfillNewestFirstAndResumesInstalledCoverage(t *testing.T) 
 	assert.Empty(t, extracted, "installed versions are coverage truth on restart")
 }
 
-func TestUsageCacheBackfillRecapturesChangedSource(t *testing.T) {
+// The pass no longer recaptures when a source moves under it: it installs the
+// facts its read snapshot saw, and the next request refills the session that
+// changed. The observable outcome, an exact answer afterwards, is unchanged.
+func TestUsageCacheBackfillPicksUpSourceChangedDuringPass(t *testing.T) {
 	database := testDB(t)
 	started := "2026-08-10T08:00:00Z"
 	insertSession(t, database, "moving-backfill", "project", func(session *Session) {
@@ -335,6 +338,45 @@ func TestUsageCacheBackfillSweepsHardDeletionTombstones(t *testing.T) {
 	assert.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
 	assert.Zero(t, usageCacheCount(t, cache, "usage_rollup_installs"),
 		"deletion hygiene must reclaim every timezone rollup for the session")
+}
+
+func TestUsageCacheBackfillContinuesWhenSessionIsDeletedDuringRollup(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "deleted-during-rollup", "project", func(session *Session) {
+		session.StartedAt = Ptr("2026-08-10T10:00:00Z")
+	})
+	require.NoError(t, database.InsertMessages([]Message{{
+		SessionID: "deleted-during-rollup", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-10T10:00:00Z", Model: "model",
+		TokenUsage: json.RawMessage(`{"input_tokens":1}`),
+	}}))
+	snapshot, err := database.captureUsageQuery(
+		context.Background(), UsageFilter{}, usageQueryKindActivity)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(
+		context.Background(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	deleted := make(chan error, 1)
+	var once atomic.Bool
+	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+		if len(builds) == 0 || !once.CompareAndSwap(false, true) {
+			return
+		}
+		deleteErr := database.DeleteSession("deleted-during-rollup")
+		if deleteErr == nil {
+			deleteErr = cache.fill.deleteNotificationSessions(
+				[]string{"deleted-during-rollup"})
+		}
+		deleted <- deleteErr
+	}
+
+	require.NoError(t, database.runUsageCacheBackfillPass(
+		context.Background(), time.Now(), snapshot))
+	require.NoError(t, <-deleted)
+	assert.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
+	assert.Zero(t, usageCacheCount(t, cache, "usage_rollup_installs"))
+	assert.NotEmpty(t,
+		readUsageCacheMetadata(t, cache.db)[usageCacheMetadataBackfillCompletedAt])
 }
 
 func TestUsageMatchingCountDiscoversWritesAfterCompletedBackfill(t *testing.T) {

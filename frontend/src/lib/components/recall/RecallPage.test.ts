@@ -43,9 +43,9 @@ describe("RecallPage", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Corpus");
-    const generated = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("button"),
-    ).find((button) => button.textContent?.trim() === "Generated insights");
+    const generated = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Generated insights",
+    );
     expect(generated).toBeDefined();
 
     generated!.click();

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -305,17 +306,37 @@ const (
 
 func testDB(tb testing.TB) *DB {
 	tb.Helper()
+	routeBenchmarkLogs(tb)
 	dir := tb.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := openCopiedTestDB(path)
+	d, err := openCopiedTestDB(tb, path)
 	require.NoError(tb, err, "opening test db")
 	tb.Cleanup(func() { require.NoError(tb, d.Close()) })
 	return d
 }
 
+// routeBenchmarkLogs sends the package's global log output through the
+// benchmark's own output for its duration. go test prints a benchmark's
+// name before the timed loop and its numbers after, so a log line
+// written straight to stderr in between (the slow InsertMessages
+// warning during fixture seeding on a busy runner) splits the result
+// line and the bench gate rejects the capture. Output written through
+// b.Output is printed after the result line instead. Tests are left
+// alone: parallel tests share the one global logger, so a per-test swap
+// could point it at a test that has already finished.
+func routeBenchmarkLogs(tb testing.TB) {
+	b, ok := tb.(*testing.B)
+	if !ok {
+		return
+	}
+	prev := log.Writer()
+	log.SetOutput(b.Output())
+	b.Cleanup(func() { log.SetOutput(prev) })
+}
+
 func testDBAtPath(t *testing.T, path, label string) *DB {
 	t.Helper()
-	d, err := openCopiedTestDB(path)
+	d, err := openCopiedTestDB(t, path)
 	require.NoError(t, err, "opening %s", label)
 	return d
 }
@@ -353,19 +374,22 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func openCopiedTestDB(path string) (*DB, error) {
-	return openTestDBWithTemplate(path, copyTestDBTemplate)
+func openCopiedTestDB(tb testing.TB, path string) (*DB, error) {
+	tb.Helper()
+	return openTestDBWithTemplate(tb, path, func(dst string) error {
+		return copyTestDBTemplate(tb, dst)
+	})
 }
 
 func openTestDBWithTemplate(
-	path string, copyTemplate func(string) error,
+	tb testing.TB, path string, copyTemplate func(string) error,
 ) (*DB, error) {
+	tb.Helper()
 	if err := copyTemplate(path); err != nil {
 		// The shared template is only a setup-cost optimization.
 		// Never let a template failure poison every test in the
 		// binary; build this database from scratch instead.
-		fmt.Fprintf(os.Stderr,
-			"db test: template unavailable, creating %s from scratch: %v\n",
+		tb.Logf("db test: template unavailable, creating %s from scratch: %v",
 			path, err)
 		for _, suffix := range []string{"", "-wal", "-shm"} {
 			_ = os.Remove(path + suffix)
@@ -375,7 +399,8 @@ func openTestDBWithTemplate(
 	return OpenPreparedTestDB(path)
 }
 
-func copyTestDBTemplate(dst string) error {
+func copyTestDBTemplate(tb testing.TB, dst string) error {
+	tb.Helper()
 	testDBTemplateOnce.Do(func() {
 		testDBTemplateDir, testDBTemplateErr = os.MkdirTemp(
 			"", "agentsview-db-template-*",
@@ -408,8 +433,7 @@ func copyTestDBTemplate(dst string) error {
 		)
 		defer cancel()
 		if err := template.CheckpointWALTruncate(ctx); err != nil {
-			fmt.Fprintf(os.Stderr,
-				"db test: template wal checkpoint failed, copying wal as-is: %v\n",
+			tb.Logf("db test: template wal checkpoint failed, copying wal as-is: %v",
 				err)
 		}
 		if err := template.Close(); err != nil && testDBTemplateErr == nil {
@@ -1053,12 +1077,17 @@ func TestCurrentDataVersionPositAssistantProviderIdentity(t *testing.T) {
 
 func TestCurrentDataVersionAntigravityCLICwdAndWorktreeProject(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 96,
-		"Antigravity CLI cwd and worktree project recovery require a sequential backfill")
+		"version 96 is the data-version boundary for Antigravity CLI cwd and worktree project recovery")
 }
 
 func TestCurrentDataVersionToolResultSummaryDedup(t *testing.T) {
-	assert.Equal(t, 97, CurrentDataVersion(),
-		"dropping summaries a single result event repeats requires a re-parse")
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 97,
+		"version 97 is the data-version boundary for tool-result summary deduplication")
+}
+
+func TestCurrentDataVersionPiSkillAttribution(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 98,
+		"version 98 is the data-version boundary for Pi skill attribution")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

@@ -69,8 +69,9 @@ batch, or deletion changes the set of dedup identities a session (or the Cursor
 store) contributes, it must, in the same cache transaction, delete the timezone
 rollup installs of every other session holding a changed identity; rollup
 installation re-verifies inside its transaction that no finalized identity
-gained an outside member and retries as a moved source otherwise. A finalized
-daily row must never survive gaining a sibling.
+gained an outside member and, when one did, reclassifies against the newly
+committed facts rather than failing the caller. A finalized daily row must never
+survive gaining a sibling.
 
 Treat a usage-cache file as identifiable only after both its SQLite
 `application_id` and `usage_cache_metadata.cache_kind` match. Filename matching
@@ -89,12 +90,23 @@ file and warn that the cache will rebuild after restart.
 Usage reads are exact. A cold aggregate request fills facts, builds the required
 timezone rollups, then reads them in one pinned cache transaction. Verify every
 candidate session's facts fingerprint, exact baked metadata, canonical pricing
-digest, resolved rate hashes, and Cursor high-water mark. Recheck each changed
-source session before installing it. A result is no older than the archive
-snapshot captured when the read began. A session confirmed deleted during fill
-is dropped from the request. Other fingerprint movement or archive-busy races
-are retried at most three times and then fail clearly rather than serving stale
-data. `cached_at` is diagnostic only.
+digest, resolved rate hashes, and Cursor high-water mark. A result is no older
+than the archive snapshot captured when the read began, and may be newer for a
+session whose facts were refilled meanwhile. A session confirmed deleted during
+fill is dropped from the request. `cached_at` is diagnostic only.
+
+The layers are kept apart so a live archive cannot veto a read. A fill reads one
+session's facts and that session's source version inside a single archive read
+transaction, installs both together, and reports the version it actually read,
+which may be newer than the one the caller asked for. Rollup aggregation then
+reads committed facts out of the usage cache only; it never touches the archive,
+so an append landing mid-build cannot abort it. An install is stale when the
+fact versions it was built from differ from the ones the cache now holds, and
+only those installs are rebuilt. Sessions written during a build are refilled by
+their own mutation notification and appear in the next aggregation, so staleness
+of a few seconds is expected and intended. Do not reintroduce a whole-snapshot
+recheck against the archive: validating a snapshot against a source that changes
+one session at a time livelocks the request.
 
 Timezone rollup identity includes both the resolved zone name and its rule
 fingerprint. Cache-generation retirement cancels detached work immediately but
@@ -103,8 +115,9 @@ query, backfill, fill, and rollup leases drain.
 
 `sync_marker` is a fingerprint component, not a monotonic version: its trigger
 recomputes the maximum of mutable timestamp fields, so it can decrease. A fill
-must recheck the full source fingerprint before installation. Do not replace
-that recheck with ordering comparisons.
+must read the full source fingerprint in the same transaction as the facts it
+installs. Do not compare fingerprints for ordering, and do not skip a refill
+because a cached fingerprint merely looks newer.
 
 ### Usage archive indexes
 

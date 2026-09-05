@@ -8,10 +8,7 @@
  *  generic ("Other") or when a tool's specific name is more
  *  informative than its category (e.g. "Skill" inside the
  *  Tool category). */
-export function displayToolName(call: {
-  tool_name: string;
-  category?: string | null;
-}): string {
+export function displayToolName(call: { tool_name: string; category?: string | null }): string {
   const cat = call.category;
   if (cat && cat !== "Other" && cat !== "Tool") return cat;
   return call.tool_name;

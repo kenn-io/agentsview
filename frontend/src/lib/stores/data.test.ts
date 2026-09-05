@@ -272,9 +272,7 @@ describe("attach", () => {
     data.inventory = makeInventory([makeRow({ project_key: "before" })]);
     detach = data.attach();
 
-    const afterSession = makeInventory([
-      makeRow({ project_key: "after-session", sessions: 2 }),
-    ]);
+    const afterSession = makeInventory([makeRow({ project_key: "after-session", sessions: 2 })]);
     api.getApiV1DataProjects.mockResolvedValueOnce(afterSession);
     emitDataChanged?.({ scope: "sessions" });
     emitDataChanged?.({ scope: "sessions" });
@@ -285,9 +283,7 @@ describe("attach", () => {
     expect(data.inventory).toEqual(afterSession);
     expect(data.rulesRefreshVersion).toBe(1);
 
-    const afterSync = makeInventory([
-      makeRow({ project_key: "after-sync", sessions: 3 }),
-    ]);
+    const afterSync = makeInventory([makeRow({ project_key: "after-sync", sessions: 3 })]);
     api.getApiV1DataProjects.mockResolvedValueOnce(afterSync);
     emitDataChanged?.({ scope: "sync" });
     await vi.advanceTimersByTimeAsync(300);

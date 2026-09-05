@@ -15,15 +15,9 @@ const DEFAULT_WINDOW_DAYS = 365;
 // without becoming the other page's selection. Rolling ranges are
 // rematerialized so retained presets stay fresh.
 class AnalyticsPageDatesStore {
-  #retained: Partial<
-    Record<AnalyticsDatePage, RetainedAnalyticsPageDate>
-  > = {};
+  #retained: Partial<Record<AnalyticsDatePage, RetainedAnalyticsPageDate>> = {};
 
-  retain(
-    page: AnalyticsDatePage,
-    state: PanelDateState,
-    explicitDateIntent = false,
-  ): void {
+  retain(page: AnalyticsDatePage, state: PanelDateState, explicitDateIntent = false): void {
     this.#retained[page] = {
       state: { ...state },
       explicitDateIntent,
@@ -34,9 +28,7 @@ class AnalyticsPageDatesStore {
     return this.restoreWithIntent(page).state;
   }
 
-  restoreWithIntent(
-    page: AnalyticsDatePage,
-  ): RetainedAnalyticsPageDate {
+  restoreWithIntent(page: AnalyticsDatePage): RetainedAnalyticsPageDate {
     const retained = this.#retained[page];
     if (retained?.state.mode === "fixed") {
       return {
@@ -45,8 +37,7 @@ class AnalyticsPageDatesStore {
       };
     }
 
-    const windowDays =
-      retained?.state.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const windowDays = retained?.state.windowDays ?? DEFAULT_WINDOW_DAYS;
     const range = rollingRange(windowDays);
     return {
       state: {

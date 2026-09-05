@@ -12,10 +12,7 @@ describe("build system package manager usage", () => {
   });
 
   it("uses npm ci in desktop helper build scripts", () => {
-    const scripts = [
-      "../scripts/desktop-dev.ps1",
-      "../desktop/scripts/prepare-sidecar.sh",
-    ];
+    const scripts = ["../scripts/desktop-dev.ps1", "../desktop/scripts/prepare-sidecar.sh"];
 
     for (const script of scripts) {
       const source = readFileSync(script, "utf8");

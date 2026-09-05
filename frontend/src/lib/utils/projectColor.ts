@@ -23,14 +23,10 @@ export function projectColor(name: string): string {
   return hashColor(name, PROJECT_PALETTE);
 }
 
-export function seriesColorMap(
-  ids: readonly string[],
-): ReadonlyMap<string, string> {
+export function seriesColorMap(ids: readonly string[]): ReadonlyMap<string, string> {
   const colors = new Map<string, string>();
   const occupied = new Set<number>();
-  const uniqueIds = [...new Set(ids)]
-    .filter((id) => id !== "" && id !== "__other__")
-    .sort();
+  const uniqueIds = [...new Set(ids)].filter((id) => id !== "" && id !== "__other__").sort();
 
   for (const id of uniqueIds) {
     const preferred = PROJECT_PALETTE.indexOf(projectColor(id));

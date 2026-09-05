@@ -12,7 +12,6 @@
     AgentName,
     AutomatedScope,
     CannedInsightKind,
-    InsightType,
   } from "../../api/types.js";
   import { m } from "../../i18n/index.js";
   import { router, getBasePath } from "../../stores/router.svelte.js";
@@ -221,7 +220,7 @@
   }
 
   function cannedKindLabel(
-    kind: CannedInsightKind | "" | undefined,
+    kind: string | undefined,
   ): string {
     switch (kind) {
       case "prompt_maturity_review":
@@ -242,8 +241,8 @@
   }
 
   function insightTypeLabel(
-    type: InsightType,
-    kind: CannedInsightKind | "" | undefined,
+    type: string,
+    kind: string | undefined,
   ): string {
     if (type === "llm_canned") return cannedKindLabel(kind);
     if (type === "agent_analysis") return m.insights_page_agent_analysis();

@@ -10,9 +10,7 @@ test.describe("Transcript strip", () => {
     await sp.selectFirstSession();
   });
 
-  test("pills fill full height of transcript-strip container", async ({
-    page,
-  }) => {
+  test("pills fill full height of transcript-strip container", async ({ page }) => {
     const strip = page.locator(".transcript-strip");
     await expect(strip).toBeVisible();
 

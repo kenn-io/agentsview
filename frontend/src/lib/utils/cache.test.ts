@@ -126,20 +126,14 @@ describe("LRUCache", () => {
   });
 
   it("throws on zero capacity", () => {
-    expect(() => new LRUCache<string, number>(0)).toThrow(
-      /capacity must be a positive integer/,
-    );
+    expect(() => new LRUCache<string, number>(0)).toThrow(/capacity must be a positive integer/);
   });
 
   it("throws on negative capacity", () => {
-    expect(() => new LRUCache<string, number>(-1)).toThrow(
-      /capacity must be a positive integer/,
-    );
+    expect(() => new LRUCache<string, number>(-1)).toThrow(/capacity must be a positive integer/);
   });
 
   it("throws on non-integer capacity", () => {
-    expect(() => new LRUCache<string, number>(2.5)).toThrow(
-      /capacity must be a positive integer/,
-    );
+    expect(() => new LRUCache<string, number>(2.5)).toThrow(/capacity must be a positive integer/);
   });
 });

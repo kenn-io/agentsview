@@ -21,10 +21,7 @@ function getScrollHeight(locator: Locator): Promise<number> {
  * Scrolls a virtual list container to the given position
  * and dispatches a scroll event to trigger virtualizer updates.
  */
-export async function scrollListTo(
-  locator: Locator,
-  position: ScrollPosition,
-): Promise<void> {
+export async function scrollListTo(locator: Locator, position: ScrollPosition): Promise<void> {
   await locator.evaluate((el, pos) => {
     if (pos === "top") {
       el.scrollTop = 0;
@@ -43,10 +40,7 @@ export async function scrollListTo(
  * Waits until the virtual list has published enough height for
  * programmatic scrolling to target the requested range.
  */
-export async function waitForScrollHeight(
-  locator: Locator,
-  minHeight: number,
-): Promise<void> {
+export async function waitForScrollHeight(locator: Locator, minHeight: number): Promise<void> {
   await expect
     .poll(() => getScrollHeight(locator), { timeout: 5_000 })
     .toBeGreaterThanOrEqual(minHeight);
@@ -60,13 +54,7 @@ export async function waitForRowCountStable(
   sp: SessionsPage,
   durationMs: number = 800,
 ): Promise<void> {
-  await expect
-    .poll(() => sp.messageRows.count(), { timeout: 5_000 })
-    .toBeGreaterThan(0);
+  await expect.poll(() => sp.messageRows.count(), { timeout: 5_000 }).toBeGreaterThan(0);
 
-  await waitForStableValue(
-    () => sp.messageRows.count(),
-    durationMs,
-    200,
-  );
+  await waitForStableValue(() => sp.messageRows.count(), durationMs, 200);
 }

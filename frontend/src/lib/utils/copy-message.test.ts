@@ -74,17 +74,30 @@ describe("formatMessageForCopy", () => {
 
   it("includes kiro-ide Edit with diff key", () => {
     const msg = {
-      id: 3, session_id: "s1", ordinal: 3, role: "assistant",
-      content: "Updating config", timestamp: "",
-      has_thinking: false, thinking_text: "", has_tool_use: true, content_length: 15,
-      model: "", context_tokens: 0, output_tokens: 0, is_system: false,
-      tool_calls: [{
-        tool_name: "Edit", category: "Edit",
-        input_json: JSON.stringify({
-          file: "config.ts",
-          diff: "--- a/config.ts\n+++ b/config.ts\n@@ -1,2 +1,2 @@\n-port: 3000\n+port: 8080",
-        }),
-      }],
+      id: 3,
+      session_id: "s1",
+      ordinal: 3,
+      role: "assistant",
+      content: "Updating config",
+      timestamp: "",
+      has_thinking: false,
+      thinking_text: "",
+      has_tool_use: true,
+      content_length: 15,
+      model: "",
+      context_tokens: 0,
+      output_tokens: 0,
+      is_system: false,
+      tool_calls: [
+        {
+          tool_name: "Edit",
+          category: "Edit",
+          input_json: JSON.stringify({
+            file: "config.ts",
+            diff: "--- a/config.ts\n+++ b/config.ts\n@@ -1,2 +1,2 @@\n-port: 3000\n+port: 8080",
+          }),
+        },
+      ],
     } as Message;
     const result = formatMessageForCopy(msg);
     expect(result).toContain("[Edit]");
@@ -94,14 +107,30 @@ describe("formatMessageForCopy", () => {
   });
 
   it("copies the canonical long path in tool metadata", () => {
-    const path = "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
+    const path =
+      "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
     const result = formatMessageForCopy({
-      id: 4, session_id: "s1", ordinal: 4, role: "assistant", content: "",
-      timestamp: "", has_thinking: false, thinking_text: "", has_tool_use: true,
-      content_length: 0, model: "", context_tokens: 0, output_tokens: 0,
-      is_system: false, tool_calls: [{
-        tool_name: "Read", category: "Read", input_json: JSON.stringify({ file_path: path }),
-      }],
+      id: 4,
+      session_id: "s1",
+      ordinal: 4,
+      role: "assistant",
+      content: "",
+      timestamp: "",
+      has_thinking: false,
+      thinking_text: "",
+      has_tool_use: true,
+      content_length: 0,
+      model: "",
+      context_tokens: 0,
+      output_tokens: 0,
+      is_system: false,
+      tool_calls: [
+        {
+          tool_name: "Read",
+          category: "Read",
+          input_json: JSON.stringify({ file_path: path }),
+        },
+      ],
     });
     expect(result).toContain(`file: ${path}`);
   });

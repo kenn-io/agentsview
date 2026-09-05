@@ -33,15 +33,9 @@ describe("ParallelGroup", () => {
     });
     await tick();
 
-    expect(document.querySelector(".pg-label")?.textContent?.trim()).toBe(
-      "并行",
-    );
-    expect(document.querySelector(".pg-count")?.textContent?.trim()).toBe(
-      "2 次调用",
-    );
-    expect(document.querySelector(".pg-upper")?.textContent?.trim()).toBe(
-      "每个 ≤ 2.5s",
-    );
+    expect(document.querySelector(".pg-label")?.textContent?.trim()).toBe("并行");
+    expect(document.querySelector(".pg-count")?.textContent?.trim()).toBe("2 次调用");
+    expect(document.querySelector(".pg-upper")?.textContent?.trim()).toBe("每个 ≤ 2.5s");
 
     unmount(component);
   });

@@ -153,9 +153,7 @@ describe("registerShortcuts", () => {
       navigate = (delta: number) =>
         sessions.navigateSession(
           delta,
-          starred.filterOnly
-            ? (session) => starred.isStarred(session.id)
-            : undefined,
+          starred.filterOnly ? (session) => starred.isStarred(session.id) : undefined,
         ),
     ) {
       const list = document.createElement("div");
@@ -167,10 +165,7 @@ describe("registerShortcuts", () => {
 
     it("navigates sessions up and down in the registered list", () => {
       const list = mountSessionList();
-      sessions.sessions = [
-        { id: "s1" } as any,
-        { id: "s2" } as any,
-      ];
+      sessions.sessions = [{ id: "s1" } as any, { id: "s2" } as any];
       sessions.activeSessionId = "s1";
       const row = document.createElement("button");
       list.appendChild(row);
@@ -240,11 +235,7 @@ describe("registerShortcuts", () => {
 
     it("keeps arrow navigation within the starred-only list", () => {
       const list = mountSessionList();
-      sessions.sessions = [
-        { id: "s1" } as any,
-        { id: "s2" } as any,
-        { id: "s3" } as any,
-      ];
+      sessions.sessions = [{ id: "s1" } as any, { id: "s2" } as any, { id: "s3" } as any];
       sessions.activeSessionId = "s1";
       starred.filterOnly = true;
       starred.ids = new Set(["s1", "s3"]);
@@ -269,10 +260,7 @@ describe("registerShortcuts", () => {
       ["tombstoned", { tombstoned: true }],
     ])("preserves arrow routing for the %s Session lineage variant", (_name, variant) => {
       const list = mountSessionList();
-      sessions.sessions = [
-        { id: "root" } as any,
-        { id: "variant", ...variant } as any,
-      ];
+      sessions.sessions = [{ id: "root" } as any, { id: "variant", ...variant } as any];
       sessions.activeSessionId = "root";
       const row = document.createElement("button");
       list.appendChild(row);
@@ -691,7 +679,7 @@ describe("registerShortcuts", () => {
         is_system: false,
       },
     ];
-    vi.spyOn(SessionsService, "postApiV1SessionsIdResume").mockRejectedValue(
+    vi.spyOn(SessionsService, "postApiV1SessionsByIdResume").mockRejectedValue(
       new Error("backend unavailable"),
     );
 
@@ -744,7 +732,7 @@ describe("registerShortcuts", () => {
         is_system: false,
       },
     ];
-    vi.spyOn(SessionsService, "postApiV1SessionsIdResume").mockResolvedValue({
+    vi.spyOn(SessionsService, "postApiV1SessionsByIdResume").mockResolvedValue({
       launched: false,
       command: "claude --resume run:keyboard-session",
       cwd: "/tmp/project",
@@ -798,7 +786,7 @@ describe("registerShortcuts", () => {
       },
     ];
     messages.hasOlder = true;
-    vi.spyOn(SessionsService, "postApiV1SessionsIdResume").mockRejectedValue(
+    vi.spyOn(SessionsService, "postApiV1SessionsByIdResume").mockRejectedValue(
       new Error("backend unavailable"),
     );
 
@@ -830,7 +818,7 @@ describe("registerShortcuts", () => {
     messages.sessionId = session.id;
     messages.loading = true;
     (messages as any)._stableMainModel = "claude sonnet";
-    vi.spyOn(SessionsService, "postApiV1SessionsIdResume").mockRejectedValue(
+    vi.spyOn(SessionsService, "postApiV1SessionsByIdResume").mockRejectedValue(
       new Error("backend unavailable"),
     );
 

@@ -47,6 +47,33 @@ func TestActivityReportCommand_Flags(t *testing.T) {
 	}
 }
 
+func TestResolveCLIActivitySelection(t *testing.T) {
+	t.Setenv("TZ", "America/New_York")
+	oldLocal := time.Local
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
+	t.Cleanup(func() { time.Local = oldLocal })
+	oldNow := activityReportNow
+	activityReportNow = func() time.Time {
+		return time.Date(2026, 3, 9, 2, 30, 0, 0, time.UTC)
+	}
+	t.Cleanup(func() { activityReportNow = oldNow })
+
+	query, filter, err := resolveCLIActivitySelection(ActivityReportConfig{
+		Preset: "day",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "America/New_York", query.Timezone)
+	assert.Equal(t, "America/New_York", filter.Timezone)
+	assert.Equal(t, "2026-03-08T05:00:00Z", query.RangeStart.Format(time.RFC3339))
+
+	query, filter, err = resolveCLIActivitySelection(ActivityReportConfig{
+		Preset: "day", Date: "2026-03-09", Timezone: "Europe/Berlin",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Europe/Berlin", query.Timezone)
+	assert.Equal(t, "Europe/Berlin", filter.Timezone)
+}
+
 func TestResolveActivityReportPagesSessionsWithDirectCursor(t *testing.T) {
 	dataDir := setupExportGoldenDataDir(t)
 	database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))

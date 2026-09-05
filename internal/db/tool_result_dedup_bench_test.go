@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -125,13 +126,21 @@ func BenchmarkRecallEvidenceWindowFiveAgentEventCalls(b *testing.B) {
 	}
 }
 
-func BenchmarkRecallEvidenceWindowSingleEventCalls(b *testing.B) {
+func BenchmarkRecallEvidenceWindowSingleEventCallsColdPools(b *testing.B) {
 	d := testDB(b)
 	const msgs, callsPerMsg = 200, 3
 	seedBenchToolResultSession(b, d, "bench-recall-1", msgs, callsPerMsg, 1)
 	ctx := context.Background()
 	b.ResetTimer()
 	for b.Loop() {
+		// Two collections evict both the primary and victim sync.Pool
+		// caches. Keep them outside the measurement so every operation
+		// measures the same cold-pool read instead of whichever pool state
+		// the process happened to inherit from earlier benchmarks.
+		b.StopTimer()
+		runtime.GC()
+		runtime.GC()
+		b.StartTimer()
 		w, err := d.BuildRecallEvidenceWindow(ctx, "bench-recall-1", 0, msgs-1)
 		if err != nil {
 			b.Fatal(err)

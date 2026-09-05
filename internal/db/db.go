@@ -455,7 +455,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // records the summary size and readers re-derive the text from the event.
 // Existing rows need re-parsing to drop the duplicate copy, which was about
 // 40% of a large archive.)
-const dataVersion = 97
+// (98: The Pi parser now attributes skill loads (SKILL.md
+// reads and skill:// URIs) so Pi tool calls count toward Top Skills.
+// Existing Pi rows need re-parsing to backfill the skill attribution.)
+const dataVersion = 98
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

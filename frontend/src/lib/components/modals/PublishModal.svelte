@@ -11,7 +11,6 @@
   } from "../../api/generated/index";
   import {
     callGenerated,
-    configureGeneratedClient,
     isAbortError,
   } from "../../api/runtime.js";
   import type { PublishResponse } from "../../api/types.js";
@@ -45,9 +44,8 @@
   async function init() {
     const signal = configRead.begin();
     try {
-      configureGeneratedClient();
       const config = await callGenerated(
-        () => ConfigService.getApiV1ConfigGithub(),
+        (options) => ConfigService.getApiV1ConfigGithub(options),
         signal,
       );
       if (isClosed() || !configRead.isCurrent(signal)) return;
@@ -70,10 +68,7 @@
 
     view = "progress";
     try {
-      configureGeneratedClient();
-      await ConfigService.postApiV1ConfigGithub({
-        requestBody: { token },
-      });
+      await ConfigService.postApiV1ConfigGithub({ token });
       if (isClosed()) return;
       await doPublish();
     } catch (err) {
@@ -95,12 +90,10 @@
     if (target.kind === "insight") {
       view = "progress";
       try {
-        configureGeneratedClient();
-        result =
-          await InsightsService.postApiV1InsightsIdPublish({
-            id: target.id,
-            secret: publishSecret,
-          }) as unknown as PublishResponse;
+        result = await InsightsService.postApiV1InsightsByIdPublish(
+          { id: target.id },
+          { secret: publishSecret },
+        );
         if (isClosed()) return;
         view = "success";
       } catch (err) {
@@ -114,12 +107,10 @@
 
     view = "progress";
     try {
-      configureGeneratedClient();
-      result =
-        await SessionsService.postApiV1SessionsIdPublish({
-          id: target.id,
-          secret: publishSecret,
-        }) as unknown as PublishResponse;
+      result = await SessionsService.postApiV1SessionsByIdPublish(
+        { id: target.id },
+        { secret: publishSecret },
+      );
       if (isClosed()) return;
       view = "success";
     } catch (err) {

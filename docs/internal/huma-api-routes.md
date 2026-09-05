@@ -27,3 +27,17 @@ When changing route registration or generated client contracts:
   changes when the OpenAPI contract intentionally changed.
 - Keep generated frontend code under `frontend/src/lib/api/generated/`; it is
   marked as generated in `.gitattributes` and should not be hand-edited.
+
+## Collection nullability
+
+AgentsView uses `encoding/json/v2`, which encodes a nil Go slice as an empty
+JSON array. Server initialization sets `huma.DefaultArrayNullable` to `false`
+before Huma builds the schema, so ordinary slice fields have the same
+non-nullable array contract in OpenAPI 3.1 and on the wire.
+
+- Use an ordinary slice for an array that may be empty but never null.
+- Use an explicit nullable representation and `nullable:"true"` only when `null`
+  is part of the wire contract.
+- Use generated response types in stores and components. Do not cast a generated
+  response to a handwritten wire type; fix the schema or add a typed adapter
+  instead.

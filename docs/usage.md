@@ -1005,6 +1005,20 @@ in-flight work.
 These actions let you quickly pick up where you left off without manually
 navigating to the project directory.
 
+### The agentsview:// URL Scheme
+
+The desktop app registers the `agentsview://` URL scheme, so other tools can
+open a session directly in the app:
+
+```bash
+open "agentsview://sessions/<session-id>"
+```
+
+An optional `?msg=<ordinal>` or `?msg=last` query scrolls to that message. If the
+app is already running, its window comes forward on the session; if not, the app
+starts and opens the session once the backend is ready. See the
+[Session API](/docs/session-api/) guide for the full contract.
+
 ______________________________________________________________________
 
 ## Session Export

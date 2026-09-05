@@ -1,9 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildReadProgressToken,
-  ReadProgressStore,
-} from "./read-progress.svelte.js";
+import { buildReadProgressToken, ReadProgressStore } from "./read-progress.svelte.js";
 
 afterEach(() => {
   localStorage.clear();
@@ -27,16 +24,19 @@ describe("read progress", () => {
   });
 
   it("drops version-one tokens so existing sessions rebaseline after upgrade", () => {
-    localStorage.setItem("agentsview-read-progress", JSON.stringify({
-      version: 1,
-      sessions: {
-        one: {
-          token: "h:old-hash|m:2026-07-11T12:00:00Z",
-          ordinal: 3,
-          touched_at: 1,
+    localStorage.setItem(
+      "agentsview-read-progress",
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          one: {
+            token: "h:old-hash|m:2026-07-11T12:00:00Z",
+            ordinal: 3,
+            touched_at: 1,
+          },
         },
-      },
-    }));
+      }),
+    );
 
     expect(new ReadProgressStore().get("one")).toBeNull();
   });
@@ -89,10 +89,7 @@ describe("read progress", () => {
 
   it("prunes old entries to keep storage bounded", () => {
     const now = vi.spyOn(Date, "now");
-    now
-      .mockReturnValueOnce(1)
-      .mockReturnValueOnce(2)
-      .mockReturnValueOnce(3);
+    now.mockReturnValueOnce(1).mockReturnValueOnce(2).mockReturnValueOnce(3);
 
     const store = new ReadProgressStore(2);
     store.baseline("first", "a", 1);

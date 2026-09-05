@@ -1,3 +1,5 @@
+import type { DbMessage, DbToolCall, DbToolResultEvent } from "../generated/index.js";
+
 /** Matches Go VersionInfo struct in internal/server/server.go */
 export interface VersionInfo {
   version: string;
@@ -121,55 +123,15 @@ export interface ProjectInfo {
   session_count: number;
 }
 
-/** Matches Go ToolResultEvent struct in internal/db/messages.go */
-export interface ToolResultEvent {
-  tool_use_id?: string;
-  agent_id?: string;
-  subagent_session_id?: string;
-  source: string;
-  status: string;
-  content: string;
-  content_length: number;
-  timestamp?: string;
-  event_index: number;
-}
-
-/** Matches Go ToolCall struct in internal/db/messages.go */
-export interface ToolCall {
-  tool_name: string;
-  category?: string;
-  tool_use_id?: string;
-  input_json?: string;
-  skill_name?: string;
-  result_content_length?: number;
-  result_content?: string;
-  subagent_session_id?: string;
-  result_events?: ToolResultEvent[];
-}
-
-/** Matches Go Message struct in internal/db/messages.go */
-export interface Message {
-  id: number;
-  session_id: string;
-  ordinal: number;
-  role: string;
-  content: string;
-  timestamp: string;
-  has_thinking: boolean;
-  thinking_text: string;
-  has_tool_use: boolean;
-  content_length: number;
-  model: string;
-  token_usage?: Record<string, number | boolean> | null;
-  context_tokens: number;
-  output_tokens: number;
-  has_context_tokens?: boolean;
-  has_output_tokens?: boolean;
+export type ToolResultEvent = DbToolResultEvent;
+export type ToolCall = Omit<DbToolCall, "category"> & {
+  category?: DbToolCall["category"];
+};
+export type Message = Omit<DbMessage, "has_context_tokens" | "has_output_tokens" | "tool_calls"> & {
+  has_context_tokens?: DbMessage["has_context_tokens"];
+  has_output_tokens?: DbMessage["has_output_tokens"];
   tool_calls?: ToolCall[];
-  is_system: boolean;
-  is_compact_boundary?: boolean;
-  source_subtype?: string;
-}
+};
 
 /** Matches Go SearchResult struct in internal/db/search.go */
 export interface SearchResult {

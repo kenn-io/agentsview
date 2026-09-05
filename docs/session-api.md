@@ -430,6 +430,36 @@ directory. Message-point forks are Claude-only, require `fork_session`, reject
 
 ______________________________________________________________________
 
+### The `agentsview://` URL scheme
+
+The desktop app registers the `agentsview://` URL scheme, letting
+external tools open a session in the app without going through HTTP:
+
+```bash
+open "agentsview://sessions/<session-id>"
+```
+
+Contract:
+
+- Only `agentsview://sessions/<session-id>` URLs are accepted. The
+  session id must be a single path segment; percent-encode reserved
+  characters. Anything else is logged to the desktop log and ignored.
+- An optional `?msg=<ordinal>` or `?msg=last` query scrolls to that
+  message. Other query parameters are dropped.
+- If the app is running, its window is focused and navigated to the
+  session. If not, the app launches and opens the session once its
+  backend is ready. On Windows and Linux a second launch forwards its
+  URL to the running instance and exits.
+- Callers can detect a missing handler because `open` (macOS) and
+  equivalent launchers exit non-zero when no app claims the scheme;
+  fall back to the web UI at
+  `http://<host>:<port>/sessions/<session-id>` in that case.
+
+The scheme is registered by the installed desktop app; it is not
+available when only the CLI or server is installed.
+
+---
+
 ### `agentsview session export`
 
 Stream the raw session source file to stdout. This is a **local-only**

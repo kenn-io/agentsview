@@ -1,32 +1,21 @@
-import {
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vite-plus/test";
-
-const { request } = vi.hoisted(() => ({
-  request: vi.fn(),
-}));
-
-vi.mock("./generated/core/OpenAPI", () => ({
-  OpenAPI: {},
-}));
-
-vi.mock("./generated/core/request", () => ({
-  request,
-}));
-
-import { AnalyticsService } from "./generated/services/AnalyticsService";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { AnalyticsService } from "./generated/index.js";
 
 describe("AnalyticsService signal sessions", () => {
-  beforeEach(() => {
-    request.mockReset();
-    request.mockResolvedValue({});
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("includes the model filter in signal session requests", async () => {
+    localStorage.setItem("agentsview-server-url", "http://localhost");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
     await AnalyticsService.getApiV1AnalyticsSignalSessions({
       signal: "runaway_tool_loop_count",
       from: "2024-06-01",
@@ -35,14 +24,8 @@ describe("AnalyticsService signal sessions", () => {
       model: "gpt-4o",
     });
 
-    expect(request).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        query: expect.objectContaining({
-          signal: "runaway_tool_loop_count",
-          model: "gpt-4o",
-        }),
-      }),
-    );
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://localhost");
+    expect(url.searchParams.get("signal")).toBe("runaway_tool_loop_count");
+    expect(url.searchParams.get("model")).toBe("gpt-4o");
   });
 });

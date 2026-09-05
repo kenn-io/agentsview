@@ -29,9 +29,7 @@ describe("resolveArrowTarget", () => {
     list.appendChild(row);
 
     expect(resolveArrowTarget(row, list, "message")).toBe("message");
-    expect(resolveArrowTarget(document.body, list, "sessionList")).toBe(
-      "sessionList",
-    );
+    expect(resolveArrowTarget(document.body, list, "sessionList")).toBe("sessionList");
     list.remove();
   });
 
@@ -93,16 +91,12 @@ describe("resolveArrowTarget", () => {
     const detach = registerSessionList(list, navigate);
 
     sidebar.style.display = "none";
-    expect(resolveArrowTarget(document.body, list, "sessionList")).toBe(
-      "message",
-    );
+    expect(resolveArrowTarget(document.body, list, "sessionList")).toBe("message");
     expect(navigateRegisteredSessionList(1)).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
 
     sidebar.style.display = "flex";
-    expect(resolveArrowTarget(document.body, list, "sessionList")).toBe(
-      "sessionList",
-    );
+    expect(resolveArrowTarget(document.body, list, "sessionList")).toBe("sessionList");
     expect(navigateRegisteredSessionList(1)).toBe(true);
     expect(navigate).toHaveBeenCalledWith(1);
 

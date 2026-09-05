@@ -3,21 +3,23 @@ import { mount, tick, unmount } from "svelte";
 import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
 import { usage } from "../../stores/usage.svelte.js";
 import type {
-  UsagePairwiseComparisonResponse,
+  ServiceUsagePairwiseComparisonResponse,
   UsageSummaryResponse,
-} from "../../api/types/usage.js";
+} from "../../api/generated/index";
 import { testMoney } from "../../test/money.js";
 
 function usageSummary(): UsageSummaryResponse {
   return {
     from: "2024-01-01",
     to: "2024-01-31",
+    projects: {},
     totals: {
       inputTokens: 400,
       outputTokens: 200,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
       totalCost: testMoney(99.99),
+      cacheSavings: testMoney(0),
     },
     daily: [],
     projectTotals: [
@@ -75,7 +77,7 @@ function usageSummary(): UsageSummaryResponse {
   };
 }
 
-function pairwiseComparison(): UsagePairwiseComparisonResponse {
+function pairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
   return {
     left: {
       totalCost: testMoney(4),
@@ -144,12 +146,7 @@ describe("UsagePairwiseComparisonPanel", () => {
     usage.loading.pairwise = false;
     usage.errors.pairwise = null;
     usage.mode = "cost";
-    usage.setSelectedTokenTypes([
-      "input",
-      "cache_write",
-      "cache_read",
-      "output",
-    ]);
+    usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
     document.body.innerHTML = "";
     vi.restoreAllMocks();
   });
@@ -169,9 +166,9 @@ describe("UsagePairwiseComparisonPanel", () => {
     trigger.click();
     await tick();
 
-    const option = Array.from(
-      document.querySelectorAll<HTMLLIElement>('li[role="option"]'),
-    ).find((item) => item.textContent?.includes("Project"));
+    const option = Array.from(document.querySelectorAll<HTMLLIElement>('li[role="option"]')).find(
+      (item) => item.textContent?.includes("Project"),
+    );
     expect(option).toBeTruthy();
     option?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await tick();
@@ -227,15 +224,10 @@ describe("UsagePairwiseComparisonPanel", () => {
     await tick();
 
     const firstRow = document.querySelector("tbody tr");
-    const cells = Array.from(
-      firstRow?.querySelectorAll("th, td") ?? [],
-    ).map((cell) => cell.textContent?.replace(/\s+/g, " ").trim());
-    expect(cells).toEqual([
-      "Total Tokens",
-      "100",
-      "50",
-      "-50 -50.0%",
-    ]);
+    const cells = Array.from(firstRow?.querySelectorAll("th, td") ?? []).map((cell) =>
+      cell.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(cells).toEqual(["Total Tokens", "100", "50", "-50 -50.0%"]);
 
     unmount(component);
   });

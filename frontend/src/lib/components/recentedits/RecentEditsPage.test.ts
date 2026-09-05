@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-import {
-  describe,
-  it,
-  expect,
-  vi,
-  beforeEach,
-  afterEach,
-} from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
 
@@ -53,7 +46,6 @@ vi.mock("../../api/runtime.js", () => ({
     return fn();
   },
   isAbortError: vi.fn(() => false),
-  configureGeneratedClient: () => {},
 }));
 
 vi.mock("../../stores/ui.svelte.js", () => ({
@@ -89,9 +81,7 @@ describe("RecentEditsPage", () => {
   });
 
   it("aborts the visible page read when unmounted", async () => {
-    mocks.getApiV1RecentEdits.mockImplementationOnce(
-      () => new Promise(() => {}),
-    );
+    mocks.getApiV1RecentEdits.mockImplementationOnce(() => new Promise(() => {}));
     component = mount(RecentEditsPage, { target: document.body });
     await tick();
     const signal = mocks.signals[0];
@@ -124,9 +114,7 @@ describe("RecentEditsPage", () => {
     await tick();
     await tick();
 
-    const fileRowBtn = document.querySelector<HTMLButtonElement>(
-      ".re-file-row",
-    );
+    const fileRowBtn = document.querySelector<HTMLButtonElement>(".re-file-row");
     expect(fileRowBtn).not.toBeNull();
 
     fileRowBtn!.click();
@@ -141,9 +129,7 @@ describe("RecentEditsPage", () => {
     await tick();
     await tick();
 
-    const fileRowBtn = document.querySelector<HTMLButtonElement>(
-      ".re-file-row",
-    );
+    const fileRowBtn = document.querySelector<HTMLButtonElement>(".re-file-row");
     fileRowBtn!.click();
     await tick();
 
@@ -156,9 +142,7 @@ describe("RecentEditsPage", () => {
     await tick();
     await tick();
 
-    const fileRowBtn = document.querySelector<HTMLButtonElement>(
-      ".re-file-row",
-    );
+    const fileRowBtn = document.querySelector<HTMLButtonElement>(".re-file-row");
     fileRowBtn!.click();
     await tick();
 
@@ -198,8 +182,7 @@ describe("RecentEditsPage", () => {
     await tick();
     await tick();
 
-    const loadMoreBtn =
-      document.querySelector<HTMLButtonElement>(".re-load-more");
+    const loadMoreBtn = document.querySelector<HTMLButtonElement>(".re-load-more");
     expect(loadMoreBtn).not.toBeNull();
     loadMoreBtn!.click();
     await tick();
@@ -207,9 +190,7 @@ describe("RecentEditsPage", () => {
 
     // The second request must start at the loaded file count (2), not a
     // blindly pre-incremented offset, so a failed page can't skip rows.
-    const calls = mocks.getApiV1RecentEdits.mock.calls as unknown as Array<
-      [{ offset: number }]
-    >;
+    const calls = mocks.getApiV1RecentEdits.mock.calls as unknown as Array<[{ offset: number }]>;
     expect(calls).toHaveLength(2);
     expect(calls[0]![0].offset).toBe(0);
     expect(calls[1]![0].offset).toBe(2);

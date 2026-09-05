@@ -130,9 +130,9 @@ describe("ProjectWorkspace", () => {
     expect(section?.getAttribute("aria-label")).toBe(m.shared_unknown());
     // The editor must still receive the raw empty label; it feeds
     // original_project and API calls, not display copy.
-    expect(api.candidates).toHaveBeenCalledWith({
-      projectLabel: "",
-      projectKey: "pl1:sha256:wrong",
+    expect(api.candidates.mock.lastCall?.[0]).toEqual({
+      project_label: "",
+      project_key: "pl1:sha256:wrong",
     });
   });
 
@@ -140,12 +140,10 @@ describe("ProjectWorkspace", () => {
     render({ row: makeRow({ label: "unknown" }) });
     await flush();
 
-    expect(
-      screen.getByRole("heading", { name: m.data_project_unclassified() }),
-    ).toBeTruthy();
-    expect(api.candidates).toHaveBeenCalledWith({
-      projectLabel: "unknown",
-      projectKey: "pl1:sha256:wrong",
+    expect(screen.getByRole("heading", { name: m.data_project_unclassified() })).toBeTruthy();
+    expect(api.candidates.mock.lastCall?.[0]).toEqual({
+      project_label: "unknown",
+      project_key: "pl1:sha256:wrong",
     });
   });
 
@@ -164,9 +162,9 @@ describe("ProjectWorkspace", () => {
     render();
     await flush();
 
-    expect(api.candidates).toHaveBeenCalledWith({
-      projectLabel: "wrong-project",
-      projectKey: "pl1:sha256:wrong",
+    expect(api.candidates.mock.lastCall?.[0]).toEqual({
+      project_label: "wrong-project",
+      project_key: "pl1:sha256:wrong",
     });
   });
 

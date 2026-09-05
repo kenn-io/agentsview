@@ -63,7 +63,7 @@ from GitHub Releases, verifies the SHA-256 checksum, and installs the binary.
 
 ### Build from source
 
-Requires Go 1.27+ with CGO and Node.js 22+:
+Requires Go 1.27+ with CGO and Node.js 24.11+:
 
 ```bash
 git clone https://github.com/kenn-io/agentsview.git

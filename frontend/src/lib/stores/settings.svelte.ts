@@ -1,22 +1,18 @@
 import {
-  ApiError as GeneratedApiError,
   SettingsService,
   type SettingsResponse,
-  type SettingsUpdateRequest,
   type SessionProviderResponse,
   type TerminalResponse,
 } from "../api/generated/index";
 import {
-  configureGeneratedClient,
+  ApiError,
   generatedErrorMessage,
   setAuthToken,
   isRemoteConnection,
 } from "../api/runtime.js";
 import { DEFAULT_CHART_PALETTE, isChartPalette, type ChartPalette } from "../utils/chartPalette.js";
 
-type TerminalConfig = TerminalResponse & {
-  mode: "auto" | "custom" | "clipboard";
-};
+type TerminalConfig = TerminalResponse;
 
 interface AppSettings extends Omit<
   SettingsResponse,
@@ -83,8 +79,7 @@ class SettingsStore {
     this.saveError = null;
     this.needsAuth = false;
     try {
-      configureGeneratedClient();
-      const data = (await SettingsService.getApiV1Settings()) as unknown as AppSettings;
+      const data = await SettingsService.getApiV1Settings();
       if (!isChartPalette(data.chart_palette)) {
         throw new Error(
           `Invalid chart_palette in settings response: ${String(data.chart_palette)}`,
@@ -108,9 +103,9 @@ class SettingsStore {
         setAuthToken(data.auth_token);
       }
     } catch (e) {
-      if (e instanceof GeneratedApiError && e.status === 401) {
+      if (e instanceof ApiError && e.status === 401) {
         this.needsAuth = true;
-      } else if (e instanceof GeneratedApiError && e.status === 403) {
+      } else if (e instanceof ApiError && e.status === 403) {
         this.error = forbiddenMessage(generatedErrorMessage(e));
       } else {
         this.error = e instanceof Error ? e.message : "Failed to load settings";
@@ -144,10 +139,7 @@ class SettingsStore {
   private async performSave(patch: Partial<AppSettings>): Promise<boolean> {
     this.saveError = null;
     try {
-      configureGeneratedClient();
-      const data = (await SettingsService.putApiV1Settings({
-        requestBody: patch as SettingsUpdateRequest,
-      })) as unknown as AppSettings;
+      const data = await SettingsService.putApiV1Settings(patch);
       if (!isChartPalette(data.chart_palette)) {
         throw new Error(
           `Invalid chart_palette in settings response: ${String(data.chart_palette)}`,

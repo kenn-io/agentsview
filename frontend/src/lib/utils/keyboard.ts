@@ -6,8 +6,7 @@ import { router } from "../stores/router.svelte.js";
 import { inSessionSearch } from "../stores/inSessionSearch.svelte.js";
 import { messages } from "../stores/messages.svelte.js";
 import { getExportUrl } from "../api/client.js";
-import { SessionsService, type ResumeRequest, type ResumeResponse } from "../api/generated/index";
-import { configureGeneratedClient } from "../api/runtime.js";
+import { SessionsService, type ResumeRequest } from "../api/generated/index";
 import { supportsResume, buildResumeCommand, formatResumeResponseCommand } from "./resume.js";
 import { copyToClipboard } from "./clipboard.js";
 import { toggleSidebarWithFocus } from "./sidebar-toggle.js";
@@ -19,9 +18,7 @@ import {
 } from "./arrow-target.js";
 
 function starredSessionFilter(): ((s: { id: string }) => boolean) | undefined {
-  return starred.filterOnly
-    ? (s: { id: string }) => starred.isStarred(s.id)
-    : undefined;
+  return starred.filterOnly ? (s: { id: string }) => starred.isStarred(s.id) : undefined;
 }
 
 function isInputFocused(): boolean {
@@ -75,10 +72,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
     if (!(e.target instanceof Element)) return;
     const sessionList = getSessionListElement();
     const sessionSidebar = sessionList?.closest("#session-sidebar");
-    if (
-      sessionList?.contains(e.target) ||
-      sessionSidebar?.contains(e.target)
-    ) {
+    if (sessionList?.contains(e.target) || sessionSidebar?.contains(e.target)) {
       lastArrowInteraction = "sessionList";
     } else if (e.target.closest(".message-list-scroll")) {
       lastArrowInteraction = "message";
@@ -229,16 +223,12 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
         if (session && supportsResume(session.agent) && !session.id.includes("~")) {
           // Copy a runnable resume command. Cursor needs the backend cwd
           // applied client-side so the copied command is self-contained.
-          configureGeneratedClient();
-          SessionsService.postApiV1SessionsIdResume({
-            id: session.id,
-            requestBody: {
-              command_only: true,
-            } satisfies ResumeRequest,
-          })
+          SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {
+            command_only: true,
+          } satisfies ResumeRequest)
             .then((resp) => {
               const cmd =
-                formatResumeResponseCommand(session.agent, resp as ResumeResponse) ||
+                formatResumeResponseCommand(session.agent, resp) ||
                 buildResumeCommand(session.agent, session.id, {
                   model: activeResumeModel(session.id),
                 });

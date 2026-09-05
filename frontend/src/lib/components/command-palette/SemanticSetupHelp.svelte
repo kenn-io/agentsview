@@ -175,7 +175,7 @@ endpoint = "http://localhost:11434/v1"`;
     buildTotal = 0;
     try {
       await callGenerated(() =>
-        EmbeddingsService.postApiV1EmbeddingsBuild({ requestBody: {} }),
+        EmbeddingsService.postApiV1EmbeddingsBuild({}),
       );
     } catch (e) {
       if (disposed || isAbortError(e)) return;

@@ -3,10 +3,7 @@ import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { initI18n } from "../../i18n/index.js";
-import {
-  YOKED_DATES_STORAGE_KEY,
-  yokedDates,
-} from "../../stores/yokedDates.svelte.js";
+import { YOKED_DATES_STORAGE_KEY, yokedDates } from "../../stores/yokedDates.svelte.js";
 import DateRangeSettings from "./DateRangeSettings.svelte";
 
 beforeEach(() => {
@@ -48,9 +45,7 @@ describe("DateRangeSettings", () => {
     });
 
     const { getByLabelText } = render(DateRangeSettings);
-    const checkbox = getByLabelText(
-      "Link date ranges across pages",
-    ) as HTMLInputElement;
+    const checkbox = getByLabelText("Link date ranges across pages") as HTMLInputElement;
 
     expect(checkbox.checked).toBe(true);
     expect(yokedDates.range).not.toBeNull();

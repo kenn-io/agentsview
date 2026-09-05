@@ -16,36 +16,24 @@ test.describe("Recent Edits feed", () => {
     });
   });
 
-  test("page renders with a file row from fixture data", async ({
-    page,
-  }) => {
+  test("page renders with a file row from fixture data", async ({ page }) => {
     // Recent Edits is a top-level TopBar tab since the kit-ui migration.
     await clickNavTab(page, "Recent Edits");
 
     // The page container and heading should appear.
-    await expect(
-      page.locator(".recent-edits-page"),
-    ).toBeVisible({ timeout: 5_000 });
-    await expect(
-      page.locator(".recent-edits-page h2"),
-    ).toHaveText("Recent Edits");
+    await expect(page.locator(".recent-edits-page")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".recent-edits-page h2")).toHaveText("Recent Edits");
 
     // Feed must not be empty — the fixture seeds one Edit call.
     await expect(page.locator(".re-empty")).toHaveCount(0);
-    await expect(
-      page.locator(".re-file-row").first(),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".re-file-row").first()).toBeVisible({ timeout: 5_000 });
   });
 
-  test("expand file row and jump to session transcript", async ({
-    page,
-  }) => {
+  test("expand file row and jump to session transcript", async ({ page }) => {
     // Navigate to Recent Edits via its TopBar tab.
     await clickNavTab(page, "Recent Edits");
 
-    await expect(
-      page.locator(".re-file-row").first(),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".re-file-row").first()).toBeVisible({ timeout: 5_000 });
 
     // Expand the first file row.
     await page.locator(".re-file-row").first().click();
@@ -61,11 +49,7 @@ test.describe("Recent Edits feed", () => {
 
     // The message list must reflect the fixture session.
     const ml = page.locator(".message-list-scroll");
-    await expect(ml).toHaveAttribute(
-      "data-session-id",
-      FIXTURE_SESSION_ID,
-      { timeout: 5_000 },
-    );
+    await expect(ml).toHaveAttribute("data-session-id", FIXTURE_SESSION_ID, { timeout: 5_000 });
     await expect(ml).toHaveAttribute("data-loaded", "true", {
       timeout: 5_000,
     });

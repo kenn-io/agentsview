@@ -1,10 +1,4 @@
-import {
-  describe,
-  it,
-  expect,
-  vi,
-  beforeEach,
-} from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { tick } from "svelte";
 import {
   SIDEBAR_WIDTH_DEFAULT,
@@ -206,10 +200,7 @@ describe("UIStore", () => {
         __TAURI__?: unknown;
       };
       const originalUrl = window.location.href;
-      const hadTauri = Object.prototype.hasOwnProperty.call(
-        tauriWindow,
-        "__TAURI__",
-      );
+      const hadTauri = Object.prototype.hasOwnProperty.call(tauriWindow, "__TAURI__");
       const originalTauri = tauriWindow.__TAURI__;
       const setZoom = vi.fn(() => Promise.resolve());
       const getCurrentWebviewWindow = vi.fn(() => ({
@@ -272,10 +263,7 @@ describe("UIStore", () => {
         __TAURI__?: unknown;
       };
       const originalUrl = window.location.href;
-      const hadTauri = Object.prototype.hasOwnProperty.call(
-        tauriWindow,
-        "__TAURI__",
-      );
+      const hadTauri = Object.prototype.hasOwnProperty.call(tauriWindow, "__TAURI__");
       const originalTauri = tauriWindow.__TAURI__;
       delete tauriWindow.__TAURI__;
       window.history.replaceState({}, "", "?desktop");
@@ -287,9 +275,7 @@ describe("UIStore", () => {
         mod.ui.setFontScale(110);
         await tick();
 
-        expect(
-          document.documentElement.style.getPropertyValue("zoom"),
-        ).toBe("2.2");
+        expect(document.documentElement.style.getPropertyValue("zoom")).toBe("2.2");
       } finally {
         window.history.replaceState({}, "", originalUrl);
         if (hadTauri) {
@@ -311,9 +297,7 @@ describe("UIStore", () => {
 
     it("migrates the legacy high-contrast key on module init", async () => {
       const original = globalThis.localStorage;
-      const store = new Map<string, string>([
-        ["agentsview-high-contrast", "true"],
-      ]);
+      const store = new Map<string, string>([["agentsview-high-contrast", "true"]]);
       Object.defineProperty(globalThis, "localStorage", {
         value: {
           getItem: (key: string) => store.get(key) ?? null,
@@ -415,9 +399,7 @@ describe("UIStore", () => {
       try {
         // @ts-expect-error -- query string busts module cache
         const mod = await import("./ui.svelte.js?sidebarWidthEmpty");
-        expect(getItem.mock.calls).toContainEqual([
-          SIDEBAR_WIDTH_KEY,
-        ]);
+        expect(getItem.mock.calls).toContainEqual([SIDEBAR_WIDTH_KEY]);
         expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
@@ -435,9 +417,7 @@ describe("UIStore", () => {
         Object.defineProperty(globalThis, "localStorage", {
           value: {
             getItem: vi.fn((key: string) =>
-              key === SIDEBAR_WIDTH_KEY
-                ? String(SIDEBAR_WIDTH_MIN - 50)
-                : null,
+              key === SIDEBAR_WIDTH_KEY ? String(SIDEBAR_WIDTH_MIN - 50) : null,
             ),
             setItem: vi.fn(),
           },
@@ -450,9 +430,7 @@ describe("UIStore", () => {
         Object.defineProperty(globalThis, "localStorage", {
           value: {
             getItem: vi.fn((key: string) =>
-              key === SIDEBAR_WIDTH_KEY
-                ? String(SIDEBAR_WIDTH_STORAGE_MAX + 50)
-                : null,
+              key === SIDEBAR_WIDTH_KEY ? String(SIDEBAR_WIDTH_STORAGE_MAX + 50) : null,
             ),
             setItem: vi.fn(),
           },
@@ -464,9 +442,7 @@ describe("UIStore", () => {
 
         Object.defineProperty(globalThis, "localStorage", {
           value: {
-            getItem: vi.fn((key: string) =>
-              key === SIDEBAR_WIDTH_KEY ? "300" : null,
-            ),
+            getItem: vi.fn((key: string) => (key === SIDEBAR_WIDTH_KEY ? "300" : null)),
             setItem: vi.fn(),
           },
           writable: true,
@@ -476,9 +452,7 @@ describe("UIStore", () => {
         const stringMod = await import("./ui.svelte.js?sidebarWidthStoredString");
 
         expect(minMod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_MIN);
-        expect(maxMod.ui.sidebarWidth).toBe(
-          SIDEBAR_WIDTH_STORAGE_MAX,
-        );
+        expect(maxMod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_STORAGE_MAX);
         expect(stringMod.ui.sidebarWidth).toBe(300);
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
@@ -511,17 +485,12 @@ describe("UIStore", () => {
         await tick();
         expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_MIN);
         expect(setItem).toHaveBeenCalledTimes(1);
-        expect(setItem).toHaveBeenLastCalledWith(
-          SIDEBAR_WIDTH_KEY,
-          String(SIDEBAR_WIDTH_MIN),
-        );
+        expect(setItem).toHaveBeenLastCalledWith(SIDEBAR_WIDTH_KEY, String(SIDEBAR_WIDTH_MIN));
 
         setItem.mockClear();
         mod.ui.setSidebarWidth(SIDEBAR_WIDTH_STORAGE_MAX + 10);
         await tick();
-        expect(mod.ui.sidebarWidth).toBe(
-          SIDEBAR_WIDTH_STORAGE_MAX,
-        );
+        expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_STORAGE_MAX);
         expect(setItem).toHaveBeenCalledTimes(1);
         expect(setItem).toHaveBeenLastCalledWith(
           SIDEBAR_WIDTH_KEY,
@@ -575,9 +544,7 @@ describe("UIStore", () => {
         // @ts-expect-error -- query string busts module cache
         const mod = await import("./ui.svelte.js?sidebarWidthNoSetItem");
         expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 10);
-        expect(() =>
-          mod.ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT + 20),
-        ).not.toThrow();
+        expect(() => mod.ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT + 20)).not.toThrow();
         expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 20);
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
@@ -601,9 +568,7 @@ describe("UIStore", () => {
         // @ts-expect-error -- query string busts module cache
         const mod = await import("./ui.svelte.js?sidebarWidthNullStorage");
         expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
-        expect(() =>
-          mod.ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT + 15),
-        ).not.toThrow();
+        expect(() => mod.ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT + 15)).not.toThrow();
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
           value: original,
@@ -622,9 +587,7 @@ describe("UIStore", () => {
         // @ts-expect-error -- query string busts module cache
         const mod = await import("./ui.svelte.js?sidebarWidthNoStorage");
         expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
-        expect(() =>
-          mod.ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT + 25),
-        ).not.toThrow();
+        expect(() => mod.ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT + 25)).not.toThrow();
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
           value: original,
@@ -666,9 +629,7 @@ describe("UIStore", () => {
       Object.defineProperty(globalThis, "localStorage", {
         value: {
           getItem: vi.fn((key: string) =>
-            key === "agentsview-session-vitals-calls-expanded"
-              ? "false"
-              : null,
+            key === "agentsview-session-vitals-calls-expanded" ? "false" : null,
           ),
           setItem,
         },
@@ -707,10 +668,7 @@ describe("UIStore", () => {
         await tick();
 
         expect(mod.ui.vitalsCallsExpanded).toBe(false);
-        expect(setItem).toHaveBeenCalledWith(
-          "agentsview-session-vitals-calls-expanded",
-          "false",
-        );
+        expect(setItem).toHaveBeenCalledWith("agentsview-session-vitals-calls-expanded", "false");
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
           value: original,
@@ -786,9 +744,7 @@ describe("UIStore", () => {
     });
 
     it("keeps a hidden system boundary hidden across a reload", () => {
-      const visible = parseBlockFilters(
-        JSON.stringify({ hidden: ["system"] }),
-      );
+      const visible = parseBlockFilters(JSON.stringify({ hidden: ["system"] }));
 
       expect(visible.has("system")).toBe(false);
       expect(visible.has("user")).toBe(true);
@@ -799,25 +755,14 @@ describe("UIStore", () => {
       chosen.delete("system");
       chosen.delete("tool");
 
-      const restored = parseBlockFilters(
-        serializeBlockFilters(chosen),
-      );
+      const restored = parseBlockFilters(serializeBlockFilters(chosen));
 
-      expect([...restored].sort()).toEqual([
-        "assistant",
-        "code",
-        "thinking",
-        "user",
-      ]);
+      expect([...restored].sort()).toEqual(["assistant", "code", "thinking", "user"]);
     });
 
     it("shows every block when the stored payload is missing or unreadable", () => {
-      expect(parseBlockFilters(null).size).toBe(
-        ALL_BLOCK_TYPES.length,
-      );
-      expect(parseBlockFilters("{not json").size).toBe(
-        ALL_BLOCK_TYPES.length,
-      );
+      expect(parseBlockFilters(null).size).toBe(ALL_BLOCK_TYPES.length);
+      expect(parseBlockFilters("{not json").size).toBe(ALL_BLOCK_TYPES.length);
     });
 
     it("should toggle a block type off and on", () => {
@@ -979,10 +924,7 @@ describe("UIStore", () => {
         setItem.mockClear();
         mod.ui.setTranscriptMode("focused");
         await Promise.resolve();
-        expect(setItem).toHaveBeenLastCalledWith(
-          "agentsview-transcript-mode",
-          "focused",
-        );
+        expect(setItem).toHaveBeenLastCalledWith("agentsview-transcript-mode", "focused");
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
           value: original,
@@ -998,9 +940,7 @@ describe("UIStore", () => {
       Object.defineProperty(globalThis, "localStorage", {
         value: {
           getItem: vi.fn((key: string) =>
-            key === "agentsview-transcript-mode"
-              ? "detailed"
-              : null,
+            key === "agentsview-transcript-mode" ? "detailed" : null,
           ),
           setItem: vi.fn(),
         },
@@ -1055,9 +995,7 @@ describe("UIStore", () => {
         const mod = await import("./ui.svelte.js?webFontScale");
         mod.ui.setFontScale(110);
         await tick();
-        expect(
-          document.documentElement.style.getPropertyValue("zoom"),
-        ).toBe("1.1");
+        expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.1");
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
           value: original,
@@ -1072,10 +1010,7 @@ describe("UIStore", () => {
       const tauriWindow = window as Window & {
         __TAURI__?: unknown;
       };
-      const hadTauri = Object.prototype.hasOwnProperty.call(
-        tauriWindow,
-        "__TAURI__",
-      );
+      const hadTauri = Object.prototype.hasOwnProperty.call(tauriWindow, "__TAURI__");
       const originalTauri = tauriWindow.__TAURI__;
       const setZoom = vi.fn(() => Promise.resolve());
       Object.defineProperty(globalThis, "localStorage", {
@@ -1101,9 +1036,7 @@ describe("UIStore", () => {
         mod.ui.zoomLevel = 200;
         mod.ui.setFontScale(110);
         await tick();
-        expect(
-          document.documentElement.style.getPropertyValue("zoom"),
-        ).toBe("1.1");
+        expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.1");
         expect(setZoom).toHaveBeenLastCalledWith(2);
       } finally {
         window.history.replaceState({}, "", "/");
@@ -1138,10 +1071,7 @@ describe("UIStore", () => {
         setItem.mockClear();
         mod.ui.setFontScale(120);
         await tick();
-        expect(setItem).toHaveBeenCalledWith(
-          "agentsview-font-scale",
-          "120",
-        );
+        expect(setItem).toHaveBeenCalledWith("agentsview-font-scale", "120");
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
           value: original,
@@ -1155,9 +1085,7 @@ describe("UIStore", () => {
       const original = globalThis.localStorage;
       Object.defineProperty(globalThis, "localStorage", {
         value: {
-          getItem: vi.fn((key: string) =>
-            key === "agentsview-font-scale" ? "145" : null,
-          ),
+          getItem: vi.fn((key: string) => (key === "agentsview-font-scale" ? "145" : null)),
           setItem: vi.fn(),
         },
         writable: true,
@@ -1207,20 +1135,13 @@ describe("UIStore", () => {
         setItem.mockClear();
         mod.ui.toggleHighContrast();
         await tick();
-        expect(
-          document.documentElement.classList.contains("high-contrast"),
-        ).toBe(true);
+        expect(document.documentElement.classList.contains("high-contrast")).toBe(true);
         // kit-ui's theme store persists high contrast under the key derived
         // from the app's "theme" storage key.
-        expect(setItem).toHaveBeenCalledWith(
-          "theme-high-contrast",
-          "true",
-        );
+        expect(setItem).toHaveBeenCalledWith("theme-high-contrast", "true");
         mod.ui.toggleHighContrast();
         await tick();
-        expect(
-          document.documentElement.classList.contains("high-contrast"),
-        ).toBe(false);
+        expect(document.documentElement.classList.contains("high-contrast")).toBe(false);
       } finally {
         document.documentElement.classList.remove("high-contrast");
         Object.defineProperty(globalThis, "localStorage", {

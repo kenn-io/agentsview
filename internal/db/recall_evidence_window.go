@@ -504,12 +504,11 @@ func recallEvidenceAuthorizationDigest(
 }
 
 func digestRecallEvidenceCanonical(value any) (string, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
+	digest := sha256.New()
+	if err := json.MarshalWrite(digest, value); err != nil {
 		return "", fmt.Errorf("encoding canonical recall evidence: %w", err)
 	}
-	digest := sha256.Sum256(encoded)
-	return hex.EncodeToString(digest[:]), nil
+	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func normalizeRecallEvidenceToolUseIDs(values []string) ([]string, error) {

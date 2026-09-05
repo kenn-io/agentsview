@@ -2,17 +2,13 @@ import { test, expect, type Locator } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
 function readZoom(page: import("@playwright/test").Page): Promise<string> {
-  return page.evaluate(() =>
-    document.documentElement.style.getPropertyValue("zoom"),
-  );
+  return page.evaluate(() => document.documentElement.style.getPropertyValue("zoom"));
 }
 
 function luminance([r, g, b]: [number, number, number]): number {
   const [rr, gg, bb] = [r, g, b].map((channel) => {
     const value = channel / 255;
-    return value <= 0.03928
-      ? value / 12.92
-      : Math.pow((value + 0.055) / 1.055, 2.4);
+    return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
   });
   return 0.2126 * rr! + 0.7152 * gg! + 0.0722 * bb!;
 }
@@ -47,19 +43,14 @@ async function elementColors(locator: Locator): Promise<{
   });
 }
 
-function expectReadableContrast(colors: {
-  background: string;
-  foreground: string;
-}) {
+function expectReadableContrast(colors: { background: string; foreground: string }) {
   expect(
     contrastRatio(parseRgb(colors.foreground), parseRgb(colors.background)),
   ).toBeGreaterThanOrEqual(4.5);
 }
 
 test.describe("Appearance accessibility", () => {
-  test("keeps Quality semantic wrappers as rendered layout boxes", async ({
-    page,
-  }) => {
+  test("keeps Quality semantic wrappers as rendered layout boxes", async ({ page }) => {
     let failSignals = false;
     await page.route("**/api/v1/analytics/signals*", (route) => {
       if (failSignals) {
@@ -147,9 +138,7 @@ test.describe("Appearance accessibility", () => {
     );
 
     await page.goto("/quality");
-    await expect(
-      page.getByRole("heading", { name: "Quality Patterns" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Quality Patterns" })).toBeVisible();
     await page.locator(".driver-row").first().click();
     await expect(page.locator(".evidence-panel-live")).toBeVisible();
 
@@ -177,9 +166,7 @@ test.describe("Appearance accessibility", () => {
     await expect(alert).toHaveCSS("display", "grid");
   });
 
-  test("text size scales the UI on web without horizontal overflow", async ({
-    page,
-  }) => {
+  test("text size scales the UI on web without horizontal overflow", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("agentsview-font-scale", "130");
     });
@@ -189,9 +176,7 @@ test.describe("Appearance accessibility", () => {
     expect(await readZoom(page)).toBe("1.3");
 
     const overflow = await page.evaluate(
-      () =>
-        document.documentElement.scrollWidth -
-        document.documentElement.clientWidth,
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     expect(overflow).toBeLessThanOrEqual(2);
 
@@ -199,9 +184,7 @@ test.describe("Appearance accessibility", () => {
     await expect(sp.messageRows.first()).toBeVisible();
   });
 
-  test("text size at 90% renders and scrolls the transcript", async ({
-    page,
-  }) => {
+  test("text size at 90% renders and scrolls the transcript", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("agentsview-font-scale", "90");
     });
@@ -214,9 +197,7 @@ test.describe("Appearance accessibility", () => {
     await expect(sp.messageRows.first()).toBeVisible();
   });
 
-  test("desktop window zoom stays separate from text size in the browser", async ({
-    page,
-  }) => {
+  test("desktop window zoom stays separate from text size in the browser", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("agentsview-zoom-level", "150");
       localStorage.setItem("agentsview-font-scale", "120");
@@ -228,9 +209,7 @@ test.describe("Appearance accessibility", () => {
     expect(await readZoom(page)).toBe("1.8");
   });
 
-  test("high contrast applies the root class and overrides tokens", async ({
-    page,
-  }) => {
+  test("high contrast applies the root class and overrides tokens", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("theme", "light");
       localStorage.setItem("agentsview-high-contrast", "true");
@@ -258,9 +237,7 @@ test.describe("Appearance accessibility", () => {
     expect(textPrimary).toBe("#000000");
   });
 
-  test("dark high contrast keeps accent-filled controls readable", async ({
-    page,
-  }) => {
+  test("dark high contrast keeps accent-filled controls readable", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("theme", "dark");
       localStorage.setItem("agentsview-high-contrast", "true");
