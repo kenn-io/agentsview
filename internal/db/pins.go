@@ -53,6 +53,10 @@ func scanPinnedRowWithContent(rs rowScanner) (PinnedMessage, error) {
 func (db *DB) PinMessage(
 	sessionID string, messageID int64, note *string,
 ) (int64, error) {
+	if db.usageOnlyStorage() {
+		// A usage archive stores no free text, and a note is free text.
+		note = nil
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

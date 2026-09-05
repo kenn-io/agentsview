@@ -303,6 +303,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 			ScanProtectedPaths:      cfg.ScanProtectedPaths,
 			Machine:                 cfg.LocalMachineName,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
+			ArchiveContent:          cfg.ArchiveContent,
 			Emitter:                 emitter,
 			DeferStartupMaintenance: deferStartupMaintenance(
 				opts.SkipInitialSync, workerSyncDone,
@@ -430,6 +431,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		identityBackfillEngine = sync.NewEngine(database, sync.EngineConfig{
 			Machine:            cfg.LocalMachineName,
 			ScanProtectedPaths: cfg.ScanProtectedPaths,
+			ArchiveContent:     cfg.ArchiveContent,
 		})
 	}
 	go idleTracker.Do(func() {
@@ -1322,7 +1324,7 @@ func truncateLogFile(path string, limit int64) {
 
 func openDB(cfg config.Config) (*db.DB, error) {
 	applyClassifierConfig(cfg)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.OpenWithArchiveContent(cfg.DBPath, cfg.ArchiveContent)
 	if err != nil {
 		return nil, err
 	}

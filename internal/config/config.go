@@ -597,6 +597,50 @@ func ParseChartPalette(value string) (ChartPalette, error) {
 	}
 }
 
+// ArchiveContent selects how much session content the SQLite archive stores.
+// The policy applies when rows are written; it never rewrites rows already in
+// the archive.
+type ArchiveContent string
+
+const (
+	// ArchiveContentFull stores every parsed field.
+	ArchiveContentFull ArchiveContent = "full"
+	// ArchiveContentTranscripts keeps message text, thinking text, titles,
+	// and tool call metadata while dropping tool inputs and tool results.
+	ArchiveContentTranscripts ArchiveContent = "transcripts"
+	// ArchiveContentUsage keeps only the session and message rows needed for
+	// token and cost reporting.
+	ArchiveContentUsage ArchiveContent = "usage"
+)
+
+// ParseArchiveContent validates a config or environment value. An empty value
+// selects the full policy.
+func ParseArchiveContent(value string) (ArchiveContent, error) {
+	policy := ArchiveContent(value)
+	switch policy {
+	case "":
+		return ArchiveContentFull, nil
+	case ArchiveContentFull, ArchiveContentTranscripts, ArchiveContentUsage:
+		return policy, nil
+	default:
+		return "", fmt.Errorf(
+			`archive_content must be "full", "transcripts", or "usage" (got %q)`,
+			value,
+		)
+	}
+}
+
+// OmitsToolContent reports whether tool inputs and tool results are dropped
+// at the storage boundary.
+func (a ArchiveContent) OmitsToolContent() bool {
+	return a == ArchiveContentTranscripts || a == ArchiveContentUsage
+}
+
+// UsageOnly reports whether the archive keeps only usage accounting rows.
+func (a ArchiveContent) UsageOnly() bool {
+	return a == ArchiveContentUsage
+}
+
 // RemoteHost describes one target for config-driven `agentsview sync`
 // fan-out. Host is required. Deprecated SSH remotes may set User and Port
 // (Port 0 means the ssh default of 22). HTTP remotes must set URL
@@ -665,6 +709,7 @@ type Config struct {
 	DisableUpdateCheck   bool                   `json:"disable_update_check" toml:"disable_update_check"`
 	NoSync               bool                   `json:"-" toml:"-"`
 	SkipInitialSync      bool                   `json:"-" toml:"-"`
+	ArchiveContent       ArchiveContent         `json:"archive_content" toml:"archive_content"`
 	PG                   PGConfig               `json:"pg,omitempty" toml:"pg"`
 	DefaultPG            string                 `json:"default_pg,omitempty" toml:"default_pg"`
 	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
@@ -1015,6 +1060,7 @@ func Default() (Config, error) {
 		Host:                           "127.0.0.1",
 		Port:                           8080,
 		ChartPalette:                   DefaultChartPalette,
+		ArchiveContent:                 ArchiveContentFull,
 		DataDir:                        dataDir,
 		DBPath:                         filepath.Join(dataDir, "sessions.db"),
 		WriteTimeout:                   30 * time.Second,
@@ -1361,6 +1407,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		RequireAuth                    bool                   `toml:"require_auth"`
 		RemoteAccess                   bool                   `toml:"remote_access"`
 		DisableUpdateCheck             bool                   `toml:"disable_update_check"`
+		ArchiveContent                 string                 `toml:"archive_content"`
 		DefaultPG                      string                 `toml:"default_pg"`
 		PG                             PGConfig               `toml:"pg"`
 		DuckDB                         DuckDBConfig           `toml:"duckdb"`
@@ -1453,6 +1500,13 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	c.RequireAuth = file.RequireAuth || file.RemoteAccess
 	c.DisableUpdateCheck = file.DisableUpdateCheck
+	if meta.IsDefined("archive_content") {
+		policy, err := ParseArchiveContent(file.ArchiveContent)
+		if err != nil {
+			return err
+		}
+		c.ArchiveContent = policy
+	}
 	if meta.IsDefined("default_pg") {
 		c.DefaultPG = normalizePGTargetName(file.DefaultPG)
 	}
@@ -1821,6 +1875,15 @@ func (c *Config) loadEnv() {
 	}
 	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
 		c.DisableUpdateCheck = v == "1" || v == "true"
+	}
+	if v := os.Getenv("AGENTSVIEW_ARCHIVE_CONTENT"); v != "" {
+		if policy, err := ParseArchiveContent(v); err == nil {
+			c.ArchiveContent = policy
+		} else {
+			log.Printf(
+				"warning: invalid AGENTSVIEW_ARCHIVE_CONTENT: %v", err,
+			)
+		}
 	}
 }
 

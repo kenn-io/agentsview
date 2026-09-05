@@ -172,6 +172,9 @@ func scanRecallEvidenceRow(rs rowScanner) (RecallEvidence, error) {
 }
 
 func (db *DB) InsertRecallEntry(m RecallEntry) (string, error) {
+	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
+		return "", err
+	}
 	if err := normalizeRecallEntryReviewState(&m); err != nil {
 		return "", err
 	}
@@ -213,6 +216,9 @@ func (db *DB) InsertRecallEntry(m RecallEntry) (string, error) {
 // covers every entry; parser-excluded sessions are the exception. Any skipped
 // entries are logged.
 func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
+	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
+		return err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -505,6 +511,9 @@ func (db *DB) SupersedeRecallEntry(
 	oldID string,
 	replacement RecallEntry,
 ) (string, error) {
+	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
+		return "", err
+	}
 	oldID = strings.TrimSpace(oldID)
 	if oldID == "" {
 		return "", fmt.Errorf("superseded entry id is required")

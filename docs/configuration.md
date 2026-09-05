@@ -43,6 +43,70 @@ The Cursor source in code attribution stats is a live, machine-local read from
 else on the host answering the stats request. The attribution database is not
 synced into AgentsView's archive and is not pushed to PostgreSQL.
 
+### Archive content
+
+`archive_content` in `config.toml` controls how much of each session the
+archive stores:
+
+```toml
+# "full" (default), "transcripts", or "usage"
+archive_content = "transcripts"
+```
+
+| Value           | What is stored                                                                                                                                                                         |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"full"`        | Everything the parsers produce.                                                                                                                                                        |
+| `"transcripts"` | Message text, thinking text, titles, and tool call metadata: names, categories, skill names, the file path a call targeted, result lengths, statuses, and subagent links. Tool inputs and tool results, usually most of a large archive, are dropped, and the one-line tool summaries inside message text keep only the tool name and target path. |
+| `"usage"`       | Only the session and message rows needed for token and cost reports. Message text, thinking text, tool calls, tool results, and content-derived titles are all dropped.                |
+
+The daemon reads the policy when it starts, so a change takes effect after
+`agentsview daemon restart`. The policy applies when rows are written, so
+changing it does not rewrite rows already in the archive. To apply a narrower
+policy to an existing archive, set the key, restart the daemon, and run
+`agentsview sync --full`. The rebuild re-parses sessions whose source files
+still exist and copies archived sessions whose sources are gone, projecting
+both onto the policy. Back up the archive first: dropped content cannot be
+restored without the original source files.
+
+`AGENTSVIEW_ARCHIVE_CONTENT` sets the policy when the config file does not,
+which suits a dedicated reporting archive in its own data directory:
+
+```bash
+AGENTSVIEW_DATA_DIR=~/.agentsview-usage \
+AGENTSVIEW_ARCHIVE_CONTENT=usage \
+agentsview sync
+```
+
+Limits of the narrower policies:
+
+- `"transcripts"` is a storage policy, not a redaction guarantee. It removes
+  the tool payload tables, the structured tool inputs, the rows and summaries
+  that parsers mark as tool output, and it rewrites the tool summaries parsers
+  inline into message text. Text that a provider wrote into a message body in
+  its own format is kept as the provider wrote it. When tool output must never
+  be present in the archive, use `"usage"`, which stores no text at all.
+- `"transcripts"` keeps session search, transcript viewing, and tool analytics
+  working, but signals and secret findings that read tool inputs or results
+  (tool failure detection, repeated identical calls, secrets inside tool output)
+  see empty payloads. `result_content_blocked_categories` has no additional
+  effect under this policy. Archived RooCode, Kilo Legacy, gptme, OpenHands,
+  Aider, Codex, TraeX, and Zencoder sessions parsed before data version 100 and
+  whose source files are gone cannot be re-parsed, so a rebuild drops every row
+  shape those parsers once used for tool output. This includes user turns for
+  OpenHands, Codex, and TraeX; assistant replies for Aider; and system-flagged
+  notices for Zencoder. Copied OpenHands actions with event summaries keep the
+  prose before the tool header and the tool label, but lose the summary and all
+  following text, including appended thinking, because the archive does not
+  retain the summary boundaries. The semantic search mirror keeps previously
+  embedded text until the next embedding pass refreshes it. With
+  `[vector.embed] run_after_sync` enabled (the default) that pass starts right
+  after the rebuild; otherwise let the scheduled pass run before pushing vectors
+  to PostgreSQL.
+- `"usage"` supports usage reports such as `agentsview usage daily`. Session
+  search, transcript viewing, tool analytics, and content-derived quality
+  metrics require a fuller archive. Insights and recall entries are refused,
+  since both hold transcript-derived text.
+
 ## Config File
 
 The config file at `~/.agentsview/config.toml` is auto-created on first run. It
@@ -70,6 +134,7 @@ chart_palette = "agentsview"
 | `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                              |
 | `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                           |
 | `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`). Changes apply to new ingestion and full rebuilds; see [storage maintenance](/docs/data/#storage-maintenance) for existing source-backed sessions.                        |
+| `archive_content`                   | How much of each session the archive stores: `"full"` (default), `"transcripts"`, or `"usage"`; changes require a daemon restart — see [Archive content](#archive-content)                                                                                |
 | `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`                                                                                                                                                    |
 | `require_auth`                      | Require bearer-token authentication for API access                                                                                                                                                                                                        |
 | `auth_token`                        | Auto-generated 256-bit bearer token for remote access; can be overridden with `AGENTSVIEW_AUTH_TOKEN`                                                                                                                                                     |

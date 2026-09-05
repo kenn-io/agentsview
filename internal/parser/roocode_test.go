@@ -828,6 +828,8 @@ func TestParseRooCodeSessionCommandOutput(t *testing.T) {
 
 	// Command output should be a user message with tool results.
 	assert.Equal(t, RoleUser, msgs[1].Role)
+	assert.Equal(t, SourceSubtypeToolResult, msgs[1].SourceSubtype,
+		"an unpaired command_output row carries tool output as its text")
 	assert.True(t, msgs[1].IsSystem)
 	require.Len(t, msgs[1].ToolResults, 1)
 	assert.Equal(t, len("test output: all tests passed"),
@@ -3792,4 +3794,32 @@ func TestParseRooCodeSessionEmptyHistoryIDFallsBackToDirName(t *testing.T) {
 	// distinct instead of colliding on "roocode:".
 	assert.Equal(t, "roocode:test-task-noid", sess.ID)
 	assert.Equal(t, "test-task-noid", sess.SourceSessionID)
+}
+
+func TestParseRooCodeSessionMarksSearchResultsAsToolOutput(t *testing.T) {
+	taskDir := t.TempDir()
+	historyJSON, err := json.Marshal(rooCodeHistoryItem{
+		ID: "task-search", Task: "find callers", Timestamp: 1688836851000,
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(taskDir, "history_item.json"), historyJSON, 0644,
+	))
+	messages := []rooCodeMessage{
+		{Timestamp: 1688836851000, Type: "say", Say: "text", Text: "find callers"},
+		{Timestamp: 1688836852000, Type: "say", Say: "codebase_search_result",
+			Text: `{"query":"callers","results":[{"path":"secret.go"}]}`},
+	}
+	messagesJSON, err := json.Marshal(messages)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(taskDir, "ui_messages.json"), messagesJSON, 0644,
+	))
+
+	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, SourceSubtypeToolResult, msgs[1].SourceSubtype,
+		"a search result is tool output even though it is stored as assistant text")
 }

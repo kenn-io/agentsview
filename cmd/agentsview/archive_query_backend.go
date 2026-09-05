@@ -265,6 +265,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 			ScanProtectedPaths:      b.cfg.ScanProtectedPaths,
 			Machine:                 b.cfg.LocalMachineName,
 			BlockedResultCategories: b.cfg.ResultContentBlockedCategories,
+			ArchiveContent:          b.cfg.ArchiveContent,
 		})
 		var syncErr error
 		if query.OwnOnly {

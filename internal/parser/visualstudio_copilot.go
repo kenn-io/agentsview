@@ -1359,8 +1359,11 @@ func visualStudioCopilotTraceContent(
 				Timestamp: span.end,
 			})
 		}
-		content := formatVSCodeCopilotToolCalls([]ParsedToolCall{call})
-		return content, []ParsedToolCall{call}
+		// Format the slice that is returned so the rendering recorded on the
+		// call is the text that lands in the message.
+		calls := []ParsedToolCall{call}
+		content := formatVSCodeCopilotToolCalls(calls)
+		return content, calls
 	}
 
 	if strings.HasPrefix(span.Name, "invoke_agent") {

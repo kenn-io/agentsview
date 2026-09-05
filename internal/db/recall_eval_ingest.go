@@ -70,6 +70,9 @@ type EvalTrajectoryIngestResult struct {
 func (db *DB) IngestEvalTrajectory(
 	ctx context.Context, in EvalTrajectoryIngest,
 ) (EvalTrajectoryIngestResult, error) {
+	if err := db.requireDerivedTextStorage("eval trajectories"); err != nil {
+		return EvalTrajectoryIngestResult{}, err
+	}
 	in = normalizeEvalTrajectoryIngest(in)
 	result := EvalTrajectoryIngestResult{
 		RunID:        in.RunID,

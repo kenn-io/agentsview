@@ -1253,7 +1253,7 @@ func buildOpenCodeParsedSession(
 		})
 
 		pm := buildOpenCodeMessage(
-			ordinal, role, m.timeCreated, msgParts, cwd,
+			ordinal, m.id, role, m.timeCreated, msgParts, cwd,
 		)
 		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
 		if strings.TrimSpace(pm.Content) == "" &&
@@ -1446,6 +1446,7 @@ func normalizeOpenCodeRole(role string) RoleType {
 
 func buildOpenCodeMessage(
 	ordinal int,
+	messageID string,
 	role RoleType,
 	timeCreatedMs int64,
 	parts []openCodePartRow,
@@ -1485,9 +1486,12 @@ func buildOpenCodeMessage(
 
 	content := strings.Join(texts, "\n")
 	return ParsedMessage{
-		Ordinal:       ordinal,
-		Role:          role,
-		Content:       content,
+		Ordinal: ordinal,
+		Role:    role,
+		Content: content,
+		// The storage message ID is the stable identity archive guards use
+		// to match stored rows when ordinals shift or are sparse.
+		SourceUUID:    messageID,
 		Timestamp:     millisToTime(timeCreatedMs),
 		HasThinking:   hasThinking,
 		HasToolUse:    hasToolUse,

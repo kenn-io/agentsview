@@ -1384,6 +1384,70 @@ func TestResolveDataDir_DefaultAndEnvOverride(t *testing.T) {
 	assert.Equal(t, custom, dir)
 }
 
+func TestArchiveContentDefaultsAndLoads(t *testing.T) {
+	tests := []struct {
+		name string
+		toml string
+		want ArchiveContent
+	}{
+		{name: "omitted", want: ArchiveContentFull},
+		{name: "full", toml: `archive_content = "full"`, want: ArchiveContentFull},
+		{
+			name: "transcripts",
+			toml: `archive_content = "transcripts"`,
+			want: ArchiveContentTranscripts,
+		},
+		{name: "usage", toml: `archive_content = "usage"`, want: ArchiveContentUsage},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			require.NoError(t, cfg.applyConfigTOML(tt.toml))
+			assert.Equal(t, tt.want, cfg.ArchiveContent)
+		})
+	}
+}
+
+func TestArchiveContentRejectsInvalidValue(t *testing.T) {
+	cfg, err := Default()
+	require.NoError(t, err)
+	err = cfg.applyConfigTOML(`archive_content = "metadata"`)
+	require.EqualError(t, err,
+		`archive_content must be "full", "transcripts", or "usage" (got "metadata")`)
+}
+
+func TestArchiveContentFromEnvironment(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want ArchiveContent
+	}{
+		{name: "valid", env: "transcripts", want: ArchiveContentTranscripts},
+		{name: "invalid keeps default", env: "everything", want: ArchiveContentFull},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			t.Setenv("AGENTSVIEW_ARCHIVE_CONTENT", tt.env)
+
+			cfg := f.LoadMinimal(t)
+
+			assert.Equal(t, tt.want, cfg.ArchiveContent)
+		})
+	}
+}
+
+func TestArchiveContentFileWinsOverEnvironment(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `archive_content = "usage"`+"\n")
+	t.Setenv("AGENTSVIEW_ARCHIVE_CONTENT", "transcripts")
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t, ArchiveContentUsage, cfg.ArchiveContent)
+}
+
 func TestResolveDataDir_ExpandsHome(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)

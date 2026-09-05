@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -28,6 +29,7 @@ import (
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/timeutil"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 const (
@@ -488,6 +490,10 @@ type EngineConfig struct {
 	// StableSourceSnapshots reports that configured source files are immutable
 	// for this engine. Bounded capture sets it after copying quiescent sources.
 	StableSourceSnapshots bool
+	// ArchiveContent tightens the database handle's storage policy before
+	// the engine writes. The handle is the single authority afterwards; a
+	// looser engine value never weakens a policy the handle already holds.
+	ArchiveContent config.ArchiveContent
 	// Emitter, when non-nil, is called once after each sync pass
 	// that wrote data. Safe to leave nil (e.g., in PG serve mode
 	// where the engine is not run).
@@ -843,6 +849,7 @@ func (e *Engine) ResetStagedProviderStatHashes() {
 func NewEngine(
 	database *db.DB, cfg EngineConfig,
 ) *Engine {
+	database.SetArchiveContent(cfg.ArchiveContent)
 	skipCache := make(map[string]int64)
 	if !cfg.Ephemeral {
 		if loaded, err := database.LoadSkippedFiles(); err == nil {
@@ -911,7 +918,8 @@ func NewEngine(
 		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
 		ephemeral:               cfg.Ephemeral,
 		discardWritesOnCancel:   cfg.DiscardPendingWritesOnCancel,
-		disableSignalRecompute:  cfg.DisableSignalRecomputation,
+		disableSignalRecompute: cfg.DisableSignalRecomputation ||
+			database.ArchiveContent().UsageOnly(),
 		disableProjectDiscovery: cfg.DisableFilesystemProjectDiscovery,
 		stableSourceSnapshots:   cfg.StableSourceSnapshots,
 		idPrefix:                cfg.IDPrefix,
@@ -949,7 +957,7 @@ func NewEngine(
 			context.Background(), sessionID,
 		)
 	}
-	if cfg.DisableSignalRecomputation {
+	if e.disableSignalRecompute {
 		recompute = func(string) {}
 	}
 	e.signalSched = newSignalScheduler(
@@ -969,7 +977,7 @@ func NewEngine(
 			flush()
 		},
 	)
-	if cfg.DisableSignalRecomputation {
+	if e.disableSignalRecompute {
 		e.signalSched.stop()
 	}
 	return e
@@ -2958,7 +2966,7 @@ func (e *Engine) resyncBuildLocked(
 		"Opening temporary database",
 		"",
 	)
-	newDB, err := db.Open(tempPath)
+	newDB, err := db.OpenWithArchiveContent(tempPath, e.db.ArchiveContent())
 	if err != nil {
 		log.Printf("resync: open temp db: %v", err)
 		restoreSkipCache()
@@ -3325,6 +3333,12 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 
+	// Insights and recall entries carry transcript-derived text, which a
+	// usage-only archive promises not to store, so those copies are skipped
+	// there. This also applies when a full archive is rebuilt under the
+	// usage policy for the first time.
+	copyDerivedText := !newDB.ArchiveContent().UsageOnly()
+
 	// Copy insights into newDB from the quiesced old DB file.
 	tInsights := time.Now()
 	reportResyncPhase(
@@ -3332,25 +3346,27 @@ func (e *Engine) resyncBuildLocked(
 		"Copying cached insights",
 		"",
 	)
-	if err := newDB.CopyInsightsFrom(origPath); err != nil {
-		log.Printf("resync: copy insights: %v", err)
-		stats.Aborted = true
-		stats.Warnings = append(stats.Warnings,
-			"insights copy failed, aborting swap: "+
-				err.Error(),
+	if copyDerivedText {
+		if err := newDB.CopyInsightsFrom(origPath); err != nil {
+			log.Printf("resync: copy insights: %v", err)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"insights copy failed, aborting swap: "+
+					err.Error(),
+			)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats, err
+		}
+		log.Printf(
+			"resync: copy insights: %s",
+			time.Since(tInsights).Round(time.Millisecond),
 		)
-		newDB.Close()
-		removeTempDB(tempPath)
-		restoreSkipCache()
-		e.mu.Lock()
-		e.lastSyncStats = stats
-		e.mu.Unlock()
-		return stats, err
 	}
-	log.Printf(
-		"resync: copy insights: %s",
-		time.Since(tInsights).Round(time.Millisecond),
-	)
 
 	// Copy model pricing so usage costs survive the swap. The
 	// startup seed only runs once per daemon lifetime, so a
@@ -3455,19 +3471,21 @@ func (e *Engine) resyncBuildLocked(
 	// recall entries, so without this every accepted entry is lost on
 	// resync. Runs after the orphan copy so referenced sessions exist.
 	// Failure aborts the swap to avoid destroying the recall archive.
-	if err := newDB.CopyRecallEntriesFrom(origPath); err != nil {
-		log.Printf("resync: copy recall entries: %v", err)
-		stats.Aborted = true
-		stats.Warnings = append(stats.Warnings,
-			"recall copy failed, aborting swap: "+err.Error(),
-		)
-		newDB.Close()
-		removeTempDB(tempPath)
-		restoreSkipCache()
-		e.mu.Lock()
-		e.lastSyncStats = stats
-		e.mu.Unlock()
-		return stats, err
+	if copyDerivedText {
+		if err := newDB.CopyRecallEntriesFrom(origPath); err != nil {
+			log.Printf("resync: copy recall entries: %v", err)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"recall copy failed, aborting swap: "+err.Error(),
+			)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats, err
+		}
 	}
 
 	// Merge user-managed data and trustworthy immutable project-identity
@@ -14638,8 +14656,11 @@ func (e *Engine) tryIncrementalJSONL(
 	// Other agents can legitimately have an empty first_message
 	// alongside real user rows — for example Codex inserts orphan
 	// subagent notifications as Role=user messages that bypass
-	// firstMessage — so this fall-through is gated on Claude.
-	if agent == parser.AgentClaude && inc.FirstMessage == "" &&
+	// firstMessage — so this fall-through is gated on Claude. Usage-only
+	// archives deliberately discard every preview; their incremental
+	// automation classifier consumes the raw appended rows instead.
+	if !e.db.ArchiveContent().UsageOnly() &&
+		agent == parser.AgentClaude && inc.FirstMessage == "" &&
 		chunkHasRealUserPrompt(newMsgs) {
 		log.Printf(
 			"incremental %s %s: first real user prompt after "+
@@ -15446,6 +15467,9 @@ func (e *Engine) failProjectIdentityBackfill(
 func (e *Engine) recomputeSignalsFromDB(
 	ctx context.Context, sessionID string,
 ) (int, error) {
+	if e.db.ArchiveContent().UsageOnly() {
+		return 0, e.db.SettleUsageOnlySignals(sessionID)
+	}
 	if e.disableSignalRecompute {
 		return 0, nil
 	}
@@ -16115,7 +16139,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		var update db.SessionSignalUpdate
 		var findings []db.SecretFinding
 		if !e.disableSignalRecompute {
-			update, findings = computeSignalsAndSecrets(s, msgs)
+			update, findings = e.computeSignalsAndSecretsForStorage(s, msgs)
 			if ctx.Err() != nil {
 				return outcome
 			}
@@ -17192,7 +17216,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		var findings []db.SecretFinding
 		if !e.disableSignalRecompute {
 			tScan := time.Now()
-			update, findings = computeSignalsAndSecrets(s, msgs)
+			update, findings = e.computeSignalsAndSecretsForStorage(s, msgs)
 			if ctx.Err() != nil {
 				return outcome
 			}
@@ -17205,12 +17229,14 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		if usageErr != nil {
 			return outcome
 		}
+		identityObservation, hasIdentityObservation :=
+			e.projectIdentityObservationForWrite(pw, s)
 		writes = append(writes, db.SessionBatchWrite{
 			Session:     s,
 			Messages:    msgs,
 			UsageEvents: usageEvents,
 			IdentityObservation: identityObservationOrZero(
-				e.projectIdentityObservationForWrite(pw, s),
+				identityObservation, hasIdentityObservation,
 			),
 			IdentitySnapshotProject: &snapshotProject,
 			Signals:                 update,
@@ -17848,7 +17874,6 @@ func (e *Engine) writeIncremental(
 	msgCount := inc.msgCount - filtered
 	userFiltered := countUserMsgs(inc.msgs) - newUser
 	userMsgCount := inc.userMsgCount - userFiltered
-
 	var endedAt *string
 	if !inc.endedAt.IsZero() {
 		s := inc.endedAt.Format(time.RFC3339Nano)
@@ -17870,20 +17895,24 @@ func (e *Engine) writeIncremental(
 
 	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
 	for i, link := range inc.links {
-		toolCall := db.ToolCall{
-			ResultContent:       parser.DecodeContent(link.ResultContentRaw),
-			ResultContentLength: link.ResultContentLen,
-		}
-		e.anomalies.recordSanitize(db.SanitizeToolCall(&toolCall))
 		subagentLinks[i] = db.ToolCallSubagentLink{
 			ToolUseID: link.ToolUseID,
 			SubagentSessionID: applyIDPrefixToID(
 				e.idPrefix, link.SubagentSessionID,
 			),
-			ResultContent:    toolCall.ResultContent,
-			ResultContentLen: toolCall.ResultContentLength,
 			HasResult:        link.HasResult,
+			ResultContentLen: link.ResultContentLen,
 		}
+		if e.db.ArchiveContent().OmitsToolContent() {
+			continue
+		}
+		toolCall := db.ToolCall{
+			ResultContent:       parser.DecodeContent(link.ResultContentRaw),
+			ResultContentLength: link.ResultContentLen,
+		}
+		e.anomalies.recordSanitize(db.SanitizeToolCall(&toolCall))
+		subagentLinks[i].ResultContent = toolCall.ResultContent
+		subagentLinks[i].ResultContentLen = toolCall.ResultContentLength
 	}
 
 	if err := e.db.WriteSessionIncremental(
@@ -18054,7 +18083,7 @@ func (e *Engine) writeSessionFullWithResolver(
 		}
 		replaceErr = e.db.ReplaceSessionMessages(s.ID, msgs)
 	} else {
-		update, findings := computeSignalsAndSecrets(s, msgs)
+		update, findings := e.computeSignalsAndSecretsForStorage(s, msgs)
 		replaceErr = e.db.ReplaceSessionContent(s.ID, msgs, update, findings)
 	}
 	if replaceErr != nil {
@@ -18203,9 +18232,23 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 		)
 		return true
 	}
-	if openCodeLegacyArchiveLooksIncomplete(
-		currentMsgs, storedMsgs,
-	) {
+	incomplete := false
+	if e.db.ArchiveContent().UsageOnly() {
+		_, comparableCurrentMsgs := e.db.ProjectSessionForStorage(
+			db.Session{}, currentMsgs,
+		)
+		_, comparableStoredMsgs := e.db.ProjectSessionForStorage(
+			db.Session{}, storedMsgs,
+		)
+		incomplete = openCodeUsageOnlyArchiveLooksIncomplete(
+			comparableCurrentMsgs, comparableStoredMsgs,
+		)
+	} else {
+		incomplete = openCodeLegacyArchiveLooksIncomplete(
+			currentMsgs, storedMsgs,
+		)
+	}
+	if incomplete {
 		if hasOpenCodeFormatStorageFingerprint(agent, storedHash) {
 			log.Printf(
 				"skip %s session %s: storage fingerprint changed but update looks incomplete relative to archive",
@@ -18352,6 +18395,48 @@ func openCodeLegacyArchiveLooksIncomplete(
 	return false
 }
 
+func openCodeUsageOnlyArchiveLooksIncomplete(
+	parsed, stored []db.Message,
+) bool {
+	if parsed == nil {
+		return len(stored) > 0
+	}
+	if len(parsed) < len(stored) {
+		return true
+	}
+	parsedByIdentity := make(
+		map[openCodeMessageIdentity]db.Message, len(parsed),
+	)
+	for _, message := range parsed {
+		parsedByIdentity[openCodeMessageStorageIdentity(message)] = message
+	}
+	for _, storedMessage := range stored {
+		parsedMessage, ok := parsedByIdentity[openCodeMessageStorageIdentity(storedMessage)]
+		if !ok || openCodeUsageOnlyMessageLooksIncomplete(
+			parsedMessage, storedMessage,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+type openCodeMessageIdentity struct {
+	sourceUUID string
+	ordinal    int
+	role       string
+}
+
+func openCodeMessageStorageIdentity(message db.Message) openCodeMessageIdentity {
+	if message.SourceUUID != "" {
+		return openCodeMessageIdentity{sourceUUID: message.SourceUUID}
+	}
+	return openCodeMessageIdentity{
+		ordinal: message.Ordinal,
+		role:    message.Role,
+	}
+}
+
 func openCodeMessageLooksIncomplete(
 	parsed, stored db.Message,
 ) bool {
@@ -18382,6 +18467,50 @@ func openCodeMessageLooksIncomplete(
 	}
 	return countToolResultEvents(parsed.ToolCalls) <
 		countToolResultEvents(stored.ToolCalls)
+}
+
+func openCodeUsageOnlyMessageLooksIncomplete(
+	parsed, stored db.Message,
+) bool {
+	if parsed.Role != stored.Role {
+		return false
+	}
+	if openCodeUsageLooksIncomplete(parsed, stored) {
+		return true
+	}
+	// Usage rows keep only delegation calls, so every stored call must
+	// still be present with the same delegated session; a replacement
+	// call with the same count would otherwise drop a subagent link.
+	parsedLinks := make(map[string]string, len(parsed.ToolCalls))
+	for _, call := range parsed.ToolCalls {
+		parsedLinks[call.ToolUseID] = call.SubagentSessionID
+	}
+	for _, call := range stored.ToolCalls {
+		child, ok := parsedLinks[call.ToolUseID]
+		if !ok || child != call.SubagentSessionID {
+			return true
+		}
+	}
+	return false
+}
+
+func openCodeUsageLooksIncomplete(parsed, stored db.Message) bool {
+	if len(stored.TokenUsage) == 0 {
+		return false
+	}
+	if len(parsed.TokenUsage) == 0 ||
+		(stored.Model != "" && parsed.Model == "") {
+		return true
+	}
+	parsedUsage := usagefacts.ParseTokenUsage(string(parsed.TokenUsage))
+	storedUsage := usagefacts.ParseTokenUsage(string(stored.TokenUsage))
+	return parsedUsage.InputTokens < storedUsage.InputTokens ||
+		parsedUsage.OutputTokens < storedUsage.OutputTokens ||
+		parsedUsage.ReasoningTokens < storedUsage.ReasoningTokens ||
+		parsedUsage.CacheCreationTokens < storedUsage.CacheCreationTokens ||
+		parsedUsage.CacheCreation1hTokens < storedUsage.CacheCreation1hTokens ||
+		parsedUsage.CacheReadTokens < storedUsage.CacheReadTokens ||
+		parsedUsage.WebSearchRequests < storedUsage.WebSearchRequests
 }
 
 func sanitizedMessageContentLength(msg db.Message) int {
@@ -19945,6 +20074,7 @@ func convertToolCallsContext(
 			Category:          tc.Category,
 			ToolUseID:         tc.ToolUseID,
 			InputJSON:         tc.InputJSON,
+			Rendering:         tc.Rendering,
 			FilePath:          filePath,
 			CallIndex:         i,
 			SkillName:         tc.SkillName,

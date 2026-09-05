@@ -1464,6 +1464,7 @@ agentsview help
 | `AGENTSVIEW_DUCKDB_MACHINE`       |                                                      | Machine name for DuckDB push                                                                        |
 | `AGENTSVIEW_GITHUB_TOKEN`         |                                                      | GitHub token used for local Gist publishing fallback and `agentsview stats` PR aggregation          |
 | `AGENTSVIEW_DISABLE_UPDATE_CHECK` |                                                      | Set to `1` to disable the update check                                                              |
+| `AGENTSVIEW_ARCHIVE_CONTENT`      | `full`                                               | Archive storage policy when `config.toml` sets none: `full`, `transcripts`, or `usage`              |
 | `AGENTSVIEW_NO_DAEMON`            |                                                      | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start                                 |
 | `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`  | `20m`                                                | Override idle self-shutdown duration for detached background daemons                                |
 | `AGENTSVIEW_TELEMETRY_ENABLED`    |                                                      | Set to `0` to disable [anonymous daemon telemetry](/docs/configuration/#anonymous-daemon-telemetry) |

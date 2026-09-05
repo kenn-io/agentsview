@@ -1232,11 +1232,13 @@ func TestParseKiloLegacySessionCodebaseSearchResultStandalone(t *testing.T) {
 	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
 	require.NoError(t, err)
 
-	// Orphaned result should appear as a standalone system message.
+	// Orphaned result should appear as a standalone system message that is
+	// marked as tool output.
 	found := false
 	for _, m := range parsed {
 		if m.IsSystem && strings.Contains(m.Content, "codebaseSearch") {
 			found = true
+			assert.Equal(t, SourceSubtypeToolResult, m.SourceSubtype)
 			break
 		}
 	}
@@ -1432,4 +1434,30 @@ func TestParseKiloLegacySessionMalformedAPIHistoryContinues(t *testing.T) {
 	assert.Equal(t, 10, sess.TotalOutputTokens,
 		"transcript should still be parsed from ui_messages.json")
 	require.Len(t, sess.UsageEvents, 1)
+}
+
+func TestParseKiloLegacySessionUnpairedCommandOutputIsMarkedToolOutput(
+	t *testing.T,
+) {
+	taskDir := writeKiloLegacyFixture(t)
+	msgs := []kiloLegacyMessage{
+		{Timestamp: 1688836851000, Type: "say", Say: "text", Text: "task"},
+		{Timestamp: 1688836860000, Type: "say", Say: "command_output",
+			Text: "secret=abc123"},
+	}
+	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), msgs)
+	_, parsed, err := parseKiloLegacySession(taskDir, "", "")
+	require.NoError(t, err)
+
+	var fallback *ParsedMessage
+	for i := range parsed {
+		if parsed[i].Content == "secret=abc123" {
+			fallback = &parsed[i]
+			break
+		}
+	}
+	require.NotNil(t, fallback, "unpaired command output falls back to a row")
+	assert.True(t, fallback.IsSystem)
+	assert.Equal(t, SourceSubtypeToolResult, fallback.SourceSubtype,
+		"the fallback row's text is tool output")
 }

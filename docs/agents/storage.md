@@ -13,6 +13,22 @@ parser change that needs a full resync must build a fresh database, sync source
 files, copy orphaned sessions from the old database, and swap the files
 atomically. Preserve sessions even when their source files no longer exist.
 
+## Archive Content Policy
+
+`archive_content` (`internal/config.ArchiveContent`) narrows what the SQLite
+archive stores. The `*db.DB` handle is the single authority: `Open` variants and
+`sync.NewEngine` only tighten it, never loosen it, and every write path projects
+sessions and messages through `internal/db/archive_content.go` before rows are
+written.
+
+- Route any new session, message, tool call, signal, or finding write through
+  the existing projection helpers instead of checking the policy inline.
+- Resync copies archived rows with `ATTACH`, which bypasses the write path.
+  `applyArchiveContentToCopiedSessionsTx` mirrors the Go projection in SQL for
+  the orphan and trash copies. Keep the two in step when either changes.
+- Compute derived values (signals, secret findings) from the projected messages
+  so a later recompute from stored rows reproduces them.
+
 ## Backend Parity
 
 - Keep observable behavior and query shape aligned between SQLite and
@@ -159,14 +175,14 @@ content clears them for a fresh scan.
 the summary equals that event's content, the summary is not stored: the column
 is empty while `result_content_length` still records the summary's size. That
 pair, an empty column with a non-zero length, tells a reader to take the text
-from the single event. Multi-event summaries, single-event summaries that
-differ from their event, calls with no events, and blocked categories store
-exactly what the parser produced. Load tool calls through the message loaders,
-which refill the summary once events are attached; a query that selects the
-column directly must apply the same fallback, and PostgreSQL and DuckDB apply
-the same write rule so their tool-call fingerprints match SQLite. Anyone
-reading the archive or a mirror by hand sees the empty column and must join
-the events table to recover the text.
+from the single event. Multi-event summaries, single-event summaries that differ
+from their event, calls with no events, and blocked categories store exactly
+what the parser produced. Load tool calls through the message loaders, which
+refill the summary once events are attached; a query that selects the column
+directly must apply the same fallback, and PostgreSQL and DuckDB apply the same
+write rule so their tool-call fingerprints match SQLite. Anyone reading the
+archive or a mirror by hand sees the empty column and must join the events table
+to recover the text.
 
 ## DuckDB Mirror
 

@@ -89,6 +89,9 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 	ctx context.Context, r io.Reader, opts RecallImportOptions,
 ) (RecallImportResult, error) {
 	var result RecallImportResult
+	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
+		return result, err
+	}
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	lineNo := 0

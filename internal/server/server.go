@@ -225,6 +225,7 @@ func New(
 	// backend.
 	var sessions service.SessionService
 	if local, ok := database.(*db.DB); ok {
+		local.SetArchiveContent(cfg.ArchiveContent)
 		sessions = service.NewDirectBackend(local, engine)
 	} else {
 		sessions = service.NewReadOnlyBackend(database)

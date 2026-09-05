@@ -290,7 +290,12 @@ func TestManagerShutdownCancelsDetachedStartBuild(t *testing.T) {
 	// context is canceled. Shutdown must cancel the detached build so daemon
 	// shutdown does not hang on Wait.
 	ix := openTestIndex(t)
+	encoderStarted := make(chan struct{}, 1)
 	stuckEncoder := func(ctx context.Context, _ []string) ([][]float32, error) {
+		select {
+		case encoderStarted <- struct{}{}:
+		default:
+		}
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
@@ -299,6 +304,11 @@ func TestManagerShutdownCancelsDetachedStartBuild(t *testing.T) {
 	)
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
+	select {
+	case <-encoderStarted:
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "build never reached the encoder")
+	}
 
 	done := make(chan struct{})
 	go func() {

@@ -721,10 +721,11 @@ func parseDevinDBToolCalls(toolCalls gjson.Result) ([]ParsedToolCall, string) {
 	toolCalls.ForEach(func(_, tc gjson.Result) bool {
 		parsedCall, ok := parseDevinDBToolCall(tc)
 		if ok {
-			parsed = append(parsed, parsedCall)
 			if text := formatDevinDBToolCall(parsedCall); text != "" {
+				parsedCall.Rendering = text
 				parts = append(parts, text)
 			}
+			parsed = append(parsed, parsedCall)
 		}
 		return true
 	})
@@ -1082,10 +1083,12 @@ func formatTopLevelToolUses(toolUses gjson.Result) (string, []ParsedToolCall) {
 		calls []ParsedToolCall
 	)
 	toolUses.ForEach(func(_, toolUse gjson.Result) bool {
-		if text := strings.TrimSpace(formatToolUse(toolUse)); text != "" {
+		text := strings.TrimSpace(formatToolUse(toolUse))
+		if text != "" {
 			parts = append(parts, text)
 		}
 		if tc, ok := parseToolCall(toolUse); ok {
+			tc.Rendering = text
 			calls = append(calls, tc)
 		}
 		return true
