@@ -14830,11 +14830,18 @@ func (e *Engine) codexFingerprintFreshness(
 	}
 	statFresh := storedMtime == effectiveMtime
 	if effectiveMtime < storedMtime {
-		indexPath := parser.CodexSessionIndexPath(path)
-		if indexPath != "" {
-			if _, err := os.Stat(indexPath); errors.Is(err, os.ErrNotExist) {
-				statFresh = true
+		// Only an index that is absent from every home means the stored
+		// mtime came from a since-removed sidecar.
+		indexPaths := parser.CodexSessionIndexPaths(path)
+		allAbsent := len(indexPaths) > 0
+		for _, indexPath := range indexPaths {
+			if _, err := os.Stat(indexPath); !errors.Is(err, os.ErrNotExist) {
+				allAbsent = false
+				break
 			}
+		}
+		if allAbsent {
+			statFresh = true
 		}
 	}
 	if effectiveMtime > storedMtime {
