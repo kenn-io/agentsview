@@ -995,7 +995,23 @@ pulled in from PostgreSQL sync or copied from other archives.
 ## Database
 
 The SQLite database uses WAL mode for concurrent reads and includes FTS5
-full-text search indexes on message content.
+full-text search indexes on message content. To add Chinese word, phrase, and
+single-character matching, build and install the pinned `simple`/cppjieba
+sidecar with `make install-chinese-fts`. Building it requires Git, CMake
+3.19 or newer, and a C++14 compiler. AgentsView discovers it next to the binary
+or under the sibling `lib/agentsview/simple` directory. A custom path can be
+selected with `AGENTSVIEW_SIMPLE_DIR`.
+
+The sidecar adds a parallel `messages_chinese_fts` index and routes only CJK
+queries through it. ASCII-only searches continue to use the existing Porter
+index, so searches such as `run` retain English stemming. The Chinese index is
+derived data: if the sidecar is removed, AgentsView drops that optional index
+and continues with the standard FTS5 path; reinstalling the sidecar backfills
+it on the next writable open. AgentsView fingerprints the native library and
+all cppjieba dictionaries, atomically rebuilding the index when that fingerprint
+changes. Writers running with another fingerprint leave a freshness marker
+instead of mixing incompatible token streams. Pinyin expansion is disabled in
+the derived index because ASCII-only queries continue to use the Porter index.
 
 **Schema tables:**
 
@@ -1011,6 +1027,7 @@ full-text search indexes on message content.
 | `stats`              | Aggregate counts (session_count, message_count)                              |
 | `skipped_files`      | Cache of non-interactive session files                                       |
 | `messages_fts`       | FTS5 virtual table for full-text search                                      |
+| `messages_chinese_fts` | Optional FTS5 index using the `simple` Chinese tokenizer                   |
 
 The database is automatically migrated on startup when the schema changes. When
 the stored data version is stale, AgentsView preserves the existing database and

@@ -1,0 +1,50 @@
+name: Chinese FTS
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/chinese-fts.yml"
+      - "Makefile"
+      - "internal/db/**"
+      - "scripts/build-simple-fts.sh"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/chinese-fts.yml"
+      - "Makefile"
+      - "internal/db/**"
+      - "scripts/build-simple-fts.sh"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-chinese-fts:
+    name: Go Test (Chinese FTS sidecar)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Restore pricing snapshot
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+
+      - name: Build pinned simple and cppjieba sidecar
+        run: bash scripts/build-simple-fts.sh dist/agentsview-simple
+
+      - name: Run database tests with Chinese FTS enabled
+        env:
+          AGENTSVIEW_SIMPLE_DIR: ${{ github.workspace }}/dist/agentsview-simple
+          CGO_ENABLED: "1"
+        run: go test -tags "fts5" ./internal/db -count=1 -timeout=20m

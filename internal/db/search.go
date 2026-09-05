@@ -345,7 +345,11 @@ func (db *DB) Search(
 	if f.Limit <= 0 || f.Limit > MaxSearchLimit {
 		f.Limit = DefaultSearchLimit
 	}
-	f.Query = PrepareFTSQuery(f.Query)
+	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Query)
+	if err != nil {
+		return SearchPage{}, err
+	}
+	f.Query = ftsQuery.match
 
 	// ORDER BY for the outer query. FTS5 ranks are negative (lower = better),
 	// so rank ASC places message matches (negative rank) before name-only rows
@@ -362,7 +366,7 @@ func (db *DB) Search(
 	// innerWhere is used in three places: the ROW_NUMBER inner subquery,
 	// the outer MATCH re-filter, and the NOT IN subquery for the name branch.
 	innerWhere := []string{
-		"messages_fts MATCH ?",
+		ftsQuery.table + " MATCH ?",
 		"s2.deleted_at IS NULL",
 		"m2.is_system = 0",
 		SystemPrefixSQL("m2.content", "m2.role"),
@@ -383,7 +387,7 @@ func (db *DB) Search(
 	// each term in double quotes for FTS (e.g. "fix bug" → `"fix" "bug"`).
 	// LIKE and instr() must use the plain text form so name/content substring
 	// searches work correctly.
-	plainQuery := StripFTSQuotes(f.Query)
+	plainQuery := ftsQuery.plain
 	if plainQuery == "" {
 		return SearchPage{}, nil
 	}
@@ -500,6 +504,7 @@ func (db *DB) Search(
 		innerWhereSQL,     // NOT IN subquery WHERE (%s)
 		orderBy,           // ORDER BY (%s)
 	)
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
 
 	// Replace the ROW_NUMBER inner subquery's ? for best_query with args
 	// re-ordered: the first innerWhere param (f.Query) was already included in

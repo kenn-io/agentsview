@@ -1394,40 +1394,82 @@ func bumpTranscriptRevision(
 	return nil
 }
 
-func sessionHasFTSTx(tx transactionQueries) (bool, error) {
+func sessionHasFTSTableTx(tx transactionQueries, table string) (bool, error) {
 	var ftsCount int
 	if err := tx.QueryRow(
 		`SELECT count(*) FROM sqlite_master
-		 WHERE type='table' AND name='messages_fts'`,
+		 WHERE type='table' AND name=?`, table,
 	).Scan(&ftsCount); err != nil {
-		return false, fmt.Errorf("probing fts table: %w", err)
+		return false, fmt.Errorf("probing fts table %s: %w", table, err)
 	}
 	return ftsCount > 0, nil
+}
+
+func sessionHasCurrentChineseFTSTx(
+	tx transactionQueries,
+) (bool, error) {
+	exists, err := sessionHasFTSTableTx(tx, "messages_chinese_fts")
+	if err != nil || !exists || !simpleFTSRuntimeConfig.available() {
+		return false, err
+	}
+	var storedFingerprint string
+	err = tx.QueryRow(
+		"SELECT CAST(value AS TEXT) FROM stats WHERE key = ?",
+		chineseFTSFingerprintStatsKey,
+	).Scan(&storedFingerprint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf(
+			"reading Chinese fts fingerprint: %w", err,
+		)
+	}
+	return storedFingerprint == simpleFTSRuntimeConfig.fingerprint, nil
 }
 
 func deleteSessionMessageRowsTx(
 	tx transactionQueries, sessionID string,
 ) error {
-	hasFTS, err := sessionHasFTSTx(tx)
-	if err != nil {
-		return err
+	tables := []struct {
+		name       string
+		deleteName string
+		deleteDDL  string
+	}{
+		{"messages_fts", "messages_ad", messagesADTriggerDDL},
+		{"messages_chinese_fts", "messages_chinese_ad", messagesChineseADTriggerDDL},
+	}
+	active := tables[:0]
+	for _, table := range tables {
+		var exists bool
+		var err error
+		if table.name == "messages_chinese_fts" {
+			exists, err = sessionHasCurrentChineseFTSTx(tx)
+		} else {
+			exists, err = sessionHasFTSTableTx(tx, table.name)
+		}
+		if err != nil {
+			return err
+		}
+		if exists {
+			active = append(active, table)
+		}
 	}
 
-	if hasFTS {
+	for _, table := range active {
 		// Bulk-delete the FTS entries first so the later row delete
-		// does not re-tokenize large message blobs through messages_ad.
+		// does not re-tokenize large message blobs through delete triggers.
 		if _, err := tx.Exec(
-			`INSERT INTO messages_fts(messages_fts, rowid, content)
-			 SELECT 'delete', id, content
-			 FROM messages WHERE session_id = ?`,
+			`INSERT INTO `+table.name+`(`+table.name+`, rowid, content)
+			 SELECT 'delete', id, content FROM messages WHERE session_id = ?`,
 			sessionID,
 		); err != nil {
-			return fmt.Errorf("bulk-deleting fts entries: %w", err)
+			return fmt.Errorf("bulk-deleting %s entries: %w", table.name, err)
 		}
 		if _, err := tx.Exec(
-			"DROP TRIGGER IF EXISTS messages_ad",
+			"DROP TRIGGER IF EXISTS " + table.deleteName,
 		); err != nil {
-			return fmt.Errorf("dropping messages_ad trigger: %w", err)
+			return fmt.Errorf("dropping %s trigger: %w", table.deleteName, err)
 		}
 	}
 	if _, err := tx.Exec(
@@ -1435,9 +1477,9 @@ func deleteSessionMessageRowsTx(
 	); err != nil {
 		return fmt.Errorf("deleting old messages: %w", err)
 	}
-	if hasFTS {
-		if _, err := tx.Exec(messagesADTriggerDDL); err != nil {
-			return fmt.Errorf("restoring messages_ad trigger: %w", err)
+	for _, table := range active {
+		if _, err := tx.Exec(table.deleteDDL); err != nil {
+			return fmt.Errorf("restoring %s trigger: %w", table.deleteName, err)
 		}
 	}
 	return nil

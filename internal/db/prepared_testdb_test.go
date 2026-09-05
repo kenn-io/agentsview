@@ -10,7 +10,7 @@ import (
 // initialized with the current schema and data version. It is intentionally
 // test-only so production code cannot bypass the normal open/migration path.
 func OpenPreparedTestDB(path string) (*DB, error) {
-	writer, err := sql.Open("sqlite3", makeDSN(path, false))
+	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening prepared test writer: %w", err)
 	}
@@ -19,8 +19,12 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 		writer.Close()
 		return nil, fmt.Errorf("configuring prepared test wal: %w", err)
 	}
+	if err := installChineseFTSTriggers(writer); err != nil {
+		writer.Close()
+		return nil, fmt.Errorf("configuring prepared test Chinese FTS: %w", err)
+	}
 
-	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
+	reader, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))
 	if err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("opening prepared test reader: %w", err)

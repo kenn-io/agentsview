@@ -681,6 +681,10 @@ func (db *DB) searchContentFTS(
 	if !db.HasFTS() {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
+	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
 	scope, scopeArgs := sessionScopeSubquery(f)
 	sysPred := "1=1"
 	if f.ExcludeSystem {
@@ -697,7 +701,8 @@ func (db *DB) searchContentFTS(
 		WHERE messages_fts MATCH ? AND %s AND m.%s
 		ORDER BY rank ASC, m.ordinal ASC, m.id ASC
 		LIMIT ? OFFSET ?`, sysPred, scope)
-	args := []any{PrepareFTSQuery(f.Pattern)}
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, f.Limit+1, f.Cursor)
 	page, err := db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, f.ftsSnippet)
@@ -1161,6 +1166,10 @@ func (db *DB) hybridFTSLeg(
 func (db *DB) fetchHybridFTSBatch(
 	ctx context.Context, f ContentSearchFilter, k, offset int,
 ) ([]hybridDisplay, error) {
+	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
+	if err != nil {
+		return nil, err
+	}
 	scope, scopeArgs := semanticSessionScopeSubquery(f)
 	query := fmt.Sprintf(`
 		SELECT m.session_id, m.ordinal,
@@ -1171,8 +1180,9 @@ func (db *DB) fetchHybridFTSBatch(
 		  AND m.%s
 		ORDER BY f.rank, m.id LIMIT ? OFFSET ?`,
 		SystemPrefixSQL("m.content", "m.role"), scope)
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
 
-	args := []any{PrepareFTSQuery(f.Pattern)}
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, k, offset)
 

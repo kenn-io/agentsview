@@ -531,6 +531,21 @@ CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
 END;
 `
 
+const chineseFTSRuntimeMatchesSQL = `EXISTS (
+    SELECT 1 FROM main.stats
+    WHERE key = '` + chineseFTSFingerprintStatsKey + `'
+      AND CAST(value AS TEXT) = agentsview_chinese_fts_fingerprint()
+)`
+
+const messagesChineseADTriggerDDL = `
+CREATE TEMP TRIGGER IF NOT EXISTS messages_chinese_ad
+AFTER DELETE ON main.messages
+WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_chinese_fts(messages_chinese_fts, rowid, content)
+        VALUES('delete', old.id, old.content);
+END;
+`
+
 const schemaFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
@@ -547,6 +562,51 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
         VALUES('delete', old.id, old.content);
     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+END;
+`
+
+const schemaChineseFTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_chinese_fts USING fts5(
+    content,
+    content='messages',
+    content_rowid='id',
+    tokenize='simple 0'
+);
+`
+
+const schemaChineseFTSTriggers = `
+CREATE TEMP TRIGGER IF NOT EXISTS messages_chinese_ai
+AFTER INSERT ON main.messages
+WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_chinese_fts(rowid, content) VALUES (new.id, new.content);
+END;
+` + messagesChineseADTriggerDDL + `
+CREATE TEMP TRIGGER IF NOT EXISTS messages_chinese_au
+AFTER UPDATE ON main.messages
+WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_chinese_fts(messages_chinese_fts, rowid, content)
+        VALUES('delete', old.id, old.content);
+    INSERT INTO messages_chinese_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TEMP TRIGGER IF NOT EXISTS sessions_chinese_pending_ai
+AFTER INSERT ON main.sessions
+WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+    DELETE FROM messages_chinese_fts_pending_sessions
+    WHERE session_id = new.id AND generation = 1;
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS sessions_chinese_pending_au
+AFTER UPDATE OF transcript_revision ON main.sessions
+WHEN old.transcript_revision IS NOT new.transcript_revision
+ AND ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+    DELETE FROM messages_chinese_fts_pending_sessions
+    WHERE session_id = new.id AND generation = 1;
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS sessions_chinese_pending_ad
+AFTER DELETE ON main.sessions
+WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+    DELETE FROM messages_chinese_fts_pending_sessions
+    WHERE session_id = old.id AND generation = 1;
 END;
 `
 
@@ -1088,6 +1148,9 @@ func open(ctx context.Context, path string, backgroundMaintenance bool) (*DB, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := checkSimpleFTSRuntimeConfig(); err != nil {
+		return nil, err
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating db directory: %w", err)
@@ -1451,7 +1514,7 @@ func UpgradeExportSchemaInPlace(path string, cause error) (retErr error) {
 		return fmt.Errorf("upgrading database schema: %s is empty", path)
 	}
 
-	writer, err := sql.Open("sqlite3", makeDSN(path, false))
+	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, false))
 	if err != nil {
 		return fmt.Errorf("opening schema upgrade writer: %w", err)
 	}
@@ -1547,6 +1610,9 @@ func initializeSchemaUpgradeMetadata(tx *sql.Tx) error {
 // any writable initialization. It is intended for cold CLI reads and recovery
 // cases where another process may own writable access to the archive.
 func OpenReadOnly(path string) (*DB, error) {
+	if err := checkSimpleFTSRuntimeConfig(); err != nil {
+		return nil, err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1564,7 +1630,7 @@ func OpenReadOnly(path string) (*DB, error) {
 		)
 	}
 
-	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
+	reader, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))
 	if err != nil {
 		return nil, fmt.Errorf("opening read-only reader: %w", err)
 	}
@@ -1658,7 +1724,7 @@ var (
 
 func readOnlyRequiredSchema() (map[string][]string, error) {
 	readOnlyRequiredSchemaOnce.Do(func() {
-		conn, err := sql.Open("sqlite3", ":memory:")
+		conn, err := sql.Open(sqliteArchiveDriverName, ":memory:")
 		if err != nil {
 			readOnlyRequiredSchemaErr = fmt.Errorf(
 				"opening schema probe: %w", err,
@@ -1835,7 +1901,7 @@ func probeDatabase(
 			"checking database file: %w", err,
 		)
 	}
-	conn, err := sql.Open("sqlite3", makeDSN(path, true))
+	conn, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))
 	if err != nil {
 		return false, false, fmt.Errorf(
 			"probing schema: %w", err,
@@ -4060,7 +4126,7 @@ func openAndInit(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	writer, err := sql.Open("sqlite3", makeDSN(path, false))
+	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening writer: %w", err)
 	}
@@ -4070,7 +4136,7 @@ func openAndInit(
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
 
-	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
+	reader, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))
 	if err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("opening reader: %w", err)
@@ -4253,6 +4319,13 @@ func (db *DB) DropFTS() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	stmts := []string{
+		"DROP TRIGGER IF EXISTS messages_chinese_ai",
+		"DROP TRIGGER IF EXISTS messages_chinese_ad",
+		"DROP TRIGGER IF EXISTS messages_chinese_au",
+		"DROP TRIGGER IF EXISTS sessions_chinese_pending_ai",
+		"DROP TRIGGER IF EXISTS sessions_chinese_pending_au",
+		"DROP TRIGGER IF EXISTS sessions_chinese_pending_ad",
+		"DROP TABLE IF EXISTS messages_chinese_fts",
 		"DROP TRIGGER IF EXISTS messages_ai",
 		"DROP TRIGGER IF EXISTS messages_ad",
 		"DROP TRIGGER IF EXISTS messages_au",
@@ -4263,6 +4336,11 @@ func (db *DB) DropFTS() error {
 		if _, err := w.Exec(s); err != nil {
 			return fmt.Errorf("drop fts (%s): %w", s, err)
 		}
+	}
+	if _, err := w.Exec(
+		"DELETE FROM stats WHERE key = ?", chineseFTSFingerprintStatsKey,
+	); err != nil {
+		return fmt.Errorf("clearing Chinese fts fingerprint: %w", err)
 	}
 	return nil
 }
@@ -4282,6 +4360,9 @@ func (db *DB) RebuildFTS() error {
 	)
 	if err != nil {
 		return fmt.Errorf("rebuild fts index: %w", err)
+	}
+	if err := ensureChineseFTS(context.Background(), w, true); err != nil {
+		return fmt.Errorf("rebuild Chinese fts index: %w", err)
 	}
 	return nil
 }
@@ -4321,6 +4402,34 @@ func (db *DB) HasFTS() bool {
 	// in the current runtime.
 	_, err := db.getReader().Exec(
 		"SELECT 1 FROM messages_fts LIMIT 1",
+	)
+	return err == nil
+}
+
+// HasChineseFTS reports whether the optional simple-tokenized message index is
+// loaded and queryable on this database connection.
+func (db *DB) HasChineseFTS() bool {
+	if !simpleFTSRuntimeConfig.available() {
+		return false
+	}
+	var storedFingerprint string
+	if err := db.getReader().QueryRow(
+		"SELECT CAST(value AS TEXT) FROM stats WHERE key = ?",
+		chineseFTSFingerprintStatsKey,
+	).Scan(&storedFingerprint); err != nil ||
+		storedFingerprint != simpleFTSRuntimeConfig.fingerprint {
+		return false
+	}
+	var hasPendingSessions bool
+	if err := db.getReader().QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM messages_chinese_fts_pending_sessions LIMIT 1
+		)`,
+	).Scan(&hasPendingSessions); err != nil || hasPendingSessions {
+		return false
+	}
+	_, err := db.getReader().Exec(
+		"SELECT 1 FROM messages_chinese_fts LIMIT 1",
 	)
 	return err == nil
 }
@@ -4405,6 +4514,10 @@ func (db *DB) init(ctx context.Context) error {
 		); err != nil {
 			return fmt.Errorf("backfilling FTS: %w", err)
 		}
+	}
+
+	if err := ensureChineseFTS(ctx, w, false); err != nil {
+		return fmt.Errorf("initializing Chinese FTS: %w", err)
 	}
 
 	var recallFTSCount int
@@ -4681,7 +4794,7 @@ func checkpointWALWithoutWriter(path string) error {
 		}
 		return fmt.Errorf("stat wal before final checkpoint: %w", err)
 	}
-	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	conn, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, false))
 	if err != nil {
 		return fmt.Errorf("opening final checkpoint connection: %w", err)
 	}
@@ -4770,7 +4883,7 @@ func (db *DB) reopenLocked() error {
 // other caller clears the barrier.
 func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	writer, err := sql.Open(
-		"sqlite3", makeDSN(db.path, false),
+		sqliteArchiveDriverName, makeDSN(db.path, false),
 	)
 	if err != nil {
 		return fmt.Errorf("reopening writer: %w", err)
@@ -4780,9 +4893,13 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
 	}
+	if err := installChineseFTSTriggers(writer); err != nil {
+		writer.Close()
+		return fmt.Errorf("configuring reopened writer: %w", err)
+	}
 
 	reader, err := sql.Open(
-		sqliteUsageDriverName, makeDSN(db.path, true),
+		sqliteArchiveDriverName, makeDSN(db.path, true),
 	)
 	if err != nil {
 		writer.Close()
@@ -4902,7 +5019,7 @@ func (db *DB) ReopenWriter() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	writer, err := sql.Open("sqlite3", makeDSN(db.path, false))
+	writer, err := sql.Open(sqliteArchiveDriverName, makeDSN(db.path, false))
 	if err != nil {
 		return fmt.Errorf("reopening writer: %w", err)
 	}
@@ -4910,6 +5027,10 @@ func (db *DB) ReopenWriter() error {
 	if err := configureWAL(writer); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
+	}
+	if err := installChineseFTSTriggers(writer); err != nil {
+		writer.Close()
+		return fmt.Errorf("configuring reopened writer: %w", err)
 	}
 
 	db.connMu.Lock()
