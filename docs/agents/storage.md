@@ -47,9 +47,9 @@ snapshot. Do not widen or narrow this live/baked boundary implicitly.
 
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
-fees, deduplication, or rollup semantics change. Catalog and user-pricing
-changes are covered separately by the pricing content digest; do not add a
-write-only extractor-version metadata key.
+fees, deduplication, rollup semantics, or query-time model canonicalization
+change. Catalog and user-pricing changes are covered separately by the pricing
+content digest; do not add a write-only extractor-version metadata key.
 
 Deduplication groups are classified per group at rollup build time. A group is
 finalized into daily rows only when its resolution provably cannot vary with the

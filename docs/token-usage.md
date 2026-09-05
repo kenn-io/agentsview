@@ -775,7 +775,10 @@ When no catalog bands or applied bands exist, their canonical JSON value is
 that null-versus-nonempty-array representation within schema version 5.
 
 Ordinary models have one resolution whose `priced_model` is the reported model.
-Timestamp-aware aliases can have more than one resolution in a report. For
+Fixed aliases such as `k2d6-agent` and `gpt-reserve` keep that reported name
+and resolve `priced_model` to a catalog row (`moonshot/kimi-k2.6` and
+`gpt-5.6-luna`). Timestamp-aware aliases can have more than one resolution in a
+report. For
 example, one `kimi-for-coding` entry can contain both `moonshot/kimi-k2.6` and
 `kimi-k3` resolutions when its rows span the pricing cutoff. An exact
 custom-pricing row for the reported alias takes precedence before timestamp

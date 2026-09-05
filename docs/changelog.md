@@ -22,6 +22,13 @@ description: Release history for AgentsView
   Existing archives resync on the next start, and a PostgreSQL mirror
   re-pushes every session once.
 
+**Bug fixes**
+
+- Price Codex Luna Reserve turns that persist as `gpt-reserve` using the
+  existing GPT-5.6 Luna catalog rates. Usage reports still list `gpt-reserve`
+  as the reported model. Existing SQLite usage caches rebuild so previously
+  unpriced Reserve rows pick up the correction. (#1636)
+
 ---
 
 ## 0.42.0

@@ -5760,6 +5760,66 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 	}
 }
 
+// TestGetDailyUsage_GPTReserveLunaPricing proves Codex Luna Reserve turns
+// that persist gpt-reserve keep that reported name in the pricing block
+// while costing the same as an explicit gpt-5.6-luna row. There is no
+// gpt-reserve catalog key, so a missed mapping yields zero against a
+// priced Luna sibling.
+func TestGetDailyUsage_GPTReserveLunaPricing(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	ts := "2026-09-05T12:00:00Z"
+	tokenUsage := jsontext.Value(`{"input_tokens":1000000,"output_tokens":0}`)
+	for _, fixture := range []struct {
+		id    string
+		model string
+	}{
+		{id: "codex-gpt-reserve", model: pricingpkg.GPTReserveModelName},
+		{id: "codex-gpt-luna", model: pricingpkg.GPT56LunaCanonical},
+	} {
+		insertSession(t, d, fixture.id, "proj", func(s *Session) {
+			s.Agent = "codex"
+			s.StartedAt = new(ts)
+		})
+		insertMessages(t, d, Message{
+			SessionID:  fixture.id,
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  ts,
+			Model:      fixture.model,
+			TokenUsage: tokenUsage,
+		})
+	}
+
+	luna, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:     "2026-09-05",
+		To:       "2026-09-05",
+		Timezone: "UTC",
+		Model:    pricingpkg.GPT56LunaCanonical,
+	})
+	requireNoError(t, err, "GetDailyUsage luna")
+	assert.NotZero(t, luna.Totals.TotalCost.Microdollars,
+		"explicit Luna usage must be priced")
+	assert.Equal(t, 1_000_000, luna.Totals.InputTokens)
+
+	reserve, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:     "2026-09-05",
+		To:       "2026-09-05",
+		Timezone: "UTC",
+		Model:    pricingpkg.GPTReserveModelName,
+	})
+	requireNoError(t, err, "GetDailyUsage reserve")
+	assert.Equal(t, 1_000_000, reserve.Totals.InputTokens)
+	assert.Equal(t, luna.Totals.TotalCost, reserve.Totals.TotalCost, "TotalCost")
+	require.NotNil(t, reserve.Pricing, "pricing block")
+	require.Contains(t, reserve.Pricing.Models, pricingpkg.GPTReserveModelName)
+	resolutions := reserve.Pricing.Models[pricingpkg.GPTReserveModelName].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, pricingpkg.GPT56LunaCanonical, resolutions[0].PricedModel)
+	assert.NotContains(t, reserve.Pricing.Models, pricingpkg.GPT56LunaCanonical)
+}
+
 // TestGetDailyUsage_KimiDateAliasMixedDaySameModel proves one reported
 // model straddling the cutoff sums both eras: a pre-cutoff row prices
 // at K2.6 and a post-cutoff row at K3 within the same model breakdown.

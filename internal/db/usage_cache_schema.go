@@ -30,7 +30,11 @@ const (
 	// Version 8 introduces a cross-process generation lease. Older binaries
 	// select version 7 and therefore cannot open a leased generation without
 	// participating in its retirement protocol.
-	usageCacheFormatVersion             = 8
+	// Version 9 rebuilds version 8 rollups because Codex Luna Reserve
+	// turns stored as gpt-reserve now resolve to gpt-5.6-luna catalog
+	// rates. EffectivePricingDigest hashes only catalog rows, so the
+	// same facts and catalog would otherwise keep the unpriced costs.
+	usageCacheFormatVersion             = 9
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1

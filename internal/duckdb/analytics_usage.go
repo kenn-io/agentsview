@@ -3505,33 +3505,42 @@ func duckUsageSnapshotInputFilter(f db.UsageFilter) db.UsageFilter {
 	return db.UsageFilter{From: f.From, To: f.To, Timezone: f.Timezone}
 }
 
-// duckPriceModelCaseSQL renders Kimi alias canonicalization as SQL so each
-// usage row carries the fixed or timestamp-selected model whose rates apply.
+// duckSQLString quotes a SQL string literal. Alias names come from the
+// curated pricing tables, not from stored session data.
+func duckSQLString(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// duckPriceModelCaseSQL renders runtime-alias canonicalization as SQL so
+// each usage row carries the fixed or timestamp-selected model whose
+// rates apply.
 func duckPriceModelCaseSQL() string {
-	fixedK26Aliases := pricingpkg.KimiK26Aliases()
-	fixedK26Quoted := make([]string, len(fixedK26Aliases))
-	for i, alias := range fixedK26Aliases {
-		fixedK26Quoted[i] = "'" + alias + "'"
+	var b strings.Builder
+	b.WriteString("CASE\n")
+	for _, alias := range pricingpkg.FixedPricingAliases() {
+		fmt.Fprintf(&b,
+			"\t\tWHEN regexp_replace(model, '^.*/', '') = %s THEN %s\n",
+			duckSQLString(alias.Name), duckSQLString(alias.Canonical),
+		)
 	}
 	aliases := pricingpkg.DateAliasedModels()
-	quoted := make([]string, len(aliases))
-	for i, alias := range aliases {
-		quoted[i] = "'" + alias + "'"
+	quoted := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		quoted = append(quoted, duckSQLString(alias))
 	}
 	cutoff := pricingpkg.KimiModelEraCutoff.UTC().Format("2006-01-02 15:04:05")
-	return fmt.Sprintf(`CASE
+	fmt.Fprintf(&b, `		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
+			AND (pricing_ts IS NULL OR pricing_ts >= TIMESTAMP '%[2]s')
+			THEN %[3]s
 		WHEN regexp_replace(model, '^.*/', '') IN (%[1]s)
-			THEN '%[2]s'
-		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
-			AND (pricing_ts IS NULL OR pricing_ts >= TIMESTAMP '%[4]s')
-			THEN '%[5]s'
-		WHEN regexp_replace(model, '^.*/', '') IN (%[3]s)
-			THEN '%[2]s'
+			THEN %[4]s
 		ELSE model
 	END`,
-		strings.Join(fixedK26Quoted, ", "), pricingpkg.KimiK26Canonical,
-		strings.Join(quoted, ", "), cutoff, pricingpkg.KimiK3Canonical,
+		strings.Join(quoted, ", "), cutoff,
+		duckSQLString(pricingpkg.KimiK3Canonical),
+		duckSQLString(pricingpkg.KimiK26Canonical),
 	)
+	return b.String()
 }
 
 func duckUsageCTEFromRaw(

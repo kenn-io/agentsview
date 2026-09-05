@@ -46,6 +46,10 @@ func TestSupplementalPricing_KimiK3StaticAliases(t *testing.T) {
 		assert.False(t, ok,
 			"date-ambiguous alias %q must not have a static row", model)
 	}
+	_, ok := byPattern[GPTReserveModelName]
+	assert.False(t, ok,
+		"gpt-reserve must not have a static row; it prices through %s",
+		GPT56LunaCanonical)
 }
 
 func TestDateAliasedModels(t *testing.T) {
@@ -88,6 +92,10 @@ func TestCanonicalModelForDate(t *testing.T) {
 		{"explicit K2.6 agent alias before cutoff", "k2d6-agent", pre, KimiK26Canonical},
 		{"explicit K2.6 agent alias after cutoff", "k2d6-agent", post, KimiK26Canonical},
 		{"provider-prefixed explicit K2.6 alias", "daimon/k2d6-agent", post, KimiK26Canonical},
+		{"gpt-reserve maps to Luna before cutoff", GPTReserveModelName, pre, GPT56LunaCanonical},
+		{"gpt-reserve maps to Luna after cutoff", GPTReserveModelName, post, GPT56LunaCanonical},
+		{"gpt-reserve ignores zero time", GPTReserveModelName, time.Time{}, GPT56LunaCanonical},
+		{"provider-prefixed gpt-reserve", "openai/" + GPTReserveModelName, post, GPT56LunaCanonical},
 		{"flat k3 alias is not date-ambiguous", "k3", pre, ""},
 		{"flat k3-agent alias is not date-ambiguous", "k3-agent", pre, ""},
 		{"canonical k2.6 model passes through", KimiK26Canonical, pre, ""},
@@ -117,6 +125,7 @@ func TestCanonicalModelForTimestamp(t *testing.T) {
 		{"empty timestamp falls back to K3", "kimi-for-coding", "", KimiK3Canonical},
 		{"garbage timestamp falls back to K3", "kimi-for-coding", "not-a-time", KimiK3Canonical},
 		{"explicit K2.6 alias ignores timestamp", "k2d6-agent", "not-a-time", KimiK26Canonical},
+		{"gpt-reserve ignores garbage timestamp", GPTReserveModelName, "not-a-time", GPT56LunaCanonical},
 		{"non-alias passes through", "k3", "2026-07-18T12:00:00Z", ""},
 	}
 	for _, tt := range tests {
@@ -154,7 +163,7 @@ func TestFallbackPricing_DateAliasTargetsResolvable(t *testing.T) {
 	for _, p := range requireEmbeddedFallbackPricing(t) {
 		byPattern[p.ModelPattern] = p
 	}
-	for _, model := range []string{KimiK26Canonical, KimiK3Canonical} {
+	for _, model := range []string{KimiK26Canonical, KimiK3Canonical, GPT56LunaCanonical} {
 		_, ok := byPattern[model]
 		assert.True(t, ok,
 			"date-alias target %q missing from FallbackPricing", model)
@@ -192,6 +201,14 @@ func TestSeedVersion_FoldsInSupplementalVersion(t *testing.T) {
 		SeedVersion)
 	assert.NotEqual(t, FallbackVersion, SeedVersion,
 		"SeedVersion must differ from FallbackVersion")
+}
+
+func TestFixedPricingAliasesReturnsCopy(t *testing.T) {
+	first := FixedPricingAliases()
+	require.NotEmpty(t, first)
+	first[0].Name = "mutated"
+	assert.NotEqual(t, "mutated", FixedPricingAliases()[0].Name,
+		"FixedPricingAliases must return an independent copy")
 }
 
 func TestSupplementalPricing_ReturnsCopy(t *testing.T) {
