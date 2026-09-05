@@ -462,7 +462,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // variant suffixes (-exp-b) against the matching effort-qualified executor
 // model. Existing Antigravity rows need re-parsing so stored messages and
 // usage events reflect the intended effort-qualified model.)
-const dataVersion = 99
+// (100: Copilot CLI sessions without a usable session.shutdown summary now
+// persist assistant output-token fallback usage and observed session-store token
+// data. Existing sessions need re-parsing for the Usage page to include this
+// enriched catalog-priced accounting.)
+const dataVersion = 100
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

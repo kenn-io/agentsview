@@ -486,15 +486,24 @@ add an archived or maintained mirror without replacing the original identity.
   [Copilot format notes](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/docs/providers/copilot.md)
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/copilot.ts).
-- **Usage and cost:** Shutdown metrics can persist input, output, cache-read,
-  cache-write, and reasoning tokens. Copilot accounting is credit-oriented;
-  Agentsview does not treat credits as USD and does not infer a monetary cost.
+- **Usage and cost:** Local observation shows `session-store.db` contains
+  `assistant_usage_events` with per-request model, input, output, cache-read,
+  cache-write, and reasoning token fields. GitHub documents the database as a
+  cross-session subset but not its schema or billing semantics, so Agentsview
+  uses these fields as observed token data and catalog-prices them. Transcript
+  `session.shutdown.totalNanoAiu` remains the only authoritative reported-cost
+  source for sessions starting on or after June 1, 2026. Assistant messages can
+  persist model identity and output tokens; without either richer source,
+  Agentsview records only that known output usage.
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
   Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and
   `tool.execution_complete` carry the same `data.toolCallId` and independent
   RFC3339 `timestamp` values, providing an exact execution interval even when
   the next user message arrives after a long resumed-session idle gap.
+  Reverified 2026-09-04 against current local transcripts: an
+  `assistant.message` can carry `data.model` and `data.outputTokens` when no
+  usable `session.shutdown` metrics are present.
 
 ## Gemini CLI (`gemini`)
 

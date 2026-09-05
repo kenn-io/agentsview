@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/money"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // newCopilotTestProvider builds a concrete copilotProvider for the given roots
@@ -524,6 +527,18 @@ func TestParseCopilotSession_ModelChange(t *testing.T) {
 	assertEqual(t, "", msgs[0].Model, "msgs[0].Model")
 }
 
+func TestParseCopilotSession_AssistantModel(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"assistant-model"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi there","model":"claude-sonnet-4.6"},"timestamp":"2025-01-15T10:00:02Z"}`,
+	)
+
+	_, msgs := parseAndValidateHelper(t, path, "m", 2)
+
+	assert.Equal(t, "claude-sonnet-4-6", msgs[1].Model)
+}
+
 func TestParseCopilotSession_NoModel(t *testing.T) {
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"no-model"},"timestamp":"2025-01-15T10:00:00Z"}`,
@@ -646,6 +661,205 @@ func TestParseCopilotSession_OutputTokens_Missing(t *testing.T) {
 	assert.False(t, sess.HasTotalOutputTokens, "HasTotalOutputTokens should be false when field absent")
 	assert.Equal(t, 0, sess.TotalOutputTokens, "TotalOutputTokens should be zero")
 	assert.False(t, msgs[1].HasOutputTokens, "msgs[1].HasOutputTokens should be false")
+}
+
+func TestLoadCopilotStoreUsage(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "session-store.db")
+	store, err := sql.Open("sqlite3", storePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.Exec(`
+		CREATE TABLE assistant_usage_events (
+			id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,
+			input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+			cache_write_tokens INTEGER, reasoning_tokens INTEGER,
+			total_nano_aiu INTEGER, created_at TEXT
+		);
+		INSERT INTO assistant_usage_events VALUES
+			(7, 'session-1', 'claude-sonnet-4.6', 100, 30, 60, 10, 4,
+			 125050000, '2026-09-04T17:40:54.970Z'),
+			(8, 'other-session', 'gpt-5.6-sol', 9, 8, 0, 0, 0,
+			 5000000, '2026-09-04T17:41:00Z');
+	`)
+	require.NoError(t, err)
+
+	events, err := loadCopilotStoreUsage(storePath, "session-1")
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "session-store", events[0].Source)
+	assert.Equal(t, "claude-sonnet-4-6", events[0].Model)
+	assert.Equal(t, 30, events[0].InputTokens)
+	assert.Equal(t, 30, events[0].OutputTokens)
+	assert.Equal(t, 60, events[0].CacheReadInputTokens)
+	assert.Equal(t, 10, events[0].CacheCreationInputTokens)
+	assert.Equal(t, 4, events[0].ReasoningTokens)
+	assert.Nil(t, events[0].Cost)
+	assert.Empty(t, events[0].CostSource)
+	assert.Equal(t, "2026-09-04T17:40:54.970Z", events[0].OccurredAt)
+	assert.Equal(t, "session-store:7", events[0].DedupKey)
+}
+
+func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "session-store.db")
+	store, err := sql.Open("sqlite3", storePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.Exec(`
+		CREATE TABLE assistant_usage_events (
+			id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,
+			input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+			cache_write_tokens INTEGER, reasoning_tokens INTEGER,
+			total_nano_aiu INTEGER, created_at TEXT
+		);
+		INSERT INTO assistant_usage_events VALUES
+			(42, 'store-wins', 'gpt-5.6-sol', 200, 50, 100, 20, 10,
+			 250000000, '2026-09-04T17:40:54.970Z');
+	`)
+	require.NoError(t, err)
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"store-wins"},"timestamp":"2026-09-04T17:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-sol","outputTokens":3},"timestamp":"2026-09-04T17:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":100000000,"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":10,"outputTokens":3}}}},"timestamp":"2026-09-04T17:00:03Z"}`,
+	)
+
+	sess, _, usage, err := newCopilotTestProvider(t).parseSessionWithStore(
+		path, "local", storePath,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, usage, 2)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 50, sess.TotalOutputTokens)
+	assert.Equal(t, "session-store", usage[0].Source)
+	assert.Equal(t, 80, usage[0].InputTokens)
+	assert.Equal(t, 50, usage[0].OutputTokens)
+	assert.Nil(t, usage[0].Cost)
+	assert.Empty(t, usage[0].CostSource)
+	assert.Equal(t, "2026-09-04T17:40:54.970Z", usage[0].OccurredAt)
+	assert.Equal(t, "session-store:42", usage[0].DedupKey)
+	assert.Equal(t, "shutdown", usage[1].Source)
+	assert.Zero(t, usage[1].InputTokens)
+	assert.Zero(t, usage[1].OutputTokens)
+	assert.Zero(t, usage[1].CacheCreationInputTokens)
+	assert.Zero(t, usage[1].CacheReadInputTokens)
+	assert.Zero(t, usage[1].ReasoningTokens)
+	require.NotNil(t, usage[1].Cost)
+	assert.Equal(t, money.MustParseDollars("0.001"), *usage[1].Cost)
+	assert.Equal(t, copilotReportedCostSource, usage[1].CostSource)
+	assert.Equal(t, "2026-09-04T17:00:03Z", usage[1].OccurredAt)
+}
+
+func TestParseCopilotSession_IncompatibleStoreRetainsShutdownUsage(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "session-store.db")
+	store, err := sql.Open("sqlite3", storePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.Exec(`CREATE TABLE unrelated (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"store-unavailable"},"timestamp":"2026-09-04T17:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-sol","outputTokens":3},"timestamp":"2026-09-04T17:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"totalNanoAiu":100000000,"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":10,"outputTokens":3}}}},"timestamp":"2026-09-04T17:00:03Z"}`,
+	)
+	logs := captureLog(t)
+
+	sess, _, usage, err := newCopilotTestProvider(t).parseSessionWithStore(
+		path, "local", storePath,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, usage, 1)
+	assert.Equal(t, "shutdown", usage[0].Source)
+	require.NotNil(t, usage[0].Cost)
+	assert.Equal(t, money.MustParseDollars("0.001"), *usage[0].Cost)
+	assertLogContains(t, logs, "copilot session store unavailable", "retaining transcript usage")
+}
+
+func TestParseCopilotSession_ResumedAfterShutdownFallsBackForUncoveredOutput(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"resumed"},"timestamp":"2026-09-04T17:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"First"},"timestamp":"2026-09-04T17:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"First answer","model":"gpt-5.6-sol","outputTokens":3},"timestamp":"2026-09-04T17:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":10,"outputTokens":3}}}},"timestamp":"2026-09-04T17:00:03Z"}`,
+		`{"type":"user.message","data":{"content":"Resume"},"timestamp":"2026-09-04T17:00:04Z"}`,
+		`{"type":"assistant.message","data":{"content":"Second answer","model":"gpt-5.6-sol","outputTokens":7},"timestamp":"2026-09-04T17:00:05Z"}`,
+	)
+
+	sess, messages, usage := parseCopilotFull(t, path, "local")
+
+	require.NotNil(t, sess)
+	require.Len(t, usage, 1)
+	assert.Equal(t, 3, usage[0].OutputTokens)
+	require.Len(t, messages, 4)
+	assert.Empty(t, messages[1].TokenUsage,
+		"shutdown accounting covers the first assistant response")
+	assert.Equal(t, `{"output_tokens":7}`, string(messages[3].TokenUsage),
+		"the resumed assistant response must retain its known output usage")
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 10, sess.TotalOutputTokens)
+}
+
+func TestCopilotProviderStoreChangeRefreshesSession(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "store-fresh"
+	eventsPath := filepath.Join(root, copilotStateDir, sessionID, "events.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(eventsPath), 0o755))
+	require.NoError(t, os.WriteFile(eventsPath, []byte(
+		`{"type":"session.start","data":{"sessionId":"store-fresh"},"timestamp":"2026-09-04T17:00:00Z"}`+"\n"+
+			`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`+"\n",
+	), 0o644))
+	storePath := filepath.Join(root, "session-store.db")
+	require.NoError(t, os.WriteFile(storePath, []byte("before"), 0o644))
+	storeInfo, err := os.Stat(storePath)
+	require.NoError(t, err)
+
+	provider := newCopilotTestProvider(t, root)
+	hasher, ok := any(provider).(MultiFileStatHasher)
+	require.True(t, ok)
+	assert.Equal(t, CapabilitySupported,
+		provider.Capabilities().Source.MultiFileStatHash)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	before, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+	beforeStatHash := hasher.ComputeMultiFileStatHash(eventsPath)
+
+	require.NoError(t, os.WriteFile(storePath, []byte("after!"), 0o644))
+	require.NoError(t, os.Chtimes(
+		storePath, storeInfo.ModTime(), storeInfo.ModTime(),
+	))
+	afterStoreInfo, err := os.Stat(storePath)
+	require.NoError(t, err)
+	assert.Equal(t, storeInfo.Size(), afterStoreInfo.Size())
+	assert.Equal(t, storeInfo.ModTime(), afterStoreInfo.ModTime())
+	after, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	afterStatHash := hasher.ComputeMultiFileStatHash(eventsPath)
+	if beforeStatHash != 0 {
+		assert.NotEqual(t, beforeStatHash, afterStatHash,
+			"a ctime-aware stat digest must detect a same-size, mtime-preserving store update")
+		assert.NotEqual(t, before.Hash, after.Hash,
+			"the final fingerprint must retain ctime-aware store changes")
+	}
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 2)
+	assert.Equal(t, []string{"session-store.db", "session-store.db-wal"},
+		plan.Roots[1].IncludeGlobs)
+
+	for _, changedPath := range []string{storePath, storePath + "-wal"} {
+		changed, err := provider.SourcesForChangedPath(context.Background(),
+			ChangedPathRequest{Path: changedPath, EventKind: "write", WatchRoot: root})
+		require.NoError(t, err)
+		require.Len(t, changed, 1)
+		assert.Equal(t, eventsPath, changed[0].DisplayPath)
+	}
 }
 
 // parseCopilotFull calls ParseCopilotSession and returns all four values.
@@ -894,9 +1108,26 @@ func TestParseCopilotSession_NoShutdown_NoUsageEvents(t *testing.T) {
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"no-shut","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
 		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
-		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-terra","outputTokens":42},"timestamp":"2025-01-15T10:00:02Z"}`,
 	)
 
-	_, _, usage := parseCopilotFull(t, path, "m")
+	_, msgs, usage := parseCopilotFull(t, path, "m")
 	assert.Empty(t, usage, "no shutdown event should produce no usage events")
+	assert.Equal(t, "gpt-5.6-terra", msgs[1].Model)
+	assert.JSONEq(t, `{"output_tokens":42}`, string(msgs[1].TokenUsage))
+}
+
+func TestParseCopilotSession_ShutdownUsageSuppressesMessageFallback(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"shutdown-wins"},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-terra","outputTokens":42},"timestamp":"2026-06-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"gpt-5.6-terra":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"2026-06-15T10:01:00Z"}`,
+	)
+
+	_, msgs, usage := parseCopilotFull(t, path, "m")
+
+	require.Len(t, usage, 1)
+	assert.Equal(t, 50, usage[0].OutputTokens)
+	assert.Empty(t, msgs[1].TokenUsage)
 }

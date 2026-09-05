@@ -421,11 +421,14 @@ authoritative, and fixed web-search fees remain at their published face value.
 As of 0.32.0, Copilot CLI sessions contribute to usage and cost reports.
 AgentsView reads per-message assistant output tokens from
 `assistant.message.outputTokens`, then reads model-level session totals from
-`session.shutdown.modelMetrics`. Fresh input tokens are computed as total input
-minus cache reads and cache writes; cache writes map to cache-creation tokens,
-and cache reads map to cache-read tokens. Copilot's Claude model IDs use dotted
-version numbers, so the parser normalizes names such as `claude-sonnet-4.6` to
-`claude-sonnet-4-6` before pricing lookup.
+`session.shutdown.modelMetrics`. When Copilot has not written a usable shutdown
+summary, known per-message output tokens still appear in usage reports. That
+partial fallback cannot report input, cache, reasoning, or Copilot AI Credit
+totals. Fresh input tokens are computed as total input minus cache reads and
+cache writes; cache writes map to cache-creation tokens, and cache reads map to
+cache-read tokens. Copilot's Claude model IDs use dotted version numbers, so the
+parser normalizes names such as `claude-sonnet-4.6` to `claude-sonnet-4-6`
+before pricing lookup.
 
 Upgrading to 0.32.0 bumps the parser data version so existing Copilot CLI
 sessions are re-indexed with the new usage rows.
@@ -459,14 +462,29 @@ it.
 
 ### Copilot Reported Billing
 
-Copilot CLI `session.shutdown` events can include a `totalNanoAiu` billing
-total. Copilot sessions starting on or after June 1, 2026 can report an
-authoritative `totalNanoAiu` billing total. Older sessions remain catalog-priced
-because they were created under the premium-request pricing model. AgentsView
-converts that cumulative amount exactly (`totalNanoAiu / 1e11` USD) and stores
-the session-level value through the normal reported-cost fields, on one stable
-usage-event row. Later shutdowns supersede earlier totals, including an
-authoritative final zero.
+`session.shutdown` is a Copilot CLI event that can contain a cumulative
+session-level usage summary. It is written by Copilot, not by AgentsView.
+Its absence means that the transcript has no usable aggregate accounting record;
+it does not by itself mean that the session is still open. In particular,
+current observed transcripts can contain assistant model and output-token data
+without a usable shutdown summary.
+
+The persisted format does not identify why a shutdown summary is absent. It can
+be consistent with a session that remains active or resumable, but it can also
+occur after completed assistant turns. AgentsView therefore does not infer
+session liveness, an ingestion failure, or zero usage from the absence of this
+event. It reports the available per-message or session-store token data instead,
+with the limitations described below.
+
+Copilot CLI's local `session-store.db` contains observed per-request token
+data, which AgentsView uses when available. GitHub does not document this
+database's schema or billing semantics, so AgentsView catalog-prices those
+tokens rather than treating the store as an exact cost ledger. Copilot sessions
+starting on or after June 1, 2026 can report an authoritative
+`session.shutdown.totalNanoAiu` billing total. Older sessions remain
+catalog-priced because they were created under the premium-request pricing
+model. A `session.shutdown.totalNanoAiu` total remains the only authoritative
+reported-cost source.
 
 When the selected data contains this reported session cost, AgentsView
 suppresses every catalog-priced estimate for that session. This prevents double

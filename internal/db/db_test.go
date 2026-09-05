@@ -1091,8 +1091,13 @@ func TestCurrentDataVersionPiSkillAttribution(t *testing.T) {
 }
 
 func TestCurrentDataVersionAntigravityCLIExperimentalServingVariant(t *testing.T) {
-	assert.Equal(t, 99, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 99,
 		"Antigravity CLI experimental serving variant normalization requires re-parsing usage events")
+}
+
+func TestCurrentDataVersionCopilotAssistantOutputFallback(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 100,
+		"version 100 is the data-version boundary for Copilot fallback and session-store token data")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
