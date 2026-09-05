@@ -1100,10 +1100,10 @@ agentsview export sessions --format ndjson --limit 100
 agentsview export sessions --all --format ndjson --project agentsview
 ```
 
-The JSON top level has `schema_version`, `database_id`, `cursor`, `pricing`,
+The JSON top level has `schema_version`, `archive_id`, `database_id`, `cursor`, `pricing`,
 `projects`, and `sessions`. NDJSON writes the same metadata as the first line,
 then one session row per following line. Current builds emit
-`schema_version: 6`; see [Session Export](/docs/session-export/#versioning) for
+`schema_version: 7`; see [Session Export](/docs/session-export/#versioning) for
 the v1 and transitional 0.38 release history. The default and maximum page size
 is `db.MaxSessionLimit`, currently 500.
 

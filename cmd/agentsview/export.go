@@ -64,6 +64,7 @@ type exportSessionsConfig struct {
 
 type exportSessionsOutput struct {
 	SchemaVersion int                               `json:"schema_version"`
+	ArchiveID     string                            `json:"archive_id"`
 	DatabaseID    string                            `json:"database_id"`
 	Cursor        exportSessionsOutputCursor        `json:"cursor"`
 	Pricing       any                               `json:"pricing"`
@@ -74,6 +75,7 @@ type exportSessionsOutput struct {
 type exportSessionsMetaOutput struct {
 	Type          string                            `json:"type"`
 	SchemaVersion int                               `json:"schema_version"`
+	ArchiveID     string                            `json:"archive_id"`
 	DatabaseID    string                            `json:"database_id"`
 	Cursor        exportSessionsOutputCursor        `json:"cursor"`
 	Pricing       any                               `json:"pricing"`
@@ -297,12 +299,13 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		return err
 	}
 
-	output := buildExportSessionsOutput(databaseID, pages)
+	output := buildExportSessionsOutput(pages)
 	enc := jsontext.NewEncoder(cmd.OutOrStdout())
 	if cfg.Format == "ndjson" {
 		if err := json.MarshalEncode(enc, exportSessionsMetaOutput{
 			Type:          "meta",
 			SchemaVersion: output.SchemaVersion,
+			ArchiveID:     output.ArchiveID,
 			DatabaseID:    output.DatabaseID,
 			Cursor:        output.Cursor,
 			Pricing:       output.Pricing,
@@ -433,18 +436,19 @@ func splitExportSessionsCSV(s string) []string {
 }
 
 func buildExportSessionsOutput(
-	databaseID string, pages []db.SessionExportResult,
+	pages []db.SessionExportResult,
 ) exportSessionsOutput {
 	var pricing *export.PricingBlock
 	output := exportSessionsOutput{
 		SchemaVersion: export.SessionSummarySchemaVersion,
-		DatabaseID:    databaseID,
 		Cursor:        exportSessionsOutputCursor{},
 		Pricing:       map[string]any{},
 		Projects:      map[string]export.ProjectMapEntry{},
 		Sessions:      []db.SessionSummaryRow{},
 	}
 	for _, page := range pages {
+		output.ArchiveID = page.ArchiveID
+		output.DatabaseID = page.DatabaseID
 		if output.SchemaVersion == export.SessionSummarySchemaVersion &&
 			page.SchemaVersion != 0 {
 			output.SchemaVersion = page.SchemaVersion

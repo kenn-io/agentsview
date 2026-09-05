@@ -7,6 +7,10 @@ description: Release history for AgentsView
 
 **Improvements**
 
+- Session exports now identify the logical archive separately from its database
+  generation, so analytics can recognize the same sessions after a full resync.
+  JSON and NDJSON emit session-summary schema v7 with `archive_id`; pricing,
+  usage, and cursor-reset behavior are unchanged.
 - Generated API bindings now keep concrete collection element types and match
   the server's JSON v2 behavior. Ordinary Go slices are documented and encoded
   as arrays, including when their value is nil, so frontend code no longer

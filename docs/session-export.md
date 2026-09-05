@@ -24,7 +24,8 @@ JSON output is one document:
 
 ```json
 {
-  "schema_version": 6,
+  "schema_version": 7,
+  "archive_id": "00000000-0000-4000-8000-000000000002",
   "database_id": "00000000-0000-4000-8000-000000000001",
   "cursor": {
     "next": "opaque-cursor-or-empty"
@@ -151,13 +152,32 @@ rows on subsequent lines. The metadata line has `"type": "meta"`; session rows
 do not add a `type` discriminator.
 
 ```json
-{"type":"meta","schema_version":6,"database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
+{"type":"meta","schema_version":7,"archive_id":"00000000-0000-4000-8000-000000000002","database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
 {"id":"path-current","agent":"claude","model_usage":{"models":["fixture-model-reported"],"input_tokens":300,"output_tokens":60,"cost":{"microdollars":12500},"has_cost":true}}
 ```
 
 These snippets are abbreviated illustrations. Complete checked JSON and NDJSON
-outputs live in `testdata/golden/session_export_v6.json` and
-`testdata/golden/session_export_v6.ndjson`.
+outputs live in `testdata/golden/session_export_v7.json` and
+`testdata/golden/session_export_v7.ndjson`.
+
+### Archive and database identity
+
+`archive_id` identifies the logical archive and survives full resync. Within
+that archive, `(archive_id, session.id)` identifies a session across rebuilt
+database generations. `database_id` identifies the physical database generation
+and changes on full resync; pagination cursors remain tied to that generation.
+Both IDs come from the same read snapshot as the exported rows, including empty
+results and the NDJSON metadata line. Missing archive identity is an error, not
+a reason for the read-only export to create an identity.
+
+A changed database ID under the same archive ID means that the archive was
+rebuilt, not that every session is new. Restart pagination and reconcile the new
+snapshot. Neither ID is an ordered revision, and a cursor is not a durable
+change-feed checkpoint. This contract does not establish which of two delayed
+exports is newer or turn absence from a filtered page into a deletion signal.
+Copied archives retain their logical identity; applications that ingest
+independent copies must define their source scope rather than assume the ID
+identifies a device or a single writer.
 
 ## Content Boundary
 
@@ -284,7 +304,7 @@ error.
 Its v1 shape shipped in 0.37.1. Releases 0.38.0 and 0.38.1 introduced the
 current privacy-bounded project, repository, worktree, and checkout evidence
 shape but mistakenly continued to report version 1. Current builds report
-version 6. Version 2 corrected the project-evidence marker, version 3 introduced
+version 7. Version 2 corrected the project-evidence marker, version 3 introduced
 exact microdollar money objects, and version 4 adds explicit
 reported-to-priced-model resolutions with complete request-pricing bands and
 application counts. Version 5 selects complete Claude snapshots before generic
@@ -292,13 +312,15 @@ deduplication across pagination and session filters, retains earliest-session
 attribution, and includes the maximum observed web-search count in pricing. The
 Version 6 applies provider-specific billing identity to computed usage and
 preserves reported cost rows and custom pricing overrides. Costs from v5 and v6
-must not be compared as the same billing semantics. The two transitional
-releases must not be treated as v1-compatible. There is no flag to request an
-earlier output version. Additive fields do not require a bump, but row semantic
-changes, field type changes, sort order changes, cursor semantics changes,
-required-field meaning changes, field removal, pricing digest canonicalization
-changes, project key derivation changes, remote normalization changes, path
-fallback normalization changes, and new closed-enum values require a bump.
+must not be compared as the same billing semantics. Version 7 publishes
+`archive_id` and defines session identity across database rebuilds; usage and
+pricing semantics are unchanged from v6. The two transitional releases must not
+be treated as v1-compatible. There is no flag to request an earlier output
+version. Additive fields do not require a bump, but row semantic changes, field
+type changes, sort order changes, cursor semantics changes, required-field
+meaning changes, field removal, pricing digest canonicalization changes, project
+key derivation changes, remote normalization changes, path fallback
+normalization changes, and new closed-enum values require a bump.
 
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.
