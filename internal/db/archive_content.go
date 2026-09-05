@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -193,23 +194,34 @@ func transcriptMessages(messages []Message) []Message {
 
 // redactToolUseRenderings rewrites the tool call summaries that parsers
 // inline into assistant text so they keep the tool label and target path but
-// lose every other argument. Each summary is regenerated from the call's
-// stored name and input and replaced only where it appears verbatim, so
-// ordinary prose is never touched.
+// lose every other argument. Only exact renderings are replaced; the rest of
+// the message stays as written.
 func redactToolUseRenderings(content string, calls []ToolCall) (string, bool) {
-	changed := false
+	var pairs []parser.ToolUseRenderingPair
 	for _, call := range calls {
 		full, redacted := toolUseRenderingToReplace(content, call)
 		if full == "" || full == redacted {
 			continue
 		}
-		// A rendering can appear more than once when a turn repeats a call
-		// or quotes it, so every occurrence is rewritten. Prose that quotes
-		// the exact text is rewritten too, which errs toward dropping text.
-		content = strings.ReplaceAll(content, full, redacted)
-		changed = true
+		pairs = append(pairs, parser.ToolUseRenderingPair{Full: full, Redacted: redacted})
 	}
-	return content, changed
+	if len(pairs) == 0 {
+		return content, false
+	}
+	// Resolve every call against the original content, then give longer
+	// renderings priority at the same position. A shorter rendering must
+	// not consume a longer one's prefix and leave its arguments behind.
+	slices.SortStableFunc(pairs, func(a, b parser.ToolUseRenderingPair) int {
+		return cmp.Compare(len(b.Full), len(a.Full))
+	})
+	replacements := make([]string, 0, 2*len(pairs))
+	for _, pair := range pairs {
+		replacements = append(replacements, pair.Full, pair.Redacted)
+	}
+	// Replacer scans once without reprocessing its output. Repeated or
+	// quoted renderings are still replaced at every occurrence.
+	redacted := strings.NewReplacer(replacements...).Replace(content)
+	return redacted, redacted != content
 }
 
 // toolUseRenderingToReplace finds the text a parser inlined for call inside

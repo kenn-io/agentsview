@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -465,6 +466,62 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 	assert.Empty(t, link.InputJSON)
 	assert.Empty(t, link.ResultContent)
 	assert.Equal(t, 15, link.ResultContentLength)
+}
+
+func TestTranscriptArchiveRedactsOverlappingToolRenderings(t *testing.T) {
+	for _, path := range []string{"write", "orphaned", "trashed"} {
+		for _, reverseCalls := range []bool{false, true} {
+			name := path + "/short-first"
+			if reverseCalls {
+				name = path + "/long-first"
+			}
+			t.Run(name, func(t *testing.T) {
+				source := testDB(t)
+				if path == "write" {
+					source.SetArchiveContent(config.ArchiveContentTranscripts)
+				}
+				require.NoError(t, source.UpsertSession(Session{
+					ID: "overlapping", Project: "project", Agent: "claude", Machine: "local",
+				}))
+				calls := []ToolCall{
+					{ToolName: "Bash", Category: "Bash", ToolUseID: "short",
+						InputJSON: `{"command":"echo"}`, Rendering: "[Bash]\n$ echo"},
+					{ToolName: "Bash", Category: "Bash", ToolUseID: "long",
+						InputJSON: `{"command":"echo SECRET"}`, Rendering: "[Bash]\n$ echo SECRET"},
+				}
+				if reverseCalls {
+					slices.Reverse(calls)
+				}
+				require.NoError(t, source.InsertMessages([]Message{{
+					SessionID: "overlapping", Role: "assistant", HasToolUse: true,
+					Content:   "before\n[Bash]\n$ echo\nbetween\n[Bash]\n$ echo SECRET\nagain\n[Bash]\n$ echo SECRET\nafter",
+					ToolCalls: calls,
+				}}))
+				destination := source
+				if path != "write" {
+					destination = testDB(t)
+					destination.SetArchiveContent(config.ArchiveContentTranscripts)
+					copyData := destination.CopyOrphanedDataFrom
+					if path == "trashed" {
+						require.NoError(t, source.SoftDeleteSession("overlapping"))
+						copyData = destination.CopyTrashedDataFrom
+					}
+					copied, err := copyData(source.Path())
+					require.NoError(t, err)
+					require.Equal(t, 1, copied)
+				}
+				messages, err := destination.GetAllMessages(context.Background(), "overlapping")
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				assert.Equal(t, "before\n[Bash]\nbetween\n[Bash]\nagain\n[Bash]\nafter", messages[0].Content)
+				assert.Equal(t, len(messages[0].Content), messages[0].ContentLength)
+				require.Len(t, messages[0].ToolCalls, 2)
+				for _, call := range messages[0].ToolCalls {
+					assert.Empty(t, call.InputJSON)
+				}
+			})
+		}
+	}
 }
 
 // These are persisted row shapes from the provider parsers. Rendering is
