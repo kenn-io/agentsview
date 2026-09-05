@@ -374,7 +374,9 @@ func rawSyncProvidersAndRoots(
 				absolute[absRoot] = append(absolute[absRoot], absAlias)
 			}
 		}
-		parser.SetCodexRootAliases(absolute)
+		syncpkg.InstallRootAliases(map[parser.AgentType]map[string][]string{
+			parser.AgentCodex: absolute,
+		})
 	}
 	for _, factory := range cfg.LocalProviderFactories() {
 		if factory.Capabilities().RawCapture.Support != parser.CapabilitySupported {

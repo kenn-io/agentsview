@@ -2429,6 +2429,10 @@ func collectWatchRoots(cfg config.Config) (
 	symlinkGatedDirs map[string][]watchScope,
 	persistentDirAgents map[string][]parser.AgentType,
 ) {
+	// Watch plans are built from providers created directly from the
+	// configuration, so the alias table must be in place here too;
+	// push --watch reaches this without ever constructing a sync engine.
+	sync.InstallRootAliases(cfg.RootAliases)
 	rootIndexes := make(map[string]int)
 	persistentPollingDirs := make(map[string]struct{})
 	symlinkGatedDirs = make(map[string][]watchScope)
