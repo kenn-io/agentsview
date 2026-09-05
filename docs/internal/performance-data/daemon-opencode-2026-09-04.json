@@ -681,7 +681,9 @@
   "generator_provenance": {
     "revision": "a87db9ce06b6514db44689434acd22f27f3af765",
     "modified": true,
-    "executable_sha256": "c1e103518e8cd2ac3e64038b19f238ae360ccc65fb96fae0f957c5680e1a5c8e"
+    "executable_sha256": "c1e103518e8cd2ac3e64038b19f238ae360ccc65fb96fae0f957c5680e1a5c8e",
+    "provenance_note": "Generated from an uncommitted simulator implementation. The exact generator patch, build command, and toolchain were not retained. The binary hash does not reconstruct that source. This capture is not a reproducible benchmark or release gate.",
+    "source_reconstructable": false
   },
   "active_sessions_in_daemon_capture": 1,
   "sidecar_followup": {
@@ -1311,5 +1313,6 @@
       "new_missing_wal_allocations": 89,
       "unchanged_container_allocations": 22796
     }
-  }
+  },
+  "evidence_status": "exploratory_capture_incomplete_generator_provenance"
 }

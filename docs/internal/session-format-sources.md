@@ -654,7 +654,11 @@ longer treated as a missing filesystem path during changed-path preparation;
 missing members still follow normal source-missing reconciliation. The retained
 recovery workload also closes the producer writer and sends WAL-sidecar events.
 A vanished sidecar beside a captured existing database does not imply missing
-sessions; an absent database still follows source-missing reconciliation.
+sessions; an absent database still follows source-missing reconciliation. Member
+deletions inside a surviving OpenCode-family container are detected by the next
+successful authoritative root/container reconciliation, not promised by a
+sidecar event. The retained integration scenario checks that eventual state and
+preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 - **Format:** Current SQLite-backed session/message/part records and the legacy
   JSON storage tree.

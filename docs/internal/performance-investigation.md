@@ -186,3 +186,13 @@ initial existence-scan spike; that difference is too small to establish an idle
 or average writer-cycle improvement. The allocation regression and original
 profile support the specific removed-sidecar fix. They do not prove that every
 writer close will incur or avoid the original spike.
+
+The retained daemon JSON is explicitly an exploratory capture with incomplete
+generator provenance. Its generator was built from uncommitted simulator code;
+the exact generator patch, command, and toolchain are unavailable. The generator
+hash and workload options do not reconstruct that source. Do not use this
+capture as a reproducible benchmark or release gate, or infer that its corpus is
+byte-identical to output from a committed simulator. A controlled comparison
+requires fresh runs from identified committed builds or fully retained patches.
+The provenance requirements in the simulator guide apply to those new runs; they
+are not a claim that this earlier capture met them.

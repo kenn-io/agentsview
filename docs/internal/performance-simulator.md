@@ -184,3 +184,22 @@ means unknown, not a clean build. Build overlays are not described by VCS
 metadata; use `--provenance-note` to record the overlay and retain its patch
 with the results. Executable hashes identify binaries but cannot reconstruct
 them.
+
+## Sidecar events and deleted members
+
+For OpenCode, Kilo, MiMoCode, and Icodemate SQLite containers, disappearance of
+WAL/SHM files beside an existing database is housekeeping, not evidence that
+sessions disappeared. A database/sidecar changed-path batch processes surviving
+sources. It does not promise immediate `source_missing_at` updates for sessions
+deleted inside that database. The next successful authoritative reconciliation
+of the provider root or container detects those deletions and retains the
+archived messages. An explicitly missing virtual-member event still takes the
+member absence path. Removal of the database itself still takes source-missing
+reconciliation when the database removal event is processed.
+
+The sidecar regression compares 8 and 800 sessions for each of the four provider
+layouts and both suffixes. It also deletes a member, closes its writer,
+processes the database/WAL/SHM event batch, and verifies the eventual
+missing-source state after authoritative reconciliation. This defines
+consistency, not a fixed time bound: reconciliation must successfully run before
+that state changes.
