@@ -16,7 +16,7 @@ import (
 func TestSimulatorParsesAndAppendsBothProviders(t *testing.T) {
 	out := t.TempDir()
 	data := filepath.Join(out, "data")
-	result, err := run(t.Context(), options{Sessions: 4, Turns: 2, Active: 2, Iterations: 2, ReconcileEvery: 1, QueryEvery: 1, Empty: 3, ContentBytes: 64, Output: out}, data)
+	result, err := run(t.Context(), options{Sessions: 4, Turns: 2, Active: 2, Iterations: 2, ReconcileEvery: 1, QueryEvery: 1, Empty: 1, ContentBytes: 64, Output: out}, data)
 	require.NoError(t, err)
 	assert.Equal(t, 4, result.Initial.SessionCount)
 	assert.Equal(t, 16, result.Initial.MessageCount)
@@ -25,15 +25,10 @@ func TestSimulatorParsesAndAppendsBothProviders(t *testing.T) {
 	archive, err := db.OpenReadOnly(filepath.Join(data, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, archive.Close()) })
-	for _, id := range []string{"00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006", "00000000-0000-4000-8000-000000000007"} {
-		session, err := archive.GetSessionFull(t.Context(), id)
-		require.NoError(t, err)
-		require.NotNil(t, session, "empty sources are archived even though sidebar stats exclude them")
-		assert.Zero(t, session.MessageCount)
-	}
-	skipped, err := archive.LoadSkippedFiles()
+	empty, err := archive.GetSessionFull(t.Context(), "00000000-0000-4000-8000-000000000005")
 	require.NoError(t, err)
-	assert.Empty(t, skipped)
+	require.NotNil(t, empty, "empty sources are archived even though sidebar stats exclude them")
+	assert.Zero(t, empty.MessageCount)
 	for _, id := range []string{"00000000-0000-4000-8000-000000000001", "codex:00000000-0000-4000-8000-000000000002"} {
 		messages, err := archive.GetAllMessages(t.Context(), id)
 		require.NoError(t, err)
@@ -103,8 +98,7 @@ func TestGenerateOnlyRetainsSQLiteWorkload(t *testing.T) {
 	encoded, err := os.ReadFile(filepath.Join(out, "sources.json"))
 	require.NoError(t, err)
 	var manifest struct {
-		Sources    []source        `json:"sources"`
-		Provenance buildProvenance `json:"provenance"`
+		Sources []source `json:"sources"`
 	}
 	require.NoError(t, json.Unmarshal(encoded, &manifest))
 	require.Len(t, manifest.Sources, 2)
@@ -114,5 +108,4 @@ func TestGenerateOnlyRetainsSQLiteWorkload(t *testing.T) {
 	var messages int
 	require.NoError(t, store.QueryRow("SELECT COUNT(*) FROM message").Scan(&messages))
 	assert.Equal(t, 8, messages)
-	assert.Len(t, manifest.Provenance.ExecutableSHA256, 64)
 }

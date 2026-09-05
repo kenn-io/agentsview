@@ -197,9 +197,9 @@ archived messages. An explicitly missing virtual-member event still takes the
 member absence path. Removal of the database itself still takes source-missing
 reconciliation when the database removal event is processed.
 
-The sidecar regression compares 8 and 800 sessions for each of the four provider
-layouts and both suffixes. It also deletes a member, closes its writer,
-processes the database/WAL/SHM event batch, and verifies the eventual
-missing-source state after authoritative reconciliation. This defines
-consistency, not a fixed time bound: reconciliation must successfully run before
-that state changes.
+The sidecar scaling regression compares 8 and 800 OpenCode sessions for both
+suffixes. Separate two-session cases cover all four provider layouts: they
+delete a member, close its writer, process the database/WAL/SHM event batch, and
+verify the eventual missing-source state after authoritative reconciliation.
+This defines consistency, not a fixed time bound: reconciliation must
+successfully run before that state changes.
