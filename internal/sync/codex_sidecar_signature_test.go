@@ -29,14 +29,15 @@ func TestCodexSidecarSignatureCoversAliasHomeIndexes(t *testing.T) {
 
 	primaryIndex := filepath.Join(primary, parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(primaryIndex, []byte("{}\n"), 0o600))
-	before, ok := codexSidecarSignature(session)
+	before, latest, ok := codexSidecarSignature(session)
 	require.True(t, ok)
+	assert.Equal(t, before.sidecarMtime, latest)
 	assert.Zero(t, before.sidecarAliases, "no alias index yet")
 	assert.NotZero(t, before.sidecarMtime, "primary index is fingerprinted")
 
 	aliasIndex := filepath.Join(alias, parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(aliasIndex, []byte("{}\n"), 0o600))
-	withAlias, ok := codexSidecarSignature(session)
+	withAlias, _, ok := codexSidecarSignature(session)
 	require.True(t, ok)
 	assert.NotZero(t, withAlias.sidecarAliases)
 	assert.Equal(t, before.sidecarMtime, withAlias.sidecarMtime,
@@ -47,8 +48,12 @@ func TestCodexSidecarSignatureCoversAliasHomeIndexes(t *testing.T) {
 	require.NoError(t, os.WriteFile(aliasIndex,
 		[]byte(`{"id":"019f0000-0000-7000-8000-000000000001","thread_name":"renamed"}`+"\n"), 0o600))
 	require.NoError(t, os.Chtimes(aliasIndex, later, later))
-	renamed, ok := codexSidecarSignature(session)
+	renamed, latest, ok := codexSidecarSignature(session)
 	require.True(t, ok)
 	assert.NotEqual(t, withAlias.sidecarAliases, renamed.sidecarAliases)
 	assert.Equal(t, withAlias.sidecarMtime, renamed.sidecarMtime)
+	// The trusted mtime follows the newest index in any home, matching
+	// what the archive stores through CodexEffectiveMtime.
+	assert.Equal(t, later.UnixNano(), latest)
+	assert.Equal(t, latest, parser.CodexEffectiveMtime(session, 0))
 }
