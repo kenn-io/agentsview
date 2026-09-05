@@ -201,9 +201,10 @@ func (e *Engine) verifiedProviderSourceState(
 	inode, device := getFileIdentity(path, info)
 	mtime := info.ModTime().UnixNano()
 	sidecar := verifiedSourceSignature{}
+	latestIndexMtime := int64(0)
 	if provider.Definition().Type == parser.AgentCodex {
 		var ok bool
-		sidecar, ok = codexSidecarSignature(path)
+		sidecar, latestIndexMtime, ok = codexSidecarSignature(path)
 		if !ok {
 			return verifiedSourceCapture{}, 0, false, false
 		}
@@ -222,8 +223,12 @@ func (e *Engine) verifiedProviderSourceState(
 		sidecarChangeTime: sidecar.sidecarChangeTime,
 		sidecarAliases:    sidecar.sidecarAliases,
 	})
-	if sidecar.sidecarMtime > mtime {
-		mtime = sidecar.sidecarMtime
+	// Stored rows carry CodexEffectiveMtime, the newest of the transcript
+	// and every index it reads, so the trusted mtime must use the same
+	// rule or an alias index that is newer than the primary would reject
+	// warm trust on every sync.
+	if latestIndexMtime > mtime {
+		mtime = latestIndexMtime
 	}
 	return capture, mtime, fresh, true
 }
@@ -306,28 +311,32 @@ func (e *Engine) invalidateVerifiedDiscoveredSource(file parser.DiscoveredFile) 
 // fields directly; alias-home indexes fold into one digest so a title
 // written in a second home invalidates the trusted source like a rename in
 // the primary home. A missing index contributes nothing; an index that is
-// not a regular file or has no reliable change time fails closed.
-func codexSidecarSignature(path string) (verifiedSourceSignature, bool) {
+// not a regular file or has no reliable change time fails closed. The
+// second result is the newest mtime across every index, matching
+// parser.CodexEffectiveMtime.
+func codexSidecarSignature(path string) (verifiedSourceSignature, int64, bool) {
 	sig := verifiedSourceSignature{}
 	indexPaths := parser.CodexSessionIndexPaths(path)
 	if len(indexPaths) == 0 {
-		return sig, true
+		return sig, 0, true
 	}
 	aliasDigest := fnv.New64a()
 	aliasSeen := false
+	latest := int64(0)
 	for i, indexPath := range indexPaths {
 		info, err := os.Stat(indexPath)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil || !info.Mode().IsRegular() {
-			return verifiedSourceSignature{}, false
+			return verifiedSourceSignature{}, 0, false
 		}
 		changeTime, reliable := fileChangeTime(indexPath, info)
 		if !reliable {
-			return verifiedSourceSignature{}, false
+			return verifiedSourceSignature{}, 0, false
 		}
 		inode, device := getFileIdentity(indexPath, info)
+		latest = max(latest, info.ModTime().UnixNano())
 		if i == 0 {
 			sig.sidecarSize = info.Size()
 			sig.sidecarMtime = info.ModTime().UnixNano()
@@ -349,5 +358,5 @@ func codexSidecarSignature(path string) (verifiedSourceSignature, bool) {
 	if aliasSeen {
 		sig.sidecarAliases = aliasDigest.Sum64()
 	}
-	return sig, true
+	return sig, latest, true
 }
