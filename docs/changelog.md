@@ -7,6 +7,11 @@ description: Release history for AgentsView
 
 **Improvements**
 
+- Session exports now include the transcript revision and local modification
+  time, so analytics can distinguish transcript corrections from session
+  activity. JSON and NDJSON add `transcript_revision` and `local_modified_at`
+  to schema v6. Project and pricing changes remain separate evidence; this
+  does not add an incremental change feed.
 - Session exports now identify the logical archive separately from its database
   generation, so analytics can recognize the same sessions after a full resync.
   JSON and NDJSON add `archive_id` to session-summary schema v6; pricing,
