@@ -441,7 +441,16 @@ func TestExportContinuesPastDeterministicRejection(t *testing.T) {
 	assert.Contains(t, rejection.Error, "message count exceeds 2")
 }
 
-func TestExportContinuesPastInvalidTokenUsage(t *testing.T) {
+// Invalid token usage no longer costs a session its artifact export. The
+// db layer clears a malformed usage blob on read, in scanMessages, which
+// this export path loads through (artifact_export_load.go), so the value
+// can no longer reach the segment encoder.
+// Previously one truncated usage object -- the same corruption that
+// panicked GET /api/v1/sessions/{id}/messages -- rejected the whole
+// session here. Export continuing past a genuinely un-encodable session
+// stays covered by TestExportContinuesPastInvalidManifestValue and
+// TestExportContinuesPastDeterministicRejection.
+func TestExportSanitizesInvalidTokenUsage(t *testing.T) {
 	t.Parallel()
 
 	database := testExportDB(t)
@@ -457,18 +466,24 @@ func TestExportContinuesPastInvalidTokenUsage(t *testing.T) {
 		t.Context(), database, store, ExportOptions{Origin: contractOrigin},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 1, result.ExportedSessions)
-	assert.Equal(t, 1, result.RejectedSessions)
+	assert.Equal(t, 2, result.ExportedSessions)
+	assert.Equal(t, 0, result.RejectedSessions)
 	checkpoint := latestStoreCheckpointForTest(t, store, contractOrigin)
-	assert.NotContains(t, checkpoint.Sessions, contractOrigin+"~invalid")
+	assert.Contains(t, checkpoint.Sessions, contractOrigin+"~invalid")
 	assert.Contains(t, checkpoint.Sessions, contractOrigin+"~valid")
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
-	rejection, ok, err := database.GetArtifactExportRejection(t.Context(), "invalid")
+	_, ok, err := database.GetArtifactExportRejection(t.Context(), "invalid")
 	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Contains(t, rejection.Error, "encoding message segment at ordinal 0")
+	assert.False(t, ok, "a sanitized usage blob must not reject the session")
+
+	// The message itself survives; only the unusable metadata is dropped.
+	msgs, err := database.GetAllMessages(t.Context(), "invalid")
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "bad usage", msgs[0].Content)
+	assert.Empty(t, string(msgs[0].TokenUsage))
 }
 
 func TestExportContinuesPastInvalidManifestValue(t *testing.T) {

@@ -754,9 +754,12 @@ func scanPGMessages(rows interface {
 		if ts != nil {
 			m.Timestamp = FormatISO8601(*ts)
 		}
-		if tokenUsage != "" {
-			m.TokenUsage = []byte(tokenUsage)
-		}
+		// Shares one guard with the other backends so they cannot drift:
+		// "" must yield nil, since a zero-length jsontext.Value fails to
+		// marshal and pg serve reaches the same response encoder.
+		// Validation happens only here, on read (see
+		// db.DecodeStoredTokenUsage).
+		m.TokenUsage = db.DecodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()

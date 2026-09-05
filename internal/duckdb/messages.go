@@ -293,7 +293,12 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 			return nil, fmt.Errorf("scanning duckdb message: %w", err)
 		}
 		m.Timestamp = formatDBTime(ts)
-		m.TokenUsage = []byte(tokenUsage)
+		// This assigned []byte(tokenUsage) unconditionally, so the ""
+		// nearly every row holds became a non-nil, zero-length
+		// jsontext.Value and every duckdb serve response failed to
+		// marshal. Validation happens only here, on read (see
+		// db.DecodeStoredTokenUsage).
+		m.TokenUsage = db.DecodeStoredTokenUsage(tokenUsage)
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
