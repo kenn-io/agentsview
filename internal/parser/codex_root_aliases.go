@@ -70,6 +70,14 @@ func codexSidecarDirs(root string) []string {
 	return dirs
 }
 
+// CodexSessionIndexPaths returns every local session_index.jsonl path that
+// may describe a transcript: the index beside its own root first, then the
+// index beside each alias root. Callers that fingerprint parse inputs must
+// cover all of them, since title lookups merge every file.
+func CodexSessionIndexPaths(sessionPath string) []string {
+	return codexSessionIndexPaths(sessionPath)
+}
+
 // codexSessionIndexPaths returns every session_index.jsonl path that may
 // describe a transcript: the index beside its own root first, then the index
 // beside each alias root. It returns nil for paths outside a Codex layout.
