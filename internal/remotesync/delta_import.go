@@ -121,6 +121,7 @@ func (im Importer) PreparePending(
 	if err != nil {
 		return nil, err
 	}
+	config.ArchiveContent = im.DB.ArchiveContent()
 
 	physicalPaths := make([]string, 0, len(request.Journal.Entries))
 	for _, entry := range request.Journal.Entries {

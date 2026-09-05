@@ -1379,6 +1379,9 @@ func (db *DB) InsertExtractedRecallEntries(
 	if err := db.requireWritable(); err != nil {
 		return 0, err
 	}
+	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
+		return 0, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if ctx == nil {
@@ -1457,6 +1460,9 @@ func (db *DB) CommitExtractedUnit(
 	ctx context.Context, u ExtractUnitCommit,
 ) (int, error) {
 	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
 		return 0, err
 	}
 	if len(u.ScanVersions) == 0 {

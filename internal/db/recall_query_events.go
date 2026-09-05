@@ -56,6 +56,9 @@ func (db *DB) RecordRecallQueryEvent(
 	if err := db.requireWritable(); err != nil {
 		return "", err
 	}
+	if err := db.requireDerivedTextStorage("recall query events"); err != nil {
+		return "", err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

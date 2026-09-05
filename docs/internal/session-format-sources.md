@@ -434,6 +434,11 @@ add an archived or maintained mirror without replacing the original identity.
   preserve each physical transcript under its configured root; duplicate
   ranking remains limited to normalized discovery. Reverified 2026-08-29 with
   live and archived copies sharing one UUID.
+- **Archive projection (2026-09-04):** Rechecked the pre-version-100
+  `flushPendingAgentResultsContext` in `internal/parser/codex.go`: it emitted
+  unpaired agent results as unmarked user rows. Archive copies under
+  `transcripts` discard those legacy user rows, including indistinguishable
+  prompts; version-100 rows use the tool-result marker.
 
 ## TraeX (`traex`)
 
@@ -464,6 +469,10 @@ add an archived or maintained mirror without replacing the original identity.
   `traex:` ID namespace, and `internal/sync` gates the format-shaped branches
   on `isCodexFormatAgent`. The `session_index.jsonl` and S3 branches stay
   Codex-only because TraeX writes no index file and has no archive layout.
+- **Archive projection (2026-09-04):** Rechecked `relabelCodexResultAsTraeX` in
+  `internal/parser/traex.go`: the shared Codex parser produces the same
+  unmarked legacy notification rows. Transcript-only archive copies apply the
+  same pre-version-100 user-row removal as Codex.
 
 ## GitHub Copilot CLI (`copilot`)
 
@@ -837,6 +846,12 @@ add an archived or maintained mirror without replacing the original identity.
 - **Agentsview:** `internal/parser/openhands.go` and
   `internal/parser/openhands_provider.go`; `TASKS.json` is legacy supplemental
   state rather than a requirement of the pinned current producer.
+- **Archive projection (2026-09-04):** Rechecked `formatOpenHandsAction` in
+  `internal/parser/openhands.go`: terminal and custom-tool headers embed the
+  event summary, which is not stored separately in tool-call rows.
+  Transcript-only archive copies discard the tail from a summary-bearing
+  header, retaining the preceding prose and tool label. Appended thinking is
+  also discarded because the summary boundaries cannot be recovered.
 
 ## Cursor (`cursor`)
 
@@ -1319,6 +1334,12 @@ add an archived or maintained mirror without replacing the original identity.
 
 - **Agentsview:** `internal/parser/kimi.go` and
   `internal/parser/kimi_provider.go`.
+
+- **Archive projection (2026-09-04):** Rechecked `formatKimiToolUse` in
+  `internal/parser/kimi.go`: its Glob header embeds the raw pattern. Copied
+  transcript-only rows now use that formatter with path-only inputs to remove
+  arguments while retaining tool labels and file paths. The shared decoder
+  gives Kimi Work the same rendering and copy behavior.
 
 ## Kimi Work (`kimi-work`)
 
@@ -1943,6 +1964,11 @@ add an archived or maintained mirror without replacing the original identity.
   reasoning, credit, or monetary-cost fields to Agentsview.
 - **Agentsview:** `internal/parser/zencoder.go` and
   `internal/parser/zencoder_provider.go`.
+- **Archive projection (2026-09-04):** Rechecked the pre-version-100
+  `internal/parser/zencoder.go`: system blocks inside tool results became
+  unmarked, system-flagged user rows. Transcript-only archive copies discard
+  these legacy system-flagged rows, including indistinguishable notices;
+  version-100 rows use the tool-result marker.
 
 ## gptme (`gptme`)
 

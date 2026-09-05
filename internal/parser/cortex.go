@@ -218,8 +218,10 @@ func parseCortexMessages(
 		content := text
 		if content == "" && len(toolCalls) > 0 {
 			var labels []string
-			for _, tc := range toolCalls {
-				labels = append(labels, formatCortexToolHeader(tc))
+			for i, tc := range toolCalls {
+				label := formatCortexToolHeader(tc)
+				toolCalls[i].Rendering = label
+				labels = append(labels, label)
 			}
 			content = strings.Join(labels, "\n")
 		}
@@ -510,4 +512,17 @@ func IsCortexSessionFile(name string) bool {
 	}
 	stem := strings.TrimSuffix(name, ".json")
 	return IsValidSessionID(stem)
+}
+
+// CortexToolUseRendering returns the header Cortex inlines into assistant
+// text for a tool call, which folds the call's main argument into the label.
+func CortexToolUseRendering(category, name, inputJSON string) string {
+	return formatCortexToolHeader(ParsedToolCall{
+		Category: category, ToolName: name, InputJSON: inputJSON,
+	})
+}
+
+// CortexRedactedToolUseRendering is the same header without the argument.
+func CortexRedactedToolUseRendering(category, name string) string {
+	return formatToolHeader(category, name)
 }

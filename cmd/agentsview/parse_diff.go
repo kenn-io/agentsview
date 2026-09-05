@@ -133,6 +133,7 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 		ScanProtectedPaths:      appCfg.ScanProtectedPaths,
 		Machine:                 appCfg.LocalMachineName,
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
+		ArchiveContent:          appCfg.ArchiveContent,
 	})
 
 	opts := sync.ParseDiffOptions{Agents: agents, Limit: cfg.Limit}

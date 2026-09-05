@@ -1160,6 +1160,12 @@ const (
 	RoleTool   RoleType = "tool"
 )
 
+// SourceSubtypeToolResult marks a user- or system-role row whose text is tool
+// output rather than something a person or model wrote. Providers that have
+// no separate tool role set it on fallback rows so storage policies that drop
+// tool output can recognize them.
+const SourceSubtypeToolResult = "tool_result"
+
 // Transcript fidelity values for ParsedSession.TranscriptFidelity. Empty
 // is treated as full (no degradation signalled).
 const (
@@ -1270,6 +1276,10 @@ type ParsedToolCall struct {
 	SkillName         string // skill name when ToolName is "Skill"
 	SubagentSessionID string // linked subagent session file (e.g. "agent-{task_id}")
 	ResultEvents      []ParsedToolResultEvent
+	// Rendering is the exact text, if any, the parser inlined into the
+	// message content for this call. Storage policies that drop tool inputs
+	// replace it verbatim, so it must match the content byte for byte.
+	Rendering string
 }
 
 // ParsedToolResult holds metadata about a tool result block in a

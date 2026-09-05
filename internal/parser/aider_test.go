@@ -449,7 +449,10 @@ func TestParseAiderTurnsToolAndEditedFiles(t *testing.T) {
 		[]RoleType{RoleUser, RoleAssistant, RoleAssistant}, roles)
 	assert.Equal(t, "fix the bug", msgs[0].Content)
 	assert.Contains(t, msgs[1].Content, "Here is the fix.")
+	assert.Empty(t, msgs[1].SourceSubtype)
 	assert.Contains(t, msgs[2].Content, "Applied edit to src/a.py")
+	assert.Equal(t, SourceSubtypeToolResult, msgs[2].SourceSubtype,
+		"the tool block is tool output even though it is surfaced as assistant text")
 
 	// Dedup; dry-run and skip lines contribute nothing.
 	assert.Equal(t, []string{"src/a.py", "src/b.py"}, touched)

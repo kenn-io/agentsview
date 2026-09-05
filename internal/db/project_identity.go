@@ -782,6 +782,7 @@ func (db *DB) upsertSessionWithProjectIdentity(
 	snapshotProject string,
 	reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
+	s = db.sessionForStorage(s)
 	if err := db.requireWritable(); err != nil {
 		return sessionUpsertResult{}, err
 	}
@@ -821,6 +822,11 @@ func (db *DB) upsertSessionWithProjectIdentity(
 	)
 	if err != nil {
 		return sessionUpsertResult{}, err
+	}
+	if db.usageOnlyStorage() {
+		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
+			return sessionUpsertResult{}, err
+		}
 	}
 	if obs.Project != "" {
 		if err := upsertProjectIdentityObservationWithSnapshotProjectTx(

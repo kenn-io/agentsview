@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
@@ -9338,6 +9339,89 @@ func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
 		t, env.db, "opencode:oc-missing-message",
 		"question", "answer",
 	)
+}
+
+func TestSyncAllUsageOnlyOpenCodeMissingUsageMessagePreservesArchive(
+	t *testing.T,
+) {
+	opencodeDir := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local", ArchiveContent: config.ArchiveContentUsage,
+	})
+	t.Cleanup(engine.Close)
+	oc := createOpenCodeStorageFixture(t, opencodeDir)
+
+	const sessionID = "oc-usage-only-missing-message"
+	sessionPath := oc.addSession(
+		t, "global", sessionID, "/workspace/project", "Usage archive",
+		1704067200000, 1704067205000,
+	)
+	addMessage := func(
+		messageID, role string, created int64, input, output int,
+	) string {
+		path := oc.addMessage(
+			t, sessionID, messageID, role, created,
+			map[string]any{"modelID": "gpt-5.2-codex"},
+		)
+		oc.addTextPart(
+			t, sessionID, messageID, "text-"+messageID,
+			role+" content", created,
+		)
+		if role == "assistant" {
+			oc.writeJSON(t, filepath.Join(
+				opencodeDir, "storage", "part", messageID,
+				"usage-"+messageID+".json",
+			), map[string]any{
+				"id": "usage-" + messageID, "sessionID": sessionID,
+				"messageID": messageID, "type": "step-finish",
+				"tokens": map[string]any{"input": input, "output": output},
+				"time":   map[string]any{"created": created + 1},
+			})
+		}
+		return path
+	}
+	addMessage("msg-u1", "user", 1704067200000, 0, 0)
+	addMessage("msg-a1", "assistant", 1704067201000, 100, 10)
+	addMessage("msg-u2", "user", 1704067202000, 0, 0)
+	missingPath := addMessage(
+		"msg-a2", "assistant", 1704067203000, 200, 20,
+	)
+
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	before, err := database.GetSessionUsage(
+		t.Context(), "opencode:"+sessionID, true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.Equal(t, 30, before.TotalOutputTokens)
+	storedMessages, err := database.GetAllMessages(
+		t.Context(), "opencode:"+sessionID,
+	)
+	require.NoError(t, err)
+	require.Len(t, storedMessages, 2)
+	require.Equal(t, []int{1, 3}, []int{
+		storedMessages[0].Ordinal, storedMessages[1].Ordinal,
+	}, "usage-only storage should expose the sparse ordinal shape")
+
+	missingDir := t.TempDir()
+	require.NoError(t, os.Rename(
+		missingPath, filepath.Join(missingDir, filepath.Base(missingPath)),
+	))
+	future := time.Now().Add(2 * time.Second)
+	require.NoError(t, os.Chtimes(sessionPath, future, future))
+	engine.SyncAll(t.Context(), nil)
+
+	after, err := database.GetSessionUsage(
+		t.Context(), "opencode:"+sessionID, true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, before, after,
+		"a partial OpenCode source cannot replace retained usage rows")
 }
 
 func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(

@@ -32,6 +32,54 @@ type SessionSignalUpdate struct {
 	QualitySignals         QualitySignals
 }
 
+// usageOnlySignalUpdate is the canonical derived-signal state for an archive
+// that deliberately omits the transcript content those signals require. The
+// current version marks the empty result as intentional so startup backfill
+// does not revisit the row on every process launch.
+func usageOnlySignalUpdate() SessionSignalUpdate {
+	return SessionSignalUpdate{
+		QualitySignals: QualitySignals{
+			Version: CurrentQualitySignalVersion,
+		},
+	}
+}
+
+func settleUsageOnlySignalsTx(
+	tx transactionQueries, sessionID string,
+) error {
+	if err := updateSessionSignalsTx(
+		tx, sessionID, usageOnlySignalUpdate(),
+	); err != nil {
+		return err
+	}
+	return replaceSecretFindingsTx(tx, sessionID, nil, 0, "")
+}
+
+// SettleUsageOnlySignals atomically clears transcript-derived signal state and
+// records the current signal version. It also heals compact archives created
+// before usage-only writes persisted that terminal state.
+func (db *DB) SettleUsageOnlySignals(sessionID string) error {
+	if !db.usageOnlyStorage() {
+		return fmt.Errorf(
+			"settling usage-only signals for %s on a full-content database",
+			sessionID,
+		)
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning usage-only signal tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := settleUsageOnlySignalsTx(tx, sessionID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // UpdateSessionSignals persists computed signal values on the
 // sessions table. Bumps local_modified_at so the session is
 // re-selected by the next pg push -- a recomputed signal column
@@ -49,7 +97,12 @@ func (db *DB) UpdateSessionSignals(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := updateSessionSignalsTx(tx, sessionID, u); err != nil {
+	if db.usageOnlyStorage() {
+		err = settleUsageOnlySignalsTx(tx, sessionID)
+	} else {
+		err = updateSessionSignalsTx(tx, sessionID, u)
+	}
+	if err != nil {
 		return err
 	}
 	return tx.Commit()

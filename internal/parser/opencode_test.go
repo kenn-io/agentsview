@@ -510,6 +510,8 @@ func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 		"fingerprinting and parsing must stamp the same raw storage identity")
 	assertEq(t, "msg[0].Role", msgs[0].Role, RoleUser)
 	assertEq(t, "msg[0].Content", msgs[0].Content, "Hello from storage")
+	assertEq(t, "msg[0].SourceUUID", msgs[0].SourceUUID, "msg_1")
+	assertEq(t, "msg[1].SourceUUID", msgs[1].SourceUUID, "msg_2")
 	assertEq(t, "msg[1].Role", msgs[1].Role, RoleAssistant)
 	assertEq(t, "msg[1].Model", msgs[1].Model, "gpt-5.2-codex")
 	assertEq(t, "msg[1].HasToolUse", msgs[1].HasToolUse, true)

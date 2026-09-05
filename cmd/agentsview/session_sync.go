@@ -80,6 +80,7 @@ func syncService(
 		IncludeCwdPrefixes: cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths: cfg.ScanProtectedPaths,
 		Machine:            cfg.LocalMachineName,
+		ArchiveContent:     cfg.ArchiveContent,
 	})
 	// Close the engine before the DB so pending debounced signal
 	// recomputes flush while the DB is still open.

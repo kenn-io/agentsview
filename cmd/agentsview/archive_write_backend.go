@@ -972,6 +972,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
+		ArchiveContent:          b.appCfg.ArchiveContent,
 	})
 	defer engine.Close()
 
@@ -1103,6 +1104,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
 		Machine:                 b.appCfg.LocalMachineName,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
+		ArchiveContent:          b.appCfg.ArchiveContent,
 	})
 	defer engine.Close()
 

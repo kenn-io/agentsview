@@ -325,12 +325,10 @@ func parseOpenHandsActionEvent(
 	}
 
 	content := openHandsText(ev.Get("thought"))
-	content = joinOpenHandsParts(
-		content,
-		formatOpenHandsAction(
-			toolName, action, ev.Get("summary").Str,
-		),
+	rendering := formatOpenHandsAction(
+		toolName, action, ev.Get("summary").Str,
 	)
+	content = joinOpenHandsParts(content, rendering)
 	content, hasThinking := openHandsAppendThinking(
 		content, ev,
 	)
@@ -353,6 +351,7 @@ func parseOpenHandsActionEvent(
 			ToolName:  toolName,
 			Category:  openHandsToolCategory(toolName, action),
 			InputJSON: inputJSON,
+			Rendering: strings.TrimSpace(rendering),
 		}},
 	}
 	return msg, true, openHandsActionCwd(toolName, action)
@@ -381,6 +380,7 @@ func parseOpenHandsObservationEvent(
 			Ordinal:       ordinal,
 			Role:          RoleUser,
 			Content:       display,
+			SourceSubtype: SourceSubtypeToolResult,
 			Timestamp:     ts,
 			ContentLength: len(display),
 		}, true, workingDir

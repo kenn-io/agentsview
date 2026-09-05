@@ -217,6 +217,11 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		); err != nil {
 			return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
+		if err := applyArchiveContentToCopiedSessionsTx(
+			ctx, tx, "_orphaned_ids", d.ArchiveContent(),
+		); err != nil {
+			return 0, fmt.Errorf("projecting orphaned data: %w", err)
+		}
 		if err := clearCopiedSelfParents(ctx, tx, "_orphaned_ids"); err != nil {
 			return 0, err
 		}
@@ -325,6 +330,11 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 		ctx, tx, "_trashed_ids", sourceVersion,
 	); err != nil {
 		return 0, fmt.Errorf("sanitizing trashed data: %w", err)
+	}
+	if err := applyArchiveContentToCopiedSessionsTx(
+		ctx, tx, "_trashed_ids", d.ArchiveContent(),
+	); err != nil {
+		return 0, fmt.Errorf("projecting trashed data: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1180,7 +1190,8 @@ func (d *DB) CopySessionMetadataFrom(
 
 	// Copy user-set display_name (renames via RenameSession) from the old DB.
 	// In the two-field design display_name is always user-owned, so any
-	// non-NULL value is a user rename worth preserving.
+	// non-NULL value is a user rename worth preserving. Usage-only archives
+	// store no titles at all, so the overlay is skipped there.
 	// session_name is repopulated by re-parse and does not need copying.
 	//
 	// Note: the name_source discriminator column (which would have distinguished
@@ -1190,7 +1201,7 @@ func (d *DB) CopySessionMetadataFrom(
 	// RenameSession (user action) or a pre-feature import — the latter being
 	// acceptable to treat as a user rename since there is no lossless heuristic
 	// to separate them without name_source.
-	if hasDisplayName {
+	if hasDisplayName && !d.usageOnlyStorage() {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
 			SET display_name = old_s.display_name
@@ -1654,6 +1665,14 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	if d.usageOnlyStorage() {
+		// Pin notes are free text, which a usage archive does not store.
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE main.pinned_messages SET note = NULL",
+		); err != nil {
+			return fmt.Errorf("clearing copied pin notes: %w", err)
+		}
+	}
 	return tx.Commit()
 }
 

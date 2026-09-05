@@ -37,7 +37,14 @@ func (db *DB) ReplaceSessionSecretFindings(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := replaceSecretFindingsTx(tx, sessionID, findings, leakCount, rulesVersion); err != nil {
+	if db.usageOnlyStorage() {
+		err = settleUsageOnlySignalsTx(tx, sessionID)
+	} else {
+		err = replaceSecretFindingsTx(
+			tx, sessionID, findings, leakCount, rulesVersion,
+		)
+	}
+	if err != nil {
 		return err
 	}
 	return tx.Commit()

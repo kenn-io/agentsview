@@ -8967,6 +8967,55 @@ func TestOpenCodeLegacyArchiveLooksIncomplete(t *testing.T) {
 	})
 }
 
+func TestOpenCodeUsageOnlyArchiveLooksIncomplete(t *testing.T) {
+	t.Run("sparse stored ordinals detect a missing usage row", func(t *testing.T) {
+		stored := []db.Message{
+			{Ordinal: 1, Role: "assistant", Model: "model-a"},
+			{
+				Ordinal: 3, Role: "assistant", Model: "model-a",
+				TokenUsage: []byte(`{"input_tokens":300,"output_tokens":200}`),
+			},
+		}
+		parsed := []db.Message{
+			{Ordinal: 0, Role: "user"},
+			{Ordinal: 1, Role: "assistant", Model: "model-a"},
+		}
+
+		require.True(t, openCodeUsageOnlyArchiveLooksIncomplete(parsed, stored),
+			"a different row count cannot hide a missing stored ordinal")
+	})
+
+	t.Run("stored usage counters cannot regress", func(t *testing.T) {
+		stored := []db.Message{{
+			Ordinal: 3, Role: "assistant", Model: "model-a",
+			TokenUsage: []byte(`{"input_tokens":300,"output_tokens":200}`),
+		}}
+		parsed := []db.Message{{
+			Ordinal: 3, Role: "assistant", Model: "model-a",
+			TokenUsage: []byte(`{"input_tokens":300,"output_tokens":20}`),
+		}}
+
+		require.True(t, openCodeUsageOnlyArchiveLooksIncomplete(parsed, stored),
+			"a partial token payload cannot replace complete stored usage")
+	})
+
+	t.Run("stable source identity survives ordinal shifts", func(t *testing.T) {
+		stored := []db.Message{{
+			Ordinal: 1, Role: "assistant", SourceUUID: "message-a",
+			Model:      "model-a",
+			TokenUsage: []byte(`{"input_tokens":300,"output_tokens":200}`),
+		}}
+		parsed := []db.Message{{
+			Ordinal: 0, Role: "assistant", SourceUUID: "message-a",
+			Model:      "model-a",
+			TokenUsage: []byte(`{"input_tokens":300,"output_tokens":200}`),
+		}}
+
+		require.False(t, openCodeUsageOnlyArchiveLooksIncomplete(parsed, stored),
+			"the same complete source row may move when an earlier row disappears")
+	})
+}
+
 func TestVisualStudioCopilotArchiveDecisionMergesNewRowsWithArchiveOnlyRows(t *testing.T) {
 	stored := []db.Message{
 		{
@@ -11770,4 +11819,43 @@ func TestProviderChangedPathForceParseGeminiMetadata(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestOpenCodeUsageOnlyArchiveRejectsOrdinalReuse(t *testing.T) {
+	// A source that lost a message and gained a later one can present a new
+	// row at the vanished ordinal with larger token counts. Identity comes
+	// from the storage message ID, so the replacement does not match.
+	stored := []db.Message{{
+		Ordinal: 3, Role: "assistant", SourceUUID: "msg_lost",
+		Model:      "model-a",
+		TokenUsage: []byte(`{"input_tokens":300,"output_tokens":200}`),
+	}}
+	parsed := []db.Message{{
+		Ordinal: 3, Role: "assistant", SourceUUID: "msg_new",
+		Model:      "model-a",
+		TokenUsage: []byte(`{"input_tokens":500,"output_tokens":400}`),
+	}}
+
+	require.True(t, openCodeUsageOnlyArchiveLooksIncomplete(parsed, stored),
+		"a different message at the same ordinal cannot replace stored usage")
+}
+
+func TestOpenCodeUsageOnlyArchiveRejectsReplacedSubagentLink(t *testing.T) {
+	stored := []db.Message{{
+		Ordinal: 3, Role: "assistant", SourceUUID: "msg_a", Model: "model-a",
+		ToolCalls: []db.ToolCall{{
+			ToolName: "subagent", Category: "Task",
+			ToolUseID: "call-1", SubagentSessionID: "child-1",
+		}},
+	}}
+	parsed := []db.Message{{
+		Ordinal: 3, Role: "assistant", SourceUUID: "msg_a", Model: "model-a",
+		ToolCalls: []db.ToolCall{{
+			ToolName: "subagent", Category: "Task",
+			ToolUseID: "call-2", SubagentSessionID: "child-2",
+		}},
+	}}
+
+	require.True(t, openCodeUsageOnlyArchiveLooksIncomplete(parsed, stored),
+		"a same-count replacement cannot drop a retained delegation link")
 }

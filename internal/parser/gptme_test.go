@@ -59,6 +59,8 @@ func TestGptmeProviderParsesFixture(t *testing.T) {
 	assert.Equal(t, RoleAssistant, tool0.Role)
 	assert.False(t, tool0.IsSystem)
 	assert.Contains(t, tool0.Content, "Saved file")
+	assert.Equal(t, SourceSubtypeToolResult, tool0.SourceSubtype,
+		"tool output kept as assistant text is still tool output")
 
 	// Timestamps must parse from the fixture's microsecond format ("2006-01-02T15:04:05.000000").
 	// sess.StartedAt comes from the system message (processed before role-skip).

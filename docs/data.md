@@ -81,7 +81,7 @@ from the writable archive that ingests the machine's sessions.
 
 ## Storage maintenance
 
-The local archive has three separate maintenance paths:
+The local archive has four separate maintenance paths:
 
 - `agentsview db compact` reclaims SQLite free pages and truncates the WAL. It
   preserves all live rows and has no effect on future tool-result growth.
@@ -89,6 +89,11 @@ The local archive has three separate maintenance paths:
   applies the current result filtering to source-backed sessions that can be
   reparsed. Orphaned and trashed sessions whose source files are gone cannot
   be filtered this way.
+- [`archive_content`](/docs/configuration/#archive-content) followed by a daemon
+  restart and `agentsview sync --full` applies a whole-archive storage policy.
+  Unlike category filtering, the rebuild also projects orphaned and trashed
+  sessions onto the policy, so dropped tool payloads or transcript text leave
+  the archive entirely.
 - Transparent compression or deduplication of live tool-result payloads is a
   separate storage-format change and is not part of `db compact`.
 

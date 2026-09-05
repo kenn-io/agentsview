@@ -543,6 +543,7 @@ func parseRooCodeMessages(
 					Content:       output,
 					Model:         model,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(output),
 					ToolResults:   toolResults,
@@ -586,6 +587,7 @@ func parseRooCodeMessages(
 					Content:       content,
 					Model:         model,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})
@@ -630,6 +632,7 @@ func parseRooCodeMessages(
 					Content:       content,
 					Model:         model,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})
@@ -733,13 +736,20 @@ func parseRooCodeMessages(
 				}
 			}
 
-			// Regular message.
+			// Regular message. A codebase_search_result is the raw
+			// result of an internal search tool, not model text, so
+			// storage policies that drop tool output can recognize it.
+			var subtype string
+			if msg.Say == "codebase_search_result" {
+				subtype = SourceSubtypeToolResult
+			}
 			parsedMessages = append(parsedMessages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          role,
 				Content:       content,
 				Model:         model,
 				IsSystem:      role == RoleSystem,
+				SourceSubtype: subtype,
 				Timestamp:     ts,
 				ContentLength: len(content),
 			})

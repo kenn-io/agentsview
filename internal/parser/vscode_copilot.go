@@ -520,18 +520,21 @@ func normalizeVSCodeToolName(toolID string) string {
 	}
 }
 
+// formatVSCodeCopilotToolCalls renders each call and records the exact text
+// on the call so storage policies that drop tool inputs can replace it.
 func formatVSCodeCopilotToolCalls(
 	calls []ParsedToolCall,
 ) string {
 	var parts []string
-	for _, tc := range calls {
+	for i, tc := range calls {
 		header := formatToolHeader(tc.Category, tc.ToolName)
 		body := extractVSCopilotToolBody(tc)
+		rendering := header
 		if body != "" {
-			parts = append(parts, header+"\n"+body)
-		} else {
-			parts = append(parts, header)
+			rendering = header + "\n" + body
 		}
+		calls[i].Rendering = rendering
+		parts = append(parts, rendering)
 	}
 	return strings.Join(parts, "\n\n")
 }
