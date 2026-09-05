@@ -54,6 +54,8 @@ type SessionExportResult struct {
 
 type SessionSummaryRow struct {
 	ID                    string                       `json:"id"`
+	TranscriptRevision    string                       `json:"transcript_revision"`
+	LocalModifiedAt       *string                      `json:"local_modified_at"`
 	Project               string                       `json:"-"`
 	ProjectReference      export.ProjectReference      `json:"project"`
 	Machine               string                       `json:"-"`
@@ -651,6 +653,8 @@ func (db *DB) querySessionExportRows(
 	query := `
 SELECT
 	id,
+	transcript_revision,
+	local_modified_at,
 	project,
 	machine,
 	agent,
@@ -689,10 +693,13 @@ LIMIT ?`
 	for sqlRows.Next() {
 		var row SessionSummaryRow
 		var startedAt, endedAt sql.NullString
+		var localModifiedAt sql.NullString
 		var parentID, relationship sql.NullString
 		var automated bool
 		if err := sqlRows.Scan(
 			&row.ID,
+			&row.TranscriptRevision,
+			&localModifiedAt,
 			&row.Project,
 			&row.Machine,
 			&row.Agent,
@@ -716,6 +723,7 @@ LIMIT ?`
 			return nil, fmt.Errorf("scanning session summary export: %w", err)
 		}
 		row.StartedAt = nullStringPtr(startedAt)
+		row.LocalModifiedAt = nullStringPtr(localModifiedAt)
 		row.EndedAt = nullStringPtr(endedAt)
 		row.DurationSeconds = sessionExportDurationSeconds(
 			row.StartedAt, row.EndedAt, row.LastActivityAt)

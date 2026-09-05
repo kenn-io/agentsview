@@ -558,8 +558,15 @@ func TestAllSessionExportIdentityUsesRowSnapshot(t *testing.T) {
 			EndedAt: Ptr("2026-05-01T10:00:00Z"),
 		})
 	}
+	_, err := d.getWriter().Exec(`UPDATE sessions
+		SET transcript_revision = '7', local_modified_at = '2026-05-01T10:01:00Z'`)
+	require.NoError(t, err)
 	pages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{Limit: 1}, func(page int) error {
 		if page == 1 {
+			if _, err := d.getWriter().Exec(`UPDATE sessions
+				SET transcript_revision = '8', local_modified_at = '2026-05-01T10:02:00Z'`); err != nil {
+				return err
+			}
 			if err := d.SetArchiveIdentityForTest(ctx, "archive-after", strings.Repeat("b", 64)); err != nil {
 				return err
 			}
@@ -572,11 +579,20 @@ func TestAllSessionExportIdentityUsesRowSnapshot(t *testing.T) {
 	for _, page := range pages {
 		assert.Equal(t, "archive-before", page.ArchiveID)
 		assert.Equal(t, "generation-before", page.DatabaseID)
+		require.Len(t, page.Rows, 1)
+		assert.Equal(t, "7", page.Rows[0].TranscriptRevision)
+		require.NotNil(t, page.Rows[0].LocalModifiedAt)
+		assert.Equal(t, "2026-05-01T10:01:00Z", *page.Rows[0].LocalModifiedAt)
 	}
 	current, err := d.ExportSessionSummaries(ctx, SessionExportOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "archive-after", current.ArchiveID)
 	assert.Equal(t, "generation-after", current.DatabaseID)
+	for _, row := range current.Rows {
+		assert.Equal(t, "8", row.TranscriptRevision)
+		require.NotNil(t, row.LocalModifiedAt)
+		assert.Equal(t, "2026-05-01T10:02:00Z", *row.LocalModifiedAt)
+	}
 }
 
 func TestSessionSummaryExportUsesMessageActivityForOpenSessions(t *testing.T) {
