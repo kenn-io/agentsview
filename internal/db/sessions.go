@@ -2951,6 +2951,9 @@ func (db *DB) UpdateSessionIncremental(
 		if err := updateUsageOnlyAutomationTx(tx, id, nil); err != nil {
 			return err
 		}
+		if err := settleUsageOnlySignalsTx(tx, id); err != nil {
+			return err
+		}
 	} else {
 		if err := updateSessionAutomationFromMessagesTx(tx, id); err != nil {
 			return err

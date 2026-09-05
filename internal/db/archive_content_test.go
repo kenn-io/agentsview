@@ -1005,17 +1005,20 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 	seed("upsert")
 	seed("replace")
 	seed("incremental")
+	seed("metadata-update")
 	seed("batch")
 	seed("identity")
 	seed("rename")
-	require.NoError(t, full.UpdateSessionSignals("upsert", SessionSignalUpdate{
-		ToolFailureSignalCount: 3, Outcome: "failure",
-		QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion},
-	}))
-	require.NoError(t, full.ReplaceSessionSecretFindings("upsert",
-		[]SecretFinding{{SessionID: "upsert", RuleName: "aws-access-key"}},
-		1, "rules-v1",
-	))
+	for _, id := range []string{"upsert", "metadata-update"} {
+		require.NoError(t, full.UpdateSessionSignals(id, SessionSignalUpdate{
+			ToolFailureSignalCount: 3, Outcome: "failure",
+			QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion - 1},
+		}))
+		require.NoError(t, full.ReplaceSessionSecretFindings(id,
+			[]SecretFinding{{SessionID: id, RuleName: "aws-access-key"}},
+			1, "rules-v1",
+		))
+	}
 	require.NoError(t, full.Close())
 
 	database, err := OpenWithArchiveContent(path, config.ArchiveContentUsage)
@@ -1036,6 +1039,9 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 			Model: "model-a", Content: "more",
 		}},
 		IncrementalSessionUpdate{MsgCount: 2},
+	))
+	require.NoError(t, database.UpdateSessionIncremental("metadata-update",
+		IncrementalSessionUpdate{MsgCount: 1},
 	))
 	_, err = database.WriteSessionBatch([]SessionBatchWrite{{
 		Session: Session{
@@ -1061,18 +1067,22 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 	))
 	require.NoError(t, database.RefreshSessionName("rename", &title))
 
-	upserted, err := database.GetSessionFull(context.Background(), "upsert")
-	require.NoError(t, err)
-	require.NotNil(t, upserted)
-	assert.Zero(t, upserted.ToolFailureSignalCount)
-	assert.Empty(t, upserted.Outcome)
-	assert.Zero(t, upserted.SecretLeakCount)
-	findings, err := database.SessionSecretFindings(context.Background(), "upsert")
-	require.NoError(t, err)
-	assert.Empty(t, findings, "an upsert settles signals the row carried")
+	for _, id := range []string{"upsert", "metadata-update"} {
+		stored, err := database.GetSessionFull(context.Background(), id)
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		assert.Zero(t, stored.ToolFailureSignalCount, id)
+		assert.Empty(t, stored.Outcome, id)
+		assert.Equal(t, CurrentQualitySignalVersion, stored.QualitySignalVersion, id)
+		assert.Zero(t, stored.SecretLeakCount, id)
+		assert.Empty(t, stored.SecretsRulesVersion, id)
+		findings, err := database.SessionSecretFindings(context.Background(), id)
+		require.NoError(t, err)
+		assert.Empty(t, findings, "the write settles findings the row carried: %s", id)
+	}
 
 	for _, id := range []string{
-		"upsert", "replace", "incremental", "batch", "identity", "rename",
+		"upsert", "replace", "incremental", "metadata-update", "batch", "identity", "rename",
 	} {
 		stored, err := database.GetSessionFull(context.Background(), id)
 		require.NoError(t, err)
