@@ -876,13 +876,7 @@ func NewEngine(
 		}
 		rootAliases[agent] = cloned
 	}
-	// The alias table is process-wide because title lookups run through
-	// path-only parser helpers. Only an engine that carries aliases
-	// installs them; import, rebuild, and probe engines built without a
-	// local root configuration must not clear the running engine's table.
-	if len(rootAliases[parser.AgentCodex]) > 0 {
-		parser.SetCodexRootAliases(rootAliases[parser.AgentCodex])
-	}
+	InstallRootAliases(rootAliases)
 	providerFactories := parser.ProviderFactories()
 	if cfg.ProviderFactories != nil {
 		providerFactories = cfg.ProviderFactories
