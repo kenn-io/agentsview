@@ -651,7 +651,10 @@ metadata. Parsed message, usage, and edited-content assertions verify the
 fixture. This subset omits the newer `session_message` projection and does not
 establish support for that layout. A successfully resolved virtual member is no
 longer treated as a missing filesystem path during changed-path preparation;
-missing members still follow normal source-missing reconciliation.
+missing members still follow normal source-missing reconciliation. The retained
+recovery workload also closes the producer writer and sends WAL-sidecar events.
+A vanished sidecar beside a captured existing database does not imply missing
+sessions; an absent database still follows source-missing reconciliation.
 
 - **Format:** Current SQLite-backed session/message/part records and the legacy
   JSON storage tree.

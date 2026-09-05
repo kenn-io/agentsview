@@ -17,6 +17,8 @@ import (
 )
 
 type options struct {
+	GenerateOnly   bool   `json:"generate_only"`
+	ProvenanceNote string `json:"provenance_note,omitempty"`
 	SourceFormat   string `json:"source_format"`
 	Sessions       int    `json:"sessions"`
 	Turns          int    `json:"turns_per_session"`
@@ -33,6 +35,8 @@ type options struct {
 
 func main() {
 	o := options{}
+	flag.BoolVar(&o.GenerateOnly, "generate-only", false, "Retain producer sources and a manifest without running the sync engine")
+	flag.StringVar(&o.ProvenanceNote, "provenance-note", "", "Describe any build overlay or other source changes not captured by VCS metadata")
 	flag.StringVar(&o.SourceFormat, "source-format", "jsonl", "Source layout: jsonl (Claude/Codex) or opencode (SQLite)")
 	flag.IntVar(&o.Sessions, "sessions", 1000, "Total sessions in the selected source format")
 	flag.IntVar(&o.Turns, "turns", 20, "User/assistant pairs per session")
@@ -78,8 +82,28 @@ func execute(ctx context.Context, o options) error {
 	if err := os.Mkdir(data, 0o700); err != nil {
 		return err
 	}
-	if !o.Keep {
+	if !o.Keep && !o.GenerateOnly {
 		defer os.RemoveAll(data)
+	}
+	if o.GenerateOnly {
+		sources, roots, err := corpus(data, o)
+		if err != nil {
+			return err
+		}
+		if sources[0].Store != nil {
+			defer sources[0].Store.Close()
+		}
+		manifest := struct {
+			Options    options         `json:"options"`
+			Sources    []source        `json:"sources"`
+			Roots      any             `json:"roots"`
+			Provenance buildProvenance `json:"provenance"`
+		}{o, sources, roots, provenance()}
+		encoded, err := json.Marshal(manifest, jsontext.WithIndent("  "))
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(o.Output, "sources.json"), append(encoded, '\n'), 0o600)
 	}
 	report, err := run(ctx, o, data)
 	if err != nil {
@@ -88,6 +112,7 @@ func execute(ctx context.Context, o options) error {
 	report.GoVersion = runtime.Version()
 	report.GOOS = runtime.GOOS
 	report.GOARCH = runtime.GOARCH
+	report.Provenance = provenance()
 	encoded, err := json.Marshal(report, jsontext.WithIndent("  "))
 	if err != nil {
 		return err

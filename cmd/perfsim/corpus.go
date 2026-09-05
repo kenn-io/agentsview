@@ -17,17 +17,18 @@ type source struct {
 	Agent    parser.AgentType
 	Turns    int
 	Start    time.Time
-	Store    *sql.DB
+	Store    *sql.DB `json:"-"`
 }
 
 func corpus(dir string, o options) ([]source, map[parser.AgentType][]string, error) {
 	if o.SourceFormat == "opencode" {
 		return openCodeCorpus(dir, o)
 	}
+	claudeRoot, codexRoot := filepath.Join(dir, "claude"), filepath.Join(dir, "codex")
 	roots := map[parser.AgentType][]string{
-		parser.AgentClaude: {filepath.Join(dir, "claude")}, parser.AgentCodex: {filepath.Join(dir, "codex")},
+		parser.AgentClaude: {claudeRoot}, parser.AgentCodex: {codexRoot},
 	}
-	var sources []source
+	sources := make([]source, 0, o.Sessions+o.Empty)
 	for i := 0; i < o.Sessions+o.Empty; i++ {
 		agent := parser.AgentCodex
 		if i >= o.Sessions || i%2 == 0 {
@@ -35,9 +36,9 @@ func corpus(dir string, o options) ([]source, map[parser.AgentType][]string, err
 		}
 		id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1)
 		start := time.Date(2026, 6, 1+i%28, 10, 0, 0, 0, time.UTC)
-		path := filepath.Join(roots[agent][0], fmt.Sprintf("project-%02d", i%20), id+".jsonl")
+		path := filepath.Join(claudeRoot, fmt.Sprintf("project-%02d", i%20), id+".jsonl")
 		if agent == parser.AgentCodex {
-			path = filepath.Join(roots[agent][0], "2026", "06", start.Format("02"), "rollout-"+start.Format("2006-01-02T15-04-05")+"-"+id+".jsonl")
+			path = filepath.Join(codexRoot, "2026", "06", start.Format("02"), "rollout-"+start.Format("2006-01-02T15-04-05")+"-"+id+".jsonl")
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, nil, err

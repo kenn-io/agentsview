@@ -59,15 +59,18 @@ Each run records:
   and full-text search after each update.
 
 Use `--reconcile-every N` and `--query-every N` to schedule those operations
-once per N update iterations. Zero disables that repeated phase. First-query
-warmup still runs before the steady-state CPU profile starts.
+after N completed update iterations, then after each additional N. For example,
+N=3 runs after updates 3, 6, and 9. Each observation records the number of
+completed updates when measurement began. Zero disables that repeated phase.
+First-query warmup still runs before the steady-state CPU profile starts.
 
 ## Comparing results
 
 The output directory contains:
 
-- `results.json`: configuration, Go version/platform, actual archive totals, and
-  every operation's duration, allocated bytes, allocation count, and heap.
+- `results.json`: configuration, build revision and dirty state when available,
+  executable SHA-256, Go version/platform, actual archive totals, and every
+  operation's duration, allocated bytes, allocation count, and heap.
 - `bench.txt`: non-cold observations in Go benchmark format.
 - `steady.cpu.pprof`: CPU samples collected after ingest and first-query warmup.
 
@@ -134,6 +137,8 @@ Additional observations distinguish the SQLite read paths:
   engine.
 - `active_session_poll`: the same active-session reads after child-only edits.
 - `active_child_edit`: engine processing of those edited virtual sources.
+- `recovery_closed_writer_event`: three container notifications after closing
+  the producer writer, including a disappeared WAL sidecar.
 
 Warm scans and unchanged container events follow `--reconcile-every`; active
 polls and child edits run every iteration. Full digest scans are diagnostic
@@ -149,3 +154,33 @@ OpenCode process or an exhaustive producer emulator. It omits the newer
 `session_message` projection, tools, concurrent writers, and deletions. Schema
 and write provenance are recorded in
 [session format sources](session-format-sources.md).
+
+## Generating sources for a real server
+
+Use `--generate-only --keep-data --output-dir /tmp/new-corpus` with the normal
+workload flags to retain producer files without running the in-process engine.
+The new directory contains `sources.json` with source paths, provider roots,
+workload options, and generator build provenance. Point a separately configured
+branch server at those roots and a new archive directory. Disable all other
+providers and update checks, build with telemetry disabled, and bind to
+loopback. Do not use the installed server's config or archive.
+
+For OpenCode, keep a SQLite writer open in WAL mode, append message/part rows,
+and separately edit a part without advancing the session timestamp. Use current
+timestamps for daemon activity tests. The generated June corpus is historical.
+Open the active session's `/api/v1/sessions/{id}/watch` SSE stream, and verify
+new content through `/api/v1/sessions/{id}/messages?direction=desc&limit=10`.
+Record commit-to-visible latency separately from engine batch duration.
+
+A real server launches sync-worker subprocesses. Capture parent and worker CPU
+and memory separately; parent `/debug/pprof` profiles omit worker execution.
+Record forced-GC heaps and macOS `vmmap -summary` alongside RSS. Keep raw
+captures in a durable output directory, not only an operating-system temporary
+directory.
+
+`make perf-sim` enables VCS build metadata. Direct builds should use
+`go build -buildvcs=true` or `go run -buildvcs=true`. Missing revision metadata
+means unknown, not a clean build. Build overlays are not described by VCS
+metadata; use `--provenance-note` to record the overlay and retain its patch
+with the results. Executable hashes identify binaries but cannot reconstruct
+them.

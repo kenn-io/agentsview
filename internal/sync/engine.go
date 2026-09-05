@@ -1632,7 +1632,19 @@ func (e *Engine) prepareChangedPathSync(
 		}
 	}
 	prepared.missingPaths = slices.DeleteFunc(prepared.missingPaths, func(path string) bool {
-		_, resolved := resolvedVirtual[filepath.Clean(path)]
+		path = filepath.Clean(path)
+		// Closing a SQLite writer can remove its WAL/SHM files while the
+		// container and every session remain. The pre-discovery capture
+		// proves this is a known, existing container. Classify its contents
+		// normally, but do not infer source loss from a vanished sidecar.
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if container, ok := strings.CutSuffix(path, suffix); ok {
+				if _, exists := prepared.preContainerStates[container]; exists {
+					return true
+				}
+			}
+		}
+		_, resolved := resolvedVirtual[path]
 		return resolved
 	})
 	return prepared

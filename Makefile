@@ -290,7 +290,7 @@ test: pricing-snapshot ensure-embed-dir
 .PHONY: perf-sim
 PERF_SIM_FLAGS ?=
 perf-sim: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go run -tags fts5 ./cmd/perfsim $(PERF_SIM_FLAGS)
+	CGO_ENABLED=1 go run -buildvcs=true -tags fts5 ./cmd/perfsim $(PERF_SIM_FLAGS)
 
 # Run fast tests only
 test-short: pricing-snapshot ensure-embed-dir

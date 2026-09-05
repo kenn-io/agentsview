@@ -1,0 +1,1315 @@
+{
+  "revision": "a87db9ce06b6514db44689434acd22f27f3af765",
+  "binary_sha256": "8c6f6637aad26a38bf0c191c64e85e4d68622739a2948b189ace1e0c859a63fc",
+  "date": "2026-09-04",
+  "sessions": 10000,
+  "initial_messages": 403920,
+  "notes": [
+    "Server code matches revision; uncommitted changes affected only the simulator.",
+    "One preparatory append preceded capture. First measured append timed out during watch setup.",
+    "Updates used one 1000-turn session, with an open SSE watch and HTTP tail polling every 250ms.",
+    "Updates were handled by session fallback. Native watcher batches resumed after the writer closed; recovery CPU was therefore not idle CPU.",
+    "CPU profiles cover parent only and the first 30 seconds of each active phase.",
+    "This is a short single-run characterization, not a before/after daemon comparison.",
+    "Recovery retained an SSE watch. Repeated native watcher batches stopped after that watch disconnected."
+  ],
+  "process_phases": {
+    "idle-before": {
+      "seconds": 30.743706941604614,
+      "parent_cpu_seconds": 0.19999999999999996,
+      "one_core_percent": 0.6505396385019058,
+      "parent_rss_kib_first": 99888,
+      "parent_rss_kib_last": 108464,
+      "parent_rss_kib_max": 108464,
+      "child_pids_seen": [],
+      "physical_footprint": "51.9M",
+      "writable_regions": "Writable regions: Total=579.1M written=48.2M(8%) resident=66.5M(11%) swapped_out=0K(0%) unallocated=512.6M(89%)"
+    },
+    "active": {
+      "seconds": 118.45315599441528,
+      "parent_cpu_seconds": 1.35,
+      "one_core_percent": 1.1396910353858773,
+      "parent_rss_kib_first": 109664,
+      "parent_rss_kib_last": 117936,
+      "parent_rss_kib_max": 117936,
+      "child_pids_seen": []
+    },
+    "active-queries": {
+      "seconds": 80.08048605918884,
+      "parent_cpu_seconds": 23.64,
+      "one_core_percent": 29.520300341992524,
+      "parent_rss_kib_first": 118144,
+      "parent_rss_kib_last": 564656,
+      "parent_rss_kib_max": 632816,
+      "child_pids_seen": []
+    },
+    "idle-after": {
+      "seconds": 62.20649313926697,
+      "parent_cpu_seconds": 5.219999999999999,
+      "one_core_percent": 8.391406968262205,
+      "parent_rss_kib_first": 564656,
+      "parent_rss_kib_last": 480288,
+      "parent_rss_kib_max": 564656,
+      "child_pids_seen": [],
+      "physical_footprint": "76.2M",
+      "writable_regions": "Writable regions: Total=964.2M written=406.4M(42%) resident=428.6M(44%) swapped_out=0K(0%) unallocated=535.6M(56%)"
+    }
+  },
+  "query_medians_ms": {
+    "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day": 238.210812502075,
+    "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC": 161.04185406584293,
+    "/search?q=latency&limit=50": 747.1386045217514,
+    "/sessions/sidebar-index": 37.6889375038445,
+    "/stats?include_one_shot=true&include_automated=true": 4.60737495450303,
+    "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC": 397.3374380148016
+  },
+  "observations": [
+    {
+      "phase": "active",
+      "kind": "append",
+      "ms": 45093.321040971205,
+      "visible": false
+    },
+    {
+      "phase": "active",
+      "kind": "child-edit",
+      "ms": 7868.185125058517,
+      "visible": true
+    },
+    {
+      "phase": "active",
+      "kind": "append",
+      "ms": 6773.922500084154,
+      "visible": true
+    },
+    {
+      "phase": "active",
+      "kind": "child-edit",
+      "ms": 7346.544542000629,
+      "visible": true
+    },
+    {
+      "phase": "active",
+      "kind": "append",
+      "ms": 7026.697083958425,
+      "visible": true
+    },
+    {
+      "phase": "active",
+      "kind": "child-edit",
+      "ms": 7602.381790988147,
+      "visible": true
+    },
+    {
+      "phase": "active",
+      "kind": "append",
+      "ms": 7028.144708019681,
+      "visible": true
+    },
+    {
+      "phase": "active",
+      "kind": "child-edit",
+      "ms": 7316.636000061408,
+      "visible": true
+    },
+    {
+      "phase": "active",
+      "kind": "append",
+      "ms": 7031.707874964923,
+      "visible": true
+    },
+    {
+      "phase": "active",
+      "kind": "child-edit",
+      "ms": 7640.1155409403145,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 4.421374993398786,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 166.95700003765523,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 238.18095796741545,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 3636.6177500458434,
+      "status": "ok",
+      "bytes": 66693
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 757.7392909443006,
+      "status": "ok",
+      "bytes": 21400
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 37.613125052303076,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "append",
+      "ms": 7103.897417080589,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 4.328375100158155,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 160.63270810991526,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 245.697750011459,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 398.69391708634794,
+      "status": "ok",
+      "bytes": 66693
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 742.9603340569884,
+      "status": "ok",
+      "bytes": 21400
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 37.73495799396187,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "child-edit",
+      "ms": 7311.54483393766,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 4.617040976881981,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 158.82704209070653,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 245.88579207193106,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 389.4383340375498,
+      "status": "ok",
+      "bytes": 66693
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 761.1051250714809,
+      "status": "ok",
+      "bytes": 21400
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 37.43470797780901,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "append",
+      "ms": 7027.69699995406,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 4.341459018178284,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 164.49291701428592,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 238.24066703673452,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 395.98095894325525,
+      "status": "ok",
+      "bytes": 66693
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 751.3168749865144,
+      "status": "ok",
+      "bytes": 21399
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 38.05045795161277,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "child-edit",
+      "ms": 7681.872374960221,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 4.695665906183422,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 164.05849996954203,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 242.346707964316,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 422.8195420000702,
+      "status": "ok",
+      "bytes": 66693
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 915.0952079799026,
+      "status": "ok",
+      "bytes": 21400
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 42.142792022787035,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "append",
+      "ms": 6822.382541955449,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 4.957583034411073,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 180.91170908883214,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 267.99212500918657,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 414.8932499811053,
+      "status": "ok",
+      "bytes": 66693
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 769.7548749856651,
+      "status": "ok",
+      "bytes": 21400
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 37.33724995981902,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "child-edit",
+      "ms": 7670.26604199782,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 9.140957961790264,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 153.61866692546755,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 230.6549579370767,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 391.7722919723019,
+      "status": "ok",
+      "bytes": 66693
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 732.9240839462727,
+      "status": "ok",
+      "bytes": 21400
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 41.22479201760143,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "append",
+      "ms": 6741.300916997716,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 4.685749998316169,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 161.4510000217706,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 230.2945420378819,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 389.09162511117756,
+      "status": "ok",
+      "bytes": 66703
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 735.7376669533551,
+      "status": "ok",
+      "bytes": 21400
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 37.54600009415299,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "child-edit",
+      "ms": 7674.497041967697,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 4.597708932124078,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 159.60545802954584,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 232.3811660753563,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 416.5504580596462,
+      "status": "ok",
+      "bytes": 66703
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 725.1293330918998,
+      "status": "ok",
+      "bytes": 21400
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 38.48345798905939,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "append",
+      "ms": 7026.890791021287,
+      "visible": true
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/stats?include_one_shot=true&include_automated=true",
+      "ms": 4.149000043980777,
+      "status": "ok",
+      "bytes": 125
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 156.26970794983208,
+      "status": "ok",
+      "bytes": 346
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/analytics/activity?from=2026-06-01&to=2026-09-30&timezone=UTC&granularity=day",
+      "ms": 235.48158397898078,
+      "status": "ok",
+      "bytes": 4736
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/usage/summary?from=2026-06-01&to=2026-09-30&timezone=UTC",
+      "ms": 389.4442080054432,
+      "status": "ok",
+      "bytes": 66703
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/search?q=latency&limit=50",
+      "ms": 736.2522919429466,
+      "status": "ok",
+      "bytes": 21351
+    },
+    {
+      "phase": "active-queries",
+      "kind": "query",
+      "route": "/sessions/sidebar-index",
+      "ms": 37.64291701372713,
+      "status": "ok",
+      "bytes": 3290037
+    },
+    {
+      "phase": "active-queries",
+      "kind": "child-edit",
+      "ms": 7316.642416990362,
+      "visible": true
+    }
+  ],
+  "generator_options": {
+    "generate_only": true,
+    "source_format": "opencode",
+    "sessions": 10000,
+    "turns_per_session": 20,
+    "active_session_turns": 1000,
+    "active_sessions": 2,
+    "iterations": 10,
+    "empty_sources": 0,
+    "reconcile_every": 1,
+    "query_every": 1,
+    "message_bytes": 512
+  },
+  "generator_provenance": {
+    "revision": "a87db9ce06b6514db44689434acd22f27f3af765",
+    "modified": true,
+    "executable_sha256": "c1e103518e8cd2ac3e64038b19f238ae360ccc65fb96fae0f957c5680e1a5c8e"
+  },
+  "active_sessions_in_daemon_capture": 1,
+  "sidecar_followup": {
+    "candidate": {
+      "binary_sha256": "ce66c93f0b33d4432f5cfba3d9a500d9337aa5158eb7f9ee2ad8ef50bb0e907e",
+      "base_revision": "a87db9ce06b6514db44689434acd22f27f3af765",
+      "change": "existing-container WAL/SHM absence filter"
+    },
+    "notes": [
+      "Six no-op SQLite writer transactions, each followed by connection close, during an SSE watch.",
+      "Before and after used the same synthetic archive after separate server warmups.",
+      "Neither no-op cycle run reproduced the initial recovery existence-scan spike; no steady CPU reduction is established."
+    ],
+    "samples": {
+      "closed-writer-before": [
+        {
+          "time": 1788566597.790528,
+          "cpu": "0:32.53",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566598.804957,
+          "cpu": "0:32.53",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566599.812068,
+          "cpu": "0:32.53",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566600.825099,
+          "cpu": "0:32.54",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566601.83903,
+          "cpu": "0:32.54",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566602.8492851,
+          "cpu": "0:32.55",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566603.863082,
+          "cpu": "0:32.55",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566604.872071,
+          "cpu": "0:32.55",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566605.890269,
+          "cpu": "0:32.56",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566606.909656,
+          "cpu": "0:32.57",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566607.9157,
+          "cpu": "0:32.58",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566608.9378781,
+          "cpu": "0:32.58",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566609.954017,
+          "cpu": "0:32.58",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566610.962551,
+          "cpu": "0:32.58",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566611.972877,
+          "cpu": "0:32.59",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566612.9827468,
+          "cpu": "0:32.59",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566613.9976141,
+          "cpu": "0:32.59",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566615.0153332,
+          "cpu": "0:32.60",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566616.026619,
+          "cpu": "0:32.61",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566617.033348,
+          "cpu": "0:32.61",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566618.0464058,
+          "cpu": "0:32.61",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566619.0580978,
+          "cpu": "0:32.61",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566620.0727758,
+          "cpu": "0:32.61",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566621.0849931,
+          "cpu": "0:32.62",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566622.094694,
+          "cpu": "0:32.62",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566623.109285,
+          "cpu": "0:32.62",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566624.119884,
+          "cpu": "0:32.63",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566625.132211,
+          "cpu": "0:32.63",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566626.143054,
+          "cpu": "0:32.63",
+          "rss_kib": 480352
+        },
+        {
+          "time": 1788566627.1554508,
+          "cpu": "0:32.64",
+          "rss_kib": 480352
+        }
+      ],
+      "closed-writer-after": [
+        {
+          "time": 1788566710.641419,
+          "cpu": "0:08.79",
+          "rss_kib": 164384
+        },
+        {
+          "time": 1788566711.649199,
+          "cpu": "0:08.79",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566712.665766,
+          "cpu": "0:08.79",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566713.686412,
+          "cpu": "0:08.80",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566714.6965382,
+          "cpu": "0:08.80",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566715.7149508,
+          "cpu": "0:08.80",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566716.724239,
+          "cpu": "0:08.81",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566717.732167,
+          "cpu": "0:08.81",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566718.747416,
+          "cpu": "0:08.81",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566719.756821,
+          "cpu": "0:08.82",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566720.772161,
+          "cpu": "0:08.82",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566721.7818081,
+          "cpu": "0:08.83",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566722.7884889,
+          "cpu": "0:08.83",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566723.797099,
+          "cpu": "0:08.83",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566724.808512,
+          "cpu": "0:08.84",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566725.823405,
+          "cpu": "0:08.85",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566726.838957,
+          "cpu": "0:08.85",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566727.852542,
+          "cpu": "0:08.85",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566728.864089,
+          "cpu": "0:08.86",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566729.878017,
+          "cpu": "0:08.86",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566730.885607,
+          "cpu": "0:08.87",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566731.8957,
+          "cpu": "0:08.87",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566732.901675,
+          "cpu": "0:08.87",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566733.922451,
+          "cpu": "0:08.88",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566734.936557,
+          "cpu": "0:08.88",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566735.944026,
+          "cpu": "0:08.88",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566736.9500642,
+          "cpu": "0:08.88",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566737.955807,
+          "cpu": "0:08.89",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566738.9673011,
+          "cpu": "0:08.89",
+          "rss_kib": 164368
+        },
+        {
+          "time": 1788566739.985823,
+          "cpu": "0:08.89",
+          "rss_kib": 164368
+        }
+      ],
+      "writer-cycles-before": [
+        {
+          "time": 1788566897.907605,
+          "cpu": "0:05.78",
+          "rss_kib": 155616
+        },
+        {
+          "time": 1788566898.920047,
+          "cpu": "0:05.79",
+          "rss_kib": 155616
+        },
+        {
+          "time": 1788566899.933365,
+          "cpu": "0:05.80",
+          "rss_kib": 155616
+        },
+        {
+          "time": 1788566900.9437592,
+          "cpu": "0:05.80",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566901.964603,
+          "cpu": "0:05.80",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566902.975569,
+          "cpu": "0:05.81",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566903.99441,
+          "cpu": "0:05.81",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566905.010209,
+          "cpu": "0:05.81",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566906.03575,
+          "cpu": "0:05.82",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566907.045179,
+          "cpu": "0:05.82",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566908.054157,
+          "cpu": "0:05.83",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566909.0647418,
+          "cpu": "0:05.83",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566910.079307,
+          "cpu": "0:05.83",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566911.098343,
+          "cpu": "0:05.83",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566912.110147,
+          "cpu": "0:05.84",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566913.121099,
+          "cpu": "0:05.84",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566914.1360462,
+          "cpu": "0:05.84",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566915.144188,
+          "cpu": "0:05.85",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566916.162771,
+          "cpu": "0:05.85",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566917.182584,
+          "cpu": "0:05.86",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566918.201699,
+          "cpu": "0:05.86",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566919.215243,
+          "cpu": "0:05.87",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566920.228009,
+          "cpu": "0:05.87",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566921.24146,
+          "cpu": "0:05.87",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566922.2503538,
+          "cpu": "0:05.88",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566923.2660742,
+          "cpu": "0:05.88",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566924.2722838,
+          "cpu": "0:05.88",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566925.28425,
+          "cpu": "0:05.89",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566926.298316,
+          "cpu": "0:05.89",
+          "rss_kib": 147424
+        },
+        {
+          "time": 1788566927.3080919,
+          "cpu": "0:05.90",
+          "rss_kib": 147424
+        }
+      ],
+      "writer-cycles-after": [
+        {
+          "time": 1788566793.8696609,
+          "cpu": "0:08.92",
+          "rss_kib": 164432
+        },
+        {
+          "time": 1788566794.885822,
+          "cpu": "0:08.92",
+          "rss_kib": 164416
+        },
+        {
+          "time": 1788566795.9036312,
+          "cpu": "0:08.93",
+          "rss_kib": 164416
+        },
+        {
+          "time": 1788566796.9118872,
+          "cpu": "0:08.93",
+          "rss_kib": 164464
+        },
+        {
+          "time": 1788566797.918745,
+          "cpu": "0:08.93",
+          "rss_kib": 164464
+        },
+        {
+          "time": 1788566798.937679,
+          "cpu": "0:08.94",
+          "rss_kib": 164464
+        },
+        {
+          "time": 1788566799.947689,
+          "cpu": "0:08.94",
+          "rss_kib": 164464
+        },
+        {
+          "time": 1788566800.9596019,
+          "cpu": "0:08.94",
+          "rss_kib": 164464
+        },
+        {
+          "time": 1788566801.97618,
+          "cpu": "0:08.95",
+          "rss_kib": 164464
+        },
+        {
+          "time": 1788566802.990274,
+          "cpu": "0:08.95",
+          "rss_kib": 164464
+        },
+        {
+          "time": 1788566804.010265,
+          "cpu": "0:08.95",
+          "rss_kib": 164464
+        },
+        {
+          "time": 1788566805.026977,
+          "cpu": "0:08.95",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566806.040131,
+          "cpu": "0:08.96",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566807.052733,
+          "cpu": "0:08.96",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566808.0679219,
+          "cpu": "0:08.97",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566809.088539,
+          "cpu": "0:08.97",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566810.094475,
+          "cpu": "0:08.97",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566811.1121411,
+          "cpu": "0:08.97",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566812.1299741,
+          "cpu": "0:08.98",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566813.140327,
+          "cpu": "0:08.98",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566814.149586,
+          "cpu": "0:08.98",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566815.159219,
+          "cpu": "0:08.99",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566816.165012,
+          "cpu": "0:08.99",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566817.178164,
+          "cpu": "0:09.00",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566818.19249,
+          "cpu": "0:09.00",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566819.2074409,
+          "cpu": "0:09.00",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566820.216138,
+          "cpu": "0:09.00",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566821.229016,
+          "cpu": "0:09.00",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566822.2433631,
+          "cpu": "0:09.01",
+          "rss_kib": 164480
+        },
+        {
+          "time": 1788566823.258484,
+          "cpu": "0:09.01",
+          "rss_kib": 164480
+        }
+      ]
+    },
+    "allocation_regression": {
+      "sessions": 800,
+      "old_missing_wal_allocations": 188690,
+      "new_missing_wal_allocations": 89,
+      "unchanged_container_allocations": 22796
+    }
+  }
+}

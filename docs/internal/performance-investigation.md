@@ -74,8 +74,10 @@ behaviors.
 
 The retained OpenCode workload uses the producer's indexed session/message/part
 schema in WAL mode. Both runs below used 20 turns per session, two active
-sessions with 1,000 initial turns, and five iterations. Only archive size
-changed. These measurements preceded the virtual-event deletion-check fix.
+sessions with 1,000 initial turns, and five iterations. The producer database
+and archive both grew with session count; active session length and update count
+stayed constant. These measurements preceded the virtual-event deletion-check
+fix.
 
 | Operation                            | 1,000 sessions | 10,000 sessions |
 | ------------------------------------ | -------------: | --------------: |
@@ -115,3 +117,72 @@ Full reconciliation still performs these member-existence checks. Its measured
 optimization target. The 10,000-session analytical query medians were 166 ms for
 summary, 242 ms for activity, 360 ms for usage, and 753 ms for common-term
 search.
+
+## Historical evidence limits
+
+The component timings above were recorded during the investigation, but their
+original temporary raw captures are no longer available. They are historical
+observations, not independently replayable benchmark evidence. Earlier simulator
+reports also omitted build revision and dirty-state metadata. The matched
+OpenCode comparison used a source overlay; its quoted numbers should be rerun
+with the retained simulator before treating them as a release gate. New reports
+record build metadata, executable hashes, and optional overlay notes.
+
+## Real daemon with a synthetic SQLite producer
+
+A separate loopback server built from `a87db9ce0`, which includes the checked
+`origin/main`, imported 10,000 sessions and 403,920 messages. Its binary hash,
+HTTP samples, and process measurements are retained in
+[the daemon capture](performance-data/daemon-opencode-2026-09-04.json). The
+installed application and its archive were not changed. Raw profiles and the
+local experiment scripts remain in the worktree's ignored `tmp/daemon-perf`
+directory; they are not needed to run the retained simulator.
+
+One long session received ten user/assistant pairs and ten child-only edits,
+with an SSE watch open. The client checked the newest ten HTTP messages every
+250 ms. One preparatory append preceded capture, and the first measured append
+timed out during watch setup. The remaining updates appeared in roughly 7–8
+seconds through the session fallback. These timings include polling and the
+five-second fallback delay, unlike the component measurements above.
+
+Ten requests to each analytical endpoint all succeeded while updates ran. The
+median HTTP times were 4.6 ms for stats, 37.7 ms for sidebar index, 161.0 ms for
+summary, 238.2 ms for daily activity, 397.3 ms for usage summary, and 747.1 ms
+for common-term search. The window covered June through September in UTC. The
+first request to each endpoint is included, so these are mixed cold/warm
+observations. The parent used about 29.5% of one CPU core during this phase. Its
+first 30-second profile contained 10.23 CPU seconds, with 51.7% of samples in C
+calls. No sync-worker subprocess was observed during these samples; initial
+ingest had used a worker before capture.
+
+RSS peaked near 618 MiB during queries. After 60 seconds of recovery and a
+forced collection, sampled live Go heap was about 17.2 MiB and macOS physical
+footprint was 76.2 MiB, compared with 51.9 MiB before updates. RSS remained near
+469 MiB before collection, and `vmmap` reported 406.4 MiB of written writable
+regions. These measures describe different accounting categories. This short run
+does not establish a long-duration memory-retention result.
+
+The recovery minute was not idle: after the producer writer closed, native
+watcher batches ran every five seconds while the SSE watch remained open. The
+profile attributed 3.6 CPU seconds to source-missing reconciliation, primarily
+per-session SQLite existence probes. A focused reproduction found 188,690
+allocations for a missing WAL event versus 22,797 for the same unchanged
+container event with 800 sessions. Removing a WAL or SHM sidecar does not itself
+mean that the database or its sessions disappeared.
+
+Changed-path preparation now excludes vanished sidecars of known containers
+whose pre-discovery state was captured successfully. Content classification
+still runs, and actual container removal keeps source-missing reconciliation.
+The regression checks both retained messages and missing-source state after
+removing the database. The fixed missing-WAL event made 89 allocations, down
+from 188,690 in the old path. The simulator retains a writer-close recovery
+phase. Repeated watcher notifications alone do not establish repeated expensive
+reconciliation: a later no-writer baseline used only 0.11 CPU seconds across
+29.4 seconds. Writer-close cost must be measured separately from quiet polling.
+
+A follow-up with six no-op SQLite writer transactions and closes over thirty
+seconds used 0.12 CPU seconds before and 0.09 after. Neither run reproduced the
+initial existence-scan spike; that difference is too small to establish an idle
+or average writer-cycle improvement. The allocation regression and original
+profile support the specific removed-sidecar fix. They do not prove that every
+writer close will incur or avoid the original spike.

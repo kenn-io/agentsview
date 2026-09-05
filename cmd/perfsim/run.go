@@ -12,21 +12,24 @@ import (
 )
 
 type observation struct {
-	Phase          string  `json:"phase"`
-	Operation      string  `json:"operation"`
-	Milliseconds   float64 `json:"ms"`
-	AllocatedBytes uint64  `json:"allocated_bytes"`
-	Allocations    uint64  `json:"allocations"`
-	HeapBytes      uint64  `json:"heap_bytes"`
+	CompletedUpdates int     `json:"completed_updates"`
+	Phase            string  `json:"phase"`
+	Operation        string  `json:"operation"`
+	Milliseconds     float64 `json:"ms"`
+	AllocatedBytes   uint64  `json:"allocated_bytes"`
+	Allocations      uint64  `json:"allocations"`
+	HeapBytes        uint64  `json:"heap_bytes"`
 }
 type report struct {
-	Options      options       `json:"options"`
-	GoVersion    string        `json:"go_version"`
-	GOOS         string        `json:"goos"`
-	GOARCH       string        `json:"goarch"`
-	Observations []observation `json:"observations"`
-	Initial      db.Stats      `json:"initial_stats"`
-	Final        db.Stats      `json:"final_stats"`
+	Provenance       buildProvenance `json:"provenance"`
+	completedUpdates int
+	Options          options       `json:"options"`
+	GoVersion        string        `json:"go_version"`
+	GOOS             string        `json:"goos"`
+	GOARCH           string        `json:"goarch"`
+	Observations     []observation `json:"observations"`
+	Initial          db.Stats      `json:"initial_stats"`
+	Final            db.Stats      `json:"final_stats"`
 }
 
 func (r *report) measure(phase, name string, fn func() error) error {
@@ -36,7 +39,7 @@ func (r *report) measure(phase, name string, fn func() error) error {
 	err := fn()
 	elapsed := time.Since(start)
 	runtime.ReadMemStats(&after)
-	r.Observations = append(r.Observations, observation{phase, name, float64(elapsed) / float64(time.Millisecond), after.TotalAlloc - before.TotalAlloc, after.Mallocs - before.Mallocs, after.HeapAlloc})
+	r.Observations = append(r.Observations, observation{CompletedUpdates: r.completedUpdates, Phase: phase, Operation: name, Milliseconds: float64(elapsed) / float64(time.Millisecond), AllocatedBytes: after.TotalAlloc - before.TotalAlloc, Allocations: after.Mallocs - before.Mallocs, HeapBytes: after.HeapAlloc})
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", phase, name, err)
 	}
@@ -113,7 +116,27 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 		if err := ctx.Err(); err != nil {
 			return r, err
 		}
-		if o.ReconcileEvery > 0 && i%o.ReconcileEvery == 0 {
+
+		var changed []string
+		for j := 0; j < o.Active; j++ {
+			s := &sources[j]
+			if err := s.appendTurns(1, o.ContentBytes); err != nil {
+				return r, err
+			}
+			if s.Store == nil || len(changed) == 0 {
+				changed = append(changed, s.Path)
+			}
+		}
+		if err := r.measure("active", "append", func() error { return engine.SyncPathsContext(ctx, changed) }); err != nil {
+			return r, err
+		}
+		r.completedUpdates = i + 1
+		if o.SourceFormat == "opencode" {
+			if err := syncSQLiteChildEdits(ctx, &r, engine, database, sources[:o.Active]); err != nil {
+				return r, err
+			}
+		}
+		if o.ReconcileEvery > 0 && (i+1)%o.ReconcileEvery == 0 {
 			if o.SourceFormat == "opencode" {
 				if err := measureSQLiteScans(ctx, &r, sources, o.Active); err != nil {
 					return r, err
@@ -137,29 +160,23 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 				return r, err
 			}
 		}
-		var changed []string
-		for j := 0; j < o.Active; j++ {
-			s := &sources[j]
-			if err := s.appendTurns(1, o.ContentBytes); err != nil {
-				return r, err
-			}
-			if s.Store == nil || len(changed) == 0 {
-				changed = append(changed, s.Path)
-			}
-		}
-		if err := r.measure("active", "append", func() error { return engine.SyncPathsContext(ctx, changed) }); err != nil {
-			return r, err
-		}
-		if o.SourceFormat == "opencode" {
-			if err := syncSQLiteChildEdits(ctx, &r, engine, database, sources[:o.Active]); err != nil {
-				return r, err
-			}
-		}
-		if o.QueryEvery > 0 && i%o.QueryEvery == 0 {
+		if o.QueryEvery > 0 && (i+1)%o.QueryEvery == 0 {
 			for _, q := range queries {
 				if err := r.measure("active", q.name, q.run); err != nil {
 					return r, err
 				}
+			}
+		}
+	}
+	if o.SourceFormat == "opencode" {
+		if err := sources[0].Store.Close(); err != nil {
+			return r, err
+		}
+		for range 3 {
+			if err := r.measure("recovery", "closed_writer_event", func() error {
+				return engine.SyncPathsContext(ctx, []string{sources[0].Path + "-wal"})
+			}); err != nil {
+				return r, err
 			}
 		}
 	}
