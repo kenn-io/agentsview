@@ -373,7 +373,13 @@ add an archived or maintained mirror without replacing the original identity.
   it subtracts cached input from upstream's inclusive input total, maps cached
   input to cache-read, and ignores cache-write and reasoning-output fields.
   Catalog pricing therefore covers only the normalized fields the parser
-  emits.
+  emits. Codex Luna Reserve turns persist `turn_context.payload.model` as
+  `gpt-reserve`. That reported name is stored unchanged; pricing resolves it
+  to the `gpt-5.6-luna` catalog row (Luna list rates, not an OpenAI invoice).
+  An exact `[custom_model_pricing."gpt-reserve"]` row still wins. Reverified
+  2026-09-06 against OpenAI's Luna Reserve help article
+  <https://help.openai.com/en/articles/20001499-luna-reserve-in-codex-and-chatgpt-work>
+  and Codex `turn_context` model seeding in `internal/parser/codex.go`.
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals. Fork and

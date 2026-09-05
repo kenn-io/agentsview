@@ -25,7 +25,11 @@ const (
 	// cached rollups to rebuild with the corrected resolution.
 	// Version 7 rebuilds version 6 facts and rollups so provider-specific
 	// billing identity survives cache generation and rollup aggregation.
-	usageCacheFormatVersion = 7
+	// Version 8 rebuilds version 7 rollups because Codex Luna Reserve
+	// turns stored as gpt-reserve now resolve to gpt-5.6-luna catalog
+	// rates. EffectivePricingDigest hashes only catalog rows, so the
+	// same facts and catalog would otherwise keep the unpriced costs.
+	usageCacheFormatVersion = 8
 	usageCacheApplicationID = 0x41565543
 	usageCacheKind          = "agentsview-usage-facts"
 
