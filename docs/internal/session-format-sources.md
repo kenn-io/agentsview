@@ -101,9 +101,17 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## Claude Code (`claude`)
 
+- **Performance fixture check (2026-09-04):** Rechecked the pinned Codeburn
+  format notes below for project-scoped JSONL. `cmd/perfsim` uses the shared
+  Claude fixture builder to emit user/assistant pairs with message/request
+  identities and usage, then checks actual parsed counts. These synthetic
+  records are a measured subset, not an authoritative or exhaustive schema.
+
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
+
 - **Evidence:** `no-public-source`.
+
 - **Upstream:** The public
   [Claude Code repository](https://github.com/anthropics/claude-code) at
   `015170d3fd84fb57ef4685a64b673fadd0690dc1` and the
@@ -116,6 +124,7 @@ add an archived or maintained mirror without replacing the original identity.
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/claude.ts);
   these are consumer observations, not Anthropic authority.
+
 - **Usage and cost:** Assistant messages persist input, output, cache-creation,
   and cache-read tokens. Model IDs are present. No authoritative persisted USD
   cost field is consumed; Agentsview prices the tokens from its catalog.
@@ -131,6 +140,7 @@ add an archived or maintained mirror without replacing the original identity.
   rate. The flat counter stays authoritative: the nested subset is clamped to
   it, and an absent or malformed breakdown falls back to the 5m rate for the
   whole write total (issue #1452).
+
 - **Server tool use (web search):** Anthropic bills server-side web search at
   $10 per 1,000 requests on top of tokens and reports the count in
   `message.usage.server_tool_use.web_search_requests`, which Claude Code
@@ -152,6 +162,7 @@ add an archived or maintained mirror without replacing the original identity.
   neither recorded nor estimated. `web_fetch_requests` is recorded when
   present but is not priced. Data version 82 reparses existing Claude archives
   so persisted side-call counts receive the flat fee.
+
 - **Subagent attribution:** Task-tool subagents are written to their own
   transcripts under `<project>/<parent-session-id>/subagents/`, named
   `agent-<id>.jsonl` (nested one more level under `workflows/<workflow-id>/`
@@ -203,6 +214,7 @@ add an archived or maintained mirror without replacing the original identity.
   SQLite archive. Reverified 2026-08-22 that activity buckets carry the
   selected Claude input-token snapshots identically across SQLite, PostgreSQL,
   and DuckDB.
+
 - **Agentsview:** `internal/parser/claude.go` and
   `internal/parser/claude_provider.go`; local observations and fixtures are
   the implementation evidence for fields not documented upstream. Reverified
@@ -341,6 +353,12 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## Codex (`codex`)
 
+- **Performance fixture check (2026-09-04):** Rechecked the pinned rollout
+  recorder below for session metadata and rollout-item persistence.
+  `cmd/perfsim` generates dated rollouts with session metadata, turn context,
+  response items and token-count events through the shared fixture builder.
+  Its integration test checks parsed messages and aggregate output tokens.
+
 - **Format:** Rollout JSONL files, with a separate JSONL session index used by
   older releases for discovery and metadata. Current releases no longer write
   `session_index.jsonl`; thread titles live in `thread_history_*.sqlite`
@@ -351,7 +369,9 @@ add an archived or maintained mirror without replacing the original identity.
   contain `session_id`, Unix-seconds `ts`, and submitted prompt `text`;
   configured size enforcement can rewrite a retained tail in place. Agentsview
   consumes only the first two fields as a live-activity hint.
+
 - **Evidence:** `source`.
+
 - **Upstream:** Clone `https://github.com/openai/codex.git` at
   `406dc9239492aff6d295cca5eebe2a548548d42f`; see the pinned
   [rollout recorder](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/rollout/src/recorder.rs)
@@ -367,6 +387,7 @@ add an archived or maintained mirror without replacing the original identity.
   The
   [configuration schema](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/config.schema.json)
   defines `save-all` (the default) and `none`.
+
 - **Usage and cost:** `token_count` records include total and last usage with
   input, cached input, cache-write input, output, reasoning output, and total
   tokens. Agentsview currently consumes input, cached input, and output only:
@@ -374,6 +395,7 @@ add an archived or maintained mirror without replacing the original identity.
   input to cache-read, and ignores cache-write and reasoning-output fields.
   Catalog pricing therefore covers only the normalized fields the parser
   emits.
+
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals. Fork and
@@ -614,6 +636,29 @@ add an archived or maintained mirror without replacing the original identity.
   whenever their shared parser changes.
 
 ## OpenCode (`opencode`)
+
+**Performance fixture check (2026-09-04):** Rechecked the pinned commit's
+[session tables](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/session/sql.ts),
+[project tables](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/project/sql.ts),
+[timestamp defaults](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/database/schema.sql.ts),
+and
+[event projector](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/session/projector.ts).
+The projector inserts/upserts JSON message and part data; updates stamp
+`time_updated` through the shared column definition. `cmd/perfsim` preserves the
+four provider-consumed tables and their indexes in a synthetic WAL database,
+writes usage-bearing messages, and edits text parts without advancing session
+metadata. Parsed message, usage, and edited-content assertions verify the
+fixture. This subset omits the newer `session_message` projection and does not
+establish support for that layout. A successfully resolved virtual member is no
+longer treated as a missing filesystem path during changed-path preparation;
+missing members still follow normal source-missing reconciliation. The retained
+recovery workload also closes the producer writer and sends WAL-sidecar events.
+A vanished sidecar beside a captured existing database does not imply missing
+sessions; an absent database still follows source-missing reconciliation. Member
+deletions inside a surviving OpenCode-family container are detected by the next
+successful authoritative root/container reconciliation, not promised by a
+sidecar event. The retained integration scenario checks that eventual state and
+preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 - **Format:** Current SQLite-backed session/message/part records and the legacy
   JSON storage tree.

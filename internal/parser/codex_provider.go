@@ -614,13 +614,15 @@ func (s codexSourceSet) discoverEachRoot(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !isCodexSessionFilename(entry.Name()) {
+		if !isCodexSessionFilename(entry.Name()) || !entry.Type().IsRegular() {
 			return nil
 		}
-		source, ok := s.sourceRef(root, path, true)
+		// ReadDir already classified the entry without following symlinks.
+		// Reuse that result instead of issuing another lstat per rollout.
+		source, ok := s.sourceRef(root, path, false)
 		if !ok {
 			if _, _, supported := CodexSessionPathInfo(root, path); supported {
-				source, ok = s.directPathSource(root, path, true)
+				source, ok = s.directPathSource(root, path, false)
 			}
 		}
 		if !ok {

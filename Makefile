@@ -286,6 +286,12 @@ GO_TEST_P_FLAG := $(if $(GO_TEST_P),-p $(GO_TEST_P),)
 test: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -v
 
+# Reproducible synthetic ingest, steady-state sync, and analytics measurements.
+.PHONY: perf-sim
+PERF_SIM_FLAGS ?=
+perf-sim: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go run -buildvcs=true -tags fts5 ./cmd/perfsim $(PERF_SIM_FLAGS)
+
 # Run fast tests only
 test-short: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -short
