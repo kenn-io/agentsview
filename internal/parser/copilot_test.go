@@ -1131,3 +1131,32 @@ func TestParseCopilotSession_ShutdownUsageSuppressesMessageFallback(t *testing.T
 	assert.Equal(t, 50, usage[0].OutputTokens)
 	assert.Empty(t, msgs[1].TokenUsage)
 }
+
+func TestParseCopilotSession_ShutdownCoverageWithoutTimestamps(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		messageTimestamp  string
+		shutdownTimestamp string
+	}{
+		{"missing shutdown", "2026-06-15T10:00:02Z", ""},
+		{"invalid shutdown", "2026-06-15T10:00:02Z", "invalid"},
+		{"missing message", "", "2026-06-15T10:01:00Z"},
+		{"both missing", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeCopilotJSONL(t,
+				`{"type":"session.start","data":{"sessionId":"coverage"},"timestamp":"2026-06-15T10:00:00Z"}`,
+				`{"type":"user.message","data":{"content":"Hello"}}`,
+				`{"type":"assistant.message","data":{"content":"First","model":"gpt-5.6-terra","outputTokens":42},"timestamp":"`+tc.messageTimestamp+`"}`,
+				`{"type":"session.shutdown","data":{"modelMetrics":{"gpt-5.6-terra":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"`+tc.shutdownTimestamp+`"}`,
+				`{"type":"assistant.message","data":{"content":"Resumed","model":"gpt-5.6-terra","outputTokens":7}}`,
+			)
+			_, messages, usage := parseCopilotFull(t, path, "local")
+			require.Len(t, usage, 1)
+			assert.Equal(t, 50, usage[0].OutputTokens)
+			require.Len(t, messages, 3)
+			assert.Empty(t, messages[1].TokenUsage, "shutdown already includes this response")
+			assert.JSONEq(t, `{"output_tokens":7}`, string(messages[2].TokenUsage), "later responses still need fallback usage")
+		})
+	}
+}

@@ -37,17 +37,18 @@ var copilotUsageBasedPricingStartedAt = time.Date(
 // copilotSessionBuilder accumulates state while scanning a
 // Copilot JSONL session file line by line.
 type copilotSessionBuilder struct {
-	messages       []ParsedMessage
-	usageEvents    []ParsedUsageEvent
-	firstMessage   string
-	startedAt      time.Time
-	endedAt        time.Time
-	sessionID      string
-	project        string
-	ordinal        int
-	currentModel   string
-	usageCoveredAt time.Time
-	fallbackOutput int
+	messages                []ParsedMessage
+	usageEvents             []ParsedUsageEvent
+	firstMessage            string
+	startedAt               time.Time
+	endedAt                 time.Time
+	sessionID               string
+	project                 string
+	ordinal                 int
+	currentModel            string
+	shutdownCoveredMessages int
+	usageCoveredAt          time.Time
+	fallbackOutput          int
 }
 
 func newCopilotSessionBuilder() *copilotSessionBuilder {
@@ -353,7 +354,8 @@ func (b *copilotSessionBuilder) handleShutdown(
 		},
 	)
 	if len(events) > 0 {
-		b.markUsageCoveredAt(ts)
+		// Transcript order identifies covered messages even without timestamps.
+		b.shutdownCoveredMessages = len(b.messages)
 	}
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Model < events[j].Model
@@ -385,7 +387,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 func (b *copilotSessionBuilder) applyMessageUsageFallback() {
 	for i := range b.messages {
 		message := &b.messages[i]
-		if message.Role != RoleAssistant || message.Model == "" ||
+		if i < b.shutdownCoveredMessages || message.Role != RoleAssistant || message.Model == "" ||
 			!message.HasOutputTokens ||
 			(!message.Timestamp.IsZero() &&
 				!message.Timestamp.After(b.usageCoveredAt)) {

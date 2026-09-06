@@ -554,8 +554,8 @@ add an archived or maintained mirror without replacing the original identity.
   cross-session subset but not its schema or billing semantics, so Agentsview
   uses these fields as observed token data and catalog-prices them. Transcript
   `session.shutdown.totalNanoAiu` remains the only authoritative reported-cost
-  source for sessions starting on or after June 1, 2026. Assistant messages can
-  persist model identity and output tokens; without either richer source,
+  source for sessions starting on or after June 1, 2026. Assistant messages
+  can persist model identity and output tokens; without either richer source,
   Agentsview records only that known output usage.
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
@@ -565,7 +565,11 @@ add an archived or maintained mirror without replacing the original identity.
   the next user message arrives after a long resumed-session idle gap.
   Reverified 2026-09-04 against current local transcripts: an
   `assistant.message` can carry `data.model` and `data.outputTokens` when no
-  usable `session.shutdown` metrics are present.
+  usable `session.shutdown` metrics are present. Parser coverage reverified
+  2026-09-06 with synthetic missing and invalid timestamp fixtures: shutdown
+  totals replace preceding message fallback, while later messages retain
+  fallback usage. These fixtures establish parser behavior, not that the CLI
+  emits timestamp-free records.
 
 ## Gemini CLI (`gemini`)
 
