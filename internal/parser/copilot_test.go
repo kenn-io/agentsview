@@ -1160,3 +1160,55 @@ func TestParseCopilotSession_ShutdownCoverageWithoutTimestamps(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCopilotSession_StoreCoverageReplacesShutdownCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		shutdownTimestamp string
+		storeTimestamp    string
+		storeOutput       int
+		wantFallback      bool
+	}{
+		{"stale store", "2026-09-04T17:00:05Z", "2026-09-04T17:00:03Z", 50, true},
+		{"missing shutdown timestamp", "", "2026-09-04T17:00:03Z", 50, true},
+		{"invalid shutdown timestamp", "invalid", "2026-09-04T17:00:03Z", 50, true},
+		{"caught up store", "", "2026-09-04T17:00:04Z", 53, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storePath := filepath.Join(t.TempDir(), "session-store.db")
+			store, err := sql.Open("sqlite3", storePath)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			_, err = store.Exec(`CREATE TABLE assistant_usage_events (
+				id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,
+				input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+				cache_write_tokens INTEGER, reasoning_tokens INTEGER, created_at TEXT
+			)`)
+			require.NoError(t, err)
+			_, err = store.Exec(`INSERT INTO assistant_usage_events VALUES
+				(1, 'store-coverage', 'gpt-5.6-sol', 100, ?, 0, 0, 0, ?)`, tc.storeOutput, tc.storeTimestamp)
+			require.NoError(t, err)
+			path := writeCopilotJSONL(t,
+				`{"type":"session.start","data":{"sessionId":"store-coverage"},"timestamp":"2026-09-04T17:00:00Z"}`,
+				`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`,
+				`{"type":"assistant.message","data":{"content":"First","model":"gpt-5.6-sol","outputTokens":50},"timestamp":"2026-09-04T17:00:02Z"}`,
+				`{"type":"assistant.message","data":{"content":"Later","model":"gpt-5.6-sol","outputTokens":3},"timestamp":"2026-09-04T17:00:04Z"}`,
+				`{"type":"session.shutdown","data":{"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":100,"outputTokens":53}}}},"timestamp":"`+tc.shutdownTimestamp+`"}`,
+			)
+			sess, messages, usage, err := newCopilotTestProvider(t).parseSessionWithStore(path, "local", storePath)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.Equal(t, 53, sess.TotalOutputTokens)
+			require.Len(t, usage, 1, "discarded shutdown tokens must not also be counted")
+			assert.Equal(t, "session-store", usage[0].Source)
+			assert.Equal(t, tc.storeOutput, usage[0].OutputTokens)
+			require.Len(t, messages, 3)
+			assert.Empty(t, messages[1].TokenUsage, "store already covers the first response")
+			if tc.wantFallback {
+				assert.JSONEq(t, `{"output_tokens":3}`, string(messages[2].TokenUsage))
+			} else {
+				assert.Empty(t, messages[2].TokenUsage, "caught-up store also covers the later response")
+			}
+		})
+	}
+}

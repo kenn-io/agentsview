@@ -569,7 +569,10 @@ add an archived or maintained mirror without replacing the original identity.
   2026-09-06 with synthetic missing and invalid timestamp fixtures: shutdown
   totals replace preceding message fallback, while later messages retain
   fallback usage. These fixtures establish parser behavior, not that the CLI
-  emits timestamp-free records.
+  emits timestamp-free records. Session-store coverage also reverified with
+  synthetic stale and caught-up store fixtures: replacing shutdown token rows
+  releases their positional coverage, but messages already covered by store
+  rows are not counted again.
 
 ## Gemini CLI (`gemini`)
 

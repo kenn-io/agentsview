@@ -618,6 +618,8 @@ func (p *copilotProvider) parseSessionWithStore(
 				break
 			}
 			b.usageEvents = storeUsage
+			// Only the selected token source determines message coverage.
+			b.shutdownCoveredMessages = 0
 			usesStoreUsage = true
 		}
 	}
