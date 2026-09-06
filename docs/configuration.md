@@ -831,6 +831,12 @@ use the `*_dirs` arrays for `s3://` roots. Sessions from every home appear under
 the same Claude or Codex provider, and names, projects, and titles come from the
 native session files, not from the wrapping tool's own metadata.
 
+At configuration load, local session roots become absolute paths with symbolic
+links resolved. Duplicate roots are removed before scanning or watching starts.
+Links to directories that do not exist yet retain their resolved destination,
+so creating the directory later does not register a second scan root. Each
+home's metadata paths remain separate from the shared transcript root.
+
 The Session Providers section of the Settings page edits the same lists. Adding
 or removing a home there writes `claude_homes` or `codex_homes` to
 `config.toml`. Like the provider enable toggles, the change takes effect after

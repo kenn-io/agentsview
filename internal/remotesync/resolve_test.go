@@ -32,7 +32,8 @@ func TestResolveTargetsExcludesNonLocalStructuredSessionSources(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, localMachine)
 	foreignMachine := localMachine + "-archive"
-	home := t.TempDir()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 	dataDir := filepath.Join(home, "data")
 	localRoot := filepath.Join(home, "local-copilot")
 	localStructuredRoot := filepath.Join(home, "local-structured-copilot")
@@ -48,6 +49,9 @@ func TestResolveTargetsExcludesNonLocalStructuredSessionSources(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	for _, def := range parser.Registry {
+		if def.DefaultRootEnvVar != "" {
+			t.Setenv(def.DefaultRootEnvVar, "")
+		}
 		if def.EnvVar != "" {
 			t.Setenv(def.EnvVar, "")
 		}

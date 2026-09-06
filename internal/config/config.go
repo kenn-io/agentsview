@@ -690,11 +690,10 @@ type Config struct {
 	// each effective configured root to its machine label for sync.
 	SessionSources []SessionSource                        `json:"-" toml:"-"`
 	SourceMachines map[parser.AgentType]map[string]string `json:"-" toml:"-"`
-	// RootAliases maps each effective root to configured roots that were
-	// folded into it because they resolve to the same directory, such as a
-	// second Codex home whose sessions directory links to the primary home.
-	// Providers scan the effective root once and read sidecar files from
-	// every alias.
+	// RootAliases maps canonical scan roots to absolute metadata-root paths.
+	// An alternate home can link its sessions directory to another home while
+	// keeping separate sidecars. These aliases identify the sidecar parents;
+	// providers scan only the canonical AgentDirs roots.
 	RootAliases          map[parser.AgentType]map[string][]string `json:"-" toml:"-"`
 	sessionSourceConfigs []sessionSourceConfig
 
@@ -2263,6 +2262,10 @@ func (c *Config) resolveSessionSources() error {
 			if value == "" {
 				continue
 			}
+			value, metadataRoot, err := normalizeRuntimeSessionRoot(value)
+			if err != nil {
+				return fmt.Errorf("resolve %s session source %q: %w", def.Type, rawDir, err)
+			}
 			key, err := sessionSourceComparisonKey(value)
 			if err != nil {
 				return fmt.Errorf(
@@ -2270,9 +2273,10 @@ func (c *Config) resolveSessionSources() error {
 				)
 			}
 			if existing, ok := seen[key]; ok {
-				recordAlias(def.Type, existing.dir, value)
+				recordAlias(def.Type, existing.dir, metadataRoot)
 				continue
 			}
+			recordAlias(def.Type, value, metadataRoot)
 			seen[key] = rootState{
 				dir:     value,
 				machine: c.LocalMachineName,
@@ -2301,7 +2305,12 @@ func (c *Config) resolveSessionSources() error {
 					fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
 				continue
 			}
-			for _, dir := range AgentHomeDirs(def, home) {
+			for _, rawDir := range AgentHomeDirs(def, home) {
+				dir, metadataRoot, err := normalizeRuntimeSessionRoot(rawDir)
+				if err != nil {
+					problems = append(problems, fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
+					continue
+				}
 				key, err := sessionSourceComparisonKey(dir)
 				if err != nil {
 					problems = append(problems,
@@ -2309,9 +2318,10 @@ func (c *Config) resolveSessionSources() error {
 					continue
 				}
 				if existing, duplicate := seen[key]; duplicate {
-					recordAlias(def.Type, existing.dir, dir)
+					recordAlias(def.Type, existing.dir, metadataRoot)
 					continue
 				}
+				recordAlias(def.Type, dir, metadataRoot)
 				seen[key] = rootState{dir: dir, machine: c.LocalMachineName}
 				c.AgentDirs[def.Type] = append(c.AgentDirs[def.Type], dir)
 			}
@@ -2348,7 +2358,7 @@ func (c *Config) resolveSessionSources() error {
 				fmt.Sprintf("entry %d (%s): dir %q is an S3 root; session_sources supports filesystem roots only, so configure S3 through the existing per-agent directory setting", entry, agent, input.Dir))
 			continue
 		}
-		dir, err := normalizeSessionSourceDir(input.Dir)
+		dir, metadataRoot, err := normalizeRuntimeSessionRoot(input.Dir)
 		if err != nil {
 			problems = append(problems,
 				fmt.Sprintf("entry %d (%s): %v", entry, agent, err))
@@ -2382,7 +2392,7 @@ func (c *Config) resolveSessionSources() error {
 		}
 		state, duplicate := seen[key]
 		if duplicate {
-			recordAlias(agent, state.dir, dir)
+			dir = state.dir
 			state.machine = machine
 			seen[key] = state
 		} else {
@@ -2392,6 +2402,7 @@ func (c *Config) resolveSessionSources() error {
 			}
 			c.AgentDirs[agent] = append(c.AgentDirs[agent], dir)
 		}
+		recordAlias(agent, dir, metadataRoot)
 		c.agentDirSource[agent] = dirFile
 		resolved = append(resolved, SessionSource{
 			Agent: agent, Dir: dir, Machine: machine,
@@ -2491,9 +2502,29 @@ func sessionSourceComparisonKey(dir string) (string, error) {
 	if strings.HasPrefix(strings.ToLower(dir), "s3://") {
 		return dir, nil
 	}
-	// Resolve symlinks so alternate homes or session roots that link to the
-	// same directory register once instead of as duplicate roots.
-	return pathutil.ResolvedComparisonKey(dir)
+	return pathutil.LocalComparisonKey(dir)
+}
+
+// Runtime scan roots are canonical absolute paths. The original home's
+// absolute path is kept separately for sidecars when only its session
+// directory is linked into another home.
+func normalizeRuntimeSessionRoot(raw string) (dir, metadataRoot string, err error) {
+	if strings.HasPrefix(strings.ToLower(raw), "s3://") {
+		return raw, raw, nil
+	}
+	expanded, err := normalizeSessionSourceDir(raw)
+	if err != nil {
+		return "", "", err
+	}
+	dir, err = pathutil.ResolveAbsolute(expanded)
+	if err != nil {
+		return "", "", err
+	}
+	home, err := pathutil.ResolveAbsolute(filepath.Dir(expanded))
+	if err != nil {
+		return "", "", err
+	}
+	return dir, filepath.Join(home, filepath.Base(expanded)), nil
 }
 
 // normalizeAgentHomeDir validates and expands one alternate agent home.

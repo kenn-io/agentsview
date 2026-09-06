@@ -44,9 +44,25 @@ func writeConfig(t *testing.T, dir string, data any) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), buf.Bytes(), 0o600), "write config")
 }
 
+// Use physical fixture paths so expected roots do not depend on the host's
+// temporary-directory symlinks. Tests create intentional aliases separately.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return dir
+}
+
+func absoluteTestPath(t *testing.T, path string) string {
+	t.Helper()
+	absolute, err := filepath.Abs(path)
+	require.NoError(t, err)
+	return absolute
+}
+
 func setupTestEnv(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	return dir
@@ -254,7 +270,7 @@ func assertLogContains(t *testing.T, buf *bytes.Buffer, substrs ...string) {
 func loadConfigFromFlags(t *testing.T, args ...string) (Config, error) {
 	t.Helper()
 	if os.Getenv("AGENTSVIEW_DATA_DIR") == "" {
-		t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+		t.Setenv("AGENTSVIEW_DATA_DIR", canonicalTempDir(t))
 	}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	RegisterServeFlags(fs)
@@ -267,7 +283,7 @@ func loadConfigFromFlags(t *testing.T, args ...string) (Config, error) {
 func loadConfigFromPFlags(t *testing.T, args ...string) (Config, error) {
 	t.Helper()
 	if os.Getenv("AGENTSVIEW_DATA_DIR") == "" {
-		t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+		t.Setenv("AGENTSVIEW_DATA_DIR", canonicalTempDir(t))
 	}
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	RegisterServePFlags(fs)
@@ -336,7 +352,7 @@ func TestLoadReadOnlyReadsLegacyJSONWithoutMigrating(t *testing.T) {
 	cfg, err := LoadReadOnly()
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{"/legacy/codex"},
+	assert.Equal(t, []string{absoluteTestPath(t, "/legacy/codex")},
 		cfg.ResolveDirs(parser.AgentCodex))
 	assert.Equal(t, []string{"Read", "Search"},
 		cfg.ResultContentBlockedCategories)
@@ -346,6 +362,7 @@ func TestLoadReadOnlyReadsLegacyJSONWithoutMigrating(t *testing.T) {
 }
 
 func TestDefault_IncludesCodexArchivedSessionsDir(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
 	cfg, err := Default()
 	require.NoError(t, err)
 
@@ -379,7 +396,7 @@ func TestDefault_IncludesDevinLocalShareRoots(t *testing.T) {
 }
 
 func TestDefault_IncludesHermesProfilesRoot(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	setTestHome(t, home)
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".hermes", "sessions"), 0o755))
 
@@ -392,7 +409,7 @@ func TestDefault_IncludesHermesProfilesRoot(t *testing.T) {
 }
 
 func TestDefault_HermesNoProfilesDirIsSafe(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	setTestHome(t, home)
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".hermes", "sessions"), 0o755))
 	cfg, err := Default()
@@ -403,9 +420,9 @@ func TestDefault_HermesNoProfilesDirIsSafe(t *testing.T) {
 }
 
 func TestDefault_HermesEnvReplacesDefaultAndProfilesRoots(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	setTestHome(t, home)
-	custom := filepath.Join(t.TempDir(), "hermes-sessions")
+	custom := filepath.Join(canonicalTempDir(t), "hermes-sessions")
 	t.Setenv("HERMES_SESSIONS_DIR", custom)
 
 	cfg, err := Default()
@@ -419,7 +436,7 @@ func TestLoadEnv_GoosePathRootUsesProducerLayout(t *testing.T) {
 	for _, basename := range []string{"data", "sessions"} {
 		t.Run(basename, func(t *testing.T) {
 			setupTestEnv(t)
-			pathRoot := filepath.Join(t.TempDir(), basename)
+			pathRoot := filepath.Join(canonicalTempDir(t), basename)
 			t.Setenv("GOOSE_PATH_ROOT", pathRoot)
 
 			cfg, err := Default()
@@ -839,19 +856,19 @@ func TestMigrateJSONToTOMLConcurrentCallersMigrateOnce(t *testing.T) {
 
 func TestLoadFile_ReadsDirArrays(t *testing.T) {
 	cfg := loadMinimalWithConfig(t, map[string]any{
-		"claude_project_dirs": []string{"/path/one", "/path/two"},
-		"codex_sessions_dirs": []string{"/codex/a"},
-		"aider_dirs":          []string{"/code"},
+		"claude_project_dirs": []string{absoluteTestPath(t, "/path/one"), absoluteTestPath(t, "/path/two")},
+		"codex_sessions_dirs": []string{absoluteTestPath(t, "/codex/a")},
+		"aider_dirs":          []string{absoluteTestPath(t, "/code")},
 	})
 
 	claudeDirs := cfg.ResolveDirs(parser.AgentClaude)
 	require.Len(t, claudeDirs, 2)
-	assert.Equal(t, "/path/one", claudeDirs[0])
-	assert.Equal(t, "/path/two", claudeDirs[1])
+	assert.Equal(t, absoluteTestPath(t, "/path/one"), claudeDirs[0])
+	assert.Equal(t, absoluteTestPath(t, "/path/two"), claudeDirs[1])
 	codexDirs := cfg.ResolveDirs(parser.AgentCodex)
 	require.Len(t, codexDirs, 1)
-	assert.Equal(t, "/codex/a", codexDirs[0])
-	assert.Equal(t, []string{"/code"}, cfg.ResolveDirs(parser.AgentAider))
+	assert.Equal(t, absoluteTestPath(t, "/codex/a"), codexDirs[0])
+	assert.Equal(t, []string{absoluteTestPath(t, "/code")}, cfg.ResolveDirs(parser.AgentAider))
 	assert.True(t, cfg.IsUserConfigured(parser.AgentAider))
 }
 
@@ -877,11 +894,11 @@ func TestAgentDirsExplicitEmptyArrayOverridesDefaults(t *testing.T) {
 func TestAgentDirsEnvBeatsExplicitEmptyArray(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, "grok_dirs = []\n")
-	t.Setenv("GROK_DIR", "/from/env/grok")
+	t.Setenv("GROK_DIR", absoluteTestPath(t, "/from/env/grok"))
 
 	cfg := f.LoadMinimal(t)
 
-	assert.Equal(t, []string{"/from/env/grok"}, cfg.ResolveDirs(parser.AgentGrok))
+	assert.Equal(t, []string{absoluteTestPath(t, "/from/env/grok")}, cfg.ResolveDirs(parser.AgentGrok))
 	assert.True(t, cfg.IsUserConfigured(parser.AgentGrok))
 }
 
@@ -895,7 +912,7 @@ func TestAgentDirsArrayPresenceTable(t *testing.T) {
 		empty    bool
 	}{
 		{name: "omitted retains defaults"},
-		{name: "non-empty replaces defaults", config: `grok_dirs = ["/from/config"]`, wantUser: true, want: []string{"/from/config"}},
+		{name: "non-empty replaces defaults", config: `grok_dirs = ["/from/config"]`, wantUser: true, want: []string{absoluteTestPath(t, "/from/config")}},
 		{name: "empty clears defaults", config: "grok_dirs = []", wantUser: true, empty: true},
 	}
 
@@ -948,7 +965,7 @@ func TestAgentDirsNonexistentOverrideAndBlankEntry(t *testing.T) {
 
 	cfg := f.LoadMinimal(t)
 
-	assert.Equal(t, []string{"C:/path/that/does/not/exist"},
+	assert.Equal(t, []string{absoluteTestPath(t, "C:/path/that/does/not/exist")},
 		cfg.ResolveDirs(parser.AgentGrok))
 	assert.True(t, cfg.IsUserConfigured(parser.AgentGrok))
 }
@@ -966,9 +983,9 @@ machine = "archivebox"
 
 	cfg := f.LoadMinimal(t)
 
-	assert.Equal(t, []string{"/sessions/archive"}, cfg.ResolveDirs(parser.AgentGrok))
+	assert.Equal(t, []string{absoluteTestPath(t, "/sessions/archive")}, cfg.ResolveDirs(parser.AgentGrok))
 	assert.Equal(t, "archivebox",
-		cfg.SourceMachines[parser.AgentGrok]["/sessions/archive"])
+		cfg.SourceMachines[parser.AgentGrok][absoluteTestPath(t, "/sessions/archive")])
 	assert.True(t, cfg.IsUserConfigured(parser.AgentGrok))
 }
 
@@ -991,20 +1008,20 @@ machine = "archivebox"
 	cfg := f.LoadMinimal(t)
 
 	assert.Equal(t, []string{
-		"/sessions/local",
-		"/sessions/duplicate/.",
-		"/sessions/archive",
+		absoluteTestPath(t, "/sessions/local"),
+		absoluteTestPath(t, "/sessions/duplicate"),
+		absoluteTestPath(t, "/sessions/archive"),
 	}, cfg.ResolveDirs(parser.AgentCopilot))
 	assert.Equal(t, cfg.LocalMachineName,
-		cfg.SourceMachines[parser.AgentCopilot]["/sessions/local"])
+		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/local")])
 	assert.Equal(t, "archivebox",
-		cfg.SourceMachines[parser.AgentCopilot]["/sessions/duplicate/."])
+		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/duplicate")])
 	assert.Equal(t, "buildbox",
-		cfg.SourceMachines[parser.AgentCopilot]["/sessions/archive"])
+		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/archive")])
 	assert.True(t, cfg.IsUserConfigured(parser.AgentCopilot))
 }
 
-func TestLoadFileSessionSourcePreservesConfiguredPathSpelling(t *testing.T) {
+func TestLoadFileSessionSourceNormalizesConfiguredPathSpelling(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, `
 [[session_sources]]
@@ -1016,15 +1033,15 @@ machine = "archivebox"
 	cfg := f.LoadMinimal(t)
 
 	require.Len(t, cfg.SessionSources, 1)
-	assert.Equal(t, "/sessions/archive/.", cfg.SessionSources[0].Dir)
-	assert.Contains(t, cfg.ResolveDirs(parser.AgentCopilot), "/sessions/archive/.")
+	assert.Equal(t, absoluteTestPath(t, "/sessions/archive"), cfg.SessionSources[0].Dir)
+	assert.Contains(t, cfg.ResolveDirs(parser.AgentCopilot), absoluteTestPath(t, "/sessions/archive"))
 	assert.Equal(t, "archivebox",
-		cfg.SourceMachines[parser.AgentCopilot]["/sessions/archive/."])
+		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/archive")])
 }
 
 func TestLoadFileSessionSourcesRemainAdditiveToEnvDirs(t *testing.T) {
 	f := newConfigFixture(t)
-	t.Setenv("COPILOT_DIR", "/sessions/from-env")
+	t.Setenv("COPILOT_DIR", absoluteTestPath(t, "/sessions/from-env"))
 	f.WriteConfigText(t, `
 copilot_dirs = ["/sessions/from-config"]
 
@@ -1037,13 +1054,13 @@ machine = "archivebox"
 	cfg := f.LoadMinimal(t)
 
 	assert.Equal(t, []string{
-		"/sessions/from-env",
-		"/sessions/from-archive",
+		absoluteTestPath(t, "/sessions/from-env"),
+		absoluteTestPath(t, "/sessions/from-archive"),
 	}, cfg.ResolveDirs(parser.AgentCopilot))
 	assert.Equal(t, cfg.LocalMachineName,
-		cfg.SourceMachines[parser.AgentCopilot]["/sessions/from-env"])
+		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/from-env")])
 	assert.Equal(t, "archivebox",
-		cfg.SourceMachines[parser.AgentCopilot]["/sessions/from-archive"])
+		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/from-archive")])
 }
 
 func TestLoadFileSessionSourcesPreserveLegacyS3Roots(t *testing.T) {
@@ -1179,21 +1196,21 @@ func TestResolveDirs(t *testing.T) {
 		{
 			"ConfigOverrides",
 			map[string]any{
-				"claude_project_dirs": []string{"/a", "/b"},
+				"claude_project_dirs": []string{absoluteTestPath(t, "/a"), absoluteTestPath(t, "/b")},
 			},
 			"",
 			false,
-			[]string{"/a", "/b"},
+			[]string{absoluteTestPath(t, "/a"), absoluteTestPath(t, "/b")},
 			true,
 		},
 		{
 			"EnvOverrides",
 			map[string]any{
-				"claude_project_dirs": []string{"/a"},
+				"claude_project_dirs": []string{absoluteTestPath(t, "/a")},
 			},
-			"/env/override",
+			absoluteTestPath(t, "/env/override"),
 			false,
-			[]string{"/env/override"},
+			[]string{absoluteTestPath(t, "/env/override")},
 			true,
 		},
 	}
@@ -1227,7 +1244,7 @@ func TestResolveDirs(t *testing.T) {
 func TestResolveDirs_ClaudeConfigDirRootEnvVar(t *testing.T) {
 	t.Run("root env re-roots implicit default", func(t *testing.T) {
 		dir := setupTestEnv(t)
-		root := t.TempDir()
+		root := canonicalTempDir(t)
 		t.Setenv("CLAUDE_CONFIG_DIR", root)
 		writeConfig(t, dir, map[string]any{})
 
@@ -1241,31 +1258,31 @@ func TestResolveDirs_ClaudeConfigDirRootEnvVar(t *testing.T) {
 
 	t.Run("projects env beats root env", func(t *testing.T) {
 		dir := setupTestEnv(t)
-		root := t.TempDir()
+		root := canonicalTempDir(t)
 		t.Setenv("CLAUDE_CONFIG_DIR", root)
-		t.Setenv("CLAUDE_PROJECTS_DIR", "/env/override")
+		t.Setenv("CLAUDE_PROJECTS_DIR", absoluteTestPath(t, "/env/override"))
 		writeConfig(t, dir, map[string]any{})
 
 		cfg, err := LoadMinimal()
 		require.NoError(t, err)
 
-		assert.Equal(t, []string{"/env/override"},
+		assert.Equal(t, []string{absoluteTestPath(t, "/env/override")},
 			cfg.ResolveDirs(parser.AgentClaude))
 		assert.True(t, cfg.IsUserConfigured(parser.AgentClaude))
 	})
 
 	t.Run("config file beats root env", func(t *testing.T) {
 		dir := setupTestEnv(t)
-		root := t.TempDir()
+		root := canonicalTempDir(t)
 		t.Setenv("CLAUDE_CONFIG_DIR", root)
 		writeConfig(t, dir, map[string]any{
-			"claude_project_dirs": []string{"/from/config"},
+			"claude_project_dirs": []string{absoluteTestPath(t, "/from/config")},
 		})
 
 		cfg, err := LoadMinimal()
 		require.NoError(t, err)
 
-		assert.Equal(t, []string{"/from/config"},
+		assert.Equal(t, []string{absoluteTestPath(t, "/from/config")},
 			cfg.ResolveDirs(parser.AgentClaude))
 		assert.True(t, cfg.IsUserConfigured(parser.AgentClaude))
 	})
@@ -1275,20 +1292,20 @@ func TestResolveDirs_DeepSeekHarnessPrecedence(t *testing.T) {
 	t.Run("config array overrides default", func(t *testing.T) {
 		dir := setupTestEnv(t)
 		writeConfig(t, dir, map[string]any{
-			"deepseek_harness_sessions_dirs": []string{"/one", "/two"},
+			"deepseek_harness_sessions_dirs": []string{absoluteTestPath(t, "/one"), absoluteTestPath(t, "/two")},
 		})
 
 		cfg, err := LoadMinimal()
 		require.NoError(t, err)
 
-		assert.Equal(t, []string{"/one", "/two"},
+		assert.Equal(t, []string{absoluteTestPath(t, "/one"), absoluteTestPath(t, "/two")},
 			cfg.ResolveDirs(parser.AgentDeepSeekHarness))
 		assert.True(t, cfg.IsUserConfigured(parser.AgentDeepSeekHarness))
 	})
 
 	t.Run("DSH_HOME re-roots implicit default", func(t *testing.T) {
 		dir := setupTestEnv(t)
-		root := t.TempDir()
+		root := canonicalTempDir(t)
 		t.Setenv("DSH_HOME", root)
 		writeConfig(t, dir, map[string]any{})
 
@@ -1302,29 +1319,29 @@ func TestResolveDirs_DeepSeekHarnessPrecedence(t *testing.T) {
 
 	t.Run("sessions env beats DSH_HOME", func(t *testing.T) {
 		dir := setupTestEnv(t)
-		t.Setenv("DSH_HOME", t.TempDir())
-		t.Setenv("DEEPSEEK_HARNESS_SESSIONS_DIR", "/from/env")
+		t.Setenv("DSH_HOME", canonicalTempDir(t))
+		t.Setenv("DEEPSEEK_HARNESS_SESSIONS_DIR", absoluteTestPath(t, "/from/env"))
 		writeConfig(t, dir, map[string]any{})
 
 		cfg, err := LoadMinimal()
 		require.NoError(t, err)
 
-		assert.Equal(t, []string{"/from/env"},
+		assert.Equal(t, []string{absoluteTestPath(t, "/from/env")},
 			cfg.ResolveDirs(parser.AgentDeepSeekHarness))
 		assert.True(t, cfg.IsUserConfigured(parser.AgentDeepSeekHarness))
 	})
 
 	t.Run("environment beats config array", func(t *testing.T) {
 		dir := setupTestEnv(t)
-		t.Setenv("DEEPSEEK_HARNESS_SESSIONS_DIR", "/from/env")
+		t.Setenv("DEEPSEEK_HARNESS_SESSIONS_DIR", absoluteTestPath(t, "/from/env"))
 		writeConfig(t, dir, map[string]any{
-			"deepseek_harness_sessions_dirs": []string{"/one", "/two"},
+			"deepseek_harness_sessions_dirs": []string{absoluteTestPath(t, "/one"), absoluteTestPath(t, "/two")},
 		})
 
 		cfg, err := LoadMinimal()
 		require.NoError(t, err)
 
-		assert.Equal(t, []string{"/from/env"},
+		assert.Equal(t, []string{absoluteTestPath(t, "/from/env")},
 			cfg.ResolveDirs(parser.AgentDeepSeekHarness))
 		assert.True(t, cfg.IsUserConfigured(parser.AgentDeepSeekHarness))
 	})
@@ -1333,10 +1350,10 @@ func TestResolveDirs_DeepSeekHarnessPrecedence(t *testing.T) {
 func TestResolveDirs_DevinPrecedenceAndMergeRules(t *testing.T) {
 	t.Run("config overrides defaults", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{
-			"devin_dirs": []string{"/from/config/devin"},
+			"devin_dirs": []string{absoluteTestPath(t, "/from/config/devin")},
 		})
 
-		assert.Equal(t, []string{"/from/config/devin"},
+		assert.Equal(t, []string{absoluteTestPath(t, "/from/config/devin")},
 			cfg.ResolveDirs(parser.AgentDevin))
 		assert.True(t, cfg.IsUserConfigured(parser.AgentDevin))
 	})
@@ -1344,13 +1361,13 @@ func TestResolveDirs_DevinPrecedenceAndMergeRules(t *testing.T) {
 	t.Run("env overrides config", func(t *testing.T) {
 		f := newConfigFixture(t)
 		f.WriteTOML(t, map[string]any{
-			"devin_dirs": []string{"/from/config/devin"},
+			"devin_dirs": []string{absoluteTestPath(t, "/from/config/devin")},
 		})
-		t.Setenv("DEVIN_DIR", "/from/env/devin")
+		t.Setenv("DEVIN_DIR", absoluteTestPath(t, "/from/env/devin"))
 
 		cfg := f.LoadMinimal(t)
 
-		assert.Equal(t, []string{"/from/env/devin"},
+		assert.Equal(t, []string{absoluteTestPath(t, "/from/env/devin")},
 			cfg.ResolveDirs(parser.AgentDevin))
 		assert.True(t, cfg.IsUserConfigured(parser.AgentDevin))
 	})
@@ -1358,13 +1375,13 @@ func TestResolveDirs_DevinPrecedenceAndMergeRules(t *testing.T) {
 	t.Run("config file still applies when env unset", func(t *testing.T) {
 		f := newConfigFixture(t)
 		f.WriteTOML(t, map[string]any{
-			"devin_dirs": []string{"/from/config/devin", "/second/config/devin"},
+			"devin_dirs": []string{absoluteTestPath(t, "/from/config/devin"), absoluteTestPath(t, "/second/config/devin")},
 		})
 		t.Setenv("DEVIN_DIR", "")
 
 		cfg := f.LoadMinimal(t)
 
-		assert.Equal(t, []string{"/from/config/devin", "/second/config/devin"},
+		assert.Equal(t, []string{absoluteTestPath(t, "/from/config/devin"), absoluteTestPath(t, "/second/config/devin")},
 			cfg.ResolveDirs(parser.AgentDevin))
 		assert.True(t, cfg.IsUserConfigured(parser.AgentDevin))
 	})
@@ -1377,7 +1394,7 @@ func TestResolveDataDir_DefaultAndEnvOverride(t *testing.T) {
 	assert.NotEmpty(t, dir, "ResolveDataDir returned empty string")
 
 	// With env override, should return the override
-	custom := t.TempDir()
+	custom := canonicalTempDir(t)
 	t.Setenv("AGENTSVIEW_DATA_DIR", custom)
 	dir, err = ResolveDataDir()
 	require.NoError(t, err)
@@ -1385,7 +1402,7 @@ func TestResolveDataDir_DefaultAndEnvOverride(t *testing.T) {
 }
 
 func TestResolveDataDir_ExpandsHome(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	setTestHome(t, home)
 	t.Setenv("AGENTSVIEW_DATA_DIR", "~/agentsview-data")
 
@@ -1399,7 +1416,7 @@ func TestResolveDataDir_ExpandsHome(t *testing.T) {
 // and that the canonical name wins when both are set.
 func TestDataDir_LegacyEnvFallback(t *testing.T) {
 	t.Run("legacy used when canonical unset", func(t *testing.T) {
-		legacy := t.TempDir()
+		legacy := canonicalTempDir(t)
 		t.Setenv("AGENT_VIEWER_DATA_DIR", legacy)
 		dir, err := ResolveDataDir()
 		require.NoError(t, err)
@@ -1407,8 +1424,8 @@ func TestDataDir_LegacyEnvFallback(t *testing.T) {
 	})
 
 	t.Run("canonical wins over legacy", func(t *testing.T) {
-		legacy := t.TempDir()
-		canonical := t.TempDir()
+		legacy := canonicalTempDir(t)
+		canonical := canonicalTempDir(t)
 		t.Setenv("AGENT_VIEWER_DATA_DIR", legacy)
 		t.Setenv("AGENTSVIEW_DATA_DIR", canonical)
 		dir, err := ResolveDataDir()
@@ -1420,14 +1437,14 @@ func TestDataDir_LegacyEnvFallback(t *testing.T) {
 func TestEnvOverridesConfigFile(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteTOML(t, map[string]any{
-		"codex_sessions_dirs": []string{"/from/config"},
+		"codex_sessions_dirs": []string{absoluteTestPath(t, "/from/config")},
 	})
-	t.Setenv("CODEX_SESSIONS_DIR", "/from/env")
+	t.Setenv("CODEX_SESSIONS_DIR", absoluteTestPath(t, "/from/env"))
 
 	cfg := f.LoadMinimal(t)
 
 	dirs := cfg.ResolveDirs(parser.AgentCodex)
-	assert.Equal(t, []string{"/from/env"}, dirs)
+	assert.Equal(t, []string{absoluteTestPath(t, "/from/env")}, dirs)
 }
 
 func TestLoadFile_MalformedDirValueLogsWarning(t *testing.T) {
@@ -1437,7 +1454,7 @@ func TestLoadFile_MalformedDirValueLogsWarning(t *testing.T) {
 	// Write a config where claude_project_dirs is a string
 	// instead of a string array.
 	f.WriteTOML(t, map[string]any{
-		"claude_project_dirs": "/not/an/array",
+		"claude_project_dirs": absoluteTestPath(t, "/not/an/array"),
 	})
 
 	// Capture log output during Load.
@@ -2015,7 +2032,7 @@ func TestDuckDBConfig_LoadsFileAndEnv(t *testing.T) {
 }
 
 func TestResolveDuckDB_Defaults(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	cfg := Config{DataDir: dir}
 
 	resolved, err := cfg.ResolveDuckDB()
@@ -2028,7 +2045,7 @@ func TestResolveDuckDB_Defaults(t *testing.T) {
 func TestResolveDuckDB_ExpandsEnvVars(t *testing.T) {
 	t.Setenv("DUCKDB_URL", "quack:localhost")
 	t.Setenv("DUCKDB_TOKEN", "secret-token")
-	t.Setenv("DUCKDB_PATH", filepath.Join(t.TempDir(), "remote.duckdb"))
+	t.Setenv("DUCKDB_PATH", filepath.Join(canonicalTempDir(t), "remote.duckdb"))
 
 	cfg := Config{
 		DuckDB: DuckDBConfig{
@@ -2355,7 +2372,7 @@ func TestLoadFile_SyncIncludeCwdPrefixesDefaultsEmpty(t *testing.T) {
 }
 
 func TestLoadMinimal_ExpandsUserSuppliedLocalPaths(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	setTestHome(t, home)
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, `sync_include_cwd_prefixes = ["~/work"]
@@ -2401,13 +2418,13 @@ func TestIsDefaultAgentsviewDBPath(t *testing.T) {
 	t.Parallel()
 
 	// A plain file inside a real ~/.agentsview directory.
-	defaultDir := filepath.Join(t.TempDir(), ".agentsview")
+	defaultDir := filepath.Join(canonicalTempDir(t), ".agentsview")
 	require.NoError(t, os.MkdirAll(defaultDir, 0o700))
 	defaultDB := filepath.Join(defaultDir, "sessions.db")
 	require.NoError(t, os.WriteFile(defaultDB, []byte("db"), 0o600))
 
 	// A plain file outside ~/.agentsview.
-	labDir := filepath.Join(t.TempDir(), "recall-lab-data")
+	labDir := filepath.Join(canonicalTempDir(t), "recall-lab-data")
 	require.NoError(t, os.MkdirAll(labDir, 0o700))
 	labDB := filepath.Join(labDir, "sessions.db")
 	require.NoError(t, os.WriteFile(labDB, []byte("db"), 0o600))
@@ -2425,7 +2442,7 @@ func TestIsDefaultAgentsviewDBPath(t *testing.T) {
 	))
 
 	// A relative dangling symlink resolves against the link's own directory.
-	siblingRoot := t.TempDir()
+	siblingRoot := canonicalTempDir(t)
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(siblingRoot, ".agentsview"), 0o700,
 	))
@@ -2599,9 +2616,9 @@ func TestLoadFileSessionSourceAbsoluteDirDeduplicatesRelativeLegacyRoot(t *testi
 		}},
 	})
 
-	assert.Equal(t, []string{relative}, cfg.ResolveDirs(parser.AgentCopilot),
+	assert.Equal(t, []string{absolute}, cfg.ResolveDirs(parser.AgentCopilot),
 		"equivalent roots must retain one scan path")
-	assert.Equal(t, map[string]string{relative: "archivebox"},
+	assert.Equal(t, map[string]string{absolute: "archivebox"},
 		cfg.SourceMachines[parser.AgentCopilot],
 		"the structured entry must relabel the equivalent legacy root")
 }
