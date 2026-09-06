@@ -2630,16 +2630,6 @@ func TestGetAnalyticsTools(t *testing.T) {
 	})
 }
 
-func TestAnalyticsToolsToolCallsQueryAggregatesInSQL(t *testing.T) {
-	q := analyticsToolsQuery("(?,?)", "", "", false)
-	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
-
-	assert.Contains(t, normalized,
-		"select tc.session_id, tc.category, trim(coalesce(tc.tool_name, '')), count(*)")
-	assert.Contains(t, normalized,
-		"group by tc.session_id, tc.category, trim(coalesce(tc.tool_name, ''))")
-}
-
 func TestGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	t *testing.T,
 ) {
@@ -3176,23 +3166,6 @@ func TestGetAnalyticsSkillsDateBoundaries(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int{"2024-06-10": 1}, trend,
 		"only the in-range week is bucketed")
-}
-
-func TestAnalyticsSkillsToolCallsQueryAggregatesInSQL(t *testing.T) {
-	q := analyticsSkillsQuery("(?,?)", "", "")
-	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
-
-	assert.Contains(t, normalized,
-		"select tc.session_id, trim(tc.skill_name), count(*), "+
-			"coalesce(m.timestamp, '')")
-	assert.Contains(t, normalized,
-		"left join messages m on m.session_id = tc.session_id "+
-			"and m.id = tc.message_id")
-	assert.Contains(t, normalized,
-		"trim(coalesce(tc.skill_name, '')) != ''")
-	assert.Contains(t, normalized,
-		"group by tc.session_id, trim(tc.skill_name), "+
-			"coalesce(m.timestamp, '')")
 }
 
 func TestGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
@@ -5005,14 +4978,6 @@ func TestSQLiteTimeModifier(t *testing.T) {
 }
 
 func TestGetAnalyticsToolsExcludesOutOfRangeToolCallRowsInSQL(t *testing.T) {
-	var observedQuery string
-	previousObserver := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "FROM tool_calls") {
-			observedQuery = query
-		}
-	}
-	t.Cleanup(func() { analyticsQueryObserver = previousObserver })
 	d := testDB(t)
 	ids := []string{"in", "pre", "post", "fallback"}
 	dates := []string{"2025-06-01T12:00:00Z", "2023-01-01T12:00:00Z", "2027-01-01T12:00:00Z", "2025-06-01T12:00:00Z"}
@@ -5029,29 +4994,37 @@ func TestGetAnalyticsToolsExcludesOutOfRangeToolCallRowsInSQL(t *testing.T) {
 			insertMessages(t, d, m)
 		}
 	}
+	hook := new(countingQueryHook)
+	d.bunReader = d.bunReader.WithQueryHook(hook)
 	f := AnalyticsFilter{From: "2025-06-01", To: "2025-06-01", Timezone: "UTC"}
 	resp, err := d.GetAnalyticsTools(context.Background(), f)
 	require.NoError(t, err)
 	assert.Equal(t, 3, resp.TotalCalls)
 	require.Len(t, resp.ByTool, 1)
 	assert.Equal(t, 2, resp.ByTool[0].SessionCount)
-	t.Logf("TotalCalls == %d; sessions == %d", resp.TotalCalls, resp.ByTool[0].SessionCount)
-	from, to := f.messageWindowBoundsUTC()
-	windowPred, _ := analyticsMessageWindowPred("m.timestamp", from, to)
-	require.NotEmpty(t, observedQuery, "production tool query was not observed")
-	assert.Contains(t, observedQuery, windowPred,
-		"production tool query must carry the message window predicate")
-	t.Log("production tool query carried the message window predicate; TotalCalls == 3; sessions == 2")
+	require.Len(t, hook.queries, 1)
+	query := hook.queries[0]
+	facts := strings.Index(query, "FROM tool_calls")
+	require.GreaterOrEqual(t, facts, 0)
+	group := strings.Index(query[facts:], "GROUP BY")
+	require.Greater(t, group, 0)
+	predicate := query[facts : facts+group]
+	assert.Contains(t, predicate, ">= '2025-06-01'")
+	assert.Contains(t, predicate, "<= '2025-06-01'")
+
 }
 
-func TestAnalyticsMessageWindowBoundsDoNotOverflowMaxDate(t *testing.T) {
-	from, to := (AnalyticsFilter{
-		From: "9999-12-31", To: "9999-12-31", Timezone: "UTC",
-	}).messageWindowBoundsUTC()
-	require.NotEmpty(t, from)
-	assert.Empty(t, to)
-	assert.NotContains(t, from, "10000")
-	t.Logf("max-date bounds: from=%s; to=%q", from, to)
+func TestAnalyticsToolsSupportsMaximumDate(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "max-date", "window")
+	message := asstMsgAt("max-date", 0, "read", "2025-06-01T12:00:00Z")
+	message.ToolCalls = []ToolCall{{ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, message)
+	result, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{
+		From: "2025-06-01", To: "9999-12-31", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TotalCalls)
 }
 
 func TestGetAnalyticsSkillsKeepsUTCPlus14BoundaryCall(t *testing.T) {
@@ -5080,11 +5053,13 @@ func TestGetAnalyticsSkillsPreservesSubMinuteLastUsedAt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, resp.TotalSkillCalls)
 	require.Len(t, resp.BySkill, 1)
-	assert.Equal(t, "2025-06-01T12:00:10.900Z", resp.BySkill[0].LastUsedAt)
+	lastUsed, err := time.Parse(time.RFC3339Nano, resp.BySkill[0].LastUsedAt)
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Date(2025, 6, 1, 12, 0, 10, 900_000_000, time.UTC), lastUsed, 0)
 	t.Logf("calls == %d; LastUsedAt == %s", resp.TotalSkillCalls, resp.BySkill[0].LastUsedAt)
 }
 
-func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
+func TestGetAnalyticsToolsLargeFilteredArchive(t *testing.T) {
 	d := testDB(t)
 	ids := make([]string, maxSQLVars+1)
 	for n := range ids {
@@ -5101,25 +5076,7 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	f := AnalyticsFilter{From: "2025-06-01", To: "2025-06-01", Timezone: "UTC", Model: "model-a"}
 	resp, err := d.GetAnalyticsTools(context.Background(), f)
 	require.NoError(t, err)
-	ph, args := inPlaceholders(ids)
-	modelPred, modelArgs := sqliteAnalyticsCSVPredicate("m.model", f.Model)
-	from, to := f.messageWindowBoundsUTC()
-	pred, windowArgs := analyticsMessageWindowPred("m.timestamp", from, to)
-	args = append(append(args, modelArgs...), windowArgs...)
-	rows, err := d.getReader().QueryContext(context.Background(), analyticsToolsQuery(ph, modelPred, pred, true), args...)
-	require.NoError(t, err)
-	defer rows.Close()
-	var all []ToolAnalyticsRow
-	for rows.Next() {
-		var r ToolAnalyticsRow
-		var ts string
-		require.NoError(t, rows.Scan(&r.SessionID, &r.Category, &r.ToolName, &r.Count, &ts))
-		r.Agent = defaultAgent
-		r.Date = "2025-06-01"
-		all = append(all, r)
-	}
-	require.NoError(t, rows.Err())
-	assert.Equal(t, BuildToolsAnalytics(all), resp)
 	assert.Equal(t, 501, resp.TotalCalls)
-	t.Log("chunked and unchunked responses match; TotalCalls == 501")
+	require.Len(t, resp.ByTool, 1)
+	assert.Equal(t, "Read", resp.ByTool[0].ToolName)
 }

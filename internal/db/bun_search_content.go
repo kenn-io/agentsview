@@ -437,6 +437,7 @@ func (s *BunStore) filterContentHitsBySessionScope(
 	where, args := buildBunSessionBaseFilter(
 		semanticContentSessionFilter(filter), s.backend.TimestampOrderExpr,
 	)
+	where, args = AppendExcludeSessionIDs(where, args, "session.id", filter.ExcludeSessionIDs)
 	allowed := make(map[string]struct{}, len(ids))
 	if err := queryChunked(ids, func(chunk []string) error {
 		var rows []struct {
@@ -617,6 +618,7 @@ func (s *BunStore) hydrateContentSearchHits(
 			contentSessionFilter(filter), s.backend.TimestampOrderExpr,
 		)
 	}
+	where, args = AppendExcludeSessionIDs(where, args, "session.id", filter.ExcludeSessionIDs)
 	var sessions []bunContentSession
 	query := store.NewSelect().TableExpr("sessions AS session").
 		ColumnExpr("session.id AS id").ColumnExpr("session.project AS project").
@@ -846,6 +848,7 @@ func (s *BunStore) bunContentPortableFTSHits(
 	where, scopeArgs := buildBunSessionFilter(
 		contentSessionFilter(filter), s.backend.TimestampOrderExpr,
 	)
+	where, scopeArgs = AppendExcludeSessionIDs(where, scopeArgs, "session.id", filter.ExcludeSessionIDs)
 	predicates := make([]string, len(terms))
 	args := make([]any, 0, len(terms)+len(scopeArgs)+2)
 	for i, term := range terms {
@@ -903,6 +906,7 @@ func (s *BunStore) bunContentCandidateQuery(
 	where, scopeArgs := buildBunSessionFilter(
 		contentSessionFilter(filter), s.backend.TimestampOrderExpr,
 	)
+	where, scopeArgs = AppendExcludeSessionIDs(where, scopeArgs, "session.id", filter.ExcludeSessionIDs)
 	scope := func(column string) string {
 		return column + " IN (SELECT id FROM sessions AS session WHERE " + where + ")"
 	}

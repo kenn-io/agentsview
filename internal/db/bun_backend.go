@@ -291,10 +291,10 @@ func (b *sqliteBunBackend) Update(
 	if b.store.readOnly {
 		return ErrReadOnly
 	}
+	if b.store.writerClosed.Load() {
+		return ErrWriterClosed
+	}
 	if b.store.bunWriter == nil {
-		if b.store.writerClosed.Load() {
-			return ErrWriterClosed
-		}
 		return ErrReadOnly
 	}
 	return fn(b.store.bunWriter)

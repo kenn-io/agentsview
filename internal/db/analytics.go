@@ -224,60 +224,6 @@ func (f AnalyticsFilter) utcRange() (string, string) {
 	return from, to
 }
 
-func (f AnalyticsFilter) messageWindowBoundsUTC() (string, string) {
-	from, to := f.utcRange()
-	if f.From == "" {
-		from = ""
-	}
-	if f.To == "" {
-		to = ""
-	} else if f.To == "9999-12-31" {
-		to = ""
-	} else if t, err := time.Parse(time.RFC3339, to); err == nil {
-		to = t.Add(time.Second).Format(time.RFC3339)
-	}
-	return strings.TrimSuffix(from, "Z"), strings.TrimSuffix(to, "Z")
-}
-
-func analyticsMessageWindowPred(col, from, to string) (string, []any) {
-	var preds []string
-	var args []any
-	if from != "" {
-		preds = append(preds, col+" >= ?")
-		args = append(args, from)
-	}
-	if to != "" {
-		preds = append(preds, col+" < ?")
-		args = append(args, to)
-	}
-	if len(preds) == 0 {
-		return "", nil
-	}
-	return "(" + col + " IS NULL OR " + col + " = '' OR strftime('%Y', " + col + ") IS NULL OR (" + strings.Join(preds, " AND ") + "))", args
-}
-
-var analyticsQueryObserver func(string)
-
-func observeAnalyticsQuery(query string) {
-	if analyticsQueryObserver != nil {
-		analyticsQueryObserver(query)
-	}
-}
-
-func (f AnalyticsFilter) toolSessionWindowSQL(dateCol, sessionID string) (string, []any) {
-	from, to := f.messageWindowBoundsUTC()
-	sessionPred, args := analyticsMessageWindowPred(dateCol, from, to)
-	if sessionPred == "" {
-		return "", nil
-	}
-	messagePred, messageArgs := analyticsMessageWindowPred("wm.timestamp", from, to)
-	return "(" + sessionPred + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = " + sessionID + " AND " + messagePred + "))", append(args, messageArgs...)
-}
-
-func sqliteAnalyticsMinuteKey() string {
-	return "COALESCE(strftime('%Y-%m-%dT%H:%M', m.timestamp), m.timestamp, '')"
-}
-
 // buildWhere returns a WHERE clause and args for common
 // analytics filters.
 func (f AnalyticsFilter) buildWhere(
@@ -1416,74 +1362,6 @@ func skillProjectBreakdowns(
 	})
 	return out
 }
-
-func analyticsToolsQuery(
-	placeholders string,
-	modelPred string,
-	windowPred string,
-	includeMessageMeta bool,
-) string {
-	query := `SELECT tc.session_id, tc.category,
-			TRIM(COALESCE(tc.tool_name, '')), COUNT(*)`
-	if includeMessageMeta {
-		query += `, MAX(COALESCE(m.timestamp, ''))`
-	}
-	query += `
-		FROM tool_calls tc`
-	if includeMessageMeta {
-		query += `
-		LEFT JOIN messages m
-			ON m.session_id = tc.session_id AND m.id = tc.message_id`
-	}
-	query += `
-		WHERE tc.session_id IN ` + placeholders
-	if modelPred != "" {
-		query += `
-			AND ` + modelPred
-	}
-	if windowPred != "" {
-		query += ` AND ` + windowPred
-	}
-	query += `
-		GROUP BY tc.session_id, tc.category,
-			TRIM(COALESCE(tc.tool_name, ''))`
-	if includeMessageMeta {
-		query += `, ` + sqliteAnalyticsMinuteKey()
-	}
-	return query
-}
-
-func analyticsSkillsQuery(
-	placeholders string,
-	modelPred string,
-	windowPred string,
-) string {
-	query := `SELECT tc.session_id, TRIM(tc.skill_name), COUNT(*),
-			COALESCE(m.timestamp, '')
-		FROM tool_calls tc
-		LEFT JOIN messages m
-			ON m.session_id = tc.session_id AND m.id = tc.message_id
-		WHERE tc.session_id IN ` + placeholders + `
-			AND TRIM(COALESCE(tc.skill_name, '')) != ''`
-	if modelPred != "" {
-		query += `
-			AND ` + modelPred
-	}
-	if windowPred != "" {
-		query += ` AND ` + windowPred
-	}
-	query += `
-		GROUP BY tc.session_id, TRIM(tc.skill_name),
-			COALESCE(m.timestamp, '')`
-	return query
-}
-
-// GetAnalyticsTools returns tool usage analytics aggregated
-// from the tool_calls table.
-
-// Fetch filtered session IDs and their metadata.
-
-// Query tool_calls for filtered sessions (chunked).
 
 // ResolveSkillRowTime resolves the timestamp for a single skill call and
 // applies the date and hour/day-of-week filters to it. The message

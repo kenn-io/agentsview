@@ -3,6 +3,8 @@ package db
 import (
 	"encoding/json/jsontext"
 	"fmt"
+	"io"
+	"log"
 	"testing"
 )
 
@@ -83,7 +85,9 @@ func seedBenchSession(
 // complete-session writer when only the streaming tail changed. The batch core
 // must apply a scoped repair instead of rebuilding FTS for unchanged history.
 func BenchmarkWriteSessionAtomicStreamingMerge(b *testing.B) {
-	silenceBenchmarkLogs(b)
+	previousLogOutput := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() { log.SetOutput(previousLogOutput) })
 	const stored = 1000
 	d := testDB(b)
 	msgs := seedBenchSession(b, d, "bench-replace", stored)

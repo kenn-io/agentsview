@@ -1072,12 +1072,16 @@ func TestSearchContentExcludeSessionIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all.Matches, 2)
 
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
-		Pattern: "needle", Mode: "substring",
-		Sources: []string{"messages"}, Limit: 1,
-		ExcludeSessionIDs: []string{"drop", " drop "},
-	})
-	require.NoError(t, err)
-	require.Len(t, got.Matches, 1, "excluded id must not consume the page")
-	assert.Equal(t, "keep", got.Matches[0].SessionID)
+	for _, mode := range []string{"substring", "regex", "fts"} {
+		t.Run(mode, func(t *testing.T) {
+			got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+				Pattern: "needle", Mode: mode,
+				Sources: []string{"messages"}, Limit: 1,
+				ExcludeSessionIDs: []string{"drop", " drop "},
+			})
+			require.NoError(t, err)
+			require.Len(t, got.Matches, 1, "excluded id must not consume the page")
+			assert.Equal(t, "keep", got.Matches[0].SessionID)
+		})
+	}
 }

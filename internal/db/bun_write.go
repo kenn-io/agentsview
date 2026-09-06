@@ -85,10 +85,10 @@ func (db *DB) beginBunWriteTx(
 	if db.readOnly {
 		return bun.Tx{}, ErrReadOnly
 	}
+	if db.writerClosed.Load() {
+		return bun.Tx{}, ErrWriterClosed
+	}
 	if db.bunWriter == nil {
-		if db.writerClosed.Load() {
-			return bun.Tx{}, ErrWriterClosed
-		}
 		return bun.Tx{}, ErrReadOnly
 	}
 	return db.bunWriter.BeginTx(ctx, (*sql.TxOptions)(nil))
@@ -100,10 +100,10 @@ func (db *DB) acquireBunWriteConn(ctx context.Context) (bun.Conn, error) {
 	if db.readOnly {
 		return bun.Conn{}, ErrReadOnly
 	}
+	if db.writerClosed.Load() {
+		return bun.Conn{}, ErrWriterClosed
+	}
 	if db.bunWriter == nil {
-		if db.writerClosed.Load() {
-			return bun.Conn{}, ErrWriterClosed
-		}
 		return bun.Conn{}, ErrReadOnly
 	}
 	return db.bunWriter.Conn(ctx)
@@ -306,9 +306,9 @@ func canonicalToolRows(
 			eventIndices := CanonicalToolResultEventIndexes(call.ResultEvents)
 			for eventPosition, result := range call.ResultEvents {
 				eventIndex := eventIndices[eventPosition]
-				if result.ContentLength == 0 {
-					result.ContentLength = len(result.Content)
-				}
+				result.ContentLength = ResolveResultContentLength(
+					result.Content, result.ContentLength,
+				)
 				if result.ToolUseID == "" {
 					result.ToolUseID = call.ToolUseID
 				}

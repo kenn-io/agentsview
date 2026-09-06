@@ -643,3 +643,38 @@ func TestBunStoreSearchContentSemanticPreservesResolvedSingletonRange(t *testing
 	require.Len(t, page.Matches, 1)
 	assert.Equal(t, [2]int{1, 1}, page.Matches[0].OrdinalRange)
 }
+
+func TestBunSearchExcludesSessionsBeforeSemanticAndHybridLimits(t *testing.T) {
+	for _, mode := range []string{"semantic", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			database := testDB(t)
+			for _, id := range []string{"drop", "keep"} {
+				seedSearchSession(t, database, id, "project", [][2]string{
+					{"user", "needle"}, {"assistant", "reply"},
+				})
+			}
+			semantic := &literalSemanticCapability{
+				available: true, units: []UnitRef{{}},
+			}
+			if mode == "semantic" {
+				semantic.hits = []ContentSearchHit{
+					{SessionID: "drop", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
+						RangeResolved: true, Location: "message", Score: new(0.9)},
+					{SessionID: "keep", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
+						RangeResolved: true, Location: "message", Score: new(0.5)},
+				}
+			}
+			backend := &searchTestBackend{
+				store: database.bunReader, semantic: semantic,
+				hybridLexical: sqliteFullTextCapability{store: database},
+			}
+			page, err := NewBunStore(backend).SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: "needle", Mode: mode, IncludeOneShot: true, Limit: 1,
+				ExcludeSessionIDs: []string{"drop", " drop ", ""},
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, "keep", page.Matches[0].SessionID)
+		})
+	}
+}
