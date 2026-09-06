@@ -76,6 +76,8 @@
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
+  import { events } from "./lib/stores/events.svelte.js";
+  import { notifications } from "./lib/stores/notifications.svelte.js";
   import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
   import {
     yokedDates,
@@ -746,6 +748,15 @@
     sync.checkForUpdate();
     sync.startPolling();
 
+    // Desktop notifications share the app's single SSE connection;
+    // decided frames come from the backend's notify hub.
+    events.setNotificationHandler((n) => notifications.deliver(n));
+    const onWindowFocus = () => {
+      notifications.handleFocus((sessionId) =>
+        router.navigateToSession(sessionId, { msg: "last" }),
+      );
+    };
+    window.addEventListener("focus", onWindowFocus);
     const healthCleanup = setupVisibilityHealthCheck(getBase, {
       onBackendDegraded: () => sync.markBackendDegraded(),
     });
@@ -758,10 +769,17 @@
     return () => {
       healthCleanup();
       cleanup();
+      events.setNotificationHandler(null);
+      window.removeEventListener("focus", onWindowFocus);
       window.removeEventListener("show-about", showAbout);
       sync.stopPolling();
       sync.unwatchSession();
     };
+  });
+
+  // Suppress desktop toasts for the session the user is reading.
+  $effect(() => {
+    notifications.setActiveSession(router.sessionId);
   });
 
 </script>

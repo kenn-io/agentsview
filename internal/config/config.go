@@ -484,6 +484,19 @@ type AgentConfig struct {
 	AllowUnsafe bool   `json:"allow_unsafe,omitempty" toml:"allow_unsafe"`
 }
 
+// NotificationsConfig controls desktop notifications for session
+// changes. Turn-end notifications use the parser-derived
+// termination status; NewReply is the optional fallback reminder
+// for sessions without a reliable end-of-turn signal.
+type NotificationsConfig struct {
+	Enabled            bool     `json:"enabled" toml:"enabled"`
+	NotifyNewReply     bool     `json:"notify_new_reply" toml:"notify_new_reply"`
+	MergeWindowSeconds int      `json:"merge_window_seconds,omitempty" toml:"merge_window_seconds"`
+	Agents             []string `json:"agents,omitempty" toml:"agents"`
+	Projects           []string `json:"projects,omitempty" toml:"projects"`
+	SuppressSubagents  *bool    `json:"suppress_subagents,omitempty" toml:"suppress_subagents"`
+}
+
 // InsightsConfig controls an optional OpenAI-compatible chat-completions
 // endpoint for generated insights.
 type InsightsConfig struct {
@@ -719,6 +732,7 @@ type Config struct {
 	Recall               RecallConfig           `json:"recall,omitempty" toml:"recall"`
 	Insights             InsightsConfig         `json:"insights,omitempty" toml:"insights"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
+	Notifications        NotificationsConfig    `json:"notifications,omitempty" toml:"notifications"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration          `json:"-" toml:"-"`
 	// InstallationID identifies this data directory independently of its label.
@@ -3287,6 +3301,27 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 			return err
 		}
 		c.Terminal = live
+		return nil
+	})
+}
+
+// SaveNotificationsConfig persists the desktop-notification policy
+// to the config file and updates the in-memory copy.
+func (c *Config) SaveNotificationsConfig(nc NotificationsConfig) error {
+	if nc.MergeWindowSeconds < 0 {
+		return fmt.Errorf("merge_window_seconds must not be negative")
+	}
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return fmt.Errorf("reading config file: %w", err)
+		}
+
+		existing["notifications"] = nc
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		c.Notifications = nc
 		return nil
 	})
 }
