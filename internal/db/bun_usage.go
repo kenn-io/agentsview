@@ -1018,12 +1018,13 @@ func bunDailyEventUsageColumns() string {
 
 func (s *BunStore) loadDailyUsageRows(
 	ctx context.Context, filter UsageFilter, includeCursor, matching bool,
+	arena *usageReadArena,
 ) ([]dailyUsageScanRow, error) {
 	var staged []dailyUsageScanRow
 	err := s.consistentView(ctx, func(store bun.IDB) error {
 		var err error
 		staged, err = s.loadDailyUsageRowsFrom(
-			ctx, store, filter, includeCursor, matching,
+			ctx, store, filter, includeCursor, matching, arena,
 		)
 		return err
 	})
@@ -1032,9 +1033,9 @@ func (s *BunStore) loadDailyUsageRows(
 
 func (s *BunStore) loadDailyUsageRowsFrom(
 	ctx context.Context, store bun.IDB, filter UsageFilter,
-	includeCursor, matching bool,
+	includeCursor, matching bool, arena *usageReadArena,
 ) ([]dailyUsageScanRow, error) {
-	rows, err := s.loadBunSessionUsageRows(ctx, store, filter, matching)
+	rows, err := s.loadBunSessionUsageRows(ctx, store, filter, matching, arena)
 	if err != nil {
 		return nil, err
 	}
@@ -1046,6 +1047,7 @@ func (s *BunStore) loadDailyUsageRowsFrom(
 		rows = append(rows, cursor...)
 	}
 	sortDailyUsageRows(rows)
+	arena.rows = rows
 	return rows, nil
 }
 
@@ -1068,6 +1070,7 @@ func (s *BunStore) loadSessionUsageRowsFrom(
 
 func (s *BunStore) loadBunSessionUsageRows(
 	ctx context.Context, store bun.IDB, filter UsageFilter, matching bool,
+	arena *usageReadArena,
 ) ([]dailyUsageScanRow, error) {
 	queryFilter := filter
 	if !matching {
@@ -1078,7 +1081,7 @@ func (s *BunStore) loadBunSessionUsageRows(
 		queryFilter = usageSnapshotInputFilter(filter)
 	}
 	if !matching {
-		return s.loadBunNormalizedDailyUsageRows(ctx, store, queryFilter, filter)
+		return s.loadBunNormalizedDailyUsageRows(ctx, store, queryFilter, filter, arena)
 	}
 	projections, err := s.loadBunDailyUsageProjections(
 		ctx, store, queryFilter, true,
@@ -1086,7 +1089,7 @@ func (s *BunStore) loadBunSessionUsageRows(
 	if err != nil {
 		return nil, err
 	}
-	rows := make([]dailyUsageScanRow, 0, len(projections))
+	rows := slices.Grow(arena.rows[:0], len(projections))
 	for _, row := range projections {
 		rows = append(rows, dailyUsageProjectionToRow(row))
 	}
@@ -1123,6 +1126,7 @@ func (s *BunStore) loadBunDailyUsageProjections(
 
 func (s *BunStore) loadBunNormalizedDailyUsageRows(
 	ctx context.Context, store bun.IDB, queryFilter, filter UsageFilter,
+	arena *usageReadArena,
 ) ([]dailyUsageScanRow, error) {
 	loc := filter.location()
 	bounded := usageBoundsForFilter(filter).bounded()
@@ -1139,10 +1143,16 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 	)
 	claudeMessageQuery = claudeMessageQuery.
 		Where("m.claude_message_id != ?", "").
-		Where("m.claude_request_id != ?", "")
-	rows := make([]dailyUsageScanRow, 0)
-	claudeRows := make([]bunDailyUsageProjection, 0)
-	snapshotRows := make([]activity.UsageRow, 0)
+		Where("m.claude_request_id != ?", "").
+		ColumnExpr("COUNT(*) OVER() AS candidate_count")
+	rows := arena.rows[:0]
+	claudeRows := arena.projections[:0]
+	snapshotRows := arena.snapshots[:0]
+	defer func() {
+		arena.projections = claudeRows
+		arena.snapshots = snapshotRows
+		arena.rows = rows
+	}()
 	metadata := make(map[string]bunDailyUsageProjection)
 	withinBounds := func(daily dailyUsageScanRow) bool {
 		if !bounded {
@@ -1163,7 +1173,13 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 		}
 		return nil
 	}
+	claudeCapacityPrepared := false
 	consumeClaude := func(row bunDailyUsageProjection) error {
+		if !claudeCapacityPrepared {
+			claudeRows = slices.Grow(claudeRows, row.CandidateCount)
+			snapshotRows = slices.Grow(snapshotRows, row.CandidateCount)
+			claudeCapacityPrepared = true
+		}
 		daily := dailyUsageProjectionToRow(row)
 		if !withinBounds(daily) {
 			return nil
@@ -1211,13 +1227,22 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 		return nil, fmt.Errorf("querying daily usage events: %w", err)
 	}
 	if err := streamBunDailyUsageProjections(
-		ctx, claudeMessageQuery, true, false, consumeClaude,
+		ctx, claudeMessageQuery, true, true, consumeClaude,
 	); err != nil {
 		return nil, fmt.Errorf("querying Claude daily usage messages: %w", err)
 	}
 
 	mask, attribution, webSearchRequests :=
 		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
+	// Repeated snapshots need projection storage, but only surviving snapshots
+	// need output rows. Reserve after selection to avoid retaining discarded rows.
+	survivorCount := 0
+	for _, survives := range mask {
+		if survives {
+			survivorCount++
+		}
+	}
+	rows = slices.Grow(rows, survivorCount)
 	for i, row := range claudeRows {
 		if !mask[i] {
 			continue
@@ -1422,10 +1447,11 @@ func (s *BunStore) bunDailyUsageQueries(
 
 func (s *BunStore) streamDailyUsageRowsFrom(
 	ctx context.Context, store bun.IDB, filter UsageFilter, includeCursor, matching bool,
+	arena *usageReadArena,
 	consume func(dailyUsageScanRow) error,
 ) error {
 	rows, err := s.loadDailyUsageRowsFrom(
-		ctx, store, filter, includeCursor, matching,
+		ctx, store, filter, includeCursor, matching, arena,
 	)
 	if err != nil {
 		return err

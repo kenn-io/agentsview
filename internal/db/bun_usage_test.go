@@ -194,7 +194,7 @@ func TestLoadBunNormalizedDailyUsageRowsFiltersOrdinaryStreamsBeforeScan(t *test
 	filter := UsageFilter{Timezone: "UTC", Model: "wanted-model"}
 
 	_, err := common.loadBunNormalizedDailyUsageRows(
-		t.Context(), store, usageSnapshotInputFilter(filter), filter,
+		t.Context(), store, usageSnapshotInputFilter(filter), filter, new(usageReadArena),
 	)
 	require.NoError(t, err)
 	require.Len(t, hook.queries, 3)
@@ -203,6 +203,44 @@ func TestLoadBunNormalizedDailyUsageRowsFiltersOrdinaryStreamsBeforeScan(t *test
 	assert.Contains(t, hook.queries[1], "ue.model IN ('wanted-model')")
 	assert.NotContains(t, hook.queries[2], "m.model IN ('wanted-model')")
 	assert.Contains(t, hook.queries[2], "m.claude_message_id != ''")
+}
+
+func TestBunDailyUsageResultsOutliveSnapshotArena(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-04T12:00:00Z"
+	for _, id := range []string{"project-a", "project-b"} {
+		require.NoError(t, database.UpsertSession(Session{
+			ID: id, Project: id, Agent: "claude", Machine: "local",
+			StartedAt: &started, CreatedAt: started,
+		}))
+	}
+	require.NoError(t, database.InsertMessages([]Message{
+		{SessionID: "project-a", Ordinal: 0, Role: "assistant", Model: "model-a",
+			Timestamp: started, ClaudeMessageID: "message-a", ClaudeRequestID: "request-a",
+			TokenUsage: []byte(`{"output_tokens":5}`)},
+		{SessionID: "project-a", Ordinal: 1, Role: "assistant", Model: "model-a",
+			Timestamp: "2026-08-04T12:00:01Z", ClaudeMessageID: "message-a", ClaudeRequestID: "request-a",
+			TokenUsage: []byte(`{"output_tokens":9}`)},
+		{SessionID: "project-b", Ordinal: 0, Role: "assistant", Model: "model-b",
+			Timestamp: started, ClaudeMessageID: "message-b", ClaudeRequestID: "request-b",
+			TokenUsage: []byte(`{"output_tokens":4}`)},
+	}))
+	common := NewBunStore(&sessionContractBackend{store: database.bunReader})
+	first, err := common.GetDailyUsage(t.Context(), UsageFilter{
+		Timezone: "UTC", Project: "project-a",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 9, first.Totals.OutputTokens)
+	for range 3 {
+		second, err := common.GetDailyUsage(t.Context(), UsageFilter{
+			Timezone: "UTC", Project: "project-b",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 4, second.Totals.OutputTokens)
+		assert.Equal(t, 9, first.Totals.OutputTokens)
+		require.Len(t, first.Daily, 1)
+		assert.Equal(t, "2026-08-04", first.Daily[0].Date)
+	}
 }
 
 // A missing ID predicate would admit ignored-session rows, adapter-specific

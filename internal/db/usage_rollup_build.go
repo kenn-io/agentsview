@@ -22,13 +22,21 @@ type usagePriceInput struct {
 }
 
 type usagePriceResult struct {
-	PricedModel, MatchedPattern, RateHash string
-	RateOK                                bool
-	Cost, Savings                         money.Money
-	AuthoritativeCost                     *money.Money
-	BandThreshold                         *int
-	ComputedRequest, ComputedAggregate    int
-	Reported, BaseRequest                 int
+	PricedModel, MatchedPattern        string
+	model                              string
+	rates                              export.ModelRates
+	RateOK                             bool
+	Cost, Savings                      money.Money
+	AuthoritativeCost                  *money.Money
+	BandThreshold                      *int
+	ComputedRequest, ComputedAggregate int
+	Reported, BaseRequest              int
+}
+
+// Live reports need costs and provenance, while persisted rollups also need
+// the rate fingerprint. Compute it only at that persistence boundary.
+func (p usagePriceResult) rateHash() string {
+	return usageRateHash(p.model, p.PricedModel, p.MatchedPattern, p.RateOK, p.rates)
 }
 
 type usageRollupFact struct {
@@ -110,8 +118,7 @@ func priceUsageFact(
 	}
 	result := usagePriceResult{
 		PricedModel: pricedModel, MatchedPattern: lookup.Pattern,
-		RateHash: usageRateHash(
-			model, pricedModel, lookup.Pattern, lookup.OK, lookup.Rates),
+		model: model, rates: lookup.Rates,
 		RateOK: lookup.OK,
 	}
 	selectedRates := lookup.Rates
@@ -234,6 +241,7 @@ func buildUsageDailyContributions(
 		if err != nil {
 			return nil, err
 		}
+		rateHash := priced.rateHash()
 		band := -1
 		if priced.BandThreshold != nil {
 			band = *priced.BandThreshold
@@ -242,7 +250,7 @@ func buildUsageDailyContributions(
 			session: fact.AttributionSessionID, date: fact.LocalDate,
 			model: fact.Model, providerID: fact.Fact.ProviderID,
 			priced:  priced.PricedModel,
-			pattern: priced.MatchedPattern, rateHash: priced.RateHash,
+			pattern: priced.MatchedPattern, rateHash: rateHash,
 			rateOK: priced.RateOK, band: band,
 		}
 		row := rows[itemKey]
@@ -253,7 +261,7 @@ func buildUsageDailyContributions(
 				ProviderID:  fact.Fact.ProviderID,
 				PricedModel: priced.PricedModel, MatchedPattern: priced.MatchedPattern,
 				PricingTimestamp: timestamp,
-				RateOK:           priced.RateOK, RateHash: priced.RateHash,
+				RateOK:           priced.RateOK, RateHash: rateHash,
 				BandThreshold: priced.BandThreshold,
 			}
 			rows[itemKey] = row

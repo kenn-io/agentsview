@@ -26,6 +26,48 @@ func TestTranscriptMessagesEqualUsesCanonicalTimestampPrecision(t *testing.T) {
 	assert.True(t, transcriptMessagesEqual(stored, incoming))
 }
 
+func TestTranscriptMessagesEqualCanonicalValues(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		stored, incoming Message
+		equal            bool
+	}{
+		{
+			name:     "same instant with different offsets",
+			stored:   Message{Timestamp: "2026-08-04T01:02:03.123456Z"},
+			incoming: Message{Timestamp: "2026-08-03T21:02:03.123456999-04:00"},
+			equal:    true,
+		},
+		{
+			name:     "different persisted microseconds",
+			stored:   Message{Timestamp: "2026-08-04T01:02:03.123456Z"},
+			incoming: Message{Timestamp: "2026-08-04T01:02:03.123457Z"},
+		},
+		{
+			name:     "sanitized text and token usage",
+			stored:   Message{Content: "answer", TokenUsage: []byte(`{"output_tokens":3}`)},
+			incoming: Message{Content: "ans\x00wer", TokenUsage: []byte("{\"output_tokens\":3}\x00")},
+			equal:    true,
+		},
+		{
+			name:     "changed token usage",
+			stored:   Message{TokenUsage: []byte(`{"output_tokens":3}`)},
+			incoming: Message{TokenUsage: []byte(`{"output_tokens":4}`)},
+		},
+		{
+			name:     "empty token usage",
+			incoming: Message{TokenUsage: []byte{}},
+			equal:    true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.equal, transcriptMessagesEqual(
+				[]Message{test.stored}, []Message{test.incoming},
+			))
+		})
+	}
+}
+
 func TestReplaceSessionMessagesCanonicalNoOpDoesNotRepairRows(t *testing.T) {
 	d := testDB(t)
 	stored := []Message{

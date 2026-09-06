@@ -7,32 +7,58 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
+// Comparisons borrow canonical row storage only for the duration of the call.
+// Clear it before returning the lease so transcript content is not retained.
+var messageComparisonPool = sync.Pool{New: func() any {
+	return new([2]bunmodel.Message)
+}}
+
 // messageRowEqual reports whether two messages have the same canonical
 // message, tool-call, and tool-result projections. Deep comparison is required
 // because nullable canonical fields are independently allocated pointers whose
 // values, rather than pointer identities, define persistence equality.
 func messageRowEqual(a, b Message) bool {
-	aTimestamp := canonicalTranscriptTimestamp(a.Timestamp)
-	bTimestamp := canonicalTranscriptTimestamp(b.Timestamp)
+	if !canonicalTranscriptTimestampsEqual(a.Timestamp, b.Timestamp) ||
+		SanitizeUTF8(string(a.TokenUsage)) != SanitizeUTF8(string(b.TokenUsage)) {
+		return false
+	}
 	a.Timestamp = ""
 	b.Timestamp = ""
-	aMessages, aCalls, aResults, err := CanonicalMessageRows([]Message{a})
+	a.TokenUsage = nil
+	b.TokenUsage = nil
+	rows := messageComparisonPool.Get().(*[2]bunmodel.Message)
+	defer func() {
+		clear(rows[:])
+		messageComparisonPool.Put(rows)
+	}()
+	var err error
+	rows[0], err = canonicalMessageRow(a)
 	if err != nil {
 		return false
 	}
-	bMessages, bCalls, bResults, err := CanonicalMessageRows([]Message{b})
+	rows[1], err = canonicalMessageRow(b)
+	if err != nil || !reflect.DeepEqual(&rows[0], &rows[1]) {
+		return false
+	}
+	if len(a.ToolCalls) == 0 && len(b.ToolCalls) == 0 {
+		return true
+	}
+	aCalls, aResults, err := canonicalToolRows([]Message{a})
 	if err != nil {
 		return false
 	}
-	return aTimestamp == bTimestamp &&
-		reflect.DeepEqual(aMessages, bMessages) &&
-		reflect.DeepEqual(aCalls, bCalls) &&
+	bCalls, bResults, err := canonicalToolRows([]Message{b})
+	if err != nil {
+		return false
+	}
+	return reflect.DeepEqual(aCalls, bCalls) &&
 		reflect.DeepEqual(aResults, bResults)
 }
 
@@ -96,7 +122,6 @@ func transcriptMessageEqual(a, b Message) bool {
 		msg.SourceType = ""
 		msg.SourceParentUUID = ""
 		msg.IsSidechain = false
-		msg.Timestamp = canonicalTranscriptTimestamp(msg.Timestamp)
 		msg.ToolCalls = append([]ToolCall(nil), msg.ToolCalls...)
 		for i := range msg.ToolCalls {
 			msg.ToolCalls[i].ResultContentLength = 0
@@ -106,9 +131,6 @@ func transcriptMessageEqual(a, b Message) bool {
 			)
 			for j := range msg.ToolCalls[i].ResultEvents {
 				msg.ToolCalls[i].ResultEvents[j].ContentLength = 0
-				msg.ToolCalls[i].ResultEvents[j].Timestamp = canonicalTranscriptTimestamp(
-					msg.ToolCalls[i].ResultEvents[j].Timestamp,
-				)
 			}
 		}
 		return msg
@@ -119,12 +141,16 @@ func transcriptMessageEqual(a, b Message) bool {
 	)
 }
 
-func canonicalTranscriptTimestamp(value string) string {
-	parsed, err := bunmodel.ParseTimestamp(value)
-	if err != nil {
-		return value
+func canonicalTranscriptTimestampsEqual(a, b string) bool {
+	if a == b {
+		return true
 	}
-	return parsed.Time.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
+	left, err := bunmodel.ParseTimestamp(a)
+	if err != nil {
+		return false
+	}
+	right, err := bunmodel.ParseTimestamp(b)
+	return err == nil && left.Truncate(time.Microsecond).Equal(right.Truncate(time.Microsecond))
 }
 
 // planSessionMessageDiff classifies incoming messages against stored
