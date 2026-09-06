@@ -1084,7 +1084,7 @@ func TestLoadFileSessionSourceDefaultsMachineToHostname(t *testing.T) {
 
 	require.NotEmpty(t, cfg.LocalMachineName)
 	assert.Equal(t, cfg.LocalMachineName,
-		cfg.SourceMachines[parser.AgentCopilot]["/sessions/archive"])
+		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/archive")])
 	require.Len(t, cfg.SessionSources, 1)
 	assert.Equal(t, cfg.LocalMachineName, cfg.SessionSources[0].Machine)
 }

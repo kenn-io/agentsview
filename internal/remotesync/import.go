@@ -129,6 +129,7 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 		layout.paths.remoteDirs = append(layout.paths.remoteDirs, remoteFile)
 		layout.paths.localDirs = append(layout.paths.localDirs, local)
 	}
+	codexAliases := make(map[string][]string)
 	for remoteRoot, indexes := range selectedCodexIndexFiles(targets, targets.CodexIndexFiles) {
 		localRoot, err := safeRemappedRemotePath(root, remoteRoot)
 		if err != nil {
@@ -143,11 +144,11 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 			if alias == localRoot {
 				continue
 			}
-			if layout.rootAliases == nil {
-				layout.rootAliases = map[parser.AgentType]map[string][]string{parser.AgentCodex: {}}
-			}
-			layout.rootAliases[parser.AgentCodex][localRoot] = append(layout.rootAliases[parser.AgentCodex][localRoot], alias)
+			codexAliases[localRoot] = append(codexAliases[localRoot], alias)
 		}
+	}
+	if len(codexAliases) > 0 {
+		layout.rootAliases = map[parser.AgentType]map[string][]string{parser.AgentCodex: codexAliases}
 	}
 	return layout, nil
 }
