@@ -331,6 +331,7 @@ export * from "./rawSyncUploadResponse.ts";
 export * from "./rawSyncUploadStartInputBody.ts";
 export * from "./remoteSyncRequest.ts";
 export * from "./remotesyncTargetSet.ts";
+export * from "./remotesyncTargetSetCodexIndexFiles.ts";
 export * from "./remotesyncTargetSetDirs.ts";
 export * from "./remotesyncTargetSetFiles.ts";
 export * from "./remotesyncTargetSetProviderExtraFiles.ts";

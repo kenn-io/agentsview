@@ -534,6 +534,7 @@ type Engine struct {
 	agentDirs               map[parser.AgentType][]string
 	sourceMachines          map[parser.AgentType]map[string]string
 	rootAliases             map[parser.AgentType]map[string][]string
+	releaseCodexAliases     func()
 	preserveAgents          []parser.AgentType
 	machine                 string
 	blockedResultCategories map[string]bool
@@ -878,7 +879,12 @@ func NewEngine(
 		}
 		rootAliases[agent] = cloned
 	}
-	InstallRootAliases(rootAliases)
+	var releaseCodexAliases func()
+	if cfg.Ephemeral {
+		releaseCodexAliases = parser.RegisterTemporaryCodexAliases(rootAliases[parser.AgentCodex])
+	} else {
+		InstallRootAliases(rootAliases)
+	}
 	providerFactories := parser.ProviderFactories()
 	if cfg.ProviderFactories != nil {
 		providerFactories = cfg.ProviderFactories
@@ -915,6 +921,7 @@ func NewEngine(
 		agentDirs:               dirs,
 		sourceMachines:          sourceMachines,
 		rootAliases:             rootAliases,
+		releaseCodexAliases:     releaseCodexAliases,
 		preserveAgents:          disabledAgents,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
@@ -1105,6 +1112,9 @@ func pathWithinRoot(path, root string) bool {
 // the scheduler. Call once when the engine's owner shuts down;
 // safe to call repeatedly.
 func (e *Engine) Close() {
+	if e.releaseCodexAliases != nil {
+		e.releaseCodexAliases()
+	}
 	e.signalSched.stop()
 }
 

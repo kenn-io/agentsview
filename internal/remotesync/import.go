@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -83,8 +84,9 @@ func requireCompleteProcessing(stats syncpkg.SyncStats) error {
 // this mapping independent from Importer lets prepared HTTP imports and future
 // rebuild contributors share the exact engine inputs and cache translation.
 type importLayout struct {
-	engineDirs map[parser.AgentType][]string
-	paths      remotePathMap
+	engineDirs  map[parser.AgentType][]string
+	rootAliases map[parser.AgentType]map[string][]string
+	paths       remotePathMap
 }
 
 type remotePathMap struct {
@@ -126,6 +128,26 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 		}
 		layout.paths.remoteDirs = append(layout.paths.remoteDirs, remoteFile)
 		layout.paths.localDirs = append(layout.paths.localDirs, local)
+	}
+	for remoteRoot, indexes := range selectedCodexIndexFiles(targets, targets.CodexIndexFiles) {
+		localRoot, err := safeRemappedRemotePath(root, remoteRoot)
+		if err != nil {
+			return importLayout{}, err
+		}
+		for _, index := range indexes {
+			localIndex, err := safeRemappedRemotePath(root, index)
+			if err != nil {
+				return importLayout{}, err
+			}
+			alias := filepath.Join(filepath.Dir(localIndex), filepath.Base(localRoot))
+			if alias == localRoot {
+				continue
+			}
+			if layout.rootAliases == nil {
+				layout.rootAliases = map[parser.AgentType]map[string][]string{parser.AgentCodex: {}}
+			}
+			layout.rootAliases[parser.AgentCodex][localRoot] = append(layout.rootAliases[parser.AgentCodex][localRoot], alias)
+		}
 	}
 	return layout, nil
 }
@@ -187,6 +209,7 @@ func importEngineConfig(
 ) syncpkg.EngineConfig {
 	return syncpkg.EngineConfig{
 		AgentDirs:               layout.engineDirs,
+		RootAliases:             layout.rootAliases,
 		Machine:                 host,
 		IDPrefix:                rebuildIDPrefix(host),
 		PathRewriter:            layout.paths.pathRewriter(),

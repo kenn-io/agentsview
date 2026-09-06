@@ -412,6 +412,10 @@ add an archived or maintained mirror without replacing the original identity.
   parent. UUID versions and identifier bytes carry no chronological meaning;
   the first turn id absent from the parent begins child-owned usage. Missing
   parents fail open, and child-only subagent transcripts are left unchanged.
+  Legacy `session_index.jsonl` files from aliased homes also travel through
+  remote archive export and import. Reverified on 2026-09-06 with
+  `TestRemoteCodexAliasTitleSurvivesArchiveImport`, which checks the imported
+  title and preserves the running daemon's separate local index associations.
   S3 imports list the child's configured Codex root for its explicitly named
   parent and materialize only that one parent beside the child. When the
   parent is not yet available or has no turns, the child remains visible but
@@ -430,38 +434,39 @@ add an archived or maintained mirror without replacing the original identity.
   `append_entry` producer call exists under the pinned `app-server` or `exec`
   trees, so this evidence does not establish IDE, desktop, or `codex exec`
   activity-hint coverage. Locally observed Codex app builds can write the same
-  schema, but that is observational evidence rather than a public compatibility
-  guarantee. A missing `session_index.jsonl` is verified as normal absence;
-  read or scan failures remain unverified and cannot earn persisted freshness
-  trust, so a transient failure cannot pin a stale stored title. Agentsview
-  derives the hint path as `<configured-sessions-root>/../history.jsonl`; a
-  custom sessions root without that sibling, or `HistoryPersistence::None`,
-  degrades to ordinary watcher behavior, degraded-coverage polling when
-  applicable, and the daily archive audit. Restart bootstrap reads at most the
-  newest 4 MiB and accepts records from the preceding 24 hours. If a daemon
-  restarts during a longer autonomous run whose last prompt falls outside
-  those bounds, the rollout relies on those fallbacks until its next prompt.
-  Reverified 2026-08-16 with Codex CLI 0.147.0: `codex exec --json` emitted a
-  `thread.started` record carrying one UUID, followed by turn and item records
-  and a terminal usage record, while its dated rollout began with a
-  `session_meta.id` equal to that UUID and ended with `task_complete`. One-shot
-  capture therefore accepts only this structured mode, tees its bytes without
-  interpreting formatted stderr, and validates the ID against filenames and
-  `session_meta` inside the wrapper-start local and UTC days, each plus or
-  minus one day. It copies and ingests that exact rollout first, then uses
-  parsed `spawn_agent` links and their message timestamps to repeat the same
-  bounded day-shard lookup around each child's spawn time. Final accounting
-  uses only the provider-shaped copies in the capture directory. Malformed
-  JSONL records are counted on both root and delegated sessions so one-shot
-  capture marks otherwise usable accounting as partial instead of silently
-  treating the transcript as complete. Reverified 2026-08-20 that this
-  includes an unterminated invalid final record after `task_complete`;
-  ordinary live parsing still defers that tail while its writer can complete
-  it. This bounded lookup is deliberately separate from the provider's general
-  full-archive UUID discovery. Hosted raw discovery and event-driven capture
-  preserve each physical transcript under its configured root; duplicate
-  ranking remains limited to normalized discovery. Reverified 2026-08-29 with
-  live and archived copies sharing one UUID.
+  schema, but that is observational evidence rather than a public
+  compatibility guarantee. A missing `session_index.jsonl` is verified as
+  normal absence; read or scan failures remain unverified and cannot earn
+  persisted freshness trust, so a transient failure cannot pin a stale stored
+  title. Agentsview derives the hint path as
+  `<configured-sessions-root>/../history.jsonl`; a custom sessions root
+  without that sibling, or `HistoryPersistence::None`, degrades to ordinary
+  watcher behavior, degraded-coverage polling when applicable, and the daily
+  archive audit. Restart bootstrap reads at most the newest 4 MiB and accepts
+  records from the preceding 24 hours. If a daemon restarts during a longer
+  autonomous run whose last prompt falls outside those bounds, the rollout
+  relies on those fallbacks until its next prompt. Reverified 2026-08-16 with
+  Codex CLI 0.147.0: `codex exec --json` emitted a `thread.started` record
+  carrying one UUID, followed by turn and item records and a terminal usage
+  record, while its dated rollout began with a `session_meta.id` equal to that
+  UUID and ended with `task_complete`. One-shot capture therefore accepts only
+  this structured mode, tees its bytes without interpreting formatted stderr,
+  and validates the ID against filenames and `session_meta` inside the
+  wrapper-start local and UTC days, each plus or minus one day. It copies and
+  ingests that exact rollout first, then uses parsed `spawn_agent` links and
+  their message timestamps to repeat the same bounded day-shard lookup around
+  each child's spawn time. Final accounting uses only the provider-shaped
+  copies in the capture directory. Malformed JSONL records are counted on both
+  root and delegated sessions so one-shot capture marks otherwise usable
+  accounting as partial instead of silently treating the transcript as complete.
+  Reverified 2026-08-20 that this includes an unterminated invalid final
+  record after `task_complete`; ordinary live parsing still defers that tail
+  while its writer can complete it. This bounded lookup is deliberately
+  separate from the provider's general full-archive UUID discovery. Hosted raw
+  discovery and event-driven capture preserve each physical transcript under
+  its configured root; duplicate ranking remains limited to normalized
+  discovery. Reverified 2026-08-29 with live and archived copies sharing one
+  UUID.
 
 ## TraeX (`traex`)
 

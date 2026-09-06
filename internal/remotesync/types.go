@@ -71,7 +71,10 @@ type TargetSet struct {
 	Files              map[parser.AgentType][]string `json:"files,omitempty"`
 	ExtraFiles         []string                      `json:"extra_files,omitempty"`
 	ProviderExtraFiles map[parser.AgentType][]string `json:"provider_extra_files,omitempty"`
-	ForbiddenRoots     []string                      `json:"forbidden_roots,omitempty"`
+	// CodexIndexFiles associates transcript roots with their home title indexes.
+	// The files are transported through ProviderExtraFiles.
+	CodexIndexFiles map[string][]string `json:"codex_index_files,omitempty"`
+	ForbiddenRoots  []string            `json:"forbidden_roots,omitempty"`
 }
 
 // AllExtraFiles returns shared and provider-owned curated files without
@@ -197,6 +200,7 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 		target.Files[agent] = files
 	}
 	dirScoped.ExtraFiles = t.ExtraFiles
+	dirScoped.CodexIndexFiles = t.CodexIndexFiles
 	for agent, files := range t.ProviderExtraFiles {
 		target := &dirScoped
 		if t.isFileScoped(agent) &&
@@ -279,6 +283,9 @@ func (r ArchiveRequest) MarshalJSON() ([]byte, error) {
 	if len(r.ProviderExtraFiles) > 0 {
 		out["provider_extra_files"] = r.ProviderExtraFiles
 	}
+	if len(r.CodexIndexFiles) > 0 {
+		out["codex_index_files"] = r.CodexIndexFiles
+	}
 	if len(r.ForbiddenRoots) > 0 {
 		out["forbidden_roots"] = r.ForbiddenRoots
 	}
@@ -294,6 +301,7 @@ func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
 		Files              jsontext.Value                `json:"files"`
 		ExtraFiles         []string                      `json:"extra_files"`
 		ProviderExtraFiles map[parser.AgentType][]string `json:"provider_extra_files"`
+		CodexIndexFiles    map[string][]string           `json:"codex_index_files"`
 		ForbiddenRoots     []string                      `json:"forbidden_roots"`
 		DeltaFiles         []string                      `json:"delta_files"`
 	}
@@ -304,6 +312,7 @@ func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
 		Dirs:               raw.Dirs,
 		ExtraFiles:         raw.ExtraFiles,
 		ProviderExtraFiles: raw.ProviderExtraFiles,
+		CodexIndexFiles:    raw.CodexIndexFiles,
 		ForbiddenRoots:     raw.ForbiddenRoots,
 	}
 	r.DeltaFiles = raw.DeltaFiles

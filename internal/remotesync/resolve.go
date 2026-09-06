@@ -25,6 +25,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 	dirs := make(map[parser.AgentType][]string)
 	files := make(map[parser.AgentType][]string)
 	providerExtraFiles := make(map[parser.AgentType][]string)
+	codexIndexFiles := make(map[string][]string)
 	var forbiddenRoots []string
 	for _, def := range parser.Registry {
 		resolvedDirs := cfg.ResolveDirs(def.Type)
@@ -135,8 +136,14 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 			}
 			dirs[def.Type] = append(dirs[def.Type], dir)
 			if def.Type == parser.AgentCodex {
-				index := filepath.Join(filepath.Dir(dir), parser.CodexSessionIndexFilename)
-				if info, err := os.Stat(index); err == nil && !info.IsDir() {
+				for _, root := range append([]string{dir}, cfg.RootAliases[def.Type][dir]...) {
+					index := filepath.Join(filepath.Dir(root), parser.CodexSessionIndexFilename)
+					if info, err := os.Stat(index); err != nil || info.IsDir() {
+						continue
+					}
+					if !slices.Contains(codexIndexFiles[dir], index) {
+						codexIndexFiles[dir] = append(codexIndexFiles[dir], index)
+					}
 					if !slices.Contains(providerExtraFiles[def.Type], index) {
 						providerExtraFiles[def.Type] = append(
 							providerExtraFiles[def.Type], index,
@@ -148,7 +155,8 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 	}
 	return filterForbiddenTargets(TargetSet{
 		Dirs: dirs, Files: files, ProviderExtraFiles: providerExtraFiles,
-		ForbiddenRoots: forbiddenRoots,
+		CodexIndexFiles: codexIndexFiles,
+		ForbiddenRoots:  forbiddenRoots,
 	}), nil
 }
 
@@ -306,7 +314,25 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 		}
 		t.ProviderExtraFiles[agent] = kept
 	}
+	t.CodexIndexFiles = selectedCodexIndexFiles(t, t.CodexIndexFiles)
 	return t
+}
+
+// Keep associations only for roots and files retained in this target set.
+func selectedCodexIndexFiles(targets TargetSet, indexes map[string][]string) map[string][]string {
+	var selected map[string][]string
+	for _, root := range targets.Dirs[parser.AgentCodex] {
+		for _, index := range indexes[root] {
+			if !slices.Contains(targets.ProviderExtraFiles[parser.AgentCodex], index) {
+				continue
+			}
+			if selected == nil {
+				selected = make(map[string][]string)
+			}
+			selected[root] = append(selected[root], index)
+		}
+	}
+	return selected
 }
 
 func withoutForbidden(paths []string, forbidden forbiddenRootMatcher) []string {
@@ -851,6 +877,7 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			)
 		}
 	}
+	selected.CodexIndexFiles = selectedCodexIndexFiles(selected, allowed.CodexIndexFiles)
 	return selected, true
 }
 

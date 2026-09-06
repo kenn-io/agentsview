@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 )
@@ -16,9 +17,29 @@ import (
 // history.jsonl and session_index.jsonl, so sidecar reads fan out to every
 // alias. The table is process-wide, like the session index cache it feeds.
 var codexRootAliases = struct {
-	mu    sync.RWMutex
-	roots map[string][]string
+	mu      sync.RWMutex
+	roots   map[string][]string
+	imports []*map[string][]string
 }{}
+
+// RegisterTemporaryCodexAliases retains aliases for one temporary import until
+// its engine closes, without replacing the running daemon's local aliases.
+// Callers must keep the supplied map immutable for the registration lifetime.
+func RegisterTemporaryCodexAliases(aliases map[string][]string) func() {
+	if len(aliases) == 0 {
+		return func() {}
+	}
+	scope := &aliases
+	codexRootAliases.mu.Lock()
+	codexRootAliases.imports = append(codexRootAliases.imports, scope)
+	codexRootAliases.mu.Unlock()
+	return func() {
+		codexRootAliases.mu.Lock()
+		defer codexRootAliases.mu.Unlock()
+		codexRootAliases.imports = slices.DeleteFunc(codexRootAliases.imports,
+			func(candidate *map[string][]string) bool { return candidate == scope })
+	}
+}
 
 // SetCodexRootAliases replaces the alias table. Keys and values are session
 // roots (the sessions or archived_sessions directory), not homes. Passing nil
@@ -49,7 +70,12 @@ func SetCodexRootAliases(aliases map[string][]string) {
 func codexAliasRoots(root string) []string {
 	codexRootAliases.mu.RLock()
 	defer codexRootAliases.mu.RUnlock()
-	return append([]string(nil), codexRootAliases.roots[filepath.Clean(root)]...)
+	root = filepath.Clean(root)
+	aliases := append([]string(nil), codexRootAliases.roots[root]...)
+	for _, scope := range codexRootAliases.imports {
+		aliases = append(aliases, (*scope)[root]...)
+	}
+	return aliases
 }
 
 // codexSidecarDirs returns the directories that may hold Codex sidecar files
