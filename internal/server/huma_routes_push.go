@@ -336,7 +336,6 @@ func validatePushWatchScope(
 func pushWatchScopeRoots(
 	ctx context.Context, cfg config.Config,
 ) ([]string, error) {
-	syncpkg.InstallRootAliases(cfg.RootAliases)
 	seen := make(map[string]struct{})
 	var roots []string
 	add := func(root string) {

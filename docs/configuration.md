@@ -895,13 +895,12 @@ leave unlinked for AgentsView's sake.
 #### How links and duplicates are handled
 
 - Roots that resolve to the same directory, including through symbolic links,
-  are scanned once. The first configured spelling is the effective root; the
-  others become aliases of it. A matching `[[session_sources]]` entry still
+  are scanned once. Configuration loading stores the resolved absolute root
+  and its provider metadata paths. A matching `[[session_sources]]` entry still
   supplies the machine label.
-- Sharing one directory links the whole home. If a second home links only
-  `sessions/` and keeps its own `archived_sessions/`, both homes' sidecars
-  still apply to every transcript, live or archived. Homes that share nothing
-  stay independent.
+- Metadata belongs to the configured transcript root. If two homes share
+  `sessions/` but keep separate `archived_sessions/`, their shared sessions
+  read both homes' metadata; each archive reads only its own home's metadata.
 - Codex sidecars are read from the effective root's home and from every alias
   home. Activity hints come from each distinct `history.jsonl`; a linked copy is
   read once. Thread titles concatenate every `session_index.jsonl`, and when two

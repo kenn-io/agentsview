@@ -84,9 +84,9 @@ func requireCompleteProcessing(stats syncpkg.SyncStats) error {
 // this mapping independent from Importer lets prepared HTTP imports and future
 // rebuild contributors share the exact engine inputs and cache translation.
 type importLayout struct {
-	engineDirs  map[parser.AgentType][]string
-	rootAliases map[parser.AgentType]map[string][]string
-	paths       remotePathMap
+	engineDirs   map[parser.AgentType][]string
+	metadataDirs map[parser.AgentType]map[string][]string
+	paths        remotePathMap
 }
 
 type remotePathMap struct {
@@ -129,7 +129,7 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 		layout.paths.remoteDirs = append(layout.paths.remoteDirs, remoteFile)
 		layout.paths.localDirs = append(layout.paths.localDirs, local)
 	}
-	codexAliases := make(map[string][]string)
+	codexMetadata := make(map[string][]string)
 	for remoteRoot, indexes := range selectedCodexIndexFiles(targets, targets.CodexIndexFiles) {
 		localRoot, err := safeRemappedRemotePath(root, remoteRoot)
 		if err != nil {
@@ -140,15 +140,18 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 			if err != nil {
 				return importLayout{}, err
 			}
-			alias := filepath.Join(filepath.Dir(localIndex), filepath.Base(localRoot))
-			if alias == localRoot {
+			alias := filepath.Dir(localIndex)
+			if len(codexMetadata[localRoot]) == 0 {
+				codexMetadata[localRoot] = []string{filepath.Dir(localRoot)}
+			}
+			if alias == filepath.Dir(localRoot) {
 				continue
 			}
-			codexAliases[localRoot] = append(codexAliases[localRoot], alias)
+			codexMetadata[localRoot] = append(codexMetadata[localRoot], alias)
 		}
 	}
-	if len(codexAliases) > 0 {
-		layout.rootAliases = map[parser.AgentType]map[string][]string{parser.AgentCodex: codexAliases}
+	if len(codexMetadata) > 0 {
+		layout.metadataDirs = map[parser.AgentType]map[string][]string{parser.AgentCodex: codexMetadata}
 	}
 	return layout, nil
 }
@@ -210,7 +213,7 @@ func importEngineConfig(
 ) syncpkg.EngineConfig {
 	return syncpkg.EngineConfig{
 		AgentDirs:               layout.engineDirs,
-		RootAliases:             layout.rootAliases,
+		ProviderMetadata:        layout.metadataDirs,
 		Machine:                 host,
 		IDPrefix:                rebuildIDPrefix(host),
 		PathRewriter:            layout.paths.pathRewriter(),

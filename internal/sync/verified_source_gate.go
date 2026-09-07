@@ -204,7 +204,7 @@ func (e *Engine) verifiedProviderSourceState(
 	latestIndexMtime := int64(0)
 	if provider.Definition().Type == parser.AgentCodex {
 		var ok bool
-		sidecar, latestIndexMtime, ok = codexSidecarSignature(path)
+		sidecar, latestIndexMtime, ok = codexSidecarSignature(path, e.codexMetadata())
 		if !ok {
 			return verifiedSourceCapture{}, 0, false, false
 		}
@@ -314,9 +314,9 @@ func (e *Engine) invalidateVerifiedDiscoveredSource(file parser.DiscoveredFile) 
 // not a regular file or has no reliable change time fails closed. The
 // second result is the newest mtime across every index, matching
 // parser.CodexEffectiveMtime.
-func codexSidecarSignature(path string) (verifiedSourceSignature, int64, bool) {
+func codexSidecarSignature(path string, metadata parser.CodexMetadata) (verifiedSourceSignature, int64, bool) {
 	sig := verifiedSourceSignature{}
-	indexPaths := parser.CodexSessionIndexPaths(path)
+	indexPaths := metadata.IndexPaths(path)
 	if len(indexPaths) == 0 {
 		return sig, 0, true
 	}

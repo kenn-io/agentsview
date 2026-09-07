@@ -27,7 +27,8 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 	providerExtraFiles := make(map[parser.AgentType][]string)
 	codexIndexFiles := make(map[string][]string)
 	var forbiddenRoots []string
-	for _, def := range parser.Registry {
+	for _, factory := range parser.ProviderFactories() {
+		def := factory.Definition()
 		resolvedDirs := cfg.ResolveDirs(def.Type)
 		if def.RemoteSyncExcluded {
 			for _, dir := range resolvedDirs {
@@ -37,6 +38,11 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 		}
 		if !resolveAgentHasOnDiskSource(def) {
 			continue
+		}
+		var metadata parser.CodexMetadata
+		if def.Type == parser.AgentCodex {
+			provider := factory.NewProvider(parser.ProviderConfig{Roots: resolvedDirs, MetadataDirs: cfg.ProviderMetadata[def.Type]})
+			metadata = provider.(parser.CodexMetadataProvider).Metadata()
 		}
 		for _, dir := range resolvedDirs {
 			// Remote imports assign the serving host to every transported root.
@@ -136,8 +142,8 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 			}
 			dirs[def.Type] = append(dirs[def.Type], dir)
 			if def.Type == parser.AgentCodex {
-				for _, root := range append([]string{dir}, cfg.RootAliases[def.Type][dir]...) {
-					index := filepath.Join(filepath.Dir(root), parser.CodexSessionIndexFilename)
+
+				for _, index := range metadata.IndexFiles(dir) {
 					if info, err := os.Stat(index); err != nil || info.IsDir() {
 						continue
 					}

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 var _ Provider = (*codexProvider)(nil)
@@ -89,12 +91,14 @@ func (f *codexProviderFactory) Capabilities() Capabilities {
 
 func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
+	sources := newCodexSourceSet(f.spec.agent, cfg.Roots)
+	sources.metadata = CodexMetadata{roots: cfg.MetadataDirs}
 	return &codexProvider{
 		Def:             cloneAgentDef(f.def),
 		Caps:            f.Capabilities(),
 		Config:          cfg,
 		spec:            f.spec,
-		sources:         newCodexSourceSet(f.spec.agent, cfg.Roots),
+		sources:         sources,
 		cursorCache:     f.cursorCache,
 		parentTurnCache: f.parentTurnCache,
 	}
@@ -196,7 +200,7 @@ func (p *codexProvider) ActivityHintSources(
 		// Alias homes share the transcripts but may keep their own hint
 		// log, so every sidecar directory contributes. Resolve links so a
 		// shared history.jsonl is read once.
-		for _, dir := range codexSidecarDirs(root) {
+		for _, dir := range p.sources.metadata.dirs(root) {
 			path := filepath.Join(dir, "history.jsonl")
 			key := path
 			if resolved, err := filepath.EvalSymlinks(path); err == nil {
@@ -352,7 +356,7 @@ func (p *codexProvider) PlanRawCapture(
 		Appendable: true,
 	}}
 	var sidecarRoots []string
-	for i, candidate := range codexSessionIndexPaths(src.Path) {
+	for i, candidate := range p.sources.metadata.IndexPaths(src.Path) {
 		info, err := os.Stat(candidate)
 		switch {
 		case err == nil && info.Mode().IsRegular():
@@ -362,6 +366,8 @@ func (p *codexProvider) PlanRawCapture(
 			logical := CodexSessionIndexFilename
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
+			}
+			if filepath.Dir(candidate) != captureRoot {
 				sidecarRoots = append(sidecarRoots, filepath.Dir(candidate))
 			}
 			entries = append(entries, RawCaptureEntry{
@@ -397,7 +403,7 @@ func (p *codexProvider) PlanRawCapture(
 // process restarts, sparing a fresh engine the full-content hash that
 // Fingerprint performs for every unchanged rollout.
 func (p *codexProvider) ComputeMultiFileStatHash(chatPath string) uint64 {
-	paths := append([]string{chatPath}, codexSessionIndexPaths(chatPath)...)
+	paths := append([]string{chatPath}, p.sources.metadata.IndexPaths(chatPath)...)
 	if len(paths) == 1 {
 		paths = append(paths, "")
 	}
@@ -416,7 +422,9 @@ func (p *codexProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("codex source path unavailable")
 	}
 	if req.ForceParse && p.spec.agent == AgentCodex {
-		EvictCodexSessionIndexForSession(path)
+		for _, index := range p.sources.metadata.IndexPaths(path) {
+			EvictCodexSessionIndex(index)
+		}
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	parentID, parentResolved := p.codexParentResolution(ctx, path)
@@ -578,8 +586,9 @@ type codexSourceSet struct {
 	// agent labels the sources this set emits. Codex-format forks share
 	// the layout but must not share a discovery namespace: keying sources
 	// by agent keeps a TraeX UUID from colliding with a Codex one.
-	agent AgentType
-	roots []string
+	agent    AgentType
+	roots    []string
+	metadata CodexMetadata
 }
 
 func newCodexSourceSet(agent AgentType, roots []string) codexSourceSet {
@@ -823,10 +832,7 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 		if !s.ownsCodexSidecars() {
 			continue
 		}
-		shallowRoots := ResolveCodexShallowWatchRoots(root)
-		for _, alias := range codexAliasRoots(root) {
-			shallowRoots = append(shallowRoots, ResolveCodexShallowWatchRoots(alias)...)
-		}
+		shallowRoots := s.metadata.dirs(root)
 		for _, shallow := range shallowRoots {
 			shallow = filepath.Clean(shallow)
 			if _, ok := seenShallow[shallow]; ok {
@@ -943,7 +949,7 @@ func (s codexSourceSet) Fingerprint(
 	inode, device := sourceFileIdentity(info)
 	mtime := info.ModTime().UnixNano()
 	if s.agent == AgentCodex {
-		mtime = CodexEffectiveMtime(path, mtime)
+		mtime = s.metadata.EffectiveMtime(path, mtime)
 	}
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
@@ -994,7 +1000,7 @@ func (s codexSourceSet) sourcesForIndexPath(
 	}
 	indexDir := filepath.Dir(indexPath)
 	return s.discover(ctx, func(root string) bool {
-		return slices.Contains(codexSidecarDirs(root), indexDir)
+		return slices.Contains(s.metadata.dirs(root), indexDir)
 	})
 }
 
@@ -1189,4 +1195,13 @@ func codexProviderCapabilities() Capabilities {
 			Snapshot: RawCaptureSnapshotNone,
 		},
 	}
+}
+
+func (p *codexProvider) Metadata() CodexMetadata { return p.sources.metadata }
+
+func (f *codexProviderFactory) ResolveMetadataDir(path string) (string, error) {
+	if f.spec.agent != AgentCodex {
+		return "", nil
+	}
+	return pathutil.ResolveAbsolute(filepath.Dir(path))
 }

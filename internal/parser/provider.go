@@ -52,8 +52,11 @@ type ProviderFactory interface {
 
 // ProviderConfig is copied into a provider instance at construction time.
 type ProviderConfig struct {
-	Roots   []string
-	Machine string
+	// MetadataDirs maps absolute transcript roots to their resolved metadata
+	// directories. Each provider interprets its own native files there.
+	MetadataDirs map[string][]string
+	Roots        []string
+	Machine      string
 	// StableSourceSnapshots reports that source files cannot change during
 	// parsing. Bounded capture enables it after copying quiescent transcripts
 	// so providers can classify an invalid end-of-file record as durable.
@@ -79,6 +82,7 @@ type ProviderConfig struct {
 // Clone returns an independent config snapshot.
 func (cfg ProviderConfig) Clone() ProviderConfig {
 	cfg.Roots = cfg.RootsCopy()
+	cfg.MetadataDirs = cloneMetadataDirs(cfg.MetadataDirs)
 	cfg.SourceMachines = maps.Clone(cfg.SourceMachines)
 	return cfg
 }

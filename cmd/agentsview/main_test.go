@@ -3596,7 +3596,6 @@ func TestOpenCodeAbsentRootPollsTheConfiguredDir(t *testing.T) {
 }
 
 func TestCollectWatchRootsWatchesAliasHomeIndexes(t *testing.T) {
-	t.Cleanup(func() { parser.SetCodexRootAliases(nil) })
 	base := t.TempDir()
 	primary := filepath.Join(base, "codex")
 	alias := filepath.Join(base, "codex-alt")
@@ -3607,8 +3606,8 @@ func TestCollectWatchRootsWatchesAliasHomeIndexes(t *testing.T) {
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {sessionsDir},
 		},
-		RootAliases: map[parser.AgentType]map[string][]string{
-			parser.AgentCodex: {sessionsDir: {filepath.Join(alias, "sessions")}},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{
+			parser.AgentCodex: {sessionsDir: {primary, alias}},
 		},
 	}
 

@@ -215,7 +215,7 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 	s.onDemandEngine = syncpkg.NewEngine(local, syncpkg.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		SourceMachines:          cfg.SourceMachines,
-		RootAliases:             cfg.RootAliases,
+		ProviderMetadata:        cfg.ProviderMetadata,
 		DisabledAgents:          cfg.DisabledAgents,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,

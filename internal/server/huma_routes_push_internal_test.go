@@ -840,16 +840,14 @@ func TestNewPushProgressStreamSenderThrottles(t *testing.T) {
 }
 
 func TestValidatePushWatchScopeAcceptsAliasIndexWithoutEngine(t *testing.T) {
-	parser.SetCodexRootAliases(nil)
-	t.Cleanup(func() { parser.SetCodexRootAliases(nil) })
 	base := t.TempDir()
 	root := filepath.Join(base, "primary", "sessions")
 	alias := filepath.Join(base, "profile", "sessions")
 	cfg := config.Config{
 		NoSync:    true,
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-		RootAliases: map[parser.AgentType]map[string][]string{
-			parser.AgentCodex: {root: {alias}},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{
+			parser.AgentCodex: {root: {filepath.Dir(root), filepath.Dir(alias)}},
 		},
 	}
 	require.NoError(t, validatePushWatchScope(t.Context(), daemonPushRequest{

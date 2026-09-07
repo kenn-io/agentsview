@@ -366,7 +366,7 @@ func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 	return sync.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		SourceMachines:          cfg.SourceMachines,
-		RootAliases:             cfg.RootAliases,
+		ProviderMetadata:        cfg.ProviderMetadata,
 		DisabledAgents:          cfg.DisabledAgents,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,

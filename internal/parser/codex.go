@@ -1828,15 +1828,13 @@ func (p *codexProvider) parseSessionSnapshotContext(
 	mtime := info.ModTime().UnixNano()
 	if p.spec.agent == AgentCodex {
 		// Include session_index.jsonl mtime so Codex renames trigger a re-parse.
-		mtime = CodexEffectiveMtime(path, mtime)
+		mtime = p.sources.metadata.EffectiveMtime(path, mtime)
 	}
 
 	sessionName := ""
 	sessionNamePresent := false
 	if p.spec.agent == AgentCodex {
-		sessionName, sessionNamePresent = LookupCodexThreadNameEntry(
-			path, b.sessionID,
-		)
+		sessionName, sessionNamePresent, _ = p.sources.metadata.ReadThreadName(path, b.sessionID)
 	}
 	if !sessionNamePresent && sessionName == "" && b.firstMessage == "" &&
 		b.relationshipType == RelSubagent {
@@ -1914,7 +1912,7 @@ func EvictAllCodexSessionIndexes() {
 // one Codex transcript. Explicit full-parse callers use this when an external
 // event says the sidecar changed even if its stat tuple did not.
 func EvictCodexSessionIndexForSession(sessionPath string) {
-	for _, indexPath := range codexSessionIndexPaths(sessionPath) {
+	for _, indexPath := range (CodexMetadata{}).IndexPaths(sessionPath) {
 		EvictCodexSessionIndex(indexPath)
 	}
 }
@@ -1943,54 +1941,20 @@ func LookupCodexThreadNameEntry(
 // A missing index is a verified absence and returns no error; modern Codex
 // releases no longer create this file. Callers that persist freshness state
 // use the error to distinguish that normal absence from a transient failure.
-func ReadCodexThreadNameEntry(
-	sessionPath, sessionID string,
-) (string, bool, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return "", false, nil
-	}
-	indexPaths := codexSessionIndexPaths(sessionPath)
-	if len(indexPaths) == 0 {
-		return "", false, nil
-	}
-	titles, err := loadCodexSessionIndexes(indexPaths)
-	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	title, ok := titles[sessionID]
-	return strings.TrimSpace(title), ok, nil
+func ReadCodexThreadNameEntry(sessionPath, sessionID string) (string, bool, error) {
+	return (CodexMetadata{}).ReadThreadName(sessionPath, sessionID)
 }
 
 // VerifyCodexSessionIndex reports whether the title index associated with a
 // rollout was read successfully or confirmed absent. It preserves non-ENOENT
 // failures so callers cannot persist a freshness digest for unchecked title
 // metadata.
-func VerifyCodexSessionIndex(sessionPath string) error {
-	indexPaths := codexSessionIndexPaths(sessionPath)
-	if len(indexPaths) == 0 {
-		return nil
-	}
-	_, err := loadCodexSessionIndexes(indexPaths)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
-}
+func VerifyCodexSessionIndex(sessionPath string) error { return (CodexMetadata{}).Verify(sessionPath) }
 
 // CodexEffectiveMtime returns the effective mtime for a Codex session file,
 // incorporating session_index.jsonl so renames invalidate the cache.
 func CodexEffectiveMtime(sessionPath string, fileMtime int64) int64 {
-	for _, idxPath := range codexSessionIndexPaths(sessionPath) {
-		if si, err := os.Stat(idxPath); err == nil {
-			if idxMtime := si.ModTime().UnixNano(); idxMtime > fileMtime {
-				fileMtime = idxMtime
-			}
-		}
-	}
-	return fileMtime
+	return (CodexMetadata{}).EffectiveMtime(sessionPath, fileMtime)
 }
 
 // CodexSessionIndexPath returns the local session_index.jsonl path associated

@@ -298,7 +298,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		engine = sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:               cfg.AgentDirs,
 			SourceMachines:          cfg.SourceMachines,
-			RootAliases:             cfg.RootAliases,
+			ProviderMetadata:        cfg.ProviderMetadata,
 			DisabledAgents:          cfg.DisabledAgents,
 			IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths:      cfg.ScanProtectedPaths,
@@ -2429,10 +2429,6 @@ func collectWatchRoots(cfg config.Config) (
 	symlinkGatedDirs map[string][]watchScope,
 	persistentDirAgents map[string][]parser.AgentType,
 ) {
-	// Watch plans are built from providers created directly from the
-	// configuration, so the alias table must be in place here too;
-	// push --watch reaches this without ever constructing a sync engine.
-	sync.InstallRootAliases(cfg.RootAliases)
 	rootIndexes := make(map[string]int)
 	persistentPollingDirs := make(map[string]struct{})
 	symlinkGatedDirs = make(map[string][]watchScope)
@@ -2470,7 +2466,7 @@ func collectWatchRoots(cfg config.Config) (
 			addAgentRoot := func(dir, root string, recursive, exists bool) {
 				addRoot(def.Type, dir, root, recursive, exists)
 			}
-			if providerWatched, polling := collectProviderWatchRoots(def, d, addAgentRoot); providerWatched {
+			if providerWatched, polling := collectProviderWatchRoots(factory, d, addAgentRoot); providerWatched {
 				if polling.persistent {
 					addPersistent(def.Type, d)
 				}
@@ -2526,14 +2522,11 @@ type providerPollingReasons struct {
 }
 
 func collectProviderWatchRoots(
-	def parser.AgentDef,
+	factory parser.ProviderFactory,
 	dir string,
 	addRoot func(dir, root string, recursive, exists bool),
 ) (bool, providerPollingReasons) {
-	factory, ok := parser.ProviderFactoryByType(def.Type)
-	if !ok {
-		return false, providerPollingReasons{}
-	}
+	def := factory.Definition()
 	provider := factory.NewProvider(parser.ProviderConfig{
 		Roots: []string{dir},
 	})

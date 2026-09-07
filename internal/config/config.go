@@ -690,11 +690,9 @@ type Config struct {
 	// each effective configured root to its machine label for sync.
 	SessionSources []SessionSource                        `json:"-" toml:"-"`
 	SourceMachines map[parser.AgentType]map[string]string `json:"-" toml:"-"`
-	// RootAliases maps canonical scan roots to absolute metadata-root paths.
-	// An alternate home can link its sessions directory to another home while
-	// keeping separate sidecars. These aliases identify the sidecar parents;
-	// providers scan only the canonical AgentDirs roots.
-	RootAliases          map[parser.AgentType]map[string][]string `json:"-" toml:"-"`
+	// ProviderMetadata holds provider-resolved metadata directories keyed by
+	// canonical transcript root. It is computed once while loading configuration.
+	ProviderMetadata     map[parser.AgentType]map[string][]string `json:"-" toml:"-"`
 	sessionSourceConfigs []sessionSourceConfig
 
 	// agentHomes holds alternate agent home directories from the config
@@ -798,6 +796,9 @@ func (c Config) ResolveDirs(agent parser.AgentType) []string {
 // ingestion. Remote import and export deliberately use the full registry.
 func (c Config) LocalProviderFactories() []parser.ProviderFactory {
 	factories := parser.ProviderFactories()
+	for i, factory := range factories {
+		factories[i] = parser.ConfigureProviderFactory(factory, c.ProviderMetadata[factory.Definition().Type])
+	}
 	return slices.DeleteFunc(factories, func(factory parser.ProviderFactory) bool {
 		return c.AgentDisabled(factory.Definition().Type)
 	})
@@ -2257,18 +2258,18 @@ func (c *Config) resolveSessionSources() error {
 
 	resolved := make([]SessionSource, 0)
 	rootsByAgent := make(map[parser.AgentType]map[string]rootState, len(c.AgentDirs))
-	aliases := make(map[parser.AgentType]map[string][]string)
-	recordAlias := func(agent parser.AgentType, canonical, alias string) {
-		if filepath.Clean(canonical) == filepath.Clean(alias) {
+	metadata := make(map[parser.AgentType]map[string][]string)
+	recordMetadata := func(agent parser.AgentType, canonical, metadataDir string) {
+		if metadataDir == "" {
 			return
 		}
-		if aliases[agent] == nil {
-			aliases[agent] = make(map[string][]string)
+		if metadata[agent] == nil {
+			metadata[agent] = make(map[string][]string)
 		}
-		if slices.Contains(aliases[agent][canonical], alias) {
+		if slices.Contains(metadata[agent][canonical], metadataDir) {
 			return
 		}
-		aliases[agent][canonical] = append(aliases[agent][canonical], alias)
+		metadata[agent][canonical] = append(metadata[agent][canonical], metadataDir)
 	}
 	for _, def := range parser.Registry {
 		seen := make(map[string]rootState)
@@ -2278,7 +2279,7 @@ func (c *Config) resolveSessionSources() error {
 			if value == "" {
 				continue
 			}
-			value, metadataRoot, err := normalizeRuntimeSessionRoot(value)
+			value, metadataDir, err := normalizeRuntimeSessionRoot(def.Type, value)
 			if err != nil {
 				return fmt.Errorf("resolve %s session source %q: %w", def.Type, rawDir, err)
 			}
@@ -2289,10 +2290,10 @@ func (c *Config) resolveSessionSources() error {
 				)
 			}
 			if existing, ok := seen[key]; ok {
-				recordAlias(def.Type, existing.dir, metadataRoot)
+				recordMetadata(def.Type, existing.dir, metadataDir)
 				continue
 			}
-			recordAlias(def.Type, value, metadataRoot)
+			recordMetadata(def.Type, value, metadataDir)
 			seen[key] = rootState{
 				dir:     value,
 				machine: c.LocalMachineName,
@@ -2322,7 +2323,7 @@ func (c *Config) resolveSessionSources() error {
 				continue
 			}
 			for _, rawDir := range AgentHomeDirs(def, home) {
-				dir, metadataRoot, err := normalizeRuntimeSessionRoot(rawDir)
+				dir, metadataDir, err := normalizeRuntimeSessionRoot(def.Type, rawDir)
 				if err != nil {
 					problems = append(problems, fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
 					continue
@@ -2334,10 +2335,10 @@ func (c *Config) resolveSessionSources() error {
 					continue
 				}
 				if existing, duplicate := seen[key]; duplicate {
-					recordAlias(def.Type, existing.dir, metadataRoot)
+					recordMetadata(def.Type, existing.dir, metadataDir)
 					continue
 				}
-				recordAlias(def.Type, dir, metadataRoot)
+				recordMetadata(def.Type, dir, metadataDir)
 				seen[key] = rootState{dir: dir, machine: c.LocalMachineName}
 				c.AgentDirs[def.Type] = append(c.AgentDirs[def.Type], dir)
 			}
@@ -2374,7 +2375,7 @@ func (c *Config) resolveSessionSources() error {
 				fmt.Sprintf("entry %d (%s): dir %q is an S3 root; session_sources supports filesystem roots only, so configure S3 through the existing per-agent directory setting", entry, agent, input.Dir))
 			continue
 		}
-		dir, metadataRoot, err := normalizeRuntimeSessionRoot(input.Dir)
+		dir, metadataDir, err := normalizeRuntimeSessionRoot(agent, input.Dir)
 		if err != nil {
 			problems = append(problems,
 				fmt.Sprintf("entry %d (%s): %v", entry, agent, err))
@@ -2418,7 +2419,7 @@ func (c *Config) resolveSessionSources() error {
 			}
 			c.AgentDirs[agent] = append(c.AgentDirs[agent], dir)
 		}
-		recordAlias(agent, dir, metadataRoot)
+		recordMetadata(agent, dir, metadataDir)
 		c.agentDirSource[agent] = dirFile
 		resolved = append(resolved, SessionSource{
 			Agent: agent, Dir: dir, Machine: machine,
@@ -2441,77 +2442,8 @@ func (c *Config) resolveSessionSources() error {
 	}
 	c.SessionSources = resolved
 	c.SourceMachines = sourceMachines
-	c.RootAliases = expandHomeAliases(c.AgentDirs, aliases)
+	c.ProviderMetadata = metadata
 	return nil
-}
-
-// expandHomeAliases widens root aliases from directories to homes. When any
-// directory of one home is the same place as a directory of another home,
-// the two homes share transcripts, so every effective root under either
-// home gains the other home's matching directory as an alias. A second
-// Codex home that links sessions/ but keeps its own archived_sessions/ then
-// still contributes its sidecars for archived transcripts, and the primary
-// home's sidecars apply to the second home's own archive. Homes with no
-// shared directory stay unrelated.
-func expandHomeAliases(
-	agentDirs map[parser.AgentType][]string,
-	aliases map[parser.AgentType]map[string][]string,
-) map[parser.AgentType]map[string][]string {
-	for agent, byRoot := range aliases {
-		// Union-find over homes joined by any alias pair.
-		parent := make(map[string]string)
-		find := func(home string) string {
-			for parent[home] != "" && parent[home] != home {
-				home = parent[home]
-			}
-			return home
-		}
-		union := func(a, b string) {
-			ra, rb := find(a), find(b)
-			if parent[ra] == "" {
-				parent[ra] = ra
-			}
-			if parent[rb] == "" {
-				parent[rb] = rb
-			}
-			if ra != rb {
-				parent[rb] = ra
-			}
-		}
-		for root, list := range byRoot {
-			for _, alias := range list {
-				union(filepath.Dir(filepath.Clean(root)), filepath.Dir(filepath.Clean(alias)))
-			}
-		}
-		if len(parent) == 0 {
-			continue
-		}
-		groups := make(map[string][]string)
-		for home := range parent {
-			leader := find(home)
-			groups[leader] = append(groups[leader], home)
-		}
-		for _, root := range agentDirs[agent] {
-			clean := filepath.Clean(root)
-			home := filepath.Dir(clean)
-			leader := find(home)
-			if parent[home] == "" {
-				continue
-			}
-			for _, other := range groups[leader] {
-				if other == home {
-					continue
-				}
-				candidate := filepath.Join(other, filepath.Base(clean))
-				if slices.Contains(byRoot[root], candidate) {
-					continue
-				}
-				byRoot[root] = append(byRoot[root], candidate)
-			}
-			sort.Strings(byRoot[root])
-		}
-	}
-	return aliases
 }
 
 func sessionSourceComparisonKey(dir string) (string, error) {
@@ -2524,23 +2456,15 @@ func sessionSourceComparisonKey(dir string) (string, error) {
 // Runtime scan roots are canonical absolute paths. The original home's
 // absolute path is kept separately for sidecars when only its session
 // directory is linked into another home.
-func normalizeRuntimeSessionRoot(raw string) (dir, metadataRoot string, err error) {
+func normalizeRuntimeSessionRoot(agent parser.AgentType, raw string) (dir, metadataDir string, err error) {
 	if strings.HasPrefix(strings.ToLower(raw), "s3://") {
-		return raw, raw, nil
+		return raw, "", nil
 	}
 	expanded, err := normalizeSessionSourceDir(raw)
 	if err != nil {
 		return "", "", err
 	}
-	dir, err = pathutil.ResolveAbsolute(expanded)
-	if err != nil {
-		return "", "", err
-	}
-	home, err := pathutil.ResolveAbsolute(filepath.Dir(expanded))
-	if err != nil {
-		return "", "", err
-	}
-	return dir, filepath.Join(home, filepath.Base(expanded)), nil
+	return parser.ResolveProviderRoot(agent, expanded)
 }
 
 // normalizeAgentHomeDir validates and expands one alternate agent home.

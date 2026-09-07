@@ -33,8 +33,8 @@ func TestRemoteCodexAliasTitleSurvivesArchiveImport(t *testing.T) {
 	), 0o600))
 	targets, err := ResolveTargets(config.Config{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {primary}},
-		RootAliases: map[parser.AgentType]map[string][]string{
-			parser.AgentCodex: {primary: {alias}},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{
+			parser.AgentCodex: {primary: {filepath.Dir(primary), filepath.Dir(alias)}},
 		},
 	})
 	require.NoError(t, err)
@@ -63,9 +63,11 @@ func TestRemoteCodexAliasTitleSurvivesArchiveImport(t *testing.T) {
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	t.Cleanup(func() { parser.SetCodexRootAliases(nil) })
-	localRoot := filepath.Join(base, "local", "sessions")
-	parser.SetCodexRootAliases(map[string][]string{localRoot: {alias}})
+	localProvider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
+		Roots: []string{primary}, MetadataDirs: map[string][]string{primary: {filepath.Dir(primary), filepath.Dir(alias)}},
+	})
+	require.True(t, ok)
+	localMetadata := localProvider.(interface{ Metadata() parser.CodexMetadata }).Metadata()
 	stats, err := (Importer{Host: "remote", DB: database}).ImportExtracted(t.Context(), selected, extracted)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
@@ -74,10 +76,8 @@ func TestRemoteCodexAliasTitleSurvivesArchiveImport(t *testing.T) {
 	require.NotNil(t, session)
 	require.NotNil(t, session.SessionName)
 	assert.Equal(t, "Renamed in alternate home", *session.SessionName)
-	assert.Equal(t, "Renamed in alternate home", parser.LookupCodexThreadName(
-		filepath.Join(localRoot, filepath.Base(transcript)), id,
-	), "remote import must preserve the daemon's local title sources")
-	assert.Empty(t, parser.LookupCodexThreadName(
-		remappedRemotePath(extracted, transcript), id,
-	), "temporary title associations must be released when import closes")
+	name, present, err := localMetadata.ReadThreadName(transcript, id)
+	require.NoError(t, err)
+	assert.True(t, present)
+	assert.Equal(t, "Renamed in alternate home", name, "import cannot replace another provider's configuration")
 }
