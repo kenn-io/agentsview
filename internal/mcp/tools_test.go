@@ -1294,3 +1294,65 @@ func TestGetMessages_AroundClampsOversizedWindow(t *testing.T) {
 		"the oversized request must actually be capped below what an "+
 			"unclamped window would have returned")
 }
+
+func TestSearchSessions_DateRange(t *testing.T) {
+	ts, d := newTestToolset(t)
+	require.True(t, d.HasFTS(), "run with -tags fts5")
+	fixtures := []struct{ id, start, end string }{
+		{"early", "2024-06-01T10:00:00Z", "2024-06-01T11:00:00Z"},
+		{"boundary", "2024-06-02T23:59:59Z", "2024-06-02T23:59:59Z"},
+		{"late", "2024-06-03T00:00:00Z", "2024-06-03T01:00:00Z"},
+		{"spanning", "2024-06-01T23:00:00Z", "2024-06-03T01:00:00Z"},
+	}
+	for _, f := range fixtures {
+		dbtest.SeedSession(t, d, f.id, "project-a", func(s *db.Session) {
+			s.StartedAt = new(f.start)
+			s.EndedAt = new(f.end)
+			s.SessionName = new("datefilter name")
+		})
+		require.NoError(t, d.InsertMessages([]db.Message{dbtest.UserMsg(f.id, 0, "datefilter message")}))
+	}
+	srv := newServer(ServeOptions{Service: ts.svc, Now: ts.now})
+	st, ct := newInMemoryPair(t, srv)
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	for _, tc := range []struct {
+		name, from, to string
+		want           []string
+	}{
+		{"omitted", "", "", []string{"early", "boundary", "late", "spanning"}},
+		{"lower only", "2024-06-02", "", []string{"boundary", "late", "spanning"}},
+		{"upper only", "", "2024-06-02", []string{"early", "boundary", "spanning"}},
+		{"same day", "2024-06-02", "2024-06-02", []string{"boundary", "spanning"}},
+		{"no matches", "2024-06-04", "2024-06-04", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, query := range []string{"message", "name"} {
+				args := map[string]any{"query": query, "project": "project-a", "limit": 1}
+				if tc.from != "" {
+					args["date_from"] = tc.from
+				}
+				if tc.to != "" {
+					args["date_to"] = tc.to
+				}
+				var ids []string
+				for range len(fixtures) + 1 {
+					res, err := ct.CallTool(context.Background(), callParams(ToolSearchSessions, args))
+					require.NoError(t, err)
+					require.False(t, res.IsError, "%+v", res.Content)
+					raw, err := json.Marshal(res.StructuredContent)
+					require.NoError(t, err)
+					var out searchSessionsOut
+					require.NoError(t, json.Unmarshal(raw, &out))
+					for _, hit := range out.Results {
+						ids = append(ids, hit.SessionID)
+					}
+					if out.NextCursor == nil {
+						break
+					}
+					args["cursor"] = *out.NextCursor
+				}
+				assert.ElementsMatch(t, tc.want, ids, "query %s", query)
+			}
+		})
+	}
+}

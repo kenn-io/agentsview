@@ -89,3 +89,21 @@ func TestHandleSearchSortParam(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchDateRangeHTTPTransport(t *testing.T) {
+	spy := &searchSpy{}
+	srv := &Server{
+		cfg: config.Config{Host: "127.0.0.1"}, db: spy,
+		sessions: service.NewReadOnlyBackend(spy), mux: http.NewServeMux(),
+	}
+	srv.routes()
+	httpServer := httptest.NewServer(srv.mux)
+	t.Cleanup(httpServer.Close)
+	client := service.NewHTTPBackend(httpServer.URL, "", true)
+	_, err := client.Search(context.Background(), service.SearchRequest{
+		Query: "hello", DateFrom: "2024-06-01", DateTo: "2024-06-02",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "2024-06-01", spy.filter.DateFrom)
+	assert.Equal(t, "2024-06-02", spy.filter.DateTo)
+}

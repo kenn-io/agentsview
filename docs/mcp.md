@@ -48,6 +48,19 @@ client will see these tools:
 | `search_content`       | Substring, regex, semantic, or hybrid search over raw session text |
 | `get_usage_summary`    | Aggregate token and cost usage                                     |
 
+`search_sessions` accepts optional `date_from` and `date_to` bounds in
+`YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
+include sessions whose activity overlaps the requested days in UTC. Either bound
+can be omitted; omitting both preserves unrestricted date matching.
+
+When a vector search index is configured, prefer `search_content` with
+`mode: "hybrid"` or `mode: "semantic"` for questions about prior work,
+especially when the exact wording is unknown. Hybrid combines semantic
+similarity with keyword matching. Use `context` to include surrounding messages.
+If the index is unavailable, use `search_sessions` for keyword search, or
+`search_content` with substring/regex for exact errors, identifiers, and code
+fragments. The default search mode remains substring.
+
 `search_content` accepts a `mode` of `substring` (default), `regex`, `semantic`,
 or `hybrid`, plus a `scope` of `top`, `all` (default), or `subordinate` that is
 only valid with the semantic and hybrid modes. The `semantic` and `hybrid` modes

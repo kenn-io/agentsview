@@ -935,10 +935,17 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		args = append(args, f.Project)
 		nameProject = "AND s.project = ?"
 	}
+	dateBuilder := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+	for _, pred := range dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
+		project += " AND " + pred
+		nameProject += " AND " + pred
+	}
+	args = append(args, dateBuilder.Args()...)
 	args = append(args, namePattern, namePattern, namePattern, namePattern)
 	if f.Project != "" {
 		args = append(args, f.Project)
 	}
+	args = append(args, dateBuilder.Args()...)
 	orderBy := "match_priority ASC, match_pos ASC, session_ended_at DESC, session_id ASC"
 	if f.Sort == "recency" {
 		orderBy = "session_ended_at DESC, session_id ASC"
