@@ -49,6 +49,7 @@ type copilotSessionBuilder struct {
 	shutdownCoveredMessages int
 	usageCoveredAt          time.Time
 	fallbackOutput          int
+	hasFallbackOutput       bool
 }
 
 func newCopilotSessionBuilder() *copilotSessionBuilder {
@@ -387,16 +388,20 @@ func (b *copilotSessionBuilder) handleShutdown(
 func (b *copilotSessionBuilder) applyMessageUsageFallback() {
 	for i := range b.messages {
 		message := &b.messages[i]
-		if i < b.shutdownCoveredMessages || message.Role != RoleAssistant || message.Model == "" ||
+		if i < b.shutdownCoveredMessages || message.Role != RoleAssistant ||
 			!message.HasOutputTokens ||
 			(!message.Timestamp.IsZero() &&
 				!message.Timestamp.After(b.usageCoveredAt)) {
 			continue
 		}
+		b.fallbackOutput += message.OutputTokens
+		b.hasFallbackOutput = true
+		if message.Model == "" {
+			continue
+		}
 		message.TokenUsage = jsontext.Value(
 			fmt.Sprintf(`{"output_tokens":%d}`, message.OutputTokens),
 		)
-		b.fallbackOutput += message.OutputTokens
 	}
 }
 
@@ -666,7 +671,7 @@ func (p *copilotProvider) parseSessionWithStore(
 		sess.TotalOutputTokens = 0
 		sess.HasTotalOutputTokens = false
 		applyUsageEventTokenTotals(sess, b.usageEvents)
-		if b.fallbackOutput > 0 {
+		if b.hasFallbackOutput {
 			sess.HasTotalOutputTokens = true
 			sess.TotalOutputTokens += b.fallbackOutput
 		}

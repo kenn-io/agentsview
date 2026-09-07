@@ -1,7 +1,8 @@
 # Copilot request accounting and pricing
 
 Checked 2026-09-07 against GitHub documentation and its published CLI package.
-This investigation does not change parser or pricing behavior.
+The follow-up producer trace establishes the request boundary used by the parser
+and pricing fixes below.
 
 ## What GitHub documents
 
@@ -60,39 +61,70 @@ Static inspection of the official
 [`@github/copilot-darwin-arm64` 1.0.83 distribution](https://registry.npmjs.org/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.83.tgz)
 found the schema and SQL in `package/prebuilds/darwin-arm64/runtime.node`. The
 archive SHA-1 matched the npm metadata:
-`8b8f67a38e893b61e6cef9c011a6fe22d8fdcd4d`. No package code was installed or
-executed.
+`8b8f67a38e893b61e6cef9c011a6fe22d8fdcd4d`. The initial inspection was static.
+The follow-up executed native tracking methods with explicitly selected scratch
+paths. It did not install the CLI, invoke a model, or use live session data.
 
 The embedded schema gives `assistant_usage_events` an autoincrement `id`,
 nullable `turn_index`, model, input/output/cache/reasoning counts,
 `total_nano_aiu`, `request_multiplier`, `token_details_json`, and `created_at`.
 It has no unique constraint on session plus turn. The insert SQL appends those
 fields, and embedded reporting SQL sums token columns by session. Embedded
-tracking strings refer to `assistant.usage` and `insertAssistantUsageEvent`.
-These observations support incremental usage accounting. Strings in compiled
-code do not prove that exactly one SDK usage event creates exactly one row, or
-exclude batching or transformation before insertion. A producer trace or
-readable implementation of that mapping remains necessary to settle that link.
+tracking strings refer to `assistant.usage` and `insertAssistantUsageEvent`. The
+initial static inspection supported incremental accounting but left the exact
+event-to-row mapping unresolved. The follow-up closed that gap:
 
-To reproduce the static check, download the versioned archive, verify its SHA-1,
-and inspect that member for `CREATE TABLE IF NOT EXISTS assistant_usage_events`,
-`INSERT INTO assistant_usage_events`, and the session-level `SUM` queries. Do
-not install or run the package for this check.
+1. In the same archive, `package/app.js` registers a session event listener in
+   `dtr`. It passes each event to `handleTrackingEventForSession`. Its `ltr`
+   serialization preserves `assistant.usage` data, agent ID, and timestamp.
+1. Load the archive's `runtime.node` with Node.js. Construct an in-memory
+   session using `sessionConstruct` with explicit scratch working and session
+   paths, `sessionFsIsLocal: false`, `isLocalSession: false`, and empty update
+   options. Do not apply its returned host actions.
+1. Open `SessionStoreHandle` with an explicit scratch database path, call
+   `upsertSession`, and initialize tracking with
+   `sessionStoreTrackingInitSessionState` and `getMaxTurnIndex`.
+1. Send three `assistant.usage` events to `handleTrackingEventForSession`, with
+   input counts 150,000, 150,000, and 300,000, output count 10 each, model
+   `gpt-5.4`, distinct timestamps, and zero cache counts. Flush tracking.
+1. Query the database. It contains exactly three rows with those unchanged
+   input/output counts, distinct IDs 1, 2, and 3, and `turn_index = 0` for all
+   three. Close the scratch store.
+
+This exercises GitHub's shipped writer, rather than a reimplementation or a
+fixture insert. Combined with the documented per-call event semantics, it
+establishes individual model-call rows for CLI 1.0.83. A shared turn index
+cannot be used to merge those rows. The trace does not claim that every older
+CLI release has an identical schema.
+
+The SDK's `AssistantMessageData` independently declares `model` optional, with
+the description "Model that produced this assistant message, if known." Its
+optional `outputTokens` is the actual API output count. Agentsview accepts these
+independently, but its store fallback previously discarded the count when
+neither a message model nor a prior model-change event supplied a model. The
+regression uses that supported event shape. It is not a claim that this
+combination was observed in the inspected local transcripts.
 
 ## Consequences for the review finding
 
 Agentsview's `internal/usagefacts/fact.go` determines request scope from either
 `MessageOrdinal` or `SourceIsRequestScoped`. Its source helper explicitly
 supports provider requests with no message. An ordinal is not mandatory. The
-parser emits source `session-store`, which the helper does not recognize.
-`internal/db/usage_rollup_build.go` selects input-size bands only for facts
-marked request-scoped; other facts retain base rates.
+parser emits source `session-store`, which the helper previously did not
+recognize. `internal/db/usage_rollup_build.go` selects input-size bands only for
+facts marked request-scoped; other facts retain base rates.
 
-That classification mechanism is established by the current implementation.
-GitHub's own prices establish that request size can matter financially. The
-exact database-row-to-call mapping remains incompletely verified, so this
-research does not fully confirm the review finding or authorize a production
-pricing change. It also does not establish that every model-provider catalog
-rate matches GitHub's rate for a particular account and date. Reported Copilot
-usage cost, catalog estimates, premium requests, and invoice charges must stay
-distinct. No production fix or regression test was added in this investigation.
+The parser now retains uncovered output in session totals even without model
+identity. It still requires a model to attach priced message usage, and still
+excludes responses already covered by store rows.
+
+The source helper now classifies `session-store` as request-scoped without
+inventing a message ordinal. A focused pricing test supplies the dated GitHub
+rates explicitly: one 300K-input call costs $1.50 for input, while two separate
+150K-input calls total $0.75. The test isolates request classification from
+catalog updates. The usage-cache format advances so existing cached facts are
+rebuilt under the corrected classification.
+
+This fix does not establish that every model-provider catalog rate matches
+GitHub's rate for a particular account and date. Reported Copilot usage cost,
+catalog estimates, premium requests, and invoice charges remain distinct.

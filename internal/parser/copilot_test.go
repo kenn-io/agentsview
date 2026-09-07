@@ -1217,3 +1217,46 @@ func TestParseCopilotSession_StoreCoverageReplacesShutdownCoverage(t *testing.T)
 		})
 	}
 }
+
+func TestParseCopilotSession_StoreRetainsUncoveredOutputWithoutModel(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		storeTimestamp string
+		storeOutput    int
+		messageOutput  int
+		wantOutput     int
+	}{
+		{"input-only store", "2026-09-04T17:00:01Z", 0, 3, 3},
+		{"known zero output", "2026-09-04T17:00:01Z", 0, 0, 0},
+		{"partial store", "2026-09-04T17:00:01Z", 50, 3, 53},
+		{"caught-up store", "2026-09-04T17:00:03Z", 53, 3, 53},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storePath := filepath.Join(t.TempDir(), "session-store.db")
+			store, err := sql.Open("sqlite3", storePath)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			_, err = store.Exec(`CREATE TABLE assistant_usage_events (
+				id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,
+				input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+				cache_write_tokens INTEGER, reasoning_tokens INTEGER, created_at TEXT
+			)`)
+			require.NoError(t, err)
+			_, err = store.Exec(`INSERT INTO assistant_usage_events VALUES
+				(1, 'unknown-model', 'gpt-5.4', 100, ?, 0, 0, 0, ?)`, tc.storeOutput, tc.storeTimestamp)
+			require.NoError(t, err)
+			path := writeCopilotJSONL(t,
+				`{"type":"session.start","data":{"sessionId":"unknown-model"},"timestamp":"2026-09-04T17:00:00Z"}`,
+				fmt.Sprintf(`{"type":"assistant.message","data":{"messageId":"response-1","content":"Answer","outputTokens":%d},"timestamp":"2026-09-04T17:00:02Z"}`, tc.messageOutput),
+			)
+			sess, messages, _, err := newCopilotTestProvider(t).parseSessionWithStore(path, "local", storePath)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.True(t, sess.HasTotalOutputTokens)
+			assert.Equal(t, tc.wantOutput, sess.TotalOutputTokens)
+			require.Len(t, messages, 1)
+			assert.Empty(t, messages[0].Model)
+			assert.Empty(t, messages[0].TokenUsage, "unknown-model output contributes to session totals without inventing priced usage")
+		})
+	}
+}

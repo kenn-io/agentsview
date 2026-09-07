@@ -496,6 +496,12 @@ catalog-priced because they were created under the premium-request pricing
 model. A `session.shutdown.totalNanoAiu` total remains the only authoritative
 reported-cost source.
 
+Each store row is priced as an individual model call, so request-size pricing
+bands apply without requiring an associated transcript message. Separate calls
+are not combined to choose a higher band. Explicit output from an uncovered
+assistant response contributes to session token totals even when its model is
+unknown; that response does not receive a model-priced usage row.
+
 When the selected data contains this reported session cost, AgentsView
 suppresses every catalog-priced estimate for that session. This prevents double
 counting across models, days, and resumed segments. Historical Copilot sessions

@@ -34,7 +34,8 @@ const (
 	// turns stored as gpt-reserve now resolve to gpt-5.6-luna catalog
 	// rates. EffectivePricingDigest hashes only catalog rows, so the
 	// same facts and catalog would otherwise keep the unpriced costs.
-	usageCacheFormatVersion             = 9
+	// Version 10 rebuilds Copilot session-store facts with request-scoped pricing.
+	usageCacheFormatVersion             = 10
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
