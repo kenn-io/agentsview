@@ -155,6 +155,7 @@ type openCodeV2Message struct {
 	ShellID string         `json:"shellID"`
 	Exit    int            `json:"exit"`
 	Status  string         `json:"status"`
+	Finish  string         `json:"finish"`
 	Files   []struct {
 		Name string `json:"name"`
 		MIME string `json:"mime"`
@@ -186,6 +187,8 @@ type openCodeV2Content struct {
 		Content    []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
+			Name string `json:"name"`
+			MIME string `json:"mime"`
 		} `json:"content"`
 		Error struct {
 			Message string `json:"message"`
@@ -236,7 +239,7 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 				pm.Content += attachment
 			}
 		case "assistant":
-			pm.Role = RoleAssistant
+			pm.Role, pm.StopReason = RoleAssistant, data.Finish
 			var texts []string
 			for _, item := range data.Content {
 				switch item.Type {
@@ -313,8 +316,15 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) ParsedToolCall {
 	if item.State.Status == "completed" || item.State.Status == "error" {
 		var texts []string
 		for _, content := range item.State.Content {
-			if content.Type == "text" {
+			switch content.Type {
+			case "text":
 				texts = append(texts, content.Text)
+			case "file":
+				name := content.Name
+				if name == "" {
+					name = content.MIME
+				}
+				texts = append(texts, "[Attachment: "+name+"]")
 			}
 		}
 		// The v2 read tool returns text files as structured UTF-8 attachments.
