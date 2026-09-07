@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -110,7 +111,7 @@ func (*alternatingUsageBackend) Name() string { return "alternating-usage" }
 func (*alternatingUsageBackend) ReadOnly() bool { return true }
 
 func (*alternatingUsageBackend) Capabilities() BackendCapabilities {
-	return BackendCapabilities{}
+	return BackendCapabilities{AnalyticsDialect: SQLiteBunAnalyticsDialect()}
 }
 
 func (*alternatingUsageBackend) TimestampOrderExpr(column string) string {
@@ -186,15 +187,15 @@ func TestGetDailyUsageKeepsPricingRowsAndIdentityInOneView(t *testing.T) {
 	assert.Equal(t, 2, backend.attempts)
 }
 
-func TestLoadBunNormalizedDailyUsageRowsFiltersOrdinaryStreamsBeforeScan(t *testing.T) {
+func TestBunUsageStreamFiltersOrdinarySourcesBeforeScan(t *testing.T) {
 	database := testDB(t)
 	hook := new(countingQueryHook)
 	store := database.bunReader.WithQueryHook(hook)
 	common := NewBunStore(&sessionContractBackend{store: store})
 	filter := UsageFilter{Timezone: "UTC", Model: "wanted-model"}
 
-	_, err := common.loadBunNormalizedDailyUsageRows(
-		t.Context(), store, usageSnapshotInputFilter(filter), filter, new(usageReadArena),
+	err := common.streamBunNormalizedDailyUsageRows(
+		t.Context(), store, filter, false, func(dailyUsageScanRow) error { return nil },
 	)
 	require.NoError(t, err)
 	require.Len(t, hook.queries, 3)
@@ -205,7 +206,7 @@ func TestLoadBunNormalizedDailyUsageRowsFiltersOrdinaryStreamsBeforeScan(t *test
 	assert.Contains(t, hook.queries[2], "m.claude_message_id != ''")
 }
 
-func TestBunDailyUsageResultsOutliveSnapshotArena(t *testing.T) {
+func TestBunDailyUsageResultsOutliveSubsequentReads(t *testing.T) {
 	database := testDB(t)
 	started := "2026-08-04T12:00:00Z"
 	for _, id := range []string{"project-a", "project-b"} {
@@ -700,9 +701,8 @@ func TestCanonicalCursorUsageEventRowsValidatesPersistedValues(t *testing.T) {
 	assert.NotEmpty(t, rows[0].DedupKey, "sanitized empty keys are regenerated")
 }
 
-// Repeated streaming updates must not reserve projection storage for every
-// candidate. Only surviving rows should consume arena storage.
-func TestBunDailyUsageSnapshotStorageTracksSurvivors(t *testing.T) {
+// Repeated streaming updates must emit only the fullest snapshot for a request.
+func TestBunDailyUsageStreamEmitsOnlySnapshotWinner(t *testing.T) {
 	for _, count := range []int{16, 4096} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			database := testDB(t)
@@ -719,20 +719,21 @@ func TestBunDailyUsageSnapshotStorageTracksSurvivors(t *testing.T) {
 			}
 			require.NoError(t, database.InsertMessages(messages))
 			common := NewBunStore(&sessionContractBackend{store: database.bunReader})
-			arena := new(usageReadArena)
-			defer arena.release()
 			filter := UsageFilter{Timezone: "UTC"}
-			rows, err := common.loadBunNormalizedDailyUsageRows(t.Context(), database.bunReader, filter, filter, arena)
+			var rows []dailyUsageScanRow
+			err := common.streamBunNormalizedDailyUsageRows(t.Context(), database.bunReader, filter, false, func(row dailyUsageScanRow) error {
+				rows = append(rows, row)
+				return nil
+			})
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
 			_, output, _, _, _ := dailyUsageRowTokens(rows[0])
 			assert.Equal(t, count, output)
-			assert.LessOrEqual(t, cap(arena.rows), 2, "discarded snapshots must not enlarge survivor storage")
 		})
 	}
 }
 
-func TestBunDailyUsageGroupedSnapshotsPreserveSourceOrderAfterAttribution(t *testing.T) {
+func TestBunDailyUsageGroupedSnapshotsPreserveCollidingKeyWinner(t *testing.T) {
 	database := testDB(t)
 	started := "2026-08-04T11:00:00Z"
 	for _, id := range []string{"a", "b", "c"} {
@@ -741,33 +742,75 @@ func TestBunDailyUsageGroupedSnapshotsPreserveSourceOrderAfterAttribution(t *tes
 			StartedAt: &started, CreatedAt: started,
 		}))
 	}
-	// Identity order is opposite source order. Both winners inherit session a
-	// and ordinal zero, so the final tie must still follow sources b then c.
+	// Different identity pairs share the public colon-joined duplicate key.
+	// Identity order opposes source order; attribution makes both winners tie
+	// on session and ordinal. Source b must still supply the billed winner.
 	for _, tc := range []struct {
-		session, identity, model, timestamp string
-		ordinal, tokens                     int
+		session, identity, request, model, timestamp string
+		ordinal, tokens                              int
 	}{
-		{"a", "z", "model-b", started, 1, 1},
-		{"a", "a", "model-c", started, 2, 1},
-		{"b", "z", "model-b", "2026-08-04T12:00:00Z", 0, 2},
-		{"c", "a", "model-c", "2026-08-04T12:00:00Z", 0, 2},
+		{"a", "x:y", "z", "model-b", started, 1, 1},
+		{"a", "x", "y:z", "model-c", started, 2, 1},
+		{"b", "x:y", "z", "model-b", "2026-08-04T12:00:00Z", 0, 2},
+		{"c", "x", "y:z", "model-c", "2026-08-04T12:00:00Z", 0, 2},
 	} {
 		require.NoError(t, database.InsertMessages([]Message{{
 			SessionID: tc.session, Ordinal: tc.ordinal, Role: "assistant",
 			Timestamp: tc.timestamp, Model: tc.model,
-			ClaudeMessageID: tc.identity, ClaudeRequestID: "request",
+			ClaudeMessageID: tc.identity, ClaudeRequestID: tc.request,
 			TokenUsage: fmt.Appendf(nil, `{"output_tokens":%d}`, tc.tokens),
 		}}))
 	}
 	common := NewBunStore(&sessionContractBackend{store: database.bunReader})
-	arena := new(usageReadArena)
-	defer arena.release()
 	filter := UsageFilter{Timezone: "UTC"}
-	rows, err := common.loadBunNormalizedDailyUsageRows(t.Context(), database.bunReader, filter, filter, arena)
+	var rows []dailyUsageScanRow
+	err := common.streamBunNormalizedDailyUsageRows(t.Context(), database.bunReader, filter, false, func(row dailyUsageScanRow) error {
+		rows = append(rows, row)
+		return nil
+	})
 	require.NoError(t, err)
-	require.Len(t, rows, 2)
+	require.Len(t, rows, 1)
 	assert.Equal(t, "a", rows[0].sessionID)
-	assert.Equal(t, "a", rows[1].sessionID)
 	assert.Equal(t, "model-b", rows[0].model)
-	assert.Equal(t, "model-c", rows[1].model)
+}
+
+func TestBunUsageStreamStopsOnConsumerError(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-05T12:00:00Z"
+	require.NoError(t, database.UpsertSession(Session{ID: "stream", Project: "project", Agent: "codex", Machine: "host", CreatedAt: started}))
+	require.NoError(t, database.InsertMessages([]Message{
+		{SessionID: "stream", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "model", TokenUsage: []byte(`{"input_tokens":1}`)},
+		{SessionID: "stream", Ordinal: 1, Role: "assistant", Timestamp: started, Model: "model", TokenUsage: []byte(`{"input_tokens":2}`)},
+	}))
+	hook := new(countingQueryHook)
+	reader := database.bunReader.WithQueryHook(hook)
+	store := NewBunStore(&sessionContractBackend{store: reader})
+	stopped := errors.New("consumer stopped")
+	calls := 0
+	err := store.streamBunNormalizedDailyUsageRows(t.Context(), reader, UsageFilter{Timezone: "UTC"}, false, func(dailyUsageScanRow) error {
+		calls++
+		return stopped
+	})
+	require.ErrorIs(t, err, stopped)
+	assert.Equal(t, 1, calls)
+	assert.Len(t, hook.queries, 1, "a rejected first row must stop before querying later sources")
+	result, err := store.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Totals.InputTokens, "a subsequent read must work after the interrupted stream closes")
+}
+
+func TestBunUsageCountsDiscardReplayedView(t *testing.T) {
+	first, second := testDB(t), testDB(t)
+	started := "2026-08-05T12:00:00Z"
+	require.NoError(t, first.UpsertSession(Session{ID: "discarded", Project: "project", Agent: "claude", Machine: "host", CreatedAt: started}))
+	require.NoError(t, first.InsertMessages([]Message{{SessionID: "discarded", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "model",
+		TokenUsage: []byte(`{"input_tokens":9}`), ClaudeMessageID: "message", ClaudeRequestID: "request"}}))
+	store := NewBunStore(&alternatingUsageBackend{first: first.bunReader, second: second.bunReader})
+	counts, err := store.GetUsageSessionCounts(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Zero(t, counts.Total)
+	assert.Empty(t, counts.ByProject)
+	matching, err := store.GetUsageMatchingSessionCount(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Zero(t, matching)
 }

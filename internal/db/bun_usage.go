@@ -881,7 +881,6 @@ type bunUsageProjection struct {
 
 type bunDailyUsageProjection struct {
 	ID                       int64               `bun:"id"`
-	CandidateCount           int                 `bun:"candidate_count"`
 	SessionID                string              `bun:"session_id"`
 	MessageOrdinal           sql.NullInt64       `bun:"message_ordinal"`
 	UsageTimestamp           bunmodel.Timestamp  `bun:"usage_timestamp"`
@@ -911,18 +910,6 @@ type bunDailyUsageProjection struct {
 	SessionEndedAt           *bunmodel.Timestamp `bun:"session_ended_at"`
 	SessionCreatedAt         bunmodel.Timestamp  `bun:"session_created_at"`
 	TerminationStatus        *string             `bun:"termination_status"`
-}
-
-type bunCursorUsageProjection struct {
-	OccurredAt          bunmodel.Timestamp `bun:"occurred_at"`
-	Model               string             `bun:"model"`
-	InputTokens         int                `bun:"input_tokens"`
-	OutputTokens        int                `bun:"output_tokens"`
-	CacheWriteTokens    int                `bun:"cache_write_tokens"`
-	CacheReadTokens     int                `bun:"cache_read_tokens"`
-	ChargedMicrodollars int64              `bun:"charged_microdollars"`
-	IsHeadless          bool               `bun:"is_headless"`
-	DedupKey            string             `bun:"dedup_key"`
 }
 
 const bunUsageSessionColumns = `
@@ -1017,41 +1004,6 @@ func bunDailyEventUsageColumns() string {
 	ue.dedup_key AS dedup_key`
 }
 
-func (s *BunStore) loadDailyUsageRows(
-	ctx context.Context, filter UsageFilter, includeCursor, matching bool,
-	arena *usageReadArena,
-) ([]dailyUsageScanRow, error) {
-	var staged []dailyUsageScanRow
-	err := s.consistentView(ctx, func(store bun.IDB) error {
-		var err error
-		staged, err = s.loadDailyUsageRowsFrom(
-			ctx, store, filter, includeCursor, matching, arena,
-		)
-		return err
-	})
-	return staged, err
-}
-
-func (s *BunStore) loadDailyUsageRowsFrom(
-	ctx context.Context, store bun.IDB, filter UsageFilter,
-	includeCursor, matching bool, arena *usageReadArena,
-) ([]dailyUsageScanRow, error) {
-	rows, err := s.loadBunSessionUsageRows(ctx, store, filter, matching, arena)
-	if err != nil {
-		return nil, err
-	}
-	if includeCursor {
-		cursor, err := s.loadBunCursorUsageRows(ctx, store, filter)
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, cursor...)
-	}
-	sortDailyUsageRows(rows)
-	arena.rows = rows
-	return rows, nil
-}
-
 func (s *BunStore) loadSessionUsageRowsFrom(
 	ctx context.Context, store bun.IDB, filter UsageFilter, sessionID string,
 ) ([]usageScanRow, error) {
@@ -1069,155 +1021,113 @@ func (s *BunStore) loadSessionUsageRowsFrom(
 	return out, nil
 }
 
-func (s *BunStore) loadBunSessionUsageRows(
-	ctx context.Context, store bun.IDB, filter UsageFilter, matching bool,
-	arena *usageReadArena,
-) ([]dailyUsageScanRow, error) {
-	queryFilter := filter
-	if !matching {
-		// Claude streams can emit the same request through a parent and a
-		// delegated session. Load the complete bounded candidate set before
-		// applying model or session filters so the fullest snapshot wins and
-		// is then attributed to its earliest session.
-		queryFilter = usageSnapshotInputFilter(filter)
-	}
-	if !matching {
-		return s.loadBunNormalizedDailyUsageRows(ctx, store, queryFilter, filter, arena)
-	}
-	projections, err := s.loadBunDailyUsageProjections(
-		ctx, store, queryFilter, true,
-	)
-	if err != nil {
-		return nil, err
-	}
-	rows := slices.Grow(arena.rows[:0], len(projections))
-	for _, row := range projections {
-		rows = append(rows, dailyUsageProjectionToRow(row))
-	}
-	return rows, nil
-}
-
-func (s *BunStore) loadBunDailyUsageProjections(
-	ctx context.Context, store bun.IDB, filter UsageFilter, matching bool,
-) ([]bunDailyUsageProjection, error) {
-	messageQuery, eventQuery := s.bunDailyUsageQueries(
-		store, filter, matching, time.Now().UTC(),
-	)
-	rows := make([]bunDailyUsageProjection, 0)
-	if err := streamBunDailyUsageProjections(
-		ctx, messageQuery, true, false,
-		func(row bunDailyUsageProjection) error {
-			rows = append(rows, row)
-			return nil
-		},
-	); err != nil {
-		return nil, fmt.Errorf("querying daily usage messages: %w", err)
-	}
-	if err := streamBunDailyUsageProjections(
-		ctx, eventQuery, false, false,
-		func(row bunDailyUsageProjection) error {
-			rows = append(rows, row)
-			return nil
-		},
-	); err != nil {
-		return nil, fmt.Errorf("querying daily usage events: %w", err)
-	}
-	return rows, nil
-}
-
-func (s *BunStore) loadBunNormalizedDailyUsageRows(
-	ctx context.Context, store bun.IDB, queryFilter, filter UsageFilter,
-	arena *usageReadArena,
-) ([]dailyUsageScanRow, error) {
+// streamBunNormalizedDailyUsageRows orders each duplicate namespace in SQL.
+// Ordinary message identities cannot collide with event/charge identities.
+// Claude candidates arrive in adjacent identity groups and retain only their
+// current winner and attribution. Token interpretation remains in Go.
+func (s *BunStore) streamBunNormalizedDailyUsageRows(
+	ctx context.Context, store bun.IDB, filter UsageFilter, includeCursor bool,
+	consume func(dailyUsageScanRow) error,
+) error {
 	loc := filter.location()
 	bounded := usageBoundsForFilter(filter).bounded()
 	referenceTime := time.Now().UTC()
-	messageQuery, eventQuery := s.bunDailyUsageQueries(
-		store, filter, false, referenceTime,
-	)
-	messageQuery = messageQuery.
-		Where("(m.claude_message_id = ? OR m.claude_request_id = ?)", "", "").
-		ColumnExpr("COUNT(*) OVER() AS candidate_count")
-	eventQuery = eventQuery.ColumnExpr("COUNT(*) OVER() AS candidate_count")
+	messageQuery, eventQuery := s.bunDailyUsageQueries(store, filter, false, referenceTime)
+	messageQuery = messageQuery.Where("(m.claude_message_id = ? OR m.claude_request_id = ?)", "", "")
 	claudeMessageQuery, _ := s.bunDailyUsageQueries(
-		store, queryFilter, false, referenceTime,
+		store, usageSnapshotInputFilter(filter), false, referenceTime,
+		"(m.claude_message_id || ':' || m.claude_request_id) ASC",
 		"m.claude_message_id ASC", "m.claude_request_id ASC",
 	)
-	claudeMessageQuery = claudeMessageQuery.
-		Where("m.claude_message_id != ?", "").
-		Where("m.claude_request_id != ?", "")
-	rows := arena.rows[:0]
-	defer func() {
-		arena.rows = rows
-	}()
+	claudeMessageQuery = claudeMessageQuery.Where("m.claude_message_id != ?", "").Where("m.claude_request_id != ?", "")
 	withinBounds := func(daily dailyUsageScanRow) bool {
 		if !bounded {
 			return true
 		}
 		date := dailyUsageLocalDate(daily, loc)
-		return date != "" && (filter.From == "" || date >= filter.From) &&
-			(filter.To == "" || date <= filter.To)
+		return date != "" && (filter.From == "" || date >= filter.From) && (filter.To == "" || date <= filter.To)
 	}
+	// Ordinary identities need a seen set; completed Claude groups do not.
+	seen := make(map[usageDedupToken]struct{})
 	consumeOrdinary := func(row bunDailyUsageProjection) error {
 		daily := dailyUsageProjectionToRow(row)
 		if !withinBounds(daily) {
 			return nil
 		}
-		if usageSourceMatches(row.Model, filter) &&
-			bunDailyUsageSessionMatches(row, filter, referenceTime) {
-			rows = append(rows, daily)
+		if key, ok := usageDedupTokenForRow(daily.usageSource, daily.agent,
+			daily.claudeMessageID, daily.claudeRequestID, daily.sourceUUID, daily.usageDedupKey); ok {
+			if _, duplicate := seen[key]; duplicate {
+				return nil
+			}
+			seen[key] = struct{}{}
 		}
-		return nil
+		return consume(daily)
+	}
+	if err := streamBunDailyUsageProjections(ctx, messageQuery, true, consumeOrdinary); err != nil {
+		return fmt.Errorf("querying daily usage messages: %w", err)
+	}
+	eventQuery, err := s.bunOrderedUsageEvents(ctx, store, eventQuery, filter, includeCursor)
+	if err != nil {
+		return err
+	}
+	if err := streamBunDailyUsageProjections(ctx, eventQuery, false, consumeOrdinary); err != nil {
+		return fmt.Errorf("querying daily usage events: %w", err)
 	}
 	var groupKey [2]string
 	var haveGroup bool
 	var selection activity.ClaudeSnapshotSelection
 	var winner, attribution bunDailyUsageProjection
-	flushClaude := func() {
+	// The public duplicate key joins the two IDs with a colon. Preserve the
+	// chronological winner even if different ID pairs produce the same key.
+	var pending dailyUsageScanRow
+	var pendingKey string
+	var havePending bool
+	flushClaude := func() error {
 		if !haveGroup {
-			return
+			return nil
 		}
 		row := bunDailyUsageProjectionWithSessionMetadata(winner, attribution)
-		if !usageSourceMatches(row.Model, filter) ||
-			!bunDailyUsageSessionMatches(row, filter, referenceTime) {
-			return
+		if !usageSourceMatches(row.Model, filter) || !bunDailyUsageSessionMatches(row, filter, referenceTime) {
+			return nil
 		}
 		daily := dailyUsageProjectionToRow(row)
+		if !withinBounds(daily) {
+			return nil
+		}
 		daily.snapshotScanTime = dailyUsageProjectionTime(winner)
 		daily.snapshotSourceSession = winner.SessionID
-		daily.webSearchRequests = sql.NullInt64{
-			Int64: int64(selection.WebSearchRequests()), Valid: true,
+		daily.webSearchRequests = sql.NullInt64{Int64: int64(selection.WebSearchRequests()), Valid: true}
+		key := row.ClaudeMessageID + ":" + row.ClaudeRequestID
+		if havePending && key != pendingKey {
+			if err := consume(pending); err != nil {
+				return err
+			}
+			havePending = false
 		}
-		if len(rows) == cap(rows) {
-			// These wide rows otherwise use Go's smaller large-slice growth
-			// increments, repeatedly copying the retained survivors.
-			capacity := max(2*len(rows), 1)
-			rows = slices.Grow(rows, capacity-len(rows))
-			// Keep doubling exact: allocator rounding at each small growth
-			// must not compound into a much larger final survivor buffer.
-			rows = rows[:len(rows):capacity]
+		if !havePending || dailyUsageRowPrecedes(daily, pending) {
+			pending = daily
 		}
-		rows = append(rows, daily)
+		pendingKey, havePending = key, true
+		return nil
 	}
-	consumeClaude := func(row bunDailyUsageProjection) error {
+	err = streamBunDailyUsageProjections(ctx, claudeMessageQuery, true, func(row bunDailyUsageProjection) error {
 		daily := dailyUsageProjectionToRowMode(row, false)
 		if !withinBounds(daily) {
 			return nil
 		}
 		key := [2]string{row.ClaudeMessageID, row.ClaudeRequestID}
 		if !haveGroup || key != groupKey {
-			flushClaude()
+			if err := flushClaude(); err != nil {
+				return err
+			}
 			groupKey, haveGroup = key, true
 			selection = activity.ClaudeSnapshotSelection{}
 		}
 		fact := usagefacts.ParseTokenUsage(row.TokenJSON)
 		if selection.Consider(activity.UsageRow{
-			SessionID:         row.SessionID,
-			Timestamp:         dailyUsageProjectionSnapshotTimestamp(row),
-			MessageOrdinal:    usageRowMessageOrdinal(daily.messageOrdinal),
-			OutputTokens:      int(fact.OutputTokens),
-			WebSearchRequests: int(fact.WebSearchRequests),
-			ClaudeMessageID:   row.ClaudeMessageID, ClaudeRequestID: row.ClaudeRequestID,
+			SessionID: row.SessionID, Timestamp: dailyUsageProjectionSnapshotTimestamp(row),
+			MessageOrdinal: usageRowMessageOrdinal(daily.messageOrdinal), OutputTokens: int(fact.OutputTokens),
+			WebSearchRequests: int(fact.WebSearchRequests), ClaudeMessageID: row.ClaudeMessageID, ClaudeRequestID: row.ClaudeRequestID,
 		}) {
 			winner = row
 		}
@@ -1225,51 +1135,23 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 			attribution = row
 		}
 		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("querying Claude daily usage messages: %w", err)
 	}
-
-	messageCapacityPrepared := false
-	if err := streamBunDailyUsageProjections(
-		ctx, messageQuery, true, true,
-		func(row bunDailyUsageProjection) error {
-			if !messageCapacityPrepared {
-				rows = slices.Grow(rows, row.CandidateCount)
-				messageCapacityPrepared = true
-			}
-			return consumeOrdinary(row)
-		},
-	); err != nil {
-		return nil, fmt.Errorf("querying daily usage messages: %w", err)
+	if err := flushClaude(); err != nil {
+		return err
 	}
-	eventCapacityPrepared := false
-	if err := streamBunDailyUsageProjections(
-		ctx, eventQuery, false, true,
-		func(row bunDailyUsageProjection) error {
-			if !eventCapacityPrepared {
-				rows = slices.Grow(rows, row.CandidateCount)
-				eventCapacityPrepared = true
-			}
-			return consumeOrdinary(row)
-		},
-	); err != nil {
-		return nil, fmt.Errorf("querying daily usage events: %w", err)
+	if havePending {
+		return consume(pending)
 	}
-	if err := streamBunDailyUsageProjections(
-		ctx, claudeMessageQuery, true, false, consumeClaude,
-	); err != nil {
-		return nil, fmt.Errorf("querying Claude daily usage messages: %w", err)
-	}
-
-	flushClaude()
-
-	sortDailyUsageRows(rows)
-	return rows, nil
+	return nil
 }
 
 func streamBunDailyUsageProjections(
 	ctx context.Context,
 	query *bun.SelectQuery,
 	message bool,
-	withCandidateCount bool,
 	consume func(bunDailyUsageProjection) error,
 ) error {
 	rows, err := query.Rows(ctx)
@@ -1326,9 +1208,6 @@ func streamBunDailyUsageProjections(
 		}
 	}
 	dest = append(dest, sessionColumns...)
-	if withCandidateCount {
-		dest = append(dest, &row.CandidateCount)
-	}
 
 	for rows.Next() {
 		row = bunDailyUsageProjection{}
@@ -1339,6 +1218,8 @@ func streamBunDailyUsageProjections(
 		}
 		if message {
 			row.UsageSource = "message"
+		} else if row.UsageSource == "cursor" {
+			row.UsageDedupKey = row.DedupKey
 		} else {
 			row.UsageDedupKey = dailyUsageEventProjectionDedupKey(row)
 		}
@@ -1392,7 +1273,6 @@ func (s *BunStore) bunDailyUsageQueries(
 	store bun.IDB, filter UsageFilter, matching bool, referenceTime time.Time,
 	messageOrderPrefix ...string,
 ) (*bun.SelectQuery, *bun.SelectQuery) {
-	timestampOrder := s.backend.TimestampOrderExpr
 	messageTimestampValue := func(column string) string {
 		return column
 	}
@@ -1415,15 +1295,13 @@ func (s *BunStore) bunDailyUsageQueries(
 		messageQuery, filter, "m.timestamp", true,
 		messageTimestampValue, s.backend.TimestampOrderExpr,
 	)
-	messageTimestamp := "COALESCE(" +
-		timestampOrder(messageTimestampValue("m.timestamp")) + ", " +
-		timestampOrder(bunNullableTimestamp("s.started_at")) + ", " +
-		timestampOrder("s.created_at") + ")"
+	messageTimestamp := s.backend.Capabilities().AnalyticsDialect.CanonicalTimestampOrder(
+		"COALESCE(" + bunNullableTimestamp("m.timestamp") + ", " + bunNullableTimestamp("s.started_at") + ", s.created_at)")
 	for _, order := range messageOrderPrefix {
 		messageQuery = messageQuery.OrderExpr(order)
 	}
 	messageQuery = messageQuery.
-		OrderExpr(messageTimestamp + " ASC").
+		OrderExpr(messageTimestamp + " ASC NULLS FIRST").
 		OrderExpr("m.session_id ASC").
 		OrderExpr("m.ordinal ASC")
 
@@ -1439,34 +1317,8 @@ func (s *BunStore) bunDailyUsageQueries(
 		eventQuery, filter, "ue.occurred_at", true,
 		bunNullableTimestamp, s.backend.TimestampOrderExpr,
 	)
-	eventTimestamp := "COALESCE(" +
-		timestampOrder(bunNullableTimestamp("ue.occurred_at")) + ", " +
-		timestampOrder(bunNullableTimestamp("s.started_at")) + ", " +
-		timestampOrder("s.created_at") + ")"
-	eventQuery = eventQuery.
-		OrderExpr(eventTimestamp + " ASC").
-		OrderExpr("ue.session_id ASC").
-		OrderExpr("COALESCE(ue.message_ordinal, -1) ASC")
-	return messageQuery, eventQuery
-}
 
-func (s *BunStore) streamDailyUsageRowsFrom(
-	ctx context.Context, store bun.IDB, filter UsageFilter, includeCursor, matching bool,
-	arena *usageReadArena,
-	consume func(dailyUsageScanRow) error,
-) error {
-	rows, err := s.loadDailyUsageRowsFrom(
-		ctx, store, filter, includeCursor, matching, arena,
-	)
-	if err != nil {
-		return err
-	}
-	for _, row := range rows {
-		if err := consume(row); err != nil {
-			return err
-		}
-	}
-	return nil
+	return messageQuery, eventQuery
 }
 
 func (s *BunStore) loadBunUsageProjections(
@@ -1834,59 +1686,50 @@ func dailyUsageEventProjectionDedupKey(row bunDailyUsageProjection) string {
 	return fmt.Sprintf("%s:%s:id:%d", row.SessionID, row.UsageSource, row.ID)
 }
 
-func (s *BunStore) loadBunCursorUsageRows(
-	ctx context.Context, store bun.IDB, filter UsageFilter,
-) ([]dailyUsageScanRow, error) {
-	if !cursorUsageMatchesFilter(filter) {
-		return nil, nil
-	}
-	exists, err := s.bunTableExists(ctx, store, "cursor_usage_events")
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, nil
-	}
-	var rows []bunCursorUsageProjection
-	query := store.NewSelect().TableExpr("cursor_usage_events AS cu").
-		Column("occurred_at", "model", "input_tokens", "output_tokens",
-			"cache_write_tokens", "cache_read_tokens", "charged_microdollars",
-			"is_headless", "dedup_key").
-		Where("model != ?", "")
-	query = appendBunUsageValues(query, "cu.model", csvUsageValues(filter.Model), true)
-	query = appendBunUsageValues(
-		query, "cu.model", csvUsageValues(filter.ExcludeModel), false,
-	)
-	switch normalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated) {
-	case "human":
-		query = query.Where("cu.is_headless = ?", false)
-	case "automated":
-		query = query.Where("cu.is_headless = ?", true)
-	}
-	query = appendBunUsageBounds(
-		query, filter, "cu.occurred_at", false,
-		bunNullableTimestamp, s.backend.TimestampOrderExpr,
-	)
-	if err := query.Scan(ctx, &rows); err != nil {
-		return nil, fmt.Errorf("querying cursor usage events: %w", err)
-	}
-	out := make([]dailyUsageScanRow, 0, len(rows))
-	for _, row := range rows {
-		if !usageSourceMatches(row.Model, filter) || !cursorAutomationMatches(row, filter) {
-			continue
+// Events and Cursor charges share duplicate keys, so they must arrive in one
+// chronological stream. UNION ALL keeps that ordering in the database instead
+// of collecting and sorting both sources in Go.
+func (s *BunStore) bunOrderedUsageEvents(
+	ctx context.Context, store bun.IDB, events *bun.SelectQuery, filter UsageFilter, includeCursor bool,
+) (*bun.SelectQuery, error) {
+	if includeCursor && cursorUsageMatchesFilter(filter) {
+		exists, err := s.bunTableExists(ctx, store, "cursor_usage_events")
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, dailyUsageScanRow{
-			usageSource: "cursor", ts: formatRequiredUsageTimestamp(row.OccurredAt),
-			usageTime: row.OccurredAt.Time, pricingTime: row.OccurredAt.Time,
-			model: row.Model, inputTokens: row.InputTokens, outputTokens: row.OutputTokens,
-			cacheCreationInputTokens: row.CacheWriteTokens,
-			cacheReadInputTokens:     row.CacheReadTokens,
-			cost:                     sql.NullInt64{Int64: row.ChargedMicrodollars, Valid: true},
-			costSource:               "cursor-reported", usageDedupKey: row.DedupKey,
-			agent: "cursor",
-		})
+		if exists {
+			cursor := store.NewSelect().TableExpr("cursor_usage_events AS cu").ColumnExpr(`
+    0 AS id, '' AS session_id, NULL AS message_ordinal,
+    cu.occurred_at AS usage_timestamp, cu.model, '' AS provider_id,
+    cu.input_tokens, cu.output_tokens, cu.cache_write_tokens AS cache_creation_input_tokens,
+    cu.cache_read_tokens AS cache_read_input_tokens, 0 AS reasoning_tokens,
+    cu.charged_microdollars AS cost_microdollars, 'cursor-reported' AS cost_source,
+    'cursor' AS usage_source, cu.dedup_key,
+    '' AS project, 'cursor' AS agent, '' AS machine, '' AS git_branch,
+    0 AS user_message_count, cu.is_headless AS is_automated,
+    NULL AS session_started_at, NULL AS session_ended_at,
+    NULL AS session_created_at, NULL AS termination_status`).Where("cu.model != ?", "")
+			cursor = appendBunUsageValues(cursor, "cu.model", csvUsageValues(filter.Model), true)
+			cursor = appendBunUsageValues(cursor, "cu.model", csvUsageValues(filter.ExcludeModel), false)
+			switch normalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated) {
+			case "human":
+				cursor = cursor.Where("cu.is_headless = ?", false)
+			case "automated":
+				cursor = cursor.Where("cu.is_headless = ?", true)
+			}
+			cursor = appendBunUsageBounds(cursor, filter, "cu.occurred_at", false, bunNullableTimestamp, s.backend.TimestampOrderExpr)
+			// Keep UNION operands unparenthesized for SQLite. PostgreSQL can
+			// infer the nullable Cursor column types from the event arm.
+			events = store.NewSelect().TableExpr(
+				"(? UNION ALL ?) AS combined_events",
+				events, cursor).ColumnExpr("combined_events.*")
+		}
 	}
-	return out, nil
+	ordered := store.NewSelect().TableExpr("(?) AS u", events).ColumnExpr("u.*")
+	timestamp := s.backend.Capabilities().AnalyticsDialect.CanonicalTimestampOrder(
+		"COALESCE(" + bunNullableTimestamp("u.usage_timestamp") + ", " + bunNullableTimestamp("u.session_started_at") + ", u.session_created_at)")
+	return ordered.OrderExpr(timestamp + " ASC NULLS FIRST").
+		OrderExpr("u.session_id ASC").OrderExpr("COALESCE(u.message_ordinal, -1) ASC"), nil
 }
 
 func usageSourceMatches(model string, filter UsageFilter) bool {
@@ -1949,12 +1792,6 @@ func cursorUsageMatchesFilter(filter UsageFilter) bool {
 	}
 	return usageCSVMatches("cursor", filter.Agent, true) &&
 		usageCSVMatches("cursor", filter.ExcludeAgent, false)
-}
-
-func cursorAutomationMatches(row bunCursorUsageProjection, filter UsageFilter) bool {
-	scope := normalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated)
-	return scope == "all" || scope == "human" && !row.IsHeadless ||
-		scope == "automated" && row.IsHeadless
 }
 
 func usageHasTerminationFilter(status string) bool {
@@ -2106,12 +1943,6 @@ func bunBoolInt(value bool) int {
 		return 1
 	}
 	return 0
-}
-
-func sortDailyUsageRows(rows []dailyUsageScanRow) {
-	sort.SliceStable(rows, func(left, right int) bool {
-		return dailyUsageRowPrecedes(rows[left], rows[right])
-	})
 }
 
 func dailyUsageRowPrecedes(left, right dailyUsageScanRow) bool {

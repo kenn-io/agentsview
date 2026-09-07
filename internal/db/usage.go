@@ -2775,8 +2775,6 @@ func (s *BunStore) GetDailyUsage(
 func (s *BunStore) getDailyUsageFrom(
 	ctx context.Context, store bun.IDB, f UsageFilter,
 ) (DailyUsageResult, error) {
-	arena := usageReadArenaPool.Get().(*usageReadArena)
-	defer arena.release()
 	loc := f.location()
 
 	pricing, err := s.loadPricingMapFrom(ctx, store)
@@ -2801,8 +2799,6 @@ func (s *BunStore) getDailyUsageFrom(
 	accum := make(map[usageCostAllocationKey]*bucket)
 	sessionCosts := make(map[string]sessionCost)
 	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
-
-	seen := make(map[usageDedupToken]struct{})
 	var seenSessions map[string]UsageSessionInfo
 	if !f.SkipSessionCounts {
 		seenSessions = make(map[string]UsageSessionInfo)
@@ -2823,18 +2819,6 @@ func (s *BunStore) getDailyUsageFrom(
 		}
 		if f.To != "" && date > f.To {
 			return nil
-		}
-		// Dedup AFTER the date filter so out-of-range rows
-		// (pulled in by the ±14h timezone padding) don't mark
-		// a key as seen and suppress the in-range duplicate.
-		if key, ok := usageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := seen[key]; dup {
-				return nil
-			}
-			seen[key] = struct{}{}
 		}
 
 		if seenSessions != nil && r.usageSource != "cursor" {
@@ -2893,8 +2877,8 @@ func (s *BunStore) getDailyUsageFrom(
 		sessionCosts[r.sessionID] = sc
 		return nil
 	}
-	if err := s.streamDailyUsageRowsFrom(
-		ctx, store, f, true, false, arena, processRow,
+	if err := s.streamBunNormalizedDailyUsageRows(
+		ctx, store, f, true, processRow,
 	); err != nil {
 		return DailyUsageResult{}, fmt.Errorf("querying daily usage: %w", err)
 	}
@@ -3583,8 +3567,6 @@ func (s *BunStore) GetTopSessionsByCost(
 func (s *BunStore) getTopSessionsByCostFrom(
 	ctx context.Context, store bun.IDB, f UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
-	arena := usageReadArenaPool.Get().(*usageReadArena)
-	defer arena.release()
 	pricing, err := s.loadPricingMapFrom(ctx, store)
 	if err != nil {
 		return nil,
@@ -3592,11 +3574,6 @@ func (s *BunStore) getTopSessionsByCostFrom(
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 
-	rows, err := s.loadDailyUsageRowsFrom(ctx, store, f, false, false, arena)
-	if err != nil {
-		return nil,
-			fmt.Errorf("querying top sessions: %w", err)
-	}
 	loc := f.location()
 
 	type sessAccum struct {
@@ -3613,37 +3590,20 @@ func (s *BunStore) getTopSessionsByCostFrom(
 	// Track insertion order for stable iteration.
 	var order []string
 
-	// Dedup duplicate usage rows across fork/subagent
-	// boundaries so per-session totals match the aggregate
-	// totals from GetDailyUsage. Same key and ordering rules.
-	seen := make(map[usageDedupToken]struct{})
-
-	for _, r := range rows {
+	err = s.streamBunNormalizedDailyUsageRows(ctx, store, f, false, func(r dailyUsageScanRow) error {
 		// Post-query date filter (same as GetDailyUsage).
 		date := localDate(r.ts, loc)
 		if f.From != "" && date < f.From {
-			continue
+			return nil
 		}
 		if f.To != "" && date > f.To {
-			continue
-		}
-		// Dedup AFTER the date filter, matching GetDailyUsage,
-		// so out-of-range rows pulled in by the ±14h padding
-		// don't claim a key and suppress the in-range duplicate.
-		if key, ok := usageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
+			return nil
 		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _, priceErr :=
 			dailyUsageAmounts(r, rateResolver)
 		if priceErr != nil {
-			return nil, priceErr
+			return priceErr
 		}
 
 		sa, ok := accum[r.sessionID]
@@ -3659,14 +3619,19 @@ func (s *BunStore) getTopSessionsByCostFrom(
 		sa.totalTokens += inputTok + outputTok + cacheCrTok + cacheRdTok
 		sa.cost, priceErr = money.Add(sa.cost, cost)
 		if priceErr != nil {
-			return nil, fmt.Errorf("summing top-session cost: %w", priceErr)
+			return fmt.Errorf("summing top-session cost: %w", priceErr)
 		}
 		if f.Model == "" && f.ExcludeModel == "" &&
 			r.costSource == CopilotReportedCostSource && r.cost.Valid {
 			v := money.Money{Microdollars: r.cost.Int64}
 			sa.authoritativeCost = &v
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("querying top sessions: %w", err)
 	}
+
 	result := make([]TopSessionEntry, 0, len(order))
 	for _, id := range order {
 		sa, ok := accum[id]
@@ -4335,71 +4300,58 @@ func (db *DB) getUsageSessionCountsLegacy(
 func (s *BunStore) GetUsageSessionCounts(
 	ctx context.Context, f UsageFilter,
 ) (UsageSessionCounts, error) {
-	arena := usageReadArenaPool.Get().(*usageReadArena)
-	defer arena.release()
-	rows, err := s.loadDailyUsageRows(ctx, f, false, false, arena)
+	var result UsageSessionCounts
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		loc := f.location()
+
+		// Track which sessions pass the localDate filter via a
+		// set of seen session IDs. Each session is counted once
+		// regardless of how many qualifying messages it has.
+		type sessInfo struct {
+			project string
+			agent   string
+		}
+		seen := make(map[string]sessInfo)
+
+		err := s.streamBunNormalizedDailyUsageRows(ctx, store, f, false, func(r dailyUsageScanRow) error {
+			// Post-query date filter (same as GetDailyUsage).
+			date := localDate(r.ts, loc)
+			if f.From != "" && date < f.From {
+				return nil
+			}
+			if f.To != "" && date > f.To {
+				return nil
+			}
+
+			if _, ok := seen[r.sessionID]; !ok {
+				seen[r.sessionID] = sessInfo{
+					project: r.project,
+					agent:   r.agent,
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		out := UsageSessionCounts{
+			Total:     len(seen),
+			ByProject: make(map[string]int),
+			ByAgent:   make(map[string]int),
+		}
+		for _, info := range seen {
+			out.ByProject[info.project]++
+			out.ByAgent[info.agent]++
+		}
+
+		result = out
+		return nil
+	})
 	if err != nil {
-		return UsageSessionCounts{},
-			fmt.Errorf("querying session counts: %w", err)
+		return UsageSessionCounts{}, fmt.Errorf("querying session counts: %w", err)
 	}
-	loc := f.location()
-
-	// Track which sessions pass the localDate filter via a
-	// set of seen session IDs. Each session is counted once
-	// regardless of how many qualifying messages it has.
-	type sessInfo struct {
-		project string
-		agent   string
-	}
-	seen := make(map[string]sessInfo)
-
-	// Usage dedup mirrors GetDailyUsage: if a session only
-	// qualifies because of rows that duplicate an earlier
-	// session's usage (fork/subagent replays), that session
-	// should NOT be counted. Otherwise sessionCounts would
-	// disagree with the deduped token totals.
-	dedup := make(map[usageDedupToken]struct{})
-
-	for _, r := range rows {
-		// Post-query date filter (same as GetDailyUsage).
-		date := localDate(r.ts, loc)
-		if f.From != "" && date < f.From {
-			continue
-		}
-		if f.To != "" && date > f.To {
-			continue
-		}
-
-		// Dedup AFTER the date filter, matching the other two
-		// queries so ±14h padding rows don't claim keys.
-		if key, ok := usageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := dedup[key]; dup {
-				continue
-			}
-			dedup[key] = struct{}{}
-		}
-
-		if _, ok := seen[r.sessionID]; !ok {
-			seen[r.sessionID] = sessInfo{
-				project: r.project,
-				agent:   r.agent,
-			}
-		}
-	}
-	out := UsageSessionCounts{
-		Total:     len(seen),
-		ByProject: make(map[string]int),
-		ByAgent:   make(map[string]int),
-	}
-	for _, info := range seen {
-		out.ByProject[info.project]++
-		out.ByAgent[info.agent]++
-	}
-
-	return out, nil
+	return result, nil
 }
 
 // getUsageMatchingSessionCountLegacy is the wide-row test oracle for sessions
@@ -4466,27 +4418,32 @@ func (db *DB) getUsageMatchingSessionCountLegacy(
 func (s *BunStore) GetUsageMatchingSessionCount(
 	ctx context.Context, f UsageFilter,
 ) (int, error) {
-	arena := usageReadArenaPool.Get().(*usageReadArena)
-	defer arena.release()
-	rows, err := s.loadDailyUsageRows(ctx, f, false, true, arena)
+	var count int
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		loc := f.location()
+		seen := make(map[string]struct{})
+		consume := func(row bunDailyUsageProjection) error {
+			r := dailyUsageProjectionToRow(row)
+			date := dailyUsageLocalDate(r, loc)
+			if usageBoundsForFilter(f).bounded() && date == "" ||
+				f.From != "" && date < f.From || f.To != "" && date > f.To {
+				return nil
+			}
+			seen[r.sessionID] = struct{}{}
+			return nil
+		}
+		messages, events := s.bunDailyUsageQueries(store, f, true, time.Now().UTC())
+		if err := streamBunDailyUsageProjections(ctx, messages, true, consume); err != nil {
+			return err
+		}
+		if err := streamBunDailyUsageProjections(ctx, events, false, consume); err != nil {
+			return err
+		}
+		count = len(seen)
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
 	}
-
-	loc := f.location()
-	seen := make(map[string]struct{})
-	for _, r := range rows {
-		date := localDate(r.ts, loc)
-		if usageBoundsForFilter(f).bounded() && date == "" {
-			continue
-		}
-		if f.From != "" && date < f.From {
-			continue
-		}
-		if f.To != "" && date > f.To {
-			continue
-		}
-		seen[r.sessionID] = struct{}{}
-	}
-	return len(seen), nil
+	return count, nil
 }

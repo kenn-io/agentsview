@@ -6,6 +6,9 @@ package db
 // application-owned SQL; runtime values remain Bun arguments in the returned
 // fragments.
 type BunAnalyticsDialect interface {
+	// CanonicalTimestampOrder preserves microsecond ordering of stored UTC
+	// timestamps without converting native timestamp columns to wall time.
+	CanonicalTimestampOrder(operand string) string
 	LocalTimestamp(operand, timezone string) BunSQLFragment
 	Date(operand BunSQLFragment) BunSQLFragment
 	Bucket(operand BunSQLFragment, granularity string) BunSQLFragment
@@ -38,7 +41,7 @@ func (sqliteBunAnalyticsDialect) LocalTimestamp(
 	// UTC reports need no timezone conversion. Preserve the stored fraction
 	// instead of SQLite datetime(), which rounds near-midnight timestamps.
 	if timezone == "UTC" {
-		return BunSQL("RTRIM(REPLACE(" + operand + ", 'T', ' '), 'Z')")
+		return BunSQL(sqliteBunAnalyticsDialect{}.CanonicalTimestampOrder(operand))
 	}
 	return BunSQL("agentsview_local_timestamp("+operand+", ?)", timezone)
 }
@@ -160,3 +163,9 @@ func (duckBunAnalyticsDialect) DurationSeconds(
 	return BunSQL("EPOCH("+end.SQL+" - "+start.SQL+")",
 		append(append([]any(nil), end.Args...), start.Args...)...)
 }
+
+func (sqliteBunAnalyticsDialect) CanonicalTimestampOrder(operand string) string {
+	return "RTRIM(REPLACE(" + operand + ", 'T', ' '), 'Z')"
+}
+func (postgresBunAnalyticsDialect) CanonicalTimestampOrder(operand string) string { return operand }
+func (duckBunAnalyticsDialect) CanonicalTimestampOrder(operand string) string     { return operand }

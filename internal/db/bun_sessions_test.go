@@ -68,7 +68,7 @@ func (*sessionContractBackend) Name() string { return "session-contract" }
 func (*sessionContractBackend) ReadOnly() bool { return true }
 
 func (*sessionContractBackend) Capabilities() BackendCapabilities {
-	return BackendCapabilities{}
+	return BackendCapabilities{AnalyticsDialect: SQLiteBunAnalyticsDialect()}
 }
 
 func (*sessionContractBackend) TimestampOrderExpr(column string) string {
