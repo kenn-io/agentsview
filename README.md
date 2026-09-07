@@ -41,10 +41,10 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 
 ```bash
 agentsview serve           # start the server in the foreground
-agentsview daemon start    # start the writable SQLite daemon
+agentsview daemon start    # alternatively, start the same server in the background
 agentsview daemon status   # show daemon status
 agentsview daemon restart  # restart from current configuration
-agentsview daemon stop     # stop the writable daemon
+agentsview daemon stop     # stop the server, web UI, and sync
 agentsview session list    # read from the daemon if warm, otherwise SQLite
 agentsview usage daily     # print daily cost summary
 ```
@@ -52,6 +52,13 @@ agentsview usage daily     # print daily cost summary
 On first run, agentsview discovers sessions from every supported agent on your
 machine, syncs them into a local SQLite database, and serves a web UI at
 `http://127.0.0.1:8080`.
+
+The daemon is the server: the web UI, API, session sync, and file watchers share
+one process. Choose `serve` for a foreground process or `daemon start` for a
+background process. Running `serve` when a compatible daemon is already running
+reports its URL and exits. `daemon stop` and `serve stop` both stop that
+writable server, including sync; `serve stop` also stops read-only mirror
+servers for the same data directory.
 
 For Devin CLI, point `DEVIN_DIR` or `devin_dirs` at the local root that contains
 `cli/` — for example `~/Library/Application Support/devin` on macOS,
@@ -72,6 +79,9 @@ daemon. Read-only CLI commands attach to it when it is already running, but fall
 back to direct read-only SQLite on a cold archive so one-off scripts stay fast.
 Commands that need fresh data or need to write, such as `sync`, `usage`,
 `token-use`, `pg push`, and `duckdb push`, auto-start the daemon when needed.
+The server remains running after these commands exit and also serves the web UI.
+For a one-shot sync with no background server, stop the daemon first and run
+`AGENTSVIEW_NO_DAEMON=1 agentsview sync`.
 
 Use `agentsview daemon start` when you want to start the writable SQLite daemon
 explicitly. It loads the normal effective configuration from `config.toml` and

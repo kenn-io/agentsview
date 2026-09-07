@@ -122,8 +122,15 @@ func newDaemonCommand() *cobra.Command {
 
 func newDaemonCommandWithDeps(deps daemonCommandDeps) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "daemon",
-		Short:        "Manage the background server",
+		Use:   "daemon",
+		Short: "Manage the background server",
+		Long: "Manage the writable server for the current data directory.\n\n" +
+			"The daemon is the same server as `agentsview serve`: it provides the\n" +
+			"web UI, API, session sync, and file watchers in one process.\n" +
+			"`daemon start` runs it in the background without opening a browser.\n" +
+			"Stopping it also stops the web UI and sync. These commands also manage\n" +
+			"a writable server started by `serve` or automatically by a CLI command.\n\n" +
+			"Read-only `pg serve` and `duckdb serve` processes are managed separately.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,

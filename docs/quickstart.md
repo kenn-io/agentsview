@@ -164,7 +164,8 @@ CLI users can start the web UI explicitly:
 agentsview serve
 ```
 
-Bare `agentsview serve` runs in the foreground until you press `Ctrl+C`.
+Bare `agentsview serve` runs in the foreground until you press `Ctrl+C`. If a
+compatible server is already running, it reports that server's URL and exits.
 
 This will:
 
@@ -175,8 +176,8 @@ This will:
 1. Launch the web UI at `http://127.0.0.1:8080`
 
 Open `http://127.0.0.1:8080` in your browser. Pass `--no-browser` to disable
-automatic browser launch. To keep the server running after your shell exits, use
-the canonical daemon lifecycle:
+automatic browser launch. Alternatively, start the same server in the background
+so it can keep running after your shell exits:
 
 ```bash
 agentsview daemon start
@@ -184,6 +185,11 @@ agentsview daemon status
 agentsview daemon restart
 agentsview daemon stop
 ```
+
+The daemon includes the web UI, API, session sync, and file watchers. You do not
+need to run `serve` after `daemon start`. Stopping it with `daemon stop` or
+`serve stop` shuts down the web UI and sync together. `serve stop` also stops
+read-only mirror servers for the same data directory.
 
 `daemon start` and `daemon restart` use the normal effective configuration from
 `config.toml` and supported environment variables. They do not accept
@@ -202,8 +208,11 @@ You do not need to keep a server running for every CLI command. Read-only
 commands attach to the daemon when it is warm, otherwise they read the local
 archive directly in read-only mode. Commands that need fresh data or need to
 write, including `sync`, `usage`, `token-use`, `pg push`, and `duckdb push`,
-auto-start the detached daemon when needed. Set `AGENTSVIEW_NO_DAEMON=1` for
-scripts or CI jobs that must never start a lingering background process.
+auto-start the detached daemon when needed. The server remains running after
+these commands finish. For scripts or CI jobs that must leave no background
+server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.
+That setting disables auto-start; it does not stop a running daemon or bypass
+its archive lock.
 
 ## Customize
 

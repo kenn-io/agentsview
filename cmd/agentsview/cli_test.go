@@ -39,7 +39,7 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 		"Data Commands:",
 		"Usage Commands:",
 		"Other Commands:",
-		"serve                  Start server",
+		"serve                  Start the web UI and sync server",
 		"duckdb status          Show DuckDB sync status",
 		"pg push                Push local data to PostgreSQL",
 		"duckdb quack           Quack remote protocol commands",
@@ -215,7 +215,7 @@ func TestRootNoArgsShowsHelp(t *testing.T) {
 	for _, want := range []string{
 		"Usage:\n  agentsview [flags]\n  agentsview <command> [flags]",
 		"Core Commands:",
-		"serve                  Start server",
+		"serve                  Start the web UI and sync server",
 	} {
 		assert.Contains(t, out, want, "output missing %q", want)
 	}

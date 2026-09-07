@@ -40,6 +40,10 @@ type sessionSyncInput struct {
 	Body service.SyncInput
 }
 
+type syncInput struct {
+	Wait bool `query:"wait" default:"false" doc:"Wait for an active sync or maintenance pass before starting this sync"`
+}
+
 type remoteSyncInput struct {
 	Body remoteSyncRequest
 }
@@ -228,7 +232,7 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 
 func (s *Server) humaTriggerSync(
 	ctx context.Context,
-	_ *emptyInput,
+	in *syncInput,
 ) (*huma.StreamResponse, error) {
 	engine, err := s.syncEngineForRequest()
 	if err != nil {
@@ -240,7 +244,7 @@ func (s *Server) humaTriggerSync(
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
-			stats, err := s.runSyncWithResyncFallback(ctx, engine, nil)
+			stats, err := s.runSyncWhenReady(ctx, engine, in.Wait, nil)
 			if err != nil {
 				writeHumaJSON(hctx, http.StatusInternalServerError,
 					apiErrorResponse{Message: err.Error()})
@@ -249,7 +253,7 @@ func (s *Server) humaTriggerSync(
 			writeHumaJSON(hctx, http.StatusOK, stats)
 			return
 		}
-		stats, err := s.runSyncWithResyncFallback(ctx, engine, func(p syncpkg.Progress) {
+		stats, err := s.runSyncWhenReady(ctx, engine, in.Wait, func(p syncpkg.Progress) {
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
@@ -258,6 +262,37 @@ func (s *Server) humaTriggerSync(
 		}
 		stream.SendJSON("done", stats)
 	}}, nil
+}
+
+// runSyncWhenReady lets CLI callers wait without changing the fail-fast
+// behavior for other clients. ErrSyncInProgress means the runner never acquired
+// the engine lock; retrying it cannot repeat a partially completed sync.
+func (s *Server) runSyncWhenReady(
+	ctx context.Context, engine *syncpkg.Engine, wait bool,
+	progress func(syncpkg.Progress),
+) (syncpkg.SyncStats, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return syncpkg.SyncStats{}, err
+		}
+		stats, err := s.runSyncWithResyncFallback(ctx, engine, progress)
+		if !wait || !errors.Is(err, syncpkg.ErrSyncInProgress) {
+			return stats, err
+		}
+		if progress != nil {
+			progress(syncpkg.Progress{
+				Detail: "Waiting for the daemon's active sync or maintenance to finish",
+				Hint:   "Ctrl+C to cancel; agentsview daemon status to inspect",
+			})
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return syncpkg.SyncStats{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // ResyncRequiredHeader marks a /sync rejection that requires a full resync, so
@@ -302,7 +337,7 @@ func (s *Server) runSyncWithResyncFallback(
 		// the failed pass as a successful sync.
 		stats, err := s.localSyncRunner(ctx, progress)
 		if err != nil {
-			if ctx.Err() == nil {
+			if ctx.Err() == nil && !errors.Is(err, syncpkg.ErrSyncInProgress) {
 				log.Printf("foreground local sync: %v", err)
 			}
 			return stats, err

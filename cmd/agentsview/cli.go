@@ -158,8 +158,13 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 	var pprofEnabled bool
 	var skipInitialSync bool
 	cmd := &cobra.Command{
-		Use:          "serve",
-		Short:        "Start server",
+		Use:   "serve",
+		Short: "Start the web UI and sync server",
+		Long: "Start the web UI, API, and session sync in one server process.\n\n" +
+			"Runs in the foreground unless --background is set. `agentsview daemon\n" +
+			"start` starts this same server in the background using saved configuration.\n" +
+			"If a compatible server is already running, serve reports its URL and exits.\n" +
+			"Stopping the server also stops its background sync and file watchers.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -251,8 +256,12 @@ func newServeStatusCommand() *cobra.Command {
 
 func newServeStopCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:          "stop",
-		Short:        "Stop the running server",
+		Use:   "stop",
+		Short: "Stop the server, including sync and file watchers",
+		Long: "Stop the server and its background work, including a server started\n" +
+			"by `agentsview daemon start` or automatically by a CLI command.\n\n" +
+			"This also stops read-only PostgreSQL and DuckDB servers for the data\n" +
+			"directory. Use `agentsview daemon stop` to stop only the writable server.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -307,9 +316,13 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 	var cfg SyncConfig
 	cmd := &cobra.Command{
 		Use:   "sync",
-		Short: "Sync session data without serving",
-		Long: "Sync session data into the local database without starting the\n" +
-			"HTTP server.\n\n" +
+		Short: "Refresh session data and exit",
+		Long: "Sync session data through the shared server, starting it in the\n" +
+			"background if needed. The server includes the web UI and continues\n" +
+			"running after this command exits. Stop it with `agentsview daemon stop`.\n\n" +
+			"Incremental local-only sync waits if the default daemon is busy, with\n" +
+			"status and Ctrl+C cancellation. For a one-shot offline run,\n" +
+			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.\n\n" +
 			"With no --host, sync runs the local sync and then fans out to\n" +
 			"every host listed in the [[remote_hosts]] array in config.toml,\n" +
 			"syncing each by its configured transport. A failure on one\n" +

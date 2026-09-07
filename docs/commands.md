@@ -71,7 +71,10 @@ ______________________________________________________________________
 
 ### `agentsview daemon`
 
-Manage the detached writable SQLite server:
+Manage the writable SQLite server. The daemon provides the web UI, API, session
+sync, and file watchers in one process. `daemon start` launches the same server
+as `serve --background`, using saved configuration and without opening a browser.
+It does not require a separate `serve` command.
 
 ```bash
 agentsview daemon start
@@ -97,7 +100,9 @@ for a one-off unauthenticated non-loopback bind; a persistent non-loopback
 `host` in `config.toml` requires `require_auth = true`.
 
 These commands manage only the writable SQLite daemon for the current data
-directory. They ignore read-only `agentsview pg serve` and
+directory, including a foreground `serve` process or a daemon auto-started by a
+CLI command. `daemon stop` stops the web UI and background sync together. They
+ignore read-only `agentsview pg serve` and
 `agentsview duckdb serve` processes. If only read-only servers are running,
 `daemon status` reports that no daemon is running, and `daemon stop` and
 `daemon restart` leave those servers alive.
@@ -115,9 +120,15 @@ ______________________________________________________________________
 
 ### `agentsview serve`
 
-Start the HTTP server with embedded web UI in the foreground. It remains
-attached to the terminal until you press `Ctrl+C`, unless `--background` is
-specified.
+Start the HTTP server with embedded web UI, session sync, and file watchers in
+the foreground. It remains attached to the terminal until you press `Ctrl+C`,
+unless `--background` is specified. This is the same writable server managed by
+`agentsview daemon`; the web UI and sync do not have separate lifecycles.
+
+If a compatible server is already running, `serve` reports its URL and exits.
+Open that URL to use the web UI. Stopping the server with either `daemon stop`
+or `serve stop` also stops its sync and file watchers. `--no-sync` disables
+automatic sync in that process; it does not create a separate sync daemon.
 
 ```bash
 agentsview serve [flags]
@@ -243,9 +254,29 @@ ______________________________________________________________________
 ### `agentsview sync`
 
 Refresh the local archive. For local sync, the CLI uses the running daemon or
-starts a detached daemon so SQLite writes stay owned by one process. Set
-`AGENTSVIEW_NO_DAEMON=1` to force a direct offline sync that acquires the local
-write-owner lock and exits when done.
+starts a detached daemon so SQLite writes stay owned by one process. That daemon
+also serves the web UI and remains running after the CLI exits, until stopped or
+its idle timeout expires. The command prints the server URL and how to stop it.
+
+An incremental local-only sync through the default daemon waits when another
+sync or maintenance pass owns it, then runs its requested pass. It prints
+waiting status; `Ctrl+C` cancels the wait without stopping the existing work.
+This waiting message applies when no remote hosts are configured. Full resync,
+syncs that include remote hosts, and servers started with `--no-sync` also wait
+for exclusive access, but do not show this message. If the wait persists, inspect
+`agentsview daemon status` and `serve.log`. A daemon launched for this local sync
+skips its redundant startup sync.
+
+For a one-shot offline sync, stop the writable daemon first, then run:
+
+```bash
+agentsview daemon stop
+AGENTSVIEW_NO_DAEMON=1 agentsview sync
+```
+
+The environment variable disables daemon auto-start. It does not stop an existing
+daemon or bypass its write-owner lock. The offline command acquires that lock,
+syncs directly, and exits without leaving a server running.
 
 ```bash
 agentsview sync [flags]

@@ -20,6 +20,11 @@ description: Release history for AgentsView
 
 **Improvements**
 
+- Local-only incremental sync now waits with visible status when the default
+  daemon is busy, instead of failing with "sync already in progress". Canceling
+  the wait leaves the existing work running. CLI help and startup guides now
+  explain that the daemon and web server share one process. Sync prints the
+  server URL and stop command because the server keeps running afterward. (#1652)
 - Session exports now identify the logical archive separately from its database
   generation, so analytics can recognize the same sessions after a full resync.
   JSON and NDJSON add `archive_id` to session-summary schema v6; pricing,

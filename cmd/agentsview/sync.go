@@ -1,5 +1,5 @@
 // ABOUTME: CLI subcommand that syncs session data into the database
-// ABOUTME: without starting the HTTP server.
+// ABOUTME: through the shared daemon or an explicit offline run.
 package main
 
 import (
@@ -105,6 +105,10 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 		}
 		if tr.Mode == transportHTTP {
 			useDaemon := useDaemonForSync(tr)
+			if useDaemon {
+				fmt.Printf("Server: %s\n", tr.URL)
+				fmt.Println("  Remains running after sync; stop with `agentsview daemon stop`.")
+			}
 			if useDaemon && len(remoteHosts) > 0 {
 				fmt.Println("Running sync with remotes via daemon...")
 				progress := newRemoteProgressPrinter(os.Stdout, time.Now)
@@ -1036,7 +1040,7 @@ func runDaemonSync(
 	full bool,
 	onProgress sync.ProgressFunc,
 ) (sync.SyncStats, error) {
-	endpoint := "/api/v1/sync"
+	endpoint := "/api/v1/sync?wait=true"
 	if full {
 		endpoint = "/api/v1/resync"
 	}

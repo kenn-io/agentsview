@@ -1813,6 +1813,73 @@ func TestRunDaemonSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 	assert.Equal(t, 7, stats.Synced)
 }
 
+func TestRunDaemonSyncWaitsForBusyEngine(t *testing.T) {
+	for _, cancelWait := range []bool{false, true} {
+		t.Run(strconv.FormatBool(cancelWait), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			engine := agentsync.NewEngine(database, agentsync.EngineConfig{})
+			t.Cleanup(engine.Close)
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			done := make(chan error, 1)
+			var releaseOnce stdsync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			go func() {
+				done <- engine.RunExclusive(func() error {
+					close(entered)
+					<-release
+					return nil
+				})
+			}()
+			<-entered
+			defer func() {
+				unblock()
+				require.NoError(t, <-done)
+			}()
+
+			var runs atomic.Int32
+			ts := httptest.NewUnstartedServer(nil)
+			defer ts.Close()
+			cfg := config.Config{Host: "127.0.0.1", Port: ts.Listener.Addr().(*net.TCPAddr).Port}
+			srv := server.New(cfg, database, engine,
+				server.WithLocalSyncRunner(func(context.Context, func(agentsync.Progress)) (agentsync.SyncStats, error) {
+					err := engine.TryRunExclusive(func() error {
+						runs.Add(1)
+						return nil
+					})
+					return agentsync.SyncStats{Synced: 7}, err
+				}),
+			)
+			ts.Config.Handler = srv.Handler()
+			ts.Start()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			var waiting bool
+			stats, err := runDaemonSync(ctx, transport{URL: ts.URL}, "", false,
+				func(p agentsync.Progress) {
+					waiting = true
+					assert.Contains(t, p.Detail, "Waiting")
+					assert.Zero(t, runs.Load(), "waiting must not run overlapping work")
+					if cancelWait {
+						cancel()
+					} else {
+						unblock()
+					}
+				},
+			)
+			assert.True(t, waiting, "the CLI must receive progress while the engine is busy")
+			if cancelWait {
+				assert.ErrorIs(t, err, context.Canceled)
+				assert.Zero(t, runs.Load())
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, 7, stats.Synced)
+				assert.EqualValues(t, 1, runs.Load())
+			}
+		})
+	}
+}
+
 // TestRunDaemonSyncDetectsResyncRequired pins the stale-archive UX: only a
 // /sync rejection carrying the resync-required header maps to
 // errDaemonResyncRequired (so the CLI retries via /api/v1/resync); a plain

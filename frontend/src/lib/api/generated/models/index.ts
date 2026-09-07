@@ -313,6 +313,7 @@ export * from "./postApiV1SessionsByIdRestorePathParameters.ts";
 export * from "./postApiV1SessionsByIdResumePathParameters.ts";
 export * from "./postApiV1SessionsUploadBody.ts";
 export * from "./postApiV1SessionsUploadParams.ts";
+export * from "./postApiV1SyncParams.ts";
 export * from "./postApiV1SyncRemotes200One.ts";
 export * from "./projectsResponse.ts";
 export * from "./projectTotal.ts";
