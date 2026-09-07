@@ -328,12 +328,12 @@ agentsview pg serve [flags]
 | `--host`            | `127.0.0.1` | Bind address                                        |
 | `--port`            | `8080`      | Port                                                |
 | `--base-path`       |             | URL prefix for reverse-proxy subpath                |
-| `--public-url`      |             | Public-facing URL for proxy access                  |
+| `--public-url`      |             | Browser URL, also added to trusted origins                  |
 | `--public-origin`   |             | Trusted browser origin (repeatable/comma-separated) |
-| `--public-port`     | `8443`      | External port for managed proxy                     |
+| `--public-port`     | URL port or `8443`      | Managed Caddy HTTP/HTTPS listener and URL port                     |
 | `--proxy`           |             | Managed proxy mode (`caddy`)                        |
 | `--caddy-bin`       | `caddy`     | Caddy binary path                                   |
-| `--proxy-bind-host` | `0.0.0.0`   | Caddy bind address                                  |
+| `--proxy-bind-host` | `127.0.0.1`   | Caddy bind address                                  |
 | `--tls-cert`        |             | TLS certificate path                                |
 | `--tls-key`         |             | TLS key path                                        |
 | `--allowed-subnet`  |             | CIDR allowlist (repeatable/comma-separated)         |

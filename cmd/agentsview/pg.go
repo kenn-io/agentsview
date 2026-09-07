@@ -669,7 +669,7 @@ func runPGServe(appCfg config.Config, basePath string) {
 		)
 	} else {
 		fmt.Printf(
-			"agentsview %s (pg read-only) backend at %s, public at %s\n",
+			"agentsview %s (pg read-only) listening at %s, browser URL: %s\n",
 			version,
 			rt.LocalURL,
 			rt.PublicURL,

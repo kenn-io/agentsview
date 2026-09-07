@@ -572,7 +572,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		)
 	} else {
 		fmt.Printf(
-			"agentsview %s backend at %s, public at %s (started in %s)\n",
+			"agentsview %s listening at %s, browser URL: %s (started in %s)\n",
 			version, rt.LocalURL, rt.PublicURL,
 			time.Since(start).Round(time.Millisecond),
 		)

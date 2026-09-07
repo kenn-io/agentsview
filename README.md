@@ -113,9 +113,13 @@ agentsview serve --public-url http://127.0.0.1:18080
 agentsview serve --public-url https://your-workspace.exe.dev
 ```
 
-Use `--public-origin` (repeatable or comma-separated) to trust additional
-browser origins. If you expose the UI beyond loopback, also enable
-`--require-auth`.
+`--public-url` also selects the URL opened on startup; it does not configure a
+listener or external proxy. Use `--no-browser` on a headless server, or use
+`--public-origin` (repeatable or comma-separated) on its own for trust-only
+configuration. If you expose the UI beyond loopback, also enable
+`--require-auth`. See
+[Remote Access](https://agentsview.io/remote-access/#public-url-and-trusted-origins)
+for the listener, browser URL, and managed Caddy port rules.
 
 ## Docker
 

@@ -54,7 +54,7 @@ type ProxyConfig struct {
 	Bin string `json:"bin,omitempty" toml:"bin"`
 	// BindHost is the local interface/IP the proxy binds to.
 	BindHost string `json:"bind_host,omitempty" toml:"bind_host"`
-	// PublicPort is the external port exposed by the proxy.
+	// PublicPort selects the managed proxy listener port and public URL port.
 	PublicPort int `json:"public_port,omitempty" toml:"public_port"`
 	// TLSCert and TLSKey are used by managed HTTPS mode.
 	TLSCert string `json:"tls_cert,omitempty" toml:"tls_cert"`
@@ -1988,16 +1988,16 @@ func (f *stringListFlag) Type() string {
 // RegisterServeFlags registers serve-command flags on fs.
 // The caller must call fs.Parse before passing fs to Load.
 func RegisterServeFlags(fs *flag.FlagSet) {
-	fs.String("host", "127.0.0.1", "Host to bind to")
-	fs.Int("port", 8080, "Port to listen on")
+	fs.String("host", "127.0.0.1", "Interface/IP for the backend HTTP server to bind")
+	fs.Int("port", 8080, "Port for the backend HTTP server to listen on")
 	fs.String(
 		"public-url", "",
-		"Public URL to trust and open for hostname or proxy access",
+		"Browser URL, also added to trusted origins; does not bind a listener",
 	)
 	fs.Var(
 		&stringListFlag{},
 		"public-origin",
-		"Trusted browser origin to allow for remote or proxied access (repeatable or comma-separated)",
+		"Trusted origin for Host/Origin checks; does not change the browser URL (repeatable or comma-separated)",
 	)
 	fs.String(
 		"proxy", "",
@@ -2009,11 +2009,11 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 	)
 	fs.String(
 		"proxy-bind-host", "",
-		"Local interface/IP for managed Caddy to bind (default: 0.0.0.0)",
+		"Local interface/IP for managed Caddy to bind (default: 127.0.0.1)",
 	)
 	fs.Int(
 		"public-port", 0,
-		"External port for the public URL in managed Caddy mode (default: 8443)",
+		"Managed Caddy HTTP/HTTPS listener port; also sets the public URL port (default: URL port or 8443)",
 	)
 	fs.String(
 		"tls-cert", "",
@@ -2056,16 +2056,16 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 
 // RegisterServePFlags registers serve-command flags on fs.
 func RegisterServePFlags(fs *pflag.FlagSet) {
-	fs.String("host", "127.0.0.1", "Host to bind to")
-	fs.Int("port", 8080, "Port to listen on")
+	fs.String("host", "127.0.0.1", "Interface/IP for the backend HTTP server to bind")
+	fs.Int("port", 8080, "Port for the backend HTTP server to listen on")
 	fs.String(
 		"public-url", "",
-		"Public URL to trust and open for hostname or proxy access",
+		"Browser URL, also added to trusted origins; does not bind a listener",
 	)
 	fs.Var(
 		&stringListFlag{},
 		"public-origin",
-		"Trusted browser origin to allow for remote or proxied access (repeatable or comma-separated)",
+		"Trusted origin for Host/Origin checks; does not change the browser URL (repeatable or comma-separated)",
 	)
 	fs.String(
 		"proxy", "",
@@ -2077,11 +2077,11 @@ func RegisterServePFlags(fs *pflag.FlagSet) {
 	)
 	fs.String(
 		"proxy-bind-host", "",
-		"Local interface/IP for managed Caddy to bind (default: 0.0.0.0)",
+		"Local interface/IP for managed Caddy to bind (default: 127.0.0.1)",
 	)
 	fs.Int(
 		"public-port", 0,
-		"External port for the public URL in managed Caddy mode (default: 8443)",
+		"Managed Caddy HTTP/HTTPS listener port; also sets the public URL port (default: URL port or 8443)",
 	)
 	fs.String(
 		"tls-cert", "",
@@ -2511,6 +2511,12 @@ func resolvePublicURL(value string, proxyCfg ProxyConfig) (string, error) {
 	}
 	if u == nil || u.Host == "" {
 		return "", fmt.Errorf("%q must include a host", value)
+	}
+	if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsUnspecified() {
+		return "", fmt.Errorf(
+			"%q uses a wildcard bind address; use a hostname or IP reachable by the browser for public_url, and set --host or --proxy-bind-host to choose the listening interface",
+			value,
+		)
 	}
 	if u.User != nil {
 		return "", fmt.Errorf("%q must not include user info", value)

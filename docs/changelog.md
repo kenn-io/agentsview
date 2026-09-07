@@ -25,6 +25,11 @@ description: Release history for AgentsView
   the wait leaves the existing work running. CLI help and startup guides now
   explain that the daemon and web server share one process. Sync prints the
   server URL and stop command because the server keeps running afterward. (#1652)
+- Server startup now distinguishes the listening address from the browser URL.
+  CLI help and remote-access docs explain trusted origins, managed Caddy ports,
+  and the loopback bind default. `--public-url` rejects wildcard bind addresses
+  such as `0.0.0.0` and `::` with guidance on which flags to use. (#1653)
+
 - Session exports now identify the logical archive separately from its database
   generation, so analytics can recognize the same sessions after a full resync.
   JSON and NDJSON add `archive_id` to session-summary schema v6; pricing,

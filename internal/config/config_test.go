@@ -652,6 +652,23 @@ func TestLoad_PublicURLMergedIntoOrigins(t *testing.T) {
 	assert.Equal(t, "https://viewer.example.test", strings.Join(cfg.PublicOrigins, ","))
 }
 
+func TestLoad_PublicURLRejectsWildcardBindAddress(t *testing.T) {
+	for _, mode := range []string{"", "caddy"} {
+		for _, publicURL := range []string{
+			"https://0.0.0.0:9999", "http://[::]:9999",
+		} {
+			t.Run(mode+"/"+publicURL, func(t *testing.T) {
+				setupTestEnv(t)
+				_, err := loadConfigFromPFlags(t,
+					"--public-url", publicURL, "--proxy", mode,
+				)
+				require.ErrorContains(t, err, "bind address")
+				assert.ErrorContains(t, err, "browser")
+			})
+		}
+	}
+}
+
 func TestLoad_ProxyConfigFromFile(t *testing.T) {
 	cfg := loadMinimalWithConfig(t, map[string]any{
 		"public_url": "https://viewer.example.test",

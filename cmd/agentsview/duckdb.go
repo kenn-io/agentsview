@@ -437,7 +437,7 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 		)
 	} else {
 		fmt.Printf(
-			"agentsview %s (duckdb read-only) backend at %s, public at %s\n",
+			"agentsview %s (duckdb read-only) listening at %s, browser URL: %s\n",
 			version,
 			rt.LocalURL,
 			rt.PublicURL,

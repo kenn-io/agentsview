@@ -147,12 +147,12 @@ Running plain `agentsview` shows help instead of starting the web UI.
 | `--require-auth`    | `false`     | Require a bearer token for API requests                  |
 | `--background`      | `false`     | Start `agentsview serve` as a managed background process |
 | `--replace`         | `false`     | Replace a running local daemon before starting           |
-| `--public-url`      |             | Public URL for hostname or proxy access                  |
+| `--public-url`      |             | Browser URL, also added to trusted origins                  |
 | `--public-origin`   |             | Trusted browser origin (repeatable/comma-separated)      |
 | `--proxy`           |             | Managed proxy mode (`caddy`)                             |
 | `--caddy-bin`       | `caddy`     | Caddy binary path                                        |
 | `--proxy-bind-host` | `127.0.0.1` | Interface for managed proxy                              |
-| `--public-port`     | `8443`      | External port for managed proxy                          |
+| `--public-port`     | URL port or `8443`      | Managed Caddy HTTP/HTTPS listener and URL port                          |
 | `--tls-cert`        |             | TLS certificate path                                     |
 | `--tls-key`         |             | TLS key path                                             |
 | `--allowed-subnet`  |             | Client CIDR allowlist (repeatable/comma-separated)       |
