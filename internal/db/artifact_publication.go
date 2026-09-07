@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/uptrace/bun"
 )
 
 const maxArtifactQueuePageSize = 1024
@@ -267,7 +269,7 @@ func (db *DB) ApplyArtifactPublicationChanges(
 }
 
 func validateArtifactOriginTx(
-	ctx context.Context, tx *sql.Tx, origin string,
+	ctx context.Context, tx bun.Tx, origin string,
 ) error {
 	var persisted string
 	err := tx.QueryRowContext(ctx, `
@@ -289,7 +291,7 @@ func validateArtifactOriginTx(
 }
 
 func artifactPublicationRevisionTx(
-	ctx context.Context, tx *sql.Tx, origin string, increment bool,
+	ctx context.Context, tx bun.Tx, origin string, increment bool,
 ) (int64, error) {
 	var revision int64
 	if increment {
@@ -453,7 +455,7 @@ func successfulArtifactExportOutcomes(
 }
 
 func validateArtifactExportClaimsTx(
-	ctx context.Context, tx *sql.Tx, items []ArtifactExportQueueItem,
+	ctx context.Context, tx bun.Tx, items []ArtifactExportQueueItem,
 ) ([]ArtifactExportQueueItem, error) {
 	unique := make([]ArtifactExportQueueItem, 0, len(items))
 	seen := make(map[string]int64, len(items))
@@ -490,7 +492,7 @@ func validateArtifactExportClaimsTx(
 }
 
 func finalizeArtifactExportOutcomesTx(
-	ctx context.Context, tx *sql.Tx, outcomes []ArtifactExportOutcome,
+	ctx context.Context, tx bun.Tx, outcomes []ArtifactExportOutcome,
 ) error {
 	items := make([]ArtifactExportQueueItem, len(outcomes))
 	for i, outcome := range outcomes {
@@ -573,7 +575,7 @@ func (db *DB) GetArtifactExportRejection(
 
 // lockArtifactPublicationTx obtains SQLite's writer reservation before claim
 // validation, closing the check-to-mutate race with other database handles.
-func lockArtifactPublicationTx(ctx context.Context, tx *sql.Tx) error {
+func lockArtifactPublicationTx(ctx context.Context, tx bun.Tx) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifact_export_queue SET generation = generation WHERE 0`); err != nil {
 		return fmt.Errorf("locking artifact publication transaction: %w", err)
@@ -612,7 +614,7 @@ func (db *DB) StreamArtifactPublications(
 		return 0, errors.New("artifact publication visitor is required")
 	}
 	db.connMu.RLock()
-	reader := db.reader.Load()
+	reader := db.bunReader
 	if reader == nil {
 		db.connMu.RUnlock()
 		return 0, errors.New("database is closed")
@@ -675,7 +677,7 @@ func (db *DB) ArtifactPublicationPage(
 		)
 	}
 	db.connMu.RLock()
-	reader := db.reader.Load()
+	reader := db.bunReader
 	if reader == nil {
 		db.connMu.RUnlock()
 		return nil, 0, false, errors.New("database is closed")
@@ -883,7 +885,7 @@ func (db *DB) ConfigureArtifactLocalMachine(machine string) error {
 	if strings.TrimSpace(machine) == "" {
 		return errors.New("artifact local installation identity is required")
 	}
-	return db.Update(func(tx *sql.Tx) error {
+	return db.Update(func(tx bun.Tx) error {
 		if err := lockArtifactPublicationTx(context.Background(), tx); err != nil {
 			return err
 		}

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -137,7 +139,7 @@ func seedCrossSessionFKGrowth(t *testing.T, d *DB, sessionID string) {
 		})
 	}
 
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		for _, seed := range seeds {
 			for i := range crossSessionToolCallsPerNeighbor {
 				if _, err := tx.Exec(
@@ -170,7 +172,7 @@ func assertNoFTSLeak(t *testing.T, d *DB, token string) {
 func poisonMessagesDeleteTrigger(t *testing.T, d *DB) {
 	t.Helper()
 
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		if _, err := tx.Exec("DROP TRIGGER IF EXISTS messages_ad"); err != nil {
 			return err
 		}
@@ -233,7 +235,7 @@ func TestInsertAndGetMessage_ThinkingText(t *testing.T) {
 func TestWriteSessionBatchCommitsGoodRowsAndSkipsBadRows(t *testing.T) {
 	d := testDB(t)
 
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"INSERT INTO excluded_sessions (id) VALUES (?)",
 			"excluded",
@@ -1078,7 +1080,7 @@ func TestMessageReadsTolerateNullTimestamp(t *testing.T) {
 	)
 
 	nullOrdinal1 := func() {
-		require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		require.NoError(t, d.Update(func(tx bun.Tx) error {
 			_, err := tx.Exec(
 				"UPDATE messages SET timestamp = NULL"+
 					" WHERE session_id = ? AND ordinal = ?", "null-ts", 1)
@@ -1093,7 +1095,7 @@ func TestMessageReadsTolerateNullTimestamp(t *testing.T) {
 	nullOrdinal1()
 	fpNull, err := d.MessageRoleTimeFingerprint("null-ts")
 	require.NoError(t, err, "fingerprint over NULL timestamp")
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE messages SET timestamp = ''"+
 				" WHERE session_id = ? AND ordinal = ?", "null-ts", 1)

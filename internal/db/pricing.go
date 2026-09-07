@@ -3,10 +3,11 @@ package db
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/money"
 )
@@ -318,7 +319,7 @@ func (db *DB) ReconcileModelPricingContext(
 }
 
 func deleteModelPricingTx(
-	ctx context.Context, tx *sql.Tx, patterns []string,
+	ctx context.Context, tx bun.Tx, patterns []string,
 ) error {
 	for i := 0; i < len(patterns); i += pricingWriteBatch {
 		end := min(i+pricingWriteBatch, len(patterns))
@@ -346,7 +347,7 @@ func deleteModelPricingTx(
 }
 
 func replaceModelPricingBands(
-	ctx context.Context, tx *sql.Tx, prices []ModelPricing,
+	ctx context.Context, tx bun.Tx, prices []ModelPricing,
 ) error {
 	for _, price := range prices {
 		if _, err := tx.ExecContext(ctx,

@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 )
 
 // VectorGenerationRow is one row of `pg vectors list`: a registered PG vector
@@ -31,8 +34,9 @@ type VectorGenerationRow struct {
 // yields an empty list rather than an error, matching the read-side gate's
 // tolerance elsewhere in this package.
 func ListVectorGenerations(
-	ctx context.Context, pg *sql.DB,
+	ctx context.Context, raw *sql.DB,
 ) ([]VectorGenerationRow, error) {
+	pg := bun.NewDB(raw, pgdialect.New())
 	rows, err := pg.QueryContext(ctx, `
 SELECT id, fingerprint, model, dimension, created_at
   FROM vector_generations ORDER BY id`)
@@ -72,7 +76,7 @@ SELECT id, fingerprint, model, dimension, created_at
 // read after the outer generation query is drained (they issue their own
 // queries), so ListVectorGenerations collects rows first, then fills each.
 func fillVectorGenerationCounts(
-	ctx context.Context, pg *sql.DB, g *VectorGenerationRow,
+	ctx context.Context, pg bun.IDB, g *VectorGenerationRow,
 ) error {
 	docs, chunks, err := vectorChunkCounts(ctx, pg, g.ID)
 	if err != nil {
@@ -92,12 +96,12 @@ func fillVectorGenerationCounts(
 // chunk table is created (or after a partial reset); a missing table is not an
 // error and reports zero for both, guarded by to_regclass.
 func vectorChunkCounts(
-	ctx context.Context, pg *sql.DB, genID int64,
+	ctx context.Context, pg bun.IDB, genID int64,
 ) (docs, chunks int64, err error) {
 	table := vectorChunkTable(genID)
 	var present bool
 	if err := pg.QueryRowContext(ctx,
-		`SELECT to_regclass($1) IS NOT NULL`, table).Scan(&present); err != nil {
+		`SELECT to_regclass(?0) IS NOT NULL`, table).Scan(&present); err != nil {
 		return 0, 0, fmt.Errorf("probing chunk table for generation %d: %w", genID, err)
 	}
 	if !present {
@@ -114,11 +118,11 @@ func vectorChunkCounts(
 // vectorGenerationMachines lists the machines that have pushed the generation,
 // sorted by name, from vector_generation_machines.
 func vectorGenerationMachines(
-	ctx context.Context, pg *sql.DB, genID int64,
+	ctx context.Context, pg bun.IDB, genID int64,
 ) ([]string, error) {
 	rows, err := pg.QueryContext(ctx,
 		`SELECT machine FROM vector_generation_machines
-		  WHERE generation_id = $1 ORDER BY machine`, genID)
+		  WHERE generation_id = ?0 ORDER BY machine`, genID)
 	if err != nil {
 		return nil, fmt.Errorf("listing machines for generation %d: %w", genID, err)
 	}
@@ -155,10 +159,11 @@ func vectorGenerationMachineDisplayName(raw string) string {
 // embeds survive). It runs in one transaction so a failure leaves the
 // generation intact. Dropping an id that does not exist, or dropping against a
 // database without the vector tables (SQLSTATE 42P01), returns a clear error.
-func DropVectorGeneration(ctx context.Context, pg *sql.DB, id int64) error {
+func DropVectorGeneration(ctx context.Context, raw *sql.DB, id int64) error {
+	pg := bun.NewDB(raw, pgdialect.New())
 	var one int
 	err := pg.QueryRowContext(ctx,
-		`SELECT 1 FROM vector_generations WHERE id = $1`, id).Scan(&one)
+		`SELECT 1 FROM vector_generations WHERE id = ?0`, id).Scan(&one)
 	if isUndefinedTable(err) {
 		return fmt.Errorf(
 			"no vector generations exist (pgvector not initialized for this target)")
@@ -195,7 +200,7 @@ func DropVectorGeneration(ctx context.Context, pg *sql.DB, id int64) error {
 // dropVectorGenerationRows drops the generation's chunk table and deletes its
 // state, machine, and generation rows within the transaction. PG DDL is
 // transactional, so a later step's failure rolls the DROP back with the rest.
-func dropVectorGenerationRows(ctx context.Context, tx *sql.Tx, id int64) error {
+func dropVectorGenerationRows(ctx context.Context, tx bun.Tx, id int64) error {
 	if _, err := tx.ExecContext(ctx,
 		fmt.Sprintf(`DROP TABLE IF EXISTS %s`, vectorChunkTable(id))); err != nil {
 		return fmt.Errorf("dropping chunk table for generation %d: %w", id, err)
@@ -204,9 +209,9 @@ func dropVectorGenerationRows(ctx context.Context, tx *sql.Tx, id int64) error {
 		what string
 		sql  string
 	}{
-		{"push state", `DELETE FROM vector_push_state WHERE generation_id = $1`},
-		{"machine rows", `DELETE FROM vector_generation_machines WHERE generation_id = $1`},
-		{"generation row", `DELETE FROM vector_generations WHERE id = $1`},
+		{"push state", `DELETE FROM vector_push_state WHERE generation_id = ?0`},
+		{"machine rows", `DELETE FROM vector_generation_machines WHERE generation_id = ?0`},
+		{"generation row", `DELETE FROM vector_generations WHERE id = ?0`},
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s.sql, id); err != nil {
@@ -222,7 +227,7 @@ func dropVectorGenerationRows(ctx context.Context, tx *sql.Tx, id int64) error {
 // the orphan-doc prune never references a missing chunk table (which would
 // abort the transaction). The outer generation query is drained before the
 // per-generation probes, since a transaction serves one query at a time.
-func existingChunkGenerationsTx(ctx context.Context, tx *sql.Tx) ([]int64, error) {
+func existingChunkGenerationsTx(ctx context.Context, tx bun.Tx) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM vector_generations`)
 	if err != nil {
 		return nil, fmt.Errorf("listing remaining generations: %w", err)
@@ -246,7 +251,7 @@ func existingChunkGenerationsTx(ctx context.Context, tx *sql.Tx) ([]int64, error
 	for _, id := range ids {
 		var present bool
 		if err := tx.QueryRowContext(ctx,
-			`SELECT to_regclass($1) IS NOT NULL`,
+			`SELECT to_regclass(?0) IS NOT NULL`,
 			vectorChunkTable(id)).Scan(&present); err != nil {
 			return nil, fmt.Errorf("probing chunk table for generation %d: %w", id, err)
 		}
@@ -263,7 +268,7 @@ func existingChunkGenerationsTx(ctx context.Context, tx *sql.Tx) ([]int64, error
 // existing chunk tables (existingChunkGenerationsTx) so the NOT EXISTS probes
 // never reference a missing table.
 func pruneUnreferencedVectorDocs(
-	ctx context.Context, tx *sql.Tx, genIDs []int64,
+	ctx context.Context, tx bun.Tx, genIDs []int64,
 ) error {
 	var conds strings.Builder
 	for _, id := range genIDs {

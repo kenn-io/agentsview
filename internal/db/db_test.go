@@ -533,7 +533,7 @@ func TestCloseWriterFailsEveryWritePathCleanly(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.ReopenWriter()) })
 
 	t.Run("Update", func(t *testing.T) {
-		err := database.Update(func(tx *sql.Tx) error {
+		err := database.Update(func(tx bun.Tx) error {
 			_, execErr := tx.Exec(
 				"UPDATE sessions SET first_message = ? WHERE id = ?",
 				"x", "barrier-session",
@@ -5360,7 +5360,7 @@ func TestReopenWriterAfterFailedCloseRestoresWrites(t *testing.T) {
 
 	require.Error(t, d.CloseWriter(),
 		"CloseWriter must fail while a writer connection is held")
-	require.ErrorIs(t, d.Update(func(*sql.Tx) error { return nil }),
+	require.ErrorIs(t, d.Update(func(bun.Tx) error { return nil }),
 		ErrWriterClosed, "the barrier stays active after the failed close")
 
 	require.NoError(t, d.ReopenWriter(), "ReopenWriter")

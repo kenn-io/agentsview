@@ -1,8 +1,9 @@
 package db
 
 import (
-	"database/sql"
 	"fmt"
+
+	"github.com/uptrace/bun"
 )
 
 // migrateMoneyColumnsLocked performs the one-way, transactional conversion
@@ -170,7 +171,7 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 	return nil
 }
 
-func rekeyMigratedCursorUsageEvents(tx *sql.Tx) error {
+func rekeyMigratedCursorUsageEvents(tx bun.Tx) error {
 	type keyUpdate struct {
 		id  int64
 		key string

@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 )
 
 // vectorBaseDDL creates the backend-agnostic vector tables. Chunk tables
@@ -148,7 +151,9 @@ func vectorChunkTable(genID int64) string {
 // halfvec_cosine_ops must be schema-qualified with it, or every schema
 // besides the one that happened to install the extension fails to resolve
 // them.
-func vectorExtensionSchema(ctx context.Context, pg *sql.DB) (string, error) {
+func vectorExtensionSchema(ctx context.Context, pg interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (string, error) {
 	var extSchema string
 	if err := pg.QueryRowContext(ctx,
 		`SELECT n.nspname FROM pg_extension e
@@ -197,9 +202,9 @@ CREATE TABLE IF NOT EXISTS %s (
 func ensureVectorGeneration(
 	ctx context.Context, pg *sql.DB, fingerprint, model string, dimension int,
 ) (int64, error) {
-	if _, err := pg.ExecContext(ctx, `
+	if _, err := bun.NewDB(pg, pgdialect.New()).ExecContext(ctx, `
 INSERT INTO vector_generations (fingerprint, model, dimension)
-VALUES ($1, $2, $3) ON CONFLICT (fingerprint) DO NOTHING`,
+VALUES (?0, ?1, ?2) ON CONFLICT (fingerprint) DO NOTHING`,
 		fingerprint, model, dimension); err != nil {
 		return 0, fmt.Errorf("registering vector generation: %w", err)
 	}
@@ -223,8 +228,8 @@ func LookupVectorGeneration(
 ) (int64, int, bool, error) {
 	var id int64
 	var dim int
-	err := pg.QueryRowContext(ctx,
-		`SELECT id, dimension FROM vector_generations WHERE fingerprint = $1`,
+	err := bun.NewDB(pg, pgdialect.New()).QueryRowContext(ctx,
+		`SELECT id, dimension FROM vector_generations WHERE fingerprint = ?0`,
 		fingerprint).Scan(&id, &dim)
 	if err == sql.ErrNoRows {
 		return 0, 0, false, nil
@@ -251,7 +256,7 @@ func VectorChunkTableExists(
 	ctx context.Context, pg *sql.DB, genID int64,
 ) (bool, error) {
 	var present bool
-	if err := pg.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`,
+	if err := bun.NewDB(pg, pgdialect.New()).QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`,
 		vectorChunkTable(genID)).Scan(&present); err != nil {
 		return false, fmt.Errorf(
 			"probing chunk table for generation %d: %w", genID, err)

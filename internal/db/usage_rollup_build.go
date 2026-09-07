@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/usagefacts"
@@ -324,7 +326,7 @@ func addUsageFactToDailyContribution(
 }
 
 func loadUsageRollupFacts(
-	ctx context.Context, conn *sql.Conn, sessions map[string]usageQuerySession,
+	ctx context.Context, conn bun.Conn, sessions map[string]usageQuerySession,
 ) ([]usageRollupFact, error) {
 	if _, err := conn.ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS
 		usage_rollup_build_sessions(session_id TEXT PRIMARY KEY) WITHOUT ROWID;
@@ -417,7 +419,7 @@ func loadUsageRollupFacts(
 }
 
 func loadCursorUsageRollupBuild(
-	ctx context.Context, conn *sql.Conn, highWater int64,
+	ctx context.Context, conn bun.Conn, highWater int64,
 	location *time.Location, pricingHash string,
 ) (usageRollupBuild, error) {
 	build := usageRollupBuild{

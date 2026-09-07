@@ -13,6 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
+
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
@@ -31,7 +34,7 @@ const rawUploadSessionColumns = `
 
 // RawUploadStore combines PostgreSQL offset fencing with a restart-safe spool.
 type RawUploadStore struct {
-	db            *sql.DB
+	db            *bun.DB
 	root          *os.Root
 	closeOnce     sync.Once
 	closeErr      error
@@ -54,7 +57,7 @@ func NewRawUploadStore(database *sql.DB, dataDir string) (*RawUploadStore, error
 	if err != nil {
 		return nil, err
 	}
-	store := &RawUploadStore{db: database, root: root}
+	store := &RawUploadStore{db: bun.NewDB(database, pgdialect.New()), root: root}
 	store.syncDirectory = store.syncSpoolDirectory
 	startupCtx, cancelStartup := context.WithTimeout(
 		context.Background(), rawUploadCleanupTimeout,
@@ -152,10 +155,10 @@ func (s *RawUploadStore) Create(
 	var expiredID string
 	err = tx.QueryRowContext(ctx, `
 		UPDATE raw_upload_sessions
-		SET state = 'expired', updated_at = $1
-		WHERE tenant_id = $2 AND device_id = $3 AND provider = $4
-			AND sha256 = $5 AND size_bytes = $6
-			AND state = 'open' AND expires_at <= $1
+		SET state = 'expired', updated_at = ?0
+		WHERE tenant_id = ?1 AND device_id = ?2 AND provider = ?3
+			AND sha256 = ?4 AND size_bytes = ?5
+			AND state = 'open' AND expires_at <= ?0
 		RETURNING upload_id`,
 		record.CreatedAt, record.Identity.TenantID, record.Identity.DeviceID,
 		record.Provider, record.Object.SHA256, record.Object.Length,
@@ -168,12 +171,12 @@ func (s *RawUploadStore) Create(
 		INSERT INTO raw_upload_sessions (
 			upload_id, tenant_id, device_id, provider, sha256, size_bytes,
 			offset_bytes, state, created_at, updated_at, expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 0, 'open', $7, $7, $8)
+		) VALUES (?0, ?1, ?2, ?3, ?4, ?5, 0, 'open', ?6, ?6, ?7)
 		ON CONFLICT (
 			tenant_id, device_id, provider, sha256, size_bytes
 		) WHERE state = 'open'
 		DO UPDATE SET updated_at = raw_upload_sessions.updated_at
-		RETURNING `+rawUploadSessionColumns+`, upload_id = $1`,
+		RETURNING `+rawUploadSessionColumns+`, upload_id = ?0`,
 		record.ID, record.Identity.TenantID, record.Identity.DeviceID,
 		record.Provider, record.Object.SHA256, record.Object.Length,
 		record.CreatedAt, record.ExpiresAt,
@@ -288,8 +291,8 @@ func (s *RawUploadStore) Append(
 	newOffset := session.Offset + int64(len(chunk))
 	result, err := tx.ExecContext(ctx, `
 		UPDATE raw_upload_sessions
-		SET offset_bytes = $1, updated_at = $2
-		WHERE upload_id = $3 AND state = 'open' AND offset_bytes = $4`,
+		SET offset_bytes = ?0, updated_at = ?1
+		WHERE upload_id = ?2 AND state = 'open' AND offset_bytes = ?3`,
 		newOffset, now, uploadID, session.Offset,
 	)
 	if err != nil {
@@ -384,8 +387,8 @@ func (s *RawUploadStore) Reset(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE raw_upload_sessions
-		SET offset_bytes = 0, generation = generation + 1, updated_at = $1
-		WHERE upload_id = $2 AND state = 'open'`, now, uploadID,
+		SET offset_bytes = 0, generation = generation + 1, updated_at = ?0
+		WHERE upload_id = ?1 AND state = 'open'`, now, uploadID,
 	); err != nil {
 		return rawsync.UploadSession{}, fmt.Errorf("resetting raw upload offset: %w", err)
 	}
@@ -441,8 +444,8 @@ func (s *RawUploadStore) Complete(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE raw_upload_sessions
-		SET state = 'complete', completed_at = $1, updated_at = $1
-		WHERE upload_id = $2 AND state = 'open'`, now, uploadID,
+		SET state = 'complete', completed_at = ?0, updated_at = ?0
+		WHERE upload_id = ?1 AND state = 'open'`, now, uploadID,
 	); err != nil {
 		return rawsync.UploadSession{}, fmt.Errorf("completing raw upload: %w", err)
 	}
@@ -484,13 +487,13 @@ func (s *RawUploadStore) cleanupExpiredAndOrphaned(
 		WITH expired AS (
 			SELECT upload_id
 			FROM raw_upload_sessions
-			WHERE state = 'open' AND expires_at <= $1
+			WHERE state = 'open' AND expires_at <= ?0
 			ORDER BY expires_at, upload_id
-			LIMIT $2
+			LIMIT ?1
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE raw_upload_sessions AS sessions
-		SET state = 'expired', updated_at = $1
+		SET state = 'expired', updated_at = ?0
 		FROM expired
 		WHERE sessions.upload_id = expired.upload_id
 		RETURNING sessions.upload_id`, now, rawUploadCleanupBatch)
@@ -513,9 +516,9 @@ func (s *RawUploadStore) cleanupExpiredAndOrphaned(
 		WITH terminal AS (
 			SELECT upload_id
 			FROM raw_upload_sessions
-			WHERE state IN ('complete', 'expired') AND expires_at <= $1
+			WHERE state IN ('complete', 'expired') AND expires_at <= ?0
 			ORDER BY expires_at, upload_id
-			LIMIT $2
+			LIMIT ?1
 			FOR UPDATE SKIP LOCKED
 		)
 		DELETE FROM raw_upload_sessions AS sessions
@@ -606,7 +609,7 @@ func (s *RawUploadStore) reconcileRawUploadStage(
 	err = tx.QueryRowContext(ctx, `
 		SELECT state, expires_at
 		FROM raw_upload_sessions
-		WHERE upload_id = $1
+		WHERE upload_id = ?0
 		FOR UPDATE`, uploadID).Scan(&state, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Rollback(); err != nil {
@@ -776,14 +779,14 @@ func scanRawUploadSession(
 
 func loadRawUploadSessionLocked(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	identity rawsync.AuthIdentity,
 	uploadID string,
 ) (rawsync.UploadSession, string, error) {
 	row := tx.QueryRowContext(ctx, `
 		SELECT `+rawUploadSessionColumns+`
 		FROM raw_upload_sessions
-		WHERE upload_id = $1 AND tenant_id = $2 AND device_id = $3
+		WHERE upload_id = ?0 AND tenant_id = ?1 AND device_id = ?2
 		FOR UPDATE`, uploadID, identity.TenantID, identity.DeviceID)
 	session, state, _, err := scanRawUploadSession(row, false)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -797,14 +800,14 @@ func loadRawUploadSessionLocked(
 
 func expireRawUploadSession(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	uploadID string,
 	now time.Time,
 ) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE raw_upload_sessions
-		SET state = 'expired', updated_at = $1
-		WHERE upload_id = $2 AND state = 'open'`, now, uploadID,
+		SET state = 'expired', updated_at = ?0
+		WHERE upload_id = ?1 AND state = 'open'`, now, uploadID,
 	); err != nil {
 		return fmt.Errorf("expiring raw upload session: %w", err)
 	}
@@ -813,7 +816,7 @@ func expireRawUploadSession(
 
 func retireExpiredRawUploadSession(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	session rawsync.UploadSession,
 	state string,
 	uploadID string,
@@ -830,7 +833,7 @@ func retireExpiredRawUploadSession(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM raw_upload_sessions
-		WHERE upload_id = $1 AND state IN ('complete', 'expired')`,
+		WHERE upload_id = ?0 AND state IN ('complete', 'expired')`,
 		uploadID,
 	); err != nil {
 		return false, fmt.Errorf("deleting expired raw upload: %w", err)

@@ -127,7 +127,7 @@ func (db *DB) ReplaceSessionUsageEvents(
 			sessionID, err,
 		)
 	}
-	if err := enqueueArtifactExportTx(tx.Tx, sessionID); err != nil {
+	if err := enqueueArtifactExportTx(tx, sessionID); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

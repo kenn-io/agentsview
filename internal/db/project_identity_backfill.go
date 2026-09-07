@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/uptrace/bun"
+
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -30,7 +32,7 @@ type BackgroundMigrationStatus struct {
 }
 
 func ensureProjectIdentityBackfillQueuedTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	var state string
 	err := tx.QueryRowContext(ctx, `
@@ -311,7 +313,7 @@ func (db *DB) ApplyProjectIdentityBackfillBatch(
 			return fmt.Errorf("applying project identity backfill batch: %w", err)
 		}
 	}
-	result, err := tx.Tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE background_migrations SET
 			completed_items = completed_items + ?,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')

@@ -1011,16 +1011,15 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	}
 
 	ctx := context.Background()
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	writeSession := func(sessionID string, sessionMessages []Message) error {
-		if err := appendCanonicalMessageGraph(ctx, bunTx, sessionID, sessionMessages); err != nil {
+		if err := appendCanonicalMessageGraph(ctx, tx, sessionID, sessionMessages); err != nil {
 			return err
 		}
 		if err := reconcileRecallEvidenceForSessionTx(
@@ -1064,7 +1063,7 @@ func (db *DB) InsertMessages(msgs []Message) error {
 			}
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	db.notifyUsageSessions(sessionIDs)
@@ -1080,7 +1079,7 @@ func (db *DB) InsertMessages(msgs []Message) error {
 // the zeroed version keeps the session eligible for recompute instead
 // of freezing pre-write derived data as current. Only the signal
 // update itself restores the version.
-func invalidateSessionSignalsTx(tx *sql.Tx, sessionID string) error {
+func invalidateSessionSignalsTx(tx bun.Tx, sessionID string) error {
 	if _, err := tx.Exec(
 		"UPDATE sessions SET quality_signal_version = 0 WHERE id = ?",
 		sessionID,
@@ -1245,16 +1244,15 @@ func (db *DB) WriteSessionIncremental(
 	defer db.mu.Unlock()
 
 	ctx := context.Background()
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return false, fmt.Errorf("beginning incremental write tx: %w", err)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	if err := appendCanonicalMessageGraph(
-		ctx, bunTx, sessionID, msgs,
+		ctx, tx, sessionID, msgs,
 	); err != nil {
 		return false, err
 	}
@@ -1354,7 +1352,7 @@ func (db *DB) WriteSessionIncremental(
 			return false, err
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("committing incremental write tx: %w", err)
 	}
 	db.notifyUsageSessions([]string{sessionID})
@@ -1474,14 +1472,13 @@ func (db *DB) replaceArchiveSessionMessages(
 		!transcriptMessagesEqual(stored, msgs)
 
 	ctx := context.Background()
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 	if useDiff {
-		needsPinRemap, err := messageDiffNeedsPinRemap(ctx, bunTx, plan)
+		needsPinRemap, err := messageDiffNeedsPinRemap(ctx, tx, plan)
 		if err != nil {
 			return err
 		}
@@ -1499,12 +1496,12 @@ func (db *DB) replaceArchiveSessionMessages(
 
 	if useDiff {
 		if err := applySessionMessageDiffTx(
-			ctx, bunTx, sessionID, plan,
+			ctx, tx, sessionID, plan,
 		); err != nil {
 			return err
 		}
 	} else if err := replaceSessionMessagesTx(
-		ctx, bunTx, tx, sessionID, msgs,
+		ctx, tx, sessionID, msgs,
 	); err != nil {
 		return err
 	}
@@ -1534,7 +1531,7 @@ func (db *DB) replaceArchiveSessionMessages(
 	// supplies fresh findings through the same canonical replacement helper.
 	if transcriptChanged {
 		if err := replaceSessionSecretFindingsBunTx(
-			ctx, bunTx, sessionID, nil, 0, "",
+			ctx, tx, sessionID, nil, 0, "",
 		); err != nil {
 			return err
 		}
@@ -1547,7 +1544,7 @@ func (db *DB) replaceArchiveSessionMessages(
 	); err != nil {
 		return err
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	db.notifyUsageSessions([]string{sessionID})
@@ -1561,7 +1558,7 @@ func (db *DB) replaceArchiveSessionMessages(
 // + tool_calls + tool_result_events, then restores pins. Caller owns the lock
 // and transaction lifecycle.
 func replaceSessionMessagesTx(
-	ctx context.Context, bunTx bun.IDB, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 	sessionID string, msgs []Message,
 ) error {
 	pins, err := savePinsTx(tx, sessionID)
@@ -1574,7 +1571,7 @@ func replaceSessionMessagesTx(
 	}
 
 	if err := appendCanonicalMessageGraph(
-		ctx, bunTx, sessionID, msgs,
+		ctx, tx, sessionID, msgs,
 	); err != nil {
 		return err
 	}
@@ -1764,14 +1761,13 @@ func (db *DB) replaceSessionContent(
 		!transcriptMessagesEqual(stored, msgs)
 
 	ctx := context.Background()
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 	if useDiff {
-		needsPinRemap, err := messageDiffNeedsPinRemap(ctx, bunTx, plan)
+		needsPinRemap, err := messageDiffNeedsPinRemap(ctx, tx, plan)
 		if err != nil {
 			return err
 		}
@@ -1789,12 +1785,12 @@ func (db *DB) replaceSessionContent(
 
 	if useDiff {
 		if err := applySessionMessageDiffTx(
-			ctx, bunTx, sessionID, plan,
+			ctx, tx, sessionID, plan,
 		); err != nil {
 			return err
 		}
 	} else if err := replaceSessionMessagesTx(
-		ctx, bunTx, tx, sessionID, msgs,
+		ctx, tx, sessionID, msgs,
 	); err != nil {
 		return err
 	}
@@ -1825,7 +1821,7 @@ func (db *DB) replaceSessionContent(
 	// secrets_rules_version (updateSessionSignalsTx leaves them untouched), so
 	// the count cannot diverge from the findings it summarizes.
 	if err := replaceSessionSecretFindingsBunTx(
-		ctx, bunTx, sessionID, findings,
+		ctx, tx, sessionID, findings,
 		signals.SecretLeakCount, signals.SecretsRulesVersion,
 	); err != nil {
 		return err
@@ -1857,7 +1853,7 @@ func (db *DB) replaceSessionContent(
 			return err
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	db.notifyUsageSessions([]string{sessionID})
@@ -2835,7 +2831,7 @@ func (db *DB) SetToolCallSubagentSession(
 // summary is compared against. Inspect at most two index entries before
 // loading content so repeated appends do not rescan the event history.
 func soleToolResultEventTx(
-	tx *sql.Tx, sessionID string, messageOrdinal, callIndex int,
+	tx bun.Tx, sessionID string, messageOrdinal, callIndex int,
 ) ([]ToolResultEvent, error) {
 	var count int
 	var content sql.NullString
@@ -2871,7 +2867,7 @@ func soleToolResultEventTx(
 }
 
 func applyToolCallSubagentLinkTx(
-	tx *sql.Tx, sessionID string, link ToolCallSubagentLink,
+	tx bun.Tx, sessionID string, link ToolCallSubagentLink,
 	blockedResultCategories map[string]bool,
 ) (bool, error) {
 	var toolName, category, currentSubagent, currentResultContent string

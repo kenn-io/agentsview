@@ -1361,34 +1361,24 @@ func (db *DB) queueSubagentParentRepairs(ids []string, cleanup bool) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	repairStmt, err := tx.Prepare(`
+	repairStmt := `
 		INSERT INTO subagent_parent_repair_queue (session_id) VALUES (?)
-		ON CONFLICT(session_id) DO NOTHING`)
-	if err != nil {
-		return fmt.Errorf("preparing subagent parent repair queue insert: %w", err)
-	}
-	defer repairStmt.Close()
-	var cleanupStmt *sql.Stmt
+		ON CONFLICT(session_id) DO NOTHING`
+	var cleanupStmt string
 	if cleanup {
-		cleanupStmt, err = tx.Prepare(`
+		cleanupStmt = `
 			INSERT INTO subagent_parent_cleanup_queue (session_id) VALUES (?)
-			ON CONFLICT(session_id) DO NOTHING`)
-		if err != nil {
-			return fmt.Errorf(
-				"preparing subagent parent cleanup queue insert: %w", err,
-			)
-		}
-		defer cleanupStmt.Close()
+			ON CONFLICT(session_id) DO NOTHING`
 	}
 	for _, id := range ids {
 		if id == "" {
 			continue
 		}
-		if _, err := repairStmt.Exec(id); err != nil {
+		if _, err := tx.Exec(repairStmt, id); err != nil {
 			return fmt.Errorf("queueing subagent parent repair for %s: %w", id, err)
 		}
-		if cleanupStmt != nil {
-			if _, err := cleanupStmt.Exec(id); err != nil {
+		if cleanupStmt != "" {
+			if _, err := tx.Exec(cleanupStmt, id); err != nil {
 				return fmt.Errorf(
 					"queueing subagent parent cleanup for %s: %w", id, err,
 				)
@@ -1511,7 +1501,7 @@ func (db *DB) RepairQueuedSubagentParentsContext(ctx context.Context) error {
 }
 
 func migrateLegacySubagentParentRepairQueueTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	var encoded string
 	err := tx.QueryRowContext(ctx,
@@ -1528,31 +1518,23 @@ func migrateLegacySubagentParentRepairQueueTx(
 	if err := json.Unmarshal([]byte(encoded), &ids); err != nil {
 		return fmt.Errorf("decoding legacy subagent parent repair queue: %w", err)
 	}
-	repairStmt, err := tx.PrepareContext(ctx, `
+	repairStmt := `
 		INSERT INTO subagent_parent_repair_queue (session_id) VALUES (?)
-		ON CONFLICT(session_id) DO NOTHING`)
-	if err != nil {
-		return fmt.Errorf("preparing legacy subagent parent repair migration: %w", err)
-	}
-	defer repairStmt.Close()
-	cleanupStmt, err := tx.PrepareContext(ctx, `
+		ON CONFLICT(session_id) DO NOTHING`
+	cleanupStmt := `
 		INSERT INTO subagent_parent_cleanup_queue (session_id) VALUES (?)
-		ON CONFLICT(session_id) DO NOTHING`)
-	if err != nil {
-		return fmt.Errorf("preparing legacy subagent parent cleanup migration: %w", err)
-	}
-	defer cleanupStmt.Close()
+		ON CONFLICT(session_id) DO NOTHING`
 	for _, id := range ids {
 		if id == "" {
 			continue
 		}
-		if _, err := repairStmt.ExecContext(ctx, id); err != nil {
+		if _, err := tx.ExecContext(ctx, repairStmt, id); err != nil {
 			return fmt.Errorf("migrating legacy subagent parent repair for %s: %w", id, err)
 		}
 		// The JSON queue predates generic post-write and attempted-session
 		// seeds; every legacy ID was captured before a destructive write and
 		// therefore carries cleanup intent.
-		if _, err := cleanupStmt.ExecContext(ctx, id); err != nil {
+		if _, err := tx.ExecContext(ctx, cleanupStmt, id); err != nil {
 			return fmt.Errorf(
 				"migrating legacy subagent parent cleanup for %s: %w", id, err,
 			)
@@ -2127,7 +2109,7 @@ func (db *DB) FileIdentityChanged(path string, inode, device int64) bool {
 // to classify termination reliably. Clearing prevents a stale prior verdict
 // from remaining visible until the next full sync reclassifies the session.
 func updateSessionIncrementalTx(
-	tx *sql.Tx, id string, update IncrementalSessionUpdate,
+	tx bun.Tx, id string, update IncrementalSessionUpdate,
 ) error {
 	var lastEntryUUID any
 	if update.LastEntryUUID != "" {
@@ -3495,7 +3477,7 @@ func (db *DB) ReplaceActiveSessionSourceBaselinesWithExceptions(
 
 func baselineActiveSessionSourceOwnershipsTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	ownerships []SessionSourceOwnership,
 ) error {
 	for _, ownership := range ownerships {
@@ -3528,7 +3510,7 @@ func baselineActiveSessionSourceOwnershipsTx(
 
 func removeSessionSourceOwnershipBaselinesTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	ownerships []SessionSourceOwnership,
 ) error {
 	for _, ownership := range ownerships {
@@ -3571,7 +3553,7 @@ func rejectedSourceCandidates(
 // condition, chunked to stay under SQLite's bind-variable limit.
 func deleteSessionSourceBaselinesTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	machine string,
 	sources []SessionSourcePath,
 	condition string,
@@ -3598,7 +3580,7 @@ func deleteSessionSourceBaselinesTx(
 
 func deleteSessionSourceBaselinesAcrossMachinesTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	sources []SessionSourcePath,
 	what string,
 ) error {
@@ -3727,7 +3709,7 @@ func (db *DB) ListActiveSessionSourceAttributions(
 
 func baselineActiveSessionSourcePathsTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	machine string,
 	sources []SessionSourcePath,
 ) error {
@@ -4161,7 +4143,7 @@ func (db *DB) DeleteSession(id string) error {
 	return tx.Commit()
 }
 
-func excludeSessionIDTx(tx *sql.Tx, id string) error {
+func excludeSessionIDTx(tx bun.Tx, id string) error {
 	_, err := tx.Exec(
 		"INSERT OR IGNORE INTO excluded_sessions (id) VALUES (?)",
 		id,
@@ -4169,7 +4151,7 @@ func excludeSessionIDTx(tx *sql.Tx, id string) error {
 	return err
 }
 
-func sessionAliasIDsTx(tx *sql.Tx, where string, args ...any) ([]string, error) {
+func sessionAliasIDsTx(tx bun.Tx, where string, args ...any) ([]string, error) {
 	rows, err := tx.Query(
 		"SELECT id, agent, file_path FROM sessions WHERE "+where,
 		args...,
@@ -4196,7 +4178,7 @@ func sessionAliasIDsTx(tx *sql.Tx, where string, args ...any) ([]string, error) 
 	return aliases, nil
 }
 
-func sessionIDsTx(tx *sql.Tx, where string, args ...any) ([]string, error) {
+func sessionIDsTx(tx bun.Tx, where string, args ...any) ([]string, error) {
 	rows, err := tx.Query(
 		"SELECT id FROM sessions WHERE "+where,
 		args...,

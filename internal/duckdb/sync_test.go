@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"github.com/uptrace/bun"
 	"log"
 	"os"
 	"path/filepath"
@@ -113,7 +114,7 @@ func TestMirroredSessionMachine(t *testing.T) {
 func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 3)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		if _, err := tx.Exec(
 			`UPDATE sessions SET machine = ? WHERE id = ?`,
 			"source-machine", "sess-2",
@@ -248,7 +249,7 @@ func TestPushFutureMarkerSessionStillReceivesLaterChanges(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
 	futureMtime := time.Now().Add(90 * 24 * time.Hour).UnixNano()
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE sessions SET file_mtime = ? WHERE id = ?`,
 			futureMtime, "sess-1",
@@ -409,7 +410,7 @@ func TestPushRebuildTriggers(t *testing.T) {
 func TestPushRebuildsV6MirrorToRestoreSourceMachine(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE sessions SET machine = ? WHERE id = ?`,
 			"source-machine", "sess-1",
@@ -1241,7 +1242,7 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 	}
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, updateErr := tx.Exec(
 			`UPDATE messages SET timestamp = ? WHERE session_id LIKE ?`,
 			"not-a-timestamp", "duck-cancel-fallback-%",
@@ -2481,7 +2482,7 @@ func appendMessage(t *testing.T, local *db.DB, sessionID string) {
 // exactly as it was: the fingerprint changes without the marker moving.
 func mutateSessionContent(t *testing.T, local *db.DB, sessionID string) {
 	t.Helper()
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE messages SET content = 'mutated content'
 			 WHERE session_id = ? AND ordinal = 0`,
@@ -2496,7 +2497,7 @@ func mutateSessionContent(t *testing.T, local *db.DB, sessionID string) {
 // so a test can pin it exactly at a mirror's stored cutoff.
 func setSessionSignalsTo(t *testing.T, local *db.DB, sessionID, marker string) {
 	t.Helper()
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE sessions SET sync_marker = ? WHERE id = ?`, marker, sessionID,
 		)

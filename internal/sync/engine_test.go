@@ -19,6 +19,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11343,7 +11345,7 @@ func TestEngine_SyncSingleSessionReasonixDeletedMetadataClearsProject(t *testing
 	assert.Equal(t, "my_app", got.Project)
 
 	require.NoError(t, os.Remove(metaPath))
-	require.NoError(t, db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
 			"reasonix:session-123",
@@ -11554,7 +11556,7 @@ func TestEngine_SyncSingleSessionReasonixProjectLayoutPreservesProject(t *testin
 	require.NotNil(t, got)
 	assert.Equal(t, "layout-name", got.Project)
 
-	require.NoError(t, db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
 			"reasonix:session-123",

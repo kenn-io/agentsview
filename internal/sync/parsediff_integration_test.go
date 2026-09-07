@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -113,7 +115,7 @@ func mutateDB(
 	t *testing.T, env *testEnv, query string, args ...any,
 ) {
 	t.Helper()
-	err := env.db.Update(func(tx *sql.Tx) error {
+	err := env.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(query, args...)
 		return err
 	})
@@ -2176,7 +2178,7 @@ func TestParseDiffHermesSharedStateDBNotMaskedAsRaced(t *testing.T) {
 	// Seed real parser drift in the archive for BOTH sessions so a re-parse
 	// of the unchanged state.db reports a first_message change.
 	for _, id := range []string{"hermes:alpha", "hermes:beta"} {
-		require.NoError(t, database.Update(func(tx *sql.Tx) error {
+		require.NoError(t, database.Update(func(tx bun.Tx) error {
 			_, err := tx.Exec(
 				"UPDATE sessions SET first_message = ? WHERE id = ?",
 				"drifted first message", id,

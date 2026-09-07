@@ -76,7 +76,7 @@ type SessionBatchResult struct {
 
 type contextTransaction struct {
 	ctx context.Context
-	tx  *sql.Tx
+	tx  bun.Tx
 }
 
 func (tx contextTransaction) Exec(
@@ -146,8 +146,7 @@ func (db *DB) WriteSessionBatchContext(
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	rawTx := tx.Tx
-	ctxTx := contextTransaction{ctx: ctx, tx: rawTx}
+	ctxTx := contextTransaction{ctx: ctx, tx: tx}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var writtenUsageIDs []string
 
@@ -177,7 +176,7 @@ func (db *DB) WriteSessionBatchContext(
 
 		var sessionRecallRevocations recallEvidenceRevocationEvents
 		messagesWritten, err := writeOneSessionBatchTx(
-			ctx, rawTx, ctxTx, tx,
+			ctx, tx,
 			write,
 			&sessionRecallRevocations,
 			db.usageOnlyStorage(),
@@ -261,7 +260,6 @@ func (db *DB) writeArchiveSessionBatchAtomic(
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	rawTx := tx.Tx
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var writtenUsageIDs []string
 
@@ -280,7 +278,7 @@ func (db *DB) writeArchiveSessionBatchAtomic(
 			write.SkipSignalUpdates = false
 		}
 		messagesWritten, err := writeOneSessionBatchTx(
-			ctx, rawTx, rawTx, tx,
+			ctx, tx,
 			write,
 			&pendingRecallRevocations,
 			db.usageOnlyStorage(),
@@ -496,13 +494,12 @@ func rollbackSavepoint(tx transactionQueries, savepoint string) error {
 
 func writeOneSessionBatchTx(
 	ctx context.Context,
-	tx *sql.Tx,
-	queries transactionQueries,
-	bunTx bun.Tx,
+	tx bun.Tx,
 	write SessionBatchWrite,
 	pendingRecallRevocations *recallEvidenceRevocationEvents,
 	preserveAutomation bool,
 ) (int, error) {
+	queries := contextTransaction{ctx: ctx, tx: tx}
 	if write.IdentityObservation.Project != "" {
 		normalized, err := normalizeProjectIdentityObservation(
 			write.IdentityObservation,
@@ -522,7 +519,7 @@ func writeOneSessionBatchTx(
 		write.IdentityObservation = normalized
 	}
 
-	upsertResult, err := upsertArchiveSessionRow(ctx, bunTx, write.Session)
+	upsertResult, err := upsertArchiveSessionRow(ctx, tx, write.Session)
 	if err != nil {
 		return 0, err
 	}
@@ -561,7 +558,7 @@ func writeOneSessionBatchTx(
 		)
 		if useMessageDiff {
 			needsPinRemap, err := messageDiffNeedsPinRemap(
-				ctx, bunTx, replacementPlan,
+				ctx, tx, replacementPlan,
 			)
 			if err != nil {
 				return 0, err
@@ -576,12 +573,12 @@ func writeOneSessionBatchTx(
 	if write.IdentityObservation.Project != "" {
 		if write.IdentitySnapshotProject == nil {
 			err = upsertProjectIdentityObservationWithSnapshotProjectBun(
-				ctx, bunTx, write.IdentityObservation,
+				ctx, tx, write.IdentityObservation,
 				write.IdentityObservation.Project, false, false,
 			)
 		} else {
 			err = upsertProjectIdentityObservationWithSnapshotProjectBun(
-				ctx, bunTx, write.IdentityObservation,
+				ctx, tx, write.IdentityObservation,
 				*write.IdentitySnapshotProject,
 				upsertResult.inserted, true,
 			)
@@ -593,7 +590,7 @@ func writeOneSessionBatchTx(
 	if !upsertResult.inserted &&
 		upsertResult.previousProject != upsertResult.currentProject {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			ctx, bunTx, write.Session.ID,
+			ctx, tx, write.Session.ID,
 			[]string{
 				upsertResult.previousProject,
 				upsertResult.currentProject,
@@ -611,7 +608,7 @@ func writeOneSessionBatchTx(
 	if err != nil {
 		return 0, err
 	}
-	if err := ReplaceUsageEventRows(ctx, bunTx, write.Session.ID, usageRows); err != nil {
+	if err := ReplaceUsageEventRows(ctx, tx, write.Session.ID, usageRows); err != nil {
 		return 0, err
 	}
 
@@ -644,18 +641,18 @@ func writeOneSessionBatchTx(
 
 	if useMessageDiff {
 		if err := applySessionMessageDiffTx(
-			ctx, bunTx, write.Session.ID, replacementPlan,
+			ctx, tx, write.Session.ID, replacementPlan,
 		); err != nil {
 			return 0, err
 		}
 	} else if len(msgs) > 0 {
 		if err := appendCanonicalMessageGraph(
-			ctx, bunTx, write.Session.ID, msgs,
+			ctx, tx, write.Session.ID, msgs,
 		); err != nil {
 			return 0, err
 		}
 	} else if replaceMessages {
-		if err := ReplaceMessageRows(ctx, bunTx, write.Session.ID, nil); err != nil {
+		if err := ReplaceMessageRows(ctx, tx, write.Session.ID, nil); err != nil {
 			return 0, err
 		}
 	}
@@ -725,7 +722,7 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 		if err := replaceSessionSecretFindingsBunTx(
-			ctx, bunTx, write.Session.ID, write.Findings,
+			ctx, tx, write.Session.ID, write.Findings,
 			write.Signals.SecretLeakCount, write.Signals.SecretsRulesVersion,
 		); err != nil {
 			return 0, err
@@ -756,7 +753,7 @@ func writeOneSessionBatchTx(
 }
 
 func sessionMessagesTx(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx bun.Tx, sessionID string,
 ) ([]Message, error) {
 	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`
 		SELECT %s

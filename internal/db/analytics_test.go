@@ -2,12 +2,13 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -2441,7 +2442,7 @@ func TestGetAnalyticsVelocity_NullTimestamp(t *testing.T) {
 			10 * time.Second, 10 * time.Second, 10 * time.Second,
 		})
 
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE messages SET timestamp = NULL"+
 				" WHERE session_id = ? AND ordinal = ?", "v-null", 5)

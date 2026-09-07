@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
@@ -371,7 +373,7 @@ func (db *DB) ActivateExtractGeneration(
 // their rows first: promotion excludes their entries and the retraction
 // pass removes them.
 func verifyExtractActivationCoverageTx(
-	ctx context.Context, tx *sql.Tx, fingerprint string,
+	ctx context.Context, tx bun.Tx, fingerprint string,
 	scanVersions []string, quietCutoff time.Time, allowCandidates bool,
 ) error {
 	gate := extractFindingsGateSQL(allowCandidates)
@@ -1059,7 +1061,7 @@ func (db *DB) ListExtractProgress(
 // the named column, so copies can adapt to archives written before a column
 // was introduced.
 func attachedColumnExistsTx(
-	ctx context.Context, tx *sql.Tx, table, column string,
+	ctx context.Context, tx bun.Tx, table, column string,
 ) (bool, error) {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `
@@ -1080,7 +1082,7 @@ func attachedColumnExistsTx(
 // the rebuilt DB, mirroring the entry copy. Archives written by releases
 // without these tables are tolerated.
 func copyRecallExtractStateFromAttachedTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	generationsExist, err := attachedRecallTableExistsTx(
 		ctx, tx, "recall_extract_generations",
@@ -1403,7 +1405,7 @@ func (db *DB) InsertExtractedRecallEntries(
 }
 
 func insertExtractedRecallEntriesTx(
-	ctx context.Context, tx *sql.Tx, entries []RecallEntry,
+	ctx context.Context, tx bun.Tx, entries []RecallEntry,
 ) (int, error) {
 	inserted := 0
 	for _, entry := range entries {
@@ -1553,7 +1555,7 @@ type ExtractSessionGuard struct {
 }
 
 func verifyExtractSessionGuardTx(
-	ctx context.Context, tx *sql.Tx, u ExtractSessionGuard,
+	ctx context.Context, tx bun.Tx, u ExtractSessionGuard,
 ) error {
 	var (
 		deletedAt, revision, localModified, endedAt sql.NullString
@@ -1646,7 +1648,7 @@ func nullableTimestampEqual(stored sql.NullString, expected *string) bool {
 // reconciler later re-verifies. Ranges are bound once and shared, since every
 // entry of one unit cites the same transcript window.
 func bindExtractedEvidenceTx(
-	ctx context.Context, tx *sql.Tx, u ExtractUnitCommit,
+	ctx context.Context, tx bun.Tx, u ExtractUnitCommit,
 ) ([]RecallEntry, error) {
 	type ordinalRange struct{ start, end int }
 	bound := make(map[ordinalRange]RecallEvidenceSelectionMetadata)
@@ -1861,7 +1863,7 @@ func (db *DB) DiscardExtractedSessionOutput(
 // Human-touched entries are left as they were, mirroring the delete path.
 // Returns how many entries changed.
 func syncExtractedEntryContextTx(
-	ctx context.Context, tx *sql.Tx, fingerprint string, session *Session,
+	ctx context.Context, tx bun.Tx, fingerprint string, session *Session,
 ) (int, error) {
 	result, err := tx.ExecContext(ctx, `
 		UPDATE recall_entries
@@ -1897,7 +1899,7 @@ func syncExtractedEntryContextTx(
 // settling the coverage stamp over a permanently dark corpus. Returns how
 // many entries had provenance restored.
 func rebindExtractedSessionEvidenceTx(
-	ctx context.Context, tx *sql.Tx, fingerprint, sessionID string,
+	ctx context.Context, tx bun.Tx, fingerprint, sessionID string,
 ) (int, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT e.id, e.entry_id,

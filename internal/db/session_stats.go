@@ -1532,16 +1532,12 @@ func (db *DB) computeOutcomeStats(
 	since := from.UTC().Format(time.RFC3339)
 	until := to.UTC().Format(time.RFC3339)
 	var cache *git.Cache
-	// Snapshot the writer pool once: CloseWriter can nil it concurrently for a
-	// worker maintenance pass, so a check-then-load would hand git.NewCache a nil
-	// *sql.DB and panic on first use. Compaction reopens the pool before its
-	// rollback window closes, so writerClosed remains the authority even when the
-	// snapshot is non-nil. Fall back to the read-only cache while either barrier
-	// is active so analytics never persists git stats that a rollback can discard.
-	if writer := db.rawWriter(); !db.ReadOnly() && !db.WriterClosed() && writer != nil {
-		cache = git.NewCache(writer)
+	// The facade rechecks the maintenance barrier on each write and follows
+	// pool replacements. Read-only queries never persist freshly computed stats.
+	if !db.ReadOnly() && !db.WriterClosed() {
+		cache = git.NewCache(db.getWriter())
 	} else {
-		cache = git.NewReadOnlyCache(db.rawReader())
+		cache = git.NewReadOnlyCache(db.getReader())
 	}
 	out := &StatsOutcomeStats{}
 	contributed := false

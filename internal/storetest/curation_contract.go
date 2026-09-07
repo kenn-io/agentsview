@@ -2,7 +2,6 @@ package storetest
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -209,7 +208,7 @@ func InsertBunCurationFixture(
 // InsertSQLiteCurationFixture inserts the same contract through SQLite's
 // shipped message-row ID alias.
 func InsertSQLiteCurationFixture(
-	ctx context.Context, tx *sql.Tx, archiveID, generation string,
+	ctx context.Context, tx bun.IDB, archiveID, generation string,
 ) (CurationFixture, error) {
 	if err := InsertSQLiteCoreFixture(ctx, tx, archiveID, generation); err != nil {
 		return CurationFixture{}, err

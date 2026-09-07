@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -23,6 +22,8 @@ import (
 	stdlibsync "sync"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/assert"
@@ -2407,7 +2408,7 @@ func TestSearch_NotAvailable(t *testing.T) {
 	te := setup(t)
 	// Simulate missing FTS by dropping the virtual table.
 	// HasFTS() will return false because the query against messages_fts will fail.
-	err := te.db.Update(func(tx *sql.Tx) error {
+	err := te.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec("DROP TABLE IF EXISTS messages_fts")
 		return err
 	})

@@ -10,13 +10,16 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
+
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
 // RawDeviceAuthStore persists raw-transport devices and short-lived tokens.
 type RawDeviceAuthStore struct {
-	db *sql.DB
+	db *bun.DB
 }
 
 // NewRawDeviceAuthStore constructs a PostgreSQL raw device auth store.
@@ -24,7 +27,7 @@ func NewRawDeviceAuthStore(db *sql.DB) (*RawDeviceAuthStore, error) {
 	if db == nil {
 		return nil, fmt.Errorf("%w: PostgreSQL connection is required", rawsync.ErrInvalid)
 	}
-	return &RawDeviceAuthStore{db: db}, nil
+	return &RawDeviceAuthStore{db: bun.NewDB(db, pgdialect.New())}, nil
 }
 
 // EnrollDevice records only the device credential digest.
@@ -38,7 +41,7 @@ func (s *RawDeviceAuthStore) EnrollDevice(
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO raw_devices (
 			device_id, tenant_id, display_name, credential_sha256, created_at
-		) VALUES ($1, $2, $3, $4, $5)`,
+		) VALUES (?0, ?1, ?2, ?3, ?4)`,
 		record.Identity.DeviceID,
 		record.Identity.TenantID,
 		record.DisplayName,
@@ -67,8 +70,8 @@ func (s *RawDeviceAuthStore) AuthenticateCredential(
 	err := s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, device_id
 		FROM raw_devices
-		WHERE device_id = $1
-			AND credential_sha256 = $2
+		WHERE device_id = ?0
+			AND credential_sha256 = ?1
 			AND revoked_at IS NULL`,
 		deviceID, credential[:],
 	).Scan(&identity.TenantID, &identity.DeviceID)
@@ -101,14 +104,14 @@ func (s *RawDeviceAuthStore) IssueToken(
 		WITH active_device AS (
 			SELECT tenant_id, device_id
 			FROM raw_devices
-			WHERE device_id = $1
-				AND credential_sha256 = $2
+			WHERE device_id = ?0
+				AND credential_sha256 = ?1
 				AND revoked_at IS NULL
 		)
 		INSERT INTO raw_device_tokens (
 			token_sha256, tenant_id, device_id, scope_bits, issued_at, expires_at
 		)
-		SELECT $3, tenant_id, device_id, $4, $5, $6
+		SELECT ?2, tenant_id, device_id, ?3, ?4, ?5
 		FROM active_device
 		RETURNING tenant_id, device_id`,
 		deviceID,
@@ -151,10 +154,10 @@ func (s *RawDeviceAuthStore) AuthenticateToken(
 		JOIN raw_devices AS devices
 			ON devices.tenant_id = tokens.tenant_id
 			AND devices.device_id = tokens.device_id
-		WHERE tokens.token_sha256 = $1
-			AND tokens.expires_at > $2
+		WHERE tokens.token_sha256 = ?0
+			AND tokens.expires_at > ?1
 			AND devices.revoked_at IS NULL
-			AND (tokens.scope_bits & $3) = $3`,
+			AND (tokens.scope_bits & ?2) = ?2`,
 		digest[:], now.UTC(), int16(required),
 	).Scan(&identity.TenantID, &identity.DeviceID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -180,8 +183,8 @@ func (s *RawDeviceAuthStore) RevokeDevice(
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE raw_devices
-		SET revoked_at = $3
-		WHERE tenant_id = $1 AND device_id = $2 AND revoked_at IS NULL`,
+		SET revoked_at = ?2
+		WHERE tenant_id = ?0 AND device_id = ?1 AND revoked_at IS NULL`,
 		identity.TenantID, identity.DeviceID, revokedAt.UTC(),
 	)
 	if err != nil {

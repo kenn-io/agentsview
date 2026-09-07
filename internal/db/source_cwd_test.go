@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,7 +58,7 @@ func TestGetCwdByAgentPathUsesSourceMissingPreservationRow(t *testing.T) {
 	require.NoError(t, d.UpsertSession(Session{
 		ID: "cursor:revive", Agent: "cursor", FilePath: &path, Cwd: "/work/revive",
 	}))
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET source_missing_at = '2026-08-01T00:00:00Z' WHERE id = ?",
 			"cursor:revive",
@@ -130,7 +132,7 @@ func TestUpdateSessionCwdDoesNotTouchUserTrashedRows(t *testing.T) {
 	require.NoError(t, d.UpsertSession(Session{
 		ID: "cursor:trashed", Agent: "cursor", FilePath: &path, Cwd: "/work/a",
 	}))
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET deleted_at = ?, deletion_cause = 'user_deleted' WHERE id = ?",
 			time.Now().UTC().Format(time.RFC3339Nano), "cursor:trashed",
@@ -166,7 +168,7 @@ func TestStaleDataVersionAgentPathsMatchesPerPathForm(t *testing.T) {
 		ID: "cursor:missing", Agent: "cursor", FilePath: &missingPath,
 	}))
 	require.NoError(t, d.SetSessionDataVersion("cursor:missing", 0))
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET source_missing_at = '2026-08-01T00:00:00Z' WHERE id = ?",
 			"cursor:missing",

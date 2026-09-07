@@ -676,7 +676,9 @@ func usageCacheActiveUsers(cache *usageCache) int {
 	return cache.users
 }
 
-func readUsageCacheMetadata(t *testing.T, conn *sql.DB) map[string]string {
+func readUsageCacheMetadata(t *testing.T, conn interface {
+	Query(string, ...any) (*sql.Rows, error)
+}) map[string]string {
 	t.Helper()
 	rows, err := conn.Query(`SELECT key, value FROM usage_cache_metadata`)
 	require.NoError(t, err)

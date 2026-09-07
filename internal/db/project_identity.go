@@ -1097,14 +1097,13 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return 0, fmt.Errorf(
 			"beginning session project identity restore: %w", err,
 		)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 
 	type projectRestore struct {
 		sessionID       string
@@ -1189,13 +1188,13 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 	}
 	for _, restore := range restores {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			ctx, bunTx, restore.sessionID,
+			ctx, tx, restore.sessionID,
 			[]string{restore.previousProject, restore.currentProject},
 		); err != nil {
 			return 0, err
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf(
 			"committing session project identity restore: %w", err,
 		)
@@ -1320,7 +1319,7 @@ func reconcileSessionProjectIdentityAggregatesTx(
 // Bun helpers above.
 func upsertScrubbedProjectIdentityObservationTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	obs export.ProjectIdentityObservation,
 	excludeRemote string,
 ) error {
@@ -1483,7 +1482,7 @@ func normalizeProjectIdentityObservation(
 }
 
 func scrubProjectIdentityGitRemoteCredentialsTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT source_archive_id, source_archive_salt,

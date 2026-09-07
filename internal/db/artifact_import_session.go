@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/uptrace/bun"
 )
 
 // ArtifactImportedSessionResult reports whether an import replaced normalized
@@ -103,20 +105,19 @@ func (db *DB) applyArtifactImportedSession(
 		return result, fmt.Errorf("beginning artifact imported session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	rawTx := tx.Tx
 
 	var machine string
-	err = rawTx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT machine FROM sessions WHERE id = ?`,
 		write.Session.ID,
 	).Scan(&machine)
 	switch {
 	case err == nil && machine != imported.Origin:
-		if err := recordArtifactImportedSessionTx(ctx, rawTx, imported); err != nil {
+		if err := recordArtifactImportedSessionTx(ctx, tx, imported); err != nil {
 			return result, err
 		}
 		if err := satisfyArtifactCheckpointImportTx(
-			ctx, rawTx, landing, staged, imported,
+			ctx, tx, landing, staged, imported,
 		); err != nil {
 			return result, err
 		}
@@ -132,9 +133,8 @@ func (db *DB) applyArtifactImportedSession(
 	}
 
 	var pendingRecallRevocations recallEvidenceRevocationEvents
-	ctxTx := contextTransaction{ctx: ctx, tx: rawTx}
 	messagesWritten, err := writeOneSessionBatchTx(
-		ctx, rawTx, ctxTx, tx, write, &pendingRecallRevocations,
+		ctx, tx, write, &pendingRecallRevocations,
 		db.usageOnlyStorage(),
 	)
 	switch {
@@ -148,11 +148,11 @@ func (db *DB) applyArtifactImportedSession(
 	default:
 		return result, err
 	}
-	if err := recordArtifactImportedSessionTx(ctx, rawTx, imported); err != nil {
+	if err := recordArtifactImportedSessionTx(ctx, tx, imported); err != nil {
 		return ArtifactImportedSessionResult{}, err
 	}
 	if err := satisfyArtifactCheckpointImportTx(
-		ctx, rawTx, landing, staged, imported,
+		ctx, tx, landing, staged, imported,
 	); err != nil {
 		return ArtifactImportedSessionResult{}, err
 	}
@@ -166,7 +166,7 @@ func (db *DB) applyArtifactImportedSession(
 
 func satisfyArtifactCheckpointImportTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	landing *ArtifactCheckpointLanding,
 	staged *ArtifactCheckpointSession,
 	imported ArtifactImportedSession,
@@ -226,7 +226,7 @@ func satisfyArtifactCheckpointImportTx(
 
 func satisfyAllArtifactCheckpointStagesTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	imported ArtifactImportedSession,
 ) error {
 	rows, err := tx.QueryContext(ctx, `

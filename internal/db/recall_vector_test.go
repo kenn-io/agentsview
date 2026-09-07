@@ -2,10 +2,11 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,7 +74,7 @@ func TestScanRecallEmbeddingUnitsFullSupportsArchiveWithoutDeletionJournal(t *te
 		Title: "Legacy archive", Body: "Still available.", SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		for _, trigger := range []string{
 			"trg_recall_embedding_deletion",
 			"trg_recall_embedding_reinsert",

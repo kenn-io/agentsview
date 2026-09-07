@@ -2,7 +2,6 @@ package storetest
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -306,7 +305,7 @@ func InsertBunUsageFixture(
 // InsertSQLiteUsageFixture inserts the same rows through shipped SQLite
 // aliases, letting SQLite allocate its physical message IDs.
 func InsertSQLiteUsageFixture(
-	ctx context.Context, tx *sql.Tx, archiveID, generation string,
+	ctx context.Context, tx bun.IDB, archiveID, generation string,
 ) error {
 	sessions, messages, events, cursor := bunUsageRows(archiveID, generation)
 	for _, row := range sessions {

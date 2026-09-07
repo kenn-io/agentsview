@@ -220,7 +220,7 @@ func (sqliteSessionMutationAdapter) BeforeDelete(
 	_ context.Context, tx bun.Tx, ids []string,
 ) error {
 	for _, id := range ids {
-		if err := deleteSessionMessagesTx(tx.Tx, id); err != nil {
+		if err := deleteSessionMessagesTx(tx, id); err != nil {
 			return fmt.Errorf("pre-deleting session %s messages: %w", id, err)
 		}
 	}

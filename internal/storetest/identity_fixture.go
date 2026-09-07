@@ -2,7 +2,6 @@ package storetest
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -94,7 +93,7 @@ func InsertBunIdentityFixture(
 // is the local archive identity.
 func InsertSQLiteIdentityFixture(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	archiveAID string,
 	archiveASalt string,
 ) (IdentityFixture, error) {
@@ -132,7 +131,7 @@ func InsertSQLiteIdentityFixture(
 				source_archive_id, source_database_generation
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			row.ID, row.Project, row.Machine, row.Agent, row.Cwd,
-			row.StartedAt, row.EndedAt, row.CreatedAt,
+			usageTimestampValue(row.StartedAt), usageTimestampValue(row.EndedAt), row.CreatedAt,
 			row.SourceArchiveID, row.SourceDatabaseGeneration,
 		)
 		if err != nil {

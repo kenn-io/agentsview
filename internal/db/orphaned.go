@@ -107,33 +107,18 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 				"begin extra orphan exclusions: %w", err,
 			)
 		}
-		stmt, err := bunTx.PrepareContext(ctx,
-			"INSERT OR IGNORE INTO _extra_excluded_orphan_ids (id) VALUES (?)",
-		)
-		if err != nil {
-			_ = bunTx.Rollback()
-			return nil, fmt.Errorf(
-				"prepare extra orphan exclusions: %w", err,
-			)
-		}
+		stmt := "INSERT OR IGNORE INTO _extra_excluded_orphan_ids (id) VALUES (?)"
 		for _, id := range extraExcludedIDs {
 			if id == "" {
 				continue
 			}
-			if _, err := stmt.ExecContext(ctx, id); err != nil {
-				_ = stmt.Close()
+			if _, err := bunTx.ExecContext(ctx, stmt, id); err != nil {
 				_ = bunTx.Rollback()
 				return nil, fmt.Errorf(
 					"insert extra orphan exclusion %s: %w",
 					id, err,
 				)
 			}
-		}
-		if err := stmt.Close(); err != nil {
-			_ = bunTx.Rollback()
-			return nil, fmt.Errorf(
-				"close extra orphan exclusions: %w", err,
-			)
 		}
 		if err := bunTx.Commit(); err != nil {
 			return nil, fmt.Errorf(
@@ -200,7 +185,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	}
 	defer func() { _ = bunTx.Rollback() }()
 
-	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
+	if err := reconcileTranscriptRevisionsTx(ctx, bunTx); err != nil {
 		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
 	}
 	if count > 0 {
@@ -208,18 +193,18 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			return nil, fmt.Errorf("copying orphaned data: %w", err)
 		}
 		if err := stampCopiedSessionProvenance(
-			ctx, bunTx.Tx, "_orphaned_ids",
+			ctx, bunTx, "_orphaned_ids",
 		); err != nil {
 			return 0, fmt.Errorf("stamping orphan provenance: %w", err)
 		}
-		sourceVersion := copiedSourceDataVersion(ctx, bunTx.Tx)
+		sourceVersion := copiedSourceDataVersion(ctx, bunTx)
 		if err := removeGeneratedIdentitySnapshotsWithoutSource(
-			ctx, bunTx.Tx, "_orphaned_ids", sourceVersion,
+			ctx, bunTx, "_orphaned_ids", sourceVersion,
 		); err != nil {
 			return nil, fmt.Errorf("repairing orphan identity snapshots: %w", err)
 		}
 		if err := sanitizeCopiedSessionContent(
-			ctx, bunTx.Tx, "_orphaned_ids", sourceVersion,
+			ctx, bunTx, "_orphaned_ids", sourceVersion,
 		); err != nil {
 			return nil, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
@@ -228,7 +213,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		); err != nil {
 			return nil, fmt.Errorf("projecting orphaned data: %w", err)
 		}
-		if err := clearCopiedSelfParents(ctx, bunTx.Tx, "_orphaned_ids"); err != nil {
+		if err := clearCopiedSelfParents(ctx, bunTx, "_orphaned_ids"); err != nil {
 			return nil, err
 		}
 	}
@@ -286,7 +271,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 	}
 	defer func() { _ = bunTx.Rollback() }()
 
-	if !oldDBHasColumn(ctx, bunTx.Tx, "sessions", "deleted_at") {
+	if !oldDBHasColumn(ctx, bunTx, "sessions", "deleted_at") {
 		return nil, nil
 	}
 
@@ -319,17 +304,17 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 	if err := copySessionDataForIDs(ctx, bunTx, "_trashed_ids"); err != nil {
 		return nil, fmt.Errorf("copying trashed data: %w", err)
 	}
-	if err := stampCopiedSessionProvenance(ctx, bunTx.Tx, "_trashed_ids"); err != nil {
+	if err := stampCopiedSessionProvenance(ctx, bunTx, "_trashed_ids"); err != nil {
 		return 0, fmt.Errorf("stamping trashed provenance: %w", err)
 	}
-	sourceVersion := copiedSourceDataVersion(ctx, bunTx.Tx)
+	sourceVersion := copiedSourceDataVersion(ctx, bunTx)
 	if err := removeGeneratedIdentitySnapshotsWithoutSource(
-		ctx, bunTx.Tx, "_trashed_ids", sourceVersion,
+		ctx, bunTx, "_trashed_ids", sourceVersion,
 	); err != nil {
 		return nil, fmt.Errorf("repairing trashed identity snapshots: %w", err)
 	}
 	if err := sanitizeCopiedSessionContent(
-		ctx, bunTx.Tx, "_trashed_ids", sourceVersion,
+		ctx, bunTx, "_trashed_ids", sourceVersion,
 	); err != nil {
 		return nil, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
@@ -543,7 +528,7 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 // survive the rebuild.
 func clearCopiedSelfParents(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 ) error {
 	if _, err := tx.ExecContext(ctx, `
@@ -557,7 +542,7 @@ func clearCopiedSelfParents(
 	return nil
 }
 
-func copyArtifactImportState(ctx context.Context, tx *sql.Tx) error {
+func copyArtifactImportState(ctx context.Context, tx bun.Tx) error {
 	if oldDBHasTable(ctx, tx, "artifact_import_queue") {
 		quarantinePending := "0"
 		if oldDBHasColumn(
@@ -686,7 +671,7 @@ func copyArtifactImportState(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func copyArtifactCheckpointStages(ctx context.Context, tx *sql.Tx) error {
+func copyArtifactCheckpointStages(ctx context.Context, tx bun.Tx) error {
 	if !oldDBHasTable(ctx, tx, "artifact_checkpoint_stages") {
 		return nil
 	}
@@ -813,7 +798,7 @@ func copyArtifactCheckpointStages(ctx context.Context, tx *sql.Tx) error {
 
 func validateArtifactCheckpointStageMerges(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 ) error {
 	var conflicts int
 	err := tx.QueryRowContext(ctx, `
@@ -911,7 +896,7 @@ func validateArtifactCheckpointStageMerges(
 	return nil
 }
 
-func copyArtifactPeerHeads(ctx context.Context, tx *sql.Tx) error {
+func copyArtifactPeerHeads(ctx context.Context, tx bun.Tx) error {
 	if !oldDBHasTable(ctx, tx, "artifact_peer_checkpoint_heads") {
 		return nil
 	}
@@ -951,7 +936,7 @@ func copyArtifactPeerHeads(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func copyArtifactCheckpointLandings(ctx context.Context, tx *sql.Tx) error {
+func copyArtifactCheckpointLandings(ctx context.Context, tx bun.Tx) error {
 	if !oldDBHasTable(ctx, tx, "artifact_checkpoint_landings") {
 		return nil
 	}
@@ -1180,12 +1165,11 @@ func (d *DB) CopySessionMetadataFrom(
 		)
 	}()
 
-	bunTx, err := conn.BeginTx(ctx, nil)
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin metadata tx: %w", err)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 	var previousArchiveID string
 	if err := tx.QueryRowContext(ctx, `
 		SELECT value FROM main.archive_metadata WHERE key = 'archive_id'`,
@@ -1593,7 +1577,7 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 		for _, change := range projectChanges {
 			if err := reconcileSessionProjectIdentityAggregatesTx(
-				ctx, bunTx, change.sessionID,
+				ctx, tx, change.sessionID,
 				[]string{change.previousProject, change.currentProject},
 			); err != nil {
 				return fmt.Errorf(
@@ -1616,12 +1600,12 @@ func (d *DB) CopySessionMetadataFrom(
 			return fmt.Errorf("clearing copied pin notes: %w", err)
 		}
 	}
-	return bunTx.Commit()
+	return tx.Commit()
 }
 
 func rekeyLocalArchiveRows(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	previousArchiveID string,
 	copiedArchiveID string,
 	copiedArchiveSalt string,
@@ -1660,7 +1644,7 @@ func rekeyLocalArchiveRows(
 
 func copyProjectIdentityObservationsFromAttached(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 ) error {
 	sourceTable := ""
 	identityColumn := func(name, fallback string) string {
@@ -1738,7 +1722,7 @@ func copyProjectIdentityObservationsFromAttached(
 
 func copySessionProjectIdentitySnapshotsFromAttached(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	sourceVersion int,
 ) error {
 	if sourceVersion < projectIdentitySourceSnapshotDataVersion {
@@ -1815,14 +1799,14 @@ func copySessionProjectIdentitySnapshotsFromAttached(
 
 func reconcileWorktreeProjectMappingsFromAttached(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 ) error {
 	return copyWorktreeProjectMappingsFromAttached(ctx, tx, true)
 }
 
 func copyWorktreeProjectMappingsFromAttached(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	deleteMissing bool,
 ) error {
 	sourceTable := ""
@@ -1924,7 +1908,7 @@ func copyWorktreeProjectMappingsFromAttached(
 // oldDBHasTable checks if a table exists in old_db.
 // Must be called within a connection that has old_db attached.
 func oldDBHasTable(
-	ctx context.Context, tx *sql.Tx, name string,
+	ctx context.Context, tx bun.Tx, name string,
 ) bool {
 	var n int
 	err := tx.QueryRowContext(ctx,
@@ -1937,7 +1921,7 @@ func oldDBHasTable(
 // orphanSessionCols returns the comma-separated column list for
 // copying sessions from old_db, including display_name and
 // deletion state only when the source schema has it.
-func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
+func orphanSessionCols(ctx context.Context, tx bun.Tx) string {
 	cols := []string{
 		"id", "project", "machine", "agent", "first_message",
 	}
@@ -2012,7 +1996,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 // incremental message-diff path, including usage and provider dedup identities.
 // Session metadata and parser-only source bookkeeping remain excluded.
 func reconcileTranscriptRevisionsTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	if !oldDBHasColumn(ctx, tx, "sessions", "transcript_revision") {
 		return nil
@@ -2154,11 +2138,10 @@ func copySessionDataForIDs(
 	tx bun.Tx,
 	tempIDsTable string,
 ) error {
-	sqlTx := tx.Tx
 	// Copy session rows. Build column list dynamically so
 	// older source DBs missing display_name/deleted_at don't
 	// abort the migration.
-	orphanCols := orphanSessionCols(ctx, sqlTx)
+	orphanCols := orphanSessionCols(ctx, tx)
 
 	if _, err := tx.NewRaw(
 		"INSERT OR IGNORE INTO sessions (" + orphanCols + ") " +
@@ -2186,20 +2169,20 @@ func copySessionDataForIDs(
 		"otc.category", "otc.tool_use_id", "otc.input_json",
 		"otc.skill_name", "otc.result_content_length",
 	}
-	if oldDBHasColumn(ctx, sqlTx, "tool_calls", "result_content") {
+	if oldDBHasColumn(ctx, tx, "tool_calls", "result_content") {
 		toolCallCols = append(toolCallCols, "result_content")
 		toolCallSelect = append(toolCallSelect, "otc.result_content")
 	}
 	toolCallCols = append(toolCallCols, "subagent_session_id")
 	toolCallSelect = append(toolCallSelect, "otc.subagent_session_id")
-	if oldDBHasColumn(ctx, sqlTx, "tool_calls", "file_path") {
+	if oldDBHasColumn(ctx, tx, "tool_calls", "file_path") {
 		toolCallCols = append(toolCallCols, "file_path")
 		toolCallSelect = append(toolCallSelect, "otc.file_path")
 	} else {
 		toolCallCols = append(toolCallCols, "file_path")
 		toolCallSelect = append(toolCallSelect, "NULL")
 	}
-	if oldDBHasColumn(ctx, sqlTx, "tool_calls", "call_index") {
+	if oldDBHasColumn(ctx, tx, "tool_calls", "call_index") {
 		toolCallCols = append(toolCallCols, "call_index")
 		toolCallSelect = append(toolCallSelect, "otc.call_index")
 	} else {
@@ -2225,7 +2208,7 @@ func copySessionDataForIDs(
 		return fmt.Errorf("copying tool_calls: %w", err)
 	}
 
-	if oldDBHasTable(ctx, sqlTx, "tool_result_events") {
+	if oldDBHasTable(ctx, tx, "tool_result_events") {
 		if err := copyCanonicalRowsFromAttached(
 			ctx, tx, (*bunmodel.ToolResultEvent)(nil),
 			"tool_result_events", tempIDsTable, "id",
@@ -2234,7 +2217,7 @@ func copySessionDataForIDs(
 		}
 	}
 
-	if oldDBHasTable(ctx, sqlTx, "secret_findings") {
+	if oldDBHasTable(ctx, tx, "secret_findings") {
 		if err := copyCanonicalRowsFromAttached(
 			ctx, tx, (*bunmodel.SecretFinding)(nil),
 			"secret_findings", tempIDsTable, "id",
@@ -2243,12 +2226,12 @@ func copySessionDataForIDs(
 		}
 	}
 
-	if err := copyPinnedMessagesForIDs(ctx, sqlTx, tempIDsTable); err != nil {
+	if err := copyPinnedMessagesForIDs(ctx, tx, tempIDsTable); err != nil {
 		return err
 	}
 	// Keep usage last so any accounting constraint failure rolls back every
 	// canonical dependent row copied above.
-	if oldDBHasTable(ctx, sqlTx, "usage_events") {
+	if oldDBHasTable(ctx, tx, "usage_events") {
 		if err := copyCanonicalRowsFromAttached(
 			ctx, tx, (*bunmodel.UsageEvent)(nil),
 			"usage_events", tempIDsTable, "id",
@@ -2261,7 +2244,7 @@ func copySessionDataForIDs(
 
 func stampCopiedSessionProvenance(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 ) error {
 	if _, err := tx.ExecContext(ctx, `
@@ -2288,7 +2271,7 @@ func stampCopiedSessionProvenance(
 // proportional to copied rows rather than total archive size.
 func removeGeneratedIdentitySnapshotsWithoutSource(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 	sourceVersion int,
 ) error {
@@ -2364,7 +2347,7 @@ const projectIdentitySourceSnapshotDataVersion = 77
 // copiedSourceDataVersion reads the attached old_db's data version.
 // Read errors are logged and returned as 0 so the copy conservatively
 // re-sanitizes everything.
-func copiedSourceDataVersion(ctx context.Context, tx *sql.Tx) int {
+func copiedSourceDataVersion(ctx context.Context, tx bun.Tx) int {
 	var version int
 	if err := tx.QueryRowContext(
 		ctx, "PRAGMA old_db.user_version",
@@ -2377,7 +2360,7 @@ func copiedSourceDataVersion(ctx context.Context, tx *sql.Tx) int {
 
 func sanitizeCopiedSessionContent(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 	sourceVersion int,
 ) error {
@@ -2415,7 +2398,7 @@ type copiedTimestampUpdate struct {
 
 func canonicalizeCopiedMessageTimestamps(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 ) error {
 	rows, err := tx.QueryContext(ctx,
@@ -2474,7 +2457,7 @@ type copiedTextUpdate struct {
 
 func sanitizeCopiedMessageContent(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 ) error {
 	rows, err := tx.QueryContext(ctx,
@@ -2528,7 +2511,7 @@ type copiedNullableTextUpdate struct {
 
 func sanitizeCopiedToolCallInputs(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 ) error {
 	rows, err := tx.QueryContext(ctx,
@@ -2581,7 +2564,7 @@ func sanitizeCopiedToolCallInputs(
 
 func sanitizeCopiedToolCallResults(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 ) error {
 	rows, err := tx.QueryContext(ctx,
@@ -2639,7 +2622,7 @@ func sanitizeCopiedToolCallResults(
 
 func sanitizeCopiedToolResultEvents(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 ) error {
 	rows, err := tx.QueryContext(ctx,
@@ -2716,7 +2699,7 @@ func sanitizedCopiedNullableTextLength(
 
 func copyPinnedMessagesForIDs(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	tempIDsTable string,
 ) error {
 	if !oldDBHasTable(ctx, tx, "pinned_messages") {
@@ -2752,7 +2735,7 @@ func copyPinnedMessagesForIDs(
 // oldDBHasColumn checks if a column exists in an old_db table
 // via PRAGMA table_info. Safe to call even if the table is missing.
 func oldDBHasColumn(
-	ctx context.Context, tx *sql.Tx, table, column string,
+	ctx context.Context, tx bun.Tx, table, column string,
 ) bool {
 	rows, err := tx.QueryContext(ctx,
 		"PRAGMA old_db.table_info("+table+")")

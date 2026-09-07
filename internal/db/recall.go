@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/uptrace/bun"
+
 	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
@@ -311,7 +313,7 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 }
 
 func copyRecallCorpusRevisionFromAttachedTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	if !oldDBHasTable(ctx, tx, "recall_corpus_state") {
 		return nil
@@ -330,7 +332,7 @@ func copyRecallCorpusRevisionFromAttachedTx(
 }
 
 func copyRecallQueryRevisionFromAttachedTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	if !oldDBHasTable(ctx, tx, "recall_query_state") {
 		return nil
@@ -349,7 +351,7 @@ func copyRecallQueryRevisionFromAttachedTx(
 }
 
 func copyRecallEmbeddingChangesFromAttachedTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	if !oldDBHasTable(ctx, tx, "recall_embedding_changes") {
 		return nil
@@ -367,7 +369,7 @@ func copyRecallEmbeddingChangesFromAttachedTx(
 }
 
 func copyRecallEmbeddingDeletionsFromAttachedTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	if oldDBHasTable(ctx, tx, "recall_embedding_deletions") {
 		if _, err := tx.ExecContext(ctx, `
@@ -418,7 +420,7 @@ func copyRecallEmbeddingDeletionsFromAttachedTx(
 
 func revokeRecallEntriesWithDroppedEvidenceTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	pending *recallEvidenceRevocationEvents,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
@@ -526,7 +528,7 @@ func (db *DB) SupersedeRecallEntry(
 
 func supersedeRecallEntryTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	oldID string,
 	replacement RecallEntry,
 ) error {
