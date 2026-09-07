@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -899,7 +900,12 @@ func TestPushRebuildsVersion11MirrorForPricingTimestampPrecision(t *testing.T) {
 		InputPerMTok: money.MustParseDollars("1"),
 		UpdatedAt:    "2026-08-09T04:09:57.836404600Z",
 	}}))
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	prices, err := local.ListModelPricing(ctx)
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	assert.Equal(t, "2026-08-09T04:09:57.836405Z", prices[0].UpdatedAt,
+		"archive revision before mirror rebuild")
+	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 
 	conn, err := Open(path)
@@ -919,6 +925,12 @@ func TestPushRebuildsVersion11MirrorForPricingTimestampPrecision(t *testing.T) {
 	conn, err = Open(path)
 	require.NoError(t, err)
 	defer conn.Close()
+	var storedVersion string
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT value FROM sync_metadata WHERE key = ?", schemaVersionMetadataKey,
+	).Scan(&storedVersion))
+	assert.Equal(t, strconv.Itoa(SchemaVersion), storedVersion,
+		"the reopened file must be the rebuilt mirror")
 	var updatedAtMicros int64
 	require.NoError(t, conn.QueryRowContext(ctx, `
 		SELECT epoch_us(updated_at) FROM model_pricing
