@@ -349,3 +349,33 @@ func TestRuntimeRootsResolveBeforeDeduplication(t *testing.T) {
 		})
 	}
 }
+
+func TestCLILoadPreservesCodexHomeMetadata(t *testing.T) {
+	for _, loader := range []struct {
+		name string
+		load func(*testing.T, ...string) (Config, error)
+	}{
+		{"flags", loadConfigFromFlags},
+		{"pflags", loadConfigFromPFlags},
+	} {
+		t.Run(loader.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteConfigText(t, "")
+			base := canonicalTempDir(t)
+			home := filepath.Join(base, "profile")
+			root := filepath.Join(base, "primary", "sessions")
+			require.NoError(t, os.MkdirAll(root, 0o755))
+			require.NoError(t, os.MkdirAll(home, 0o755))
+			alias := filepath.Join(home, "sessions")
+			require.NoError(t, os.Symlink(root, alias))
+			t.Setenv("CODEX_HOME", home)
+			t.Setenv("CODEX_SESSIONS_DIR", "")
+
+			cfg, err := loader.load(t)
+			require.NoError(t, err)
+			assert.Contains(t, cfg.ResolveDirs(parser.AgentCodex), root)
+			assert.Contains(t, cfg.RootAliases[parser.AgentCodex][root], alias,
+				"CLI loading must retain the configured home's title and history location")
+		})
+	}
+}

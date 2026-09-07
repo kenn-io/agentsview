@@ -1123,12 +1123,12 @@ func AgentHomeDirs(def parser.AgentDef, home string) []string {
 // The provided FlagSet must already be parsed by the caller.
 // Only flags that were explicitly set override the lower layers.
 func Load(fs *flag.FlagSet) (Config, error) {
-	cfg, err := LoadMinimal()
+	cfg, err := loadConfigLayers()
 	if err != nil {
 		return cfg, err
 	}
 	applyFlags(&cfg, fs)
-	if err := finalize(&cfg); err != nil {
+	if err := finishLoadedConfig(&cfg); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -1136,12 +1136,12 @@ func Load(fs *flag.FlagSet) (Config, error) {
 
 // LoadPFlags builds a Config from a parsed Cobra/pflag FlagSet.
 func LoadPFlags(fs *pflag.FlagSet) (Config, error) {
-	cfg, err := LoadMinimal()
+	cfg, err := loadConfigLayers()
 	if err != nil {
 		return cfg, err
 	}
 	applyPFlags(&cfg, fs)
-	if err := finalize(&cfg); err != nil {
+	if err := finishLoadedConfig(&cfg); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -1210,6 +1210,18 @@ func loadPGServeBase() (Config, error) {
 // without parsing CLI flags. Use this for subcommands that manage
 // their own flag sets.
 func LoadMinimal() (Config, error) {
+	cfg, err := loadConfigLayers()
+	if err != nil {
+		return cfg, err
+	}
+	if err := finishLoadedConfig(&cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// loadConfigLayers leaves runtime roots unresolved until flags are applied.
+func loadConfigLayers() (Config, error) {
 	cfg, err := Default()
 	if err != nil {
 		return cfg, err
@@ -1222,14 +1234,18 @@ func LoadMinimal() (Config, error) {
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
 	}
-	if err := finalize(&cfg); err != nil {
-		return cfg, err
+	return cfg, nil
+}
+
+func finishLoadedConfig(cfg *Config) error {
+	if err := finalize(cfg); err != nil {
+		return err
 	}
 	if err := cfg.ensureCursorSecret(); err != nil {
-		return cfg, fmt.Errorf("ensuring cursor secret: %w", err)
+		return fmt.Errorf("ensuring cursor secret: %w", err)
 	}
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
-	return cfg, nil
+	return nil
 }
 
 // LoadReadOnly builds a Config from defaults, env, and config.toml without
