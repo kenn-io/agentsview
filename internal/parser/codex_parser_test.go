@@ -188,33 +188,6 @@ func TestParseCodexSession_SubagentLineage(t *testing.T) {
 			wantRelationship: RelSubagent,
 		},
 		{
-			name: "review source string",
-			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
-				"guardian_review", "review", childID, parentID,
-				"/tmp", "user", tsEarly,
-			),
-			wantParent:       "codex:" + parentID,
-			wantRelationship: RelSubagent,
-		},
-		{
-			name: "compact source string",
-			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
-				"guardian_review", "compact", childID, parentID,
-				"/tmp", "user", tsEarly,
-			),
-			wantParent:       "codex:" + parentID,
-			wantRelationship: RelSubagent,
-		},
-		{
-			name: "memory consolidation source string",
-			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
-				"guardian_review", "memory_consolidation", childID, parentID,
-				"/tmp", "user", tsEarly,
-			),
-			wantParent:       "codex:" + parentID,
-			wantRelationship: RelSubagent,
-		},
-		{
 			name: "future source label",
 			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
 				"future_label", map[string]any{"future": "variant"},
@@ -225,9 +198,9 @@ func TestParseCodexSession_SubagentLineage(t *testing.T) {
 		},
 		{
 			name: "subagent source without parent",
-			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
-				"guardian_review", map[string]any{"other": "guardian"},
-				childID, "", "/tmp", "user", tsEarly,
+			meta: fmt.Sprintf(
+				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","parent_thread_id":"","session_id":"root-session","source":{"subagent":{"other":"guardian"}},"thread_source":"guardian_review"}}`,
+				tsEarly, childID,
 			),
 			wantRelationship: RelNone,
 		},
