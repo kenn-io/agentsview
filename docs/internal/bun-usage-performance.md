@@ -100,6 +100,66 @@ making exact heap parity a reason to keep rebasing the stack. Deployments that
 routinely issue concurrent all-history reports should account for this transient
 memory cost when sizing the service.
 
+### Why the Go heap is higher
+
+A follow-up allocation profile of the same unique-identity PostgreSQL fixture
+locates the cost in materialization, driver decoding, and object lifetime. Main
+aggregates each returned row inside its database iterator. The shared reader's
+`streamDailyUsageRowsFrom` first calls `loadDailyUsageRowsFrom`, which retains
+all surviving rows and sorts them before invoking the aggregate consumer.
+Grouping discarded snapshots does not make that final stage stream.
+
+Each `dailyUsageScanRow` occupies 400 bytes on the measured arm64 toolchain,
+excluding the data referenced by strings. A 65,536-row backing array therefore
+occupies 26.2 MB. It includes three `time.Time` values, a formatted timestamp,
+token JSON, counters, identities, and session metadata. Growing this array also
+allocates replacement arrays; previous copies await collection. Across the
+profiled request stacks, slice growth accounted for about 36% of allocation
+bytes, PostgreSQL string/timestamp decoding for 35%, and the aggregate consumer
+itself for 14%. These are allocation-volume shares, not retained-heap shares.
+
+The arena remains reachable throughout aggregation. On release it clears the
+referenced strings, but the pool can retain the entire empty backing array.
+Consequently pooling reduces repeat allocation while keeping substantial storage
+after a request. The one-GC and two-GC measurements above distinguish this
+temporary pool retention from the final report's much smaller result. They do
+not establish a long-running process memory bound or rule out every possible
+leak. For repeated snapshots, the driver additionally allocates for candidates
+that main's SQL removes before returning them.
+
+The next memory optimization should reduce the rows that must remain live for
+aggregation, rather than merely raise the pool cap or add more pools. Any such
+change must preserve cross-source deduplication and chronological tie order;
+feeding identity-ordered rows directly into the existing consumer would change
+which duplicate wins. Compacting the surviving row representation and releasing
+consumed references are narrower options to measure against true streaming.
+
+### Database sorting and assessment limits
+
+`EXPLAIN ANALYZE` of the actual grouped Claude query on the same isolated
+64,000-message fixture confirms that both PostgreSQL and DuckDB sort candidate
+rows. PostgreSQL used an external merge sort with 19,192 KiB of disk space and
+returned 64,000 rows. The sort node completed at 66.8 ms, including its child
+work. DuckDB's plan includes an `ORDER_BY` operator; its complete profiled query
+took 11.8 ms. These were warm diagnostic runs. They are not a main-versus-stack
+comparison and do not measure native process memory.
+
+The measured envelope is 64,000 messages, unique or sixteen-fold repeated
+identities, with one and four concurrent requests for the unique PostgreSQL
+case. No larger archive or higher concurrency has been qualified by this
+assessment. Do not extrapolate its latency or memory ratios into a supported
+archive-size limit. The existing benchmark gate is the latency/allocation
+acceptance check for its own workloads; it does not enforce total process memory
+or database spill limits.
+
+The heap table records the current memory cost being assessed, not memory
+parity: approximately 106 MB for one request and 317 MB for four, falling below
+10 MB after two collections in those samples. A revision that exceeds those
+costs on the same fixture worsens the documented tradeoff and needs a new
+assessment. Reducing that cost remains performance work even though CI and the
+latency gate pass. Claims about larger archives require new cardinality and
+concurrency measurements, including database-side resources.
+
 ### Other reads
 
 Same fixture and sampling method. These measurements cover the final reader;
@@ -131,8 +191,10 @@ and 9,784 allocations on that runner. Its only three gate failures were this
 query's time, bytes, and allocation count. The final local query measures 22.11
 ms, 0.260 MB, and 5,014 allocations; local main measures 11.59 ms, 0.406 MB, and
 9,784 allocations. This removes the allocation regression and brings the local
-time ratio below the existing 2x gate without changing limits. CI must confirm
-the time ratio on its runner.
+time ratio below the existing 2x gate without changing limits. The final CI gate
+confirmed 37.44 ms against 19.74 ms on its baseline, a 1.90x time ratio, with
+0.260 MB and 5,014 allocations. It passed the existing thresholds without
+changing them.
 
 Bulk insertion uses the same 200-message fixture and 20 iterations per sample.
 Local main is 3.31 ms and 0.487 MB; the stack is 3.32 ms and 0.393 MB, with
