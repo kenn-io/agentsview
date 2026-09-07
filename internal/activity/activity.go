@@ -765,6 +765,48 @@ func CanonicalSessionTokenCoverageContext(
 	return coverage, nil
 }
 
+// ClaudeSnapshotSelection incrementally selects one message/request group's
+// token row, earliest attribution, and maximum billed web-search count.
+// The zero value is ready for use. Callers keep the payload when Consider returns true.
+type ClaudeSnapshotSelection struct {
+	best, earliest    claudeSnapshotRank
+	webSearchRequests int
+	initialized       bool
+}
+
+type claudeSnapshotRank struct {
+	sessionID, timestamp string
+	ordinal              int64
+	outputTokens         int
+}
+
+func (r claudeSnapshotRank) usageRow() UsageRow {
+	return UsageRow{SessionID: r.sessionID, Timestamp: r.timestamp,
+		MessageOrdinal: r.ordinal, OutputTokens: r.outputTokens}
+}
+
+// Consider reports whether row replaces the selected token row. All rows
+// supplied to a selection must have the same non-empty Claude identity pair.
+func (s *ClaudeSnapshotSelection) Consider(row UsageRow) bool {
+	rank := claudeSnapshotRank{row.SessionID, row.Timestamp, row.MessageOrdinal, row.OutputTokens}
+	if !s.initialized || earlierClaudeSnapshotAttribution(row, s.earliest.usageRow()) {
+		s.earliest = rank
+	}
+	selected := !s.initialized || laterClaudeSnapshot(row, s.best.usageRow())
+	if selected {
+		s.best = rank
+	}
+	s.webSearchRequests = max(s.webSearchRequests, row.WebSearchRequests)
+	s.initialized = true
+	return selected
+}
+
+// AttributionSessionID returns the earliest snapshot's session.
+func (s *ClaudeSnapshotSelection) AttributionSessionID() string { return s.earliest.sessionID }
+
+// WebSearchRequests returns the largest billed search count across snapshots.
+func (s *ClaudeSnapshotSelection) WebSearchRequests() int { return s.webSearchRequests }
+
 func earlierClaudeSnapshotAttribution(candidate, current UsageRow) bool {
 	candidateTS, candidateErr := time.Parse(time.RFC3339Nano, candidate.Timestamp)
 	currentTS, currentErr := time.Parse(time.RFC3339Nano, current.Timestamp)

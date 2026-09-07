@@ -699,3 +699,35 @@ func TestCanonicalCursorUsageEventRowsValidatesPersistedValues(t *testing.T) {
 	assert.Empty(t, rows[0].Model, "legacy empty models remain replicable")
 	assert.NotEmpty(t, rows[0].DedupKey, "sanitized empty keys are regenerated")
 }
+
+// Repeated streaming updates must not reserve projection storage for every
+// candidate. Only distinct request groups should consume arena blocks.
+func TestBunDailyUsageSnapshotStorageTracksDistinctRequests(t *testing.T) {
+	for _, count := range []int{16, 4096} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			database := testDB(t)
+			started := "2026-08-04T12:00:00Z"
+			require.NoError(t, database.UpsertSession(Session{
+				ID: "session", Project: "project", Agent: "claude", Machine: "local",
+				StartedAt: &started, CreatedAt: started,
+			}))
+			messages := make([]Message, count)
+			for i := range messages {
+				messages[i] = Message{SessionID: "session", Ordinal: i, Role: "assistant",
+					Timestamp: started, Model: "model", ClaudeMessageID: "message", ClaudeRequestID: "request",
+					TokenUsage: fmt.Appendf(nil, `{"output_tokens":%d}`, i+1)}
+			}
+			require.NoError(t, database.InsertMessages(messages))
+			common := NewBunStore(&sessionContractBackend{store: database.bunReader})
+			arena := new(usageReadArena)
+			defer arena.release()
+			filter := UsageFilter{Timezone: "UTC"}
+			rows, err := common.loadBunNormalizedDailyUsageRows(t.Context(), database.bunReader, filter, filter, arena)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			_, output, _, _, _ := dailyUsageRowTokens(rows[0])
+			assert.Equal(t, count, output)
+			assert.Len(t, arena.snapshots, 1, "repeated snapshots must share one arena block")
+		})
+	}
+}

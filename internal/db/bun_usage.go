@@ -1143,14 +1143,10 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 	)
 	claudeMessageQuery = claudeMessageQuery.
 		Where("m.claude_message_id != ?", "").
-		Where("m.claude_request_id != ?", "").
-		ColumnExpr("COUNT(*) OVER() AS candidate_count")
+		Where("m.claude_request_id != ?", "")
 	rows := arena.rows[:0]
-	claudeRows := arena.projections[:0]
-	snapshotRows := arena.snapshots[:0]
+	snapshotCount := 0
 	defer func() {
-		arena.projections = claudeRows
-		arena.snapshots = snapshotRows
 		arena.rows = rows
 	}()
 	metadata := make(map[string]bunDailyUsageProjection)
@@ -1173,30 +1169,36 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 		}
 		return nil
 	}
-	claudeCapacityPrepared := false
+	selectionIndex := make(map[[2]string]int)
+	candidatePosition := 0
 	consumeClaude := func(row bunDailyUsageProjection) error {
-		if !claudeCapacityPrepared {
-			claudeRows = slices.Grow(claudeRows, row.CandidateCount)
-			snapshotRows = slices.Grow(snapshotRows, row.CandidateCount)
-			claudeCapacityPrepared = true
-		}
 		daily := dailyUsageProjectionToRow(row)
 		if !withinBounds(daily) {
 			return nil
 		}
 		metadata[row.SessionID] = row
-		_, outputTokens, _, _, _ := dailyUsageRowTokens(daily)
-		claudeRows = append(claudeRows, row)
-		snapshotRows = append(snapshotRows, activity.UsageRow{
-			SessionID:      row.SessionID,
-			Timestamp:      dailyUsageProjectionSnapshotTimestamp(row),
-			MessageOrdinal: usageRowMessageOrdinal(daily.messageOrdinal),
-			OutputTokens:   outputTokens,
-			WebSearchRequests: usageRowWebSearchRequests(
-				daily.usageSource, daily.tokenJSON),
-			ClaudeMessageID: row.ClaudeMessageID,
-			ClaudeRequestID: row.ClaudeRequestID,
-		})
+		fact, _ := dailyUsageFact(daily)
+		key := [2]string{row.ClaudeMessageID, row.ClaudeRequestID}
+		index, exists := selectionIndex[key]
+		if !exists {
+			index = snapshotCount
+			selectionIndex[key] = index
+			snapshotCount++
+		}
+		selected := arena.snapshot(index)
+		if selected.selection.Consider(activity.UsageRow{
+			SessionID:         row.SessionID,
+			Timestamp:         dailyUsageProjectionSnapshotTimestamp(row),
+			MessageOrdinal:    usageRowMessageOrdinal(daily.messageOrdinal),
+			OutputTokens:      int(fact.OutputTokens),
+			WebSearchRequests: int(fact.WebSearchRequests),
+			ClaudeMessageID:   row.ClaudeMessageID,
+			ClaudeRequestID:   row.ClaudeRequestID,
+		}) {
+			selected.projection = row
+			selected.position = candidatePosition
+		}
+		candidatePosition++
 		return nil
 	}
 
@@ -1227,27 +1229,25 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 		return nil, fmt.Errorf("querying daily usage events: %w", err)
 	}
 	if err := streamBunDailyUsageProjections(
-		ctx, claudeMessageQuery, true, true, consumeClaude,
+		ctx, claudeMessageQuery, true, false, consumeClaude,
 	); err != nil {
 		return nil, fmt.Errorf("querying Claude daily usage messages: %w", err)
 	}
 
-	mask, attribution, webSearchRequests :=
-		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
-	// Repeated snapshots need projection storage, but only surviving snapshots
-	// need output rows. Reserve after selection to avoid retaining discarded rows.
-	survivorCount := 0
-	for _, survives := range mask {
-		if survives {
-			survivorCount++
-		}
+	// Preserve winner scan order before the stable daily ordering, including
+	// ties between distinct identities that general usage dedup may resolve.
+	arena.order = slices.Grow(arena.order[:0], snapshotCount)[:snapshotCount]
+	for i := range arena.order {
+		arena.order[i] = i
 	}
-	rows = slices.Grow(rows, survivorCount)
-	for i, row := range claudeRows {
-		if !mask[i] {
-			continue
-		}
-		if attributed, ok := metadata[attribution[i]]; ok {
+	sort.Slice(arena.order, func(i, j int) bool {
+		return arena.snapshot(arena.order[i]).position < arena.snapshot(arena.order[j]).position
+	})
+	rows = slices.Grow(rows, snapshotCount)
+	for _, index := range arena.order {
+		selected := arena.snapshot(index)
+		row := selected.projection
+		if attributed, ok := metadata[selected.selection.AttributionSessionID()]; ok {
 			row = bunDailyUsageProjectionWithSessionMetadata(row, attributed)
 		}
 		if !usageSourceMatches(row.Model, filter) ||
@@ -1256,7 +1256,7 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 		}
 		daily := dailyUsageProjectionToRow(row)
 		daily.webSearchRequests = sql.NullInt64{
-			Int64: int64(webSearchRequests[i]), Valid: true,
+			Int64: int64(selected.selection.WebSearchRequests()), Valid: true,
 		}
 		rows = append(rows, daily)
 	}
