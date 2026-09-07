@@ -163,7 +163,7 @@ describe("CostTimeSeriesChart", () => {
     usage.selectedTimeRange = null;
     usage.excludedProjectKeys = "";
     usage.excludedAgents = "";
-    usage.selectedModels = "";
+    usage.excludedModels = "";
     usage.mode = "cost";
     usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
     settings.chartPalette = "agentsview";
@@ -539,6 +539,34 @@ describe("CostTimeSeriesChart", () => {
     expect(document.querySelector(".empty")).toBeTruthy();
     expect(document.querySelectorAll(".chart-svg path.lc-area-path")).toHaveLength(0);
     unmount(component);
+  });
+
+  it("hides and restores model series in the cached chart range", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary!.daily = [
+      modelDailyEntry(0, [
+        { modelName: "model-alpha", cost: testMoney(3) },
+        { modelName: "model-bravo", cost: testMoney(2) },
+      ]),
+      modelDailyEntry(1, [
+        { modelName: "model-alpha", cost: testMoney(3) },
+        { modelName: "model-bravo", cost: testMoney(2) },
+      ]),
+    ];
+    usage.excludedModels = "model-alpha";
+    const component = mountChart();
+    await tick();
+    try {
+      expect(document.querySelectorAll("path.lc-area-path")).toHaveLength(1);
+      usage.excludedModels = "model-alpha,model-bravo";
+      await tick();
+      expect(document.querySelectorAll("path.lc-area-path")).toHaveLength(0);
+      usage.excludedModels = "";
+      await tick();
+      expect(document.querySelectorAll("path.lc-area-path")).toHaveLength(2);
+    } finally {
+      await unmount(component);
+    }
   });
 
   it("uses aggregate-cost-ranked Matplotlib colors for model paths and legend dots", async () => {

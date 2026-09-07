@@ -403,12 +403,14 @@ describe("UsageStore filter persistence", () => {
     usage.excludedProjects = "proj-a";
     usage.excludedProjectKeys = "pl1:sha256:proj-a";
     usage.excludedAgents = "claude";
+    usage.excludedModels = "opus";
     await usage.fetchAll();
 
     const saved = JSON.parse(localStorage.getItem("usage-filters") ?? "{}");
     expect(saved.excludedProjects).toBe("proj-a");
     expect(saved.excludedProjectKeys).toBeUndefined();
     expect(saved.excludedAgents).toBe("claude");
+    expect(saved.excludedModels).toBe("opus");
   });
 
   it("restores usage filters from localStorage on load", async () => {
@@ -418,14 +420,12 @@ describe("UsageStore filter persistence", () => {
         excludedProjects: "saved-proj",
         excludedProjectKeys: "pl1:sha256:saved-proj",
         excludedModels: "opus",
-        selectedModels: "sonnet",
       }),
     );
     const { usage } = await loadStore();
     expect(usage.excludedProjects).toBe("saved-proj");
     expect(usage.excludedProjectKeys).toBe("");
     expect(usage.excludedModels).toBe("opus");
-    expect(usage.selectedModels).toBe("sonnet");
     expect(usage.excludedAgents).toBe("");
   });
 
@@ -1675,7 +1675,7 @@ describe("UsageStore time-series range selection", () => {
 
     expect(usage.selectedTimeRange).toBeNull();
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-      expect.objectContaining({ from: "2026-06-04", to: "2026-06-18", model: "model-a" }),
+      expect.objectContaining({ from: "2026-06-04", to: "2026-06-18", exclude_model: "model-a" }),
     );
   });
 
@@ -1765,13 +1765,11 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "pk1",
       excludedAgents: "a1",
       excludedModels: "m1",
-      selectedModels: "m2",
     });
     expect(params).toEqual({
       exclude_project: "p1",
       exclude_agent: "a1",
       exclude_model: "m1",
-      model: "m2",
     });
   });
 
@@ -1786,7 +1784,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({
       from: "2026-01-01",
@@ -1805,7 +1802,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({});
   });
@@ -1821,7 +1817,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({});
   });
@@ -1837,7 +1832,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({ window_days: "7" });
   });
@@ -1853,7 +1847,6 @@ describe("buildUsageUrlParams", () => {
       excludedProjectKeys: "",
       excludedAgents: "",
       excludedModels: "",
-      selectedModels: "",
     });
     expect(params).toEqual({
       from: "2026-01-01",

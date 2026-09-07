@@ -247,7 +247,6 @@ describe("AttributionPanel model exclusion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     usage.summary = summaryWithModels();
-    usage.selectedModels = "";
     usage.excludedModels = "";
     usage.toggles.attribution.groupBy = "model";
   });
@@ -255,7 +254,6 @@ describe("AttributionPanel model exclusion", () => {
   afterEach(() => {
     usage.cancelInFlightReads();
     usage.summary = null;
-    usage.selectedModels = "";
     usage.excludedModels = "";
     usage.applyDateRange(usage.from, usage.to);
     usage.toggles.attribution.groupBy = "project";
@@ -312,8 +310,8 @@ describe("AttributionPanel model exclusion", () => {
     }
   });
 
-  it("keeps the selected models and chart brush when hiding a model", async () => {
-    usage.selectedModels = "gpt-5.6-sol,claude-opus-5";
+  it("keeps other hidden models and the chart brush when hiding a model", async () => {
+    usage.excludedModels = "model-other";
     usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
     usage.toggles.attribution.view = "treemap";
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithModels());
@@ -329,8 +327,7 @@ describe("AttributionPanel model exclusion", () => {
           expect.objectContaining({
             from: "2024-01-08",
             to: "2024-01-14",
-            model: "gpt-5.6-sol,claude-opus-5",
-            exclude_model: "gpt-5.6-sol",
+            exclude_model: "model-other,gpt-5.6-sol",
           }),
         ),
       );

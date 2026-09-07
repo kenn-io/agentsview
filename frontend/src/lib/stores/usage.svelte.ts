@@ -120,7 +120,6 @@ export interface UsageFilterState {
   excludedProjectKeys?: string;
   excludedAgents: string;
   excludedModels: string;
-  selectedModels: string;
 }
 
 function loadUsageFilters(): UsageFilterState {
@@ -133,7 +132,6 @@ function loadUsageFilters(): UsageFilterState {
         excludedProjectKeys: "",
         excludedAgents: saved.excludedAgents ?? "",
         excludedModels: saved.excludedModels ?? "",
-        selectedModels: saved.selectedModels ?? "",
       };
     }
   } catch {
@@ -144,7 +142,6 @@ function loadUsageFilters(): UsageFilterState {
     excludedProjectKeys: "",
     excludedAgents: "",
     excludedModels: "",
-    selectedModels: "",
   };
 }
 
@@ -154,7 +151,6 @@ function saveUsageFilters(f: UsageFilterState): void {
       excludedProjects: f.excludedProjects,
       excludedAgents: f.excludedAgents,
       excludedModels: f.excludedModels,
-      selectedModels: f.selectedModels,
     };
     localStorage.setItem(USAGE_FILTERS_KEY, JSON.stringify(data));
   } catch {
@@ -324,14 +320,13 @@ class UsageStore {
   selectedTokenTypes: UsageTokenType[] = $state([...ALL_TOKEN_TYPES]);
   selectedTimeRange: { from: string; to: string } | null = $state(null);
 
-  // Exclusions and the model picker's inclusion set are comma-separated.
-  // Empty selectedModels includes all models except explicit exclusions.
+  // Empty exclusion sets show all items. Chart clicks and picker checkboxes
+  // share these comma-separated sets.
   // Initialized from localStorage to survive tab switches.
   excludedProjects: string = $state("");
   excludedProjectKeys: string = $state("");
   excludedAgents: string = $state("");
   excludedModels: string = $state("");
-  selectedModels: string = $state("");
   knownProjects: UsageProjectFilterItem[] = $state([]);
 
   constructor() {
@@ -340,7 +335,6 @@ class UsageStore {
     this.excludedProjectKeys = saved.excludedProjectKeys ?? "";
     this.excludedAgents = saved.excludedAgents;
     this.excludedModels = saved.excludedModels;
-    this.selectedModels = saved.selectedModels;
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
@@ -420,9 +414,6 @@ class UsageStore {
     }
     if (this.excludedAgents) {
       p.exclude_agent = this.excludedAgents;
-    }
-    if (this.selectedModels) {
-      p.model = this.selectedModels;
     }
     if (this.excludedModels) {
       p.exclude_model = this.excludedModels;
@@ -653,16 +644,13 @@ class UsageStore {
   }
 
   toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
-    const previousSelected = this.selectedModels;
-    const previousExcluded = this.excludedModels;
+    const previous = this.excludedModels;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
-    this.selectedModels = this.toggleCsv(this.selectedModels, name);
-    this.excludedModels = "";
-    const changed = this.selectedModels;
+    this.excludedModels = this.toggleCsv(this.excludedModels, name);
+    const changed = this.excludedModels;
     void this.fetchAllWithResult(options).then((result) => {
-      if (result !== "error" || !hadSelectedTimeRange || this.selectedModels !== changed) return;
-      this.selectedModels = previousSelected;
-      this.excludedModels = previousExcluded;
+      if (result !== "error" || !hadSelectedTimeRange || this.excludedModels !== changed) return;
+      this.excludedModels = previous;
       void this.fetchAll({ preserveTimeRange: true });
     });
   }
@@ -700,11 +688,6 @@ class UsageStore {
     return this.excludedModels.split(",").includes(name);
   }
 
-  isModelSelected(name: string): boolean {
-    if (!this.selectedModels) return false;
-    return this.selectedModels.split(",").includes(name);
-  }
-
   selectAllProjects(): void {
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
@@ -731,14 +714,12 @@ class UsageStore {
   }
 
   selectAllModels(): void {
-    this.selectedModels = "";
     this.excludedModels = "";
     this.fetchAll();
   }
 
-  deselectAllModels(_all: string[]): void {
-    this.selectedModels = "";
-    this.excludedModels = "";
+  deselectAllModels(all: string[]): void {
+    this.excludedModels = joinCsvParts(this.excludedModels, all.join(","));
     this.fetchAll();
   }
 
@@ -747,7 +728,6 @@ class UsageStore {
     this.excludedProjectKeys = "";
     this.excludedAgents = "";
     this.excludedModels = "";
-    this.selectedModels = "";
     this.fetchAll();
   }
 
@@ -756,8 +736,7 @@ class UsageStore {
       this.excludedProjects !== "" ||
       this.excludedProjectKeys !== "" ||
       this.excludedAgents !== "" ||
-      this.excludedModels !== "" ||
-      this.selectedModels !== ""
+      this.excludedModels !== ""
     );
   }
 
@@ -1274,7 +1253,6 @@ export interface UsageUrlState {
   excludedProjectKeys: string;
   excludedAgents: string;
   excludedModels: string;
-  selectedModels: string;
 }
 
 export const USAGE_DEFAULT_WINDOW_DAYS = DEFAULT_WINDOW_DAYS;
@@ -1295,9 +1273,6 @@ export function buildUsageUrlParams(state: UsageUrlState): Record<string, string
     if (state.to) params["to"] = state.to;
   } else if (state.windowDays > 0 && state.windowDays !== DEFAULT_WINDOW_DAYS) {
     params["window_days"] = String(state.windowDays);
-  }
-  if (state.selectedModels) {
-    params["model"] = state.selectedModels;
   }
   if (state.excludedModels) {
     params["exclude_model"] = state.excludedModels;

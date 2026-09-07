@@ -148,6 +148,16 @@ Each filter dropdown supports multi-select with a search box, Select all /
 Deselect all shortcuts, and a colored dot for agents so you can tell them apart
 at a glance.
 
+In the Model picker, checked models are visible and unchecked models are
+hidden. Clicking a model in the attribution chart unchecks it in the picker.
+Recheck it to show it again without changing the other models. Hidden models
+remain in the picker after a reload or when opening a shared URL.
+
+Usage saves model visibility with `exclude_model`. The previous Usage-only
+`model` URL parameter and saved inclusion selections no longer restrict the
+view; choose hidden models in the picker instead. The Analytics model filter
+and API model filters are unchanged.
+
 ![Model filter dropdown](/docs/assets/generated/screenshots/usage-filter-dropdown.png)
 
 ### Summary Cards
