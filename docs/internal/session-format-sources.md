@@ -572,7 +572,9 @@ add an archived or maintained mirror without replacing the original identity.
   emits timestamp-free records. Session-store coverage also reverified with
   synthetic stale and caught-up store fixtures: replacing shutdown token rows
   releases their positional coverage, but messages already covered by store
-  rows are not counted again.
+  rows are not counted again. Reverified 2026-09-07 with input-only store
+  fixtures: session output starts from store totals and adds uncovered message
+  output once, including when every store output value is zero.
 
 ## Gemini CLI (`gemini`)
 

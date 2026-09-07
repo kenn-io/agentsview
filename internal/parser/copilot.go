@@ -661,6 +661,10 @@ func (p *copilotProvider) parseSessionWithStore(
 
 	accumulateMessageTokenUsage(sess, b.messages)
 	if usesStoreUsage {
+		// Store output and uncovered message output replace the transcript total,
+		// including when the store contains no positive output tokens.
+		sess.TotalOutputTokens = 0
+		sess.HasTotalOutputTokens = false
 		applyUsageEventTokenTotals(sess, b.usageEvents)
 		if b.fallbackOutput > 0 {
 			sess.HasTotalOutputTokens = true
