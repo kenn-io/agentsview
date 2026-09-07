@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -1118,25 +1119,34 @@ func (e *scopedEmitter) Emit(scope string) {
 }
 
 func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
-	em := &scopedEmitter{scopes: make(chan string, 1)}
-	syncFn := func() (int, error) { return 3, nil }
+	synctest.Test(t, func(t *testing.T) {
+		em := &scopedEmitter{scopes: make(chan string, 1)}
+		syncFn := func() (int, error) { return 3, nil }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			<-exited
+		}()
 
-	select {
-	case scope := <-em.scopes:
-		assert.Equal(t, "sessions", scope)
-	case <-time.After(3 * interval):
-		require.FailNow(t, "timed out waiting for remote sync event")
-	}
-	close(done)
-	<-exited
+		// Wait for the loop to start its ticker before advancing fake time.
+		synctest.Wait()
+		time.Sleep(interval)
+		synctest.Wait()
+
+		select {
+		case scope := <-em.scopes:
+			assert.Equal(t, "sessions", scope)
+		default:
+			require.FailNow(t, "remote sync did not emit after its first tick")
+		}
+	})
 }
 
 func TestStartRemoteHostSync_NoEmitOnZeroSynced(t *testing.T) {
