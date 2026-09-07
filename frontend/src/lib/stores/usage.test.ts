@@ -424,7 +424,7 @@ describe("UsageStore filter persistence", () => {
     const { usage } = await loadStore();
     expect(usage.excludedProjects).toBe("saved-proj");
     expect(usage.excludedProjectKeys).toBe("");
-    expect(usage.excludedModels).toBe("");
+    expect(usage.excludedModels).toBe("opus");
     expect(usage.selectedModels).toBe("sonnet");
     expect(usage.excludedAgents).toBe("");
   });
@@ -1770,6 +1770,7 @@ describe("buildUsageUrlParams", () => {
     expect(params).toEqual({
       exclude_project: "p1",
       exclude_agent: "a1",
+      exclude_model: "m1",
       model: "m2",
     });
   });

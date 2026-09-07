@@ -379,14 +379,14 @@
         usage.excludedAgents = newExAgent;
         changed = true;
       }
-      if (usage.excludedModels) {
-        usage.excludedModels = "";
+      const newExModel = params["exclude_model"] ?? "";
+      if (newExModel !== usage.excludedModels) {
+        usage.excludedModels = newExModel;
         changed = true;
       }
       const newModel = params["model"] ?? "";
       if (newModel !== usage.selectedModels) {
         usage.selectedModels = newModel;
-        if (newModel) usage.excludedModels = "";
         changed = true;
       }
       if ((changed || sessionChanged) && urlInitRan) {

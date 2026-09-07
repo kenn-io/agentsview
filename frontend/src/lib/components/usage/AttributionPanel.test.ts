@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { UsageSummaryResponse } from "../../api/generated/index";
 import { testMoney } from "../../test/money.js";
@@ -240,6 +240,104 @@ describe("AttributionPanel project identity", () => {
       ),
     );
     unmount(component);
+  });
+});
+
+describe("AttributionPanel model exclusion", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    usage.summary = summaryWithModels();
+    usage.selectedModels = "";
+    usage.excludedModels = "";
+    usage.toggles.attribution.groupBy = "model";
+  });
+
+  afterEach(() => {
+    usage.cancelInFlightReads();
+    usage.summary = null;
+    usage.selectedModels = "";
+    usage.excludedModels = "";
+    usage.applyDateRange(usage.from, usage.to);
+    usage.toggles.attribution.groupBy = "project";
+    usage.toggles.attribution.view = "list";
+    document.body.innerHTML = "";
+  });
+
+  it.each([
+    ["treemap", ".tile"],
+    ["treemap", ".rail-row"],
+    ["list", ".list-row"],
+  ] as const)("hides a model through %s %s instead of selecting it", async (view, selector) => {
+    usage.toggles.attribution.view = view;
+    const remaining = summaryWithModels();
+    remaining.modelTotals = [remaining.modelTotals[1]!];
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(remaining);
+    const component = mountPanel();
+    await tick();
+
+    try {
+      document.querySelector(selector)!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      await vi.waitFor(() => {
+        const params = usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
+        expect(params).toEqual(expect.objectContaining({ exclude_model: "gpt-5.6-sol" }));
+        expect(params.model).toBeUndefined();
+      });
+      await tick();
+      expect(Array.from(document.querySelectorAll(selector), (row) => row.textContent)).toEqual([
+        expect.stringContaining("claude-opus-5"),
+      ]);
+      expect(usage.hasActiveFilters).toBe(true);
+
+      const empty = summaryWithModels();
+      empty.modelTotals = [];
+      usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(empty);
+      document.querySelector(selector)!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await vi.waitFor(() =>
+        expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+          expect.objectContaining({ exclude_model: "gpt-5.6-sol,claude-opus-5" }),
+        ),
+      );
+      await tick();
+      expect(document.querySelectorAll(selector)).toHaveLength(0);
+
+      usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithModels());
+      usage.clearFilters();
+      await vi.waitFor(() => expect(document.querySelectorAll(selector)).toHaveLength(2));
+      expect(
+        usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].exclude_model,
+      ).toBeUndefined();
+    } finally {
+      await unmount(component);
+    }
+  });
+
+  it("keeps the selected models and chart brush when hiding a model", async () => {
+    usage.selectedModels = "gpt-5.6-sol,claude-opus-5";
+    usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+    usage.toggles.attribution.view = "treemap";
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithModels());
+    const component = mountPanel();
+    await tick();
+
+    try {
+      document.querySelector(".tile")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await vi.waitFor(() =>
+        expect(
+          usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params),
+        ).toContainEqual(
+          expect.objectContaining({
+            from: "2024-01-08",
+            to: "2024-01-14",
+            model: "gpt-5.6-sol,claude-opus-5",
+            exclude_model: "gpt-5.6-sol",
+          }),
+        ),
+      );
+      expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
+    } finally {
+      await unmount(component);
+    }
   });
 });
 

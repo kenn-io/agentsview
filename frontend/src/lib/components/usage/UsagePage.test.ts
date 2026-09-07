@@ -137,6 +137,8 @@ afterEach(() => {
   usage.toggles.attribution.view = "treemap";
   usage.excludedProjects = "";
   usage.excludedProjectKeys = "";
+  usage.excludedModels = "";
+  usage.selectedModels = "";
   usage.knownProjects = [];
   settings.chartPalette = "agentsview";
   sessions.projects = [];
@@ -145,6 +147,22 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("restores hidden models from a shared URL alongside selected models", async () => {
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = { model: "model-alpha,model-bravo", exclude_model: "model-alpha" };
+    usage.summary = usageSummaryWithUnsupported();
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.excludedModels).toBe("model-alpha");
+    expect(usage.selectedModels).toBe("model-alpha,model-bravo");
+    expect(router.params.exclude_model).toBe("model-alpha");
+    expect(usage.hasActiveFilters).toBe(true);
+  });
+
   it("uses stable project keys in the Project filter", async () => {
     vi.stubGlobal(
       "ResizeObserver",

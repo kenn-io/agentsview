@@ -132,7 +132,7 @@ function loadUsageFilters(): UsageFilterState {
         excludedProjects: saved.excludedProjects ?? "",
         excludedProjectKeys: "",
         excludedAgents: saved.excludedAgents ?? "",
-        excludedModels: "",
+        excludedModels: saved.excludedModels ?? "",
         selectedModels: saved.selectedModels ?? "",
       };
     }
@@ -324,8 +324,8 @@ class UsageStore {
   selectedTokenTypes: UsageTokenType[] = $state([...ALL_TOKEN_TYPES]);
   selectedTimeRange: { from: string; to: string } | null = $state(null);
 
-  // Excluded project items and included model items
-  // (comma-separated strings). Empty models = all models.
+  // Exclusions and the model picker's inclusion set are comma-separated.
+  // Empty selectedModels includes all models except explicit exclusions.
   // Initialized from localStorage to survive tab switches.
   excludedProjects: string = $state("");
   excludedProjectKeys: string = $state("");
@@ -423,6 +423,9 @@ class UsageStore {
     }
     if (this.selectedModels) {
       p.model = this.selectedModels;
+    }
+    if (this.excludedModels) {
+      p.exclude_model = this.excludedModels;
     }
     return p;
   }
@@ -637,6 +640,18 @@ class UsageStore {
     });
   }
 
+  hideModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
+    const previous = this.excludedModels;
+    const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
+    this.excludedModels = joinCsvParts(this.excludedModels, name);
+    const changed = this.excludedModels;
+    void this.fetchAllWithResult(options).then((result) => {
+      if (result !== "error" || !hadSelectedTimeRange || this.excludedModels !== changed) return;
+      this.excludedModels = previous;
+      void this.fetchAll({ preserveTimeRange: true });
+    });
+  }
+
   toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
     const previousSelected = this.selectedModels;
     const previousExcluded = this.excludedModels;
@@ -741,6 +756,7 @@ class UsageStore {
       this.excludedProjects !== "" ||
       this.excludedProjectKeys !== "" ||
       this.excludedAgents !== "" ||
+      this.excludedModels !== "" ||
       this.selectedModels !== ""
     );
   }
@@ -1282,6 +1298,9 @@ export function buildUsageUrlParams(state: UsageUrlState): Record<string, string
   }
   if (state.selectedModels) {
     params["model"] = state.selectedModels;
+  }
+  if (state.excludedModels) {
+    params["exclude_model"] = state.excludedModels;
   }
   if (state.excludedProjects) {
     params["exclude_project"] = state.excludedProjects;
