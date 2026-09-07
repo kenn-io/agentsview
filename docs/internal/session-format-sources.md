@@ -469,6 +469,13 @@ add an archived or maintained mirror without replacing the original identity.
   ranking remains limited to normalized discovery. Reverified 2026-08-29 with
   live and archived copies sharing one UUID.
 
+- **HTTP import verification (2026-09-07):**
+  `TestRemoteCodexAliasTitleSurvivesArchiveImport` also checks that unrelated
+  indexes cannot override explicit or empty metadata associations.
+  `TestHTTPMirrorCodexIndexRemoval` exercises persisted mirror deletion,
+  truncation, home removal, and journal replay. Remaining indexes supply the
+  title; absence of all titles preserves the stored name.
+
 ## TraeX (`traex`)
 
 - **Format:** Codex-compatible rollout JSONL under a dated `YYYY/MM/DD` tree,

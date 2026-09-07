@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -871,6 +872,35 @@ func (hs HTTPSync) prepareMirror(
 		for path := range fileScopedPaths {
 			observed = append(observed, path)
 			forceFullParseObserved = append(forceFullParseObserved, path)
+		}
+	}
+	// Capture the old index's sessions before replacement or deletion loses
+	// their association. Journal transcript paths so replay uses the current
+	// provider metadata, including titles from remaining homes.
+	indexChanges := append([]string(nil), delta.Deletions...)
+	for _, remotePath := range delta.Fetch {
+		localPath, err := safeRemappedRemotePath(mirrorRoot, remotePath)
+		if err != nil {
+			return nil, err
+		}
+		indexChanges = append(indexChanges, localPath)
+	}
+	for _, indexPath := range indexChanges {
+		if filepath.Base(indexPath) != parser.CodexSessionIndexFilename {
+			continue
+		}
+		parser.EvictCodexSessionIndex(indexPath)
+		for uuid := range parser.CodexSessionIndexTitles(indexPath) {
+			storedPath := hs.DB.GetSessionFilePath(hs.Host + "~codex:" + uuid)
+			remotePath, ok := strings.CutPrefix(storedPath, hs.Host+":")
+			if !ok {
+				continue
+			}
+			path, err := mirrorRelativeRemoteChangePath(mirrorRoot, remotePath)
+			if err != nil {
+				return nil, err
+			}
+			observed = append(observed, path)
 		}
 	}
 	journal, mergeStats, err := mergeMirrorChangesWithForce(

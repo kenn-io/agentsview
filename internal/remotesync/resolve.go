@@ -142,7 +142,8 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 			}
 			dirs[def.Type] = append(dirs[def.Type], dir)
 			if def.Type == parser.AgentCodex {
-
+				// An empty association must not become inferred parent metadata on import.
+				codexIndexFiles[dir] = nil
 				for _, index := range metadata.IndexFiles(dir) {
 					if info, err := os.Stat(index); err != nil || info.IsDir() {
 						continue
@@ -328,12 +329,16 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 func selectedCodexIndexFiles(targets TargetSet, indexes map[string][]string) map[string][]string {
 	var selected map[string][]string
 	for _, root := range targets.Dirs[parser.AgentCodex] {
+		if _, ok := indexes[root]; !ok {
+			continue
+		}
+		if selected == nil {
+			selected = make(map[string][]string)
+		}
+		selected[root] = nil
 		for _, index := range indexes[root] {
 			if !slices.Contains(targets.ProviderExtraFiles[parser.AgentCodex], index) {
 				continue
-			}
-			if selected == nil {
-				selected = make(map[string][]string)
 			}
 			selected[root] = append(selected[root], index)
 		}

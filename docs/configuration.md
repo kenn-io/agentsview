@@ -885,8 +885,13 @@ codex_homes = ["~/.codex-profile"]
 
 Codex writes thread titles to `session_index.jsonl` in whichever home the
 rename happened in. Do not link that file; AgentsView reads every home's copy.
-Remote sync also transfers these indexes and preserves their associations with
-the shared transcripts, so imported sessions retain titles from alternate homes.
+HTTP remote sync also transfers these indexes and preserves their associations
+with the shared transcripts, so imported sessions retain titles from alternate
+homes. When an index is removed or loses an entry, the next sync uses a title
+from the remaining configured indexes. If none names the session, AgentsView
+keeps its last known title. Deprecated SSH sync does not carry alternate-home
+index associations. Upgrade both ends of HTTP sync together; older protocol
+versions are rejected.
 
 The same shape works for Claude Code by linking `<alt>/projects` to
 `~/.claude/projects`. Claude keeps no title index, so there is nothing else to

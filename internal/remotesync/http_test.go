@@ -92,16 +92,20 @@ func TestHTTPSyncRejectsRemoteWithoutProtocolHandshake(t *testing.T) {
 }
 
 func TestHTTPSyncRejectsMismatchedRemoteProtocol(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set(ProtocolHeader, strconv.Itoa(ProtocolVersion+1))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	t.Cleanup(ts.Close)
+	for _, version := range []string{"1", strconv.Itoa(ProtocolVersion + 1)} {
+		t.Run(version, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set(ProtocolHeader, version)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			t.Cleanup(ts.Close)
 
-	_, err := HTTPSync{Host: "devbox", URL: ts.URL}.Prepare(t.Context())
+			_, err := HTTPSync{Host: "devbox", URL: ts.URL}.Prepare(t.Context())
 
-	require.ErrorContains(t, err, "incompatible")
+			require.ErrorContains(t, err, "incompatible")
+		})
+	}
 }
 
 func TestHTTPSyncDownloadsArchiveAndImports(t *testing.T) {

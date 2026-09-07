@@ -376,7 +376,7 @@ func TestRemoteSyncTargetsRejectsMismatchedProtocol(t *testing.T) {
 	srv, _, _ := newRemoteSyncServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
 	req.Header.Set("Authorization", "Bearer remote-token")
-	req.Header.Set(remotesync.ProtocolHeader, "2")
+	req.Header.Set(remotesync.ProtocolHeader, "1")
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 

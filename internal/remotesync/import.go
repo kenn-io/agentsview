@@ -135,19 +135,13 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 		if err != nil {
 			return importLayout{}, err
 		}
+		codexMetadata[localRoot] = nil
 		for _, index := range indexes {
 			localIndex, err := safeRemappedRemotePath(root, index)
 			if err != nil {
 				return importLayout{}, err
 			}
-			alias := filepath.Dir(localIndex)
-			if len(codexMetadata[localRoot]) == 0 {
-				codexMetadata[localRoot] = []string{filepath.Dir(localRoot)}
-			}
-			if alias == filepath.Dir(localRoot) {
-				continue
-			}
-			codexMetadata[localRoot] = append(codexMetadata[localRoot], alias)
+			codexMetadata[localRoot] = append(codexMetadata[localRoot], filepath.Dir(localIndex))
 		}
 	}
 	if len(codexMetadata) > 0 {
