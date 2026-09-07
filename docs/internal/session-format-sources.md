@@ -369,6 +369,10 @@ add an archived or maintained mirror without replacing the original identity.
   contain `session_id`, Unix-seconds `ts`, and submitted prompt `text`;
   configured size enforcement can rewrite a retained tail in place. Agentsview
   consumes only the first two fields as a live-activity hint.
+  Subagent rollouts carry a structural `source.subagent` marker and a top-level
+  `parent_thread_id`; that pair defines the parent edge. `thread_source` is a
+  legacy fallback, and `session_id` identifies the root or tree rather than the
+  parent.
 
 - **Evidence:** `source`.
 
@@ -377,6 +381,10 @@ add an archived or maintained mirror without replacing the original identity.
   [rollout recorder](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/rollout/src/recorder.rs)
   and
   [protocol types](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/protocol.rs).
+  The current producer source at commit
+  `a44454656459437fc8e2ffa9eca0646537b1fdfd` keeps the subagent source marker
+  and parent while serializing guardian reviews as `guardian_review`; see
+  [codex_delegate.rs](https://github.com/openai/codex/blob/a44454656459437fc8e2ffa9eca0646537b1fdfd/codex-rs/core/src/codex_delegate.rs#L76-L110).
   The pinned
   [message-history implementation](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/message-history/src/lib.rs)
   defines the `session_id`/`ts`/`text` schema, append behavior, file
@@ -412,6 +420,9 @@ add an archived or maintained mirror without replacing the original identity.
   parent. UUID versions and identifier bytes carry no chronological meaning;
   the first turn id absent from the parent begins child-owned usage. Missing
   parents fail open, and child-only subagent transcripts are left unchanged.
+  A local corpus measured 2026-09-07 contained 2,044 Codex JSONL files, with
+  1,565 carrying `source.subagent` and none carrying `guardian_review`; the
+  published producer source supplies the guardian format evidence.
   Legacy `session_index.jsonl` files from aliased homes also travel through
   remote archive export and import. Reverified on 2026-09-07 with
   `TestRemoteCodexAliasTitleSurvivesArchiveImport`, which checks the imported

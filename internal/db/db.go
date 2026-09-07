@@ -462,7 +462,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // variant suffixes (-exp-b) against the matching effort-qualified executor
 // model. Existing Antigravity rows need re-parsing so stored messages and
 // usage events reflect the intended effort-qualified model.)
-const dataVersion = 99
+// (100: Codex subagent lineage now uses the structural source marker. Existing
+// guardian rows need re-parsing because a fingerprint change cannot repair
+// byte-identical files.)
+const dataVersion = 100
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
