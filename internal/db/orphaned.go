@@ -1138,17 +1138,7 @@ func (d *DB) CopySessionMetadataFrom(
 	defer d.mu.Unlock()
 
 	ctx := context.Background()
-	d.connMu.RLock()
-	writer := d.bunWriter
-	if writer == nil {
-		d.connMu.RUnlock()
-		if d.writerClosed.Load() {
-			return ErrWriterClosed
-		}
-		return ErrReadOnly
-	}
-	conn, err := writer.Conn(ctx)
-	d.connMu.RUnlock()
+	conn, err := d.acquireBunWriteConn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
 	}

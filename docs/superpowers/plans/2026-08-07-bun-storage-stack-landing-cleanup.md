@@ -22,7 +22,10 @@ restacked after every lower branch is complete.
 
 ## Global Constraints
 
-- SQLite remains the persistent archive and must never be rebuilt or truncated.
+- SQLite remains the persistent archive. Schema convergence must never drop,
+  truncate, or recreate it. Parser resync may build a temporary replacement,
+  preserve orphaned sessions and user-managed metadata, validate it, and swap
+  it atomically through the workflow in `docs/agents/storage.md`.
 - DuckDB remains a disposable mirror and Quack remains read-only.
 - New or changed tests must assert observable behavior and must fail before the
   corresponding production change.
@@ -248,8 +251,10 @@ ______________________________________________________________________
   and resolve duplicate patches by preserving the lower introducing fix.
 
 - [x] Run focused tests after each rebase, then `go fmt ./...`, `go vet ./...`,
-  `make test-short`, relevant DuckDB-tagged tests, and PostgreSQL integration
-  if the dedicated test container is available.
+  `make test-short`, and relevant DuckDB-tagged tests. Changes to PostgreSQL
+  paths require their integration suites against a dedicated test database. If
+  that database is unavailable, leave PostgreSQL verification incomplete and
+  do not declare the affected path ready to publish.
 
 - [x] Treat the unrelated macOS FSEvents baseline timeouts separately; do not
   weaken them as part of storage cleanup.
@@ -261,7 +266,7 @@ ______________________________________________________________________
 - [x] Push only after verification, close completed Kata children with commit
   evidence, and unsnooze RoboRev on every affected branch.
 
-### Task 7: Complete archive-writer consolidation (`h381`)
+### Task 7: Complete Bun execution at the stack tip (`h381`)
 
 **Interfaces:**
 
@@ -284,6 +289,33 @@ ______________________________________________________________________
 
 - [x] Verify and publish the sixth stacked PR, then close Kata `h381` and resume
   RoboRev reminders.
+
+#### Acceptance boundaries within Task 7
+
+The combined tip is the delivery gate. Review these areas separately in the
+order below; their acceptance checks do not require every intermediate PR to
+pass CI or rewriting the published stack into new branches.
+
+1. **Archive writes and recovery:** establish the guarded transaction and
+   connection facade first, then route batches, recall, artifact accounting,
+   and attached metadata recovery through it. Acceptance: archive hook and
+   rollback tests, reopened-pool barrier tests including metadata copying,
+   orphan recovery, and compaction tests in `internal/db`.
+1. **Usage-cache execution:** build on the archive handles and retain cache
+   transaction ownership. Acceptance: usage-cache and rollup tests, concurrent
+   access checks, and the internal NUL-key round trip in `internal/db`.
+1. **PostgreSQL raw custody:** convert device authorization, raw ingestion, and
+   resumable uploads to Bun placeholders. Acceptance: the PostgreSQL `pgtest`
+   integration cases for those APIs against a dedicated database.
+1. **PostgreSQL vectors:** convert vector push, search, administration, and
+   startup metadata probes after raw custody. Acceptance: vector schema and
+   vector integration cases with pgvector installed, including
+   `TestVectorChunkTableExists` for both missing and present chunk tables.
+1. **Upgrade and architecture documentation:** describe the final execution
+   boundaries after the preceding areas are verified. Acceptance: the archive
+   resync constraints agree with `docs/agents/storage.md`, and the linked
+   upgrade procedure covers quiesced backup, restoration, completion checks,
+   and replacement-archive disk space.
 
 ## Self-review
 

@@ -256,7 +256,7 @@ func VectorChunkTableExists(
 	ctx context.Context, pg *sql.DB, genID int64,
 ) (bool, error) {
 	var present bool
-	if err := bun.NewDB(pg, pgdialect.New()).QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`,
+	if err := bun.NewDB(pg, pgdialect.New()).QueryRowContext(ctx, `SELECT to_regclass(?0) IS NOT NULL`,
 		vectorChunkTable(genID)).Scan(&present); err != nil {
 		return false, fmt.Errorf(
 			"probing chunk table for generation %d: %w", genID, err)

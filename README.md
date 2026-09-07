@@ -48,7 +48,9 @@ mirrors are rebuilt from the archive.
 
 Downgrading an upgraded archive in place is unsupported. To return to an older
 binary, restore the pre-upgrade backup first. A read-only open cannot perform
-the upgrade.
+the upgrade. See the
+[storage upgrade procedure](docs/internal/storage-upgrade.md) for backup,
+restoration, temporary disk space, and resync completion checks.
 
 ## Quick Start
 

@@ -64,3 +64,32 @@ func TestBunWritesStayBarredAfterPoolReopen(t *testing.T) {
 		})
 	}
 }
+
+func TestMetadataCopyStaysBarredAfterPoolReopen(t *testing.T) {
+	source, destination := testDB(t), testDB(t)
+	for _, database := range []*DB{source, destination} {
+		insertSession(t, database, "metadata-session", "project")
+	}
+	require.NoError(t, source.RenameSession("metadata-session", Ptr("copied name")))
+	require.NoError(t, destination.RenameSession("metadata-session", Ptr("original name")))
+	require.NoError(t, source.CloseWriter())
+	require.NoError(t, destination.CloseWriter())
+	destination.mu.Lock()
+	err := destination.reopenLockedWithBarrier(true)
+	destination.mu.Unlock()
+	require.NoError(t, err)
+
+	copyErr := destination.CopySessionMetadataFrom(source.Path())
+	session, err := destination.GetSession(t.Context(), "metadata-session")
+	require.NoError(t, err)
+	require.NotNil(t, session.DisplayName)
+	require.Equal(t, "original name", *session.DisplayName)
+	require.ErrorIs(t, copyErr, ErrWriterClosed)
+
+	require.NoError(t, destination.Reopen())
+	require.NoError(t, destination.CopySessionMetadataFrom(source.Path()))
+	session, err = destination.GetSession(t.Context(), "metadata-session")
+	require.NoError(t, err)
+	require.NotNil(t, session.DisplayName)
+	require.Equal(t, "copied name", *session.DisplayName)
+}
