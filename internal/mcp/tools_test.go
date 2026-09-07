@@ -1356,3 +1356,23 @@ func TestSearchSessions_DateRange(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchSessions_RejectsInvalidDateRange(t *testing.T) {
+	ts, _ := newTestToolset(t)
+	for _, tc := range []struct {
+		name, from, to, message string
+	}{
+		{"reversed", "2024-06-03", "2024-06-01", "date_from must not be after date_to"},
+		{"malformed from", "not-a-date", "", "invalid date format: use YYYY-MM-DD"},
+		{"malformed to", "", "2024-02-30", "invalid date format: use YYYY-MM-DD"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+				Query: "hello", DateFrom: tc.from, DateTo: tc.to,
+			})
+			var inputErr *db.SearchInputError
+			require.ErrorAs(t, err, &inputErr)
+			assert.Contains(t, inputErr.Error(), tc.message)
+		})
+	}
+}

@@ -51,7 +51,8 @@ client will see these tools:
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
 include sessions whose activity overlaps the requested days in UTC. Either bound
-can be omitted; omitting both preserves unrestricted date matching.
+can be omitted; omitting both preserves unrestricted date matching. Malformed
+dates and ranges where `date_from` is after `date_to` return an error.
 
 When a vector search index is configured, prefer `search_content` with
 `mode: "hybrid"` or `mode: "semantic"` for questions about prior work,

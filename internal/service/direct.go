@@ -656,6 +656,14 @@ func (b *directBackend) Search(
 	if query == "" {
 		return nil, &db.SearchInputError{Msg: "search: query required"}
 	}
+	for _, d := range []string{req.DateFrom, req.DateTo} {
+		if d != "" && !timeutil.IsValidDate(d) {
+			return nil, &db.SearchInputError{Msg: "search: invalid date format: use YYYY-MM-DD"}
+		}
+	}
+	if req.DateFrom != "" && req.DateTo != "" && req.DateFrom > req.DateTo {
+		return nil, &db.SearchInputError{Msg: "search: date_from must not be after date_to"}
+	}
 	if !b.db.HasFTS() {
 		return nil, ErrSearchUnavailable
 	}
