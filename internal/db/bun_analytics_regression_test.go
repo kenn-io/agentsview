@@ -290,3 +290,25 @@ func bunContentSelects(queries []string) []string {
 	}
 	return contentQueries
 }
+
+func TestBunAnalyticsToolsUTCDateKeepsFinalMicrosecond(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-04T12:00:00Z"
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "utc-boundary", Project: "boundary", Agent: "claude", Machine: "local",
+		StartedAt: &started, MessageCount: 2, UserMessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]Message{
+		{SessionID: "utc-boundary", Ordinal: 0, Role: "assistant", Model: "model",
+			Timestamp: "2026-08-04T23:59:59.999999Z", Content: "read", ContentLength: 4,
+			ToolCalls: []ToolCall{{ToolName: "Read", Category: "Read"}}},
+		{SessionID: "utc-boundary", Ordinal: 1, Role: "assistant", Model: "model",
+			Timestamp: "2026-08-05T00:00:00Z", Content: "read", ContentLength: 4,
+			ToolCalls: []ToolCall{{ToolName: "Read", Category: "Read"}}},
+	}))
+	result, err := database.GetAnalyticsTools(t.Context(), AnalyticsFilter{
+		Project: "boundary", From: "2026-08-04", To: "2026-08-04", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TotalCalls)
+}

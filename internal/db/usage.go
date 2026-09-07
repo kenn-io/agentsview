@@ -740,6 +740,8 @@ type usageScanRow struct {
 }
 
 type dailyUsageScanRow struct {
+	snapshotScanTime         time.Time
+	snapshotSourceSession    string
 	sessionID                string
 	messageOrdinal           sql.NullInt64
 	usageSource              string
@@ -1656,7 +1658,7 @@ func dailyUsageAmounts(
 	cost, savings money.Money,
 	err error,
 ) {
-	fact, _ := dailyUsageFact(r)
+	fact, _ := dailyUsageTokenFact(r)
 	if r.webSearchRequests.Valid {
 		fact.WebSearchRequests = int64(max(int(r.webSearchRequests.Int64), 0))
 	}
@@ -1671,17 +1673,12 @@ func dailyUsageAmounts(
 	if err != nil {
 		return 0, 0, 0, 0, money.Money{}, money.Money{}, err
 	}
-	_, lookup := pricing.ResolveAt(
-		r.model, dailyUsageLookupModel(r), r.pricingTime,
-	)
+	// Record the exact lookup used for the charge, including provider billing
+	// adjustments, rather than resolving the same row again for provenance.
+	lookup := priced.lookup
 	if priced.Reported > 0 {
 		pricing.RecordResolvedReported(r.model, priced.PricedModel, lookup)
 	} else {
-		_, lookup, err = pricing.ResolveBilledAt(
-			r.providerID, r.model, dailyUsageLookupModel(r), r.pricingTime)
-		if err != nil {
-			return 0, 0, 0, 0, money.Money{}, money.Money{}, err
-		}
 		recordComputedUsagePricing(
 			pricing, r.model, priced.PricedModel, lookup, fact.RequestScoped,
 			inputTok, cacheCrTok, cacheRdTok,
@@ -1695,17 +1692,20 @@ func dailyUsageAmounts(
 func dailyUsageRowTokens(
 	r dailyUsageScanRow,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
-	fact, _ := dailyUsageFact(r)
+	fact, _ := dailyUsageTokenFact(r)
 	return int(fact.InputTokens), int(fact.OutputTokens),
 		int(fact.CacheCreationTokens), int(fact.CacheReadTokens),
 		int(fact.ReasoningTokens)
 }
 
-func dailyUsageFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
+// dailyUsageTokenFact extracts billing counters and identities. Callers already
+// hold parsed usage/pricing times; extracting unused timestamp pointers here
+// would format and parse the same time for every row.
+func dailyUsageTokenFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
 	if r.usageSource == "message" {
 		return usagefacts.FromMessage(usagefacts.MessageInput{
 			Ordinal: int(r.messageOrdinal.Int64), Role: "assistant",
-			Timestamp: formatRequiredUsageTime(r.pricingTime), Model: r.model,
+			Model:           r.model,
 			ProviderID:      r.providerID,
 			TokenUsage:      r.tokenJSON,
 			ClaudeMessageID: r.claudeMessageID,
@@ -1725,7 +1725,7 @@ func dailyUsageFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
 	}
 	return usagefacts.FromEvent(usagefacts.EventInput{
 		MessageOrdinal: ordinal, Source: r.usageSource,
-		Timestamp: formatRequiredUsageTime(r.pricingTime), Model: r.model,
+		Model:      r.model,
 		ProviderID: r.providerID,
 		CostSource: r.costSource, DedupKey: r.usageDedupKey,
 		InputTokens:              int64(r.inputTokens),

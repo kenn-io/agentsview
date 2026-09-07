@@ -1,102 +1,185 @@
-# Bun daily usage performance
+# Bun storage performance assessment
 
-## September 2026 streaming snapshot selection
+## Decision
 
-Continue the Bun consolidation. These changes reduce allocation and retain the
-shared query and billing rules, but do not establish performance parity with
-main or make the stack ready to merge.
+Keep the stack and land the combined feature after the final revision passes CI
+and the documented archive-upgrade procedure is reviewed. Performance is
+sufficient to continue; allocation parity is not established and is not the
+basis for this recommendation.
 
-Previously, daily usage retained every Claude candidate in both a full query
-projection and a usage row before selecting survivors. It now keeps one winning
-projection per message/request pair, plus compact state for earliest attribution
-and maximum web-search billing. The existing activity comparisons still own
-ranking and tie rules. A sorted index preserves winner scan order before the
-stable daily ordering and general usage deduplication.
+The shared implementation materially reduces PostgreSQL and DuckDB daily-usage
+latency. SQLite warm daily usage and bulk insertion remain comparable to main.
+The tools-report regression found by the benchmark gate is repaired. The
+tradeoff is higher allocation volume and transient Go heap for live usage
+reports, particularly with repeated snapshots. These costs are explicit below;
+pools do not make them disappear.
 
-Projections use fixed-size arena blocks. This avoids copying large projections
-as distinct requests accumulate without reserving memory for discarded
-snapshots. The request still owns its scratch storage through reduction; public
-results do not borrow it. Released blocks are cleared. The existing 128 MiB
-retention limit remains per arena, not a process-wide memory bound.
+## Implementation and maintenance
 
-The Claude query no longer needs a candidate-count window, and selection uses
-one parsed usage fact for both output tokens and web-search counts.
+Claude rows are ordered by message/request identity, then by the original
+chronological source order. The reader keeps one group's winner, earliest
+attribution, and maximum billed web searches. Only surviving usage rows enter
+the pooled arena. This removes the map and projection blocks previously held for
+every distinct request. The final sort preserves source order even when
+attribution gives two winners the same session, timestamp, and ordinal.
 
-A CPU profile then identified repeated lowercasing in catalog matching as a
-larger cost: 2.91 seconds of the 5.99 sampled CPU seconds under the daily-usage
-call. Catalog loading now normalizes immutable substring patterns once, and
-resolution normalizes each model name once for all rules. Equality still uses
-Unicode case folding; regular expressions still receive the original text. This
-changes matching work without changing selected prices, temporal rules, provider
-fallback, or persisted catalog content.
+Survivor storage grows geometrically with exact capacity steps to avoid repeated
+copies and compounded allocator rounding. Release clears all references. The 128
+MiB retention cap is per arena, not a global limit or a limit on an active
+request. The Go collector can discard idle pool entries.
 
-### Measurements
+Pricing resolves a computed row once and retains that exact lookup for
+provenance, including provider billing adjustments. Token extraction no longer
+formats and reparses timestamps whose values the caller already holds. Small
+pricing alias lists use stack arrays. The existing catalog normalization
+optimization remains in place.
 
-Synthetic fixture: 1,000 sessions, 64 messages per session, disposable DuckDB
-and PostgreSQL stores. Baseline: `19dfbbc68856d29fd1359bb55d312c7101984919`.
-Measurements used Go 1.27, darwin/arm64, CGO and `fts5,benchdb` on September 7,
-2026\. The same harness was used for both revisions. MB means decimal megabytes.
+SQLite analytics uses its canonical UTC timestamps without a Go timezone
+callback for UTC reports. The SQL representation preserves fractional seconds
+and correct last-used ordering. Non-UTC conversion retains one timezone per
+connection rather than reloading its file for every row. PostgreSQL and DuckDB
+keep their existing native timezone expressions within the same shared queries.
 
-Unique identities use the median of three samples, five calls per sample.
-Repeated identities use one five-call sample with 16 snapshots per request.
-Timing is directional: other work ran on the shared host. Pool reuse and garbage
-collection also introduce variation in bytes per call. One final DuckDB timing
-sample was 796 ms; the other two were 363 and 333 ms. These are comparisons
-against the previously pushed Bun tip, not a new comparison against main.
+These changes keep snapshot ranking, billing, filtering, and result ownership in
+the common implementation. They add no backend-local Store methods, unsafe
+allocator, alternate query engine, or caller-visible configuration. Backend
+adapters still own connection lifecycle and the documented capability seams.
 
-| Identities | Backend    | Before ms/call | After ms/call | Before MB/call | After MB/call | Before allocations/call | After allocations/call |
-| ---------- | ---------- | -------------: | ------------: | -------------: | ------------: | ----------------------: | ---------------------: |
-| Unique     | DuckDB     |          671.1 |         363.5 |         116.81 |        107.38 |               3,318,899 |              3,190,804 |
-| Unique     | PostgreSQL |          733.7 |         378.7 |         138.23 |        124.61 |               3,014,420 |              2,886,463 |
-| Repeated   | DuckDB     |          163.4 |         139.6 |          67.68 |         55.40 |               2,597,928 |              2,469,843 |
-| Repeated   | PostgreSQL |          296.6 |         189.5 |          70.84 |         51.20 |               2,293,449 |              2,165,478 |
+## Method
 
-One cold PostgreSQL heap sample per concurrency level, using unique identities,
-measured after the arena change and before the catalog optimization:
+Measured September 7, 2026, Go 1.27, darwin/arm64, CGO, `fts5,benchdb`. The
+baseline is current main `618f0fabb9471cce346d1c09abd8150f6889671d`. The
+previous published stack is `088c01e3e247ee8bd741c7409bb77479395acb3d`. An
+isolated source copy of main ran the same backend benchmark fixture as the
+candidate, with identical embedded pricing snapshots. All databases and sessions
+were synthetic and disposable. No live archive was used.
 
-| Concurrent requests | Before sampled peak MB | After sampled peak MB | Before MB after one GC | After MB after one GC | Before MB after two GCs | After MB after two GCs |
-| ------------------: | ---------------------: | --------------------: | ---------------------: | --------------------: | ----------------------: | ---------------------: |
-|                   1 |                 135.03 |                122.91 |                  79.22 |                 68.71 |                    9.48 |                   9.48 |
-|                   4 |                 503.65 |                437.69 |                 288.45 |                246.57 |                    9.87 |                   9.86 |
+The fixture has 1,000 sessions and 64 messages per session. Timings and
+allocations are medians of three samples, five calls per sample. Repeated
+identities use 16 snapshots per request. MB means decimal megabytes. Other work
+ran on the host; these timing samples establish direction, not statistical
+significance. GC and pool eviction also affect bytes per call. For example,
+final unique PostgreSQL samples allocated 97.90, 110.48, and 123.10 MB.
 
-The four-request peak improved by 13%, and retained heap after one collection by
-15%. Concurrent usage still needs hundreds of megabytes; this change does not
-establish a global retention bound or a physical-memory result.
+### Daily usage
 
-### Reproduction
+| Identities | Backend  | Main ms | Published ms | Final ms | Main MB | Published MB | Final MB | Main allocations | Final allocations |
+| ---------- | -------- | ------: | -----------: | -------: | ------: | -----------: | -------: | ---------------: | ----------------: |
+| Unique     | sqlite   |   37.20 |        35.30 |    35.31 |   12.27 |        13.07 |    13.00 |          162,204 |           165,033 |
+| Unique     | duckdb   |  338.44 |       255.63 |   193.19 |   63.06 |       107.38 |    80.16 |        2,246,794 |         2,421,245 |
+| Unique     | postgres |  641.30 |       309.93 |   226.53 |   78.70 |       136.44 |   110.48 |        1,523,125 |         2,116,894 |
+| Repeated   | sqlite   |   41.38 |  not sampled |    38.48 |   15.26 |  not sampled |    15.98 |          236,958 |           239,394 |
+| Repeated   | duckdb   |   96.48 |  not sampled |    80.53 |   10.92 |  not sampled |    49.33 |          189,356 |         2,120,777 |
+| Repeated   | postgres |  359.34 |  not sampled |   128.59 |   11.69 |  not sampled |    44.22 |          142,619 |         1,816,413 |
 
-Run `BenchmarkStoreBackends/DailyUsage/(duckdb|postgres)$` in
-`internal/backendbench` with
-`-tags fts5,benchdb -run '^$' -benchmem -benchtime 5x -count 3` and
-`CGO_ENABLED=1`. Docker must be available for the disposable PostgreSQL fixture.
-Set `AGENTSVIEW_BENCH_SNAPSHOT_REPETITIONS=16` for repeated snapshots; the
-default is one. Session and message counts remain configurable through
-`AGENTSVIEW_BENCH_SESSIONS` and `AGENTSVIEW_BENCH_MESSAGES_PER_SESSION`.
+Main's PostgreSQL query ranks and removes duplicate snapshots in SQL before
+scanning results. The shared Bun reader transfers candidates and selects them in
+Go. This explains the remaining repeated-snapshot allocation gap; pooling
+survivors cannot remove driver allocations for discarded input. The final
+repeated PostgreSQL report is nevertheless substantially faster on this fixture.
+This is an accepted latency/temporary-allocation tradeoff, not a claim that the
+two implementations have equal memory cost.
 
-`BenchmarkDailyUsageHeap/postgres/` in the same package measures one and four
-simultaneous requests. Run it with `-benchtime 1x -count 1`. It samples Go heap
-every 5 ms and reports heap after one and two forced collections. Its figures
-include fixture heap, exclude native driver memory, and are not exact peaks or
-process physical-footprint measurements.
+### Concurrent Go heap
 
-### Regression coverage
+One cold sample per concurrency level, unique identities, same fixture. These
+are sampled Go heap figures, not process physical memory or PostgreSQL server
+memory.
 
-The snapshot-storage test increases one request from 16 to 4,096 candidates
-while retaining one arena block and the fullest output count. Arrival-order
-coverage verifies that token selection, earliest attribution and maximum billed
-searches can come from three different rows. Existing cross-session, filter,
-web-search and result-lifetime tests exercise the shared public usage APIs.
+| Requests | Main peak MB | Final peak MB | Main after one GC MB | Final after one GC MB | Main after two GCs MB | Final after two GCs MB |
+| -------: | -----------: | ------------: | -------------------: | --------------------: | --------------------: | ---------------------: |
+|        1 |        26.51 |        106.30 |                 4.68 |                 42.04 |                  4.67 |                   9.53 |
+|        4 |        77.64 |        317.37 |                 4.96 |                139.72 |                  4.95 |                   9.91 |
 
-The focused 256-rule catalog benchmark reduced an uppercase model lookup from
-about 16.9 microseconds and 258 allocations to 0.76 microseconds and two
-allocations. This isolates repeated normalization from database and host I/O; it
-is not an end-to-end speedup claim.
+The four-request peak remains about four times main's. This is the largest
+remaining cost of doing candidate selection and retaining sorted survivors in
+Go. Pool retention drops after the second collection; there is no claim of
+process-wide memory parity or a global allocation bound. I accept this tradeoff
+for the measured latency gain and common behavior implementation, rather than
+making exact heap parity a reason to keep rebasing the stack. Deployments that
+routinely issue concurrent all-history reports should account for this transient
+memory cost when sizing the service.
 
-### Remaining work
+### Other reads
 
-The allocation profile points to PostgreSQL row-value conversion and timestamp
-formatting as the next targets. The catalog change reduces CPU work but does not
-remove those allocations. Keep further changes inside the shared Bun query and
-reduction path, and preserve attribution, window filtering, and pricing
-provenance. Repeat the main comparison before deciding to merge; the numbers
-above establish progress against the pushed stack, not that all gates pass.
+Same fixture and sampling method. These measurements cover the final reader;
+small differences remain sensitive to shared-host load.
+
+| Operation           | Backend  | Main ms | Final ms | Main MB | Final MB |
+| ------------------- | -------- | ------: | -------: | ------: | -------: |
+| ListSessions        | sqlite   |   1.149 |    1.395 |   0.235 |    0.250 |
+| ListSessions        | duckdb   |   1.051 |    1.052 |   0.257 |    0.264 |
+| ListSessions        | postgres |   1.730 |    2.371 |   0.248 |    0.253 |
+| SidebarSessionIndex | sqlite   |   2.106 |    2.508 |   1.409 |    1.574 |
+| SidebarSessionIndex | duckdb   |   4.180 |    3.180 |   1.511 |    1.547 |
+| SidebarSessionIndex | postgres |  17.871 |   19.148 |   1.531 |    1.520 |
+| Search              | sqlite   |  22.920 |   27.519 |   0.130 |    0.159 |
+| Search              | duckdb   |  99.572 |  111.163 |   0.106 |    0.121 |
+| Search              | postgres |  30.650 |   31.836 |   0.117 |    0.139 |
+| GetAllMessages      | sqlite   |   0.193 |    0.224 |   0.138 |    0.153 |
+| GetAllMessages      | duckdb   |   1.856 |    1.276 |   0.132 |    0.161 |
+| GetAllMessages      | postgres |   1.483 |    1.828 |   0.183 |    0.154 |
+| AnalyticsSummary    | sqlite   |  19.539 |   20.817 |   0.010 |    0.022 |
+| AnalyticsSummary    | duckdb   |   9.892 |    4.203 |   2.502 |    0.028 |
+| AnalyticsSummary    | postgres |  16.064 |   13.591 |   1.037 |    0.024 |
+
+### Tools and writes
+
+The published head's CI benchmark gate reported the year-range tools query at
+139.6 ms, 13.62 MB, and 662,300 allocations, against main's 25.51 ms, 0.406 MB,
+and 9,784 allocations on that runner. Its only three gate failures were this
+query's time, bytes, and allocation count. The final local query measures 22.11
+ms, 0.260 MB, and 5,014 allocations; local main measures 11.59 ms, 0.406 MB, and
+9,784 allocations. This removes the allocation regression and brings the local
+time ratio below the existing 2x gate without changing limits. CI must confirm
+the time ratio on its runner.
+
+Bulk insertion uses the same 200-message fixture and 20 iterations per sample.
+Local main is 3.31 ms and 0.487 MB; the stack is 3.32 ms and 0.393 MB, with
+allocations reduced from 1,756 to 915. The published CI run independently showed
+5.749 ms versus 5.743 ms and 0.487 MB versus 0.389 MB. Earlier local 77/39 ms
+samples were distorted by host variability and are not evidence of a speedup.
+
+The production atomic streaming-tail writer measured 11.37 ms for a 1,000-row
+session with one changed tail. Main has no equivalent `WriteSessionAtomic` entry
+point, so this is not presented as a before/after comparison.
+
+## Correctness and delivery
+
+The full database, DuckDB, export, activity, pricing, and PostgreSQL integration
+suites passed during this work. The final grouped reader passed PostgreSQL's
+usage and analytics cases, including complete SQLite/PostgreSQL result parity.
+Focused race checks cover arena result ownership, snapshot selection, pricing,
+and per-connection timezone conversion. Formatting and vet passed.
+
+Regression coverage preserves winning tokens, earliest attribution, billed
+searches, date/model/session filters, provider provenance, final-microsecond UTC
+filtering, timezone changes on one connection, result lifetime after pool reuse,
+and the original ordering of tied attributed winners. Survivor capacity stays
+constant when one request grows from 16 to 4,096 snapshots.
+
+The stack still requires its documented data-version rebuild. This performance
+assessment does not replace archive backup, recovery, and upgrade review in
+`docs/internal/storage-upgrade.md`. The combined tip is the acceptance target;
+intermediate PRs need not independently pass all checks.
+
+## Reproduction
+
+Run `BenchmarkStoreBackends` in `internal/backendbench` with
+`CGO_ENABLED=1 go test -tags fts5,benchdb ./internal/backendbench -run '^$' -bench BenchmarkStoreBackends -benchmem -benchtime 5x -count 3`
+as one command. Docker must be available for the disposable PostgreSQL fixture.
+With a Docker VM, point `DOCKER_HOST` at its host socket and
+`TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE` at the socket inside that VM.
+
+Set `AGENTSVIEW_BENCH_SNAPSHOT_REPETITIONS=16` for repeated identities.
+`AGENTSVIEW_BENCH_SESSIONS` and `AGENTSVIEW_BENCH_MESSAGES_PER_SESSION` adjust
+fixture size. Run `BenchmarkDailyUsageHeap/postgres` with
+`-benchtime 1x -count 1` for one and four concurrent cold requests. It samples
+Go heap every 5 ms and reports heap after one and two collections. Those
+measurements include fixture heap, exclude native driver/server memory, and are
+neither exact peaks nor process physical-footprint measurements.
+
+Run `BenchmarkGetAnalyticsToolsYearRange` and `BenchmarkInsertMessagesBatch` in
+`internal/db` with CGO, `fts5`, `-run '^$' -benchmem -benchtime 20x -count 3`.
+Use the same fixture source on both revisions. Do not compare a session-batch
+writer with a lower-level message-only API as though their work were identical.

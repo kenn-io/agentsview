@@ -188,3 +188,20 @@ func TestSQLiteAnalyticsLocalTimestampIsStrictAndDSTCorrect(t *testing.T) {
 	assert.Nil(t, invalid)
 	assert.Nil(t, missing)
 }
+
+func TestSQLiteAnalyticsTimezoneChangesOnOneConnection(t *testing.T) {
+	database := testDB(t)
+	conn, err := database.bunReader.Conn(t.Context())
+	require.NoError(t, err)
+	defer conn.Close()
+	for _, tc := range []struct{ zone, want string }{
+		{"America/New_York", "2026-03-08 03:01:00"},
+		{"UTC", "2026-03-08 07:01:00"},
+		{"America/New_York", "2026-03-08 03:01:00"},
+	} {
+		var got string
+		require.NoError(t, conn.NewRaw("SELECT agentsview_local_timestamp(?, ?)",
+			"2026-03-08T07:01:00Z", tc.zone).Scan(t.Context(), &got))
+		assert.Equal(t, tc.want, got)
+	}
+}

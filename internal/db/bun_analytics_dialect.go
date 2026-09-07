@@ -34,6 +34,12 @@ func analyticsGranularity(value string) string {
 func (sqliteBunAnalyticsDialect) LocalTimestamp(
 	operand, timezone string,
 ) BunSQLFragment {
+	// Canonical archive timestamps are UTC RFC3339 at microsecond precision.
+	// UTC reports need no timezone conversion. Preserve the stored fraction
+	// instead of SQLite datetime(), which rounds near-midnight timestamps.
+	if timezone == "UTC" {
+		return BunSQL("RTRIM(REPLACE(" + operand + ", 'T', ' '), 'Z')")
+	}
 	return BunSQL("agentsview_local_timestamp("+operand+", ?)", timezone)
 }
 

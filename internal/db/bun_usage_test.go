@@ -701,8 +701,8 @@ func TestCanonicalCursorUsageEventRowsValidatesPersistedValues(t *testing.T) {
 }
 
 // Repeated streaming updates must not reserve projection storage for every
-// candidate. Only distinct request groups should consume arena blocks.
-func TestBunDailyUsageSnapshotStorageTracksDistinctRequests(t *testing.T) {
+// candidate. Only surviving rows should consume arena storage.
+func TestBunDailyUsageSnapshotStorageTracksSurvivors(t *testing.T) {
 	for _, count := range []int{16, 4096} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			database := testDB(t)
@@ -727,7 +727,47 @@ func TestBunDailyUsageSnapshotStorageTracksDistinctRequests(t *testing.T) {
 			require.Len(t, rows, 1)
 			_, output, _, _, _ := dailyUsageRowTokens(rows[0])
 			assert.Equal(t, count, output)
-			assert.Len(t, arena.snapshots, 1, "repeated snapshots must share one arena block")
+			assert.LessOrEqual(t, cap(arena.rows), 2, "discarded snapshots must not enlarge survivor storage")
 		})
 	}
+}
+
+func TestBunDailyUsageGroupedSnapshotsPreserveSourceOrderAfterAttribution(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-04T11:00:00Z"
+	for _, id := range []string{"a", "b", "c"} {
+		require.NoError(t, database.UpsertSession(Session{
+			ID: id, Project: "project", Agent: "claude", Machine: "local",
+			StartedAt: &started, CreatedAt: started,
+		}))
+	}
+	// Identity order is opposite source order. Both winners inherit session a
+	// and ordinal zero, so the final tie must still follow sources b then c.
+	for _, tc := range []struct {
+		session, identity, model, timestamp string
+		ordinal, tokens                     int
+	}{
+		{"a", "z", "model-b", started, 1, 1},
+		{"a", "a", "model-c", started, 2, 1},
+		{"b", "z", "model-b", "2026-08-04T12:00:00Z", 0, 2},
+		{"c", "a", "model-c", "2026-08-04T12:00:00Z", 0, 2},
+	} {
+		require.NoError(t, database.InsertMessages([]Message{{
+			SessionID: tc.session, Ordinal: tc.ordinal, Role: "assistant",
+			Timestamp: tc.timestamp, Model: tc.model,
+			ClaudeMessageID: tc.identity, ClaudeRequestID: "request",
+			TokenUsage: fmt.Appendf(nil, `{"output_tokens":%d}`, tc.tokens),
+		}}))
+	}
+	common := NewBunStore(&sessionContractBackend{store: database.bunReader})
+	arena := new(usageReadArena)
+	defer arena.release()
+	filter := UsageFilter{Timezone: "UTC"}
+	rows, err := common.loadBunNormalizedDailyUsageRows(t.Context(), database.bunReader, filter, filter, arena)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "a", rows[0].sessionID)
+	assert.Equal(t, "a", rows[1].sessionID)
+	assert.Equal(t, "model-b", rows[0].model)
+	assert.Equal(t, "model-c", rows[1].model)
 }

@@ -26,7 +26,7 @@ type usagePriceInput struct {
 type usagePriceResult struct {
 	PricedModel, MatchedPattern        string
 	model                              string
-	rates                              export.ModelRates
+	lookup                             export.PricingLookup
 	RateOK                             bool
 	Cost, Savings                      money.Money
 	AuthoritativeCost                  *money.Money
@@ -38,7 +38,7 @@ type usagePriceResult struct {
 // Live reports need costs and provenance, while persisted rollups also need
 // the rate fingerprint. Compute it only at that persistence boundary.
 func (p usagePriceResult) rateHash() string {
-	return usageRateHash(p.model, p.PricedModel, p.MatchedPattern, p.RateOK, p.rates)
+	return usageRateHash(p.model, p.PricedModel, p.MatchedPattern, p.RateOK, p.lookup.Rates)
 }
 
 type usageRollupFact struct {
@@ -101,16 +101,17 @@ func priceUsageFact(
 	if model == "" {
 		model = input.Fact.Model
 	}
-	pricedModel, lookup := resolver.ResolveAt(
-		model, usageLookupModel(model, input.Timestamp),
-		usagePricingTimestamp(input.Timestamp),
-	)
+	canonicalModel := usageLookupModel(model, input.Timestamp)
+	timestamp := usagePricingTimestamp(input.Timestamp)
+	var pricedModel string
+	var lookup export.PricingLookup
 	reported := input.Fact.ReportedCostMicrodollars
-	if reported == nil || input.Fact.CostSource == CopilotReportedCostSource {
+	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource {
+		pricedModel, lookup = resolver.ResolveAt(model, canonicalModel, timestamp)
+	} else {
 		var err error
 		pricedModel, lookup, err = resolver.ResolveBilledAt(
-			input.ProviderID, model, usageLookupModel(model, input.Timestamp),
-			usagePricingTimestamp(input.Timestamp))
+			input.ProviderID, model, canonicalModel, timestamp)
 		if err != nil {
 			return usagePriceResult{}, fmt.Errorf("pricing usage row for model %q: %w", model, err)
 		}
@@ -120,7 +121,7 @@ func priceUsageFact(
 	}
 	result := usagePriceResult{
 		PricedModel: pricedModel, MatchedPattern: lookup.Pattern,
-		model: model, rates: lookup.Rates,
+		model: model, lookup: lookup,
 		RateOK: lookup.OK,
 	}
 	selectedRates := lookup.Rates
@@ -132,8 +133,7 @@ func priceUsageFact(
 	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource &&
 		(input.Fact.CacheReadTokens != 0 || input.Fact.CacheCreationTokens != 0) {
 		_, savingsLookup, err := resolver.ResolveBilledAt(
-			input.ProviderID, model, usageLookupModel(model, input.Timestamp),
-			usagePricingTimestamp(input.Timestamp))
+			input.ProviderID, model, canonicalModel, timestamp)
 		if err != nil {
 			return usagePriceResult{}, fmt.Errorf(
 				"pricing reported usage cache savings for model %q: %w", model, err)

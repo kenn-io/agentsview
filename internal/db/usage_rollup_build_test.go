@@ -3,6 +3,7 @@
 package db
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -428,4 +429,37 @@ func TestPriceCopilotStoreRequestsWithoutMessageOrdinal(t *testing.T) {
 			assert.Equal(t, tc.wantMicrodollars, total)
 		})
 	}
+}
+
+func TestDailyUsageAmountsPreservesReportedAndBilledProvenance(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "model-a",
+		Rates:        export.ModelRates{OutputPerMTok: money.Money{Microdollars: 1_000_000}},
+	}})
+	for _, tc := range []struct {
+		name     string
+		reported sql.NullInt64
+		wantCost int64
+	}{
+		{name: "computed", wantCost: 1_100_000},
+		{name: "reported", reported: sql.NullInt64{Int64: 77, Valid: true}, wantCost: 77},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, _, cost, _, err := dailyUsageAmounts(dailyUsageScanRow{
+				usageSource: "session", model: "model-a", providerID: "positai",
+				outputTokens: 1_000_000, cost: tc.reported, costSource: "provider-reported",
+			}, resolver)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantCost, cost.Microdollars)
+		})
+	}
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "model-a")
+	resolutions := block.Models["model-a"].Resolutions
+	require.Len(t, resolutions, 2)
+	assert.ElementsMatch(t, []int64{1_000_000, 1_100_000}, []int64{
+		resolutions[0].OutputCostPerMTok.Microdollars,
+		resolutions[1].OutputCostPerMTok.Microdollars,
+	})
 }

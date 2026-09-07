@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/timeutil"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 const pricingRevisionLayout = "2006-01-02T15:04:05.000000Z07:00"
@@ -1140,16 +1141,15 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 	eventQuery = eventQuery.ColumnExpr("COUNT(*) OVER() AS candidate_count")
 	claudeMessageQuery, _ := s.bunDailyUsageQueries(
 		store, queryFilter, false, referenceTime,
+		"m.claude_message_id ASC", "m.claude_request_id ASC",
 	)
 	claudeMessageQuery = claudeMessageQuery.
 		Where("m.claude_message_id != ?", "").
 		Where("m.claude_request_id != ?", "")
 	rows := arena.rows[:0]
-	snapshotCount := 0
 	defer func() {
 		arena.rows = rows
 	}()
-	metadata := make(map[string]bunDailyUsageProjection)
 	withinBounds := func(daily dailyUsageScanRow) bool {
 		if !bounded {
 			return true
@@ -1169,36 +1169,61 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 		}
 		return nil
 	}
-	selectionIndex := make(map[[2]string]int)
-	candidatePosition := 0
-	consumeClaude := func(row bunDailyUsageProjection) error {
+	var groupKey [2]string
+	var haveGroup bool
+	var selection activity.ClaudeSnapshotSelection
+	var winner, attribution bunDailyUsageProjection
+	flushClaude := func() {
+		if !haveGroup {
+			return
+		}
+		row := bunDailyUsageProjectionWithSessionMetadata(winner, attribution)
+		if !usageSourceMatches(row.Model, filter) ||
+			!bunDailyUsageSessionMatches(row, filter, referenceTime) {
+			return
+		}
 		daily := dailyUsageProjectionToRow(row)
+		daily.snapshotScanTime = dailyUsageProjectionTime(winner)
+		daily.snapshotSourceSession = winner.SessionID
+		daily.webSearchRequests = sql.NullInt64{
+			Int64: int64(selection.WebSearchRequests()), Valid: true,
+		}
+		if len(rows) == cap(rows) {
+			// These wide rows otherwise use Go's smaller large-slice growth
+			// increments, repeatedly copying the retained survivors.
+			capacity := max(2*len(rows), 1)
+			rows = slices.Grow(rows, capacity-len(rows))
+			// Keep doubling exact: allocator rounding at each small growth
+			// must not compound into a much larger final survivor buffer.
+			rows = rows[:len(rows):capacity]
+		}
+		rows = append(rows, daily)
+	}
+	consumeClaude := func(row bunDailyUsageProjection) error {
+		daily := dailyUsageProjectionToRowMode(row, false)
 		if !withinBounds(daily) {
 			return nil
 		}
-		metadata[row.SessionID] = row
-		fact, _ := dailyUsageFact(daily)
 		key := [2]string{row.ClaudeMessageID, row.ClaudeRequestID}
-		index, exists := selectionIndex[key]
-		if !exists {
-			index = snapshotCount
-			selectionIndex[key] = index
-			snapshotCount++
+		if !haveGroup || key != groupKey {
+			flushClaude()
+			groupKey, haveGroup = key, true
+			selection = activity.ClaudeSnapshotSelection{}
 		}
-		selected := arena.snapshot(index)
-		if selected.selection.Consider(activity.UsageRow{
+		fact := usagefacts.ParseTokenUsage(row.TokenJSON)
+		if selection.Consider(activity.UsageRow{
 			SessionID:         row.SessionID,
 			Timestamp:         dailyUsageProjectionSnapshotTimestamp(row),
 			MessageOrdinal:    usageRowMessageOrdinal(daily.messageOrdinal),
 			OutputTokens:      int(fact.OutputTokens),
 			WebSearchRequests: int(fact.WebSearchRequests),
-			ClaudeMessageID:   row.ClaudeMessageID,
-			ClaudeRequestID:   row.ClaudeRequestID,
+			ClaudeMessageID:   row.ClaudeMessageID, ClaudeRequestID: row.ClaudeRequestID,
 		}) {
-			selected.projection = row
-			selected.position = candidatePosition
+			winner = row
 		}
-		candidatePosition++
+		if selection.AttributionSessionID() == row.SessionID {
+			attribution = row
+		}
 		return nil
 	}
 
@@ -1234,32 +1259,8 @@ func (s *BunStore) loadBunNormalizedDailyUsageRows(
 		return nil, fmt.Errorf("querying Claude daily usage messages: %w", err)
 	}
 
-	// Preserve winner scan order before the stable daily ordering, including
-	// ties between distinct identities that general usage dedup may resolve.
-	arena.order = slices.Grow(arena.order[:0], snapshotCount)[:snapshotCount]
-	for i := range arena.order {
-		arena.order[i] = i
-	}
-	sort.Slice(arena.order, func(i, j int) bool {
-		return arena.snapshot(arena.order[i]).position < arena.snapshot(arena.order[j]).position
-	})
-	rows = slices.Grow(rows, snapshotCount)
-	for _, index := range arena.order {
-		selected := arena.snapshot(index)
-		row := selected.projection
-		if attributed, ok := metadata[selected.selection.AttributionSessionID()]; ok {
-			row = bunDailyUsageProjectionWithSessionMetadata(row, attributed)
-		}
-		if !usageSourceMatches(row.Model, filter) ||
-			!bunDailyUsageSessionMatches(row, filter, referenceTime) {
-			continue
-		}
-		daily := dailyUsageProjectionToRow(row)
-		daily.webSearchRequests = sql.NullInt64{
-			Int64: int64(selected.selection.WebSearchRequests()), Valid: true,
-		}
-		rows = append(rows, daily)
-	}
+	flushClaude()
+
 	sortDailyUsageRows(rows)
 	return rows, nil
 }
@@ -1389,6 +1390,7 @@ func bunDailyUsageSessionMatches(
 
 func (s *BunStore) bunDailyUsageQueries(
 	store bun.IDB, filter UsageFilter, matching bool, referenceTime time.Time,
+	messageOrderPrefix ...string,
 ) (*bun.SelectQuery, *bun.SelectQuery) {
 	timestampOrder := s.backend.TimestampOrderExpr
 	messageTimestampValue := func(column string) string {
@@ -1417,6 +1419,9 @@ func (s *BunStore) bunDailyUsageQueries(
 		timestampOrder(messageTimestampValue("m.timestamp")) + ", " +
 		timestampOrder(bunNullableTimestamp("s.started_at")) + ", " +
 		timestampOrder("s.created_at") + ")"
+	for _, order := range messageOrderPrefix {
+		messageQuery = messageQuery.OrderExpr(order)
+	}
 	messageQuery = messageQuery.
 		OrderExpr(messageTimestamp + " ASC").
 		OrderExpr("m.session_id ASC").
@@ -2125,7 +2130,19 @@ func dailyUsageRowPrecedes(left, right dailyUsageScanRow) bool {
 	if right.messageOrdinal.Valid {
 		rightOrdinal = right.messageOrdinal.Int64
 	}
-	return leftOrdinal < rightOrdinal
+	if leftOrdinal != rightOrdinal {
+		return leftOrdinal < rightOrdinal
+	}
+	// Grouped Claude reads must retain the old chronological source-scan
+	// order when attribution makes two winners share a session and ordinal.
+	// Ordinary/event rows precede Claude rows on exact ties, as before.
+	if left.snapshotSourceSession == "" || right.snapshotSourceSession == "" {
+		return left.snapshotSourceSession == "" && right.snapshotSourceSession != ""
+	}
+	if order := left.snapshotScanTime.Compare(right.snapshotScanTime); order != 0 {
+		return order < 0
+	}
+	return left.snapshotSourceSession < right.snapshotSourceSession
 }
 
 func dailyUsageRowTimestamp(row dailyUsageScanRow) string {
