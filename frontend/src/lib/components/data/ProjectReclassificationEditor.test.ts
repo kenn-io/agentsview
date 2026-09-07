@@ -560,9 +560,9 @@ describe("ProjectReclassificationEditor", () => {
     await flush();
 
     const otherPath = "/srv/worktrees/example/repo/other-branch";
-    expect(
-      screen.getByRole("button", { name: candidate.suggested_prefix }).textContent,
-    ).toContain(candidate.suggested_prefix);
+    expect(screen.getByRole("button", { name: candidate.suggested_prefix }).textContent).toContain(
+      candidate.suggested_prefix,
+    );
     expect(screen.getByRole("button", { name: otherPath }).textContent).toContain(otherPath);
     expect(screen.getAllByText("remote.example")).toHaveLength(2);
     await fireEvent.click(screen.getByRole("button", { name: otherPath }));

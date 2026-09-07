@@ -53,21 +53,23 @@ describe("ProjectBatchReclassificationEditor", () => {
     api.candidates.mockReset();
     api.preview.mockReset();
     api.apply.mockReset();
-    api.candidates.mockImplementation(({ projectLabel }: { projectLabel: string }) =>
+    api.candidates.mockImplementation(({ project_label }: { project_label: string }) =>
       Promise.resolve({
-        candidates: [{
-          id: `candidate-${projectLabel}`,
-          machine: "machine-a",
-          suggested_prefix: `/worktrees/${projectLabel}`,
-          contributing_sessions: 1,
-          distinct_cwds: 1,
-          evidence_kind: "snapshot",
-          examples: [],
-          available: true,
-        }],
+        candidates: [
+          {
+            id: `candidate-${project_label}`,
+            machine: "machine-a",
+            suggested_prefix: `/worktrees/${project_label}`,
+            contributing_sessions: 1,
+            distinct_cwds: 1,
+            evidence_kind: "snapshot",
+            examples: [],
+            available: true,
+          },
+        ],
       }),
     );
-    api.preview.mockImplementation(({ requestBody }: { requestBody: { path_prefix: string } }) =>
+    api.preview.mockImplementation((requestBody: { path_prefix: string }) =>
       Promise.resolve({
         mapping_token: `token:${requestBody.path_prefix}`,
         normalized_project: "agentsview",
@@ -94,11 +96,7 @@ describe("ProjectBatchReclassificationEditor", () => {
     component = mount(ProjectBatchReclassificationEditor, {
       target: document.body,
       props: {
-        rows: [
-          row("k1", "source-alpha"),
-          row("k2", "source-beta"),
-          row("k3", "source-gamma"),
-        ],
+        rows: [row("k1", "source-alpha"), row("k2", "source-beta"), row("k3", "source-gamma")],
         projects: [{ name: "agentsview", session_count: 20 }],
         onRefresh,
         onComplete,
@@ -121,7 +119,7 @@ describe("ProjectBatchReclassificationEditor", () => {
     await flush();
 
     expect(api.apply).toHaveBeenCalledTimes(3);
-    expect(api.apply.mock.calls.map(([request]) => request.requestBody)).toEqual([
+    expect(api.apply.mock.calls.map(([request]) => request)).toEqual([
       expect.objectContaining({
         path_prefix: "/worktrees/source-alpha",
         project: "agentsview",

@@ -57,7 +57,7 @@
     loadingId = sample.id;
     try {
       const detail = await callGenerated(
-        () => SessionsService.getApiV1SessionsId({ id: sample.id }),
+        (options) => SessionsService.getApiV1SessionsById({ id: sample.id }, options),
         signal,
       );
       if (!detailRead.isCurrent(signal)) return;

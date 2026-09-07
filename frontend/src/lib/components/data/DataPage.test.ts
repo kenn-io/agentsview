@@ -27,7 +27,7 @@ vi.mock("../../api/generated/index", () => ({
   },
   SessionsService: {
     getApiV1Sessions: api.listSessions,
-    getApiV1SessionsIdMessages: api.listMessages,
+    getApiV1SessionsByIdMessages: api.listMessages,
   },
   SettingsService: {
     postApiV1SettingsWorktreeMappingsPreview: api.preview,

@@ -1449,12 +1449,12 @@ class SessionsStore {
   }
 
   async assignSessionProject(id: string, project: string) {
-    configureGeneratedClient();
-    const assignment = await SettingsService
-      .putApiV1SettingsSessionProjectAssignmentsSessionId({
+    const assignment = await SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId(
+      {
         sessionId: id,
-        requestBody: { project },
-      });
+      },
+      { project },
+    );
     const idx = this.sessions.findIndex((session) => session.id === id);
     if (idx !== -1) {
       this.sessions[idx] = {
@@ -1469,11 +1469,9 @@ class SessionsStore {
   }
 
   async clearSessionProjectAssignment(id: string) {
-    configureGeneratedClient();
-    const cleared = await SettingsService
-      .deleteApiV1SettingsSessionProjectAssignmentsSessionId({
-        sessionId: id,
-      });
+    const cleared = await SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId({
+      sessionId: id,
+    });
     const idx = this.sessions.findIndex((session) => session.id === id);
     if (idx !== -1) {
       this.sessions[idx] = {
