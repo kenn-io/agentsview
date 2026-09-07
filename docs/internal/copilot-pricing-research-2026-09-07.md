@@ -128,3 +128,21 @@ rebuilt under the corrected classification.
 This fix does not establish that every model-provider catalog rate matches
 GitHub's rate for a particular account and date. Reported Copilot usage cost,
 catalog estimates, premium requests, and invoice charges remain distinct.
+
+## Shared-store freshness
+
+The official CLI 1.0.83 native writer was also exercised against a scratch
+SQLite database to check whether OpenCode's session-timestamp optimization
+applies. After `upsertSession`, the experiment set `sessions.updated_at` to
+`2000-01-01T00:00:00Z`, passed an `assistant.usage` event through
+`handleTrackingEventForSession`, and called `flushTrackingForSession`. The usage
+row was inserted, but `sessions.updated_at` remained at the sentinel value.
+Session timestamps therefore cannot identify Copilot usage appends.
+
+The producer schema has an index on `assistant_usage_events(session_id, id)`.
+Agentsview reads each session's maximum usage ID through that index and hashes
+usage payloads only for changed sessions. It caches transcript content hashes
+using file change metadata. Startup and the first sync after five minutes verify
+all usage rows, including edits and deletions below an unchanged maximum ID.
+This retains OpenCode's distinction between lightweight metadata discovery and
+changed-session payload work without relying on an unchanged timestamp.

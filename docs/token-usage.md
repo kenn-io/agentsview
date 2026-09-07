@@ -496,6 +496,15 @@ catalog-priced because they were created under the premium-request pricing
 model. A `session.shutdown.totalNanoAiu` total remains the only authoritative
 reported-cost source.
 
+Copilot sync caches transcript hashes and fingerprints usage per session. A
+shared-store write checks lightweight session metadata and rereads usage only
+for sessions whose latest usage-row ID changed. Unchanged transcripts are not
+reread or rearchived. Startup and the first sync after each five-minute
+verification interval scan all usage rows to catch edits or deletions below an
+unchanged latest ID. The shared database's modification time is not used as a
+session timestamp. Candidate enumeration and metadata checks still grow with
+the number of sessions, as they do for OpenCode.
+
 Each store row is priced as an individual model call, so request-size pricing
 bands apply without requiring an associated transcript message. Separate calls
 are not combined to choose a higher band. Explicit output from an uncovered

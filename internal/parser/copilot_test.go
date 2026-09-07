@@ -813,40 +813,23 @@ func TestCopilotProviderStoreChangeRefreshesSession(t *testing.T) {
 			`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`+"\n",
 	), 0o644))
 	storePath := filepath.Join(root, "session-store.db")
-	require.NoError(t, os.WriteFile(storePath, []byte("before"), 0o644))
-	storeInfo, err := os.Stat(storePath)
+	store := createCopilotUsageStore(t, root)
+	_, err := store.Exec(`INSERT INTO sessions VALUES ('store-fresh');
+	 INSERT INTO assistant_usage_events VALUES (1, 'store-fresh', 'gpt-5.4', 100, 3, 0, 0, 0, '2026-09-04T17:00:02Z')`)
 	require.NoError(t, err)
-
 	provider := newCopilotTestProvider(t, root)
-	hasher, ok := any(provider).(MultiFileStatHasher)
-	require.True(t, ok)
-	assert.Equal(t, CapabilitySupported,
-		provider.Capabilities().Source.MultiFileStatHash)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	before, err := provider.Fingerprint(context.Background(), sources[0])
 	require.NoError(t, err)
-	beforeStatHash := hasher.ComputeMultiFileStatHash(eventsPath)
-
-	require.NoError(t, os.WriteFile(storePath, []byte("after!"), 0o644))
-	require.NoError(t, os.Chtimes(
-		storePath, storeInfo.ModTime(), storeInfo.ModTime(),
-	))
-	afterStoreInfo, err := os.Stat(storePath)
+	_, err = store.Exec(`INSERT INTO assistant_usage_events VALUES
+	 (2, 'store-fresh', 'gpt-5.4', 100, 7, 0, 0, 0, '2026-09-04T17:00:03Z')`)
 	require.NoError(t, err)
-	assert.Equal(t, storeInfo.Size(), afterStoreInfo.Size())
-	assert.Equal(t, storeInfo.ModTime(), afterStoreInfo.ModTime())
 	after, err := provider.Fingerprint(context.Background(), sources[0])
 	require.NoError(t, err)
-
-	afterStatHash := hasher.ComputeMultiFileStatHash(eventsPath)
-	if beforeStatHash != 0 {
-		assert.NotEqual(t, beforeStatHash, afterStatHash,
-			"a ctime-aware stat digest must detect a same-size, mtime-preserving store update")
-		assert.NotEqual(t, before.Hash, after.Hash,
-			"the final fingerprint must retain ctime-aware store changes")
-	}
+	assert.NotEqual(t, before.Hash, after.Hash)
+	assert.Equal(t, before.MTimeNS, after.MTimeNS, "store updates do not change transcript timestamps")
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)

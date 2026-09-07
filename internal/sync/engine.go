@@ -2336,6 +2336,11 @@ func providerChangedPathForceParse(
 		return eventKind == "remove" &&
 			providerDeletedPhysicalSQLiteSource(agent, sourcePath)
 	}
+	// Copilot workspace and shared-store events use per-session content hashes.
+	// Force would bypass those hashes and reparse every store member.
+	if agent == parser.AgentCopilot && filepath.Clean(sourcePath) != filepath.Clean(eventPath) {
+		return false
+	}
 	if mode != parser.ProviderMigrationProviderAuthoritative {
 		return true
 	}
@@ -14544,15 +14549,6 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// on scheduled syncs. Gemini relies on the post-fingerprint DB hash check
 	// instead (providerFingerprintHashRequiredForFreshness), which catches a
 	// resolved-project change even when size and mtime are unchanged.
-	case parser.AgentCopilot:
-		size, mtime := parser.CopilotCompositeFileStat(path, info)
-		effectiveInfo := fakeSnapshotInfo{
-			fSize:  size,
-			fMtime: mtime,
-		}
-		if e.shouldSkipByPath(path, effectiveInfo) {
-			return mtime, true
-		}
 	case parser.AgentRooCode:
 		// RooCode's fingerprint is composite (history_item.json plus
 		// ui_messages.json) and content-hashes both files. The

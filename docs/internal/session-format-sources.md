@@ -566,6 +566,15 @@ add an archived or maintained mirror without replacing the original identity.
   [pricing investigation](copilot-pricing-research-2026-09-07.md) for
   reproducible producer evidence and remaining billing limits. Store rows are
   request-scoped; a message ordinal is not a billing requirement.
+- **Freshness evidence reverified 2026-09-07:** The official CLI 1.0.83 native
+  store writer inserts usage rows without advancing `sessions.updated_at`. Its
+  `(session_id, id)` usage index supports a latest-row lookup per session.
+  Agentsview uses this lookup for changed-store discovery, caches transcript
+  content hashes, and verifies all usage rows on startup and after a
+  five-minute interval. Older-row edits and deletions can wait until that
+  verification; appends and latest-row deletions change the per-session marker
+  immediately. See the producer experiment in the pricing investigation linked
+  above.
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
   Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and
