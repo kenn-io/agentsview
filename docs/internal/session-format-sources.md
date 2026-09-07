@@ -557,6 +557,14 @@ add an archived or maintained mirror without replacing the original identity.
   source for sessions starting on or after June 1, 2026. Assistant messages
   can persist model identity and output tokens; without either richer source,
   Agentsview records only that known output usage.
+- **Pricing evidence reverified 2026-09-07:** GitHub documents per-model-call
+  SDK usage events and Copilot-specific input-size price bands. Static
+  inspection of the official CLI 1.0.83 distribution confirms the store schema
+  and additive reporting SQL, but does not fully establish the event-to-row
+  mapping. See the cited
+  [pricing investigation](copilot-pricing-research-2026-09-07.md) for package
+  provenance, plan differences, and unresolved billing details. A message
+  ordinal is an Agentsview association, not a GitHub billing requirement.
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
   Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and
