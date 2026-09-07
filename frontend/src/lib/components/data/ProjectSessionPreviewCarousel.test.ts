@@ -7,7 +7,7 @@ import type { DbWorktreeReclassificationSessionSample } from "../../api/generate
 const api = vi.hoisted(() => ({ getSession: vi.fn() }));
 
 vi.mock("../../api/generated/index", () => ({
-  SessionsService: { getApiV1SessionsId: api.getSession },
+  SessionsService: { getApiV1SessionsById: api.getSession },
 }));
 vi.mock("../../api/runtime.js", () => ({
   callGenerated: (request: () => Promise<unknown>) => request(),
@@ -88,7 +88,7 @@ describe("ProjectSessionPreviewCarousel", () => {
     );
     await flush();
 
-    expect(api.getSession).toHaveBeenNthCalledWith(1, { id: "session-1" });
+    expect(api.getSession).toHaveBeenNthCalledWith(1, { id: "session-1" }, undefined);
     expect(screen.getByText("Fix the first project")).toBeTruthy();
     expect(screen.getByText("project-a-old")).toBeTruthy();
     expect(screen.getByText("project-a")).toBeTruthy();
@@ -98,7 +98,7 @@ describe("ProjectSessionPreviewCarousel", () => {
     );
     await flush();
 
-    expect(api.getSession).toHaveBeenNthCalledWith(2, { id: "session-2" });
+    expect(api.getSession).toHaveBeenNthCalledWith(2, { id: "session-2" }, undefined);
     expect(screen.getByText("Review the second project")).toBeTruthy();
     expect(screen.getByText("project-b-old")).toBeTruthy();
     expect(screen.getByText("/worktrees/project-a/branch-two")).toBeTruthy();

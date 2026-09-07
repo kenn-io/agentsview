@@ -57,9 +57,9 @@
     loadError = "";
     try {
       const response = await callGenerated(
-        () => DataService.getApiV1DataProjectsProjectKeySessions({
+        (options) => DataService.getApiV1DataProjectsByProjectKeySessions({
           projectKey,
-        }),
+        }, options),
         signal,
       );
       if (!sessionsRead.isCurrent(signal)) return;
@@ -101,10 +101,9 @@
     assignmentRefreshError = "";
     try {
       const assignment = await callGenerated(() =>
-        SettingsService.putApiV1SettingsSessionProjectAssignmentsSessionId({
+        SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId({
           sessionId: session.id,
-          requestBody: { project: target },
-        }),
+        }, { project: target }),
       );
       let inventoryRefreshed = false;
       try {
@@ -137,7 +136,7 @@
     assignmentRefreshError = "";
     try {
       const cleared = await callGenerated(() =>
-        SettingsService.deleteApiV1SettingsSessionProjectAssignmentsSessionId({
+        SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId({
           sessionId: session.id,
         }),
       );
@@ -172,12 +171,13 @@
     messagesLoadingId = sessionId;
     try {
       const response = await callGenerated(
-        () => SessionsService.getApiV1SessionsIdMessages({
+        (options) => SessionsService.getApiV1SessionsByIdMessages({
           id: sessionId,
+        }, {
           limit: 12,
           direction: "asc",
           roles: "user,assistant",
-        }),
+        }, options),
         signal,
       );
       if (!messagesRead.isCurrent(signal)) return;

@@ -6,8 +6,8 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 

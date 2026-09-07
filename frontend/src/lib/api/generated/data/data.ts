@@ -10,8 +10,10 @@ import type {
   DbCompactResult,
   DbProjectInventory,
   DbStripImagesReport,
+  DbSessionPage,
   GetApiV1DataProjectReclassificationCandidatesParams,
   GetApiV1DataProjectRulesParams,
+  GetApiV1DataProjectsByProjectKeySessionsPathParameters,
 } from "../models";
 
 import { orvalFetch } from "../../runtime.ts";
@@ -173,5 +175,24 @@ export const postApiV1DataStripImagesPreview = async (
     method: "POST",
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
     body: JSON.stringify(dataStripImagesRequest),
+  });
+};
+
+export const getGetApiV1DataProjectsByProjectKeySessionsUrl = ({
+  projectKey,
+}: GetApiV1DataProjectsByProjectKeySessionsPathParameters) => {
+  return `/api/v1/data/projects/${encodeURIComponent(String(projectKey))}/sessions`;
+};
+
+/**
+ * @summary List sessions for an opaque project identity
+ */
+export const getApiV1DataProjectsByProjectKeySessions = async (
+  { projectKey }: GetApiV1DataProjectsByProjectKeySessionsPathParameters,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbSessionPage> => {
+  return orvalFetch<DbSessionPage>(getGetApiV1DataProjectsByProjectKeySessionsUrl({ projectKey }), {
+    ...options,
+    method: "GET",
   });
 };

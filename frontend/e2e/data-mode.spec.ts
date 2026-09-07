@@ -1,8 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const isDuckDBBackend = process.env.AGENTSVIEW_E2E_BACKEND === "duckdb";
-const mappingWorkspaceE2EEnabled =
-  process.env.PROJECT_MAPPING_WORKSPACE_E2E_ENABLED === "true";
+const mappingWorkspaceE2EEnabled = process.env.PROJECT_MAPPING_WORKSPACE_E2E_ENABLED === "true";
 const wrongProject = "wrong_branch_label";
 const targetProject = "sample_service";
 const machine = "remote-example-host";
@@ -17,11 +16,7 @@ function waitForApiResponse(page: Page, method: string, pathname: string) {
   return page
     .waitForResponse((response) => {
       const url = new URL(response.url());
-      return (
-        response.request().method() === method &&
-        url.pathname === pathname &&
-        response.ok()
-      );
+      return response.request().method() === method && url.pathname === pathname && response.ok();
     })
     .then(async (response) => {
       await response.body();
@@ -79,11 +74,7 @@ test.describe("Data mode project reclassification", () => {
     // accessible name computation ignores once the link has text content.
     const link = page.getByTitle(`View ${wrongProject} in Data`);
     await expect(link).toBeVisible();
-    const inventoryPromise = waitForApiResponse(
-      page,
-      "GET",
-      "/api/v1/data/projects",
-    );
+    const inventoryPromise = waitForApiResponse(page, "GET", "/api/v1/data/projects");
     const candidatesPromise = waitForApiResponse(
       page,
       "GET",
@@ -95,24 +86,15 @@ test.describe("Data mode project reclassification", () => {
     await expect(page).toHaveURL(/\/data\?.*project_key=/);
     await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
     const ws = workspace(page);
-    await expect(
-      ws.getByRole("heading", { name: wrongProject }),
-    ).toBeVisible();
-    await expect(
-      ws.getByRole("button", { name: "Folder suggestions" }),
-    ).toHaveAttribute("aria-expanded", "true");
-    await expect(
-      ws.getByRole("button", { name: worktreeRoot }),
-    ).toBeVisible();
-    const correctionHeader = ws
-      .getByRole("heading", { name: "Project correction" })
-      .locator("..");
-    await expect(
-      correctionHeader.getByText(machine, { exact: true }),
-    ).toBeVisible();
-    await expect(
-      ws.locator("header").getByText("2 sessions", { exact: true }),
-    ).toBeVisible();
+    await expect(ws.getByRole("heading", { name: wrongProject })).toBeVisible();
+    await expect(ws.getByRole("button", { name: "Folder suggestions" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect(ws.getByRole("button", { name: worktreeRoot })).toBeVisible();
+    const correctionHeader = ws.getByRole("heading", { name: "Project correction" }).locator("..");
+    await expect(correctionHeader.getByText(machine, { exact: true })).toBeVisible();
+    await expect(ws.locator("header").getByText("2 sessions", { exact: true })).toBeVisible();
 
     const prefix = ws.getByRole("textbox", { name: "Path prefix" });
     await expect(prefix).toHaveValue(worktreeRoot);
@@ -126,17 +108,11 @@ test.describe("Data mode project reclassification", () => {
       "POST",
       "/api/v1/settings/worktree-mappings/preview",
     );
-    await page
-      .getByRole("option", { name: `Use project "${targetProject}"` })
-      .click();
+    await page.getByRole("option", { name: `Use project "${targetProject}"` }).click();
 
     await previewPromise;
-    await expect(
-      ws.getByText("2 sessions matched", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      ws.getByText("2 sessions will change", { exact: true }),
-    ).toBeVisible();
+    await expect(ws.getByText("2 sessions matched", { exact: true })).toBeVisible();
+    await expect(ws.getByText("2 sessions will change", { exact: true })).toBeVisible();
     await expect(ws.getByText("1 project", { exact: true })).toBeVisible();
 
     const reclassifyPromise = waitForApiResponse(
@@ -144,11 +120,7 @@ test.describe("Data mode project reclassification", () => {
       "POST",
       "/api/v1/settings/worktree-mappings/reclassify",
     );
-    const refreshPromise = waitForApiResponse(
-      page,
-      "GET",
-      "/api/v1/data/projects",
-    );
+    const refreshPromise = waitForApiResponse(page, "GET", "/api/v1/data/projects");
     await ws.getByRole("button", { name: "Save correction" }).click();
     await Promise.all([reclassifyPromise, refreshPromise]);
 
@@ -158,25 +130,15 @@ test.describe("Data mode project reclassification", () => {
     await expect(page.getByRole("row", { name: targetProject })).toBeVisible();
     await expect(page.getByRole("row", { name: wrongProject })).toHaveCount(0);
 
-    const rulesPromise = waitForApiResponse(
-      page,
-      "GET",
-      "/api/v1/data/project-rules",
-    );
+    const rulesPromise = waitForApiResponse(page, "GET", "/api/v1/data/project-rules");
     await page
       .locator('[aria-label="Data view"]')
       .getByText("Project mapping rules", { exact: true })
       .click();
     await rulesPromise;
-    await expect(
-      page.getByRole("heading", { name: "Worktree mappings" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Worktree mappings" })).toBeVisible();
     await page.getByRole("button", { name: "Select machine" }).click();
-    const machineRulesPromise = waitForApiResponse(
-      page,
-      "GET",
-      "/api/v1/data/project-rules",
-    );
+    const machineRulesPromise = waitForApiResponse(page, "GET", "/api/v1/data/project-rules");
     await page.getByRole("option", { name: machine, exact: true }).click();
     await machineRulesPromise;
 
@@ -216,24 +178,12 @@ test.describe("Data mode project reclassification", () => {
     await row.click();
 
     const ws = workspace(page);
-    await expect(
-      ws.getByRole("button", { name: "Folder suggestions" }),
-    ).toBeVisible();
-    await expect(
-      ws.getByRole("button", { name: worktreeRoot }),
-    ).toBeVisible();
-    await expect(ws.getByRole("note")).toContainText(
-      "Changes are unavailable here.",
-    );
-    await expect(
-      ws.getByRole("textbox", { name: "Path prefix" }),
-    ).toHaveCount(0);
-    await expect(
-      ws.getByRole("button", { name: "Project", exact: true }),
-    ).toHaveCount(0);
-    await expect(
-      ws.getByRole("button", { name: "Save correction" }),
-    ).toHaveCount(0);
+    await expect(ws.getByRole("button", { name: "Folder suggestions" })).toBeVisible();
+    await expect(ws.getByRole("button", { name: worktreeRoot })).toBeVisible();
+    await expect(ws.getByRole("note")).toContainText("Changes are unavailable here.");
+    await expect(ws.getByRole("textbox", { name: "Path prefix" })).toHaveCount(0);
+    await expect(ws.getByRole("button", { name: "Project", exact: true })).toHaveCount(0);
+    await expect(ws.getByRole("button", { name: "Save correction" })).toHaveCount(0);
 
     expect(mutationRequests).toEqual([]);
   });

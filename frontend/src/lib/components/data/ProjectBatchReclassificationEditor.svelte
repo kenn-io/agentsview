@@ -97,10 +97,10 @@
         rows.map(async (row) => ({
           row,
           response: await callGenerated(
-            () => DataService.getApiV1DataProjectReclassificationCandidates({
-              projectLabel: row.label,
-              projectKey: row.project_key,
-            }),
+            (options) => DataService.getApiV1DataProjectReclassificationCandidates({
+              project_label: row.label,
+              project_key: row.project_key,
+            }, options),
             signal,
           ),
         })),
@@ -184,9 +184,7 @@
         usableCandidates.map(async (entry) => ({
           entry,
           preview: await callGenerated(
-            () => SettingsService.postApiV1SettingsWorktreeMappingsPreview({
-              requestBody: draft(entry),
-            }),
+            (options) => SettingsService.postApiV1SettingsWorktreeMappingsPreview(draft(entry), options),
             signal,
           ),
         })),
@@ -213,11 +211,11 @@
       for (const entry of usableCandidates) {
         const requestBody = draft(entry);
         const current = await callGenerated(() =>
-          SettingsService.postApiV1SettingsWorktreeMappingsPreview({ requestBody }),
+          SettingsService.postApiV1SettingsWorktreeMappingsPreview(requestBody),
         );
         await callGenerated(() =>
           SettingsService.postApiV1SettingsWorktreeMappingsReclassify({
-            requestBody: { ...requestBody, mapping_token: current.mapping_token },
+            ...requestBody, mapping_token: current.mapping_token,
           }),
         );
         savedCount += 1;

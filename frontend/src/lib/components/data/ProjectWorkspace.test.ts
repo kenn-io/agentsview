@@ -19,22 +19,21 @@ const api = vi.hoisted(() => ({
 vi.mock("../../api/generated/index", () => ({
   DataService: {
     getApiV1DataProjectReclassificationCandidates: api.candidates,
-    getApiV1DataProjectsProjectKeySessions: api.listSessions,
+    getApiV1DataProjectsByProjectKeySessions: api.listSessions,
   },
   SessionsService: {
-    getApiV1SessionsIdMessages: api.listMessages,
+    getApiV1SessionsByIdMessages: api.listMessages,
   },
   SettingsService: {
     postApiV1SettingsWorktreeMappingsPreview: api.preview,
     postApiV1SettingsWorktreeMappingsReclassify: api.apply,
-    putApiV1SettingsSessionProjectAssignmentsSessionId: api.assignSession,
-    deleteApiV1SettingsSessionProjectAssignmentsSessionId: api.clearSession,
+    putApiV1SettingsSessionProjectAssignmentsBySessionId: api.assignSession,
+    deleteApiV1SettingsSessionProjectAssignmentsBySessionId: api.clearSession,
   },
 }));
 vi.mock("../../api/runtime.js", () => ({
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
-  configureGeneratedClient: vi.fn(),
   isRemoteConnection: vi.fn(() => false),
 }));
 
@@ -244,15 +243,20 @@ describe("ProjectWorkspace", () => {
     await flush();
     await flush();
 
-    expect(api.listSessions).toHaveBeenCalledWith({
+    expect(api.listSessions.mock.lastCall?.[0]).toEqual({
       projectKey: "pl1:sha256:wrong",
     });
-    expect(api.listMessages).toHaveBeenCalledWith({
-      id: "session-1",
-      limit: 12,
-      direction: "asc",
-      roles: "user,assistant",
-    });
+    expect(api.listMessages).toHaveBeenCalledWith(
+      {
+        id: "session-1",
+      },
+      {
+        limit: 12,
+        direction: "asc",
+        roles: "user,assistant",
+      },
+      undefined,
+    );
     expect(screen.getByText("The repository layout shows this belongs to project A.")).toBeTruthy();
     expect(screen.queryByTitle(m.message_content_pin_message())).toBeNull();
   });
@@ -327,17 +331,24 @@ describe("ProjectWorkspace", () => {
     await fireEvent.click(screen.getByRole("button", { name: m.data_session_assignment_save() }));
     await flush();
 
-    expect(api.assignSession).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      requestBody: { project: "target-project" },
-    });
+    expect(api.assignSession).toHaveBeenCalledWith(
+      {
+        sessionId: "session-1",
+      },
+      { project: "target-project" },
+    );
     expect(onRefresh).toHaveBeenCalledWith("pl1:sha256:wrong", "target-project");
-    expect(api.listMessages).toHaveBeenLastCalledWith({
-      id: "session-automated",
-      limit: 12,
-      direction: "asc",
-      roles: "user,assistant",
-    });
+    expect(api.listMessages).toHaveBeenLastCalledWith(
+      {
+        id: "session-automated",
+      },
+      {
+        limit: 12,
+        direction: "asc",
+        roles: "user,assistant",
+      },
+      undefined,
+    );
   });
 
   it("disables carousel navigation while an assignment is pending", async () => {
@@ -359,11 +370,13 @@ describe("ProjectWorkspace", () => {
     await flush();
 
     expect(
-      screen.getByRole("button", { name: m.data_reclassify_session_preview_previous() })
+      screen
+        .getByRole("button", { name: m.data_reclassify_session_preview_previous() })
         .getAttribute("disabled"),
     ).not.toBeNull();
     expect(
-      screen.getByRole("button", { name: m.data_reclassify_session_preview_next() })
+      screen
+        .getByRole("button", { name: m.data_reclassify_session_preview_next() })
         .getAttribute("disabled"),
     ).not.toBeNull();
 
@@ -429,9 +442,11 @@ describe("ProjectWorkspace", () => {
     await flush();
 
     expect(screen.getByText(m.data_session_assignment_manual())).toBeTruthy();
-    await fireEvent.click(screen.getByRole("button", {
-      name: m.data_session_assignment_use_automatic(),
-    }));
+    await fireEvent.click(
+      screen.getByRole("button", {
+        name: m.data_session_assignment_use_automatic(),
+      }),
+    );
     await flush();
 
     expect(api.clearSession).toHaveBeenCalledWith({ sessionId: "session-1" });
@@ -462,17 +477,24 @@ describe("ProjectWorkspace", () => {
     await fireEvent.click(assignButton);
     await flush();
 
-    expect(api.assignSession).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      requestBody: { project: "wrong-project" },
-    });
+    expect(api.assignSession).toHaveBeenCalledWith(
+      {
+        sessionId: "session-1",
+      },
+      { project: "wrong-project" },
+    );
     expect(onRefresh).toHaveBeenCalledWith("pl1:sha256:wrong", "wrong-project");
-    expect(api.listMessages).toHaveBeenLastCalledWith({
-      id: "session-1",
-      limit: 12,
-      direction: "asc",
-      roles: "user,assistant",
-    });
+    expect(api.listMessages).toHaveBeenLastCalledWith(
+      {
+        id: "session-1",
+      },
+      {
+        limit: 12,
+        direction: "asc",
+        roles: "user,assistant",
+      },
+      undefined,
+    );
   });
 
   it("opens the existing all-folders correction for one selected project", async () => {
@@ -489,9 +511,9 @@ describe("ProjectWorkspace", () => {
     expect(
       screen.getByRole("button", { name: m.data_workspace_correct_one_folder() }),
     ).toBeTruthy();
-    expect(api.candidates).toHaveBeenLastCalledWith({
-      projectLabel: "wrong-project",
-      projectKey: "pl1:sha256:wrong",
+    expect(api.candidates.mock.lastCall?.[0]).toEqual({
+      project_label: "wrong-project",
+      project_key: "pl1:sha256:wrong",
     });
   });
 
