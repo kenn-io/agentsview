@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,8 @@ type cursorStoreReadStats struct {
 	Reachable        int
 	DecodedTurns     int
 }
+
+var cursorStoreReadDir = os.ReadDir
 
 type cursorStoreTurn struct {
 	UserDecoded      bool
@@ -112,15 +115,19 @@ func (i *cursorStoreIndex) initialized(chatsRoot string) bool {
 	return ok
 }
 
-func (i *cursorStoreIndex) refresh(chatsRoot string) {
+func (i *cursorStoreIndex) refresh(chatsRoot string) error {
 	if i == nil || chatsRoot == "" {
-		return
+		return nil
 	}
 	key := filepath.Clean(chatsRoot)
-	paths := cursorStorePathsUnderChats(key)
+	paths, err := cursorStorePathsUnderChats(key)
+	if err != nil {
+		return err
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.roots[key] = paths
+	return nil
 }
 
 func (i *cursorStoreIndex) validPath(
@@ -680,22 +687,33 @@ func cursorStoreTranscriptPair(
 	return 0, 0, false
 }
 
-func cursorStorePathsUnderChats(chatsRoot string) map[string]string {
+func cursorStorePathsUnderChats(chatsRoot string) (map[string]string, error) {
 	paths := make(map[string]string)
 	if chatsRoot == "" {
-		return paths
+		return paths, nil
 	}
-	entries, err := os.ReadDir(chatsRoot)
+	entries, err := cursorStoreReadDir(chatsRoot)
 	if err != nil {
-		return paths
+		if errors.Is(err, os.ErrNotExist) {
+			return paths, nil
+		}
+		return nil, fmt.Errorf("read Cursor chats root %s: %w", chatsRoot, err)
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		agentDirs, readErr := os.ReadDir(filepath.Join(chatsRoot, entry.Name()))
+		agentDirs, readErr := cursorStoreReadDir(
+			filepath.Join(chatsRoot, entry.Name()),
+		)
 		if readErr != nil {
-			continue
+			if errors.Is(readErr, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf(
+				"read Cursor workspace %s: %w",
+				filepath.Join(chatsRoot, entry.Name()), readErr,
+			)
 		}
 		for _, agentEntry := range agentDirs {
 			if !agentEntry.IsDir() || !IsValidSessionID(agentEntry.Name()) {
@@ -709,7 +727,7 @@ func cursorStorePathsUnderChats(chatsRoot string) map[string]string {
 			}
 		}
 	}
-	return paths
+	return paths, nil
 }
 
 func cursorStorePathIsValid(chatsRoot, storePath string) bool {

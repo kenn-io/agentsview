@@ -130,7 +130,10 @@ func (p *cursorProvider) Parse(
 		}, nil
 	}
 	var enrichErr error
-	if storePath, agentID := p.sources.storePathForSource(req.Source, path); storePath != "" {
+	storePath, agentID, storeIndexErr := p.sources.storePathForSource(req.Source, path)
+	if storeIndexErr != nil {
+		enrichErr = fmt.Errorf("cursor store index: %w", storeIndexErr)
+	} else if storePath != "" {
 		_, enrichErr = enrichCursorSessionFromStore(
 			ctx, storePath, agentID, sess, msgs,
 		)
@@ -286,7 +289,9 @@ func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			continue
 		}
 		for _, chats := range s.chatsDirs(root) {
-			s.storeIndex.refresh(chats)
+			if err := s.storeIndex.refresh(chats); err != nil {
+				return nil, err
+			}
 		}
 		for _, path := range s.discoverTranscriptPaths(root) {
 			source, ok := s.sourceRefWithCache(root, path, resolutionCache)
@@ -319,7 +324,9 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 			continue
 		}
 		for _, chats := range s.chatsDirs(root) {
-			s.storeIndex.refresh(chats)
+			if err := s.storeIndex.refresh(chats); err != nil {
+				return err
+			}
 		}
 		resolvedRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
@@ -782,7 +789,11 @@ func (s cursorSourceSet) Fingerprint(
 		}
 	}
 	mtime := info.ModTime().UnixNano()
-	if storePath, _ := s.storePathForSource(source, path); storePath != "" {
+	storePath, _, storeIndexErr := s.storePathForSource(source, path)
+	if storeIndexErr != nil {
+		return SourceFingerprint{}, fmt.Errorf("cursor store index: %w", storeIndexErr)
+	}
+	if storePath != "" {
 		if composite, err := sqliteDBCompositeMtime(
 			storePath, sqliteDBJournalSuffixes,
 		); err == nil && composite > mtime {
@@ -938,7 +949,9 @@ func (s cursorSourceSet) projectsRootForChats(chatsRoot string) (string, bool) {
 	return "", false
 }
 
-func (s cursorSourceSet) storePathForSource(source SourceRef, path string) (string, string) {
+func (s cursorSourceSet) storePathForSource(
+	source SourceRef, path string,
+) (string, string, error) {
 	root := ""
 	switch src := source.Opaque.(type) {
 	case cursorSource:
@@ -960,29 +973,34 @@ func (s cursorSourceSet) storePathForSource(source SourceRef, path string) (stri
 		}
 	}
 	if root == "" {
-		return "", ""
+		return "", "", nil
 	}
 	agentID := cursorRawIDFromTranscriptPath(path)
 	if !IsValidSessionID(agentID) {
-		return "", ""
+		return "", "", nil
 	}
-	storePath := s.storePathForRawID(root, agentID)
+	storePath, err := s.storePathForRawID(root, agentID)
+	if err != nil {
+		return "", "", err
+	}
 	if storePath == "" {
-		return "", ""
+		return "", "", nil
 	}
-	return storePath, agentID
+	return storePath, agentID, nil
 }
 
-func (s cursorSourceSet) storePathForRawID(root, agentID string) string {
+func (s cursorSourceSet) storePathForRawID(root, agentID string) (string, error) {
 	for _, chats := range s.chatsDirs(root) {
 		if !s.storeIndex.initialized(chats) {
-			s.storeIndex.refresh(chats)
+			if err := s.storeIndex.refresh(chats); err != nil {
+				return "", err
+			}
 		}
 		if path := s.storeIndex.path(chats, agentID); path != "" {
-			return path
+			return path, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func (s cursorSourceSet) sourcesForStorePath(root, path string) ([]SourceRef, error) {

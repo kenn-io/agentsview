@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -846,7 +847,9 @@ func TestCursorStoreIndexKeepsSiblingStoresVisible(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
 	otherAgentID := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	provider := fx.Provider.(*cursorProvider)
-	assert.Empty(t, provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID))
+	path, err := provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
+	require.NoError(t, err)
+	assert.Empty(t, path)
 	otherStore := filepath.Join(
 		fx.ChatsRoot, "deadbeefdeadbeefdeadbeefdeadbeef", otherAgentID, "store.db",
 	)
@@ -854,12 +857,36 @@ func TestCursorStoreIndexKeepsSiblingStoresVisible(t *testing.T) {
 	require.NoError(t, os.WriteFile(otherStore, []byte("store"), 0o644))
 	provider.sources.storeIndex.refresh(fx.ChatsRoot)
 
-	assert.Equal(
-		t,
-		otherStore,
-		provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID),
-	)
+	path, err = provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
+	require.NoError(t, err)
+	assert.Equal(t, otherStore, path)
 	t.Logf("latestRootBlobId=%s sibling_store_indexed=true", fx.RootID)
+}
+
+func TestCursorStoreIndexRetainsLastCompleteScanOnRefreshError(t *testing.T) {
+	root := t.TempDir()
+	agentID := cursorStoreTestAgentID
+	storePath := filepath.Join(root, "workspace", agentID, "store.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0o755))
+	require.NoError(t, os.WriteFile(storePath, []byte("store"), 0o644))
+
+	index := newCursorStoreIndex()
+	require.NoError(t, index.refresh(root))
+	key := filepath.Clean(root)
+	before := index.roots[key][agentID]
+	require.Equal(t, storePath, before)
+
+	readDir := cursorStoreReadDir
+	cursorStoreReadDir = func(path string) ([]os.DirEntry, error) {
+		if path == root {
+			return nil, errors.New("transient directory read failure")
+		}
+		return readDir(path)
+	}
+	t.Cleanup(func() { cursorStoreReadDir = readDir })
+	err := index.refresh(root)
+	require.Error(t, err)
+	assert.Equal(t, before, index.roots[key][agentID])
 }
 
 func TestCursorStoreRemovalKeepsTranscript(t *testing.T) {
