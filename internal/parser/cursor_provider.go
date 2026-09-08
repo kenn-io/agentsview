@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,11 +131,9 @@ func (p *cursorProvider) Parse(
 		}, nil
 	}
 	var enrichErr error
-	storePath, agentID, storeIndexErr := p.sources.storePathForSource(req.Source, path)
-	if storeIndexErr != nil {
-		enrichErr = fmt.Errorf("cursor store index: %w", storeIndexErr)
-	} else if storePath != "" {
-		_, enrichErr = enrichCursorSessionFromStore(
+	storePath, agentID := p.sources.storePathForSource(req.Source, path)
+	if storePath != "" {
+		enrichErr = enrichCursorSessionFromStore(
 			ctx, storePath, agentID, sess, msgs,
 		)
 		if errors.Is(enrichErr, context.Canceled) ||
@@ -145,7 +144,9 @@ func (p *cursorProvider) Parse(
 			enrichErr = fmt.Errorf("cursor store %s: %w", storePath, enrichErr)
 		}
 	}
-	if enrichErr != nil {
+	if errors.Is(enrichErr, errCursorStoreFormat) {
+		log.Printf("warning: %v; using Cursor transcript only", enrichErr)
+	} else if enrichErr != nil {
 		return ParseOutcome{
 			SourceErrors: []SourceError{{
 				SourceKey:   req.Source.Key,
@@ -166,7 +167,7 @@ func (p *cursorProvider) Parse(
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
-	outcome := ParseOutcome{
+	return ParseOutcome{
 		Results: []ParseResultOutcome{{
 			Result: ParseResult{
 				Session:  *sess,
@@ -175,8 +176,7 @@ func (p *cursorProvider) Parse(
 			DataVersion: DataVersionCurrent,
 		}},
 		ResultSetComplete: true,
-	}
-	return outcome, nil
+	}, nil
 }
 
 type cursorSource struct {
@@ -289,9 +289,7 @@ func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			continue
 		}
 		for _, chats := range s.chatsDirs(root) {
-			if err := s.storeIndex.refresh(chats); err != nil {
-				return nil, err
-			}
+			s.storeIndex.refresh(chats)
 		}
 		for _, path := range s.discoverTranscriptPaths(root) {
 			source, ok := s.sourceRefWithCache(root, path, resolutionCache)
@@ -324,9 +322,7 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 			continue
 		}
 		for _, chats := range s.chatsDirs(root) {
-			if err := s.storeIndex.refresh(chats); err != nil {
-				return err
-			}
+			s.storeIndex.refresh(chats)
 		}
 		resolvedRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
@@ -629,10 +625,9 @@ func (s cursorSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			}
 			seenChats[chats] = struct{}{}
 			roots = append(roots, WatchRoot{
-				Path:         chats,
-				Recursive:    true,
-				IncludeGlobs: []string{"store.db", "store.db-wal"},
-				DebounceKey:  string(AgentCursor) + ":store:" + chats,
+				Path:        chats,
+				Recursive:   true,
+				DebounceKey: string(AgentCursor) + ":store:" + chats,
 			})
 		}
 	}
@@ -789,10 +784,7 @@ func (s cursorSourceSet) Fingerprint(
 		}
 	}
 	mtime := info.ModTime().UnixNano()
-	storePath, _, storeIndexErr := s.storePathForSource(source, path)
-	if storeIndexErr != nil {
-		return SourceFingerprint{}, fmt.Errorf("cursor store index: %w", storeIndexErr)
-	}
+	storePath, _ := s.storePathForSource(source, path)
 	if storePath != "" {
 		if composite, err := sqliteDBCompositeMtime(
 			storePath, sqliteDBJournalSuffixes,
@@ -951,7 +943,7 @@ func (s cursorSourceSet) projectsRootForChats(chatsRoot string) (string, bool) {
 
 func (s cursorSourceSet) storePathForSource(
 	source SourceRef, path string,
-) (string, string, error) {
+) (string, string) {
 	root := ""
 	switch src := source.Opaque.(type) {
 	case cursorSource:
@@ -973,34 +965,29 @@ func (s cursorSourceSet) storePathForSource(
 		}
 	}
 	if root == "" {
-		return "", "", nil
+		return "", ""
 	}
 	agentID := cursorRawIDFromTranscriptPath(path)
 	if !IsValidSessionID(agentID) {
-		return "", "", nil
+		return "", ""
 	}
-	storePath, err := s.storePathForRawID(root, agentID)
-	if err != nil {
-		return "", "", err
-	}
+	storePath := s.storePathForRawID(root, agentID)
 	if storePath == "" {
-		return "", "", nil
+		return "", ""
 	}
-	return storePath, agentID, nil
+	return storePath, agentID
 }
 
-func (s cursorSourceSet) storePathForRawID(root, agentID string) (string, error) {
+func (s cursorSourceSet) storePathForRawID(root, agentID string) string {
 	for _, chats := range s.chatsDirs(root) {
 		if !s.storeIndex.initialized(chats) {
-			if err := s.storeIndex.refresh(chats); err != nil {
-				return "", err
-			}
+			s.storeIndex.refresh(chats)
 		}
 		if path := s.storeIndex.path(chats, agentID); path != "" {
-			return path, nil
+			return path
 		}
 	}
-	return "", nil
+	return ""
 }
 
 func (s cursorSourceSet) sourcesForStorePath(root, path string) ([]SourceRef, error) {

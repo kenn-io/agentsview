@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,16 +15,9 @@ import (
 	"time"
 )
 
-// cursorStoreReadStats records bounded store-read accounting for tests and
-// proof output. BlobLoads counts SELECT attempts for reachable ids only.
-type cursorStoreReadStats struct {
-	LatestRootBlobID string
-	BlobLoads        int
-	Reachable        int
-	DecodedTurns     int
-}
-
-var cursorStoreReadDir = os.ReadDir
+// errCursorStoreFormat identifies readable stores whose structure cannot be
+// used for enrichment. Database I/O errors remain retryable source errors.
+var errCursorStoreFormat = errors.New("unsupported Cursor store format")
 
 type cursorStoreTurn struct {
 	UserDecoded      bool
@@ -115,19 +109,25 @@ func (i *cursorStoreIndex) initialized(chatsRoot string) bool {
 	return ok
 }
 
-func (i *cursorStoreIndex) refresh(chatsRoot string) error {
+// refresh keeps the last complete index on scan failure. An unsuccessful first
+// scan records an empty index so each transcript does not repeat the same scan;
+// the next discovery pass retries, and store events can populate it meanwhile.
+func (i *cursorStoreIndex) refresh(chatsRoot string) {
 	if i == nil || chatsRoot == "" {
-		return nil
+		return
 	}
 	key := filepath.Clean(chatsRoot)
 	paths, err := cursorStorePathsUnderChats(key)
-	if err != nil {
-		return err
-	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if err != nil {
+		if _, ok := i.roots[key]; !ok {
+			i.roots[key] = nil
+		}
+		log.Printf("warning: Cursor store index: %v; continuing with transcripts and cached stores", err)
+		return
+	}
 	i.roots[key] = paths
-	return nil
 }
 
 func (i *cursorStoreIndex) validPath(
@@ -168,97 +168,90 @@ func enrichCursorSessionFromStore(
 	storePath, agentID string,
 	sess *ParsedSession,
 	msgs []ParsedMessage,
-) (cursorStoreReadStats, error) {
-	turns, stats, err := readCursorStoreTurns(ctx, storePath, agentID)
+) error {
+	turns, err := readCursorStoreTurns(ctx, storePath, agentID)
 	if err != nil {
-		return stats, err
-	}
-	if stats.DecodedTurns == 0 {
-		return stats, fmt.Errorf(
-			"cursor store %s: no decodable turn (latestRootBlobId=%s)",
-			storePath, stats.LatestRootBlobID,
-		)
+		return err
 	}
 	applyCursorStoreTurns(sess, msgs, turns)
-	return stats, nil
+	return nil
 }
 
 func readCursorStoreTurns(
 	ctx context.Context, storePath, agentID string,
-) ([]cursorStoreTurn, cursorStoreReadStats, error) {
-	var stats cursorStoreReadStats
+) ([]cursorStoreTurn, error) {
 	if storePath == "" || !IsValidSessionID(agentID) {
-		return nil, stats, fmt.Errorf("cursor store: missing agent id")
+		return nil, fmt.Errorf("%w: missing agent id", errCursorStoreFormat)
 	}
 	conn, err := openCursorIDEDB(storePath)
 	if err != nil {
-		return nil, stats, err
+		return nil, err
 	}
 	defer conn.Close()
 
 	tx, err := beginCursorIDESnapshot(ctx, conn, agentID)
 	if err != nil {
-		return nil, stats, err
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	meta, err := loadCursorStoreMeta(ctx, tx, agentID)
 	if err != nil {
-		return nil, stats, err
+		return nil, err
 	}
-	stats.LatestRootBlobID = meta.LatestRootBlobID
 
-	loader := newCursorStoreBlobLoader(ctx, tx, &stats)
+	loader := newCursorStoreBlobLoader(ctx, tx)
 	rootData, ok := loader.load(meta.LatestRootBlobID)
 	if loader.err != nil {
-		return nil, stats, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"cursor store %s: reading selected root (latestRootBlobId=%s): %w",
 			storePath, meta.LatestRootBlobID, loader.err,
 		)
 	}
 	if !ok {
-		return nil, stats, fmt.Errorf(
-			"cursor store %s: missing selected root (latestRootBlobId=%s)",
-			storePath, meta.LatestRootBlobID,
+		return nil, fmt.Errorf(
+			"%w: missing selected root (latestRootBlobId=%s)",
+			errCursorStoreFormat, meta.LatestRootBlobID,
 		)
 	}
 
 	rootFields, err := agProtoParse(rootData)
 	if err != nil {
-		return nil, stats, fmt.Errorf(
-			"cursor store %s: decoding root (latestRootBlobId=%s): %w",
-			storePath, meta.LatestRootBlobID, err,
+		return nil, fmt.Errorf(
+			"%w: decoding root (latestRootBlobId=%s): %w",
+			errCursorStoreFormat, meta.LatestRootBlobID, err,
 		)
 	}
 	turnIndexField, ok := agProtoFind(rootFields, 8)
 	if !ok {
-		return nil, stats, fmt.Errorf(
-			"cursor store %s: root missing turn index (latestRootBlobId=%s)",
-			storePath, meta.LatestRootBlobID,
+		return nil, fmt.Errorf(
+			"%w: root missing turn index (latestRootBlobId=%s)",
+			errCursorStoreFormat, meta.LatestRootBlobID,
 		)
 	}
 	turnIndexFields, ok := cursorStoreResolveMessage(turnIndexField, loader)
 	if loader.err != nil {
-		return nil, stats, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"cursor store %s: reading turn index (latestRootBlobId=%s): %w",
 			storePath, meta.LatestRootBlobID, loader.err,
 		)
 	}
 	if !ok {
-		return nil, stats, fmt.Errorf(
-			"cursor store %s: undecodable turn index (latestRootBlobId=%s)",
-			storePath, meta.LatestRootBlobID,
+		return nil, fmt.Errorf(
+			"%w: undecodable turn index (latestRootBlobId=%s)",
+			errCursorStoreFormat, meta.LatestRootBlobID,
 		)
 	}
 
 	var turns []cursorStoreTurn
+	decodedAny := false
 	for _, f := range turnIndexFields {
 		if f.Number != 1 {
 			continue
 		}
 		turnFields, ok := cursorStoreResolveMessage(f, loader)
 		if loader.err != nil {
-			return nil, stats, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"cursor store %s: reading turn (latestRootBlobId=%s): %w",
 				storePath, meta.LatestRootBlobID, loader.err,
 			)
@@ -269,18 +262,21 @@ func readCursorStoreTurns(
 		}
 		turn, decoded := decodeCursorStoreTurn(turnFields, loader)
 		if loader.err != nil {
-			return nil, stats, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"cursor store %s: reading turn payload (latestRootBlobId=%s): %w",
 				storePath, meta.LatestRootBlobID, loader.err,
 			)
 		}
-		if decoded {
-			stats.DecodedTurns++
-		}
+		decodedAny = decodedAny || decoded
 		turns = append(turns, turn)
 	}
-	stats.Reachable = len(loader.seen)
-	return turns, stats, nil
+	if !decodedAny {
+		return nil, fmt.Errorf(
+			"%w: no decodable turn (latestRootBlobId=%s)",
+			errCursorStoreFormat, meta.LatestRootBlobID,
+		)
+	}
+	return turns, nil
 }
 
 func loadCursorStoreMeta(
@@ -290,7 +286,7 @@ func loadCursorStoreMeta(
 	err := q.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, "0").Scan(&raw)
 	if err == sql.ErrNoRows {
 		return cursorStoreMetaJSON{}, fmt.Errorf(
-			"cursor store: missing metadata key 0 for %s", agentID,
+			"%w: missing metadata key 0 for %s", errCursorStoreFormat, agentID,
 		)
 	}
 	if err != nil {
@@ -301,25 +297,25 @@ func loadCursorStoreMeta(
 	decoded, err := hex.DecodeString(strings.TrimSpace(raw))
 	if err != nil {
 		return cursorStoreMetaJSON{}, fmt.Errorf(
-			"cursor store: metadata key 0 is not hex for %s: %w", agentID, err,
+			"%w: metadata key 0 is not hex for %s: %w", errCursorStoreFormat, agentID, err,
 		)
 	}
 	var meta cursorStoreMetaJSON
 	if err := json.Unmarshal(decoded, &meta); err != nil {
 		return cursorStoreMetaJSON{}, fmt.Errorf(
-			"cursor store: metadata key 0 is not JSON for %s: %w", agentID, err,
+			"%w: metadata key 0 is not JSON for %s: %w", errCursorStoreFormat, agentID, err,
 		)
 	}
 	if meta.AgentID == "" || meta.LatestRootBlobID == "" {
 		return cursorStoreMetaJSON{}, fmt.Errorf(
-			"cursor store: metadata key 0 missing agentId or latestRootBlobId for %s",
-			agentID,
+			"%w: metadata key 0 missing agentId or latestRootBlobId for %s",
+			errCursorStoreFormat, agentID,
 		)
 	}
 	if meta.AgentID != agentID {
 		return cursorStoreMetaJSON{}, fmt.Errorf(
-			"cursor store: metadata agentId %q does not match %s",
-			meta.AgentID, agentID,
+			"%w: metadata agentId %q does not match %s",
+			errCursorStoreFormat, meta.AgentID, agentID,
 		)
 	}
 	return meta, nil
@@ -328,20 +324,16 @@ func loadCursorStoreMeta(
 type cursorStoreBlobLoader struct {
 	ctx   context.Context
 	q     cursorIDEQuerier
-	stats *cursorStoreReadStats
-	seen  map[string]struct{}
 	cache map[string][]byte
 	err   error
 }
 
 func newCursorStoreBlobLoader(
-	ctx context.Context, q cursorIDEQuerier, stats *cursorStoreReadStats,
+	ctx context.Context, q cursorIDEQuerier,
 ) *cursorStoreBlobLoader {
 	return &cursorStoreBlobLoader{
 		ctx:   ctx,
 		q:     q,
-		stats: stats,
-		seen:  make(map[string]struct{}),
 		cache: make(map[string][]byte),
 	}
 }
@@ -353,7 +345,6 @@ func (l *cursorStoreBlobLoader) load(id string) ([]byte, bool) {
 	if data, ok := l.cache[id]; ok {
 		return data, true
 	}
-	l.stats.BlobLoads++
 	var data []byte
 	err := l.q.QueryRowContext(
 		l.ctx, `SELECT data FROM blobs WHERE id = ?`, id,
@@ -364,7 +355,6 @@ func (l *cursorStoreBlobLoader) load(id string) ([]byte, bool) {
 		}
 		return nil, false
 	}
-	l.seen[id] = struct{}{}
 	l.cache[id] = data
 	return data, true
 }
@@ -692,7 +682,7 @@ func cursorStorePathsUnderChats(chatsRoot string) (map[string]string, error) {
 	if chatsRoot == "" {
 		return paths, nil
 	}
-	entries, err := cursorStoreReadDir(chatsRoot)
+	entries, err := os.ReadDir(chatsRoot)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return paths, nil
@@ -703,7 +693,7 @@ func cursorStorePathsUnderChats(chatsRoot string) (map[string]string, error) {
 		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		agentDirs, readErr := cursorStoreReadDir(
+		agentDirs, readErr := os.ReadDir(
 			filepath.Join(chatsRoot, entry.Name()),
 		)
 		if readErr != nil {

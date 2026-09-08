@@ -2,6 +2,7 @@ package sync_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -106,4 +107,56 @@ func TestCursorSameMtimeHashChangeReparses(t *testing.T) {
 	require.NotNil(t, after.FirstMessage)
 	assert.Equal(t, "two!", *after.FirstMessage,
 		"a same-mtime content change must bypass Cursor freshness")
+}
+
+func TestCursorStoreEnrichmentFailureStillArchivesTranscriptUpdates(t *testing.T) {
+	for _, failure := range []string{"chats is a file", "unsupported metadata"} {
+		t.Run(failure, func(t *testing.T) {
+			cursorDir := filepath.Join(t.TempDir(), ".cursor")
+			root := filepath.Join(cursorDir, "projects")
+			const sessionID = "11111111-2222-4333-8444-555555555555"
+			path := filepath.Join(root, "Users-demo-Code-app", "agent-transcripts", sessionID+".jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			transcript := `{"role":"user","message":{"content":"<user_query>First prompt</user_query>"}}` + "\n" +
+				`{"role":"assistant","message":{"content":"First answer"}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(transcript), 0o644))
+			chats := filepath.Join(cursorDir, "chats")
+			if failure == "chats is a file" {
+				require.NoError(t, os.WriteFile(chats, []byte("file"), 0o644))
+			} else {
+				storePath := filepath.Join(chats, "workspace", sessionID, "store.db")
+				require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0o755))
+				store, err := sql.Open("sqlite3", storePath)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = store.Close() })
+				_, err = store.Exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+					CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);
+					INSERT INTO meta VALUES ('0', 'not-hex');`)
+				require.NoError(t, err)
+				require.NoError(t, store.Close())
+			}
+
+			archive := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(archive, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
+				Machine:   "local",
+			})
+			t.Cleanup(engine.Close)
+			first := engine.SyncAll(t.Context(), nil)
+			require.Equal(t, 1, first.Synced)
+			messages, err := archive.GetMessages(t.Context(), "cursor:"+sessionID, 0, 10, true)
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			assert.Equal(t, "First answer", messages[1].Content)
+
+			transcript += `{"role":"user","message":{"content":"<user_query>Next prompt</user_query>"}}` + "\n" +
+				`{"role":"assistant","message":{"content":"Next answer"}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(transcript), 0o644))
+			engine.SyncPaths([]string{path})
+			messages, err = archive.GetMessages(t.Context(), "cursor:"+sessionID, 0, 10, true)
+			require.NoError(t, err)
+			require.Len(t, messages, 4)
+			assert.Equal(t, "Next answer", messages[3].Content)
+		})
+	}
 }

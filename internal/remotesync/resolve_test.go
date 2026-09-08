@@ -1009,7 +1009,6 @@ func TestCursorRemoteTargetsExcludeChatsRoot(t *testing.T) {
 			assert.NotContains(t, filepath.Base(file), "store.db")
 		}
 	}
-	t.Logf("latestRootBlobId=n/a projects=%s chats_excluded=%s", root, meta)
 }
 
 func samePathForTest(t *testing.T, a, b string) bool {

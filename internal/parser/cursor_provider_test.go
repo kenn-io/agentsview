@@ -585,7 +585,6 @@ func TestCursorProviderPathRewriterMakesResolutionRemote(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, changed)
-	t.Log("latestRootBlobId=n/a remote_chats_ignored=true")
 }
 
 func TestCursorProviderSourceMachineMakesResolutionRemote(t *testing.T) {

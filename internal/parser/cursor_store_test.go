@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -261,11 +260,8 @@ func setupCursorStoreFixture(t *testing.T, keepWriterOpen bool) cursorStoreFixtu
 
 func TestCursorStoreParsesRowsHeldOnlyInWAL(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
-	info, err := os.Stat(fx.StorePath)
-	require.NoError(t, err)
 	walInfo, err := os.Stat(fx.StorePath + "-wal")
 	require.NoError(t, err)
-	t.Logf("latestRootBlobId=%s main_size=%d wal_size=%d", fx.RootID, info.Size(), walInfo.Size())
 	assert.Positive(t, walInfo.Size())
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
@@ -280,7 +276,6 @@ func TestCursorStoreParsesRowsHeldOnlyInWAL(t *testing.T) {
 
 func TestCursorStoreTraversesOnlyLatestRootBlobId(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	t.Logf("latestRootBlobId=%s", fx.RootID)
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
@@ -292,7 +287,6 @@ func TestCursorStoreTraversesOnlyLatestRootBlobId(t *testing.T) {
 
 func TestCursorStoreEnrichesExistingTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	t.Logf("latestRootBlobId=%s", fx.RootID)
 	discovered, err := fx.Provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
@@ -322,7 +316,6 @@ func TestCursorStoreEnrichesExistingTranscript(t *testing.T) {
 
 func TestCursorStoreUsesTurnIndexProjection(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	t.Logf("latestRootBlobId=%s", fx.RootID)
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	msgs := outcome.Results[0].Result.Messages
@@ -361,7 +354,6 @@ func TestCursorStoreSkipsUndecodableBlobWithoutDroppingSiblings(t *testing.T) {
 	})
 	_, err = db.Exec(`UPDATE blobs SET data = ? WHERE id = ?`, turnData, turnID)
 	require.NoError(t, err)
-	t.Logf("latestRootBlobId=%s", fx.RootID)
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
@@ -381,46 +373,54 @@ func TestCursorStoreResolvesInline32ByteMessage(t *testing.T) {
 	payload := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: message}})
 	require.Len(t, payload, 32)
 	loader := newCursorStoreBlobLoader(
-		context.Background(), db, &cursorStoreReadStats{},
+		context.Background(), db,
 	)
 	resolved, ok := cursorStoreResolveMessage(agProtoField{
 		Wire: pbWireBytes, Bytes: payload,
 	}, loader)
 	require.True(t, ok)
 	_, _, ok = decodeCursorStoreAssistantMessage(resolved)
-	t.Logf("latestRootBlobId=%s inline_payload_bytes=%d", fx.RootID, len(payload))
 	assert.True(t, ok)
 }
 
-func TestCursorStoreMalformedMetaReturnsError(t *testing.T) {
+func assertCursorStoreTranscriptOnly(t *testing.T, outcome ParseOutcome) {
+	t.Helper()
+	assert.Empty(t, outcome.SourceErrors)
+	assert.True(t, outcome.ResultSetComplete)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+	assert.Equal(t, "cursor:"+cursorStoreTestAgentID, result.Session.ID)
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "is this composer? what model is this?", result.Messages[0].Content)
+	assert.Equal(t, "I'm Auto, an agent router designed by Cursor.", result.Messages[1].Content)
+	assert.False(t, result.Messages[1].HasThinking)
+	assert.Empty(t, result.Messages[1].ThinkingText)
+}
+
+func TestCursorStoreMalformedMetaKeepsTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
 	db, err := sql.Open("sqlite3", fx.StorePath)
 	require.NoError(t, err)
 	defer db.Close()
 	_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = '0'`, "not-hex")
 	require.NoError(t, err)
-	t.Logf("latestRootBlobId=%s", fx.RootID)
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
-	assert.Empty(t, outcome.Results)
-	require.Len(t, outcome.SourceErrors, 1)
-	assert.Contains(t, outcome.SourceErrors[0].Err.Error(), "metadata")
+	assertCursorStoreTranscriptOnly(t, outcome)
 }
 
-func TestCursorStoreMissingMetadataReturnsError(t *testing.T) {
+func TestCursorStoreMissingMetadataKeepsTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
 	_, err := fx.Writer.Exec(`DELETE FROM meta WHERE key = '0'`)
 	require.NoError(t, err)
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
-	assert.Empty(t, outcome.Results)
-	require.Len(t, outcome.SourceErrors, 1)
-	t.Logf("latestRootBlobId=%s metadata_case=missing error=%q", fx.RootID, outcome.SourceErrors[0].Err.Error())
+	assertCursorStoreTranscriptOnly(t, outcome)
 }
 
-func TestCursorStoreIncompleteMetadataReturnsError(t *testing.T) {
+func TestCursorStoreIncompleteMetadataKeepsTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
 	payload, err := json.Marshal(map[string]any{
 		"agentId": cursorStoreTestAgentID,
@@ -434,12 +434,10 @@ func TestCursorStoreIncompleteMetadataReturnsError(t *testing.T) {
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
-	assert.Empty(t, outcome.Results)
-	require.Len(t, outcome.SourceErrors, 1)
-	t.Logf("latestRootBlobId=%s metadata_case=incomplete error=%q", fx.RootID, outcome.SourceErrors[0].Err.Error())
+	assertCursorStoreTranscriptOnly(t, outcome)
 }
 
-func TestCursorStoreMetadataAgentMismatchReturnsError(t *testing.T) {
+func TestCursorStoreMetadataAgentMismatchKeepsTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
 	payload, err := json.Marshal(map[string]any{
 		"agentId":          "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -454,12 +452,10 @@ func TestCursorStoreMetadataAgentMismatchReturnsError(t *testing.T) {
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
-	assert.Empty(t, outcome.Results)
-	require.Len(t, outcome.SourceErrors, 1)
-	t.Logf("latestRootBlobId=%s metadata_case=agent_mismatch error=%q", fx.RootID, outcome.SourceErrors[0].Err.Error())
+	assertCursorStoreTranscriptOnly(t, outcome)
 }
 
-func TestCursorStoreMissingSelectedRootReturnsError(t *testing.T) {
+func TestCursorStoreMissingSelectedRootKeepsTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
 	missingRoot := strings.Repeat("f", 64)
 	payload, err := json.Marshal(map[string]any{
@@ -472,13 +468,91 @@ func TestCursorStoreMissingSelectedRootReturnsError(t *testing.T) {
 		hex.EncodeToString(payload),
 	)
 	require.NoError(t, err)
-	t.Logf("latestRootBlobId=%s", missingRoot)
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
-	assert.Empty(t, outcome.Results)
-	require.Len(t, outcome.SourceErrors, 1)
-	assert.Contains(t, outcome.SourceErrors[0].Err.Error(), "missing selected root")
+	assertCursorStoreTranscriptOnly(t, outcome)
+}
+
+func TestCursorStoreUnsupportedRootKeepsTranscript(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		root []byte
+	}{
+		{name: "undecodable root", root: []byte{0xff}},
+		{name: "missing turn index", root: encodePB([]pbField{
+			{num: 22, wire: pbWireBytes, bytes: []byte("cli")},
+		})},
+		{name: "undecodable turn index", root: encodePB([]pbField{
+			{num: 8, wire: pbWireBytes, bytes: []byte{0xff}},
+		})},
+		{name: "no decoded turns", root: encodePB([]pbField{
+			{num: 8, wire: pbWireBytes, bytes: encodePB([]pbField{
+				{num: 1, wire: pbWireBytes, bytes: []byte{0xff}},
+			})},
+		})},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fx := setupCursorStoreFixture(t, true)
+			_, err := fx.Writer.Exec(`UPDATE blobs SET data = ? WHERE id = ?`, tt.root, fx.RootID)
+			require.NoError(t, err)
+			outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
+			require.NoError(t, err)
+			assertCursorStoreTranscriptOnly(t, outcome)
+		})
+	}
+}
+
+func TestCursorStoreIndexFailureKeepsTranscripts(t *testing.T) {
+	for _, failure := range []string{"chats is a file", "unreadable workspace"} {
+		t.Run(failure, func(t *testing.T) {
+			fx := setupCursorStoreFixture(t, false)
+			switch failure {
+			case "chats is a file":
+				require.NoError(t, os.Rename(fx.ChatsRoot, fx.ChatsRoot+"-saved"))
+				require.NoError(t, os.WriteFile(fx.ChatsRoot, []byte("file"), 0o644))
+			case "unreadable workspace":
+				workspace := filepath.Dir(filepath.Dir(fx.StorePath))
+				require.NoError(t, os.Chmod(workspace, 0))
+				t.Cleanup(func() { require.NoError(t, os.Chmod(workspace, 0o755)) })
+				if _, err := os.ReadDir(workspace); err == nil {
+					t.Skip("directory permissions are not enforced")
+				}
+			}
+			provider := fx.Provider.(*cursorProvider)
+			logs := captureLog(t)
+			for _, operation := range []string{"Discover", "DiscoverEach", "Fingerprint", "Parse"} {
+				t.Run(operation, func(t *testing.T) {
+					provider.sources.storeIndex = newCursorStoreIndex()
+					switch operation {
+					case "Discover":
+						sources, err := provider.Discover(t.Context())
+						require.NoError(t, err)
+						require.Len(t, sources, 1)
+						assert.Equal(t, fx.Transcript, sources[0].DisplayPath)
+					case "DiscoverEach":
+						var paths []string
+						err := provider.DiscoverEach(t.Context(), func(source SourceRef) error {
+							paths = append(paths, source.DisplayPath)
+							return nil
+						})
+						require.NoError(t, err)
+						assert.Equal(t, []string{fx.Transcript}, paths)
+					case "Fingerprint":
+						fp, err := provider.Fingerprint(t.Context(), fx.Source)
+						require.NoError(t, err)
+						assert.NotEmpty(t, fp.Hash)
+						assert.NotContains(t, fp.Hash, "|store:")
+					case "Parse":
+						outcome, err := provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
+						require.NoError(t, err)
+						assertCursorStoreTranscriptOnly(t, outcome)
+					}
+				})
+			}
+			assertLogContains(t, logs, "warning", "Cursor store index")
+		})
+	}
 }
 
 func TestCursorStoreUnreadableMatchingStoreReturnsError(t *testing.T) {
@@ -487,7 +561,6 @@ func TestCursorStoreUnreadableMatchingStoreReturnsError(t *testing.T) {
 	for _, suffix := range []string{"-wal", "-shm"} {
 		_ = os.Remove(fx.StorePath + suffix)
 	}
-	t.Logf("latestRootBlobId=%s unreadable_store=true", fx.RootID)
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
@@ -496,7 +569,6 @@ func TestCursorStoreUnreadableMatchingStoreReturnsError(t *testing.T) {
 	assert.True(t, outcome.ResultSetComplete)
 	assert.True(t, outcome.SourceErrors[0].Retryable)
 	assert.Contains(t, outcome.SourceErrors[0].Err.Error(), "cursor store")
-	t.Log("store_error=cursor_store_unreadable")
 }
 
 func TestCursorStoreEnrichesSourceWithoutOpaque(t *testing.T) {
@@ -573,7 +645,6 @@ func TestCursorStoreSkipsTurnWithoutUserToPreserveAlignment(t *testing.T) {
 	assert.Equal(t, secondUser, msgs[2].Timestamp)
 	assert.Equal(t, secondAssistant, msgs[3].Timestamp)
 	assert.Equal(t, "aligned reasoning", msgs[3].ThinkingText)
-	t.Log("latestRootBlobId=n/a missing_user_turn_skipped=true")
 }
 
 func TestCursorStoreSkipsTurnWithoutAssistantToPreserveAlignment(t *testing.T) {
@@ -611,7 +682,6 @@ func TestCursorStoreSkipsTurnWithoutAssistantToPreserveAlignment(t *testing.T) {
 	assert.Equal(t, secondUser, msgs[2].Timestamp)
 	assert.Equal(t, secondAssistant, msgs[3].Timestamp)
 	assert.Equal(t, "aligned reasoning", msgs[3].ThinkingText)
-	t.Log("latestRootBlobId=n/a missing_assistant_turn_skipped=true")
 }
 
 func TestCursorStoreLeavesLaterTurnUnmappedAfterUndecodableTurn(t *testing.T) {
@@ -639,7 +709,6 @@ func TestCursorStoreLeavesLaterTurnUnmappedAfterUndecodableTurn(t *testing.T) {
 		assert.Empty(t, msg.Timestamp)
 		assert.Empty(t, msg.ThinkingText)
 	}
-	t.Log("latestRootBlobId=n/a undecodable_turn_stops_alignment=true")
 }
 
 func TestCursorStoreMatchesFinalAssistantAfterIntermediateMessage(t *testing.T) {
@@ -671,12 +740,10 @@ func TestCursorStoreMatchesFinalAssistantAfterIntermediateMessage(t *testing.T) 
 	assert.Empty(t, msgs[1].ThinkingText)
 	assert.Equal(t, "first reasoning", msgs[2].ThinkingText)
 	assert.Equal(t, "second reasoning", msgs[4].ThinkingText)
-	t.Log("latestRootBlobId=n/a intermediate_assistant_skipped=true")
 }
 
 func TestCursorStoreUsesProducerMillisecondTimes(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	t.Logf("latestRootBlobId=%s", fx.RootID)
 	old := time.Now().Add(-48 * time.Hour)
 	require.NoError(t, os.Chtimes(fx.Transcript, old, old))
 
@@ -705,7 +772,6 @@ func TestCursorStorePartialTurnIndexRetainsTranscriptEndBound(t *testing.T) {
 	))
 	transcriptTime := time.UnixMilli(int64(cursorStoreTestAsstMS) + 10_000).UTC()
 	require.NoError(t, os.Chtimes(fx.Transcript, transcriptTime, transcriptTime))
-	t.Logf("latestRootBlobId=%s transcript_end=%d", fx.RootID, transcriptTime.UnixMilli())
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
@@ -728,7 +794,6 @@ func TestCursorStoreExtraAssistantRetainsTranscriptEndBound(t *testing.T) {
 	require.NoError(t, os.WriteFile(fx.Transcript, []byte(transcript), 0o644))
 	transcriptTime := time.UnixMilli(int64(cursorStoreTestAsstMS) + 30_000).UTC()
 	require.NoError(t, os.Chtimes(fx.Transcript, transcriptTime, transcriptTime))
-	t.Logf("latestRootBlobId=%s transcript_end=%d", fx.RootID, transcriptTime.UnixMilli())
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
@@ -753,7 +818,6 @@ func TestCursorStoreIncompleteTurnTimesRetainTranscriptEndBound(t *testing.T) {
 	require.NoError(t, err)
 	transcriptTime := time.UnixMilli(int64(cursorStoreTestAsstMS) + 20_000).UTC()
 	require.NoError(t, os.Chtimes(fx.Transcript, transcriptTime, transcriptTime))
-	t.Logf("latestRootBlobId=%s transcript_end=%d", fx.RootID, transcriptTime.UnixMilli())
 
 	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
@@ -768,12 +832,11 @@ func TestCursorStoreDoesNotTreatUntimedFieldThreeAsReasoning(t *testing.T) {
 	}}))
 	require.NoError(t, err)
 	text, _, ok := decodeCursorStoreReasoning(fields)
-	t.Log("latestRootBlobId=n/a field=3 untimed=true")
 	assert.False(t, ok)
 	assert.Empty(t, text)
 }
 
-func TestCursorStoreWatchPlanIncludesWAL(t *testing.T) {
+func TestCursorStoreWatchPlanIgnoresSHM(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
 	plan, err := fx.Provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -787,19 +850,15 @@ func TestCursorStoreWatchPlanIncludesWAL(t *testing.T) {
 		}
 	}
 	require.True(t, found)
-	assert.ElementsMatch(t, []string{"store.db", "store.db-wal"}, chatsRoot.IncludeGlobs)
-	assert.NotContains(t, chatsRoot.IncludeGlobs, "store.db-shm")
 	changed, err := fx.Provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
-		Path: fx.StorePath + "-shm", EventKind: "write", WatchRoot: fx.ChatsRoot,
+		Path: fx.StorePath + "-shm", EventKind: "write", WatchRoot: chatsRoot.Path,
 	})
 	require.NoError(t, err)
 	assert.Empty(t, changed)
-	t.Logf("latestRootBlobId=%s watch_chats=%s shm_ignored=true", fx.RootID, chatsRoot.Path)
 }
 
 func TestCursorStoreChangedPathUsesTranscriptSource(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	t.Logf("latestRootBlobId=%s", fx.RootID)
 
 	changed, err := fx.Provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
 		Path: fx.StorePath, EventKind: "write", WatchRoot: fx.ChatsRoot,
@@ -847,8 +906,7 @@ func TestCursorStoreIndexKeepsSiblingStoresVisible(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
 	otherAgentID := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	provider := fx.Provider.(*cursorProvider)
-	path, err := provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
-	require.NoError(t, err)
+	path := provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
 	assert.Empty(t, path)
 	otherStore := filepath.Join(
 		fx.ChatsRoot, "deadbeefdeadbeefdeadbeefdeadbeef", otherAgentID, "store.db",
@@ -857,41 +915,31 @@ func TestCursorStoreIndexKeepsSiblingStoresVisible(t *testing.T) {
 	require.NoError(t, os.WriteFile(otherStore, []byte("store"), 0o644))
 	provider.sources.storeIndex.refresh(fx.ChatsRoot)
 
-	path, err = provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
-	require.NoError(t, err)
+	path = provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
 	assert.Equal(t, otherStore, path)
-	t.Logf("latestRootBlobId=%s sibling_store_indexed=true", fx.RootID)
 }
 
 func TestCursorStoreIndexRetainsLastCompleteScanOnRefreshError(t *testing.T) {
-	root := t.TempDir()
-	agentID := cursorStoreTestAgentID
-	storePath := filepath.Join(root, "workspace", agentID, "store.db")
-	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0o755))
-	require.NoError(t, os.WriteFile(storePath, []byte("store"), 0o644))
-
-	index := newCursorStoreIndex()
-	require.NoError(t, index.refresh(root))
-	key := filepath.Clean(root)
-	before := index.roots[key][agentID]
-	require.Equal(t, storePath, before)
-
-	readDir := cursorStoreReadDir
-	cursorStoreReadDir = func(path string) ([]os.DirEntry, error) {
-		if path == root {
-			return nil, errors.New("transient directory read failure")
-		}
-		return readDir(path)
+	fx := setupCursorStoreFixture(t, false)
+	workspace := filepath.Join(fx.ChatsRoot, "unreadable-workspace")
+	require.NoError(t, os.Mkdir(workspace, 0))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(workspace, 0o755)) })
+	if _, err := os.ReadDir(workspace); err == nil {
+		t.Skip("directory permissions are not enforced")
 	}
-	t.Cleanup(func() { cursorStoreReadDir = readDir })
-	err := index.refresh(root)
-	require.Error(t, err)
-	assert.Equal(t, before, index.roots[key][agentID])
+
+	sources, err := fx.Provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	require.Len(t, outcome.Results[0].Result.Messages, 2)
+	assert.Contains(t, outcome.Results[0].Result.Messages[1].ThinkingText, "asking who I am")
 }
 
 func TestCursorStoreRemovalKeepsTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	t.Logf("latestRootBlobId=%s", fx.RootID)
 	require.NoError(t, os.Remove(fx.StorePath))
 	_ = os.Remove(fx.StorePath + "-wal")
 	_ = os.Remove(fx.StorePath + "-shm")
@@ -910,31 +958,11 @@ func TestCursorStoreRemovalKeepsTranscript(t *testing.T) {
 
 func TestCursorStoreOpensReadOnly(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	t.Logf("latestRootBlobId=%s", fx.RootID)
 	conn, err := openCursorIDEDB(fx.StorePath)
 	require.NoError(t, err)
 	defer conn.Close()
 	_, err = conn.Exec(`CREATE TABLE should_fail (id INTEGER)`)
 	require.Error(t, err)
-}
-
-func TestCursorStoreReadsOnlyReachableBlobs(t *testing.T) {
-	fx := setupCursorStoreFixture(t, true)
-	turns, stats, err := readCursorStoreTurns(
-		context.Background(), fx.StorePath, cursorStoreTestAgentID,
-	)
-	require.NoError(t, err)
-	require.NotEmpty(t, turns)
-	var tableBlobCount int
-	require.NoError(t, fx.Writer.QueryRow(`SELECT COUNT(*) FROM blobs`).Scan(&tableBlobCount))
-	t.Logf(
-		"latestRootBlobId=%s blob_loads=%d reachable=%d table_blobs=%d",
-		stats.LatestRootBlobID, stats.BlobLoads, stats.Reachable, tableBlobCount,
-	)
-	assert.Equal(t, fx.RootID, stats.LatestRootBlobID)
-	assert.Equal(t, stats.Reachable, stats.BlobLoads)
-	assert.Less(t, stats.Reachable, tableBlobCount)
-	assert.Equal(t, 32, len(cursorStoreBlobRef(fx.RootID)))
 }
 
 func TestCursorStoreDoesNotDiscoverStoreOnlySession(t *testing.T) {
@@ -943,7 +971,6 @@ func TestCursorStoreDoesNotDiscoverStoreOnlySession(t *testing.T) {
 	storeOnly := filepath.Join(fx.ChatsRoot, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", storeOnlyID, "store.db")
 	require.NoError(t, os.MkdirAll(filepath.Dir(storeOnly), 0o755))
 	require.NoError(t, os.WriteFile(storeOnly, []byte("not a real store"), 0o644))
-	t.Logf("latestRootBlobId=%s store_only=%s", fx.RootID, storeOnlyID)
 
 	discovered, err := fx.Provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -996,7 +1023,6 @@ func TestCursorStoreFingerprintTracksWAL(t *testing.T) {
 	fp2, err := fx.Provider.Fingerprint(context.Background(), fx.Source)
 	require.NoError(t, err)
 	assert.NotEqual(t, fp1.Hash, fp2.Hash)
-	t.Logf("latestRootBlobId=%s hash1=%s hash2=%s", fx.RootID, fp1.Hash, fp2.Hash)
 }
 
 func TestCursorStoreFingerprintSurvivesStoreRemoval(t *testing.T) {
@@ -1010,7 +1036,6 @@ func TestCursorStoreFingerprintSurvivesStoreRemoval(t *testing.T) {
 	fingerprint, err := fx.Provider.Fingerprint(context.Background(), fx.Source)
 	require.NoError(t, err)
 	assert.NotContains(t, fingerprint.Hash, "|store:")
-	t.Logf("latestRootBlobId=%s store_removed=true", fx.RootID)
 }
 
 func TestCursorStoreParseCarriesFingerprintMtime(t *testing.T) {
@@ -1026,5 +1051,4 @@ func TestCursorStoreParseCarriesFingerprintMtime(t *testing.T) {
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, fingerprint.MTimeNS, outcome.Results[0].Result.Session.File.Mtime)
 	assert.Equal(t, fingerprint.Size, outcome.Results[0].Result.Session.File.Size)
-	t.Logf("latestRootBlobId=%s fingerprint_mtime=%d", fx.RootID, fingerprint.MTimeNS)
 }
