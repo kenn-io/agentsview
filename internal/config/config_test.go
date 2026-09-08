@@ -115,6 +115,41 @@ func TestChartPaletteRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestToolResultImagesConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		toml string
+		want ToolResultImages
+	}{
+		{name: "missing defaults to keep", want: ToolResultImagesKeep},
+		{name: "keep trims and folds", toml: `tool_result_images = " KEEP "`, want: ToolResultImagesKeep},
+		{name: "drop trims and folds", toml: `tool_result_images = " Drop "`, want: ToolResultImagesDrop},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			require.NoError(t, cfg.applyConfigTOML(tt.toml))
+			assert.Equal(t, tt.want, cfg.ToolResultImages)
+		})
+	}
+
+	cfg, err := Default()
+	require.NoError(t, err)
+	require.EqualError(t, cfg.applyConfigTOML(`tool_result_images = "discard"`),
+		`tool_result_images must be "keep" or "drop" (got "discard")`)
+
+	dir := setupTestEnv(t)
+	cfg.DataDir = dir
+	require.NoError(t, cfg.SaveSettings(map[string]any{
+		"tool_result_images": ToolResultImagesDrop,
+	}))
+	assert.Equal(t, ToolResultImagesDrop, cfg.ToolResultImages)
+	loaded, err := LoadMinimal()
+	require.NoError(t, err)
+	assert.Equal(t, ToolResultImagesDrop, loaded.ToolResultImages)
+}
+
 func setTestHome(t *testing.T, home string) {
 	t.Helper()
 	t.Setenv("HOME", home)

@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -448,6 +449,9 @@ type EngineConfig struct {
 	// CodexStagingDir selects the directory for staged Codex scratch
 	// databases. Empty means the system temporary directory.
 	CodexStagingDir string
+	// ToolResultImages carries the configured retention policy into workers
+	// that open the source archive read-only before building a replacement.
+	ToolResultImages config.ToolResultImages
 	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
 	// sessions whose working directory equals one of the prefixes
 	// or lives underneath one. Sessions without a recorded cwd are
@@ -547,8 +551,9 @@ type Engine struct {
 	// sources take the staged streaming path.
 	stagedCodexMin int64
 	// stagedCodexDir is the scratch directory for staged Codex parses.
-	stagedCodexDir string
-	cwdFilter      cwdPrefixFilter
+	stagedCodexDir   string
+	toolResultImages config.ToolResultImages
+	cwdFilter        cwdPrefixFilter
 	// scanProtectedPaths, homeDir, and goos gate passive probing of macOS
 	// TCC-protected locations. homeDir is empty when the home directory
 	// cannot be resolved, which disables the gate rather than guessing.
@@ -935,6 +940,10 @@ func NewEngine(
 	if progressStallAfter <= 0 {
 		progressStallAfter = defaultProgressStallAfter
 	}
+	toolResultImages := database.ToolResultImages()
+	if cfg.ToolResultImages == config.ToolResultImagesDrop {
+		toolResultImages = config.ToolResultImagesDrop
+	}
 	e := &Engine{
 		db:                      database,
 		stat:                    os.Stat,
@@ -946,6 +955,7 @@ func NewEngine(
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		stagedCodexMin:          stagedCodexMinBytes(cfg.StagedCodexParseMinBytes),
 		stagedCodexDir:          stagedCodexDir,
+		toolResultImages:        toolResultImages,
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
 		scanProtectedPaths:      cfg.ScanProtectedPaths,
 		homeDir:                 userHomeDirOrEmpty(),
@@ -3066,6 +3076,7 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
+	newDB.SetToolResultImages(e.toolResultImages)
 	if err := newDB.CopyArchiveIdentityFrom(origPath); err != nil {
 		log.Printf("resync: preserve archive identity: %v", err)
 		newDB.Close()
@@ -3683,6 +3694,23 @@ func (e *Engine) resyncBuildLocked(
 	)
 	if err := newDB.ForceBackfillIsAutomated(); err != nil {
 		log.Printf("resync: reclassify is_automated: %v", err)
+	}
+
+	if newDB.ToolResultImages() == config.ToolResultImagesDrop {
+		if _, err := newDB.StripToolImages(ctx, db.StripImagesFilter{}); err != nil {
+			log.Printf("resync: project copied tool-result images: %v", err)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"copied tool-result image projection failed, aborting swap: "+err.Error(),
+			)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats, err
+		}
 	}
 
 	if ftsDropped {
@@ -16915,6 +16943,7 @@ func (e *Engine) prepareSessionWriteContext(
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
 	}
+	msgs, _ = e.db.ProjectToolResultImages(msgs)
 	s, err := toDBSessionContext(ctx, pw)
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
@@ -16965,6 +16994,7 @@ func (e *Engine) prepareSessionWriteContext(
 	} else if mergedMsgs != nil {
 		parsedMsgs := msgs
 		msgs = mergedMsgs
+		msgs, _ = e.db.ProjectToolResultImages(msgs)
 		applyVisualStudioCopilotArchiveSessionFields(
 			&s, archived, parsedMsgs, msgs,
 		)
@@ -18641,6 +18671,7 @@ func (e *Engine) writeIncremental(
 		},
 		e.blockedResultCategories,
 	)
+	dbMsgs, _ = e.db.ProjectToolResultImages(dbMsgs)
 	// The incremental append path bypasses prepareSessionWrite, so run
 	// the central validation/sanitization pass on the new message rows
 	// here to keep coverage uniform across write paths. The fix counts
@@ -18691,8 +18722,12 @@ func (e *Engine) writeIncremental(
 
 	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
 	for i, link := range inc.links {
+		resultContent := parser.DecodeContent(link.ResultContentRaw)
+		if _, stats := db.StripToolResultImages(link.ResultContentRaw); stats.Payloads > 0 {
+			resultContent = link.ResultContentRaw
+		}
 		toolCall := db.ToolCall{
-			ResultContent:       parser.DecodeContent(link.ResultContentRaw),
+			ResultContent:       resultContent,
 			ResultContentLength: link.ResultContentLen,
 		}
 		e.anomalies.recordSanitize(db.SanitizeToolCall(&toolCall))
@@ -21056,6 +21091,9 @@ func pairToolResultsContext(
 				tc.ResultContentLength = tr.ContentLength
 				if !blocked[tc.Category] {
 					tc.ResultContent = parser.DecodeContent(tr.ContentRaw)
+					if _, stats := db.StripToolResultImages(tr.ContentRaw); stats.Payloads > 0 {
+						tc.ResultContent = tr.ContentRaw
+					}
 					tc.ResultContentLength = db.ResolveResultContentLength(
 						tc.ResultContent, tr.ContentLength,
 					)
@@ -21089,6 +21127,8 @@ func pairToolResultEventSummariesContext(
 			if len(tc.ResultEvents) == 0 {
 				continue
 			}
+			rawResult := tc.ResultContent
+			_, rawStats := db.StripToolResultImages(rawResult)
 			summary, err := summarizeToolResultEventsContext(
 				ctx, tc.ResultEvents,
 			)
@@ -21101,6 +21141,13 @@ func pairToolResultEventSummariesContext(
 				for k := range tc.ResultEvents {
 					tc.ResultEvents[k].Content = ""
 				}
+				continue
+			}
+			if rawStats.Payloads > 0 {
+				tc.ResultContent = rawResult
+				tc.ResultContentLength = db.ResolveResultContentLength(
+					rawResult, tc.ResultContentLength,
+				)
 				continue
 			}
 			tc.ResultContent = summary

@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
@@ -295,6 +296,72 @@ func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
 	require.NotNil(t, full)
 	require.NotNil(t, full.FilePath)
 	assert.Contains(t, *full.FilePath, "devbox:/home/wes/.claude/projects/test-project/session.jsonl")
+}
+
+func TestImporterAppliesDBOwnedToolResultImagePolicy(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	database.SetToolResultImages(config.ToolResultImagesDrop)
+
+	extracted := t.TempDir()
+	remoteRoot := "/home/remote/.codex/sessions"
+	const sessionUUID = "019eb791-cf7d-75c1-8439-9ed74c1229f6"
+	localDir := filepath.Join(
+		remappedRemotePath(extracted, remoteRoot), "2024", "01", "01",
+	)
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	imageContent := `[{
+  "type":"input_image",
+  "image_url":"data:image/png;base64,AAEC"
+}]`
+	transcript := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			sessionUUID, "/work", "codex", "2024-01-01T00:00:00Z",
+		),
+		testjsonl.CodexMsgJSON(
+			"user", "show the image", "2024-01-01T00:00:01Z",
+		),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"Read", "call_image", map[string]string{
+				"file_path": "image.png",
+			}, "2024-01-01T00:00:02Z",
+		),
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_image", imageContent, "2024-01-01T00:00:03Z",
+		),
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(
+			localDir,
+			"rollout-2024-01-01T10-00-00-"+sessionUUID+".jsonl",
+		),
+		[]byte(transcript), 0o644,
+	))
+
+	stats, err := (Importer{Host: "devbox", DB: database}).ImportExtracted(
+		t.Context(), TargetSet{Dirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {remoteRoot},
+		}}, extracted,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	messages, err := database.GetAllMessages(
+		t.Context(), page.Sessions[0].ID,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 1)
+	call := messages[1].ToolCalls[0]
+	require.Len(t, call.ResultEvents, 1)
+	assert.Contains(t, call.ResultContent, "agentsview_image")
+	assert.NotContains(t, call.ResultContent, "input_image")
+	assert.Contains(t, call.ResultEvents[0].Content, "agentsview_image")
+	assert.NotContains(t, call.ResultEvents[0].Content, "input_image")
 }
 
 func TestRequireCompleteRejectsDeferredWithoutHardFailure(t *testing.T) {

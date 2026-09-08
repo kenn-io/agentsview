@@ -134,6 +134,7 @@ func (db *DB) WriteSessionBatchContext(
 		if err != nil {
 			return result, err
 		}
+		write.Messages, _ = db.ProjectToolResultImages(write.Messages)
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := ctxTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
@@ -222,6 +223,7 @@ func (db *DB) WriteSessionBatchAtomic(
 
 	for i, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
+		write.Messages, _ = db.ProjectToolResultImages(write.Messages)
 		messagesWritten, err := writeOneSessionBatchTx(
 			context.Background(), tx, tx,
 			write,

@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -1397,6 +1398,7 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
+	msgs, _ = db.ProjectToolResultImages(msgs)
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -1586,6 +1588,20 @@ func applyMessageTokenUsageUpdateTx(
 func (db *DB) WriteSessionIncremental(
 	sessionID string, msgs []Message, update IncrementalSessionUpdate,
 ) (bool, error) {
+	if err := db.requireWritable(); err != nil {
+		return false, err
+	}
+	msgs, _ = db.ProjectToolResultImages(msgs)
+	if db.ToolResultImages() == config.ToolResultImagesDrop {
+		update.SubagentLinks = append([]ToolCallSubagentLink(nil), update.SubagentLinks...)
+		for i := range update.SubagentLinks {
+			content, _ := StripToolResultImages(update.SubagentLinks[i].ResultContent)
+			update.SubagentLinks[i].ResultContent = content
+			update.SubagentLinks[i].ResultContentLen = ResolveResultContentLength(
+				content, update.SubagentLinks[i].ResultContentLen,
+			)
+		}
+	}
 	t := time.Now()
 	defer func() {
 		if d := time.Since(t); d > slowOpThreshold {
@@ -1788,6 +1804,7 @@ type savedPin struct {
 func (db *DB) ReplaceSessionMessages(
 	sessionID string, msgs []Message,
 ) error {
+	msgs, _ = db.ProjectToolResultImages(msgs)
 	msgs = append([]Message(nil), msgs...)
 	_ = ValidateAndSanitize(nil, msgs, nil)
 
@@ -2094,6 +2111,7 @@ func (db *DB) replaceSessionContent(
 	signals SessionSignalUpdate, findings []SecretFinding,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 ) error {
+	msgs, _ = db.ProjectToolResultImages(msgs)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

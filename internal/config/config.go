@@ -704,7 +704,8 @@ type Config struct {
 	// set so loadFile doesn't override env-set values.
 	agentDirSource map[parser.AgentType]dirSource
 
-	ResultContentBlockedCategories []string `json:"result_content_blocked_categories,omitempty" toml:"result_content_blocked_categories"`
+	ResultContentBlockedCategories []string         `json:"result_content_blocked_categories,omitempty" toml:"result_content_blocked_categories"`
+	ToolResultImages               ToolResultImages `json:"tool_result_images,omitempty" toml:"tool_result_images"`
 
 	// SyncIncludeCwdPrefixes, when non-empty, restricts local session
 	// ingestion to sessions whose working directory equals one of the
@@ -1445,6 +1446,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		SyncIncludeCwdPrefixes         []string               `toml:"sync_include_cwd_prefixes"`
 		ScanProtectedPaths             bool                   `toml:"scan_protected_paths"`
 		ResultContentBlockedCategories []string               `toml:"result_content_blocked_categories"`
+		ToolResultImages               string                 `toml:"tool_result_images"`
 		Terminal                       TerminalConfig         `toml:"terminal"`
 		AuthToken                      string                 `toml:"auth_token"`
 		RequireAuth                    bool                   `toml:"require_auth"`
@@ -1533,6 +1535,13 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.ResultContentBlockedCategories != nil {
 		c.ResultContentBlockedCategories = file.ResultContentBlockedCategories
+	}
+	if meta.IsDefined("tool_result_images") {
+		policy, err := ParseToolResultImages(file.ToolResultImages)
+		if err != nil {
+			return err
+		}
+		c.ToolResultImages = policy
 	}
 	if file.Terminal.Mode != "" {
 		c.Terminal = file.Terminal
@@ -3258,6 +3267,15 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
 	patch = maps.Clone(patch)
+	if value, ok := patch["tool_result_images"]; ok {
+		policy, ok := value.(ToolResultImages)
+		if !ok {
+			return fmt.Errorf("tool_result_images must use the typed configuration value")
+		}
+		if _, err := ParseToolResultImages(string(policy)); err != nil {
+			return err
+		}
+	}
 	if value, ok := patch["chart_palette"]; ok {
 		palette, ok := value.(ChartPalette)
 		if !ok {
@@ -3369,6 +3387,11 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["chart_palette"]; ok {
 			if palette, ok := v.(ChartPalette); ok {
 				c.ChartPalette = palette
+			}
+		}
+		if v, ok := patch["tool_result_images"]; ok {
+			if policy, ok := v.(ToolResultImages); ok {
+				c.ToolResultImages = policy
 			}
 		}
 		if v, ok := patch["disabled_agents"]; ok {

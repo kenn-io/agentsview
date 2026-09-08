@@ -496,6 +496,33 @@ at risk. Do not delete the manifest or the database files by hand.
 
 ______________________________________________________________________
 
+### `agentsview db strip --images`
+
+Remove supported inline image payloads from stored tool-result rows. The
+command requires `--images`; it uses the existing direct maintenance write
+owner and confirmation prompt. It never changes provider source files or
+standalone image files. Run `db compact` separately when you need measured
+SQLite file-space reclamation.
+
+```bash
+agentsview db strip --images [flags]
+```
+
+| Flag        | Default | Description                                         |
+| ----------- | ------- | --------------------------------------------------- |
+| `--images`  | `false` | Required image cleanup operation                    |
+| `--project` |         | Sessions whose project contains this substring     |
+| `--before`  |         | Sessions that ended before this date (`YYYY-MM-DD`) |
+| `--dry-run` | `false` | Preview selected sessions and byte counts           |
+| `--yes`     | `false` | Skip confirmation                                   |
+| `--format`  | `human` | Use `json` for machine-readable output              |
+
+JSON apply requires `--yes`. Preview and a declined confirmation leave the
+archive unchanged. Reported stored-content bytes and decoded image bytes are
+content measurements, not reclaimed disk space.
+
+______________________________________________________________________
+
 ### `agentsview version`
 
 Print the version, git commit, and build date. Use `--json` for a stable,

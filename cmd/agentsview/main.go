@@ -1327,6 +1327,7 @@ func openDB(cfg config.Config) (*db.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	database.SetToolResultImages(cfg.ToolResultImages)
 	localMachine := cfg.LocalMachineName
 	if strings.TrimSpace(localMachine) == "" {
 		localMachine = "local"

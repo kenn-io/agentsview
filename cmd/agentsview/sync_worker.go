@@ -378,5 +378,6 @@ func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,
 		Machine:                 cfg.LocalMachineName,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
+		ToolResultImages:        cfg.ToolResultImages,
 	}
 }

@@ -209,6 +209,59 @@ func TestSyncWorkerResyncBuildModeBuildsReplacement(t *testing.T) {
 		"worker must leave the built replacement for the daemon to swap")
 }
 
+func TestSyncWorkerResyncBuildUsesConfiguredImagePolicy(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	claudeRoot := cfg.AgentDirs[parser.AgentClaude][0]
+	imageSession := filepath.Join(claudeRoot, "-home-proj0", "session0.jsonl")
+	imageContent := `[ {"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"} ]`
+	require.NoError(t, os.WriteFile(imageSession, []byte(
+		testjsonl.NewSessionBuilder().
+			AddClaudeUser("2026-01-01T00:00:00Z", "hello").
+			AddRaw(`{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call-image","name":"Read","input":{}}]}}`).
+			AddRaw(fmt.Sprintf(`{"type":"user","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-image","content":%s}]}}`, imageContent)).
+			String(),
+	), 0o644))
+
+	seedCfg := cfg
+	seedCfg.ToolResultImages = config.ToolResultImagesKeep
+	database, err := db.Open(cfg.DBPath)
+	require.NoError(t, err)
+	engine := sync.NewEngine(database, workerEngineConfig(seedCfg))
+	require.Equal(t, 3, engine.SyncAll(context.Background(), nil).Synced)
+	engine.Close()
+	require.NoError(t, database.Close())
+
+	cfg.ToolResultImages = config.ToolResultImagesDrop
+	var out bytes.Buffer
+	require.NoError(t, runSyncWorker(cfg, "resync-build", &out))
+	require.Equal(t, "ok", decodeSingleResult(t, &out).Status)
+
+	replacement, err := db.Open(cfg.DBPath + "-resync")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, replacement.Close()) }()
+	page, err := replacement.ListSessions(context.Background(), db.SessionFilter{})
+	require.NoError(t, err)
+	var foundImageCall bool
+	for _, session := range page.Sessions {
+		messages, err := replacement.GetAllMessages(context.Background(), session.ID)
+		require.NoError(t, err)
+		for _, message := range messages {
+			for _, call := range message.ToolCalls {
+				if call.ToolUseID != "call-image" {
+					continue
+				}
+				foundImageCall = true
+				assert.NotContains(t, call.ResultContent, "input_image")
+				assert.NotContains(t, call.ResultContent, "data:image")
+				for _, event := range call.ResultEvents {
+					assert.NotContains(t, event.Content, "input_image")
+				}
+			}
+		}
+	}
+	assert.True(t, foundImageCall, "fixture must reach the normalized tool-result tables")
+}
+
 // TestSyncWorkerResyncBuildAppliesClassifierConfig pins the classifier wiring
 // for the resync-build worker: it runs in a fresh process, so unless it
 // installs the configured automation patterns before building, the rebuilt
