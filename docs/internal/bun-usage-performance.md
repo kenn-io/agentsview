@@ -143,6 +143,35 @@ on the stack, using the same 200-message fixture and twenty iterations.
 Allocations fell from 1,756 to 915. The streaming-query change does not alter
 that writer. Earlier noisy 77/39 ms samples are not evidence of a write speedup.
 
+## Fresh-sync follow-up
+
+The separate production-scale benchmark reported fresh sync at 437.70 seconds
+for `6a81b90eb0c07ad2a2dc4ba92fbe35255b50e1e1`, against 383.96 seconds for
+`e1e2eaf81f4d11b6b8e08fb36d17817a8c61d319`. This 14% regression was not covered
+by the earlier usage measurements or the passing repository benchmark gate. The
+same report measured daily usage within 3% of its baseline.
+
+Native samples of a synthetic full rebuild showed substantial time in repeated
+UTF-8 and control-character scans of clean transcript bodies. The shared
+sanitizer now checks clean input in one pass, decoding only non-ASCII text.
+Inputs needing repair retain the existing normalization behavior. Archive,
+PostgreSQL, and fingerprint callers use the same implementation.
+
+The clean-text microbenchmark improved from a median 20.84 microseconds to 9.53
+microseconds per 16 KiB, with zero allocations in both versions. The
+full-rebuild fixture uses 100 sessions, 300 messages per session, and 16 KiB of
+additional assistant text. Three-iteration compiled-binary runs measured 3.84
+seconds before and 3.21 seconds after the change. The reverse-order run measured
+3.62 seconds before and 3.24 seconds after, a 10% improvement. Host contention
+affected earlier samples; these local measurements do not establish that the
+production-scale regression is resolved. That requires a new run of the external
+fresh-sync benchmark against the pushed revision.
+
+The full-rebuild fixture can be reproduced with
+`AGENTSVIEW_BENCH_SYNC_SESSIONS=100`, `AGENTSVIEW_BENCH_SYNC_MESSAGES=300`, and
+`AGENTSVIEW_BENCH_SYNC_REPLY_BYTES=16384`, running
+`BenchmarkResyncBulkContributorIngestUsage` with `-benchtime 3x`.
+
 ## Correctness and delivery
 
 The shared contract exercises all three engines. It preserves exact costs,

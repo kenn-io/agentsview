@@ -2516,6 +2516,29 @@ func (db *DB) MessageContentFingerprint(sessionID string) (sum, max, min int64, 
 // raw NUL must be removed before strings.ToValidUTF8 (which treats it
 // as valid).
 func SanitizeUTF8(s string) string {
+	// Most source text needs no repair. Validate and check controls in one
+	// pass, without decoding ASCII or calling a predicate for every byte.
+	clean := true
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c < utf8.RuneSelf {
+			if c == 0x7f || c < 0x20 && c != '\n' && c != '\t' && c != '\r' {
+				clean = false
+				break
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 || isStrippableControl(r) {
+			clean = false
+			break
+		}
+		i += size
+	}
+	if clean {
+		return s
+	}
 	s = strings.ReplaceAll(s, "\x00", "")
 	s = strings.ToValidUTF8(s, "")
 	// Fast path: skip the rune scan and allocation when the string
