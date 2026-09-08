@@ -875,18 +875,27 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	}
 	lock := flock.New(path)
 	locked, err := startLockTryLock(lock)
-	if err == nil && locked {
-		_ = lock.Unlock()
-		return false
+	if err == nil {
+		if locked {
+			_ = lock.Unlock()
+			return false
+		}
+		// The lock is cleanly, unambiguously held by someone else right now.
+		// That is authoritative on its own: a process can legitimately hold
+		// the lock for a moment before its first startup snapshot write, so
+		// cross-checking a snapshot here could read a still-stale one left
+		// by a *previous*, now-dead holder and wrongly wave through a
+		// concurrent second launch while the real owner is still starting.
+		return true
 	}
-	// The probe found the lock held (or failed outright). Normally that
-	// means another process is genuinely starting, but a process that dies
-	// between acquiring this lock and writing its runtime record leaves it
-	// looking held forever on platforms where a crashed holder's lock isn't
-	// promptly released. Fall back to the startup snapshot's own recorded
-	// owner: if that pid is confirmably dead (or reused by a different
-	// process), this is an orphan, not a live launch, so self-heal it the
-	// same way isLegacyDaemonStarting already does for the legacy lock file.
+	// The probe itself failed rather than cleanly determining the lock is
+	// held. That's ambiguous, not proof of an active startup: on a platform
+	// where a crashed holder's lock file leaves the probe erroring instead
+	// of cleanly unlockable, treating every error as "still starting" would
+	// wedge every future launch forever, since this exact probe would keep
+	// failing the same way. Break the tie using the startup snapshot's own
+	// recorded owner, the same way isLegacyDaemonStarting already does for
+	// the legacy lock file.
 	if orphanedStartupState(dataDir) {
 		removeStartupState(dataDir)
 		return false
@@ -896,10 +905,11 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 
 // orphanedStartupState reports whether dataDir holds a startup snapshot
 // whose recorded owner is confirmably gone: the pid is not alive, or it is
-// alive but its OS create time no longer matches the snapshot (the pid was
-// recycled by an unrelated process). A missing/unreadable snapshot, or one
-// whose pid is alive with no create time to cross-check, is not evidence
-// either way and must not self-heal a possibly-genuine in-progress startup.
+// alive but its OS create time explicitly mismatches the snapshot (the pid
+// was recycled by an unrelated process). A missing/unreadable snapshot, or
+// one whose owner's create time can't be verified either way, is not
+// evidence of anything and must not self-heal a possibly-genuine
+// in-progress startup.
 func orphanedStartupState(dataDir string) bool {
 	st := readStartupState(dataDir)
 	if st == nil || st.PID <= 0 {
@@ -908,7 +918,8 @@ func orphanedStartupState(dataDir string) bool {
 	if !daemon.ProcessAlive(st.PID) {
 		return true
 	}
-	return st.CreateTime != "" && !processCreateTimeMatches(st.PID, st.CreateTime)
+	return st.CreateTime != "" &&
+		processCreateTimeStateForPID(st.PID, st.CreateTime) == processCreateTimeMismatch
 }
 
 func isExternalDaemonStarting(dataDir string) bool {

@@ -1234,35 +1234,23 @@ func TestIsLocalDaemonActive_UnprobeableLegacyStateFileDoesNotSuppressWrites(
 		"unprobeable legacy state should not become a kit runtime record")
 }
 
-func writeStartupStateForTest(t *testing.T, dir string, pid int) {
+func writeStartupStateForTest(t *testing.T, dir string, pid int, createTime string) {
 	t.Helper()
 	state := startupState{
-		PID:       pid,
-		Phase:     "initial sync",
-		StartedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		PID:        pid,
+		Phase:      "initial sync",
+		StartedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		CreateTime: createTime,
 	}
 	data, err := json.Marshal(state)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
 }
 
-func TestIsDaemonStarting_OrphanedStartupStateSelfHeals(t *testing.T) {
+func TestIsDaemonStarting_ProbeErrorWithDeadOwnerSelfHeals(t *testing.T) {
 	dir := runtimeTestDir(t)
-	writeStartupStateForTest(t, dir, deadPID(t))
-
-	oldTryLock := startLockTryLock
-	startLockTryLock = func(*flock.Flock) (bool, error) { return false, nil }
-	t.Cleanup(func() { startLockTryLock = oldTryLock })
-
-	assert.False(t, isDaemonStarting(dir),
-		"a startup lock whose recorded owner is dead must not wedge future launches")
-	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
-}
-
-func TestIsDaemonStarting_LockProbeErrorAlsoSelfHeals(t *testing.T) {
-	dir := runtimeTestDir(t)
-	writeStartupStateForTest(t, dir, deadPID(t))
+	writeStartupStateForTest(t, dir, deadPID(t), "")
 
 	oldTryLock := startLockTryLock
 	startLockTryLock = func(*flock.Flock) (bool, error) {
@@ -1271,20 +1259,78 @@ func TestIsDaemonStarting_LockProbeErrorAlsoSelfHeals(t *testing.T) {
 	t.Cleanup(func() { startLockTryLock = oldTryLock })
 
 	assert.False(t, isDaemonStarting(dir),
-		"a lock probe error must still self-heal when the recorded owner is dead")
+		"a lock probe error must self-heal when the recorded owner is confirmably dead")
 	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
 }
 
-func TestIsDaemonStarting_LiveOwnerStaysBlocked(t *testing.T) {
+func TestIsDaemonStarting_ProbeErrorWithRecycledPIDSelfHeals(t *testing.T) {
 	dir := runtimeTestDir(t)
-	writeStartupStateForTest(t, dir, os.Getpid())
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	// A wrong-but-parseable create time simulates the recorded pid having
+	// been recycled by a different, unrelated process since the snapshot
+	// was written.
+	writeStartupStateForTest(t, dir, os.Getpid(), strconv.FormatInt(createTime+1, 10))
+
+	oldTryLock := startLockTryLock
+	startLockTryLock = func(*flock.Flock) (bool, error) {
+		return false, errors.New("simulated lock probe failure")
+	}
+	t.Cleanup(func() { startLockTryLock = oldTryLock })
+
+	assert.False(t, isDaemonStarting(dir),
+		"a lock probe error must self-heal when the recorded pid was recycled by another process")
+	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
+}
+
+func TestIsDaemonStarting_ProbeErrorWithUnverifiableCreateTimeStaysBlocked(t *testing.T) {
+	dir := runtimeTestDir(t)
+	// A live pid whose recorded create time can't be parsed/compared is an
+	// unknown state, not a confirmed mismatch: it must not self-heal a
+	// possibly-genuine in-progress startup.
+	writeStartupStateForTest(t, dir, os.Getpid(), "not-a-number")
+
+	oldTryLock := startLockTryLock
+	startLockTryLock = func(*flock.Flock) (bool, error) {
+		return false, errors.New("simulated lock probe failure")
+	}
+	t.Cleanup(func() { startLockTryLock = oldTryLock })
+
+	assert.True(t, isDaemonStarting(dir),
+		"an unverifiable create-time state must fail closed, not self-heal")
+	assert.FileExists(t, startupStatePath(dir))
+}
+
+func TestIsDaemonStarting_CleanlyHeldLockStaysBlockedEvenWithStaleSnapshot(t *testing.T) {
+	dir := runtimeTestDir(t)
+	// The lock is cleanly, unambiguously held by someone right now, but the
+	// on-disk snapshot still names a dead pid: the window between a fresh
+	// holder acquiring the lock and publishing its first snapshot. The lock
+	// itself is authoritative here and must not be second-guessed by a
+	// snapshot that simply hasn't caught up yet.
+	writeStartupStateForTest(t, dir, deadPID(t), "")
 
 	oldTryLock := startLockTryLock
 	startLockTryLock = func(*flock.Flock) (bool, error) { return false, nil }
 	t.Cleanup(func() { startLockTryLock = oldTryLock })
 
 	assert.True(t, isDaemonStarting(dir),
-		"a startup lock whose recorded owner is alive must stay blocked")
+		"a cleanly-held lock must stay blocked regardless of a stale snapshot")
+	assert.FileExists(t, startupStatePath(dir))
+}
+
+func TestIsDaemonStarting_LiveOwnerStaysBlocked(t *testing.T) {
+	dir := runtimeTestDir(t)
+	writeStartupStateForTest(t, dir, os.Getpid(), "")
+
+	oldTryLock := startLockTryLock
+	startLockTryLock = func(*flock.Flock) (bool, error) {
+		return false, errors.New("simulated lock probe failure")
+	}
+	t.Cleanup(func() { startLockTryLock = oldTryLock })
+
+	assert.True(t, isDaemonStarting(dir),
+		"a startup lock whose recorded owner is alive (no create time to cross-check) must stay blocked")
 	assert.FileExists(t, startupStatePath(dir))
 }
 
