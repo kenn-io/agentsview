@@ -430,6 +430,20 @@ describe("renderMarkdown", () => {
       expect(parseHTML(enabled).querySelector("h1")).not.toBeNull();
     });
 
+    it("preserves prose before a complete block", () => {
+      const source = "Intro **text**\n<policy>\n# heading\n</policy>\nAfter";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelector("p")?.textContent).toContain("Intro text");
+      expect(dom.querySelector("pre > code")?.textContent).toBe(
+        "<policy>\n# heading\n</policy>\n",
+      );
+      expect(dom.textContent).toContain("After");
+      expect(dom.querySelector("h1")).toBeNull();
+    });
+
     it("captures complete blocks with up to three leading spaces", () => {
       const source = "  <policy>\n# heading\n  </policy>";
       const dom = parseHTML(

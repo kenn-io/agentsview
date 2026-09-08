@@ -164,7 +164,7 @@ function bashWrapperExtension(
 
 function findFirstCompleteUnknownXmlBlock(
   src: string,
-): { start: number; end: number } | undefined {
+): { start: number; rawStart: number; end: number } | undefined {
   const fenceRanges: MarkdownFenceRange[] = [];
   const fenceRe = /^ {0,3}(`{3,}|~{3,})[^\n]*$/gm;
   let openFence: { start: number; char: string; length: number } | undefined;
@@ -180,8 +180,8 @@ function findFirstCompleteUnknownXmlBlock(
   }
   if (openFence) fenceRanges.push({ start: openFence.start, end: src.length });
 
-  const openByName = new Map<string, Array<{ start?: number }>>();
-  const complete: Array<{ start: number; end: number }> = [];
+  const openByName = new Map<string, Array<{ start?: number; rawStart?: number }>>();
+  const complete: Array<{ start: number; rawStart: number; end: number }> = [];
   let fenceIndex = 0;
 
   XML_TAG_SCAN_RE.lastIndex = 0;
@@ -200,8 +200,12 @@ function findFirstCompleteUnknownXmlBlock(
     const stack = openByName.get(name) ?? [];
     if (tagText.startsWith("</")) {
       const opening = stack.pop();
-      if (opening?.start !== undefined) {
-        complete.push({ start: opening.start, end: XML_TAG_SCAN_RE.lastIndex });
+      if (opening?.start !== undefined && opening.rawStart !== undefined) {
+        complete.push({
+          start: opening.start,
+          rawStart: opening.rawStart,
+          end: XML_TAG_SCAN_RE.lastIndex,
+        });
       }
       if (stack.length === 0) openByName.delete(name);
       continue;
@@ -211,16 +215,12 @@ function findFirstCompleteUnknownXmlBlock(
       const lineStart = src.lastIndexOf("\n", tag.index - 1) + 1;
       const indentation = src.slice(lineStart, tag.index);
       const start = /^ {0,3}$/.test(indentation) ? tag.index : undefined;
-      stack.push({ start });
+      stack.push({ start, rawStart: start === undefined ? undefined : lineStart });
       openByName.set(name, stack);
     }
   }
 
   return complete.sort((left, right) => left.start - right.start)[0];
-}
-
-function findUnknownXmlBlockEnd(src: string): number | undefined {
-  return findFirstCompleteUnknownXmlBlock(src)?.end;
 }
 
 /** Build a tokenizer that captures a complete unknown XML block before
@@ -235,9 +235,9 @@ function unknownXmlBlockExtension(): TokenizerExtension {
       return block && block.start > 0 ? block.start : undefined;
     },
     tokenizer(src) {
-      const blockEnd = findUnknownXmlBlockEnd(src);
-      if (blockEnd === undefined) return undefined;
-      const raw = src.slice(0, blockEnd);
+      const block = findFirstCompleteUnknownXmlBlock(src);
+      if (!block || block.rawStart !== 0) return undefined;
+      const raw = src.slice(block.rawStart, block.end);
       return {
         type: "code",
         raw,
