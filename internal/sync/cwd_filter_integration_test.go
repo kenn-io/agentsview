@@ -450,7 +450,8 @@ func TestSyncEngineCursorCwdDataVersionRefresh(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.True(t, changed)
-	assert.Equal(t, 99, env.db.GetSessionDataVersion(fullID))
+	assert.Equal(t, db.CurrentDataVersion()-1, env.db.GetSessionDataVersion(fullID),
+		"cwd repair must mark the row stale by exactly one version")
 	stats := env.engine.SyncAllSince(
 		t.Context(), time.Now().Add(time.Hour), nil,
 	)
