@@ -893,14 +893,24 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	// a crashed holder's lock file leaves the probe erroring instead of
 	// cleanly unlockable, but it can just as easily come from a live holder
 	// (e.g. a transient sharing violation), so it is not on its own proof of
-	// either state. Break the tie using the startup snapshot's own recorded
-	// owner, the same way isLegacyDaemonStarting already does for the legacy
-	// lock file.
-	if orphanedStartupState(dataDir, orphanedStartupStateNow()) {
-		removeStartupState(dataDir)
-		return false
+	// either state. Cross-check the startup snapshot's own recorded owner,
+	// the same way isLegacyDaemonStarting already does for the legacy lock
+	// file, but a stale-looking snapshot still isn't proof the underlying
+	// lock is actually free: only reporting "clear" after genuinely
+	// re-acquiring it ourselves (and releasing it again, since this is a
+	// probe rather than a real launch) rules that out. If we can't acquire
+	// it either, we still can't tell the two cases apart, so fail closed.
+	if !orphanedStartupState(dataDir, orphanedStartupStateNow()) {
+		return true
 	}
-	return true
+	recovery := flock.New(path)
+	recoveryLocked, recoveryErr := startLockTryLock(recovery)
+	if recoveryErr != nil || !recoveryLocked {
+		return true
+	}
+	_ = recovery.Unlock()
+	removeStartupState(dataDir)
+	return false
 }
 
 // orphanedStartupStateGracePeriod bounds how long a startup snapshot can go

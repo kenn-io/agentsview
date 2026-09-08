@@ -1256,8 +1256,39 @@ func wellPastStartupGrace() time.Time {
 	return time.Now().Add(-orphanedStartupStateGracePeriod - time.Second)
 }
 
+// errorThenRecoverableTryLock simulates the initial ambiguous probe failure
+// followed by the fix's own verification re-acquire genuinely succeeding,
+// i.e. the lock really is free by the time recovery is attempted.
+func errorThenRecoverableTryLock() func(*flock.Flock) (bool, error) {
+	calls := 0
+	return func(*flock.Flock) (bool, error) {
+		calls++
+		if calls == 1 {
+			return false, errors.New("simulated lock probe failure")
+		}
+		return true, nil
+	}
+}
+
 func TestIsDaemonStarting_ProbeErrorWithDeadOwnerPastGracePeriodSelfHeals(t *testing.T) {
 	dir := runtimeTestDir(t)
+	writeStartupStateForTest(t, dir, deadPID(t), "", wellPastStartupGrace())
+
+	oldTryLock := startLockTryLock
+	startLockTryLock = errorThenRecoverableTryLock()
+	t.Cleanup(func() { startLockTryLock = oldTryLock })
+
+	assert.False(t, isDaemonStarting(dir),
+		"a lock probe error must self-heal a confirmably dead owner once the grace period passes and the lock is verified free")
+	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
+}
+
+func TestIsDaemonStarting_OrphanedSnapshotButLockStillUnrecoverableStaysBlocked(t *testing.T) {
+	dir := runtimeTestDir(t)
+	// The snapshot looks orphaned (dead pid, past the grace period), but the
+	// underlying lock genuinely still can't be acquired -- proof the probe
+	// error case can't be told apart from a live holder by the snapshot
+	// alone. Must fail closed rather than trust the snapshot.
 	writeStartupStateForTest(t, dir, deadPID(t), "", wellPastStartupGrace())
 
 	oldTryLock := startLockTryLock
@@ -1266,9 +1297,10 @@ func TestIsDaemonStarting_ProbeErrorWithDeadOwnerPastGracePeriodSelfHeals(t *tes
 	}
 	t.Cleanup(func() { startLockTryLock = oldTryLock })
 
-	assert.False(t, isDaemonStarting(dir),
-		"a lock probe error must self-heal a confirmably dead owner once the grace period passes")
-	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
+	assert.True(t, isDaemonStarting(dir),
+		"an orphaned-looking snapshot must not be trusted when the lock itself can't be verified free")
+	assert.FileExists(t, startupStatePath(dir),
+		"startup-state.json must not be removed without verifying the lock is actually free")
 }
 
 func TestIsDaemonStarting_ProbeErrorWithDeadOwnerWithinGracePeriodStaysBlocked(t *testing.T) {
@@ -1304,13 +1336,11 @@ func TestIsDaemonStarting_ProbeErrorWithRecycledPIDPastGracePeriodSelfHeals(t *t
 	)
 
 	oldTryLock := startLockTryLock
-	startLockTryLock = func(*flock.Flock) (bool, error) {
-		return false, errors.New("simulated lock probe failure")
-	}
+	startLockTryLock = errorThenRecoverableTryLock()
 	t.Cleanup(func() { startLockTryLock = oldTryLock })
 
 	assert.False(t, isDaemonStarting(dir),
-		"a lock probe error must self-heal a recycled pid once the grace period passes")
+		"a lock probe error must self-heal a recycled pid once the grace period passes and the lock is verified free")
 	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
 }
 
