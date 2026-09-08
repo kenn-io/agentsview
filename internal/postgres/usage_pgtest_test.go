@@ -2091,3 +2091,27 @@ func TestStoreGetSessionUsage_CodebuffCostOnlyReported(t *testing.T) {
 	assert.Equal(t, []string{"base2-deepseek"}, u.Models,
 		"the parser-attributed template name must surface in Models")
 }
+
+func TestStoreDailyUsageActiveSincePreservesMicrosecondsBeforeDedup(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_microseconds_test")
+	_, err := store.bun.NewRaw(`
+  INSERT INTO sessions (id, project, machine, agent, started_at, ended_at, message_count, user_message_count)
+  VALUES ('a-outside', 'a-outside', 'host', 'codex', '2026-08-05T12:00:00.000001Z', '2026-08-05T12:00:00.000001Z', 1, 1),
+         ('b-inside', 'b-inside', 'host', 'codex', '2026-08-05T12:00:00.000002Z', '2026-08-05T12:00:00.000002Z', 1, 1)`).Exec(t.Context())
+	require.NoError(t, err)
+	_, err = store.bun.NewRaw(`
+  INSERT INTO messages (session_id, ordinal, role, content, timestamp, content_length, model, source_uuid, token_usage)
+  VALUES ('a-outside', 0, 'assistant', '', '2026-08-05T11:00:00Z', 0, 'usage-model', 'shared-source', '{"input_tokens":99}'),
+         ('b-inside', 0, 'assistant', '', '2026-08-05T11:00:00Z', 0, 'usage-model', 'shared-source', '{"input_tokens":7}')`).Exec(t.Context())
+	require.NoError(t, err)
+	filter := db.UsageFilter{
+		From: "2026-08-05", To: "2026-08-05", Timezone: "UTC",
+		ActiveSince: "2026-08-05T12:00:00.000002Z",
+	}
+	result, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 7, result.Totals.InputTokens)
+	counts, err := store.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+}

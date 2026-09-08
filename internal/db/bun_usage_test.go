@@ -814,3 +814,37 @@ func TestBunUsageCountsDiscardReplayedView(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, matching)
 }
+
+func TestBunDailyUsageActiveSincePreservesMicrosecondsBeforeDedup(t *testing.T) {
+	database := testDB(t)
+	for _, row := range []struct {
+		id, ended string
+		tokens    int
+	}{
+		{"a-outside", "2026-08-05T12:00:00.000001Z", 99},
+		{"b-inside", "2026-08-05T12:00:00.000002Z", 7},
+	} {
+		require.NoError(t, database.UpsertSession(Session{
+			ID: row.id, Project: row.id, Agent: "codex",
+			StartedAt: &row.ended, EndedAt: &row.ended, CreatedAt: row.ended,
+			MessageCount: 1, UserMessageCount: 1,
+		}))
+		insertMessages(t, database, Message{
+			SessionID: row.id, Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-08-05T11:00:00Z", Model: "usage-model",
+			SourceUUID: "shared-source",
+			TokenUsage: fmt.Appendf(nil, `{"input_tokens":%d}`, row.tokens),
+		})
+	}
+	store := NewBunStore(&sessionContractBackend{store: database.bunReader})
+	filter := UsageFilter{
+		From: "2026-08-05", To: "2026-08-05", Timezone: "UTC",
+		ActiveSince: "2026-08-05T12:00:00.000002Z",
+	}
+	result, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 7, result.Totals.InputTokens)
+	counts, err := store.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+}

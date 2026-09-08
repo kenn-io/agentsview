@@ -1049,7 +1049,13 @@ func (s *BunStore) streamBunNormalizedDailyUsageRows(
 	}
 	// Ordinary identities need a seen set; completed Claude groups do not.
 	seen := make(map[usageDedupToken]struct{})
+	preciseSessionTimeFilter := filter.ActiveSince != "" || usageHasTerminationFilter(filter.Termination)
 	consumeOrdinary := func(row bunDailyUsageProjection) error {
+		// SQL timestamp comparisons can round sub-millisecond activity onto a
+		// cutoff. Reject those rows before they claim a duplicate identity.
+		if preciseSessionTimeFilter && !bunDailyUsageSessionMatches(row, filter, referenceTime) {
+			return nil
+		}
 		daily := dailyUsageProjectionToRow(row)
 		if !withinBounds(daily) {
 			return nil
