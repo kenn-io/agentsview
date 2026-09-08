@@ -444,7 +444,8 @@ func evenerMessage(entry evenerEntry, ordinal int) ParsedMessage {
 				text := evenerResultText(part)
 				raw, _ := json.Marshal(text)
 				msg.ToolResults = append(msg.ToolResults, ParsedToolResult{ToolUseID: part.ToolResult.ToolCallID, ContentLength: len(text), ContentRaw: string(raw)})
-				content = append(content, text)
+				// Result bodies must pass through the tool-category storage filter.
+				msg.ContentLength += len(text)
 			}
 		default:
 			content = append(content, "["+part.Kind+"] "+part.Text)
@@ -461,12 +462,12 @@ func evenerMessage(entry evenerEntry, ordinal int) ParsedMessage {
 		content = append(content, "["+turn.Kind+"] "+string(entry.raw))
 	}
 	msg.Content = strings.TrimSpace(strings.Join(content, "\n"))
-	if msg.Content == "" && !msg.HasThinking && len(msg.ToolCalls) == 0 {
+	if msg.Content == "" && !msg.HasThinking && len(msg.ToolCalls) == 0 && len(msg.ToolResults) == 0 {
 		msg.Content = "[" + turn.Kind + "]"
 	}
 	msg.ThinkingText = strings.TrimSpace(strings.Join(thinking, "\n"))
 	msg.HasToolUse = len(msg.ToolCalls) > 0
-	msg.ContentLength = len(msg.Content)
+	msg.ContentLength += len(msg.Content)
 	return msg
 }
 

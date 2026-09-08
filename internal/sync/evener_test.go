@@ -13,6 +13,47 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+func TestEvenerRespectsBlockedResultCategories(t *testing.T) {
+	for _, category := range []string{"Read", "Glob", "Bash"} {
+		t.Run(category, func(t *testing.T) {
+			database := openTestDB(t)
+			root := t.TempDir()
+			sessions := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(sessions, 0o755))
+			source, err := os.ReadFile("testdata/evener/demo.transcript.jsonl")
+			require.NoError(t, err)
+			text := strings.ReplaceAll(string(source), "exec_command", category)
+			text = strings.ReplaceAll(text, `"content":"/workspace/demo"`, `"content":"result-marker"`)
+			require.NoError(t, os.WriteFile(filepath.Join(sessions, "demo.transcript.jsonl"), []byte(text), 0o600))
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentEvener: {root}}, Machine: "local",
+				BlockedResultCategories: []string{"Read", "Glob"},
+			})
+			t.Cleanup(engine.Close)
+			stats := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			require.Equal(t, 1, stats.Synced)
+			messages, err := database.GetMessages(t.Context(), "evener:demo", 0, 100, true)
+			require.NoError(t, err)
+			require.Len(t, messages, 3)
+			require.Len(t, messages[1].ToolCalls, 1)
+			call := messages[1].ToolCalls[0]
+			assert.Equal(t, category, call.Category)
+			require.Len(t, call.ResultEvents, 1)
+			if category == "Bash" {
+				assert.Equal(t, "result-marker", call.ResultContent)
+				assert.Equal(t, "result-marker", call.ResultEvents[0].Content)
+			} else {
+				assert.Empty(t, call.ResultContent)
+				assert.Empty(t, call.ResultEvents[0].Content)
+			}
+			assert.Empty(t, messages[2].Content, "tool result bodies must not bypass filtering as message text")
+			assert.Equal(t, 13, messages[2].ContentLength)
+			assert.Contains(t, messages[1].Content, "I will inspect the orchard.")
+		})
+	}
+}
+
 func TestEvenerArchiveLifecycle(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()

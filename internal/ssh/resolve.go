@@ -629,6 +629,10 @@ func parseResolvedTargets(
 		seen[value] = struct{}{}
 		dirs[at] = append(dirs[at], value)
 	}
+	// Evener roots stay file-scoped even when every filename was rejected.
+	if len(dirs[parser.AgentEvener]) > 0 && len(files[parser.AgentEvener]) == 0 {
+		files[parser.AgentEvener] = []string{}
+	}
 	return dirs, files, extraFiles, forbiddenRoots, nil
 }
 

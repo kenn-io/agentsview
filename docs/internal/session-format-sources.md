@@ -399,8 +399,8 @@ add an archived or maintained mirror without replacing the original identity.
   to the `gpt-5.6-luna` catalog row (Luna list rates, not an OpenAI invoice).
   An exact `[custom_model_pricing."gpt-reserve"]` row still wins. Reverified
   2026-09-06 against OpenAI's Luna Reserve help article
-  <https://help.openai.com/en/articles/20001499-luna-reserve-in-codex-and-chatgpt-work>
-  and Codex `turn_context` model seeding in `internal/parser/codex.go`.
+    <https://help.openai.com/en/articles/20001499-luna-reserve-in-codex-and-chatgpt-work>
+    and Codex `turn_context` model seeding in `internal/parser/codex.go`.
 
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
@@ -2260,9 +2260,9 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/prime-radiant-inc/evener.git`,
   producer revision `da7c06396c9848abfae362dcffce3861a6a0c95a`, checked
-  2026-09-05, includes structured model-switch facts from PR #889. Earlier v2
-  records need not contain those facts. See
-  [transcript writer and framing][evener-source-1],
+  2026-09-05 (tool-result types reverified 2026-09-08), includes structured
+  model-switch facts from PR #889. Earlier v2 records need not contain those
+  facts. See [transcript writer and framing][evener-source-1],
   [turn schema][evener-source-2], [message and usage types][evener-source-3],
   [metadata][evener-source-4], and [fork writer][evener-source-5].
 - **Usage and cost:** assistant turns persist uncached input and output plus
@@ -2289,7 +2289,10 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   on the receiving machine. The shared remote-import engine applies this
   policy during parsing and project metadata preservation. This can use a
   subdirectory name instead of the Git repository name; local discovery is
-  unchanged.
+  unchanged. Tool-result bodies are stored through the existing category
+  filter, without an unfiltered copy in message text; result lengths remain
+  available. SSH roots remain file-scoped when invalid filename encodings are
+  skipped.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go

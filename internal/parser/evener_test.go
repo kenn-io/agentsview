@@ -158,8 +158,9 @@ func TestEvenerTools(t *testing.T) {
 	assert.Equal(t, "error", tc.ResultEvents[0].Status)
 	require.Len(t, msgs[1].ToolResults, 1)
 	assert.Contains(t, DecodeContent(msgs[1].ToolResults[0].ContentRaw), "failed")
-	assert.Contains(t, msgs[1].Content, "image")
-	assert.NotContains(t, msgs[1].Content, "c2VjcmV0")
+	assert.Contains(t, DecodeContent(msgs[1].ToolResults[0].ContentRaw), "image")
+	assert.NotContains(t, DecodeContent(msgs[1].ToolResults[0].ContentRaw), "c2VjcmV0")
+	assert.Empty(t, msgs[1].Content)
 }
 
 func TestEvenerModelTimelineAndUsagePresence(t *testing.T) {
@@ -351,7 +352,7 @@ func TestEvenerDelegateStructuredState(t *testing.T) {
 			assert.Equal(t, "evener:child", messages[0].ToolCalls[0].SubagentSessionID)
 			require.Len(t, messages[0].ToolCalls[0].ResultEvents, 1)
 			assert.Equal(t, "running", messages[0].ToolCalls[0].ResultEvents[0].Status)
-			assert.Contains(t, messages[1].Content, "retained")
+			assert.Contains(t, messages[0].ToolCalls[0].ResultEvents[0].Content, "retained")
 		})
 	}
 }

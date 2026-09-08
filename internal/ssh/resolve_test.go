@@ -1304,6 +1304,38 @@ func TestResolveEvenerSkipsBackslashPaths(t *testing.T) {
 	}
 }
 
+func TestResolveEvenerInvalidUTF8KeepsFileScope(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote shell and byte-valued filenames use POSIX paths")
+	}
+	for _, name := range []string{"invalid-only", "mixed"} {
+		t.Run(name, func(t *testing.T) {
+			home := physTempDir(t)
+			root := filepath.Join(home, "evener")
+			sessions := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(sessions, 0o755))
+			files := []string{filepath.Join(sessions, "bad\xff.transcript.jsonl"), filepath.Join(root, "credentials.json")}
+			var expected []string
+			if name == "mixed" {
+				valid := filepath.Join(sessions, "demo.transcript.jsonl")
+				files = append(files, valid)
+				expected = append(expected, archivePathForTest(valid))
+			}
+			for _, file := range files {
+				require.NoError(t, os.WriteFile(file, []byte("{}\n"), 0o600))
+			}
+			out := runResolveScriptForTest(t, "HOME="+home, "EVENER_DIR="+root)
+			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
+			require.NoError(t, err)
+			cmd := exec.Command("sh")
+			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
+			archive, err := cmd.Output()
+			require.NoError(t, err)
+			assert.ElementsMatch(t, expected, tarNames(t, archive))
+		})
+	}
+}
+
 func TestResolveEvenerSkipsRootWithoutTranscripts(t *testing.T) {
 	home := physTempDir(t)
 	root := filepath.Join(home, ".local", "state", "evener")
