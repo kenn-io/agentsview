@@ -489,48 +489,41 @@ func TestEmbedSchedulerExhaustedBackstopCarriesIntoNextNotification(
 // interval (24h in production). The scheduler must remember it and fold
 // Backstop: true into the next debounced build request instead.
 func TestEmbedSchedulerDroppedBackstopRetriesOnNextDebouncedBuild(t *testing.T) {
-	fake := &fakeEmbedManager{
-		results: []fakeTryBuildResult{
-			{started: false, err: nil}, // the backstop tick collides with a build elsewhere
-			{started: true, err: nil},  // the following debounced build recovers it
-		},
-	}
-	// A long backstop interval relative to the debounce interval and the
-	// test's own buffers keeps a second, unrelated backstop tick from
-	// firing mid-test and making the call count non-deterministic.
-	s := newEmbedScheduler(fake, 10*time.Millisecond, 500*time.Millisecond, false, nil)
+	synctest.Test(t, func(t *testing.T) {
+		fake := &fakeEmbedManager{
+			results: []fakeTryBuildResult{
+				{started: false, err: nil}, // the backstop tick collides with a build elsewhere
+				{started: true, err: nil},  // the following debounced build recovers it
+			},
+		}
+		s := newEmbedScheduler(fake, 10*time.Millisecond, 500*time.Millisecond, false, nil)
+		go s.Run(t.Context())
+		defer s.Stop()
 
-	ctx := t.Context()
-	go s.Run(ctx)
-	defer s.Stop()
+		synctest.Sleep(500 * time.Millisecond)
+		require.Equal(t, 1, fake.callCount(), "expected the backstop tick to collide")
 
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-		"expected the backstop tick to fire and be dropped")
+		// Let the automatic retry finish without a new notification, keeping
+		// the clock before the next periodic backstop tick.
+		synctest.Sleep(50 * time.Millisecond)
 
-	s.Notify()
+		calls := fake.callsSnapshot()
+		require.Len(t, calls, 2, "the dropped backstop must be retried exactly once, not repeatedly")
+		assert.True(t, calls[0].Backstop, "the original (dropped) backstop tick request")
+		assert.True(t, calls[1].Backstop,
+			"the debounced build must carry the pending backstop forward instead of dropping it")
 
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
-		"expected the debounced build to recover the dropped backstop")
-	time.Sleep(50 * time.Millisecond)
+		// Once the recovered build actually succeeded, the pending flag must
+		// clear: a further, unrelated debounced build must not keep carrying
+		// Backstop: true forever.
+		s.Notify()
+		synctest.Sleep(50 * time.Millisecond)
 
-	calls := fake.callsSnapshot()
-	require.Len(t, calls, 2, "the dropped backstop must be retried exactly once, not repeatedly")
-	assert.True(t, calls[0].Backstop, "the original (dropped) backstop tick request")
-	assert.True(t, calls[1].Backstop,
-		"the debounced build must carry the pending backstop forward instead of dropping it")
-
-	// Once the recovered build actually started, the pending flag must
-	// clear: a further, unrelated debounced build must not keep carrying
-	// Backstop: true forever.
-	s.Notify()
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 3 },
-		"expected a further debounced build after the recovered one")
-	time.Sleep(50 * time.Millisecond)
-
-	calls = fake.callsSnapshot()
-	require.Len(t, calls, 3)
-	assert.False(t, calls[2].Backstop,
-		"the recovered backstop must not leak into a later unrelated debounced build")
+		calls = fake.callsSnapshot()
+		require.Len(t, calls, 3)
+		assert.False(t, calls[2].Backstop,
+			"the recovered backstop must not leak into a later unrelated debounced build")
+	})
 }
 
 // TestEmbedSchedulerBackstopTickStartedButFailedKeepsPendingBackstop is the
@@ -540,45 +533,42 @@ func TestEmbedSchedulerDroppedBackstopRetriesOnNextDebouncedBuild(t *testing.T) 
 // very next debounced build rather than silently deferred to the next
 // backstop interval (24h in production).
 func TestEmbedSchedulerBackstopTickStartedButFailedKeepsPendingBackstop(t *testing.T) {
-	buildErr := errors.New("embeddings endpoint unreachable")
-	fake := &fakeEmbedManager{
-		results: []fakeTryBuildResult{
-			{started: true, err: buildErr}, // the backstop tick starts but fails
-			{started: true, err: nil},      // the following debounced build recovers it
-		},
-	}
-	s := newEmbedScheduler(fake, 10*time.Millisecond, 500*time.Millisecond, false, nil)
+	synctest.Test(t, func(t *testing.T) {
+		buildErr := errors.New("embeddings endpoint unreachable")
+		fake := &fakeEmbedManager{
+			results: []fakeTryBuildResult{
+				{started: true, err: buildErr}, // the backstop tick starts but fails
+				{started: true, err: nil},      // the following debounced build recovers it
+			},
+		}
+		s := newEmbedScheduler(fake, 10*time.Millisecond, 500*time.Millisecond, false, nil)
+		go s.Run(t.Context())
+		defer s.Stop()
 
-	ctx := t.Context()
-	go s.Run(ctx)
-	defer s.Stop()
+		synctest.Sleep(500 * time.Millisecond)
+		require.Equal(t, 1, fake.callCount(), "expected the backstop tick to fail")
 
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-		"expected the backstop tick to fire and fail")
+		// Let the automatic retry finish without a new notification, keeping
+		// the clock before the next periodic backstop tick.
+		synctest.Sleep(50 * time.Millisecond)
 
-	s.Notify()
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
-		"expected the debounced build to retry the failed backstop")
-	time.Sleep(50 * time.Millisecond)
+		calls := fake.callsSnapshot()
+		require.Len(t, calls, 2, "the failed backstop must be retried exactly once, not repeatedly")
+		assert.True(t, calls[0].Backstop, "the original (started-but-failed) backstop tick request")
+		assert.True(t, calls[1].Backstop,
+			"the debounced build must carry the failed backstop forward instead of dropping it")
 
-	calls := fake.callsSnapshot()
-	require.Len(t, calls, 2, "the failed backstop must be retried exactly once, not repeatedly")
-	assert.True(t, calls[0].Backstop, "the original (started-but-failed) backstop tick request")
-	assert.True(t, calls[1].Backstop,
-		"the debounced build must carry the failed backstop forward instead of dropping it")
+		// Once the recovered build actually succeeded, the pending flag must
+		// clear: a further, unrelated debounced build must not keep carrying
+		// Backstop: true forever.
+		s.Notify()
+		synctest.Sleep(50 * time.Millisecond)
 
-	// Once the recovered build actually succeeded, the pending flag must
-	// clear: a further, unrelated debounced build must not keep carrying
-	// Backstop: true forever.
-	s.Notify()
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 3 },
-		"expected a further debounced build after the recovered one")
-	time.Sleep(50 * time.Millisecond)
-
-	calls = fake.callsSnapshot()
-	require.Len(t, calls, 3)
-	assert.False(t, calls[2].Backstop,
-		"the recovered backstop must not leak into a later unrelated debounced build")
+		calls = fake.callsSnapshot()
+		require.Len(t, calls, 3)
+		assert.False(t, calls[2].Backstop,
+			"the recovered backstop must not leak into a later unrelated debounced build")
+	})
 }
 
 // TestEmbedSchedulerDebouncedBuildStartedButFailedKeepsPendingBackstop is the
