@@ -465,7 +465,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (100: Codex subagent lineage now uses the structural source marker. Existing
 // guardian rows need re-parsing because a fingerprint change cannot repair
 // byte-identical files.)
-const dataVersion = 100
+// (101: Cursor user turn timestamps are parsed from recognized metadata.
+// Existing Cursor rows need re-parsing so stored message and session times
+// reflect the transcript timestamps.)
+const dataVersion = 101
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

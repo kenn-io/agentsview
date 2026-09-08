@@ -1096,8 +1096,13 @@ func TestCurrentDataVersionAntigravityCLIExperimentalServingVariant(t *testing.T
 }
 
 func TestCurrentDataVersionCodexGuardianLineage(t *testing.T) {
-	assert.Equal(t, 100, CurrentDataVersion(),
-		"Codex guardian lineage requires re-parsing unchanged rollout files")
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 100,
+		"version 100 is the data-version boundary for Codex guardian lineage")
+}
+
+func TestCurrentDataVersionCursorTurnTimestamps(t *testing.T) {
+	assert.Equal(t, 101, CurrentDataVersion(),
+		"Cursor turn timestamps require re-parsing existing sessions")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

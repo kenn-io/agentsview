@@ -938,6 +938,16 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 - **Format:** Legacy text and newer JSONL transcripts under per-project
   `agent-transcripts` directories.
+- **Turn timestamps:** Cursor user messages can carry a leading metadata tag in
+  the form
+  `<timestamp>Weekday, Mon D, YYYY, H:MM AM|PM (UTC±H[:MM])</timestamp>`
+  immediately before `<user_query>`. Agentsview parses the explicit offset and
+  stores a UTC instant with zero seconds and nanoseconds. The source has
+  minute precision, so the encoded `:00` does not provide second precision.
+- **Session bounds:** Agentsview uses the earliest and latest usable tagged user
+  turns. A transcript with no usable tag retains the file modification time
+  for both bounds. The latest user turn gives a lower bound for assistant
+  completion because the Cursor format supplies no assistant completion time.
 - **Evidence:** `documentation`.
 - **Upstream:** Cursor's first-party
   [history documentation](https://docs.cursor.com/en/agent/chat/history)

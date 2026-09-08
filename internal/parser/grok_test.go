@@ -103,6 +103,26 @@ func TestGrokProviderGoldenLegacyTranscript(t *testing.T) {
 	assert.Equal(t, "call_1", result.Messages[2].ToolResults[0].ToolUseID)
 }
 
+func TestGrokTimestampLookingPrompt(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "cwd-key", "grok-timestamp")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"), `{
+		"info":{"id":"grok-timestamp","cwd":"/workspace/agentsview"},
+		"created_at":"2026-07-02T15:11:00Z",
+		"updated_at":"2026-07-02T15:12:00Z"
+	}`)
+	literal := "<timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp> review this prompt"
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "chat_history.jsonl"),
+		`{"type":"user","content":"`+literal+`"}`+"\n")
+
+	result, err := ParseGrokSummary(
+		filepath.Join(sessionDir, "summary.json"), "agentsview", "test-machine",
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Messages, 1)
+	assert.Equal(t, literal, result.Messages[0].Content)
+}
+
 func TestGrokProviderParsesMixedTranscriptFormats(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "mixed-formats"
