@@ -768,7 +768,10 @@ represented by the existing transcript view is shown as a descriptive
 placeholder, without fetching referenced files or URLs.
 
 Remote sync uses Agentsview's existing mechanisms. This provider does not
-connect to Evener hubs or add an S3/SSH transport.
+connect to Evener hubs or add an S3/SSH transport. SSH transfers skip Evener
+files whose full paths contain backslashes, which tar can interpret as escape
+sequences. Remote sync skips files deleted after discovery, including metadata
+left behind when its transcript is deleted.
 
 ### Disabling Session Providers
 

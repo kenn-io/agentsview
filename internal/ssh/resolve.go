@@ -83,6 +83,8 @@ func buildEvenerResolveSnippet() string {
   av_evener_id=${av_evener_id%.transcript.jsonl}
   case "$av_evener_id" in ''|.|..|*:*|*'\'*) continue;; esac
   av_evener_phys=$(av_phys_file "$av_evener_file") || continue
+  # tar -T decodes backslash escapes anywhere in a filename.
+  case "$av_evener_phys" in *'\'*) continue;; esac
   if [ "$av_evener_emitted" -eq 0 ]; then
    printf '%s\000' "evener:$av_evener_root"
    av_evener_emitted=1

@@ -1008,7 +1008,7 @@ func authorizedStaleCuratedFile(
 			) {
 				continue
 			}
-		} else if !sessionFileShape(agent, rel) {
+		} else if !sessionFileShape(agent, dir, rel) {
 			continue
 		}
 		if symlinkEscapesRoot(dir, file) {
@@ -1027,6 +1027,11 @@ func authorizedStaleCuratedFile(
 		if agent == parser.AgentVSCodeCopilot && isVSCodeWorkspaceMetadata(rel) &&
 			vscodeWorkspaceChatVanished(allowed, forbidden, dir, rel, requestedFiles) {
 			return true
+		}
+		if agent == parser.AgentEvener && strings.HasSuffix(file, ".meta.json") {
+			// Metadata left behind by a deleted transcript is no longer a source companion.
+			_, err := os.Lstat(strings.TrimSuffix(file, ".meta.json") + ".transcript.jsonl")
+			return os.IsNotExist(err)
 		}
 		return hasPreferredCuratedSibling(dir, allowed.Files[agent], rel)
 	}
@@ -1093,8 +1098,22 @@ func vscodeWorkspaceChatVanished(
 
 // sessionFileShape reports whether rel names exactly a session file
 // for the given agent type.
-func sessionFileShape(agent parser.AgentType, rel string) bool {
+func sessionFileShape(agent parser.AgentType, root, rel string) bool {
 	switch agent {
+	case parser.AgentEvener:
+		parts := strings.Split(rel, "/")
+		validLayout := len(parts) == 4 && parts[0] == "projects" && parts[2] == "sessions" ||
+			len(parts) == 2 && parts[0] == "sessions" ||
+			len(parts) == 1 && filepath.Base(root) == "sessions"
+		if !validLayout {
+			return false
+		}
+		name := parts[len(parts)-1]
+		id, ok := strings.CutSuffix(name, ".transcript.jsonl")
+		if !ok {
+			id, ok = strings.CutSuffix(name, ".meta.json")
+		}
+		return ok && id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "\\:\x00")
 	case parser.AgentKiloLegacy:
 		return kiloLegacySessionFileShape(rel)
 	case parser.AgentCursor:

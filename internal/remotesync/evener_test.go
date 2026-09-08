@@ -70,6 +70,54 @@ func TestEvenerRemoteFilesAndImport(t *testing.T) {
 	}
 }
 
+func TestEvenerRemoteSyncToleratesDeletedCompanions(t *testing.T) {
+	for _, layout := range []string{"state", "project", "sessions"} {
+		for _, deleted := range []string{"demo.meta.json", "demo.transcript.jsonl"} {
+			t.Run(layout+"/"+deleted, func(t *testing.T) {
+				root := t.TempDir()
+				sessions := filepath.Join(root, "projects", "demo", "sessions")
+				require.NoError(t, os.MkdirAll(sessions, 0o755))
+				switch layout {
+				case "project":
+					root = filepath.Dir(sessions)
+				case "sessions":
+					root = sessions
+				}
+				transcript := filepath.Join(sessions, "demo.transcript.jsonl")
+				metadata := filepath.Join(sessions, "demo.meta.json")
+				for _, file := range []string{transcript, metadata} {
+					require.NoError(t, os.WriteFile(file, []byte("{}\n"), 0o600))
+				}
+				cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentEvener: {root}}}
+				requested, err := ResolveTargets(cfg)
+				require.NoError(t, err)
+				require.ElementsMatch(t, []string{transcript, metadata}, requested.Files[parser.AgentEvener])
+				require.NoError(t, os.Remove(filepath.Join(sessions, deleted)))
+				fresh, err := ResolveTargets(cfg)
+				require.NoError(t, err)
+				selected, ok := SelectAllowedTargets(fresh, requested)
+				require.True(t, ok, "deleting a companion must not reject the sync request")
+				manifest, err := BuildManifest(selected)
+				require.NoError(t, err)
+				var paths []string
+				for _, file := range manifest.Files {
+					paths = append(paths, file.Path)
+				}
+				var expected []string
+				if deleted == "demo.meta.json" {
+					expected = []string{transcript}
+				}
+				assert.ElementsMatch(t, expected, paths, "the manifest must omit deleted sources and orphan metadata")
+				delta, ok := SelectAllowedFiles(fresh, requested.Files[parser.AgentEvener])
+				require.True(t, ok)
+				assert.ElementsMatch(t, expected, delta)
+				_, ok = SelectAllowedFiles(fresh, []string{filepath.Join(sessions, "demo.api.jsonl")})
+				assert.False(t, ok, "unrelated file shapes must remain rejected")
+			})
+		}
+	}
+}
+
 func TestEvenerEmptyRemoteRootDoesNotExportUnrelatedState(t *testing.T) {
 	root := t.TempDir()
 	secret := filepath.Join(root, "auth-token")

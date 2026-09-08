@@ -1267,6 +1267,43 @@ func TestResolveEvenerArchivesOnlySessionFiles(t *testing.T) {
 	}
 }
 
+func TestResolveEvenerSkipsBackslashPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote shell and tar use POSIX paths")
+	}
+	for _, location := range []string{"project", "root"} {
+		t.Run(location, func(t *testing.T) {
+			home := physTempDir(t)
+			root := filepath.Join(home, "evener")
+			unsafe := filepath.Join(root, "projects", `\056\056\057\056\056\057outside`, "sessions", "demo.transcript.jsonl")
+			outside := filepath.Join(home, "outside", "sessions", "demo.transcript.jsonl")
+			var expected []string
+			files := []string{outside, strings.TrimSuffix(outside, ".transcript.jsonl") + ".meta.json"}
+			if location == "root" {
+				root = filepath.Join(home, `\157utside`)
+				unsafe = filepath.Join(root, "sessions", "demo.transcript.jsonl")
+			} else {
+				ordinary := filepath.Join(root, "sessions", "keep.transcript.jsonl")
+				files = append(files, ordinary)
+				expected = append(expected, archivePathForTest(ordinary))
+			}
+			files = append(files, unsafe, strings.TrimSuffix(unsafe, ".transcript.jsonl")+".meta.json")
+			for _, file := range files {
+				require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o755))
+				require.NoError(t, os.WriteFile(file, []byte("{}\n"), 0o600))
+			}
+			out := runResolveScriptForTest(t, "HOME="+home, "EVENER_DIR="+root)
+			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
+			require.NoError(t, err)
+			cmd := exec.Command("sh")
+			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
+			archive, err := cmd.Output()
+			require.NoError(t, err)
+			assert.ElementsMatch(t, expected, tarNames(t, archive))
+		})
+	}
+}
+
 func TestResolveEvenerSkipsRootWithoutTranscripts(t *testing.T) {
 	home := physTempDir(t)
 	root := filepath.Join(home, ".local", "state", "evener")
