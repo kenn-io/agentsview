@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,8 +97,19 @@ func TestEvenerProviderFingerprintTracksEachFile(t *testing.T) {
 	assert.NotZero(t, firstDigest)
 	metaInfo, err := os.Stat(meta)
 	require.NoError(t, err)
+	beforeChangeTime, ok := codexIndexChangeTime(meta, metaInfo)
+	require.True(t, ok)
 	writeSourceFile(t, meta, `{"id":"good","name":"two"}`)
-	require.NoError(t, os.Chtimes(meta, metaInfo.ModTime(), metaInfo.ModTime()))
+	// Preserve size and mtime, but establish a distinct ctime before checking
+	// the stat digest. Rapid writes can share a filesystem timestamp tick.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.NoError(c, os.Chtimes(meta, metaInfo.ModTime(), metaInfo.ModTime()))
+		info, err := os.Stat(meta)
+		require.NoError(c, err)
+		changeTime, ok := codexIndexChangeTime(meta, info)
+		require.True(c, ok)
+		assert.NotEqual(c, beforeChangeTime, changeTime)
+	}, 2*time.Second, time.Millisecond)
 	second, err := provider.Fingerprint(context.Background(), sources[0])
 	require.NoError(t, err)
 	assert.Equal(t, before.Size, second.Size)
@@ -384,8 +396,14 @@ func TestEvenerProviderUnavailableParentRetainsChild(t *testing.T) {
 				assert.Equal(t, fingerprint, after)
 				assert.Equal(t, digest, hasher.ComputeMultiFileStatHash(child))
 			}
+			parentInfo, err := os.Lstat(parent)
+			require.NoError(t, err)
 			require.NoError(t, os.Remove(parent))
 			writeEvenerFixture(t, dir, "parent", nil, copied)
+			// Recreating an equal-size parent need not advance filesystem time.
+			// Give the replacement a distinct mtime for the stat-digest check.
+			replacementTime := parentInfo.ModTime().Add(2 * time.Second)
+			require.NoError(t, os.Chtimes(parent, replacementTime, replacementTime))
 			available, err := provider.Fingerprint(t.Context(), source)
 			require.NoError(t, err)
 			assert.NotEqual(t, fingerprint.Hash, available.Hash)
