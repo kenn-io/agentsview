@@ -430,6 +430,16 @@ describe("renderMarkdown", () => {
       expect(parseHTML(enabled).querySelector("h1")).not.toBeNull();
     });
 
+    it("captures complete blocks with up to three leading spaces", () => {
+      const source = "  <policy>\n# heading\n  </policy>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelector("pre > code")?.textContent).toBe(`${source}\n`);
+      expect(dom.querySelector("h1")).toBeNull();
+    });
+
     it("balances nested blocks with the same tag name", () => {
       const source = "<example>\n1\n<example>\ninner\n</example>\ntail\n</example>";
       const dom = parseHTML(
@@ -464,6 +474,20 @@ describe("renderMarkdown", () => {
         renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
       ).toBe(preformattedHtml);
       expect(preformattedHtml).not.toBe(defaultHtml);
+
+      const reverseSource = "<reverse-cache-policy>\n# reverse heading\n</reverse-cache-policy>";
+      const reversePreformatted = renderMarkdown(reverseSource, {
+        renderUnknownXmlBlocksAsPreformatted: true,
+      });
+      const reverseDefault = renderMarkdown(reverseSource, {
+        renderUnknownXmlBlocksAsPreformatted: false,
+      });
+
+      expect(renderMarkdown(reverseSource, { renderUnknownXmlBlocksAsPreformatted: true })).toBe(
+        reversePreformatted,
+      );
+      expect(renderMarkdown(reverseSource)).toBe(reverseDefault);
+      expect(reversePreformatted).not.toBe(reverseDefault);
     });
 
     it("preserves protected Markdown paths when enabled", () => {

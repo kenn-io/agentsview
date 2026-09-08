@@ -120,10 +120,11 @@ const KNOWN_HTML_TAGS = new Set([
 ]);
 
 const XML_TAG_ESCAPE_RE = /<\/?([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/g;
-const XML_OPEN_TAG_RE = /^<([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/;
 const XML_TAG_SCAN_RE = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
 
 type MarkdownToken = Token & Record<string, unknown>;
+
+type MarkdownFenceRange = { start: number; end: number };
 
 /** Build a marked tokenizer extension that consumes a Claude Code
  *  shell-shortcut wrapper tag and emits a `code` token directly.
@@ -161,30 +162,65 @@ function bashWrapperExtension(
   };
 }
 
-function findUnknownXmlBlockEnd(src: string): number | undefined {
-  const opening = XML_OPEN_TAG_RE.exec(src);
-  if (!opening) return undefined;
-
-  const name = opening[1]?.toLowerCase();
-  if (!name || isPreservedHtmlTag(name) || /\/\s*>$/.test(opening[0])) {
-    return undefined;
+function findFirstCompleteUnknownXmlBlock(
+  src: string,
+): { start: number; end: number } | undefined {
+  const fenceRanges: MarkdownFenceRange[] = [];
+  const fenceRe = /^ {0,3}(`{3,}|~{3,})[^\n]*$/gm;
+  let openFence: { start: number; char: string; length: number } | undefined;
+  let fence: RegExpExecArray | null;
+  while ((fence = fenceRe.exec(src)) !== null) {
+    const marker = fence[1]!;
+    if (!openFence) {
+      openFence = { start: fence.index, char: marker[0]!, length: marker.length };
+    } else if (marker[0] === openFence.char && marker.length >= openFence.length) {
+      fenceRanges.push({ start: openFence.start, end: fence.index + fence[0].length });
+      openFence = undefined;
+    }
   }
+  if (openFence) fenceRanges.push({ start: openFence.start, end: src.length });
 
-  XML_TAG_SCAN_RE.lastIndex = opening[0].length;
-  let depth = 1;
+  const openByName = new Map<string, Array<{ start?: number }>>();
+  const complete: Array<{ start: number; end: number }> = [];
+  let fenceIndex = 0;
+
+  XML_TAG_SCAN_RE.lastIndex = 0;
   let tag: RegExpExecArray | null;
   while ((tag = XML_TAG_SCAN_RE.exec(src)) !== null) {
-    const tagName = tag[1]?.toLowerCase();
-    if (tagName !== name || /\/\s*>$/.test(tag[0])) continue;
-    if (tag[0].startsWith("</")) {
-      depth -= 1;
-      if (depth === 0) return XML_TAG_SCAN_RE.lastIndex;
-    } else {
-      depth += 1;
+    while (fenceIndex < fenceRanges.length && tag.index >= fenceRanges[fenceIndex]!.end) {
+      fenceIndex += 1;
+    }
+    const activeFence = fenceRanges[fenceIndex];
+    if (activeFence && tag.index >= activeFence.start) continue;
+
+    const name = tag[1]?.toLowerCase();
+    if (!name || isPreservedHtmlTag(name)) continue;
+
+    const tagText = tag[0];
+    const stack = openByName.get(name) ?? [];
+    if (tagText.startsWith("</")) {
+      const opening = stack.pop();
+      if (opening?.start !== undefined) {
+        complete.push({ start: opening.start, end: XML_TAG_SCAN_RE.lastIndex });
+      }
+      if (stack.length === 0) openByName.delete(name);
+      continue;
+    }
+
+    if (!/\/\s*>$/.test(tagText)) {
+      const lineStart = src.lastIndexOf("\n", tag.index - 1) + 1;
+      const indentation = src.slice(lineStart, tag.index);
+      const start = /^ {0,3}$/.test(indentation) ? tag.index : undefined;
+      stack.push({ start });
+      openByName.set(name, stack);
     }
   }
 
-  return undefined;
+  return complete.sort((left, right) => left.start - right.start)[0];
+}
+
+function findUnknownXmlBlockEnd(src: string): number | undefined {
+  return findFirstCompleteUnknownXmlBlock(src)?.end;
 }
 
 /** Build a tokenizer that captures a complete unknown XML block before
@@ -195,15 +231,8 @@ function unknownXmlBlockExtension(): TokenizerExtension {
     name: "unknownXmlBlock",
     level: "block",
     start(src) {
-      const candidates = /(?:^|\n)<[A-Za-z][A-Za-z0-9:_-]*/g;
-      let match: RegExpExecArray | null;
-      while ((match = candidates.exec(src)) !== null) {
-        const tagIndex = match.index + match[0].lastIndexOf("<");
-        if (tagIndex > 0 && findUnknownXmlBlockEnd(src.slice(tagIndex)) !== undefined) {
-          return tagIndex;
-        }
-      }
-      return undefined;
+      const block = findFirstCompleteUnknownXmlBlock(src);
+      return block && block.start > 0 ? block.start : undefined;
     },
     tokenizer(src) {
       const blockEnd = findUnknownXmlBlockEnd(src);
