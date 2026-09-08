@@ -908,8 +908,12 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	if recoveryErr != nil || !recoveryLocked {
 		return true
 	}
-	_ = recovery.Unlock()
+	// Remove the stale snapshot while still holding the lock we just
+	// verified is free, not after releasing it: unlocking first would leave
+	// a window where a genuinely new holder could acquire the lock and
+	// publish its own fresh snapshot right before this deletes it.
 	removeStartupState(dataDir)
+	_ = recovery.Unlock()
 	return false
 }
 
