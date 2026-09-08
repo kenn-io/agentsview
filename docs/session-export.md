@@ -81,6 +81,8 @@ JSON output is one document:
   "sessions": [
     {
       "id": "remote-current",
+      "transcript_revision": "1",
+      "local_modified_at": "2026-07-03T12:00:00.123Z",
       "project": {
         "project_key": "pl1:sha256:333e5f19bc8ed34f56fa89e51a9307bbc972d173498993ed02e564d32162196f",
         "display_label": "remote-project",
@@ -173,11 +175,55 @@ a reason for the read-only export to create an identity.
 A changed database ID under the same archive ID means that the archive was
 rebuilt, not that every session is new. Restart pagination and reconcile the new
 snapshot. Neither ID is an ordered revision, and a cursor is not a durable
-change-feed checkpoint. This contract does not establish which of two delayed
-exports is newer or turn absence from a filtered page into a deletion signal.
-Copied archives retain their logical identity; applications that ingest
-independent copies must define their source scope rather than assume the ID
-identifies a device or a single writer.
+change-feed checkpoint. These IDs do not establish which of two delayed exports
+is newer or turn absence from a filtered page into a deletion signal. Copied
+archives retain their logical identity; applications that ingest independent
+copies must define their source scope rather than assume the ID identifies a
+device or a single writer.
+
+### Revision evidence
+
+Schema v6 adds two fields to each session row, in JSON and NDJSON:
+
+- `transcript_revision` is the archive's per-session counter, exported as a
+  decimal string to preserve integer precision. Compare it numerically, not
+  lexicographically. Within one archive's writer lineage, an identical
+  transcript retains its counter through full resync; a changed transcript
+  advances the previous counter once. The comparison includes persisted
+  messages, tool calls, tool-result events, and message token usage. It does
+  not export any of that content.
+- `local_modified_at` is the stored local modification timestamp, or `null` when
+  unavailable. It is not session activity time or measured working time.
+  Transcript and standalone usage-event writes can update it while
+  `last_activity_at` stays unchanged. It is a wall-clock signal: equal values,
+  clock changes, and rebuilds prevent treating it as a monotonic revision.
+
+For a materialized session receipt, retain a tuple of independent version
+evidence: **transcript revision, project identity (or a digest of the complete
+exported `project` reference), and pricing timestamp plus digest**. Also retain
+`local_modified_at` for local metadata and standalone usage-event changes.
+Project evidence can change without a transcript edit. Pricing evidence remains
+page-level: `pricing.latest_row_updated_at` is the latest timestamp among the
+effective pricing rows, and `pricing.digest` identifies their contents. An edit
+to another pricing row need not advance that maximum, and removing the newest
+row can lower it. Keep the digest even when timestamps match or are unavailable.
+
+This is not a lexicographically ordered receipt version. A larger transcript
+counter orders transcript changes, not concurrent project or pricing changes;
+equal counters do not prove equal usage totals. Standalone `usage_events` and
+session metadata are outside transcript equality. Digests establish equality,
+not chronology. Do not use the transcript counter alone to reject or accept an
+entire receipt, or compare counters from independently modified archive copies.
+
+All fields are read with their session rows in the existing read transaction;
+`--all` uses one transaction for all pages. Ordinary cursor pages remain
+separate read transactions with the existing activity-based cursor checks, not a
+revision-pinned historical snapshot. This addition does not change cursor
+semantics or add a modified-since filter, durable checkpoint, or tombstones. A
+future incremental export must cover every export-affecting writer, project and
+pricing changes, cutoff ties, and journal resets before it can promise complete
+change discovery. `--active-since` filters activity time and does not discover
+all corrections to old sessions.
 
 ## Content Boundary
 

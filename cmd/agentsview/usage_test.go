@@ -206,7 +206,7 @@ func setupExportGoldenDataDir(t *testing.T) string {
 	database := dbtest.OpenTestDBAt(t, dbPath)
 	seedExportGoldenArchive(t, database)
 	require.NoError(t, database.Close(), "close golden database")
-	setGoldenPricingUpdatedAt(t, dbPath)
+	setGoldenExportTimestamps(t, dbPath)
 	return dataDir
 }
 
@@ -413,7 +413,7 @@ func seedGoldenExportSession(
 	}
 }
 
-func setGoldenPricingUpdatedAt(t *testing.T, dbPath string) {
+func setGoldenExportTimestamps(t *testing.T, dbPath string) {
 	t.Helper()
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open golden db for pricing timestamp")
@@ -422,9 +422,10 @@ func setGoldenPricingUpdatedAt(t *testing.T, dbPath string) {
 	}()
 	_, err = conn.Exec(`
 		UPDATE model_pricing SET updated_at = ?;
-		UPDATE genai_pricing SET updated_at = ?`,
-		goldenPricingUpdatedAt, goldenPricingUpdatedAt)
-	require.NoError(t, err, "set deterministic pricing updated_at")
+		UPDATE genai_pricing SET updated_at = ?;
+		UPDATE sessions SET local_modified_at = ?`,
+		goldenPricingUpdatedAt, goldenPricingUpdatedAt, "2026-07-03T12:00:00.123Z")
+	require.NoError(t, err, "set deterministic export timestamps")
 }
 
 func assertGoldenBytes(t *testing.T, name string, got []byte) {
