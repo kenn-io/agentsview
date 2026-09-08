@@ -220,6 +220,7 @@ function findFirstCompleteUnknownXmlBlock(
   protectedRanges.sort((left, right) => left.start - right.start);
 
   const openUnknownTags: Array<{ name: string; start?: number; rawStart?: number }> = [];
+  let malformedUnknownTags: string[] = [];
   const openHtmlTags: string[] = [];
   let firstComplete: { start: number; rawStart: number; end: number } | undefined;
   let protectedIndex = 0;
@@ -258,8 +259,20 @@ function findFirstCompleteUnknownXmlBlock(
     if (openHtmlTags.length > 0) continue;
 
     if (tagText.startsWith("</")) {
+      if (malformedUnknownTags.length > 0) {
+        const malformedIndex = malformedUnknownTags.lastIndexOf(name);
+        if (malformedIndex >= 0) malformedUnknownTags.splice(malformedIndex, 1);
+        continue;
+      }
       const opening = openUnknownTags.at(-1);
-      if (!opening || opening.name !== name) continue;
+      if (!opening) continue;
+      if (opening.name !== name) {
+        malformedUnknownTags = openUnknownTags.map((open) => open.name);
+        openUnknownTags.length = 0;
+        const malformedIndex = malformedUnknownTags.lastIndexOf(name);
+        if (malformedIndex >= 0) malformedUnknownTags.splice(malformedIndex, 1);
+        continue;
+      }
       openUnknownTags.pop();
       if (opening.start !== undefined && opening.rawStart !== undefined) {
         const candidate = {
@@ -275,6 +288,10 @@ function findFirstCompleteUnknownXmlBlock(
     }
 
     if (selfClosing || openHtmlTags.length > 0) continue;
+    if (malformedUnknownTags.length > 0) {
+      malformedUnknownTags.push(name);
+      continue;
+    }
     const indentation = src.slice(lineStart, tag.index);
     const start = /^ {0,3}$/.test(indentation)
       ? tag.index
