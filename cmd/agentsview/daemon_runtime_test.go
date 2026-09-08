@@ -1234,6 +1234,60 @@ func TestIsLocalDaemonActive_UnprobeableLegacyStateFileDoesNotSuppressWrites(
 		"unprobeable legacy state should not become a kit runtime record")
 }
 
+func writeStartupStateForTest(t *testing.T, dir string, pid int) {
+	t.Helper()
+	state := startupState{
+		PID:       pid,
+		Phase:     "initial sync",
+		StartedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
+}
+
+func TestIsDaemonStarting_OrphanedStartupStateSelfHeals(t *testing.T) {
+	dir := runtimeTestDir(t)
+	writeStartupStateForTest(t, dir, deadPID(t))
+
+	oldTryLock := startLockTryLock
+	startLockTryLock = func(*flock.Flock) (bool, error) { return false, nil }
+	t.Cleanup(func() { startLockTryLock = oldTryLock })
+
+	assert.False(t, isDaemonStarting(dir),
+		"a startup lock whose recorded owner is dead must not wedge future launches")
+	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
+}
+
+func TestIsDaemonStarting_LockProbeErrorAlsoSelfHeals(t *testing.T) {
+	dir := runtimeTestDir(t)
+	writeStartupStateForTest(t, dir, deadPID(t))
+
+	oldTryLock := startLockTryLock
+	startLockTryLock = func(*flock.Flock) (bool, error) {
+		return false, errors.New("simulated lock probe failure")
+	}
+	t.Cleanup(func() { startLockTryLock = oldTryLock })
+
+	assert.False(t, isDaemonStarting(dir),
+		"a lock probe error must still self-heal when the recorded owner is dead")
+	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
+}
+
+func TestIsDaemonStarting_LiveOwnerStaysBlocked(t *testing.T) {
+	dir := runtimeTestDir(t)
+	writeStartupStateForTest(t, dir, os.Getpid())
+
+	oldTryLock := startLockTryLock
+	startLockTryLock = func(*flock.Flock) (bool, error) { return false, nil }
+	t.Cleanup(func() { startLockTryLock = oldTryLock })
+
+	assert.True(t, isDaemonStarting(dir),
+		"a startup lock whose recorded owner is alive must stay blocked")
+	assert.FileExists(t, startupStatePath(dir))
+}
+
 func TestIsDaemonStarting_LegacyStartupLock(t *testing.T) {
 	dir := runtimeTestDir(t)
 	require.NoError(t, os.WriteFile(
