@@ -677,6 +677,54 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## OpenCode (`opencode`)
 
+**V2 projection check (2026-09-08):** Cloned upstream at
+`dff8fbc149fb7492e4f07b713ac31ea70d9a541c` and checked the
+[SQL schema](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/session/sql.ts),
+[message schema](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/schema/src/session-message.ts),
+[projector](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/session/projector.ts),
+and
+[message updater](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/session/message-updater.ts).
+The event log is `event`. The `session_message` table stores complete projected
+messages, with `id`, `session_id`, `type`, `seq`, `time_created`,
+`time_updated`, and JSON `data`. Inserts retain their initial event sequence;
+later text, tool, and step events update the same row. Read rows in `seq` order
+without replaying the event log. Revert commits delete rows after the chosen
+sequence.
+
+Metadata still lives in `session`. Neither this checkout nor a fresh database
+created by the installed OpenCode 1.18.25 has the `session_v2` table described
+in issue #1642. The installed CLI's `run` command writes v1 messages, while its
+`POST /api/session` and `/api/session/:id/prompt` APIs write v2 projections in
+the same database. Both paths were exercised in an isolated scratch project with
+a three-line text file. The captured v2 rows are retained in
+`internal/parser/testdata/opencode_v2/messages.json`, with temporary paths
+replaced by `/workspace/project-a`.
+
+The parser selects projections per session, using v1 `message`/`part` rows for
+sessions without projections. V2 user text and ordered assistant content carry
+text, reasoning, and tools. Model identity is `model.id`; tokens retain the
+`input`, `output`, and `cache.{read,write}` shape. A completed assistant step
+with usage but no visible text still contributes usage. System, synthetic, and
+compaction rows are system messages and do not count as user prompts. Shell rows
+retain their commands and completed output. Agent/model switch rows are omitted.
+Binary attachments are not imported.
+
+Tool IDs and names are `content[].id` and `content[].name`. Results use
+`state.content` text items; the captured `read` tool instead returns a UTF-8
+file in `state.structured.content`. Failed tools use `state.status = error`, and
+completed bash calls also expose nonzero exits in `state.structured.exit`. The
+latter is verified against the upstream
+[bash tool](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/tool/bash.ts).
+
+V2 change detection adds projection timestamps, row counts, and ordered
+`id/seq/time_updated` identities to the v1 composite described below.
+Per-session queries use the producer's `session_id` indexes. Watermark-only
+discovery still reads session/project metadata; child-only changes follow the
+existing five-minute full-digest reconciliation policy. `cmd/perfsim` accepts
+`--source-format opencode-v2` to exercise projection inserts, finalization,
+child-only updates, archive parsing, and usage queries. This simulator models
+the persisted projector output; it does not implement OpenCode's event engine.
+
 **Performance fixture check (2026-09-04):** Rechecked the pinned commit's
 [session tables](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/session/sql.ts),
 [project tables](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/project/sql.ts),

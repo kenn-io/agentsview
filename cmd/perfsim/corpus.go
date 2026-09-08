@@ -15,13 +15,14 @@ import (
 type source struct {
 	Path, ID string
 	Agent    parser.AgentType
+	V2       bool
 	Turns    int
 	Start    time.Time
 	Store    *sql.DB `json:"-"`
 }
 
 func corpus(dir string, o options) ([]source, map[parser.AgentType][]string, error) {
-	if o.SourceFormat == "opencode" {
+	if o.SourceFormat == "opencode" || o.SourceFormat == "opencode-v2" {
 		return openCodeCorpus(dir, o)
 	}
 	claudeRoot, codexRoot := filepath.Join(dir, "claude"), filepath.Join(dir, "codex")

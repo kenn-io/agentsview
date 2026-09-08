@@ -111,6 +111,21 @@ deliberately contains repeated search terms, stressing common-term FTS.
 
 ## OpenCode SQLite workload
 
+Use `--source-format opencode-v2` for the event-sourced message projections. For
+example:
+
+```bash
+make perf-sim PERF_SIM_FLAGS='--source-format opencode-v2 --sessions 100 --turns 5 --active 2 --iterations 3'
+```
+
+This mode preserves the upstream v1 tables and adds `session_message` with its
+published indexes. It simulates prompt and assistant-step insertion, then
+finalizes assistant text and usage by updating the same row without changing its
+event sequence. Child-only edits update the projected assistant content. The
+same archive-content and usage checks described below apply to both OpenCode
+modes. See `session-format-sources.md` for upstream evidence and the captured
+real v2 workflow used by parser tests.
+
 `--source-format opencode` creates a separate producer database in WAL mode and
 keeps its writer open while Agentsview reads it. Only this synthetic database
 receives producer writes; the archive is populated through the normal provider.

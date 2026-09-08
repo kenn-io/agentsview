@@ -37,7 +37,7 @@ func main() {
 	o := options{}
 	flag.BoolVar(&o.GenerateOnly, "generate-only", false, "Retain producer sources and a manifest without running the sync engine")
 	flag.StringVar(&o.ProvenanceNote, "provenance-note", "", "Describe any build overlay or other source changes not captured by VCS metadata")
-	flag.StringVar(&o.SourceFormat, "source-format", "jsonl", "Source layout: jsonl (Claude/Codex) or opencode (SQLite)")
+	flag.StringVar(&o.SourceFormat, "source-format", "jsonl", "Source layout: jsonl (Claude/Codex), opencode or opencode-v2 (SQLite)")
 	flag.IntVar(&o.Sessions, "sessions", 1000, "Total sessions in the selected source format")
 	flag.IntVar(&o.Turns, "turns", 20, "User/assistant pairs per session")
 	flag.IntVar(&o.ActiveTurns, "active-turns", 0, "Initial turns in active sessions; 0 uses --turns")
@@ -59,10 +59,10 @@ func main() {
 }
 
 func execute(ctx context.Context, o options) error {
-	if o.SourceFormat != "jsonl" && o.SourceFormat != "opencode" {
-		return fmt.Errorf("source-format must be jsonl or opencode")
+	if o.SourceFormat != "jsonl" && o.SourceFormat != "opencode" && o.SourceFormat != "opencode-v2" {
+		return fmt.Errorf("source-format must be jsonl, opencode or opencode-v2")
 	}
-	if o.SourceFormat == "opencode" && o.Empty != 0 {
+	if (o.SourceFormat == "opencode" || o.SourceFormat == "opencode-v2") && o.Empty != 0 {
 		return fmt.Errorf("empty sources apply only to the jsonl workload")
 	}
 	if o.Sessions < 2 || o.Turns < 1 || o.ActiveTurns < 0 || o.Active < 1 || o.Active > o.Sessions || o.Iterations < 1 || o.Empty < 0 || o.ReconcileEvery < 0 || o.QueryEvery < 0 || o.ContentBytes < 1 {
