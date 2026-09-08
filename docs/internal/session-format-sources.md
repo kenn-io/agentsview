@@ -2331,3 +2331,52 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
 [evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go
 [evener-source-5]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/fork.go
+
+## Tau (`tau`)
+
+- **Format:** Tau stores one JSONL transcript per session below
+  `<root>/<project>/`, beside a metadata-only `index.jsonl`. Entries use an
+  `id` and `parent_id` tree, and the latest `leaf.entry_id` selects the active
+  path. Outer timestamps use fractional Unix seconds; nested message
+  timestamps use Unix milliseconds.
+- **Evidence:** `source`.
+- **Upstream:** Tau source is pinned to
+  [`93bfc761b43e0a5a646b0e5ac808b3a15918e74d`](https://github.com/huggingface/tau/tree/93bfc761b43e0a5a646b0e5ac808b3a15918e74d).
+  Clone `https://github.com/huggingface/tau.git` at that revision. The issue
+  transcript attachment has 33 records and SHA256
+  `f0d95655c08002655c7e727afe7249bebd8077c58ec017d76a703d785dddb3bd`. The
+  index attachment has SHA256
+  `069e87052a6fb448f2588669ec6cd31c2456e7a8f7bdee15083d9308197cd3d1`.
+  `internal/parser/testdata/tau/issue-session.jsonl` is a sanitized derivative
+  of the transcript. It changes paths and names but retains IDs, parents,
+  timestamps, models, tools, and usage values. A private Tau 0.4.1 capture
+  used during PR validation exercises an active-leaf branch and compaction.
+  The public fixture and the committed branch and compaction tests remain
+  separate from that private capture. The entry models are in
+  [`entries.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_agent/session/entries.py),
+  message models are in
+  [`messages.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_agent/messages.py),
+  ancestry is in
+  [`tree.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_agent/session/tree.py),
+  persistence is in
+  [`storage.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_agent/session/storage.py),
+  paths are in
+  [`paths.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_coding/paths.py),
+  and the session manager is in
+  [`session_manager.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_coding/session_manager.py).
+- **Usage and cost:** AgentsView maps only `input`, `output`, `cacheRead`, and
+  `cacheWrite` to its existing per-message token fields. Tau's `cacheWrite`
+  already contains total cache creation, so AgentsView counts it once and
+  ignores `cacheWrite1h`, `reasoning`, and the stored cost object. Catalog
+  pricing supplies cost when a model has a rate. The private live capture also
+  contained `reasoning`, `totalTokens`, and cost objects, which AgentsView
+  ignores. A producer-derived test covers 25 total cache-write tokens and a
+  10-token one-hour subset.
+- **Agentsview:** `internal/parser/tau.go` and `internal/parser/tau_provider.go`
+  read each transcript once, exclude the exact `index.jsonl` basename, use the
+  filename for ordinary session identity, and encode the project directory
+  plus a stable hash of the canonical configured root into `default.jsonl`
+  session IDs. They replay the selected ancestry and return a zero-message
+  result for an explicit empty leaf. A missing parent detaches the selected
+  path. No legacy Tau v1 conversion, native transfer, extension-role
+  rendering, or index metadata synchronization is included.

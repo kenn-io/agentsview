@@ -457,6 +457,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentTrae,
 		AgentVSCopilot,
 		AgentPi,
+		AgentTau,
 		AgentPrimeAgent,
 		AgentOMP,
 		AgentQwen,
