@@ -71,6 +71,13 @@ description: Release history for AgentsView
   print coarse phase updates. Redirected output omits terminal control
   sequences and per-session refresh lines. Interactive terminals retain live
   progress. (#1645)
+- Stop the server from consuming most of a machine's CPU while it sits idle on
+  a large archive. The usage-cache backfill verified each 256-session batch by
+  reading every installed rollup row, so the work grew with the square of the
+  archive size and the discarded rows kept the garbage collector saturated. The
+  backfill now reads only the rows for the sessions it is verifying. On a
+  128,000-session archive a pass that previously burned eight to nine cores for
+  several minutes and then gave up now finishes in about four minutes.
 - Price Codex Luna Reserve turns that persist as `gpt-reserve` using the
   existing GPT-5.6 Luna catalog rates. Usage reports still list `gpt-reserve`
   as the reported model. Existing SQLite usage caches rebuild so previously

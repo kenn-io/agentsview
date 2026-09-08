@@ -442,12 +442,30 @@ func readUsageRollupInstalls(
 	snapshot usageQuerySnapshot, fills map[string]usageFillResult,
 	pricingHash string,
 ) (map[string]usageRollupInstall, map[string]bool, error) {
-	rows, err := conn.QueryContext(ctx, `SELECT i.id, i.session_id,
+	query := `SELECT i.id, i.session_id,
 		i.fact_install_revision, i.install_revision, i.cached_at,
 		i.source_sync_marker, i.source_transcript_rev, i.usage_event_fingerprint,
 		i.baked_agent, i.baked_started_at, i.pricing_hash
 		FROM usage_rollup_timezones tz JOIN usage_rollup_installs i
-		  ON i.timezone_id = tz.id WHERE tz.timezone_key = ?`, identity.Key)
+		  ON i.timezone_id = tz.id WHERE tz.timezone_key = ?`
+	args := []any{identity.Key}
+	// Scope the read to the sessions this snapshot can consult, so a batched
+	// backfill pass stays linear in archive size instead of re-reading every
+	// installed row per batch. Sessions and Versions carry the same IDs in the
+	// same order from capture through ordering and batch slicing. Archive-scale
+	// snapshots exceed the bind limit and read unscoped, which returns a
+	// superset of the same rows.
+	scope := make([]string, 1, len(snapshot.Versions)+1)
+	scope[0] = usageRollupCursorSessionID
+	for _, version := range snapshot.Versions {
+		scope = append(scope, version.SessionID)
+	}
+	if len(scope) < maxSQLVars {
+		placeholders, scopeArgs := inPlaceholders(scope)
+		query += ` AND i.session_id IN ` + placeholders
+		args = append(args, scopeArgs...)
+	}
+	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, err
 	}

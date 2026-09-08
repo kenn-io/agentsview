@@ -612,6 +612,47 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 	assert.Equal(t, int64(3), inputTokens)
 }
 
+func TestUsageRollupInstallReadScopesToSnapshotBatch(t *testing.T) {
+	database := testDB(t)
+	for index, id := range []string{"session-a", "session-b"} {
+		started := []string{"2026-08-10T08:00:00Z", "2026-08-10T08:01:00Z"}[index]
+		insertSession(t, database, id, "project-a", func(session *Session) {
+			session.StartedAt = &started
+		})
+		require.NoError(t, database.InsertMessages([]Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-08-10T09:00:00Z", Model: "model-a",
+			TokenUsage: json.RawMessage(`{"input_tokens":2}`),
+		}}))
+	}
+	snapshot, fills, cache := prepareUsageRollupTest(t, database)
+	require.Len(t, snapshot.Sessions, 2)
+	_, _, err := cache.rollup.Ensure(t.Context(), snapshot, fills,
+		export.NewPricingResolver(snapshot.PricingRows))
+	require.NoError(t, err)
+
+	// A backfill pass verifies one batch at a time by slicing the snapshot.
+	batch := snapshot
+	batch.Sessions = snapshot.Sessions[:1]
+	batch.Versions = snapshot.Versions[:1]
+	require.Equal(t, batch.Sessions[0].ID, batch.Versions[0].SessionID)
+	conn, err := cache.db.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	pricingHash, err := usagePricingIdentity(batch.PricingRows)
+	require.NoError(t, err)
+
+	installs, stale, err := readUsageRollupInstalls(
+		t.Context(), conn,
+		usageTimezoneIdentityFor(batch.location, batch.Intervals),
+		batch, fills, pricingHash)
+	require.NoError(t, err)
+	assert.Empty(t, stale, "the batch was installed by the preceding Ensure")
+	assert.Contains(t, installs, batch.Sessions[0].ID)
+	assert.NotContains(t, installs, snapshot.Sessions[1].ID,
+		"verifying a batch must not read installs outside it")
+}
+
 func prepareUsageRollupTest(
 	t *testing.T, database *DB,
 ) (usageQuerySnapshot, map[string]usageFillResult, *usageCache) {
