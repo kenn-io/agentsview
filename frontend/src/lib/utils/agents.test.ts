@@ -17,6 +17,7 @@ describe("KNOWN_AGENTS", () => {
       "traex",
       "copilot",
       "devin",
+      "evener",
       "gemini",
       "gemini-apps",
       "opencode",
@@ -75,6 +76,7 @@ describe("agentColor", () => {
     expect(agentColor("traex")).toBe("var(--accent-coral)");
     expect(agentColor("copilot")).toBe("var(--accent-amber)");
     expect(agentColor("devin")).toBe("var(--accent-red)");
+    expect(agentColor("evener")).toBe("var(--accent-teal)");
     expect(agentColor("gemini")).toBe("var(--accent-rose)");
     expect(agentColor("opencode")).toBe("var(--accent-purple)");
     expect(agentColor("openhands")).toBe("var(--accent-teal)");

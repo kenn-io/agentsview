@@ -1009,6 +1009,13 @@ func Default() (Config, error) {
 			}
 			dirs[i] = filepath.Join(home, rel)
 		}
+		// XDG_STATE_HOME replaces the state directory, including both .local
+		// and state components of the home-relative default.
+		if def.Type == parser.AgentEvener {
+			if stateHome := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(stateHome) {
+				dirs = []string{filepath.Join(stateHome, "evener")}
+			}
+		}
 		// Keep the Hermes profiles container as a stable provider root. The
 		// provider enumerates its children on every discovery pass, so profiles
 		// created after startup become visible without rebuilding Config or the

@@ -265,6 +265,7 @@ keeps its default directories.
 | Command Code          | `~/.commandcode/projects/`                                                                                                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                                              |
 | Copilot CLI           | `~/.copilot/`                                                                                                                                                    | JSONL per session under `session-state/`                                                                                                                      |
 | Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS)                                                                                  | Local CLI data rooted at the directory that contains `cli/`; session data is discovered under `<root>/cli/...`                                                |
+| Evener                | `~/.local/state/evener/` (or `$XDG_STATE_HOME/evener/`)                                                                                                          | Semantic v2 `*.transcript.jsonl` and optional `*.meta.json`                                                                                                   |
 | Cortex Code           | `~/.snowflake/cortex/conversations/`                                                                                                                             | JSON / JSONL per session                                                                                                                                      |
 | Cursor                | `~/.cursor/projects/`                                                                                                                                            | JSONL or plain-text transcripts                                                                                                                               |
 | Cursor IDE            | (platform-specific, see below)                                                                                                                                   | Shared VS Code-style `globalStorage/state.vscdb` database, one session per Composer                                                                           |
@@ -739,6 +740,35 @@ export ZCODE_DIR=~/custom/zcode/cli
 export ZED_DIR=~/custom/zed
 export ZENCODER_DIR=~/custom/zencoder
 ```
+
+### Evener
+
+Evener discovery reads semantic transcript **format v2** under
+`$XDG_STATE_HOME/evener/projects/<project-id>/sessions/`, falling back to
+`~/.local/state/evener/projects/`. Override the state root with `EVENER_DIR` or
+`evener_dirs`; an explicit project state directory or sessions directory also
+works. Older transcript versions are unsupported; existing archive data is not
+deleted.
+
+```toml
+evener_dirs = ["~/session-sources/evener"]
+```
+
+The provider reads messages, thinking, tools, recorded usage, session names,
+and fork/subagent relationships. Metadata-only edits refresh the session.
+Verified copied fork prefixes are omitted from child sessions, following the
+Codex provider policy. If the parent is missing or cannot be verified, child
+history is retained and shared usage may appear in both sessions.
+
+Costs represent recorded conversation usage, not provider invoices. Model
+switch records with structured identities update the model context; an older
+prose-only switch cannot establish a fallback billing model. Explicit
+per-response model identities still take precedence. Media that cannot be
+represented by the existing transcript view is shown as a descriptive
+placeholder, without fetching referenced files or URLs.
+
+Remote sync uses Agentsview's existing mechanisms. This provider does not
+connect to Evener hubs or add an S3/SSH transport.
 
 ### Disabling Session Providers
 

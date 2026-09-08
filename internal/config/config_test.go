@@ -2697,3 +2697,54 @@ func TestDisabledAgentsExplicitEmptyArrayEnablesDefaults(t *testing.T) {
 	assert.Empty(t, cfg.DisabledAgents)
 	assert.NotEmpty(t, cfg.ResolveDirs(parser.AgentGemini))
 }
+
+func TestResolveDirs_EvenerPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, override string
+		configured            bool
+	}{
+		{name: "home default"},
+		{name: "XDG state default", state: "state"},
+		{name: "explicit root", state: "state", override: "override", configured: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			// Windows temporary paths may use a short-name alias. Resolve the
+			// existing root before appending the not-yet-created session paths.
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			t.Setenv("XDG_STATE_HOME", "")
+			t.Setenv("EVENER_DIR", "")
+			home, err := os.UserHomeDir()
+			require.NoError(t, err)
+			want := filepath.Join(home, ".local", "state", "evener")
+			if tc.state != "" {
+				state := filepath.Join(root, tc.state)
+				t.Setenv("XDG_STATE_HOME", state)
+				want = filepath.Join(state, "evener")
+			}
+			if tc.override != "" {
+				want = filepath.Join(root, tc.override)
+				t.Setenv("EVENER_DIR", want)
+			}
+			writeConfig(t, dir, map[string]any{})
+			cfg, err := LoadMinimal()
+			require.NoError(t, err)
+			assert.Equal(t, []string{want}, cfg.ResolveDirs(parser.AgentType("evener")))
+			assert.Equal(t, tc.configured, cfg.IsUserConfigured(parser.AgentType("evener")))
+		})
+	}
+	t.Run("config root", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+		t.Setenv("EVENER_DIR", "")
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		want := filepath.Join(root, "sessions")
+		writeConfig(t, dir, map[string]any{"evener_dirs": []string{want}})
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+		assert.Equal(t, []string{want}, cfg.ResolveDirs(parser.AgentType("evener")))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentType("evener")))
+	})
+}

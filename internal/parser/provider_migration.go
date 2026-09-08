@@ -73,6 +73,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentShelley:        ProviderMigrationProviderAuthoritative,
 	AgentAider:          ProviderMigrationProviderAuthoritative,
 	AgentOMP:            ProviderMigrationProviderAuthoritative,
+	AgentEvener:         ProviderMigrationProviderAuthoritative,
 	AgentReasonix:       ProviderMigrationProviderAuthoritative,
 	AgentRooCode:        ProviderMigrationProviderAuthoritative,
 	AgentPoolside:       ProviderMigrationProviderAuthoritative,

@@ -124,7 +124,7 @@ func (t TargetSet) isFileScoped(agent parser.AgentType) bool {
 // until added here.
 func verbatimFileScopedAgent(agent parser.AgentType) bool {
 	return agent == parser.AgentRooCode || agent == parser.AgentKiloLegacy ||
-		agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot
+		agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot || agent == parser.AgentEvener
 }
 
 // snapshotFileScopedAgent reports whether a file-scoped agent's
@@ -144,7 +144,7 @@ func snapshotFileScopedAgent(agent parser.AgentType) bool {
 // remaining copies instead of failing the sync. Agents without this
 // trait drop the root entirely when nothing is discovered.
 func emptyFileScopeAgent(agent parser.AgentType) bool {
-	return agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot
+	return agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot || agent == parser.AgentEvener
 }
 
 // HasSanitizedFileScopedAgents reports whether any agent's export is

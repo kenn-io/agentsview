@@ -72,6 +72,50 @@ func buildAiderResolveSnippet(envVar string) string {
 	)
 }
 
+// buildEvenerResolveSnippet selects semantic transcripts and their optional
+// metadata companions. The state root can also contain credentials and API logs.
+func buildEvenerResolveSnippet() string {
+	return `av_evener_sessions() {
+ [ -d "$1" ] && [ ! -L "$1" ] || return 0
+ for av_evener_file in "$1"/*.transcript.jsonl "$1"/.[!.]*.transcript.jsonl "$1"/..?*.transcript.jsonl; do
+  [ -f "$av_evener_file" ] && [ ! -L "$av_evener_file" ] || continue
+  av_evener_id=${av_evener_file##*/}
+  av_evener_id=${av_evener_id%.transcript.jsonl}
+  case "$av_evener_id" in ''|.|..|*:*|*'\'*) continue;; esac
+  av_evener_phys=$(av_phys_file "$av_evener_file") || continue
+  if [ "$av_evener_emitted" -eq 0 ]; then
+   printf '%s\000' "evener:$av_evener_root"
+   av_evener_emitted=1
+  fi
+  printf '%s\000' "@agentfile:evener:$av_evener_phys"
+  av_evener_meta=${av_evener_file%.transcript.jsonl}.meta.json
+  [ -L "$av_evener_meta" ] || av_emit_agent_file evener "$av_evener_meta"
+ done
+}
+av_evener_root=${EVENER_DIR:-}
+if [ -z "$av_evener_root" ]; then
+ case "${XDG_STATE_HOME:-}" in
+  /*) av_evener_root="$XDG_STATE_HOME/evener";;
+  *) av_evener_root="$HOME/.local/state/evener";;
+ esac
+fi
+if [ -d "$av_evener_root" ]; then
+ av_evener_root=$(av_phys_dir "$av_evener_root") || exit 1
+ av_evener_emitted=0
+ case "$av_evener_root" in
+  */sessions) av_evener_sessions "$av_evener_root";;
+  *) av_evener_sessions "$av_evener_root/sessions";;
+ esac
+ if [ ! -L "$av_evener_root/projects" ]; then
+  for av_evener_project in "$av_evener_root/projects"/* "$av_evener_root/projects"/.[!.]* "$av_evener_root/projects"/..?*; do
+   [ -d "$av_evener_project" ] && [ ! -L "$av_evener_project" ] || continue
+   av_evener_sessions "$av_evener_project/sessions"
+  done
+ fi
+fi
+`
+}
+
 // buildResolveScript generates a shell script that echoes each file-based
 // agent's resolved transfer target on the remote host. Output format:
 // "agentType:path\n" per agent target, plus "@file:path\n" lines for sibling
@@ -388,6 +432,10 @@ func buildResolveScript() string {
 			if def.EnvVar != "" {
 				b.WriteString(buildAiderResolveSnippet(def.EnvVar))
 			}
+			continue
+		}
+		if def.Type == parser.AgentEvener {
+			b.WriteString(buildEvenerResolveSnippet())
 			continue
 		}
 		for _, rel := range def.DefaultDirs {

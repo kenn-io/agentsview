@@ -2251,3 +2251,48 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 - **Agentsview:** `internal/parser/codebuff.go` and
   `internal/parser/codebuff_provider.go`; single-file provider with JSON array
   parsing.
+
+## Evener (`evener`)
+
+- **Format:** newline-framed semantic transcript v2; header followed by entries
+  containing a sequence number and semantic turn. Optional metadata is a
+  sibling `<session-id>.meta.json`.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/prime-radiant-inc/evener.git`,
+  producer revision `da7c06396c9848abfae362dcffce3861a6a0c95a`, checked
+  2026-09-05, includes structured model-switch facts from PR #889. Earlier v2
+  records need not contain those facts. See
+  [transcript writer and framing][evener-source-1],
+  [turn schema][evener-source-2], [message and usage types][evener-source-3],
+  [metadata][evener-source-4], and [fork writer][evener-source-5].
+- **Usage and cost:** assistant turns persist uncached input and output plus
+  optional cache reads, 5-minute cache writes, 1-hour cache writes, and
+  reasoning counts. Reasoning is part of output, not an additional output
+  total. Metadata running totals and API logs are not added to these per-turn
+  facts. Catalog pricing is computed by Agentsview, not supplied by the
+  transcript.
+- **Forks:** the producer copies complete turns before the 1-based divergence
+  index; verify that prefix against the parent before suppressing replayed
+  child history. Missing parents retain child history, like Codex.
+- **Model switches:** structured values identify configured provider/model
+  transitions, not automatic fallbacks or response aliases. Per-response
+  identities take precedence; do not parse display prose for billing facts.
+- **Agentsview:** `internal/parser/evener.go` and `evener_provider.go`. Fixtures
+  are synthetic and cover semantic content, usage, metadata and fork behavior.
+  Capture discovery uses bounded directory batches and the raw-audit progress
+  contract. Remote imports verify content hashes rather than trusting copied
+  filesystem timestamps. SSH discovery honors an absolute `XDG_STATE_HOME`
+  when `EVENER_DIR` is unset and transfers only transcript/metadata pairs,
+  excluding API logs, credentials, and symlinked descendants. These transport
+  selections do not change the producer format above. Remote Evener imports
+  derive project names from the recorded path without probing that directory
+  on the receiving machine. The shared remote-import engine applies this
+  policy during parsing and project metadata preservation. This can use a
+  subdirectory name instead of the Git repository name; local discovery is
+  unchanged.
+
+[evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
+[evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
+[evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
+[evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go
+[evener-source-5]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/fork.go

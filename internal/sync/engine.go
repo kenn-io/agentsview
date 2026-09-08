@@ -13933,7 +13933,7 @@ func (e *Engine) providerStatFreshnessMtime(
 
 // providerStatDigestEligible reports whether this engine may stage,
 // stamp, or consult a provider_freshness stat digest for the agent. The
-// content-hashing single-file JSONL providers (Claude, Codex family) are
+// content-hashing JSONL providers (Claude, Codex family, Evener) are
 // ineligible under a pathRewriter: a remote import materializes a fresh
 // physical file whose mtime is copied from the remote and whose ctime is
 // the import clock, so a same-stat different-content re-download can
@@ -13948,7 +13948,7 @@ func (e *Engine) providerStatDigestEligible(agent parser.AgentType) bool {
 	if e.pathRewriter == nil {
 		return true
 	}
-	return agent != parser.AgentClaude && !isCodexFormatAgent(agent)
+	return agent != parser.AgentClaude && agent != parser.AgentEvener && !isCodexFormatAgent(agent)
 }
 
 // providerFreshnessAgents returns the stored-agent labels a provider's
@@ -19142,6 +19142,14 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		return obj.LastModified.UnixNano()
 	}
 
+	if def.Type == parser.AgentEvener {
+		// Session polling must notice metadata and parent changes too.
+		// This opaque stat token is compared for equality, not ordering.
+		if hasher := e.providerStatHashers[def.Type]; hasher != nil {
+			return int64(hasher.ComputeMultiFileStatHash(path))
+		}
+		return 0
+	}
 	if usesCompositeSidecarFreshness(def.Type, path) {
 		mtime, err := parser.ClaudeLayoutCompositeMtime(path)
 		if err != nil {

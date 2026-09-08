@@ -202,6 +202,39 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 	}
 }
 
+func TestPreserveUnavailableSourceProjectsHonorsDiscoveryPolicy(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
+			cwd := t.TempDir()
+			engine := NewEngine(openTestDB(t), EngineConfig{
+				Machine: "source-host", IDPrefix: "source-host~",
+				DisableFilesystemProjectDiscovery: disabled,
+			})
+			t.Cleanup(engine.Close)
+			probes := 0
+			engine.stat = func(path string) (os.FileInfo, error) {
+				assert.Equal(t, cwd, path)
+				probes++
+				return os.Stat(path)
+			}
+			result, err := engine.preserveUnavailableSourceProjects(t.Context(),
+				[]pendingWrite{{sess: parser.ParsedSession{
+					ID: "evener:session", Agent: parser.AgentEvener,
+					Machine: "source-host", Project: "recorded-project", Cwd: cwd,
+				}}},
+			)
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+			assert.Equal(t, "recorded-project", result[0].sess.Project)
+			if disabled {
+				assert.Zero(t, probes)
+			} else {
+				assert.Equal(t, 1, probes)
+			}
+		})
+	}
+}
+
 // TestPreserveUnavailableSourceProjectsSkipsProtectedPath pins that deciding
 // whether a session's working directory still exists never stats a path in a
 // macOS TCC-protected location. This probe runs for every unresolved local

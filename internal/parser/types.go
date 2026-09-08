@@ -72,6 +72,7 @@ const (
 	AgentShelley        AgentType = "shelley"
 	AgentAider          AgentType = "aider"
 	AgentReasonix       AgentType = "reasonix"
+	AgentEvener         AgentType = "evener"
 	AgentIcodemate      AgentType = "icodemate"
 	AgentRooCode        AgentType = "roocode"
 	AgentPoolside       AgentType = "poolside"
@@ -893,6 +894,16 @@ var Registry = []AgentDef{
 		IDPrefix:          "aider:",
 		FileBased:         true,
 		ShallowWatch:      true,
+		PeriodicReconcile: true,
+	},
+	{
+		Type:              AgentEvener,
+		DisplayName:       "Evener",
+		EnvVar:            "EVENER_DIR",
+		ConfigKey:         "evener_dirs",
+		DefaultDirs:       []string{".local/state/evener"},
+		IDPrefix:          "evener:",
+		FileBased:         true,
 		PeriodicReconcile: true,
 	},
 	{

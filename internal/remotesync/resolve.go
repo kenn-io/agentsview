@@ -113,7 +113,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 				continue
 			}
 			if emptyFileScopeAgent(def.Type) {
-				root, targetFiles, err := resolveEditorTarget(def.Type, dir)
+				root, targetFiles, err := resolveFileScopedTarget(def.Type, dir)
 				if err != nil {
 					return TargetSet{}, err
 				}
@@ -167,10 +167,10 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 	}), nil
 }
 
-// resolveEditorTarget asks the parser for the exact session files it would
-// consume, then adds only the workspace manifest needed to preserve project
-// attribution. The configured editor root remains the authorization boundary.
-func resolveEditorTarget(agent parser.AgentType, root string) (string, []string, error) {
+// resolveFileScopedTarget asks the provider for the exact session files it
+// consumes. Provider-owned companions travel with each source; editor workspace
+// manifests preserve project attribution. The root is the authorization boundary.
+func resolveFileScopedTarget(agent parser.AgentType, root string) (string, []string, error) {
 	root = filepath.Clean(root)
 	ok, err := curatedRoot(root)
 	if err != nil || !ok {
@@ -188,6 +188,31 @@ func resolveEditorTarget(agent parser.AgentType, root string) (string, []string,
 	seen := make(map[string]struct{})
 	var files []string
 	for _, source := range sources {
+		if agent == parser.AgentEvener {
+			plan, supported, err := parser.ResolveRawCapturePlan(context.Background(), provider, source)
+			if err != nil {
+				return "", nil, err
+			}
+			if !supported {
+				return "", nil, fmt.Errorf("evener provider does not declare source companions")
+			}
+			for _, entry := range plan.Entries {
+				// Capture validation canonicalizes paths; retain the configured
+				// root spelling used by the remote target's authorization scope.
+				localPath := filepath.Join(root, filepath.FromSlash(entry.Path))
+				regular, err := regularCuratedFile(root, localPath)
+				if err != nil {
+					return "", nil, err
+				}
+				if regular {
+					if _, exists := seen[localPath]; !exists {
+						seen[localPath] = struct{}{}
+						files = append(files, localPath)
+					}
+				}
+			}
+			continue
+		}
 		path := providerDiscoveredPath(source)
 		if path == "" {
 			continue
