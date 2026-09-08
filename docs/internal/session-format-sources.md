@@ -578,6 +578,14 @@ add an archived or maintained mirror without replacing the original identity.
   provides a follow-up even without a second store event. The daemon's
   15-minute cadence is separate from the five-minute verification threshold.
   See the producer experiment in the pricing investigation linked above.
+- **Coverage reverified 2026-09-08:** The shipped native writer rejects a usage
+  insert under a SQLite write lock, accepts a later event after the lock
+  clears, and does not replay the failed event on flush. A maximum timestamp
+  is not a contiguous coverage watermark. The parser retains only positive
+  per-model transcript output remainders within the overlap region. Native
+  assistant emission generates its own timestamp; missing producer timestamps
+  remain unestablished. See the coverage experiment in the pricing
+  investigation.
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
   Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and

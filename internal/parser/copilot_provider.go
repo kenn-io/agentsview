@@ -392,7 +392,7 @@ func (s copilotSourceSet) fingerprint(ctx context.Context, source SourceRef, loa
 	fingerprint := SourceFingerprint{
 		Key:  firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
 		Size: transcript.Size, MTimeNS: transcript.Mtime,
-		Hash: fmt.Sprintf("copilot-session:v3:%s:%s", encoded, storeHash),
+		Hash: fmt.Sprintf("copilot-session:v4:%s:%s", encoded, storeHash),
 	}
 	return fingerprint, nil
 }

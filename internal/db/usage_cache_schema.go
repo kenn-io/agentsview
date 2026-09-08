@@ -35,7 +35,8 @@ const (
 	// rates. EffectivePricingDigest hashes only catalog rows, so the
 	// same facts and catalog would otherwise keep the unpriced costs.
 	// Version 10 rebuilds Copilot session-store facts with request-scoped pricing.
-	usageCacheFormatVersion             = 10
+	// Version 11 rebuilds Copilot output facts after reconciling store gaps.
+	usageCacheFormatVersion             = 11
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1

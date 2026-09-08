@@ -516,6 +516,21 @@ are not combined to choose a higher band. Explicit output from an uncovered
 assistant response contributes to session token totals even when its model is
 unknown; that response does not receive a model-priced usage row.
 
+The latest store timestamp bounds an overlap region; it does not prove that
+all earlier calls reached the store. Within that region, AgentsView compares
+transcript and store output totals per known model and retains only a positive
+transcript remainder as a separate aggregate estimate. It does not assign that
+remainder to a guessed request. Unknown-model output uses any remaining store
+output as overlap and retains only the excess, unpriced. Later responses retain
+the existing per-message fallback.
+
+This is a conservative lower bound when the sources cannot be correlated. Extra
+store-only calls can hide missing transcript-call output for the same model.
+The remainder has no recovered input count or request-size band, and is dated at
+the latest contributing transcript response for that model. It is an estimate,
+not recovered per-call billing. If missing store rows later appear, they replace
+the remainder rather than being added to it.
+
 When the selected data contains this reported session cost, AgentsView
 suppresses every catalog-priced estimate for that session. This prevents double
 counting across models, days, and resumed segments. Historical Copilot sessions

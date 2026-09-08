@@ -385,13 +385,73 @@ func (b *copilotSessionBuilder) handleShutdown(
 	b.usageEvents = append(b.usageEvents, events...)
 }
 
+// retainStoreOutputRemainder treats pre-cutoff store and transcript output as
+// overlapping observations, not proof that every response reached the store.
+// Without a shared response ID, only the positive aggregate difference is
+// known to be absent. Keep it separate from per-request store facts rather than
+// attributing a missing call to an arbitrary transcript message.
+func (b *copilotSessionBuilder) retainStoreOutputRemainder() {
+	storeOutput := make(map[string]int)
+	for _, event := range b.usageEvents {
+		if event.Source == "session-store" {
+			storeOutput[event.Model] += event.OutputTokens
+		}
+	}
+	type observedOutput struct {
+		tokens int
+		at     time.Time
+	}
+	observed := make(map[string]observedOutput)
+	unknown := 0
+	for _, message := range b.messages {
+		if message.Role != RoleAssistant || !message.HasOutputTokens ||
+			(!message.Timestamp.IsZero() && message.Timestamp.After(b.usageCoveredAt)) {
+			continue
+		}
+		if message.Model == "" {
+			unknown += message.OutputTokens
+			continue
+		}
+		value := observed[message.Model]
+		value.tokens += message.OutputTokens
+		if message.Timestamp.After(value.at) {
+			value.at = message.Timestamp
+		}
+		observed[message.Model] = value
+	}
+	models := make([]string, 0, len(observed))
+	for model := range observed {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	for _, model := range models {
+		value := observed[model]
+		if extra := value.tokens - storeOutput[model]; extra > 0 {
+			b.usageEvents = append(b.usageEvents, ParsedUsageEvent{
+				Source: "transcript-output-remainder", Model: model, OutputTokens: extra,
+				OccurredAt: timeString(value.at, b.startedAt),
+			})
+		}
+		storeOutput[model] = max(storeOutput[model]-value.tokens, 0)
+	}
+	// Unknown-model responses can overlap any remaining store output. Retain
+	// only the excess, unpriced, as for other model-less transcript fallback.
+	for _, tokens := range storeOutput {
+		unknown -= tokens
+	}
+	if unknown > 0 {
+		b.fallbackOutput += unknown
+		b.hasFallbackOutput = true
+	}
+}
+
 func (b *copilotSessionBuilder) applyMessageUsageFallback() {
 	for i := range b.messages {
 		message := &b.messages[i]
 		if i < b.shutdownCoveredMessages || message.Role != RoleAssistant ||
 			!message.HasOutputTokens ||
-			(!message.Timestamp.IsZero() &&
-				!message.Timestamp.After(b.usageCoveredAt)) {
+			(!b.usageCoveredAt.IsZero() &&
+				(message.Timestamp.IsZero() || !message.Timestamp.After(b.usageCoveredAt))) {
 			continue
 		}
 		b.fallbackOutput += message.OutputTokens
@@ -627,6 +687,9 @@ func (p *copilotProvider) parseSessionWithStore(
 			b.shutdownCoveredMessages = 0
 			usesStoreUsage = true
 		}
+	}
+	if usesStoreUsage {
+		b.retainStoreOutputRemainder()
 	}
 	b.applyMessageUsageFallback()
 

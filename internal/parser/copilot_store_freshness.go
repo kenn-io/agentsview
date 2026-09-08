@@ -52,7 +52,7 @@ func (f copilotTranscriptFingerprint) encode() (string, error) {
 
 func restoreCopilotTranscriptFingerprint(value string, stat uint64) (copilotTranscriptFingerprint, bool) {
 	parts := strings.SplitN(value, ":", 4)
-	if len(parts) != 4 || parts[0] != "copilot-session" || parts[1] != "v3" || stat == 0 {
+	if len(parts) != 4 || parts[0] != "copilot-session" || parts[1] != "v4" || stat == 0 {
 		return copilotTranscriptFingerprint{}, false
 	}
 	data, err := base64.RawURLEncoding.DecodeString(parts[2])

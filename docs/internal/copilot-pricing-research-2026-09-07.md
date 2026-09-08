@@ -146,3 +146,33 @@ using file change metadata. Startup and the first sync after five minutes verify
 all usage rows, including edits and deletions below an unchanged maximum ID.
 This retains OpenCode's distinction between lightweight metadata discovery and
 changed-session payload work without relying on an unchanged timestamp.
+
+## Coverage reverified 2026-09-08
+
+The CLI's native `sessionEmitInternalJson` was called with an assistant message
+and no caller-provided timestamp. Its returned delivery contained a generated
+ISO timestamp. The published JavaScript `emitInternal` wrapper calls that method
+without supplying a timestamp. VS Code's pinned
+[session-event builder](https://github.com/microsoft/vscode/blob/ae1dca64258d4d7f399a101beec29d800bb6b492/src/vs/platform/agentHost/node/copilot/buildSessionEvents.ts#L79)
+also generates ISO timestamps. Missing timestamps in ordinary producer output
+remain unestablished; schema permissiveness is not evidence of that failure.
+
+A separate experiment established that usage rows can be missing before a later
+successful row. Using the same native runtime and scratch-session setup above,
+open a second SQLite connection and hold `BEGIN IMMEDIATE`. Send an
+`assistant.usage` event with output count 3. The native tracking method rejects
+with `database is locked`; flushing produces no row. Release the write lock,
+send a later usage event with output count 7, and flush again. Querying the
+store returns only the 7-output row. The earlier event is not replayed. The
+published JavaScript tracking listener catches and logs handler rejections and
+continues processing later events. This is a producer failure path, not a claim
+that arbitrary row deletion happens in normal CLI operation.
+
+Agentsview therefore cannot infer contiguous coverage from the maximum store
+timestamp. Within the overlap region, the parser now retains the positive
+per-model difference between transcript output and store output as a separate
+aggregate estimate. It keeps per-request store rows intact. This avoids summing
+overlapping output while recovering a visible shortfall. It cannot identify the
+missing request, reconstruct its input usage or input-size pricing band, or
+recover gaps masked by other store-only calls. The usage documentation records
+those limits and the aggregate timestamp convention.
