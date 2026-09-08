@@ -969,11 +969,14 @@ func resolveCanonicalToolMessageIDs(
 	messageIDs := make(map[int]*int64, len(ordinals))
 	if len(ordinals) > 0 {
 		if err := writeCanonicalBatches(ordinals, func(batch []int) error {
-			var messages []bunmodel.Message
-			if err := tx.NewSelect().Model(&messages).Column("id", "ordinal").
+			var messages []struct {
+				ID      *int64 `bun:"id"`
+				Ordinal int    `bun:"ordinal"`
+			}
+			if err := tx.NewSelect().Model((*bunmodel.Message)(nil)).Column("id", "ordinal").
 				Where("session_id = ?", sessionID).
 				Where("ordinal IN (?)", bun.List(batch)).
-				Scan(ctx); err != nil {
+				Scan(ctx, &messages); err != nil {
 				return fmt.Errorf(
 					"resolving canonical tool message ids for %s: %w", sessionID, err,
 				)

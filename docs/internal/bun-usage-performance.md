@@ -216,6 +216,25 @@ improve the local paired measurements, so index handling remains unchanged. A
 speed advantage. External benchmark pickup after push remains the acceptance
 check for production-scale fresh-sync time and memory.
 
+### Tool-call message lookup
+
+Tool-call writes resolve parent message IDs by selecting `id` and `ordinal`. The
+scan now stores those two fields instead of allocating full message model
+structs. The canonical Bun model still owns the query, and the selected rows and
+parent-ID mapping are unchanged.
+
+An isolated SQLite comparison covered 300 and 3,000 messages with tools on 10%,
+50%, and 100% of messages, including repeated calls and noncontiguous physical
+IDs. Three 100-operation samples per case, repeated in reverse variant order,
+measured 52–74% fewer allocated bytes and 6–16% lower lookup time. At 3,000
+messages with tools on every message, allocation fell from 4.666 MB to 1.201 MB
+per lookup. Median time fell from 4.072 ms to 3.773 ms in the first order and
+from 3.953 ms to 3.616 ms in reverse order.
+
+These are lookup-only measurements. The earlier full-rebuild fixture has no tool
+calls and cannot measure this change. External fresh-sync results are still
+required to establish its effect on the complete workload.
+
 ## Correctness and delivery
 
 The shared contract exercises all three engines. It preserves exact costs,
