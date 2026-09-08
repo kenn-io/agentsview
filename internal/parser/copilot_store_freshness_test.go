@@ -58,6 +58,19 @@ func TestCopilotStoreFingerprintWorkScalesWithChangedUsage(t *testing.T) {
 				require.NoError(t, err)
 				before[source.Key] = fp
 			}
+			// A fresh provider restores transcript metadata from the archive's
+			// fingerprint but independently rebuilds usage hashes from the store.
+			cold := newCopilotTestProvider(t, root)
+			for _, source := range sources {
+				fp, err := cold.FingerprintWithStored(t.Context(), source, func(path string) (string, bool) {
+					stored, ok := before[path]
+					return stored.Hash, ok
+				})
+				require.NoError(t, err)
+				assert.Equal(t, before[source.Key], fp)
+			}
+			assert.Zero(t, cold.sources.cache.transcriptBytes)
+			provider = cold
 			cache := provider.sources.cache
 			bytesBefore, rowsBefore := cache.transcriptBytes, cache.usageRows
 			_, err = store.Exec(`INSERT INTO assistant_usage_events(session_id,model,input_tokens,output_tokens,created_at)

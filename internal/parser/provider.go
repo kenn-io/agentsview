@@ -937,6 +937,17 @@ type FindSourceRequest struct {
 	PreferStoredSource bool
 }
 
+// StoredFingerprintLookup reads the archive's last successful source fingerprint.
+// It is lazy: providers invoke it only when their in-memory cache needs a seed.
+type StoredFingerprintLookup func(path string) (string, bool)
+
+// StoredFingerprintProvider can reuse independently verified parts of a persisted
+// fingerprint. It must still check every other input before returning freshness.
+// Providers without this optional capability receive no archive lookup.
+type StoredFingerprintProvider interface {
+	FingerprintWithStored(context.Context, SourceRef, StoredFingerprintLookup) (SourceFingerprint, error)
+}
+
 // SourceFingerprint is the provider-normalized source freshness identity. The
 // engine uses Key plus size/mtime/hash fields for skip-cache, data-version, and
 // source metadata compatibility, including PostgreSQL push/read parity. Key

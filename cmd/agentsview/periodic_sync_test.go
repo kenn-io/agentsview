@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -257,4 +259,52 @@ func TestRunScheduledSyncPassLogsLifecycle(t *testing.T) {
 			assert.Contains(t, output, "outcome="+tc.wantOutcome)
 		})
 	}
+}
+
+// A single store edit must eventually reach the archive without another file
+// event. Fake time advances through the real scheduled-pass interval; neither
+// the provider cache nor its verification timestamp is modified by the test.
+func TestScheduledCopilotReconcilesDeferredUsage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "session-state", "scheduled", "events.jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(`{"type":"session.start","timestamp":"2026-09-04T17:00:00Z","data":{"sessionId":"scheduled"}}
+{"type":"user.message","timestamp":"2026-09-04T17:00:01Z","data":{"content":"Question"}}
+{"type":"assistant.message","timestamp":"2026-09-04T17:00:02Z","data":{"content":"Answer","outputTokens":3}}
+`), 0o644))
+		storePath := filepath.Join(root, "session-store.db")
+		store, err := sql.Open("sqlite3", storePath)
+		require.NoError(t, err)
+		defer store.Close()
+		_, err = store.Exec(`PRAGMA journal_mode=WAL;
+CREATE TABLE sessions(id TEXT PRIMARY KEY);
+INSERT INTO sessions VALUES('scheduled');
+CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY AUTOINCREMENT,
+session_id TEXT,model TEXT,input_tokens INTEGER,output_tokens INTEGER,
+cache_read_tokens INTEGER,cache_write_tokens INTEGER,reasoning_tokens INTEGER,created_at TEXT);
+CREATE INDEX idx_assistant_usage_events_session ON assistant_usage_events(session_id,id);
+INSERT INTO assistant_usage_events VALUES(1,'scheduled','gpt-5.4',100,3,0,0,0,'2026-09-04T17:00:02Z');
+INSERT INTO assistant_usage_events VALUES(2,'scheduled','gpt-5.4',100,7,0,0,0,'2026-09-04T17:00:03Z');`)
+		require.NoError(t, err)
+		archive := dbtest.OpenTestDB(t)
+		cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}}
+		engine := agentsync.NewEngine(archive, agentsync.EngineConfig{AgentDirs: cfg.AgentDirs, Machine: "local"})
+		defer engine.Close()
+		require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+		_, err = store.Exec(`UPDATE assistant_usage_events SET output_tokens=9 WHERE id=1`)
+		require.NoError(t, err)
+		require.NoError(t, engine.SyncPathsContext(t.Context(), []string{storePath + "-wal"}))
+		usage, err := archive.GetUsageEvents(t.Context(), "copilot:scheduled")
+		require.NoError(t, err)
+		require.Len(t, usage, 2)
+		assert.Equal(t, 3, usage[0].OutputTokens, "the event fast path defers this older-row edit")
+		time.Sleep(periodicSyncInterval)
+		runScheduledSyncPass(t.Context(), engine, scheduledReconcileTargets(cfg))
+		usage, err = archive.GetUsageEvents(t.Context(), "copilot:scheduled")
+		require.NoError(t, err)
+		require.Len(t, usage, 2)
+		assert.Equal(t, 9, usage[0].OutputTokens, "scheduled reconciliation must publish the deferred edit")
+		assert.Equal(t, 7, usage[1].OutputTokens)
+	})
 }

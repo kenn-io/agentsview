@@ -4,18 +4,27 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json/v2"
 	"fmt"
 	"hash"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tidwall/gjson"
 )
 
 const copilotStoreVerifyInterval = 5 * time.Minute
+
+var copilotTranscriptBytesRead atomic.Int64
+
+// CopilotTranscriptBytesRead reports transcript payload work for sync scaling checks.
+func CopilotTranscriptBytesRead() int64 { return copilotTranscriptBytesRead.Load() }
 
 // Like the OpenCode factory index, this cache is shared by the short-lived
 // providers of one engine. It caches producer inputs, never successful archive
@@ -30,10 +39,31 @@ type copilotSourceCache struct {
 }
 
 type copilotTranscriptFingerprint struct {
-	stat            uint64
-	size, mtime     int64
-	hash, sessionID string
-	usesStore       bool
+	Stat            uint64
+	Size, Mtime     int64
+	Hash, SessionID string
+	UsesStore       bool
+}
+
+func (f copilotTranscriptFingerprint) encode() (string, error) {
+	data, err := json.Marshal(f)
+	return base64.RawURLEncoding.EncodeToString(data), err
+}
+
+func restoreCopilotTranscriptFingerprint(value string, stat uint64) (copilotTranscriptFingerprint, bool) {
+	parts := strings.SplitN(value, ":", 4)
+	if len(parts) != 4 || parts[0] != "copilot-session" || parts[1] != "v3" || stat == 0 {
+		return copilotTranscriptFingerprint{}, false
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return copilotTranscriptFingerprint{}, false
+	}
+	var f copilotTranscriptFingerprint
+	if json.Unmarshal(data, &f) != nil || f.Stat != stat {
+		return copilotTranscriptFingerprint{}, false
+	}
+	return f, true
 }
 
 type copilotStoreMember struct {
@@ -54,7 +84,7 @@ func newCopilotSourceCache() *copilotSourceCache {
 	}
 }
 
-func (c *copilotSourceCache) transcript(ctx context.Context, path string, info os.FileInfo) (copilotTranscriptFingerprint, error) {
+func (c *copilotSourceCache) transcript(ctx context.Context, path string, info os.FileInfo, load StoredFingerprintLookup) (copilotTranscriptFingerprint, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	workspace := copilotWorkspacePath(path)
@@ -63,8 +93,16 @@ func (c *copilotSourceCache) transcript(ctx context.Context, path string, info o
 		paths = append(paths, workspace)
 	}
 	stat := fileStatTupleDigest(0xC3, paths...)
-	if prior, ok := c.transcripts[path]; ok && stat != 0 && prior.stat == stat {
+	if prior, ok := c.transcripts[path]; ok && stat != 0 && prior.Stat == stat {
 		return prior, nil
+	}
+	if load != nil && stat != 0 {
+		if value, ok := load(path); ok {
+			if prior, valid := restoreCopilotTranscriptFingerprint(value, stat); valid {
+				c.transcripts[path] = prior
+				return prior, nil
+			}
+		}
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -73,6 +111,7 @@ func (c *copilotSourceCache) transcript(ctx context.Context, path string, info o
 	}
 	defer file.Close()
 	c.transcriptBytes += info.Size()
+	copilotTranscriptBytesRead.Add(info.Size())
 	h := sha256.New()
 	var started time.Time
 	sessionID := ""
@@ -113,9 +152,9 @@ func (c *copilotSourceCache) transcript(ctx context.Context, path string, info o
 		h.Write(data)
 	}
 	size, mtime := CopilotCompositeFileStat(path, info)
-	result := copilotTranscriptFingerprint{stat: stat, size: size, mtime: mtime,
-		hash: fmt.Sprintf("%x", h.Sum(nil)), sessionID: sessionID,
-		usesStore: !started.Before(copilotUsageBasedPricingStartedAt)}
+	result := copilotTranscriptFingerprint{Stat: stat, Size: size, Mtime: mtime,
+		Hash: fmt.Sprintf("%x", h.Sum(nil)), SessionID: sessionID,
+		UsesStore: !started.Before(copilotUsageBasedPricingStartedAt)}
 	c.transcripts[path] = result
 	return result, nil
 }

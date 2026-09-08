@@ -214,14 +214,15 @@ var Registry = []AgentDef{
 		// SQLite WALs TRAE CLI keeps there.
 	},
 	{
-		Type:         AgentCopilot,
-		DisplayName:  "Copilot",
-		EnvVar:       "COPILOT_DIR",
-		ConfigKey:    "copilot_dirs",
-		DefaultDirs:  []string{".copilot"},
-		IDPrefix:     "copilot:",
-		WatchSubdirs: []string{"session-state"},
-		FileBased:    true,
+		Type:              AgentCopilot,
+		DisplayName:       "Copilot",
+		EnvVar:            "COPILOT_DIR",
+		ConfigKey:         "copilot_dirs",
+		DefaultDirs:       []string{".copilot"},
+		IDPrefix:          "copilot:",
+		WatchSubdirs:      []string{"session-state"},
+		FileBased:         true,
+		PeriodicReconcile: true,
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
 			AICreditsDenominated:  true,

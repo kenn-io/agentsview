@@ -499,9 +499,14 @@ reported-cost source.
 Copilot sync caches transcript hashes and fingerprints usage per session. A
 shared-store write checks lightweight session metadata and rereads usage only
 for sessions whose latest usage-row ID changed. Unchanged transcripts are not
-reread or rearchived. Startup and the first sync after each five-minute
-verification interval scan all usage rows to catch edits or deletions below an
-unchanged latest ID. The shared database's modification time is not used as a
+reread or rearchived. A new engine restores transcript hashes from archived
+fingerprints when current file-change metadata matches; first import and changed
+transcripts still require payload reads. Startup and the first sync after each
+five-minute verification interval scan all usage rows to catch edits or deletions
+below an unchanged latest ID. Copilot also participates in the daemon's
+15-minute scheduled reconciliation, so deferred edits do not require another
+filesystem event. The five-minute threshold plus the next scheduled tick can
+leave an older-row edit stale for up to 20 minutes before the pass starts. The shared database's modification time is not used as a
 session timestamp. Candidate enumeration and metadata checks still grow with
 the number of sessions, as they do for OpenCode.
 

@@ -76,6 +76,10 @@ func (p *copilotProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+func (p *copilotProvider) FingerprintWithStored(ctx context.Context, source SourceRef, load StoredFingerprintLookup) (SourceFingerprint, error) {
+	return p.sources.fingerprint(ctx, source, load)
+}
+
 func (p *copilotProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,
@@ -344,6 +348,10 @@ func (s copilotSourceSet) Fingerprint(
 	ctx context.Context,
 	source SourceRef,
 ) (SourceFingerprint, error) {
+	return s.fingerprint(ctx, source, nil)
+}
+
+func (s copilotSourceSet) fingerprint(ctx context.Context, source SourceRef, load StoredFingerprintLookup) (SourceFingerprint, error) {
 	if err := ctx.Err(); err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -358,14 +366,14 @@ func (s copilotSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	transcript, err := s.cache.transcript(ctx, path, info)
+	transcript, err := s.cache.transcript(ctx, path, info, load)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
 	storeHash := ""
-	if transcript.usesStore {
+	if transcript.UsesStore {
 		storePath := filepath.Join(copilotRootForEventsPath(path), "session-store.db")
-		storeHash, err = s.cache.usageHash(ctx, storePath, transcript.sessionID)
+		storeHash, err = s.cache.usageHash(ctx, storePath, transcript.SessionID)
 		if err != nil {
 			if ctx.Err() != nil {
 				return SourceFingerprint{}, ctx.Err()
@@ -377,10 +385,14 @@ func (s copilotSourceSet) Fingerprint(
 			storeHash = fmt.Sprintf("unavailable:%v", state)
 		}
 	}
+	encoded, err := transcript.encode()
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
 	fingerprint := SourceFingerprint{
 		Key:  firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
-		Size: transcript.size, MTimeNS: transcript.mtime,
-		Hash: fmt.Sprintf("copilot-session:v2:%s:%s", transcript.hash, storeHash),
+		Size: transcript.Size, MTimeNS: transcript.Mtime,
+		Hash: fmt.Sprintf("copilot-session:v3:%s:%s", encoded, storeHash),
 	}
 	return fingerprint, nil
 }
