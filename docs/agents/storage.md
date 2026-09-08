@@ -119,6 +119,20 @@ must read the full source fingerprint in the same transaction as the facts it
 installs. Do not compare fingerprints for ordering, and do not skip a refill
 because a cached fingerprint merely looks newer.
 
+### Activity report index
+
+Activity session selection checks terminal tool-execution events even when a
+session's `ended_at` predates the report. Keep the partial
+`idx_tool_result_events_terminal` index on `(session_id, timestamp)` aligned
+between SQLite and PostgreSQL. It includes completed and errored executions with
+non-null timestamps, so the lookup can skip unrelated result payloads and seek
+directly to the report's lower bound.
+
+The next writable SQLite open or PostgreSQL schema setup builds the index once
+for existing archives. PostgreSQL push must also detect its absence before
+taking the schema-current fast path. Creating the index scans existing tool
+results and can delay that first startup; it does not require a session resync.
+
 ### Usage archive indexes
 
 The usage cache discovers bounded-window candidates through
@@ -159,14 +173,14 @@ content clears them for a fresh scan.
 the summary equals that event's content, the summary is not stored: the column
 is empty while `result_content_length` still records the summary's size. That
 pair, an empty column with a non-zero length, tells a reader to take the text
-from the single event. Multi-event summaries, single-event summaries that
-differ from their event, calls with no events, and blocked categories store
-exactly what the parser produced. Load tool calls through the message loaders,
-which refill the summary once events are attached; a query that selects the
-column directly must apply the same fallback, and PostgreSQL and DuckDB apply
-the same write rule so their tool-call fingerprints match SQLite. Anyone
-reading the archive or a mirror by hand sees the empty column and must join
-the events table to recover the text.
+from the single event. Multi-event summaries, single-event summaries that differ
+from their event, calls with no events, and blocked categories store exactly
+what the parser produced. Load tool calls through the message loaders, which
+refill the summary once events are attached; a query that selects the column
+directly must apply the same fallback, and PostgreSQL and DuckDB apply the same
+write rule so their tool-call fingerprints match SQLite. Anyone reading the
+archive or a mirror by hand sees the empty column and must join the events table
+to recover the text.
 
 ## DuckDB Mirror
 

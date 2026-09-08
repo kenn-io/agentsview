@@ -47,6 +47,11 @@ description: Release history for AgentsView
 
 **Bug fixes**
 
+- Activity reports load faster on large archives by skipping historical tool
+  results that cannot affect the selected period. SQLite and PostgreSQL build a
+  focused index during the next writable database setup, which can make that
+  first startup longer. No session resync is needed for this index.
+
 - Price Codex Luna Reserve turns that persist as `gpt-reserve` using the
   existing GPT-5.6 Luna catalog rates. Usage reports still list `gpt-reserve`
   as the reported model. Existing SQLite usage caches rebuild so previously

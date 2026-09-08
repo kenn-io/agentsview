@@ -596,7 +596,8 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"cursor_usage_events":                             true,
 	}
 	state.existingIndexes = map[string]bool{
-		"idx_cursor_usage_events_dedup": true,
+		"idx_cursor_usage_events_dedup":   true,
+		"idx_tool_result_events_terminal": true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
@@ -635,7 +636,8 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"cursor_usage_events":                             true,
 	}
 	state.existingIndexes = map[string]bool{
-		"idx_cursor_usage_events_dedup": true,
+		"idx_cursor_usage_events_dedup":   true,
+		"idx_tool_result_events_terminal": true,
 	}
 	state.syncMetadataKeys = map[string]bool{
 		sourceCurationBackfillMetadataKey: true,
@@ -930,7 +932,8 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 		"cursor_usage_events": true,
 	}
 	state.existingIndexes = map[string]bool{
-		"idx_cursor_usage_events_dedup": true,
+		"idx_cursor_usage_events_dedup":   true,
+		"idx_tool_result_events_terminal": true,
 	}
 	// Read-compatible with tables and index present, but the push-only
 	// owner_marker column is absent, so the push fast path must fall back
@@ -1001,7 +1004,8 @@ func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 		"cursor_usage_events":                       true,
 	}
 	state.existingIndexes = map[string]bool{
-		"idx_cursor_usage_events_dedup": true,
+		"idx_cursor_usage_events_dedup":   true,
+		"idx_tool_result_events_terminal": true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
