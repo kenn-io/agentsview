@@ -520,7 +520,6 @@ func TestCursorStoreIndexFailureKeepsTranscripts(t *testing.T) {
 				}
 			}
 			provider := fx.Provider.(*cursorProvider)
-			logs := captureLog(t)
 			for _, operation := range []string{"Discover", "DiscoverEach", "Fingerprint", "Parse"} {
 				t.Run(operation, func(t *testing.T) {
 					provider.sources.storeIndex = newCursorStoreIndex()
@@ -550,7 +549,6 @@ func TestCursorStoreIndexFailureKeepsTranscripts(t *testing.T) {
 					}
 				})
 			}
-			assertLogContains(t, logs, "warning", "Cursor store index")
 		})
 	}
 }
@@ -928,6 +926,7 @@ func TestCursorStoreIndexRetainsLastCompleteScanOnRefreshError(t *testing.T) {
 		t.Skip("directory permissions are not enforced")
 	}
 
+	logs := captureLog(t)
 	sources, err := fx.Provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
@@ -936,6 +935,7 @@ func TestCursorStoreIndexRetainsLastCompleteScanOnRefreshError(t *testing.T) {
 	require.Len(t, outcome.Results, 1)
 	require.Len(t, outcome.Results[0].Result.Messages, 2)
 	assert.Contains(t, outcome.Results[0].Result.Messages[1].ThinkingText, "asking who I am")
+	assertLogContains(t, logs, "warning", "Cursor store index")
 }
 
 func TestCursorStoreRemovalKeepsTranscript(t *testing.T) {
