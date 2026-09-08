@@ -219,7 +219,7 @@ function findFirstCompleteUnknownXmlBlock(
   }
   protectedRanges.sort((left, right) => left.start - right.start);
 
-  const openUnknownTags: Array<{ name: string; start?: number; rawStart?: number }> = [];
+  const openUnknownTags: Array<{ name: string; position: number; start?: number; rawStart?: number }> = [];
   let malformedUnknownTags: string[] = [];
   const openHtmlTags: string[] = [];
   let firstComplete: { start: number; rawStart: number; end: number } | undefined;
@@ -267,6 +267,8 @@ function findFirstCompleteUnknownXmlBlock(
       const opening = openUnknownTags.at(-1);
       if (!opening) continue;
       if (opening.name !== name) {
+        const malformedStart = openUnknownTags[0]?.position ?? tag.index;
+        if (firstComplete && firstComplete.start >= malformedStart) firstComplete = undefined;
         malformedUnknownTags = openUnknownTags.map((open) => open.name);
         openUnknownTags.length = 0;
         const malformedIndex = malformedUnknownTags.lastIndexOf(name);
@@ -298,6 +300,7 @@ function findFirstCompleteUnknownXmlBlock(
       : undefined;
     openUnknownTags.push({
       name,
+      position: tag.index,
       start,
       rawStart: start === undefined ? undefined : lineStart,
     });

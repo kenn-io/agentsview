@@ -417,6 +417,7 @@ describe("renderMarkdown", () => {
         "<policy>body</other>",
         "<policy>\n<rule>\n# heading\n</policy>\n</rule>",
         "Intro\n<policy>\n<rule>\n# heading\n</policy>\n</rule>",
+        "Intro\n<policy>\n<rule>\n# heading\n</rule>\n</wrong>\n</policy>\nAfter",
         "<policy />",
       ]) {
         const dom = parseHTML(
