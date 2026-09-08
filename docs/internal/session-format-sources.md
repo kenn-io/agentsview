@@ -922,6 +922,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 - **Agentsview:** `internal/parser/openhands.go` and
   `internal/parser/openhands_provider.go`; `TASKS.json` is legacy supplemental
   state rather than a requirement of the pinned current producer.
+- **Project discovery reverified 2026-09-08:** The pinned SDK's
+  [terminal observation](https://github.com/OpenHands/software-agent-sdk/blob/4fe565663af2b4f1130a6e0dac7566b002bfe9b4/openhands-tools/openhands/tools/terminal/definition.py)
+  carries `metadata.working_dir`. Remote imports derive project names from
+  recorded paths without inspecting those directories on the receiving
+  machine; local sessions retain filesystem-based Git project discovery.
 
 ## Cursor (`cursor`)
 

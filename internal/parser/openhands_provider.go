@@ -87,7 +87,7 @@ func (p *openHandsProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("openhands source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, err := p.parseSession(path, machine)
+	sess, msgs, err := p.parseSession(ctx, path, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
