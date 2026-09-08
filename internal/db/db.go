@@ -468,7 +468,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (101: Cursor user turn timestamps are parsed from recognized metadata.
 // Existing Cursor rows need re-parsing so stored message and session times
 // reflect the transcript timestamps.)
-const dataVersion = 101
+// (102: Cursor legacy text transcripts now preserve nonempty tool-result
+// bodies as result events. Existing Cursor rows need re-parsing to recover
+// output from unchanged source files.)
+const dataVersion = 102
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

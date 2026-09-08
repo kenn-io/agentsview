@@ -368,14 +368,27 @@ func extractAssistantContent(
 			continue
 		}
 
-		// Tool result — skip the header and body
+		// Tool result — attach the body to the preceding call
 		if strings.HasPrefix(trimmed, "[Tool result]") {
 			i++
+			bodyStart := i
 			for i < len(lines) {
 				if isBlockBodyEnd(lines[i]) {
 					break
 				}
 				i++
+			}
+			if len(toolCalls) > 0 {
+				content := strings.TrimSpace(strings.Join(
+					dedentCursorBlock(lines[bodyStart:i]), "\n",
+				))
+				if content == "" {
+					continue
+				}
+				toolCalls[len(toolCalls)-1].ResultEvents = append(
+					toolCalls[len(toolCalls)-1].ResultEvents,
+					ParsedToolResultEvent{Content: content},
+				)
 			}
 			continue
 		}

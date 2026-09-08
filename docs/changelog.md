@@ -57,6 +57,9 @@ description: Release history for AgentsView
 
 **Bug fixes**
 
+- Preserve nonempty tool output from legacy Cursor text transcripts. Existing
+  archived sessions gain the output on their next sync when the source files
+  are still available. (#1627)
 - Activity reports load faster on large archives by skipping historical tool
   results that cannot affect the selected period. SQLite and PostgreSQL build a
   focused index during the next writable database setup, which can make that

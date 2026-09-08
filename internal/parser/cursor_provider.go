@@ -885,10 +885,11 @@ func cursorProviderCapabilities() Capabilities {
 			S3Discovery:          CapabilitySupported,
 		},
 		Content: ContentCapabilities{
-			FirstMessage: CapabilitySupported,
-			Thinking:     CapabilitySupported,
-			ToolCalls:    CapabilitySupported,
-			ToolResults:  CapabilitySupported,
+			FirstMessage:     CapabilitySupported,
+			Thinking:         CapabilitySupported,
+			ToolCalls:        CapabilitySupported,
+			ToolResults:      CapabilitySupported,
+			ToolResultEvents: CapabilitySupported,
 		},
 	}
 }

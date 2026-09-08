@@ -257,11 +257,12 @@ func TestCursorParentAndChildTimestamps(t *testing.T) {
 
 func TestExtractAssistantContent(t *testing.T) {
 	tests := []struct {
-		name          string
-		lines         []string
-		wantText      string
-		wantThinking  bool
-		wantToolCount int
+		name             string
+		lines            []string
+		wantText         string
+		wantThinking     bool
+		wantToolCount    int
+		wantResultCounts []int
 	}{
 		{
 			name: "plain text",
@@ -311,9 +312,29 @@ func TestExtractAssistantContent(t *testing.T) {
 				"  file1.go",
 				"Here are the files I found.",
 			},
-			wantText:      "Here are the files I found.",
-			wantThinking:  true,
-			wantToolCount: 1,
+			wantText:         "Here are the files I found.",
+			wantThinking:     true,
+			wantToolCount:    1,
+			wantResultCounts: []int{1},
+		},
+		{
+			name: "thinking, two tools, prose after first result, no second result",
+			lines: []string{
+				"[Thinking]",
+				"  let me think...",
+				"[Tool call] First",
+				"  command=one",
+				"[Tool result]",
+				"  first result",
+				"The first call finished.",
+				"[Tool call] Second",
+				"  command=two",
+				"The second call is pending.",
+			},
+			wantText:         "The first call finished.\nThe second call is pending.",
+			wantThinking:     true,
+			wantToolCount:    2,
+			wantResultCounts: []int{1, 0},
 		},
 		{
 			name: "prose between markers",
@@ -331,7 +352,44 @@ func TestExtractAssistantContent(t *testing.T) {
 			wantText: "First I'll check the file.\n" +
 				"The file looks good.\n" +
 				"Build succeeded.",
-			wantToolCount: 2,
+			wantToolCount:    2,
+			wantResultCounts: []int{1, 0},
+		},
+		{
+			name: "result before a later call",
+			lines: []string{
+				"[Tool result]",
+				"  orphan output",
+				"The call follows.",
+				"[Tool call] Shell",
+				"  command=ls",
+			},
+			wantText:      "The call follows.",
+			wantToolCount: 1,
+		},
+		{
+			name: "result belongs to the latest call",
+			lines: []string{
+				"[Tool call] First",
+				"  command=one",
+				"[Tool call] Second",
+				"  command=two",
+				"[Tool result]",
+				"  second result",
+			},
+			wantToolCount:    2,
+			wantResultCounts: []int{0, 1},
+		},
+		{
+			name: "empty and whitespace-only results are omitted",
+			lines: []string{
+				"[Tool call] Shell",
+				"  command=ls",
+				"[Tool result]",
+				"[Tool result]",
+				"  ",
+			},
+			wantToolCount: 1,
 		},
 		{
 			name:  "empty lines",
@@ -357,9 +415,83 @@ func TestExtractAssistantContent(t *testing.T) {
 			)
 			assert.Equal(t, tt.wantText, text, "text")
 			assert.Equal(t, tt.wantThinking, hasThinking, "hasThinking")
-			assert.Len(t, toolCalls, tt.wantToolCount, "tool call count")
+			require.Len(t, toolCalls, tt.wantToolCount, "tool call count")
+			for i, call := range toolCalls {
+				wantResults := 0
+				if tt.wantResultCounts != nil {
+					wantResults = tt.wantResultCounts[i]
+				}
+				assert.Len(t, call.ResultEvents, wantResults, "results for call %d", i)
+			}
 		})
 	}
+}
+
+func TestCursorLegacyToolResultMultiline(t *testing.T) {
+	assert.Equal(t, CapabilitySupported,
+		cursorProviderCapabilities().Content.ToolResultEvents)
+
+	lines := []string{
+		"assistant:",
+		"[Tool call] First",
+		"  command=first",
+		"[Tool result]",
+		"    first line",
+		"",
+		"    second line",
+		"[Tool result]",
+		"[Tool result]",
+		"  third result",
+		"Visible prose line one.",
+		"Visible prose line two.",
+		"[Tool call] Second",
+		"  command=second",
+		"[Tool result]",
+		"    second call result",
+	}
+
+	messages := parseCursorMessages(lines)
+
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 2)
+	assert.Equal(t, "Visible prose line one.\nVisible prose line two.",
+		messages[0].Content)
+	firstCall := messages[0].ToolCalls[0]
+	require.Len(t, firstCall.ResultEvents, 2)
+	assert.Equal(t, "first line\n\nsecond line",
+		firstCall.ResultEvents[0].Content)
+	assert.Equal(t, "third result", firstCall.ResultEvents[1].Content)
+	for _, event := range firstCall.ResultEvents {
+		assert.Empty(t, event.ToolUseID)
+		assert.Empty(t, event.AgentID)
+		assert.Empty(t, event.SubagentSessionID)
+		assert.Empty(t, event.Source)
+		assert.Empty(t, event.Status)
+		assert.Zero(t, event.Timestamp)
+	}
+
+	secondCall := messages[0].ToolCalls[1]
+	require.Len(t, secondCall.ResultEvents, 1)
+	assert.Equal(t, "second call result",
+		secondCall.ResultEvents[0].Content)
+}
+
+func TestCursorLegacyToolResultStaysWithinAssistantBlock(t *testing.T) {
+	messages := parseCursorMessages([]string{
+		"assistant:",
+		"[Tool call] Shell",
+		"  command=ls",
+		"assistant:",
+		"[Tool result]",
+		"  orphan output",
+		"Later prose.",
+	})
+
+	require.Len(t, messages, 2)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Empty(t, messages[0].ToolCalls[0].ResultEvents)
+	assert.Equal(t, "Later prose.", messages[1].Content)
+	assert.Empty(t, messages[1].ToolCalls)
 }
 
 func TestExtractAssistantContentCursorApplyPatch(t *testing.T) {
