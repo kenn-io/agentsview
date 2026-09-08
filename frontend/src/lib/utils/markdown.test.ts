@@ -1,36 +1,6 @@
 import { describe, it, expect } from "vite-plus/test";
-// @ts-expect-error -- the fixture is loaded only in the local Node test environment
-import { existsSync, readFileSync } from "node:fs";
-// @ts-expect-error -- the fixture is loaded only in the local Node test environment
-import { resolve } from "node:path";
+import issueReproductionFixture from "./__fixtures__/unknown-xml-1672.txt?raw";
 import { renderMarkdown } from "./markdown.js";
-
-const testProcess = globalThis as typeof globalThis & {
-  process?: { cwd(): string };
-};
-
-const issueReproductionFixture = (() => {
-  const fixturePath = resolve(
-    testProcess.process?.cwd() ?? ".",
-    "..",
-    "..",
-    ".claude",
-    "pr-sweep",
-    "agentsview-PR-TARGET-1672-REPRO.txt",
-  );
-  if (existsSync(fixturePath)) return readFileSync(fixturePath, "utf8");
-  return `<current_file_diff>
-diff --git a/example.py b/example.py
---- a/example.py
-+++ b/example.py
-@@ -1,2 +1 @@
-
--    # FIXME: replace this
--    old_value
-+    new_value
-
-</current_file_diff>`;
-})();
 
 /**
  * Parse HTML string into a DOM container for semantic assertions.
@@ -449,6 +419,27 @@ describe("renderMarkdown", () => {
         expect(dom.querySelector("pre > code")).toBeNull();
         expect(dom.textContent).toContain(source.split("\n")[0]!);
       }
+    });
+
+    it("leaves an unmatched block after prose on the current path", () => {
+      const source = "Hello **world**\n<policy>\n# heading\nmore prose";
+      const omitted = renderMarkdown(source);
+      const enabled = renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true });
+
+      expect(enabled).toBe(omitted);
+      expect(parseHTML(enabled).querySelector("h1")).not.toBeNull();
+    });
+
+    it("balances nested blocks with the same tag name", () => {
+      const source = "<example>\n1\n<example>\ninner\n</example>\ntail\n</example>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+      const code = dom.querySelector("pre > code");
+
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe(`${source}\n`);
+      expect(dom.querySelector("p")).toBeNull();
     });
 
     it("keeps internal whitespace inside the captured block", () => {

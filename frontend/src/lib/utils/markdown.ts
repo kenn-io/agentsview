@@ -121,6 +121,7 @@ const KNOWN_HTML_TAGS = new Set([
 
 const XML_TAG_ESCAPE_RE = /<\/?([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/g;
 const XML_OPEN_TAG_RE = /^<([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/;
+const XML_TAG_SCAN_RE = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
 
 type MarkdownToken = Token & Record<string, unknown>;
 
@@ -160,8 +161,30 @@ function bashWrapperExtension(
   };
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function findUnknownXmlBlockEnd(src: string): number | undefined {
+  const opening = XML_OPEN_TAG_RE.exec(src);
+  if (!opening) return undefined;
+
+  const name = opening[1]?.toLowerCase();
+  if (!name || isPreservedHtmlTag(name) || /\/\s*>$/.test(opening[0])) {
+    return undefined;
+  }
+
+  XML_TAG_SCAN_RE.lastIndex = opening[0].length;
+  let depth = 1;
+  let tag: RegExpExecArray | null;
+  while ((tag = XML_TAG_SCAN_RE.exec(src)) !== null) {
+    const tagName = tag[1]?.toLowerCase();
+    if (tagName !== name || /\/\s*>$/.test(tag[0])) continue;
+    if (tag[0].startsWith("</")) {
+      depth -= 1;
+      if (depth === 0) return XML_TAG_SCAN_RE.lastIndex;
+    } else {
+      depth += 1;
+    }
+  }
+
+  return undefined;
 }
 
 /** Build a tokenizer that captures a complete unknown XML block before
@@ -172,27 +195,20 @@ function unknownXmlBlockExtension(): TokenizerExtension {
     name: "unknownXmlBlock",
     level: "block",
     start(src) {
-      const match = /(?:^|\n)<[A-Za-z][A-Za-z0-9:_-]*/.exec(src);
-      if (!match) return undefined;
-      const tagIndex = match.index + match[0].lastIndexOf("<");
-      return tagIndex > 0 ? tagIndex : undefined;
+      const candidates = /(?:^|\n)<[A-Za-z][A-Za-z0-9:_-]*/g;
+      let match: RegExpExecArray | null;
+      while ((match = candidates.exec(src)) !== null) {
+        const tagIndex = match.index + match[0].lastIndexOf("<");
+        if (tagIndex > 0 && findUnknownXmlBlockEnd(src.slice(tagIndex)) !== undefined) {
+          return tagIndex;
+        }
+      }
+      return undefined;
     },
     tokenizer(src) {
-      const opening = XML_OPEN_TAG_RE.exec(src);
-      if (!opening) return undefined;
-
-      const name = opening[1]?.toLowerCase();
-      if (!name || isPreservedHtmlTag(name) || /\/\s*>$/.test(opening[0])) {
-        return undefined;
-      }
-
-      const closing = new RegExp(`</${escapeRegExp(name)}\\s*>`, "i").exec(
-        src.slice(opening[0].length),
-      );
-      if (!closing) return undefined;
-
-      const closingEnd = opening[0].length + closing.index + closing[0].length;
-      const raw = src.slice(0, closingEnd);
+      const blockEnd = findUnknownXmlBlockEnd(src);
+      if (blockEnd === undefined) return undefined;
+      const raw = src.slice(0, blockEnd);
       return {
         type: "code",
         raw,
@@ -223,7 +239,9 @@ function createParser(renderUnknownXmlBlocksAsPreformatted: boolean): Marked {
 const parser = createParser(false);
 const preformattedParser = createParser(true);
 
-const cache = new LRUCache<string, string>(6000);
+type RenderCacheEntry = [string | undefined, string | undefined];
+
+const cache = new LRUCache<string, RenderCacheEntry>(6000);
 
 function getApiBase(): string {
   const baseEl = document.querySelector("base[href]");
@@ -348,8 +366,8 @@ export function renderMarkdown(text: string, options: MarkdownRenderOptions = {}
 
   const renderUnknownXmlBlocksAsPreformatted =
     options.renderUnknownXmlBlocksAsPreformatted === true;
-  const cacheKey = JSON.stringify([text, renderUnknownXmlBlocksAsPreformatted]);
-  const cached = cache.get(cacheKey);
+  const modeIndex = renderUnknownXmlBlocksAsPreformatted ? 1 : 0;
+  const cached = cache.get(text)?.[modeIndex];
   if (cached !== undefined) return cached;
 
   const markdownParser = renderUnknownXmlBlocksAsPreformatted ? preformattedParser : parser;
@@ -357,6 +375,8 @@ export function renderMarkdown(text: string, options: MarkdownRenderOptions = {}
   const html = markdownParser.parser(resolved) as string;
   const safe = DOMPurify.sanitize(html);
 
-  cache.set(cacheKey, safe);
+  const entry: RenderCacheEntry = cache.get(text) ?? [undefined, undefined];
+  entry[modeIndex] = safe;
+  cache.set(text, entry);
   return safe;
 }
