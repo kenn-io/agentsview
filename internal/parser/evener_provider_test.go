@@ -493,8 +493,13 @@ func TestEvenerProviderParentMetadataFingerprint(t *testing.T) {
 	hasher := provider.(MultiFileStatHasher)
 	digest := hasher.ComputeMultiFileStatHash(child)
 	meta := filepath.Join(dir, "parent.meta.json")
+	mtime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for _, content := range []string{`{"id":"broken"}`, `{"id":"parent"}`, `{bad}`} {
 		writeSourceFile(t, meta, content)
+		// Equal-size revisions can share a filesystem timestamp tick.
+		// Give each revision a distinct mtime before checking its stat digest.
+		require.NoError(t, os.Chtimes(meta, mtime, mtime))
+		mtime = mtime.Add(2 * time.Second)
 		changed, err := provider.Fingerprint(t.Context(), source)
 		require.NoError(t, err)
 		assert.NotEqual(t, fingerprint.Hash, changed.Hash)
