@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -635,11 +636,11 @@ func TestFindWritableDaemonRuntime_StartupFallbackSurvivesStartLockProbeError(t 
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
 
-	oldTryLock := startLockTryLock
-	startLockTryLock = func(*flock.Flock) (bool, error) {
-		return false, errors.New("simulated lock probe failure")
+	oldTryLock := tryAcquireStartLock
+	tryAcquireStartLock = func(daemon.RuntimeStore, context.Context) (func(), bool, error) {
+		return nil, false, errors.New("simulated lock probe failure")
 	}
-	t.Cleanup(func() { startLockTryLock = oldTryLock })
+	t.Cleanup(func() { tryAcquireStartLock = oldTryLock })
 
 	rt := FindWritableDaemonRuntime(dir)
 	require.NotNil(t, rt)
@@ -1250,23 +1251,28 @@ func writeStartupStateForTest(
 	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
 }
 
-// wellPastStartupGrace is old enough that a snapshot this stale can no
-// longer belong to a holder that simply hasn't published its first write yet.
 func wellPastStartupGrace() time.Time {
 	return time.Now().Add(-orphanedStartupStateGracePeriod - time.Second)
 }
 
-// errorThenRecoverableTryLock simulates the initial ambiguous probe failure
-// followed by the fix's own verification re-acquire genuinely succeeding,
-// i.e. the lock really is free by the time recovery is attempted.
-func errorThenRecoverableTryLock() func(*flock.Flock) (bool, error) {
+// Inject only the initial error; recovery must acquire the real kit lock.
+func errorThenRecoverableTryLock(t *testing.T, dir string) func(daemon.RuntimeStore, context.Context) (func(), bool, error) {
+	t.Helper()
 	calls := 0
-	return func(*flock.Flock) (bool, error) {
+	return func(store daemon.RuntimeStore, ctx context.Context) (func(), bool, error) {
+		require.Equal(t, dir, store.Dir)
 		calls++
 		if calls == 1 {
-			return false, errors.New("simulated lock probe failure")
+			return nil, false, errors.New("simulated lock probe failure")
 		}
-		return true, nil
+		release, acquired, err := store.TryAcquireStartLock(ctx)
+		if err != nil || !acquired {
+			return release, acquired, err
+		}
+		return func() {
+			defer release()
+			assert.NoFileExists(t, startupStatePath(dir), "cleanup must precede release")
+		}, true, nil
 	}
 }
 
@@ -1274,9 +1280,9 @@ func TestIsDaemonStarting_ProbeErrorWithDeadOwnerPastGracePeriodSelfHeals(t *tes
 	dir := runtimeTestDir(t)
 	writeStartupStateForTest(t, dir, deadPID(t), "", wellPastStartupGrace())
 
-	oldTryLock := startLockTryLock
-	startLockTryLock = errorThenRecoverableTryLock()
-	t.Cleanup(func() { startLockTryLock = oldTryLock })
+	oldTryLock := tryAcquireStartLock
+	tryAcquireStartLock = errorThenRecoverableTryLock(t, dir)
+	t.Cleanup(func() { tryAcquireStartLock = oldTryLock })
 
 	assert.False(t, isDaemonStarting(dir),
 		"a lock probe error must self-heal a confirmably dead owner once the grace period passes and the lock is verified free")
@@ -1291,11 +1297,11 @@ func TestIsDaemonStarting_OrphanedSnapshotButLockStillUnrecoverableStaysBlocked(
 	// alone. Must fail closed rather than trust the snapshot.
 	writeStartupStateForTest(t, dir, deadPID(t), "", wellPastStartupGrace())
 
-	oldTryLock := startLockTryLock
-	startLockTryLock = func(*flock.Flock) (bool, error) {
-		return false, errors.New("simulated lock probe failure")
+	oldTryLock := tryAcquireStartLock
+	tryAcquireStartLock = func(daemon.RuntimeStore, context.Context) (func(), bool, error) {
+		return nil, false, errors.New("simulated lock probe failure")
 	}
-	t.Cleanup(func() { startLockTryLock = oldTryLock })
+	t.Cleanup(func() { tryAcquireStartLock = oldTryLock })
 
 	assert.True(t, isDaemonStarting(dir),
 		"an orphaned-looking snapshot must not be trusted when the lock itself can't be verified free")
@@ -1313,11 +1319,11 @@ func TestIsDaemonStarting_ProbeErrorWithDeadOwnerWithinGracePeriodStaysBlocked(t
 	// a genuinely in-progress one.
 	writeStartupStateForTest(t, dir, deadPID(t), "", time.Now())
 
-	oldTryLock := startLockTryLock
-	startLockTryLock = func(*flock.Flock) (bool, error) {
-		return false, errors.New("simulated lock probe failure")
+	oldTryLock := tryAcquireStartLock
+	tryAcquireStartLock = func(daemon.RuntimeStore, context.Context) (func(), bool, error) {
+		return nil, false, errors.New("simulated lock probe failure")
 	}
-	t.Cleanup(func() { startLockTryLock = oldTryLock })
+	t.Cleanup(func() { tryAcquireStartLock = oldTryLock })
 
 	assert.True(t, isDaemonStarting(dir),
 		"a fresh snapshot must stay blocked even with a dead recorded pid")
@@ -1335,9 +1341,9 @@ func TestIsDaemonStarting_ProbeErrorWithRecycledPIDPastGracePeriodSelfHeals(t *t
 		t, dir, os.Getpid(), strconv.FormatInt(createTime+1, 10), wellPastStartupGrace(),
 	)
 
-	oldTryLock := startLockTryLock
-	startLockTryLock = errorThenRecoverableTryLock()
-	t.Cleanup(func() { startLockTryLock = oldTryLock })
+	oldTryLock := tryAcquireStartLock
+	tryAcquireStartLock = errorThenRecoverableTryLock(t, dir)
+	t.Cleanup(func() { tryAcquireStartLock = oldTryLock })
 
 	assert.False(t, isDaemonStarting(dir),
 		"a lock probe error must self-heal a recycled pid once the grace period passes and the lock is verified free")
@@ -1351,11 +1357,11 @@ func TestIsDaemonStarting_ProbeErrorWithUnverifiableCreateTimeStaysBlocked(t *te
 	// possibly-genuine in-progress startup, even once stale.
 	writeStartupStateForTest(t, dir, os.Getpid(), "not-a-number", wellPastStartupGrace())
 
-	oldTryLock := startLockTryLock
-	startLockTryLock = func(*flock.Flock) (bool, error) {
-		return false, errors.New("simulated lock probe failure")
+	oldTryLock := tryAcquireStartLock
+	tryAcquireStartLock = func(daemon.RuntimeStore, context.Context) (func(), bool, error) {
+		return nil, false, errors.New("simulated lock probe failure")
 	}
-	t.Cleanup(func() { startLockTryLock = oldTryLock })
+	t.Cleanup(func() { tryAcquireStartLock = oldTryLock })
 
 	assert.True(t, isDaemonStarting(dir),
 		"an unverifiable create-time state must fail closed, not self-heal")
@@ -1371,24 +1377,29 @@ func TestIsDaemonStarting_CleanlyHeldLockStaysBlockedEvenWithStaleSnapshot(t *te
 	// snapshot that simply hasn't caught up yet.
 	writeStartupStateForTest(t, dir, deadPID(t), "", wellPastStartupGrace())
 
-	oldTryLock := startLockTryLock
-	startLockTryLock = func(*flock.Flock) (bool, error) { return false, nil }
-	t.Cleanup(func() { startLockTryLock = oldTryLock })
+	release, acquired, err := runtimeStore(dir).TryAcquireStartLock(t.Context())
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(release)
 
 	assert.True(t, isDaemonStarting(dir),
 		"a cleanly-held lock must stay blocked regardless of a stale snapshot")
 	assert.FileExists(t, startupStatePath(dir))
+	assert.True(t, isExternalDaemonStarting(dir), "a kit holder is not our startup marker")
+	owned, acquired := markDaemonStarting(dir)
+	assert.False(t, owned)
+	assert.False(t, acquired)
 }
 
 func TestIsDaemonStarting_LiveOwnerStaysBlocked(t *testing.T) {
 	dir := runtimeTestDir(t)
 	writeStartupStateForTest(t, dir, os.Getpid(), "", wellPastStartupGrace())
 
-	oldTryLock := startLockTryLock
-	startLockTryLock = func(*flock.Flock) (bool, error) {
-		return false, errors.New("simulated lock probe failure")
+	oldTryLock := tryAcquireStartLock
+	tryAcquireStartLock = func(daemon.RuntimeStore, context.Context) (func(), bool, error) {
+		return nil, false, errors.New("simulated lock probe failure")
 	}
-	t.Cleanup(func() { startLockTryLock = oldTryLock })
+	t.Cleanup(func() { tryAcquireStartLock = oldTryLock })
 
 	assert.True(t, isDaemonStarting(dir),
 		"a startup lock whose recorded owner is alive (no create time to cross-check) must stay blocked")
@@ -1689,10 +1700,22 @@ func TestStartLock_OwnProcess(t *testing.T) {
 	require.False(t, isDaemonStarting(dir), "expected false before lock written")
 
 	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	require.True(t, isDaemonStarting(dir), "expected true after lock written")
+	assert.False(t, isExternalDaemonStarting(dir))
+	release, acquired, err := runtimeStore(dir).TryAcquireStartLock(t.Context())
+	if acquired {
+		release()
+	}
+	require.NoError(t, err)
+	assert.False(t, acquired, "our marker must exclude kit startup callers")
 
 	UnmarkDaemonStarting(dir)
 	require.False(t, isDaemonStarting(dir), "expected false after start lock released")
+	release, acquired, err = runtimeStore(dir).TryAcquireStartLock(t.Context())
+	require.NoError(t, err)
+	require.True(t, acquired, "unmark and probes must release kit ownership")
+	release()
 }
 
 func TestWaitForDaemonStartup_AlreadyRunning(t *testing.T) {

@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gofrs/flock"
 	"github.com/shirou/gopsutil/v4/process"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -43,7 +42,7 @@ const (
 )
 
 var startProbeTickNanos int64 = int64(defaultStartProbeTick)
-var startLockTryLock = func(lock *flock.Flock) (bool, error) { return lock.TryLock() }
+var tryAcquireStartLock = daemon.RuntimeStore.TryAcquireStartLock
 
 func startProbeTick() time.Duration {
 	return time.Duration(atomic.LoadInt64(&startProbeTickNanos))
@@ -798,8 +797,7 @@ func runtimeRecordHasMismatchedCreateTime(
 }
 
 type heldStartLock struct {
-	path string
-	lock *flock.Flock
+	release func()
 }
 
 var startLocks sync.Map
@@ -824,12 +822,11 @@ func markDaemonStarting(dataDir string) (owned bool, acquired bool) {
 	if _, ok := startLocks.Load(path); ok {
 		return true, false
 	}
-	lock := flock.New(path)
-	locked, err := lock.TryLock()
+	release, locked, err := runtimeStore(dataDir).TryAcquireStartLock(context.Background())
 	if err != nil || !locked {
 		return false, false
 	}
-	startLocks.Store(path, heldStartLock{path: path, lock: lock})
+	startLocks.Store(path, heldStartLock{release: release})
 	return true, true
 }
 
@@ -856,7 +853,7 @@ func UnmarkDaemonStarting(dataDir string) {
 	// file never outlives the "starting" state readers trust it under.
 	removeStartupState(dataDir)
 	held := value.(heldStartLock)
-	_ = held.lock.Unlock()
+	held.release()
 }
 
 func isDaemonStarting(dataDir string) bool {
@@ -873,11 +870,10 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	if _, ok := startLocks.Load(path); ok {
 		return !external
 	}
-	lock := flock.New(path)
-	locked, err := startLockTryLock(lock)
+	release, locked, err := tryAcquireStartLock(runtimeStore(dataDir), context.Background())
 	if err == nil {
 		if locked {
-			_ = lock.Unlock()
+			release()
 			return false
 		}
 		// The lock is cleanly, unambiguously held by someone else right now.
@@ -888,23 +884,12 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 		// concurrent second launch while the real owner is still starting.
 		return true
 	}
-	// The probe itself failed rather than cleanly determining the lock is
-	// held. That's ambiguous: the same error can come from a platform where
-	// a crashed holder's lock file leaves the probe erroring instead of
-	// cleanly unlockable, but it can just as easily come from a live holder
-	// (e.g. a transient sharing violation), so it is not on its own proof of
-	// either state. Cross-check the startup snapshot's own recorded owner,
-	// the same way isLegacyDaemonStarting already does for the legacy lock
-	// file, but a stale-looking snapshot still isn't proof the underlying
-	// lock is actually free: only reporting "clear" after genuinely
-	// re-acquiring it ourselves (and releasing it again, since this is a
-	// probe rather than a real launch) rules that out. If we can't acquire
-	// it either, we still can't tell the two cases apart, so fail closed.
+	// An error leaves ownership unknown. Retry for an old snapshot whose
+	// recorded owner is gone, but only successful acquisition permits cleanup.
 	if !orphanedStartupState(dataDir, orphanedStartupStateNow()) {
 		return true
 	}
-	recovery := flock.New(path)
-	recoveryLocked, recoveryErr := startLockTryLock(recovery)
+	release, recoveryLocked, recoveryErr := tryAcquireStartLock(runtimeStore(dataDir), context.Background())
 	if recoveryErr != nil || !recoveryLocked {
 		return true
 	}
@@ -913,20 +898,13 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	// a window where a genuinely new holder could acquire the lock and
 	// publish its own fresh snapshot right before this deletes it.
 	removeStartupState(dataDir)
-	_ = recovery.Unlock()
+	release()
 	return false
 }
 
-// orphanedStartupStateGracePeriod bounds how long a startup snapshot can go
-// without a fresh write before its recorded owner is treated as orphaned.
-// SetPhase persists immediately, bypassing the detail throttle, so a freshly
-// acquired lock's real holder publishes its own snapshot within a fraction
-// of this window. Requiring the snapshot to also predate the grace period
-// closes the race where a lock probe errors while a live holder has legitimately
-// acquired the lock but not yet published: without this, reading a previous,
-// now-dead holder's leftover snapshot from that narrow gap could self-heal
-// out from under a startup that is genuinely in progress, letting a second
-// process start concurrently.
+// orphanedStartupStateGracePeriod is the minimum snapshot age for retrying an
+// ambiguous lock probe. Age and process identity select retry candidates;
+// successful lock acquisition is still required before removing the snapshot.
 const orphanedStartupStateGracePeriod = 10 * time.Second
 
 // orphanedStartupStateNow is overridden in tests.
