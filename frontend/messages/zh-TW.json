@@ -2036,5 +2036,6 @@
       }
     }
   ],
-  "settings_image_cleanup_compact_note": "刪除有效載荷會改寫儲存的資料列。在執行 agentsview db compact 之前，封存檔大小保持不變。"
+  "settings_image_cleanup_compact_note": "刪除有效載荷會改寫儲存的資料列。在執行 agentsview db compact 之前，封存檔大小保持不變。",
+  "appearance_render_unknown_xml_blocks": "將未知 XML 區塊以預格式化文字呈現"
 }

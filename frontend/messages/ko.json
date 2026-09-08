@@ -2036,5 +2036,6 @@
       }
     }
   ],
-  "settings_image_cleanup_compact_note": "페이로드를 제거하면 저장된 행이 다시 작성됩니다. agentsview db compact를 실행할 때까지 아카이브 파일 크기는 유지됩니다."
+  "settings_image_cleanup_compact_note": "페이로드를 제거하면 저장된 행이 다시 작성됩니다. agentsview db compact를 실행할 때까지 아카이브 파일 크기는 유지됩니다.",
+  "appearance_render_unknown_xml_blocks": "알 수 없는 XML 블록을 미리 서식이 지정된 텍스트로 표시"
 }

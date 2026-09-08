@@ -2036,5 +2036,6 @@
       }
     }
   ],
-  "settings_image_cleanup_compact_note": "删除载荷会重写存储的行。在运行 agentsview db compact 之前，存档文件大小保持不变。"
+  "settings_image_cleanup_compact_note": "删除载荷会重写存储的行。在运行 agentsview db compact 之前，存档文件大小保持不变。",
+  "appearance_render_unknown_xml_blocks": "将未知 XML 块渲染为预格式化文本"
 }

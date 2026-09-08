@@ -2100,5 +2100,6 @@
       }
     }
   ],
-  "settings_image_cleanup_compact_note": "La suppression des charges réécrit les lignes stockées. La taille du fichier d'archive reste inchangée jusqu'à ce que vous exécutiez agentsview db compact."
+  "settings_image_cleanup_compact_note": "La suppression des charges réécrit les lignes stockées. La taille du fichier d'archive reste inchangée jusqu'à ce que vous exécutiez agentsview db compact.",
+  "appearance_render_unknown_xml_blocks": "Afficher les blocs XML inconnus en texte préformaté"
 }

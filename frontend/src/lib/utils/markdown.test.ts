@@ -1,5 +1,36 @@
 import { describe, it, expect } from "vite-plus/test";
+// @ts-expect-error -- the fixture is loaded only in the local Node test environment
+import { existsSync, readFileSync } from "node:fs";
+// @ts-expect-error -- the fixture is loaded only in the local Node test environment
+import { resolve } from "node:path";
 import { renderMarkdown } from "./markdown.js";
+
+const testProcess = globalThis as typeof globalThis & {
+  process?: { cwd(): string };
+};
+
+const issueReproductionFixture = (() => {
+  const fixturePath = resolve(
+    testProcess.process?.cwd() ?? ".",
+    "..",
+    "..",
+    ".claude",
+    "pr-sweep",
+    "agentsview-PR-TARGET-1672-REPRO.txt",
+  );
+  if (existsSync(fixturePath)) return readFileSync(fixturePath, "utf8");
+  return `<current_file_diff>
+diff --git a/example.py b/example.py
+--- a/example.py
++++ b/example.py
+@@ -1,2 +1 @@
+
+-    # FIXME: replace this
+-    old_value
++    new_value
+
+</current_file_diff>`;
+})();
 
 /**
  * Parse HTML string into a DOM container for semantic assertions.
@@ -367,6 +398,96 @@ describe("renderMarkdown", () => {
       expect(cell!.innerHTML).toContain("&lt;policy&gt;");
       expect(cell!.innerHTML).toContain("&lt;/policy&gt;");
       expect(cell!.textContent).toBe("<policy>keep tags</policy>");
+    });
+
+    it("renders a complete unknown block as one preformatted code block when enabled", () => {
+      const source = "<policy>\n# heading\n\n  indented body\n</policy>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe(`${source}\n`);
+      expect(dom.querySelector("h1")).toBeNull();
+      expect(dom.querySelector("ul")).toBeNull();
+    });
+
+    it("renders the issue fixture as one literal code block when enabled", () => {
+      const dom = parseHTML(
+        renderMarkdown(issueReproductionFixture, {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        }),
+      );
+      const codes = dom.querySelectorAll("pre > code");
+      expect(codes).toHaveLength(1);
+      expect(codes[0]!.textContent).toContain("<current_file_diff>");
+      expect(codes[0]!.textContent).toContain("-    # FIXME: replace this");
+      expect(codes[0]!.textContent).toContain("+    new_value");
+      expect(codes[0]!.textContent).toContain("</current_file_diff>");
+      expect(dom.querySelector("h1")).toBeNull();
+      expect(dom.querySelector("ul")).toBeNull();
+    });
+
+    it("keeps the current Markdown behavior when the mode is omitted or false", () => {
+      const omitted = parseHTML(renderMarkdown(issueReproductionFixture));
+      const explicitFalse = parseHTML(
+        renderMarkdown(issueReproductionFixture, {
+          renderUnknownXmlBlocksAsPreformatted: false,
+        }),
+      );
+
+      expect(omitted.querySelector("h1")).not.toBeNull();
+      expect(omitted.querySelector("ul")).not.toBeNull();
+      expect(explicitFalse.innerHTML).toBe(omitted.innerHTML);
+    });
+
+    it("leaves incomplete and mismatched blocks on the escaped Markdown path", () => {
+      for (const source of ["<policy>\n# heading", "<policy>body</other>", "<policy />"]) {
+        const dom = parseHTML(
+          renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+        );
+        expect(dom.querySelector("pre > code")).toBeNull();
+        expect(dom.textContent).toContain(source.split("\n")[0]!);
+      }
+    });
+
+    it("keeps internal whitespace inside the captured block", () => {
+      const source = "<policy>\n\n    first\n\n      second\n\n</policy>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+      expect(dom.querySelector("pre > code")!.textContent).toBe(`${source}\n`);
+    });
+
+    it("uses separate cache entries for the two rendering modes", () => {
+      const source = "<cache-policy>\n# cached heading\n</cache-policy>";
+      const defaultHtml = renderMarkdown(source, {
+        renderUnknownXmlBlocksAsPreformatted: false,
+      });
+      const preformattedHtml = renderMarkdown(source, {
+        renderUnknownXmlBlocksAsPreformatted: true,
+      });
+
+      expect(renderMarkdown(source)).toBe(defaultHtml);
+      expect(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      ).toBe(preformattedHtml);
+      expect(preformattedHtml).not.toBe(defaultHtml);
+    });
+
+    it("preserves protected Markdown paths when enabled", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          '<img src=x onerror="alert(1)">\n\n<bash-input>echo hi</bash-input>\n\n`<policy>inline</policy>`\n\n```\n<policy>fenced</policy>\n```',
+          { renderUnknownXmlBlocksAsPreformatted: true },
+        ),
+      );
+      expect(dom.querySelector("img")!.hasAttribute("onerror")).toBe(false);
+      expect(dom.querySelector("p > code")!.textContent).toBe("<policy>inline</policy>");
+      expect(dom.querySelectorAll("pre > code")[0]!.textContent).toBe("!echo hi\n");
+      expect(dom.querySelectorAll("pre > code")[1]!.textContent).toBe(
+        "<policy>fenced</policy>\n",
+      );
     });
   });
 

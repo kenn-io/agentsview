@@ -143,7 +143,9 @@
                   class="pin-content-full markdown"
                   use:highlightCodeFences={{ content: pin.content }}
                 >
-                  {@html renderMarkdown(pin.content)}
+                  {@html renderMarkdown(pin.content, {
+                    renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+                  })}
                 </div>
               {:else}
                 <div class="pin-content-preview">{preview}</div>

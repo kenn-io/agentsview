@@ -2101,5 +2101,6 @@
       }
     }
   ],
-  "settings_image_cleanup_compact_note": "ペイロードの削除は保存済み行を書き換えます。agentsview db compact を実行するまでアーカイブファイルのサイズは変わりません。"
+  "settings_image_cleanup_compact_note": "ペイロードの削除は保存済み行を書き換えます。agentsview db compact を実行するまでアーカイブファイルのサイズは変わりません。",
+  "appearance_render_unknown_xml_blocks": "不明なXMLブロックを整形済みテキストとして表示"
 }

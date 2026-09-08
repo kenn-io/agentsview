@@ -3,6 +3,7 @@
   import { renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { ChevronRightIcon } from "../../icons.js";
+  import { ui } from "../../stores/ui.svelte.js";
 
   interface Props {
     content: string;
@@ -41,7 +42,9 @@
       class="skill-content markdown"
       use:highlightCodeFences={{ content }}
     >
-      {@html renderMarkdown(content)}
+      {@html renderMarkdown(content, {
+        renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+      })}
     </div>
   {/if}
 </div>

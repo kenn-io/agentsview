@@ -18,6 +18,7 @@
   import { CopyButton, SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { displayToolResult } from "../../utils/toolDisplay.js";
+  import { ui } from "../../stores/ui.svelte.js";
 
   interface Props {
     content: string;
@@ -547,7 +548,9 @@
             use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: outputContent }}
             use:highlightCodeFences={{ q: highlightQuery, current: isCurrentHighlight, content: outputContent }}
           >
-            {@html renderMarkdown(outputContent)}
+            {@html renderMarkdown(outputContent, {
+              renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+            })}
           </div>
         {:else}
           <pre class="tool-content output-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: outputContent }}>{@html escapeHTML(outputContent)}</pre>

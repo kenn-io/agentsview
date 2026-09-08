@@ -509,7 +509,9 @@
               current: isCurrentHighlight,
             }}
           >
-            {@html renderMarkdown(segment.content)}
+            {@html renderMarkdown(segment.content, {
+              renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+            })}
           </div>
         {/if}
       {/if}

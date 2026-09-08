@@ -961,6 +961,132 @@ describe("UIStore", () => {
     });
   });
 
+  describe("renderUnknownXmlBlocksAsPreformatted", () => {
+    beforeEach(() => {
+      ui.renderUnknownXmlBlocksAsPreformatted = false;
+    });
+
+    it("defaults to false and toggles between both values", () => {
+      expect(ui.renderUnknownXmlBlocksAsPreformatted).toBe(false);
+
+      ui.toggleUnknownXmlBlocksAsPreformatted();
+      expect(ui.renderUnknownXmlBlocksAsPreformatted).toBe(true);
+
+      ui.toggleUnknownXmlBlocksAsPreformatted();
+      expect(ui.renderUnknownXmlBlocksAsPreformatted).toBe(false);
+    });
+
+    it("persists true and false under its own key", async () => {
+      const original = globalThis.localStorage;
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem: vi.fn(() => null), setItem },
+        writable: true,
+        configurable: true,
+      });
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?persistUnknownXmlPreference");
+        setItem.mockClear();
+
+        mod.ui.toggleUnknownXmlBlocksAsPreformatted();
+        await tick();
+        expect(setItem).toHaveBeenCalledWith("agentsview-unknown-xml-preformatted", "true");
+
+        mod.ui.toggleUnknownXmlBlocksAsPreformatted();
+        await tick();
+        expect(setItem).toHaveBeenLastCalledWith(
+          "agentsview-unknown-xml-preformatted",
+          "false",
+        );
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("loads a stored true value and rejects invalid values", async () => {
+      const original = globalThis.localStorage;
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn((key: string) =>
+            key === "agentsview-unknown-xml-preformatted" ? "true" : null,
+          ),
+          setItem: vi.fn(),
+        },
+        writable: true,
+        configurable: true,
+      });
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const stored = await import("./ui.svelte.js?storedUnknownXmlPreference");
+        expect(stored.ui.renderUnknownXmlBlocksAsPreformatted).toBe(true);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn((key: string) =>
+            key === "agentsview-unknown-xml-preformatted" ? "yes" : null,
+          ),
+          setItem: vi.fn(),
+        },
+        writable: true,
+        configurable: true,
+      });
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const invalid = await import("./ui.svelte.js?invalidUnknownXmlPreference");
+        expect(invalid.ui.renderUnknownXmlBlocksAsPreformatted).toBe(false);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("keeps toggling usable when storage is unavailable", async () => {
+      const original = globalThis.localStorage;
+      const unavailableStorage = {
+        getItem: vi.fn(() => {
+          throw new Error("storage unavailable");
+        }),
+        setItem: vi.fn(() => {
+          throw new Error("storage unavailable");
+        }),
+      };
+      Object.defineProperty(globalThis, "localStorage", {
+        value: unavailableStorage,
+        writable: true,
+        configurable: true,
+      });
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?unavailableUnknownXmlPreference");
+        expect(mod.ui.renderUnknownXmlBlocksAsPreformatted).toBe(false);
+        mod.ui.toggleUnknownXmlBlocksAsPreformatted();
+        await tick();
+        expect(mod.ui.renderUnknownXmlBlocksAsPreformatted).toBe(true);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
+
   describe("fontScale", () => {
     beforeEach(() => {
       ui.setFontScale(100);

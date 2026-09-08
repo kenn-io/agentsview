@@ -120,6 +120,7 @@ const KNOWN_HTML_TAGS = new Set([
 ]);
 
 const XML_TAG_ESCAPE_RE = /<\/?([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/g;
+const XML_OPEN_TAG_RE = /^<([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/;
 
 type MarkdownToken = Token & Record<string, unknown>;
 
@@ -159,18 +160,68 @@ function bashWrapperExtension(
   };
 }
 
-const parser = new Marked({
-  gfm: true,
-  breaks: true,
-});
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-parser.use({
-  extensions: [
-    bashWrapperExtension("bashInput", "bash-input", "!", "shell"),
-    bashWrapperExtension("bashStdout", "bash-stdout", "", ""),
-    bashWrapperExtension("bashStderr", "bash-stderr", "", ""),
-  ],
-});
+/** Build a tokenizer that captures a complete unknown XML block before
+ *  marked can parse Markdown in its body. Line-start matching keeps inline
+ *  code and prose containing the same tags on their existing paths. */
+function unknownXmlBlockExtension(): TokenizerExtension {
+  return {
+    name: "unknownXmlBlock",
+    level: "block",
+    start(src) {
+      const match = /(?:^|\n)<[A-Za-z][A-Za-z0-9:_-]*/.exec(src);
+      if (!match) return undefined;
+      const tagIndex = match.index + match[0].lastIndexOf("<");
+      return tagIndex > 0 ? tagIndex : undefined;
+    },
+    tokenizer(src) {
+      const opening = XML_OPEN_TAG_RE.exec(src);
+      if (!opening) return undefined;
+
+      const name = opening[1]?.toLowerCase();
+      if (!name || isPreservedHtmlTag(name) || /\/\s*>$/.test(opening[0])) {
+        return undefined;
+      }
+
+      const closing = new RegExp(`</${escapeRegExp(name)}\\s*>`, "i").exec(
+        src.slice(opening[0].length),
+      );
+      if (!closing) return undefined;
+
+      const closingEnd = opening[0].length + closing.index + closing[0].length;
+      const raw = src.slice(0, closingEnd);
+      return {
+        type: "code",
+        raw,
+        text: raw,
+      };
+    },
+  };
+}
+
+function createParser(renderUnknownXmlBlocksAsPreformatted: boolean): Marked {
+  const instance = new Marked({
+    gfm: true,
+    breaks: true,
+  });
+
+  instance.use({
+    extensions: [
+      ...(renderUnknownXmlBlocksAsPreformatted ? [unknownXmlBlockExtension()] : []),
+      bashWrapperExtension("bashInput", "bash-input", "!", "shell"),
+      bashWrapperExtension("bashStdout", "bash-stdout", "", ""),
+      bashWrapperExtension("bashStderr", "bash-stderr", "", ""),
+    ],
+  });
+
+  return instance;
+}
+
+const parser = createParser(false);
+const preformattedParser = createParser(true);
 
 const cache = new LRUCache<string, string>(6000);
 
@@ -283,21 +334,29 @@ function escapeCustomXmlTokens(tokens: MarkdownToken[]): MarkdownToken[] {
   return tokens.map((token) => escapeCustomXmlToken(token));
 }
 
-function escapeCustomXmlTags(text: string): MarkdownToken[] {
-  const tokens = parser.lexer(text.trimEnd()) as MarkdownToken[];
+function escapeCustomXmlTags(text: string, markdownParser: Marked): MarkdownToken[] {
+  const tokens = markdownParser.lexer(text.trimEnd()) as MarkdownToken[];
   return escapeCustomXmlTokens(tokens);
 }
 
-export function renderMarkdown(text: string): string {
+export interface MarkdownRenderOptions {
+  renderUnknownXmlBlocksAsPreformatted?: boolean;
+}
+
+export function renderMarkdown(text: string, options: MarkdownRenderOptions = {}): string {
   if (!text) return "";
 
-  const cached = cache.get(text);
+  const renderUnknownXmlBlocksAsPreformatted =
+    options.renderUnknownXmlBlocksAsPreformatted === true;
+  const cacheKey = JSON.stringify([text, renderUnknownXmlBlocksAsPreformatted]);
+  const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
 
-  const resolved = escapeCustomXmlTags(resolveAssetURLs(text));
-  const html = parser.parser(resolved) as string;
+  const markdownParser = renderUnknownXmlBlocksAsPreformatted ? preformattedParser : parser;
+  const resolved = escapeCustomXmlTags(resolveAssetURLs(text), markdownParser);
+  const html = markdownParser.parser(resolved) as string;
   const safe = DOMPurify.sanitize(html);
 
-  cache.set(text, safe);
+  cache.set(cacheKey, safe);
   return safe;
 }
