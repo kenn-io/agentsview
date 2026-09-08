@@ -124,6 +124,47 @@ describe("ToolBlock output section", () => {
     expect(outputContent!.textContent).toBe(resultText);
   });
 
+  it("shows retained image placeholders in block order in output and history", async () => {
+    const result =
+      '[{"type":"input_text","text":"Before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"After"}]';
+    const toolCall: ToolCall = {
+      tool_name: "view_image",
+      category: "Other",
+      result_content: result,
+      result_events: [
+        {
+          event_index: 0,
+          status: "completed",
+          source: "tool_result",
+          content: result,
+          content_length: result.length,
+        },
+      ],
+    };
+    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+    expect(document.querySelector(".output-header .tool-preview")?.textContent).toBe("Before");
+    document.querySelector<HTMLButtonElement>(".output-header")!.click();
+    document.querySelector<HTMLButtonElement>(".history-header")!.click();
+    await tick();
+    expect(document.querySelector(".output-content")?.textContent).toBe(
+      "Before\n\n[Image: image/png, 3 bytes]\n\nAfter",
+    );
+    expect(document.querySelector(".history-content")?.textContent).toBe(
+      "Before\n\n[Image: image/png, 3 bytes]\n\nAfter",
+    );
+    document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(2)")!.click();
+    await tick();
+    expect(
+      Array.from(document.querySelectorAll(".formatted-output p"), (p) => p.textContent),
+    ).toEqual(["Before", "[Image: image/png, 3 bytes]", "After"]);
+    document.querySelector<HTMLButtonElement>('button[aria-label="Copy output"]')!.click();
+    await tick();
+    expect(copyToClipboardMock).toHaveBeenCalledWith(result);
+  });
+
   it("switches the expanded current output between raw and formatted modes", async () => {
     const toolCall: ToolCall = {
       tool_name: "Read",

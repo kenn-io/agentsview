@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -43,6 +44,8 @@ type codexStagingSink struct {
 	// directly from scratch and never pass through the in-memory rewrite
 	// that prefixes remote (SSH/S3) session ids.
 	idPrefix string
+
+	toolResultImages config.ToolResultImages
 
 	// blocked marks categories whose stored content is blanked. Their raw
 	// content never enters scratch storage; only digest, original length,
@@ -537,6 +540,10 @@ func (s *codexStagingSink) AppendToolResultEvent(
 		// contract before the real content enters the scratch publish source.
 		// Keep dedup above this point raw: two provider events that differ
 		// only by stripped controls remain two events on the collecting path.
+		if s.toolResultImages == config.ToolResultImagesDrop {
+			ev.Content, _ = db.StripToolResultImages(ev.Content)
+			contentLength = len(ev.Content)
+		}
 		toolCall := db.ToolCall{ResultEvents: []db.ToolResultEvent{{
 			Content:       ev.Content,
 			ContentLength: contentLength,

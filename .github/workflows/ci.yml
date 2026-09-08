@@ -236,8 +236,14 @@ jobs:
             package: ./internal/db
           - name: Parser
             package: ./internal/parser
-          - name: Sync
+          # The sync suite exceeds one Windows process's 20-minute budget.
+          # Complementary filters keep every test in exactly one job.
+          - name: Sync-A-R
             package: ./internal/sync
+            test-filter: -run '^Test[A-R]'
+          - name: Sync-other
+            package: ./internal/sync
+            test-filter: -skip '^Test[A-R]'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -273,7 +279,7 @@ jobs:
       - name: Run ${{ matrix.name }} tests
         shell: pwsh
         run: |
-          go test -json -tags "fts5" ${{ matrix.package }} -count=1 -timeout=20m 2>&1 |
+          go test -json -tags "fts5" ${{ matrix.package }} ${{ matrix.test-filter }} -count=1 -timeout=20m 2>&1 |
             Tee-Object -FilePath go-test-events.jsonl
           exit $LASTEXITCODE
         env:

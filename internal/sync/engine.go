@@ -3107,13 +3107,15 @@ func (e *Engine) resyncBuildLocked(
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
 	trashedCopied := 0
-	if n, err := newDB.CopyTrashedDataFrom(origPath); err != nil {
+	var copiedSessionIDs []string
+	if ids, err := newDB.CopyTrashedDataFrom(origPath); err != nil {
 		log.Printf("resync: pre-sync copy trashed sessions: %v", err)
 		// Non-fatal: worst case, trashed sessions are reparsed
 		// and then re-marked as trashed by metadata copy.
-	} else if n > 0 {
-		trashedCopied = n
-		log.Printf("resync: pre-sync copied %d trashed sessions", n)
+	} else if len(ids) > 0 {
+		copiedSessionIDs = append(copiedSessionIDs, ids...)
+		trashedCopied = len(ids)
+		log.Printf("resync: pre-sync copied %d trashed sessions", len(ids))
 	}
 	// The temp DB is not swapped into production until the end,
 	// so avoid per-row FTS trigger work during the bulk load and
@@ -3499,7 +3501,8 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
-	stats.OrphanedCopied = orphaned
+	stats.OrphanedCopied = len(orphaned)
+	copiedSessionIDs = append(copiedSessionIDs, orphaned...)
 	deferredCwdUpdated, err := e.applyDeferredSourceCwd(
 		newDB, deferredSourceCwd,
 	)
@@ -3523,7 +3526,7 @@ func (e *Engine) resyncBuildLocked(
 
 	// Re-link subagent sessions after orphan copy so copied
 	// tool_calls.subagent_session_id references are resolved.
-	if orphaned > 0 {
+	if len(orphaned) > 0 {
 		reportResyncPhase(
 			PhaseCopyingOrphans,
 			"Relinking archived subagent sessions",
@@ -3697,7 +3700,7 @@ func (e *Engine) resyncBuildLocked(
 	}
 
 	if newDB.ToolResultImages() == config.ToolResultImagesDrop {
-		if _, err := newDB.StripToolImages(ctx, db.StripImagesFilter{}); err != nil {
+		if err := newDB.StripToolImagesForSessions(ctx, copiedSessionIDs); err != nil {
 			log.Printf("resync: project copied tool-result images: %v", err)
 			stats.Aborted = true
 			stats.Warnings = append(stats.Warnings,
@@ -11753,6 +11756,7 @@ func (e *Engine) processProviderFile(
 				noCacheSkip: true,
 			}, true
 		}
+		stagedSink.toolResultImages = e.toolResultImages
 		stagedSink.idPrefix = e.idPrefix
 		stagedSink.disableSignals = e.disableSignalRecompute
 		stagedGCRelease = beginStagedColdSync()
@@ -18723,9 +18727,6 @@ func (e *Engine) writeIncremental(
 	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
 	for i, link := range inc.links {
 		resultContent := parser.DecodeContent(link.ResultContentRaw)
-		if _, stats := db.StripToolResultImages(link.ResultContentRaw); stats.Payloads > 0 {
-			resultContent = link.ResultContentRaw
-		}
 		toolCall := db.ToolCall{
 			ResultContent:       resultContent,
 			ResultContentLength: link.ResultContentLen,
@@ -21091,9 +21092,6 @@ func pairToolResultsContext(
 				tc.ResultContentLength = tr.ContentLength
 				if !blocked[tc.Category] {
 					tc.ResultContent = parser.DecodeContent(tr.ContentRaw)
-					if _, stats := db.StripToolResultImages(tr.ContentRaw); stats.Payloads > 0 {
-						tc.ResultContent = tr.ContentRaw
-					}
 					tc.ResultContentLength = db.ResolveResultContentLength(
 						tc.ResultContent, tr.ContentLength,
 					)
@@ -21127,8 +21125,6 @@ func pairToolResultEventSummariesContext(
 			if len(tc.ResultEvents) == 0 {
 				continue
 			}
-			rawResult := tc.ResultContent
-			_, rawStats := db.StripToolResultImages(rawResult)
 			summary, err := summarizeToolResultEventsContext(
 				ctx, tc.ResultEvents,
 			)
@@ -21141,13 +21137,6 @@ func pairToolResultEventSummariesContext(
 				for k := range tc.ResultEvents {
 					tc.ResultEvents[k].Content = ""
 				}
-				continue
-			}
-			if rawStats.Payloads > 0 {
-				tc.ResultContent = rawResult
-				tc.ResultContentLength = db.ResolveResultContentLength(
-					rawResult, tc.ResultContentLength,
-				)
 				continue
 			}
 			tc.ResultContent = summary

@@ -349,3 +349,42 @@ func TestStripToolImagesRollsBackWhenEventUpdateFails(t *testing.T) {
 	assert.Contains(t, storedCall, "input_image")
 	assert.Contains(t, storedEvent, "input_image")
 }
+
+func TestStripToolImagesCopiedSessionsOnly(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	for _, id := range []string{"orphan", "trashed", "fresh", "excluded"} {
+		insertSession(t, source, id, "project")
+		insertMessages(t, source, testImageMessage(id))
+	}
+	require.NoError(t, source.SoftDeleteSession("trashed"))
+	sourcePath := source.Path()
+	require.NoError(t, source.Close())
+
+	destination := testDB(t)
+	trashedIDs, err := destination.CopyTrashedDataFrom(sourcePath)
+	require.NoError(t, err)
+	insertSession(t, destination, "fresh", "project")
+	insertMessages(t, destination, testImageMessage("fresh"))
+	orphanIDs, err := destination.CopyOrphanedDataFromExcluding(sourcePath, []string{"excluded"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"trashed"}, trashedIDs)
+	assert.Equal(t, []string{"orphan"}, orphanIDs)
+	require.NoError(t, destination.StripToolImagesForSessions(ctx, nil))
+	require.NoError(t, destination.StripToolImagesForSessions(ctx, append(trashedIDs, orphanIDs...)))
+
+	for _, id := range []string{"orphan", "trashed", "fresh"} {
+		messages, err := destination.GetAllMessages(ctx, id)
+		require.NoError(t, err)
+		require.Len(t, messages, 1)
+		require.Len(t, messages[0].ToolCalls, 1)
+		if id == "fresh" {
+			assert.Contains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
+		} else {
+			assert.Contains(t, messages[0].ToolCalls[0].ResultContent, "agentsview_image")
+		}
+	}
+	excluded, err := destination.GetSessionFull(ctx, "excluded")
+	require.NoError(t, err)
+	assert.Nil(t, excluded)
+}

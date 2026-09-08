@@ -353,6 +353,17 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## Codex (`codex`)
 
+- **Tool-result image check (2026-09-08):** Reverified the pinned
+  [output payload types and array tests](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/models.rs).
+  `function_call_output.output` accepts a string or a content-item array.
+  `FunctionCallOutputContentItem::InputImage` serializes as `input_image` with
+  a string `image_url`; upstream's MCP conversion tests cover inline
+  `data:image/png;base64,...` URLs alongside `input_text` blocks. The
+  archive's drop policy projects supported inline images in these stored
+  arrays, including staged full imports and late results. Claude's text-block
+  decoding is unchanged; this evidence does not establish Claude emitting
+  Codex image blocks.
+
 - **Performance fixture check (2026-09-04):** Rechecked the pinned rollout
   recorder below for session metadata and rollout-item persistence.
   `cmd/perfsim` generates dated rollouts with session metadata, turn context,
@@ -368,11 +379,11 @@ add an archived or maintained mirror without replacing the original identity.
   The TUI also maintains an append-oriented `history.jsonl` whose records
   contain `session_id`, Unix-seconds `ts`, and submitted prompt `text`;
   configured size enforcement can rewrite a retained tail in place. Agentsview
-  consumes only the first two fields as a live-activity hint.
-  Subagent rollouts carry a structural `source.subagent` marker and a top-level
+  consumes only the first two fields as a live-activity hint. Subagent
+  rollouts carry a structural `source.subagent` marker and a top-level
   `parent_thread_id`; that pair defines the parent edge. `thread_source` is a
-  legacy fallback, and `session_id` identifies the root or tree rather than the
-  parent.
+  legacy fallback, and `session_id` identifies the root or tree rather than
+  the parent.
 
 - **Evidence:** `source`.
 
@@ -419,12 +430,12 @@ add an archived or maintained mirror without replacing the original identity.
   opaque identifiers, and discards the leading turns also present in the
   parent. UUID versions and identifier bytes carry no chronological meaning;
   the first turn id absent from the parent begins child-owned usage. Missing
-  parents fail open, and child-only subagent transcripts are left unchanged.
-  A local corpus measured 2026-09-07 contained 2,044 Codex JSONL files, with
+  parents fail open, and child-only subagent transcripts are left unchanged. A
+  local corpus measured 2026-09-07 contained 2,044 Codex JSONL files, with
   1,565 carrying `source.subagent` and none carrying `guardian_review`; the
-  published producer source supplies the guardian format evidence.
-  Legacy `session_index.jsonl` files from aliased homes also travel through
-  remote archive export and import. Reverified on 2026-09-07 with
+  published producer source supplies the guardian format evidence. Legacy
+  `session_index.jsonl` files from aliased homes also travel through remote
+  archive export and import. Reverified on 2026-09-07 with
   `TestRemoteCodexAliasTitleSurvivesArchiveImport`, which checks the imported
   title while another provider retains its own metadata configuration.
   Metadata paths are resolved at configuration load and belong to provider

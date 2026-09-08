@@ -250,3 +250,49 @@ func TestToolResultImagesDedupAndLengths(t *testing.T) {
 	assert.Greater(t, eventLength, 0)
 	assert.Equal(t, eventLength, summaryLength)
 }
+
+func TestDropImagesLateResultsRetainRawIdentity(t *testing.T) {
+	d := testDB(t)
+	d.SetToolResultImages(config.ToolResultImagesDrop)
+	insertSession(t, d, "late-images", "project")
+	require.NoError(t, d.InsertMessages([]Message{{
+		SessionID: "late-images", Role: "assistant",
+		ToolCalls: []ToolCall{{
+			ToolUseID: "call", ToolName: "exec_command", Category: "Bash",
+		}},
+	}}))
+	const first = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	const second = `[{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
+	update := IncrementalSessionUpdate{
+		MsgCount: 1, NextOrdinal: 1,
+		ToolCallResultUpdates: []ToolCallResultUpdate{{
+			ToolUseID: "call", Events: []ToolResultEvent{
+				{Content: first, Source: "function_call_output"},
+				{Content: second, Source: "function_call_output"},
+			},
+		}},
+	}
+	_, err := d.WriteSessionIncremental("late-images", nil, update)
+	require.NoError(t, err)
+	messages, err := d.GetAllMessages(t.Context(), "late-images")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	call := messages[0].ToolCalls[0]
+	require.Len(t, call.ResultEvents, 2)
+	const want = `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
+	assert.Equal(t, want, call.ResultContent)
+	for _, event := range call.ResultEvents {
+		assert.Equal(t, want, event.Content)
+		assert.Equal(t, len(want), event.ContentLength)
+	}
+	assert.NotEqual(t, call.ResultEvents[0].RawContentDigest, call.ResultEvents[1].RawContentDigest)
+	before, err := d.GetSessionFull(t.Context(), "late-images")
+	require.NoError(t, err)
+	_, err = d.WriteSessionIncremental("late-images", nil, update)
+	require.NoError(t, err)
+	after, err := d.GetSessionFull(t.Context(), "late-images")
+	require.NoError(t, err)
+	assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision, "raw replay must remain a no-op after projection")
+	assert.Equal(t, first, update.ToolCallResultUpdates[0].Events[0].Content)
+}

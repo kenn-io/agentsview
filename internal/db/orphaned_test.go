@@ -684,7 +684,8 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 			name:  "trashed",
 			trash: true,
 			copy: func(dst *DB, srcPath string) (int, error) {
-				return dst.CopyTrashedDataFrom(srcPath)
+				ids, err := dst.CopyTrashedDataFrom(srcPath)
+				return len(ids), err
 			},
 		},
 	}

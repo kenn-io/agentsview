@@ -95,7 +95,9 @@ The local archive has three separate maintenance paths:
   source-missing sessions selected by its filters. It leaves provider
   transcripts and standalone image files unchanged. The stored placeholder
   records version `1`, readable text, media type, decoded byte size, and an
-  empty `sha256` field.
+  empty `sha256` field. Configure this policy in `config.toml`; it is not
+  exposed in desktop Settings or the settings API. The default `keep` policy
+  preserves the existing provider decoding behavior.
 - Transparent compression or deduplication of live tool-result payloads is a
   separate storage-format change and is not part of `db compact`.
 

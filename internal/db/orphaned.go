@@ -41,25 +41,26 @@ func execWithoutCancel(
 func (d *DB) CopyOrphanedDataFrom(
 	sourcePath string,
 ) (int, error) {
-	return d.CopyOrphanedDataFromExcluding(sourcePath, nil)
+	ids, err := d.CopyOrphanedDataFromExcluding(sourcePath, nil)
+	return len(ids), err
 }
 
 // CopyOrphanedDataFromExcluding copies orphaned sessions while
 // treating extraExcludedIDs as absent by design. This is used by
 // resync for parser-level exclusions: those IDs should not be
 // restored as orphans, but they also should not become permanent
-// user-deletion entries in excluded_sessions.
+// user-deletion entries in excluded_sessions. It returns the copied session IDs.
 func (d *DB) CopyOrphanedDataFromExcluding(
 	sourcePath string,
 	extraExcludedIDs []string,
-) (int, error) {
+) ([]string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	ctx := context.Background()
 	conn, err := d.getWriter().Conn(ctx)
 	if err != nil {
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"acquiring connection: %w", err,
 		)
 	}
@@ -68,7 +69,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if _, err := conn.ExecContext(
 		ctx, "ATTACH DATABASE ? AS old_db", sourcePath,
 	); err != nil {
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"attaching source db: %w", err,
 		)
 	}
@@ -85,7 +86,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			id TEXT PRIMARY KEY
 		)`,
 	); err != nil {
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"creating extra orphan exclusions: %w", err,
 		)
 	}
@@ -99,7 +100,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if len(extraExcludedIDs) > 0 {
 		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
-			return 0, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"begin extra orphan exclusions: %w", err,
 			)
 		}
@@ -108,7 +109,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 		if err != nil {
 			_ = tx.Rollback()
-			return 0, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"prepare extra orphan exclusions: %w", err,
 			)
 		}
@@ -119,7 +120,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			if _, err := stmt.ExecContext(ctx, id); err != nil {
 				_ = stmt.Close()
 				_ = tx.Rollback()
-				return 0, fmt.Errorf(
+				return nil, fmt.Errorf(
 					"insert extra orphan exclusion %s: %w",
 					id, err,
 				)
@@ -127,12 +128,12 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		}
 		if err := stmt.Close(); err != nil {
 			_ = tx.Rollback()
-			return 0, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"close extra orphan exclusions: %w", err,
 			)
 		}
 		if err := tx.Commit(); err != nil {
-			return 0, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"commit extra orphan exclusions: %w", err,
 			)
 		}
@@ -167,7 +168,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			  AND new_s.agent = 'codex'
 		  )`,
 	); err != nil {
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"identifying orphaned sessions: %w", err,
 		)
 	}
@@ -179,14 +180,11 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}()
 
-	var count int
-	if err := conn.QueryRowContext(ctx,
-		"SELECT count(*) FROM _orphaned_ids",
-	).Scan(&count); err != nil {
-		return 0, fmt.Errorf(
-			"counting orphaned sessions: %w", err,
-		)
+	ids, err := copiedSessionIDs(ctx, conn, "_orphaned_ids")
+	if err != nil {
+		return nil, err
 	}
+	count := len(ids)
 	t := time.Now()
 
 	// Reconcile revisions and copy orphans in one transaction. Partial
@@ -195,35 +193,35 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	// could make a failed resync look complete.
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin orphan tx: %w", err)
+		return nil, fmt.Errorf("begin orphan tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
-		return 0, fmt.Errorf("reconciling transcript revisions: %w", err)
+		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
 	}
 	if count > 0 {
 		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
-			return 0, fmt.Errorf("copying orphaned data: %w", err)
+			return nil, fmt.Errorf("copying orphaned data: %w", err)
 		}
 		sourceVersion := copiedSourceDataVersion(ctx, tx)
 		if err := removeGeneratedIdentitySnapshotsWithoutSource(
 			ctx, tx, "_orphaned_ids", sourceVersion,
 		); err != nil {
-			return 0, fmt.Errorf("repairing orphan identity snapshots: %w", err)
+			return nil, fmt.Errorf("repairing orphan identity snapshots: %w", err)
 		}
 		if err := sanitizeCopiedSessionContent(
 			ctx, tx, "_orphaned_ids", sourceVersion,
 		); err != nil {
-			return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
+			return nil, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
 		if err := clearCopiedSelfParents(ctx, tx, "_orphaned_ids"); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"committing orphaned data: %w", err,
 		)
 	}
@@ -235,22 +233,22 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}
 
-	return count, nil
+	return ids, nil
 }
 
 // CopyTrashedDataFrom copies soft-deleted sessions and their
 // messages from the source database. ResyncAll calls this before
 // parsing into a fresh DB so UpsertSession can see trashed rows
 // and reject source-file writes that would otherwise overwrite
-// the user's trash.
-func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
+// the user's trash. It returns the copied session IDs.
+func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	ctx := context.Background()
 	conn, err := d.getWriter().Conn(ctx)
 	if err != nil {
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"acquiring connection: %w", err,
 		)
 	}
@@ -259,7 +257,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 	if _, err := conn.ExecContext(
 		ctx, "ATTACH DATABASE ? AS old_db", sourcePath,
 	); err != nil {
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"attaching source db: %w", err,
 		)
 	}
@@ -271,12 +269,12 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin trashed copy tx: %w", err)
+		return nil, fmt.Errorf("begin trashed copy tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if !oldDBHasColumn(ctx, tx, "sessions", "deleted_at") {
-		return 0, nil
+		return nil, nil
 	}
 
 	trashFilter := "deleted_at IS NOT NULL"
@@ -289,7 +287,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 		SELECT id FROM old_db.sessions
 		WHERE `+trashFilter+`
 		  AND id NOT IN (SELECT id FROM main.excluded_sessions)`); err != nil {
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"identifying trashed sessions: %w", err,
 		)
 	}
@@ -300,37 +298,52 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 		)
 	}()
 
-	var count int
-	if err := tx.QueryRowContext(ctx,
-		"SELECT count(*) FROM _trashed_ids",
-	).Scan(&count); err != nil {
-		return 0, fmt.Errorf(
-			"counting trashed sessions: %w", err,
-		)
+	ids, err := copiedSessionIDs(ctx, tx, "_trashed_ids")
+	if err != nil {
+		return nil, err
 	}
-	if count == 0 {
-		return 0, nil
+	if len(ids) == 0 {
+		return nil, nil
 	}
 
 	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
-		return 0, fmt.Errorf("copying trashed data: %w", err)
+		return nil, fmt.Errorf("copying trashed data: %w", err)
 	}
 	sourceVersion := copiedSourceDataVersion(ctx, tx)
 	if err := removeGeneratedIdentitySnapshotsWithoutSource(
 		ctx, tx, "_trashed_ids", sourceVersion,
 	); err != nil {
-		return 0, fmt.Errorf("repairing trashed identity snapshots: %w", err)
+		return nil, fmt.Errorf("repairing trashed identity snapshots: %w", err)
 	}
 	if err := sanitizeCopiedSessionContent(
 		ctx, tx, "_trashed_ids", sourceVersion,
 	); err != nil {
-		return 0, fmt.Errorf("sanitizing trashed data: %w", err)
+		return nil, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing trashed copy: %w", err)
+		return nil, fmt.Errorf("committing trashed copy: %w", err)
 	}
-	return count, nil
+	return ids, nil
+}
+
+func copiedSessionIDs(ctx context.Context, queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, table string) ([]string, error) {
+	rows, err := queryer.QueryContext(ctx, "SELECT id FROM "+table+" ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("reading copied session IDs: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning copied session ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // CopySyncStateFrom copies durable synchronization authority from the source

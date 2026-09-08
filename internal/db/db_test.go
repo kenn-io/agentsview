@@ -6206,7 +6206,7 @@ func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
 
 	count, err := dstDB.CopyTrashedDataFrom(srcPath)
 	requireNoError(t, err, "CopyTrashedDataFrom")
-	require.Equal(t, 1, count, "copied trashed sessions")
+	require.Len(t, count, 1, "copied trashed sessions")
 
 	pins, err := dstDB.ListPinnedMessages(ctx, "s1", "")
 	requireNoError(t, err, "ListPinnedMessages")

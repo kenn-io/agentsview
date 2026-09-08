@@ -1654,7 +1654,7 @@ func (db *DB) WriteSessionIncremental(
 	for _, resultUpdate := range update.ToolCallResultUpdates {
 		changed, inserted, err := applyToolCallResultUpdateTx(
 			tx, sessionID, resultUpdate,
-			update.BlockedResultCategories,
+			update.BlockedResultCategories, db.ToolResultImages(),
 		)
 		if err != nil {
 			return false, err
@@ -3280,6 +3280,7 @@ func applyToolCallSubagentLinkTx(
 func applyToolCallResultUpdateTx(
 	tx *sql.Tx, sessionID string, update ToolCallResultUpdate,
 	blockedResultCategories map[string]bool,
+	imagePolicy config.ToolResultImages,
 ) (bool, []ToolResultEvent, error) {
 	if strings.TrimSpace(update.ToolUseID) == "" || len(update.Events) == 0 {
 		return false, nil, nil
@@ -3364,6 +3365,14 @@ func applyToolCallResultUpdateTx(
 	// stripped-byte count before the blank overwrites Content, losing the
 	// original result length the full and staged paths both preserve.
 	if !blocked {
+		if imagePolicy == config.ToolResultImagesDrop {
+			for i := range incoming {
+				incoming[i].Content, _ = StripToolResultImages(incoming[i].Content)
+				incoming[i].ContentLength = ResolveResultContentLength(
+					incoming[i].Content, incoming[i].ContentLength,
+				)
+			}
+		}
 		toolCall := ToolCall{ResultEvents: incoming}
 		_ = SanitizeToolCall(&toolCall)
 		incoming = toolCall.ResultEvents

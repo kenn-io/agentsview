@@ -55,19 +55,36 @@ func (db *DB) StripToolImages(
 	}
 	return db.scanStripToolImages(ctx, filter, func(
 		ctx context.Context, session stripImageSession,
-	) (bool, ToolImageStats, error) {
-		stats, err := db.stripImageStats(ctx, session.id)
-		if err != nil {
-			return false, ToolImageStats{}, err
-		}
+	) (bool, error) {
 		changed, err := db.stripStoredToolResultRows(ctx, session.id)
 		if err != nil {
-			return false, ToolImageStats{}, fmt.Errorf(
+			return false, fmt.Errorf(
 				"stripping tool results for %s: %w", session.id, err,
 			)
 		}
-		return changed, stats, nil
+		return changed, nil
 	})
+}
+
+// StripToolImagesForSessions projects only the supplied copied sessions during
+// resync. The caller owns the archive write lock; an empty list does no work.
+func (db *DB) StripToolImagesForSessions(ctx context.Context, sessionIDs []string) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	for _, id := range sessionIDs {
+		stats, err := db.stripImageStats(ctx, id)
+		if err != nil {
+			return err
+		}
+		if stats.Payloads == 0 {
+			continue
+		}
+		if _, err := db.stripStoredToolResultRows(ctx, id); err != nil {
+			return fmt.Errorf("stripping copied tool results for %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // stripStoredToolResultRows projects both stored tool-result tables in one
@@ -257,7 +274,7 @@ func (db *DB) stripStoredToolResultRows(
 func (db *DB) scanStripToolImages(
 	ctx context.Context,
 	filter StripImagesFilter,
-	apply func(context.Context, stripImageSession) (bool, ToolImageStats, error),
+	apply func(context.Context, stripImageSession) (bool, error),
 ) (StripImagesReport, error) {
 	sessions, err := db.stripImageSessions(ctx, filter)
 	if err != nil {
@@ -289,7 +306,7 @@ func (db *DB) scanStripToolImages(
 		project.Sessions++
 		report.Sessions++
 		if apply != nil {
-			changed, _, err := apply(ctx, session)
+			changed, err := apply(ctx, session)
 			if err != nil {
 				return StripImagesReport{}, err
 			}
