@@ -188,6 +188,7 @@ jobs:
             exit $LASTEXITCODE
           }
           $isolatedPackages = @(
+            'go.kenn.io/agentsview/internal/capture'
             'go.kenn.io/agentsview/internal/db'
             'go.kenn.io/agentsview/internal/duckdb'
             'go.kenn.io/agentsview/internal/parser'
@@ -229,6 +230,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Capture
+            package: ./internal/capture
           - name: Database
             package: ./internal/db
           - name: Parser
