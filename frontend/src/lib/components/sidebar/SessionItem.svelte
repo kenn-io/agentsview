@@ -646,6 +646,10 @@
   .entrypoint-tag {
     opacity: 0.75;
     font-size: 0.9em;
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .machine-tag {

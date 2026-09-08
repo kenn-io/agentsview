@@ -2,6 +2,7 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
 const SIDEBAR_WIDTH_KEY = "agentsview-sidebar-width";
 const REVIEW_LABEL = "Open Code Review";
+const LONG_LABEL = "Open Code Review With a Very Long Custom Label";
 const REGISTRY_LABEL = "Opencode";
 
 interface SidebarFixtureRow {
@@ -68,6 +69,25 @@ const fixtureRows: SidebarFixtureRow[] = [
     is_automated: false,
     is_teammate: false,
   },
+  {
+    id: "long-label-session",
+    parent_session_id: null,
+    relationship_type: null,
+    project: "fixture-project",
+    machine: "ci-runner-west",
+    agent: "opencode",
+    agent_label: LONG_LABEL,
+    entrypoint: "sdk-python-experimental-runner",
+    display_name: "Long label session with metadata",
+    first_message: "Long label session with metadata",
+    started_at: now,
+    ended_at: now,
+    created_at: now,
+    message_count: 5,
+    user_message_count: 4,
+    is_automated: false,
+    is_teammate: false,
+  },
 ];
 
 function sidebarResponse(): SidebarFixtureResponse {
@@ -87,33 +107,37 @@ async function installSyntheticRoutes(page: Page) {
       return;
     }
     if (pathname.endsWith("/sessions")) {
-      await route.fulfill({ json: { sessions: fixtureRows, next_cursor: null, total: 2 } });
+      await route.fulfill({
+        json: { sessions: fixtureRows, next_cursor: null, total: fixtureRows.length },
+      });
       return;
     }
     if (pathname.endsWith("/agents")) {
-      await route.fulfill({ json: { agents: [{ name: "opencode", session_count: 2 }] } });
+      await route.fulfill({
+        json: { agents: [{ name: "opencode", session_count: fixtureRows.length }] },
+      });
       return;
     }
     if (pathname.endsWith("/machines")) {
-      await route.fulfill({ json: { machines: ["ci-runner-east"] } });
+      await route.fulfill({ json: { machines: ["ci-runner-east", "ci-runner-west"] } });
       return;
     }
     if (pathname.endsWith("/projects")) {
       await route.fulfill({
-        json: { projects: [{ name: "fixture-project", session_count: 2 }] },
+        json: { projects: [{ name: "fixture-project", session_count: fixtureRows.length }] },
       });
       return;
     }
     if (pathname.endsWith("/stats")) {
       await route.fulfill({
         json: {
-          session_count: 2,
-          message_count: 7,
-          user_message_count: 5,
-          assistant_message_count: 2,
+          session_count: fixtureRows.length,
+          message_count: 12,
+          user_message_count: 9,
+          assistant_message_count: 3,
           tool_call_count: 0,
           project_count: 1,
-          machine_count: 1,
+          machine_count: 2,
           agent_count: 1,
           earliest_session: now,
         },
@@ -160,7 +184,13 @@ async function measureRow(page: Page, sessionId: string) {
     const name = row.querySelector<HTMLElement>(".session-name")!;
     const controls = [...row.querySelectorAll<HTMLElement>("button, a")];
     return {
-      row: { width: rect.width, height: rect.height, right: rect.right },
+      row: {
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        bottom: rect.bottom,
+        right: rect.right,
+      },
       meta: { width: meta.getBoundingClientRect().width, right: meta.getBoundingClientRect().right },
       agent: {
         width: agent.getBoundingClientRect().width,
@@ -168,6 +198,12 @@ async function measureRow(page: Page, sessionId: string) {
         clientWidth: agent.clientWidth,
         scrollWidth: agent.scrollWidth,
       },
+      entrypoint: (() => {
+        const element = row.querySelector<HTMLElement>(".entrypoint-tag");
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        return { top: rect.top, bottom: rect.bottom, height: rect.height };
+      })(),
       name: { width: name.getBoundingClientRect().width, scrollWidth: name.scrollWidth },
       controls: controls.map((control) => {
         const controlRect = control.getBoundingClientRect();
@@ -210,10 +246,21 @@ async function collectRenderFindings(page: Page) {
       if (meta && meta.getBoundingClientRect().right > rowRect.right + 1) {
         violations.push("metadata escaped row");
       }
-      for (const control of row.querySelectorAll<HTMLElement>("button, a")) {
-        const controlRect = control.getBoundingClientRect();
-        if (controlRect.right > rowRect.right + 1 || controlRect.left < rowRect.left - 1) {
-          violations.push("control escaped row");
+      for (const element of row.querySelectorAll<HTMLElement>(
+        ".session-name, .side-meta, .side-meta > *, button, a",
+      )) {
+        const elementRect = element.getBoundingClientRect();
+        if (
+          elementRect.right > rowRect.right + 1 ||
+          elementRect.left < rowRect.left - 1
+        ) {
+          violations.push("element escaped row horizontally");
+        }
+        if (
+          elementRect.bottom > rowRect.bottom + 1 ||
+          elementRect.top < rowRect.top - 1
+        ) {
+          violations.push("element escaped row vertically");
         }
       }
     }
@@ -223,7 +270,7 @@ async function collectRenderFindings(page: Page) {
 
 async function capture(page: Page, testInfo: TestInfo, name: string) {
   const screenshotPath = testInfo.outputPath(`${name}.png`);
-  await page.screenshot({ path: screenshotPath, fullPage: true });
+  await page.locator("#session-sidebar").screenshot({ path: screenshotPath });
   return screenshotPath;
 }
 
@@ -265,11 +312,22 @@ test.describe("sidebar agent names", () => {
     expect(narrow.row.width).toBeGreaterThanOrEqual(218);
     expect(narrow.row.width).toBeLessThanOrEqual(220);
     expect(narrow.meta.width).toBeLessThanOrEqual(narrow.row.width * 0.4 + 1);
-    expect(narrow.agent.scrollWidth).toBeGreaterThan(narrow.agent.clientWidth);
     expect(await prefixFitsBeforeEllipsis(page, "open-code-review-session", "Open Code".length)).toBe(
       true,
     );
+    const longLabel = await measureRow(page, "long-label-session");
+    expect(longLabel.row.height).toBeCloseTo(42, 0);
+    expect(longLabel.meta.width).toBeLessThanOrEqual(longLabel.row.width * 0.4 + 1);
+    expect(longLabel.name.width).toBeGreaterThan(0);
+    expect(longLabel.agent.scrollWidth).toBeGreaterThan(longLabel.agent.clientWidth);
+    expect(longLabel.entrypoint?.bottom).toBeLessThanOrEqual(longLabel.row.bottom + 1);
+    expect(longLabel.entrypoint?.top).toBeGreaterThanOrEqual(longLabel.row.top - 1);
+    expect(page.locator('[data-session-id="long-label-session"] .agent-tag')).toHaveAttribute(
+      "title",
+      LONG_LABEL,
+    );
     console.log(`width=220px ${JSON.stringify(narrow)}`);
+    console.log(`width=220px long-label ${JSON.stringify(longLabel)}`);
   });
 
   test("metadata boundary preserves rows and controls across desktop and mobile widths", async ({ page }, testInfo) => {
@@ -279,6 +337,8 @@ test.describe("sidebar agent names", () => {
     expect(desktop.name.width).toBeGreaterThan(0);
     expect(desktop.meta.width).toBeLessThanOrEqual(desktop.row.width * 0.4 + 1);
     expect(desktop.controls.every((control) => control.right <= desktop.row.right + 1)).toBe(true);
+    const longDesktop = await measureRow(page, "long-label-session");
+    expect(longDesktop.entrypoint?.bottom).toBeLessThanOrEqual(longDesktop.row.bottom + 1);
     const desktopLint = await collectRenderFindings(page);
     expect(desktopLint).toEqual([]);
     console.log(`render-lint width=1280px violations=${JSON.stringify(desktopLint)}`);
