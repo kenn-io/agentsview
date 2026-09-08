@@ -969,3 +969,55 @@ func TestRooCodeRemoteSyncSkipsRootWithoutSessions(t *testing.T) {
 	assert.NotContains(t, targets.Dirs, parser.AgentRooCode)
 	assert.NotContains(t, targets.Files, parser.AgentRooCode)
 }
+
+func TestCursorRemoteTargetsExcludeChatsRoot(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	projects := filepath.Join(home, ".cursor", "projects")
+	chats := filepath.Join(home, ".cursor", "chats")
+	require.NoError(t, os.MkdirAll(projects, 0o755))
+	require.NoError(t, os.MkdirAll(chats, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(chats, "workspace", "session"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(chats, "workspace", "session", "store.db"),
+		[]byte("store"),
+		0o644,
+	))
+
+	root, meta, err := parser.ResolveProviderRoot(parser.AgentCursor, projects)
+	require.NoError(t, err)
+	require.NotEmpty(t, meta)
+	assert.True(t, samePathForTest(t, meta, chats))
+
+	targets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {root},
+		},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{
+			parser.AgentCursor: {root: {meta}},
+		},
+	})
+	require.Contains(t, targets.Dirs, parser.AgentCursor)
+	assert.Contains(t, targets.Dirs[parser.AgentCursor], root)
+	for _, dir := range targets.Dirs[parser.AgentCursor] {
+		assert.False(t, samePathForTest(t, dir, meta), "chats metadata must not be a transfer dir: %s", dir)
+		assert.NotEqual(t, "chats", filepath.Base(dir))
+	}
+	for _, files := range targets.Files {
+		for _, file := range files {
+			assert.NotContains(t, file, string(filepath.Separator)+"chats"+string(filepath.Separator))
+			assert.NotContains(t, filepath.Base(file), "store.db")
+		}
+	}
+	t.Logf("latestRootBlobId=n/a projects=%s chats_excluded=%s", root, meta)
+}
+
+func samePathForTest(t *testing.T, a, b string) bool {
+	t.Helper()
+	aAbs, err := filepath.Abs(a)
+	require.NoError(t, err)
+	bAbs, err := filepath.Abs(b)
+	require.NoError(t, err)
+	return filepath.Clean(aAbs) == filepath.Clean(bAbs) ||
+		strings.EqualFold(filepath.Clean(aAbs), filepath.Clean(bAbs))
+}

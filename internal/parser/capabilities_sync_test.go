@@ -53,6 +53,10 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentZed: {
 			UnchangedResults: UnchangedResultMTime,
 		},
+		AgentCursor: {
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+		},
 		AgentCursorIDE: {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,

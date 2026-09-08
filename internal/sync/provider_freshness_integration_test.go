@@ -2,7 +2,11 @@ package sync_test
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,4 +54,56 @@ func TestProviderAuthoritativeUnchangedSessionSkipsOnResync(t *testing.T) {
 		"an unchanged provider-authoritative session must not be re-synced")
 	assert.GreaterOrEqual(t, second.Skipped, 1,
 		"the unchanged session must be counted as skipped")
+}
+
+func TestCursorSameMtimeHashChangeReparses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := t.TempDir()
+	const sessionID = "11111111-2222-4333-8444-555555555555"
+	path := filepath.Join(
+		root, "Users-demo-Code-app", "agent-transcripts", sessionID+".jsonl",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	writeTranscript := func(first string) {
+		require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf(
+			`{"role":"user","message":{"content":"<user_query>%s</user_query>"}}`+"\n"+
+				`{"role":"assistant","message":{"content":"Done."}}`+"\n",
+			first,
+		)), 0o644))
+	}
+	writeTranscript("one!")
+	mtime := time.Now().Add(-time.Hour).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(path, mtime, mtime))
+
+	testDB := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(testDB, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	ctx := context.Background()
+	first := engine.SyncAll(ctx, nil)
+	require.Equal(t, 1, first.Synced)
+	before, err := testDB.GetSession(ctx, "cursor:"+sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.FirstMessage)
+	assert.Equal(t, "one!", *before.FirstMessage)
+
+	writeTranscript("two!")
+	require.NoError(t, os.Chtimes(path, mtime, mtime))
+	engine.SyncPaths([]string{path})
+
+	after, err := testDB.GetSession(ctx, "cursor:"+sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.FirstMessage)
+	assert.Equal(t, "two!", *after.FirstMessage,
+		"a same-mtime content change must bypass Cursor freshness")
 }

@@ -1040,6 +1040,43 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   Cursor IDE is retired through stored-source-hint tombstones on `state.vscdb`
   change events and through complete-container ownership reconciliation.
 
+### Cursor CLI store store.db
+
+Cursor CLI store format. A per-session SQLite store under
+  `~/.cursor/chats/<workspace-hash>/<agent-id>/store.db`, with `blobs` and
+  `meta` tables. Metadata key `0` is hex-encoded UTF-8 JSON that carries the
+  native `agentId` and `latestRootBlobId`. Conversation content is a protobuf
+  blob tree; Agentsview reads only the tree reachable from
+  `latestRootBlobId` and projects the field-8 typed turn index onto the
+  matching `agent-transcripts` session (same native UUID). Field-8 turns supply
+  assistant reasoning text and producer epoch-millisecond timestamps. Field-1
+  system/context blobs are not archived as transcript messages.
+Evidence for the CLI store. A live installed-tool capture from one Windows Cursor CLI install
+  was collected on 2026-09-07 with the structural probe described above. The
+  probe recorded no private prompts, paths, ids, or encryption-key values.
+  An independent directory measure on that install found 1 store among 18
+  transcript ids, 1 overlapping id, and 0 store-only sessions.
+Upstream evidence for the CLI store. No published `.proto` or store schema was found. Protobuf field
+  numbers are therefore provisional for the captured producer version.
+- **WAL requirement:** The live capture keeps schema and rows in
+  `store.db-wal` while the main file stays a 4096-byte header. A main-file-only
+  open reports an empty schema. Agentsview opens the live path read-only
+  (`mode=ro`) and reads one deferred transaction so the WAL remains attached.
+  The reader issues no mutating SQL and ignores `blobEncryptionKey`.
+CLI store usage and cost. The captured store has no priced usage fields consumed by
+  Agentsview.
+Unsupported in this slice. Native tool-call/result joining (the capture
+  contains no tool result), store-only discovery (no store-only sessions in the
+  measured install), encrypted blob payloads on other installs, and complete
+  cross-version field-number stability. Unknown or undecodable reachable blobs
+  are skipped without dropping decoded siblings; a present store with no
+  decodable selected turn is a source error that preserves the archive.
+Agentsview CLI store handling. `internal/parser/cursor_store.go` plus enrichment hooks in
+  `internal/parser/cursor_provider.go`. Discovery and archive identity remain
+  the existing transcript source (`cursor:<agentId>`). The chats directory is
+  carried only through `ResolveMetadataDir` / provider metadata and is not a
+  remote, SSH, or S3 transfer target.
+
 ## Amp (`amp`)
 
 - **Format:** One JSON thread document per session.
