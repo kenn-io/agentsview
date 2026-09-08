@@ -412,7 +412,12 @@ describe("renderMarkdown", () => {
     });
 
     it("leaves incomplete and mismatched blocks on the escaped Markdown path", () => {
-      for (const source of ["<policy>\n# heading", "<policy>body</other>", "<policy />"]) {
+      for (const source of [
+        "<policy>\n# heading",
+        "<policy>body</other>",
+        "<policy>\n<rule>\n# heading\n</policy>\n</rule>",
+        "<policy />",
+      ]) {
         const dom = parseHTML(
           renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
         );
@@ -441,6 +446,19 @@ describe("renderMarkdown", () => {
         "<policy>\n# heading\n</policy>\n",
       );
       expect(dom.textContent).toContain("After");
+      expect(dom.querySelector("h1")).toBeNull();
+    });
+
+    it("preserves indentation when a complete block follows prose", () => {
+      const source = "Intro\n  <policy>\n# heading\n  </policy>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelector("p")?.textContent).toContain("Intro");
+      expect(dom.querySelector("pre > code")?.textContent).toBe(
+        "  <policy>\n# heading\n  </policy>\n",
+      );
       expect(dom.querySelector("h1")).toBeNull();
     });
 
@@ -517,6 +535,21 @@ describe("renderMarkdown", () => {
       expect(dom.querySelectorAll("pre > code")[1]!.textContent).toBe(
         "<policy>fenced</policy>\n",
       );
+    });
+
+    it("does not capture unknown tags inside multiline inline code or known HTML", () => {
+      for (const source of [
+        "prefix `\n<policy>\n# heading\n</policy>\n` suffix",
+        "Intro <span>\n<policy>\n# heading\n</policy>\n</span>",
+      ]) {
+        const omitted = renderMarkdown(source);
+        const enabled = renderMarkdown(source, {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        });
+
+        expect(enabled).toBe(omitted);
+        expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
+      }
     });
   });
 

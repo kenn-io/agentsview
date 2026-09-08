@@ -126,6 +126,23 @@ type MarkdownToken = Token & Record<string, unknown>;
 
 type MarkdownFenceRange = { start: number; end: number };
 
+const VOID_HTML_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
 /** Build a marked tokenizer extension that consumes a Claude Code
  *  shell-shortcut wrapper tag and emits a `code` token directly.
  *  Because this runs at the lexer level, occurrences of the tag
@@ -180,47 +197,96 @@ function findFirstCompleteUnknownXmlBlock(
   }
   if (openFence) fenceRanges.push({ start: openFence.start, end: src.length });
 
-  const openByName = new Map<string, Array<{ start?: number; rawStart?: number }>>();
-  const complete: Array<{ start: number; rawStart: number; end: number }> = [];
+  const protectedRanges = [...fenceRanges];
+  const inlineCodeRe = /`+/g;
+  let openInlineCode: { start: number; length: number } | undefined;
   let fenceIndex = 0;
+  let inlineCode: RegExpExecArray | null;
+  while ((inlineCode = inlineCodeRe.exec(src)) !== null) {
+    while (fenceIndex < fenceRanges.length && inlineCode.index >= fenceRanges[fenceIndex]!.end) {
+      fenceIndex += 1;
+    }
+    const fenceRange = fenceRanges[fenceIndex];
+    const inFence = fenceRange !== undefined && inlineCode.index >= fenceRange.start;
+    if (inFence) continue;
+
+    if (!openInlineCode) {
+      openInlineCode = { start: inlineCode.index, length: inlineCode[0].length };
+    } else if (inlineCode[0].length === openInlineCode.length) {
+      protectedRanges.push({ start: openInlineCode.start, end: inlineCode.index + inlineCode[0].length });
+      openInlineCode = undefined;
+    }
+  }
+  protectedRanges.sort((left, right) => left.start - right.start);
+
+  const openUnknownTags: Array<{ name: string; start?: number; rawStart?: number }> = [];
+  const openHtmlTags: string[] = [];
+  let firstComplete: { start: number; rawStart: number; end: number } | undefined;
+  let protectedIndex = 0;
+  let lineStart = 0;
+  let scanCursor = 0;
 
   XML_TAG_SCAN_RE.lastIndex = 0;
   let tag: RegExpExecArray | null;
   while ((tag = XML_TAG_SCAN_RE.exec(src)) !== null) {
-    while (fenceIndex < fenceRanges.length && tag.index >= fenceRanges[fenceIndex]!.end) {
-      fenceIndex += 1;
+    const between = src.slice(scanCursor, tag.index);
+    const newline = between.lastIndexOf("\n");
+    if (newline >= 0) lineStart = scanCursor + newline + 1;
+    scanCursor = XML_TAG_SCAN_RE.lastIndex;
+
+    while (protectedIndex < protectedRanges.length && tag.index >= protectedRanges[protectedIndex]!.end) {
+      protectedIndex += 1;
     }
-    const activeFence = fenceRanges[fenceIndex];
-    if (activeFence && tag.index >= activeFence.start) continue;
+    const protectedRange = protectedRanges[protectedIndex];
+    if (protectedRange && tag.index >= protectedRange.start) continue;
 
     const name = tag[1]?.toLowerCase();
-    if (!name || isPreservedHtmlTag(name)) continue;
+    if (!name) continue;
 
     const tagText = tag[0];
-    const stack = openByName.get(name) ?? [];
-    if (tagText.startsWith("</")) {
-      const opening = stack.pop();
-      if (opening?.start !== undefined && opening.rawStart !== undefined) {
-        complete.push({
-          start: opening.start,
-          rawStart: opening.rawStart,
-          end: XML_TAG_SCAN_RE.lastIndex,
-        });
+    const closing = tagText.startsWith("</");
+    const selfClosing = /\/\s*>$/.test(tagText);
+    if (isPreservedHtmlTag(name)) {
+      if (closing) {
+        if (openHtmlTags.at(-1) === name) openHtmlTags.pop();
+      } else if (!selfClosing && !VOID_HTML_TAGS.has(name)) {
+        openHtmlTags.push(name);
       }
-      if (stack.length === 0) openByName.delete(name);
       continue;
     }
 
-    if (!/\/\s*>$/.test(tagText)) {
-      const lineStart = src.lastIndexOf("\n", tag.index - 1) + 1;
-      const indentation = src.slice(lineStart, tag.index);
-      const start = /^ {0,3}$/.test(indentation) ? tag.index : undefined;
-      stack.push({ start, rawStart: start === undefined ? undefined : lineStart });
-      openByName.set(name, stack);
+    if (openHtmlTags.length > 0) continue;
+
+    if (tagText.startsWith("</")) {
+      const opening = openUnknownTags.at(-1);
+      if (!opening || opening.name !== name) continue;
+      openUnknownTags.pop();
+      if (opening.start !== undefined && opening.rawStart !== undefined) {
+        const candidate = {
+          start: opening.start,
+          rawStart: opening.rawStart,
+          end: XML_TAG_SCAN_RE.lastIndex,
+        };
+        if (!firstComplete || candidate.start < firstComplete.start) {
+          firstComplete = candidate;
+        }
+      }
+      continue;
     }
+
+    if (selfClosing || openHtmlTags.length > 0) continue;
+    const indentation = src.slice(lineStart, tag.index);
+    const start = /^ {0,3}$/.test(indentation)
+      ? tag.index
+      : undefined;
+    openUnknownTags.push({
+      name,
+      start,
+      rawStart: start === undefined ? undefined : lineStart,
+    });
   }
 
-  return complete.sort((left, right) => left.start - right.start)[0];
+  return firstComplete;
 }
 
 /** Build a tokenizer that captures a complete unknown XML block before
@@ -232,7 +298,7 @@ function unknownXmlBlockExtension(): TokenizerExtension {
     level: "block",
     start(src) {
       const block = findFirstCompleteUnknownXmlBlock(src);
-      return block && block.start > 0 ? block.start : undefined;
+      return block && block.rawStart > 0 ? block.rawStart : undefined;
     },
     tokenizer(src) {
       const block = findFirstCompleteUnknownXmlBlock(src);
