@@ -4421,8 +4421,13 @@ func (s *BunStore) GetUsageMatchingSessionCount(
 	var count int
 	err := s.consistentView(ctx, func(store bun.IDB) error {
 		loc := f.location()
+		referenceTime := time.Now().UTC()
+		preciseSessionTimeFilter := f.ActiveSince != "" || usageHasTerminationFilter(f.Termination)
 		seen := make(map[string]struct{})
 		consume := func(row bunDailyUsageProjection) error {
+			if preciseSessionTimeFilter && !bunDailyUsageSessionMatches(row, f, referenceTime) {
+				return nil
+			}
 			r := dailyUsageProjectionToRow(row)
 			date := dailyUsageLocalDate(r, loc)
 			if usageBoundsForFilter(f).bounded() && date == "" ||
@@ -4432,7 +4437,7 @@ func (s *BunStore) GetUsageMatchingSessionCount(
 			seen[r.sessionID] = struct{}{}
 			return nil
 		}
-		messages, events := s.bunDailyUsageQueries(store, f, true, time.Now().UTC())
+		messages, events := s.bunDailyUsageQueries(store, f, true, referenceTime)
 		if err := streamBunDailyUsageProjections(ctx, messages, true, consume); err != nil {
 			return err
 		}

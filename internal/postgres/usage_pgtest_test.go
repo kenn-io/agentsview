@@ -4,10 +4,13 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/dlclark/regexp2/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -2114,4 +2117,45 @@ func TestStoreDailyUsageActiveSincePreservesMicrosecondsBeforeDedup(t *testing.T
 	counts, err := store.GetUsageSessionCounts(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+}
+
+func TestStoreUsageTerminationPreservesMicrosecondCandidates(t *testing.T) {
+	for _, tc := range []struct{ status, cutoff, inside string }{
+		{"active", "2026-08-05T11:50:00Z", "2026-08-05T11:50:00.000001Z"},
+		{"stale", "2026-08-05T11:00:00Z", "2026-08-05T11:00:00.000001Z"},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			_, store := prepareUsageSchema(t, "agentsview_usage_termination_precision_test")
+			for _, row := range []struct {
+				id, ended string
+				tokens    int
+			}{
+				{"a-outside", tc.cutoff, 99}, {"b-inside", tc.inside, 7},
+			} {
+				_, err := store.bun.NewRaw(`INSERT INTO sessions
+     (id, project, machine, agent, started_at, ended_at, message_count, user_message_count, termination_status)
+     VALUES (?0, ?0, 'host', 'codex', ?1, ?1, 1, 1, 'tool_call_pending')`, row.id, row.ended).Exec(t.Context())
+				require.NoError(t, err)
+				_, err = store.bun.NewRaw(`INSERT INTO messages
+     (session_id, ordinal, role, content, timestamp, content_length, model, source_uuid, token_usage)
+     VALUES (?, 0, 'assistant', '', '2026-08-05T10:00:00Z', 0, 'usage-model', 'shared-source', ?)`,
+					row.id, fmt.Sprintf(`{"input_tokens":%d}`, row.tokens)).Exec(t.Context())
+				require.NoError(t, err)
+			}
+			synctest.Test(t, func(t *testing.T) {
+				t.Cleanup(regexp2.StopTimeoutClock)
+				time.Sleep(time.Until(time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)))
+				filter := db.UsageFilter{Termination: tc.status, Timezone: "UTC"}
+				daily, err := store.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 7, daily.Totals.InputTokens)
+				counts, err := store.GetUsageSessionCounts(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+				matching, err := store.GetUsageMatchingSessionCount(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 1, matching)
+			})
+		})
+	}
 }

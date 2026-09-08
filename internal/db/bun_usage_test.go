@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/dlclark/regexp2/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
@@ -410,7 +412,7 @@ func TestBunDailyUsageQueriesUseProvidedReference(t *testing.T) {
 	assert.Equal(t, "active-at-reference", rows[0].SessionID)
 }
 
-func TestAppendBunUsageTerminationFilterKeepsExactCutoffSemantics(t *testing.T) {
+func TestAppendBunUsageTerminationFilterKeepsBoundaryCandidates(t *testing.T) {
 	database := testDB(t)
 	reference := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
 	flagged := "tool_call_pending"
@@ -442,8 +444,8 @@ func TestAppendBunUsageTerminationFilterKeepsExactCutoffSemantics(t *testing.T) 
 		return ids
 	}
 
-	assert.Equal(t, []string{"active-after"}, queryIDs("active"))
-	assert.Equal(t, []string{"active-cutoff", "stale-after"}, queryIDs("stale"))
+	assert.Equal(t, []string{"active-after", "active-cutoff"}, queryIDs("active"))
+	assert.Equal(t, []string{"active-cutoff", "stale-after", "stale-cutoff"}, queryIDs("stale"))
 	assert.Equal(t, []string{"stale-cutoff"}, queryIDs("unclean"))
 }
 
@@ -847,4 +849,48 @@ func TestBunDailyUsageActiveSincePreservesMicrosecondsBeforeDedup(t *testing.T) 
 	counts, err := store.GetUsageSessionCounts(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+}
+
+func TestBunUsageTerminationPreservesMicrosecondCandidates(t *testing.T) {
+	for _, tc := range []struct{ status, cutoff, inside string }{
+		{"active", "2026-08-05T11:50:00Z", "2026-08-05T11:50:00.000001Z"},
+		{"stale", "2026-08-05T11:00:00Z", "2026-08-05T11:00:00.000001Z"},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			database := testDB(t)
+			for _, row := range []struct {
+				id, ended string
+				tokens    int
+			}{
+				{"a-outside", tc.cutoff, 99}, {"b-inside", tc.inside, 7},
+			} {
+				require.NoError(t, database.UpsertSession(Session{
+					ID: row.id, Project: row.id, Agent: "codex",
+					StartedAt: &row.ended, EndedAt: &row.ended, CreatedAt: row.ended,
+					TerminationStatus: Ptr("tool_call_pending"), MessageCount: 1, UserMessageCount: 1,
+				}))
+				insertMessages(t, database, Message{
+					SessionID: row.id, Ordinal: 0, Role: "assistant", Timestamp: "2026-08-05T10:00:00Z",
+					Model: "usage-model", SourceUUID: "shared-source",
+					TokenUsage: fmt.Appendf(nil, `{"input_tokens":%d}`, row.tokens),
+				})
+			}
+			store := NewBunStore(&sessionContractBackend{store: database.bunReader})
+			// Freeze the reference clock while real SQLite queries run.
+			synctest.Test(t, func(t *testing.T) {
+				t.Cleanup(regexp2.StopTimeoutClock)
+				time.Sleep(time.Until(time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)))
+				filter := UsageFilter{Termination: tc.status, Timezone: "UTC"}
+				daily, err := store.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 7, daily.Totals.InputTokens)
+				counts, err := store.GetUsageSessionCounts(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+				matching, err := store.GetUsageMatchingSessionCount(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 1, matching)
+			})
+		})
+	}
 }

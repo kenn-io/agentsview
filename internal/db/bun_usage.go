@@ -1510,8 +1510,10 @@ func appendBunUsageTerminationFilter(
 	query *bun.SelectQuery, filter string, timestampOrder func(string) string,
 	referenceTime time.Time,
 ) *bun.SelectQuery {
-	return appendBunTerminationFilter(
-		query, filter, "s", timestampOrder, referenceTime,
+	// Rounded SQL timestamps must retain candidates on either side of a
+	// strict lower cutoff. Usage readers apply the exact Go filter afterward.
+	return appendBunTerminationFilterWithLowerBound(
+		query, filter, "s", timestampOrder, referenceTime, ">=",
 	)
 }
 
@@ -1519,6 +1521,15 @@ func appendBunTerminationFilter(
 	query *bun.SelectQuery, filter, alias string,
 	timestampOrder func(string) string,
 	referenceTime time.Time,
+) *bun.SelectQuery {
+	return appendBunTerminationFilterWithLowerBound(
+		query, filter, alias, timestampOrder, referenceTime, ">",
+	)
+}
+
+func appendBunTerminationFilterWithLowerBound(
+	query *bun.SelectQuery, filter, alias string,
+	timestampOrder func(string) string, referenceTime time.Time, lowerBound string,
 ) *bun.SelectQuery {
 	if !usageHasTerminationFilter(filter) {
 		return query
@@ -1535,10 +1546,10 @@ func appendBunTerminationFilter(
 	for part := range strings.SplitSeq(filter, ",") {
 		switch strings.TrimSpace(part) {
 		case "active":
-			predicates = append(predicates, activityExpr+" > "+parameter)
+			predicates = append(predicates, activityExpr+" "+lowerBound+" "+parameter)
 			args = append(args, activeCutoff)
 		case "stale":
-			predicates = append(predicates, "("+activityExpr+" > "+parameter+
+			predicates = append(predicates, "("+activityExpr+" "+lowerBound+" "+parameter+
 				" AND "+activityExpr+" <= "+parameter+" AND "+flagged+")")
 			args = append(args, staleCutoff, activeCutoff)
 		case "unclean":
