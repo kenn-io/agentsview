@@ -889,30 +889,53 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 		return true
 	}
 	// The probe itself failed rather than cleanly determining the lock is
-	// held. That's ambiguous, not proof of an active startup: on a platform
-	// where a crashed holder's lock file leaves the probe erroring instead
-	// of cleanly unlockable, treating every error as "still starting" would
-	// wedge every future launch forever, since this exact probe would keep
-	// failing the same way. Break the tie using the startup snapshot's own
-	// recorded owner, the same way isLegacyDaemonStarting already does for
-	// the legacy lock file.
-	if orphanedStartupState(dataDir) {
+	// held. That's ambiguous: the same error can come from a platform where
+	// a crashed holder's lock file leaves the probe erroring instead of
+	// cleanly unlockable, but it can just as easily come from a live holder
+	// (e.g. a transient sharing violation), so it is not on its own proof of
+	// either state. Break the tie using the startup snapshot's own recorded
+	// owner, the same way isLegacyDaemonStarting already does for the legacy
+	// lock file.
+	if orphanedStartupState(dataDir, orphanedStartupStateNow()) {
 		removeStartupState(dataDir)
 		return false
 	}
 	return true
 }
 
-// orphanedStartupState reports whether dataDir holds a startup snapshot
+// orphanedStartupStateGracePeriod bounds how long a startup snapshot can go
+// without a fresh write before its recorded owner is treated as orphaned.
+// SetPhase persists immediately, bypassing the detail throttle, so a freshly
+// acquired lock's real holder publishes its own snapshot within a fraction
+// of this window. Requiring the snapshot to also predate the grace period
+// closes the race where a lock probe errors while a live holder has legitimately
+// acquired the lock but not yet published: without this, reading a previous,
+// now-dead holder's leftover snapshot from that narrow gap could self-heal
+// out from under a startup that is genuinely in progress, letting a second
+// process start concurrently.
+const orphanedStartupStateGracePeriod = 10 * time.Second
+
+// orphanedStartupStateNow is overridden in tests.
+var orphanedStartupStateNow = time.Now
+
+// orphanedStartupState reports whether dataDir holds a startup snapshot that
+// is both stale (unwritten for at least orphanedStartupStateGracePeriod) and
 // whose recorded owner is confirmably gone: the pid is not alive, or it is
 // alive but its OS create time explicitly mismatches the snapshot (the pid
-// was recycled by an unrelated process). A missing/unreadable snapshot, or
-// one whose owner's create time can't be verified either way, is not
-// evidence of anything and must not self-heal a possibly-genuine
-// in-progress startup.
-func orphanedStartupState(dataDir string) bool {
+// was recycled by an unrelated process). A missing/unreadable snapshot, one
+// still within the grace period, or one whose owner's create time can't be
+// verified either way, is not evidence of anything and must not self-heal a
+// possibly-genuine in-progress startup.
+func orphanedStartupState(dataDir string, now time.Time) bool {
 	st := readStartupState(dataDir)
 	if st == nil || st.PID <= 0 {
+		return false
+	}
+	lastWrite := st.UpdatedAt
+	if lastWrite.IsZero() {
+		lastWrite = st.StartedAt
+	}
+	if lastWrite.IsZero() || now.Sub(lastWrite) < orphanedStartupStateGracePeriod {
 		return false
 	}
 	if !daemon.ProcessAlive(st.PID) {

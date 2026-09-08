@@ -1234,13 +1234,15 @@ func TestIsLocalDaemonActive_UnprobeableLegacyStateFileDoesNotSuppressWrites(
 		"unprobeable legacy state should not become a kit runtime record")
 }
 
-func writeStartupStateForTest(t *testing.T, dir string, pid int, createTime string) {
+func writeStartupStateForTest(
+	t *testing.T, dir string, pid int, createTime string, updatedAt time.Time,
+) {
 	t.Helper()
 	state := startupState{
 		PID:        pid,
 		Phase:      "initial sync",
-		StartedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		StartedAt:  updatedAt,
+		UpdatedAt:  updatedAt,
 		CreateTime: createTime,
 	}
 	data, err := json.Marshal(state)
@@ -1248,9 +1250,15 @@ func writeStartupStateForTest(t *testing.T, dir string, pid int, createTime stri
 	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
 }
 
-func TestIsDaemonStarting_ProbeErrorWithDeadOwnerSelfHeals(t *testing.T) {
+// wellPastStartupGrace is old enough that a snapshot this stale can no
+// longer belong to a holder that simply hasn't published its first write yet.
+func wellPastStartupGrace() time.Time {
+	return time.Now().Add(-orphanedStartupStateGracePeriod - time.Second)
+}
+
+func TestIsDaemonStarting_ProbeErrorWithDeadOwnerPastGracePeriodSelfHeals(t *testing.T) {
 	dir := runtimeTestDir(t)
-	writeStartupStateForTest(t, dir, deadPID(t), "")
+	writeStartupStateForTest(t, dir, deadPID(t), "", wellPastStartupGrace())
 
 	oldTryLock := startLockTryLock
 	startLockTryLock = func(*flock.Flock) (bool, error) {
@@ -1259,18 +1267,41 @@ func TestIsDaemonStarting_ProbeErrorWithDeadOwnerSelfHeals(t *testing.T) {
 	t.Cleanup(func() { startLockTryLock = oldTryLock })
 
 	assert.False(t, isDaemonStarting(dir),
-		"a lock probe error must self-heal when the recorded owner is confirmably dead")
+		"a lock probe error must self-heal a confirmably dead owner once the grace period passes")
 	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
 }
 
-func TestIsDaemonStarting_ProbeErrorWithRecycledPIDSelfHeals(t *testing.T) {
+func TestIsDaemonStarting_ProbeErrorWithDeadOwnerWithinGracePeriodStaysBlocked(t *testing.T) {
+	dir := runtimeTestDir(t)
+	// A dead pid alone is not enough within the grace period: a lock probe
+	// can error for a live holder too (e.g. a transient sharing violation),
+	// and that holder may not have published its own snapshot yet, so the
+	// on-disk snapshot can still be a previous, now-dead holder's leftover.
+	// Self-healing here would let a second process start concurrently with
+	// a genuinely in-progress one.
+	writeStartupStateForTest(t, dir, deadPID(t), "", time.Now())
+
+	oldTryLock := startLockTryLock
+	startLockTryLock = func(*flock.Flock) (bool, error) {
+		return false, errors.New("simulated lock probe failure")
+	}
+	t.Cleanup(func() { startLockTryLock = oldTryLock })
+
+	assert.True(t, isDaemonStarting(dir),
+		"a fresh snapshot must stay blocked even with a dead recorded pid")
+	assert.FileExists(t, startupStatePath(dir))
+}
+
+func TestIsDaemonStarting_ProbeErrorWithRecycledPIDPastGracePeriodSelfHeals(t *testing.T) {
 	dir := runtimeTestDir(t)
 	createTime, ok := processCreateTimeMillis(os.Getpid())
 	require.True(t, ok)
 	// A wrong-but-parseable create time simulates the recorded pid having
 	// been recycled by a different, unrelated process since the snapshot
 	// was written.
-	writeStartupStateForTest(t, dir, os.Getpid(), strconv.FormatInt(createTime+1, 10))
+	writeStartupStateForTest(
+		t, dir, os.Getpid(), strconv.FormatInt(createTime+1, 10), wellPastStartupGrace(),
+	)
 
 	oldTryLock := startLockTryLock
 	startLockTryLock = func(*flock.Flock) (bool, error) {
@@ -1279,7 +1310,7 @@ func TestIsDaemonStarting_ProbeErrorWithRecycledPIDSelfHeals(t *testing.T) {
 	t.Cleanup(func() { startLockTryLock = oldTryLock })
 
 	assert.False(t, isDaemonStarting(dir),
-		"a lock probe error must self-heal when the recorded pid was recycled by another process")
+		"a lock probe error must self-heal a recycled pid once the grace period passes")
 	assertPathRemoved(t, startupStatePath(dir), "orphaned startup-state.json not removed")
 }
 
@@ -1287,8 +1318,8 @@ func TestIsDaemonStarting_ProbeErrorWithUnverifiableCreateTimeStaysBlocked(t *te
 	dir := runtimeTestDir(t)
 	// A live pid whose recorded create time can't be parsed/compared is an
 	// unknown state, not a confirmed mismatch: it must not self-heal a
-	// possibly-genuine in-progress startup.
-	writeStartupStateForTest(t, dir, os.Getpid(), "not-a-number")
+	// possibly-genuine in-progress startup, even once stale.
+	writeStartupStateForTest(t, dir, os.Getpid(), "not-a-number", wellPastStartupGrace())
 
 	oldTryLock := startLockTryLock
 	startLockTryLock = func(*flock.Flock) (bool, error) {
@@ -1308,7 +1339,7 @@ func TestIsDaemonStarting_CleanlyHeldLockStaysBlockedEvenWithStaleSnapshot(t *te
 	// holder acquiring the lock and publishing its first snapshot. The lock
 	// itself is authoritative here and must not be second-guessed by a
 	// snapshot that simply hasn't caught up yet.
-	writeStartupStateForTest(t, dir, deadPID(t), "")
+	writeStartupStateForTest(t, dir, deadPID(t), "", wellPastStartupGrace())
 
 	oldTryLock := startLockTryLock
 	startLockTryLock = func(*flock.Flock) (bool, error) { return false, nil }
@@ -1321,7 +1352,7 @@ func TestIsDaemonStarting_CleanlyHeldLockStaysBlockedEvenWithStaleSnapshot(t *te
 
 func TestIsDaemonStarting_LiveOwnerStaysBlocked(t *testing.T) {
 	dir := runtimeTestDir(t)
-	writeStartupStateForTest(t, dir, os.Getpid(), "")
+	writeStartupStateForTest(t, dir, os.Getpid(), "", wellPastStartupGrace())
 
 	oldTryLock := startLockTryLock
 	startLockTryLock = func(*flock.Flock) (bool, error) {
