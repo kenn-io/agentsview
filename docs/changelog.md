@@ -7,6 +7,8 @@ description: Release history for AgentsView
 
 **New features**
 
+- Browse and search Tau sessions, including the active conversation branch,
+  thinking, tools, session names, and recorded token usage. (#1661)
 - Register alternate Claude Code and Codex homes with `claude_homes` and
   `codex_homes` in `config.toml`. AgentsView derives each home's native session
   directories, so sessions from tools that set a custom home such as t3code

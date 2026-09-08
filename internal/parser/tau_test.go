@@ -264,7 +264,7 @@ func TestTauLineSizeLimit(t *testing.T) {
 		{name: "oversized", size: maxLineSize + 1, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root, path := writeTauTestSource(t, "size.jsonl", "")
+			_, path := writeTauTestSource(t, "size.jsonl", "")
 			require.NoError(t, os.WriteFile(path, makeRecord(tc.size), 0o644))
 			entries, err := readTauEntries(t.Context(), path)
 			if tc.wantErr {
@@ -273,7 +273,6 @@ func TestTauLineSizeLimit(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Len(t, entries, 1)
-			_ = root
 		})
 	}
 }

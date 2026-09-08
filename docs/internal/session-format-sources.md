@@ -368,11 +368,11 @@ add an archived or maintained mirror without replacing the original identity.
   The TUI also maintains an append-oriented `history.jsonl` whose records
   contain `session_id`, Unix-seconds `ts`, and submitted prompt `text`;
   configured size enforcement can rewrite a retained tail in place. Agentsview
-  consumes only the first two fields as a live-activity hint.
-  Subagent rollouts carry a structural `source.subagent` marker and a top-level
+  consumes only the first two fields as a live-activity hint. Subagent
+  rollouts carry a structural `source.subagent` marker and a top-level
   `parent_thread_id`; that pair defines the parent edge. `thread_source` is a
-  legacy fallback, and `session_id` identifies the root or tree rather than the
-  parent.
+  legacy fallback, and `session_id` identifies the root or tree rather than
+  the parent.
 
 - **Evidence:** `source`.
 
@@ -419,12 +419,12 @@ add an archived or maintained mirror without replacing the original identity.
   opaque identifiers, and discards the leading turns also present in the
   parent. UUID versions and identifier bytes carry no chronological meaning;
   the first turn id absent from the parent begins child-owned usage. Missing
-  parents fail open, and child-only subagent transcripts are left unchanged.
-  A local corpus measured 2026-09-07 contained 2,044 Codex JSONL files, with
+  parents fail open, and child-only subagent transcripts are left unchanged. A
+  local corpus measured 2026-09-07 contained 2,044 Codex JSONL files, with
   1,565 carrying `source.subagent` and none carrying `guardian_review`; the
-  published producer source supplies the guardian format evidence.
-  Legacy `session_index.jsonl` files from aliased homes also travel through
-  remote archive export and import. Reverified on 2026-09-07 with
+  published producer source supplies the guardian format evidence. Legacy
+  `session_index.jsonl` files from aliased homes also travel through remote
+  archive export and import. Reverified on 2026-09-07 with
   `TestRemoteCodexAliasTitleSurvivesArchiveImport`, which checks the imported
   title while another provider retains its own metadata configuration.
   Metadata paths are resolved at configuration load and belong to provider
@@ -2326,12 +2326,6 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   available. SSH roots remain file-scoped when invalid filename encodings are
   skipped.
 
-[evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
-[evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
-[evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
-[evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go
-[evener-source-5]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/fork.go
-
 ## Tau (`tau`)
 
 - **Format:** Tau stores one JSONL transcript per session below
@@ -2378,5 +2372,17 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   plus a stable hash of the canonical configured root into `default.jsonl`
   session IDs. They replay the selected ancestry and return a zero-message
   result for an explicit empty leaf. A missing parent detaches the selected
-  path. No legacy Tau v1 conversion, native transfer, extension-role
-  rendering, or index metadata synchronization is included.
+  path. Messages with roles `bashExecution` (user-run shell commands),
+  `custom`, `branchSummary`, and `compactionSummary` are skipped; separate
+  `branch_summary` and `compaction` entries are rendered. These roles and the
+  native `default-<project-directory>` ID were reverified against the pinned
+  message models and session manager on 2026-09-08. The root hash keeps
+  default sessions from distinct configured roots separate; it does not
+  distinguish machines with identical root paths. No legacy Tau v1 conversion,
+  native transfer, or index metadata synchronization is included.
+
+[evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
+[evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
+[evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
+[evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go
+[evener-source-5]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/fork.go

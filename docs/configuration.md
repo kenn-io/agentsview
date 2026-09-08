@@ -335,6 +335,10 @@ directories, excludes the exact `index.jsonl` metadata file, and follows the
 latest `leaf` entry when selecting the active history. Set `TAU_SESSIONS_DIR` or
 `tau_dirs` to use another sessions root.
 
+User-run shell commands (`bashExecution`) and messages with the `custom`,
+`branchSummary`, or `compactionSummary` role are not shown. Separate
+`branch_summary` and `compaction` entries are shown.
+
 **Qoder default directories** include the legacy `~/.qoder/projects/` and
 `~/.qoderwork/projects/` export roots, the Qoder CLI CN store, and the current
 IDE store:
@@ -829,11 +833,11 @@ The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `deepseek_tui_sessions_dirs`, `forge_dirs`, `gemini_dirs`, `goose_dirs`,
 `gptme_dirs`, `grok_dirs`, `hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`,
 `kilo_legacy_dirs`, `kimi_dirs`, `kimi_work_dirs`, `kiro_dirs`, `kiro_ide_dirs`,
-`mimocode_dirs`, `vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`, `tau_dirs`,
+`mimocode_dirs`, `vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`,
 `opencode_dirs`, `openhands_dirs`, `pi_dirs`, `prime_agent_dirs`,
 `piebald_dirs`, `posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`,
 `qoder_project_dirs`, `qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`,
-`roocode_dirs`, `shelley_dirs`, `traex_sessions_dirs`,
+`roocode_dirs`, `shelley_dirs`, `tau_dirs`, `traex_sessions_dirs`,
 `visualstudio_copilot_dirs`, `vscode_copilot_dirs`, `windsurf_dirs`,
 `warp_dirs`, `workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and
 `zencoder_dirs`. Each accepts an array of paths. Environment variables take

@@ -12,10 +12,7 @@ import (
 )
 
 func TestTauIssue1634ArtifactReproduction(t *testing.T) {
-	artifact := os.Getenv("AGENTSVIEW_TAU_ISSUE_ARTIFACT")
-	if artifact == "" {
-		artifact = filepath.Join("testdata", "tau", "issue-session.jsonl")
-	}
+	artifact := filepath.Join("testdata", "tau", "issue-session.jsonl")
 	data, err := os.ReadFile(artifact)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
