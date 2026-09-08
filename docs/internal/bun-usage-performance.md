@@ -172,6 +172,50 @@ The full-rebuild fixture can be reproduced with
 `AGENTSVIEW_BENCH_SYNC_REPLY_BYTES=16384`, running
 `BenchmarkResyncBulkContributorIngestUsage` with `-benchtime 3x`.
 
+### Further fresh-sync tuning
+
+A follow-up comparison against `6d935f4e0` isolated SQL/index work, repeated
+text conversion, and pending parsed-result retention. The same 100-session,
+300-message, 16 KiB reply fixture ran as compiled binaries with three iterations
+per sample, then repeated in reverse variant order. Runs overlapping other Go
+test jobs were discarded.
+
+| Variant                            | First sample | Reverse sample | Peak RSS samples |
+| ---------------------------------- | ------------ | -------------- | ---------------- |
+| Before this follow-up              | 3.230 s      | 3.219 s        | 627 / 632 MB     |
+| Skip the final validated-body scan | 3.076 s      | 3.154 s        | 641 / 636 MB     |
+| Lower pending budget to 128 MiB    | 3.140 s      | 3.300 s        | 399 / 398 MB     |
+| Both changes                       | 3.084 s      | 3.250 s        | 398 / 400 MB     |
+
+The combined change reduces process peak RSS by about 37%. Its average elapsed
+time is about 2% lower, within the variation between local samples. This does
+not establish parity with the external baseline. Allocation volume remains
+roughly 2.28 GB per rebuild: smaller batches shorten the lifetime of retained
+parser data rather than eliminating its allocation.
+
+Separate diagnostic runs forced collection at batch preparation and write
+checkpoints. Maximum sampled live heap fell from 242 MB to 120 MB. The larger
+heap attributed about 86% to retained parser content and 3% to converted
+database messages. Existing model-row pools already clear references and cap
+retained backing storage. No additional pool was introduced.
+
+Archive-scale passes now retain an estimated 128 MiB of completed parsed
+results, down from 512 MiB, while keeping the 256 MiB active-parser budget.
+Oversized or unknown sources remain indivisible and may exceed the pending
+budget before their standalone batch is written. The fixture consequently uses
+eight transactions instead of two. The worker-admission limit is unchanged.
+
+Validated session batches also avoid scanning Content and ThinkingText again
+when building canonical message rows. Direct incremental writes, repairs, and
+mirror conversion still sanitize those fields at their existing boundaries; all
+paths keep the same canonical field projection and graph writes.
+
+Deferring the additional timestamp index until the end of the rebuild did not
+improve the local paired measurements, so index handling remains unchanged. A
+256 MiB pending-budget alternative retained more memory without a consistent
+speed advantage. External benchmark pickup after push remains the acceptance
+check for production-scale fresh-sync time and memory.
+
 ## Correctness and delivery
 
 The shared contract exercises all three engines. It preserves exact costs,

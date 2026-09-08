@@ -646,8 +646,10 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	} else if len(msgs) > 0 {
-		if err := appendCanonicalMessageGraph(
-			ctx, tx, write.Session.ID, msgs,
+		// Every caller sanitized Content and ThinkingText before calling this
+		// writer; preserve the canonical conversion without rescanning text.
+		if err := appendCanonicalMessageGraphUsing(
+			ctx, tx, write.Session.ID, msgs, canonicalMessageRowWithValidatedContent,
 		); err != nil {
 			return 0, err
 		}

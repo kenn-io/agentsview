@@ -264,9 +264,16 @@ func CanonicalMessageRows(
 }
 
 func canonicalMessageRow(message Message) (bunmodel.Message, error) {
-	message.Role = SanitizeUTF8(message.Role)
 	message.Content = SanitizeUTF8(message.Content)
 	message.ThinkingText = SanitizeUTF8(message.ThinkingText)
+	return canonicalMessageRowWithValidatedContent(message)
+}
+
+// The session-batch validator already sanitized these two large text fields.
+// Keep every other canonical conversion here, including fields the validator
+// does not own, and leave callers outside that boundary on canonicalMessageRow.
+func canonicalMessageRowWithValidatedContent(message Message) (bunmodel.Message, error) {
+	message.Role = SanitizeUTF8(message.Role)
 	message.Model = SanitizeUTF8(message.Model)
 	message.TokenUsage = []byte(SanitizeUTF8(string(message.TokenUsage)))
 	message.ClaudeMessageID = SanitizeUTF8(message.ClaudeMessageID)
@@ -353,16 +360,6 @@ func canonicalToolRows(
 	return callRows, resultRows, nil
 }
 
-// appendArchiveMessageRows writes SQLite messages through the canonical model.
-// Parser output is sanitized before reaching this boundary, so an unavailable
-// provider timestamp is stored as NULL and malformed values cannot enter the
-// archive.
-func appendArchiveMessageRows(
-	ctx context.Context, tx bun.IDB, sessionID string, messages []Message,
-) error {
-	return writeArchiveMessageRows(ctx, tx, sessionID, messages, "")
-}
-
 func repairArchiveMessageRows(
 	ctx context.Context, tx bun.IDB, sessionID string, messages []Message,
 ) error {
@@ -372,12 +369,13 @@ func repairArchiveMessageRows(
 	conflict := canonicalConflictUpdateClauseForKeys(
 		[]string{"session_id", "ordinal"}, updates,
 	)
-	return writeArchiveMessageRows(ctx, tx, sessionID, messages, conflict)
+	return writeArchiveMessageRows(ctx, tx, sessionID, messages, conflict, canonicalMessageRow)
 }
 
 func writeArchiveMessageRows(
 	ctx context.Context, tx bun.IDB, sessionID string, messages []Message,
 	conflict string,
+	convert func(Message) (bunmodel.Message, error),
 ) error {
 	if len(messages) == 0 {
 		return nil
@@ -392,7 +390,7 @@ func writeArchiveMessageRows(
 				message.SessionID, sessionID,
 			)
 		}
-		row, err := canonicalMessageRow(message)
+		row, err := convert(message)
 		if err != nil {
 			return err
 		}

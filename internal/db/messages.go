@@ -1094,6 +1094,13 @@ func invalidateSessionSignalsTx(tx bun.Tx, sessionID string) error {
 func appendCanonicalMessageGraph(
 	ctx context.Context, tx bun.IDB, sessionID string, msgs []Message,
 ) error {
+	return appendCanonicalMessageGraphUsing(ctx, tx, sessionID, msgs, canonicalMessageRow)
+}
+
+func appendCanonicalMessageGraphUsing(
+	ctx context.Context, tx bun.IDB, sessionID string, msgs []Message,
+	convert func(Message) (bunmodel.Message, error),
+) error {
 	for _, msg := range msgs {
 		if msg.SessionID != sessionID {
 			return fmt.Errorf(
@@ -1102,7 +1109,7 @@ func appendCanonicalMessageGraph(
 			)
 		}
 	}
-	if err := appendArchiveMessageRows(ctx, tx, sessionID, msgs); err != nil {
+	if err := writeArchiveMessageRows(ctx, tx, sessionID, msgs, "", convert); err != nil {
 		return err
 	}
 	callRows, resultRows, err := canonicalToolRows(msgs)
