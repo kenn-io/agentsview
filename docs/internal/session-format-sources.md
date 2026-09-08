@@ -2294,9 +2294,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   producer revision `da7c06396c9848abfae362dcffce3861a6a0c95a`, checked
   2026-09-05 (tool-result types reverified 2026-09-08), includes structured
   model-switch facts from PR #889. Earlier v2 records need not contain those
-  facts. See [transcript writer and framing][evener-source-1],
-  [turn schema][evener-source-2], [message and usage types][evener-source-3],
-  [metadata][evener-source-4], and [fork writer][evener-source-5].
+  facts. See
+  [transcript.go](https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go),
+  [turn schema][evener-source-2],
+  [message and usage types][evener-source-3], [metadata][evener-source-4], and
+  [fork writer][evener-source-5].
 - **Usage and cost:** assistant turns persist uncached input and output plus
   optional cache reads, 5-minute cache writes, 1-hour cache writes, and
   reasoning counts. Reasoning is part of output, not an additional output
@@ -2381,7 +2383,6 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   distinguish machines with identical root paths. No legacy Tau v1 conversion,
   native transfer, or index metadata synchronization is included.
 
-[evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
 [evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go
