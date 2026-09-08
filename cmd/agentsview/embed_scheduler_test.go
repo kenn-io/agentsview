@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -586,38 +587,34 @@ func TestEmbedSchedulerBackstopTickStartedButFailedKeepsPendingBackstop(t *testi
 // starts but then fails must not clear it either -- the same
 // started-but-failed rule applies on both paths that can clear the flag.
 func TestEmbedSchedulerDebouncedBuildStartedButFailedKeepsPendingBackstop(t *testing.T) {
-	buildErr := errors.New("embeddings endpoint unreachable")
-	fake := &fakeEmbedManager{
-		results: []fakeTryBuildResult{
-			{started: false, err: nil},     // the backstop tick collides with a build elsewhere
-			{started: true, err: buildErr}, // the recovering debounced build starts but fails
-			{started: true, err: nil},      // a further debounced build finally succeeds
-		},
-	}
-	s := newEmbedScheduler(fake, 10*time.Millisecond, 500*time.Millisecond, false, nil)
+	synctest.Test(t, func(t *testing.T) {
+		buildErr := errors.New("embeddings endpoint unreachable")
+		fake := &fakeEmbedManager{
+			results: []fakeTryBuildResult{
+				{started: false, err: nil},     // the backstop tick collides with a build elsewhere
+				{started: true, err: buildErr}, // the recovering debounced build starts but fails
+				{started: true, err: nil},      // a further debounced build finally succeeds
+			},
+		}
+		s := newEmbedScheduler(fake, 10*time.Millisecond, 500*time.Millisecond, false, nil)
+		go s.Run(t.Context())
+		defer s.Stop()
 
-	ctx := t.Context()
-	go s.Run(ctx)
-	defer s.Stop()
+		synctest.Sleep(500 * time.Millisecond)
+		require.Equal(t, 1, fake.callCount(), "expected the backstop tick to collide")
 
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-		"expected the backstop tick to fire and be dropped")
+		// Both retries are automatic. Extra notifications could arrive after
+		// recovery and trigger an unrelated build. Advance past the retries,
+		// but stop before the next periodic backstop tick.
+		synctest.Sleep(50 * time.Millisecond)
 
-	s.Notify()
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
-		"expected the debounced build to attempt recovering the dropped backstop")
-
-	s.Notify()
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 3 },
-		"expected a further debounced build to retry after the recovering build failed")
-	time.Sleep(50 * time.Millisecond)
-
-	calls := fake.callsSnapshot()
-	require.Len(t, calls, 3)
-	assert.True(t, calls[0].Backstop, "the original (dropped) backstop tick request")
-	assert.True(t, calls[1].Backstop, "the recovering (started-but-failed) debounced build")
-	assert.True(t, calls[2].Backstop,
-		"a started-but-failed build must not clear pendingBackstop: the retry must still carry it")
+		calls := fake.callsSnapshot()
+		require.Len(t, calls, 3)
+		assert.True(t, calls[0].Backstop, "the original (dropped) backstop tick request")
+		assert.True(t, calls[1].Backstop, "the recovering (started-but-failed) debounced build")
+		assert.True(t, calls[2].Backstop,
+			"a started-but-failed build must not clear pendingBackstop: the retry must still carry it")
+	})
 }
 
 func TestEmbedSchedulerStopTerminatesRun(t *testing.T) {
