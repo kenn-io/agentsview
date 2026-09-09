@@ -121,6 +121,7 @@ const KNOWN_HTML_TAGS = new Set([
 
 const XML_TAG_ESCAPE_RE = /<\/?([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/g;
 const XML_TAG_SCAN_RE = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
+const UNKNOWN_XML_BLOCK_LINE_START_RE = /^ {0,3}<([A-Za-z][A-Za-z0-9:_-]*)\b/;
 
 type MarkdownToken = Token & Record<string, unknown>;
 
@@ -323,6 +324,7 @@ function unknownXmlBlockExtension(source: string): TokenizerExtension {
   ]);
   let currentSource = source;
   let currentBlocks = scans.get(source)!;
+  let currentIsTopLevel = true;
 
   function firstBlockAtOrAfter(
     blocks: UnknownXmlBlock[],
@@ -343,10 +345,27 @@ function unknownXmlBlockExtension(source: string): TokenizerExtension {
       if (source.endsWith(src)) {
         currentSource = source;
         currentBlocks = scans.get(source)!;
+        currentIsTopLevel = true;
       } else {
         currentSource = src;
         currentBlocks = scans.get(src) ?? findCompleteUnknownXmlBlocks(src);
         scans.set(src, currentBlocks);
+        currentIsTopLevel = false;
+      }
+    } else if (
+      !currentIsTopLevel &&
+      src !== currentSource &&
+      UNKNOWN_XML_BLOCK_LINE_START_RE.test(src)
+    ) {
+      const offset = currentSource.length - src.length;
+      const currentBlock = firstBlockAtOrAfter(currentBlocks, offset);
+      if (!currentBlock || currentBlock.rawStart !== offset) {
+        const localBlocks = scans.get(src) ?? findCompleteUnknownXmlBlocks(src);
+        scans.set(src, localBlocks);
+        if (localBlocks.some((block) => block.rawStart === 0)) {
+          currentSource = src;
+          currentBlocks = localBlocks;
+        }
       }
     }
     return { source: currentSource, blocks: currentBlocks };

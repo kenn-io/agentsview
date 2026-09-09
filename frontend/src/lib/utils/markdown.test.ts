@@ -530,6 +530,15 @@ describe("renderMarkdown", () => {
       }
     });
 
+    it("rescans each transformed list item independently", () => {
+      const source = "- Intro <policy>\n  # heading\n  </policy>\n- <policy>\n  # heading\n  </policy>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelectorAll("pre > code")).toHaveLength(1);
+    });
+
     it("captures complete blocks with up to three leading spaces", () => {
       const source = "  <policy>\n# heading\n  </policy>";
       const dom = parseHTML(
