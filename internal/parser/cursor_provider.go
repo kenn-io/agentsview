@@ -55,11 +55,14 @@ func (f cursorProviderFactory) ResolveMetadataDir(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	parent := filepath.Dir(root)
-	if filepath.Base(parent) != ".cursor" {
+	key, err := pathutil.LocalComparisonKey(root)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Base(key) != "projects" || filepath.Base(filepath.Dir(key)) != ".cursor" {
 		return "", nil
 	}
-	return pathutil.ResolveAbsolute(filepath.Join(parent, "chats"))
+	return pathutil.ResolveAbsolute(filepath.Join(filepath.Dir(root), "chats"))
 }
 
 type cursorProvider struct {

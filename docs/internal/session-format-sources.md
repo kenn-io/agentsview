@@ -1007,23 +1007,26 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   following only the selected root's turn tree in one deferred read-only
   transaction (`mode=ro`), without mutating SQL. Discovery and archive
   identity remain the transcript source (`cursor:<agentId>`). The chats
-  directory is local provider metadata, outside remote, SSH, and S3 transfer
-  targets. Store-only discovery, native tool-call/result joining, encrypted
-  blob payloads, and cross-version field-number stability remain unsupported;
-  the capture contained no tool result and the reader ignores
-  `blobEncryptionKey`. Unknown reachable blobs do not discard decoded
-  siblings. Missing required tables, unsupported metadata, missing roots or
-  turn indexes, and stores with no decodable turns leave the transcript
-  usable, with a warning. Store open/read errors remain retryable source
-  errors without replacing archived content. Store fingerprint failures
-  prevent freshness skips, and temporary path-access failures retain cached
-  stores for retry. A failed chats scan warns and preserves cached store
-  locations; otherwise sync uses transcripts alone. The next discovery pass
-  retries the scan, and store changes invalidate the composite fingerprint.
-  Reverified 2026-09-09 with synthetic parser and SQLite archive fixtures
-  covering initial import and subsequent transcript updates when store
-  enrichment is unavailable, missing store tables, and recovery after store
-  access failures.
+  directory is local provider metadata, automatically associated only with a
+  resolved `.cursor/projects` root, with case-insensitive matching on Windows.
+  Custom roots such as `.cursor/archive` remain transcript-only. The chats
+  directory stays outside remote, SSH, and S3 transfer targets. Store-only
+  discovery, native tool-call/result joining, encrypted blob payloads, and
+  cross-version field-number stability remain unsupported; the capture
+  contained no tool result and the reader ignores `blobEncryptionKey`. Unknown
+  reachable blobs do not discard decoded siblings. Missing required tables,
+  unsupported metadata, missing roots or turn indexes, and stores with no
+  decodable turns leave the transcript usable, with a warning. Store open/read
+  errors remain retryable source errors without replacing archived content.
+  Store fingerprint failures prevent freshness skips, and temporary
+  path-access failures retain cached stores for retry. A failed chats scan
+  warns and preserves cached store locations; otherwise sync uses transcripts
+  alone. The next discovery pass retries the scan, and store changes
+  invalidate the composite fingerprint. Reverified 2026-09-09 with synthetic
+  parser and SQLite archive fixtures covering initial import and subsequent
+  transcript updates when store enrichment is unavailable, missing store tables,
+  and recovery after store access failures, plus a custom-root fixture that
+  keeps sibling live-store reasoning out of archived transcripts.
 
 ## Cursor IDE (`cursor-ide`)
 

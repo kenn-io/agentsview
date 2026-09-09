@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1063,30 +1064,58 @@ func TestCursorStoreDoesNotDiscoverStoreOnlySession(t *testing.T) {
 }
 
 func TestCursorStoreResolveMetadataDir(t *testing.T) {
-	home := t.TempDir()
-	projects := filepath.Join(home, ".cursor", "projects")
-	chats := filepath.Join(home, ".cursor", "chats")
-	require.NoError(t, os.MkdirAll(projects, 0o755))
-	require.NoError(t, os.MkdirAll(chats, 0o755))
-	factory, ok := ProviderFactoryByType(AgentCursor)
-	require.True(t, ok)
-	resolver, ok := factory.(interface {
-		ResolveMetadataDir(string) (string, error)
+	for _, tt := range []struct {
+		root      string
+		wantChats bool
+	}{
+		{root: ".cursor/projects", wantChats: true},
+		{root: ".cursor/archive"},
+		{root: "other/projects"},
+		{root: ".cursor/Projects", wantChats: runtime.GOOS == "windows"},
+		{root: ".Cursor/projects", wantChats: runtime.GOOS == "windows"},
+	} {
+		t.Run(tt.root, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), filepath.FromSlash(tt.root))
+			chats := filepath.Join(filepath.Dir(root), "chats")
+			require.NoError(t, os.MkdirAll(root, 0o755))
+			require.NoError(t, os.MkdirAll(chats, 0o755))
+			_, got, err := ResolveProviderRoot(AgentCursor, root)
+			require.NoError(t, err)
+			if !tt.wantChats {
+				assert.Empty(t, got)
+				return
+			}
+			want, err := filepath.EvalSymlinks(chats)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+func TestCursorStoreCustomRootKeepsTranscriptOnly(t *testing.T) {
+	fx := setupCursorStoreFixture(t, false)
+	archive := filepath.Join(filepath.Dir(fx.ProjectsRoot), "archive")
+	require.NoError(t, os.Rename(fx.ProjectsRoot, archive))
+	root, metadata, err := ResolveProviderRoot(AgentCursor, archive)
+	require.NoError(t, err)
+	provider, ok := NewProvider(AgentCursor, ProviderConfig{
+		Roots: []string{root},
+		MetadataDirs: map[string][]string{
+			root: {metadata},
+		},
 	})
 	require.True(t, ok)
-	got, err := resolver.ResolveMetadataDir(projects)
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
-	want, err := filepath.EvalSymlinks(chats)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
-	got, err = filepath.EvalSymlinks(got)
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-
-	unrelated := filepath.Join(home, "other")
-	require.NoError(t, os.MkdirAll(unrelated, 0o755))
-	empty, err := resolver.ResolveMetadataDir(unrelated)
-	require.NoError(t, err)
-	assert.Empty(t, empty)
+	require.Empty(t, outcome.SourceErrors)
+	require.Len(t, outcome.Results, 1)
+	require.Len(t, outcome.Results[0].Result.Messages, 2)
+	assistant := outcome.Results[0].Result.Messages[1]
+	assert.Equal(t, "I'm Auto, an agent router designed by Cursor.", assistant.Content)
+	assert.Empty(t, assistant.ThinkingText)
 }
 
 func TestCursorStoreFingerprintTracksWAL(t *testing.T) {
