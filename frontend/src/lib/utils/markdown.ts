@@ -1,8 +1,8 @@
 // kit-ui-check-ignore: app renderer adds agent-specific XML escaping and shell wrapper tags on top of marked; migrating to kit-ui createMarkdownRenderer needs a dedicated behavior-preserving pass.
 import {
   Marked,
+  Tokenizer,
   type Token,
-  type TokenizerAndRendererExtension,
   type TokenizerExtension,
 } from "marked";
 // kit-ui-check-ignore: app renderer sanitizes the custom marked output above; migrating to kit-ui createMarkdownRenderer needs a dedicated behavior-preserving pass.
@@ -125,11 +125,8 @@ const KNOWN_HTML_TAGS = new Set([
 ]);
 
 const XML_TAG_ESCAPE_RE = /<\/?([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/g;
-const XML_TAG_SCAN_RE = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
 
 type MarkdownToken = Token & Record<string, unknown>;
-
-type MarkdownFenceRange = { start: number; end: number };
 
 const VOID_HTML_TAGS = new Set([
   "area",
@@ -184,80 +181,46 @@ function bashWrapperExtension(
   };
 }
 
-type UnknownXmlBlock = { start: number; rawStart: number; end: number };
+function isSelfClosingTag(tagText: string): boolean {
+  return /\/\s*>$/.test(tagText);
+}
 
-function findCompleteUnknownXmlBlocks(src: string): UnknownXmlBlock[] {
-  const fenceRanges: MarkdownFenceRange[] = [];
-  const fenceRe = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)\r?$/gm;
-  let openFence: { start: number; char: string; length: number } | undefined;
-  let fence: RegExpExecArray | null;
-  while ((fence = fenceRe.exec(src)) !== null) {
-    const marker = fence[1]!;
-    const suffix = fence[2] ?? "";
-    if (!openFence) {
-      if (marker[0] === "`" && suffix.includes("`")) continue;
-      openFence = { start: fence.index, char: marker[0]!, length: marker.length };
-    } else if (
-      marker[0] === openFence.char &&
-      marker.length >= openFence.length &&
-      /^[ \t]*$/.test(suffix)
-    ) {
-      fenceRanges.push({ start: openFence.start, end: fence.index + fence[0].length });
-      openFence = undefined;
-    }
+function tagAtLineStart(src: string, offset: number): RegExpExecArray | undefined {
+  const match = new RegExp(`^ {0,3}${XML_TAG_ESCAPE_RE.source}`).exec(src.slice(offset));
+  return match ?? undefined;
+}
+
+function matchUnknownXmlBlockAt(src: string, offset: number): number | undefined {
+  if (offset < 0 || offset >= src.length || (offset > 0 && src[offset - 1] !== "\n")) {
+    return undefined;
   }
-  if (openFence) fenceRanges.push({ start: openFence.start, end: src.length });
 
-  const protectedRanges = [...fenceRanges];
-  const inlineCodeRe = /`+/g;
-  let openInlineCode: { start: number; length: number } | undefined;
-  let fenceIndex = 0;
-  let inlineCode: RegExpExecArray | null;
-  while ((inlineCode = inlineCodeRe.exec(src)) !== null) {
-    while (fenceIndex < fenceRanges.length && inlineCode.index >= fenceRanges[fenceIndex]!.end) {
-      fenceIndex += 1;
-    }
-    const fenceRange = fenceRanges[fenceIndex];
-    const inFence = fenceRange !== undefined && inlineCode.index >= fenceRange.start;
-    if (inFence) continue;
+  const opening = tagAtLineStart(src, offset);
+  if (!opening) return undefined;
 
-    if (!openInlineCode) {
-      openInlineCode = { start: inlineCode.index, length: inlineCode[0].length };
-    } else if (inlineCode[0].length === openInlineCode.length) {
-      protectedRanges.push({ start: openInlineCode.start, end: inlineCode.index + inlineCode[0].length });
-      openInlineCode = undefined;
-    }
+  const openingText = opening[0];
+  const openingName = opening[1]?.toLowerCase();
+  if (
+    !openingName ||
+    openingText.startsWith("</") ||
+    isSelfClosingTag(openingText) ||
+    isPreservedHtmlTag(openingName)
+  ) {
+    return undefined;
   }
-  protectedRanges.sort((left, right) => left.start - right.start);
 
-  const openUnknownTags: Array<{ name: string; position: number; start?: number; rawStart?: number }> = [];
-  let malformedUnknownTags: string[] = [];
+  const stack = [openingName];
   const openHtmlTags: string[] = [];
-  const completeBlocks: UnknownXmlBlock[] = [];
-  let protectedIndex = 0;
-  let lineStart = 0;
-  let scanCursor = 0;
-
-  XML_TAG_SCAN_RE.lastIndex = 0;
+  const tags = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
+  tags.lastIndex = offset + openingText.length;
   let tag: RegExpExecArray | null;
-  while ((tag = XML_TAG_SCAN_RE.exec(src)) !== null) {
-    const between = src.slice(scanCursor, tag.index);
-    const newline = between.lastIndexOf("\n");
-    if (newline >= 0) lineStart = scanCursor + newline + 1;
-    scanCursor = XML_TAG_SCAN_RE.lastIndex;
-
-    while (protectedIndex < protectedRanges.length && tag.index >= protectedRanges[protectedIndex]!.end) {
-      protectedIndex += 1;
-    }
-    const protectedRange = protectedRanges[protectedIndex];
-    if (protectedRange && tag.index >= protectedRange.start) continue;
-
+  while ((tag = tags.exec(src)) !== null) {
+    const tagText = tag[0];
     const name = tag[1]?.toLowerCase();
     if (!name) continue;
 
-    const tagText = tag[0];
     const closing = tagText.startsWith("</");
-    const selfClosing = /\/\s*>$/.test(tagText);
+    const selfClosing = isSelfClosingTag(tagText);
     if (isPreservedHtmlTag(name)) {
       if (closing) {
         if (openHtmlTags.at(-1) === name) openHtmlTags.pop();
@@ -267,131 +230,132 @@ function findCompleteUnknownXmlBlocks(src: string): UnknownXmlBlock[] {
       continue;
     }
 
-    if (openHtmlTags.length > 0) continue;
-
-    if (tagText.startsWith("</")) {
-      if (malformedUnknownTags.length > 0) {
-        const malformedIndex = malformedUnknownTags.lastIndexOf(name);
-        if (malformedIndex >= 0) malformedUnknownTags.splice(malformedIndex, 1);
-        continue;
-      }
-      const opening = openUnknownTags.at(-1);
-      if (!opening) continue;
-      if (opening.name !== name) {
-        const malformedStart = openUnknownTags[0]?.position ?? tag.index;
-        for (let index = completeBlocks.length - 1; index >= 0; index -= 1) {
-          if (completeBlocks[index]!.start >= malformedStart) completeBlocks.splice(index, 1);
-        }
-        malformedUnknownTags = openUnknownTags.map((open) => open.name);
-        openUnknownTags.length = 0;
-        const malformedIndex = malformedUnknownTags.lastIndexOf(name);
-        if (malformedIndex >= 0) malformedUnknownTags.splice(malformedIndex, 1);
-        continue;
-      }
-      openUnknownTags.pop();
-      if (opening.start !== undefined && opening.rawStart !== undefined) {
-        completeBlocks.push({
-          start: opening.start,
-          rawStart: opening.rawStart,
-          end: XML_TAG_SCAN_RE.lastIndex,
-        });
-      }
+    if (openHtmlTags.length > 0 || selfClosing) continue;
+    if (closing) {
+      if (stack.at(-1) !== name) return undefined;
+      stack.pop();
+      if (stack.length === 0) return tags.lastIndex;
       continue;
     }
 
-    if (selfClosing || openHtmlTags.length > 0) continue;
-    if (malformedUnknownTags.length > 0) {
-      malformedUnknownTags.push(name);
-      continue;
-    }
-    const indentation = src.slice(lineStart, tag.index);
-    const start = /^ {0,3}$/.test(indentation)
-      ? tag.index
-      : undefined;
-    openUnknownTags.push({
-      name,
-      position: tag.index,
-      start,
-      rawStart: start === undefined ? undefined : lineStart,
-    });
+    stack.push(name);
   }
 
-  return completeBlocks.sort((left, right) => left.start - right.start);
+  return undefined;
 }
 
-/** Build a tokenizer that captures a complete unknown XML block before
- *  marked can parse Markdown in its body. Line-start matching keeps inline
- *  code and prose containing the same tags on their existing paths. */
-function unknownXmlBlockExtension(): TokenizerAndRendererExtension {
-  type ScanContext = { source: string; blocks: UnknownXmlBlock[] };
-  const contexts = new WeakMap<object, ScanContext>();
-  let currentContext: ScanContext | undefined;
+type TextRange = { start: number; end: number };
 
-  function firstBlockAtOrAfter(
-    blocks: UnknownXmlBlock[],
-    offset: number,
-  ): UnknownXmlBlock | undefined {
-    let low = 0;
-    let high = blocks.length;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      if (blocks[middle]!.rawStart < offset) low = middle + 1;
-      else high = middle;
-    }
-    return blocks[low];
+function closedBacktickRanges(src: string, end: number): TextRange[] {
+  const runs = new Map<number, number[]>();
+  const re = /`+/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(src)) !== null && match.index < end) {
+    const length = match[0].length;
+    const starts = runs.get(length) ?? [];
+    starts.push(match.index);
+    runs.set(length, starts);
   }
 
-  function scanFor(src: string, tokens?: Token[]): ScanContext | undefined {
-    if (!tokens) return undefined;
-    let context = contexts.get(tokens);
-    if (!context || !context.source.endsWith(src)) {
-      context = { source: src, blocks: findCompleteUnknownXmlBlocks(src) };
-      contexts.set(tokens, context);
+  const ranges: TextRange[] = [];
+  for (const [length, starts] of runs) {
+    for (let index = 0; index + 1 < starts.length; index += 2) {
+      const start = starts[index]!;
+      const close = starts[index + 1]!;
+      ranges.push({ start, end: Math.min(close + length, end) });
     }
-    currentContext = context;
-    return context;
+  }
+  return ranges;
+}
+
+function isInRange(offset: number, ranges: TextRange[]): boolean {
+  return ranges.some((range) => offset >= range.start && offset < range.end);
+}
+
+function updateKnownHtmlTags(stack: string[], tagText: string, name: string): void {
+  if (!isPreservedHtmlTag(name)) return;
+  if (tagText.startsWith("</")) {
+    if (stack.at(-1) === name) stack.pop();
+  } else if (!isSelfClosingTag(tagText) && !VOID_HTML_TAGS.has(name)) {
+    stack.push(name);
+  }
+}
+
+function findUnknownXmlCandidate(src: string): number | undefined {
+  if (src.indexOf("<") < 0) return undefined;
+
+  const blankLine = /(?:^|\n)[ \t]*(?:\n|$)/.exec(src);
+  const windowEnd = blankLine?.index ?? src.length;
+  const protectedRanges = closedBacktickRanges(src, windowEnd);
+  const openHtmlTags: string[] = [];
+  const tags = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
+  let tagCursor = 0;
+
+  for (let lineStart = 0; lineStart < windowEnd; ) {
+    while (true) {
+      tags.lastIndex = tagCursor;
+      const tag = tags.exec(src);
+      if (!tag || tag.index >= lineStart) break;
+      tagCursor = tags.lastIndex;
+      if (!isInRange(tag.index, protectedRanges)) {
+        const name = tag[1]?.toLowerCase();
+        if (name) updateKnownHtmlTags(openHtmlTags, tag[0], name);
+      }
+    }
+
+    if (!isInRange(lineStart, protectedRanges)) {
+      const lineTag = tagAtLineStart(src, lineStart);
+      if (lineTag) {
+        const tagText = lineTag[0];
+        const name = lineTag[1]?.toLowerCase();
+        if (name && isPreservedHtmlTag(name)) {
+          updateKnownHtmlTags(openHtmlTags, tagText, name);
+          tagCursor = lineStart + tagText.indexOf("<") + tagText.length;
+        } else if (openHtmlTags.length === 0 && name && !tagText.startsWith("</") && !isSelfClosingTag(tagText)) {
+          const end = matchUnknownXmlBlockAt(src, lineStart);
+          return end === undefined ? undefined : lineStart;
+        } else if (lineTag) {
+          tagCursor = lineStart + tagText.indexOf("<") + tagText.length;
+        }
+      }
+    }
+
+    const nextNewline = src.indexOf("\n", lineStart);
+    if (nextNewline < 0 || nextNewline + 1 >= windowEnd) break;
+    lineStart = nextNewline + 1;
   }
 
+  return undefined;
+}
+
+function unknownXmlBlockExtension(): TokenizerExtension {
   return {
     name: "unknownXmlBlock",
     level: "block",
     start(src) {
-      if (!currentContext || !currentContext.source.endsWith(src)) return undefined;
-      const offset = currentContext.source.length - src.length;
-      const block = firstBlockAtOrAfter(currentContext.blocks, offset);
-      if (!block) return undefined;
-      const prefix = currentContext.source.slice(offset, block.rawStart);
-      if (!/^(?:[ \t\n]*|(?:<\/[A-Za-z][A-Za-z0-9:_-]*[ \t]*>[ \t\n]*)+)$/.test(prefix)) {
-        return undefined;
-      }
-      return block.rawStart - offset;
+      const candidate = findUnknownXmlCandidate(src);
+      return candidate === 0 ? undefined : candidate;
     },
-    tokenizer(src, tokens) {
-      const scan = scanFor(src, tokens);
-      if (!scan) return undefined;
-      const offset = scan.source.length - src.length;
-      const block = firstBlockAtOrAfter(scan.blocks, offset);
-      if (!block) return undefined;
-      if (block.rawStart !== offset) {
-        const prefixLength = block.rawStart - offset;
-        const prefix = src.slice(0, prefixLength);
-        if (prefixLength <= 0) return undefined;
-        return {
-          type: "unknownXmlBlock",
-          raw: prefix,
-          tokens: this.lexer.blockTokens(prefix, []),
-        };
-      }
-      const raw = src.slice(0, block.end - block.rawStart);
-      return {
-        type: "code",
-        raw,
-        text: raw,
-      };
+    tokenizer(src) {
+      const end = matchUnknownXmlBlockAt(src, 0);
+      if (end === undefined) return undefined;
+      const raw = src.slice(0, end);
+      return { type: "code", raw, text: raw };
     },
-    renderer(token) {
-      const prefixToken = token as Token & { tokens: MarkdownToken[] };
-      return this.parser.parse(escapeCustomXmlTokens(prefixToken.tokens));
+  };
+}
+
+function unknownXmlHtmlBoundary() {
+  return {
+    html(src: string) {
+      if (/^<(?:!|\?|script\b|pre\b|style\b|textarea\b)/i.test(src)) return false;
+      const candidate = findUnknownXmlCandidate(src);
+      if (candidate === undefined || candidate === 0) return false;
+
+      const token = Tokenizer.prototype.html.call(this, src);
+      if (!token || token.raw.length <= candidate) return token;
+      const raw = token.raw.slice(0, candidate);
+      return { ...token, raw, text: raw };
     },
   };
 }
@@ -413,12 +377,16 @@ function createParser(
       bashWrapperExtension("bashStdout", "bash-stdout", "", ""),
       bashWrapperExtension("bashStderr", "bash-stderr", "", ""),
     ],
+    ...(renderUnknownXmlBlocksAsPreformatted
+      ? { tokenizer: unknownXmlHtmlBoundary() }
+      : {}),
   });
 
   return instance;
 }
 
 const parser = createParser(false);
+const preformattedParser = createParser(true);
 
 type RenderCacheEntry = [string | undefined, string | undefined];
 
@@ -435,10 +403,6 @@ function getApiBase(): string {
 
 function resolveAssetURLs(text: string): string {
   return text.replace(/asset:\/\/([^\s)]+)/g, `${getApiBase()}/assets/$1`);
-}
-
-function normalizeLineEndings(text: string): string {
-  return text.replace(/\r\n|\r/g, "\n");
 }
 
 function isPreservedHtmlTag(name: string): boolean {
@@ -556,11 +520,8 @@ export function renderMarkdown(text: string, options: MarkdownRenderOptions = {}
   if (cached !== undefined) return cached;
 
   const resolvedText = resolveAssetURLs(text);
-  const markdownParser = renderUnknownXmlBlocksAsPreformatted ? createParser(true) : parser;
-  const parserInput = renderUnknownXmlBlocksAsPreformatted
-    ? normalizeLineEndings(resolvedText)
-    : resolvedText;
-  const resolved = escapeCustomXmlTags(parserInput, markdownParser);
+  const markdownParser = renderUnknownXmlBlocksAsPreformatted ? preformattedParser : parser;
+  const resolved = escapeCustomXmlTags(resolvedText, markdownParser);
   const html = markdownParser.parser(resolved) as string;
   const safe = DOMPurify.sanitize(html);
 

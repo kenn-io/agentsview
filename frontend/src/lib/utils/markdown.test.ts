@@ -361,7 +361,7 @@ describe("renderMarkdown", () => {
       );
     });
 
-    it("normalizes CRLF before matching complete blocks", () => {
+    it("uses marked line ending normalization before matching complete blocks", () => {
       const dom = parseHTML(
         renderMarkdown("<policy>\r\n# heading\r\n</policy>", {
           renderUnknownXmlBlocksAsPreformatted: true,
@@ -520,14 +520,22 @@ describe("renderMarkdown", () => {
       for (const source of [
         "<one>\n# one\n</one>\nIntro **text**\n<two>\n# two\n</two>",
         "<one>\n# one\n</one>\n- Intro **text**\n  <two>\n  # two\n  </two>",
+        "<one>\n# one\n</one>\nIntro **outside**\n\n- Intro **inside**\n  <two>\n  # two\n  </two>",
       ]) {
         const dom = parseHTML(
           renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
         );
 
-        expect(dom.querySelector("strong")?.textContent).toBe("text");
+        if (source.includes("Intro **text**")) {
+          expect(dom.querySelector("strong")?.textContent).toBe("text");
+        } else {
+          expect(dom.querySelector("strong")).not.toBeNull();
+        }
         expect(dom.querySelectorAll("pre > code")).toHaveLength(2);
         expect(dom.querySelector("h1")).toBeNull();
+        if (source.includes("- Intro")) {
+          expect(dom.querySelector("li pre > code")).not.toBeNull();
+        }
       }
     });
 
@@ -541,6 +549,11 @@ describe("renderMarkdown", () => {
         );
 
         expect(dom.querySelector("pre > code")?.textContent).toContain("<policy>");
+        expect(
+          source.startsWith("-")
+            ? dom.querySelector("li pre > code")
+            : dom.querySelector("blockquote pre > code"),
+        ).not.toBeNull();
         expect(dom.querySelector("h1")).toBeNull();
       }
     });
@@ -573,13 +586,59 @@ describe("renderMarkdown", () => {
       expect(dom.textContent).not.toContain("</div>");
     });
 
-    it("rescans each transformed list item independently", () => {
+    it("captures one block in the second list item", () => {
       const source = "- Intro <policy>\n  # heading\n  </policy>\n- <policy>\n  # heading\n  </policy>";
       const dom = parseHTML(
         renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
       );
 
       expect(dom.querySelectorAll("pre > code")).toHaveLength(1);
+      expect(dom.querySelector("li pre > code")?.textContent).toContain("<policy>");
+    });
+
+    it("keeps blocks inside ordered, nested, and sibling list items", () => {
+      const source = [
+        "1. <ordered>\n   # one\n   </ordered>",
+        "- outer\n  - <nested>\n    # two\n    </nested>",
+        "- <first>\n  # one\n  </first>\n- <second>\n  # two\n  </second>",
+      ].join("\n");
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelector("ol li pre > code")?.textContent).toContain("<ordered>");
+      expect(dom.querySelector("ul ul li pre > code")?.textContent).toContain("<nested>");
+      expect(dom.querySelectorAll("ul > li > pre > code")).toHaveLength(3);
+    });
+
+    it("captures an independent block after malformed nesting and a blank line", () => {
+      const source = "<outer>\n<inner>\n</outer>\n\n<later>\n# later\n</later>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelectorAll("pre > code")).toHaveLength(1);
+      expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
+      expect(dom.querySelector("h1")).toBeNull();
+    });
+
+    it("does not recover a malformed block without a blank-line boundary", () => {
+      const source = "Intro\n<policy>\n<rule>\n# heading\n</rule>\n</wrong>\n</policy>\nAfter";
+      const omitted = renderMarkdown(source);
+      const enabled = renderMarkdown(source, {
+        renderUnknownXmlBlocksAsPreformatted: true,
+      });
+
+      expect(enabled).toBe(omitted);
+      expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
+    });
+
+    it("bounds the candidate search for Markdown without unknown tags", () => {
+      const source = "Intro **text**\n\n- one\n- two\n\n> quoted\n\n```\ncode\n```";
+
+      expect(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      ).toBe(renderMarkdown(source));
     });
 
     it("captures complete blocks with up to three leading spaces", () => {
