@@ -397,28 +397,25 @@ function findUnknownXmlCandidate(src: string): number | undefined {
   return undefined;
 }
 
-function candidateInsideOmittedInlineCode(src: string, candidate: number): boolean {
-  if (candidate <= 0 || src.slice(0, candidate).includes("`")) return false;
-  const sourceWithOpening = `\`${src}`;
-  const ranges = markdownCodeRanges(sourceWithOpening, sourceWithOpening.length);
-  return isInRange(candidate + 1, ranges);
-}
-
 function unknownXmlBlockExtension(): TokenizerExtension {
   return {
     name: "unknownXmlBlock",
     level: "block",
-    start(src) {
-      const candidate = findUnknownXmlCandidate(src);
-      return candidate === undefined || candidate === 0 || candidateInsideOmittedInlineCode(src, candidate)
-        ? undefined
-        : candidate;
-    },
     tokenizer(src) {
       const end = matchUnknownXmlBlockAt(src, 0);
       if (end === undefined) return undefined;
       const raw = src.slice(0, end);
       return { type: "code", raw, text: raw };
+    },
+  };
+}
+
+function unknownXmlParagraphBoundary() {
+  return {
+    paragraph(src: string) {
+      const candidate = findUnknownXmlCandidate(src);
+      if (candidate === undefined || candidate === 0) return false;
+      return Tokenizer.prototype.paragraph.call(this, src.slice(0, candidate)) ?? false;
     },
   };
 }
@@ -456,7 +453,7 @@ function createParser(
       bashWrapperExtension("bashStderr", "bash-stderr", "", ""),
     ],
     ...(renderUnknownXmlBlocksAsPreformatted
-      ? { tokenizer: unknownXmlHtmlBoundary() }
+      ? { tokenizer: { ...unknownXmlHtmlBoundary(), ...unknownXmlParagraphBoundary() } }
       : {}),
   });
 

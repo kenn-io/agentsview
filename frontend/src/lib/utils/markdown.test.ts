@@ -714,17 +714,31 @@ describe("renderMarkdown", () => {
     });
 
     it("keeps a multiline inline span opened at source start intact", () => {
-      const source = "`before\n<later>\nbody\n</later>\nafter`";
-      const omitted = renderMarkdown(source);
-      const enabled = renderMarkdown(source, {
-        renderUnknownXmlBlocksAsPreformatted: true,
-      });
+      for (const source of [
+        "`before\n<later>\nbody\n</later>\nafter`",
+        "`before `` inner\n<later>\nbody\n</later>\nafter`",
+      ]) {
+        const omitted = renderMarkdown(source);
+        const enabled = renderMarkdown(source, {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        });
 
-      expect(enabled).toBe(omitted);
-      expect(parseHTML(enabled).querySelector("p > code")?.textContent).toContain(
-        "<later> body </later>",
+        expect(enabled).toBe(omitted);
+        expect(parseHTML(enabled).querySelector("p > code")?.textContent).toContain(
+          "<later> body </later>",
+        );
+        expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
+      }
+    });
+
+    it("captures a block before a later unmatched inline delimiter", () => {
+      const source = "Intro\n<later>\n# later\n</later>\nafter `code`";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
       );
-      expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
+
+      expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
+      expect(dom.querySelector("h1")).toBeNull();
     });
 
     it("keeps internal whitespace inside the captured block", () => {
