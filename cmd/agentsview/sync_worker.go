@@ -105,6 +105,9 @@ func runSyncWorker(cfg config.Config, mode string, out io.Writer) error {
 func runSyncWorkerContext(
 	ctx context.Context, cfg config.Config, mode string, out io.Writer,
 ) error {
+	stopProfile := startSyncWorkerProfile(mode)
+	defer stopProfile()
+
 	enc := jsontext.NewEncoder(out)
 	// Retain the first encode error: a dropped terminal-result line means the
 	// parent never sees the outcome, so the worker must exit non-zero even if the

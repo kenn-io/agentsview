@@ -264,3 +264,21 @@ Set `AGENTSVIEW_BENCH_SNAPSHOT_REPETITIONS=16` for repeated identities.
 fixture size. Run `BenchmarkDailyUsageHeap/postgres` with
 `-benchtime 1x -count 1` for one and four concurrent cold requests and post-GC
 heap measurements. Use identical fixture source on main and the candidate.
+
+## Profiling spawned sync workers
+
+A normal `sync --full` can send work through a daemon to a separate sync worker.
+The CLI's `--cpuprofile`, `--memprofile`, and `--trace` flags capture only the
+CLI process. To capture the worker, set `AGENTSVIEW_SYNC_PROFILE_DIR` before
+starting an isolated daemon. Spawned workers inherit it and write CPU and memory
+profiles into a separate private `sync-worker-<mode>-<pid>-<suffix>` directory
+under that root. Filenames are `cpu.pprof` and `memory.pprof`. The memory
+profile is captured after a final garbage collection; use its `alloc_space`
+sample for allocation volume rather than treating it as peak live memory.
+
+Set `AGENTSVIEW_SYNC_PROFILE_TRACE=true` as well to write `runtime.trace`.
+Tracing is separate because a full archive rebuild can produce a large trace.
+Profiling is disabled by default. An invalid trace value or inaccessible output
+directory logs a diagnostic and leaves the sync pass running without worker
+profiling. Existing daemons must restart in the isolated environment to inherit
+these settings. Use disposable source and archive clones for profiling.
