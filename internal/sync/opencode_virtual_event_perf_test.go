@@ -16,8 +16,9 @@ import (
 )
 
 func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
-	for _, v2 := range []bool{false, true} {
-		t.Run(fmt.Sprintf("v2_%t", v2), func(t *testing.T) {
+	for _, layout := range []string{"v1", "v2", "mixed"} {
+		t.Run(layout, func(t *testing.T) {
+			v2 := layout != "v1"
 			var allocations []float64
 			for _, count := range []int{8, 800} {
 				t.Run(fmt.Sprint(count), func(t *testing.T) {
@@ -32,9 +33,12 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 					})
 					if v2 {
 						// The current beta has session_v2 and no v1 child tables.
-						_, err := oc.db.Exec(`DROP TABLE part; DROP TABLE message;
- ALTER TABLE session RENAME TO session_v2;
- CREATE TABLE session_message (
+						metadataDDL := "DROP TABLE part; DROP TABLE message; ALTER TABLE session RENAME TO session_v2;"
+						if layout == "mixed" {
+							metadataDDL = `CREATE TABLE session_v2 AS SELECT * FROM session WHERE id != 'ses00001';
+                            CREATE UNIQUE INDEX session_v2_id_idx ON session_v2(id);`
+						}
+						_, err := oc.db.Exec(metadataDDL + `CREATE TABLE session_message (
  id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES session_v2(id) ON DELETE CASCADE,
  type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
  time_updated INTEGER NOT NULL, data TEXT NOT NULL);
@@ -64,6 +68,10 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 					}
 					_, err := oc.db.Exec("DELETE FROM " + table + " WHERE id = 'ses00000'")
 					require.NoError(t, err)
+					if layout == "mixed" {
+						_, err = oc.db.Exec("DELETE FROM session WHERE id = 'ses00000'")
+						require.NoError(t, err)
+					}
 					require.NoError(t, env.engine.SyncPathsContext(t.Context(), []string{path}))
 					stored, err := env.db.GetSessionFull(t.Context(), "opencode:ses00000")
 					require.NoError(t, err)
@@ -76,6 +84,7 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 					assert.Nil(t, other.SourceMissingAt)
 				})
 			}
+			require.Len(t, allocations, 2)
 			assert.Less(t, allocations[1], allocations[0]*3,
 				"an existing virtual member must not trigger archive-wide absence checks")
 		})

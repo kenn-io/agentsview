@@ -7,14 +7,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestOpenCodeV2BetaWorkflow(t *testing.T) {
-	// The beta CLI produced these tables through three real prompts. Keeping
+	// The beta CLI produced these tables through four real prompts. Keeping
 	// its schema catches assumptions about legacy tables that hand-built
 	// projection-only fixtures cannot catch.
 	raw, err := os.ReadFile("testdata/opencode_v2/beta.sql")
@@ -45,6 +47,7 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Equal(t, "/workspace/project-a", sess.Cwd)
 	assert.Equal(t, 2, sess.UserMessageCount)
+	assert.True(t, time.UnixMilli(1788972159327).Equal(sess.EndedAt))
 	require.Len(t, msgs, 5)
 	assert.Contains(t, msgs[0].Content, "Read input.txt using the read tool.")
 	require.Len(t, msgs[1].ToolCalls, 1)
@@ -237,7 +240,7 @@ func TestOpenCodeV2MixedDatabase(t *testing.T) {
 		seed.AddMessage("msg_"+id, id, 1700000000000, 1700000000000, `{"role":"user"}`)
 		seed.AddPart("prt_"+id, "msg_"+id, id, 1700000000000, 1700000000000, `{"type":"text","text":"Legacy conversation"}`)
 	}
-	_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_v2', 'ses_v2', 'user', 1, 1700000000000, 1700000000000, '{"text":"Projected conversation"}')`)
+	_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_ses_v2', 'ses_v2', 'user', 1, 1700000000000, 1700000000000, '{"text":"Projected conversation"}')`)
 	require.NoError(t, err)
 	for _, tc := range []struct{ id, text string }{{"ses_v1", "Legacy conversation"}, {"ses_v2", "Projected conversation"}} {
 		t.Run(tc.id, func(t *testing.T) {
@@ -286,12 +289,17 @@ func TestOpenCodeV2ToolStates(t *testing.T) {
 
 func TestOpenCodeV2MessageKinds(t *testing.T) {
 	for _, tc := range []struct {
-		kind, data, content          string
-		system, tool, usage, invalid bool
+		kind, data, content                   string
+		system, compact, tool, usage, invalid bool
 	}{
 		{kind: "system", data: `{"text":"System context"}`, content: "System context", system: true},
 		{kind: "synthetic", data: `{"text":"Injected context"}`, content: "Injected context", system: true},
-		{kind: "compaction", data: `{"summary":"Earlier work summary","recent":"recent context","reason":"auto"}`, content: "Earlier work summary", system: true},
+		{kind: "skill", data: `{"skill":"skill_a","name":"review","text":"Review instructions"}`, content: "Review instructions", system: true},
+		{kind: "compaction", data: `{"status":"completed","summary":"Earlier work summary","recent":"recent context","reason":"auto"}`, content: "Earlier work summary", system: true, compact: true},
+		{kind: "compaction", data: `{"status":"running","summary":"Partial summary","recent":"","reason":"manual"}`, content: "Partial summary", system: true},
+		{kind: "user", data: `{"text":"","files":[{"name":"input.txt","mime":"text/plain","data":"YWxwaGEK","source":{"type":"inline"}}]}`, content: "[Attachment: input.txt]\nalpha\n"},
+		{kind: "user", data: `{"text":"Inspect this","files":[{"name":"plot.png","mime":"image/png","data":"","source":{"type":"inline"}}]}`, content: "Inspect this\n[Attachment: plot.png]"},
+		{kind: "user", data: `{"text":"","files":[{"name":"input.txt","mime":"text/plain","uri":"file:///workspace/project-a/input.txt"}]}`, content: "[Attachment: input.txt]"},
 		{kind: "shell", data: `{"command":"echo hello","callID":"call_shell","output":"hello\n","time":{"created":1700000000000,"completed":1700000001000}}`, content: "echo hello", tool: true},
 		{kind: "shell", data: `{"command":"echo hello","shellID":"shell_a","status":"exited","exit":0,"output":{"output":"hello\n","cursor":6,"size":6,"truncated":false},"time":{"created":1700000000000,"completed":1700000001000}}`, content: "echo hello", tool: true},
 		{kind: "assistant", data: `{"model":{"id":"gpt-5.4"},"content":[],"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}`, usage: true},
@@ -316,6 +324,7 @@ func TestOpenCodeV2MessageKinds(t *testing.T) {
 			require.Len(t, msgs, 1)
 			assert.Equal(t, tc.content, msgs[0].Content)
 			assert.Equal(t, tc.system, msgs[0].IsSystem)
+			assert.Equal(t, tc.compact, msgs[0].IsCompactBoundary)
 			assert.Equal(t, tc.tool, msgs[0].HasToolUse)
 			if tc.system {
 				assert.Zero(t, sess.UserMessageCount)
@@ -334,4 +343,151 @@ func TestOpenCodeV2MessageKinds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOpenCodeV2CrossPathHistory(t *testing.T) {
+	// Reproduced with 1.18.25: the v2 API accepts an existing CLI session
+	// and appends projections without converting its older message/part rows.
+	path, seed, writer := newTestDB(t)
+	seed.AddProject("project-a", "/workspace/project-a")
+	seed.AddSession("ses_a", "project-a", "", "", 1000, 5000)
+	for i, text := range []string{"Earlier CLI prompt", "Legacy copy", "Later CLI prompt"} {
+		id := fmt.Sprintf("msg_%d", i)
+		seed.AddMessage(id, "ses_a", int64(i+1)*1000, int64(i+1)*1000, `{"role":"user"}`)
+		seed.AddPart("prt_"+id, id, "ses_a", int64(i+1)*1000, int64(i+1)*1000, fmt.Sprintf(`{"type":"text","text":%q}`, text))
+	}
+	_, err := writer.Exec(openCodeV2TestSchema)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO session_message VALUES
+ ('msg_1','ses_a','user',10,2000,2000,'{"text":"Projected copy"}'),
+ ('msg_a','ses_a','assistant',20,2500,2500,'{"content":[{"type":"text","text":"First projected reply"}]}'),
+ ('msg_b','ses_a','assistant',30,2400,2500,'{"content":[{"type":"text","text":"Second projected reply"}]}')`)
+	require.NoError(t, err)
+	sess, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 5)
+	assert.Equal(t, 3, sess.UserMessageCount)
+	for i, want := range []string{"Earlier CLI prompt", "Projected copy", "First projected reply", "Second projected reply", "Later CLI prompt"} {
+		assert.Equal(t, want, msgs[i].Content)
+		assert.Equal(t, i, msgs[i].Ordinal)
+	}
+}
+
+func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
+	path, seed, writer := newTestDB(t)
+	seed.AddProject("project-a", "/workspace/project-a")
+	for _, id := range []string{"ses_a", "ses_b"} {
+		seed.AddSession(id, "project-a", "", "", 1000, 2000)
+		seed.AddMessage("msg_"+id, id, 1000, 1000, `{"role":"user"}`)
+		seed.AddPart("prt_"+id, "msg_"+id, id, 1000, 1000, `{"type":"text","text":"Legacy prompt"}`)
+	}
+	// The beta migration leaves session/message/part in place and commits
+	// session_v2 metadata plus all its projections together, one session at a time.
+	_, err := writer.Exec(`CREATE TABLE session_v2 (
+ id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, title TEXT,
+ directory TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
+ time_idle INTEGER);
+ INSERT INTO session_v2 VALUES ('ses_b','project-a',NULL,NULL,'/workspace/project-a',1000,2000,4000),
+ ('ses_c','project-a',NULL,NULL,'/workspace/project-a',1000,2000,5000);`)
+	require.NoError(t, err)
+	_, err = writer.Exec(strings.ReplaceAll(openCodeV2TestSchema, "REFERENCES session(id)", "REFERENCES session_v2(id)"))
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO session_message VALUES
+ ('msg_ses_b','ses_b','user',1,1000,1000,'{"text":"Migrated prompt"}'),
+ ('msg_ses_c','ses_c','user',1,1000,1000,'{"text":"Beta prompt"}')`)
+	require.NoError(t, err)
+	full, err := ListOpenCodeSessionMeta(path)
+	require.NoError(t, err)
+	watermarks, err := ListOpenCodeSessionWatermarkMeta(path)
+	require.NoError(t, err)
+	require.Len(t, full, 3)
+	require.Len(t, watermarks, 3)
+	for i, tc := range []struct {
+		id, text string
+		ended    int64
+	}{
+		{"ses_a", "Legacy prompt", 2000}, {"ses_b", "Migrated prompt", 4000}, {"ses_c", "Beta prompt", 5000},
+	} {
+		assert.Equal(t, tc.id, full[i].SessionID)
+		assert.Equal(t, tc.id, watermarks[i].SessionID)
+		assert.True(t, OpenCodeSQLiteSessionExists(path, tc.id))
+		mtime, digest, composite, err := openCodeSessionCompositeMtime(writer, path, tc.id)
+		require.NoError(t, err)
+		assert.True(t, composite)
+		assert.Equal(t, full[i].FileMtime, mtime*1_000_000)
+		assert.Equal(t, full[i].ChildDigest, digest)
+		sess, msgs, err := parseOpenCodeDBSession(path, tc.id, "host-a")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, tc.text, msgs[0].Content)
+		assert.True(t, time.UnixMilli(tc.ended).Equal(sess.EndedAt))
+	}
+	// Execution completion alone must advance both passive and active freshness.
+	_, err = writer.Exec("UPDATE session_v2 SET time_idle = 6000 WHERE id = 'ses_c'")
+	require.NoError(t, err)
+	next, err := ListOpenCodeSessionWatermarkMeta(path)
+	require.NoError(t, err)
+	require.Len(t, next, 3)
+	assert.Equal(t, int64(6000_000_000), next[2].FileMtime)
+	mtime, err := OpenCodeSourceMtime(path + "#ses_c")
+	require.NoError(t, err)
+	assert.Equal(t, int64(6000_000_000), mtime)
+	// The producer keeps v1 rows after migration, including after v2 deletion.
+	// Its descending cursor excludes copied IDs while older IDs remain visible.
+	_, err = writer.Exec(`CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+ INSERT INTO kv VALUES ('migration.v1-v2', '{"phase":"sessions","cursor":"ses_b"}');
+ DELETE FROM session_v2 WHERE id = 'ses_b'`)
+	require.NoError(t, err)
+	full, err = ListOpenCodeSessionMeta(path)
+	require.NoError(t, err)
+	require.Len(t, full, 2)
+	assert.Equal(t, "ses_a", full[0].SessionID)
+	assert.Equal(t, "ses_c", full[1].SessionID)
+	assert.False(t, OpenCodeSQLiteSessionExists(path, "ses_b"))
+	_, _, found, err := openCodeSQLiteSessionWatermarkOnly(t.Context(), path, "ses_b")
+	require.NoError(t, err)
+	assert.False(t, found)
+	_, err = writer.Exec(`UPDATE kv SET value = '{"phase":"completed"}' WHERE key = 'migration.v1-v2'`)
+	require.NoError(t, err)
+	watermarks, err = ListOpenCodeSessionWatermarkMeta(path)
+	require.NoError(t, err)
+	require.Len(t, watermarks, 1)
+	assert.Equal(t, "ses_c", watermarks[0].SessionID)
+	assert.False(t, OpenCodeSQLiteSessionExists(path, "ses_a"))
+}
+
+func TestOpenCodeV2CapturedAttachmentCompaction(t *testing.T) {
+	// Captured from beta 19381's prompt and compact APIs. The request had no
+	// prompt text and carried input.txt as an inline text attachment.
+	raw, err := os.ReadFile("testdata/opencode_v2/attachment_compaction.json")
+	require.NoError(t, err)
+	var rows []struct {
+		ID      string         `json:"id"`
+		Type    string         `json:"type"`
+		Seq     int64          `json:"seq"`
+		Created int64          `json:"time_created"`
+		Updated int64          `json:"time_updated"`
+		Data    jsontext.Value `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &rows))
+	path, seed, writer := newTestDB(t)
+	seed.AddProject("project-a", "/workspace/project-a")
+	seed.AddSession("ses_a", "project-a", "", "", 1788977900000, 1788977920000)
+	_, err = writer.Exec(openCodeV2TestSchema)
+	require.NoError(t, err)
+	for _, row := range rows {
+		_, err = writer.Exec(`INSERT INTO session_message VALUES (?, 'ses_a', ?, ?, ?, ?, ?)`, row.ID, row.Type, row.Seq, row.Created, row.Updated, string(row.Data))
+		require.NoError(t, err)
+	}
+	sess, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 4)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "[Attachment: input.txt]\nalpha\nbeta\ngamma\n", msgs[0].Content)
+	assert.True(t, msgs[3].IsSystem)
+	assert.True(t, msgs[3].IsCompactBoundary)
+	assert.Contains(t, msgs[3].Content, "The user shared a file `input.txt` containing three lines")
 }

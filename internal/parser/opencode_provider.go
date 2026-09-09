@@ -1064,14 +1064,19 @@ func openCodeSQLiteSessionWatermarkOnly(
 	if err != nil {
 		return 0, false, false, err
 	}
-	table, err := openCodeSessionTableCached(db, dbPath)
+	table, err := openCodeSessionTableCached(db, dbPath, sessionID)
 	if err != nil {
 		return 0, false, false, err
 	}
-	query := "SELECT s.time_updated FROM " + table + " s WHERE s.id = ?"
+	from, err := openCodeSessionFromCached(db, dbPath, table)
+	if err != nil {
+		return 0, false, false, err
+	}
+
+	query := "SELECT s.time_updated FROM " + from + " s WHERE s.id = ?"
 	if composite {
 		query = "SELECT " + openCodeSessionRowWatermarkExpr +
-			" FROM " + table + " s" + openCodeSessionCompositeMtimeJoins +
+			" FROM " + from + " s" + openCodeSessionCompositeMtimeJoins +
 			" WHERE s.id = ?"
 	}
 	err = db.QueryRowContext(ctx, query, sessionID).Scan(&watermark)

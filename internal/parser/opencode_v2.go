@@ -3,48 +3,98 @@ package parser
 import (
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 )
 
-// Current beta databases store metadata in session_v2. Early v2 previews used
-// session alongside the v1 tables. Never query v1 children in the current layout.
-func openCodeSessionTable(db *sql.DB) (string, error) {
-	has, err := openCodeTableHasColumn(db, "session_v2", "id")
-	if err != nil {
-		return "", err
-	}
-	if has {
-		return "session_v2", nil
-	}
-	return "session", nil
-}
-
-func openCodeSessionTableCached(db *sql.DB, dbPath string) (string, error) {
+// Upgrades retain v1 tables and copy one complete session at a time. Prefer
+// session_v2 only for IDs already copied; legacy-only IDs remain discoverable.
+func openCodeSessionTablesCached(db *sql.DB, dbPath string) ([]string, bool, bool, error) {
 	state, cacheable := StatSQLiteContainerState(dbPath)
 	openCodeSessionSchemaCacheMu.Lock()
 	entry, hit := openCodeSessionSchemaCache[dbPath]
 	openCodeSessionSchemaCacheMu.Unlock()
-	if cacheable && hit && entry.state == state && entry.sessionTable != "" {
-		return entry.sessionTable, nil
+	if cacheable && hit && entry.state == state && entry.sessionTables != nil {
+		return entry.sessionTables, entry.hasTimeIdle, entry.hasMigrationState, nil
 	}
-	table, err := openCodeSessionTable(db)
-	if err != nil || !cacheable {
-		return table, err
+	var tables []string
+	for _, table := range []string{"session_v2", "session"} {
+		has, err := openCodeTableHasColumn(db, table, "id")
+		if err != nil {
+			return nil, false, false, err
+		}
+		if has {
+			tables = append(tables, table)
+		}
 	}
-	openCodeSessionSchemaCacheMu.Lock()
-	previous := openCodeSessionSchemaCache[dbPath]
-	if previous.state != state {
-		previous = openCodeSessionSchemaCacheEntry{state: state}
+	idle, err := openCodeTableHasColumn(db, "session_v2", "time_idle")
+	if err != nil {
+		return nil, false, false, err
 	}
-	previous.sessionTable = table
-	openCodeSessionSchemaCache[dbPath] = previous
-	openCodeSessionSchemaCacheMu.Unlock()
-	return table, nil
+	migration, err := openCodeTableHasColumn(db, "kv", "value")
+	if err != nil {
+		return nil, false, false, err
+	}
+	if len(tables) == 0 {
+		tables = []string{"session"}
+	}
+	if cacheable {
+		openCodeSessionSchemaCacheMu.Lock()
+		previous := openCodeSessionSchemaCache[dbPath]
+		if previous.state != state {
+			previous = openCodeSessionSchemaCacheEntry{state: state}
+		}
+		previous.sessionTables, previous.hasTimeIdle, previous.hasMigrationState = tables, idle, migration
+		openCodeSessionSchemaCache[dbPath] = previous
+		openCodeSessionSchemaCacheMu.Unlock()
+	}
+	return tables, idle, migration, nil
+}
+
+func openCodeSessionTableCached(db *sql.DB, dbPath, sessionID string) (string, error) {
+	tables, _, _, err := openCodeSessionTablesCached(db, dbPath)
+	if err != nil {
+		return "", err
+	}
+	if len(tables) == 2 {
+		var found bool
+		if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM session_v2 WHERE id = ?)", sessionID).Scan(&found); err != nil {
+			return "", err
+		}
+		if !found {
+			return "session", nil
+		}
+	}
+	return tables[0], nil
+}
+
+// Fold terminal activity into the metadata watermark as well as EndedAt. The
+// beta deliberately leaves time_updated unchanged when execution becomes idle.
+func openCodeSessionFrom(table string, idle, migration bool) string {
+	if table == "session" && migration {
+		// Migration walks IDs descending and commits its cursor with each copy.
+		// Retained v1 rows at/above it are backups, even after a v2 deletion.
+		return `(SELECT * FROM session WHERE NOT EXISTS (
+ SELECT 1 FROM kv WHERE key = 'migration.v1-v2' AND (
+ json_extract(value, '$.phase') = 'completed' OR
+ (json_extract(value, '$.phase') = 'sessions' AND session.id >= json_extract(value, '$.cursor')))))`
+	}
+	if table != "session_v2" || !idle {
+		return table
+	}
+	return `(SELECT id, project_id, parent_id, title, directory, time_created,
+  MAX(time_updated, COALESCE(time_idle, 0)) time_updated FROM session_v2)`
+}
+
+func openCodeSessionFromCached(db *sql.DB, dbPath, table string) (string, error) {
+	_, idle, migration, err := openCodeSessionTablesCached(db, dbPath)
+	return openCodeSessionFrom(table, idle, migration), err
 }
 
 const openCodeV2BaseCountsExpr = `s.time_updated, COALESCE(pr.time_updated, 0), 0, 0, '', ''`
@@ -104,7 +154,13 @@ type openCodeV2Message struct {
 	CallID  string         `json:"callID"`
 	ShellID string         `json:"shellID"`
 	Exit    int            `json:"exit"`
-	Model   struct {
+	Status  string         `json:"status"`
+	Files   []struct {
+		Name string `json:"name"`
+		MIME string `json:"mime"`
+		Data string `json:"data"`
+	} `json:"files"`
+	Model struct {
 		ID string `json:"id"`
 	} `json:"model"`
 	Content []openCodeV2Content `json:"content"`
@@ -162,6 +218,23 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 		switch kind {
 		case "user":
 			pm.Role, pm.Content = RoleUser, data.Text
+			for _, file := range data.Files {
+				name := file.Name
+				if name == "" {
+					name = file.MIME
+				}
+				attachment := "[Attachment: " + name + "]"
+				if strings.HasPrefix(file.MIME, "text/") {
+					decoded, err := base64.StdEncoding.DecodeString(file.Data)
+					if err == nil && utf8.Valid(decoded) && len(decoded) != 0 {
+						attachment += "\n" + string(decoded)
+					}
+				}
+				if pm.Content != "" {
+					pm.Content += "\n"
+				}
+				pm.Content += attachment
+			}
 		case "assistant":
 			pm.Role = RoleAssistant
 			var texts []string
@@ -183,9 +256,10 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 			}
 			pm.Content = strings.Join(texts, "\n")
 			applyOpenCodeTokenUsage(&pm, openCodeMessageData{ModelID: data.Model.ID}, raw, nil)
-		case "system", "synthetic", "compaction":
+		case "system", "synthetic", "skill", "compaction":
 			pm.Role, pm.IsSystem, pm.Content = RoleUser, true, data.Text
 			if kind == "compaction" {
+				pm.IsCompactBoundary = data.Status == "completed" || data.Status == ""
 				pm.Content = data.Summary
 			}
 		case "shell":
@@ -214,7 +288,7 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 			// Agent/model switches are session controls, not transcript messages.
 			continue
 		}
-		if strings.TrimSpace(pm.Content) == "" && !pm.HasToolUse && len(pm.TokenUsage) == 0 {
+		if strings.TrimSpace(pm.Content) == "" && !pm.HasToolUse && !pm.IsCompactBoundary && len(pm.TokenUsage) == 0 {
 			continue
 		}
 		pm.ContentLength = len(pm.Content)

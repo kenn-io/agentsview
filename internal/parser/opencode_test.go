@@ -2001,7 +2001,7 @@ func TestParseOpenCodeDB_LegacySchemaWithoutDirectoryUsesProjectWorktree(t *test
 
 	// Confirm the column is actually absent so the test would fail closed
 	// if the modern SELECT path were used.
-	hasDir, err := openCodeSessionTableHasDirectory(db)
+	hasDir, err := openCodeTableHasColumn(db, "session", "directory")
 	require.NoError(t, err)
 	require.False(t, hasDir, "legacy fixture must omit session.directory")
 
@@ -2019,7 +2019,7 @@ func TestParseOpenCodeDB_ModernSchemaDirectoryColumnDetected(t *testing.T) {
 	defer db.Close()
 	seedStandardSession(t, seeder)
 
-	hasDir, err := openCodeSessionHasDirectoryCached(db, dbPath)
+	hasDir, err := openCodeSessionHasDirectoryCached(db, dbPath, "session")
 	require.NoError(t, err)
 	assert.True(t, hasDir, "modern fixture must include session.directory")
 
