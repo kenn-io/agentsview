@@ -11853,6 +11853,79 @@ func TestSyncPathsVSCodeCopilotPersistsUsageEvents(t *testing.T) {
 	assert.Equal(t, "claude-opus-4-8", events[0].Model)
 }
 
+func TestSyncPathsCopilotUsesAssistantOutputFallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := t.TempDir()
+	sessionID := "cccccccc-dddd-eeee-ffff-000000000000"
+	path := filepath.Join(root, "session-state", sessionID, "events.jsonl")
+	dbtest.WriteTestFile(t, path, []byte(strings.Join([]string{
+		`{"type":"session.start","data":{"sessionId":"` + sessionID + `"},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"hi","model":"claude-sonnet-4.6","outputTokens":42},"timestamp":"2026-06-15T10:00:02Z"}`,
+	}, "\n")+"\n"))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCopilot: {root},
+		},
+		Machine: "local",
+	})
+
+	engine.SyncPaths([]string{path})
+
+	events, err := database.GetUsageEvents(t.Context(), "copilot:"+sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, events, "fallback is stored on the assistant message")
+
+	daily, err := database.GetDailyUsage(t.Context(), db.UsageFilter{
+		From:     "2026-06-15",
+		To:       "2026-06-15",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 42, daily.Totals.OutputTokens)
+	assert.Equal(t, []string{"claude-sonnet-4-6"}, daily.Daily[0].ModelsUsed)
+}
+
+func TestSyncPathsCopilotShutdownUsageSuppressesAssistantFallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := t.TempDir()
+	sessionID := "dddddddd-eeee-ffff-0000-000000000000"
+	path := filepath.Join(root, "session-state", sessionID, "events.jsonl")
+	dbtest.WriteTestFile(t, path, []byte(strings.Join([]string{
+		`{"type":"session.start","data":{"sessionId":"` + sessionID + `"},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"hi","model":"claude-sonnet-4.6","outputTokens":42},"timestamp":"2026-06-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"2026-06-15T10:01:00Z"}`,
+	}, "\n")+"\n"))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCopilot: {root},
+		},
+		Machine: "local",
+	})
+
+	engine.SyncPaths([]string{path})
+
+	daily, err := database.GetDailyUsage(t.Context(), db.UsageFilter{
+		From:     "2026-06-15",
+		To:       "2026-06-15",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 50, daily.Totals.OutputTokens,
+		"authoritative shutdown totals must replace assistant fallback data")
+}
+
 func TestSyncPathsPositronJSONLPriority(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")

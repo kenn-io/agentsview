@@ -471,7 +471,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (102: Cursor legacy text transcripts now preserve nonempty tool-result
 // bodies as result events. Existing Cursor rows need re-parsing to recover
 // output from unchanged source files.)
-const dataVersion = 102
+// (103: Copilot assistant output is reported without a shutdown summary.)
+const dataVersion = 103
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
