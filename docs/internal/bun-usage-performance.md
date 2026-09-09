@@ -367,3 +367,43 @@ run through the gate unchanged.
 
 Reproduce with `BenchmarkGetAnalyticsToolsYearRange` in `internal/db`, using
 `CGO_ENABLED=1 go test -tags fts5 ./internal/db -run '^$' -bench '^BenchmarkGetAnalyticsToolsYearRange$' -benchtime=10x -count=3 -benchmem`.
+
+## Fresh-sync text validation
+
+A local Linux comparison against commit `6bd839629` used the same copied
+Claude/Codex corpus, an empty isolated archive per run, warmed source files, and
+worker CPU/heap profiling. Unchanged controls took 143.216 and 143.145 seconds.
+Skipping eight printable ASCII bytes per sanitizer check took 133.896 and
+126.578 seconds, about 9.0% less time on average. Sampled peak anonymous memory
+was 813–822 MB for the controls and 776–795 MB for the candidate. These are
+local incremental measurements, not a comparison with the current default branch
+or proof that the external regression is resolved.
+
+The fast path skips only printable ASCII. Unicode, controls, invalid UTF-8, and
+short tails retain the existing scalar validation and repair behavior. The
+transcript sanitizer microbenchmark fell from about 9.49 to 3.31 microseconds
+without allocations. A standard-library alternative measured 4.26 microseconds
+and 136.672–138.691 seconds on the same full corpus, so the block scan is
+retained despite its less obvious byte arithmetic.
+
+Archive session upserts also reuse registry-derived preserved columns and
+conflict SQL. Three fixed-iteration samples reduced allocation from 391–394 KB
+and 918–920 allocations per message-batch operation to about 376 KB and 901–902
+allocations. Timing was noisy and does not establish a separate speed
+improvement. Reducing statement payload limits from 1 MiB to 256 or 64 KiB did
+not improve the tested writes consistently and increased short-message cost; the
+1 MiB limit remains.
+
+The combined block scan and cached session SQL completed a final local run in
+126.981 seconds, 11.3% below the unchanged control average, with 799 MB sampled
+peak anonymous memory. All runs imported 13,967 sessions and reported 3,954
+sanitized fields. External BenchDB results for the preceding commit still
+measured fresh sync at 433.982 seconds against 398.332 seconds on its latest
+default baseline, an 8.95% regression. The combined change requires a new
+external run before claiming that gap is closed.
+
+Sorted SHA-256 comparisons of stored message text, tool-call payloads, and
+tool-result payloads and raw digests matched the unchanged control: 816,220
+messages, 628,068 tool calls, and 567,881 result events. Full database, sync,
+DuckDB, and PostgreSQL unit suites and focused PostgreSQL sanitization and
+curation integration tests passed, along with formatting, vet, and CI lint.

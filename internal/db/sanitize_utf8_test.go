@@ -18,11 +18,21 @@ func TestSanitizeUTF8PreservesCleanTextAndRepairsControls(t *testing.T) {
 		{"terminal controls", "a\x1b]0;title\x07b\x7f", "a]0;titleb"},
 		{"unicode controls", "a\u0080b\u009fc\u00a0", "abc\u00a0"},
 		{"invalid utf8", "a\xff\xfeb\xe2\x82", "ab"},
+		{"ascii bounds", " !~\x7f\x1f", " !~"},
+		{"mixed byte controls", "\x00 \xff~\x7f", " ~"},
+		{"clean c2 prefix", "\u00a0\u00a3\u00a9\u00bf", "\u00a0\u00a3\u00a9\u00bf"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := SanitizeUTF8(tc.input)
 			require.Equal(t, tc.want, got)
 			require.Equal(t, tc.want, SanitizeUTF8(got))
+			// Put controls and multi-byte runes across each block boundary.
+			for offset := range 16 {
+				prefix := strings.Repeat("a", offset)
+				const suffix = " ordinary text"
+				require.Equal(t, prefix+tc.want+suffix,
+					SanitizeUTF8(prefix+tc.input+suffix), "offset %d", offset)
+			}
 		})
 	}
 }

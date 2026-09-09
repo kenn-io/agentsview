@@ -754,7 +754,7 @@ func upsertArchiveSessionRow(
 	var current bunmodel.Session
 	err = store.NewSelect().Model(&current).
 		Column("project", "session_name").
-		Column(bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive)...).
+		Column(canonicalArchiveSessionColumns...).
 		Where("id = ?", s.ID).Scan(ctx)
 	inserted := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !inserted {
@@ -811,7 +811,7 @@ func upsertArchiveSessionRow(
 	normalizeCanonicalSessionTimestampPrecision(&row)
 	if err := UpsertSessionRow(
 		ctx, store, row,
-		bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive)...,
+		canonicalArchiveSessionColumns...,
 	); err != nil {
 		return sessionUpsertResult{}, err
 	}

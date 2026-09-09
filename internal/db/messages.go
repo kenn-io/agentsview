@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
@@ -2534,6 +2535,16 @@ func SanitizeUTF8(s string) string {
 	// pass, without decoding ASCII or calling a predicate for every byte.
 	clean := true
 	for i := 0; i < len(s); {
+		if len(s)-i >= 8 {
+			// Skip printable ASCII together. Subtraction marks bytes below
+			// space; addition marks DEL and high-bit bytes. Carries can only
+			// send extra bytes through the scalar check below.
+			word := binary.LittleEndian.Uint64([]byte(s[i : i+8]))
+			if ((word-0x2020202020202020)|(word+0x0101010101010101))&0x8080808080808080 == 0 {
+				i += 8
+				continue
+			}
+		}
 		c := s[i]
 		if c < utf8.RuneSelf {
 			if c == 0x7f || c < 0x20 && c != '\n' && c != '\t' && c != '\r' {

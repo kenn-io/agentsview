@@ -15,6 +15,12 @@ import (
 )
 
 var (
+	canonicalArchiveSessionColumns        = bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive)
+	canonicalArchiveSessionConflictClause = canonicalConflictUpdateClause(
+		canonicalReplacementColumns(
+			(*bunmodel.Session)(nil), append([]string{"id"}, canonicalArchiveSessionColumns...)...,
+		),
+	)
 	canonicalSessionConflictClause = canonicalConflictUpdateClause(
 		canonicalReplacementColumns((*bunmodel.Session)(nil), "id"),
 	)
@@ -70,6 +76,9 @@ func canonicalSessionUpsertConflictClause(preservedColumns []string) string {
 	}
 	if len(preservedColumns) == 1 && preservedColumns[0] == "data_version" {
 		return canonicalSessionPreserveDataVersionConflictClause
+	}
+	if slices.Equal(preservedColumns, canonicalArchiveSessionColumns) {
+		return canonicalArchiveSessionConflictClause
 	}
 	excludedColumns := append([]string{"id"}, preservedColumns...)
 	return canonicalConflictUpdateClause(canonicalReplacementColumns(
