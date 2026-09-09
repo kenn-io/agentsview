@@ -23,7 +23,7 @@
     UserRoundIcon,
     UsersRoundIcon,
   } from "../../icons.js";
-  import { StatusDot, Tooltip } from "@kenn-io/kit-ui";
+  import { StatusDot } from "@kenn-io/kit-ui";
   import { sessionStatusLabel } from "../../utils/sessionStatus.js";
   import { router } from "../../stores/router.svelte.js";
 
@@ -427,6 +427,7 @@
         <div
           class="session-name"
           class:shell={displayLabel.isShell}
+          title={displayLabel.text}
           ondblclick={handleDblClick}
         >
           {#if displayLabel.isShell}
@@ -437,7 +438,7 @@
         </div>
         <div class="session-meta">
           {#if !hideProject}
-            <span class="session-project">{session.project}</span>
+            <span class="session-project" title={session.project}>{session.project}</span>
           {/if}
           <span class="session-time">{timeStr}</span>
           {#if hasUnread}
@@ -481,21 +482,16 @@
   {#if !compact && (!hideAgent || showMachine)}
     <div class="side-meta">
       {#if !hideAgent}
-        <div class="agent-tag-wrapper">
-          <Tooltip
-            text={agentLabel(session.agent, session.agent_label)}
-            openDelayMs={0}
-            align="end"
-          >
-            <span
-              class="agent-tag"
-              style:color={agentColor}
-              title={agentLabel(session.agent, session.agent_label)}
-            >{agentLabel(session.agent, session.agent_label)}</span>
-          </Tooltip>
-        </div>
+        <span
+          class="agent-tag"
+          style:color={agentColor}
+          title={agentLabel(session.agent, session.agent_label)}
+        >{agentLabel(session.agent, session.agent_label)}</span>
         {#if entrypointBadge(session.entrypoint)}
-          <span class="entrypoint-tag">{entrypointBadge(session.entrypoint)}</span>
+          <span
+            class="entrypoint-tag"
+            title={entrypointBadge(session.entrypoint)}
+          >{entrypointBadge(session.entrypoint)}</span>
         {/if}
       {/if}
       {#if showMachine}
@@ -649,21 +645,6 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .agent-tag-wrapper {
-    display: flex;
-    align-items: flex-end;
-    height: 8px;
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  .agent-tag-wrapper :global(.kit-tooltip-trigger) {
-    display: flex;
-    align-items: flex-end;
-    height: 8px;
-    max-width: 100%;
   }
 
   .entrypoint-tag {

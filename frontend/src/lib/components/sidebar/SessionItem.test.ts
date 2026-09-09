@@ -38,12 +38,24 @@ describe("SessionItem identity", () => {
   }
 
   it("renders the session label and entrypoint badge", () => {
-    mountSession({ id: "custom-label", agent_label: "Claude Triage", entrypoint: "sdk-cli" });
+    mountSession({
+      id: "custom-label",
+      display_name: "A session with a long title",
+      agent_label: "Claude Triage",
+      entrypoint: "sdk-cli",
+      machine: "remote-machine",
+    });
 
     const agentTag = document.querySelector<HTMLElement>(".agent-tag");
     expect(agentTag?.textContent).toBe("Claude Triage");
     expect(agentTag?.title).toBe("Claude Triage");
     expect(document.querySelector(".entrypoint-tag")?.textContent).toBe("sdk-cli");
+    expect(document.querySelector<HTMLElement>(".session-name")?.title).toBe(
+      "A session with a long title",
+    );
+    expect(document.querySelector<HTMLElement>(".session-project")?.title).toBe("project");
+    expect(document.querySelector<HTMLElement>(".entrypoint-tag")?.title).toBe("sdk-cli");
+    expect(document.querySelector<HTMLElement>(".machine-tag")?.title).toBe("remote-machine");
   });
 
   it("uses the registry label when no override exists", () => {
