@@ -162,6 +162,10 @@ func (i *cursorStoreIndex) remember(chatsRoot, agentID, storePath string) {
 	}
 	valid, err := cursorStorePathIsValid(key, storePath)
 	if err != nil {
+		// Let subsequent lookups retry validation of newly observed stores.
+		if paths[agentID] == "" {
+			paths[agentID] = storePath
+		}
 		return
 	}
 	if !valid {
@@ -206,13 +210,23 @@ func readCursorStoreTurns(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var tables int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema
-		WHERE type = 'table' AND name IN ('meta', 'blobs')`).Scan(&tables); err != nil {
+	var tables, metaColumns, blobColumns int
+	if err := tx.QueryRowContext(ctx, `SELECT
+		(SELECT count(*) FROM sqlite_schema
+			WHERE type = 'table' AND name IN ('meta', 'blobs')),
+		(SELECT count(*) FROM pragma_table_info('meta')
+			WHERE name COLLATE NOCASE IN ('key', 'value')),
+		(SELECT count(*) FROM pragma_table_info('blobs')
+			WHERE name COLLATE NOCASE IN ('id', 'data'))`).Scan(
+		&tables, &metaColumns, &blobColumns,
+	); err != nil {
 		return nil, fmt.Errorf("cursor store: reading schema: %w", err)
 	}
 	if tables != 2 {
 		return nil, fmt.Errorf("%w: missing meta or blobs table", errCursorStoreFormat)
+	}
+	if metaColumns != 2 || blobColumns != 2 {
+		return nil, fmt.Errorf("%w: missing required meta or blobs columns", errCursorStoreFormat)
 	}
 
 	meta, err := loadCursorStoreMeta(ctx, tx, agentID)

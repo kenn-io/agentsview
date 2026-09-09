@@ -447,6 +447,40 @@ func TestCursorStoreMissingMetadataKeepsTranscript(t *testing.T) {
 	assertCursorStoreTranscriptOnly(t, outcome)
 }
 
+func TestCursorStoreMissingColumnKeepsTranscript(t *testing.T) {
+	for _, tt := range []struct {
+		missing string
+		schema  string
+	}{
+		{"meta.key", `CREATE TABLE meta (other_key TEXT, value TEXT);
+			CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)`},
+		{"meta.value", `CREATE TABLE meta (key TEXT PRIMARY KEY, payload TEXT);
+			CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)`},
+		{"blobs.id", `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+			CREATE TABLE blobs (other_id TEXT, data BLOB)`},
+		{"blobs.data", `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+			CREATE TABLE blobs (id TEXT PRIMARY KEY, payload BLOB)`},
+	} {
+		t.Run(tt.missing, func(t *testing.T) {
+			fx := setupCursorStoreFixture(t, false)
+			require.NoError(t, os.Remove(fx.StorePath))
+			store, err := sql.Open("sqlite3", fx.StorePath)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = store.Close() })
+			_, err = store.Exec(tt.schema)
+			require.NoError(t, err)
+			if strings.HasPrefix(tt.missing, "blobs.") {
+				writeCursorStoreMeta(t, store, cursorStoreTestAgentID, fx.RootID)
+			}
+			require.NoError(t, store.Close())
+
+			outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
+			require.NoError(t, err)
+			assertCursorStoreTranscriptOnly(t, outcome)
+		})
+	}
+}
+
 func TestCursorStoreIncompleteMetadataKeepsTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
 	payload, err := json.Marshal(map[string]any{
@@ -644,6 +678,61 @@ func TestCursorStoreAccessFailureKeepsEnrichmentRetryable(t *testing.T) {
 			assert.Contains(t, outcome.Results[0].Result.Messages[1].ThinkingText, "asking who I am")
 			_, err = fx.Provider.Fingerprint(t.Context(), fx.Source)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestCursorStoreUncachedEventAccessFailureRemainsRetryable(t *testing.T) {
+	for _, discovery := range []string{"before discovery", "after transcript-only discovery"} {
+		t.Run(discovery, func(t *testing.T) {
+			fx := setupCursorStoreFixture(t, false)
+			provider, ok := NewProvider(AgentCursor, ProviderConfig{
+				Roots: []string{fx.ProjectsRoot},
+				MetadataDirs: map[string][]string{
+					fx.ProjectsRoot: {fx.ChatsRoot},
+				},
+			})
+			require.True(t, ok)
+			if discovery == "after transcript-only discovery" {
+				require.NoError(t, os.Rename(fx.StorePath, fx.StorePath+".pending"))
+				sources, err := provider.Discover(t.Context())
+				require.NoError(t, err)
+				require.Len(t, sources, 1)
+				require.NoError(t, os.Rename(fx.StorePath+".pending", fx.StorePath))
+			}
+			sessionDir := filepath.Dir(fx.StorePath)
+			require.NoError(t, os.Chmod(sessionDir, 0))
+			t.Cleanup(func() { require.NoError(t, os.Chmod(sessionDir, 0o755)) })
+			_, err := os.Stat(fx.StorePath)
+			if err == nil {
+				t.Skip("directory permissions are not enforced")
+			}
+			require.ErrorIs(t, err, os.ErrPermission)
+
+			sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+				Path: fx.StorePath, EventKind: "write", WatchRoot: fx.ChatsRoot,
+			})
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			_, err = provider.Fingerprint(t.Context(), sources[0])
+			assert.ErrorIs(t, err, os.ErrPermission)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			assert.Empty(t, outcome.Results)
+			require.Len(t, outcome.SourceErrors, 1)
+			assert.True(t, outcome.SourceErrors[0].Retryable)
+			assert.ErrorIs(t, outcome.SourceErrors[0].Err, os.ErrPermission)
+
+			require.NoError(t, os.Chmod(sessionDir, 0o755))
+			fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+			require.NoError(t, err)
+			assert.Contains(t, fingerprint.Hash, "|store:")
+			outcome, err = provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Empty(t, outcome.SourceErrors)
+			require.Len(t, outcome.Results, 1)
+			require.Len(t, outcome.Results[0].Result.Messages, 2)
+			assert.Contains(t, outcome.Results[0].Result.Messages[1].ThinkingText, "asking who I am")
 		})
 	}
 }
