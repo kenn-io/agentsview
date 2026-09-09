@@ -199,11 +199,12 @@ function matchUnknownXmlBlockAt(src: string, offset: number): number | undefined
   if (!opening) return undefined;
 
   const openingText = opening[0];
+  const openingTagText = openingText.trimStart();
   const openingName = opening[1]?.toLowerCase();
   if (
     !openingName ||
-    openingText.startsWith("</") ||
-    isSelfClosingTag(openingText) ||
+    openingTagText.startsWith("</") ||
+    isSelfClosingTag(openingTagText) ||
     isPreservedHtmlTag(openingName)
   ) {
     return undefined;
@@ -211,10 +212,12 @@ function matchUnknownXmlBlockAt(src: string, offset: number): number | undefined
 
   const stack = [openingName];
   const openHtmlTags: string[] = [];
+  const codeRanges = markdownCodeRanges(src, src.length);
   const tags = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
   tags.lastIndex = offset + openingText.length;
   let tag: RegExpExecArray | null;
   while ((tag = tags.exec(src)) !== null) {
+    if (isInRange(tag.index, codeRanges)) continue;
     const tagText = tag[0];
     const name = tag[1]?.toLowerCase();
     if (!name) continue;
@@ -246,26 +249,80 @@ function matchUnknownXmlBlockAt(src: string, offset: number): number | undefined
 
 type TextRange = { start: number; end: number };
 
-function closedBacktickRanges(src: string, end: number): TextRange[] {
-  const runs = new Map<number, number[]>();
-  const re = /`+/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(src)) !== null && match.index < end) {
-    const length = match[0].length;
-    const starts = runs.get(length) ?? [];
-    starts.push(match.index);
-    runs.set(length, starts);
-  }
-
+function fencedCodeRanges(src: string, end: number): TextRange[] {
   const ranges: TextRange[] = [];
-  for (const [length, starts] of runs) {
-    for (let index = 0; index + 1 < starts.length; index += 2) {
-      const start = starts[index]!;
-      const close = starts[index + 1]!;
-      ranges.push({ start, end: Math.min(close + length, end) });
+  const linePattern = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n|$)/gm;
+  let open: { start: number; char: string; length: number } | undefined;
+  let match: RegExpExecArray | null;
+  while ((match = linePattern.exec(src)) !== null && match.index < end) {
+    const marker = match[1]!;
+    const suffix = match[2] ?? "";
+    if (!open) {
+      if (marker[0] === "`" && suffix.includes("`")) continue;
+      open = { start: match.index, char: marker[0]!, length: marker.length };
+      continue;
+    }
+    if (
+      marker[0] === open.char &&
+      marker.length >= open.length &&
+      /^[ \t]*$/.test(suffix)
+    ) {
+      ranges.push({ start: open.start, end: Math.min(match.index + match[0].length, end) });
+      open = undefined;
     }
   }
+  if (open) ranges.push({ start: open.start, end });
   return ranges;
+}
+
+function closedBacktickRanges(
+  src: string,
+  end: number,
+  fencedRanges: TextRange[] = fencedCodeRanges(src, end),
+): TextRange[] {
+  const ranges: TextRange[] = [];
+  const runs = /`+/g;
+  let cursor = 0;
+  while (cursor < end) {
+    runs.lastIndex = cursor;
+    const opening = runs.exec(src);
+    if (!opening || opening.index >= end) break;
+    const fencedRange = fencedRanges.find(
+      (range) => opening.index >= range.start && opening.index < range.end,
+    );
+    if (fencedRange) {
+      cursor = fencedRange.end;
+      continue;
+    }
+
+    const length = opening[0].length;
+    const closingRuns = /`+/g;
+    closingRuns.lastIndex = opening.index + length;
+    let closing: RegExpExecArray | null = null;
+    let paired = false;
+    while ((closing = closingRuns.exec(src)) !== null && closing.index < end) {
+      const closingFence = fencedRanges.find(
+        (range) => closing!.index >= range.start && closing!.index < range.end,
+      );
+      if (closingFence) {
+        closingRuns.lastIndex = closingFence.end;
+        continue;
+      }
+      if (closing[0].length === length) {
+        ranges.push({ start: opening.index, end: Math.min(closing.index + length, end) });
+        cursor = closing.index + length;
+        paired = true;
+        break;
+      }
+    }
+    if (!paired) cursor = opening.index + length;
+  }
+  return ranges;
+}
+
+function markdownCodeRanges(src: string, end: number): TextRange[] {
+  const fencedRanges = fencedCodeRanges(src, end);
+  return [...fencedRanges, ...closedBacktickRanges(src, end, fencedRanges)];
 }
 
 function isInRange(offset: number, ranges: TextRange[]): boolean {
@@ -286,36 +343,36 @@ function findUnknownXmlCandidate(src: string): number | undefined {
 
   const blankLine = /(?:^|\n)[ \t]*(?:\n|$)/.exec(src);
   const windowEnd = blankLine?.index ?? src.length;
-  const protectedRanges = closedBacktickRanges(src, windowEnd);
+  const codeRanges = markdownCodeRanges(src, windowEnd);
   const openHtmlTags: string[] = [];
   const tags = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
-  let tagCursor = 0;
+  let nextTag = tags.exec(src);
 
   for (let lineStart = 0; lineStart < windowEnd; ) {
-    while (true) {
-      tags.lastIndex = tagCursor;
-      const tag = tags.exec(src);
-      if (!tag || tag.index >= lineStart) break;
-      tagCursor = tags.lastIndex;
-      if (!isInRange(tag.index, protectedRanges)) {
-        const name = tag[1]?.toLowerCase();
-        if (name) updateKnownHtmlTags(openHtmlTags, tag[0], name);
+    while (nextTag && nextTag.index < lineStart) {
+      if (!isInRange(nextTag.index, codeRanges)) {
+        const name = nextTag[1]?.toLowerCase();
+        if (name) updateKnownHtmlTags(openHtmlTags, nextTag[0], name);
       }
+      nextTag = tags.exec(src);
     }
 
-    if (!isInRange(lineStart, protectedRanges)) {
+    if (!isInRange(lineStart, codeRanges)) {
       const lineTag = tagAtLineStart(src, lineStart);
       if (lineTag) {
         const tagText = lineTag[0];
+        const tagBody = tagText.trimStart();
         const name = lineTag[1]?.toLowerCase();
         if (name && isPreservedHtmlTag(name)) {
-          updateKnownHtmlTags(openHtmlTags, tagText, name);
-          tagCursor = lineStart + tagText.indexOf("<") + tagText.length;
-        } else if (openHtmlTags.length === 0 && name && !tagText.startsWith("</") && !isSelfClosingTag(tagText)) {
+          updateKnownHtmlTags(openHtmlTags, tagBody, name);
+          tags.lastIndex = lineStart + tagText.indexOf("<") + tagText.length;
+          nextTag = tags.exec(src);
+        } else if (openHtmlTags.length === 0 && name && !tagBody.startsWith("</") && !isSelfClosingTag(tagBody)) {
           const end = matchUnknownXmlBlockAt(src, lineStart);
           return end === undefined ? undefined : lineStart;
         } else if (lineTag) {
-          tagCursor = lineStart + tagText.indexOf("<") + tagText.length;
+          tags.lastIndex = lineStart + tagText.indexOf("<") + tagText.length;
+          nextTag = tags.exec(src);
         }
       }
     }

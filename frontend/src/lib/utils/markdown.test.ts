@@ -574,11 +574,9 @@ describe("renderMarkdown", () => {
     });
 
     it("keeps known HTML closing tags on the HTML path", () => {
-      const dom = parseHTML(
-        renderMarkdown("</div>\n</span>\n<policy>\n# heading\n</policy>", {
-          renderUnknownXmlBlocksAsPreformatted: true,
-        }),
-      );
+      const dom = parseHTML(renderMarkdown("  </div>\n</span>\n<policy>\n# heading\n</policy>", {
+        renderUnknownXmlBlocksAsPreformatted: true,
+      }));
 
       expect(dom.querySelector("pre > code")?.textContent).toBe(
         "<policy>\n# heading\n</policy>\n",
@@ -661,6 +659,42 @@ describe("renderMarkdown", () => {
       expect(code).not.toBeNull();
       expect(code!.textContent).toBe(`${source}\n`);
       expect(dom.querySelector("p")).toBeNull();
+    });
+
+    it("keeps protected tags inside a captured block literal", () => {
+      const tick = String.fromCharCode(96);
+      for (const source of [
+        `<policy>\n${tick.repeat(3)}\n<inner>\n# heading\n</inner>\n${tick.repeat(3)}\n</policy>`,
+        `<policy>\n${tick}<inner>\n# heading\n</inner>${tick}\n</policy>`,
+      ]) {
+        const dom = parseHTML(
+          renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+        );
+
+        expect(dom.querySelector("pre > code")?.textContent).toBe(`${source}\n`);
+        expect(dom.querySelector("h1")).toBeNull();
+      }
+    });
+
+    it("finds a block after a valid inline code span with a different inner run", () => {
+      const tick = String.fromCharCode(96);
+      const source =
+        "prefix " +
+        tick +
+        "literal " +
+        tick.repeat(2) +
+        " inside" +
+        tick +
+        "\n<later>\n# later\n</later>\n" +
+        tick.repeat(2) +
+        " after";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelector("p > code")?.textContent).toBe("literal `` inside");
+      expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
+      expect(dom.querySelector("h1")).toBeNull();
     });
 
     it("keeps internal whitespace inside the captured block", () => {
