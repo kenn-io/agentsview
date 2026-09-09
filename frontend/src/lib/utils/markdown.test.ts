@@ -336,6 +336,31 @@ describe("renderMarkdown", () => {
       expect(code!.textContent).toBe("<policy>keep tags</policy>\n");
     });
 
+    it("keeps fence-like lines inside a fenced code block", () => {
+      const source = "```\n```not-a-closer\n<policy>\n# heading\n</policy>\n```";
+      const omitted = renderMarkdown(source);
+      const enabled = renderMarkdown(source, {
+        renderUnknownXmlBlocksAsPreformatted: true,
+      });
+
+      expect(enabled).toBe(omitted);
+      expect(parseHTML(enabled).querySelectorAll("pre > code")).toHaveLength(1);
+      expect(parseHTML(enabled).querySelector("pre > code")?.textContent).toContain(
+        "<policy>\n# heading\n</policy>",
+      );
+    });
+
+    it("does not treat backticks in a fence info string as an opening fence", () => {
+      const source = "```bad`info\n<policy>\n# heading\n</policy>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelector("pre > code")?.textContent).toBe(
+        "<policy>\n# heading\n</policy>\n",
+      );
+    });
+
     it("keeps markdown angle autolinks intact", () => {
       const dom = parseHTML(renderMarkdown("<https://example.com>"));
       const link = dom.querySelector("p > a");
@@ -396,6 +421,21 @@ describe("renderMarkdown", () => {
       expect(codes[0]!.textContent).toContain("</current_file_diff>");
       expect(dom.querySelector("h1")).toBeNull();
       expect(dom.querySelector("ul")).toBeNull();
+    });
+
+    it("renders each complete unknown block when several follow one another", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "<first-policy>\n# first\n</first-policy>\n\n<second-policy>\n# second\n</second-policy>",
+          { renderUnknownXmlBlocksAsPreformatted: true },
+        ),
+      );
+      const codes = dom.querySelectorAll("pre > code");
+
+      expect(codes).toHaveLength(2);
+      expect(codes[0]!.textContent).toContain("<first-policy>");
+      expect(codes[1]!.textContent).toContain("<second-policy>");
+      expect(dom.querySelectorAll("h1")).toHaveLength(0);
     });
 
     it("keeps the current Markdown behavior when the mode is omitted or false", () => {

@@ -179,18 +179,24 @@ function bashWrapperExtension(
   };
 }
 
-function findFirstCompleteUnknownXmlBlock(
-  src: string,
-): { start: number; rawStart: number; end: number } | undefined {
+type UnknownXmlBlock = { start: number; rawStart: number; end: number };
+
+function findCompleteUnknownXmlBlocks(src: string): UnknownXmlBlock[] {
   const fenceRanges: MarkdownFenceRange[] = [];
-  const fenceRe = /^ {0,3}(`{3,}|~{3,})[^\n]*$/gm;
+  const fenceRe = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)\r?$/gm;
   let openFence: { start: number; char: string; length: number } | undefined;
   let fence: RegExpExecArray | null;
   while ((fence = fenceRe.exec(src)) !== null) {
     const marker = fence[1]!;
+    const suffix = fence[2] ?? "";
     if (!openFence) {
+      if (marker[0] === "`" && suffix.includes("`")) continue;
       openFence = { start: fence.index, char: marker[0]!, length: marker.length };
-    } else if (marker[0] === openFence.char && marker.length >= openFence.length) {
+    } else if (
+      marker[0] === openFence.char &&
+      marker.length >= openFence.length &&
+      /^[ \t]*$/.test(suffix)
+    ) {
       fenceRanges.push({ start: openFence.start, end: fence.index + fence[0].length });
       openFence = undefined;
     }
@@ -222,7 +228,7 @@ function findFirstCompleteUnknownXmlBlock(
   const openUnknownTags: Array<{ name: string; position: number; start?: number; rawStart?: number }> = [];
   let malformedUnknownTags: string[] = [];
   const openHtmlTags: string[] = [];
-  let firstComplete: { start: number; rawStart: number; end: number } | undefined;
+  const completeBlocks: UnknownXmlBlock[] = [];
   let protectedIndex = 0;
   let lineStart = 0;
   let scanCursor = 0;
@@ -268,7 +274,9 @@ function findFirstCompleteUnknownXmlBlock(
       if (!opening) continue;
       if (opening.name !== name) {
         const malformedStart = openUnknownTags[0]?.position ?? tag.index;
-        if (firstComplete && firstComplete.start >= malformedStart) firstComplete = undefined;
+        for (let index = completeBlocks.length - 1; index >= 0; index -= 1) {
+          if (completeBlocks[index]!.start >= malformedStart) completeBlocks.splice(index, 1);
+        }
         malformedUnknownTags = openUnknownTags.map((open) => open.name);
         openUnknownTags.length = 0;
         const malformedIndex = malformedUnknownTags.lastIndexOf(name);
@@ -277,14 +285,11 @@ function findFirstCompleteUnknownXmlBlock(
       }
       openUnknownTags.pop();
       if (opening.start !== undefined && opening.rawStart !== undefined) {
-        const candidate = {
+        completeBlocks.push({
           start: opening.start,
           rawStart: opening.rawStart,
           end: XML_TAG_SCAN_RE.lastIndex,
-        };
-        if (!firstComplete || candidate.start < firstComplete.start) {
-          firstComplete = candidate;
-        }
+        });
       }
       continue;
     }
@@ -306,24 +311,41 @@ function findFirstCompleteUnknownXmlBlock(
     });
   }
 
-  return firstComplete;
+  return completeBlocks.sort((left, right) => left.start - right.start);
 }
 
 /** Build a tokenizer that captures a complete unknown XML block before
  *  marked can parse Markdown in its body. Line-start matching keeps inline
  *  code and prose containing the same tags on their existing paths. */
-function unknownXmlBlockExtension(): TokenizerExtension {
+function unknownXmlBlockExtension(source: string): TokenizerExtension {
+  const blocks = findCompleteUnknownXmlBlocks(source);
+
+  function firstBlockAtOrAfter(offset: number): UnknownXmlBlock | undefined {
+    let low = 0;
+    let high = blocks.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (blocks[middle]!.rawStart < offset) low = middle + 1;
+      else high = middle;
+    }
+    return blocks[low];
+  }
+
   return {
     name: "unknownXmlBlock",
     level: "block",
     start(src) {
-      const block = findFirstCompleteUnknownXmlBlock(src);
-      return block && block.rawStart > 0 ? block.rawStart : undefined;
+      if (!source.endsWith(src)) return undefined;
+      const offset = source.length - src.length;
+      const block = firstBlockAtOrAfter(offset);
+      return block ? block.rawStart - offset : undefined;
     },
     tokenizer(src) {
-      const block = findFirstCompleteUnknownXmlBlock(src);
-      if (!block || block.rawStart !== 0) return undefined;
-      const raw = src.slice(block.rawStart, block.end);
+      if (!source.endsWith(src)) return undefined;
+      const offset = source.length - src.length;
+      const block = firstBlockAtOrAfter(offset);
+      if (!block || block.rawStart !== offset) return undefined;
+      const raw = src.slice(0, block.end - block.rawStart);
       return {
         type: "code",
         raw,
@@ -333,7 +355,10 @@ function unknownXmlBlockExtension(): TokenizerExtension {
   };
 }
 
-function createParser(renderUnknownXmlBlocksAsPreformatted: boolean): Marked {
+function createParser(
+  renderUnknownXmlBlocksAsPreformatted: boolean,
+  unknownXmlSource?: string,
+): Marked {
   const instance = new Marked({
     gfm: true,
     breaks: true,
@@ -341,7 +366,9 @@ function createParser(renderUnknownXmlBlocksAsPreformatted: boolean): Marked {
 
   instance.use({
     extensions: [
-      ...(renderUnknownXmlBlocksAsPreformatted ? [unknownXmlBlockExtension()] : []),
+      ...(renderUnknownXmlBlocksAsPreformatted
+        ? [unknownXmlBlockExtension(unknownXmlSource ?? "")]
+        : []),
       bashWrapperExtension("bashInput", "bash-input", "!", "shell"),
       bashWrapperExtension("bashStdout", "bash-stdout", "", ""),
       bashWrapperExtension("bashStderr", "bash-stderr", "", ""),
@@ -352,7 +379,6 @@ function createParser(renderUnknownXmlBlocksAsPreformatted: boolean): Marked {
 }
 
 const parser = createParser(false);
-const preformattedParser = createParser(true);
 
 type RenderCacheEntry = [string | undefined, string | undefined];
 
@@ -485,8 +511,11 @@ export function renderMarkdown(text: string, options: MarkdownRenderOptions = {}
   const cached = cache.get(text)?.[modeIndex];
   if (cached !== undefined) return cached;
 
-  const markdownParser = renderUnknownXmlBlocksAsPreformatted ? preformattedParser : parser;
-  const resolved = escapeCustomXmlTags(resolveAssetURLs(text), markdownParser);
+  const resolvedText = resolveAssetURLs(text);
+  const markdownParser = renderUnknownXmlBlocksAsPreformatted
+    ? createParser(true, resolvedText.trimEnd())
+    : parser;
+  const resolved = escapeCustomXmlTags(resolvedText, markdownParser);
   const html = markdownParser.parser(resolved) as string;
   const safe = DOMPurify.sanitize(html);
 
