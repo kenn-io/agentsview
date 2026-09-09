@@ -32,6 +32,7 @@ describe("KNOWN_AGENTS", () => {
       "vscode-copilot",
       "visualstudio-copilot",
       "pi",
+      "tau",
       "prime-agent",
       "qwen",
       "qwenpaw",
@@ -85,6 +86,7 @@ describe("agentColor", () => {
     expect(agentColor("zencoder")).toBe("var(--accent-red)");
     expect(agentColor("zed")).toBe("var(--accent-green)");
     expect(agentColor("pi")).toBe("var(--accent-indigo)");
+    expect(agentColor("tau")).toBe("var(--accent-amber)");
     expect(agentColor("prime-agent")).toBe("var(--accent-indigo)");
     expect(agentColor("qwen")).toBe("var(--accent-cyan)");
     expect(agentColor("qwenpaw")).toBe("var(--accent-cyan)");

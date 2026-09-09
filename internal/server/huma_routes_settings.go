@@ -87,7 +87,7 @@ func (s *Server) humaGetSettings(
 			DisplayName:        def.DisplayName,
 			Dirs:               d,
 			PostAnswerToolWork: def.PostAnswerToolWork,
-			HomesSupported:     def.HomeConfigKey != "",
+			HomesSupported:     def.HomesSupported,
 			Homes:              homes,
 		})
 	}

@@ -712,6 +712,7 @@ func runStartupSyncViaWorker(
 	t := time.Now()
 	resyncAnnounced := false
 	progressShown := false
+	terminal := isTerminalWriter(os.Stdout)
 	onLine := func(l workerLine) {
 		if l.Progress == nil {
 			return
@@ -726,8 +727,9 @@ func runStartupSyncViaWorker(
 				fmt.Println("Data version changed, running full resync...")
 			}
 		}
-		printSyncProgress(p)
-		progressShown = true
+		if writeSyncProgress(os.Stdout, terminal, p) {
+			progressShown = true
+		}
 		progress.SetDetail(startupProgressDetail(p))
 	}
 	result, err := launchSyncWorker(ctx, cfg, "startup", onLine)
@@ -1550,8 +1552,9 @@ func runInitialSync(
 ) sync.SyncStats {
 	fmt.Println("Running initial sync...")
 	t := time.Now()
+	progress := newSyncProgressPrinter(os.Stdout)
 	stats := engine.SyncAll(ctx, func(p sync.Progress) {
-		printSyncProgress(p)
+		progress(p)
 		startupProgress.SetDetail(startupProgressDetail(p))
 	})
 	printSyncSummary(stats, t)
@@ -1581,8 +1584,9 @@ func runInitialResync(
 	if stats.Aborted && ctx.Err() == nil {
 		fmt.Println("Resync incomplete, running incremental sync...")
 		t = time.Now()
+		progress := newSyncProgressPrinter(os.Stdout)
 		stats = engine.SyncAll(ctx, func(p sync.Progress) {
-			printSyncProgress(p)
+			progress(p)
 			startupProgress.SetDetail(startupProgressDetail(p))
 		})
 		printSyncSummary(stats, t)
@@ -1638,9 +1642,12 @@ func resyncCoversSignals(
 
 func printSyncSummary(stats sync.SyncStats, t time.Time) {
 	summary := fmt.Sprintf(
-		"\nSync complete: %d sessions synced",
+		"Sync complete: %d sessions synced",
 		stats.Synced,
 	)
+	if isTerminalWriter(os.Stdout) {
+		summary = "\n" + summary
+	}
 	if stats.OrphanedCopied > 0 {
 		summary += fmt.Sprintf(
 			", %d archived sessions preserved",
@@ -1663,6 +1670,7 @@ func printSyncSummary(stats sync.SyncStats, t time.Time) {
 type resyncProgressPrinter struct {
 	w        io.Writer
 	now      func() time.Time
+	terminal bool
 	label    string
 	started  time.Time
 	inPlace  bool
@@ -1672,7 +1680,9 @@ type resyncProgressPrinter struct {
 func newResyncProgressPrinter(
 	w io.Writer, now func() time.Time,
 ) *resyncProgressPrinter {
-	return &resyncProgressPrinter{w: w, now: now}
+	return &resyncProgressPrinter{
+		w: w, now: now, terminal: isTerminalWriter(w),
+	}
 }
 
 func (p *resyncProgressPrinter) Print(progress sync.Progress) {
@@ -1694,9 +1704,17 @@ func (p *resyncProgressPrinter) Print(progress sync.Progress) {
 			p.finishCurrent()
 			p.label = progress.Detail
 			p.started = p.now()
+			if !p.terminal {
+				fmt.Fprintf(
+					p.w, "  %s...\n",
+					strings.TrimSuffix(resyncProgressDisplayLabel(progress), "."),
+				)
+			}
 		}
-		p.inPlace = true
-		fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		p.inPlace = p.terminal
+		if p.terminal {
+			fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		}
 		return
 	}
 
@@ -1854,10 +1872,21 @@ func startupProgressDetail(p sync.Progress) string {
 	return resyncProgressDisplayLabel(p)
 }
 
-func printSyncProgress(p sync.Progress) {
+func writeSyncProgress(w io.Writer, terminal bool, p sync.Progress) bool {
+	if !terminal {
+		return false
+	}
 	if detail := formatSyncProgress(p); detail != "" {
-		fmt.Printf("\r  %s\x1b[K", detail)
-		return
+		fmt.Fprintf(w, "\r  %s\x1b[K", detail)
+		return true
+	}
+	return false
+}
+
+func newSyncProgressPrinter(w io.Writer) sync.ProgressFunc {
+	terminal := isTerminalWriter(w)
+	return func(p sync.Progress) {
+		writeSyncProgress(w, terminal, p)
 	}
 }
 

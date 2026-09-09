@@ -42,11 +42,12 @@ root in that agent's native layout. `machine` uses the same machine label shown
 in session filters and configured by `[pg].machine_name`. If `machine` is
 omitted, AgentsView uses the primary viewer's hostname.
 
-Existing per-agent arrays and environment variables remain supported. Structured
-sources are additive:
+Per-agent `dirs` arrays and environment variables select session roots.
+Structured sources are additive:
 
 ```toml
-copilot_dirs = ["/home/viewer/.copilot"]
+[agents.copilot]
+dirs = ["~/.copilot"]
 
 [[session_sources]]
 agent = "copilot"
@@ -54,17 +55,16 @@ dir = "/srv/session-archive/buildbox/copilot"
 machine = "buildbox"
 ```
 
-AgentsView compares roots as absolute, cleaned paths and ignores case on
-Windows. Legacy per-agent settings and structured entries retain their original
-path spelling, except that a leading `~/` is expanded to the current home
-directory before scanning. When a structured source names the same root as a
-per-agent array, default, or environment variable, the structured entry supplies
-the machine label.
+AgentsView expands `~/` and resolves local roots to absolute paths with symbolic
+links resolved. Equivalent roots are scanned once. When a structured source
+names the same root as a per-agent array, default, or environment variable, the
+structured entry supplies the machine label.
 
 `session_sources` accepts filesystem roots only. Keep using the existing
-per-agent arrays for `s3://` roots; S3 ingestion has established machine-derived
-ID-prefix behavior that differs from filesystem labeling. Native SQLite-backed
-agent stores are supported when `dir` points at their filesystem root.
+`agents.<id>.dirs` arrays for `s3://` roots; S3 ingestion has established
+machine-derived ID-prefix behavior that differs from filesystem labeling. Native
+SQLite-backed agent stores are supported when `dir` points at their filesystem
+root.
 
 ## Transport Rules
 

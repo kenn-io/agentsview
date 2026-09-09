@@ -315,8 +315,8 @@ and indexes it into your local archive. SSH remote sync is deprecated and
 receives only critical fixes; use configured HTTP remote sync for new setups.
 
 Local sync can also read configured Claude, Codex, and Cursor roots from
-S3-compatible object storage. Add `s3://` entries to `claude_project_dirs`,
-`codex_sessions_dirs`, or `cursor_project_dirs` in `~/.agentsview/config.toml`,
+S3-compatible object storage. Add `s3://` entries to `agents.claude.dirs`,
+`agents.codex.dirs`, or `agents.cursor.dirs` in `~/.agentsview/config.toml`,
 then run `agentsview sync` normally. This is not SSH remote sync: object storage
 is treated as a read-only session source, using object size and `LastModified`
 metadata to skip unchanged sessions and downloading only objects that need
@@ -1463,6 +1463,8 @@ agentsview help
 | `OPENCODE_DIR`                    | `~/.local/share/opencode`                            | OpenCode data directory                                                                             |
 | `OPENHANDS_CONVERSATIONS_DIR`     | `~/.openhands/conversations`                         | OpenHands CLI conversations directory                                                               |
 | `PI_DIR`                          | `~/.pi/agent/sessions`                               | Pi sessions directory                                                                               |
+| `PI_CODING_AGENT_DIR` | unset | Pi agent home that re-roots the default `sessions/` discovery path |
+| `PI_CODING_AGENT_SESSION_DIR` | unset | Pi session directory override; `PI_DIR` takes precedence |
 | `PRIME_AGENT_SESSION_DIR`         | `~/.prime/agent/sessions`                            | Prime Agent sessions directory                                                                      |
 | `PIEBALD_DIR`                     | `~/.local/share/piebald`                             | Piebald directory (contains `app.db`)                                                               |
 | `POOLSIDE_DIR`                    | (platform-specific)                                  | Poolside Agent CLI trajectory directory                                                             |

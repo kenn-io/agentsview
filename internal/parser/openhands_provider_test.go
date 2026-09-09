@@ -2,6 +2,8 @@ package parser
 
 import (
 	"context"
+	"encoding/json/v2"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -144,6 +146,59 @@ func TestOpenHandsProviderParse(t *testing.T) {
 	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
 	assert.Equal(t, "parse question", result.Result.Session.FirstMessage)
 	assert.Len(t, result.Result.Messages, 1)
+}
+
+func TestOpenHandsProviderProjectDiscoveryPolicy(t *testing.T) {
+	for _, disableDiscovery := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disabled=%t", disableDiscovery), func(t *testing.T) {
+			root := t.TempDir()
+			repo := filepath.Join(t.TempDir(), "repository")
+			cwd := filepath.Join(repo, "nested")
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+			require.NoError(t, os.MkdirAll(cwd, 0o755))
+			sessionDir := openHandsProviderWriteSession(t, root,
+				"086c7ecf6cb746b69fbcb900358d1247",
+				"086c7ecf-6cb7-46b6-9fbc-b900358d1247", "project question")
+			cwdJSON, err := json.Marshal(cwd)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "events", "event-00001.json"),
+				[]byte(fmt.Sprintf(`{"id":"e1","timestamp":"2026-04-02T15:25:42","source":"environment",
+"observation":{"content":[{"type":"text","text":"terminal output"}],
+"metadata":{"working_dir":%s},"kind":"TerminalObservation"},"kind":"ObservationEvent"}`, cwdJSON)), 0o600))
+			provider, ok := NewProvider(AgentOpenHands, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+
+			originalStat := osStat
+			t.Cleanup(func() { osStat = originalStat })
+			probes := 0
+			osStat = func(path string) (os.FileInfo, error) {
+				if path == cwd {
+					probes++
+				}
+				return originalStat(path)
+			}
+			ctx := t.Context()
+			if disableDiscovery {
+				ctx = WithoutFilesystemProjectDiscovery(ctx)
+			}
+			outcome, err := provider.Parse(ctx, ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			result := outcome.Results[0].Result
+			assert.Equal(t, cwd, result.Session.Cwd)
+			assert.Equal(t, "project question", result.Session.FirstMessage)
+			if disableDiscovery {
+				assert.Zero(t, probes, "recorded cwd must not be inspected")
+				assert.Equal(t, "nested", result.Session.Project)
+			} else {
+				assert.Positive(t, probes, "local Git discovery must still run")
+				assert.Equal(t, "repository", result.Session.Project)
+			}
+		})
+	}
 }
 
 func openHandsProviderWriteSession(

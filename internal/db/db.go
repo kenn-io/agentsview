@@ -462,10 +462,19 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // variant suffixes (-exp-b) against the matching effort-qualified executor
 // model. Existing Antigravity rows need re-parsing so stored messages and
 // usage events reflect the intended effort-qualified model.)
-// (100: OpenCode v2 projections, mixed CLI/API history, attachments, and
+// (100: Codex subagent lineage now uses the structural source marker. Existing
+// guardian rows need re-parsing because a fingerprint change cannot repair
+// byte-identical files.)
+// (101: Cursor user turn timestamps are parsed from recognized metadata.
+// Existing Cursor rows need re-parsing so stored message and session times
+// reflect the transcript timestamps.)
+// (102: Cursor legacy text transcripts now preserve nonempty tool-result
+// bodies as result events. Existing Cursor rows need re-parsing to recover
+// output from unchanged source files.)
+// (103: OpenCode v2 projections, mixed CLI/API history, attachments, and
 // compaction boundaries. Re-parse existing sessions and reconsider skipped
 // sources even when the producer database has not changed.)
-const dataVersion = 100
+const dataVersion = 103
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -60,8 +60,8 @@ reports its URL and exits. `daemon stop` and `serve stop` both stop that
 writable server, including sync; `serve stop` also stops read-only mirror
 servers for the same data directory.
 
-For Devin CLI, point `DEVIN_DIR` or `devin_dirs` at the local root that contains
-`cli/` — for example `~/Library/Application Support/devin` on macOS,
+For Devin CLI, point `DEVIN_DIR` or `agents.devin.dirs` at the local root that
+contains `cli/` — for example `~/Library/Application Support/devin` on macOS,
 `~/.local/share/devin` on Linux, or a redacted path like
 `.../Application Support/devin`. AgentsView reads session data under
 `<root>/cli/...` and intentionally ignores copied config or OAuth paths. Do not
@@ -69,10 +69,10 @@ paste tokens, OAuth files, or other secrets into bug reports.
 
 Claude and Codex sources can also be configured as `s3://` roots, so a central
 AgentsView instance can read sessions that other machines push to S3-compatible
-object storage. Add those roots to `claude_project_dirs` or
-`codex_sessions_dirs`; AgentsView lists object metadata and only downloads
-changed sessions during sync. S3 change detection uses size, modified time, and
-available object fingerprints such as ETag, version ID, or checksums.
+object storage. Add those roots to `agents.claude.dirs` or `agents.codex.dirs`;
+AgentsView lists object metadata and only downloads changed sessions during
+sync. S3 change detection uses size, modified time, and available object
+fingerprints such as ETag, version ID, or checksums.
 
 The desktop app and freshness-sensitive CLI commands share a detached local
 daemon. Read-only CLI commands attach to it when it is already running, but fall
@@ -336,14 +336,14 @@ agentsview stats --include-git-outcomes
 ## Supported Agents
 
 agentsview discovers sessions from all of these. Aider is opt-in because it has
-no central session directory; set `AIDER_DIR` or `aider_dirs` to enable it. Amp
-support is deprecated because current Amp releases may store threads server-side
-and leave only local stubs; agentsview can still parse historical local Amp
-thread JSON files.
+no central session directory; set `AIDER_DIR` or `agents.aider.dirs` to enable
+it. Amp support is deprecated because current Amp releases may store threads
+server-side and leave only local stubs; agentsview can still parse historical
+local Amp thread JSON files.
 
 | Agent                 | Session Directory                                                                                                                                                                                                                                    |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Aider                 | `<repo>/.aider.chat.history.md` (per repo; opt in with `AIDER_DIR` or `aider_dirs`)                                                                                                                                                                  |
+| Aider                 | `<repo>/.aider.chat.history.md` (per repo; opt in with `AIDER_DIR` or `agents.aider.dirs`)                                                                                                                                                           |
 | Amp (deprecated)      | `~/.local/share/amp/threads/` (historical local thread JSON only)                                                                                                                                                                                    |
 | Antigravity           | `~/.gemini/antigravity/`                                                                                                                                                                                                                             |
 | Antigravity CLI       | `~/.gemini/antigravity-cli/` (see note below)                                                                                                                                                                                                        |
@@ -352,7 +352,7 @@ thread JSON files.
 | Claude Cowork         | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS)                                                                                                                                                                            |
 | Codex                 | `~/.codex/sessions/`                                                                                                                                                                                                                                 |
 | Copilot CLI           | `~/.copilot/`                                                                                                                                                                                                                                        |
-| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS); point `DEVIN_DIR` / `devin_dirs` at the root that contains `cli/`                                                                                                   |
+| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS); point `DEVIN_DIR` / `agents.devin.dirs` at the root that contains `cli/`                                                                                            |
 | Evener                | `~/.local/state/evener/projects/` (or `$XDG_STATE_HOME/evener/projects/`; semantic transcript v2)                                                                                                                                                    |
 | Cortex Code           | `~/.snowflake/cortex/conversations/`                                                                                                                                                                                                                 |
 | Cursor                | `~/.cursor/projects/`                                                                                                                                                                                                                                |
@@ -379,6 +379,7 @@ thread JSON files.
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                                                                                                             |
 | Omnigent              | `~/.omnigent/chat.db`                                                                                                                                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                                                                                                              |
+| Tau                   | `~/.tau/sessions/`                                                                                                                                                                                                                                   |
 | Prime Agent           | `~/.prime/agent/sessions/`                                                                                                                                                                                                                           |
 | Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/state/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows)                                                                                     |
 | Piebald               | `~/.local/share/piebald/`                                                                                                                                                                                                                            |
@@ -405,14 +406,14 @@ Grok sessions are read from `summary.json` (title, timestamps, project),
 optional `signals.json` (token counters), and `chat_history.jsonl` when present
 for the full transcript (user turns, assistant replies, thinking, and tool
 calls). If `chat_history.jsonl` is missing, AgentsView falls back to
-summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
+summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
 directory.
 
 Goose sessions are read from its shared SQLite `sessions.db`, including
 transcript content, thinking, tool calls and results, session relationships,
 models, token usage, and recorded costs. Set `GOOSE_PATH_ROOT` to a Goose path
-root (sessions are read from `<root>/data/sessions/`), or `goose_dirs` to one or
-more data or sessions directories.
+root (sessions are read from `<root>/data/sessions/`), or `agents.goose.dirs` to
+one or more data or sessions directories.
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details. Cursor
@@ -432,8 +433,8 @@ AgentsView does not scan for Aider logs by default. Earlier builds attempted an
 always-on bounded scan of the home directory, but that was not trustworthy:
 desktop launches and background usage refreshes could still trigger macOS
 privacy prompts for protected folders. To enable Aider, point `AIDER_DIR` (or
-the `aider_dirs` config key) at a code root you explicitly want scanned. The
-scan descends at most four levels below each configured root, skips
+the `agents.aider.dirs` config key) at a code root you explicitly want scanned.
+The scan descends at most four levels below each configured root, skips
 vendor/build/VCS directories by name (`node_modules`, `target`, `.git`,
 `Library`, `go`, `.cargo`, and similar), and stops after a two-second wall-clock
 budget. On macOS, broad home roots still skip protected top-level folders unless
@@ -464,7 +465,8 @@ export COPILOT_DIR=~/.copilot/jetbrains-sessions
 Or in `~/.agentsview/config.toml`:
 
 ```toml
-copilot_dirs = ["~/.copilot/jetbrains-sessions"]
+[agents.copilot]
+dirs = ["~/.copilot/jetbrains-sessions"]
 ```
 
 Re-run the exporter after new JetBrains Copilot sessions if you want agentsview
@@ -529,8 +531,8 @@ dir = "/srv/session-archive/buildbox/copilot"
 machine = "buildbox"
 ```
 
-Structured sources are additive to existing `copilot_dirs`,
-`claude_project_dirs`, and other per-agent settings. They label sessions by
+Structured sources are additive to existing `agents.copilot.dirs`,
+`agents.claude.dirs`, and other per-agent settings. They label sessions by
 source machine without namespacing native session IDs. Transport source session
 files only -- never copy `sessions.db` or its WAL files. Machine labels are
 captured at first ingestion; ordinary sync and `agentsview sync --full` preserve

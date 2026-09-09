@@ -33,6 +33,14 @@ func TestImporterUsesRecordedProjectWithoutLocalGitDiscovery(t *testing.T) {
 {"type":"response_item","timestamp":"2026-09-01T10:01:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Remote session content"}]}}
 `,
 		},
+		{
+			agent:    parser.AgentOpenHands,
+			filename: "086c7ecf6cb746b69fbcb900358d1247/events/event-00000.json",
+			id:       "openhands:086c7ecf-6cb7-46b6-9fbc-b900358d1247",
+			body: `{"id":"e0","timestamp":"2026-09-01T10:00:00Z","source":"environment",
+"observation":{"content":[{"type":"text","text":"Remote session content"}],
+"metadata":{"working_dir":%s},"kind":"TerminalObservation"},"kind":"ObservationEvent"}`,
+		},
 	} {
 		t.Run(string(tc.agent), func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
@@ -46,7 +54,7 @@ func TestImporterUsesRecordedProjectWithoutLocalGitDiscovery(t *testing.T) {
 			extracted := t.TempDir()
 			const remoteDir = "/remote/sessions"
 			sessions := remappedRemotePath(extracted, remoteDir)
-			require.NoError(t, os.MkdirAll(sessions, 0o755))
+			require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(sessions, tc.filename)), 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(sessions, tc.filename),
 				[]byte(fmt.Sprintf(tc.body, cwdJSON)), 0o600))
 

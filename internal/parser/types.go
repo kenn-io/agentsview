@@ -37,6 +37,7 @@ const (
 	AgentTrae           AgentType = "trae"
 	AgentVSCopilot      AgentType = "visualstudio-copilot"
 	AgentPi             AgentType = "pi"
+	AgentTau            AgentType = "tau"
 	AgentPrimeAgent     AgentType = "prime-agent"
 	AgentOMP            AgentType = "omp"
 	AgentQwen           AgentType = "qwen"
@@ -89,18 +90,19 @@ type AgentDef struct {
 	Type              AgentType
 	DisplayName       string // "Claude Code", "Codex", etc.
 	EnvVar            string // env var for dir override
+	NativeEnvVar      string // native session-dir env var, used when EnvVar is empty
 	DefaultRootEnvVar string // env var that re-roots DefaultDirs before $HOME fallback
-	ConfigKey         string // TOML key in config.toml ("" = none)
-	// HomeConfigKey is the TOML key for an array of alternate agent home
-	// directories ("" = none). Each home re-roots DefaultDirs the same way
-	// DefaultRootEnvVar does, and the derived roots are additive.
-	HomeConfigKey string
-	DefaultDirs   []string // paths relative to $HOME
-	IDPrefix      string   // session ID prefix ("" for Claude)
-	WatchSubdirs  []string // subdirs to watch (nil = watch root)
-	ShallowWatch  bool     // true = watch root only, rely on periodic sync for subdirs
-	FileBased     bool     // false for DB-backed agents
-	Usage         UsageCapabilities
+	DefaultRootDir    string // home-relative prefix replaced by the root env (empty = first component)
+	ConfigKey         string // optional legacy top-level TOML directory key
+	// HomesSupported enables [agents.<id>].homes. Each home re-roots
+	// DefaultDirs the same way DefaultRootEnvVar does; roots are additive.
+	HomesSupported bool
+	DefaultDirs    []string // paths relative to $HOME
+	IDPrefix       string   // session ID prefix ("" for Claude)
+	WatchSubdirs   []string // subdirs to watch (nil = watch root)
+	ShallowWatch   bool     // true = watch root only, rely on periodic sync for subdirs
+	FileBased      bool     // false for DB-backed agents
+	Usage          UsageCapabilities
 	// PostAnswerToolWork marks transcript formats that may emit their
 	// user-facing answer before later tool calls in the same turn.
 	PostAnswerToolWork bool
@@ -147,7 +149,7 @@ var Registry = []AgentDef{
 		EnvVar:            "CLAUDE_PROJECTS_DIR",
 		DefaultRootEnvVar: "CLAUDE_CONFIG_DIR",
 		ConfigKey:         "claude_project_dirs",
-		HomeConfigKey:     "claude_homes",
+		HomesSupported:    true,
 		DefaultDirs:       []string{".claude/projects"},
 		IDPrefix:          "",
 		FileBased:         true,
@@ -178,7 +180,7 @@ var Registry = []AgentDef{
 		EnvVar:            "CODEX_SESSIONS_DIR",
 		DefaultRootEnvVar: "CODEX_HOME",
 		ConfigKey:         "codex_sessions_dirs",
-		HomeConfigKey:     "codex_homes",
+		HomesSupported:    true,
 		DefaultDirs: []string{
 			".codex/sessions",
 			".codex/archived_sessions",
@@ -482,12 +484,25 @@ var Registry = []AgentDef{
 		},
 	},
 	{
-		Type:        AgentPi,
-		DisplayName: "Pi",
-		EnvVar:      "PI_DIR",
-		ConfigKey:   "pi_dirs",
-		DefaultDirs: []string{".pi/agent/sessions"},
-		IDPrefix:    "pi:",
+		Type:              AgentPi,
+		DisplayName:       "Pi",
+		EnvVar:            "PI_DIR",
+		NativeEnvVar:      "PI_CODING_AGENT_SESSION_DIR",
+		DefaultRootEnvVar: "PI_CODING_AGENT_DIR",
+		DefaultRootDir:    ".pi/agent",
+		ConfigKey:         "pi_dirs",
+		HomesSupported:    true,
+		DefaultDirs:       []string{".pi/agent/sessions"},
+		IDPrefix:          "pi:",
+		FileBased:         true,
+	},
+	{
+		Type:        AgentTau,
+		DisplayName: "Tau",
+		EnvVar:      "TAU_SESSIONS_DIR",
+		ConfigKey:   "tau_dirs",
+		DefaultDirs: []string{".tau/sessions"},
+		IDPrefix:    "tau:",
 		FileBased:   true,
 	},
 	{

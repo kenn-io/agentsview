@@ -289,6 +289,22 @@ func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
 		)
 	}
 
+	// Pi's native session-dir override writes transcripts directly into the
+	// chosen directory; default homes group them by project instead.
+	if agent == AgentPi {
+		return NewJSONLSourceSet(agent, roots,
+			WithRecursive(),
+			WithSymlinkFollowing(),
+			WithIncludePath(func(root, path string) bool {
+				return isPiSourcePath(root, path) &&
+					(filepath.Dir(path) == filepath.Clean(root) || IsDirectoryJSONLPath(root, path))
+			}),
+			WithProjectHint(func(root, path string) string { return "" }),
+			WithSessionIDFromPath(piSessionIDFromPath),
+			WithContentHashing(),
+		)
+	}
+
 	// OMP nests subagent transcripts one directory deeper than the main
 	// session (<project>/<session>/<agent>.jsonl), so it cannot use the
 	// strict two-segment DirectoryJSONLSourceSet layout the other pi-family

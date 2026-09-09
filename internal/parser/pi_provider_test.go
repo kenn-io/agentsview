@@ -133,7 +133,8 @@ func TestPiProviderSourceMethods(t *testing.T) {
 	writeSourceFile(t, sourcePath, piProviderFixture("session-123"))
 	writeSourceFile(t, lookupOnlyPath, `{"type":"message"}`+"\n")
 	writeSourceFile(t, filepath.Join(root, "encoded-cwd", "notes.txt"), "{}\n")
-	writeSourceFile(t, filepath.Join(root, "root-session.jsonl"), piProviderFixture("root-session"))
+	rootPath := filepath.Join(root, "root-session.jsonl")
+	writeSourceFile(t, rootPath, piProviderFixture("root-session"))
 	writeSourceFile(t, filepath.Join(root, "encoded-cwd", "nested", "deep.jsonl"), piProviderFixture("deep"))
 
 	provider, ok := NewProvider(AgentPi, ProviderConfig{
@@ -144,10 +145,9 @@ func TestPiProviderSourceMethods(t *testing.T) {
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, AgentPi, discovered[0].Provider)
-	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
-	assert.Empty(t, discovered[0].ProjectHint)
+	require.Len(t, discovered, 2)
+	assert.ElementsMatch(t, []string{sourcePath, rootPath},
+		[]string{discovered[0].DisplayPath, discovered[1].DisplayPath})
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -170,8 +170,22 @@ func TestPiProviderSourceMethods(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, lookupOnlyPath, found.DisplayPath)
 
+	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "pi:root-session",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rootPath, found.DisplayPath)
+
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: rootPath, EventKind: "write", WatchRoot: root,
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, rootPath, changed[0].DisplayPath)
+
 	require.NoError(t, os.Remove(sourcePath))
-	changed, err := provider.SourcesForChangedPath(
+	changed, err = provider.SourcesForChangedPath(
 		context.Background(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)

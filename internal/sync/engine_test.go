@@ -11328,6 +11328,59 @@ func TestEngine_SyncPathsReasonixPersistsToolResultContent(t *testing.T) {
 	assert.Equal(t, len("file contents here"), msgs[1].ToolCalls[0].ResultContentLength)
 }
 
+func TestSyncAllReparsesCursorLegacyToolResultsFromVersion101(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {root},
+		},
+		Machine:                           "local",
+		DisableFilesystemProjectDiscovery: true,
+	})
+	t.Cleanup(engine.Close)
+	const sessionID = "cursor:11111111-2222-4333-8444-555555555555"
+	path := filepath.Join(root, "project-a", "agent-transcripts",
+		"11111111-2222-4333-8444-555555555555.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(
+		"assistant:\n[Tool call] Shell\n  command=ls\n"+
+			"[Tool result]\n  file1.go\n",
+	), 0o644))
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	before, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	require.Len(t, before[0].ToolCalls, 1)
+
+	// Reproduce the archived output of the parser at data version 101,
+	// preserving the source fingerprint and leaving the file unchanged.
+	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec("DELETE FROM tool_result_events WHERE session_id = ?", sessionID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE tool_calls
+			SET result_content = '', result_content_length = 0
+			WHERE session_id = ?`, sessionID)
+		return err
+	}))
+	require.NoError(t, database.SetSessionDataVersion(sessionID, 101))
+
+	stats = engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	assert.False(t, stats.Aborted)
+	messages, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	call := messages[0].ToolCalls[0]
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "file1.go", call.ResultEvents[0].Content)
+	assert.Equal(t, "file1.go", call.ResultContent)
+}
+
 func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {
 	fx := newEngineFixture(t)
 	em := &fakeEmitter{}

@@ -47,6 +47,10 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 		"completion             Generate the autocompletion script for the specified shell",
 		"Flags:",
 		"--version",
+		"[agents.claude]",
+		"dirs = [\"/path/one\", \"/path/two\"]",
+		"[agents.codex]",
+		"dirs = [\"/codex/a\", \"/codex/b\"]",
 	} {
 		assert.Contains(t, help, want, "help missing %q", want)
 	}

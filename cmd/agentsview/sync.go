@@ -146,7 +146,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 					onProgress = progress.Print
 				} else {
 					fmt.Println("Running sync via daemon...")
-					onProgress = printSyncProgress
+					onProgress = newSyncProgressPrinter(os.Stdout)
 				}
 				stats, err := runDaemonSync(
 					context.Background(), tr, appCfg.AuthToken, cfg.Full,
@@ -271,6 +271,7 @@ func useDaemonForSync(tr transport) bool {
 type remoteProgressPrinter struct {
 	w        io.Writer
 	now      func() time.Time
+	terminal bool
 	label    string
 	started  time.Time
 	inPlace  bool
@@ -282,7 +283,9 @@ const remoteLocalSyncProgressLabel = "Syncing local sessions"
 func newRemoteProgressPrinter(
 	w io.Writer, now func() time.Time,
 ) *remoteProgressPrinter {
-	return &remoteProgressPrinter{w: w, now: now}
+	return &remoteProgressPrinter{
+		w: w, now: now, terminal: isTerminalWriter(w),
+	}
 }
 
 func (p *remoteProgressPrinter) Print(progress sync.Progress) {
@@ -314,9 +317,14 @@ func (p *remoteProgressPrinter) Print(progress sync.Progress) {
 			p.finishCurrent()
 			p.label = label
 			p.started = p.now()
+			if !p.terminal {
+				fmt.Fprintf(p.w, "  %s...\n", strings.TrimSuffix(label, "."))
+			}
 		}
-		p.inPlace = true
-		fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		p.inPlace = p.terminal
+		if p.terminal {
+			fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		}
 		return
 	}
 	if progress.Phase == sync.PhaseSyncing && progress.SessionsTotal > 0 {
@@ -324,9 +332,14 @@ func (p *remoteProgressPrinter) Print(progress sync.Progress) {
 			p.finishCurrent()
 			p.label = label
 			p.started = p.now()
+			if !p.terminal {
+				fmt.Fprintf(p.w, "  %s...\n", strings.TrimSuffix(label, "."))
+			}
 		}
-		p.inPlace = true
-		fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		p.inPlace = p.terminal
+		if p.terminal {
+			fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		}
 		return
 	}
 	if p.label == label {
@@ -888,7 +901,7 @@ func runLocalSyncResult(
 		progress = resyncProgress.Print
 	} else {
 		fmt.Println("Running initial sync...")
-		progress = printSyncProgress
+		progress = newSyncProgressPrinter(os.Stdout)
 	}
 	started := time.Now()
 	didResync, stats, err := coordinateLocalSyncRunner(

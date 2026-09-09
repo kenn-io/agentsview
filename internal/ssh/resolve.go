@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -397,6 +398,8 @@ func buildResolveScript() string {
 			"av_emit_rooted_dir() { " +
 			"dir=\"$1\"; " +
 			"root=\"$2\"; " +
+			"case \"$dir\" in \"~\") dir=\"$HOME\";; \"~/\"*) dir=\"$HOME/${dir#??}\";; esac; " +
+			"case \"$root\" in \"~\") root=\"$HOME\";; \"~/\"*) root=\"$HOME/${root#??}\";; esac; " +
 			"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root$3\"; " +
 			"[ -n \"$dir\" ] || dir=\"$4\"; " +
 			"av_emit_target \"$5\" \"$dir\"; " +
@@ -411,7 +414,7 @@ func buildResolveScript() string {
 			for _, rel := range def.DefaultDirs {
 				fmt.Fprintf(&b,
 					"av_emit_forbidden_root \"%s\" \"$HOME/%s\"\n",
-					remoteEnvExpansion(def.EnvVar), rel,
+					remoteEnvExpansion(def.EnvVar, def.NativeEnvVar), rel,
 				)
 			}
 			continue
@@ -445,26 +448,26 @@ func buildResolveScript() string {
 			if def.Type == parser.AgentHermes {
 				fmt.Fprintf(&b,
 					"av_emit_hermes_dir \"%s\" \"%s\"\n",
-					remoteEnvExpansion(def.EnvVar), defaultDir,
+					remoteEnvExpansion(def.EnvVar, def.NativeEnvVar), defaultDir,
 				)
 				continue
 			}
 			if def.DefaultRootEnvVar != "" {
-				rootTail := remoteDefaultRootTail(rel)
+				rootTail := remoteDefaultRootTail(rel, def.DefaultRootDir)
 				rootSuffix := ""
 				if rootTail != "" {
 					rootSuffix = "/" + rootTail
 				}
 				fmt.Fprintf(&b,
 					"av_emit_rooted_dir \"%s\" \"%s\" \"%s\" \"%s\" %s\n",
-					remoteEnvExpansion(def.EnvVar),
+					remoteEnvExpansion(def.EnvVar, def.NativeEnvVar),
 					remoteEnvExpansion(def.DefaultRootEnvVar),
 					rootSuffix, defaultDir, string(def.Type),
 				)
 			} else {
 				fmt.Fprintf(&b,
 					"av_emit_dir \"%s\" \"%s\" %s\n",
-					remoteEnvExpansion(def.EnvVar), defaultDir,
+					remoteEnvExpansion(def.EnvVar, def.NativeEnvVar), defaultDir,
 					string(def.Type),
 				)
 			}
@@ -483,7 +486,7 @@ func buildResolveScript() string {
 			fmt.Fprintf(&b,
 				"if [ -z \"%s\" ]; then "+
 					"av_emit_hermes_profiles \"$HOME/.hermes/profiles\"; fi\n",
-				remoteEnvExpansion(def.EnvVar),
+				remoteEnvExpansion(def.EnvVar, def.NativeEnvVar),
 			)
 		}
 	}
@@ -493,11 +496,14 @@ func buildResolveScript() string {
 	return b.String()
 }
 
-func remoteEnvExpansion(envVar string) string {
-	if envVar == "" {
-		return ""
+func remoteEnvExpansion(envVars ...string) string {
+	value := ""
+	for _, envVar := range slices.Backward(envVars) {
+		if envVar != "" {
+			value = "${" + envVar + ":-" + value + "}"
+		}
 	}
-	return "${" + envVar + ":-}"
+	return value
 }
 
 // BuildResolveScriptForTest exposes the SSH resolver script to
@@ -506,8 +512,11 @@ func BuildResolveScriptForTest() string {
 	return buildResolveScript()
 }
 
-func remoteDefaultRootTail(rel string) string {
+func remoteDefaultRootTail(rel, defaultRoot string) string {
 	cleaned := path.Clean(rel)
+	if defaultRoot != "" {
+		return strings.TrimPrefix(cleaned, path.Clean(defaultRoot)+"/")
+	}
 	if _, tail, ok := strings.Cut(cleaned, "/"); ok && tail != "" {
 		return tail
 	}

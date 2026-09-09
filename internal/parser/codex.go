@@ -174,7 +174,7 @@ func codexSubagentParentThreadID(payload gjson.Result) string {
 	parentID := strings.TrimSpace(
 		payload.Get("source.subagent.thread_spawn.parent_thread_id").Str,
 	)
-	if parentID == "" && payload.Get("thread_source").Str == "subagent" {
+	if parentID == "" && (payload.Get("source.subagent").Exists() || payload.Get("thread_source").Str == "subagent") {
 		parentID = strings.TrimSpace(payload.Get("parent_thread_id").Str)
 	}
 	return parentID

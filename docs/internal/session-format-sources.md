@@ -368,7 +368,11 @@ add an archived or maintained mirror without replacing the original identity.
   The TUI also maintains an append-oriented `history.jsonl` whose records
   contain `session_id`, Unix-seconds `ts`, and submitted prompt `text`;
   configured size enforcement can rewrite a retained tail in place. Agentsview
-  consumes only the first two fields as a live-activity hint.
+  consumes only the first two fields as a live-activity hint. Subagent
+  rollouts carry a structural `source.subagent` marker and a top-level
+  `parent_thread_id`; that pair defines the parent edge. `thread_source` is a
+  legacy fallback, and `session_id` identifies the root or tree rather than
+  the parent.
 
 - **Evidence:** `source`.
 
@@ -377,6 +381,10 @@ add an archived or maintained mirror without replacing the original identity.
   [rollout recorder](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/rollout/src/recorder.rs)
   and
   [protocol types](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/protocol.rs).
+  The current producer source at commit
+  `a44454656459437fc8e2ffa9eca0646537b1fdfd` keeps the subagent source marker
+  and parent while serializing guardian reviews as `guardian_review`; see
+  [codex_delegate.rs](https://github.com/openai/codex/blob/a44454656459437fc8e2ffa9eca0646537b1fdfd/codex-rs/core/src/codex_delegate.rs#L76-L110).
   The pinned
   [message-history implementation](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/message-history/src/lib.rs)
   defines the `session_id`/`ts`/`text` schema, append behavior, file
@@ -411,9 +419,12 @@ add an archived or maintained mirror without replacing the original identity.
   opaque identifiers, and discards the leading turns also present in the
   parent. UUID versions and identifier bytes carry no chronological meaning;
   the first turn id absent from the parent begins child-owned usage. Missing
-  parents fail open, and child-only subagent transcripts are left unchanged.
-  Legacy `session_index.jsonl` files from aliased homes also travel through
-  remote archive export and import. Reverified on 2026-09-07 with
+  parents fail open, and child-only subagent transcripts are left unchanged. A
+  local corpus measured 2026-09-07 contained 2,044 Codex JSONL files, with
+  1,565 carrying `source.subagent` and none carrying `guardian_review`; the
+  published producer source supplies the guardian format evidence. Legacy
+  `session_index.jsonl` files from aliased homes also travel through remote
+  archive export and import. Reverified on 2026-09-07 with
   `TestRemoteCodexAliasTitleSurvivesArchiveImport`, which checks the imported
   title while another provider retains its own metadata configuration.
   Metadata paths are resolved at configuration load and belong to provider
@@ -798,7 +809,7 @@ changes follow the existing five-minute full-digest reconciliation policy.
 `cmd/perfsim` accepts `--source-format opencode-v2` to exercise projection
 inserts, finalization, child-only updates, archive parsing, and usage queries.
 This simulator models the persisted projector output; it does not implement
-OpenCode's event engine. Data version 100 makes existing imports and skipped
+OpenCode's event engine. Data version 103 makes existing imports and skipped
 sources eligible for parsing again without requiring a producer write.
 
 **Performance fixture check (2026-09-04):** Rechecked the pinned commit's
@@ -1046,11 +1057,26 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 - **Agentsview:** `internal/parser/openhands.go` and
   `internal/parser/openhands_provider.go`; `TASKS.json` is legacy supplemental
   state rather than a requirement of the pinned current producer.
+- **Project discovery reverified 2026-09-08:** The pinned SDK's
+  [terminal observation](https://github.com/OpenHands/software-agent-sdk/blob/4fe565663af2b4f1130a6e0dac7566b002bfe9b4/openhands-tools/openhands/tools/terminal/definition.py)
+  carries `metadata.working_dir`. Remote imports derive project names from
+  recorded paths without inspecting those directories on the receiving
+  machine; local sessions retain filesystem-based Git project discovery.
 
 ## Cursor (`cursor`)
 
 - **Format:** Legacy text and newer JSONL transcripts under per-project
   `agent-transcripts` directories.
+- **Turn timestamps:** Cursor user messages can carry a leading metadata tag in
+  the form
+  `<timestamp>Weekday, Mon D, YYYY, H:MM AM|PM (UTC±H[:MM])</timestamp>`
+  immediately before `<user_query>`. Agentsview parses the explicit offset and
+  stores a UTC instant with zero seconds and nanoseconds. The source has
+  minute precision, so the encoded `:00` does not provide second precision.
+- **Session bounds:** Agentsview uses the earliest and latest usable tagged user
+  turns. A transcript with no usable tag retains the file modification time
+  for both bounds. The latest user turn gives a lower bound for assistant
+  completion because the Cursor format supplies no assistant completion time.
 - **Evidence:** `documentation`.
 - **Upstream:** Cursor's first-party
   [history documentation](https://docs.cursor.com/en/agent/chat/history)
@@ -1062,6 +1088,24 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   for the GUI, `state.vscdb` is the only transcript store, not metadata beside
   one. Cursor's public GitHub organization was also searched 2026-07-19; no
   transcript schema or producer source was found.
+- **Legacy result evidence (rechecked 2026-09-09):**
+  [Issue #1627](https://github.com/kenn-io/agentsview/issues/1627), based on
+  read-only inspection of live transcripts on 2026-09-04, reports discarded
+  legacy `[Tool result]` blocks. It supplies no raw legacy excerpt or producer
+  version. The parser retains its existing assumption that result bodies are
+  indented: a nonempty line at column zero ends the body and becomes assistant
+  prose. Transcript role delimiters also start at column zero; indented
+  `user:` and `assistant:` lines remain in the result body. The issue and
+  linked first-party material do not establish that indentation contract; the
+  regression inputs are synthetic, not captured producer fixtures. A redacted
+  legacy excerpt is still needed to verify it. The first-party
+  [JSONL discussion](https://forum.cursor.com/t/accessing-the-full-agent-transcript-in-cursor/157311)
+  reports missing tool outputs in JSONL, which does not establish legacy
+  text boundaries. The history documentation link above now redirects to the
+  docs landing page and supplies no legacy format details. The archive
+  regression also exercises incremental S3 sync from data version 101 with an
+  unchanged object, verifying recovered output and a skipped fetch on the next
+  pass. This uses synthetic input, not additional format evidence.
 - **Usage and cost:** The consumed text/JSONL transcripts have no reliable
   per-message token, cache, reasoning, credit, or monetary-cost fields.
 - **Agentsview:** `internal/parser/cursor.go`,
@@ -1272,6 +1316,18 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
   version 81 reparses existing Pi-family archives after adding the flat
   `cacheWrite` spelling.
+- **Directory configuration:** Reverified 2026-09-09 against
+  [config.ts](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/config.ts)
+  and
+  [main.ts](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/main.ts).
+  `PI_CODING_AGENT_DIR` replaces `~/.pi/agent`, with default sessions under
+  `sessions/`. `PI_CODING_AGENT_SESSION_DIR` supplies the session directory
+  directly and takes precedence over that default. Both accept tilde paths.
+  The pinned
+  [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
+  writes files directly into an explicit session directory; default sessions
+  live one encoded project directory below the session root. Agentsview
+  discovers both layouts.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
@@ -2407,9 +2463,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   producer revision `da7c06396c9848abfae362dcffce3861a6a0c95a`, checked
   2026-09-05 (tool-result types reverified 2026-09-08), includes structured
   model-switch facts from PR #889. Earlier v2 records need not contain those
-  facts. See [transcript writer and framing][evener-source-1],
-  [turn schema][evener-source-2], [message and usage types][evener-source-3],
-  [metadata][evener-source-4], and [fork writer][evener-source-5].
+  facts. See
+  [transcript.go](https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go),
+  [turn schema][evener-source-2],
+  [message and usage types][evener-source-3], [metadata][evener-source-4], and
+  [fork writer][evener-source-5].
 - **Usage and cost:** assistant turns persist uncached input and output plus
   optional cache reads, 5-minute cache writes, 1-hour cache writes, and
   reasoning counts. Reasoning is part of output, not an additional output
@@ -2439,7 +2497,61 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   available. SSH roots remain file-scoped when invalid filename encodings are
   skipped.
 
-[evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
+## Tau (`tau`)
+
+- **Format:** Tau stores one JSONL transcript per session below
+  `<root>/<project>/`, beside a metadata-only `index.jsonl`. Entries use an
+  `id` and `parent_id` tree, and the latest `leaf.entry_id` selects the active
+  path. Outer timestamps use fractional Unix seconds; nested message
+  timestamps use Unix milliseconds.
+- **Evidence:** `source`.
+- **Upstream:** Tau source is pinned to
+  [`93bfc761b43e0a5a646b0e5ac808b3a15918e74d`](https://github.com/huggingface/tau/tree/93bfc761b43e0a5a646b0e5ac808b3a15918e74d).
+  Clone `https://github.com/huggingface/tau.git` at that revision. The issue
+  transcript attachment has 33 records and SHA256
+  `f0d95655c08002655c7e727afe7249bebd8077c58ec017d76a703d785dddb3bd`. The
+  index attachment has SHA256
+  `069e87052a6fb448f2588669ec6cd31c2456e7a8f7bdee15083d9308197cd3d1`.
+  `internal/parser/testdata/tau/issue-session.jsonl` is a sanitized derivative
+  of the transcript. It changes paths and names but retains IDs, parents,
+  timestamps, models, tools, and usage values. A private Tau 0.4.1 capture
+  used during PR validation exercises an active-leaf branch and compaction.
+  The public fixture and the committed branch and compaction tests remain
+  separate from that private capture. The entry models are in
+  [`entries.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_agent/session/entries.py),
+  message models are in
+  [`messages.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_agent/messages.py),
+  ancestry is in
+  [`tree.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_agent/session/tree.py),
+  persistence is in
+  [`storage.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_agent/session/storage.py),
+  paths are in
+  [`paths.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_coding/paths.py),
+  and the session manager is in
+  [`session_manager.py`](https://github.com/huggingface/tau/blob/93bfc761b43e0a5a646b0e5ac808b3a15918e74d/src/tau_coding/session_manager.py).
+- **Usage and cost:** AgentsView maps only `input`, `output`, `cacheRead`, and
+  `cacheWrite` to its existing per-message token fields. Tau's `cacheWrite`
+  already contains total cache creation, so AgentsView counts it once and
+  ignores `cacheWrite1h`, `reasoning`, and the stored cost object. Catalog
+  pricing supplies cost when a model has a rate. The private live capture also
+  contained `reasoning`, `totalTokens`, and cost objects, which AgentsView
+  ignores. A producer-derived test covers 25 total cache-write tokens and a
+  10-token one-hour subset.
+- **Agentsview:** `internal/parser/tau.go` and `internal/parser/tau_provider.go`
+  read each transcript once, exclude the exact `index.jsonl` basename, use the
+  filename for ordinary session identity, and encode the project directory
+  plus a stable hash of the canonical configured root into `default.jsonl`
+  session IDs. They replay the selected ancestry and return a zero-message
+  result for an explicit empty leaf. A missing parent detaches the selected
+  path. Messages with roles `bashExecution` (user-run shell commands),
+  `custom`, `branchSummary`, and `compactionSummary` are skipped; separate
+  `branch_summary` and `compaction` entries are rendered. These roles and the
+  native `default-<project-directory>` ID were reverified against the pinned
+  message models and session manager on 2026-09-08. The root hash keeps
+  default sessions from distinct configured roots separate; it does not
+  distinguish machines with identical root paths. No legacy Tau v1 conversion,
+  native transfer, or index metadata synchronization is included.
+
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
 [evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
@@ -110,6 +111,7 @@ func OpenHandsSnapshot(path string) (FileInfo, error) {
 // parseSession parses a single OpenHands CLI conversation
 // directory into a session and messages.
 func (p *openHandsProvider) parseSession(
+	ctx context.Context,
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	sessionDir, err := normalizeOpenHandsSessionPath(path)
@@ -239,7 +241,7 @@ func (p *openHandsProvider) parseSession(
 
 	project := ""
 	if cwd != "" {
-		project = ExtractProjectFromCwd(cwd)
+		project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	}
 	if project == "" {
 		project = "openhands"

@@ -8279,12 +8279,12 @@ func (e *Engine) filterFilesByMtime(
 				continue
 			}
 		}
-		if !isS3SourcePath(f.Path) &&
-			e.pathInStaleIdentitySet(staleIdentities, f.Agent, f.Path) &&
+		if e.pathInStaleIdentitySet(staleIdentities, f.Agent, f.Path) &&
 			e.staleSourceReparseAdmitted(
 				sourceCwdParticipating, sourceCwd,
 			) {
-			// Cwd-only reconciliation invalidates rows that must bypass mtime cutoff.
+			// Parser upgrades and cwd reconciliation must bypass the cutoff,
+			// including unchanged S3 objects with stale archived output.
 			out = append(out, f)
 			continue
 		}

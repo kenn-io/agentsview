@@ -419,7 +419,10 @@ func TestSyncEngineCursorCwdDataVersionRefresh(t *testing.T) {
 	path := filepath.Join(root, projectDir, "agent-transcripts", sessionID+".jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(
-		`{"role":"user","message":{"content":"refresh cursor cwd"}}`+"\n",
+		strings.Join([]string{
+			`{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp>\n<user_query>refresh cursor cwd</user_query>"}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"assistant reply"}]}}`,
+		}, "\n")+"\n",
 	), 0o644))
 	env := &testEnv{db: dbtest.OpenTestDB(t)}
 	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
@@ -447,7 +450,8 @@ func TestSyncEngineCursorCwdDataVersionRefresh(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.True(t, changed)
-	assert.Less(t, env.db.GetSessionDataVersion(fullID), db.CurrentDataVersion())
+	assert.Equal(t, db.CurrentDataVersion()-1, env.db.GetSessionDataVersion(fullID),
+		"cwd repair must mark the row stale by exactly one version")
 	stats := env.engine.SyncAllSince(
 		t.Context(), time.Now().Add(time.Hour), nil,
 	)
@@ -458,6 +462,21 @@ func TestSyncEngineCursorCwdDataVersionRefresh(t *testing.T) {
 			"stale Cursor rows must be reparsed through the cutoff")
 	})
 	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(fullID))
+
+	refreshed, err := env.db.GetSession(t.Context(), fullID)
+	require.NoError(t, err)
+	require.NotNil(t, refreshed)
+	require.NotNil(t, refreshed.StartedAt)
+	require.NotNil(t, refreshed.EndedAt)
+	assert.Equal(t, expectedCwd, refreshed.Cwd)
+	assert.Equal(t, "2026-07-02T15:11:00Z", *refreshed.StartedAt)
+	assert.Equal(t, "2026-07-02T15:11:00Z", *refreshed.EndedAt)
+
+	messages, err := env.db.GetMessages(t.Context(), fullID, 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "2026-07-02T15:11:00Z", messages[0].Timestamp)
+	assert.Equal(t, "", messages[1].Timestamp)
 }
 
 // A session archived before the cwd allow-list was configured must not

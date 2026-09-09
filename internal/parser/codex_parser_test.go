@@ -121,6 +121,19 @@ func TestParseCodexSession_Basic(t *testing.T) {
 	assertSessionMeta(t, sess, "codex:abc-123", "my_api", AgentCodex)
 }
 
+func TestParseCodexSession_GuardianReviewIssue1644(t *testing.T) {
+	content := loadFixture(t, "codex/guardian_review_session.jsonl")
+	sess, msgs := runCodexParserTest(t, "guardian_review_session.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Equal(t, "codex:01a00000-0000-7000-8000-000000000002", sess.ID)
+	assert.Equal(t, "codex:01a00000-0000-7000-8000-000000000001", sess.ParentSessionID)
+	assert.Equal(t, RelSubagent, sess.RelationshipType)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "review the retry change for safety", msgs[0].Content)
+	assert.Equal(t, "No blocking issues found in the retry change.", msgs[1].Content)
+}
+
 func TestParseCodexSession_TracksMalformedMiddleRecord(t *testing.T) {
 	content := loadFixture(t, "codex/standard_session.jsonl")
 	lineEnd := strings.IndexByte(content, '\n')
@@ -150,7 +163,7 @@ func TestParseCodexSession_SubagentLineage(t *testing.T) {
 		{
 			name: "current nested source",
 			meta: fmt.Sprintf(
-				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"depth":1}}}}}`,
+				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","parent_thread_id":"wrong-parent","source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"depth":1}}}}}`,
 				tsEarly, childID, parentID,
 			),
 			wantParent:       "codex:" + parentID,
@@ -164,6 +177,67 @@ func TestParseCodexSession_SubagentLineage(t *testing.T) {
 			),
 			wantParent:       "codex:" + parentID,
 			wantRelationship: RelSubagent,
+		},
+		{
+			name: "guardian other source",
+			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
+				"guardian_review", map[string]any{"other": "guardian"},
+				childID, parentID, "/tmp", "user", tsEarly,
+			),
+			wantParent:       "codex:" + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name: "review source unit",
+			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
+				"guardian_review", "review", childID, parentID,
+				"/tmp", "user", tsEarly,
+			),
+			wantParent:       "codex:" + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name: "compact source unit",
+			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
+				"guardian_review", "compact", childID, parentID,
+				"/tmp", "user", tsEarly,
+			),
+			wantParent:       "codex:" + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name: "memory consolidation source unit",
+			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
+				"guardian_review", "memory_consolidation", childID, parentID,
+				"/tmp", "user", tsEarly,
+			),
+			wantParent:       "codex:" + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name: "future source label",
+			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
+				"future_label", map[string]any{"future": "variant"},
+				childID, parentID, "/tmp", "user", tsEarly,
+			),
+			wantParent:       "codex:" + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name: "subagent source without parent",
+			meta: fmt.Sprintf(
+				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","parent_thread_id":"","session_id":"root-session","source":{"subagent":{"other":"guardian"}},"thread_source":"guardian_review"}}`,
+				tsEarly, childID,
+			),
+			wantRelationship: RelNone,
+		},
+		{
+			name: "non subagent source with parent",
+			meta: fmt.Sprintf(
+				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","parent_thread_id":%q,"session_id":"root-session","source":"vscode","thread_source":"user"}}`,
+				tsEarly, childID, parentID,
+			),
+			wantRelationship: RelNone,
 		},
 		{
 			name:             "root session",
@@ -1875,6 +1949,13 @@ func TestParseCodexSession_SubagentSessionSkipsReplayedHistory(t *testing.T) {
 			meta: fmt.Sprintf(
 				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp/project","thread_source":"subagent","parent_thread_id":%q}}`,
 				tsEarly, childID, parentID,
+			),
+		},
+		{
+			name: "guardian source metadata",
+			meta: testjsonl.CodexSubagentSessionMetaVariantJSON(
+				"guardian_review", map[string]any{"other": "guardian"},
+				childID, parentID, "/tmp/project", "user", tsEarly,
 			),
 		},
 	}

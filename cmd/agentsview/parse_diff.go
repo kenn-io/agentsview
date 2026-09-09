@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
+	"golang.org/x/term"
 )
 
 // parseDiffChangedCap caps the non-verbose changed-sessions
@@ -218,11 +219,7 @@ func isTerminalWriter(w io.Writer) bool {
 	if !ok {
 		return false
 	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 // parseDiffAgentTypes validates --agent values against the parser

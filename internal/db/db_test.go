@@ -1091,8 +1091,18 @@ func TestCurrentDataVersionPiSkillAttribution(t *testing.T) {
 }
 
 func TestCurrentDataVersionAntigravityCLIExperimentalServingVariant(t *testing.T) {
-	assert.Equal(t, 99, CurrentDataVersion(),
-		"Antigravity CLI experimental serving variant normalization requires re-parsing usage events")
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 99,
+		"version 99 is the data-version boundary for Antigravity CLI experimental serving variant normalization")
+}
+
+func TestCurrentDataVersionCodexGuardianLineage(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 100,
+		"version 100 is the data-version boundary for Codex guardian lineage")
+}
+
+func TestCurrentDataVersionCursorTurnTimestamps(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 101,
+		"Cursor turn timestamps require re-parsing existing sessions")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

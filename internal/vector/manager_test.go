@@ -290,15 +290,27 @@ func TestManagerShutdownCancelsDetachedStartBuild(t *testing.T) {
 	// context is canceled. Shutdown must cancel the detached build so daemon
 	// shutdown does not hang on Wait.
 	ix := openTestIndex(t)
+	encoding := make(chan struct{})
 	stuckEncoder := func(ctx context.Context, _ []string) ([][]float32, error) {
+		close(encoding)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 	m := NewManager(
 		ix, twoDocSource(), soloEncoders(stuckEncoder), fakeGeneration("fake-model"),
 	)
+	t.Cleanup(func() {
+		m.cancelDetached()
+		m.Wait()
+	})
 	require.NoError(t, m.StartBuild(BuildRequest{}))
-	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
+	// Running is set before the build goroutine starts. Wait for the encoder
+	// so Shutdown exercises cancellation there, after SQLite setup finishes.
+	select {
+	case <-encoding:
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "build never reached the encoder")
+	}
 
 	done := make(chan struct{})
 	go func() {

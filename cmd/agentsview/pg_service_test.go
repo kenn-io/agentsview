@@ -175,11 +175,13 @@ func TestSetEnvVarsAffectingService(t *testing.T) {
 	// AGENTSVIEW_PG_URL is a hard error elsewhere, not a warning, so it
 	// must never appear here even when set.
 	env := map[string]string{
-		"AGENTSVIEW_PG_SCHEMA":  "staging",
-		"CLAUDE_CONFIG_DIR":     "/tmp/claude-root",
-		"CLAUDE_PROJECTS_DIR":   "/tmp/claude",
-		"AGENTSVIEW_PG_URL":     "postgres://from-env",
-		"AGENTSVIEW_PG_MACHINE": "", // set-but-empty should be ignored
+		"AGENTSVIEW_PG_SCHEMA":        "staging",
+		"CLAUDE_CONFIG_DIR":           "/tmp/claude-root",
+		"CLAUDE_PROJECTS_DIR":         "/tmp/claude",
+		"PI_CODING_AGENT_DIR":         "/tmp/pi-home",
+		"PI_CODING_AGENT_SESSION_DIR": "/tmp/pi-sessions",
+		"AGENTSVIEW_PG_URL":           "postgres://from-env",
+		"AGENTSVIEW_PG_MACHINE":       "", // set-but-empty should be ignored
 	}
 	lookup := func(name string) (string, bool) {
 		v, ok := env[name]
@@ -189,6 +191,8 @@ func TestSetEnvVarsAffectingService(t *testing.T) {
 	assert.Contains(t, got, "AGENTSVIEW_PG_SCHEMA")
 	assert.Contains(t, got, "CLAUDE_CONFIG_DIR")
 	assert.Contains(t, got, "CLAUDE_PROJECTS_DIR")
+	assert.Contains(t, got, "PI_CODING_AGENT_DIR")
+	assert.Contains(t, got, "PI_CODING_AGENT_SESSION_DIR")
 	assert.NotContains(t, got, "AGENTSVIEW_PG_URL")
 	assert.NotContains(t, got, "AGENTSVIEW_PG_MACHINE",
 		"set-but-empty env vars should not be reported")
