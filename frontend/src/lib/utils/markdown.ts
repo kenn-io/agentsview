@@ -145,6 +145,8 @@ const VOID_HTML_TAGS = new Set([
   "wbr",
 ]);
 
+const RAW_HTML_TAGS = new Set(["pre", "script", "style", "textarea"]);
+
 /** Build a marked tokenizer extension that consumes a Claude Code
  *  shell-shortcut wrapper tag and emits a `code` token directly.
  *  Because this runs at the lexer level, occurrences of the tag
@@ -275,17 +277,43 @@ function fencedCodeRanges(src: string, end: number): TextRange[] {
   return ranges;
 }
 
+function xmlTagRanges(src: string, end: number): TextRange[] {
+  const ranges: TextRange[] = [];
+  const tags = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
+  let tag: RegExpExecArray | null;
+  while ((tag = tags.exec(src)) !== null && tag.index < end) {
+    ranges.push({ start: tag.index, end: Math.min(tags.lastIndex, end) });
+  }
+  return ranges;
+}
+
+function rawHtmlRanges(src: string, end: number): TextRange[] {
+  const ranges: TextRange[] = [];
+  const tags = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
+  let open: { name: string; contentStart: number } | undefined;
+  let tag: RegExpExecArray | null;
+  while ((tag = tags.exec(src)) !== null && tag.index < end) {
+    const name = tag[1]?.toLowerCase();
+    if (!name || !RAW_HTML_TAGS.has(name) || isSelfClosingTag(tag[0])) continue;
+    if (tag[0].startsWith("</")) {
+      if (open?.name === name) {
+        ranges.push({ start: open.contentStart, end: tag.index });
+        open = undefined;
+      }
+    } else if (!open) {
+      open = { name, contentStart: tags.lastIndex };
+    }
+  }
+  if (open) ranges.push({ start: open.contentStart, end });
+  return ranges;
+}
+
 function closedBacktickRanges(
   src: string,
   end: number,
   fencedRanges: TextRange[] = fencedCodeRanges(src, end),
 ): TextRange[] {
-  const ignoredRanges = [...fencedRanges];
-  const tags = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
-  let tag: RegExpExecArray | null;
-  while ((tag = tags.exec(src)) !== null && tag.index < end) {
-    ignoredRanges.push({ start: tag.index, end: Math.min(tags.lastIndex, end) });
-  }
+  const ignoredRanges = [...fencedRanges, ...xmlTagRanges(src, end)];
   const fenceLines = /^ {0,3}(?:`{3,}|~{3,})[^\r\n]*(?:\r?\n|$)/gm;
   let fenceLine: RegExpExecArray | null;
   while ((fenceLine = fenceLines.exec(src)) !== null && fenceLine.index < end) {
@@ -335,11 +363,16 @@ function closedBacktickRanges(
 function markdownCodeRanges(src: string, end: number): TextRange[] {
   const fencedRanges = fencedCodeRanges(src, end);
   const ranges = [...fencedRanges, ...closedBacktickRanges(src, end, fencedRanges)];
+  const tagRanges = xmlTagRanges(src, end);
+  const rawRanges = rawHtmlRanges(src, end);
   const comments = /<!--[\s\S]*?(?:-->|$)/g;
   let comment: RegExpExecArray | null;
   while ((comment = comments.exec(src)) !== null && comment.index < end) {
-    ranges.push({ start: comment.index, end: Math.min(comments.lastIndex, end) });
+    if (!isInRange(comment.index, tagRanges) && !isInRange(comment.index, rawRanges)) {
+      ranges.push({ start: comment.index, end: Math.min(comments.lastIndex, end) });
+    }
   }
+  ranges.push(...rawRanges);
   return ranges;
 }
 

@@ -810,14 +810,33 @@ describe("renderMarkdown", () => {
     });
 
     it("does not capture unknown tags inside HTML comments", () => {
-      const source = "Intro <!--\n<policy>\n# heading\n</policy>\n-->";
-      const omitted = renderMarkdown(source);
-      const enabled = renderMarkdown(source, {
-        renderUnknownXmlBlocksAsPreformatted: true,
-      });
+      for (const source of [
+        "Intro <!--\n<policy>\n# heading\n</policy>\n-->",
+        'Intro <script>const x = "<!--";</script>\n<policy>\n# later\n</policy>',
+      ]) {
+        const omitted = renderMarkdown(source);
+        const enabled = renderMarkdown(source, {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        });
 
-      expect(enabled).toBe(omitted);
-      expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
+        if (source.startsWith("Intro <!--")) {
+          expect(enabled).toBe(omitted);
+          expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
+        } else {
+          expect(parseHTML(enabled).querySelector("pre > code")?.textContent).toContain(
+            "<policy>",
+          );
+        }
+      }
+    });
+
+    it("treats comment-like text in an XML attribute as literal", () => {
+      const source = '<policy data="<!--">\n# body\n</policy>';
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelector("pre > code")?.textContent).toBe(`${source}\n`);
     });
   });
 
