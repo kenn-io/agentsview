@@ -1101,7 +1101,7 @@ func TestCurrentDataVersionCodexGuardianLineage(t *testing.T) {
 }
 
 func TestCurrentDataVersionCursorTurnTimestamps(t *testing.T) {
-	assert.Equal(t, 101, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 101,
 		"Cursor turn timestamps require re-parsing existing sessions")
 }
 
