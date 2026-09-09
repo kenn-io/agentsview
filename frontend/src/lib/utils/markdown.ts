@@ -121,7 +121,6 @@ const KNOWN_HTML_TAGS = new Set([
 
 const XML_TAG_ESCAPE_RE = /<\/?([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/g;
 const XML_TAG_SCAN_RE = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
-const UNKNOWN_XML_BLOCK_LINE_START_RE = /^ {0,3}<([A-Za-z][A-Za-z0-9:_-]*)\b/;
 
 type MarkdownToken = Token & Record<string, unknown>;
 
@@ -318,13 +317,10 @@ function findCompleteUnknownXmlBlocks(src: string): UnknownXmlBlock[] {
 /** Build a tokenizer that captures a complete unknown XML block before
  *  marked can parse Markdown in its body. Line-start matching keeps inline
  *  code and prose containing the same tags on their existing paths. */
-function unknownXmlBlockExtension(source: string): TokenizerExtension {
-  const scans = new Map<string, UnknownXmlBlock[]>([
-    [source, findCompleteUnknownXmlBlocks(source)],
-  ]);
-  let currentSource = source;
-  let currentBlocks = scans.get(source)!;
-  let currentIsTopLevel = true;
+function unknownXmlBlockExtension(): TokenizerExtension {
+  type ScanContext = { source: string; blocks: UnknownXmlBlock[] };
+  const contexts = new WeakMap<object, ScanContext>();
+  let currentContext: ScanContext | undefined;
 
   function firstBlockAtOrAfter(
     blocks: UnknownXmlBlock[],
@@ -340,51 +336,43 @@ function unknownXmlBlockExtension(source: string): TokenizerExtension {
     return blocks[low];
   }
 
-  function scanFor(src: string): { source: string; blocks: UnknownXmlBlock[] } {
-    if (!currentSource.endsWith(src)) {
-      if (source.endsWith(src)) {
-        currentSource = source;
-        currentBlocks = scans.get(source)!;
-        currentIsTopLevel = true;
-      } else {
-        currentSource = src;
-        currentBlocks = scans.get(src) ?? findCompleteUnknownXmlBlocks(src);
-        scans.set(src, currentBlocks);
-        currentIsTopLevel = false;
-      }
-    } else if (
-      !currentIsTopLevel &&
-      src !== currentSource &&
-      UNKNOWN_XML_BLOCK_LINE_START_RE.test(src)
-    ) {
-      const offset = currentSource.length - src.length;
-      const currentBlock = firstBlockAtOrAfter(currentBlocks, offset);
-      if (!currentBlock || currentBlock.rawStart !== offset) {
-        const localBlocks = scans.get(src) ?? findCompleteUnknownXmlBlocks(src);
-        scans.set(src, localBlocks);
-        if (localBlocks.some((block) => block.rawStart === 0)) {
-          currentSource = src;
-          currentBlocks = localBlocks;
-        }
-      }
+  function scanFor(src: string, tokens?: Token[]): ScanContext | undefined {
+    if (!tokens) return undefined;
+    let context = contexts.get(tokens);
+    if (!context || !context.source.endsWith(src)) {
+      context = { source: src, blocks: findCompleteUnknownXmlBlocks(src) };
+      contexts.set(tokens, context);
     }
-    return { source: currentSource, blocks: currentBlocks };
+    currentContext = context;
+    return context;
   }
 
   return {
     name: "unknownXmlBlock",
     level: "block",
     start(src) {
-      const scan = scanFor(src);
-      const offset = scan.source.length - src.length;
-      const block = firstBlockAtOrAfter(scan.blocks, offset);
+      if (!currentContext || !currentContext.source.endsWith(src)) return undefined;
+      const offset = currentContext.source.length - src.length;
+      const block = firstBlockAtOrAfter(currentContext.blocks, offset);
       return block ? block.rawStart - offset : undefined;
     },
-    tokenizer(src) {
-      const scan = scanFor(src);
+    tokenizer(src, tokens) {
+      const scan = scanFor(src, tokens);
+      if (!scan) return undefined;
       const offset = scan.source.length - src.length;
       const block = firstBlockAtOrAfter(scan.blocks, offset);
-      if (!block || block.rawStart !== offset) return undefined;
+      if (!block) return undefined;
+      if (block.rawStart !== offset) {
+        const prefixLength = block.rawStart - offset;
+        const prefix = src.slice(0, prefixLength);
+        if (
+          prefixLength <= 0 ||
+          !/^<\/[A-Za-z][A-Za-z0-9:_-]*[ \t]*>(?:[ \t]*\n[ \t]*)*$/.test(prefix)
+        ) {
+          return undefined;
+        }
+        return { type: "text", raw: prefix, text: prefix };
+      }
       const raw = src.slice(0, block.end - block.rawStart);
       return {
         type: "code",
@@ -397,7 +385,6 @@ function unknownXmlBlockExtension(source: string): TokenizerExtension {
 
 function createParser(
   renderUnknownXmlBlocksAsPreformatted: boolean,
-  unknownXmlSource?: string,
 ): Marked {
   const instance = new Marked({
     gfm: true,
@@ -407,7 +394,7 @@ function createParser(
   instance.use({
     extensions: [
       ...(renderUnknownXmlBlocksAsPreformatted
-        ? [unknownXmlBlockExtension(unknownXmlSource ?? "")]
+        ? [unknownXmlBlockExtension()]
         : []),
       bashWrapperExtension("bashInput", "bash-input", "!", "shell"),
       bashWrapperExtension("bashStdout", "bash-stdout", "", ""),
@@ -556,10 +543,11 @@ export function renderMarkdown(text: string, options: MarkdownRenderOptions = {}
   if (cached !== undefined) return cached;
 
   const resolvedText = resolveAssetURLs(text);
-  const markdownParser = renderUnknownXmlBlocksAsPreformatted
-    ? createParser(true, normalizeLineEndings(resolvedText).trimEnd())
-    : parser;
-  const resolved = escapeCustomXmlTags(resolvedText, markdownParser);
+  const markdownParser = renderUnknownXmlBlocksAsPreformatted ? createParser(true) : parser;
+  const parserInput = renderUnknownXmlBlocksAsPreformatted
+    ? normalizeLineEndings(resolvedText)
+    : resolvedText;
+  const resolved = escapeCustomXmlTags(parserInput, markdownParser);
   const html = markdownParser.parser(resolved) as string;
   const safe = DOMPurify.sanitize(html);
 

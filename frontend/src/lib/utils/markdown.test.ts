@@ -530,6 +530,21 @@ describe("renderMarkdown", () => {
       }
     });
 
+    it("captures a later line-start block after inline XML in transformed items", () => {
+      for (const source of [
+        "- Intro <one>\n  # one\n  </one>\n- <two>\n  # two\n  </two>",
+        "> Intro <one>\n> # one\n> </one>\n> <two>\n> # two\n> </two>",
+      ]) {
+        const dom = parseHTML(
+          renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+        );
+
+        expect(dom.querySelectorAll("pre > code"), source).toHaveLength(1);
+        expect(dom.querySelector("pre > code")?.textContent, source).toContain("<two>");
+        expect(dom.querySelector("h1")?.textContent, source).toBe("one");
+      }
+    });
+
     it("rescans each transformed list item independently", () => {
       const source = "- Intro <policy>\n  # heading\n  </policy>\n- <policy>\n  # heading\n  </policy>";
       const dom = parseHTML(
