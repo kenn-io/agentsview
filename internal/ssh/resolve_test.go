@@ -1359,6 +1359,9 @@ func TestResolveScriptPiDirectoryOverrides(t *testing.T) {
 		{name: "default", want: ".pi/agent/sessions"},
 		{name: "agent home", agentDir: "pi profile", want: "pi profile/sessions"},
 		{name: "session directory", sessionDir: "transcripts", want: "transcripts"},
+		{name: "tilde agent home", agentDir: "~/pi profile", want: "pi profile/sessions"},
+		{name: "tilde session directory", sessionDir: "~/transcripts", want: "transcripts"},
+		{name: "tilde PI_DIR", piDir: "~/explicit", want: "explicit"},
 		{name: "sessions override home", agentDir: "pi profile", sessionDir: "transcripts", want: "transcripts"},
 		{name: "PI_DIR overrides native variables", agentDir: "pi profile", sessionDir: "transcripts", piDir: "explicit", want: "explicit"},
 	} {
@@ -1371,7 +1374,11 @@ func TestResolveScriptPiDirectoryOverrides(t *testing.T) {
 				"PI_DIR":                      tt.piDir,
 			} {
 				if value != "" {
-					env = append(env, key+"="+filepath.Join(home, value))
+					envValue := filepath.Join(home, value)
+					if strings.HasPrefix(value, "~") {
+						envValue = value
+					}
+					env = append(env, key+"="+envValue)
 				}
 			}
 			root := filepath.Join(home, tt.want)

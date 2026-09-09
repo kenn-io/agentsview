@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -91,6 +92,9 @@ homes = ["~/pi-work/agent"]
 mode = "auto"
 `
 			require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+			if !readOnly && runtime.GOOS != "windows" {
+				require.NoError(t, os.Chmod(path, 0o644))
+			}
 			load := LoadMinimal
 			if readOnly {
 				load = LoadReadOnly
@@ -106,6 +110,11 @@ mode = "auto"
 			if readOnly {
 				assert.Equal(t, original, string(after))
 				return
+			}
+			if runtime.GOOS != "windows" {
+				info, err := os.Stat(path)
+				require.NoError(t, err)
+				assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 			}
 			var saved struct {
 				Port     int                             `toml:"port"`
@@ -148,6 +157,7 @@ func TestAgentTablesRejectInvalidProviders(t *testing.T) {
 		want string
 	}{
 		{name: "unknown provider", text: "[agents.unknown]\ndirs = []", want: `unknown session provider "unknown"`},
+		{name: "import-only dirs", text: "[agents.chatgpt]\ndirs = [\"~/exports\"]", want: "agents.chatgpt.dirs: provider does not support configured directories"},
 		{name: "unsupported homes", text: "[agents.gemini]\nhomes = [\"~/profile\"]", want: "agents.gemini.homes: provider does not support alternate homes"},
 		{name: "agents is not a table", text: "agents = []", want: "agents: expected a TOML table"},
 		{name: "provider is not a table", text: "[agents]\npi = []", want: "agents.pi: expected a TOML table"},

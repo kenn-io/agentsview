@@ -6,6 +6,7 @@ import (
 	"log"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/BurntSushi/toml"
@@ -39,6 +40,9 @@ func (c *Config) applyAgentDirectories(value any) error {
 		}
 		var entry AgentDirectoryConfig
 		if dirs, exists := table["dirs"]; exists {
+			if !def.FileBased && def.EnvVar == "" {
+				return fmt.Errorf("agents.%s.dirs: provider does not support configured directories", name)
+			}
 			entry.Dirs = agentDirectoryArray("agents."+name+".dirs", dirs)
 		}
 		if homes, exists := table["homes"]; exists {
@@ -189,9 +193,36 @@ func (c *Config) migrateAgentTables() error {
 		if err != nil || !changed {
 			return err
 		}
-		if err := os.WriteFile(c.configPath(), []byte(converted), 0o600); err != nil {
-			return fmt.Errorf("writing agent configuration: %w", err)
+		path := c.configPath()
+		temp, err := os.CreateTemp(filepath.Dir(path), ".config.toml.*")
+		if err != nil {
+			return fmt.Errorf("creating temporary agent configuration: %w", err)
 		}
+		tempPath := temp.Name()
+		defer func() {
+			if tempPath != "" {
+				_ = os.Remove(tempPath)
+			}
+		}()
+		if err := temp.Chmod(0o600); err != nil {
+			_ = temp.Close()
+			return fmt.Errorf("setting temporary agent configuration permissions: %w", err)
+		}
+		if _, err := temp.Write([]byte(converted)); err != nil {
+			_ = temp.Close()
+			return fmt.Errorf("writing temporary agent configuration: %w", err)
+		}
+		if err := temp.Sync(); err != nil {
+			_ = temp.Close()
+			return fmt.Errorf("syncing temporary agent configuration: %w", err)
+		}
+		if err := temp.Close(); err != nil {
+			return fmt.Errorf("closing temporary agent configuration: %w", err)
+		}
+		if err := os.Rename(tempPath, path); err != nil {
+			return fmt.Errorf("replacing agent configuration: %w", err)
+		}
+		tempPath = ""
 		return nil
 	})
 }

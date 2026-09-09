@@ -10,10 +10,10 @@ description: Release history for AgentsView
 - Browse and search Tau sessions, including the active conversation branch,
   thinking, tools, session names, and recorded token usage. (#1661)
 - Configure session directories and alternate homes in `[agents.<id>]` tables
-  in `config.toml`. Every provider accepts `dirs`; Claude Code, Codex, and Pi
-  also accept `homes`, which add each home's native session directories.
-  Settings can add and remove homes for all three providers. `CODEX_HOME`
-  also changes the default Codex session roots. Existing flat
+  in `config.toml`. Every locally discovered provider accepts `dirs`; Claude
+  Code, Codex, and Pi also accept `homes`, which add each home's native session
+  directories. Settings can add and remove homes for all three providers.
+  `CODEX_HOME` also changes the default Codex session roots. Existing flat
   directory and home keys convert on startup, while read-only commands leave
   files unchanged. Shared roots are scanned once. (#1611, #1681)
 

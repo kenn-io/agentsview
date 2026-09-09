@@ -398,6 +398,8 @@ func buildResolveScript() string {
 			"av_emit_rooted_dir() { " +
 			"dir=\"$1\"; " +
 			"root=\"$2\"; " +
+			"case \"$dir\" in \"~\") dir=\"$HOME\";; \"~/\"*) dir=\"$HOME/${dir#??}\";; esac; " +
+			"case \"$root\" in \"~\") root=\"$HOME\";; \"~/\"*) root=\"$HOME/${root#??}\";; esac; " +
 			"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root$3\"; " +
 			"[ -n \"$dir\" ] || dir=\"$4\"; " +
 			"av_emit_target \"$5\" \"$dir\"; " +

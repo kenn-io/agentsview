@@ -830,8 +830,8 @@ dirs = [
 ]
 ```
 
-Every provider uses the same `[agents.<id>]` table with a `dirs` array. Use its
-provider ID, such as `claude`, `codex`, `pi`, or `gemini`.
+Every locally discovered provider uses the same `[agents.<id>]` table with a
+`dirs` array. Use its provider ID, such as `claude`, `codex`, `pi`, or `gemini`.
 Environment variables take precedence over `dirs`. A non-empty array replaces
 the default paths, and an explicit empty array clears the default local roots.
 
