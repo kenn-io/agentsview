@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tidwall/gjson"
 )
@@ -154,13 +155,13 @@ func parseCursorMessages(lines []string) []ParsedMessage {
 }
 
 // splitCursorBlocks splits lines into blocks delimited by
-// "user:" or "assistant:" on a line by itself.
+// "user:" or "assistant:" at the left margin, with optional trailing whitespace.
 func splitCursorBlocks(lines []string) []cursorBlock {
 	var blocks []cursorBlock
 	var current *cursorBlock
 
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
+		trimmed := strings.TrimRightFunc(line, unicode.IsSpace)
 		if trimmed == "user:" || trimmed == "assistant:" {
 			if current != nil {
 				blocks = append(blocks, *current)

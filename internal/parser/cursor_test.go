@@ -432,12 +432,14 @@ func TestCursorLegacyToolResultMultiline(t *testing.T) {
 		cursorProviderCapabilities().Content.ToolResultEvents)
 
 	lines := []string{
-		"assistant:",
+		"assistant: \t\r",
 		"[Tool call] First",
 		"  command=first",
 		"[Tool result]",
 		"    first line",
 		"",
+		"    user:",
+		"    assistant:",
 		"    second line",
 		"[Tool result]",
 		"[Tool result]",
@@ -458,7 +460,7 @@ func TestCursorLegacyToolResultMultiline(t *testing.T) {
 		messages[0].Content)
 	firstCall := messages[0].ToolCalls[0]
 	require.Len(t, firstCall.ResultEvents, 2)
-	assert.Equal(t, "first line\n\nsecond line",
+	assert.Equal(t, "first line\n\nuser:\nassistant:\nsecond line",
 		firstCall.ResultEvents[0].Content)
 	assert.Equal(t, "third result", firstCall.ResultEvents[1].Content)
 	for _, event := range firstCall.ResultEvents {

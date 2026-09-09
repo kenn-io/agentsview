@@ -970,10 +970,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   legacy `[Tool result]` blocks. It supplies no raw legacy excerpt or producer
   version. The parser retains its existing assumption that result bodies are
   indented: a nonempty line at column zero ends the body and becomes assistant
-  prose. The issue and linked first-party material do not establish that
-  indentation contract; the regression inputs are synthetic, not captured
-  producer fixtures. A redacted legacy excerpt is still needed to verify it.
-  The first-party
+  prose. Transcript role delimiters also start at column zero; indented
+  `user:` and `assistant:` lines remain in the result body. The issue and
+  linked first-party material do not establish that indentation contract; the
+  regression inputs are synthetic, not captured producer fixtures. A redacted
+  legacy excerpt is still needed to verify it. The first-party
   [JSONL discussion](https://forum.cursor.com/t/accessing-the-full-agent-transcript-in-cursor/157311)
   reports missing tool outputs in JSONL, which does not establish legacy
   text boundaries. The history documentation link above now redirects to the
