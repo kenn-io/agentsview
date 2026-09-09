@@ -361,6 +361,15 @@ describe("renderMarkdown", () => {
       );
     });
 
+    it("keeps a closing tag visible after invalid fence info", () => {
+      const source = "<policy>\n```bad`info </policy>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelector("pre > code")?.textContent).toBe(`${source}\n`);
+    });
+
     it("uses marked line ending normalization before matching complete blocks", () => {
       const dom = parseHTML(
         renderMarkdown("<policy>\r\n# heading\r\n</policy>", {
@@ -379,6 +388,43 @@ describe("renderMarkdown", () => {
       expect(link).not.toBeNull();
       expect(link!.textContent).toBe("https://example.com");
       expect(link!.getAttribute("href")).toBe("https://example.com");
+    });
+
+    it("keeps native protected constructs inside a complete unknown block", () => {
+      for (const [source, expected] of [
+        ["<policy>\n<https://example.com>\n# heading\n</policy>", "<policy>\n<https://example.com>\n# heading\n</policy>\n"],
+        ["<policy>\n[<inner>label</inner>][ref]\n# heading\n</policy>\n\n[ref]: https://example.com", "<policy>\n[<inner>label</inner>][ref]\n# heading\n</policy>\n"],
+        ["<policy>\n<![CDATA[\n<inner>\n</wrong>\n]]>\n# heading\n</policy>", "<policy>\n<![CDATA[\n<inner>\n</wrong>\n]]>\n# heading\n</policy>\n"],
+        ["<policy>\n<!doctype \"<inner>\n</wrong>\">\n# heading\n</policy>", "<policy>\n<!doctype \"<inner>\n</wrong>\">\n# heading\n</policy>\n"],
+        ["<policy>\n\\`\n# heading\n</policy>\n`", "<policy>\n\\`\n# heading\n</policy>\n"],
+        ["<policy>\n```\n<pre>\n```\n# heading\n</policy>", "<policy>\n```\n<pre>\n```\n# heading\n</policy>\n"],
+        ["<policy>\n`<pre>`\n# heading\n</policy>", "<policy>\n`<pre>`\n# heading\n</policy>\n"],
+        ["<policy>\n```\n<!--\n```\n# heading\n</policy>", "<policy>\n```\n<!--\n```\n# heading\n</policy>\n"],
+        ["<policy>\n`<!--`\n# heading\n</policy>", "<policy>\n`<!--`\n# heading\n</policy>\n"],
+        ["<policy>\n<!-- <pre> -->\n# heading\n</policy>", "<policy>\n<!-- <pre> -->\n# heading\n</policy>\n"],
+      ] as const) {
+        const dom = parseHTML(
+          renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+        );
+        expect(dom.querySelector("pre > code")?.textContent).toBe(expected);
+      }
+    });
+
+    it("keeps forward reference definitions available in nested containers", () => {
+      for (const source of [
+        "<policy>\n[<inner>label</bad>][ref]\n# heading\n</policy>\n\n[ref]: https://example.com",
+        "- <policy>\n  [<inner>label</bad>][ref]\n  # heading\n  </policy>\n\n[ref]: https://example.com",
+        "> <policy>\n> [<inner>label</bad>][ref]\n> # heading\n> </policy>\n\n[ref]: https://example.com",
+      ]) {
+        const dom = parseHTML(
+          renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+        );
+        expect(
+          [...dom.querySelectorAll("pre > code")].some((code) =>
+            code.textContent?.startsWith("<policy>"),
+          ),
+        ).toBe(true);
+      }
     });
 
     it("preserves namespaced prompt tags as literal text", () => {
@@ -631,6 +677,26 @@ describe("renderMarkdown", () => {
       expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
     });
 
+    it("does not treat unresolved or protected reference definitions as links", () => {
+      for (const source of [
+        "<policy>\n[<inner>label</bad>][constructor]\n# heading\n</policy>",
+        "<policy>\n[<inner>label</bad>][ref]\n# heading\n</policy>\n\n```\n[ref]: https://example.com\n```",
+        "<policy>\n[<inner>label</bad>][ref]\n# heading\n</policy>\n\n<!--\n[ref]: https://example.com\n-->",
+      ]) {
+        const omitted = renderMarkdown(source);
+        const enabled = renderMarkdown(source, {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        });
+
+        expect(enabled).toBe(omitted);
+        expect(
+          [...parseHTML(enabled).querySelectorAll("pre > code")].some((code) =>
+            code.textContent?.startsWith("<policy>"),
+          ),
+        ).toBe(false);
+      }
+    });
+
     it("bounds the candidate search for Markdown without unknown tags", () => {
       const source = "Intro **text**\n\n- one\n- two\n\n> quoted\n\n```\ncode\n```";
 
@@ -707,16 +773,26 @@ describe("renderMarkdown", () => {
         const dom = parseHTML(
           renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
         );
-
         expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
         expect(dom.querySelector("h1")).toBeNull();
       }
     });
 
     it("keeps a multiline inline span opened at source start intact", () => {
+      const tick = String.fromCharCode(96);
       for (const source of [
         "`before\n<later>\nbody\n</later>\nafter`",
         "`before `` inner\n<later>\nbody\n</later>\nafter`",
+        "Intro\n" +
+          "\\" +
+          tick.repeat(2) +
+          "before\n<later>\nbody\n</later>\nafter" +
+          tick,
+        "Intro " +
+          "\\\\" +
+          tick +
+          "before\n<later>\nbody\n</later>\nafter" +
+          tick,
       ]) {
         const omitted = renderMarkdown(source);
         const enabled = renderMarkdown(source, {
