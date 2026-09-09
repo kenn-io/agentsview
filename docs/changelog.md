@@ -60,10 +60,11 @@ description: Release history for AgentsView
   focused index during the next writable database setup, which can make that
   first startup longer. No session resync is needed for this index.
 
-- Keep sync output readable when redirected to a pipe, file, or CI log. Show
-  summaries and coarse phase updates without terminal control sequences or
-  per-session refresh lines. Interactive terminals retain live progress.
-  (#1645)
+- Keep sync output readable when redirected to a pipe, file, or CI log.
+  Incremental sync prints its final summary; full resync and remote sync also
+  print coarse phase updates. Redirected output omits terminal control
+  sequences and per-session refresh lines. Interactive terminals retain live
+  progress. (#1645)
 - Price Codex Luna Reserve turns that persist as `gpt-reserve` using the
   existing GPT-5.6 Luna catalog rates. Usage reports still list `gpt-reserve`
   as the reported model. Existing SQLite usage caches rebuild so previously
