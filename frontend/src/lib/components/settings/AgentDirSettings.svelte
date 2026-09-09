@@ -7,6 +7,7 @@
   const HOME_ENV_VARS: Record<string, string> = {
     claude: "CLAUDE_CONFIG_DIR",
     codex: "CODEX_HOME",
+    pi: "PI_CODING_AGENT_DIR",
   };
 
   let homeDrafts: Record<string, string> = $state({});

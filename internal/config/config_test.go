@@ -1480,7 +1480,7 @@ func TestLoadFile_MalformedDirValueLogsWarning(t *testing.T) {
 	cfg := f.LoadMinimal(t)
 
 	// The malformed key should trigger a warning.
-	assertLogContains(t, buf, "claude_project_dirs", "expected string array")
+	assertLogContains(t, buf, "agents.claude.dirs", "expected string array")
 
 	// ResolveDirs should return the default (malformed value
 	// was not applied).

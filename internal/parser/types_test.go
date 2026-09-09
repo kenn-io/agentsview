@@ -618,17 +618,6 @@ func TestInferRelationshipTypes(t *testing.T) {
 	}
 }
 
-func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
-	for _, def := range Registry {
-		if !def.FileBased {
-			continue
-		}
-		assert.NotEmptyf(t, def.ConfigKey,
-			"file-based agent %q (%s) has empty ConfigKey",
-			def.DisplayName, def.Type)
-	}
-}
-
 func TestZedRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentZed)
 	require.True(t, ok, "AgentZed missing from Registry")

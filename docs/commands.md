@@ -315,8 +315,8 @@ and indexes it into your local archive. SSH remote sync is deprecated and
 receives only critical fixes; use configured HTTP remote sync for new setups.
 
 Local sync can also read configured Claude, Codex, and Cursor roots from
-S3-compatible object storage. Add `s3://` entries to `claude_project_dirs`,
-`codex_sessions_dirs`, or `cursor_project_dirs` in `~/.agentsview/config.toml`,
+S3-compatible object storage. Add `s3://` entries to `agents.claude.dirs`,
+`agents.codex.dirs`, or `agents.cursor.dirs` in `~/.agentsview/config.toml`,
 then run `agentsview sync` normally. This is not SSH remote sync: object storage
 is treated as a read-only session source, using object size and `LastModified`
 metadata to skip unchanged sessions and downloading only objects that need

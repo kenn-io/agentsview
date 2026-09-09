@@ -242,9 +242,9 @@ support is deprecated because current Amp releases may keep full threads
 server-side and leave only local stubs; historical local Amp thread JSON files
 can still be parsed.
 
-The matching environment variable and `*_dirs` configuration key override an
+The matching environment variable and `agents.<id>.dirs` configuration key override an
 agent's default directories. Environment variables take precedence when both are
-set. An explicit empty `*_dirs` array, such as `grok_dirs = []`, clears that
+set. An explicit empty `agents.<id>.dirs` array, such as `agents.grok.dirs = []`, clears that
 agent's default local directories, so local discovery finds nothing there.
 Matching `session_sources` entries for that agent still apply. Provider-wide
 exclusion is documented under
@@ -253,7 +253,7 @@ keeps its default directories.
 
 | Agent                 | Default Directory                                                                                                                                                | File Format                                                                                                                                                   |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Aider                 | No default; opt in with `AIDER_DIR` or `aider_dirs`                                                                                                              | `.aider.chat.history.md` Markdown history files                                                                                                               |
+| Aider                 | No default; opt in with `AIDER_DIR` or `agents.aider.dirs`                                                                                                              | `.aider.chat.history.md` Markdown history files                                                                                                               |
 | Amp (deprecated)      | `~/.local/share/amp/threads/`                                                                                                                                    | Historical local JSON thread files                                                                                                                            |
 | Antigravity (IDE)     | `~/.gemini/antigravity/`                                                                                                                                         | SQLite database per session                                                                                                                                   |
 | Antigravity CLI       | `~/.gemini/antigravity-cli/`                                                                                                                                     | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl`                               |
@@ -320,7 +320,7 @@ keeps its default directories.
 DeepSeek Harness sessions are read from its default JSONL persistence backend,
 including plain `session.jsonl` and multi-frame `session.jsonl.zstd` files.
 `DSH_HOME` re-roots the default `<home>/sessions` path; set
-`DEEPSEEK_HARNESS_SESSIONS_DIR` or `deepseek_harness_sessions_dirs` to point
+`DEEPSEEK_HARNESS_SESSIONS_DIR` or `agents.deepseek-harness.dirs` to point
 directly at one or more session roots. The optional SQLite persistence backend
 is not supported.
 
@@ -333,7 +333,7 @@ Tau stores multiple session transcripts in each project directory under
 `~/.tau/sessions/`. AgentsView reads `.jsonl` files directly below those project
 directories, excludes the exact `index.jsonl` metadata file, and follows the
 latest `leaf` entry when selecting the active history. Set `TAU_SESSIONS_DIR` or
-`tau_dirs` to use another sessions root.
+`agents.tau.dirs` to use another sessions root.
 
 User-run shell commands (`bashExecution`) and messages with the `custom`,
 `branchSummary`, or `compactionSummary` role are not shown. Separate
@@ -352,14 +352,14 @@ IDE store:
 
 - **Windows:** `%APPDATA%\Qoder\SharedClientCache\cli\projects\`
 
-Set `QODER_PROJECTS_DIR` or `qoder_project_dirs` to replace these defaults with
+Set `QODER_PROJECTS_DIR` or `agents.qoder.dirs` to replace these defaults with
 one or more explicit roots.
 
 Grok sessions are read from `summary.json` (title, timestamps, project),
 optional `signals.json` (token counters), and `chat_history.jsonl` when present
 for the full transcript (user turns, assistant replies, thinking, and tool
 calls). If `chat_history.jsonl` is missing, AgentsView falls back to
-summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
+summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
 directory.
 
 **Goose default directories** are:
@@ -368,12 +368,12 @@ directory.
 - **Windows:** `%APPDATA%/Block/goose/data/sessions/`
 
 `GOOSE_PATH_ROOT` follows Goose's own path-root convention and resolves
-`<root>/data/sessions/sessions.db`. A `goose_dirs` entry may instead point
+`<root>/data/sessions/sessions.db`. A `agents.goose.dirs` entry may instead point
 directly to that sessions directory, its parent data directory, or the database
 file.
 
 Omnigent sessions are read from `~/.omnigent/chat.db`. Set `OMNIGENT_DIR` or
-`omnigent_dirs` to override the default directory. AgentsView creates one
+`agents.omnigent.dirs` to override the default directory. AgentsView creates one
 session per conversation and supports the split text-ID and current binary-UUID
 schema generations; the older single-table schema is detected and reported as
 unsupported without losing sessions already synced from it. Remote HTTP and SSH
@@ -398,7 +398,7 @@ Code Insiders and VSCodium variants are also discovered automatically.
 
 This is separate from VS Code Copilot. Visual Studio Copilot stores trace files
 named like `*_VSGitHubCopilot_traces.jsonl`; set `VISUALSTUDIO_COPILOT_DIR` or
-`visualstudio_copilot_dirs` if your installation writes them elsewhere.
+`agents.visualstudio-copilot.dirs` if your installation writes them elsewhere.
 
 **Windsurf default directories** vary by platform:
 
@@ -418,7 +418,7 @@ Windsurf stores workspace chats in `workspaceStorage/<hash>/state.vscdb`.
 
 Trae stores chats in `workspaceStorage/<hash>/state.vscdb` and
 `globalStorage/state.vscdb`. Override these roots with `TRAE_DIR` or the
-`trae_dirs` configuration key. AgentsView watches `workspaceStorage` and
+`agents.trae.dirs` configuration key. AgentsView watches `workspaceStorage` and
 `globalStorage`, then reads chat records from those SQLite stores.
 
 Trae legacy inline-message parsing is supported. Modern encrypted transcript
@@ -443,7 +443,7 @@ kernel wire logs under
 
 Only `conv-*` session directories are user conversations; auxiliary internal
 sessions (`ctitle-*`, `sklsum-*`, `dvlt-*`) are excluded from discovery. Set
-`KIMI_WORK_DIR` or `kimi_work_dirs` if your installation stores them elsewhere.
+`KIMI_WORK_DIR` or `agents.kimi-work.dirs` if your installation stores them elsewhere.
 
 **Positron Assistant default directory** (macOS only):
 
@@ -452,7 +452,7 @@ sessions (`ctitle-*`, `sklsum-*`, `dvlt-*`) are excluded from discovery. Set
 Positron is an IDE built on VS Code, so sessions use the same
 `workspaceStorage/<hash>/chatSessions/` layout as VS Code Copilot. As of
 v0.20.0, Positron Assistant has a built-in default path only on macOS — on Linux
-and Windows, set `POSITRON_DIR` or `positron_dirs` to point at your Positron
+and Windows, set `POSITRON_DIR` or `agents.positron.dirs` to point at your Positron
 user directory (for example, `~/.config/Positron/User` on Linux or
 `%APPDATA%\Positron\User` on Windows).
 
@@ -464,13 +464,13 @@ directory per conversation under
 transcript; subagent runs nest under a `subagents/` subdirectory of their parent
 conversation. All Posit Assistant hosts (Positron/VS Code extension, standalone,
 desktop, TUI) share this location. Set `POSIT_ASSISTANT_DIR` or
-`posit_assistant_dirs` if your installation stores its workspaces elsewhere.
+`agents.posit-assistant.dirs` if your installation stores its workspaces elsewhere.
 
 **Cursor IDE** is the graphical editor, distinct from the Cursor command-line
 agent above. AgentsView reads Composer sessions from Cursor's shared
 `globalStorage/state.vscdb` database. The default follows Cursor's normal user
 data directory on macOS, Linux, and Windows; set `CURSOR_IDE_DIR` or
-`cursor_ide_dirs` to override it. This database also contains authentication and
+`agents.cursor-ide.dirs` to override it. This database also contains authentication and
 extension state, so Cursor IDE is deliberately excluded from remote source-file
 sync. Parsed sessions still stay in the local archive and can be shared through
 the normal PostgreSQL or DuckDB paths.
@@ -484,7 +484,7 @@ location:
   `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\local-agent-mode-sessions\`
   or `%APPDATA%\Claude\local-agent-mode-sessions\`
 
-Set `COWORK_DIR` or `cowork_dirs` when Claude Desktop stores local-agent-mode
+Set `COWORK_DIR` or `agents.cowork.dirs` when Claude Desktop stores local-agent-mode
 sessions somewhere else.
 
 **Codebuff / Freebuff sessions:** Codebuff and Freebuff share the same on-disk
@@ -517,7 +517,7 @@ savings for these rows resolve to zero by design rather than an aggregator bug.
 
 Freebuff does not have its own environment variable or config key — it shares
 the Codebuff provider for discovery and the parser auto-classifies sessions. Set
-`CODEBUFF_DIR` or `codebuff_dirs` when manicode stores its projects directory
+`CODEBUFF_DIR` or `agents.codebuff.dirs` when manicode stores its projects directory
 somewhere other than `~/.config/manicode/projects`; this covers both Codebuff
 and Freebuff sessions.
 
@@ -533,7 +533,7 @@ log reports how many directories are watched this way:
 Watching 74 directories for changes (2 shallow) (76ms)
 ```
 
-**Devin CLI root:** Point `DEVIN_DIR` or `devin_dirs` at the local root that
+**Devin CLI root:** Point `DEVIN_DIR` or `agents.devin.dirs` at the local root that
 contains Devin's `cli/` directory, not at copied config or OAuth files. The
 default roots are `~/Library/Application Support/devin` on macOS and
 `~/.local/share/devin` on Linux, and AgentsView discovers session data under
@@ -563,7 +563,7 @@ layout is absent.
 
 **aider discovery:** aider writes one `.aider.chat.history.md` file per
 repository instead of a central session directory. AgentsView does not scan for
-Aider logs unless you opt in with `AIDER_DIR` or `aider_dirs`. Always-on
+Aider logs unless you opt in with `AIDER_DIR` or `agents.aider.dirs`. Always-on
 home-directory discovery has caused unwanted macOS privacy prompts from
 background refreshes, so Aider discovery is limited to roots you explicitly
 configure. On macOS, broad home roots still skip protected top-level folders
@@ -613,7 +613,7 @@ usage event for cost tracking.
 
 RooCode was shut down on May 15, 2026. ZooCode (Zoo-CodeInc.zoo-cline) is the
 active community fork and will be supported separately. Set `ROOCODE_DIR` or
-`roocode_dirs` if your VSCode globalStorage directory is elsewhere.
+`agents.roocode.dirs` if your VSCode globalStorage directory is elsewhere.
 
 **Kilo (legacy) default directories** vary by platform, all rooted at the
 canonical lowercase `kilocode.kilo-code` global storage directory that VSCode
@@ -631,7 +631,7 @@ AgentsView folds the latter two into a composite fingerprint with
 `task_metadata.json` as the source anchor so changes to any of the three trigger
 a reparse. Sessions are parsed through RooCode-descended Cline message handling
 (tool-call and result pairing, reasoning pipeline, compact boundaries, error
-linking). Set `KILO_LEGACY_DIR` or `kilo_legacy_dirs` when the legacy extension
+linking). Set `KILO_LEGACY_DIR` or `agents.kilo-legacy.dirs` when the legacy extension
 stores its data outside the standard locations.
 
 **Kilo (legacy) vs Kilo.** These are two different agents. *Kilo* (the `kilo`
@@ -760,12 +760,13 @@ export ZENCODER_DIR=~/custom/zencoder
 Evener discovery reads semantic transcript **format v2** under
 `$XDG_STATE_HOME/evener/projects/<project-id>/sessions/`, falling back to
 `~/.local/state/evener/projects/`. Override the state root with `EVENER_DIR` or
-`evener_dirs`; an explicit project state directory or sessions directory also
+`agents.evener.dirs`; an explicit project state directory or sessions directory also
 works. Older transcript versions are unsupported; existing archive data is not
 deleted.
 
 ```toml
-evener_dirs = ["~/session-sources/evener"]
+[agents.evener]
+dirs = ["~/session-sources/evener"]
 ```
 
 The provider reads messages, thinking, tools, recorded usage, session names,
@@ -817,35 +818,29 @@ To scan more than one directory per agent — for example, when running Windows
 and WSL side by side — add array fields to `~/.agentsview/config.toml`:
 
 ```toml
-claude_project_dirs = [
+[agents.claude]
+dirs = [
   "~/.claude/projects",
   "/mnt/c/Users/you/.claude/projects",
 ]
 
-codex_sessions_dirs = [
+[agents.codex]
+dirs = [
   "~/.codex/sessions",
 ]
 ```
 
-The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
-`antigravity_cli_dirs`, `claude_project_dirs`, `openclaude_project_dirs`,
-`cowork_dirs`, `devin_dirs`, `codebuff_dirs`, `codex_sessions_dirs`,
-`commandcode_project_dirs`, `copilot_dirs`, `cortex_dirs`,
-`cursor_project_dirs`, `deepseek_harness_sessions_dirs`,
-`deepseek_tui_sessions_dirs`, `forge_dirs`, `gemini_dirs`, `goose_dirs`,
-`gptme_dirs`, `grok_dirs`, `hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`,
-`kilo_legacy_dirs`, `kimi_dirs`, `kimi_work_dirs`, `kiro_dirs`, `kiro_ide_dirs`,
-`mimocode_dirs`, `vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`,
-`opencode_dirs`, `openhands_dirs`, `pi_dirs`, `prime_agent_dirs`,
-`piebald_dirs`, `posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`,
-`qoder_project_dirs`, `qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`,
-`roocode_dirs`, `shelley_dirs`, `tau_dirs`, `traex_sessions_dirs`,
-`visualstudio_copilot_dirs`, `vscode_copilot_dirs`, `windsurf_dirs`,
-`warp_dirs`, `workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and
-`zencoder_dirs`. Each accepts an array of paths. Environment variables take
-precedence over these arrays when both are set; otherwise, a non-empty array
-replaces the default path and an explicit empty array clears the default local
-directory.
+Every provider uses the same `[agents.<id>]` table with a `dirs` array. Use its
+provider ID, such as `claude`, `codex`, `pi`, or `gemini`.
+Environment variables take precedence over `dirs`. A non-empty array replaces
+the default paths, and an explicit empty array clears the default local roots.
+
+On normal startup, AgentsView converts existing top-level directory and home
+keys to these tables and saves the result. Read-only commands interpret the old
+format without rewriting it. If both forms set the same field, startup reports
+the conflict and leaves the file unchanged; remove one of the entries. Settings
+writes only the new format. Conversion preserves unrelated settings, but
+rewrites TOML formatting and comments.
 
 All listed directories are discovered, watched, and synced independently.
 
@@ -853,38 +848,44 @@ Pi also honors its native `PI_CODING_AGENT_DIR` and
 `PI_CODING_AGENT_SESSION_DIR` variables in local and SSH discovery. The agent
 home variable changes the default to `<agent-home>/sessions`; the session
 variable points directly at a session directory. `PI_DIR` takes precedence over
-`PI_CODING_AGENT_SESSION_DIR`, which takes precedence over `pi_dirs` in
-`config.toml`. A configured `pi_dirs` array replaces the home-derived default;
-an empty array clears it. With no overrides, Pi uses `~/.pi/agent/sessions`.
+`PI_CODING_AGENT_SESSION_DIR`, which takes precedence over `agents.pi.dirs` in
+`config.toml`. A configured `agents.pi.dirs` array replaces the home-derived
+default; an empty array clears it. With no overrides, Pi uses `~/.pi/agent/sessions`.
 
-### Alternate Claude and Codex Homes
+### Alternate Agent Homes
 
-Claude Code honors `CLAUDE_CONFIG_DIR` and Codex honors `CODEX_HOME`. Point
-either at a different directory and that instance keeps its own settings,
-credentials, skills, and sessions there. People do this for a second account,
-a separate skill or settings profile, or because a wrapper such as t3code sets
-`homePath` per instance. Those sessions land outside the default roots, so
-AgentsView cannot see them unless each home is registered.
-
-Set `claude_homes` or `codex_homes` to the home directories themselves.
-AgentsView derives the native session directories for each home, so you do not
-need to know the on-disk layout:
+Claude Code, Codex, and Pi support alternate homes. Each home can hold a
+separate account or settings profile. Register the home directories themselves
+in `homes`; AgentsView derives their native session directories:
 
 ```toml
-claude_homes = ["~/.claude-work", "~/.t3code/instances/alpha/claude"]
-codex_homes = ["~/.codex-work", "~/.t3code/instances/alpha/codex"]
+[agents.claude]
+homes = ["~/.claude-work", "~/.t3code/instances/alpha/claude"]
+
+[agents.codex]
+homes = ["~/.codex-work", "~/.t3code/instances/alpha/codex"]
+
+[agents.pi]
+homes = ["~/.pi-work/agent", "~/.pi-personal/agent"]
 ```
 
-| Agent       | Home variable       | Transcripts scanned                             | Sidecars read from each home           |
-| ----------- | ------------------- | ----------------------------------------------- | -------------------------------------- |
-| Claude Code | `CLAUDE_CONFIG_DIR` | `<home>/projects/`                              | none                                   |
-| Codex       | `CODEX_HOME`        | `<home>/sessions/`, `<home>/archived_sessions/` | `history.jsonl`, `session_index.jsonl` |
+| Agent | Home variable | Transcripts scanned | Sidecars read from each home |
+| --- | --- | --- | --- |
+| Claude Code | `CLAUDE_CONFIG_DIR` | `<home>/projects/` | none |
+| Codex | `CODEX_HOME` | `<home>/sessions/`, `<home>/archived_sessions/` | `history.jsonl`, `session_index.jsonl` |
+| Pi | `PI_CODING_AGENT_DIR` | `<home>/sessions/` | none |
 
-Homes are additive to the default directories, the environment variables above,
-the `*_dirs` arrays, and `[[session_sources]]`. Homes must be local directories;
-use the `*_dirs` arrays for `s3://` roots. Sessions from every home appear under
-the same Claude or Codex provider, and names, projects, and titles come from the
-native session files, not from the wrapping tool's own metadata.
+Homes are additive to defaults, environment overrides, the same table's `dirs`,
+and `[[session_sources]]`. To scan only the listed homes, set `dirs = []` and
+leave directory environment overrides and `session_sources` entries unset.
+Homes must be local directories; use `dirs` for `s3://` roots on providers that
+support S3. Sessions from each home appear under their native provider.
+Pi's `homes` values correspond to `PI_CODING_AGENT_DIR`, not its parent `.pi`
+directory or a direct session directory.
+
+Other providers support multiple explicit `dirs`; they do not yet accept
+`homes`. A home mapping must match the provider's native layout before it can
+be enabled.
 
 At configuration load, local session roots become absolute paths with symbolic
 links resolved. Duplicate roots are removed before scanning or watching starts.
@@ -893,9 +894,9 @@ so creating the directory later does not register a second scan root. Each
 home's metadata paths remain separate from the shared transcript root.
 
 The Session Providers section of the Settings page edits the same lists. Adding
-or removing a home there writes `claude_homes` or `codex_homes` to
-`config.toml`. Like the provider enable toggles, the change takes effect after
-the AgentsView daemon and any separate push-watch process restart.
+or removing a home there updates `homes` in that provider's `[agents.<id>]`
+table in `config.toml`. Like the provider enable toggles, the change takes
+effect after the AgentsView daemon and any separate push-watch process restart.
 
 #### Choosing a layout
 
@@ -912,7 +913,8 @@ CODEX_HOME=~/.codex-work codex login
 ```
 
 ```toml
-codex_homes = ["~/.codex-work"]
+[agents.codex]
+homes = ["~/.codex-work"]
 ```
 
 **Shared transcripts, separate profile.** The second home keeps its own
@@ -935,7 +937,8 @@ CODEX_HOME="$alt" codex
 ```
 
 ```toml
-codex_homes = ["~/.codex-profile"]
+[agents.codex]
+homes = ["~/.codex-profile"]
 ```
 
 Codex writes thread titles to `session_index.jsonl` in whichever home the
@@ -1006,22 +1009,26 @@ useful when several machines push their raw session files to object storage and
 one central AgentsView instance reads them without SSH access to those machines.
 
 ```toml
-claude_project_dirs = [
+[agents.claude]
+dirs = [
   "~/.claude/projects",
   "s3://agent-archive/laptop/raw/claude",
 ]
 
-codex_sessions_dirs = [
+[agents.codex]
+dirs = [
   "~/.codex/sessions",
   "s3://agent-archive/laptop/raw/codex",
 ]
 
-cursor_project_dirs = [
+[agents.cursor]
+dirs = [
   "~/.cursor/projects",
   "s3://agent-archive/laptop/raw/cursor",
 ]
 
-icodemate_dirs = [
+[agents.icodemate]
+dirs = [
   "~/.local/share/icodemate",
   "s3://agent-archive/laptop/raw/icodemate",
 ]

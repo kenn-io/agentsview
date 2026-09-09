@@ -93,17 +93,16 @@ type AgentDef struct {
 	NativeEnvVar      string // native session-dir env var, used when EnvVar is empty
 	DefaultRootEnvVar string // env var that re-roots DefaultDirs before $HOME fallback
 	DefaultRootDir    string // home-relative prefix replaced by the root env (empty = first component)
-	ConfigKey         string // TOML key in config.toml ("" = none)
-	// HomeConfigKey is the TOML key for an array of alternate agent home
-	// directories ("" = none). Each home re-roots DefaultDirs the same way
-	// DefaultRootEnvVar does, and the derived roots are additive.
-	HomeConfigKey string
-	DefaultDirs   []string // paths relative to $HOME
-	IDPrefix      string   // session ID prefix ("" for Claude)
-	WatchSubdirs  []string // subdirs to watch (nil = watch root)
-	ShallowWatch  bool     // true = watch root only, rely on periodic sync for subdirs
-	FileBased     bool     // false for DB-backed agents
-	Usage         UsageCapabilities
+	ConfigKey         string // optional legacy top-level TOML directory key
+	// HomesSupported enables [agents.<id>].homes. Each home re-roots
+	// DefaultDirs the same way DefaultRootEnvVar does; roots are additive.
+	HomesSupported bool
+	DefaultDirs    []string // paths relative to $HOME
+	IDPrefix       string   // session ID prefix ("" for Claude)
+	WatchSubdirs   []string // subdirs to watch (nil = watch root)
+	ShallowWatch   bool     // true = watch root only, rely on periodic sync for subdirs
+	FileBased      bool     // false for DB-backed agents
+	Usage          UsageCapabilities
 	// PostAnswerToolWork marks transcript formats that may emit their
 	// user-facing answer before later tool calls in the same turn.
 	PostAnswerToolWork bool
@@ -150,7 +149,7 @@ var Registry = []AgentDef{
 		EnvVar:            "CLAUDE_PROJECTS_DIR",
 		DefaultRootEnvVar: "CLAUDE_CONFIG_DIR",
 		ConfigKey:         "claude_project_dirs",
-		HomeConfigKey:     "claude_homes",
+		HomesSupported:    true,
 		DefaultDirs:       []string{".claude/projects"},
 		IDPrefix:          "",
 		FileBased:         true,
@@ -181,7 +180,7 @@ var Registry = []AgentDef{
 		EnvVar:            "CODEX_SESSIONS_DIR",
 		DefaultRootEnvVar: "CODEX_HOME",
 		ConfigKey:         "codex_sessions_dirs",
-		HomeConfigKey:     "codex_homes",
+		HomesSupported:    true,
 		DefaultDirs: []string{
 			".codex/sessions",
 			".codex/archived_sessions",
@@ -492,6 +491,7 @@ var Registry = []AgentDef{
 		DefaultRootEnvVar: "PI_CODING_AGENT_DIR",
 		DefaultRootDir:    ".pi/agent",
 		ConfigKey:         "pi_dirs",
+		HomesSupported:    true,
 		DefaultDirs:       []string{".pi/agent/sessions"},
 		IDPrefix:          "pi:",
 		FileBased:         true,
