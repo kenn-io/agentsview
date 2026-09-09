@@ -215,6 +215,7 @@ const UNKNOWN_XML_LEXER_LINKS = Symbol("unknownXmlLexerLinks");
 type UnknownXmlScanContext = {
   source: string;
   results: Map<number, number | undefined>;
+  candidateResults: Map<number, number | undefined>;
   links: Links;
 };
 
@@ -236,6 +237,7 @@ function getUnknownXmlScanContext(
     context = {
       source: src,
       results: new Map(),
+      candidateResults: new Map(),
       links: Object.assign(Object.create(null), links, documentLinks),
     };
     Object.defineProperty(tokenArray, UNKNOWN_XML_SCAN_CONTEXT, {
@@ -571,10 +573,35 @@ function updateKnownHtmlTags(stack: string[], tagText: string, name: string): vo
   }
 }
 
-function findUnknownXmlCandidate(src: string, links?: Links): number | undefined {
+function findUnknownXmlCandidate(
+  src: string,
+  links?: Links,
+  scan?: { context: UnknownXmlScanContext; offset: number },
+): number | undefined {
   if (src.indexOf("<") < 0) return undefined;
 
   const referenceLinks = links ?? collectReferenceLinks(src);
+  const base = scan?.offset ?? 0;
+  const candidateResults = scan?.context.candidateResults;
+  const cached = candidateResults?.get(base);
+  if (candidateResults?.has(base)) {
+    return cached === undefined ? undefined : cached - base;
+  }
+
+  const cacheCandidate = (start: number, candidate: number | undefined): void => {
+    if (!candidateResults) return;
+    candidateResults.set(
+      base + start,
+      candidate === undefined ? undefined : base + candidate,
+    );
+  };
+
+  const pendingStarts: number[] = [];
+  const cachePending = (candidate: number | undefined): void => {
+    cacheCandidate(0, candidate);
+    for (const start of pendingStarts) cacheCandidate(start, candidate);
+  };
+
   let windowStart = 0;
   while (windowStart < src.length) {
     const blankLines = /(?:^|\n)[ \t]*(?:\n|$)/g;
@@ -584,6 +611,12 @@ function findUnknownXmlCandidate(src: string, links?: Links): number | undefined
     const blankLineEnd = blankLine
       ? blankLine.index + blankLine[0].length
       : src.length;
+    const cachedWindow = candidateResults?.get(base + windowStart);
+    if (candidateResults?.has(base + windowStart)) {
+      const candidate = cachedWindow === undefined ? undefined : cachedWindow - base;
+      cachePending(candidate);
+      return candidate;
+    }
     const openHtmlTags: string[] = [];
     const scanner = createMarkdownScanner(referenceLinks);
     let cursor = windowStart;
@@ -611,12 +644,16 @@ function findUnknownXmlCandidate(src: string, links?: Links): number | undefined
               scanner.links,
             );
             if (matched !== undefined && (windowEnd === src.length || matched !== windowEnd)) {
+              cachePending(cursor);
+              cacheCandidate(windowStart, cursor);
               return cursor;
             }
             if (windowEnd < src.length) {
+              pendingStarts.push(windowStart);
               windowStart = blankLineEnd;
               break;
             }
+            cachePending(undefined);
             return undefined;
           }
         }
@@ -643,9 +680,13 @@ function findUnknownXmlCandidate(src: string, links?: Links): number | undefined
       cursor += 1;
     }
 
-    if (windowStart === 0 || windowStart !== blankLineEnd) return undefined;
+    if (windowStart === 0 || windowStart !== blankLineEnd) {
+      cachePending(undefined);
+      return undefined;
+    }
   }
 
+  cachePending(undefined);
   return undefined;
 }
 
@@ -693,7 +734,7 @@ function unknownXmlParagraphBoundary() {
         src,
         getLexerLinks(this, src),
       );
-      const candidate = findUnknownXmlCandidate(src, scan?.context.links);
+      const candidate = findUnknownXmlCandidate(src, scan?.context.links, scan);
       if (candidate === undefined || candidate === 0) return false;
       return Tokenizer.prototype.paragraph.call(this, src.slice(0, candidate)) ?? false;
     },
@@ -709,7 +750,7 @@ function unknownXmlHtmlBoundary() {
         src,
         getLexerLinks(this, src),
       );
-      const candidate = findUnknownXmlCandidate(src, scan?.context.links);
+      const candidate = findUnknownXmlCandidate(src, scan?.context.links, scan);
       if (candidate === undefined || candidate === 0) return false;
 
       const token = Tokenizer.prototype.html.call(this, src);
