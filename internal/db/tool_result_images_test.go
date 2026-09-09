@@ -251,6 +251,68 @@ func TestToolResultImagesDedupAndLengths(t *testing.T) {
 	assert.Equal(t, eventLength, summaryLength)
 }
 
+func TestDropImagesPreservesEmptySummaryMeaning(t *testing.T) {
+	const raw = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	const projected = `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
+	for _, tt := range []struct {
+		name          string
+		summaryLength int
+		events        []ToolResultEvent
+		wantLength    int
+		wantEvent     string
+		wantEventLen  int
+	}{
+		{
+			name: "deduplicated", summaryLength: len(raw),
+			events:     []ToolResultEvent{{Content: raw, ContentLength: len(raw)}},
+			wantLength: len(projected), wantEvent: projected, wantEventLen: len(projected),
+		},
+		{
+			name:      "genuinely empty",
+			events:    []ToolResultEvent{{Content: raw, ContentLength: len(raw)}},
+			wantEvent: projected, wantEventLen: len(projected),
+		},
+		{
+			name: "blocked", summaryLength: len(raw),
+			events:     []ToolResultEvent{{ContentLength: len(raw)}},
+			wantLength: len(raw), wantEventLen: len(raw),
+		},
+		{
+			name: "multiple events", summaryLength: len(raw),
+			events:     []ToolResultEvent{{Content: raw}, {Content: "later"}},
+			wantLength: len(raw), wantEvent: projected, wantEventLen: len(projected),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			d.SetToolResultImages(config.ToolResultImagesDrop)
+			insertSession(t, d, "empty-summary", "project")
+			require.NoError(t, d.InsertMessages([]Message{{
+				SessionID: "empty-summary", Role: "assistant",
+				ToolCalls: []ToolCall{{
+					ToolUseID: "call", ResultContentLength: tt.summaryLength,
+					ResultEvents: tt.events,
+				}},
+			}}))
+
+			var summary, event string
+			var summaryLength, eventLength int
+			require.NoError(t, d.getReader().QueryRow(`
+				SELECT COALESCE(tc.result_content, ''), COALESCE(tc.result_content_length, 0),
+				       ev.content, ev.content_length
+				FROM tool_calls tc
+				JOIN tool_result_events ev
+				  ON ev.session_id = tc.session_id AND ev.call_index = tc.call_index
+				WHERE tc.session_id = 'empty-summary' AND ev.event_index = 0`,
+			).Scan(&summary, &summaryLength, &event, &eventLength))
+			assert.Empty(t, summary)
+			assert.Equal(t, tt.wantLength, summaryLength)
+			assert.Equal(t, tt.wantEvent, event)
+			assert.Equal(t, tt.wantEventLen, eventLength)
+		})
+	}
+}
+
 func TestDropImagesLateResultsRetainRawIdentity(t *testing.T) {
 	d := testDB(t)
 	d.SetToolResultImages(config.ToolResultImagesDrop)

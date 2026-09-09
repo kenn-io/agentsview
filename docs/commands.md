@@ -502,7 +502,8 @@ Remove supported inline image payloads from stored tool-result rows. The
 command requires `--images`; it uses the existing direct maintenance write
 owner and confirmation prompt. It never changes provider source files or
 standalone image files. Run `db compact` separately when you need measured
-SQLite file-space reclamation.
+SQLite file-space reclamation. Changed sessions are automatically rescanned for
+secrets so detections reflect the remaining content.
 
 ```bash
 agentsview db strip --images [flags]

@@ -108,6 +108,38 @@ func TestDBStripCommandJSONApply(t *testing.T) {
 	assertCommandArchiveHasNoImage(t)
 }
 
+func TestDBStripCommandRefreshesSecretFindings(t *testing.T) {
+	testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database, err := db.Open(cfg.DBPath)
+	require.NoError(t, err)
+	insertSessionForStripTest(t, database, "command")
+	message := commandImageMessage("command")
+	message.Content = "AKIA" + "7QHWN2DKR4FYPLJA"
+	require.NoError(t, database.InsertMessages([]db.Message{message}))
+	require.NoError(t, database.Close())
+
+	cmd := newDBStripCommand()
+	cmd.SetArgs([]string{"--images", "--yes"})
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, cmd.Execute())
+
+	database, err = db.Open(cfg.DBPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, database.Close()) }()
+	findings, err := database.SessionSecretFindings(t.Context(), "command")
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	source, ok, err := database.SecretFindingSource(t.Context(), findings[0])
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, message.Content, source[findings[0].MatchStart:findings[0].MatchEnd])
+	session, err := database.GetSessionFull(t.Context(), "command")
+	require.NoError(t, err)
+	assert.Equal(t, 1, session.SecretLeakCount)
+}
+
 func TestDBStripLeavesSourceFiles(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	path := t.TempDir() + "\\provider.jsonl"

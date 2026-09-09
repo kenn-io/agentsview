@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"go.kenn.io/agentsview/internal/secrets"
 )
 
 // StripImagesFilter scopes the existing rows changed by image cleanup.
@@ -252,7 +254,17 @@ func (db *DB) stripStoredToolResultRows(
 	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
 		return false, err
 	}
-	if err := replaceSecretFindingsTx(tx, sessionID, nil, 0, ""); err != nil {
+	// Re-scan the projected transcript inside the same transaction. Keeping
+	// old offsets would make --reveal point at the wrong bytes; clearing all
+	// findings would hide detections in text that image removal preserved.
+	findings, leakCount, err := scanStoredSecretFindingsTx(ctx, tx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := replaceSecretFindingsTx(tx, sessionID, findings, leakCount, secrets.RulesVersion()); err != nil {
 		return false, err
 	}
 	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {

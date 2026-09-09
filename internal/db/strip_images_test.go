@@ -3,11 +3,13 @@ package db
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/secrets"
 )
 
 func TestStripToolImagesScope(t *testing.T) {
@@ -387,4 +389,97 @@ func TestStripToolImagesCopiedSessionsOnly(t *testing.T) {
 	excluded, err := destination.GetSessionFull(ctx, "excluded")
 	require.NoError(t, err)
 	assert.Nil(t, excluded)
+}
+
+func TestStripToolImagesRefreshesSecretFindings(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "secrets", "project")
+	key := "AKIA" + "7QHWN2DKR4FYPLJA"
+	message := testImageMessage("secrets")
+	message.Content = "message key: " + key
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"` + key + `"}]`
+	message.ToolCalls[0].ResultContent = content
+	message.ToolCalls[0].ResultEvents[0].Content = content
+	insertMessages(t, d, message)
+	// Seed the existing event finding at its pre-strip offset. The rescan must
+	// relocate it after the larger placeholder and retain the message finding.
+	require.NoError(t, d.ReplaceSessionSecretFindings("secrets", []SecretFinding{
+		{RuleName: "aws-access-key", Confidence: "definite", LocationKind: "message", MatchStart: len("message key: "), MatchEnd: len(message.Content)},
+		{RuleName: "aws-access-key", Confidence: "definite", LocationKind: "tool_result_event", CallIndex: new(0), EventIndex: new(0), MatchStart: strings.Index(content, key), MatchEnd: strings.Index(content, key) + len(key)},
+	}, 2, secrets.RulesVersion()))
+	report, err := d.StripToolImages(t.Context(), StripImagesFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, report.Changed)
+	findings, err := d.SessionSecretFindings(t.Context(), "secrets")
+	require.NoError(t, err)
+	require.Len(t, findings, 2)
+	locations := []string{}
+	for _, finding := range findings {
+		locations = append(locations, finding.LocationKind)
+		source, ok, err := d.SecretFindingSource(t.Context(), finding)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.LessOrEqual(t, finding.MatchEnd, len(source))
+		assert.Equal(t, key, source[finding.MatchStart:finding.MatchEnd])
+		assert.Equal(t, secrets.RulesVersion(), finding.RulesVersion)
+	}
+	assert.ElementsMatch(t, []string{"message", "tool_result_event"}, locations)
+	session, err := d.GetSessionFull(t.Context(), "secrets")
+	require.NoError(t, err)
+	assert.Equal(t, 2, session.SecretLeakCount)
+	assert.Equal(t, secrets.RulesVersion(), session.SecretsRulesVersion)
+	report, err = d.StripToolImages(t.Context(), StripImagesFilter{})
+	require.NoError(t, err)
+	assert.Zero(t, report.Changed)
+	after, err := d.SessionSecretFindings(t.Context(), "secrets")
+	require.NoError(t, err)
+	assert.Equal(t, findings, after)
+}
+
+func TestStripToolImagesRescansStoredEventCoordinates(t *testing.T) {
+	for _, orphan := range []bool{false, true} {
+		name := "attached"
+		if orphan {
+			name = "orphan"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "coordinates", "project")
+			message := testImageMessage("coordinates")
+			key := "AKIA" + "7QHWN2DKR4FYPLJA"
+			content := message.ToolCalls[0].ResultEvents[0].Content
+			content = strings.TrimSuffix(content, "]") + `,{"type":"text","text":"` + key + `"}]`
+			message.ToolCalls[0].ResultContent = content
+			message.ToolCalls[0].ResultEvents[0].Content = content
+			insertMessages(t, d, message)
+			// Copied archives keep stored event IDs, including rows with no call.
+			_, err := d.getWriter().Exec("UPDATE tool_result_events SET event_index = 4 WHERE session_id = ?", "coordinates")
+			require.NoError(t, err)
+			if orphan {
+				_, err = d.getWriter().Exec("DELETE FROM tool_calls WHERE session_id = ?", "coordinates")
+				require.NoError(t, err)
+			}
+			report, err := d.StripToolImages(t.Context(), StripImagesFilter{})
+			require.NoError(t, err)
+			require.Equal(t, 1, report.Changed)
+			findings, err := d.SessionSecretFindings(t.Context(), "coordinates")
+			require.NoError(t, err)
+			require.Len(t, findings, 1)
+			finding := findings[0]
+			require.NotNil(t, finding.EventIndex)
+			assert.Equal(t, 4, *finding.EventIndex)
+			assert.Equal(t, "tool_result_event", finding.LocationKind)
+			var stored string
+			require.NoError(t, d.getReader().QueryRow(
+				"SELECT content FROM tool_result_events WHERE session_id = ? AND event_index = ?",
+				finding.SessionID, *finding.EventIndex).Scan(&stored))
+			assert.Equal(t, key, stored[finding.MatchStart:finding.MatchEnd])
+			if !orphan {
+				source, ok, err := d.SecretFindingSource(t.Context(), finding)
+				require.NoError(t, err)
+				require.True(t, ok)
+				assert.Equal(t, stored, source)
+			}
+		})
+	}
 }

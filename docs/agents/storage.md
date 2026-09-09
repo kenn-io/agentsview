@@ -52,10 +52,12 @@ placeholders. `db strip --images` applies the projection to existing rows one
 session at a time. The command updates `tool_calls.result_content` and
 `tool_result_events.content` directly in one transaction per session,
 recalculates their stored lengths, and keeps every event coordinate and metadata
-column unchanged. A changed session gets the normal transcript revision, Recall,
-signal, artifact export, usage notification, and post-commit revocation
-sequence. An unchanged session gets none of those publications. Full resync
-applies this same projection only to the IDs returned by its trashed and
+column unchanged. Each changed session also gets a full secret scan of its
+projected transcript inside that transaction, preserving findings with their
+current offsets and rule version. A changed session gets the normal transcript
+revision, Recall, signal, artifact export, usage notification, and post-commit
+revocation sequence. An unchanged session gets none of those publications. Full
+resync applies this same projection only to the IDs returned by its trashed and
 orphaned session copies, before the replacement is published. Freshly parsed
 sessions already carry the projection. Large Codex imports project events before
 scratch insertion; staged summaries and signals use that projected content. The

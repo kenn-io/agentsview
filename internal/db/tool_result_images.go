@@ -208,6 +208,12 @@ func ProjectToolResultImages(
 					event.Content, event.ContentLength,
 				)
 			}
+			// A deduplicated summary keeps its text in the sole event, so its
+			// retained length must follow that event's projected content.
+			if call.ResultContent == "" && call.ResultContentLength > 0 &&
+				len(call.ResultEvents) == 1 && call.ResultEvents[0].Content != "" {
+				call.ResultContentLength = call.ResultEvents[0].ContentLength
+			}
 		}
 	}
 	return projected, stats
