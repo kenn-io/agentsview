@@ -588,105 +588,79 @@ function findUnknownXmlCandidate(
     return cached === undefined ? undefined : cached - base;
   }
 
-  const cacheCandidate = (start: number, candidate: number | undefined): void => {
-    if (!candidateResults) return;
-    candidateResults.set(
-      base + start,
-      candidate === undefined ? undefined : base + candidate,
-    );
-  };
+  const blankLine = /(?:^|\n)[ \t]*(?:\n|$)/.exec(src);
+  const windowEnd = blankLine?.index ?? src.length;
+  const openHtmlTags: string[] = [];
+  const scanner = createMarkdownScanner(referenceLinks);
+  let cursor = 0;
+  let atLineStart = true;
 
-  const pendingStarts: number[] = [];
-  const cachePending = (candidate: number | undefined): void => {
-    cacheCandidate(0, candidate);
-    for (const start of pendingStarts) cacheCandidate(start, candidate);
-  };
-
-  let windowStart = 0;
-  while (windowStart < src.length) {
-    const blankLines = /(?:^|\n)[ \t]*(?:\n|$)/g;
-    blankLines.lastIndex = windowStart;
-    const blankLine = blankLines.exec(src);
-    const windowEnd = blankLine?.index ?? src.length;
-    const blankLineEnd = blankLine
-      ? blankLine.index + blankLine[0].length
-      : src.length;
-    const cachedWindow = candidateResults?.get(base + windowStart);
-    if (candidateResults?.has(base + windowStart)) {
-      const candidate = cachedWindow === undefined ? undefined : cachedWindow - base;
-      cachePending(candidate);
-      return candidate;
-    }
-    const openHtmlTags: string[] = [];
-    const scanner = createMarkdownScanner(referenceLinks);
-    let cursor = windowStart;
-    let atLineStart = cursor === 0 || src[cursor - 1] === "\n";
-
-    while (cursor < windowEnd) {
-      if (atLineStart) {
-        const lineTag = tagAtLineStart(src, cursor, windowEnd);
-        if (lineTag) {
-          const tagBody = lineTag[0].trimStart();
-          const name = lineTag[1]?.toLowerCase();
-          if (
-            name &&
-            openHtmlTags.length === 0 &&
-            !tagBody.startsWith("</") &&
-            !isSelfClosingTag(tagBody) &&
-            !isPreservedHtmlTag(name) &&
-            !isProtectedAutolink(tagBody)
-          ) {
-            const matched = matchUnknownXmlBlockAt(
-              src,
-              cursor,
-              windowEnd,
-              windowEnd < src.length,
-              scanner.links,
-            );
-            if (matched !== undefined && (windowEnd === src.length || matched !== windowEnd)) {
-              cachePending(cursor);
-              cacheCandidate(windowStart, cursor);
-              return cursor;
-            }
-            if (windowEnd < src.length) {
-              pendingStarts.push(windowStart);
-              windowStart = blankLineEnd;
-              break;
-            }
-            cachePending(undefined);
-            return undefined;
+  while (cursor < windowEnd) {
+    if (atLineStart) {
+      const lineTag = tagAtLineStart(src, cursor, windowEnd);
+      if (lineTag) {
+        const tagBody = lineTag[0].trimStart();
+        const name = lineTag[1]?.toLowerCase();
+        if (
+          name &&
+          openHtmlTags.length === 0 &&
+          !tagBody.startsWith("</") &&
+          !isSelfClosingTag(tagBody) &&
+          !isPreservedHtmlTag(name) &&
+          !isProtectedAutolink(tagBody)
+        ) {
+          const absoluteStart = base + cursor;
+          const cachedMatch = scan?.context.results.get(absoluteStart);
+          if (scan?.context.results.has(absoluteStart)) {
+            if (cachedMatch === undefined) return undefined;
+            candidateResults?.set(base, absoluteStart);
+            return cursor;
           }
+
+          const matched = matchUnknownXmlBlockAt(
+            src,
+            cursor,
+            src.length,
+            false,
+            scanner.links,
+            scan
+              ? (localStart, localEnd) => {
+                  scan.context.results.set(
+                    base + localStart,
+                    localEnd === undefined ? undefined : base + localEnd,
+                  );
+                }
+              : undefined,
+          );
+          if (matched === undefined) return undefined;
+          candidateResults?.set(base, absoluteStart);
+          return cursor;
         }
       }
-
-      const token = nextScannerToken(src, cursor, windowEnd, scanner);
-      if (token) {
-        if (token.kind === "tag") {
-          const tag = new RegExp(`^${XML_TAG_ESCAPE_RE.source}`).exec(token.raw);
-          const name = tag?.[1]?.toLowerCase();
-          if (name) updateKnownHtmlTags(openHtmlTags, token.raw, name);
-        }
-        cursor = Math.max(token.end, cursor + 1);
-        atLineStart = src[cursor - 1] === "\n";
-        continue;
-      }
-
-      const char = src[cursor];
-      if (char === "\n") {
-        atLineStart = true;
-      } else if (!(atLineStart && (char === " " || char === "\t"))) {
-        atLineStart = false;
-      }
-      cursor += 1;
     }
 
-    if (windowStart === 0 || windowStart !== blankLineEnd) {
-      cachePending(undefined);
-      return undefined;
+    const token = nextScannerToken(src, cursor, windowEnd, scanner);
+    if (token) {
+      if (token.kind === "tag") {
+        const tag = new RegExp("^" + XML_TAG_ESCAPE_RE.source).exec(token.raw);
+        const name = tag?.[1]?.toLowerCase();
+        if (name) updateKnownHtmlTags(openHtmlTags, token.raw, name);
+      }
+      cursor = Math.max(token.end, cursor + 1);
+      atLineStart = src[cursor - 1] === "\n";
+      continue;
     }
+
+    const char = src[cursor];
+    if (char === "\n") {
+      atLineStart = true;
+    } else if (!(atLineStart && (char === " " || char === "\t"))) {
+      atLineStart = false;
+    }
+    cursor += 1;
   }
 
-  cachePending(undefined);
+  candidateResults?.set(base, undefined);
   return undefined;
 }
 

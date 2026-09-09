@@ -551,6 +551,17 @@ describe("renderMarkdown", () => {
       expect(dom.querySelector("h1")).toBeNull();
     });
 
+    it("captures a complete block across a blank line", () => {
+      const source = "Intro\n<outer>\n# heading\n\nmore\n</outer>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelectorAll("pre > code")).toHaveLength(1);
+      expect(dom.querySelector("pre > code")?.textContent).toContain("# heading\n\nmore");
+      expect(dom.querySelector("h1")).toBeNull();
+    });
+
     it("preserves indentation when a complete block follows prose", () => {
       const source = "Intro\n  <policy>\n# heading\n  </policy>";
       const dom = parseHTML(
