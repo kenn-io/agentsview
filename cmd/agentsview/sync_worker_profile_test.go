@@ -25,6 +25,22 @@ func TestSyncWorkerProfileHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestSyncProfileTraceExcludesHeapSnapshotGC(t *testing.T) {
+	dir := t.TempDir()
+	tracePath := filepath.Join(dir, "runtime.trace")
+	stop := startSyncProfile(SyncConfig{
+		Trace: tracePath, MemProfile: filepath.Join(dir, "memory.pprof"),
+	})
+	stop()
+
+	// Inspect the artifact: the forced heap-snapshot GC is profiling cleanup,
+	// not work performed by the operation being measured.
+	command := exec.CommandContext(t.Context(), "go", "tool", "trace", "-d=parsed", tracePath)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assert.NotContains(t, string(output), "\truntime.GC @")
+}
+
 func TestSyncWorkerProfilesActualPass(t *testing.T) {
 	for _, tc := range []struct {
 		name, trace            string

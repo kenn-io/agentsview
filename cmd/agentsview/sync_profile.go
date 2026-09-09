@@ -64,7 +64,12 @@ func startSyncProfile(cfg SyncConfig) func() {
 	// Memory profile is captured at end (heap snapshot at exit), not
 	// streamed, so we just stash the path and write on shutdown.
 	memPath := cfg.MemProfile
-	stoppers = append(stoppers, func() {
+	return func() {
+		// Finish streaming profiles before the forced GC and heap encoding,
+		// which measure shutdown work rather than the sync pass.
+		for _, stop := range slices.Backward(stoppers) {
+			stop()
+		}
 		if memPath == "" {
 			return
 		}
@@ -80,14 +85,6 @@ func startSyncProfile(cfg SyncConfig) func() {
 			return
 		}
 		log.Printf("memprofile: wrote %s", memPath)
-	})
-
-	return func() {
-		// Stop in reverse order so trace.Stop runs before file
-		// close.
-		for _, stop := range slices.Backward(stoppers) {
-			stop()
-		}
 	}
 }
 
