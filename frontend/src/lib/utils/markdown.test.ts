@@ -393,6 +393,7 @@ describe("renderMarkdown", () => {
     it("keeps native protected constructs inside a complete unknown block", () => {
       for (const [source, expected] of [
         ["<policy>\n<https://example.com>\n# heading\n</policy>", "<policy>\n<https://example.com>\n# heading\n</policy>\n"],
+        ["<policy>\n<urn:foo>\n# heading\n</policy>", "<policy>\n<urn:foo>\n# heading\n</policy>\n"],
         ["<policy>\n[<inner>label</inner>][ref]\n# heading\n</policy>\n\n[ref]: https://example.com", "<policy>\n[<inner>label</inner>][ref]\n# heading\n</policy>\n"],
         ["<policy>\n<![CDATA[\n<inner>\n</wrong>\n]]>\n# heading\n</policy>", "<policy>\n<![CDATA[\n<inner>\n</wrong>\n]]>\n# heading\n</policy>\n"],
         ["<policy>\n<!doctype \"<inner>\n</wrong>\">\n# heading\n</policy>", "<policy>\n<!doctype \"<inner>\n</wrong>\">\n# heading\n</policy>\n"],

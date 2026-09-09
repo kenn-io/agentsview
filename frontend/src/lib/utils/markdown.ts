@@ -754,6 +754,15 @@ function escapeTagBrackets(text: string): string {
 function isProtectedAutolink(raw: string): boolean {
   const inner = raw.slice(1, -1);
   return (
+    /^[A-Za-z][A-Za-z0-9+.-]{1,31}:/.test(inner) ||
+    /^mailto:/i.test(inner) ||
+    /^[^\s<>@]+@[^\s<>]+$/.test(inner)
+  );
+}
+
+function isLegacyProtectedAutolink(raw: string): boolean {
+  const inner = raw.slice(1, -1);
+  return (
     /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(inner) ||
     /^mailto:/i.test(inner) ||
     /^[^\s<>@]+@[^\s<>]+$/.test(inner)
@@ -761,7 +770,7 @@ function isProtectedAutolink(raw: string): boolean {
 }
 
 function shouldEscapeCustomXmlLiteral(raw: string | undefined): boolean {
-  if (!raw || isProtectedAutolink(raw)) {
+  if (!raw || isLegacyProtectedAutolink(raw)) {
     return false;
   }
 
