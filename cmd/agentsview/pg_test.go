@@ -40,8 +40,10 @@ func restoreTestLogger(t *testing.T) {
 func clearConfiguredAgentEnvVars(t *testing.T) {
 	t.Helper()
 	for _, def := range parser.Registry {
-		if def.EnvVar != "" {
-			t.Setenv(def.EnvVar, "")
+		for _, name := range []string{def.EnvVar, def.NativeEnvVar, def.DefaultRootEnvVar} {
+			if name != "" {
+				t.Setenv(name, "")
+			}
 		}
 	}
 }
