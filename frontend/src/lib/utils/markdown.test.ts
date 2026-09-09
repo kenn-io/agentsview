@@ -668,6 +668,17 @@ describe("renderMarkdown", () => {
       expect(dom.querySelector("h1")).toBeNull();
     });
 
+    it("recovers after an incomplete candidate and a blank line", () => {
+      const source = "<outer>\n<inner>\n\n<later>\n# later\n</later>";
+      const dom = parseHTML(
+        renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+      );
+
+      expect(dom.querySelectorAll("pre > code")).toHaveLength(1);
+      expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
+      expect(dom.querySelector("h1")).toBeNull();
+    });
+
     it("does not recover a malformed block without a blank-line boundary", () => {
       const source = "Intro\n<policy>\n<rule>\n# heading\n</rule>\n</wrong>\n</policy>\nAfter";
       const omitted = renderMarkdown(source);
