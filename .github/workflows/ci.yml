@@ -1,22 +1,8 @@
 name: CI
-run-name: "${{ inputs.group_windows_packages && 'Windows package grouping trial' || 'CI' }} (${{ inputs.runner_size || '16cpu' }})"
 
 on:
   workflow_call:
   workflow_dispatch:
-    inputs:
-      runner_size:
-        description: Namespace runner size for this trial
-        type: choice
-        default: 16cpu
-        options:
-          - 4cpu
-          - 8cpu
-          - 16cpu
-      group_windows_packages:
-        description: Run only Capture, Database, and Parser together for a focused trial
-        type: boolean
-        default: false
   push:
     branches: [main]
   # Run on every pull request regardless of base branch so stacked PRs that
@@ -24,7 +10,7 @@ on:
   # lint, and e2e suite. The expensive desktop/tauri bundle builds are gated
   # to main separately in desktop-artifacts.yml.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}-${{ inputs.runner_size || '16cpu' }}-${{ inputs.group_windows_packages && 'grouped' || 'split' }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -32,8 +18,7 @@ permissions:
 
 jobs:
   lint:
-    if: ${{ !inputs.group_windows_packages }}
-    runs-on: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
+    runs-on: namespace-profile-linux-4cpu
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -43,6 +28,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+
+      - name: Configure Namespace Go cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: go
 
       - name: Install lint tools
         run: |
@@ -53,8 +44,7 @@ jobs:
         run: make lint-ci
 
   frontend:
-    if: ${{ !inputs.group_windows_packages }}
-    runs-on: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
+    runs-on: namespace-profile-linux-8cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -63,10 +53,22 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "24"
+          package-manager-cache: false
+
+      - name: Configure Namespace npm cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: npm
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+
+      - name: Configure Namespace Go cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: go
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -97,8 +99,7 @@ jobs:
         working-directory: frontend
 
   frontend-node-25:
-    if: ${{ !inputs.group_windows_packages }}
-    runs-on: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
+    runs-on: namespace-profile-linux-8cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -107,6 +108,12 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "25"
+          package-manager-cache: false
+
+      - name: Configure Namespace npm cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: npm
 
       - name: Install frontend dependencies
         run: npm ci
@@ -117,8 +124,8 @@ jobs:
         working-directory: frontend
 
   docs:
-    if: ${{ !inputs.group_windows_packages }}
-    runs-on: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
+    name: Docs and scripts
+    runs-on: namespace-profile-linux-4cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -139,14 +146,6 @@ jobs:
       - name: Run docs check
         run: make docs-check
 
-  scripts:
-    if: ${{ !inputs.group_windows_packages }}
-    runs-on: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
       - name: Run shell script tests
         run: |
           bash scripts/install_test.sh
@@ -155,7 +154,6 @@ jobs:
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
   test:
-    if: ${{ !inputs.group_windows_packages }}
     name: Go Test (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -163,9 +161,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            runner: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
+            runner: namespace-profile-linux-8cpu
           - os: windows-latest
-            runner: ${{ format('namespace-profile-windows-{0}', inputs.runner_size || '16cpu') }}
+            runner: namespace-profile-windows-4cpu
           - os: macos-latest
             runner: macos-latest
     steps:
@@ -177,6 +175,13 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ runner.os == 'macOS' }}
+
+      - name: Configure Namespace Go cache
+        if: runner.os != 'macOS'
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: go
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -257,21 +262,18 @@ jobs:
         if: runner.os == 'Linux' && steps.codecov.outcome == 'failure'
         run: echo "::warning::Codecov upload failed"
 
-  # Manual trials may share setup for the shorter suites. Sync remains
-  # isolated, and routine CI retains the separate package jobs.
+  # Share setup for the shorter SQLite suites; keep Sync on its own runner.
   test-sqlite-packages-windows:
     name: Go Test (windows-latest, ${{ matrix.name }})
-    runs-on: ${{ format('namespace-profile-windows-{0}', inputs.runner_size || '16cpu') }}
+    runs-on: namespace-profile-windows-4cpu
     strategy:
       fail-fast: false
       matrix:
-        include: >-
-          ${{ fromJSON(inputs.group_windows_packages &&
-          '[{"name":"Capture, Database, Parser","package":"./internal/capture ./internal/db ./internal/parser"}]' ||
-          '[{"name":"Capture","package":"./internal/capture"},
-            {"name":"Database","package":"./internal/db"},
-            {"name":"Parser","package":"./internal/parser"},
-            {"name":"Sync","package":"./internal/sync"}]') }}
+        include:
+          - name: Capture, Database, Parser
+            package: ./internal/capture ./internal/db ./internal/parser
+          - name: Sync
+            package: ./internal/sync
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -281,6 +283,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+
+      - name: Configure Namespace Go cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: go
 
       - name: Setup MinGW
         id: setup_mingw
@@ -434,9 +442,8 @@ jobs:
 
   # Keep the derived-mirror suite concurrent with the main Windows package set.
   test-duckdb-windows:
-    if: ${{ !inputs.group_windows_packages }}
     name: Go Test (windows-latest, DuckDB)
-    runs-on: ${{ format('namespace-profile-windows-{0}', inputs.runner_size || '16cpu') }}
+    runs-on: namespace-profile-windows-4cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -446,6 +453,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+
+      - name: Configure Namespace Go cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: go
 
       - name: Setup MinGW
         id: setup_mingw
@@ -475,9 +488,8 @@ jobs:
           CGO_ENABLED: "1"
 
   test-race:
-    if: ${{ !inputs.group_windows_packages }}
     name: Go Test (race detector)
-    runs-on: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
+    runs-on: namespace-profile-linux-8cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -487,6 +499,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+
+      - name: Configure Namespace Go cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: go
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -507,17 +525,18 @@ jobs:
           CGO_ENABLED: "1"
 
   desktop-windows-unit:
-    if: ${{ !inputs.group_windows_packages }}
     name: Desktop Unit Tests (Windows)
-    runs-on: ${{ format('namespace-profile-windows-{0}', inputs.runner_size || '16cpu') }}
+    runs-on: namespace-profile-windows-4cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - name: Configure Namespace Rust cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
-          workspaces: desktop/src-tauri
+          cache: rust
+          path: desktop/src-tauri/target
 
       - name: Prepare placeholder sidecar resource
         shell: pwsh
@@ -547,8 +566,7 @@ jobs:
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib
 
   integration:
-    if: ${{ !inputs.group_windows_packages }}
-    runs-on: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
+    runs-on: namespace-profile-linux-4cpu
     services:
       postgres:
         image: pgvector/pgvector:pg18
@@ -575,6 +593,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+
+      - name: Configure Namespace Go cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: go
 
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
@@ -617,8 +641,7 @@ jobs:
           TEST_SSH_KEY: ${{ github.workspace }}/testdata/ssh/test_key
 
   e2e:
-    if: ${{ !inputs.group_windows_packages }}
-    runs-on: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
+    runs-on: namespace-profile-linux-8cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -628,6 +651,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+
+      - name: Configure Namespace Go cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: go
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -638,6 +667,12 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "24"
+          package-manager-cache: false
+
+      - name: Configure Namespace npm cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        with:
+          cache: npm
 
       - name: Install frontend dependencies
         run: npm ci
@@ -664,37 +699,13 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      - name: Resolve Playwright version
-        id: playwright-version
-        run: |
-          version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-        working-directory: frontend
-
-      - name: Resolve Playwright runner platform
-        id: playwright-platform
-        run: |
-          . /etc/os-release
-          echo "linux-distribution=${ID:-unknown}-${VERSION_ID:-unknown}" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      - name: Configure Namespace Playwright cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
-          path: ~/.cache/ms-playwright
-          key: playwright-browsers-${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-${{ steps.playwright-platform.outputs.linux-distribution }}-${{ steps.playwright-version.outputs.version }}
+          cache: playwright
 
-      - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
+      - name: Install Playwright browsers and system dependencies
         run: npx playwright install --with-deps chromium webkit
-        working-directory: frontend
-
-      # Cache hit: browser binaries are already present, but the runner
-      # image itself isn't guaranteed to have the OS packages Playwright
-      # needs after a runner image update, so make sure those are still installed.
-      - name: Install Playwright system dependencies
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium webkit
         working-directory: frontend
 
       - name: Run E2E tests

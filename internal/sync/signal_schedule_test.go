@@ -2,12 +2,14 @@ package sync
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 type harnessTimer struct {
@@ -526,6 +528,30 @@ func TestWriteIncrementalDebouncesSignalRecompute(t *testing.T) {
 	fx.engine.FlushSignals()
 	assert.Equal(t, 3, secretLeakCount(t, fx, sid),
 		"third secret must flush, proving the deferral was real")
+}
+
+func TestClaudeAssistantAppendDebouncesSignalRecompute(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := fx.writeClaudeSession(t, "proj", "assistant-debounce.jsonl", "hello")
+	fx.engine.SyncAll(context.Background(), nil)
+	sid := fx.sessionIDFor(t, path)
+
+	// Open the debounce window with a user append, then stream an assistant
+	// reply. Its findings must be included when the deferred work is flushed.
+	fx.appendClaudeMessage(t, path, "continue")
+	fx.engine.SyncPaths([]string{path})
+	line := testjsonl.NewSessionBuilder().AddClaudeAssistant(
+		"2026-06-20T11:00:00Z", "key AKIA7QHWN2DKR4FYPLJM leaked",
+	).String()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(line)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	fx.engine.SyncPaths([]string{path})
+	assert.Zero(t, secretLeakCount(t, fx, sid), "assistant appends must debounce")
+	fx.engine.FlushSignals()
+	assert.Equal(t, 1, secretLeakCount(t, fx, sid))
 }
 
 // TestSyncThenRunFlushesSignalsBeforeWork mirrors the PG/DuckDB push

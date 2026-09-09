@@ -299,9 +299,12 @@ agentsview serve
 For Claude, Codex, and Cursor, custom roots may also be `s3://` URIs:
 
 ```toml
-claude_project_dirs = ["s3://agent-archive/laptop/raw/claude"]
-codex_sessions_dirs = ["s3://agent-archive/laptop/raw/codex"]
-cursor_project_dirs = ["s3://agent-archive/laptop/raw/cursor"]
+[agents.claude]
+dirs = ["s3://agent-archive/laptop/raw/claude"]
+[agents.codex]
+dirs = ["s3://agent-archive/laptop/raw/codex"]
+[agents.cursor]
+dirs = ["s3://agent-archive/laptop/raw/cursor"]
 ```
 
 Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and optionally

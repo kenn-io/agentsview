@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
@@ -440,6 +441,17 @@ type EngineConfig struct {
 	DisabledAgents          []parser.AgentType
 	Machine                 string
 	BlockedResultCategories []string
+	// StagedCodexParseMinBytes overrides the full-parse size above which a
+	// Codex source streams through the scratch staging path. Zero selects
+	// the default (stagedCodexParseMinBytes). Tests lower it so the staged
+	// wiring is covered by small fixtures in the default test build.
+	StagedCodexParseMinBytes int64
+	// CodexStagingDir selects the directory for staged Codex scratch
+	// databases. Empty means the system temporary directory.
+	CodexStagingDir string
+	// ToolResultImages carries the configured retention policy into workers
+	// that open the source archive read-only before building a replacement.
+	ToolResultImages config.ToolResultImages
 	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
 	// sessions whose working directory equals one of the prefixes
 	// or lives underneath one. Sessions without a recorded cwd are
@@ -535,7 +547,13 @@ type Engine struct {
 	preserveAgents          []parser.AgentType
 	machine                 string
 	blockedResultCategories map[string]bool
-	cwdFilter               cwdPrefixFilter
+	// stagedCodexMin is the resolved full-parse size above which Codex
+	// sources take the staged streaming path.
+	stagedCodexMin int64
+	// stagedCodexDir is the scratch directory for staged Codex parses.
+	stagedCodexDir   string
+	toolResultImages config.ToolResultImages
+	cwdFilter        cwdPrefixFilter
 	// scanProtectedPaths, homeDir, and goos gate passive probing of macOS
 	// TCC-protected locations. homeDir is empty when the home directory
 	// cannot be resolved, which disables the gate rather than guessing.
@@ -571,6 +589,11 @@ type Engine struct {
 	skipHashKeys      map[string]string
 	s3CodexIndexMu    gosync.Mutex
 	s3CodexIndexCache map[string]s3CodexIndexSnapshot
+	// checkpointAudit, when set, bypasses the checkpoint stat-trust gate so
+	// the provider's full-source fingerprint verifies content. The periodic
+	// archive audit sets it to catch same-stat in-place rewrites that
+	// append-trust would otherwise keep stale.
+	checkpointAudit atomic.Bool
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
@@ -887,6 +910,23 @@ func NewEngine(
 		maps.Copy(providerModes, cfg.ProviderMigrationModes)
 	}
 
+	stagedCodexDir := cfg.CodexStagingDir
+	// Ephemeral engines keep scratch files in the system temporary directory;
+	// their archive directory may be a capture bundle with a fixed layout.
+	if stagedCodexDir == "" && !cfg.Ephemeral {
+		dbPath := database.Path()
+		if dbPath != "" && dbPath != ":memory:" {
+			stagedCodexDir = filepath.Join(
+				filepath.Dir(dbPath), "scratch", "codex",
+			)
+		}
+	}
+	if stagedCodexDir != "" {
+		if err := prepareCodexStagingDir(stagedCodexDir); err != nil {
+			log.Printf("preparing codex staging directory: %v", err)
+		}
+	}
+
 	if cfg.ScanProtectedPaths {
 		// Parsers extract project names by probing recorded cwds for git
 		// roots; that guard is package-level because extraction runs deep
@@ -900,6 +940,10 @@ func NewEngine(
 	if progressStallAfter <= 0 {
 		progressStallAfter = defaultProgressStallAfter
 	}
+	toolResultImages := database.ToolResultImages()
+	if cfg.ToolResultImages == config.ToolResultImagesDrop {
+		toolResultImages = config.ToolResultImagesDrop
+	}
 	e := &Engine{
 		db:                      database,
 		stat:                    os.Stat,
@@ -909,6 +953,9 @@ func NewEngine(
 		preserveAgents:          disabledAgents,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
+		stagedCodexMin:          stagedCodexMinBytes(cfg.StagedCodexParseMinBytes),
+		stagedCodexDir:          stagedCodexDir,
+		toolResultImages:        toolResultImages,
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
 		scanProtectedPaths:      cfg.ScanProtectedPaths,
 		homeDir:                 userHomeDirOrEmpty(),
@@ -950,12 +997,13 @@ func NewEngine(
 	if !cfg.DeferStartupMaintenance {
 		e.ReleaseStartupMaintenance()
 	}
-	// Errors are logged inside recomputeSignalsFromDB and are
-	// non-fatal: the next write or flush retries.
+	// A competing archive writer can invalidate a snapshot after it was
+	// loaded. Keep failed work queued even if no later source change arrives.
 	recompute := func(sessionID string) {
-		_, _ = e.recomputeSignalsFromDB(
-			context.Background(), sessionID,
-		)
+		if _, err := e.recomputeSignalsFromDB(context.Background(), sessionID); err != nil {
+			log.Printf("signals: recompute %s: %v", sessionID, err)
+			e.signalSched.deferRetry(sessionID)
+		}
 	}
 	if cfg.DisableSignalRecomputation {
 		recompute = func(string) {}
@@ -1541,6 +1589,18 @@ func (e *Engine) Machine() string {
 	return e.machine
 }
 
+// SetCheckpointAudit enables or disables the checkpoint-bypassing content
+// audit. When enabled, checkpointed sources are re-hashed with the provider's
+// full-source fingerprint instead of being trusted on stat, so same-stat
+// in-place rewrites are detected and repaired. The periodic archive audit
+// toggles this around its reconciliation pass.
+func (e *Engine) SetCheckpointAudit(enabled bool) {
+	if e == nil {
+		return
+	}
+	e.checkpointAudit.Store(enabled)
+}
+
 type syncJob struct {
 	processResult
 	agent          parser.AgentType
@@ -1568,6 +1628,17 @@ func (j *syncJob) releaseRetention() {
 	}
 	j.retentionLease.Release()
 	j.retentionLease = nil
+}
+
+// releaseAll drops every parse-owned resource a discarded result holds: the
+// retention lease bounds the parsed payload memory, and releaseStaged closes
+// the scratch staging sink and restores the process GC target it lowered.
+// Every collector discard path — including cancellation draining — must call
+// this instead of releaseRetention alone, or a staged Codex result leaks its
+// scratch database and pins the process GC percent at the staged value.
+func (j *syncJob) releaseAll() {
+	j.releaseRetention()
+	j.releaseStaged()
 }
 
 func (j syncJob) skipCacheKey() string {
@@ -3005,6 +3076,7 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
+	newDB.SetToolResultImages(e.toolResultImages)
 	if err := newDB.CopyArchiveIdentityFrom(origPath); err != nil {
 		log.Printf("resync: preserve archive identity: %v", err)
 		newDB.Close()
@@ -3035,13 +3107,15 @@ func (e *Engine) resyncBuildLocked(
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
 	trashedCopied := 0
-	if n, err := newDB.CopyTrashedDataFrom(origPath); err != nil {
+	var copiedSessionIDs []string
+	if ids, err := newDB.CopyTrashedDataFrom(origPath); err != nil {
 		log.Printf("resync: pre-sync copy trashed sessions: %v", err)
 		// Non-fatal: worst case, trashed sessions are reparsed
 		// and then re-marked as trashed by metadata copy.
-	} else if n > 0 {
-		trashedCopied = n
-		log.Printf("resync: pre-sync copied %d trashed sessions", n)
+	} else if len(ids) > 0 {
+		copiedSessionIDs = append(copiedSessionIDs, ids...)
+		trashedCopied = len(ids)
+		log.Printf("resync: pre-sync copied %d trashed sessions", len(ids))
 	}
 	// The temp DB is not swapped into production until the end,
 	// so avoid per-row FTS trigger work during the bulk load and
@@ -3078,12 +3152,12 @@ func (e *Engine) resyncBuildLocked(
 		)
 	}
 
-	// Same trade as FTS: the usage and activity message indexes are
+	// Same trade as FTS: the usage, activity, and tool-result indexes are
 	// pure derived state, so skip their per-row maintenance during the
 	// bulk load and build each B-tree once before the swap. Read-only
 	// opens require these indexes, so the rebuild must succeed before
 	// the replacement is installed.
-	if err := newDB.DropUsageMessageIndexes(); err != nil {
+	if err := newDB.DropBulkImportIndexes(); err != nil {
 		log.Printf("resync: drop temp usage indexes: %v", err)
 		newDB.Close()
 		removeTempDB(tempPath)
@@ -3427,7 +3501,8 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
-	stats.OrphanedCopied = orphaned
+	stats.OrphanedCopied = len(orphaned)
+	copiedSessionIDs = append(copiedSessionIDs, orphaned...)
 	deferredCwdUpdated, err := e.applyDeferredSourceCwd(
 		newDB, deferredSourceCwd,
 	)
@@ -3451,7 +3526,7 @@ func (e *Engine) resyncBuildLocked(
 
 	// Re-link subagent sessions after orphan copy so copied
 	// tool_calls.subagent_session_id references are resolved.
-	if orphaned > 0 {
+	if len(orphaned) > 0 {
 		reportResyncPhase(
 			PhaseCopyingOrphans,
 			"Relinking archived subagent sessions",
@@ -3622,6 +3697,23 @@ func (e *Engine) resyncBuildLocked(
 	)
 	if err := newDB.ForceBackfillIsAutomated(); err != nil {
 		log.Printf("resync: reclassify is_automated: %v", err)
+	}
+
+	if newDB.ToolResultImages() == config.ToolResultImagesDrop {
+		if err := newDB.StripToolImagesForSessions(ctx, copiedSessionIDs); err != nil {
+			log.Printf("resync: project copied tool-result images: %v", err)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"copied tool-result image projection failed, aborting swap: "+err.Error(),
+			)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats, err
+		}
 	}
 
 	if ftsDropped {
@@ -8218,12 +8310,12 @@ func (e *Engine) filterFilesByMtime(
 				continue
 			}
 		}
-		if !isS3SourcePath(f.Path) &&
-			e.pathInStaleIdentitySet(staleIdentities, f.Agent, f.Path) &&
+		if e.pathInStaleIdentitySet(staleIdentities, f.Agent, f.Path) &&
 			e.staleSourceReparseAdmitted(
 				sourceCwdParticipating, sourceCwd,
 			) {
-			// Cwd-only reconciliation invalidates rows that must bypass mtime cutoff.
+			// Parser upgrades and cwd reconciliation must bypass the cutoff,
+			// including unchanged S3 objects with stale archived output.
 			out = append(out, f)
 			continue
 		}
@@ -9308,9 +9400,9 @@ func (e *Engine) syncProviderDBBackedAgent(
 				}
 				var err error
 				if useWorktreeResolver {
-					err = e.writeSessionFullWithResolver(pw, resolveWorktreeProject)
+					err = e.writeSessionFullWithResolver(ctx, pw, resolveWorktreeProject)
 				} else {
-					err = e.writeSessionFull(pw)
+					err = e.writeSessionFullWithResolver(ctx, pw, e.loadWorktreeProjectResolverContext(ctx))
 				}
 				switch {
 				case err == nil:
@@ -9497,7 +9589,10 @@ func (e *Engine) collectAndBatchWithOptions(
 	}
 
 	var pending []pendingWrite
+	var pendingBytes int64
 	var pendingLeases []*parseRetentionLease
+	var pendingStaged []*codexStagingSink
+	var pendingStagedGC []func()
 	var pendingCacheWrites []skipCacheWrite
 	var pendingRetentionBytes int64
 	baselineCacheWrites := make(
@@ -9702,19 +9797,13 @@ func (e *Engine) collectAndBatchWithOptions(
 		if len(pending) == 0 {
 			return
 		}
-		if ctx.Err() != nil && e.discardWritesOnCancel {
-			releaseParseRetentionLeases(pendingLeases)
-			clear(pending)
-			pending = pending[:0]
-			clear(pendingLeases)
-			pendingLeases = pendingLeases[:0]
-			clear(pendingCacheWrites)
-			pendingCacheWrites = pendingCacheWrites[:0]
-			pendingRetentionBytes = 0
-			return
-		}
 		func() {
 			defer releaseParseRetentionLeases(pendingLeases)
+			defer closeCodexStagingSinks(pendingStaged)
+			defer releaseStagedGCGuards(pendingStagedGC)
+			if ctx.Err() != nil && e.discardWritesOnCancel {
+				return
+			}
 			completionCtx := ctx
 			if !e.discardWritesOnCancel {
 				completionCtx = context.WithoutCancel(ctx)
@@ -9839,8 +9928,13 @@ func (e *Engine) collectAndBatchWithOptions(
 		clear(pending)
 		pending = pending[:0]
 		clear(pendingLeases)
+		pendingBytes = 0
 		pendingLeases = pendingLeases[:0]
 		clear(pendingCacheWrites)
+		clear(pendingStaged)
+		pendingStaged = pendingStaged[:0]
+		clear(pendingStagedGC)
+		pendingStagedGC = pendingStagedGC[:0]
 		pendingCacheWrites = pendingCacheWrites[:0]
 		pendingRetentionBytes = 0
 	}
@@ -9883,7 +9977,7 @@ func (e *Engine) collectAndBatchWithOptions(
 		}
 		if ctx.Err() != nil && e.discardWritesOnCancel {
 			stats.Aborted = true
-			r.releaseRetention()
+			r.releaseAll()
 			drainResults(results, total-i-1)
 			goto flush
 		}
@@ -9898,7 +9992,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			// ctx.Done() branch above.
 			if ctx.Err() != nil {
 				stats.Aborted = true
-				r.releaseRetention()
+				r.releaseAll()
 				drainResults(results, total-i-1)
 				goto flush
 			}
@@ -9911,7 +10005,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
 			}
 			log.Printf("sync error: %v", r.err)
-			r.releaseRetention()
+			r.releaseAll()
 			continue
 		}
 		if len(r.excludedSessionIDs) > 0 || len(r.sourceMissingMembers) > 0 {
@@ -9969,7 +10063,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			}
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
-			r.releaseRetention()
+			r.releaseAll()
 			continue
 		}
 		sourceAllowsParserExclusions := e.sourceAllowsParserExclusions(
@@ -9995,7 +10089,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			log.Printf("list pre-write subagent children: %v", err)
 			stats.RecordFailed()
 			e.noteSQLiteContainerResult(r.path, false)
-			r.releaseRetention()
+			r.releaseAll()
 			continue
 		}
 		// Persist affected IDs before any exclusion or replacement can
@@ -10005,7 +10099,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			log.Printf("queue subagent parent repairs: %v", err)
 			stats.RecordFailed()
 			e.noteSQLiteContainerResult(r.path, false)
-			r.releaseRetention()
+			r.releaseAll()
 			continue
 		}
 		atomicDAG := sourceRequiresAtomicDAGCompletion(
@@ -10024,7 +10118,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				log.Printf("stage DAG source data versions: %v", err)
 				stats.RecordFailed()
 				e.noteSQLiteContainerResult(r.path, false)
-				r.releaseRetention()
+				r.releaseAll()
 				continue
 			}
 		}
@@ -10035,7 +10129,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			log.Printf("delete parser-excluded sessions: %v", err)
 			stats.RecordFailed()
 			e.noteSQLiteContainerResult(r.path, false)
-			r.releaseRetention()
+			r.releaseAll()
 			continue
 		}
 		if len(excludedSessionIDs) > 0 {
@@ -10063,7 +10157,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				)
 				stats.RecordFailed()
 				e.noteSQLiteContainerResult(r.path, false)
-				r.releaseRetention()
+				r.releaseAll()
 				continue
 			}
 			stats.sourceMissingArchiveMembers = append(
@@ -10117,7 +10211,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			}
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
-			r.releaseRetention()
+			r.releaseAll()
 			continue
 		}
 		if r.cacheSkip {
@@ -10175,7 +10269,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			}
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
-			r.releaseRetention()
+			r.releaseAll()
 			continue
 		}
 
@@ -10183,7 +10277,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			if err := e.writeIncremental(r.incremental); err != nil {
 				log.Printf("%v", err)
 				stats.RecordFailed()
-				r.releaseRetention()
+				r.releaseAll()
 				continue
 			}
 			stats.RecordSynced(1)
@@ -10196,7 +10290,7 @@ func (e *Engine) collectAndBatchWithOptions(
 				r.incremental.msgs,
 			)
 			stats.messagesIndexed = progress.MessagesIndexed
-			r.releaseRetention()
+			r.releaseAll()
 		} else {
 			sourceNeedsRetry := presenceProofWithheld
 			if resultRetentionBytes > 0 && len(pending) > 0 &&
@@ -10214,6 +10308,10 @@ func (e *Engine) collectAndBatchWithOptions(
 					sess:                    pr.Session,
 					msgs:                    pr.Messages,
 					usageEvents:             pr.UsageEvents,
+					sourceBytes:             r.sourceBytes,
+					checkpoint:              pr.Checkpoint,
+					checkpointHashState:     pr.CheckpointHashState,
+					checkpointAnchorDigest:  pr.CheckpointAnchorDigest,
 					needsRetry:              sessionNeedsRetry || atomicDAG,
 					forceReplace:            r.forceReplace,
 					baselineEligible:        !sourceNeedsRetry,
@@ -10239,7 +10337,11 @@ func (e *Engine) collectAndBatchWithOptions(
 					pw.sourceCompletionEligible = !sourceNeedsRetry
 					pw.promoteSourceOnComplete = atomicDAG
 				}
+				if i == 0 {
+					pw.staged = r.staged
+				}
 				pending = append(pending, pw)
+				pendingBytes += pw.sourceBytes
 				if runtimeMetrics != nil {
 					runtimeMetrics.pendingWrites(len(pending))
 				}
@@ -10253,6 +10355,16 @@ func (e *Engine) collectAndBatchWithOptions(
 				pendingLeases = append(pendingLeases, r.retentionLease)
 				r.retentionLease = nil
 			}
+			if r.staged != nil {
+				pendingStaged = append(pendingStaged, r.staged)
+				r.staged = nil
+			}
+			if r.stagedGCRelease != nil {
+				pendingStagedGC = append(
+					pendingStagedGC, r.stagedGCRelease,
+				)
+				r.stagedGCRelease = nil
+			}
 			if r.cacheAfterWrite && !sourceNeedsRetry {
 				pendingCacheWrites = append(pendingCacheWrites, skipCacheWrite{
 					agent:             r.agent,
@@ -10264,7 +10376,8 @@ func (e *Engine) collectAndBatchWithOptions(
 			if len(pending) >= batchSize ||
 				(archiveRetention &&
 					pendingRetentionBytes >= pendingRetentionLimit) ||
-				(!archiveRetention && budget.underPressure()) {
+				(!archiveRetention && (budget.underPressure() ||
+					pendingBytes >= parseBatchBytesLimit)) {
 				flushPending()
 			}
 			// A Kiro SQLite store is discovered as one container source
@@ -10552,7 +10665,7 @@ func (e *Engine) linkSubagentSessions(ctx context.Context) error {
 func drainResults(results <-chan syncJob, remaining int) {
 	for range remaining {
 		job := <-results
-		job.releaseRetention()
+		job.releaseAll()
 	}
 }
 
@@ -10560,13 +10673,21 @@ func drainResults(results <-chan syncJob, remaining int) {
 // incremental JSONL parse, used to partially update the
 // session row without overwriting unrelated columns.
 type incrementalUpdate struct {
-	sessionID            string
-	project              string
-	sourceProject        string
-	machine              string
-	cwd                  string
-	msgs                 []parser.ParsedMessage
-	links                []parser.ClaudeSubagentLink
+	agent               parser.AgentType
+	sessionID           string
+	project             string
+	sourceProject       string
+	machine             string
+	cwd                 string
+	msgs                []parser.ParsedMessage
+	links               []parser.ClaudeSubagentLink
+	toolCallUpdates     []parser.ParsedToolCallUpdate
+	messageUsageUpdates []parser.ParsedMessageTokenUsageUpdate
+	// checkpoint is the machine-local parser checkpoint to persist in the
+	// same transaction as this incremental delta. nil keeps the existing
+	// checkpoint (or leaves none).
+	checkpoint           *db.ParserCheckpoint
+	checkpointBlobs      *db.ParserCheckpointBlobs
 	endedAt              time.Time
 	terminationStatus    *string
 	msgCount             int // total (old + new)
@@ -10581,6 +10702,46 @@ type incrementalUpdate struct {
 	hasTotalOutputTokens bool
 	hasPeakContextTokens bool
 	providerStatHash     *pendingProviderStatHash
+}
+
+// hasSubstantiveUserMessage reports whether the delta contains a user
+// message with non-whitespace content. Such deltas can change prompt-derived
+// heuristics, which the incremental signal maintainer does not fold; they
+// fall back to the debounced full recompute.
+func (inc *incrementalUpdate) hasSubstantiveUserMessage() bool {
+	for _, m := range inc.msgs {
+		if m.Role == parser.RoleUser &&
+			strings.TrimSpace(m.Content) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCompactBoundary reports whether the delta contains a compact-boundary
+// message. Boundaries change the compaction detectors, which the incremental
+// signal maintainer does not fold; they fall back to a full recompute.
+func (inc *incrementalUpdate) hasCompactBoundary() bool {
+	for _, m := range inc.msgs {
+		if m.IsCompactBoundary {
+			return true
+		}
+	}
+	return false
+}
+
+// hasResultSubagentLink reports whether the delta carries a subagent link
+// with result content. Linked results update tool_calls.result_content
+// outside ToolCallResultUpdates, so the incremental secret scan never sees
+// them; maintenance must decline and let the debounced full recompute
+// rescan the affected call instead of stamping it current.
+func (inc *incrementalUpdate) hasResultSubagentLink() bool {
+	for _, link := range inc.links {
+		if link.HasResult && strings.TrimSpace(link.ResultContentRaw) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionParseError is a per-session parse failure inside a shared
@@ -10604,6 +10765,10 @@ type sourceMissingMember struct {
 }
 
 type processResult struct {
+	// sourceBytes is the physical source size used to acquire the retention
+	// lease and to account this result against the pending write batch byte
+	// cap. Zero on lease-free skips.
+	sourceBytes        int64
 	results            []parser.ParseResult
 	excludedSessionIDs []string
 	// preservedSessionIDs are higher-ranked members omitted by a shared source;
@@ -10706,6 +10871,34 @@ type processResult struct {
 	sourceCwdStoredOK   bool
 	sourceCwdPath       string
 	sourceCwdAgent      parser.AgentType
+	// staged carries the scratch staging sink for a Codex full parse that
+	// took the streaming path. The collector moves it onto the pending
+	// write (and into pendingStaged for release after the batch commits);
+	// every path that drops the result without writing must releaseStaged.
+	staged *codexStagingSink
+	// stagedGCRelease restores the process GC percent after this result's
+	// staged sink is released. nil when the result carries no sink.
+	stagedGCRelease func()
+}
+
+// releaseStaged closes the result's staging sink, restores the GC percent
+// window it opened, and clears the handles. It must be called exactly once
+// on every processResult that carries a sink and is not moving the sink
+// onto a pending write.
+func (r *processResult) releaseStaged() {
+	if r.staged == nil && r.stagedGCRelease == nil {
+		return
+	}
+	if r.staged != nil {
+		if err := r.staged.Close(); err != nil {
+			log.Printf("closing codex staging sink: %v", err)
+		}
+		r.staged = nil
+	}
+	if r.stagedGCRelease != nil {
+		r.stagedGCRelease()
+		r.stagedGCRelease = nil
+	}
 }
 
 func (r processResult) needsRetryForSession(sessionID string) bool {
@@ -10977,13 +11170,14 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 	machine := e.machineForFile(file)
-	provider := factory.NewProvider(parser.ProviderConfig{
+	providerConfig := parser.ProviderConfig{
 		Roots:                 e.agentDirs[file.Agent],
 		Machine:               e.machine,
 		StableSourceSnapshots: e.stableSourceSnapshots,
 		SourceMachines:        e.sourceMachines[file.Agent],
 		PathRewriter:          e.pathRewriter,
-	})
+	}
+	provider := factory.NewProvider(providerConfig)
 
 	// Re-apply the pass-failure check at the moment carried metadata is
 	// about to be trusted: another worker can fail the container after this
@@ -11044,9 +11238,25 @@ func (e *Engine) processProviderFile(
 	}
 	forceSourceCwdParse := cwdDecision.forceParse
 
+	// Codex checkpoint decision: an invalid proof requires an authoritative
+	// replacement. A missing checkpoint is merely absent optimization state:
+	// unchanged upgraded archives keep the existing stat/content freshness
+	// gates and earn a checkpoint lazily on their next real source change.
+	var fingerprint parser.SourceFingerprint
+	var codexCheckpoint *db.ParserCheckpoint
+	var codexSeed []byte
+	var codexFullHash string
+	var codexHashState []byte
+	codexForceFullParse := false
+	codexProvenUnchanged := false
+	codexAuditDeepVerify := e.checkpointAudit.Load() &&
+		isCodexFormatAgent(file.Agent)
+	var codexUnchangedMtime int64
 	verifiedCapture, verifiedMtime, verifiedFresh, verifiedStateOK :=
 		e.verifiedProviderSourceState(provider, source, file)
-	if !forceSourceCwdParse && verifiedStateOK && verifiedFresh {
+	if !forceSourceCwdParse && !codexForceFullParse &&
+		!codexProvenUnchanged && !codexAuditDeepVerify &&
+		verifiedStateOK && verifiedFresh {
 		if e.verifiedProviderSourceFreshInDB(
 			verifiedCapture.key.agent, source,
 			verifiedCapture.signature.size, verifiedMtime,
@@ -11059,6 +11269,11 @@ func (e *Engine) processProviderFile(
 		e.invalidateVerifiedSource(
 			verifiedCapture.key.agent, verifiedCapture.key.path,
 		)
+		// The stat snapshot was fresh, but the persisted projection was not.
+		// Treat the source as unverified for the remaining gates in this call:
+		// if the row disappeared, the Codex cold-parse path can derive its
+		// fingerprint from the parse instead of paying for a redundant read.
+		verifiedFresh = false
 	}
 
 	// Capture the per-component stat digest from the same pre-parse
@@ -11104,8 +11319,9 @@ func (e *Engine) processProviderFile(
 	// change -- including a same-size same-mtime in-place rewrite --
 	// bumps a ctime and breaks the digest, falling through to the
 	// content-verified gates.
-	if !forceSourceCwdParse {
-		if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(
+	if !forceSourceCwdParse && !codexForceFullParse &&
+		!codexProvenUnchanged && !codexAuditDeepVerify {
+		if freshMTime, fresh := e.providerSourceFreshBeforeFingerprint(
 			ctx, source, file, preParseStatHash,
 		); fresh {
 			if verifiedStateOK {
@@ -11113,8 +11329,35 @@ func (e *Engine) processProviderFile(
 			}
 			return processResult{
 				skip:  true,
-				mtime: freshMtime,
+				mtime: freshMTime,
 			}, true
+		}
+	}
+
+	// Consult the heavier checkpoint tables only after the free in-memory and
+	// persisted stat-digest gates have declined. This preserves current-main
+	// warm-sweep behavior while still proving appends before any full content
+	// fingerprint read. Audit mode deliberately bypasses this optimization and
+	// takes the authoritative full-parse path below.
+	if isCodexFormatAgent(file.Agent) && !codexAuditDeepVerify {
+		cpResult, cpErr := e.codexCheckpointFingerprint(ctx, source, file)
+		if cpErr != nil {
+			log.Printf("codex checkpoint %s: %v", file.Path, cpErr)
+		} else {
+			switch cpResult.decision {
+			case codexCheckpointUnchanged:
+				codexProvenUnchanged = true
+				codexUnchangedMtime = cpResult.fingerprint.MTimeNS
+			case codexCheckpointAppend:
+				fingerprint = cpResult.fingerprint
+				codexCheckpoint = cpResult.checkpoint
+				codexSeed = cpResult.seed
+				codexFullHash = cpResult.fingerprint.Hash
+				codexHashState = cpResult.hashState
+			case codexCheckpointMissing:
+			case codexCheckpointInvalid:
+				codexForceFullParse = true
+			}
 		}
 	}
 
@@ -11129,7 +11372,8 @@ func (e *Engine) processProviderFile(
 	// companion touch invalidated); without the stamp those rows would
 	// re-hash on every fresh process forever, since a skip never writes.
 	sourceForceReplace := false
-	if !forceSourceCwdParse {
+	if !forceSourceCwdParse && !codexForceFullParse &&
+		!codexProvenUnchanged && !codexAuditDeepVerify {
 		if mtime, fresh, forceReplace, contentVerified := e.providerSingleSessionFresh(
 			ctx, provider, source, file,
 		); fresh {
@@ -11160,8 +11404,11 @@ func (e *Engine) processProviderFile(
 	// did not change, so skip before Fingerprint pays the per-session child
 	// lookup; a child-only edit this cannot see is reconciled by the next
 	// full-discovery pass, whose digest comparison still catches it.
-	if !forceSourceCwdParse {
-		if freshMtime, fresh := e.watermarkOnlySQLiteSourceFresh(source, file); fresh {
+	if !forceSourceCwdParse && !codexForceFullParse &&
+		!codexProvenUnchanged && !codexAuditDeepVerify {
+		if freshMtime, fresh := e.watermarkOnlySQLiteSourceFresh(
+			source, file,
+		); fresh {
 			return processResult{
 				skip:  true,
 				mtime: freshMtime,
@@ -11169,33 +11416,108 @@ func (e *Engine) processProviderFile(
 		}
 	}
 
-	fingerprint, err := provider.Fingerprint(ctx, source)
-	if err != nil {
-		if (file.ForceParse || file.ForceFullParse) &&
-			providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) &&
-			errors.Is(err, os.ErrNotExist) {
-			excludedSessionIDs, ownershipErr :=
-				e.providerSourceSessionIDsForForceReplace(
-					ctx, provider, source,
-				)
-			if ownershipErr != nil {
+	// The checkpoint proved the committed transcript and the current stat
+	// snapshot agree. Persist that same snapshot so archives created before
+	// provider freshness digests do not re-enter the content-hash path after
+	// every restart; this also refreshes a digest after an unrelated
+	// session-index touch.
+	if codexProvenUnchanged {
+		if verifiedStateOK {
+			e.promoteVerifiedSource(verifiedCapture)
+		}
+		e.stampProviderStatHashForConfirmedSource(ctx, preParseStatHash)
+		return processResult{
+			skip:        true,
+			mtime:       codexUnchangedMtime,
+			noCacheSkip: true,
+		}, true
+	}
+
+	// codexFingerprintFromParse marks a never-synced Codex-format source
+	// whose fingerprint is derived from the parser's single-pass hash
+	// state instead of a separate full-file fingerprint read.
+	codexFingerprintFromParse := false
+	if codexCheckpoint == nil {
+		var err error
+		if isCodexFormatAgent(file.Agent) &&
+			!verifiedFresh &&
+			!e.forceParseRequested(file) &&
+			!codexAuditDeepVerify {
+			// A never-synced Codex-format source has no stored hash to
+			// compare: skip the standalone fingerprint read and derive
+			// the hash from the parser's single-pass capture after the
+			// parse, so the cold full sync reads the source once instead
+			// of twice. Only the identity fields are needed up front;
+			// every skip gate above this point requires a stored row or
+			// cache entry, which a new source does not have. A persisted
+			// skip-cache entry for the same base path (e.g. a parse-error
+			// entry keyed by the real source hash) keeps the fingerprint
+			// read so its cache key still matches.
+			lookupPath := file.Path
+			if e.pathRewriter != nil {
+				lookupPath = e.pathRewriter(file.Path)
+			}
+			_, hasHash := e.db.GetFileHashByAgentPath(
+				lookupPath, string(file.Agent),
+			)
+			e.skipMu.RLock()
+			skipBase := providerAgentSkipCacheKey(file.Path, file.Agent)
+			_, hasSkipEntry := e.skipHashKeys[skipBase]
+			e.skipMu.RUnlock()
+			if !hasHash && !hasSkipEntry {
+				if info, statErr := os.Stat(file.Path); statErr == nil {
+					inode, device := getFileIdentity(file.Path, info)
+					mtime := info.ModTime().UnixNano()
+					if file.Agent == parser.AgentCodex {
+						mtime = parser.CodexEffectiveMtime(
+							file.Path, mtime,
+						)
+					}
+					fingerprint = parser.SourceFingerprint{
+						Key: codexCheckpointFingerprintKey(
+							source, file.Path,
+						),
+						Size:    info.Size(),
+						MTimeNS: mtime,
+						Inode:   uint64(inode),
+						Device:  uint64(device),
+					}
+					codexFingerprintFromParse = true
+				}
+			}
+		}
+		if !codexFingerprintFromParse {
+			fingerprint, err = provider.Fingerprint(ctx, source)
+		}
+		if err != nil {
+			if (file.ForceParse || file.ForceFullParse) &&
+				providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) &&
+				errors.Is(err, os.ErrNotExist) {
+				excludedSessionIDs, ownershipErr :=
+					e.providerSourceSessionIDsForForceReplace(
+						ctx, provider, source,
+					)
+				if ownershipErr != nil {
+					return processResult{
+						err:         ownershipErr,
+						noCacheSkip: true,
+					}, true
+				}
 				return processResult{
-					err:         ownershipErr,
-					noCacheSkip: true,
+					excludedSessionIDs: excludedSessionIDs,
+					forceReplace:       true,
 				}, true
 			}
-			return processResult{
-				excludedSessionIDs: excludedSessionIDs,
-				forceReplace:       true,
-			}, true
+			return processResult{err: err}, true
 		}
-		return processResult{err: err}, true
 	}
 	cacheKey := providerProcessCacheKey(
 		file, source, fingerprint, providerSemantics,
 	)
 	cacheSkip := e.shouldCacheSkip(file)
-	if cacheSkip && !forceSourceCwdParse && !e.forceParseBypassesCache(file) {
+	if cacheSkip && !forceSourceCwdParse &&
+		!e.forceParseBypassesCache(file) &&
+		!codexForceFullParse && !codexAuditDeepVerify {
 		e.skipMu.RLock()
 		cachedMtime, cached := e.skipCache[cacheKey]
 		e.skipMu.RUnlock()
@@ -11306,9 +11628,16 @@ func (e *Engine) processProviderFile(
 	// stored messages instead of appending on top of stale rows.
 	var incRes processResult
 	var incOK bool
-	if !forceSourceCwdParse {
+	if codexForceFullParse {
+		incRes = processResult{forceReplace: true}
+	} else if codexAuditDeepVerify {
+		// The audit content-hashes the full source below and repairs only
+		// on mismatch; never tail-apply against a prefix it cannot prove.
+		incRes = processResult{}
+	} else if !forceSourceCwdParse {
 		incRes, incOK = e.tryProviderIncrementalAppend(
 			ctx, provider, source, file, fingerprint,
+			codexSeed, codexFullHash, codexHashState, codexCheckpoint,
 		)
 	}
 	if incOK {
@@ -11391,7 +11720,10 @@ func (e *Engine) processProviderFile(
 	// here the provider parses the source, so acquire the retention lease that
 	// bounds the parsed payload and attach it to every result carrying that
 	// data. A result still classified as a skip below releases it immediately.
-	lease, err := e.retentionBudget().acquire(ctx, parseRetentionSourceBytes(file))
+	sourceBytes := parseRetentionSourceBytes(file)
+	lease, err := e.retentionBudget().acquire(
+		ctx, sourceBytes,
+	)
 	if err != nil {
 		return processResult{err: err}, true
 	}
@@ -11400,14 +11732,63 @@ func (e *Engine) processProviderFile(
 			runtimeMetrics.openCodeSQLiteParse()
 		}
 	}
-	outcome, err := provider.Parse(ctx, parser.ParseRequest{
-		Source:             source,
-		Fingerprint:        fingerprint,
-		Machine:            machine,
-		ForceParse:         e.forceParseRequested(file),
-		StoredPathResolver: e.storedPathResolver,
-	})
+	// Large Codex full parses stream through the scratch staging sink: the
+	// in-memory model keeps placeholders instead of tool-result content, so
+	// peak memory stays bounded by messages + one scratch batch rather than
+	// the transcript size. Small files keep the collecting path. Report-only
+	// parse-diff disables staging through e.forceParse; ordinary forced full
+	// syncs retain the bounded-memory path.
+	var stagedSink *codexStagingSink
+	var stagedGCRelease func()
+	if file.Agent == parser.AgentCodex &&
+		sourceBytes > e.stagedCodexMin &&
+		!e.forceParse {
+		stagedSink, err = newCodexStagingSink(
+			e.stagedCodexDir, e.blockedResultCategories, sourceBytes,
+		)
+		if err != nil {
+			lease.Release()
+			return processResult{
+				err:         fmt.Errorf("codex staging sink: %w", err),
+				mtime:       fingerprint.MTimeNS,
+				cacheSkip:   cacheSkip,
+				cacheKey:    cacheKey,
+				noCacheSkip: true,
+			}, true
+		}
+		stagedSink.toolResultImages = e.toolResultImages
+		stagedSink.idPrefix = e.idPrefix
+		stagedSink.disableSignals = e.disableSignalRecompute
+		stagedGCRelease = beginStagedColdSync()
+	}
+	var outcome parser.ParseOutcome
+	if stagedSink != nil {
+		if e.forceParseRequested(file) {
+			parser.EvictCodexSessionIndexForSession(
+				providerDiscoveredPath(source),
+			)
+		}
+		stagedConfig := providerConfig
+		stagedConfig.Machine = machine
+		outcome, err = stagedCodexParseOutcome(
+			ctx, stagedConfig, source, fingerprint, stagedSink,
+		)
+	} else {
+		outcome, err = provider.Parse(ctx, parser.ParseRequest{
+			Source:             source,
+			Fingerprint:        fingerprint,
+			Machine:            machine,
+			ForceParse:         e.forceParseRequested(file),
+			StoredPathResolver: e.storedPathResolver,
+		})
+	}
 	if err != nil {
+		if stagedSink != nil {
+			stagedSink.Close()
+		}
+		if stagedGCRelease != nil {
+			stagedGCRelease()
+		}
 		if !e.forceParse {
 			cwdChanged, reconcileErr := e.reconcileSourceCwdByPath(
 				source, cwdDecision,
@@ -11440,6 +11821,12 @@ func (e *Engine) processProviderFile(
 		fingerprint,
 		outcome,
 	); err != nil {
+		if stagedSink != nil {
+			stagedSink.Close()
+		}
+		if stagedGCRelease != nil {
+			stagedGCRelease()
+		}
 		return processResult{
 			err:            err,
 			mtime:          fingerprint.MTimeNS,
@@ -11449,7 +11836,25 @@ func (e *Engine) processProviderFile(
 			retentionLease: lease,
 		}, true
 	}
+	if isCodexFormatAgent(file.Agent) && stagedSink == nil {
+		for i := range outcome.Results {
+			prepareCodexResultIdentities(outcome.Results[i].Result.Messages, nil)
+		}
+	}
 	applyProviderFingerprintFileInfo(file.Agent, fingerprint, outcome.Results)
+	if codexFingerprintFromParse && fingerprint.Hash == "" {
+		// A completed parse captures the full source hash even when its pending
+		// calls cannot fit a persisted checkpoint.
+		for i := range outcome.Results {
+			if hash := outcome.Results[i].Result.Session.File.Hash; hash != "" {
+				fingerprint.Hash = hash
+				break
+			}
+		}
+		if fingerprint.Hash != "" {
+			cacheKey = providerProcessCacheKey(file, source, fingerprint, providerSemantics)
+		}
+	}
 	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome)
 	providerWideFailureCount := len(outcome.SourceErrors)
 	if !outcome.ResultSetComplete {
@@ -11532,6 +11937,7 @@ func (e *Engine) processProviderFile(
 			excludedSessionIDs:   excludedSessionIDs,
 			preservedSessionIDs:  preservedSessionIDs,
 			sourceMissingMembers: missingMembers,
+			sourceBytes:          sourceBytes,
 			mtime:                fingerprint.MTimeNS,
 			cacheSkip:            cacheSkip,
 			cacheKey:             cacheKey,
@@ -11621,11 +12027,20 @@ func (e *Engine) processProviderFile(
 	)
 	filteredResults, truncationVerifyFailed :=
 		e.dropShrinkingTruncatedCursorIDEResults(ctx, file, filteredResults)
+	if stagedSink != nil && len(filteredResults) == 0 {
+		// Every result was dropped as unchanged; nothing will publish the
+		// staged rows, so release the scratch sink now.
+		stagedSink.Close()
+		stagedSink = nil
+		stagedGCRelease()
+		stagedGCRelease = nil
+	}
 	res := processResult{
 		results:              filteredResults,
 		excludedSessionIDs:   excludedSessionIDs,
 		preservedSessionIDs:  preservedSessionIDs,
 		sourceMissingMembers: missingMembers,
+		sourceBytes:          sourceBytes,
 		mtime:                fingerprint.MTimeNS,
 		cacheSkip:            cacheSkip,
 		cacheKey:             cacheKey,
@@ -11637,6 +12052,8 @@ func (e *Engine) processProviderFile(
 		providerWideFailureCount: providerWideFailureCount,
 		retentionLease:           lease,
 		providerStatHash:         preParseStatHash,
+		staged:                   stagedSink,
+		stagedGCRelease:          stagedGCRelease,
 		sourceCwdResolution:      cwdDecision.resolution,
 		sourceCwdStored:          cwdDecision.storedCwd,
 		sourceCwdStoredOK:        cwdDecision.storedOK,
@@ -13933,7 +14350,7 @@ func (e *Engine) providerStatFreshnessMtime(
 
 // providerStatDigestEligible reports whether this engine may stage,
 // stamp, or consult a provider_freshness stat digest for the agent. The
-// content-hashing single-file JSONL providers (Claude, Codex family) are
+// content-hashing JSONL providers (Claude, Codex family, Evener) are
 // ineligible under a pathRewriter: a remote import materializes a fresh
 // physical file whose mtime is copied from the remote and whose ctime is
 // the import clock, so a same-stat different-content re-download can
@@ -13948,7 +14365,7 @@ func (e *Engine) providerStatDigestEligible(agent parser.AgentType) bool {
 	if e.pathRewriter == nil {
 		return true
 	}
-	return agent != parser.AgentClaude && !isCodexFormatAgent(agent)
+	return agent != parser.AgentClaude && agent != parser.AgentEvener && !isCodexFormatAgent(agent)
 }
 
 // providerFreshnessAgents returns the stored-agent labels a provider's
@@ -14339,6 +14756,10 @@ func (e *Engine) tryProviderIncrementalAppend(
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
 	fingerprint parser.SourceFingerprint,
+	seed []byte,
+	fullHash string,
+	hashState []byte,
+	checkpoint *db.ParserCheckpoint,
 ) (processResult, bool) {
 	// Match the shared tryIncrementalJSONL gate: parse-diff and an explicit
 	// full import both require a complete replacement rather than an append.
@@ -14377,7 +14798,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 
 	parseFn := func(
 		_ string, inc *db.IncrementalInfo,
-	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
 		// The Claude parser needs the stored tail's provider message id
 		// so its queued-command masking fallback fires only for a real
 		// same-message.id continuation; without it, every routine queued
@@ -14396,23 +14817,25 @@ func (e *Engine) tryProviderIncrementalAppend(
 				Offset:                    inc.FileSize,
 				StartOrdinal:              inc.NextOrdinal,
 				Machine:                   inc.Machine,
+				Seed:                      seed,
 				LastEntryUUID:             inc.LastEntryUUID,
 				StoredAgentLabel:          inc.AgentLabel,
 				StoredEntrypoint:          inc.Entrypoint,
 				StoredSessionKind:         inc.SessionKind,
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
+				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,
 			},
 		)
 		if perr != nil {
-			return nil, nil, time.Time{}, 0, nil, perr
+			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, perr
 		}
 		switch status {
 		case parser.IncrementalNeedsFullParse:
 			if outcome.ForceReplace {
 				// Signal the shared helper to fall back to a
 				// full parse that replaces stored messages.
-				return nil, nil, time.Time{}, 0, nil,
+				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
 					parser.ErrIncrementalNeedsFullParse
 			}
 			// A plain full-parse fallback without a replace request.
@@ -14420,9 +14843,9 @@ func (e *Engine) tryProviderIncrementalAppend(
 			// fallbacks (a DAG fork can drop or re-branch stored
 			// rows), so this branch serves providers that only need
 			// an append-preserving full parse.
-			return nil, nil, time.Time{}, 0, nil, parser.ErrDAGDetected
+			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, parser.ErrDAGDetected
 		case parser.IncrementalNoNewData:
-			return nil, nil, time.Time{}, 0, nil, nil
+			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
 			var terminationStatus *string
 			if outcome.TerminationStatus != nil {
@@ -14430,11 +14853,17 @@ func (e *Engine) tryProviderIncrementalAppend(
 				terminationStatus = &status
 			}
 			return outcome.Messages, outcome.SubagentLinks,
-				outcome.EndedAt, outcome.ConsumedBytes, terminationStatus, nil
+				outcome.ToolCallUpdates,
+				outcome.MessageTokenUsageUpdates,
+				outcome.EndedAt, outcome.ConsumedBytes, terminationStatus,
+				outcome.NextCursor, nil
 		}
 	}
 
-	return e.tryIncrementalJSONL(ctx, file, info, file.Agent, parseFn)
+	return e.tryIncrementalJSONL(
+		ctx, file, info, file.Agent, parseFn,
+		checkpoint, fullHash, hashState,
+	)
 }
 
 // incrementalParseFunc reads new JSONL lines from a file
@@ -14445,7 +14874,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 // only complete, valid JSON lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
 	path string, inc *db.IncrementalInfo,
-) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error)
+) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
@@ -14459,6 +14888,9 @@ func (e *Engine) tryIncrementalJSONL(
 	info os.FileInfo,
 	agent parser.AgentType,
 	parseFn incrementalParseFunc,
+	checkpoint *db.ParserCheckpoint,
+	fullHash string,
+	hashState []byte,
 ) (processResult, bool) {
 	if e.forceParse || e.forceFullParse || file.ForceFullParse {
 		// Parse-diff and explicit full imports never produce append deltas.
@@ -14568,14 +15000,15 @@ func (e *Engine) tryIncrementalJSONL(
 	// retention lease that bounds the parsed payload. It is attached to the
 	// incremental results below and released on every decline (fall-through to
 	// a full parse re-acquires at the provider parse seam) or skip return.
+	sourceBytes := parseRetentionSourceBytes(file)
 	lease, leaseErr := e.retentionBudget().acquire(
-		ctx, parseRetentionSourceBytes(file),
+		ctx, sourceBytes,
 	)
 	if leaseErr != nil {
 		return processResult{err: leaseErr}, true
 	}
 
-	newMsgs, links, endedAt, consumed, terminationStatus, err := parseFn(
+	newMsgs, links, toolCallUpdates, messageUsageUpdates, endedAt, consumed, terminationStatus, cursor, err := parseFn(
 		file.Path, inc,
 	)
 	if err != nil {
@@ -14601,19 +15034,133 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
+	if isCodexFormatAgent(agent) {
+		prepareCodexResultIdentities(newMsgs, toolCallUpdates)
+	}
+	if len(toolCallUpdates) > 0 {
+		positions := make([]db.ToolCallPosition, len(toolCallUpdates))
+		for i, update := range toolCallUpdates {
+			positions[i] = db.ToolCallPosition{MessageOrdinal: update.MessageOrdinal, CallIndex: update.CallIndex}
+		}
+		missing, err := e.db.HasMissingToolResultMetadata(ctx, inc.ID, positions)
+		if err != nil {
+			lease.Release()
+			return processResult{err: err}, true
+		}
+		if missing {
+			lease.Release()
+			return processResult{forceReplace: true}, false
+		}
+	}
+
 	// Use the offset through the last valid JSON line, not
 	// info.Size(), so partial lines at EOF are retried on
 	// the next sync.
 	newOffset := inc.FileSize + consumed
 	var incHash string
+	resumeOK := false
 	// Refresh the stored content fingerprint on the incremental path. Codex
 	// needs it for parse-diff's raced-skew detection; Claude needs it so
 	// providerSingleSessionFresh can compare the stored hash against the
 	// on-disk bytes and catch a same-size, same-mtime, same-inode in-place
 	// rewrite that the size/mtime/identity skip signals cannot see.
-	if isCodexFormatAgent(agent) || agent == parser.AgentClaude {
+	if fullHash != "" {
+		// The stored fingerprint must cover only the committed safe prefix,
+		// not an unfinished partial tail at EOF. Resume the hash state
+		// through newOffset (the last complete record) rather than trusting
+		// the full-file hash computed by the checkpoint gate.
+		if state, hash, hashErr := codexResumeHashFn(
+			file.Path, inc.FileSize, newOffset, hashState,
+		); hashErr == nil {
+			incHash = hash
+			hashState = state
+			resumeOK = true
+		} else {
+			log.Printf(
+				"resuming codex hash for %s at %d: %v",
+				file.Path, newOffset, hashErr,
+			)
+			incHash = fullHash
+		}
+	} else if isCodexFormatAgent(agent) || agent == parser.AgentClaude {
 		if hash, err := ComputeFileHashPrefix(file.Path, newOffset); err == nil {
 			incHash = hash
+		}
+	}
+
+	// Persist the advanced parser checkpoint in the same transaction as the
+	// delta when this append was resumed from one.
+	var nextCheckpoint *db.ParserCheckpoint
+	var nextCheckpointBlobs *db.ParserCheckpointBlobs
+	// Only persist the advanced checkpoint when the resumable hash state was
+	// proven to cover the new offset. On reconstruction failure the write
+	// keeps the previous checkpoint: its offset now disagrees with the
+	// committed file size, so the next gate rebuilds authoritatively instead
+	// of resuming from stale state at a newer offset and omitting bytes.
+	if checkpoint != nil && len(cursor) > 0 && hashState != nil && resumeOK {
+		cpNextOrdinal := inc.NextOrdinal
+		if len(newMsgs) > 0 {
+			cpNextOrdinal = nextParsedOrdinal(inc.NextOrdinal, newMsgs)
+		}
+		anchorDigest, anchorErr := codexCheckpointAnchorDigest(
+			file.Path, newOffset,
+		)
+		if anchorErr != nil {
+			log.Printf(
+				"building codex checkpoint %s: %v", file.Path, anchorErr,
+			)
+		} else {
+			inode, device := getFileIdentity(file.Path, info)
+			changeTime, _ := fileChangeTime(file.Path, info)
+			built, blobs := buildCodexCheckpoint(
+				inc.ID,
+				string(agent),
+				e.effectiveSourcePath(file.Path),
+				uint64(inode),
+				uint64(device),
+				incMtime,
+				changeTime,
+				newOffset,
+				cursor,
+				hashState,
+				incHash,
+				cpNextOrdinal,
+				anchorDigest,
+			)
+			nextCheckpoint = built
+			nextCheckpointBlobs = &blobs
+		}
+	}
+
+	totalOut := inc.TotalOutputTokens
+	peakCtx := inc.PeakContextTokens
+	hasTotalOut := inc.HasTotalOutputTokens
+	hasPeakCtx := inc.HasPeakContextTokens
+	for _, m := range newMsgs {
+		msgHasCtx, msgHasOut := m.TokenPresence()
+		// Accumulate from per-message values already bounded to the
+		// per-message clamp the central pass applies to the stored rows, so
+		// a corrupt new message cannot inflate the session aggregates past
+		// what the persisted rows justify (parity with the full path, which
+		// re-derives message-derived totals from the clamped rows).
+		if msgHasOut {
+			totalOut += clampedTokens(m.OutputTokens)
+			hasTotalOut = true
+		}
+		if ctx := clampedTokens(m.ContextTokens); msgHasCtx &&
+			(!hasPeakCtx || ctx > peakCtx) {
+			peakCtx = ctx
+			hasPeakCtx = true
+		}
+	}
+	for _, usageUpdate := range messageUsageUpdates {
+		if usageUpdate.HasOutputTokens {
+			totalOut += clampedTokens(usageUpdate.OutputTokens)
+			hasTotalOut = true
+		}
+		if ctx := clampedTokens(usageUpdate.ContextTokens); usageUpdate.HasContextTokens && (!hasPeakCtx || ctx > peakCtx) {
+			peakCtx = ctx
+			hasPeakCtx = true
 		}
 	}
 
@@ -14625,13 +15172,19 @@ func (e *Engine) tryIncrementalJSONL(
 		// with non-message timestamps (e.g. progress).
 		if consumed > 0 {
 			return processResult{
+				sourceBytes: sourceBytes,
 				incremental: &incrementalUpdate{
+					agent:                agent,
 					sessionID:            inc.ID,
 					project:              inc.Project,
 					sourceProject:        inc.SourceProject,
 					machine:              inc.Machine,
 					cwd:                  inc.Cwd,
 					links:                links,
+					toolCallUpdates:      toolCallUpdates,
+					messageUsageUpdates:  messageUsageUpdates,
+					checkpoint:           nextCheckpoint,
+					checkpointBlobs:      nextCheckpointBlobs,
 					endedAt:              endedAt,
 					terminationStatus:    terminationStatus,
 					msgCount:             inc.MsgCount,
@@ -14641,10 +15194,10 @@ func (e *Engine) tryIncrementalJSONL(
 					fileHash:             incHash,
 					nextOrdinal:          inc.NextOrdinal,
 					lastEntryUUID:        inc.LastEntryUUID,
-					totalOutputTokens:    inc.TotalOutputTokens,
-					peakContextTokens:    inc.PeakContextTokens,
-					hasTotalOutputTokens: inc.HasTotalOutputTokens,
-					hasPeakContextTokens: inc.HasPeakContextTokens,
+					totalOutputTokens:    totalOut,
+					peakContextTokens:    peakCtx,
+					hasTotalOutputTokens: hasTotalOut,
+					hasPeakContextTokens: hasPeakCtx,
 				},
 				retentionLease: lease,
 			}, true
@@ -14720,30 +15273,10 @@ func (e *Engine) tryIncrementalJSONL(
 		agent, inc.ID, len(newMsgs), inc.FileSize,
 	)
 
-	totalOut := inc.TotalOutputTokens
-	peakCtx := inc.PeakContextTokens
-	hasTotalOut := inc.HasTotalOutputTokens
-	hasPeakCtx := inc.HasPeakContextTokens
-	for _, m := range newMsgs {
-		msgHasCtx, msgHasOut := m.TokenPresence()
-		// Accumulate from per-message values already bounded to the
-		// per-message clamp the central pass applies to the stored rows, so
-		// a corrupt new message cannot inflate the session aggregates past
-		// what the persisted rows justify (parity with the full path, which
-		// re-derives message-derived totals from the clamped rows).
-		if msgHasOut {
-			totalOut += clampedTokens(m.OutputTokens)
-			hasTotalOut = true
-		}
-		if ctx := clampedTokens(m.ContextTokens); msgHasCtx &&
-			(!hasPeakCtx || ctx > peakCtx) {
-			peakCtx = ctx
-			hasPeakCtx = true
-		}
-	}
-
 	return processResult{
+		sourceBytes: sourceBytes,
 		incremental: &incrementalUpdate{
+			agent:                agent,
 			sessionID:            inc.ID,
 			project:              inc.Project,
 			sourceProject:        inc.SourceProject,
@@ -14751,6 +15284,10 @@ func (e *Engine) tryIncrementalJSONL(
 			cwd:                  inc.Cwd,
 			msgs:                 newMsgs,
 			links:                links,
+			toolCallUpdates:      toolCallUpdates,
+			messageUsageUpdates:  messageUsageUpdates,
+			checkpoint:           nextCheckpoint,
+			checkpointBlobs:      nextCheckpointBlobs,
 			endedAt:              endedAt,
 			terminationStatus:    terminationStatus,
 			msgCount:             inc.MsgCount + len(newMsgs),
@@ -15518,55 +16055,105 @@ func (e *Engine) recomputeSignalsFromDB(
 	if e.disableSignalRecompute {
 		return 0, nil
 	}
-	sess, err := e.db.GetSessionFull(ctx, sessionID)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"loading session %s: %w", sessionID, err,
+	return e.recomputeSignalsFromDBWithHook(ctx, sessionID, nil)
+}
+
+// recomputeSignalsFromDBWithHook retries a full recompute when the transcript
+// changes after its revision token is captured. beforePublish is a deterministic
+// test seam invoked after the snapshot has been computed and before the
+// conditional write; production callers pass nil.
+func (e *Engine) recomputeSignalsFromDBWithHook(
+	ctx context.Context,
+	sessionID string,
+	beforePublish func(attempt int),
+) (int, error) {
+	const maxSnapshotAttempts = 3
+	for attempt := range maxSnapshotAttempts {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		sess, err := e.db.GetSessionFull(ctx, sessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"loading session %s: %w", sessionID, err,
+			)
+		}
+		if sess == nil {
+			return 0, nil
+		}
+		// Capture every session-row input consumed by the signal compute before
+		// loading transcript rows. The conditional transaction below rejects
+		// transcript changes and metadata-only races alike.
+		expectedInputs, err := db.SignalInputSnapshot(*sess)
+		if err != nil {
+			return 0, err
+		}
+		msgs, err := e.db.GetAllMessages(ctx, sessionID)
+		if err != nil {
+			log.Printf(
+				"signals: load messages %s: %v",
+				sessionID, err,
+			)
+			return 0, fmt.Errorf(
+				"loading messages %s: %w", sessionID, err,
+			)
+		}
+		update, findings := computeSignalsAndSecrets(*sess, msgs)
+		heapBytes := recomputeHeapBytes(msgs, findings)
+		var state db.SessionSignalState
+		if isCodexFormatAgent(parser.AgentType(sess.Agent)) {
+			state, err = buildSignalStateFromRows(
+				sessionID, msgs, extractToolCallRows(msgs),
+				expectedInputs.TranscriptRevision,
+			)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if beforePublish != nil {
+			beforePublish(attempt)
+		}
+		applied, err := e.db.ReplaceSessionSignalsIfInputsMatch(
+			sessionID, expectedInputs, findings, update, state,
 		)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"publishing signal snapshot %s: %w", sessionID, err,
+			)
+		}
+		if applied {
+			return heapBytes, nil
+		}
 	}
-	if sess == nil {
-		return 0, nil
-	}
-	msgs, err := e.db.GetAllMessages(ctx, sessionID)
-	if err != nil {
-		log.Printf(
-			"signals: load messages %s: %v",
-			sessionID, err,
-		)
-		return 0, fmt.Errorf(
-			"loading messages %s: %w", sessionID, err,
-		)
-	}
-	update, findings := computeSignalsAndSecrets(*sess, msgs)
-	heapBytes := recomputeHeapBytes(msgs, findings)
-	// Findings persist before the signals update: UpdateSessionSignals
-	// advances quality_signal_version, which BackfillSignals treats as
-	// proof the whole compute persisted. Writing it last keeps a
-	// session whose findings write failed below the current version,
-	// so the next backfill retries it.
-	if err := e.db.ReplaceSessionSecretFindings(
-		sessionID, findings, update.SecretLeakCount, update.SecretsRulesVersion,
-	); err != nil {
-		log.Printf("secrets: persist %s: %v", sessionID, err)
-		return 0, fmt.Errorf("persisting findings %s: %w", sessionID, err)
-	}
-	if err := e.db.UpdateSessionSignals(
-		sessionID, update,
-	); err != nil {
-		log.Printf(
-			"signals: update %s: %v", sessionID, err,
-		)
-		return 0, fmt.Errorf(
-			"updating signals %s: %w", sessionID, err,
-		)
-	}
-	return heapBytes, nil
+	return 0, fmt.Errorf(
+		"session %s changed during %d signal recompute attempts",
+		sessionID, maxSnapshotAttempts,
+	)
 }
 
 type pendingWrite struct {
-	sess         parser.ParsedSession
-	msgs         []parser.ParsedMessage
-	usageEvents  []parser.ParsedUsageEvent
+	sess        parser.ParsedSession
+	msgs        []parser.ParsedMessage
+	usageEvents []parser.ParsedUsageEvent
+	// sourceBytes is the physical source size carried from the parse result;
+	// collectAndBatch uses it to flush batches on estimated bytes as well as
+	// session count.
+	sourceBytes int64
+	// checkpoint is the provider's persisted continuation cursor for a full
+	// parse. The flush path persists it as a parser_checkpoints row after the
+	// session rows commit, so later appends can resume without rescanning the
+	// transcript prefix. Empty for providers without checkpoints.
+	checkpoint []byte
+	// checkpointHashState/checkpointAnchorDigest carry the single-pass
+	// hash state and tail-anchor digest the parser captured while reading
+	// the snapshot; persisting them avoids any second source read after a
+	// full parse. Empty when the provider did not supply them.
+	checkpointHashState    []byte
+	checkpointAnchorDigest string
+	// staged carries the scratch staging sink when this write came from a
+	// streaming Codex full parse; the write path publishes tool-result rows
+	// and summaries from it and the batch flush closes it.
+	staged       *codexStagingSink
 	needsRetry   bool
 	forceReplace bool
 	// sourceIdentityUnverified marks a copy that shares a native session ID
@@ -16183,22 +16770,53 @@ func (e *Engine) writeBatchWithOutcomeContext(
 
 		var update db.SessionSignalUpdate
 		var findings []db.SecretFinding
-		if !e.disableSignalRecompute {
-			update, findings = computeSignalsAndSecrets(s, msgs)
+		var werr error
+		if replaceMessages && pw.staged != nil {
+			// The staged sink owns this parse's tool-result rows, and only the
+			// staged write publishes them, so it runs even when signal
+			// recomputation is disabled.
+			werr = e.writeStagedFullParse(ctx, s, msgs, pw)
+		} else if replaceMessages && !e.disableSignalRecompute {
+			update, findings, werr = computeFullSignalsAndSecrets(s, msgs, nil)
+			if werr != nil {
+				log.Printf("compute full signals %s: %v", s.ID, werr)
+				outcome.failedSessions++
+				continue
+			}
 			if ctx.Err() != nil {
 				return outcome
 			}
-		}
-
-		var werr error
-		if replaceMessages && !e.disableSignalRecompute {
-			werr = e.db.ReplaceSessionContent(s.ID, msgs, update, findings)
+			if isCodexFormatAgent(pw.sess.Agent) {
+				cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
+					pw.sess.File.Path, pw,
+				)
+				if cpErr != nil {
+					log.Printf(
+						"checkpoint build %s: %v",
+						pw.sess.File.Path, cpErr,
+					)
+					cp, blobs = nil, nil
+				}
+				werr = e.db.ReplaceSessionContentWithCheckpoint(
+					s.ID, msgs, update, findings, cp, blobs,
+				)
+			} else {
+				werr = e.db.ReplaceSessionContent(
+					s.ID, msgs, update, findings,
+				)
+			}
 		} else if replaceMessages {
 			if msgs == nil {
 				msgs = []db.Message{}
 			}
 			werr = e.db.ReplaceSessionMessages(s.ID, msgs)
 		} else {
+			if !e.disableSignalRecompute {
+				update, findings = computeSignalsAndSecrets(s, msgs)
+				if ctx.Err() != nil {
+					return outcome
+				}
+			}
 			werr = e.writeMessages(s.ID, msgs)
 		}
 		if werr != nil {
@@ -16213,6 +16831,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			outcome.failedSessions++
 			continue
 		}
+
 		if ctx.Err() != nil {
 			return outcome
 		}
@@ -16328,6 +16947,7 @@ func (e *Engine) prepareSessionWriteContext(
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
 	}
+	msgs, _ = e.db.ProjectToolResultImages(msgs)
 	s, err := toDBSessionContext(ctx, pw)
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
@@ -16378,6 +16998,7 @@ func (e *Engine) prepareSessionWriteContext(
 	} else if mergedMsgs != nil {
 		parsedMsgs := msgs
 		msgs = mergedMsgs
+		msgs, _ = e.db.ProjectToolResultImages(msgs)
 		applyVisualStudioCopilotArchiveSessionFields(
 			&s, archived, parsedMsgs, msgs,
 		)
@@ -17214,6 +17835,77 @@ type localGitIdentity struct {
 	worktreeKind   export.WorktreeRelationship
 }
 
+// stagedToolCallPositions maps every occurrence-qualified staging key in the
+// message model to its final message/call coordinates. Provider call IDs can
+// repeat, so raw tool_use_id alone cannot identify a staged event target.
+func stagedToolCallPositions(
+	msgs []db.Message,
+) map[string]db.StagedToolCallPosition {
+	positions := make(map[string]db.StagedToolCallPosition)
+	callOccurrences := make(map[string]int)
+	for _, m := range msgs {
+		for callIdx, tc := range m.ToolCalls {
+			if tc.ToolUseID == "" {
+				continue
+			}
+			occurrence := callOccurrences[tc.ToolUseID]
+			callOccurrences[tc.ToolUseID] = occurrence + 1
+			stageKey := db.StagedToolCallKey(tc.ToolUseID, occurrence)
+			positions[stageKey] = db.StagedToolCallPosition{
+				ToolUseID: tc.ToolUseID,
+				Ordinal:   m.Ordinal,
+				CallIndex: callIdx,
+			}
+		}
+	}
+	return positions
+}
+
+// writeStagedFullParse publishes one staged streaming result. The publish
+// transaction resolves every per-call summary once and runs the signals
+// closure before commit, so the content-failure-aware signals and
+// findings persist atomically with the message, tool-call, and event
+// rows. The incremental signal state uses the same captured verdicts and
+// commits with the content.
+func (e *Engine) writeStagedFullParse(
+	ctx context.Context, s db.Session, msgs []db.Message, pw pendingWrite,
+) error {
+	positions := stagedToolCallPositions(msgs)
+	var closure db.StagedSignalsFunc
+	if !e.disableSignalRecompute {
+		closure = func(verdicts map[string]bool) (
+			db.SessionSignalUpdate, []db.SecretFinding, error,
+		) {
+			update, findings, err := computeFullSignalsAndSecrets(s, msgs, verdicts)
+			if err != nil {
+				return db.SessionSignalUpdate{}, nil, err
+			}
+			combined := append(
+				append([]db.SecretFinding(nil), findings...),
+				pw.staged.Findings(s.ID, positions)...,
+			)
+			update.SecretLeakCount = definiteFindingCount(combined)
+			return update, combined, nil
+		}
+	}
+	cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
+		pw.sess.File.Path, pw,
+	)
+	if cpErr != nil {
+		log.Printf("checkpoint build %s: %v", pw.sess.File.Path, cpErr)
+		cp, blobs = nil, nil
+	}
+	if err := e.db.ReplaceSessionContentStagedWithCheckpoint(
+		ctx, s.ID, msgs, pw.staged,
+		e.blockedResultCategories, closure, cp, blobs,
+	); err != nil {
+		return err
+	}
+	e.anomalies.recordSanitize(pw.staged.ValidationStats())
+
+	return nil
+}
+
 func (e *Engine) writeBatchBulkWithOutcome(
 	batch []pendingWrite, forceReplace bool,
 ) writeBatchOutcome {
@@ -17254,6 +17946,76 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			}
 			continue
 		}
+		if pw.staged != nil {
+			// Staged streaming results bypass the bulk batch: their
+			// tool-result rows live in the staging scratch database and
+			// must be published through the staged transaction, which
+			// also persists the content-failure-aware signals in the
+			// same commit. A staged full parse always force-replaces.
+			// The bulk batch would normally create the session row, so
+			// mirror the standard write path's session upsert and
+			// post-write sequence here.
+			_, err :=
+				e.upsertSessionPendingContentForWrite(pw, s)
+			if err != nil {
+				if isIntentionalSessionSkip(err) {
+					if pw.sess.File.Path != "" {
+						e.cacheSkip(
+							pw.sess.File.Path,
+							pw.sess.File.Mtime,
+							pw.sess.File.Hash,
+						)
+					}
+					continue
+				}
+				log.Printf("upsert session %s: %v", s.ID, err)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
+			tWrite := time.Now()
+			err = e.writeStagedFullParse(ctx, s, msgs, pw)
+			e.phaseStats.WriteNanos.Add(int64(time.Since(tWrite)))
+			if err != nil {
+				log.Printf(
+					"write staged session %s: %v", s.ID, err,
+				)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
+			if err := e.db.ReplaceSessionUsageEvents(
+				s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
+			); err != nil {
+				log.Printf(
+					"write usage events for %s: %v", s.ID, err,
+				)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
+			if err := e.db.SetSessionDataVersion(
+				s.ID, dataVersionForWrite(pw),
+			); err != nil {
+				log.Printf(
+					"set data_version for %s: %v", s.ID, err,
+				)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
+			if err := e.db.ClearSessionSourceMissing(s.ID); err != nil {
+				log.Printf(
+					"clear source-missing state for session %s: %v", s.ID, err,
+				)
+				outcome.failedSessions++
+				continue
+			}
+			outcome.written[pendingIndex] = true
+			outcome.writtenSessions++
+			outcome.writtenMessages += len(msgs)
+			continue
+		}
 		replaceMessages := shouldReplaceFullParseMessages(
 			pw, forceReplace, false, false,
 		)
@@ -17261,13 +18023,33 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		var findings []db.SecretFinding
 		if !e.disableSignalRecompute {
 			tScan := time.Now()
-			update, findings = computeSignalsAndSecrets(s, msgs)
+			var signalErr error
+			update, findings, signalErr = computeFullSignalsAndSecrets(s, msgs, nil)
+			if signalErr != nil {
+				log.Printf("compute full signals %s: %v", s.ID, signalErr)
+				outcome.failedSessions++
+				continue
+			}
 			if ctx.Err() != nil {
 				return outcome
 			}
 			e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
 		}
 		snapshotProject := pw.sess.Project
+		var checkpoint *db.ParserCheckpoint
+		var checkpointBlobs *db.ParserCheckpointBlobs
+		if isCodexFormatAgent(pw.sess.Agent) {
+			var checkpointErr error
+			checkpoint, checkpointBlobs, checkpointErr =
+				e.buildCodexFullParseCheckpoint(pw.sess.File.Path, pw)
+			if checkpointErr != nil {
+				log.Printf(
+					"checkpoint build %s: %v",
+					pw.sess.File.Path, checkpointErr,
+				)
+				checkpoint, checkpointBlobs = nil, nil
+			}
+		}
 		usageEvents, usageErr := e.usageEventsForWriteContext(
 			ctx, s.ID, pw.usageEvents,
 		)
@@ -17287,6 +18069,8 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			SkipSignalUpdates:       e.disableSignalRecompute,
 			DataVersion:             dataVersionForWrite(pw),
 			ReplaceMessages:         replaceMessages,
+			Checkpoint:              checkpoint,
+			CheckpointBlobs:         checkpointBlobs,
 		})
 		pendingIndexes = append(pendingIndexes, pendingIndex)
 		pendingByID[s.ID] = pw
@@ -17326,6 +18110,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			outcome.written[pendingIndex] = true
 			outcome.resolved[pendingIndex] = true
 		}
+
 	}
 	for _, id := range result.FailedIDs {
 		if pw, ok := pendingByID[id]; ok {
@@ -17819,6 +18604,7 @@ func shouldReplaceFullParseMessages(
 ) bool {
 	return forceReplace || pw.forceReplace || pw.needsRetry || stale ||
 		revivingSourceMissing ||
+		isCodexFormatAgent(pw.sess.Agent) ||
 		// Kiro full parses rebuild the complete accepted message projection;
 		// append semantics would retain rows removed or rewritten by the source.
 		pw.sess.Agent == parser.AgentKiro ||
@@ -17884,11 +18670,12 @@ func (e *Engine) writeIncremental(
 
 	dbMsgs := toDBMessages(
 		pendingWrite{
-			sess: parser.ParsedSession{ID: inc.sessionID},
+			sess: parser.ParsedSession{ID: inc.sessionID, Agent: inc.agent},
 			msgs: inc.msgs,
 		},
 		e.blockedResultCategories,
 	)
+	dbMsgs, _ = e.db.ProjectToolResultImages(dbMsgs)
 	// The incremental append path bypasses prepareSessionWrite, so run
 	// the central validation/sanitization pass on the new message rows
 	// here to keep coverage uniform across write paths. The fix counts
@@ -17939,8 +18726,9 @@ func (e *Engine) writeIncremental(
 
 	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
 	for i, link := range inc.links {
+		resultContent := parser.DecodeContent(link.ResultContentRaw)
 		toolCall := db.ToolCall{
-			ResultContent:       parser.DecodeContent(link.ResultContentRaw),
+			ResultContent:       resultContent,
 			ResultContentLength: link.ResultContentLen,
 		}
 		e.anomalies.recordSanitize(db.SanitizeToolCall(&toolCall))
@@ -17954,28 +18742,97 @@ func (e *Engine) writeIncremental(
 			HasResult:        link.HasResult,
 		}
 	}
+	toolCallResultUpdates := make(
+		[]db.ToolCallResultUpdate, len(inc.toolCallUpdates),
+	)
+	for i, update := range inc.toolCallUpdates {
+		resultEvents, err := convertToolResultEventsContext(
+			context.Background(), update.ResultEvents,
+		)
+		if err != nil {
+			return err
+		}
+		toolCall := db.ToolCall{ResultEvents: resultEvents}
+		for j := range toolCall.ResultEvents {
+			db.PrepareToolResultEvent(&toolCall.ResultEvents[j])
+			toolCall.ResultEvents[j].SubagentSessionID = applyIDPrefixToID(
+				e.idPrefix, toolCall.ResultEvents[j].SubagentSessionID,
+			)
+		}
+		// The database sanitizes after resolving the target category, preserving
+		// raw identity and blocked-output lengths until then.
+		toolCallResultUpdates[i] = db.ToolCallResultUpdate{
+			ToolUseID: update.ToolUseID,
+			Position: db.ToolCallPosition{
+				MessageOrdinal: update.MessageOrdinal,
+				CallIndex:      update.CallIndex,
+			},
+			Events: toolCall.ResultEvents,
+		}
+	}
+	messageUsageUpdates := make(
+		[]db.MessageTokenUsageUpdate, len(inc.messageUsageUpdates),
+	)
+	for i, update := range inc.messageUsageUpdates {
+		messageUsageUpdates[i] = db.MessageTokenUsageUpdate{
+			Ordinal:          update.Ordinal,
+			TokenUsage:       append([]byte(nil), update.TokenUsage...),
+			ContextTokens:    clampedTokens(update.ContextTokens),
+			OutputTokens:     clampedTokens(update.OutputTokens),
+			HasContextTokens: update.HasContextTokens,
+			HasOutputTokens:  update.HasOutputTokens,
+		}
+	}
 
-	if err := e.db.WriteSessionIncremental(
+	signalsMaintained := false
+	var maintainer db.SignalMaintainer
+	// Fold checkpoint-backed Codex deltas transactionally. Other append paths
+	// retain their debounced recompute instead of paying for state reads and
+	// signal writes on every streamed assistant message.
+	if inc.checkpoint != nil && !e.disableSignalRecompute &&
+		!inc.hasSubstantiveUserMessage() &&
+		!inc.hasCompactBoundary() &&
+		!inc.hasResultSubagentLink() {
+		preRev, err := e.db.TranscriptRevision(inc.sessionID)
+		if err == nil {
+			var preSecrets string
+			if preSecrets, err = e.db.SessionSecretsRulesVersion(
+				inc.sessionID,
+			); err == nil {
+				maintainer = e.newIncrementalSignalMaintainer(
+					inc, dbMsgs, toolCallResultUpdates,
+					messageUsageUpdates, preRev, preSecrets,
+				)
+			}
+		}
+	}
+	signalsMaintained, err := e.db.WriteSessionIncremental(
 		inc.sessionID,
 		dbMsgs,
 		db.IncrementalSessionUpdate{
-			EndedAt:                 endedAt,
-			TerminationStatus:       inc.terminationStatus,
-			MsgCount:                msgCount,
-			UserMsgCount:            userMsgCount,
-			FileSize:                inc.fileSize,
-			FileMtime:               inc.fileMtime,
-			FileHash:                strPtr(inc.fileHash),
-			NextOrdinal:             inc.nextOrdinal,
-			LastEntryUUID:           inc.lastEntryUUID,
-			TotalOutputTokens:       inc.totalOutputTokens,
-			PeakContextTokens:       inc.peakContextTokens,
-			HasTotalOutputTokens:    inc.hasTotalOutputTokens,
-			HasPeakContextTokens:    inc.hasPeakContextTokens,
-			SubagentLinks:           subagentLinks,
-			BlockedResultCategories: e.blockedResultCategories,
+			EndedAt:                  endedAt,
+			TerminationStatus:        inc.terminationStatus,
+			MsgCount:                 msgCount,
+			UserMsgCount:             userMsgCount,
+			FileSize:                 inc.fileSize,
+			FileMtime:                inc.fileMtime,
+			FileHash:                 strPtr(inc.fileHash),
+			NextOrdinal:              inc.nextOrdinal,
+			LastEntryUUID:            inc.lastEntryUUID,
+			TotalOutputTokens:        inc.totalOutputTokens,
+			PeakContextTokens:        inc.peakContextTokens,
+			HasTotalOutputTokens:     inc.hasTotalOutputTokens,
+			HasPeakContextTokens:     inc.hasPeakContextTokens,
+			SubagentLinks:            subagentLinks,
+			ToolCallResultUpdates:    toolCallResultUpdates,
+			MessageTokenUsageUpdates: messageUsageUpdates,
+			Checkpoint:               inc.checkpoint,
+			CheckpointBlobs:          inc.checkpointBlobs,
+			BlockedResultCategories:  e.blockedResultCategories,
+			SignalMaintainer:         maintainer,
 		},
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf(
 			"incremental write %s: %w",
 			inc.sessionID, err,
@@ -18005,14 +18862,17 @@ func (e *Engine) writeIncremental(
 		)
 	}
 
-	// Signal/secret recompute costs O(session history), so it is
-	// debounced per session instead of running on every appended
-	// line: the first write after a quiet period recomputes
-	// inline, writes during a streaming burst coalesce into one
-	// recompute per interval plus a trailing flush. Recompute
-	// errors are logged inside recomputeSignalsFromDB and are
-	// non-fatal; a later write or flush retries.
-	e.signalSched.markDirty(inc.sessionID)
+	// Signal/secret maintenance normally ran inside the incremental write
+	// transaction. When the maintainer declined (user prompts, compact
+	// boundaries, stale state, out-of-window updates), fall back to the
+	// debounced full recompute: the first write after a quiet period
+	// recomputes inline, writes during a streaming burst coalesce into one
+	// recompute per interval plus a trailing flush. Recompute errors are
+	// logged inside recomputeSignalsFromDB and are non-fatal; a later
+	// write or flush retries.
+	if !signalsMaintained {
+		e.signalSched.markDirty(inc.sessionID)
+	}
 	if inc.providerStatHash != nil {
 		e.recordProviderStatHash(
 			context.Background(), *inc.providerStatHash,
@@ -18075,21 +18935,21 @@ func (e *Engine) writeMessages(
 // failures.
 func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
-	return e.writeSessionFullWithResolver(pw, resolveWorktreeProject)
+	return e.writeSessionFullWithResolver(context.Background(), pw, resolveWorktreeProject)
 }
 
 func (e *Engine) writeSessionFullWithResolver(
-	pw pendingWrite,
+	ctx context.Context, pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 ) error {
 	normalized, err := e.normalizePendingWriteMachines(
-		context.Background(), []pendingWrite{pw},
+		ctx, []pendingWrite{pw},
 	)
 	if err != nil {
 		return err
 	}
 	preserved, err := e.preserveUnavailableSourceProjects(
-		context.Background(), normalized,
+		ctx, normalized,
 	)
 	if err != nil {
 		return err
@@ -18116,22 +18976,55 @@ func (e *Engine) writeSessionFullWithResolver(
 		log.Printf("upsert session %s: %v", s.ID, err)
 		return err
 	}
-	var replaceErr error
-	if e.disableSignalRecompute {
+	if pw.staged != nil {
+		// The staged sink owns this parse's tool-result rows, and only the
+		// staged write publishes them.
+		if err := e.writeStagedFullParse(ctx, s, msgs, pw); err != nil {
+			log.Printf(
+				"write staged session %s: %v",
+				s.ID, err,
+			)
+			return err
+		}
+	} else if e.disableSignalRecompute {
 		if msgs == nil {
 			msgs = []db.Message{}
 		}
-		replaceErr = e.db.ReplaceSessionMessages(s.ID, msgs)
+		if err := e.db.ReplaceSessionMessages(s.ID, msgs); err != nil {
+			log.Printf(
+				"replace messages for %s: %v",
+				s.ID, err,
+			)
+			return err
+		}
 	} else {
-		update, findings := computeSignalsAndSecrets(s, msgs)
-		replaceErr = e.db.ReplaceSessionContent(s.ID, msgs, update, findings)
-	}
-	if replaceErr != nil {
-		log.Printf(
-			"replace messages for %s: %v",
-			s.ID, replaceErr,
-		)
-		return replaceErr
+		update, findings, signalErr := computeFullSignalsAndSecrets(s, msgs, nil)
+		if signalErr != nil {
+			return signalErr
+		}
+		var checkpoint *db.ParserCheckpoint
+		var checkpointBlobs *db.ParserCheckpointBlobs
+		if isCodexFormatAgent(pw.sess.Agent) {
+			var checkpointErr error
+			checkpoint, checkpointBlobs, checkpointErr =
+				e.buildCodexFullParseCheckpoint(pw.sess.File.Path, pw)
+			if checkpointErr != nil {
+				log.Printf(
+					"checkpoint build %s: %v",
+					pw.sess.File.Path, checkpointErr,
+				)
+				checkpoint, checkpointBlobs = nil, nil
+			}
+		}
+		if err := e.db.ReplaceSessionContentWithCheckpoint(
+			s.ID, msgs, update, findings, checkpoint, checkpointBlobs,
+		); err != nil {
+			log.Printf(
+				"replace messages for %s: %v",
+				s.ID, err,
+			)
+			return err
+		}
 	}
 	if err := e.db.ReplaceSessionUsageEvents(
 		s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
@@ -18157,7 +19050,6 @@ func (e *Engine) writeSessionFullWithResolver(
 		log.Printf("clear source-missing state for session %s: %v", s.ID, err)
 		return err
 	}
-
 	return nil
 }
 
@@ -18614,6 +19506,13 @@ func toDBMessagesContext(
 		toolCalls, err := convertToolCallsContext(ctx, pw.sess.ID, m.ToolCalls)
 		if err != nil {
 			return nil, err
+		}
+		if isCodexFormatAgent(pw.sess.Agent) {
+			for j := range toolCalls {
+				for k := range toolCalls[j].ResultEvents {
+					db.PrepareToolResultEvent(&toolCalls[j].ResultEvents[k])
+				}
+			}
 		}
 		toolResults, err := convertToolResultsContext(ctx, m.ToolResults)
 		if err != nil {
@@ -19142,6 +20041,14 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		return obj.LastModified.UnixNano()
 	}
 
+	if def.Type == parser.AgentEvener {
+		// Session polling must notice metadata and parent changes too.
+		// This opaque stat token is compared for equality, not ordering.
+		if hasher := e.providerStatHashers[def.Type]; hasher != nil {
+			return int64(hasher.ComputeMultiFileStatHash(path))
+		}
+		return 0
+	}
 	if usesCompositeSidecarFreshness(def.Type, path) {
 		mtime, err := parser.ClaudeLayoutCompositeMtime(path)
 		if err != nil {
@@ -19565,6 +20472,7 @@ func (e *Engine) processAndWriteSessionFile(
 	res := e.processFile(ctx, file)
 	defer e.retentionBudget().scavengeIfNeeded()
 	defer res.retentionLease.Release()
+	defer res.releaseStaged()
 	if res.err != nil {
 		sessionsChanged = res.sourceCwdChanged
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
@@ -19807,14 +20715,20 @@ func (e *Engine) processAndWriteSessionFile(
 		sessionNeedsRetry := res.providerWideFailureCount > 0 ||
 			res.needsRetryForSession(pr.Session.ID)
 		write := pendingWrite{
-			sess:                pr.Session,
-			msgs:                pr.Messages,
-			usageEvents:         pr.UsageEvents,
-			needsRetry:          sessionNeedsRetry || atomicDAG,
-			forceReplace:        res.forceReplace,
-			sourceCwdResolution: res.sourceCwdResolution,
-			sourceCwdStored:     res.sourceCwdStored,
-			sourceCwdStoredOK:   res.sourceCwdStoredOK,
+			sess:                   pr.Session,
+			msgs:                   pr.Messages,
+			usageEvents:            pr.UsageEvents,
+			checkpoint:             pr.Checkpoint,
+			checkpointHashState:    pr.CheckpointHashState,
+			checkpointAnchorDigest: pr.CheckpointAnchorDigest,
+			needsRetry:             sessionNeedsRetry || atomicDAG,
+			forceReplace:           res.forceReplace,
+			sourceCwdResolution:    res.sourceCwdResolution,
+			sourceCwdStored:        res.sourceCwdStored,
+			sourceCwdStoredOK:      res.sourceCwdStoredOK,
+		}
+		if i == 0 {
+			write.staged = res.staged
 		}
 		// The session upsert commits parser-derived parent provenance before
 		// the later content, usage, and completion stages. Queue the attempted
@@ -19829,7 +20743,7 @@ func (e *Engine) processAndWriteSessionFile(
 			)
 		}
 		repairQueued = true
-		writeErr := e.writeSessionFull(write)
+		writeErr := e.writeSessionFullWithResolver(ctx, write, e.loadWorktreeProjectResolverContext(ctx))
 		memberPolicySkipped := sourceCompletionSkipped[resultIDs[i]]
 		// Full-write stages commit independently. Message content (and a new
 		// spawn edge) can persist even when a later usage, data-version, or
@@ -20024,6 +20938,32 @@ func convertToolCallsContext(
 	return calls, ctx.Err()
 }
 
+// prepareCodexResultIdentities runs in parse workers before their payloads
+// enter the serialized archive writer. Direct write callers capture missing
+// metadata at conversion; normal imports only copy the small digest.
+func prepareCodexResultIdentities(
+	msgs []parser.ParsedMessage, updates []parser.ParsedToolCallUpdate,
+) {
+	prepare := func(events []parser.ParsedToolResultEvent) {
+		for i := range events {
+			event := db.ToolResultEvent{
+				Content:          events[i].Content,
+				RawContentDigest: events[i].RawContentDigest,
+			}
+			db.PrepareToolResultEvent(&event)
+			events[i].RawContentDigest = event.RawContentDigest
+		}
+	}
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			prepare(msgs[i].ToolCalls[j].ResultEvents)
+		}
+	}
+	for i := range updates {
+		prepare(updates[i].ResultEvents)
+	}
+}
+
 func convertToolResultEventsContext(
 	ctx context.Context, parsed []parser.ParsedToolResultEvent,
 ) ([]db.ToolResultEvent, error) {
@@ -20036,6 +20976,7 @@ func convertToolResultEventsContext(
 			return nil, err
 		}
 		events[i] = db.ToolResultEvent{
+			RawContentDigest:  ev.RawContentDigest,
 			ToolUseID:         ev.ToolUseID,
 			AgentID:           ev.AgentID,
 			SubagentSessionID: ev.SubagentSessionID,

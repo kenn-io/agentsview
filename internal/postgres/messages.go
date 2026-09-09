@@ -397,6 +397,14 @@ func (s *Store) Search(
 		argIdx++
 	}
 
+	dateBuilder := db.NewQueryBuilder(db.PostgresQueryDialect(), argIdx-1)
+	for _, pred := range dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
+		msgProjectClause += " AND " + pred
+		nameProjectClause += " AND " + pred
+	}
+	args = append(args, dateBuilder.Args()...)
+	argIdx += len(dateBuilder.Args())
+
 	query := fmt.Sprintf(`
 		WITH msg_matches AS (
 			SELECT DISTINCT ON (m.session_id)

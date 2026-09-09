@@ -315,8 +315,8 @@ and indexes it into your local archive. SSH remote sync is deprecated and
 receives only critical fixes; use configured HTTP remote sync for new setups.
 
 Local sync can also read configured Claude, Codex, and Cursor roots from
-S3-compatible object storage. Add `s3://` entries to `claude_project_dirs`,
-`codex_sessions_dirs`, or `cursor_project_dirs` in `~/.agentsview/config.toml`,
+S3-compatible object storage. Add `s3://` entries to `agents.claude.dirs`,
+`agents.codex.dirs`, or `agents.cursor.dirs` in `~/.agentsview/config.toml`,
 then run `agentsview sync` normally. This is not SSH remote sync: object storage
 is treated as a read-only session source, using object size and `LastModified`
 metadata to skip unchanged sessions and downloading only objects that need
@@ -493,6 +493,34 @@ the error names the manifest; restarting the daemon resolves it. Once a
 compaction has committed, recovery only cleans up leftover staging files and
 never replaces the archive, so sessions ingested after a compaction are never
 at risk. Do not delete the manifest or the database files by hand.
+
+______________________________________________________________________
+
+### `agentsview db strip --images`
+
+Remove supported inline image payloads from stored tool-result rows. The
+command requires `--images`; it uses the existing direct maintenance write
+owner and confirmation prompt. It never changes provider source files or
+standalone image files. Run `db compact` separately when you need measured
+SQLite file-space reclamation. Changed sessions are automatically rescanned for
+secrets so detections reflect the remaining content.
+
+```bash
+agentsview db strip --images [flags]
+```
+
+| Flag        | Default | Description                                         |
+| ----------- | ------- | --------------------------------------------------- |
+| `--images`  | `false` | Required image cleanup operation                    |
+| `--project` |         | Sessions whose project contains this substring     |
+| `--before`  |         | Sessions that ended before this date (`YYYY-MM-DD`) |
+| `--dry-run` | `false` | Preview selected sessions and byte counts           |
+| `--yes`     | `false` | Skip confirmation                                   |
+| `--format`  | `human` | Use `json` for machine-readable output              |
+
+JSON apply requires `--yes`. Preview and a declined confirmation leave the
+archive unchanged. Reported stored-content bytes and decoded image bytes are
+content measurements, not reclaimed disk space.
 
 ______________________________________________________________________
 
@@ -1463,6 +1491,8 @@ agentsview help
 | `OPENCODE_DIR`                    | `~/.local/share/opencode`                            | OpenCode data directory                                                                             |
 | `OPENHANDS_CONVERSATIONS_DIR`     | `~/.openhands/conversations`                         | OpenHands CLI conversations directory                                                               |
 | `PI_DIR`                          | `~/.pi/agent/sessions`                               | Pi sessions directory                                                                               |
+| `PI_CODING_AGENT_DIR` | unset | Pi agent home that re-roots the default `sessions/` discovery path |
+| `PI_CODING_AGENT_SESSION_DIR` | unset | Pi session directory override; `PI_DIR` takes precedence |
 | `PRIME_AGENT_SESSION_DIR`         | `~/.prime/agent/sessions`                            | Prime Agent sessions directory                                                                      |
 | `PIEBALD_DIR`                     | `~/.local/share/piebald`                             | Piebald directory (contains `app.db`)                                                               |
 | `POOLSIDE_DIR`                    | (platform-specific)                                  | Poolside Agent CLI trajectory directory                                                             |

@@ -7,18 +7,21 @@ description: Release history for AgentsView
 
 **New features**
 
-- Register alternate Claude Code and Codex homes with `claude_homes` and
-  `codex_homes` in `config.toml`. AgentsView derives each home's native session
-  directories, so sessions from tools that set a custom home such as t3code
-  appear alongside the default roots without hand-configuring low-level paths.
-  `CODEX_HOME` now re-roots the default Codex directories the same way
-  `CLAUDE_CONFIG_DIR` already does for Claude Code. The Session Providers
-  section of the Settings page can add and remove these homes. Roots that
-  reach the same directory through a symbolic link are scanned once, while
-  each home's own `history.jsonl` and `session_index.jsonl` are still read.
-  (#1611)
+- Browse and search Tau sessions, including the active conversation branch,
+  thinking, tools, session names, and recorded token usage. (#1661)
+- Configure session directories and alternate homes in `[agents.<id>]` tables
+  in `config.toml`. Every locally discovered provider accepts `dirs`; Claude
+  Code, Codex, and Pi also accept `homes`, which add each home's native session
+  directories. Settings can add and remove homes for all three providers.
+  `CODEX_HOME` also changes the default Codex session roots. Existing flat
+  directory and home keys convert on startup, while read-only commands leave
+  files unchanged. Shared roots are scanned once. (#1611, #1681)
 
 **Improvements**
+
+- Discover Pi sessions stored under `PI_CODING_AGENT_DIR` or
+  `PI_CODING_AGENT_SESSION_DIR`, locally and over SSH. Existing `PI_DIR`
+  overrides retain priority. (#1681)
 
 - Local-only incremental sync now waits with visible status when the default
   daemon is busy, instead of failing with "sync already in progress". Canceling
@@ -35,6 +38,9 @@ description: Release history for AgentsView
   activity. JSON and NDJSON add `transcript_revision` and `local_modified_at`
   to schema v6. Project and pricing changes remain separate evidence; this
   does not add an incremental change feed.
+- Browse and search Evener v2 sessions, including thinking, tools, session
+  names, fork relationships, and recorded token usage.
+
 - Session exports now identify the logical archive separately from its database
   generation, so analytics can recognize the same sessions after a full resync.
   JSON and NDJSON add `archive_id` to session-summary schema v6; pricing,
@@ -52,6 +58,19 @@ description: Release history for AgentsView
 
 **Bug fixes**
 
+- Preserve nonempty tool output from legacy Cursor text transcripts. Existing
+  archived sessions gain the output on their next sync when the source files
+  are still available. (#1627)
+- Activity reports load faster on large archives by skipping historical tool
+  results that cannot affect the selected period. SQLite and PostgreSQL build a
+  focused index during the next writable database setup, which can make that
+  first startup longer. No session resync is needed for this index.
+
+- Keep sync output readable when redirected to a pipe, file, or CI log.
+  Incremental sync prints its final summary; full resync and remote sync also
+  print coarse phase updates. Redirected output omits terminal control
+  sequences and per-session refresh lines. Interactive terminals retain live
+  progress. (#1645)
 - Price Codex Luna Reserve turns that persist as `gpt-reserve` using the
   existing GPT-5.6 Luna catalog rates. Usage reports still list `gpt-reserve`
   as the reported model. Existing SQLite usage caches rebuild so previously

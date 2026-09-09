@@ -5,6 +5,14 @@ import type { GetApiV1SearchSort } from "./getApiV1SearchSort.ts";
 
 export type GetApiV1SearchParams = {
   /**
+   * Filter sessions active on or after this date
+   */
+  date_from?: string;
+  /**
+   * Filter sessions active on or before this date
+   */
+  date_to?: string;
+  /**
    * Search query
    */
   q: string;

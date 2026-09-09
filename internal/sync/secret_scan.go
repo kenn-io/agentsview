@@ -1,9 +1,23 @@
 package sync
 
 import (
+	"sync/atomic"
+
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
+	"go.kenn.io/agentsview/internal/signals"
 )
+
+// secretScanBytes counts the content bytes passed to the secret scanner.
+// Tests use deltas of it to gate the incremental path: a maintained delta
+// must scan no more than the delta's own content.
+var secretScanBytes atomic.Int64
+
+// SecretScanBytes returns the total scanned byte count so far. Monotonic.
+func SecretScanBytes() int64 {
+	return secretScanBytes.Load()
+}
 
 // computeSignalsAndSecrets computes a session's signal update and its secret
 // findings from the same message slice, returning the update with the
@@ -25,6 +39,53 @@ func computeSignalsAndSecrets(
 	return update, findings
 }
 
+// computeSignalsAndSecretsWithContentFailures is the staged streaming
+// variant: the signal pass receives pre-computed per-call content-failure
+// verdicts in place of the placeholder result content, while the secret
+// scan is unchanged (staged event findings arrive through the sink's
+// Findings instead).
+func computeSignalsAndSecretsWithContentFailures(
+	s db.Session, msgs []db.Message, failures map[string]bool,
+) (db.SessionSignalUpdate, []db.SecretFinding) {
+	update := computeSignalsFromMessagesWithContentFailures(s, msgs, failures)
+	findings, leak := scanSecretsFromMessages(s, msgs, secrets.ScanDefinite)
+	update.SecretLeakCount = leak
+	update.SecretsRulesVersion = secrets.DefiniteRulesVersion()
+	return update, findings
+}
+
+// computeFullSignalsAndSecrets prepares all derived state for a full content
+// transaction. The database binds the seed to the revision it commits, so no
+// follow-up transaction or revision read is needed. Reuse the tool rows for
+// aggregate signals and the incremental seed.
+func computeFullSignalsAndSecrets(
+	s db.Session, msgs []db.Message, failures map[string]bool,
+) (db.SessionSignalUpdate, []db.SecretFinding, error) {
+	rows := extractToolCallRows(msgs)
+	patchToolCallRowsWithContentFailures(rows, msgs, failures)
+	// These rows remain immutable through aggregate calculation and seeding.
+	// Cache negative verdicts too: ordinary successful output otherwise gets
+	// scanned again by each detector and the incremental-state seed.
+	for i := range rows {
+		if rows[i].EventStatus == "" {
+			rows[i].ContentFailure = signals.IsFailure(rows[i])
+			rows[i].ContentFailureKnown = true
+		}
+	}
+	update := computeSignalsFromToolRows(s, msgs, rows)
+	findings, leak := scanSecretsFromMessages(s, msgs, secrets.ScanDefinite)
+	update.SecretLeakCount = leak
+	update.SecretsRulesVersion = secrets.DefiniteRulesVersion()
+	if isCodexFormatAgent(parser.AgentType(s.Agent)) {
+		state, err := buildSignalStateFromRows(s.ID, msgs, rows, "")
+		if err != nil {
+			return db.SessionSignalUpdate{}, nil, err
+		}
+		update.FullState = &state
+	}
+	return update, findings, nil
+}
+
 // scanSecretsFromMessages detects secrets across a session's message content,
 // tool inputs, and canonical tool output (result events when present, else
 // result_content) using scan: secrets.ScanDefinite for the fast inline path,
@@ -35,7 +96,8 @@ func scanSecretsFromMessages(
 	_ db.Session, msgs []db.Message, scan func(string) []secrets.Match,
 ) (findings []db.SecretFinding, definiteCount int) {
 	findings = make([]db.SecretFinding, 0)
-	add := func(sessionID, loc string, ord int, call, event *int, matches []secrets.Match) {
+	add := func(sessionID, loc string, ord int, call, event *int, content string, matches []secrets.Match) {
+		secretScanBytes.Add(int64(len(content)))
 		for _, m := range matches {
 			findings = append(findings, db.SecretFinding{
 				SessionID:      sessionID,
@@ -49,6 +111,11 @@ func scanSecretsFromMessages(
 				MatchEnd:       m.End,
 				MatchIndex:     m.Index,
 				RedactedMatch:  m.Redacted,
+				// The incremental persist path (applySignalDeltaTx) inserts
+				// f.RulesVersion verbatim, unlike replaceSecretFindingsTx
+				// which overrides it; stamp it here so inline findings are
+				// visible to current-version listings.
+				RulesVersion: secrets.DefiniteRulesVersion(),
 			})
 			if m.Confidence == secrets.ConfidenceDefinite {
 				definiteCount++
@@ -57,12 +124,12 @@ func scanSecretsFromMessages(
 	}
 	for _, msg := range msgs {
 		add(msg.SessionID, "message", msg.Ordinal, nil, nil,
-			scan(msg.Content))
+			msg.Content, scan(msg.Content))
 		for ci := range msg.ToolCalls {
 			tc := msg.ToolCalls[ci]
 			callIdx := ci
 			add(msg.SessionID, "tool_input", msg.Ordinal, &callIdx, nil,
-				scan(tc.InputJSON))
+				tc.InputJSON, scan(tc.InputJSON))
 			if len(tc.ResultEvents) > 0 {
 				for ei := range tc.ResultEvents {
 					// Store the slice position, which is what the persistence
@@ -71,11 +138,12 @@ func scanSecretsFromMessages(
 					// normalized value, so --reveal can re-locate the source.
 					evIdx := ei
 					add(msg.SessionID, "tool_result_event", msg.Ordinal,
-						&callIdx, &evIdx, scan(tc.ResultEvents[ei].Content))
+						&callIdx, &evIdx, tc.ResultEvents[ei].Content,
+						scan(tc.ResultEvents[ei].Content))
 				}
 			} else {
 				add(msg.SessionID, "tool_result", msg.Ordinal, &callIdx, nil,
-					scan(tc.ResultContent))
+					tc.ResultContent, scan(tc.ResultContent))
 			}
 		}
 	}

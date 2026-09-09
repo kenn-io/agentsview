@@ -85,7 +85,17 @@ func messageRowEqual(a, b Message) bool {
 		return false
 	}
 	for i := range aEvents {
-		if aEvents[i] != bEvents[i] {
+		x, y := aEvents[i], bEvents[i]
+		if x.SessionID != y.SessionID || x.MessageOrdinal != y.MessageOrdinal || x.CallIndex != y.CallIndex ||
+			x.Event.ToolUseID != y.Event.ToolUseID || x.Event.AgentID != y.Event.AgentID ||
+			x.Event.SubagentSessionID != y.Event.SubagentSessionID || x.Event.Source != y.Event.Source ||
+			x.Event.Status != y.Event.Status || x.Event.Content != y.Event.Content ||
+			x.Event.ContentLength != y.Event.ContentLength || x.Event.Timestamp != y.Event.Timestamp ||
+			x.Event.EventIndex != y.Event.EventIndex || !bytes.Equal(x.Event.RawContentDigest, y.Event.RawContentDigest) {
+			return false
+		}
+		if (x.Event.SummaryParticipates == nil) != (y.Event.SummaryParticipates == nil) ||
+			(x.Event.SummaryParticipates != nil && *x.Event.SummaryParticipates != *y.Event.SummaryParticipates) {
 			return false
 		}
 	}
@@ -392,6 +402,20 @@ func deleteToolRowsForMessagesTx(
 		idArgs := make([]any, 0, end-start)
 		for _, id := range ids[start:end] {
 			idArgs = append(idArgs, id)
+		}
+		// Agent-state rows use stable message/call coordinates. Clear every
+		// occurrence owned by the messages being rebuilt so removed agents and
+		// reused provider IDs cannot leave stale summary state.
+		if _, err := tx.Exec(
+			"DELETE FROM tool_call_occurrence_agent_state WHERE session_id = ?"+
+				" AND message_ordinal IN ("+
+				"SELECT ordinal FROM messages WHERE id IN ("+
+				placeholderList(len(idArgs))+"))",
+			append([]any{sessionID}, idArgs...)...,
+		); err != nil {
+			return fmt.Errorf(
+				"deleting stale tool-call occurrence state: %w", err,
+			)
 		}
 		if _, err := tx.Exec(
 			"DELETE FROM tool_calls WHERE message_id IN ("+

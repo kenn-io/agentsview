@@ -149,13 +149,13 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 			// Workers emit ctx.Err() for files skipped after
 			// cancellation.
 			cancel()
-			r.releaseRetention()
+			r.releaseAll()
 			drainResults(results, total-i-1)
 			return nil, ctx.Err()
 		}
 		if r.incremental != nil {
 			cancel()
-			r.releaseRetention()
+			r.releaseAll()
 			drainResults(results, total-i-1)
 			return nil, fmt.Errorf(
 				"parse-diff: internal error: incremental parse of %s "+
@@ -167,11 +167,11 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 			visited, resolver, &presencePaths,
 		); err != nil {
 			cancel()
-			r.releaseRetention()
+			r.releaseAll()
 			drainResults(results, total-i-1)
 			return nil, err
 		}
-		r.releaseRetention()
+		r.releaseAll()
 		if opts.Progress != nil {
 			opts.Progress(i+1, total)
 		}

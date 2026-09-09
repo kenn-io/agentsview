@@ -140,11 +140,13 @@ type SecretFindingList struct {
 // It mirrors the GET /api/v1/search query parameters so both transports
 // produce identical results.
 type SearchRequest struct {
-	Query   string `json:"query"`
-	Project string `json:"project,omitempty"`
-	Sort    string `json:"sort,omitempty"` // "relevance" (default) or "recency"
-	Cursor  int    `json:"cursor,omitempty"`
-	Limit   int    `json:"limit,omitempty"`
+	DateFrom string `json:"date_from,omitempty"`
+	DateTo   string `json:"date_to,omitempty"`
+	Query    string `json:"query"`
+	Project  string `json:"project,omitempty"`
+	Sort     string `json:"sort,omitempty"` // "relevance" (default) or "recency"
+	Cursor   int    `json:"cursor,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
 }
 
 // SessionSearchResult mirrors db.SearchPage for transport: ranked

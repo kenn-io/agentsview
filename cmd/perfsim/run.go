@@ -131,13 +131,13 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 			return r, err
 		}
 		r.completedUpdates = i + 1
-		if o.SourceFormat == "opencode" {
+		if o.SourceFormat == "opencode" || o.SourceFormat == "opencode-v2" {
 			if err := syncSQLiteChildEdits(ctx, &r, engine, database, sources[:o.Active]); err != nil {
 				return r, err
 			}
 		}
 		if o.ReconcileEvery > 0 && (i+1)%o.ReconcileEvery == 0 {
-			if o.SourceFormat == "opencode" {
+			if o.SourceFormat == "opencode" || o.SourceFormat == "opencode-v2" {
 				if err := measureSQLiteScans(ctx, &r, sources, o.Active); err != nil {
 					return r, err
 				}
@@ -168,7 +168,7 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 			}
 		}
 	}
-	if o.SourceFormat == "opencode" {
+	if o.SourceFormat == "opencode" || o.SourceFormat == "opencode-v2" {
 		if err := sources[0].Store.Close(); err != nil {
 			return r, err
 		}

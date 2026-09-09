@@ -704,7 +704,8 @@ type Config struct {
 	// set so loadFile doesn't override env-set values.
 	agentDirSource map[parser.AgentType]dirSource
 
-	ResultContentBlockedCategories []string `json:"result_content_blocked_categories,omitempty" toml:"result_content_blocked_categories"`
+	ResultContentBlockedCategories []string         `json:"result_content_blocked_categories,omitempty" toml:"result_content_blocked_categories"`
+	ToolResultImages               ToolResultImages `json:"tool_result_images,omitempty" toml:"tool_result_images"`
 
 	// SyncIncludeCwdPrefixes, when non-empty, restricts local session
 	// ingestion to sessions whose working directory equals one of the
@@ -1004,10 +1005,17 @@ func Default() (Config, error) {
 		}
 		for i, rel := range def.DefaultDirs {
 			if root != "" {
-				dirs[i] = reRootDefaultDir(root, rel)
+				dirs[i] = reRootDefaultDir(root, rel, def.DefaultRootDir)
 				continue
 			}
 			dirs[i] = filepath.Join(home, rel)
+		}
+		// XDG_STATE_HOME replaces the state directory, including both .local
+		// and state components of the home-relative default.
+		if def.Type == parser.AgentEvener {
+			if stateHome := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(stateHome) {
+				dirs = []string{filepath.Join(stateHome, "evener")}
+			}
 		}
 		// Keep the Hermes profiles container as a stable provider root. The
 		// provider enumerates its children on every discovery pass, so profiles
@@ -1057,34 +1065,15 @@ func Default() (Config, error) {
 	}, nil
 }
 
-func reRootDefaultDir(root, rel string) string {
+func reRootDefaultDir(root, rel, defaultRoot string) string {
 	rel = filepath.Clean(rel)
+	if defaultRoot != "" {
+		return filepath.Join(root, strings.TrimPrefix(rel, filepath.Clean(defaultRoot)+string(filepath.Separator)))
+	}
 	if _, tail, ok := strings.Cut(rel, string(filepath.Separator)); ok && tail != "" {
 		return filepath.Join(root, tail)
 	}
 	return root
-}
-
-// decodeStringArray converts a raw TOML value into a string slice. It logs
-// and reports false when the value is not an array of strings.
-func decodeStringArray(key string, rawVal any) ([]string, bool) {
-	rawSlice, ok := rawVal.([]any)
-	if !ok {
-		log.Printf("config: %s: expected string array: got %T", key, rawVal)
-		return nil, false
-	}
-	values := make([]string, 0, len(rawSlice))
-	for _, v := range rawSlice {
-		s, ok := v.(string)
-		if !ok {
-			log.Printf(
-				"config: %s: expected string array: element is %T", key, v,
-			)
-			return nil, false
-		}
-		values = append(values, s)
-	}
-	return values, true
 }
 
 // dedupeTrimmedStrings trims each value and drops empty and repeated
@@ -1115,7 +1104,7 @@ func AgentHomeDirs(def parser.AgentDef, home string) []string {
 	}
 	dirs := make([]string, 0, len(def.DefaultDirs))
 	for _, rel := range def.DefaultDirs {
-		dirs = append(dirs, reRootDefaultDir(home, rel))
+		dirs = append(dirs, reRootDefaultDir(home, rel, def.DefaultRootDir))
 	}
 	return dirs
 }
@@ -1331,6 +1320,9 @@ func (c *Config) loadFileWithMigration(migrate bool) error {
 		if err := c.migrateJSONToTOML(); err != nil {
 			return err
 		}
+		if err := c.migrateAgentTables(); err != nil {
+			return err
+		}
 	}
 
 	path := c.configPath()
@@ -1421,6 +1413,10 @@ func normalizeLegacyJSONNumbers(value any) (any, error) {
 }
 
 func (c *Config) applyConfigTOML(data string) error {
+	data, _, err := convertAgentTables(data)
+	if err != nil {
+		return err
+	}
 	var file struct {
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
@@ -1438,6 +1434,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		SyncIncludeCwdPrefixes         []string               `toml:"sync_include_cwd_prefixes"`
 		ScanProtectedPaths             bool                   `toml:"scan_protected_paths"`
 		ResultContentBlockedCategories []string               `toml:"result_content_blocked_categories"`
+		ToolResultImages               string                 `toml:"tool_result_images"`
 		Terminal                       TerminalConfig         `toml:"terminal"`
 		AuthToken                      string                 `toml:"auth_token"`
 		RequireAuth                    bool                   `toml:"require_auth"`
@@ -1526,6 +1523,13 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.ResultContentBlockedCategories != nil {
 		c.ResultContentBlockedCategories = file.ResultContentBlockedCategories
+	}
+	if meta.IsDefined("tool_result_images") {
+		policy, err := ParseToolResultImages(file.ToolResultImages)
+		if err != nil {
+			return err
+		}
+		c.ToolResultImages = policy
 	}
 	if file.Terminal.Mode != "" {
 		c.Terminal = file.Terminal
@@ -1706,43 +1710,8 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.sessionSourceConfigs = append([]sessionSourceConfig(nil), file.SessionSources...)
 	}
 
-	for _, def := range parser.Registry {
-		if def.HomeConfigKey == "" {
-			continue
-		}
-		rawVal, exists := raw[def.HomeConfigKey]
-		if !exists {
-			continue
-		}
-		homes, ok := decodeStringArray(def.HomeConfigKey, rawVal)
-		if !ok {
-			continue
-		}
-		if c.agentHomes == nil {
-			c.agentHomes = make(map[parser.AgentType][]string)
-		}
-		// Repeated spellings would register the same roots twice and give
-		// the settings UI duplicate list keys; keep the first occurrence.
-		c.agentHomes[def.Type] = dedupeTrimmedStrings(homes)
-	}
-
-	// Parse config-file dir arrays for agents that have a
-	// ConfigKey. Only apply when not already set by env var.
-	for _, def := range parser.Registry {
-		if def.ConfigKey == "" {
-			continue
-		}
-		rawVal, exists := raw[def.ConfigKey]
-		if !exists {
-			continue
-		}
-		if c.agentDirSource[def.Type] == dirEnv {
-			continue
-		}
-		if dirs, ok := decodeStringArray(def.ConfigKey, rawVal); ok {
-			c.AgentDirs[def.Type] = dirs
-			c.agentDirSource[def.Type] = dirFile
-		}
+	if err := c.applyAgentDirectories(raw["agents"]); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1771,7 +1740,7 @@ func NormalizeAgentHomes(
 			return nil, fmt.Errorf(
 				`agent_homes: unknown session provider %q`, rawAgent)
 		}
-		if def.HomeConfigKey == "" {
+		if !def.HomesSupported {
 			return nil, fmt.Errorf(
 				`agent_homes: %q does not support alternate homes`, agent)
 		}
@@ -1785,7 +1754,7 @@ func NormalizeAgentHomes(
 			home := strings.TrimSpace(raw)
 			if _, err := normalizeAgentHomeDir(home); err != nil {
 				return nil, fmt.Errorf(
-					"agent_homes: %s: entry %d: %w", def.HomeConfigKey, i+1, err)
+					"agent_homes: agents.%s.homes: entry %d: %w", def.Type, i+1, err)
 			}
 			if _, dup := seen[home]; dup {
 				continue
@@ -1882,7 +1851,7 @@ func dataDirFromEnv() string {
 
 func (c *Config) loadEnv() {
 	for _, def := range parser.Registry {
-		if v := os.Getenv(def.EnvVar); v != "" {
+		if v := firstEnv(def.EnvVar, def.NativeEnvVar); v != "" {
 			if def.Type == parser.AgentGoose {
 				v = parser.ResolveGoosePathRoot(v)
 				if v == "" {
@@ -2319,19 +2288,19 @@ func (c *Config) resolveSessionSources() error {
 			home, err := normalizeAgentHomeDir(rawHome)
 			if err != nil {
 				problems = append(problems,
-					fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
+					fmt.Sprintf("agents.%s.homes: entry %d: %v", def.Type, i+1, err))
 				continue
 			}
 			for _, rawDir := range AgentHomeDirs(def, home) {
 				dir, metadataDir, err := normalizeRuntimeSessionRoot(def.Type, rawDir)
 				if err != nil {
-					problems = append(problems, fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
+					problems = append(problems, fmt.Sprintf("agents.%s.homes: entry %d: %v", def.Type, i+1, err))
 					continue
 				}
 				key, err := sessionSourceComparisonKey(dir)
 				if err != nil {
 					problems = append(problems,
-						fmt.Sprintf("%s: entry %d: %v", def.HomeConfigKey, i+1, err))
+						fmt.Sprintf("agents.%s.homes: entry %d: %v", def.Type, i+1, err))
 					continue
 				}
 				if existing, duplicate := seen[key]; duplicate {
@@ -3251,6 +3220,15 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
 	patch = maps.Clone(patch)
+	if value, ok := patch["tool_result_images"]; ok {
+		policy, ok := value.(ToolResultImages)
+		if !ok {
+			return fmt.Errorf("tool_result_images must use the typed configuration value")
+		}
+		if _, err := ParseToolResultImages(string(policy)); err != nil {
+			return err
+		}
+	}
 	if value, ok := patch["chart_palette"]; ok {
 		palette, ok := value.(ChartPalette)
 		if !ok {
@@ -3295,19 +3273,18 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		}
 		agentHomes = normalized
 		delete(patch, "agent_homes")
-		for agent, dirs := range normalized {
-			def, _ := parser.AgentByType(agent)
-			if len(dirs) == 0 {
-				patch[def.HomeConfigKey] = nil
-				continue
-			}
-			patch[def.HomeConfigKey] = dirs
-		}
 	}
 	return c.withConfigLock(func() error {
 		existing, err := c.readConfigMap()
 		if err != nil {
 			return fmt.Errorf("reading config file: %w", err)
+		}
+
+		if _, err := convertAgentTableMap(existing); err != nil {
+			return err
+		}
+		if err := setAgentHomes(existing, agentHomes); err != nil {
+			return err
 		}
 
 		for key, value := range patch {
@@ -3362,6 +3339,11 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["chart_palette"]; ok {
 			if palette, ok := v.(ChartPalette); ok {
 				c.ChartPalette = palette
+			}
+		}
+		if v, ok := patch["tool_result_images"]; ok {
+			if policy, ok := v.(ToolResultImages); ok {
+				c.ToolResultImages = policy
 			}
 		}
 		if v, ok := patch["disabled_agents"]; ok {

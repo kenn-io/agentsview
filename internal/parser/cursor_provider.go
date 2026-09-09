@@ -4,39 +4,65 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 var _ Provider = (*cursorProvider)(nil)
 var _ S3Provider = (*cursorProvider)(nil)
 
 type cursorProviderFactory struct {
-	def AgentDef
+	def        AgentDef
+	storeIndex *cursorStoreIndex
 }
 
 func newCursorProviderFactory(def AgentDef) ProviderFactory {
-	return cursorProviderFactory{def: cloneAgentDef(def)}
+	return &cursorProviderFactory{
+		def:        cloneAgentDef(def),
+		storeIndex: newCursorStoreIndex(),
+	}
 }
 
-func (f cursorProviderFactory) Definition() AgentDef {
+func (f *cursorProviderFactory) Definition() AgentDef {
 	return cloneAgentDef(f.def)
 }
 
-func (f cursorProviderFactory) Capabilities() Capabilities {
+func (f *cursorProviderFactory) Capabilities() Capabilities {
 	return cursorProviderCapabilities()
 }
 
-func (f cursorProviderFactory) NewProvider(cfg ProviderConfig) Provider {
+func (f *cursorProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
+	sources := newCursorSourceSetWithConfig(cfg)
+	sources.storeIndex = f.storeIndex
 	return &cursorProvider{
 		Def:               cloneAgentDef(f.def),
 		Caps:              cursorProviderCapabilities(),
 		Config:            cfg,
 		DefaultS3Provider: cursorS3Provider,
-		sources:           newCursorSourceSetWithConfig(cfg),
+		sources:           sources,
 	}
+}
+
+// ResolveMetadataDir returns the sibling .cursor/chats directory for a local
+// .cursor/projects root. Remote, rewritten and unrelated roots yield "".
+func (f cursorProviderFactory) ResolveMetadataDir(path string) (string, error) {
+	root, err := pathutil.ResolveAbsolute(path)
+	if err != nil {
+		return "", err
+	}
+	key, err := pathutil.LocalComparisonKey(root)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Base(key) != "projects" || filepath.Base(filepath.Dir(key)) != ".cursor" {
+		return "", nil
+	}
+	return pathutil.ResolveAbsolute(filepath.Join(filepath.Dir(root), "chats"))
 }
 
 type cursorProvider struct {
@@ -107,6 +133,39 @@ func (p *cursorProvider) Parse(
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
+	storePath, agentID, enrichErr := p.sources.storePathForSource(req.Source, path)
+	if enrichErr == nil && storePath != "" {
+		enrichErr = enrichCursorSessionFromStore(
+			ctx, storePath, agentID, sess, msgs,
+		)
+		if errors.Is(enrichErr, context.Canceled) ||
+			errors.Is(enrichErr, context.DeadlineExceeded) {
+			return ParseOutcome{}, enrichErr
+		}
+		if enrichErr != nil {
+			enrichErr = fmt.Errorf("cursor store %s: %w", storePath, enrichErr)
+		}
+	}
+	if errors.Is(enrichErr, errCursorStoreFormat) {
+		log.Printf("warning: %v; using Cursor transcript only", enrichErr)
+	} else if enrichErr != nil {
+		return ParseOutcome{
+			SourceErrors: []SourceError{{
+				SourceKey:   req.Source.Key,
+				DisplayPath: path,
+				SessionID:   sess.ID,
+				Err:         enrichErr,
+				Retryable:   true,
+			}},
+			ResultSetComplete: true,
+		}, nil
+	}
+	if req.Fingerprint.Size > 0 {
+		sess.File.Size = req.Fingerprint.Size
+	}
+	if req.Fingerprint.MTimeNS > 0 {
+		sess.File.Mtime = req.Fingerprint.MTimeNS
+	}
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
@@ -129,6 +188,8 @@ type cursorSource struct {
 
 type cursorSourceSet struct {
 	roots              []string
+	metadataDirs       map[string][]string
+	storeIndex         *cursorStoreIndex
 	resolver           func(string) string
 	resolutionResolver func(string, CursorResolveMode, string) SourceCwdResolution
 	remote             bool
@@ -138,12 +199,14 @@ type cursorSourceSet struct {
 func newCursorSourceSet(roots []string) cursorSourceSet {
 	return cursorSourceSet{
 		roots:       cleanJSONLRoots(roots),
+		storeIndex:  newCursorStoreIndex(),
 		remoteRoots: make(map[string]bool),
 	}
 }
 
 func newCursorSourceSetWithConfig(cfg ProviderConfig) cursorSourceSet {
 	s := newCursorSourceSet(cfg.Roots)
+	s.metadataDirs = cloneMetadataDirs(cfg.MetadataDirs)
 	s.remote = cfg.PathRewriter != nil
 	for root, machine := range cfg.SourceMachines {
 		if machine != "" && machine != cfg.Machine {
@@ -227,6 +290,9 @@ func (s cursorSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			}
 			continue
 		}
+		for _, chats := range s.chatsDirs(root) {
+			s.storeIndex.refresh(chats)
+		}
 		for _, path := range s.discoverTranscriptPaths(root) {
 			source, ok := s.sourceRefWithCache(root, path, resolutionCache)
 			if !ok {
@@ -256,6 +322,9 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 				}
 			}
 			continue
+		}
+		for _, chats := range s.chatsDirs(root) {
+			s.storeIndex.refresh(chats)
 		}
 		resolvedRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
@@ -360,6 +429,7 @@ func (s cursorSourceSet) streamingSourceRefWithCache(
 	if project == "" {
 		project = "unknown"
 	}
+	s.storeIndex.rememberTranscript(root, path)
 	return SourceRef{
 		Provider: AgentCursor, Key: path, DisplayPath: path,
 		FingerprintKey: path, ProjectHint: project,
@@ -538,7 +608,8 @@ func cursorAddSeen(seen map[string]string, name, fullPath string) {
 }
 
 func (s cursorSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
-	roots := make([]WatchRoot, 0, len(s.roots))
+	roots := make([]WatchRoot, 0, len(s.roots)*2)
+	seenChats := make(map[string]struct{})
 	for _, root := range s.roots {
 		if isS3URI(root) {
 			continue
@@ -549,6 +620,18 @@ func (s cursorSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			IncludeGlobs: []string{"*.jsonl", "*.txt"},
 			DebounceKey:  string(AgentCursor) + ":transcripts:" + root,
 		})
+		for _, chats := range s.chatsDirs(root) {
+			chats = filepath.Clean(chats)
+			if _, ok := seenChats[chats]; ok {
+				continue
+			}
+			seenChats[chats] = struct{}{}
+			roots = append(roots, WatchRoot{
+				Path:        chats,
+				Recursive:   true,
+				DebounceKey: string(AgentCursor) + ":store:" + chats,
+			})
+		}
 	}
 	return WatchPlan{Roots: roots}, nil
 }
@@ -561,20 +644,30 @@ func (s cursorSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	if req.WatchRoot != "" {
-		root := filepath.Clean(req.WatchRoot)
-		if !s.hasRoot(root) {
-			return nil, nil
+		watchRoot := filepath.Clean(req.WatchRoot)
+		if s.hasRoot(watchRoot) {
+			source, ok := s.sourceForPathInRoot(watchRoot, req.Path)
+			if !ok {
+				return nil, nil
+			}
+			return []SourceRef{source}, nil
 		}
-		source, ok := s.sourceForPathInRoot(root, req.Path)
-		if !ok {
-			return nil, nil
+		if projectsRoot, ok := s.projectsRootForChats(watchRoot); ok {
+			return s.sourcesForStorePath(projectsRoot, req.Path)
 		}
-		return []SourceRef{source}, nil
+		return nil, nil
 	}
 	for _, root := range s.roots {
 		source, ok := s.sourceForPathInRoot(root, req.Path)
 		if ok {
 			return []SourceRef{source}, nil
+		}
+	}
+	for _, root := range s.roots {
+		if sources, err := s.sourcesForStorePath(root, req.Path); err != nil {
+			return nil, err
+		} else if len(sources) > 0 {
+			return sources, nil
 		}
 	}
 	return nil, nil
@@ -692,10 +785,31 @@ func (s cursorSourceSet) Fingerprint(
 			return SourceFingerprint{}, err
 		}
 	}
+	mtime := info.ModTime().UnixNano()
+	storePath, _, err := s.storePathForSource(source, path)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	if storePath != "" {
+		if composite, err := sqliteDBCompositeMtime(
+			storePath, sqliteDBJournalSuffixes,
+		); err == nil && composite > mtime {
+			mtime = composite
+		}
+		stateHash, err := cursorIDESQLiteStateHash(storePath)
+		if err != nil {
+			return SourceFingerprint{}, fmt.Errorf("fingerprint Cursor store %s: %w", storePath, err)
+		}
+		if hash == "" {
+			hash = "store:" + stateHash
+		} else {
+			hash = hash + "|store:" + stateHash
+		}
+	}
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
 		Size:    info.Size(),
-		MTimeNS: info.ModTime().UnixNano(),
+		MTimeNS: mtime,
 		Hash:    hash,
 	}, nil
 }
@@ -780,6 +894,7 @@ func (s cursorSourceSet) sourceRefWithCache(
 	if project == "" {
 		project = "unknown"
 	}
+	s.storeIndex.rememberTranscript(root, path)
 	return SourceRef{
 		Provider:       AgentCursor,
 		Key:            path,
@@ -803,6 +918,112 @@ func (s cursorSourceSet) hasRoot(root string) bool {
 		}
 	}
 	return false
+}
+
+func (s cursorSourceSet) chatsDirs(root string) []string {
+	if isS3URI(root) || s.remote || s.remoteRoot(root) {
+		return nil
+	}
+	clean := filepath.Clean(root)
+	if dirs := s.metadataDirs[clean]; len(dirs) > 0 {
+		return dirs
+	}
+	for configured, dirs := range s.metadataDirs {
+		if samePath(configured, clean) {
+			return dirs
+		}
+	}
+	return nil
+}
+
+func (s cursorSourceSet) projectsRootForChats(chatsRoot string) (string, bool) {
+	chatsRoot = filepath.Clean(chatsRoot)
+	for _, root := range s.roots {
+		for _, chats := range s.chatsDirs(root) {
+			if samePath(chats, chatsRoot) {
+				return root, true
+			}
+		}
+	}
+	return "", false
+}
+
+func (s cursorSourceSet) storePathForSource(
+	source SourceRef, path string,
+) (string, string, error) {
+	root := ""
+	switch src := source.Opaque.(type) {
+	case cursorSource:
+		root = src.Root
+	case *cursorSource:
+		if src != nil {
+			root = src.Root
+		}
+	}
+	if root == "" {
+		for _, candidate := range s.roots {
+			if _, ok := cursorRawSessionIDFromPath(candidate, path); !ok {
+				continue
+			}
+			if _, ok := cursorProjectDirFromPath(candidate, path); ok {
+				root = candidate
+				break
+			}
+		}
+	}
+	if root == "" {
+		return "", "", nil
+	}
+	agentID := cursorRawIDFromTranscriptPath(path)
+	if !IsValidSessionID(agentID) {
+		return "", "", nil
+	}
+	storePath, err := s.storePathForRawID(root, agentID)
+	return storePath, agentID, err
+}
+
+func (s cursorSourceSet) storePathForRawID(root, agentID string) (string, error) {
+	for _, chats := range s.chatsDirs(root) {
+		if !s.storeIndex.initialized(chats) {
+			s.storeIndex.refresh(chats)
+		}
+		if path, err := s.storeIndex.path(chats, agentID); path != "" || err != nil {
+			return path, err
+		}
+	}
+	return "", nil
+}
+
+func (s cursorSourceSet) sourcesForStorePath(root, path string) ([]SourceRef, error) {
+	agentID, ok := cursorStoreAgentIDFromPath(path)
+	if !ok {
+		return nil, nil
+	}
+	underMetadata := false
+	matchingChats := ""
+	for _, chats := range s.chatsDirs(root) {
+		if !isContainedIn(filepath.Clean(path), filepath.Clean(chats)) {
+			continue
+		}
+		underMetadata = true
+		matchingChats = chats
+		break
+	}
+	if !underMetadata {
+		return nil, nil
+	}
+	s.storeIndex.remember(
+		matchingChats, agentID, filepath.Join(filepath.Dir(path), "store.db"),
+	)
+	transcript := s.storeIndex.transcriptPath(root, agentID)
+	if transcript == "" {
+		transcript = cursorFindSourceFile(root, agentID)
+	}
+	source, ok := s.sourceRef(root, transcript)
+	if !ok {
+		return nil, nil
+	}
+	return []SourceRef{source}, nil
 }
 
 func cursorFindSourceFileInProject(root, projectDir, rawID string) string {
@@ -885,10 +1106,15 @@ func cursorProviderCapabilities() Capabilities {
 			S3Discovery:          CapabilitySupported,
 		},
 		Content: ContentCapabilities{
-			FirstMessage: CapabilitySupported,
-			Thinking:     CapabilitySupported,
-			ToolCalls:    CapabilitySupported,
-			ToolResults:  CapabilitySupported,
+			FirstMessage:     CapabilitySupported,
+			Thinking:         CapabilitySupported,
+			ToolCalls:        CapabilitySupported,
+			ToolResults:      CapabilitySupported,
+			ToolResultEvents: CapabilitySupported,
+		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
 		},
 	}
 }

@@ -3,15 +3,6 @@ name: Desktop Artifacts
 on:
   workflow_call:
   workflow_dispatch:
-    inputs:
-      runner_size:
-        description: Namespace runner size for this trial
-        type: choice
-        default: 16cpu
-        options:
-          - 4cpu
-          - 8cpu
-          - 16cpu
   # Linux AMD64 and Windows builds use Namespace for pushes and all PRs.
   # macOS builds live in desktop-macos-main.yml.
   push:
@@ -27,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}-${{ inputs.runner_size || '16cpu' }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -39,13 +30,13 @@ jobs:
       matrix:
         include:
           - name: Windows
-            os: ${{ format('namespace-profile-windows-{0}', inputs.runner_size || '16cpu') }}
+            os: namespace-profile-windows-8cpu
             bundle: nsis
             target_triple: ""
             artifact_name: agentsview-desktop-windows
             artifact_dir: desktop/src-tauri/target/release/bundle/nsis/
           - name: Linux
-            os: ${{ format('namespace-profile-linux-{0}', inputs.runner_size || '16cpu') }}
+            os: namespace-profile-linux-8cpu
             bundle: appimage
             target_triple: ""
             artifact_name: agentsview-desktop-linux
@@ -63,6 +54,7 @@ jobs:
 
       - uses: ./.github/actions/build-desktop-artifact
         with:
+          namespace-cache: ${{ matrix.name != 'Linux (arm64)' }}
           bundle: ${{ matrix.bundle }}
           target_triple: ${{ matrix.target_triple }}
           artifact_name: ${{ matrix.artifact_name }}

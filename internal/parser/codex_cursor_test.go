@@ -141,12 +141,16 @@ func TestCodexCursorCache(t *testing.T) {
 	})
 
 	t.Run("least recently used bytes are evicted", func(t *testing.T) {
-		cache := newCodexCursorCache(10, 900)
 		path := filepath.Join(t.TempDir(), "rollout.jsonl")
 		first := state
 		first.cwd = strings.Repeat("a", 200)
 		second := state
 		second.cwd = strings.Repeat("b", 200)
+		firstBytes := estimateCodexCursorEntryBytes(newCodexCursorKey(path, 10, 1, 2), first)
+		secondBytes := estimateCodexCursorEntryBytes(newCodexCursorKey(path, 20, 1, 2), second)
+		cache := newCodexCursorCache(
+			10, max(firstBytes, secondBytes)+min(firstBytes, secondBytes)-1,
+		)
 
 		require.True(t, cache.Put(path, 10, 1, 2, first))
 		require.True(t, cache.Put(path, 20, 1, 2, second))
@@ -159,10 +163,11 @@ func TestCodexCursorCache(t *testing.T) {
 	})
 
 	t.Run("oversized entry is rejected without disturbing cache", func(t *testing.T) {
-		cache := newCodexCursorCache(4, 900)
 		path := filepath.Join(t.TempDir(), "rollout.jsonl")
+		maxBytes := estimateCodexCursorEntryBytes(newCodexCursorKey(path, 10, 1, 2), state) + 32
+		cache := newCodexCursorCache(4, maxBytes)
 		oversized := state
-		oversized.cwd = strings.Repeat("x", 901)
+		oversized.cwd = strings.Repeat("x", int(maxBytes)+1)
 
 		require.True(t, cache.Put(path, 10, 1, 2, state))
 		assert.False(t, cache.Put(path, 20, 1, 2, oversized))
@@ -233,7 +238,7 @@ func TestCodexCursorFullParseSeedBoundaries(t *testing.T) {
 		assert.Equal(t, int64(0), sess.File.Size)
 		info, err := os.Stat(path)
 		require.NoError(t, err)
-		inode, device := sourceFileIdentity(info)
+		inode, device := sourceFileIdentityForPath(path, info)
 		_, ok := provider.cursorCache.Get(path, 0, inode, device)
 		assert.True(t, ok)
 	})
@@ -256,7 +261,7 @@ func TestCodexCursorFullParseSeedBoundaries(t *testing.T) {
 		assert.Equal(t, int64(len(content)), sess.File.Size)
 		info, err := os.Stat(path)
 		require.NoError(t, err)
-		inode, device := sourceFileIdentity(info)
+		inode, device := sourceFileIdentityForPath(path, info)
 		_, ok := provider.cursorCache.Get(
 			path, int64(len(content)), inode, device,
 		)
@@ -277,7 +282,7 @@ func TestCodexCursorFullParseSeedBoundaries(t *testing.T) {
 		assert.Equal(t, int64(len(content)), sess.File.Size)
 		info, err := os.Stat(path)
 		require.NoError(t, err)
-		inode, device := sourceFileIdentity(info)
+		inode, device := sourceFileIdentityForPath(path, info)
 		_, ok := provider.cursorCache.Get(
 			path, int64(len(content)), inode, device,
 		)

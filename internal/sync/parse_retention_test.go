@@ -70,75 +70,92 @@ func TestWarmNoopSyncAcquiresNoRetentionLeases(t *testing.T) {
 }
 
 func TestBulkCollectorReleasesFlushedParsedBatch(t *testing.T) {
-	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
-	t.Cleanup(engine.Close)
+	for _, staged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("staged_%t", staged), func(t *testing.T) {
+			engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+			t.Cleanup(engine.Close)
 
-	flushed := make(chan struct{})
-	engine.writeBatchOverride = func(
-		pending []pendingWrite, _ syncWriteMode, _ bool,
-	) (int, int, int, int) {
-		close(flushed)
-		return len(pending), 0, 0, 0
-	}
+			flushed := make(chan struct{})
+			engine.writeBatchOverride = func(
+				pending []pendingWrite, _ syncWriteMode, _ bool,
+			) (int, int, int, int) {
+				close(flushed)
+				return len(pending), 0, 0, 0
+			}
 
-	results := make(chan syncJob, batchSize+1)
-	finalized := make(chan struct{})
-	func() {
-		marker := &parseRetentionFinalizerMarker{}
-		runtime.SetFinalizer(marker, func(*parseRetentionFinalizerMarker) {
-			close(finalized)
+			results := make(chan syncJob, batchSize+1)
+			finalized := make(chan struct{})
+			func() {
+				if staged {
+					sink, err := newCodexStagingSink(t.TempDir(), nil)
+					require.NoError(t, err)
+					runtime.SetFinalizer(sink, func(*codexStagingSink) { close(finalized) })
+					results <- syncJob{
+						staged: sink,
+						results: []parser.ParseResult{{Session: parser.ParsedSession{
+							ID: "first", Agent: parser.AgentCodex,
+						}}},
+					}
+					return
+				}
+				marker := &parseRetentionFinalizerMarker{}
+				runtime.SetFinalizer(marker, func(*parseRetentionFinalizerMarker) {
+					close(finalized)
+				})
+				results <- syncJob{
+					results: []parser.ParseResult{{
+						Session: parser.ParsedSession{
+							ID: "first", Agent: parser.AgentClaude,
+							ClaudeLinearParse: &marker.value,
+						},
+					}}}
+			}()
+			for i := 1; i < batchSize; i++ {
+				results <- syncJob{
+					results: []parser.ParseResult{{
+						Session: parser.ParsedSession{
+							ID:    fmt.Sprintf("session-%d", i),
+							Agent: parser.AgentClaude,
+						},
+					}}}
+			}
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				engine.collectAndBatch(
+					t.Context(), results, batchSize+1, batchSize+1,
+					nil, syncWriteBulk,
+				)
+			}()
+			select {
+			case <-flushed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("collector did not flush the full parsed batch")
+			}
+
+			assert.Eventually(t, func() bool {
+				runtime.GC()
+				runtime.Gosched()
+				select {
+				case <-finalized:
+					return true
+				default:
+					return false
+				}
+			}, 2*time.Second, 10*time.Millisecond,
+				"flushed parsed batch remained live while the collector awaited more results")
+
+			results <- syncJob{err: errors.New("finish")}
+			close(results)
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("collector did not finish")
+			}
 		})
-		results <- syncJob{
-			results: []parser.ParseResult{{
-				Session: parser.ParsedSession{
-					ID: "first", Agent: parser.AgentClaude,
-					ClaudeLinearParse: &marker.value,
-				},
-			}}}
-	}()
-	for i := 1; i < batchSize; i++ {
-		results <- syncJob{
-			results: []parser.ParseResult{{
-				Session: parser.ParsedSession{
-					ID:    fmt.Sprintf("session-%d", i),
-					Agent: parser.AgentClaude,
-				},
-			}}}
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		engine.collectAndBatch(
-			t.Context(), results, batchSize+1, batchSize+1,
-			nil, syncWriteBulk,
-		)
-	}()
-	select {
-	case <-flushed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("collector did not flush the full parsed batch")
-	}
-
-	for range 3 {
-		runtime.GC()
-		runtime.Gosched()
-	}
-	select {
-	case <-finalized:
-	case <-time.After(2 * time.Second):
-		t.Error("flushed parsed batch remained live while the collector awaited more results")
-	}
-
-	results <- syncJob{err: errors.New("finish")}
-	close(results)
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("collector did not finish")
 	}
 }
-
 func TestFullSyncPassUsesBoundedRetentionAndScavengesOnce(t *testing.T) {
 	e, ctx := newWarmBenchEngine(t)
 	var scavenges int
@@ -238,7 +255,9 @@ func TestBulkParseRetentionBudgetScavengesOncePerParseBearingPass(t *testing.T) 
 	budget.scavengeIfNeeded()
 	assert.Zero(t, scavenges, "a pass with no parses must not scavenge")
 
-	lease, err := budget.acquire(t.Context(), 1)
+	lease, err := budget.acquire(
+		t.Context(), parseRetentionScavengeThreshold,
+	)
 	require.NoError(t, err)
 	lease.Release()
 	budget.scavengeIfNeeded()
@@ -255,6 +274,40 @@ func TestBulkParseRetentionBudgetCountsUnknownSourceAtPendingLimit(t *testing.T)
 
 	assert.Equal(t, defaultBulkPendingRetentionBytes, lease.retainedBytes,
 		"an unknown source must not undercount the pending parsed payload")
+}
+
+func TestCollectAndBatchFlushesOnByteCap(t *testing.T) {
+	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	var batchLengths []int
+	engine.writeBatchOverride = func(
+		batch []pendingWrite, _ syncWriteMode, _ bool,
+	) (int, int, int, int) {
+		batchLengths = append(batchLengths, len(batch))
+		return len(batch), 0, 0, 0
+	}
+	results := make(chan syncJob, 2)
+	for i := range 2 {
+		results <- syncJob{
+			path:        fmt.Sprintf("/sessions/large-%d.jsonl", i),
+			sourceBytes: parseBatchBytesLimit,
+			results: []parser.ParseResult{{
+				Session: parser.ParsedSession{
+					ID:    fmt.Sprintf("byte-cap-%d", i),
+					Agent: parser.AgentClaude,
+				},
+			}},
+		}
+	}
+	close(results)
+
+	stats := engine.collectAndBatch(
+		t.Context(), results, 2, 2, nil, syncWriteDefault,
+	)
+
+	assert.Equal(t, []int{1, 1}, batchLengths,
+		"each oversized pending result must flush its own batch")
+	assert.Equal(t, 2, stats.Synced)
 }
 
 func TestParseRetentionBudgetBoundsConcurrentSourceWeight(t *testing.T) {
@@ -578,7 +631,8 @@ func TestCollectAndBatchReportsOrderedBulkFinalization(t *testing.T) {
 	restore := engine.beginBulkRetentionPass()
 	defer restore()
 	budget := engine.retentionBudget()
-	lease, err := budget.acquire(t.Context(), 1)
+	// Parsing a source arms the end-of-pass bulk memory scavenge.
+	lease, err := budget.acquire(t.Context(), parseRetentionScavengeThreshold)
 	require.NoError(t, err)
 
 	scavengeEntered := make(chan struct{})

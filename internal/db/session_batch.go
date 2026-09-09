@@ -30,6 +30,8 @@ type SessionBatchWrite struct {
 	ReplaceMessages   bool
 	// RejectMessageCountDecrease prevents full replacement with fewer messages.
 	RejectMessageCountDecrease bool
+	Checkpoint                 *ParserCheckpoint
+	CheckpointBlobs            *ParserCheckpointBlobs
 }
 
 // SessionWouldShortenError reports a rejected message-count decrease.
@@ -132,6 +134,7 @@ func (db *DB) WriteSessionBatchContext(
 		if err != nil {
 			return result, err
 		}
+		write.Messages, _ = db.ProjectToolResultImages(write.Messages)
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := ctxTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
@@ -220,6 +223,7 @@ func (db *DB) WriteSessionBatchAtomic(
 
 	for i, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
+		write.Messages, _ = db.ProjectToolResultImages(write.Messages)
 		messagesWritten, err := writeOneSessionBatchTx(
 			context.Background(), tx, tx,
 			write,
@@ -613,6 +617,21 @@ func writeOneSessionBatchTx(
 		if err := replaceSecretFindingsTx(queries, write.Session.ID, write.Findings,
 			write.Signals.SecretLeakCount, write.Signals.SecretsRulesVersion); err != nil {
 			return 0, err
+		}
+	}
+	if write.ReplaceMessages {
+		if write.Checkpoint == nil || write.CheckpointBlobs == nil {
+			if err := deleteParserCheckpointTx(tx, write.Session.ID); err != nil {
+				return 0, err
+			}
+		} else {
+			checkpoint := *write.Checkpoint
+			blobs := *write.CheckpointBlobs
+			checkpoint.SessionID = write.Session.ID
+			blobs.SessionID = write.Session.ID
+			if err := upsertParserCheckpointTx(tx, checkpoint, blobs); err != nil {
+				return 0, err
+			}
 		}
 	}
 	if err := enqueueArtifactExportIfGenerationUnchangedTx(

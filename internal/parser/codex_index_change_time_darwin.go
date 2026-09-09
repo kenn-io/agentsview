@@ -7,10 +7,14 @@ import (
 	"syscall"
 )
 
-func codexIndexChangeTime(_ string, info os.FileInfo) (int64, bool) {
+func codexIndexChangeTimeForFile(_ *os.File, info os.FileInfo) (int64, bool) {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return 0, false
 	}
 	return stat.Ctimespec.Sec*1_000_000_000 + stat.Ctimespec.Nsec, true
+}
+
+func codexIndexChangeTime(_ string, info os.FileInfo) (int64, bool) {
+	return codexIndexChangeTimeForFile(nil, info)
 }

@@ -214,6 +214,9 @@ func importEngineConfig(
 		StoredPathResolver:      layout.paths.storedPathResolver(),
 		Ephemeral:               true,
 		BlockedResultCategories: blockedResultCategories,
+		// Recorded working directories belong to the source machine, including
+		// during project metadata preservation after parsing.
+		DisableFilesystemProjectDiscovery: true,
 	}
 }
 

@@ -67,9 +67,10 @@ func TestMessageMutationAdvancesUsageVersion(t *testing.T) {
 				insertSession(t, d, id, "proj")
 			},
 			write: func(t *testing.T, d *DB, id string, changed Message) {
-				require.NoError(t, d.WriteSessionIncremental(
+				_, err := d.WriteSessionIncremental(
 					id, []Message{changed}, IncrementalSessionUpdate{},
-				))
+				)
+				require.NoError(t, err)
 			},
 		},
 		{

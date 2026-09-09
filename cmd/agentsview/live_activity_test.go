@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -149,91 +150,99 @@ func TestLiveActivityIndexedLookupSchedulesRowsWithoutCompleteStat(t *testing.T)
 }
 
 func TestStartLiveActivityRunTracksSyncAndWaitsForStop(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	base := t.TempDir()
-	sessions := filepath.Join(base, "sessions")
-	history := filepath.Join(base, "history.jsonl")
-	rollout := filepath.Join(base, "rollout.jsonl")
-	id := "019f0000-0000-7000-8000-000000000002"
-	now := time.Now()
-	require.NoError(t, os.WriteFile(history, []byte(
-		`{"session_id":"`+id+`","ts":`+
-			strconv.FormatInt(now.Unix(), 10)+
-			`,"text":"private prompt sentinel"}`+"\n",
-	), 0o644))
-	require.NoError(t, os.WriteFile(rollout, []byte("changed"), 0o644))
-	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
-		Roots: []string{sessions},
-	})
-	require.True(t, ok)
-	hints, ok, err := parser.ResolveActivityHintProvider(provider)
-	require.NoError(t, err)
-	require.True(t, ok)
-	sources, err := hints.ActivityHintSources(t.Context())
-	require.NoError(t, err)
-
-	idled := make(chan struct{}, 1)
-	idle := server.NewIdleTracker(20*time.Millisecond, func() {
-		idled <- struct{}{}
-	})
-	go idle.Run(ctx)
-
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	finished := make(chan struct{})
-	trackedSync := trackLiveActivitySync(idle,
-		func(context.Context, []string) error {
-			close(entered)
-			<-release
-			close(finished)
-			return nil
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		base := t.TempDir()
+		sessions := filepath.Join(base, "sessions")
+		history := filepath.Join(base, "history.jsonl")
+		rollout := filepath.Join(base, "rollout.jsonl")
+		id := "019f0000-0000-7000-8000-000000000002"
+		now := time.Now()
+		require.NoError(t, os.WriteFile(history, []byte(
+			`{"session_id":"`+id+`","ts":`+
+				strconv.FormatInt(now.Unix(), 10)+
+				`,"text":"private prompt sentinel"}`+"\n",
+		), 0o644))
+		require.NoError(t, os.WriteFile(rollout, []byte("changed"), 0o644))
+		provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
+			Roots: []string{sessions},
 		})
-	runCtx, runCancel := context.WithCancel(ctx)
-	poller := agentsync.NewLiveActivityPoller(
-		[]agentsync.LiveActivityTarget{{
-			Provider: provider,
-			Hints:    hints,
-			Sources:  sources,
-		}},
-		func(context.Context, string) (agentsync.LiveActivitySource, bool, error) {
-			return agentsync.LiveActivitySource{Path: rollout}, true, nil
-		},
-		trackedSync,
-		nil,
-	)
-	stop := startLiveActivityRun(runCtx, runCancel, poller)
+		require.True(t, ok)
+		hints, ok, err := parser.ResolveActivityHintProvider(provider)
+		require.NoError(t, err)
+		require.True(t, ok)
+		sources, err := hints.ActivityHintSources(t.Context())
+		require.NoError(t, err)
 
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		require.FailNow(t, "tracked sync did not start")
-	}
-	select {
-	case <-idled:
-		require.FailNow(t, "idle callback fired while sync work was active")
-	case <-time.After(3 * 20 * time.Millisecond):
-	}
+		idled := make(chan struct{}, 1)
+		idle := server.NewIdleTracker(20*time.Millisecond, func() {
+			idled <- struct{}{}
+		})
 
-	stopped := make(chan struct{})
-	go func() {
-		stop()
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-		require.FailNow(t, "stop returned before active sync work completed")
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(release)
-	select {
-	case <-finished:
-	case <-time.After(time.Second):
-		require.FailNow(t, "tracked sync did not finish")
-	}
-	select {
-	case <-stopped:
-	case <-time.After(time.Second):
-		require.FailNow(t, "stop did not join the poller goroutine")
-	}
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		finished := make(chan struct{})
+		trackedSync := trackLiveActivitySync(idle,
+			func(context.Context, []string) error {
+				close(entered)
+				<-release
+				close(finished)
+				return nil
+			})
+		runCtx, runCancel := context.WithCancel(ctx)
+		poller := agentsync.NewLiveActivityPoller(
+			[]agentsync.LiveActivityTarget{{
+				Provider: provider,
+				Hints:    hints,
+				Sources:  sources,
+			}},
+			func(context.Context, string) (agentsync.LiveActivitySource, bool, error) {
+				return agentsync.LiveActivitySource{Path: rollout}, true, nil
+			},
+			trackedSync,
+			nil,
+		)
+		stop := startLiveActivityRun(runCtx, runCancel, poller)
+		defer func() {
+			close(release)
+			stop()
+		}()
+
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			require.FailNow(t, "tracked sync did not start")
+		}
+		// Exercise idle suppression only after the sync has acquired its work
+		// lease; slow file reads during startup are not part of this contract.
+		go idle.Run(ctx)
+		select {
+		case <-idled:
+			require.FailNow(t, "idle callback fired while sync work was active")
+		case <-time.After(3 * 20 * time.Millisecond):
+		}
+
+		stopped := make(chan struct{})
+		go func() {
+			stop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+			require.FailNow(t, "stop returned before active sync work completed")
+		case <-time.After(20 * time.Millisecond):
+		}
+		release <- struct{}{}
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			require.FailNow(t, "tracked sync did not finish")
+		}
+		select {
+		case <-stopped:
+		case <-time.After(time.Second):
+			require.FailNow(t, "stop did not join the poller goroutine")
+		}
+	})
 }

@@ -17,6 +17,7 @@
   import { summarizeToolCall, summarizeToolCallPath } from "../../utils/tool-summary.js";
   import { CopyButton, SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
   import { renderMarkdown } from "../../utils/markdown.js";
+  import { displayToolResult } from "../../utils/toolDisplay.js";
 
   interface Props {
     content: string;
@@ -194,14 +195,19 @@
       : userHistoryCollapsed,
   );
 
+  let outputContent = $derived(displayToolResult(toolCall?.result_content ?? ""));
+
   let outputPreviewLine = $derived.by(() => {
-    const rc = toolCall?.result_content;
+    const rc = outputContent;
     if (!rc) return "";
     const nl = rc.indexOf("\n");
     return (nl === -1 ? rc : rc.slice(0, nl)).slice(0, 100);
   });
 
-  let resultEvents = $derived(toolCall?.result_events ?? []);
+  let resultEvents = $derived((toolCall?.result_events ?? []).map((event) => ({
+    ...event,
+    content: displayToolResult(event.content),
+  })));
 
   let historyPreviewLine = $derived.by(() => {
     const last = resultEvents[resultEvents.length - 1];
@@ -538,13 +544,13 @@
         {#if outputMode === "formatted"}
           <div
             class="tool-content output-content formatted-output"
-            use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: toolCall.result_content }}
-            use:highlightCodeFences={{ q: highlightQuery, current: isCurrentHighlight, content: toolCall.result_content }}
+            use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: outputContent }}
+            use:highlightCodeFences={{ q: highlightQuery, current: isCurrentHighlight, content: outputContent }}
           >
-            {@html renderMarkdown(toolCall.result_content)}
+            {@html renderMarkdown(outputContent)}
           </div>
         {:else}
-          <pre class="tool-content output-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: toolCall.result_content }}>{@html escapeHTML(toolCall.result_content)}</pre>
+          <pre class="tool-content output-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: outputContent }}>{@html escapeHTML(outputContent)}</pre>
         {/if}
       {/if}
     {/if}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -70,6 +71,52 @@ func buildAiderResolveSnippet(envVar string) string {
 		parser.AiderDiscoveryMaxFiles(),
 		envVar,
 	)
+}
+
+// buildEvenerResolveSnippet selects semantic transcripts and their optional
+// metadata companions. The state root can also contain credentials and API logs.
+func buildEvenerResolveSnippet() string {
+	return `av_evener_sessions() {
+ [ -d "$1" ] && [ ! -L "$1" ] || return 0
+ for av_evener_file in "$1"/*.transcript.jsonl "$1"/.[!.]*.transcript.jsonl "$1"/..?*.transcript.jsonl; do
+  [ -f "$av_evener_file" ] && [ ! -L "$av_evener_file" ] || continue
+  av_evener_id=${av_evener_file##*/}
+  av_evener_id=${av_evener_id%.transcript.jsonl}
+  case "$av_evener_id" in ''|.|..|*:*|*'\'*) continue;; esac
+  av_evener_phys=$(av_phys_file "$av_evener_file") || continue
+  # tar -T decodes backslash escapes anywhere in a filename.
+  case "$av_evener_phys" in *'\'*) continue;; esac
+  if [ "$av_evener_emitted" -eq 0 ]; then
+   printf '%s\000' "evener:$av_evener_root"
+   av_evener_emitted=1
+  fi
+  printf '%s\000' "@agentfile:evener:$av_evener_phys"
+  av_evener_meta=${av_evener_file%.transcript.jsonl}.meta.json
+  [ -L "$av_evener_meta" ] || av_emit_agent_file evener "$av_evener_meta"
+ done
+}
+av_evener_root=${EVENER_DIR:-}
+if [ -z "$av_evener_root" ]; then
+ case "${XDG_STATE_HOME:-}" in
+  /*) av_evener_root="$XDG_STATE_HOME/evener";;
+  *) av_evener_root="$HOME/.local/state/evener";;
+ esac
+fi
+if [ -d "$av_evener_root" ]; then
+ av_evener_root=$(av_phys_dir "$av_evener_root") || exit 1
+ av_evener_emitted=0
+ case "$av_evener_root" in
+  */sessions) av_evener_sessions "$av_evener_root";;
+  *) av_evener_sessions "$av_evener_root/sessions";;
+ esac
+ if [ ! -L "$av_evener_root/projects" ]; then
+  for av_evener_project in "$av_evener_root/projects"/* "$av_evener_root/projects"/.[!.]* "$av_evener_root/projects"/..?*; do
+   [ -d "$av_evener_project" ] && [ ! -L "$av_evener_project" ] || continue
+   av_evener_sessions "$av_evener_project/sessions"
+  done
+ fi
+fi
+`
 }
 
 // buildResolveScript generates a shell script that echoes each file-based
@@ -351,6 +398,8 @@ func buildResolveScript() string {
 			"av_emit_rooted_dir() { " +
 			"dir=\"$1\"; " +
 			"root=\"$2\"; " +
+			"case \"$dir\" in \"~\") dir=\"$HOME\";; \"~/\"*) dir=\"$HOME/${dir#??}\";; esac; " +
+			"case \"$root\" in \"~\") root=\"$HOME\";; \"~/\"*) root=\"$HOME/${root#??}\";; esac; " +
 			"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root$3\"; " +
 			"[ -n \"$dir\" ] || dir=\"$4\"; " +
 			"av_emit_target \"$5\" \"$dir\"; " +
@@ -365,7 +414,7 @@ func buildResolveScript() string {
 			for _, rel := range def.DefaultDirs {
 				fmt.Fprintf(&b,
 					"av_emit_forbidden_root \"%s\" \"$HOME/%s\"\n",
-					remoteEnvExpansion(def.EnvVar), rel,
+					remoteEnvExpansion(def.EnvVar, def.NativeEnvVar), rel,
 				)
 			}
 			continue
@@ -390,31 +439,35 @@ func buildResolveScript() string {
 			}
 			continue
 		}
+		if def.Type == parser.AgentEvener {
+			b.WriteString(buildEvenerResolveSnippet())
+			continue
+		}
 		for _, rel := range def.DefaultDirs {
 			defaultDir := "$HOME/" + rel
 			if def.Type == parser.AgentHermes {
 				fmt.Fprintf(&b,
 					"av_emit_hermes_dir \"%s\" \"%s\"\n",
-					remoteEnvExpansion(def.EnvVar), defaultDir,
+					remoteEnvExpansion(def.EnvVar, def.NativeEnvVar), defaultDir,
 				)
 				continue
 			}
 			if def.DefaultRootEnvVar != "" {
-				rootTail := remoteDefaultRootTail(rel)
+				rootTail := remoteDefaultRootTail(rel, def.DefaultRootDir)
 				rootSuffix := ""
 				if rootTail != "" {
 					rootSuffix = "/" + rootTail
 				}
 				fmt.Fprintf(&b,
 					"av_emit_rooted_dir \"%s\" \"%s\" \"%s\" \"%s\" %s\n",
-					remoteEnvExpansion(def.EnvVar),
+					remoteEnvExpansion(def.EnvVar, def.NativeEnvVar),
 					remoteEnvExpansion(def.DefaultRootEnvVar),
 					rootSuffix, defaultDir, string(def.Type),
 				)
 			} else {
 				fmt.Fprintf(&b,
 					"av_emit_dir \"%s\" \"%s\" %s\n",
-					remoteEnvExpansion(def.EnvVar), defaultDir,
+					remoteEnvExpansion(def.EnvVar, def.NativeEnvVar), defaultDir,
 					string(def.Type),
 				)
 			}
@@ -433,7 +486,7 @@ func buildResolveScript() string {
 			fmt.Fprintf(&b,
 				"if [ -z \"%s\" ]; then "+
 					"av_emit_hermes_profiles \"$HOME/.hermes/profiles\"; fi\n",
-				remoteEnvExpansion(def.EnvVar),
+				remoteEnvExpansion(def.EnvVar, def.NativeEnvVar),
 			)
 		}
 	}
@@ -443,11 +496,14 @@ func buildResolveScript() string {
 	return b.String()
 }
 
-func remoteEnvExpansion(envVar string) string {
-	if envVar == "" {
-		return ""
+func remoteEnvExpansion(envVars ...string) string {
+	value := ""
+	for _, envVar := range slices.Backward(envVars) {
+		if envVar != "" {
+			value = "${" + envVar + ":-" + value + "}"
+		}
 	}
-	return "${" + envVar + ":-}"
+	return value
 }
 
 // BuildResolveScriptForTest exposes the SSH resolver script to
@@ -456,8 +512,11 @@ func BuildResolveScriptForTest() string {
 	return buildResolveScript()
 }
 
-func remoteDefaultRootTail(rel string) string {
+func remoteDefaultRootTail(rel, defaultRoot string) string {
 	cleaned := path.Clean(rel)
+	if defaultRoot != "" {
+		return strings.TrimPrefix(cleaned, path.Clean(defaultRoot)+"/")
+	}
 	if _, tail, ok := strings.Cut(cleaned, "/"); ok && tail != "" {
 		return tail
 	}
@@ -578,6 +637,10 @@ func parseResolvedTargets(
 		}
 		seen[value] = struct{}{}
 		dirs[at] = append(dirs[at], value)
+	}
+	// Evener roots stay file-scoped even when every filename was rejected.
+	if len(dirs[parser.AgentEvener]) > 0 && len(files[parser.AgentEvener]) == 0 {
+		files[parser.AgentEvener] = []string{}
 	}
 	return dirs, files, extraFiles, forbiddenRoots, nil
 }

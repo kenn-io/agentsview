@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -51,9 +52,10 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 36 // 27 params per row
-	toolCallInsertRowsPerStmt        = 83 // 12 params per row (999/12 = 83)
-	toolResultEventInsertRowsPerStmt = 80 // 12 params per row
+	messageInsertRowsPerStmt         = 36  // 27 params per row
+	toolCallInsertRowsPerStmt        = 83  // 12 params per row (999/12 = 83)
+	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
+	toolCallAgentStateRowsPerStmt    = 166 // 6 params per row
 )
 
 // ToolCall represents a single tool invocation stored in
@@ -92,6 +94,393 @@ type ToolResultEvent struct {
 	ContentLength     int    `json:"content_length"`
 	Timestamp         string `json:"timestamp,omitempty"`
 	EventIndex        int    `json:"event_index"`
+	// Raw metadata is captured before sanitization or blocked-content removal.
+	// NULL metadata on an older archive cannot reconstruct provider identity.
+	RawContentDigest    []byte `json:"-"`
+	SummaryParticipates *bool  `json:"-"`
+}
+
+// ErrToolResultMetadataMissing requires reparsing a source before appending
+// results to a call whose archived events predate raw result metadata.
+var ErrToolResultMetadataMissing = errors.New("tool result raw metadata missing")
+
+const toolResultMetadataMissingSQL = `SELECT EXISTS (
+	SELECT 1 FROM tool_result_events
+	WHERE session_id = ? AND tool_call_message_ordinal = ? AND call_index = ?
+	  AND (summary_participates IS NULL OR raw_content_digest IS NULL) = 1
+)`
+
+// HasMissingToolResultMetadata reports whether a target call needs a source
+// reparse before late results can be deduplicated by their raw provider bytes.
+// Each target probes the metadata index; unrelated calls are not scanned.
+func (db *DB) HasMissingToolResultMetadata(
+	ctx context.Context, sessionID string, positions []ToolCallPosition,
+) (bool, error) {
+	for _, position := range positions {
+		var missing bool
+		if err := db.getReader().QueryRowContext(ctx, toolResultMetadataMissingSQL,
+			sessionID, position.MessageOrdinal, position.CallIndex,
+		).Scan(&missing); err != nil {
+			return false, fmt.Errorf("checking tool result metadata for %s/%s: %w",
+				sessionID, formatToolCallPosition(position), err)
+		}
+		if missing {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// PrepareToolResultEvent records provider identity and summary participation
+// while Content still contains raw provider bytes. Call this before sanitizing
+// or blanking newly parsed events, never to infer metadata for archived rows.
+func PrepareToolResultEvent(event *ToolResultEvent) {
+	if event.RawContentDigest == nil {
+		// Hash in bounded chunks: converting a large result string directly
+		// to []byte allocates a second payload on the serialized write path.
+		h := sha256.New()
+		var chunk [4096]byte
+		for content := event.Content; len(content) > 0; {
+			n := copy(chunk[:], content)
+			_, _ = h.Write(chunk[:n])
+			content = content[n:]
+		}
+		event.RawContentDigest = h.Sum(nil)
+	}
+	if event.SummaryParticipates == nil {
+		event.SummaryParticipates = new(strings.TrimSpace(event.Content) != "")
+	}
+}
+
+func formatToolCallPosition(position ToolCallPosition) string {
+	return fmt.Sprintf("%d/%d", position.MessageOrdinal, position.CallIndex)
+}
+
+// summarizeToolCallFromStateTx assembles the result summary for one tool
+// call from the per-call agent state table. Participation was captured on
+// the raw events, before content sanitization or category blocking. Reading
+// only the distinct agents avoids rescanning the call's event history on
+// each late update.
+func summarizeToolCallFromStateTx(
+	tx *sql.Tx, sessionID string, position ToolCallPosition,
+) (string, error) {
+	rows, err := tx.Query(
+		`SELECT s.agent_id, e.content
+		 FROM tool_call_occurrence_agent_state s
+		 JOIN tool_result_events e
+		   ON e.session_id = s.session_id
+		  AND e.tool_call_message_ordinal = s.message_ordinal
+		  AND e.call_index = s.call_index
+		  AND e.event_index = s.latest_event_index
+		 WHERE s.session_id = ? AND s.message_ordinal = ? AND s.call_index = ?
+		 ORDER BY s.first_event_index`,
+		sessionID, position.MessageOrdinal, position.CallIndex,
+	)
+	if err != nil {
+		return "", fmt.Errorf(
+			"loading agent state for %s/%s: %w",
+			sessionID, formatToolCallPosition(position), err,
+		)
+	}
+	var orderedAgents []string
+	latest := make(map[string]string)
+	lastAnon := ""
+	hasAnon := false
+	for rows.Next() {
+		var agentID, content string
+		if err := rows.Scan(&agentID, &content); err != nil {
+			_ = rows.Close()
+			return "", fmt.Errorf(
+				"scanning agent state for %s/%s: %w",
+				sessionID, formatToolCallPosition(position), err,
+			)
+		}
+		if agentID == "" {
+			hasAnon = true
+			lastAnon = content
+			continue
+		}
+		if _, ok := latest[agentID]; !ok {
+			orderedAgents = append(orderedAgents, agentID)
+		}
+		latest[agentID] = content
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return "", fmt.Errorf(
+			"reading agent state for %s/%s: %w",
+			sessionID, formatToolCallPosition(position), err,
+		)
+	}
+	if err := rows.Close(); err != nil {
+		return "", fmt.Errorf(
+			"closing agent state for %s/%s: %w",
+			sessionID, formatToolCallPosition(position), err,
+		)
+	}
+	if len(latest) <= 1 {
+		if len(latest) == 1 {
+			var summary string
+			for _, content := range latest {
+				summary = content
+			}
+			if hasAnon {
+				return summary + "\n\n" + lastAnon, nil
+			}
+			return summary, nil
+		}
+		return lastAnon, nil
+	}
+	parts := make([]string, 0, len(orderedAgents))
+	for _, agentID := range orderedAgents {
+		parts = append(parts, agentID+":\n"+latest[agentID])
+	}
+	if hasAnon {
+		parts = append(parts, lastAnon)
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// summarizeToolCallLengthFromStateTx returns the byte length of the summary
+// summarizeToolCallFromStateTx would assemble, without materializing the
+// contents. Blocked-category rows store blank content but keep their
+// content_length, so this reconstructs the original summary length — agent
+// labels and separators included — instead of the zero the blanked display
+// summary would report. It must stay structurally identical to
+// summarizeToolCallFromStateTx: a change to either assembly rule must update
+// both.
+func summarizeToolCallLengthFromStateTx(
+	tx *sql.Tx, sessionID string, position ToolCallPosition,
+) (int, error) {
+	rows, err := tx.Query(
+		`SELECT s.agent_id, e.content_length
+		 FROM tool_call_occurrence_agent_state s
+		 JOIN tool_result_events e
+		   ON e.session_id = s.session_id
+		  AND e.tool_call_message_ordinal = s.message_ordinal
+		  AND e.call_index = s.call_index
+		  AND e.event_index = s.latest_event_index
+		 WHERE s.session_id = ? AND s.message_ordinal = ? AND s.call_index = ?
+		 ORDER BY s.first_event_index`,
+		sessionID, position.MessageOrdinal, position.CallIndex,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"loading agent state lengths for %s/%s: %w",
+			sessionID, formatToolCallPosition(position), err,
+		)
+	}
+	var orderedAgents []string
+	latest := make(map[string]int)
+	lastAnonLen := 0
+	hasAnon := false
+	for rows.Next() {
+		var agentID string
+		var contentLength int
+		if err := rows.Scan(&agentID, &contentLength); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf(
+				"scanning agent state lengths for %s/%s: %w",
+				sessionID, formatToolCallPosition(position), err,
+			)
+		}
+		if agentID == "" {
+			hasAnon = true
+			lastAnonLen = contentLength
+			continue
+		}
+		if _, ok := latest[agentID]; !ok {
+			orderedAgents = append(orderedAgents, agentID)
+		}
+		latest[agentID] = contentLength
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, fmt.Errorf(
+			"reading agent state lengths for %s/%s: %w",
+			sessionID, formatToolCallPosition(position), err,
+		)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf(
+			"closing agent state lengths for %s/%s: %w",
+			sessionID, formatToolCallPosition(position), err,
+		)
+	}
+	switch {
+	case len(latest) == 0:
+		return lastAnonLen, nil
+	case len(latest) == 1:
+		var total int
+		for _, length := range latest {
+			total = length
+		}
+		if hasAnon {
+			total += 2 + lastAnonLen
+		}
+		return total, nil
+	default:
+		total := 0
+		for _, agentID := range orderedAgents {
+			total += len(agentID) + 2 + latest[agentID]
+		}
+		total += 2 * (len(orderedAgents) - 1)
+		if hasAnon {
+			total += 2 + lastAnonLen
+		}
+		return total, nil
+	}
+}
+
+// backfillToolCallAgentStateTx rebuilds the per-call agent state rows
+// from the stored events. It runs once per call for sessions written
+// before the state table existed or through the staged publish; after
+// that, every late result update reads only the state table.
+func backfillToolCallAgentStateTx(
+	tx *sql.Tx, sessionID string, position ToolCallPosition,
+) error {
+	var missing bool
+	if err := tx.QueryRow(toolResultMetadataMissingSQL,
+		sessionID, position.MessageOrdinal, position.CallIndex,
+	).Scan(&missing); err != nil {
+		return fmt.Errorf("checking tool result metadata: %w", err)
+	}
+	if missing {
+		return ErrToolResultMetadataMissing
+	}
+	messageOrdinal := position.MessageOrdinal
+	callIndex := position.CallIndex
+	rows, err := tx.Query(
+		`SELECT COALESCE(agent_id, ''), event_index
+		 FROM tool_result_events
+		 WHERE session_id = ? AND tool_call_message_ordinal = ?
+		   AND call_index = ?
+		   AND (summary_participates IS NULL OR raw_content_digest IS NULL) = 0
+		   AND summary_participates = 1
+		 ORDER BY event_index, id`,
+		sessionID, messageOrdinal, callIndex,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"backfilling agent state for %s/%s: %w",
+			sessionID, formatToolCallPosition(position), err,
+		)
+	}
+	type stateRow struct {
+		firstIndex  int
+		latestIndex int
+	}
+	latest := make(map[string]stateRow)
+	for rows.Next() {
+		var agentID string
+		var eventIndex int
+		if err := rows.Scan(
+			&agentID, &eventIndex,
+		); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf(
+				"backfill scan for %s/%s: %w",
+				sessionID, formatToolCallPosition(position), err,
+			)
+		}
+		key := strings.TrimSpace(agentID)
+		entry, ok := latest[key]
+		if !ok {
+			entry.firstIndex = eventIndex
+		}
+		entry.latestIndex = eventIndex
+		latest[key] = entry
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf(
+			"backfill read for %s/%s: %w",
+			sessionID, formatToolCallPosition(position), err,
+		)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf(
+			"backfill close for %s/%s: %w",
+			sessionID, formatToolCallPosition(position), err,
+		)
+	}
+	args := make([]any, 0, len(latest)*6)
+	for key, entry := range latest {
+		args = append(args,
+			sessionID, position.MessageOrdinal, position.CallIndex, key,
+			entry.firstIndex, entry.latestIndex,
+		)
+	}
+	for chunk := range slices.Chunk(args, toolCallAgentStateRowsPerStmt*6) {
+		if _, err := tx.Exec(
+			`INSERT INTO tool_call_occurrence_agent_state
+				(session_id, message_ordinal, call_index, agent_id,
+				 first_event_index, latest_event_index)
+			 VALUES `+multiRowPlaceholders(len(chunk)/6, 6)+`
+			 ON CONFLICT(session_id, message_ordinal, call_index, agent_id)
+			 DO UPDATE SET latest_event_index = excluded.latest_event_index`,
+			chunk...,
+		); err != nil {
+			return fmt.Errorf(
+				"backfilling tool_call_agent_state (%d rows): %w",
+				len(chunk)/6, err,
+			)
+		}
+	}
+	return nil
+}
+
+// SummarizeToolResultEvents derives the display result stored on a tool call
+// from its chronological result events. Anonymous events use the latest
+// content; agent-scoped events keep the latest content for each agent.
+func SummarizeToolResultEvents(events []ToolResultEvent) string {
+	if len(events) == 0 {
+		return ""
+	}
+	type agentSummary struct {
+		content string
+	}
+	latestByAgent := map[string]agentSummary{}
+	orderedAgents := make([]string, 0, len(events))
+	lastAnon := ""
+	allHaveAgentID := true
+	for _, ev := range events {
+		if strings.TrimSpace(ev.Content) == "" {
+			continue
+		}
+		agentID := strings.TrimSpace(ev.AgentID)
+		if agentID == "" {
+			allHaveAgentID = false
+			lastAnon = ev.Content
+			continue
+		}
+		if _, ok := latestByAgent[agentID]; !ok {
+			latestByAgent[agentID] = agentSummary{content: ev.Content}
+			orderedAgents = append(orderedAgents, agentID)
+			continue
+		}
+		entry := latestByAgent[agentID]
+		entry.content = ev.Content
+		latestByAgent[agentID] = entry
+	}
+	if len(latestByAgent) <= 1 {
+		if len(latestByAgent) == 1 {
+			summary := latestByAgent[orderedAgents[0]].content
+			if lastAnon != "" {
+				return summary + "\n\n" + lastAnon
+			}
+			return summary
+		}
+		return lastAnon
+	}
+	parts := make([]string, 0, len(orderedAgents))
+	for _, agentID := range orderedAgents {
+		parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
+	}
+	if !allHaveAgentID && lastAnon != "" {
+		parts = append(parts, lastAnon)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // Message represents a row in the messages table.
@@ -351,6 +740,7 @@ func roleFilterClause(roles []string) (string, []any) {
 func (db *DB) GetAllMessages(
 	ctx context.Context, sessionID string,
 ) ([]Message, error) {
+	db.messagesLoadCount.Add(1)
 	rows, err := db.getReader().QueryContext(ctx, fmt.Sprintf(`
 		SELECT %s
 		FROM messages
@@ -886,7 +1276,7 @@ func insertToolCallsChunkTx(
 func insertToolResultEventsChunkTx(
 	tx transactionQueries, rows []toolResultEventRow,
 ) error {
-	args := make([]any, 0, len(rows)*12)
+	args := make([]any, 0, len(rows)*14)
 	for _, r := range rows {
 		args = append(args,
 			r.SessionID, r.MessageOrdinal, r.CallIndex,
@@ -898,6 +1288,7 @@ func insertToolResultEventsChunkTx(
 			r.Event.ContentLength,
 			nilIfEmpty(r.Event.Timestamp),
 			r.Event.EventIndex,
+			r.Event.RawContentDigest, r.Event.SummaryParticipates,
 		)
 	}
 	query := `
@@ -905,13 +1296,57 @@ func insertToolResultEventsChunkTx(
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, agent_id, subagent_session_id,
 			 source, status, content, content_length,
-			 timestamp, event_index)
-		VALUES ` + multiRowPlaceholders(len(rows), 12)
+			 timestamp, event_index, raw_content_digest, summary_participates)
+		VALUES ` + multiRowPlaceholders(len(rows), 14)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_result_events batch (%d rows): %w",
 			len(rows), err,
 		)
+	}
+	return nil
+}
+
+// upsertToolCallAgentStateRows mirrors the inserted events into the
+// per-call agent state table as event coordinates: the latest event per
+// trimmed agent key in first-write order, so incremental summary
+// recomputation never rescans a call's full event history and never
+// duplicates event content. Participation follows the original provider
+// content, even when the stored bytes have since been stripped or blanked.
+func upsertToolCallAgentStateRows(
+	tx transactionQueries, rows []toolResultEventRow,
+) error {
+	for chunk := range slices.Chunk(rows, toolCallAgentStateRowsPerStmt) {
+		args := make([]any, 0, len(chunk)*6)
+		for _, r := range chunk {
+			if r.Event.SummaryParticipates == nil || !*r.Event.SummaryParticipates {
+				continue
+			}
+			args = append(args,
+				r.SessionID,
+				r.MessageOrdinal,
+				r.CallIndex,
+				strings.TrimSpace(r.Event.AgentID),
+				r.Event.EventIndex,
+				r.Event.EventIndex,
+			)
+		}
+		if len(args) == 0 {
+			continue
+		}
+		query := `
+			INSERT INTO tool_call_occurrence_agent_state
+				(session_id, message_ordinal, call_index, agent_id,
+				 first_event_index, latest_event_index)
+			VALUES ` + multiRowPlaceholders(len(args)/6, 6) + `
+			ON CONFLICT(session_id, message_ordinal, call_index, agent_id)
+			DO UPDATE SET latest_event_index = excluded.latest_event_index`
+		if _, err := tx.Exec(query, args...); err != nil {
+			return fmt.Errorf(
+				"upserting tool_call_agent_state (%d rows): %w",
+				len(args)/6, err,
+			)
+		}
 	}
 	return nil
 }
@@ -963,6 +1398,7 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
+	msgs, _ = db.ProjectToolResultImages(msgs)
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -1058,9 +1494,114 @@ func writeMessagesTx(tx *sql.Tx, msgs []Message) error {
 	return nil
 }
 
+// WriteSessionIncremental applies an incremental delta in one transaction:
+// appended messages, tool-result updates, session metadata, the parser
+// checkpoint, and — when update.SignalMaintainer is set and accepts the
+// delta — the incremental signal/secret maintenance. The returned bool
+// reports whether signals were maintained inside the transaction; when
+// false the session's signal version was invalidated and the caller must
+// schedule the debounced full recompute.
+func applyMessageTokenUsageUpdateTx(
+	tx *sql.Tx, sessionID string, update MessageTokenUsageUpdate,
+) (bool, error) {
+	var role, tokenUsage string
+	var contextTokens, outputTokens int
+	var hasContextTokens, hasOutputTokens bool
+	if err := tx.QueryRow(
+		`SELECT role, token_usage, context_tokens, output_tokens,
+		        has_context_tokens, has_output_tokens
+		 FROM messages
+		 WHERE session_id = ? AND ordinal = ?`,
+		sessionID, update.Ordinal,
+	).Scan(
+		&role, &tokenUsage, &contextTokens, &outputTokens,
+		&hasContextTokens, &hasOutputTokens,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf(
+				"message usage target %s/%d does not exist",
+				sessionID, update.Ordinal,
+			)
+		}
+		return false, fmt.Errorf(
+			"loading message usage target %s/%d: %w",
+			sessionID, update.Ordinal, err,
+		)
+	}
+	if role != string(parser.RoleAssistant) {
+		return false, fmt.Errorf(
+			"message usage target %s/%d has role %q",
+			sessionID, update.Ordinal, role,
+		)
+	}
+
+	incomingUsage := string(update.TokenUsage)
+	if tokenUsage == incomingUsage &&
+		contextTokens == update.ContextTokens &&
+		outputTokens == update.OutputTokens &&
+		hasContextTokens == update.HasContextTokens &&
+		hasOutputTokens == update.HasOutputTokens {
+		return false, nil
+	}
+	if tokenUsage != "" {
+		return false, fmt.Errorf(
+			"message usage target %s/%d already has different usage",
+			sessionID, update.Ordinal,
+		)
+	}
+
+	result, err := tx.Exec(
+		`UPDATE messages
+		 SET token_usage = ?, context_tokens = ?, output_tokens = ?,
+		     has_context_tokens = ?, has_output_tokens = ?
+		 WHERE session_id = ? AND ordinal = ? AND token_usage = ''`,
+		incomingUsage,
+		update.ContextTokens,
+		update.OutputTokens,
+		update.HasContextTokens,
+		update.HasOutputTokens,
+		sessionID,
+		update.Ordinal,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"updating message usage target %s/%d: %w",
+			sessionID, update.Ordinal, err,
+		)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf(
+			"reading message usage update result %s/%d: %w",
+			sessionID, update.Ordinal, err,
+		)
+	}
+	if rows != 1 {
+		return false, fmt.Errorf(
+			"message usage target %s/%d changed concurrently",
+			sessionID, update.Ordinal,
+		)
+	}
+	return true, nil
+}
+
 func (db *DB) WriteSessionIncremental(
 	sessionID string, msgs []Message, update IncrementalSessionUpdate,
-) error {
+) (bool, error) {
+	if err := db.requireWritable(); err != nil {
+		return false, err
+	}
+	msgs, _ = db.ProjectToolResultImages(msgs)
+	if db.ToolResultImages() == config.ToolResultImagesDrop {
+		update.SubagentLinks = append([]ToolCallSubagentLink(nil), update.SubagentLinks...)
+		for i := range update.SubagentLinks {
+			content, _ := StripToolResultImages(update.SubagentLinks[i].ResultContent)
+			update.SubagentLinks[i].ResultContent = content
+			update.SubagentLinks[i].ResultContentLen = ResolveResultContentLength(
+				content, update.SubagentLinks[i].ResultContentLen,
+			)
+		}
+	}
 	t := time.Now()
 	defer func() {
 		if d := time.Since(t); d > slowOpThreshold {
@@ -1076,42 +1617,107 @@ func (db *DB) WriteSessionIncremental(
 
 	tx, err := db.getWriter().Begin()
 	if err != nil {
-		return fmt.Errorf("beginning incremental write tx: %w", err)
+		return false, fmt.Errorf("beginning incremental write tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if err := writeMessagesTx(tx, msgs); err != nil {
-		return err
+		return false, err
 	}
 	transcriptChanged := len(msgs) > 0
+	var updatedMessageUsageOrdinals map[int]struct{}
+	for _, usageUpdate := range update.MessageTokenUsageUpdates {
+		changed, err := applyMessageTokenUsageUpdateTx(
+			tx, sessionID, usageUpdate,
+		)
+		if err != nil {
+			return false, err
+		}
+		if changed {
+			if updatedMessageUsageOrdinals == nil {
+				updatedMessageUsageOrdinals = make(map[int]struct{})
+			}
+			updatedMessageUsageOrdinals[usageUpdate.Ordinal] = struct{}{}
+		}
+		transcriptChanged = transcriptChanged || changed
+	}
 	for _, link := range update.SubagentLinks {
 		changed, err := applyToolCallSubagentLinkTx(
 			tx, sessionID, link, update.BlockedResultCategories,
 		)
 		if err != nil {
-			return err
+			return false, err
 		}
 		transcriptChanged = transcriptChanged || changed
 	}
+	var insertedResultEvents map[ToolCallPosition][]ToolResultEvent
+	for _, resultUpdate := range update.ToolCallResultUpdates {
+		changed, inserted, err := applyToolCallResultUpdateTx(
+			tx, sessionID, resultUpdate,
+			update.BlockedResultCategories, db.ToolResultImages(),
+		)
+		if err != nil {
+			return false, err
+		}
+		transcriptChanged = transcriptChanged || changed
+		if len(inserted) > 0 {
+			if insertedResultEvents == nil {
+				insertedResultEvents = make(map[ToolCallPosition][]ToolResultEvent)
+			}
+			key := resultUpdate.Position
+			insertedResultEvents[key] = append(
+				insertedResultEvents[key], inserted...,
+			)
+		}
+	}
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := updateSessionIncrementalTx(tx, sessionID, update); err != nil {
-		return err
+		return false, err
+	}
+	if update.Checkpoint != nil && update.CheckpointBlobs != nil {
+		if err := upsertParserCheckpointTx(
+			tx, *update.Checkpoint, *update.CheckpointBlobs,
+		); err != nil {
+			return false, err
+		}
 	}
 	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
-		return err
+		return false, err
 	}
-	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
-		return err
+	signalsMaintained := false
+	if update.SignalMaintainer != nil {
+		delta, err := update.SignalMaintainer.MaintainTx(
+			context.Background(), signalTxQuery{
+				tx:                          tx,
+				sessionID:                   sessionID,
+				insertedResultEvents:        insertedResultEvents,
+				updatedMessageUsageOrdinals: updatedMessageUsageOrdinals,
+			},
+		)
+		if err != nil {
+			return false, err
+		}
+		if delta != nil {
+			if err := applySignalDeltaTx(tx, sessionID, *delta); err != nil {
+				return false, err
+			}
+			signalsMaintained = true
+		}
+	}
+	if !signalsMaintained {
+		if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing incremental write tx: %w", err)
+		return false, fmt.Errorf("committing incremental write tx: %w", err)
 	}
 	db.notifyUsageSessions([]string{sessionID})
-	return nil
+	return signalsMaintained, nil
 }
 
 func messageSessionIDs(msgs []Message) []string {
@@ -1198,6 +1804,7 @@ type savedPin struct {
 func (db *DB) ReplaceSessionMessages(
 	sessionID string, msgs []Message,
 ) error {
+	msgs, _ = db.ProjectToolResultImages(msgs)
 	msgs = append([]Message(nil), msgs...)
 	_ = ValidateAndSanitize(nil, msgs, nil)
 
@@ -1458,7 +2065,23 @@ func deleteSessionMessagesTx(tx transactionQueries, sessionID string) error {
 			"deleting old tool_result_events: %w", err,
 		)
 	}
-	return deleteSessionMessageRowsTx(tx, sessionID)
+	if err := deleteSessionMessageRowsTx(tx, sessionID); err != nil {
+		return err
+	}
+	// Machine-local side tables are keyed by session id without foreign
+	// keys; hard deletes must not leave checkpoint, blob, or signal-state
+	// orphans behind.
+	for _, stmt := range []string{
+		"DELETE FROM parser_checkpoints WHERE session_id = ?",
+		"DELETE FROM parser_checkpoint_blobs WHERE session_id = ?",
+		"DELETE FROM session_signal_state WHERE session_id = ?",
+		"DELETE FROM tool_call_occurrence_agent_state WHERE session_id = ?",
+	} {
+		if _, err := tx.Exec(stmt, sessionID); err != nil {
+			return fmt.Errorf("deleting session side rows: %w", err)
+		}
+	}
+	return nil
 }
 
 // ReplaceSessionContent atomically replaces a session's messages, signal
@@ -1468,6 +2091,27 @@ func (db *DB) ReplaceSessionContent(
 	sessionID string, msgs []Message,
 	signals SessionSignalUpdate, findings []SecretFinding,
 ) error {
+	return db.replaceSessionContent(sessionID, msgs, signals, findings, nil, nil)
+}
+
+// ReplaceSessionContentWithCheckpoint replaces a session's content and
+// persists the parser checkpoint in the same transaction, so the archive
+// can never contain committed content whose resume state is missing. The
+// checkpoint params are optional (nil skips the upsert).
+func (db *DB) ReplaceSessionContentWithCheckpoint(
+	sessionID string, msgs []Message,
+	signals SessionSignalUpdate, findings []SecretFinding,
+	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+) error {
+	return db.replaceSessionContent(sessionID, msgs, signals, findings, cp, blobs)
+}
+
+func (db *DB) replaceSessionContent(
+	sessionID string, msgs []Message,
+	signals SessionSignalUpdate, findings []SecretFinding,
+	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+) error {
+	msgs, _ = db.ProjectToolResultImages(msgs)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -1542,6 +2186,28 @@ func (db *DB) ReplaceSessionContent(
 		tx, sessionID, queueGenerationBefore, queueExistedBefore,
 	); err != nil {
 		return err
+	}
+	if cp == nil || blobs == nil {
+		// A full replacement without safe resume state invalidates any
+		// checkpoint for the previous projection. Leaving it behind would
+		// pair a newer committed transcript with an older cursor and hash.
+		if err := deleteParserCheckpointTx(tx, sessionID); err != nil {
+			return err
+		}
+	} else {
+		c := *cp
+		b := *blobs
+		// The checkpoint row is keyed by session id just like the blobs.
+		// The engine may hand in a parser-native id while the write lands
+		// under an idPrefix-rewritten session id; storing the two tables
+		// under different ids would strand the resume state and let a
+		// prefixed session overwrite (or borrow) a local checkpoint that
+		// shares the same native id.
+		c.SessionID = sessionID
+		b.SessionID = sessionID
+		if err := upsertParserCheckpointTx(tx, c, b); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -2061,7 +2727,7 @@ func attachToolResultEventsBatch(
 		SELECT tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id,
 			source, status, content, content_length,
-			timestamp, event_index
+			timestamp, event_index, raw_content_digest, summary_participates
 		FROM tool_result_events
 		WHERE session_id = ? AND tool_call_message_ordinal IN (%s)
 		ORDER BY tool_call_message_ordinal, call_index, event_index`,
@@ -2088,6 +2754,7 @@ func attachToolResultEventsBatch(
 			&toolUseID, &agentID, &subID,
 			&ev.Source, &ev.Status, &ev.Content,
 			&ev.ContentLength, &timestamp, &ev.EventIndex,
+			&ev.RawContentDigest, &ev.SummaryParticipates,
 		); err != nil {
 			return fmt.Errorf("scanning tool_result_event: %w", err)
 		}
@@ -2492,19 +3159,22 @@ func (db *DB) SetToolCallSubagentSession(
 // one stored result event, and nil for every other count, which never
 // dedups. The key is the same triple attachToolResultEvents and
 // ToolCallResultContentSQL use, so every site agrees on which event a
-// summary is compared against. MIN over the single row is its content.
+// summary is compared against. Inspect at most two index entries before
+// loading content so repeated appends do not rescan the event history.
 func soleToolResultEventTx(
 	tx *sql.Tx, sessionID string, messageOrdinal, callIndex int,
 ) ([]ToolResultEvent, error) {
 	var count int
 	var content sql.NullString
 	if err := tx.QueryRow(
-		`SELECT COUNT(*), MIN(content) FROM tool_result_events
-		 WHERE session_id = ?
-		   AND tool_call_message_ordinal = ?
-		   AND call_index = ?`,
+		`SELECT COUNT(*) FROM (
+			SELECT 1 FROM tool_result_events
+			WHERE session_id = ? AND tool_call_message_ordinal = ?
+			  AND call_index = ?
+			LIMIT 2
+		)`,
 		sessionID, messageOrdinal, callIndex,
-	).Scan(&count, &content); err != nil {
+	).Scan(&count); err != nil {
 		return nil, fmt.Errorf(
 			"counting tool result events for %s/%d/%d: %w",
 			sessionID, messageOrdinal, callIndex, err,
@@ -2512,6 +3182,17 @@ func soleToolResultEventTx(
 	}
 	if count != 1 {
 		return nil, nil
+	}
+	if err := tx.QueryRow(
+		`SELECT content FROM tool_result_events
+		 WHERE session_id = ? AND tool_call_message_ordinal = ?
+		   AND call_index = ?`,
+		sessionID, messageOrdinal, callIndex,
+	).Scan(&content); err != nil {
+		return nil, fmt.Errorf(
+			"reading sole tool result event for %s/%d/%d: %w",
+			sessionID, messageOrdinal, callIndex, err,
+		)
 	}
 	return []ToolResultEvent{{Content: content.String}}, nil
 }
@@ -2594,6 +3275,200 @@ func applyToolCallSubagentLinkTx(
 		sessionID, link.ToolUseID,
 	)
 	return err == nil, err
+}
+
+func applyToolCallResultUpdateTx(
+	tx *sql.Tx, sessionID string, update ToolCallResultUpdate,
+	blockedResultCategories map[string]bool,
+	imagePolicy config.ToolResultImages,
+) (bool, []ToolResultEvent, error) {
+	if strings.TrimSpace(update.ToolUseID) == "" || len(update.Events) == 0 {
+		return false, nil, nil
+	}
+
+	position := update.Position
+	var toolCallID int64
+	var category string
+	if err := tx.QueryRow(
+		`SELECT tc.id, tc.category
+		 FROM tool_calls tc
+		 JOIN messages m ON m.id = tc.message_id
+		 WHERE tc.session_id = ? AND m.session_id = tc.session_id AND m.ordinal = ?
+		   AND COALESCE(tc.call_index, 0) = ?
+		   AND COALESCE(tc.tool_use_id, '') = ?`,
+		sessionID, position.MessageOrdinal, position.CallIndex,
+		update.ToolUseID,
+	).Scan(&toolCallID, &category); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil, nil
+		}
+		return false, nil, fmt.Errorf(
+			"checking tool result target for %s/%s: %w",
+			sessionID, update.ToolUseID, err,
+		)
+	}
+
+	// Deduplication probes raw identity directly, and the summary reads
+	// only the call's distinct agents. Full and staged writes initialize
+	// summary state lazily on their first late result, after verifying that
+	// the stored events retain their raw metadata.
+	var stateExists int
+	err := tx.QueryRow(
+		`SELECT 1 FROM tool_call_occurrence_agent_state
+		 WHERE session_id = ? AND message_ordinal = ? AND call_index = ?
+		 LIMIT 1`,
+		sessionID, position.MessageOrdinal, position.CallIndex,
+	).Scan(&stateExists)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, nil, fmt.Errorf(
+			"checking agent state for %s/%s: %w",
+			sessionID, update.ToolUseID, err,
+		)
+	}
+	if err != nil {
+		if err := backfillToolCallAgentStateTx(
+			tx, sessionID, position,
+		); err != nil {
+			return false, nil, err
+		}
+	}
+	var nextEventIndex int
+	if err := tx.QueryRow(
+		`SELECT COALESCE(MAX(event_index), -1) + 1
+		 FROM tool_result_events
+		 WHERE session_id = ? AND tool_call_message_ordinal = ?
+		   AND call_index = ?`,
+		sessionID, position.MessageOrdinal, position.CallIndex,
+	).Scan(&nextEventIndex); err != nil {
+		return false, nil, fmt.Errorf(
+			"reading next event index for %s/%s: %w",
+			sessionID, update.ToolUseID, err,
+		)
+	}
+
+	incoming := append([]ToolResultEvent(nil), update.Events...)
+	for i := range incoming {
+		PrepareToolResultEvent(&incoming[i])
+		if incoming[i].ToolUseID == "" {
+			incoming[i].ToolUseID = update.ToolUseID
+		}
+		if incoming[i].ContentLength == 0 {
+			incoming[i].ContentLength = len(incoming[i].Content)
+		}
+	}
+
+	blocked := blockedResultCategories[category]
+	// Blocked-category content is blanked below and never stored, so it
+	// must skip sanitization: sanitizing first (like the full-parse
+	// pairToolResultEventSummaries path avoids by blanking before its
+	// central validation pass runs) would shrink ContentLength by the
+	// stripped-byte count before the blank overwrites Content, losing the
+	// original result length the full and staged paths both preserve.
+	if !blocked {
+		if imagePolicy == config.ToolResultImagesDrop {
+			for i := range incoming {
+				incoming[i].Content, _ = StripToolResultImages(incoming[i].Content)
+				incoming[i].ContentLength = ResolveResultContentLength(
+					incoming[i].Content, incoming[i].ContentLength,
+				)
+			}
+		}
+		toolCall := ToolCall{ResultEvents: incoming}
+		_ = SanitizeToolCall(&toolCall)
+		incoming = toolCall.ResultEvents
+	}
+
+	insertRows := make([]toolResultEventRow, 0, len(incoming))
+	var inserted []ToolResultEvent
+	for _, candidate := range incoming {
+		stored := candidate
+		if blocked {
+			stored.Content = ""
+		}
+		// Provider identity is captured before bytes are sanitized or blanked.
+		var exists int
+		err := tx.QueryRow(
+			`SELECT 1 FROM tool_result_events
+			 WHERE session_id = ? AND tool_call_message_ordinal = ?
+			   AND call_index = ? AND agent_id IS ? AND status = ?
+			   AND raw_content_digest = ? LIMIT 1`,
+			sessionID, position.MessageOrdinal, position.CallIndex,
+			nilIfEmpty(stored.AgentID), stored.Status, stored.RawContentDigest,
+		).Scan(&exists)
+		if err == nil {
+			continue // equivalent event already stored
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return false, nil, fmt.Errorf(
+				"checking tool result equivalence for %s/%s: %w",
+				sessionID, update.ToolUseID, err,
+			)
+		}
+		stored.EventIndex = nextEventIndex
+		nextEventIndex++
+		inserted = append(inserted, stored)
+		insertRows = append(insertRows, toolResultEventRow{
+			SessionID:      sessionID,
+			MessageOrdinal: position.MessageOrdinal,
+			CallIndex:      position.CallIndex,
+			Event:          stored,
+		})
+	}
+	if len(insertRows) == 0 {
+		return false, nil, nil
+	}
+	if err := insertToolResultEventsTx(tx, insertRows); err != nil {
+		return false, nil, err
+	}
+	if err := upsertToolCallAgentStateRows(tx, insertRows); err != nil {
+		return false, nil, err
+	}
+
+	summary, err := summarizeToolCallFromStateTx(
+		tx, sessionID, position,
+	)
+	if err != nil {
+		return false, nil, err
+	}
+	resultLength, err := summarizeToolCallLengthFromStateTx(
+		tx, sessionID, position,
+	)
+	if err != nil {
+		return false, nil, err
+	}
+	var storedSummary string
+	if !blocked {
+		// Existing events can predate a switch from keep to drop. Project the
+		// assembled summary too, so a late update cannot store their raw images
+		// again. Blocked results retain their original accounting length.
+		if imagePolicy == config.ToolResultImagesDrop {
+			projected, stats := StripToolResultImages(summary)
+			if stats.Payloads > 0 {
+				summary = projected
+				resultLength = len(summary)
+			}
+		}
+
+		sole, err := soleToolResultEventTx(
+			tx, sessionID, position.MessageOrdinal, position.CallIndex,
+		)
+		if err != nil {
+			return false, nil, err
+		}
+		storedSummary = DedupToolCallResultSummary(summary, sole)
+	}
+	if _, err := tx.Exec(
+		`UPDATE tool_calls
+		 SET result_content_length = ?, result_content = ?
+		 WHERE id = ?`,
+		resultLength, storedSummary, toolCallID,
+	); err != nil {
+		return false, nil, fmt.Errorf(
+			"updating tool result summary for %s/%s: %w",
+			sessionID, update.ToolUseID, err,
+		)
+	}
+	return true, inserted, nil
 }
 
 // SystemMessageFingerprint returns the ordered, comma-separated list of

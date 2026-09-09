@@ -11857,6 +11857,79 @@ func TestSyncPathsVSCodeCopilotPersistsUsageEvents(t *testing.T) {
 	assert.Equal(t, "claude-opus-4-8", events[0].Model)
 }
 
+func TestSyncPathsCopilotUsesAssistantOutputFallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := t.TempDir()
+	sessionID := "cccccccc-dddd-eeee-ffff-000000000000"
+	path := filepath.Join(root, "session-state", sessionID, "events.jsonl")
+	dbtest.WriteTestFile(t, path, []byte(strings.Join([]string{
+		`{"type":"session.start","data":{"sessionId":"` + sessionID + `"},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"hi","model":"claude-sonnet-4.6","outputTokens":42},"timestamp":"2026-06-15T10:00:02Z"}`,
+	}, "\n")+"\n"))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCopilot: {root},
+		},
+		Machine: "local",
+	})
+
+	engine.SyncPaths([]string{path})
+
+	events, err := database.GetUsageEvents(t.Context(), "copilot:"+sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, events, "fallback is stored on the assistant message")
+
+	daily, err := database.GetDailyUsage(t.Context(), db.UsageFilter{
+		From:     "2026-06-15",
+		To:       "2026-06-15",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 42, daily.Totals.OutputTokens)
+	assert.Equal(t, []string{"claude-sonnet-4-6"}, daily.Daily[0].ModelsUsed)
+}
+
+func TestSyncPathsCopilotShutdownUsageSuppressesAssistantFallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	root := t.TempDir()
+	sessionID := "dddddddd-eeee-ffff-0000-000000000000"
+	path := filepath.Join(root, "session-state", sessionID, "events.jsonl")
+	dbtest.WriteTestFile(t, path, []byte(strings.Join([]string{
+		`{"type":"session.start","data":{"sessionId":"` + sessionID + `"},"timestamp":"2026-06-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"hello"},"timestamp":"2026-06-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"hi","model":"claude-sonnet-4.6","outputTokens":42},"timestamp":"2026-06-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50}}}},"timestamp":"2026-06-15T10:01:00Z"}`,
+	}, "\n")+"\n"))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCopilot: {root},
+		},
+		Machine: "local",
+	})
+
+	engine.SyncPaths([]string{path})
+
+	daily, err := database.GetDailyUsage(t.Context(), db.UsageFilter{
+		From:     "2026-06-15",
+		To:       "2026-06-15",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 50, daily.Totals.OutputTokens,
+		"authoritative shutdown totals must replace assistant fallback data")
+}
+
 func TestSyncPathsPositronJSONLPriority(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -13744,7 +13817,7 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount)
 }
 
-func TestSyncPathsCodexSameStatInPlaceRewriteUsesContentHash(t *testing.T) {
+func TestSyncPathsCodexSameStatInPlaceRewriteRejectedByCheckpoint(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229f5"
@@ -13788,19 +13861,24 @@ func TestSyncPathsCodexSameStatInPlaceRewriteUsesContentHash(t *testing.T) {
 
 	env.engine.SyncPaths([]string{path})
 
+	// The stored change-time no longer matches after the rewrite, so the
+	// checkpoint no-op path must decline and the engine must re-parse the
+	// rewritten bytes.
 	msgs := fetchMessages(t, env.db, "codex:"+uuid)
 	require.Len(t, msgs, 1)
-	assert.Equal(t, "bravo request", msgs[0].Content)
+	assert.Equal(t, "bravo request", msgs[0].Content,
+		"a same-stat rewrite must be re-parsed, not trusted")
 	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.FileHash)
-	assert.False(t, after.LastWriteIncremental,
-		"same-size rewrite must use a full replacement")
-	assert.NotEqual(t, beforeHash, *after.FileHash)
-	wantHash, err := sync.ComputeFileHash(path)
+	assert.NotEqual(t, beforeHash, *after.FileHash,
+		"the re-parse must refresh the stored hash")
+	cp, ok, err := env.db.GetParserCheckpoint("codex:" + uuid)
 	require.NoError(t, err)
-	assert.Equal(t, wantHash, *after.FileHash)
+	require.True(t, ok)
+	assert.Equal(t, int64(len(original)), cp.Offset,
+		"the rewritten bytes keep the same length, so the offset stays")
 }
 
 func TestSyncAllCodexPathRewriterSameStatRewriteUsesContentHash(t *testing.T) {
@@ -14540,6 +14618,9 @@ func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 		"rollout-20240101-inc-cx-exec.jsonl", initial,
 	)
 	env.engine.SyncAll(context.Background(), nil)
+	before := fetchMessages(t, env.db, "codex:inc-cx-exec")
+	require.Len(t, before, 2)
+	toolMessageID := before[1].ID
 
 	appended := testjsonl.JoinJSONL(
 		testjsonl.CodexFunctionCallOutputJSON(
@@ -14558,9 +14639,31 @@ func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 
 	msgs := fetchMessages(t, env.db, "codex:inc-cx-exec")
 	require.Len(t, msgs, 2)
+	assert.Equal(t, toolMessageID, msgs[1].ID,
+		"result-only append must preserve the existing tool message")
 	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "exec_command", msgs[1].ToolCalls[0].ToolName, "tool name")
-	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent, "result_content")
+	call := msgs[1].ToolCalls[0]
+	assert.Equal(t, "exec_command", call.ToolName, "tool name")
+	assert.Equal(t, "done", call.ResultContent, "result_content")
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "function_call_output", call.ResultEvents[0].Source)
+	assert.Equal(t, "done", call.ResultEvents[0].Content)
+	afterIncremental, err := env.db.GetSessionFull(
+		context.Background(), "codex:inc-cx-exec",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, afterIncremental)
+	assert.True(t, afterIncremental.LastWriteIncremental)
+
+	env.engine.ResyncAll(context.Background(), nil)
+	fullMsgs := fetchMessages(t, env.db, "codex:inc-cx-exec")
+	require.Len(t, fullMsgs, 2)
+	require.Len(t, fullMsgs[1].ToolCalls, 1)
+	fullCall := fullMsgs[1].ToolCalls[0]
+	assert.Equal(t, call.ResultContent, fullCall.ResultContent)
+	assert.Equal(t, call.ResultContentLength, fullCall.ResultContentLength)
+	assert.Equal(t, call.ResultEvents, fullCall.ResultEvents,
+		"incremental and authoritative full parses must store the same events")
 }
 
 func TestIncrementalSync_CodexLateTokenCountRewritesStoredMessage(t *testing.T) {

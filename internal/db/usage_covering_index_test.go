@@ -150,12 +150,15 @@ func TestUsageIndexesMigration(t *testing.T) {
 	require.Equal(t, 1, sessions, "session row must survive migration")
 }
 
-func TestDropAndRebuildUsageMessageIndexes(t *testing.T) {
+func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 	database := testDB(t)
 	usageIndexes := []string{
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
 		"idx_messages_activity_timestamp",
+		"idx_tool_calls_session_tool_use",
+		"idx_tool_result_events_identity",
+		"idx_tool_result_events_summary",
 	}
 	countIndex := func(name string) int {
 		var got int
@@ -169,7 +172,7 @@ func TestDropAndRebuildUsageMessageIndexes(t *testing.T) {
 		require.Equal(t, 1, countIndex(name), "index %s before drop", name)
 	}
 
-	require.NoError(t, database.DropUsageMessageIndexes())
+	require.NoError(t, database.DropBulkImportIndexes())
 	for _, name := range usageIndexes {
 		assert.Equal(t, 0, countIndex(name), "index %s after drop", name)
 	}
@@ -188,7 +191,7 @@ func TestDropAndRebuildUsageMessageIndexes(t *testing.T) {
 		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 
-	require.NoError(t, database.RebuildUsageMessageIndexes())
+	require.NoError(t, database.RebuildBulkImportIndexes())
 	for _, name := range usageIndexes {
 		assert.Equal(t, 1, countIndex(name), "index %s after rebuild", name)
 	}

@@ -11,6 +11,10 @@ const signalsBackfillMarker = "session_quality_signals_v1"
 // SessionSignalUpdate holds computed signal values to persist
 // on the sessions table.
 type SessionSignalUpdate struct {
+	// FullState is optional state computed from the complete message snapshot
+	// being published. The same transaction binds it to the stored revision.
+	// Incremental and asynchronous writers use their own snapshot guards.
+	FullState              *SessionSignalState
 	ToolFailureSignalCount int
 	ToolRetryCount         int
 	EditChurnCount         int
@@ -124,6 +128,25 @@ func updateSessionSignalsTx(
 			"updating session signals for %s: %w",
 			sessionID, err,
 		)
+	}
+	if u.FullState != nil {
+		state := u.FullState
+		// Copy the revision inside SQLite, avoiding a post-commit read and
+		// a second transaction for the same session's derived state.
+		if _, err := tx.Exec(`
+			INSERT INTO session_signal_state
+				(session_id, state, transcript_revision, signal_version, updated_at)
+			SELECT id, ?, transcript_revision, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			FROM sessions WHERE id = ?
+			ON CONFLICT(session_id) DO UPDATE SET
+				state = excluded.state,
+				transcript_revision = excluded.transcript_revision,
+				signal_version = excluded.signal_version,
+				updated_at = excluded.updated_at`,
+			state.State, state.SignalVersion, sessionID,
+		); err != nil {
+			return fmt.Errorf("writing full signal state for %s: %w", sessionID, err)
+		}
 	}
 	return nil
 }

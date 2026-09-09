@@ -1211,3 +1211,181 @@ func TestParseResolvedTargetsDropsNonUTF8TargetRecords(t *testing.T) {
 		dirs[parser.AgentCodex],
 		"valid records in the same output must survive")
 }
+
+func TestResolveEvenerArchivesOnlySessionFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote shell and tar use POSIX paths")
+	}
+	for _, mode := range []string{"default", "xdg", "relative-xdg", "override", "project", "sessions"} {
+		t.Run(mode, func(t *testing.T) {
+			home := physTempDir(t)
+			root := filepath.Join(home, ".local", "state", "evener")
+			env := []string{"HOME=" + home}
+			switch mode {
+			case "xdg":
+				root = filepath.Join(home, "custom state", "evener")
+				env = append(env, "XDG_STATE_HOME="+filepath.Dir(root))
+			case "relative-xdg":
+				env = append(env, "XDG_STATE_HOME=relative")
+			case "override", "project", "sessions":
+				root = filepath.Join(home, "custom evener")
+				env = append(env, "XDG_STATE_HOME="+filepath.Join(home, "unused"))
+			}
+			sessions := filepath.Join(root, "projects", "demo", "sessions")
+			target := root
+			if mode == "project" {
+				target = filepath.Dir(sessions)
+			}
+			if mode == "sessions" {
+				target = sessions
+			}
+			if mode == "override" || mode == "project" || mode == "sessions" {
+				env = append(env, "EVENER_DIR="+target+"/")
+			}
+			write := func(p string) {
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+				require.NoError(t, os.WriteFile(p, []byte("{}\n"), 0o600))
+			}
+			transcript := filepath.Join(sessions, "demo.transcript.jsonl")
+			meta := filepath.Join(sessions, "demo.meta.json")
+			for _, p := range []string{transcript, meta, filepath.Join(root, "credentials.json"), filepath.Join(root, "logs", "bad.transcript.jsonl"), filepath.Join(sessions, "demo.api.jsonl"), filepath.Join(sessions, "orphan.meta.json"), filepath.Join(sessions, "bad:id.transcript.jsonl"), filepath.Join(sessions, "bad\\id.transcript.jsonl")} {
+				write(p)
+			}
+			require.NoError(t, os.Symlink(transcript, filepath.Join(sessions, "linked.transcript.jsonl")))
+			require.NoError(t, os.Symlink(filepath.Dir(sessions), filepath.Join(root, "projects", "linked")))
+			out := runResolveScriptForTest(t, env...)
+			dirs, files, extras, forbidden, _ := parseResolvedTargets(string(out))
+			assert.Equal(t, []string{target}, dirs[parser.AgentEvener])
+			assert.ElementsMatch(t, []string{transcript, meta}, files[parser.AgentEvener])
+			cmd := exec.Command("sh")
+			cmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
+			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, files, extras, forbidden))
+			archive, err := cmd.Output()
+			require.NoError(t, err)
+			assert.ElementsMatch(t, []string{archivePathForTest(transcript), archivePathForTest(meta)}, tarNames(t, archive))
+		})
+	}
+}
+
+func TestResolveEvenerSkipsBackslashPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote shell and tar use POSIX paths")
+	}
+	for _, location := range []string{"project", "root"} {
+		t.Run(location, func(t *testing.T) {
+			home := physTempDir(t)
+			root := filepath.Join(home, "evener")
+			unsafe := filepath.Join(root, "projects", `\056\056\057\056\056\057outside`, "sessions", "demo.transcript.jsonl")
+			outside := filepath.Join(home, "outside", "sessions", "demo.transcript.jsonl")
+			var expected []string
+			files := []string{outside, strings.TrimSuffix(outside, ".transcript.jsonl") + ".meta.json"}
+			if location == "root" {
+				root = filepath.Join(home, `\157utside`)
+				unsafe = filepath.Join(root, "sessions", "demo.transcript.jsonl")
+			} else {
+				ordinary := filepath.Join(root, "sessions", "keep.transcript.jsonl")
+				files = append(files, ordinary)
+				expected = append(expected, archivePathForTest(ordinary))
+			}
+			files = append(files, unsafe, strings.TrimSuffix(unsafe, ".transcript.jsonl")+".meta.json")
+			for _, file := range files {
+				require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o755))
+				require.NoError(t, os.WriteFile(file, []byte("{}\n"), 0o600))
+			}
+			out := runResolveScriptForTest(t, "HOME="+home, "EVENER_DIR="+root)
+			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
+			require.NoError(t, err)
+			cmd := exec.Command("sh")
+			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
+			archive, err := cmd.Output()
+			require.NoError(t, err)
+			assert.ElementsMatch(t, expected, tarNames(t, archive))
+		})
+	}
+}
+
+func TestResolveEvenerInvalidUTF8KeepsFileScope(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote shell and byte-valued filenames use POSIX paths")
+	}
+	for _, name := range []string{"invalid-only", "mixed"} {
+		t.Run(name, func(t *testing.T) {
+			home := physTempDir(t)
+			root := filepath.Join(home, "evener")
+			sessions := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(sessions, 0o755))
+			files := []string{filepath.Join(sessions, "bad\xff.transcript.jsonl"), filepath.Join(root, "credentials.json")}
+			var expected []string
+			if name == "mixed" {
+				valid := filepath.Join(sessions, "demo.transcript.jsonl")
+				files = append(files, valid)
+				expected = append(expected, archivePathForTest(valid))
+			}
+			for _, file := range files {
+				require.NoError(t, os.WriteFile(file, []byte("{}\n"), 0o600))
+			}
+			out := runResolveScriptForTest(t, "HOME="+home, "EVENER_DIR="+root)
+			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
+			require.NoError(t, err)
+			cmd := exec.Command("sh")
+			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
+			archive, err := cmd.Output()
+			require.NoError(t, err)
+			assert.ElementsMatch(t, expected, tarNames(t, archive))
+		})
+	}
+}
+
+func TestResolveEvenerSkipsRootWithoutTranscripts(t *testing.T) {
+	home := physTempDir(t)
+	root := filepath.Join(home, ".local", "state", "evener")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "sessions", "orphan.meta.json"), []byte("{}"), 0o600))
+	out := runResolveScriptForTest(t, "HOME="+home)
+	dirs, files, _, _, _ := parseResolvedTargets(string(out))
+	assert.Empty(t, dirs[parser.AgentEvener])
+	assert.Empty(t, files[parser.AgentEvener])
+}
+
+func TestResolveScriptPiDirectoryOverrides(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
+	for _, tt := range []struct {
+		name       string
+		agentDir   string
+		sessionDir string
+		piDir      string
+		want       string
+	}{
+		{name: "default", want: ".pi/agent/sessions"},
+		{name: "agent home", agentDir: "pi profile", want: "pi profile/sessions"},
+		{name: "session directory", sessionDir: "transcripts", want: "transcripts"},
+		{name: "tilde agent home", agentDir: "~/pi profile", want: "pi profile/sessions"},
+		{name: "tilde session directory", sessionDir: "~/transcripts", want: "transcripts"},
+		{name: "tilde PI_DIR", piDir: "~/explicit", want: "explicit"},
+		{name: "sessions override home", agentDir: "pi profile", sessionDir: "transcripts", want: "transcripts"},
+		{name: "PI_DIR overrides native variables", agentDir: "pi profile", sessionDir: "transcripts", piDir: "explicit", want: "explicit"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := physTempDir(t)
+			env := []string{"HOME=" + home}
+			for key, value := range map[string]string{
+				"PI_CODING_AGENT_DIR":         tt.agentDir,
+				"PI_CODING_AGENT_SESSION_DIR": tt.sessionDir,
+				"PI_DIR":                      tt.piDir,
+			} {
+				if value != "" {
+					envValue := filepath.Join(home, value)
+					if strings.HasPrefix(value, "~") {
+						envValue = value
+					}
+					env = append(env, key+"="+envValue)
+				}
+			}
+			root := filepath.Join(home, tt.want)
+			require.NoError(t, os.MkdirAll(root, 0o755))
+			out := runResolveScriptForTest(t, env...)
+			dirs, _, _ := parseResolvedDirs(string(out))
+			assert.Equal(t, []string{root}, dirs[parser.AgentPi])
+		})
+	}
+}

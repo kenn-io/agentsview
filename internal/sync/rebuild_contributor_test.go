@@ -1298,7 +1298,7 @@ func TestResyncDropsAndRebuildsUsageIndexes(t *testing.T) {
 			rebuildUsageIndexes: func(newDB *db.DB) error {
 				rebuildCalls++
 				duringRebuild = countArchiveUsageIndexes(t, newDB.Path())
-				return newDB.RebuildUsageMessageIndexes()
+				return newDB.RebuildBulkImportIndexes()
 			},
 		},
 	)

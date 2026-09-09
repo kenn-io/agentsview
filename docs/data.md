@@ -89,6 +89,15 @@ The local archive has three separate maintenance paths:
   applies the current result filtering to source-backed sessions that can be
   reparsed. Orphaned and trashed sessions whose source files are gone cannot
   be filtered this way.
+- `tool_result_images = "drop"` removes supported inline `input_image` blocks
+  during future ingestion and full resyncs. `agentsview db strip --images`
+  applies the same projection to existing rows, including parent, trashed, and
+  source-missing sessions selected by its filters. It leaves provider
+  transcripts and standalone image files unchanged. The stored placeholder
+  records version `1`, readable text, media type, decoded byte size, and an
+  empty `sha256` field. Configure this policy in `config.toml`; it is not
+  exposed in desktop Settings or the settings API. The default `keep` policy
+  preserves the existing provider decoding behavior.
 - Transparent compression or deduplication of live tool-result payloads is a
   separate storage-format change and is not part of `db compact`.
 

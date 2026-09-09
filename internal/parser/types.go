@@ -37,6 +37,7 @@ const (
 	AgentTrae           AgentType = "trae"
 	AgentVSCopilot      AgentType = "visualstudio-copilot"
 	AgentPi             AgentType = "pi"
+	AgentTau            AgentType = "tau"
 	AgentPrimeAgent     AgentType = "prime-agent"
 	AgentOMP            AgentType = "omp"
 	AgentQwen           AgentType = "qwen"
@@ -72,6 +73,7 @@ const (
 	AgentShelley        AgentType = "shelley"
 	AgentAider          AgentType = "aider"
 	AgentReasonix       AgentType = "reasonix"
+	AgentEvener         AgentType = "evener"
 	AgentIcodemate      AgentType = "icodemate"
 	AgentRooCode        AgentType = "roocode"
 	AgentPoolside       AgentType = "poolside"
@@ -88,18 +90,19 @@ type AgentDef struct {
 	Type              AgentType
 	DisplayName       string // "Claude Code", "Codex", etc.
 	EnvVar            string // env var for dir override
+	NativeEnvVar      string // native session-dir env var, used when EnvVar is empty
 	DefaultRootEnvVar string // env var that re-roots DefaultDirs before $HOME fallback
-	ConfigKey         string // TOML key in config.toml ("" = none)
-	// HomeConfigKey is the TOML key for an array of alternate agent home
-	// directories ("" = none). Each home re-roots DefaultDirs the same way
-	// DefaultRootEnvVar does, and the derived roots are additive.
-	HomeConfigKey string
-	DefaultDirs   []string // paths relative to $HOME
-	IDPrefix      string   // session ID prefix ("" for Claude)
-	WatchSubdirs  []string // subdirs to watch (nil = watch root)
-	ShallowWatch  bool     // true = watch root only, rely on periodic sync for subdirs
-	FileBased     bool     // false for DB-backed agents
-	Usage         UsageCapabilities
+	DefaultRootDir    string // home-relative prefix replaced by the root env (empty = first component)
+	ConfigKey         string // optional legacy top-level TOML directory key
+	// HomesSupported enables [agents.<id>].homes. Each home re-roots
+	// DefaultDirs the same way DefaultRootEnvVar does; roots are additive.
+	HomesSupported bool
+	DefaultDirs    []string // paths relative to $HOME
+	IDPrefix       string   // session ID prefix ("" for Claude)
+	WatchSubdirs   []string // subdirs to watch (nil = watch root)
+	ShallowWatch   bool     // true = watch root only, rely on periodic sync for subdirs
+	FileBased      bool     // false for DB-backed agents
+	Usage          UsageCapabilities
 	// PostAnswerToolWork marks transcript formats that may emit their
 	// user-facing answer before later tool calls in the same turn.
 	PostAnswerToolWork bool
@@ -146,7 +149,7 @@ var Registry = []AgentDef{
 		EnvVar:            "CLAUDE_PROJECTS_DIR",
 		DefaultRootEnvVar: "CLAUDE_CONFIG_DIR",
 		ConfigKey:         "claude_project_dirs",
-		HomeConfigKey:     "claude_homes",
+		HomesSupported:    true,
 		DefaultDirs:       []string{".claude/projects"},
 		IDPrefix:          "",
 		FileBased:         true,
@@ -177,7 +180,7 @@ var Registry = []AgentDef{
 		EnvVar:            "CODEX_SESSIONS_DIR",
 		DefaultRootEnvVar: "CODEX_HOME",
 		ConfigKey:         "codex_sessions_dirs",
-		HomeConfigKey:     "codex_homes",
+		HomesSupported:    true,
 		DefaultDirs: []string{
 			".codex/sessions",
 			".codex/archived_sessions",
@@ -481,12 +484,25 @@ var Registry = []AgentDef{
 		},
 	},
 	{
-		Type:        AgentPi,
-		DisplayName: "Pi",
-		EnvVar:      "PI_DIR",
-		ConfigKey:   "pi_dirs",
-		DefaultDirs: []string{".pi/agent/sessions"},
-		IDPrefix:    "pi:",
+		Type:              AgentPi,
+		DisplayName:       "Pi",
+		EnvVar:            "PI_DIR",
+		NativeEnvVar:      "PI_CODING_AGENT_SESSION_DIR",
+		DefaultRootEnvVar: "PI_CODING_AGENT_DIR",
+		DefaultRootDir:    ".pi/agent",
+		ConfigKey:         "pi_dirs",
+		HomesSupported:    true,
+		DefaultDirs:       []string{".pi/agent/sessions"},
+		IDPrefix:          "pi:",
+		FileBased:         true,
+	},
+	{
+		Type:        AgentTau,
+		DisplayName: "Tau",
+		EnvVar:      "TAU_SESSIONS_DIR",
+		ConfigKey:   "tau_dirs",
+		DefaultDirs: []string{".tau/sessions"},
+		IDPrefix:    "tau:",
 		FileBased:   true,
 	},
 	{
@@ -896,6 +912,16 @@ var Registry = []AgentDef{
 		PeriodicReconcile: true,
 	},
 	{
+		Type:              AgentEvener,
+		DisplayName:       "Evener",
+		EnvVar:            "EVENER_DIR",
+		ConfigKey:         "evener_dirs",
+		DefaultDirs:       []string{".local/state/evener"},
+		IDPrefix:          "evener:",
+		FileBased:         true,
+		PeriodicReconcile: true,
+	},
+	{
 		Type:         AgentReasonix,
 		DisplayName:  "Reasonix",
 		EnvVar:       "REASONIX_DIR",
@@ -1186,6 +1212,10 @@ type FileInfo struct {
 	Inode  int64
 	Device int64
 	Hash   string
+	// ChangeTime is the change time captured from the same descriptor the
+	// parser read its snapshot from. Zero means the platform could not
+	// provide one; checkpoint consumers then rebuild conservatively.
+	ChangeTime int64
 }
 
 // ParsedSession holds session metadata extracted from a JSONL file.
@@ -1279,6 +1309,38 @@ type ParsedToolCall struct {
 	ResultEvents      []ParsedToolResultEvent
 }
 
+// ParsedToolCallPosition identifies one emitted tool-call occurrence by its
+// stable normalized message ordinal and call index.
+type ParsedToolCallPosition struct {
+	MessageOrdinal int
+	CallIndex      int
+}
+
+// ParsedToolCallUpdate carries result events for a tool call that was parsed
+// before the current append-only chunk. TargetKnown is required for safe
+// incremental application when a provider reuses call IDs.
+type ParsedToolCallUpdate struct {
+	ToolUseID      string
+	MessageOrdinal int
+	CallIndex      int
+	TargetKnown    bool
+	ResultEvents   []ParsedToolResultEvent
+}
+
+// ParsedMessageTokenUsageUpdate carries token metadata for an assistant
+// message that was committed before the current append-only chunk. Codex
+// emits a token_count record immediately after a late tool result, so the
+// target assistant message may not be present in the incremental message
+// slice even though its ordinal is known from the stored transcript.
+type ParsedMessageTokenUsageUpdate struct {
+	Ordinal          int
+	TokenUsage       jsontext.Value
+	ContextTokens    int
+	OutputTokens     int
+	HasContextTokens bool
+	HasOutputTokens  bool
+}
+
 // ParsedToolResult holds metadata about a tool result block in a
 // user message (the response to a prior tool_use).
 type ParsedToolResult struct {
@@ -1290,6 +1352,9 @@ type ParsedToolResult struct {
 // ParsedToolResultEvent is a canonical chronological update attached
 // to a tool call. Used for Codex subagent terminal status updates.
 type ParsedToolResultEvent struct {
+	// RawContentDigest is optional import metadata captured before sanitization.
+	// Sync workers compute it before queuing large bodies for archive writes.
+	RawContentDigest  []byte `json:"-"`
 	ToolUseID         string
 	AgentID           string
 	SubagentSessionID string
@@ -1582,6 +1647,19 @@ type ParseResult struct {
 	Session     ParsedSession
 	Messages    []ParsedMessage
 	UsageEvents []ParsedUsageEvent
+	// Checkpoint is opaque provider continuation state (a parser
+	// checkpoint) that the sync engine persists after this result's
+	// session rows commit, so later appends can resume without rescanning
+	// the transcript prefix. Empty for providers without checkpoints.
+	Checkpoint []byte
+	// CheckpointHashState is the resumable SHA-256 state covering the
+	// parsed snapshot [0, Session.File.Size), captured on the same read
+	// pass as the parse. CheckpointAnchorDigest is the digest of the
+	// snapshot's trailing anchor window. Both are empty for providers
+	// without single-pass hashing; the engine persists them with the
+	// checkpoint so it never re-reads the source after a full parse.
+	CheckpointHashState    []byte
+	CheckpointAnchorDigest string
 }
 
 // InferRelationshipTypes sets RelationshipType on results that have

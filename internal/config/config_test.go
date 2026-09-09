@@ -115,6 +115,41 @@ func TestChartPaletteRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestToolResultImagesConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		toml string
+		want ToolResultImages
+	}{
+		{name: "missing defaults to keep", want: ToolResultImagesKeep},
+		{name: "keep trims and folds", toml: `tool_result_images = " KEEP "`, want: ToolResultImagesKeep},
+		{name: "drop trims and folds", toml: `tool_result_images = " Drop "`, want: ToolResultImagesDrop},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			require.NoError(t, cfg.applyConfigTOML(tt.toml))
+			assert.Equal(t, tt.want, cfg.ToolResultImages)
+		})
+	}
+
+	cfg, err := Default()
+	require.NoError(t, err)
+	require.EqualError(t, cfg.applyConfigTOML(`tool_result_images = "discard"`),
+		`tool_result_images must be "keep" or "drop" (got "discard")`)
+
+	dir := setupTestEnv(t)
+	cfg.DataDir = dir
+	require.NoError(t, cfg.SaveSettings(map[string]any{
+		"tool_result_images": ToolResultImagesDrop,
+	}))
+	assert.Equal(t, ToolResultImagesDrop, cfg.ToolResultImages)
+	loaded, err := LoadMinimal()
+	require.NoError(t, err)
+	assert.Equal(t, ToolResultImagesDrop, loaded.ToolResultImages)
+}
+
 func setTestHome(t *testing.T, home string) {
 	t.Helper()
 	t.Setenv("HOME", home)
@@ -1480,7 +1515,7 @@ func TestLoadFile_MalformedDirValueLogsWarning(t *testing.T) {
 	cfg := f.LoadMinimal(t)
 
 	// The malformed key should trigger a warning.
-	assertLogContains(t, buf, "claude_project_dirs", "expected string array")
+	assertLogContains(t, buf, "agents.claude.dirs", "expected string array")
 
 	// ResolveDirs should return the default (malformed value
 	// was not applied).
@@ -2696,4 +2731,55 @@ func TestDisabledAgentsExplicitEmptyArrayEnablesDefaults(t *testing.T) {
 
 	assert.Empty(t, cfg.DisabledAgents)
 	assert.NotEmpty(t, cfg.ResolveDirs(parser.AgentGemini))
+}
+
+func TestResolveDirs_EvenerPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, override string
+		configured            bool
+	}{
+		{name: "home default"},
+		{name: "XDG state default", state: "state"},
+		{name: "explicit root", state: "state", override: "override", configured: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			// Windows temporary paths may use a short-name alias. Resolve the
+			// existing root before appending the not-yet-created session paths.
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			t.Setenv("XDG_STATE_HOME", "")
+			t.Setenv("EVENER_DIR", "")
+			home, err := os.UserHomeDir()
+			require.NoError(t, err)
+			want := filepath.Join(home, ".local", "state", "evener")
+			if tc.state != "" {
+				state := filepath.Join(root, tc.state)
+				t.Setenv("XDG_STATE_HOME", state)
+				want = filepath.Join(state, "evener")
+			}
+			if tc.override != "" {
+				want = filepath.Join(root, tc.override)
+				t.Setenv("EVENER_DIR", want)
+			}
+			writeConfig(t, dir, map[string]any{})
+			cfg, err := LoadMinimal()
+			require.NoError(t, err)
+			assert.Equal(t, []string{want}, cfg.ResolveDirs(parser.AgentType("evener")))
+			assert.Equal(t, tc.configured, cfg.IsUserConfigured(parser.AgentType("evener")))
+		})
+	}
+	t.Run("config root", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+		t.Setenv("EVENER_DIR", "")
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		want := filepath.Join(root, "sessions")
+		writeConfig(t, dir, map[string]any{"evener_dirs": []string{want}})
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+		assert.Equal(t, []string{want}, cfg.ResolveDirs(parser.AgentType("evener")))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentType("evener")))
+	})
 }

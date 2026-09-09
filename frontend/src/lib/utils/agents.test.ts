@@ -17,6 +17,7 @@ describe("KNOWN_AGENTS", () => {
       "traex",
       "copilot",
       "devin",
+      "evener",
       "gemini",
       "gemini-apps",
       "opencode",
@@ -31,6 +32,7 @@ describe("KNOWN_AGENTS", () => {
       "vscode-copilot",
       "visualstudio-copilot",
       "pi",
+      "tau",
       "prime-agent",
       "qwen",
       "qwenpaw",
@@ -75,6 +77,7 @@ describe("agentColor", () => {
     expect(agentColor("traex")).toBe("var(--accent-coral)");
     expect(agentColor("copilot")).toBe("var(--accent-amber)");
     expect(agentColor("devin")).toBe("var(--accent-red)");
+    expect(agentColor("evener")).toBe("var(--accent-teal)");
     expect(agentColor("gemini")).toBe("var(--accent-rose)");
     expect(agentColor("opencode")).toBe("var(--accent-purple)");
     expect(agentColor("openhands")).toBe("var(--accent-teal)");
@@ -83,6 +86,7 @@ describe("agentColor", () => {
     expect(agentColor("zencoder")).toBe("var(--accent-red)");
     expect(agentColor("zed")).toBe("var(--accent-green)");
     expect(agentColor("pi")).toBe("var(--accent-indigo)");
+    expect(agentColor("tau")).toBe("var(--accent-amber)");
     expect(agentColor("prime-agent")).toBe("var(--accent-indigo)");
     expect(agentColor("qwen")).toBe("var(--accent-cyan)");
     expect(agentColor("qwenpaw")).toBe("var(--accent-cyan)");

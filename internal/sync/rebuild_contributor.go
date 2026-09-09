@@ -90,7 +90,7 @@ type rebuildOperations struct {
 var productionRebuildOperations = rebuildOperations{
 	rebuildFTS: func(database *db.DB) error { return database.RebuildFTS() },
 	rebuildUsageIndexes: func(database *db.DB) error {
-		return database.RebuildUsageMessageIndexes()
+		return database.RebuildBulkImportIndexes()
 	},
 	reopen: func(database *db.DB) error { return database.Reopen() },
 	listActiveWorktreeMappingMachines: func(

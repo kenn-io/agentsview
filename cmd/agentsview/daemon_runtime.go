@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gofrs/flock"
 	"github.com/shirou/gopsutil/v4/process"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -43,7 +42,7 @@ const (
 )
 
 var startProbeTickNanos int64 = int64(defaultStartProbeTick)
-var startLockTryLock = func(lock *flock.Flock) (bool, error) { return lock.TryLock() }
+var tryAcquireStartLock = daemon.RuntimeStore.TryAcquireStartLock
 
 func startProbeTick() time.Duration {
 	return time.Duration(atomic.LoadInt64(&startProbeTickNanos))
@@ -798,8 +797,7 @@ func runtimeRecordHasMismatchedCreateTime(
 }
 
 type heldStartLock struct {
-	path string
-	lock *flock.Flock
+	release func()
 }
 
 var startLocks sync.Map
@@ -824,12 +822,11 @@ func markDaemonStarting(dataDir string) (owned bool, acquired bool) {
 	if _, ok := startLocks.Load(path); ok {
 		return true, false
 	}
-	lock := flock.New(path)
-	locked, err := lock.TryLock()
+	release, locked, err := runtimeStore(dataDir).TryAcquireStartLock(context.Background())
 	if err != nil || !locked {
 		return false, false
 	}
-	startLocks.Store(path, heldStartLock{path: path, lock: lock})
+	startLocks.Store(path, heldStartLock{release: release})
 	return true, true
 }
 
@@ -856,7 +853,7 @@ func UnmarkDaemonStarting(dataDir string) {
 	// file never outlives the "starting" state readers trust it under.
 	removeStartupState(dataDir)
 	held := value.(heldStartLock)
-	_ = held.lock.Unlock()
+	held.release()
 }
 
 func isDaemonStarting(dataDir string) bool {
@@ -873,16 +870,71 @@ func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	if _, ok := startLocks.Load(path); ok {
 		return !external
 	}
-	lock := flock.New(path)
-	locked, err := startLockTryLock(lock)
-	if err != nil {
+	release, locked, err := tryAcquireStartLock(runtimeStore(dataDir), context.Background())
+	if err == nil {
+		if locked {
+			release()
+			return false
+		}
+		// The lock is cleanly, unambiguously held by someone else right now.
+		// That is authoritative on its own: a process can legitimately hold
+		// the lock for a moment before its first startup snapshot write, so
+		// cross-checking a snapshot here could read a still-stale one left
+		// by a *previous*, now-dead holder and wrongly wave through a
+		// concurrent second launch while the real owner is still starting.
 		return true
 	}
-	if locked {
-		_ = lock.Unlock()
+	// An error leaves ownership unknown. Retry for an old snapshot whose
+	// recorded owner is gone, but only successful acquisition permits cleanup.
+	if !orphanedStartupState(dataDir, orphanedStartupStateNow()) {
+		return true
+	}
+	release, recoveryLocked, recoveryErr := tryAcquireStartLock(runtimeStore(dataDir), context.Background())
+	if recoveryErr != nil || !recoveryLocked {
+		return true
+	}
+	// Remove the stale snapshot while still holding the lock we just
+	// verified is free, not after releasing it: unlocking first would leave
+	// a window where a genuinely new holder could acquire the lock and
+	// publish its own fresh snapshot right before this deletes it.
+	removeStartupState(dataDir)
+	release()
+	return false
+}
+
+// orphanedStartupStateGracePeriod is the minimum snapshot age for retrying an
+// ambiguous lock probe. Age and process identity select retry candidates;
+// successful lock acquisition is still required before removing the snapshot.
+const orphanedStartupStateGracePeriod = 10 * time.Second
+
+// orphanedStartupStateNow is overridden in tests.
+var orphanedStartupStateNow = time.Now
+
+// orphanedStartupState reports whether dataDir holds a startup snapshot that
+// is both stale (unwritten for at least orphanedStartupStateGracePeriod) and
+// whose recorded owner is confirmably gone: the pid is not alive, or it is
+// alive but its OS create time explicitly mismatches the snapshot (the pid
+// was recycled by an unrelated process). A missing/unreadable snapshot, one
+// still within the grace period, or one whose owner's create time can't be
+// verified either way, is not evidence of anything and must not self-heal a
+// possibly-genuine in-progress startup.
+func orphanedStartupState(dataDir string, now time.Time) bool {
+	st := readStartupState(dataDir)
+	if st == nil || st.PID <= 0 {
 		return false
 	}
-	return true
+	lastWrite := st.UpdatedAt
+	if lastWrite.IsZero() {
+		lastWrite = st.StartedAt
+	}
+	if lastWrite.IsZero() || now.Sub(lastWrite) < orphanedStartupStateGracePeriod {
+		return false
+	}
+	if !daemon.ProcessAlive(st.PID) {
+		return true
+	}
+	return st.CreateTime != "" &&
+		processCreateTimeStateForPID(st.PID, st.CreateTime) == processCreateTimeMismatch
 }
 
 func isExternalDaemonStarting(dataDir string) bool {

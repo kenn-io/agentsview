@@ -33,6 +33,80 @@ func openTestDB(t *testing.T) *db.DB {
 	return dbtest.OpenTestDB(t)
 }
 
+func TestIncrementalClaudeLateResultLinkScansDefiniteSecret(t *testing.T) {
+	// Assemble the AWS-shaped fixture key at runtime so push protection
+	// does not treat the test source itself as a leaked credential.
+	secret := "AKIA" + "7QHWN2DKR4FYPLJM"
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "proj-a")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	path := filepath.Join(projectDir, "session.jsonl")
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", "2024-01-01T10:00:00Z"),
+		testjsonl.ClaudeAssistantJSON("hi", "2024-01-01T10:00:01Z"),
+		`{"type":"assistant","uuid":"a2","parentUuid":"a1",`+
+			`"timestamp":"2024-01-01T10:00:02Z",`+
+			`"message":{"id":"msg_tool","content":[{"type":"tool_use",`+
+			`"id":"toolu_r","name":"Bash","input":{"command":"ls"}}]}}`,
+	)
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {root},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	ids, err := database.ListSessionIDsByFilePath(path, "claude")
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	sessionID := ids[0]
+
+	appended := `{"type":"user","timestamp":"2024-01-01T10:00:05Z",` +
+		`"uuid":"u2","parentUuid":"a2","message":{"content":[` +
+		`{"type":"tool_result","tool_use_id":"toolu_r",` +
+		`"content":"` + secret + `","is_error":false}]}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	sess, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.True(t, sess.LastWriteIncremental,
+		"the late result must take the incremental path")
+
+	var stored string
+	require.NoError(t, database.Reader().QueryRow(
+		`SELECT COALESCE(result_content, '') FROM tool_calls
+		 WHERE session_id = ? AND tool_use_id = ?`,
+		sessionID, "toolu_r",
+	).Scan(&stored))
+	require.Contains(t, stored, secret,
+		"the late link must update the stored result content")
+
+	findings, err := database.SessionSecretFindings(
+		t.Context(), sessionID,
+	)
+	require.NoError(t, err)
+	found := false
+	for _, finding := range findings {
+		if finding.LocationKind == "tool_result" &&
+			strings.Contains(finding.RedactedMatch, "AKIA") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"a definite secret in a late Claude result link must be reported")
+}
+
 func requireClassifyPaths(
 	t *testing.T, engine *Engine, paths []string,
 ) []parser.DiscoveredFile {
@@ -198,6 +272,39 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 			assert.Equal(t, originalProject, result[0].sess.Project)
 			assert.Equal(t, sessionID, result[0].sess.ID,
 				"snapshot lookup must not mutate the parser session id")
+		})
+	}
+}
+
+func TestPreserveUnavailableSourceProjectsHonorsDiscoveryPolicy(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
+			cwd := t.TempDir()
+			engine := NewEngine(openTestDB(t), EngineConfig{
+				Machine: "source-host", IDPrefix: "source-host~",
+				DisableFilesystemProjectDiscovery: disabled,
+			})
+			t.Cleanup(engine.Close)
+			probes := 0
+			engine.stat = func(path string) (os.FileInfo, error) {
+				assert.Equal(t, cwd, path)
+				probes++
+				return os.Stat(path)
+			}
+			result, err := engine.preserveUnavailableSourceProjects(t.Context(),
+				[]pendingWrite{{sess: parser.ParsedSession{
+					ID: "evener:session", Agent: parser.AgentEvener,
+					Machine: "source-host", Project: "recorded-project", Cwd: cwd,
+				}}},
+			)
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+			assert.Equal(t, "recorded-project", result[0].sess.Project)
+			if disabled {
+				assert.Zero(t, probes)
+			} else {
+				assert.Equal(t, 1, probes)
+			}
 		})
 	}
 }
@@ -6757,12 +6864,13 @@ func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
 				func(
 					_ string,
 					inc *db.IncrementalInfo,
-				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
 					return []parser.ParsedMessage{{
 						Role: parser.RoleAssistant, Content: "appended",
 						Ordinal: inc.NextOrdinal,
-					}}, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil
+					}}, nil, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil, nil
 				},
+				nil, "", nil,
 			)
 			require.True(t, ok)
 			require.NotNil(t, result.incremental)
@@ -6858,10 +6966,11 @@ func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
 		func(
 			_ string,
 			_ *db.IncrementalInfo,
-		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
+		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
 			parseCalled = true
-			return nil, nil, time.Time{}, 0, nil, nil
+			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		},
+		nil, "", nil,
 	)
 	assert.False(t, ok,
 		"legacy snapshots must fall through to a source-aware full parse")
@@ -7894,15 +8003,22 @@ func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
 		},
 	}
 
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
-		Agent:   parser.AgentCodex,
-		Path:    path,
-		Machine: "host",
-	})
-	require.NoError(t, res.err)
-	require.True(t, res.skip)
-	assert.True(t, res.noCacheSkip)
-	assert.Empty(t, e.SnapshotSkipCache())
+	// Missing optimization state must not force an unchanged remote source
+	// through a full parse. Preserve the database freshness skip without
+	// caching it, since remote sources must be content-verified again.
+	stats := e.SyncAll(context.Background(), nil)
+	require.Zero(t, stats.Failed)
+	require.Zero(t, stats.Synced)
+	_, cpOK, cpErr := database.GetParserCheckpoint("host~codex:abc")
+	require.NoError(t, cpErr)
+	require.False(t, cpOK, "an unchanged source must not rebuild its checkpoint")
+
+	stats = e.SyncAll(context.Background(), nil)
+	require.Zero(t, stats.Failed)
+	require.Zero(t, stats.Synced,
+		"the second sync must skip the fresh session")
+	assert.Empty(t, e.SnapshotSkipCache(),
+		"the fresh skip must not be cached")
 }
 
 func TestClassifyCodexIndexPathSkipsMissingTranscript(t *testing.T) {
@@ -8326,6 +8442,7 @@ func TestTryProviderIncrementalAppendPassesPersistedSessionID(t *testing.T) {
 			Size:    info.Size(),
 			MTimeNS: info.ModTime().UnixNano(),
 		},
+		nil, "", nil, nil,
 	)
 
 	require.True(t, applied)
@@ -11209,6 +11326,59 @@ func TestEngine_SyncPathsReasonixPersistsToolResultContent(t *testing.T) {
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "file contents here", msgs[1].ToolCalls[0].ResultContent)
 	assert.Equal(t, len("file contents here"), msgs[1].ToolCalls[0].ResultContentLength)
+}
+
+func TestSyncAllReparsesCursorLegacyToolResultsFromVersion101(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {root},
+		},
+		Machine:                           "local",
+		DisableFilesystemProjectDiscovery: true,
+	})
+	t.Cleanup(engine.Close)
+	const sessionID = "cursor:11111111-2222-4333-8444-555555555555"
+	path := filepath.Join(root, "project-a", "agent-transcripts",
+		"11111111-2222-4333-8444-555555555555.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(
+		"assistant:\n[Tool call] Shell\n  command=ls\n"+
+			"[Tool result]\n  file1.go\n",
+	), 0o644))
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	before, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	require.Len(t, before[0].ToolCalls, 1)
+
+	// Reproduce the archived output of the parser at data version 101,
+	// preserving the source fingerprint and leaving the file unchanged.
+	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec("DELETE FROM tool_result_events WHERE session_id = ?", sessionID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE tool_calls
+			SET result_content = '', result_content_length = 0
+			WHERE session_id = ?`, sessionID)
+		return err
+	}))
+	require.NoError(t, database.SetSessionDataVersion(sessionID, 101))
+
+	stats = engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	assert.False(t, stats.Aborted)
+	messages, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	call := messages[0].ToolCalls[0]
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "file1.go", call.ResultEvents[0].Content)
+	assert.Equal(t, "file1.go", call.ResultContent)
 }
 
 func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {

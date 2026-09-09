@@ -388,3 +388,33 @@ func requireLegacyRepairIndexes(t *testing.T, d *DB) {
 		assert.Equal(t, 1, count, "index %s", name)
 	}
 }
+
+func TestToolResultMetadataMigrationPreservesArchivedEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	_, err = conn.Exec(preParentLegacySchema + `
+ CREATE TABLE tool_result_events (
+ id INTEGER PRIMARY KEY, session_id TEXT NOT NULL,
+ tool_call_message_ordinal INTEGER NOT NULL, call_index INTEGER NOT NULL DEFAULT 0,
+ tool_use_id TEXT, agent_id TEXT, subagent_session_id TEXT, source TEXT NOT NULL,
+ status TEXT NOT NULL, content TEXT NOT NULL, content_length INTEGER NOT NULL DEFAULT 0,
+ timestamp TEXT, event_index INTEGER NOT NULL DEFAULT 0);
+ INSERT INTO sessions(id,project) VALUES ('s1','project-a');
+ INSERT INTO tool_result_events(session_id,tool_call_message_ordinal,source,status,content,content_length)
+ VALUES ('s1',0,'function_call_output','','archived',8);`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	for range 2 {
+		d, err := Open(path)
+		require.NoError(t, err)
+		var content string
+		var digest []byte
+		var participates *bool
+		require.NoError(t, d.Reader().QueryRow(`SELECT content, raw_content_digest, summary_participates FROM tool_result_events WHERE session_id='s1'`).Scan(&content, &digest, &participates))
+		assert.Equal(t, "archived", content)
+		assert.Nil(t, digest, "migration cannot recover the original bytes")
+		assert.Nil(t, participates, "missing raw metadata remains explicit")
+		require.NoError(t, d.Close())
+	}
+}

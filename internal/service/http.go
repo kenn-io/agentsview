@@ -454,6 +454,12 @@ func (b *httpBackend) Search(
 	if req.Project != "" {
 		q.Set("project", req.Project)
 	}
+	if req.DateFrom != "" {
+		q.Set("date_from", req.DateFrom)
+	}
+	if req.DateTo != "" {
+		q.Set("date_to", req.DateTo)
+	}
 	if req.Sort != "" {
 		q.Set("sort", req.Sort)
 	}

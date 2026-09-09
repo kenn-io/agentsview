@@ -5416,6 +5416,8 @@ func TestHandleSyncSession_InvalidJSON(t *testing.T) {
 
 func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 	te := setup(t)
+	require.NoError(t, os.WriteFile(filepath.Join(te.dataDir, "config.toml"),
+		[]byte("[agents.pi]\ndirs = [\"/sessions/pi\"]\n"), 0o600))
 	put := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
@@ -5441,31 +5443,40 @@ func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 		return byID
 	}
 
-	w := put(`{"agent_homes":{"codex":["~/.codex-work","/srv/codex"]}}`)
+	w := put(`{"agent_homes":{"codex":["~/.codex-work","/srv/codex"],"pi":["~/.pi-work/agent","~/.pi-personal/agent"]}}`)
 	assertStatus(t, w, http.StatusOK)
 	providers := decode(w)
 	assert.True(t, providers[parser.AgentCodex].HomesSupported)
 	assert.Equal(t, []string{"~/.codex-work", "/srv/codex"},
 		providers[parser.AgentCodex].Homes)
+	assert.True(t, providers[parser.AgentPi].HomesSupported)
+	assert.Equal(t, []string{"~/.pi-work/agent", "~/.pi-personal/agent"}, providers[parser.AgentPi].Homes)
 	assert.True(t, providers[parser.AgentClaude].HomesSupported)
 	assert.Equal(t, []string{}, providers[parser.AgentClaude].Homes)
 	assert.False(t, providers[parser.AgentGemini].HomesSupported)
 
 	var persisted struct {
-		CodexHomes []string `toml:"codex_homes"`
+		Agents map[string]config.AgentDirectoryConfig `toml:"agents"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"~/.codex-work", "/srv/codex"}, persisted.CodexHomes)
+	assert.Equal(t, []string{"~/.codex-work", "/srv/codex"}, persisted.Agents["codex"].Homes)
+	assert.Equal(t, []string{"~/.pi-work/agent", "~/.pi-personal/agent"}, persisted.Agents["pi"].Homes)
+	assert.Equal(t, []string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
 
 	w = put(`{"agent_homes":{"gemini":["/x"]}}`)
 	assertStatus(t, w, http.StatusBadRequest)
 	assertBodyContains(t, w, "does not support alternate homes")
 
-	w = put(`{"agent_homes":{"codex":[]}}`)
+	w = put(`{"agent_homes":{"codex":[],"pi":[]}}`)
 	assertStatus(t, w, http.StatusOK)
 	assert.Equal(t, []string{}, decode(w)[parser.AgentCodex].Homes)
 	raw, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
 	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "codex_homes")
+	persisted.Agents = nil
+	_, err = toml.Decode(string(raw), &persisted)
+	require.NoError(t, err)
+	assert.Empty(t, persisted.Agents["codex"].Homes)
+	assert.Empty(t, persisted.Agents["pi"].Homes)
+	assert.Equal(t, []string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
 }

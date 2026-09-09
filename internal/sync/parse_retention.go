@@ -22,6 +22,8 @@ const (
 	parseRetentionFixedBytes         = int64(64 << 10)
 	parseRetentionMultiplier         = int64(4)
 	parseRetentionScavengeThreshold  = int64(16 << 20)
+	// Bound pending daemon writes by source bytes as well as session count.
+	parseBatchBytesLimit = defaultParseRetentionBytes
 )
 
 type parseRetentionBudget struct {

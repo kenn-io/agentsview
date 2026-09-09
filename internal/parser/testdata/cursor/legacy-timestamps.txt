@@ -1,0 +1,15 @@
+# Constructed and sanitized, not captured. The issue ships no transcript artifact. Tag values match the real observed grammar, and the surrounding prose is invented.
+user:
+<timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp>
+<user_query>
+Inspect the repository.
+</user_query>
+assistant:
+The repository is ready for inspection.
+user:
+<timestamp>Thursday, Jul 2, 2026, 11:12 AM (UTC-4)</timestamp>
+<user_query>
+Continue with the next step.
+</user_query>
+assistant:
+The next step is complete.

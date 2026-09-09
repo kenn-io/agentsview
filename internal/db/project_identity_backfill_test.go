@@ -236,7 +236,7 @@ func TestResyncTrashedCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	destination := testDB(t)
 	copied, err := destination.CopyTrashedDataFrom(sourcePath)
 	require.NoError(t, err)
-	assert.Equal(t, 1, copied)
+	assert.Len(t, copied, 1)
 	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(

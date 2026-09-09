@@ -14,18 +14,33 @@ inputs:
   artifact_dir:
     description: Bundle output directory
     required: true
+  namespace-cache:
+    description: Use Namespace cache volumes for this runner
+    default: 'false'
 runs:
   using: composite
   steps:
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version-file: go.mod
+        cache: ${{ inputs.namespace-cache != 'true' }}
 
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
       with:
         node-version: "24"
+        package-manager-cache: ${{ inputs.namespace-cache != 'true' }}
 
     - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable
+
+    - name: Configure Namespace build caches
+      if: inputs.namespace-cache == 'true'
+      uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+      with:
+        cache: |
+          go
+          npm
+          rust
+        path: desktop/src-tauri/target
 
     - name: Setup MinGW (Windows)
       if: runner.os == 'Windows'

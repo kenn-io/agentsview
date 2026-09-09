@@ -313,11 +313,13 @@ type SearchResult struct {
 
 // SearchFilter specifies search parameters.
 type SearchFilter struct {
-	Query   string
-	Project string
-	Sort    string // "relevance" (default) or "recency"
-	Cursor  int    // offset for pagination
-	Limit   int
+	DateFrom string
+	DateTo   string
+	Query    string
+	Project  string
+	Sort     string // "relevance" (default) or "recency"
+	Cursor   int    // offset for pagination
+	Limit    int
 }
 
 // SearchPage holds paginated search results.
@@ -377,6 +379,16 @@ func (db *DB) Search(
 		nameProjectClause = "AND s.project = ?"
 		nameProjectArgs = []any{f.Project}
 	}
+
+	dateBuilder := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	datePreds := dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s2." + col })
+	innerWhere = append(innerWhere, datePreds...)
+	ftsArgs = append(ftsArgs, dateBuilder.Args()...)
+	nameDateBuilder := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	for _, pred := range nameDateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
+		nameProjectClause += " AND " + pred
+	}
+	nameProjectArgs = append(nameProjectArgs, nameDateBuilder.Args()...)
 
 	innerWhereSQL := strings.Join(innerWhere, " AND ")
 	// Strip FTS quoting before substring operations. PrepareFTSQuery wraps

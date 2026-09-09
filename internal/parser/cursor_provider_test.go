@@ -561,7 +561,9 @@ func TestCursorProviderPathRewriterMakesResolutionRemote(t *testing.T) {
 	}
 
 	provider, ok := NewProvider(AgentCursor, ProviderConfig{
-		Roots: []string{root}, PathRewriter: func(string) string { return "remote:" + path },
+		Roots:        []string{root},
+		PathRewriter: func(string) string { return "remote:" + path },
+		MetadataDirs: map[string][]string{root: {filepath.Join(root, "chats")}},
 	})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
@@ -571,6 +573,18 @@ func TestCursorProviderPathRewriterMakesResolutionRemote(t *testing.T) {
 	assert.Zero(t, probeCalls)
 	assert.Zero(t, readDirCalls)
 	assert.Zero(t, statCalls)
+	watchPlan, err := provider.WatchPlan(t.Context())
+	require.NoError(t, err)
+	for _, watchRoot := range watchPlan.Roots {
+		assert.False(t, samePath(watchRoot.Path, filepath.Join(root, "chats")))
+	}
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+		Path:      filepath.Join(root, "chats", "store.db"),
+		WatchRoot: filepath.Join(root, "chats"),
+		EventKind: "write",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 }
 
 func TestCursorProviderSourceMachineMakesResolutionRemote(t *testing.T) {

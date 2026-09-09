@@ -13,6 +13,61 @@ parser change that needs a full resync must build a fresh database, sync source
 files, copy orphaned sessions from the old database, and swap the files
 atomically. Preserve sessions even when their source files no longer exist.
 
+### Codex incremental import state
+
+Four SQLite-only tables support local Codex imports: `parser_checkpoints` holds
+resume metadata, `parser_checkpoint_blobs` holds cursor and hash state,
+`session_signal_state` holds the incremental signal reducer, and
+`tool_call_occurrence_agent_state` holds per-agent result coordinates. The last
+table is populated lazily when a call receives a late result. Other providers do
+not maintain Codex signal state. Full writes commit the signal seed with the
+content and bind it to the stored transcript revision inside SQLite. A failed
+seed rolls back the content; there is no post-commit revision read. During a
+full resync, the disposable replacement archive defers the tool-call ID and
+result metadata indexes until after the bulk load. Rebuilding them must succeed
+before the replacement can be installed.
+
+Codex result events also retain a raw-content digest and whether the raw event
+participates in the summary. These local fields distinguish events that become
+identical after sanitization and preserve whitespace and blocked-result rules.
+An older session missing this metadata is reparsed from its source before a late
+result is applied. Its first rewrite can advance the transcript revision;
+subsequent equal parses remain no-ops. These fields are excluded from exports
+and mirror fingerprints.
+
+Large Codex imports use a disposable scratch SQLite database for result
+payloads. Publication attaches it to the archive writer and commits content,
+checkpoint, and enabled derived state together. Cancellation aborts publication;
+cleanup detaches with a context that survives cancellation. Scratch storage is
+not an archive or a mirror and is removed after the import.
+
+Tool-result image retention uses the canonical `config.ToolResultImages` policy
+on writable SQLite handles. The zero value keeps content. Drop mode projects a
+valid inline `data:image/...;base64` block into an `agentsview_image`
+placeholder before derived lengths, display comparisons, and persistence. Raw
+event digests are captured before projection so distinct provider events remain
+distinct and replayed late results stay no-ops. The projection preserves
+ordinary text, metadata, block order, unsupported shapes, and future
+placeholders. Combined summaries project labeled and anonymous sections using
+JSON boundaries, so blank lines inside arrays do not split them. Late result
+writes also project the rebuilt summary when older events predate drop mode.
+`db strip --images` applies the projection to existing rows one session at a
+time. The command updates `tool_calls.result_content` and
+`tool_result_events.content` directly in one transaction per session,
+recalculates their stored lengths, and keeps every event coordinate and metadata
+column unchanged. Each changed session also gets a full secret scan of its
+projected transcript inside that transaction, preserving findings with their
+current offsets and rule version. A changed session gets the normal transcript
+revision, Recall, signal, artifact export, usage notification, and post-commit
+revocation sequence. An unchanged session gets none of those publications. Full
+resync applies this same projection only to the IDs returned by its trashed and
+orphaned session copies, before the replacement is published. Freshly parsed
+sessions already carry the projection. Large Codex imports project events before
+scratch insertion; staged summaries and signals use that projected content. The
+command counts raw `tool_calls.result_content` and `tool_result_events.content`
+bytes separately from decoded image bytes. `db compact` reports file-size
+reclamation separately.
+
 ## Backend Parity
 
 - Keep observable behavior and query shape aligned between SQLite and
@@ -119,6 +174,20 @@ must read the full source fingerprint in the same transaction as the facts it
 installs. Do not compare fingerprints for ordering, and do not skip a refill
 because a cached fingerprint merely looks newer.
 
+### Activity report index
+
+Activity session selection checks terminal tool-execution events even when a
+session's `ended_at` predates the report. Keep the partial
+`idx_tool_result_events_terminal` index on `(session_id, timestamp)` aligned
+between SQLite and PostgreSQL. It includes completed and errored executions with
+non-null timestamps, so the lookup can skip unrelated result payloads and seek
+directly to the report's lower bound.
+
+The next writable SQLite open or PostgreSQL schema setup builds the index once
+for existing archives. PostgreSQL push must also detect its absence before
+taking the schema-current fast path. Creating the index scans existing tool
+results and can delay that first startup; it does not require a session resync.
+
 ### Usage archive indexes
 
 The usage cache discovers bounded-window candidates through
@@ -159,14 +228,14 @@ content clears them for a fresh scan.
 the summary equals that event's content, the summary is not stored: the column
 is empty while `result_content_length` still records the summary's size. That
 pair, an empty column with a non-zero length, tells a reader to take the text
-from the single event. Multi-event summaries, single-event summaries that
-differ from their event, calls with no events, and blocked categories store
-exactly what the parser produced. Load tool calls through the message loaders,
-which refill the summary once events are attached; a query that selects the
-column directly must apply the same fallback, and PostgreSQL and DuckDB apply
-the same write rule so their tool-call fingerprints match SQLite. Anyone
-reading the archive or a mirror by hand sees the empty column and must join
-the events table to recover the text.
+from the single event. Multi-event summaries, single-event summaries that differ
+from their event, calls with no events, and blocked categories store exactly
+what the parser produced. Load tool calls through the message loaders, which
+refill the summary once events are attached; a query that selects the column
+directly must apply the same fallback, and PostgreSQL and DuckDB apply the same
+write rule so their tool-call fingerprints match SQLite. Anyone reading the
+archive or a mirror by hand sees the empty column and must join the events table
+to recover the text.
 
 ## DuckDB Mirror
 

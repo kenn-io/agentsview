@@ -74,6 +74,32 @@ func TestPreparedHTTPRebuildLeaseCLIForwardsCommitOnce(t *testing.T) {
 	assert.Zero(t, prepared.closed, "commit must not infer cleanup")
 }
 
+func TestStartupWorkerDoesNotAddBlankLineForNonTerminalProgress(t *testing.T) {
+	cfg := config.Config{DataDir: t.TempDir()}
+	restore := stubLaunchSyncWorker(t, func(
+		_ context.Context, _ config.Config, _ string, onLine func(workerLine),
+	) (workerResult, error) {
+		onLine(workerLine{Progress: &agentsync.Progress{
+			Phase:         agentsync.PhaseSyncing,
+			Detail:        "Syncing sessions",
+			SessionsDone:  1,
+			SessionsTotal: 1,
+		}})
+		return workerResult{}, errors.New("worker failed")
+	})
+	defer restore()
+
+	var err error
+	out := captureStdout(t, func() {
+		_, err = runStartupSyncViaWorker(
+			t.Context(), cfg, newStartupStateWriter(cfg.DataDir, time.Now),
+		)
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, "Running initial sync...\n", out)
+}
+
 func newDirectSyncFixture(t *testing.T) (config.Config, *db.DB) {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -1337,20 +1363,185 @@ func TestParseDaemonSyncSSEReportsProgressEvents(t *testing.T) {
 	assert.True(t, progress[0].Resync)
 }
 
-func TestPrintSyncProgressClearsShorterOverwrites(t *testing.T) {
-	out := captureStdout(t, func() {
-		printSyncProgress(agentsync.Progress{
-			Detail: "Rebuilding search index",
-			Hint:   "Rebuilding the search index may take a while on large archives.",
-		})
-		printSyncProgress(agentsync.Progress{
-			Detail: "Swapping rebuilt database into place",
-		})
+func TestWriteSyncProgressClearsShorterOverwritesInTerminalStyle(t *testing.T) {
+	var out bytes.Buffer
+	writeSyncProgress(&out, true, agentsync.Progress{
+		Detail: "Rebuilding search index",
+		Hint:   "Rebuilding the search index may take a while on large archives.",
+	})
+	writeSyncProgress(&out, true, agentsync.Progress{
+		Detail: "Swapping rebuilt database into place",
 	})
 
-	require.GreaterOrEqual(t, strings.Count(out, "\x1b[K"), 2,
+	outString := out.String()
+
+	require.GreaterOrEqual(t, strings.Count(outString, "\x1b[K"), 2,
 		"each carriage-return progress line must clear stale text")
-	assert.Contains(t, out, "\r  Swapping rebuilt database into place\x1b[K")
+	assert.Contains(t, outString, "\r  Swapping rebuilt database into place\x1b[K")
+}
+
+func TestPrintSyncProgressStaysCleanOnNonTerminalStdout(t *testing.T) {
+	out := captureStdout(t, func() {
+		printProgress := newSyncProgressPrinter(os.Stdout)
+		for _, progress := range []agentsync.Progress{
+			{Phase: agentsync.PhaseDiscovering, Detail: "Discovering sessions"},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3, SessionsDone: 1},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3, SessionsDone: 2},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3, SessionsDone: 3},
+			{Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3, SessionsDone: 3, MessagesIndexed: 6},
+		} {
+			printProgress(progress)
+		}
+		printSyncSummary(agentsync.SyncStats{Synced: 3}, time.Now())
+	})
+
+	assert.NotContains(t, out, "\r")
+	assert.NotContains(t, out, "\x1b[K")
+	assert.True(t, strings.HasPrefix(out, "Sync complete: 3 sessions synced"),
+		"a redirected summary must not start with a blank line")
+}
+
+func TestResyncProgressPrinterStaysLineOrientedOnNonTerminalFile(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "resync-progress-*.txt")
+	require.NoError(t, err)
+	defer file.Close()
+
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	printer := newResyncProgressPrinter(file, func() time.Time { return now })
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhasePreparingResync, Detail: "Preparing full resync", Resync: true,
+	})
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3,
+		SessionsDone: 1, Resync: true,
+	})
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 3,
+		SessionsDone: 3, Resync: true,
+	})
+	printer.Print(agentsync.Progress{Phase: agentsync.PhaseDone, SessionsTotal: 3, Resync: true})
+	printer.Finish()
+	printer.Finish()
+	printer.Print(agentsync.Progress{Detail: "after finish"})
+	require.NoError(t, file.Close())
+
+	content, err := os.ReadFile(file.Name())
+	require.NoError(t, err)
+	out := string(content)
+	assert.NotContains(t, out, "\r")
+	assert.NotContains(t, out, "\x1b[K")
+	assert.Contains(t, out, "Preparing full resync...")
+	assert.Contains(t, out, "Syncing sessions...")
+	assert.Contains(t, out, "Syncing sessions completed in")
+	assert.NotContains(t, out, "after finish")
+}
+
+func TestRemoteProgressPrinterStaysLineOrientedOnNonTerminalFile(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "remote-progress-*.txt")
+	require.NoError(t, err)
+	defer file.Close()
+
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	printer := newRemoteProgressPrinter(file, func() time.Time { return now })
+	printer.Print(agentsync.Progress{
+		Detail: "Downloading session archive", BytesDone: 1, BytesTotal: 2,
+	})
+	printer.Print(agentsync.Progress{
+		Detail: "Downloading session archive", BytesDone: 2, BytesTotal: 2,
+	})
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhaseSyncing, Detail: "Processing sessions", SessionsTotal: 2,
+		SessionsDone: 1,
+	})
+	printer.Print(agentsync.Progress{
+		Phase: agentsync.PhaseSyncing, Detail: "Processing sessions", SessionsTotal: 2,
+		SessionsDone: 2,
+	})
+	printer.Print(agentsync.Progress{Detail: "Synced 2 sessions"})
+	printer.Print(agentsync.Progress{Detail: "Skipped offline host"})
+	printer.Finish()
+	printer.Finish()
+	require.NoError(t, file.Close())
+
+	content, err := os.ReadFile(file.Name())
+	require.NoError(t, err)
+	out := string(content)
+	assert.NotContains(t, out, "\r")
+	assert.NotContains(t, out, "\x1b[K")
+	assert.Contains(t, out, "Downloading session archive...")
+	assert.Contains(t, out, "Processing sessions...")
+	assert.Contains(t, out, "Synced 2 sessions")
+	assert.Contains(t, out, "Skipped offline host")
+	assert.Contains(t, out, "Processing sessions completed in")
+}
+
+func TestIsTerminalWriterClassifiesDestinations(t *testing.T) {
+	assert.False(t, isTerminalWriter(&bytes.Buffer{}))
+
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	assert.False(t, isTerminalWriter(reader))
+	assert.False(t, isTerminalWriter(writer))
+	require.NoError(t, reader.Close())
+	require.NoError(t, writer.Close())
+
+	file, err := os.CreateTemp(t.TempDir(), "terminal-classification-*.txt")
+	require.NoError(t, err)
+	assert.False(t, isTerminalWriter(file))
+	require.NoError(t, file.Close())
+	assert.False(t, isTerminalWriter(file))
+
+	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	assert.False(t, isTerminalWriter(null))
+	require.NoError(t, null.Close())
+}
+
+func TestUsageResyncProgressStaysCleanOnNonTerminalStderr(t *testing.T) {
+	stdout := captureStdout(t, func() {
+		stderr := captureStderr(t, func() {
+			printer := newResyncProgressPrinter(os.Stderr, time.Now)
+			printer.Print(agentsync.Progress{
+				Phase: agentsync.PhasePreparingResync, Detail: "Preparing full resync",
+			})
+			printer.Print(agentsync.Progress{
+				Phase: agentsync.PhaseSyncing, Detail: "Syncing sessions", SessionsTotal: 1,
+				SessionsDone: 1,
+			})
+			printer.Print(agentsync.Progress{Phase: agentsync.PhaseDone, SessionsTotal: 1})
+			printer.Finish()
+			printSyncSummaryStderr(agentsync.SyncStats{Synced: 1}, time.Now())
+		})
+		assert.NotContains(t, stderr, "\r")
+		assert.NotContains(t, stderr, "\x1b[K")
+		assert.NotContains(t, stderr, "\n\n",
+			"a redirected summary must follow the completed phase without a blank line")
+		assert.Contains(t, stderr, "Sync complete: 1 sessions synced")
+	})
+
+	assert.Empty(t, stdout)
+}
+
+func TestNonTerminalProgressOutputIsBounded(t *testing.T) {
+	var out bytes.Buffer
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	printer := newRemoteProgressPrinter(&out, func() time.Time { return now })
+	for i := range 100 {
+		printer.Print(agentsync.Progress{
+			Phase: agentsync.PhaseSyncing, Detail: "Processing sessions", SessionsTotal: 10,
+			SessionsDone: i % 10,
+		})
+	}
+	printer.Finish()
+	printer.Finish()
+	printer.Print(agentsync.Progress{Detail: "after finish"})
+
+	assert.NotContains(t, out.String(), "\r")
+	assert.NotContains(t, out.String(), "\x1b[K")
+	assert.Equal(t, 1, strings.Count(out.String(), "Processing sessions..."))
+	assert.Equal(t, 1, strings.Count(out.String(), "Processing sessions completed in"))
+	assert.NotContains(t, out.String(), "after finish")
 }
 
 func TestResyncProgressPrinterWritesPhaseTimingsOnNewLines(t *testing.T) {
@@ -1358,6 +1549,7 @@ func TestResyncProgressPrinterWritesPhaseTimingsOnNewLines(t *testing.T) {
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newResyncProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Phase:  agentsync.PhasePreparingResync,
@@ -1424,6 +1616,7 @@ func TestResyncProgressPrinterRendersDoneProgressBeforeCompletion(t *testing.T) 
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newResyncProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Phase:           agentsync.PhaseSyncing,
@@ -1454,6 +1647,7 @@ func TestRemoteProgressPrinterWritesTimedStepLines(t *testing.T) {
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newRemoteProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Detail: "Resolving agent directories on devbox",
@@ -1505,6 +1699,7 @@ func TestRemoteProgressPrinterRendersByteProgressInPlace(t *testing.T) {
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newRemoteProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Detail:     "Downloading session archive from devbox",
@@ -1540,6 +1735,7 @@ func TestRemoteProgressPrinterRendersLocalSyncProgressWithoutDetail(t *testing.T
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newRemoteProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Phase:           agentsync.PhaseSyncing,
@@ -1570,6 +1766,7 @@ func TestRemoteProgressPrinterKeepsResyncLabelOnDoneProgress(t *testing.T) {
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
 	printer := newRemoteProgressPrinter(&out, clock)
+	printer.terminal = true
 
 	printer.Print(agentsync.Progress{
 		Phase:           agentsync.PhaseSyncing,

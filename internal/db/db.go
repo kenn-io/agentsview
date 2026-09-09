@@ -462,7 +462,20 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // variant suffixes (-exp-b) against the matching effort-qualified executor
 // model. Existing Antigravity rows need re-parsing so stored messages and
 // usage events reflect the intended effort-qualified model.)
-const dataVersion = 99
+// (100: Codex subagent lineage now uses the structural source marker. Existing
+// guardian rows need re-parsing because a fingerprint change cannot repair
+// byte-identical files.)
+// (101: Cursor user turn timestamps are parsed from recognized metadata.
+// Existing Cursor rows need re-parsing so stored message and session times
+// reflect the transcript timestamps.)
+// (102: Cursor legacy text transcripts now preserve nonempty tool-result
+// bodies as result events. Existing Cursor rows need re-parsing to recover
+// output from unchanged source files.)
+// (103: Copilot assistant output is reported without a shutdown summary.)
+// (104: OpenCode v2 projections, mixed CLI/API history, attachments, and
+// compaction boundaries. Re-parse existing sessions and reconsider skipped
+// sources even when the producer database has not changed.)
+const dataVersion = 104
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -669,8 +682,9 @@ type DB struct {
 	// a later close reports success, or write ownership could be released
 	// (or the database file replaced) while a connection still holds the
 	// file. Guarded by connMu.
-	undrainedPools []*sql.DB
-	readOnly       bool
+	undrainedPools   []*sql.DB
+	readOnly         bool
+	toolResultImages config.ToolResultImages
 	// writerClosed is set while the writer pool is intentionally closed for a
 	// worker maintenance pass (CloseWriter). It lets write attempts report
 	// ErrWriterClosed instead of the generic read-only error.
@@ -697,6 +711,17 @@ type DB struct {
 	vectorMu       sync.RWMutex
 	vectorSearcher VectorSearcher
 	recallSearcher RecallVectorSearcher
+
+	// messagesLoadCount counts GetAllMessages calls. Tests use it to gate
+	// the incremental signal path: a maintained delta must not load
+	// session history.
+	messagesLoadCount atomic.Int64
+}
+
+// MessagesLoadCount returns the total number of GetAllMessages calls the
+// database has served. Monotonic; used by the incremental-path gates.
+func (db *DB) MessagesLoadCount() int64 {
+	return db.messagesLoadCount.Load()
 }
 
 // Reader exposes guarded read-only query operations. It intentionally does
@@ -1919,6 +1944,14 @@ type schemaColumnMigration struct {
 func legacySchemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{
+			"tool_result_events", "raw_content_digest",
+			"ALTER TABLE tool_result_events ADD COLUMN raw_content_digest BLOB",
+		},
+		{
+			"tool_result_events", "summary_participates",
+			"ALTER TABLE tool_result_events ADD COLUMN summary_participates INTEGER",
+		},
+		{
 			"sessions", "parent_session_id",
 			"ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
 		},
@@ -2743,6 +2776,15 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 			"creating idx_tool_calls_file_path: %w", err,
 		)
 	}
+	if _, err := w.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_tool_calls_session_tool_use
+		 ON tool_calls(session_id, tool_use_id)
+		 WHERE tool_use_id IS NOT NULL`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating idx_tool_calls_session_tool_use: %w", err,
+		)
+	}
 
 	if _, err := w.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_termination_status
@@ -3299,7 +3341,25 @@ func (db *DB) scrubProjectIdentityGitRemoteCredentialsLocked(
 // createPartialIndexesLocked creates partial indexes that are not
 // covered by the initial schema DDL. Idempotent via IF NOT EXISTS.
 func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
+	var terminalIndexExists bool
+	if err := w.QueryRow(`SELECT EXISTS (
+		SELECT 1 FROM sqlite_master WHERE type = 'index'
+		AND name = 'idx_tool_result_events_terminal'
+	)`).Scan(&terminalIndexExists); err != nil {
+		return fmt.Errorf("checking activity terminal index: %w", err)
+	}
+	if !terminalIndexExists {
+		log.Print("building SQLite activity index; startup waits for the tool-result scan to finish")
+	}
 	indexes := []string{
+		// Activity checks terminal events even for sessions whose ended_at
+		// predates the report. Avoid reading historical result payloads for
+		// every session just to find a recent tool completion.
+		`CREATE INDEX IF NOT EXISTS idx_tool_result_events_terminal
+		 ON tool_result_events(session_id, timestamp)
+		 WHERE source = 'tool_execution'
+		   AND status IN ('completed', 'errored')
+		   AND timestamp IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_cwd
 		 ON sessions(cwd) WHERE cwd != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_project_git_branch
@@ -4286,32 +4346,50 @@ func (db *DB) RebuildFTS() error {
 	return nil
 }
 
-// DropUsageMessageIndexes drops the archive usage and activity
-// message indexes so bulk message loads avoid per-row B-tree
-// maintenance. Call RebuildUsageMessageIndexes before the archive
-// is served again: read-only opens require these indexes.
-func (db *DB) DropUsageMessageIndexes() error {
+// DropBulkImportIndexes omits derived index maintenance in a disposable
+// full-resync archive. RebuildBulkImportIndexes must succeed before the swap.
+func (db *DB) DropBulkImportIndexes() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	w := db.getWriter()
 	for _, name := range []string{
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
 		"idx_messages_activity_timestamp",
+		"idx_tool_calls_session_tool_use",
+		"idx_tool_result_events_identity",
+		"idx_tool_result_events_summary",
 	} {
-		if _, err := w.Exec(`DROP INDEX IF EXISTS ` + name); err != nil {
-			return fmt.Errorf("dropping usage index %s: %w", name, err)
+		if _, err := db.getWriter().Exec(`DROP INDEX IF EXISTS ` + name); err != nil {
+			return fmt.Errorf("dropping bulk import index %s: %w", name, err)
 		}
 	}
 	return nil
 }
 
-// RebuildUsageMessageIndexes recreates the archive usage and
-// activity message indexes after a bulk load that dropped them.
-func (db *DB) RebuildUsageMessageIndexes() error {
+// RebuildBulkImportIndexes creates each deferred B-tree once after the bulk
+// load. Source archives and live incremental writers never drop these indexes.
+func (db *DB) RebuildBulkImportIndexes() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	return ensureUsageIndexesLocked(db.getWriter())
+	if err := ensureUsageIndexesLocked(db.getWriter()); err != nil {
+		return err
+	}
+	for _, query := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_tool_calls_session_tool_use
+		 ON tool_calls(session_id, tool_use_id) WHERE tool_use_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_result_events_identity
+		 ON tool_result_events(session_id, tool_call_message_ordinal, call_index,
+		 agent_id, status, raw_content_digest) WHERE raw_content_digest IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_result_events_summary
+		 ON tool_result_events(session_id, tool_call_message_ordinal, call_index,
+		 (summary_participates IS NULL OR raw_content_digest IS NULL),
+		 summary_participates, event_index)`,
+	} {
+		if _, err := db.getWriter().Exec(query); err != nil {
+			return fmt.Errorf("rebuilding tool result import indexes: %w", err)
+		}
+	}
+	return nil
 }
 
 // HasFTS checks if Full Text Search is available.

@@ -22,6 +22,7 @@ func newDBCommand() *cobra.Command {
 		Args:    cobra.NoArgs,
 	}
 	cmd.AddCommand(newDBCompactCommand())
+	cmd.AddCommand(newDBStripCommand())
 	return cmd
 }
 

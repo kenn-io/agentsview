@@ -1110,7 +1110,7 @@ func TestResyncKeepsMappedProjectForTrashedSession(t *testing.T) {
 	destination := testDB(t)
 	copied, err := destination.CopyTrashedDataFrom(sourcePath)
 	require.NoError(t, err)
-	require.Equal(t, 1, copied)
+	require.Len(t, copied, 1)
 	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
 
 	restoredProjects, err :=

@@ -95,6 +95,18 @@ func (s *signalScheduler) markDirty(sessionID string) {
 	s.mu.Unlock()
 }
 
+// deferRetry schedules a failed recompute without the leading-edge execution
+// of markDirty. Shutdown gets only its existing final flush attempt.
+func (s *signalScheduler) deferRetry(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
+	s.dirty[sessionID] = s.now()
+	s.armLocked()
+}
+
 // tick flushes deferred sessions whose interval has elapsed or
 // that have been quiet long enough. Callers must not hold the
 // engine's sync lock: the pass runs inside exclusive, which takes

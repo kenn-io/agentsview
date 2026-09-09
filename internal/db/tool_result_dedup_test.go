@@ -316,7 +316,7 @@ func TestSubagentLinkKeepsDedupedSummary(t *testing.T) {
 	require.Equal(t, len("agent finished"), length)
 
 	link := func(result string) {
-		require.NoError(t, d.WriteSessionIncremental("s-link", nil,
+		_, err := d.WriteSessionIncremental("s-link", nil,
 			IncrementalSessionUpdate{
 				MsgCount:    1,
 				NextOrdinal: 1,
@@ -327,7 +327,8 @@ func TestSubagentLinkKeepsDedupedSummary(t *testing.T) {
 					ResultContentLen:  len(result),
 					HasResult:         true,
 				}},
-			}))
+			})
+		require.NoError(t, err)
 	}
 
 	link("agent finished")
@@ -465,7 +466,7 @@ func TestOmittedResultContentLengthRoundTrips(t *testing.T) {
 				ToolName: "Agent", Category: "Task", ToolUseID: "call_link_nolen",
 			}},
 		}}))
-		require.NoError(t, d.WriteSessionIncremental("s-link-nolen", nil,
+		_, err := d.WriteSessionIncremental("s-link-nolen", nil,
 			IncrementalSessionUpdate{
 				MsgCount: 1, NextOrdinal: 1,
 				SubagentLinks: []ToolCallSubagentLink{{
@@ -474,7 +475,8 @@ func TestOmittedResultContentLengthRoundTrips(t *testing.T) {
 					ResultContent:     summary,
 					HasResult:         true,
 				}},
-			}))
+			})
+		require.NoError(t, err)
 		got := loaded(t, d, "s-link-nolen", 0)
 		assert.Equal(t, summary, got.ResultContent)
 		assert.Equal(t, len(summary), got.ResultContentLength)

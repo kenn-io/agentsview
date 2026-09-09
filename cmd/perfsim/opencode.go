@@ -71,7 +71,13 @@ func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]str
 		}
 	}()
 	store.SetMaxOpenConns(1)
-	if _, err := store.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;" + openCodeSchema); err != nil {
+	schema := openCodeSchema
+	sessionTable := "session"
+	if o.SourceFormat == "opencode-v2" {
+		schema = openCodeV2Schema
+		sessionTable = "session_v2"
+	}
+	if _, err := store.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;" + schema); err != nil {
 		return nil, nil, err
 	}
 	tx, err := store.Begin()
@@ -89,8 +95,8 @@ func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]str
 	}
 	sources := make([]source, 0, o.Sessions)
 	for i := range o.Sessions {
-		s := source{Path: path, ID: fmt.Sprintf("ses_%012d", i+1), Agent: parser.AgentOpenCode, Store: store, Start: start.AddDate(0, 0, i%28)}
-		if _, err := tx.Exec(`INSERT INTO session
+		s := source{V2: o.SourceFormat == "opencode-v2", Path: path, ID: fmt.Sprintf("ses_%012d", i+1), Agent: parser.AgentOpenCode, Store: store, Start: start.AddDate(0, 0, i%28)}
+		if _, err := tx.Exec(`INSERT INTO `+sessionTable+`
  (id, project_id, slug, directory, title, version, time_created, time_updated)
  VALUES (?, ?, ?, ?, ?, 'simulation', ?, ?)`, s.ID, fmt.Sprintf("project-%02d", i%20), s.ID,
 			fmt.Sprintf("/workspace/project-%02d", i%20), "Investigate query latency", s.Start.UnixMilli(), s.Start.UnixMilli()); err != nil {
@@ -114,6 +120,9 @@ func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]str
 }
 
 func (s *source) writeSQLiteTurns(tx *sql.Tx, n, contentBytes int) error {
+	if s.V2 {
+		return s.writeSQLiteV2Turns(tx, n, contentBytes)
+	}
 	for j := range n {
 		turn := s.Turns + j
 		for roleIndex, role := range []string{"user", "assistant"} {
@@ -152,6 +161,10 @@ func (s *source) writeSQLiteTurns(tx *sql.Tx, n, contentBytes int) error {
 const sqliteEditedText = "Streaming part finalized after session metadata update."
 
 func (s *source) editSQLitePart() error {
+	if s.V2 {
+		_, err := s.Store.Exec(`UPDATE session_message SET data = json_set(data, '$.content[0].text', ?), time_updated = ? WHERE id = ?`, sqliteEditedText, s.Start.Add(time.Duration(s.Turns-1)*time.Minute).UnixMilli()+10, fmt.Sprintf("msg_%s_%08d_1", s.ID, s.Turns-1))
+		return err
+	}
 	encoded, err := json.Marshal(map[string]string{"type": "text", "text": sqliteEditedText})
 	if err != nil {
 		return err

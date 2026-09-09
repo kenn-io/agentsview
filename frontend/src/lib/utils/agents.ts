@@ -11,6 +11,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   { name: "traex", color: "var(--accent-coral)", label: "TraeX" },
   { name: "copilot", color: "var(--accent-amber)" },
   { name: "devin", color: "var(--accent-red)", label: "Devin" },
+  { name: "evener", color: "var(--accent-teal)", label: "Evener" },
   { name: "gemini", color: "var(--accent-rose)" },
   { name: "gemini-apps", color: "var(--accent-rose)", label: "Gemini Apps" },
   { name: "opencode", color: "var(--accent-purple)" },
@@ -33,6 +34,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
     label: "Visual Studio Copilot",
   },
   { name: "pi", color: "var(--accent-indigo)", label: "Pi" },
+  { name: "tau", color: "var(--accent-amber)", label: "Tau" },
   {
     name: "prime-agent",
     color: "var(--accent-indigo)",

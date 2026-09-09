@@ -427,6 +427,7 @@
         <div
           class="session-name"
           class:shell={displayLabel.isShell}
+          title={displayLabel.text}
           ondblclick={handleDblClick}
         >
           {#if displayLabel.isShell}
@@ -437,7 +438,7 @@
         </div>
         <div class="session-meta">
           {#if !hideProject}
-            <span class="session-project">{session.project}</span>
+            <span class="session-project" title={session.project}>{session.project}</span>
           {/if}
           <span class="session-time">{timeStr}</span>
           {#if hasUnread}
@@ -481,13 +482,20 @@
   {#if !compact && (!hideAgent || showMachine)}
     <div class="side-meta">
       {#if !hideAgent}
-        <span class="agent-tag" style:color={agentColor}>{agentLabel(session.agent, session.agent_label)}</span>
+        <span
+          class="agent-tag"
+          style:color={agentColor}
+          title={agentLabel(session.agent, session.agent_label)}
+        >{agentLabel(session.agent, session.agent_label)}</span>
         {#if entrypointBadge(session.entrypoint)}
-          <span class="entrypoint-tag">{entrypointBadge(session.entrypoint)}</span>
+          <span
+            class="entrypoint-tag"
+            title={entrypointBadge(session.entrypoint)}
+          >{entrypointBadge(session.entrypoint)}</span>
         {/if}
       {/if}
       {#if showMachine}
-        <span class="machine-tag" title={session.machine}>
+        <span class="machine-tag">
           {truncate(session.machine, 18)}
         </span>
       {/if}
@@ -621,6 +629,7 @@
     gap: var(--space-1);
     min-width: 0;
     flex-shrink: 0;
+    max-width: 40%;
     margin-left: 4px;
   }
 
@@ -633,7 +642,7 @@
     line-height: 1;
     opacity: 0.7;
     white-space: nowrap;
-    max-width: 52px;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -641,6 +650,10 @@
   .entrypoint-tag {
     opacity: 0.75;
     font-size: 0.9em;
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .machine-tag {

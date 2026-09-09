@@ -9,6 +9,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const codexNTFSEpochOffset = int64(116444736000000000)
+
 type codexIndexWindowsFileBasicInfo struct {
 	creationTime   int64
 	lastAccessTime int64
@@ -18,15 +20,12 @@ type codexIndexWindowsFileBasicInfo struct {
 	_              uint32
 }
 
-func codexIndexChangeTime(path string, _ os.FileInfo) (int64, bool) {
-	file, err := os.Open(path)
-	if err != nil {
+func codexIndexChangeTimeForFile(file *os.File, _ os.FileInfo) (int64, bool) {
+	if file == nil {
 		return 0, false
 	}
-	defer file.Close()
-
 	var info codexIndexWindowsFileBasicInfo
-	err = windows.GetFileInformationByHandleEx(
+	err := windows.GetFileInformationByHandleEx(
 		windows.Handle(file.Fd()),
 		windows.FileBasicInfo,
 		(*byte)(unsafe.Pointer(&info)),
@@ -35,5 +34,14 @@ func codexIndexChangeTime(path string, _ os.FileInfo) (int64, bool) {
 	if err != nil || info.changeTime == 0 {
 		return 0, false
 	}
-	return info.changeTime, true
+	return (info.changeTime - codexNTFSEpochOffset) * 100, true
+}
+
+func codexIndexChangeTime(path string, info os.FileInfo) (int64, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer file.Close()
+	return codexIndexChangeTimeForFile(file, info)
 }

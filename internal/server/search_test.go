@@ -89,3 +89,45 @@ func TestHandleSearchSortParam(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchDateRangeHTTPTransport(t *testing.T) {
+	spy := &searchSpy{}
+	srv := &Server{
+		cfg: config.Config{Host: "127.0.0.1"}, db: spy,
+		sessions: service.NewReadOnlyBackend(spy), mux: http.NewServeMux(),
+	}
+	srv.routes()
+	httpServer := httptest.NewServer(srv.mux)
+	t.Cleanup(httpServer.Close)
+	client := service.NewHTTPBackend(httpServer.URL, "", true)
+	_, err := client.Search(context.Background(), service.SearchRequest{
+		Query: "hello", DateFrom: "2024-06-01", DateTo: "2024-06-02",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "2024-06-01", spy.filter.DateFrom)
+	assert.Equal(t, "2024-06-02", spy.filter.DateTo)
+}
+
+func TestSearchRejectsInvalidDateRange(t *testing.T) {
+	spy := &searchSpy{}
+	srv := &Server{
+		cfg: config.Config{Host: "127.0.0.1"}, db: spy,
+		sessions: service.NewReadOnlyBackend(spy), mux: http.NewServeMux(),
+	}
+	srv.routes()
+	for _, tc := range []struct {
+		name, params, message string
+	}{
+		{"reversed", "date_from=2024-06-03&date_to=2024-06-01", "date_from must not be after date_to"},
+		{"malformed from", "date_from=not-a-date", "date"},
+		{"malformed to", "date_to=2024-02-30", "date"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=hello&"+tc.params, nil)
+			srv.mux.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "%s", w.Body.String())
+			assert.Contains(t, w.Body.String(), tc.message)
+		})
+	}
+}

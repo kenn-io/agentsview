@@ -457,6 +457,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentTrae,
 		AgentVSCopilot,
 		AgentPi,
+		AgentTau,
 		AgentPrimeAgent,
 		AgentOMP,
 		AgentQwen,
@@ -495,6 +496,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentShelley,
 		AgentVibe,
 		AgentAider,
+		AgentEvener,
 		AgentReasonix,
 		AgentRooCode,
 		AgentPoolside,
@@ -613,17 +615,6 @@ func TestInferRelationshipTypes(t *testing.T) {
 					"inputs[%d].RelationshipType", i)
 			}
 		})
-	}
-}
-
-func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
-	for _, def := range Registry {
-		if !def.FileBased {
-			continue
-		}
-		assert.NotEmptyf(t, def.ConfigKey,
-			"file-based agent %q (%s) has empty ConfigKey",
-			def.DisplayName, def.Type)
 	}
 }
 
