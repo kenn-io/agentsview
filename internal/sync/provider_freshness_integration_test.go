@@ -109,6 +109,61 @@ func TestCursorSameMtimeHashChangeReparses(t *testing.T) {
 		"a same-mtime content change must bypass Cursor freshness")
 }
 
+func TestCursorUnreadableStoreDoesNotCountAsFresh(t *testing.T) {
+	cursorRoot := filepath.Join(t.TempDir(), ".cursor")
+	projects := filepath.Join(cursorRoot, "projects")
+	const sessionID = "11111111-2222-4333-8444-555555555555"
+	transcript := filepath.Join(projects, "synthetic-project", "agent-transcripts", sessionID+".jsonl")
+	storePath := filepath.Join(cursorRoot, "chats", "workspace", sessionID, "store.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0o755))
+	store, err := sql.Open("sqlite3", storePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	_, err = store.Exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+		CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);`)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	old := time.Now().Add(-time.Minute)
+	require.NoError(t, os.Chtimes(storePath, old, old))
+	require.NoError(t, os.Rename(storePath, storePath+".backup"))
+	require.NoError(t, os.MkdirAll(filepath.Dir(transcript), 0o755))
+	require.NoError(t, os.WriteFile(transcript, []byte(
+		`{"role":"user","message":{"content":"<user_query>Example</user_query>"}}`+"\n"+
+			`{"role":"assistant","message":{"content":"Example answer"}}`+"\n",
+	), 0o644))
+
+	archive := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {projects}},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{
+			parser.AgentCursor: {projects: {filepath.Join(cursorRoot, "chats")}},
+		},
+		Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	first := engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, first.Synced)
+
+	// A previously unavailable store is older than the unchanged transcript,
+	// so only its required hash can distinguish it from the archived source.
+	require.NoError(t, os.Rename(storePath+".backup", storePath))
+	require.NoError(t, os.Chmod(storePath, 0))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(storePath, 0o600)) })
+	if file, err := os.Open(storePath); err == nil {
+		require.NoError(t, file.Close())
+		t.Skip("file permissions are not enforced")
+	}
+	second := engine.SyncAll(t.Context(), nil)
+	assert.Equal(t, 1, second.Failed)
+	assert.Zero(t, second.Skipped)
+	assert.Zero(t, second.Synced)
+
+	require.NoError(t, os.Chmod(storePath, 0o600))
+	recovered := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, recovered.Failed)
+	assert.Equal(t, 1, recovered.Synced)
+}
+
 func TestCursorStoreEnrichmentFailureStillArchivesTranscriptUpdates(t *testing.T) {
 	for _, failure := range []string{"chats is a file", "unsupported metadata"} {
 		t.Run(failure, func(t *testing.T) {
@@ -139,7 +194,10 @@ func TestCursorStoreEnrichmentFailureStillArchivesTranscriptUpdates(t *testing.T
 			archive := dbtest.OpenTestDB(t)
 			engine := sync.NewEngine(archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
-				Machine:   "local",
+				ProviderMetadata: map[parser.AgentType]map[string][]string{
+					parser.AgentCursor: {root: {chats}},
+				},
+				Machine: "local",
 			})
 			t.Cleanup(engine.Close)
 			first := engine.SyncAll(t.Context(), nil)

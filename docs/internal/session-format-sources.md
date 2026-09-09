@@ -1012,15 +1012,18 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   blob payloads, and cross-version field-number stability remain unsupported;
   the capture contained no tool result and the reader ignores
   `blobEncryptionKey`. Unknown reachable blobs do not discard decoded
-  siblings. Unsupported metadata, missing roots or turn indexes, and stores
-  with no decodable turns leave the transcript usable, with a warning. Store
-  open/read errors remain retryable source errors without replacing archived
-  content. A failed chats scan warns and preserves cached store locations;
-  otherwise sync uses transcripts alone. The next discovery pass retries the
-  scan, and store changes invalidate the composite fingerprint. Reverified
-  2026-09-08 with synthetic parser and SQLite archive fixtures covering
-  initial import and subsequent transcript updates when store enrichment is
-  unavailable.
+  siblings. Missing required tables, unsupported metadata, missing roots or
+  turn indexes, and stores with no decodable turns leave the transcript
+  usable, with a warning. Store open/read errors remain retryable source
+  errors without replacing archived content. Store fingerprint failures
+  prevent freshness skips, and temporary path-access failures retain cached
+  stores for retry. A failed chats scan warns and preserves cached store
+  locations; otherwise sync uses transcripts alone. The next discovery pass
+  retries the scan, and store changes invalidate the composite fingerprint.
+  Reverified 2026-09-09 with synthetic parser and SQLite archive fixtures
+  covering initial import and subsequent transcript updates when store
+  enrichment is unavailable, missing store tables, and recovery after store
+  access failures.
 
 ## Cursor IDE (`cursor-ide`)
 

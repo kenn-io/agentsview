@@ -410,6 +410,32 @@ func TestCursorStoreMalformedMetaKeepsTranscript(t *testing.T) {
 	assertCursorStoreTranscriptOnly(t, outcome)
 }
 
+func TestCursorStoreMissingTableKeepsTranscript(t *testing.T) {
+	for _, missing := range []string{"meta", "blobs"} {
+		t.Run(missing, func(t *testing.T) {
+			fx := setupCursorStoreFixture(t, false)
+			// Replace the fixture with a readable but unsupported store schema.
+			require.NoError(t, os.Remove(fx.StorePath))
+			store, err := sql.Open("sqlite3", fx.StorePath)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = store.Close() })
+			if missing == "meta" {
+				_, err = store.Exec(`CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)`)
+				require.NoError(t, err)
+			} else {
+				_, err = store.Exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`)
+				require.NoError(t, err)
+				writeCursorStoreMeta(t, store, cursorStoreTestAgentID, fx.RootID)
+			}
+			require.NoError(t, store.Close())
+
+			outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
+			require.NoError(t, err)
+			assertCursorStoreTranscriptOnly(t, outcome)
+		})
+	}
+}
+
 func TestCursorStoreMissingMetadataKeepsTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
 	_, err := fx.Writer.Exec(`DELETE FROM meta WHERE key = '0'`)
@@ -567,6 +593,58 @@ func TestCursorStoreUnreadableMatchingStoreReturnsError(t *testing.T) {
 	assert.True(t, outcome.ResultSetComplete)
 	assert.True(t, outcome.SourceErrors[0].Retryable)
 	assert.Contains(t, outcome.SourceErrors[0].Err.Error(), "cursor store")
+}
+
+func TestCursorStoreAccessFailureKeepsEnrichmentRetryable(t *testing.T) {
+	for _, target := range []string{"store", "session directory"} {
+		t.Run(target, func(t *testing.T) {
+			fx := setupCursorStoreFixture(t, false)
+			path := fx.StorePath
+			if target == "session directory" {
+				path = filepath.Dir(path)
+			}
+			info, err := os.Stat(path)
+			require.NoError(t, err)
+			require.NoError(t, os.Chmod(path, 0))
+			t.Cleanup(func() { require.NoError(t, os.Chmod(path, info.Mode().Perm())) })
+			if file, err := os.Open(fx.StorePath); err == nil {
+				require.NoError(t, file.Close())
+				t.Skip("filesystem permissions are not enforced")
+			}
+
+			for _, operation := range []string{"cached lookup", "discovery refresh", "store event"} {
+				switch operation {
+				case "discovery refresh":
+					sources, err := fx.Provider.Discover(t.Context())
+					require.NoError(t, err)
+					require.Len(t, sources, 1)
+				case "store event":
+					sources, err := fx.Provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+						Path: fx.StorePath, EventKind: "write", WatchRoot: fx.ChatsRoot,
+					})
+					require.NoError(t, err)
+					require.Len(t, sources, 1)
+				}
+				_, err := fx.Provider.Fingerprint(t.Context(), fx.Source)
+				assert.ErrorIs(t, err, os.ErrPermission, operation)
+				outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
+				require.NoError(t, err)
+				assert.Empty(t, outcome.Results, operation)
+				require.Len(t, outcome.SourceErrors, 1, operation)
+				assert.True(t, outcome.SourceErrors[0].Retryable, operation)
+			}
+
+			require.NoError(t, os.Chmod(path, info.Mode().Perm()))
+			outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
+			require.NoError(t, err)
+			require.Empty(t, outcome.SourceErrors)
+			require.Len(t, outcome.Results, 1)
+			require.Len(t, outcome.Results[0].Result.Messages, 2)
+			assert.Contains(t, outcome.Results[0].Result.Messages[1].ThinkingText, "asking who I am")
+			_, err = fx.Provider.Fingerprint(t.Context(), fx.Source)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestCursorStoreEnrichesSourceWithoutOpaque(t *testing.T) {
@@ -904,7 +982,8 @@ func TestCursorStoreIndexKeepsSiblingStoresVisible(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
 	otherAgentID := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	provider := fx.Provider.(*cursorProvider)
-	path := provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
+	path, err := provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
+	require.NoError(t, err)
 	assert.Empty(t, path)
 	otherStore := filepath.Join(
 		fx.ChatsRoot, "deadbeefdeadbeefdeadbeefdeadbeef", otherAgentID, "store.db",
@@ -913,7 +992,8 @@ func TestCursorStoreIndexKeepsSiblingStoresVisible(t *testing.T) {
 	require.NoError(t, os.WriteFile(otherStore, []byte("store"), 0o644))
 	provider.sources.storeIndex.refresh(fx.ChatsRoot)
 
-	path = provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
+	path, err = provider.sources.storePathForRawID(fx.ProjectsRoot, otherAgentID)
+	require.NoError(t, err)
 	assert.Equal(t, otherStore, path)
 }
 

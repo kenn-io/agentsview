@@ -85,16 +85,16 @@ func (i *cursorStoreIndex) transcriptPath(root, agentID string) string {
 	return path
 }
 
-func (i *cursorStoreIndex) path(chatsRoot, agentID string) string {
+func (i *cursorStoreIndex) path(chatsRoot, agentID string) (string, error) {
 	if i == nil {
-		return ""
+		return "", nil
 	}
 	key := filepath.Clean(chatsRoot)
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	paths, ok := i.roots[key]
 	if !ok {
-		return ""
+		return "", nil
 	}
 	return i.validPath(key, paths, agentID)
 }
@@ -132,13 +132,20 @@ func (i *cursorStoreIndex) refresh(chatsRoot string) {
 
 func (i *cursorStoreIndex) validPath(
 	chatsRoot string, paths map[string]string, agentID string,
-) string {
+) (string, error) {
 	path := paths[agentID]
-	if path != "" && !cursorStorePathIsValid(chatsRoot, path) {
-		delete(paths, agentID)
-		return ""
+	if path == "" {
+		return "", nil
 	}
-	return path
+	valid, err := cursorStorePathIsValid(chatsRoot, path)
+	if err != nil {
+		return path, fmt.Errorf("validate Cursor store %s: %w", path, err)
+	}
+	if !valid {
+		delete(paths, agentID)
+		return "", nil
+	}
+	return path, nil
 }
 
 func (i *cursorStoreIndex) remember(chatsRoot, agentID, storePath string) {
@@ -153,7 +160,11 @@ func (i *cursorStoreIndex) remember(chatsRoot, agentID, storePath string) {
 		paths = make(map[string]string)
 		i.roots[key] = paths
 	}
-	if storePath == "" || !cursorStorePathIsValid(key, storePath) {
+	valid, err := cursorStorePathIsValid(key, storePath)
+	if err != nil {
+		return
+	}
+	if !valid {
 		delete(paths, agentID)
 		return
 	}
@@ -194,6 +205,15 @@ func readCursorStoreTurns(
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	var tables int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema
+		WHERE type = 'table' AND name IN ('meta', 'blobs')`).Scan(&tables); err != nil {
+		return nil, fmt.Errorf("cursor store: reading schema: %w", err)
+	}
+	if tables != 2 {
+		return nil, fmt.Errorf("%w: missing meta or blobs table", errCursorStoreFormat)
+	}
 
 	meta, err := loadCursorStoreMeta(ctx, tx, agentID)
 	if err != nil {
@@ -712,7 +732,11 @@ func cursorStorePathsUnderChats(chatsRoot string) (map[string]string, error) {
 			candidate := filepath.Join(
 				chatsRoot, entry.Name(), agentEntry.Name(), "store.db",
 			)
-			if cursorStorePathIsValid(chatsRoot, candidate) {
+			valid, err := cursorStorePathIsValid(chatsRoot, candidate)
+			if err != nil {
+				return nil, fmt.Errorf("validate Cursor store %s: %w", candidate, err)
+			}
+			if valid {
 				paths[agentEntry.Name()] = candidate
 			}
 		}
@@ -720,17 +744,34 @@ func cursorStorePathsUnderChats(chatsRoot string) (map[string]string, error) {
 	return paths, nil
 }
 
-func cursorStorePathIsValid(chatsRoot, storePath string) bool {
+// cursorStorePathIsValid distinguishes absent or invalid paths from access
+// failures, which must not discard a known store or mark it fresh.
+func cursorStorePathIsValid(chatsRoot, storePath string) (bool, error) {
 	info, err := os.Stat(storePath)
-	if err != nil || !info.Mode().IsRegular() {
-		return false
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, nil
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(chatsRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, err
 	}
 	resolved, err := filepath.EvalSymlinks(storePath)
-	return err == nil && isContainedIn(resolved, resolvedRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return isContainedIn(resolved, resolvedRoot), nil
 }
 
 func cursorStoreAgentIDFromPath(path string) (string, bool) {
