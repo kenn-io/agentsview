@@ -318,9 +318,16 @@ function findCompleteUnknownXmlBlocks(src: string): UnknownXmlBlock[] {
  *  marked can parse Markdown in its body. Line-start matching keeps inline
  *  code and prose containing the same tags on their existing paths. */
 function unknownXmlBlockExtension(source: string): TokenizerExtension {
-  const blocks = findCompleteUnknownXmlBlocks(source);
+  const scans = new Map<string, UnknownXmlBlock[]>([
+    [source, findCompleteUnknownXmlBlocks(source)],
+  ]);
+  let currentSource = source;
+  let currentBlocks = scans.get(source)!;
 
-  function firstBlockAtOrAfter(offset: number): UnknownXmlBlock | undefined {
+  function firstBlockAtOrAfter(
+    blocks: UnknownXmlBlock[],
+    offset: number,
+  ): UnknownXmlBlock | undefined {
     let low = 0;
     let high = blocks.length;
     while (low < high) {
@@ -331,19 +338,33 @@ function unknownXmlBlockExtension(source: string): TokenizerExtension {
     return blocks[low];
   }
 
+  function scanFor(src: string): { source: string; blocks: UnknownXmlBlock[] } {
+    if (!currentSource.endsWith(src)) {
+      if (source.endsWith(src)) {
+        currentSource = source;
+        currentBlocks = scans.get(source)!;
+      } else {
+        currentSource = src;
+        currentBlocks = scans.get(src) ?? findCompleteUnknownXmlBlocks(src);
+        scans.set(src, currentBlocks);
+      }
+    }
+    return { source: currentSource, blocks: currentBlocks };
+  }
+
   return {
     name: "unknownXmlBlock",
     level: "block",
     start(src) {
-      if (!source.endsWith(src)) return undefined;
-      const offset = source.length - src.length;
-      const block = firstBlockAtOrAfter(offset);
+      const scan = scanFor(src);
+      const offset = scan.source.length - src.length;
+      const block = firstBlockAtOrAfter(scan.blocks, offset);
       return block ? block.rawStart - offset : undefined;
     },
     tokenizer(src) {
-      if (!source.endsWith(src)) return undefined;
-      const offset = source.length - src.length;
-      const block = firstBlockAtOrAfter(offset);
+      const scan = scanFor(src);
+      const offset = scan.source.length - src.length;
+      const block = firstBlockAtOrAfter(scan.blocks, offset);
       if (!block || block.rawStart !== offset) return undefined;
       const raw = src.slice(0, block.end - block.rawStart);
       return {
@@ -395,6 +416,10 @@ function getApiBase(): string {
 
 function resolveAssetURLs(text: string): string {
   return text.replace(/asset:\/\/([^\s)]+)/g, `${getApiBase()}/assets/$1`);
+}
+
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n|\r/g, "\n");
 }
 
 function isPreservedHtmlTag(name: string): boolean {
@@ -513,7 +538,7 @@ export function renderMarkdown(text: string, options: MarkdownRenderOptions = {}
 
   const resolvedText = resolveAssetURLs(text);
   const markdownParser = renderUnknownXmlBlocksAsPreformatted
-    ? createParser(true, resolvedText.trimEnd())
+    ? createParser(true, normalizeLineEndings(resolvedText).trimEnd())
     : parser;
   const resolved = escapeCustomXmlTags(resolvedText, markdownParser);
   const html = markdownParser.parser(resolved) as string;

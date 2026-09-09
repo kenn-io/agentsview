@@ -361,6 +361,18 @@ describe("renderMarkdown", () => {
       );
     });
 
+    it("normalizes CRLF before matching complete blocks", () => {
+      const dom = parseHTML(
+        renderMarkdown("<policy>\r\n# heading\r\n</policy>", {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        }),
+      );
+
+      expect(dom.querySelector("pre > code")?.textContent).toBe(
+        "<policy>\n# heading\n</policy>\n",
+      );
+    });
+
     it("keeps markdown angle autolinks intact", () => {
       const dom = parseHTML(renderMarkdown("<https://example.com>"));
       const link = dom.querySelector("p > a");
@@ -502,6 +514,20 @@ describe("renderMarkdown", () => {
         "  <policy>\n# heading\n  </policy>\n",
       );
       expect(dom.querySelector("h1")).toBeNull();
+    });
+
+    it("captures complete blocks inside list and blockquote items", () => {
+      for (const source of [
+        "- <policy>\n  # heading\n  </policy>",
+        "> <policy>\n> # heading\n> </policy>",
+      ]) {
+        const dom = parseHTML(
+          renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+        );
+
+        expect(dom.querySelector("pre > code")?.textContent).toContain("<policy>");
+        expect(dom.querySelector("h1")).toBeNull();
+      }
     });
 
     it("captures complete blocks with up to three leading spaces", () => {
