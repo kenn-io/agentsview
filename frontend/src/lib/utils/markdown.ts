@@ -1,5 +1,10 @@
 // kit-ui-check-ignore: app renderer adds agent-specific XML escaping and shell wrapper tags on top of marked; migrating to kit-ui createMarkdownRenderer needs a dedicated behavior-preserving pass.
-import { Marked, type Token, type TokenizerExtension } from "marked";
+import {
+  Marked,
+  type Token,
+  type TokenizerAndRendererExtension,
+  type TokenizerExtension,
+} from "marked";
 // kit-ui-check-ignore: app renderer sanitizes the custom marked output above; migrating to kit-ui createMarkdownRenderer needs a dedicated behavior-preserving pass.
 import DOMPurify from "dompurify";
 import { LRUCache } from "./cache.js";
@@ -317,7 +322,7 @@ function findCompleteUnknownXmlBlocks(src: string): UnknownXmlBlock[] {
 /** Build a tokenizer that captures a complete unknown XML block before
  *  marked can parse Markdown in its body. Line-start matching keeps inline
  *  code and prose containing the same tags on their existing paths. */
-function unknownXmlBlockExtension(): TokenizerExtension {
+function unknownXmlBlockExtension(): TokenizerAndRendererExtension {
   type ScanContext = { source: string; blocks: UnknownXmlBlock[] };
   const contexts = new WeakMap<object, ScanContext>();
   let currentContext: ScanContext | undefined;
@@ -354,7 +359,12 @@ function unknownXmlBlockExtension(): TokenizerExtension {
       if (!currentContext || !currentContext.source.endsWith(src)) return undefined;
       const offset = currentContext.source.length - src.length;
       const block = firstBlockAtOrAfter(currentContext.blocks, offset);
-      return block ? block.rawStart - offset : undefined;
+      if (!block) return undefined;
+      const prefix = currentContext.source.slice(offset, block.rawStart);
+      if (!/^(?:[ \t\n]*|(?:<\/[A-Za-z][A-Za-z0-9:_-]*[ \t]*>[ \t\n]*)+)$/.test(prefix)) {
+        return undefined;
+      }
+      return block.rawStart - offset;
     },
     tokenizer(src, tokens) {
       const scan = scanFor(src, tokens);
@@ -366,32 +376,11 @@ function unknownXmlBlockExtension(): TokenizerExtension {
         const prefixLength = block.rawStart - offset;
         const prefix = src.slice(0, prefixLength);
         if (prefixLength <= 0) return undefined;
-        const closingTagRe = /<\/([A-Za-z][A-Za-z0-9:_-]*)[ \t]*>/g;
-        let cursor = 0;
-        let foundClosingTag = false;
-        let allKnown = true;
-        let escapedPrefix = "";
-        let closingTag: RegExpExecArray | null;
-        while ((closingTag = closingTagRe.exec(prefix)) !== null) {
-          foundClosingTag = true;
-          if (!/^[ \t\n]*$/.test(prefix.slice(cursor, closingTag.index))) {
-            return undefined;
-          }
-          const rawTag = closingTag[0];
-          const known = isPreservedHtmlTag(closingTag[1]!.toLowerCase());
-          allKnown &&= known;
-          escapedPrefix += prefix.slice(cursor, closingTag.index);
-          escapedPrefix += known ? rawTag : escapeTagBrackets(rawTag);
-          cursor = closingTagRe.lastIndex;
-        }
-        if (
-          !foundClosingTag ||
-          !/^[ \t\n]*$/.test(prefix.slice(cursor))
-        ) {
-          return undefined;
-        }
-        if (allKnown) return { type: "html", raw: prefix, text: prefix };
-        return { type: "text", raw: prefix, text: escapedPrefix, escaped: true };
+        return {
+          type: "unknownXmlBlock",
+          raw: prefix,
+          tokens: this.lexer.blockTokens(prefix, []),
+        };
       }
       const raw = src.slice(0, block.end - block.rawStart);
       return {
@@ -399,6 +388,10 @@ function unknownXmlBlockExtension(): TokenizerExtension {
         raw,
         text: raw,
       };
+    },
+    renderer(token) {
+      const prefixToken = token as Token & { tokens: MarkdownToken[] };
+      return this.parser.parse(escapeCustomXmlTokens(prefixToken.tokens));
     },
   };
 }

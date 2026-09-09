@@ -516,6 +516,21 @@ describe("renderMarkdown", () => {
       expect(dom.querySelector("h1")).toBeNull();
     });
 
+    it("preserves Markdown prefixes before later complete blocks", () => {
+      for (const source of [
+        "<one>\n# one\n</one>\nIntro **text**\n<two>\n# two\n</two>",
+        "<one>\n# one\n</one>\n- Intro **text**\n  <two>\n  # two\n  </two>",
+      ]) {
+        const dom = parseHTML(
+          renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+        );
+
+        expect(dom.querySelector("strong")?.textContent).toBe("text");
+        expect(dom.querySelectorAll("pre > code")).toHaveLength(2);
+        expect(dom.querySelector("h1")).toBeNull();
+      }
+    });
+
     it("captures complete blocks inside list and blockquote items", () => {
       for (const source of [
         "- <policy>\n  # heading\n  </policy>",
