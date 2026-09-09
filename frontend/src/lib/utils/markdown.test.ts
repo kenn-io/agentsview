@@ -808,6 +808,17 @@ describe("renderMarkdown", () => {
         expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
       }
     });
+
+    it("does not capture unknown tags inside HTML comments", () => {
+      const source = "Intro <!--\n<policy>\n# heading\n</policy>\n-->";
+      const omitted = renderMarkdown(source);
+      const enabled = renderMarkdown(source, {
+        renderUnknownXmlBlocksAsPreformatted: true,
+      });
+
+      expect(enabled).toBe(omitted);
+      expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
+    });
   });
 
   describe("Claude Code shell shortcuts", () => {

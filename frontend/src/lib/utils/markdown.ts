@@ -334,7 +334,13 @@ function closedBacktickRanges(
 
 function markdownCodeRanges(src: string, end: number): TextRange[] {
   const fencedRanges = fencedCodeRanges(src, end);
-  return [...fencedRanges, ...closedBacktickRanges(src, end, fencedRanges)];
+  const ranges = [...fencedRanges, ...closedBacktickRanges(src, end, fencedRanges)];
+  const comments = /<!--[\s\S]*?(?:-->|$)/g;
+  let comment: RegExpExecArray | null;
+  while ((comment = comments.exec(src)) !== null && comment.index < end) {
+    ranges.push({ start: comment.index, end: Math.min(comments.lastIndex, end) });
+  }
+  return ranges;
 }
 
 function isInRange(offset: number, ranges: TextRange[]): boolean {
