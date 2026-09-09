@@ -545,6 +545,19 @@ describe("renderMarkdown", () => {
       }
     });
 
+    it("keeps known HTML closing tags on the HTML path", () => {
+      const dom = parseHTML(
+        renderMarkdown("</div>\n<policy>\n# heading\n</policy>", {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        }),
+      );
+
+      expect(dom.querySelector("pre > code")?.textContent).toBe(
+        "<policy>\n# heading\n</policy>\n",
+      );
+      expect(dom.textContent).not.toContain("</div>");
+    });
+
     it("rescans each transformed list item independently", () => {
       const source = "- Intro <policy>\n  # heading\n  </policy>\n- <policy>\n  # heading\n  </policy>";
       const dom = parseHTML(

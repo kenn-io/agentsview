@@ -371,7 +371,12 @@ function unknownXmlBlockExtension(): TokenizerExtension {
         ) {
           return undefined;
         }
-        return { type: "text", raw: prefix, text: prefix };
+        const closingTag = prefix.match(/^<\/([A-Za-z][A-Za-z0-9:_-]*)[ \t]*>/);
+        if (!closingTag) {
+          return undefined;
+        }
+        const type = isPreservedHtmlTag(closingTag[1]!.toLowerCase()) ? "html" : "text";
+        return { type, raw: prefix, text: prefix };
       }
       const raw = src.slice(0, block.end - block.rawStart);
       return {
