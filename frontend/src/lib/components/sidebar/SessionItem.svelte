@@ -23,7 +23,7 @@
     UserRoundIcon,
     UsersRoundIcon,
   } from "../../icons.js";
-  import { StatusDot } from "@kenn-io/kit-ui";
+  import { StatusDot, Tooltip } from "@kenn-io/kit-ui";
   import { sessionStatusLabel } from "../../utils/sessionStatus.js";
   import { router } from "../../stores/router.svelte.js";
 
@@ -188,38 +188,6 @@
 
   // Context menu state
   let contextMenu: { x: number; y: number } | null = $state(null);
-
-  type AgentTooltip = {
-    label: string;
-    left: number;
-    top: number;
-    maxWidth: number;
-  };
-
-  let agentTooltip: AgentTooltip | null = $state(null);
-
-  function showAgentTooltip(target: EventTarget | null) {
-    if (!(target instanceof HTMLElement)) return;
-    const label = target.getAttribute("title")?.trim();
-    if (!label || target.scrollWidth <= target.clientWidth + 1) return;
-    const rect = target.getBoundingClientRect();
-    const maxWidth = Math.min(360, Math.max(180, window.innerWidth - 16));
-    const rightAlignedLeft = rect.right - maxWidth;
-    const left = Math.min(
-      Math.max(8, rightAlignedLeft),
-      Math.max(8, window.innerWidth - maxWidth - 8),
-    );
-    const estimatedHeight = 32;
-    const belowTop = rect.bottom + 6;
-    const top = belowTop + estimatedHeight <= window.innerHeight
-      ? belowTop
-      : Math.max(8, rect.top - estimatedHeight - 6);
-    agentTooltip = { label, left, top, maxWidth };
-  }
-
-  function hideAgentTooltip() {
-    agentTooltip = null;
-  }
 
   // Rename state
   let renaming = $state(false);
@@ -513,13 +481,19 @@
   {#if !compact && (!hideAgent || showMachine)}
     <div class="side-meta">
       {#if !hideAgent}
-        <span
-          class="agent-tag"
-          style:color={agentColor}
-          title={agentLabel(session.agent, session.agent_label)}
-          onmouseenter={(event) => showAgentTooltip(event.currentTarget)}
-          onmouseleave={hideAgentTooltip}
-        >{agentLabel(session.agent, session.agent_label)}</span>
+        <div class="agent-tag-wrapper">
+          <Tooltip
+            text={agentLabel(session.agent, session.agent_label)}
+            openDelayMs={0}
+            align="end"
+          >
+            <span
+              class="agent-tag"
+              style:color={agentColor}
+              title={agentLabel(session.agent, session.agent_label)}
+            >{agentLabel(session.agent, session.agent_label)}</span>
+          </Tooltip>
+        </div>
         {#if entrypointBadge(session.entrypoint)}
           <span class="entrypoint-tag">{entrypointBadge(session.entrypoint)}</span>
         {/if}
@@ -532,17 +506,6 @@
     </div>
   {/if}
 </div>
-
-{#if agentTooltip}
-  <div
-    class="agent-tooltip"
-    use:portal
-    role="tooltip"
-    style:left={`${agentTooltip.left}px`}
-    style:top={`${agentTooltip.top}px`}
-    style:max-width={`${agentTooltip.maxWidth}px`}
-  >{agentTooltip.label}</div>
-{/if}
 
 {#if contextMenu}
   <div
@@ -688,20 +651,19 @@
     text-overflow: ellipsis;
   }
 
-  :global(.agent-tooltip) {
-    position: fixed;
-    z-index: 1000;
-    box-sizing: border-box;
-    padding: 5px 8px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    box-shadow: var(--shadow-md);
-    font-size: 11px;
-    line-height: 1.35;
-    overflow-wrap: anywhere;
-    pointer-events: none;
+  .agent-tag-wrapper {
+    display: flex;
+    align-items: flex-end;
+    height: 8px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .agent-tag-wrapper :global(.kit-tooltip-trigger) {
+    display: flex;
+    align-items: flex-end;
+    height: 8px;
+    max-width: 100%;
   }
 
   .entrypoint-tag {
