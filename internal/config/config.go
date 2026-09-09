@@ -1004,7 +1004,7 @@ func Default() (Config, error) {
 		}
 		for i, rel := range def.DefaultDirs {
 			if root != "" {
-				dirs[i] = reRootDefaultDir(root, rel)
+				dirs[i] = reRootDefaultDir(root, rel, def.DefaultRootDir)
 				continue
 			}
 			dirs[i] = filepath.Join(home, rel)
@@ -1064,8 +1064,11 @@ func Default() (Config, error) {
 	}, nil
 }
 
-func reRootDefaultDir(root, rel string) string {
+func reRootDefaultDir(root, rel, defaultRoot string) string {
 	rel = filepath.Clean(rel)
+	if defaultRoot != "" {
+		return filepath.Join(root, strings.TrimPrefix(rel, filepath.Clean(defaultRoot)+string(filepath.Separator)))
+	}
 	if _, tail, ok := strings.Cut(rel, string(filepath.Separator)); ok && tail != "" {
 		return filepath.Join(root, tail)
 	}
@@ -1122,7 +1125,7 @@ func AgentHomeDirs(def parser.AgentDef, home string) []string {
 	}
 	dirs := make([]string, 0, len(def.DefaultDirs))
 	for _, rel := range def.DefaultDirs {
-		dirs = append(dirs, reRootDefaultDir(home, rel))
+		dirs = append(dirs, reRootDefaultDir(home, rel, def.DefaultRootDir))
 	}
 	return dirs
 }
@@ -1889,7 +1892,7 @@ func dataDirFromEnv() string {
 
 func (c *Config) loadEnv() {
 	for _, def := range parser.Registry {
-		if v := os.Getenv(def.EnvVar); v != "" {
+		if v := firstEnv(def.EnvVar, def.NativeEnvVar); v != "" {
 			if def.Type == parser.AgentGoose {
 				v = parser.ResolveGoosePathRoot(v)
 				if v == "" {

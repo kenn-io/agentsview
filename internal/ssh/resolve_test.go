@@ -1346,3 +1346,39 @@ func TestResolveEvenerSkipsRootWithoutTranscripts(t *testing.T) {
 	assert.Empty(t, dirs[parser.AgentEvener])
 	assert.Empty(t, files[parser.AgentEvener])
 }
+
+func TestResolveScriptPiDirectoryOverrides(t *testing.T) {
+	skipScriptPathEqualityOnWindows(t)
+	for _, tt := range []struct {
+		name       string
+		agentDir   string
+		sessionDir string
+		piDir      string
+		want       string
+	}{
+		{name: "default", want: ".pi/agent/sessions"},
+		{name: "agent home", agentDir: "pi profile", want: "pi profile/sessions"},
+		{name: "session directory", sessionDir: "transcripts", want: "transcripts"},
+		{name: "sessions override home", agentDir: "pi profile", sessionDir: "transcripts", want: "transcripts"},
+		{name: "PI_DIR overrides native variables", agentDir: "pi profile", sessionDir: "transcripts", piDir: "explicit", want: "explicit"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := physTempDir(t)
+			env := []string{"HOME=" + home}
+			for key, value := range map[string]string{
+				"PI_CODING_AGENT_DIR":         tt.agentDir,
+				"PI_CODING_AGENT_SESSION_DIR": tt.sessionDir,
+				"PI_DIR":                      tt.piDir,
+			} {
+				if value != "" {
+					env = append(env, key+"="+filepath.Join(home, value))
+				}
+			}
+			root := filepath.Join(home, tt.want)
+			require.NoError(t, os.MkdirAll(root, 0o755))
+			out := runResolveScriptForTest(t, env...)
+			dirs, _, _ := parseResolvedDirs(string(out))
+			assert.Equal(t, []string{root}, dirs[parser.AgentPi])
+		})
+	}
+}

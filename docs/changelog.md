@@ -22,6 +22,10 @@ description: Release history for AgentsView
 
 **Improvements**
 
+- Discover Pi sessions stored under `PI_CODING_AGENT_DIR` or
+  `PI_CODING_AGENT_SESSION_DIR`, locally and over SSH. Existing `PI_DIR`
+  overrides retain priority. (#1681)
+
 - Local-only incremental sync now waits with visible status when the default
   daemon is busy, instead of failing with "sync already in progress". Canceling
   the wait leaves the existing work running. CLI help and startup guides now

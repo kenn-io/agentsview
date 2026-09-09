@@ -729,6 +729,8 @@ export OPENCLAW_DIR=~/custom/openclaw
 export OPENCODE_DIR=~/custom/opencode
 export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi
+export PI_CODING_AGENT_DIR=~/custom/pi-home # sessions are under this home
+export PI_CODING_AGENT_SESSION_DIR=~/custom/pi-sessions # direct session directory
 export TAU_SESSIONS_DIR=~/custom/tau/sessions
 export PIEBALD_DIR=~/custom/piebald
 export POOLSIDE_DIR=~/custom/poolside/trajectories
@@ -846,6 +848,14 @@ replaces the default path and an explicit empty array clears the default local
 directory.
 
 All listed directories are discovered, watched, and synced independently.
+
+Pi also honors its native `PI_CODING_AGENT_DIR` and
+`PI_CODING_AGENT_SESSION_DIR` variables in local and SSH discovery. The agent
+home variable changes the default to `<agent-home>/sessions`; the session
+variable points directly at a session directory. `PI_DIR` takes precedence over
+`PI_CODING_AGENT_SESSION_DIR`, which takes precedence over `pi_dirs` in
+`config.toml`. A configured `pi_dirs` array replaces the home-derived default;
+an empty array clears it. With no overrides, Pi uses `~/.pi/agent/sessions`.
 
 ### Alternate Claude and Codex Homes
 

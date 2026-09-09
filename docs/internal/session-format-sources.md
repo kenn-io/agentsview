@@ -1174,6 +1174,18 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
   version 81 reparses existing Pi-family archives after adding the flat
   `cacheWrite` spelling.
+- **Directory configuration:** Reverified 2026-09-09 against
+  [config.ts](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/config.ts)
+  and
+  [main.ts](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/main.ts).
+  `PI_CODING_AGENT_DIR` replaces `~/.pi/agent`, with default sessions under
+  `sessions/`. `PI_CODING_AGENT_SESSION_DIR` supplies the session directory
+  directly and takes precedence over that default. Both accept tilde paths.
+  The pinned
+  [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
+  writes files directly into an explicit session directory; default sessions
+  live one encoded project directory below the session root. Agentsview
+  discovers both layouts.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the

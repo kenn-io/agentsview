@@ -90,7 +90,9 @@ type AgentDef struct {
 	Type              AgentType
 	DisplayName       string // "Claude Code", "Codex", etc.
 	EnvVar            string // env var for dir override
+	NativeEnvVar      string // native session-dir env var, used when EnvVar is empty
 	DefaultRootEnvVar string // env var that re-roots DefaultDirs before $HOME fallback
+	DefaultRootDir    string // home-relative prefix replaced by the root env (empty = first component)
 	ConfigKey         string // TOML key in config.toml ("" = none)
 	// HomeConfigKey is the TOML key for an array of alternate agent home
 	// directories ("" = none). Each home re-roots DefaultDirs the same way
@@ -483,13 +485,16 @@ var Registry = []AgentDef{
 		},
 	},
 	{
-		Type:        AgentPi,
-		DisplayName: "Pi",
-		EnvVar:      "PI_DIR",
-		ConfigKey:   "pi_dirs",
-		DefaultDirs: []string{".pi/agent/sessions"},
-		IDPrefix:    "pi:",
-		FileBased:   true,
+		Type:              AgentPi,
+		DisplayName:       "Pi",
+		EnvVar:            "PI_DIR",
+		NativeEnvVar:      "PI_CODING_AGENT_SESSION_DIR",
+		DefaultRootEnvVar: "PI_CODING_AGENT_DIR",
+		DefaultRootDir:    ".pi/agent",
+		ConfigKey:         "pi_dirs",
+		DefaultDirs:       []string{".pi/agent/sessions"},
+		IDPrefix:          "pi:",
+		FileBased:         true,
 	},
 	{
 		Type:        AgentTau,
