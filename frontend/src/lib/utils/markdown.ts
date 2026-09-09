@@ -280,6 +280,18 @@ function closedBacktickRanges(
   end: number,
   fencedRanges: TextRange[] = fencedCodeRanges(src, end),
 ): TextRange[] {
+  const ignoredRanges = [...fencedRanges];
+  const tags = new RegExp(XML_TAG_ESCAPE_RE.source, "g");
+  let tag: RegExpExecArray | null;
+  while ((tag = tags.exec(src)) !== null && tag.index < end) {
+    ignoredRanges.push({ start: tag.index, end: Math.min(tags.lastIndex, end) });
+  }
+  const fenceLines = /^ {0,3}(?:`{3,}|~{3,})[^\r\n]*(?:\r?\n|$)/gm;
+  let fenceLine: RegExpExecArray | null;
+  while ((fenceLine = fenceLines.exec(src)) !== null && fenceLine.index < end) {
+    ignoredRanges.push({ start: fenceLine.index, end: Math.min(fenceLines.lastIndex, end) });
+  }
+
   const ranges: TextRange[] = [];
   const runs = /`+/g;
   let cursor = 0;
@@ -287,11 +299,11 @@ function closedBacktickRanges(
     runs.lastIndex = cursor;
     const opening = runs.exec(src);
     if (!opening || opening.index >= end) break;
-    const fencedRange = fencedRanges.find(
+    const ignoredRange = ignoredRanges.find(
       (range) => opening.index >= range.start && opening.index < range.end,
     );
-    if (fencedRange) {
-      cursor = fencedRange.end;
+    if (ignoredRange) {
+      cursor = ignoredRange.end;
       continue;
     }
 
@@ -301,11 +313,11 @@ function closedBacktickRanges(
     let closing: RegExpExecArray | null = null;
     let paired = false;
     while ((closing = closingRuns.exec(src)) !== null && closing.index < end) {
-      const closingFence = fencedRanges.find(
+      const closingRange = ignoredRanges.find(
         (range) => closing!.index >= range.start && closing!.index < range.end,
       );
-      if (closingFence) {
-        closingRuns.lastIndex = closingFence.end;
+      if (closingRange) {
+        closingRuns.lastIndex = closingRange.end;
         continue;
       }
       if (closing[0].length === length) {

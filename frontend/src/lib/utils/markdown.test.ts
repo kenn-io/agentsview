@@ -697,6 +697,22 @@ describe("renderMarkdown", () => {
       expect(dom.querySelector("h1")).toBeNull();
     });
 
+    it("ignores backticks in HTML attributes and invalid fence info", () => {
+      const sources = [
+        '<img title="`">\n<later>\n# later\n</later>\n` after',
+        "Intro\n```bad`info\n<later>\n# later\n</later>\n`` after",
+      ];
+
+      for (const source of sources) {
+        const dom = parseHTML(
+          renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+        );
+
+        expect(dom.querySelector("pre > code")?.textContent).toContain("<later>");
+        expect(dom.querySelector("h1")).toBeNull();
+      }
+    });
+
     it("keeps internal whitespace inside the captured block", () => {
       const source = "<policy>\n\n    first\n\n      second\n\n</policy>";
       const dom = parseHTML(
