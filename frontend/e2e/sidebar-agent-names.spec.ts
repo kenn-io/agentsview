@@ -326,6 +326,8 @@ test.describe("sidebar agent names", () => {
       "title",
       LONG_LABEL,
     );
+    await page.locator('[data-session-id="long-label-session"] .agent-tag').hover();
+    await expect(page.locator(".agent-tooltip")).toHaveText(LONG_LABEL);
     console.log(`width=220px ${JSON.stringify(narrow)}`);
     console.log(`width=220px long-label ${JSON.stringify(longLabel)}`);
   });
