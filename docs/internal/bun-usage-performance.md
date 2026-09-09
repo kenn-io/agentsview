@@ -343,3 +343,27 @@ Profiling is disabled by default. An invalid trace value or inaccessible output
 directory logs a diagnostic and leaves the sync pass running without worker
 profiling. Existing daemons must restart in the isolated environment to inherit
 these settings. Use disposable source and archive clones for profiling.
+
+## Tool analytics benchmark gate
+
+The year-range tool analytics gate measured 39.22 ms against a 19.61 ms
+baseline. The query computed weekly buckets per tool call in SQL, then the Go
+response builder bucketed the aggregate dates into weeks again.
+
+Group by local date in SQL and keep weekly response bucketing in Go. SQLite UTC
+date extraction now reads the canonical timestamp's date directly, without
+normalizing its separator and suffix. Other timezones still use the existing
+local-time conversion. A session spanning several days can return up to seven
+daily groups per former weekly group; individual tool calls remain aggregated in
+the database.
+
+A local macOS arm64 comparison used the same year-range fixture, ten iterations
+per sample, and three samples per version. The original query took 21.57–22.57
+ms before the candidate run. Repeating in reverse order measured 13.40–13.98 ms
+for the candidate and 21.53–22.27 ms for the original query, about 38% lower at
+the median. Allocation was about 260 KB per operation versus 262–263 KB. These
+local measurements do not establish a CI gate pass; the next pushed commit must
+run through the gate unchanged.
+
+Reproduce with `BenchmarkGetAnalyticsToolsYearRange` in `internal/db`, using
+`CGO_ENABLED=1 go test -tags fts5 ./internal/db -run '^$' -bench '^BenchmarkGetAnalyticsToolsYearRange$' -benchtime=10x -count=3 -benchmem`.

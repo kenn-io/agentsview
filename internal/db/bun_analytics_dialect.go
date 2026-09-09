@@ -10,6 +10,7 @@ type BunAnalyticsDialect interface {
 	// timestamps without converting native timestamp columns to wall time.
 	CanonicalTimestampOrder(operand string) string
 	LocalTimestamp(operand, timezone string) BunSQLFragment
+	LocalDate(operand, timezone string) BunSQLFragment
 	Date(operand BunSQLFragment) BunSQLFragment
 	Bucket(operand BunSQLFragment, granularity string) BunSQLFragment
 	Hour(operand BunSQLFragment) BunSQLFragment
@@ -169,3 +170,19 @@ func (sqliteBunAnalyticsDialect) CanonicalTimestampOrder(operand string) string 
 }
 func (postgresBunAnalyticsDialect) CanonicalTimestampOrder(operand string) string { return operand }
 func (duckBunAnalyticsDialect) CanonicalTimestampOrder(operand string) string     { return operand }
+
+// LocalDate avoids normalizing canonical UTC text when only its date is needed.
+func (d sqliteBunAnalyticsDialect) LocalDate(operand, timezone string) BunSQLFragment {
+	if timezone == "UTC" {
+		return d.Date(BunSQL(operand))
+	}
+	return d.Date(d.LocalTimestamp(operand, timezone))
+}
+
+func (d postgresBunAnalyticsDialect) LocalDate(operand, timezone string) BunSQLFragment {
+	return d.Date(d.LocalTimestamp(operand, timezone))
+}
+
+func (d duckBunAnalyticsDialect) LocalDate(operand, timezone string) BunSQLFragment {
+	return d.Date(d.LocalTimestamp(operand, timezone))
+}

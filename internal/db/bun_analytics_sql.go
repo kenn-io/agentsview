@@ -226,11 +226,11 @@ func (b *bunAnalyticsSQL) qualifiedSessionsCTE() BunCTEFragment {
 // model and timestamp. Paired blank-model user ownership does not apply to
 // tool calls.
 func (b *bunAnalyticsSQL) directToolFactsCTE() BunCTEFragment {
-	local := b.dialect.LocalTimestamp("COALESCE("+
-		bunNullableTimestamp("message.timestamp")+", "+
-		bunNullableTimestamp("session.started_at")+", session.created_at)", b.zone)
+	instant := "COALESCE(" + bunNullableTimestamp("message.timestamp") + ", " +
+		bunNullableTimestamp("session.started_at") + ", session.created_at)"
+	local := b.dialect.LocalTimestamp(instant, b.zone)
 	predicates := append(
-		b.timestampRangePredicates(local), b.messageDayHourPredicates(local)...,
+		b.dateRangePredicates(b.dialect.LocalDate(instant, b.zone)), b.messageDayHourPredicates(local)...,
 	)
 	if len(b.models) > 0 {
 		predicates = append([]BunSQLFragment{
@@ -255,17 +255,13 @@ func (b *bunAnalyticsSQL) directToolFactsCTE() BunCTEFragment {
 	}
 }
 
-func (b *bunAnalyticsSQL) timestampRangePredicates(
-	local BunSQLFragment,
-) []BunSQLFragment {
+func (b *bunAnalyticsSQL) dateRangePredicates(date BunSQLFragment) []BunSQLFragment {
 	var predicates []BunSQLFragment
 	if b.filter.From != "" {
-		date := b.dialect.Date(local)
 		predicates = append(predicates,
 			BunSQL(date.SQL+" >= ?", append(date.Args, b.filter.From)...))
 	}
 	if b.filter.To != "" {
-		date := b.dialect.Date(local)
 		predicates = append(predicates,
 			BunSQL(date.SQL+" <= ?", append(date.Args, b.filter.To)...))
 	}

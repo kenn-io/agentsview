@@ -26,7 +26,7 @@ type bunAnalyticsToolAggregateRow struct {
 	ToolName  string `bun:"tool_name"`
 	Category  string `bun:"category"`
 	Agent     string `bun:"agent"`
-	Week      string `bun:"week"`
+	Date      string `bun:"date"`
 	Count     int    `bun:"count"`
 }
 
@@ -40,25 +40,26 @@ func (s *BunStore) getBunAnalyticsToolsAggregate(
 		return ToolsAnalyticsResponse{}, err
 	}
 	with := renderBunCTEs(sessions, builder.directToolFactsCTE())
-	local := builder.dialect.LocalTimestamp("COALESCE("+
+	// BuildToolsAnalytics merges local dates into weeks. Grouping by date here
+	// avoids computing the same week boundary for every tool call in SQL.
+	date := builder.dialect.LocalDate("COALESCE("+
 		bunNullableTimestamp("tool.message_timestamp")+", "+
 		bunNullableTimestamp("session.started_at")+", session.created_at)", builder.zone)
-	week := builder.dialect.Bucket(local, "week")
 	args := append([]any{}, with.Args...)
-	args = append(args, week.Args...)
+	args = append(args, date.Args...)
 	query := `WITH ` + with.SQL + `
 SELECT tool.session_id,
 	TRIM(COALESCE(tool.tool_name, '')) AS tool_name,
 	tool.category,
 	session.agent,
-	` + week.SQL + ` AS week,
+	` + date.SQL + ` AS date,
 	COUNT(*) AS count
 FROM ` + bunAnalyticsToolFactsCTE + ` AS tool
 JOIN ` + bunAnalyticsFilteredSessionsCTE + ` AS session
 	ON session.id = tool.session_id
 GROUP BY tool.session_id, TRIM(COALESCE(tool.tool_name, '')),
-	tool.category, session.agent, ` + week.SQL
-	args = append(args, week.Args...)
+	tool.category, session.agent, ` + date.SQL
+	args = append(args, date.Args...)
 
 	var rows []bunAnalyticsToolAggregateRow
 	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
@@ -68,10 +69,7 @@ GROUP BY tool.session_id, TRIM(COALESCE(tool.tool_name, '')),
 	}
 	compact := make([]ToolAnalyticsRow, 0, len(rows))
 	for _, row := range rows {
-		compact = append(compact, ToolAnalyticsRow{
-			SessionID: row.SessionID, ToolName: row.ToolName,
-			Category: row.Category, Agent: row.Agent, Date: row.Week, Count: row.Count,
-		})
+		compact = append(compact, ToolAnalyticsRow(row))
 	}
 	return BuildToolsAnalytics(compact), nil
 }
