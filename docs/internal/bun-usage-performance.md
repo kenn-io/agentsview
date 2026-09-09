@@ -282,6 +282,12 @@ baseline in both samples. Total allocation remains about 32% higher than
 baseline. The change shortens transient buffer lifetimes rather than removing
 Bun's SQL formatting cost; an additional pool is not claimed to solve it.
 
+On the tool-payload microbenchmark, the final 1 MiB statements allocate about
+5.02 MB per operation, measured with three samples of three iterations each on
+darwin/arm64. The 15.31 MB measurement above isolates the formatter change with
+the earlier 16 MiB statements. Both variants check persisted result contents
+outside the timer.
+
 Staged Codex publication retains the upstream streaming path while committing
 session content, usage, signals, and checkpoints together through Bun. Its
 scratch store also uses Bun. SQLite-only raw-result metadata survives

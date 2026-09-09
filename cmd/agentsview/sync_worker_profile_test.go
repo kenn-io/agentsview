@@ -47,8 +47,10 @@ func TestSyncWorkerProfilesActualPass(t *testing.T) {
 				require.NoError(t, os.WriteFile(root, []byte("occupied"), 0o600))
 			}
 			command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSyncWorkerProfileHelperProcess$")
+			home, temp := t.TempDir(), t.TempDir()
 			command.Env = []string{
-				"HOME=" + t.TempDir(), "TMPDIR=" + t.TempDir(),
+				"HOME=" + home, "USERPROFILE=" + home,
+				"TMPDIR=" + temp, "TMP=" + temp, "TEMP=" + temp,
 				"AGENTSVIEW_DATA_DIR=" + cfg.DataDir, "AGENTSVIEW_NO_DAEMON=1",
 				"AGENTSVIEW_PROFILE_TEST_HELPER=1",
 				"AGENTSVIEW_SYNC_PROFILE_TRACE=" + tc.trace,
