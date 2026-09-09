@@ -155,6 +155,8 @@ func TestParseCortexSession_ToolUse(t *testing.T) {
 	require.NotNil(t, sess)
 
 	assertMessageCount(t, sess.MessageCount, 3)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Read main.go", sess.FirstMessage)
 	require.Len(t, msgs, 3)
 	assert.True(t, msgs[1].HasToolUse)
 	require.Len(t, msgs[1].ToolCalls, 1)
@@ -162,6 +164,7 @@ func TestParseCortexSession_ToolUse(t *testing.T) {
 	assert.Contains(t, msgs[1].Content, "/tmp/main.go")
 
 	// Tool result message carries ContentLength > 0.
+	assert.Equal(t, SourceSubtypeToolResult, msgs[2].SourceSubtype)
 	require.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, "tu1", msgs[2].ToolResults[0].ToolUseID)
 	assert.Greater(t, msgs[2].ToolResults[0].ContentLength, 0,

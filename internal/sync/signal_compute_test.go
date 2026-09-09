@@ -219,3 +219,18 @@ func TestComputeSignalsFromMessages_ExplicitBoundariesOverrideHeuristic(t *testi
 	got := computeSignalsFromMessages(sess, msgs)
 	assert.Equal(t, 2, got.CompactionCount)
 }
+
+func TestSignalsIgnoreToolResultPrompts(t *testing.T) {
+	messages := []db.Message{
+		{Ordinal: 0, Role: "user", Content: "help"},
+		{Ordinal: 1, Role: "assistant", Content: "Finished successfully."},
+		{Ordinal: 2, Role: "user", SourceSubtype: "tool_result", Content: "WHY IS THIS STILL BROKEN"},
+	}
+	got := computeSignalsFromMessages(db.Session{MessageCount: 3}, messages)
+	assert.Equal(t, "assistant", got.EndedWithRole)
+	assert.Equal(t, 1, got.QualitySignals.ShortPromptCount)
+	assert.Zero(t, signals.CountFrustrationMarkers(extractHeuristicMessages(messages)))
+	orphan := computeSignalsFromMessages(db.Session{MessageCount: 1}, messages[2:])
+	assert.Empty(t, orphan.EndedWithRole)
+	assert.Zero(t, orphan.QualitySignals.ShortPromptCount)
+}

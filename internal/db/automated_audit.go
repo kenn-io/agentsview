@@ -37,6 +37,7 @@ func auditAutomatedFull(
 				FROM messages m
 				WHERE m.session_id = s.id
 				  AND m.role = 'user'
+				  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 				  AND m.is_system = 0
 				  AND TRIM(m.content) <> ''
 				ORDER BY m.ordinal
@@ -88,6 +89,7 @@ func auditAutomatedMatchingHash(
 				FROM messages m
 				WHERE m.session_id = s.id
 				  AND m.role = 'user'
+				  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 				  AND m.is_system = 0
 				  AND TRIM(m.content) <> ''
 				ORDER BY m.ordinal
@@ -170,6 +172,7 @@ func auditAutomatedMatchingHash(
 					FROM messages m
 					WHERE m.session_id = s.id
 					  AND m.role = 'user'
+					  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 					  AND m.is_system = 0
 					  AND TRIM(m.content) <> ''
 					ORDER BY m.ordinal

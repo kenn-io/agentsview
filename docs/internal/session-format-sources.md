@@ -513,6 +513,12 @@ add an archived or maintained mirror without replacing the original identity.
   so cancellation reaches the parser while it emits staged events. These are
   Agentsview integration checks; they do not change the producer format.
 
+- **Archive import integration reverified 2026-09-08:** collecting and staged
+  Codex imports apply the archive content policy before storing result
+  payloads or computing signals. Restricted archives omit resumable hash
+  state, which can contain trailing source bytes. This is an Agentsview
+  storage change; the pinned producer format is unchanged.
+
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)
   cancels work, allows a short grace period, and emits `turn_aborted`; it
@@ -522,6 +528,15 @@ add an archived or maintained mirror without replacing the original identity.
   aborts. Synthetic repeated-ID fixtures preserve its existing latest-call
   attachment behavior; the schema alone does not establish that the producer
   emits repeated IDs.
+
+- **Archive projection (2026-09-04):** Rechecked the pre-version-100
+  `flushPendingAgentResultsContext` in `internal/parser/codex.go`: it emitted
+  unpaired agent results as unmarked user rows. Archive copies under
+  `transcripts` discard those legacy user rows, including indistinguishable
+  prompts; version-100 rows use the tool-result marker. Reverified 2026-09-05
+  against the parser and archive classification paths: orphan notifications
+  retain their result text in full archives but do not count as user prompts
+  or supply the first-user text used for automation classification.
 
 ## TraeX (`traex`)
 
@@ -552,6 +567,10 @@ add an archived or maintained mirror without replacing the original identity.
   `traex:` ID namespace, and `internal/sync` gates the format-shaped branches
   on `isCodexFormatAgent`. The `session_index.jsonl` and S3 branches stay
   Codex-only because TraeX writes no index file and has no archive layout.
+- **Archive projection (2026-09-04):** Rechecked `relabelCodexResultAsTraeX` in
+  `internal/parser/traex.go`: the shared Codex parser produces the same
+  unmarked legacy notification rows. Transcript-only archive copies apply the
+  same pre-version-100 user-row removal as Codex.
 
 ## GitHub Copilot CLI (`copilot`)
 
@@ -867,7 +886,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   Channel database naming was reverified 2026-08-27 against `database.ts`.
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
   cache-write tokens, plus model/provider identity. Agentsview computes price
-  from those tokens rather than consuming a persisted USD total.
+  from those tokens rather than consuming a persisted USD total. Reverified
+  2026-09-07: the pinned `message-v2.ts` hydrates message data independently
+  of its part rows. Agentsview retains model identity even when no recognized
+  token fields are available; usage-only resync guards check model loss before
+  checking token counts.
 - **Working directory:** SQLite sessions store a per-session `directory` and a
   `project_id`. The synthetic `global` project uses `worktree=/`. Agentsview
   prefers a concrete `session.directory` over `project.worktree` when
@@ -978,6 +1001,12 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   watermark index, which OpenCode's schema does not have and which is not
   agentsview's to add — but only the changed batch and one stored page are
   ever held in memory.
+- **Archive message identity:** Reverified 2026-09-05 against `message-v2.ts` at
+  the pinned revision: hydrated messages expose the persisted message row ID
+  as `info.id`. Agentsview's pre-version-100 parsers did not retain that ID in
+  `source_uuid`. Usage archive comparisons match those stored rows by ordinal
+  and role until a complete source rewrite records the ID; rows that already
+  have an ID require an exact identity match.
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
@@ -1083,6 +1112,12 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   carries `metadata.working_dir`. Remote imports derive project names from
   recorded paths without inspecting those directories on the receiving
   machine; local sessions retain filesystem-based Git project discovery.
+- **Archive projection (2026-09-04):** Rechecked `formatOpenHandsAction` in
+  `internal/parser/openhands.go`: terminal and custom-tool headers embed the
+  event summary, which is not stored separately in tool-call rows.
+  Transcript-only archive copies discard the tail from a summary-bearing
+  header, retaining the preceding prose and tool label. Appended thinking is
+  also discarded because the summary boundaries cannot be recovered.
 
 ## Cursor (`cursor`)
 
@@ -1606,6 +1641,12 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 - **Agentsview:** `internal/parser/kimi.go` and
   `internal/parser/kimi_provider.go`.
 
+- **Archive projection (2026-09-04):** Rechecked `formatKimiToolUse` in
+  `internal/parser/kimi.go`: its Glob header embeds the raw pattern. Copied
+  transcript-only rows now use that formatter with path-only inputs to remove
+  arguments while retaining tool labels and file paths. The shared decoder
+  gives Kimi Work the same rendering and copy behavior.
+
 ## Kimi Work (`kimi-work`)
 
 - **Format:** Kimi Desktop's `daimon` runtime stores each user conversation as a
@@ -1743,14 +1784,16 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 - **Evidence:** `documentation`.
 - **Upstream:** Snowflake's first-party
   [CoCo session-replay guide](https://www.snowflake.com/en/developers/guides/create-shareable-coco-session-replays-with-cortex-replay/)
-  was checked 2026-07-19 and documents automatic JSON transcript storage at
+  was checked 2026-09-06 and documents automatic JSON transcript storage at
   `~/.snowflake/cortex/conversations/<session-id>.json`. It links an
   independent open-source reader: clone
   `https://github.com/dataprofessor/cortex-replay.git` at
   `d61d46a7acbe55b3367f695a04e56eca24871320` and inspect the pinned
   [session parser](https://github.com/dataprofessor/cortex-replay/blob/d61d46a7acbe55b3367f695a04e56eca24871320/src/parser.mjs).
-  Snowflake does not publish the producer or a versioned schema, and the
-  independent reader does not cover the newer split-history generation.
+  Rechecked the pinned reader on 2026-09-06: it supports the split-history
+  companion and treats user rows containing only tool results and internal
+  text as tool responses, not new prompts. This is consumer-side evidence;
+  Snowflake does not publish the producer or a versioned schema.
 - **Usage and cost:** The consumed files expose transcript content but no token,
   cache, reasoning, credit, or USD accounting.
 - **Agentsview:** `internal/parser/cortex.go` and
@@ -2229,6 +2272,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   reasoning, credit, or monetary-cost fields to Agentsview.
 - **Agentsview:** `internal/parser/zencoder.go` and
   `internal/parser/zencoder_provider.go`.
+- **Archive projection (2026-09-04):** Rechecked the pre-version-100
+  `internal/parser/zencoder.go`: system blocks inside tool results became
+  unmarked, system-flagged user rows. Transcript-only archive copies discard
+  these legacy system-flagged rows, including indistinguishable notices;
+  version-100 rows use the tool-result marker.
 
 ## gptme (`gptme`)
 

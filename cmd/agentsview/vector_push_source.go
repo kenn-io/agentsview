@@ -37,7 +37,7 @@ type vectorPushSource struct {
 // [vector] is disabled: there is then no vectors.db to open and nothing to
 // push, and a nil source leaves postgres.Sync's vector phase skipped.
 func newVectorPushSource(appCfg config.Config) postgres.VectorPushSource {
-	if !appCfg.Vector.Enabled {
+	if appCfg.ArchiveContent.UsageOnly() || !appCfg.Vector.Enabled {
 		return nil
 	}
 	return &vectorPushSource{cfg: appCfg}

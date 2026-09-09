@@ -200,11 +200,12 @@ func extractHeuristicMessages(
 	rows := make([]signals.HeuristicMessage, 0, len(msgs))
 	for _, m := range msgs {
 		rows = append(rows, signals.HeuristicMessage{
-			Role:      m.Role,
-			Content:   m.Content,
-			IsSystem:  m.IsSystem,
-			Ordinal:   m.Ordinal,
-			Timestamp: m.Timestamp,
+			Role:          m.Role,
+			SourceSubtype: m.SourceSubtype,
+			Content:       m.Content,
+			IsSystem:      m.IsSystem,
+			Ordinal:       m.Ordinal,
+			Timestamp:     m.Timestamp,
 		})
 	}
 	return rows
@@ -300,7 +301,7 @@ func extractMostCommonModel(msgs []db.Message) string {
 }
 
 // extractLastMessageRole returns the role and content of the
-// last non-system message. Empty strings if none.
+// last non-system, non-tool-result message. Empty strings if none.
 func extractLastMessageRole(
 	msgs []db.Message,
 ) (role, content string) {
@@ -308,7 +309,7 @@ func extractLastMessageRole(
 		return "", ""
 	}
 	for _, v := range slices.Backward(msgs) {
-		if !v.IsSystem {
+		if !v.IsSystem && v.SourceSubtype != "tool_result" {
 			return v.Role, v.Content
 		}
 	}

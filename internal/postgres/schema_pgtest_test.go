@@ -469,3 +469,25 @@ func TestEnsureSchemaRejectsInvalidLegacyMoneyWithoutChangingSchema(t *testing.T
 	).Scan(&cost))
 	assert.Equal(t, -0.01, cost)
 }
+
+func TestPromptEvidenceMigrationPreservesSessions(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	// Reproduce the previously shipped schema, which has no policy marker.
+	_, err = pg.Exec(`ALTER TABLE sessions DROP COLUMN prompt_evidence_discarded`)
+	require.NoError(t, err)
+	_, err = pg.Exec(`INSERT INTO sessions (id, machine, project, agent, first_message) VALUES ('full-session', 'machine', 'project', 'claude', 'Explain this code')`)
+	require.NoError(t, err)
+	sync := &Sync{pg: pg, schema: schemaTestSchema}
+	require.NoError(t, sync.EnsureSchema(t.Context()))
+	var prompt string
+	var discarded bool
+	require.NoError(t, pg.QueryRow(`SELECT first_message, prompt_evidence_discarded FROM sessions WHERE id = 'full-session'`).Scan(&prompt, &discarded))
+	assert.Equal(t, "Explain this code", prompt)
+	assert.False(t, discarded)
+}

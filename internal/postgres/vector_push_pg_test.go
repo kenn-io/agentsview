@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -2322,4 +2323,99 @@ func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
 	require.NoError(t, err, "privilege failure must skip, not fail the push")
 	assert.True(t, res.Skipped)
 	assert.Contains(t, res.SkippedReason, "privileges")
+}
+
+func TestUsageOnlyPushClearsVectors(t *testing.T) {
+	pgURL := testPGURL(t)
+	sync, local, pg := newVectorPushTestSync(t, pgURL, "agentsview_usage_vector_test")
+	seedVectorSession(t, local, "usage-session")
+	src := &fakeVectorSource{
+		gen: VectorGenerationInfo{Fingerprint: "usage-gen", Model: "model-a", Dimension: 4}, hasGen: true,
+		hashes: map[string]string{"usage-session": "hash-a"},
+		docs:   map[string][]VectorPushDoc{"usage-session": {vdoc("usage-session", "usage-session#0", 0, "stored transcript text", "hash-a", []float32{1, 0, 0, 0})}},
+	}
+	sync.vectorSource = src
+	_, err := sync.Push(t.Context(), true, nil)
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents`).Scan(&count))
+	require.Equal(t, 1, count)
+	// A different archive's indexed document must survive this policy change.
+	_, err = pg.Exec(`INSERT INTO vector_documents (doc_key, session_id, ordinal, ordinal_end, content, content_hash) VALUES ('other#0', 'other-session', 0, 0, 'other archive text', 'other-hash')`)
+	require.NoError(t, err)
+	local.SetArchiveContent(config.ArchiveContentUsage)
+	seedVectorSession(t, local, "usage-session")
+	// Keep the stale vector source attached: the storage boundary must reject it.
+	for _, full := range []bool{false, true} {
+		result, err := sync.Push(t.Context(), full, nil)
+		require.NoError(t, err)
+		assert.True(t, result.Vectors.Skipped)
+		require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents WHERE session_id = 'usage-session'`).Scan(&count))
+		assert.Zero(t, count)
+		require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents WHERE session_id = 'other-session'`).Scan(&count))
+		assert.Equal(t, 1, count)
+		require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_push_state`).Scan(&count))
+		assert.Zero(t, count)
+	}
+}
+
+func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		t.Run(fmt.Sprintf("full=%t", full), func(t *testing.T) {
+			sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_usage_deleted_vector_test")
+			src := &fakeVectorSource{
+				gen: VectorGenerationInfo{Fingerprint: "generation-a", Model: "model-a", Dimension: 4}, hasGen: true,
+				hashes: map[string]string{}, docs: map[string][]VectorPushDoc{},
+			}
+			for _, id := range []string{"removed", "other-owner"} {
+				seedVectorSession(t, local, id)
+				src.hashes[id] = "hash-" + id
+				src.docs[id] = []VectorPushDoc{vdoc(id, id+"#0", 0, id+" transcript", "hash-"+id, []float32{1, 0, 0, 0})}
+			}
+			sync.vectorSource = src
+			var generations []int64
+			for _, fingerprint := range []string{"generation-a", "generation-b"} {
+				src.gen.Fingerprint = fingerprint
+				result, err := sync.Push(t.Context(), true, nil)
+				require.NoError(t, err)
+				require.Equal(t, 2, result.Vectors.DocsPushed)
+				generations = append(generations, result.Vectors.GenerationID)
+			}
+			// Another archive owns this session now, even though its machine matches.
+			_, err := pg.Exec(`UPDATE sessions SET owner_marker = 'another-archive' WHERE id = 'other-owner'`)
+			require.NoError(t, err)
+			for _, id := range []string{"removed", "other-owner"} {
+				require.NoError(t, local.DeleteSession(id))
+			}
+			local.SetArchiveContent(config.ArchiveContentUsage)
+			sync.vectorSource = nil // Usage-only CLI pushes do not open the local vector index.
+			_, err = sync.Push(t.Context(), full, nil)
+			require.NoError(t, err)
+			for _, generation := range generations {
+				searcher := NewVectorSearcher(pg, generation, 4, 100, fixedEncoder([]float32{1, 0, 0, 0}))
+				hits, err := searcher.SemanticSearch(t.Context(), "transcript", 10)
+				require.NoError(t, err)
+				require.Len(t, hits, 1)
+				assert.Equal(t, "other-owner", hits[0].SessionID)
+				assert.Equal(t, "other-owner transcript", hits[0].Snippet)
+			}
+
+			for _, tc := range []struct {
+				id           string
+				docs, states int
+			}{
+				{"removed", 0, 0}, {"other-owner", 1, 2},
+			} {
+				var count int
+				require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_documents WHERE session_id = $1`, tc.id).Scan(&count))
+				assert.Equal(t, tc.docs, count, tc.id)
+				require.NoError(t, pg.QueryRow(`SELECT count(*) FROM vector_push_state WHERE session_id = $1`, tc.id).Scan(&count))
+				assert.Equal(t, tc.states, count, tc.id)
+				for _, generation := range generations {
+					require.NoError(t, pg.QueryRow(`SELECT count(*) FROM `+vectorChunkTable(generation)+` WHERE doc_key = $1`, tc.id+"#0").Scan(&count))
+					assert.Equal(t, tc.docs, count, "generation %d, session %s", generation, tc.id)
+				}
+			}
+		})
+	}
 }

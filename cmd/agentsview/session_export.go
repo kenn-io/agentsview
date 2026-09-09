@@ -42,6 +42,9 @@ func newSessionExportCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
+			if cfg.ArchiveContent.UsageOnly() {
+				return fmt.Errorf("session export is unavailable with archive_content=usage")
+			}
 			d, err := openReadOnlyDB(cfg)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {

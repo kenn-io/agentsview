@@ -423,12 +423,14 @@ func extractGeminiContent(
 			hasToolUse = true
 			name := tc.Get("name").Str
 			tcID := tc.Get("id").Str
+			rendering := formatGeminiToolCall(tc)
 			if name != "" {
 				parsed = append(parsed, ParsedToolCall{
 					ToolName:  name,
 					Category:  NormalizeToolCategory(name),
 					ToolUseID: tcID,
 					InputJSON: tc.Get("args").Raw,
+					Rendering: rendering,
 				})
 				// Extract inline tool results from
 				// result[].functionResponse.response.output
@@ -453,7 +455,7 @@ func extractGeminiContent(
 					},
 				)
 			}
-			parts = append(parts, formatGeminiToolCall(tc))
+			parts = append(parts, rendering)
 			return true
 		})
 	}

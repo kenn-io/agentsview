@@ -1269,6 +1269,7 @@ func (db *DB) accumulateHourlyUTC(
 		FROM messages m
 		WHERE m.session_id IN ` + ph + `
 			AND m.role = 'user'
+			AND COALESCE(m.source_subtype, '') <> 'tool_result'
 			AND m.timestamp IS NOT NULL
 			AND m.timestamp != ''
 			AND m.timestamp >= ?

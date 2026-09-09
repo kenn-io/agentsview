@@ -101,6 +101,7 @@ func scopedFrom(row MessageInput) ScopedMessage {
 		SessionID:       row.SessionID,
 		Ordinal:         row.Ordinal,
 		Role:            row.Role,
+		SourceSubtype:   row.SourceSubtype,
 		Content:         row.Content,
 		IsSystem:        row.IsSystem,
 		HasThinking:     row.HasThinking,

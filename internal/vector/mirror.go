@@ -605,3 +605,15 @@ func (ix *Index) storedIncludeAutomatedScope(ctx context.Context) (value, ok boo
 func (ix *Index) setIncludeAutomatedScope(ctx context.Context, value bool) error {
 	return ix.metaSet(ctx, scopeIncludeAutomatedKey, strconv.FormatBool(value))
 }
+
+// Clear removes all mirrored documents and their vectors from this index.
+// The caller must hold the vectors write lock and exclude concurrent builds.
+func (ix *Index) Clear(ctx context.Context) error {
+	if err := ix.requireWritable(); err != nil {
+		return err
+	}
+	if _, err := ix.reconcileDeletions(ctx, nil); err != nil {
+		return err
+	}
+	return ix.metaDelete(ctx, refreshWatermarkKey)
+}

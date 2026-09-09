@@ -360,6 +360,7 @@ func ensureFreshData(
 			IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths: appCfg.ScanProtectedPaths,
 			Machine:            appCfg.LocalMachineName,
+			ArchiveContent:     appCfg.ArchiveContent,
 		})
 		defer engine.Close()
 		fmt.Fprintln(os.Stderr,
@@ -388,6 +389,7 @@ func ensureFreshData(
 		IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths: appCfg.ScanProtectedPaths,
 		Machine:            appCfg.LocalMachineName,
+		ArchiveContent:     appCfg.ArchiveContent,
 	})
 	defer engine.Close()
 

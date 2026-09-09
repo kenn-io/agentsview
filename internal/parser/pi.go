@@ -471,6 +471,7 @@ func parsePiAssistantMessage(
 				// "description" so the frontend can use a single
 				// params.description check across all agents.
 				argsRaw = normalizePiIntent(argsRaw)
+				rendering := formatPiToolUse(name, argsRaw)
 				toolCalls = append(toolCalls, ParsedToolCall{
 					ToolUseID: id,
 					ToolName:  name,
@@ -479,10 +480,9 @@ func parsePiAssistantMessage(
 					SkillName: inferPiSkillName(
 						name, argsRaw, sessionCwd,
 					),
+					Rendering: rendering,
 				})
-				parts = append(parts, formatPiToolUse(
-					name, argsRaw,
-				))
+				parts = append(parts, rendering)
 			}
 			return true
 		})

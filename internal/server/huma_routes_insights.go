@@ -59,11 +59,10 @@ func supportsInsightGeneration(store db.Store) bool {
 	if store == nil {
 		return false
 	}
-	if !store.ReadOnly() {
-		return true
+	if capable, ok := store.(insightGenerationCapableStore); ok {
+		return capable.InsightGenerationAvailable()
 	}
-	capable, ok := store.(insightGenerationCapableStore)
-	return ok && capable.InsightGenerationAvailable()
+	return !store.ReadOnly()
 }
 
 func (s *Server) humaListInsights(
@@ -196,7 +195,7 @@ func (s *Server) humaGenerateInsight(
 ) (*huma.StreamResponse, error) {
 	if !supportsInsightGeneration(s.db) {
 		return nil, apiError(http.StatusNotImplemented,
-			"insight generation is not available in read-only mode")
+			"insight generation is not available for this archive")
 	}
 	if err := s.rejectWriterClosedWrite(); err != nil {
 		return nil, err

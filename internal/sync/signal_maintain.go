@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -254,7 +255,7 @@ func (m *incrementalSignalMaintainer) MaintainTx(
 	}
 	for _, msg := range m.appended {
 		msgIndex++
-		if msg.IsSystem {
+		if msg.IsSystem || msg.SourceSubtype == string(parser.SourceSubtypeToolResult) {
 			continue
 		}
 		lastRole, lastContent = string(msg.Role), msg.Content

@@ -507,7 +507,7 @@ func TestGenerateInsight_StaysBlockedForReadOnlyStoreWithoutInsightWrites(t *tes
 	w := te.post(t, "/api/v1/insights/generate",
 		`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
 	assertStatus(t, w, http.StatusNotImplemented)
-	assertBodyContains(t, w, "read-only mode")
+	assertBodyContains(t, w, "insight generation is not available for this archive")
 	assert.False(t, called)
 }
 
@@ -1981,4 +1981,32 @@ func (te *testEnv) seedInsight(
 	id, err := te.db.InsertInsight(insight)
 	require.NoError(t, err)
 	return id
+}
+
+func TestGenerateInsight_ArchiveContentCapability(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			called := false
+			te := setupWithServerOpts(t, []server.Option{
+				server.WithGenerateFunc(func(context.Context, string, string) (insight.Result, error) {
+					called = true
+					return insight.Result{Agent: "claude", Content: "report"}, nil
+				}),
+			})
+			// Tightening after server construction must update both the
+			// advertised capability and the request guard.
+			te.db.SetArchiveContent(policy)
+			available := !policy.UsageOnly()
+			version := decode[map[string]any](t, te.get(t, "/api/v1/version"))
+			assert.Equal(t, available, version["insight_generation_available"], "capability must be explicit")
+			w := te.post(t, "/api/v1/insights/generate",
+				`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
+			if available {
+				assertStatus(t, w, http.StatusOK)
+			} else {
+				assertStatus(t, w, http.StatusNotImplemented)
+			}
+			assert.Equal(t, available, called, "unavailable generation must not invoke the agent")
+		})
+	}
 }

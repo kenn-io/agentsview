@@ -588,6 +588,10 @@ func TestParseVisualStudioCopilotTraceSession(t *testing.T) {
 		"go test ./...")
 	assert.JSONEq(t, `{"command":"go test ./..."}`,
 		msgs[0].ToolCalls[0].InputJSON)
+	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ go test ./...",
+		msgs[0].ToolCalls[0].Rendering,
+		"the returned call must carry the text that landed in the message")
+	assert.Contains(t, msgs[0].Content, msgs[0].ToolCalls[0].Rendering)
 	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
 	assert.Equal(t, "completed",
 		msgs[0].ToolCalls[0].ResultEvents[0].Status)

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -55,10 +56,12 @@ func ExtractTextContent(
 			// some tools populate only "arguments", so fall back to
 			// it when "input" is missing or empty.
 			hasToolUse = true
+			rendering := formatToolUse(block)
 			if tc, ok := parseToolCall(block); ok {
+				tc.Rendering = rendering
 				toolCalls = append(toolCalls, tc)
 			}
-			parts = append(parts, formatToolUse(block))
+			parts = append(parts, rendering)
 		case "tool_result":
 			if tr, ok := parseToolResult(block); ok {
 				toolResults = append(toolResults, tr)
@@ -423,4 +426,264 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// ToolUseRendering returns the text formatToolUse inlines into message
+// content for a tool call with the given name and raw input JSON, or "" when
+// the input is not an object.
+func ToolUseRendering(name, inputJSON string) string {
+	block, ok := toolUseBlock(name, inputJSON)
+	if !ok {
+		return ""
+	}
+	return formatToolUse(block)
+}
+
+// RedactedToolUseRendering is ToolUseRendering with every argument except
+// the call's target path removed. Storage policies that keep tool metadata
+// but drop tool inputs replace the full rendering inside message text with
+// it, so a transcript still shows which tool ran and on which file while
+// commands, patterns, prompts, and other arguments leave the archive.
+func RedactedToolUseRendering(name, inputJSON string) string {
+	block, ok := toolUseBlock(name, inputJSON)
+	if !ok {
+		return ""
+	}
+	reduced, ok := toolUseBlock(
+		name, reduceToolInputToPaths(block.Get("input").Raw),
+	)
+	if !ok {
+		return ""
+	}
+	return collapseEmptyRenderingDetail(formatToolUse(reduced))
+}
+
+func toolUseBlock(name, inputJSON string) (gjson.Result, bool) {
+	if name == "" {
+		return gjson.Result{}, false
+	}
+	input := strings.TrimSpace(inputJSON)
+	if input == "" {
+		input = "{}"
+	}
+	if !gjson.Valid(input) {
+		return gjson.Result{}, false
+	}
+	nameJSON, err := json.Marshal(name)
+	if err != nil {
+		return gjson.Result{}, false
+	}
+	return gjson.Parse(
+		`{"name":` + string(nameJSON) + `,"input":` + input + `}`,
+	), true
+}
+
+// ToolUseRenderingPair is one text a parser may inline for a tool call and
+// the form that keeps only the tool label and target path.
+type ToolUseRenderingPair struct {
+	Full     string
+	Redacted string
+}
+
+// ToolUseRenderingCandidates regenerates every rendering a parser could have
+// inlined for a call from its stored name and input. Copied rows carry no
+// record of which renderer produced their text, so callers try each pair.
+func ToolUseRenderingCandidates(
+	category, name, inputJSON string,
+) []ToolUseRenderingPair {
+	candidates := []ToolUseRenderingPair{
+		{
+			Full:     ToolUseRendering(name, inputJSON),
+			Redacted: RedactedToolUseRendering(name, inputJSON),
+		},
+		{
+			Full:     CortexToolUseRendering(category, name, inputJSON),
+			Redacted: CortexRedactedToolUseRendering(category, name),
+		},
+		{
+			Full:     geminiToolUseRendering(name, inputJSON),
+			Redacted: geminiRedactedToolUseRendering(name, inputJSON),
+		},
+		{
+			Full:     formatToolHeader(category, agyToolDetail(name, inputJSON)),
+			Redacted: formatToolHeader(category, name),
+		},
+		{
+			Full:     codexToolUseRendering(name, inputJSON),
+			Redacted: collapseToolHeader(codexToolUseRendering(name, inputJSON)),
+		},
+		{
+			Full:     grokToolUseRendering(name, inputJSON),
+			Redacted: collapseToolHeader(grokToolUseRendering(name, inputJSON)),
+		},
+		{
+			Full: formatVSCodeCopilotToolCalls([]ParsedToolCall{{
+				Category: category, ToolName: name, InputJSON: inputJSON,
+			}}),
+			Redacted: formatToolHeader(category, name),
+		},
+		{
+			Full: formatKimiToolUse(name, gjson.Parse(inputJSON)),
+			Redacted: collapseEmptyRenderingDetail(formatKimiToolUse(
+				name, gjson.Parse(reduceToolInputToPaths(inputJSON)),
+			)),
+		},
+		{
+			Full:     openHandsToolUseRendering(name, inputJSON),
+			Redacted: collapseToolHeader(openHandsToolUseRendering(name, inputJSON)),
+		},
+	}
+	// A pair whose redacted form equals its full form still matters: it
+	// tells the caller the rendering carried nothing to remove.
+	kept := candidates[:0]
+	for _, pair := range candidates {
+		if pair.Full != "" {
+			kept = append(kept, pair)
+		}
+	}
+	return kept
+}
+
+// RedactToolUseRendering returns the redacted form of full, the exact text a
+// parser inlined for a call. It prefers the renderer that produced full and
+// otherwise keeps only the first header line with its detail removed, so a
+// rendering from any provider loses its arguments even when it cannot be
+// regenerated.
+func RedactToolUseRendering(full, category, name, inputJSON string) string {
+	for _, pair := range ToolUseRenderingCandidates(category, name, inputJSON) {
+		if pair.Full == full {
+			return pair.Redacted
+		}
+	}
+	return collapseToolHeader(full)
+}
+
+// collapseToolHeader keeps the bracketed tool label that opens a rendering
+// and drops everything else: the detail after a colon inside the brackets,
+// any text after the closing bracket, and every later line.
+func collapseToolHeader(rendering string) string {
+	first, _, _ := strings.Cut(rendering, "\n")
+	first = strings.TrimSpace(first)
+	if !strings.HasPrefix(first, "[") {
+		return ""
+	}
+	inside, _, found := strings.Cut(first[1:], "]")
+	if !found {
+		return ""
+	}
+	label, _, _ := strings.Cut(inside, ":")
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return ""
+	}
+	return "[" + label + "]"
+}
+
+func geminiToolUseRendering(name, inputJSON string) string {
+	call, ok := geminiToolCallBlock(name, inputJSON)
+	if !ok {
+		return ""
+	}
+	return formatGeminiToolCall(call)
+}
+
+func geminiRedactedToolUseRendering(name, inputJSON string) string {
+	call, ok := geminiToolCallBlock(name, reduceToolInputToPaths(inputJSON))
+	if !ok {
+		return ""
+	}
+	return collapseEmptyRenderingDetail(formatGeminiToolCall(call))
+}
+
+func geminiToolCallBlock(name, inputJSON string) (gjson.Result, bool) {
+	block, ok := toolUseBlock(name, inputJSON)
+	if !ok {
+		return gjson.Result{}, false
+	}
+	return gjson.Parse(
+		`{"name":` + block.Get("name").Raw + `,"args":` + block.Get("input").Raw + `}`,
+	), true
+}
+
+func codexToolUseRendering(name, inputJSON string) string {
+	block, ok := toolUseBlock(name, inputJSON)
+	if !ok {
+		return ""
+	}
+	return formatCodexFunctionCall(
+		name, gjson.Parse(`{"arguments":`+block.Get("input").Raw+`}`),
+	)
+}
+
+// reduceToolInputToPaths keeps only the path-like arguments of a tool input.
+func reduceToolInputToPaths(inputJSON string) string {
+	input := gjson.Parse(strings.TrimSpace(inputJSON))
+	kept := map[string]string{}
+	for _, key := range []string{"file_path", "path", "notebook_path", "dir_path"} {
+		if value := input.Get(key).Str; value != "" {
+			kept[key] = value
+		}
+	}
+	reduced, err := json.Marshal(kept)
+	if err != nil {
+		return "{}"
+	}
+	return string(reduced)
+}
+
+// collapseEmptyRenderingDetail drops the empty detail or command line a
+// rendering built around a removed argument leaves behind.
+func collapseEmptyRenderingDetail(rendering string) string {
+	lines := strings.Split(rendering, "\n")
+	collapsed := lines[:0]
+	for _, line := range lines {
+		if line == "$ " || line == "$" {
+			continue
+		}
+		collapsed = append(collapsed, strings.Replace(line, ": ]", "]", 1))
+	}
+	return strings.Join(collapsed, "\n")
+}
+
+// grokToolUseRendering rebuilds the summary the Grok parser inlines for a
+// backend tool call from the input it stored for that call.
+func grokToolUseRendering(name, inputJSON string) string {
+	input := strings.TrimSpace(inputJSON)
+	if input == "" {
+		return ""
+	}
+	var payload gjson.Result
+	switch name {
+	case "web_search":
+		if !gjson.Valid(input) {
+			return ""
+		}
+		payload = gjson.Parse(`{"action":` + input + `}`)
+	case "x_search":
+		quoted, err := json.Marshal(input)
+		if err != nil {
+			return ""
+		}
+		payload = gjson.Parse(`{"input":` + string(quoted) + `}`)
+	case "code_interpreter":
+		if !gjson.Valid(input) {
+			return ""
+		}
+		payload = gjson.Parse(input)
+	default:
+		return ""
+	}
+	return grokBackendToolSummary(name, payload)
+}
+
+// openHandsToolUseRendering rebuilds the action text the OpenHands parser
+// inlines for a call from its stored arguments. An event summary folded into
+// the header cannot be rebuilt, so that case relies on the recorded
+// rendering at write time.
+func openHandsToolUseRendering(name, inputJSON string) string {
+	input := strings.TrimSpace(inputJSON)
+	if input == "" || !gjson.Valid(input) {
+		return ""
+	}
+	return strings.TrimSpace(formatOpenHandsAction(name, gjson.Parse(input), ""))
 }

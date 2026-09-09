@@ -364,6 +364,60 @@ func TestImporterAppliesDBOwnedToolResultImagePolicy(t *testing.T) {
 	assert.NotContains(t, call.ResultEvents[0].Content, "input_image")
 }
 
+func TestImporterHonorsUsageOnlyStorageBoundary(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	database.SetArchiveContent(config.ArchiveContentUsage)
+
+	extracted := t.TempDir()
+	remoteDir := "/home/remote-user/.claude/projects"
+	localDir := filepath.Join(
+		extracted, "home", "remote-user", ".claude", "projects", "private-project",
+	)
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	const sessionID = "usage-only-remote"
+	body := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			"2026-08-31T10:00:00Z", "private remote prompt", sessionID,
+		).
+		AddClaudeAssistantUsage(
+			"2026-08-31T10:00:01Z", "private remote response",
+			testjsonl.ClaudeAssistantUsage{
+				MessageID: "message-id", RequestID: "request-id",
+				Model: "claude-sonnet-4-6", InputTokens: 100, OutputTokens: 20,
+			},
+		).
+		String()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localDir, "session.jsonl"), []byte(body), 0o600,
+	))
+
+	stats, err := (Importer{Host: "remote-host", DB: database}).ImportExtracted(
+		t.Context(), TargetSet{Dirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {remoteDir},
+		}}, extracted,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.SessionsSynced)
+
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	stored, err := database.GetSessionFull(t.Context(), page.Sessions[0].ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Nil(t, stored.FirstMessage)
+	assert.Nil(t, stored.DisplayName)
+	assert.Nil(t, stored.SessionName)
+	messages, err := database.GetAllMessages(t.Context(), stored.ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "assistant", messages[0].Role)
+	assert.Empty(t, messages[0].Content)
+	assert.Empty(t, messages[0].ToolCalls)
+}
+
 func TestRequireCompleteRejectsDeferredWithoutHardFailure(t *testing.T) {
 	err := requireCompleteProcessing(syncpkg.SyncStats{Deferred: 1})
 	require.Error(t, err)

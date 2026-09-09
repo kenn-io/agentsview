@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/secrets"
 )
@@ -2989,5 +2990,40 @@ func TestManagerAllowCandidateFindingsPreSendScanIgnoresCandidateText(t *testing
 	if result.Failed != 0 || result.Sessions != 1 || log.count() == 0 {
 		t.Fatalf("candidate-tier text must not fail the pre-send scan when "+
 			"candidate findings are allowed: %+v, %d calls", result, log.count())
+	}
+}
+
+func TestManagerArchiveContentBeforeModelCall(t *testing.T) {
+	for _, scheduled := range []bool{false, true} {
+		for _, policy := range []config.ArchiveContent{
+			config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage,
+		} {
+			t.Run(fmt.Sprintf("scheduled=%t/%s", scheduled, policy), func(t *testing.T) {
+				d := newTestArchive(t)
+				seedSession(t, d, "stored-session", turnMessages("fix the test", "pinned the clock"), nil)
+				server, calls := modelServer(t, alwaysEntries(t, "clock decision"))
+				manager := newManager(t, d, server.URL, nil)
+				// Changing policy leaves old transcript rows until the archive rebuild.
+				d.SetArchiveContent(policy)
+				var result PassResult
+				var err error
+				if scheduled {
+					var started bool
+					started, result, err = manager.TryPass(context.Background(), PassOptions{})
+					assert.True(t, started)
+				} else {
+					result, err = manager.RunPass(context.Background(), PassOptions{SessionID: "stored-session"})
+				}
+				if policy.UsageOnly() {
+					assert.ErrorIs(t, err, db.ErrArchiveContentExcluded)
+					assert.Zero(t, calls.count(), "no stored transcript may reach the model")
+					assert.Zero(t, result.Units)
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, 2, calls.count())
+					assert.Equal(t, 2, result.Entries)
+				}
+			})
+		}
 	}
 }

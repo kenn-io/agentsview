@@ -1451,3 +1451,110 @@ func halfvecLiteral(v []float32) (string, error) {
 	b.WriteByte(']')
 	return b.String(), nil
 }
+
+// clearUsageOnlyVectorSessions discovers indexed sessions in PostgreSQL rather
+// than the local push candidates, which omit sessions deleted from the archive.
+// Usage-only storage retains no vectors for this archive, including generations
+// that are no longer active. Other archives' sessions remain untouched.
+func (s *Sync) clearUsageOnlyVectorSessions(ctx context.Context) error {
+	var exists bool
+	if err := s.pg.QueryRowContext(ctx, `SELECT to_regclass('vector_documents') IS NOT NULL`).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	owner, err := s.vectorOwnerIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	rows, err := s.pg.QueryContext(ctx, `
+		SELECT s.id, s.owner_marker, s.machine
+		FROM sessions s
+		JOIN (
+			SELECT session_id FROM vector_documents
+			UNION SELECT session_id FROM vector_push_state
+		) indexed ON indexed.session_id = s.id`)
+	if err != nil {
+		return fmt.Errorf("listing usage-only vector sessions: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		var marker, machine sql.NullString
+		if err := rows.Scan(&id, &marker, &machine); err != nil {
+			rows.Close()
+			return err
+		}
+		if owner.owns(marker.String, machine.String) {
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := s.clearOwnedSessionVectors(ctx, owner, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Sync) clearOwnedSessionVectors(ctx context.Context, owner vectorOwnerIdentity, id string) error {
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Match eviction's ownership lock: another archive may have claimed the
+	// session since discovery. A missing owner cannot authorize this deletion.
+	var marker, machine sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`, id,
+	).Scan(&marker, &machine)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !owner.owns(marker.String, machine.String) {
+		return nil
+	}
+	if err := clearSessionVectorsTx(ctx, tx, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// clearSessionVectorsTx removes every generation's content for an owned
+// session in the same transaction that applies its usage-only projection.
+func clearSessionVectorsTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('vector_documents') IS NOT NULL`).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	generations, err := existingChunkGenerationsTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, id := range generations {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+vectorChunkTable(id)+` WHERE doc_key IN (SELECT doc_key FROM vector_documents WHERE session_id = $1)`, sessionID); err != nil {
+			return fmt.Errorf("clearing usage-only vector chunks: %w", err)
+		}
+	}
+	for _, table := range []string{"vector_documents", "vector_push_state"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE session_id = $1`, sessionID); err != nil {
+			return fmt.Errorf("clearing usage-only vector content: %w", err)
+		}
+	}
+	return nil
+}

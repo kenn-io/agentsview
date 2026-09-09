@@ -225,6 +225,7 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,
 		Machine:                 cfg.LocalMachineName,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
+		ArchiveContent:          cfg.ArchiveContent,
 		Emitter:                 emitter,
 	})
 	return s.onDemandEngine

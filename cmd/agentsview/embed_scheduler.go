@@ -609,7 +609,7 @@ func setupVectorServing(
 	ctx context.Context, cfg config.Config, database *db.DB,
 	idle *server.IdleTracker,
 ) (vectorServing, error) {
-	if !cfg.Vector.Enabled {
+	if cfg.ArchiveContent.UsageOnly() || database.ArchiveContent().UsageOnly() || !cfg.Vector.Enabled {
 		return vectorServing{}, nil
 	}
 
@@ -777,7 +777,7 @@ func recallBackstop(cfg config.Config, configured time.Duration) time.Duration {
 // caller must call it when done with d to release the read-only index
 // handle.
 func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
-	if !cfg.Vector.Enabled {
+	if cfg.ArchiveContent.UsageOnly() || d.ArchiveContent().UsageOnly() || !cfg.Vector.Enabled {
 		return nil
 	}
 	path := cfg.Vector.ResolvedDBPath(cfg.DataDir)

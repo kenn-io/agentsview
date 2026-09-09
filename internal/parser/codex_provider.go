@@ -1228,7 +1228,7 @@ func preferCodexSource(candidate, current SourceRef) bool {
 func codexProviderUserMessageCount(messages []ParsedMessage) int {
 	count := 0
 	for _, message := range messages {
-		if message.Role == RoleUser && message.Content != "" {
+		if message.Role == RoleUser && message.SourceSubtype != SourceSubtypeToolResult && message.Content != "" {
 			count++
 		}
 	}

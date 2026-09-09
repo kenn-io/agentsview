@@ -12,11 +12,12 @@ import (
 // HeuristicMessage is the message subset needed by deterministic
 // session-quality heuristics.
 type HeuristicMessage struct {
-	Role      string
-	Content   string
-	IsSystem  bool
-	Ordinal   int
-	Timestamp string
+	SourceSubtype string
+	Role          string
+	Content       string
+	IsSystem      bool
+	Ordinal       int
+	Timestamp     string
 }
 
 // HeuristicInput holds session data for deterministic prompt and
@@ -109,7 +110,7 @@ func IsFrustrationMarker(content string) bool {
 func CountFrustrationMarkers(msgs []HeuristicMessage) int {
 	count := 0
 	for _, m := range msgs {
-		if m.IsSystem || m.Role != "user" {
+		if m.IsSystem || m.SourceSubtype == "tool_result" || m.Role != "user" {
 			continue
 		}
 		if IsFrustrationMarker(m.Content) {
@@ -137,7 +138,7 @@ func userPrompts(msgs []HeuristicMessage) []promptInfo {
 	hasPreviousAssistant := false
 	userSinceLastAssistant := false
 	for _, m := range msgs {
-		if m.IsSystem {
+		if m.IsSystem || m.SourceSubtype == "tool_result" {
 			continue
 		}
 		if m.Role == "assistant" {

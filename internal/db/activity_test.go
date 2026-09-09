@@ -28,6 +28,8 @@ func TestGetSessionActivity(t *testing.T) {
 		// Gap: no messages from 10:02 to 10:28.
 		{SessionID: sid, Ordinal: 4, Role: "user", Content: "back", Timestamp: "2026-03-26T10:28:00Z", ContentLength: 4},
 		{SessionID: sid, Ordinal: 5, Role: "assistant", Content: "wb", Timestamp: "2026-03-26T10:29:00Z", ContentLength: 2},
+		// Tool results retain a user role but are not user prompts.
+		{SessionID: sid, Ordinal: 7, Role: "user", SourceSubtype: "tool_result", Content: "[1 tool result(s)]", Timestamp: "2026-03-26T10:00:15Z"},
 		// System message — should be excluded from counts.
 		{SessionID: sid, Ordinal: 6, Role: "user", Content: "This session is being continued from a previous conversation.", Timestamp: "2026-03-26T10:29:30Z", ContentLength: 60, IsSystem: true},
 	}
@@ -39,8 +41,8 @@ func TestGetSessionActivity(t *testing.T) {
 	// 29 min span => 1min buckets (snapInterval(1740) = 60).
 	assert.Equal(t, int64(60), resp.IntervalSeconds, "interval")
 
-	// System message should still count toward total (7 total messages).
-	assert.Equal(t, 7, resp.TotalMessages, "total")
+	// System and tool-result rows still count toward total messages.
+	assert.Equal(t, 8, resp.TotalMessages, "total")
 
 	// Should have 30 buckets (min 0 to min 29).
 	assert.GreaterOrEqual(t, len(resp.Buckets), 28, "bucket count")

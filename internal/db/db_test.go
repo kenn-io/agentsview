@@ -1080,6 +1080,11 @@ func TestCurrentDataVersionAntigravityCLICwdAndWorktreeProject(t *testing.T) {
 		"version 96 is the data-version boundary for Antigravity CLI cwd and worktree project recovery")
 }
 
+func TestCurrentDataVersionOpenCodeMessageIdentity(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 105,
+		"OpenCode rows need re-parsing to record their storage message ID")
+}
+
 func TestCurrentDataVersionToolResultSummaryDedup(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 97,
 		"version 97 is the data-version boundary for tool-result summary deduplication")

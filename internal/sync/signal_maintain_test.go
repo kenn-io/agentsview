@@ -1098,3 +1098,19 @@ func TestCloneCountsNilReturnsWritableMap(t *testing.T) {
 	counts["gpt-test"] = 1
 	require.Equal(t, 1, counts["gpt-test"])
 }
+
+func TestIncrementalMaintainerIgnoresToolResultFinalRole(t *testing.T) {
+	m := newTestMaintainer("rev", secrets.DefiniteRulesVersion(), []db.Message{
+		{SessionID: "s1", Ordinal: 0, Role: "assistant", Content: "Done."},
+		{SessionID: "s1", Ordinal: 1, Role: "user", SourceSubtype: string(parser.SourceSubtypeToolResult)},
+	})
+	q := &fakeSignalQuery{
+		sess:     &db.Session{QualitySignalVersion: db.CurrentQualitySignalVersion},
+		state:    db.SessionSignalState{State: currentStateBlob(t), TranscriptRevision: "rev", SignalVersion: db.CurrentQualitySignalVersion},
+		hasState: true, revision: "rev",
+	}
+	delta, err := m.MaintainTx(t.Context(), q)
+	require.NoError(t, err)
+	require.NotNil(t, delta)
+	assert.Equal(t, "assistant", delta.Update.EndedWithRole)
+}

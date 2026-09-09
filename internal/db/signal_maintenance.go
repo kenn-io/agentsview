@@ -536,6 +536,15 @@ func (db *DB) ReplaceSessionSignalsIfInputsMatch(
 	if err != nil || !matches {
 		return false, err
 	}
+	if db.usageOnlyStorage() {
+		update = usageOnlySignalUpdate()
+		findings = nil
+		state = SessionSignalState{}
+		if err := settleUsageOnlySignalsTx(tx, sessionID); err != nil {
+			return false, err
+		}
+	}
+
 	if err := replaceSecretFindingsTx(
 		tx, sessionID, findings, update.SecretLeakCount,
 		update.SecretsRulesVersion,

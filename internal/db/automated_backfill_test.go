@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestAutomationVerdictFromPrefix(t *testing.T) {
@@ -774,4 +776,36 @@ func TestForceBackfillIsAutomatedRunsDespiteMatchingHash(t *testing.T) {
 	require.NoError(t, err, "read hash after force")
 	assert.Equal(t, ClassifierHash(), stored,
 		"stored hash not refreshed after force")
+}
+
+func TestAutomationIgnoresToolResultAsFirstPrompt(t *testing.T) {
+	for _, automated := range []bool{false, true} {
+		name := "interactive"
+		prompt, result := "Explain this code.", "You are a code reviewer. Review the diff."
+		if automated {
+			name = "automated"
+			prompt, result = result, prompt
+		}
+		t.Run(name, func(t *testing.T) {
+			database := testDB(t)
+			messages := []Message{
+				{SessionID: "orphan", Ordinal: 0, Role: "user", Content: result, SourceSubtype: parser.SourceSubtypeToolResult},
+				{SessionID: "orphan", Ordinal: 1, Role: "user", Content: prompt},
+			}
+			assert.Equal(t, automated, IsAutomatedTranscript(1, messages, nil))
+			require.NoError(t, database.UpsertSession(Session{
+				ID: "orphan", Agent: "codex", Project: "project", Machine: "local", UserMessageCount: 1,
+			}))
+			require.NoError(t, database.InsertMessages(messages))
+			stored, err := database.GetSessionFull(t.Context(), "orphan")
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Equal(t, automated, stored.IsAutomated, "write-time classification")
+			require.NoError(t, database.ForceBackfillIsAutomated())
+			stored, err = database.GetSessionFull(t.Context(), "orphan")
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Equal(t, automated, stored.IsAutomated, "audit classification")
+		})
+	}
 }

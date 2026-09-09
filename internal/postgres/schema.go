@@ -160,6 +160,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     has_total_output_tokens BOOLEAN NOT NULL DEFAULT FALSE,
     has_peak_context_tokens BOOLEAN NOT NULL DEFAULT FALSE,
     is_automated       BOOLEAN NOT NULL DEFAULT FALSE,
+    prompt_evidence_discarded BOOLEAN NOT NULL DEFAULT FALSE,
     tool_failure_signal_count INT NOT NULL DEFAULT 0,
     tool_retry_count          INT NOT NULL DEFAULT 0,
     edit_churn_count          INT NOT NULL DEFAULT 0,
@@ -1064,6 +1065,11 @@ func EnsureSchema(
 			"tool_calls", "file_path",
 			`file_path TEXT`,
 			"adding tool_calls.file_path",
+		},
+		{
+			"sessions", "prompt_evidence_discarded",
+			`prompt_evidence_discarded BOOLEAN NOT NULL DEFAULT FALSE`,
+			"adding sessions.prompt_evidence_discarded",
 		},
 		{
 			"sessions", "is_automated",
@@ -2741,7 +2747,7 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT owner_marker FROM sessions LIMIT 0`)
+		`SELECT owner_marker, prompt_evidence_discarded FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"sessions table missing push ownership columns: %w", err)

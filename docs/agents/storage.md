@@ -68,6 +68,43 @@ command counts raw `tool_calls.result_content` and `tool_result_events.content`
 bytes separately from decoded image bytes. `db compact` reports file-size
 reclamation separately.
 
+Transcript-only and usage-only writes omit parser checkpoints because resumable
+hash state can contain raw trailing transcript bytes. They retain staged parsing
+but publish projected messages and tool metadata without staged output. Late
+result updates use the same projection as newly inserted messages.
+
+## Archive Content Policy
+
+`archive_content` (`internal/config.ArchiveContent`) narrows what the SQLite
+archive stores. The `*db.DB` handle is the single authority: `Open` variants and
+`sync.NewEngine` only tighten it, never loosen it, and every write path projects
+sessions and messages through `internal/db/archive_content.go` before rows are
+written.
+
+- Route any new session, message, tool call, signal, or finding write through
+  the existing projection helpers instead of checking the policy inline.
+- Resync copies archived rows with `ATTACH`, which bypasses the write path.
+  `applyArchiveContentToCopiedSessionsTx` mirrors the Go projection in SQL for
+  the orphan and trash copies. Keep the two in step when either changes.
+- Copied tool renderings use exact reconstructed text where possible. When
+  stored inputs cannot reconstruct a recognizable tool rendering, transcript
+  projection keeps the preceding prose and tool label but discards the
+  remaining message tail, whose argument boundaries are unknown.
+- Usage-only rows retain normalized context/output token values and their
+  presence flags as well as `token_usage`; model-mix totals use these columns.
+- PostgreSQL pushes record `prompt_evidence_discarded` per session from the
+  source archive policy. Automation audits preserve the stored verdict only
+  when this marker explains the missing prompt evidence. Full-content rows
+  remain eligible for corrections.
+- Usage-only mode disables vector building, serving, and export. Opening the
+  writable archive clears the local message and recall indexes under the
+  vector write lock. PostgreSQL pushes clear all generations of indexed
+  content for owned sessions, including sessions already deleted locally.
+  Cleanup finds candidates in PostgreSQL and rechecks ownership under the
+  session lock before deleting them.
+- Compute derived values (signals, secret findings) from the projected messages
+  so a later recompute from stored rows reproduces them.
+
 ## Backend Parity
 
 - Keep observable behavior and query shape aligned between SQLite and

@@ -32,6 +32,7 @@ type MessageInput struct {
 	SessionID       string
 	Ordinal         int
 	Role            string
+	SourceSubtype   string
 	Model           string
 	IsSystem        bool
 	Timestamp       string
@@ -52,6 +53,7 @@ type ScopedMessage struct {
 	SessionID       string
 	Ordinal         int
 	Role            string
+	SourceSubtype   string
 	Content         string
 	IsSystem        bool
 	HasThinking     bool
@@ -110,7 +112,7 @@ func ScopeStats(rows []ScopedMessage) MessageStats {
 		s.Messages++
 		switch row.Role {
 		case "user":
-			if !row.IsSystem {
+			if !row.IsSystem && row.SourceSubtype != "tool_result" {
 				s.UserMessages++
 			}
 		case "assistant":

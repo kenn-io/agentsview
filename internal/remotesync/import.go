@@ -30,6 +30,7 @@ func (im Importer) ImportExtracted(
 	if err != nil {
 		return stats, err
 	}
+	config.ArchiveContent = im.DB.ArchiveContent()
 
 	engine := syncpkg.NewEngine(im.DB, config)
 	defer engine.Close()

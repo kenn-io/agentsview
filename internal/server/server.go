@@ -43,7 +43,7 @@ type VersionInfo struct {
 	Commit                     string `json:"commit"`
 	BuildDate                  string `json:"build_date"`
 	ReadOnly                   bool   `json:"read_only,omitempty"`
-	InsightGenerationAvailable bool   `json:"insight_generation_available,omitempty"`
+	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	APIVersion                 int    `json:"api_version"`
 	DataVersion                int    `json:"data_version"`
 }
@@ -225,6 +225,7 @@ func New(
 	// backend.
 	var sessions service.SessionService
 	if local, ok := database.(*db.DB); ok {
+		local.SetArchiveContent(cfg.ArchiveContent)
 		sessions = service.NewDirectBackend(local, engine)
 	} else {
 		sessions = service.NewReadOnlyBackend(database)

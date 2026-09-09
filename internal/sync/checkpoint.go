@@ -72,7 +72,8 @@ func (e *Engine) codexCheckpointFingerprint(
 	file parser.DiscoveredFile,
 ) (codexCheckpointResult, error) {
 	res := codexCheckpointResult{decision: codexCheckpointFallback}
-	if e.forceParse || file.ForceParse || e.checkpointAudit.Load() {
+	if e.db.ArchiveContent().OmitsToolContent() ||
+		e.forceParse || file.ForceParse || e.checkpointAudit.Load() {
 		// Audit mode deliberately bypasses the checkpoint gate so the
 		// provider's full-source fingerprint can verify content and repair
 		// same-stat in-place rewrites that append-trust would otherwise miss.
@@ -353,7 +354,8 @@ func codexHashStateDigest(state []byte) (string, error) {
 func (e *Engine) buildCodexFullParseCheckpoint(
 	path string, pw pendingWrite,
 ) (*db.ParserCheckpoint, *db.ParserCheckpointBlobs, error) {
-	if len(pw.checkpoint) == 0 || len(pw.checkpointHashState) == 0 ||
+	if e.db.ArchiveContent().OmitsToolContent() ||
+		len(pw.checkpoint) == 0 || len(pw.checkpointHashState) == 0 ||
 		pw.checkpointAnchorDigest == "" {
 		return nil, nil, nil
 	}

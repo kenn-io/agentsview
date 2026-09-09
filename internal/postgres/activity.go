@@ -64,7 +64,7 @@ func (s *Store) GetSessionActivity(
 		SELECT
 			floor((EXTRACT(EPOCH FROM m.timestamp) - $1) / $2)::bigint
 				AS bucket,
-			SUM(CASE WHEN m.role = 'user'
+			SUM(CASE WHEN m.role = 'user' AND COALESCE(m.source_subtype, '') <> 'tool_result'
 				THEN 1 ELSE 0 END)::int,
 			SUM(CASE WHEN m.role = 'assistant'
 				THEN 1 ELSE 0 END)::int,

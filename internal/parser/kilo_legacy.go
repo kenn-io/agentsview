@@ -725,6 +725,7 @@ func parseKiloLegacyMessages(
 					Role:          RoleUser,
 					Content:       output,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(output),
 					ToolResults:   toolResults,
@@ -763,6 +764,7 @@ func parseKiloLegacyMessages(
 					Role:          RoleSystem,
 					Content:       content,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})
@@ -802,6 +804,7 @@ func parseKiloLegacyMessages(
 					Role:          RoleSystem,
 					Content:       content,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})
@@ -843,6 +846,7 @@ func parseKiloLegacyMessages(
 					Role:          RoleSystem,
 					Content:       content,
 					IsSystem:      true,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ts,
 					ContentLength: len(content),
 				})

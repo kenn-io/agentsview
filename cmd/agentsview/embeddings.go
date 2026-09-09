@@ -230,6 +230,9 @@ func parseGenerationID(raw string) (int64, error) {
 // requireVectorEnabled rejects every embeddings subcommand up front when
 // [vector] is not configured, with the exact message the brief specifies.
 func requireVectorEnabled(cfg config.Config) error {
+	if cfg.ArchiveContent.UsageOnly() {
+		return fmt.Errorf("%w: embeddings require transcript content", db.ErrArchiveContentExcluded)
+	}
 	if !cfg.Vector.Enabled {
 		return errors.New(
 			"vector search is not enabled: set [vector] enabled = true in config.toml",

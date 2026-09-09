@@ -69,6 +69,10 @@ func resolvePGServeVectorState(
 func wirePGVectorSearch(
 	ctx context.Context, appCfg config.Config, store *postgres.Store, label string,
 ) error {
+	if appCfg.ArchiveContent.UsageOnly() {
+		store.SetSemanticUnavailableReason("vector search is unavailable for usage-only archives")
+		return nil
+	}
 	if !appCfg.Vector.Enabled {
 		_, reason := resolvePGServeVectorState(false, false, "", "")
 		store.SetSemanticUnavailableReason(reason)

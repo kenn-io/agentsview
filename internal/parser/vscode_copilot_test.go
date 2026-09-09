@@ -1359,3 +1359,18 @@ func TestParseVSCodeCopilotSession_NoTokenUsage(t *testing.T) {
 	assert.False(t, sess.HasTotalOutputTokens, "no total output expected")
 	assert.False(t, sess.HasPeakContextTokens, "no peak context expected")
 }
+
+func TestFormatVSCodeCopilotToolCallsRecordsRenderings(t *testing.T) {
+	calls := []ParsedToolCall{
+		{ToolName: "run_in_terminal", Category: "Bash",
+			InputJSON: `{"command":"printenv TOKEN"}`},
+		{ToolName: "read_file", Category: "Read"},
+	}
+
+	text := formatVSCodeCopilotToolCalls(calls)
+
+	assert.Equal(t, "[Bash: run_in_terminal]\n$ printenv TOKEN", calls[0].Rendering)
+	assert.Equal(t, "[Read: read_file]", calls[1].Rendering)
+	assert.Contains(t, text, calls[0].Rendering)
+	assert.Contains(t, text, calls[1].Rendering)
+}

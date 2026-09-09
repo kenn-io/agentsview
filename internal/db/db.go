@@ -475,7 +475,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (104: OpenCode v2 projections, mixed CLI/API history, attachments, and
 // compaction boundaries. Re-parse existing sessions and reconsider skipped
 // sources even when the producer database has not changed.)
-const dataVersion = 104
+// (105: OpenCode messages record their storage message ID as source_uuid so
+// archive guards match stored rows by identity instead of ordinal, and
+// RooCode, Kilo Legacy, gptme, OpenHands, and Aider rows that carry tool
+// output as message text, along with Cortex tool-result-only rows, are
+// marked with the tool_result source subtype so storage policies can drop it.
+// Existing rows need re-parsing to receive both.)
+const dataVersion = 105
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -685,6 +691,8 @@ type DB struct {
 	undrainedPools   []*sql.DB
 	readOnly         bool
 	toolResultImages config.ToolResultImages
+	// archiveContent indexes archiveContentRanks; see SetArchiveContent.
+	archiveContent atomic.Int32
 	// writerClosed is set while the writer pool is intentionally closed for a
 	// worker maintenance pass (CloseWriter). It lets write attempts report
 	// ErrWriterClosed instead of the generic read-only error.
@@ -1054,19 +1062,28 @@ func configureReaderPool(reader *sql.DB) {
 // If the schema is current but the data version is stale, the database
 // is also preserved and marked for a re-sync on the next cycle.
 func Open(path string) (*DB, error) {
-	return open(context.Background(), path, true)
+	return open(context.Background(), path, true, config.ArchiveContentFull)
+}
+
+// OpenWithArchiveContent opens an archive under a storage policy. The policy
+// is active before startup migrations run so they cannot reinterpret
+// classifications whose source text was discarded.
+func OpenWithArchiveContent(
+	path string, policy config.ArchiveContent,
+) (*DB, error) {
+	return open(context.Background(), path, true, policy)
 }
 
 // OpenIsolated opens an archive without starting long-running database
 // maintenance. Short-lived, isolated workflows must close the returned DB.
 func OpenIsolated(path string) (*DB, error) {
-	return open(context.Background(), path, false)
+	return open(context.Background(), path, false, config.ArchiveContentFull)
 }
 
 // OpenIsolatedContext is OpenIsolated with cooperative cancellation between
 // database initialization phases. The returned database must be closed.
 func OpenIsolatedContext(ctx context.Context, path string) (*DB, error) {
-	return open(ctx, path, false)
+	return open(ctx, path, false, config.ArchiveContentFull)
 }
 
 // OpenFreshIsolatedContext initializes a current-schema archive in an empty,
@@ -1109,7 +1126,10 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	return d, nil
 }
 
-func open(ctx context.Context, path string, backgroundMaintenance bool) (*DB, error) {
+func open(
+	ctx context.Context, path string,
+	backgroundMaintenance bool, policy config.ArchiveContent,
+) (*DB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -1133,6 +1153,7 @@ func open(ctx context.Context, path string, backgroundMaintenance bool) (*DB, er
 	if err != nil {
 		return nil, err
 	}
+	d.SetArchiveContent(policy)
 	closeOnError := func(err error) (*DB, error) {
 		if _, bounded := ctx.Deadline(); bounded {
 			return nil, errors.Join(err, d.CloseContext(ctx))
@@ -3543,6 +3564,20 @@ func ensureUsageIndexColumnsLocked(
 // or stale remote machines after the hash was stamped.
 func (db *DB) backfillIsAutomatedLocked(w *writerHandle) error {
 	current := ClassifierHash()
+	if db.usageOnlyStorage() {
+		// Usage-only archives deliberately discard the text this migration
+		// audits. Session writes classify while raw parser/importer data is
+		// still available, so the stored flag is the durable authority here.
+		_, err := w.Exec(
+			`INSERT INTO stats (key, value) VALUES (?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			ClassifierHashKey, current,
+		)
+		if err != nil {
+			return fmt.Errorf("storing classifier hash: %w", err)
+		}
+		return nil
+	}
 	var stored string
 	err := w.QueryRow(
 		`SELECT value FROM stats WHERE key = ?`,

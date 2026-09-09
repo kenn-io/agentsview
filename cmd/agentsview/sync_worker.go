@@ -379,5 +379,6 @@ func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 		Machine:                 cfg.LocalMachineName,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 		ToolResultImages:        cfg.ToolResultImages,
+		ArchiveContent:          cfg.ArchiveContent,
 	}
 }

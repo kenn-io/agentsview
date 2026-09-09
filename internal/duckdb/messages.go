@@ -442,7 +442,9 @@ func (s *Store) GetSessionActivity(ctx context.Context, sessionID string) (*db.S
 		row := populated[idx]
 		switch msg.Role {
 		case "user":
-			row.userCount++
+			if msg.SourceSubtype != "tool_result" {
+				row.userCount++
+			}
 		case "assistant":
 			row.asstCount++
 		}

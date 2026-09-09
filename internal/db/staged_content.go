@@ -366,6 +366,21 @@ func (db *DB) replaceSessionContentStaged(
 	signalsFn StagedSignalsFunc,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 ) error {
+	if db.ArchiveContent().OmitsToolContent() {
+		// The in-memory rows contain all retained metadata. Staged output is
+		// excluded by this policy, so publish through the regular projection.
+		var update SessionSignalUpdate
+		var findings []SecretFinding
+		if signalsFn != nil {
+			var err error
+			update, findings, err = signalsFn(nil)
+			if err != nil {
+				return err
+			}
+		}
+		return db.ReplaceSessionContent(sessionID, msgs, update, findings)
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

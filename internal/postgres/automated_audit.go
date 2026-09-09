@@ -23,11 +23,13 @@ const fullAutomationCandidatesPG = `SELECT
 	s.first_message,
 	s.user_message_count,
 	s.is_automated,
+	s.prompt_evidence_discarded,
 	(
 		SELECT m.content
 		FROM messages m
 		WHERE m.session_id = s.id
 		  AND m.role = 'user'
+		  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 		  AND COALESCE(m.is_system, false) = false
 		  AND btrim(m.content) <> ''
 		ORDER BY m.ordinal
@@ -132,6 +134,7 @@ func auditAutomatedMatchingHashPG(
 			s.session_kind,
 			s.user_message_count,
 			s.is_automated,
+			s.prompt_evidence_discarded,
 			CASE WHEN s.user_message_count <= 1
 				THEN substring(
 					convert_to(first_user.content, 'UTF8') FROM 1 FOR $1
@@ -158,6 +161,7 @@ func auditAutomatedMatchingHashPG(
 			FROM messages m
 			WHERE m.session_id = s.id
 			  AND m.role = 'user'
+			  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 			  AND COALESCE(m.is_system, false) = false
 			  AND btrim(m.content) <> ''
 			ORDER BY m.ordinal
@@ -174,15 +178,16 @@ func auditAutomatedMatchingHashPG(
 	var unresolved []string
 	for rows.Next() {
 		var (
-			id                 string
-			agent              string
-			sessionKind        string
-			userMessageCount   int
-			rowAutomated       bool
-			firstUserPrefix    []byte
-			firstUserLength    sql.NullInt64
-			firstMessagePrefix []byte
-			firstMessageLength sql.NullInt64
+			id                      string
+			agent                   string
+			sessionKind             string
+			userMessageCount        int
+			rowAutomated            bool
+			promptEvidenceDiscarded bool
+			firstUserPrefix         []byte
+			firstUserLength         sql.NullInt64
+			firstMessagePrefix      []byte
+			firstMessageLength      sql.NullInt64
 		)
 		if err := rows.Scan(
 			&id,
@@ -190,6 +195,7 @@ func auditAutomatedMatchingHashPG(
 			&sessionKind,
 			&userMessageCount,
 			&rowAutomated,
+			&promptEvidenceDiscarded,
 			&firstUserPrefix,
 			&firstUserLength,
 			&firstMessagePrefix,
@@ -205,6 +211,12 @@ func auditAutomatedMatchingHashPG(
 			setIDs, clearIDs = appendAutomationFlagChangePG(
 				setIDs, clearIDs, id, rowAutomated, true,
 			)
+			continue
+		}
+
+		// Usage-only archives discard both text candidates. With at most
+		// one prompt, missing text cannot disprove the stored verdict.
+		if promptEvidenceDiscarded && userMessageCount <= 1 && firstUserLength.Int64 == 0 && firstMessageLength.Int64 == 0 {
 			continue
 		}
 
@@ -270,27 +282,33 @@ func scanFullAutomationCandidatesPG(
 ) (setIDs, clearIDs []string, count int, err error) {
 	for rows.Next() {
 		var (
-			id           string
-			agent        string
-			sessionKind  string
-			firstMessage sql.NullString
-			firstUser    sql.NullString
-			userCount    int
-			rowAutomated bool
+			id                      string
+			agent                   string
+			sessionKind             string
+			firstMessage            sql.NullString
+			firstUser               sql.NullString
+			userCount               int
+			rowAutomated            bool
+			promptEvidenceDiscarded bool
 		)
 		if err := rows.Scan(
 			&id, &agent, &sessionKind,
-			&firstMessage, &userCount, &rowAutomated, &firstUser,
+			&firstMessage, &userCount, &rowAutomated, &promptEvidenceDiscarded, &firstUser,
 		); err != nil {
 			return nil, nil, count, fmt.Errorf(
 				"scanning PG automated audit candidate: %w", err,
 			)
 		}
 		count++
-		want := db.IsAutomatedSessionMetadata(agent, sessionKind) ||
-			classifier.IsAutomatedFromTextCandidates(
-				userCount, firstUser, firstMessage,
-			)
+		want := db.IsAutomatedSessionMetadata(agent, sessionKind)
+		// Match the bounded audit: retain the verdict when classification
+		// needs prompt text that the source archive no longer stores.
+		if promptEvidenceDiscarded && !want && userCount <= 1 && firstUser.String == "" && firstMessage.String == "" {
+			continue
+		}
+		want = want || classifier.IsAutomatedFromTextCandidates(
+			userCount, firstUser, firstMessage,
+		)
 		setIDs, clearIDs = appendAutomationFlagChangePG(
 			setIDs, clearIDs, id, rowAutomated, want,
 		)

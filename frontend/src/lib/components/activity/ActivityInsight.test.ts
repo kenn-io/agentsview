@@ -226,6 +226,16 @@ describe("ActivityInsight", () => {
     expect(btn.hasAttribute("disabled")).toBe(true);
   });
 
+  it("disables Generate when a writable server denies the capability", async () => {
+    mocks.serverVersion = { read_only: false, insight_generation_available: false };
+    render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
+    await settle();
+    const btn = screen.getByRole("button", { name: /generate/i });
+    expect(btn.hasAttribute("disabled")).toBe(true);
+    await fireEvent.click(btn);
+    expect(mocks.generateInsight).not.toHaveBeenCalled();
+  });
+
   it("allows Generate in read-only mode when insight generation is advertised", async () => {
     mocks.serverVersion = {
       read_only: true,

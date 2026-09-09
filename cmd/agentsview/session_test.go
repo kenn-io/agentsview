@@ -968,6 +968,38 @@ func TestSessionExport_StreamsFromDisk(t *testing.T) {
 	assert.Equal(t, body, out)
 }
 
+func TestSessionExportArchiveContent(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{
+		config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			t.Setenv("AGENTSVIEW_ARCHIVE_CONTENT", string(policy))
+			src := filepath.Join(t.TempDir(), "session.jsonl")
+			const body = "{\"type\":\"user\",\"content\":\"source transcript\"}\n"
+			require.NoError(t, os.WriteFile(src, []byte(body), 0o600))
+			database, err := db.OpenWithArchiveContent(sessionsDBPath(dataDir), policy)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = database.Close() })
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: "export-policy", Project: "proj", Machine: "local", Agent: "claude", FilePath: &src,
+			}))
+			require.NoError(t, database.InsertMessages([]db.Message{{
+				SessionID: "export-policy", Role: "user", Content: "source transcript",
+			}}))
+			require.NoError(t, database.Close())
+			out, err := executeCommand(newRootCommand(), "session", "export", "export-policy")
+			if policy.UsageOnly() {
+				require.ErrorContains(t, err, "archive_content=usage")
+				assert.Empty(t, out)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, body, out)
+			}
+		})
+	}
+}
+
 func createTraeExportStateDB(t *testing.T, root string) string {
 	t.Helper()
 	dbPath := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")

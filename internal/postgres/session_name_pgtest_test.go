@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -115,3 +116,46 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 
 // strPtr is a helper to take the address of a string literal.
 func strPtr(s string) *string { return &s }
+
+func TestPGPushUsageOnlyClearsRenamedTitle(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	local := testDB(t)
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	ctx := context.Background()
+	session := db.Session{
+		ID: "title-policy", Agent: "claude", Project: "proj", Machine: "test-machine",
+		FirstMessage: strPtr("original prompt"), DisplayName: strPtr("source title"),
+		SessionName: strPtr("provider title"),
+	}
+	require.NoError(t, local.UpsertSession(session))
+	require.NoError(t, local.RenameSession(session.ID, strPtr("source title")))
+	_, err = ps.Push(ctx, true, nil)
+	require.NoError(t, err)
+	_, err = ps.pg.ExecContext(ctx, `UPDATE sessions SET display_name = 'remote title' WHERE id = $1`, session.ID)
+	require.NoError(t, err)
+	// Full-content pushes preserve an independent PostgreSQL rename.
+	_, err = ps.Push(ctx, true, nil)
+	require.NoError(t, err)
+	var display, source, provider sql.NullString
+	require.NoError(t, ps.pg.QueryRowContext(ctx,
+		`SELECT display_name, source_display_name, session_name FROM sessions WHERE id = $1`, session.ID,
+	).Scan(&display, &source, &provider))
+	assert.Equal(t, "remote title", display.String)
+	assert.Equal(t, "source title", source.String)
+	assert.Equal(t, "provider title", provider.String)
+
+	local.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, local.UpsertSession(session))
+	_, err = ps.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.NoError(t, ps.pg.QueryRowContext(ctx,
+		`SELECT display_name, source_display_name, session_name FROM sessions WHERE id = $1`, session.ID,
+	).Scan(&display, &source, &provider))
+	assert.False(t, display.Valid, "usage-only push must remove the remote rename")
+	assert.False(t, source.Valid)
+	assert.False(t, provider.Valid)
+}

@@ -314,10 +314,18 @@ func parseAiderTurns(body string) ([]ParsedMessage, []string) {
 		if curChan == chanUser {
 			role = RoleUser
 		}
+		// Tool output stays visible as assistant text because aider has no
+		// tool-call IDs to pair on, but it is marked so storage policies
+		// that drop tool output can recognize it.
+		var subtype string
+		if curChan == chanTool {
+			subtype = SourceSubtypeToolResult
+		}
 		messages = append(messages, ParsedMessage{
 			Ordinal:       ordinal,
 			Role:          role,
 			Content:       text,
+			SourceSubtype: subtype,
 			ContentLength: len(text),
 		})
 		ordinal++

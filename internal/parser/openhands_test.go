@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestDiscoverAndFindOpenHandsSessions(t *testing.T) {
@@ -190,4 +192,24 @@ func TestParseOpenHandsSession(t *testing.T) {
 	assert.True(t, msgs[3].HasThinking)
 	assert.Equal(t, "litellm_proxy/claude-sonnet-4-6", msgs[3].Model)
 	assert.Contains(t, msgs[3].Content, "The panic happens during startup.")
+}
+
+func TestParseOpenHandsObservationWithoutToolCallIsMarkedToolOutput(t *testing.T) {
+	event := gjson.Parse(`{
+		"id":"e9",
+		"source":"environment",
+		"observation":{
+			"content":[{"type":"text","text":"token=abc123"}],
+			"kind":"TerminalObservation"
+		},
+		"kind":"ObservationEvent"
+	}`)
+
+	msg, ok, _ := parseOpenHandsObservationEvent(event, 3, time.Time{})
+
+	require.True(t, ok)
+	assert.Equal(t, RoleUser, msg.Role)
+	assert.Equal(t, "token=abc123", msg.Content)
+	assert.Equal(t, SourceSubtypeToolResult, msg.SourceSubtype,
+		"an observation with no tool call to pair with is still tool output")
 }

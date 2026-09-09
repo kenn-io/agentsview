@@ -151,7 +151,9 @@ func (s *Server) humaGetVersion(
 	_ context.Context,
 	_ *emptyInput,
 ) (*jsonOutput[VersionInfo], error) {
-	return &jsonOutput[VersionInfo]{Body: s.version}, nil
+	version := s.version
+	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
+	return &jsonOutput[VersionInfo]{Body: version}, nil
 }
 
 func (s *Server) humaCheckUpdate(

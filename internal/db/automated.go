@@ -363,7 +363,7 @@ func IsAutomatedTranscript(
 
 func firstUserMessageContent(msgs []Message) (string, bool) {
 	for _, m := range msgs {
-		if m.Role != "user" || m.IsSystem {
+		if m.Role != "user" || m.IsSystem || m.SourceSubtype == parser.SourceSubtypeToolResult {
 			continue
 		}
 		if strings.TrimSpace(m.Content) == "" {

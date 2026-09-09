@@ -734,6 +734,7 @@ func (e *Engine) parseDiffCollectFile(
 		if err != nil {
 			return err
 		}
+		prepared, msgs = e.db.ProjectSessionForStorage(prepared, msgs)
 		id := prepared.ID
 		if verdict != sessionWriteOK {
 			// prepareSessionWrite returns a zero session on veto;

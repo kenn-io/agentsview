@@ -826,6 +826,9 @@ func grokBackendToolMessage(
 		ToolName:  toolName,
 		Category:  NormalizeToolCategory(toolName),
 		InputJSON: inputJSON,
+		// The summary is the message text, so storage policies that drop
+		// tool inputs can replace it verbatim.
+		Rendering: content,
 	}
 	return ParsedMessage{
 		Ordinal:       ordinal,

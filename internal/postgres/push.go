@@ -509,7 +509,7 @@ func (s *Sync) PushWithOptions(
 				sess, pushedSessionMachine(sess, s.machine),
 				s.archiveID, usageFP, markerID,
 				dependencyFP+"\x00source-database-generation:"+
-					s.databaseGeneration,
+					s.databaseGeneration+"\x00archive-content:"+string(s.local.ArchiveContent()),
 			)
 			prepared++
 			if prepared%pushPrepareProgressStride == 0 {
@@ -762,8 +762,8 @@ func (s *Sync) PushWithOptions(
 }
 
 // runVectorPushPhase runs the vector push phase and wraps its error. With no
-// source attached the phase never runs: it returns a Skipped result with an
-// empty reason, which the summary printer renders as nothing (an unconfigured
+// source attached no export runs; usage-only pushes still evict owned vectors.
+// A Skipped result with an empty reason renders as nothing (an unconfigured
 // phase is not a diagnosable skip like an unavailable extension). Without this
 // the zero-valued VectorPushResult would print "Vectors: 0 session(s) pushed".
 // failedSessions names sessions whose session-phase push failed; their vectors
@@ -779,6 +779,9 @@ func (s *Sync) runVectorPushPhase(
 	failedSessions map[string]struct{},
 	onProgress func(PushProgress),
 ) (VectorPushResult, error) {
+	if s.local.ArchiveContent().UsageOnly() {
+		return VectorPushResult{Skipped: true}, s.clearUsageOnlyVectorSessions(ctx)
+	}
 	if s.vectorSource == nil {
 		return VectorPushResult{Skipped: true}, nil
 	}
@@ -2345,7 +2348,7 @@ func (s *Sync) pushSession(
 			transcript_fidelity, transcript_revision,
 			agent_label, entrypoint, session_kind,
 			source_archive_id, source_database_generation, file_path,
-			updated_at
+			prompt_evidence_discarded, updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
@@ -2363,7 +2366,7 @@ func (s *Sync) pushSession(
 				$50, $51,
 				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
 				$62, $63, $64, $65, $66, $67,
-				NOW()
+				$69, NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
 			)
@@ -2380,12 +2383,19 @@ func (s *Sync) pushSession(
 			file_path = EXCLUDED.file_path,
 			first_message = EXCLUDED.first_message,
 			display_name = CASE
+				WHEN EXCLUDED.prompt_evidence_discarded THEN NULL
 				WHEN sessions.display_name IS DISTINCT FROM
 					sessions.source_display_name THEN sessions.display_name
 				ELSE EXCLUDED.display_name
 			END,
-			source_display_name = EXCLUDED.display_name,
-			session_name = EXCLUDED.session_name,
+			source_display_name = CASE
+				WHEN EXCLUDED.prompt_evidence_discarded THEN NULL
+				ELSE EXCLUDED.display_name
+			END,
+			session_name = CASE
+				WHEN EXCLUDED.prompt_evidence_discarded THEN NULL
+				ELSE EXCLUDED.session_name
+			END,
 			created_at = EXCLUDED.created_at,
 			started_at = EXCLUDED.started_at,
 			ended_at = EXCLUDED.ended_at,
@@ -2407,6 +2417,7 @@ func (s *Sync) pushSession(
 			has_total_output_tokens = EXCLUDED.has_total_output_tokens,
 			has_peak_context_tokens = EXCLUDED.has_peak_context_tokens,
 			is_automated = EXCLUDED.is_automated,
+			prompt_evidence_discarded = EXCLUDED.prompt_evidence_discarded,
 			data_version = EXCLUDED.data_version,
 			cwd = EXCLUDED.cwd,
 			git_branch = EXCLUDED.git_branch,
@@ -2474,6 +2485,10 @@ func (s *Sync) pushSession(
 				EXCLUDED.source_database_generation
 			OR sessions.file_path IS DISTINCT FROM EXCLUDED.file_path
 			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
+			OR (EXCLUDED.prompt_evidence_discarded AND (
+				sessions.display_name IS NOT NULL OR
+				sessions.source_display_name IS NOT NULL OR
+				sessions.session_name IS NOT NULL))
 			OR sessions.source_display_name IS DISTINCT FROM EXCLUDED.display_name
 			OR sessions.session_name IS DISTINCT FROM EXCLUDED.session_name
 			OR sessions.created_at IS DISTINCT FROM EXCLUDED.created_at
@@ -2487,6 +2502,7 @@ func (s *Sync) pushSession(
 			OR sessions.peak_context_tokens IS DISTINCT FROM EXCLUDED.peak_context_tokens
 			OR sessions.has_total_output_tokens IS DISTINCT FROM EXCLUDED.has_total_output_tokens
 			OR sessions.has_peak_context_tokens IS DISTINCT FROM EXCLUDED.has_peak_context_tokens
+			OR sessions.prompt_evidence_discarded IS DISTINCT FROM EXCLUDED.prompt_evidence_discarded
 			OR sessions.is_automated IS DISTINCT FROM EXCLUDED.is_automated
 			OR sessions.data_version IS DISTINCT FROM EXCLUDED.data_version
 			OR sessions.cwd IS DISTINCT FROM EXCLUDED.cwd
@@ -2576,6 +2592,7 @@ func (s *Sync) pushSession(
 		s.databaseGeneration,
 		sess.FilePath,
 		string(legacyMarkerMachinesJSON),
+		s.local.ArchiveContent().UsageOnly(),
 	)
 	if err != nil {
 		return err
@@ -2620,6 +2637,11 @@ func (s *Sync) pushSession(
 	}
 	if excluded {
 		return errSessionExcluded
+	}
+	if s.local.ArchiveContent().UsageOnly() {
+		if err := clearSessionVectorsTx(ctx, tx, sess.ID); err != nil {
+			return err
+		}
 	}
 	if err := replacePGSessionAliases(ctx, tx, sess); err != nil {
 		return err

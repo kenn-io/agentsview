@@ -1560,6 +1560,9 @@ func parseAntigravityCLITrajectory(
 			content := pr.Response
 			if content == "" && len(toolHeaders) > 0 {
 				content = strings.Join(toolHeaders, "\n")
+				for i := range toolCalls {
+					toolCalls[i].Rendering = toolHeaders[i]
+				}
 			}
 
 			msg := ParsedMessage{

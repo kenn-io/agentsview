@@ -4753,6 +4753,7 @@ func TestBuildSignalExamplesUsesObservedOrdinal(t *testing.T) {
 			},
 			msgs: []SignalMessage{
 				{SessionID: "short", Ordinal: 0, Role: "user", Content: "yes"},
+				{SessionID: "short", Ordinal: 1, Role: "user", SourceSubtype: "tool_result", Content: "failed"},
 				{SessionID: "short", Ordinal: 3, Role: "user", Content: "fix bug"},
 			},
 			want: 3,
@@ -4793,6 +4794,7 @@ func TestBuildSignalExamplesUsesObservedOrdinal(t *testing.T) {
 			msgs: []SignalMessage{
 				{SessionID: "outcome", Ordinal: 0, Role: "user", Content: "start"},
 				{SessionID: "outcome", Ordinal: 6, Role: "assistant", Content: "failed"},
+				{SessionID: "outcome", Ordinal: 7, Role: "user", SourceSubtype: "tool_result", Content: "tool output"},
 			},
 			want: 6,
 		},

@@ -135,6 +135,17 @@ func (db *DB) WriteSessionBatchContext(
 			return result, err
 		}
 		write.Messages, _ = db.ProjectToolResultImages(write.Messages)
+		if db.ArchiveContent().OmitsToolContent() {
+			write.Checkpoint, write.CheckpointBlobs = nil, nil
+		}
+		write.Session, write.Messages = db.sessionAndMessagesForStorage(
+			write.Session, write.Messages,
+		)
+		if db.usageOnlyStorage() {
+			write.Signals = usageOnlySignalUpdate()
+			write.Findings = nil
+			write.SkipSignalUpdates = false
+		}
 		savepoint := fmt.Sprintf("session_batch_%d", i)
 		if _, err := ctxTx.Exec("SAVEPOINT " + savepoint); err != nil {
 			return result, fmt.Errorf(
@@ -147,6 +158,7 @@ func (db *DB) WriteSessionBatchContext(
 			ctx, tx, ctxTx,
 			write,
 			&sessionRecallRevocations,
+			db.usageOnlyStorage(),
 		)
 		switch {
 		case err == nil:
@@ -224,10 +236,22 @@ func (db *DB) WriteSessionBatchAtomic(
 	for i, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
 		write.Messages, _ = db.ProjectToolResultImages(write.Messages)
+		if db.ArchiveContent().OmitsToolContent() {
+			write.Checkpoint, write.CheckpointBlobs = nil, nil
+		}
+		write.Session, write.Messages = db.sessionAndMessagesForStorage(
+			write.Session, write.Messages,
+		)
+		if db.usageOnlyStorage() {
+			write.Signals = usageOnlySignalUpdate()
+			write.Findings = nil
+			write.SkipSignalUpdates = false
+		}
 		messagesWritten, err := writeOneSessionBatchTx(
 			context.Background(), tx, tx,
 			write,
 			&pendingRecallRevocations,
+			db.usageOnlyStorage(),
 		)
 		if err != nil {
 			result.WrittenSessions = 0
@@ -424,6 +448,7 @@ func writeOneSessionBatchTx(
 	queries transactionQueries,
 	write SessionBatchWrite,
 	pendingRecallRevocations *recallEvidenceRevocationEvents,
+	preserveAutomation bool,
 ) (int, error) {
 	if write.IdentityObservation.Project != "" {
 		normalized, err := normalizeProjectIdentityObservation(
@@ -589,7 +614,11 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if err := updateSessionAutomationFromMessagesTx(
+	if preserveAutomation {
+		if err := clearUsageOnlyTextTx(queries, write.Session.ID); err != nil {
+			return 0, err
+		}
+	} else if err := updateSessionAutomationFromMessagesTx(
 		queries, write.Session.ID,
 	); err != nil {
 		return 0, err

@@ -654,6 +654,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 			ToolName:  name,
 			Category:  NormalizeToolCategory(name),
 			InputJSON: inputJSON,
+			Rendering: content,
 			SkillName: skillName,
 		}},
 	})
@@ -877,6 +878,7 @@ func (b *codexSessionBuilder) flushPendingAgentResultsContext(
 					Ordinal:       ev.ordinal,
 					Role:          RoleUser,
 					Content:       ev.text,
+					SourceSubtype: SourceSubtypeToolResult,
 					Timestamp:     ev.timestamp,
 					Model:         b.model,
 					ContentLength: len(ev.text),
@@ -1842,7 +1844,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		if err := contextErrEvery(ctx, i); err != nil {
 			return nil, nil, codexCursorState{}, false, nil, "", "", err
 		}
-		if m.Role == RoleUser && m.Content != "" {
+		if m.Role == RoleUser && m.SourceSubtype != SourceSubtypeToolResult && m.Content != "" {
 			userCount++
 		}
 	}

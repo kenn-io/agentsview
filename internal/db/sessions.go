@@ -391,6 +391,10 @@ type Session struct {
 	// retains an existing session_name while a new row can still use the
 	// parser's fallback name.
 	PreserveSessionName bool `json:"-"`
+
+	// PreserveStoredAutomation is transient write intent set by the usage-only
+	// projection when metadata cannot reclassify a one-turn session.
+	PreserveStoredAutomation bool `json:"-"`
 }
 
 // SessionCursor is the opaque pagination token. EndedAt carries the
@@ -1501,15 +1505,44 @@ func (db *DB) UpsertSessionPendingContent(s Session) (bool, error) {
 func (db *DB) upsertSession(
 	s Session, reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
+	s = db.sessionForStorage(s)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	writer := db.getWriter()
-	return upsertSessionExec(
-		writer.Exec,
-		writer.QueryRow,
+	if !db.usageOnlyStorage() {
+		return upsertSessionExec(
+			writer.Exec,
+			writer.QueryRow,
+			s,
+			reviveSourceMissing,
+		)
+	}
+	// The upsert leaves stored titles, signals, and findings alone on
+	// purpose in full mode; a usage archive must not keep any that predate
+	// the policy, so the row is settled in the same transaction.
+	tx, err := writer.Begin()
+	if err != nil {
+		return sessionUpsertResult{}, fmt.Errorf("beginning session upsert: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := upsertSessionExec(
+		tx.Exec,
+		func(query string, args ...any) rowScanner {
+			return tx.QueryRow(query, args...)
+		},
 		s,
 		reviveSourceMissing,
 	)
+	if err != nil {
+		return result, err
+	}
+	if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
+		return result, err
+	}
+	if err := tx.Commit(); err != nil {
+		return result, fmt.Errorf("committing session upsert: %w", err)
+	}
+	return result, nil
 }
 
 type sessionUpsertResult struct {
@@ -1542,12 +1575,13 @@ func upsertSessionExec(
 	}
 	var previousProject string
 	var previousSessionName sql.NullString
+	var previousAutomated bool
 	var deletedAt, sourceMissingAt sql.NullString
 	err = queryRow(
-		"SELECT project, session_name, deleted_at, source_missing_at "+
+		"SELECT project, session_name, deleted_at, source_missing_at, is_automated "+
 			"FROM sessions WHERE id = ?", s.ID,
 	).Scan(
-		&previousProject, &previousSessionName, &deletedAt, &sourceMissingAt,
+		&previousProject, &previousSessionName, &deletedAt, &sourceMissingAt, &previousAutomated,
 	)
 	result := sessionUpsertResult{
 		inserted:        errors.Is(err, sql.ErrNoRows),
@@ -1557,6 +1591,9 @@ func upsertSessionExec(
 	if err != nil && !result.inserted {
 		return sessionUpsertResult{},
 			fmt.Errorf("checking session %s: %w", s.ID, err)
+	}
+	if s.PreserveStoredAutomation {
+		s.IsAutomated = s.IsAutomated || previousAutomated
 	}
 	if s.PreserveSessionName && !result.inserted {
 		if previousSessionName.Valid {
@@ -2358,6 +2395,9 @@ func (db *DB) BumpLocalModifiedAt(id string) error {
 // full UpsertSession is unsafe because the caller does not have a complete
 // row to avoid overwriting existing fields with zero values.
 func (db *DB) RefreshSessionName(id string, sessionName *string) error {
+	if db.usageOnlyStorage() {
+		sessionName = nil
+	}
 	if sessionName != nil {
 		clean := *sessionName
 		var stats ValidationStats
@@ -2367,14 +2407,27 @@ func (db *DB) RefreshSessionName(id string, sessionName *string) error {
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.Exec(
 		`UPDATE sessions
 		 SET session_name = ?,
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ? AND deleted_at IS NULL`,
 		sessionName, id,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if db.usageOnlyStorage() {
+		if err := clearUsageOnlyTextTx(tx, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // FindSessionIDsByPartial returns up to limit session IDs that contain the
@@ -2962,8 +3015,17 @@ func (db *DB) UpdateSessionIncremental(
 	if err != nil {
 		return err
 	}
-	if err := updateSessionAutomationFromMessagesTx(tx, id); err != nil {
-		return err
+	if db.usageOnlyStorage() {
+		if err := updateUsageOnlyAutomationTx(tx, id, nil); err != nil {
+			return err
+		}
+		if err := settleUsageOnlySignalsTx(tx, id); err != nil {
+			return err
+		}
+	} else {
+		if err := updateSessionAutomationFromMessagesTx(tx, id); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing incremental update tx: %w", err)
@@ -5514,16 +5576,32 @@ func (db *DB) RestoreSession(id string) (int64, error) {
 // RenameSession sets or clears the display_name for a session.
 // Pass nil to clear a custom name (reverts to session_name or first_message).
 func (db *DB) RenameSession(id string, displayName *string) error {
+	if db.usageOnlyStorage() {
+		displayName = nil
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.Exec(
 		`UPDATE sessions
 		 SET display_name = ?,
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ? AND deleted_at IS NULL`,
 		displayName, id,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if db.usageOnlyStorage() {
+		if err := clearUsageOnlyTextTx(tx, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ListTrashedSessions returns sessions that have been soft-deleted.

@@ -143,6 +143,9 @@ func deleteParserCheckpointTx(tx *sql.Tx, sessionID string) error {
 func (db *DB) UpsertParserCheckpoint(
 	cp ParserCheckpoint, blobs ParserCheckpointBlobs,
 ) error {
+	if db.ArchiveContent().OmitsToolContent() {
+		return db.DeleteParserCheckpoint(cp.SessionID)
+	}
 	if cp.Version == 0 {
 		cp.Version = ParserCheckpointVersion
 	}

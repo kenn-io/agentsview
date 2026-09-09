@@ -3647,6 +3647,33 @@ func TestSeedCodexIncrementalStatePropagatesReaderError(t *testing.T) {
 	require.ErrorIs(t, err, wantErr)
 }
 
+func TestParseCodexSession_OrphanToolResultsAreNotPrompts(t *testing.T) {
+	prompt := "You are a code reviewer. Review the diff."
+	notification := `<subagent_notification>{"agent_id":"child-orphan","status":{"completed":"Finished successfully"}}</subagent_notification>`
+	for _, prompts := range [][]string{nil, {prompt}, {prompt, "Please explain the result."}} {
+		t.Run(fmt.Sprintf("%d-prompts", len(prompts)), func(t *testing.T) {
+			lines := []string{
+				testjsonl.CodexSessionMetaJSON("orphan-prompts", "/workspace/project", "user", tsEarly),
+				testjsonl.CodexMsgJSON("user", notification, tsEarlyS1),
+			}
+			for _, text := range prompts {
+				lines = append(lines, testjsonl.CodexMsgJSON("user", text, tsEarlyS5))
+			}
+			sess, msgs := runCodexParserTest(t, "test.jsonl", testjsonl.JoinJSONL(lines...), false)
+			require.NotNil(t, sess)
+			require.Len(t, msgs, len(prompts)+1)
+			assert.Equal(t, SourceSubtypeToolResult, msgs[0].SourceSubtype)
+			assert.Equal(t, len(prompts), sess.UserMessageCount)
+			assert.Equal(t, len(prompts), codexProviderUserMessageCount(msgs))
+			if len(prompts) == 0 {
+				assert.Empty(t, sess.FirstMessage)
+			} else {
+				assert.Equal(t, prompt, sess.FirstMessage)
+			}
+		})
+	}
+}
+
 // TestParseCodexSession_TurnAbortedNotCountedAsUser pins the
 // behavior that Codex's synthetic <turn_aborted> "user" message
 // (emitted when codex exec is interrupted) is filtered like other

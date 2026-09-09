@@ -59,15 +59,15 @@
   }
 
   const insightGenerationAvailable = $derived(
-    sync.serverVersion?.insight_generation_available === true ||
-      sync.serverVersion?.read_only !== true,
+    sync.serverVersion?.insight_generation_available ??
+      (sync.serverVersion?.read_only !== true),
   );
   const generationUnavailable = $derived(
     sync.serverVersion === null || !insightGenerationAvailable,
   );
   const unavailableTitle = $derived(
     sync.serverVersion !== null && !insightGenerationAvailable
-      ? m.activity_insight_unavailable_read_only()
+      ? m.insights_page_generate_disabled()
       : sync.serverVersion === null
         ? m.activity_insight_waiting_server()
         : m.activity_insight_generate_insight(),

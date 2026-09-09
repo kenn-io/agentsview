@@ -228,6 +228,9 @@ func (m *Manager) runPassLocked(
 	ctx context.Context, opts PassOptions,
 ) (PassResult, error) {
 	var result PassResult
+	if m.cfg.DB.ArchiveContent().UsageOnly() {
+		return result, fmt.Errorf("%w: recall extraction is unavailable with archive_content=usage", db.ErrArchiveContentExcluded)
+	}
 	passStart := time.Now()
 	if err := m.ensureGeneration(ctx); err != nil {
 		return result, err

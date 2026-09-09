@@ -609,6 +609,8 @@ func TestZencoderProviderParsesToolResultSystemTags(t *testing.T) {
 	assert.Equal(t, RoleUser, msgs[3].Role)
 	assert.Contains(t, msgs[3].Content, "Remember your tasks")
 	assert.Contains(t, msgs[3].Content, "Extra context")
+	assert.Equal(t, SourceSubtypeToolResult, msgs[3].SourceSubtype,
+		"text lifted out of a tool result is still tool output")
 }
 
 func TestZencoderProviderParsesToolResultTaggedBlocksFilteredFromContentRaw(t *testing.T) {

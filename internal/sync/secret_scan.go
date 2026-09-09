@@ -149,3 +149,28 @@ func scanSecretsFromMessages(
 	}
 	return findings, definiteCount
 }
+
+// computeSignalsAndSecretsForStorage computes signals and findings from the
+// messages as the archive will store them. A policy that drops tool payloads
+// would otherwise produce content-derived values at write time that a later
+// recompute from stored rows cannot reproduce.
+func (e *Engine) computeSignalsAndSecretsForStorage(
+	s db.Session, msgs []db.Message,
+) (db.SessionSignalUpdate, []db.SecretFinding) {
+	if e.db.ArchiveContent().OmitsToolContent() {
+		s, msgs = e.db.ProjectSessionForStorage(s, msgs)
+	}
+	return computeSignalsAndSecrets(s, msgs)
+}
+
+// computeFullSignalsAndSecretsForStorage seeds full-parse state from the same
+// content retained by the archive.
+func (e *Engine) computeFullSignalsAndSecretsForStorage(
+	s db.Session, msgs []db.Message, failures map[string]bool,
+) (db.SessionSignalUpdate, []db.SecretFinding, error) {
+	if e.db.ArchiveContent().OmitsToolContent() {
+		s, msgs = e.db.ProjectSessionForStorage(s, msgs)
+		failures = nil
+	}
+	return computeFullSignalsAndSecrets(s, msgs, failures)
+}

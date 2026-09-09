@@ -119,7 +119,14 @@ func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
 			stored[i].ToolCalls[j].SessionID = ""
 		}
 	}
-	require.Equal(t, toDBMessages(pendingWrite{sess: parser.ParsedSession{Agent: parser.AgentCodex}, msgs: msgs}, nil), stored)
+	expected := toDBMessages(pendingWrite{sess: parser.ParsedSession{Agent: parser.AgentCodex}, msgs: msgs}, nil)
+	for i := range expected {
+		for j := range expected[i].ToolCalls {
+			// Rendering is parser input to the write projection, not a stored field.
+			expected[i].ToolCalls[j].Rendering = ""
+		}
+	}
+	require.Equal(t, expected, stored)
 }
 
 func TestCodexCheckpointMissingHonorsMatchingSkipEntry(t *testing.T) {

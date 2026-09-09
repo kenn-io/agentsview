@@ -393,11 +393,10 @@ func parseKimiSessionWithFallbackModel(
 							fnName, fnArgs,
 						),
 					}
-					pendingToolCall = append(pendingToolCall, tc)
-
 					argsResult := kimiJSONResult(event.Get("args"))
-					pendingText = append(pendingText,
-						formatKimiToolUse(fnName, argsResult))
+					tc.Rendering = formatKimiToolUse(fnName, argsResult)
+					pendingToolCall = append(pendingToolCall, tc)
+					pendingText = append(pendingText, tc.Rendering)
 
 				case "tool.result":
 					if index := flushAssistantTurn(); index >= 0 {
@@ -612,12 +611,11 @@ func parseKimiSessionWithFallbackModel(
 					fnName, fnArgs,
 				),
 			}
+			// Format tool use display text and keep it on the call so
+			// storage policies that drop tool inputs can replace it.
+			tc.Rendering = formatKimiToolUse(fnName, gjson.Parse(fnArgs))
 			pendingToolCall = append(pendingToolCall, tc)
-
-			// Format tool use display text.
-			argsResult := gjson.Parse(fnArgs)
-			pendingText = append(pendingText,
-				formatKimiToolUse(fnName, argsResult))
+			pendingText = append(pendingText, tc.Rendering)
 
 		case "ToolResult":
 			flushAssistantTurn()

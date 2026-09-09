@@ -882,8 +882,13 @@ func TestWatcherSustainedWritesProgress(t *testing.T) {
 
 	assert.Contains(t, first.paths, path)
 	assert.Contains(t, second.paths, path)
+	// The watcher spaces callbacks from its own clock reads taken before each
+	// dispatch, while these stamps are taken inside the callback. Dispatch
+	// jitter and coarse Windows timers can therefore shave a few
+	// milliseconds off the observed spacing without the watcher firing early.
+	const dispatchJitter = 25 * time.Millisecond
 	spacing := second.at.Sub(first.at)
-	assert.GreaterOrEqual(t, spacing, minInterval,
+	assert.GreaterOrEqual(t, spacing, minInterval-dispatchJitter,
 		"sustained-write callbacks started too close together")
 	assert.LessOrEqual(t, spacing, minInterval+dispatchTolerance,
 		"sustained writes did not make bounded progress")
