@@ -397,13 +397,22 @@ function findUnknownXmlCandidate(src: string): number | undefined {
   return undefined;
 }
 
+function candidateInsideOmittedInlineCode(src: string, candidate: number): boolean {
+  if (candidate <= 0 || src.slice(0, candidate).includes("`")) return false;
+  const sourceWithOpening = `\`${src}`;
+  const ranges = markdownCodeRanges(sourceWithOpening, sourceWithOpening.length);
+  return isInRange(candidate + 1, ranges);
+}
+
 function unknownXmlBlockExtension(): TokenizerExtension {
   return {
     name: "unknownXmlBlock",
     level: "block",
     start(src) {
       const candidate = findUnknownXmlCandidate(src);
-      return candidate === 0 ? undefined : candidate;
+      return candidate === undefined || candidate === 0 || candidateInsideOmittedInlineCode(src, candidate)
+        ? undefined
+        : candidate;
     },
     tokenizer(src) {
       const end = matchUnknownXmlBlockAt(src, 0);

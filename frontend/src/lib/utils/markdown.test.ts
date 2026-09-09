@@ -713,6 +713,20 @@ describe("renderMarkdown", () => {
       }
     });
 
+    it("keeps a multiline inline span opened at source start intact", () => {
+      const source = "`before\n<later>\nbody\n</later>\nafter`";
+      const omitted = renderMarkdown(source);
+      const enabled = renderMarkdown(source, {
+        renderUnknownXmlBlocksAsPreformatted: true,
+      });
+
+      expect(enabled).toBe(omitted);
+      expect(parseHTML(enabled).querySelector("p > code")?.textContent).toContain(
+        "<later> body </later>",
+      );
+      expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
+    });
+
     it("keeps internal whitespace inside the captured block", () => {
       const source = "<policy>\n\n    first\n\n      second\n\n</policy>";
       const dom = parseHTML(
