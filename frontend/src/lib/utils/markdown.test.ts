@@ -562,6 +562,22 @@ describe("renderMarkdown", () => {
       expect(dom.querySelector("h1")).toBeNull();
     });
 
+    it("does not split multiline emphasis around an XML-looking line", () => {
+      for (const source of [
+        "*before\n<policy>\n# heading\n</policy>\nafter*",
+        "**before\n<policy>\n# heading\n</policy>\nafter**",
+        "~~before\n<policy>\n# heading\n</policy>\nafter~~",
+      ]) {
+        const omitted = renderMarkdown(source);
+        const enabled = renderMarkdown(source, {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        });
+
+        expect(enabled).toBe(omitted);
+        expect(parseHTML(enabled).querySelector("pre > code")).toBeNull();
+      }
+    });
+
     it("preserves indentation when a complete block follows prose", () => {
       const source = "Intro\n  <policy>\n# heading\n  </policy>";
       const dom = parseHTML(

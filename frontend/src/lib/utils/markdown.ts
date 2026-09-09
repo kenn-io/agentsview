@@ -451,6 +451,34 @@ function nextScannerToken(
     }
   }
 
+  if (src[offset] === "*" || src[offset] === "_") {
+    const rest = src.slice(offset, end);
+    const emphasis = scanner.tokenizer.emStrong(
+      rest,
+      rest,
+      offset > 0 ? src[offset - 1] : "",
+    );
+    if (emphasis) {
+      return { kind: "protected", start: offset, end: offset + emphasis.raw.length };
+    }
+  }
+
+  if (src[offset] === "~") {
+    const rest = src.slice(offset, end);
+    const strikethrough = scanner.tokenizer.del(
+      rest,
+      rest,
+      offset > 0 ? src[offset - 1] : "",
+    );
+    if (strikethrough) {
+      return {
+        kind: "protected",
+        start: offset,
+        end: offset + strikethrough.raw.length,
+      };
+    }
+  }
+
   if (src[offset] === "<") {
     const rest = src.slice(offset, tagInputEnd(src, offset, end));
     const autolink = scanner.tokenizer.autolink(rest);
