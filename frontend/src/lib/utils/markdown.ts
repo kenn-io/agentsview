@@ -365,18 +365,33 @@ function unknownXmlBlockExtension(): TokenizerExtension {
       if (block.rawStart !== offset) {
         const prefixLength = block.rawStart - offset;
         const prefix = src.slice(0, prefixLength);
+        if (prefixLength <= 0) return undefined;
+        const closingTagRe = /<\/([A-Za-z][A-Za-z0-9:_-]*)[ \t]*>/g;
+        let cursor = 0;
+        let foundClosingTag = false;
+        let allKnown = true;
+        let escapedPrefix = "";
+        let closingTag: RegExpExecArray | null;
+        while ((closingTag = closingTagRe.exec(prefix)) !== null) {
+          foundClosingTag = true;
+          if (!/^[ \t\n]*$/.test(prefix.slice(cursor, closingTag.index))) {
+            return undefined;
+          }
+          const rawTag = closingTag[0];
+          const known = isPreservedHtmlTag(closingTag[1]!.toLowerCase());
+          allKnown &&= known;
+          escapedPrefix += prefix.slice(cursor, closingTag.index);
+          escapedPrefix += known ? rawTag : escapeTagBrackets(rawTag);
+          cursor = closingTagRe.lastIndex;
+        }
         if (
-          prefixLength <= 0 ||
-          !/^<\/[A-Za-z][A-Za-z0-9:_-]*[ \t]*>(?:[ \t]*\n[ \t]*)*$/.test(prefix)
+          !foundClosingTag ||
+          !/^[ \t\n]*$/.test(prefix.slice(cursor))
         ) {
           return undefined;
         }
-        const closingTag = prefix.match(/^<\/([A-Za-z][A-Za-z0-9:_-]*)[ \t]*>/);
-        if (!closingTag) {
-          return undefined;
-        }
-        const type = isPreservedHtmlTag(closingTag[1]!.toLowerCase()) ? "html" : "text";
-        return { type, raw: prefix, text: prefix };
+        if (allKnown) return { type: "html", raw: prefix, text: prefix };
+        return { type: "text", raw: prefix, text: escapedPrefix, escaped: true };
       }
       const raw = src.slice(0, block.end - block.rawStart);
       return {

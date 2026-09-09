@@ -547,7 +547,7 @@ describe("renderMarkdown", () => {
 
     it("keeps known HTML closing tags on the HTML path", () => {
       const dom = parseHTML(
-        renderMarkdown("</div>\n<policy>\n# heading\n</policy>", {
+        renderMarkdown("</div>\n</span>\n<policy>\n# heading\n</policy>", {
           renderUnknownXmlBlocksAsPreformatted: true,
         }),
       );
