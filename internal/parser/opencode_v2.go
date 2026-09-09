@@ -11,9 +11,46 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// OpenCode v2 projects durable events into session_message. Rows are complete
-// message states, updated in place; seq is their original event order. The v1
-// tables remain in upgraded databases, so select the format per session.
+// Current beta databases store metadata in session_v2. Early v2 previews used
+// session alongside the v1 tables. Never query v1 children in the current layout.
+func openCodeSessionTable(db *sql.DB) (string, error) {
+	has, err := openCodeTableHasColumn(db, "session_v2", "id")
+	if err != nil {
+		return "", err
+	}
+	if has {
+		return "session_v2", nil
+	}
+	return "session", nil
+}
+
+func openCodeSessionTableCached(db *sql.DB, dbPath string) (string, error) {
+	state, cacheable := StatSQLiteContainerState(dbPath)
+	openCodeSessionSchemaCacheMu.Lock()
+	entry, hit := openCodeSessionSchemaCache[dbPath]
+	openCodeSessionSchemaCacheMu.Unlock()
+	if cacheable && hit && entry.state == state && entry.sessionTable != "" {
+		return entry.sessionTable, nil
+	}
+	table, err := openCodeSessionTable(db)
+	if err != nil || !cacheable {
+		return table, err
+	}
+	openCodeSessionSchemaCacheMu.Lock()
+	previous := openCodeSessionSchemaCache[dbPath]
+	if previous.state != state {
+		previous = openCodeSessionSchemaCacheEntry{state: state}
+	}
+	previous.sessionTable = table
+	openCodeSessionSchemaCache[dbPath] = previous
+	openCodeSessionSchemaCacheMu.Unlock()
+	return table, nil
+}
+
+const openCodeV2BaseCountsExpr = `s.time_updated, COALESCE(pr.time_updated, 0), 0, 0, '', ''`
+
+// OpenCode v2 stores complete message states, updated in place; seq is their
+// original event order. Early previews select message format per session.
 func openCodeV2SupportedCached(db *sql.DB, dbPath string) (bool, error) {
 	state, cacheable := StatSQLiteContainerState(dbPath)
 	openCodeSessionSchemaCacheMu.Lock()
@@ -60,11 +97,13 @@ func openCodeV2AggregateSQL(v2, single bool) (columns, joins string) {
 }
 
 type openCodeV2Message struct {
-	Text    string `json:"text"`
-	Summary string `json:"summary"`
-	Command string `json:"command"`
-	Output  string `json:"output"`
-	CallID  string `json:"callID"`
+	Text    string         `json:"text"`
+	Summary string         `json:"summary"`
+	Command string         `json:"command"`
+	Output  jsontext.Value `json:"output"`
+	CallID  string         `json:"callID"`
+	ShellID string         `json:"shellID"`
+	Exit    int            `json:"exit"`
 	Model   struct {
 		ID string `json:"id"`
 	} `json:"model"`
@@ -85,6 +124,7 @@ type openCodeV2Content struct {
 	Time  openCodeV2Time `json:"time"`
 	State struct {
 		Structured jsontext.Value `json:"structured"`
+		Metadata   jsontext.Value `json:"metadata"`
 		Status     string         `json:"status"`
 		Input      jsontext.Value `json:"input"`
 		Content    []struct {
@@ -155,9 +195,19 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 			if err != nil {
 				return nil, true, "", err
 			}
-			call := ParsedToolCall{ToolUseID: data.CallID, ToolName: "bash", Category: NormalizeToolCategory("bash"), InputJSON: string(input)}
+			id, name := data.CallID, "bash"
+			output := gjson.ParseBytes(data.Output).Str
+			if data.ShellID != "" {
+				id, name = data.ShellID, "shell"
+				output = gjson.GetBytes(data.Output, "output").Str
+			}
+			call := ParsedToolCall{ToolUseID: id, ToolName: name, Category: NormalizeToolCategory(name), InputJSON: string(input)}
 			if data.Time.Completed != 0 {
-				call.ResultEvents = []ParsedToolResultEvent{{ToolUseID: data.CallID, Status: "completed", Content: data.Output, Timestamp: millisToTime(data.Time.Completed)}}
+				status := "completed"
+				if data.Exit != 0 {
+					status = "errored"
+				}
+				call.ResultEvents = []ParsedToolResultEvent{{ToolUseID: id, Status: status, Content: output, Timestamp: millisToTime(data.Time.Completed)}}
 			}
 			pm.ToolCalls = []ParsedToolCall{call}
 		default:
@@ -178,7 +228,7 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) ParsedToolCall {
 		ToolUseID: item.ID, ToolName: item.Name, Category: NormalizeToolCategory(item.Name),
 		InputJSON: string(item.State.Input),
 	}
-	if item.State.Status == "pending" {
+	if item.State.Status == "pending" || item.State.Status == "streaming" {
 		call.InputJSON = ""
 	}
 	if item.Name == "skill" {
@@ -201,7 +251,9 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) ParsedToolCall {
 			}
 		}
 		status := "completed"
-		if item.State.Status == "error" || (item.Name == "bash" && gjson.Get(structured, "exit").Int() != 0) {
+		shellFailed := (item.Name == "shell" || item.Name == "bash") &&
+			(gjson.Get(string(item.State.Metadata), "exit").Int() != 0 || gjson.Get(structured, "exit").Int() != 0)
+		if item.State.Status == "error" || shellFailed {
 			status = "errored"
 			if item.State.Error.Message != "" {
 				texts = append(texts, item.State.Error.Message)

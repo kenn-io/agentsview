@@ -118,13 +118,14 @@ example:
 make perf-sim PERF_SIM_FLAGS='--source-format opencode-v2 --sessions 100 --turns 5 --active 2 --iterations 3'
 ```
 
-This mode preserves the upstream v1 tables and adds `session_message` with its
-published indexes. It simulates prompt and assistant-step insertion, then
-finalizes assistant text and usage by updating the same row without changing its
-event sequence. Child-only edits update the projected assistant content. The
-same archive-content and usage checks described below apply to both OpenCode
-modes. See `session-format-sources.md` for upstream evidence and the captured
-real v2 workflow used by parser tests.
+This mode creates the beta `session_v2` and `session_message` tables with their
+published indexes, without the v1 `session`, `message`, or `part` tables. It
+simulates prompt and assistant-step insertion, then finalizes assistant text and
+usage by updating the same row without changing its event sequence. Child-only
+edits update the projected assistant content. The same archive-content and usage
+checks described below apply to both OpenCode modes. See
+`session-format-sources.md` for upstream evidence and the captured real v2
+workflow used by parser tests.
 
 `--source-format opencode` creates a separate producer database in WAL mode and
 keeps its writer open while Agentsview reads it. Only this synthetic database
@@ -165,9 +166,9 @@ too. Session/message count and literal usage/content assertions cover both
 layouts in the normal Go suite.
 
 This is the OpenCode `message`/`part` layout consumed by Agentsview, not an
-OpenCode process or an exhaustive producer emulator. It omits the newer
-`session_message` projection, tools, concurrent writers, and deletions. Schema
-and write provenance are recorded in
+OpenCode process or an exhaustive producer emulator. The default `opencode` mode
+omits v2 projections; `opencode-v2` exercises them. Both modes omit tools,
+concurrent writers, and deletions. Schema and write provenance are recorded in
 [session format sources](session-format-sources.md).
 
 ## Generating sources for a real server

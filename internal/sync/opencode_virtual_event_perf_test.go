@@ -31,9 +31,11 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 						}
 					})
 					if v2 {
-						// Projected v2 rows coexist with v1 tables in the producer schema.
-						_, err := oc.db.Exec(`CREATE TABLE session_message (
- id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+						// The current beta has session_v2 and no v1 child tables.
+						_, err := oc.db.Exec(`DROP TABLE part; DROP TABLE message;
+ ALTER TABLE session RENAME TO session_v2;
+ CREATE TABLE session_message (
+ id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES session_v2(id) ON DELETE CASCADE,
  type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
  time_updated INTEGER NOT NULL, data TEXT NOT NULL);
  CREATE UNIQUE INDEX session_message_session_seq_idx ON session_message(session_id, seq);
@@ -41,9 +43,9 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
  CREATE INDEX session_message_session_time_created_id_idx ON session_message(session_id, time_created, id);
  CREATE INDEX session_message_time_created_idx ON session_message(time_created);
  INSERT INTO session_message SELECT 'v2_user_' || id, id, 'user', 1, time_created, time_updated,
- '{"text":"prompt"}' FROM session;
+ '{"text":"prompt"}' FROM session_v2;
  INSERT INTO session_message SELECT 'v2_assistant_' || id, id, 'assistant', 2, time_created, time_updated,
- '{"content":[{"type":"text","id":"text-a","text":"answer"}]}' FROM session;`)
+ '{"content":[{"type":"text","id":"text-a","text":"answer"}]}' FROM session_v2;`)
 						require.NoError(t, err)
 					}
 					require.Equal(t, count, env.engine.SyncAll(t.Context(), nil).Synced)
@@ -56,7 +58,11 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 					assertMessageContent(t, env.db, "opencode:ses00000", "prompt", "answer")
 					// A genuinely removed virtual member still needs source-missing
 					// reconciliation, and the persistent archive must retain its content.
-					_, err := oc.db.Exec("DELETE FROM session WHERE id = 'ses00000'")
+					table := "session"
+					if v2 {
+						table = "session_v2"
+					}
+					_, err := oc.db.Exec("DELETE FROM " + table + " WHERE id = 'ses00000'")
 					require.NoError(t, err)
 					require.NoError(t, env.engine.SyncPathsContext(t.Context(), []string{path}))
 					stored, err := env.db.GetSessionFull(t.Context(), "opencode:ses00000")

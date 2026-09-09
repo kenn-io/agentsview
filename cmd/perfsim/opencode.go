@@ -72,8 +72,10 @@ func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]str
 	}()
 	store.SetMaxOpenConns(1)
 	schema := openCodeSchema
+	sessionTable := "session"
 	if o.SourceFormat == "opencode-v2" {
-		schema += openCodeV2Schema
+		schema = openCodeV2Schema
+		sessionTable = "session_v2"
 	}
 	if _, err := store.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;" + schema); err != nil {
 		return nil, nil, err
@@ -94,7 +96,7 @@ func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]str
 	sources := make([]source, 0, o.Sessions)
 	for i := range o.Sessions {
 		s := source{V2: o.SourceFormat == "opencode-v2", Path: path, ID: fmt.Sprintf("ses_%012d", i+1), Agent: parser.AgentOpenCode, Store: store, Start: start.AddDate(0, 0, i%28)}
-		if _, err := tx.Exec(`INSERT INTO session
+		if _, err := tx.Exec(`INSERT INTO `+sessionTable+`
  (id, project_id, slug, directory, title, version, time_created, time_updated)
  VALUES (?, ?, ?, ?, ?, 'simulation', ?, ?)`, s.ID, fmt.Sprintf("project-%02d", i%20), s.ID,
 			fmt.Sprintf("/workspace/project-%02d", i%20), "Investigate query latency", s.Start.UnixMilli(), s.Start.UnixMilli()); err != nil {

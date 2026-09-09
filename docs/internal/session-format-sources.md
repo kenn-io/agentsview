@@ -700,14 +700,49 @@ a three-line text file. The captured v2 rows are retained in
 `internal/parser/testdata/opencode_v2/messages.json`, with temporary paths
 replaced by `/workspace/project-a`.
 
-The parser selects projections per session, using v1 `message`/`part` rows for
-sessions without projections. V2 user text and ordered assistant content carry
-text, reasoning, and tools. Model identity is `model.id`; tokens retain the
-`input`, `output`, and `cache.{read,write}` shape. A completed assistant step
-with usage but no visible text still contributes usage. System, synthetic, and
-compaction rows are system messages and do not count as user prompts. Shell rows
-retain their commands and completed output. Agent/model switch rows are omitted.
-Binary attachments are not imported.
+**Released beta check (2026-09-09):** Downloaded the macOS ARM64 asset from
+[OpenCode beta 19381](https://github.com/anomalyco/opencode-beta/releases/tag/v0.0.0-beta-19381).
+Its bundled CLI reports `opencode2 v0.0.0-beta-19381` and describes itself as
+"OpenCode 2.0 preview". The separate `anomalyco/opencode-beta` release channel
+carries newer v2 builds than npm's `beta` tag. The exact `2.0.0-beta.7` label in
+the issue remains unverified.
+
+Four prompts ran with `run --standalone --model opencode/big-pickle` against
+fresh scratch data: a text reply, reading a three-line file, a follow-up
+recalling the second word, and a shell command exiting with code 7. The database
+contains `session_v2` and `session_message`, with no `session`, `message`, or
+`part` tables. Metadata uses `time_created` and `time_updated`; projections
+retain the `type`, `seq`, and JSON `data` shape above. The three sessions, ten
+messages, four user prompts, two tool calls, and one failed tool were imported
+through the Agentsview provider. Sanitized producer tables, indexes, and rows
+are retained in `internal/parser/testdata/opencode_v2/beta.sql`.
+
+The beta branch at `d461154a8d2b24c4ad24a89b589069cf08ab168c` corroborates the
+[session tables](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/core/src/session/sql.ts)
+and
+[message types](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/schema/src/session-message.ts).
+This is a source cross-check, not a verified release-to-commit mapping. Current
+beta metadata and all freshness queries use `session_v2` when present. They
+aggregate only projections, without requiring v1 child tables. Empty beta
+sessions remain empty instead of attempting v1 parsing. The simulator now uses
+this beta schema, including its published indexes.
+
+The beta's `read` result uses `state.content`. Its command tool is named
+`shell`; the observed exit code 7 is in `state.metadata.exit`. The
+[shell plugin](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/core/src/tool/plugin/shell.ts)
+confirms that metadata. Streaming tool input has status `streaming` and is not
+yet a complete JSON object. Standalone shell messages use `shellID` and an
+`output` object containing the text, cursor, size, and truncation flag.
+
+For earlier databases using `session`, the parser selects projections per
+session, using v1 `message`/`part` rows for sessions without projections. V2
+user text and ordered assistant content carry text, reasoning, and tools. Model
+identity is `model.id`; tokens retain the `input`, `output`, and
+`cache.{read,write}` shape. A completed assistant step with usage but no visible
+text still contributes usage. System, synthetic, and compaction rows are system
+messages and do not count as user prompts. Shell rows retain their commands and
+completed output. Agent/model switch rows are omitted. Binary attachments are
+not imported.
 
 Tool IDs and names are `content[].id` and `content[].name`. Results use
 `state.content` text items; the captured `read` tool instead returns a UTF-8
@@ -716,14 +751,16 @@ completed bash calls also expose nonzero exits in `state.structured.exit`. The
 latter is verified against the upstream
 [bash tool](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/tool/bash.ts).
 
-V2 change detection adds projection timestamps, row counts, and ordered
-`id/seq/time_updated` identities to the v1 composite described below.
-Per-session queries use the producer's `session_id` indexes. Watermark-only
-discovery still reads session/project metadata; child-only changes follow the
-existing five-minute full-digest reconciliation policy. `cmd/perfsim` accepts
-`--source-format opencode-v2` to exercise projection inserts, finalization,
-child-only updates, archive parsing, and usage queries. This simulator models
-the persisted projector output; it does not implement OpenCode's event engine.
+V2 change detection includes projection timestamps, row counts, and ordered
+`id/seq/time_updated` identities. Earlier previews add these to the v1 composite
+described below; current beta databases combine them with session/project
+metadata. Per-session queries use the producer's `session_id` indexes.
+Watermark-only discovery still reads session/project metadata; child-only
+changes follow the existing five-minute full-digest reconciliation policy.
+`cmd/perfsim` accepts `--source-format opencode-v2` to exercise projection
+inserts, finalization, child-only updates, archive parsing, and usage queries.
+This simulator models the persisted projector output; it does not implement
+OpenCode's event engine.
 
 **Performance fixture check (2026-09-04):** Rechecked the pinned commit's
 [session tables](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/session/sql.ts),

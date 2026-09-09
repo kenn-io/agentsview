@@ -92,7 +92,7 @@ func TestSimulatorScansSQLiteAndArchivesChildOnlyEdits(t *testing.T) {
  FROM part p JOIN session s ON s.id = p.session_id
  WHERE p.id = 'prt_msg_ses_000000000001_00000004_1'`
 			if format == "opencode-v2" {
-				query = `SELECT p.time_updated - s.time_updated FROM session_message p JOIN session s ON s.id = p.session_id WHERE p.id = 'msg_ses_000000000001_00000004_1'`
+				query = `SELECT p.time_updated - s.time_updated FROM session_message p JOIN session_v2 s ON s.id = p.session_id WHERE p.id = 'msg_ses_000000000001_00000004_1'`
 			}
 			require.NoError(t, producer.QueryRow(query).Scan(&childAhead))
 			assert.Positive(t, childAhead, "part edits must exercise a change invisible to session-row-only scans")
