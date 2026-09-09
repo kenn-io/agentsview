@@ -910,12 +910,19 @@ func TestPushRebuildsVersion11MirrorForPricingTimestampPrecision(t *testing.T) {
 
 	conn, err := Open(path)
 	require.NoError(t, err)
+	// Preserve an old WAL, as can happen after an interrupted writer.
+	// Replacement must not replay these transactions onto the new mirror.
+	_, err = conn.ExecContext(ctx, "PRAGMA disable_checkpoint_on_shutdown")
+	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `
 		UPDATE model_pricing SET updated_at = TIMESTAMP '2026-08-09 04:09:57.836404'
 		WHERE model_pattern = 'pricing-precision-model'`)
 	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "UPDATE sync_metadata SET value = '11' WHERE key = ?", schemaVersionMetadataKey)
+	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "11")
+	_, err = os.Stat(path + ".wal")
+	require.NoError(t, err)
 
 	result, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
