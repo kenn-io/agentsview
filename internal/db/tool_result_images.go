@@ -109,30 +109,52 @@ func stripToolResultImageArray(content string) (string, ToolImageStats) {
 }
 
 func stripToolResultSummaryImages(content string) (string, ToolImageStats) {
-	parts := strings.Split(content, "\n\n")
+	var result strings.Builder
 	var stats ToolImageStats
-	changed := false
-	for i, part := range parts {
-		newline := strings.IndexByte(part, '\n')
-		if newline <= 0 || !strings.HasSuffix(
-			strings.TrimSpace(part[:newline]), ":",
-		) {
-			continue
+	copied := 0
+	for start := 0; start < len(content); {
+		section := strings.TrimLeft(content[start:], " \t\r\n")
+		arrayStart := len(content) - len(section)
+		if !strings.HasPrefix(section, "[") {
+			if newline := strings.IndexByte(section, '\n'); newline > 0 &&
+				strings.HasSuffix(strings.TrimSpace(section[:newline]), ":") {
+				arrayStart += newline + 1
+			}
 		}
-		projected, found := stripToolResultImageArray(part[newline+1:])
-		if found.Payloads == 0 {
-			continue
+
+		// Decode the complete value before looking for the next separator:
+		// provider JSON can itself contain blank lines. Anonymous sections have
+		// no agent label, including the trailing section of a mixed summary.
+		decoder := json.NewDecoder(strings.NewReader(content[arrayStart:]))
+		var raw json.RawMessage
+		scanEnd := start
+		if err := decoder.Decode(&raw); err == nil {
+			end := arrayStart + int(decoder.InputOffset())
+			scanEnd = end
+			tail, _, _ := strings.Cut(content[end:], "\n\n")
+			if len(raw) > 0 && raw[0] == '[' && strings.TrimSpace(tail) == "" {
+				projected, found := stripToolResultImageArray(string(raw))
+				if found.Payloads > 0 {
+					result.WriteString(content[copied:arrayStart])
+					result.WriteString(projected)
+					copied = end
+					stats.Payloads += found.Payloads
+					stats.StoredBytes += found.StoredBytes
+					stats.DecodedBytes += found.DecodedBytes
+				}
+			}
 		}
-		parts[i] = part[:newline+1] + projected
-		stats.Payloads += found.Payloads
-		stats.StoredBytes += found.StoredBytes
-		stats.DecodedBytes += found.DecodedBytes
-		changed = true
+		separator := strings.Index(content[scanEnd:], "\n\n")
+		if separator < 0 {
+			break
+		}
+		start = scanEnd + separator + 2
 	}
-	if !changed {
-		return content, ToolImageStats{}
+	if stats.Payloads == 0 {
+		return content, stats
 	}
-	return strings.Join(parts, "\n\n"), stats
+	result.WriteString(content[copied:])
+	return result.String(), stats
 }
 
 func decodeInlineImageURL(raw json.RawMessage) (string, int64, int64, bool) {

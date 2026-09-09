@@ -358,3 +358,89 @@ func TestDropImagesLateResultsRetainRawIdentity(t *testing.T) {
 	assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision, "raw replay must remain a no-op after projection")
 	assert.Equal(t, first, update.ToolCallResultUpdates[0].Events[0].Content)
 }
+
+func TestStripToolImagesMixedSummary(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "mixed", "project")
+	require.NoError(t, d.InsertMessages([]Message{{SessionID: "mixed", Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "call", ToolName: "exec_command", Category: "Bash"}}}}))
+	raw := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	_, err := d.WriteSessionIncremental("mixed", nil, IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1, ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call", Events: []ToolResultEvent{
+		{AgentID: "agent-a", Content: raw, Source: "function_call_output"},
+		{AgentID: "agent-b", Content: "plain result", Source: "function_call_output"},
+		{Content: raw, Source: "function_call_output"},
+	}}}})
+	require.NoError(t, err)
+	report, err := d.StripToolImages(t.Context(), StripImagesFilter{})
+	require.NoError(t, err)
+	var after string
+	require.NoError(t, d.getReader().QueryRow("SELECT result_content FROM tool_calls WHERE session_id = ?", "mixed").Scan(&after))
+	assert.NotContains(t, after, "input_image")
+	assert.Equal(t, int64(4), report.Payloads)
+}
+
+func TestDropImagesLateSummaryWithExistingRawEvent(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "late-existing", "project")
+	raw := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	require.NoError(t, d.InsertMessages([]Message{{SessionID: "late-existing", Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "call", ToolName: "exec_command", Category: "Bash"}}}}))
+	_, firstErr := d.WriteSessionIncremental("late-existing", nil, IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1, ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call", Events: []ToolResultEvent{{AgentID: "agent-a", Content: raw, Source: "function_call_output"}}}}})
+	require.NoError(t, firstErr)
+	d.SetToolResultImages(config.ToolResultImagesDrop)
+	_, err := d.WriteSessionIncremental("late-existing", nil, IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1, ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call", Events: []ToolResultEvent{{AgentID: "agent-b", Content: raw, Source: "function_call_output"}}}}})
+	require.NoError(t, err)
+	messages, err := d.GetAllMessages(t.Context(), "late-existing")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	call := messages[0].ToolCalls[0]
+	require.Len(t, call.ResultEvents, 2)
+	assert.NotContains(t, call.ResultEvents[1].Content, "input_image")
+	assert.NotContains(t, call.ResultContent, "input_image")
+	assert.Equal(t, len(call.ResultContent), call.ResultContentLength)
+	assert.Contains(t, call.ResultContent, "agent-a:")
+	assert.Contains(t, call.ResultContent, "agent-b:")
+	assert.Contains(t, call.ResultEvents[0].Content, "input_image")
+}
+
+func TestStripToolResultSummarySections(t *testing.T) {
+	const raw = `[
+ {"type":"text","text":"before"},
+
+ {"type":"input_image","image_url":"data:image/png;base64,AAEC"}
+]`
+	for _, tt := range []struct {
+		content  string
+		payloads int64
+	}{
+		{"agent-a:\nplain text\n\nagent-b:\n" + raw + "\n\n" + raw, 2},
+		{raw + "\n\n" + raw, 2},
+		{"plain text\n\n" + raw, 1},
+	} {
+		projected, stats := StripToolResultImages(tt.content)
+		assert.NotContains(t, projected, "input_image")
+		assert.Contains(t, projected, `"text":"before"`)
+		assert.Equal(t, tt.payloads, stats.Payloads)
+		again, repeated := StripToolResultImages(projected)
+		assert.Equal(t, projected, again)
+		assert.Zero(t, repeated)
+	}
+}
+
+func TestStripToolResultSummaryPreservesSectionBoundaries(t *testing.T) {
+	const image = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	const splitImage = `[{"type":
+"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	const placeholder = `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
+	const unsupported = `[{"type":"input_image","image_url":"https://example.com/image.png"}]`
+	for _, tt := range []struct{ name, content, want string }{
+		{"anonymous split property", "plain\n\n" + splitImage, "plain\n\n" + placeholder},
+		{"trailing newline", "agent-a:\nplain result\n\n\nagent-b:\n" + image, "agent-a:\nplain result\n\n\nagent-b:\n" + placeholder},
+		{"unsupported neighboring result", "agent-a:\n" + unsupported + "\n\n" + image, "agent-a:\n" + unsupported + "\n\n" + placeholder},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, stats := StripToolResultImages(tt.content)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, int64(1), stats.Payloads)
+		})
+	}
+}

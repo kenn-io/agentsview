@@ -48,8 +48,11 @@ placeholder before derived lengths, display comparisons, and persistence. Raw
 event digests are captured before projection so distinct provider events remain
 distinct and replayed late results stay no-ops. The projection preserves
 ordinary text, metadata, block order, unsupported shapes, and future
-placeholders. `db strip --images` applies the projection to existing rows one
-session at a time. The command updates `tool_calls.result_content` and
+placeholders. Combined summaries project labeled and anonymous sections using
+JSON boundaries, so blank lines inside arrays do not split them. Late result
+writes also project the rebuilt summary when older events predate drop mode.
+`db strip --images` applies the projection to existing rows one session at a
+time. The command updates `tool_calls.result_content` and
 `tool_result_events.content` directly in one transaction per session,
 recalculates their stored lengths, and keeps every event coordinate and metadata
 column unchanged. Each changed session also gets a full secret scan of its

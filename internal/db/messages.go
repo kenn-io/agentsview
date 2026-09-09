@@ -3438,6 +3438,17 @@ func applyToolCallResultUpdateTx(
 	}
 	var storedSummary string
 	if !blocked {
+		// Existing events can predate a switch from keep to drop. Project the
+		// assembled summary too, so a late update cannot store their raw images
+		// again. Blocked results retain their original accounting length.
+		if imagePolicy == config.ToolResultImagesDrop {
+			projected, stats := StripToolResultImages(summary)
+			if stats.Payloads > 0 {
+				summary = projected
+				resultLength = len(summary)
+			}
+		}
+
 		sole, err := soleToolResultEventTx(
 			tx, sessionID, position.MessageOrdinal, position.CallIndex,
 		)

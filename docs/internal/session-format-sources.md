@@ -362,7 +362,11 @@ add an archived or maintained mirror without replacing the original identity.
   archive's drop policy projects supported inline images in these stored
   arrays, including staged full imports and late results. Claude's text-block
   decoding is unchanged; this evidence does not establish Claude emitting
-  Codex image blocks.
+  Codex image blocks. Reverified archive summary handling on 2026-09-09
+  against `summarizeToolCallFromStateTx`: multiple named results get agent
+  labels; an anonymous result is appended without a label. The image
+  projection handles both forms, including JSON arrays with internal blank
+  lines. These summary labels are added by Agentsview, not by the provider.
 
 - **Performance fixture check (2026-09-04):** Rechecked the pinned rollout
   recorder below for session metadata and rollout-item persistence.
