@@ -495,7 +495,7 @@
         {/if}
       {/if}
       {#if showMachine}
-        <span class="machine-tag" title={session.machine}>
+        <span class="machine-tag">
           {truncate(session.machine, 18)}
         </span>
       {/if}

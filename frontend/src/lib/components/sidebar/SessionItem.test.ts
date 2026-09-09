@@ -55,7 +55,6 @@ describe("SessionItem identity", () => {
     );
     expect(document.querySelector<HTMLElement>(".session-project")?.title).toBe("project");
     expect(document.querySelector<HTMLElement>(".entrypoint-tag")?.title).toBe("sdk-cli");
-    expect(document.querySelector<HTMLElement>(".machine-tag")?.title).toBe("remote-machine");
   });
 
   it("uses the registry label when no override exists", () => {
