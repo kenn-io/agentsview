@@ -21,6 +21,7 @@ func TestActivityReportTerminalLookupIndex(t *testing.T) {
 					s.StartedAt = Ptr("2026-06-15T23:59:00Z")
 					s.EndedAt = Ptr("2026-06-15T23:59:30Z")
 				})
+				seedMessage(t, d, status, 0, "assistant", "2026-06-15T23:59:15Z", "")
 				timingInsertToolResultEvent(t, d, status, 0, 0,
 					"call", status, "2026-06-16T00:01:00Z", 0)
 			}
@@ -34,10 +35,10 @@ func TestActivityReportTerminalLookupIndex(t *testing.T) {
 				t.Cleanup(func() { require.NoError(t, d.Close()) })
 			}
 
-			// The report's terminal-event lookup must seek by date as well as
-			// session, without loading unrelated transcript result payloads.
+			// Verify the installed index supports a date seek. Pin it because
+			// this tiny fixture can favor a session-only index after ANALYZE.
 			rows, err := d.getReader().QueryContext(t.Context(), `EXPLAIN QUERY PLAN
-				SELECT 1 FROM tool_result_events tre
+				SELECT 1 FROM tool_result_events tre INDEXED BY idx_tool_result_events_terminal
 				WHERE tre.session_id = ? AND tre.source = 'tool_execution'
 					AND tre.status IN ('completed', 'errored')
 					AND tre.timestamp IS NOT NULL AND tre.timestamp != ''
@@ -55,10 +56,14 @@ func TestActivityReportTerminalLookupIndex(t *testing.T) {
 			require.NoError(t, rows.Close())
 			assert.Contains(t, strings.Join(details, "\n"), "(session_id=? AND timestamp>?)")
 
-			_, ids, err := d.activityReportSessions(t.Context(), AnalyticsFilter{},
-				"2026-06-16T00:00:00Z", "2026-06-17T00:00:00Z")
+			report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{},
+				dayQuery(t, "2026-06-16", "UTC"))
 			require.NoError(t, err)
-			assert.Equal(t, []string{"completed", "errored"}, ids)
+			var ids []string
+			for _, session := range report.BySession {
+				ids = append(ids, session.SessionID)
+			}
+			assert.ElementsMatch(t, []string{"completed", "errored"}, ids)
 		})
 	}
 }

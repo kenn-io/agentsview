@@ -409,7 +409,7 @@ func newUsageFactSpool() (*usageFactSpool, error) {
 		_ = removeUsageCacheFiles(path)
 		return nil, fmt.Errorf("initializing usage fact spool: %w", err)
 	}
-	return &usageFactSpool{db: bun.NewDB(database, newSQLiteArchiveDialect()), path: path}, nil
+	return &usageFactSpool{db: bun.NewDB(database, NewSQLiteArchiveDialect()), path: path}, nil
 }
 
 func (s *usageFactSpool) Close() error {

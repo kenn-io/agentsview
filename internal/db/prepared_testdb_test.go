@@ -37,8 +37,8 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
-	db.bunWriter = bun.NewDB(writer, newSQLiteArchiveDialect())
-	db.bunReader = bun.NewDB(reader, newSQLiteArchiveDialect())
+	db.bunWriter = bun.NewDB(writer, NewSQLiteArchiveDialect())
+	db.bunReader = bun.NewDB(reader, NewSQLiteArchiveDialect())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
 	cursorSecret := make([]byte, 32)

@@ -16781,6 +16781,22 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			}
 			continue
 		}
+		if pw.staged != nil {
+			if err := e.writeStagedFullParse(ctx, s, msgs, pw); err != nil {
+				if isIntentionalSessionSkip(err) {
+					outcome.resolved[i] = true
+					continue
+				}
+				log.Printf("write staged session %s: %v", s.ID, err)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
+			outcome.written[i], outcome.resolved[i] = true, true
+			outcome.writtenSessions++
+			outcome.writtenMessages += len(msgs)
+			continue
+		}
 		// Detect stale parser version BEFORE UpsertSession
 		// overwrites it. Existing message rows from an
 		// older parser lack new metadata columns, and newly
@@ -17786,42 +17802,21 @@ func stagedToolCallPositions(
 func (e *Engine) writeStagedFullParse(
 	ctx context.Context, s db.Session, msgs []db.Message, pw pendingWrite,
 ) error {
-	positions := stagedToolCallPositions(msgs)
-	var closure db.StagedSignalsFunc
-	if !e.disableSignalRecompute {
-		closure = func(verdicts map[string]bool) (
-			db.SessionSignalUpdate, []db.SecretFinding, error,
-		) {
-			update, findings, err := e.computeFullSignalsAndSecretsForStorage(s, msgs, verdicts)
-			if err != nil {
-				return db.SessionSignalUpdate{}, nil, err
-			}
-			if e.db.ArchiveContent().OmitsToolContent() {
-				return update, findings, nil
-			}
-			combined := append(
-				append([]db.SecretFinding(nil), findings...),
-				pw.staged.Findings(s.ID, positions)...,
-			)
-			update.SecretLeakCount = definiteFindingCount(combined)
-			return update, combined, nil
-		}
-	}
-	cp, blobs, cpErr := e.buildCodexFullParseCheckpoint(
-		pw.sess.File.Path, pw,
-	)
-	if cpErr != nil {
-		log.Printf("checkpoint build %s: %v", pw.sess.File.Path, cpErr)
-		cp, blobs = nil, nil
-	}
-	if err := e.db.ReplaceSessionContentStagedWithCheckpoint(
-		ctx, s.ID, msgs, pw.staged,
-		e.blockedResultCategories, closure, cp, blobs,
-	); err != nil {
+	write, err := e.buildSessionBatchWriteContext(ctx, pw, s, msgs, true)
+	if err != nil {
 		return err
 	}
+	result, err := e.db.WriteSessionBatchContext(ctx, []db.SessionBatchWrite{write})
+	if err != nil {
+		return err
+	}
+	if len(result.Errors) > 0 {
+		return result.Errors[0]
+	}
+	if result.ExcludedSessions > 0 {
+		return db.ErrSessionExcluded
+	}
 	e.anomalies.recordSanitize(pw.staged.ValidationStats())
-
 	return nil
 }
 
@@ -17866,71 +17861,21 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			continue
 		}
 		if pw.staged != nil {
-			// Staged streaming results bypass the bulk batch: their
-			// tool-result rows live in the staging scratch database and
-			// must be published through the staged transaction, which
-			// also persists the content-failure-aware signals in the
-			// same commit. A staged full parse always force-replaces.
-			// The bulk batch would normally create the session row, so
-			// mirror the standard write path's session upsert and
-			// post-write sequence here.
-			_, err :=
-				e.upsertSessionPendingContentForWrite(pw, s)
-			if err != nil {
-				if isIntentionalSessionSkip(err) {
-					if pw.sess.File.Path != "" {
-						e.cacheSkip(
-							pw.sess.File.Path,
-							pw.sess.File.Mtime,
-							pw.sess.File.Hash,
-						)
-					}
-					continue
-				}
-				log.Printf("upsert session %s: %v", s.ID, err)
-				e.markStaleFailedMemberWrite(pw)
-				outcome.failedSessions++
-				continue
-			}
 			tWrite := time.Now()
-			err = e.writeStagedFullParse(ctx, s, msgs, pw)
+			err := e.writeStagedFullParse(ctx, s, msgs, pw)
 			e.phaseStats.WriteNanos.Add(int64(time.Since(tWrite)))
 			if err != nil {
-				log.Printf(
-					"write staged session %s: %v", s.ID, err,
-				)
+				if isIntentionalSessionSkip(err) {
+					outcome.resolved[pendingIndex] = true
+					continue
+				}
+				log.Printf("write staged session %s: %v", s.ID, err)
 				e.markStaleFailedMemberWrite(pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ReplaceSessionUsageEvents(
-				s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
-			); err != nil {
-				log.Printf(
-					"write usage events for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.SetSessionDataVersion(
-				s.ID, dataVersionForWrite(pw),
-			); err != nil {
-				log.Printf(
-					"set data_version for %s: %v", s.ID, err,
-				)
-				e.markStaleFailedMemberWrite(pw)
-				outcome.failedSessions++
-				continue
-			}
-			if err := e.db.ClearSessionSourceMissing(s.ID); err != nil {
-				log.Printf(
-					"clear source-missing state for session %s: %v", s.ID, err,
-				)
 				outcome.failedSessions++
 				continue
 			}
 			outcome.written[pendingIndex] = true
+			outcome.resolved[pendingIndex] = true
 			outcome.writtenSessions++
 			outcome.writtenMessages += len(msgs)
 			continue
@@ -18020,7 +17965,7 @@ func (e *Engine) buildSessionBatchWriteContext(
 ) (db.SessionBatchWrite, error) {
 	var signals db.SessionSignalUpdate
 	var findings []db.SecretFinding
-	if !e.disableSignalRecompute {
+	if !e.disableSignalRecompute && pw.staged == nil {
 		var signalErr error
 		signals, findings, signalErr = computeFullSignalsAndSecrets(session, messages, nil)
 		if signalErr != nil {
@@ -18046,6 +17991,23 @@ func (e *Engine) buildSessionBatchWriteContext(
 			checkpoint, checkpointBlobs = nil, nil
 		}
 	}
+	var stagedSignals db.StagedSignalsFunc
+	if pw.staged != nil && !e.disableSignalRecompute {
+		positions := stagedToolCallPositions(messages)
+		stagedSignals = func(verdicts map[string]bool) (db.SessionSignalUpdate, []db.SecretFinding, error) {
+			update, findings, err := computeFullSignalsAndSecrets(session, messages, verdicts)
+			if err != nil {
+				return db.SessionSignalUpdate{}, nil, err
+			}
+			findings = append(findings, pw.staged.Findings(session.ID, positions)...)
+			update.SecretLeakCount = definiteFindingCount(findings)
+			return update, findings, nil
+		}
+	}
+	var staged db.StagedToolResults
+	if pw.staged != nil {
+		staged = pw.staged
+	}
 	snapshotProject := pw.sess.Project
 	return db.SessionBatchWrite{
 		ToolResultImages: &e.toolResultImages,
@@ -18060,9 +18022,10 @@ func (e *Engine) buildSessionBatchWriteContext(
 		Findings:                findings,
 		SkipSignalUpdates:       e.disableSignalRecompute,
 		DataVersion:             dataVersionForWrite(pw),
-		ReplaceMessages:         replaceMessages,
-		Checkpoint:              checkpoint,
-		CheckpointBlobs:         checkpointBlobs,
+		ReplaceMessages:         replaceMessages || pw.staged != nil,
+		Staged:                  staged, StagedSignals: stagedSignals, BlockedResultCategories: e.blockedResultCategories,
+		Checkpoint:      checkpoint,
+		CheckpointBlobs: checkpointBlobs,
 	}, nil
 }
 
@@ -18824,6 +18787,9 @@ func (e *Engine) writeSessionFullWithResolver(
 	)
 	if verdict != sessionWriteOK {
 		return errSessionPreserved
+	}
+	if pw.staged != nil {
+		return e.writeStagedFullParse(ctx, s, msgs, pw)
 	}
 	write, err := e.buildSessionBatchWriteContext(
 		context.Background(), pw, s, msgs, true,

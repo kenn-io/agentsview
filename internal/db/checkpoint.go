@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/uptrace/bun"
 )
 
 // ParserCheckpointVersion is the codec version for parser_checkpoints rows.
@@ -118,7 +120,7 @@ func (db *DB) DeleteParserCheckpoint(sessionID string) error {
 	return tx.Commit()
 }
 
-func deleteParserCheckpointTx(tx *sql.Tx, sessionID string) error {
+func deleteParserCheckpointTx(tx bun.Tx, sessionID string) error {
 	if _, err := tx.Exec(
 		`DELETE FROM parser_checkpoints WHERE session_id = ?`,
 		sessionID,
@@ -167,7 +169,7 @@ func (db *DB) UpsertParserCheckpoint(
 }
 
 func upsertParserCheckpointTx(
-	tx *sql.Tx, cp ParserCheckpoint, blobs ParserCheckpointBlobs,
+	tx bun.Tx, cp ParserCheckpoint, blobs ParserCheckpointBlobs,
 ) error {
 	return upsertParserCheckpointExec(tx, cp, blobs)
 }

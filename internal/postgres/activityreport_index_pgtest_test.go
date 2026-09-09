@@ -22,6 +22,10 @@ func TestPGActivityReportTerminalLookupIndex(t *testing.T) {
 				'2026-06-15T23:59:00Z', '2026-06-15T23:59:30Z', 1, 1)`, status)
 		require.NoError(t, err)
 		_, err = store.DB().ExecContext(t.Context(), `
+			INSERT INTO messages (session_id, ordinal, role, content, timestamp)
+			VALUES ($1, 0, 'assistant', '', '2026-06-15T23:59:15Z')`, status)
+		require.NoError(t, err)
+		_, err = store.DB().ExecContext(t.Context(), `
 			INSERT INTO tool_result_events (session_id, tool_call_message_ordinal,
 				source, status, content, timestamp)
 			VALUES ($1, 0, 'tool_execution', $1, '', '2026-06-16T00:01:00Z')`, status)
@@ -65,10 +69,14 @@ func TestPGActivityReportTerminalLookupIndex(t *testing.T) {
 			assert.Contains(t, plan[0].Plan.IndexCond, `"timestamp" >=`)
 			require.NoError(t, tx.Rollback())
 
-			_, ids, err := store.activityReportSessions(t.Context(), db.AnalyticsFilter{},
-				"2026-06-16T00:00:00Z", "2026-06-17T00:00:00Z")
+			report, err := store.GetActivityReport(t.Context(), db.AnalyticsFilter{},
+				pgDayQuery(t, "2026-06-16", "UTC"))
 			require.NoError(t, err)
-			assert.Equal(t, []string{"completed", "errored"}, ids)
+			var ids []string
+			for _, session := range report.BySession {
+				ids = append(ids, session.SessionID)
+			}
+			assert.ElementsMatch(t, []string{"completed", "errored"}, ids)
 		})
 	}
 }

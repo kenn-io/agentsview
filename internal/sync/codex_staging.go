@@ -16,6 +16,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"go.kenn.io/agentsview/internal/config"
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -36,7 +37,7 @@ import (
 type codexStagingSink struct {
 	*parser.CodexCollectingSink
 
-	scratch *sql.DB
+	scratch *bun.DB
 	path    string
 
 	// idPrefix is applied to subagent_session_id at publish time, mirroring
@@ -306,14 +307,15 @@ func newCodexStagingSink(
 			return nil, fmt.Errorf("configuring codex staging db: %w", err)
 		}
 	}
-	if _, err := scratch.Exec(codexStagingSchema); err != nil {
+	stagingStore := bun.NewDB(scratch, db.NewSQLiteArchiveDialect())
+	if _, err := stagingStore.Exec(codexStagingSchema); err != nil {
 		scratch.Close()
 		os.Remove(path)
 		return nil, fmt.Errorf("creating codex staging schema: %w", err)
 	}
 	return &codexStagingSink{
 		CodexCollectingSink: parser.NewCodexCollectingSink(0),
-		scratch:             scratch,
+		scratch:             stagingStore,
 		path:                path,
 		blocked:             blocked,
 		currentCallKey:      make(map[string]string),
@@ -470,10 +472,9 @@ func (s *codexStagingSink) AppendToolResultEvent(
 	ev.SubagentSessionID = strings.Clone(ev.SubagentSessionID)
 	ev.Status = strings.Clone(ev.Status)
 	ev.Source = strings.Clone(ev.Source)
-	// The legacy write path normalizes event timestamps through
-	// timeutil.Format before storing them; the staged rows must store the
-	// same normalized form so stored projections match byte for byte.
-	tsStr := timeutil.Format(ev.Timestamp)
+	// Scratch publication bypasses canonical row conversion, so apply its
+	// microsecond precision before persisting the event timestamp.
+	tsStr := timeutil.Format(ev.Timestamp.Truncate(time.Microsecond))
 	// Events for calls that never registered in the message model are
 	// unreachable regardless of how they are held: parser.ParseResult
 	// carries no ToolCallUpdates field, so every full-parse consumer
@@ -664,47 +665,13 @@ func (s *codexStagingSink) Findings(
 // ever modifies main, so the cross-database crash-atomicity limit for
 // WAL-mode attached databases is respected.
 func (s *codexStagingSink) InsertEventsTx(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx bun.Tx, sessionID string,
 	messageOrdinals map[string]db.StagedToolCallPosition,
 ) error {
 	if s.stageErr != nil {
 		return s.stageErr
 	}
-	for stageKey, pos := range messageOrdinals {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tool_result_events (
-				session_id, tool_call_message_ordinal, call_index,
-				tool_use_id, agent_id, subagent_session_id,
-				source, status, content, content_length,
-				timestamp, event_index, raw_content_digest, summary_participates
-			)
-			SELECT ?, ?, ?, tool_use_id,
-			       CASE WHEN agent_id = '' THEN NULL ELSE agent_id END,
-			       CASE
-			           WHEN subagent_session_id = '' THEN NULL
-			           WHEN ? = '' OR instr(subagent_session_id, ?) = 1
-			               THEN subagent_session_id
-			           ELSE ? || subagent_session_id
-			       END,
-			       source, status,
-			       CASE WHEN blanked = 1 THEN '' ELSE content END,
-			       content_length,
-			       CASE WHEN timestamp = '' THEN NULL ELSE timestamp END,
-			       row_number() OVER (ORDER BY seq) - 1,
-			       raw_content_digest, summary_participates
-			FROM codex_staging.stage_events
-			WHERE call_key = ?
-			ORDER BY seq`,
-			sessionID, pos.Ordinal, pos.CallIndex,
-			s.idPrefix, s.idPrefix, s.idPrefix, stageKey,
-		); err != nil {
-			return fmt.Errorf(
-				"publishing staged events for %s/%s: %w",
-				sessionID, pos.ToolUseID, err,
-			)
-		}
-	}
-	return nil
+	return db.PublishStagedToolResultEvents(ctx, tx, sessionID, s.idPrefix, messageOrdinals)
 }
 
 // ResolveSummary computes the stored result summary for one call by

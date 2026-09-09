@@ -78,4 +78,9 @@ type ToolResultEvent struct {
 	ContentLength          int        `bun:"content_length,notnull,default:0"`
 	Timestamp              *Timestamp `bun:"timestamp,type:TIMESTAMPTZ,nullzero"`
 	EventIndex             int        `bun:"event_index,pk,default:0"`
+
+	// SQLite import metadata is selected explicitly and never enters the
+	// portable schema, exports, or mirror fingerprints.
+	RawContentDigest    []byte `bun:"raw_content_digest,scanonly" json:"-"`
+	SummaryParticipates *bool  `bun:"summary_participates,scanonly" json:"-"`
 }

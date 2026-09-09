@@ -135,6 +135,7 @@ func (s *BunStore) GetMessagesWindow(
 func (s *BunStore) GetAllMessages(
 	ctx context.Context, sessionID string,
 ) ([]Message, error) {
+	s.messagesLoadCount.Add(1)
 	pendingMessages := []Message{}
 	err := s.consistentView(ctx, func(store bun.IDB) error {
 		rows, err := scanBunMessages(ctx, store.NewSelect().
@@ -234,7 +235,7 @@ func attachBunToolData(
 	for start := 0; start < len(ordinals); start += hydrationBatchSize {
 		end := min(start+hydrationBatchSize, len(ordinals))
 		var batch []bunmodel.ToolResultEvent
-		if err := store.NewSelect().Model(&batch).
+		if err := store.NewSelect().Model(&batch).Column(toolResultColumns(store)...).
 			Where("session_id = ?", messages[0].SessionID).
 			Where("tool_call_message_ordinal IN (?)", bun.List(ordinals[start:end])).
 			OrderExpr("tool_call_message_ordinal ASC").
@@ -327,7 +328,8 @@ func toolResultEventFromBunRow(row bunmodel.ToolResultEvent) ToolResultEvent {
 	event := ToolResultEvent{
 		Source: row.Source, Status: row.Status, Content: row.Content,
 		ContentLength: row.ContentLength, EventIndex: row.EventIndex,
-		Timestamp: requiredTimestampFromBunRowPtr(row.Timestamp),
+		Timestamp:        requiredTimestampFromBunRowPtr(row.Timestamp),
+		RawContentDigest: row.RawContentDigest, SummaryParticipates: row.SummaryParticipates,
 	}
 	if row.ToolUseID != nil {
 		event.ToolUseID = *row.ToolUseID

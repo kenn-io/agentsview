@@ -814,7 +814,7 @@ func TestWriteSessionIncrementalUsesCanonicalMessageGraph(t *testing.T) {
 
 	endedAt := "2026-08-07T10:00:04Z"
 	fileHash := "incremental-hash"
-	require.NoError(t, d.WriteSessionIncremental(
+	_, err = d.WriteSessionIncremental(
 		sessionID,
 		[]Message{{
 			SessionID: sessionID,
@@ -845,7 +845,8 @@ func TestWriteSessionIncrementalUsesCanonicalMessageGraph(t *testing.T) {
 			NextOrdinal:   2,
 			LastEntryUUID: "entry-2",
 		},
-	), "incremental write")
+	)
+	require.NoError(t, err, "incremental write")
 
 	messages, err := d.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)

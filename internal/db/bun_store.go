@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/config"
@@ -19,11 +20,19 @@ type pricingState struct {
 type BunStore struct {
 	backend BunBackend
 
+	// Incremental signal checks use this to detect full history loads.
+	messagesLoadCount atomic.Int64
+
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
 	pricingMu sync.RWMutex
 	pricing   pricingState
+}
+
+// MessagesLoadCount returns the number of complete message loads requested.
+func (s *BunStore) MessagesLoadCount() int64 {
+	return s.messagesLoadCount.Load()
 }
 
 // NewBunStore creates a shared store over one guarded backend.

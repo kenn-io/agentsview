@@ -2,11 +2,12 @@
 
 ## Decision
 
-Keep the stack and land the combined feature once the final tip passes CI. The
-shared usage query now streams into Go aggregation without retaining all winning
-rows. Token interpretation, snapshot ranking, pricing, and billing remain in Go.
-The archive backup, rebuild, and rollback procedure remains documented in
-`docs/internal/storage-upgrade.md`.
+Keep the stack. The rebased local fresh-sync measurements support continuing
+with the combined feature; the external BenchDB run remains the acceptance check
+for its machine and corpus. The shared usage query now streams into Go
+aggregation without retaining all winning rows. Token interpretation, snapshot
+ranking, pricing, and billing remain in Go. The archive backup, rebuild, and
+rollback procedure remains documented in `docs/internal/storage-upgrade.md`.
 
 The large concurrent-heap regression came from retaining and pooling the
 complete input to the reducers. That storage and the redundant consumer
@@ -235,6 +236,59 @@ These are lookup-only measurements. The earlier full-rebuild fixture has no tool
 calls and cannot measure this change. External fresh-sync results are still
 required to establish its effect on the complete workload.
 
+## Rebased local fresh sync
+
+Measured September 9, 2026 against baseline
+`e1e41fd0e31c41b7a6a0cd76c1f61a0cb2da4147`, with the stack rebased onto that
+revision. The private copied corpus contains about 14 GB of Claude and Codex
+JSONL. Each run uses a fresh archive, read-only source mounts, and the real
+`sync --full` daemon/worker path. Source files are read before timing, matching
+the benchmark harness's prewarming. Worker CPU and allocation profiles are
+captured on both baseline and candidate.
+
+Runs execute locally in Linux ARM64 containers with Go 1.27, CGO, `fts5`, GCC
+12.2, eight virtual CPUs, and about 32 GB of VM memory. The external benchmark
+uses a different CPU architecture, compiler, and corpus. Local host variation
+also matters: prewarmed baseline samples ranged from 143.27 to 166.20 seconds.
+These results establish comparable local performance, not a proven speedup or an
+external benchmark pass.
+
+| Variant                                 |    Wall seconds | Peak anonymous GB | Allocated GiB |
+| --------------------------------------- | --------------: | ----------------: | ------------: |
+| Baseline, repeated with memory sampler  |          166.20 |             0.782 |         59.68 |
+| Rebased integration, original formatter | 142.46 / 146.93 |     1.296 / 1.337 |         82.94 |
+| Preallocation alone                     |          171.83 |             1.398 |         79.84 |
+| Chunk formatter, 16 MiB statements      |          172.59 |             1.491 |         80.21 |
+| Chunk formatter, 1 MiB statements       | 149.58 / 160.81 |     0.810 / 0.773 |         78.92 |
+
+GB is decimal; GiB is binary. Anonymous memory is sampled from the container
+cgroup every 250 ms across the CLI, daemon, and worker. It includes native
+allocations and is not an exact Go heap peak. Cgroup total memory includes
+roughly 20 GB of file cache on many runs, so it must not be described as
+retained application memory. Allocation volume comes from the worker's
+`alloc_space` profile; it is cumulative allocation, not retained memory.
+
+The SQLite formatter now reserves room for each string and copies spans between
+quotes, preserving NUL and invalid UTF-8 key bytes. This reduces allocation in
+the tool-payload microbenchmark from 26.69 to 15.31 MB per operation. It did not
+establish a full-sync speed improvement by itself. Bun still starts insert SQL
+with a small buffer; growing formatted statements accounted for about 20 GiB of
+allocation in the full-corpus profile.
+
+Canonical writes now target 1 MiB of estimated row payload per SQL statement,
+down from 16 MiB. Transactions and row order are unchanged, and oversized rows
+remain whole. The smaller statements bring peak anonymous memory close to the
+baseline in both samples. Total allocation remains about 32% higher than
+baseline. The change shortens transient buffer lifetimes rather than removing
+Bun's SQL formatting cost; an additional pool is not claimed to solve it.
+
+Staged Codex publication retains the upstream streaming path while committing
+session content, usage, signals, and checkpoints together through Bun. Its
+scratch store also uses Bun. SQLite-only raw-result metadata survives
+replacement and remains excluded from portable mirrors. All compared archives
+contain 13,967 sessions, 816,220 messages, 628,068 tool calls, and 567,881
+result events, with no missing raw-result metadata.
+
 ## Correctness and delivery
 
 The shared contract exercises all three engines. It preserves exact costs,
@@ -248,8 +302,9 @@ consistent-view replay.
 The full database and DuckDB suites, PostgreSQL usage/analytics cases including
 complete SQLite/PostgreSQL result parity, focused race checks, formatting, and
 vet are the local checks. The combined tip is the CI acceptance target;
-intermediate stack PRs need not independently pass all checks. No archive,
-provider format, pricing policy, or persisted cache format changes here.
+intermediate stack PRs need not independently pass all checks. The rebase
+retains upstream archive and parser-version changes; pricing policy remains
+unchanged.
 
 ## Reproduction
 

@@ -35,6 +35,11 @@ type SessionBatchWrite struct {
 	RejectMessageCountDecrease bool
 	Checkpoint                 *ParserCheckpoint
 	CheckpointBlobs            *ParserCheckpointBlobs
+	// Staged keeps result payloads in attached scratch storage until commit.
+	// A transaction may contain one staged session plus ordinary sessions.
+	Staged                  StagedToolResults
+	StagedSignals           StagedSignalsFunc
+	BlockedResultCategories map[string]bool
 	// ToolResultImages overrides the DB policy for this sync-engine write.
 	ToolResultImages *config.ToolResultImages
 }
@@ -141,7 +146,27 @@ func (db *DB) WriteSessionBatchContext(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.beginBunWriteTx(ctx)
+	conn, err := db.acquireBunWriteConn(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer conn.Close()
+	var staged StagedToolResults
+	for _, write := range writes {
+		if write.Staged != nil {
+			if staged != nil {
+				return result, fmt.Errorf("batch contains multiple staging databases")
+			}
+			staged = write.Staged
+		}
+	}
+	if staged != nil {
+		if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS "+stagedAttachName, staged.Path()); err != nil {
+			return result, err
+		}
+		defer detachStagedConn(ctx, conn)
+	}
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
@@ -255,7 +280,27 @@ func (db *DB) writeArchiveSessionBatchAtomic(
 	defer db.mu.Unlock()
 
 	ctx := context.Background()
-	tx, err := db.beginBunWriteTx(ctx)
+	conn, err := db.acquireBunWriteConn(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer conn.Close()
+	var staged StagedToolResults
+	for _, write := range writes {
+		if write.Staged != nil {
+			if staged != nil {
+				return result, fmt.Errorf("atomic batch contains multiple staging databases")
+			}
+			staged = write.Staged
+		}
+	}
+	if staged != nil {
+		if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS "+stagedAttachName, staged.Path()); err != nil {
+			return result, err
+		}
+		defer detachStagedConn(ctx, conn)
+	}
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
@@ -535,7 +580,7 @@ func writeOneSessionBatchTx(
 	replacementTranscriptChanged := false
 	var replacementPlan messageDiffPlan
 	useMessageDiff := false
-	if replaceMessages && sessionExists {
+	if replaceMessages && sessionExists && write.Staged == nil {
 		stored, err := sessionMessagesTx(
 			ctx, tx, write.Session.ID,
 		)
@@ -614,7 +659,7 @@ func writeOneSessionBatchTx(
 
 	msgs := write.Messages
 	var pins []savedPin
-	if fullMessageReplace && sessionExists {
+	if fullMessageReplace && sessionExists && write.Staged == nil {
 		pins, err = savePinsTx(queries, write.Session.ID)
 		if err != nil {
 			return 0, err
@@ -639,7 +684,19 @@ func writeOneSessionBatchTx(
 	}
 	messagesWritten := len(msgs)
 
-	if useMessageDiff {
+	if write.Staged != nil {
+		changed, err := replaceStagedBatchContent(ctx, tx, write)
+		if err != nil {
+			return 0, err
+		}
+		transcriptChanged = changed
+		if write.StagedSignals != nil {
+			write.Signals, write.Findings, err = write.StagedSignals(contentFailureVerdicts(write.Staged))
+			if err != nil {
+				return 0, err
+			}
+		}
+	} else if useMessageDiff {
 		if err := applySessionMessageDiffTx(
 			ctx, tx, write.Session.ID, replacementPlan,
 		); err != nil {
@@ -681,7 +738,7 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if replaceMessages {
-		if fullMessageReplace {
+		if fullMessageReplace && write.Staged == nil {
 			if err := restorePinsTx(queries, write.Session.ID, pins); err != nil {
 				return 0, err
 			}
@@ -730,7 +787,15 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if write.ReplaceMessages {
+	if write.Staged != nil && write.SkipSignalUpdates && transcriptChanged {
+		if err := replaceSessionSecretFindingsBunTx(ctx, tx, write.Session.ID, nil, 0, ""); err != nil {
+			return 0, err
+		}
+		if err := invalidateSessionSignalsTx(tx, write.Session.ID); err != nil {
+			return 0, err
+		}
+	}
+	if replaceMessages {
 		if write.Checkpoint == nil || write.CheckpointBlobs == nil {
 			if err := deleteParserCheckpointTx(tx, write.Session.ID); err != nil {
 				return 0, err

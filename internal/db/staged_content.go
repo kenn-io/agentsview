@@ -10,6 +10,10 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
+
+	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // StagedToolResults is the publish-side handle for tool-result rows staged
@@ -30,7 +34,7 @@ type StagedToolResults interface {
 	// already attached to the tx's connection by the caller.
 	InsertEventsTx(
 		ctx context.Context,
-		tx *sql.Tx,
+		tx bun.Tx,
 		sessionID string,
 		positions map[string]StagedToolCallPosition,
 	) error
@@ -138,7 +142,7 @@ func writeStagedDigestInt(h interface{ Write([]byte) (int, error) }, value int64
 // A cold staged import can use this to skip both full-table digest scans
 // entirely instead of proving byte-for-byte equality against nothing.
 func stagedSessionHasStoredMessagesTx(
-	tx *sql.Tx, sessionID string,
+	tx bun.Tx, sessionID string,
 ) (bool, error) {
 	var exists int
 	err := tx.QueryRow(
@@ -159,7 +163,7 @@ func stagedSessionHasStoredMessagesTx(
 // ignoring SQLite row IDs. It lets a forced staged verification prove that the
 // normalized content is unchanged and avoid delete/reinsert revision churn.
 func stagedSessionContentDigestTx(
-	tx *sql.Tx, sessionID string,
+	tx bun.Tx, sessionID string,
 ) ([sha256.Size]byte, error) {
 	h := sha256.New()
 	rows, err := tx.Query(`
@@ -311,7 +315,7 @@ func stagedSessionContentDigestTx(
 }
 
 func commitStagedDerivedStateAndCheckpoint(
-	ctx context.Context, conn *sql.Conn, sessionID string,
+	ctx context.Context, conn bun.Conn, sessionID string,
 	signals *SessionSignalUpdate, findings []SecretFinding,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 ) error {
@@ -334,7 +338,7 @@ func commitStagedDerivedStateAndCheckpoint(
 		if err := updateSessionSignalsTx(tx, sessionID, *signals); err != nil {
 			return err
 		}
-		if err := replaceSecretFindingsTx(
+		if err := replaceSessionSecretFindingsBunTx(ctx,
 			tx, sessionID, findings,
 			signals.SecretLeakCount, signals.SecretsRulesVersion,
 		); err != nil {
@@ -492,14 +496,14 @@ func (db *DB) replaceSessionContentStaged(
 		if err := updateSessionSignalsTx(tx, sessionID, signals); err != nil {
 			return err
 		}
-		if err := replaceSecretFindingsTx(tx, sessionID, findings,
+		if err := replaceSessionSecretFindingsBunTx(ctx, tx, sessionID, findings,
 			signals.SecretLeakCount, signals.SecretsRulesVersion); err != nil {
 			return err
 		}
 	} else {
 		// Changed content cannot retain findings or signal freshness from the
 		// previous transcript, even when this import skips recomputation.
-		if err := replaceSecretFindingsTx(tx, sessionID, nil, 0, ""); err != nil {
+		if err := replaceSessionSecretFindingsBunTx(ctx, tx, sessionID, nil, 0, ""); err != nil {
 			return err
 		}
 		if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
@@ -554,7 +558,7 @@ func contentFailureVerdicts(staged StagedToolResults) map[string]bool {
 // connection returns to the pool clean. A failed detach would poison the
 // single-connection writer pool for every later publish, so the
 // connection is discarded instead.
-func detachStagedConn(ctx context.Context, conn *sql.Conn) {
+func detachStagedConn(ctx context.Context, conn bun.Conn) {
 	if _, err := conn.ExecContext(
 		context.WithoutCancel(ctx), "DETACH DATABASE "+stagedAttachName,
 	); err != nil {
@@ -568,7 +572,7 @@ func detachStagedConn(ctx context.Context, conn *sql.Conn) {
 // tool_calls insert in bounded chunks with per-call summaries resolved on
 // the fly, and the event rows come from the staged handle.
 func replaceSessionMessagesTxStaged(
-	ctx context.Context, tx *sql.Tx, sessionID string, msgs []Message,
+	ctx context.Context, tx bun.Tx, sessionID string, msgs []Message,
 	staged StagedToolResults, blocked map[string]bool,
 ) error {
 	pins, err := savePinsTx(tx, sessionID)
@@ -582,30 +586,30 @@ func replaceSessionMessagesTxStaged(
 		return restorePinsTx(tx, sessionID, pins)
 	}
 
-	ids, err := insertMessagesTx(tx, msgs)
+	err = writeArchiveMessageRows(ctx, tx, sessionID, msgs, "", canonicalMessageRow)
 	if err != nil {
 		return err
 	}
 
 	positions := make(map[string]StagedToolCallPosition)
 	callOccurrences := make(map[string]int)
-	chunk := make([]ToolCall, 0, toolCallInsertRowsPerStmt)
+	chunk := make([]bunmodel.ToolCall, 0, attachToolCallBatchSize)
 	var chunkBytes int64
 	flush := func() error {
 		if len(chunk) == 0 {
 			return nil
 		}
-		if err := insertToolCallsChunkTx(tx, chunk); err != nil {
+		if err := appendToolRows(ctx, tx, sessionID, chunk, nil); err != nil {
 			return err
 		}
 		chunk = chunk[:0]
 		chunkBytes = 0
 		return nil
 	}
-	for i, m := range msgs {
+	for _, m := range msgs {
 		for callIdx := range m.ToolCalls {
 			tc := ToolCall{
-				MessageID:         ids[i],
+				MessageOrdinal:    m.Ordinal,
 				SessionID:         m.SessionID,
 				ToolName:          m.ToolCalls[callIdx].ToolName,
 				Category:          m.ToolCalls[callIdx].Category,
@@ -640,13 +644,20 @@ func replaceSessionMessagesTxStaged(
 				}
 				chunkBytes += int64(len(tc.ResultContent))
 			}
-			chunk = append(chunk, tc)
+			calls, _, err := canonicalToolRows([]Message{{
+				SessionID: sessionID, Ordinal: m.Ordinal, ToolCalls: []ToolCall{tc},
+			}})
+			if err != nil {
+				return err
+			}
+			calls[0].CallIndex = callIdx
+			chunk = append(chunk, calls[0])
 			// Flush by byte budget as well as count: resolved summaries
 			// are the largest per-call strings, and a count-only bound
-			// (toolCallInsertRowsPerStmt) would still accumulate up to
+			// (attachToolCallBatchSize) would still accumulate up to
 			// count * max-summary-size bytes of resolved content before
 			// the insert.
-			if len(chunk) >= toolCallInsertRowsPerStmt ||
+			if len(chunk) >= attachToolCallBatchSize ||
 				chunkBytes >= toolCallStagedChunkBytes {
 				if err := flush(); err != nil {
 					return err
@@ -669,3 +680,91 @@ func replaceSessionMessagesTxStaged(
 // toolCallStagedChunkBytes bounds resolved summary content in addition to
 // the shared SQL parameter limit, since one summary can dwarf ordinary rows.
 const toolCallStagedChunkBytes = 16 << 20
+
+// replaceStagedBatchContent preserves physical row identities on an equal
+// streamed replay without holding all result payloads in memory.
+func replaceStagedBatchContent(ctx context.Context, tx bun.Tx, write SessionBatchWrite) (bool, error) {
+	exists, err := stagedSessionHasStoredMessagesTx(tx, write.Session.ID)
+	if err != nil {
+		return false, err
+	}
+	var before [sha256.Size]byte
+	if exists {
+		if write.RejectMessageCountDecrease {
+			var count int
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE session_id = ?", write.Session.ID).Scan(&count); err != nil {
+				return false, err
+			}
+			if len(write.Messages) < count {
+				return false, &SessionWouldShortenError{SessionID: write.Session.ID, ExistingMessages: count, IncomingMessages: len(write.Messages)}
+			}
+		}
+		before, err = stagedSessionContentDigestTx(tx, write.Session.ID)
+		if err != nil {
+			return false, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT staged_content"); err != nil {
+		return false, err
+	}
+	if err := replaceSessionMessagesTxStaged(ctx, tx, write.Session.ID, write.Messages, write.Staged, write.BlockedResultCategories); err != nil {
+		return false, err
+	}
+	if exists {
+		after, err := stagedSessionContentDigestTx(tx, write.Session.ID)
+		if err != nil {
+			return false, err
+		}
+		if before == after {
+			return false, rollbackSavepoint(contextTransaction{ctx: ctx, tx: tx}, "staged_content")
+		}
+	}
+	_, err = tx.ExecContext(ctx, "RELEASE SAVEPOINT staged_content")
+	return true, err
+}
+
+// PublishStagedToolResultEvents maps scratch event payloads onto the canonical
+// archive projection. Scratch call keys retain occurrence identity while the
+// archive records the original provider ID and final transcript coordinates.
+func PublishStagedToolResultEvents(
+	ctx context.Context, tx bun.Tx, sessionID, idPrefix string,
+	positions map[string]StagedToolCallPosition,
+) error {
+	columns := toolResultColumns(tx)
+	quoted := make([]string, len(columns))
+	for i, column := range columns {
+		quoted[i] = quoteCommonIdentifier(column)
+	}
+	for stageKey, position := range positions {
+		source := tx.NewSelect().TableExpr("codex_staging.stage_events").
+			Where("call_key = ?", stageKey).OrderExpr("seq")
+		for _, column := range columns {
+			switch column {
+			case "session_id":
+				source.ColumnExpr("?", sessionID)
+			case "tool_call_message_ordinal":
+				source.ColumnExpr("?", position.Ordinal)
+			case "call_index":
+				source.ColumnExpr("?", position.CallIndex)
+			case "agent_id":
+				source.ColumnExpr("NULLIF(agent_id, '')")
+			case "subagent_session_id":
+				source.ColumnExpr(`CASE WHEN subagent_session_id = '' THEN NULL
+                WHEN ?0 = '' OR instr(subagent_session_id, ?0) = 1 THEN subagent_session_id
+                ELSE ?0 || subagent_session_id END`, idPrefix)
+			case "content":
+				source.ColumnExpr("CASE WHEN blanked = 1 THEN '' ELSE content END")
+			case "timestamp":
+				source.ColumnExpr("NULLIF(timestamp, '')")
+			case "event_index":
+				source.ColumnExpr("row_number() OVER (ORDER BY seq) - 1")
+			default:
+				source.Column(column)
+			}
+		}
+		if _, err := tx.NewRaw("INSERT INTO tool_result_events ("+strings.Join(quoted, ", ")+") ?", source).Exec(ctx); err != nil {
+			return fmt.Errorf("publishing staged events for %s/%s: %w", sessionID, position.ToolUseID, err)
+		}
+	}
+	return nil
+}

@@ -379,6 +379,14 @@ add an archived or maintained mirror without replacing the original identity.
   labels; an anonymous result is appended without a label. The image
   projection handles both forms, including JSON arrays with internal blank
   lines. These summary labels are added by Agentsview, not by the provider.
+- **Timestamp precision check (2026-09-09):** Rechecked the pinned
+  [rollout writer](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/rollout/src/recorder.rs#L1903-L1916),
+  which emits envelope timestamps with three fractional digits. Agentsview
+  also accepts RFC3339 nanoseconds. Its collecting and staged archive writers
+  truncate tool-result timestamps to the canonical microsecond precision.
+  `TestCodexStagedToolResultTimestampPrecision` exercises that accepted-input
+  contract with a synthetic nanosecond timestamp; it does not establish an
+  observed discrepancy in provider-produced rollouts.
 
 - **Performance fixture check (2026-09-04):** Rechecked the pinned rollout
   recorder below for session metadata and rollout-item persistence.

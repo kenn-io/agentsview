@@ -490,9 +490,10 @@ func TestRecallEvidenceAppendOnlyWritesRevokeDuplicateSourceEndpoint(t *testing.
 		{
 			name: "incremental session",
 			append: func(d *DB, sessionID string, message Message) error {
-				return d.WriteSessionIncremental(
+				_, err := d.WriteSessionIncremental(
 					sessionID, []Message{message}, IncrementalSessionUpdate{},
 				)
+				return err
 			},
 		},
 		{
@@ -546,7 +547,7 @@ func TestRecallEvidenceIncrementalLinkRevokesChangedToolContent(t *testing.T) {
 	)
 	result := "late result content"
 
-	err := d.WriteSessionIncremental(sessionID, nil, IncrementalSessionUpdate{
+	_, err := d.WriteSessionIncremental(sessionID, nil, IncrementalSessionUpdate{
 		SubagentLinks: []ToolCallSubagentLink{{
 			ToolUseID: "tool-a", ResultContent: result,
 			ResultContentLen: len(result), HasResult: true,

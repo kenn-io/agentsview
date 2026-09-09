@@ -192,9 +192,9 @@ otherwise follows the same transaction, revision, and publication sequence as
   driver-side bind array. Chunk bounded reads and writes, keep sensitive
   values out of ad hoc logging, and inspect the formatted query when
   diagnosing placeholder or dialect failures.
-- Canonical slice writes use a 16 MiB approximate dynamic-payload budget,
-  matching the largest tool result the archive deliberately persists. This is
-  a pre-format row-payload target, not a statement-length, row-count, or
+- Canonical slice writes use a 1 MiB approximate dynamic-payload budget to limit
+  transient SQL buffers while retaining the surrounding transaction. This is a
+  pre-format row-payload target, not a statement-length, row-count, or
   bind-variable guarantee: SQL syntax, escaping, and Bun's intermediate copies
   add overhead. One larger logical row is written alone rather than split
   across statements.

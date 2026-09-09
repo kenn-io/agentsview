@@ -795,18 +795,7 @@ type DB struct {
 	vectorSearcher VectorSearcher
 	recallSearcher RecallVectorSearcher
 
-	// messagesLoadCount counts GetAllMessages calls. Tests use it to gate
-	// the incremental signal path: a maintained delta must not load
-	// session history.
-	messagesLoadCount atomic.Int64
-
 	chineseFTSUnavailableLog sync.Once
-}
-
-// MessagesLoadCount returns the total number of GetAllMessages calls the
-// database has served. Monotonic; used by the incremental-path gates.
-func (db *DB) MessagesLoadCount() int64 {
-	return db.messagesLoadCount.Load()
 }
 
 // Reader exposes guarded read-only query operations through the current Bun
@@ -1472,7 +1461,7 @@ func UpgradeExportSchemaInPlace(path string, cause error) (retErr error) {
 		return fmt.Errorf("opening schema upgrade writer: %w", err)
 	}
 
-	tx, err := bun.NewDB(writer, newSQLiteArchiveDialect()).BeginTx(context.Background(), nil)
+	tx, err := bun.NewDB(writer, NewSQLiteArchiveDialect()).BeginTx(context.Background(), nil)
 	if err != nil {
 		return fmt.Errorf("starting schema upgrade transaction: %w", err)
 	}
@@ -1607,7 +1596,7 @@ func OpenReadOnly(path string) (*DB, error) {
 	}
 	db.usageCache.attachArchive(db)
 	db.reader.Store(reader)
-	db.bunReader = bun.NewDB(reader, newSQLiteArchiveDialect())
+	db.bunReader = bun.NewDB(reader, NewSQLiteArchiveDialect())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 	cursorSecret := make([]byte, 32)
 	if _, err := rand.Read(cursorSecret); err != nil {
@@ -1689,7 +1678,7 @@ func readOnlyRequiredSchema() (map[string][]string, error) {
 			)
 			return
 		}
-		store := bun.NewDB(conn, newSQLiteArchiveDialect())
+		store := bun.NewDB(conn, NewSQLiteArchiveDialect())
 		if err := CreateCommonSchema(context.Background(), store); err != nil {
 			readOnlyRequiredSchemaErr = fmt.Errorf(
 				"loading common schema probe: %w", err,
@@ -4142,8 +4131,8 @@ func openAndInit(
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
-	db.bunWriter = bun.NewDB(writer, newSQLiteArchiveDialect())
-	db.bunReader = bun.NewDB(reader, newSQLiteArchiveDialect())
+	db.bunWriter = bun.NewDB(writer, NewSQLiteArchiveDialect())
+	db.bunReader = bun.NewDB(reader, NewSQLiteArchiveDialect())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
 	cursorSecret := make([]byte, 32)
@@ -4935,8 +4924,8 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	oldReader := db.reader.Swap(reader)
-	db.bunWriter = bun.NewDB(writer, newSQLiteArchiveDialect())
-	db.bunReader = bun.NewDB(reader, newSQLiteArchiveDialect())
+	db.bunWriter = bun.NewDB(writer, NewSQLiteArchiveDialect())
+	db.bunReader = bun.NewDB(reader, NewSQLiteArchiveDialect())
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a
 	// resync swap that ran behind the worker write barrier would reopen the
@@ -5062,7 +5051,7 @@ func (db *DB) ReopenWriter() error {
 
 	db.connMu.Lock()
 	old := db.writer.Swap(writer)
-	db.bunWriter = bun.NewDB(writer, newSQLiteArchiveDialect())
+	db.bunWriter = bun.NewDB(writer, NewSQLiteArchiveDialect())
 	db.writerClosed.Store(false)
 	db.connMu.Unlock()
 

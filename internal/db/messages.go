@@ -149,7 +149,7 @@ func formatToolCallPosition(position ToolCallPosition) string {
 // only the distinct agents avoids rescanning the call's event history on
 // each late update.
 func summarizeToolCallFromStateTx(
-	tx *sql.Tx, sessionID string, position ToolCallPosition,
+	tx bun.Tx, sessionID string, position ToolCallPosition,
 ) (string, error) {
 	rows, err := tx.Query(
 		`SELECT s.agent_id, e.content
@@ -237,7 +237,7 @@ func summarizeToolCallFromStateTx(
 // summarizeToolCallFromStateTx: a change to either assembly rule must update
 // both.
 func summarizeToolCallLengthFromStateTx(
-	tx *sql.Tx, sessionID string, position ToolCallPosition,
+	tx bun.Tx, sessionID string, position ToolCallPosition,
 ) (int, error) {
 	rows, err := tx.Query(
 		`SELECT s.agent_id, e.content_length
@@ -324,7 +324,7 @@ func summarizeToolCallLengthFromStateTx(
 // before the state table existed or through the staged publish; after
 // that, every late result update reads only the state table.
 func backfillToolCallAgentStateTx(
-	tx *sql.Tx, sessionID string, position ToolCallPosition,
+	tx bun.Tx, sessionID string, position ToolCallPosition,
 ) error {
 	var missing bool
 	if err := tx.QueryRow(toolResultMetadataMissingSQL,
@@ -927,6 +927,13 @@ func multiRowPlaceholders(rows, cols int) string {
 	return b.String()
 }
 
+type toolResultEventRow struct {
+	SessionID      string
+	MessageOrdinal int
+	CallIndex      int
+	Event          ToolResultEvent
+}
+
 // upsertToolCallAgentStateRows mirrors the inserted events into the
 // per-call agent state table as event coordinates: the latest event per
 // trimmed agent key in first-write order, so incremental summary
@@ -1151,7 +1158,7 @@ func repairArchiveMessageGraph(
 // false the session's signal version was invalidated and the caller must
 // schedule the debounced full recompute.
 func applyMessageTokenUsageUpdateTx(
-	tx *sql.Tx, sessionID string, update MessageTokenUsageUpdate,
+	tx bun.Tx, sessionID string, update MessageTokenUsageUpdate,
 ) (bool, error) {
 	var role, tokenUsage string
 	var contextTokens, outputTokens int
@@ -2977,7 +2984,7 @@ func applyToolCallSubagentLinkTx(
 }
 
 func applyToolCallResultUpdateTx(
-	tx *sql.Tx, sessionID string, update ToolCallResultUpdate,
+	tx bun.Tx, sessionID string, update ToolCallResultUpdate,
 	blockedResultCategories map[string]bool,
 ) (bool, []ToolResultEvent, error) {
 	if strings.TrimSpace(update.ToolUseID) == "" || len(update.Events) == 0 {
@@ -3107,7 +3114,7 @@ func applyToolCallResultUpdateTx(
 	if len(insertRows) == 0 {
 		return false, nil, nil
 	}
-	if err := insertToolResultEventsTx(tx, insertRows); err != nil {
+	if err := insertToolResultEventsTx(context.Background(), tx, insertRows); err != nil {
 		return false, nil, err
 	}
 	if err := upsertToolCallAgentStateRows(tx, insertRows); err != nil {

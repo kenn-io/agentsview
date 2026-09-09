@@ -770,7 +770,7 @@ func (s *BunStore) bunContentUnicodeSubstringHits(
 				"scanning Bun Unicode substring timestamp: %w", err,
 			)
 		}
-		if CaseInsensitiveIndex(row.Body, filter.Pattern) < 0 {
+		if _, _, found := CaseInsensitiveSpan(row.Body, filter.Pattern); !found {
 			continue
 		}
 		if confirmed < filter.Cursor {

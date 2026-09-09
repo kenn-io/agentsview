@@ -5,13 +5,12 @@ import (
 	"reflect"
 )
 
-// canonicalWriteBatchPayloadLimit matches the largest tool-result payload the
-// archive deliberately persists. It caps the estimated pre-format row payload
-// instead of guessing at a row count or applying an irrelevant bind-variable
-// ceiling; SQL syntax, escaping, and Bun's intermediate copies add overhead
-// beyond this target. A single larger logical row is still written alone
-// because splitting one stored value would change the schema contract.
-const canonicalWriteBatchPayloadLimit = 16 << 20
+// canonicalWriteBatchPayloadLimit bounds estimated row payload before Bun
+// formats SQL. Smaller statements limit transient query buffers without
+// splitting the surrounding transaction. Syntax, escaping, and intermediate
+// copies add overhead beyond this target. A larger row is written alone;
+// splitting one stored value would change the schema contract.
+const canonicalWriteBatchPayloadLimit = 1 << 20
 
 func writeCanonicalBatches[T any](
 	rows []T,

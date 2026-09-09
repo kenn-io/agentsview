@@ -2,12 +2,14 @@ package ssh
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1296,6 +1298,7 @@ func TestResolveEvenerSkipsBackslashPaths(t *testing.T) {
 			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
 			require.NoError(t, err)
 			cmd := exec.Command("sh")
+			cmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
 			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
 			archive, err := cmd.Output()
 			require.NoError(t, err)
@@ -1322,12 +1325,17 @@ func TestResolveEvenerInvalidUTF8KeepsFileScope(t *testing.T) {
 				expected = append(expected, archivePathForTest(valid))
 			}
 			for _, file := range files {
-				require.NoError(t, os.WriteFile(file, []byte("{}\n"), 0o600))
+				err := os.WriteFile(file, []byte("{}\n"), 0o600)
+				if file == files[0] && errors.Is(err, syscall.EILSEQ) {
+					t.Skip("filesystem rejects non-UTF-8 filenames")
+				}
+				require.NoError(t, err)
 			}
 			out := runResolveScriptForTest(t, "HOME="+home, "EVENER_DIR="+root)
 			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
 			require.NoError(t, err)
 			cmd := exec.Command("sh")
+			cmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
 			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
 			archive, err := cmd.Output()
 			require.NoError(t, err)

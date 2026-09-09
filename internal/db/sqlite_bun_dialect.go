@@ -2,24 +2,38 @@ package db
 
 import (
 	"encoding/hex"
+	"slices"
 	"strings"
 
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 )
 
-// sqliteArchiveDialect preserves internal text keys containing NUL. Bun's
-// default string formatter drops NUL bytes; SQLite can store them as TEXT
-// when the literal is expressed as a blob cast. Provider content sanitization
-// remains the ingestion layer's responsibility.
+// sqliteArchiveDialect preserves raw text identity, including invalid UTF-8
+// and embedded NUL. SQLite accepts NUL text through a blob cast. Provider
+// content sanitization remains the ingestion layer's responsibility.
 type sqliteArchiveDialect struct{ *sqlitedialect.Dialect }
 
-func newSQLiteArchiveDialect() *sqliteArchiveDialect {
+// NewSQLiteArchiveDialect preserves raw bytes in SQLite text keys.
+// Archive and disposable staging stores share the same literal formatter.
+func NewSQLiteArchiveDialect() *sqliteArchiveDialect {
 	return &sqliteArchiveDialect{Dialect: sqlitedialect.New()}
 }
 
 func (d *sqliteArchiveDialect) AppendString(dst []byte, value string) []byte {
 	if !strings.ContainsRune(value, 0) {
-		return d.Dialect.AppendString(dst, value)
+		dst = slices.Grow(dst, len(value)+strings.Count(value, "'")+2)
+		dst = append(dst, '\'')
+		for {
+			quote := strings.IndexByte(value, '\'')
+			if quote < 0 {
+				break
+			}
+			dst = append(dst, value[:quote+1]...)
+			dst = append(dst, '\'')
+			value = value[quote+1:]
+		}
+		dst = append(dst, value...)
+		return append(dst, '\'')
 	}
 	dst = append(dst, "CAST(X'"...)
 	dst = hex.AppendEncode(dst, []byte(value))

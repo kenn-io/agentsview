@@ -387,15 +387,16 @@ func (capability sqliteFullTextCapability) Search(
 		nameProjectArgs = []any{f.Project}
 	}
 
-	dateBuilder := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	datePreds := dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s2." + col })
-	innerWhere = append(innerWhere, datePreds...)
-	ftsArgs = append(ftsArgs, dateBuilder.Args()...)
-	nameDateBuilder := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	for _, pred := range nameDateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
-		nameProjectClause += " AND " + pred
+	if f.DateFrom != "" || f.DateTo != "" {
+		innerWhere = append(innerWhere, "(?)")
+		ftsArgs = append(ftsArgs, BunSessionDateRangePredicate(
+			f.DateFrom, f.DateTo, "", "s2", sqliteTimestampOrderExpr,
+		))
+		nameProjectClause += " AND (?)"
+		nameProjectArgs = append(nameProjectArgs, BunSessionDateRangePredicate(
+			f.DateFrom, f.DateTo, "", "s", sqliteTimestampOrderExpr,
+		))
 	}
-	nameProjectArgs = append(nameProjectArgs, nameDateBuilder.Args()...)
 
 	innerWhereSQL := strings.Join(innerWhere, " AND ")
 	// Strip FTS quoting before substring operations. PrepareFTSQuery wraps

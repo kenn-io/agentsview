@@ -322,26 +322,12 @@ func canonicalToolRows(
 				if result.SubagentSessionID == "" {
 					result.SubagentSessionID = call.SubagentSessionID
 				}
-				timestamp, err := timestampToBunRow(result.Timestamp)
+				row, err := canonicalToolResultRow(message.SessionID, message.Ordinal, callIndex, result)
 				if err != nil {
-					return nil, nil, fmt.Errorf(
-						"tool result %q ordinal %d event %d timestamp: %w",
-						message.SessionID, message.Ordinal, eventIndex, err,
-					)
+					return nil, nil, err
 				}
-				truncateCanonicalTimestamp(timestamp)
-				resultRows = append(resultRows, bunmodel.ToolResultEvent{
-					SessionID:              message.SessionID,
-					ToolCallMessageOrdinal: message.Ordinal,
-					CallIndex:              callIndex, EventIndex: eventIndex,
-					ToolUseID:         optionalCanonicalString(result.ToolUseID),
-					AgentID:           optionalCanonicalString(result.AgentID),
-					SubagentSessionID: optionalCanonicalString(result.SubagentSessionID),
-					Source:            SanitizeUTF8(result.Source),
-					Status:            SanitizeUTF8(result.Status),
-					Content:           SanitizeUTF8(result.Content),
-					ContentLength:     result.ContentLength, Timestamp: timestamp,
-				})
+				row.EventIndex = eventIndex
+				resultRows = append(resultRows, row)
 			}
 		}
 	}
@@ -493,6 +479,9 @@ func ReplaceMessageRows(
 	if err := validateMessageWriteScope(sessionID, rows); err != nil {
 		return err
 	}
+	if err := clearToolOccurrenceState(ctx, tx, sessionID, nil); err != nil {
+		return err
+	}
 	for _, model := range []any{
 		(*bunmodel.ToolResultEvent)(nil),
 		(*bunmodel.ToolCall)(nil),
@@ -526,7 +515,7 @@ func CanonicalSessionDependentRowsMatch(
 		return false, fmt.Errorf("reading canonical tool calls for comparison: %w", err)
 	}
 	var storedResults []bunmodel.ToolResultEvent
-	if err := store.NewSelect().Model(&storedResults).
+	if err := store.NewSelect().Model(&storedResults).Column(toolResultColumns(store)...).
 		Where("session_id = ?", sessionID).
 		OrderExpr("tool_call_message_ordinal ASC").OrderExpr("call_index ASC").
 		OrderExpr("event_index ASC").Scan(ctx); err != nil {
@@ -568,6 +557,10 @@ func CanonicalSessionDependentRowsMatch(
 	}
 	for i := range results {
 		results[i].ID = nil
+		if !isSQLiteArchive(store) {
+			results[i].RawContentDigest = nil
+			results[i].SummaryParticipates = nil
+		}
 	}
 	for i := range storedUsage {
 		storedUsage[i].ID = 0
@@ -752,6 +745,9 @@ func prepareMessageRepair(
 		if err := writeCanonicalBatches(
 			affectedOrdinals,
 			func(batch []int) error {
+				if err := clearToolOccurrenceState(ctx, tx, sessionID, batch); err != nil {
+					return err
+				}
 				if _, err := tx.NewDelete().Model((*bunmodel.ToolResultEvent)(nil)).
 					Where("session_id = ?", sessionID).
 					Where("tool_call_message_ordinal IN (?)", bun.List(batch)).
@@ -802,24 +798,8 @@ func appendToolRows(
 			return err
 		}
 	}
-	if len(results) > 0 {
-		if err := writeCanonicalBatches(
-			results,
-			func(batch []bunmodel.ToolResultEvent) error {
-				if _, err := tx.NewInsert().Model(&batch).
-					Column(canonicalReplacementColumns(
-						(*bunmodel.ToolResultEvent)(nil), "id",
-					)...).
-					Returning("").Exec(ctx); err != nil {
-					return fmt.Errorf(
-						"inserting canonical tool results for %s: %w", sessionID, err,
-					)
-				}
-				return nil
-			},
-		); err != nil {
-			return err
-		}
+	if err := insertCanonicalToolResults(ctx, tx, results, false); err != nil {
+		return err
 	}
 	return nil
 }
@@ -839,6 +819,9 @@ func replaceToolRows(
 	ctx context.Context, tx bun.IDB, sessionID string,
 	calls []bunmodel.ToolCall, results []bunmodel.ToolResultEvent,
 ) error {
+	if err := clearToolOccurrenceState(ctx, tx, sessionID, nil); err != nil {
+		return err
+	}
 	var existingCalls []canonicalToolCallKey
 	if err := tx.NewSelect().Model((*bunmodel.ToolCall)(nil)).
 		Column("message_ordinal", "call_index").
@@ -882,34 +865,8 @@ func replaceToolRows(
 			return err
 		}
 	}
-	if len(results) > 0 {
-		if err := writeCanonicalBatches(
-			results,
-			func(batch []bunmodel.ToolResultEvent) error {
-				if _, err := tx.NewInsert().Model(&batch).
-					Column(canonicalReplacementColumns(
-						(*bunmodel.ToolResultEvent)(nil), "id",
-					)...).
-					Returning("").
-					On("CONFLICT (session_id, tool_call_message_ordinal, call_index, event_index) DO UPDATE").
-					Set("tool_use_id = EXCLUDED.tool_use_id").
-					Set("agent_id = EXCLUDED.agent_id").
-					Set("subagent_session_id = EXCLUDED.subagent_session_id").
-					Set("source = EXCLUDED.source").
-					Set("status = EXCLUDED.status").
-					Set("content = EXCLUDED.content").
-					Set("content_length = EXCLUDED.content_length").
-					Set("timestamp = EXCLUDED.timestamp").
-					Exec(ctx); err != nil {
-					return fmt.Errorf(
-						"upserting canonical tool results for %s: %w", sessionID, err,
-					)
-				}
-				return nil
-			},
-		); err != nil {
-			return err
-		}
+	if err := insertCanonicalToolResults(ctx, tx, results, true); err != nil {
+		return err
 	}
 
 	desiredResults := make(map[canonicalToolResultKey]struct{}, len(results))
@@ -1153,4 +1110,78 @@ func validateToolWriteScope(
 		resultKeys[key] = struct{}{}
 	}
 	return nil
+}
+
+// toolResultColumns extends the portable projection only for the local archive.
+func toolResultColumns(store bun.IDB) []string {
+	columns := canonicalReplacementColumns((*bunmodel.ToolResultEvent)(nil), "id")
+	if isSQLiteArchive(store) {
+		columns = append(columns, "raw_content_digest", "summary_participates")
+	}
+	return columns
+}
+
+func insertCanonicalToolResults(ctx context.Context, tx bun.IDB, rows []bunmodel.ToolResultEvent, replace bool) error {
+	columns := toolResultColumns(tx)
+	return writeCanonicalBatches(rows, func(batch []bunmodel.ToolResultEvent) error {
+		query := tx.NewInsert().Model(&batch).Column(columns...).Returning("")
+		if replace {
+			query = query.On("CONFLICT (session_id, tool_call_message_ordinal, call_index, event_index) DO UPDATE")
+			for _, column := range columns {
+				switch column {
+				case "session_id", "tool_call_message_ordinal", "call_index", "event_index":
+					continue
+				}
+				query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
+			}
+		}
+		_, err := query.Exec(ctx)
+		return err
+	})
+}
+
+func clearToolOccurrenceState(ctx context.Context, tx bun.IDB, sessionID string, ordinals []int) error {
+	if !isSQLiteArchive(tx) {
+		return nil
+	}
+	query := tx.NewDelete().Table("tool_call_occurrence_agent_state").Where("session_id = ?", sessionID)
+	if ordinals != nil {
+		query = query.Where("message_ordinal IN (?)", bun.List(ordinals))
+	}
+	_, err := query.Exec(ctx)
+	return err
+}
+
+func insertToolResultEventsTx(ctx context.Context, tx bun.Tx, rows []toolResultEventRow) error {
+	canonical := make([]bunmodel.ToolResultEvent, 0, len(rows))
+	for _, row := range rows {
+		event, err := canonicalToolResultRow(row.SessionID, row.MessageOrdinal, row.CallIndex, row.Event)
+		if err != nil {
+			return err
+		}
+		canonical = append(canonical, event)
+	}
+	return insertCanonicalToolResults(ctx, tx, canonical, false)
+}
+
+func canonicalToolResultRow(sessionID string, ordinal, callIndex int, event ToolResultEvent) (bunmodel.ToolResultEvent, error) {
+	timestamp, err := timestampToBunRow(event.Timestamp)
+	if err != nil {
+		return bunmodel.ToolResultEvent{}, fmt.Errorf("tool result %q ordinal %d event %d timestamp: %w", sessionID, ordinal, event.EventIndex, err)
+	}
+	truncateCanonicalTimestamp(timestamp)
+	return bunmodel.ToolResultEvent{
+		SessionID: sessionID, ToolCallMessageOrdinal: ordinal,
+		CallIndex: callIndex, EventIndex: event.EventIndex,
+		ToolUseID: optionalCanonicalString(event.ToolUseID), AgentID: optionalCanonicalString(event.AgentID),
+		SubagentSessionID: optionalCanonicalString(event.SubagentSessionID),
+		Source:            SanitizeUTF8(event.Source), Status: SanitizeUTF8(event.Status),
+		Content: SanitizeUTF8(event.Content), ContentLength: event.ContentLength, Timestamp: timestamp,
+		RawContentDigest: event.RawContentDigest, SummaryParticipates: event.SummaryParticipates,
+	}, nil
+}
+
+func isSQLiteArchive(store bun.IDB) bool {
+	_, ok := store.Dialect().(*sqliteArchiveDialect)
+	return ok
 }

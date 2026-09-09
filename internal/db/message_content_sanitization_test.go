@@ -26,7 +26,8 @@ func TestArchiveMessageWritesSanitizeContent(t *testing.T) {
 				require.Equal(t, 1, result.WrittenSessions)
 			} else {
 				insertSession(t, database, sessionID, "project-a")
-				require.NoError(t, database.WriteSessionIncremental(sessionID, messages, IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1}))
+				_, err := database.WriteSessionIncremental(sessionID, messages, IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1})
+				require.NoError(t, err)
 			}
 
 			stored, err := database.GetMessages(t.Context(), sessionID, 0, 10, true)
