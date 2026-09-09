@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"os"
@@ -566,6 +567,79 @@ func TestProcessFileS3RestoredSessionBypassesSkipCache(t *testing.T) {
 		database.GetSessionDataVersion("laptop~restored"))
 }
 
+func TestSyncAllSinceReparsesCursorS3ToolResultsFromVersion101(t *testing.T) {
+	database := openTestDB(t)
+	const root = "s3://bucket/laptop/raw/cursor"
+	const uri = root + "/demo-proj/11111111-2222-4333-8444-555555555555.txt"
+	const sessionID = "laptop~cursor:11111111-2222-4333-8444-555555555555"
+	const content = "assistant:\n[Tool call] Shell\n  command=ls\n[Tool result]\n  file1.go\n"
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	oldFetch, oldStat := fetchS3Object, statS3Object
+	t.Cleanup(func() { fetchS3Object, statS3Object = oldFetch, oldStat })
+	var fetches atomic.Int32
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		if got != uri {
+			return nil, missingS3ObjectError()
+		}
+		fetches.Add(1)
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+	statS3Object = func(string) (parser.S3Object, error) {
+		return parser.S3Object{}, missingS3ObjectError()
+	}
+	def, ok := parser.AgentByType(parser.AgentCursor)
+	require.True(t, ok)
+	// Stub remote discovery and transport; parsing and archive writes are real.
+	factory := processFixtureFactory{provider: &processFixtureProvider{
+		Def: def, Caps: parser.Capabilities{
+			Source: parser.SourceCapabilities{DiscoverSources: parser.CapabilitySupported},
+		},
+		discovered: []parser.SourceRef{{
+			Provider: parser.AgentCursor, Key: uri, DisplayPath: uri,
+			FingerprintKey: uri, ProjectHint: "demo-proj",
+			Opaque: parser.S3DiscoveredSource{URI: uri, Project: "demo-proj",
+				Machine: "laptop", Size: int64(len(content)), MtimeNS: mtime.UnixNano()},
+		}},
+	}}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
+		Machine:   "local", DisableFilesystemProjectDiscovery: true,
+		ProviderFactories: []parser.ProviderFactory{factory},
+	})
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	// Recreate the old parser's missing output, keeping the S3 fingerprint intact.
+	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+		if _, err := tx.Exec("DELETE FROM tool_result_events WHERE session_id = ?", sessionID); err != nil {
+			return err
+		}
+		_, err := tx.Exec("UPDATE tool_calls SET result_content = '', result_content_length = 0 WHERE session_id = ?", sessionID)
+		return err
+	}))
+	require.NoError(t, database.SetSessionDataVersion(sessionID, 101))
+	fetches.Store(0)
+	cutoff := mtime.Add(time.Hour)
+	stats = engine.SyncAllSince(t.Context(), cutoff, nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced, "old parser output must refresh despite the object cutoff")
+	messages, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	call := messages[0].ToolCalls[0]
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "file1.go", call.ResultEvents[0].Content)
+	assert.Equal(t, "file1.go", call.ResultContent)
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(sessionID))
+	require.EqualValues(t, 1, fetches.Load())
+	stats = engine.SyncAllSince(t.Context(), cutoff, nil)
+	assert.Zero(t, stats.Failed)
+	assert.Zero(t, stats.Synced)
+	assert.EqualValues(t, 1, fetches.Load(), "current unchanged sources must not be fetched again")
+}
+
 func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/fingerprint.jsonl"
@@ -580,6 +654,9 @@ func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
 		FileMtime: int64Ptr(mtime),
 		FileHash:  strPtr("s3:fingerprint:old"),
 	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		"laptop~fingerprint", db.CurrentDataVersion(),
+	))
 
 	e := &Engine{db: database}
 	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
@@ -609,6 +686,9 @@ func TestFilterFilesByMtimeKeepsS3ChangedSize(t *testing.T) {
 		FileSize:  int64Ptr(512),
 		FileMtime: int64Ptr(mtime),
 	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		"laptop~size", db.CurrentDataVersion(),
+	))
 
 	e := &Engine{db: database}
 	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
@@ -1807,6 +1887,9 @@ func TestFilterFilesByMtimeAppliesCutoffToProviderDiscoveredClaudeS3(t *testing.
 		FileMtime: int64Ptr(mtime),
 		FileHash:  strPtr("s3:fingerprint:stable"),
 	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		"laptop~old", db.CurrentDataVersion(),
+	))
 
 	claudeFactory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
 	require.True(t, ok, "claude provider factory must be registered")

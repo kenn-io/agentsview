@@ -964,7 +964,7 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   for the GUI, `state.vscdb` is the only transcript store, not metadata beside
   one. Cursor's public GitHub organization was also searched 2026-07-19; no
   transcript schema or producer source was found.
-- **Legacy result evidence (rechecked 2026-09-08):**
+- **Legacy result evidence (rechecked 2026-09-09):**
   [Issue #1627](https://github.com/kenn-io/agentsview/issues/1627), based on
   read-only inspection of live transcripts on 2026-09-04, reports discarded
   legacy `[Tool result]` blocks. It supplies no raw legacy excerpt or producer
@@ -978,7 +978,10 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   [JSONL discussion](https://forum.cursor.com/t/accessing-the-full-agent-transcript-in-cursor/157311)
   reports missing tool outputs in JSONL, which does not establish legacy
   text boundaries. The history documentation link above now redirects to the
-  docs landing page and supplies no legacy format details.
+  docs landing page and supplies no legacy format details. The archive
+  regression also exercises incremental S3 sync from data version 101 with an
+  unchanged object, verifying recovered output and a skipped fetch on the next
+  pass. This uses synthetic input, not additional format evidence.
 - **Usage and cost:** The consumed text/JSONL transcripts have no reliable
   per-message token, cache, reasoning, credit, or monetary-cost fields.
 - **Agentsview:** `internal/parser/cursor.go`,
