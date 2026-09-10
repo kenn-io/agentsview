@@ -364,6 +364,7 @@ keeps its default directories.
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                         | JSONL per session                                                                                                                                             |
 | OpenClaw              | `~/.openclaw/assets/static/agents/` and `~/.kimi_openclaw/assets/static/agents/`                                                                                 | JSONL per session                                                                                                                                             |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
+| Open Code Review      | `~/.opencodereview/sessions/`                                                                                                                                   | One JSONL file per review under an encoded project directory                                                                                                  |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                                                          |
 | Omnigent              | `~/.omnigent/`                                                                                                                                                   | SQLite `chat.db`, one session per conversation                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
@@ -801,6 +802,7 @@ export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp
 export OPENCLAW_DIR=~/custom/openclaw
 export OPENCODE_DIR=~/custom/opencode
+export OPENCODEREVIEW_DIR=~/custom/opencodereview/sessions
 export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi
 export PI_CODING_AGENT_DIR=~/custom/pi-home # sessions are under this home
@@ -902,6 +904,9 @@ dirs = [
 dirs = [
   "~/.codex/sessions",
 ]
+
+[agents.opencodereview]
+dirs = ["~/.opencodereview/sessions"]
 ```
 
 Every locally discovered provider uses the same `[agents.<id>]` table with a

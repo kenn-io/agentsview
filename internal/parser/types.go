@@ -24,6 +24,7 @@ const (
 	AgentGeminiApps     AgentType = "gemini-apps"
 	AgentMiMoCode       AgentType = "mimocode"
 	AgentOpenCode       AgentType = "opencode"
+	AgentOpenCodeReview AgentType = "opencodereview"
 	AgentKilo           AgentType = "kilo"
 	AgentKiloLegacy     AgentType = "kilo-legacy"
 	AgentOpenHands      AgentType = "openhands"
@@ -268,6 +269,15 @@ var Registry = []AgentDef{
 		},
 		FileBased:      true,
 		WatchRootsFunc: ResolveOpenCodeWatchRoots,
+	},
+	{
+		Type:        AgentOpenCodeReview,
+		DisplayName: "Open Code Review",
+		EnvVar:      "OPENCODEREVIEW_DIR",
+		ConfigKey:   "opencodereview_dirs",
+		DefaultDirs: []string{".opencodereview/sessions"},
+		IDPrefix:    "opencodereview:",
+		FileBased:   true,
 	},
 	{
 		Type:        AgentKilo,

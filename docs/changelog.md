@@ -11,6 +11,8 @@ description: Release history for AgentsView
   session headers. Upgrading triggers a full session resync to populate
   existing rows, which can take time for large archives. Sessions whose source
   files are gone remain in the archive. (#1677)
+- Browse and search Open Code Review sessions, including review comments,
+  tools, thinking, recorded token usage, and resumed reviews. (#1660)
 - Browse and search Tau sessions, including the active conversation branch,
   thinking, tools, session names, and recorded token usage. (#1661)
 - Configure session directories and alternate homes in `[agents.<id>]` tables

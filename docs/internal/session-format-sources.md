@@ -796,6 +796,51 @@ add an archived or maintained mirror without replacing the original identity.
   `internal/parser/opencode.go`; compare MiMo's pinned schema with OpenCode
   whenever their shared parser changes.
 
+## Open Code Review (`opencodereview`)
+
+- **Format:** One JSONL session file per review under an encoded project
+  directory below `.opencodereview/sessions`. Records include review metadata,
+  request and response history, tool results, resume lineage, and a terminal
+  run manifest.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/alibaba/open-code-review.git` at
+  `966f976e24b09e2a3691d3919c9833adcd03642f`; see
+  [session writer](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/session/persist.go)
+  and
+  [session history](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/session/history.go).
+  The public issue sample was also preserved as a sanitized fixture in the
+  AgentsView parser tests.
+- **Reverified (2026-09-10):** Checked the pinned writer and history code plus
+  [tool execution](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/llmloop/loop.go)
+  and
+  [compression](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/llmloop/compression.go),
+  together with the
+  [comment schema](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/model/review.go).
+  `task_done` is a control signal and writes no tool result. `session_end`
+  closes the file and is its last physical record. Main and plan requests
+  append conversation messages; compression rewrites the initial user prompt
+  and removes older messages. AgentsView tracks each stream's previous message
+  count and tail digest, emits new user turns, and excludes auxiliary task
+  prompts. The tail digest preserves grace prompts appended immediately after
+  compression. Successful `task_done` calls reset request history for
+  subsequent
+  [review rounds](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/agent/agent.go)
+  on the same stream. Review checkpoints retain the complete comment objects
+  and reuse source ID.
+- **Usage and cost:** Response records persist prompt, completion, cache-read,
+  and cache-write token counts plus model identity. The
+  [OpenAI usage resolver](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/llm/usage_resolver.go)
+  treats cached tokens as part of the prompt total, and the
+  [native Anthropic adapter](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/llm/client.go)
+  adds cache reads and writes to its prompt total. AgentsView subtracts both
+  cache counts for uncached input pricing and uses the prompt total for
+  context size. The raw resolver's Anthropic-style fallback can instead leave
+  cache counts outside the prompt total. JSONL usage records omit that
+  distinction, so those fallback or proxy records may undercount. AgentsView
+  does not consume a producer-reported monetary total.
+- **Agentsview:** `internal/parser/opencodereview.go` and
+  `internal/parser/opencodereview_provider.go`.
+
 ## OpenCode (`opencode`)
 
 **V2 projection check (2026-09-08):** Cloned upstream at

@@ -1554,6 +1554,7 @@ agentsview help
 | `OMP_DIR`                         | `~/.omp/agent/sessions`                              | OhMyPi sessions directory                                                                           |
 | `OPENCLAW_DIR`                    | `~/.openclaw/agents` and `~/.kimi_openclaw/agents`   | OpenClaw agents directory                                                                           |
 | `OPENCODE_DIR`                    | `~/.local/share/opencode`                            | OpenCode data directory                                                                             |
+| `OPENCODEREVIEW_DIR`              | `~/.opencodereview/sessions`                         | Open Code Review sessions directory                                                                 |
 | `OPENHANDS_CONVERSATIONS_DIR`     | `~/.openhands/conversations`                         | OpenHands CLI conversations directory                                                               |
 | `PI_DIR`                          | `~/.pi/agent/sessions`                               | Pi sessions directory                                                                               |
 | `PI_CODING_AGENT_DIR` | unset | Pi agent home that re-roots the default `sessions/` discovery path |

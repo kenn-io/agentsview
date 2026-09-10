@@ -21,6 +21,7 @@ describe("KNOWN_AGENTS", () => {
       "gemini",
       "gemini-apps",
       "opencode",
+      "opencodereview",
       "kilo",
       "kilo-legacy",
       "openhands",
@@ -80,6 +81,7 @@ describe("agentColor", () => {
     expect(agentColor("evener")).toBe("var(--accent-teal)");
     expect(agentColor("gemini")).toBe("var(--accent-rose)");
     expect(agentColor("opencode")).toBe("var(--accent-purple)");
+    expect(agentColor("opencodereview")).toBe("var(--accent-indigo)");
     expect(agentColor("openhands")).toBe("var(--accent-teal)");
     expect(agentColor("cursor")).toBe("var(--accent-black)");
     expect(agentColor("amp")).toBe("var(--accent-coral)");
@@ -125,6 +127,7 @@ describe("agentForeground", () => {
   it("uses non-blue accent foregrounds for non-blue agent fills", () => {
     expect(agentForeground("codex")).toBe("var(--accent-green-foreground)");
     expect(agentForeground("opencode")).toBe("var(--accent-purple-foreground)");
+    expect(agentForeground("opencodereview")).toBe("var(--accent-indigo-foreground)");
   });
 });
 
@@ -168,6 +171,7 @@ describe("agentLabel", () => {
     expect(agentLabel("roocode")).toBe("RooCode");
     expect(agentLabel("omnigent")).toBe("Omnigent");
     expect(agentLabel("traex")).toBe("TraeX");
+    expect(agentLabel("opencodereview")).toBe("Open Code Review");
   });
 
   it("capitalizes simple agent names", () => {

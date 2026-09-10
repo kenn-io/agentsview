@@ -223,6 +223,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentGemini, true},
 		{AgentMiMoCode, true},
 		{AgentOpenCode, true},
+		{AgentOpenCodeReview, true},
 		{AgentOpenHands, true},
 		{AgentCursor, true},
 		{AgentAmp, true},
@@ -446,6 +447,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentGeminiApps,
 		AgentMiMoCode,
 		AgentOpenCode,
+		AgentOpenCodeReview,
 		AgentKilo,
 		AgentKiloLegacy,
 		AgentOpenHands,
@@ -668,6 +670,17 @@ func TestOpenCodeRegistryEntry(t *testing.T) {
 	}
 	require.Truef(t, slices.Equal(def.WatchSubdirs, want),
 		"OpenCode WatchSubdirs = %v, want %v", def.WatchSubdirs, want)
+}
+
+func TestOpenCodeReviewRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentOpenCodeReview)
+	require.True(t, ok, "AgentOpenCodeReview missing from Registry")
+	require.True(t, def.FileBased, "Open Code Review FileBased")
+	assert.Equal(t, "Open Code Review", def.DisplayName)
+	assert.Equal(t, "OPENCODEREVIEW_DIR", def.EnvVar)
+	assert.Equal(t, "opencodereview_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".opencodereview/sessions"}, def.DefaultDirs)
+	assert.Equal(t, "opencodereview:", def.IDPrefix)
 }
 
 func TestOpenClaudeRegistryEntry(t *testing.T) {

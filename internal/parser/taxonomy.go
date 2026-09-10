@@ -93,6 +93,8 @@ func NormalizeToolCategory(rawName string) string {
 	// Note: "grep" is handled above in the Gemini section.
 	case "read":
 		return "Read"
+	case "file_read", "file_read_diff":
+		return "Read"
 	case "edit":
 		return "Edit"
 	case "write":
@@ -101,6 +103,12 @@ func NormalizeToolCategory(rawName string) string {
 		return "Bash"
 	case "glob":
 		return "Glob"
+	case "file_find":
+		return "Glob"
+	case "code_search":
+		return "Grep"
+	case "code_comment":
+		return "Tool"
 	case "task":
 		return "Task"
 

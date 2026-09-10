@@ -1199,6 +1199,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newOpenHandsProviderFactory(def)
 	case AgentOpenCode:
 		return newOpenCodeProviderFactory(def)
+	case AgentOpenCodeReview:
+		return newOpenCodeReviewProviderFactory(def)
 	case AgentOMP:
 		return newPiProviderFactory(def)
 	case AgentOpenClaw:
