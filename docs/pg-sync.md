@@ -348,7 +348,18 @@ When the PostgreSQL role can write the raw-sync tables and ingest-job sequence,
 [hosted raw-sync control plane](/docs/hosted-raw-sync/#http-control-plane).
 Those routes can write raw custody metadata and local raw-sync storage, but they
 do not make the session APIs writable. A PostgreSQL role without the required
-raw-sync write privileges omits the runtime routes.
+raw-sync write privileges omits the runtime routes and logs the missing
+requirements. Existing least-privilege raw-sync roles now also need `SELECT` and
+`UPDATE` on `raw_ingest_jobs` so manifest commits can retire obsolete parse jobs:
+
+```sql
+GRANT SELECT, UPDATE ON agentsview.raw_ingest_jobs TO raw_sync_runtime;
+```
+
+Run this as the schema owner, substitute your schema and runtime role, and
+restart `pg serve`. Keep the existing `INSERT` and ingest-job sequence `USAGE`
+grants. This enables the raw-sync HTTP routes; `pg serve` does not yet start the
+internal parse worker or project hosted raw captures into browsable sessions.
 
 On startup, `pg serve` automatically applies any pending schema migrations to
 PostgreSQL, creating new tables and indexes added in newer AgentsView versions.

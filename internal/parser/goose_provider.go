@@ -38,7 +38,7 @@ func (f *gooseProviderFactory) Capabilities() Capabilities {
 func (f *gooseProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	cfg.Roots = normalizeGooseRoots(cfg.Roots)
-	spec := gooseProviderSpec()
+	spec := gooseProviderSpec(cfg.StableSourceSnapshots)
 	base := &dbBackedProvider{
 		Def:     cloneAgentDef(f.def),
 		Caps:    withDBBackedRawCapture(spec.caps),
@@ -93,7 +93,7 @@ func (p *gooseProvider) captureDiscoveryWatermarks(
 		if dbPath == "" {
 			continue
 		}
-		state, err := readGooseTrackedDatabase(ctx, dbPath)
+		state, err := readGooseTrackedDatabase(ctx, dbPath, p.Config.StableSourceSnapshots)
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +130,7 @@ func (p *gooseProvider) SourcesForChangedPath(
 			// cannot prove that any archived Goose member was deleted.
 			return nil, nil
 		}
-		ids, cold, snapshot, err := p.tracker.changedSessionIDs(ctx, dbPath)
+		ids, cold, snapshot, err := p.tracker.changedSessionIDs(ctx, dbPath, p.Config.StableSourceSnapshots)
 		if err != nil {
 			return nil, err
 		}
@@ -149,7 +149,7 @@ func (p *gooseProvider) SourcesForChangedPath(
 
 		sources := make([]SourceRef, 0, len(ids))
 		for _, id := range ids {
-			meta, found, err := gooseSessionMeta(ctx, dbPath, id)
+			meta, found, err := gooseSessionMeta(ctx, dbPath, id, p.Config.StableSourceSnapshots)
 			if err != nil {
 				return nil, err
 			}
@@ -179,7 +179,7 @@ func (p *gooseProvider) Fingerprint(
 	if !ok || !IsRegularFile(src.DBPath) {
 		return fingerprint, nil
 	}
-	hash, found, err := gooseSessionFingerprint(ctx, src.DBPath, src.SessionID)
+	hash, found, err := gooseSessionFingerprint(ctx, src.DBPath, src.SessionID, p.Config.StableSourceSnapshots)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -214,7 +214,7 @@ func gooseProviderCapabilities() Capabilities {
 	}
 }
 
-func gooseProviderSpec() dbBackedProviderSpec {
+func gooseProviderSpec(stableSnapshot bool) dbBackedProviderSpec {
 	return dbBackedProviderSpec{
 		agent:  AgentGoose,
 		dbName: GooseDBName,
@@ -224,15 +224,17 @@ func gooseProviderSpec() dbBackedProviderSpec {
 			dbPath string,
 			yield func(dbBackedSessionMeta) error,
 		) error {
-			return forEachGooseSessionMeta(ctx, dbPath, yield)
+			return forEachGooseSessionMeta(ctx, dbPath, stableSnapshot, yield)
 		},
 		metaForID: func(
 			ctx context.Context, dbPath, sessionID string,
 		) (dbBackedSessionMeta, bool, error) {
-			return gooseSessionMeta(ctx, dbPath, sessionID)
+			return gooseSessionMeta(ctx, dbPath, sessionID, stableSnapshot)
 		},
-		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
-			result, err := parseGooseSession(dbPath, sessionID, machine)
+		parse: func(
+			ctx context.Context, dbPath, sessionID, machine string,
+		) ([]ParseResult, error) {
+			result, err := parseGooseSession(ctx, dbPath, sessionID, machine, stableSnapshot)
 			if err != nil || result == nil {
 				return nil, err
 			}
@@ -317,8 +319,12 @@ func GooseSQLiteVirtualPath(dbPath, sessionID string) string {
 	return VirtualSourcePath(dbPath, sessionID)
 }
 
-func openGooseDB(dbPath string) (*sql.DB, error) {
-	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=0&_busy_timeout=3000"
+func openGooseDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
+	immutable := "0"
+	if stableSnapshot {
+		immutable = "1"
+	}
+	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=" + immutable + "&_busy_timeout=3000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening goose sessions database %s: %w", dbPath, err)
@@ -428,7 +434,7 @@ func furthestGooseRowCursor(a, b gooseRowCursor) gooseRowCursor {
 // skipped — deletions are reconciliation's job — while inserts from the
 // tables whose cursors are intact are still listed.
 func (t *gooseChangeTracker) changedSessionIDs(
-	ctx context.Context, dbPath string,
+	ctx context.Context, dbPath string, stableSnapshot bool,
 ) (ids []string, cold bool, snapshot gooseTrackedDatabase, err error) {
 	entry := t.entry(dbPath)
 	entry.mu.Lock()
@@ -439,7 +445,7 @@ func (t *gooseChangeTracker) changedSessionIDs(
 		return nil, false, gooseTrackedDatabase{},
 			fmt.Errorf("stat goose sessions database: %w", err)
 	}
-	db, err := openGooseDB(dbPath)
+	db, err := openGooseDB(dbPath, stableSnapshot)
 	if err != nil {
 		return nil, false, gooseTrackedDatabase{}, err
 	}
@@ -487,13 +493,13 @@ func gooseTrackedDatabaseReplaced(
 }
 
 func readGooseTrackedDatabase(
-	ctx context.Context, dbPath string,
+	ctx context.Context, dbPath string, stableSnapshot bool,
 ) (gooseTrackedDatabase, error) {
 	info, err := os.Stat(dbPath)
 	if err != nil {
 		return gooseTrackedDatabase{}, fmt.Errorf("stat goose sessions database: %w", err)
 	}
-	db, err := openGooseDB(dbPath)
+	db, err := openGooseDB(dbPath, stableSnapshot)
 	if err != nil {
 		return gooseTrackedDatabase{}, err
 	}

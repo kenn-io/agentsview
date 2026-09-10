@@ -90,6 +90,73 @@ func (s *artifactObjectStore) OpenObject(
 	return objectInfoFromArtifact(entry), reader, nil
 }
 
+// CopyObject copies one exact, terminally verified custody object while the
+// store owns the reader lifecycle. The artifact reader is opened with ctx and
+// is read and closed sequentially; callers never need to assume that Close is
+// safe to race with an in-flight Read.
+func (s *artifactObjectStore) CopyObject(
+	ctx context.Context,
+	tenantID string,
+	object ObjectRef,
+	destination io.Writer,
+) (_ ObjectInfo, resultErr error) {
+	if destination == nil {
+		return ObjectInfo{}, fmt.Errorf("%w: raw object destination is required", ErrInvalid)
+	}
+	info, reader, err := s.OpenObject(ctx, tenantID, object)
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil && resultErr == nil {
+			resultErr = fmt.Errorf("closing raw object: %w", closeErr)
+		}
+	}()
+	if info.Ref != object {
+		return ObjectInfo{}, fmt.Errorf("%w: raw object identity is inconsistent", ErrInvalid)
+	}
+	stream := rawObjectCopyReader{ctx: ctx, reader: reader}
+	written, err := io.CopyN(destination, stream, object.Length)
+	if err != nil {
+		return ObjectInfo{}, fmt.Errorf("copying raw object: %w", err)
+	}
+	extra, err := io.Copy(io.Discard, io.LimitReader(stream, 1))
+	if err != nil {
+		return ObjectInfo{}, fmt.Errorf("finishing raw object read: %w", err)
+	}
+	if written != object.Length || extra != 0 {
+		return ObjectInfo{}, fmt.Errorf("%w: raw object length is inconsistent", ErrInvalid)
+	}
+	if err := ctx.Err(); err != nil {
+		return ObjectInfo{}, err
+	}
+	if err := reader.Verify(); err != nil {
+		return ObjectInfo{}, fmt.Errorf("verifying raw object: %w", err)
+	}
+	return info, nil
+}
+
+const maxRawObjectCopyChunkBytes = 64 << 10
+
+type rawObjectCopyReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r rawObjectCopyReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(p) > maxRawObjectCopyChunkBytes {
+		p = p[:maxRawObjectCopyChunkBytes]
+	}
+	n, err := r.reader.Read(p)
+	if err != nil && r.ctx.Err() != nil {
+		return n, r.ctx.Err()
+	}
+	return n, err
+}
+
 func (s *artifactObjectStore) MissingObjects(
 	ctx context.Context,
 	tenantID string,

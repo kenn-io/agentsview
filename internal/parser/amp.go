@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -97,7 +98,7 @@ func parseAmpSession(
 		}
 
 		content, thinkingText, hasThinking, hasToolUse, tcs, trs :=
-			ExtractTextContent(msg.Get("content"))
+			ExtractTextContent(context.Background(), msg.Get("content"))
 		trs = append(trs, extractAmpToolResults(msg.Get("content"))...)
 		usage := msg.Get("usage")
 		if strings.TrimSpace(content) == "" && len(trs) == 0 &&

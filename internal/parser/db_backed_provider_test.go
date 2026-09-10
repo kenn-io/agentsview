@@ -2,10 +2,12 @@ package parser
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -244,6 +246,76 @@ func TestDBBackedProviderRawCaptureReportsDiscoveryCompleteness(t *testing.T) {
 			assert.Equal(t, dbPath, streamed[0].DisplayPath)
 		})
 	}
+}
+
+func TestDBBackedProviderRawSnapshotSessionsFanOutLogicalSessions(t *testing.T) {
+	dbPath, seeder, db := newForgeTestDB(t)
+	defer db.Close()
+	seedForgeConversation(t, seeder)
+	seeder.AddConversation(
+		"conv-002", "Second", 123,
+		`{"conversation_id":"conv-002","messages":[]}`,
+		"2026-05-03 09:58:15.000000000",
+		"2026-05-03 10:00:16.000000000", "",
+	)
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+	require.NoError(t, err)
+	require.True(t, discovery.Complete)
+	require.Len(t, discovery.Sources, 1)
+
+	sessions, supported, err := ResolveRawSnapshotSessions(
+		t.Context(), provider, discovery.Sources[0],
+	)
+	require.NoError(t, err)
+	require.True(t, supported, "db-backed providers must fan raw snapshots out to sessions")
+	require.Len(t, sessions, 2)
+	assert.Equal(t, dbPath+"#conv-001", sessions[0].Key)
+	assert.Equal(t, dbPath+"#conv-001", sessions[0].DisplayPath)
+	assert.Equal(t, dbPath+"#conv-002", sessions[1].Key)
+	assert.Equal(t,
+		time.Date(2026, 5, 2, 10, 0, 16, 848497543, time.UTC).UnixNano(),
+		sessions[0].DiscoveryMTimeNS)
+
+	// The ordinary per-session contract must accept each enumerated session.
+	fingerprint, err := provider.Fingerprint(t.Context(), sessions[0])
+	require.NoError(t, err)
+	assert.Equal(t, dbPath+"#conv-001", fingerprint.Key)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
+		Source:      sessions[0],
+		Fingerprint: fingerprint,
+		Machine:     "hosted-worker",
+		ForceParse:  true,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, dbPath+"#conv-001", outcome.Results[0].Result.Session.File.Path)
+	assert.Equal(t, "forge:conv-001", outcome.Results[0].Result.Session.ID)
+
+	_, _, err = ResolveRawSnapshotSessions(t.Context(), provider, SourceRef{
+		Provider: AgentForge, Key: ForgeDBFilename,
+	})
+	assert.ErrorIs(t, err, ErrInvalidRawCapturePlan,
+		"a source without provider-owned raw state must not fan out")
+}
+
+func TestResolveRawSnapshotSessionsLeavesFileShapedProvidersAlone(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "session.jsonl"), []byte("{}\n"), 0o600,
+	))
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{dir}})
+	require.True(t, ok)
+
+	sessions, supported, err := ResolveRawSnapshotSessions(t.Context(), provider, SourceRef{
+		Provider: AgentClaude, Key: "session.jsonl",
+	})
+
+	require.NoError(t, err)
+	assert.False(t, supported)
+	assert.Empty(t, sessions)
 }
 
 func TestPiebaldProviderSourceMethodsAndParse(t *testing.T) {
@@ -655,4 +727,101 @@ func seedPiebaldProviderBasicChat(t *testing.T, dbPath string) {
 		 (id, parent_chat_id, role, model, created_at, updated_at, status, finish_reason)
 		 VALUES (101, 42, 'assistant', 'claude-test', '2026-05-01T10:00:02Z', '2026-05-01T10:00:03Z', 'completed', 'end_turn')`)
 	seedPiebaldTextPart(t, dbPath, 201, 101, 0, "I fixed it", false)
+}
+
+func TestDBBackedSQLiteReadModes(t *testing.T) {
+	for _, agent := range []AgentType{AgentGoose, AgentZCode, AgentForge, AgentPiebald, AgentWarp} {
+		for _, stableSnapshot := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stable=%t", agent, stableSnapshot), func(t *testing.T) {
+				var database *sql.DB
+				var dbPath string
+				var insert func()
+				sessionID := "wal-session"
+				switch agent {
+				case AgentGoose:
+					fixture := newGooseTestFixture(t)
+					database, dbPath = fixture.database, fixture.dbPath
+					insert = func() {
+						fixture.insertSession(t, "wal-session", "WAL session", "user", "")
+						fixture.insertMessage(t, "wal-session", "user", `[{"type":"text","text":"WAL session"}]`, 1700000000)
+					}
+				case AgentZCode:
+					fixture := newZCodeTestFixture(t)
+					database, dbPath = fixture.database, fixture.DBPath
+					insert = func() {
+						fixture.insertSession(t, "wal-session", "/work/app", "WAL session",
+							1700000000, 1700000001, "", "")
+						fixture.insertMessage(t, "m1", "wal-session", 1700000000, `{"role":"user"}`)
+						fixture.insertPart(t, "p1", "m1", "wal-session", `{"type":"text","text":"WAL session"}`)
+					}
+				case AgentForge:
+					var seeder *ForgeSeeder
+					dbPath, seeder, database = newForgeTestDB(t)
+					insert = func() {
+						seeder.AddConversation("wal-session", "WAL session", 1,
+							`{"messages":[{"message":{"text":{"role":"User","content":"WAL session"}}}]}`,
+							"2026-05-01T10:00:00Z", "2026-05-01T10:01:00Z", "")
+					}
+				case AgentWarp:
+					var seeder *WarpSeeder
+					dbPath, seeder, database = newWarpTestDB(t)
+					insert = func() {
+						seeder.AddConversation("wal-session", `{}`, "2026-05-01 10:01:00")
+						seeder.AddExchange("ex-1", "wal-session", "2026-05-01 10:00:00",
+							`[{"Query":{"text":"WAL session","context":[]}}]`, "/work/app", `"Completed"`, "")
+					}
+				case AgentPiebald:
+					dbPath = newPiebaldTestDB(t)
+					var err error
+					database, err = sql.Open("sqlite3", dbPath)
+					require.NoError(t, err)
+					sessionID = "42"
+					insert = func() {
+						execPiebaldTestSQL(t, dbPath, `INSERT INTO chats
+                            (id, title, created_at, updated_at, is_deleted, message_count, current_directory)
+                            VALUES (42, 'WAL session', '2026-05-01T10:00:00Z', '2026-05-01T10:01:00Z', 0, 1, '/work/app')`)
+						execPiebaldTestSQL(t, dbPath, `INSERT INTO messages
+                            (id, parent_chat_id, role, model, created_at, updated_at, status)
+                            VALUES (100, 42, 'user', '', '2026-05-01T10:00:00Z', '2026-05-01T10:01:00Z', 'completed')`)
+						seedPiebaldTextPart(t, dbPath, 200, 100, 0, "WAL session", false)
+					}
+				}
+				t.Cleanup(func() { require.NoError(t, database.Close()) })
+				_, err := database.Exec("PRAGMA journal_mode=WAL")
+				require.NoError(t, err)
+				insert()
+				root := filepath.Dir(dbPath)
+				if stableSnapshot {
+					// Closing checkpoints the WAL, leaving a self-contained database
+					// with the WAL header retained, as an online backup does.
+					require.NoError(t, database.Close())
+					require.NoError(t, os.Chmod(dbPath, 0o400))
+					require.NoError(t, os.Chmod(root, 0o500))
+					t.Cleanup(func() { require.NoError(t, os.Chmod(root, 0o700)) })
+				}
+				provider, ok := NewProvider(agent, ProviderConfig{
+					Roots: []string{root}, StableSourceSnapshots: stableSnapshot,
+				})
+				require.True(t, ok)
+				discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+				require.NoError(t, err)
+				require.Len(t, discovery.Sources, 1)
+				sources, supported, err := ResolveRawSnapshotSessions(t.Context(), provider, discovery.Sources[0])
+				require.NoError(t, err)
+				require.True(t, supported)
+				require.Len(t, sources, 1)
+				fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+				require.NoError(t, err)
+				outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], Fingerprint: fingerprint})
+				require.NoError(t, err)
+				require.Len(t, outcome.Results, 1)
+				assert.Equal(t, string(agent)+":"+sessionID, outcome.Results[0].Result.Session.ID)
+				assert.Equal(t, "WAL session", outcome.Results[0].Result.Session.FirstMessage)
+				// Goose's ordinary discovery also reads watcher watermarks.
+				sources, err = provider.Discover(t.Context())
+				require.NoError(t, err)
+				assert.Len(t, sources, 1)
+			})
+		}
+	}
 }

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -389,7 +390,7 @@ func parseKimiSessionWithFallbackModel(
 						ToolName:  fnName,
 						Category:  NormalizeToolCategory(fnName),
 						InputJSON: fnArgs,
-						SkillName: inferToolSkillName(
+						SkillName: inferToolSkillName(context.Background(),
 							fnName, fnArgs,
 						),
 					}
@@ -607,7 +608,7 @@ func parseKimiSessionWithFallbackModel(
 				ToolName:  fnName,
 				Category:  NormalizeToolCategory(fnName),
 				InputJSON: fnArgs,
-				SkillName: inferToolSkillName(
+				SkillName: inferToolSkillName(context.Background(),
 					fnName, fnArgs,
 				),
 			}

@@ -12,6 +12,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -323,7 +324,7 @@ func parsePoolsideSession(
 				// Extract skill name from skill tool calls.
 				// For other tools, infer from SKILL.md references in read/shell.
 				var skillName string
-				skillName = inferToolSkillName(name, inputJSON)
+				skillName = inferToolSkillName(context.Background(), name, inputJSON)
 				if name == "skill" && skillName == "" {
 					skillName = gjson.Get(inputJSON, "skill").Str
 					if skillName == "" {

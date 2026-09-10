@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -214,6 +214,112 @@ func TestZCodeParsesReportedIntegerTimestamps(t *testing.T) {
 	assert.Equal(t, int64(1783352401000000000), outcome.Results[0].Result.Session.StartedAt.UnixNano())
 	assert.Equal(t, int64(1783352700000000000), outcome.Results[0].Result.Session.EndedAt.UnixNano())
 	assert.Equal(t, int64(1783352700000000000), outcome.Results[0].Result.Session.File.Mtime)
+}
+
+func TestZCodeProviderFindsRawDatabaseInDirectRoot(t *testing.T) {
+	// A materialized raw snapshot places db.sqlite directly inside the given
+	// root, so stable-snapshot root normalization must accept that layout
+	// instead of always appending a "db" child.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, ZCodeDBName), []byte("sqlite\n"), 0o600,
+	))
+	provider, ok := NewProvider(AgentZCode, ProviderConfig{
+		Roots:                 []string{dir},
+		StableSourceSnapshots: true,
+	})
+	require.True(t, ok)
+
+	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+
+	require.NoError(t, err)
+	require.True(t, discovery.Complete)
+	require.Len(t, discovery.Sources, 1)
+	assert.Equal(t, ZCodeDBName, discovery.Sources[0].Key)
+	assert.Equal(t, filepath.Join(dir, ZCodeDBName), discovery.Sources[0].DisplayPath)
+}
+
+func TestZCodeDiscoveryPreservesSessionsWhenUsageTableCorrupt(t *testing.T) {
+	fixture := newZCodeTestFixture(t)
+	fixture.insertSession(t, "readable", "/work/app", "Readable session",
+		1700000000, 1700000001, "", "")
+	// Keep the producer schema and session data intact while damaging the
+	// usage table's page. Discovery must retain session identities; the usage
+	// failure belongs to parsing each source, as in ordinary local sync.
+	var page, pageSize int
+	require.NoError(t, fixture.database.QueryRow(
+		"SELECT rootpage FROM sqlite_schema WHERE name = 'model_usage'",
+	).Scan(&page))
+	require.NoError(t, fixture.database.QueryRow("PRAGMA page_size").Scan(&pageSize))
+	require.NoError(t, fixture.database.Close())
+	contents, err := os.ReadFile(fixture.DBPath)
+	require.NoError(t, err)
+	contents[(page-1)*pageSize] = 0
+	require.NoError(t, os.WriteFile(fixture.DBPath, contents, 0o600))
+
+	provider, ok := NewProvider(AgentZCode, ProviderConfig{Roots: []string{fixture.CLIRoot}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, fixture.DBPath+"#readable", sources[0].DisplayPath)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	assert.NotZero(t, fingerprint.MTimeNS)
+	_, err = provider.Parse(t.Context(), ParseRequest{Source: sources[0], Fingerprint: fingerprint})
+	var sqliteErr sqlite3.Error
+	require.ErrorAs(t, err, &sqliteErr)
+	assert.Equal(t, sqlite3.ErrCorrupt, sqliteErr.Code)
+}
+
+func TestZCodeConfiguredRootKeepsEstablishedDBLayoutPrecedence(t *testing.T) {
+	// A configured root that carries both a stray top-level db.sqlite and the
+	// established db/db.sqlite layout must keep resolving to db/db.sqlite:
+	// direct-root acceptance exists only for hosted stable snapshots.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "db"), 0o755))
+	directPath := filepath.Join(root, ZCodeDBName)
+	establishedPath := filepath.Join(root, "db", ZCodeDBName)
+	require.NoError(t, os.WriteFile(directPath, []byte("direct"), 0o600))
+	db, err := sql.Open("sqlite3", establishedPath)
+	require.NoError(t, err)
+	_, err = db.Exec(zcodeTestSchema)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO session (id, project_id, workspace_id, directory, title,
+			time_created, time_updated)
+		VALUES ('session-001', NULL, NULL, '/work/app', 'Established',
+			'2026-07-06T13:00:01Z', '2026-07-06T13:05:00Z')`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	provider, ok := NewProvider(AgentZCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	sources, err := provider.Discover(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: sources[0], Machine: "devbox",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "zcode:session-001", outcome.Results[0].Result.Session.ID,
+		"discovery must use the established db/db.sqlite, not the stray top-level copy")
+}
+
+func TestZCodeConfiguredRootWithoutDBDirKeepsAppendingDB(t *testing.T) {
+	// Without the stable-snapshot flag a root that only carries a stray
+	// top-level database keeps the historical mapping onto root/db, so local
+	// discovery behavior is unchanged by the hosted direct-root support.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ZCodeDBName), []byte("not a sqlite database"), 0o600,
+	))
+
+	assert.Equal(t, filepath.Join(root, "db"), normalizeZCodeRoot(root, false))
+	assert.Equal(t, root, normalizeZCodeRoot(root, true))
 }
 
 func TestZCodeProviderSourceMethodsAndParse(t *testing.T) {
@@ -530,7 +636,7 @@ func TestZCodeIngestsTranscriptMessages(t *testing.T) {
 		`{"type":"text","text":"I'll inspect the auth flow."}`,
 	)
 
-	result, err := parseZCodeSession(fixture.DBPath, "session-transcript", "devbox")
+	result, err := parseZCodeSession(t.Context(), fixture.DBPath, "session-transcript", "devbox", false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, 2, result.Session.MessageCount)
@@ -590,7 +696,7 @@ func TestZCodeToolCallsAndResults(t *testing.T) {
 		`{"type":"tool_result","tool_use_id":"call-read","content":"package auth"}`,
 	)
 
-	result, err := parseZCodeSession(fixture.DBPath, "session-tools", "devbox")
+	result, err := parseZCodeSession(t.Context(), fixture.DBPath, "session-tools", "devbox", false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, result.Messages, 2)
@@ -670,7 +776,7 @@ func TestZCodeOpenCodeStyleReasoningAndToolParts(t *testing.T) {
 		`{"type":"tool","tool":"Read","callID":"call-read","state":{"input":{"file_path":"auth.go"},"output":"package auth"}}`,
 	)
 
-	result, err := parseZCodeSession(fixture.DBPath, "session-opencode-parts", "devbox")
+	result, err := parseZCodeSession(t.Context(), fixture.DBPath, "session-opencode-parts", "devbox", false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, result.Messages, 2)
@@ -723,7 +829,7 @@ func TestZCodeOpenCodeStyleFailedToolPart(t *testing.T) {
 		`{"type":"tool","tool":"Read","callID":"call-read","state":{"input":{"file_path":"auth.go"},"error":"permission denied"}}`,
 	)
 
-	result, err := parseZCodeSession(fixture.DBPath, "session-tool-error", "devbox")
+	result, err := parseZCodeSession(t.Context(), fixture.DBPath, "session-tool-error", "devbox", false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, result.Messages, 1)
@@ -965,7 +1071,7 @@ func TestZCodeMissingTranscriptTables(t *testing.T) {
 		2,
 	)
 
-	result, err := parseZCodeSession(fixture.DBPath, "session-no-transcript", "devbox")
+	result, err := parseZCodeSession(t.Context(), fixture.DBPath, "session-no-transcript", "devbox", false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, 0, result.Session.MessageCount)
@@ -1025,7 +1131,7 @@ func TestZCodeSystemMessagesAreMarkedSystem(t *testing.T) {
 		`{"type":"text","text":"You are a code reviewer."}`,
 	)
 
-	result, err := parseZCodeSession(fixture.DBPath, "session-system", "devbox")
+	result, err := parseZCodeSession(t.Context(), fixture.DBPath, "session-system", "devbox", false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, result.Messages, 1)

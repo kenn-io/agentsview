@@ -3,6 +3,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -362,7 +363,7 @@ func extractMessagesIflow(entries []dagEntryIflow) (
 
 		content := gjson.Get(e.line, "message.content")
 		text, _, hasThinking, hasToolUse, tcs, trs :=
-			ExtractTextContent(content)
+			ExtractTextContent(context.Background(), content)
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content

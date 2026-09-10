@@ -182,9 +182,8 @@ func TestEvenerProviderRawCaptureNamesOnlyTranscriptAndMetadata(t *testing.T) {
 	assert.Equal(t, root, plan.CaptureRoot)
 	assert.Equal(t, "projects/demo/sessions/good.transcript.jsonl", plan.Entries[0].Path)
 	assert.Equal(t, "projects/demo/sessions/good.meta.json", plan.Entries[1].Path)
-	for _, entry := range plan.Entries {
-		assert.False(t, entry.Appendable)
-	}
+	assert.True(t, plan.Entries[0].Appendable)
+	assert.False(t, plan.Entries[1].Appendable)
 	require.NoError(t, os.Remove(meta))
 	plan, err = planner.PlanRawCapture(context.Background(), sources[0])
 	require.NoError(t, err)

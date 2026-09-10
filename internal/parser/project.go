@@ -61,9 +61,9 @@ var allowProtectedPathProbes atomic.Bool
 
 type filesystemProjectDiscoveryKey struct{}
 
-// WithoutFilesystemProjectDiscovery returns a context that limits project
-// attribution to transcript metadata and lexical path rules. Bounded importers
-// use it so recorded working directories are never touched on the local host.
+// WithoutFilesystemProjectDiscovery limits project and skill attribution to
+// transcript metadata and lexical path rules. Bounded importers use it so
+// captured paths never trigger local Git discovery or skill frontmatter reads.
 func WithoutFilesystemProjectDiscovery(ctx context.Context) context.Context {
 	return context.WithValue(ctx, filesystemProjectDiscoveryKey{}, true)
 }

@@ -45,6 +45,12 @@ The tracked delivery sequence and production acceptance criteria live in
 | Server derivation      | Not available | Accepted generations are not yet parsed into PostgreSQL sessions or embeddings                                               |
 | Operations and cutover | Not available | Retention, garbage collection, disaster rebuilds, and migration from `pg push` remain future work                            |
 
+The server parse-worker foundation now includes fenced PostgreSQL job leases,
+verified source materialization, provider parsing, retry handling, and a
+projection interface. It is an internal library: `pg serve` does not start a
+worker, and a PostgreSQL session-projection implementation is still pending.
+Hosted browsing and embeddings therefore continue to require `pg push`.
+
 The broader delivery issue remains open because public enrollment, hosted
 session derivation, and production lifecycle controls are not finished.
 
@@ -79,7 +85,23 @@ doing so intentionally creates two watchers over the same provider roots.
 `agentsview pg serve` registers the raw-sync routes when its PostgreSQL role can
 write every raw-sync table and the ingest-job sequence. A read-only role keeps
 serving the normal PostgreSQL-backed UI and API without these runtime routes.
-There is no separate raw-sync configuration switch.
+There is no separate raw-sync configuration switch. When requirements are
+missing, startup logs `raw-sync routes disabled; missing requirements:` followed
+by the exact missing table privileges, sequence access, or read-only transaction
+setting.
+
+Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
+`raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.
+Manifest commits retire the previous source head's pending parse job. As the
+schema owner, grant the additional privileges and restart `pg serve`:
+
+```sql
+GRANT SELECT, UPDATE ON agentsview.raw_ingest_jobs TO raw_sync_runtime;
+```
+
+Replace `agentsview` and `raw_sync_runtime` with your schema and runtime role.
+Until these grants are applied, the normal session UI continues to work, but
+raw-sync HTTP routes are omitted.
 
 The implemented routes are:
 
@@ -132,7 +154,7 @@ The PostgreSQL acceptance transaction then:
 1. records the manifest, file entries, and ordered object references;
 1. assigns a monotonically increasing generation and durable receipt;
 1. creates the corresponding parse job; and
-1. advances the source head.
+1. advances the source head and retires its previous pending parse job.
 
 Repeating the same capture returns its existing receipt. Reusing a capture
 identity for different content or committing against a stale parent fails

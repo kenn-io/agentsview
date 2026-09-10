@@ -89,6 +89,26 @@ func TestFinalizeAndAcknowledgeOfflineChainInOrder(t *testing.T) {
 	assert.True(t, replayed.Replayed)
 }
 
+func TestFinalizeNextManifestCarriesEntryModTime(t *testing.T) {
+	store, root := openOutboxTestStore(t, 1<<20)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	ref := rawsync.ObjectRef{SHA256: validCheckpointDigest(21), Length: 3}
+	installOutboxTestObject(t, store, ref, []byte("abc"))
+	generation := testCapturedGeneration(4, root, "", ref)
+	require.Equal(t, int64(4), generation.Entries[0].ModTimeNS)
+	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
+	require.NoError(t, err)
+	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+
+	manifest, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
+
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, manifest.Entries, 1)
+	assert.Equal(t, int64(4), manifest.Entries[0].ModTimeNS,
+		"finalized manifests must retain each captured file's mod time")
+}
+
 func TestFinalizeNextManifestOrdersExactSecondBeforeLaterFraction(t *testing.T) {
 	store, root := openOutboxTestStore(t, 1<<20)
 	require.NoError(t, store.SetDevice(t.Context(), "device-a"))

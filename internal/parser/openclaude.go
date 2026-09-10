@@ -481,7 +481,7 @@ func parseOpenClaudeSession(
 		}
 
 		if isOpenClaudeCompactBoundary(line) {
-			content, _, _, _, _, _ := ExtractTextContent(
+			content, _, _, _, _, _ := ExtractTextContent(context.Background(),
 				gjson.Get(line, "message.content"),
 			)
 			messages = append(messages, ParsedMessage{
@@ -517,7 +517,7 @@ func parseOpenClaudeSession(
 
 		content := gjson.Get(line, "message.content")
 		text, thinkingText, hasThinking, hasToolUse, toolCalls, toolResults :=
-			ExtractTextContent(content)
+			ExtractTextContent(context.Background(), content)
 		if strings.TrimSpace(text) == "" && len(toolResults) == 0 &&
 			len(toolCalls) == 0 && role != "system" {
 			continue
@@ -688,7 +688,7 @@ func extractOpenClaudeQueuedCommand(line string) (claudeQueuedCommand, bool) {
 		return claudeQueuedCommand{}, false
 	}
 
-	prompt, _, _, _, _, _ := ExtractTextContent(attachment.Get("prompt"))
+	prompt, _, _, _, _, _ := ExtractTextContent(context.Background(), attachment.Get("prompt"))
 	if strings.TrimSpace(prompt) == "" {
 		return claudeQueuedCommand{}, false
 	}

@@ -65,12 +65,13 @@ type gooseUsageRow struct {
 func forEachGooseSessionMeta(
 	ctx context.Context,
 	dbPath string,
+	stableSnapshot bool,
 	yield func(dbBackedSessionMeta) error,
 ) error {
 	if !IsRegularFile(dbPath) {
 		return nil
 	}
-	db, err := openGooseDB(dbPath)
+	db, err := openGooseDB(dbPath, stableSnapshot)
 	if err != nil {
 		return err
 	}
@@ -94,7 +95,7 @@ func forEachGooseSessionMeta(
 		if err != nil {
 			return err
 		}
-		mtime, err := gooseSessionFileMtime(dbPath, db, hasUsage, row)
+		mtime, err := gooseSessionFileMtime(ctx, dbPath, db, hasUsage, row)
 		if err != nil {
 			return err
 		}
@@ -111,12 +112,12 @@ func forEachGooseSessionMeta(
 }
 
 func gooseSessionMeta(
-	ctx context.Context, dbPath, sessionID string,
+	ctx context.Context, dbPath, sessionID string, stableSnapshot bool,
 ) (dbBackedSessionMeta, bool, error) {
 	if !IsRegularFile(dbPath) {
 		return dbBackedSessionMeta{}, false, nil
 	}
-	db, err := openGooseDB(dbPath)
+	db, err := openGooseDB(dbPath, stableSnapshot)
 	if err != nil {
 		return dbBackedSessionMeta{}, false, err
 	}
@@ -129,7 +130,7 @@ func gooseSessionMeta(
 	if err != nil {
 		return dbBackedSessionMeta{}, false, err
 	}
-	mtime, err := gooseSessionFileMtime(dbPath, db, hasUsage, row)
+	mtime, err := gooseSessionFileMtime(ctx, dbPath, db, hasUsage, row)
 	if err != nil {
 		return dbBackedSessionMeta{}, false, err
 	}
@@ -141,21 +142,21 @@ func gooseSessionMeta(
 }
 
 func parseGooseSession(
-	dbPath, sessionID, machine string,
+	ctx context.Context, dbPath, sessionID, machine string, stableSnapshot bool,
 ) (*ParseResult, error) {
-	db, err := openGooseDB(dbPath)
+	db, err := openGooseDB(dbPath, stableSnapshot)
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
-	row, found, err := loadGooseSessionRow(context.Background(), db, sessionID)
+	row, found, err := loadGooseSessionRow(ctx, db, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
 		return nil, sql.ErrNoRows
 	}
-	result, err := buildGooseParseResult(dbPath, machine, row, db)
+	result, err := buildGooseParseResult(ctx, dbPath, machine, row, db)
 	if err != nil {
 		return nil, err
 	}
@@ -308,9 +309,9 @@ func gooseNullableColumn(columns map[string]bool, name string) string {
 }
 
 func buildGooseParseResult(
-	dbPath, machine string, row gooseSessionRow, db *sql.DB,
+	ctx context.Context, dbPath, machine string, row gooseSessionRow, db *sql.DB,
 ) (ParseResult, error) {
-	messages, err := loadGooseMessages(db, row.id, gooseSessionModel(row))
+	messages, err := loadGooseMessages(ctx, db, row.id, gooseSessionModel(row))
 	if err != nil {
 		return ParseResult{}, err
 	}
@@ -339,7 +340,7 @@ func buildGooseParseResult(
 	if firstMessage == "" {
 		firstMessage = truncate(strings.ReplaceAll(sessionName, "\n", " "), 300)
 	}
-	project := ExtractProjectFromCwd(row.workingDir)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, row.workingDir, "")
 	if project == "" {
 		if projectID := strings.TrimSpace(row.projectID); projectID != "" {
 			project = "project-" + projectID
@@ -354,15 +355,15 @@ func buildGooseParseResult(
 			userMessages++
 		}
 	}
-	schemaVersion, err := gooseSchemaVersion(context.Background(), db)
+	schemaVersion, err := gooseSchemaVersion(ctx, db)
 	if err != nil {
 		return ParseResult{}, err
 	}
-	hasUsage, err := gooseTableExists(context.Background(), db, "usage_ledger")
+	hasUsage, err := gooseTableExists(ctx, db, "usage_ledger")
 	if err != nil {
 		return ParseResult{}, err
 	}
-	mtime, err := gooseSessionFileMtime(dbPath, db, hasUsage, row)
+	mtime, err := gooseSessionFileMtime(ctx, dbPath, db, hasUsage, row)
 	if err != nil {
 		return ParseResult{}, err
 	}
@@ -390,7 +391,7 @@ func buildGooseParseResult(
 		session.ParentSessionID = "goose:" + parentID
 		session.RelationshipType = RelSubagent
 	}
-	usageEvents, err := listGooseUsageEvents(db, row, hasUsage, startedAt, endedAt)
+	usageEvents, err := listGooseUsageEvents(ctx, db, row, hasUsage, startedAt, endedAt)
 	if err != nil {
 		return ParseResult{}, err
 	}
@@ -408,9 +409,9 @@ func buildGooseParseResult(
 }
 
 func loadGooseMessages(
-	db *sql.DB, sessionID, sessionModel string,
+	ctx context.Context, db *sql.DB, sessionID, sessionModel string,
 ) ([]ParsedMessage, error) {
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT id,
 		       COALESCE(role, ''),
 		       COALESCE(content_json, '[]'),
@@ -434,7 +435,7 @@ func loadGooseMessages(
 		); err != nil {
 			return nil, fmt.Errorf("scanning goose message row: %w", err)
 		}
-		message, ok, err := buildGooseMessage(len(parsed), row, sessionModel)
+		message, ok, err := buildGooseMessage(ctx, len(parsed), row, sessionModel)
 		if err != nil {
 			return nil, err
 		}
@@ -449,7 +450,7 @@ func loadGooseMessages(
 }
 
 func buildGooseMessage(
-	ordinal int, row gooseMessageRow, sessionModel string,
+	ctx context.Context, ordinal int, row gooseMessageRow, sessionModel string,
 ) (ParsedMessage, bool, error) {
 	if visible := gjson.Get(row.metadataJSON, "userVisible"); visible.Exists() && !visible.Bool() {
 		return ParsedMessage{}, false, nil
@@ -490,7 +491,7 @@ func buildGooseMessage(
 			message.HasThinking = true
 		case "toolRequest", "frontendToolRequest":
 			message.HasToolUse = true
-			if call, ok := gooseParseToolCall(block); ok {
+			if call, ok := gooseParseToolCall(ctx, block); ok {
 				message.ToolCalls = append(message.ToolCalls, call)
 			}
 		case "toolResponse":
@@ -523,7 +524,7 @@ func normalizeGooseRole(role string) (RoleType, bool) {
 	}
 }
 
-func gooseParseToolCall(block gjson.Result) (ParsedToolCall, bool) {
+func gooseParseToolCall(ctx context.Context, block gjson.Result) (ParsedToolCall, bool) {
 	toolUseID := strings.TrimSpace(block.Get("id").Str)
 	envelope := block.Get("toolCall")
 	if toolUseID == "" || envelope.Get("status").Str != "success" {
@@ -551,7 +552,7 @@ func gooseParseToolCall(block gjson.Result) (ParsedToolCall, bool) {
 			call.SkillName = arguments.Get("name").Str
 		}
 	} else {
-		call.SkillName = inferToolSkillName(name, inputJSON)
+		call.SkillName = inferToolSkillName(ctx, name, inputJSON)
 	}
 	return call, true
 }
@@ -632,6 +633,7 @@ func gooseSessionModel(row gooseSessionRow) string {
 }
 
 func listGooseUsageEvents(
+	ctx context.Context,
 	db *sql.DB,
 	row gooseSessionRow,
 	hasLedger bool,
@@ -640,7 +642,7 @@ func listGooseUsageEvents(
 	if !hasLedger {
 		return gooseAggregateUsageFallback(row, startedAt, endedAt), nil
 	}
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT id,
 		       session_id,
 		       COALESCE(created_timestamp, 0),
@@ -826,12 +828,13 @@ func gooseMessageTime(createdTimestamp int64, fallback string) time.Time {
 }
 
 func gooseSessionFileMtime(
+	ctx context.Context,
 	dbPath string, db *sql.DB, hasUsage bool, row gooseSessionRow,
 ) (int64, error) {
 	maxTime := maxGooseTime(gooseParseTime(row.updatedAt), gooseParseTime(row.createdAt))
 	var messageTimestamp sql.NullInt64
-	if err := db.QueryRow(
-		"SELECT MAX(created_timestamp) FROM messages WHERE session_id = ?", row.id,
+	if err := db.QueryRowContext(
+		ctx, "SELECT MAX(created_timestamp) FROM messages WHERE session_id = ?", row.id,
 	).Scan(&messageTimestamp); err != nil {
 		return 0, fmt.Errorf("reading goose session %s message mtime: %w", row.id, err)
 	}
@@ -840,8 +843,8 @@ func gooseSessionFileMtime(
 	}
 	if hasUsage {
 		var usageTimestamp sql.NullInt64
-		if err := db.QueryRow(
-			"SELECT MAX(created_timestamp) FROM usage_ledger WHERE session_id = ?", row.id,
+		if err := db.QueryRowContext(
+			ctx, "SELECT MAX(created_timestamp) FROM usage_ledger WHERE session_id = ?", row.id,
 		).Scan(&usageTimestamp); err != nil {
 			return 0, fmt.Errorf("reading goose session %s usage mtime: %w", row.id, err)
 		}
@@ -867,9 +870,9 @@ func maxGooseTime(values ...time.Time) time.Time {
 }
 
 func gooseSessionFingerprint(
-	ctx context.Context, dbPath, sessionID string,
+	ctx context.Context, dbPath, sessionID string, stableSnapshot bool,
 ) (string, bool, error) {
-	db, err := openGooseDB(dbPath)
+	db, err := openGooseDB(dbPath, stableSnapshot)
 	if err != nil {
 		return "", false, err
 	}

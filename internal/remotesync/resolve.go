@@ -199,7 +199,11 @@ func resolveFileScopedTarget(agent parser.AgentType, root string) (string, []str
 			for _, entry := range plan.Entries {
 				// Capture validation canonicalizes paths; retain the configured
 				// root spelling used by the remote target's authorization scope.
-				localPath := filepath.Join(root, filepath.FromSlash(entry.Path))
+				rel, err := filepath.Rel(plan.ConfiguredRoot, entry.LocalPath)
+				if err != nil {
+					return "", nil, err
+				}
+				localPath := filepath.Join(root, rel)
 				regular, err := regularCuratedFile(root, localPath)
 				if err != nil {
 					return "", nil, err

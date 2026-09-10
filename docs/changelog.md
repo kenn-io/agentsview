@@ -32,6 +32,23 @@ description: Release history for AgentsView
   sync to apply the new category. A machine that only runs `agentsview usage`
   needs one `agentsview sync` to pick up subagent transcripts that already
   exist.
+
+- Hosted raw-sync operators now get a startup message identifying missing
+  database privileges when raw-sync routes are disabled. Existing least-privilege
+  runtime roles need `SELECT` and `UPDATE` on `raw_ingest_jobs`, in addition to
+  their existing grants. The internal hosted parse-worker foundation adds job
+  leases, source reconstruction, parsing, and retries; server startup and
+  PostgreSQL session projection are still pending. (#1607)
+
+- Hosted replay keeps skill-name inference within recorded transcript paths,
+  without reading worker-local `SKILL.md` files or cached names from local
+  parses. It also accepts Evener captures from either a home directory or a
+  directly configured sessions directory and preserves the parent history
+  needed to avoid duplicate fork messages. (#1607)
+
+- Hosted Codex forks retain parents from other configured directories, avoiding
+  duplicate parent messages during replay. (#1607)
+
 - Discover Pi sessions stored under `PI_CODING_AGENT_DIR` or
   `PI_CODING_AGENT_SESSION_DIR`, locally and over SSH. Existing `PI_DIR`
   overrides retain priority. (#1681)

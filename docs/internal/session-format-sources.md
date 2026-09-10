@@ -263,19 +263,24 @@ add an archived or maintained mirror without replacing the original identity.
   transcript carries no `sessionKind` — the writer re-stamps the current
   process's kind on each persisted line, overwriting the copied value, so the
   bg marker reflects the forking process and cannot be inherited through
-  replayed entries. Evidence remains `no-public-source`. Reverified 2026-08-16
-  with Claude Code 2.1.233 using a controlled `claude -p --session-id <uuid>`
-  probe under an isolated `CLAUDE_CONFIG_DIR`. Before the deliberately bounded
-  probe was terminated during its API retry, Claude had created the exact UUID
-  transcript under `projects/<sanitized-cwd>/`. A working directory containing
-  spaces, `.`, `_`, `@`, and separators confirmed that the producer preserves
-  ASCII letters, digits, and `-` and replaces every other character with `-`.
-  The transcript existed before process exit, so an interrupted wrapper can
-  retain exact recovery evidence. One-shot capture copies the exact root and
-  bounded subagent tree after an unchanged-file interval, requires every
-  persisted child reference to have a captured transcript, and includes every
-  captured subagent file even when interruption prevented its link record from
-  being flushed. Parser termination remains separate assurance; an interrupted
+  replayed entries. Evidence remains `no-public-source`. Reverified 2026-09-10
+  against local parser fixtures: equal-length replay candidates with the same
+  background flag leave lineage unresolved when their complete UUID sets
+  differ. Identical sets elect the smallest stem, retaining one copy across
+  three background transcripts. An interactive original still wins a tie with
+  a background sibling. Reverified 2026-08-16 with Claude Code 2.1.233 using a
+  controlled `claude -p --session-id <uuid>` probe under an isolated
+  `CLAUDE_CONFIG_DIR`. Before the deliberately bounded probe was terminated
+  during its API retry, Claude had created the exact UUID transcript under
+  `projects/<sanitized-cwd>/`. A working directory containing spaces, `.`,
+  `_`, `@`, and separators confirmed that the producer preserves ASCII
+  letters, digits, and `-` and replaces every other character with `-`. The
+  transcript existed before process exit, so an interrupted wrapper can retain
+  exact recovery evidence. One-shot capture copies the exact root and bounded
+  subagent tree after an unchanged-file interval, requires every persisted
+  child reference to have a captured transcript, and includes every captured
+  subagent file even when interruption prevented its link record from being
+  flushed. Parser termination remains separate assurance; an interrupted
   transcript can still contain usable token records. Because an unparseable
   middle record may hide usage, one-shot capture marks assurance partial when
   any included session reports parser-malformed lines. One-shot correlation
@@ -286,22 +291,26 @@ add an archived or maintained mirror without replacing the original identity.
   child-start failure is persisted as a terminal capture state: later
   `capture report` retries do not discover or attribute a matching transcript
   for an execution that never started. Reverified 2026-08-21 that recovery
-  refuses to seal when the wrapper did not durably record execution completion,
-  even if the transcript is temporarily quiescent and receives more usage
-  later. Reverified 2026-08-21 that exact token projection compares canonical
-  output and context coverage separately for every included session, while
-  crediting a deduplicated snapshot to each source session that contained its
-  equivalent row. It also requires the materialized breakdown length to match
-  its recorded count. A larger context row from another session therefore
-  cannot hide missing delegated input or cache usage. Reverified 2026-08-22
-  that an incomplete category breakdown, malformed included transcript, or
-  unfinished included session withholds computed or mixed cost;
-  provider-reported cost remains authoritative. Reverified 2026-08-27 that
-  raw-capture membership mirrors persisted tool output resolution: it includes
-  regular files at any depth in the session's `tool-results/` directory and,
-  for subagents, the enclosing parent session's `tool-results/` directory.
-  These immutable companions are captured with the appendable transcript so a
-  reconstructed tree preserves the parser's physical inputs.
+  refuses to seal when the wrapper did not durably record execution
+  completion, even if the transcript is temporarily quiescent and receives
+  more usage later. Reverified 2026-08-21 that exact token projection compares
+  canonical output and context coverage separately for every included session,
+  while crediting a deduplicated snapshot to each source session that
+  contained its equivalent row. It also requires the materialized breakdown
+  length to match its recorded count. A larger context row from another
+  session therefore cannot hide missing delegated input or cache usage.
+  Reverified 2026-08-22 that an incomplete category breakdown, malformed
+  included transcript, or unfinished included session withholds computed or
+  mixed cost; provider-reported cost remains authoritative. Reverified
+  2026-08-27 that raw-capture membership mirrors persisted tool output
+  resolution: it includes regular files at any depth in the session's
+  `tool-results/` directory and, for subagents, the enclosing parent session's
+  `tool-results/` directory. These immutable companions are captured with the
+  appendable transcript so a reconstructed tree preserves the parser's
+  physical inputs. Reverified 2026-09-10 that hosted tool parsing derives
+  skill names from recorded paths without consulting worker-local `SKILL.md`
+  frontmatter or the local parse cache; local parsing retains frontmatter
+  lookup. `TestHostedSkillInferenceKeepsNamesLexical` covers this boundary.
 
 ## OpenClaude (`openclaude`)
 
@@ -463,34 +472,51 @@ add an archived or maintained mirror without replacing the original identity.
   archive export and import. Reverified on 2026-09-07 with
   `TestRemoteCodexAliasTitleSurvivesArchiveImport`, which checks the imported
   title while another provider retains its own metadata configuration.
-  Metadata paths are resolved at configuration load and belong to provider
-  instances; imports do not change process-wide configuration. S3 imports list
-  the child's configured Codex root for its explicitly named parent and
-  materialize only that one parent beside the child. When the parent is not
-  yet available, the child remains visible but is stored below the current
-  data version so a later unchanged-object sync retries and corrects the
-  overcount. Reverified 2026-08-13 against the materialized-S3 parser-to-SQLite
-  path: the first missing-parent pass kept replayed content as retryable,
-  and the next pass fetched only the named parent and replaced it with
-  child-owned messages and usage. A readable parent with no turns resolves as
-  current, whether or not the child carries copied parent metadata. Reverified
-  2026-09-06 against the provider parse path with both metadata shapes when
-  integrating the single-pass retry gate with the turnless-parent fix from
-  #1578. An appended `session_meta` after an incremental-sync offset forces an
-  authoritative replacement of that derived session, because the metadata can
-  be the copied parent record that activates replay filtering. The original
-  parent session remains valid and is not reparsed. Reverified 2026-08-12
-  against locally observed multi-agent rollouts that replayed differently
-  shaped opaque turn ids before the first child-owned turn, and against the
-  pinned format sources; the pinned TUI is the evidenced `history.jsonl`
-  producer. No `append_entry` producer call exists under the pinned
-  `app-server` or `exec` trees, so this evidence does not establish IDE,
-  desktop, or `codex exec` activity-hint coverage. Locally observed Codex app
-  builds can write the same schema, but that is observational evidence rather
-  than a public compatibility guarantee. A missing `session_index.jsonl` is
-  verified as normal absence; read or scan failures remain unverified and
-  cannot earn persisted freshness trust, so a transient failure cannot pin a
-  stale stored title. Agentsview derives the hint path as
+  Reverified hosted replay on 2026-09-10 with
+  `TestProviderParserHostedCodexAliasHomeMetadata`: captured primary and alias
+  indexes merge by their original modification times, with later configured
+  homes winning ties. Missing indexes preserve the remaining aliases' logical
+  paths and precedence, including generations without a primary index.
+  `TestProviderParserHostedCodexSkillNameStaysLexical` also verifies that hosted
+  skill inference ignores worker-local frontmatter and cached local names. A
+  bare `SKILL.md` reference without a lexical skill name remains unnamed in
+  hosted replay. Metadata paths are resolved at configuration load and belong
+  to provider instances; imports do not change process-wide configuration. S3
+  imports list the child's configured Codex root for its explicitly named
+  parent and materialize only that one parent beside the child. When the
+  parent is not yet available, the child remains visible but is stored below
+  the current data version so a later unchanged-object sync retries and
+  corrects the overcount. Reverified 2026-08-13 against the materialized-S3
+  parser-to-SQLite path: the first missing-parent pass kept replayed content
+  as retryable, and the next pass fetched only the named parent and replaced
+  it with child-owned messages and usage. A readable parent with no turns
+  resolves as current, whether or not the child carries copied parent metadata.
+  Reverified 2026-09-06 against the provider parse path with both metadata
+  shapes when integrating the single-pass retry gate with the turnless-parent
+  fix from #1578. Reverified 2026-09-10 that raw capture also preserves an
+  orphaned child's full transcript when its named parent is unavailable,
+  matching local parsing. When available, the explicitly named parent travels
+  with the captured fork so hosted parsing applies the local replay boundary.
+  Reverified on 2026-09-10 with
+  `TestProviderParserHostedParseMatchesLocalCodexForkLineage`: parents in
+  other configured homes, archives, and custom roots also travel with the
+  child. Capture keeps local root precedence when roots contain differing
+  parent copies; hosted replay discovers the selected external parent in its
+  own flat root. An appended `session_meta` after an incremental-sync offset
+  forces an authoritative replacement of that derived session, because the
+  metadata can be the copied parent record that activates replay filtering.
+  The original parent session remains valid and is not reparsed. Reverified
+  2026-08-12 against locally observed multi-agent rollouts that replayed
+  differently shaped opaque turn ids before the first child-owned turn, and
+  against the pinned format sources; the pinned TUI is the evidenced
+  `history.jsonl` producer. No `append_entry` producer call exists under the
+  pinned `app-server` or `exec` trees, so this evidence does not establish
+  IDE, desktop, or `codex exec` activity-hint coverage. Locally observed Codex
+  app builds can write the same schema, but that is observational evidence
+  rather than a public compatibility guarantee. A missing
+  `session_index.jsonl` is verified as normal absence; read or scan failures
+  remain unverified and cannot earn persisted freshness trust, so a transient
+  failure cannot pin a stale stored title. Agentsview derives the hint path as
   `<configured-sessions-root>/../history.jsonl`; a custom sessions root
   without that sibling, or `HistoryPersistence::None`, degrades to ordinary
   watcher behavior, degraded-coverage polling when applicable, and the daily
@@ -1989,7 +2015,10 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   cached tokens. Although Forge domain data can discuss cost, Agentsview does
   not consume a direct persisted currency total from this store and instead
   catalog-prices normalized tokens.
-- **Agentsview:** `internal/parser/forge.go`.
+- **Agentsview:** `internal/parser/forge.go`. Reverified 2026-09-10 with
+  isolated SQLite fixtures: hosted WAL snapshots use immutable reads in
+  read-only materializations; live reads retain uncheckpointed WAL rows.
+  Producer schema and usage semantics are unchanged.
 
 ## Devin CLI (`devin`)
 
@@ -2062,7 +2091,10 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   cache-write, model, and service-tier data. The official analyzer derives
   price from those fields; it does not read a persisted provider USD total.
   Agentsview likewise normalizes the counters and catalog-prices the result.
-- **Agentsview:** `internal/parser/piebald.go`.
+- **Agentsview:** `internal/parser/piebald.go`. Reverified 2026-09-10 with
+  isolated SQLite fixtures: hosted WAL snapshots use immutable reads in
+  read-only materializations; live reads retain uncheckpointed WAL rows.
+  Producer schema and usage semantics are unchanged.
 
 ## Warp (`warp`)
 
@@ -2086,6 +2118,9 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   it reports them as session metrics and does not derive USD from them.
 
 - **Agentsview:** `internal/parser/warp.go` and `internal/parser/warp_paths.go`.
+  Reverified 2026-09-10 with isolated SQLite fixtures: hosted WAL snapshots
+  use immutable reads in read-only materializations; live reads retain
+  uncheckpointed WAL rows. Producer schema and usage semantics are unchanged.
 
 ## Positron (`positron`)
 
@@ -2191,7 +2226,17 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   usage events and derives monetary price from its catalog rather than a
   provider-reported USD value.
 - **Agentsview:** `internal/parser/zcode.go`; table and column semantics remain
-  reverse-engineered implementation evidence.
+  reverse-engineered implementation evidence. Rechecked 2026-09-10 against
+  isolated SQLite fixtures: stable WAL snapshots parse read-only, live WAL
+  rows remain visible, and a damaged usage-table page preserves session
+  discovery while parsing reports the per-session error. Cancellation still
+  aborts usage-mtime lookup. Hosted tool skill inference uses recorded path
+  names without reading worker-local frontmatter, as checked by
+  `TestHostedSkillInferenceKeepsNamesLexical`. Captured WAL fixtures also pass
+  through capture, object storage, PostgreSQL job leases, and the hosted
+  worker to its projection boundary in
+  `TestRawCapturedSourcesReachHostedWorker`. No producer schema change is
+  inferred.
 
 ## Goose (`goose`)
 
@@ -2232,6 +2277,13 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   `internal/parser/goose_provider.go`; the provider uses per-session content
   fingerprints and bounded SQLite row cursors for watcher events, while a
   periodic full reconciliation covers metadata-only edits and row deletes.
+  Rechecked 2026-09-10: the pinned session manager enables WAL, and a SQLite
+  backup retains its WAL header. Stable snapshots use `immutable=1` so the
+  read-only materialized directory needs no WAL/SHM writes. Live reads retain
+  `immutable=0`; isolated provider fixtures verify both paths. Reverified
+  2026-09-10 with `TestHostedSkillInferenceKeepsNamesLexical` that hosted tool
+  parsing derives skill names from recorded paths without reading worker-local
+  frontmatter; local parsing retains frontmatter lookup.
 
 ## Zed (`zed`)
 
@@ -2722,7 +2774,19 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   unchanged. Tool-result bodies are stored through the existing category
   filter, without an unfiltered copy in message text; result lengths remain
   available. SSH roots remain file-scoped when invalid filename encodings are
-  skipped.
+  skipped. Reverified 2026-09-10 with
+  `TestProviderParserHostedEvenerMatchesLocal` that captures from both home
+  and directly configured sessions roots replay with the local session
+  identity and messages. Capture plans retain the sessions directory in their
+  logical entry paths so hosted discovery sees the provider's layout, and
+  include the immediate parent transcript and metadata needed to filter copied
+  fork history. Missing or invalid parent evidence preserves the child's
+  history, matching local parsing. The pinned transcript writer appends framed
+  entries and resumes at EOF after trimming a partial tail (see the pinned
+  [transcript writer][evener-source-1]).
+  `TestCapturerEvenerLineageParentGrowthReusesFork` verifies incremental
+  parent capture with unchanged fork-object reuse; metadata remains
+  replaceable.
 
 ## Tau (`tau`)
 
@@ -2779,6 +2843,7 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   distinguish machines with identical root paths. No legacy Tau v1 conversion,
   native transfer, or index metadata synchronization is included.
 
+[evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
 [evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go
