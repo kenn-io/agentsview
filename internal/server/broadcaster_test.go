@@ -184,7 +184,11 @@ func TestBroadcaster_LeadingEdgeCancelsPendingTrailing(t *testing.T) {
 
 		// Leading broadcast fills the window.
 		b.Emit("a")
-		<-sub
+		select {
+		case <-sub:
+		default:
+			require.Fail(t, "leading emit did not broadcast")
+		}
 
 		// Rate-limited emit schedules a trailing broadcast of "b".
 		b.Emit("b")

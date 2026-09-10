@@ -497,7 +497,11 @@ func TestLoadPricingMapCancelsDBRowsWithCaller(t *testing.T) {
 		cancel()
 
 		synctest.Wait()
-		<-state.done
+		select {
+		case <-state.done:
+		default:
+			require.FailNow(t, "canceled pricing query did not finish")
+		}
 		require.ErrorIs(t, <-result, context.Canceled)
 	})
 }

@@ -450,7 +450,11 @@ func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 		}()
 
 		synctest.Wait()
-		<-ensureFetchStarted
+		select {
+		case <-ensureFetchStarted:
+		default:
+			require.FailNow(t, "ensureCurrent did not start its fetch")
+		}
 
 		var refreshFetchCalls atomic.Int32
 		refreshDone := make(chan error, 1)
@@ -468,7 +472,12 @@ func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 		}()
 
 		synctest.Wait()
-		refreshErr := <-refreshDone
+		var refreshErr error
+		select {
+		case refreshErr = <-refreshDone:
+		default:
+			require.FailNow(t, "refreshCurrent did not finish while ensureCurrent was in flight")
+		}
 		require.NoError(t, refreshErr)
 		assert.Zero(t, refreshFetchCalls.Load())
 		scheduledPrice, err := database.GetModelPricing("scheduled-model")
@@ -477,7 +486,12 @@ func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 
 		releaseEnsureFetch <- struct{}{}
 		synctest.Wait()
-		ensureErr := <-ensureDone
+		var ensureErr error
+		select {
+		case ensureErr = <-ensureDone:
+		default:
+			require.FailNow(t, "ensureCurrent did not finish after its fetch was released")
+		}
 		require.NoError(t, ensureErr)
 		ensuredPrice, err := database.GetModelPricing("ensure-model")
 		require.NoError(t, err)

@@ -240,6 +240,9 @@ func TestActivityReportProgressBuildsKeepCallbacksRequestLocal(t *testing.T) {
 			started: make(chan struct{}, 2),
 			release: make(chan struct{}),
 		}
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(store.release) }) }
+		t.Cleanup(release)
 		srv := &Server{activityReportFlights: newActivityReportBuildGroup()}
 		var mu sync.Mutex
 		seen := map[string][]int64{"first": {}, "second": {}}
@@ -273,7 +276,7 @@ func TestActivityReportProgressBuildsKeepCallbacksRequestLocal(t *testing.T) {
 		default:
 			require.FailNow(t, "second progress request reused the first callback")
 		}
-		close(store.release)
+		release()
 		require.NoError(t, <-first)
 		require.NoError(t, <-second)
 		require.Equal(t, int32(2), store.builds.Load())
