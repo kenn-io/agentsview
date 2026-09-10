@@ -1253,9 +1253,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   same selection rules as discovery. This is an Agentsview policy, not a
   producer guarantee that child IDs are unique. A synthetic fixture also
   verifies that a symlinked nested transcript cannot hide a regular child
-  transcript with the same filename in either discovery mode. The official
-  support post linked above still documents the `agent-transcripts` location;
-  the history documentation link now redirects to the Agent overview.
+  transcript with the same filename in either discovery mode. Broken nested
+  links still abort streaming scans as file-access errors, as verified by the
+  archive reconciliation fixture. The official support post linked above still
+  documents the `agent-transcripts` location; the history documentation link
+  now redirects to the Agent overview.
 
 ## Cursor IDE (`cursor-ide`)
 

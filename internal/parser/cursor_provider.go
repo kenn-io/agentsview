@@ -372,15 +372,13 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 				base := filepath.Join(sessionDir, entry.Name())
 				path := ""
 				for _, ext := range []string{".jsonl", ".txt"} {
-					// A symlink must not reserve the stem or outrank a regular file.
-					info, statErr := os.Lstat(base + ext)
-					if errors.Is(statErr, os.ErrNotExist) {
-						continue
-					}
+					// Preserve broken-link errors without letting a symlink
+					// reserve the stem or outrank a regular file.
+					regular, statErr := streamingRegularFileCandidate(base + ext)
 					if statErr != nil {
 						return fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr)
 					}
-					if info.Mode().IsRegular() {
+					if regular && IsRegularFile(base+ext) {
 						path = base + ext
 						break
 					}

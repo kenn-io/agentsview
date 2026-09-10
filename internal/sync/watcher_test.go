@@ -808,7 +808,10 @@ func TestWatcherBatchesPathsAndEnforcesDispatchFloor(t *testing.T) {
 	laterPath := filepath.Join(dir, "c.jsonl")
 	require.NoError(t, os.WriteFile(laterPath, []byte("c"), 0o644))
 	second := receiveWatcherCall(t, calls)
-	assert.GreaterOrEqual(t, second.at.Sub(first.at), minInterval,
+	// These timestamps are inside the callback, after the scheduler's clock
+	// read. Allow the same dispatch jitter as the sustained-write test below.
+	const dispatchJitter = 25 * time.Millisecond
+	assert.GreaterOrEqual(t, second.at.Sub(first.at), minInterval-dispatchJitter,
 		"callbacks started less than the configured minimum interval apart")
 	assert.Contains(t, second.paths, laterPath)
 }
