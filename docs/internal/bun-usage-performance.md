@@ -407,3 +407,18 @@ tool-result payloads and raw digests matched the unchanged control: 816,220
 messages, 628,068 tool calls, and 567,881 result events. Full database, sync,
 DuckDB, and PostgreSQL unit suites and focused PostgreSQL sanitization and
 curation integration tests passed, along with formatting, vet, and CI lint.
+
+## Upstream performance alignment
+
+The stack now includes upstream through `eebb51d9a`, including the usage-rollup
+backfill fix that limits install reads to the current snapshot batch. The same
+change retains the cursor row and the existing large-snapshot query. Earlier
+BenchDB comparisons used default-branch versions that already contained this fix
+while the branch still lacked it; fresh results are required after rebase.
+
+The shared Bun paths also preserve upstream reasoning-effort metadata,
+archive-content policies, and tool-result image retention. Restricted archives
+keep staged parsing but publish only projected rows and omit parser checkpoints.
+Data version 107 triggers the canonical timestamp rebuild and repairs copied
+version-106 orphaned and trashed messages. DuckDB mirror version 16 adds the
+reasoning-effort column to the canonical schema.

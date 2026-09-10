@@ -23,6 +23,7 @@ type Message struct {
 	ContentLength     int             `bun:"content_length,notnull,default:0"`
 	IsSystem          bool            `bun:"is_system,notnull,default:false"`
 	Model             string          `bun:"model,notnull,default:''"`
+	ReasoningEffort   string          `bun:"reasoning_effort,notnull,default:''"`
 	TokenUsage        json.RawMessage `bun:"token_usage,type:TEXT,notnull,default:''"`
 	ContextTokens     int             `bun:"context_tokens,notnull,default:0"`
 	OutputTokens      int             `bun:"output_tokens,notnull,default:0"`

@@ -81,18 +81,13 @@ func (db *DB) applyArtifactImportedSession(
 	stampSessionArchiveIdentity(&write.Session, identity)
 	write, sanitization := sanitizeSessionBatchWrite(write)
 	defer sanitization.release()
-	write.Session, write.Messages = db.sessionAndMessagesForStorage(
-		write.Session, write.Messages,
-	)
-	switch {
-	case db.usageOnlyStorage():
-		write.Signals = usageOnlySignalUpdate()
-		write.Findings = nil
-		write.SkipSignalUpdates = false
-	case db.ArchiveContent().OmitsToolContent():
-		// The manifest computed signals and findings over payloads this
-		// archive does not keep. Leave them cleared at version zero so the
-		// startup backfill recomputes both from the projected rows.
+	write, err = db.projectSessionBatchWrite(write)
+	if err != nil {
+		return result, err
+	}
+	if db.ArchiveContent().OmitsToolContent() && !db.usageOnlyStorage() {
+		// Imported findings describe discarded payloads. Recompute from the
+		// retained transcript rather than publishing the manifest's values.
 		write.Signals = SessionSignalUpdate{}
 		write.Findings = nil
 		write.SkipSignalUpdates = false

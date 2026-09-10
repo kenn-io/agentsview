@@ -875,7 +875,7 @@ func (db *DB) upsertSessionWithProjectIdentity(
 		return sessionUpsertResult{}, err
 	}
 	if db.usageOnlyStorage() {
-		if err := settleUsageOnlySessionTx(tx.Tx, s.ID); err != nil {
+		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
 			return sessionUpsertResult{}, err
 		}
 	}

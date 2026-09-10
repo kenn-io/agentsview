@@ -11631,7 +11631,7 @@ func TestSyncAllReparsesCursorLegacyToolResultsFromVersion101(t *testing.T) {
 
 	// Reproduce the archived output of the parser at data version 101,
 	// preserving the source fingerprint and leaving the file unchanged.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec("DELETE FROM tool_result_events WHERE session_id = ?", sessionID)
 		if err != nil {
 			return err

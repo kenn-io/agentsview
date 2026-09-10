@@ -17965,9 +17965,9 @@ func (e *Engine) buildSessionBatchWriteContext(
 ) (db.SessionBatchWrite, error) {
 	var signals db.SessionSignalUpdate
 	var findings []db.SecretFinding
-	if !e.disableSignalRecompute && pw.staged == nil {
+	if !e.disableSignalRecompute && (pw.staged == nil || e.db.ArchiveContent().OmitsToolContent()) {
 		var signalErr error
-		signals, findings, signalErr = computeFullSignalsAndSecrets(session, messages, nil)
+		signals, findings, signalErr = e.computeFullSignalsAndSecretsForStorage(session, messages, nil)
 		if signalErr != nil {
 			return db.SessionBatchWrite{}, signalErr
 		}
@@ -17983,7 +17983,7 @@ func (e *Engine) buildSessionBatchWriteContext(
 	}
 	var checkpoint *db.ParserCheckpoint
 	var checkpointBlobs *db.ParserCheckpointBlobs
-	if isCodexFormatAgent(pw.sess.Agent) {
+	if isCodexFormatAgent(pw.sess.Agent) && !e.db.ArchiveContent().OmitsToolContent() {
 		var checkpointErr error
 		checkpoint, checkpointBlobs, checkpointErr = e.buildCodexFullParseCheckpoint(pw.sess.File.Path, pw)
 		if checkpointErr != nil {
@@ -17992,10 +17992,10 @@ func (e *Engine) buildSessionBatchWriteContext(
 		}
 	}
 	var stagedSignals db.StagedSignalsFunc
-	if pw.staged != nil && !e.disableSignalRecompute {
+	if pw.staged != nil && !e.disableSignalRecompute && !e.db.ArchiveContent().OmitsToolContent() {
 		positions := stagedToolCallPositions(messages)
 		stagedSignals = func(verdicts map[string]bool) (db.SessionSignalUpdate, []db.SecretFinding, error) {
-			update, findings, err := computeFullSignalsAndSecrets(session, messages, verdicts)
+			update, findings, err := e.computeFullSignalsAndSecretsForStorage(session, messages, verdicts)
 			if err != nil {
 				return db.SessionSignalUpdate{}, nil, err
 			}
@@ -18005,7 +18005,7 @@ func (e *Engine) buildSessionBatchWriteContext(
 		}
 	}
 	var staged db.StagedToolResults
-	if pw.staged != nil {
+	if pw.staged != nil && !e.db.ArchiveContent().OmitsToolContent() {
 		staged = pw.staged
 	}
 	snapshotProject := pw.sess.Project

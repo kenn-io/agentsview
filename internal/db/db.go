@@ -19,6 +19,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 

@@ -718,7 +718,9 @@ func (db *DB) upsertSession(s Session) (sessionUpsertResult, error) {
 		return sessionUpsertResult{}, err
 	}
 	if db.usageOnlyStorage() {
-		if err := settleUsageOnlySessionTx(tx.Tx, s.ID); err != nil { return sessionUpsertResult{}, err }
+		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
+			return sessionUpsertResult{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return sessionUpsertResult{}, fmt.Errorf("committing session upsert: %w", err)
@@ -753,7 +755,7 @@ func upsertArchiveSessionRow(
 
 	var current bunmodel.Session
 	err = store.NewSelect().Model(&current).
-		Column("project", "session_name").
+		Column("project", "session_name", "is_automated").
 		Column(canonicalArchiveSessionColumns...).
 		Where("id = ?", s.ID).Scan(ctx)
 	inserted := errors.Is(err, sql.ErrNoRows)

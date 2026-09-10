@@ -3710,7 +3710,7 @@ func TestCanonicalSessionWriteContractUpgradesPreviousTargetProjection(t *testin
 	snapshot, err := localDB.ReadSessionReplicationSnapshot(ctx, source.ID)
 	require.NoError(t, err)
 	syncer.stampReplicationSnapshot(&snapshot)
-	fingerprint, err := postgresSessionReplicationFingerprint(snapshot, markerID)
+	fingerprint, err := postgresSessionReplicationFingerprint(snapshot, markerID, string(localDB.ArchiveContent()))
 	require.NoError(t, err)
 	require.NoError(t, writePushBoundaryState(
 		state, cutoff, []db.Session{snapshot.Session}, nil,

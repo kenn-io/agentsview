@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/uptrace/bun"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -62,6 +63,10 @@ type ToolCall struct {
 	ResultContent       string            `json:"result_content,omitempty"`
 	SubagentSessionID   string            `json:"subagent_session_id,omitempty"`
 	ResultEvents        []ToolResultEvent `json:"result_events,omitempty"`
+	// Rendering is the exact text the parser inlined into the message
+	// content for this call. It is consumed by the storage projection and
+	// never persisted.
+	Rendering string `json:"-"`
 }
 
 // ToolResult holds a tool_result content block for pairing.
@@ -509,6 +514,7 @@ type Message struct {
 	HasToolUse        bool           `json:"has_tool_use"`
 	ContentLength     int            `json:"content_length"`
 	Model             string         `json:"model"`
+	ReasoningEffort   string         `json:"reasoning_effort,omitempty"`
 	ProviderID        string         `json:"provider_id,omitempty"`
 	TokenUsage        jsontext.Value `json:"token_usage,omitempty"`
 	ContextTokens     int            `json:"context_tokens"`
@@ -996,6 +1002,7 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
+	msgs, _ = db.ProjectToolResultImages(msgs)
 	msgs = append([]Message(nil), msgs...)
 	_ = ValidateAndSanitize(nil, msgs, nil)
 	t := time.Now()
@@ -1026,27 +1033,31 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	defer func() { _ = tx.Rollback() }()
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	writeSession := func(sessionID string, sessionMessages []Message) error {
-		if err := appendCanonicalMessageGraph(ctx, tx, sessionID, sessionMessages); err != nil {
+	writeSession := func(sessionID string, rawMessages []Message) error {
+		storedMessages := db.messagesForStorage(rawMessages)
+		if len(storedMessages) > 0 {
+			if err := appendCanonicalMessageGraph(ctx, tx, sessionID, storedMessages); err != nil {
+				return err
+			}
+			if err := reconcileRecallEvidenceForSessionTx(
+				ctx, tx, sessionID, &pendingRecallRevocations,
+			); err != nil {
+				return err
+			}
+			if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+				return err
+			}
+		}
+		if db.usageOnlyStorage() {
+			if err := updateUsageOnlyAutomationTx(tx, sessionID, rawMessages); err != nil {
+				return err
+			}
+			return settleUsageOnlySignalsTx(tx, sessionID)
+		}
+		if err := setSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
 			return err
 		}
-		if err := reconcileRecallEvidenceForSessionTx(
-			ctx, tx, sessionID, &pendingRecallRevocations,
-		); err != nil {
-			return err
-		}
-		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
-			return err
-		}
-		if err := setSessionAutomationFromMessagesTx(
-			tx, sessionID,
-		); err != nil {
-			return err
-		}
-		if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
-			return err
-		}
-		return nil
+		return invalidateSessionSignalsTx(tx, sessionID)
 	}
 	sessionIDs := messageSessionIDs(msgs)
 	oneSession := true
@@ -1245,6 +1256,28 @@ func applyMessageTokenUsageUpdateTx(
 func (db *DB) WriteSessionIncremental(
 	sessionID string, msgs []Message, update IncrementalSessionUpdate,
 ) (bool, error) {
+	if err := db.requireWritable(); err != nil {
+		return false, err
+	}
+	msgs, _ = db.ProjectToolResultImages(msgs)
+	if db.ToolResultImages() == config.ToolResultImagesDrop {
+		update.SubagentLinks = append([]ToolCallSubagentLink(nil), update.SubagentLinks...)
+		for i := range update.SubagentLinks {
+			content, _ := StripToolResultImages(update.SubagentLinks[i].ResultContent)
+			update.SubagentLinks[i].ResultContent = content
+			update.SubagentLinks[i].ResultContentLen = ResolveResultContentLength(
+				content, update.SubagentLinks[i].ResultContentLen,
+			)
+		}
+	}
+	rawMessages := msgs
+	msgs = db.messagesForStorage(msgs)
+	update.SubagentLinks = db.subagentLinksForStorage(update.SubagentLinks)
+	update.ToolCallResultUpdates = db.toolCallResultUpdatesForStorage(update.ToolCallResultUpdates)
+	if db.ArchiveContent().OmitsToolContent() {
+		update.Checkpoint, update.CheckpointBlobs = nil, nil
+	}
+
 	t := time.Now()
 	defer func() {
 		if d := time.Since(t); d > slowOpThreshold {
@@ -1301,7 +1334,7 @@ func (db *DB) WriteSessionIncremental(
 	for _, resultUpdate := range update.ToolCallResultUpdates {
 		changed, inserted, err := applyToolCallResultUpdateTx(
 			tx, sessionID, resultUpdate,
-			update.BlockedResultCategories,
+			update.BlockedResultCategories, db.ToolResultImages(),
 		)
 		if err != nil {
 			return false, err
@@ -1339,11 +1372,16 @@ func (db *DB) WriteSessionIncremental(
 			return false, err
 		}
 	}
-	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
+	if db.usageOnlyStorage() {
+		err = updateUsageOnlyAutomationTx(tx, sessionID, rawMessages)
+	} else {
+		err = updateSessionAutomationFromMessagesTx(tx, sessionID)
+	}
+	if err != nil {
 		return false, err
 	}
 	signalsMaintained := false
-	if update.SignalMaintainer != nil {
+	if !db.ArchiveContent().OmitsToolContent() && update.SignalMaintainer != nil {
 		delta, err := update.SignalMaintainer.MaintainTx(
 			context.Background(), signalTxQuery{
 				tx:                          tx,
@@ -1362,7 +1400,12 @@ func (db *DB) WriteSessionIncremental(
 			signalsMaintained = true
 		}
 	}
-	if !signalsMaintained {
+	if db.usageOnlyStorage() {
+		if err := settleUsageOnlySignalsTx(tx, sessionID); err != nil {
+			return false, err
+		}
+		signalsMaintained = true
+	} else if !signalsMaintained {
 		if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
 			return false, err
 		}
@@ -1459,8 +1502,11 @@ type savedPin struct {
 func (db *DB) replaceArchiveSessionMessages(
 	sessionID string, msgs []Message,
 ) error {
+	msgs, _ = db.ProjectToolResultImages(msgs)
 	msgs = append([]Message(nil), msgs...)
 	_ = ValidateAndSanitize(nil, msgs, nil)
+	rawMessages := msgs
+	msgs = db.messagesForStorage(msgs)
 
 	t := time.Now()
 	defer func() {
@@ -1537,21 +1583,29 @@ func (db *DB) replaceArchiveSessionMessages(
 	if err := resetIncrementalMarkerTx(tx, sessionID); err != nil {
 		return err
 	}
-	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
+	if db.usageOnlyStorage() {
+		err = updateUsageOnlyAutomationTx(tx, sessionID, rawMessages)
+	} else {
+		err = updateSessionAutomationFromMessagesTx(tx, sessionID)
+	}
+	if err != nil {
 		return err
 	}
-	// The new messages invalidate any findings scanned from the old content, so
-	// clear them and reset the scan state (empty version => secrets scan
-	// --backfill re-scans). ReplaceSessionContent does not call this method; it
-	// supplies fresh findings through the same canonical replacement helper.
-	if transcriptChanged {
-		if err := replaceSessionSecretFindingsBunTx(
-			ctx, tx, sessionID, nil, 0, "",
-		); err != nil {
-			return err
+	if db.usageOnlyStorage() {
+		err = settleUsageOnlySignalsTx(tx, sessionID)
+	} else {
+		// Changed transcript content invalidates findings from the previous
+		// scan. ReplaceSessionContent supplies fresh findings separately.
+		if transcriptChanged {
+			if err := replaceSessionSecretFindingsBunTx(
+				ctx, tx, sessionID, nil, 0, "",
+			); err != nil {
+				return err
+			}
 		}
+		err = invalidateSessionSignalsTx(tx, sessionID)
 	}
-	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
+	if err != nil {
 		return err
 	}
 	if err := enqueueArtifactExportIfGenerationUnchangedTx(
@@ -1764,6 +1818,21 @@ func (db *DB) replaceSessionContent(
 	signals SessionSignalUpdate, findings []SecretFinding,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 ) error {
+	msgs, _ = db.ProjectToolResultImages(msgs)
+	if len(msgs) > 0 {
+		msgs = append([]Message(nil), msgs...)
+		_ = ValidateAndSanitize(nil, msgs, nil)
+	}
+	rawMessages := msgs
+	msgs = db.messagesForStorage(msgs)
+	if db.usageOnlyStorage() {
+		signals = usageOnlySignalUpdate()
+		findings = nil
+	}
+	if db.ArchiveContent().OmitsToolContent() {
+		cp, blobs = nil, nil
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -1826,7 +1895,12 @@ func (db *DB) replaceSessionContent(
 	if err := resetIncrementalMarkerTx(tx, sessionID); err != nil {
 		return err
 	}
-	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
+	if db.usageOnlyStorage() {
+		err = updateUsageOnlyAutomationTx(tx, sessionID, rawMessages)
+	} else {
+		err = updateSessionAutomationFromMessagesTx(tx, sessionID)
+	}
+	if err != nil {
 		return err
 	}
 	if err := updateSessionSignalsTx(tx, sessionID, signals); err != nil {
@@ -1925,6 +1999,7 @@ func sessionAutomationStateTx(
 				FROM messages m
 				WHERE m.session_id = s.id
 				  AND m.role = 'user'
+				  AND COALESCE(m.source_subtype, '') <> 'tool_result'
 				  AND m.is_system = 0
 				  AND TRIM(m.content) <> ''
 				ORDER BY m.ordinal
@@ -2451,7 +2526,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 			&m.Content, &m.ThinkingText, &m.Timestamp,
 			&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 			&m.IsSystem,
-			&m.Model, &tokenUsage,
+			&m.Model, &m.ReasoningEffort, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,
 			&m.ProviderID,
 			&m.HasContextTokens, &m.HasOutputTokens,
@@ -2598,7 +2673,7 @@ func isStrippableControl(r rune) bool {
 // metadata-only changes invalidate the fast path.
 func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
-		`SELECT ordinal, model, provider_id, token_usage, context_tokens,
+		`SELECT ordinal, model, reasoning_effort, provider_id, token_usage, context_tokens,
 			output_tokens, has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
 			source_type, source_subtype, prompt_source, source_uuid,
@@ -2617,7 +2692,7 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 	for rows.Next() {
 		var r tokenFingerprintRow
 		if err := rows.Scan(
-			&r.ordinal, &r.model, &r.providerID, &r.tokenUsage, &r.contextTokens,
+			&r.ordinal, &r.model, &r.reasoningEffort, &r.providerID, &r.tokenUsage, &r.contextTokens,
 			&r.outputTokens, &r.hasContextTokens, &r.hasOutputTokens,
 			&r.claudeMessageID, &r.claudeRequestID,
 			&r.sourceType, &r.sourceSubtype, &r.promptSource, &r.sourceUUID,
@@ -2997,6 +3072,7 @@ func applyToolCallSubagentLinkTx(
 func applyToolCallResultUpdateTx(
 	tx bun.Tx, sessionID string, update ToolCallResultUpdate,
 	blockedResultCategories map[string]bool,
+	imagePolicy config.ToolResultImages,
 ) (bool, []ToolResultEvent, error) {
 	if strings.TrimSpace(update.ToolUseID) == "" || len(update.Events) == 0 {
 		return false, nil, nil
@@ -3081,6 +3157,14 @@ func applyToolCallResultUpdateTx(
 	// stripped-byte count before the blank overwrites Content, losing the
 	// original result length the full and staged paths both preserve.
 	if !blocked {
+		if imagePolicy == config.ToolResultImagesDrop {
+			for i := range incoming {
+				incoming[i].Content, _ = StripToolResultImages(incoming[i].Content)
+				incoming[i].ContentLength = ResolveResultContentLength(
+					incoming[i].Content, incoming[i].ContentLength,
+				)
+			}
+		}
 		toolCall := ToolCall{ResultEvents: incoming}
 		_ = SanitizeToolCall(&toolCall)
 		incoming = toolCall.ResultEvents
@@ -3146,6 +3230,17 @@ func applyToolCallResultUpdateTx(
 	}
 	var storedSummary string
 	if !blocked {
+		// Existing events can predate a switch from keep to drop. Project the
+		// assembled summary too, so a late update cannot store their raw images
+		// again. Blocked results retain their original accounting length.
+		if imagePolicy == config.ToolResultImagesDrop {
+			projected, stats := StripToolResultImages(summary)
+			if stats.Payloads > 0 {
+				summary = projected
+				resultLength = len(summary)
+			}
+		}
+
 		sole, err := soleToolResultEventTx(
 			tx, sessionID, position.MessageOrdinal, position.CallIndex,
 		)
@@ -3300,7 +3395,7 @@ func (db *DB) GetMessageByOrdinal(
 		&m.Content, &m.ThinkingText, &m.Timestamp,
 		&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 		&m.IsSystem,
-		&m.Model, &tokenUsage,
+		&m.Model, &m.ReasoningEffort, &tokenUsage,
 		&m.ContextTokens, &m.OutputTokens,
 		&m.ProviderID,
 		&m.HasContextTokens, &m.HasOutputTokens,

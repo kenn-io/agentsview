@@ -2,9 +2,9 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/uptrace/bun"
 	"os"
 	"path/filepath"
 	"testing"
@@ -360,7 +360,7 @@ func TestReadOnlyResyncReplacementCarriesDropPolicy(t *testing.T) {
 		}}))
 	}
 	require.NoError(t, writable.SoftDeleteSession("trashed"))
-	require.NoError(t, writable.Update(func(tx *sql.Tx) error {
+	require.NoError(t, writable.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET source_missing_at = ? WHERE id = ?",
 			"2026-01-01T00:00:00Z", "source-missing",

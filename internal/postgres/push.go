@@ -503,7 +503,7 @@ func (s *Sync) PushWithOptions(
 			}
 			s.stampReplicationSnapshot(&snapshot)
 			sessionFingerprints[id], err =
-				postgresSessionReplicationFingerprint(snapshot, markerID)
+				postgresSessionReplicationFingerprint(snapshot, markerID, string(s.local.ArchiveContent()))
 			if err != nil {
 				return result, fmt.Errorf(
 					"computing local snapshot fingerprint %s: %w", id, err,
@@ -1301,7 +1301,7 @@ func (s *Sync) pushBatch(
 			s.afterSessionReplicationSnapshotRead(sess.ID)
 		}
 		s.stampReplicationSnapshot(&snapshot)
-		fingerprint, err := postgresSessionReplicationFingerprint(snapshot, markerID)
+		fingerprint, err := postgresSessionReplicationFingerprint(snapshot, markerID, string(s.local.ArchiveContent()))
 		if err != nil {
 			log.Printf("pgsync: session %s fingerprint: %v", sess.ID, err)
 			_ = tx.Rollback()
@@ -1397,14 +1397,14 @@ func (s *Sync) stampReplicationSnapshot(snapshot *db.SessionReplicationSnapshot)
 }
 
 func postgresSessionReplicationFingerprint(
-	snapshot db.SessionReplicationSnapshot, markerID string,
+	snapshot db.SessionReplicationSnapshot, markerID string, archiveContent string,
 ) (string, error) {
 	// PostgreSQL owns curation pins and local_modified_at independently of the
 	// source archive. They are deliberately excluded because pushSession does
 	// not commit their SQLite values. Portable file metadata remains included.
 	snapshot.PinnedMessages = nil
 	snapshot.Session.LocalModifiedAt = nil
-	return db.CanonicalSessionReplicationFingerprint(snapshot, markerID)
+	return db.CanonicalSessionReplicationFingerprint(snapshot, markerID, "archive-content:"+archiveContent)
 }
 
 func (s *Sync) replacePGReplicationSnapshot(
@@ -2182,18 +2182,19 @@ func (s *Sync) pushSession(
 
 	pushedMachine := pushedSessionMachine(sess, s.machine)
 	type policyRow struct {
-		Machine           string       `bun:"machine"`
-		OwnerMarker       string       `bun:"owner_marker"`
-		DisplayName       *string      `bun:"display_name"`
-		SourceDisplayName *string      `bun:"source_display_name"`
-		DeletedAt         sql.NullTime `bun:"deleted_at"`
-		SourceDeletedAt   sql.NullTime `bun:"source_deleted_at"`
-		DeletionCause     *string      `bun:"deletion_cause"`
-		LocalModifiedAt   sql.NullTime `bun:"local_modified_at"`
+		PromptEvidenceDiscarded bool         `bun:"prompt_evidence_discarded"`
+		Machine                 string       `bun:"machine"`
+		OwnerMarker             string       `bun:"owner_marker"`
+		DisplayName             *string      `bun:"display_name"`
+		SourceDisplayName       *string      `bun:"source_display_name"`
+		DeletedAt               sql.NullTime `bun:"deleted_at"`
+		SourceDeletedAt         sql.NullTime `bun:"source_deleted_at"`
+		DeletionCause           *string      `bun:"deletion_cause"`
+		LocalModifiedAt         sql.NullTime `bun:"local_modified_at"`
 	}
 	var current policyRow
 	err := store.NewSelect().TableExpr("sessions").
-		Column("machine", "owner_marker", "display_name", "source_display_name",
+		Column("machine", "owner_marker", "display_name", "source_display_name", "prompt_evidence_discarded",
 			"deleted_at", "source_deleted_at", "deletion_cause", "local_modified_at").
 		Where("id = ?", sess.ID).For("UPDATE").Scan(ctx, &current)
 	exists := err == nil
@@ -2211,6 +2212,10 @@ func (s *Sync) pushSession(
 		return errSessionOwnershipConflict
 	}
 
+	usageOnly := s.local.ArchiveContent().UsageOnly()
+	if usageOnly {
+		sess.FirstMessage, sess.DisplayName, sess.SessionName = nil, nil, nil
+	}
 	sess.Machine = pushedMachine
 	sess.SourceArchiveID = s.archiveID
 	sess.SourceDatabaseGeneration = s.databaseGeneration
@@ -2218,7 +2223,7 @@ func (s *Sync) pushSession(
 	if err != nil {
 		return fmt.Errorf("converting pg source session %s: %w", sess.ID, err)
 	}
-	if exists && !equalOptionalString(current.DisplayName, current.SourceDisplayName) {
+	if exists && !usageOnly && !equalOptionalString(current.DisplayName, current.SourceDisplayName) {
 		sess.DisplayName = current.DisplayName
 	}
 	if exists && !equalOptionalTime(current.DeletedAt, current.SourceDeletedAt) {
@@ -2239,6 +2244,7 @@ func (s *Sync) pushSession(
 		return err
 	}
 	policyMatches := exists && current.OwnerMarker == markerID &&
+		current.PromptEvidenceDiscarded == usageOnly &&
 		equalOptionalString(current.SourceDisplayName, sourceRow.DisplayName) &&
 		equalOptionalTimeAndTimestamp(current.SourceDeletedAt, sourceRow.DeletedAt)
 	if !rowMatches || !policyMatches {
@@ -2251,6 +2257,7 @@ func (s *Sync) pushSession(
 		}
 		if _, err := store.NewUpdate().Table("sessions").
 			Set("owner_marker = ?", markerID).
+			Set("prompt_evidence_discarded = ?", usageOnly).
 			Set("source_display_name = ?", sourceRow.DisplayName).
 			Set("source_deleted_at = ?", sourceDeletedAt).
 			Set("updated_at = NOW()").Where("id = ?", sess.ID).Exec(ctx); err != nil {
@@ -2264,6 +2271,11 @@ func (s *Sync) pushSession(
 		return err
 	} else if excluded {
 		return errSessionExcluded
+	}
+	if usageOnly {
+		if err := clearSessionVectorsTx(ctx, store, sess.ID); err != nil {
+			return err
+		}
 	}
 	return replacePGSessionAliases(ctx, store, sess)
 }

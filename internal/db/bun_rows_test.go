@@ -109,7 +109,7 @@ func TestBunRowMessageRoundTripPreservesJSONAndOptionalID(t *testing.T) {
 				ID: id, SessionID: "session-1", Ordinal: 7, Role: "assistant",
 				Content: "answer", ThinkingText: "reasoning",
 				Timestamp: "2026-08-02T12:30:00Z", HasThinking: true,
-				HasToolUse: true, ContentLength: 6, Model: "model-1",
+				HasToolUse: true, ContentLength: 6, Model: "model-1", ReasoningEffort: "high",
 				TokenUsage:    json.RawMessage(`{"input_tokens":12,"output_tokens":7}`),
 				ContextTokens: 1200, OutputTokens: 7, HasContextTokens: true,
 				HasOutputTokens: true, ClaudeMessageID: "message-id",

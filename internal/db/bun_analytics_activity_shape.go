@@ -99,6 +99,7 @@ func (b *bunAnalyticsSQL) activityMessageStatsCTE() BunCTEFragment {
 		Query: BunSQL(`SELECT message.session_id,
 	CAST(COUNT(*) AS BIGINT) AS messages,
 	CAST(SUM(CASE WHEN message.role = 'user' AND NOT message.is_system
+		AND COALESCE(message.source_subtype, '') <> 'tool_result'
 		THEN 1 ELSE 0 END) AS BIGINT) AS user_messages,
 	CAST(SUM(CASE WHEN message.role = 'assistant' THEN 1 ELSE 0 END)
 		AS BIGINT) AS assistant_messages,
@@ -221,6 +222,7 @@ func (b *bunAnalyticsSQL) sessionShapeMessageStatsCTE() BunCTEFragment {
 		Query: BunSQL(`SELECT message.session_id,
 	CAST(COUNT(*) AS BIGINT) AS messages,
 	CAST(SUM(CASE WHEN message.role = 'user' AND NOT message.is_system
+		AND COALESCE(message.source_subtype, '') <> 'tool_result'
 		THEN 1 ELSE 0 END) AS BIGINT) AS user_messages,
 	CAST(SUM(CASE WHEN message.role = 'assistant' AND message.has_tool_use
 		THEN 1 ELSE 0 END) AS BIGINT) AS tool_use_messages

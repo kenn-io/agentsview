@@ -2,8 +2,8 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"github.com/uptrace/bun"
 	"io"
 	"os"
 	"path/filepath"
@@ -611,7 +611,7 @@ func TestSyncAllSinceReparsesCursorS3ToolResultsFromVersion101(t *testing.T) {
 	require.Zero(t, stats.Failed)
 	require.Equal(t, 1, stats.Synced)
 	// Recreate the old parser's missing output, keeping the S3 fingerprint intact.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		if _, err := tx.Exec("DELETE FROM tool_result_events WHERE session_id = ?", sessionID); err != nil {
 			return err
 		}

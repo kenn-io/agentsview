@@ -1064,7 +1064,8 @@ func TestArchiveRecoveryRepairsMalformedMessageTimestamp(t *testing.T) {
 			name:  "trashed",
 			trash: true,
 			copy: func(destination *DB, sourcePath string) (int, error) {
-				return destination.CopyTrashedDataFrom(sourcePath)
+				ids, err := destination.CopyTrashedDataFrom(sourcePath)
+				return len(ids), err
 			},
 		},
 	}
@@ -1090,9 +1091,8 @@ func TestArchiveRecoveryRepairsMalformedMessageTimestamp(t *testing.T) {
 			if test.trash {
 				require.NoError(t, source.SoftDeleteSession("malformed-timestamp"))
 			}
-			_, err = source.rawWriter().ExecContext(ctx, fmt.Sprintf(
-				"PRAGMA user_version = %d", canonicalTimestampDataVersion-1,
-			))
+			// Version 106 is the last upstream archive before Bun timestamp canonicalization.
+			_, err = source.rawWriter().ExecContext(ctx, "PRAGMA user_version = 106")
 			require.NoError(t, err, "mark source before timestamp canonicalization")
 			require.NoError(t, source.Close(), "close source")
 

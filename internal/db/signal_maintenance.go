@@ -678,7 +678,7 @@ func applySignalDeltaTx(
 	addedDefinite := 0
 	for i := range d.InsertFindings {
 		f := &d.InsertFindings[i]
-		// Unlike replaceSecretFindingsTx (which overrides RulesVersion
+		// Unlike replaceSessionSecretFindingsBunTx (which overrides RulesVersion
 		// with the caller's stamp), this path inserts f.RulesVersion
 		// verbatim. Default an un-stamped finding to the current definite
 		// version so it stays visible to current-version listings.

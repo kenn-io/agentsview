@@ -195,7 +195,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		if err := stampCopiedSessionProvenance(
 			ctx, bunTx, "_orphaned_ids",
 		); err != nil {
-			return 0, fmt.Errorf("stamping orphan provenance: %w", err)
+			return nil, fmt.Errorf("stamping orphan provenance: %w", err)
 		}
 		sourceVersion := copiedSourceDataVersion(ctx, bunTx)
 		if err := removeGeneratedIdentitySnapshotsWithoutSource(
@@ -209,7 +209,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			return nil, fmt.Errorf("sanitizing orphaned data: %w", err)
 		}
 		if err := applyArchiveContentToCopiedSessionsTx(
-			ctx, bunTx.Tx, "_orphaned_ids", d.ArchiveContent(),
+			ctx, bunTx, "_orphaned_ids", d.ArchiveContent(),
 		); err != nil {
 			return nil, fmt.Errorf("projecting orphaned data: %w", err)
 		}
@@ -293,7 +293,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		)
 	}()
 
-	ids, err := copiedSessionIDs(ctx, bunTx.Tx, "_trashed_ids")
+	ids, err := copiedSessionIDs(ctx, bunTx, "_trashed_ids")
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +305,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		return nil, fmt.Errorf("copying trashed data: %w", err)
 	}
 	if err := stampCopiedSessionProvenance(ctx, bunTx, "_trashed_ids"); err != nil {
-		return 0, fmt.Errorf("stamping trashed provenance: %w", err)
+		return nil, fmt.Errorf("stamping trashed provenance: %w", err)
 	}
 	sourceVersion := copiedSourceDataVersion(ctx, bunTx)
 	if err := removeGeneratedIdentitySnapshotsWithoutSource(
@@ -319,7 +319,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		return nil, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
 	if err := applyArchiveContentToCopiedSessionsTx(
-		ctx, bunTx.Tx, "_trashed_ids", d.ArchiveContent(),
+		ctx, bunTx, "_trashed_ids", d.ArchiveContent(),
 	); err != nil {
 		return nil, fmt.Errorf("projecting trashed data: %w", err)
 	}
@@ -2325,7 +2325,7 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 const (
 	sanitizedSourceDataVersion      = 58
 	sanitizedInputSourceDataVersion = 59
-	canonicalTimestampDataVersion   = 91
+	canonicalTimestampDataVersion   = 107
 )
 
 // projectIdentitySourceSnapshotDataVersion is the first archive version whose

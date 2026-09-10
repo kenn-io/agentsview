@@ -1498,7 +1498,7 @@ func halfvecLiteral(v []float32) (string, error) {
 // that are no longer active. Other archives' sessions remain untouched.
 func (s *Sync) clearUsageOnlyVectorSessions(ctx context.Context) error {
 	var exists bool
-	if err := s.pg.QueryRowContext(ctx, `SELECT to_regclass('vector_documents') IS NOT NULL`).Scan(&exists); err != nil {
+	if err := s.bunDB().QueryRowContext(ctx, `SELECT to_regclass('vector_documents') IS NOT NULL`).Scan(&exists); err != nil {
 		return err
 	}
 	if !exists {
@@ -1508,7 +1508,7 @@ func (s *Sync) clearUsageOnlyVectorSessions(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	rows, err := s.pg.QueryContext(ctx, `
+	rows, err := s.bunDB().QueryContext(ctx, `
 		SELECT s.id, s.owner_marker, s.machine
 		FROM sessions s
 		JOIN (
@@ -1546,7 +1546,7 @@ func (s *Sync) clearUsageOnlyVectorSessions(ctx context.Context) error {
 }
 
 func (s *Sync) clearOwnedSessionVectors(ctx context.Context, owner vectorOwnerIdentity, id string) error {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.bunDB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -1555,7 +1555,7 @@ func (s *Sync) clearOwnedSessionVectors(ctx context.Context, owner vectorOwnerId
 	// session since discovery. A missing owner cannot authorize this deletion.
 	var marker, machine sql.NullString
 	err = tx.QueryRowContext(ctx,
-		`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`, id,
+		`SELECT owner_marker, machine FROM sessions WHERE id = ? FOR UPDATE`, id,
 	).Scan(&marker, &machine)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
@@ -1574,7 +1574,7 @@ func (s *Sync) clearOwnedSessionVectors(ctx context.Context, owner vectorOwnerId
 
 // clearSessionVectorsTx removes every generation's content for an owned
 // session in the same transaction that applies its usage-only projection.
-func clearSessionVectorsTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+func clearSessionVectorsTx(ctx context.Context, tx bun.IDB, sessionID string) error {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('vector_documents') IS NOT NULL`).Scan(&exists); err != nil {
 		return err
@@ -1587,12 +1587,12 @@ func clearSessionVectorsTx(ctx context.Context, tx *sql.Tx, sessionID string) er
 		return err
 	}
 	for _, id := range generations {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+vectorChunkTable(id)+` WHERE doc_key IN (SELECT doc_key FROM vector_documents WHERE session_id = $1)`, sessionID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+vectorChunkTable(id)+` WHERE doc_key IN (SELECT doc_key FROM vector_documents WHERE session_id = ?)`, sessionID); err != nil {
 			return fmt.Errorf("clearing usage-only vector chunks: %w", err)
 		}
 	}
 	for _, table := range []string{"vector_documents", "vector_push_state"} {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE session_id = $1`, sessionID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE session_id = ?`, sessionID); err != nil {
 			return fmt.Errorf("clearing usage-only vector content: %w", err)
 		}
 	}

@@ -284,6 +284,7 @@ func canonicalMessageRow(message Message) (bunmodel.Message, error) {
 func canonicalMessageRowWithValidatedContent(message Message) (bunmodel.Message, error) {
 	message.Role = SanitizeUTF8(message.Role)
 	message.Model = SanitizeUTF8(message.Model)
+	message.ReasoningEffort = SanitizeUTF8(message.ReasoningEffort)
 	message.TokenUsage = []byte(SanitizeUTF8(string(message.TokenUsage)))
 	message.ClaudeMessageID = SanitizeUTF8(message.ClaudeMessageID)
 	message.ClaudeRequestID = SanitizeUTF8(message.ClaudeRequestID)

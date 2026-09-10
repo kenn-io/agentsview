@@ -2,7 +2,7 @@ package db
 
 import (
 	"context"
-	"database/sql"
+	"github.com/uptrace/bun"
 	"strings"
 	"testing"
 
@@ -327,7 +327,7 @@ func TestStripToolImagesRollsBackWhenEventUpdateFails(t *testing.T) {
 	message.ToolCalls[0].ResultContent =
 		`[{"type":"text","text":"summary"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	insertMessages(t, d, message)
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TRIGGER fail_strip_event_update
 			AFTER UPDATE OF content ON tool_result_events

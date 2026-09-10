@@ -227,7 +227,7 @@ func dropVectorGenerationRows(ctx context.Context, tx bun.Tx, id int64) error {
 // the orphan-doc prune never references a missing chunk table (which would
 // abort the transaction). The outer generation query is drained before the
 // per-generation probes, since a transaction serves one query at a time.
-func existingChunkGenerationsTx(ctx context.Context, tx bun.Tx) ([]int64, error) {
+func existingChunkGenerationsTx(ctx context.Context, tx bun.IDB) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM vector_generations`)
 	if err != nil {
 		return nil, fmt.Errorf("listing remaining generations: %w", err)

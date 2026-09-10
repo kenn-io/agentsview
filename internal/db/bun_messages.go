@@ -367,16 +367,17 @@ func (s *BunStore) GetSessionActivity(
 	ctx context.Context, sessionID string,
 ) (*SessionActivityResponse, error) {
 	type activityMessage struct {
-		Ordinal   int    `bun:"ordinal"`
-		Role      string `bun:"role"`
-		Content   string `bun:"content"`
-		IsSystem  bool   `bun:"is_system"`
-		Timestamp any    `bun:"timestamp"`
+		SourceSubtype string `bun:"source_subtype"`
+		Ordinal       int    `bun:"ordinal"`
+		Role          string `bun:"role"`
+		Content       string `bun:"content"`
+		IsSystem      bool   `bun:"is_system"`
+		Timestamp     any    `bun:"timestamp"`
 	}
 	var rows []activityMessage
 	err := s.view(ctx, func(store bun.IDB) error {
 		return store.NewSelect().Table("messages").
-			Column("ordinal", "role", "content", "is_system", "timestamp").
+			Column("ordinal", "role", "source_subtype", "content", "is_system", "timestamp").
 			Where("session_id = ?", sessionID).
 			OrderExpr("ordinal ASC").Scan(ctx, &rows)
 	})
@@ -427,7 +428,9 @@ func (s *BunStore) GetSessionActivity(
 		value := populated[index]
 		switch item.message.Role {
 		case "user":
-			value.user++
+			if item.message.SourceSubtype != "tool_result" {
+				value.user++
+			}
 		case "assistant":
 			value.assistant++
 		}

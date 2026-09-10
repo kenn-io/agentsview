@@ -286,7 +286,7 @@ func bunAnalyticsMessagesProjectedFrom(
 	err := queryChunked(sessionIDs, func(chunk []string) error {
 		var rows []bunmodel.Message
 		query := store.NewSelect().Model(&rows).Column(
-			"session_id", "ordinal", "role", "has_thinking", "has_tool_use",
+			"session_id", "ordinal", "role", "source_subtype", "has_thinking", "has_tool_use",
 			"content_length", "is_system", "model", "output_tokens",
 			"has_output_tokens", "is_sidechain", "timestamp",
 		)
@@ -359,7 +359,7 @@ func bunAnalyticsMessageScope(
 		}
 		if err := reducer.Push(MessageInput{
 			SessionID: row.SessionID, Ordinal: row.Ordinal, Role: row.Role,
-			Model: row.Model, IsSystem: row.IsSystem,
+			Model: row.Model, IsSystem: row.IsSystem, SourceSubtype: row.SourceSubtype,
 			Timestamp: bunAnalyticsTimeString(row.Timestamp), LocalTime: local,
 			HasLocalTime: hasLocal, HasThinking: row.HasThinking,
 			HasToolUse: row.HasToolUse, OutputTokens: row.OutputTokens,
@@ -570,7 +570,8 @@ func bunFrustrationCountsFrom(
 			rows, err := store.NewSelect().Table("messages").
 				Column("session_id", "is_system", "content").
 				Where("session_id IN (?)", bun.List(chunk)).
-				Where("role = ?", "user").Rows(ctx)
+				Where("role = ?", "user").
+				Where("COALESCE(source_subtype, '') <> ?", "tool_result").Rows(ctx)
 			if err != nil {
 				return fmt.Errorf("querying Bun frustration messages: %w", err)
 			}
@@ -693,7 +694,7 @@ func (s *BunStore) GetAnalyticsSignalSessions(
 				for _, message := range scoped {
 					messageMap[id] = append(messageMap[id], SignalMessage{
 						SessionID: id, Ordinal: message.Ordinal, Role: message.Role,
-						Content: message.Content, Timestamp: message.Timestamp,
+						Content: message.Content, Timestamp: message.Timestamp, SourceSubtype: message.SourceSubtype,
 						IsSystem: message.IsSystem, HasToolUse: message.HasToolUse,
 					})
 				}
@@ -702,7 +703,7 @@ func (s *BunStore) GetAnalyticsSignalSessions(
 			for _, message := range messages {
 				messageMap[message.SessionID] = append(messageMap[message.SessionID], SignalMessage{
 					SessionID: message.SessionID, Ordinal: message.Ordinal,
-					Role: message.Role, Content: message.Content,
+					Role: message.Role, Content: message.Content, SourceSubtype: message.SourceSubtype,
 					Timestamp: bunAnalyticsTimeString(message.Timestamp),
 					IsSystem:  message.IsSystem, HasToolUse: message.HasToolUse,
 				})

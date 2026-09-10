@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+
+	"github.com/uptrace/bun"
 )
 
 const signalsBackfillMarker = "session_quality_signals_v1"
@@ -49,7 +51,7 @@ func usageOnlySignalUpdate() SessionSignalUpdate {
 }
 
 func settleUsageOnlySignalsTx(
-	tx transactionQueries, sessionID string,
+	tx bun.Tx, sessionID string,
 ) error {
 	if err := updateSessionSignalsTx(
 		tx, sessionID, usageOnlySignalUpdate(),
@@ -59,7 +61,7 @@ func settleUsageOnlySignalsTx(
 	if _, err := tx.Exec(`DELETE FROM session_signal_state WHERE session_id = ?`, sessionID); err != nil {
 		return fmt.Errorf("clearing usage-only signal state: %w", err)
 	}
-	return replaceSecretFindingsTx(tx, sessionID, nil, 0, "")
+	return replaceSessionSecretFindingsBunTx(context.Background(), tx, sessionID, nil, 0, "")
 }
 
 // SettleUsageOnlySignals atomically clears transcript-derived signal state and

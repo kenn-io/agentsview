@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -55,6 +56,34 @@ func (db *DB) ArchiveContent() config.ArchiveContent {
 
 func (db *DB) usageOnlyStorage() bool {
 	return db.ArchiveContent().UsageOnly()
+}
+
+// bunArchiveContentPolicy exposes the archive's local storage policy to the
+// shared mutation owner. Mirrors retain their own write capabilities.
+type bunArchiveContentPolicy interface {
+	ArchiveContent() config.ArchiveContent
+	ClearUsageOnlyText(context.Context, bun.Tx, string) error
+}
+
+func (b *sqliteBunBackend) ArchiveContent() config.ArchiveContent {
+	return b.store.ArchiveContent()
+}
+
+func (b *sqliteBunBackend) ClearUsageOnlyText(ctx context.Context, tx bun.Tx, sessionID string) error {
+	return clearUsageOnlyTextTx(contextTransaction{ctx: ctx, tx: tx}, sessionID)
+}
+
+func (s *BunStore) usageOnlyStorage() bool {
+	policy, ok := s.backend.(bunArchiveContentPolicy)
+	return ok && policy.ArchiveContent().UsageOnly()
+}
+
+func (s *BunStore) requireDerivedTextStorage(kind string) error {
+	if !s.usageOnlyStorage() {
+		return nil
+	}
+	return fmt.Errorf("%w: %s are not stored under archive_content = %q",
+		ErrArchiveContentExcluded, kind, config.ArchiveContentUsage)
 }
 
 // ErrArchiveContentExcluded reports a write that the archive's content
@@ -407,7 +436,7 @@ func clearUsageOnlyTextTx(
 // settleUsageOnlySessionTx brings an existing session row that predates the
 // usage policy in line with it: titles and pin notes go, and transcript-
 // derived signals and secret findings are cleared and marked settled.
-func settleUsageOnlySessionTx(tx transactionQueries, sessionID string) error {
+func settleUsageOnlySessionTx(tx bun.Tx, sessionID string) error {
 	if err := clearUsageOnlyTextTx(tx, sessionID); err != nil {
 		return err
 	}
@@ -452,22 +481,12 @@ func updateUsageOnlyAutomationTx(
 	return setSessionAutomationTx(tx, sessionID, true)
 }
 
-func messagesForSession(messages []Message, sessionID string) []Message {
-	selected := make([]Message, 0, len(messages))
-	for _, message := range messages {
-		if message.SessionID == sessionID {
-			selected = append(selected, message)
-		}
-	}
-	return selected
-}
-
 // applyArchiveContentToCopiedSessionsTx projects sessions copied verbatim
 // from another archive onto this database's storage policy. Resync copies
 // archived rows with ATTACH, so the write-time projection never sees them.
 // The SQL mirrors usageOnlyMessages and transcriptMessages column for column.
 func applyArchiveContentToCopiedSessionsTx(
-	ctx context.Context, tx *sql.Tx, tempIDsTable string,
+	ctx context.Context, tx bun.Tx, tempIDsTable string,
 	policy config.ArchiveContent,
 ) error {
 	switch policy {
@@ -487,7 +506,7 @@ func applyArchiveContentToCopiedSessionsTx(
 const toolOutputMarkerDataVersion = 105
 
 func dropCopiedToolContentTx(
-	ctx context.Context, tx *sql.Tx, tempIDsTable string,
+	ctx context.Context, tx bun.Tx, tempIDsTable string,
 ) error {
 	inCopied := ` IN (SELECT id FROM ` + tempIDsTable + `)`
 	// Rows of sessions parsed before the marker existed cannot be told apart
@@ -586,7 +605,7 @@ func dropCopiedToolContentTx(
 		); err != nil {
 			return fmt.Errorf("clearing copied signals for %s: %w", id, err)
 		}
-		if err := replaceSecretFindingsTx(tx, id, nil, 0, ""); err != nil {
+		if err := replaceSessionSecretFindingsBunTx(ctx, tx, id, nil, 0, ""); err != nil {
 			return fmt.Errorf("clearing copied findings for %s: %w", id, err)
 		}
 	}
@@ -594,7 +613,7 @@ func dropCopiedToolContentTx(
 }
 
 func compactCopiedSessionsForUsageTx(
-	ctx context.Context, tx *sql.Tx, tempIDsTable string,
+	ctx context.Context, tx bun.Tx, tempIDsTable string,
 ) error {
 	inCopied := ` IN (SELECT id FROM ` + tempIDsTable + `)`
 	statements := []struct {
@@ -682,7 +701,7 @@ func scanStrings(rows *sql.Rows) ([]string, error) {
 }
 
 func redactCopiedToolUseRenderingsTx(
-	ctx context.Context, tx *sql.Tx, tempIDsTable string,
+	ctx context.Context, tx bun.Tx, tempIDsTable string,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT m.id, m.content, tc.tool_name, tc.category,

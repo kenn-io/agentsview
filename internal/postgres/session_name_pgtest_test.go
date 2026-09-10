@@ -158,4 +158,9 @@ func TestPGPushUsageOnlyClearsRenamedTitle(t *testing.T) {
 	assert.False(t, display.Valid, "usage-only push must remove the remote rename")
 	assert.False(t, source.Valid)
 	assert.False(t, provider.Valid)
+	var discarded bool
+	require.NoError(t, ps.pg.QueryRowContext(ctx,
+		`SELECT prompt_evidence_discarded FROM sessions WHERE id = $1`, session.ID,
+	).Scan(&discarded))
+	assert.True(t, discarded, "the mirror records that prompt evidence was discarded")
 }
