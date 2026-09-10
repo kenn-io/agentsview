@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -271,60 +272,62 @@ func TestSignalSchedulerStopFlushesAndRunsInlineAfter(t *testing.T) {
 // running on the timer goroutine must finish before stop returns,
 // or the owner could close the DB underneath it.
 func TestSignalSchedulerStopWaitsForInflightTimerRun(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var startedOnce sync.Once
-	var mu sync.Mutex
-	clock := time.Unix(1_700_000_000, 0)
-	sched := newSignalScheduler(10*time.Second, 2*time.Second,
-		func(string) {},
-		func(flush func()) {
-			startedOnce.Do(func() { close(started) })
-			<-release
-			flush()
-		},
-	)
-	sched.now = func() time.Time {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var startedOnce sync.Once
+		var mu sync.Mutex
+		clock := time.Unix(1_700_000_000, 0)
+		sched := newSignalScheduler(10*time.Second, 2*time.Second,
+			func(string) {},
+			func(flush func()) {
+				startedOnce.Do(func() { close(started) })
+				<-release
+				flush()
+			},
+		)
+		sched.now = func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return clock
+		}
+		var timerCB func()
+		sched.afterFunc = func(_ time.Duration, f func()) func() bool {
+			timerCB = f
+			return func() bool { return false }
+		}
+
+		sched.markDirty("s1") // leading edge, inline
+		sched.markDirty("s1") // defers and arms the timer
+		require.NotNil(t, timerCB, "deferral should arm the flush timer")
+
+		// The timer fires after the quiet delay and the deferred run
+		// blocks, simulating a recompute in the middle of DB work.
 		mu.Lock()
-		defer mu.Unlock()
-		return clock
-	}
-	var timerCB func()
-	sched.afterFunc = func(_ time.Duration, f func()) func() bool {
-		timerCB = f
-		return func() bool { return false }
-	}
+		clock = clock.Add(3 * time.Second)
+		mu.Unlock()
+		go timerCB()
+		<-started
 
-	sched.markDirty("s1") // leading edge, inline
-	sched.markDirty("s1") // defers and arms the timer
-	require.NotNil(t, timerCB, "deferral should arm the flush timer")
-
-	// The timer fires after the quiet delay and the deferred run
-	// blocks, simulating a recompute in the middle of DB work.
-	mu.Lock()
-	clock = clock.Add(3 * time.Second)
-	mu.Unlock()
-	go timerCB()
-	<-started
-
-	stopDone := make(chan struct{})
-	go func() {
-		sched.stop()
-		close(stopDone)
-	}()
-	stopped := func() bool {
+		stopDone := make(chan struct{})
+		go func() {
+			sched.stop()
+			close(stopDone)
+		}()
+		synctest.Wait()
 		select {
 		case <-stopDone:
-			return true
+			require.FailNow(t, "stop must wait for the in-flight timer recompute")
 		default:
-			return false
 		}
-	}
-	assert.Never(t, stopped, 100*time.Millisecond, 10*time.Millisecond,
-		"stop must wait for the in-flight timer recompute")
-	close(release)
-	require.Eventually(t, stopped, 2*time.Second, 5*time.Millisecond,
-		"stop must return once the in-flight recompute finishes")
+		close(release)
+		synctest.Wait()
+		select {
+		case <-stopDone:
+		default:
+			require.FailNow(t, "stop must return once the in-flight recompute finishes")
+		}
+	})
 }
 
 // TestSignalSchedulerFlushAllInlineUsesInlinePath covers the flush
@@ -611,24 +614,26 @@ func TestRunExclusiveFlushedFlushesSignalsBeforeWork(t *testing.T) {
 }
 
 func TestSignalSchedulerRealTimerFlushes(t *testing.T) {
-	var mu sync.Mutex
-	var runs int
-	run := func(string) {
-		mu.Lock()
-		runs++
-		mu.Unlock()
-	}
-	sched := newSignalScheduler(
-		50*time.Millisecond, 10*time.Millisecond, run,
-		func(flush func()) { flush() },
-	)
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		var runs int
+		run := func(string) {
+			mu.Lock()
+			runs++
+			mu.Unlock()
+		}
+		sched := newSignalScheduler(
+			50*time.Millisecond, 10*time.Millisecond, run,
+			func(flush func()) { flush() },
+		)
 
-	sched.markDirty("s1")
-	sched.markDirty("s1")
-	require.Eventually(t, func() bool {
+		sched.markDirty("s1")
+		sched.markDirty("s1")
+		synctest.Sleep(10 * time.Millisecond)
+		synctest.Wait()
 		mu.Lock()
 		defer mu.Unlock()
-		return runs == 2
-	}, 2*time.Second, 5*time.Millisecond,
-		"deferred recompute should flush via the real timer")
+		assert.Equal(t, 2, runs,
+			"deferred recompute should flush via the real timer")
+	})
 }

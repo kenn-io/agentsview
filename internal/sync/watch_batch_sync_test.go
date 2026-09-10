@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -424,129 +425,133 @@ func TestSyncWatchBatchThenRunMissingPathTombstoneIsCardinalityBounded(t *testin
 func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturns(
 	t *testing.T,
 ) {
-	const agent parser.AgentType = "watch-batch-blocked-discovery"
-	root := t.TempDir()
-	started := make(chan struct{}, 1)
-	release := make(chan struct{}, 1)
-	defer func() {
-		select {
-		case release <- struct{}{}:
-		default:
+	synctest.Test(t, func(t *testing.T) {
+		const agent parser.AgentType = "watch-batch-blocked-discovery"
+		root := t.TempDir()
+		started := make(chan struct{}, 1)
+		release := make(chan struct{}, 1)
+		defer func() {
+			select {
+			case release <- struct{}{}:
+			default:
+			}
+		}()
+		provider := &directStreamingProvider{
+			Def: parser.AgentDef{Type: agent, FileBased: true},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				DiscoverSources:    parser.CapabilitySupported,
+				StreamingDiscovery: parser.CapabilitySupported,
+				WatchSources:       parser.CapabilitySupported,
+			}},
+			discoverStarted: started,
+			discoverRelease: release,
 		}
-	}()
-	provider := &directStreamingProvider{
-		Def: parser.AgentDef{Type: agent, FileBased: true},
-		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-			DiscoverSources:    parser.CapabilitySupported,
-			StreamingDiscovery: parser.CapabilitySupported,
-			WatchSources:       parser.CapabilitySupported,
-		}},
-		discoverStarted: started,
-		discoverRelease: release,
-	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
-		AgentDirs:          map[parser.AgentType][]string{agent: {root}},
-		Machine:            "local",
-		ProgressStallAfter: time.Nanosecond,
-		ProviderFactories: []parser.ProviderFactory{
-			directStreamingFactory{provider: provider},
-		},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			agent: parser.ProviderMigrationProviderAuthoritative,
-		},
+		engine := NewEngine(openTestDB(t), EngineConfig{
+			AgentDirs:          map[parser.AgentType][]string{agent: {root}},
+			Machine:            "local",
+			ProgressStallAfter: time.Nanosecond,
+			ProviderFactories: []parser.ProviderFactory{
+				directStreamingFactory{provider: provider},
+			},
+			ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+				agent: parser.ProviderMigrationProviderAuthoritative,
+			},
+		})
+		t.Cleanup(engine.Close)
+		done := make(chan error, 1)
+		go func() {
+			_, err := engine.SyncWatchBatchThenRun(
+				t.Context(), WatchBatch{ReconcileRoots: []string{root}}, nil, nil,
+			)
+			done <- err
+		}()
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			require.FailNow(t, "watch batch did not enter reconciliation discovery")
+		}
+
+		progress := requireStalledCurrentProgress(t, engine)
+		assert.Equal(t, PhaseDiscovering, progress.Phase)
+
+		release <- struct{}{}
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			require.FailNow(t, "watch batch did not finish after discovery resumed")
+		}
 	})
-	t.Cleanup(engine.Close)
-	done := make(chan error, 1)
-	go func() {
-		_, err := engine.SyncWatchBatchThenRun(
-			t.Context(), WatchBatch{ReconcileRoots: []string{root}}, nil, nil,
-		)
-		done <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		require.FailNow(t, "watch batch did not enter reconciliation discovery")
-	}
-
-	progress := requireStalledCurrentProgress(t, engine)
-	assert.Equal(t, PhaseDiscovering, progress.Phase)
-
-	release <- struct{}{}
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		require.FailNow(t, "watch batch did not finish after discovery resumed")
-	}
 }
 
 func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 	t *testing.T,
 ) {
-	const agent parser.AgentType = "watch-batch-blocked-changed-path"
-	root := t.TempDir()
-	path := filepath.Join(root, "source.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
-	started := make(chan struct{}, 1)
-	release := make(chan struct{}, 1)
-	defer func() {
-		select {
-		case release <- struct{}{}:
-		default:
+	synctest.Test(t, func(t *testing.T) {
+		const agent parser.AgentType = "watch-batch-blocked-changed-path"
+		root := t.TempDir()
+		path := filepath.Join(root, "source.jsonl")
+		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+		started := make(chan struct{}, 1)
+		release := make(chan struct{}, 1)
+		defer func() {
+			select {
+			case release <- struct{}{}:
+			default:
+			}
+		}()
+		source := parser.SourceRef{
+			Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
 		}
-	}()
-	source := parser.SourceRef{
-		Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
-	}
-	provider := &directStreamingProvider{
-		Def: parser.AgentDef{Type: agent, FileBased: true},
-		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-			DiscoverSources:    parser.CapabilitySupported,
-			StreamingDiscovery: parser.CapabilitySupported,
-			WatchSources:       parser.CapabilitySupported,
-			FindSource:         parser.CapabilitySupported,
-		}},
-		source:       &source,
-		parseStarted: started,
-		parseRelease: release,
-		parseOutcome: parser.ParseOutcome{ResultSetComplete: true},
-	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
-		AgentDirs:          map[parser.AgentType][]string{agent: {root}},
-		Machine:            "local",
-		ProgressStallAfter: time.Nanosecond,
-		ProviderFactories: []parser.ProviderFactory{
-			directStreamingFactory{provider: provider},
-		},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			agent: parser.ProviderMigrationProviderAuthoritative,
-		},
+		provider := &directStreamingProvider{
+			Def: parser.AgentDef{Type: agent, FileBased: true},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				DiscoverSources:    parser.CapabilitySupported,
+				StreamingDiscovery: parser.CapabilitySupported,
+				WatchSources:       parser.CapabilitySupported,
+				FindSource:         parser.CapabilitySupported,
+			}},
+			source:       &source,
+			parseStarted: started,
+			parseRelease: release,
+			parseOutcome: parser.ParseOutcome{ResultSetComplete: true},
+		}
+		engine := NewEngine(openTestDB(t), EngineConfig{
+			AgentDirs:          map[parser.AgentType][]string{agent: {root}},
+			Machine:            "local",
+			ProgressStallAfter: time.Nanosecond,
+			ProviderFactories: []parser.ProviderFactory{
+				directStreamingFactory{provider: provider},
+			},
+			ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+				agent: parser.ProviderMigrationProviderAuthoritative,
+			},
+		})
+		t.Cleanup(engine.Close)
+		done := make(chan error, 1)
+		go func() {
+			_, err := engine.SyncWatchBatchThenRun(
+				t.Context(), WatchBatch{Paths: []string{path}}, nil, nil,
+			)
+			done <- err
+		}()
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			require.FailNow(t, "watch batch did not enter changed-path parsing")
+		}
+
+		progress := requireStalledCurrentProgress(t, engine)
+		assert.Equal(t, PhaseSyncing, progress.Phase)
+
+		release <- struct{}{}
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			require.FailNow(t, "watch batch did not finish after parsing resumed")
+		}
 	})
-	t.Cleanup(engine.Close)
-	done := make(chan error, 1)
-	go func() {
-		_, err := engine.SyncWatchBatchThenRun(
-			t.Context(), WatchBatch{Paths: []string{path}}, nil, nil,
-		)
-		done <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		require.FailNow(t, "watch batch did not enter changed-path parsing")
-	}
-
-	progress := requireStalledCurrentProgress(t, engine)
-	assert.Equal(t, PhaseSyncing, progress.Phase)
-
-	release <- struct{}{}
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		require.FailNow(t, "watch batch did not finish after parsing resumed")
-	}
 }
 
 func TestSyncWatchBatchThenRunClearsProgressBeforePostSyncWork(t *testing.T) {
@@ -576,57 +581,59 @@ func TestSyncWatchBatchThenRunClearsProgressBeforePostSyncWork(t *testing.T) {
 func TestApplyWatchBatchReportsProgressBeforeUnknownRenameStatReturns(
 	t *testing.T,
 ) {
-	const agent parser.AgentType = "watch-batch-blocked-rename-plan"
-	_, engine, _, _, path := newChangedPathOutcomeEngine(
-		t, agent, func(string) parser.ParseOutcome {
-			return parser.ParseOutcome{ResultSetComplete: true}
-		},
-	)
-	engine.progressStallAfter = time.Nanosecond
-	started := make(chan struct{}, 1)
-	release := make(chan struct{}, 1)
-	defer func() {
-		select {
-		case release <- struct{}{}:
-		default:
-		}
-	}()
-	realStat := engine.stat
-	engine.stat = func(got string) (os.FileInfo, error) {
-		assert.Equal(t, path, got)
-		started <- struct{}{}
-		<-release
-		return realStat(got)
-	}
-	done := make(chan error, 1)
-	go func() {
-		err := ApplyWatchBatch(
-			t.Context(), engine, WatchBatch{Renames: []WatchRename{{
-				Path: path, Agent: string(agent), ItemType: ItemIsUnknown,
-			}}}, &WatchRecoveryScope{},
+	synctest.Test(t, func(t *testing.T) {
+		const agent parser.AgentType = "watch-batch-blocked-rename-plan"
+		_, engine, _, _, path := newChangedPathOutcomeEngine(
+			t, agent, func(string) parser.ParseOutcome {
+				return parser.ParseOutcome{ResultSetComplete: true}
+			},
 		)
-		done <- err
-	}()
-	select {
-	case <-started:
-	case err := <-done:
-		require.FailNow(t, "watch batch bypassed the owned planning stat", "%v", err)
-	case <-time.After(time.Second):
-		require.FailNow(t, "watch batch did not enter rename planning stat")
-	}
+		engine.progressStallAfter = time.Nanosecond
+		started := make(chan struct{}, 1)
+		release := make(chan struct{}, 1)
+		defer func() {
+			select {
+			case release <- struct{}{}:
+			default:
+			}
+		}()
+		realStat := engine.stat
+		engine.stat = func(got string) (os.FileInfo, error) {
+			assert.Equal(t, path, got)
+			started <- struct{}{}
+			<-release
+			return realStat(got)
+		}
+		done := make(chan error, 1)
+		go func() {
+			err := ApplyWatchBatch(
+				t.Context(), engine, WatchBatch{Renames: []WatchRename{{
+					Path: path, Agent: string(agent), ItemType: ItemIsUnknown,
+				}}}, &WatchRecoveryScope{},
+			)
+			done <- err
+		}()
+		select {
+		case <-started:
+		case err := <-done:
+			require.FailNow(t, "watch batch bypassed the owned planning stat", "%v", err)
+		case <-time.After(time.Second):
+			require.FailNow(t, "watch batch did not enter rename planning stat")
+		}
 
-	progress := requireStalledCurrentProgress(t, engine)
-	assert.Equal(t, PhaseDiscovering, progress.Phase)
+		progress := requireStalledCurrentProgress(t, engine)
+		assert.Equal(t, PhaseDiscovering, progress.Phase)
 
-	release <- struct{}{}
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		require.FailNow(t, "watch batch did not finish after planning resumed")
-	}
-	_, active := engine.CurrentProgress()
-	assert.False(t, active)
+		release <- struct{}{}
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			require.FailNow(t, "watch batch did not finish after planning resumed")
+		}
+		_, active := engine.CurrentProgress()
+		assert.False(t, active)
+	})
 }
 
 func TestValidateWatchBatchAcceptsBoundedAndAuthoritativeScopes(t *testing.T) {

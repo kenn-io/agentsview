@@ -16,6 +16,7 @@ import (
 	gosync "sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -3837,41 +3838,40 @@ func TestDeferredStartupPassDoesNotAcknowledgeReconciliation(t *testing.T) {
 }
 
 func TestStartupSyncFallbackRunsWhenForegroundSyncNeverArrives(t *testing.T) {
-	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
-		Machine:                 "local",
-		DeferStartupMaintenance: true,
-	})
-	t.Cleanup(engine.Close)
+	synctest.Test(t, func(t *testing.T) {
+		database := openTestDB(t)
+		engine := NewEngine(database, EngineConfig{
+			Machine:                 "local",
+			DeferStartupMaintenance: true,
+		})
+		t.Cleanup(engine.Close)
 
-	maintenanceStarted := make(chan struct{})
-	maintenanceDone := make(chan error, 1)
-	go func() {
-		maintenanceDone <- engine.RunStartupMaintenance(
-			t.Context(),
-			func() error {
-				close(maintenanceStarted)
-				return nil
-			},
-		)
-	}()
+		maintenanceStarted := make(chan struct{})
+		maintenanceDone := make(chan error, 1)
+		go func() {
+			maintenanceDone <- engine.RunStartupMaintenance(
+				t.Context(),
+				func() error {
+					close(maintenanceStarted)
+					return nil
+				},
+			)
+		}()
 
-	stats, ran, err := engine.RunStartupSyncFallback(t.Context(), nil)
-	require.NoError(t, err)
-	assert.True(t, ran)
-	assert.False(t, stats.Aborted)
-	assert.False(t, engine.LastSyncStartedAt().IsZero(),
-		"fallback must perform the skipped startup sync")
-	require.Eventually(t, func() bool {
+		stats, ran, err := engine.RunStartupSyncFallback(t.Context(), nil)
+		require.NoError(t, err)
+		assert.True(t, ran)
+		assert.False(t, stats.Aborted)
+		assert.False(t, engine.LastSyncStartedAt().IsZero(),
+			"fallback must perform the skipped startup sync")
+		synctest.Wait()
 		select {
 		case <-maintenanceStarted:
-			return true
 		default:
-			return false
+			require.FailNow(t, "fallback completion must release startup maintenance")
 		}
-	}, time.Second, 10*time.Millisecond,
-		"fallback completion must release startup maintenance")
-	require.NoError(t, <-maintenanceDone)
+		require.NoError(t, <-maintenanceDone)
+	})
 }
 
 func TestStartupReconciledCallbackRunsOnceAfterSyncLockRelease(t *testing.T) {
@@ -3930,7 +3930,7 @@ func TestStartupReconciledCallbackReportsIncompleteDiscoveryOnce(t *testing.T) {
 
 	failed := engine.SyncAll(t.Context(), nil)
 	assert.Greater(t, failed.Failed, 0)
-	first := requireReceiveWithin(t, reconciled, time.Second)
+	first := <-reconciled
 	require.Error(t, first.err)
 	assert.False(t, first.stats.AuthoritativeDiscoveryComplete())
 
@@ -3939,7 +3939,7 @@ func TestStartupReconciledCallbackReportsIncompleteDiscoveryOnce(t *testing.T) {
 	select {
 	case duplicate := <-reconciled:
 		require.Fail(t, "startup attempt callback ran more than once", "%+v", duplicate)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 }
 
@@ -3981,7 +3981,7 @@ func TestStartupSyncFallbackUsesSuccessSignalNotMaintenanceRelease(t *testing.T)
 		"maintenance release from an incomplete foreground attempt must not skip fallback")
 	select {
 	case <-reconciled:
-	case <-time.After(time.Second):
+	default:
 		require.FailNow(t, "successful fallback did not reconcile startup")
 	}
 }
@@ -4077,10 +4077,10 @@ func TestStartupReconciledCallbackOwnersRetainFailureForLaterSuccess(t *testing.
 			select {
 			case <-reconciled:
 				require.Fail(t, "failed owner opened startup gate")
-			case <-time.After(50 * time.Millisecond):
+			default:
 			}
 			tt.succeed(t.Context(), engine)
-			requireReceiveWithin(t, reconciled, time.Second)
+			<-reconciled
 		})
 	}
 }
@@ -4153,41 +4153,40 @@ func TestStartupSyncFallbackRecoversCanceledForegroundSync(t *testing.T) {
 func TestStartupSyncFallbackReleasesMaintenanceAfterCanceledAttempt(
 	t *testing.T,
 ) {
-	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
-		Machine:                 "local",
-		DeferStartupMaintenance: true,
-	})
-	t.Cleanup(engine.Close)
+	synctest.Test(t, func(t *testing.T) {
+		database := openTestDB(t)
+		engine := NewEngine(database, EngineConfig{
+			Machine:                 "local",
+			DeferStartupMaintenance: true,
+		})
+		t.Cleanup(engine.Close)
 
-	maintenanceStarted := make(chan struct{})
-	maintenanceDone := make(chan error, 1)
-	go func() {
-		maintenanceDone <- engine.RunStartupMaintenance(
-			t.Context(),
-			func() error {
-				close(maintenanceStarted)
-				return nil
-			},
-		)
-	}()
+		maintenanceStarted := make(chan struct{})
+		maintenanceDone := make(chan error, 1)
+		go func() {
+			maintenanceDone <- engine.RunStartupMaintenance(
+				t.Context(),
+				func() error {
+					close(maintenanceStarted)
+					return nil
+				},
+			)
+		}()
 
-	fallbackCtx, cancelFallback := context.WithCancel(t.Context())
-	cancelFallback()
-	_, ran, err := engine.RunStartupSyncFallback(fallbackCtx, nil)
-	require.ErrorIs(t, err, context.Canceled)
-	assert.True(t, ran)
+		fallbackCtx, cancelFallback := context.WithCancel(t.Context())
+		cancelFallback()
+		_, ran, err := engine.RunStartupSyncFallback(fallbackCtx, nil)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.True(t, ran)
 
-	require.Eventually(t, func() bool {
+		synctest.Wait()
 		select {
 		case <-maintenanceStarted:
-			return true
 		default:
-			return false
+			require.FailNow(t, "an attempted fallback must release startup maintenance")
 		}
-	}, time.Second, 10*time.Millisecond,
-		"an attempted fallback must release startup maintenance")
-	require.NoError(t, <-maintenanceDone)
+		require.NoError(t, <-maintenanceDone)
+	})
 }
 
 func TestStartupSyncFallbackRechecksAfterInFlightForegroundSync(t *testing.T) {
@@ -9780,118 +9779,117 @@ func TestEngine_ReconcileWatchRootsClearsCurrentProgress(t *testing.T) {
 
 func requireStalledCurrentProgress(t *testing.T, engine *Engine) Progress {
 	t.Helper()
-	var progress Progress
-	require.Eventually(t, func() bool {
-		current, active := engine.CurrentProgress()
-		if !active || !current.Stalled {
-			return false
-		}
-		progress = current
-		return true
-	}, time.Second, time.Millisecond,
+	synctest.Sleep(time.Millisecond)
+	progress, active := engine.CurrentProgress()
+	require.True(t, active, "active progress did not age into the stalled state")
+	require.True(t, progress.Stalled,
 		"active progress did not age into the stalled state")
 	return progress
 }
 
 func TestEngine_ReconcileWatchRootsReportsProgressBeforeDiscoveryReturns(t *testing.T) {
-	const agent parser.AgentType = "blocked-discovery"
-	root := t.TempDir()
-	started := make(chan struct{}, 1)
-	release := make(chan struct{}, 1)
-	defer func() {
-		select {
-		case release <- struct{}{}:
-		default:
+	synctest.Test(t, func(t *testing.T) {
+		const agent parser.AgentType = "blocked-discovery"
+		root := t.TempDir()
+		started := make(chan struct{}, 1)
+		release := make(chan struct{}, 1)
+		defer func() {
+			select {
+			case release <- struct{}{}:
+			default:
+			}
+		}()
+		provider := &directStreamingProvider{
+			Def: parser.AgentDef{Type: agent, FileBased: true},
+			Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+				DiscoverSources:    parser.CapabilitySupported,
+				StreamingDiscovery: parser.CapabilitySupported,
+				WatchSources:       parser.CapabilitySupported,
+			}},
+			discoverStarted: started,
+			discoverRelease: release,
 		}
-	}()
-	provider := &directStreamingProvider{
-		Def: parser.AgentDef{Type: agent, FileBased: true},
-		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-			DiscoverSources:    parser.CapabilitySupported,
-			StreamingDiscovery: parser.CapabilitySupported,
-			WatchSources:       parser.CapabilitySupported,
-		}},
-		discoverStarted: started,
-		discoverRelease: release,
-	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
-		AgentDirs:          map[parser.AgentType][]string{agent: {root}},
-		Machine:            "local",
-		ProgressStallAfter: time.Nanosecond,
-		ProviderFactories: []parser.ProviderFactory{
-			directStreamingFactory{provider: provider},
-		},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			agent: parser.ProviderMigrationProviderAuthoritative,
-		},
+		engine := NewEngine(openTestDB(t), EngineConfig{
+			AgentDirs:          map[parser.AgentType][]string{agent: {root}},
+			Machine:            "local",
+			ProgressStallAfter: time.Nanosecond,
+			ProviderFactories: []parser.ProviderFactory{
+				directStreamingFactory{provider: provider},
+			},
+			ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+				agent: parser.ProviderMigrationProviderAuthoritative,
+			},
+		})
+		t.Cleanup(engine.Close)
+		done := make(chan error, 1)
+		go func() {
+			done <- engine.ReconcileWatchRoots(t.Context(), []string{root}, false)
+		}()
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			require.FailNow(t, "reconciliation did not enter discovery")
+		}
+
+		progress := requireStalledCurrentProgress(t, engine)
+		assert.Equal(t, PhaseDiscovering, progress.Phase)
+
+		release <- struct{}{}
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			require.FailNow(t, "reconciliation did not finish after discovery resumed")
+		}
 	})
-	t.Cleanup(engine.Close)
-	done := make(chan error, 1)
-	go func() {
-		done <- engine.ReconcileWatchRoots(t.Context(), []string{root}, false)
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		require.FailNow(t, "reconciliation did not enter discovery")
-	}
-
-	progress := requireStalledCurrentProgress(t, engine)
-	assert.Equal(t, PhaseDiscovering, progress.Phase)
-
-	release <- struct{}{}
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		require.FailNow(t, "reconciliation did not finish after discovery resumed")
-	}
 }
 
 func TestEngine_SyncPathsReportsProgressBeforeChangedPathStatReturns(t *testing.T) {
-	fx := newEngineFixture(t)
-	path := fx.writeClaudeSession(t, "proj", "blocked-stat.jsonl", "hello")
-	fx.engine.progressStallAfter = time.Nanosecond
-	started := make(chan struct{}, 1)
-	release := make(chan struct{}, 1)
-	defer func() {
+	synctest.Test(t, func(t *testing.T) {
+		fx := newEngineFixture(t)
+		path := fx.writeClaudeSession(t, "proj", "blocked-stat.jsonl", "hello")
+		fx.engine.progressStallAfter = time.Nanosecond
+		started := make(chan struct{}, 1)
+		release := make(chan struct{}, 1)
+		defer func() {
+			select {
+			case release <- struct{}{}:
+			default:
+			}
+		}()
+		realLstat := fx.engine.lstat
+		var calls atomic.Int32
+		fx.engine.lstat = func(got string) (os.FileInfo, error) {
+			if calls.Add(1) == 1 {
+				assert.Equal(t, path, got)
+				started <- struct{}{}
+				<-release
+			}
+			return realLstat(got)
+		}
+		done := make(chan error, 1)
+		go func() {
+			done <- fx.engine.SyncPathsContext(t.Context(), []string{path})
+		}()
 		select {
-		case release <- struct{}{}:
-		default:
+		case <-started:
+		case <-time.After(time.Second):
+			require.FailNow(t, "changed-path sync did not enter source stat")
 		}
-	}()
-	realLstat := fx.engine.lstat
-	var calls atomic.Int32
-	fx.engine.lstat = func(got string) (os.FileInfo, error) {
-		if calls.Add(1) == 1 {
-			assert.Equal(t, path, got)
-			started <- struct{}{}
-			<-release
+
+		progress := requireStalledCurrentProgress(t, fx.engine)
+		assert.Equal(t, PhaseDiscovering, progress.Phase)
+
+		release <- struct{}{}
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			require.FailNow(t, "changed-path sync did not finish after stat resumed")
 		}
-		return realLstat(got)
-	}
-	done := make(chan error, 1)
-	go func() {
-		done <- fx.engine.SyncPathsContext(t.Context(), []string{path})
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		require.FailNow(t, "changed-path sync did not enter source stat")
-	}
-
-	progress := requireStalledCurrentProgress(t, fx.engine)
-	assert.Equal(t, PhaseDiscovering, progress.Phase)
-
-	release <- struct{}{}
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		require.FailNow(t, "changed-path sync did not finish after stat resumed")
-	}
-	_, active := fx.engine.CurrentProgress()
-	assert.False(t, active)
+		_, active := fx.engine.CurrentProgress()
+		assert.False(t, active)
+	})
 }
 
 func TestEngine_CoordinatedSyncClearsProgressBeforePostSyncWork(t *testing.T) {
@@ -9944,40 +9942,42 @@ func TestEngine_CoordinatedSyncClearsProgressBeforePostSyncWork(t *testing.T) {
 }
 
 func TestEngine_TryRunExclusiveRejectsBusySyncWithoutRunningWork(t *testing.T) {
-	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
-	t.Cleanup(engine.Close)
-	entered := make(chan struct{})
-	release := make(chan struct{}, 1)
-	defer func() {
+	synctest.Test(t, func(t *testing.T) {
+		engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+		t.Cleanup(engine.Close)
+		entered := make(chan struct{})
+		release := make(chan struct{}, 1)
+		defer func() {
+			select {
+			case release <- struct{}{}:
+			default:
+			}
+		}()
+		done := make(chan error, 1)
+		go func() {
+			done <- engine.RunExclusive(func() error {
+				close(entered)
+				<-release
+				return nil
+			})
+		}()
 		select {
-		case release <- struct{}{}:
-		default:
+		case <-entered:
+		case <-time.After(time.Second):
+			require.FailNow(t, "first exclusive sync did not acquire the lock")
 		}
-	}()
-	done := make(chan error, 1)
-	go func() {
-		done <- engine.RunExclusive(func() error {
-			close(entered)
-			<-release
+
+		workRan := false
+		err := engine.TryRunExclusive(func() error {
+			workRan = true
 			return nil
 		})
-	}()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		require.FailNow(t, "first exclusive sync did not acquire the lock")
-	}
 
-	workRan := false
-	err := engine.TryRunExclusive(func() error {
-		workRan = true
-		return nil
+		require.ErrorIs(t, err, ErrSyncInProgress)
+		assert.False(t, workRan)
+		release <- struct{}{}
+		require.NoError(t, <-done)
 	})
-
-	require.ErrorIs(t, err, ErrSyncInProgress)
-	assert.False(t, workRan)
-	release <- struct{}{}
-	require.NoError(t, <-done)
 }
 
 func TestEngine_ZeroSyncedSuccessfulResyncEmits(t *testing.T) {
