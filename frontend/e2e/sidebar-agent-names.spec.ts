@@ -167,10 +167,10 @@ async function installSyntheticRoutes(page: Page) {
 
 async function openSessions(page: Page, viewportWidth: number, sidebarWidth: number) {
   await page.setViewportSize({ width: viewportWidth, height: 900 });
-  await page.addInitScript(
-    ({ key, value }) => localStorage.setItem(key, String(value)),
-    { key: SIDEBAR_WIDTH_KEY, value: sidebarWidth },
-  );
+  await page.addInitScript(({ key, value }) => localStorage.setItem(key, String(value)), {
+    key: SIDEBAR_WIDTH_KEY,
+    value: sidebarWidth,
+  });
   await page.goto("/");
   await expect(page.locator(".session-item").first()).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
@@ -191,7 +191,10 @@ async function measureRow(page: Page, sessionId: string) {
         bottom: rect.bottom,
         right: rect.right,
       },
-      meta: { width: meta.getBoundingClientRect().width, right: meta.getBoundingClientRect().right },
+      meta: {
+        width: meta.getBoundingClientRect().width,
+        right: meta.getBoundingClientRect().right,
+      },
       agent: {
         width: agent.getBoundingClientRect().width,
         right: agent.getBoundingClientRect().right,
@@ -214,19 +217,16 @@ async function measureRow(page: Page, sessionId: string) {
 }
 
 async function prefixFitsBeforeEllipsis(page: Page, sessionId: string, prefixLength: number) {
-  return page.locator(`[data-session-id="${sessionId}"] .agent-tag`).evaluate(
-    (agent, length) => {
-      const textNode = agent.firstChild;
-      if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return false;
-      const range = document.createRange();
-      range.setStart(textNode, 0);
-      range.setEnd(textNode, length);
-      const prefix = range.getBoundingClientRect();
-      const tag = agent.getBoundingClientRect();
-      return prefix.width > 0 && prefix.right <= tag.right + 1;
-    },
-    prefixLength,
-  );
+  return page.locator(`[data-session-id="${sessionId}"] .agent-tag`).evaluate((agent, length) => {
+    const textNode = agent.firstChild;
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return false;
+    const range = document.createRange();
+    range.setStart(textNode, 0);
+    range.setEnd(textNode, length);
+    const prefix = range.getBoundingClientRect();
+    const tag = agent.getBoundingClientRect();
+    return prefix.width > 0 && prefix.right <= tag.right + 1;
+  }, prefixLength);
 }
 
 async function collectRenderFindings(page: Page) {
@@ -250,16 +250,10 @@ async function collectRenderFindings(page: Page) {
         ".session-name, .side-meta, .side-meta > *, button, a",
       )) {
         const elementRect = element.getBoundingClientRect();
-        if (
-          elementRect.right > rowRect.right + 1 ||
-          elementRect.left < rowRect.left - 1
-        ) {
+        if (elementRect.right > rowRect.right + 1 || elementRect.left < rowRect.left - 1) {
           violations.push("element escaped row horizontally");
         }
-        if (
-          elementRect.bottom > rowRect.bottom + 1 ||
-          elementRect.top < rowRect.top - 1
-        ) {
+        if (elementRect.bottom > rowRect.bottom + 1 || elementRect.top < rowRect.top - 1) {
           violations.push("element escaped row vertically");
         }
       }
@@ -279,7 +273,9 @@ test.describe("sidebar agent names", () => {
     await installSyntheticRoutes(page);
   });
 
-  test("reporter distinction keeps the full label at 520px and a prefix at 220px", async ({ page }) => {
+  test("reporter distinction keeps the full label at 520px and a prefix at 220px", async ({
+    page,
+  }) => {
     await openSessions(page, 1280, 520);
     const wide = await measureRow(page, "open-code-review-session");
     expect(wide.row.width).toBeGreaterThanOrEqual(518);
@@ -287,23 +283,19 @@ test.describe("sidebar agent names", () => {
     expect(wide.meta.width).toBeLessThanOrEqual(wide.row.width * 0.4 + 1);
     expect(wide.agent.scrollWidth).toBeLessThanOrEqual(wide.agent.clientWidth + 1);
     console.log(`width=520px ${JSON.stringify(wide)}`);
-    expect(page.locator('[data-session-id="open-code-review-session"] .agent-tag')).toHaveAttribute(
-      "title",
-      REVIEW_LABEL,
-    );
-    expect(page.locator('[data-session-id="opencode-session"] .agent-tag')).toHaveAttribute(
+    await expect(
+      page.locator('[data-session-id="open-code-review-session"] .agent-tag'),
+    ).toHaveAttribute("title", REVIEW_LABEL);
+    await expect(page.locator('[data-session-id="opencode-session"] .agent-tag')).toHaveAttribute(
       "title",
       REGISTRY_LABEL,
     );
 
-    await page.addInitScript(
-      ({ key, value }) => localStorage.setItem(key, String(value)),
-      { key: SIDEBAR_WIDTH_KEY, value: 220 },
-    );
-    await page.evaluate(
-      ({ key }) => localStorage.setItem(key, "220"),
-      { key: SIDEBAR_WIDTH_KEY },
-    );
+    await page.addInitScript(({ key, value }) => localStorage.setItem(key, String(value)), {
+      key: SIDEBAR_WIDTH_KEY,
+      value: 220,
+    });
+    await page.evaluate(({ key }) => localStorage.setItem(key, "220"), { key: SIDEBAR_WIDTH_KEY });
     await page.reload();
     await expect(page.locator(".session-item").first()).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
@@ -312,9 +304,9 @@ test.describe("sidebar agent names", () => {
     expect(narrow.row.width).toBeGreaterThanOrEqual(218);
     expect(narrow.row.width).toBeLessThanOrEqual(220);
     expect(narrow.meta.width).toBeLessThanOrEqual(narrow.row.width * 0.4 + 1);
-    expect(await prefixFitsBeforeEllipsis(page, "open-code-review-session", "Open Code".length)).toBe(
-      true,
-    );
+    expect(
+      await prefixFitsBeforeEllipsis(page, "open-code-review-session", "Open Code".length),
+    ).toBe(true);
     const longLabel = await measureRow(page, "long-label-session");
     expect(longLabel.row.height).toBeCloseTo(42, 0);
     expect(longLabel.meta.width).toBeLessThanOrEqual(longLabel.row.width * 0.4 + 1);
@@ -322,7 +314,7 @@ test.describe("sidebar agent names", () => {
     expect(longLabel.agent.scrollWidth).toBeGreaterThan(longLabel.agent.clientWidth);
     expect(longLabel.entrypoint?.bottom).toBeLessThanOrEqual(longLabel.row.bottom + 1);
     expect(longLabel.entrypoint?.top).toBeGreaterThanOrEqual(longLabel.row.top - 1);
-    expect(page.locator('[data-session-id="long-label-session"] .agent-tag')).toHaveAttribute(
+    await expect(page.locator('[data-session-id="long-label-session"] .agent-tag')).toHaveAttribute(
       "title",
       LONG_LABEL,
     );
@@ -330,7 +322,9 @@ test.describe("sidebar agent names", () => {
     console.log(`width=220px long-label ${JSON.stringify(longLabel)}`);
   });
 
-  test("metadata boundary preserves rows and controls across desktop and mobile widths", async ({ page }, testInfo) => {
+  test("metadata boundary preserves rows and controls across desktop and mobile widths", async ({
+    page,
+  }, testInfo) => {
     await openSessions(page, 1280, 260);
     const desktop = await measureRow(page, "open-code-review-session");
     expect(desktop.row.height).toBeCloseTo(42, 0);
@@ -346,14 +340,11 @@ test.describe("sidebar agent names", () => {
     await capture(page, testInfo, "sidebar-agent-names-1280");
 
     await page.setViewportSize({ width: 768, height: 900 });
-    await page.addInitScript(
-      ({ key, value }) => localStorage.setItem(key, String(value)),
-      { key: SIDEBAR_WIDTH_KEY, value: 520 },
-    );
-    await page.evaluate(
-      ({ key }) => localStorage.setItem(key, "520"),
-      { key: SIDEBAR_WIDTH_KEY },
-    );
+    await page.addInitScript(({ key, value }) => localStorage.setItem(key, String(value)), {
+      key: SIDEBAR_WIDTH_KEY,
+      value: 520,
+    });
+    await page.evaluate(({ key }) => localStorage.setItem(key, "520"), { key: SIDEBAR_WIDTH_KEY });
     await page.reload();
     await expect(page.locator(".session-item").first()).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
