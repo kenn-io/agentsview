@@ -193,17 +193,20 @@ func TestMigrateCancellationPreservesReport(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	calls := 0
-	put := func(mediaType string, body []byte) (string, bool, error) {
-		result, created, err := realPut(assetsDir)(mediaType, body)
-		calls++
-		if calls == 2 {
+	applies := 0
+	apply := func(ctx context.Context, session stripImageSession) (bool, error) {
+		var stats ToolImageStats
+		changed, err := d.migrateStoredToolResultRows(
+			ctx, session.id, realPut(assetsDir), &stats,
+		)
+		applies++
+		if applies == 1 {
 			cancel()
 		}
-		return result, created, err
+		return changed, err
 	}
 
-	report, err := d.MigrateToolImages(ctx, StripImagesFilter{}, put)
+	report, err := d.scanMigrateToolImages(ctx, StripImagesFilter{}, apply)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, 1, report.Sessions)
 	assert.Equal(t, 1, report.Changed)
@@ -221,6 +224,45 @@ func TestMigrateCancellationPreservesReport(t *testing.T) {
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "cancel-second",
 	).Scan(&secondContent))
 	assert.Contains(t, secondContent, "input_image")
+}
+
+// TestMigrateStatsFailurePreservesReport verifies that a statistics error
+// after a committed session still reports the work that preceded it.
+func TestMigrateStatsFailurePreservesReport(t *testing.T) {
+	d := testDB(t)
+	assetsDir := t.TempDir()
+	insertSession(t, d, "stats-first", "project")
+	insertSession(t, d, "stats-second", "project")
+	insertMessages(t, d, testImageMessage("stats-first"))
+	insertMessages(t, d, testImageMessage("stats-second"))
+
+	applies := 0
+	apply := func(ctx context.Context, session stripImageSession) (bool, error) {
+		var stats ToolImageStats
+		changed, err := d.migrateStoredToolResultRows(
+			ctx, session.id, realPut(assetsDir), &stats,
+		)
+		if err != nil {
+			return false, err
+		}
+		applies++
+		if applies == 1 {
+			_, err = d.getWriter().Exec("DROP TABLE tool_result_events")
+			require.NoError(t, err)
+		}
+		return changed, nil
+	}
+
+	report, err := d.scanMigrateToolImages(t.Context(), StripImagesFilter{}, apply)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "migrate stats")
+	assert.Equal(t, 1, report.Sessions)
+	assert.Equal(t, 1, report.Changed)
+	assert.Equal(t, int64(1), report.Payloads)
+	entries, readErr := os.ReadDir(assetsDir)
+	require.NoError(t, readErr)
+	assert.Len(t, entries, 1)
+	t.Logf("stats failure report: sessions=%d changed=%d payloads=%d", report.Sessions, report.Changed, report.Payloads)
 }
 
 // TestMigratedReferenceMatchesStoredFile verifies that migration repairs a
