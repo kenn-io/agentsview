@@ -836,7 +836,11 @@ func TestSyncAllCursorIDEReplacedDatabaseFileReparses(t *testing.T) {
 // kenn-io/agentsview#1676: a cursorDiskKV row with a NULL value must not fail
 // the whole cursor-ide pass. It loads the reporter's captured artifact
 // verbatim, applied on top of two healthy sibling composers built by the
-// existing test helper.
+// existing test helper. Sibling A additionally carries a bubble id matching
+// the fixture's own "bubbleId:%:nullvalue-%" UPDATE, so the artifact's second
+// statement (not just its first, the NULL composerData INSERT) actually
+// nulls a stored row: without this, the fixture's bubble-level UPDATE matches
+// zero rows and the test proves only the NULL-composer half of the fix.
 func TestSyncAllCursorIDENullValueRowsDoNotFailThePass(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "state.vscdb")
@@ -844,10 +848,18 @@ func TestSyncAllCursorIDENullValueRowsDoNotFailThePass(t *testing.T) {
 		{
 			id: "sibling-a-composer", name: "Sibling A",
 			createdAt: 1782026756842, updatedAt: 1782026791522,
-			bubbles: []cursorIDESyncBubble{{
-				id: "b1", bubbleType: 1, text: "sibling a content",
-				createdAt: "2026-06-21T07:27:29.606Z",
-			}},
+			bubbles: []cursorIDESyncBubble{
+				{
+					id: "b1", bubbleType: 1, text: "sibling a content",
+					createdAt: "2026-06-21T07:27:29.606Z",
+				},
+				{
+					// Matches the fixture's "bubbleId:%:nullvalue-%" UPDATE, so
+					// applying the artifact nulls this row's value.
+					id: "nullvalue-1", bubbleType: 2, text: "will be nulled by the fixture",
+					createdAt: "2026-06-21T07:27:31.522Z",
+				},
+			},
 		},
 		{
 			id: "sibling-b-composer", name: "Sibling B",
@@ -867,6 +879,16 @@ func TestSyncAllCursorIDENullValueRowsDoNotFailThePass(t *testing.T) {
 	require.NoError(t, err)
 	_, err = writer.Exec(string(artifact))
 	require.NoError(t, err)
+	// Confirm the fixture's own UPDATE actually matched sibling A's
+	// nullvalue-1 bubble, so this test cannot silently regress to proving
+	// only the NULL-composer half again.
+	var nulledValue sql.NullString
+	require.NoError(t, writer.QueryRow(
+		`SELECT value FROM cursorDiskKV WHERE key = ?`,
+		"bubbleId:sibling-a-composer:nullvalue-1",
+	).Scan(&nulledValue))
+	require.False(t, nulledValue.Valid,
+		"the fixture's bubbleId:%%:nullvalue-%% UPDATE must have nulled this row")
 	require.NoError(t, writer.Close())
 
 	engine, database := newCursorIDESyncEngine(t, root)
@@ -880,12 +902,20 @@ func TestSyncAllCursorIDENullValueRowsDoNotFailThePass(t *testing.T) {
 	a, err := database.GetSessionFull(t.Context(), "cursor-ide:sibling-a-composer")
 	require.NoError(t, err)
 	require.NotNil(t, a)
-	assert.Equal(t, 1, a.MessageCount)
+	assert.Equal(t, 1, a.MessageCount,
+		"sibling A's nulled nullvalue-1 bubble must not surface as a message")
+	assert.True(t, a.IsTruncated,
+		"sibling A must be flagged truncated: the fixture nulled one of its two bubbles")
+	require.NotNil(t, a.FirstMessage)
+	assert.Equal(t, "sibling a content", *a.FirstMessage,
+		"sibling A's surviving turn must still carry its original content")
 	assert.Zero(t, a.ParserMalformedLines)
 	b, err := database.GetSessionFull(t.Context(), "cursor-ide:sibling-b-composer")
 	require.NoError(t, err)
 	require.NotNil(t, b)
 	assert.Equal(t, 1, b.MessageCount)
+	assert.False(t, b.IsTruncated,
+		"sibling B is untouched by the fixture and must not be flagged truncated")
 	assert.Zero(t, b.ParserMalformedLines)
 
 	_, hasCursorIDE := stats.Anomalies.MalformedLinesByAgent["cursor-ide"]
