@@ -1807,6 +1807,13 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   [hermes_state.py](https://github.com/NousResearch/hermes-agent/blob/299e409f15aa5615a8a64be488580be92cda351e/hermes_state.py)
   and
   [usage_pricing.py](https://github.com/NousResearch/hermes-agent/blob/299e409f15aa5615a8a64be488580be92cda351e/agent/usage_pricing.py).
+- **Timestamp check (2026-09-10):** Reverified the pinned `hermes_state.py`:
+  `end_session` writes `ended_at` from `time.time()` only when closing a
+  session. `append_message` and `_insert_message_rows` persist message times
+  independently and accept explicit timestamps. Agentsview keeps the latest
+  transcript or recorded end time and advances it when a state message is
+  newer than both that value and `started_at`. The aggregate usage event still
+  uses the recorded `ended_at`, falling back to `started_at`.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it

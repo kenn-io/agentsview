@@ -184,6 +184,7 @@ type hermesTestSessionRow struct {
 	id              string
 	parentSessionID string
 	startedAt       float64
+	endedAt         float64
 }
 
 type hermesTestMessageRow struct {
@@ -255,16 +256,14 @@ func createHermesTestStateDB(
 		if s.parentSessionID != "" {
 			parent = s.parentSessionID
 		}
-		// ended_at is left NULL on every row: these fixtures exist to exercise
-		// the open-session back-fill, not a closed one.
 		_, err = db.Exec(`
 			INSERT INTO sessions (
 				id, source, model, parent_session_id, started_at, ended_at,
 				message_count, input_tokens, output_tokens, cache_read_tokens,
 				cache_write_tokens, reasoning_tokens, estimated_cost_usd,
 				cost_status, cost_source, title, api_call_count
-			) VALUES (?, 'cli', 'gpt-5.4', ?, ?, NULL, 0, 0, 0, 0, 0, 0, 0, 'estimated', 'hermes', ?, 0)`,
-			s.id, parent, s.startedAt, s.id,
+			) VALUES (?, 'cli', 'gpt-5.4', ?, ?, NULLIF(?, 0), 0, 0, 0, 0, 0, 0, 0, 'estimated', 'hermes', ?, 0)`,
+			s.id, parent, s.startedAt, s.endedAt, s.id,
 		)
 		require.NoError(t, err)
 	}
@@ -337,24 +336,32 @@ func TestParseHermesArchiveOpenStateSessionEndsAtLatestMessage(t *testing.T) {
 	assert.False(t, cont.Session.EndedAt.IsZero())
 }
 
-// TestParseHermesArchiveKeepsTranscriptEndedAtOverStateBackfill is proof row
-// 6 (P3 preservation): when chooseHermesStateSessionSource selects a
-// transcript file, the transcript-derived EndedAt must win even though the
-// state.db row's ended_at is NULL and would otherwise be eligible for the
-// back-fill.
-func TestParseHermesArchiveKeepsTranscriptEndedAtOverStateBackfill(t *testing.T) {
-	root := t.TempDir()
-	sessionsDir := filepath.Join(root, "sessions")
-	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
-	createHermesTestStateDB(t, root,
-		[]hermesTestSessionRow{{id: "trans1", startedAt: 1778745600.0}},
-		[]hermesTestMessageRow{
-			{sessionID: "trans1", role: "user", content: "state db message, older", timestamp: 1778749200.0},
-		},
-	)
-	require.NoError(t, os.WriteFile(
-		filepath.Join(sessionsDir, "session_trans1.json"),
-		[]byte(`{
+func TestParseHermesArchiveReconcilesTranscriptAndStateEndedAt(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		messageTime float64
+		endedAt     float64
+		wantEndedAt string
+	}{
+		{"open session with newer transcript", 1778749200, 0, "2026-05-14T12:00:00Z"},
+		{"open session with newer state message", 1778763600, 0, "2026-05-14T13:00:00Z"},
+		{"closed session with newer transcript", 1778749200, 1778753400, "2026-05-14T12:00:00Z"},
+		{"closed session with newer state message", 1778763600, 1778760600, "2026-05-14T13:00:00Z"},
+		{"closed session with newer recorded end", 1778763600, 1778767200, "2026-05-14T14:00:00Z"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessionsDir := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+			createHermesTestStateDB(t, root,
+				[]hermesTestSessionRow{{id: "trans1", startedAt: 1778745600.0, endedAt: tt.endedAt}},
+				[]hermesTestMessageRow{
+					{sessionID: "trans1", role: "user", content: "state db message", timestamp: tt.messageTime},
+				},
+			)
+			require.NoError(t, os.WriteFile(
+				filepath.Join(sessionsDir, "session_trans1.json"),
+				[]byte(`{
 			"platform":"discord",
 			"session_start":"2026-05-14T10:00:00Z",
 			"last_updated":"2026-05-14T12:00:00Z",
@@ -363,22 +370,21 @@ func TestParseHermesArchiveKeepsTranscriptEndedAtOverStateBackfill(t *testing.T)
 				{"role":"assistant","content":"reply from transcript, newest","timestamp":"2026-05-14T11:00:00Z"}
 			]
 		}`),
-		0o644,
-	))
+				0o644,
+			))
 
-	results, err := parseHermesTestArchive(t, root, "", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+			results, err := parseHermesTestArchive(t, root, "", "local")
+			require.NoError(t, err)
+			require.Len(t, results, 1)
 
-	res := results[0]
-	assert.Equal(t, "hermes:trans1", res.Session.ID)
-	assert.Equal(t, "hermes-state-db", res.Session.SourceVersion)
-	// The JSON transcript path already advances EndedAt from its own
-	// envelope and message reconciliation (parseHermesJSONSession); the
-	// state.db-derived value, from a message that is actually older, must
-	// never replace it.
-	wantEndedAt := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
-	assert.Equal(t, wantEndedAt, res.Session.EndedAt)
+			res := results[0]
+			assert.Equal(t, "hermes:trans1", res.Session.ID)
+			assert.Equal(t, "hermes-state-db", res.Session.SourceVersion)
+			require.Len(t, res.Messages, 2)
+			assert.Equal(t, "hello from transcript", res.Messages[0].Content)
+			assert.Equal(t, tt.wantEndedAt, res.Session.EndedAt.Format(time.RFC3339Nano))
+		})
+	}
 }
 
 // TestHermesParseStateMemberMatchesContainerPathForOpenSession is proof row
@@ -963,11 +969,7 @@ func TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage(t *testing.T
 	assert.Equal(t, ParseResult{}, res)
 }
 
-// TestBuildHermesStateResultPreservesAlreadySetEndedAt is proof row 2 (P1):
-// a closed session's recorded ended_at is never touched, whether the
-// newest message falls after it (the ordinary case) or before it (the case
-// that would prove the branch does not advance an already-set value).
-func TestBuildHermesStateResultPreservesAlreadySetEndedAt(t *testing.T) {
+func TestBuildHermesStateResultReconcilesRecordedEndedAt(t *testing.T) {
 	t.Run("ended_at later than every message", func(t *testing.T) {
 		res, ok := buildHermesStateResult(
 			hermesStateSession{
@@ -997,10 +999,7 @@ func TestBuildHermesStateResultPreservesAlreadySetEndedAt(t *testing.T) {
 			t.TempDir(), "state.db", "", "local",
 		)
 		require.True(t, ok)
-		// The newest message (12:30) is after the recorded ended_at (12:10):
-		// if the branch fired regardless of ss.endedAt, it would advance
-		// EndedAt to 12:30. It must not.
-		assert.Equal(t, time.Date(2026, 5, 14, 12, 10, 0, 0, time.UTC), res.Session.EndedAt)
+		assert.Equal(t, time.Date(2026, 5, 14, 12, 30, 0, 0, time.UTC), res.Session.EndedAt)
 	})
 }
 
