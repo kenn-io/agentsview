@@ -2201,7 +2201,7 @@ func TestParseClaudeSession_RecordsLinearParseVerdict(t *testing.T) {
 		"single-root resolvable chain must record a DAG verdict")
 }
 
-func TestParseClaudeSessionFrom_QueueOperationOnlyFallsBack(t *testing.T) {
+func TestParseClaudeSessionFrom_QueueOperationOnlyAppliesLink(t *testing.T) {
 	t.Parallel()
 
 	initial := testjsonl.JoinJSONL(
@@ -2227,12 +2227,19 @@ func TestParseClaudeSessionFrom_QueueOperationOnlyFallsBack(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = callParseClaudeSessionFrom(path, offset, 2, "a1")
-	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
-	assert.True(t, IsIncrementalFullParseFallback(err))
+	msgs, links, _, consumed, err := callParseClaudeSessionFromWithLinks(
+		path, offset, 2, "a1",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
+	assert.Equal(t, int64(len(appended)), consumed)
+	assert.Equal(t, []ClaudeSubagentLink{{
+		ToolUseID:         "toolu_queue",
+		SubagentSessionID: "agent-childqueue",
+	}}, links)
 }
 
-func TestParseClaudeSessionFrom_ProgressOnlyFallsBack(t *testing.T) {
+func TestParseClaudeSessionFrom_ProgressOnlyAppliesLink(t *testing.T) {
 	t.Parallel()
 
 	initial := testjsonl.JoinJSONL(
@@ -2258,9 +2265,16 @@ func TestParseClaudeSessionFrom_ProgressOnlyFallsBack(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = callParseClaudeSessionFrom(path, offset, 2, "a1")
-	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
-	assert.True(t, IsIncrementalFullParseFallback(err))
+	msgs, links, _, consumed, err := callParseClaudeSessionFromWithLinks(
+		path, offset, 2, "a1",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
+	assert.Equal(t, int64(len(appended)), consumed)
+	assert.Equal(t, []ClaudeSubagentLink{{
+		ToolUseID:         "toolu_progress",
+		SubagentSessionID: "agent-childprogress",
+	}}, links)
 }
 
 // Sanity: a benign incremental append (one user, one assistant
