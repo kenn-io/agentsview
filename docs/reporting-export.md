@@ -22,8 +22,8 @@ hours; the current UTC date contains only closed hours and has no day digest.
 Digest ranges are inclusive, require both bounds, and may contain at most 31
 dates.
 
-Version 3 is the default and the only supported version. Hour, day, and digest
-commands accept `--schema-version 3`; versions 1 and 2 are no longer available.
+Version 3 is the default. Hour, day, and digest commands also accept
+`--schema-version 4` for joint cells; versions 1 and 2 are no longer available.
 Any other value is rejected before the archive is opened or output is written.
 Integrations pinned to an older version must update to version 3 and refresh
 their saved digests.
@@ -121,6 +121,91 @@ A day document contains its UTC `date`, `complete` and `has_data` flags, its
 ordered closed-hour documents, and a `digest` only when all 24 hours are
 present. `agentsview export hour H` is constructed by the same day reader and
 emits byte-for-byte the canonical hour element contained by `export day D`.
+
+## Joint bucket cells (version 3)
+
+Version 4 keeps version 3's accounting rules and adds a `joint` object to every
+hour. Independent project, model and agent breakdowns cannot answer a combined
+filter such as "model A on project B". Joint cells retain those relationships
+without exporting session identifiers, titles, messages or tool content.
+
+```sh
+agentsview export day --schema-version 4 2026-07-28
+agentsview export hour --schema-version 4 --project-key <project-key> 2026-07-28-13
+agentsview export digest --schema-version 4 --project-key <project-key> \
+  --from 2026-07-01 --to 2026-07-28
+```
+
+Repeat `--project-key` to include more projects. Get the archive-scoped keys
+from the project breakdowns or a session export's project map. No keys means the
+whole archive, including unattributed usage. An explicit key selects only that
+project; an unknown key produces an empty replacement, not an error. An empty
+key is invalid. Version 3 rejects project selection.
+
+The selected scope applies to the **whole hour**, including existing totals,
+breakdowns and per-device bucket maxima. The exporter chooses canonical usage
+survivors and allocates authoritative costs before applying scope. A duplicate
+observation excluded by that selection cannot become a new charge just because
+its winning observation belongs to another project. This is export selection,
+not an authorization check; callers still own permission and destination rules.
+
+`joint.project_keys` contains the sorted, unique requested keys (`[]` for the
+whole archive). `joint.cells` is a sparse array with these fields:
+
+| Field                         | Meaning                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| `bucket_start`                | UTC start of a half-open five-minute bucket                                                     |
+| `project`, `project_key`      | Safe display label and canonical archive-scoped key; an empty key is unattributed               |
+| `agent`, `model`              | Producer agent and model; `unknown` when absent                                                 |
+| `automation`                  | `interactive`, `automated`, or `unknown` for observations without session classification        |
+| `agent_minutes`, `max_agents` | Sum of inferred activity durations and simultaneous peak within this cell                       |
+| `usage`                       | Input, output, cache-creation and cache-read tokens, plus cost in integer microdollars          |
+| `pricing`                     | `computed_cost`, `reported_cost`, `allocated_cost` in integer microdollars, and `unpriced_rows` |
+
+Known cost is partitioned across the three pricing fields; their sum is the
+cell's usage cost. `allocated_cost` identifies an authoritative total
+apportioned by the existing accounting rules, not separately measured
+per-message spend. `unpriced_rows` counts canonical usage observations without
+complete pricing. Known fees still contribute to cost when token prices are
+unknown; that cost is incomplete, not free usage. Activity-only cells have zero
+usage. Usage without an activity interval still contributes tokens and cost, but
+not invented minutes. Usage is assigned by observation timestamp, not spread
+over an activity interval.
+
+Activity uses the same gap cap, model attribution, clipping and overlap removal
+as the Activity report. Agent-minutes are not measured human working time. A
+report edge inside a cell has five-minute precision; consumers must not prorate
+that cell and claim an exact instant-level result.
+
+### Concurrency and corrections
+
+A model switch can create two cells for one session in the same bucket. Adding
+their maxima can overstate even a single device's peak. For selected cells in a
+bucket, use this upper bound across devices:
+
+```text
+sum over devices of min(device bucket max_agents,
+                       sum of that device's selected cell max_agents)
+```
+
+Take the maximum bucket bound for a window-level bound. The companion device
+maximum is `activity.buckets[].max_agents` from the same permitted export scope.
+This is not exact selected concurrency or exact cross-device concurrency.
+
+Cells are sorted by bucket, project key, agent, model and automation. Their
+entire contents and requested project scope participate in the hour digest,
+including for quiet hours. A changed hour replaces its entire previous cell set
+in the same scope; removed cells are retractions. An empty set retracts all
+previous cells. Never append a replacement as additional usage, or combine
+overlapping export scopes as independent sources.
+
+Old parser corrections, project changes, pricing changes and deletions can
+change a closed hour. Re-export and replace it when its digest changes; closing
+an hour does not freeze its meaning. Version 4 does not add a history checkpoint
+or a deletion journal. Digest screening still computes full day exports before
+returning identities, and a single-hour command still reads the corresponding
+day. Joint export adds aggregation and output proportional to the populated
+cells; it is not a source-side incremental optimization.
 
 ## Quiet hours
 
@@ -235,7 +320,9 @@ independent concurrency peaks for each category. It retains the complete Claude
 snapshot selection and web-search charging introduced in version 2. Versions 1
 and 2 are no longer emitted.
 
-Integrations should request and require `schema_version: 3`, reject unknown
+Version 4 adds scoped joint cells while version 3 remains the default.
+
+Integrations should request and require their intended `schema_version`, reject unknown
 fields, and verify the canonical content digest before accepting an hour. The
 new fields change hour and day digests, including quiet hours; refresh
 previously saved digests when updating. Adding, renaming, or removing a field,

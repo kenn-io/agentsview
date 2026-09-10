@@ -15,12 +15,14 @@ const (
 	// ReportingSchemaVersion is the current wire version for hour, day, and
 	// digest exports consumed by downstream integrations.
 	ReportingSchemaVersion = 3
+	// ReportingJointSchemaVersion adds opt-in session-free joint bucket cells.
+	ReportingJointSchemaVersion = 4
 )
 
 // IsSupportedReportingSchemaVersion reports whether reporting exports can
 // still produce the requested wire semantics.
 func IsSupportedReportingSchemaVersion(version int) bool {
-	return version == ReportingSchemaVersion
+	return version == ReportingSchemaVersion || version == ReportingJointSchemaVersion
 }
 
 // ReportingHour is one immutable UTC-hour export. Digest identifies the
@@ -32,6 +34,7 @@ type ReportingHour struct {
 	HasData       bool              `json:"has_data"`
 	Activity      ReportingActivity `json:"activity"`
 	Usage         ReportingUsage    `json:"usage"`
+	Joint         *ReportingJoint   `json:"joint,omitempty"`
 }
 
 // ReportingDay is one UTC date exported from a single read snapshot. A
@@ -211,6 +214,10 @@ func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
 		return ReportingHour{}, nil, err
 	}
 	hour = normalizeReportingHour(hour)
+	hour.Joint, err = normalizeReportingJoint(hour)
+	if err != nil {
+		return ReportingHour{}, nil, err
+	}
 	if err := validateReportingBuckets(hourStart, hour.Activity.Buckets); err != nil {
 		return ReportingHour{}, nil, err
 	}
@@ -221,6 +228,7 @@ func FinalizeReportingHour(hour ReportingHour) (ReportingHour, []byte, error) {
 		HasData:       hour.HasData,
 		Activity:      hour.Activity,
 		Usage:         hour.Usage,
+		Joint:         hour.Joint,
 	})
 	if err != nil {
 		return ReportingHour{}, nil, fmt.Errorf("digest reporting hour: %w", err)
@@ -304,6 +312,7 @@ type reportingHourDigestInput struct {
 	HasData       bool              `json:"has_data"`
 	Activity      ReportingActivity `json:"activity"`
 	Usage         ReportingUsage    `json:"usage"`
+	Joint         *ReportingJoint   `json:"joint,omitempty"`
 }
 
 func parseReportingHour(value string) (time.Time, error) {

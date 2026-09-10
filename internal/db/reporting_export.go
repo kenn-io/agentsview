@@ -20,6 +20,7 @@ type ReportingExportOptions struct {
 	Date          time.Time
 	Now           time.Time
 	SchemaVersion int
+	ProjectKeys   []string
 
 	// afterSnapshot is a deterministic test seam for proving that every source
 	// read uses the transaction established before this callback.
@@ -39,6 +40,9 @@ func (db *DB) ExportReportingDay(
 		return export.ReportingDay{}, fmt.Errorf(
 			"unsupported reporting schema version %d", schemaVersion,
 		)
+	}
+	if err := export.ValidateReportingProjectScope(schemaVersion, opts.ProjectKeys); err != nil {
+		return export.ReportingDay{}, err
 	}
 	date, _, hourCount, complete, err := resolveReportingExportRange(opts)
 	if err != nil {
@@ -66,7 +70,7 @@ func (db *DB) ExportReportingDay(
 	}
 
 	hours, err := db.reportingHoursFromSnapshot(
-		ctx, tx, date, hourCount, schemaVersion,
+		ctx, tx, date, hourCount, schemaVersion, opts.ProjectKeys,
 	)
 	if err != nil {
 		return export.ReportingDay{}, err
@@ -88,6 +92,7 @@ func (db *DB) ExportReportingDay(
 
 func (db *DB) reportingHoursFromSnapshot(
 	ctx context.Context, tx *sql.Tx, date time.Time, hourCount, schemaVersion int,
+	projectKeys []string,
 ) ([]export.ReportingHour, error) {
 	hours := make([]export.ReportingHour, hourCount)
 	if hourCount == 0 {
@@ -160,14 +165,19 @@ func (db *DB) reportingHoursFromSnapshot(
 	if err != nil {
 		return nil, err
 	}
-	activityIDs := reportingSessionIDSet(ids)
-	activityUsage := reportingActivityUsage(usage, activityIDs)
-
 	projectLabels := activityReportProjectLabels(allSessions)
 	projects, err := db.reportingProjectIdentityMapFrom(ctx, tx, projectLabels)
 	if err != nil {
 		return nil, err
 	}
+	if schemaVersion == export.ReportingJointSchemaVersion {
+		sessions, ids, events, usage = scopeJointReporting(sessions, events, usage, sessionByID, projects, projectKeys)
+		for i := range sessions {
+			sessions[i].ProjectKey = export.ProjectKeyForEntry(projects[sessions[i].Project])
+		}
+	}
+	activityIDs := reportingSessionIDSet(ids)
+	activityUsage := reportingActivityUsage(usage, activityIDs)
 	createdAt, err := reportingSessionCreatedAtFrom(ctx, tx, ids)
 	if err != nil {
 		return nil, err
@@ -186,7 +196,11 @@ func (db *DB) reportingHoursFromSnapshot(
 		hourEnd := hourStart.Add(time.Hour)
 		gapCap := time.Duration(query.GapCapSeconds) * time.Second
 		candidates := activity.PairActivityEvents(events, hourStart, hourEnd, gapCap)
-		report, aggregateErr := activity.AggregateCandidates(ctx, activity.Params{
+		aggregate := activity.AggregateCandidates
+		if schemaVersion == export.ReportingJointSchemaVersion {
+			aggregate = activity.AggregateCandidatesWithJointActivity
+		}
+		report, aggregateErr := aggregate(ctx, activity.Params{
 			RangeStart:    hourStart,
 			RangeEnd:      hourEnd,
 			Loc:           time.UTC,
@@ -226,6 +240,12 @@ func (db *DB) reportingHoursFromSnapshot(
 			firstSeen[i].hasAny()
 		if !hour.HasData {
 			hour = quietReportingHour(hourStart, schemaVersion)
+		}
+		if schemaVersion == export.ReportingJointSchemaVersion {
+			hour.Joint, err = jointReportingHour(hourStart, report.JointActivity, usage, sessionByID, projects, projectKeys)
+			if err != nil {
+				return nil, err
+			}
 		}
 		hours[i] = hour
 	}
@@ -612,6 +632,7 @@ func allocateReportingUsageCosts(
 			for i, index := range indices {
 				out[index].Cost = costs[i]
 				out[index].CostSource = export.CostSourceReported
+				out[index].CostAllocated = true
 				out[index].Priced = true
 				out[index].Contributes = true
 			}

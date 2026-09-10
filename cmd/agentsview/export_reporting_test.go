@@ -202,7 +202,7 @@ func TestExportReportingSchemaVersionRejectsBeforeOpen(t *testing.T) {
 		{"export", "day", "2026-07-28"},
 		{"export", "digest", "--from", "2026-07-28", "--to", "2026-07-28"},
 	} {
-		for _, version := range []int{1, 2, 4} {
+		for _, version := range []int{1, 2, 99} {
 			t.Run(args[1]+"/"+strconv.Itoa(version), func(t *testing.T) {
 				opened := false
 				deps := exportReportingDeps{
