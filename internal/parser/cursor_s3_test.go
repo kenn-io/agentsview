@@ -60,6 +60,33 @@ func TestCursorS3ScannerRejectsNonTranscriptLayouts(t *testing.T) {
 			name: "subagent child",
 			rel:  "demo-proj/agent-transcripts/sess/subagents/child.jsonl",
 			segs: []string{"demo-proj", "agent-transcripts", "sess", "subagents", "child.jsonl"},
+			want: true,
+		},
+		{
+			name: "subagent legacy text",
+			rel:  "demo-proj/agent-transcripts/sess/subagents/child.txt",
+			segs: []string{"demo-proj", "agent-transcripts", "sess", "subagents", "child.txt"},
+			want: true,
+		},
+		{
+			name: "subagents without parent",
+			rel:  "demo-proj/agent-transcripts/subagents/child.jsonl",
+			segs: []string{"demo-proj", "agent-transcripts", "subagents", "child.jsonl"},
+		},
+		{
+			name: "subagent named after parent",
+			rel:  "demo-proj/agent-transcripts/sess/subagents/sess.jsonl",
+			segs: []string{"demo-proj", "agent-transcripts", "sess", "subagents", "sess.jsonl"},
+		},
+		{
+			name: "subagent invalid stem",
+			rel:  "demo-proj/agent-transcripts/sess/subagents/ch ild.jsonl",
+			segs: []string{"demo-proj", "agent-transcripts", "sess", "subagents", "ch ild.jsonl"},
+		},
+		{
+			name: "grandchild",
+			rel:  "demo-proj/agent-transcripts/sess/subagents/child/subagents/grand.jsonl",
+			segs: []string{"demo-proj", "agent-transcripts", "sess", "subagents", "child", "subagents", "grand.jsonl"},
 		},
 		{
 			name: "random nested txt",
@@ -193,26 +220,30 @@ func TestCursorS3DiscoverDecodesAgentTranscriptsProject(t *testing.T) {
 	encoded := "Users-fiona-Documents-demo"
 	harvestURI := root + "/my-cool-project/11111111-1111-4111-8111-111111111111.jsonl"
 	localURI := root + "/" + encoded + "/agent-transcripts/sess.jsonl"
+	subagentURI := root + "/" + encoded + "/agent-transcripts/sess/subagents/child.jsonl"
 	mtime := time.Unix(100, 0)
 	listS3Objects = func(got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{
 			{URI: harvestURI, Size: 11, LastModified: mtime},
 			{URI: localURI, Size: 7, LastModified: mtime},
+			{URI: subagentURI, Size: 5, LastModified: mtime},
 		}, nil
 	}
 
 	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
 	require.NoError(t, err)
-	require.Len(t, sources, 2)
+	require.Len(t, sources, 3)
 	byPath := make(map[string]SourceRef, len(sources))
 	for _, src := range sources {
 		byPath[src.DisplayPath] = src
 	}
 	require.Contains(t, byPath, harvestURI)
 	require.Contains(t, byPath, localURI)
+	require.Contains(t, byPath, subagentURI)
 	assert.Equal(t, "my-cool-project", byPath[harvestURI].ProjectHint)
 	assert.Equal(t, "demo", byPath[localURI].ProjectHint)
+	assert.Equal(t, "demo", byPath[subagentURI].ProjectHint)
 }
 
 func TestCursorS3DiscoverPrefersNestedOverFlat(t *testing.T) {
@@ -237,6 +268,75 @@ func TestCursorS3DiscoverPrefersNestedOverFlat(t *testing.T) {
 	require.Len(t, sources, 1)
 	assert.Equal(t, nestedURI, sources[0].DisplayPath)
 	assert.Equal(t, "demo", sources[0].ProjectHint)
+}
+
+func TestCursorS3DiscoverPrefersFlatOverSubagentStem(t *testing.T) {
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+
+	root := "s3://bucket/laptop/raw/cursor"
+	project := "Users-fiona-Documents-demo"
+	// "aaa/subagents/sess.jsonl" sorts before "sess.jsonl", so lexical order
+	// alone would pick the subagent copy.
+	subagentURI := root + "/" + project + "/agent-transcripts/aaa/subagents/sess.jsonl"
+	flatURI := root + "/" + project + "/agent-transcripts/sess.jsonl"
+	mtime := time.Unix(100, 0)
+	listS3Objects = func(got string) ([]S3Object, error) {
+		require.Equal(t, root, got)
+		return []S3Object{
+			{URI: subagentURI, Size: 11, LastModified: mtime},
+			{URI: flatURI, Size: 13, LastModified: mtime},
+		}, nil
+	}
+
+	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, flatURI, sources[0].DisplayPath)
+}
+
+func TestCursorS3LayoutRank(t *testing.T) {
+	root := "s3://bucket/laptop/raw/cursor/"
+	tests := []struct {
+		name string
+		uri  string
+		want int
+	}{
+		{name: "nested", uri: root + "proj/agent-transcripts/sess/sess.jsonl", want: cursorS3LayoutNested},
+		{name: "flat", uri: root + "proj/agent-transcripts/sess.jsonl", want: cursorS3LayoutFlat},
+		{name: "harvest", uri: root + "proj/sess.jsonl", want: cursorS3LayoutFlat},
+		{name: "subagent", uri: root + "proj/agent-transcripts/parent/subagents/sess.jsonl", want: cursorS3LayoutSubagent},
+		{name: "harvest project named subagents", uri: root + "subagents/sess.jsonl", want: cursorS3LayoutFlat},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, cursorS3LayoutRank(tt.uri))
+		})
+	}
+}
+
+func TestCursorS3DiscoverPrefersTopLevelTextOverSubagentJSONL(t *testing.T) {
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+
+	root := "s3://bucket/laptop/raw/cursor"
+	project := "Users-fiona-Documents-demo"
+	subagentURI := root + "/" + project + "/agent-transcripts/aaa/subagents/sess.jsonl"
+	flatTxtURI := root + "/" + project + "/agent-transcripts/sess.txt"
+	mtime := time.Unix(100, 0)
+	listS3Objects = func(got string) ([]S3Object, error) {
+		require.Equal(t, root, got)
+		return []S3Object{
+			{URI: subagentURI, Size: 11, LastModified: mtime},
+			{URI: flatTxtURI, Size: 13, LastModified: mtime},
+		}, nil
+	}
+
+	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, flatTxtURI, sources[0].DisplayPath,
+		"the session's own object outranks a subagent copy regardless of extension")
 }
 
 func TestCursorS3ProviderRejectsNonTranscriptLayout(t *testing.T) {

@@ -78,7 +78,7 @@ func (i *cursorStoreIndex) transcriptPath(root, agentID string) string {
 	if path == "" {
 		return ""
 	}
-	if _, ok := cursorRawSessionIDFromPath(key, path); !ok || !IsRegularFile(path) {
+	if _, ok := cursorTranscriptLocationInRoot(key, path); !ok || !IsRegularFile(path) {
 		delete(i.transcripts[key], agentID)
 		return ""
 	}

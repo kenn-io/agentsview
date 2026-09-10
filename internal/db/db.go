@@ -483,7 +483,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Existing rows need re-parsing to receive both.)
 // (106: Claude and Codex assistant messages now persist reasoning effort.
 // Existing rows need re-parsing so the field is populated.)
-const dataVersion = 106
+// (107: Cursor CLI Subagent tool category. Re-parsing maps existing Cursor
+// Subagent tool calls from Other to Task so delegation renders as a task call
+// and leaves the Other analytics bucket; subagent transcripts themselves are
+// new sources and need no re-parse.)
+const dataVersion = 107
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

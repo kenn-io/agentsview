@@ -1115,6 +1115,11 @@ func TestCurrentDataVersionReasoningEffort(t *testing.T) {
 		"reasoning effort persistence requires re-parsing unchanged transcripts")
 }
 
+func TestCurrentDataVersionCursorSubagentCategory(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 107,
+		"version 107 is the data-version boundary for the Cursor Subagent tool category")
+}
+
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")
