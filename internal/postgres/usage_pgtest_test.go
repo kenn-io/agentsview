@@ -75,6 +75,41 @@ func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {
 	assert.Len(t, result.Daily, 1)
 }
 
+func TestStoreGetDailyUsageCodexBedrockPricing(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_codex_bedrock_test")
+	for _, tt := range []struct{ model, date, cost string }{
+		{"openai.gpt-5.4", "2026-09-09", "1.925"},
+		{"openai.gpt-5.6-luna", "2026-07-29", "0.77"},
+		{"openai.gpt-5.6-luna", "2026-07-30", "0.154"},
+		{"openai.gpt-5.6-terra", "2026-07-29", "1.925"},
+		{"openai.gpt-5.6-terra", "2026-07-30", "1.54"},
+		{"openai.gpt-6-astra", "2026-09-09", "6.6"},
+	} {
+		t.Run(tt.model+"/"+tt.date, func(t *testing.T) {
+			id := tt.model + ":" + tt.date
+			ts := tt.date + "T12:00:00Z"
+			_, err := store.DB().ExecContext(t.Context(), `
+				INSERT INTO sessions (id, machine, project, agent, started_at, message_count)
+				VALUES ($1, 'test-machine', 'proj', 'codex', $2::timestamptz, 1)`, id, ts)
+			require.NoError(t, err)
+			_, err = store.DB().ExecContext(t.Context(), `
+				INSERT INTO messages (session_id, ordinal, role, content, timestamp, model, token_usage)
+				VALUES ($1, 0, 'assistant', 'hi', $2::timestamptz, $3,
+					'{"input_tokens":100000,"output_tokens":100000}')`, id, ts, tt.model)
+			require.NoError(t, err)
+			got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
+				From: tt.date, To: tt.date, Timezone: "UTC", Model: tt.model,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, money.MustParseDollars(tt.cost), got.Totals.TotalCost)
+			require.NotNil(t, got.Pricing)
+			resolutions := got.Pricing.Models[tt.model].Resolutions
+			require.Len(t, resolutions, 1)
+			assert.Equal(t, "bedrock_mantle/"+tt.model, resolutions[0].PricedModel)
+		})
+	}
+}
+
 func TestStoreGetDailyUsageReturnsAggregateCostOverflow(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_overflow_test")
 	ctx := t.Context()

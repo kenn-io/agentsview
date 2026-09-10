@@ -3582,9 +3582,13 @@ func duckPriceModelCaseSQL() string {
 	var b strings.Builder
 	b.WriteString("CASE\n")
 	for _, alias := range pricingpkg.FixedPricingAliases() {
+		modelExpr := "regexp_replace(model, '^.*/', '')"
+		if alias.Exact {
+			modelExpr = "model"
+		}
 		fmt.Fprintf(&b,
-			"\t\tWHEN regexp_replace(model, '^.*/', '') = %s THEN %s\n",
-			duckSQLString(alias.Name), duckSQLString(alias.Canonical),
+			"\t\tWHEN %s = %s THEN %s\n",
+			modelExpr, duckSQLString(alias.Name), duckSQLString(alias.Canonical),
 		)
 	}
 	aliases := pricingpkg.DateAliasedModels()

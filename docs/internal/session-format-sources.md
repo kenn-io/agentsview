@@ -423,18 +423,28 @@ add an archived or maintained mirror without replacing the original identity.
   An exact `[custom_model_pricing."gpt-reserve"]` row still wins. Reverified
   2026-09-06 against OpenAI's Luna Reserve help article
     <https://help.openai.com/en/articles/20001499-luna-reserve-in-codex-and-chatgpt-work>
-    and Codex `turn_context` model seeding in `internal/parser/codex.go`.
-  Codex also persists namespaced GPT-5.4, GPT-5.6 Luna, GPT-5.6 Terra, and
-  GPT-6 Astra model names. Agentsview retains those names in usage breakdowns
-  while pricing the first three through their standard `bedrock_mantle`
-  catalog rows and `openai.gpt-6-astra` through `gpt-6-astra`. GPT-5.5 and
-  GPT-5.6 Sol already resolve unambiguously to their standard Bedrock rows.
-  Reverified 2026-09-10 against observed Codex rollouts and the LiteLLM
-  catalog at commit
-  [`328a5f5d`](https://github.com/BerriAI/litellm/blob/328a5f5d6024c673c4d5e37bad8dab17ab8e79ee/model_prices_and_context_window.json).
-  The pinned fallback snapshot predates Astra, so the supplemental catalog
-  mirrors those base rates and the higher-rate band above 272k input tokens
-  until the snapshot is refreshed.
+    and Codex `turn_context` model seeding in `internal/parser/codex.go`. With
+    the `amazon-bedrock` provider, Codex reports `openai.gpt-5.4`,
+    `openai.gpt-5.6-luna`, `openai.gpt-5.6-terra`, and `openai.gpt-6-astra`.
+    Reverified 2026-09-10 against Codex's
+    [provider model IDs](https://github.com/openai/codex/blob/713caa89f389acd9cbcd77016edbb607273826af/codex-rs/model-provider-info/src/lib.rs#L45-L53)
+    and
+    [Bedrock catalog](https://github.com/openai/codex/blob/713caa89f389acd9cbcd77016edbb607273826af/codex-rs/model-provider/src/amazon_bedrock/catalog.rs).
+    Agentsview retains these reported names and maps them to the corresponding
+    `bedrock_mantle/openai.gpt-*` pricing names. Only the full reported IDs
+    match these aliases; provider- and region-qualified catalog keys pass
+    through unchanged. Exact custom pricing still wins. For timestamped usage,
+    GenAI Prices' `aws/openai.*` entries take precedence over flat LiteLLM rows
+    when available, including Luna and Terra prices before the 2026-07-30
+    reduction. Usage without a valid timestamp uses the flat catalog. The
+    embedded GenAI document uses the pinned
+    [AWS price history](https://github.com/pydantic/genai-prices/blob/83a49e8b386176a1e28e9d9aedeea5e2b4abc586/prices/providers/aws.yml).
+    The pinned LiteLLM snapshot predates Astra. A temporary supplemental
+    `bedrock_mantle/openai.gpt-6-astra` row uses $11 input, $55 output,
+    $13.75 cache write, and $1.10 cache read per million tokens; above 272k
+    input tokens these become $22, $82.50, $27.50, and $2.20. Reverified against
+    [LiteLLM's Bedrock row](https://github.com/BerriAI/litellm/blob/fbed17d567a62b14b8fc7d9ef13c5cd61a8d1ae0/model_prices_and_context_window.json).
+    Remove that supplemental row when the shared snapshot includes it.
 
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn

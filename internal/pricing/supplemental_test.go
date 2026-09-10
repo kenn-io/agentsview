@@ -99,7 +99,9 @@ func TestCanonicalModelForDate(t *testing.T) {
 		{"Codex GPT-5.4 maps to standard Bedrock model", CodexGPT54ModelName, post, BedrockGPT54Canonical},
 		{"Codex GPT-5.6 Luna maps to standard Bedrock model", CodexGPT56LunaModelName, post, BedrockGPT56LunaCanonical},
 		{"Codex GPT-5.6 Terra maps to standard Bedrock model", CodexGPT56TerraModelName, post, BedrockGPT56TerraCanonical},
-		{"Codex Astra maps to catalog model", CodexAstraModelName, post, GPT6AstraCanonical},
+		{"Codex Astra maps to Bedrock model", "openai.gpt-6-astra", post, "bedrock_mantle/openai.gpt-6-astra"},
+		{"qualified Bedrock model passes through", "bedrock_mantle/openai.gpt-5.4", post, ""},
+		{"GovCloud model passes through", "bedrock_mantle/us-gov-west-1/openai.gpt-5.4", post, ""},
 		{"flat k3 alias is not date-ambiguous", "k3", pre, ""},
 		{"flat k3-agent alias is not date-ambiguous", "k3-agent", pre, ""},
 		{"canonical k2.6 model passes through", KimiK26Canonical, pre, ""},
@@ -181,18 +183,18 @@ func TestFallbackPricing_AliasTargetsResolvable(t *testing.T) {
 	}
 
 	astra := byPattern[GPT6AstraCanonical]
-	assert.Equal(t, money.MustParseDollars("10"), astra.InputPerMTok)
-	assert.Equal(t, money.MustParseDollars("50"), astra.OutputPerMTok)
-	assert.Equal(t, money.MustParseDollars("12.50"),
+	assert.Equal(t, money.MustParseDollars("11"), astra.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("55"), astra.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("13.75"),
 		astra.CacheCreationPerMTok)
-	assert.Equal(t, money.MustParseDollars("1"), astra.CacheReadPerMTok)
+	assert.Equal(t, money.MustParseDollars("1.1"), astra.CacheReadPerMTok)
 	require.Len(t, astra.Bands, 1)
 	assert.Equal(t, PricingBand{
 		AboveInputTokens:     272_000,
-		InputPerMTok:         money.MustParseDollars("20"),
-		OutputPerMTok:        money.MustParseDollars("75"),
-		CacheCreationPerMTok: money.MustParseDollars("25"),
-		CacheReadPerMTok:     money.MustParseDollars("2"),
+		InputPerMTok:         money.MustParseDollars("22"),
+		OutputPerMTok:        money.MustParseDollars("82.5"),
+		CacheCreationPerMTok: money.MustParseDollars("27.5"),
+		CacheReadPerMTok:     money.MustParseDollars("2.2"),
 	}, astra.Bands[0])
 }
 

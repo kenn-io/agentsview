@@ -5822,90 +5822,51 @@ func TestGetDailyUsage_GPTReserveLunaPricing(t *testing.T) {
 
 func TestGetDailyUsage_CodexNamespacedPricing(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
-
+	d.SetEmptyCatalogPricing(fallbackRateMap())
+	// This region-qualified row is newer than the embedded snapshot.
+	d.SetEffectivePricing(map[string]export.ModelRates{
+		"bedrock_mantle/us-gov-west-1/openai.gpt-5.4": {
+			InputPerMTok:  money.MustParseDollars("3.3"),
+			OutputPerMTok: money.MustParseDollars("19.8"),
+			Source:        export.PricingRowSourceFetched,
+		},
+	})
 	tests := []struct {
-		name      string
-		reported  string
-		canonical string
-		rate      string
+		model, date, canonical, pattern, input, output, cost string
 	}{
-		{
-			name:      "GPT-5.4",
-			reported:  pricingpkg.CodexGPT54ModelName,
-			canonical: pricingpkg.BedrockGPT54Canonical,
-			rate:      "4",
-		},
-		{
-			name:      "GPT-5.6 Luna",
-			reported:  pricingpkg.CodexGPT56LunaModelName,
-			canonical: pricingpkg.BedrockGPT56LunaCanonical,
-			rate:      "6",
-		},
-		{
-			name:      "GPT-5.6 Terra",
-			reported:  pricingpkg.CodexGPT56TerraModelName,
-			canonical: pricingpkg.BedrockGPT56TerraCanonical,
-			rate:      "8",
-		},
-		{
-			name:      "GPT-6 Astra",
-			reported:  pricingpkg.CodexAstraModelName,
-			canonical: pricingpkg.GPT6AstraCanonical,
-			rate:      "10",
-		},
+		{"openai.gpt-5.4", "2026-09-09", "bedrock_mantle/openai.gpt-5.4", "aws/openai.gpt-5.4", "2.75", "16.5", "1.925"},
+		{"openai.gpt-5.6-luna", "2026-07-29", "bedrock_mantle/openai.gpt-5.6-luna", "aws/openai.gpt-5.6-luna", "1.1", "6.6", "0.77"},
+		{"openai.gpt-5.6-luna", "2026-07-30", "bedrock_mantle/openai.gpt-5.6-luna", "aws/openai.gpt-5.6-luna", "0.22", "1.32", "0.154"},
+		{"openai.gpt-5.6-terra", "2026-07-29", "bedrock_mantle/openai.gpt-5.6-terra", "aws/openai.gpt-5.6-terra", "2.75", "16.5", "1.925"},
+		{"openai.gpt-5.6-terra", "2026-07-30", "bedrock_mantle/openai.gpt-5.6-terra", "aws/openai.gpt-5.6-terra", "2.2", "13.2", "1.54"},
+		{"openai.gpt-6-astra", "2026-09-09", "bedrock_mantle/openai.gpt-6-astra", "bedrock_mantle/openai.gpt-6-astra", "11", "55", "6.6"},
+		{"bedrock_mantle/us-gov-west-1/openai.gpt-5.4", "2026-09-09", "bedrock_mantle/us-gov-west-1/openai.gpt-5.4", "bedrock_mantle/us-gov-west-1/openai.gpt-5.4", "3.3", "19.8", "2.31"},
 	}
-
-	ts := "2026-09-09T12:00:00Z"
-	tokenUsage := jsontext.Value(`{"input_tokens":1000000,"output_tokens":0}`)
 	for i, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-				ModelPattern: tt.canonical,
-				InputPerMTok: money.MustParseDollars(tt.rate),
-			}}), "seed canonical pricing")
-
-			for suffix, model := range map[string]string{
-				"reported":  tt.reported,
-				"canonical": tt.canonical,
-			} {
-				id := fmt.Sprintf("codex-namespaced-%d-%s", i, suffix)
-				insertSession(t, d, id, "proj", func(s *Session) {
-					s.Agent = "codex"
-					s.StartedAt = new(ts)
-				})
-				insertMessages(t, d, Message{
-					SessionID:  id,
-					Ordinal:    0,
-					Role:       "assistant",
-					Timestamp:  ts,
-					Model:      model,
-					TokenUsage: tokenUsage,
-				})
-			}
-
-			canonical, err := d.GetDailyUsage(ctx, UsageFilter{
-				From:     "2026-09-09",
-				To:       "2026-09-09",
-				Timezone: "UTC",
-				Model:    tt.canonical,
+		t.Run(tt.model+"/"+tt.date, func(t *testing.T) {
+			ts := tt.date + "T12:00:00Z"
+			id := fmt.Sprintf("codex-namespaced-%d", i)
+			insertSession(t, d, id, "proj", func(s *Session) {
+				s.Agent = "codex"
+				s.StartedAt = new(ts)
 			})
-			requireNoError(t, err, "GetDailyUsage canonical model")
-			assert.NotZero(t, canonical.Totals.TotalCost.Microdollars)
-
-			namespaced, err := d.GetDailyUsage(ctx, UsageFilter{
-				From:     "2026-09-09",
-				To:       "2026-09-09",
-				Timezone: "UTC",
-				Model:    tt.reported,
+			insertMessages(t, d, Message{
+				SessionID: id, Ordinal: 0, Role: "assistant",
+				Timestamp: ts, Model: tt.model,
+				TokenUsage: jsontext.Value(`{"input_tokens":100000,"output_tokens":100000}`),
 			})
-			requireNoError(t, err, "GetDailyUsage namespaced model")
-			assert.Equal(t, canonical.Totals.TotalCost, namespaced.Totals.TotalCost)
-			require.NotNil(t, namespaced.Pricing)
-			resolutions := namespaced.Pricing.Models[tt.reported].Resolutions
+			got, err := d.GetDailyUsage(t.Context(), UsageFilter{
+				From: tt.date, To: tt.date, Timezone: "UTC", Model: tt.model,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, money.MustParseDollars(tt.cost), got.Totals.TotalCost)
+			require.NotNil(t, got.Pricing)
+			resolutions := got.Pricing.Models[tt.model].Resolutions
 			require.Len(t, resolutions, 1)
 			assert.Equal(t, tt.canonical, resolutions[0].PricedModel)
-			assert.NotContains(t, namespaced.Pricing.Models, tt.canonical)
+			assert.Equal(t, new(tt.pattern), resolutions[0].MatchedPattern)
+			assert.Equal(t, money.MustParseDollars(tt.input), resolutions[0].InputCostPerMTok)
+			assert.Equal(t, money.MustParseDollars(tt.output), resolutions[0].OutputCostPerMTok)
 		})
 	}
 }

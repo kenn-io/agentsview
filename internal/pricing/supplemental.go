@@ -16,7 +16,7 @@ import (
 // date-based pricing: those names left the static set (the seed
 // deletes their stale rows) and k3/k3-agent moved from K2.6 to K3
 // rates. Version 3 removed moonshot/kimi-k3 after LiteLLM added it.
-// Version 4 adds namespaced Codex mappings and a temporary gpt-6-astra
+// Version 4 adds namespaced Codex mappings and a temporary Bedrock Astra
 // fallback until the pinned LiteLLM snapshot includes it.
 const supplementalVersion = "4"
 
@@ -35,7 +35,7 @@ const (
 	BedrockGPT54Canonical      = "bedrock_mantle/openai.gpt-5.4"
 	BedrockGPT56LunaCanonical  = "bedrock_mantle/openai.gpt-5.6-luna"
 	BedrockGPT56TerraCanonical = "bedrock_mantle/openai.gpt-5.6-terra"
-	GPT6AstraCanonical         = "gpt-6-astra"
+	GPT6AstraCanonical         = "bedrock_mantle/openai.gpt-6-astra"
 	GPTReserveModelName        = "gpt-reserve"
 	CodexGPT54ModelName        = "openai.gpt-5.4"
 	CodexGPT56LunaModelName    = "openai.gpt-5.6-luna"
@@ -71,6 +71,8 @@ var kimiAmbiguousDateAliases = []string{
 type FixedPricingAlias struct {
 	Name      string
 	Canonical string
+	// Exact preserves provider and region qualifiers on catalog model names.
+	Exact bool
 }
 
 // fixedPricingAliases are timestamp-independent reported names that need a
@@ -82,10 +84,10 @@ type FixedPricingAlias struct {
 var fixedPricingAliases = []FixedPricingAlias{
 	{Name: "k2d6-agent", Canonical: KimiK26Canonical},
 	{Name: GPTReserveModelName, Canonical: GPT56LunaCanonical},
-	{Name: CodexGPT54ModelName, Canonical: BedrockGPT54Canonical},
-	{Name: CodexGPT56LunaModelName, Canonical: BedrockGPT56LunaCanonical},
-	{Name: CodexGPT56TerraModelName, Canonical: BedrockGPT56TerraCanonical},
-	{Name: CodexAstraModelName, Canonical: GPT6AstraCanonical},
+	{Name: CodexGPT54ModelName, Canonical: BedrockGPT54Canonical, Exact: true},
+	{Name: CodexGPT56LunaModelName, Canonical: BedrockGPT56LunaCanonical, Exact: true},
+	{Name: CodexGPT56TerraModelName, Canonical: BedrockGPT56TerraCanonical, Exact: true},
+	{Name: CodexAstraModelName, Canonical: GPT6AstraCanonical, Exact: true},
 }
 
 // DateAliasedModels returns the sorted unqualified date-ambiguous
@@ -126,7 +128,7 @@ func isDateAliasedModel(model string) bool {
 func fixedCanonicalModel(model string) string {
 	name := pricingAliasName(model)
 	for _, alias := range fixedPricingAliases {
-		if alias.Name == name {
+		if alias.Name == model || (!alias.Exact && alias.Name == name) {
 			return alias.Canonical
 		}
 	}
@@ -193,16 +195,16 @@ func CanonicalModelForTimestamp(model, ts string) string {
 var supplementalPricing = []ModelPricing{
 	{
 		ModelPattern:         GPT6AstraCanonical,
-		InputPerMTok:         money.MustParseDollars("10.00"),
-		OutputPerMTok:        money.MustParseDollars("50.00"),
-		CacheCreationPerMTok: money.MustParseDollars("12.50"),
-		CacheReadPerMTok:     money.MustParseDollars("1.00"),
+		InputPerMTok:         money.MustParseDollars("11.00"),
+		OutputPerMTok:        money.MustParseDollars("55.00"),
+		CacheCreationPerMTok: money.MustParseDollars("13.75"),
+		CacheReadPerMTok:     money.MustParseDollars("1.10"),
 		Bands: []PricingBand{{
 			AboveInputTokens:     272_000,
-			InputPerMTok:         money.MustParseDollars("20.00"),
-			OutputPerMTok:        money.MustParseDollars("75.00"),
-			CacheCreationPerMTok: money.MustParseDollars("25.00"),
-			CacheReadPerMTok:     money.MustParseDollars("2.00"),
+			InputPerMTok:         money.MustParseDollars("22.00"),
+			OutputPerMTok:        money.MustParseDollars("82.50"),
+			CacheCreationPerMTok: money.MustParseDollars("27.50"),
+			CacheReadPerMTok:     money.MustParseDollars("2.20"),
 		}},
 	},
 	{

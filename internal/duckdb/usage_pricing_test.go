@@ -500,3 +500,24 @@ func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, money.MustParseDollars("1.1"), report.Totals.Cost)
 }
+
+func TestPriceModelCasePreservesQualifiedBedrockModels(t *testing.T) {
+	syncer := newInMemoryTestSync(t, newLocalDB(t), SyncOptions{})
+	for _, tt := range []struct{ model, want string }{
+		{"openai.gpt-6-astra", "bedrock_mantle/openai.gpt-6-astra"},
+		{"openai.gpt-5.4", "bedrock_mantle/openai.gpt-5.4"},
+		{"bedrock_mantle/us-gov-west-1/openai.gpt-5.4", "bedrock_mantle/us-gov-west-1/openai.gpt-5.4"},
+		{"openai/gpt-reserve", "gpt-5.6-luna"},
+		{"daimon/k2d6-agent", "moonshot/kimi-k2.6"},
+	} {
+		t.Run(tt.model, func(t *testing.T) {
+			var got string
+			err := syncer.DB().QueryRowContext(t.Context(),
+				"SELECT "+duckPriceModelCaseSQL()+
+					" FROM (SELECT ? AS model, TIMESTAMP '2026-09-09' AS pricing_ts)",
+				tt.model).Scan(&got)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
