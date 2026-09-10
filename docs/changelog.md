@@ -58,9 +58,10 @@ description: Release history for AgentsView
 
 **Bug fixes**
 
-- Price Codex Astra turns reported as `openai.gpt-6-astra` using the
-  `gpt-6-astra` catalog rates while keeping the reported model name in usage
-  breakdowns, including before a live pricing refresh succeeds.
+- Price namespaced Codex GPT-5.4, GPT-5.6 Luna, GPT-5.6 Terra, and GPT-6 Astra
+  turns while keeping their reported model names in usage breakdowns. The
+  first three use the standard Bedrock catalog rows; Astra remains priced
+  before a live pricing refresh succeeds.
 - Preserve nonempty tool output from legacy Cursor text transcripts. Existing
   archived sessions gain the output on their next sync when the source files
   are still available. (#1627)

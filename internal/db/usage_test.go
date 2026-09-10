@@ -5820,62 +5820,94 @@ func TestGetDailyUsage_GPTReserveLunaPricing(t *testing.T) {
 	assert.NotContains(t, reserve.Pricing.Models, pricingpkg.GPT56LunaCanonical)
 }
 
-func TestGetDailyUsage_AstraPricing(t *testing.T) {
+func TestGetDailyUsage_CodexNamespacedPricing(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern: pricingpkg.GPT6AstraCanonical,
-		InputPerMTok: money.MustParseDollars("10"),
-	}}), "seed Astra pricing")
+	tests := []struct {
+		name      string
+		reported  string
+		canonical string
+		rate      string
+	}{
+		{
+			name:      "GPT-5.4",
+			reported:  pricingpkg.CodexGPT54ModelName,
+			canonical: pricingpkg.BedrockGPT54Canonical,
+			rate:      "4",
+		},
+		{
+			name:      "GPT-5.6 Luna",
+			reported:  pricingpkg.CodexGPT56LunaModelName,
+			canonical: pricingpkg.BedrockGPT56LunaCanonical,
+			rate:      "6",
+		},
+		{
+			name:      "GPT-5.6 Terra",
+			reported:  pricingpkg.CodexGPT56TerraModelName,
+			canonical: pricingpkg.BedrockGPT56TerraCanonical,
+			rate:      "8",
+		},
+		{
+			name:      "GPT-6 Astra",
+			reported:  pricingpkg.CodexAstraModelName,
+			canonical: pricingpkg.GPT6AstraCanonical,
+			rate:      "10",
+		},
+	}
 
 	ts := "2026-09-09T12:00:00Z"
 	tokenUsage := jsontext.Value(`{"input_tokens":1000000,"output_tokens":0}`)
-	for _, fixture := range []struct {
-		id    string
-		model string
-	}{
-		{id: "codex-astra-namespaced", model: pricingpkg.CodexAstraModelName},
-		{id: "codex-astra-canonical", model: pricingpkg.GPT6AstraCanonical},
-	} {
-		insertSession(t, d, fixture.id, "proj", func(s *Session) {
-			s.Agent = "codex"
-			s.StartedAt = new(ts)
-		})
-		insertMessages(t, d, Message{
-			SessionID:  fixture.id,
-			Ordinal:    0,
-			Role:       "assistant",
-			Timestamp:  ts,
-			Model:      fixture.model,
-			TokenUsage: tokenUsage,
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+				ModelPattern: tt.canonical,
+				InputPerMTok: money.MustParseDollars(tt.rate),
+			}}), "seed canonical pricing")
+
+			for suffix, model := range map[string]string{
+				"reported":  tt.reported,
+				"canonical": tt.canonical,
+			} {
+				id := fmt.Sprintf("codex-namespaced-%d-%s", i, suffix)
+				insertSession(t, d, id, "proj", func(s *Session) {
+					s.Agent = "codex"
+					s.StartedAt = new(ts)
+				})
+				insertMessages(t, d, Message{
+					SessionID:  id,
+					Ordinal:    0,
+					Role:       "assistant",
+					Timestamp:  ts,
+					Model:      model,
+					TokenUsage: tokenUsage,
+				})
+			}
+
+			canonical, err := d.GetDailyUsage(ctx, UsageFilter{
+				From:     "2026-09-09",
+				To:       "2026-09-09",
+				Timezone: "UTC",
+				Model:    tt.canonical,
+			})
+			requireNoError(t, err, "GetDailyUsage canonical model")
+			assert.NotZero(t, canonical.Totals.TotalCost.Microdollars)
+
+			namespaced, err := d.GetDailyUsage(ctx, UsageFilter{
+				From:     "2026-09-09",
+				To:       "2026-09-09",
+				Timezone: "UTC",
+				Model:    tt.reported,
+			})
+			requireNoError(t, err, "GetDailyUsage namespaced model")
+			assert.Equal(t, canonical.Totals.TotalCost, namespaced.Totals.TotalCost)
+			require.NotNil(t, namespaced.Pricing)
+			resolutions := namespaced.Pricing.Models[tt.reported].Resolutions
+			require.Len(t, resolutions, 1)
+			assert.Equal(t, tt.canonical, resolutions[0].PricedModel)
+			assert.NotContains(t, namespaced.Pricing.Models, tt.canonical)
 		})
 	}
-
-	canonical, err := d.GetDailyUsage(ctx, UsageFilter{
-		From:     "2026-09-09",
-		To:       "2026-09-09",
-		Timezone: "UTC",
-		Model:    pricingpkg.GPT6AstraCanonical,
-	})
-	requireNoError(t, err, "GetDailyUsage canonical Astra")
-	assert.NotZero(t, canonical.Totals.TotalCost.Microdollars)
-
-	namespaced, err := d.GetDailyUsage(ctx, UsageFilter{
-		From:     "2026-09-09",
-		To:       "2026-09-09",
-		Timezone: "UTC",
-		Model:    pricingpkg.CodexAstraModelName,
-	})
-	requireNoError(t, err, "GetDailyUsage namespaced Astra")
-	assert.Equal(t, canonical.Totals.TotalCost, namespaced.Totals.TotalCost)
-	require.NotNil(t, namespaced.Pricing)
-	resolutions := namespaced.Pricing.Models[pricingpkg.CodexAstraModelName].Resolutions
-	require.Len(t, resolutions, 1)
-	assert.Equal(t, pricingpkg.GPT6AstraCanonical,
-		resolutions[0].PricedModel)
-	assert.NotContains(t, namespaced.Pricing.Models,
-		pricingpkg.GPT6AstraCanonical)
 }
 
 // TestGetDailyUsage_KimiDateAliasMixedDaySameModel proves one reported

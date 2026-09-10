@@ -16,8 +16,8 @@ import (
 // date-based pricing: those names left the static set (the seed
 // deletes their stale rows) and k3/k3-agent moved from K2.6 to K3
 // rates. Version 3 removed moonshot/kimi-k3 after LiteLLM added it.
-// Version 4 adds a temporary gpt-6-astra fallback until the pinned
-// LiteLLM snapshot includes it.
+// Version 4 adds namespaced Codex mappings and a temporary gpt-6-astra
+// fallback until the pinned LiteLLM snapshot includes it.
 const supplementalVersion = "4"
 
 // Canonical pricing models runtime aliases resolve to.
@@ -25,14 +25,22 @@ const supplementalVersion = "4"
 // KimiK3Canonical is seeded by the supplemental set below because the
 // LiteLLM catalog lists only the provider-qualified Kimi K3 name.
 // GPT56LunaCanonical is the catalog id for Codex Luna Reserve (gpt-reserve).
+// The Bedrock constants are the standard catalog rows for namespaced Codex
+// models that otherwise collide with provider-qualified variants.
 // GPT6AstraCanonical is the catalog id for Codex's namespaced Astra model.
 const (
-	KimiK26Canonical    = "moonshot/kimi-k2.6"
-	KimiK3Canonical     = "kimi-k3"
-	GPT56LunaCanonical  = "gpt-5.6-luna"
-	GPT6AstraCanonical  = "gpt-6-astra"
-	GPTReserveModelName = "gpt-reserve"
-	CodexAstraModelName = "openai.gpt-6-astra"
+	KimiK26Canonical           = "moonshot/kimi-k2.6"
+	KimiK3Canonical            = "kimi-k3"
+	GPT56LunaCanonical         = "gpt-5.6-luna"
+	BedrockGPT54Canonical      = "bedrock_mantle/openai.gpt-5.4"
+	BedrockGPT56LunaCanonical  = "bedrock_mantle/openai.gpt-5.6-luna"
+	BedrockGPT56TerraCanonical = "bedrock_mantle/openai.gpt-5.6-terra"
+	GPT6AstraCanonical         = "gpt-6-astra"
+	GPTReserveModelName        = "gpt-reserve"
+	CodexGPT54ModelName        = "openai.gpt-5.4"
+	CodexGPT56LunaModelName    = "openai.gpt-5.6-luna"
+	CodexGPT56TerraModelName   = "openai.gpt-5.6-terra"
+	CodexAstraModelName        = "openai.gpt-6-astra"
 )
 
 // KimiModelEraCutoff is the UTC instant at which the date-ambiguous
@@ -65,15 +73,18 @@ type FixedPricingAlias struct {
 	Canonical string
 }
 
-// fixedPricingAliases are timestamp-independent reported names that
-// never appear as catalog keys. Codex writes gpt-reserve for Luna
-// Reserve turns; Kimi Work writes k2d6-agent for the K2.6 era. A
-// static supplemental rate row for these names would hide later
-// catalog updates for the canonical model, including Pydantic
-// time-window rates for GPT-5.6 Luna.
+// fixedPricingAliases are timestamp-independent reported names that need a
+// curated catalog target. Codex writes gpt-reserve for Luna Reserve turns and
+// namespaced model ids that can collide with provider-qualified rows; Kimi Work
+// writes k2d6-agent for the K2.6 era. A static supplemental rate row for these
+// names would hide later catalog updates for the canonical model, including
+// Pydantic time-window rates for GPT-5.6 Luna.
 var fixedPricingAliases = []FixedPricingAlias{
 	{Name: "k2d6-agent", Canonical: KimiK26Canonical},
 	{Name: GPTReserveModelName, Canonical: GPT56LunaCanonical},
+	{Name: CodexGPT54ModelName, Canonical: BedrockGPT54Canonical},
+	{Name: CodexGPT56LunaModelName, Canonical: BedrockGPT56LunaCanonical},
+	{Name: CodexGPT56TerraModelName, Canonical: BedrockGPT56TerraCanonical},
 	{Name: CodexAstraModelName, Canonical: GPT6AstraCanonical},
 }
 
