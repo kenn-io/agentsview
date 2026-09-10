@@ -370,19 +370,20 @@ func (s cursorSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 				sessionDir := filepath.Join(dir, entry.Name())
 				sessionDirs = append(sessionDirs, sessionDir)
 				base := filepath.Join(sessionDir, entry.Name())
-				jsonl, statErr := streamingRegularFileCandidate(base + ".jsonl")
-				if statErr != nil {
-					return fmt.Errorf("stat cursor candidate %s: %w", base+".jsonl", statErr)
-				}
-				txt, statErr := streamingRegularFileCandidate(base + ".txt")
-				if statErr != nil {
-					return fmt.Errorf("stat cursor candidate %s: %w", base+".txt", statErr)
-				}
 				path := ""
-				if jsonl {
-					path = base + ".jsonl"
-				} else if txt {
-					path = base + ".txt"
+				for _, ext := range []string{".jsonl", ".txt"} {
+					// A symlink must not reserve the stem or outrank a regular file.
+					info, statErr := os.Lstat(base + ext)
+					if errors.Is(statErr, os.ErrNotExist) {
+						continue
+					}
+					if statErr != nil {
+						return fmt.Errorf("stat cursor candidate %s: %w", base+ext, statErr)
+					}
+					if info.Mode().IsRegular() {
+						path = base + ext
+						break
+					}
 				}
 				if path == "" {
 					return nil

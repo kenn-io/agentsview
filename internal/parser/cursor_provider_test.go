@@ -869,17 +869,24 @@ func TestCursorTopLevelTranscriptOutranksSubagentCopyRegardlessOfExtension(t *te
 	}
 }
 
-func TestCursorDiscoverySkipsSymlinkedSubagentTranscriptInBothWalks(t *testing.T) {
+func TestCursorDiscoverySkipsSymlinkedTranscriptsInBothWalks(t *testing.T) {
 	root := t.TempDir()
 	transcriptsDir := filepath.Join(root, "Users-demo", "agent-transcripts")
 	parent := cursorProviderWriteJSONLTranscript(
 		t, transcriptsDir, filepath.Join("parent", "parent.jsonl"), "parent",
 	)
+	child := cursorProviderWriteJSONLTranscript(
+		t, transcriptsDir, filepath.Join("parent", "subagents", "nested.jsonl"), "child",
+	)
 	target := cursorProviderWriteJSONLTranscript(t, filepath.Join(root, "elsewhere"), "real.jsonl", "real")
-	link := filepath.Join(transcriptsDir, "parent", "subagents", "child.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlink not supported: %v", err)
+	for _, link := range []string{
+		filepath.Join(transcriptsDir, "parent", "subagents", "child.jsonl"),
+		filepath.Join(transcriptsDir, "nested", "nested.jsonl"),
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink not supported: %v", err)
+		}
 	}
 	provider, ok := NewProvider(AgentCursor, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
@@ -901,8 +908,8 @@ func TestCursorDiscoverySkipsSymlinkedSubagentTranscriptInBothWalks(t *testing.T
 			for _, source := range sources {
 				paths = append(paths, source.DisplayPath)
 			}
-			assert.Equal(t, []string{parent}, paths,
-				"a symlinked transcript cannot be opened by parseSession, so no walk may yield it")
+			assert.ElementsMatch(t, []string{parent, child}, paths,
+				"symlinked transcripts must neither be yielded nor shadow regular transcripts")
 		})
 	}
 }
