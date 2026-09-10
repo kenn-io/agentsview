@@ -117,27 +117,26 @@ func waitForSchedulerConditionWithin(
 }
 
 func TestEmbedSchedulerBurstOfNotifyProducesExactlyOneBuild(t *testing.T) {
-	fake := &fakeEmbedManager{}
-	s := newEmbedScheduler(fake, 20*time.Millisecond, 0, false, nil)
+	synctest.Test(t, func(t *testing.T) {
+		fake := &fakeEmbedManager{}
+		s := newEmbedScheduler(fake, 20*time.Millisecond, 0, false, nil)
 
-	// Queue the whole burst before Run starts so the test exercises the
-	// scheduler's documented pre-reader coalescing without racing the debounce
-	// interval on slow or coarsely scheduled runners.
-	for range 10 {
-		s.Notify()
-	}
+		// Queue the whole burst before Run starts so the test exercises the
+		// scheduler's documented pre-reader coalescing without racing the debounce
+		// interval on slow or coarsely scheduled runners.
+		for range 10 {
+			s.Notify()
+		}
 
-	ctx := t.Context()
-	go s.Run(ctx)
-	defer s.Stop()
+		go s.Run(t.Context())
+		defer s.Stop()
 
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-		"expected a build after the burst quieted")
-	// Give any spurious extra build a chance to show up before asserting
-	// there is exactly one.
-	time.Sleep(60 * time.Millisecond)
-	assert.Equal(t, 1, fake.callCount(), "a burst of Notify must collapse to one build")
-	assert.Equal(t, []vector.BuildRequest{{}}, fake.callsSnapshot())
+		synctest.Sleep(60 * time.Millisecond)
+		require.GreaterOrEqual(t, fake.callCount(), 1,
+			"expected a build after the burst quieted")
+		assert.Equal(t, 1, fake.callCount(), "a burst of Notify must collapse to one build")
+		assert.Equal(t, []vector.BuildRequest{{}}, fake.callsSnapshot())
+	})
 }
 
 // TestEmbedSchedulerIncludeAutomatedThreadsIntoBuildRequests asserts the
@@ -667,24 +666,25 @@ func (e *recordingEmitter) count() int {
 }
 
 func TestTeeEmitterAlwaysCallsPrimaryAndGatesSchedulerOnRunAfterSync(t *testing.T) {
-	primary := &recordingEmitter{}
-	fake := &fakeEmbedManager{}
-	s := newEmbedScheduler(fake, 10*time.Millisecond, 0, false, nil)
-	ctx := t.Context()
-	go s.Run(ctx)
-	defer s.Stop()
+	synctest.Test(t, func(t *testing.T) {
+		primary := &recordingEmitter{}
+		fake := &fakeEmbedManager{}
+		s := newEmbedScheduler(fake, 10*time.Millisecond, 0, false, nil)
+		go s.Run(t.Context())
+		defer s.Stop()
 
-	disabled := teeEmitter{primary: primary, scheduler: s, runAfterSync: false}
-	disabled.Emit("sessions")
-	assert.Equal(t, 1, primary.count())
-	time.Sleep(30 * time.Millisecond)
-	assert.Equal(t, 0, fake.callCount(), "runAfterSync=false must not notify the scheduler")
+		disabled := teeEmitter{primary: primary, scheduler: s, runAfterSync: false}
+		disabled.Emit("sessions")
+		assert.Equal(t, 1, primary.count())
+		synctest.Sleep(30 * time.Millisecond)
+		assert.Equal(t, 0, fake.callCount(), "runAfterSync=false must not notify the scheduler")
 
-	enabled := teeEmitter{primary: primary, scheduler: s, runAfterSync: true}
-	enabled.Emit("sessions")
-	assert.Equal(t, 2, primary.count())
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-		"runAfterSync=true must notify the scheduler")
+		enabled := teeEmitter{primary: primary, scheduler: s, runAfterSync: true}
+		enabled.Emit("sessions")
+		assert.Equal(t, 2, primary.count())
+		synctest.Sleep(30 * time.Millisecond)
+		require.Equal(t, 1, fake.callCount(), "runAfterSync=true must notify the scheduler")
+	})
 }
 
 // TestRunRemoteHostSyncLoop_EmitsThroughTeeNotifiesScheduler is a

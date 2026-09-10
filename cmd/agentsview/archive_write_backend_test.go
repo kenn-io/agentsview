@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	stdsync "sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -29,24 +29,26 @@ import (
 // output: an immediate delegation announcement, elapsed-time heartbeats
 // while the blocking POST is in flight, and silence after stop.
 func TestDaemonPushHeartbeat(t *testing.T) {
-	orig := daemonPushHeartbeatInterval
-	daemonPushHeartbeatInterval = 5 * time.Millisecond
-	t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
+	synctest.Test(t, func(t *testing.T) {
+		orig := daemonPushHeartbeatInterval
+		daemonPushHeartbeatInterval = 5 * time.Millisecond
+		t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
 
-	var out syncBuffer
-	stop := startDaemonPushHeartbeatTo(&out, "PostgreSQL")
-	assert.Contains(t, out.String(),
-		"Pushing to PostgreSQL via the local daemon")
+		var out syncBuffer
+		stop := startDaemonPushHeartbeatTo(&out, "PostgreSQL")
+		assert.Contains(t, out.String(),
+			"Pushing to PostgreSQL via the local daemon")
 
-	require.Eventually(t, func() bool {
-		return strings.Contains(out.String(),
-			"still pushing to PostgreSQL via the daemon")
-	}, time.Second, time.Millisecond, "heartbeat line must appear")
+		synctest.Sleep(daemonPushHeartbeatInterval)
+		assert.Contains(t, out.String(),
+			"still pushing to PostgreSQL via the daemon",
+			"heartbeat line must appear")
 
-	stop()
-	settled := out.String()
-	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, settled, out.String(), "no output after stop")
+		stop()
+		settled := out.String()
+		synctest.Sleep(20 * time.Millisecond)
+		assert.Equal(t, settled, out.String(), "no output after stop")
+	})
 }
 
 // TestDaemonPushProgressSilencesHeartbeat pins that the first streamed
@@ -760,58 +762,58 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 ) {
 	for _, owner := range pushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
-			h := newPushWatchOwnerHarness(1)
-			ctx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
-			done := make(chan error, 1)
-			go func() { done <- owner.run(ctx, h.hooks()) }()
+			synctest.Test(t, func(t *testing.T) {
+				h := newPushWatchOwnerHarness(1)
+				ctx, cancel := context.WithCancel(context.Background())
+				t.Cleanup(cancel)
+				done := make(chan error, 1)
+				go func() { done <- owner.run(ctx, h.hooks()) }()
 
-			first := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 1, first.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonStartup, first.reason)
-			}
-			require.Eventually(t, func() bool {
+				first := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 1, first.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonStartup, first.reason)
+				}
+				synctest.Wait()
 				pending, waiters := h.pending()
-				return pending && waiters == 1
-			}, time.Second, time.Millisecond,
-				"partial startup must retain one dirty generation and waiter")
-			select {
-			case <-h.opened:
-				require.Fail(t, "partial startup opened watcher dispatch")
-			default:
-			}
+				require.True(t, pending && waiters == 1,
+					"partial startup must retain one dirty generation and waiter")
+				select {
+				case <-h.opened:
+					require.Fail(t, "partial startup opened watcher dispatch")
+				default:
+				}
 
-			h.floor <- time.Now()
-			second := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 2, second.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonInterval, second.reason)
-			}
-			receiveArchiveTest(t, h.opened)
-			require.Eventually(t, func() bool {
-				pending, waiters := h.pending()
-				return !pending && waiters == 0
-			}, time.Second, time.Millisecond,
-				"complete periodic push must drain startup work")
+				h.floor <- time.Now()
+				second := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 2, second.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonInterval, second.reason)
+				}
+				receiveArchiveTest(t, h.opened)
+				synctest.Wait()
+				pending, waiters = h.pending()
+				require.True(t, !pending && waiters == 0,
+					"complete periodic push must drain startup work")
 
-			events, opens, startupSyncs, localSyncs := h.snapshot()
-			require.NotEmpty(t, events)
-			assert.Equal(t, "collect", events[0],
-				"watcher collection must precede startup work")
-			assert.Equal(t, 1, opens)
-			if isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, 1, startupSyncs)
-				assert.GreaterOrEqual(t, localSyncs, 2,
-					"initial and retry pushes each run local sync")
-				assert.Less(t, indexOfEvent(events, "startup-sync"),
-					indexOfEvent(events, "push"))
-				assert.Less(t, indexOfEvent(events, "local-sync"),
-					indexOfEvent(events, "push"))
-			}
+				events, opens, startupSyncs, localSyncs := h.snapshot()
+				require.NotEmpty(t, events)
+				assert.Equal(t, "collect", events[0],
+					"watcher collection must precede startup work")
+				assert.Equal(t, 1, opens)
+				if isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, 1, startupSyncs)
+					assert.GreaterOrEqual(t, localSyncs, 2,
+						"initial and retry pushes each run local sync")
+					assert.Less(t, indexOfEvent(events, "startup-sync"),
+						indexOfEvent(events, "push"))
+					assert.Less(t, indexOfEvent(events, "local-sync"),
+						indexOfEvent(events, "push"))
+				}
 
-			cancel()
-			require.NoError(t, receiveArchiveTest(t, done))
+				cancel()
+				require.NoError(t, receiveArchiveTest(t, done))
+			})
 		})
 	}
 }
@@ -821,61 +823,60 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 ) {
 	for _, owner := range pushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
-			h := newPushWatchOwnerHarness(2)
-			ctx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
-			done := make(chan error, 1)
-			go func() { done <- owner.run(ctx, h.hooks()) }()
+			synctest.Test(t, func(t *testing.T) {
+				h := newPushWatchOwnerHarness(2)
+				ctx, cancel := context.WithCancel(context.Background())
+				t.Cleanup(cancel)
+				done := make(chan error, 1)
+				go func() { done <- owner.run(ctx, h.hooks()) }()
 
-			first := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 1, first.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonStartup, first.reason)
-			}
-			receiveArchiveTest(t, h.opened)
-			callback := h.watcherCallback()
-			require.NotNil(t, callback)
-			callbackDone := make(chan error, 1)
-			go func() {
-				callbackDone <- callback(ctx, syncpkg.WatchBatch{FullSync: true})
-			}()
-			require.Eventually(t, func() bool {
+				first := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 1, first.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonStartup, first.reason)
+				}
+				receiveArchiveTest(t, h.opened)
+				callback := h.watcherCallback()
+				require.NotNil(t, callback)
+				callbackDone := make(chan error, 1)
+				go func() {
+					callbackDone <- callback(ctx, syncpkg.WatchBatch{FullSync: true})
+				}()
+				synctest.Wait()
 				pending, waiters := h.pending()
-				return pending && waiters == 1
-			}, time.Second, time.Millisecond)
+				require.True(t, pending && waiters == 1)
 
-			h.floor <- time.Now()
-			second := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 2, second.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonInterval, second.reason)
-			}
-			select {
-			case err := <-callbackDone:
-				require.Fail(t, "partial runtime push acknowledged watcher batch", "%v", err)
-			case <-time.After(50 * time.Millisecond):
-			}
-			require.Eventually(t, func() bool {
-				pending, waiters := h.pending()
-				return pending && waiters == 1
-			}, time.Second, time.Millisecond)
+				h.floor <- time.Now()
+				second := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 2, second.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonInterval, second.reason)
+				}
+				synctest.Wait()
+				select {
+				case err := <-callbackDone:
+					require.Fail(t, "partial runtime push acknowledged watcher batch", "%v", err)
+				default:
+				}
+				pending, waiters = h.pending()
+				require.True(t, pending && waiters == 1)
 
-			h.floor <- time.Now()
-			third := receiveArchiveTest(t, h.attempts)
-			require.Equal(t, 3, third.index)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonInterval, third.reason)
-			}
-			require.NoError(t, receiveArchiveTest(t, callbackDone))
-			require.Eventually(t, func() bool {
-				pending, waiters := h.pending()
-				return !pending && waiters == 0
-			}, time.Second, time.Millisecond)
-			_, opens, _, _ := h.snapshot()
-			assert.Equal(t, 1, opens, "runtime retries must not reopen dispatch")
+				h.floor <- time.Now()
+				third := receiveArchiveTest(t, h.attempts)
+				require.Equal(t, 3, third.index)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonInterval, third.reason)
+				}
+				require.NoError(t, receiveArchiveTest(t, callbackDone))
+				synctest.Wait()
+				pending, waiters = h.pending()
+				require.True(t, !pending && waiters == 0)
+				_, opens, _, _ := h.snapshot()
+				assert.Equal(t, 1, opens, "runtime retries must not reopen dispatch")
 
-			cancel()
-			require.NoError(t, receiveArchiveTest(t, done))
+				cancel()
+				require.NoError(t, receiveArchiveTest(t, done))
+			})
 		})
 	}
 }
@@ -883,28 +884,29 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 func TestPushWatchProductionOwnersFallbackUsesActiveIntervalFloor(t *testing.T) {
 	for _, owner := range pushWatchOwnerCases(t) {
 		t.Run(owner.name, func(t *testing.T) {
-			h := newPushWatchOwnerHarness()
-			ctx, cancel := context.WithCancel(context.Background())
-			done := make(chan error, 1)
-			go func() { done <- owner.run(ctx, h.hooks()) }()
+			synctest.Test(t, func(t *testing.T) {
+				h := newPushWatchOwnerHarness()
+				ctx, cancel := context.WithCancel(context.Background())
+				done := make(chan error, 1)
+				go func() { done <- owner.run(ctx, h.hooks()) }()
 
-			receiveArchiveTest(t, h.attempts)
-			receiveArchiveTest(t, h.opened)
-			degraded := h.degradationCallback()
-			require.NotNil(t, degraded, "watcher collection receives a degradation owner")
-			require.NoError(t, degraded([]string{"/root-a", "/root-a", "/root-b"}))
-			require.Eventually(t, func() bool {
+				receiveArchiveTest(t, h.attempts)
+				receiveArchiveTest(t, h.opened)
+				degraded := h.degradationCallback()
+				require.NotNil(t, degraded, "watcher collection receives a degradation owner")
+				require.NoError(t, degraded([]string{"/root-a", "/root-a", "/root-b"}))
+				synctest.Wait()
 				pending, waiters := h.pending()
-				return pending && waiters == 0
-			}, time.Second, time.Millisecond)
+				require.True(t, pending && waiters == 0)
 
-			h.floor <- time.Now()
-			attempt := receiveArchiveTest(t, h.attempts)
-			if !isLocalEnginePushWatchOwner(owner.name) {
-				assert.Equal(t, reasonInterval, attempt.reason)
-			}
-			cancel()
-			require.NoError(t, receiveArchiveTest(t, done))
+				h.floor <- time.Now()
+				attempt := receiveArchiveTest(t, h.attempts)
+				if !isLocalEnginePushWatchOwner(owner.name) {
+					assert.Equal(t, reasonInterval, attempt.reason)
+				}
+				cancel()
+				require.NoError(t, receiveArchiveTest(t, done))
+			})
 		})
 	}
 }
