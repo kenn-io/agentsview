@@ -72,7 +72,6 @@ func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
 		}
 		synctest.Sleep(50 * time.Millisecond)
 		require.Equal(t, 1, mgr.callCount(), "debounced pass never ran")
-		assert.Equal(t, 1, mgr.callCount(), "burst must coalesce into one pass")
 		calls := mgr.callsSnapshot()
 		assert.True(t, calls[0].Full,
 			"the lifetime's first pass carries the startup full top-up")

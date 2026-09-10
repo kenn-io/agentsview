@@ -233,12 +233,7 @@ func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
 		}))
 
 		coordinator.requestPoll()
-		synctest.Wait()
-		select {
-		case <-syncer.wake:
-		default:
-			require.FailNow(t, "poll did not run before timeout")
-		}
+		requirePollWithin(t, syncer.wake, time.Second)
 		assert.Equal(t, [][]string{{root}}, syncer.snapshot())
 
 		require.NoError(t, os.RemoveAll(root))
@@ -249,12 +244,7 @@ func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
 
 		require.NoError(t, os.Mkdir(root, 0o755))
 		coordinator.requestPoll()
-		synctest.Wait()
-		select {
-		case <-syncer.wake:
-		default:
-			require.FailNow(t, "poll did not run before timeout")
-		}
+		requirePollWithin(t, syncer.wake, time.Second)
 		assert.Equal(t, [][]string{{root}, {root}}, syncer.snapshot(),
 			"the polling obligation must remain active for a returning root")
 	})
@@ -288,12 +278,7 @@ func TestUnwatchedPollDefersScopesWhileProbePathMissing(t *testing.T) {
 		}))
 
 		coordinator.requestPoll()
-		synctest.Wait()
-		select {
-		case <-syncer.wake:
-		default:
-			require.FailNow(t, "poll did not run before timeout")
-		}
+		requirePollWithin(t, syncer.wake, time.Second)
 		assert.Equal(t, [][]string{{configured}}, syncer.snapshot(),
 			"an available probe reconciles the configured scope")
 
@@ -306,12 +291,7 @@ func TestUnwatchedPollDefersScopesWhileProbePathMissing(t *testing.T) {
 
 		require.NoError(t, os.Mkdir(physical, 0o755))
 		coordinator.requestPoll()
-		synctest.Wait()
-		select {
-		case <-syncer.wake:
-		default:
-			require.FailNow(t, "poll did not run before timeout")
-		}
+		requirePollWithin(t, syncer.wake, time.Second)
 		assert.Equal(t, [][]string{{configured}, {configured}}, syncer.snapshot(),
 			"the deferred scope must resume once the physical path returns")
 	})
@@ -347,12 +327,7 @@ func TestUnwatchedPollDefersSharedScopeWhileAnyProbeMissing(t *testing.T) {
 		}))
 
 		coordinator.requestPoll()
-		synctest.Wait()
-		select {
-		case <-syncer.wake:
-		default:
-			require.FailNow(t, "poll did not run before timeout")
-		}
+		requirePollWithin(t, syncer.wake, time.Second)
 		assert.Equal(t, [][]string{{configured}}, syncer.snapshot(),
 			"with every probe available the shared scope reconciles")
 
@@ -365,12 +340,7 @@ func TestUnwatchedPollDefersSharedScopeWhileAnyProbeMissing(t *testing.T) {
 
 		require.NoError(t, os.Mkdir(sessions, 0o755))
 		coordinator.requestPoll()
-		synctest.Wait()
-		select {
-		case <-syncer.wake:
-		default:
-			require.FailNow(t, "poll did not run before timeout")
-		}
+		requirePollWithin(t, syncer.wake, time.Second)
 		assert.Equal(t, [][]string{{configured}, {configured}}, syncer.snapshot(),
 			"the shared scope must resume once every probe returns")
 	})
@@ -615,12 +585,7 @@ func TestUnwatchedPollStopCancelsAndJoinsActiveReconciliation(t *testing.T) {
 			Key: "owned", Scopes: []pollingScope{{Root: owned}},
 		}))
 		coordinator.requestPoll()
-		synctest.Wait()
-		select {
-		case <-syncer.started:
-		default:
-			require.FailNow(t, "poll did not run before timeout")
-		}
+		requirePollWithin(t, syncer.started, time.Second)
 		coordinator.requestPoll()
 
 		stopDone := make(chan struct{})
@@ -628,12 +593,7 @@ func TestUnwatchedPollStopCancelsAndJoinsActiveReconciliation(t *testing.T) {
 			coordinator.Stop()
 			close(stopDone)
 		}()
-		synctest.Wait()
-		select {
-		case <-stopDone:
-		default:
-			require.FailNow(t, "poll did not run before timeout")
-		}
+		requirePollWithin(t, stopDone, time.Second)
 		select {
 		case <-syncer.canceled:
 		default:

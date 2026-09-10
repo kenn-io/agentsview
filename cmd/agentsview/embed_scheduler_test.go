@@ -132,8 +132,6 @@ func TestEmbedSchedulerBurstOfNotifyProducesExactlyOneBuild(t *testing.T) {
 		defer s.Stop()
 
 		synctest.Sleep(60 * time.Millisecond)
-		require.GreaterOrEqual(t, fake.callCount(), 1,
-			"expected a build after the burst quieted")
 		assert.Equal(t, 1, fake.callCount(), "a burst of Notify must collapse to one build")
 		assert.Equal(t, []vector.BuildRequest{{}}, fake.callsSnapshot())
 	})

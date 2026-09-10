@@ -40,7 +40,7 @@ func TestDaemonPushHeartbeat(t *testing.T) {
 			"Pushing to PostgreSQL via the local daemon")
 
 		synctest.Sleep(daemonPushHeartbeatInterval)
-		assert.Contains(t, out.String(),
+		require.Contains(t, out.String(),
 			"still pushing to PostgreSQL via the daemon",
 			"heartbeat line must appear")
 
@@ -887,6 +887,7 @@ func TestPushWatchProductionOwnersFallbackUsesActiveIntervalFloor(t *testing.T) 
 			synctest.Test(t, func(t *testing.T) {
 				h := newPushWatchOwnerHarness()
 				ctx, cancel := context.WithCancel(context.Background())
+				t.Cleanup(cancel)
 				done := make(chan error, 1)
 				go func() { done <- owner.run(ctx, h.hooks()) }()
 

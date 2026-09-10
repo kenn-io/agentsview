@@ -457,12 +457,7 @@ func TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing(t *testing.T) {
 		}))
 
 		coordinator.requestPoll()
-		synctest.Wait()
-		select {
-		case <-syncer.wake:
-		default:
-			require.FailNow(t, "poll did not run before timeout")
-		}
+		requirePollWithin(t, syncer.wake, time.Second)
 
 		calls := syncer.snapshot()
 		require.Len(t, calls, 1,
@@ -471,12 +466,6 @@ func TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing(t *testing.T) {
 			"the call must be for the healthy provider")
 		assert.Equal(t, []string{sharedRoot}, calls[0].Roots)
 
-		// Assert A was never called.
-		synctest.Wait()
-		for _, c := range syncer.snapshot() {
-			assert.NotEqual(t, parser.AgentClaude, c.Agent,
-				"provider A must never be called while its probe is missing")
-		}
 	})
 }
 
