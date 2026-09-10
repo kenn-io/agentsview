@@ -16,8 +16,11 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
-// Resync may spend up to five seconds draining SQLite connections before a
-// swap, and the surrounding work can take longer on loaded Windows runners.
+// Budget for the polling waits in this file. Resync may spend up to five
+// seconds draining SQLite connections before a swap, and under contention on
+// the Windows runner these waits run tens of times slower than on an idle
+// machine, so one second leaves no margin for a refresh that takes about a
+// tenth of a second unloaded.
 const pricingResyncTestTimeout = 30 * time.Second
 
 // pricingCatalogTransport answers the GenAI Prices, LiteLLM, and OpenRouter
@@ -80,14 +83,14 @@ func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
 			default:
 				return false
 			}
-		}, time.Second, time.Millisecond)
+		}, pricingResyncTestTimeout, time.Millisecond)
 	})
 
 	ticks <- time.Now()
 	require.Eventually(t, func() bool {
 		price, err := database.GetModelPricing("scheduled-model")
 		return err == nil && price != nil
-	}, time.Second, time.Millisecond)
+	}, pricingResyncTestTimeout, time.Millisecond)
 
 	require.Equal(t,
 		"https://raw.githubusercontent.com/pydantic/genai-prices/main/"+
@@ -292,16 +295,16 @@ func TestRunPricingRefreshLoopContinuesAfterFailure(t *testing.T) {
 			default:
 				return false
 			}
-		}, time.Second, time.Millisecond)
+		}, pricingResyncTestTimeout, time.Millisecond)
 	})
 
 	ticks <- time.Time{}
 	require.Eventually(t, func() bool {
 		return attempts.Load() == 1
-	}, time.Second, time.Millisecond)
+	}, pricingResyncTestTimeout, time.Millisecond)
 
 	ticks <- time.Time{}
 	require.Eventually(t, func() bool {
 		return attempts.Load() == 2
-	}, time.Second, time.Millisecond)
+	}, pricingResyncTestTimeout, time.Millisecond)
 }
