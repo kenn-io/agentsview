@@ -465,9 +465,10 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 			)
 			done <- err
 		}()
+		synctest.Wait()
 		select {
 		case <-started:
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "watch batch did not enter reconciliation discovery")
 		}
 
@@ -475,10 +476,11 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 		assert.Equal(t, PhaseDiscovering, progress.Phase)
 
 		release <- struct{}{}
+		synctest.Wait()
 		select {
 		case err := <-done:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "watch batch did not finish after discovery resumed")
 		}
 	})
@@ -535,9 +537,10 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 			)
 			done <- err
 		}()
+		synctest.Wait()
 		select {
 		case <-started:
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "watch batch did not enter changed-path parsing")
 		}
 
@@ -545,10 +548,11 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 		assert.Equal(t, PhaseSyncing, progress.Phase)
 
 		release <- struct{}{}
+		synctest.Wait()
 		select {
 		case err := <-done:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "watch batch did not finish after parsing resumed")
 		}
 	})
@@ -613,11 +617,12 @@ func TestApplyWatchBatchReportsProgressBeforeUnknownRenameStatReturns(
 			)
 			done <- err
 		}()
+		synctest.Wait()
 		select {
 		case <-started:
 		case err := <-done:
 			require.FailNow(t, "watch batch bypassed the owned planning stat", "%v", err)
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "watch batch did not enter rename planning stat")
 		}
 
@@ -625,10 +630,11 @@ func TestApplyWatchBatchReportsProgressBeforeUnknownRenameStatReturns(
 		assert.Equal(t, PhaseDiscovering, progress.Phase)
 
 		release <- struct{}{}
+		synctest.Wait()
 		select {
 		case err := <-done:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "watch batch did not finish after planning resumed")
 		}
 		_, active := engine.CurrentProgress()

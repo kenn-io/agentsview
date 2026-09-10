@@ -4086,25 +4086,33 @@ func TestStartupReconciledCallbackOwnersRetainFailureForLaterSuccess(t *testing.
 }
 
 func TestStartupReconciledCallbackReportsAbortedResyncAttempt(t *testing.T) {
-	database := openTestDB(t)
-	missingPath := filepath.Join(t.TempDir(), "missing.jsonl")
-	dbtest.SeedSession(t, database, "existing", "proj", func(s *db.Session) {
-		s.FilePath = &missingPath
-	})
-	reconciled := make(chan error, 1)
-	engine := NewEngine(database, EngineConfig{
-		OnStartupReconciled: func(stats SyncStats, err error) {
-			assert.True(t, stats.Aborted)
-			reconciled <- err
-		},
-	})
-	t.Cleanup(engine.Close)
+	synctest.Test(t, func(t *testing.T) {
+		database := openTestDB(t)
+		missingPath := filepath.Join(t.TempDir(), "missing.jsonl")
+		dbtest.SeedSession(t, database, "existing", "proj", func(s *db.Session) {
+			s.FilePath = &missingPath
+		})
+		reconciled := make(chan error, 1)
+		engine := NewEngine(database, EngineConfig{
+			OnStartupReconciled: func(stats SyncStats, err error) {
+				assert.True(t, stats.Aborted)
+				reconciled <- err
+			},
+		})
+		t.Cleanup(engine.Close)
 
-	resync := engine.ResyncAll(t.Context(), nil)
-	assert.True(t, resync.Aborted)
-	require.Error(t, requireReceiveWithin(t, reconciled, time.Second))
-	fallback := engine.SyncAll(t.Context(), nil)
-	assert.False(t, fallback.Aborted)
+		resync := engine.ResyncAll(t.Context(), nil)
+		assert.True(t, resync.Aborted)
+		synctest.Wait()
+		select {
+		case err := <-reconciled:
+			require.Error(t, err)
+		default:
+			require.FailNow(t, "aborted resync did not report startup reconciliation")
+		}
+		fallback := engine.SyncAll(t.Context(), nil)
+		assert.False(t, fallback.Aborted)
+	})
 }
 
 func TestStartupSyncFallbackSkipsAfterForegroundSyncCompletes(t *testing.T) {
@@ -9825,9 +9833,10 @@ func TestEngine_ReconcileWatchRootsReportsProgressBeforeDiscoveryReturns(t *test
 		go func() {
 			done <- engine.ReconcileWatchRoots(t.Context(), []string{root}, false)
 		}()
+		synctest.Wait()
 		select {
 		case <-started:
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "reconciliation did not enter discovery")
 		}
 
@@ -9835,10 +9844,11 @@ func TestEngine_ReconcileWatchRootsReportsProgressBeforeDiscoveryReturns(t *test
 		assert.Equal(t, PhaseDiscovering, progress.Phase)
 
 		release <- struct{}{}
+		synctest.Wait()
 		select {
 		case err := <-done:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "reconciliation did not finish after discovery resumed")
 		}
 	})
@@ -9871,9 +9881,10 @@ func TestEngine_SyncPathsReportsProgressBeforeChangedPathStatReturns(t *testing.
 		go func() {
 			done <- fx.engine.SyncPathsContext(t.Context(), []string{path})
 		}()
+		synctest.Wait()
 		select {
 		case <-started:
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "changed-path sync did not enter source stat")
 		}
 
@@ -9881,10 +9892,11 @@ func TestEngine_SyncPathsReportsProgressBeforeChangedPathStatReturns(t *testing.
 		assert.Equal(t, PhaseDiscovering, progress.Phase)
 
 		release <- struct{}{}
+		synctest.Wait()
 		select {
 		case err := <-done:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "changed-path sync did not finish after stat resumed")
 		}
 		_, active := fx.engine.CurrentProgress()
@@ -9961,9 +9973,10 @@ func TestEngine_TryRunExclusiveRejectsBusySyncWithoutRunningWork(t *testing.T) {
 				return nil
 			})
 		}()
+		synctest.Wait()
 		select {
 		case <-entered:
-		case <-time.After(time.Second):
+		default:
 			require.FailNow(t, "first exclusive sync did not acquire the lock")
 		}
 
