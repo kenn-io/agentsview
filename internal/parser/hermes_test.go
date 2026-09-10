@@ -914,17 +914,17 @@ func TestParseHermesArchiveIncludesTranscriptsMissingFromStateDB(
 	assert.Contains(t, ids, "hermes:extra")
 }
 
-// TestBuildHermesStateResultKeepsUsageOnlySessions is proof row 3's P2 half,
-// and also proof for P7: a usage-only session (messages nil, usage events
-// present) has no message rows at all, so there is nothing to back-fill
-// from and EndedAt stays the zero time. It does not exercise P5: ok is true
-// here because the usage event alone satisfies buildHermesStateResult's
-// "has something to publish" check. TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage
-// below is proof row 3's P5 half. P7 (hermesUsageEvents receives the same
-// hermesStateSession and its returned UsageEvents slice is unchanged) is
-// asserted by the InputTokens == 10 check below: the new EndedAt branch
-// runs after hermesUsageEvents is called and never touches ss, so this
-// session's one usage event is untouched by it.
+// TestBuildHermesStateResultKeepsUsageOnlySessions is proof row 3's P2 half:
+// a usage-only session (messages nil, usage events present) has no message
+// rows at all, so there is nothing to back-fill from and EndedAt stays the
+// zero time. It does not exercise P5: ok is true here because the usage
+// event alone satisfies buildHermesStateResult's "has something to publish"
+// check. TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage
+// below is proof row 3's P5 half. This test is not P7's proof: stateMessages
+// is nil here, so the new branch's len(stateMessages) > 0 guard never lets
+// it run, and this test cannot tell a passing branch from no branch at all.
+// TestBuildHermesStateResultKeepsUsageEventPinnedToStartedAtWhenEndedAtBackfills
+// below, where the branch genuinely fires, is P7's proof.
 func TestBuildHermesStateResultKeepsUsageOnlySessions(t *testing.T) {
 	res, ok := buildHermesStateResult(
 		hermesStateSession{
@@ -1179,27 +1179,51 @@ func TestHermesUsageEvents_PositiveEstimateUsedWhenStatusEmpty(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 500_000}, *events[0].Cost)
 }
 
-func TestBuildHermesStateResultLeavesAggregatesUnsetWhenNoTokens(t *testing.T) {
+// TestBuildHermesStateResultKeepsUsageEventPinnedToStartedAtWhenEndedAtBackfills
+// is proof row 3's P7 half, moved here from the usage-only nil-slice test
+// (TestBuildHermesStateResultKeepsUsageOnlySessions), whose nil stateMessages
+// never satisfy the new branch's len(stateMessages) > 0 guard and so cannot
+// prove anything about it. This session's one message (12:00:01) is after
+// its startedAt (12:00:00), so the branch actually fires: Session.EndedAt is
+// back-filled to the message time. hermesUsageEvents (internal/parser/hermes.go:943)
+// runs and consumes ss before that branch runs, and the branch only ever
+// writes sess.EndedAt, never ss, so the usage event's own OccurredAt
+// (internal/parser/hermes.go:1121, timeString(ss.endedAt, ss.startedAt))
+// must stay pinned to startedAt rather than follow the back-filled
+// Session.EndedAt. inputTokens is set (the prior version of this test had
+// none) so hermesUsageEvents actually returns an event to assert on;
+// outputTokens is still 0, so TotalOutputTokens/HasTotalOutputTokens stay
+// unset, and PeakContextTokens now reflects the input tokens.
+func TestBuildHermesStateResultKeepsUsageEventPinnedToStartedAtWhenEndedAtBackfills(t *testing.T) {
+	startedAt := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	newestMessage := time.Date(2026, 5, 14, 12, 0, 1, 0, time.UTC)
 	res, ok := buildHermesStateResult(
 		hermesStateSession{
-			id:        "no-usage",
-			source:    "cli",
-			model:     "gpt-5.5",
-			startedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
-			// No token counts: a session with messages but no recorded usage.
+			id:          "ended-at-backfill-usage",
+			source:      "cli",
+			model:       "gpt-5.5",
+			startedAt:   startedAt,
+			inputTokens: 100,
 		},
 		[]hermesStateMessage{{
 			role:      "user",
 			content:   "hi",
-			timestamp: time.Date(2026, 5, 14, 12, 0, 1, 0, time.UTC),
+			timestamp: newestMessage,
 		}},
 		t.TempDir(), "state.db", "", "local",
 	)
 	require.True(t, ok)
+	require.False(t, res.Session.EndedAt.IsZero())
+	assert.Equal(t, newestMessage, res.Session.EndedAt)
+
 	assert.False(t, res.Session.HasTotalOutputTokens)
 	assert.Zero(t, res.Session.TotalOutputTokens)
-	assert.False(t, res.Session.HasPeakContextTokens)
-	assert.Zero(t, res.Session.PeakContextTokens)
+	assert.True(t, res.Session.HasPeakContextTokens)
+	assert.Equal(t, 100, res.Session.PeakContextTokens)
+
+	require.Len(t, res.UsageEvents, 1)
+	assert.Equal(t, 100, res.UsageEvents[0].InputTokens)
+	assert.Equal(t, startedAt.Format(time.RFC3339Nano), res.UsageEvents[0].OccurredAt)
 }
 
 func TestCountHermesUsersSkipsToolResultOnlyMessages(t *testing.T) {
