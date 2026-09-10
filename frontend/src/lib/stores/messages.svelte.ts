@@ -2,10 +2,7 @@ import { SessionsService } from "../api/generated/index";
 import type { Message } from "../api/types.js";
 import { isAbortError } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
-import {
-  computeMainModelInfo,
-  type ModelEffort,
-} from "../utils/model.js";
+import { computeMainModelInfo, type ModelEffort } from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
 import { sessions } from "./sessions.svelte.js";
 
@@ -34,22 +31,10 @@ class MessagesStore {
     model: "",
     reasoningEffort: "",
   });
-  private _stableMainModel: string = $state("");
   mainModelInfo: ModelEffort = $derived(
-    this.loading
-      ? this._stableMainModelInfo.model || this._stableMainModel
-        ? {
-            model: this._stableMainModelInfo.model || this._stableMainModel,
-            reasoningEffort: this._stableMainModelInfo.reasoningEffort,
-          }
-        : this._stableMainModelInfo
-      : this.messages.length > 0
-        ? computeMainModelInfo(this.messages)
-        : { model: "", reasoningEffort: "" },
+    this.loading ? this._stableMainModelInfo : computeMainModelInfo(this.messages),
   );
-  mainModel: string = $derived(
-    this.mainModelInfo.model,
-  );
+  mainModel: string = $derived(this.mainModelInfo.model);
   private abortController: AbortController | null = null;
   private cancelledSessionId: string | null = null;
   // The session id alone cannot tell a stale load's late 404 apart
@@ -86,8 +71,6 @@ class MessagesStore {
     const readMarker = readProgress.get(id);
     if (!resumesCancelledLoad) {
       this.clear();
-      this._stableMainModelInfo = { model: "", reasoningEffort: "" };
-      this._stableMainModel = "";
       this.activeSessionToken = null;
       this.activeSessionUnreadOrdinal = null;
     }
@@ -181,7 +164,6 @@ class MessagesStore {
     this.cancelledSessionId = null;
     this.loading = false;
     this._stableMainModelInfo = { model: "", reasoningEffort: "" };
-    this._stableMainModel = "";
     this.messageCount = 0;
     this.activeSessionToken = null;
     this.activeSessionUnreadOrdinal = null;
@@ -605,10 +587,7 @@ class MessagesStore {
   }
 
   private updateStableMainModelInfo() {
-    this._stableMainModelInfo = this.messages.length > 0
-      ? computeMainModelInfo(this.messages)
-      : { model: "", reasoningEffort: "" };
-    this._stableMainModel = this._stableMainModelInfo.model;
+    this._stableMainModelInfo = computeMainModelInfo(this.messages);
   }
 }
 

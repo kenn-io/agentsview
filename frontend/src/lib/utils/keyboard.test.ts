@@ -806,7 +806,7 @@ describe("registerShortcuts", () => {
       first_message: null,
       started_at: null,
       ended_at: null,
-      message_count: 3001,
+      message_count: 1,
       user_message_count: 1,
       total_output_tokens: 0,
       peak_context_tokens: 0,
@@ -815,9 +815,36 @@ describe("registerShortcuts", () => {
     };
     sessions.sessions = [session];
     sessions.activeSessionId = session.id;
-    messages.sessionId = session.id;
+    vi.mocked(vi.spyOn(SessionsService, "getApiV1SessionsById"), {
+      partial: true,
+    }).mockResolvedValueOnce(session);
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockResolvedValueOnce({
+      messages: [
+        {
+          id: 1,
+          session_id: session.id,
+          ordinal: 0,
+          role: "assistant",
+          content: "answer",
+          timestamp: "",
+          has_thinking: false,
+          thinking_text: "",
+          has_tool_use: false,
+          content_length: 6,
+          model: "claude sonnet",
+          token_usage: null,
+          context_tokens: 0,
+          output_tokens: 0,
+          has_context_tokens: false,
+          has_output_tokens: false,
+          is_system: false,
+        },
+      ],
+      count: 1,
+    });
+    await messages.loadSession(session.id);
     messages.loading = true;
-    (messages as any)._stableMainModel = "claude sonnet";
+    expect(messages.mainModel).toBe("claude sonnet");
     vi.spyOn(SessionsService, "postApiV1SessionsByIdResume").mockRejectedValue(
       new Error("backend unavailable"),
     );

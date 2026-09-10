@@ -245,7 +245,6 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // events. Existing rows need re-parsing so the new awaiting_user
 // value populates correctly.)
 //
-// (44: Claude and Codex reasoning effort on assistant messages.)
 // (22: added termination_status column to sessions; existing
 // rows need re-parsing so the Claude classifier can populate
 // the new column.)

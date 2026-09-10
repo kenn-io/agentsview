@@ -37,6 +37,6 @@ func TestReasoningEffortNativeConversionAndDiff(t *testing.T) {
 		messageTokenFingerprintTwin(rows),
 		messageTokenFingerprintTwin([]db.Message{changed, rows[1]}),
 	)
-	assert.Equal(t, "reasoning_effort differs",
+	assert.Equal(t, `reasoning_effort "high" -> "medium"`,
 		messageMetadataDiff(rows[0], changed))
 }

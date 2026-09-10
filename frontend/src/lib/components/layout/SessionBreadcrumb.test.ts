@@ -4,7 +4,7 @@ import { mount, unmount, tick } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 // @ts-ignore
 import SessionBreadcrumb from "./SessionBreadcrumb.svelte";
-import type { Message, Session } from "../../api/types.js";
+import type { Session } from "../../api/types.js";
 import { OpenersService, SessionsService } from "../../api/generated/index";
 import { messages } from "../../stores/messages.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
@@ -44,6 +44,8 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
       getApiV1Openers: vi.fn(),
     },
     SessionsService: {
+      getApiV1SessionsById: vi.fn(),
+      getApiV1SessionsByIdMessages: vi.fn(),
       getApiV1SessionsByIdDirectory: vi.fn(),
       getApiV1SessionsByIdUsage: vi.fn(),
       postApiV1SessionsByIdResume: vi.fn(),
@@ -153,7 +155,7 @@ async function openUsageBreakdown(): Promise<void> {
   await tick();
 }
 
-function makeAssistantMessage(model: string, reasoning_effort?: string): Message {
+function makeAssistantMessage(model: string, reasoning_effort?: string) {
   return {
     id: 1,
     session_id: "run:123456789abcdef",
@@ -340,9 +342,7 @@ describe("SessionBreadcrumb", () => {
     });
 
     await vi.waitFor(() => {
-      expect(document.querySelector(".model-badge")?.textContent?.trim()).toBe(
-        "model-test high",
-      );
+      expect(document.querySelector(".model-badge")?.textContent?.trim()).toBe("model-test high");
     });
     unmount(component);
   });
@@ -533,15 +533,23 @@ describe("SessionBreadcrumb", () => {
 
   it("does not pin a reloading stable model in the resume fallback", async () => {
     vi.mocked(copyToClipboard).mockClear();
-    messages.sessionId = "run:123456789abcdef";
+    const session = makeSession("claude", { message_count: 1 });
+    vi.mocked(SessionsService.getApiV1SessionsById, { partial: true }).mockResolvedValueOnce({
+      id: session.id,
+      message_count: session.message_count,
+    });
+    vi.mocked(SessionsService.getApiV1SessionsByIdMessages).mockResolvedValueOnce({
+      messages: [makeAssistantMessage("claude sonnet")],
+      count: 1,
+    });
+    await messages.loadSession(session.id);
     messages.loading = true;
-    (messages as any)._stableMainModel = "claude sonnet";
     sessionsService.postApiV1SessionsByIdResume.mockRejectedValue(new Error("backend unavailable"));
 
     const component = mount(SessionBreadcrumb, {
       target: document.body,
       props: {
-        session: makeSession("claude", { message_count: 3001 }),
+        session,
         onBack: () => {},
       },
     });

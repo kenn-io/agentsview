@@ -7,6 +7,10 @@ description: Release history for AgentsView
 
 **New features**
 
+- See recorded reasoning effort beside the model in Claude Code and Codex
+  session headers. Upgrading triggers a full session resync to populate
+  existing rows, which can take time for large archives. Sessions whose source
+  files are gone remain in the archive. (#1677)
 - Browse and search Tau sessions, including the active conversation branch,
   thinking, tools, session names, and recorded token usage. (#1661)
 - Configure session directories and alternate homes in `[agents.<id>]` tables

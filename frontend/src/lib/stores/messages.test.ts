@@ -263,21 +263,21 @@ describe("MessagesStore", () => {
       reasoningEffort: "high",
     });
 
-    // Start a reload that hangs — mainModel must stay stable.
-    const { promise: hang, resolve: resolveHang } = createDeferred<Session>();
-    vi.mocked(api.getSession).mockReturnValue(hang);
+    // A smaller transcript triggers a full reload and its stable model state.
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession("s1", 2));
+    const { promise: hang, resolve: resolveHang } = createDeferred<MessagesResponse>();
+    vi.mocked(api.getMessages).mockReturnValueOnce(hang);
 
     const p = messages.reload();
+    await vi.waitFor(() => expect(messages.loading).toBe(true));
 
-    // While reload is in flight, mainModel should still be
-    // computed from the existing messages, not blank.
     expect(messages.mainModel).toBe("claude-3-opus");
     expect(messages.mainModelInfo).toEqual({
       model: "claude-3-opus",
       reasoningEffort: "high",
     });
 
-    resolveHang(makeSession("s1", 5));
+    resolveHang(makeMessagesResponse(msgs.slice(0, 2)));
     await p;
 
     expect(messages.mainModel).toBe("claude-3-opus");

@@ -862,7 +862,9 @@ func messageMetadataDiff(stored, parsed db.Message) string {
 		return fmt.Sprintf("role %q -> %q", stored.Role, parsed.Role)
 	case db.SanitizeUTF8(stored.ReasoningEffort) !=
 		db.SanitizeUTF8(parsed.ReasoningEffort):
-		return "reasoning_effort differs"
+		return fmt.Sprintf(
+			"reasoning_effort %q -> %q", stored.ReasoningEffort, parsed.ReasoningEffort,
+		)
 	case stored.Timestamp != parsed.Timestamp:
 		return fmt.Sprintf(
 			"timestamp %q -> %q", stored.Timestamp, parsed.Timestamp,
