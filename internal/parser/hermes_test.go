@@ -384,15 +384,22 @@ func TestParseHermesArchiveKeepsTranscriptEndedAtOverStateBackfill(t *testing.T)
 // TestHermesParseStateMemberMatchesContainerPathForOpenSession is proof row
 // 7 (parity): the member parse path (parseStateMember, used by streaming
 // discovery) must back-fill EndedAt the same way the container path
-// (parseArchive) does for the same open session.
+// (parseArchive) does for the same open session. The two message rows are
+// inserted newest-first (rowid order would otherwise put "newest" last, the
+// same order as chronological order, and silently pass even without the
+// ORDER BY): readHermesStateMessagesForSession's own
+// ORDER BY timestamp ASC, id ASC (internal/parser/hermes.go:774) is what
+// must put "newest" last, not insertion order, so the member path's
+// last-element read is genuinely gated the same way row 1 gates the
+// container path's readHermesStateMessages ordering.
 func TestHermesParseStateMemberMatchesContainerPathForOpenSession(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o755))
 	createHermesTestStateDB(t, root,
 		[]hermesTestSessionRow{{id: "open-member", startedAt: 1788878363.0}},
 		[]hermesTestMessageRow{
-			{sessionID: "open-member", role: "user", content: "first", timestamp: 1788879600.0},
 			{sessionID: "open-member", role: "assistant", content: "newest", timestamp: 1788883200.0},
+			{sessionID: "open-member", role: "user", content: "first", timestamp: 1788879600.0},
 		},
 	)
 	stateDB := filepath.Join(root, "state.db")
@@ -907,13 +914,17 @@ func TestParseHermesArchiveIncludesTranscriptsMissingFromStateDB(
 	assert.Contains(t, ids, "hermes:extra")
 }
 
-// TestBuildHermesStateResultKeepsUsageOnlySessions is proof row 3's P2 half:
-// a usage-only session (messages nil, usage events present) has no message
-// rows at all, so there is nothing to back-fill from and EndedAt stays the
-// zero time. It does not exercise P5: ok is true here because the usage
-// event alone satisfies buildHermesStateResult's "has something to publish"
-// check. TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage
-// below is proof row 3's P5 half.
+// TestBuildHermesStateResultKeepsUsageOnlySessions is proof row 3's P2 half,
+// and also proof for P7: a usage-only session (messages nil, usage events
+// present) has no message rows at all, so there is nothing to back-fill
+// from and EndedAt stays the zero time. It does not exercise P5: ok is true
+// here because the usage event alone satisfies buildHermesStateResult's
+// "has something to publish" check. TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage
+// below is proof row 3's P5 half. P7 (hermesUsageEvents receives the same
+// hermesStateSession and its returned UsageEvents slice is unchanged) is
+// asserted by the InputTokens == 10 check below: the new EndedAt branch
+// runs after hermesUsageEvents is called and never touches ss, so this
+// session's one usage event is untouched by it.
 func TestBuildHermesStateResultKeepsUsageOnlySessions(t *testing.T) {
 	res, ok := buildHermesStateResult(
 		hermesStateSession{
@@ -1015,24 +1026,45 @@ func TestBuildHermesStateResultKeepsEndedAtZeroWhenMessageTimestampsAreNonPositi
 }
 
 // TestBuildHermesStateResultKeepsEndedAtZeroWhenNewestMessagePrecedesStartedAt
-// is proof row 5 (P2): the newest message is older than the resolved
-// StartedAt, so writing it would sort the session lower than it sits today
-// through cursorActivityExpr. EndedAt stays zero and the existing
-// started_at fallback governs instead.
+// is proof row 5 (P2): EndedAt stays zero whenever no message timestamp is
+// strictly after StartedAt, so writing one would sort the session lower
+// than it sits today through cursorActivityExpr. The second subtest is the
+// equality boundary "strictly" actually depends on: a newest message whose
+// timestamp equals StartedAt exactly, where After is false (equal is not
+// after) and EndedAt correctly stays zero, using a whole-second timestamp
+// so the float64 round trip is exact.
 func TestBuildHermesStateResultKeepsEndedAtZeroWhenNewestMessagePrecedesStartedAt(t *testing.T) {
-	res, ok := buildHermesStateResult(
-		hermesStateSession{
-			id:        "precedes-start",
-			startedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
-		},
-		[]hermesStateMessage{
-			{role: "user", content: "a", timestamp: time.Date(2026, 5, 14, 11, 0, 0, 0, time.UTC)},
-			{role: "assistant", content: "b", timestamp: time.Date(2026, 5, 14, 11, 30, 0, 0, time.UTC)},
-		},
-		t.TempDir(), "state.db", "", "local",
-	)
-	require.True(t, ok)
-	assert.True(t, res.Session.EndedAt.IsZero())
+	t.Run("newest message strictly before started_at", func(t *testing.T) {
+		res, ok := buildHermesStateResult(
+			hermesStateSession{
+				id:        "precedes-start",
+				startedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
+			},
+			[]hermesStateMessage{
+				{role: "user", content: "a", timestamp: time.Date(2026, 5, 14, 11, 0, 0, 0, time.UTC)},
+				{role: "assistant", content: "b", timestamp: time.Date(2026, 5, 14, 11, 30, 0, 0, time.UTC)},
+			},
+			t.TempDir(), "state.db", "", "local",
+		)
+		require.True(t, ok)
+		assert.True(t, res.Session.EndedAt.IsZero())
+	})
+
+	t.Run("newest message equals started_at exactly", func(t *testing.T) {
+		startedAt := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+		res, ok := buildHermesStateResult(
+			hermesStateSession{
+				id:        "equals-start",
+				startedAt: startedAt,
+			},
+			[]hermesStateMessage{
+				{role: "user", content: "a", timestamp: startedAt},
+			},
+			t.TempDir(), "state.db", "", "local",
+		)
+		require.True(t, ok)
+		assert.True(t, res.Session.EndedAt.IsZero())
+	})
 }
 
 func TestBuildHermesStateResultPopulatesSessionAggregateTokens(t *testing.T) {
