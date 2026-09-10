@@ -1208,6 +1208,18 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   update (3.16.29) has shrunk or wiped some users' `cursorDiskKV` rows, so the
   parser tolerates a `fullConversationHeadersOnly` entry whose `bubbleId` row
   is missing rather than failing the whole session.
+- **NULL values:**
+  [Issue #1676](https://github.com/kenn-io/agentsview/issues/1676) (reported
+  2026-09-08; rechecked 2026-09-10) records 64 SQL NULL values among 2,189
+  `cursorDiskKV` rows: 2 `composerData:` rows and 62 `bubbleId:` rows. What
+  created those NULLs remains unknown. The synthetic fixture
+  `internal/parser/testdata/cursor-ide-null-values.sql` reproduces both row
+  types. Tests also cover zero-length BLOBs as synthetic boundary cases; the
+  report establishes SQL NULLs only. Agentsview treats either zero-length
+  value as absent: a composer yields no session result, preserving any
+  archived transcript in the recoverable source-missing state; a bubble
+  becomes a gap and marks the transcript truncated. Nonempty malformed JSON
+  still errors.
 - **Usage and cost:** No per-message or per-session token, cache, reasoning,
   credit, or monetary-cost fields were observed in `composerData` or bubble
   documents. Agentsview emits no usage events for this agent; cost is

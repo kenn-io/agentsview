@@ -832,15 +832,9 @@ func TestSyncAllCursorIDEReplacedDatabaseFileReparses(t *testing.T) {
 		"a replaced database file must miss the skip cache and reparse")
 }
 
-// TestSyncAllCursorIDENullValueRowsDoNotFailThePass reproduces
-// kenn-io/agentsview#1676: a cursorDiskKV row with a NULL value must not fail
-// the whole cursor-ide pass. It loads the reporter's captured artifact
-// verbatim, applied on top of two healthy sibling composers built by the
-// existing test helper. Sibling A additionally carries a bubble id matching
-// the fixture's own "bubbleId:%:nullvalue-%" UPDATE, so the artifact's second
-// statement (not just its first, the NULL composerData INSERT) actually
-// nulls a stored row: without this, the fixture's bubble-level UPDATE matches
-// zero rows and the test proves only the NULL-composer half of the fix.
+// TestSyncAllCursorIDENullValueRowsDoNotFailThePass uses a synthetic fixture
+// based on issue #1676. A NULL composer and a NULL bubble in sibling A must
+// leave both siblings available and the sync pass complete.
 func TestSyncAllCursorIDENullValueRowsDoNotFailThePass(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "state.vscdb")
@@ -855,7 +849,7 @@ func TestSyncAllCursorIDENullValueRowsDoNotFailThePass(t *testing.T) {
 				},
 				{
 					// Matches the fixture's "bubbleId:%:nullvalue-%" UPDATE, so
-					// applying the artifact nulls this row's value.
+					// applying the fixture nulls this row's value.
 					id: "nullvalue-1", bubbleType: 2, text: "will be nulled by the fixture",
 					createdAt: "2026-06-21T07:27:31.522Z",
 				},
@@ -871,13 +865,13 @@ func TestSyncAllCursorIDENullValueRowsDoNotFailThePass(t *testing.T) {
 		},
 	})
 
-	artifact, err := os.ReadFile(
+	fixture, err := os.ReadFile(
 		filepath.Join("..", "parser", "testdata", "cursor-ide-null-values.sql"),
 	)
 	require.NoError(t, err)
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(string(artifact))
+	_, err = writer.Exec(string(fixture))
 	require.NoError(t, err)
 	// Confirm the fixture's own UPDATE actually matched sibling A's
 	// nullvalue-1 bubble, so this test cannot silently regress to proving
@@ -894,7 +888,7 @@ func TestSyncAllCursorIDENullValueRowsDoNotFailThePass(t *testing.T) {
 	engine, database := newCursorIDESyncEngine(t, root)
 	stats := engine.SyncAll(t.Context(), nil)
 	require.True(t, stats.ProcessingComplete(),
-		"the reporter's NULL cursorDiskKV rows must not fail the sync pass: %+v", stats)
+		"NULL cursorDiskKV rows must not fail the sync pass: %+v", stats)
 	assert.Zero(t, stats.Failed)
 	assert.Equal(t, 2, stats.Synced,
 		"both healthy sibling composers must be synced past the husk rows")
