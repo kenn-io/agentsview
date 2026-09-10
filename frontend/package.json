@@ -45,12 +45,13 @@
     "svelte": "5.56.10",
     "svelte-check": "4.7.6",
     "typescript": "6.0.3",
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
-    "vite-plus": "0.3.0",
-    "vitest": "5.0.0"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.1",
+    "vite-plus": "0.3.1",
+    "vitest": "4.1.11"
   },
   "overrides": {
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.1",
+    "vitest": "$vitest"
   },
   "engines": {
     "node": ">=24.11.0"
