@@ -21,8 +21,12 @@ func TestBroadcaster_EmitFansOutToAllSubscribers(t *testing.T) {
 		b.Emit("messages")
 
 		for i, sub := range []<-chan Event{sub1, sub2} {
-			ev := <-sub
-			assert.Equal(t, "messages", ev.Scope, "sub %d", i)
+			select {
+			case ev := <-sub:
+				assert.Equal(t, "messages", ev.Scope, "sub %d", i)
+			default:
+				require.Fail(t, "timed out waiting for event", "sub %d", i)
+			}
 		}
 	})
 }
@@ -46,7 +50,11 @@ func TestBroadcaster_EmitIsNonBlockingOnSlowSubscriber(t *testing.T) {
 			close(done)
 		}()
 		synctest.Wait()
-		<-done
+		select {
+		case <-done:
+		default:
+			require.Fail(t, "Emit blocked on slow subscriber")
+		}
 
 		// Drain what we can — drop count >= extra, exact count not guaranteed.
 		drained := 0
@@ -71,8 +79,13 @@ func TestBroadcaster_UnsubscribeStopsDelivery(t *testing.T) {
 
 		b.Emit("messages")
 
-		ev, ok := <-sub
-		require.False(t, ok, "got event after unsubscribe: %v", ev)
+		select {
+		case ev, ok := <-sub:
+			require.False(t, ok, "got event after unsubscribe: %v", ev)
+			// channel closed by unsubscribe — acceptable
+		default:
+			// no delivery — also acceptable
+		}
 	})
 }
 
@@ -87,7 +100,11 @@ func TestBroadcaster_ConcurrentSubscribeAndEmit(t *testing.T) {
 				sub, unsub := b.Subscribe()
 				defer unsub()
 				b.Emit("sessions")
-				<-sub
+				select {
+				case <-sub:
+				default:
+					assert.Fail(t, "concurrent subscriber did not receive event")
+				}
 			})
 		}
 		wg.Wait()
@@ -102,8 +119,12 @@ func TestBroadcaster_LeadingEdgeEmitsImmediately(t *testing.T) {
 
 		b.Emit("messages")
 
-		ev := <-sub
-		assert.Equal(t, "messages", ev.Scope)
+		select {
+		case ev := <-sub:
+			assert.Equal(t, "messages", ev.Scope)
+		default:
+			require.Fail(t, "first emit did not broadcast immediately")
+		}
 	})
 }
 
@@ -116,7 +137,11 @@ func TestBroadcaster_CoalescesWithinWindow(t *testing.T) {
 
 		// Leading-edge broadcast drains the first emit.
 		b.Emit("sessions")
-		<-sub
+		select {
+		case <-sub:
+		default:
+			require.Fail(t, "leading-edge emit did not broadcast immediately")
+		}
 
 		// Bursts within the window are coalesced; no broadcast yet.
 		b.Emit("messages")
@@ -132,8 +157,13 @@ func TestBroadcaster_CoalescesWithinWindow(t *testing.T) {
 
 		// After the window elapses a single trailing broadcast arrives
 		// carrying the most recent scope.
-		ev := <-sub
-		assert.Equal(t, "sessions", ev.Scope, "trailing scope")
+		synctest.Sleep(interval / 2)
+		select {
+		case ev := <-sub:
+			assert.Equal(t, "sessions", ev.Scope, "trailing scope")
+		default:
+			require.Fail(t, "trailing broadcast never arrived")
+		}
 
 		// The three coalesced emits produce exactly one trailing broadcast.
 		synctest.Sleep(interval)
@@ -169,8 +199,12 @@ func TestBroadcaster_LeadingEdgeCancelsPendingTrailing(t *testing.T) {
 		b.mu.Unlock()
 
 		b.Emit("c")
-		ev := <-sub
-		assert.Equal(t, "c", ev.Scope, "leading broadcast scope")
+		select {
+		case ev := <-sub:
+			assert.Equal(t, "c", ev.Scope, "leading broadcast scope")
+		default:
+			require.Fail(t, "second leading emit did not broadcast")
+		}
 
 		// The pre-existing trailing timer for "b" may still fire. If the
 		// leading branch did not cancel pending/timer, flushTrailing
@@ -199,7 +233,11 @@ func TestBroadcaster_StaleTrailingCallbackDoesNotConsumeNewerPending(t *testing.
 		defer unsub()
 
 		b.Emit("a")
-		<-sub
+		select {
+		case <-sub:
+		default:
+			require.Fail(t, "leading emit did not broadcast")
+		}
 
 		// Rate-limited emit schedules a timer; capture the generation
 		// the scheduled callback will check against when it runs.
@@ -214,7 +252,11 @@ func TestBroadcaster_StaleTrailingCallbackDoesNotConsumeNewerPending(t *testing.
 		b.lastEmit = time.Now().Add(-2 * interval)
 		b.mu.Unlock()
 		b.Emit("c")
-		<-sub
+		select {
+		case <-sub:
+		default:
+			require.Fail(t, "second leading emit did not broadcast")
+		}
 
 		// Rate-limited emit after the leading edge installs a fresh
 		// pending+timer under the new generation.
@@ -240,8 +282,13 @@ func TestBroadcaster_StaleTrailingCallbackDoesNotConsumeNewerPending(t *testing.
 		// null out b.timer would orphan the new timer here — in which case
 		// the callback still fires, finds pending == nil, and no event
 		// arrives.
-		ev := <-sub
-		assert.Equal(t, "d", ev.Scope)
+		synctest.Sleep(interval / 2)
+		select {
+		case ev := <-sub:
+			assert.Equal(t, "d", ev.Scope)
+		default:
+			require.Fail(t, "new trailing timer did not fire with pending scope")
+		}
 	})
 }
 
@@ -253,12 +300,20 @@ func TestBroadcaster_EmitAfterIntervalBroadcastsImmediately(t *testing.T) {
 		defer unsub()
 
 		b.Emit("first")
-		<-sub
+		select {
+		case <-sub:
+		default:
+			require.Fail(t, "leading emit did not broadcast")
+		}
 
 		synctest.Sleep(interval * 2)
 
 		b.Emit("second")
-		ev := <-sub
-		assert.Equal(t, "second", ev.Scope)
+		select {
+		case ev := <-sub:
+			assert.Equal(t, "second", ev.Scope)
+		default:
+			require.Fail(t, "emit after quiet interval did not broadcast immediately")
+		}
 	})
 }

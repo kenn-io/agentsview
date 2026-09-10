@@ -108,7 +108,11 @@ func TestActivityReportBuildGroupCancelsAbandonedBuild(t *testing.T) {
 		cancel()
 		require.ErrorIs(t, <-done, context.Canceled)
 		synctest.Wait()
-		<-buildCanceled
+		select {
+		case <-buildCanceled:
+		default:
+			require.FailNow(t, "abandoned build was not canceled")
+		}
 	})
 }
 
@@ -153,7 +157,12 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 			_, err := group.do(firstCtx, "same", build)
 			firstDone <- err
 		}()
-		<-firstStarted
+		synctest.Wait()
+		select {
+		case <-firstStarted:
+		default:
+			require.FailNow(t, "first build did not start")
+		}
 		group.mu.Lock()
 		firstFlight := group.flights["same"]
 		group.mu.Unlock()
@@ -162,7 +171,11 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 		cancelFirst()
 		require.ErrorIs(t, <-firstDone, context.Canceled)
 		synctest.Wait()
-		<-firstCanceled
+		select {
+		case <-firstCanceled:
+		default:
+			require.FailNow(t, "abandoned build was not canceled")
+		}
 
 		type result struct {
 			artifacts activity.CandidateArtifacts
@@ -173,7 +186,12 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 			artifacts, err := group.do(context.Background(), "same", build)
 			secondDone <- result{artifacts: artifacts, err: err}
 		}()
-		<-secondStarted
+		synctest.Wait()
+		select {
+		case <-secondStarted:
+		default:
+			require.FailNow(t, "replacement request joined the canceled flight")
+		}
 		group.mu.Lock()
 		secondFlight := group.flights["same"]
 		group.mu.Unlock()
@@ -181,7 +199,12 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 		require.NotSame(t, firstFlight, secondFlight)
 
 		releaseFirstOnce.Do(func() { close(releaseFirst) })
-		<-firstFlight.done
+		synctest.Wait()
+		select {
+		case <-firstFlight.done:
+		default:
+			require.FailNow(t, "canceled flight did not exit")
+		}
 		group.mu.Lock()
 		currentFlight := group.flights["same"]
 		group.mu.Unlock()
@@ -237,9 +260,19 @@ func TestActivityReportProgressBuildsKeepCallbacksRequestLocal(t *testing.T) {
 		}
 
 		first := start("first")
-		<-store.started
+		synctest.Wait()
+		select {
+		case <-store.started:
+		default:
+			require.FailNow(t, "first report build did not start")
+		}
 		second := start("second")
-		<-store.started
+		synctest.Wait()
+		select {
+		case <-store.started:
+		default:
+			require.FailNow(t, "second progress request reused the first callback")
+		}
 		close(store.release)
 		require.NoError(t, <-first)
 		require.NoError(t, <-second)
