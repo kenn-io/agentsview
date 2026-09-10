@@ -36,6 +36,9 @@ func TestDaemonPushHeartbeat(t *testing.T) {
 
 		var out syncBuffer
 		stop := startDaemonPushHeartbeatTo(&out, "PostgreSQL")
+		var stopOnce stdsync.Once
+		stopHeartbeat := func() { stopOnce.Do(stop) }
+		t.Cleanup(stopHeartbeat)
 		assert.Contains(t, out.String(),
 			"Pushing to PostgreSQL via the local daemon")
 
@@ -44,7 +47,7 @@ func TestDaemonPushHeartbeat(t *testing.T) {
 			"still pushing to PostgreSQL via the daemon",
 			"heartbeat line must appear")
 
-		stop()
+		stopHeartbeat()
 		settled := out.String()
 		synctest.Sleep(20 * time.Millisecond)
 		assert.Equal(t, settled, out.String(), "no output after stop")
