@@ -56,6 +56,7 @@
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
+  import { formatModelEffort } from "../../utils/model.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { m } from "../../i18n/index.js";
 
@@ -347,11 +348,12 @@
       : null,
   );
 
-  let mainModel = $derived(
+  let mainModelInfo = $derived(
     messagesStore.sessionId === session?.id
-      ? messagesStore.mainModel
-      : "",
+      ? messagesStore.mainModelInfo
+      : { model: "", reasoningEffort: "" },
   );
+  let mainModel = $derived(formatModelEffort(mainModelInfo));
 
   let resumeModel = $derived(
     session ? messagesStore.resumeModelFor(session.id) : "",
@@ -1046,8 +1048,12 @@
           {/if}
         </span>
       {/if}
-      {#if mainModel}
-        <span class="model-badge" title={mainModel}>{mainModel}</span>
+      {#if mainModelInfo.model}
+        <span
+          class="model-badge"
+          class:model-badge--with-effort={mainModelInfo.reasoningEffort}
+          title={mainModel}
+        ><span class="model-badge__model">{mainModelInfo.model}</span>{#if mainModelInfo.reasoningEffort}{" "}<span class="model-badge__effort">{mainModelInfo.reasoningEffort}</span>{/if}</span>
       {/if}
       <div class="actions-wrapper">
         <button
@@ -1192,7 +1198,8 @@
     align-items: center;
     gap: 6px;
     margin-left: auto;
-    flex-shrink: 0;
+    min-width: 0;
+    flex-shrink: 1;
   }
 
   .agent-badge {
@@ -1523,13 +1530,33 @@
   }
 
   .model-badge {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: min(280px, 28vw);
     font-size: 10px;
     color: var(--text-muted);
     padding: 1px 5px;
     border-radius: 4px;
     background: var(--bg-tertiary);
     white-space: nowrap;
+    overflow: hidden;
+    flex-shrink: 1;
+  }
+
+  .model-badge__model {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .model-badge--with-effort {
+    min-width: 39px;
+  }
+
+  .model-badge__effort {
     flex-shrink: 0;
+    margin-left: 4px;
   }
 
   .actions-wrapper {
@@ -1700,9 +1727,9 @@
     );
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 900px) {
     .breadcrumb-meta {
-      gap: 4px;
+      gap: 2px;
     }
 
     .session-time {
@@ -1744,6 +1771,29 @@
 
     .session-id {
       display: none;
+    }
+
+    .usage-breakdown {
+      display: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .session-breadcrumb {
+      gap: 4px;
+      padding: 0 6px;
+    }
+
+    .breadcrumb-meta {
+      gap: 1px;
+    }
+
+    .breadcrumb-meta > .agent-badge {
+      display: none;
+    }
+
+    .actions-wrapper {
+      gap: 0;
     }
   }
 </style>

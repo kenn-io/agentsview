@@ -1809,14 +1809,18 @@ func reconcileTranscriptRevisionsTx(
 			}
 		}
 	}
+	oldReasoningEffort := "reasoning_effort"
+	if !oldDBHasColumn(ctx, tx, "messages", "reasoning_effort") {
+		oldReasoningEffort = "''"
+	}
 
-	_, err := tx.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, fmt.Sprintf(`
 		UPDATE main.sessions AS current
 		SET transcript_revision = (
 			SELECT CASE WHEN
 				NOT EXISTS (
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system, model, token_usage,
+						 has_thinking, has_tool_use, is_system, model, reasoning_effort, token_usage,
 						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
@@ -1824,7 +1828,7 @@ func reconcileTranscriptRevisionsTx(
 					FROM main.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system, model, token_usage,
+						 has_thinking, has_tool_use, is_system, model, %s, token_usage,
 						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
@@ -1833,7 +1837,7 @@ func reconcileTranscriptRevisionsTx(
 				)
 				AND NOT EXISTS (
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system, model, token_usage,
+						 has_thinking, has_tool_use, is_system, model, %s, token_usage,
 						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
@@ -1841,7 +1845,7 @@ func reconcileTranscriptRevisionsTx(
 					FROM old_db.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system, model, token_usage,
+						 has_thinking, has_tool_use, is_system, model, reasoning_effort, token_usage,
 						claude_message_id, claude_request_id, source_uuid,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
@@ -1908,7 +1912,7 @@ func reconcileTranscriptRevisionsTx(
 		)
 		WHERE EXISTS (
 			SELECT 1 FROM old_db.sessions AS old WHERE old.id = current.id
-		)`)
+		)`, oldReasoningEffort, oldReasoningEffort))
 	return err
 }
 
@@ -1942,7 +1946,7 @@ func copySessionDataForIDs(
 		msgCols.WriteString(", is_system")
 	}
 	for _, c := range []string{
-		"model", "token_usage", "context_tokens",
+		"model", "reasoning_effort", "token_usage", "context_tokens",
 		"output_tokens", "provider_id", "has_context_tokens",
 		"has_output_tokens",
 		"claude_message_id", "claude_request_id",

@@ -22,6 +22,7 @@ export interface DbMessage {
   output_tokens: number;
   prompt_source?: string;
   provider_id?: string;
+  reasoning_effort?: string;
   role: string;
   session_id: string;
   source_parent_uuid?: string;

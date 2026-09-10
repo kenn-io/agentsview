@@ -213,6 +213,7 @@ func SanitizeMessage(m *Message) ValidationStats {
 	if ClampModel(&m.Model) {
 		stats.ModelClamped++
 	}
+	sanitizeStringField(&m.ReasoningEffort, &stats)
 
 	if clampTokens(&m.ContextTokens) {
 		stats.TokensClamped++

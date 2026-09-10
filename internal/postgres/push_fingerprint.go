@@ -589,7 +589,7 @@ func loadPushMessageTokenFingerprints(
 	out map[string]string,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id, ordinal, model, provider_id, token_usage, context_tokens,
+		SELECT session_id, ordinal, model, reasoning_effort, provider_id, token_usage, context_tokens,
 			output_tokens, has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
 			source_type, source_subtype, prompt_source, source_uuid,
@@ -607,13 +607,13 @@ func loadPushMessageTokenFingerprints(
 	for rows.Next() {
 		var sessionID string
 		var ordinal, contextTokens, outputTokens int
-		var model, providerID, tokenUsage string
+		var model, reasoningEffort, providerID, tokenUsage string
 		var hasContextTokens, hasOutputTokens bool
 		var claudeMsgID, claudeReqID string
 		var srcType, srcSubtype, promptSource, srcUUID, srcParentUUID string
 		var isSidechain, isCompactBoundary bool
 		if err := rows.Scan(
-			&sessionID, &ordinal, &model, &providerID, &tokenUsage, &contextTokens,
+			&sessionID, &ordinal, &model, &reasoningEffort, &providerID, &tokenUsage, &contextTokens,
 			&outputTokens, &hasContextTokens, &hasOutputTokens,
 			&claudeMsgID, &claudeReqID,
 			&srcType, &srcSubtype, &promptSource, &srcUUID, &srcParentUUID,
@@ -628,10 +628,11 @@ func loadPushMessageTokenFingerprints(
 		}
 		fmt.Fprintf(
 			b,
-			"%d|%d:%s|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
+			"%d|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
 				"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 			ordinal,
 			len(model), model,
+			len(reasoningEffort), reasoningEffort,
 			len(providerID), providerID,
 			len(tokenUsage), tokenUsage,
 			contextTokens, outputTokens,

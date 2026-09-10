@@ -26,7 +26,7 @@ func (s *Store) GetMessages(
 	rows, err := s.queryContext(ctx, `
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
-			is_system, model, token_usage, context_tokens, output_tokens,
+			is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
@@ -90,7 +90,7 @@ func (s *Store) getMessagesLinearRoleFiltered(
 	query := `
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
-			is_system, model, token_usage, context_tokens, output_tokens,
+			is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
@@ -128,7 +128,7 @@ func (s *Store) getMessagesAroundAnchor(
 	beforeQuery := `
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
-			is_system, model, token_usage, context_tokens, output_tokens,
+			is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
@@ -147,7 +147,7 @@ func (s *Store) getMessagesAroundAnchor(
 	anchorQuery := `
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
-			is_system, model, token_usage, context_tokens, output_tokens,
+			is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
@@ -161,7 +161,7 @@ func (s *Store) getMessagesAroundAnchor(
 	afterQuery := `
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
-			is_system, model, token_usage, context_tokens, output_tokens,
+			is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
@@ -218,7 +218,7 @@ func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Mess
 	rows, err := s.queryContext(ctx, `
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
-			is_system, model, token_usage, context_tokens, output_tokens,
+			is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
 			provider_id,
 			has_context_tokens, has_output_tokens, claude_message_id,
 			claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
@@ -282,7 +282,7 @@ func scanMessages(rows *sql.Rows) ([]db.Message, error) {
 		if err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role, &m.Content,
 			&m.ThinkingText, &ts, &m.HasThinking, &m.HasToolUse,
-			&m.ContentLength, &m.IsSystem, &m.Model, &tokenUsage,
+			&m.ContentLength, &m.IsSystem, &m.Model, &m.ReasoningEffort, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,
 			&m.ProviderID,
 			&m.HasContextTokens, &m.HasOutputTokens,

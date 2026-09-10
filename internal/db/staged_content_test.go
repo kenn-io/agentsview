@@ -60,6 +60,30 @@ func TestStagedSessionHasStoredMessagesTx(t *testing.T) {
 	require.NoError(t, tx.Rollback())
 }
 
+func TestStagedSessionContentDigestIncludesReasoningEffort(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s-effort", "proj")
+	insertMessages(t, d, Message{
+		SessionID: "s-effort", Ordinal: 0, Role: "assistant", Content: "answer",
+		Model: "model", ReasoningEffort: "high",
+	})
+
+	tx, err := d.getWriter().BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+
+	before, err := stagedSessionContentDigestTx(tx, "s-effort")
+	require.NoError(t, err)
+	_, err = tx.Exec(`
+		UPDATE messages SET reasoning_effort = 'medium'
+		WHERE session_id = 's-effort' AND ordinal = 0`)
+	require.NoError(t, err)
+	after, err := stagedSessionContentDigestTx(tx, "s-effort")
+	require.NoError(t, err)
+	require.NotEqual(t, before, after,
+		"effort-only staged changes must invalidate the content digest")
+}
+
 // scratchStagedResults is a minimal StagedToolResults backed by a real
 // scratch SQLite file, so the publish transaction's ATTACH and
 // INSERT..SELECT run against genuine cross-database SQL.

@@ -1110,6 +1110,11 @@ func TestCurrentDataVersionCursorTurnTimestamps(t *testing.T) {
 		"Cursor turn timestamps require re-parsing existing sessions")
 }
 
+func TestCurrentDataVersionReasoningEffort(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 106,
+		"reasoning effort persistence requires re-parsing unchanged transcripts")
+}
+
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")

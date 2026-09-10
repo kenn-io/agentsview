@@ -217,6 +217,7 @@ func sessionBatchWriteFromParsed(
 			IsSystem:          m.IsSystem,
 			IsCompactBoundary: m.IsCompactBoundary,
 			Model:             m.Model,
+			ReasoningEffort:   m.ReasoningEffort,
 			TokenUsage:        m.TokenUsage,
 			PromptSource:      m.PromptSource,
 			SourceType:        m.SourceType,

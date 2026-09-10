@@ -32,7 +32,8 @@ func recomputeHeapBytes(
 	total := 0
 	for _, msg := range msgs {
 		total += len(msg.Content) + len(msg.ThinkingText) +
-			len(msg.Timestamp) + len(msg.Model) + len(msg.TokenUsage) +
+			len(msg.Timestamp) + len(msg.Model) + len(msg.ReasoningEffort) +
+			len(msg.TokenUsage) +
 			len(msg.ClaudeMessageID) + len(msg.ClaudeRequestID) +
 			len(msg.SourceType) + len(msg.SourceSubtype) +
 			len(msg.PromptSource) +

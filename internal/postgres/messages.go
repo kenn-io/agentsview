@@ -57,7 +57,7 @@ func (s *Store) GetMessages(
 
 const pgMessageCols = `session_id, ordinal, role, content, thinking_text,
 	timestamp, has_thinking, has_tool_use,
-	content_length, is_system, model, token_usage,
+	content_length, is_system, model, reasoning_effort, token_usage,
 	context_tokens, output_tokens, provider_id,
 	has_context_tokens, has_output_tokens,
 	claude_message_id, claude_request_id,
@@ -745,7 +745,7 @@ func scanPGMessages(rows interface {
 			&m.SessionID, &m.Ordinal, &m.Role,
 			&m.Content, &m.ThinkingText, &ts, &m.HasThinking,
 			&m.HasToolUse, &m.ContentLength, &m.IsSystem,
-			&m.Model, &tokenUsage,
+			&m.Model, &m.ReasoningEffort, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,
 			&m.ProviderID,
 			&m.HasContextTokens, &m.HasOutputTokens,

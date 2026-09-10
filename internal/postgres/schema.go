@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS messages (
     content_length INT NOT NULL DEFAULT 0,
     is_system      BOOLEAN NOT NULL DEFAULT FALSE,
     model          TEXT NOT NULL DEFAULT '',
+    reasoning_effort TEXT NOT NULL DEFAULT '',
     token_usage    TEXT NOT NULL DEFAULT '',
     context_tokens INT NOT NULL DEFAULT 0,
     output_tokens  INT NOT NULL DEFAULT 0,
@@ -1010,6 +1011,11 @@ func EnsureSchema(
 			"messages", "model",
 			`model TEXT NOT NULL DEFAULT ''`,
 			"adding messages.model",
+		},
+		{
+			"messages", "reasoning_effort",
+			`reasoning_effort TEXT NOT NULL DEFAULT ''`,
+			"adding messages.reasoning_effort",
 		},
 		{
 			"messages", "token_usage",
@@ -2501,7 +2507,7 @@ func CheckSchemaCompat(
 	rows, err = db.QueryContext(ctx,
 		`SELECT session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use,
-			content_length, is_system, model, token_usage,
+			content_length, is_system, model, reasoning_effort, token_usage,
 			context_tokens, output_tokens, provider_id,
 			has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,

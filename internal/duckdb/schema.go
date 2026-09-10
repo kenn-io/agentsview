@@ -15,8 +15,9 @@ import (
 // migrations between versions. A version mismatch means the mirror file
 // must be rebuilt with 'agentsview duckdb push --full'. v12 adds the 1h
 // cache-write rate columns on top of v11's raw GenAI pricing document. v13
-// adds row-level provider identity to messages and usage events.
-const SchemaVersion = 13
+// adds row-level provider identity to messages and usage events. v14 adds
+// reasoning effort to messages.
+const SchemaVersion = 14
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -273,6 +274,7 @@ var mirrorTables = []tableSpec{
 			content_length INTEGER NOT NULL DEFAULT 0,
 			is_system BOOLEAN NOT NULL DEFAULT FALSE,
 			model TEXT NOT NULL DEFAULT '',
+			reasoning_effort TEXT NOT NULL DEFAULT '',
 			token_usage TEXT NOT NULL DEFAULT '',
 			context_tokens INTEGER NOT NULL DEFAULT 0,
 			output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -303,6 +305,7 @@ var mirrorTables = []tableSpec{
 			{"content_length", "content_length INTEGER NOT NULL DEFAULT 0"},
 			{"is_system", "is_system BOOLEAN NOT NULL DEFAULT FALSE"},
 			{"model", "model TEXT NOT NULL DEFAULT ''"},
+			{"reasoning_effort", "reasoning_effort TEXT NOT NULL DEFAULT ''"},
 			{"token_usage", "token_usage TEXT NOT NULL DEFAULT ''"},
 			{"context_tokens", "context_tokens INTEGER NOT NULL DEFAULT 0"},
 			{"output_tokens", "output_tokens INTEGER NOT NULL DEFAULT 0"},

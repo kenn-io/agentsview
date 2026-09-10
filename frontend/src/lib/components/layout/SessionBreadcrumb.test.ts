@@ -153,7 +153,7 @@ async function openUsageBreakdown(): Promise<void> {
   await tick();
 }
 
-function makeAssistantMessage(model: string): Message {
+function makeAssistantMessage(model: string, reasoning_effort?: string): Message {
   return {
     id: 1,
     session_id: "run:123456789abcdef",
@@ -166,6 +166,7 @@ function makeAssistantMessage(model: string): Message {
     has_tool_use: false,
     content_length: 2,
     model,
+    reasoning_effort,
     token_usage: null,
     context_tokens: 0,
     output_tokens: 0,
@@ -322,6 +323,27 @@ describe("SessionBreadcrumb", () => {
     expect(document.body.textContent).toContain("重命名");
     expect(document.body.textContent).toContain("删除");
 
+    unmount(component);
+  });
+
+  it("renders the recorded effort beside the model", async () => {
+    sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(makeUsage());
+    messages.sessionId = "run:123456789abcdef";
+    messages.messages = [makeAssistantMessage("model-test", "high")];
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".model-badge")?.textContent?.trim()).toBe(
+        "model-test high",
+      );
+    });
     unmount(component);
   });
 

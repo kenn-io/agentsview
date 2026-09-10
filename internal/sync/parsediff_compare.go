@@ -513,6 +513,7 @@ func messageTokenFingerprintTwin(msgs []db.Message) string {
 	var b strings.Builder
 	for _, m := range ordered {
 		model := db.SanitizeUTF8(m.Model)
+		reasoningEffort := db.SanitizeUTF8(m.ReasoningEffort)
 		providerID := db.SanitizeUTF8(m.ProviderID)
 		tokenUsage := db.SanitizeUTF8(string(m.TokenUsage))
 		claudeMsgID := db.SanitizeUTF8(m.ClaudeMessageID)
@@ -523,10 +524,11 @@ func messageTokenFingerprintTwin(msgs []db.Message) string {
 		srcUUID := db.SanitizeUTF8(m.SourceUUID)
 		srcParentUUID := db.SanitizeUTF8(m.SourceParentUUID)
 		fmt.Fprintf(&b,
-			"%d|%d:%s|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
+			"%d|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
 				"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 			m.Ordinal,
 			len(model), model,
+			len(reasoningEffort), reasoningEffort,
 			len(providerID), providerID,
 			len(tokenUsage), tokenUsage,
 			m.ContextTokens, m.OutputTokens,
@@ -858,6 +860,9 @@ func messageMetadataDiff(stored, parsed db.Message) string {
 	switch {
 	case db.SanitizeUTF8(stored.Role) != db.SanitizeUTF8(parsed.Role):
 		return fmt.Sprintf("role %q -> %q", stored.Role, parsed.Role)
+	case db.SanitizeUTF8(stored.ReasoningEffort) !=
+		db.SanitizeUTF8(parsed.ReasoningEffort):
+		return "reasoning_effort differs"
 	case stored.Timestamp != parsed.Timestamp:
 		return fmt.Sprintf(
 			"timestamp %q -> %q", stored.Timestamp, parsed.Timestamp,

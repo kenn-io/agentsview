@@ -165,7 +165,7 @@ func stagedSessionContentDigestTx(
 	rows, err := tx.Query(`
 		SELECT ordinal, role, content, thinking_text, COALESCE(timestamp, ''),
 		       has_thinking, has_tool_use, content_length, is_system, model,
-		       token_usage, context_tokens, output_tokens,
+		       reasoning_effort, token_usage, context_tokens, output_tokens,
 		       has_context_tokens, has_output_tokens,
 		       claude_message_id, claude_request_id, source_type,
 		       source_subtype, prompt_source, source_uuid,
@@ -178,13 +178,14 @@ func stagedSessionContentDigestTx(
 		var ordinal, hasThinking, hasToolUse, contentLength, isSystem int64
 		var contextTokens, outputTokens, hasContext, hasOutput int64
 		var isSidechain, isCompact int64
-		var role, content, thinking, timestamp, model, tokenUsage string
+		var role, content, thinking, timestamp, model, reasoningEffort, tokenUsage string
 		var claudeMessageID, claudeRequestID, sourceType, sourceSubtype string
 		var promptSource, sourceUUID, sourceParentUUID string
 		if err := rows.Scan(
 			&ordinal, &role, &content, &thinking, &timestamp,
 			&hasThinking, &hasToolUse, &contentLength, &isSystem, &model,
-			&tokenUsage, &contextTokens, &outputTokens, &hasContext, &hasOutput,
+			&reasoningEffort, &tokenUsage, &contextTokens, &outputTokens,
+			&hasContext, &hasOutput,
 			&claudeMessageID, &claudeRequestID, &sourceType, &sourceSubtype,
 			&promptSource, &sourceUUID, &sourceParentUUID, &isSidechain, &isCompact,
 		); err != nil {
@@ -200,7 +201,7 @@ func stagedSessionContentDigestTx(
 			writeStagedDigestInt(h, value)
 		}
 		for _, value := range []string{
-			role, content, thinking, timestamp, model, tokenUsage,
+			role, content, thinking, timestamp, model, reasoningEffort, tokenUsage,
 			claudeMessageID, claudeRequestID, sourceType, sourceSubtype,
 			promptSource, sourceUUID, sourceParentUUID,
 		} {

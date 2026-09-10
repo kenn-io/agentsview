@@ -253,10 +253,15 @@ describe("MessagesStore", () => {
     const msgs = Array.from({ length: 5 }, (_, i) => ({
       ...makeMessage(i),
       model: "claude-3-opus",
+      reasoning_effort: i < 3 ? "high" : "medium",
     }));
     await setupSession("s1", 5, msgs);
 
     expect(messages.mainModel).toBe("claude-3-opus");
+    expect(messages.mainModelInfo).toEqual({
+      model: "claude-3-opus",
+      reasoningEffort: "high",
+    });
 
     // Start a reload that hangs — mainModel must stay stable.
     const { promise: hang, resolve: resolveHang } = createDeferred<Session>();
@@ -267,6 +272,10 @@ describe("MessagesStore", () => {
     // While reload is in flight, mainModel should still be
     // computed from the existing messages, not blank.
     expect(messages.mainModel).toBe("claude-3-opus");
+    expect(messages.mainModelInfo).toEqual({
+      model: "claude-3-opus",
+      reasoningEffort: "high",
+    });
 
     resolveHang(makeSession("s1", 5));
     await p;

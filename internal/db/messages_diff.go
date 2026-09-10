@@ -23,7 +23,7 @@ func messageInsertArgs(m Message) []any {
 		m.ThinkingText,
 		m.Timestamp, m.HasThinking, m.HasToolUse,
 		m.ContentLength, m.IsSystem,
-		m.Model, string(m.TokenUsage),
+		m.Model, m.ReasoningEffort, string(m.TokenUsage),
 		m.ContextTokens, m.OutputTokens, m.ProviderID,
 		m.HasContextTokens, m.HasOutputTokens,
 		m.ClaudeMessageID, m.ClaudeRequestID,
@@ -53,7 +53,8 @@ func messageRowEqual(a, b Message) bool {
 		a.ThinkingText != b.ThinkingText || a.Timestamp != b.Timestamp ||
 		a.HasThinking != b.HasThinking || a.HasToolUse != b.HasToolUse ||
 		a.ContentLength != b.ContentLength || a.IsSystem != b.IsSystem ||
-		a.Model != b.Model || !bytes.Equal(a.TokenUsage, b.TokenUsage) ||
+		a.Model != b.Model || a.ReasoningEffort != b.ReasoningEffort ||
+		!bytes.Equal(a.TokenUsage, b.TokenUsage) ||
 		a.ContextTokens != b.ContextTokens || a.OutputTokens != b.OutputTokens ||
 		a.ProviderID != b.ProviderID ||
 		a.HasContextTokens != b.HasContextTokens ||

@@ -46,9 +46,9 @@ const (
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
-	// field; v1 and v2 segments still decode, with the fields defaulting
-	// to empty.
-	messageSegmentFormatVersion    = 3
+	// field. Segment v4 adds the optional reasoning_effort field; v1 through
+	// v3 segments still decode, with the fields defaulting to empty.
+	messageSegmentFormatVersion    = 4
 	messageSegmentMinDecodeVersion = 1
 	metadataEventFormatVersion     = 1
 )
@@ -194,6 +194,7 @@ type segmentMessage struct {
 	HasToolUse        bool              `json:"has_tool_use,omitzero"`
 	ContentLength     int               `json:"content_length,omitzero"`
 	Model             string            `json:"model,omitempty"`
+	ReasoningEffort   string            `json:"reasoning_effort,omitempty"`
 	ProviderID        string            `json:"provider_id,omitempty"`
 	TokenUsage        jsontext.Value    `json:"token_usage,omitempty"`
 	ContextTokens     int               `json:"context_tokens,omitzero"`
@@ -304,6 +305,7 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		HasToolUse:        msg.HasToolUse,
 		ContentLength:     msg.ContentLength,
 		Model:             msg.Model,
+		ReasoningEffort:   msg.ReasoningEffort,
 		ProviderID:        msg.ProviderID,
 		TokenUsage:        msg.TokenUsage,
 		ContextTokens:     msg.ContextTokens,

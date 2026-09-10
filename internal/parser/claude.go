@@ -548,6 +548,7 @@ func compactClaudeEntry(line []byte) string {
 		{name: "uuid"}, {name: "parentUuid"}, {name: "timestamp"},
 		{name: "isCompactSummary"}, {name: "isSidechain"},
 		{name: "isMeta"}, {name: "requestId"}, {name: "promptSource"},
+		{name: "effort"},
 	}
 	messageFields := []claudeCompactField{
 		{name: "content"}, {name: "id"}, {name: "stop_reason"},
@@ -2663,6 +2664,7 @@ func extractMessagesContext(
 // Used by both full and incremental parsing paths.
 func extractClaudeTokenFields(msg *ParsedMessage, line string) {
 	msg.Model = gjson.Get(line, "message.model").String()
+	msg.ReasoningEffort = gjson.Get(line, "effort").Str
 	msg.ClaudeMessageID = gjson.Get(line, "message.id").String()
 	msg.ClaudeRequestID = gjson.Get(line, "requestId").String()
 

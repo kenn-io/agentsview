@@ -2,7 +2,10 @@ import { SessionsService } from "../api/generated/index";
 import type { Message } from "../api/types.js";
 import { isAbortError } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
-import { computeMainModel } from "../utils/model.js";
+import {
+  computeMainModelInfo,
+  type ModelEffort,
+} from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
 import { sessions } from "./sessions.svelte.js";
 
@@ -27,13 +30,25 @@ class MessagesStore {
   loadingOlder: boolean = $state(false);
   historyComplete: boolean = $state(false);
   private reloading: boolean = $state(false);
+  private _stableMainModelInfo: ModelEffort = $state({
+    model: "",
+    reasoningEffort: "",
+  });
   private _stableMainModel: string = $state("");
-  mainModel: string = $derived(
+  mainModelInfo: ModelEffort = $derived(
     this.loading
-      ? this._stableMainModel
+      ? this._stableMainModelInfo.model || this._stableMainModel
+        ? {
+            model: this._stableMainModelInfo.model || this._stableMainModel,
+            reasoningEffort: this._stableMainModelInfo.reasoningEffort,
+          }
+        : this._stableMainModelInfo
       : this.messages.length > 0
-        ? computeMainModel(this.messages)
-        : "",
+        ? computeMainModelInfo(this.messages)
+        : { model: "", reasoningEffort: "" },
+  );
+  mainModel: string = $derived(
+    this.mainModelInfo.model,
   );
   private abortController: AbortController | null = null;
   private cancelledSessionId: string | null = null;
@@ -71,6 +86,7 @@ class MessagesStore {
     const readMarker = readProgress.get(id);
     if (!resumesCancelledLoad) {
       this.clear();
+      this._stableMainModelInfo = { model: "", reasoningEffort: "" };
       this._stableMainModel = "";
       this.activeSessionToken = null;
       this.activeSessionUnreadOrdinal = null;
@@ -123,7 +139,7 @@ class MessagesStore {
     } finally {
       if (this.sessionId === id) {
         this.loading = false;
-        this._stableMainModel = this.messages.length > 0 ? computeMainModel(this.messages) : "";
+        this.updateStableMainModelInfo();
       }
     }
   }
@@ -164,6 +180,7 @@ class MessagesStore {
     this.sessionId = null;
     this.cancelledSessionId = null;
     this.loading = false;
+    this._stableMainModelInfo = { model: "", reasoningEffort: "" };
     this._stableMainModel = "";
     this.messageCount = 0;
     this.activeSessionToken = null;
@@ -315,6 +332,7 @@ class MessagesStore {
       const appended = pages.filter((m) => !existingOrdinals.has(m.ordinal));
       clearContentCaches();
       this.messages = [...this.messages.map((m) => updates.get(m.ordinal) ?? m), ...appended];
+      this.updateStableMainModelInfo();
     }
   }
 
@@ -565,6 +583,7 @@ class MessagesStore {
     );
     clearContentCaches();
     this.messages = this.messages.map((m) => updates.get(m.ordinal) ?? m);
+    this.updateStableMainModelInfo();
     return true;
   }
 
@@ -580,9 +599,16 @@ class MessagesStore {
     } finally {
       if (this.sessionId === id) {
         this.loading = false;
-        this._stableMainModel = this.messages.length > 0 ? computeMainModel(this.messages) : "";
+        this.updateStableMainModelInfo();
       }
     }
+  }
+
+  private updateStableMainModelInfo() {
+    this._stableMainModelInfo = this.messages.length > 0
+      ? computeMainModelInfo(this.messages)
+      : { model: "", reasoningEffort: "" };
+    this._stableMainModel = this._stableMainModelInfo.model;
   }
 }
 
@@ -612,6 +638,7 @@ function transcriptMessageEqual(before: Message, after: Message): boolean {
     hasToolUse: message.has_tool_use,
     isSystem: message.is_system,
     model: message.model,
+    reasoningEffort: message.reasoning_effort ?? "",
     contextTokens: message.context_tokens,
     outputTokens: message.output_tokens,
     hasContextTokens: message.has_context_tokens ?? false,

@@ -3448,7 +3448,7 @@ func pgMessageTokenFingerprint(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) (string, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT ordinal, model, provider_id, token_usage, context_tokens,
+		`SELECT ordinal, model, reasoning_effort, provider_id, token_usage, context_tokens,
 			output_tokens, has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
 			source_type, source_subtype, prompt_source, source_uuid,
@@ -3466,13 +3466,13 @@ func pgMessageTokenFingerprint(
 	var b strings.Builder
 	for rows.Next() {
 		var ordinal, contextTokens, outputTokens int
-		var model, providerID, tokenUsage string
+		var model, reasoningEffort, providerID, tokenUsage string
 		var hasContextTokens, hasOutputTokens bool
 		var claudeMsgID, claudeReqID string
 		var srcType, srcSubtype, promptSource, srcUUID, srcParentUUID string
 		var isSidechain, isCompactBoundary bool
 		if err := rows.Scan(
-			&ordinal, &model, &providerID, &tokenUsage, &contextTokens,
+			&ordinal, &model, &reasoningEffort, &providerID, &tokenUsage, &contextTokens,
 			&outputTokens, &hasContextTokens, &hasOutputTokens,
 			&claudeMsgID, &claudeReqID,
 			&srcType, &srcSubtype, &promptSource, &srcUUID, &srcParentUUID,
@@ -3481,10 +3481,11 @@ func pgMessageTokenFingerprint(
 			return "", err
 		}
 		fmt.Fprintf(&b,
-			"%d|%d:%s|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
+			"%d|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
 				"%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
 			ordinal,
 			len(model), model,
+			len(reasoningEffort), reasoningEffort,
 			len(providerID), providerID,
 			len(tokenUsage), tokenUsage,
 			contextTokens, outputTokens,
@@ -3749,7 +3750,7 @@ func bulkInsertMessages(
 		b.WriteString(`INSERT INTO messages (
 			session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use,
-			content_length, is_system, model, token_usage,
+			content_length, is_system, model, reasoning_effort, token_usage,
 			context_tokens, output_tokens,
 			provider_id,
 			has_context_tokens, has_output_tokens,
@@ -3757,19 +3758,19 @@ func bulkInsertMessages(
 			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain,
 			is_compact_boundary) VALUES `)
-		args := make([]any, 0, len(batch)*26)
+		args := make([]any, 0, len(batch)*27)
 		for j, m := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*26 + 1
+			p := j*27 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4,
 				p+5, p+6, p+7, p+8, p+9,
 				p+10, p+11, p+12, p+13, p+14, p+15,
 				p+16, p+17, p+18, p+19, p+20,
-				p+21, p+22, p+23, p+24, p+25,
+				p+21, p+22, p+23, p+24, p+25, p+26,
 			)
 			ts, err := optionalSQLiteTimestamp(m.Timestamp)
 			if err != nil {
@@ -3790,6 +3791,7 @@ func bulkInsertMessages(
 				m.HasThinking,
 				m.HasToolUse, m.ContentLength, m.IsSystem,
 				sanitizePG(m.Model),
+				sanitizePG(m.ReasoningEffort),
 				sanitizePG(string(m.TokenUsage)),
 				m.ContextTokens, m.OutputTokens,
 				sanitizePG(m.ProviderID),

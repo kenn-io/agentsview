@@ -1388,7 +1388,8 @@ type ParsedMessage struct {
 	ToolCalls     []ParsedToolCall
 	ToolResults   []ParsedToolResult
 
-	Model string
+	Model           string
+	ReasoningEffort string
 	// ProviderID identifies the billing provider for this response, such as
 	// Posit Assistant's "positai" managed service or BYO "anthropic".
 	ProviderID       string

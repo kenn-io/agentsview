@@ -22,3 +22,40 @@ export function computeMainModel(messages: Message[]): string {
   }
   return best;
 }
+
+export interface ModelEffort {
+  model: string;
+  reasoningEffort: string;
+}
+
+export function computeMainModelInfo(messages: Message[]): ModelEffort {
+  const model = computeMainModel(messages);
+  if (!model) {
+    return { model: "", reasoningEffort: "" };
+  }
+
+  const counts = new Map<string, number>();
+  for (const message of messages) {
+    if (message.role === "assistant" && message.model === model) {
+      const effort = message.reasoning_effort ?? "";
+      counts.set(effort, (counts.get(effort) ?? 0) + 1);
+    }
+  }
+
+  let bestEffort = "";
+  let bestN = 0;
+  for (const [effort, n] of counts) {
+    if (n > bestN || (n === bestN && effort < bestEffort)) {
+      bestEffort = effort;
+      bestN = n;
+    }
+  }
+  return { model, reasoningEffort: bestEffort };
+}
+
+export function formatModelEffort(info: ModelEffort): string {
+  if (!info.model) return "";
+  return info.reasoningEffort
+    ? `${info.model} ${info.reasoningEffort}`
+    : info.model;
+}

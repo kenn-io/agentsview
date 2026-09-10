@@ -245,6 +245,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // events. Existing rows need re-parsing so the new awaiting_user
 // value populates correctly.)
 //
+// (44: Claude and Codex reasoning effort on assistant messages.)
 // (22: added termination_status column to sessions; existing
 // rows need re-parsing so the Claude classifier can populate
 // the new column.)
@@ -481,7 +482,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // output as message text, along with Cortex tool-result-only rows, are
 // marked with the tool_result source subtype so storage policies can drop it.
 // Existing rows need re-parsing to receive both.)
-const dataVersion = 105
+// (106: Claude and Codex assistant messages now persist reasoning effort.
+// Existing rows need re-parsing so the field is populated.)
+const dataVersion = 106
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -2084,6 +2087,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"messages", "model",
 			"ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"messages", "reasoning_effort",
+			"ALTER TABLE messages ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''",
 		},
 		{
 			"messages", "token_usage",

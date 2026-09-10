@@ -241,9 +241,10 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 		{
 			name: "future segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
-				segment := []byte(
-					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":4}\n",
-				)
+				segment := []byte(fmt.Sprintf(
+					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":%d}\n",
+					messageSegmentFormatVersion+1,
+				))
 				segmentHash := createHashedImportArtifact(
 					t, store, KindSegments, ".ndjson", segment,
 				)

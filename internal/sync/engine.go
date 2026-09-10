@@ -19669,6 +19669,7 @@ func toDBMessagesContext(
 			ContentLength:     m.ContentLength,
 			IsSystem:          m.IsSystem,
 			Model:             m.Model,
+			ReasoningEffort:   m.ReasoningEffort,
 			ProviderID:        m.ProviderID,
 			TokenUsage:        m.TokenUsage,
 			ContextTokens:     m.ContextTokens,

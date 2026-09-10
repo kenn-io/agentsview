@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vite-plus/test";
-import { computeMainModel } from "./model.js";
+import {
+  computeMainModel,
+  computeMainModelInfo,
+  formatModelEffort,
+} from "./model.js";
 import type { Message } from "../api/types.js";
 
-function msg(role: string, model: string): Message {
+function msg(role: string, model: string, reasoning_effort?: string): Message {
   return {
     id: 0,
     session_id: "",
@@ -15,6 +19,7 @@ function msg(role: string, model: string): Message {
     has_tool_use: false,
     content_length: 0,
     model,
+    reasoning_effort,
     context_tokens: 0,
     output_tokens: 0,
     is_system: false,
@@ -91,5 +96,43 @@ describe("computeMainModel", () => {
 
   it("returns empty when no model data", () => {
     expect(computeMainModel([msg("assistant", ""), msg("user", "")])).toBe("");
+  });
+});
+
+describe("computeMainModelInfo", () => {
+  it("returns an empty pair when there are no messages", () => {
+    expect(computeMainModelInfo([])).toEqual({
+      model: "",
+      reasoningEffort: "",
+    });
+  });
+
+  it("selects effort only from the winning assistant model", () => {
+    expect(
+      computeMainModelInfo([
+        msg("assistant", "winning", "medium"),
+        msg("assistant", "winning", "medium"),
+        msg("assistant", "other", "high"),
+        msg("user", "winning", "high"),
+      ]),
+    ).toEqual({ model: "winning", reasoningEffort: "medium" });
+  });
+
+  it("keeps the empty effort bucket as the alphabetical tie winner", () => {
+    expect(
+      computeMainModelInfo([
+        msg("assistant", "model", "high"),
+        msg("assistant", "model"),
+      ]),
+    ).toEqual({ model: "model", reasoningEffort: "" });
+  });
+
+  it("formats absent effort as model only", () => {
+    expect(formatModelEffort({ model: "model", reasoningEffort: "" })).toBe("model");
+    expect(formatModelEffort({ model: "model", reasoningEffort: "high" })).toBe("model high");
+  });
+
+  it("formats an empty model as an empty label", () => {
+    expect(formatModelEffort({ model: "", reasoningEffort: "high" })).toBe("");
   });
 });

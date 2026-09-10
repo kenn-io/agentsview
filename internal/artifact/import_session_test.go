@@ -148,8 +148,9 @@ func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
 	store := newTestArtifactStore(t)
 	var segment strings.Builder
 	for range productionArtifactLimits().segmentMessages + 1 {
-		segment.WriteString(
-			"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":4}\n",
+		_, _ = fmt.Fprintf(&segment,
+			"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":%d}\n",
+			messageSegmentFormatVersion+1,
 		)
 	}
 	segmentHash := createHashedImportArtifact(
@@ -171,7 +172,7 @@ func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
 	var future *futureArtifactVersionError
 	require.ErrorAs(t, err, &future)
 	assert.Equal(t, Kind(KindSegments), future.Kind)
-	assert.Equal(t, 4, future.Version)
+	assert.Equal(t, messageSegmentFormatVersion+1, future.Version)
 }
 
 func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
@@ -209,9 +210,10 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 		{
 			name: "future segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
-				segment := []byte(
-					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":4}\n",
-				)
+				segment := []byte(fmt.Sprintf(
+					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":%d}\n",
+					messageSegmentFormatVersion+1,
+				))
 				segmentHash := createHashedImportArtifact(
 					t, store, KindSegments, ".ndjson", segment,
 				)

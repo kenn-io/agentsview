@@ -390,6 +390,7 @@ func (b *codexSessionBuilder) processLine(
 			return false
 		}
 		b.model = payload.Get("model").Str
+		b.reasoningEffort = payload.Get("effort").Str
 	case codexTypeResponseItem:
 		if b.suppresses(codexTypeResponseItem, payload) {
 			return false
@@ -497,13 +498,17 @@ func (b *codexSessionBuilder) handleResponseItem(
 		b.committedUsageBlockedByUser = true
 	}
 
-	b.sink.AppendMessage(ParsedMessage{
+	msg := ParsedMessage{
 		Role:          RoleType(role),
 		Content:       content,
 		Timestamp:     ts,
 		ContentLength: len(content),
 		Model:         b.model,
-	})
+	}
+	if role == string(RoleAssistant) {
+		msg.ReasoningEffort = b.reasoningEffort
+	}
+	b.sink.AppendMessage(msg)
 }
 
 func (b *codexSessionBuilder) handleAgentMessage(
@@ -643,12 +648,13 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	}
 
 	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
-		Role:          RoleAssistant,
-		Content:       content,
-		Timestamp:     ts,
-		HasToolUse:    true,
-		ContentLength: len(content),
-		Model:         b.model,
+		Role:            RoleAssistant,
+		Content:         content,
+		Timestamp:       ts,
+		HasToolUse:      true,
+		ContentLength:   len(content),
+		Model:           b.model,
+		ReasoningEffort: b.reasoningEffort,
 		ToolCalls: []ParsedToolCall{{
 			ToolUseID: callID,
 			ToolName:  name,
