@@ -907,6 +907,13 @@ func TestParseHermesArchiveIncludesTranscriptsMissingFromStateDB(
 	assert.Contains(t, ids, "hermes:extra")
 }
 
+// TestBuildHermesStateResultKeepsUsageOnlySessions is proof row 3's P2 half:
+// a usage-only session (messages nil, usage events present) has no message
+// rows at all, so there is nothing to back-fill from and EndedAt stays the
+// zero time. It does not exercise P5: ok is true here because the usage
+// event alone satisfies buildHermesStateResult's "has something to publish"
+// check. TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage
+// below is proof row 3's P5 half.
 func TestBuildHermesStateResultKeepsUsageOnlySessions(t *testing.T) {
 	res, ok := buildHermesStateResult(
 		hermesStateSession{
@@ -923,9 +930,26 @@ func TestBuildHermesStateResultKeepsUsageOnlySessions(t *testing.T) {
 	assert.Empty(t, res.Messages)
 	require.Len(t, res.UsageEvents, 1)
 	assert.Equal(t, 10, res.UsageEvents[0].InputTokens)
-	// Proof row 3 (P2, P5): a usage-only session has no message rows at all,
-	// so there is nothing to back-fill from; EndedAt stays the zero time.
 	assert.True(t, res.Session.EndedAt.IsZero())
+}
+
+// TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage is proof
+// row 3's P5 half: internal/parser/hermes.go:946-948 returns ok == false
+// only when there are no converted messages AND no usage events. This
+// session has no model (hermesUsageEvents' own model == "" guard returns
+// nil) and no state messages, so both halves of the early return's
+// condition are hit at once, unlike the usage-only case above.
+func TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage(t *testing.T) {
+	res, ok := buildHermesStateResult(
+		hermesStateSession{
+			id:        "empty",
+			source:    "cli",
+			startedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
+		},
+		nil, t.TempDir(), "state.db", "", "local",
+	)
+	require.False(t, ok)
+	assert.Equal(t, ParseResult{}, res)
 }
 
 // TestBuildHermesStateResultPreservesAlreadySetEndedAt is proof row 2 (P1):
