@@ -41,6 +41,9 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 		group := newActivityReportBuildGroup()
 		started := make(chan struct{})
 		release := make(chan struct{})
+		var releaseOnce sync.Once
+		releaseBuild := func() { releaseOnce.Do(func() { close(release) }) }
+		t.Cleanup(releaseBuild)
 		var builds atomic.Int32
 		build := func(ctx context.Context) (activity.CandidateArtifacts, error) {
 			if builds.Add(1) == 1 {
@@ -81,7 +84,7 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 		require.Equal(t, 2, sameWaiters)
 		cancelFirst()
 		require.ErrorIs(t, <-firstDone, context.Canceled)
-		close(release)
+		releaseBuild()
 		second := <-secondDone
 		require.NoError(t, second.err)
 		require.Equal(t, "ok", second.artifacts.Sessions[0].SessionID)

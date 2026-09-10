@@ -326,6 +326,9 @@ func TestPGModelPricingSourceDetectsBandOnlyFallbackMismatch(t *testing.T) {
 func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		block := make(chan struct{})
+		var blockOnce sync.Once
+		releaseBlock := func() { blockOnce.Do(func() { close(block) }) }
+		t.Cleanup(releaseBlock)
 		state := &pricingProbeState{
 			rows: [][]driver.Value{{
 				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
@@ -353,7 +356,7 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 		}()
 		synctest.Wait()
 		require.Equal(t, 1, state.queryCount(), "pricing queries")
-		close(block)
+		releaseBlock()
 
 		first := <-results
 		second := <-results
