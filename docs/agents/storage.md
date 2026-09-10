@@ -106,12 +106,15 @@ written.
   so a later recompute from stored rows reproduces them.
 
 `db migrate --images` moves retained inline payloads out of SQLite and into the
-asset store. It writes each decoded payload to `{dataDir}/assets/<sha256hex><ext>`
-before any UPDATE commits in the session transaction. An existing object is
-reused only when its byte count and SHA-256 digest match. A missing or corrupt
-object is replaced while the source bytes remain available. The inline block is
-replaced with an `agentsview_image` placeholder whose `image_ref` field holds
-`asset://<sha256hex><ext>` and whose `text` field carries a markdown image
+asset store. It writes each decoded payload to
+`{dataDir}/assets/<sha256hex><ext>` before any UPDATE commits in the session
+transaction. If that transaction fails, complete objects remain unreferenced on
+disk and are reused by a matching retry; there is no automatic cleanup of
+unreferenced assets. An existing object is reused only when its byte count and
+SHA-256 digest match. A missing or corrupt object is replaced while the source
+bytes remain available. The inline block is replaced with an `agentsview_image`
+placeholder whose `image_ref` field holds `asset://<sha256hex><ext>` and whose
+`text` field carries a markdown image
 `![Image: <type>, <n> bytes](asset://<sha256hex><ext>)`. The discriminator for
 migrated blocks is `image_ref`. A later keep-mode reparse or full resync can
 restore inline bytes from provider source files. Only the four passive media

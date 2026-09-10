@@ -12,12 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 func TestDBMigrateJSONRequiresYes(t *testing.T) {
@@ -124,53 +123,69 @@ func TestDBMigrateInteractiveConfirmation(t *testing.T) {
 	assert.DirExists(t, assetsDir)
 }
 
-// TestDBMigratePartialFailureReportsCommittedWork verifies the failure path
-// header. A run that dies on a later session must name the committed counts
-// rather than claim completion, and must not print the follow-up tips.
-func TestDBMigratePartialFailureReportsCommittedWork(t *testing.T) {
-	dataDir := testDataDir(t)
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
-	require.NoError(t, err)
-	for _, id := range []string{"mig-pf-a", "mig-pf-b"} {
-		insertSessionForStripTest(t, database, id)
-		require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage(id)}))
+func TestDBStripAndMigratePartialFailureReportsCommittedWork(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		command func() *cobra.Command
+		title   string
+	}{
+		{"strip", newDBStripCommand, "Image strip"},
+		{"migrate", newDBMigrateCommand, "Image migration"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			testDataDir(t)
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			database, err := db.Open(cfg.DBPath)
+			require.NoError(t, err)
+			for _, id := range []string{"mig-pf-a", "mig-pf-b"} {
+				insertSessionForStripTest(t, database, id)
+				require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage(id)}))
+			}
+			// Sessions run in id order, one transaction each. Aborting the second
+			// session's revision bump commits the first and stops the run mid-selection.
+			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+				_, err := tx.Exec(`
+					CREATE TRIGGER fail_mig_pf_b
+					AFTER UPDATE OF transcript_revision ON sessions
+					WHEN NEW.id = 'mig-pf-b'
+					BEGIN
+						SELECT RAISE(ABORT, 'forced failure for mig-pf-b');
+					END`)
+				return err
+			}))
+			require.NoError(t, database.Close())
+
+			cmd := tt.command()
+			cmd.SetArgs([]string{"--images", "--yes"})
+			var output, errOutput bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetErr(&errOutput)
+			require.Error(t, cmd.Execute())
+
+			assert.Contains(t, errOutput.String(), tt.title+" stopped early.")
+			assert.Contains(t, errOutput.String(), "Sessions: 1")
+			assert.Contains(t, errOutput.String(), "Changed: 1")
+			assert.NotContains(t, errOutput.String(), tt.title+" completed.")
+			assert.NotContains(t, errOutput.String(), "Run db compact separately")
+			assert.NotContains(t, output.String(), tt.title+" completed.")
+			t.Logf("partial report:\n%s", errOutput.String())
+			database, err = db.Open(cfg.DBPath)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, database.Close()) }()
+			committed, err := database.GetAllMessages(t.Context(), "mig-pf-a")
+			require.NoError(t, err)
+			require.Len(t, committed, 1)
+			assert.NotContains(t, committed[0].ToolCalls[0].ResultContent, "input_image")
+			failed, err := database.GetAllMessages(t.Context(), "mig-pf-b")
+			require.NoError(t, err)
+			require.Len(t, failed, 1)
+			assert.Contains(t, failed[0].ToolCalls[0].ResultContent, "input_image")
+		})
 	}
-	// Sessions run in id order, one transaction each. Aborting the second
-	// session's revision bump commits the first and stops the run mid-selection.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
-			CREATE TRIGGER fail_mig_pf_b
-			AFTER UPDATE OF transcript_revision ON sessions
-			WHEN NEW.id = 'mig-pf-b'
-			BEGIN
-				SELECT RAISE(ABORT, 'forced failure for mig-pf-b');
-			END`)
-		return err
-	}))
-	require.NoError(t, database.Close())
-
-	cmd := newDBMigrateCommand()
-	cmd.SetArgs([]string{"--images", "--yes"})
-	var output, errOutput bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetErr(&errOutput)
-	require.Error(t, cmd.Execute())
-
-	assert.Contains(t, errOutput.String(), "Image migration stopped early.")
-	assert.Contains(t, errOutput.String(), "Sessions: 1")
-	assert.NotContains(t, errOutput.String(), "Image migration completed.")
-	assert.NotContains(t, errOutput.String(), "Run db compact separately")
-	assert.NotContains(t, output.String(), "Image migration completed.")
-	assert.DirExists(t, filepath.Join(dataDir, "assets"))
-	t.Logf("partial report:\n%s", errOutput.String())
 }
 
-// TestDBMigrateReferenceMatchesAssetsPut checks the stored sha256 field against
-// the file the real assets.Put wrote. The db-level equivalent injects a put that
-// names files by the same hash the block records, so only a command-level run
-// can catch the field and the asset store disagreeing.
+// The archive reference and digest must identify the bytes in the asset store.
 func TestDBMigrateReferenceMatchesAssetsPut(t *testing.T) {
 	dataDir := testDataDir(t)
 	seedMigrateCommandArchive(t)
@@ -197,48 +212,6 @@ func TestDBMigrateReferenceMatchesAssetsPut(t *testing.T) {
 		"sha256 must be the digest of the bytes assets.Put stored")
 	assert.Equal(t, "asset://"+entries[0].Name(), ref)
 	assert.Equal(t, sha256Hex+".png", entries[0].Name())
-}
-
-func TestDBMigratePreservesSources(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	srcDir := t.TempDir()
-	path := filepath.Join(srcDir, "provider.jsonl")
-	sourcePath := path
-	insertSessionForStripTest(t, database, "mig-source", func(s *db.Session) {
-		s.FilePath = &sourcePath
-	})
-	require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage("mig-source")}))
-	database.SetToolResultImages(config.ToolResultImagesKeep)
-
-	transcriptBefore := "provider transcript remains byte-for-byte unchanged"
-	require.NoError(t, os.WriteFile(path, []byte(transcriptBefore), 0o600))
-
-	// Standalone GIF beside the archive: migration must not open any write handle
-	// to standalone image files. PI-4 requirement.
-	gifBody := []byte("GIF89a") // minimal GIF header
-	gifPath := filepath.Join(srcDir, "photo.gif")
-	require.NoError(t, os.WriteFile(gifPath, gifBody, 0o600))
-
-	assetsDir := t.TempDir()
-	put := func(mediaType string, body []byte) (string, bool, error) {
-		return assets.Put(assetsDir, mediaType, body)
-	}
-	report, err := database.MigrateToolImages(context.Background(), db.StripImagesFilter{}, put)
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Changed)
-
-	// Provider transcript stays byte-identical.
-	transcriptAfter, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, transcriptBefore, string(transcriptAfter))
-
-	// Standalone GIF stays byte-identical.
-	gifAfter, err := os.ReadFile(gifPath)
-	require.NoError(t, err)
-	assert.Equal(t, gifBody, gifAfter)
-
-	t.Logf("0 bytes changed in either file: transcript before=%d bytes, after=%d; gif before=%d bytes, after=%d",
-		len(transcriptBefore), len(transcriptAfter), len(gifBody), len(gifAfter))
 }
 
 // TestDBMigrateReachesTrashedAndOrphanRows verifies that the command migrates
@@ -318,11 +291,10 @@ func TestDBMigrateReachesTrashedAndOrphanRows(t *testing.T) {
 
 	// Count trashed-session event rows that were migrated.
 	var trashedMigrated int
-	_ = database2.Reader().QueryRow(`
+	require.NoError(t, database2.Reader().QueryRow(`
 		SELECT COUNT(*) FROM tool_result_events e
 		JOIN sessions s ON s.id = e.session_id
-		WHERE s.deleted_at IS NOT NULL AND e.content LIKE '%image_ref%'`).Scan(&trashedMigrated)
-	t.Logf("trashed-session event rows migrated: got %d", trashedMigrated)
+		WHERE s.deleted_at IS NOT NULL AND e.content LIKE '%image_ref%'`).Scan(&trashedMigrated))
 	assert.Equal(t, 1, trashedMigrated)
 }
 

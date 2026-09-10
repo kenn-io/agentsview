@@ -553,6 +553,16 @@ changes provider source files. A separate serving host needs the matching
 `db compact` separately to measure SQLite file-space reclamation after
 migration. Back up the `{dataDir}/assets` directory together with the archive.
 
+If a session transaction fails after writing assets, its rows remain unchanged
+but complete, unreferenced asset files remain on disk. Retrying the migration
+reuses matching files; there is no automatic cleanup of unreferenced assets.
+Both `db migrate --images` and `db strip --images` report the sessions that
+committed before a later failure.
+
+JPEG assets now use `.jpg` filenames, including `.jpeg` files copied from chat
+imports. Existing `asset://<hash>.jpeg` references still resolve, but re-importing
+an export with those files can create a second copy under `.jpg`.
+
 Only the four passive image media types are migrated: `image/png`, `image/jpeg`,
 `image/webp`, `image/gif`. Every other payload stays inline, including SVG,
 which the serving route refuses as active content, and near-misses such as the

@@ -320,6 +320,8 @@ func TestStripToolImagesProjectsOrphanedStoredEvents(t *testing.T) {
 
 func TestStripToolImagesRollsBackWhenEventUpdateFails(t *testing.T) {
 	d := testDB(t)
+	insertSession(t, d, "committed", "earlier-project")
+	insertMessages(t, d, testImageMessage("committed"))
 	insertSession(t, d, "rollback", "project")
 	message := testImageMessage("rollback")
 	message.ToolCalls[0].ResultContent =
@@ -329,15 +331,29 @@ func TestStripToolImagesRollsBackWhenEventUpdateFails(t *testing.T) {
 		_, err := tx.Exec(`
 			CREATE TRIGGER fail_strip_event_update
 			AFTER UPDATE OF content ON tool_result_events
+			WHEN OLD.session_id = 'rollback'
 			BEGIN
 				SELECT RAISE(FAIL, 'forced strip event update failure');
 			END`)
 		return err
 	}))
 
-	_, err := d.StripToolImages(context.Background(), StripImagesFilter{})
+	report, err := d.StripToolImages(context.Background(), StripImagesFilter{})
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "updating orphaned tool result event")
+	assert.Equal(t, StripImagesReport{
+		Sessions: 1, Changed: 1, Payloads: 1, StoredBytes: 26, DecodedBytes: 3,
+		Projects: []StripImagesProjectReport{{
+			Project: "earlier-project", Sessions: 1, Changed: 1,
+			Payloads: 1, StoredBytes: 26, DecodedBytes: 3,
+		}},
+	}, report)
+	var committedContent string
+	require.NoError(t, d.getReader().QueryRow(`
+		SELECT content FROM tool_result_events WHERE session_id = 'committed'`,
+	).Scan(&committedContent))
+	assert.Contains(t, committedContent, "agentsview_image")
+	assert.NotContains(t, committedContent, "input_image")
 
 	var storedCall, storedEvent string
 	require.NoError(t, d.getReader().QueryRow(`
@@ -482,4 +498,88 @@ func TestStripToolImagesRescansStoredEventCoordinates(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStripToolResultImagesGolden covers placeholders, unsupported headers,
+// mixed blocks, and summaries with anonymous sections.
+func TestStripToolResultImagesGolden(t *testing.T) {
+	inputs := []string{
+		// 1. Simple PNG inline.
+		`[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`,
+		// 2. WebP with charset parameter — parseInlineImageHeader requires exactly
+		// two semicolon-delimited parts before the comma, so this passes through.
+		`[{"type":"input_image","image_url":"data:image/webp;charset=utf-8;base64,AAEC"}]`,
+		// 3. Already-stripped placeholder (no-op for strip).
+		`[{"type":"agentsview_image","version":1,"text":"[Image: image/png, 3 bytes]","media_type":"image/png","byte_size":3,"sha256":""}]`,
+		// 4. Mixed array with non-image blocks.
+		`[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`,
+		// 5. Labeled summary with anonymous trailing section.
+		"agent-a:\n[{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}]\n\n[{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}]",
+		// 6. Plain text with no images.
+		`plain text, no images`,
+	}
+	want := []string{
+		// 1. PNG stripped to placeholder.
+		`[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`,
+		// 2. WebP with charset passes through unchanged (3-part header rejected).
+		`[{"type":"input_image","image_url":"data:image/webp;charset=utf-8;base64,AAEC"}]`,
+		// 3. Already-stripped placeholder passes through unchanged.
+		`[{"type":"agentsview_image","version":1,"text":"[Image: image/png, 3 bytes]","media_type":"image/png","byte_size":3,"sha256":""}]`,
+		// 4. Mixed array: image stripped, text blocks pass through.
+		`[{"type":"text","text":"before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"after"}]`,
+		// 5. Both labeled sections stripped.
+		"agent-a:\n[{\"byte_size\":3,\"media_type\":\"image/png\",\"sha256\":\"\",\"text\":\"[Image: image/png, 3 bytes]\",\"type\":\"agentsview_image\",\"version\":1}]\n\n[{\"byte_size\":3,\"media_type\":\"image/png\",\"sha256\":\"\",\"text\":\"[Image: image/png, 3 bytes]\",\"type\":\"agentsview_image\",\"version\":1}]",
+		// 6. Plain text passes through unchanged.
+		`plain text, no images`,
+	}
+
+	for i, input := range inputs {
+		got, _ := StripToolResultImages(input)
+		assert.Equal(t, want[i], got, "input %d", i+1)
+	}
+}
+
+// TestStripPublicationSequence verifies that stripping changes stored content
+// and its revision once, while a second strip is a no-op.
+func TestStripPublicationSequence(t *testing.T) {
+	d := testDB(t)
+	seedArtifactOrigin(t, d)
+	insertSession(t, d, "pub-unchanged", "project")
+	insertMessages(t, d, testImageMessage("pub-unchanged"))
+	clearArtifactExportQueue(t, d)
+
+	var before string
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT transcript_revision FROM sessions WHERE id = ?", "pub-unchanged",
+	).Scan(&before))
+
+	report, err := d.StripToolImages(t.Context(), StripImagesFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Changed)
+	assert.Equal(t, int64(1), report.Payloads)
+
+	var after string
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT transcript_revision FROM sessions WHERE id = ?", "pub-unchanged",
+	).Scan(&after))
+	assert.NotEqual(t, before, after)
+
+	// testImageMessage seeds the mixed-array format: text+image+text.
+	const wantStripped = `[{"type":"text","text":"before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"after"}]`
+	var eventContent string
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT content FROM tool_result_events WHERE session_id = ?", "pub-unchanged",
+	).Scan(&eventContent))
+	assert.Equal(t, wantStripped, eventContent, "post-strip content preserves text around the placeholder")
+
+	// Second strip: no change, revision stays.
+	report2, err := d.StripToolImages(t.Context(), StripImagesFilter{})
+	require.NoError(t, err)
+	assert.Zero(t, report2.Changed)
+
+	var after2 string
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT transcript_revision FROM sessions WHERE id = ?", "pub-unchanged",
+	).Scan(&after2))
+	assert.Equal(t, after, after2)
 }

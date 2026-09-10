@@ -13,8 +13,8 @@ import (
 	"go.kenn.io/agentsview/internal/assets"
 )
 
-// TestCopyAssetNormalizesJPEGExtension verifies PI-7 extension parity:
-// a .jpeg source and Put with image/jpeg produce the same file and reference.
+// TestCopyAssetNormalizesJPEGExtension verifies that a .jpeg source and Put
+// with image/jpeg produce the same file and reference.
 func TestCopyAssetNormalizesJPEGExtension(t *testing.T) {
 	assetsDir := t.TempDir()
 	body := []byte{0xff, 0xd8, 0xff, 0xe0} // JPEG magic bytes

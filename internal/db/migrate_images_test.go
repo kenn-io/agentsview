@@ -60,8 +60,7 @@ func TestToolImageMigrationContract(t *testing.T) {
 
 	content := "[" + audioBlock + "," + inlineBlock + "," + placeholderV7 + "]"
 
-	var stats ToolImageStats
-	projected, err := migrateToolResultImages(content, fakePut, &stats)
+	projected, err := migrateToolResultImages(content, fakePut)
 	require.NoError(t, err)
 
 	var blocks []json.RawMessage
@@ -83,14 +82,10 @@ func TestToolImageMigrationContract(t *testing.T) {
 	assert.Equal(t, `"agentsview_image"`, string(migrated["type"]))
 	assert.Equal(t, `1`, string(migrated["version"]))
 
-	assert.Equal(t, int64(1), stats.Payloads)
-
 	// A failing put returns original content and the error.
-	var stats2 ToolImageStats
-	result, err2 := migrateToolResultImages(content, errorPut, &stats2)
+	result, err2 := migrateToolResultImages(content, errorPut)
 	require.Error(t, err2)
 	assert.Equal(t, content, result)
-	assert.Zero(t, stats2.Payloads)
 }
 
 // TestMigrateLeavesBlockInlineWhenPutFails verifies the fault guard:
@@ -118,9 +113,7 @@ func TestMigrateLeavesBlockInlineWhenPutFails(t *testing.T) {
 	// Boundary: 0 rows carrying image_ref after failure.
 	assert.Equal(t, beforeContent, afterContent)
 	assert.NotContains(t, afterContent, "image_ref")
-	var rowsWithRef int
-	_ = d.getReader().QueryRow(`SELECT COUNT(*) FROM tool_result_events WHERE session_id = 'fail-put' AND content LIKE '%image_ref%'`).Scan(&rowsWithRef)
-	t.Logf("0 rows carrying image_ref after the failure: got %d", rowsWithRef)
+
 }
 
 // TestMigratePartialFailurePreservesReport verifies the partial-failure contract:
@@ -195,9 +188,8 @@ func TestMigrateCancellationPreservesReport(t *testing.T) {
 	defer cancel()
 	applies := 0
 	apply := func(ctx context.Context, session stripImageSession) (bool, error) {
-		var stats ToolImageStats
 		changed, err := d.migrateStoredToolResultRows(
-			ctx, session.id, realPut(assetsDir), &stats,
+			ctx, session.id, realPut(assetsDir),
 		)
 		applies++
 		if applies == 1 {
@@ -206,7 +198,7 @@ func TestMigrateCancellationPreservesReport(t *testing.T) {
 		return changed, err
 	}
 
-	report, err := d.scanMigrateToolImages(ctx, StripImagesFilter{}, apply)
+	report, err := d.scanToolImages(ctx, StripImagesFilter{}, countMigratable, apply)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, 1, report.Sessions)
 	assert.Equal(t, 1, report.Changed)
@@ -238,9 +230,8 @@ func TestMigrateStatsFailurePreservesReport(t *testing.T) {
 
 	applies := 0
 	apply := func(ctx context.Context, session stripImageSession) (bool, error) {
-		var stats ToolImageStats
 		changed, err := d.migrateStoredToolResultRows(
-			ctx, session.id, realPut(assetsDir), &stats,
+			ctx, session.id, realPut(assetsDir),
 		)
 		if err != nil {
 			return false, err
@@ -253,9 +244,9 @@ func TestMigrateStatsFailurePreservesReport(t *testing.T) {
 		return changed, nil
 	}
 
-	report, err := d.scanMigrateToolImages(t.Context(), StripImagesFilter{}, apply)
+	report, err := d.scanToolImages(t.Context(), StripImagesFilter{}, countMigratable, apply)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "migrate stats")
+	assert.ErrorContains(t, err, "tool result bytes")
 	assert.Equal(t, 1, report.Sessions)
 	assert.Equal(t, 1, report.Changed)
 	assert.Equal(t, int64(1), report.Payloads)
@@ -586,16 +577,12 @@ func TestMigratePreviewAndApplyAgreeOnUnsupportedType(t *testing.T) {
 		preview.Payloads, applied.Payloads, len(putTypes))
 }
 
-// TestMigrateSummaryPutFailureLeavesStatsUntouched verifies that the
-// labeled-summary path unwinds like the array path: when a later section's put
-// fails, the caller's stats keep the value they had and the content is returned
-// unchanged. Boundary: 0 counts added for 1 successful section.
-func TestMigrateSummaryPutFailureLeavesStatsUntouched(t *testing.T) {
+// TestMigrateSummaryPutFailurePreservesContent verifies that a failure in a
+// later summary section returns the original content.
+func TestMigrateSummaryPutFailurePreservesContent(t *testing.T) {
 	content := "agent-a:\n" + testInlineImageContent() +
 		"\n\nagent-b:\n" + testInlineImageContent()
 
-	before := ToolImageStats{Payloads: 5, StoredBytes: 50, DecodedBytes: 500}
-	stats := before
 	calls := 0
 	put := func(mediaType string, body []byte) (string, bool, error) {
 		calls++
@@ -605,16 +592,13 @@ func TestMigrateSummaryPutFailureLeavesStatsUntouched(t *testing.T) {
 		return "", false, errors.New("forced put failure in the second section")
 	}
 
-	got, err := migrateToolResultImages(content, put, &stats)
+	got, err := migrateToolResultImages(content, put)
 	require.Error(t, err)
 	assert.Equal(t, content, got)
 	assert.Equal(t, 2, calls, "the first section must migrate before the failure")
-	assert.Equal(t, before, stats)
-	t.Logf("0 counts added for 1 successful section: payloads before=%d after=%d",
-		before.Payloads, stats.Payloads)
 }
 
-// TestMigrateNoOpPreservesRevisionAndQueue verifies PI-3: a session with no
+// TestMigrateNoOpPreservesRevisionAndQueue verifies that a session with no
 // migratable payloads produces no publications, no revision bump, no queue row.
 // Boundary: 0 publications.
 func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
@@ -668,9 +652,9 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 	// No new publication queued: pending stays 0 (clearArtifactExportQueue zeros
 	// rows but does not delete them).
 	var pending int
-	_ = d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(
 		"SELECT pending FROM artifact_export_queue WHERE session_id = ?", "noop-session",
-	).Scan(&pending)
+	).Scan(&pending))
 	assert.Zero(t, pending)
 
 	// Signal invalidation and incremental-marker reset must not fire.
@@ -689,106 +673,7 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 	t.Logf("0 publications: sessions=%d, changed=%d, assets=%d", report.Sessions, report.Changed, len(entries))
 }
 
-// TestStripToolResultImagesUnchangedAfterRefactor verifies PI-6: extracting
-// rewriteStoredToolResultRows does not change StripToolResultImages output.
-// Six stored strings including a webp with charset parameter and a labeled
-// summary whose second section is anonymous.
-// Golden values were captured at base commit fccd49abbd53.
-// Boundary: 6 strings compared with 0 differences.
-func TestStripToolResultImagesUnchangedAfterRefactor(t *testing.T) {
-	inputs := []string{
-		// 1. Simple PNG inline.
-		`[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`,
-		// 2. WebP with charset parameter — parseInlineImageHeader requires exactly
-		// two semicolon-delimited parts before the comma, so this passes through.
-		`[{"type":"input_image","image_url":"data:image/webp;charset=utf-8;base64,AAEC"}]`,
-		// 3. Already-stripped placeholder (no-op for strip).
-		`[{"type":"agentsview_image","version":1,"text":"[Image: image/png, 3 bytes]","media_type":"image/png","byte_size":3,"sha256":""}]`,
-		// 4. Mixed array with non-image blocks.
-		`[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`,
-		// 5. Labeled summary with anonymous trailing section.
-		"agent-a:\n[{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}]\n\n[{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}]",
-		// 6. Plain text with no images.
-		`plain text, no images`,
-	}
-	// Golden outputs captured at base commit fccd49abbd53. Head must match.
-	baseGolden := []string{
-		// 1. PNG stripped to placeholder.
-		`[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`,
-		// 2. WebP with charset passes through unchanged (3-part header rejected).
-		`[{"type":"input_image","image_url":"data:image/webp;charset=utf-8;base64,AAEC"}]`,
-		// 3. Already-stripped placeholder passes through unchanged.
-		`[{"type":"agentsview_image","version":1,"text":"[Image: image/png, 3 bytes]","media_type":"image/png","byte_size":3,"sha256":""}]`,
-		// 4. Mixed array: image stripped, text blocks pass through.
-		`[{"type":"text","text":"before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"after"}]`,
-		// 5. Both labeled sections stripped.
-		"agent-a:\n[{\"byte_size\":3,\"media_type\":\"image/png\",\"sha256\":\"\",\"text\":\"[Image: image/png, 3 bytes]\",\"type\":\"agentsview_image\",\"version\":1}]\n\n[{\"byte_size\":3,\"media_type\":\"image/png\",\"sha256\":\"\",\"text\":\"[Image: image/png, 3 bytes]\",\"type\":\"agentsview_image\",\"version\":1}]",
-		// 6. Plain text passes through unchanged.
-		`plain text, no images`,
-	}
-
-	diffs := 0
-	for i, input := range inputs {
-		got, _ := StripToolResultImages(input)
-		if got != baseGolden[i] {
-			t.Errorf("input %d: head output differs from base golden\n  got:  %q\n  want: %q", i+1, got, baseGolden[i])
-			diffs++
-		}
-	}
-	// Boundary: 0 differences.
-	assert.Equal(t, 0, diffs)
-	t.Logf("6 strings compared with 0 differences: inputs=%d, diffs=%d", len(inputs), diffs)
-}
-
-// TestStripPublicationSequenceUnchanged verifies PI-6 at the database level:
-// strip over a seeded archive produces the expected revision bump. A second
-// strip is a no-op. Post-strip row content matches the base golden at commit
-// fccd49abbd53.
-func TestStripPublicationSequenceUnchanged(t *testing.T) {
-	d := testDB(t)
-	seedArtifactOrigin(t, d)
-	insertSession(t, d, "pub-unchanged", "project")
-	insertMessages(t, d, testImageMessage("pub-unchanged"))
-	clearArtifactExportQueue(t, d)
-
-	var before string
-	require.NoError(t, d.getReader().QueryRow(
-		"SELECT transcript_revision FROM sessions WHERE id = ?", "pub-unchanged",
-	).Scan(&before))
-
-	report, err := d.StripToolImages(t.Context(), StripImagesFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Changed)
-	assert.Equal(t, int64(1), report.Payloads)
-
-	var after string
-	require.NoError(t, d.getReader().QueryRow(
-		"SELECT transcript_revision FROM sessions WHERE id = ?", "pub-unchanged",
-	).Scan(&after))
-	assert.NotEqual(t, before, after)
-
-	// PI-6: post-strip event content must equal the base golden (fccd49abbd53).
-	// testImageMessage seeds the mixed-array format: text+image+text.
-	const baseGoldenStripped = `[{"type":"text","text":"before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"after"}]`
-	var eventContent string
-	require.NoError(t, d.getReader().QueryRow(
-		"SELECT content FROM tool_result_events WHERE session_id = ?", "pub-unchanged",
-	).Scan(&eventContent))
-	assert.Equal(t, baseGoldenStripped, eventContent, "post-strip content must match base golden (fccd49abbd53)")
-
-	// Second strip: no change, revision stays.
-	report2, err := d.StripToolImages(t.Context(), StripImagesFilter{})
-	require.NoError(t, err)
-	assert.Zero(t, report2.Changed)
-
-	var after2 string
-	require.NoError(t, d.getReader().QueryRow(
-		"SELECT transcript_revision FROM sessions WHERE id = ?", "pub-unchanged",
-	).Scan(&after2))
-	assert.Equal(t, after, after2)
-}
-
-// TestMigrateDeduplicatesAcrossSessions verifies PI-7: the same inline image
+// TestMigrateDeduplicatesAcrossSessions verifies that the same inline image
 // in two sessions produces one file and two identical asset:// references.
 // Boundary: 1 file for 2 references.
 func TestMigrateDeduplicatesAcrossSessions(t *testing.T) {

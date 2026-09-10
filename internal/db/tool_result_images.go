@@ -213,21 +213,21 @@ func decodeInlineImageURL(raw json.RawMessage) (string, int64, int64, bool) {
 
 // decodeInlineImage returns the parsed media type and decoded bytes of a
 // supported inline data URI. Acceptance matches decodeInlineImageURL.
-func decodeInlineImage(raw json.RawMessage) (mediaType string, decoded []byte, stored int64, ok bool) {
+func decodeInlineImage(raw json.RawMessage) (mediaType string, decoded []byte, ok bool) {
 	var uri string
 	if err := json.Unmarshal(raw, &uri); err != nil {
-		return "", nil, 0, false
+		return "", nil, false
 	}
 	mediaType, payload, ok := parseInlineImageHeader(uri)
 	if !ok {
-		return "", nil, 0, false
+		return "", nil, false
 	}
 	var buf bytes.Buffer
 	decoder := base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
 	if _, err := io.Copy(&buf, decoder); err != nil {
-		return "", nil, 0, false
+		return "", nil, false
 	}
-	return mediaType, buf.Bytes(), int64(len(uri)), true
+	return mediaType, buf.Bytes(), true
 }
 
 // imagePutFunc writes decoded image bytes and returns their asset reference.
@@ -256,30 +256,26 @@ func isMigratableToolImageBlock(raw json.RawMessage) bool {
 // migrateToolResultImages rewrites every migratable inline image block in one
 // stored result string with a durable asset:// reference. Unsupported shapes
 // keep their original JSON bytes. A put error returns the original content and
-// the error. stats is updated in place.
-func migrateToolResultImages(content string, put imagePutFunc, stats *ToolImageStats) (string, error) {
-	projected, arrayStats, err := migrateToolResultImageArray(content, put)
+// the error.
+func migrateToolResultImages(content string, put imagePutFunc) (string, error) {
+	projected, err := migrateToolResultImageArray(content, put)
 	if err != nil {
 		return content, err
 	}
-	if arrayStats.Payloads > 0 {
-		stats.Payloads += arrayStats.Payloads
-		stats.StoredBytes += arrayStats.StoredBytes
-		stats.DecodedBytes += arrayStats.DecodedBytes
+	if projected != content {
 		return projected, nil
 	}
-	return migrateToolResultSummaryImages(content, put, stats)
+	return migrateToolResultSummaryImages(content, put)
 }
 
-func migrateToolResultImageArray(content string, put imagePutFunc) (string, ToolImageStats, error) {
+func migrateToolResultImageArray(content string, put imagePutFunc) (string, error) {
 	var blocks []json.RawMessage
 	if err := json.Unmarshal([]byte(content), &blocks); err != nil || blocks == nil {
-		return content, ToolImageStats{}, nil
+		return content, nil
 	}
 
 	projected := make([]json.RawMessage, len(blocks))
 	copy(projected, blocks)
-	var stats ToolImageStats
 	changed := false
 
 	for i, raw := range blocks {
@@ -296,13 +292,13 @@ func migrateToolResultImageArray(content string, put imagePutFunc) (string, Tool
 		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 			continue
 		}
-		mediaType, decoded, storedBytes, ok := decodeInlineImage(block.ImageURL)
+		mediaType, decoded, ok := decodeInlineImage(block.ImageURL)
 		if !ok {
 			continue
 		}
 		ref, _, err := put(mediaType, decoded)
 		if err != nil {
-			return content, ToolImageStats{}, err
+			return content, err
 		}
 		// Hash the payload we handed to put rather than reading the digest back
 		// out of the reference: put is caller-supplied and may name files freely.
@@ -338,12 +334,9 @@ func migrateToolResultImageArray(content string, put imagePutFunc) (string, Tool
 		}
 		projected[i] = placeholder
 		changed = true
-		stats.Payloads++
-		stats.StoredBytes += storedBytes
-		stats.DecodedBytes += decodedBytes
 	}
 	if !changed {
-		return content, ToolImageStats{}, nil
+		return content, nil
 	}
 	var result bytes.Buffer
 	result.WriteByte('[')
@@ -354,14 +347,11 @@ func migrateToolResultImageArray(content string, put imagePutFunc) (string, Tool
 		result.Write(block)
 	}
 	result.WriteByte(']')
-	return result.String(), stats, nil
+	return result.String(), nil
 }
 
-func migrateToolResultSummaryImages(content string, put imagePutFunc, stats *ToolImageStats) (string, error) {
+func migrateToolResultSummaryImages(content string, put imagePutFunc) (string, error) {
 	var result strings.Builder
-	// Section counts land in *stats only once every section has been written,
-	// so a later put failure leaves the caller's totals untouched.
-	var found ToolImageStats
 	var putErr error
 	copied := 0
 	scanSummarySections(content, func(arrayStart, end int, raw json.RawMessage) {
@@ -370,31 +360,25 @@ func migrateToolResultSummaryImages(content string, put imagePutFunc, stats *Too
 		if putErr != nil {
 			return
 		}
-		projected, sectionStats, err := migrateToolResultImageArray(string(raw), put)
+		projected, err := migrateToolResultImageArray(string(raw), put)
 		if err != nil {
 			putErr = err
 			return
 		}
-		if sectionStats.Payloads == 0 {
+		if projected == string(raw) {
 			return
 		}
 		result.WriteString(content[copied:arrayStart])
 		result.WriteString(projected)
 		copied = end
-		found.Payloads += sectionStats.Payloads
-		found.StoredBytes += sectionStats.StoredBytes
-		found.DecodedBytes += sectionStats.DecodedBytes
 	})
 	if putErr != nil {
 		return content, putErr
 	}
-	if found.Payloads == 0 {
+	if copied == 0 {
 		return content, nil
 	}
 	result.WriteString(content[copied:])
-	stats.Payloads += found.Payloads
-	stats.StoredBytes += found.StoredBytes
-	stats.DecodedBytes += found.DecodedBytes
 	return result.String(), nil
 }
 

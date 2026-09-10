@@ -169,7 +169,7 @@ func TestStripThenCompactAccounting(t *testing.T) {
 	report, err := database.StripToolImages(context.Background(), db.StripImagesFilter{})
 	require.NoError(t, err)
 	var output strings.Builder
-	require.NoError(t, writeDBStripReport(&output, report, false, false))
+	require.NoError(t, writeDBImageReport(&output, report, false, "Image strip completed."))
 	assert.Contains(t, output.String(), "Stored content bytes:")
 	assert.Contains(t, output.String(), "Decoded image bytes:")
 	assert.NotContains(t, output.String(), "Reclaimed:")

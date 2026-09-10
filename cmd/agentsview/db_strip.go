@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
@@ -12,21 +13,32 @@ import (
 )
 
 func newDBStripCommand() *cobra.Command {
+	return newDBImageCommand(
+		"Strip", "strip", "Remove retained inline tool-result images",
+		"Strip inline image payloads", previewDBStrip, runDBStrip,
+	)
+}
+
+func newDBImageCommand(
+	verb, operation, short, imagesHelp string,
+	preview, apply func(context.Context, config.Config, db.StripImagesFilter) (db.StripImagesReport, error),
+) *cobra.Command {
+	name := strings.ToLower(verb)
 	var images bool
 	var project, before string
 	var dryRun, yes bool
 	cmd := &cobra.Command{
-		Use:          "strip",
-		Short:        "Remove retained inline tool-result images",
+		Use:          name,
+		Short:        short,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !images {
-				return fmt.Errorf("db strip requires --images")
+				return fmt.Errorf("db %s requires --images", name)
 			}
 			jsonOutput := outputFormat(cmd) == "json"
 			if jsonOutput && !yes && !dryRun {
-				return fmt.Errorf("--format json requires --yes for db strip --images")
+				return fmt.Errorf("--format json requires --yes for db %s --images", name)
 			}
 			cfg, err := config.LoadReadOnly()
 			if err != nil {
@@ -34,34 +46,54 @@ func newDBStripCommand() *cobra.Command {
 			}
 			filter := db.StripImagesFilter{Project: project, Before: before}
 			if dryRun {
-				report, err := previewDBStrip(cmd.Context(), cfg, filter)
+				report, err := preview(cmd.Context(), cfg, filter)
 				if err != nil {
 					return err
 				}
-				return writeDBStripReport(cmd.OutOrStdout(), report, jsonOutput, true)
+				return writeDBImageReport(cmd.OutOrStdout(), report, jsonOutput, "Image "+operation+" preview.")
 			}
 			if !yes {
-				report, err := previewDBStrip(cmd.Context(), cfg, filter)
+				report, err := preview(cmd.Context(), cfg, filter)
 				if err != nil {
 					return err
 				}
-				if err := writeDBStripReport(cmd.ErrOrStderr(), report, false, true); err != nil {
+				if err := writeDBImageReport(cmd.ErrOrStderr(), report, false, "Image "+operation+" preview."); err != nil {
 					return err
 				}
+				if name == "migrate" {
+					fmt.Fprintln(cmd.ErrOrStderr(),
+						"Migrated images require a backup of the assets directory beside the archive.")
+				}
 				if !confirm(cmd.InOrStdin(), cmd.ErrOrStderr(),
-					fmt.Sprintf("Strip images from %d sessions?", report.Sessions)) {
+					fmt.Sprintf("%s images from %d sessions?", verb, report.Sessions)) {
 					fmt.Fprintln(cmd.ErrOrStderr(), "Aborted.")
 					return nil
 				}
 			}
-			report, err := runDBStrip(cmd.Context(), cfg, filter)
+			report, err := apply(cmd.Context(), cfg, filter)
 			if err != nil {
+				if report.Sessions > 0 {
+					_ = writeDBImageReport(cmd.ErrOrStderr(), report, false,
+						"Image "+operation+" stopped early. Counts below cover the sessions that committed:")
+				}
 				return err
 			}
-			return writeDBStripReport(cmd.OutOrStdout(), report, jsonOutput, false)
+			out := cmd.OutOrStdout()
+			if err := writeDBImageReport(out, report, jsonOutput, "Image "+operation+" completed."); err != nil {
+				return err
+			}
+			if !jsonOutput {
+				if name == "migrate" {
+					fmt.Fprintln(out, "Migrated images live in the assets directory beside the archive; back them up together.")
+					fmt.Fprintln(out, "Run db compact separately to measure SQLite file-space reclamation.")
+				} else {
+					fmt.Fprintln(out, "Run db compact separately to measure file-space reclamation.")
+				}
+			}
+			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&images, "images", false, "Strip inline image payloads")
+	cmd.Flags().BoolVar(&images, "images", false, imagesHelp)
 	cmd.Flags().StringVar(&project, "project", "", "Sessions whose project contains this substring")
 	cmd.Flags().StringVar(&before, "before", "", "Sessions that ended before this date (YYYY-MM-DD)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report matching rows without changing the archive")
@@ -95,22 +127,18 @@ func runDBStrip(
 	defer closeWriteDB(database, lock)
 	report, err := database.StripToolImages(ctx, filter)
 	if err != nil {
-		return db.StripImagesReport{}, fmt.Errorf("stripping images: %w", err)
+		return report, fmt.Errorf("stripping images: %w", err)
 	}
 	return report, nil
 }
 
-func writeDBStripReport(
-	out io.Writer, report db.StripImagesReport, jsonOutput, preview bool,
+func writeDBImageReport(
+	out io.Writer, report db.StripImagesReport, jsonOutput bool, heading string,
 ) error {
 	if jsonOutput {
 		return json.NewEncoder(out).Encode(report)
 	}
-	if preview {
-		fmt.Fprintln(out, "Image strip preview.")
-	} else {
-		fmt.Fprintln(out, "Image strip completed.")
-	}
+	fmt.Fprintln(out, heading)
 	fmt.Fprintf(out, "  Sessions: %d\n", report.Sessions)
 	fmt.Fprintf(out, "  Changed: %d\n", report.Changed)
 	fmt.Fprintf(out, "  Image payloads: %d\n", report.Payloads)
@@ -124,9 +152,6 @@ func writeDBStripReport(
 				project.Project, project.Sessions, project.Changed, project.Payloads,
 				formatBytes(project.StoredBytes), formatBytes(project.DecodedBytes))
 		}
-	}
-	if !preview {
-		fmt.Fprintln(out, "Run db compact separately to measure file-space reclamation.")
 	}
 	return nil
 }
