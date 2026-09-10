@@ -138,13 +138,12 @@ func cursorIDEFingerprintSource(
 		return SourceFingerprint{}, err
 	}
 	if !ok {
-		// Composer row is gone but the DB file remains: a keyed-empty
-		// fingerprint without error so the engine proceeds to Parse, which
-		// force-replaces the deleted composer out of the archive. This branch
-		// is also reached by a husk row whose key is still present (value is
-		// NULL or empty): CursorIDEComposerExists selects on key alone, so
-		// cursorIDEBatchMemberPresent still reports it present and the
-		// session lands on source_missing_at instead of being force-replaced.
+		// Composer row is absent or a husk (NULL/empty value): return a
+		// keyed-empty fingerprint without error. With the container file
+		// present, both cases land on source_missing_at. They differ only
+		// upstream: a husk key is still returned by listCursorIDEComposerIDs,
+		// so changedPathTombstones emits no member tombstone for it, while a
+		// fully deleted key does produce one.
 		return SourceFingerprint{}, nil
 	}
 	return SourceFingerprint{
