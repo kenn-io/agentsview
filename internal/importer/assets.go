@@ -1,9 +1,6 @@
 package importer
 
 import (
-	"crypto/sha256"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,73 +102,4 @@ func (idx AssetIndex) Resolve(pointer string) (string, bool) {
 	}
 	path, ok := idx.entries[prefix]
 	return path, ok
-}
-
-// allowedImageExts is the set of passive image formats that
-// are safe to serve inline. Active content (svg, html, js) is
-// rejected to prevent stored XSS.
-var allowedImageExts = map[string]bool{
-	".png":  true,
-	".jpg":  true,
-	".jpeg": true,
-	".webp": true,
-	".gif":  true,
-}
-
-// CopyAsset copies a file to the assets directory using its
-// SHA-256 hash as the filename. Returns the asset:// reference.
-// Only passive image types are accepted; active content is
-// rejected.
-func CopyAsset(srcPath, assetsDir string) (string, error) {
-	ext := strings.ToLower(filepath.Ext(srcPath))
-	if !allowedImageExts[ext] {
-		return "", fmt.Errorf(
-			"unsupported asset type: %s", ext,
-		)
-	}
-
-	f, err := os.Open(srcPath)
-	if err != nil {
-		return "", fmt.Errorf("reading asset: %w", err)
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", fmt.Errorf("hashing asset: %w", err)
-	}
-
-	hash := fmt.Sprintf("%x", h.Sum(nil))
-	filename := hash + ext
-	destPath := filepath.Join(assetsDir, filename)
-
-	if _, err := os.Stat(destPath); err == nil {
-		return "asset://" + filename, nil
-	}
-
-	if err := os.MkdirAll(assetsDir, 0o755); err != nil {
-		return "", fmt.Errorf("creating assets dir: %w", err)
-	}
-
-	// Re-read source for copy (we consumed it for hashing).
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return "", fmt.Errorf("reopening asset: %w", err)
-	}
-	defer src.Close()
-
-	out, err := os.Create(destPath)
-	if err != nil {
-		return "", fmt.Errorf("writing asset: %w", err)
-	}
-
-	if _, err := io.Copy(out, src); err != nil {
-		out.Close()
-		return "", fmt.Errorf("copying asset: %w", err)
-	}
-	if err := out.Close(); err != nil {
-		return "", fmt.Errorf("closing asset: %w", err)
-	}
-
-	return "asset://" + filename, nil
 }

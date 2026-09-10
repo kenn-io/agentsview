@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"mime"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -108,10 +110,13 @@ func stripToolResultImageArray(content string) (string, ToolImageStats) {
 	return result.String(), stats
 }
 
-func stripToolResultSummaryImages(content string) (string, ToolImageStats) {
-	var result strings.Builder
-	var stats ToolImageStats
-	copied := 0
+// scanSummarySections walks a labeled or anonymous tool-result summary and
+// calls fn once per section that holds a JSON array, passing the offsets the
+// array occupies in content and its raw bytes. Preview, strip and migrate all
+// scan through here so they cannot disagree about which sections exist.
+func scanSummarySections(
+	content string, fn func(arrayStart, end int, raw json.RawMessage),
+) {
 	for start := 0; start < len(content); {
 		section := strings.TrimLeft(content[start:], " \t\r\n")
 		arrayStart := len(content) - len(section)
@@ -133,15 +138,7 @@ func stripToolResultSummaryImages(content string) (string, ToolImageStats) {
 			scanEnd = end
 			tail, _, _ := strings.Cut(content[end:], "\n\n")
 			if len(raw) > 0 && raw[0] == '[' && strings.TrimSpace(tail) == "" {
-				projected, found := stripToolResultImageArray(string(raw))
-				if found.Payloads > 0 {
-					result.WriteString(content[copied:arrayStart])
-					result.WriteString(projected)
-					copied = end
-					stats.Payloads += found.Payloads
-					stats.StoredBytes += found.StoredBytes
-					stats.DecodedBytes += found.DecodedBytes
-				}
+				fn(arrayStart, end, raw)
 			}
 		}
 		separator := strings.Index(content[scanEnd:], "\n\n")
@@ -150,6 +147,24 @@ func stripToolResultSummaryImages(content string) (string, ToolImageStats) {
 		}
 		start = scanEnd + separator + 2
 	}
+}
+
+func stripToolResultSummaryImages(content string) (string, ToolImageStats) {
+	var result strings.Builder
+	var stats ToolImageStats
+	copied := 0
+	scanSummarySections(content, func(arrayStart, end int, raw json.RawMessage) {
+		projected, found := stripToolResultImageArray(string(raw))
+		if found.Payloads == 0 {
+			return
+		}
+		result.WriteString(content[copied:arrayStart])
+		result.WriteString(projected)
+		copied = end
+		stats.Payloads += found.Payloads
+		stats.StoredBytes += found.StoredBytes
+		stats.DecodedBytes += found.DecodedBytes
+	})
 	if stats.Payloads == 0 {
 		return content, stats
 	}
@@ -157,30 +172,35 @@ func stripToolResultSummaryImages(content string) (string, ToolImageStats) {
 	return result.String(), stats
 }
 
+// parseInlineImageHeader parses a data URI header and returns the parsed
+// media type and base64 payload. It accepts only base64-encoded image/* URIs.
+func parseInlineImageHeader(uri string) (mediaType, payload string, ok bool) {
+	if !strings.HasPrefix(strings.ToLower(uri), "data:") {
+		return "", "", false
+	}
+	header, payload, found := strings.Cut(uri, ",")
+	if !found || payload == "" {
+		return "", "", false
+	}
+	parts := strings.Split(header, ";")
+	if len(parts) != 2 || !strings.EqualFold(parts[1], "base64") {
+		return "", "", false
+	}
+	rawType := parts[0][len("data:"):]
+	parsedType, _, err := mime.ParseMediaType(rawType)
+	if err != nil || !strings.HasPrefix(strings.ToLower(parsedType), "image/") {
+		return "", "", false
+	}
+	return parsedType, payload, true
+}
+
 func decodeInlineImageURL(raw json.RawMessage) (string, int64, int64, bool) {
 	var uri string
 	if err := json.Unmarshal(raw, &uri); err != nil {
 		return "", 0, 0, false
 	}
-	if !strings.HasPrefix(strings.ToLower(uri), "data:") {
-		return "", 0, 0, false
-	}
-	comma := strings.IndexByte(uri, ',')
-	if comma < 0 {
-		return "", 0, 0, false
-	}
-	header := uri[:comma]
-	payload := uri[comma+1:]
-	if payload == "" {
-		return "", 0, 0, false
-	}
-	parts := strings.Split(header, ";")
-	if len(parts) != 2 || !strings.EqualFold(parts[1], "base64") {
-		return "", 0, 0, false
-	}
-	mediaType := parts[0][len("data:"):]
-	parsedType, _, err := mime.ParseMediaType(mediaType)
-	if err != nil || !strings.HasPrefix(strings.ToLower(parsedType), "image/") {
+	mediaType, payload, ok := parseInlineImageHeader(uri)
+	if !ok {
 		return "", 0, 0, false
 	}
 	var count countingWriter
@@ -188,7 +208,194 @@ func decodeInlineImageURL(raw json.RawMessage) (string, int64, int64, bool) {
 	if _, err := io.Copy(&count, decoder); err != nil {
 		return "", 0, 0, false
 	}
-	return parsedType, count.n, int64(len(uri)), true
+	return mediaType, count.n, int64(len(uri)), true
+}
+
+// decodeInlineImage returns the parsed media type and decoded bytes of a
+// supported inline data URI. Acceptance matches decodeInlineImageURL.
+func decodeInlineImage(raw json.RawMessage) (mediaType string, decoded []byte, stored int64, ok bool) {
+	var uri string
+	if err := json.Unmarshal(raw, &uri); err != nil {
+		return "", nil, 0, false
+	}
+	mediaType, payload, ok := parseInlineImageHeader(uri)
+	if !ok {
+		return "", nil, 0, false
+	}
+	var buf bytes.Buffer
+	decoder := base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
+	if _, err := io.Copy(&buf, decoder); err != nil {
+		return "", nil, 0, false
+	}
+	return mediaType, buf.Bytes(), int64(len(uri)), true
+}
+
+// imagePutFunc writes decoded image bytes and returns their asset reference.
+type imagePutFunc func(mediaType string, body []byte) (ref string, created bool, err error)
+
+// isMigratableToolImageBlock reports whether one stored block holds an inline
+// image payload this migration can move. The block must be an input_image
+// with a base64 data URI whose media type is one the asset store accepts.
+func isMigratableToolImageBlock(raw json.RawMessage) bool {
+	var block toolImageBlock
+	if err := json.Unmarshal(raw, &block); err != nil || block.Type != "input_image" {
+		return false
+	}
+	var uri string
+	if err := json.Unmarshal(block.ImageURL, &uri); err != nil {
+		return false
+	}
+	mediaType, _, ok := parseInlineImageHeader(uri)
+	if !ok {
+		return false
+	}
+	_, allowed := assets.ExtForMediaType(mediaType)
+	return allowed
+}
+
+// migrateToolResultImages rewrites every migratable inline image block in one
+// stored result string with a durable asset:// reference. Unsupported shapes
+// keep their original JSON bytes. A put error returns the original content and
+// the error. stats is updated in place.
+func migrateToolResultImages(content string, put imagePutFunc, stats *ToolImageStats) (string, error) {
+	projected, arrayStats, err := migrateToolResultImageArray(content, put)
+	if err != nil {
+		return content, err
+	}
+	if arrayStats.Payloads > 0 {
+		stats.Payloads += arrayStats.Payloads
+		stats.StoredBytes += arrayStats.StoredBytes
+		stats.DecodedBytes += arrayStats.DecodedBytes
+		return projected, nil
+	}
+	return migrateToolResultSummaryImages(content, put, stats)
+}
+
+func migrateToolResultImageArray(content string, put imagePutFunc) (string, ToolImageStats, error) {
+	var blocks []json.RawMessage
+	if err := json.Unmarshal([]byte(content), &blocks); err != nil || blocks == nil {
+		return content, ToolImageStats{}, nil
+	}
+
+	projected := make([]json.RawMessage, len(blocks))
+	copy(projected, blocks)
+	var stats ToolImageStats
+	changed := false
+
+	for i, raw := range blocks {
+		// The preview path counts through this same predicate, so apply cannot
+		// call put for a payload the preview never counted.
+		if !isMigratableToolImageBlock(raw) {
+			continue
+		}
+		var block toolImageBlock
+		if err := json.Unmarshal(raw, &block); err != nil {
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+			continue
+		}
+		mediaType, decoded, storedBytes, ok := decodeInlineImage(block.ImageURL)
+		if !ok {
+			continue
+		}
+		ref, _, err := put(mediaType, decoded)
+		if err != nil {
+			return content, ToolImageStats{}, err
+		}
+		// Hash the payload we handed to put rather than reading the digest back
+		// out of the reference: put is caller-supplied and may name files freely.
+		sum := sha256.Sum256(decoded)
+		sha256hex := fmt.Sprintf("%x", sum[:])
+		decodedBytes := int64(len(decoded))
+
+		placeholderFields := make(map[string]json.RawMessage, len(fields)+7)
+		for key, value := range fields {
+			if !strings.EqualFold(key, "type") &&
+				!strings.EqualFold(key, "image_url") {
+				placeholderFields[key] = value
+			}
+		}
+		placeholderFields["type"] = json.RawMessage(`"agentsview_image"`)
+		placeholderFields["version"] = json.RawMessage(`1`)
+		textValue, _ := json.Marshal(
+			fmt.Sprintf("![Image: %s, %d bytes](%s)", mediaType, decodedBytes, ref),
+		)
+		placeholderFields["text"] = textValue
+		mediaValue, _ := json.Marshal(mediaType)
+		placeholderFields["media_type"] = mediaValue
+		byteSizeValue, _ := json.Marshal(decodedBytes)
+		placeholderFields["byte_size"] = byteSizeValue
+		sha256Value, _ := json.Marshal(sha256hex)
+		placeholderFields["sha256"] = sha256Value
+		imageRefValue, _ := json.Marshal(ref)
+		placeholderFields["image_ref"] = imageRefValue
+
+		placeholder, err := json.Marshal(placeholderFields)
+		if err != nil {
+			continue
+		}
+		projected[i] = placeholder
+		changed = true
+		stats.Payloads++
+		stats.StoredBytes += storedBytes
+		stats.DecodedBytes += decodedBytes
+	}
+	if !changed {
+		return content, ToolImageStats{}, nil
+	}
+	var result bytes.Buffer
+	result.WriteByte('[')
+	for i, block := range projected {
+		if i > 0 {
+			result.WriteByte(',')
+		}
+		result.Write(block)
+	}
+	result.WriteByte(']')
+	return result.String(), stats, nil
+}
+
+func migrateToolResultSummaryImages(content string, put imagePutFunc, stats *ToolImageStats) (string, error) {
+	var result strings.Builder
+	// Section counts land in *stats only once every section has been written,
+	// so a later put failure leaves the caller's totals untouched.
+	var found ToolImageStats
+	var putErr error
+	copied := 0
+	scanSummarySections(content, func(arrayStart, end int, raw json.RawMessage) {
+		// The first put failure abandons the rewrite; later sections are still
+		// walked but do no work, so no further payload leaves the row.
+		if putErr != nil {
+			return
+		}
+		projected, sectionStats, err := migrateToolResultImageArray(string(raw), put)
+		if err != nil {
+			putErr = err
+			return
+		}
+		if sectionStats.Payloads == 0 {
+			return
+		}
+		result.WriteString(content[copied:arrayStart])
+		result.WriteString(projected)
+		copied = end
+		found.Payloads += sectionStats.Payloads
+		found.StoredBytes += sectionStats.StoredBytes
+		found.DecodedBytes += sectionStats.DecodedBytes
+	})
+	if putErr != nil {
+		return content, putErr
+	}
+	if found.Payloads == 0 {
+		return content, nil
+	}
+	result.WriteString(content[copied:])
+	stats.Payloads += found.Payloads
+	stats.StoredBytes += found.StoredBytes
+	stats.DecodedBytes += found.DecodedBytes
+	return result.String(), nil
 }
 
 type countingWriter struct{ n int64 }

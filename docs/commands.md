@@ -524,6 +524,54 @@ content measurements, not reclaimed disk space.
 
 ______________________________________________________________________
 
+### `agentsview db migrate --images`
+
+Move retained inline tool-result image payloads out of the archive and into the
+asset store at `{dataDir}/assets`. Each payload is written as a
+content-addressed file named `<sha256hex><ext>` and the inline `input_image`
+block is replaced with an `agentsview_image` placeholder whose `image_ref` field
+holds the `asset://` reference. The `GET /api/v1/assets/{filename}` route and
+`renderMarkdown` already resolve `asset://` references, so no HTTP route and no
+frontend changes are needed.
+
+The image appears when a tool result's output is switched to formatted mode and
+every other block in that result is a text block. Raw mode shows the stored
+text, including the markdown reference, as it always has, and so does a result
+that still holds an unmigrated image block, such as an SVG or an `image/bmp`
+payload beside a migrated PNG. Under `require_auth` the asset route rejects the
+browser's image request, because an `img` element sends no `Authorization`
+header. Chat-imported images already carry that limit.
+
+The command requires `--images`. It never changes provider source files. Run
+`db compact` separately to measure SQLite file-space reclamation after
+migration. Back up the `{dataDir}/assets` directory together with the archive.
+
+Only the four passive image media types are migrated: `image/png`, `image/jpeg`,
+`image/webp`, `image/gif`. Every other payload stays inline, including SVG,
+which the serving route refuses as active content, and near-misses such as the
+non-canonical `image/jpg` spelling. `db strip --images` is broader and replaces
+any `image/*` payload with a placeholder, so the two commands do not select the
+same rows.
+
+```bash
+agentsview db migrate --images [flags]
+```
+
+| Flag        | Default | Description                                         |
+| ----------- | ------- | --------------------------------------------------- |
+| `--images`  | `false` | Required image migration operation                  |
+| `--project` |         | Sessions whose project contains this substring      |
+| `--before`  |         | Sessions that ended before this date (`YYYY-MM-DD`) |
+| `--dry-run` | `false` | Preview selected sessions and byte counts           |
+| `--yes`     | `false` | Skip confirmation                                   |
+| `--format`  | `human` | Use `json` for machine-readable output              |
+
+JSON apply requires `--yes`. Preview and a declined confirmation leave the
+archive and assets directory unchanged. Reported stored-content bytes and
+decoded image bytes are content measurements, not reclaimed disk space.
+
+______________________________________________________________________
+
 ### `agentsview version`
 
 Print the version, git commit, and build date. Use `--json` for a stable,

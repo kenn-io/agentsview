@@ -103,6 +103,15 @@ The local archive has four separate maintenance paths:
   Unlike category filtering, the rebuild also projects orphaned and trashed
   sessions onto the policy, so dropped tool payloads or transcript text leave
   the archive entirely.
+- `agentsview db migrate --images` moves retained inline tool-result image
+  payloads out of SQLite and into `{dataDir}/assets`. Each payload is written
+  as a content-addressed file named `<sha256hex><ext>` before any row commits;
+  the inline block is replaced with an `agentsview_image` placeholder whose
+  `image_ref` field holds the `asset://` reference. Only the four passive
+  media types are migrated (`image/png`, `image/jpeg`, `image/webp`, `image/gif`).
+  SVG payloads stay inline. After migration, back up `{dataDir}/assets` together
+  with the archive. Run `db compact` separately to measure SQLite file-space
+  reclamation.
 - Transparent compression or deduplication of live tool-result payloads is a
   separate storage-format change and is not part of `db compact`.
 

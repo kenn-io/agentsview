@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -277,7 +278,7 @@ func (a *assetResolverAdapter) Resolve(
 func (a *assetResolverAdapter) Copy(
 	srcPath string,
 ) (string, error) {
-	return CopyAsset(srcPath, a.assetsDir)
+	return assets.CopyAsset(srcPath, a.assetsDir)
 }
 
 // ImportChatGPT reads a ChatGPT export directory (containing

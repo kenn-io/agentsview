@@ -89,10 +89,27 @@ func (db *DB) StripToolImagesForSessions(ctx context.Context, sessionIDs []strin
 	return nil
 }
 
-// stripStoredToolResultRows projects both stored tool-result tables in one
-// transaction. Direct row updates preserve event coordinates and metadata.
+// storedToolResultProjection transforms one stored result-content string.
+// A returned error aborts the session transaction.
+type storedToolResultProjection func(string) (string, error)
+
+// stripStoredToolResultRows is a wrapper over rewriteStoredToolResultRows
+// that applies the strip projection: StripToolResultImages, discarding stats.
 func (db *DB) stripStoredToolResultRows(
 	ctx context.Context, sessionID string,
+) (bool, error) {
+	return db.rewriteStoredToolResultRows(ctx, sessionID, func(content string) (string, error) {
+		projected, _ := StripToolResultImages(content)
+		return projected, nil
+	})
+}
+
+// rewriteStoredToolResultRows rewrites both stored tool-result tables in one
+// transaction using the given projection. Direct row updates preserve event
+// coordinates and metadata. The projection is called once per stored content
+// string; a projection error closes the open Rows and aborts the transaction.
+func (db *DB) rewriteStoredToolResultRows(
+	ctx context.Context, sessionID string, project storedToolResultProjection,
 ) (bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -143,7 +160,11 @@ func (db *DB) stripStoredToolResultRows(
 			return false, fmt.Errorf("scanning tool call: %w", err)
 		}
 		allCalls = append(allCalls, update)
-		projected, _ := StripToolResultImages(update.content)
+		projected, err := project(update.content)
+		if err != nil {
+			callRows.Close()
+			return false, err
+		}
 		if projected != update.content {
 			update.content = projected
 			update.length = ResolveResultContentLength(projected, update.length)
@@ -174,7 +195,11 @@ func (db *DB) stripStoredToolResultRows(
 			eventRows.Close()
 			return false, fmt.Errorf("scanning tool result event: %w", err)
 		}
-		projected, _ := StripToolResultImages(update.content)
+		projected, err := project(update.content)
+		if err != nil {
+			eventRows.Close()
+			return false, err
+		}
 		eventContents[update.key] = append(
 			eventContents[update.key], projected,
 		)
