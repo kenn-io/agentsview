@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"errors"
@@ -506,14 +507,8 @@ func loadCopilotStoreUsage(
 		// Older stores need not contain usage data. Confirm a missing schema
 		// before falling back; operational read failures must remain retryable.
 		if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok && sqliteErr.Code == sqlite3.ErrError {
-			var columns int
-			schemaErr := store.QueryRow(`
-				SELECT count(*) FROM pragma_table_info('assistant_usage_events')
-				WHERE name IN ('id', 'session_id', 'model', 'input_tokens',
-				    'output_tokens', 'cache_read_tokens', 'cache_write_tokens',
-				    'reasoning_tokens', 'created_at')
-			`).Scan(&columns)
-			if schemaErr == nil && columns < 9 {
+			hasUsage, schemaErr := copilotStoreHasUsageSchema(context.Background(), store.QueryRowContext)
+			if schemaErr == nil && !hasUsage {
 				return nil, nil
 			}
 		}
@@ -548,6 +543,17 @@ func loadCopilotStoreUsage(
 		return nil, fmt.Errorf("iterating copilot session-store usage: %w", err)
 	}
 	return events, nil
+}
+
+func copilotStoreHasUsageSchema(ctx context.Context, queryRow func(context.Context, string, ...any) *sql.Row) (bool, error) {
+	var columns int
+	err := queryRow(ctx, `
+		SELECT count(*) FROM pragma_table_info('assistant_usage_events')
+		WHERE name IN ('id', 'session_id', 'model', 'input_tokens',
+		    'output_tokens', 'cache_read_tokens', 'cache_write_tokens',
+		    'reasoning_tokens', 'created_at')
+	`).Scan(&columns)
+	return columns == 9, err
 }
 
 func formatCopilotToolCalls(

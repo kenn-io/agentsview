@@ -182,10 +182,16 @@ func (c *copilotSourceCache) usageHash(ctx context.Context, path, sessionID stri
 		return "", err
 	}
 	defer func() { _ = tx.Rollback() }()
+	hasUsage, err := copilotStoreHasUsageSchema(ctx, tx.QueryRowContext)
+	if err != nil {
+		return "", fmt.Errorf("checking copilot usage schema: %w", err)
+	}
+	// Missing or incomplete usage schemas are valid empty results. Cache them
+	// with this SQLite state and check again only after the store changes.
 	members := make(map[string]copilotStoreMember)
-	if full || !valid {
+	if hasUsage && (full || !valid) {
 		members, err = c.readUsageHashes(ctx, tx, "", nil)
-	} else {
+	} else if hasUsage {
 		// sessions is small metadata. The producer's (session_id, id) index makes
 		// each MAX lookup bounded; do not aggregate every usage row on a WAL event.
 		var rows *sql.Rows

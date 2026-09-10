@@ -308,3 +308,80 @@ VALUES ('session-0000','gpt-5.4',100,7,'2026-09-04T17:00:03Z')`)
 		})
 	}
 }
+
+func TestCopilotStoreWithoutUsageSchemaSkipsUnchangedSessions(t *testing.T) {
+	for _, incomplete := range []bool{false, true} {
+		for _, count := range []int{8, 800} {
+			t.Run(fmt.Sprintf("incomplete=%t/sessions=%d", incomplete, count), func(t *testing.T) {
+				root := t.TempDir()
+				storePath := filepath.Join(root, "session-store.db")
+				store, err := sql.Open("sqlite3", storePath)
+				require.NoError(t, err)
+				store.SetMaxOpenConns(1)
+				t.Cleanup(func() { require.NoError(t, store.Close()) })
+				_, err = store.Exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, summary TEXT)`)
+				require.NoError(t, err)
+				if incomplete {
+					_, err = store.Exec(`CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY, session_id TEXT, model TEXT)`)
+					require.NoError(t, err)
+				}
+				for i := range count {
+					id := fmt.Sprintf("session-%04d", i)
+					_, err = store.Exec(`INSERT INTO sessions VALUES (?, 'before')`, id)
+					require.NoError(t, err)
+					path := filepath.Join(root, "session-state", id, "events.jsonl")
+					require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+					transcript := fmt.Sprintf(`{"type":"session.start","timestamp":"2026-09-08T12:00:00Z","data":{"sessionId":%q}}
+{"type":"assistant.message","timestamp":"2026-09-08T12:00:01Z","data":{"content":"Hello","model":"gpt-5.4","outputTokens":3}}
+`, id)
+					require.NoError(t, os.WriteFile(path, []byte(transcript), 0o644))
+				}
+				archive := dbtest.OpenTestDB(t)
+				engine := agentsync.NewEngine(archive, agentsync.EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local",
+				})
+				t.Cleanup(engine.Close)
+				require.Equal(t, count, engine.SyncAll(t.Context(), nil).Synced)
+
+				_, err = store.Exec(`UPDATE sessions SET summary='after' WHERE id='session-0000'`)
+				require.NoError(t, err)
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{storePath}))
+				stats := engine.LastSyncStats()
+				require.Zero(t, stats.Synced, "metadata-only writes must not reparse transcripts")
+				assert.Equal(t, count, stats.Skipped)
+
+				// Taking a lock without writing leaves the SQLite state unchanged.
+				// Reusing the cached no-usage result must not query the locked store.
+				_, err = store.Exec(`BEGIN EXCLUSIVE`)
+				require.NoError(t, err)
+				t.Cleanup(func() { _, _ = store.Exec("ROLLBACK") })
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{storePath}))
+				assert.Equal(t, count, engine.LastSyncStats().Skipped)
+				_, err = store.Exec(`ROLLBACK`)
+				require.NoError(t, err)
+
+				if !incomplete {
+					_, err = store.Exec(`CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY, session_id TEXT, model TEXT)`)
+					require.NoError(t, err)
+				}
+				_, err = store.Exec(`ALTER TABLE assistant_usage_events ADD COLUMN input_tokens INTEGER;
+ALTER TABLE assistant_usage_events ADD COLUMN output_tokens INTEGER;
+ALTER TABLE assistant_usage_events ADD COLUMN cache_read_tokens INTEGER;
+ALTER TABLE assistant_usage_events ADD COLUMN cache_write_tokens INTEGER;
+ALTER TABLE assistant_usage_events ADD COLUMN reasoning_tokens INTEGER;
+ALTER TABLE assistant_usage_events ADD COLUMN created_at TEXT;
+CREATE INDEX idx_assistant_usage_events_session ON assistant_usage_events(session_id,id);
+INSERT INTO assistant_usage_events VALUES(1,'session-0000','gpt-5.4',100,7,0,0,0,'2026-09-08T12:00:01Z')`)
+				require.NoError(t, err)
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{storePath}))
+				stats = engine.LastSyncStats()
+				assert.Equal(t, 1, stats.Synced)
+				assert.Equal(t, count-1, stats.Skipped)
+				usage, err := archive.GetSessionUsage(t.Context(), "copilot:session-0000", true)
+				require.NoError(t, err)
+				require.NotNil(t, usage)
+				assert.Equal(t, 7, usage.TotalOutputTokens)
+			})
+		}
+	}
+}

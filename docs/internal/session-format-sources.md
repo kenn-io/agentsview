@@ -652,7 +652,12 @@ add an archived or maintained mirror without replacing the original identity.
   initializes session-store schema version 4 without `assistant_usage_events`.
   Running that initialization SQL in isolated SQLite reproduced the missing
   table. A store without the required usage schema leaves transcript and
-  shutdown usage available.
+  shutdown usage available. Missing or incomplete usage schemas are cached as
+  empty usage for the current SQLite state. Reverified 2026-09-10 with
+  isolated syncs of 8 and 800 sessions: metadata-only writes do not reparse
+  transcripts, unchanged states reuse the cached result while the store is
+  locked, and a completed schema imports new usage for only the affected
+  session.
 
 - **Store refresh:** Store database and WAL writes participate in incremental
   sync cutoff filtering without changing session activity timestamps. Parent
