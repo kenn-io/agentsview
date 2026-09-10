@@ -64,11 +64,11 @@ func (db *DB) scanMigrateToolImages(
 	byProject := make(map[string]*StripImagesProjectReport)
 	for _, session := range sessions {
 		if err := ctx.Err(); err != nil {
-			return StripImagesReport{}, err
+			return report, err
 		}
 		stats, err := db.migrateImageStats(ctx, session.id)
 		if err != nil {
-			return StripImagesReport{}, err
+			return report, err
 		}
 		if stats.Payloads == 0 {
 			continue

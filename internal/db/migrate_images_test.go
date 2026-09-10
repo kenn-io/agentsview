@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -178,6 +179,48 @@ func TestMigratePartialFailurePreservesReport(t *testing.T) {
 	).Scan(&secondAfter))
 	assert.Equal(t, secondBefore, secondAfter)
 	assert.NotContains(t, secondAfter, "image_ref")
+}
+
+// TestMigrateCancellationPreservesReport verifies that cancellation after a
+// committed session still reports the work that preceded it.
+func TestMigrateCancellationPreservesReport(t *testing.T) {
+	d := testDB(t)
+	assetsDir := t.TempDir()
+	insertSession(t, d, "cancel-first", "project")
+	insertSession(t, d, "cancel-second", "project")
+	insertMessages(t, d, testImageMessage("cancel-first"))
+	insertMessages(t, d, testImageMessage("cancel-second"))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	put := func(mediaType string, body []byte) (string, bool, error) {
+		result, created, err := realPut(assetsDir)(mediaType, body)
+		calls++
+		if calls == 2 {
+			cancel()
+		}
+		return result, created, err
+	}
+
+	report, err := d.MigrateToolImages(ctx, StripImagesFilter{}, put)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, report.Sessions)
+	assert.Equal(t, 1, report.Changed)
+	assert.Equal(t, int64(1), report.Payloads)
+	t.Logf("cancellation report: sessions=%d changed=%d payloads=%d", report.Sessions, report.Changed, report.Payloads)
+
+	var firstContent string
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT content FROM tool_result_events WHERE session_id = ?", "cancel-first",
+	).Scan(&firstContent))
+	assert.Contains(t, firstContent, "image_ref")
+
+	var secondContent string
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT content FROM tool_result_events WHERE session_id = ?", "cancel-second",
+	).Scan(&secondContent))
+	assert.Contains(t, secondContent, "input_image")
 }
 
 // TestMigratedReferenceMatchesStoredFile verifies that migration repairs a
