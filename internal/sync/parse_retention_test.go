@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -494,6 +495,11 @@ func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
 
 				writeEntered := make(chan struct{})
 				allowWrite := make(chan struct{})
+				var releaseWriteOnce sync.Once
+				releaseWrite := func() {
+					releaseWriteOnce.Do(func() { close(allowWrite) })
+				}
+				t.Cleanup(releaseWrite)
 				engine.writeBatchOverride = func(
 					batch []pendingWrite, _ syncWriteMode, _ bool,
 				) (int, int, int, int) {
@@ -530,6 +536,7 @@ func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
 				acquireCtx, cancel := context.WithTimeout(
 					t.Context(), time.Second,
 				)
+				t.Cleanup(cancel)
 				acquired := make(chan struct {
 					next *parseRetentionLease
 					err  error
@@ -556,7 +563,7 @@ func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
 				if acquireResult.next != nil {
 					acquireResult.next.Release()
 				}
-				close(allowWrite)
+				releaseWrite()
 				synctest.Wait()
 				select {
 				case <-done:

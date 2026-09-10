@@ -3930,7 +3930,12 @@ func TestStartupReconciledCallbackReportsIncompleteDiscoveryOnce(t *testing.T) {
 
 	failed := engine.SyncAll(t.Context(), nil)
 	assert.Greater(t, failed.Failed, 0)
-	first := <-reconciled
+	var first callbackResult
+	select {
+	case first = <-reconciled:
+	default:
+		require.FailNow(t, "failed startup attempt did not report reconciliation")
+	}
 	require.Error(t, first.err)
 	assert.False(t, first.stats.AuthoritativeDiscoveryComplete())
 
@@ -4080,7 +4085,11 @@ func TestStartupReconciledCallbackOwnersRetainFailureForLaterSuccess(t *testing.
 			default:
 			}
 			tt.succeed(t.Context(), engine)
-			<-reconciled
+			select {
+			case <-reconciled:
+			default:
+				require.FailNow(t, "successful owner did not report startup reconciliation")
+			}
 		})
 	}
 }
