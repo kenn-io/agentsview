@@ -21,8 +21,7 @@ PRICING_SNAPSHOT_FILE := internal/pricing/snapshot/litellm_snapshot.json.gz
 # compiler falls back to the system header (the macOS SDK one marks
 # sqlite3_auto_extension deprecated, warning on every build) which can also
 # drift from the amalgamation mattn/go-sqlite3 statically links. Compile
-# against the bundled amalgamation's own header instead, mirroring the
-# Linux release workflow in .github/workflows/release.yml.
+# against the bundled amalgamation's own header instead.
 # Setting CGO_CFLAGS replaces Go's built-in default of "-O2 -g", so restate
 # it explicitly or the SQLite amalgamation compiles unoptimized (2-3x slower
 # queries, caught by the bench gate). Caller-provided flags stay last so
