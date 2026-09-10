@@ -437,6 +437,230 @@ func TestParseCursorIDEComposer_EndedAtNotBeforeLastMessage(t *testing.T) {
 	assert.False(t, result.Session.EndedAt.Before(result.Session.StartedAt))
 }
 
+func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {
+	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{
+		{
+			id:        "husk-0000-0000-0000-000000000000",
+			name:      "Husk chat",
+			createdAt: 1782026756842,
+			updatedAt: 1782026791522,
+			bubbles: []cursorIDETestBubble{{
+				id: "b1", bubbleType: cursorIDEBubbleTypeUser,
+				text: "will be nulled", createdAt: "2026-06-21T07:27:29.606Z",
+			}},
+		},
+		{
+			id:        "sibling-one-0000-0000-000000000000",
+			name:      "Sibling one",
+			createdAt: 1782026756842,
+			updatedAt: 1782026791522,
+			bubbles: []cursorIDETestBubble{{
+				id: "b1", bubbleType: cursorIDEBubbleTypeUser,
+				text: "kept one", createdAt: "2026-06-21T07:27:29.606Z",
+			}},
+		},
+		{
+			id:        "sibling-two-0000-0000-000000000000",
+			name:      "Sibling two",
+			createdAt: 1782026756842,
+			updatedAt: 1782026791522,
+			bubbles: []cursorIDETestBubble{{
+				id: "b1", bubbleType: cursorIDEBubbleTypeUser,
+				text: "kept two", createdAt: "2026-06-21T07:27:29.606Z",
+			}},
+		},
+	})
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`UPDATE cursorDiskKV SET value = NULL WHERE key = ?`,
+		"composerData:husk-0000-0000-0000-000000000000",
+	)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	root := filepath.Dir(dbPath)
+	provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{
+		Roots: []string{root}, Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	fingerprint, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: discovered[0], Machine: "devbox", Fingerprint: fingerprint,
+	})
+	require.NoError(t, err,
+		"a husk composer must not fail the whole container fan-out")
+	require.Len(t, outcome.Results, 2,
+		"both healthy siblings must survive past the husk composer")
+
+	var ids []string
+	for _, r := range outcome.Results {
+		ids = append(ids, r.Result.Session.ID)
+	}
+	assert.ElementsMatch(t, []string{
+		"cursor-ide:sibling-one-0000-0000-000000000000",
+		"cursor-ide:sibling-two-0000-0000-000000000000",
+	}, ids)
+	assert.NotContains(t, ids, "cursor-ide:husk-0000-0000-0000-000000000000")
+}
+
+func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
+	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
+		id:        "null-bubble-0000-0000-000000000000",
+		name:      "Null bubble thread",
+		createdAt: 1782026756842,
+		updatedAt: 1782026791522,
+		bubbles: []cursorIDETestBubble{
+			{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "kept", createdAt: "2026-06-21T07:27:29.606Z"},
+			{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "will be nulled", createdAt: "2026-06-21T07:27:31.522Z"},
+		},
+	}})
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`UPDATE cursorDiskKV SET value = NULL WHERE key = ?`,
+		"bubbleId:null-bubble-0000-0000-000000000000:b2",
+	)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	conn, err := openCursorIDEDB(dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+
+	result, err := parseCursorIDEComposer(
+		context.Background(), conn, dbPath,
+		"null-bubble-0000-0000-000000000000", "devbox", info,
+	)
+	require.NoError(t, err,
+		"a bubble whose value is NULL must become a truncation gap, not a fatal error")
+	require.NotNil(t, result)
+	require.Len(t, result.Messages, 1)
+	assert.Equal(t, "kept", result.Messages[0].Content)
+	assert.True(t, result.Session.IsTruncated,
+		"a transcript with a null-valued bubble row must be flagged truncated")
+	assert.Zero(t, result.Session.MalformedLines,
+		"this diff writes no malformed-line counter for a husk bubble")
+	assert.Equal(t, "b1", result.Messages[0].SourceUUID,
+		"the surviving message's SourceUUID must be unchanged")
+}
+
+func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
+	t.Run("composer", func(t *testing.T) {
+		dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
+			id: "empty-object-composer-0000-00000000",
+		}})
+		writer, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		_, err = writer.Exec(
+			`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
+			[]byte(`{}`), "composerData:empty-object-composer-0000-00000000",
+		)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+
+		conn, err := openCursorIDEDB(dbPath)
+		require.NoError(t, err)
+		defer conn.Close()
+		info, err := os.Stat(dbPath)
+		require.NoError(t, err)
+
+		result, err := parseCursorIDEComposer(
+			context.Background(), conn, dbPath,
+			"empty-object-composer-0000-00000000", "devbox", info,
+		)
+		require.NoError(t, err,
+			"a two-byte {} value decodes cleanly and must not take the absent path")
+		assert.Nil(t, result,
+			"a composer with zero headers must not surface as a session")
+	})
+
+	t.Run("bubble", func(t *testing.T) {
+		dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
+			id:        "empty-object-bubble-0000-0000000000",
+			name:      "Empty object bubble",
+			createdAt: 1782026756842,
+			updatedAt: 1782026791522,
+			bubbles: []cursorIDETestBubble{
+				{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "kept", createdAt: "2026-06-21T07:27:29.606Z"},
+				{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "will be emptied", createdAt: "2026-06-21T07:27:31.522Z"},
+			},
+		}})
+		writer, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		_, err = writer.Exec(
+			`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
+			[]byte(`{}`), "bubbleId:empty-object-bubble-0000-0000000000:b2",
+		)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+
+		conn, err := openCursorIDEDB(dbPath)
+		require.NoError(t, err)
+		defer conn.Close()
+		info, err := os.Stat(dbPath)
+		require.NoError(t, err)
+
+		result, err := parseCursorIDEComposer(
+			context.Background(), conn, dbPath,
+			"empty-object-bubble-0000-0000000000", "devbox", info,
+		)
+		require.NoError(t, err,
+			"a two-byte {} bubble value decodes cleanly and must not take the absent path")
+		require.NotNil(t, result)
+		require.Len(t, result.Messages, 1)
+		assert.Equal(t, "kept", result.Messages[0].Content)
+		assert.True(t, result.Session.IsTruncated,
+			"a bubble that decodes but renders nothing still takes the truncation path")
+	})
+}
+
+func TestLoadCursorIDEComposerMetaNullValueReportsNotFound(t *testing.T) {
+	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
+		id:        "null-meta-0000-0000-000000000000",
+		name:      "Null meta chat",
+		createdAt: 1782026756842,
+		updatedAt: 1782026791522,
+		bubbles: []cursorIDETestBubble{{
+			id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "hi",
+			createdAt: "2026-06-21T07:27:29.606Z",
+		}},
+	}})
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(
+		`UPDATE cursorDiskKV SET value = NULL WHERE key = ?`,
+		"composerData:null-meta-0000-0000-000000000000",
+	)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	conn, err := openCursorIDEDB(dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	meta, ok, err := loadCursorIDEComposerMeta(
+		context.Background(), conn, "null-meta-0000-0000-000000000000",
+	)
+	require.NoError(t, err,
+		"a NULL composer value must fingerprint as absent, not error")
+	assert.False(t, ok)
+	assert.Equal(t, cursorIDEComposerMeta{}, meta)
+
+	assert.True(t,
+		CursorIDEComposerExists(dbPath, "null-meta-0000-0000-000000000000"),
+		"the key remains present in cursorDiskKV even though its value is NULL")
+}
+
 func TestParseCursorIDEComposer_TypelessBubbleFallsBackToHeaderType(t *testing.T) {
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 		id:        "typeless-0000-0000-0000-000000000000",

@@ -213,6 +213,15 @@ func loadCursorIDEComposerMeta(
 		return cursorIDEComposerMeta{}, false, fmt.Errorf(
 			"loading cursor IDE composer meta %s: %w", composerID, err)
 	}
+	if len(raw) == 0 {
+		// A composerData key whose value is NULL or empty holds no session
+		// document, so there is nothing to fingerprint. This is the same fact
+		// as the vanished row above, not the malformed case below: an absent
+		// value yields no shorter transcript that could replace the archived
+		// one. The engine proceeds to Parse, which routes the stored session
+		// to the recoverable source-missing seam while state.vscdb is present.
+		return cursorIDEComposerMeta{}, false, nil
+	}
 	var doc cursorIDEComposerDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		// Malformed is not missing: a row that exists but no longer decodes
@@ -291,6 +300,14 @@ func loadCursorIDEBubble(
 	if err != nil {
 		return nil, fmt.Errorf(
 			"loading cursor IDE bubble %s:%s: %w", composerID, bubbleID, err)
+	}
+	if len(raw) == 0 {
+		// A bubbleId row whose value is NULL or empty carries no turn text,
+		// which is the same gap as the missing row above. The caller flags the
+		// transcript truncated, and the engine's truncation guard
+		// (dropShrinkingTruncatedCursorIDEResults) still refuses any result
+		// that would drop an archived message.
+		return nil, nil
 	}
 	var bubble cursorIDEBubble
 	if err := json.Unmarshal(raw, &bubble); err != nil {
@@ -414,6 +431,13 @@ func parseCursorIDEComposer(
 	if err != nil {
 		return nil, fmt.Errorf(
 			"loading cursor IDE composer %s: %w", composerID, err)
+	}
+	if len(raw) == 0 {
+		// Same husk row as in loadCursorIDEComposerMeta: no document, so no
+		// result. A nil result keeps the container fan-out running for every
+		// sibling composer instead of failing the whole pass, and the stored
+		// session is preserved through the source-missing seam.
+		return nil, nil
 	}
 	var doc cursorIDEComposerDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
