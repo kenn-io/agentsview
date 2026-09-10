@@ -16,18 +16,23 @@ import (
 // date-based pricing: those names left the static set (the seed
 // deletes their stale rows) and k3/k3-agent moved from K2.6 to K3
 // rates. Version 3 removed moonshot/kimi-k3 after LiteLLM added it.
-const supplementalVersion = "3"
+// Version 4 adds a temporary gpt-6-astra fallback until the pinned
+// LiteLLM snapshot includes it.
+const supplementalVersion = "4"
 
 // Canonical pricing models runtime aliases resolve to.
 // KimiK26Canonical exists in the embedded LiteLLM snapshot;
 // KimiK3Canonical is seeded by the supplemental set below because the
 // LiteLLM catalog lists only the provider-qualified Kimi K3 name.
 // GPT56LunaCanonical is the catalog id for Codex Luna Reserve (gpt-reserve).
+// GPT6AstraCanonical is the catalog id for Codex's namespaced Astra model.
 const (
 	KimiK26Canonical    = "moonshot/kimi-k2.6"
 	KimiK3Canonical     = "kimi-k3"
 	GPT56LunaCanonical  = "gpt-5.6-luna"
+	GPT6AstraCanonical  = "gpt-6-astra"
 	GPTReserveModelName = "gpt-reserve"
+	CodexAstraModelName = "openai.gpt-6-astra"
 )
 
 // KimiModelEraCutoff is the UTC instant at which the date-ambiguous
@@ -69,6 +74,7 @@ type FixedPricingAlias struct {
 var fixedPricingAliases = []FixedPricingAlias{
 	{Name: "k2d6-agent", Canonical: KimiK26Canonical},
 	{Name: GPTReserveModelName, Canonical: GPT56LunaCanonical},
+	{Name: CodexAstraModelName, Canonical: GPT6AstraCanonical},
 }
 
 // DateAliasedModels returns the sorted unqualified date-ambiguous
@@ -160,12 +166,11 @@ func CanonicalModelForTimestamp(model, ts string) string {
 	return CanonicalModelForDate(model, t)
 }
 
-// supplementalPricing lists curated pricing aliases for internal model
-// names that never appear in the upstream LiteLLM catalog (neither in
-// the embedded snapshot nor in the fetched table), so sessions priced
-// through them would otherwise report $0.
+// supplementalPricing lists curated pricing fallbacks for model names
+// that are absent from the pinned LiteLLM snapshot, so sessions priced
+// through them would otherwise report $0 before a live refresh.
 //
-// The rates below are ESTIMATES at the Kimi K3 list pricing (input
+// The Kimi rates below are ESTIMATES at the Kimi K3 list pricing (input
 // 3.00, output 15.00, cache creation 0, cache read 0.30 per MTok):
 // the Kimi CLI reports k3 and kimi-k3, and Kimi Work (the kimi-desktop
 // daimon runtime) reports k3-agent, none of which carry public rate
@@ -175,6 +180,20 @@ func CanonicalModelForTimestamp(model, ts string) string {
 // these rows like any other fallback row, so a later LiteLLM refresh
 // still overwrites them if upstream lists the real models.
 var supplementalPricing = []ModelPricing{
+	{
+		ModelPattern:         GPT6AstraCanonical,
+		InputPerMTok:         money.MustParseDollars("10.00"),
+		OutputPerMTok:        money.MustParseDollars("50.00"),
+		CacheCreationPerMTok: money.MustParseDollars("12.50"),
+		CacheReadPerMTok:     money.MustParseDollars("1.00"),
+		Bands: []PricingBand{{
+			AboveInputTokens:     272_000,
+			InputPerMTok:         money.MustParseDollars("20.00"),
+			OutputPerMTok:        money.MustParseDollars("75.00"),
+			CacheCreationPerMTok: money.MustParseDollars("25.00"),
+			CacheReadPerMTok:     money.MustParseDollars("2.00"),
+		}},
+	},
 	{
 		ModelPattern:         "k3",
 		InputPerMTok:         money.MustParseDollars("3.00"),
@@ -198,9 +217,9 @@ var supplementalPricing = []ModelPricing{
 	},
 }
 
-// SupplementalPricing returns the curated alias set, copied for caller
+// SupplementalPricing returns the curated fallback set, copied for caller
 // safety. It is already folded into FallbackPricing; this accessor
 // exists for tests and diagnostics that need the supplementals alone.
 func SupplementalPricing() []ModelPricing {
-	return slices.Clone(supplementalPricing)
+	return cloneModelPricing(supplementalPricing)
 }

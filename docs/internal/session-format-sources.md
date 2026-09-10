@@ -423,7 +423,15 @@ add an archived or maintained mirror without replacing the original identity.
   An exact `[custom_model_pricing."gpt-reserve"]` row still wins. Reverified
   2026-09-06 against OpenAI's Luna Reserve help article
     <https://help.openai.com/en/articles/20001499-luna-reserve-in-codex-and-chatgpt-work>
-    and Codex `turn_context` model seeding in `internal/parser/codex.go`.
+    and Codex `turn_context` model seeding in `internal/parser/codex.go`. Codex
+  Astra turns can persist the namespaced model `openai.gpt-6-astra`;
+  Agentsview maps that reported name to the `gpt-6-astra` catalog row while
+  retaining it in usage breakdowns. Reverified 2026-09-10 against an observed
+  Codex rollout and the LiteLLM catalog at commit
+  [`328a5f5d`](https://github.com/BerriAI/litellm/blob/328a5f5d6024c673c4d5e37bad8dab17ab8e79ee/model_prices_and_context_window.json).
+  The pinned fallback snapshot predates Astra, so the supplemental catalog
+  mirrors those base rates and the higher-rate band above 272k input tokens
+  until the snapshot is refreshed.
 
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn

@@ -5820,6 +5820,64 @@ func TestGetDailyUsage_GPTReserveLunaPricing(t *testing.T) {
 	assert.NotContains(t, reserve.Pricing.Models, pricingpkg.GPT56LunaCanonical)
 }
 
+func TestGetDailyUsage_AstraPricing(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: pricingpkg.GPT6AstraCanonical,
+		InputPerMTok: money.MustParseDollars("10"),
+	}}), "seed Astra pricing")
+
+	ts := "2026-09-09T12:00:00Z"
+	tokenUsage := jsontext.Value(`{"input_tokens":1000000,"output_tokens":0}`)
+	for _, fixture := range []struct {
+		id    string
+		model string
+	}{
+		{id: "codex-astra-namespaced", model: pricingpkg.CodexAstraModelName},
+		{id: "codex-astra-canonical", model: pricingpkg.GPT6AstraCanonical},
+	} {
+		insertSession(t, d, fixture.id, "proj", func(s *Session) {
+			s.Agent = "codex"
+			s.StartedAt = new(ts)
+		})
+		insertMessages(t, d, Message{
+			SessionID:  fixture.id,
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  ts,
+			Model:      fixture.model,
+			TokenUsage: tokenUsage,
+		})
+	}
+
+	canonical, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:     "2026-09-09",
+		To:       "2026-09-09",
+		Timezone: "UTC",
+		Model:    pricingpkg.GPT6AstraCanonical,
+	})
+	requireNoError(t, err, "GetDailyUsage canonical Astra")
+	assert.NotZero(t, canonical.Totals.TotalCost.Microdollars)
+
+	namespaced, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:     "2026-09-09",
+		To:       "2026-09-09",
+		Timezone: "UTC",
+		Model:    pricingpkg.CodexAstraModelName,
+	})
+	requireNoError(t, err, "GetDailyUsage namespaced Astra")
+	assert.Equal(t, canonical.Totals.TotalCost, namespaced.Totals.TotalCost)
+	require.NotNil(t, namespaced.Pricing)
+	resolutions := namespaced.Pricing.Models[pricingpkg.CodexAstraModelName].Resolutions
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, pricingpkg.GPT6AstraCanonical,
+		resolutions[0].PricedModel)
+	assert.NotContains(t, namespaced.Pricing.Models,
+		pricingpkg.GPT6AstraCanonical)
+}
+
 // TestGetDailyUsage_KimiDateAliasMixedDaySameModel proves one reported
 // model straddling the cutoff sums both eras: a pre-cutoff row prices
 // at K2.6 and a post-cutoff row at K3 within the same model breakdown.
