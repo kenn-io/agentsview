@@ -1965,5 +1965,13 @@
   "appearance_high_contrast": "고대비",
   "appearance_on": "켜짐",
   "appearance_off": "꺼짐",
-  "appearance_text_size": "텍스트 크기"
+  "appearance_text_size": "텍스트 크기",
+  "settings_archive_content_title": "아카이브 콘텐츠",
+  "settings_archive_content_description": "수집할 때 도구 결과에서 저장하는 내용입니다.",
+  "settings_search_keywords_archive_content": "아카이브 콘텐츠 이미지 보존 도구 결과 플레이스홀더 저장 archive content images retention tool results placeholders storage",
+  "settings_tool_result_images": "도구 결과 이미지",
+  "settings_tool_result_images_keep": "유지",
+  "settings_tool_result_images_drop": "삭제",
+  "settings_tool_result_images_hint": "이미 저장된 결과는 기록될 당시의 정책을 유지하며, 유지로 되돌려도 이미 삭제된 데이터는 복원되지 않습니다. 기존 행은 agentsview db strip --images 로 처리합니다.",
+  "settings_tool_result_images_restart_notice": "이 변경을 새로 수집되는 세션에 적용하려면 AgentsView 데몬을 다시 시작하세요."
 }

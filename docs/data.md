@@ -95,9 +95,11 @@ The local archive has four separate maintenance paths:
   source-missing sessions selected by its filters. It leaves provider
   transcripts and standalone image files unchanged. The stored placeholder
   records version `1`, readable text, media type, decoded byte size, and an
-  empty `sha256` field. Configure this policy in `config.toml`; it is not
-  exposed in desktop Settings or the settings API. The default `keep` policy
-  preserves the existing provider decoding behavior.
+  empty `sha256` field. Configure this policy in `config.toml` or under
+  **Settings > Archive content**, which writes the same key; the daemon
+  applies a change to its own ingestion after a restart. Already stored rows
+  keep the policy they were written under. The default `keep` policy preserves
+  the existing provider decoding behavior.
 - [`archive_content`](/docs/configuration/#archive-content) followed by a daemon
   restart and `agentsview sync --full` applies a whole-archive storage policy.
   Unlike category filtering, the rebuild also projects orphaned and trashed

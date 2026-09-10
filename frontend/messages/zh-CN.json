@@ -1965,5 +1965,13 @@
   "appearance_high_contrast": "高对比度",
   "appearance_on": "开",
   "appearance_off": "关",
-  "appearance_text_size": "文字大小"
+  "appearance_text_size": "文字大小",
+  "settings_archive_content_title": "归档内容",
+  "settings_archive_content_description": "采集时从工具结果中保存的内容。",
+  "settings_search_keywords_archive_content": "归档 内容 图片 图像 保留 工具结果 占位符 存储 archive content images retention tool results placeholders storage",
+  "settings_tool_result_images": "工具结果图片",
+  "settings_tool_result_images_keep": "保留",
+  "settings_tool_result_images_drop": "丢弃",
+  "settings_tool_result_images_hint": "已存储的结果保持写入时的策略，改回「保留」也无法恢复已删除的数据。运行 agentsview db strip --images 可处理已有记录。",
+  "settings_tool_result_images_restart_notice": "重启 AgentsView 守护进程后，此更改才会应用到新采集的会话。"
 }

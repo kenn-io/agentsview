@@ -3666,6 +3666,144 @@ func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T)
 	assert.Equal(t, config.ChartPaletteMatplotlib, got.ChartPalette)
 }
 
+func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
+	te := setup(t)
+	// Point the loader at the same data dir the handler writes, so the
+	// assertions below exercise config.LoadMinimal rather than re-parsing the
+	// stored string themselves.
+	t.Setenv("AGENTSVIEW_DATA_DIR", te.dataDir)
+	loadedPolicy := func(t *testing.T) config.ToolResultImages {
+		t.Helper()
+		cfg, err := config.LoadMinimal()
+		require.NoError(t, err)
+		return cfg.ToolResultImages
+	}
+	putSettings := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+
+	w := te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	var initial struct {
+		ToolResultImages string `json:"tool_result_images"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &initial))
+	assert.Equal(t, "keep", initial.ToolResultImages)
+
+	w = putSettings(`{"tool_result_images":"drop"}`)
+	assertStatus(t, w, http.StatusOK)
+	var updated struct {
+		ToolResultImages string `json:"tool_result_images"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, "drop", updated.ToolResultImages)
+
+	var persisted struct {
+		ToolResultImages string `toml:"tool_result_images"`
+	}
+	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
+	require.NoError(t, err)
+	assert.Equal(t, "drop", persisted.ToolResultImages)
+	assert.Equal(t, config.ToolResultImagesDrop, loadedPolicy(t))
+
+	w = putSettings(`{"tool_result_images":"keep"}`)
+	assertStatus(t, w, http.StatusOK)
+	var restored struct {
+		ToolResultImages string `json:"tool_result_images"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &restored))
+	assert.Equal(t, "keep", restored.ToolResultImages)
+
+	_, err = toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
+	require.NoError(t, err)
+	assert.Equal(t, "keep", persisted.ToolResultImages)
+	assert.Equal(t, config.ToolResultImagesKeep, loadedPolicy(t))
+}
+
+func TestSettingsRejectsOutOfEnumToolResultImages(t *testing.T) {
+	te := setup(t)
+	putSettings := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+
+	// Establish a known prior state.
+	w := putSettings(`{"tool_result_images":"drop"}`)
+	assertStatus(t, w, http.StatusOK)
+
+	w = putSettings(`{"tool_result_images":"strip"}`)
+	assertStatus(t, w, http.StatusBadRequest)
+
+	w = putSettings(`{"tool_result_images":""}`)
+	assertStatus(t, w, http.StatusBadRequest)
+
+	// Stored selection must be unchanged.
+	var persisted struct {
+		ToolResultImages string `toml:"tool_result_images"`
+	}
+	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
+	require.NoError(t, err)
+	assert.Equal(t, "drop", persisted.ToolResultImages)
+}
+
+func TestSettingsToolResultImagesRejectionPreservesSiblingKeys(t *testing.T) {
+	te := setup(t)
+	putSettings := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+
+	// Establish initial state.
+	w := putSettings(`{"chart_palette":"matplotlib"}`)
+	assertStatus(t, w, http.StatusOK)
+
+	// A body with a valid palette change and an invalid policy:
+	// Huma rejects the whole request before the handler runs.
+	w = putSettings(`{"chart_palette":"agentsview","tool_result_images":"strip"}`)
+	assertStatus(t, w, http.StatusBadRequest)
+
+	// Neither key must have changed.
+	w = te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	var got struct {
+		ChartPalette     string `json:"chart_palette"`
+		ToolResultImages string `json:"tool_result_images"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, "matplotlib", got.ChartPalette)
+	assert.Equal(t, "keep", got.ToolResultImages)
+}
+
+func TestSettingsToolResultImagesReadOnlyBackend(t *testing.T) {
+	te := setupPGMode(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		strings.NewReader(`{"tool_result_images":"drop"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusNotImplemented)
+
+	_, err := os.Stat(filepath.Join(te.dataDir, "config.toml"))
+	assert.True(t, os.IsNotExist(err), "config.toml must not be written by a read-only backend")
+}
+
 func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
 	geminiDir := filepath.Join(t.TempDir(), "gemini")
 	te := setup(t, func(cfg *config.Config) {

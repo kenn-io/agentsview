@@ -105,11 +105,12 @@ func (s *Server) humaGetSettings(
 			CustomBin:  tc.CustomBin,
 			CustomArgs: tc.CustomArgs,
 		},
-		Host:         s.cfg.Host,
-		Port:         s.cfg.Port,
-		ChartPalette: s.cfg.ResolvedChartPalette(),
-		RequireAuth:  s.cfg.RequireAuth,
-		ReadOnly:     s.db.ReadOnly(),
+		Host:             s.cfg.Host,
+		Port:             s.cfg.Port,
+		ChartPalette:     s.cfg.ResolvedChartPalette(),
+		ToolResultImages: toolResultImagesValue(s.cfg.ToolResultImages),
+		RequireAuth:      s.cfg.RequireAuth,
+		ReadOnly:         s.db.ReadOnly(),
 	}
 	if isLocalhostContext(ctx) {
 		resp.AuthToken = s.cfg.AuthToken
@@ -138,6 +139,13 @@ func (s *Server) humaUpdateSettings(
 			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		patch["chart_palette"] = palette
+	}
+	if in.Body.ToolResultImages != nil {
+		// The enum tag already constrained this to "keep" or "drop" before
+		// the handler ran, and those are the two spellings the configuration
+		// reference documents, so the value is persisted as sent. SaveSettings
+		// re-validates it for callers that bypass the HTTP layer.
+		patch["tool_result_images"] = config.ToolResultImages(*in.Body.ToolResultImages)
 	}
 	if in.Body.DisabledAgents != nil {
 		disabled, err := config.NormalizeDisabledAgents(*in.Body.DisabledAgents)

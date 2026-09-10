@@ -1965,5 +1965,13 @@
   "appearance_high_contrast": "高對比",
   "appearance_on": "開",
   "appearance_off": "關",
-  "appearance_text_size": "文字大小"
+  "appearance_text_size": "文字大小",
+  "settings_archive_content_title": "封存內容",
+  "settings_archive_content_description": "擷取時從工具結果保存的內容。",
+  "settings_search_keywords_archive_content": "封存 內容 圖片 影像 保留 工具結果 佔位符 儲存 archive content images retention tool results placeholders storage",
+  "settings_tool_result_images": "工具結果圖片",
+  "settings_tool_result_images_keep": "保留",
+  "settings_tool_result_images_drop": "捨棄",
+  "settings_tool_result_images_hint": "已儲存的結果維持寫入時的政策，改回「保留」也無法還原已刪除的資料。執行 agentsview db strip --images 可處理既有記錄。",
+  "settings_tool_result_images_restart_notice": "重新啟動 AgentsView 常駐程式後，此變更才會套用到新擷取的對話。"
 }

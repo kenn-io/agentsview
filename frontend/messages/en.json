@@ -2030,5 +2030,13 @@
   "appearance_high_contrast": "High contrast",
   "appearance_on": "On",
   "appearance_off": "Off",
-  "appearance_text_size": "Text size"
+  "appearance_text_size": "Text size",
+  "settings_archive_content_title": "Archive content",
+  "settings_archive_content_description": "What ingestion stores from tool results.",
+  "settings_search_keywords_archive_content": "archive content images retention tool results placeholders storage size",
+  "settings_tool_result_images": "Tool-result images",
+  "settings_tool_result_images_keep": "Keep",
+  "settings_tool_result_images_drop": "Drop",
+  "settings_tool_result_images_hint": "Stored results keep the policy they were written under, and switching back to Keep cannot restore payloads already removed. Run agentsview db strip --images to project existing rows.",
+  "settings_tool_result_images_restart_notice": "Restart the AgentsView daemon to apply this change to newly ingested sessions."
 }

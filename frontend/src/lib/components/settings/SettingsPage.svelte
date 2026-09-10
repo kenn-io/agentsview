@@ -20,6 +20,7 @@
   import AgentDirSettings from "./AgentDirSettings.svelte";
   import DateRangeSettings from "./DateRangeSettings.svelte";
   import TerminalSettings from "./TerminalSettings.svelte";
+  import ArchiveContentSettings from "./ArchiveContentSettings.svelte";
   import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
   import GithubSettings from "./GithubSettings.svelte";
   import LanguageSettings from "./LanguageSettings.svelte";
@@ -222,6 +223,8 @@
                 />
               {:else if meta.id === "embeddings"}
                 <EmbeddingsSettings />
+              {:else if meta.id === "archive-content"}
+                <ArchiveContentSettings />
               {:else if meta.id === "github"}
                 <GithubSettings />
               {:else if meta.id === "remote-access"}

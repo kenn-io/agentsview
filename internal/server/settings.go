@@ -15,6 +15,7 @@ type settingsResponse struct {
 	Host             string                    `json:"host"`
 	Port             int                       `json:"port"`
 	ChartPalette     config.ChartPalette       `json:"chart_palette"`
+	ToolResultImages string                    `json:"tool_result_images" enum:"keep,drop" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
 	AuthToken        string                    `json:"auth_token,omitempty"`
 	RequireAuth      bool                      `json:"require_auth"`
 	ReadOnly         bool                      `json:"read_only"`
@@ -41,12 +42,26 @@ type terminalResponse struct {
 // settingsUpdateRequest is the JSON body for PUT /api/v1/settings.
 // All fields are optional; only non-nil fields are applied.
 type settingsUpdateRequest struct {
-	Terminal       *terminalResponse `json:"terminal,omitempty"`
-	AuthToken      *string           `json:"auth_token,omitempty"`
-	RequireAuth    *bool             `json:"require_auth,omitempty"`
-	ChartPalette   *string           `json:"chart_palette,omitempty"`
-	DisabledAgents *[]string         `json:"disabled_agents,omitempty"`
+	Terminal         *terminalResponse `json:"terminal,omitempty"`
+	AuthToken        *string           `json:"auth_token,omitempty"`
+	RequireAuth      *bool             `json:"require_auth,omitempty"`
+	ChartPalette     *string           `json:"chart_palette,omitempty"`
+	ToolResultImages *string           `json:"tool_result_images,omitempty" enum:"keep,drop" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
+	DisabledAgents   *[]string         `json:"disabled_agents,omitempty"`
 	// AgentHomes replaces the alternate home list for each listed provider.
 	// An empty list clears that provider's homes.
 	AgentHomes *map[string][]string `json:"agent_homes,omitempty"`
+}
+
+// toolResultImagesKeepValue is the documented spelling of the keep policy.
+// config.ToolResultImagesKeep is the empty string, which neither the API nor
+// a settings-written config.toml ever emits.
+const toolResultImagesKeepValue = "keep"
+
+// toolResultImagesValue renders a retention policy in its documented spelling.
+func toolResultImagesValue(policy config.ToolResultImages) string {
+	if policy == config.ToolResultImagesDrop {
+		return string(config.ToolResultImagesDrop)
+	}
+	return toolResultImagesKeepValue
 }

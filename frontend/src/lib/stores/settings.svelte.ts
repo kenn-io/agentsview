@@ -12,6 +12,8 @@ import {
 } from "../api/runtime.js";
 import { DEFAULT_CHART_PALETTE, isChartPalette, type ChartPalette } from "../utils/chartPalette.js";
 
+export type ToolResultImagesPolicy = "keep" | "drop";
+
 type TerminalConfig = TerminalResponse;
 
 interface AppSettings extends Omit<
@@ -64,6 +66,7 @@ class SettingsStore {
   requireAuth: boolean = $state(false);
   readOnly: boolean = $state(false);
   chartPalette: ChartPalette = $state(DEFAULT_CHART_PALETTE);
+  toolResultImages: ToolResultImagesPolicy = $state("keep");
   loaded: boolean = $state(false);
   loading: boolean = $state(false);
   saving: boolean = $state(false);
@@ -97,6 +100,9 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
+      // A response without the field, including every fixture that predates
+      // it, reads as the default keep policy instead of failing the load.
+      this.toolResultImages = data.tool_result_images === "drop" ? "drop" : "keep";
       // When the server returns an auth token (localhost only), persist
       // it so the client stays authenticated after remote access is
       // toggled on (which starts requiring auth for all requests).
@@ -157,6 +163,9 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
+      // A response without the field, including every fixture that predates
+      // it, reads as the default keep policy instead of failing the load.
+      this.toolResultImages = data.tool_result_images === "drop" ? "drop" : "keep";
       if (data.auth_token && !isRemoteConnection()) {
         setAuthToken(data.auth_token);
       }

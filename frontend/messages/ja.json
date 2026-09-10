@@ -2030,5 +2030,13 @@
   "appearance_high_contrast": "ハイコントラスト",
   "appearance_on": "オン",
   "appearance_off": "オフ",
-  "appearance_text_size": "文字サイズ"
+  "appearance_text_size": "文字サイズ",
+  "settings_archive_content_title": "アーカイブの内容",
+  "settings_archive_content_description": "取り込み時にツール結果から保存する内容。",
+  "settings_search_keywords_archive_content": "アーカイブ 内容 画像 保持 ツール結果 プレースホルダー ストレージ archive content images retention tool results placeholders storage",
+  "settings_tool_result_images": "ツール結果の画像",
+  "settings_tool_result_images_keep": "保持",
+  "settings_tool_result_images_drop": "破棄",
+  "settings_tool_result_images_hint": "保存済みの結果は書き込み時のポリシーを保ち、保持に戻しても削除済みのデータは復元できません。既存の行は agentsview db strip --images で処理してください。",
+  "settings_tool_result_images_restart_notice": "この変更を新しく取り込むセッションに適用するには、AgentsView デーモンを再起動してください。"
 }

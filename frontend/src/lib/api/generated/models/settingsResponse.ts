@@ -3,6 +3,7 @@
  */
 import type { SessionProviderResponse } from "./sessionProviderResponse.ts";
 import type { SettingsResponseAgentDirs } from "./settingsResponseAgentDirs.ts";
+import type { SettingsResponseToolResultImages } from "./settingsResponseToolResultImages.ts";
 import type { TerminalResponse } from "./terminalResponse.ts";
 
 export interface SettingsResponse {
@@ -17,4 +18,6 @@ export interface SettingsResponse {
   require_auth: boolean;
   session_providers: SessionProviderResponse[];
   terminal: TerminalResponse;
+  /** Inline tool-result image retention applied to ingestion after a daemon restart */
+  tool_result_images: SettingsResponseToolResultImages;
 }
