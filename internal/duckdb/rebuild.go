@@ -33,7 +33,7 @@ func mirrorWorkDirPath(path string) string {
 
 // ensureMirrorWorkDir creates the mirror's work directory if needed and
 // returns its path. Callers may only invoke it once real work is starting —
-// a rebuild creating its temp file, a serve process hardlinking a reopen
+// a push acquiring its lock, a serve process hardlinking a reopen
 // alias — never from probe/status/sweep paths, which must stay create-free.
 //
 // The directory must be private: rebuild temp files and reopen aliases
@@ -160,17 +160,8 @@ func createMirrorTempPath(path string) (string, error) {
 // and rebuildMirror's deferred cleanup, which only fires for that process's
 // own file and never runs at all if the process is killed outright).
 //
-// The age is a heuristic, not proof of liveness: pushes are not serialized
-// across processes, so a second push's sweep could in principle run while a
-// first push's rebuild has genuinely been in progress for longer than this
-// threshold (a very large archive, a slow disk) and race-remove its still-
-// live temp file. 24 hours makes that window large enough that hitting it
-// in practice would already be a surprising rebuild duration on its own.
-// The worst case if it does happen is bounded and self-healing: the
-// in-progress rebuild's own rename fails with an actionable "temp file
-// missing" error, that one push attempt fails, and the caller retries — the
-// existing mirror retains its previous data, possibly checkpointed from
-// its WAL, and can still be used after the failed push.
+// Push holds the mirror's process lock before sweeping, so another push
+// cannot remove a running rebuild's temp file.
 const staleTempFileAge = 24 * time.Hour
 
 // sweepStaleTempFiles removes <base>.tmp-<digits> rebuild temp files older

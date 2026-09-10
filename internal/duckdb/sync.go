@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb/bundialect"
@@ -252,10 +254,27 @@ func (s *Sync) isFiltered() bool {
 // rebuild logs and records its trigger in Diagnostics.RebuildReason, since
 // a rebuild silently substituted for a requested incremental push is
 // otherwise invisible to the operator.
+// Push holds a per-mirror process lock through probing, checkpointing, and
+// replacement so another push cannot write an old mirror's WAL during a swap.
 func Push(
 	ctx context.Context, path string, local *db.DB, machine string,
 	opts SyncOptions, full bool, onProgress func(PushProgress),
-) (PushResult, error) {
+) (pushResult PushResult, returnErr error) {
+	workDir, err := ensureMirrorWorkDir(path)
+	if err != nil {
+		return PushResult{}, err
+	}
+	// Keep the lock file after release: removing it would let racing pushes
+	// acquire locks on different inodes. Artifact sweeps leave this name alone.
+	lock := flock.New(filepath.Join(workDir, "push.lock"))
+	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
+	locked, err := lock.TryLockContext(ctx, 50*time.Millisecond)
+	if err != nil {
+		return PushResult{}, fmt.Errorf("locking duckdb mirror for push: %w", err)
+	}
+	if !locked {
+		return PushResult{}, fmt.Errorf("duckdb mirror is held by another push")
+	}
 	if err := sweepStaleTempFiles(path); err != nil {
 		log.Printf("duckdbsync: sweeping stale rebuild temp files: %v", err)
 	}

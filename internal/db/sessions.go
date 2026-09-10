@@ -898,7 +898,7 @@ func resetArchiveManagedSessionFields(row *bunmodel.Session) error {
 	}
 	return copyCanonicalSessionColumns(
 		row, &defaults,
-		bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive),
+		canonicalArchiveSessionColumns,
 	)
 }
 
@@ -907,7 +907,7 @@ func preserveArchiveManagedSessionFields(
 ) error {
 	return copyCanonicalSessionColumns(
 		row, &current,
-		bunmodel.SessionColumnsOwnedBy(bunmodel.SessionColumnArchive),
+		canonicalArchiveSessionColumns,
 	)
 }
 
