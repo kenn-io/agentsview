@@ -959,6 +959,20 @@ func buildHermesStateResult(
 	}
 
 	applyHermesStateMetadata(sess, ss, selectedPath, project)
+	// Hermes leaves sessions.ended_at NULL until a session closes, so an open
+	// session reaches here with EndedAt unset and every last-activity consumer
+	// falls back to started_at. Stand in the newest message timestamp, matching
+	// the JSONL and JSON transcript paths. Both state.db message readers
+	// order by timestamp ASC, id ASC, and hermesUnixTime maps a non-positive
+	// raw value to the zero time, which sorts first, so the last row is newest.
+	// Fill only an unset value, and never place EndedAt before StartedAt: a
+	// closed session's recorded ended_at wins, and writing a time older than
+	// started_at would sort the session below where it sits today.
+	if sess.EndedAt.IsZero() && len(stateMessages) > 0 {
+		if latest := stateMessages[len(stateMessages)-1].timestamp; latest.After(sess.StartedAt) {
+			sess.EndedAt = latest
+		}
+	}
 	return ParseResult{
 		Session:     *sess,
 		Messages:    msgs,

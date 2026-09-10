@@ -5,10 +5,40 @@ import (
 	"encoding/json/v2"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestAssembleTiming_HermesBackfilledEndedAtStopsReportingRunning is proof
+// row 9, a named intended consequence of the hermes state.db EndedAt
+// back-fill (internal/parser/hermes.go): AssembleTiming reads sess.EndedAt
+// straight off the archive row, so a live hermes session that used to
+// publish a nil EndedAt and now publishes the newest message time stops
+// reporting Running: true and starts reporting a bounded duration, matching
+// what every other provider's live sessions already do.
+func TestAssembleTiming_HermesBackfilledEndedAtStopsReportingRunning(t *testing.T) {
+	now := time.Date(2026, 9, 8, 18, 0, 0, 0, time.UTC)
+	startedAt := "2026-09-08T14:39:23Z"
+	newestMessage := "2026-09-08T17:00:00Z"
+
+	live := &Session{ID: "hermes:open1", StartedAt: &startedAt}
+	liveTiming := AssembleTiming(live, nil, nil, now)
+	assert.True(t, liveTiming.Running,
+		"today's shape: a nil EndedAt reports Running true")
+	assert.Equal(t,
+		millisBetween(startedAt, now.Format(time.RFC3339)),
+		liveTiming.TotalDurationMs)
+
+	backfilled := &Session{ID: "hermes:open1", StartedAt: &startedAt, EndedAt: &newestMessage}
+	backfilledTiming := AssembleTiming(backfilled, nil, nil, now)
+	assert.False(t, backfilledTiming.Running,
+		"head's shape: EndedAt back-filled to the newest message time reports Running false")
+	assert.Equal(t,
+		millisBetween(startedAt, newestMessage),
+		backfilledTiming.TotalDurationMs)
+}
 
 func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	d := testDB(t)

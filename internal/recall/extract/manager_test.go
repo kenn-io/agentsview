@@ -126,6 +126,89 @@ func growSession(t *testing.T, d *db.DB, id string, msgs []db.Message, startOrdi
 	settleSessionWrite()
 }
 
+// eligibleExtractableSession returns a *db.Session that passes every
+// extractableSession predicate on its own, so each subtest below need only
+// break the one predicate it is proving.
+func eligibleExtractableSession() *db.Session {
+	ended := "2026-09-08T17:00:00Z"
+	return &db.Session{
+		MessageCount:        1,
+		SecretsRulesVersion: secrets.RulesVersion(),
+		EndedAt:             &ended,
+	}
+}
+
+// TestExtractableSession_BackfilledEndedAtNoLongerRejectsLiveHermesSession
+// is proof row 10, a named intended consequence of the hermes state.db
+// EndedAt back-fill (internal/parser/hermes.go): explicit Recall extraction
+// no longer rejects a live hermes session with "has not ended" once its
+// EndedAt is back-filled from the newest message, matching what every other
+// provider's live sessions already pass. Every other predicate in the
+// switch must keep firing on its own terms.
+func TestExtractableSession_BackfilledEndedAtNoLongerRejectsLiveHermesSession(t *testing.T) {
+	t.Run("set EndedAt is eligible", func(t *testing.T) {
+		assert.NoError(t, extractableSession("hermes:open1", eligibleExtractableSession()))
+	})
+
+	t.Run("nil EndedAt is still rejected as not ended", func(t *testing.T) {
+		s := eligibleExtractableSession()
+		s.EndedAt = nil
+		err := extractableSession("hermes:open1", s)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has not ended")
+	})
+
+	t.Run("empty-string EndedAt is still rejected as not ended", func(t *testing.T) {
+		s := eligibleExtractableSession()
+		empty := ""
+		s.EndedAt = &empty
+		err := extractableSession("hermes:open1", s)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has not ended")
+	})
+
+	t.Run("trashed still fires ahead of EndedAt", func(t *testing.T) {
+		s := eligibleExtractableSession()
+		deleted := "2026-09-08T18:00:00Z"
+		s.DeletedAt = &deleted
+		err := extractableSession("hermes:open1", s)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is trashed")
+	})
+
+	t.Run("automated still fires", func(t *testing.T) {
+		s := eligibleExtractableSession()
+		s.IsAutomated = true
+		err := extractableSession("hermes:open1", s)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "automated")
+	})
+
+	t.Run("secret findings still fire", func(t *testing.T) {
+		s := eligibleExtractableSession()
+		s.SecretLeakCount = 1
+		err := extractableSession("hermes:open1", s)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "secret findings")
+	})
+
+	t.Run("stale scan version still fires", func(t *testing.T) {
+		s := eligibleExtractableSession()
+		s.SecretsRulesVersion = "stale-version"
+		err := extractableSession("hermes:open1", s)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "secret scan")
+	})
+
+	t.Run("zero messages still fires", func(t *testing.T) {
+		s := eligibleExtractableSession()
+		s.MessageCount = 0
+		err := extractableSession("hermes:open1", s)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no messages")
+	})
+}
+
 func turnMessages(pairs ...string) []db.Message {
 	msgs := make([]db.Message, 0, len(pairs))
 	for i, content := range pairs {
