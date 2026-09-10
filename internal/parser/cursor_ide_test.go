@@ -105,6 +105,33 @@ func createCursorIDEDB(t *testing.T, composers []cursorIDETestComposer) string {
 	return dbPath
 }
 
+// assertCursorDiskKVStoredShape pins the on-disk premise the null/empty-blob
+// subtests rest on: a SQL NULL value reports typeof "null", while a stored
+// zero-length BLOB reports typeof "blob" with length 0. Without this check,
+// a driver whose bind path folded []byte{} into NULL (the repo carries a
+// second SQLite driver, modernc.org/sqlite, so this is not hypothetical)
+// would silently collapse the empty-blob subtests into copies of their null
+// siblings and still pass.
+func assertCursorDiskKVStoredShape(t *testing.T, dbPath, key string, wantNull bool) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	var typ string
+	var length sql.NullInt64
+	require.NoError(t, conn.QueryRow(
+		`SELECT typeof(value), length(value) FROM cursorDiskKV WHERE key = ?`,
+		key,
+	).Scan(&typ, &length))
+	if wantNull {
+		assert.Equal(t, "null", typ)
+		return
+	}
+	assert.Equal(t, "blob", typ)
+	require.True(t, length.Valid)
+	assert.Zero(t, length.Int64)
+}
+
 func TestCursorIDEProviderCapabilities(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentCursorIDE)
 	require.True(t, ok)
@@ -494,6 +521,8 @@ func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
+			assertCursorDiskKVStoredShape(t, dbPath,
+				"composerData:husk-0000-0000-0000-000000000000", tc.value == nil)
 
 			root := filepath.Dir(dbPath)
 			provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{
@@ -565,7 +594,7 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
+			composer := []cursorIDETestComposer{{
 				id:        "null-bubble-0000-0000-000000000000",
 				name:      "Null bubble thread",
 				createdAt: 1782026756842,
@@ -574,7 +603,29 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 					{id: "b1", bubbleType: cursorIDEBubbleTypeUser, text: "kept", createdAt: "2026-06-21T07:27:29.606Z"},
 					{id: "b2", bubbleType: cursorIDEBubbleTypeAssistant, text: "will be husked", createdAt: "2026-06-21T07:27:31.522Z"},
 				},
-			}})
+			}}
+
+			// Reference digest: the same composer with bubble b2 intact. This
+			// is the one input for which cursorIDEComposerDigest becomes newly
+			// reachable by this diff: on base, loadCursorIDEBubble errored at
+			// header b2 and parseCursorIDEComposer returned before the digest
+			// call. P6 requires the digest to hash every stored bubble's key
+			// and value bytes unconditionally, so husking b2 must change it.
+			intactPath := createCursorIDEDB(t, composer)
+			intactConn, err := openCursorIDEDB(intactPath)
+			require.NoError(t, err)
+			intactInfo, err := os.Stat(intactPath)
+			require.NoError(t, err)
+			intactResult, err := parseCursorIDEComposer(
+				context.Background(), intactConn, intactPath,
+				"null-bubble-0000-0000-000000000000", "devbox", intactInfo,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, intactResult)
+			require.NotEmpty(t, intactResult.Session.File.Hash)
+			require.NoError(t, intactConn.Close())
+
+			dbPath := createCursorIDEDB(t, composer)
 			writer, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
 			_, err = writer.Exec(
@@ -583,6 +634,8 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
+			assertCursorDiskKVStoredShape(t, dbPath,
+				"bubbleId:null-bubble-0000-0000-000000000000:b2", tc.value == nil)
 
 			conn, err := openCursorIDEDB(dbPath)
 			require.NoError(t, err)
@@ -605,6 +658,10 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 				"this diff writes no malformed-line counter for a husk bubble")
 			assert.Equal(t, "b1", result.Messages[0].SourceUUID,
 				"the surviving message's SourceUUID must be unchanged")
+
+			assert.NotEmpty(t, result.Session.File.Hash)
+			assert.NotEqual(t, intactResult.Session.File.Hash, result.Session.File.Hash,
+				"husking bubble b2 must change the composer digest")
 		})
 	}
 }
@@ -748,6 +805,8 @@ func TestLoadCursorIDEComposerMetaNullValueReportsNotFound(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
+			assertCursorDiskKVStoredShape(t, dbPath,
+				"composerData:null-meta-0000-0000-000000000000", tc.value == nil)
 
 			conn, err := openCursorIDEDB(dbPath)
 			require.NoError(t, err)
