@@ -508,11 +508,29 @@ func (s *Server) rejectWriterClosedWrite() error {
 // serializeArchiveWrite runs work under the daemon engine's exclusive lock —
 // the same mutex a worker pass holds while the writer is closed — so a write
 // that passed the pre-stream writer gate cannot race a maintenance pass
-// closing the writer mid-operation. Servers without a daemon engine have no
-// worker passes to serialize with, so work runs directly.
+// closing the writer mid-operation. Local servers without a daemon engine
+// share the on-demand sync engine's lock.
 func (s *Server) serializeArchiveWrite(work func() error) error {
 	if s.engine != nil {
 		return s.engine.RunExclusive(work)
+	}
+	if local, ok := s.db.(*db.DB); ok {
+		return s.syncEngineForLocal(local).RunExclusive(work)
+	}
+	return work()
+}
+
+// tryArchiveWrite runs user-triggered archive maintenance under the daemon
+// engine's exclusive lock without waiting for it, which is the barrier
+// newForegroundCompactRunner puts compaction behind. Background work keeps
+// serializeArchiveWrite so scheduled obligations are not lost. Local servers
+// without a daemon engine share the on-demand sync engine's lock.
+func (s *Server) tryArchiveWrite(work func() error) error {
+	if s.engine != nil {
+		return s.engine.TryRunExclusive(work)
+	}
+	if local, ok := s.db.(*db.DB); ok {
+		return s.syncEngineForLocal(local).TryRunExclusive(work)
 	}
 	return work()
 }

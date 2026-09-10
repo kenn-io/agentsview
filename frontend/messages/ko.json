@@ -1973,5 +1973,68 @@
   "settings_tool_result_images_keep": "유지",
   "settings_tool_result_images_drop": "삭제",
   "settings_tool_result_images_hint": "이미 저장된 결과는 기록될 당시의 정책을 유지하며, 유지로 되돌려도 이미 삭제된 데이터는 복원되지 않습니다. 기존 행은 agentsview db strip --images 로 처리합니다.",
-  "settings_tool_result_images_restart_notice": "이 변경을 새로 수집되는 세션에 적용하려면 AgentsView 데몬을 다시 시작하세요."
+  "settings_tool_result_images_restart_notice": "이 변경을 새로 수집되는 세션에 적용하려면 AgentsView 데몬을 다시 시작하세요.",
+  "settings_tool_images_title": "도구 결과 이미지",
+  "settings_tool_images_description": "도구 결과 내에 저장된 인라인 이미지.",
+  "settings_search_keywords_tool_images": "이미지 도구 결과 제거 정리 페이로드 바이트 저장소",
+  "settings_image_cleanup_intro": "인라인 이미지 페이로드가 포함된 저장된 도구 결과를 미리 보고, 해당 페이로드를 읽기 쉬운 자리 표시자로 교체합니다.",
+  "settings_image_cleanup_project_label": "프로젝트 포함",
+  "settings_image_cleanup_project_placeholder": "모든 프로젝트",
+  "settings_image_cleanup_before_label": "종료 날짜 이전",
+  "settings_image_cleanup_before_placeholder": "YYYY-MM-DD",
+  "settings_image_cleanup_preview": "미리 보기",
+  "settings_image_cleanup_previewing": "미리 보는 중…",
+  "settings_image_cleanup_preview_failed": "미리 보기에 실패했습니다.",
+  "settings_image_cleanup_unavailable": "이미지 제거는 이 기기의 로컬 아카이브에 대해서만 실행됩니다.",
+  "settings_image_cleanup_proxy_denied": "이미지 제거는 프록시나 포트 포워딩이 아니라 이 컴퓨터에서 직접 연 AgentsView에서 실행해야 합니다.",
+  "settings_image_cleanup_read_only": "이 아카이브는 읽기 전용이므로 저장된 행을 변경할 수 없습니다.",
+  "settings_image_cleanup_empty": "이 선택 항목의 저장된 도구 결과에는 인라인 이미지 페이로드가 없습니다.",
+  "settings_image_cleanup_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel}개 세션 선택됨",
+        "countPlural=other": "{countLabel}개 세션 선택됨"
+      }
+    }
+  ],
+  "settings_image_cleanup_payloads": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "이미지 페이로드 {countLabel}개",
+        "countPlural=other": "이미지 페이로드 {countLabel}개"
+      }
+    }
+  ],
+  "settings_image_cleanup_by_project": "프로젝트별",
+  "settings_image_cleanup_column_project": "프로젝트",
+  "settings_image_cleanup_column_sessions": "세션",
+  "settings_image_cleanup_column_payloads": "페이로드",
+  "settings_image_cleanup_column_stored": "저장됨",
+  "settings_image_cleanup_column_decoded": "디코딩됨",
+  "settings_image_cleanup_apply": "이미지 페이로드 제거",
+  "settings_image_cleanup_applying": "제거 중…",
+  "settings_image_cleanup_apply_failed": "이미지 제거가 완료되지 않았습니다. 일부 세션이 이미 변경되었을 수 있습니다. 다시 시도하기 전에 미리 보기를 다시 실행하세요.",
+  "settings_image_cleanup_busy": "다른 아카이브 유지 관리 작업이 이미 실행 중입니다. 완료된 후 다시 시도하세요.",
+  "settings_image_cleanup_confirm_title": "저장된 이미지 페이로드를 제거하시겠습니까?",
+  "settings_image_cleanup_confirm_close": "닫기",
+  "settings_image_cleanup_confirm_scope": "정리는 시작 시 이 필터와 일치하는 모든 세션을 포함하므로 이 미리 보기 이후에 새로운 일치 콘텐츠가 추가될 수 있습니다.",
+  "settings_image_cleanup_confirm_body": "이 작업은 선택된 저장 도구 결과를 제자리에서 다시 쓰며 취소할 수 없습니다. 공급자 전사 및 독립 이미지 파일은 변경되지 않습니다.",
+  "settings_image_cleanup_confirm_action": "제거",
+  "settings_image_cleanup_cancel": "취소",
+  "settings_image_cleanup_applied": "이미지 제거가 완료되었습니다.",
+  "settings_image_cleanup_changed": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel}개 세션 변경됨",
+        "countPlural=other": "{countLabel}개 세션 변경됨"
+      }
+    }
+  ],
+  "settings_image_cleanup_compact_note": "페이로드를 제거하면 저장된 행이 다시 작성됩니다. agentsview db compact를 실행할 때까지 아카이브 파일 크기는 유지됩니다."
 }

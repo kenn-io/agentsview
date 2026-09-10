@@ -2038,5 +2038,68 @@
   "settings_tool_result_images_keep": "保持",
   "settings_tool_result_images_drop": "破棄",
   "settings_tool_result_images_hint": "保存済みの結果は書き込み時のポリシーを保ち、保持に戻しても削除済みのデータは復元できません。既存の行は agentsview db strip --images で処理してください。",
-  "settings_tool_result_images_restart_notice": "この変更を新しく取り込むセッションに適用するには、AgentsView デーモンを再起動してください。"
+  "settings_tool_result_images_restart_notice": "この変更を新しく取り込むセッションに適用するには、AgentsView デーモンを再起動してください。",
+  "settings_tool_images_title": "ツール結果の画像",
+  "settings_tool_images_description": "ツール結果内に保存されたインライン画像。",
+  "settings_search_keywords_tool_images": "画像 ツール結果 削除 クリーンアップ ペイロード バイト ストレージ",
+  "settings_image_cleanup_intro": "インライン画像ペイロードを保持している保存済みツール結果をプレビューし、それらのペイロードを読み取り可能なプレースホルダーに置き換えます。",
+  "settings_image_cleanup_project_label": "プロジェクトに含まれる",
+  "settings_image_cleanup_project_placeholder": "すべてのプロジェクト",
+  "settings_image_cleanup_before_label": "終了日（以前）",
+  "settings_image_cleanup_before_placeholder": "YYYY-MM-DD",
+  "settings_image_cleanup_preview": "プレビュー",
+  "settings_image_cleanup_previewing": "プレビュー中…",
+  "settings_image_cleanup_preview_failed": "プレビューに失敗しました。",
+  "settings_image_cleanup_unavailable": "画像の削除はこのマシンのローカルアーカイブに対してのみ実行されます。",
+  "settings_image_cleanup_proxy_denied": "画像の削除は、プロキシや転送ポート経由ではなく、このマシンで直接開いた AgentsView で実行する必要があります。",
+  "settings_image_cleanup_read_only": "このアーカイブは読み取り専用のため、保存された行を変更できません。",
+  "settings_image_cleanup_empty": "この選択内の保存済みツール結果にはインライン画像ペイロードが含まれていません。",
+  "settings_image_cleanup_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} セッション選択済み",
+        "countPlural=other": "{countLabel} セッション選択済み"
+      }
+    }
+  ],
+  "settings_image_cleanup_payloads": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "画像ペイロード {countLabel} 件",
+        "countPlural=other": "画像ペイロード {countLabel} 件"
+      }
+    }
+  ],
+  "settings_image_cleanup_by_project": "プロジェクト別",
+  "settings_image_cleanup_column_project": "プロジェクト",
+  "settings_image_cleanup_column_sessions": "セッション",
+  "settings_image_cleanup_column_payloads": "ペイロード",
+  "settings_image_cleanup_column_stored": "保存済み",
+  "settings_image_cleanup_column_decoded": "デコード済み",
+  "settings_image_cleanup_apply": "画像ペイロードを削除",
+  "settings_image_cleanup_applying": "削除中…",
+  "settings_image_cleanup_apply_failed": "画像の削除が完了しませんでした。一部のセッションはすでに変更されている可能性があります。再試行する前にもう一度プレビューしてください。",
+  "settings_image_cleanup_busy": "別のアーカイブメンテナンス操作が実行中です。完了してから再試行してください。",
+  "settings_image_cleanup_confirm_title": "保存された画像ペイロードを削除しますか？",
+  "settings_image_cleanup_confirm_close": "閉じる",
+  "settings_image_cleanup_confirm_scope": "クリーンアップは開始時にこれらのフィルターに一致するすべてのセッションを対象とするため、このプレビュー後に新しい一致コンテンツが追加される場合があります。",
+  "settings_image_cleanup_confirm_body": "これにより、選択した保存済みツール結果がその場で書き換えられ、元に戻すことはできません。プロバイダーのトランスクリプトとスタンドアロン画像ファイルは変更されません。",
+  "settings_image_cleanup_confirm_action": "削除",
+  "settings_image_cleanup_cancel": "キャンセル",
+  "settings_image_cleanup_applied": "画像の削除が完了しました。",
+  "settings_image_cleanup_changed": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} セッションが変更されました",
+        "countPlural=other": "{countLabel} セッションが変更されました"
+      }
+    }
+  ],
+  "settings_image_cleanup_compact_note": "ペイロードの削除は保存済み行を書き換えます。agentsview db compact を実行するまでアーカイブファイルのサイズは変わりません。"
 }

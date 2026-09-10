@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
@@ -18,6 +19,10 @@ func (s *Server) registerDataRoutes() {
 		"List archive-wide reclassification candidates",
 		s.humaDataCandidates)
 	s.postLong(group, "/compact", "Compact local archive", s.humaDataCompact)
+	s.postLong(group, "/strip-images/preview",
+		"Preview inline tool-result image removal", s.humaDataStripImagesPreview)
+	s.postLong(group, "/strip-images",
+		"Remove retained inline tool-result images", s.humaDataStripImages)
 }
 
 type dataProjectRulesInput struct {
@@ -47,6 +52,34 @@ type dataCompactRequest struct {
 	// here would let any authenticated remote caller make the daemon copy a
 	// complete archive and backup into an arbitrary filesystem location.
 	KeepBackup *bool `json:"keep_backup,omitempty" doc:"Keep the original archive backup"`
+}
+
+type dataStripImagesPreviewInput struct {
+	Body dataStripImagesRequest
+}
+
+type dataStripImagesInput struct {
+	Body dataStripImagesApplyRequest
+}
+
+// The request carries the whole selection. The server re-evaluates it under
+// the archive write boundary instead of accepting a client-held preview,
+// because ingestion between preview and apply can add matching rows and
+// those rows are inside the selection the caller asked for. Values are used
+// as sent: cmd/agentsview/db_strip.go builds the same filter from raw flag
+// bytes, so trimming here would make the two surfaces select differently.
+type dataStripImagesRequest struct {
+	Project string `json:"project,omitempty" doc:"Sessions whose project contains this substring; empty matches all projects"`
+	Before  string `json:"before,omitempty" doc:"Sessions that ended before this date (YYYY-MM-DD); empty applies no date bound"`
+}
+
+// Confirmed is required and must be true. An empty body would otherwise select
+// every stored image in the archive, so acceptance of the submitted filter is
+// explicit. It is not authentication and not evidence that a preview ran.
+type dataStripImagesApplyRequest struct {
+	Project   string `json:"project,omitempty" doc:"Sessions whose project contains this substring; empty matches all projects"`
+	Before    string `json:"before,omitempty" doc:"Sessions that ended before this date (YYYY-MM-DD); empty applies no date bound"`
+	Confirmed *bool  `json:"confirmed,omitempty" doc:"Must be true; confirms cleanup of every session matching the filter when the run starts"`
 }
 
 func (s *Server) humaDataProjects(
@@ -148,7 +181,7 @@ func (s *Server) humaDataCompact(
 	if s.localCompactRunner != nil {
 		result, err = s.localCompactRunner(ctx, options)
 	} else {
-		err = s.serializeArchiveWrite(func() error {
+		err = s.tryArchiveWrite(func() error {
 			result, err = local.Compact(ctx, options)
 			return err
 		})
@@ -170,4 +203,99 @@ func (s *Server) humaDataCompact(
 		return nil, internalError("compact local archive error", err)
 	}
 	return &jsonOutput[db.CompactResult]{Body: result}, nil
+}
+
+// stripImagesTarget applies the same access gates as archive compaction and
+// builds the selection. Localhost is checked before the backend type so a
+// remote caller cannot probe which backend is serving.
+func (s *Server) stripImagesTarget(
+	ctx context.Context, project, before string,
+) (*db.DB, db.StripImagesFilter, error) {
+	if !isLocalhostContext(ctx) {
+		return nil, db.StripImagesFilter{}, apiError(
+			http.StatusForbidden,
+			"tool-result image removal is only permitted from localhost",
+		)
+	}
+	local, ok := s.db.(*db.DB)
+	if !ok {
+		return nil, db.StripImagesFilter{}, apiError(
+			http.StatusNotImplemented, "not available in remote mode",
+		)
+	}
+	if before != "" {
+		if _, err := time.Parse("2006-01-02", before); err != nil {
+			return nil, db.StripImagesFilter{}, apiError(
+				http.StatusBadRequest, "before must be a YYYY-MM-DD date",
+			)
+		}
+	}
+	return local, db.StripImagesFilter{Project: project, Before: before}, nil
+}
+
+func (s *Server) humaDataStripImagesPreview(
+	ctx context.Context, in *dataStripImagesPreviewInput,
+) (*jsonOutput[db.StripImagesReport], error) {
+	var project, before string
+	if in != nil {
+		project, before = in.Body.Project, in.Body.Before
+	}
+	local, filter, err := s.stripImagesTarget(ctx, project, before)
+	if err != nil {
+		return nil, err
+	}
+	report, err := local.PreviewStripToolImages(ctx, filter)
+	if handled := handleHumaContextError(err); handled != nil {
+		return nil, handled
+	}
+	if handled := handleHumaReadOnly(err); handled != nil {
+		return nil, handled
+	}
+	if err != nil {
+		return nil, internalError("preview tool result image removal error", err)
+	}
+	return &jsonOutput[db.StripImagesReport]{Body: report}, nil
+}
+
+func (s *Server) humaDataStripImages(
+	ctx context.Context, in *dataStripImagesInput,
+) (*jsonOutput[db.StripImagesReport], error) {
+	if in == nil || in.Body.Confirmed == nil || !*in.Body.Confirmed {
+		return nil, apiError(http.StatusBadRequest,
+			"confirmed must be true to remove stored image payloads")
+	}
+	local, filter, err := s.stripImagesTarget(ctx, in.Body.Project, in.Body.Before)
+	if err != nil {
+		return nil, err
+	}
+	var report db.StripImagesReport
+	// StripToolImages documents that the caller owns the archive write lock;
+	// the daemon's foreground exclusive boundary is that ownership, not the
+	// CLI flock, and it refuses rather than queues behind a worker pass.
+	err = s.tryArchiveWrite(func() error {
+		var stripErr error
+		report, stripErr = local.StripToolImages(ctx, filter)
+		// An error can follow per-session commits, even with an empty report.
+		if stripErr != nil || report.Changed > 0 {
+			s.notifySessionMutation()
+		}
+		return stripErr
+	})
+	if errors.Is(err, syncpkg.ErrSyncInProgress) ||
+		errors.Is(err, db.ErrCompactInProgress) {
+		return nil, apiError(
+			http.StatusConflict,
+			"another archive maintenance operation is already running",
+		)
+	}
+	if handled := handleHumaContextError(err); handled != nil {
+		return nil, handled
+	}
+	if handled := handleHumaReadOnly(err); handled != nil {
+		return nil, handled
+	}
+	if err != nil {
+		return nil, internalError("strip tool result images error", err)
+	}
+	return &jsonOutput[db.StripImagesReport]{Body: report}, nil
 }
