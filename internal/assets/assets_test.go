@@ -86,42 +86,55 @@ func TestPutContract(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported asset type")
 }
 
-// TestPutReplacesTruncatedObject covers the migration's destructive path: the
-// caller drops the inline base64 once Put returns a reference, so a short file
-// left at the content-addressed path by an interrupted write must be replaced
-// rather than accepted as a hit.
-func TestPutReplacesTruncatedObject(t *testing.T) {
-	assetsDir := t.TempDir()
-
+// TestPutReplacesIncompleteObject covers truncated and equal-length corrupt
+// objects at the content-addressed path.
+func TestPutReplacesIncompleteObject(t *testing.T) {
 	body := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a} // PNG header
 	sum := sha256.Sum256(body)
-	destPath := filepath.Join(assetsDir, fmt.Sprintf("%x.png", sum[:]))
-	require.NoError(t, os.WriteFile(destPath, body[:3], 0o644))
 
-	ref, created, err := assets.Put(assetsDir, "image/png", body)
-	require.NoError(t, err)
-	assert.Equal(t, "asset://"+filepath.Base(destPath), ref)
-	// created reports that this call wrote the object, so repairing a partial
-	// file reads as created even though the path already existed.
-	assert.True(t, created)
+	corrupt := append([]byte(nil), body...)
+	corrupt[0] ^= 0xff
+	for _, tt := range []struct {
+		name     string
+		existing []byte
+	}{
+		{name: "truncated", existing: body[:3]},
+		{name: "same-size-corrupt", existing: corrupt},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assetsDir := t.TempDir()
+			destPath := filepath.Join(assetsDir, fmt.Sprintf("%x.png", sum[:]))
+			require.NoError(t, os.WriteFile(destPath, tt.existing, 0o644))
 
-	stored, err := os.ReadFile(destPath)
-	require.NoError(t, err)
-	assert.Equal(t, body, stored)
+			ref, created, err := assets.Put(assetsDir, "image/png", body)
+			require.NoError(t, err)
+			assert.Equal(t, "asset://"+filepath.Base(destPath), ref)
+			assert.True(t, created)
 
-	// The temp file the write used is renamed, not left beside the object.
-	entries, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Len(t, entries, 1)
-	t.Logf("truncated %d bytes replaced by %d: files=%d", 3, len(stored), len(entries))
+			stored, err := os.ReadFile(destPath)
+			require.NoError(t, err)
+			assert.Equal(t, body, stored)
+			assert.Equal(t, sum, sha256.Sum256(stored))
+
+			entries, err := os.ReadDir(assetsDir)
+			require.NoError(t, err)
+			assert.Len(t, entries, 1)
+
+			ref2, created2, err := assets.Put(assetsDir, "image/png", body)
+			require.NoError(t, err)
+			assert.Equal(t, ref, ref2)
+			assert.False(t, created2)
+			t.Logf("%s object repaired: %d bytes, digest=%x, files=%d", tt.name, len(stored), sum, len(entries))
+		})
+	}
 }
 
-// TestCopyAssetContract covers the path-in entry point: reference shape, the
-// bytes on disk, dedup on a repeat copy, replacement of a truncated object, and
-// rejection of a non-image extension.
+// TestCopyAssetContract covers the path-in entry point, deduplication, repair
+// of incomplete objects, and rejection of a non-image extension.
 func TestCopyAssetContract(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "source.webp")
 	body := []byte("image data")
+	sum := sha256.Sum256(body)
 	require.NoError(t, os.WriteFile(src, body, 0o644))
 
 	assetsDir := filepath.Join(t.TempDir(), "assets")
@@ -135,6 +148,7 @@ func TestCopyAssetContract(t *testing.T) {
 	stored, err := os.ReadFile(destPath)
 	require.NoError(t, err)
 	assert.Equal(t, body, stored)
+	assert.Equal(t, sum, sha256.Sum256(stored))
 
 	// A repeat copy returns the same reference without a second file.
 	ref2, err := assets.CopyAsset(src, assetsDir)
@@ -144,14 +158,29 @@ func TestCopyAssetContract(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
 
-	// A short file at the destination is a partial write, not a dedup hit.
-	require.NoError(t, os.WriteFile(destPath, body[:2], 0o644))
-	ref3, err := assets.CopyAsset(src, assetsDir)
+	corrupt := append([]byte(nil), body...)
+	corrupt[0] ^= 0xff
+	for _, tt := range []struct {
+		name     string
+		existing []byte
+	}{
+		{name: "truncated", existing: body[:2]},
+		{name: "same-size-corrupt", existing: corrupt},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, os.WriteFile(destPath, tt.existing, 0o644))
+			ref3, err := assets.CopyAsset(src, assetsDir)
+			require.NoError(t, err)
+			assert.Equal(t, ref, ref3)
+			stored, err := os.ReadFile(destPath)
+			require.NoError(t, err)
+			assert.Equal(t, body, stored)
+			assert.Equal(t, sum, sha256.Sum256(stored))
+		})
+	}
+	entries, err = os.ReadDir(assetsDir)
 	require.NoError(t, err)
-	assert.Equal(t, ref, ref3)
-	stored, err = os.ReadFile(destPath)
-	require.NoError(t, err)
-	assert.Equal(t, body, stored)
+	assert.Len(t, entries, 1)
 
 	// Active content is rejected on extension.
 	_, err = assets.CopyAsset(filepath.Join(t.TempDir(), "payload.svg"), assetsDir)

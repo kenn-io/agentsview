@@ -50,7 +50,7 @@ func Put(assetsDir, mediaType string, body []byte) (ref string, created bool, er
 	filename := hash + ext
 	destPath := filepath.Join(assetsDir, filename)
 
-	if isCompleteObject(destPath, int64(len(body))) {
+	if isCompleteObject(destPath, int64(len(body)), hash) {
 		return "asset://" + filename, false, nil
 	}
 
@@ -64,13 +64,25 @@ func Put(assetsDir, mediaType string, body []byte) (ref string, created bool, er
 	return "asset://" + filename, true, nil
 }
 
-// isCompleteObject reports whether the content-addressed path already holds the
-// whole object. Objects arrive through a rename, so a file whose size differs
-// from the payload is a partial write left by an interrupted older run and must
-// be replaced: the caller is about to drop the only other copy of those bytes.
-func isCompleteObject(destPath string, size int64) bool {
-	info, err := os.Stat(destPath)
-	return err == nil && info.Size() == size
+// isCompleteObject reports whether the content-addressed path already holds a
+// regular file with the expected size and SHA-256 digest.
+func isCompleteObject(destPath string, size int64, expectedHash string) bool {
+	info, err := os.Lstat(destPath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+		return false
+	}
+
+	f, err := os.Open(destPath)
+	if err != nil {
+		return false
+	}
+	h := sha256.New()
+	actualSize, copyErr := io.Copy(h, f)
+	closeErr := f.Close()
+	if copyErr != nil || closeErr != nil || actualSize != size {
+		return false
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)) == expectedHash
 }
 
 // writeObject fills a temp file in assetsDir and renames it onto destPath, so
@@ -141,7 +153,7 @@ func CopyAsset(srcPath, assetsDir string) (string, error) {
 	filename := hash + ext // ext is already normalized to .jpg for .jpeg sources
 	destPath := filepath.Join(assetsDir, filename)
 
-	if isCompleteObject(destPath, size) {
+	if isCompleteObject(destPath, size, hash) {
 		return "asset://" + filename, nil
 	}
 

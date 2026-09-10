@@ -38,26 +38,10 @@ func hexSHA256(b []byte) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
-// realPut returns a put closure that writes to assetsDir.
+// realPut returns a put closure backed by the production asset writer.
 func realPut(assetsDir string) imagePutFunc {
 	return func(mediaType string, body []byte) (string, bool, error) {
-		ext, ok := assets.ExtForMediaType(mediaType)
-		if !ok {
-			return "", false, fmt.Errorf("unsupported: %s", mediaType)
-		}
-		digest := hexSHA256(body)
-		filename := digest + ext
-		path := filepath.Join(assetsDir, filename)
-		if _, err := os.Stat(path); err == nil {
-			return "asset://" + filename, false, nil
-		}
-		if err := os.MkdirAll(assetsDir, 0o755); err != nil {
-			return "", false, err
-		}
-		if err := os.WriteFile(path, body, 0o644); err != nil {
-			return "", false, err
-		}
-		return "asset://" + filename, true, nil
+		return assets.Put(assetsDir, mediaType, body)
 	}
 }
 
@@ -196,52 +180,93 @@ func TestMigratePartialFailurePreservesReport(t *testing.T) {
 	assert.NotContains(t, secondAfter, "image_ref")
 }
 
-// TestMigratedReferenceMatchesStoredFile verifies that the reference written to
-// the row matches the SHA-256 digest of the file written to disk.
+// TestMigratedReferenceMatchesStoredFile verifies that migration repairs a
+// same-size corrupt object before removing the inline source.
 func TestMigratedReferenceMatchesStoredFile(t *testing.T) {
-	d := testDB(t)
-	assetsDir := t.TempDir()
-	insertSession(t, d, "ref-match", "project")
-	insertMessages(t, d, testImageMessage("ref-match"))
-
-	put := realPut(assetsDir)
-	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Changed)
-
-	var storedContent string
-	require.NoError(t, d.getReader().QueryRow(
-		"SELECT content FROM tool_result_events WHERE session_id = ?", "ref-match",
-	).Scan(&storedContent))
-
-	var blocks []json.RawMessage
-	require.NoError(t, json.Unmarshal([]byte(storedContent), &blocks))
-
-	var imageRef, sha256Hex string
-	for _, raw := range blocks {
-		var m map[string]json.RawMessage
-		if json.Unmarshal(raw, &m) != nil {
-			continue
-		}
-		if refRaw, ok := m["image_ref"]; ok {
-			require.NoError(t, json.Unmarshal(refRaw, &imageRef))
-			require.NoError(t, json.Unmarshal(m["sha256"], &sha256Hex))
-			break
-		}
-	}
-	require.NotEmpty(t, imageRef)
-
-	filename := strings.TrimPrefix(imageRef, "asset://")
-	stored, err := os.ReadFile(filepath.Join(assetsDir, filename))
-	require.NoError(t, err)
-
-	// The file holds the decoded payload of the inline image.
 	decoded, err := base64.StdEncoding.DecodeString("AAEC")
 	require.NoError(t, err)
-	assert.Equal(t, decoded, stored)
+	sum := sha256.Sum256(decoded)
+	filename := fmt.Sprintf("%x.png", sum[:])
+	for _, tt := range []struct {
+		name        string
+		seedCorrupt bool
+	}{
+		{name: "missing-object"},
+		{name: "same-size-corrupt-object", seedCorrupt: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			assetsDir := t.TempDir()
+			insertSession(t, d, "ref-match", "project")
+			insertMessages(t, d, testImageMessage("ref-match"))
 
-	// sha256 field in the block matches the file's digest.
-	assert.Equal(t, hexSHA256(decoded), sha256Hex)
+			if tt.seedCorrupt {
+				corrupt := append([]byte(nil), decoded...)
+				corrupt[0] ^= 0xff
+				require.NoError(t, os.WriteFile(filepath.Join(assetsDir, filename), corrupt, 0o644))
+				assert.Len(t, corrupt, len(decoded))
+			}
+
+			report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
+			require.NoError(t, err)
+			assert.Equal(t, 1, report.Changed)
+
+			var storedContent string
+			require.NoError(t, d.getReader().QueryRow(
+				"SELECT content FROM tool_result_events WHERE session_id = ?", "ref-match",
+			).Scan(&storedContent))
+			assert.NotContains(t, storedContent, "input_image")
+			assert.Contains(t, storedContent, `"text":"before"`)
+			assert.Contains(t, storedContent, `"text":"after"`)
+
+			var blocks []json.RawMessage
+			require.NoError(t, json.Unmarshal([]byte(storedContent), &blocks))
+
+			var imageRef, sha256Hex string
+			for _, raw := range blocks {
+				var m map[string]json.RawMessage
+				if json.Unmarshal(raw, &m) != nil {
+					continue
+				}
+				if refRaw, ok := m["image_ref"]; ok {
+					require.NoError(t, json.Unmarshal(refRaw, &imageRef))
+					require.NoError(t, json.Unmarshal(m["sha256"], &sha256Hex))
+					break
+				}
+			}
+			require.Equal(t, "asset://"+filename, imageRef)
+
+			stored, err := os.ReadFile(filepath.Join(assetsDir, filename))
+			require.NoError(t, err)
+			assert.Equal(t, decoded, stored)
+			assert.Equal(t, sum, sha256.Sum256(stored))
+			assert.Equal(t, hexSHA256(decoded), sha256Hex)
+
+			messages, err := d.GetAllMessages(t.Context(), "ref-match")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			require.Len(t, messages[0].ToolCalls, 1)
+			call := messages[0].ToolCalls[0]
+			assert.Equal(t, storedContent, call.ResultContent)
+			assert.NotContains(t, call.ResultContent, "input_image")
+
+			var summaryLength, eventLength int
+			require.NoError(t, d.getReader().QueryRow(`
+				SELECT tc.result_content_length, ev.content_length
+				FROM tool_calls tc
+				JOIN messages m ON m.id = tc.message_id
+				JOIN tool_result_events ev
+				  ON ev.session_id = tc.session_id
+				 AND ev.tool_call_message_ordinal = m.ordinal
+				 AND ev.call_index = tc.call_index
+				WHERE tc.session_id = ? AND tc.tool_use_id = ?`,
+				"ref-match", "call-1",
+			).Scan(&summaryLength, &eventLength))
+			assert.Equal(t, len(storedContent), eventLength)
+			assert.Equal(t, eventLength, summaryLength)
+			assert.Equal(t, eventLength, call.ResultContentLength)
+		})
+	}
 }
 
 // TestMigrateWritesBeforeCommit verifies the write-before-commit ordering:

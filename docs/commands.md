@@ -526,13 +526,15 @@ ______________________________________________________________________
 
 ### `agentsview db migrate --images`
 
-Move retained inline tool-result image payloads out of the archive and into the
-asset store at `{dataDir}/assets`. Each payload is written as a
-content-addressed file named `<sha256hex><ext>` and the inline `input_image`
-block is replaced with an `agentsview_image` placeholder whose `image_ref` field
-holds the `asset://` reference. The `GET /api/v1/assets/{filename}` route and
-`renderMarkdown` already resolve `asset://` references, so no HTTP route and no
-frontend changes are needed.
+Move retained inline tool-result image payloads from currently stored archive
+rows into the asset store at `{dataDir}/assets`. Each payload is written as a
+content-addressed file named `<sha256hex><ext>`. Before the row changes, an
+existing object must have the expected byte count and SHA-256 digest. A missing
+or corrupt object is replaced while the source bytes remain available. The
+inline `input_image` block is replaced with an `agentsview_image` placeholder
+whose `image_ref` field holds the `asset://` reference. The
+`GET /api/v1/assets/{filename}` route and `renderMarkdown` resolve these
+references from the local assets directory.
 
 The image appears when a tool result's output is switched to formatted mode and
 every other block in that result is a text block. Raw mode shows the stored
@@ -542,7 +544,12 @@ payload beside a migrated PNG. Under `require_auth` the asset route rejects the
 browser's image request, because an `img` element sends no `Authorization`
 header. Chat-imported images already carry that limit.
 
-The command requires `--images`. It never changes provider source files. Run
+Migration changes currently stored rows. A later keep-mode reparse or full
+resync can restore inline bytes from provider source files. The
+`tool_result_images = "drop"` policy keeps supported images projected during
+future ingestion and full resync. The command requires `--images` and never
+changes provider source files. A separate serving host needs the matching
+`{dataDir}/assets` directory as well as the copied database content. Run
 `db compact` separately to measure SQLite file-space reclamation after
 migration. Back up the `{dataDir}/assets` directory together with the archive.
 

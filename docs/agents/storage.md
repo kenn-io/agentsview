@@ -104,18 +104,22 @@ written.
   session lock before deleting them.
 - Compute derived values (signals, secret findings) from the projected messages
   so a later recompute from stored rows reproduces them.
+
 `db migrate --images` moves retained inline payloads out of SQLite and into the
 asset store. It writes each decoded payload to `{dataDir}/assets/<sha256hex><ext>`
-before any UPDATE commits in the session transaction. If the file already exists
-the write is skipped (content-addressed dedup). The inline block is replaced
-with an `agentsview_image` placeholder whose `image_ref` field holds
+before any UPDATE commits in the session transaction. An existing object is
+reused only when its byte count and SHA-256 digest match. A missing or corrupt
+object is replaced while the source bytes remain available. The inline block is
+replaced with an `agentsview_image` placeholder whose `image_ref` field holds
 `asset://<sha256hex><ext>` and whose `text` field carries a markdown image
 `![Image: <type>, <n> bytes](asset://<sha256hex><ext>)`. The discriminator for
-migrated blocks is `image_ref`, not `sha256`. Only the four passive media types are
-migrated: `image/png`, `image/jpeg`, `image/webp`, `image/gif`. SVG payloads
-stay inline. The command otherwise follows the same transaction, revision, and
-publication sequence as `db strip --images`. Back up `{dataDir}/assets` together
-with the archive.
+migrated blocks is `image_ref`. A later keep-mode reparse or full resync can
+restore inline bytes from provider source files. Only the four passive media
+types are migrated: `image/png`, `image/jpeg`, `image/webp`, and `image/gif`.
+SVG payloads stay inline. A separate serving host needs the matching
+`{dataDir}/assets` directory with the copied database content. The command
+otherwise follows the same transaction, revision, and publication sequence as
+`db strip --images`. Back up `{dataDir}/assets` together with the archive.
 
 ## Backend Parity
 
