@@ -2353,6 +2353,10 @@ func providerChangedPathForceParse(
 		return eventKind == "remove" &&
 			providerDeletedPhysicalSQLiteSource(agent, sourcePath)
 	}
+	// Copilot companion events compare per-session hashes before parsing.
+	if agent == parser.AgentCopilot && filepath.Clean(sourcePath) != filepath.Clean(eventPath) {
+		return false
+	}
 	if mode != parser.ProviderMigrationProviderAuthoritative {
 		return true
 	}
@@ -8626,6 +8630,18 @@ func (e *Engine) discoveredFileEffectiveMtime(
 // the owning provider's Fingerprint. The boolean reports whether the provider
 // runtime produced a usable timestamp; a false result tells the caller to fall
 // back to the legacy mtime path.
+func (e *Engine) providerFingerprint(ctx context.Context, provider parser.Provider, source parser.SourceRef) (parser.SourceFingerprint, error) {
+	if reusable, ok := provider.(parser.StoredFingerprintProvider); ok {
+		return reusable.FingerprintWithStored(ctx, source, func(path string) (string, bool) {
+			if e.pathRewriter != nil {
+				path = e.pathRewriter(path)
+			}
+			return e.db.GetFileHashByAgentPath(path, string(provider.Definition().Type))
+		})
+	}
+	return provider.Fingerprint(ctx, source)
+}
+
 func (e *Engine) providerSourceMtime(
 	ctx context.Context, file parser.DiscoveredFile,
 ) (int64, bool, error) {
@@ -8649,7 +8665,7 @@ func (e *Engine) providerSourceMtime(
 		Machine:      e.machine,
 		PathRewriter: e.pathRewriter,
 	})
-	fingerprint, err := provider.Fingerprint(ctx, source)
+	fingerprint, err := e.providerFingerprint(ctx, provider, source)
 	if err != nil {
 		return 0, false, err
 	}
@@ -9272,7 +9288,7 @@ func (e *Engine) syncProviderDBBacked(
 	discovered, sourceFailures := 0, 0
 	err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
 		discovered++
-		fingerprint, err := provider.Fingerprint(ctx, source)
+		fingerprint, err := e.providerFingerprint(ctx, provider, source)
 		if err != nil {
 			log.Printf("sync %s fingerprint: %v", agent, err)
 			sourceFailures++
@@ -11530,7 +11546,7 @@ func (e *Engine) processProviderFile(
 			}
 		}
 		if !codexFingerprintFromParse {
-			fingerprint, err = provider.Fingerprint(ctx, source)
+			fingerprint, err = e.providerFingerprint(ctx, provider, source)
 		}
 		if err != nil {
 			if (file.ForceParse || file.ForceFullParse) &&
@@ -11605,8 +11621,8 @@ func (e *Engine) processProviderFile(
 						}, true
 					}
 					if restored {
-						currentFingerprint, err := provider.Fingerprint(
-							ctx, source,
+						currentFingerprint, err := e.providerFingerprint(
+							ctx, provider, source,
 						)
 						if err != nil {
 							return processResult{err: err}, true
@@ -20032,7 +20048,7 @@ func (e *Engine) providerSessionSourceMtime(
 	if !found {
 		return 0
 	}
-	fingerprint, err := provider.Fingerprint(ctx, source)
+	fingerprint, err := e.providerFingerprint(ctx, provider, source)
 	if err != nil {
 		log.Printf("%s provider source mtime fingerprint: %v", def.Type, err)
 		return 0

@@ -679,6 +679,15 @@ add an archived or maintained mirror without replacing the original identity.
   calls can mask missing output, and missing input or request bands cannot be
   recovered. A recovered row replaces that excess without adding it twice.
 
+- **Store refresh:** The native usage insert leaves `sessions.updated_at`
+  unchanged. Its `(session_id, id)` usage index supports per-session
+  maximum-ID lookups. Agentsview hashes changed sessions' usage rows once per
+  store update and reuses unchanged transcript hashes across provider and
+  engine restarts. Session timestamps still come from the transcript. Startup
+  rebuilds store hashes; runtime refresh follows appends and latest-row
+  removal. Historical edits below an unchanged maximum ID wait for a new
+  engine or CLI sync.
+
 ## Gemini CLI (`gemini`)
 
 - **Format:** Project chat recordings written as JSONL, with older JSON
