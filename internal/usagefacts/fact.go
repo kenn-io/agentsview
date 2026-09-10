@@ -291,7 +291,7 @@ func floorTokens(value int64) int64 {
 // posit-assistant-keepalive, posit-assistant-classifier) each record one
 // provider request, so the whole prefix is request-scoped.
 func SourceIsRequestScoped(source string) bool {
-	return source == "message" || source == "goose-request" ||
+	return source == "message" || source == "goose-request" || source == "session-store" ||
 		source == "deepseek-harness" ||
 		strings.HasPrefix(source, "posit-assistant-")
 }

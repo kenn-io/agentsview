@@ -90,7 +90,7 @@ func (p *copilotProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("copilot source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, usage, err := p.parseSession(path, machine)
+	sess, msgs, usage, err := p.parseSessionWithStore(path, machine, filepath.Join(copilotRootForEventsPath(path), "session-store.db"))
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -236,7 +236,7 @@ func (s copilotSourceSet) discoverSessionPaths(root string) []string {
 }
 
 func (s copilotSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
-	roots := make([]WatchRoot, 0, len(s.roots))
+	roots := make([]WatchRoot, 0, len(s.roots)*2)
 	for _, root := range s.roots {
 		stateDir := filepath.Join(root, copilotStateDir)
 		roots = append(roots, WatchRoot{
@@ -244,6 +244,11 @@ func (s copilotSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			Recursive:    true,
 			IncludeGlobs: []string{"*.jsonl", "workspace.yaml"},
 			DebounceKey:  string(AgentCopilot) + ":state:" + stateDir,
+		})
+		roots = append(roots, WatchRoot{
+			Path:         root,
+			IncludeGlobs: []string{"session-store.db", "session-store.db-wal"},
+			DebounceKey:  string(AgentCopilot) + ":store:" + root,
 		})
 	}
 	return WatchPlan{Roots: roots}, nil
@@ -257,6 +262,19 @@ func (s copilotSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	for _, root := range s.roots {
+		if copilotStoreChangedPath(root, req.Path) {
+			var sources []SourceRef
+			for _, path := range s.discoverSessionPaths(root) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if source, ok := s.sourceRef(root, path); ok {
+					sources = append(sources, source)
+				}
+			}
+			sortJSONLSources(sources)
+			return sources, nil
+		}
 		source, ok := s.sourceForChangedPath(root, req)
 		if ok {
 			return []SourceRef{source}, nil
@@ -365,6 +383,15 @@ func (s copilotSourceSet) Fingerprint(
 			}
 		}
 	}
+	// SQLite write markers affect freshness, never session timestamps.
+	storePath := filepath.Join(copilotRootForEventsPath(path), "session-store.db")
+	state, captured := StatSQLiteContainerState(storePath)
+	if !captured {
+		if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+			return SourceFingerprint{}, fmt.Errorf("cannot capture copilot session store state %s", storePath)
+		}
+	}
+	fmt.Fprintf(h, "%v", state)
 	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
 	return fingerprint, nil
 }
@@ -511,6 +538,7 @@ func copilotProviderCapabilities() Capabilities {
 			ExcludedSessions:     CapabilityNotApplicable,
 			ForceReplaceOnParse:  CapabilityNotApplicable,
 		},
+		Sync: ProviderSyncSemantics{FingerprintHashRequiredForFreshness: true},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			Cwd:                  CapabilitySupported,
@@ -522,5 +550,28 @@ func copilotProviderCapabilities() Capabilities {
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
+	}
+}
+
+func copilotRootForEventsPath(eventsPath string) string {
+	stateDir := filepath.Dir(eventsPath)
+	if filepath.Base(eventsPath) == "events.jsonl" {
+		stateDir = filepath.Dir(stateDir)
+	}
+	if filepath.Base(stateDir) != copilotStateDir {
+		return ""
+	}
+	return filepath.Dir(stateDir)
+}
+
+func copilotStoreChangedPath(root, path string) bool {
+	if !samePath(filepath.Dir(path), root) {
+		return false
+	}
+	switch filepath.Base(path) {
+	case "session-store.db", "session-store.db-wal":
+		return true
+	default:
+		return false
 	}
 }

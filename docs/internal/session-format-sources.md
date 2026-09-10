@@ -597,7 +597,9 @@ add an archived or maintained mirror without replacing the original identity.
 
 - **Format:** Flat session JSONL or a session directory containing
   `events.jsonl`.
+
 - **Evidence:** `documentation`.
+
 - **Upstream:** The public
   [Copilot CLI repository](https://github.com/github/copilot-cli) at
   `fd24cea5cb11da4e630485ff2d9269318b8c2a4e` and
@@ -614,12 +616,14 @@ add an archived or maintained mirror without replacing the original identity.
   [Copilot format notes](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/docs/providers/copilot.md)
   and
   [parser](https://github.com/getagentseal/codeburn/blob/3472885629c41725b40c19c0780ecce148b067bf/src/providers/copilot.ts).
+
 - **Usage and cost:** Assistant messages can persist model identity and output
   tokens. Shutdown metrics can persist input, output, cache-read, cache-write,
-  and reasoning totals. When the latter are absent, Agentsview records only
-  known per-message output tokens; it does not infer input, cache, reasoning,
-  or credit totals. Known-model tokens use catalog estimates; the existing
-  shutdown reported-cost treatment is unchanged.
+  and reasoning totals. When both shutdown and store usage are absent,
+  Agentsview records only known per-message output tokens; it does not infer
+  input, cache, reasoning, or credit totals. Known-model tokens use catalog
+  estimates; the existing shutdown reported-cost treatment is unchanged.
+
 - **Agentsview:** `internal/parser/copilot.go` and
   `internal/parser/copilot_provider.go`. Reverified 2026-07-28 against local
   Copilot CLI 1.0.76-0 transcripts: `tool.execution_start` and
@@ -629,6 +633,51 @@ add an archived or maintained mirror without replacing the original identity.
   Reverified 2026-09-04 against current local transcripts: an
   `assistant.message` can carry `data.model` and `data.outputTokens` when no
   usable `session.shutdown` metrics are present.
+
+- **Store evidence:** Reverified 2026-09-10 against the published Copilot CLI
+  1.0.83
+  [native package](https://registry.npmjs.org/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.83.tgz)
+  (SHA1 `8b8f67a38e893b61e6cef9c011a6fe22d8fdcd4d`). Native tracking writes
+  one usage row per model call, including multiple calls in one turn. Store
+  rows therefore use request pricing without a message ordinal. The native
+  emitter supplies ISO timestamps. A controlled SQLite writer lock rejected an
+  earlier usage insert; a later insert succeeded, and flush did not replay the
+  failed insert. A maximum row timestamp is not proof of complete transcript
+  coverage. The package's embedded schema and tracking handoff confirm the
+  queried token fields and explicit event timestamp.
+
+- **Optional store schema:** Reverified 2026-09-10 against the published
+  [Copilot CLI 1.0.60 package](https://registry.npmjs.org/@github/copilot/-/copilot-1.0.60.tgz)
+  (SHA1 `8c3a6ae7f9b98986092a9adcb6a2e4d42d915ae3`). Its `app.js`
+  initializes session-store schema version 4 without `assistant_usage_events`.
+  Running that initialization SQL in isolated SQLite reproduced the missing
+  table. A store without the required usage schema leaves transcript and
+  shutdown usage available.
+
+- **Store refresh:** Store database and WAL writes participate in incremental
+  sync cutoff filtering without changing session activity timestamps. Parent
+  directory timestamps and available file change times also retain deleted or
+  replaced stores whose mtimes are old. Non-missing stat errors retain the
+  source for worker verification; operational read failures preserve the
+  archived result and remain retryable. Reverified 2026-09-10 with isolated
+  sync tests for store-only writes in both journal modes, deletion,
+  replacement with an older mtime, database/WAL stat errors, and a lock
+  followed by a retry without another store write.
+
+- **Store marker capture:** Reverified 2026-09-10 with isolated SQLite writes
+  and connection closes. WAL cleanup racing a marker read can leave usage
+  readable while the marker capture fails. Failed captures remain retryable;
+  only a confirmed missing database uses the absent-store fingerprint. Parser
+  regressions cover failed database/WAL captures, recovery, and an absent
+  store.
+
+- **Store accounting:** For sessions starting June 1, 2026 or later, observed
+  store tokens replace shutdown token estimates. The latest shutdown reported
+  cost remains authoritative; store tokens use catalog estimates, not inferred
+  invoice prices. Overlapping transcript output contributes only its positive
+  per-model excess over store output. This is a lower bound: extra store-only
+  calls can mask missing output, and missing input or request bands cannot be
+  recovered. A recovered row replaces that excess without adding it twice.
 
 ## Gemini CLI (`gemini`)
 

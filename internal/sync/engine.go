@@ -8498,6 +8498,32 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	if isS3SourcePath(file.Path) {
 		return discoveredFileMtime(file)
 	}
+	// Copilot store changes must pass the cutoff even when the transcript is
+	// old. Parent timestamps expose deletions; ctime catches restored mtimes.
+	// Keep these stat-only signals separate from persisted session mtimes.
+	if file.Agent == parser.AgentCopilot {
+		mtime, err := discoveredFileMtime(file)
+		if err != nil {
+			return 0, err
+		}
+		root := filepath.Dir(filepath.Dir(file.Path))
+		if filepath.Base(file.Path) == "events.jsonl" {
+			root = filepath.Dir(root)
+		}
+		storePath := filepath.Join(root, "session-store.db")
+		for _, path := range []string{storePath, storePath + "-wal", root} {
+			info, err := os.Stat(path)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return 0, err
+			}
+			changeTime, _ := fileChangeTime(path, info)
+			mtime = max(mtime, info.ModTime().UnixNano(), changeTime)
+		}
+		return mtime, nil
+	}
 	// RooCode is excluded from the provider-Fingerprint path for cost, not
 	// correctness: its Fingerprint content-hashes history_item.json plus
 	// ui_messages.json, so consulting it here would read every task's full
@@ -14593,15 +14619,6 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// on scheduled syncs. Gemini relies on the post-fingerprint DB hash check
 	// instead (providerFingerprintHashRequiredForFreshness), which catches a
 	// resolved-project change even when size and mtime are unchanged.
-	case parser.AgentCopilot:
-		mtime := copilotEffectiveMtime(path, info)
-		effectiveInfo := fakeSnapshotInfo{
-			fSize:  info.Size(),
-			fMtime: mtime,
-		}
-		if e.shouldSkipByPath(path, effectiveInfo) {
-			return mtime, true
-		}
 	case parser.AgentRooCode:
 		// RooCode's fingerprint is composite (history_item.json plus
 		// ui_messages.json) and content-hashes both files. The
@@ -15738,9 +15755,6 @@ func pickPreferredCodexDiscoveredFile(
 	return chosen
 }
 
-// copilotEffectiveMtime returns max(events.jsonl mtime,
-// workspace.yaml mtime). For flat .jsonl sessions (no
-// workspace.yaml sibling) it returns the events.jsonl mtime.
 // roocodeEffectiveStat returns the composite size and latest mtime of
 // a RooCode task's history_item.json and its ui_messages.json sibling
 // using stat calls only. The values mirror what
@@ -15787,6 +15801,9 @@ func kiloLegacyEffectiveStat(metadataPath string, info os.FileInfo) (int64, int6
 	return size, mtime
 }
 
+// copilotEffectiveMtime returns max(events.jsonl mtime,
+// workspace.yaml mtime). For flat .jsonl sessions (no
+// workspace.yaml sibling) it returns the events.jsonl mtime.
 func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
 	m := info.ModTime().UnixNano()
 	if filepath.Base(eventsPath) != "events.jsonl" {

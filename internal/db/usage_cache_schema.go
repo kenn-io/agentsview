@@ -36,7 +36,8 @@ const (
 	// same facts and catalog would otherwise keep the unpriced costs.
 	// Version 10 rebuilds rollups with Bedrock pricing for namespaced Codex
 	// models, including historical AWS rates for timestamped usage.
-	usageCacheFormatVersion             = 10
+	// Version 11 rebuilds Copilot store usage with request-scoped pricing.
+	usageCacheFormatVersion             = 11
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
