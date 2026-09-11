@@ -47,6 +47,21 @@ func assertTimingScan(t *testing.T, root string, files map[string]string, wantCo
 }
 
 func TestRunTimingBudgetFixtures(t *testing.T) {
+	t.Run("repository-relative subdirectory keeps allowances", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n"), 0o644))
+		files := map[string]string{
+			"internal/sync/engine_test.go": fixtureSource(fixtureImports, "TestStartupMaintenanceWaitsForForegroundSyncAndSerializesLaterSyncs", "assert.Never(t, nil, 100*time.Millisecond, time.Millisecond)"),
+		}
+		writeTimingFixtures(t, root, files)
+		var stderr bytes.Buffer
+		assert.Equal(t, 0, run([]string{filepath.Join(root, "internal", "sync")}, &stderr))
+		assert.Empty(t, stderr.String())
+		after, err := os.ReadFile(filepath.Join(root, "internal", "sync", "engine_test.go"))
+		require.NoError(t, err)
+		assert.Equal(t, []byte(files["internal/sync/engine_test.go"]), after)
+	})
+
 	for _, assertion := range []string{"assert.Eventually", "require.Eventually", "assert.Never", "require.Never"} {
 		t.Run(assertion+" rejects 50ms", func(t *testing.T) {
 			files := map[string]string{"fixture_test.go": fixtureSource(fixtureImports, "TestFixture", assertion+"(t, func() bool { panic(\"must never execute\") }, 50*time.Millisecond, time.Millisecond)")}

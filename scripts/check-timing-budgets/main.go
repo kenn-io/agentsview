@@ -82,15 +82,23 @@ func check(root string, stderr io.Writer) (int, error) {
 	if !info.IsDir() {
 		return 0, fmt.Errorf("%s: expected a directory", root)
 	}
+	walkRoot, err := filepath.Abs(root)
+	if err != nil {
+		return 0, err
+	}
+	allowanceRoot := findModuleRoot(walkRoot)
+	if allowanceRoot == "" {
+		allowanceRoot = walkRoot
+	}
 	used := make(map[budgetKey]int)
 	violations := 0
-	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(walkRoot, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		name := entry.Name()
 		if entry.IsDir() {
-			if path != root && (name == "vendor" || name == "node_modules" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+			if path != walkRoot && (name == "vendor" || name == "node_modules" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -98,7 +106,7 @@ func check(root string, stderr io.Writer) (int, error) {
 		if !entry.Type().IsRegular() || !strings.HasSuffix(name, "_test.go") {
 			return nil
 		}
-		relativePath, err := filepath.Rel(root, path)
+		relativePath, err := filepath.Rel(allowanceRoot, path)
 		if err != nil {
 			return err
 		}
@@ -107,6 +115,19 @@ func check(root string, stderr io.Writer) (int, error) {
 		return err
 	})
 	return violations, err
+}
+
+func findModuleRoot(dir string) string {
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 func checkFile(path, relativePath string, used map[budgetKey]int, stderr io.Writer) (int, error) {
