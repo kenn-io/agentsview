@@ -306,6 +306,27 @@ func TestCrushUnknownRoleIsSkipped(t *testing.T) {
 	assert.Equal(t, RoleUser, messages[0].Role)
 }
 
+func TestCrushSubagentToolCallLinking(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const created = int64(1_789_093_626)
+	// Crush names subagent sessions "<own-uuid>$$<spawning-tool-call-id>".
+	fixture.insertSession(t, "parent", "Parent", "", created, created, 0, 0, 0)
+	fixture.insertSession(t,
+		"child-uuid$$chatcmpl-tool-fetch", "Child", "parent",
+		created, created, 0, 0, 0)
+	fixture.insertMessage(t, "msg-p", "parent", "assistant", `[
+		{"type":"tool_call","data":{"id":"chatcmpl-tool-fetch","name":"agentic_fetch","input":"{\"url\":\"https://example.test\"}","finished":true,"provider_executed":false}}
+	]`, created, "glm-5.3-flash", "")
+
+	_, messages, err := parseCrushSession(fixture.dbPath, "parent", "m")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, "crush:child-uuid$$chatcmpl-tool-fetch",
+		messages[0].ToolCalls[0].SubagentSessionID,
+		"the spawning tool call must link to the child session")
+}
+
 func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	fixture := newCrushTestFixture(t)
 	const created = int64(1_789_093_626)
@@ -385,6 +406,37 @@ func TestCrushRegistryCompletenessIncludesCrush(t *testing.T) {
 	assert.Equal(t, "Charm Crush", def.DisplayName)
 	assert.True(t, def.PeriodicReconcile)
 	assert.True(t, def.Usage.NoPerMessageTokenData)
+}
+
+func TestCrushProviderParseCarriesUsageEvents(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const created = int64(1_789_093_626)
+	fixture.insertSession(t, "sess-use", "Usage", "",
+		created, created, 43_922, 185, 0.0126)
+
+	factory := newCrushProviderFactory(AgentDef{Type: AgentCrush, IDPrefix: "crush:"})
+	provider := factory.NewProvider(ProviderConfig{
+		Roots: []string{fixture.dataDir},
+	})
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: SourceRef{
+			Provider:    AgentCrush,
+			Key:         VirtualSourcePath(fixture.dbPath, "sess-use"),
+			DisplayPath: VirtualSourcePath(fixture.dbPath, "sess-use"),
+			Opaque: dbBackedSource{
+				Root: fixture.dataDir, DBPath: fixture.dbPath, SessionID: "sess-use",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	require.Len(t, outcome.Results[0].Result.UsageEvents, 1,
+		"the sync engine writes usage rows only from ParseResult.UsageEvents")
+	event := outcome.Results[0].Result.UsageEvents[0]
+	assert.Equal(t, "crush:sess-use", event.SessionID)
+	assert.Equal(t, 43_922, event.InputTokens)
+	assert.Equal(t, 185, event.OutputTokens)
+	require.NotNil(t, event.Cost)
 }
 
 func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
