@@ -371,7 +371,7 @@ func parseCrushSession(
 	if projectDir == "" {
 		projectDir = filepath.Clean(filepath.Dir(dataDir))
 	}
-	project := ExtractProjectFromCwd(projectDir)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, projectDir, "")
 	if project == "" {
 		project = "crush"
 	}
@@ -472,18 +472,28 @@ func crushSubagentLinks(
 func loadCrushMessages(
 	ctx context.Context, db *sql.DB, sessionID string,
 ) ([]ParsedMessage, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT id,
-		       COALESCE(role, ''),
-		       COALESCE(parts, '[]'),
-		       COALESCE(model, ''),
-		       COALESCE(provider, ''),
-		       COALESCE(created_at, 0),
-		       COALESCE(is_summary_message, 0)
-		  FROM messages
-		 WHERE session_id = ?
-		 ORDER BY created_at, rowid
-	`, sessionID)
+	columns, err := crushTableColumns(ctx, db, "messages")
+	if err != nil {
+		return nil, fmt.Errorf("inspecting crush messages columns: %w", err)
+	}
+	selectCols := []string{
+		"id",
+		"COALESCE(role, '')",
+		"COALESCE(parts, '[]')",
+		"COALESCE(model, '')",
+		"COALESCE(created_at, 0)",
+	}
+	if columns["provider"] {
+		selectCols = append(selectCols, "COALESCE(provider, '')")
+	}
+	if columns["is_summary_message"] {
+		selectCols = append(selectCols, "COALESCE(is_summary_message, 0)")
+	}
+	query := "SELECT " + strings.Join(selectCols, ", ") + `
+		FROM messages
+	   WHERE session_id = ?
+	   ORDER BY created_at, rowid`
+	rows, err := db.QueryContext(ctx, query, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("listing crush messages for %s: %w", sessionID, err)
 	}
@@ -495,13 +505,18 @@ func loadCrushMessages(
 			role      string
 			parts     string
 			model     string
-			provider  string
 			createdAt int64
+			provider  string
 			isSummary int64
 		)
-		if err := rows.Scan(
-			&rowID, &role, &parts, &model, &provider, &createdAt, &isSummary,
-		); err != nil {
+		scanArgs := []any{&rowID, &role, &parts, &model, &createdAt}
+		if columns["provider"] {
+			scanArgs = append(scanArgs, &provider)
+		}
+		if columns["is_summary_message"] {
+			scanArgs = append(scanArgs, &isSummary)
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
 			return nil, fmt.Errorf("scanning crush message row: %w", err)
 		}
 		message, ok, err := buildCrushMessage(

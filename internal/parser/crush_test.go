@@ -342,8 +342,8 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 
 	// A Crush data dir with projects.json expands to per-project roots.
 	registryDir := t.TempDir()
-	registry := `{"projects":[{"path":"` + fixture.projectDir +
-		`","data_dir":"` + fixture.dataDir + `"}]}`
+	registry := `{"projects":[{"path":"` + filepath.ToSlash(fixture.projectDir) +
+		`","data_dir":"` + filepath.ToSlash(fixture.dataDir) + `"}]}`
 	require.NoError(t, os.WriteFile(
 		filepath.Join(registryDir, CrushProjectsFileName),
 		[]byte(registry), 0o600,
@@ -541,4 +541,47 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.False(t, found)
+}
+
+func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
+	t.Parallel()
+	projectDir := t.TempDir()
+	dataDir := filepath.Join(projectDir, ".crush")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	dbPath := filepath.Join(dataDir, CrushDBName)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY, parent_session_id TEXT, title TEXT NOT NULL,
+			message_count INTEGER NOT NULL DEFAULT 0,
+			prompt_tokens INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			cost REAL NOT NULL DEFAULT 0.0,
+			updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL
+		);
+		CREATE TABLE messages (
+			id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+			role TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]',
+			model TEXT, created_at INTEGER NOT NULL
+		);
+		INSERT INTO sessions (id, title, updated_at, created_at)
+		VALUES ('sess-min', 'Minimal', 1000, 1000);
+		INSERT INTO messages (id, session_id, role, parts, model, created_at)
+		VALUES ('msg-1', 'sess-min', 'user', '[]', '', 1000);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	session, messages, err := parseCrushSession(
+		context.Background(), dbPath, "sess-min", "m", false, nil,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.Len(t, messages, 1)
+	assert.Equal(t, RoleUser, messages[0].Role)
+	assert.Empty(t, messages[0].ProviderID)
+	assert.False(t, messages[0].IsSystem)
 }

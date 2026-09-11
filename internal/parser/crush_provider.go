@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -342,9 +343,7 @@ func normalizeCrushRoots(roots []string) ([]string, map[string][]string, map[str
 		}
 		registryMapping[root] = expanded
 		mapping := crushProjectDirsMapping(filepath.Join(root, CrushProjectsFileName))
-		for k, v := range mapping {
-			projectMapping[k] = v
-		}
+		maps.Copy(projectMapping, mapping)
 		for _, dir := range expanded {
 			add(dir)
 		}
@@ -662,14 +661,18 @@ func readCrushTrackedDatabaseFrom(
 func latestCrushRowCursor(
 	ctx context.Context, db *sql.DB, table string,
 ) (crushRowCursor, error) {
-	identityExpr, ok := crushRowIdentityExpression(table)
+	columns, err := crushTableColumns(ctx, db, table)
+	if err != nil {
+		return crushRowCursor{}, fmt.Errorf("inspecting crush %s columns: %w", table, err)
+	}
+	identityExpr, ok := crushRowIdentityExpression(table, columns)
 	if !ok {
 		return crushRowCursor{}, fmt.Errorf("unsupported crush cursor table %q", table)
 	}
 	query := "SELECT rowid, " + identityExpr + " FROM " + table +
 		" ORDER BY rowid DESC LIMIT 1"
 	var cursor crushRowCursor
-	err := db.QueryRowContext(ctx, query).Scan(&cursor.id, &cursor.identity)
+	err = db.QueryRowContext(ctx, query).Scan(&cursor.id, &cursor.identity)
 	if errors.Is(err, sql.ErrNoRows) {
 		return crushRowCursor{}, nil
 	}
@@ -679,14 +682,17 @@ func latestCrushRowCursor(
 	return cursor, nil
 }
 
-func crushRowIdentityExpression(table string) (string, bool) {
+func crushRowIdentityExpression(table string, columns map[string]bool) (string, bool) {
 	switch table {
 	case "sessions":
 		return "CAST(id AS TEXT)", true
 	case "messages":
-		return "session_id || char(31) || COALESCE(role, '') || char(31) || " +
-			"CAST(COALESCE(created_at, 0) AS TEXT) || char(31) || " +
-			"COALESCE(CAST(finished_at AS TEXT), '')", true
+		expr := "session_id || char(31) || COALESCE(role, '') || char(31) || " +
+			"CAST(COALESCE(created_at, 0) AS TEXT)"
+		if columns["finished_at"] {
+			expr += " || char(31) || COALESCE(CAST(finished_at AS TEXT), '')"
+		}
+		return expr, true
 	default:
 		return "", false
 	}
@@ -707,12 +713,16 @@ func crushCursorStillValid(
 	if check.previous.id == 0 {
 		return true, nil
 	}
-	identityExpr, ok := crushRowIdentityExpression(check.table)
+	columns, err := crushTableColumns(ctx, db, check.table)
+	if err != nil {
+		return false, fmt.Errorf("inspecting crush %s columns: %w", check.table, err)
+	}
+	identityExpr, ok := crushRowIdentityExpression(check.table, columns)
 	if !ok {
 		return false, fmt.Errorf("unsupported crush cursor table %q", check.table)
 	}
 	var identity string
-	err := db.QueryRowContext(
+	err = db.QueryRowContext(
 		ctx, "SELECT "+identityExpr+" FROM "+check.table+" WHERE rowid = ?",
 		check.previous.id,
 	).Scan(&identity)
