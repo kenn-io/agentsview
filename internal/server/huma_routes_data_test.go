@@ -358,6 +358,8 @@ func TestDataStripImagesAppliesAndIsIdempotent(t *testing.T) {
 		server.WithSessionMutationNotifier(func() { notified++ }),
 	})
 	seedSessionWithImage(t, te, sid, "test-project")
+	events, unsubscribe := te.broadcaster.Subscribe()
+	t.Cleanup(unsubscribe)
 
 	// First apply: must report changed=1 and the stored row must hold the placeholder.
 	w := te.post(t, "/api/v1/data/strip-images", `{"confirmed":true}`)
@@ -368,6 +370,12 @@ func TestDataStripImagesAppliesAndIsIdempotent(t *testing.T) {
 	// The stored row must now hold the agentsview_image placeholder, not the original data: URI.
 	assert.Contains(t, readToolCallContent(t, te, sid), "agentsview_image", "stored row must hold the placeholder after apply")
 	assert.Equal(t, 1, notified, "committed cleanup must notify session consumers")
+	select {
+	case event := <-events:
+		assert.Equal(t, "sessions", event.Scope)
+	default:
+		require.FailNow(t, "committed cleanup must broadcast a sessions event")
+	}
 
 	// Second apply (idempotent): sessions=0, changed=0, payloads=0 (PI-5).
 	w2 := te.post(t, "/api/v1/data/strip-images", `{"confirmed":true}`)
@@ -378,6 +386,11 @@ func TestDataStripImagesAppliesAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, 0, report2.Changed, "second apply must change nothing (PI-5)")
 	assert.Equal(t, int64(0), report2.Payloads, "second apply must find no payloads (PI-5)")
 	assert.Equal(t, 1, notified, "unchanged cleanup must not notify again")
+	select {
+	case event := <-events:
+		assert.Fail(t, "unchanged cleanup broadcast an unexpected event", "%+v", event)
+	default:
+	}
 }
 
 func TestDataStripImagesNotifiesAfterPartialCommit(t *testing.T) {
@@ -387,6 +400,8 @@ func TestDataStripImagesNotifiesAfterPartialCommit(t *testing.T) {
 	})
 	seedSessionWithImage(t, te, "img-a", "test-project")
 	seedSessionWithImage(t, te, "img-b", "test-project")
+	events, unsubscribe := te.broadcaster.Subscribe()
+	t.Cleanup(unsubscribe)
 	originalContent := readToolCallContent(t, te, "img-b")
 	// The cleanup visits sessions by ID within the project. Fail the
 	// second session's write after the first session has committed.
@@ -406,6 +421,12 @@ func TestDataStripImagesNotifiesAfterPartialCommit(t *testing.T) {
 	assert.Contains(t, readToolCallContent(t, te, "img-a"), "agentsview_image")
 	assert.Equal(t, originalContent, readToolCallContent(t, te, "img-b"))
 	assert.Equal(t, 1, notified, "committed sessions must notify even when cleanup fails")
+	select {
+	case event := <-events:
+		assert.Equal(t, "sessions", event.Scope)
+	default:
+		require.FailNow(t, "partially committed cleanup must broadcast a sessions event")
+	}
 }
 
 func TestDataStripImagesPreviewLeavesArchiveUnchanged(t *testing.T) {

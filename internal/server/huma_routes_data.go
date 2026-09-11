@@ -279,6 +279,9 @@ func (s *Server) humaDataStripImages(
 		if stripErr != nil || report.Changed > 0 {
 			s.notifySessionMutation()
 		}
+		if report.Changed > 0 && s.broadcaster != nil {
+			s.broadcaster.Emit("sessions")
+		}
 		return stripErr
 	})
 	if errors.Is(err, syncpkg.ErrSyncInProgress) ||
