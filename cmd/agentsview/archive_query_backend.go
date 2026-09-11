@@ -103,10 +103,6 @@ func resolveArchiveQueryBackendWithConfig(
 		return nil, nil, err
 	}
 	cleanup := func() { closeWriteDB(database, writeLock) }
-	if err := database.ApplyMachineAliases(ctx, &cfg); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
 	return localArchiveQueryBackend{
 		cfg:           cfg,
 		database:      database,

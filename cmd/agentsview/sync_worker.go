@@ -166,9 +166,6 @@ func runSyncWorkerStartup(
 		return err
 	}
 	defer closeWriteDB(database, writeLock)
-	if err := database.ApplyMachineAliases(ctx, &cfg); err != nil {
-		return err
-	}
 
 	// Remove stale temp DB from a prior crashed resync before ResyncAll
 	// stages a fresh one, matching runServe's startup cleanup.
@@ -263,9 +260,6 @@ func runSyncWorkerResyncBuild(
 		return fmt.Errorf("resync-build: open read-only archive: %w", err)
 	}
 	defer origRO.Close()
-	if err := origRO.ApplyMachineAliases(ctx, &cfg); err != nil {
-		return err
-	}
 
 	engine := sync.NewEngine(origRO, workerEngineConfig(cfg))
 	defer engine.Close()

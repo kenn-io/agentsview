@@ -2010,7 +2010,7 @@ func TestLoadResolvesLocalMachineNameFromHostname(t *testing.T) {
 	assert.Equal(t, hostname, cfg.LocalMachineName)
 }
 
-func TestMachineNameSurvivesHostnameChanges(t *testing.T) {
+func TestInstallationIDSurvivesHostnameChanges(t *testing.T) {
 	dir := setupTestEnv(t)
 	const id = "0123456789abcdef0123456789abcdef"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "telemetry-install-id"), []byte(id), 0o600))
@@ -2027,7 +2027,7 @@ func TestMachineNameSurvivesHostnameChanges(t *testing.T) {
 		}
 		// Each fresh config represents a process starting on a different network.
 		require.NoError(t, finishLoadedConfig(&cfg))
-		assert.Equal(t, "local", cfg.LocalMachineName)
+		assert.Equal(t, hostname, cfg.LocalMachineName)
 		assert.Equal(t, id, cfg.SourceMachines[parser.AgentClaude][localDir])
 		require.Len(t, cfg.SessionSources, 2)
 		assert.Equal(t, id, cfg.SessionSources[0].Machine)
@@ -2044,7 +2044,7 @@ func TestMachineNameSurvivesHostnameChanges(t *testing.T) {
 	require.NoError(t, err)
 	cfg, err := LoadReadOnly()
 	require.NoError(t, err)
-	assert.Equal(t, "local", cfg.LocalMachineName)
+	assert.Equal(t, id, cfg.InstallationID)
 	after, err := os.ReadFile(filepath.Join(dir, configFileName))
 	require.NoError(t, err)
 	assert.Equal(t, before, after)

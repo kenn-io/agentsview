@@ -73,10 +73,6 @@ func syncService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening db: %w", err)
 	}
-	if err := d.ApplyMachineAliases(context.Background(), &cfg); err != nil {
-		closeWriteDB(d, lock)
-		return nil, nil, err
-	}
 	engine := sync.NewEngine(d, sync.EngineConfig{
 		AgentDirs:          cfg.AgentDirs,
 		SourceMachines:     cfg.SourceMachines,

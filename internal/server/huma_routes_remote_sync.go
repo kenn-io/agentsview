@@ -43,7 +43,7 @@ func (s *Server) humaRemoteSyncTargets(
 	if _, ok := s.db.(*db.DB); !ok {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
-	targets, err := s.resolveRemoteSyncTargets(ctx)
+	targets, err := remotesync.ResolveTargets(s.ingestionConfig())
 	if err != nil {
 		return nil, apiError(http.StatusInternalServerError, err.Error())
 	}
@@ -51,14 +51,6 @@ func (s *Server) humaRemoteSyncTargets(
 		ProtocolVersion: strconv.Itoa(remotesync.ProtocolVersion),
 		Body:            targets,
 	}, nil
-}
-
-func (s *Server) resolveRemoteSyncTargets(ctx context.Context) (remotesync.TargetSet, error) {
-	cfg := s.ingestionConfig()
-	if err := s.db.(*db.DB).ApplyMachineAliases(ctx, &cfg); err != nil {
-		return remotesync.TargetSet{}, err
-	}
-	return remotesync.ResolveTargets(cfg)
 }
 
 func requireRemoteSyncProtocol(w http.ResponseWriter, r *http.Request) bool {
@@ -87,7 +79,7 @@ func (s *Server) remoteSyncManifestHTTP(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid manifest request", http.StatusBadRequest)
 		return
 	}
-	allowed, err := s.resolveRemoteSyncTargets(r.Context())
+	allowed, err := remotesync.ResolveTargets(s.ingestionConfig())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -146,7 +138,7 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid archive request", http.StatusBadRequest)
 		return
 	}
-	allowed, err := s.resolveRemoteSyncTargets(r.Context())
+	allowed, err := remotesync.ResolveTargets(s.ingestionConfig())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

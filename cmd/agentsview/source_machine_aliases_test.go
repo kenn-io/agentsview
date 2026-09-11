@@ -1,47 +1,12 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
-
-func TestSessionSyncNormalizesRecordedSourceMachineAlias(t *testing.T) {
-	isolateDirectCLISources(t)
-	dir := t.TempDir()
-	root := filepath.Join(dir, "claude", "project")
-	require.NoError(t, os.MkdirAll(root, 0o700))
-	path := filepath.Join(root, "current.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
-		AddClaudeUser("2026-07-12T00:00:00Z", "source machine alias check").String()), 0o600))
-	cfg := config.Config{
-		DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"),
-		InstallationID: "installation-a", LocalMachineName: "renamed-host",
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {filepath.Dir(root)}},
-		SourceMachines: map[parser.AgentType]map[string]string{
-			parser.AgentClaude: {filepath.Dir(root): "old-host"},
-		},
-	}
-	database, err := openDB(cfg)
-	require.NoError(t, err)
-	require.NoError(t, database.SetSyncState(db.MachineAliasKeyPrefix+"old-host", "installation-a"))
-	require.NoError(t, database.Close())
-
-	svc, cleanup, err := syncService(cfg, transport{Mode: transportDirect})
-	require.NoError(t, err)
-	defer cleanup()
-	detail, err := svc.Sync(t.Context(), service.SyncInput{Path: path})
-	require.NoError(t, err)
-	assert.Equal(t, "installation-a", detail.Machine)
-}
 
 func TestDirectArchiveReportsResolveMachineAliases(t *testing.T) {
 	database := newTestDB(t)

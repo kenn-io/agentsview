@@ -523,11 +523,12 @@ RooCode-derived VS Code extension that wrote per-task JSON under
 ## Filesystem Session Sync
 
 Local imports use a persisted installation ID, so updates and network changes do
-not split sessions across machine identities. `installation.json` stores the ID
-and initial display label; `local_machine_name` in `config.toml` overrides the
-label after a daemon restart. Upgrades adopt historical local sessions when the
-archive has saved ownership. Older archives keep historical keys until you
-select the local ones with `agentsview db adopt-machine`; see the
+not split sessions across machine identities. `telemetry-install-id` stores the
+ID independently of telemetry. The display label defaults to the current
+hostname; set `local_machine_name` in `config.toml` for a fixed label after a
+daemon restart. Upgrades adopt historical local sessions when the archive has
+saved ownership. Older archives keep historical keys until you select the local
+ones with `agentsview db adopt-machine`; see the
 [upgrade guide](https://agentsview.io/configuration/#upgrading-historical-machine-keys).
 
 One primary AgentsView instance can ingest native agent session directories
@@ -545,9 +546,9 @@ Structured sources are additive to existing `agents.copilot.dirs`,
 source machine without namespacing native session IDs. Transport source session
 files only -- never copy `sessions.db` or its WAL files. Machine keys are
 captured at first ingestion; ordinary sync and `agentsview sync --full` preserve
-the stored key. Use a peer's ID from `installation.json` for remote roots and
-omit `machine` for local roots. Adopted old keys remain aliases for existing
-filters and URLs.
+the stored key. Use a peer's ID from `telemetry-install-id` for remote roots.
+For local roots, omit `machine`, removing any existing hostname setting. Adopted
+old keys remain aliases for existing filters and URLs.
 
 See the [Filesystem Session Sync guide](https://agentsview.io/filesystem-sync/)
 for Git, rsync, shared-mount, freshness, and operational guidance.

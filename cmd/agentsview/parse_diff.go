@@ -125,9 +125,6 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 
 	database, writeLock := mustOpenWriteDB(context.Background(), appCfg)
 	defer closeWriteDB(database, writeLock)
-	if err := database.ApplyMachineAliases(context.Background(), &appCfg); err != nil {
-		fatal("parse-diff: %v", err)
-	}
 
 	engine := sync.NewDiffEngine(database, sync.EngineConfig{
 		AgentDirs:               appCfg.AgentDirs,

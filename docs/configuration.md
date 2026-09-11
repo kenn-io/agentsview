@@ -18,7 +18,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── sessions.db      # SQLite database (WAL mode)
 ├── vectors.db       # Semantic-search vector index (when [vector] is enabled)
 ├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
-├── installation.json # Installation ID and initial display name
+├── telemetry-install-id # Application installation ID
 ├── config.toml      # Configuration file
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
@@ -29,7 +29,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 `usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user data.
 It is safe to delete when no AgentsView process is running; the next usage query
 rebuilds it automatically. Back up `sessions.db` for session history and
-`config.toml` for settings and `installation.json` for installation identity.
+`config.toml` for settings and `telemetry-install-id` for installation identity.
 
 The desktop app and CLI share a detached local daemon for fresh reads and
 writes. A running daemon owns local SQLite writes for this data directory and
@@ -118,29 +118,25 @@ Limits of the narrower policies:
 
 ## Installation Identity
 
-Local sessions use a random installation ID and an initial display name, saved in
-`installation.json` as `id` and `name`. The name defaults to the hostname. On
-upgrade, AgentsView adopts an existing `telemetry-install-id` once, then removes
-that old file. This works with telemetry disabled. Read-only commands leave both
-files unchanged.
+Local sessions use a random installation ID saved in `telemetry-install-id` in
+this data directory. AgentsView reuses an existing ID from that file or creates
+one, even when telemetry is disabled. PostHog consumes the same ID. Read-only
+commands leave the file unchanged.
 
 The ID identifies an installation, not physical hardware. It survives updates,
 binary replacements, restarts, and network or hostname changes. A fresh data
 directory creates a new ID; copying the data directory copies the identity.
-Restore the original `installation.json` from a backup to
-keep that identity. Deleting it deliberately creates a distinct installation;
-that new installation does not automatically take ownership of the old one's
-sessions. If recovery starts with a corrupt record and a leftover
-`telemetry-install-id`, remove both files only when you intend to create a new ID.
+Restore the original `telemetry-install-id` from a backup to keep that identity.
+Deleting it deliberately creates a distinct installation; that new installation
+does not automatically take ownership of the old one's sessions.
 
-The saved `name` is the default display label. Set `local_machine_name` in
-`config.toml` to override it, then run `agentsview daemon restart`. Any non-empty
-label is allowed, including `local`. Changing the label leaves session keys
-unchanged; PostgreSQL and DuckDB receive the label on the next push. Saving the
-default label does not rewrite `config.toml` or its comments. The existing cursor
-secret is reused; a missing cursor secret is still generated and saved. Machine
-filters use keys; `/api/v1/machines` returns display labels and known aliases
-separately.
+The display label defaults to the current hostname. Set `local_machine_name` in
+`config.toml` for a fixed label, then run `agentsview daemon restart`. Any
+non-empty label is allowed, including `local`. Changing the label leaves session
+keys unchanged; PostgreSQL and DuckDB receive the label on the next push.
+Creating the identity does not rewrite `config.toml` or its comments. A missing
+cursor secret is still generated and saved. Machine filters use keys;
+`/api/v1/machines` returns display labels and known aliases separately.
 
 ### Upgrading Historical Machine Keys
 
@@ -166,8 +162,9 @@ action.
 
 PostgreSQL publishes the migrated sessions and metadata on the next incremental
 push. DuckDB rebuilds its mirror once when the default machine key changes.
-The SQLite archive stays intact. PostgreSQL rejects an alias that belongs
-to another installation instead of replacing its owner.
+The SQLite archive stays intact. If two installations publish the same old
+hostname alias to PostgreSQL, the latest push determines its filter target.
+Use installation IDs to select machines unambiguously in a shared mirror.
 
 ## Config File
 
@@ -1123,9 +1120,11 @@ machine = "0123456789abcdef0123456789abcdef" # Peer installation ID
 The fields are `agent`, `dir`, and optional `machine`. Entries are additive to
 the per-agent arrays, defaults, and environment variables above. Equivalent
 roots are deduplicated; a structured entry supplies the machine key when it
-duplicates a shorthand root. Use the peer's `id` from `installation.json` for a
-remote root. An omitted `machine` uses this installation's ID. Proven old local
-keys resolve to that ID; a matching display label does not make a root local.
+duplicates a shorthand root. Use the peer's ID from `telemetry-install-id` for a
+remote root. For a local root, omit `machine` to use this installation's ID.
+If an existing local source sets `machine` to a hostname, remove that setting.
+Source keys are used literally; filter aliases and display labels do not make a
+source local.
 
 Machine attribution is captured when each session is first ingested. Changing an
 entry's `machine` value affects newly discovered sessions but does not relabel
@@ -1569,7 +1568,7 @@ startup and every 24 hours while running. The ping contains only:
 - app version and git commit
 - operating system and CPU architecture
 - the application-owned installation ID stored in
-  `~/.agentsview/installation.json`
+  `~/.agentsview/telemetry-install-id`
 
 It contains no session data, prompts, project names, file paths, account
 information, or hostname, and the events are sent with person-profile processing

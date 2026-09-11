@@ -722,9 +722,8 @@ type Config struct {
 	WriteTimeout         time.Duration          `json:"-" toml:"-"`
 	// InstallationID identifies this data directory independently of its label.
 	InstallationID string `json:"-" toml:"-"`
-	// LocalMachineName is the display label, initially the system hostname.
-	LocalMachineName           string `json:"-" toml:"local_machine_name"`
-	localMachineNameConfigured bool
+	// LocalMachineName is the display label, defaulting to the system hostname.
+	LocalMachineName string `json:"-" toml:"local_machine_name"`
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -735,7 +734,6 @@ type Config struct {
 	// each effective configured root to its machine label for sync.
 	SessionSources []SessionSource                        `json:"-" toml:"-"`
 	SourceMachines map[parser.AgentType]map[string]string `json:"-" toml:"-"`
-	machineAliases map[string]string
 	// ProviderMetadata holds provider-resolved metadata directories keyed by
 	// canonical transcript root. It is computed once while loading configuration.
 	ProviderMetadata     map[parser.AgentType]map[string][]string `json:"-" toml:"-"`
@@ -1530,7 +1528,6 @@ func (c *Config) applyConfigTOML(data string) error {
 			return fmt.Errorf("local_machine_name must be non-empty")
 		}
 		c.LocalMachineName = name
-		c.localMachineNameConfigured = true
 	}
 	if file.CursorAdminAPIKey != "" && c.CursorAdminAPIKey == "" {
 		c.CursorAdminAPIKey = file.CursorAdminAPIKey
@@ -2488,7 +2485,6 @@ func (c *Config) resolveSessionSources() error {
 	}
 	c.SessionSources = resolved
 	c.SourceMachines = sourceMachines
-	c.ApplyMachineAliases(c.machineAliases)
 	c.ProviderMetadata = metadata
 	return nil
 }

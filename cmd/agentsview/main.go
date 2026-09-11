@@ -228,9 +228,6 @@ func runServe(cfg config.Config, opts serveOptions) {
 			RemoveDaemonRuntime(runtimeRecordDataDir)
 		}
 	}()
-	if err := database.ApplyMachineAliases(ctx, &cfg); err != nil {
-		fatal("resolving source machine identities: %v", err)
-	}
 
 	if n := len(db.UserAutomationPrefixes()); n > 0 {
 		log.Printf("loaded %d user automation prefix(es) from config", n)

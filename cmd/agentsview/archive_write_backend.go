@@ -396,10 +396,6 @@ func resolveArchiveWriteBackend(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := database.ApplyMachineAliases(ctx, &appCfg); err != nil {
-		closeWriteDB(database, writeLock)
-		return nil, nil, err
-	}
 	return &localArchiveWriteBackend{
 		appCfg:   appCfg,
 		database: database,

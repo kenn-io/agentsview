@@ -972,9 +972,6 @@ func coordinateLocalSync(
 	work func(forceFull, rebuilt bool) error,
 ) (didResync bool, stats sync.SyncStats, err error) {
 	didResync = full || database.NeedsResync()
-	if err := database.ApplyMachineAliases(ctx, &appCfg); err != nil {
-		return didResync, sync.SyncStats{}, err
-	}
 	for _, def := range parser.Registry {
 		if !appCfg.IsUserConfigured(def.Type) {
 			continue

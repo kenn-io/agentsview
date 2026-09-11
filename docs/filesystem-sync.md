@@ -39,13 +39,13 @@ machine = "fedcba9876543210fedcba9876543210" # Laptop installation ID
 
 `agent` must be a supported AgentsView parser name. `dir` must be a filesystem
 root in that agent's native layout. For a remote root, set `machine` to the
-peer's `id` from `installation.json`. For a local root, omit `machine` to use
+peer's ID from `telemetry-install-id`. For a local root, omit `machine` to use
 the primary viewer's installation ID. Display labels are separate from these
 keys; `local_machine_name` changes the displayed name after a daemon restart.
 
-Hostnames adopted by this installation resolve to its ID. Those aliases remain
-reserved for existing filters and URLs; do not reuse them for another machine. A
-matching display label alone does not make a source local.
+If an existing local source sets `machine` to a hostname, remove that setting.
+Source keys are used literally; adopted hostname aliases apply only to filters
+and URLs. A matching display label does not make a source local.
 
 Per-agent `dirs` arrays and environment variables select session roots.
 Structured sources are additive:

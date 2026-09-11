@@ -98,14 +98,16 @@ description: Release history for AgentsView
   region-qualified catalog names retain their own pricing.
 
 - Keep local session history together across hostname changes. AgentsView saves
-  the installation ID and initial display name in `installation.json`, adopting
-  an existing telemetry ID once. Upgrades move historical local sessions using
+  an installation ID in `telemetry-install-id`, reusing an existing ID even
+  with telemetry disabled. Upgrades move historical local sessions using
   saved ownership; older archives keep historical keys until you select the local
   ones with `db adopt-machine`.
   Session IDs, messages, curation, and worktree rules stay intact, and old machine
   filters and URLs keep working through recorded aliases. Display-name changes
   take effect after a daemon restart and the next mirror push. PostgreSQL updates
   incrementally; DuckDB rebuilds its mirror once when the default key changes.
+  If a local `session_sources` entry sets `machine` to a hostname, remove that
+  setting so new sessions use the installation ID.
 
 - Preserve nonempty tool output from legacy Cursor text transcripts. Existing
   archived sessions gain the output on their next sync when the source files

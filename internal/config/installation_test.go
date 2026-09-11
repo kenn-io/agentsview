@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,8 +40,9 @@ func TestInstallationIdentityIsIndependentOfTelemetryAndDisplayName(t *testing.T
 	writeConfig(t, dir, map[string]any{"cursor_secret": "existing-secret"})
 	cfg, err := LoadMinimal()
 	require.NoError(t, err)
-	assert.Equal(t, "host-a.local", cfg.LocalMachineName, "clearing the override restores the initial display label")
-
+	hostname, err := os.Hostname()
+	require.NoError(t, err)
+	assert.Equal(t, hostname, cfg.LocalMachineName, "clearing the override restores the current hostname")
 }
 
 func TestInstallationIdentityLifecycle(t *testing.T) {
@@ -62,7 +62,7 @@ func TestInstallationIdentityLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.InstallationID, copied.InstallationID, "copying the data directory copies identity")
 
-	require.NoError(t, os.Remove(filepath.Join(dir, "installation.json")))
+	require.NoError(t, os.Remove(filepath.Join(dir, "telemetry-install-id")))
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	replacement, err := LoadMinimal()
 	require.NoError(t, err)
@@ -86,12 +86,9 @@ func TestInstallationIdentityRejectsInvalidFileWithoutReplacingIt(t *testing.T) 
 		file    string
 		content string
 	}{
-		{"invalid JSON", "installation.json", "{broken"},
-		{"missing ID", "installation.json", `{"name":"host-a.example"}`},
-		{"invalid ID", "installation.json", `{"id":"local","name":"host-a.example"}`},
-		{"missing name", "installation.json", `{"id":"0123456789abcdef0123456789abcdef"}`},
-		{"empty legacy", "telemetry-install-id", "\n"},
-		{"invalid legacy", "telemetry-install-id", "not-an-installation-id\n"},
+		{"empty", "telemetry-install-id", "\n"},
+		{"invalid", "telemetry-install-id", "not-an-installation-id\n"},
+		{"wrong length", "telemetry-install-id", "0123456789abcdef\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := setupTestEnv(t)
@@ -110,29 +107,7 @@ func TestInstallationIdentityRejectsInvalidFileWithoutReplacingIt(t *testing.T) 
 	}
 }
 
-func TestInstallationIdentityAdoptsLegacyOnce(t *testing.T) {
-	for _, interrupted := range []bool{false, true} {
-		t.Run(fmt.Sprint(interrupted), func(t *testing.T) {
-			dir := setupTestEnv(t)
-			t.Setenv("AGENTSVIEW_TELEMETRY_ENABLED", "0")
-			const id = "0123456789ABCDEF0123456789ABCDEF"
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "telemetry-install-id"), []byte(id+"\n"), 0o600))
-			path := filepath.Join(dir, "installation.json")
-			if interrupted {
-				require.NoError(t, os.WriteFile(path, []byte(`{"id":"0123456789ABCDEF0123456789ABCDEF","name":"host-a.example"}`), 0o600))
-			}
-			cfg, err := LoadMinimal()
-			require.NoError(t, err)
-			assert.Equal(t, id, cfg.InstallationID)
-			require.NoError(t, os.Remove(path))
-			reset, err := LoadMinimal()
-			require.NoError(t, err)
-			assert.NotEqual(t, id, reset.InstallationID, "reset must not resurrect the adopted legacy identity")
-		})
-	}
-}
-
-func TestInstallationIdentityReadOnlyDoesNotAdoptLegacy(t *testing.T) {
+func TestInstallationIdentityReadOnlyLeavesFileUnchanged(t *testing.T) {
 	dir := setupTestEnv(t)
 	const id = "0123456789abcdef0123456789abcdef"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "telemetry-install-id"), []byte(id), 0o600))
@@ -161,36 +136,32 @@ func TestInstallationIdentityPreservesReadOnlyConfig(t *testing.T) {
 	assert.Equal(t, content, string(stored))
 }
 
-func TestInstallationIdentityReadsRecordWithoutConfigLock(t *testing.T) {
+func TestInstallationIdentityReadsFileWithoutConfigLock(t *testing.T) {
 	skipIfNotUnix(t)
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "installation.json"), []byte(`{"id":"0123456789abcdef0123456789abcdef","name":"host-a.example"}`), 0o400))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "telemetry-install-id"), []byte("0123456789abcdef0123456789abcdef\n"), 0o400))
 	require.NoError(t, os.Chmod(dir, 0o500))
 	t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0o700)) })
 	cfg := Config{DataDir: dir, LocalMachineName: "host-b.example"}
 	require.NoError(t, cfg.ensureInstallationID())
 	assert.Equal(t, "0123456789abcdef0123456789abcdef", cfg.InstallationID)
-	assert.Equal(t, "host-a.example", cfg.LocalMachineName)
+	assert.Equal(t, "host-b.example", cfg.LocalMachineName)
 }
 
 func TestInstallationIdentityConcurrentCreation(t *testing.T) {
 	dir := t.TempDir()
 	const workers = 8
 	ids := make([]string, workers)
-	names := make([]string, workers)
 	runConcurrent(t, workers, func(i int) error {
-		cfg := Config{DataDir: dir, LocalMachineName: fmt.Sprintf("host-%d.example", i)}
+		cfg := Config{DataDir: dir}
 		if err := cfg.ensureInstallationID(); err != nil {
 			return err
 		}
 		ids[i] = cfg.InstallationID
-		names[i] = cfg.LocalMachineName
 		return nil
 	})
 	requireAllSameNonEmpty(t, ids)
-	requireAllSameNonEmpty(t, names)
 	cfg := Config{DataDir: dir}
 	require.NoError(t, cfg.ensureInstallationID())
 	assert.Equal(t, ids[0], cfg.InstallationID)
-	assert.Equal(t, names[0], cfg.LocalMachineName)
 }
