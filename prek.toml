@@ -6,6 +6,14 @@ default_stages = ["pre-commit"]
 repo = "local"
 
 [[repos.hooks]]
+id = "check-timing-budgets"
+name = "Check timing budgets"
+language = "system"
+entry = "go run ./scripts/check-timing-budgets ."
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
 id = "golangci-lint"
 name = "golangci-lint"
 language = "system"
