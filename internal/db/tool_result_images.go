@@ -12,7 +12,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ToolImageStats describes inline image payloads found by the projection.
@@ -462,10 +461,6 @@ func projectToolResultEventForDedup(
 	projected, stats := StripToolResultImages(content)
 	if stats.Payloads == 0 {
 		return content
-	}
-	// Linked summaries use decoded text, while late summaries keep projected JSON.
-	if decoded := parser.DecodeContent(content); decoded == summary {
-		return decoded
 	}
 	return projected
 }

@@ -236,6 +236,7 @@ func TestEngineImagePolicyOverridesDatabaseForBulkAppendAndLink(t *testing.T) {
 
 func TestEngineImagePolicyDeduplicatesHistoricalRawLinkedResult(t *testing.T) {
 	const raw = `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`
+	const linkWant = "beforeafter"
 	database := dbtest.OpenTestDB(t)
 	database.SetToolResultImages(config.ToolResultImagesKeep)
 	require.NoError(t, database.UpsertSession(db.Session{
@@ -270,7 +271,14 @@ func TestEngineImagePolicyDeduplicatesHistoricalRawLinkedResult(t *testing.T) {
 	require.NoError(t, database.Reader().QueryRowContext(
 		t.Context(), "SELECT COALESCE(result_content, '') FROM tool_calls WHERE session_id = ?", "historical-link",
 	).Scan(&storedSummary))
-	assert.Empty(t, storedSummary)
+	assert.Equal(t, linkWant, storedSummary)
+
+	messages, err := database.GetAllMessages(t.Context(), "historical-link")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, linkWant, messages[0].ToolCalls[0].ResultContent)
+	assert.Equal(t, len(linkWant), messages[0].ToolCalls[0].ResultContentLength)
 }
 
 func TestEngineImagePolicyDeduplicatesLateProjectedResult(t *testing.T) {
