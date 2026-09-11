@@ -19,9 +19,9 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 		writer.Close()
 		return nil, fmt.Errorf("configuring prepared test wal: %w", err)
 	}
-	if err := installChineseFTSTriggers(writer); err != nil {
+	if err := installCJKFTSTriggers(writer); err != nil {
 		writer.Close()
-		return nil, fmt.Errorf("configuring prepared test Chinese FTS: %w", err)
+		return nil, fmt.Errorf("configuring prepared test CJK FTS: %w", err)
 	}
 
 	reader, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))

@@ -83,7 +83,7 @@ func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
 
 func TestSearchSessions_ChineseSegmentation(t *testing.T) {
 	ts, d := newTestToolset(t)
-	if !d.HasChineseFTS() {
+	if !d.HasCJKFTS() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
 	seedFTSSession(t, d, "chinese", "proj",
@@ -97,6 +97,32 @@ func TestSearchSessions_ChineseSegmentation(t *testing.T) {
 
 	phrase := mustSearch(t, ts, searchSessionsIn{Query: `"全文搜索"`})
 	assert.Empty(t, phrase.Results, "explicit phrases must retain word adjacency")
+}
+
+func TestSearchSessions_JapaneseAndKoreanTerms(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+		match string
+		miss  string
+	}{
+		{"japanese", "かな", "かなを探します。", "なかを探します。"},
+		{"korean", "검색", "검색합니다.", "색상 검토입니다."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			if !d.HasCJKFTS() {
+				t.Skip("simple FTS5 runtime is not installed for this test process")
+			}
+			seedFTSSession(t, d, "match", "proj", tc.match, "2024-06-15T10:00:00Z")
+			seedFTSSession(t, d, "miss", "proj", tc.miss, "2024-06-15T10:00:00Z")
+
+			out := mustSearch(t, ts, searchSessionsIn{Query: tc.query})
+			require.Len(t, out.Results, 1)
+			assert.Equal(t, "match", out.Results[0].SessionID)
+			assert.Contains(t, out.Results[0].Snippet, "<mark>"+tc.query+"</mark>")
+		})
+	}
 }
 
 func TestSearchSessions_QuerySyntax(t *testing.T) {

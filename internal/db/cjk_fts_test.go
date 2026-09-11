@@ -82,7 +82,7 @@ func TestDiscoverSimpleFTSRuntimeExplicitDirIsValidated(t *testing.T) {
 	assert.Contains(t, err.Error(), simpleFTSDirEnv)
 }
 
-func TestChineseFTSSearch(t *testing.T) {
+func TestCJKFTSChineseSearch(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -213,7 +213,7 @@ func TestChineseFTSSearch(t *testing.T) {
 	var storedFingerprint string
 	require.NoError(t, d.getReader().QueryRow(
 		"SELECT CAST(value AS TEXT) FROM stats WHERE key = ?",
-		chineseFTSFingerprintStatsKey,
+		cjkFTSFingerprintStatsKey,
 	).Scan(&storedFingerprint))
 	assert.Equal(t, simpleFTSRuntimeConfig.fingerprint, storedFingerprint)
 
@@ -230,7 +230,7 @@ func TestChineseFTSSearch(t *testing.T) {
 			content_rowid='id',
 			tokenize='simple'
 		);
-		DELETE FROM stats WHERE key = '` + chineseFTSFingerprintStatsKey + `'`)
+		DELETE FROM stats WHERE key = '` + cjkFTSFingerprintStatsKey + `'`)
 	require.NoError(t, err)
 	require.NoError(t, d.Reopen())
 	repaired, err := d.SearchContent(context.Background(), ContentSearchFilter{
@@ -245,12 +245,12 @@ func TestChineseFTSSearch(t *testing.T) {
 
 	_, err = d.getWriter().Exec(
 		"UPDATE stats SET value = 'stale' WHERE key = ?",
-		chineseFTSFingerprintStatsKey,
+		cjkFTSFingerprintStatsKey,
 	)
 	require.NoError(t, err)
-	assert.False(t, d.HasChineseFTS())
+	assert.False(t, d.HasCJKFTS())
 	require.NoError(t, d.Reopen())
-	assert.True(t, d.HasChineseFTS())
+	assert.True(t, d.HasCJKFTS())
 
 	require.NoError(t, d.CloseWriter())
 	require.NoError(t, d.ReopenWriter())
@@ -282,7 +282,7 @@ func TestChineseFTSSearch(t *testing.T) {
 	assert.Equal(t, "swapped", swapped.Matches[0].SessionID)
 }
 
-func TestChineseFTSContentSnippetCentersOnMatch(t *testing.T) {
+func TestCJKFTSContentSnippetCentersOnMatch(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -311,7 +311,7 @@ func TestChineseFTSContentSnippetCentersOnMatch(t *testing.T) {
 	}
 }
 
-func TestChineseFTSTableCanBeDroppedWithoutExtension(t *testing.T) {
+func TestCJKFTSTableCanBeDroppedWithoutExtension(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -327,7 +327,7 @@ func TestChineseFTSTableCanBeDroppedWithoutExtension(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestChineseFTSRebuildsAfterLegacyWriter(t *testing.T) {
+func TestCJKFTSRebuildsAfterLegacyWriter(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -361,28 +361,28 @@ func TestChineseFTSRebuildsAfterLegacyWriter(t *testing.T) {
 	).Scan(&pending))
 	assert.Equal(t, 1, pending)
 	require.NoError(t, raw.Close())
-	require.False(t, d.HasChineseFTS())
+	require.False(t, d.HasCJKFTS())
 
 	// A local metadata update does not repair the other writer's message index.
 	name := "Renamed session"
 	require.NoError(t, d.RenameSession("legacy", &name))
-	require.False(t, d.HasChineseFTS(), "renaming must preserve the stale marker")
+	require.False(t, d.HasCJKFTS(), "renaming must preserve the stale marker")
 	insertSession(t, d, "legacy", "proj", func(s *Session) {
 		s.UserMessageCount = 2
 	})
-	require.False(t, d.HasChineseFTS(), "upserts must preserve the stale marker")
+	require.False(t, d.HasCJKFTS(), "upserts must preserve the stale marker")
 	require.NoError(t, d.InsertMessages([]Message{{
 		SessionID: "legacy", Ordinal: 1, Role: "assistant",
 		Content: "本地追加的消息。",
 	}}))
-	require.False(t, d.HasChineseFTS(), "appends do not repair earlier stale content")
+	require.False(t, d.HasCJKFTS(), "appends do not repair earlier stale content")
 
 	var output bytes.Buffer
 	previousWriter := log.Writer()
 	log.SetOutput(&output)
 	t.Cleanup(func() { log.SetOutput(previousWriter) })
 	require.NoError(t, d.Reopen())
-	assert.Contains(t, output.String(), "rebuilding Chinese FTS index; startup waits")
+	assert.Contains(t, output.String(), "rebuilding CJK FTS index; startup waits")
 	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "旧版本写入",
 		Mode:    "fts",
@@ -399,7 +399,7 @@ func TestChineseFTSRebuildsAfterLegacyWriter(t *testing.T) {
 	assert.Zero(t, pending)
 }
 
-func TestChineseFTSForeignFingerprintDefersMaintenance(t *testing.T) {
+func TestCJKFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -414,12 +414,12 @@ func TestChineseFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 
 	_, err := d.getWriter().Exec(
 		"UPDATE stats SET value = 'foreign-runtime' WHERE key = ?",
-		chineseFTSFingerprintStatsKey,
+		cjkFTSFingerprintStatsKey,
 	)
 	require.NoError(t, err)
-	assert.False(t, d.HasChineseFTS())
-	assert.False(t, d.HasChineseFTS())
-	assert.Equal(t, 1, strings.Count(output.String(), "Chinese FTS unavailable or stale"))
+	assert.False(t, d.HasCJKFTS())
+	assert.False(t, d.HasCJKFTS())
+	assert.Equal(t, 1, strings.Count(output.String(), "CJK FTS unavailable or stale"))
 
 	require.NoError(t, d.Update(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(
@@ -459,7 +459,7 @@ func TestChineseFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 	assert.Zero(t, staleMatches)
 
 	require.NoError(t, d.Reopen())
-	assert.True(t, d.HasChineseFTS())
+	assert.True(t, d.HasCJKFTS())
 	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "跨版本写入",
 		Mode:    "fts",
@@ -475,7 +475,7 @@ func TestChineseFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 	assert.Zero(t, pending)
 }
 
-func TestChineseFTSJiebaConfigurationSerializesWithQueries(t *testing.T) {
+func TestCJKFTSJiebaConfigurationSerializesWithQueries(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -529,7 +529,7 @@ func TestChineseFTSJiebaConfigurationSerializesWithQueries(t *testing.T) {
 }
 
 // Session upserts and no-op recall inserts must leave a healthy index usable.
-func TestChineseFTSSurvivesSessionResyncUpsert(t *testing.T) {
+func TestCJKFTSSurvivesSessionResyncUpsert(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -537,7 +537,7 @@ func TestChineseFTSSurvivesSessionResyncUpsert(t *testing.T) {
 	seedSearchSession(t, d, "resync", "proj", [][2]string{
 		{"user", "中文搜索必须在重新同步之后仍然可用。"},
 	})
-	require.True(t, d.HasChineseFTS(), "Chinese FTS live after the first write")
+	require.True(t, d.HasCJKFTS(), "CJK FTS live after the first write")
 
 	// Re-upsert the same session id, leaving transcript_revision alone. This
 	// is the shape of every ordinary resync of an unchanged session.
@@ -555,7 +555,7 @@ func TestChineseFTSSurvivesSessionResyncUpsert(t *testing.T) {
 		"SELECT count(*) FROM messages_chinese_fts_pending_sessions",
 	).Scan(&pending))
 	assert.Zero(t, pending, "resync upsert must not strand a pending row")
-	assert.True(t, d.HasChineseFTS(), "Chinese FTS stays live across a resync")
+	assert.True(t, d.HasCJKFTS(), "CJK FTS stays live across a resync")
 
 	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "重新同步",
@@ -568,12 +568,12 @@ func TestChineseFTSSurvivesSessionResyncUpsert(t *testing.T) {
 	assert.Equal(t, "resync", page.Matches[0].SessionID)
 }
 
-// TestChineseFTSSurvivesCompaction pins that staged archive compaction keeps
-// the optional Chinese index queryable. Compaction rebuilds the archive into a
+// TestCJKFTSSurvivesCompaction pins that staged archive compaction keeps
+// the optional CJK index queryable. Compaction rebuilds the archive into a
 // candidate file through maintenance connections that do not load the
 // tokenizer sidecar, and then swaps that candidate in, so the index surviving
 // the round trip is worth holding still.
-func TestChineseFTSSurvivesCompaction(t *testing.T) {
+func TestCJKFTSSurvivesCompaction(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -581,14 +581,14 @@ func TestChineseFTSSurvivesCompaction(t *testing.T) {
 	seedSearchSession(t, d, "compact-cn", "proj", [][2]string{
 		{"user", "压缩之后中文索引必须继续可用。"},
 	})
-	require.True(t, d.HasChineseFTS(), "Chinese FTS live before compaction")
+	require.True(t, d.HasCJKFTS(), "CJK FTS live before compaction")
 
 	_, err := d.Compact(context.Background(), CompactOptions{
 		StagingDir: t.TempDir(),
 	})
-	require.NoError(t, err, "compaction must not fail on an archive with a Chinese index")
+	require.NoError(t, err, "compaction must not fail on an archive with a CJK index")
 
-	assert.True(t, d.HasChineseFTS(), "Chinese FTS still live after compaction")
+	assert.True(t, d.HasCJKFTS(), "CJK FTS still live after compaction")
 	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "中文索引",
 		Mode:    "fts",

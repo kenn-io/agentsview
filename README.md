@@ -311,8 +311,9 @@ agentsview stats --include-git-outcomes
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | ![Search](https://agentsview.io/assets/generated/screenshots/search-results.png) | ![Heatmap](https://agentsview.io/assets/generated/screenshots/heatmap.png) |
 
-- **Full-text search** across all message content (FTS5), with optional
-  `simple`/cppjieba tokenization for Chinese queries
+- **Full-text search** across all message content (FTS5), with optional CJK
+  character and phrase search for Chinese, Japanese, and Korean text in
+  SQLite, including Chinese word segmentation through `simple`/cppjieba
 - **Semantic search** (opt-in) -- index session content with any
   OpenAI-compatible embeddings endpoint and search by meaning with
   `agentsview session search --semantic` or `--hybrid`; every content-search

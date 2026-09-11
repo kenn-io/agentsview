@@ -25,7 +25,7 @@ func (db *DB) prepareMessageFTSQuery(
 		match: prepared,
 		plain: StripFTSQuotes(prepared),
 	}
-	if prepared == "" || !containsCJK(trimmed) || !db.HasChineseFTS() {
+	if prepared == "" || !containsCJK(trimmed) || !db.HasCJKFTS() {
 		return query, nil
 	}
 
@@ -36,11 +36,20 @@ func (db *DB) prepareMessageFTSQuery(
 		query.match = prepared
 		return query, nil
 	}
+	if strings.ContainsFunc(trimmed, func(r rune) bool {
+		return unicode.In(r, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
+	}) {
+		// Jieba turns kana and Hangul queries into independent character
+		// matches. Keep each whitespace-delimited term as a phrase in the
+		// character index instead. Han-only queries remain Chinese-segmented;
+		// callers can quote Japanese kanji phrases to preserve their order.
+		return query, nil
+	}
 
 	conn, err := db.getReader().Conn(ctx)
 	if err != nil {
 		return messageFTSQuery{}, fmt.Errorf(
-			"acquiring Chinese FTS query connection: %w", err,
+			"acquiring CJK FTS query connection: %w", err,
 		)
 	}
 	defer conn.Close()
@@ -52,12 +61,12 @@ func (db *DB) prepareMessageFTSQuery(
 	simpleFTSJiebaMu.Unlock()
 	if err != nil {
 		return messageFTSQuery{}, fmt.Errorf(
-			"preparing Chinese FTS query: %w", err,
+			"preparing CJK FTS query: %w", err,
 		)
 	}
 	if strings.TrimSpace(query.match) == "" {
 		return messageFTSQuery{}, &SearchInputError{
-			Msg: "search: Chinese FTS query is empty after tokenization",
+			Msg: "search: CJK FTS query is empty after tokenization",
 		}
 	}
 	// jieba_query joins terms with AND and may add an unquoted prefix '*'.

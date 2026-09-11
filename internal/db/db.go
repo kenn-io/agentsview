@@ -556,16 +556,16 @@ CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
 END;
 `
 
-const chineseFTSRuntimeMatchesSQL = `EXISTS (
+const cjkFTSRuntimeMatchesSQL = `EXISTS (
     SELECT 1 FROM main.stats
-    WHERE key = '` + chineseFTSFingerprintStatsKey + `'
+    WHERE key = '` + cjkFTSFingerprintStatsKey + `'
       AND CAST(value AS TEXT) = agentsview_chinese_fts_fingerprint()
 )`
 
-const messagesChineseADTriggerDDL = `
+const messagesCJKADTriggerDDL = `
 CREATE TEMP TRIGGER IF NOT EXISTS messages_chinese_ad
 AFTER DELETE ON main.messages
-WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     INSERT INTO messages_chinese_fts(messages_chinese_fts, rowid, content)
         VALUES('delete', old.id, old.content);
 END;
@@ -590,7 +590,7 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
 END;
 `
 
-const schemaChineseFTS = `
+const schemaCJKFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_chinese_fts USING fts5(
     content,
     content='messages',
@@ -599,16 +599,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_chinese_fts USING fts5(
 );
 `
 
-const schemaChineseFTSTriggers = `
+const schemaCJKFTSTriggers = `
 CREATE TEMP TRIGGER IF NOT EXISTS messages_chinese_ai
 AFTER INSERT ON main.messages
-WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     INSERT INTO messages_chinese_fts(rowid, content) VALUES (new.id, new.content);
 END;
-` + messagesChineseADTriggerDDL + `
+` + messagesCJKADTriggerDDL + `
 CREATE TEMP TRIGGER IF NOT EXISTS messages_chinese_au
 AFTER UPDATE ON main.messages
-WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     INSERT INTO messages_chinese_fts(messages_chinese_fts, rowid, content)
         VALUES('delete', old.id, old.content);
     INSERT INTO messages_chinese_fts(rowid, content) VALUES (new.id, new.content);
@@ -622,20 +622,20 @@ END;
 -- INSERT trigger ignores existing sessions, so an upsert marks at most once.
 CREATE TEMP TRIGGER IF NOT EXISTS sessions_chinese_pending_ai
 AFTER INSERT ON main.sessions
-WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     DELETE FROM messages_chinese_fts_pending_sessions
     WHERE session_id = new.id AND generation = 1;
 END;
 CREATE TEMP TRIGGER IF NOT EXISTS sessions_chinese_pending_au
 AFTER UPDATE OF transcript_revision ON main.sessions
 WHEN old.transcript_revision IS NOT new.transcript_revision
- AND ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+ AND ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     DELETE FROM messages_chinese_fts_pending_sessions
     WHERE session_id = new.id AND generation = 1;
 END;
 CREATE TEMP TRIGGER IF NOT EXISTS sessions_chinese_pending_ad
 AFTER DELETE ON main.sessions
-WHEN ` + chineseFTSRuntimeMatchesSQL + ` BEGIN
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
     DELETE FROM messages_chinese_fts_pending_sessions
     WHERE session_id = old.id AND generation = 1;
 END;
@@ -797,7 +797,7 @@ type DB struct {
 	// session history.
 	messagesLoadCount atomic.Int64
 
-	chineseFTSUnavailableLog sync.Once
+	cjkFTSUnavailableLog sync.Once
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the
@@ -4453,9 +4453,9 @@ func (db *DB) DropFTS() error {
 		}
 	}
 	if _, err := w.Exec(
-		"DELETE FROM stats WHERE key = ?", chineseFTSFingerprintStatsKey,
+		"DELETE FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey,
 	); err != nil {
-		return fmt.Errorf("clearing Chinese fts fingerprint: %w", err)
+		return fmt.Errorf("clearing CJK fts fingerprint: %w", err)
 	}
 	return nil
 }
@@ -4476,8 +4476,8 @@ func (db *DB) RebuildFTS() error {
 	if err != nil {
 		return fmt.Errorf("rebuild fts index: %w", err)
 	}
-	if err := ensureChineseFTS(context.Background(), w, true); err != nil {
-		return fmt.Errorf("rebuild Chinese fts index: %w", err)
+	if err := ensureCJKFTS(context.Background(), w, true); err != nil {
+		return fmt.Errorf("rebuild CJK fts index: %w", err)
 	}
 	return nil
 }
@@ -4539,23 +4539,23 @@ func (db *DB) HasFTS() bool {
 	return err == nil
 }
 
-// HasChineseFTS reports whether the optional simple-tokenized message index is
+// HasCJKFTS reports whether the optional simple-tokenized message index is
 // loaded and queryable on this database connection.
-func (db *DB) HasChineseFTS() (available bool) {
+func (db *DB) HasCJKFTS() (available bool) {
 	if !simpleFTSRuntimeConfig.available() {
 		return false
 	}
 	defer func() {
 		if !available {
-			db.chineseFTSUnavailableLog.Do(func() {
-				log.Print("Chinese FTS unavailable or stale; using standard FTS5 until the archive is reopened")
+			db.cjkFTSUnavailableLog.Do(func() {
+				log.Print("CJK FTS unavailable or stale; using standard FTS5 until the archive is reopened")
 			})
 		}
 	}()
 	var storedFingerprint string
 	if err := db.getReader().QueryRow(
 		"SELECT CAST(value AS TEXT) FROM stats WHERE key = ?",
-		chineseFTSFingerprintStatsKey,
+		cjkFTSFingerprintStatsKey,
 	).Scan(&storedFingerprint); err != nil ||
 		storedFingerprint != simpleFTSRuntimeConfig.fingerprint {
 		return false
@@ -4656,8 +4656,8 @@ func (db *DB) init(ctx context.Context) error {
 		}
 	}
 
-	if err := ensureChineseFTS(ctx, w, false); err != nil {
-		return fmt.Errorf("initializing Chinese FTS: %w", err)
+	if err := ensureCJKFTS(ctx, w, false); err != nil {
+		return fmt.Errorf("initializing CJK FTS: %w", err)
 	}
 
 	var recallFTSCount int
@@ -5033,7 +5033,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
 	}
-	if err := installChineseFTSTriggers(writer); err != nil {
+	if err := installCJKFTSTriggers(writer); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened writer: %w", err)
 	}
@@ -5168,7 +5168,7 @@ func (db *DB) ReopenWriter() error {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
 	}
-	if err := installChineseFTSTriggers(writer); err != nil {
+	if err := installCJKFTSTriggers(writer); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened writer: %w", err)
 	}

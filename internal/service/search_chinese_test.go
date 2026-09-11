@@ -25,7 +25,7 @@ func TestDirectSearchSegmentsChineseQuery(t *testing.T) {
 		dbtest.UserMsg(id, 0, "这是全文的搜索实现说明。"),
 		dbtest.AsstMsg(id, 1, "understood"),
 	}, dbtest.WithMessageCounts(3, 2))
-	if !d.HasChineseFTS() {
+	if !d.HasCJKFTS() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
 	be := service.NewDirectBackend(d, nil)

@@ -1309,16 +1309,40 @@ pulled in from PostgreSQL sync or copied from other archives.
 ## Database
 
 The SQLite database uses WAL mode for concurrent reads and includes FTS5
-full-text search indexes on message content. To add Chinese word, phrase, and
-single-character matching, build and install the pinned `simple`/cppjieba
-sidecar with `make install-chinese-fts`. Building it requires Git, CMake
-3.19 or newer, and a C++14 compiler. AgentsView discovers it next to the binary
+full-text search indexes on message content.
+
+### CJK full-text search
+
+To add character and phrase matching for Chinese, Japanese, and Korean text,
+including Chinese word segmentation, build and install the pinned
+`simple`/cppjieba sidecar with `make install-cjk-fts`. Building it requires Git,
+CMake 3.19 or newer, and a C++14 compiler. AgentsView discovers it next to the binary
 or under the sibling `lib/agentsview/simple` directory. A custom path can be
 selected with `AGENTSVIEW_SIMPLE_DIR`.
 
-The sidecar adds a parallel `messages_chinese_fts` index and routes only CJK
-queries through it. ASCII-only searches continue to use the existing Porter
-index, so searches such as `run` retain English stemming. The Chinese index is
+The sidecar indexes individual CJK characters and routes queries containing Han,
+Hiragana, Katakana, or Hangul through that index. Query preparation depends on
+the scripts in the query:
+
+- Queries containing Japanese kana or Korean Hangul preserve character order
+  and adjacency within each whitespace-separated search term. For example,
+  `かな` does not match `なか`, and `검색` does not match separate occurrences
+  of `검` and `색`. Separate terms can match anywhere in the same message.
+- Queries containing Han without kana or Hangul use Chinese word segmentation
+  through cppjieba. Japanese queries written entirely in kanji take this same
+  path because the scripts alone do not distinguish the languages. Quote a
+  kanji phrase, such as `"検索方法"`, to require its characters in order.
+- A leading double quote opts into explicit FTS5 expressions, including phrases
+  and operators, in any language. For example, `"검색 기능"` requires the
+  two terms together, while `검색 기능` allows intervening text.
+
+Japanese and Korean matching is character-based; it does not analyze grammatical
+word forms or expand readings, romanizations, or spelling variants. Chinese word
+segmentation also stays off when a query mixes Han with kana or Hangul.
+
+ASCII-only searches continue to use the existing Porter index, so searches such
+as `run` retain English stemming. The CJK index retains its original database
+name, `messages_chinese_fts`; the broader feature name requires no rebuild. It is
 derived data: if the sidecar is removed, AgentsView drops that optional index
 and continues with the standard FTS5 path; reinstalling the sidecar backfills
 it on the next writable open. AgentsView fingerprints the native library and
@@ -1327,7 +1351,7 @@ changes. Writers running with another fingerprint leave a freshness marker
 instead of mixing incompatible token streams. Pinyin expansion is disabled in
 the derived index because ASCII-only queries continue to use the Porter index.
 
-Chinese word segmentation is specific to SQLite message search, including the
+CJK full-text search is specific to SQLite message search, including the
 HTTP, CLI, and MCP search paths. PostgreSQL/CockroachDB and DuckDB do not load
 this SQLite extension and keep their existing search behavior. Substring and
 regular-expression searches are unchanged. Session search result snippets
@@ -1338,18 +1362,18 @@ The first backfill, a changed fingerprint, or any pending session requires a
 full index rebuild before startup completes. AgentsView logs this wait. The
 freshness ledger stores session IDs rather than old message IDs and token
 content, so it cannot remove stale entries for individual replaced or deleted
-messages. Removing the sidecar drops the Chinese index but retains the
+messages. Removing the sidecar drops the CJK index but retains the
 `messages_chinese_fts_pending_sessions` ledger and three persistent session
 triggers. The ledger holds at most one row per touched session ID until the
-next successful Chinese index rebuild clears it.
+next successful CJK index rebuild clears it.
 
 Index maintenance uses TEMP triggers on the writer connection. Writes made
 without these triggers or with another sidecar fingerprint leave the index
-stale. Chinese search then falls back to standard FTS5 and logs a warning once
+stale. CJK search then falls back to standard FTS5 and logs a warning once
 per database handle. Reopening the archive with the sidecar restores the index
 and its triggers.
 
-**Schema tables:**
+### Schema tables
 
 | Table                | Purpose                                                                      |
 | -------------------- | ---------------------------------------------------------------------------- |
@@ -1363,7 +1387,7 @@ and its triggers.
 | `stats`              | Aggregate counts (session_count, message_count)                              |
 | `skipped_files`      | Cache of non-interactive session files                                       |
 | `messages_fts`       | FTS5 virtual table for full-text search                                      |
-| `messages_chinese_fts` | Optional FTS5 index using the `simple` Chinese tokenizer                   |
+| `messages_chinese_fts` | Optional CJK FTS5 index using the `simple` character tokenizer             |
 
 The database is automatically migrated on startup when the schema changes. When
 the stored data version is stale, AgentsView preserves the existing database and

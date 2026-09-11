@@ -35,7 +35,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install install-chinese-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help check-timing-budgets
+.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help check-timing-budgets
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -102,8 +102,8 @@ install: build-release
 simple-fts:
 	bash scripts/build-simple-fts.sh dist/agentsview-simple
 
-# Install the binary and its Chinese-search sidecar in sibling bin/lib trees.
-install-chinese-fts: install simple-fts
+# Install the binary and its CJK-search sidecar in sibling bin/lib trees.
+install-cjk-fts: install simple-fts
 	@if [ -d "$(HOME)/.local/bin" ]; then \
 		INSTALL_DIR="$(HOME)/.local/bin"; \
 	else \
@@ -127,7 +127,7 @@ install-chinese-fts: install simple-fts
 	for name in simple-LICENSE cppjieba-LICENSE; do \
 		install -m 0644 "dist/agentsview-simple/licenses/$$name" "$$SIMPLE_DIR/licenses/$$name"; \
 	done; \
-	echo "Installed Chinese FTS sidecar to $$SIMPLE_DIR"
+	echo "Installed CJK FTS sidecar to $$SIMPLE_DIR"
 
 # Build frontend SPA and copy into embed directory
 frontend:
@@ -653,7 +653,7 @@ help:
 	@echo "  build-release  - Release build (optimized, stripped)"
 	@echo "  pricing-snapshot - Restore LiteLLM snapshot from artifact branch"
 	@echo "  install        - Build and install to ~/.local/bin or GOPATH"
-	@echo "  install-chinese-fts - Install agentsview with the optional Chinese FTS sidecar"
+	@echo "  install-cjk-fts - Install agentsview with the optional CJK FTS sidecar"
 	@echo "  simple-fts     - Build the pinned simple/cppjieba SQLite extension"
 	@echo ""
 	@echo "  dev            - Run Go server with live reload via air (use with frontend-dev)"

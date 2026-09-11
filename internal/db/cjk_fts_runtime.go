@@ -15,16 +15,18 @@ import (
 
 const simpleFTSDirEnv = "AGENTSVIEW_SIMPLE_DIR"
 
+// Persisted names and the fingerprint version stay stable: the CJK rename and
+// query preparation changes do not alter the stored character token stream.
 const (
-	chineseFTSFingerprintStatsKey = "messages_chinese_fts_fingerprint_v1"
-	chineseFTSSchemaVersion       = "messages-chinese-fts-v3"
+	cjkFTSFingerprintStatsKey = "messages_chinese_fts_fingerprint_v1"
+	cjkFTSSchemaVersion       = "messages-chinese-fts-v3"
 )
 
 var (
 	simpleFTSRuntimeConfig, simpleFTSRuntimeErr = discoverSimpleFTSRuntime()
 )
 
-const schemaChineseFTSPendingSessions = `
+const schemaCJKFTSPendingSessions = `
 CREATE TABLE IF NOT EXISTS messages_chinese_fts_pending_sessions (
     session_id TEXT PRIMARY KEY,
     generation INTEGER NOT NULL CHECK (generation > 0)
@@ -178,7 +180,7 @@ func fingerprintSimpleFTSRuntime(
 	libraryPath, dictionaryPath string,
 ) (string, error) {
 	h := sha256.New()
-	_, _ = io.WriteString(h, chineseFTSSchemaVersion+"\n")
+	_, _ = io.WriteString(h, cjkFTSSchemaVersion+"\n")
 
 	type fingerprintFile struct {
 		name string
@@ -216,7 +218,7 @@ func fingerprintSimpleFTSRuntime(
 		}
 		_, _ = io.WriteString(h, "\x00")
 	}
-	return fmt.Sprintf("%s:%x", chineseFTSSchemaVersion, h.Sum(nil)), nil
+	return fmt.Sprintf("%s:%x", cjkFTSSchemaVersion, h.Sum(nil)), nil
 }
 
 func simpleFTSLibraryName(goos string) (string, error) {
@@ -243,19 +245,19 @@ func requireRegularFile(path string) error {
 	return nil
 }
 
-type chineseFTSTransactor interface {
+type cjkFTSTransactor interface {
 	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
 }
 
-// ensureChineseFTS atomically reconciles the derived Chinese index with the
+// ensureCJKFTS atomically reconciles the derived CJK index with the
 // loaded extension and dictionaries. The table, complete backfill, fingerprint,
 // and connection-local maintenance triggers become visible together.
-func ensureChineseFTS(
-	ctx context.Context, conn chineseFTSTransactor, forceRebuild bool,
+func ensureCJKFTS(
+	ctx context.Context, conn cjkFTSTransactor, forceRebuild bool,
 ) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("beginning Chinese FTS transaction: %w", err)
+		return fmt.Errorf("beginning CJK FTS transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -268,7 +270,7 @@ func ensureChineseFTS(
 		"sessions_chinese_pending_ad",
 	} {
 		if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS "+trigger); err != nil {
-			return fmt.Errorf("dropping Chinese FTS trigger %s: %w", trigger, err)
+			return fmt.Errorf("dropping CJK FTS trigger %s: %w", trigger, err)
 		}
 	}
 
@@ -278,7 +280,7 @@ func ensureChineseFTS(
 			SELECT 1 FROM sqlite_master
 			WHERE type = 'table' AND name = 'messages_chinese_fts'
 		)`).Scan(&tableExists); err != nil {
-		return fmt.Errorf("checking Chinese FTS table: %w", err)
+		return fmt.Errorf("checking CJK FTS table: %w", err)
 	}
 
 	var pendingTableExists bool
@@ -288,46 +290,46 @@ func ensureChineseFTS(
 			WHERE type = 'table'
 			  AND name = 'messages_chinese_fts_pending_sessions'
 		)`).Scan(&pendingTableExists); err != nil {
-		return fmt.Errorf("checking Chinese FTS freshness ledger table: %w", err)
+		return fmt.Errorf("checking CJK FTS freshness ledger table: %w", err)
 	}
 
 	trackFreshness := simpleFTSRuntimeConfig.available() ||
 		tableExists || pendingTableExists
 	if !trackFreshness {
 		if _, err := tx.ExecContext(
-			ctx, "DELETE FROM stats WHERE key = ?", chineseFTSFingerprintStatsKey,
+			ctx, "DELETE FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey,
 		); err != nil {
-			return fmt.Errorf("clearing orphaned Chinese FTS fingerprint: %w", err)
+			return fmt.Errorf("clearing orphaned CJK FTS fingerprint: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("committing disabled Chinese FTS state: %w", err)
+			return fmt.Errorf("committing disabled CJK FTS state: %w", err)
 		}
 		return nil
 	}
 
-	if _, err := tx.ExecContext(ctx, schemaChineseFTSPendingSessions); err != nil {
-		return fmt.Errorf("installing Chinese FTS freshness ledger: %w", err)
+	if _, err := tx.ExecContext(ctx, schemaCJKFTSPendingSessions); err != nil {
+		return fmt.Errorf("installing CJK FTS freshness ledger: %w", err)
 	}
 	var pendingSessions int
 	if err := tx.QueryRowContext(ctx,
 		"SELECT count(*) FROM messages_chinese_fts_pending_sessions",
 	).Scan(&pendingSessions); err != nil {
-		return fmt.Errorf("checking Chinese FTS freshness ledger: %w", err)
+		return fmt.Errorf("checking CJK FTS freshness ledger: %w", err)
 	}
 
 	if !simpleFTSRuntimeConfig.available() {
 		if tableExists {
 			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_chinese_fts"); err != nil {
-				return fmt.Errorf("dropping unavailable Chinese FTS: %w", err)
+				return fmt.Errorf("dropping unavailable CJK FTS: %w", err)
 			}
 		}
 		if _, err := tx.ExecContext(
-			ctx, "DELETE FROM stats WHERE key = ?", chineseFTSFingerprintStatsKey,
+			ctx, "DELETE FROM stats WHERE key = ?", cjkFTSFingerprintStatsKey,
 		); err != nil {
-			return fmt.Errorf("clearing Chinese FTS fingerprint: %w", err)
+			return fmt.Errorf("clearing CJK FTS fingerprint: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("committing Chinese FTS removal: %w", err)
+			return fmt.Errorf("committing CJK FTS removal: %w", err)
 		}
 		return nil
 	}
@@ -335,53 +337,53 @@ func ensureChineseFTS(
 	var storedFingerprint string
 	fingerprintErr := tx.QueryRowContext(ctx,
 		"SELECT CAST(value AS TEXT) FROM stats WHERE key = ?",
-		chineseFTSFingerprintStatsKey,
+		cjkFTSFingerprintStatsKey,
 	).Scan(&storedFingerprint)
 	if fingerprintErr != nil && !errors.Is(fingerprintErr, sql.ErrNoRows) {
-		return fmt.Errorf("reading Chinese FTS fingerprint: %w", fingerprintErr)
+		return fmt.Errorf("reading CJK FTS fingerprint: %w", fingerprintErr)
 	}
 	current := tableExists && fingerprintErr == nil && pendingSessions == 0 &&
 		storedFingerprint == simpleFTSRuntimeConfig.fingerprint
 
 	if forceRebuild || !current {
-		log.Print("rebuilding Chinese FTS index; startup waits for the full message scan to finish")
+		log.Print("rebuilding CJK FTS index; startup waits for the full message scan to finish")
 		if tableExists {
 			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_chinese_fts"); err != nil {
-				return fmt.Errorf("dropping stale Chinese FTS: %w", err)
+				return fmt.Errorf("dropping stale CJK FTS: %w", err)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, schemaChineseFTS); err != nil {
-			return fmt.Errorf("creating Chinese FTS: %w", err)
+		if _, err := tx.ExecContext(ctx, schemaCJKFTS); err != nil {
+			return fmt.Errorf("creating CJK FTS: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO messages_chinese_fts(messages_chinese_fts) VALUES('rebuild')",
 		); err != nil {
-			return fmt.Errorf("backfilling Chinese FTS: %w", err)
+			return fmt.Errorf("backfilling CJK FTS: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO stats (key, value) VALUES (?, ?)
 			ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-			chineseFTSFingerprintStatsKey,
+			cjkFTSFingerprintStatsKey,
 			simpleFTSRuntimeConfig.fingerprint,
 		); err != nil {
-			return fmt.Errorf("storing Chinese FTS fingerprint: %w", err)
+			return fmt.Errorf("storing CJK FTS fingerprint: %w", err)
 		}
 		if _, err := tx.ExecContext(
 			ctx, "DELETE FROM messages_chinese_fts_pending_sessions",
 		); err != nil {
-			return fmt.Errorf("clearing Chinese FTS freshness ledger: %w", err)
+			return fmt.Errorf("clearing CJK FTS freshness ledger: %w", err)
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, schemaChineseFTSTriggers); err != nil {
-		return fmt.Errorf("installing Chinese FTS triggers: %w", err)
+	if _, err := tx.ExecContext(ctx, schemaCJKFTSTriggers); err != nil {
+		return fmt.Errorf("installing CJK FTS triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing Chinese FTS transaction: %w", err)
+		return fmt.Errorf("committing CJK FTS transaction: %w", err)
 	}
 	return nil
 }
 
-func installChineseFTSTriggers(conn *sql.DB) error {
-	return ensureChineseFTS(context.Background(), conn, false)
+func installCJKFTSTriggers(conn *sql.DB) error {
+	return ensureCJKFTS(context.Background(), conn, false)
 }

@@ -1,9 +1,9 @@
-name: Chinese FTS
+name: CJK FTS
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/chinese-fts.yml"
+      - ".github/workflows/cjk-fts.yml"
       - "Makefile"
       - "internal/db/**"
       - "internal/service/**"
@@ -12,7 +12,7 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/chinese-fts.yml"
+      - ".github/workflows/cjk-fts.yml"
       - "Makefile"
       - "internal/db/**"
       - "internal/service/**"
@@ -27,8 +27,8 @@ permissions:
   contents: read
 
 jobs:
-  test-chinese-fts:
-    name: Go Test (Chinese FTS sidecar)
+  test-cjk-fts:
+    name: Go Test (CJK FTS sidecar)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -47,7 +47,7 @@ jobs:
       - name: Build pinned simple and cppjieba sidecar
         run: bash scripts/build-simple-fts.sh dist/agentsview-simple
 
-      - name: Run database, service, and MCP tests with Chinese FTS enabled
+      - name: Run database, service, and MCP tests with CJK FTS enabled
         env:
           AGENTSVIEW_SIMPLE_DIR: ${{ github.workspace }}/dist/agentsview-simple
           CGO_ENABLED: "1"
