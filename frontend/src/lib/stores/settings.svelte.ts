@@ -83,7 +83,7 @@ class SettingsStore {
   constructor() {
     ui.setZoomSaveCallback((level) => {
       this.zoomSaveVersion += 1;
-      if (!this.loaded || this.error) {
+      if (!this.loaded || this.error || this.needsAuth) {
         this.pendingZoomSave = true;
       } else if (!this.readOnly) {
         void this.save({ zoom_level: level });
