@@ -763,6 +763,7 @@ type DB struct {
 	undrainedPools   []*sql.DB
 	readOnly         bool
 	toolResultImages config.ToolResultImages
+	assetsDir        string
 	// archiveContent indexes archiveContentRanks; see SetArchiveContent.
 	archiveContent atomic.Int32
 	// writerClosed is set while the writer pool is intentionally closed for a

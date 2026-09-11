@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"strings"
 
@@ -390,15 +391,27 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 }
 
 // ProjectToolResultImages applies the configured policy to a message graph.
-// Drop mode copies the graph and its nested tool-result slices before editing.
+// Projection copies the graph and its nested tool-result slices before editing.
 func ProjectToolResultImages(
 	messages []Message, policy config.ToolResultImages,
 ) ([]Message, ToolImageStats) {
-	if policy != config.ToolResultImagesDrop || len(messages) == 0 {
+	return projectToolResultImages(messages, policy, "")
+}
+
+func projectToolResultImages(
+	messages []Message, policy config.ToolResultImages, assetsDir string,
+) ([]Message, ToolImageStats) {
+	if (policy != config.ToolResultImagesDrop && policy != config.ToolResultImagesOffload) || len(messages) == 0 {
 		if messages == nil {
 			return []Message{}, ToolImageStats{}
 		}
 		return messages, ToolImageStats{}
+	}
+	project := func(content string, length int, stats ToolImageStats) (string, ToolImageStats) {
+		if policy == config.ToolResultImagesDrop {
+			return projectToolResultText(content, length, stats)
+		}
+		return ProjectToolResultImageContent(content, policy, assetsDir), stats
 	}
 	projected := make([]Message, len(messages))
 	copy(projected, messages)
@@ -408,13 +421,14 @@ func ProjectToolResultImages(
 		for j := range projected[i].ToolCalls {
 			call := &projected[i].ToolCalls[j]
 			call.ResultEvents = append([]ToolResultEvent(nil), call.ResultEvents...)
-			call.ResultContent, stats = projectToolResultText(call.ResultContent, call.ResultContentLength, stats)
+			call.ResultContent, stats = project(call.ResultContent, call.ResultContentLength, stats)
 			call.ResultContentLength = ResolveResultContentLength(
 				call.ResultContent, call.ResultContentLength,
 			)
 			for k := range call.ResultEvents {
 				event := &call.ResultEvents[k]
-				event.Content, stats = projectToolResultText(
+				PrepareToolResultEvent(event)
+				event.Content, stats = project(
 					event.Content, event.ContentLength, stats,
 				)
 				event.ContentLength = ResolveResultContentLength(
@@ -442,35 +456,41 @@ func projectToolResultText(
 	return projected, stats
 }
 
-func projectToolResultImageContent(
-	content string, policy config.ToolResultImages,
-) string {
-	if policy != config.ToolResultImagesDrop {
+// ProjectToolResultImageContent publishes supported assets before returning reference text.
+func ProjectToolResultImageContent(content string, policy config.ToolResultImages, assetsDir string) string {
+	switch policy {
+	case config.ToolResultImagesDrop:
+		projected, _ := StripToolResultImages(content)
+		return projected
+	case config.ToolResultImagesOffload:
+		if assetsDir == "" {
+			return content
+		}
+		projected, err := migrateToolResultImages(content, func(mediaType string, body []byte) (string, bool, error) {
+			return assets.Put(assetsDir, mediaType, body)
+		})
+		if err != nil {
+			log.Printf("offloading tool-result images: %v", err)
+			return content
+		}
+		return projected
+	default:
 		return content
 	}
-	projected, _ := StripToolResultImages(content)
-	return projected
 }
 
-func projectToolResultEventForDedup(
-	content, summary string, policy config.ToolResultImages,
-) string {
-	if policy != config.ToolResultImagesDrop {
-		return content
-	}
-	projected, stats := StripToolResultImages(content)
-	if stats.Payloads == 0 {
-		return content
-	}
-	return projected
-}
+// SetAssetsDir sets the local asset destination, including on read-only handles.
+func (db *DB) SetAssetsDir(dir string) { db.assetsDir = dir }
+
+// AssetsDir returns the local asset destination.
+func (db *DB) AssetsDir() string { return db.assetsDir }
 
 // SetToolResultImages stores the policy on a writable database handle.
 func (db *DB) SetToolResultImages(policy config.ToolResultImages) {
 	if db.readOnly {
 		return
 	}
-	if policy != config.ToolResultImagesDrop {
+	if policy != config.ToolResultImagesDrop && policy != config.ToolResultImagesOffload {
 		policy = config.ToolResultImagesKeep
 	}
 	db.toolResultImages = policy
@@ -478,13 +498,21 @@ func (db *DB) SetToolResultImages(policy config.ToolResultImages) {
 
 // ToolResultImages returns the policy carried by this database handle.
 func (db *DB) ToolResultImages() config.ToolResultImages {
-	if db.toolResultImages == config.ToolResultImagesDrop {
-		return config.ToolResultImagesDrop
+	if db.toolResultImages == config.ToolResultImagesDrop || db.toolResultImages == config.ToolResultImagesOffload {
+		return db.toolResultImages
 	}
 	return config.ToolResultImagesKeep
 }
 
 // ProjectToolResultImages applies the handle's configured policy.
 func (db *DB) ProjectToolResultImages(messages []Message) ([]Message, ToolImageStats) {
-	return ProjectToolResultImages(messages, db.ToolResultImages())
+	return db.ProjectToolResultImagesWithPolicy(messages, db.ToolResultImages())
+}
+
+// ProjectToolResultImagesWithPolicy applies a run policy only to retained tool content.
+func (db *DB) ProjectToolResultImagesWithPolicy(messages []Message, policy config.ToolResultImages) ([]Message, ToolImageStats) {
+	if db.ArchiveContent().OmitsToolContent() {
+		return messages, ToolImageStats{}
+	}
+	return projectToolResultImages(messages, policy, db.AssetsDir())
 }

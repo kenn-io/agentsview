@@ -46,6 +46,7 @@ type codexStagingSink struct {
 	idPrefix string
 
 	toolResultImages config.ToolResultImages
+	database         *db.DB
 
 	// blocked marks categories whose stored content is blanked. Their raw
 	// content never enters scratch storage; only digest, original length,
@@ -540,8 +541,12 @@ func (s *codexStagingSink) AppendToolResultEvent(
 		// contract before the real content enters the scratch publish source.
 		// Keep dedup above this point raw: two provider events that differ
 		// only by stripped controls remain two events on the collecting path.
-		if s.toolResultImages == config.ToolResultImagesDrop {
-			ev.Content, _ = db.StripToolResultImages(ev.Content)
+		if s.database == nil || !s.database.ArchiveContent().OmitsToolContent() {
+			assetsDir := ""
+			if s.database != nil {
+				assetsDir = s.database.AssetsDir()
+			}
+			ev.Content = db.ProjectToolResultImageContent(ev.Content, s.toolResultImages, assetsDir)
 			contentLength = len(ev.Content)
 		}
 		toolCall := db.ToolCall{ResultEvents: []db.ToolResultEvent{{

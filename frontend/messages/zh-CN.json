@@ -1995,6 +1995,7 @@
   "settings_tool_result_images": "工具结果图片",
   "settings_tool_result_images_keep": "保留",
   "settings_tool_result_images_drop": "丢弃",
+  "settings_tool_result_images_offload": "单独存储",
   "settings_tool_result_images_hint": "已存储的结果保持写入时的策略，改回「保留」也无法恢复已删除的数据。运行 agentsview db strip --images 可处理已有记录。",
   "settings_tool_result_images_restart_notice": "重启 AgentsView 守护进程后，此更改才会应用到新采集的会话。",
   "settings_tool_images_title": "工具结果图像",

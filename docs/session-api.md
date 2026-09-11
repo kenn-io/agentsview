@@ -1105,3 +1105,7 @@ When [PostgreSQL sync](/docs/pg-sync/) is enabled, the `secret_findings` table,
 the session-level `secret_leak_count`, and the `--has-secret` filter all mirror
 to the shared database. Substring and regex content search work the same way
 against `pg serve`, with the same masking and `--reveal` constraints.
+
+### Ingest-time image offload
+
+The normalized `/api/v1/sessions/{id}/export` and `/api/v1/sessions/{id}/md` endpoints carry stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source bytes and retains their original inline payloads.

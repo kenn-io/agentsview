@@ -183,6 +183,7 @@ type exportMessage struct {
 	Role          string
 	Timestamp     string
 	ContentHTML   template.HTML
+	ToolResults   []string
 	FocusedHidden bool
 }
 
@@ -455,7 +456,7 @@ footer a:hover { text-decoration: underline; }
 </header>
 <main><div class="messages">
 {{- range .Messages}}
-<div class="message {{.RoleClass}}{{.ExtraClass}}{{if .FocusedHidden}} focused-hidden{{end}}" data-ordinal="{{.Ordinal}}"><div class="message-header"><span class="message-role">{{.Role}}</span><span class="message-time">{{.Timestamp}}</span></div><div class="message-content">{{.ContentHTML}}</div></div>
+<div class="message {{.RoleClass}}{{.ExtraClass}}{{if .FocusedHidden}} focused-hidden{{end}}" data-ordinal="{{.Ordinal}}"><div class="message-header"><span class="message-role">{{.Role}}</span><span class="message-time">{{.Timestamp}}</span></div><div class="message-content">{{.ContentHTML}}{{range .ToolResults}}<pre class="tool-block">{{.}}</pre>{{end}}</div></div>
 {{- end}}
 </div></main>
 <footer>Exported from <a href="https://github.com/kenn-io/agentsview">agentsview</a></footer>
@@ -654,8 +655,20 @@ func generateExportHTML(
 			extraClass = " thinking-only"
 		}
 
+		var results []string
+		for _, call := range m.ToolCalls {
+			if call.ResultContent != "" {
+				results = append(results, call.ResultContent)
+			}
+			for _, event := range call.ResultEvents {
+				if event.Content != "" && event.Content != call.ResultContent {
+					results = append(results, event.Content)
+				}
+			}
+		}
 		data.Messages[i] = exportMessage{
 			Ordinal:       m.Ordinal,
+			ToolResults:   results,
 			RoleClass:     roleClass,
 			ExtraClass:    extraClass,
 			Role:          m.Role,

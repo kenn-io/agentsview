@@ -20,7 +20,7 @@ const settingsService = SettingsService as unknown as {
   putApiV1Settings: ReturnType<typeof vi.fn>;
 };
 
-function makeSettingsResponse(toolResultImages: "keep" | "drop") {
+function makeSettingsResponse(toolResultImages: "keep" | "drop" | "offload") {
   return {
     agent_dirs: {},
     chart_palette: "agentsview",
@@ -48,7 +48,7 @@ describe("ArchiveContentSettings", () => {
     cleanup();
   });
 
-  it("renders Keep and Drop options with the store value marked aria-checked", () => {
+  it("renders Keep, Drop, and Offload options with the store value marked aria-checked", () => {
     const { getByRole } = render(ArchiveContentSettings);
     expect(getByRole("radio", { name: "Keep" }).getAttribute("aria-checked")).toBe("true");
     expect(getByRole("radio", { name: "Drop" }).getAttribute("aria-checked")).toBe("false");
@@ -64,6 +64,16 @@ describe("ArchiveContentSettings", () => {
       tool_result_images: "drop",
     });
     expect(getByRole("radio", { name: "Drop" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("saves offload and retains the returned policy", async () => {
+    settingsService.putApiV1Settings.mockResolvedValue(makeSettingsResponse("offload"));
+    const { getByRole } = render(ArchiveContentSettings);
+    await fireEvent.click(getByRole("radio", { name: "Offload" }));
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({
+      tool_result_images: "offload",
+    });
+    expect(getByRole("radio", { name: "Offload" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("shows no restart notice on first render and shows it after a saved selection", async () => {
@@ -93,11 +103,12 @@ describe("ArchiveContentSettings", () => {
     expect(getByRole("radio", { name: "Keep" }).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("disables both radios when settings are read-only", () => {
+  it("disables all radios when settings are read-only", () => {
     settings.readOnly = true;
     const { getByRole } = render(ArchiveContentSettings);
 
     expect((getByRole("radio", { name: "Keep" }) as HTMLButtonElement).disabled).toBe(true);
     expect((getByRole("radio", { name: "Drop" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((getByRole("radio", { name: "Offload" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

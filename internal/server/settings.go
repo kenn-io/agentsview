@@ -18,7 +18,7 @@ type settingsResponse struct {
 	Port             int                       `json:"port"`
 	ChartPalette     config.ChartPalette       `json:"chart_palette"`
 	ZoomLevel        *config.ZoomLevel         `json:"zoom_level,omitempty"`
-	ToolResultImages string                    `json:"tool_result_images" enum:"keep,drop" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
+	ToolResultImages string                    `json:"tool_result_images" enum:"keep,drop,offload" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
 	AuthToken        string                    `json:"auth_token,omitempty"`
 	RequireAuth      bool                      `json:"require_auth"`
 	ReadOnly         bool                      `json:"read_only"`
@@ -50,7 +50,7 @@ type settingsUpdateRequest struct {
 	RequireAuth      *bool             `json:"require_auth,omitempty"`
 	ChartPalette     *string           `json:"chart_palette,omitempty"`
 	ZoomLevel        *config.ZoomLevel `json:"zoom_level,omitempty"`
-	ToolResultImages *string           `json:"tool_result_images,omitempty" enum:"keep,drop" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
+	ToolResultImages *string           `json:"tool_result_images,omitempty" enum:"keep,drop,offload" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
 	DisabledAgents   *[]string         `json:"disabled_agents,omitempty"`
 	// AgentHomes replaces the alternate home list for each listed provider.
 	// An empty list clears that provider's homes.
@@ -64,8 +64,8 @@ const toolResultImagesKeepValue = "keep"
 
 // toolResultImagesValue renders a retention policy in its documented spelling.
 func toolResultImagesValue(policy config.ToolResultImages) string {
-	if policy == config.ToolResultImagesDrop {
-		return string(config.ToolResultImagesDrop)
+	if policy == config.ToolResultImagesDrop || policy == config.ToolResultImagesOffload {
+		return string(policy)
 	}
 	return toolResultImagesKeepValue
 }

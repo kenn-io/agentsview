@@ -11,4 +11,5 @@ export type SettingsUpdateRequestToolResultImages =
 export const SettingsUpdateRequestToolResultImages = {
   keep: "keep",
   drop: "drop",
+  offload: "offload",
 } as const;

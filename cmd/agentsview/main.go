@@ -1336,6 +1336,7 @@ func openDB(cfg config.Config) (*db.DB, error) {
 		return nil, err
 	}
 	database.SetToolResultImages(cfg.ToolResultImages)
+	database.SetAssetsDir(filepath.Join(cfg.DataDir, "assets"))
 	if cfg.InstallationID != "" {
 		unowned, err := database.EnsureInstallationIdentity(context.Background(), cfg.InstallationID)
 		if err != nil {

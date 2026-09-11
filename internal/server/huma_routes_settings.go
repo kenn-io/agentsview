@@ -145,10 +145,7 @@ func (s *Server) humaUpdateSettings(
 		patch["zoom_level"] = *in.Body.ZoomLevel
 	}
 	if in.Body.ToolResultImages != nil {
-		// The enum tag already constrained this to "keep" or "drop" before
-		// the handler ran, and those are the two spellings the configuration
-		// reference documents, so the value is persisted as sent. SaveSettings
-		// re-validates it for callers that bypass the HTTP layer.
+		// SaveSettings revalidates values for callers that bypass the HTTP enum.
 		patch["tool_result_images"] = config.ToolResultImages(*in.Body.ToolResultImages)
 	}
 	if in.Body.DisabledAgents != nil {

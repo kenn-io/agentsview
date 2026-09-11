@@ -2060,6 +2060,7 @@
   "settings_tool_result_images": "Tool-result images",
   "settings_tool_result_images_keep": "Keep",
   "settings_tool_result_images_drop": "Drop",
+  "settings_tool_result_images_offload": "Offload",
   "settings_tool_result_images_hint": "Stored results keep the policy they were written under, and switching back to Keep cannot restore payloads already removed. Run agentsview db strip --images to project existing rows.",
   "settings_tool_result_images_restart_notice": "Restart the AgentsView daemon to apply this change to newly ingested sessions.",
   "settings_tool_images_title": "Tool-result images",

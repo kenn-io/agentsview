@@ -1638,3 +1638,7 @@ profile or pass them inline:
 ```bash
 AGENTSVIEW_DATA_DIR=/tmp/av-test agentsview serve
 ```
+
+### Ingest-time image offload
+
+Set `tool_result_images = "offload"` to offload supported tool-result images on future ingestion. Run `agentsview db migrate --images` to retry retained inline images after an asset-write failure. The raw `agentsview session export` command continues to stream provider source bytes. See [image storage](/docs/data/#ingest-time-image-offload) for backup and remote-backend limits.

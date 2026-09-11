@@ -3,6 +3,11 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/mattn/go-sqlite3"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -443,4 +448,252 @@ func TestStripToolResultSummaryPreservesSectionBoundaries(t *testing.T) {
 			assert.Equal(t, int64(1), stats.Payloads)
 		})
 	}
+}
+
+func assertOffloadedImage(t *testing.T, content, dir string) {
+	t.Helper()
+	var blocks []struct {
+		Ref string `json:"image_ref"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(content), &blocks))
+	var ref string
+	for _, block := range blocks {
+		if block.Ref != "" {
+			ref = block.Ref
+		}
+	}
+	require.True(t, strings.HasPrefix(ref, "asset://"), content)
+	body, err := os.ReadFile(filepath.Join(dir, strings.TrimPrefix(ref, "asset://")))
+	require.NoError(t, err)
+	assert.Equal(t, []byte{0, 1, 2}, body)
+}
+
+func TestProjectToolResultImageContent(t *testing.T) {
+	raw := testInlineImageContent()
+	for _, mode := range []config.ToolResultImages{config.ToolResultImagesKeep, config.ToolResultImagesDrop, config.ToolResultImagesOffload, "unknown"} {
+		t.Run(string(mode), func(t *testing.T) {
+			dir := t.TempDir()
+			got := ProjectToolResultImageContent(raw, mode, dir)
+			if mode == config.ToolResultImagesOffload {
+				assertOffloadedImage(t, got, dir)
+				assert.Contains(t, got, `"text":"before"`)
+				assert.Contains(t, got, `"text":"after"`)
+			} else {
+				entries, err := os.ReadDir(dir)
+				require.NoError(t, err)
+				assert.Empty(t, entries)
+				if mode == config.ToolResultImagesDrop {
+					assert.Contains(t, got, `"type":"agentsview_image"`)
+					assert.NotContains(t, got, "image_ref")
+				} else {
+					assert.Equal(t, raw, got)
+				}
+			}
+		})
+	}
+	for _, raw := range []string{"", "ordinary text", `[{"type":"input_image","image_url":"data:image/svg+xml;base64,AAEC"}]`, `[{"type":"input_image","image_url":"data:image/png;base64,!!!"}]`, `[{"type":"input_image","image_url":"data:image/png,AAEC"}]`} {
+		dir := t.TempDir()
+		assert.Equal(t, raw, ProjectToolResultImageContent(raw, config.ToolResultImagesOffload, dir))
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	}
+	blocked := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(blocked, []byte("occupied"), 0o600))
+	assert.Equal(t, raw, ProjectToolResultImageContent(raw, config.ToolResultImagesOffload, blocked))
+	assert.Equal(t, raw, ProjectToolResultImageContent(raw, config.ToolResultImagesOffload, ""))
+}
+
+func TestToolResultImagesOffloadWriteRoutes(t *testing.T) {
+	for _, route := range []string{"insert", "incremental", "replacement", "content", "batch", "atomic"} {
+		t.Run(route, func(t *testing.T) {
+			d := testDB(t)
+			d.SetToolResultImages(config.ToolResultImagesOffload)
+			d.SetAssetsDir(t.TempDir())
+			insertSession(t, d, route, "project")
+			messages := []Message{testImageMessage(route)}
+			switch route {
+			case "insert":
+				require.NoError(t, d.InsertMessages(messages))
+			case "incremental":
+				_, err := d.WriteSessionIncremental(route, messages, IncrementalSessionUpdate{})
+				require.NoError(t, err)
+			case "replacement":
+				require.NoError(t, d.ReplaceSessionMessages(route, messages))
+			case "content":
+				require.NoError(t, d.ReplaceSessionContent(route, messages, SessionSignalUpdate{}, nil))
+			default:
+				writes := []SessionBatchWrite{{Session: Session{ID: route, Project: "project", Machine: "local", Agent: "codex"}, Messages: messages}}
+				var result SessionBatchResult
+				var err error
+				if route == "atomic" {
+					result, err = d.WriteSessionBatchAtomic(writes)
+				} else {
+					result, err = d.WriteSessionBatch(writes)
+				}
+				require.NoError(t, err)
+				require.Equal(t, 1, result.WrittenSessions)
+			}
+			stored, err := d.GetAllMessages(t.Context(), route)
+			require.NoError(t, err)
+			require.Len(t, stored, 1)
+			call := stored[0].ToolCalls[0]
+			assertOffloadedImage(t, call.ResultContent, d.AssetsDir())
+			require.Len(t, call.ResultEvents, 1)
+			assertOffloadedImage(t, call.ResultEvents[0].Content, d.AssetsDir())
+			assert.Equal(t, len(call.ResultEvents[0].Content), call.ResultEvents[0].ContentLength)
+			assert.Equal(t, testInlineImageContent(), messages[0].ToolCalls[0].ResultEvents[0].Content)
+		})
+	}
+}
+
+func TestToolResultImagesOffloadLateAndLinked(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		for _, linked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("blocked=%t/linked=%t", blocked, linked), func(t *testing.T) {
+				d := testDB(t)
+				d.SetToolResultImages(config.ToolResultImagesOffload)
+				d.SetAssetsDir(t.TempDir())
+				insertSession(t, d, "late", "project")
+				require.NoError(t, d.InsertMessages([]Message{{SessionID: "late", Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "call", Category: "Bash"}}}}))
+				raw := testInlineImageContent()
+				update := IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1, BlockedResultCategories: map[string]bool{"Bash": blocked}}
+				if linked {
+					update.SubagentLinks = []ToolCallSubagentLink{{ToolUseID: "call", HasResult: true, ResultContent: raw, ResultContentLen: len(raw)}}
+				} else {
+					update.ToolCallResultUpdates = []ToolCallResultUpdate{{ToolUseID: "call", Events: []ToolResultEvent{{Content: raw, Source: "function_call_output"}}}}
+				}
+				_, err := d.WriteSessionIncremental("late", nil, update)
+				require.NoError(t, err)
+				stored, err := d.GetAllMessages(t.Context(), "late")
+				require.NoError(t, err)
+				call := stored[0].ToolCalls[0]
+				if blocked {
+					assert.Empty(t, call.ResultContent)
+					assert.Equal(t, len(raw), call.ResultContentLength)
+					entries, err := os.ReadDir(d.AssetsDir())
+					require.NoError(t, err)
+					assert.Empty(t, entries)
+				} else {
+					assertOffloadedImage(t, call.ResultContent, d.AssetsDir())
+					assert.Equal(t, len(call.ResultContent), call.ResultContentLength)
+				}
+				before, err := d.GetSessionFull(t.Context(), "late")
+				require.NoError(t, err)
+				_, err = d.WriteSessionIncremental("late", nil, update)
+				require.NoError(t, err)
+				after, err := d.GetSessionFull(t.Context(), "late")
+				require.NoError(t, err)
+				assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision)
+			})
+		}
+	}
+}
+
+func TestToolResultImagesResyncRoute(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			d := testDB(t)
+			dir := t.TempDir()
+			if failed {
+				dir = filepath.Join(dir, "file")
+				require.NoError(t, os.WriteFile(dir, []byte("occupied"), 0o600))
+			}
+			d.SetAssetsDir(dir)
+			for _, id := range []string{"copied", "untouched"} {
+				insertSession(t, d, id, "project")
+				require.NoError(t, d.InsertMessages([]Message{testImageMessage(id)}))
+			}
+			d.SetToolResultImages(config.ToolResultImagesOffload)
+			require.NoError(t, d.ProjectToolImagesForSessions(t.Context(), []string{"copied"}))
+			for _, id := range []string{"copied", "untouched"} {
+				messages, err := d.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				if id == "copied" && !failed {
+					assertOffloadedImage(t, messages[0].ToolCalls[0].ResultContent, dir)
+				} else {
+					assert.Equal(t, testInlineImageContent(), messages[0].ToolCalls[0].ResultContent)
+				}
+			}
+		})
+	}
+}
+
+func TestToolResultImagesOffloadOmittedArchives(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			d := testDB(t)
+			d.SetToolResultImages(config.ToolResultImagesOffload)
+			d.SetAssetsDir(t.TempDir())
+			d.SetArchiveContent(policy)
+			insertSession(t, d, "omitted", "project")
+			message := testImageMessage("omitted")
+			message.ToolCalls[0].ResultEvents = nil
+			require.NoError(t, d.InsertMessages([]Message{message}))
+			_, err := d.WriteSessionIncremental("omitted", nil, IncrementalSessionUpdate{SubagentLinks: []ToolCallSubagentLink{{ToolUseID: "call-1", HasResult: true, ResultContent: testInlineImageContent()}}, ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call-1", Events: []ToolResultEvent{{Content: testInlineImageContent()}}}}})
+			require.NoError(t, err)
+			require.NoError(t, d.ProjectToolImagesForSessions(t.Context(), []string{"omitted"}))
+			entries, err := os.ReadDir(d.AssetsDir())
+			require.NoError(t, err)
+			assert.Empty(t, entries)
+		})
+	}
+}
+
+func TestToolResultImagesOffloadPublishesBeforeInsert(t *testing.T) {
+	d := testDB(t)
+	d.SetAssetsDir(t.TempDir())
+	d.SetToolResultImages(config.ToolResultImagesOffload)
+	insertSession(t, d, "ordered", "project")
+	conn, err := d.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(driverConn any) error {
+		return driverConn.(*sqlite3.SQLiteConn).RegisterFunc("asset_published", func(content string) bool {
+			const object = "ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc.png"
+			body, err := os.ReadFile(filepath.Join(d.AssetsDir(), object))
+			return err == nil && string(body) == "\x00\x01\x02" && strings.Contains(content, "asset://"+object)
+		}, false)
+	}))
+	require.NoError(t, conn.Close())
+	_, err = d.getWriter().Exec(`CREATE TEMP TRIGGER require_asset BEFORE INSERT ON tool_result_events WHEN NOT asset_published(NEW.content) BEGIN SELECT RAISE(ABORT, 'asset missing before insert'); END`)
+	require.NoError(t, err)
+	require.NoError(t, d.InsertMessages([]Message{testImageMessage("ordered")}))
+	var count int
+	require.NoError(t, d.getReader().QueryRow("SELECT COUNT(*) FROM tool_result_events WHERE session_id = 'ordered'").Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
+func TestOffloadLinkedSummaryKeepsReferenceWithOlderInlineEvent(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "older", "project")
+	require.NoError(t, d.InsertMessages([]Message{testImageMessage("older")}))
+	d.SetToolResultImages(config.ToolResultImagesOffload)
+	d.SetAssetsDir(t.TempDir())
+	_, err := d.WriteSessionIncremental("older", nil, IncrementalSessionUpdate{SubagentLinks: []ToolCallSubagentLink{{ToolUseID: "call-1", HasResult: true, ResultContent: testInlineImageContent()}}})
+	require.NoError(t, err)
+	messages, err := d.GetAllMessages(t.Context(), "older")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	call := messages[0].ToolCalls[0]
+	assertOffloadedImage(t, call.ResultContent, d.AssetsDir())
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, testInlineImageContent(), call.ResultEvents[0].Content)
+	assert.Equal(t, len(call.ResultContent), call.ResultContentLength)
+}
+
+func TestOffloadOmittedLateResultDoesNotPublishOlderImages(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "retained", "project")
+	message := testImageMessage("retained")
+	PrepareToolResultEvent(&message.ToolCalls[0].ResultEvents[0])
+	require.NoError(t, d.InsertMessages([]Message{message}))
+	d.SetAssetsDir(t.TempDir())
+	d.SetToolResultImages(config.ToolResultImagesOffload)
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
+	_, err := d.WriteSessionIncremental("retained", nil, IncrementalSessionUpdate{ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call-1", Events: []ToolResultEvent{{Content: "later result", Source: "function_call_output"}}}}})
+	require.NoError(t, err)
+	objects, err := os.ReadDir(d.AssetsDir())
+	require.NoError(t, err)
+	assert.Empty(t, objects)
 }

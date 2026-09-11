@@ -135,3 +135,12 @@ reclaimed bytes separately; its result must not be combined with savings from
 filtering or a future compression implementation. See
 [`agentsview db compact`](/docs/commands/#agentsview-db-compact) for the staging
 space model and interrupted-compaction recovery.
+
+
+### Ingest-time image offload
+
+Set `tool_result_images = "offload"` to move supported inline tool-result PNG, JPEG, WebP, and GIF payloads into `{dataDir}/assets/<sha256hex><ext>` during ingestion. Restart the daemon after changing the setting. Each asset write completes before SQLite can commit its `agentsview_image` placeholder and `image_ref`. Unsupported media and malformed data remain inline. Archives that omit tool content write no image assets. `keep` retains inline content; `drop` retains the existing readable placeholder without an asset.
+
+If an asset write fails, ingestion and copied-session resync keep the original inline content. Retry retained inline payloads with `agentsview db migrate --images` after restoring access to the asset directory. Complete unreferenced objects from a failed database transaction remain available for reuse; the store does not automatically remove them. Back up the asset directory with the archive and copy both to another local serving host.
+
+PostgreSQL and CockroachDB preserve the placeholder and reference text but cannot resolve the local asset. DuckDB, artifact exports, and the normalized server session exports at `/api/v1/sessions/{id}/export` and `/api/v1/sessions/{id}/md` carry the stored content. The raw `agentsview session export` command streams provider source bytes, so its output retains the original inline payloads.

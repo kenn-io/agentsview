@@ -10,11 +10,12 @@ import (
 type ToolResultImages string
 
 const (
-	ToolResultImagesKeep ToolResultImages = ""
-	ToolResultImagesDrop ToolResultImages = "drop"
+	ToolResultImagesKeep    ToolResultImages = ""
+	ToolResultImagesDrop    ToolResultImages = "drop"
+	ToolResultImagesOffload ToolResultImages = "offload"
 )
 
-// ParseToolResultImages accepts the two persisted policy values. An empty
+// ParseToolResultImages accepts the persisted policy values. An empty
 // value means the default keep policy.
 func ParseToolResultImages(value string) (ToolResultImages, error) {
 	switch value = strings.ToLower(strings.TrimSpace(value)); ToolResultImages(value) {
@@ -22,11 +23,11 @@ func ParseToolResultImages(value string) (ToolResultImages, error) {
 		return ToolResultImagesKeep, nil
 	case "keep":
 		return ToolResultImagesKeep, nil
-	case "drop":
-		return ToolResultImagesDrop, nil
+	case "drop", "offload":
+		return ToolResultImages(value), nil
 	default:
 		return "", fmt.Errorf(
-			`tool_result_images must be "keep" or "drop" (got %q)`, value,
+			`tool_result_images must be "keep", "drop", or "offload" (got %q)`, value,
 		)
 	}
 }

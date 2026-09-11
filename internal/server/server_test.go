@@ -3771,19 +3771,22 @@ func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
 
 	w = putSettings(`{"tool_result_images":"drop"}`)
 	assertStatus(t, w, http.StatusOK)
+	assert.Equal(t, config.ToolResultImagesDrop, loadedPolicy(t))
+	w = putSettings(`{"tool_result_images":"offload"}`)
+	assertStatus(t, w, http.StatusOK)
 	var updated struct {
 		ToolResultImages string `json:"tool_result_images"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
-	assert.Equal(t, "drop", updated.ToolResultImages)
+	assert.Equal(t, "offload", updated.ToolResultImages)
 
 	var persisted struct {
 		ToolResultImages string `toml:"tool_result_images"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
 	require.NoError(t, err)
-	assert.Equal(t, "drop", persisted.ToolResultImages)
-	assert.Equal(t, config.ToolResultImagesDrop, loadedPolicy(t))
+	assert.Equal(t, "offload", persisted.ToolResultImages)
+	assert.Equal(t, config.ToolResultImagesOffload, loadedPolicy(t))
 
 	w = putSettings(`{"tool_result_images":"keep"}`)
 	assertStatus(t, w, http.StatusOK)
@@ -5704,4 +5707,20 @@ func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 	assert.Empty(t, persisted.Agents["codex"].Homes)
 	assert.Empty(t, persisted.Agents["pi"].Homes)
 	assert.Equal(t, []string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
+}
+
+func TestNormalizedSessionExportsPreserveOffloadedImages(t *testing.T) {
+	te := setup(t)
+	te.db.SetToolResultImages(config.ToolResultImagesOffload)
+	te.db.SetAssetsDir(t.TempDir())
+	te.seedSession(t, "image-export", "project", 1)
+	require.NoError(t, te.db.InsertMessages([]db.Message{{SessionID: "image-export", Role: "assistant", Content: "image result", ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "Read", Category: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}}))
+	for _, endpoint := range []string{"export", "md"} {
+		w := te.get(t, "/api/v1/sessions/image-export/"+endpoint)
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Body.String(), "image_ref")
+		assert.Contains(t, w.Body.String(), "asset://")
+		assert.Contains(t, w.Body.String(), "agentsview_image")
+		assert.NotContains(t, w.Body.String(), "base64,AAEC")
+	}
 }
