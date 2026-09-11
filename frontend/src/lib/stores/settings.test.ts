@@ -204,6 +204,39 @@ describe("SettingsStore.load mode handling", () => {
     expect(ui.zoomLevel).toBe(150);
     expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
   });
+
+  it("does not hydrate over a zoom save queued behind another mutation", async () => {
+    const saveResponse = {
+      agent_dirs: {},
+      chart_palette: "matplotlib" as const,
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" as const },
+    };
+    let finishFirstSave!: (value: typeof saveResponse) => void;
+    settingsService.putApiV1Settings
+      .mockReturnValueOnce(new Promise<typeof saveResponse>((resolve) => {
+        finishFirstSave = resolve;
+      }))
+      .mockResolvedValue({ ...saveResponse, zoom_level: 150 });
+    const firstSave = settings.save({ chart_palette: "matplotlib" });
+    settingsService.getApiV1Settings.mockResolvedValue({
+      ...saveResponse,
+      zoom_level: 120,
+    });
+
+    ui.setZoomLevel(150);
+    await settings.load();
+
+    expect(ui.zoomLevel).toBe(150);
+    finishFirstSave(saveResponse);
+    await firstSave;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("SettingsStore zoom persistence", () => {

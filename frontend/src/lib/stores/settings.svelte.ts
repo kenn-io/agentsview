@@ -90,6 +90,7 @@ class SettingsStore {
     const loadVersion = ++this.loadVersion;
     const zoomChangeVersion = ui.zoomChangeVersion;
     const zoomSaveVersion = this.zoomSaveVersion;
+    const mutationActive = this.saving;
     this.loading = true;
     this.loaded = false;
     this.error = null;
@@ -117,7 +118,8 @@ class SettingsStore {
         data.zoom_level !== undefined &&
         loadVersion === this.loadVersion &&
         ui.zoomChangeVersion === zoomChangeVersion &&
-        this.zoomSaveVersion === zoomSaveVersion
+        this.zoomSaveVersion === zoomSaveVersion &&
+        !mutationActive
       ) {
         ui.applyZoomLevel(data.zoom_level);
       }
