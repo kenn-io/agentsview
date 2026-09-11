@@ -2815,8 +2815,14 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   goose migration tool and proves nothing), expand `projects.json` entries
   into provider roots, attribute each session to the project directory above
   the store, pair `tool_result` parts into system tool-result messages keyed
-  by call ID, treat `is_summary_message` rows as summary markers, and use
-  stat-based composite freshness over the database and WAL sidecar.
+  by call ID, emit `is_summary_message` rows as compact-boundary system
+  messages, and fingerprint the session and message rows so same-second
+  edits still invalidate freshness (`FingerprintHashRequiredForFreshness`).
+  Watcher events use bounded rowid cursors over `sessions` and `messages` so
+  work stays proportional to inserted rows, with a periodic reconciliation
+  pass covering metadata-only edits and row deletes. A malformed `parts`
+  value fails that session's parse rather than degrading silently, matching
+  the goose parser's policy.
 
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
