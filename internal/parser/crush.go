@@ -45,6 +45,7 @@ type crushSessionRow struct {
 // ~/.local/share/crush/projects.json.
 type crushProjectsFile struct {
 	Projects []struct {
+		Path    string `json:"path"`
 		DataDir string `json:"data_dir"`
 	} `json:"projects"`
 }
@@ -69,6 +70,34 @@ func crushProjectsDataDirs(registryPath string) []string {
 		dirs = append(dirs, filepath.Clean(dir))
 	}
 	return dirs
+}
+
+// crushProjectDirsMapping reads a Crush projects.json registry and returns
+// a mapping from each data directory to its project path. The project path
+// is used for project attribution when the data directory does not follow
+// the default <project>/.crush layout.
+func crushProjectDirsMapping(registryPath string) map[string]string {
+	data, err := os.ReadFile(registryPath)
+	if err != nil {
+		return nil
+	}
+	var pf crushProjectsFile
+	if err := json.Unmarshal(data, &pf); err != nil {
+		return nil
+	}
+	mapping := make(map[string]string, len(pf.Projects))
+	for _, project := range pf.Projects {
+		dir := strings.TrimSpace(project.DataDir)
+		if dir == "" {
+			continue
+		}
+		path := strings.TrimSpace(project.Path)
+		if path == "" {
+			continue
+		}
+		mapping[filepath.Clean(dir)] = filepath.Clean(path)
+	}
+	return mapping
 }
 
 func openCrushDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
@@ -293,7 +322,8 @@ func crushSessionMtime(dbPath string, row crushSessionRow) int64 {
 }
 
 func parseCrushSession(
-	ctx context.Context, dbPath, sessionID, machine string, stableSnapshot bool,
+	ctx context.Context, dbPath, sessionID, machine string,
+	stableSnapshot bool, projectMapping map[string]string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	db, err := openCrushDB(dbPath, stableSnapshot)
 	if err != nil {
@@ -328,10 +358,19 @@ func parseCrushSession(
 		}
 	}
 
-	// The store lives at <project>/.crush/crush.db; the project directory
-	// is two levels above the database file. Configured roots that keep
-	// crush.db elsewhere still resolve to the store's parent directory.
-	projectDir := filepath.Clean(filepath.Dir(filepath.Dir(dbPath)))
+	// Resolve the project directory: first check the registry mapping for
+	// an explicit project path, then fall back to the two-levels-above
+	// heuristic for the default <project>/.crush layout.
+	dataDir := filepath.Dir(dbPath)
+	projectDir := ""
+	if projectMapping != nil {
+		if path, ok := projectMapping[dataDir]; ok {
+			projectDir = path
+		}
+	}
+	if projectDir == "" {
+		projectDir = filepath.Clean(filepath.Dir(dataDir))
+	}
 	project := ExtractProjectFromCwd(projectDir)
 	if project == "" {
 		project = "crush"

@@ -38,7 +38,10 @@ func (f *crushProviderFactory) Capabilities() Capabilities {
 
 func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
-	cfg.Roots = normalizeCrushRoots(cfg.Roots)
+	originalRoots := make([]string, len(cfg.Roots))
+	copy(originalRoots, cfg.Roots)
+	expandedRoots, registryMapping, projectMapping := normalizeCrushRoots(cfg.Roots)
+	cfg.Roots = expandedRoots
 	spec := crushProviderSpec(cfg.StableSourceSnapshots)
 	base := &dbBackedProvider{
 		Def:     cloneAgentDef(f.def),
@@ -47,12 +50,61 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		spec:    spec,
 		sources: newDBBackedSourceSet(spec, cfg.Roots),
 	}
-	return &crushProvider{dbBackedProvider: base, tracker: f.tracker}
+	p := &crushProvider{
+		dbBackedProvider: base,
+		tracker:          f.tracker,
+		originalRoots:    originalRoots,
+		registryMapping:  registryMapping,
+		projectMapping:   projectMapping,
+	}
+	// Replace the parse closure to capture the project mapping so
+	// parseCrushSession can attribute sessions to the correct project
+	// when the data directory does not follow the default layout.
+	p.spec.parse = func(
+		ctx context.Context, dbPath, sessionID, machine string,
+	) ([]ParseResult, error) {
+		sess, msgs, err := parseCrushSession(
+			ctx, dbPath, sessionID, machine,
+			cfg.StableSourceSnapshots, p.projectMapping,
+		)
+		if err != nil || sess == nil {
+			return nil, err
+		}
+		return []ParseResult{{
+			Session:     *sess,
+			Messages:    msgs,
+			UsageEvents: sess.UsageEvents,
+		}}, nil
+	}
+	return p
 }
 
 type crushProvider struct {
 	*dbBackedProvider
-	tracker *crushChangeTracker
+	tracker         *crushChangeTracker
+	originalRoots   []string
+	registryMapping map[string][]string
+	projectMapping  map[string]string
+}
+
+// ResolveReconciliationScopes expands registry roots to their per-project
+// data directories before scope resolution. The configured roots contain
+// only expanded data directories, so a request root that is a registry
+// directory would otherwise match no scope.
+func (p *crushProvider) ResolveReconciliationScopes(
+	ctx context.Context, req ReconciliationScopeRequest,
+) (ReconciliationScopePlan, error) {
+	expanded := make([]string, 0, len(req.Roots))
+	for _, root := range req.Roots {
+		if dataDirs, ok := p.registryMapping[filepath.Clean(root)]; ok {
+			expanded = append(expanded, dataDirs...)
+		} else {
+			expanded = append(expanded, root)
+		}
+	}
+	return p.dbBackedProvider.ResolveReconciliationScopes(ctx, ReconciliationScopeRequest{
+		Roots: expanded,
+	})
 }
 
 func (p *crushProvider) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -232,7 +284,7 @@ func crushProviderSpec(stableSnapshot bool) dbBackedProviderSpec {
 		parse: func(
 			ctx context.Context, dbPath, sessionID, machine string,
 		) ([]ParseResult, error) {
-			sess, msgs, err := parseCrushSession(ctx, dbPath, sessionID, machine, stableSnapshot)
+			sess, msgs, err := parseCrushSession(ctx, dbPath, sessionID, machine, stableSnapshot, nil)
 			if err != nil || sess == nil {
 				return nil, err
 			}
@@ -249,16 +301,20 @@ func crushProviderSpec(stableSnapshot bool) dbBackedProviderSpec {
 }
 
 // normalizeCrushRoots expands configured roots into per-project data
-// directories. A root is one of:
+// directories and returns the expanded roots alongside a mapping from
+// each original registry root to its expanded data directories. A root
+// is one of:
 //   - a directory directly holding crush.db (a <project>/.crush data dir)
 //   - the path to a crush.db file itself
 //   - a Crush data directory holding projects.json, whose listed data
 //     dirs are each expanded (deduplicated); an unreadable or empty
 //     registry leaves the root in place rather than failing discovery
-func normalizeCrushRoots(roots []string) []string {
+func normalizeCrushRoots(roots []string) ([]string, map[string][]string, map[string]string) {
 	cleaned := cleanJSONLRoots(roots)
 	out := make([]string, 0, len(cleaned))
 	seen := make(map[string]struct{}, len(cleaned))
+	registryMapping := make(map[string][]string)
+	projectMapping := make(map[string]string)
 	add := func(root string) {
 		if _, ok := seen[root]; ok {
 			return
@@ -284,11 +340,16 @@ func normalizeCrushRoots(roots []string) []string {
 			add(root)
 			continue
 		}
+		registryMapping[root] = expanded
+		mapping := crushProjectDirsMapping(filepath.Join(root, CrushProjectsFileName))
+		for k, v := range mapping {
+			projectMapping[k] = v
+		}
 		for _, dir := range expanded {
 			add(dir)
 		}
 	}
-	return out
+	return out, registryMapping, projectMapping
 }
 
 func crushDBPath(dir string) string {
@@ -335,21 +396,41 @@ func crushSessionFingerprint(
 	} {
 		crushWriteFingerprintField(hasher, value)
 	}
-	messageRows, err := db.QueryContext(ctx, `
-		SELECT id, session_id, COALESCE(role, ''), COALESCE(parts, ''),
-		       COALESCE(model, ''), COALESCE(provider, ''),
-		       CAST(COALESCE(created_at, 0) AS TEXT),
-		       CAST(COALESCE(updated_at, 0) AS TEXT),
-		       COALESCE(CAST(finished_at AS TEXT), ''),
-		       CAST(COALESCE(is_summary_message, 0) AS TEXT)
-		  FROM messages WHERE session_id = ? ORDER BY rowid
-	`, sessionID)
+	messageColumns, err := crushTableColumns(ctx, db, "messages")
+	if err != nil {
+		return "", false, fmt.Errorf("fingerprinting crush messages: %w", err)
+	}
+	columns := []struct {
+		name    string
+		exists  bool
+		express string
+	}{
+		{"id", true, "id"},
+		{"session_id", true, "session_id"},
+		{"role", true, "COALESCE(role, '')"},
+		{"parts", true, "COALESCE(parts, '')"},
+		{"model", true, "COALESCE(model, '')"},
+		{"provider", messageColumns["provider"], "COALESCE(provider, '')"},
+		{"created_at", true, "CAST(COALESCE(created_at, 0) AS TEXT)"},
+		{"updated_at", true, "CAST(COALESCE(updated_at, 0) AS TEXT)"},
+		{"finished_at", messageColumns["finished_at"], "COALESCE(CAST(finished_at AS TEXT), '')"},
+		{"is_summary_message", messageColumns["is_summary_message"], "CAST(COALESCE(is_summary_message, 0) AS TEXT)"},
+	}
+	selectExprs := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if col.exists {
+			selectExprs = append(selectExprs, col.express)
+		}
+	}
+	selectStmt := "SELECT " + strings.Join(selectExprs, ", ") +
+		" FROM messages WHERE session_id = ? ORDER BY rowid"
+	messageRows, err := db.QueryContext(ctx, selectStmt, sessionID)
 	if err != nil {
 		return "", false, fmt.Errorf("fingerprinting crush messages: %w", err)
 	}
 	defer messageRows.Close()
 	for messageRows.Next() {
-		var values [10]string
+		values := make([]string, len(selectExprs))
 		destinations := make([]any, len(values))
 		for i := range values {
 			destinations[i] = &values[i]
