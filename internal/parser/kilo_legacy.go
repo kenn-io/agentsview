@@ -20,6 +20,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -1701,7 +1702,7 @@ func parseKiloLegacyToolCall(text string, ordinal int) *ParsedToolCall {
 			tc.SkillName, _ = toolData["name"].(string)
 		}
 	} else {
-		tc.SkillName = inferToolSkillName(toolName, tc.InputJSON)
+		tc.SkillName = inferToolSkillName(context.Background(), toolName, tc.InputJSON)
 	}
 	// FilePath is exposed from the payload when present so the
 	// frontend can route Edits / Writes to the right file even
@@ -1737,7 +1738,7 @@ func parseKiloLegacyMCPToolCall(
 		Category:  "MCP",
 		InputJSON: inputJSON,
 	}
-	tc.SkillName = inferToolSkillName(qualified, inputJSON)
+	tc.SkillName = inferToolSkillName(context.Background(), qualified, inputJSON)
 	return tc
 }
 

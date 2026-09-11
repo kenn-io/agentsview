@@ -365,6 +365,7 @@ keeps its default directories.
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                         | JSONL per session                                                                                                                                             |
 | OpenClaw              | `~/.openclaw/assets/static/agents/` and `~/.kimi_openclaw/assets/static/agents/`                                                                                 | JSONL per session                                                                                                                                             |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
+| Open Code Review      | `~/.opencodereview/sessions/`                                                                                                                                   | One JSONL file per review under an encoded project directory                                                                                                  |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                                                          |
 | Omnigent              | `~/.omnigent/`                                                                                                                                                   | SQLite `chat.db`, one session per conversation                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
@@ -816,6 +817,7 @@ export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp
 export OPENCLAW_DIR=~/custom/openclaw
 export OPENCODE_DIR=~/custom/opencode
+export OPENCODEREVIEW_DIR=~/custom/opencodereview/sessions
 export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi
 export PI_CODING_AGENT_DIR=~/custom/pi-home # sessions are under this home
@@ -917,6 +919,9 @@ dirs = [
 dirs = [
   "~/.codex/sessions",
 ]
+
+[agents.opencodereview]
+dirs = ["~/.opencodereview/sessions"]
 ```
 
 Every locally discovered provider uses the same `[agents.<id>]` table with a
@@ -1262,7 +1267,45 @@ pulled in from PostgreSQL sync or copied from other archives.
 ## Database
 
 The SQLite database uses WAL mode for concurrent reads and includes FTS5
-full-text search indexes on message content.
+full-text search indexes on message content. To add Chinese word, phrase, and
+single-character matching, build and install the pinned `simple`/cppjieba
+sidecar with `make install-chinese-fts`. Building it requires Git, CMake
+3.19 or newer, and a C++14 compiler. AgentsView discovers it next to the binary
+or under the sibling `lib/agentsview/simple` directory. A custom path can be
+selected with `AGENTSVIEW_SIMPLE_DIR`.
+
+The sidecar adds a parallel `messages_chinese_fts` index and routes only CJK
+queries through it. ASCII-only searches continue to use the existing Porter
+index, so searches such as `run` retain English stemming. The Chinese index is
+derived data: if the sidecar is removed, AgentsView drops that optional index
+and continues with the standard FTS5 path; reinstalling the sidecar backfills
+it on the next writable open. AgentsView fingerprints the native library and
+all cppjieba dictionaries, atomically rebuilding the index when that fingerprint
+changes. Writers running with another fingerprint leave a freshness marker
+instead of mixing incompatible token streams. Pinyin expansion is disabled in
+the derived index because ASCII-only queries continue to use the Porter index.
+
+Chinese word segmentation is specific to SQLite message search, including the
+HTTP, CLI, and MCP search paths. PostgreSQL/CockroachDB and DuckDB do not load
+this SQLite extension and keep their existing search behavior. Substring and
+regular-expression searches are unchanged. Session search result snippets
+highlight the segmented matches; highlighting inside an opened transcript uses
+the original query and may miss separated Chinese words.
+
+The first backfill, a changed fingerprint, or any pending session requires a
+full index rebuild before startup completes. AgentsView logs this wait. The
+freshness ledger stores session IDs rather than old message IDs and token
+content, so it cannot remove stale entries for individual replaced or deleted
+messages. Removing the sidecar drops the Chinese index but retains the
+`messages_chinese_fts_pending_sessions` ledger and three persistent session
+triggers. The ledger holds at most one row per touched session ID until the
+next successful Chinese index rebuild clears it.
+
+Index maintenance uses TEMP triggers on the writer connection. Writes made
+without these triggers or with another sidecar fingerprint leave the index
+stale. Chinese search then falls back to standard FTS5 and logs a warning once
+per database handle. Reopening the archive with the sidecar restores the index
+and its triggers.
 
 **Schema tables:**
 
@@ -1278,6 +1321,7 @@ full-text search indexes on message content.
 | `stats`              | Aggregate counts (session_count, message_count)                              |
 | `skipped_files`      | Cache of non-interactive session files                                       |
 | `messages_fts`       | FTS5 virtual table for full-text search                                      |
+| `messages_chinese_fts` | Optional FTS5 index using the `simple` Chinese tokenizer                   |
 
 The database is automatically migrated on startup when the schema changes. When
 the stored data version is stale, AgentsView preserves the existing database and
@@ -1449,6 +1493,17 @@ keep more roots watched in real time:
 ```bash
 sudo sysctl fs.inotify.max_user_watches=524288
 ```
+
+## Memory Behavior
+
+The serve daemon bounds its own memory, so no tuning is required. It installs a
+256 MiB Go soft memory limit, and on Linux it also limits glibc to two malloc
+arenas and pins the heap trim threshold at 1 MiB. Pinning the threshold turns
+off glibc's dynamic adjustment, which otherwise lets a long-running process stop
+trimming until as much as 64 MiB is free, so memory freed by the SQLite driver
+goes back to the operating system instead of accumulating as fragmentation.
+Setting `GOMEMLIMIT`, `MALLOC_ARENA_MAX`, or `MALLOC_TRIM_THRESHOLD_` in the
+daemon's environment overrides the corresponding default.
 
 ## Manual Sync
 

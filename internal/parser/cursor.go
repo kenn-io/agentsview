@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json/v2"
 	"fmt"
@@ -368,7 +369,7 @@ func extractAssistantContent(
 				ToolName:  toolName,
 				Category:  NormalizeToolCategory(toolName),
 				InputJSON: inputJSON,
-				SkillName: inferToolSkillName(
+				SkillName: inferToolSkillName(context.Background(),
 					toolName,
 					inputJSON,
 				),
@@ -590,7 +591,7 @@ func parseCursorJSONL(data string) []ParsedMessage {
 			msg.Role = RoleAssistant
 			text, _, hasThinking, hasToolUse,
 				toolCalls, toolResults :=
-				ExtractTextContent(content)
+				ExtractTextContent(context.Background(), content)
 			msg.Content = text
 			msg.HasThinking = hasThinking
 			msg.HasToolUse = hasToolUse

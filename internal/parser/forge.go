@@ -44,7 +44,7 @@ func forgeDBPath(dir string) string {
 func ListForgeSessionMeta(dbPath string) ([]ForgeSessionMeta, error) {
 	var metas []ForgeSessionMeta
 	err := ForEachForgeSessionMeta(
-		context.Background(), dbPath,
+		context.Background(), dbPath, false,
 		func(meta ForgeSessionMeta) error {
 			metas = append(metas, meta)
 			return nil
@@ -54,13 +54,13 @@ func ListForgeSessionMeta(dbPath string) ([]ForgeSessionMeta, error) {
 }
 
 func ForEachForgeSessionMeta(
-	ctx context.Context, dbPath string, yield func(ForgeSessionMeta) error,
+	ctx context.Context, dbPath string, stableSnapshot bool, yield func(ForgeSessionMeta) error,
 ) error {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil
 	}
 
-	db, err := openForgeDB(dbPath)
+	db, err := openForgeDB(dbPath, stableSnapshot)
 	if err != nil {
 		return err
 	}
@@ -96,9 +96,9 @@ func ForEachForgeSessionMeta(
 }
 
 func forgeSessionMeta(
-	ctx context.Context, dbPath, sessionID string,
+	ctx context.Context, dbPath, sessionID string, stableSnapshot bool,
 ) (ForgeSessionMeta, bool, error) {
-	db, err := openForgeDB(dbPath)
+	db, err := openForgeDB(dbPath, stableSnapshot)
 	if err != nil {
 		return ForgeSessionMeta{}, false, err
 	}
@@ -122,27 +122,32 @@ func forgeSessionMeta(
 }
 
 // parseForgeSession parses a single conversation by ID from the Forge database.
-func parseForgeSession(dbPath, conversationID, machine string) (*ParsedSession, []ParsedMessage, error) {
+func parseForgeSession(
+	ctx context.Context, dbPath, conversationID, machine string, stableSnapshot bool,
+) (*ParsedSession, []ParsedMessage, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil, nil, fmt.Errorf("forge db not found: %s", dbPath)
 	}
 
-	db, err := openForgeDB(dbPath)
+	db, err := openForgeDB(dbPath, stableSnapshot)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer db.Close()
 
-	c, err := loadOneForgeConversation(db, conversationID)
+	c, err := loadOneForgeConversation(ctx, db, conversationID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading forge conversation %s: %w", conversationID, err)
 	}
-	return buildForgeSession(c, dbPath, machine)
+	return buildForgeSession(ctx, c, dbPath, machine)
 }
 
-func openForgeDB(dbPath string) (*sql.DB, error) {
-	dsn := "file:" + sqliteURIPath(dbPath) +
-		"?mode=ro&_busy_timeout=3000"
+func openForgeDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
+	immutable := "0"
+	if stableSnapshot {
+		immutable = "1"
+	}
+	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=" + immutable + "&_busy_timeout=3000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening forge db %s: %w", dbPath, err)
@@ -159,8 +164,10 @@ type forgeConversationRow struct {
 	metrics   string
 }
 
-func loadOneForgeConversation(db *sql.DB, conversationID string) (forgeConversationRow, error) {
-	row := db.QueryRow(`
+func loadOneForgeConversation(
+	ctx context.Context, db *sql.DB, conversationID string,
+) (forgeConversationRow, error) {
+	row := db.QueryRowContext(ctx, `
 		SELECT conversation_id,
 		       COALESCE(title, ''),
 		       COALESCE(context, ''),
@@ -176,7 +183,9 @@ func loadOneForgeConversation(db *sql.DB, conversationID string) (forgeConversat
 	return c, err
 }
 
-func buildForgeSession(c forgeConversationRow, dbPath, machine string) (*ParsedSession, []ParsedMessage, error) {
+func buildForgeSession(
+	ctx context.Context, c forgeConversationRow, dbPath, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
 	root := gjson.Parse(c.context)
 	messagesRoot := root.Get("messages")
 	if !messagesRoot.IsArray() {
@@ -302,7 +311,7 @@ func buildForgeSession(c forgeConversationRow, dbPath, machine string) (*ParsedS
 		return nil, nil, nil
 	}
 
-	project := ExtractProjectFromCwd(cwd)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	startedAt := parseForgeTimestamp(c.createdAt)
 	endedAt := parseForgeTimestamp(c.updatedAt)
 	if endedAt.IsZero() {

@@ -440,6 +440,14 @@ cache-read tokens. Copilot's Claude model IDs use dotted version numbers, so the
 parser normalizes names such as `claude-sonnet-4.6` to `claude-sonnet-4-6`
 before pricing lookup.
 
+For sessions starting June 1, 2026 or later, available per-call usage from
+`session-store.db` supplies input, output, cache, and reasoning counts before
+shutdown. Store updates refresh the affected sessions without rereading
+unchanged transcripts. Overlapping transcript output contributes only its
+positive per-model difference from store totals; missing input cannot be
+reconstructed. Store tokens use catalog estimates, while the latest shutdown
+reported cost retains the treatment described below.
+
 Upgrading to 0.32.0 bumps the parser data version so existing Copilot CLI
 sessions are re-indexed with the new usage rows.
 

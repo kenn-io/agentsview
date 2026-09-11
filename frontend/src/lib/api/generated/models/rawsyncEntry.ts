@@ -5,6 +5,7 @@ import type { RawsyncObjectRef } from "./rawsyncObjectRef.ts";
 
 export interface RawsyncEntry {
   length: number;
+  mod_time_ns?: number;
   objects: RawsyncObjectRef[];
   path: string;
   type: string;

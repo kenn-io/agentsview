@@ -692,6 +692,10 @@ func (db *DB) searchContentFTS(
 	if !db.HasFTS() {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
+	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
 	scope, scopeArgs := sessionScopeSubquery(f)
 	sysPred := "1=1"
 	if f.ExcludeSystem {
@@ -708,10 +712,13 @@ func (db *DB) searchContentFTS(
 		WHERE messages_fts MATCH ? AND %s AND m.%s
 		ORDER BY rank ASC, m.ordinal ASC, m.id ASC
 		LIMIT ? OFFSET ?`, sysPred, scope)
-	args := []any{PrepareFTSQuery(f.Pattern)}
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, f.Limit+1, f.Cursor)
-	page, err := db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, f.ftsSnippet)
+	page, err := db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, func(body string) string {
+		return f.ftsSnippet(body, ftsQuery.snippetTerm)
+	})
 	if err != nil {
 		return ContentSearchPage{}, classifyFTSError(err)
 	}
@@ -721,12 +728,15 @@ func (db *DB) searchContentFTS(
 // ftsSnippet builds the snippet for an FTS match. FTS matching is tokenized, so
 // there is no exact byte offset; it centers on the first case-insensitive
 // occurrence of the de-quoted query phrase, falling back to the query's first
-// token, then to the start. Trying the whole phrase first keeps a phrase query
-// ("foo bar") centered on the phrase rather than on a stray earlier "foo". The
-// approximation only affects snippet centering, not redaction, which scans the
-// full body.
-func (f ContentSearchFilter) ftsSnippet(body string) string {
+// token, then a segmented term if supplied, then to the start. Trying the whole
+// phrase first keeps a phrase query ("foo bar") centered on the phrase rather
+// than on a stray earlier "foo". The approximation only affects snippet
+// centering, not redaction, which scans the full body.
+func (f ContentSearchFilter) ftsSnippet(body, segmentedTerm string) string {
 	start, end := FTSSnippetRange(f.Pattern, body)
+	if start == end && segmentedTerm != "" {
+		start, end, _ = CaseInsensitiveSpan(body, segmentedTerm)
+	}
 	return f.buildSnippet(body, start, end)
 }
 
@@ -1171,6 +1181,10 @@ func (db *DB) hybridFTSLeg(
 func (db *DB) fetchHybridFTSBatch(
 	ctx context.Context, f ContentSearchFilter, k, offset int,
 ) ([]hybridDisplay, error) {
+	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
+	if err != nil {
+		return nil, err
+	}
 	scope, scopeArgs := semanticSessionScopeSubquery(f)
 	query := fmt.Sprintf(`
 		SELECT m.session_id, m.ordinal,
@@ -1181,8 +1195,9 @@ func (db *DB) fetchHybridFTSBatch(
 		  AND m.%s
 		ORDER BY f.rank, m.id LIMIT ? OFFSET ?`,
 		SystemPrefixSQL("m.content", "m.role"), scope)
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
 
-	args := []any{PrepareFTSQuery(f.Pattern)}
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, k, offset)
 

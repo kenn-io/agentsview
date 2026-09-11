@@ -207,7 +207,7 @@ func TestCopilotFingerprintRejectsUnreadableStoreState(t *testing.T) {
 		t.Run("session-store.db"+suffix, func(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "session-state", "fingerprint.jsonl")
-			writeSourceFile(t, path, `{"type":"session.start","data":{"sessionId":"fingerprint"}}`)
+			writeSourceFile(t, path, `{"type":"session.start","timestamp":"2026-09-08T12:00:00Z","data":{"sessionId":"fingerprint"}}`)
 			provider := newCopilotTestProvider(t, root)
 			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
@@ -216,6 +216,9 @@ func TestCopilotFingerprintRejectsUnreadableStoreState(t *testing.T) {
 			require.NoError(t, err, "a missing optional store is valid")
 
 			store := createCopilotUsageStore(t, root)
+			_, err = store.Exec(`INSERT INTO assistant_usage_events(session_id,model,output_tokens,created_at)
+				VALUES ('fingerprint','gpt-5.4',3,'2026-09-08T12:00:01Z')`)
+			require.NoError(t, err)
 			require.NoError(t, store.Close())
 			storePath := filepath.Join(root, "session-store.db")
 			original, err := os.ReadFile(storePath)

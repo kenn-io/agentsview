@@ -81,6 +81,46 @@ func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
 	assert.Zero(t, out.ExcludedActive)
 }
 
+func TestSearchSessions_ChineseSegmentation(t *testing.T) {
+	ts, d := newTestToolset(t)
+	if !d.HasChineseFTS() {
+		t.Skip("simple FTS5 runtime is not installed for this test process")
+	}
+	seedFTSSession(t, d, "chinese", "proj",
+		"这是全文的搜索实现说明。", "2024-06-15T10:00:00Z")
+
+	out := mustSearch(t, ts, searchSessionsIn{Query: "全文搜索"})
+	require.Len(t, out.Results, 1)
+	assert.Equal(t, "chinese", out.Results[0].SessionID)
+	assert.Contains(t, out.Results[0].Snippet, "<mark>全文</mark>")
+	assert.Contains(t, out.Results[0].Snippet, "<mark>搜索</mark>")
+
+	phrase := mustSearch(t, ts, searchSessionsIn{Query: `"全文搜索"`})
+	assert.Empty(t, phrase.Results, "explicit phrases must retain word adjacency")
+}
+
+func TestSearchSessions_QuerySyntax(t *testing.T) {
+	ts, d := newTestToolset(t)
+	seedFTSSession(t, d, "terms", "proj",
+		`fix the bug with status:500 and say"hi`, "2024-06-15T10:00:00Z")
+	for _, tc := range []struct {
+		query string
+		hits  int
+	}{
+		{"fix bug", 1},
+		{"status:500", 1},
+		{`say"hi`, 1},
+		{`"say""hi"`, 1},
+		{`"fix bug"`, 0},
+		{`"fix" OR "missing"`, 1},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			out := mustSearch(t, ts, searchSessionsIn{Query: tc.query})
+			assert.Len(t, out.Results, tc.hits)
+		})
+	}
+}
+
 func TestSearchSessions_ExcludesRecentlyActive(t *testing.T) {
 	ts, d := newTestToolset(t)
 	if !d.HasFTS() {

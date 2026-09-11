@@ -29,6 +29,9 @@ type ObjectStore interface {
 	PutObject(context.Context, string, ObjectRef, io.Reader) (PutResult, error)
 	StatObject(context.Context, string, ObjectRef) (ObjectInfo, error)
 	OpenObject(context.Context, string, ObjectRef) (ObjectInfo, VerifiedObjectReader, error)
+	// CopyObject writes exactly one verified object to destination. The store
+	// owns the reader lifecycle and observes ctx without concurrent Read/Close.
+	CopyObject(context.Context, string, ObjectRef, io.Writer) (ObjectInfo, error)
 	MissingObjects(context.Context, string, []ObjectRef) ([]ObjectRef, error)
 	// VerifyObjects requires every supplied semantic identity to exist exactly.
 	VerifyObjects(context.Context, string, []ObjectRef) error

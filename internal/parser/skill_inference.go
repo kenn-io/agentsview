@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"io"
 	"os"
@@ -39,29 +40,29 @@ var searchValueFlags = map[string]bool{
 // call by trying the read-file heuristic first, then the shell
 // read-command heuristic. Used by both the Cursor JSONL and
 // plain-text transcript paths so they stay in sync.
-func inferToolSkillName(toolName, inputJSON string) string {
-	if name := inferCursorSkillName(toolName, inputJSON); name != "" {
+func inferToolSkillName(ctx context.Context, toolName, inputJSON string) string {
+	if name := inferCursorSkillName(ctx, toolName, inputJSON); name != "" {
 		return name
 	}
-	return inferCodexSkillName(toolName, inputJSON)
+	return inferCodexSkillName(ctx, toolName, inputJSON)
 }
 
-func inferCursorSkillName(toolName, inputJSON string) string {
+func inferCursorSkillName(ctx context.Context, toolName, inputJSON string) string {
 	if !isCursorSkillReadTool(toolName) {
 		return ""
 	}
-	return inferSkillNameFromJSONPaths(inputJSON)
+	return inferSkillNameFromJSONPaths(ctx, inputJSON)
 }
 
-func inferCodexSkillName(toolName, inputJSON string) string {
-	return inferCodexSkillNameWithBase(toolName, inputJSON, "")
+func inferCodexSkillName(ctx context.Context, toolName, inputJSON string) string {
+	return inferCodexSkillNameWithBase(ctx, toolName, inputJSON, "")
 }
 
 // inferCodexSkillNameWithBase infers a Codex skill name, resolving
 // relative SKILL.md paths against the tool call's own workdir/cwd
 // hint when present, otherwise against fallbackBaseDir (typically
 // the session working directory from session_meta).
-func inferCodexSkillNameWithBase(toolName, inputJSON, fallbackBaseDir string) string {
+func inferCodexSkillNameWithBase(ctx context.Context, toolName, inputJSON, fallbackBaseDir string) string {
 	if !isCodexShellTool(toolName) {
 		return ""
 	}
@@ -74,7 +75,7 @@ func inferCodexSkillNameWithBase(toolName, inputJSON, fallbackBaseDir string) st
 		baseDir = fallbackBaseDir
 	}
 	for _, path := range skillPathsFromCommand(cmd) {
-		if name := skillNameFromPath(path, baseDir); name != "" {
+		if name := skillNameFromPath(ctx, path, baseDir); name != "" {
 			return name
 		}
 	}
@@ -246,7 +247,7 @@ func skillPathsFromSearchArgs(args []string) []string {
 	return skillFilePaths(files)
 }
 
-func inferSkillNameFromJSONPaths(inputJSON string) string {
+func inferSkillNameFromJSONPaths(ctx context.Context, inputJSON string) string {
 	trimmed := strings.TrimSpace(inputJSON)
 	if trimmed == "" {
 		return ""
@@ -254,7 +255,7 @@ func inferSkillNameFromJSONPaths(inputJSON string) string {
 	baseDir := skillBaseDirFromInput(trimmed)
 	if !gjson.Valid(trimmed) {
 		for _, path := range skillPathsFromText(trimmed) {
-			if name := skillNameFromPath(path, baseDir); name != "" {
+			if name := skillNameFromPath(ctx, path, baseDir); name != "" {
 				return name
 			}
 		}
@@ -276,12 +277,12 @@ func inferSkillNameFromJSONPaths(inputJSON string) string {
 			// A JSON string value is already one unescaped path, so
 			// try it whole first — the free-text regex below splits
 			// on whitespace and would truncate paths with spaces.
-			if name := skillNameFromPath(t, baseDir); name != "" {
+			if name := skillNameFromPath(ctx, t, baseDir); name != "" {
 				found = name
 				return
 			}
 			for _, path := range skillPathsFromText(t) {
-				if name := skillNameFromPath(path, baseDir); name != "" {
+				if name := skillNameFromPath(ctx, path, baseDir); name != "" {
 					found = name
 					return
 				}
@@ -383,10 +384,18 @@ func skillPathMatchHasBoundary(text string, end int) bool {
 // Paths carrying shell glob metacharacters are rejected: they come
 // from discovery commands (e.g. "**/SKILL.md") rather than a
 // concrete file, and would otherwise yield a bogus name like "**".
-func skillNameFromPath(path, baseDir string) string {
+func skillNameFromPath(ctx context.Context, path, baseDir string) string {
 	path = strings.TrimSpace(path)
 	if path == "" || skillPathIsGlob(path) || !isSkillMarkdownPath(path) {
 		return ""
+	}
+	if filesystemProjectDiscoveryDisabled(ctx) {
+		// Captured paths name another host. Do not expand the worker's home,
+		// read frontmatter, or reuse a cached local frontmatter name.
+		if skillPathIsBare(path) {
+			return ""
+		}
+		return skillNameFromParentDir(strings.ReplaceAll(path, "\\", "/"))
 	}
 	resolved, readable := resolveSkillPath(path, baseDir)
 	clean := filepath.Clean(resolved)

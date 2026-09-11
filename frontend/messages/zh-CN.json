@@ -1973,5 +1973,68 @@
   "settings_tool_result_images_keep": "保留",
   "settings_tool_result_images_drop": "丢弃",
   "settings_tool_result_images_hint": "已存储的结果保持写入时的策略，改回「保留」也无法恢复已删除的数据。运行 agentsview db strip --images 可处理已有记录。",
-  "settings_tool_result_images_restart_notice": "重启 AgentsView 守护进程后，此更改才会应用到新采集的会话。"
+  "settings_tool_result_images_restart_notice": "重启 AgentsView 守护进程后，此更改才会应用到新采集的会话。",
+  "settings_tool_images_title": "工具结果图像",
+  "settings_tool_images_description": "存储在工具结果中的内联图像。",
+  "settings_search_keywords_tool_images": "图像 工具结果 删除 清理 载荷 字节 存储",
+  "settings_image_cleanup_intro": "预览仍包含内联图像载荷的已存储工具结果，然后用可读占位符替换这些载荷。",
+  "settings_image_cleanup_project_label": "项目包含",
+  "settings_image_cleanup_project_placeholder": "所有项目",
+  "settings_image_cleanup_before_label": "结束时间早于",
+  "settings_image_cleanup_before_placeholder": "YYYY-MM-DD",
+  "settings_image_cleanup_preview": "预览",
+  "settings_image_cleanup_previewing": "预览中…",
+  "settings_image_cleanup_preview_failed": "预览失败。",
+  "settings_image_cleanup_unavailable": "图像删除仅针对此机器上的本地存档运行。",
+  "settings_image_cleanup_proxy_denied": "移除图像必须在本机直接打开的 AgentsView 中运行，而不是通过代理或端口转发。",
+  "settings_image_cleanup_read_only": "此存档为只读，无法更改存储的行。",
+  "settings_image_cleanup_empty": "此选择中没有存储的工具结果包含内联图像载荷。",
+  "settings_image_cleanup_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "已选择 {countLabel} 个会话",
+        "countPlural=other": "已选择 {countLabel} 个会话"
+      }
+    }
+  ],
+  "settings_image_cleanup_payloads": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 个图像载荷",
+        "countPlural=other": "{countLabel} 个图像载荷"
+      }
+    }
+  ],
+  "settings_image_cleanup_by_project": "按项目",
+  "settings_image_cleanup_column_project": "项目",
+  "settings_image_cleanup_column_sessions": "会话",
+  "settings_image_cleanup_column_payloads": "载荷",
+  "settings_image_cleanup_column_stored": "已存储",
+  "settings_image_cleanup_column_decoded": "已解码",
+  "settings_image_cleanup_apply": "删除图像载荷",
+  "settings_image_cleanup_applying": "删除中…",
+  "settings_image_cleanup_apply_failed": "图像删除未完成。某些会话可能已更改。重试前请再次预览。",
+  "settings_image_cleanup_busy": "另一个存档维护操作已在运行。完成后请重试。",
+  "settings_image_cleanup_confirm_title": "删除存储的图像载荷？",
+  "settings_image_cleanup_confirm_close": "关闭",
+  "settings_image_cleanup_confirm_scope": "清理在开始时覆盖与这些过滤器匹配的所有会话，因此在此预览后可能会有新的匹配内容加入。",
+  "settings_image_cleanup_confirm_body": "这将就地重写所选的已存储工具结果，且无法撤销。提供商转录和独立图像文件不受影响。",
+  "settings_image_cleanup_confirm_action": "删除",
+  "settings_image_cleanup_cancel": "取消",
+  "settings_image_cleanup_applied": "图像删除已完成。",
+  "settings_image_cleanup_changed": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "已更改 {countLabel} 个会话",
+        "countPlural=other": "已更改 {countLabel} 个会话"
+      }
+    }
+  ],
+  "settings_image_cleanup_compact_note": "删除载荷会重写存储的行。在运行 agentsview db compact 之前，存档文件大小保持不变。"
 }

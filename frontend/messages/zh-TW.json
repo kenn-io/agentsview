@@ -1973,5 +1973,68 @@
   "settings_tool_result_images_keep": "保留",
   "settings_tool_result_images_drop": "捨棄",
   "settings_tool_result_images_hint": "已儲存的結果維持寫入時的政策，改回「保留」也無法還原已刪除的資料。執行 agentsview db strip --images 可處理既有記錄。",
-  "settings_tool_result_images_restart_notice": "重新啟動 AgentsView 常駐程式後，此變更才會套用到新擷取的對話。"
+  "settings_tool_result_images_restart_notice": "重新啟動 AgentsView 常駐程式後，此變更才會套用到新擷取的對話。",
+  "settings_tool_images_title": "工具結果圖像",
+  "settings_tool_images_description": "儲存在工具結果中的內嵌圖像。",
+  "settings_search_keywords_tool_images": "圖像 工具結果 刪除 清理 有效載荷 位元組 儲存",
+  "settings_image_cleanup_intro": "預覽仍包含內嵌圖像有效載荷的已儲存工具結果，然後用可讀的佔位符替換這些有效載荷。",
+  "settings_image_cleanup_project_label": "專案包含",
+  "settings_image_cleanup_project_placeholder": "所有專案",
+  "settings_image_cleanup_before_label": "結束時間早於",
+  "settings_image_cleanup_before_placeholder": "YYYY-MM-DD",
+  "settings_image_cleanup_preview": "預覽",
+  "settings_image_cleanup_previewing": "預覽中…",
+  "settings_image_cleanup_preview_failed": "預覽失敗。",
+  "settings_image_cleanup_unavailable": "圖像刪除僅針對此機器上的本機封存執行。",
+  "settings_image_cleanup_proxy_denied": "移除圖像必須在本機直接開啟的 AgentsView 中執行，而不是透過代理或連接埠轉送。",
+  "settings_image_cleanup_read_only": "此封存為唯讀，無法變更儲存的資料列。",
+  "settings_image_cleanup_empty": "此選取範圍中沒有儲存的工具結果包含內嵌圖像有效載荷。",
+  "settings_image_cleanup_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "已選取 {countLabel} 個工作階段",
+        "countPlural=other": "已選取 {countLabel} 個工作階段"
+      }
+    }
+  ],
+  "settings_image_cleanup_payloads": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 個圖像有效載荷",
+        "countPlural=other": "{countLabel} 個圖像有效載荷"
+      }
+    }
+  ],
+  "settings_image_cleanup_by_project": "依專案",
+  "settings_image_cleanup_column_project": "專案",
+  "settings_image_cleanup_column_sessions": "工作階段",
+  "settings_image_cleanup_column_payloads": "有效載荷",
+  "settings_image_cleanup_column_stored": "已儲存",
+  "settings_image_cleanup_column_decoded": "已解碼",
+  "settings_image_cleanup_apply": "刪除圖像有效載荷",
+  "settings_image_cleanup_applying": "刪除中…",
+  "settings_image_cleanup_apply_failed": "圖像刪除未完成。某些工作階段可能已變更。重試前請再次預覽。",
+  "settings_image_cleanup_busy": "另一個封存維護作業已在執行中。完成後請重試。",
+  "settings_image_cleanup_confirm_title": "刪除儲存的圖像有效載荷？",
+  "settings_image_cleanup_confirm_close": "關閉",
+  "settings_image_cleanup_confirm_scope": "清理在開始時涵蓋符合這些篩選條件的所有工作階段，因此在此預覽後可能會有新的符合內容加入。",
+  "settings_image_cleanup_confirm_body": "這將就地改寫所選的已儲存工具結果，且無法復原。提供者的逐字稿和獨立圖像檔案不受影響。",
+  "settings_image_cleanup_confirm_action": "刪除",
+  "settings_image_cleanup_cancel": "取消",
+  "settings_image_cleanup_applied": "圖像刪除已完成。",
+  "settings_image_cleanup_changed": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "已變更 {countLabel} 個工作階段",
+        "countPlural=other": "已變更 {countLabel} 個工作階段"
+      }
+    }
+  ],
+  "settings_image_cleanup_compact_note": "刪除有效載荷會改寫儲存的資料列。在執行 agentsview db compact 之前，封存檔大小保持不變。"
 }

@@ -14,6 +14,8 @@ import (
 
 const ProviderFeatureRawCapture = "raw capture"
 
+const ProviderFeatureRawSnapshotSessions = "raw snapshot sessions"
+
 var ErrInvalidRawCapturePlan = errors.New("invalid raw capture plan")
 
 // RawCaptureShape describes the physical shape a provider exposes for raw
@@ -26,13 +28,14 @@ const (
 	RawCaptureShapeSQLite
 )
 
-// RawCaptureAppendPolicy declares whether a provider can safely extend one
-// entry while retaining the prior generation's ordered object references.
+// RawCaptureAppendPolicy declares which entries can safely extend while
+// retaining the prior generation's ordered object references.
 type RawCaptureAppendPolicy uint8
 
 const (
 	RawCaptureAppendReplaceOnly RawCaptureAppendPolicy = iota
 	RawCaptureAppendOne
+	RawCaptureAppendMany
 )
 
 // RawCaptureSnapshotRequirement declares how capture obtains a consistent
@@ -92,6 +95,43 @@ type RawCaptureSourceProvider interface {
 	RawCaptureSourcesForChangedPath(
 		context.Context, ChangedPathRequest,
 	) ([]SourceRef, error)
+}
+
+// RawSnapshotSessionProvider fans one physical raw-capture source out to its
+// logical session sources. Providers whose ordinary Fingerprint and Parse
+// operate on session-scoped virtual sources -- a single shared SQLite store
+// captured as one physical file -- implement it so raw-snapshot parsing can
+// enumerate and parse every logical session inside a materialized copy of
+// that file through the provider's own per-session contract.
+type RawSnapshotSessionProvider interface {
+	RawSnapshotSessions(context.Context, SourceRef) ([]SourceRef, error)
+}
+
+// ResolveRawSnapshotSessions returns the logical session sources of one
+// physical raw-capture source when the provider fans SQLite raw snapshots out
+// to session-scoped virtual sources. File-shaped sources keep the caller's
+// single-source flow and report supported=false without an error.
+func ResolveRawSnapshotSessions(
+	ctx context.Context,
+	provider Provider,
+	source SourceRef,
+) ([]SourceRef, bool, error) {
+	if provider.Capabilities().RawCapture.Shape != RawCaptureShapeSQLite {
+		return nil, false, nil
+	}
+	fanout, ok := provider.(RawSnapshotSessionProvider)
+	if !ok {
+		return nil, false, UnsupportedProviderFeatureError{
+			Provider: provider.Definition().Type,
+			Feature:  ProviderFeatureRawSnapshotSessions,
+		}
+	}
+	sessions, err := fanout.RawSnapshotSessions(ctx, source)
+	if err != nil {
+		return nil, true, err
+	}
+	sortJSONLSources(sessions)
+	return sessions, true, nil
 }
 
 // StreamingRawCaptureSourceProvider emits physical raw sources without
@@ -339,6 +379,10 @@ func validateRawCapturePlan(
 	case RawCaptureAppendOne:
 		if appendable != 1 {
 			return RawCapturePlan{}, invalidRawCapturePlan("source must have exactly one appendable entry")
+		}
+	case RawCaptureAppendMany:
+		if appendable == 0 {
+			return RawCapturePlan{}, invalidRawCapturePlan("source must have an appendable entry")
 		}
 	default:
 		return RawCapturePlan{}, invalidRawCapturePlan("unknown append policy %d", capabilities.Append)

@@ -272,6 +272,7 @@ export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp/sessions
 export OPENCLAW_DIR=~/custom/openclaw/agents
 export OPENCODE_DIR=~/custom/opencode
+export OPENCODEREVIEW_DIR=~/custom/opencodereview/sessions
 export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi/sessions
 export PIEBALD_DIR=~/custom/piebald

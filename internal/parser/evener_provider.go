@@ -351,7 +351,7 @@ func evenerProviderCapabilities() Capabilities {
 		RawCapture: RawCaptureCapabilities{
 			Support: CapabilitySupported,
 			Shape:   RawCaptureShapeFiles,
-			Append:  RawCaptureAppendReplaceOnly,
+			Append:  RawCaptureAppendMany,
 		},
 		Source: caps,
 		Content: ContentCapabilities{
@@ -397,8 +397,25 @@ func (p *evenerProvider) PlanRawCapture(ctx context.Context, source SourceRef) (
 	if _, ok := evenerClassifyPath(src.Root, src.Path, false); !ok {
 		return RawCapturePlan{}, invalidRawCapturePlan("evener source is outside its configured layout")
 	}
-	plan := RawCapturePlan{ConfiguredRoot: src.Root, CaptureRoot: src.Root, SourceKey: source.Key}
-	for _, path := range []string{src.Path, evenerMetadataPath(src.Path)} {
+	captureRoot := src.Root
+	if filepath.Base(captureRoot) == "sessions" {
+		// Retain the sessions directory in custody so discovery recognizes
+		// the layout after materialization under an arbitrary worker root.
+		captureRoot = filepath.Dir(captureRoot)
+	}
+	plan := RawCapturePlan{ConfiguredRoot: src.Root, CaptureRoot: captureRoot, SourceKey: source.Key}
+	paths := []string{src.Path, evenerMetadataPath(src.Path)}
+	// Parsing verifies copied fork history against one immediate parent and
+	// its metadata. Preserve those inputs without following the parent's forks.
+	// Invalid child metadata is still captured; parsing reports its error.
+	if parent, err := evenerParentTranscriptPath(src.Path); err == nil && evenerParentFileInfo(parent) != nil {
+		parentMeta := evenerMetadataPath(parent)
+		info, err := os.Lstat(parentMeta)
+		if os.IsNotExist(err) || err == nil && info.Mode().IsRegular() {
+			paths = append(paths, parent, parentMeta)
+		}
+	}
+	for _, path := range paths {
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) && path != src.Path {
 			continue
@@ -409,11 +426,14 @@ func (p *evenerProvider) PlanRawCapture(ctx context.Context, source SourceRef) (
 		if !info.Mode().IsRegular() {
 			return RawCapturePlan{}, invalidRawCapturePlan("evener capture source is not a regular file")
 		}
-		rel, err := filepath.Rel(src.Root, path)
+		rel, err := filepath.Rel(captureRoot, path)
 		if err != nil {
 			return RawCapturePlan{}, err
 		}
-		plan.Entries = append(plan.Entries, RawCaptureEntry{Path: filepath.ToSlash(rel), LocalPath: path})
+		plan.Entries = append(plan.Entries, RawCaptureEntry{
+			Path: filepath.ToSlash(rel), LocalPath: path,
+			Appendable: strings.HasSuffix(path, evenerTranscriptSuffix),
+		})
 	}
 	return plan, nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -60,29 +61,28 @@ func (f *fakePassManager) callsSnapshot() []extract.PassOptions {
 }
 
 func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
-	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, 20*time.Millisecond, 0, 0, nil)
-	ctx := t.Context()
-	go s.Run(ctx)
-	defer s.Stop()
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakePassManager{}
+		s := newExtractScheduler(mgr, 20*time.Millisecond, 0, 0, nil)
+		go s.Run(t.Context())
+		defer s.Stop()
 
-	for range 5 {
+		for range 5 {
+			s.Notify()
+		}
+		synctest.Sleep(50 * time.Millisecond)
+		require.Equal(t, 1, mgr.callCount(), "debounced pass never ran")
+		calls := mgr.callsSnapshot()
+		assert.True(t, calls[0].Full,
+			"the lifetime's first pass carries the startup full top-up")
+
 		s.Notify()
-	}
-	waitForSchedulerCondition(t, func() bool { return mgr.callCount() == 1 },
-		"debounced pass never ran")
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 1, mgr.callCount(), "burst must coalesce into one pass")
-	calls := mgr.callsSnapshot()
-	assert.True(t, calls[0].Full,
-		"the lifetime's first pass carries the startup full top-up")
-
-	s.Notify()
-	waitForSchedulerCondition(t, func() bool { return mgr.callCount() == 2 },
-		"second debounced pass never ran")
-	calls = mgr.callsSnapshot()
-	assert.False(t, calls[1].Full,
-		"event-driven passes after the startup pass are incremental")
+		synctest.Sleep(50 * time.Millisecond)
+		calls = mgr.callsSnapshot()
+		require.Equal(t, 2, mgr.callCount(), "second debounced pass never ran")
+		assert.False(t, calls[1].Full,
+			"event-driven passes after the startup pass are incremental")
+	})
 }
 
 func TestExtractSchedulerNotifiesDownstreamAfterEveryStartedPass(t *testing.T) {
@@ -156,52 +156,59 @@ func TestExtractSchedulerDroppedBackstopRetriesOnDebouncedPass(t *testing.T) {
 }
 
 func TestExtractSchedulerStopTerminatesRun(t *testing.T) {
-	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, time.Hour, 0, 0, nil)
-	go s.Run(context.Background())
-	done := make(chan struct{})
-	go func() {
-		s.Stop()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Stop did not terminate Run")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakePassManager{}
+		s := newExtractScheduler(mgr, time.Hour, 0, 0, nil)
+		go s.Run(t.Context())
+		done := make(chan struct{})
+		go func() {
+			s.Stop()
+			close(done)
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("Stop did not terminate Run")
+		}
+	})
 }
 
 func TestExtractSchedulerNotifyNeverBlocksWithoutAReader(t *testing.T) {
-	s := newExtractScheduler(&fakePassManager{}, time.Hour, 0, 0, nil)
-	done := make(chan struct{})
-	go func() {
-		for range 100 {
-			s.Notify()
+	synctest.Test(t, func(t *testing.T) {
+		s := newExtractScheduler(&fakePassManager{}, time.Hour, 0, 0, nil)
+		done := make(chan struct{})
+		go func() {
+			for range 100 {
+				s.Notify()
+			}
+			close(done)
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("Notify blocked without a running scheduler")
 		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Notify blocked without a running scheduler")
-	}
+	})
 }
 
 func TestExtractTeeEmitterNotifiesScheduler(t *testing.T) {
-	mgr := &fakePassManager{}
-	s := newExtractScheduler(mgr, 10*time.Millisecond, 0, 0, nil)
-	primary := &recordingEmitter{}
-	tee := extractTeeEmitter{primary: primary, scheduler: s}
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakePassManager{}
+		s := newExtractScheduler(mgr, 10*time.Millisecond, 0, 0, nil)
+		primary := &recordingEmitter{}
+		tee := extractTeeEmitter{primary: primary, scheduler: s}
 
-	ctx := t.Context()
-	go s.Run(ctx)
-	defer s.Stop()
+		go s.Run(t.Context())
+		defer s.Stop()
 
-	tee.Emit("sessions")
-	assert.Equal(t, 1, primary.count(),
-		"primary emitter must still receive the event")
-	waitForSchedulerCondition(t, func() bool { return mgr.callCount() == 1 },
-		"emit must schedule a pass")
+		tee.Emit("sessions")
+		assert.Equal(t, 1, primary.count(),
+			"primary emitter must still receive the event")
+		synctest.Sleep(10 * time.Millisecond)
+		require.Equal(t, 1, mgr.callCount(), "emit must schedule a pass")
+	})
 }
 
 func TestExtractSchedulerCatchupTicksWhenBackstopDisabled(t *testing.T) {
@@ -302,24 +309,26 @@ func TestExtractSchedulerPassHoldsIdleWorkLease(t *testing.T) {
 // lease contract: once the idle reaper has begun draining, a queued Notify
 // must not start a fresh pass under a daemon that is shutting down.
 func TestExtractSchedulerStartsNoPassAfterDraining(t *testing.T) {
-	mgr := &fakePassManager{}
-	idled := make(chan struct{})
-	tracker := server.NewIdleTracker(time.Millisecond, func() { close(idled) })
-	s := newExtractScheduler(mgr, 10*time.Millisecond, 0, 0, tracker)
-	ctx := t.Context()
-	go tracker.Run(ctx)
-	select {
-	case <-idled:
-	case <-time.After(2 * time.Second):
-		t.Fatal("tracker never went idle")
-	}
-	go s.Run(ctx)
-	defer s.Stop()
+	synctest.Test(t, func(t *testing.T) {
+		mgr := &fakePassManager{}
+		idled := make(chan struct{})
+		tracker := server.NewIdleTracker(time.Millisecond, func() { close(idled) })
+		s := newExtractScheduler(mgr, 10*time.Millisecond, 0, 0, tracker)
+		go tracker.Run(t.Context())
+		synctest.Sleep(time.Millisecond)
+		select {
+		case <-idled:
+		default:
+			t.Fatal("tracker never went idle")
+		}
+		go s.Run(t.Context())
+		defer s.Stop()
 
-	s.Notify()
-	time.Sleep(100 * time.Millisecond)
-	assert.Equal(t, 0, mgr.callCount(),
-		"a draining daemon must not start new extraction passes")
+		s.Notify()
+		synctest.Sleep(100 * time.Millisecond)
+		assert.Equal(t, 0, mgr.callCount(),
+			"a draining daemon must not start new extraction passes")
+	})
 }
 
 // TestExtractSchedulerStartupPassSurvivesShortIdleTimeout pins that the

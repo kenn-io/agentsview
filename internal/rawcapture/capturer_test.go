@@ -135,6 +135,86 @@ func TestCapturerPersistsStableGenerationWithoutParsing(t *testing.T) {
 	assert.Equal(t, []byte("one\n"), content)
 }
 
+func TestCapturerClaudeLineageParentGrowthReusesFork(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o700))
+	parentPath := filepath.Join(project, "parent.jsonl")
+	forkPath := filepath.Join(project, "fork.jsonl")
+	require.NoError(t, os.WriteFile(parentPath, []byte(`{"type":"user","uuid":"u1","parentUuid":null,"message":{"content":"question"}}`+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(forkPath, []byte(`{"type":"user","uuid":"u1","parentUuid":null,"sessionKind":"bg","message":{"content":"question"}}`+"\n"), 0o600))
+	provider, supported := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, supported)
+	sources, err := provider.SourcesForChangedPath(t.Context(), parser.ChangedPathRequest{Path: forkPath})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	capturer := New(store)
+	first, err := capturer.Capture(t.Context(), provider, sources[0])
+	require.NoError(t, err)
+	before, ok, err := store.CaptureBase(t.Context(), first.Source)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.NoError(t, appendFile(parentPath, `{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"answer"}}`+"\n"))
+	second, err := capturer.Capture(t.Context(), provider, sources[0])
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, second.Status)
+	after, ok, err := store.CaptureBase(t.Context(), first.Source)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, after.Entries, 2)
+	assert.Equal(t, before.Entries[0].Objects, after.Entries[0].Objects)
+	require.Len(t, after.Entries[1].Objects, 2)
+	assert.Equal(t, before.Entries[1].Objects[0], after.Entries[1].Objects[0])
+}
+
+func TestCapturerEvenerLineageParentGrowthReusesFork(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessions, 0o700))
+	parentPath := filepath.Join(sessions, "parent.transcript.jsonl")
+	forkPath := filepath.Join(sessions, "fork.transcript.jsonl")
+	metaPath := filepath.Join(sessions, "fork.meta.json")
+	require.NoError(t, os.WriteFile(parentPath, []byte("parent prefix\n"), 0o600))
+	require.NoError(t, os.WriteFile(forkPath, []byte("fork transcript\n"), 0o600))
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"id":"fork","parent_session_id":"parent","divergence_turn":2}`), 0o600))
+	provider, supported := parser.NewProvider(parser.AgentEvener, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, supported)
+	source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{RawSessionID: "fork"})
+	require.NoError(t, err)
+	require.True(t, found)
+	capturer := New(store)
+	first, err := capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	before, ok, err := store.CaptureBase(t.Context(), first.Source)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, before.Entries, 3)
+
+	require.NoError(t, appendFile(parentPath, "parent suffix\n"))
+	_, err = capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	after, ok, err := store.CaptureBase(t.Context(), first.Source)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, after.Entries, 3)
+	assert.Equal(t, before.Entries[1].Objects, after.Entries[1].Objects)
+	require.Len(t, after.Entries[2].Objects, 2)
+	assert.Equal(t, before.Entries[2].Objects[0], after.Entries[2].Objects[0])
+
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"id":"fork","name":"Renamed","parent_session_id":"parent","divergence_turn":2}`), 0o600))
+	_, err = capturer.Capture(t.Context(), provider, source)
+	require.NoError(t, err)
+	renamed, ok, err := store.CaptureBase(t.Context(), first.Source)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, renamed.Entries, 3)
+	require.Len(t, renamed.Entries[0].Objects, 1)
+	assert.NotEqual(t, after.Entries[0].Objects, renamed.Entries[0].Objects)
+}
+
 func TestConcurrentCapturesDoNotDiscardAnotherCaptureSharedObject(t *testing.T) {
 	store, _ := openCapturerTestStore(t, 1<<20)
 	providerA, sourceA, _ := captureFileProvider(t, "shared\n")
@@ -672,6 +752,10 @@ func TestCapturerSnapshotsSQLiteWithOnlineBackup(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO items (value) VALUES ('committed')`)
 	require.NoError(t, err)
+	requestedModTime := time.Date(2024, time.January, 2, 3, 4, 5, 678_000_000, time.UTC)
+	require.NoError(t, os.Chtimes(dbPath, requestedModTime, requestedModTime))
+	sourceInfo, err := os.Stat(dbPath)
+	require.NoError(t, err)
 	tx, err := db.Begin()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tx.Rollback() })
@@ -708,6 +792,7 @@ func TestCapturerSnapshotsSQLiteWithOnlineBackup(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, generation.Entries, 1)
 	assert.Equal(t, "live.db", generation.Entries[0].Path)
+	assert.Equal(t, sourceInfo.ModTime().UnixNano(), generation.Entries[0].ModTimeNS)
 	require.Len(t, generation.Entries[0].Objects, 1)
 	snapshot, err := sql.Open(
 		sqliteSnapshotDriverName, store.ObjectPath(generation.Entries[0].Objects[0]),
@@ -1468,7 +1553,8 @@ func uploadCanonicalBytes(
 	for _, entry := range entries {
 		manifestEntries = append(manifestEntries, rawsync.Entry{
 			Path: entry.Path, Type: "file", Length: entry.Length,
-			Objects: append([]rawsync.ObjectRef(nil), entry.Objects...),
+			ModTimeNS: entry.ModTimeNS,
+			Objects:   append([]rawsync.ObjectRef(nil), entry.Objects...),
 		})
 	}
 	identity, err := rawsync.NewAuthIdentity(strings.Repeat(`"`, 128), strings.Repeat(`"`, 128))

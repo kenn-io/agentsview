@@ -265,7 +265,9 @@ WITH required_table_privileges(table_name, privilege) AS (
         ('raw_source_heads', 'SELECT'),
         ('raw_source_heads', 'INSERT'),
         ('raw_source_heads', 'UPDATE'),
-        ('raw_ingest_jobs', 'INSERT')
+        ('raw_ingest_jobs', 'SELECT'),
+        ('raw_ingest_jobs', 'INSERT'),
+        ('raw_ingest_jobs', 'UPDATE')
 ), job_table(table_name, table_ref) AS (
     SELECT
         format('%I.%I', $1::text, 'raw_ingest_jobs'),
@@ -277,22 +279,24 @@ WITH required_table_privileges(table_name, privilege) AS (
     END
     FROM job_table
 )
-SELECT
-    COALESCE(current_setting('transaction_read_only', true), 'off') <> 'on'
-    AND COALESCE(bool_and(
-        to_regclass(format('%I.%I', $1::text, table_name)) IS NOT NULL
-        AND has_table_privilege(
-            current_user,
-            to_regclass(format('%I.%I', $1::text, table_name)),
-            privilege
-        )
+SELECT COALESCE(string_agg(reason, ', ' ORDER BY reason), '')
+FROM (
+    SELECT privilege || ' ON ' || table_name AS reason
+    FROM required_table_privileges
+    WHERE NOT COALESCE(has_table_privilege(
+        current_user,
+        to_regclass(format('%I.%I', $1::text, table_name)),
+        privilege
     ), false)
-    AND COALESCE((
-        SELECT sequence_name IS NULL
-            OR has_sequence_privilege(current_user, sequence_name, 'USAGE')
-        FROM job_sequence
-    ), false)
-FROM required_table_privileges`
+    UNION ALL
+    SELECT 'USAGE ON raw_ingest_jobs ID sequence'
+    FROM job_sequence
+    WHERE sequence_name IS NOT NULL
+        AND NOT has_sequence_privilege(current_user, sequence_name, 'USAGE')
+    UNION ALL
+    SELECT 'writable transaction (transaction_read_only is on)'
+    WHERE current_setting('transaction_read_only', true) = 'on'
+) AS missing_privileges`
 
 // CanWriteRawSyncSchema reports whether the current role can use every table
 // and any owned sequence required by the raw-sync control plane. It deliberately
@@ -307,11 +311,14 @@ func CanWriteRawSyncSchema(
 	if strings.TrimSpace(schema) == "" {
 		return false, errors.New("raw sync write probe requires a schema")
 	}
-	var writable bool
-	if err := db.QueryRowContext(ctx, rawSyncWritePrivilegeSQL, schema).Scan(&writable); err != nil {
+	var missing string
+	if err := db.QueryRowContext(ctx, rawSyncWritePrivilegeSQL, schema).Scan(&missing); err != nil {
 		return false, fmt.Errorf("probing raw sync write privileges: %w", err)
 	}
-	return writable, nil
+	if missing != "" {
+		log.Printf("pg serve: raw-sync routes disabled; missing requirements: %s", missing)
+	}
+	return missing == "", nil
 }
 
 func ensureRawIngestSchemaPG(ctx context.Context, db *sql.DB) error {

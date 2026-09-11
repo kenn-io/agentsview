@@ -15,6 +15,11 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   { name: "gemini", color: "var(--accent-rose)" },
   { name: "gemini-apps", color: "var(--accent-rose)", label: "Gemini Apps" },
   { name: "opencode", color: "var(--accent-purple)" },
+  {
+    name: "opencodereview",
+    color: "var(--accent-indigo)",
+    label: "Open Code Review",
+  },
   { name: "kilo", color: "var(--accent-purple)", label: "Kilo" },
   { name: "kilo-legacy", color: "var(--accent-purple)", label: "Kilo (legacy)" },
   { name: "openhands", color: "var(--accent-teal)", label: "OpenHands" },

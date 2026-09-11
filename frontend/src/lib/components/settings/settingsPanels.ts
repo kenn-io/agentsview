@@ -6,6 +6,7 @@ export type SettingsPanelId =
   | "date-ranges"
   | "terminal"
   | "agent-directories"
+  | "tool-result-images"
   | "worktree-mappings"
   | "embeddings"
   | "archive-content"
@@ -66,6 +67,14 @@ export function settingsPanels(): SettingsPanelMeta[] {
       description: m.settings_session_providers_description(),
       group: data,
       keywords: m.settings_search_keywords_agent_directories(),
+    },
+    {
+      id: "tool-result-images",
+      label: m.settings_tool_images_title(),
+      title: m.settings_tool_images_title(),
+      description: m.settings_tool_images_description(),
+      group: data,
+      keywords: m.settings_search_keywords_tool_images(),
     },
     {
       id: "worktree-mappings",

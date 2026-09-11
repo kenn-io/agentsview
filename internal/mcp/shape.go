@@ -1,11 +1,10 @@
 // ABOUTME: Response-shaping helpers shared by the MCP tools: limit
-// ABOUTME: clamping, rune-safe truncation, FTS query building, the
+// ABOUTME: clamping, rune-safe truncation, the
 // ABOUTME: self-reference exclusion window, and the role filter.
 package mcp
 
 import (
 	"slices"
-	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -64,41 +63,6 @@ func clampLimit(requested, def, max int) int {
 		return def
 	}
 	return requested
-}
-
-// buildSearchQuery turns a user's search input into an FTS5 expression
-// that is safe and useful to hand to the agentsview search layer. Two
-// sharp edges bite a naive caller: bare punctuation in a token (the
-// hyphen in "agentsview-mcp", a colon in "foo:bar", a stray paren) is
-// parsed as query syntax and raises an error, and an unquoted multi-word
-// query is matched as a single exact phrase, so natural-language input
-// quietly returns nothing.
-//
-// We quote each whitespace-separated term, escaping any embedded quote by
-// doubling it. Quoting makes punctuation literal inside the term, and
-// space-separated quoted phrases combine under FTS5's implicit AND - so
-// every term must appear without demanding an exact phrase. The leading
-// quote also makes db.PrepareFTSQuery pass the query through unchanged
-// instead of re-wrapping it as a phrase.
-//
-// A query the caller already opened with a double quote is treated as a
-// deliberate FTS expression (including an explicit "exact phrase") and is
-// passed through untouched.
-func buildSearchQuery(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.HasPrefix(raw, `"`) {
-		return raw
-	}
-	var b strings.Builder
-	for i, term := range strings.Fields(raw) {
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		b.WriteByte('"')
-		b.WriteString(strings.ReplaceAll(term, `"`, `""`))
-		b.WriteByte('"')
-	}
-	return b.String()
 }
 
 // isActiveSince reports whether an RFC3339 timestamp falls within the

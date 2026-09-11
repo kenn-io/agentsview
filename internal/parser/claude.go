@@ -1239,7 +1239,7 @@ func extractMessagesFrom(
 
 		content := gjson.Get(e.line, "message.content")
 		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
-			ExtractTextContent(content)
+			ExtractTextContent(context.Background(), content)
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -2461,7 +2461,7 @@ func countUserTurnsContext(
 		visited++
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if isCountedClaudeUserTurn(entries[current]) {
+		if isCountedClaudeUserTurn(ctx, entries[current]) {
 			count++
 		}
 		stack = append(stack, children[entries[current].uuid]...)
@@ -2469,14 +2469,14 @@ func countUserTurnsContext(
 	return count, ctx.Err()
 }
 
-func isCountedClaudeUserTurn(entry dagEntry) bool {
+func isCountedClaudeUserTurn(ctx context.Context, entry dagEntry) bool {
 	if entry.entryType != "user" ||
 		gjson.Get(entry.line, "isMeta").Bool() ||
 		gjson.Get(entry.line, "isCompactSummary").Bool() {
 		return false
 	}
 	content := gjson.Get(entry.line, "message.content")
-	text, _, _, _, _, _ := ExtractTextContent(content)
+	text, _, _, _, _, _ := ExtractTextContent(ctx, content)
 	text, skip := preprocessClaudeUserText(text)
 	if skip || strings.TrimSpace(text) == "" {
 		return false
@@ -2548,7 +2548,7 @@ func extractMessagesContext(
 
 		content := gjson.Get(e.line, "message.content")
 		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
-			ExtractTextContent(content)
+			ExtractTextContent(ctx, content)
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content

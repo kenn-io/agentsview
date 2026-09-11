@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -530,14 +531,14 @@ func inferPiSkillName(toolName, inputJSON, sessionCwd string) string {
 				return skill
 			}
 			if fp != "" && sessionCwd != "" {
-				if name := skillNameFromPath(fp, sessionCwd); name != "" {
+				if name := skillNameFromPath(context.Background(), fp, sessionCwd); name != "" {
 					return name
 				}
 			}
 		}
-		return inferSkillNameFromJSONPaths(inputJSON)
+		return inferSkillNameFromJSONPaths(context.Background(), inputJSON)
 	}
-	return inferCodexSkillNameWithBase(toolName, inputJSON, sessionCwd)
+	return inferCodexSkillNameWithBase(context.Background(), toolName, inputJSON, sessionCwd)
 }
 
 // piSkillURISkillName extracts the decoded skill name from the

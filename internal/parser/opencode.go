@@ -1743,13 +1743,13 @@ func inferOpenCodeSkillName(toolName, inputJSON, cwd string) string {
 		// paths and falls back to the parent directory name. Try the
 		// file_path directly against the session worktree first.
 		if fp := gjson.Get(inputJSON, "file_path").Str; fp != "" && cwd != "" {
-			if name := skillNameFromPath(fp, cwd); name != "" {
+			if name := skillNameFromPath(context.Background(), fp, cwd); name != "" {
 				return name
 			}
 		}
-		return inferSkillNameFromJSONPaths(inputJSON)
+		return inferSkillNameFromJSONPaths(context.Background(), inputJSON)
 	}
-	return inferCodexSkillNameWithBase(toolName, inputJSON, cwd)
+	return inferCodexSkillNameWithBase(context.Background(), toolName, inputJSON, cwd)
 }
 
 type openCodeStorageTime struct {

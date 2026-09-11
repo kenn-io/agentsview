@@ -135,6 +135,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	start := time.Now()
 	setupLogFile(cfg.DataDir)
 	applyServeMemoryLimit()
+	applyServeMallocTuning()
 
 	if err := validateServeConfig(cfg); err != nil {
 		fatal("invalid serve config: %v", err)

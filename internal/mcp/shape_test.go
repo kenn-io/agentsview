@@ -1,34 +1,11 @@
 package mcp
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
-
-func TestBuildSearchQuery(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name, raw, want string
-	}{
-		{"single word quoted", "login", `"login"`},
-		{"multi-word AND", "fix bug", `"fix" "bug"`},
-		{"hyphen token literal", "agentsview-mcp", `"agentsview-mcp"`},
-		{"colon token literal", "status:500", `"status:500"`},
-		{"embedded quote doubled", `say"hi`, `"say""hi"`},
-		{"leading quote passthrough", `"fix bug"`, `"fix bug"`},
-		{"empty", "", ""},
-		{"whitespace only", "   ", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tc.want, buildSearchQuery(tc.raw))
-		})
-	}
-}
 
 func TestTruncate(t *testing.T) {
 	t.Parallel()
@@ -82,13 +59,4 @@ func TestStrval(t *testing.T) {
 	assert.Equal(t, "", strval(nil))
 	v := "x"
 	assert.Equal(t, "x", strval(&v))
-}
-
-// Guard against accidental whitespace regressions in the multi-term query
-// builder.
-func TestBuildSearchQuery_NoTrailingSpace(t *testing.T) {
-	t.Parallel()
-	got := buildSearchQuery("a b c")
-	assert.False(t, strings.HasSuffix(got, " "))
-	assert.Equal(t, `"a" "b" "c"`, got)
 }

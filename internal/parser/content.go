@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -16,7 +17,7 @@ import (
 // Thinking blocks are joined with "\n\n" to give an unambiguous
 // block boundary in the concatenated thinking text.
 func ExtractTextContent(
-	content gjson.Result,
+	ctx context.Context, content gjson.Result,
 ) (string, string, bool, bool, []ParsedToolCall, []ParsedToolResult) {
 	if content.Type == gjson.String {
 		return content.Str, "", false, false, nil, nil
@@ -57,7 +58,7 @@ func ExtractTextContent(
 			// it when "input" is missing or empty.
 			hasToolUse = true
 			rendering := formatToolUse(block)
-			if tc, ok := parseToolCall(block); ok {
+			if tc, ok := parseToolCall(ctx, block); ok {
 				tc.Rendering = rendering
 				toolCalls = append(toolCalls, tc)
 			}
@@ -75,7 +76,7 @@ func ExtractTextContent(
 		hasThinking, hasToolUse, toolCalls, toolResults
 }
 
-func parseToolCall(block gjson.Result) (ParsedToolCall, bool) {
+func parseToolCall(ctx context.Context, block gjson.Result) (ParsedToolCall, bool) {
 	name := block.Get("name").Str
 	if name == "" {
 		return ParsedToolCall{}, false
@@ -96,7 +97,7 @@ func parseToolCall(block gjson.Result) (ParsedToolCall, bool) {
 			tc.SkillName = input.Get("name").Str
 		}
 	default:
-		tc.SkillName = inferToolSkillName(name, tc.InputJSON)
+		tc.SkillName = inferToolSkillName(ctx, name, tc.InputJSON)
 	}
 	return tc, true
 }

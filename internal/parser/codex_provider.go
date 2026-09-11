@@ -356,6 +356,40 @@ func (p *codexProvider) PlanRawCapture(
 		Appendable: true,
 	}}
 	var sidecarRoots []string
+	if parentID, needed := codexReplayParentIDContext(ctx, src.Path); needed {
+		parentPath := ""
+		for _, root := range p.sources.roots {
+			if err := ctx.Err(); err != nil {
+				return RawCapturePlan{}, err
+			}
+			candidate := p.sources.findSourceFile(root, parentID)
+			if candidate == "" || samePath(candidate, src.Path) {
+				continue
+			}
+			parentPath = candidate
+			break
+		}
+		// Missing parents preserve the child's history, matching local parsing.
+		if parentPath != "" {
+			// One named parent may come from any configured root. Give an
+			// external parent its own flat root so it cannot collide with the
+			// child's layout, and hosted lookup can find it by session UUID.
+			parentRel := filepath.Join("replay-parent", filepath.Base(parentPath))
+			if rawCapturePathWithin(captureRoot, parentPath) {
+				parentRel, err = filepath.Rel(captureRoot, parentPath)
+				if err != nil {
+					return RawCapturePlan{}, invalidRawCapturePlan(
+						"resolve Codex replay parent: %s", rawCaptureFilesystemError(err),
+					)
+				}
+			} else {
+				sidecarRoots = append(sidecarRoots, filepath.Dir(parentPath))
+			}
+			entries = append(entries, RawCaptureEntry{
+				Path: filepath.ToSlash(parentRel), LocalPath: parentPath,
+			})
+		}
+	}
 	for i, candidate := range p.sources.metadata.IndexPaths(src.Path) {
 		info, err := os.Stat(candidate)
 		switch {
@@ -366,6 +400,17 @@ func (p *codexProvider) PlanRawCapture(
 			logical := CodexSessionIndexFilename
 			if i > 0 {
 				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
+			}
+			if p.Config.StableSourceSnapshots && rawCapturePathWithin(captureRoot, candidate) {
+				// Materialized aliases already have custody paths. Keep their
+				// original ordinals even when missing indexes left gaps.
+				rel, err := filepath.Rel(captureRoot, candidate)
+				if err != nil {
+					return RawCapturePlan{}, invalidRawCapturePlan(
+						"resolve Codex session index: %s", rawCaptureFilesystemError(err),
+					)
+				}
+				logical = filepath.ToSlash(rel)
 			}
 			if filepath.Dir(candidate) != captureRoot {
 				sidecarRoots = append(sidecarRoots, filepath.Dir(candidate))

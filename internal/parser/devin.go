@@ -579,7 +579,7 @@ func parseDevinDBMessageNode(
 		return ParsedMessage{}, false, nil
 	}
 
-	content, thinking, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(root.Get("content"))
+	content, thinking, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), root.Get("content"))
 	topThinking := strings.TrimSpace(root.Get("thinking").Str)
 	if topThinking != "" && topThinking != thinking {
 		thinking = joinNonEmpty(thinking, topThinking)
@@ -733,7 +733,7 @@ func parseDevinDBToolCalls(toolCalls gjson.Result) ([]ParsedToolCall, string) {
 }
 
 func parseDevinDBToolCall(tc gjson.Result) (ParsedToolCall, bool) {
-	if parsed, ok := parseToolCall(tc); ok {
+	if parsed, ok := parseToolCall(context.Background(), tc); ok {
 		return parsed, true
 	}
 	name := firstNonEmpty(tc.Get("function.name").Str, tc.Get("name").Str)
@@ -965,7 +965,7 @@ func parseDevinStep(step gjson.Result, ordinal int, model string) (ParsedMessage
 	}
 
 	content, thinking, hasThinking, hasToolUse, toolCalls, toolResults :=
-		ExtractTextContent(step.Get("message"))
+		ExtractTextContent(context.Background(), step.Get("message"))
 	topLevelToolText, topLevelToolCalls := formatTopLevelToolUses(step.Get("tool_use"))
 	if topLevelToolText != "" {
 		content = joinNonEmpty(content, topLevelToolText)
@@ -1087,7 +1087,7 @@ func formatTopLevelToolUses(toolUses gjson.Result) (string, []ParsedToolCall) {
 		if text != "" {
 			parts = append(parts, text)
 		}
-		if tc, ok := parseToolCall(toolUse); ok {
+		if tc, ok := parseToolCall(context.Background(), toolUse); ok {
 			tc.Rendering = text
 			calls = append(calls, tc)
 		}

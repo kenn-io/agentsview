@@ -1508,6 +1508,58 @@ func TestSyncEngineForLocalReusesNoSyncEngineConcurrently(t *testing.T) {
 	}
 }
 
+func TestArchiveMaintenanceNoSyncSharesBarrier(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*Server, func() error) error
+	}{
+		{"foreground", (*Server).tryArchiveWrite},
+		{"background", (*Server).serializeArchiveWrite},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSyncRouteFixture(t)
+			t.Cleanup(func() { require.NoError(t, f.srv.Shutdown(context.Background())) })
+			started := make(chan struct{})
+			unblock := make(chan struct{})
+			release := stdlibsync.OnceFunc(func() { close(unblock) })
+			done := make(chan error, 1)
+			go func() {
+				done <- tc.run(f.srv, func() error {
+					close(started)
+					<-unblock
+					return nil
+				})
+			}()
+			t.Cleanup(func() {
+				release()
+				require.NoError(t, <-done)
+			})
+			<-started
+
+			for _, request := range []struct {
+				path string
+				body map[string]any
+			}{
+				{"/api/v1/data/compact", map[string]any{}},
+				{"/api/v1/data/strip-images", map[string]any{"confirmed": true}},
+			} {
+				response := make(chan *httptest.ResponseRecorder, 1)
+				go func() {
+					response <- serveJSON(t, f.handler, http.MethodPost, request.path, request.body)
+				}()
+				select {
+				case w := <-response:
+					assert.Equal(t, http.StatusConflict, w.Code, "%s: %s", request.path, w.Body.String())
+				case <-time.After(5 * time.Second):
+					release()
+					<-response
+					require.FailNow(t, request.path+" waited for maintenance instead of returning a conflict")
+				}
+			}
+		})
+	}
+}
+
 func TestSyncEngineForLocalCarriesUsageOnlyStoragePolicy(t *testing.T) {
 	f := newSyncRouteFixture(t, withUsageOnlyStorage())
 	f.writeClaudeSession(t, "proj/private.jsonl", "private prompt")

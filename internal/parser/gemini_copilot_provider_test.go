@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -657,6 +658,9 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 	assert.NotEmpty(t, fingerprint.Hash)
 
 	writeSourceFile(t, workspacePath, "name: Workspace other\n")
+	// Equal-size writes can share a filesystem timestamp tick on Windows.
+	workspaceTime := time.Unix(0, fingerprint.MTimeNS).Add(time.Second)
+	require.NoError(t, os.Chtimes(workspacePath, workspaceTime, workspaceTime))
 	renamedFingerprint, err := provider.Fingerprint(context.Background(), found)
 	require.NoError(t, err)
 	assert.NotEqual(t, fingerprint.Hash, renamedFingerprint.Hash)

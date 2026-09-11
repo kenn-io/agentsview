@@ -151,6 +151,7 @@ func (c *Capturer) Capture(
 		finishPublication()
 	}()
 	snapshot := false
+	var snapshotSourceModTimeNS int64
 	observationRecorded := false
 	var removeSnapshot func() error
 	switch {
@@ -180,6 +181,7 @@ func (c *Capturer) Capture(
 		if len(sourceObserved) != 1 {
 			return Result{}, ErrSourceChanged
 		}
+		snapshotSourceModTimeNS = sourceObserved[0].info.ModTime().UnixNano()
 		sqliteSource, openErr := openSQLiteSnapshotSource(
 			ctx, sourcePath, sourceObserved[0].info,
 		)
@@ -347,7 +349,8 @@ func (c *Capturer) Capture(
 		planned := observed[i].planned
 		var entry rawcheckpoint.CapturedEntry
 		var newlyInstalled bool
-		if assessment.mode == captureAppend && planned.Appendable {
+		if assessment.mode == captureAppend && planned.Appendable &&
+			observed[i].info.Size() > assessment.appendBases[i].Length {
 			entry, newlyInstalled, err = c.captureAppendFile(
 				ctx, observed[i], assessment.appendBases[i],
 			)
@@ -364,11 +367,15 @@ func (c *Capturer) Capture(
 			return Result{}, err
 		}
 		capturedIdentity := entry.FileIdentity
+		capturedModTimeNS := entry.ModTimeNS
 		entry.FileIdentity = observed[i].checkpointIdentity
+		if snapshot {
+			entry.ModTimeNS = snapshotSourceModTimeNS
+		}
 		entries = append(entries, entry)
 		capturedFiles = append(capturedFiles, capturedFileState{
 			length:       entry.Length,
-			modTimeNS:    entry.ModTimeNS,
+			modTimeNS:    capturedModTimeNS,
 			fileIdentity: capturedIdentity,
 			prefixSHA256: entry.PrefixSHA256,
 		})
@@ -672,7 +679,8 @@ func (c *Capturer) validateForUpload(
 	for _, entry := range entries {
 		manifestEntries = append(manifestEntries, rawsync.Entry{
 			Path: entry.Path, Type: "file", Length: entry.Length,
-			Objects: append([]rawsync.ObjectRef(nil), entry.Objects...),
+			ModTimeNS: entry.ModTimeNS,
+			Objects:   append([]rawsync.ObjectRef(nil), entry.Objects...),
 		})
 	}
 	return rawsync.ValidateManifestForUpload(rawsync.Manifest{

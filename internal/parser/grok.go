@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -1037,7 +1038,7 @@ func grokToolCalls(arr gjson.Result) []ParsedToolCall {
 			ToolName:  name,
 			Category:  NormalizeToolCategory(name),
 			InputJSON: inputJSON,
-			SkillName: inferToolSkillName(name, inputJSON),
+			SkillName: inferToolSkillName(context.Background(), name, inputJSON),
 		})
 		return true
 	})

@@ -8,6 +8,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -1365,7 +1366,7 @@ func parseRooCodeToolCall(text string, ordinal int) *ParsedToolCall {
 		// Infer skill name from readFile calls to SKILL.md files,
 		// matching how Cursor, Codex, Grok, Kimi, and ZCode detect
 		// skill usage from file reads.
-		tc.SkillName = inferToolSkillName(toolName, tc.InputJSON)
+		tc.SkillName = inferToolSkillName(context.Background(), toolName, tc.InputJSON)
 	}
 	return tc
 }

@@ -680,11 +680,14 @@ func (b *directBackend) Search(
 	page, err := b.db.Search(ctx, db.SearchFilter{
 		DateFrom: req.DateFrom,
 		DateTo:   req.DateTo,
-		Query:    db.PrepareFTSQuery(query),
-		Project:  req.Project,
-		Sort:     req.Sort,
-		Cursor:   req.Cursor,
-		Limit:    limit,
+		// Pass the query through untouched. db.Search prepares it itself,
+		// and pre-quoting here made every Chinese query look like an
+		// explicit FTS5 expression, which skipped word segmentation.
+		Query:   query,
+		Project: req.Project,
+		Sort:    req.Sort,
+		Cursor:  req.Cursor,
+		Limit:   limit,
 	})
 	if err != nil {
 		return nil, err

@@ -94,6 +94,17 @@ func (cfg ProviderConfig) RootsCopy() []string {
 
 // Provider is the target parser/source facade. Providers own source shape,
 // source identity, freshness, and lookup; the engine consumes SourceRefs,
+// StoredFingerprintLookup reads the archive's last successful source fingerprint.
+// It is lazy: providers invoke it only when their in-memory cache needs a seed.
+type StoredFingerprintLookup func(path string) (string, bool)
+
+// StoredFingerprintProvider can reuse independently verified parts of a persisted
+// fingerprint. It must still check every other input before returning freshness.
+// Providers without this optional capability receive no archive lookup.
+type StoredFingerprintProvider interface {
+	FingerprintWithStored(context.Context, SourceRef, StoredFingerprintLookup) (SourceFingerprint, error)
+}
+
 // SourceFingerprints, and normalized ParseResults without knowing whether the
 // backing data is a file, virtual DB row, sidecar set, remote canonical path, or
 // multi-session container.
@@ -1201,6 +1212,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newOpenHandsProviderFactory(def)
 	case AgentOpenCode:
 		return newOpenCodeProviderFactory(def)
+	case AgentOpenCodeReview:
+		return newOpenCodeReviewProviderFactory(def)
 	case AgentOMP:
 		return newPiProviderFactory(def)
 	case AgentOpenClaw:
