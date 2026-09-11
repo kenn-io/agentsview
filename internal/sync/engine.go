@@ -6309,12 +6309,22 @@ func (e *Engine) rehydrateReconciliationPage(
 					provider, &source, candidate.SourceState,
 					candidate.Provider, candidate.Path,
 				) {
-					files = append(files, parser.DiscoveredFile{
+					file := parser.DiscoveredFile{
 						Path: candidate.Path, Project: source.ProjectHint,
 						Agent: candidate.Provider, ForceParse: forceCandidate,
 						Machine:        candidate.Machine,
 						ProviderSource: &source, ProviderProcess: true,
+					}
+					membershipFile := file
+					membershipFile.Path = providerDiscoveredPath(source)
+					if membershipFile.Path == "" {
+						membershipFile.Path = candidate.Path
+					}
+					e.unNoteSQLiteContainerDiscovery(parser.DiscoveredFile{
+						Agent: candidate.Provider, Path: candidate.Path,
 					})
+					e.noteSQLiteContainerDiscovery(membershipFile)
+					files = append(files, file)
 					continue
 				}
 			}
@@ -6341,7 +6351,7 @@ func (e *Engine) rehydrateReconciliationPage(
 			provider, &source, candidate.SourceState,
 			candidate.Provider, candidate.Path,
 		)
-		files = append(files, parser.DiscoveredFile{
+		file := parser.DiscoveredFile{
 			Path: candidate.Path, Project: source.ProjectHint,
 			Agent: candidate.Provider, ForceParse: forceCandidate,
 			// Carry the candidate's stored attribution: recomputing it from the
@@ -6349,7 +6359,17 @@ func (e *Engine) rehydrateReconciliationPage(
 			// the labeled root it was configured under.
 			Machine:        candidate.Machine,
 			ProviderSource: &source, ProviderProcess: true,
+		}
+		membershipFile := file
+		membershipFile.Path = providerDiscoveredPath(source)
+		if membershipFile.Path == "" {
+			membershipFile.Path = candidate.Path
+		}
+		e.unNoteSQLiteContainerDiscovery(parser.DiscoveredFile{
+			Agent: candidate.Provider, Path: candidate.Path,
 		})
+		e.noteSQLiteContainerDiscovery(membershipFile)
+		files = append(files, file)
 	}
 	return files, nil
 }

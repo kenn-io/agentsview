@@ -1265,6 +1265,40 @@ func TestParseRetentionChargesPromotedStorageShadowWholeSize(t *testing.T) {
 		"a member promoted to its storage shadow is charged the shadow, not a container share")
 }
 
+func TestRehydrateStorageShadowRemovesSQLiteMembership(t *testing.T) {
+	engine, files, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
+	shadowPath := filepath.Join(filepath.Dir(dbPath), "storage", "session.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(shadowPath), 0o755))
+	handle, err := os.Create(shadowPath)
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(64<<20))
+	require.NoError(t, handle.Close())
+
+	provider := &reconciliationSourceStateTestProvider{
+		source: parser.SourceRef{
+			Provider:    parser.AgentMiMoCode,
+			DisplayPath: shadowPath,
+		},
+	}
+	rehydrated, err := engine.rehydrateReconciliationPage(
+		t.Context(), []reconciliationCandidate{{
+			Provider: parser.AgentMiMoCode,
+			Identity: "session",
+			Path:     files[0].Path,
+		}},
+		map[parser.AgentType]parser.Provider{
+			parser.AgentMiMoCode: provider,
+		},
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, rehydrated, 1)
+	assert.Equal(t, 63, engine.sqliteContainerDiscoveredMembers(files[0]),
+		"a storage-promoted candidate must leave the remaining SQLite member count")
+	assert.Equal(t, int64(64<<20), engine.parseRetentionSourceBytes(rehydrated[0]),
+		"a storage-promoted candidate must keep its resolved file size")
+}
+
 func TestParseRetentionFallsBackToContainerSizeWithoutPass(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "mimocode.db")
 	handle, err := os.Create(dbPath)
