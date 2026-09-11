@@ -194,15 +194,30 @@ func (p *crushProvider) ResolveReconciliationScopes(
 }
 
 // withOriginalTraversalRoots maps each expanded data directory back onto the
-// configured registry, crush.db, or data-directory root that produced it.
+// configured registry, crush.db, or data-directory root that produced it. A
+// registry traversal also includes all of its expanded data directories so
+// sibling projects discovered through the registry stay inside the declared
+// traversal boundary.
 func (p *crushProvider) withOriginalTraversalRoots(roots []string) []string {
 	out := make([]string, 0, len(roots))
+	seen := make(map[string]struct{}, len(roots))
+	appendRoot := func(root string) {
+		root = filepath.Clean(root)
+		if _, ok := seen[root]; ok {
+			return
+		}
+		seen[root] = struct{}{}
+		out = append(out, root)
+	}
 	for _, root := range roots {
 		if original, ok := p.configuredRoot[filepath.Clean(root)]; ok {
-			out = append(out, original)
+			appendRoot(original)
+			for _, dataDir := range p.registryMapping[filepath.Clean(original)] {
+				appendRoot(dataDir)
+			}
 			continue
 		}
-		out = append(out, root)
+		appendRoot(root)
 	}
 	return out
 }
@@ -574,6 +589,27 @@ func crushSessionFingerprint(
 		}
 	}
 	if err := messageRows.Err(); err != nil {
+		return "", false, err
+	}
+	childRows, err := db.QueryContext(ctx, `
+		SELECT id FROM sessions
+		WHERE parent_session_id = ?
+		ORDER BY id
+	`, sessionID)
+	if err != nil {
+		return "", false, fmt.Errorf("fingerprinting crush child sessions: %w", err)
+	}
+	defer childRows.Close()
+	for childRows.Next() {
+		var childID string
+		if err := childRows.Scan(&childID); err != nil {
+			return "", false, fmt.Errorf("scanning crush fingerprint child session: %w", err)
+		}
+		if idx := strings.LastIndex(childID, "$$"); idx >= 0 && idx+2 < len(childID) {
+			crushWriteFingerprintField(hasher, childID)
+		}
+	}
+	if err := childRows.Err(); err != nil {
 		return "", false, err
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), true, nil

@@ -140,6 +140,94 @@ func TestSyncCrushReparsesWhenRegistryProjectPathChanges(t *testing.T) {
 	assert.Equal(t, "new_project", session.Project)
 }
 
+func TestSyncCrushReparsesParentWhenChildSessionIsAdded(t *testing.T) {
+	dataDir, _, sourceDB := writeSyncCrushDB(t)
+	_, err := sourceDB.Exec(`
+		UPDATE messages
+		SET parts = '[{"type":"tool_call","data":{"id":"chatcmpl-tool-fetch","name":"agentic_fetch","input":"{}","finished":true,"provider_executed":false}}]'
+		WHERE id = 'msg-assistant'
+	`)
+	require.NoError(t, err)
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCrush: {dataDir},
+		},
+		Machine: "devbox",
+	})
+	t.Cleanup(engine.Close)
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
+
+	messages, err := database.GetMessages(
+		context.Background(), "crush:sess-001", 0, 100, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 1)
+	assert.Empty(t, messages[1].ToolCalls[0].SubagentSessionID)
+
+	_, err = sourceDB.Exec(`
+		INSERT INTO sessions (
+			id, parent_session_id, title, created_at, updated_at
+		) VALUES (
+			'child-uuid$$chatcmpl-tool-fetch', 'sess-001', 'Child',
+			1789093630, 1789093630
+		)
+	`)
+	require.NoError(t, err)
+	engine.SyncAll(context.Background(), nil)
+
+	messages, err = database.GetMessages(
+		context.Background(), "crush:sess-001", 0, 100, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 1)
+	assert.Equal(t, "crush:child-uuid$$chatcmpl-tool-fetch",
+		messages[1].ToolCalls[0].SubagentSessionID)
+}
+
+func TestReconcileProviderRootsCrushRegistryKeepsSiblingWithinTraversal(t *testing.T) {
+	firstDataDir, _, _ := writeSyncCrushDB(t)
+	secondDataDir, _, secondSourceDB := writeSyncCrushDB(t)
+	_, err := secondSourceDB.Exec(`
+		UPDATE sessions SET id = 'sess-002' WHERE id = 'sess-001';
+		UPDATE messages SET session_id = 'sess-002' WHERE session_id = 'sess-001';
+	`)
+	require.NoError(t, err)
+
+	registryDir := t.TempDir()
+	registry := `{"projects":[` +
+		`{"path":"` + filepath.ToSlash(filepath.Dir(firstDataDir)) +
+		`","data_dir":"` + filepath.ToSlash(firstDataDir) + `"},` +
+		`{"path":"` + filepath.ToSlash(filepath.Dir(secondDataDir)) +
+		`","data_dir":"` + filepath.ToSlash(secondDataDir) + `"}` +
+		`]}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(registryDir, parser.CrushProjectsFileName),
+		[]byte(registry), 0o600,
+	))
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCrush: {registryDir},
+		},
+		Machine: "devbox",
+	})
+	t.Cleanup(engine.Close)
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 2, Synced: 2})
+
+	require.NoError(t, engine.ReconcileProviderRoots(
+		context.Background(), parser.AgentCrush, []string{firstDataDir},
+	))
+	sibling, err := database.GetSessionFull(context.Background(), "crush:sess-002")
+	require.NoError(t, err)
+	require.NotNil(t, sibling)
+	assert.Nil(t, sibling.SourceMissingAt)
+}
+
 func TestReconcileProviderRootsCrushDBFileRootTombstonesDeletedSession(t *testing.T) {
 	_, dbPath, sourceDB := writeSyncCrushDB(t)
 	database := openTestDB(t)
