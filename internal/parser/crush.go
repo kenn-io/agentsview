@@ -297,6 +297,17 @@ func parseCrushSession(
 	if err != nil {
 		return nil, nil, err
 	}
+	links, err := crushSubagentLinks(db, sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range messages {
+		for j := range messages[i].ToolCalls {
+			if child, ok := links[messages[i].ToolCalls[j].ToolUseID]; ok {
+				messages[i].ToolCalls[j].SubagentSessionID = child
+			}
+		}
+	}
 
 	// The store lives at <project>/.crush/crush.db; the project directory
 	// is two levels above the database file. Configured roots that keep
@@ -369,6 +380,33 @@ func parseCrushSession(
 	applyUsageEventTokenTotals(session, usageEvents)
 	session.UsageEvents = usageEvents
 	return session, messages, nil
+}
+
+// crushSubagentLinks maps a session's prefixed tool-call IDs to the
+// crush-prefixed child session they spawned. Crush names subagent sessions
+// "<own-uuid>$$<spawning-tool-call-id>" under the delegating session.
+func crushSubagentLinks(db *sql.DB, sessionID string) (map[string]string, error) {
+	rows, err := db.Query(`
+		SELECT id FROM sessions WHERE parent_session_id = ?
+	`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("listing crush child sessions for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	links := make(map[string]string)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning crush child session: %w", err)
+		}
+		if idx := strings.LastIndex(id, "$$"); idx >= 0 && idx+2 < len(id) {
+			links["crush:"+id[idx+2:]] = "crush:" + id
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return links, nil
 }
 
 func loadCrushMessages(db *sql.DB, sessionID string) ([]ParsedMessage, error) {
