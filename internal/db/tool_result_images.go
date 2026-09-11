@@ -442,6 +442,16 @@ func projectToolResultText(
 	return projected, stats
 }
 
+func projectToolResultImageContent(
+	content string, policy config.ToolResultImages,
+) string {
+	if policy != config.ToolResultImagesDrop {
+		return content
+	}
+	projected, _ := StripToolResultImages(content)
+	return projected
+}
+
 // SetToolResultImages stores the policy on a writable database handle.
 func (db *DB) SetToolResultImages(policy config.ToolResultImages) {
 	if db.readOnly {

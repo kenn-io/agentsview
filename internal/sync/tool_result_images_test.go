@@ -333,7 +333,7 @@ func TestCodexImageRetentionAcrossFullAndLateResults(t *testing.T) {
 			)
 			require.NoError(t, os.WriteFile(path, []byte(transcript), 0o600))
 			database := openTestDB(t)
-			database.SetToolResultImages(config.ToolResultImagesDrop)
+			database.SetToolResultImages(config.ToolResultImagesKeep)
 			engine := NewEngine(database, EngineConfig{Machine: "local", Ephemeral: true,
 				AgentDirs:        map[parser.AgentType][]string{parser.AgentCodex: {root}},
 				ToolResultImages: config.ToolResultImagesDrop, StagedCodexParseMinBytes: threshold,

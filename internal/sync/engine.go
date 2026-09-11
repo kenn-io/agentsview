@@ -16838,19 +16838,22 @@ func (e *Engine) writeBatchWithOutcomeContext(
 					)
 					cp, blobs = nil, nil
 				}
-				werr = e.db.ReplaceSessionContentWithCheckpoint(
+				werr = e.db.ReplaceSessionContentWithCheckpointAndToolResultImages(
 					s.ID, msgs, update, findings, cp, blobs,
+					e.toolResultImages,
 				)
 			} else {
-				werr = e.db.ReplaceSessionContent(
-					s.ID, msgs, update, findings,
+				werr = e.db.ReplaceSessionContentWithToolResultImages(
+					s.ID, msgs, update, findings, e.toolResultImages,
 				)
 			}
 		} else if replaceMessages {
 			if msgs == nil {
 				msgs = []db.Message{}
 			}
-			werr = e.db.ReplaceSessionMessages(s.ID, msgs)
+			werr = e.db.ReplaceSessionMessagesWithToolResultImages(
+				s.ID, msgs, e.toolResultImages,
+			)
 		} else {
 			if !e.disableSignalRecompute {
 				update, findings = e.computeSignalsAndSecretsForStorage(s, msgs)
@@ -16988,7 +16991,7 @@ func (e *Engine) prepareSessionWriteContext(
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
 	}
-	msgs, _ = e.db.ProjectToolResultImages(msgs)
+	msgs, _ = db.ProjectToolResultImages(msgs, e.toolResultImages)
 	s, err := toDBSessionContext(ctx, pw)
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
@@ -17039,7 +17042,7 @@ func (e *Engine) prepareSessionWriteContext(
 	} else if mergedMsgs != nil {
 		parsedMsgs := msgs
 		msgs = mergedMsgs
-		msgs, _ = e.db.ProjectToolResultImages(msgs)
+		msgs, _ = db.ProjectToolResultImages(msgs, e.toolResultImages)
 		applyVisualStudioCopilotArchiveSessionFields(
 			&s, archived, parsedMsgs, msgs,
 		)
@@ -18103,9 +18106,10 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		identityObservation, hasIdentityObservation :=
 			e.projectIdentityObservationForWrite(pw, s)
 		writes = append(writes, db.SessionBatchWrite{
-			Session:     s,
-			Messages:    msgs,
-			UsageEvents: usageEvents,
+			Session:          s,
+			Messages:         msgs,
+			UsageEvents:      usageEvents,
+			ToolResultImages: &e.toolResultImages,
 			IdentityObservation: identityObservationOrZero(
 				identityObservation, hasIdentityObservation,
 			),
@@ -18721,7 +18725,7 @@ func (e *Engine) writeIncremental(
 		},
 		e.blockedResultCategories,
 	)
-	dbMsgs, _ = e.db.ProjectToolResultImages(dbMsgs)
+	dbMsgs, _ = db.ProjectToolResultImages(dbMsgs, e.toolResultImages)
 	// The incremental append path bypasses prepareSessionWrite, so run
 	// the central validation/sanitization pass on the new message rows
 	// here to keep coverage uniform across write paths. The fix counts
@@ -18854,7 +18858,7 @@ func (e *Engine) writeIncremental(
 			}
 		}
 	}
-	signalsMaintained, err := e.db.WriteSessionIncremental(
+	signalsMaintained, err := e.db.WriteSessionIncrementalWithToolResultImages(
 		inc.sessionID,
 		dbMsgs,
 		db.IncrementalSessionUpdate{
@@ -18879,6 +18883,7 @@ func (e *Engine) writeIncremental(
 			BlockedResultCategories:  e.blockedResultCategories,
 			SignalMaintainer:         maintainer,
 		},
+		e.toolResultImages,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -18942,7 +18947,9 @@ func (e *Engine) writeMessages(
 
 	// No existing messages — insert all.
 	if maxOrd < 0 {
-		if err := e.db.InsertMessages(msgs); err != nil {
+		if err := e.db.InsertMessagesWithToolResultImages(
+			msgs, e.toolResultImages,
+		); err != nil {
 			return fmt.Errorf(
 				"insert messages for %s: %w",
 				sessionID, err,
@@ -18965,7 +18972,9 @@ func (e *Engine) writeMessages(
 		return nil
 	}
 
-	if err := e.db.InsertMessages(msgs); err != nil {
+	if err := e.db.InsertMessagesWithToolResultImages(
+		msgs, e.toolResultImages,
+	); err != nil {
 		return fmt.Errorf(
 			"append messages for %s: %w",
 			sessionID, err,
@@ -19038,7 +19047,9 @@ func (e *Engine) writeSessionFullWithResolver(
 		if msgs == nil {
 			msgs = []db.Message{}
 		}
-		if err := e.db.ReplaceSessionMessages(s.ID, msgs); err != nil {
+		if err := e.db.ReplaceSessionMessagesWithToolResultImages(
+			s.ID, msgs, e.toolResultImages,
+		); err != nil {
 			log.Printf(
 				"replace messages for %s: %v",
 				s.ID, err,
@@ -19064,8 +19075,9 @@ func (e *Engine) writeSessionFullWithResolver(
 				checkpoint, checkpointBlobs = nil, nil
 			}
 		}
-		if err := e.db.ReplaceSessionContentWithCheckpoint(
+		if err := e.db.ReplaceSessionContentWithCheckpointAndToolResultImages(
 			s.ID, msgs, update, findings, checkpoint, checkpointBlobs,
+			e.toolResultImages,
 		); err != nil {
 			log.Printf(
 				"replace messages for %s: %v",
