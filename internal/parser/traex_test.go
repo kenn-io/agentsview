@@ -190,6 +190,19 @@ func TestTraeXProviderParseRelabelsCodexSession(t *testing.T) {
 	assert.Equal(t, []string{"traex:" + spawned}, subagentIDs)
 }
 
+// TestTraeXProviderDiscardsRateLimitSnapshots: TraeX is not a supported rate-limit source, though it shares the Codex-format parser.
+func TestTraeXProviderDiscardsRateLimitSnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.jsonl")
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("s1", "/tmp", "codex-tui", "2026-08-01T18:07:03Z"), testjsonl.CodexMsgJSON("user", "hi", "2026-08-01T18:07:04Z"),
+		testjsonl.CodexTokenCountWithRateLimitsJSON("2026-08-01T18:07:05Z", 100, 50, 0, "codex", "pro", &testjsonl.CodexRateLimitWindow{UsedPercent: 40, WindowMinutes: 10080}, nil, "1.0"))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	provider, _ := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{filepath.Dir(path)}})
+	sess, _, err := provider.(*codexProvider).parseSession(path, "devbox", false)
+	require.NoError(t, err)
+	assert.Empty(t, sess.RateLimitSnapshots, "TraeX must not persist rate-limit snapshots")
+}
+
 func TestTraeXProviderIgnoresCopiedCodexSessionIndex(t *testing.T) {
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")

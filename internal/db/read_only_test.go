@@ -442,6 +442,17 @@ func TestOpenReadOnlyAllowsMissingFTSTable(t *testing.T) {
 	assert.False(t, readonly.HasFTS())
 }
 
+// TestOpenReadOnlyToleratesMissingRateLimitSnapshotsTable: a pre-table archive opened read-only must not fail Latest/History with "no such table".
+func TestOpenReadOnlyToleratesMissingRateLimitSnapshotsTable(t *testing.T) {
+	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
+	execRawSQLite(t, path, "DROP TABLE IF EXISTS rate_limit_snapshots")
+	readonly := openReadOnlyTestDB(t, path)
+	_, err := readonly.LatestRateLimitSnapshots(context.Background(), RateLimitFilter{})
+	require.NoError(t, err)
+	_, err = readonly.RateLimitSnapshotHistory(context.Background(), RateLimitHistoryFilter{})
+	require.NoError(t, err)
+}
+
 func TestOpenReadOnlyCopyHelpersReturnErrReadOnly(t *testing.T) {
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "source.db")

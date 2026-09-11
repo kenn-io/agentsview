@@ -67,6 +67,11 @@ func applyIDPrefixToParsedResult(
 			}
 		}
 	}
+	for i := range result.RateLimitSnapshots {
+		result.RateLimitSnapshots[i].SessionID = applyIDPrefixToID(
+			prefix, result.RateLimitSnapshots[i].SessionID,
+		)
+	}
 }
 
 func safeS3TempRelPath(

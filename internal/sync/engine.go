@@ -3522,6 +3522,43 @@ func (e *Engine) resyncBuildLocked(
 	}
 	stats.OrphanedCopied = len(orphaned)
 	copiedSessionIDs = append(copiedSessionIDs, orphaned...)
+
+	// Copy rate-limit snapshots so previously observed Codex rate-limit
+	// windows survive the swap, the same way model pricing does above.
+	// This must run after orphaned sessions are restored, not before:
+	// rate_limit_snapshots.session_id is a foreign key, and a snapshot
+	// belonging to an orphaned or trashed session (its source file is
+	// gone, so it is absent from newDB until the copies above run) would
+	// otherwise violate that constraint -- INSERT OR IGNORE does not
+	// suppress a foreign-key violation the way it suppresses a duplicate,
+	// so copying too early silently loses every row in the table, not
+	// just that session's. Unlike model pricing, this history cannot be
+	// reconstructed once lost except by a full reparse of the source
+	// rollout, which neither an orphaned nor a trashed session still has,
+	// so a failure here aborts the swap instead of merely warning.
+	// copiedSessionIDs -- the union of CopyTrashedDataFrom's and
+	// CopyOrphanedDataFromExcluding's ids, both restored-without-reparse
+	// -- is passed through so the copy can tell those sessions apart from
+	// ones the fresh sync itself rebuilt, and only resurrect old rows for
+	// the former (see CopyRateLimitSnapshotsFrom's doc comment). Passing
+	// only orphaned here would silently drop a trashed session's
+	// rate-limit history on every resync.
+	if err := newDB.CopyRateLimitSnapshotsFrom(origPath, copiedSessionIDs); err != nil {
+		log.Printf("resync: copy rate limit snapshots: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"rate limit snapshots copy failed, aborting swap: "+
+				err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
+
 	deferredCwdUpdated, err := e.applyDeferredSourceCwd(
 		newDB, deferredSourceCwd,
 	)
@@ -9318,10 +9355,11 @@ func (e *Engine) syncProviderDBBacked(
 		pending := make([]pendingWrite, 0, len(outcome.Results))
 		for _, result := range outcome.Results {
 			pending = append(pending, pendingWrite{
-				sess:        result.Result.Session,
-				msgs:        result.Result.Messages,
-				usageEvents: result.Result.UsageEvents,
-				needsRetry:  !complete,
+				sess:               result.Result.Session,
+				msgs:               result.Result.Messages,
+				usageEvents:        result.Result.UsageEvents,
+				rateLimitSnapshots: result.Result.RateLimitSnapshots,
+				needsRetry:         !complete,
 			})
 		}
 		if len(pending) > 0 && !flush(pending) {
@@ -10367,6 +10405,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sess:                    pr.Session,
 					msgs:                    pr.Messages,
 					usageEvents:             pr.UsageEvents,
+					rateLimitSnapshots:      pr.RateLimitSnapshots,
 					sourceBytes:             r.sourceBytes,
 					checkpoint:              pr.Checkpoint,
 					checkpointHashState:     pr.CheckpointHashState,
@@ -10742,6 +10781,7 @@ type incrementalUpdate struct {
 	links               []parser.ClaudeSubagentLink
 	toolCallUpdates     []parser.ParsedToolCallUpdate
 	messageUsageUpdates []parser.ParsedMessageTokenUsageUpdate
+	rateLimitSnapshots  []parser.ParsedRateLimitSnapshot
 	// checkpoint is the machine-local parser checkpoint to persist in the
 	// same transaction as this incremental delta. nil keeps the existing
 	// checkpoint (or leaves none).
@@ -14848,7 +14888,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 
 	parseFn := func(
 		_ string, inc *db.IncrementalInfo,
-	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
+	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, []parser.ParsedRateLimitSnapshot, time.Time, int64, *string, []byte, error) {
 		// The Claude parser needs the stored tail's provider message id
 		// so its queued-command masking fallback fires only for a real
 		// same-message.id continuation; without it, every routine queued
@@ -14878,14 +14918,14 @@ func (e *Engine) tryProviderIncrementalAppend(
 			},
 		)
 		if perr != nil {
-			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, perr
+			return nil, nil, nil, nil, nil, time.Time{}, 0, nil, nil, perr
 		}
 		switch status {
 		case parser.IncrementalNeedsFullParse:
 			if outcome.ForceReplace {
 				// Signal the shared helper to fall back to a
 				// full parse that replaces stored messages.
-				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
+				return nil, nil, nil, nil, nil, time.Time{}, 0, nil, nil,
 					parser.ErrIncrementalNeedsFullParse
 			}
 			// A plain full-parse fallback without a replace request.
@@ -14893,9 +14933,9 @@ func (e *Engine) tryProviderIncrementalAppend(
 			// fallbacks (a DAG fork can drop or re-branch stored
 			// rows), so this branch serves providers that only need
 			// an append-preserving full parse.
-			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, parser.ErrDAGDetected
+			return nil, nil, nil, nil, nil, time.Time{}, 0, nil, nil, parser.ErrDAGDetected
 		case parser.IncrementalNoNewData:
-			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
+			return nil, nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
 			var terminationStatus *string
 			if outcome.TerminationStatus != nil {
@@ -14905,6 +14945,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 			return outcome.Messages, outcome.SubagentLinks,
 				outcome.ToolCallUpdates,
 				outcome.MessageTokenUsageUpdates,
+				outcome.RateLimitSnapshots,
 				outcome.EndedAt, outcome.ConsumedBytes, terminationStatus,
 				outcome.NextCursor, nil
 		}
@@ -14924,7 +14965,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 // only complete, valid JSON lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
 	path string, inc *db.IncrementalInfo,
-) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error)
+) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, []parser.ParsedRateLimitSnapshot, time.Time, int64, *string, []byte, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
@@ -15058,7 +15099,7 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{err: leaseErr}, true
 	}
 
-	newMsgs, links, toolCallUpdates, messageUsageUpdates, endedAt, consumed, terminationStatus, cursor, err := parseFn(
+	newMsgs, links, toolCallUpdates, messageUsageUpdates, rateLimitSnapshots, endedAt, consumed, terminationStatus, cursor, err := parseFn(
 		file.Path, inc,
 	)
 	if err != nil {
@@ -15233,6 +15274,7 @@ func (e *Engine) tryIncrementalJSONL(
 					links:                links,
 					toolCallUpdates:      toolCallUpdates,
 					messageUsageUpdates:  messageUsageUpdates,
+					rateLimitSnapshots:   rateLimitSnapshots,
 					checkpoint:           nextCheckpoint,
 					checkpointBlobs:      nextCheckpointBlobs,
 					endedAt:              endedAt,
@@ -15339,6 +15381,7 @@ func (e *Engine) tryIncrementalJSONL(
 			links:                links,
 			toolCallUpdates:      toolCallUpdates,
 			messageUsageUpdates:  messageUsageUpdates,
+			rateLimitSnapshots:   rateLimitSnapshots,
 			checkpoint:           nextCheckpoint,
 			checkpointBlobs:      nextCheckpointBlobs,
 			endedAt:              endedAt,
@@ -16189,9 +16232,10 @@ func (e *Engine) recomputeSignalsFromDBWithHook(
 }
 
 type pendingWrite struct {
-	sess        parser.ParsedSession
-	msgs        []parser.ParsedMessage
-	usageEvents []parser.ParsedUsageEvent
+	sess               parser.ParsedSession
+	msgs               []parser.ParsedMessage
+	usageEvents        []parser.ParsedUsageEvent
+	rateLimitSnapshots []parser.ParsedRateLimitSnapshot
 	// sourceBytes is the physical source size carried from the parse result;
 	// collectAndBatch uses it to flush batches on estimated bytes as well as
 	// session count.
@@ -16906,6 +16950,21 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			}
 			log.Printf(
 				"write usage events for %s: %v",
+				s.ID, err,
+			)
+			e.markStaleFailedMemberWrite(pw)
+			outcome.failedSessions++
+			continue
+		}
+		if err := e.writeRateLimitSnapshots(
+			replaceMessages, s.ID,
+			rateLimitSnapshotsForWrite(s.ID, s.Machine, pw.rateLimitSnapshots),
+		); err != nil {
+			if ctx.Err() != nil {
+				return outcome
+			}
+			log.Printf(
+				"write rate limit snapshots for %s: %v",
 				s.ID, err,
 			)
 			e.markStaleFailedMemberWrite(pw)
@@ -18054,6 +18113,20 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				outcome.failedSessions++
 				continue
 			}
+			// A staged full parse always force-replaces (see the comment
+			// above), so its rate-limit snapshots replace the session's
+			// prior rows too.
+			if err := e.writeRateLimitSnapshots(
+				true, s.ID,
+				rateLimitSnapshotsForWrite(s.ID, s.Machine, pw.rateLimitSnapshots),
+			); err != nil {
+				log.Printf(
+					"write rate limit snapshots for %s: %v", s.ID, err,
+				)
+				e.markStaleFailedMemberWrite(pw)
+				outcome.failedSessions++
+				continue
+			}
 			if err := e.db.SetSessionDataVersion(
 				s.ID, dataVersionForWrite(pw),
 			); err != nil {
@@ -18119,9 +18192,10 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		identityObservation, hasIdentityObservation :=
 			e.projectIdentityObservationForWrite(pw, s)
 		writes = append(writes, db.SessionBatchWrite{
-			Session:     s,
-			Messages:    msgs,
-			UsageEvents: usageEvents,
+			Session:            s,
+			Messages:           msgs,
+			UsageEvents:        usageEvents,
+			RateLimitSnapshots: rateLimitSnapshotsForWrite(s.ID, s.Machine, pw.rateLimitSnapshots),
 			IdentityObservation: identityObservationOrZero(
 				identityObservation, hasIdentityObservation,
 			),
@@ -18890,6 +18964,7 @@ func (e *Engine) writeIncremental(
 			SubagentLinks:            subagentLinks,
 			ToolCallResultUpdates:    toolCallResultUpdates,
 			MessageTokenUsageUpdates: messageUsageUpdates,
+			RateLimitSnapshots:       rateLimitSnapshotsForWrite(inc.sessionID, inc.machine, inc.rateLimitSnapshots),
 			Checkpoint:               inc.checkpoint,
 			CheckpointBlobs:          inc.checkpointBlobs,
 			BlockedResultCategories:  e.blockedResultCategories,
@@ -19095,6 +19170,19 @@ func (e *Engine) writeSessionFullWithResolver(
 	); err != nil {
 		log.Printf(
 			"replace usage events for %s: %v",
+			s.ID, err,
+		)
+		return err
+	}
+	// writeSessionFullWithResolver always does a full delete+reinsert of
+	// messages (see its doc comment), so its rate-limit snapshots
+	// replace the session's prior rows too.
+	if err := e.writeRateLimitSnapshots(
+		true, s.ID,
+		rateLimitSnapshotsForWrite(s.ID, s.Machine, pw.rateLimitSnapshots),
+	); err != nil {
+		log.Printf(
+			"write rate limit snapshots for %s: %v",
 			s.ID, err,
 		)
 		return err
@@ -19793,6 +19881,86 @@ func (e *Engine) usageEventsForWriteContext(
 	}
 	e.anomalies.recordSanitize(vs)
 	return out, nil
+}
+
+// writeRateLimitSnapshots inserts snapshots for sessionID, deleting the
+// session's existing rate_limit_snapshots rows first when replaceMessages
+// is true -- the same full-replacement condition used for the session's
+// own messages at this call site, so an authoritative reparse superseding
+// a fallback marked parser.DataVersionNeedsRetry cannot leave that
+// fallback's rows behind (see docs/agents/storage.md). A normal
+// incremental parse (replaceMessages false, appending only the newly
+// parsed tail) must not delete.
+func (e *Engine) writeRateLimitSnapshots(
+	replaceMessages bool, sessionID string, snapshots []db.RateLimitSnapshot,
+) error {
+	if replaceMessages {
+		return e.db.InsertRateLimitSnapshotsReplacingSession(
+			sessionID, snapshots,
+		)
+	}
+	return e.db.InsertRateLimitSnapshots(snapshots)
+}
+
+// rateLimitSnapshotsForWrite converts parser-emitted Codex rate-limit
+// snapshots into db rows for InsertRateLimitSnapshots, always
+// stamping them with sessionID and machine -- the session id and machine
+// this write is actually committing under -- rather than the parser-
+// native snap.SessionID/snap.Machine. The parser fills those fields from
+// its own raw scan before the engine can correct them: remote/S3 sync
+// namespaces the session id with a machine prefix (see
+// applyRemoteRewrites and applyIDPrefixToParsedResult), and
+// normalizePendingWriteMachines can overwrite pw.sess.Machine with the
+// archive's immutable stored machine for an existing session. Preferring
+// the parser's own values here would attach a prefixed sync's rate-limit
+// rows to a session id that was never written (failing the session_id
+// foreign key), or store them under a machine that no longer matches the
+// session they belong to, splitting one account's history across two
+// machine labels. sessionID and machine are always the final, corrected
+// values at every call site. Unlike usage events, rate-limit rows are
+// normally inserted with INSERT OR IGNORE against a unique dedup_key
+// rather than replaced per session, so calling this on every incremental
+// write cannot duplicate rows; the dedup key is (re)computed from the
+// corrected SessionID by InsertRateLimitSnapshotsContext. A write that
+// replaces a session's messages wholesale instead deletes the session's
+// prior rows first (see writeRateLimitSnapshots and
+// InsertRateLimitSnapshotsReplacingSession) so a superseded fallback
+// parse cannot leave stale rows behind.
+func rateLimitSnapshotsForWrite(
+	sessionID, machine string, snapshots []parser.ParsedRateLimitSnapshot,
+) []db.RateLimitSnapshot {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	out := make([]db.RateLimitSnapshot, len(snapshots))
+	for i, snap := range snapshots {
+		// windowMinutes: 0 doubles as "unknown" from the database onward
+		// (see db.RateLimitSnapshot.WindowMinutes), since Codex never
+		// reports a genuine zero-minute window; a nil snap.WindowMinutes
+		// collapses to that same sentinel here.
+		windowMinutes := 0
+		if snap.WindowMinutes != nil {
+			windowMinutes = *snap.WindowMinutes
+		}
+		out[i] = db.RateLimitSnapshot{
+			SessionID:            sessionID,
+			Machine:              machine,
+			LimitID:              snap.LimitID,
+			LimitName:            snap.LimitName,
+			PlanType:             snap.PlanType,
+			WindowKind:           snap.WindowKind,
+			UsedPercent:          snap.UsedPercent,
+			WindowMinutes:        windowMinutes,
+			ResetsAt:             snap.ResetsAt,
+			CreditsHas:           snap.CreditsHas,
+			CreditsUnlimited:     snap.CreditsUnlimited,
+			CreditsBalance:       snap.CreditsBalance,
+			RateLimitReachedType: snap.RateLimitReachedType,
+			ObservedAt:           snap.ObservedAt.UTC().Format(time.RFC3339Nano),
+			Ordinal:              snap.Ordinal,
+		}
+	}
+	return out
 }
 
 // postFilterCounts returns the total and user message counts
@@ -20891,6 +21059,7 @@ func (e *Engine) processAndWriteSessionFile(
 			sess:                   pr.Session,
 			msgs:                   pr.Messages,
 			usageEvents:            pr.UsageEvents,
+			rateLimitSnapshots:     pr.RateLimitSnapshots,
 			checkpoint:             pr.Checkpoint,
 			checkpointHashState:    pr.CheckpointHashState,
 			checkpointAnchorDigest: pr.CheckpointAnchorDigest,

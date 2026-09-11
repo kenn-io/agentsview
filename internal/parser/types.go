@@ -1303,6 +1303,11 @@ type ParsedSession struct {
 	// the usage_events table for catalog-based cost pricing.
 	UsageEvents []ParsedUsageEvent
 
+	// RateLimitSnapshots carries Codex rate_limits observations extracted
+	// from token_count events. The sync engine forwards these into the
+	// rate_limit_snapshots table.
+	RateLimitSnapshots []ParsedRateLimitSnapshot
+
 	// CountsAuthoritative marks parsers that own MessageCount and
 	// UserMessageCount even when they intentionally emit no transcript rows.
 	CountsAuthoritative bool
@@ -1460,6 +1465,61 @@ type ParsedUsageEvent struct {
 	CostSource               string
 	OccurredAt               string
 	DedupKey                 string
+}
+
+// ParsedRateLimitSnapshot records one Codex rate-limit window observed in a
+// token_count event's rate_limits payload. Codex rollouts carry no stable
+// account identifier (no account id, user id, email, or org field appears
+// anywhere in session_meta or token_count payloads as of 2026-09), so a
+// snapshot is identified by (Machine, LimitID, PlanType, WindowKind) rather
+// than by account; see docs/internal/session-format-sources.md for the
+// evidence entry and docs/token-usage.md for the resulting design note.
+// SessionID and Machine are filled in by the caller once the enclosing
+// session's identity is known (the builder that emits these during
+// line-by-line parsing does not always know either yet, e.g. during an
+// incremental parse of a tail chunk that starts after session_meta).
+// ObservedAt is the event's envelope timestamp; the db layer derives
+// its own dedup key from SessionID + ObservedAt + LimitID + WindowKind +
+// Ordinal once the caller has filled in the final SessionID, so
+// re-parsing a file cannot duplicate rows.
+type ParsedRateLimitSnapshot struct {
+	SessionID  string
+	Machine    string
+	LimitID    string
+	LimitName  string
+	PlanType   string
+	WindowKind string // "primary" or "secondary"
+
+	// Ordinal is the source token_count event's 0-based position among
+	// every token_count event in the rollout file, counted in file
+	// order regardless of whether an event carries a rate_limits
+	// payload. It is stable across a full parse, an incremental tail
+	// parse resuming from a cached or seeded cursor, and any later
+	// re-parse of the same file (see codexCursorState.tokenCountOrdinal),
+	// so the db layer folds it into dedup_key/observation_key to tell
+	// apart two token_count events that land on the same observed_at
+	// second -- otherwise indistinguishable by SessionID+ObservedAt+
+	// LimitID+WindowKind alone.
+	Ordinal int
+
+	UsedPercent float64
+	// WindowMinutes is nil when Codex did not report a duration for this
+	// window, distinct from a reported duration of zero (which Codex
+	// never sends). See docs/agents/storage.md.
+	WindowMinutes *int
+	// ResetsAt is unix seconds, or nil when Codex did not report a
+	// reset time for this window. A window with no known reset time is
+	// distinct from one that resets at the unix epoch -- flattening the
+	// two let a null resets_at surface as a bogus "resets in 0m" instead
+	// of an unknown reset time.
+	ResetsAt *int64
+
+	CreditsHas       bool
+	CreditsUnlimited bool
+	CreditsBalance   string
+
+	RateLimitReachedType string
+	ObservedAt           time.Time
 }
 
 // accumulateMessageTokenUsage rolls up explicit per-message token
@@ -1665,9 +1725,10 @@ func (s ParsedSession) TokenCoverageContext(
 
 // ParseResult pairs a parsed session with its messages.
 type ParseResult struct {
-	Session     ParsedSession
-	Messages    []ParsedMessage
-	UsageEvents []ParsedUsageEvent
+	Session            ParsedSession
+	Messages           []ParsedMessage
+	UsageEvents        []ParsedUsageEvent
+	RateLimitSnapshots []ParsedRateLimitSnapshot
 	// Checkpoint is opaque provider continuation state (a parser
 	// checkpoint) that the sync engine persists after this result's
 	// session rows commit, so later appends can resume without rescanning

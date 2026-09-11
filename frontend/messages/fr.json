@@ -2037,5 +2037,19 @@
   "settings_tool_result_images_keep": "Conserver",
   "settings_tool_result_images_drop": "Supprimer",
   "settings_tool_result_images_hint": "Les résultats déjà stockés gardent la règle appliquée lors de leur écriture, et revenir à Conserver ne restaure pas les données déjà supprimées. Lancez agentsview db strip --images pour traiter les lignes existantes.",
-  "settings_tool_result_images_restart_notice": "Redémarrez le démon AgentsView pour appliquer ce changement aux nouvelles sessions ingérées."
+  "settings_tool_result_images_restart_notice": "Redémarrez le démon AgentsView pour appliquer ce changement aux nouvelles sessions ingérées.",
+  "rate_limits_section_title": "Limites de débit",
+  "rate_limits_plan_label": "Forfait",
+  "rate_limits_credits_label": "Crédits",
+  "rate_limits_credits_unlimited": "Illimité",
+  "rate_limits_resets_in": "Réinitialisation dans {value}",
+  "rate_limits_resets_now": "Réinitialisation immédiate",
+  "rate_limits_used_percent_aria": "Utilisation de la limite de débit",
+  "rate_limits_history_aria": "Historique d'utilisation de la limite de débit",
+  "rate_limits_window_weekly": "Limite hebdomadaire",
+  "rate_limits_window_session": "Limite de session",
+  "rate_limits_window_generic": "Limite {duration}",
+  "rate_limits_card_header": "{window} [{name}]",
+  "rate_limits_vendor_codex": "Codex",
+  "rate_limits_resets_unknown": "Heure de réinitialisation inconnue"
 }

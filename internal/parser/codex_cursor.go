@@ -20,12 +20,17 @@ const (
 	// codexCursorCheckpointVersion is the wire version for the persisted
 	// cursor encoding. Bump when the encoding changes; decode failures fall
 	// back to a full parse.
+	// Version 5 additionally stores the running token_count event
+	// ordinal (see codexCursorState.tokenCountOrdinal), so an incremental
+	// parse resuming from a persisted or cached cursor assigns the same
+	// ordinal to a later token_count event that a full reparse of the
+	// whole file would.
 	// Version 4 stores the current reasoning effort alongside the model.
 	// Version 3 replaces duplicate IDs with their latest occurrence, matching
 	// full parsing; version 2 retained the oldest unresolved occurrence.
 	// The fork replay gate is process-only state: it is re-armed from the
 	// transcript on every parse and is not part of the persisted cursor.
-	codexCursorCheckpointVersion   = 4
+	codexCursorCheckpointVersion   = 5
 	codexCursorCheckpointMaxString = 1 << 20
 
 	// Account for the map bucket, list element, pointers, string headers, and
@@ -65,6 +70,10 @@ type codexCursorState struct {
 	pendingCalls             [codexCursorMaxPendingCalls]codexPendingToolCall
 	pendingCallCount         uint8
 	pendingCallsOverflow     bool
+	// tokenCountOrdinal is the number of token_count events processed so
+	// far in this file (equivalently, the 0-based ordinal the next one
+	// will receive). See ParsedRateLimitSnapshot.Ordinal.
+	tokenCountOrdinal uint32
 }
 
 // MarshalBinary encodes the compact continuation state for persistence.
@@ -90,6 +99,9 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 		return err
 	}
 	if err := write(uint8(codexCursorCheckpointVersion)); err != nil {
+		return nil, err
+	}
+	if err := write(s.tokenCountOrdinal); err != nil {
 		return nil, err
 	}
 	for _, str := range []string{s.model, s.reasoningEffort, s.cwd, s.agentPath} {
@@ -186,6 +198,9 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 		)
 	}
 	*s = codexCursorState{}
+	if err := read(&s.tokenCountOrdinal); err != nil {
+		return err
+	}
 	var err error
 	if s.model, err = readStr(); err != nil {
 		return err

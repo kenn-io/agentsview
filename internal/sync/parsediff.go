@@ -716,6 +716,7 @@ func (e *Engine) parseDiffCollectFile(
 			sess:                pr.Session,
 			msgs:                pr.Messages,
 			usageEvents:         pr.UsageEvents,
+			rateLimitSnapshots:  pr.RateLimitSnapshots,
 			needsRetry:          job.needsRetryForSession(pr.Session.ID),
 			sourceCwdResolution: job.sourceCwdResolution,
 			sourceCwdStored:     job.sourceCwdStored,

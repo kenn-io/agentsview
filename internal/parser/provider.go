@@ -1091,6 +1091,9 @@ type IncrementalOutcome struct {
 	SubagentLinks            []ClaudeSubagentLink
 	ToolCallUpdates          []ParsedToolCallUpdate
 	MessageTokenUsageUpdates []ParsedMessageTokenUsageUpdate
+	// RateLimitSnapshots carries Codex rate_limits observations parsed from
+	// the appended tail. Empty for providers that do not emit them.
+	RateLimitSnapshots []ParsedRateLimitSnapshot
 	// NextCursor is the provider's continuation state after consuming the
 	// appended tail, for persistence alongside the committed offset.
 	NextCursor           []byte

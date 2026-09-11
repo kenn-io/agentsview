@@ -451,6 +451,82 @@ func CodexTokenCountJSON(
 	return mustMarshal(m)
 }
 
+// CodexRateLimitWindow describes one nullable rate_limits window
+// ({used_percent, window_minutes, resets_at}) for test fixtures.
+// ResetsAtNull encodes resets_at as JSON null (the Codex protocol allows
+// this independently of the window itself being present) regardless of
+// ResetsAt's value; leave it false to encode ResetsAt normally.
+// WindowMinutesNull does the same for window_minutes.
+type CodexRateLimitWindow struct {
+	UsedPercent       float64
+	WindowMinutes     int
+	WindowMinutesNull bool
+	ResetsAt          int64
+	ResetsAtNull      bool
+}
+
+func (w *CodexRateLimitWindow) toMap() any {
+	if w == nil {
+		return nil
+	}
+	var resetsAt any = w.ResetsAt
+	if w.ResetsAtNull {
+		resetsAt = nil
+	}
+	var windowMinutes any = w.WindowMinutes
+	if w.WindowMinutesNull {
+		windowMinutes = nil
+	}
+	return map[string]any{
+		"used_percent":   w.UsedPercent,
+		"window_minutes": windowMinutes,
+		"resets_at":      resetsAt,
+	}
+}
+
+// CodexTokenCountWithRateLimitsJSON returns a Codex event_msg with
+// payload.type=token_count carrying both last_token_usage and a
+// rate_limits object shaped like a real Codex CLI payload: limit_id,
+// plan_type, up to two nullable windows (primary/secondary), and a
+// credits object. Pass primary/secondary as nil to encode a null window.
+// Use CodexTokenCountJSON instead when the fixture needs rate_limits to
+// be entirely absent or null.
+func CodexTokenCountWithRateLimitsJSON(
+	timestamp string,
+	inputTokens, outputTokens, cachedInputTokens int,
+	limitID, planType string,
+	primary, secondary *CodexRateLimitWindow,
+	creditsBalance string,
+) string {
+	m := map[string]any{
+		"type":      "event_msg",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"type": "token_count",
+			"info": map[string]any{
+				"last_token_usage": map[string]any{
+					"input_tokens":        inputTokens,
+					"output_tokens":       outputTokens,
+					"cached_input_tokens": cachedInputTokens,
+					"total_tokens":        inputTokens + outputTokens,
+				},
+			},
+			"rate_limits": map[string]any{
+				"limit_id":                limitID,
+				"limit_name":              nil,
+				"primary":                 primary.toMap(),
+				"secondary":               secondary.toMap(),
+				"credits":                 map[string]any{"has_credits": true, "unlimited": false, "balance": creditsBalance},
+				"individual_limit":        nil,
+				"spend_control_reached":   nil,
+				"plan_type":               planType,
+				"rate_limit_reached_type": nil,
+			},
+		},
+	}
+	return mustMarshal(m)
+}
+
 // ClaudeEntryJSON returns a Claude JSONL entry with uuid and
 // parentUuid fields.
 func ClaudeEntryJSON(

@@ -1973,5 +1973,19 @@
   "settings_tool_result_images_keep": "保留",
   "settings_tool_result_images_drop": "捨棄",
   "settings_tool_result_images_hint": "已儲存的結果維持寫入時的政策，改回「保留」也無法還原已刪除的資料。執行 agentsview db strip --images 可處理既有記錄。",
-  "settings_tool_result_images_restart_notice": "重新啟動 AgentsView 常駐程式後，此變更才會套用到新擷取的對話。"
+  "settings_tool_result_images_restart_notice": "重新啟動 AgentsView 常駐程式後，此變更才會套用到新擷取的對話。",
+  "rate_limits_section_title": "速率限制",
+  "rate_limits_plan_label": "方案",
+  "rate_limits_credits_label": "餘額",
+  "rate_limits_credits_unlimited": "無限制",
+  "rate_limits_resets_in": "{value} 後重置",
+  "rate_limits_resets_now": "現在重置",
+  "rate_limits_used_percent_aria": "速率限制使用情況",
+  "rate_limits_history_aria": "速率限制使用趨勢",
+  "rate_limits_window_weekly": "每週限額",
+  "rate_limits_window_session": "工作階段限額",
+  "rate_limits_window_generic": "{duration} 限額",
+  "rate_limits_card_header": "{window} [{name}]",
+  "rate_limits_vendor_codex": "Codex",
+  "rate_limits_resets_unknown": "重置時間未知"
 }

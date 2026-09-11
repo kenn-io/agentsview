@@ -25,6 +25,8 @@
     type RangeSelection,
   } from "../shared/rangeSelection.js";
   import UsageSummaryCards from "./UsageSummaryCards.svelte";
+  import { rateLimits } from "../../stores/ratelimits.svelte.js";
+  import RateLimitsSection from "../ratelimits/RateLimitsSection.svelte";
   import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
   import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
   import AttributionPanel from "./AttributionPanel.svelte";
@@ -518,7 +520,14 @@
       <RefreshControl
         lastUpdatedAt={usage.lastUpdatedAt}
         busy={usage.isQuerying}
-        onRefresh={() => usage.fetchAll({ preserveTimeRange: true })}
+        onRefresh={() => {
+          usage.fetchAll({ preserveTimeRange: true });
+          // Manual clicks and kit-ui's periodic auto-refresh both call
+          // this one callback; without this, rate-limit cards only ever
+          // refreshed on mount or a machine-filter change and otherwise
+          // went stale while the page stayed open.
+          rateLimits.fetchCurrent();
+        }}
         label={m.usage_refresh()}
         title={m.shared_refresh()}
       />
@@ -550,6 +559,8 @@
     {/if}
 
     <UsageSummaryCards />
+
+    <RateLimitsSection from={usage.from} to={usage.to} />
 
     <Card level="default" padding="none" class="chart-panel wide">
       <CostTimeSeriesChart

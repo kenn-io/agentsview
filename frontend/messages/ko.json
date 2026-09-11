@@ -1973,5 +1973,19 @@
   "settings_tool_result_images_keep": "유지",
   "settings_tool_result_images_drop": "삭제",
   "settings_tool_result_images_hint": "이미 저장된 결과는 기록될 당시의 정책을 유지하며, 유지로 되돌려도 이미 삭제된 데이터는 복원되지 않습니다. 기존 행은 agentsview db strip --images 로 처리합니다.",
-  "settings_tool_result_images_restart_notice": "이 변경을 새로 수집되는 세션에 적용하려면 AgentsView 데몬을 다시 시작하세요."
+  "settings_tool_result_images_restart_notice": "이 변경을 새로 수집되는 세션에 적용하려면 AgentsView 데몬을 다시 시작하세요.",
+  "rate_limits_section_title": "속도 제한",
+  "rate_limits_plan_label": "요금제",
+  "rate_limits_credits_label": "크레딧",
+  "rate_limits_credits_unlimited": "무제한",
+  "rate_limits_resets_in": "{value} 후 초기화",
+  "rate_limits_resets_now": "지금 초기화",
+  "rate_limits_used_percent_aria": "속도 제한 사용량",
+  "rate_limits_history_aria": "속도 제한 사용량 추이",
+  "rate_limits_window_weekly": "주간 한도",
+  "rate_limits_window_session": "세션 한도",
+  "rate_limits_window_generic": "{duration} 한도",
+  "rate_limits_card_header": "{window} [{name}]",
+  "rate_limits_vendor_codex": "Codex",
+  "rate_limits_resets_unknown": "초기화 시간 알 수 없음"
 }

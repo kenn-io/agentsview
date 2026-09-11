@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"go.kenn.io/agentsview/internal/testjsonl"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func TestStagedImportHonorsDisabledSignalRecomputation(t *testing.T) {

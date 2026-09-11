@@ -17,6 +17,7 @@ type SessionBatchWrite struct {
 	Session             Session
 	Messages            []Message
 	UsageEvents         []UsageEvent
+	RateLimitSnapshots  []RateLimitSnapshot
 	IdentityObservation export.ProjectIdentityObservation
 	// IdentitySnapshotProject distinguishes legacy omission (nil, use the
 	// aggregate project) from an explicit empty parser source (omit snapshot).
@@ -541,6 +542,24 @@ func writeOneSessionBatchTx(
 	}
 	if err := replaceSessionUsageEventsTx(
 		queries, write.Session.ID, write.UsageEvents, false,
+	); err != nil {
+		return 0, err
+	}
+	if replaceMessages {
+		// This is the same full-replacement path used for an
+		// authoritative reparse superseding a fallback marked
+		// parser.DataVersionNeedsRetry: without this delete, that
+		// fallback's rate_limit_snapshots rows would outlive the parse
+		// that superseded them (see docs/agents/storage.md). An
+		// incremental append (replaceMessages false) must not delete.
+		if err := deleteRateLimitSnapshotsForSessionTx(
+			queries, write.Session.ID,
+		); err != nil {
+			return 0, err
+		}
+	}
+	if err := insertRateLimitSnapshotsTx(
+		ctx, queries, write.RateLimitSnapshots,
 	); err != nil {
 		return 0, err
 	}

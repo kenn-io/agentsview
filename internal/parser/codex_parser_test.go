@@ -1676,6 +1676,27 @@ func TestParseCodexSession_TokenUsage(t *testing.T) {
 	})
 }
 
+// TestParseCodexSession_RateLimits_NullResetsAt pins that a null
+// resets_at/window_minutes parses as nil, not 0.
+func TestParseCodexSession_RateLimits_NullResetsAt(t *testing.T) {
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("rl-sess", "/tmp", "user", tsEarly),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+		testjsonl.CodexMsgJSON("assistant", "hi", tsEarlyS5),
+		testjsonl.CodexTokenCountWithRateLimitsJSON(
+			tsEarlyS5, 10000, 500, 6000, "codex", "pro",
+			&testjsonl.CodexRateLimitWindow{UsedPercent: 40, WindowMinutesNull: true, ResetsAtNull: true},
+			nil, "100.0",
+		),
+	)
+	sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
+	require.NotNil(t, sess)
+	require.Len(t, sess.RateLimitSnapshots, 1)
+	assert.Nil(t, sess.RateLimitSnapshots[0].ResetsAt, "a null resets_at must not be flattened to 0")
+	assert.Nil(t, sess.RateLimitSnapshots[0].WindowMinutes, "a null window_minutes must not be flattened to 0")
+}
+
 // testUUIDv7 builds a syntactically valid UUIDv7 whose embedded
 // timestamp is the given unix-millisecond value.
 func testUUIDv7(ms int64, seq byte) string {

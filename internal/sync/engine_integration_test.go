@@ -6341,6 +6341,64 @@ func TestCodexRequiredReparseWithoutIndexPreservesStoredTitle(t *testing.T) {
 	}
 }
 
+// TestUpgradingArchiveBackfillsCodexRateLimitSnapshots pins the
+// data-version-backfill invariant: a session stamped at a data_version
+// older than the one that added rate_limits extraction must get a full
+// reparse (not skip via the incremental fast path) once
+// db.CurrentDataVersion() moves past it, backfilling its history from the
+// unchanged source file.
+func TestUpgradingArchiveBackfillsCodexRateLimitSnapshots(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229f5"
+	sessionID := "codex:" + uuid
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/repo", "user").
+		AddCodexMessage(tsEarlyS1, "user", "hello").
+		AddCodexMessage(tsEarlyS5, "assistant", "hi").
+		AddRaw(testjsonl.CodexTokenCountWithRateLimitsJSON(
+			tsEarlyS5, 10000, 500, 6000, "codex", "pro",
+			&testjsonl.CodexRateLimitWindow{UsedPercent: 33, WindowMinutes: 10080, ResetsAt: 1789435448},
+			nil, "100.0",
+		)).
+		String()
+	env.writeCodexSession(t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", content)
+
+	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(sessionID))
+
+	// Simulate the pre-upgrade archive state this binary predates: an
+	// older data_version and no rate-limit rows, the file on disk
+	// untouched. The literal pre-rate-limits version (107), not
+	// CurrentDataVersion()-1, so the test still proves the bump matters
+	// if it were reverted.
+	const preRateLimitsDataVersion = 107
+	require.Less(t, preRateLimitsDataVersion, db.CurrentDataVersion())
+	require.NoError(t, env.db.SetSessionDataVersion(sessionID, preRateLimitsDataVersion))
+	raw, err := sql.Open("sqlite3", env.db.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`DELETE FROM rate_limit_snapshots WHERE session_id = ?`, sessionID)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced,
+		"a stale data version must force a full reparse of the unchanged file")
+
+	sess, err := env.db.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, db.CurrentDataVersion(), sess.DataVersion)
+
+	rows, err := env.db.RateLimitSnapshotHistory(context.Background(), db.RateLimitHistoryFilter{})
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "upgrading the archive must backfill rate-limit history from the unchanged file")
+	assert.InDelta(t, 33.0, rows[0].UsedPercent, 0.001)
+}
+
 func TestCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")

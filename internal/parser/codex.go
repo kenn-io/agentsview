@@ -79,7 +79,17 @@ type codexSessionBuilder struct {
 	committedUsageTarget        *int
 	committedUsageBlockedByUser bool
 	messageUsageUpdates         []ParsedMessageTokenUsageUpdate
-	checkpointUnsafe            bool
+	rateLimitSnapshots          []ParsedRateLimitSnapshot
+	// discardRateLimitSnapshots skips accumulating rateLimitSnapshots
+	// entirely. Set for builders that reconstruct cursor state from a
+	// full prefix scan (seedCodexIncrementalStateFromReader) without
+	// ever returning a session result: those observations are neither
+	// read nor persisted, so collecting them would grow unboundedly
+	// with the scanned prefix -- proportional to the whole rollout, not
+	// the incremental tail a cache hit would otherwise read -- for no
+	// benefit on every incremental-parse cache miss.
+	discardRateLimitSnapshots bool
+	checkpointUnsafe          bool
 	// Calls beyond the persisted cursor's capacity remain parse-local until
 	// enough results arrive to fit the bounded checkpoint again.
 	overflowPendingCalls map[string]codexPendingToolCall
@@ -400,7 +410,7 @@ func (b *codexSessionBuilder) processLine(
 		if b.suppresses(codexTypeEventMsg, payload) {
 			return false
 		}
-		b.handleEventMsg(payload)
+		b.handleEventMsg(payload, ts)
 	}
 	return false
 }
@@ -538,13 +548,15 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	})
 }
 
-func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
+func (b *codexSessionBuilder) handleEventMsg(
+	payload gjson.Result, ts time.Time,
+) {
 	eventType := payload.Get("type").Str
 	switch eventType {
 	case "task_started", "task_complete", "turn_aborted":
 		b.observeTaskEvent(eventType)
 	case "token_count":
-		b.handleTokenCountEvent(payload)
+		b.handleTokenCountEvent(payload, ts)
 	case "collab_agent_spawn_end":
 		b.handleCollabAgentSpawnEnd(payload)
 	case "sub_agent_activity":
@@ -557,8 +569,24 @@ func (b *codexSessionBuilder) markFirstUserReplayPossible() {
 }
 
 func (b *codexSessionBuilder) handleTokenCountEvent(
-	payload gjson.Result,
+	payload gjson.Result, ts time.Time,
 ) {
+	// ordinal is this token_count event's 0-based position among every
+	// token_count event in the file, counted unconditionally -- even
+	// when discardRateLimitSnapshots is set, or rate_limits itself is
+	// absent -- so a prefix rescan that seeds an incremental parse's
+	// cursor keeps the counter in lockstep with what a full parse would
+	// have counted by the same offset. See ParsedRateLimitSnapshot.Ordinal.
+	ordinal := int(b.tokenCountOrdinal)
+	b.tokenCountOrdinal++
+
+	// rate_limits is a sibling of info.last_token_usage, not nested under
+	// it, and must be captured even when the usage payload itself is
+	// empty or a duplicate (observeTokenUsage dedups by content below);
+	// codex_exec heartbeats can repeat identical token usage while still
+	// reporting a freshly advanced rate-limit window.
+	b.observeRateLimits(payload.Get("rate_limits"), ts, ordinal)
+
 	raw := payload.Get("info.last_token_usage").Raw
 	if raw == "" || b.observeTokenUsage(raw) {
 		return
@@ -591,6 +619,112 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 		},
 	)
 	b.committedUsageTarget = nil
+}
+
+// observeRateLimits extracts the rate_limits object carried beside
+// info.last_token_usage in a Codex token_count event. rate_limits is
+// nullable (older releases and non-primary limit_id rows such as
+// "premium" report it as null); a present object nests up to two nullable
+// windows, "primary" and "secondary" (e.g. a 5h window and a weekly
+// window), each shaped {used_percent, window_minutes, resets_at}. One
+// ParsedRateLimitSnapshot is appended per non-null window so the schema
+// can key rows by window kind; a rate_limits object with both windows
+// null (seen for limit_id "premium", which currently reports credits
+// only) carries no window to record and is skipped. SessionID and
+// Machine are left blank here — the builder does not reliably know the
+// final session identity yet during an incremental tail parse — and are
+// filled in by the caller once the enclosing ParsedSession/
+// IncrementalOutcome is assembled. ordinal is the source token_count
+// event's stable per-file position (see ParsedRateLimitSnapshot.Ordinal)
+// and is stamped onto every window this one event produces.
+func (b *codexSessionBuilder) observeRateLimits(
+	rl gjson.Result, ts time.Time, ordinal int,
+) {
+	if !rl.Exists() || rl.Type == gjson.Null || ts.IsZero() {
+		return
+	}
+	if b.discardRateLimitSnapshots {
+		return
+	}
+	limitID := rl.Get("limit_id").Str
+	limitName := rl.Get("limit_name").Str
+	planType := rl.Get("plan_type").Str
+	reachedType := rl.Get("rate_limit_reached_type").Str
+	creditsHas := rl.Get("credits.has_credits").Bool()
+	creditsUnlimited := rl.Get("credits.unlimited").Bool()
+	creditsBalance := rl.Get("credits.balance").String()
+
+	base := ParsedRateLimitSnapshot{
+		LimitID:              limitID,
+		LimitName:            limitName,
+		PlanType:             planType,
+		CreditsHas:           creditsHas,
+		CreditsUnlimited:     creditsUnlimited,
+		CreditsBalance:       creditsBalance,
+		RateLimitReachedType: reachedType,
+		ObservedAt:           ts,
+		Ordinal:              ordinal,
+	}
+
+	if win, ok := codexRateLimitWindow(rl.Get("primary")); ok {
+		snap := base
+		snap.WindowKind = "primary"
+		snap.UsedPercent = win.usedPercent
+		snap.WindowMinutes = win.windowMinutes
+		snap.ResetsAt = win.resetsAt
+		b.rateLimitSnapshots = append(b.rateLimitSnapshots, snap)
+	}
+	if win, ok := codexRateLimitWindow(rl.Get("secondary")); ok {
+		snap := base
+		snap.WindowKind = "secondary"
+		snap.UsedPercent = win.usedPercent
+		snap.WindowMinutes = win.windowMinutes
+		snap.ResetsAt = win.resetsAt
+		b.rateLimitSnapshots = append(b.rateLimitSnapshots, snap)
+	}
+}
+
+type codexRateLimitWindowValue struct {
+	usedPercent float64
+	// windowMinutes is nil when the window's window_minutes field is
+	// absent or JSON null, which the Codex protocol allows independently
+	// of the window object itself being present -- distinct from a
+	// reported duration of zero, which Codex never sends. Preserving
+	// that as nil (rather than flattening it to 0) keeps a window with
+	// an unknown duration from being displayed with a bogus "0m" length;
+	// the card falls back to a window-kind label instead (see
+	// RateLimitWindow.WindowMinutes).
+	windowMinutes *int
+	// resetsAt is nil when the window's resets_at field is absent or
+	// JSON null, which the Codex protocol allows independently of the
+	// window object itself being present.
+	resetsAt *int64
+}
+
+// codexRateLimitWindow decodes one nullable rate_limits window object
+// ({used_percent, window_minutes, resets_at}). resets_at is itself
+// independently nullable, distinct from the window as a whole being
+// null: preserving that as a nil resetsAt (rather than flattening it to
+// 0) keeps a window with an unknown reset time from being displayed as
+// if it resets at the unix epoch.
+func codexRateLimitWindow(
+	win gjson.Result,
+) (codexRateLimitWindowValue, bool) {
+	if !win.Exists() || win.Type == gjson.Null {
+		return codexRateLimitWindowValue{}, false
+	}
+	value := codexRateLimitWindowValue{
+		usedPercent: win.Get("used_percent").Float(),
+	}
+	if windowMinutes := win.Get("window_minutes"); windowMinutes.Exists() && windowMinutes.Type != gjson.Null {
+		v := int(windowMinutes.Int())
+		value.windowMinutes = &v
+	}
+	if resetsAt := win.Get("resets_at"); resetsAt.Exists() && resetsAt.Type != gjson.Null {
+		v := resetsAt.Int()
+		value.resetsAt = &v
+	}
+	return value, true
 }
 
 func (b *codexSessionBuilder) handleCollabAgentSpawnEnd(
@@ -1771,6 +1905,12 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	b := newCodexSessionBuilder(
 		ctx, includeExec, p.parentTurnResolver(ctx, path), sink,
 	)
+	if p.spec.agent != AgentCodex {
+		// TraeX shares this parser (same rollout format) but is not a
+		// supported rate-limit source; its rate_limits payloads are
+		// left uncollected rather than persisted under the wrong agent.
+		b.discardRateLimitSnapshots = true
+	}
 	malformedLines := 0
 
 	for {
@@ -1896,6 +2036,16 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 			Device:     int64(device),
 			ChangeTime: changeTime,
 		},
+	}
+	if len(b.rateLimitSnapshots) > 0 {
+		sess.RateLimitSnapshots = make(
+			[]ParsedRateLimitSnapshot, len(b.rateLimitSnapshots),
+		)
+		for i, snap := range b.rateLimitSnapshots {
+			snap.SessionID = sessionID
+			snap.Machine = machine
+			sess.RateLimitSnapshots[i] = snap
+		}
 	}
 
 	if err := accumulateMessageTokenUsageContext(ctx, sess, msgs); err != nil {
@@ -2172,6 +2322,12 @@ func seedCodexIncrementalStateFromReader(
 	b := newCodexSessionBuilder(
 		context.Background(), false, resolveParentTurns, sink,
 	)
+	// This scan reconstructs cursor state from a (potentially large)
+	// prefix and never returns a session result -- codexIncrementalSeed
+	// carries only cursor/pending-call state, not rate-limit history --
+	// so collecting rate-limit snapshots here would grow unboundedly
+	// with the scanned prefix for no benefit.
+	b.discardRateLimitSnapshots = true
 	lr := newLineReader(r, maxLineSize)
 	defer releaseLineReader(lr)
 	for {
@@ -2359,6 +2515,7 @@ type codexIncrementalParseResult struct {
 	messages            []ParsedMessage
 	toolCallUpdates     []ParsedToolCallUpdate
 	messageUsageUpdates []ParsedMessageTokenUsageUpdate
+	rateLimitSnapshots  []ParsedRateLimitSnapshot
 	endedAt             time.Time
 	consumedBytes       int64
 	initialCursor       codexCursorState
@@ -2531,6 +2688,11 @@ func (p *codexProvider) parseSessionFromWithSources(
 		p.parentTurnResolver(context.Background(), path),
 		NewCodexCollectingSink(startOrdinal),
 	)
+	if p.spec.agent != AgentCodex {
+		// See parseCodexSessionSnapshotStreaming: TraeX is not a
+		// supported rate-limit source.
+		b.discardRateLimitSnapshots = true
+	}
 	b.codexCursorState = seed.codexCursorState
 	b.overflowPendingCalls = seed.overflowPendingCalls
 	if committedUsageTarget != nil {
@@ -2587,6 +2749,9 @@ func (p *codexProvider) parseSessionFromWithSources(
 		toolCallUpdates: b.sink.ToolCallUpdates(),
 		messageUsageUpdates: append(
 			[]ParsedMessageTokenUsageUpdate(nil), b.messageUsageUpdates...,
+		),
+		rateLimitSnapshots: append(
+			[]ParsedRateLimitSnapshot(nil), b.rateLimitSnapshots...,
 		),
 		endedAt:       b.endedAt,
 		consumedBytes: consumed,

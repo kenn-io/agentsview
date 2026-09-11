@@ -374,6 +374,7 @@ func stagedCodexParseOutcome(
 		Result: parser.ParseResult{
 			Session:                *sess,
 			Messages:               msgs,
+			RateLimitSnapshots:     sess.RateLimitSnapshots,
 			Checkpoint:             cursor,
 			CheckpointHashState:    hashState,
 			CheckpointAnchorDigest: anchorDigest,

@@ -99,6 +99,11 @@ type Store interface {
 	GetUsageMatchingSessionCount(ctx context.Context, f UsageFilter) (int, error)
 	GetSessionUsage(ctx context.Context, sessionID string, includeBreakdown bool) (*SessionUsage, error)
 
+	// Rate limits. SQLite-only (see docs/agents/storage.md); other
+	// backends return an empty slice so the Usage page hides the section.
+	LatestRateLimitSnapshots(ctx context.Context, f RateLimitFilter) ([]RateLimitSnapshot, error)
+	RateLimitSnapshotHistory(ctx context.Context, f RateLimitHistoryFilter) ([]RateLimitSnapshot, error)
+
 	// Stars.
 	StarSession(sessionID string) (bool, error)
 	UnstarSession(sessionID string) error

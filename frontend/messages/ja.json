@@ -2038,5 +2038,19 @@
   "settings_tool_result_images_keep": "保持",
   "settings_tool_result_images_drop": "破棄",
   "settings_tool_result_images_hint": "保存済みの結果は書き込み時のポリシーを保ち、保持に戻しても削除済みのデータは復元できません。既存の行は agentsview db strip --images で処理してください。",
-  "settings_tool_result_images_restart_notice": "この変更を新しく取り込むセッションに適用するには、AgentsView デーモンを再起動してください。"
+  "settings_tool_result_images_restart_notice": "この変更を新しく取り込むセッションに適用するには、AgentsView デーモンを再起動してください。",
+  "rate_limits_section_title": "レート制限",
+  "rate_limits_plan_label": "プラン",
+  "rate_limits_credits_label": "クレジット",
+  "rate_limits_credits_unlimited": "無制限",
+  "rate_limits_resets_in": "{value}後にリセット",
+  "rate_limits_resets_now": "今すぐリセット",
+  "rate_limits_used_percent_aria": "レート制限の使用状況",
+  "rate_limits_history_aria": "レート制限の使用状況の推移",
+  "rate_limits_window_weekly": "週間上限",
+  "rate_limits_window_session": "セッション上限",
+  "rate_limits_window_generic": "{duration}上限",
+  "rate_limits_card_header": "{window} [{name}]",
+  "rate_limits_vendor_codex": "Codex",
+  "rate_limits_resets_unknown": "リセット時刻不明"
 }

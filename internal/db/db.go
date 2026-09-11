@@ -487,7 +487,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Subagent tool calls from Other to Task so delegation renders as a task call
 // and leaves the Other analytics bucket; subagent transcripts themselves are
 // new sources and need no re-parse.)
-const dataVersion = 107
+// (108: Codex token_count events now also extract the rate_limits object
+// into rate_limit_snapshots. An unchanged rollout file byte-for-byte
+// still needs re-parsing to backfill this history, because a fingerprint
+// change alone cannot repair a session parsed before this field existed.)
+const dataVersion = 108
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -730,6 +734,15 @@ type DB struct {
 	// the incremental signal path: a maintained delta must not load
 	// session history.
 	messagesLoadCount atomic.Int64
+
+	// rateLimitSnapshotsTableMu guards the cached sqlite_master probe for
+	// whether this archive's rate_limit_snapshots table exists (see
+	// docs/agents/storage.md): a read-only open of an archive that
+	// predates this table leaves it absent, and Latest/History must
+	// tolerate that without probing on every call.
+	rateLimitSnapshotsTableMu     sync.Mutex
+	rateLimitSnapshotsTableProbed bool
+	rateLimitSnapshotsTableFound  bool
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the

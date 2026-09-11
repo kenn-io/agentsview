@@ -2761,6 +2761,12 @@ type IncrementalSessionUpdate struct {
 	SubagentLinks            []ToolCallSubagentLink
 	ToolCallResultUpdates    []ToolCallResultUpdate
 	MessageTokenUsageUpdates []MessageTokenUsageUpdate
+	// RateLimitSnapshots carries Codex rate_limits observations parsed
+	// from this delta's appended tail. Rows are inserted with INSERT OR
+	// IGNORE against a unique dedup_key rather than replaced, so this can
+	// be a non-exhaustive incremental slice without risking duplicates or
+	// losing earlier history.
+	RateLimitSnapshots []RateLimitSnapshot
 	// Checkpoint/CheckpointBlobs are the machine-local parser checkpoint
 	// metadata and lazy payload to persist in the same transaction as this
 	// delta. nil keeps any existing checkpoint.

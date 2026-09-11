@@ -1973,5 +1973,19 @@
   "settings_tool_result_images_keep": "保留",
   "settings_tool_result_images_drop": "丢弃",
   "settings_tool_result_images_hint": "已存储的结果保持写入时的策略，改回「保留」也无法恢复已删除的数据。运行 agentsview db strip --images 可处理已有记录。",
-  "settings_tool_result_images_restart_notice": "重启 AgentsView 守护进程后，此更改才会应用到新采集的会话。"
+  "settings_tool_result_images_restart_notice": "重启 AgentsView 守护进程后，此更改才会应用到新采集的会话。",
+  "rate_limits_section_title": "速率限制",
+  "rate_limits_plan_label": "套餐",
+  "rate_limits_credits_label": "余额",
+  "rate_limits_credits_unlimited": "不限量",
+  "rate_limits_resets_in": "{value} 后重置",
+  "rate_limits_resets_now": "现在重置",
+  "rate_limits_used_percent_aria": "速率限制使用情况",
+  "rate_limits_history_aria": "速率限制使用趋势",
+  "rate_limits_window_weekly": "每周限额",
+  "rate_limits_window_session": "会话限额",
+  "rate_limits_window_generic": "{duration} 限额",
+  "rate_limits_card_header": "{window} [{name}]",
+  "rate_limits_vendor_codex": "Codex",
+  "rate_limits_resets_unknown": "重置时间未知"
 }

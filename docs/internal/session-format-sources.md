@@ -455,6 +455,30 @@ add an archived or maintained mirror without replacing the original identity.
     [LiteLLM's Bedrock row](https://github.com/BerriAI/litellm/blob/fbed17d567a62b14b8fc7d9ef13c5cd61a8d1ae0/model_prices_and_context_window.json).
     Remove that supplemental row when the shared snapshot includes it.
 
+- **Rate limits (2026-09-09):** `token_count` events carry a `rate_limits`
+  object beside `info.last_token_usage`, confirmed against the pinned
+  [protocol types](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/protocol.rs):
+  a `RateLimitSnapshot` (`limit_id`, `limit_name`, `primary`/`secondary`
+  `RateLimitWindow`s, `credits`, `plan_type`, `rate_limit_reached_type`,
+  `individual_limit`, `spend_control_reached`) nested in `TokenCountEvent`.
+  Each `RateLimitWindow` is `{used_percent: f64, window_minutes: Option<i64>,
+  resets_at: Option<i64>}`; `CreditsSnapshot` is `{has_credits: bool,
+  unlimited: bool, balance: Option<String>}`. `rate_limits` itself, and both
+  windows independently, are nullable — observed as null for events with no
+  rate-limit data and for limit ids (e.g. `premium`) that report credits only.
+  Cross-checked against a local corpus of 218,803 `token_count` events from
+  2026-09 rollouts: 216,394 carried only a `primary` window, 2,408 carried
+  both `primary` and `secondary` (e.g. a 5h window plus a 7-day window), and
+  1 carried neither. No account, user, or organization identifier field
+  appears anywhere in this protocol file, nor in any `session_meta` or
+  `token_count` payload across that corpus (also grepped for `account_id`,
+  `chatgpt_account`, `account_email`, `user_email`, and `org_id`; every hit
+  was inside transcript content, not a real identity field) — so
+  `rate_limit_snapshots` keys a Codex snapshot by (machine, limit_id,
+  window_kind) with an `account_id` column reserved for a future
+  Codex release that starts reporting one. See
+  `internal/db/schema.sql` and `docs/token-usage.md`.
+
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals. Fork and

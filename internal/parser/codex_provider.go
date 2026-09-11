@@ -502,6 +502,7 @@ func (p *codexProvider) Parse(
 		Result: ParseResult{
 			Session:                *sess,
 			Messages:               msgs,
+			RateLimitSnapshots:     sess.RateLimitSnapshots,
 			Checkpoint:             checkpoint,
 			CheckpointHashState:    hashState,
 			CheckpointAnchorDigest: anchorDigest,
@@ -714,11 +715,23 @@ func (p *codexProvider) ParseIncremental(
 			)
 		}
 	}
+	rateLimitSnapshots := result.rateLimitSnapshots
+	if len(rateLimitSnapshots) > 0 {
+		machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
+		filled := make([]ParsedRateLimitSnapshot, len(rateLimitSnapshots))
+		for i, snap := range rateLimitSnapshots {
+			snap.SessionID = req.SessionID
+			snap.Machine = machine
+			filled[i] = snap
+		}
+		rateLimitSnapshots = filled
+	}
 	return IncrementalOutcome{
 		SessionID:                req.SessionID,
 		Messages:                 result.messages,
 		ToolCallUpdates:          result.toolCallUpdates,
 		MessageTokenUsageUpdates: result.messageUsageUpdates,
+		RateLimitSnapshots:       rateLimitSnapshots,
 		NextCursor:               nextCursor,
 		EndedAt:                  result.endedAt,
 		ConsumedBytes:            result.consumedBytes,

@@ -232,6 +232,48 @@ cache creation without earning the reads back.
 
 ![Cache efficiency panel](/docs/assets/generated/screenshots/usage-cache-efficiency.png)
 
+### Rate Limits
+
+When the archive contains sessions from a vendor whose rate limits agentsview
+tracks (Codex CLI today), the Usage page adds a **Rate limits** section below
+the summary cards, grouped by vendor and then by account (Codex reports no
+account identity, so its group is keyed by machine instead): one card per
+rate-limit window (Codex reports up to two — a short `primary` window and a
+longer `secondary` window, e.g. 5 hours and 7 days), showing how much of the
+window is used, when it resets, the plan type, and the current credit
+balance, plus a small history chart of used-percent over the selected date
+range, plotted on a real time axis so the spacing between points reflects how
+much time actually elapsed. The section is hidden entirely for archives with
+no rate-limit data.
+
+Codex CLI writes a `rate_limits` object into its `token_count` events;
+agentsview persists each observation into a vendor-keyed
+`rate_limit_snapshots` table (SQLite only — see `docs/agents/storage.md`) and
+serves it over:
+
+```http
+GET /api/v1/rate-limits/current
+GET /api/v1/rate-limits/history
+```
+
+Both accept `vendor`, `account_id`, and `machine` filters (`agent` is a
+deprecated alias for `vendor`); `history` additionally accepts `limit_id`,
+`window`, `since`, `until`, and `max_points` (default 500), but not
+`plan_type`: a window's identity for history purposes is (vendor,
+machine, account_id, limit_id, window_kind), and the returned series
+(and its downsampling) covers the whole window regardless of the
+`plan_type` label each observation happens to carry. A `history`
+request spanning more observations than `max_points` is downsampled: the
+range is divided into `max_points` equal-width time buckets and only the
+most recently observed row in each bucket is kept, so a wide date range
+does not grow the response (or the chart's point count) unboundedly.
+Codex rollouts do not currently report a
+stable per-account identifier, so Codex snapshots are grouped by machine,
+`limit_id`, and window kind rather than by account — see the Codex
+entry in `docs/internal/session-format-sources.md` for the evidence and
+`internal/db/schema.sql` for the exact column set, including the columns
+reserved for a future account-keyed vendor.
+
 The dashboard reads from the same `model_pricing` table that backs the CLI
 commands below, so the numbers line up exactly with what
 `agentsview usage daily` prints.

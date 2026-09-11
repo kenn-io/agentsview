@@ -311,6 +311,104 @@ CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_occurred
 CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_model
     ON cursor_usage_events(model);
 
+-- Rate-limit snapshots. Each row is one rate-limit window (5h "primary",
+-- weekly "secondary", ...) observed for a vendor at a point in time --
+-- today, always a Codex token_count event's rate_limits payload,
+-- alongside the plan type and credit balance reported at the same
+-- instant. SQLite-only, following the same vendor-data precedent as
+-- cursor_usage_events above and the Codex incremental-import tables
+-- documented in docs/agents/storage.md: it is not part of the
+-- SQLite/PostgreSQL/DuckDB parity contract.
+--
+-- `vendor` is NOT NULL from the start (always 'codex' today) so a future
+-- vendor's rows never need a backfill or a migration to add the column;
+-- `account_id`/`account_label`/`scope_label`/`details` are reserved the
+-- same way and always '' for Codex.
+--
+-- Codex rollouts carry no stable per-account identifier (no account id,
+-- user id, email, or org field appears in session_meta or token_count
+-- payloads as of 2026-09 -- see docs/internal/session-format-sources.md),
+-- so a Codex snapshot's identity is (machine, limit_id, plan_type,
+-- window_kind) rather than an account.
+CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+    id INTEGER PRIMARY KEY,
+    vendor TEXT NOT NULL DEFAULT 'codex',
+    session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+    machine TEXT NOT NULL DEFAULT '',
+    account_id TEXT NOT NULL DEFAULT '',
+    account_label TEXT NOT NULL DEFAULT '',
+    limit_id TEXT NOT NULL DEFAULT '',
+    limit_name TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    window_kind TEXT NOT NULL,
+    used_percent REAL NOT NULL DEFAULT 0,
+    window_minutes INTEGER NOT NULL DEFAULT 0,
+    resets_at INTEGER,
+    credits_has INTEGER NOT NULL DEFAULT 0,
+    credits_unlimited INTEGER NOT NULL DEFAULT 0,
+    credits_balance TEXT NOT NULL DEFAULT '',
+    rate_limit_reached_type TEXT NOT NULL DEFAULT '',
+    scope_label TEXT NOT NULL DEFAULT '',
+    details TEXT NOT NULL DEFAULT '',
+    observed_at TEXT NOT NULL,
+    -- ordinal is the source token_count event's stable per-file position
+    -- (see docs/agents/storage.md and parser.ParsedRateLimitSnapshot).
+    -- Folded into dedup_key and observation_key below so two distinct
+    -- token_count events sharing an observed_at second stay distinct
+    -- rows instead of colliding.
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    dedup_key TEXT NOT NULL DEFAULT '',
+    -- observation_key identifies the single source observation a row
+    -- came from (shared by the up-to-two window rows -- primary,
+    -- secondary -- one Codex rate_limits payload produces). Computed
+    -- from session_id+observed_at at insert time and stored
+    -- independently of the nullable session_id column, so sibling
+    -- windows stay grouped for LatestRateLimitSnapshots even after the
+    -- source session is deleted or excluded from a resync.
+    observation_key TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limit_snapshots_dedup
+    ON rate_limit_snapshots(dedup_key)
+    WHERE dedup_key != '';
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_machine_limit_observed
+    ON rate_limit_snapshots(machine, limit_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_session
+    ON rate_limit_snapshots(session_id);
+-- Backs LatestRateLimitSnapshots' bucket-max lookup and its per-bucket
+-- plan_type/limit_name correlated subqueries, and RateLimitSnapshotHistory's
+-- range scan: all three key on this same (vendor, machine, account_id,
+-- limit_id) bucket with observed_at trailing, so SQLite can seek a bucket's
+-- newest row directly off the index instead of ranking the whole filtered
+-- set with a window function. Applied on every writable open (this file
+-- re-runs in full; see execSchemaScriptLocked), so an existing archive
+-- picks it up without a separate migration.
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_bucket_observed
+    ON rate_limit_snapshots(vendor, machine, account_id, limit_id, observed_at);
+-- julianday(observed_at), not the raw column, because every "most recent
+-- observation" lookup orders by julianday(observed_at) -- raw RFC3339Nano
+-- text does not sort chronologically once two timestamps differ in
+-- fractional-second width (see normalizeRateLimitBoundary) -- and without
+-- a matching expression index SQLite falls back to a temp-b-tree sort of
+-- the whole bucket for that ORDER BY ... LIMIT 1, even though the bucket
+-- itself is reached by an index seek on the leading columns.
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_bucket_jd
+    ON rate_limit_snapshots(vendor, machine, account_id, limit_id, julianday(observed_at), id);
+-- Partial indexes backing the "latest non-empty plan_type/limit_name"
+-- lookups: without a partial index whose WHERE clause matches the
+-- subquery's own "plan_type != ''" (or "limit_name != ''") filter,
+-- idx_rate_limit_snapshots_bucket_jd can seek to the bucket's newest row
+-- but then has to walk backward past every row that fails the filter --
+-- the whole bucket, in the worst case a label that is empty on every
+-- observation ever recorded for it -- before concluding there is no
+-- match. These let that search land only on rows that could qualify.
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_bucket_jd_plan_type
+    ON rate_limit_snapshots(vendor, machine, account_id, limit_id, julianday(observed_at), id)
+    WHERE plan_type != '';
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_bucket_jd_limit_name
+    ON rate_limit_snapshots(vendor, machine, account_id, limit_id, julianday(observed_at), id)
+    WHERE limit_name != '';
+
 -- Tool calls table
 CREATE TABLE IF NOT EXISTS tool_calls (
     id         INTEGER PRIMARY KEY,

@@ -73,6 +73,118 @@ hash state can contain raw trailing transcript bytes. They retain staged parsing
 but publish projected messages and tool metadata without staged output. Late
 result updates use the same projection as newly inserted messages.
 
+### Rate-limit snapshots
+
+`rate_limit_snapshots` is a SQLite-only vendor-data table, in the same
+category as `cursor_usage_events` and the four Codex incremental-import
+tables above: it is out of scope for the SQLite/PostgreSQL/DuckDB parity
+rule below. It is vendor-keyed (`vendor`, `'codex'` today) from the start
+so a future vendor can add rows without a schema change or a migration:
+`account_id`, `account_label`, `scope_label`, and `details` are reserved
+for a vendor whose rate-limit source has that shape, and stay `''` on
+every Codex row -- verified against `~/.codex/sessions` rollouts: no
+account id, user id, email, or org field appears in `session_meta` or
+`token_count` payloads, so a Codex snapshot's identity omits an account
+entirely (see `docs/internal/session-format-sources.md`). An
+`account_id` filter scopes vendors that have
+accounts, so both `LatestRateLimitSnapshots` and
+`RateLimitSnapshotHistory` match a nonempty `account_id` against
+`(account_id = '' OR account_id = ?)` rather than a bare equality,
+letting an account-less vendor's rows (Codex today) pass through
+instead of being excluded by someone else's account filter.
+
+It stores each `rate_limits` observation a Codex `token_count` event
+carries beside `info.last_token_usage` (one row per rate-limit window).
+It is written with an upsert against a unique `dedup_key` (source
+session id + observed timestamp + limit id + window kind + `ordinal`),
+never a delete-then-reinsert, so both a full parse (which sees the
+whole transcript every time) and an incremental parse (which only sees
+the appended tail) can write to it without duplicating or losing rows.
+A `dedup_key` collision against a row whose `session_id` is already
+NULL (a resync copy for a session absent from the destination -- see
+`CopyRateLimitSnapshotsFrom`) reattaches that row to the incoming
+session and refreshes its other fields instead of being ignored, since
+the copy preserves `dedup_key` unchanged and the session reappearing
+later (a fresh parse reproducing the identical key) would otherwise
+collide with, and lose to, the stale detached row forever. A collision
+against a row that already has a session attached is still a no-op.
+`ordinal` is the source `token_count` event's 0-based
+position among every `token_count` event in the rollout file, assigned
+by the parser (`ParsedRateLimitSnapshot.Ordinal`) and stable across a
+full parse, an incremental tail parse resuming from a cached or
+reseeded cursor, and any later re-parse of the same file: without it,
+two distinct `token_count` events landing on the same observed-at
+second would produce the same `dedup_key`, and the second event's row
+would be silently dropped by `INSERT OR IGNORE` instead of persisted.
+It also participates in `observation_key` for the same reason -- two
+such events would otherwise merge their sibling windows into one
+`LatestRateLimitSnapshots` bucket. A single malformed
+observation (e.g. one missing `limit_id`) is skipped rather than failing
+the whole write, so it cannot take down the rest of the batch or the
+session ingestion it rode in on. `session_id` is nullable (`ON DELETE SET
+NULL`) so a row survives its source session being deleted. `resets_at` is
+also nullable: Codex can report a window with no reset time, and that is
+kept distinct from a window that resets at the unix epoch all the way
+through the Go types and the API response (an absent field, not `0`), so
+the Usage page can tell "no known reset time" apart from "resets right
+now". A full resync copies existing rows into the replacement archive
+the same way model pricing is copied (`CopyRateLimitSnapshotsFrom`), but
+only after orphaned sessions are restored: `session_id` is a foreign
+key, and copying before restoration could violate it for a snapshot
+belonging to an orphaned session, aborting the whole copy. The copy also
+NULLs `session_id` for any row whose session does not exist in the
+destination even after restoration -- a session resync intentionally
+does not restore, such as one superseded by a reparse under a different
+id, or one excluded as parser-excluded -- rather than copying that id
+unchanged and violating the same foreign key; `dedup_key` is preserved
+from the source unchanged either way. The copy also skips any row whose
+session was rebuilt by the resync's own reparse rather than merely
+restored: it copies a row only when `session_id` is NULL, absent from
+the destination's `sessions` table, or one of the ids the orphan copy
+restored without reparsing, so a rebuilt session's superseded rows
+cannot resurrect on top of its fresh, current ones.
+`LatestRateLimitSnapshots` (the
+`/current` endpoint) resolves "latest" per (vendor, machine, account_id,
+limit_id) bucket -- one level above window_kind -- and returns every
+window belonging to that bucket's single newest observation. Ranking
+each window_kind independently instead would let a window that stops
+being reported (e.g. a session moving from primary+secondary to
+primary-only) keep surfacing its last-known row forever, since no newer
+row for that window_kind ever arrives to supersede it. `plan_type` is
+deliberately not part of this bucket, or of any other window identity in
+this codebase: Codex reports it as a label that can flip between
+`"pro"` and empty for the same window from one observation to the next,
+not a stable identity component, so partitioning on it would let a stale
+plan-keyed bucket coexist alongside the newest observation instead of
+being superseded by it, and (on the history/frontend side) would split
+one window's history across two chart series or silently drop half of
+it. `plan_type` and `limit_name` are instead resolved independently as
+the latest non-empty value ever observed for the bucket -- so a bucket
+whose newest observation happens to omit one or both labels still
+displays the last value seen for it rather than blanking the card --
+and are otherwise pure display labels carried on each row, never a
+grouping key. `RateLimitSnapshotHistory` still returns every row over
+time regardless of the current-snapshot grouping, and its query,
+downsampling, and frontend cache key never filter or key by `plan_type`
+either. A window's identity, for both the current-snapshot and history
+paths, is (vendor, machine, account_id, limit_id, window_kind) -- the
+same fields `RateLimitCardIdentity` on the frontend groups by. PostgreSQL
+and DuckDB implement the read-side
+`Store` methods as no-ops returning an empty result, so the Usage page's
+rate-limits section is simply hidden when either backend is the active
+read store. `LatestRateLimitSnapshots` and `RateLimitSnapshotHistory` both
+probe once (cached per `*DB`) whether `rate_limit_snapshots` exists and
+return an empty result instead of erroring when it does not, since
+`OpenReadOnly` tolerates an older, otherwise-compatible archive that
+predates the table. A write that replaces a session's messages wholesale
+(an authoritative reparse superseding a fallback parsed at
+`parser.DataVersionNeedsRetry`, or any other full delete-and-reinsert)
+must delete that session's `rate_limit_snapshots` rows in the same
+transaction before inserting the new set via
+`InsertRateLimitSnapshotsReplacingSession`, while a normal incremental
+parse keeps appending through `InsertRateLimitSnapshots` without
+deleting.
+
 ## Archive Content Policy
 
 `archive_content` (`internal/config.ArchiveContent`) narrows what the SQLite

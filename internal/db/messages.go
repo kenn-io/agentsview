@@ -1709,6 +1709,11 @@ func (db *DB) WriteSessionIncremental(
 	if err := updateSessionIncrementalTx(tx, sessionID, update); err != nil {
 		return false, err
 	}
+	if err := insertRateLimitSnapshotsTx(
+		context.Background(), tx, update.RateLimitSnapshots,
+	); err != nil {
+		return false, err
+	}
 	if update.Checkpoint != nil && update.CheckpointBlobs != nil {
 		if err := upsertParserCheckpointTx(
 			tx, *update.Checkpoint, *update.CheckpointBlobs,

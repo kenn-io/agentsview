@@ -2038,5 +2038,19 @@
   "settings_tool_result_images_keep": "Keep",
   "settings_tool_result_images_drop": "Drop",
   "settings_tool_result_images_hint": "Stored results keep the policy they were written under, and switching back to Keep cannot restore payloads already removed. Run agentsview db strip --images to project existing rows.",
-  "settings_tool_result_images_restart_notice": "Restart the AgentsView daemon to apply this change to newly ingested sessions."
+  "settings_tool_result_images_restart_notice": "Restart the AgentsView daemon to apply this change to newly ingested sessions.",
+  "rate_limits_section_title": "Rate limits",
+  "rate_limits_plan_label": "Plan",
+  "rate_limits_credits_label": "Credits",
+  "rate_limits_credits_unlimited": "Unlimited",
+  "rate_limits_resets_in": "Resets in {value}",
+  "rate_limits_resets_now": "Resets now",
+  "rate_limits_used_percent_aria": "Rate limit usage",
+  "rate_limits_history_aria": "Rate limit usage over time",
+  "rate_limits_window_weekly": "Weekly limit",
+  "rate_limits_window_session": "Session limit",
+  "rate_limits_window_generic": "{duration} limit",
+  "rate_limits_card_header": "{window} [{name}]",
+  "rate_limits_vendor_codex": "Codex",
+  "rate_limits_resets_unknown": "Reset time unknown"
 }
