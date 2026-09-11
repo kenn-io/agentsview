@@ -1265,6 +1265,134 @@ func TestParseRetentionChargesPromotedStorageShadowWholeSize(t *testing.T) {
 		"a member promoted to its storage shadow is charged the shadow, not a container share")
 }
 
+type retentionSourceTestProvider struct {
+	parser.ProviderBase
+	source parser.SourceRef
+}
+
+func (p *retentionSourceTestProvider) FindSource(
+	context.Context, parser.FindSourceRequest,
+) (parser.SourceRef, bool, error) {
+	return p.source, true, nil
+}
+
+func (p *retentionSourceTestProvider) Fingerprint(
+	context.Context, parser.SourceRef,
+) (parser.SourceFingerprint, error) {
+	return parser.SourceFingerprint{}, nil
+}
+
+func (p *retentionSourceTestProvider) Parse(
+	context.Context, parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	return parser.ParseOutcome{ResultSetComplete: true}, nil
+}
+
+type retentionSourceTestFactory struct {
+	provider *retentionSourceTestProvider
+}
+
+func (f retentionSourceTestFactory) Definition() parser.AgentDef {
+	return f.provider.Definition()
+}
+
+func (f retentionSourceTestFactory) Capabilities() parser.Capabilities {
+	return f.provider.Capabilities()
+}
+
+func (f retentionSourceTestFactory) NewProvider(parser.ProviderConfig) parser.Provider {
+	return f.provider
+}
+
+func TestProcessProviderFileUsesResolvedSourceAfterStaleMetadataDiscard(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "mimocode.db")
+	handle, err := os.Create(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(64<<20))
+	require.NoError(t, handle.Close())
+
+	shadowPath := filepath.Join(t.TempDir(), "session.json")
+	handle, err = os.Create(shadowPath)
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(64<<20))
+	require.NoError(t, handle.Close())
+
+	virtualPath := parser.VirtualSourcePath(dbPath, "session")
+	virtual := parser.SourceRef{
+		Provider:       parser.AgentMiMoCode,
+		DisplayPath:    virtualPath,
+		FingerprintKey: virtualPath,
+		Key:            virtualPath,
+	}
+	provider := &retentionSourceTestProvider{
+		source: parser.SourceRef{
+			Provider:       parser.AgentMiMoCode,
+			DisplayPath:    shadowPath,
+			FingerprintKey: shadowPath,
+			Key:            shadowPath,
+		},
+	}
+	provider.ProviderBase = parser.ProviderBase{
+		Def: parser.AgentDef{Type: parser.AgentMiMoCode},
+		Caps: parser.Capabilities{
+			Source: parser.SourceCapabilities{
+				FindSource: parser.CapabilitySupported,
+			},
+		},
+	}
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentMiMoCode: {filepath.Dir(dbPath)},
+		},
+		Machine:           "local",
+		ProviderFactories: []parser.ProviderFactory{retentionSourceTestFactory{provider: provider}},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentMiMoCode: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	before := parser.SQLiteContainerState{
+		DBInode: 1, DBDevice: 2, DBChangeCounter: 3,
+	}
+	engine.beginStreamingSQLiteContainerPass(map[string]parser.SQLiteContainerState{
+		dbPath: before,
+	})
+	engine.noteSQLiteContainerDiscovery(parser.DiscoveredFile{
+		Agent: parser.AgentMiMoCode,
+		Path:  virtualPath,
+	})
+	for i := range 63 {
+		engine.noteSQLiteContainerDiscovery(parser.DiscoveredFile{
+			Agent: parser.AgentMiMoCode,
+			Path:  parser.VirtualSourcePath(dbPath, fmt.Sprintf("sibling-%02d", i)),
+		})
+	}
+
+	origStat := statSQLiteContainerState
+	t.Cleanup(func() { statSQLiteContainerState = origStat })
+	statSQLiteContainerState = func(path string) (parser.SQLiteContainerState, bool) {
+		if path == dbPath {
+			changed := before
+			changed.DBChangeCounter++
+			return changed, true
+		}
+		return origStat(path)
+	}
+
+	result, used := engine.processProviderFile(t.Context(), parser.DiscoveredFile{
+		Agent:           parser.AgentMiMoCode,
+		Path:            virtualPath,
+		ProviderSource:  &virtual,
+		ProviderProcess: true,
+	})
+	require.True(t, used)
+	require.NoError(t, result.err)
+	assert.Equal(t, int64(64<<20), result.sourceBytes,
+		"a source resolved after stale metadata discard must size from the resolved path")
+	(&syncJob{processResult: result}).releaseAll()
+}
+
 func TestRehydrateStorageShadowRemovesSQLiteMembership(t *testing.T) {
 	engine, files, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
 	shadowPath := filepath.Join(filepath.Dir(dbPath), "storage", "session.json")
