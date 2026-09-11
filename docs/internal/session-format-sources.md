@@ -268,19 +268,22 @@ add an archived or maintained mirror without replacing the original identity.
   background flag leave lineage unresolved when their complete UUID sets
   differ. Identical sets elect the smallest stem, retaining one copy across
   three background transcripts. An interactive original still wins a tie with
-  a background sibling. Reverified 2026-08-16 with Claude Code 2.1.233 using a
-  controlled `claude -p --session-id <uuid>` probe under an isolated
-  `CLAUDE_CONFIG_DIR`. Before the deliberately bounded probe was terminated
-  during its API retry, Claude had created the exact UUID transcript under
-  `projects/<sanitized-cwd>/`. A working directory containing spaces, `.`,
-  `_`, `@`, and separators confirmed that the producer preserves ASCII
-  letters, digits, and `-` and replaces every other character with `-`. The
-  transcript existed before process exit, so an interrupted wrapper can retain
-  exact recovery evidence. One-shot capture copies the exact root and bounded
-  subagent tree after an unchanged-file interval, requires every persisted
-  child reference to have a captured transcript, and includes every captured
-  subagent file even when interruption prevented its link record from being
-  flushed. Parser termination remains separate assurance; an interrupted
+  a background sibling. Reverified 2026-09-11 against the local lineage
+  fixtures: replacing the background marker or root UUID in a same-size
+  transcript updates the parsed lineage after its file-change timestamp
+  advances, even when its modification time is restored. Reverified 2026-08-16
+  with Claude Code 2.1.233 using a controlled `claude -p --session-id <uuid>`
+  probe under an isolated `CLAUDE_CONFIG_DIR`. Before the deliberately bounded
+  probe was terminated during its API retry, Claude had created the exact UUID
+  transcript under `projects/<sanitized-cwd>/`. A working directory containing
+  spaces, `.`, `_`, `@`, and separators confirmed that the producer preserves
+  ASCII letters, digits, and `-` and replaces every other character with `-`.
+  The transcript existed before process exit, so an interrupted wrapper can
+  retain exact recovery evidence. One-shot capture copies the exact root and
+  bounded subagent tree after an unchanged-file interval, requires every
+  persisted child reference to have a captured transcript, and includes every
+  captured subagent file even when interruption prevented its link record from
+  being flushed. Parser termination remains separate assurance; an interrupted
   transcript can still contain usable token records. Because an unparseable
   middle record may hide usage, one-shot capture marks assurance partial when
   any included session reports parser-malformed lines. One-shot correlation
