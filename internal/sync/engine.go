@@ -13540,8 +13540,8 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 
 func processFileUsesProvider(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentForge, parser.AgentGoose, parser.AgentPiebald,
-		parser.AgentWarp, parser.AgentZCode, parser.AgentCrush:
+	case parser.AgentCrush, parser.AgentForge, parser.AgentGoose,
+		parser.AgentPiebald, parser.AgentWarp, parser.AgentZCode:
 		return true
 	default:
 		return false
@@ -13594,8 +13594,8 @@ func (e *Engine) shouldSkipProviderSource(
 
 func providerSourceSupportsPersistedFreshness(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentForge, parser.AgentGoose, parser.AgentWarp, parser.AgentZCode,
-		parser.AgentCrush:
+	case parser.AgentCrush, parser.AgentForge, parser.AgentGoose,
+		parser.AgentWarp, parser.AgentZCode:
 		return true
 	default:
 		return false
@@ -19899,8 +19899,8 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	}
 	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
 	if !def.FileBased {
-		// Forge, Piebald, Warp, and ZCode are DB-backed providers that own
-		// discovery and source lookup through the provider facade. Their
+		// Crush, Forge, Piebald, Warp, and ZCode are DB-backed providers that
+		// own discovery and source lookup through the provider facade. Their
 		// virtual <db>#<sessionID> path is resolved by findProviderSourceFile
 		// below. Non-provider, non-file-based agents (e.g. remote imports)
 		// have no local source file.
@@ -20188,8 +20188,8 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
 	if !def.FileBased {
-		// Forge, Piebald, Warp, and ZCode are DB-backed providers: their
-		// per-session source mtime comes from the provider fingerprint
+		// Crush, Forge, Piebald, Warp, and ZCode are DB-backed providers:
+		// their per-session source mtime comes from the provider fingerprint
 		// (which mirrors the legacy List*SessionMeta last-modified value).
 		// Non-provider, non-file-based agents have no local source.
 		if e.isProviderAuthoritative(def.Type) {
@@ -20482,11 +20482,11 @@ func (e *Engine) SyncSingleSessionContext(
 		return fmt.Errorf("unknown agent for session %s", sessionID)
 	}
 	if !def.FileBased {
-		// Forge, Piebald, Warp, and ZCode are DB-backed providers: re-sync routes
-		// through FindSourceFile (resolving the virtual <db>#<sessionID>
-		// path) plus the provider-aware processFile path below, mirroring
-		// the file-based agents. Other non-file-based agents use the
-		// OpenCode-format storage path.
+		// Crush, Forge, Piebald, Warp, and ZCode are DB-backed providers:
+		// re-sync routes through FindSourceFile (resolving the virtual
+		// <db>#<sessionID> path) plus the provider-aware processFile path
+		// below, mirroring the file-based agents. Other non-file-based
+		// agents use the OpenCode-format storage path.
 		if !e.isProviderAuthoritative(def.Type) {
 			return fmt.Errorf(
 				"cannot resync non-file-based session %s for agent %s",

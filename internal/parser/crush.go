@@ -101,6 +101,9 @@ func crushProjectDirsMapping(registryPath string) map[string]string {
 }
 
 func openCrushDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
+	// Immutable mode is used only for explicit stable snapshots. Live
+	// reads must not fall back to it: a WAL-backed store opened with
+	// immutable=1 ignores the WAL and can return stale session contents.
 	immutable := "0"
 	if stableSnapshot {
 		immutable = "1"
@@ -112,18 +115,6 @@ func openCrushDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
 	}
 	if err := db.PingContext(context.Background()); err != nil {
 		_ = db.Close()
-		if stableSnapshot {
-			// The snapshot DSN itself failed; a fallback would break the
-			// stable-snapshot guarantee, so surface the failure.
-			return nil, fmt.Errorf("opening crush sessions database %s: %w (WAL corruption is a possible cause; Crush must repair the store)", dbPath, err)
-		}
-		fallback := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=1&_busy_timeout=3000"
-		if fb, err2 := sql.Open("sqlite3", fallback); err2 == nil {
-			if err3 := fb.PingContext(context.Background()); err3 == nil {
-				return fb, nil
-			}
-			_ = fb.Close()
-		}
 		return nil, fmt.Errorf("opening crush sessions database %s: %w (WAL corruption is a possible cause; Crush must repair the store)", dbPath, err)
 	}
 	return db, nil

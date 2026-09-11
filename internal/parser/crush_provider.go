@@ -57,6 +57,7 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		originalRoots:    originalRoots,
 		registryMapping:  registryMapping,
 		projectMapping:   projectMapping,
+		configuredRoot:   crushConfiguredRootByExpanded(originalRoots, registryMapping),
 	}
 	// Replace the parse closure to capture the project mapping so
 	// parseCrushSession can attribute sessions to the correct project
@@ -86,26 +87,116 @@ type crushProvider struct {
 	originalRoots   []string
 	registryMapping map[string][]string
 	projectMapping  map[string]string
+	// configuredRoot maps each expanded data directory back onto the
+	// configured registry, crush.db, or data-directory root that produced
+	// it, so source-machine mapping stays bound to the user's spelling.
+	configuredRoot map[string]string
+}
+
+// crushConfiguredRootByExpanded maps every expanded data directory onto the
+// configured root that produced it. Later originals do not overwrite earlier
+// ones: the first configured spelling wins when roots collapse together.
+func crushConfiguredRootByExpanded(
+	originalRoots []string, registryMapping map[string][]string,
+) map[string]string {
+	mapping := make(map[string]string, len(originalRoots))
+	add := func(expanded, original string) {
+		expanded = filepath.Clean(expanded)
+		original = filepath.Clean(original)
+		if expanded == "" || original == "" || expanded == "." || original == "." {
+			return
+		}
+		if _, ok := mapping[expanded]; !ok {
+			mapping[expanded] = original
+		}
+	}
+	for _, root := range originalRoots {
+		cleaned := filepath.Clean(root)
+		if cleaned == "" || cleaned == "." {
+			continue
+		}
+		physical := cleaned
+		if container, _, ok := ParseVirtualSourcePath(physical); ok {
+			physical = container
+		}
+		if filepath.Base(physical) == CrushDBName {
+			add(filepath.Dir(physical), cleaned)
+			continue
+		}
+		if dataDirs, ok := registryMapping[cleaned]; ok {
+			for _, dir := range dataDirs {
+				add(dir, cleaned)
+			}
+			continue
+		}
+		add(cleaned, cleaned)
+	}
+	return mapping
+}
+
+// withConfiguredRoot stamps the original configured root onto a source whose
+// expanded data directory came from a registry or crush.db spelling.
+func (p *crushProvider) withConfiguredRoot(source SourceRef) SourceRef {
+	if source.ConfiguredRoot != "" {
+		return source
+	}
+	src, ok := source.Opaque.(dbBackedSource)
+	if !ok {
+		return source
+	}
+	if configured, ok := p.configuredRoot[src.Root]; ok {
+		source.ConfiguredRoot = configured
+	}
+	return source
+}
+
+func (p *crushProvider) withConfiguredRoots(sources []SourceRef) []SourceRef {
+	for i := range sources {
+		sources[i] = p.withConfiguredRoot(sources[i])
+	}
+	return sources
 }
 
 // ResolveReconciliationScopes expands registry roots to their per-project
 // data directories before scope resolution. The configured roots contain
 // only expanded data directories, so a request root that is a registry
-// directory would otherwise match no scope.
+// directory would otherwise match no scope. A crush.db database-file root
+// or virtual member widens through the container topology onto the owning
+// data directory so virtual session members stay in the proof scope.
 func (p *crushProvider) ResolveReconciliationScopes(
-	ctx context.Context, req ReconciliationScopeRequest,
+	_ context.Context, req ReconciliationScopeRequest,
 ) (ReconciliationScopePlan, error) {
 	expanded := make([]string, 0, len(req.Roots))
 	for _, root := range req.Roots {
 		if dataDirs, ok := p.registryMapping[filepath.Clean(root)]; ok {
 			expanded = append(expanded, dataDirs...)
-		} else {
-			expanded = append(expanded, root)
+			continue
 		}
+		expanded = append(expanded, root)
 	}
-	return p.dbBackedProvider.ResolveReconciliationScopes(ctx, ReconciliationScopeRequest{
-		Roots: expanded,
-	})
+	if err := ValidateReconciliationScopeRoots(
+		p.Def.Type, p.Config.Roots, expanded,
+	); err != nil {
+		return ReconciliationScopePlan{}, err
+	}
+	return containerAwareReconciliationScopePlan(
+		p.Config.Roots, expanded, p.reconciliationContainer,
+	), nil
+}
+
+// reconciliationContainer maps a crush.db path or virtual member onto the
+// owning data directory, which is the spelling configured roots carry after
+// normalizeCrushRoots. Classification must not stat: a deleted database must
+// still resolve so its members remain reclaimable.
+func (p *crushProvider) reconciliationContainer(requested string) (string, bool) {
+	physical := requested
+	if container, _, ok := ParseVirtualSourcePath(physical); ok {
+		physical = container
+	}
+	if filepath.Base(physical) != CrushDBName {
+		return "", false
+	}
+	return filepath.Dir(physical), true
 }
 
 func (p *crushProvider) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -118,7 +209,7 @@ func (p *crushProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 		return nil, err
 	}
 	p.tracker.storeDiscoveryWatermarks(watermarks)
-	return sources, nil
+	return p.withConfiguredRoots(sources), nil
 }
 
 func (p *crushProvider) DiscoverEach(
@@ -128,7 +219,10 @@ func (p *crushProvider) DiscoverEach(
 	if err != nil {
 		return err
 	}
-	if err := p.dbBackedProvider.DiscoverEach(ctx, yield); err != nil {
+	err = p.dbBackedProvider.DiscoverEach(ctx, func(source SourceRef) error {
+		return yield(p.withConfiguredRoot(source))
+	})
+	if err != nil {
 		return err
 	}
 	p.tracker.storeDiscoveryWatermarks(watermarks)
@@ -174,7 +268,7 @@ func (p *crushProvider) SourcesForChangedPath(
 			continue
 		}
 		if ref, ok := p.sources.sourceRef(root, req.Path, true); ok {
-			return []SourceRef{ref}, nil
+			return []SourceRef{p.withConfiguredRoot(ref)}, nil
 		}
 		dbPath, ok := p.sources.dbPathForEvent(root, req.Path)
 		if !ok {
@@ -201,7 +295,7 @@ func (p *crushProvider) SourcesForChangedPath(
 				return nil, err
 			}
 			p.tracker.commit(dbPath, snapshot)
-			return sources, nil
+			return p.withConfiguredRoots(sources), nil
 		}
 
 		sources := make([]SourceRef, 0, len(ids))
@@ -213,9 +307,19 @@ func (p *crushProvider) SourcesForChangedPath(
 		sort.Slice(sources, func(i, j int) bool {
 			return sources[i].DisplayPath < sources[j].DisplayPath
 		})
-		return sources, nil
+		return p.withConfiguredRoots(sources), nil
 	}
 	return nil, nil
+}
+
+func (p *crushProvider) FindSource(
+	ctx context.Context, req FindSourceRequest,
+) (SourceRef, bool, error) {
+	source, found, err := p.dbBackedProvider.FindSource(ctx, req)
+	if err != nil || !found {
+		return source, found, err
+	}
+	return p.withConfiguredRoot(source), true, nil
 }
 
 func (p *crushProvider) Fingerprint(

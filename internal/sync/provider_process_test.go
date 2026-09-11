@@ -459,6 +459,7 @@ func TestProcessFileProviderZCodeVirtualSource(t *testing.T) {
 func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
 
 	for _, agent := range []parser.AgentType{
+		parser.AgentCrush,
 		parser.AgentForge,
 		parser.AgentGoose,
 		parser.AgentPiebald,

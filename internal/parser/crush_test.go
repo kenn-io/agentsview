@@ -385,6 +385,155 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	assert.Equal(t, []string{registryDir + "-missing"}, dataDirs)
 }
 
+// A configured database-file root must map onto the data directory that
+// holds virtual session members, so reconciliation can prove the whole
+// membership rather than the bare crush.db path.
+func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	factory := newCrushProviderFactory(AgentDef{
+		Type: AgentCrush, IDPrefix: "crush:",
+	})
+
+	for name, requested := range map[string]string{
+		"database":       fixture.dbPath,
+		"virtual member": VirtualSourcePath(fixture.dbPath, "sess-1"),
+		"data directory": fixture.dataDir,
+	} {
+		t.Run(name, func(t *testing.T) {
+			provider := factory.NewProvider(ProviderConfig{
+				Roots: []string{fixture.dbPath},
+			})
+			plan, err := provider.ResolveReconciliationScopes(
+				t.Context(), ReconciliationScopeRequest{Roots: []string{requested}},
+			)
+			require.NoError(t, err)
+			require.Len(t, plan.Scopes, 1)
+			scope := plan.Scopes[0]
+			assert.Equal(t, []string{fixture.dataDir}, scope.TraversalRoots,
+				"traversal must use the normalized data-directory root")
+			assert.Equal(t,
+				[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+				scope.CoverageIdentities,
+				"the database-file request must cover the configured data directory")
+			assert.Equal(t, []string{requested}, scope.RetryRoots)
+			assert.Equal(t,
+				[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+				plan.RequiredCoverageIdentities)
+		})
+	}
+
+	// A configured data directory requested by its crush.db path still
+	// covers the configured root.
+	provider := factory.NewProvider(ProviderConfig{
+		Roots: []string{fixture.dataDir},
+	})
+	plan, err := provider.ResolveReconciliationScopes(
+		t.Context(), ReconciliationScopeRequest{Roots: []string{fixture.dbPath}},
+	)
+	require.NoError(t, err)
+	require.Len(t, plan.Scopes, 1)
+	assert.Equal(t,
+		[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+		plan.Scopes[0].CoverageIdentities,
+	)
+	assert.Equal(t, []string{fixture.dbPath}, plan.Scopes[0].RetryRoots)
+}
+
+// Sources discovered under a configured registry or crush.db root must
+// keep that configured spelling on ConfiguredRoot so machine mapping does
+// not fall back to the expanded data-directory path.
+func TestCrushSourcesPreserveConfiguredRoot(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const created = int64(1_789_093_626)
+	fixture.insertSession(t, "sess-cfg", "Configured root", "",
+		created, created, 0, 0, 0)
+
+	registryDir := t.TempDir()
+	registry := `{"projects":[{"path":"` + filepath.ToSlash(fixture.projectDir) +
+		`","data_dir":"` + filepath.ToSlash(fixture.dataDir) + `"}]}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(registryDir, CrushProjectsFileName),
+		[]byte(registry), 0o600,
+	))
+
+	factory := newCrushProviderFactory(AgentDef{
+		Type: AgentCrush, IDPrefix: "crush:",
+	})
+
+	t.Run("registry root", func(t *testing.T) {
+		provider := factory.NewProvider(ProviderConfig{
+			Roots: []string{registryDir},
+		})
+		sources, err := provider.Discover(context.Background())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, filepath.Clean(registryDir), sources[0].ConfiguredRoot)
+	})
+
+	t.Run("database file root", func(t *testing.T) {
+		provider := factory.NewProvider(ProviderConfig{
+			Roots: []string{fixture.dbPath},
+		})
+		sources, err := provider.Discover(context.Background())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, filepath.Clean(fixture.dbPath), sources[0].ConfiguredRoot)
+	})
+
+	t.Run("data directory root", func(t *testing.T) {
+		provider := factory.NewProvider(ProviderConfig{
+			Roots: []string{fixture.dataDir},
+		})
+		sources, err := provider.Discover(context.Background())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, filepath.Clean(fixture.dataDir), sources[0].ConfiguredRoot)
+	})
+
+	t.Run("changed path keeps configured root", func(t *testing.T) {
+		// Use a fresh factory so the shared change tracker is cold and the
+		// source set is built from the database-file spelling.
+		freshFactory := newCrushProviderFactory(AgentDef{
+			Type: AgentCrush, IDPrefix: "crush:",
+		})
+		provider := freshFactory.NewProvider(ProviderConfig{
+			Roots: []string{fixture.dbPath},
+		})
+		sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+			Path: fixture.dbPath, EventKind: "write",
+		})
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		assert.Equal(t, filepath.Clean(fixture.dbPath), sources[0].ConfiguredRoot)
+	})
+}
+
+func TestOpenCrushDBLiveReadObservesWALContent(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const created = int64(1_789_093_626)
+	fixture.insertSession(t, "sess-wal", "WAL content", "",
+		created, created, 0, 0, 0)
+
+	// A live open must observe rows still sitting in the WAL. Immutable
+	// mode would ignore the WAL and return only the main file snapshot.
+	_, err := fixture.database.Exec(`
+		INSERT INTO sessions (
+			id, title, created_at, updated_at
+		) VALUES ('sess-wal-only', 'WAL only', 1789093630, 1789093630)
+	`)
+	require.NoError(t, err)
+
+	live, err := openCrushDB(fixture.dbPath, false)
+	require.NoError(t, err)
+	defer live.Close()
+	var count int
+	require.NoError(t, live.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = 'sess-wal-only'`,
+	).Scan(&count))
+	assert.Equal(t, 1, count,
+		"live open must observe WAL content rather than a stale main-file snapshot")
+}
+
 func TestCrushSchemaValidationRejectsGooseStores(t *testing.T) {
 	fixture := newCrushTestFixture(t)
 	// Drop the parts column marker: a messages table without it is not
