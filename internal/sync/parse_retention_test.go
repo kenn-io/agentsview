@@ -1380,17 +1380,26 @@ func TestProcessProviderFileUsesResolvedSourceAfterStaleMetadataDiscard(t *testi
 		return origStat(path)
 	}
 
-	result, used := engine.processProviderFile(t.Context(), parser.DiscoveredFile{
+	results := engine.startWorkers(t.Context(), []parser.DiscoveredFile{{
 		Agent:           parser.AgentMiMoCode,
 		Path:            virtualPath,
 		ProviderSource:  &virtual,
 		ProviderProcess: true,
-	})
-	require.True(t, used)
-	require.NoError(t, result.err)
-	assert.Equal(t, int64(64<<20), result.sourceBytes,
+	}})
+	job, ok := <-results
+	require.True(t, ok)
+	require.NoError(t, job.err)
+	assert.Equal(t, int64(64<<20), job.sourceBytes,
 		"a source resolved after stale metadata discard must size from the resolved path")
-	(&syncJob{processResult: result}).releaseAll()
+	assert.Equal(t, shadowPath, job.containerResultPath(),
+		"container completion must use the resolved source path")
+	engine.noteSQLiteContainerResult(job.containerResultPath(), true)
+	engine.containerMu.Lock()
+	completed := engine.containerPass.completed[dbPath]
+	engine.containerMu.Unlock()
+	assert.Zero(t, completed,
+		"a storage shadow must not count as a completed SQLite member")
+	job.releaseAll()
 }
 
 func TestRehydrateStorageShadowRemovesSQLiteMembership(t *testing.T) {
