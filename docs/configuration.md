@@ -1341,9 +1341,8 @@ word forms or expand readings, romanizations, or spelling variants. Chinese word
 segmentation also stays off when a query mixes Han with kana or Hangul.
 
 ASCII-only searches continue to use the existing Porter index, so searches such
-as `run` retain English stemming. The CJK index retains its original database
-name, `messages_chinese_fts`; the broader feature name requires no rebuild. It is
-derived data: if the sidecar is removed, AgentsView drops that optional index
+as `run` retain English stemming. The `messages_cjk_fts` index is derived data:
+if the sidecar is removed, AgentsView drops that optional index
 and continues with the standard FTS5 path; reinstalling the sidecar backfills
 it on the next writable open. AgentsView fingerprints the native library and
 all cppjieba dictionaries, atomically rebuilding the index when that fingerprint
@@ -1363,7 +1362,7 @@ full index rebuild before startup completes. AgentsView logs this wait. The
 freshness ledger stores session IDs rather than old message IDs and token
 content, so it cannot remove stale entries for individual replaced or deleted
 messages. Removing the sidecar drops the CJK index but retains the
-`messages_chinese_fts_pending_sessions` ledger and three persistent session
+`messages_cjk_fts_pending_sessions` ledger and three persistent session
 triggers. The ledger holds at most one row per touched session ID until the
 next successful CJK index rebuild clears it.
 
@@ -1387,7 +1386,7 @@ and its triggers.
 | `stats`              | Aggregate counts (session_count, message_count)                              |
 | `skipped_files`      | Cache of non-interactive session files                                       |
 | `messages_fts`       | FTS5 virtual table for full-text search                                      |
-| `messages_chinese_fts` | Optional CJK FTS5 index using the `simple` character tokenizer             |
+| `messages_cjk_fts`   | Optional CJK FTS5 index using the `simple` character tokenizer               |
 
 The database is automatically migrated on startup when the schema changes. When
 the stored data version is stale, AgentsView preserves the existing database and

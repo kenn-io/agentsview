@@ -15,11 +15,9 @@ import (
 
 const simpleFTSDirEnv = "AGENTSVIEW_SIMPLE_DIR"
 
-// Persisted names and the fingerprint version stay stable: the CJK rename and
-// query preparation changes do not alter the stored character token stream.
 const (
-	cjkFTSFingerprintStatsKey = "messages_chinese_fts_fingerprint_v1"
-	cjkFTSSchemaVersion       = "messages-chinese-fts-v3"
+	cjkFTSFingerprintStatsKey = "messages_cjk_fts_fingerprint_v1"
+	cjkFTSSchemaVersion       = "messages-cjk-fts-v3"
 )
 
 var (
@@ -27,39 +25,39 @@ var (
 )
 
 const schemaCJKFTSPendingSessions = `
-CREATE TABLE IF NOT EXISTS messages_chinese_fts_pending_sessions (
+CREATE TABLE IF NOT EXISTS messages_cjk_fts_pending_sessions (
     session_id TEXT PRIMARY KEY,
     generation INTEGER NOT NULL CHECK (generation > 0)
 );
 
-DROP TRIGGER IF EXISTS sessions_chinese_pending_bi;
-DROP TRIGGER IF EXISTS sessions_chinese_pending_bu;
-DROP TRIGGER IF EXISTS sessions_chinese_pending_bd;
+DROP TRIGGER IF EXISTS sessions_cjk_pending_bi;
+DROP TRIGGER IF EXISTS sessions_cjk_pending_bu;
+DROP TRIGGER IF EXISTS sessions_cjk_pending_bd;
 
-CREATE TRIGGER sessions_chinese_pending_bi
+CREATE TRIGGER sessions_cjk_pending_bi
 BEFORE INSERT ON sessions
 WHEN NOT EXISTS (SELECT 1 FROM sessions WHERE id = new.id) BEGIN
-    INSERT INTO messages_chinese_fts_pending_sessions(session_id, generation)
+    INSERT INTO messages_cjk_fts_pending_sessions(session_id, generation)
         VALUES(new.id, 1)
     ON CONFLICT(session_id) DO UPDATE SET
-        generation = messages_chinese_fts_pending_sessions.generation + 1;
+        generation = messages_cjk_fts_pending_sessions.generation + 1;
 END;
 
-CREATE TRIGGER sessions_chinese_pending_bu
+CREATE TRIGGER sessions_cjk_pending_bu
 BEFORE UPDATE OF transcript_revision ON sessions
 WHEN old.transcript_revision IS NOT new.transcript_revision BEGIN
-    INSERT INTO messages_chinese_fts_pending_sessions(session_id, generation)
+    INSERT INTO messages_cjk_fts_pending_sessions(session_id, generation)
         VALUES(new.id, 1)
     ON CONFLICT(session_id) DO UPDATE SET
-        generation = messages_chinese_fts_pending_sessions.generation + 1;
+        generation = messages_cjk_fts_pending_sessions.generation + 1;
 END;
 
-CREATE TRIGGER sessions_chinese_pending_bd
+CREATE TRIGGER sessions_cjk_pending_bd
 BEFORE DELETE ON sessions BEGIN
-    INSERT INTO messages_chinese_fts_pending_sessions(session_id, generation)
+    INSERT INTO messages_cjk_fts_pending_sessions(session_id, generation)
         VALUES(old.id, 1)
     ON CONFLICT(session_id) DO UPDATE SET
-        generation = messages_chinese_fts_pending_sessions.generation + 1;
+        generation = messages_cjk_fts_pending_sessions.generation + 1;
 END;
 `
 
@@ -262,12 +260,12 @@ func ensureCJKFTS(
 	defer func() { _ = tx.Rollback() }()
 
 	for _, trigger := range []string{
-		"messages_chinese_ai",
-		"messages_chinese_ad",
-		"messages_chinese_au",
-		"sessions_chinese_pending_ai",
-		"sessions_chinese_pending_au",
-		"sessions_chinese_pending_ad",
+		"messages_cjk_ai",
+		"messages_cjk_ad",
+		"messages_cjk_au",
+		"sessions_cjk_pending_ai",
+		"sessions_cjk_pending_au",
+		"sessions_cjk_pending_ad",
 	} {
 		if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS "+trigger); err != nil {
 			return fmt.Errorf("dropping CJK FTS trigger %s: %w", trigger, err)
@@ -278,7 +276,7 @@ func ensureCJKFTS(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM sqlite_master
-			WHERE type = 'table' AND name = 'messages_chinese_fts'
+			WHERE type = 'table' AND name = 'messages_cjk_fts'
 		)`).Scan(&tableExists); err != nil {
 		return fmt.Errorf("checking CJK FTS table: %w", err)
 	}
@@ -288,7 +286,7 @@ func ensureCJKFTS(
 		SELECT EXISTS(
 			SELECT 1 FROM sqlite_master
 			WHERE type = 'table'
-			  AND name = 'messages_chinese_fts_pending_sessions'
+			  AND name = 'messages_cjk_fts_pending_sessions'
 		)`).Scan(&pendingTableExists); err != nil {
 		return fmt.Errorf("checking CJK FTS freshness ledger table: %w", err)
 	}
@@ -312,14 +310,14 @@ func ensureCJKFTS(
 	}
 	var pendingSessions int
 	if err := tx.QueryRowContext(ctx,
-		"SELECT count(*) FROM messages_chinese_fts_pending_sessions",
+		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pendingSessions); err != nil {
 		return fmt.Errorf("checking CJK FTS freshness ledger: %w", err)
 	}
 
 	if !simpleFTSRuntimeConfig.available() {
 		if tableExists {
-			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_chinese_fts"); err != nil {
+			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_cjk_fts"); err != nil {
 				return fmt.Errorf("dropping unavailable CJK FTS: %w", err)
 			}
 		}
@@ -348,7 +346,7 @@ func ensureCJKFTS(
 	if forceRebuild || !current {
 		log.Print("rebuilding CJK FTS index; startup waits for the full message scan to finish")
 		if tableExists {
-			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_chinese_fts"); err != nil {
+			if _, err := tx.ExecContext(ctx, "DROP TABLE messages_cjk_fts"); err != nil {
 				return fmt.Errorf("dropping stale CJK FTS: %w", err)
 			}
 		}
@@ -356,7 +354,7 @@ func ensureCJKFTS(
 			return fmt.Errorf("creating CJK FTS: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO messages_chinese_fts(messages_chinese_fts) VALUES('rebuild')",
+			"INSERT INTO messages_cjk_fts(messages_cjk_fts) VALUES('rebuild')",
 		); err != nil {
 			return fmt.Errorf("backfilling CJK FTS: %w", err)
 		}
@@ -369,7 +367,7 @@ func ensureCJKFTS(
 			return fmt.Errorf("storing CJK FTS fingerprint: %w", err)
 		}
 		if _, err := tx.ExecContext(
-			ctx, "DELETE FROM messages_chinese_fts_pending_sessions",
+			ctx, "DELETE FROM messages_cjk_fts_pending_sessions",
 		); err != nil {
 			return fmt.Errorf("clearing CJK FTS freshness ledger: %w", err)
 		}

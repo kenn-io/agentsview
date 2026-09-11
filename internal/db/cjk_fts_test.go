@@ -103,7 +103,7 @@ func TestCJKFTSChineseSearch(t *testing.T) {
 
 	var pending int
 	require.NoError(t, d.getReader().QueryRow(
-		"SELECT count(*) FROM messages_chinese_fts_pending_sessions",
+		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
 	assert.Zero(t, pending)
 
@@ -116,8 +116,8 @@ func TestCJKFTSChineseSearch(t *testing.T) {
 	require.NoError(t, err)
 	var pinyinHits int
 	require.NoError(t, d.getReader().QueryRow(
-		`SELECT count(*) FROM messages_chinese_fts
-		 WHERE messages_chinese_fts MATCH ?`, pinyinMatch,
+		`SELECT count(*) FROM messages_cjk_fts
+		 WHERE messages_cjk_fts MATCH ?`, pinyinMatch,
 	).Scan(&pinyinHits))
 	assert.Zero(t, pinyinHits)
 
@@ -220,11 +220,11 @@ func TestCJKFTSChineseSearch(t *testing.T) {
 	// Simulate a pre-fix partial build: the table exists without the atomic
 	// completion fingerprint. Reopen must replace and backfill it.
 	_, err = d.getWriter().Exec(`
-		DROP TRIGGER IF EXISTS messages_chinese_ai;
-		DROP TRIGGER IF EXISTS messages_chinese_ad;
-		DROP TRIGGER IF EXISTS messages_chinese_au;
-		DROP TABLE messages_chinese_fts;
-		CREATE VIRTUAL TABLE messages_chinese_fts USING fts5(
+		DROP TRIGGER IF EXISTS messages_cjk_ai;
+		DROP TRIGGER IF EXISTS messages_cjk_ad;
+		DROP TRIGGER IF EXISTS messages_cjk_au;
+		DROP TABLE messages_cjk_fts;
+		CREATE VIRTUAL TABLE messages_cjk_fts USING fts5(
 			content,
 			content='messages',
 			content_rowid='id',
@@ -323,7 +323,7 @@ func TestCJKFTSTableCanBeDroppedWithoutExtension(t *testing.T) {
 	raw, err := sql.Open("sqlite3", makeDSN(path, false))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.Exec("DROP TABLE messages_chinese_fts")
+	_, err = raw.Exec("DROP TABLE messages_cjk_fts")
 	require.NoError(t, err)
 }
 
@@ -357,7 +357,7 @@ func TestCJKFTSRebuildsAfterLegacyWriter(t *testing.T) {
 
 	var pending int
 	require.NoError(t, raw.QueryRow(
-		"SELECT count(*) FROM messages_chinese_fts_pending_sessions",
+		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
 	assert.Equal(t, 1, pending)
 	require.NoError(t, raw.Close())
@@ -394,7 +394,7 @@ func TestCJKFTSRebuildsAfterLegacyWriter(t *testing.T) {
 	assert.Equal(t, "legacy", page.Matches[0].SessionID)
 
 	require.NoError(t, d.getReader().QueryRow(
-		"SELECT count(*) FROM messages_chinese_fts_pending_sessions",
+		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
 	assert.Zero(t, pending)
 }
@@ -439,7 +439,7 @@ func TestCJKFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 
 	var pending int
 	require.NoError(t, d.getReader().QueryRow(
-		"SELECT count(*) FROM messages_chinese_fts_pending_sessions",
+		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
 	assert.Equal(t, 1, pending)
 
@@ -453,8 +453,8 @@ func TestCJKFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 
 	var staleMatches int
 	require.NoError(t, d.getReader().QueryRow(
-		`SELECT count(*) FROM messages_chinese_fts
-		 WHERE messages_chinese_fts MATCH ?`, match,
+		`SELECT count(*) FROM messages_cjk_fts
+		 WHERE messages_cjk_fts MATCH ?`, match,
 	).Scan(&staleMatches))
 	assert.Zero(t, staleMatches)
 
@@ -470,7 +470,7 @@ func TestCJKFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 	require.NotEmpty(t, page.Matches)
 	assert.Equal(t, "foreign-runtime", page.Matches[0].SessionID)
 	require.NoError(t, d.getReader().QueryRow(
-		"SELECT count(*) FROM messages_chinese_fts_pending_sessions",
+		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
 	assert.Zero(t, pending)
 }
@@ -552,7 +552,7 @@ func TestCJKFTSSurvivesSessionResyncUpsert(t *testing.T) {
 
 	var pending int
 	require.NoError(t, d.getReader().QueryRow(
-		"SELECT count(*) FROM messages_chinese_fts_pending_sessions",
+		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
 	assert.Zero(t, pending, "resync upsert must not strand a pending row")
 	assert.True(t, d.HasCJKFTS(), "CJK FTS stays live across a resync")

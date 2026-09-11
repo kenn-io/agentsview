@@ -29,7 +29,7 @@ func (db *DB) prepareMessageFTSQuery(
 		return query, nil
 	}
 
-	query.table = "messages_chinese_fts"
+	query.table = "messages_cjk_fts"
 	if strings.HasPrefix(trimmed, `"`) {
 		// A leading quote is the established opt-in for an explicit FTS5
 		// expression. Preserve phrases, operators, and grouping verbatim.

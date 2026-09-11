@@ -559,14 +559,14 @@ END;
 const cjkFTSRuntimeMatchesSQL = `EXISTS (
     SELECT 1 FROM main.stats
     WHERE key = '` + cjkFTSFingerprintStatsKey + `'
-      AND CAST(value AS TEXT) = agentsview_chinese_fts_fingerprint()
+      AND CAST(value AS TEXT) = agentsview_cjk_fts_fingerprint()
 )`
 
 const messagesCJKADTriggerDDL = `
-CREATE TEMP TRIGGER IF NOT EXISTS messages_chinese_ad
+CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_ad
 AFTER DELETE ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
-    INSERT INTO messages_chinese_fts(messages_chinese_fts, rowid, content)
+    INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, content)
         VALUES('delete', old.id, old.content);
 END;
 `
@@ -591,7 +591,7 @@ END;
 `
 
 const schemaCJKFTS = `
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_chinese_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
     content,
     content='messages',
     content_rowid='id',
@@ -600,18 +600,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_chinese_fts USING fts5(
 `
 
 const schemaCJKFTSTriggers = `
-CREATE TEMP TRIGGER IF NOT EXISTS messages_chinese_ai
+CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_ai
 AFTER INSERT ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
-    INSERT INTO messages_chinese_fts(rowid, content) VALUES (new.id, new.content);
+    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, new.content);
 END;
 ` + messagesCJKADTriggerDDL + `
-CREATE TEMP TRIGGER IF NOT EXISTS messages_chinese_au
+CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_au
 AFTER UPDATE ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
-    INSERT INTO messages_chinese_fts(messages_chinese_fts, rowid, content)
+    INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, content)
         VALUES('delete', old.id, old.content);
-    INSERT INTO messages_chinese_fts(rowid, content) VALUES (new.id, new.content);
+    INSERT INTO messages_cjk_fts(rowid, content) VALUES (new.id, new.content);
 END;
 
 -- The persistent BEFORE triggers mark a session pending without consulting
@@ -620,23 +620,23 @@ END;
 -- 1, which was created by this write. Higher generations include an earlier
 -- unmaintained write and must survive until the index is rebuilt. The BEFORE
 -- INSERT trigger ignores existing sessions, so an upsert marks at most once.
-CREATE TEMP TRIGGER IF NOT EXISTS sessions_chinese_pending_ai
+CREATE TEMP TRIGGER IF NOT EXISTS sessions_cjk_pending_ai
 AFTER INSERT ON main.sessions
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
-    DELETE FROM messages_chinese_fts_pending_sessions
+    DELETE FROM messages_cjk_fts_pending_sessions
     WHERE session_id = new.id AND generation = 1;
 END;
-CREATE TEMP TRIGGER IF NOT EXISTS sessions_chinese_pending_au
+CREATE TEMP TRIGGER IF NOT EXISTS sessions_cjk_pending_au
 AFTER UPDATE OF transcript_revision ON main.sessions
 WHEN old.transcript_revision IS NOT new.transcript_revision
  AND ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
-    DELETE FROM messages_chinese_fts_pending_sessions
+    DELETE FROM messages_cjk_fts_pending_sessions
     WHERE session_id = new.id AND generation = 1;
 END;
-CREATE TEMP TRIGGER IF NOT EXISTS sessions_chinese_pending_ad
+CREATE TEMP TRIGGER IF NOT EXISTS sessions_cjk_pending_ad
 AFTER DELETE ON main.sessions
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
-    DELETE FROM messages_chinese_fts_pending_sessions
+    DELETE FROM messages_cjk_fts_pending_sessions
     WHERE session_id = old.id AND generation = 1;
 END;
 `
@@ -4434,13 +4434,13 @@ func (db *DB) DropFTS() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	stmts := []string{
-		"DROP TRIGGER IF EXISTS messages_chinese_ai",
-		"DROP TRIGGER IF EXISTS messages_chinese_ad",
-		"DROP TRIGGER IF EXISTS messages_chinese_au",
-		"DROP TRIGGER IF EXISTS sessions_chinese_pending_ai",
-		"DROP TRIGGER IF EXISTS sessions_chinese_pending_au",
-		"DROP TRIGGER IF EXISTS sessions_chinese_pending_ad",
-		"DROP TABLE IF EXISTS messages_chinese_fts",
+		"DROP TRIGGER IF EXISTS messages_cjk_ai",
+		"DROP TRIGGER IF EXISTS messages_cjk_ad",
+		"DROP TRIGGER IF EXISTS messages_cjk_au",
+		"DROP TRIGGER IF EXISTS sessions_cjk_pending_ai",
+		"DROP TRIGGER IF EXISTS sessions_cjk_pending_au",
+		"DROP TRIGGER IF EXISTS sessions_cjk_pending_ad",
+		"DROP TABLE IF EXISTS messages_cjk_fts",
 		"DROP TRIGGER IF EXISTS messages_ai",
 		"DROP TRIGGER IF EXISTS messages_ad",
 		"DROP TRIGGER IF EXISTS messages_au",
@@ -4563,13 +4563,13 @@ func (db *DB) HasCJKFTS() (available bool) {
 	var hasPendingSessions bool
 	if err := db.getReader().QueryRow(`
 		SELECT EXISTS(
-			SELECT 1 FROM messages_chinese_fts_pending_sessions LIMIT 1
+			SELECT 1 FROM messages_cjk_fts_pending_sessions LIMIT 1
 		)`,
 	).Scan(&hasPendingSessions); err != nil || hasPendingSessions {
 		return false
 	}
 	_, err := db.getReader().Exec(
-		"SELECT 1 FROM messages_chinese_fts LIMIT 1",
+		"SELECT 1 FROM messages_cjk_fts LIMIT 1",
 	)
 	return err == nil
 }
