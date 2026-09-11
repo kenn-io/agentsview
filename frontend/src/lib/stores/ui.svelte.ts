@@ -101,6 +101,7 @@ const ZOOM_DEFAULT = 100;
 const FONT_SCALE_KEY = "agentsview-font-scale";
 const HIGH_CONTRAST_KEY = "agentsview-high-contrast";
 const LEGACY_FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
+let zoomRequest = 0;
 
 type DesktopTauriWebviewWindow = {
   setZoom(scaleFactor: number): Promise<void>;
@@ -118,13 +119,17 @@ function currentDesktopWebviewWindow(): DesktopTauriWebviewWindow | undefined {
   return tauri?.webviewWindow?.getCurrentWebviewWindow?.();
 }
 
-function syncDesktopZoom(scaleFactor: number): boolean {
+function syncDesktopZoom(scaleFactor: number): Promise<void> | undefined {
   const webview = currentDesktopWebviewWindow();
-  if (!webview) return false;
-  void webview.setZoom(scaleFactor).catch(() => {
-    // ignore
-  });
-  return true;
+  return webview?.setZoom(scaleFactor);
+}
+
+function setCssZoom(factor: number): void {
+  document.documentElement.style.setProperty("zoom", String(factor));
+  document.documentElement.style.setProperty(
+    "--agentsview-zoom-compensation",
+    String(1 / factor),
+  );
 }
 
 function readStoredZoom(): number {
@@ -300,12 +305,22 @@ class UIStore {
 
       $effect(() => {
         const factor = this.zoomLevel / 100;
+        const request = ++zoomRequest;
         const nativeZoom = syncDesktopZoom(factor);
-        document.documentElement.style.setProperty("zoom", nativeZoom ? "1" : String(factor));
-        document.documentElement.style.setProperty(
-          "--agentsview-zoom-compensation",
-          nativeZoom ? "1" : String(1 / factor),
-        );
+        if (nativeZoom) {
+          document.documentElement.style.setProperty("zoom", "1");
+          document.documentElement.style.setProperty("--agentsview-zoom-compensation", "1");
+          void nativeZoom.then(
+            () => {
+              if (request === zoomRequest) setCssZoom(1);
+            },
+            () => {
+              if (request === zoomRequest) setCssZoom(factor);
+            },
+          );
+        } else {
+          setCssZoom(factor);
+        }
         try {
           localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
           localStorage?.removeItem(FONT_SCALE_KEY);

@@ -997,7 +997,7 @@ describe("UIStore", () => {
       expect(stored.get("agentsview-zoom-level")).toBe("120");
     });
 
-    it("handles native rejection without applying a second CSS factor", async () => {
+    it("falls back to CSS zoom when native zoom rejects", async () => {
       window.history.replaceState({}, "", "/?desktop");
       stored.set("agentsview-font-scale", "120");
       const setZoom = vi.fn(() => Promise.reject(new Error("webview unavailable")));
@@ -1005,7 +1005,7 @@ describe("UIStore", () => {
       await import("./ui.svelte.js");
       await tick();
       expect(setZoom.mock.calls).toEqual([[1.2]]);
-      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1");
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.2");
       expect(stored.get("agentsview-zoom-level")).toBe("120");
     });
 

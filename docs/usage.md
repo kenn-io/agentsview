@@ -1196,7 +1196,11 @@ ______________________________________________________________________
 
 ## Zoom
 
-Settings > Appearance has one Zoom setting for the whole interface in both the browser and desktop app. It offers 67%, 75%, 80%, 90%, 100%, 110%, 120%, 125%, 130%, 150%, 175%, and 200%. Existing text-size preferences migrate to Zoom. A saved non-default zoom takes precedence. Otherwise, a saved non-default text size takes precedence over 100%.
+Settings > Appearance has one Zoom setting for the whole interface in both the
+browser and desktop app. It offers 67%, 75%, 80%, 90%, 100%, 110%, 120%, 125%,
+130%, 150%, 175%, and 200%. Existing text-size preferences migrate to Zoom. A
+saved non-default zoom takes precedence. Otherwise, a saved non-default text
+size takes precedence over 100%.
 
 The desktop status bar and shortcuts change the same setting. Use `Cmd+Plus` and `Cmd+Minus`, or `Ctrl+Plus` and `Ctrl+Minus` on Windows, to zoom in and out. `Cmd+0`, or `Ctrl+0` on Windows, resets Zoom to 100%.
 

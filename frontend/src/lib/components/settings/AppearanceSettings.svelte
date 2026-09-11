@@ -149,7 +149,12 @@
     gap: 8px;
   }
 
-  :global(.kit-typeahead__panel) {
+  /* Fixed kit-ui menus need the inverse root zoom for viewport coordinates. */
+  :global(.kit-typeahead__panel),
+  :global(.kit-select-dropdown__list),
+  :global(.kit-filter-dropdown__panel),
+  :global(.kit-date-range-picker__panel),
+  :global(.kit-mention__menu) {
     zoom: var(--agentsview-zoom-compensation, 1);
   }
 
