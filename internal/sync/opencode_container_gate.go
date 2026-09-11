@@ -573,6 +573,25 @@ func (e *Engine) unNoteSQLiteContainerDiscovery(file parser.DiscoveredFile) {
 	pass.discovered[dbPath]--
 }
 
+// sqliteContainerDiscoveredMembers returns how many sessions this pass
+// discovered in the shared SQLite container backing the file, or 0 when the
+// file is not a container member or no pass is tracking membership. A zero
+// answer leaves the caller on the whole-container size, which is what the
+// engine charged before per-member sizing existed.
+func (e *Engine) sqliteContainerDiscoveredMembers(file parser.DiscoveredFile) int {
+	dbPath, _, ok := sqliteContainerSourceForFile(file)
+	if !ok {
+		return 0
+	}
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	pass := e.containerPass
+	if pass == nil {
+		return 0
+	}
+	return pass.discovered[dbPath]
+}
+
 func (e *Engine) finishStreamingSQLiteContainerDiscovery() {
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()

@@ -156,7 +156,15 @@ func releaseParseRetentionLeases(leases []*parseRetentionLease) {
 	}
 }
 
-func parseRetentionSourceBytes(file parser.DiscoveredFile) int64 {
+// parseRetentionSourceBytes estimates the bytes one discovered source
+// contributes to a parse. A shared SQLite container fans into one virtual
+// source per session row and every member stats back to the same container
+// file, so the raw size would charge each member for rows only its siblings
+// hold. Members partition the container, so the container size divided by the
+// sessions this pass discovered in it sums back to the container across the
+// whole membership. An unknown or partial count returns a larger share and
+// therefore admits fewer parses, never more.
+func (e *Engine) parseRetentionSourceBytes(file parser.DiscoveredFile) int64 {
 	if file.SourceSize > 0 {
 		return file.SourceSize
 	}
@@ -170,6 +178,12 @@ func parseRetentionSourceBytes(file parser.DiscoveredFile) int64 {
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return 0
+	}
+	if members := e.sqliteContainerDiscoveredMembers(file); members > 1 {
+		// retainedBytes reads a non-positive size as "unknown source" and
+		// charges the whole budget, which is the fault this fixes, so the
+		// share floors at one byte rather than dividing to zero.
+		return max(info.Size()/int64(members), 1)
 	}
 	return info.Size()
 }

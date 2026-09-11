@@ -1075,3 +1075,173 @@ func TestStartWorkersCancellationReleasesAdmissionWaiters(t *testing.T) {
 		next.Release()
 	})
 }
+
+// newSQLiteContainerMemberFixture builds a container-shaped fixture: one real
+// file named for an OpenCode-family container, truncated to containerBytes,
+// fanned into members virtual sources registered with a live container pass.
+func newSQLiteContainerMemberFixture(
+	t *testing.T, containerBytes int64, members int,
+) (*Engine, []parser.DiscoveredFile, string) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "mimocode.db")
+	handle, err := os.Create(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(containerBytes))
+	require.NoError(t, handle.Close())
+
+	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+
+	files := make([]parser.DiscoveredFile, members)
+	engine.beginStreamingSQLiteContainerPass(nil)
+	for i := range files {
+		files[i] = parser.DiscoveredFile{
+			Path:  parser.VirtualSourcePath(dbPath, fmt.Sprintf("ses-%03d", i)),
+			Agent: parser.AgentMiMoCode,
+		}
+		engine.noteSQLiteContainerDiscovery(files[i])
+	}
+	engine.finishStreamingSQLiteContainerDiscovery()
+	return engine, files, dbPath
+}
+
+func TestBulkAdmissionAdmitsWorkerPoolForSQLiteContainerMembers(t *testing.T) {
+	engine, files, _ := newSQLiteContainerMemberFixture(t, 64<<20, 64)
+	synctest.Test(t, func(t *testing.T) {
+		budget := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+
+		admitted := 0
+		for i := range maxWorkers {
+			lease, err := budget.acquire(
+				ctx, engine.parseRetentionSourceBytes(files[i]),
+			)
+			if err != nil {
+				break
+			}
+			admitted++
+			t.Cleanup(lease.Release)
+		}
+		assert.Equal(t, maxWorkers, admitted,
+			"members of one shared SQLite container must not serialize bulk admission")
+	})
+}
+
+func TestParseRetentionChargesContainerMemberItsShare(t *testing.T) {
+	engine, files, _ := newSQLiteContainerMemberFixture(t, 64<<20, 64)
+
+	assert.Equal(t, int64(1048576), engine.parseRetentionSourceBytes(files[0]),
+		"a member must be charged its share of the container, not the whole file")
+
+	var total int64
+	for _, file := range files {
+		total += engine.parseRetentionSourceBytes(file)
+	}
+	assert.Equal(t, int64(67108864), total)
+	assert.LessOrEqual(t, total, int64(67108864),
+		"member shares must sum back to the container they partition")
+}
+
+func TestParseRetentionKeepsWholeFileSourceExclusive(t *testing.T) {
+	engine, _, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
+	plainPath := filepath.Join(filepath.Dir(dbPath), "whole.jsonl")
+	handle, err := os.Create(plainPath)
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(67108864))
+	require.NoError(t, handle.Close())
+	plain := parser.DiscoveredFile{Path: plainPath, Agent: parser.AgentClaude}
+
+	sourceBytes := engine.parseRetentionSourceBytes(plain)
+	assert.Equal(t, int64(67108864), sourceBytes,
+		"a plain source must keep its whole-file size")
+
+	synctest.Test(t, func(t *testing.T) {
+		budget := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
+		assert.Equal(t, defaultBulkParseRetentionBytes, budget.weight(sourceBytes))
+
+		first, acquireErr := budget.acquire(t.Context(), sourceBytes)
+		require.NoError(t, acquireErr)
+		t.Cleanup(first.Release)
+
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		_, acquireErr = budget.acquire(ctx, sourceBytes)
+		assert.ErrorIs(t, acquireErr, context.DeadlineExceeded,
+			"a second whole-file source must still block on the bulk budget")
+	})
+}
+
+func TestParseRetentionIgnoresNonFamilyVirtualPath(t *testing.T) {
+	engine, _, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
+	otherPath := filepath.Join(filepath.Dir(dbPath), "other.db")
+	handle, err := os.Create(otherPath)
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(67108864))
+	require.NoError(t, handle.Close())
+
+	assert.Equal(t, int64(67108864), engine.parseRetentionSourceBytes(
+		parser.DiscoveredFile{
+			Path:  parser.VirtualSourcePath(otherPath, "ses-1"),
+			Agent: parser.AgentMiMoCode,
+		}),
+		"a virtual path over a non-family container base must keep the stat size")
+}
+
+func TestParseRetentionKeepsCodexSourceBytesForStagingThreshold(t *testing.T) {
+	engine, _, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
+	codexPath := filepath.Join(filepath.Dir(dbPath), "rollout.jsonl")
+	handle, err := os.Create(codexPath)
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(67108864))
+	require.NoError(t, handle.Close())
+
+	assert.Equal(t, int64(67108864), engine.parseRetentionSourceBytes(
+		parser.DiscoveredFile{Path: codexPath, Agent: parser.AgentCodex}),
+		"the Codex staging threshold input must keep the whole-file size")
+}
+
+func TestParseRetentionFallsBackToContainerSizeWithoutPass(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "mimocode.db")
+	handle, err := os.Create(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(67108864))
+	require.NoError(t, handle.Close())
+
+	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	require.Nil(t, engine.containerPass)
+
+	assert.Equal(t, int64(67108864), engine.parseRetentionSourceBytes(
+		parser.DiscoveredFile{
+			Path:  parser.VirtualSourcePath(dbPath, "ses-001"),
+			Agent: parser.AgentMiMoCode,
+		}),
+		"a pass tracking no membership must keep the whole-container size")
+}
+
+func TestParseRetentionBudgetAdmissionWeights(t *testing.T) {
+	bulk := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
+	daemon := newParseRetentionBudget(defaultParseRetentionBytes)
+	for _, tc := range []struct {
+		name         string
+		budget       *parseRetentionBudget
+		sourceBytes  int64
+		wantWeight   int64
+		wantRetained int64
+	}{
+		{"bulk_one_byte", bulk, 1, 65540, 65540},
+		{"bulk_six_mib", bulk, 6291456, 25231360, 25231360},
+		{"bulk_below_clamp", bulk, 67092479, 268435452, 268435452},
+		{"bulk_at_clamp", bulk, 67092480, 268435456, 268435456},
+		{"bulk_saturated", bulk, 134217728, 268435456, 536870912},
+		{"bulk_unknown", bulk, 0, 268435456, 536870912},
+		{"bulk_negative", bulk, -1, 268435456, 536870912},
+		{"daemon_sixty_four_mib", daemon, 67108864, 67108864, 67108864},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.wantWeight, tc.budget.weight(tc.sourceBytes))
+			assert.Equal(t, tc.wantRetained, tc.budget.retainedBytes(tc.sourceBytes))
+		})
+	}
+}

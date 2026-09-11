@@ -11779,7 +11779,7 @@ func (e *Engine) processProviderFile(
 	// here the provider parses the source, so acquire the retention lease that
 	// bounds the parsed payload and attach it to every result carrying that
 	// data. A result still classified as a skip below releases it immediately.
-	sourceBytes := parseRetentionSourceBytes(file)
+	sourceBytes := e.parseRetentionSourceBytes(file)
 	lease, err := e.retentionBudget().acquire(
 		ctx, sourceBytes,
 	)
@@ -15050,7 +15050,7 @@ func (e *Engine) tryIncrementalJSONL(
 	// retention lease that bounds the parsed payload. It is attached to the
 	// incremental results below and released on every decline (fall-through to
 	// a full parse re-acquires at the provider parse seam) or skip return.
-	sourceBytes := parseRetentionSourceBytes(file)
+	sourceBytes := e.parseRetentionSourceBytes(file)
 	lease, leaseErr := e.retentionBudget().acquire(
 		ctx, sourceBytes,
 	)

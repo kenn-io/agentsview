@@ -294,7 +294,7 @@ func (e *Engine) processS3Session(
 	// so acquire the retention lease that bounds the materialized-and-parsed
 	// payload just before the object is fetched and parsed. Every result from
 	// here carries the lease; releaseRetention frees it after consumption.
-	sourceBytes := parseRetentionSourceBytes(file)
+	sourceBytes := e.parseRetentionSourceBytes(file)
 	lease, err := e.retentionBudget().acquire(ctx, sourceBytes)
 	if err != nil {
 		return processResult{err: err}
