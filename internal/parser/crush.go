@@ -71,14 +71,23 @@ func crushProjectsDataDirs(registryPath string) []string {
 	return dirs
 }
 
-func openCrushDB(dbPath string) (*sql.DB, error) {
-	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=0&_busy_timeout=3000"
+func openCrushDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
+	immutable := "0"
+	if stableSnapshot {
+		immutable = "1"
+	}
+	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=" + immutable + "&_busy_timeout=3000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening crush sessions database %s: %w", dbPath, err)
 	}
 	if err := db.PingContext(context.Background()); err != nil {
 		_ = db.Close()
+		if stableSnapshot {
+			// The snapshot DSN itself failed; a fallback would break the
+			// stable-snapshot guarantee, so surface the failure.
+			return nil, fmt.Errorf("opening crush sessions database %s: %w (WAL corruption is a possible cause; Crush must repair the store)", dbPath, err)
+		}
 		fallback := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=1&_busy_timeout=3000"
 		if fb, err2 := sql.Open("sqlite3", fallback); err2 == nil {
 			if err3 := fb.PingContext(context.Background()); err3 == nil {
@@ -199,12 +208,13 @@ func scanCrushSessionRow(scanner interface{ Scan(...any) error }) (crushSessionR
 }
 
 func forEachCrushSessionMeta(
-	ctx context.Context, dbPath string, yield func(dbBackedSessionMeta) error,
+	ctx context.Context, dbPath string, stableSnapshot bool,
+	yield func(dbBackedSessionMeta) error,
 ) error {
 	if !IsRegularFile(dbPath) {
 		return nil
 	}
-	db, err := openCrushDB(dbPath)
+	db, err := openCrushDB(dbPath, stableSnapshot)
 	if err != nil {
 		return err
 	}
@@ -238,12 +248,12 @@ func forEachCrushSessionMeta(
 }
 
 func crushSessionMeta(
-	ctx context.Context, dbPath, sessionID string,
+	ctx context.Context, dbPath, sessionID string, stableSnapshot bool,
 ) (dbBackedSessionMeta, bool, error) {
 	if !IsRegularFile(dbPath) {
 		return dbBackedSessionMeta{}, false, nil
 	}
-	db, err := openCrushDB(dbPath)
+	db, err := openCrushDB(dbPath, stableSnapshot)
 	if err != nil {
 		return dbBackedSessionMeta{}, false, err
 	}
@@ -283,14 +293,13 @@ func crushSessionMtime(dbPath string, row crushSessionRow) int64 {
 }
 
 func parseCrushSession(
-	dbPath, sessionID, machine string,
+	ctx context.Context, dbPath, sessionID, machine string, stableSnapshot bool,
 ) (*ParsedSession, []ParsedMessage, error) {
-	db, err := openCrushDB(dbPath)
+	db, err := openCrushDB(dbPath, stableSnapshot)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer db.Close()
-	ctx := context.Background()
 	if err := validateCrushSchema(ctx, db); err != nil {
 		return nil, nil, err
 	}
@@ -303,11 +312,11 @@ func parseCrushSession(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading crush session %s: %w", sessionID, err)
 	}
-	messages, err := loadCrushMessages(db, sessionID)
+	messages, err := loadCrushMessages(ctx, db, sessionID)
 	if err != nil {
 		return nil, nil, err
 	}
-	links, err := crushSubagentLinks(db, sessionID)
+	links, err := crushSubagentLinks(ctx, db, sessionID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -395,8 +404,10 @@ func parseCrushSession(
 // crushSubagentLinks maps a session's prefixed tool-call IDs to the
 // crush-prefixed child session they spawned. Crush names subagent sessions
 // "<own-uuid>$$<spawning-tool-call-id>" under the delegating session.
-func crushSubagentLinks(db *sql.DB, sessionID string) (map[string]string, error) {
-	rows, err := db.Query(`
+func crushSubagentLinks(
+	ctx context.Context, db *sql.DB, sessionID string,
+) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT id FROM sessions WHERE parent_session_id = ?
 	`, sessionID)
 	if err != nil {
@@ -419,8 +430,10 @@ func crushSubagentLinks(db *sql.DB, sessionID string) (map[string]string, error)
 	return links, nil
 }
 
-func loadCrushMessages(db *sql.DB, sessionID string) ([]ParsedMessage, error) {
-	rows, err := db.Query(`
+func loadCrushMessages(
+	ctx context.Context, db *sql.DB, sessionID string,
+) ([]ParsedMessage, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT id,
 		       COALESCE(role, ''),
 		       COALESCE(parts, '[]'),
@@ -453,7 +466,7 @@ func loadCrushMessages(db *sql.DB, sessionID string) ([]ParsedMessage, error) {
 			return nil, fmt.Errorf("scanning crush message row: %w", err)
 		}
 		message, ok, err := buildCrushMessage(
-			len(parsed), rowID, role, parts, model, provider, createdAt,
+			ctx, len(parsed), rowID, role, parts, model, provider, createdAt,
 			isSummary != 0,
 		)
 		if err != nil {
@@ -470,7 +483,7 @@ func loadCrushMessages(db *sql.DB, sessionID string) ([]ParsedMessage, error) {
 }
 
 func buildCrushMessage(
-	ordinal int, rowID, role, parts, model, provider string,
+	ctx context.Context, ordinal int, rowID, role, parts, model, provider string,
 	createdAt int64, isSummary bool,
 ) (ParsedMessage, bool, error) {
 	contentJSON := gjson.Parse(parts)
@@ -524,7 +537,7 @@ func buildCrushMessage(
 				texts = append(texts, "[Thinking]\n"+text+"\n[/Thinking]")
 			}
 		case "tool_call":
-			if call, ok := crushParseToolCall(rowID, part); ok {
+			if call, ok := crushParseToolCall(ctx, rowID, part); ok {
 				message.HasToolUse = true
 				message.ToolCalls = append(message.ToolCalls, call)
 			}
@@ -550,7 +563,9 @@ func buildCrushMessage(
 	return message, true, nil
 }
 
-func crushParseToolCall(rowID string, part gjson.Result) (ParsedToolCall, bool) {
+func crushParseToolCall(
+	ctx context.Context, rowID string, part gjson.Result,
+) (ParsedToolCall, bool) {
 	data := part.Get("data")
 	name := strings.TrimSpace(data.Get("name").Str)
 	if name == "" {
@@ -571,7 +586,7 @@ func crushParseToolCall(rowID string, part gjson.Result) (ParsedToolCall, bool) 
 		ToolName:  name,
 		Category:  NormalizeToolCategory(name),
 		InputJSON: inputJSON,
-		SkillName: inferToolSkillName(name, inputJSON),
+		SkillName: inferToolSkillName(ctx, name, inputJSON),
 	}
 	return call, true
 }
