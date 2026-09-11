@@ -412,6 +412,18 @@ describe("renderMarkdown", () => {
       }
     });
 
+    it("keeps namespaced element pairs inside a complete unknown block", () => {
+      for (const source of [
+        "<policy>\n<ns:item>value</ns:item>\n# heading\n</policy>",
+        "<policy>\n<ns:item id=\"1\">\nvalue\n</ns:item>\n# heading\n</policy>",
+      ]) {
+        const dom = parseHTML(
+          renderMarkdown(source, { renderUnknownXmlBlocksAsPreformatted: true }),
+        );
+        expect(dom.querySelector("pre > code")?.textContent).toBe(`${source}\n`);
+      }
+    });
+
     it("keeps forward reference definitions available in nested containers", () => {
       for (const source of [
         "<policy>\n[<inner>label</bad>][ref]\n# heading\n</policy>\n\n[ref]: https://example.com",

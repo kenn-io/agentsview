@@ -567,6 +567,9 @@ function matchUnknownXmlBlockAt(
     if (openHtmlTags.length > 0 || selfClosing || isProtectedAutolink(token.raw)) return true;
     if (closing) {
       if (stack.at(-1)?.name !== name) {
+        // Namespaced openers such as <ns:item> scan as URI autolinks, so their
+        // closers have no stack entry to pair with.
+        if (name.includes(":")) return true;
         failed = true;
         return false;
       }
