@@ -102,6 +102,8 @@ const FONT_SCALE_KEY = "agentsview-font-scale";
 const HIGH_CONTRAST_KEY = "agentsview-high-contrast";
 const LEGACY_FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
 let zoomRequest = 0;
+let nativeZoomQueue = Promise.resolve();
+let confirmedNativeZoom = 1;
 
 type DesktopTauriWebviewWindow = {
   setZoom(scaleFactor: number): Promise<void>;
@@ -121,7 +123,9 @@ function currentDesktopWebviewWindow(): DesktopTauriWebviewWindow | undefined {
 
 function syncDesktopZoom(scaleFactor: number): Promise<void> | undefined {
   const webview = currentDesktopWebviewWindow();
-  return webview ? Promise.resolve().then(() => webview.setZoom(scaleFactor)) : undefined;
+  if (!webview) return;
+  nativeZoomQueue = nativeZoomQueue.catch(() => {}).then(() => webview.setZoom(scaleFactor));
+  return nativeZoomQueue;
 }
 
 function setCssZoom(factor: number): void {
@@ -312,10 +316,29 @@ class UIStore {
           document.documentElement.style.setProperty("--agentsview-zoom-compensation", "1");
           void nativeZoom.then(
             () => {
-              if (request === zoomRequest) setCssZoom(1);
+              if (request === zoomRequest) {
+                confirmedNativeZoom = factor;
+                setCssZoom(1);
+              }
             },
             () => {
-              if (request === zoomRequest) setCssZoom(factor);
+              if (request !== zoomRequest) return;
+              const reset = syncDesktopZoom(1);
+              if (!reset) {
+                setCssZoom(factor / confirmedNativeZoom);
+                return;
+              }
+              void reset.then(
+                () => {
+                  if (request === zoomRequest) {
+                    confirmedNativeZoom = 1;
+                    setCssZoom(factor);
+                  }
+                },
+                () => {
+                  if (request === zoomRequest) setCssZoom(factor / confirmedNativeZoom);
+                },
+              );
             },
           );
         } else {

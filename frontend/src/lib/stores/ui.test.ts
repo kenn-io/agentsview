@@ -946,6 +946,8 @@ describe("UIStore", () => {
         setZoom.mockClear();
         zoom.setZoomLevel(level);
         await tick();
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
         expect(zoom.zoomLevel).toBe(level);
         expect(document.documentElement.style.getPropertyValue("zoom")).toBe(native ? "1" : factor);
         expect(stored.get("agentsview-zoom-level")).toBe(String(level));
@@ -985,6 +987,8 @@ describe("UIStore", () => {
       const { ui: zoom } = await import("./ui.svelte.js");
       zoom.setZoomLevel(120);
       await tick();
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       setZoom.mockClear();
       vi.mocked(storage.setItem).mockClear();
       for (const level of [0, -100, 66, 133, 201, 120.5, NaN, Infinity]) {
@@ -1006,7 +1010,9 @@ describe("UIStore", () => {
       await tick();
       await Promise.resolve();
       await tick();
-      expect(setZoom.mock.calls.at(-1)).toEqual([1.2]);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(setZoom.mock.calls).toEqual([[1.2], [1]]);
       expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.2");
       expect(stored.get("agentsview-zoom-level")).toBe("120");
     });
@@ -1020,9 +1026,31 @@ describe("UIStore", () => {
       await tick();
       await Promise.resolve();
       await tick();
-      expect(setZoom.mock.calls.at(-1)).toEqual([1.2]);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(setZoom.mock.calls).toEqual([[1.2], [1]]);
       expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.2");
       expect(stored.get("agentsview-zoom-level")).toBe("120");
+    });
+
+    it("resets a previous native factor before CSS fallback", async () => {
+      window.history.replaceState({}, "", "/?desktop");
+      stored.set("agentsview-zoom-level", "150");
+      const setZoom = vi.fn(async (factor: number) => {
+        if (factor === 1.2) throw new Error("webview unavailable");
+      });
+      vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      const { ui: zoom } = await import("./ui.svelte.js");
+      await tick();
+      zoom.setZoomLevel(120);
+      await tick();
+      await Promise.resolve();
+      await tick();
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setZoom.mock.calls).toEqual([[1.5], [1.2], [1]]);
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.2");
     });
 
     it("defaults when storage reads throw and still applies later selections", async () => {
