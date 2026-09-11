@@ -80,7 +80,7 @@ var deepSeekHarnessKnownEvents = map[string]struct{}{
 	"compaction/end": {}, "compaction/prune": {}, "compaction/start": {},
 	"compaction/summary": {}, "feedback/record": {}, "goal/change": {},
 	"hook/invoked": {}, "hook/result": {}, "llm/retry": {},
-	"llm/retry-started": {}, "permission/preset": {}, "plan/mode": {},
+	"llm/retry-started": {}, "model/selection": {}, "permission/preset": {}, "plan/mode": {},
 	"request/context": {}, "request/header": {}, "sandbox/mode": {},
 	"schedule/change": {}, "session/end-seed": {}, "session/title": {},
 	"session/title-llm-request": {}, "step/end": {}, "step/start": {},

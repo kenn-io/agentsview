@@ -776,6 +776,22 @@ func TestDeepSeekHarnessFormatErrorsAndCrashTails(t *testing.T) {
 		assert.Empty(t, result.Messages)
 	})
 
+	t.Run("model/selection accepted", func(t *testing.T) {
+		records := []any{
+			deepSeekHarnessFixtureHeader("model-select", deepSeekHarnessFixtureCwd, nil),
+			map[string]any{
+				"type": "model/selection", "seq": 0, "time": 1700000000001,
+				"data": map[string]any{"provider": "deepseek-official", "model": "deepseek-v4-flash", "reasoningEffort": "high"},
+			},
+			deepSeekHarnessFixtureEvent(1, "turn/start", map[string]any{"turn": 1}, nil),
+			deepSeekHarnessFixtureEvent(2, "turn/end", deepSeekHarnessTurnEnd(1, "completed"), nil),
+		}
+		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "model-select", deepSeekHarnessFixtureCwd, "plain", records)
+		result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+		require.NoError(t, err)
+		assert.Len(t, result.Messages, 0)
+	})
+
 	t.Run("unsafe event integer", func(t *testing.T) {
 		records := []any{
 			deepSeekHarnessFixtureHeader("unsafe-int", deepSeekHarnessFixtureCwd, nil),
