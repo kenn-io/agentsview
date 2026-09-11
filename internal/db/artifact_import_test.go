@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 func artifactImportTestWork(origin string, sequence int) ArtifactImportWork {
@@ -602,6 +603,40 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, provenance)
+}
+
+func TestApplyArtifactImportedSessionProjectsToolResultImages(t *testing.T) {
+	database := testDB(t)
+	database.SetToolResultImages(config.ToolResultImagesOffload)
+	database.SetAssetsDir(t.TempDir())
+	ctx := t.Context()
+	origin := "peer-a1b2c3"
+	gid := origin + "~image"
+	imported := ArtifactImportedSession{
+		Origin:            origin,
+		GID:               gid,
+		ManifestHash:      strings.Repeat("a", 64),
+		ImportedSessionID: gid,
+	}
+	write := SessionBatchWrite{
+		Session: Session{
+			ID: gid, Project: "project", Machine: origin, Agent: "codex",
+		},
+		Messages:        []Message{testImageMessage(gid)},
+		ReplaceMessages: true,
+	}
+
+	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
+	require.NoError(t, err)
+	require.True(t, result.Written)
+
+	messages, err := database.GetAllMessages(ctx, gid)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	call := messages[0].ToolCalls[0]
+	assertOffloadedImage(t, call.ResultContent, database.AssetsDir())
+	require.Len(t, call.ResultEvents, 1)
+	assertOffloadedImage(t, call.ResultEvents[0].Content, database.AssetsDir())
 }
 
 func TestArtifactImportedManifestHashesChunksWithinSQLiteVariableLimit(

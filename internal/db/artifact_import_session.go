@@ -73,6 +73,7 @@ func (db *DB) applyArtifactImportedSession(
 		)
 	}
 	write = sanitizeSessionBatchWrite(write)
+	write.Messages = db.projectSessionBatchMessages(write)
 	write.Session, write.Messages = db.sessionAndMessagesForStorage(
 		write.Session, write.Messages,
 	)
