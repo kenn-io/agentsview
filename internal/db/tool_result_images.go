@@ -504,6 +504,9 @@ func (db *DB) ProjectToolResultImages(messages []Message) ([]Message, ToolImageS
 // ProjectToolResultImagesWithPolicy applies a run policy only to retained tool content.
 func (db *DB) ProjectToolResultImagesWithPolicy(messages []Message, policy config.ToolResultImages) ([]Message, ToolImageStats) {
 	if db.ArchiveContent().OmitsToolContent() {
+		if messages == nil {
+			return []Message{}, ToolImageStats{}
+		}
 		return messages, ToolImageStats{}
 	}
 	return projectToolResultImages(messages, policy, db.AssetsDir())

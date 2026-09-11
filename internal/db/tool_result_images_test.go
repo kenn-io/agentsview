@@ -132,6 +132,19 @@ func TestDBPolicyZeroValue(t *testing.T) {
 	assert.Equal(t, config.ToolResultImagesDrop, d.ToolResultImages())
 }
 
+func TestProjectToolResultImagesNormalizesNilForOmittedArchives(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentTranscripts)
+
+	projected, stats := d.ProjectToolResultImagesWithPolicy(
+		nil, config.ToolResultImagesKeep,
+	)
+
+	assert.NotNil(t, projected)
+	assert.Empty(t, projected)
+	assert.Zero(t, stats)
+}
+
 func TestIngestWithDropRemovesInlineImagesFromBothTables(t *testing.T) {
 	d := testDB(t)
 	d.SetToolResultImages(config.ToolResultImagesDrop)
