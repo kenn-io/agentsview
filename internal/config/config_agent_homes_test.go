@@ -56,7 +56,7 @@ homes = ["/homes/work/.codex", "/homes/other/.codex-alt"]
 	}, cfg.ResolveDirs(parser.AgentCodex))
 	assert.True(t, cfg.IsUserConfigured(parser.AgentClaude))
 	assert.True(t, cfg.IsUserConfigured(parser.AgentCodex))
-	assert.Equal(t, cfg.LocalMachineName,
+	assert.Equal(t, cfg.InstallationID,
 		cfg.SourceMachines[parser.AgentCodex][filepath.Join(absoluteTestPath(t, "/homes/work/.codex"), "sessions")])
 }
 
@@ -301,7 +301,7 @@ func TestRuntimeRootsResolveBeforeDeduplication(t *testing.T) {
 				}
 			}
 			cfg := Config{
-				LocalMachineName: "host-a",
+				InstallationID: "host-a",
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentCodex: {"profile/sessions", "primary/sessions"},
 				},

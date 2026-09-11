@@ -11,6 +11,7 @@
   import { m } from "../../i18n/index.js";
   import type { ProjectInfo } from "../../api/types/core.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import { displayProjectLabel } from "./project-label.js";
 
@@ -294,7 +295,7 @@
       <div class="folder-heading">
         <strong>{m.data_mapping_observed_folders()}</strong>
         {#if candidateMachines.length === 1}
-          <span class="folder-meta">{candidateMachines[0]}</span>
+          <span class="folder-meta">{sessions.machineLabel(candidateMachines[0]!)}</span>
         {/if}
       </div>
       <div class="folder-list">
@@ -322,7 +323,7 @@
               {/snippet}
             </Button>
             {#if candidateMachines.length > 1}
-              <span class="folder-meta">{candidate.machine}</span>
+              <span class="folder-meta">{sessions.machineLabel(candidate.machine)}</span>
             {/if}
             <span class="folder-meta">
               {m.data_reclassify_candidate_sessions({

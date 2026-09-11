@@ -5,6 +5,9 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/update"
@@ -44,7 +47,42 @@ type projectsResponse struct {
 }
 
 type machinesResponse struct {
-	Machines []string `json:"machines"`
+	Machines       []string          `json:"machines"`
+	MachineLabels  map[string]string `json:"machine_labels"`
+	MachineAliases map[string]string `json:"machine_aliases"`
+}
+
+// Normalize read filters before Huma binds typed inputs. Import and mutation
+// requests retain the exact source identity the caller supplied.
+func (s *Server) humaMachineAliases(ctx huma.Context, next func(huma.Context)) {
+	if ctx.Method() != http.MethodGet || ctx.Query("machine") == "" {
+		next(ctx)
+		return
+	}
+	aliases, err := s.machineAliases(ctx.Context())
+	if err != nil {
+		_ = huma.WriteErr(s.api, ctx, http.StatusInternalServerError, "reading machine aliases", err)
+		return
+	}
+	req, _ := humago.Unwrap(ctx)
+	u := *req.URL
+	query := u.Query()
+	query.Set("machine", db.CanonicalMachineFilter(ctx.Query("machine"), aliases))
+	u.RawQuery = query.Encode()
+	req.URL = &u
+	next(ctx)
+}
+
+func (s *Server) machineAliases(ctx context.Context) (map[string]string, error) {
+	aliases, err := s.db.GetMachineAliases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// The old local sentinel belongs only to this archive, never a shared mirror.
+	if _, local := s.db.(*db.DB); local && s.cfg.InstallationID != "" {
+		aliases["local"] = s.cfg.InstallationID
+	}
+	return aliases, nil
 }
 
 type branchesResponse struct {
@@ -122,7 +160,15 @@ func (s *Server) humaListMachines(
 	if err != nil {
 		return nil, serverError(err)
 	}
-	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines}}, nil
+	labels, err := s.db.GetMachineLabels(ctx)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	aliases, err := s.machineAliases(ctx)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines, MachineLabels: labels, MachineAliases: aliases}}, nil
 }
 
 func (s *Server) humaListBranches(

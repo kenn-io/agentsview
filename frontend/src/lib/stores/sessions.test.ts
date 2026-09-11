@@ -2297,6 +2297,38 @@ describe("SessionsStore", () => {
     });
   });
 
+  it("uses machine keys as labels when an older daemon omits machine_labels", async () => {
+    api.getMachines.mockResolvedValue({ machines: ["host-a.example"] });
+
+    await sessions.loadMachines();
+
+    expect(sessions.machines).toEqual(["host-a.example"]);
+    expect(sessions.machineLabel("host-a.example")).toBe("host-a.example");
+  });
+
+  it("upgrades saved and URL machine selections using recorded aliases only", async () => {
+    localStorage.setItem(
+      "session-filters",
+      JSON.stringify({ version: 2, machine: "old-owner,installation-a,source-a" }),
+    );
+    sessions = createSessionsStore();
+    api.getMachines.mockResolvedValue({
+      machines: ["installation-a", "source-a"],
+      machine_labels: { "installation-a": "Laptop" },
+      machine_aliases: { "old-owner": "installation-a" },
+    });
+
+    await sessions.loadMachines();
+
+    expect(sessions.selectedMachines).toEqual(["installation-a", "source-a"]);
+    expect(filtersToParams(sessions.filters).machine).toBe("installation-a,source-a");
+    expect(JSON.parse(localStorage.getItem("session-filters")!).machine).toBe(
+      "installation-a,source-a",
+    );
+    sessions.initFromParams({ machine: "old-owner,Laptop,constructor" });
+    expect(sessions.selectedMachines).toEqual(["installation-a", "Laptop", "constructor"]);
+  });
+
   describe("loadProjects dedup", () => {
     beforeEach(() => {
       mockGetProjects();

@@ -59,10 +59,14 @@
   });
 
   const sortedMachines = $derived.by(() => {
-    const machines = [...sessions.machines].sort();
+    const machines = [...sessions.machines].sort((a, b) =>
+      sessions.machineLabel(a).localeCompare(sessions.machineLabel(b)),
+    );
     if (!machineSearch) return machines;
     const q = machineSearch.toLowerCase();
-    return machines.filter((m) => m.toLowerCase().includes(q));
+    return machines.filter((machine) =>
+      sessions.machineLabel(machine).toLowerCase().includes(q),
+    );
   });
 
   $effect(() => {
@@ -354,6 +358,7 @@
               class:selected
               style:--agent-color={"var(--accent-blue)"}
               style:--agent-foreground={"var(--accent-blue-foreground)"}
+              title={machine}
               onclick={() =>
                 sessions.toggleMachineFilter(machine)}
             >
@@ -366,7 +371,7 @@
                 {/if}
               </span>
               <span class="agent-select-name">
-                {machine}
+                {sessions.machineLabel(machine)}
               </span>
             </button>
           {:else}

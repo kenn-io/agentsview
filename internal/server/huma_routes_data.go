@@ -71,7 +71,7 @@ func (s *Server) localMachineName() string {
 			return machine
 		}
 	}
-	return s.cfg.LocalMachineName
+	return s.cfg.InstallationID
 }
 
 func (s *Server) humaDataProjectRules(

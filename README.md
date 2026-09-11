@@ -74,10 +74,10 @@ AgentsView lists object metadata and only downloads changed sessions during
 sync. S3 change detection uses size, modified time, and available object
 fingerprints such as ETag, version ID, or checksums.
 
-The desktop app and freshness-sensitive CLI commands share a detached local
-daemon. Read-only CLI commands attach to it when it is already running, but fall
-back to direct read-only SQLite on a cold archive so one-off scripts stay fast.
-Commands that need fresh data or need to write, such as `sync`, `usage`,
+The desktop app and ordinary session CLI commands share a detached local daemon
+and start one when needed. Dedicated diagnostics such as
+`db adopt-machine --list` and `doctor sync` read the archive without starting
+it. Commands that need fresh data or need to write, such as `sync`, `usage`,
 `token-use`, `pg push`, and `duckdb push`, auto-start the daemon when needed.
 The server remains running after these commands exit and also serves the web UI.
 For a one-shot sync with no background server, stop the daemon first and run
@@ -522,6 +522,14 @@ RooCode-derived VS Code extension that wrote per-task JSON under
 
 ## Filesystem Session Sync
 
+Local imports use a persisted installation ID, so updates and network changes do
+not split sessions across machine identities. `installation.json` stores the ID
+and initial display label; `local_machine_name` in `config.toml` overrides the
+label after a daemon restart. Upgrades adopt historical local sessions when the
+archive has saved ownership. Older archives ask you to select the local keys
+with `agentsview db adopt-machine`; see the
+[upgrade guide](https://agentsview.io/configuration/#upgrading-historical-machine-keys).
+
 One primary AgentsView instance can ingest native agent session directories
 copied or mounted from other machines without PostgreSQL:
 
@@ -529,16 +537,17 @@ copied or mounted from other machines without PostgreSQL:
 [[session_sources]]
 agent = "copilot"
 dir = "/srv/session-archive/buildbox/copilot"
-machine = "buildbox"
+machine = "0123456789abcdef0123456789abcdef" # Peer installation ID
 ```
 
 Structured sources are additive to existing `agents.copilot.dirs`,
 `agents.claude.dirs`, and other per-agent settings. They label sessions by
 source machine without namespacing native session IDs. Transport source session
-files only -- never copy `sessions.db` or its WAL files. Machine labels are
+files only -- never copy `sessions.db` or its WAL files. Machine keys are
 captured at first ingestion; ordinary sync and `agentsview sync --full` preserve
-the stored label. Changing attribution for existing sessions is not currently
-supported.
+the stored key. Use a peer's ID from `installation.json` for remote roots and
+omit `machine` for local roots. Adopted old keys remain aliases for existing
+filters and URLs.
 
 See the [Filesystem Session Sync guide](https://agentsview.io/filesystem-sync/)
 for Git, rsync, shared-mount, freshness, and operational guidance.
@@ -566,11 +575,9 @@ default_pg = "work"
 
 [pg.work]
 url = "postgres://user:pass@work-db/agentsview"
-machine_name = "laptop"
 
 [pg.archive]
 url = "postgres://user:pass@archive-db/agentsview"
-machine_name = "laptop-archive"
 exclude_projects = ["scratch"]
 ```
 

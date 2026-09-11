@@ -366,6 +366,9 @@ func (s *Sync) pushEverything(
 	if err := s.ensureArchiveID(ctx); err != nil {
 		return result, err
 	}
+	if err := s.syncMachineMetadata(ctx); err != nil {
+		return result, err
+	}
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
 	}

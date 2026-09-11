@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { DbProjectInventory, DbProjectInventoryRow } from "../../api/generated/index";
 
@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
 const syncMock = vi.hoisted(() => ({
   serverVersion: { version: "1.0.0", read_only: false } as object | null,
   readOnly: false,
+  onSyncComplete: vi.fn(),
 }));
 
 vi.mock("../../api/generated/index", () => ({
@@ -42,6 +43,7 @@ import DataPage from "./DataPage.svelte";
 import { data } from "../../stores/data.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { m } from "../../i18n/index.js";
+import { sessions } from "../../stores/sessions.svelte.js";
 
 function makeRow(overrides: Partial<DbProjectInventoryRow> = {}): DbProjectInventoryRow {
   return {
@@ -85,6 +87,7 @@ beforeEach(() => {
   data.selectedProjectKey = "";
   data.rulesMachine = "";
   data.rulesRefreshVersion = 0;
+  sessions.machineLabels = {};
   (router as unknown as { params: Record<string, string> }).params = {};
 });
 
@@ -369,6 +372,7 @@ describe("DataPage", () => {
   });
 
   it("fetches rules exactly once when a machine is selected in the rules view", async () => {
+    sessions.machineLabels = { "machine-a": "Workstation", "machine-b": "Workstation" };
     (router as unknown as { params: Record<string, string> }).params = { view: "rules" };
     api.getApiV1DataProjects.mockResolvedValue(makeInventory([]));
     api.getApiV1DataProjectRules.mockImplementation((args: { machine?: string }) =>
@@ -384,7 +388,7 @@ describe("DataPage", () => {
     expect(api.getApiV1DataProjectRules).toHaveBeenCalledTimes(1);
 
     await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "machine-b" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "Workstation machine-b" }));
     await flush();
 
     // The selection delegates to the store, whose {#key} remount performs the

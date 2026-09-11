@@ -383,6 +383,13 @@ func collectExportSessionPages(
 		Limit:           cfg.Limit,
 		Format:          string(cfg.Format),
 	}
+	if cfg.Cursor == "" {
+		var err error
+		opts.Filter.Machine, err = db.ResolveMachineFilter(ctx, database, opts.Filter.Machine)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if cfg.All {
 		return database.ExportAllSessionSummaries(ctx, opts)
 	}

@@ -1043,6 +1043,8 @@ func TestGenerateCannedInsight_UsesSessionFilterPayload(t *testing.T) {
 		s.HasToolCalls = true
 		s.TerminationStatus = &clean
 	})
+	const installationID = "0123456789abcdef0123456789abcdef"
+	require.NoError(t, te.db.AdoptMachineIdentity(t.Context(), installationID, []string{"workstation"}))
 
 	firstPayload := `{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","project":"my-app","agent":"claude","llm_opt_in":true,"filters":{"timezone":"America/New_York","agent":"codex","machine":"workstation","termination":"clean","min_user_messages":2,"include_one_shot":false,"automated_scope":"human"}}`
 	w := te.post(t, "/api/v1/insights/generate", firstPayload)
@@ -1056,6 +1058,25 @@ func TestGenerateCannedInsight_UsesSessionFilterPayload(t *testing.T) {
 	assert.NotContains(t, generatedPrompts[0], claudePrompt)
 	assert.NotContains(t, generatedPrompts[0], wrongMachinePrompt)
 	assert.NotContains(t, generatedPrompts[0], oneShotPrompt)
+	assert.Contains(t, generatedPrompts[0], `"machine":"`+installationID+`"`)
+	events := parseSSE(w.Body.String())
+	require.NotEmpty(t, events)
+	require.Equal(t, "done", events[len(events)-1].Event, w.Body.String())
+	var saved db.Insight
+	require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].Data), &saved))
+	assert.Contains(t, saved.ProvenanceJSON, `"machine":"`+installationID+`"`)
+
+	canonicalPayload := strings.Replace(firstPayload, `"machine":"workstation"`, `"machine":"`+installationID+`"`, 1)
+	w = te.post(t, "/api/v1/insights/generate", canonicalPayload)
+	assertStatus(t, w, http.StatusOK)
+	require.Equal(t, int32(1), calls.Load(), "alias and installation ID must share the cached insight")
+	events = parseSSE(w.Body.String())
+	require.NotEmpty(t, events)
+	require.Equal(t, "done", events[len(events)-1].Event, w.Body.String())
+	var cached db.Insight
+	require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].Data), &cached))
+	assert.Equal(t, saved.ID, cached.ID)
+	assert.Equal(t, "hit", cached.CacheStatus)
 
 	secondPayload := `{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","project":"my-app","agent":"claude","llm_opt_in":true,"filters":{"timezone":"America/New_York","agent":"claude","machine":"workstation","termination":"clean","min_user_messages":2,"include_one_shot":false,"automated_scope":"human"}}`
 	w = te.post(t, "/api/v1/insights/generate", secondPayload)

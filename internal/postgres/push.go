@@ -404,6 +404,9 @@ func (s *Sync) PushWithOptions(
 			return result, scopeErr
 		}
 	}
+	if err := s.syncMachineMetadata(ctx); err != nil {
+		return result, err
+	}
 	if err := timedPushSetupStep("model pricing sync",
 		func() error { return s.syncModelPricing(ctx) }); err != nil {
 		return result, err

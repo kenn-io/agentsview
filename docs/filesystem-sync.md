@@ -24,23 +24,28 @@ Add one `[[session_sources]]` table per received agent root:
 [[session_sources]]
 agent = "copilot"
 dir = "/srv/session-archive/buildbox/copilot"
-machine = "buildbox"
+machine = "0123456789abcdef0123456789abcdef" # Buildbox installation ID
 
 [[session_sources]]
 agent = "claude"
 dir = "/srv/session-archive/buildbox/claude/projects"
-machine = "buildbox"
+machine = "0123456789abcdef0123456789abcdef" # Buildbox installation ID
 
 [[session_sources]]
 agent = "codex"
 dir = "/srv/session-archive/laptop/codex/sessions"
-machine = "laptop"
+machine = "fedcba9876543210fedcba9876543210" # Laptop installation ID
 ```
 
 `agent` must be a supported AgentsView parser name. `dir` must be a filesystem
-root in that agent's native layout. `machine` uses the same machine label shown
-in session filters and configured by `[pg].machine_name`. If `machine` is
-omitted, AgentsView uses the primary viewer's hostname.
+root in that agent's native layout. For a remote root, set `machine` to the
+peer's `id` from `installation.json`. For a local root, omit `machine` to use
+the primary viewer's installation ID. Display labels are separate from these
+keys; `local_machine_name` changes the displayed name after a daemon restart.
+
+Hostnames adopted by this installation resolve to its ID. Those aliases remain
+reserved for existing filters and URLs; do not reuse them for another machine. A
+matching display label alone does not make a source local.
 
 Per-agent `dirs` arrays and environment variables select session roots.
 Structured sources are additive:
@@ -52,13 +57,13 @@ dirs = ["~/.copilot"]
 [[session_sources]]
 agent = "copilot"
 dir = "/srv/session-archive/buildbox/copilot"
-machine = "buildbox"
+machine = "0123456789abcdef0123456789abcdef" # Buildbox installation ID
 ```
 
 AgentsView expands `~/` and resolves local roots to absolute paths with symbolic
 links resolved. Equivalent roots are scanned once. When a structured source
 names the same root as a per-agent array, default, or environment variable, the
-structured entry supplies the machine label.
+structured entry supplies the machine key.
 
 `session_sources` accepts filesystem roots only. Keep using the existing
 `agents.<id>.dirs` arrays for `s3://` roots; S3 ingestion has established
@@ -131,12 +136,12 @@ preferably read-only:
 [[session_sources]]
 agent = "claude"
 dir = "/mnt/sessions/buildbox/claude/projects"
-machine = "buildbox"
+machine = "0123456789abcdef0123456789abcdef" # Buildbox installation ID
 
 [[session_sources]]
 agent = "copilot"
 dir = "/mnt/sessions/laptop/copilot"
-machine = "laptop"
+machine = "fedcba9876543210fedcba9876543210" # Laptop installation ID
 ```
 
 Shared mounts remove the copy step, but freshness and watcher behavior depend on
@@ -145,23 +150,26 @@ reliably; the periodic sync remains the backstop.
 
 ## Identity, Filtering, and Freshness
 
-- The machine label is stored per discovered source root. Filter sessions by
+- The machine key is stored per discovered source root. Filter sessions by
   `machine` in the session browser, API, and analytics views.
-- A session keeps the machine label it received when it was first ingested.
+- A session keeps the machine key it received when it was first ingested.
   Editing a source's `machine` value affects newly discovered sessions but
   does not retroactively relabel existing ones, even when their source files
-  later change. `agentsview sync --full` also preserves the stored label.
-  Changing attribution for existing sessions is not currently supported.
-- Filesystem machine labels do **not** namespace session IDs. If the same native
+  later change. `agentsview sync --full` also preserves the stored key. The
+  [installation upgrade](/docs/configuration/#upgrading-historical-machine-keys)
+  adopts recorded local keys; use
+  [`db adopt-machine`](/docs/commands/#agentsview-db-adopt-machine) to select
+  additional historical keys you own.
+- Filesystem machine keys do **not** namespace session IDs. If the same native
   session is copied into two configured roots, AgentsView continues to
   deduplicate it by the agent's native session ID.
 - A newly transported or changed file is normally detected by the filesystem
   watcher. AgentsView also performs a full periodic sync every 15 minutes.
 - Roots that cannot be watched fall back to polling, as described under
   [Large Watch Trees](/docs/configuration/#large-watch-trees).
-- A machine label changes attribution, not source identity or conflict
-  resolution. Do not intentionally place different sessions with the same
-  native ID in separate roots.
+- A machine key changes attribution, not source identity or conflict resolution.
+  Do not intentionally place different sessions with the same native ID in
+  separate roots.
 - Deleting a transported source file does not automatically erase the archived
   session. The local SQLite database is a persistent archive; use pruning
   tools when removal is intended.

@@ -228,6 +228,9 @@ func runServe(cfg config.Config, opts serveOptions) {
 			RemoveDaemonRuntime(runtimeRecordDataDir)
 		}
 	}()
+	if err := database.ApplyMachineAliases(ctx, &cfg); err != nil {
+		fatal("resolving source machine identities: %v", err)
+	}
 
 	if n := len(db.UserAutomationPrefixes()); n > 0 {
 		log.Printf("loaded %d user automation prefix(es) from config", n)
@@ -249,9 +252,9 @@ func runServe(cfg config.Config, opts serveOptions) {
 	idleTracker := newDaemonIdleTracker(cfg, stop)
 
 	telemetryReporter := telemetry.NewReporterOrDisabled(telemetry.Options{
-		DataDir: cfg.DataDir,
-		Version: version,
-		Commit:  commit,
+		InstallationID: cfg.InstallationID,
+		Version:        version,
+		Commit:         commit,
 	})
 	defer func() {
 		if err := telemetryReporter.Close(); err != nil {
@@ -303,7 +306,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 			DisabledAgents:          cfg.DisabledAgents,
 			IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths:      cfg.ScanProtectedPaths,
-			Machine:                 cfg.LocalMachineName,
+			Machine:                 cfg.InstallationID,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			ArchiveContent:          cfg.ArchiveContent,
 			Emitter:                 emitter,
@@ -431,7 +434,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	identityBackfillEngine := engine
 	if identityBackfillEngine == nil {
 		identityBackfillEngine = sync.NewEngine(database, sync.EngineConfig{
-			Machine:            cfg.LocalMachineName,
+			Machine:            cfg.InstallationID,
 			ScanProtectedPaths: cfg.ScanProtectedPaths,
 			ArchiveContent:     cfg.ArchiveContent,
 		})
@@ -1336,13 +1339,17 @@ func openDB(cfg config.Config) (*db.DB, error) {
 		return nil, err
 	}
 	database.SetToolResultImages(cfg.ToolResultImages)
-	localMachine := cfg.LocalMachineName
-	if strings.TrimSpace(localMachine) == "" {
-		localMachine = "local"
+	if cfg.InstallationID != "" {
+		if err := database.EnsureInstallationIdentity(context.Background(), cfg.InstallationID); err != nil {
+			database.Close()
+			return nil, fmt.Errorf("adopting installation identity: %w", err)
+		}
 	}
-	if err := database.ConfigureArtifactLocalMachine(localMachine); err != nil {
-		database.Close()
-		return nil, fmt.Errorf("configuring artifact local machine: %w", err)
+	if cfg.InstallationID != "" && cfg.LocalMachineName != "" {
+		if err := database.SetSyncState(db.MachineLabelKeyPrefix+cfg.InstallationID, cfg.LocalMachineName); err != nil {
+			database.Close()
+			return nil, fmt.Errorf("recording installation display name: %w", err)
+		}
 	}
 	applyCustomPricing(database, cfg)
 	return database, nil
@@ -1392,6 +1399,16 @@ func openWriteDB(
 	ctx context.Context,
 	cfg config.Config,
 ) (*db.DB, *writeOwnerLock, error) {
+	return openWriteDBWith(ctx, cfg, openDB)
+}
+
+// Explicit ownership adoption uses the same writer exclusion and interrupted
+// compaction recovery as every other direct archive write, before normal
+// startup can require an ownership choice.
+func openWriteDBWith(
+	ctx context.Context, cfg config.Config,
+	openArchive func(config.Config) (*db.DB, error),
+) (*db.DB, *writeOwnerLock, error) {
 	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
 		return nil, nil, err
 	}
@@ -1409,7 +1426,7 @@ func openWriteDB(
 			"recovering interrupted archive compaction: %w", err,
 		)
 	}
-	database, err := openDB(cfg)
+	database, err := openArchive(cfg)
 	if err != nil {
 		_ = lock.Close()
 		return nil, nil, err

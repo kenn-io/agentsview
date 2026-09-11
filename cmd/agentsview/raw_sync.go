@@ -374,7 +374,7 @@ func rawSyncProvidersAndRoots(
 			continue
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots: configuredRoots, Machine: cfg.LocalMachineName,
+			Roots: configuredRoots, Machine: cfg.InstallationID,
 			SourceMachines: cfg.SourceMachines[def.Type],
 		})
 		watchRoots, err := parser.ResolveWatchRoots(ctx, provider)

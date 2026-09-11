@@ -2735,24 +2735,21 @@ func CheckSchemaCompat(
 		)
 	}
 	rows.Close()
-	return nil
-}
-
-// checkPushSchemaCompat verifies schema elements that only push needs. PG serve
-// never reads sync_metadata or sessions.owner_marker, so they live outside
-// CheckSchemaCompat (which gates read-only serve startup and now probes the
-// serve-read sessions.source_archive_id/file_path provenance columns itself)
-// and are checked only on the push fast path.
-func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx,
+	rows, err = db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"sync_metadata table missing required columns: %w", err)
 	}
 	rows.Close()
+	return nil
+}
 
-	rows, err = db.QueryContext(ctx,
+// checkPushSchemaCompat verifies session ownership columns used only by push.
+// CheckSchemaCompat also checks sync_metadata because PG serve reads machine
+// display labels from it.
+func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx,
 		`SELECT owner_marker, prompt_evidence_discarded FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -2764,7 +2761,7 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 
 // pushSchemaCurrent reports whether the PG schema has everything a push
 // needs. CheckSchemaCompat covers the read and PG serve write paths but does
-// not require push-only sync_metadata or sessions.owner_marker (verified by
+// not require push-only sessions.owner_marker (verified by
 // checkPushSchemaCompat), model_pricing (always queried by syncModelPricing)
 // or cursor_usage_events (written by syncCursorUsageEvents), so probe those
 // explicitly. It also requires the cursor dedup index, which the cursor usage

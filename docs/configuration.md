@@ -18,6 +18,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── sessions.db      # SQLite database (WAL mode)
 ├── vectors.db       # Semantic-search vector index (when [vector] is enabled)
 ├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
+├── installation.json # Installation ID and initial display name
 ├── config.toml      # Configuration file
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
@@ -27,15 +28,15 @@ AgentsView stores all persistent data under a single directory, defaulting to
 
 `usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user data.
 It is safe to delete when no AgentsView process is running; the next usage query
-rebuilds it automatically. `sessions.db` remains the only file that needs
-backing up.
+rebuilds it automatically. Back up `sessions.db` for session history and
+`config.toml` for settings and `installation.json` for installation identity.
 
 The desktop app and CLI share a detached local daemon for fresh reads and
 writes. A running daemon owns local SQLite writes for this data directory and
-self-exits after an idle period. Read-only CLI commands can still open
-`sessions.db` directly in read-only mode when no daemon is running. Set
-`AGENTSVIEW_NO_DAEMON=1` for scripts or CI jobs that must never auto-start a
-daemon.
+self-exits after an idle period. Ordinary session commands require the daemon.
+Dedicated diagnostics, including `db adopt-machine --list` and `doctor sync`,
+can inspect the archive without starting it. Set `AGENTSVIEW_NO_DAEMON=1` when a
+script must never auto-start a daemon; commands that require one will refuse.
 
 The Cursor source in code attribution stats is a live, machine-local read from
 `~/.cursor/ai-tracking/ai-code-tracking.db` by default. Set
@@ -115,6 +116,59 @@ Limits of the narrower policies:
   names changed in PostgreSQL. Other sessions in a shared PostgreSQL store
   are unaffected.
 
+## Installation Identity
+
+Local sessions use a random installation ID and an initial display name, saved in
+`installation.json` as `id` and `name`. The name defaults to the hostname. On
+upgrade, AgentsView adopts an existing `telemetry-install-id` once, then removes
+that old file. This works with telemetry disabled. Read-only commands leave both
+files unchanged.
+
+The ID identifies an installation, not physical hardware. It survives updates,
+binary replacements, restarts, and network or hostname changes. A fresh data
+directory creates a new ID; copying the data directory copies the identity.
+Restore the original `installation.json` from a backup to
+keep that identity. Deleting it deliberately creates a distinct installation;
+that new installation does not automatically take ownership of the old one's
+sessions. If recovery starts with a corrupt record and a leftover
+`telemetry-install-id`, remove both files only when you intend to create a new ID.
+
+The saved `name` is the default display label. Set `local_machine_name` in
+`config.toml` to override it, then run `agentsview daemon restart`. Any non-empty
+label is allowed, including `local`. Changing the label leaves session keys
+unchanged; PostgreSQL and DuckDB receive the label on the next push. Saving the
+default label does not rewrite `config.toml` or its comments. The existing cursor
+secret is reused; a missing cursor secret is still generated and saved. Machine
+filters use keys; `/api/v1/machines` returns display labels and known aliases
+separately.
+
+### Upgrading Historical Machine Keys
+
+At writable startup, AgentsView moves sessions from the archive's recorded local
+machine to the installation ID. The saved ownership record was introduced in
+v0.40.0; v0.39.0 archives do not have it. Older `local` rows move too. Session IDs,
+messages, stars, pins, and other curation remain intact. Worktree rules and project
+and source metadata move with the sessions. Conflicting worktree rules stop the
+migration so you can reconcile them without losing edits.
+
+Adopted hostnames remain aliases for old filters and URLs. Display labels do not
+establish ownership, and other historical hostnames remain separate until you
+explicitly select them. Alias keys are reserved redirects: use a peer's
+installation ID for a remote source and omit `machine` for a local root.
+
+If an archive has named machines but no saved local ownership, writable startup
+stops and asks you to choose. You can still inspect it with
+`agentsview db adopt-machine --list`, which prints machine keys and session counts
+without starting a daemon or changing configuration. Stop the daemon, then run
+[`agentsview db adopt-machine`](/docs/commands/#agentsview-db-adopt-machine) with
+the old machine keys you own. Use `--no-local-sessions` alone if every existing
+named machine belongs to another installation.
+
+PostgreSQL publishes the migrated sessions and metadata on the next incremental
+push. DuckDB rebuilds its mirror once when the default machine key changes.
+The SQLite archive stays intact. PostgreSQL rejects an alias that belongs
+to another installation instead of replacing its owner.
+
 ## Config File
 
 The config file at `~/.agentsview/config.toml` is auto-created on first run. It
@@ -136,6 +190,7 @@ chart_palette = "agentsview"
 
 | Field                               | Description                                                                                                                                                                                                                                               |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `local_machine_name`               | Optional display-name override; takes effect after a daemon restart |
 | `cursor_secret`                     | Auto-generated HMAC key for pagination cursor signing                                                                                                                                                                                                     |
 | `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview usage cursor`                                                                                                                                                                                                    |
 | `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                                                                                                                                                                |
@@ -161,7 +216,7 @@ chart_palette = "agentsview"
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)           |
 | `[insights]`                        | Optional generated-insights endpoint and model; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                             |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                 |
-| `[[session_sources]]`               | Additional filesystem session roots with per-root machine labels — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                  |
+| `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                  |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                       |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/docs/token-usage/#custom-model-pricing)                                                                                                                                         |
 
@@ -1039,7 +1094,7 @@ leave unlinked for AgentsView's sake.
 - Roots that resolve to the same directory, including through symbolic links,
   are scanned once. Configuration loading stores the resolved absolute root
   and its provider metadata paths. A matching `[[session_sources]]` entry still
-  supplies the machine label.
+  supplies the machine key.
 - Metadata belongs to the configured transcript root. If two homes share
   `sessions/` but keep separate `archived_sessions/`, their shared sessions
   read both homes' metadata; each archive reads only its own home's metadata.
@@ -1062,18 +1117,21 @@ transported to this AgentsView host:
 [[session_sources]]
 agent = "copilot"
 dir = "/srv/session-archive/buildbox/copilot"
-machine = "buildbox"
+machine = "0123456789abcdef0123456789abcdef" # Peer installation ID
 ```
 
 The fields are `agent`, `dir`, and optional `machine`. Entries are additive to
 the per-agent arrays, defaults, and environment variables above. Equivalent
-roots are deduplicated; a structured entry supplies the machine label when it
-duplicates a shorthand root. An omitted `machine` uses the local hostname.
+roots are deduplicated; a structured entry supplies the machine key when it
+duplicates a shorthand root. Use the peer's `id` from `installation.json` for a
+remote root. An omitted `machine` uses this installation's ID. Proven old local
+keys resolve to that ID; a matching display label does not make a root local.
 
 Machine attribution is captured when each session is first ingested. Changing an
 entry's `machine` value affects newly discovered sessions but does not relabel
-existing sessions during ordinary syncs or `agentsview sync --full`. Changing
-attribution for existing sessions is not currently supported.
+existing sessions during ordinary syncs or `agentsview sync --full`. To adopt old
+keys belonging to this installation, use
+[`agentsview db adopt-machine`](/docs/commands/#agentsview-db-adopt-machine).
 
 See [Filesystem Session Sync](/docs/filesystem-sync/) for multi-machine
 examples, transport safety, ID deduplication, watcher behavior, and the
@@ -1510,8 +1568,8 @@ startup and every 24 hours while running. The ping contains only:
 
 - app version and git commit
 - operating system and CPU architecture
-- a random install ID, generated once and stored in
-  `~/.agentsview/telemetry-install-id`
+- the application-owned installation ID stored in
+  `~/.agentsview/installation.json`
 
 It contains no session data, prompts, project names, file paths, account
 information, or hostname, and the events are sent with person-profile processing
@@ -1523,6 +1581,9 @@ Disable it with an environment variable:
 ```bash
 export AGENTSVIEW_TELEMETRY_ENABLED=0
 ```
+
+This disables outbound telemetry, not the installation identity used for local
+session attribution.
 
 ### Disabling Update Checks
 

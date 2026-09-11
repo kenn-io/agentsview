@@ -27,7 +27,7 @@ func collectLiveActivityTargets(
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots:   roots,
-			Machine: cfg.LocalMachineName,
+			Machine: cfg.InstallationID,
 		})
 		hints, supported, err := parser.ResolveActivityHintProvider(provider)
 		if err != nil {

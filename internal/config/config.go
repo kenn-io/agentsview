@@ -720,11 +720,11 @@ type Config struct {
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration          `json:"-" toml:"-"`
-	// LocalMachineName is the operating-system hostname used to identify
-	// sessions ingested from this machine. It is runtime-derived rather than
-	// persisted configuration so local and remote source labels share the same
-	// hostname namespace.
-	LocalMachineName string `json:"-" toml:"-"`
+	// InstallationID identifies this data directory independently of its label.
+	InstallationID string `json:"-" toml:"-"`
+	// LocalMachineName is the display label, initially the system hostname.
+	LocalMachineName           string `json:"-" toml:"local_machine_name"`
+	localMachineNameConfigured bool
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -735,6 +735,7 @@ type Config struct {
 	// each effective configured root to its machine label for sync.
 	SessionSources []SessionSource                        `json:"-" toml:"-"`
 	SourceMachines map[parser.AgentType]map[string]string `json:"-" toml:"-"`
+	machineAliases map[string]string
 	// ProviderMetadata holds provider-resolved metadata directories keyed by
 	// canonical transcript root. It is computed once while loading configuration.
 	ProviderMetadata     map[parser.AgentType]map[string][]string `json:"-" toml:"-"`
@@ -1190,7 +1191,7 @@ func LoadPGServePFlags(fs *pflag.FlagSet) (Config, error) {
 		return cfg, err
 	}
 	applyPFlags(&cfg, fs)
-	if err := finalize(&cfg); err != nil {
+	if err := finishLoadedConfig(&cfg); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -1204,7 +1205,7 @@ func LoadDuckDBServePFlags(fs *pflag.FlagSet) (Config, error) {
 		return cfg, err
 	}
 	applyPFlags(&cfg, fs)
-	if err := finalize(&cfg); err != nil {
+	if err := finishLoadedConfig(&cfg); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -1221,9 +1222,6 @@ func loadPGServeBase() (Config, error) {
 	}
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
-	}
-	if err := cfg.ensureCursorSecret(); err != nil {
-		return cfg, fmt.Errorf("ensuring cursor secret: %w", err)
 	}
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
 
@@ -1274,6 +1272,10 @@ func loadConfigLayers() (Config, error) {
 }
 
 func finishLoadedConfig(cfg *Config) error {
+	// Resolve installation identity before source roots and their metadata.
+	if err := cfg.ensureInstallationID(); err != nil {
+		return fmt.Errorf("ensuring installation identity: %w", err)
+	}
 	if err := finalize(cfg); err != nil {
 		return err
 	}
@@ -1299,6 +1301,9 @@ func LoadReadOnly() (Config, error) {
 
 	if err := cfg.loadFileReadOnly(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
+	}
+	if err := cfg.readInstallationID(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return cfg, fmt.Errorf("reading installation identity: %w", err)
 	}
 	if err := finalize(&cfg); err != nil {
 		return cfg, err
@@ -1464,6 +1469,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		return err
 	}
 	var file struct {
+		LocalMachineName               *string                `toml:"local_machine_name"`
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
 		CursorAdminAPIKey              string                 `toml:"cursor_admin_api_key"`
@@ -1517,6 +1523,14 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.CursorSecret != "" {
 		c.CursorSecret = file.CursorSecret
+	}
+	if file.LocalMachineName != nil {
+		name := strings.TrimSpace(*file.LocalMachineName)
+		if name == "" {
+			return fmt.Errorf("local_machine_name must be non-empty")
+		}
+		c.LocalMachineName = name
+		c.localMachineNameConfigured = true
 	}
 	if file.CursorAdminAPIKey != "" && c.CursorAdminAPIKey == "" {
 		c.CursorAdminAPIKey = file.CursorAdminAPIKey
@@ -2328,7 +2342,7 @@ func (c *Config) resolveSessionSources() error {
 			recordMetadata(def.Type, value, metadataDir)
 			seen[key] = rootState{
 				dir:     value,
-				machine: c.LocalMachineName,
+				machine: c.InstallationID,
 			}
 			dirs = append(dirs, value)
 		}
@@ -2371,7 +2385,7 @@ func (c *Config) resolveSessionSources() error {
 					continue
 				}
 				recordMetadata(def.Type, dir, metadataDir)
-				seen[key] = rootState{dir: dir, machine: c.LocalMachineName}
+				seen[key] = rootState{dir: dir, machine: c.InstallationID}
 				c.AgentDirs[def.Type] = append(c.AgentDirs[def.Type], dir)
 			}
 			c.agentDirSource[def.Type] = dirFile
@@ -2413,7 +2427,7 @@ func (c *Config) resolveSessionSources() error {
 				fmt.Sprintf("entry %d (%s): %v", entry, agent, err))
 			continue
 		}
-		machine := c.LocalMachineName
+		machine := c.InstallationID
 		if input.Machine != nil {
 			machine = strings.TrimSpace(*input.Machine)
 			if machine == "" {
@@ -2474,6 +2488,7 @@ func (c *Config) resolveSessionSources() error {
 	}
 	c.SessionSources = resolved
 	c.SourceMachines = sourceMachines
+	c.ApplyMachineAliases(c.machineAliases)
 	c.ProviderMetadata = metadata
 	return nil
 }
@@ -3060,11 +3075,7 @@ func (c *Config) resolvePGConfig(
 		pg.Schema = "agentsview"
 	}
 	if pg.MachineName == "" {
-		h, err := os.Hostname()
-		if err != nil {
-			return pg, fmt.Errorf("os.Hostname failed (%w); set machine_name explicitly in config", err)
-		}
-		pg.MachineName = h
+		pg.MachineName = c.InstallationID
 	}
 	return pg, nil
 }
@@ -3179,11 +3190,7 @@ func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 		duck.Path = filepath.Join(c.DataDir, "sessions.duckdb")
 	}
 	if duck.MachineName == "" {
-		h, err := os.Hostname()
-		if err != nil {
-			return duck, fmt.Errorf("os.Hostname failed (%w); set machine_name explicitly in config", err)
-		}
-		duck.MachineName = h
+		duck.MachineName = c.InstallationID
 	}
 	return duck, nil
 }

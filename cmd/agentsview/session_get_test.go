@@ -160,10 +160,10 @@ func TestResolveBareCodebuffID_LocalMachine_Match(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		// cfg.LocalMachineName drives the --machine=local filter:
-		// a session whose detail.Machine equals cfg.LocalMachineName
+		// cfg.InstallationID drives the --machine=local filter:
+		// a session whose detail.Machine equals cfg.InstallationID
 		// passes the gate.
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -190,7 +190,7 @@ func TestResolveBareCodebuffID_LocalMachine_Mismatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -219,7 +219,7 @@ func TestResolveBareCodebuffID_WildcardMatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -248,7 +248,7 @@ func TestResolveBareCodebuffID_SpecificMachineMatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -278,7 +278,7 @@ func TestResolveBareCodebuffID_SpecificMachineMismatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -317,7 +317,7 @@ func TestResolveBareCodebuffID_FreebuffPrefixProbeFromCodebuffRoots(t *testing.T
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -524,7 +524,7 @@ func TestResolveBareCodebuffID_RemoteHostPrefixedMatch(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -565,7 +565,7 @@ func TestResolveBareCodebuffID_RemoteAmbiguity(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -611,7 +611,7 @@ func TestResolveBareCodebuffID_RemoteOnlyNoLocations(t *testing.T) {
 	// return without ever querying the database.
 	tmp := t.TempDir()
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -647,7 +647,7 @@ func TestResolveBareCodebuffID_FailClosedOnLookupError(t *testing.T) {
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	stageCodebuffSession(t, tmp, "otherproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -685,7 +685,7 @@ func TestResolveBareCodebuffID_ArchiveOnlyLocalMatch(t *testing.T) {
 	// tree is gone, so only the archive row can resolve the ID.
 	tmp := t.TempDir()
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -719,7 +719,7 @@ func TestResolveBareCodebuffID_ArchivedLocalAndRemoteTwinAmbiguous(t *testing.T)
 	// No on-disk session: the local row exists only in the archive.
 	tmp := t.TempDir()
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},
@@ -761,7 +761,7 @@ func TestResolveBareCodebuffID_OnDiskRowNotDoubleCounted(t *testing.T) {
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
 	cfg := config.Config{
-		LocalMachineName: "test-machine",
+		InstallationID: "test-machine",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {tmp},
 		},

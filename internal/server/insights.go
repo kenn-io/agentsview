@@ -145,6 +145,7 @@ func insightGenerateClientMessage(
 }
 
 func (s *Server) humaGenerateCannedInsight(
+	ctx context.Context,
 	req generateInsightRequest,
 ) (*huma.StreamResponse, error) {
 	req.Prompt = strings.TrimSpace(req.Prompt)
@@ -188,6 +189,11 @@ func (s *Server) humaGenerateCannedInsight(
 	filters, message, ok := normalizeCannedSessionFilters(req)
 	if !ok {
 		return nil, apiError(http.StatusBadRequest, message)
+	}
+	var err error
+	filters.Machine, err = db.ResolveMachineFilter(ctx, s.db, filters.Machine)
+	if err != nil {
+		return nil, serverError(err)
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)

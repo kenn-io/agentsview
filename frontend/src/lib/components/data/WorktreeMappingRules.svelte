@@ -17,6 +17,7 @@
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
 
   interface Props {
     readOnly?: boolean;
@@ -80,7 +81,12 @@
   let refreshVersionInitialized = false;
 
   const machineOptions = $derived(
-    machines.map((name) => ({ name, label: name, displayLabel: name })),
+    machines.map((name) => ({
+      name,
+      label: sessions.machineLabel(name),
+      displayLabel: sessions.machineLabel(name),
+      meta: sessions.machineLabel(name) !== name ? name : undefined,
+    })),
   );
   const isRepoDotWorktrees = $derived(layout === repoDotWorktreesLayout);
   const canSave = $derived(
@@ -345,7 +351,7 @@
       <Typeahead
         options={machineOptions}
         value={machine}
-        fallbackLabel={machine || localMachine}
+        fallbackLabel={sessions.machineLabel(machine || localMachine)}
         placeholder={m.worktree_select_machine()}
         title={m.worktree_select_machine()}
         emptyLabel={m.worktree_no_machines()}

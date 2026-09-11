@@ -96,6 +96,16 @@ description: Release history for AgentsView
   from GenAI Prices when available, including Luna and Terra prices before
   the July 30 cut. Astra gains offline pricing at Bedrock rates. Full
   region-qualified catalog names retain their own pricing.
+
+- Keep local session history together across hostname changes. AgentsView saves
+  the installation ID and initial display name in `installation.json`, adopting
+  an existing telemetry ID once. Upgrades move historical local sessions using
+  saved ownership; older archives ask you to choose with `db adopt-machine`.
+  Session IDs, messages, curation, and worktree rules stay intact, and old machine
+  filters and URLs keep working through recorded aliases. Display-name changes
+  take effect after a daemon restart and the next mirror push. PostgreSQL updates
+  incrementally; DuckDB rebuilds its mirror once when the default key changes.
+
 - Preserve nonempty tool output from legacy Cursor text transcripts. Existing
   archived sessions gain the output on their next sync when the source files
   are still available. (#1627)

@@ -8,6 +8,7 @@
   } from "../../stores/activity.svelte.js";
   import type { ActivityReportProgress } from "../../api/activity-report.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import {
     yokedDates,
@@ -156,8 +157,9 @@
     },
     ...activity.machines.map((machine) => ({
       name: machine,
-      label: machine,
-      displayLabel: machine,
+      label: sessions.machineLabel(machine),
+      displayLabel: sessions.machineLabel(machine),
+      meta: sessions.machineLabel(machine) !== machine ? machine : undefined,
     })),
   ]);
   const automationOptions: TypeaheadOption[] = $derived([

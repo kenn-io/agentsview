@@ -660,12 +660,23 @@ func TestCheckSchemaCompatIgnoresPushOnlySchema(t *testing.T) {
 	state.queryErrors = []schemaProbeQueryError{
 		{contains: "owner_marker", err: errors.New(
 			`ERROR: column "owner_marker" does not exist (SQLSTATE 42703)`)},
-		{contains: "from sync_metadata", err: errors.New(
-			`ERROR: relation "sync_metadata" does not exist (SQLSTATE 42P01)`)},
 	}
 
 	require.NoError(t, CheckSchemaCompat(context.Background(), pg),
 		"read compatibility must not require push-only schema")
+}
+
+func TestCheckSchemaCompatRequiresMachineLabelMetadata(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "from sync_metadata",
+		err:      errors.New(`ERROR: relation "sync_metadata" does not exist (SQLSTATE 42P01)`),
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sync_metadata table missing required columns")
 }
 
 func TestCheckSchemaCompatRequiresUsageJSONHelper(t *testing.T) {

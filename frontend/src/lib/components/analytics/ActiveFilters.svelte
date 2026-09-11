@@ -1,5 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import {
     CalendarIcon,
     ClockIcon,
@@ -165,12 +166,12 @@
       <button
         class="filter-chip"
         onclick={() => analytics.removeMachine(machine)}
-        title={m.shared_active_filters_remove_machine({ machine })}
+        title={m.shared_active_filters_remove_machine({ machine: sessions.machineLabel(machine) })}
       >
         <span class="chip-icon">
           <MonitorIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
-        {machine}
+        {sessions.machineLabel(machine)}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>

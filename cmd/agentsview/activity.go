@@ -389,6 +389,10 @@ func resolveActivityReport(
 		if err != nil {
 			return activity.Report{}, err
 		}
+		f.Machine, err = db.ResolveMachineFilter(context.Background(), database, f.Machine)
+		if err != nil {
+			return activity.Report{}, err
+		}
 	}
 
 	var onProgress activity.ProgressFunc

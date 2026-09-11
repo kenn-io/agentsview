@@ -113,9 +113,9 @@ func newDirectSyncFixture(t *testing.T) (config.Config, *db.DB) {
 		0o600,
 	))
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "collector-host",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "collector-host",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {localRoot},
 		},

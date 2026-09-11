@@ -279,6 +279,8 @@ export * from "./githubConfigResponse.ts";
 export * from "./headApiV1RawSyncUploadsByUploadIdPathParameters.ts";
 export * from "./insightsResponse.ts";
 export * from "./machinesResponse.ts";
+export * from "./machinesResponseMachineAliases.ts";
+export * from "./machinesResponseMachineLabels.ts";
 export * from "./modelTotal.ts";
 export * from "./moneyMoney.ts";
 export * from "./opener.ts";

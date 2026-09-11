@@ -28,10 +28,8 @@ func resolveTargetsForTest(t *testing.T, cfg config.Config) remotesync.TargetSet
 }
 
 func TestResolveTargetsExcludesNonLocalStructuredSessionSources(t *testing.T) {
-	localMachine, err := os.Hostname()
-	require.NoError(t, err)
-	require.NotEmpty(t, localMachine)
-	foreignMachine := localMachine + "-archive"
+	const localMachine = "0123456789abcdef0123456789abcdef"
+	const foreignMachine = "remote-host"
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	dataDir := filepath.Join(home, "data")
@@ -73,9 +71,10 @@ machine = %q
 		0o600,
 	))
 
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "telemetry-install-id"), []byte(localMachine), 0o600))
 	cfg, err := config.LoadMinimal()
 	require.NoError(t, err)
-	require.Equal(t, localMachine, cfg.LocalMachineName)
+	require.Equal(t, localMachine, cfg.InstallationID)
 	targets := resolveTargetsForTest(t, cfg)
 
 	assert.ElementsMatch(t, []string{localRoot, localStructuredRoot},

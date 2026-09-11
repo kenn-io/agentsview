@@ -3223,9 +3223,9 @@ func TestSyncWatchBatchFullRecoveryDefersBrokenSymlinkRoot(t *testing.T) {
 	))
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeRoot},
 			parser.AgentCodex:  {codexRoot},
@@ -3234,7 +3234,7 @@ func TestSyncWatchBatchFullRecoveryDefersBrokenSymlinkRoot(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3322,9 +3322,9 @@ func TestSyncWatchBatchFullRecoveryDefersUnavailableRoots(t *testing.T) {
 	))
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeRoot},
 			parser.AgentCodex:  {codexRoot},
@@ -3333,7 +3333,7 @@ func TestSyncWatchBatchFullRecoveryDefersUnavailableRoots(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3408,9 +3408,9 @@ func TestSyncWatchBatchFullRecoveryDefersOverlappingUnavailableRoot(t *testing.T
 	))
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {baseRoot, nestedRoot},
 		},
@@ -3418,7 +3418,7 @@ func TestSyncWatchBatchFullRecoveryDefersOverlappingUnavailableRoot(t *testing.T
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3481,9 +3481,9 @@ func TestSyncWatchBatchDirectoryRenameDefersUnavailableProviderRoots(t *testing.
 	writeCodexSession(rootB, uuidB)
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {rootA, rootB},
 		},
@@ -3491,7 +3491,7 @@ func TestSyncWatchBatchDirectoryRenameDefersUnavailableProviderRoots(t *testing.
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 

@@ -210,7 +210,7 @@ func (s *Server) humaGenerateInsight(
 			"session_id is only supported for agent_analysis")
 	}
 	if req.Type == insight.CannedType {
-		return s.humaGenerateCannedInsight(req)
+		return s.humaGenerateCannedInsight(ctx, req)
 	}
 	if req.SessionID != "" {
 		session, err := s.db.GetSession(ctx, req.SessionID)

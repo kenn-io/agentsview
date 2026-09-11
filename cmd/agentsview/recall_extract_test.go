@@ -63,14 +63,17 @@ endpoint = %q
 // seedExtractCLISession stores one ended, extractable session.
 func seedExtractCLISession(t *testing.T, dataDir string) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err)
+	cfg.DBPath = filepath.Join(dataDir, "sessions.db")
+	d, err := openDB(cfg)
 	require.NoError(t, err)
 	defer d.Close()
 	ended := time.Now().Add(-time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
 	require.NoError(t, d.UpsertSession(db.Session{
 		ID:           "extract-session",
 		Project:      "proj",
-		Machine:      "local",
+		Machine:      cfg.InstallationID,
 		Agent:        "claude",
 		EndedAt:      &ended,
 		MessageCount: 2,

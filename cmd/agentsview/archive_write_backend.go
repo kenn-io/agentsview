@@ -396,6 +396,10 @@ func resolveArchiveWriteBackend(
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := database.ApplyMachineAliases(ctx, &appCfg); err != nil {
+		closeWriteDB(database, writeLock)
+		return nil, nil, err
+	}
 	return &localArchiveWriteBackend{
 		appCfg:   appCfg,
 		database: database,
@@ -971,7 +975,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		DisabledAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
-		Machine:                 b.appCfg.LocalMachineName,
+		Machine:                 b.appCfg.InstallationID,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 		ArchiveContent:          b.appCfg.ArchiveContent,
 	})
@@ -1104,7 +1108,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 		DisabledAgents:          b.appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
-		Machine:                 b.appCfg.LocalMachineName,
+		Machine:                 b.appCfg.InstallationID,
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 		ArchiveContent:          b.appCfg.ArchiveContent,
 	})

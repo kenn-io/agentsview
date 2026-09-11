@@ -285,7 +285,7 @@ func isLocalRemoteSyncSource(
 	cfg config.Config, agent parser.AgentType, dir string,
 ) bool {
 	machine, ok := cfg.SourceMachines[agent][dir]
-	return !ok || machine == "" || machine == cfg.LocalMachineName
+	return !ok || machine == "" || machine == cfg.InstallationID
 }
 
 // filterForbiddenTargets drops resolved targets that lie inside a forbidden

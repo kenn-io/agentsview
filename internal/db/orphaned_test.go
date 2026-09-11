@@ -12,6 +12,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCopySyncStateQueuesBothRecordedLocalArtifactIdentities(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	require.NoError(t, source.SetSyncState("artifact_origin_id", "origin-a"))
+	require.NoError(t, source.SetSyncState("artifact_local_machine_name", "previous-machine"))
+	require.NoError(t, source.SetSyncState("artifact_local_installation_id", "installation-a"))
+
+	replacement := testDB(t)
+	for _, machine := range []string{"local", "previous-machine", "installation-a", "other-machine"} {
+		require.NoError(t, replacement.UpsertSession(Session{
+			ID: machine, Machine: machine, Agent: "claude", Project: "project-a",
+		}))
+	}
+	require.NoError(t, replacement.CopySyncStateFrom(source.Path()))
+	queued, err := replacement.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(queued))
+	for _, item := range queued {
+		ids = append(ids, item.SessionID)
+	}
+	assert.ElementsMatch(t, []string{"local", "previous-machine", "installation-a"}, ids)
+}
+
 func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()
