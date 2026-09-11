@@ -832,7 +832,8 @@ func TestExportPreservesSessionIDsAfterInstallationAdoption(t *testing.T) {
 	require.Len(t, before.Sessions, 2)
 
 	const installationID = "0123456789abcdef0123456789abcdef"
-	require.NoError(t, database.EnsureInstallationIdentity(t.Context(), installationID))
+	_, err = database.EnsureInstallationIdentity(t.Context(), installationID)
+	require.NoError(t, err)
 	for _, session := range []struct{ id, machine string }{
 		{"installation-session", installationID},
 		{"unrelated-alias", "renamed.example"},

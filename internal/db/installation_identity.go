@@ -9,10 +9,6 @@ import (
 	"strings"
 )
 
-// ErrMachineOwnershipRequired means the archive predates recorded local
-// ownership. Neither today's hostname nor a display label can repair that gap.
-var ErrMachineOwnershipRequired = errors.New("archive local machine ownership is unknown")
-
 const archiveMachineKeysSQL = `SELECT machine FROM sessions
 	UNION SELECT machine FROM worktree_project_mappings
 	UNION SELECT machine FROM project_identity_observations
@@ -48,20 +44,25 @@ func (db *DB) ListMachineIdentityCandidates(ctx context.Context) ([]MachineIdent
 }
 
 // EnsureInstallationIdentity adopts the archive's recorded local owner once.
+// Archives that predate recorded ownership keep their named machines in place;
+// the returned keys are left for an explicit AdoptMachineIdentity decision.
 // The installation record is independent of this migration: replacing it starts
 // a new installation and must not silently claim the previous one's sessions.
-func (db *DB) EnsureInstallationIdentity(ctx context.Context, identity string) error {
-	return db.adoptMachineIdentity(ctx, identity, nil, false)
+func (db *DB) EnsureInstallationIdentity(ctx context.Context, identity string) ([]string, error) {
+	var unowned []string
+	err := db.adoptMachineIdentity(ctx, identity, nil, false, &unowned)
+	return unowned, err
 }
 
 // AdoptMachineIdentity records an operator's explicit ownership selection.
-// An empty selection confirms that existing named machines are all remote.
 // Callers must hold the archive write-owner lock, with ingestion stopped.
 func (db *DB) AdoptMachineIdentity(ctx context.Context, identity string, machines []string) error {
-	return db.adoptMachineIdentity(ctx, identity, machines, true)
+	return db.adoptMachineIdentity(ctx, identity, machines, true, nil)
 }
 
-func (db *DB) adoptMachineIdentity(ctx context.Context, identity string, machines []string, explicit bool) error {
+func (db *DB) adoptMachineIdentity(
+	ctx context.Context, identity string, machines []string, explicit bool, unowned *[]string,
+) error {
 	if strings.TrimSpace(identity) == "" || identity == "local" {
 		return errors.New("installation identity is required")
 	}
@@ -79,15 +80,11 @@ func (db *DB) adoptMachineIdentity(ctx context.Context, identity string, machine
 			return configureArtifactLocalMachineTx(ctx, tx, identity)
 		}
 		if !explicit && former == "" {
-			var unresolved string
-			err := tx.QueryRowContext(ctx, `SELECT machine FROM (`+archiveMachineKeysSQL+`)
-				WHERE machine NOT IN ('', 'local', ?) ORDER BY machine LIMIT 1`, identity).Scan(&unresolved)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("checking archive ownership: %w", err)
+			keys, err := unownedMachineKeysTx(ctx, tx, identity)
+			if err != nil {
+				return err
 			}
-			if unresolved != "" {
-				return fmt.Errorf("%w (existing machine %q); inspect with `agentsview db adopt-machine --list`, then stop the daemon and run `agentsview db adopt-machine <old-machine>` (list additional aliases you own), or `agentsview db adopt-machine --no-local-sessions` if all existing named machines are remote", ErrMachineOwnershipRequired, unresolved)
-			}
+			*unowned = keys
 		}
 		if explicit {
 			for _, machine := range machines {
@@ -135,6 +132,25 @@ func (db *DB) adoptMachineIdentity(ctx context.Context, identity string, machine
 		}
 		return configureArtifactLocalMachineTx(ctx, tx, identity)
 	})
+}
+
+// unownedMachineKeysTx lists named machines that no recorded owner explains.
+func unownedMachineKeysTx(ctx context.Context, tx *sql.Tx, identity string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT machine FROM (`+archiveMachineKeysSQL+`)
+		WHERE machine NOT IN ('', 'local', ?) ORDER BY machine`, identity)
+	if err != nil {
+		return nil, fmt.Errorf("checking archive ownership: %w", err)
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
 }
 
 func adoptMachineRowsTx(ctx context.Context, tx *sql.Tx, machine, identity string) error {

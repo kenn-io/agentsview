@@ -10,7 +10,7 @@ import (
 )
 
 func newDBAdoptMachineCommand() *cobra.Command {
-	var noLocalSessions, list bool
+	var list bool
 	cmd := &cobra.Command{
 		Use:          "adopt-machine [old-machine ...]",
 		Short:        "Assign historical local machine keys to this installation",
@@ -18,7 +18,7 @@ func newDBAdoptMachineCommand() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, machines []string) error {
 			if list {
-				if len(machines) != 0 || noLocalSessions {
+				if len(machines) != 0 {
 					return fmt.Errorf("use --list alone to inspect machine keys")
 				}
 				cfg, err := config.LoadReadOnly()
@@ -41,8 +41,8 @@ func newDBAdoptMachineCommand() *cobra.Command {
 				}
 				return out.Flush()
 			}
-			if (len(machines) == 0) != noLocalSessions {
-				return fmt.Errorf("select one or more old machine keys, or use --no-local-sessions alone")
+			if len(machines) == 0 {
+				return fmt.Errorf("select one or more old machine keys")
 			}
 			cfg, err := config.LoadMinimal()
 			if err != nil {
@@ -68,8 +68,6 @@ func newDBAdoptMachineCommand() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&noLocalSessions, "no-local-sessions", false,
-		"Confirm that existing named machines all belong to other installations")
 	cmd.Flags().BoolVar(&list, "list", false, "List archived machine keys without starting a daemon or changing the archive")
 	return cmd
 }

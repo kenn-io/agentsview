@@ -526,8 +526,8 @@ Local imports use a persisted installation ID, so updates and network changes do
 not split sessions across machine identities. `installation.json` stores the ID
 and initial display label; `local_machine_name` in `config.toml` overrides the
 label after a daemon restart. Upgrades adopt historical local sessions when the
-archive has saved ownership. Older archives ask you to select the local keys
-with `agentsview db adopt-machine`; see the
+archive has saved ownership. Older archives keep historical keys until you
+select the local ones with `agentsview db adopt-machine`; see the
 [upgrade guide](https://agentsview.io/configuration/#upgrading-historical-machine-keys).
 
 One primary AgentsView instance can ingest native agent session directories

@@ -100,7 +100,8 @@ description: Release history for AgentsView
 - Keep local session history together across hostname changes. AgentsView saves
   the installation ID and initial display name in `installation.json`, adopting
   an existing telemetry ID once. Upgrades move historical local sessions using
-  saved ownership; older archives ask you to choose with `db adopt-machine`.
+  saved ownership; older archives keep historical keys until you select the local
+  ones with `db adopt-machine`.
   Session IDs, messages, curation, and worktree rules stay intact, and old machine
   filters and URLs keep working through recorded aliases. Display-name changes
   take effect after a daemon restart and the next mirror push. PostgreSQL updates

@@ -16,12 +16,11 @@ import (
 func TestSourceMachineAliasesPreserveLocalProviderResolution(t *testing.T) {
 	const sessionID = "11111111-2222-4333-8444-555555555555"
 	for _, tc := range []struct {
-		agent      parser.AgentType
-		path       string
-		localState parser.SourceCwdState
+		agent parser.AgentType
+		path  string
 	}{
-		{parser.AgentCursor, filepath.Join("unknown-project", "agent-transcripts", sessionID+".jsonl"), parser.SourceCwdNone},
-		{parser.AgentAntigravityCLI, filepath.Join("conversations", sessionID+".pb"), parser.SourceCwdUnspecified},
+		{parser.AgentCursor, filepath.Join("unknown-project", "agent-transcripts", sessionID+".jsonl")},
+		{parser.AgentAntigravityCLI, filepath.Join("conversations", sessionID+".pb")},
 	} {
 		t.Run(string(tc.agent), func(t *testing.T) {
 			root := t.TempDir()
@@ -39,7 +38,8 @@ func TestSourceMachineAliasesPreserveLocalProviderResolution(t *testing.T) {
 					tc.agent: {root: "old-host"},
 				},
 			}
-			for _, expected := range []parser.SourceCwdState{parser.SourceCwdRemote, tc.localState} {
+			// The local cwd state differs by platform; only remoteness is under test.
+			for _, remote := range []bool{true, false} {
 				require.NoError(t, readOnly.ApplyMachineAliases(t.Context(), &cfg))
 				provider, ok := parser.NewProvider(tc.agent, parser.ProviderConfig{
 					Roots: []string{root}, Machine: cfg.InstallationID,
@@ -49,7 +49,7 @@ func TestSourceMachineAliasesPreserveLocalProviderResolution(t *testing.T) {
 				sources, err := provider.Discover(t.Context())
 				require.NoError(t, err)
 				require.Len(t, sources, 1)
-				assert.Equal(t, expected, sources[0].CwdResolution.State)
+				assert.Equal(t, remote, sources[0].CwdResolution.State == parser.SourceCwdRemote)
 				require.NoError(t, database.SetSyncState(db.MachineAliasKeyPrefix+"old-host", "installation-a"))
 			}
 		})

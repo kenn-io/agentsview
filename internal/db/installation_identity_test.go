@@ -37,7 +37,8 @@ func TestInstallationAdoptionMovesOwnedArchiveState(t *testing.T) {
 		return err
 	}))
 	require.NoError(t, database.SetSyncState("artifact_local_machine_name", owner))
-	require.NoError(t, database.EnsureInstallationIdentity(t.Context(), identity))
+	_, err = database.EnsureInstallationIdentity(t.Context(), identity)
+	require.NoError(t, err)
 	for _, machine := range []string{owner, "local", "unproven.example", "peer.example"} {
 		session, err := database.GetSession(t.Context(), machine)
 		require.NoError(t, err)
@@ -76,37 +77,34 @@ func TestInstallationAdoptionMovesOwnedArchiveState(t *testing.T) {
 	require.NoError(t, database.UpsertSession(Session{
 		ID: "later-peer", Machine: owner, Project: "project", Agent: "claude",
 	}))
-	require.NoError(t, database.EnsureInstallationIdentity(t.Context(), identity))
+	_, err = database.EnsureInstallationIdentity(t.Context(), identity)
+	require.NoError(t, err)
 	peer, err := database.GetSession(t.Context(), "later-peer")
 	require.NoError(t, err)
 	assert.Equal(t, owner, peer.Machine)
 	assert.Equal(t, identity, rules[0].Machine)
 }
 
-func TestInstallationAdoptionRequiresOwnershipEvidence(t *testing.T) {
+func TestInstallationAdoptionLeavesUnownedHistoryInPlace(t *testing.T) {
 	const identity = "0123456789abcdef0123456789abcdef"
-	for _, explicitNone := range []bool{false, true} {
-		t.Run(map[bool]string{false: "choose owner", true: "all remote"}[explicitNone], func(t *testing.T) {
-			database := testDB(t)
-			require.NoError(t, database.UpsertSession(Session{
-				ID: "history", Machine: "oldhost.example", Project: "project", Agent: "claude",
-			}))
-			require.ErrorIs(t, database.EnsureInstallationIdentity(t.Context(), identity), ErrMachineOwnershipRequired)
-			var machines []string
-			if !explicitNone {
-				machines = []string{"oldhost.example"}
-			}
-			require.NoError(t, database.AdoptMachineIdentity(t.Context(), identity, machines))
-			require.NoError(t, database.EnsureInstallationIdentity(t.Context(), identity))
-			session, err := database.GetSession(t.Context(), "history")
-			require.NoError(t, err)
-			if explicitNone {
-				assert.Equal(t, "oldhost.example", session.Machine)
-			} else {
-				assert.Equal(t, identity, session.Machine)
-			}
-		})
-	}
+	database := testDB(t)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "history", Machine: "oldhost.example", Project: "project", Agent: "claude",
+	}))
+	unowned, err := database.EnsureInstallationIdentity(t.Context(), identity)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"oldhost.example"}, unowned)
+	session, err := database.GetSession(t.Context(), "history")
+	require.NoError(t, err)
+	assert.Equal(t, "oldhost.example", session.Machine)
+	// Later starts do not repeat the decision; explicit adoption still works.
+	unowned, err = database.EnsureInstallationIdentity(t.Context(), identity)
+	require.NoError(t, err)
+	assert.Empty(t, unowned)
+	require.NoError(t, database.AdoptMachineIdentity(t.Context(), identity, []string{"oldhost.example"}))
+	session, err = database.GetSession(t.Context(), "history")
+	require.NoError(t, err)
+	assert.Equal(t, identity, session.Machine)
 }
 
 func TestInstallationAdoptionRollsBackConflictingRules(t *testing.T) {
@@ -140,7 +138,8 @@ func TestInstallationResetDoesNotClaimPreviousIdentity(t *testing.T) {
 		ID: "before-reset", Machine: former, Project: "project", Agent: "claude",
 	}))
 	require.NoError(t, database.AdoptMachineIdentity(t.Context(), first, []string{former}))
-	require.NoError(t, database.EnsureInstallationIdentity(t.Context(), second))
+	_, err := database.EnsureInstallationIdentity(t.Context(), second)
+	require.NoError(t, err)
 	session, err := database.GetSession(t.Context(), "before-reset")
 	require.NoError(t, err)
 	assert.Equal(t, first, session.Machine)

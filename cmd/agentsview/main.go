@@ -1340,9 +1340,15 @@ func openDB(cfg config.Config) (*db.DB, error) {
 	}
 	database.SetToolResultImages(cfg.ToolResultImages)
 	if cfg.InstallationID != "" {
-		if err := database.EnsureInstallationIdentity(context.Background(), cfg.InstallationID); err != nil {
+		unowned, err := database.EnsureInstallationIdentity(context.Background(), cfg.InstallationID)
+		if err != nil {
 			database.Close()
 			return nil, fmt.Errorf("adopting installation identity: %w", err)
+		}
+		if len(unowned) > 0 {
+			log.Printf("archive has sessions under machine keys %q with no recorded local owner; "+
+				"they stay separate until you run `agentsview db adopt-machine` with the keys you own",
+				unowned)
 		}
 	}
 	if cfg.InstallationID != "" && cfg.LocalMachineName != "" {

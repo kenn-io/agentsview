@@ -695,7 +695,8 @@ func TestArtifactQueueUsesAdoptedInstallationOwnership(t *testing.T) {
 			ID: session.id, Project: "project", Machine: session.machine, Agent: "claude",
 		}))
 	}
-	require.NoError(t, database.EnsureInstallationIdentity(t.Context(), "00000000-0000-4000-8000-000000000001"))
+	_, err := database.EnsureInstallationIdentity(t.Context(), "00000000-0000-4000-8000-000000000001")
+	require.NoError(t, err)
 	require.NoError(t, database.UpsertSession(Session{ID: "retired-key-peer", Project: "project", Machine: "workstation.example", Agent: "claude"}))
 	want := []string{"hostname", "installation", "legacy"}
 	assert.Equal(t, want, artifactExportQueueIDs(t, database), "inserts")

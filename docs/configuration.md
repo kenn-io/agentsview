@@ -156,13 +156,13 @@ establish ownership, and other historical hostnames remain separate until you
 explicitly select them. Alias keys are reserved redirects: use a peer's
 installation ID for a remote source and omit `machine` for a local root.
 
-If an archive has named machines but no saved local ownership, writable startup
-stops and asks you to choose. You can still inspect it with
+If an archive has named machines but no saved local ownership, startup keeps
+them under their existing keys and logs the keys once. Inspect them with
 `agentsview db adopt-machine --list`, which prints machine keys and session counts
 without starting a daemon or changing configuration. Stop the daemon, then run
 [`agentsview db adopt-machine`](/docs/commands/#agentsview-db-adopt-machine) with
-the old machine keys you own. Use `--no-local-sessions` alone if every existing
-named machine belongs to another installation.
+the old machine keys you own. Keys that belong to other installations need no
+action.
 
 PostgreSQL publishes the migrated sessions and metadata on the next incremental
 push. DuckDB rebuilds its mirror once when the default machine key changes.

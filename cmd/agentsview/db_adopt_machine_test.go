@@ -27,9 +27,13 @@ func TestDBAdoptMachineRepairsSelectedHistoryAndBareCodebuffLookup(t *testing.T)
 	require.NoError(t, database.Close())
 	cfg, err := config.LoadMinimal()
 	require.NoError(t, err)
-	_, err = openDB(cfg)
-	require.ErrorIs(t, err, db.ErrMachineOwnershipRequired)
-	// The suggested inspection command works before writable startup can run.
+	// Startup records the installation without claiming unowned history.
+	database, err = openDB(cfg)
+	require.NoError(t, err)
+	history, err := database.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "oldhost.example", history.Machine)
+	require.NoError(t, database.Close())
 	output, err := executeCommand(newRootCommand(), "db", "adopt-machine", "--list")
 	require.NoError(t, err)
 	assert.Contains(t, output, "oldhost.example")
@@ -55,9 +59,7 @@ func TestDBAdoptMachineRepairsSelectedHistoryAndBareCodebuffLookup(t *testing.T)
 }
 
 func TestDBAdoptMachineRequiresExplicitSelection(t *testing.T) {
-	for _, args := range [][]string{nil, {"--no-local-sessions", "oldhost.example"}} {
-		cmd := newDBAdoptMachineCommand()
-		cmd.SetArgs(args)
-		require.ErrorContains(t, cmd.Execute(), "select one or more")
-	}
+	cmd := newDBAdoptMachineCommand()
+	cmd.SetArgs(nil)
+	require.ErrorContains(t, cmd.Execute(), "select one or more")
 }
