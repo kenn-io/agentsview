@@ -99,6 +99,47 @@ func TestSyncCrushSkipsUnchangedSessionsAndReparsesChangedOnes(t *testing.T) {
 	assert.Equal(t, "Review complete.", messages[2].Content)
 }
 
+func TestSyncCrushReparsesWhenRegistryProjectPathChanges(t *testing.T) {
+	dataDir, _, _ := writeSyncCrushDB(t)
+	oldProjectDir := filepath.Join(t.TempDir(), "old-project")
+	newProjectDir := filepath.Join(t.TempDir(), "new-project")
+	require.NoError(t, os.MkdirAll(oldProjectDir, 0o755))
+	require.NoError(t, os.MkdirAll(newProjectDir, 0o755))
+
+	registryDir := t.TempDir()
+	registryPath := filepath.Join(registryDir, parser.CrushProjectsFileName)
+	registry := `{"projects":[{"path":"` + filepath.ToSlash(oldProjectDir) +
+		`","data_dir":"` + filepath.ToSlash(dataDir) + `"}]}`
+	require.NoError(t, os.WriteFile(registryPath, []byte(registry), 0o600))
+
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCrush: {registryDir},
+		},
+		Machine: "devbox",
+	})
+	t.Cleanup(engine.Close)
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
+
+	session, err := database.GetSession(context.Background(), "crush:sess-001")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, oldProjectDir, session.Cwd)
+	assert.Equal(t, "old_project", session.Project)
+
+	registry = `{"projects":[{"path":"` + filepath.ToSlash(newProjectDir) +
+		`","data_dir":"` + filepath.ToSlash(dataDir) + `"}]}`
+	require.NoError(t, os.WriteFile(registryPath, []byte(registry), 0o600))
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
+
+	session, err = database.GetSession(context.Background(), "crush:sess-001")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, newProjectDir, session.Cwd)
+	assert.Equal(t, "new_project", session.Project)
+}
+
 func TestReconcileProviderRootsCrushDBFileRootTombstonesDeletedSession(t *testing.T) {
 	_, dbPath, sourceDB := writeSyncCrushDB(t)
 	database := openTestDB(t)
