@@ -677,6 +677,14 @@ func TestToolResultImagesStagedRoute(t *testing.T) {
 					assert.Contains(t, content, `"image_ref":"asset://`)
 					assert.Equal(t, len(content), length)
 				}
+				if omitted {
+					assert.NotContains(t, content, "data:image/png;base64,AAEC")
+					if !blocked {
+						assert.Equal(t, len(content), length)
+						assert.Contains(t, content, "agentsview_image")
+						assert.NotContains(t, content, `"image_ref":"asset://`)
+					}
+				}
 				if blocked {
 					assert.Empty(t, content)
 					assert.Equal(t, len(raw), length)

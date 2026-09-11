@@ -2061,7 +2061,7 @@
   "settings_tool_result_images_keep": "保持",
   "settings_tool_result_images_drop": "破棄",
   "settings_tool_result_images_offload": "外部保存",
-  "settings_tool_result_images_hint": "保存済みの結果は書き込み時のポリシーを保ち、保持に戻しても削除済みのデータは復元できません。既存の行は agentsview db strip --images で処理してください。",
+  "settings_tool_result_images_hint": "保存済みの結果は書き込み時のポリシーを保ち、保持に戻しても削除済みのデータは復元できません。既存の行は agentsview db migrate --images で処理してください。",
   "settings_tool_result_images_restart_notice": "この変更を新しく取り込むセッションに適用するには、AgentsView デーモンを再起動してください。",
   "settings_tool_images_title": "ツール結果の画像",
   "settings_tool_images_description": "ツール結果内に保存されたインライン画像。",

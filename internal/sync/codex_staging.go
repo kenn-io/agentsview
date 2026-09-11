@@ -541,15 +541,17 @@ func (s *codexStagingSink) AppendToolResultEvent(
 		// contract before the real content enters the scratch publish source.
 		// Keep dedup above this point raw: two provider events that differ
 		// only by stripped controls remain two events on the collecting path.
-		if s.toolResultImages != config.ToolResultImagesOffload ||
-			s.database == nil || !s.database.ArchiveContent().OmitsToolContent() {
-			assetsDir := ""
-			if s.database != nil {
-				assetsDir = s.database.AssetsDir()
+		imagePolicy := s.toolResultImages
+		assetsDir := ""
+		if s.database != nil {
+			assetsDir = s.database.AssetsDir()
+			if imagePolicy == config.ToolResultImagesOffload &&
+				s.database.ArchiveContent().OmitsToolContent() {
+				imagePolicy = config.ToolResultImagesDrop
 			}
-			ev.Content = db.ProjectToolResultImageContent(ev.Content, s.toolResultImages, assetsDir)
-			contentLength = len(ev.Content)
 		}
+		ev.Content = db.ProjectToolResultImageContent(ev.Content, imagePolicy, assetsDir)
+		contentLength = len(ev.Content)
 		toolCall := db.ToolCall{ResultEvents: []db.ToolResultEvent{{
 			Content:       ev.Content,
 			ContentLength: contentLength,

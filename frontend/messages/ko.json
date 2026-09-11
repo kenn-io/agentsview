@@ -1996,7 +1996,7 @@
   "settings_tool_result_images_keep": "유지",
   "settings_tool_result_images_drop": "삭제",
   "settings_tool_result_images_offload": "별도 저장",
-  "settings_tool_result_images_hint": "이미 저장된 결과는 기록될 당시의 정책을 유지하며, 유지로 되돌려도 이미 삭제된 데이터는 복원되지 않습니다. 기존 행은 agentsview db strip --images 로 처리합니다.",
+  "settings_tool_result_images_hint": "이미 저장된 결과는 기록될 당시의 정책을 유지하며, 유지로 되돌려도 이미 삭제된 데이터는 복원되지 않습니다. 기존 행은 agentsview db migrate --images 로 처리합니다.",
   "settings_tool_result_images_restart_notice": "이 변경을 새로 수집되는 세션에 적용하려면 AgentsView 데몬을 다시 시작하세요.",
   "settings_tool_images_title": "도구 결과 이미지",
   "settings_tool_images_description": "도구 결과 내에 저장된 인라인 이미지.",

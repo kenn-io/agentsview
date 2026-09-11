@@ -136,7 +136,6 @@ filtering or a future compression implementation. See
 [`agentsview db compact`](/docs/commands/#agentsview-db-compact) for the staging
 space model and interrupted-compaction recovery.
 
-
 ### Ingest-time image offload
 
 Set `tool_result_images = "offload"` to move supported inline tool-result PNG, JPEG, WebP, and GIF payloads into `{dataDir}/assets/<sha256hex><ext>` during ingestion. Restart the daemon after changing the setting. Each asset write completes before SQLite can commit its `agentsview_image` placeholder and `image_ref`. Unsupported media and malformed data remain inline. Archives that omit tool content write no image assets. `keep` retains inline content; `drop` retains the existing readable placeholder without an asset.
