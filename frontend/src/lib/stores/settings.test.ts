@@ -83,6 +83,7 @@ describe("SettingsStore.load mode handling", () => {
   });
 
   it("hydrates configured zoom without saving it", async () => {
+    localStorage.setItem("agentsview-zoom-level", "100");
     ui.applyZoomLevel(130);
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
@@ -99,6 +100,7 @@ describe("SettingsStore.load mode handling", () => {
     await settings.load();
 
     expect(ui.zoomLevel).toBe(120);
+    expect(localStorage.getItem("agentsview-zoom-level")).toBe("100");
     expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
   });
 
@@ -160,7 +162,8 @@ describe("SettingsStore.load mode handling", () => {
   });
 
   it("keeps local zoom when the server omits the field", async () => {
-    ui.applyZoomLevel(130);
+    localStorage.setItem("agentsview-zoom-level", "130");
+    ui.applyZoomLevel(150);
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
       chart_palette: "agentsview",
@@ -175,6 +178,7 @@ describe("SettingsStore.load mode handling", () => {
     await settings.load();
 
     expect(ui.zoomLevel).toBe(130);
+    expect(localStorage.getItem("agentsview-zoom-level")).toBe("130");
   });
 
   it("does not let a pending load replace a newer user zoom", async () => {

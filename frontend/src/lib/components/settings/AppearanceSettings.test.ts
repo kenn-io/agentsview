@@ -81,11 +81,15 @@ describe("AppearanceSettings", () => {
     await waitFor(() => expect(getByTitle("Zoom").textContent).toContain("100%"));
   });
 
-  it("disables Zoom when server settings are read-only", () => {
+  it("keeps local Zoom available when server settings are read-only", async () => {
     settings.readOnly = true;
-    const { getByRole } = render(AppearanceSettings);
+    const { getByRole, getByTitle } = render(AppearanceSettings);
 
-    expect((getByRole("button", { name: "Zoom 100%" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((getByRole("button", { name: "Zoom 100%" }) as HTMLButtonElement).disabled).toBe(false);
+    await fireEvent.click(getByTitle("Zoom"));
+    await fireEvent.mouseDown(getByRole("option", { name: "120%" }));
+    await waitFor(() => expect(getByTitle("Zoom").textContent).toContain("120%"));
+    expect(ui.zoomLevel).toBe(120);
     expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
   });
 

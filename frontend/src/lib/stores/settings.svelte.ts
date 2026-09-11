@@ -115,13 +115,16 @@ class SettingsStore {
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
       if (
-        data.zoom_level !== undefined &&
         loadVersion === this.loadVersion &&
         ui.zoomChangeVersion === zoomChangeVersion &&
         this.zoomSaveVersion === zoomSaveVersion &&
         !mutationActive
       ) {
-        ui.applyZoomLevel(data.zoom_level);
+        if (data.zoom_level !== undefined) {
+          ui.applyZoomLevel(data.zoom_level);
+        } else {
+          ui.restoreStoredZoom();
+        }
       }
       // A response without the field, including every fixture that predates
       // it, reads as the default keep policy instead of failing the load.

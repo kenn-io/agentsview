@@ -7,6 +7,15 @@
   padding: 0;
 }
 
+/* Fixed kit-ui menus need the inverse root zoom for viewport coordinates. */
+.kit-typeahead__panel,
+.kit-select-dropdown__list,
+.kit-filter-dropdown__panel,
+.kit-date-range-picker__panel,
+.kit-mention__menu {
+  zoom: var(--agentsview-zoom-compensation, 1);
+}
+
 /*
  * Shared design tokens (backgrounds, text, borders, the core accent set,
  * shadows, radii, fonts, type scale, spacing ladder, chrome heights, and the

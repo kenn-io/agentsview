@@ -1005,9 +1005,12 @@ describe("UIStore", () => {
       const { ui: zoom } = await import("./ui.svelte.js");
       const save = vi.fn();
       zoom.setZoomSaveCallback(save);
+      stored.set("agentsview-zoom-level", "120");
 
       zoom.setZoomLevel(120);
       zoom.applyZoomLevel(150);
+      await tick();
+      expect(stored.get("agentsview-zoom-level")).toBe("120");
       zoom.resetZoom();
 
       expect(save.mock.calls).toEqual([[120], [100]]);

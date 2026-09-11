@@ -264,6 +264,7 @@ class UIStore {
 
   zoomLevel: number = $state(readStoredZoom());
   zoomChangeVersion = 0;
+  private persistZoomStorage = true;
   private zoomSaveCallback: ZoomSaveCallback | null = null;
 
   sidebarOpen: boolean = $state(true);
@@ -350,11 +351,13 @@ class UIStore {
         } else {
           setCssZoom(factor);
         }
-        try {
-          localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
-          localStorage?.removeItem(FONT_SCALE_KEY);
-        } catch {
-          // ignore
+        if (this.persistZoomStorage) {
+          try {
+            localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
+            localStorage?.removeItem(FONT_SCALE_KEY);
+          } catch {
+            // ignore
+          }
         }
       });
 
@@ -578,13 +581,19 @@ class UIStore {
 
   applyZoomLevel(level: number) {
     if (ZOOM_STEPS.includes(level)) {
+      this.persistZoomStorage = false;
       this.zoomLevel = level;
       return true;
     }
     return false;
   }
 
+  restoreStoredZoom() {
+    return this.applyZoomLevel(readStoredZoom());
+  }
+
   private setUserZoomLevel(level: number) {
+    this.persistZoomStorage = true;
     this.zoomLevel = level;
     this.zoomChangeVersion += 1;
     this.zoomSaveCallback?.(level);
