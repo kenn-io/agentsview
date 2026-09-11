@@ -228,6 +228,10 @@ func (s *Server) humaSidebarSessionIndex(
 	if err != nil {
 		return nil, err
 	}
+	filter.Machine, err = db.ResolveMachineFilter(ctx, s.db, filter.Machine)
+	if err != nil {
+		return nil, serverError(err)
+	}
 	index, err := s.db.GetSidebarSessionIndex(ctx, filter)
 	if err != nil {
 		if errors.Is(err, db.ErrInvalidCursor) {

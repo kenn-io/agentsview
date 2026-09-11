@@ -39,6 +39,7 @@ func TestDataProjectsEndpoint(t *testing.T) {
 
 func TestDataProjectRulesEndpoint(t *testing.T) {
 	te := setup(t)
+	require.NoError(t, te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-workstation", "ws"))
 	_, err := te.db.CreateWorktreeProjectMapping(context.Background(), db.WorktreeProjectMapping{
 		Machine: "ws", PathPrefix: "/work", Layout: db.WorktreeMappingLayoutExplicit,
 		Project: "outer", Enabled: true,
@@ -49,7 +50,7 @@ func TestDataProjectRulesEndpoint(t *testing.T) {
 		s.Cwd = "/work/a"
 	})
 
-	w := te.get(t, "/api/v1/data/project-rules?machine=ws")
+	w := te.get(t, "/api/v1/data/project-rules?machine=old-workstation")
 	assertStatus(t, w, http.StatusOK)
 
 	var rules db.ProjectRules

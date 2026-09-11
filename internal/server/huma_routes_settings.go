@@ -205,6 +205,10 @@ func (s *Server) humaListWorktreeMappings(
 	if machine == "" {
 		machine = localMachine
 	}
+	machine, err = db.ResolveMachineFilter(ctx, localDB, machine)
+	if err != nil {
+		return nil, serverError(err)
+	}
 	mappings, err := localDB.ListWorktreeProjectMappings(ctx, machine)
 	if err != nil {
 		return nil, internalError("list worktree mappings", err)

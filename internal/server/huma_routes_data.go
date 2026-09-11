@@ -82,6 +82,10 @@ func (s *Server) humaDataProjectRules(
 	if machine == "" {
 		machine = localMachine
 	}
+	machine, err := db.ResolveMachineFilter(ctx, s.db, machine)
+	if err != nil {
+		return nil, serverError(err)
+	}
 	rules, err := s.db.ListProjectRules(ctx, machine)
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {

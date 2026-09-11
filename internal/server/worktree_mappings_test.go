@@ -18,6 +18,7 @@ import (
 
 func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 	te := setup(t)
+	require.NoError(t, te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-owner", "host-a.example"))
 	prefix := filepath.Join(t.TempDir(), "app.worktrees")
 	require.NoError(t, te.db.UpsertSession(db.Session{
 		ID: "remote-session", Machine: "host-a.example", Agent: "claude",
@@ -42,7 +43,7 @@ func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 		Machines     []string                    `json:"machines"`
 		Mappings     []db.WorktreeProjectMapping `json:"mappings"`
 	}
-	w := te.get(t, "/api/v1/settings/worktree-mappings?machine=host-a.example")
+	w := te.get(t, "/api/v1/settings/worktree-mappings?machine=old-owner")
 	assertStatus(t, w, http.StatusOK)
 	decodeInto(t, w, &list)
 	require.Equal(t, "host-a.example", list.Machine)
