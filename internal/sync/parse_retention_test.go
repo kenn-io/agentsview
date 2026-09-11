@@ -1143,6 +1143,59 @@ func TestParseRetentionChargesContainerMemberItsShare(t *testing.T) {
 		"member shares must sum back to the container they partition")
 }
 
+func TestParseRetentionFloorsContainerMemberShareAboveZero(t *testing.T) {
+	// A container smaller than its membership divides to zero, which
+	// retainedBytes reads as an unknown source and charges the whole budget:
+	// the exact fault per-member sizing removes. The floor is what prevents it,
+	// so pin it with a fixture the share test's 64 MiB container cannot reach.
+	engine, files, _ := newSQLiteContainerMemberFixture(t, 32, 64)
+
+	charged := engine.parseRetentionSourceBytes(files[0])
+	assert.Equal(t, int64(1), charged,
+		"a member share must floor at one byte, never divide to zero")
+
+	budget := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
+	assert.Equal(t, parseRetentionFixedBytes+parseRetentionMultiplier, budget.weight(charged),
+		"the floored share must weigh as a known small source")
+	assert.Equal(t, defaultBulkParseRetentionBytes, budget.weight(0),
+		"a zero estimate would instead charge the whole admission capacity")
+
+	first, err := budget.acquire(t.Context(), charged)
+	require.NoError(t, err)
+	defer first.Release()
+	second, err := budget.acquire(t.Context(), charged)
+	require.NoError(t, err,
+		"a floored member share must not hold the budget exclusively")
+	second.Release()
+}
+
+func TestParseRetentionKeepsDaemonScavengeForLargeNonMembers(t *testing.T) {
+	// Preservation invariant: correcting the estimate narrows which sources
+	// clear the daemon scavenge threshold. A member's share may now fall below
+	// it, which is coherent with the smaller parse, but a genuinely large
+	// non-member source must still mark a scavenge.
+	engine, files, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
+
+	memberBytes := engine.parseRetentionSourceBytes(files[0])
+	assert.Less(t, memberBytes, parseRetentionScavengeThreshold,
+		"a member share below the threshold is what narrows daemon scavenging")
+
+	plainPath := filepath.Join(filepath.Dir(dbPath), "large.jsonl")
+	handle, err := os.Create(plainPath)
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(64<<20))
+	require.NoError(t, handle.Close())
+	plain := parser.DiscoveredFile{Path: plainPath, Agent: parser.AgentClaude}
+
+	daemon := newParseRetentionBudget(defaultParseRetentionBytes)
+	daemon.scavenge = func() {}
+	lease, err := daemon.acquire(t.Context(), engine.parseRetentionSourceBytes(plain))
+	require.NoError(t, err)
+	defer lease.Release()
+	assert.True(t, daemon.scavengePending.Load(),
+		"a large non-member source must still mark a daemon scavenge")
+}
+
 func TestParseRetentionKeepsWholeFileSourceExclusive(t *testing.T) {
 	engine, _, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
 	plainPath := filepath.Join(filepath.Dir(dbPath), "whole.jsonl")
