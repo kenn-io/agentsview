@@ -60,6 +60,7 @@ describe("KNOWN_AGENTS", () => {
       "omnigent",
       "codebuff",
       "freebuff",
+      "crush",
     ]);
   });
 
@@ -99,6 +100,7 @@ describe("agentColor", () => {
     expect(agentColor("piebald")).toBe("var(--accent-orange)");
     expect(agentColor("roocode")).toBe("var(--accent-rose)");
     expect(agentColor("omnigent")).toBe("var(--accent-teal)");
+    expect(agentColor("crush")).toBe("var(--accent-coral)");
   });
 
   it("falls back to blue for unknown agents", () => {
@@ -168,6 +170,7 @@ describe("agentLabel", () => {
     expect(agentLabel("roocode")).toBe("RooCode");
     expect(agentLabel("omnigent")).toBe("Omnigent");
     expect(agentLabel("traex")).toBe("TraeX");
+    expect(agentLabel("crush")).toBe("Charm Crush");
   });
 
   it("capitalizes simple agent names", () => {

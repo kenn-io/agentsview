@@ -287,6 +287,11 @@ func NormalizeToolCategory(rawName string) string {
 	case "shell_kill", "shell_status", "shell_tail":
 		return "Bash"
 
+	// Charm Crush tools (only tools not already covered above:
+	// bash→Bash, view→Read, edit→Edit, write→Write)
+	case "todos":
+		return "Tool"
+
 	default:
 		// MCP tools may carry a server prefix (e.g.
 		// "Zencoder_subagent__ZencoderSubagent") or use

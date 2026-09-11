@@ -338,6 +338,7 @@ keeps its default directories.
 | Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                                                                                                           | JSONL per session                                                                                                                                             |
 | Command Code          | `~/.commandcode/projects/`                                                                                                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                                              |
 | Copilot CLI           | `~/.copilot/`                                                                                                                                                    | JSONL per session under `session-state/`                                                                                                                      |
+| Crush                 | (platform-specific, see below)                                                                                                                                   | Per-project SQLite `crush.db` with transcripts, tool activity, relationships, and recorded session costs                                                      |
 | Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS)                                                                                  | Local CLI data rooted at the directory that contains `cli/`; session data is discovered under `<root>/cli/...`                                                |
 | Evener                | `~/.local/state/evener/` (or `$XDG_STATE_HOME/evener/`)                                                                                                          | Semantic v2 `*.transcript.jsonl` and optional `*.meta.json`                                                                                                   |
 | Cortex Code           | `~/.snowflake/cortex/conversations/`                                                                                                                             | JSON / JSONL per session                                                                                                                                      |
@@ -445,6 +446,19 @@ directory.
 `<root>/data/sessions/sessions.db`. A `agents.goose.dirs` entry may instead point
 directly to that sessions directory, its parent data directory, or the database
 file.
+
+**Crush default directories** are:
+
+- **macOS and Linux:** `~/.local/share/crush/`
+- **Windows:** `%LOCALAPPDATA%/crush/`
+
+AgentsView reads `projects.json` in that directory and discovers one SQLite
+`crush.db` per project under each listed `<project>/.crush/` data directory.
+Set `CRUSH_DIR` or `agents.crush.dirs` to override the default with one or more
+directories: each entry may be a Crush data directory (containing
+`projects.json`), a `<project>/.crush` directory, or a `crush.db` file. A
+project added after AgentsView starts is picked up by the next scheduled
+reconciliation pass.
 
 Omnigent sessions are read from `~/.omnigent/chat.db`. Set `OMNIGENT_DIR` or
 `agents.omnigent.dirs` to override the default directory. AgentsView creates one
@@ -778,6 +792,7 @@ export CODEX_SESSIONS_DIR=~/custom/codex
 export CODEX_HOME=~/custom/codex-home # re-roots the default sessions/ paths
 export COMMANDCODE_PROJECTS_DIR=~/custom/commandcode
 export COPILOT_DIR=~/custom/copilot
+export CRUSH_DIR=~/custom/crush
 export DEVIN_DIR=~/Library/Application\ Support/devin
 export CORTEX_DIR=~/custom/cortex
 export CURSOR_PROJECTS_DIR=~/custom/cursor

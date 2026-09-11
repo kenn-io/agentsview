@@ -2779,6 +2779,45 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   distinguish machines with identical root paths. No legacy Tau v1 conversion,
   native transfer, or index metadata synchronization is included.
 
+## Charm Crush (`crush`)
+
+- **Format:** One SQLite `crush.db` per project under the project's `.crush`
+  data directory (configurable with `options.data_directory` or `--data-dir`).
+  Session metadata, cumulative token totals, and cost live in `sessions`;
+  ordered role messages with a JSON `parts` array (`text`, `reasoning`,
+  `tool_call`, `tool_result`, `finish`) live in `messages`. A project registry
+  at the global data directory maps project paths to data directories.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/charmbracelet/crush.git` at
+  `ce980ada68444b7591d8dfa631af7e94b2aba0b3`; see the pinned
+  [initial schema](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/db/migrations/20250424200609_initial.sql),
+  [project registry](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/projects/projects.go),
+  and
+  [data-directory resolution](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/config/load.go).
+  The registry is `projects.json` next to the global config file:
+  `~/.local/share/crush/projects.json` (or `$XDG_DATA_HOME/crush/`,
+  `$CRUSH_GLOBAL_DATA/`) on macOS and Linux and
+  `%LOCALAPPDATA%\crush\projects.json` on Windows. Timestamps are Unix
+  seconds despite older schema comments claiming milliseconds; the
+  `updated_at` triggers write `strftime('%s','now')`. Later migrations add
+  `summary_message_id`, `todos`, `provider`, `is_summary_message`,
+  `read_files`, and Prism/Hyper metadata columns. The schema was reverified
+  against a live 2026-09 Crush store on 2026-09-11.
+- **Usage and cost:** `sessions.prompt_tokens` and `sessions.completion_tokens`
+  are cumulative session totals and `sessions.cost` is a recorded provider
+  cost, with no per-request breakdown and no per-message token fields.
+  Agentsview emits exactly one aggregate `session` usage event per session,
+  tagged with the most recent assistant message's model, and reports no
+  per-message token data.
+- **Agentsview:** `internal/parser/crush.go` and
+  `internal/parser/crush_provider.go` require the `messages.parts` column as
+  the format marker (the `goose_db_version` table belongs to Crush's vendored
+  goose migration tool and proves nothing), expand `projects.json` entries
+  into provider roots, attribute each session to the project directory above
+  the store, pair `tool_result` parts into system tool-result messages keyed
+  by call ID, treat `is_summary_message` rows as summary markers, and use
+  stat-based composite freshness over the database and WAL sidecar.
+
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
 [evener-source-4]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/snapshot.go
