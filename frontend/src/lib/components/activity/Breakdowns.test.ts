@@ -24,6 +24,7 @@ function makeReport(): Report {
       automated_cost: testMoney(0),
       interactive_cost: testMoney(0),
       automated_sessions: 0,
+      subagent_sessions: 0,
       interactive_sessions: 0,
     },
     partial: false,

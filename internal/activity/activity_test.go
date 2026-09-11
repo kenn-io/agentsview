@@ -428,7 +428,7 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 		GapCapSeconds: 300, Bucket: BucketSpec{BucketMinute, 300},
 	}
 	// ta: timed automated (2 min, cost 1). ti: timed interactive (3 min, cost 2).
-	// ua: UNTIMED automated (no activity, cost 4). All project "P", model "m1".
+	// ua: untimed automated subagent (no activity, cost 4). All project "P", model "m1".
 	act := []ActivityEvent{
 		{SessionID: "ta", Ordinal: 1, Timestamp: "2026-06-16T10:00:00Z", Role: "user"},
 		{SessionID: "ta", Ordinal: 2, Timestamp: "2026-06-16T10:02:00Z", Role: "assistant", Model: "m1"},
@@ -443,9 +443,13 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 	sessions := []SessionMeta{
 		{SessionID: "ta", Project: "P", Agent: "claude", IsAutomated: true},
 		{SessionID: "ti", Project: "P", Agent: "claude", IsAutomated: false},
-		{SessionID: "ua", Project: "P", Agent: "claude", IsAutomated: true},
+		{SessionID: "ua", Project: "P", Agent: "claude", IsAutomated: true, IsSubagent: true},
 	}
 	r := mustAggregate(t, p, sessions, act, usage)
+	assert.Equal(t, 3, r.Totals.Sessions)
+	assert.Equal(t, 1, r.Totals.InteractiveSessions)
+	assert.Equal(t, 1, r.Totals.AutomatedSessions)
+	assert.Equal(t, 1, r.Totals.SubagentSessions, "even automated and untimed subagents count separately")
 
 	require.Len(t, r.ByProject, 1)
 	proj := r.ByProject[0]

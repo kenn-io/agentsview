@@ -43,8 +43,8 @@ The summary cards show:
   with the local clock time of the peak
 - **Active** — active wall-clock time, plus idle time in the range
 - **Agent-minutes** — combined active minutes across concurrent agents
-- **Sessions** — session count, with interactive/automated and untimed-session
-  detail when applicable
+- **Sessions** — session count, with interactive/subagent/automated and
+  untimed-session detail when applicable
 - **Projects** and **Models** — distinct counts in the range
 - **Total Cost** — selected session cost attributed to activity in the range:
   authoritative reported totals when available, otherwise catalog estimates
@@ -54,6 +54,12 @@ and fork sessions (rewound conversation branches) alongside their parent
 sessions, so **Total Cost** lines up with `agentsview usage daily` for the same
 day and timezone. Usage rows that recur across related sessions are deduplicated
 before totaling, the same rule the Usage page applies.
+
+The session count separates subagents from interactive and automated
+conversations. A subagent counts only in the subagent category, even if its
+prompt also matches the automation classifier. Forks remain in the interactive
+or automated category. Costs, agent-minutes, concurrency, and automation filters
+continue to use each session's automation flag, including subagents.
 
 If the selected range reaches into the future, the page marks it as partial and
 shows the report's current **as of** time.
@@ -212,6 +218,10 @@ automatically reaggregate it.
 Version 7 applies provider-specific billing identity to computed usage and
 preserves reported cost rows and custom pricing overrides. Costs from v6 and v7
 must not be compared as the same billing semantics.
+
+Version 8 adds `totals.subagent_sessions` and excludes subagents from
+`totals.interactive_sessions` and `totals.automated_sessions`. These three
+counts sum to `totals.sessions`; token and cost accounting is unchanged.
 
 Each project, branch, agent, or machine filter is limited to 1,024 UTF-8 bytes,
 with a 3,072-byte combined limit. The server also validates the fully encoded

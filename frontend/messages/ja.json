@@ -1067,6 +1067,22 @@
   "activity_session": "セッション",
   "activity_automated_session": "自動セッション",
   "activity_auto": "自動",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} インタラクティブ / {subagentsLabel} サブエージェント / {automated} 自動化",
+        "subagentPlural=other": "{interactive} インタラクティブ / {subagentsLabel} サブエージェント / {automated} 自動化"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} インタラクティブ / {automated} 自動化",
   "activity_untimed_count": "{count} 件（時間情報なし）",
   "activity_peak_concurrency": "ピーク同時実行数",

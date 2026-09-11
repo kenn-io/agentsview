@@ -525,7 +525,8 @@ func (db *DB) activityReportSessionsFrom(
 		s.machine,
 		COALESCE(s.started_at, ''),
 		COALESCE(s.ended_at, ''),
-		COALESCE(s.is_automated, 0)
+		COALESCE(s.is_automated, 0),
+		s.relationship_type = 'subagent'
 	FROM sessions s
 	WHERE ` + where + `
 		AND (COALESCE(NULLIF(s.ended_at, ''),
@@ -557,7 +558,7 @@ func (db *DB) activityReportSessionsFrom(
 		var s activity.SessionMeta
 		if err := rows.Scan(
 			&s.SessionID, &s.Title, &s.Project, &s.Agent,
-			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated,
+			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated, &s.IsSubagent,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning activity report session: %w", err)

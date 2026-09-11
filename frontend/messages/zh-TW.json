@@ -1012,6 +1012,22 @@
   "activity_session": "對話",
   "activity_automated_session": "自動化對話",
   "activity_auto": "自動",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} 交互式 / {subagentsLabel} 子代理 / {automated} 自動化",
+        "subagentPlural=other": "{interactive} 交互式 / {subagentsLabel} 子代理 / {automated} 自動化"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} 交互式 / {automated} 自動化",
   "activity_untimed_count": "{count} 個未計時",
   "activity_peak_concurrency": "尖峰並發",

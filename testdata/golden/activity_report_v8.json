@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
@@ -175,7 +175,8 @@
       "microdollars": 17260
     },
     "automated_sessions": 0,
-    "interactive_sessions": 2
+    "interactive_sessions": 2,
+    "subagent_sessions": 0
   },
   "by_project": [
     {

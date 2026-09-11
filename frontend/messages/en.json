@@ -1067,6 +1067,22 @@
   "activity_session": "Session",
   "activity_automated_session": "Automated session",
   "activity_auto": "Auto",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} interactive / {subagentsLabel} subagent / {automated} automated",
+        "subagentPlural=other": "{interactive} interactive / {subagentsLabel} subagents / {automated} automated"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} interactive / {automated} automated",
   "activity_untimed_count": "{count} untimed",
   "activity_peak_concurrency": "Peak Concurrency",

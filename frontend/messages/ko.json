@@ -1014,6 +1014,22 @@
   "activity_session": "세션",
   "activity_automated_session": "자동화된 세션",
   "activity_auto": "자동",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} 대화형 / {subagentsLabel} 서브에이전트 / {automated} 자동화",
+        "subagentPlural=other": "{interactive} 대화형 / {subagentsLabel} 서브에이전트 / {automated} 자동화"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} 대화형 / {automated} 자동화",
   "activity_untimed_count": "{count}개 시간 미측정",
   "activity_peak_concurrency": "최대 동시성",

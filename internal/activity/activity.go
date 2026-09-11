@@ -40,6 +40,7 @@ type SessionMeta struct {
 	StartedAt   string // RFC3339 or ""
 	EndedAt     string // RFC3339 or ""
 	IsAutomated bool   // automated (e.g. roborev) vs interactive session
+	IsSubagent  bool   // delegated session, counted separately from conversations
 }
 
 // ActivityEvent is one timestamped message (backends send only timestamped rows).
@@ -316,10 +317,11 @@ type Totals struct {
 	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
 	AutomatedCost           money.Money `json:"automated_cost"`
 	InteractiveCost         money.Money `json:"interactive_cost"`
-	// Session counts split by class (AutomatedSessions + InteractiveSessions
-	// == Sessions), so the summary card can show "total (auto / int)".
+	// Session counts are disjoint: subagents take precedence over automation.
+	// AutomatedSessions + InteractiveSessions + SubagentSessions == Sessions.
 	AutomatedSessions   int `json:"automated_sessions"`
 	InteractiveSessions int `json:"interactive_sessions"`
+	SubagentSessions    int `json:"subagent_sessions"`
 }
 
 // KeyMinutes is one breakdown row (by project/model/agent). It carries both the
@@ -1005,9 +1007,12 @@ func buildSessionsTableFromDedupedUsage(
 	r.BySession = make([]SessionRow, 0, len(sessions))
 	for _, s := range sessions {
 		au := s.IsAutomated
-		if au {
+		switch {
+		case s.IsSubagent:
+			r.Totals.SubagentSessions++
+		case au:
 			r.Totals.AutomatedSessions++
-		} else {
+		default:
 			r.Totals.InteractiveSessions++
 		}
 		projSet[s.Project] = struct{}{}

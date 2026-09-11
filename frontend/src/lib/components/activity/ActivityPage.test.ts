@@ -63,6 +63,7 @@ function projectReport(): Report {
       automated_agent_minutes: 0,
       automated_cost: testMoney(0),
       automated_sessions: 0,
+      subagent_sessions: 0,
       interactive_agent_minutes: 20,
       interactive_cost: testMoney(0),
       interactive_sessions: 1,

@@ -1067,6 +1067,22 @@
   "activity_session": "Session",
   "activity_automated_session": "Session automatisée",
   "activity_auto": "Auto",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} interactives / {subagentsLabel} sous-agent / {automated} automatisées",
+        "subagentPlural=other": "{interactive} interactives / {subagentsLabel} sous-agents / {automated} automatisées"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} interactives / {automated} automatisées",
   "activity_untimed_count": "{count} sans durée",
   "activity_peak_concurrency": "Pic de simultanéité",

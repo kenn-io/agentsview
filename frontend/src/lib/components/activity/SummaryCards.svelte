@@ -10,12 +10,19 @@
     return v.toLocaleString();
   }
 
-  // Sessions card detail line: surface the automation split only when there
-  // are automated sessions, so the common all-interactive view stays clean,
-  // and keep the untimed count. interactive + automated == sessions.
+  // Subagents are separate from interactive and automated conversation counts.
   function sessionsSub(t: Report["totals"]): string {
     const parts: string[] = [];
-    if (t.automated_sessions > 0) {
+    if (t.subagent_sessions > 0) {
+      parts.push(
+        m.activity_session_kind_split({
+          interactive: fmtInt(t.interactive_sessions),
+          subagents: t.subagent_sessions,
+          subagentsLabel: fmtInt(t.subagent_sessions),
+          automated: fmtInt(t.automated_sessions),
+        }),
+      );
+    } else if (t.automated_sessions > 0) {
       parts.push(
         m.activity_interactive_automated_split({ interactive: fmtInt(t.interactive_sessions), automated: fmtInt(t.automated_sessions) }),
       );

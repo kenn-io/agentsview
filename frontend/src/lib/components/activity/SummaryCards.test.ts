@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick } from "svelte";
 import SummaryCards from "./SummaryCards.svelte";
 import type { Report } from "../../api/types.js";
@@ -35,6 +35,7 @@ function makeReport(totals: Partial<Report["totals"]> = {}): Report {
       interactive_cost: testMoney(0),
       automated_sessions: 0,
       interactive_sessions: 3,
+      subagent_sessions: 0,
       ...totals,
     },
     by_project: [],
@@ -90,10 +91,28 @@ describe("SummaryCards", () => {
     expect(sessionsSub(target)).toBe("1 untimed");
   });
 
+  it.each([
+    [1, 0, "2 interactive / 1 subagent / 0 automated"],
+    [4, 1, "2 interactive / 4 subagents / 1 automated"],
+  ])(
+    "shows %i subagents separately with %i automated sessions",
+    async (subagents, automated, expected) => {
+      const target = await render(
+        makeReport({
+          sessions: 2 + subagents + automated,
+          interactive_sessions: 2,
+          subagent_sessions: subagents,
+          automated_sessions: automated,
+        }),
+      );
+      expect(sessionsSub(target)).toBe(expected);
+    },
+  );
+
   it("combines the split and the untimed count", async () => {
     const target = await render(
       makeReport({
-        sessions: 4,
+        sessions: 3,
         interactive_sessions: 1,
         automated_sessions: 2,
         untimed_sessions: 1,
