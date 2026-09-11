@@ -130,7 +130,8 @@ type ContentSearchHit struct {
 // hydrated canonical SearchResults. Implementations must enforce the project
 // filter and non-deleted visibility before LIMIT/OFFSET, return at most one
 // result per session, and preserve stable ordering and pagination. BunStore
-// owns input normalization and the public page contract.
+// owns whitespace trimming and the public page contract. Implementations receive
+// the user's query with its original quoting and own lexical preparation.
 type FullTextCapability interface {
 	Available() bool
 	Search(context.Context, bun.IDB, SearchFilter) ([]SearchResult, error)

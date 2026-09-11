@@ -192,13 +192,13 @@ func TestBunStoreSearchUsesCanonicalCapabilityHit(t *testing.T) {
 	store := NewBunStore(backend)
 
 	page, err := store.Search(t.Context(), SearchFilter{
-		Query: "needle", Project: "alpha", Limit: 10,
+		Query: " needle ", Project: "alpha", Limit: 10,
 	})
 
 	require.NoError(t, err)
 	assert.True(t, store.HasFTS())
 	assert.Equal(t, 1, backend.viewCalls)
-	assert.Equal(t, `"needle"`, capability.lastFilter.Query)
+	assert.Equal(t, "needle", capability.lastFilter.Query)
 	assert.Equal(t, SearchPage{Results: []SearchResult{
 		{
 			SessionID: "search-alpha", Project: "alpha", Agent: "codex",
