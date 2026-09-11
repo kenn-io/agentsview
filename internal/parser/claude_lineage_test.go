@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -901,6 +902,35 @@ func TestClaudeLineageSniffCacheInvalidatedBySameSizeRewrite(t *testing.T) {
 			assert.Equal(t, tt.wantFirst, firstMessageContent(results[0].Messages))
 		})
 	}
+}
+
+// Model a prior observation whose filesystem metadata collides with a newer
+// same-size head. The full parser must validate bytes before using that memo.
+func TestClaudeLineageSniffCacheRejectsStaleHeadWithMatchingMetadata(t *testing.T) {
+	t.Parallel()
+	original := lineageOriginalContent()
+	origPath, forkPath := writeLineageFixture(t, "orig-1111.jsonl", original, "fork-2222.jsonl", lineageForkContent())
+	warm, _, err := claudeParseFile(forkPath, "my_app", "local", claudeParseOptions{siblingLineage: true})
+	require.NoError(t, err)
+	require.Len(t, warm, 1)
+	require.Equal(t, "orig-1111", warm[0].Session.ParentSessionID)
+	// This is the memo a previous z9 head can leave when stat metadata has
+	// coarse resolution. Retain all actual observed cache metadata.
+	prior := strings.ReplaceAll(original, `"u1"`, `"z9"`)
+	require.Len(t, prior, len(original))
+	claudeSniffMu.Lock()
+	cached, ok := claudeSniffCache[origPath]
+	cached.headSHA = sha256.Sum256([]byte(prior))
+	cached.sniff.rootUUID = "z9"
+	claudeSniffCache[origPath] = cached
+	claudeSniffMu.Unlock()
+	require.True(t, ok, "full parse must warm the original's head")
+	results, _, err := claudeParseFile(forkPath, "my_app", "local", claudeParseOptions{siblingLineage: true})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "continued question", firstMessageContent(results[0].Messages))
 }
 
 func BenchmarkClaudeLineageSniffCacheHit(b *testing.B) {

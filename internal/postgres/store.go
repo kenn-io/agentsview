@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -26,7 +27,29 @@ func NewStore(
 	if err != nil {
 		return nil, err
 	}
+	if err = RejectHostedPush(context.Background(), pg); err != nil {
+		pg.Close()
+		if errors.Is(err, ErrHostedProjectionOwned) {
+			return nil, fmt.Errorf("hosted schema requires raw_tenant and the hosted read adapter")
+		}
+		return nil, err
+	}
 	return &Store{pg: pg}, nil
+}
+
+// NewHostedStore opens the read adapter with the same fixed tenant boundary as
+// custody. It fails before serving queries if the runtime role or schema is unsafe.
+func NewHostedStore(pgURL, schema, tenant string, allowInsecure bool) (*HostedStore, error) {
+	pg, err := OpenHosted(pgURL, schema, tenant, allowInsecure)
+	if err != nil {
+		return nil, err
+	}
+	h, err := newHostedAdapter(pg, tenant)
+	if err != nil {
+		pg.Close()
+		return nil, err
+	}
+	return h, nil
 }
 
 // DB returns the underlying *sql.DB for operations that need
@@ -551,6 +574,10 @@ func (s *Store) ListTrashedSessions(
 
 // EmptyTrash permanently deletes every trashed session.
 func (s *Store) EmptyTrash() (int, error) {
+	return s.emptyTrash(false)
+}
+
+func (s *Store) emptyTrash(legacyOnly bool) (int, error) {
 	ctx := context.Background()
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
@@ -558,8 +585,12 @@ func (s *Store) EmptyTrash() (int, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	where := "s.deleted_at IS NOT NULL"
+	if legacyOnly {
+		where += " AND s.provenance_kind='legacy'"
+	}
 	sessionIDs, excludedIDs, err := readPGTrashedSessionExclusions(
-		ctx, tx, "s.deleted_at IS NOT NULL",
+		ctx, tx, where,
 	)
 	if err != nil {
 		return 0, mapPGWriteError("locking trashed sessions", err)
@@ -579,7 +610,12 @@ func (s *Store) EmptyTrash() (int, error) {
 	if err != nil {
 		return 0, mapPGWriteError("emptying trash", err)
 	}
-	if err := deletePGExcludedSessionRows(ctx, tx, excludedIDs); err != nil {
+	if legacyOnly {
+		err = deleteLegacyExcludedSessionRows(ctx, tx, excludedIDs)
+	} else {
+		err = deletePGExcludedSessionRows(ctx, tx, excludedIDs)
+	}
+	if err != nil {
 		return 0, mapPGWriteError("purging excluded trashed session aliases", err)
 	}
 	if err := tx.Commit(); err != nil {

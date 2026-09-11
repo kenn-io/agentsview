@@ -801,3 +801,22 @@ func (s *rawSyncCustodyStub) CommitManifest(
 
 var _ RawSyncDeviceAuth = (*rawSyncAuthStub)(nil)
 var _ RawSyncCustody = (*rawSyncCustodyStub)(nil)
+
+func TestRawSyncRejectsOtherTenantBeforeCustody(t *testing.T) {
+	other := rawsync.AuthIdentity{TenantID: "other", DeviceID: "device"}
+	for _, path := range []string{"/api/v1/raw-sync/tokens", "/api/v1/raw-sync/objects/missing", "/api/v1/raw-sync/manifests", "/api/v1/raw-sync/uploads"} {
+		t.Run(path, func(t *testing.T) {
+			auth := &rawSyncAuthStub{authenticateToken: func(context.Context, string, rawsync.DeviceTokenScope) (rawsync.AuthIdentity, error) {
+				return other, nil
+			}, authenticateCredential: func(context.Context, string, string) (rawsync.AuthIdentity, error) { return other, nil }}
+			custody := &rawSyncCustodyStub{}
+			uploads := &rawSyncUploadsStub{}
+			srv := New(config.Config{Host: "127.0.0.1", Port: 8080, RequireAuth: true, AuthToken: "synthetic-server-token"}, nil, nil, WithRawSyncServices(auth, custody), WithRawSyncUploads(uploads), WithRawSyncTenant("configured"))
+			recorder := serveRawSyncJSON(t, srv, http.MethodPost, path, `{}`, "avdt_token", "device")
+			assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+			assert.Zero(t, custody.missingCalls)
+			assert.Zero(t, custody.commitCalls)
+			assert.Zero(t, uploads.startCalls)
+		})
+	}
+}

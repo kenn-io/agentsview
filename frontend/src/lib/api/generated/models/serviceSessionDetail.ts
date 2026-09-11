@@ -46,6 +46,7 @@ export interface ServiceSessionDetail {
   outcome: string;
   outcome_confidence: string;
   parent_session_id?: string;
+  parent_session_ids?: string[];
   parser_malformed_lines?: number;
   peak_context_tokens: number;
   project: string;

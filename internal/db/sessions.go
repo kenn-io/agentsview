@@ -293,28 +293,29 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 
 // Session represents a row in the sessions table.
 type Session struct {
-	ID                    string  `json:"id"`
-	Project               string  `json:"project"`
-	Machine               string  `json:"machine"`
-	Agent                 string  `json:"agent"`
-	AgentLabel            string  `json:"agent_label,omitempty"`
-	Entrypoint            string  `json:"entrypoint,omitempty"`
-	SessionKind           string  `json:"session_kind,omitempty"`
-	FirstMessage          *string `json:"first_message"`
-	DisplayName           *string `json:"display_name,omitempty"`
-	SessionName           *string `json:"-"`
-	StartedAt             *string `json:"started_at"`
-	EndedAt               *string `json:"ended_at"`
-	MessageCount          int     `json:"message_count"`
-	UserMessageCount      int     `json:"user_message_count"`
-	ParentSessionID       *string `json:"parent_session_id,omitempty"`
-	ParserParentSessionID *string `json:"-"`
-	RelationshipType      string  `json:"relationship_type,omitempty"`
-	TotalOutputTokens     int     `json:"total_output_tokens"`
-	PeakContextTokens     int     `json:"peak_context_tokens"`
-	HasTotalOutputTokens  bool    `json:"has_total_output_tokens"`
-	HasPeakContextTokens  bool    `json:"has_peak_context_tokens"`
-	IsAutomated           bool    `json:"is_automated"`
+	ID                    string   `json:"id"`
+	Project               string   `json:"project"`
+	Machine               string   `json:"machine"`
+	Agent                 string   `json:"agent"`
+	AgentLabel            string   `json:"agent_label,omitempty"`
+	Entrypoint            string   `json:"entrypoint,omitempty"`
+	SessionKind           string   `json:"session_kind,omitempty"`
+	FirstMessage          *string  `json:"first_message"`
+	DisplayName           *string  `json:"display_name,omitempty"`
+	SessionName           *string  `json:"-"`
+	StartedAt             *string  `json:"started_at"`
+	EndedAt               *string  `json:"ended_at"`
+	MessageCount          int      `json:"message_count"`
+	UserMessageCount      int      `json:"user_message_count"`
+	ParentSessionIDs      []string `json:"parent_session_ids,omitempty"`
+	ParentSessionID       *string  `json:"parent_session_id,omitempty"`
+	ParserParentSessionID *string  `json:"-"`
+	RelationshipType      string   `json:"relationship_type,omitempty"`
+	TotalOutputTokens     int      `json:"total_output_tokens"`
+	PeakContextTokens     int      `json:"peak_context_tokens"`
+	HasTotalOutputTokens  bool     `json:"has_total_output_tokens"`
+	HasPeakContextTokens  bool     `json:"has_peak_context_tokens"`
+	IsAutomated           bool     `json:"is_automated"`
 
 	// Session signals (computed from messages/tool_calls).
 	ToolFailureSignalCount int      `json:"tool_failure_signal_count"`
@@ -638,25 +639,26 @@ type SessionPage struct {
 }
 
 type SidebarSessionIndexRow struct {
-	ID                 string  `json:"id"`
-	ParentSessionID    *string `json:"parent_session_id,omitempty"`
-	RelationshipType   string  `json:"relationship_type,omitempty"`
-	Project            string  `json:"project"`
-	Machine            string  `json:"machine"`
-	Agent              string  `json:"agent"`
-	AgentLabel         string  `json:"agent_label,omitempty"`
-	Entrypoint         string  `json:"entrypoint,omitempty"`
-	SessionKind        string  `json:"session_kind,omitempty"`
-	DisplayName        *string `json:"display_name,omitempty"`
-	StartedAt          *string `json:"started_at"`
-	EndedAt            *string `json:"ended_at"`
-	CreatedAt          string  `json:"created_at"`
-	TerminationStatus  *string `json:"termination_status,omitempty"`
-	MessageCount       int     `json:"message_count"`
-	UserMessageCount   int     `json:"user_message_count"`
-	TranscriptRevision *string `json:"transcript_revision,omitempty"`
-	IsAutomated        bool    `json:"is_automated"`
-	IsTeammate         bool    `json:"is_teammate"`
+	ParentSessionIDs   []string `json:"parent_session_ids,omitempty"`
+	ID                 string   `json:"id"`
+	ParentSessionID    *string  `json:"parent_session_id,omitempty"`
+	RelationshipType   string   `json:"relationship_type,omitempty"`
+	Project            string   `json:"project"`
+	Machine            string   `json:"machine"`
+	Agent              string   `json:"agent"`
+	AgentLabel         string   `json:"agent_label,omitempty"`
+	Entrypoint         string   `json:"entrypoint,omitempty"`
+	SessionKind        string   `json:"session_kind,omitempty"`
+	DisplayName        *string  `json:"display_name,omitempty"`
+	StartedAt          *string  `json:"started_at"`
+	EndedAt            *string  `json:"ended_at"`
+	CreatedAt          string   `json:"created_at"`
+	TerminationStatus  *string  `json:"termination_status,omitempty"`
+	MessageCount       int      `json:"message_count"`
+	UserMessageCount   int      `json:"user_message_count"`
+	TranscriptRevision *string  `json:"transcript_revision,omitempty"`
+	IsAutomated        bool     `json:"is_automated"`
+	IsTeammate         bool     `json:"is_teammate"`
 }
 
 type SidebarSessionIndex struct {

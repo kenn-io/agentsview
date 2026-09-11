@@ -1,3 +1,7 @@
+---
+last_edited: 2026-09-11
+---
+
 # agentsview
 
 Browse, search, and track costs across all your AI coding agents. One binary, no
@@ -557,6 +561,11 @@ agentsview pg status --all     # show status for every configured PG target
 agentsview pg serve            # serve web UI from the default PG target (read-only)
 ```
 
+Opt-in [hosted raw processing](docs/hosted-raw-sync.md) lets `pg serve` parse
+uploaded sources directly into PostgreSQL. It requires explicit tenant/schema
+provisioning, a restricted runtime role, authentication and Linux isolation.
+Ordinary PG serving remains read-only; `pg push` refuses hosted-owned schemas.
+
 Single-target configs still use the legacy `[pg]` block. To manage more than one
 PostgreSQL destination, define named `[pg.NAME]` blocks and set `default_pg`
 when more than one target exists:
@@ -576,7 +585,9 @@ exclude_projects = ["scratch"]
 
 Named target names are normalized case-insensitively. `all`, `local`, and the
 legacy `[pg]` field names `url`, `schema`, `machine_name`, `allow_insecure`,
-`projects`, and `exclude_projects` cannot be used for `[pg.NAME]`.
+`projects`, `exclude_projects`, `raw_tenant`, `raw_derivation`,
+`raw_poll_seconds`, `raw_attempt_seconds`, and `raw_max_attempts` cannot be used
+for `[pg.NAME]`.
 
 `AGENTSVIEW_PG_URL`, `AGENTSVIEW_PG_SCHEMA`, and `AGENTSVIEW_PG_MACHINE` still
 work, but in named-target mode they apply only to the effective default target.

@@ -11,5 +11,6 @@ import (
 var (
 	_ db.Store = (*db.DB)(nil)
 	_ db.Store = (*postgresstore.Store)(nil)
+	_ db.Store = (*postgresstore.HostedStore)(nil)
 	_ db.Store = (*duckdbstore.Store)(nil)
 )

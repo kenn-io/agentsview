@@ -163,6 +163,8 @@ CREATE TABLE IF NOT EXISTS raw_ingest_jobs (
     manifest_id TEXT NOT NULL,
     stage TEXT NOT NULL CHECK (stage IN ('parse')),
     processing_version TEXT NOT NULL,
+    projection_generation BIGINT NOT NULL DEFAULT 0,
+    projection_selected BOOLEAN NOT NULL DEFAULT true,
     state TEXT NOT NULL DEFAULT 'ready'
         CHECK (
             state IN (
@@ -325,6 +327,9 @@ func ensureRawIngestSchemaPG(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, rawIngestDDL); err != nil {
 		return fmt.Errorf("creating raw ingest schema: %w", err)
 	}
+	if err := ensureRawProjectionJobColumns(ctx, db); err != nil {
+		return err
+	}
 	if _, err := db.ExecContext(ctx, rawIngestAppendOnlyDDL); err != nil {
 		if !rawIngestAppendOnlyUnsupported(err) {
 			return fmt.Errorf("installing raw ingest append-only guards: %w", err)
@@ -335,6 +340,24 @@ func ensureRawIngestSchemaPG(ctx context.Context, db *sql.DB) error {
 		)
 	}
 	return nil
+}
+
+// The raw bootstrap also runs on the compatible mirror fast path. Probe before
+// taking a migration lock so an already-provisioned schema performs no ALTER.
+func ensureRawProjectionJobColumns(ctx context.Context, q interface {
+	hostedQuerier
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}) error {
+	var current bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='raw_ingest_jobs'::regclass AND attnum>0 AND NOT attisdropped AND attname IN ('projection_generation','projection_selected') GROUP BY attrelid HAVING count(*)=2)`).Scan(&current)
+	if err != nil {
+		return fmt.Errorf("probing raw projection job columns: %w", err)
+	}
+	if current {
+		return nil
+	}
+	_, err = q.ExecContext(ctx, `ALTER TABLE raw_ingest_jobs ADD COLUMN IF NOT EXISTS projection_generation BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS projection_selected BOOLEAN NOT NULL DEFAULT true`)
+	return err
 }
 
 func rawIngestAppendOnlyUnsupported(err error) bool {

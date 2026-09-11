@@ -1,10 +1,12 @@
 review_guidelines = """
-agentsview is a single-user developer tool. Default mode binds to
+agentsview defaults to a single-user developer tool. Local mode binds to
 127.0.0.1. Optional managed Caddy proxy mode allows LAN access while
 keeping the backend on loopback. Optional remote access mode binds to
 0.0.0.0 with bearer-token auth for use over secure tunnels (Tailscale,
-SSH, reverse proxy with TLS). Not designed for multi-user or
-internet-facing deployment.
+SSH, reverse proxy with TLS). These legacy modes are not designed for
+request-multiplexed multi-user deployment. Opt-in hosted raw processing has
+a separate threat model: one configured tenant, schema, restricted role and
+server instance, with authenticated uploads treated as untrusted input.
 
 Key assumptions reviewers MUST account for:
 
@@ -15,7 +17,9 @@ Key assumptions reviewers MUST account for:
    bearer token is required for all API requests (including localhost,
    to prevent bypass via reverse proxy). An auth token is
    auto-generated at startup if missing. Do not flag missing auth on
-   local-only code paths. DO flag any path that lets the backend bind
+   local-only code paths. Hosted mode always requires authentication;
+   raw-sync routes use device credentials and scoped tokens separately
+   from the viewer bearer token. DO flag any path that lets the backend bind
    non-loopback in proxy mode, or missing subnet checks for
    non-loopback Caddy binds.
 
@@ -37,8 +41,9 @@ Key assumptions reviewers MUST account for:
 4. XSS: {@html renderMarkdown(...)} is safe — renderMarkdown()
    sanitizes via DOMPurify before returning HTML.
 
-5. RATE LIMITING: Single-user tool. Do not flag missing rate limits
-   or concurrency caps.
+5. RATE LIMITING: Do not flag missing rate limits or concurrency
+   caps in local/legacy single-user paths. Hosted raw ingestion and
+   derivation must bound body, materialization, output and worker resources.
 
 6. CORS: corsMiddleware requires matching Origin for mutating
    requests. Allowed origins = loopback variants + public_url +
@@ -46,25 +51,31 @@ Key assumptions reviewers MUST account for:
    token) allow the request origin. Do not flag as overly permissive
    unless origins outside the configured set are accepted.
 
-7. INPUT VALIDATION: Body size limits not required — backend is
-   loopback-only; in proxy mode Caddy subnet filtering limits
+7. INPUT VALIDATION: In local/legacy paths, body size limits are not
+   required — backend is loopback-only; in proxy mode Caddy subnet filtering limits
    clients to trusted hosts. In remote mode, bearer token gates
-   all API access.
+   all API access. Hosted raw authentication does not make source bytes
+   trusted; review bounded protocol and parser validation.
 
 8. SESSION DATA: Displaying session contents (tool args, commands,
    paths) is the tool's purpose. The user owns these files. Do not
-   flag as sensitive data exposure.
+   flag as sensitive data exposure within that user's local/legacy access
+   boundary. Hosted reads must preserve tenant and public-identity isolation.
 
-9. SUBPROCESS ENV: Agent CLI subprocesses intentionally inherit the
-   parent environment. Do not flag env var inheritance.
+9. SUBPROCESS ENV: Local insight/capture agent CLIs intentionally inherit
+   the parent environment. Hosted raw parser children require an explicit
+   minimal environment and pre-runtime inherited-descriptor closure.
 
-10. SESSION PARSING: Input files are from local agent CLIs, not
-    adversarial. Do not flag missing cycle detection, recursion
-    limits, or unreachable-node checks in DAG traversals.
+10. SESSION PARSING: Local/legacy input files are user-owned. Do not flag
+    missing cycle detection, recursion limits or unreachable-node checks
+    there. Hosted raw input is untrusted; review fail-closed filesystem,
+    network, process and resource isolation before parsing.
 
-11. WRITE ATOMICITY: Per-session transactions only. Full resync
-    recovers partial state. Do not flag non-atomic multi-session
-    writes.
+11. WRITE ATOMICITY: Local/legacy writes use per-session transactions;
+    full resync recovers partial state. Hosted publication must atomically
+    fence selection and lease generations, normalized rows, provenance,
+    public identity, curation, outbox and job outcome. Partial sources must
+    retain unresolved proof and retry finitely.
 
 12. TOCTOU ON LOCAL FILES: Files in ~/.agentsview/ are user-owned.
     An attacker with home-directory access already has equivalent
@@ -132,7 +143,11 @@ Key assumptions reviewers MUST account for:
     go.mod toolchain version before flagging unfamiliar language
     features.
 
-Do NOT flag issues that only apply to public-facing, multi-tenant,
-or internet-exposed services. Focus on bugs, logic errors, data
-corruption risks, and code quality issues.
+For local/legacy modes, do not impose requirements that apply only to
+public-facing multi-tenant services. For opt-in hosted raw processing,
+review its actual tenant/role/catalog boundary, immutable source provenance,
+source-selection and lease fences, bounded isolated parsing, public-ID
+ambiguity, curation survival and partial-source retry semantics. Do not
+assume request-multiplexed tenancy. Focus on bugs, data corruption, boundary
+violations and maintainability within each mode's supported contract.
 """

@@ -27,13 +27,19 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 
 	var sess db.Session
 	populateWireFixture(t, reflect.ValueOf(&sess).Elem(), 1)
+	require.Len(t, sess.ParentSessionIDs, 2)
+	require.NotEqual(t, sess.ParentSessionIDs[0], sess.ParentSessionIDs[1])
 
 	// Deliberate parity exemption: quality_signals is hoisted to the
 	// manifest-level session_quality_signals field because db.Session's
 	// pointer is load-path-transient (see the manifestSession struct
-	// comment). The reference for parity is the session without it.
+	// comment). ParentSessionIDs is also deliberately absent: plural parents
+	// describe hosted read context, not portable artifact content. Neither
+	// field may change the pinned artifact bytes. Scalar ParentSessionID stays
+	// in the reference and retains its existing wire contract.
 	reference := sess
 	reference.QualitySignals = nil
+	reference.ParentSessionIDs = nil
 	type sessionAlias db.Session
 
 	want, err := canonicalJSON(sessionAlias(reference))
@@ -41,12 +47,20 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	got, err := canonicalJSON(manifestSessionFromDB(sess))
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(got),
-		"manifestSession must serialize byte-identically to db.Session minus quality_signals")
+		"manifestSession must serialize byte-identically to db.Session minus transient quality_signals and hosted parent context")
 
-	withoutPointer, err := canonicalJSON(manifestSessionFromDB(reference))
+	withoutReadMetadata, err := canonicalJSON(manifestSessionFromDB(reference))
 	require.NoError(t, err)
-	assert.Equal(t, string(got), string(withoutPointer),
-		"manifest bytes must not depend on the transient quality_signals pointer")
+	assert.Equal(t, string(got), string(withoutReadMetadata),
+		"manifest bytes must not depend on the transient quality_signals pointer or hosted plural parents")
+
+	for _, parents := range [][]string{nil, {}, {"other-parent-a", "other-parent-b"}} {
+		changed := sess
+		changed.ParentSessionIDs = parents
+		wire, err := canonicalJSON(manifestSessionFromDB(changed))
+		require.NoError(t, err)
+		assert.Equal(t, string(got), string(wire), "hosted parent context must not rehash artifacts")
+	}
 
 	roundTrip, err := canonicalJSON(sessionAlias(manifestSessionFromDB(sess).dbSession()))
 	require.NoError(t, err)
@@ -105,6 +119,12 @@ func setWireFixtureValue(t *testing.T, field reflect.Value, n int) {
 		elem := reflect.New(field.Type().Elem())
 		setWireFixtureValue(t, elem.Elem(), n)
 		field.Set(elem)
+	case reflect.Slice:
+		values := reflect.MakeSlice(field.Type(), 2, 2)
+		for i := 0; i < values.Len(); i++ {
+			setWireFixtureValue(t, values.Index(i), n*10+i)
+		}
+		field.Set(values)
 	case reflect.Struct:
 		populateWireFixture(t, field, n*10)
 	default:

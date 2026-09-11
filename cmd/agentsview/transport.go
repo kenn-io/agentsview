@@ -83,6 +83,20 @@ var openPGReadStore = func(
 	pgCfg config.PGConfig,
 ) (db.Store, func(), error) {
 	applyClassifierConfig(cfg)
+	if err := pgCfg.ValidateRawDerivation(cfg.RequireAuth); err != nil {
+		return nil, nil, err
+	}
+	if pgCfg.RawTenant != "" {
+		store, err := postgres.NewHostedStore(pgCfg.URL, pgCfg.Schema, pgCfg.RawTenant, pgCfg.AllowInsecure)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err = applyRequiredCursorSecret(store, cfg); err != nil {
+			store.Close()
+			return nil, nil, err
+		}
+		return store, func() { _ = store.Close() }, nil
+	}
 	store, err := postgres.NewStore(
 		pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure,
 	)

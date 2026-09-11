@@ -151,8 +151,19 @@ func (s *Store) PinMessage(
 		return 0, err
 	}
 
+	id, err := pinMessageTx(ctx, tx, sessionID, messageID, note)
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func pinMessageTx(ctx context.Context, tx *sql.Tx, sessionID string, messageID int64, note *string) (int64, error) {
 	var id int64
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		WITH upsert AS (
 			INSERT INTO pinned_messages (
 				session_id, message_id, ordinal, source_uuid, note
@@ -172,18 +183,9 @@ func (s *Store) PinMessage(
 		sessionID, messageID, note,
 	).Scan(&id)
 	if err == sql.ErrNoRows {
-		if err := tx.Commit(); err != nil {
-			return 0, fmt.Errorf("committing empty pin transaction: %w", err)
-		}
 		return 0, nil
 	}
-	if err != nil {
-		return 0, fmt.Errorf("pinning message: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing pin transaction: %w", err)
-	}
-	return id, nil
+	return id, err
 }
 
 // UnpinMessage removes a shared PG pin.

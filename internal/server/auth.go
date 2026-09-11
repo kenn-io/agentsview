@@ -237,7 +237,13 @@ func (s *Server) isRawSyncOwnAuthPath(path string) bool {
 
 func (s *Server) authenticateRawSyncRequest(
 	r *http.Request,
-) (rawsync.AuthIdentity, error) {
+) (identity rawsync.AuthIdentity, resultErr error) {
+	defer func() {
+		if resultErr == nil && s.rawSyncTenant != "" && identity.TenantID != s.rawSyncTenant {
+			identity = rawsync.AuthIdentity{}
+			resultErr = rawsync.ErrUnauthorized
+		}
+	}()
 	secret, err := rawSyncBearer(r.Header.Get("Authorization"))
 	if err != nil {
 		return rawsync.AuthIdentity{}, err

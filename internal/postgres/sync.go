@@ -268,6 +268,10 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	if err = RejectHostedPush(context.Background(), pg); err != nil {
+		pg.Close()
+		return nil, err
+	}
 	targetFingerprint, err := pgTargetFingerprint(pgURL, schema)
 	if err != nil {
 		pg.Close()

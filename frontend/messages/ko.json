@@ -1664,6 +1664,7 @@
   "pinned_expand": "펼치기",
   "pinned_copy_message": "메시지 복사",
   "pinned_copied_message": "메시지가 복사됨",
+  "pinned_unresolved": "고정한 메시지가 이 대화에 더 이상 없습니다.",
   "pinned_unpin": "고정 해제",
   "settings_session_providers_title": "세션 공급자",
   "settings_session_providers_description": "AgentsView가 검색하고 동기화할 에이전트 세션 소스를 선택합니다.",

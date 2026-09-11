@@ -16,6 +16,7 @@ export interface DbSidebarSessionIndexRow {
   machine: string;
   message_count: number;
   parent_session_id?: string;
+  parent_session_ids?: string[];
   project: string;
   relationship_type?: string;
   session_kind?: string;

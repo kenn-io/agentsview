@@ -28,6 +28,7 @@ const (
 // ORM: callers still own SELECTs, JOINs, backend-specific search paths, and
 // table schemas.
 type QueryDialect struct {
+	parentRelation     func(childAlias, parentAlias string) string
 	name               string
 	placeholderStyle   placeholderStyle
 	trueLiteral        string
@@ -469,6 +470,16 @@ func SidebarOrphanPredicate(sessionAlias, parentAlias string) string {
 		)`
 }
 
+func (d QueryDialect) WithParentRelation(relation func(string, string) string) QueryDialect {
+	d.parentRelation = relation
+	return d
+}
+func (d QueryDialect) ParentRelation(child, parent string) string {
+	if d.parentRelation != nil {
+		return d.parentRelation(child, parent)
+	}
+	return child + ".parent_session_id = " + parent + ".id"
+}
 func BuildCanonicalRootWhere(dialect QueryDialect, sessionAlias string, includeOrphans bool) string {
 	base := `NOT (` + CanonicalChildRelationshipPredicate(dialect, sessionAlias) + `)`
 	if !includeOrphans {
@@ -476,7 +487,7 @@ func BuildCanonicalRootWhere(dialect QueryDialect, sessionAlias string, includeO
 	}
 	return `(` + base + ` OR (` +
 		CanonicalChildRelationshipPredicate(dialect, sessionAlias) + ` AND ` +
-		SidebarOrphanPredicate(sessionAlias, "parent") + `))`
+		`NOT EXISTS (SELECT 1 FROM sessions parent WHERE ` + dialect.ParentRelation(sessionAlias, "parent") + `)` + `))`
 }
 
 func buildSessionFilterWithBuilder(
@@ -531,7 +542,7 @@ func buildSessionFilterWithBuilder(
 		rootMatch +
 		" UNION " +
 		"SELECT s.id FROM sessions s" +
-		" JOIN tree t ON s.parent_session_id = t.id" +
+		" JOIN tree t ON " + b.dialect.ParentRelation("s", "t") +
 		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
 		childAutomationWhere +
 		") SELECT id FROM tree"

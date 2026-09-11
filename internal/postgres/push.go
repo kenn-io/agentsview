@@ -2266,6 +2266,21 @@ func (s *Sync) pushSession(
 	ctx context.Context, tx *sql.Tx, sess db.Session, markerID string,
 	legacyMarkerMachines []string,
 ) error {
+	return writePGSession(ctx, tx, sess, markerID, legacyMarkerMachines, pgSessionWriteOptions{
+		Machine: s.machine, ArchiveID: s.archiveID, DatabaseGeneration: s.databaseGeneration, UsageOnly: s.local.ArchiveContent().UsageOnly(),
+	})
+}
+
+type pgSessionWriteOptions struct {
+	Machine, ArchiveID string
+	DatabaseGeneration string
+	UsageOnly          bool
+	SkipAliases        bool
+}
+
+// writePGSession is the shared transaction-owned row kernel. Mirror ownership
+// is passed explicitly; it never reads the source archive or global pool.
+func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID string, legacyMarkerMachines []string, options pgSessionWriteOptions) error {
 	createdAt, ok := ParseSQLiteTimestamp(sess.CreatedAt)
 	if !ok {
 		return fmt.Errorf(
@@ -2286,7 +2301,7 @@ func (s *Sync) pushSession(
 		return fmt.Errorf("parsing session %s deleted_at: %w", sess.ID, err)
 	}
 	isAutomated := sess.IsAutomated
-	pushedMachine := pushedSessionMachine(sess, s.machine)
+	pushedMachine := pushedSessionMachine(sess, options.Machine)
 	var existingMachine sql.NullString
 	var existingOwnerMarker sql.NullString
 	checkErr := tx.QueryRowContext(ctx,
@@ -2588,11 +2603,11 @@ func (s *Sync) pushSession(
 		sanitizePG(sess.AgentLabel),
 		sanitizePG(sess.Entrypoint),
 		sanitizePG(sess.SessionKind),
-		s.archiveID,
-		s.databaseGeneration,
+		options.ArchiveID,
+		options.DatabaseGeneration,
 		sess.FilePath,
 		string(legacyMarkerMachinesJSON),
-		s.local.ArchiveContent().UsageOnly(),
+		options.UsageOnly,
 	)
 	if err != nil {
 		return err
@@ -2638,13 +2653,15 @@ func (s *Sync) pushSession(
 	if excluded {
 		return errSessionExcluded
 	}
-	if s.local.ArchiveContent().UsageOnly() {
+	if options.UsageOnly {
 		if err := clearSessionVectorsTx(ctx, tx, sess.ID); err != nil {
 			return err
 		}
 	}
-	if err := replacePGSessionAliases(ctx, tx, sess); err != nil {
-		return err
+	if !options.SkipAliases {
+		if err := replacePGSessionAliases(ctx, tx, sess); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -4135,6 +4152,13 @@ func (s *Sync) pushSecretFindings(
 		return deleted > 0, nil
 	}
 
+	if err := bulkInsertSecretFindings(ctx, tx, sessionID, findings); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func bulkInsertSecretFindings(ctx context.Context, tx *sql.Tx, sessionID string, findings []db.SecretFinding) error {
 	const sfBatch = 50
 	for i := 0; i < len(findings); i += sfBatch {
 		end := min(i+sfBatch, len(findings))
@@ -4171,13 +4195,13 @@ func (s *Sync) pushSecretFindings(
 		if _, err := tx.ExecContext(
 			ctx, b.String(), args...,
 		); err != nil {
-			return false, fmt.Errorf(
+			return fmt.Errorf(
 				"bulk inserting secret_findings for %s: %w",
 				sessionID, err,
 			)
 		}
 	}
-	return true, nil
+	return nil
 }
 
 // normalizeSyncTimestamps ensures schema exists and normalizes

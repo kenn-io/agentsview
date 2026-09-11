@@ -20,8 +20,10 @@ const rawIngestBatchRows = 256
 
 // RawIngestStore implements raw custody metadata over PostgreSQL.
 type RawIngestStore struct {
-	db         *sql.DB
-	newReceipt func() (string, error)
+	db            *sql.DB
+	tenant        string
+	hostedVersion string
+	newReceipt    func() (string, error)
 }
 
 // NewRawIngestStore constructs a PostgreSQL raw custody metadata store.
@@ -30,6 +32,40 @@ func NewRawIngestStore(db *sql.DB) (*RawIngestStore, error) {
 		return nil, fmt.Errorf("%w: PostgreSQL connection is required", rawsync.ErrInvalid)
 	}
 	return &RawIngestStore{db: db, newReceipt: generateRawIngestReceipt}, nil
+}
+
+// NewTenantRawIngestStore binds custody and job operations to one configured
+// tenant. Callers must separately validate the hosted pool at startup.
+func NewTenantRawIngestStore(database *sql.DB, tenant string) (*RawIngestStore, error) {
+	if err := validateHostedBinding("hosted", tenant); err != nil {
+		return nil, err
+	}
+	s, err := NewRawIngestStore(database)
+	if err != nil {
+		return nil, err
+	}
+	s.tenant = tenant
+	return s, nil
+}
+
+// NewHostedRawIngestStore atomically selects the configured projection on new
+// acceptance and limits claims to that exact processing version.
+func NewHostedRawIngestStore(database *sql.DB, tenant, version string) (*RawIngestStore, error) {
+	if err := validateRawIngestProcessingVersion(version); err != nil {
+		return nil, err
+	}
+	s, err := NewTenantRawIngestStore(database, tenant)
+	if err != nil {
+		return nil, err
+	}
+	s.hostedVersion = version
+	return s, nil
+}
+func (s *RawIngestStore) validateIdentity(identity rawsync.AuthIdentity) error {
+	if s.tenant != "" && identity.TenantID != s.tenant {
+		return rawsync.ErrUnauthorized
+	}
+	return validateRawIngestIdentity(identity)
 }
 
 // RecordVerifiedObject records an object only after physical verification.
@@ -47,7 +83,7 @@ func (s *RawIngestStore) RecordVerifiedObjects(
 	identity rawsync.AuthIdentity,
 	objects []rawsync.ObjectRef,
 ) error {
-	if err := validateRawIngestIdentity(identity); err != nil {
+	if err := s.validateIdentity(identity); err != nil {
 		return err
 	}
 	unique, err := uniqueRawIngestObjects(objects)
@@ -94,7 +130,7 @@ func (s *RawIngestStore) MissingObjects(
 	identity rawsync.AuthIdentity,
 	objects []rawsync.ObjectRef,
 ) ([]rawsync.ObjectRef, error) {
-	if err := validateRawIngestIdentity(identity); err != nil {
+	if err := s.validateIdentity(identity); err != nil {
 		return nil, err
 	}
 	unique, err := uniqueRawIngestObjects(objects)
@@ -124,6 +160,12 @@ func (s *RawIngestStore) CommitManifest(
 	manifest rawsync.CanonicalManifest,
 	processingVersion string,
 ) (rawsync.CommitResult, error) {
+	if s.hostedVersion != "" && processingVersion != s.hostedVersion {
+		return rawsync.CommitResult{}, rawsync.ErrInvalid
+	}
+	if err := s.validateIdentity(manifest.Identity); err != nil {
+		return rawsync.CommitResult{}, err
+	}
 	if err := validateRawIngestProcessingVersion(processingVersion); err != nil {
 		return rawsync.CommitResult{}, err
 	}
@@ -249,6 +291,11 @@ func (s *RawIngestStore) CommitManifest(
 	}
 	if affected != 1 {
 		return rawsync.CommitResult{}, fmt.Errorf("advancing raw source head affected %d rows", affected)
+	}
+	if s.hostedVersion != "" {
+		if _, err := selectRawSourceGenerationTx(ctx, tx, manifest, processingVersion); err != nil {
+			return rawsync.CommitResult{}, err
+		}
 	}
 	if head.ManifestID != "" {
 		// The unique key permits legacy rows with several processing versions

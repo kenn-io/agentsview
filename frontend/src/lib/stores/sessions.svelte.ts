@@ -30,6 +30,7 @@ const RECENTLY_DELETED_TTL_MS = 10_000;
 export interface SessionGroupInput {
   id: string;
   parent_session_id?: string | null;
+  parent_session_ids?: string[];
   relationship_type?: string | null;
   project: string;
   machine: string;
@@ -1543,6 +1544,7 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     message_count: row.message_count,
     user_message_count: row.user_message_count,
     parent_session_id: row.parent_session_id ?? undefined,
+    parent_session_ids: row.parent_session_ids,
     relationship_type: row.relationship_type ?? undefined,
     termination_status: row.termination_status ?? null,
     total_output_tokens: 0,
@@ -1570,6 +1572,7 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     message_count: skinny.message_count,
     user_message_count: skinny.user_message_count,
     parent_session_id: skinny.parent_session_id,
+    parent_session_ids: skinny.parent_session_ids,
     relationship_type: skinny.relationship_type,
     termination_status: skinny.termination_status,
     transcript_revision: skinny.transcript_revision,
@@ -1719,6 +1722,30 @@ function findRoot(
   return cur;
 }
 
+// A hosted equal-content child may belong to several proven parent cohorts.
+// Keep every reachable loaded root, without choosing a representative parent.
+function findPublicRoots(id: string, byId: Map<string, SessionGroupInput>): string[] {
+  const pending = [id];
+  const visited = new Set<string>();
+  const roots = new Set<string>();
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    const row = byId.get(current);
+    const parents = (
+      row?.parent_session_ids?.length
+        ? row.parent_session_ids
+        : row?.parent_session_id
+          ? [row.parent_session_id]
+          : []
+    ).filter((parent) => byId.has(parent));
+    if (!parents.length) roots.add(current);
+    else pending.push(...parents);
+  }
+  return [...roots].sort();
+}
+
 export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[] {
   const byId = new Map<string, SessionGroupInput>();
   for (const s of sessions) {
@@ -1729,33 +1756,37 @@ export function buildSessionGroups(sessions: SessionGroupInput[]): SessionGroup[
   const groupMap = new Map<string, SessionGroup>();
   const insertionOrder: string[] = [];
 
+  const pluralParents = sessions.some((s) => s.parent_session_ids?.length);
   for (const s of sessions) {
-    const root = findRoot(s.id, byId, rootCache);
-    // Sessions without a parent_session_id that aren't
-    // pointed to by anyone get root == their own id, so
-    // they form a single-session group naturally.
-    const key = root;
+    const roots = pluralParents ? findPublicRoots(s.id, byId) : [findRoot(s.id, byId, rootCache)];
+    if (!roots.length) roots.push(findRoot(s.id, byId, rootCache));
+    for (const root of roots) {
+      // Sessions without a parent_session_id that aren't
+      // pointed to by anyone get root == their own id, so
+      // they form a single-session group naturally.
+      const key = root;
 
-    let group = groupMap.get(key);
-    if (!group) {
-      group = {
-        key,
-        project: s.project,
-        sessions: [],
-        primarySessionId: s.id,
-        totalMessages: 0,
-        firstMessage: null,
-        startedAt: null,
-        endedAt: null,
-      };
-      groupMap.set(key, group);
-      insertionOrder.push(key);
+      let group = groupMap.get(key);
+      if (!group) {
+        group = {
+          key,
+          project: s.project,
+          sessions: [],
+          primarySessionId: s.id,
+          totalMessages: 0,
+          firstMessage: null,
+          startedAt: null,
+          endedAt: null,
+        };
+        groupMap.set(key, group);
+        insertionOrder.push(key);
+      }
+
+      group.sessions.push(s);
+      group.totalMessages += s.message_count;
+      group.startedAt = minString(group.startedAt, s.started_at);
+      group.endedAt = maxString(group.endedAt, s.ended_at);
     }
-
-    group.sessions.push(s);
-    group.totalMessages += s.message_count;
-    group.startedAt = minString(group.startedAt, s.started_at);
-    group.endedAt = maxString(group.endedAt, s.ended_at);
   }
 
   // Adopt orphaned teammate sessions so they NEVER appear at root level.

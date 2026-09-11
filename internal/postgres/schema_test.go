@@ -1176,6 +1176,7 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 	// source_project_identity_observations: repository/worktree/checkout/remote
 	// context). Per-table batching means one ALTER each. tool_calls
 	// lists all its migration columns (call_index, file_path) as present, so
-	// it contributes no ALTER.
+	// it contributes no ALTER. Already-present raw job columns are probed
+	// without issuing a redundant ALTER.
 	assert.Equal(t, 4, state.alterTableExecCount(), "ALTER TABLE execs")
 }

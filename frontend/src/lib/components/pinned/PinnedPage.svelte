@@ -116,7 +116,7 @@
     </EmptyState>
   {:else}
     <div class="pin-list">
-      {#each pins.pins as pin (pin.id)}
+      {#each pins.pins as pin (`${pin.session_id}:${pin.message_key ?? pin.id}`)}
         {@const info = getSessionInfo(pin)}
         {@const isExpanded = expanded.has(pin.id)}
         {@const preview = previewContent(pin.content)}
@@ -136,6 +136,9 @@
             <span class="pin-time">{formatRelativeTime(pin.created_at)}</span>
           </div>
 
+          {#if pin.unresolved}
+            <div class="pin-content-preview">{m.pinned_unresolved()}</div>
+          {/if}
           {#if preview}
             <div class="pin-content-wrap">
               {#if isExpanded && pin.content}
@@ -154,6 +157,7 @@
           <div class="pin-card-footer">
             <button
               class="pin-card-meta"
+              disabled={pin.unresolved}
               onclick={() => navigateToPin(pin.session_id, pin.ordinal)}
               title={m.pinned_go_to_message()}
             >
@@ -180,7 +184,7 @@
               <button
                 class="unpin-btn"
                 title={m.pinned_unpin()}
-                onclick={() => pins.unpin(pin.session_id, pin.message_id)}
+                onclick={() => pin.message_key ? pins.removeReference(pin) : pins.unpin(pin.session_id, pin.message_id)}
               >
                 <XIcon size="12" strokeWidth="2.4" aria-hidden="true" />
               </button>

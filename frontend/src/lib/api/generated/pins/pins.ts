@@ -3,6 +3,7 @@
  */
 import type {
   DeleteApiV1SessionsByIdMessagesByMessageIdPinPathParameters,
+  DeleteApiV1SessionsByIdPinReferencesByMessageKeyPathParameters,
   GetApiV1PinsParams,
   GetApiV1SessionsByIdPinsPathParameters,
   PinMessageResponse,
@@ -90,6 +91,29 @@ export const postApiV1SessionsByIdMessagesByMessageIdPin = async (
       method: "POST",
       headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
       body: JSON.stringify(pinRequest),
+    },
+  );
+};
+
+export const getDeleteApiV1SessionsByIdPinReferencesByMessageKeyUrl = ({
+  id,
+  messageKey,
+}: DeleteApiV1SessionsByIdPinReferencesByMessageKeyPathParameters) => {
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/pin-references/${encodeURIComponent(String(messageKey))}`;
+};
+
+/**
+ * @summary Remove retained pin
+ */
+export const deleteApiV1SessionsByIdPinReferencesByMessageKey = async (
+  { id, messageKey }: DeleteApiV1SessionsByIdPinReferencesByMessageKeyPathParameters,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<void> => {
+  return orvalFetch<void>(
+    getDeleteApiV1SessionsByIdPinReferencesByMessageKeyUrl({ id, messageKey }),
+    {
+      ...options,
+      method: "DELETE",
     },
   );
 };

@@ -7,6 +7,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -89,6 +90,50 @@ func (w *Watcher) Events(
 	ctx context.Context, sessionID string,
 ) <-chan struct{} {
 	ch := make(chan struct{})
+	if identity, ok := w.db.(db.SessionWatchStateStore); ok {
+		initial, err := identity.GetSessionWatchState(sessionID)
+		go func() {
+			defer close(ch)
+			if err != nil {
+				return
+			}
+			if initial.State != db.SessionWatchResolved {
+				select {
+				case ch <- struct{}{}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			ticker := time.NewTicker(pollInterval())
+			defer ticker.Stop()
+			lastCount, lastVersion, _ := w.db.GetSessionVersion(sessionID)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					current, e := identity.GetSessionWatchState(sessionID)
+					if e != nil {
+						continue
+					}
+					transition := current.State != initial.State || current.PublicID != initial.PublicID || current.ContentRevision != initial.ContentRevision || !slices.Equal(current.Variants, initial.Variants)
+					count, version, ok := w.db.GetSessionVersion(sessionID)
+					if transition || ok && (count != lastCount || version != lastVersion) {
+						select {
+						case ch <- struct{}{}:
+						case <-ctx.Done():
+							return
+						}
+						if transition {
+							return
+						}
+						lastCount, lastVersion = count, version
+					}
+				}
+			}
+		}()
+		return ch
+	}
 	lastCount, lastDBVersion, _ := w.db.GetSessionVersion(
 		sessionID,
 	)

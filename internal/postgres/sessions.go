@@ -19,9 +19,10 @@ import (
 // Store wraps a PostgreSQL connection for read-only session
 // queries.
 type Store struct {
-	pg           *sql.DB
-	cursorMu     sync.RWMutex
-	cursorSecret []byte
+	hostedRelations bool
+	pg              *sql.DB
+	cursorMu        sync.RWMutex
+	cursorSecret    []byte
 
 	insightCapabilityMu        sync.RWMutex
 	insightGenerationAvailable bool
@@ -441,7 +442,7 @@ func (s *Store) ListSessions(
 		f.Limit = db.DefaultSessionLimit
 	}
 
-	where, args := buildPGSessionFilter(f)
+	where, args := db.BuildSessionFilterSQL(f, s.sessionDialect())
 
 	dialect := db.PostgresQueryDialect()
 	rs := db.ResolveSort(f)
@@ -537,7 +538,7 @@ func (s *Store) GetSidebarSessionIndex(
 	rootFilter.IncludeChildren = false
 	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
 	canonicalRootWhere := db.BuildCanonicalRootWhere(
-		db.PostgresQueryDialect(), "sessions", f.IncludeOrphans,
+		s.sessionDialect(), "sessions", f.IncludeOrphans,
 	)
 	var total int
 	countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
@@ -549,7 +550,7 @@ func (s *Store) GetSidebarSessionIndex(
 			fmt.Errorf("counting sidebar roots: %w", err)
 	}
 
-	where, args := buildPGSessionFilter(f)
+	where, args := db.BuildSessionFilterSQL(f, s.sessionDialect())
 	query := `
 		SELECT
 			id,
@@ -608,7 +609,7 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
 	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
-	canonicalRootWhere := db.BuildCanonicalRootWhere(db.PostgresQueryDialect(), "sessions", f.IncludeOrphans)
+	canonicalRootWhere := db.BuildCanonicalRootWhere(s.sessionDialect(), "sessions", f.IncludeOrphans)
 	childAutomationPred := pgAutomatedScopePredicate(
 		normalizePGAutomatedScope(f.AutomatedScope, f.ExcludeAutomated),
 		"s.is_automated",
@@ -642,7 +643,7 @@ func (s *Store) getSidebarSessionIndexPage(
 					UNION
 					SELECT t.root_id, s.id
 					FROM sessions s
-					JOIN tree t ON s.parent_session_id = t.id
+					JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
 					WHERE s.message_count > 0
 					  AND s.deleted_at IS NULL
 					  ` + childAutomationWhere + `
@@ -692,7 +693,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			UNION
 			SELECT t.root_id, s.id
 			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
+			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
 			WHERE s.message_count > 0
 			  AND s.deleted_at IS NULL
 			  ` + childAutomationWhere + `
@@ -781,7 +782,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			UNION
 			SELECT s.id, t.ord
 			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
+			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
 			WHERE s.message_count > 0
 			  AND s.deleted_at IS NULL
 			  ` + childAutomationWhere + `

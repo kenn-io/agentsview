@@ -1,3 +1,7 @@
+---
+last_edited: 2026-09-11
+---
+
 # Session Format Source Inventory
 
 This inventory records the best reproducible evidence currently available for
@@ -100,6 +104,11 @@ repository or document disappears, retain its original URL and commit hash and
 add an archived or maintained mirror without replacing the original identity.
 
 ## Claude Code (`claude`)
+
+Rechecked 2026-09-11 against the existing provider parser and its metadata
+fixtures: the first nonempty JSONL `sessionId` supplies `SourceSessionID`. A
+filename alone does not supply that provider identity. Hosted multi-device
+fixtures retain this field; missing identities remain source-local.
 
 - **Performance fixture check (2026-09-04):** Rechecked the pinned Codeburn
   format notes below for project-scoped JSONL. `cmd/perfsim` uses the shared
@@ -268,7 +277,12 @@ add an archived or maintained mirror without replacing the original identity.
   background flag leave lineage unresolved when their complete UUID sets
   differ. Identical sets elect the smallest stem, retaining one copy across
   three background transcripts. An interactive original still wins a tie with
-  a background sibling. Reverified 2026-08-16 with Claude Code 2.1.233 using a
+  a background sibling. Reverified 2026-09-11 with same-size sibling rewrites
+  that restore mtime: filesystem ctime can also remain unchanged. Cached head
+  metadata therefore requires a bounded leading-byte digest check before
+  reusing the root UUID or background stamp. Full parsing retains the verified
+  parent and trims only the replayed prefix; no provider format changed.
+  Reverified 2026-08-16 with Claude Code 2.1.233 using a
   controlled `claude -p --session-id <uuid>` probe under an isolated
   `CLAUDE_CONFIG_DIR`. Before the deliberately bounded probe was terminated
   during its API retry, Claude had created the exact UUID transcript under
@@ -497,6 +511,12 @@ add an archived or maintained mirror without replacing the original identity.
   orphaned child's full transcript when its named parent is unavailable,
   matching local parsing. When available, the explicitly named parent travels
   with the captured fork so hosted parsing applies the local replay boundary.
+  Rechecked 2026-09-11 against the pinned protocol's `forked_from_id` field
+  and synthetic registered-provider fixtures: an absent parent reports
+  `DataVersionNeedsRetry` while retaining the child messages; a later captured
+  readable turnless parent resolves the same child as current. The hosted
+  integration exercises finite retry exhaustion and new-generation recovery
+  without changing these provider semantics.
   Reverified on 2026-09-10 with
   `TestProviderParserHostedParseMatchesLocalCodexForkLineage`: parents in
   other configured homes, archives, and custom roots also travel with the
@@ -735,7 +755,13 @@ add an archived or maintained mirror without replacing the original identity.
   available; monetary cost is catalog-derived.
 - **Agentsview:** `internal/parser/gemini.go` and
   `internal/parser/gemini_provider.go`; both JSON and JSONL generations remain
-  supported.
+  supported. Reverified the pinned recording source on 2026-09-11: token
+  metadata is attached separately from message content; its writer emits zero
+  defaults when usage arrives. Hosted transport preserves the parser’s explicit
+  coverage state, including absent usage and partially populated older records,
+  rather than inferring coverage from normalized zero-valued keys. The
+  provider-wire-preparation regression is
+  `TestSandboxGeminiWirePreservesTokenCoverage`.
 
 ## Gemini Apps (`gemini-apps`)
 

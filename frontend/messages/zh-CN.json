@@ -1662,6 +1662,7 @@
   "pinned_expand": "展开",
   "pinned_copy_message": "复制消息",
   "pinned_copied_message": "已复制消息",
+  "pinned_unresolved": "已固定的消息已不在此会话中。",
   "pinned_unpin": "取消固定",
   "settings_session_providers_title": "会话提供商",
   "settings_session_providers_description": "选择 AgentsView 要发现和同步的代理会话来源。",

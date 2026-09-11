@@ -17,6 +17,7 @@ vi.mock("../api/generated/index", () => ({
     getApiV1SessionsByIdPins: vi.fn().mockResolvedValue({ pins: [] }),
     postApiV1SessionsByIdMessagesByMessageIdPin: vi.fn().mockResolvedValue({ id: 1 }),
     deleteApiV1SessionsByIdMessagesByMessageIdPin: vi.fn().mockResolvedValue(undefined),
+    deleteApiV1SessionsByIdPinReferencesByMessageKey: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -197,5 +198,37 @@ describe("PinsStore.loadAll project filtering", () => {
     resolveAlpha({ pins: [PIN_ALPHA] });
     await alphaLoad;
     expect(store.pins).toEqual([PIN_BETA]);
+  });
+});
+
+describe("retained pin references", () => {
+  it("does not mark a reused ordinal pinned and removes the retained message key", async () => {
+    const store = createPinsStore();
+    const oldPin = {
+      ...PIN_ALPHA,
+      message_id: 1,
+      ordinal: 1,
+      message_key: "old-message",
+      unresolved: true,
+    };
+    const currentPin = {
+      ...PIN_ALPHA,
+      id: 2,
+      message_id: 2,
+      ordinal: 2,
+      message_key: "current-message",
+    };
+    pinsService.getApiV1SessionsByIdPins.mockResolvedValue({ pins: [oldPin, currentPin] });
+    await store.loadForSession("s1");
+    expect(store.isPinned(1)).toBe(false);
+    expect(store.isPinned(2)).toBe(true);
+    store.pins = [oldPin, currentPin];
+    pinsService.getApiV1Pins.mockResolvedValue({ pins: [currentPin] });
+    await store.removeReference(oldPin);
+    expect(PinsService.deleteApiV1SessionsByIdPinReferencesByMessageKey).toHaveBeenCalledWith({
+      id: "s1",
+      messageKey: "old-message",
+    });
+    expect(store.pins.map((p) => p.message_key)).toEqual(["current-message"]);
   });
 });

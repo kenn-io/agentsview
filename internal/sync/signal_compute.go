@@ -1,317 +1,51 @@
 package sync
 
 import (
-	"slices"
-	"time"
-
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/signals"
 )
 
-// computeSignalsFromMessages produces a SessionSignalUpdate from
-// in-memory session metadata and messages. Pure function with no
-// DB access — the caller already holds everything we need.
-//
-// Used by both the live write paths (writeBatch, writeSessionFull,
-// writeIncremental) and the legacy backfill path (RecomputeSignals,
-// which reads msgs from the DB once and then calls this).
+// Compatibility wrappers keep incremental maintenance and existing package
+// tests on the shared normalized computation.
 func computeSignalsFromMessages(
-	sess db.Session, msgs []db.Message,
+	session db.Session, messages []db.Message,
 ) db.SessionSignalUpdate {
-	return computeSignalsFromToolRows(sess, msgs, extractToolCallRows(msgs))
+	return ingest.ComputeSignalsFromMessages(session, messages)
 }
 
-// computeSignalsFromMessagesWithContentFailures is the staged streaming
-// variant: tool rows whose placeholder content hides a pre-computed
-// content-failure verdict get that verdict stamped before the signal pass,
-// so content-driven tool-health signals match the collecting path byte for
-// byte.
-func computeSignalsFromMessagesWithContentFailures(
-	sess db.Session, msgs []db.Message, failures map[string]bool,
-) db.SessionSignalUpdate {
-	toolRows := extractToolCallRows(msgs)
-	patchToolCallRowsWithContentFailures(toolRows, msgs, failures)
-	return computeSignalsFromToolRows(sess, msgs, toolRows)
-}
-
-// patchToolCallRowsWithContentFailures stamps pre-computed content-failure
-// verdicts onto rows whose last event status is empty (status-driven
-// verdicts win). toolRows must be the output of extractToolCallRows over
-// the same msgs slice, so the walk order is identical.
 func patchToolCallRowsWithContentFailures(
-	toolRows []signals.ToolCallRow,
-	msgs []db.Message,
-	failures map[string]bool,
+	rows []signals.ToolCallRow, messages []db.Message, failures map[string]bool,
 ) {
-	if len(failures) == 0 {
-		return
-	}
-	idx := 0
-	callOccurrences := make(map[string]int)
-	for _, m := range msgs {
-		for _, tc := range m.ToolCalls {
-			if idx >= len(toolRows) {
-				return
-			}
-			failed := false
-			if tc.ToolUseID != "" {
-				occurrence := callOccurrences[tc.ToolUseID]
-				callOccurrences[tc.ToolUseID] = occurrence + 1
-				failed = failures[db.StagedToolCallKey(
-					tc.ToolUseID, occurrence,
-				)]
-			}
-			if failed && toolRows[idx].EventStatus == "" {
-				toolRows[idx].ContentFailure = true
-			}
-			idx++
-		}
-	}
+	ingest.PatchToolCallRowsWithContentFailures(rows, messages, failures)
 }
 
 func computeSignalsFromToolRows(
-	sess db.Session, msgs []db.Message, toolRows []signals.ToolCallRow,
+	session db.Session, messages []db.Message, rows []signals.ToolCallRow,
 ) db.SessionSignalUpdate {
-	heuristics := signals.AnalyzeHeuristics(signals.HeuristicInput{
-		Messages: extractHeuristicMessages(msgs),
-		ToolRows: toolRows,
-	})
-	ctxTokens := extractContextTokens(msgs)
-	boundaries := extractCompactBoundaryOrdinals(msgs)
-	model := extractMostCommonModel(msgs)
-	lastRole, lastContent := extractLastMessageRole(msgs)
-
-	toolHealth := signals.ComputeToolHealth(toolRows)
-	ctxPressure := signals.ComputeContextPressure(
-		ctxTokens, sess.PeakContextTokens, model,
-	)
-
-	// Prefer explicit boundary count when available; fall back
-	// to the token-drop heuristic for sessions without
-	// compact-boundary messages.
-	compactionCount := ctxPressure.CompactionCount
-	if len(boundaries) > 0 {
-		compactionCount = len(boundaries)
-	}
-
-	midTaskCalls := make(
-		[]signals.ToolCallOrdinal, 0, len(toolRows),
-	)
-	for _, t := range toolRows {
-		midTaskCalls = append(midTaskCalls,
-			signals.ToolCallOrdinal{
-				MessageOrdinal: t.MessageOrdinal,
-				ToolName:       t.ToolName,
-			})
-	}
-	midTaskCount := signals.CountMidTaskCompactions(
-		boundaries, midTaskCalls,
-	)
-
-	finalStreak := computeFinalStreak(toolRows)
-
-	var lastActivity time.Time
-	if sess.EndedAt != nil {
-		lastActivity, _ = time.Parse(
-			time.RFC3339Nano, *sess.EndedAt,
-		)
-	}
-
-	outcomeResult := signals.ClassifyOutcome(signals.OutcomeInput{
-		IsAutomated:        sess.IsAutomated,
-		MessageCount:       sess.MessageCount,
-		EndedWithRole:      lastRole,
-		FinalFailureStreak: finalStreak,
-		LastAssistantText:  lastContent,
-		LastActivity:       lastActivity,
-	})
-
-	hasContextData := sess.HasPeakContextTokens
-	if !hasContextData {
-		for _, t := range ctxTokens {
-			if t.HasContextTokens {
-				hasContextData = true
-				break
-			}
-		}
-	}
-
-	scoreResult := signals.ComputeHealthScore(signals.ScoreInput{
-		Outcome:                outcomeResult.Outcome,
-		OutcomeConfidence:      outcomeResult.Confidence,
-		HasToolCalls:           len(toolRows) > 0,
-		FailureSignalCount:     toolHealth.FailureSignalCount,
-		RetryCount:             toolHealth.RetryCount,
-		EditChurnCount:         toolHealth.EditChurnCount,
-		ConsecutiveFailMax:     toolHealth.ConsecutiveFailureMax,
-		HasContextData:         hasContextData,
-		CompactionCount:        compactionCount,
-		MidTaskCompactionCount: midTaskCount,
-		PressureMax:            ctxPressure.PressureMax,
-		Heuristics:             heuristics,
-	})
-
-	var pendingSince *string
-	if outcomeResult.IsRecent {
-		now := time.Now().UTC().Format(time.RFC3339)
-		pendingSince = &now
-	}
-
-	var healthGrade *string
-	if scoreResult.Grade != "" {
-		healthGrade = &scoreResult.Grade
-	}
-
-	return db.SessionSignalUpdate{
-		ToolFailureSignalCount: toolHealth.FailureSignalCount,
-		ToolRetryCount:         toolHealth.RetryCount,
-		EditChurnCount:         toolHealth.EditChurnCount,
-		ConsecutiveFailureMax:  toolHealth.ConsecutiveFailureMax,
-		Outcome:                outcomeResult.Outcome,
-		OutcomeConfidence:      outcomeResult.Confidence,
-		EndedWithRole:          lastRole,
-		FinalFailureStreak:     finalStreak,
-		SignalsPendingSince:    pendingSince,
-		CompactionCount:        compactionCount,
-		MidTaskCompactionCount: midTaskCount,
-		ContextPressureMax:     ctxPressure.PressureMax,
-		HealthScore:            scoreResult.Score,
-		HealthGrade:            healthGrade,
-		HasToolCalls:           len(toolRows) > 0,
-		HasContextData:         hasContextData,
-		QualitySignals: db.QualitySignals{
-			Version:           db.CurrentQualitySignalVersion,
-			ShortPromptCount:  heuristics.ShortPromptCount,
-			UnstructuredStart: heuristics.UnstructuredStart,
-			MissingSuccessCriteriaCount: heuristics.
-				MissingSuccessCriteriaCount,
-			MissingVerificationCount: heuristics.
-				MissingVerificationCount,
-			DuplicatePromptCount: heuristics.DuplicatePromptCount,
-			NoCodeContextCount:   heuristics.NoCodeContextCount,
-			RunawayToolLoopCount: heuristics.RunawayToolLoopCount,
-		},
-	}
+	return ingest.ComputeSignalsFromToolRows(session, messages, rows)
 }
 
-func extractHeuristicMessages(
-	msgs []db.Message,
-) []signals.HeuristicMessage {
-	rows := make([]signals.HeuristicMessage, 0, len(msgs))
-	for _, m := range msgs {
-		rows = append(rows, signals.HeuristicMessage{
-			Role:          m.Role,
-			SourceSubtype: m.SourceSubtype,
-			Content:       m.Content,
-			IsSystem:      m.IsSystem,
-			Ordinal:       m.Ordinal,
-			Timestamp:     m.Timestamp,
-		})
-	}
-	return rows
+func extractHeuristicMessages(messages []db.Message) []signals.HeuristicMessage {
+	return ingest.ExtractHeuristicMessages(messages)
 }
 
-// extractToolCallRows builds signal inputs from in-memory tool
-// calls. CallIndex is the call's position within its message.
-// EventStatus is the status of the latest result event (events
-// are stored in event_index order, so the last one wins).
-func extractToolCallRows(
-	msgs []db.Message,
-) []signals.ToolCallRow {
-	rows := make([]signals.ToolCallRow, 0)
-	for _, m := range msgs {
-		for callIdx, tc := range m.ToolCalls {
-			status := ""
-			if n := len(tc.ResultEvents); n > 0 {
-				status = tc.ResultEvents[n-1].Status
-			}
-			rows = append(rows, signals.ToolCallRow{
-				ToolName:       tc.ToolName,
-				Category:       tc.Category,
-				InputJSON:      tc.InputJSON,
-				ResultContent:  tc.ResultContent,
-				MessageOrdinal: m.Ordinal,
-				CallIndex:      callIdx,
-				EventStatus:    status,
-			})
-		}
-	}
-	return rows
+func extractToolCallRows(messages []db.Message) []signals.ToolCallRow {
+	return ingest.ExtractToolCallRows(messages)
 }
 
-// extractContextTokens returns context-token measurements for
-// assistant messages in order.
-func extractContextTokens(
-	msgs []db.Message,
-) []signals.ContextTokenRow {
-	var rows []signals.ContextTokenRow
-	for _, m := range msgs {
-		if m.Role != "assistant" {
-			continue
-		}
-		rows = append(rows, signals.ContextTokenRow{
-			ContextTokens:    m.ContextTokens,
-			HasContextTokens: m.HasContextTokens,
-		})
-	}
-	return rows
+func extractContextTokens(messages []db.Message) []signals.ContextTokenRow {
+	return ingest.ExtractContextTokens(messages)
 }
 
-// extractCompactBoundaryOrdinals returns ordinals of explicit
-// compact-boundary messages in ascending order.
-func extractCompactBoundaryOrdinals(msgs []db.Message) []int {
-	var ords []int
-	for _, m := range msgs {
-		if m.IsCompactBoundary {
-			ords = append(ords, m.Ordinal)
-		}
-	}
-	return ords
+func extractCompactBoundaryOrdinals(messages []db.Message) []int {
+	return ingest.ExtractCompactBoundaryOrdinals(messages)
 }
 
-// extractMostCommonModel returns the assistant model name that
-// appears most often. Ties are broken by the model that appears
-// first chronologically — matches SQLite's GROUP BY iteration
-// order closely enough that legacy and live computations agree
-// on real sessions (every observed session has a clear majority
-// model).
-func extractMostCommonModel(msgs []db.Message) string {
-	counts := map[string]int{}
-	firstSeen := map[string]int{}
-	for i, m := range msgs {
-		if m.Role != "assistant" || m.Model == "" {
-			continue
-		}
-		counts[m.Model]++
-		if _, ok := firstSeen[m.Model]; !ok {
-			firstSeen[m.Model] = i
-		}
-	}
-	var best string
-	bestCount := -1
-	for model, n := range counts {
-		switch {
-		case n > bestCount:
-			best, bestCount = model, n
-		case n == bestCount && firstSeen[model] < firstSeen[best]:
-			best = model
-		}
-	}
-	return best
+func extractMostCommonModel(messages []db.Message) string {
+	return ingest.ExtractMostCommonModel(messages)
 }
 
-// extractLastMessageRole returns the role and content of the
-// last non-system, non-tool-result message. Empty strings if none.
-func extractLastMessageRole(
-	msgs []db.Message,
-) (role, content string) {
-	if msgs == nil {
-		return "", ""
-	}
-	for _, v := range slices.Backward(msgs) {
-		if !v.IsSystem && v.SourceSubtype != "tool_result" {
-			return v.Role, v.Content
-		}
-	}
-	return "", ""
+func extractLastMessageRole(messages []db.Message) (role, content string) {
+	return ingest.ExtractLastMessageRole(messages)
 }

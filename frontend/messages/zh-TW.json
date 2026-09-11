@@ -1662,6 +1662,7 @@
   "pinned_expand": "展開",
   "pinned_copy_message": "複製訊息",
   "pinned_copied_message": "已複製訊息",
+  "pinned_unresolved": "已釘選的訊息已不在此對話中。",
   "pinned_unpin": "取消釘選",
   "settings_session_providers_title": "工作階段提供者",
   "settings_session_providers_description": "選擇 AgentsView 要探索及同步的代理工作階段來源。",

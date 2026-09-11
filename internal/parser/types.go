@@ -1701,3 +1701,20 @@ func InferRelationshipTypes(results []ParseResult) {
 		}
 	}
 }
+
+// TokenPresenceKnown reports whether provider flags override legacy inference.
+// Transport adapters must preserve it alongside the exported token fields.
+func (m ParsedMessage) TokenPresenceKnown() bool { return m.tokenPresenceKnown }
+
+// RestoreTokenPresenceKnown restores transport metadata without inferring or
+// changing the provider's exported token values and coverage flags.
+func (m *ParsedMessage) RestoreTokenPresenceKnown(known bool) { m.tokenPresenceKnown = known }
+
+// AggregateTokenPresenceKnown reports whether session aggregate coverage is
+// authoritative rather than inferred from nonzero legacy values.
+func (s ParsedSession) AggregateTokenPresenceKnown() bool { return s.aggregateTokenPresenceKnown }
+
+// RestoreAggregateTokenPresenceKnown restores the session transport metadata.
+func (s *ParsedSession) RestoreAggregateTokenPresenceKnown(known bool) {
+	s.aggregateTokenPresenceKnown = known
+}

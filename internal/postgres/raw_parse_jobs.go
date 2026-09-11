@@ -43,53 +43,8 @@ func (s *RawIngestStore) ClaimRawParseJobs(
 		}
 	}()
 
-	rows, err := tx.QueryContext(ctx, `
-		WITH candidates AS (
-			SELECT job.id
-			FROM raw_ingest_jobs AS job
-			JOIN raw_manifests AS manifest
-				ON manifest.tenant_id = job.tenant_id
-				AND manifest.manifest_id = job.manifest_id
-			WHERE (
-				(job.state IN ('ready', 'retrying') AND job.available_at <= now())
-				OR (job.state = 'leased' AND job.lease_expires_at <= now())
-			)
-				AND job.stage = 'parse'
-				AND EXISTS (
-				SELECT 1
-				FROM raw_source_heads AS head
-				WHERE head.tenant_id = manifest.tenant_id
-					AND head.device_id = manifest.device_id
-					AND head.provider = manifest.provider
-					AND head.configured_root_id = manifest.configured_root_id
-					AND head.source_key_sha256 = manifest.source_key_sha256
-					AND head.manifest_id = manifest.manifest_id
-				)
-			ORDER BY job.available_at, job.id
-			LIMIT $1
-			FOR UPDATE OF job SKIP LOCKED
-		), claimed AS (
-			UPDATE raw_ingest_jobs AS job
-			SET state = 'leased', attempt_count = job.attempt_count + 1,
-				lease_owner = $2,
-				lease_expires_at = now() + ($3 * interval '1 microsecond'),
-				last_error_class = '', last_error = '', updated_at = now()
-			FROM candidates
-			WHERE job.id = candidates.id
-			RETURNING job.id, job.tenant_id, job.manifest_id,
-				job.processing_version, job.attempt_count, job.lease_owner,
-				job.lease_expires_at
-		)
-		SELECT claimed.id, claimed.tenant_id, manifest.device_id,
-			claimed.manifest_id, claimed.processing_version,
-			claimed.attempt_count, claimed.lease_owner, claimed.lease_expires_at
-		FROM claimed
-		JOIN raw_manifests AS manifest
-			ON manifest.tenant_id = claimed.tenant_id
-			AND manifest.manifest_id = claimed.manifest_id
-		ORDER BY claimed.id`,
-		limit, owner, leaseDuration.Microseconds(),
-	)
+	query, args := s.rawParseClaimStatement(owner, limit, leaseDuration)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("claiming raw parse jobs: %w", err)
 	}
@@ -102,6 +57,7 @@ func (s *RawIngestStore) ClaimRawParseJobs(
 			&lease.Identity.DeviceID,
 			&lease.ManifestID,
 			&lease.ProcessingVersion,
+			&lease.ProjectionGeneration,
 			&lease.Attempt,
 			&lease.Owner,
 			&lease.ExpiresAt,
@@ -121,9 +77,9 @@ func (s *RawIngestStore) ClaimRawParseJobs(
 	// supersession only reclaims rows no claim could ever lease. Running it
 	// after a short claim keeps cleanup bounded without charging the common
 	// full-batch path for an O(backlog) head-probe scan.
-	if len(leasing) < limit {
-		if err := supersedeObsoleteRawParseJobs(
-			ctx, tx, maxRawParseSupersedeBatch,
+	if len(leasing) < limit && s.hostedVersion == "" {
+		if err := supersedeTenantObsoleteRawParseJobs(
+			ctx, tx, maxRawParseSupersedeBatch, s.tenant,
 		); err != nil {
 			return nil, err
 		}
@@ -155,7 +111,7 @@ func supersedeObsoleteRawParseJobs(
 }
 
 // Future retries stay outside the idle cleanup scan until they become due.
-const rawParseSupersedeSQL = `
+const rawParseSupersedePrefix = `
 		UPDATE raw_ingest_jobs AS job
 		SET state = 'superseded', lease_owner = '', lease_expires_at = NULL,
 			updated_at = now()
@@ -169,7 +125,8 @@ const rawParseSupersedeSQL = `
 					(obsolete.state IN ('ready', 'retrying') AND obsolete.available_at <= now())
 					OR (obsolete.state = 'leased' AND obsolete.lease_expires_at <= now())
 			)
-				AND obsolete.stage = 'parse'
+				AND obsolete.stage = 'parse'`
+const rawParseSupersedeSuffix = `
 				AND NOT EXISTS (
 					SELECT 1
 					FROM raw_source_heads AS head
@@ -185,12 +142,29 @@ const rawParseSupersedeSQL = `
 			FOR UPDATE OF obsolete SKIP LOCKED
 		)`
 
+const rawParseSupersedeSQL = rawParseSupersedePrefix + rawParseSupersedeSuffix
+const rawParseSupersedeTenantSQL = rawParseSupersedePrefix + ` AND obsolete.tenant_id = $2 ` + rawParseSupersedeSuffix + ` AND job.tenant_id = $2 `
+
+func supersedeTenantObsoleteRawParseJobs(ctx context.Context, tx *sql.Tx, limit int, tenant string) error {
+	if tenant == "" {
+		return supersedeObsoleteRawParseJobs(ctx, tx, limit)
+	}
+	_, err := tx.ExecContext(ctx, rawParseSupersedeTenantSQL, limit, tenant)
+	if err != nil {
+		return fmt.Errorf("superseding tenant raw parse jobs: %w", err)
+	}
+	return nil
+}
+
 // HeartbeatRawParseJob extends an active lease held by the current source head.
 func (s *RawIngestStore) HeartbeatRawParseJob(
 	ctx context.Context,
 	lease rawderive.JobLease,
 	leaseDuration time.Duration,
 ) error {
+	if s.tenant != "" && lease.Identity.TenantID != s.tenant {
+		return rawderive.ErrLeaseLost
+	}
 	if err := validateRawParseLease(lease); err != nil {
 		return err
 	}
@@ -202,6 +176,7 @@ func (s *RawIngestStore) HeartbeatRawParseJob(
 		SET lease_expires_at = now() + ($4 * interval '1 microsecond'),
 			updated_at = now()
 		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
+			AND ($5 = '' OR (job.tenant_id = $5 AND job.manifest_id = $6 AND job.processing_version = $7))
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -216,7 +191,7 @@ func (s *RawIngestStore) HeartbeatRawParseJob(
 				WHERE manifest.tenant_id = job.tenant_id
 					AND manifest.manifest_id = job.manifest_id
 			)`,
-		lease.ID, lease.Owner, lease.Attempt, leaseDuration.Microseconds(),
+		lease.ID, lease.Owner, lease.Attempt, leaseDuration.Microseconds(), s.tenant, lease.ManifestID, lease.ProcessingVersion,
 	)
 	if err != nil {
 		return fmt.Errorf("heartbeating raw parse job: %w", err)
@@ -229,6 +204,9 @@ func (s *RawIngestStore) CompleteRawParseJob(
 	ctx context.Context,
 	lease rawderive.JobLease,
 ) error {
+	if s.tenant != "" && lease.Identity.TenantID != s.tenant {
+		return rawderive.ErrLeaseLost
+	}
 	if err := validateRawParseLease(lease); err != nil {
 		return err
 	}
@@ -237,6 +215,7 @@ func (s *RawIngestStore) CompleteRawParseJob(
 		SET state = 'complete', lease_owner = '', lease_expires_at = NULL,
 			last_error_class = '', last_error = '', updated_at = now()
 		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
+			AND ($4 = '' OR (job.tenant_id = $4 AND job.manifest_id = $5 AND job.processing_version = $6))
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -251,7 +230,7 @@ func (s *RawIngestStore) CompleteRawParseJob(
 				WHERE manifest.tenant_id = job.tenant_id
 					AND manifest.manifest_id = job.manifest_id
 			)`,
-		lease.ID, lease.Owner, lease.Attempt,
+		lease.ID, lease.Owner, lease.Attempt, s.tenant, lease.ManifestID, lease.ProcessingVersion,
 	)
 	if err != nil {
 		return fmt.Errorf("completing raw parse job: %w", err)
@@ -267,6 +246,9 @@ func (s *RawIngestStore) RetryRawParseJob(
 	errorClass string,
 	message string,
 ) error {
+	if s.tenant != "" && lease.Identity.TenantID != s.tenant {
+		return rawderive.ErrLeaseLost
+	}
 	if err := validateRawParseLease(lease); err != nil {
 		return err
 	}
@@ -279,6 +261,7 @@ func (s *RawIngestStore) RetryRawParseJob(
 			lease_expires_at = NULL, last_error_class = $5, last_error = $6,
 			updated_at = now()
 		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
+			AND ($7 = '' OR (job.tenant_id = $7 AND job.manifest_id = $8 AND job.processing_version = $9))
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -293,7 +276,7 @@ func (s *RawIngestStore) RetryRawParseJob(
 				WHERE manifest.tenant_id = job.tenant_id
 					AND manifest.manifest_id = job.manifest_id
 			)`,
-		lease.ID, lease.Owner, lease.Attempt, availableAt.UTC(), errorClass, message,
+		lease.ID, lease.Owner, lease.Attempt, availableAt.UTC(), errorClass, message, s.tenant, lease.ManifestID, lease.ProcessingVersion,
 	)
 	if err != nil {
 		return fmt.Errorf("retrying raw parse job: %w", err)
@@ -309,6 +292,9 @@ func (s *RawIngestStore) FailRawParseJob(
 	errorClass string,
 	message string,
 ) error {
+	if s.tenant != "" && lease.Identity.TenantID != s.tenant {
+		return rawderive.ErrLeaseLost
+	}
 	if err := validateRawParseLease(lease); err != nil {
 		return err
 	}
@@ -317,6 +303,7 @@ func (s *RawIngestStore) FailRawParseJob(
 		SET state = 'failed', lease_owner = '', lease_expires_at = NULL,
 			last_error_class = $4, last_error = $5, updated_at = now()
 		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
+			AND ($6 = '' OR (job.tenant_id = $6 AND job.manifest_id = $7 AND job.processing_version = $8))
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -331,7 +318,7 @@ func (s *RawIngestStore) FailRawParseJob(
 				WHERE manifest.tenant_id = job.tenant_id
 					AND manifest.manifest_id = job.manifest_id
 			)`,
-		lease.ID, lease.Owner, lease.Attempt, errorClass, message,
+		lease.ID, lease.Owner, lease.Attempt, errorClass, message, s.tenant, lease.ManifestID, lease.ProcessingVersion,
 	)
 	if err != nil {
 		return fmt.Errorf("failing raw parse job: %w", err)
@@ -373,4 +360,62 @@ func requireRawParseLeaseUpdate(result sql.Result) error {
 		return rawderive.ErrLeaseLost
 	}
 	return nil
+}
+
+func (s *RawIngestStore) rawParseClaimStatement(owner string, limit int, leaseDuration time.Duration) (string, []any) {
+	query := `
+		WITH candidates AS (
+			SELECT job.id
+			FROM raw_ingest_jobs AS job
+			JOIN raw_manifests AS manifest
+				ON manifest.tenant_id = job.tenant_id
+				AND manifest.manifest_id = job.manifest_id
+			WHERE (
+				(job.state IN ('ready', 'retrying') AND job.available_at <= now())
+				OR (job.state = 'leased' AND job.lease_expires_at <= now())
+			)
+				AND job.stage = 'parse' AND job.projection_selected
+ AND ($4 = '' OR job.tenant_id = $4)
+ {{hosted}}
+				AND EXISTS (
+				SELECT 1
+				FROM raw_source_heads AS head
+				WHERE head.tenant_id = manifest.tenant_id
+					AND head.device_id = manifest.device_id
+					AND head.provider = manifest.provider
+					AND head.configured_root_id = manifest.configured_root_id
+					AND head.source_key_sha256 = manifest.source_key_sha256
+					AND head.manifest_id = manifest.manifest_id
+				)
+			ORDER BY job.available_at, job.id
+			LIMIT $1
+			FOR UPDATE OF job SKIP LOCKED
+		), claimed AS (
+			UPDATE raw_ingest_jobs AS job
+			SET state = 'leased', attempt_count = job.attempt_count + 1,
+				lease_owner = $2,
+				lease_expires_at = now() + ($3 * interval '1 microsecond'),
+				last_error_class = '', last_error = '', updated_at = now()
+			FROM candidates
+			WHERE job.id = candidates.id AND ($4 = '' OR job.tenant_id = $4)
+			RETURNING job.id, job.tenant_id, job.manifest_id,
+				job.processing_version, job.projection_generation, job.attempt_count, job.lease_owner,
+				job.lease_expires_at
+		)
+		SELECT claimed.id, claimed.tenant_id, manifest.device_id,
+			claimed.manifest_id, claimed.processing_version, claimed.projection_generation,
+			claimed.attempt_count, claimed.lease_owner, claimed.lease_expires_at
+		FROM claimed
+		JOIN raw_manifests AS manifest
+			ON manifest.tenant_id = claimed.tenant_id
+			AND manifest.manifest_id = claimed.manifest_id
+		ORDER BY claimed.id`
+	args := []any{limit, owner, leaseDuration.Microseconds(), s.tenant}
+	predicate := ""
+	if s.hostedVersion != "" {
+		predicate = `AND job.processing_version=$5 AND job.projection_generation>0 AND EXISTS (SELECT 1 FROM raw_source_projections selected WHERE selected.tenant_id=job.tenant_id AND selected.selected_job_id=job.id AND selected.selected_manifest_id=job.manifest_id AND selected.processing_version=job.processing_version AND selected.projection_generation=job.projection_generation)`
+		args = append(args, s.hostedVersion)
+		query = strings.ReplaceAll(query, "($4 = '' OR job.tenant_id = $4)", "job.tenant_id = $4")
+	}
+	return strings.Replace(query, "{{hosted}}", predicate, 1), args
 }

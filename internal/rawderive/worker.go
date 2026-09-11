@@ -94,7 +94,9 @@ type SourceParser interface {
 }
 
 // ProjectionSink atomically applies a normalized outcome and completes the
-// supplied fenced lease. Implementations must change neither projection nor
+// supplied fenced lease. A partial commit returns CommittedProjectionOutcome
+// after scheduling retry or terminal failure in that same transaction.
+// Implementations must change neither projection nor
 // job state when the manifest is no longer the current source head.
 type ProjectionSink interface {
 	Project(context.Context, JobLease, rawsync.CanonicalManifest, ParsedManifest) error
@@ -167,11 +169,8 @@ func NewWorker(config WorkerConfig) (*Worker, error) {
 		config.HeartbeatInterval >= config.LeaseDuration {
 		return nil, fmt.Errorf("%w: raw parse worker lease timing is invalid", rawsync.ErrInvalid)
 	}
-	if config.RetryBase <= 0 || config.RetryMax < config.RetryBase {
-		return nil, fmt.Errorf("%w: raw parse worker retry timing is invalid", rawsync.ErrInvalid)
-	}
-	if config.MaxAttempts <= 0 {
-		return nil, fmt.Errorf("%w: raw parse worker max attempts must be positive", rawsync.ErrInvalid)
+	if err := (RetryPolicy{Base: config.RetryBase, Maximum: config.RetryMax, MaxAttempts: config.MaxAttempts}).Validate(); err != nil {
+		return nil, err
 	}
 	if config.AttemptTimeout <= 0 {
 		return nil, fmt.Errorf("%w: raw parse worker attempt timeout must be positive", rawsync.ErrInvalid)
@@ -248,6 +247,16 @@ func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResul
 	workCause := context.Cause(workCtx)
 	cancelWork(nil)
 	cancelTimeout()
+	if committed, ok := errors.AsType[CommittedProjectionOutcome](operationErr); ok {
+		switch committed {
+		case ProjectionRetrying:
+			result.retried = 1
+			return result
+		case ProjectionFailed:
+			result.failed = 1
+			return result
+		}
+	}
 	if operationErr == nil {
 		// The pipeline committed its outcome; a heartbeat failure after
 		// that point cannot un-commit it.
@@ -300,7 +309,8 @@ func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResul
 	if parent.Err() != nil {
 		return result
 	}
-	if lease.Attempt >= w.MaxAttempts {
+	decision := (RetryPolicy{Base: w.RetryBase, Maximum: w.RetryMax, MaxAttempts: w.MaxAttempts}).Decide(lease.Attempt)
+	if decision.Failed {
 		failureErr := w.Queue.FailRawParseJob(
 			parent, lease, stage, jobErrorDiagnostic(stage, operationErr),
 		)
@@ -318,7 +328,7 @@ func (w *Worker) processLease(parent context.Context, lease JobLease) leaseResul
 		result.failed = 1
 		return result
 	}
-	retryAt := w.now().Add(retryDelay(lease.Attempt, w.RetryBase, w.RetryMax))
+	retryAt := w.now().Add(decision.Delay)
 	retryErr := w.Queue.RetryRawParseJob(
 		parent, lease, retryAt, stage, jobErrorDiagnostic(stage, operationErr),
 	)

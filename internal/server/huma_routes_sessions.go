@@ -980,6 +980,17 @@ func (s *Server) humaWatchSession(
 				if !ok {
 					return
 				}
+				if identity, ok := s.db.(db.SessionWatchStateStore); ok {
+					state, e := identity.GetSessionWatchState(in.ID)
+					if e != nil {
+						return
+					}
+					if state.State != db.SessionWatchResolved {
+						stream.SendJSON("session.identity", state)
+						return
+					}
+					stream.SendJSON("session.identity", state)
+				}
 				stream.Send("session_updated", in.ID)
 				if t, err := s.db.GetSessionTiming(streamCtx, in.ID); err != nil {
 					log.Printf("session timing update: %v", err)
@@ -1298,6 +1309,12 @@ func (s *Server) humaResumeSession(
 	}
 	prefix := string(session.Agent) + ":"
 	rawID := strings.TrimPrefix(in.ID, prefix)
+	if provider, ok := s.db.(db.ProviderResumeIdentityStore); ok {
+		rawID, err = provider.GetProviderResumeID(ctx, in.ID)
+		if err != nil {
+			return nil, internalError("resume identity", err)
+		}
+	}
 	if s.db.ReadOnly() && !req.CommandOnly {
 		return nil, apiError(http.StatusNotImplemented,
 			"session launch not available in remote mode")

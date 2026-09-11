@@ -24,12 +24,10 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/secrets"
-	"go.kenn.io/agentsview/internal/signals"
-	"go.kenn.io/agentsview/internal/timeutil"
-	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 const (
@@ -6245,12 +6243,7 @@ func isOpenCodeFormatAgent(agent parser.AgentType) bool {
 // or its S3 archive layout stay keyed to parser.AgentCodex alone: TraeX writes
 // no index file and has no S3 path convention.
 func isCodexFormatAgent(agent parser.AgentType) bool {
-	switch agent {
-	case parser.AgentCodex, parser.AgentTraeX:
-		return true
-	default:
-		return false
-	}
+	return ingest.IsCodexFormatAgent(agent)
 }
 
 func reconciliationWatchRoot(
@@ -8853,7 +8846,7 @@ func claudeDiscoveredFileKey(
 // OpenClaude also stores this layout but parses linearly to one session per
 // file, so it stays outside this set.
 func isClaudeFormatAgent(agent parser.AgentType) bool {
-	return agent == parser.AgentClaude || agent == parser.AgentIcodemate
+	return ingest.IsClaudeFormatAgent(agent)
 }
 
 func isClaudeFormatTranscriptFile(file parser.DiscoveredFile) bool {
@@ -8864,7 +8857,7 @@ func isClaudeFormatTranscriptFile(file parser.DiscoveredFile) bool {
 // path. For ICodeMate this distinguishes CLI transcripts from the agent's
 // OpenCode-storage family, which shares the same agent label.
 func isClaudeFormatTranscript(agent parser.AgentType, path string) bool {
-	return isClaudeFormatAgent(agent) && claudeSessionIDFromPath(path) != ""
+	return ingest.IsClaudeFormatTranscript(agent, path)
 }
 
 // claudeFormatArchiveSessionID maps a raw filename-derived session ID into
@@ -15960,20 +15953,6 @@ func commandCodeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
 }
 
-// computeFinalStreak counts trailing consecutive failures
-// from the end of the tool call list.
-func computeFinalStreak(calls []signals.ToolCallRow) int {
-	streak := 0
-	for _, v := range slices.Backward(calls) {
-		if signals.IsFailure(v) {
-			streak++
-		} else {
-			break
-		}
-	}
-	return streak
-}
-
 // RecomputeSignals recomputes signals for a single session
 // from existing DB data. Returns nil on success (including
 // when the session no longer exists). Returns an error when
@@ -16767,8 +16746,8 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		if ctx.Err() != nil {
 			return outcome
 		}
-		s, msgs, verdict, prepErr := e.prepareSessionWriteContext(
-			ctx, pw, resolveWorktreeProject,
+		prepared, verdict, prepErr := e.prepareSessionNormalizedContext(
+			ctx, pw, resolveWorktreeProject, true,
 		)
 		if prepErr != nil {
 			return outcome
@@ -16779,6 +16758,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			}
 			continue
 		}
+		s, msgs := prepared.Session, prepared.Messages
 		// Detect stale parser version BEFORE UpsertSession
 		// overwrites it. Existing message rows from an
 		// older parser lack new metadata columns, and newly
@@ -16825,8 +16805,8 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			pw, forceReplace, stale, revivingSourceMissing,
 		)
 
-		var update db.SessionSignalUpdate
-		var findings []db.SecretFinding
+		update := prepared.Signals
+		findings := prepared.Findings
 		var werr error
 		if replaceMessages && pw.staged != nil {
 			// The staged sink owns this parse's tool-result rows, and only the
@@ -16834,7 +16814,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			// recomputation is disabled.
 			werr = e.writeStagedFullParse(ctx, s, msgs, pw)
 		} else if replaceMessages && !e.disableSignalRecompute {
-			update, findings, werr = e.computeFullSignalsAndSecretsForStorage(s, msgs, nil)
+			update, werr = e.attachFullSignalState(s, msgs, update, nil)
 			if werr != nil {
 				log.Printf("compute full signals %s: %v", s.ID, werr)
 				outcome.failedSessions++
@@ -16868,11 +16848,8 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			}
 			werr = e.db.ReplaceSessionMessages(s.ID, msgs)
 		} else {
-			if !e.disableSignalRecompute {
-				update, findings = e.computeSignalsAndSecretsForStorage(s, msgs)
-				if ctx.Err() != nil {
-					return outcome
-				}
+			if !e.disableSignalRecompute && ctx.Err() != nil {
+				return outcome
 			}
 			werr = e.writeMessages(s.ID, msgs)
 		}
@@ -16892,14 +16869,8 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		if ctx.Err() != nil {
 			return outcome
 		}
-		usageEvents, usageErr := e.usageEventsForWriteContext(
-			ctx, s.ID, pw.usageEvents,
-		)
-		if usageErr != nil {
-			return outcome
-		}
 		if err := e.db.ReplaceSessionUsageEvents(
-			s.ID, usageEvents,
+			s.ID, prepared.UsageEvents,
 		); err != nil {
 			if ctx.Err() != nil {
 				return outcome
@@ -16989,10 +16960,10 @@ func (e *Engine) prepareSessionWrite(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 ) (db.Session, []db.Message, sessionWriteVerdict) {
-	s, msgs, verdict, _ := e.prepareSessionWriteContext(
-		context.Background(), pw, resolveWorktreeProject,
+	prepared, verdict, _ := e.prepareSessionNormalizedContext(
+		context.Background(), pw, resolveWorktreeProject, false,
 	)
-	return s, msgs, verdict
+	return prepared.Session, prepared.Messages, verdict
 }
 
 func (e *Engine) prepareSessionWriteContext(
@@ -17000,22 +16971,31 @@ func (e *Engine) prepareSessionWriteContext(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 ) (db.Session, []db.Message, sessionWriteVerdict, error) {
-	msgs, err := toDBMessagesContext(ctx, pw, e.blockedResultCategories)
+	prepared, verdict, err := e.prepareSessionNormalizedContext(
+		ctx, pw, resolveWorktreeProject, false,
+	)
+	return prepared.Session, prepared.Messages, verdict, err
+}
+
+func (e *Engine) prepareSessionNormalizedContext(
+	ctx context.Context,
+	pw pendingWrite,
+	resolveWorktreeProject worktreeProjectResolver,
+	derive bool,
+) (ingest.PreparedSession, sessionWriteVerdict, error) {
+	candidate, err := ingest.PrepareCandidate(ctx, parser.ParseResult{
+		Session: pw.sess, Messages: pw.msgs, UsageEvents: pw.usageEvents,
+	}, ingest.ContentOptions{
+		BlockedResultCategories: e.blockedResultCategories,
+		ToolResultImages:        e.toolResultImages,
+		ArchiveContent:          e.db.ArchiveContent(),
+	})
 	if err != nil {
-		return db.Session{}, nil, sessionWritePreserved, err
+		return ingest.PreparedSession{}, sessionWritePreserved, err
 	}
-	msgs, _ = e.db.ProjectToolResultImages(msgs)
-	s, err := toDBSessionContext(ctx, pw)
-	if err != nil {
-		return db.Session{}, nil, sessionWritePreserved, err
-	}
-	if err := applySessionMessageDerivedFieldsContext(
-		ctx, &s, msgs, pw.sess.CountsAuthoritative,
-	); err != nil {
-		return db.Session{}, nil, sessionWritePreserved, err
-	}
+	s, msgs := candidate.Session, candidate.Messages
 	if err := e.applyRemoteRewritesContext(ctx, &s, msgs); err != nil {
-		return db.Session{}, nil, sessionWritePreserved, err
+		return ingest.PreparedSession{}, sessionWritePreserved, err
 	}
 	applySourceCwdResolution(
 		&s, pw.sourceCwdResolution, pw.sourceCwdStored, pw.sourceCwdStoredOK,
@@ -17033,81 +17013,40 @@ func (e *Engine) prepareSessionWriteContext(
 	// preserve/merge handling so a filtered session is not written by
 	// any downstream path.
 	if !e.cwdFilter.allows(s.Cwd) {
-		return db.Session{}, nil, sessionWriteCwdFiltered, nil
+		return ingest.PreparedSession{}, sessionWriteCwdFiltered, nil
 	}
 	if err := ctx.Err(); err != nil {
-		return db.Session{}, nil, sessionWritePreserved, err
+		return ingest.PreparedSession{}, sessionWritePreserved, err
 	}
 
-	if e.shouldPreserveOpenCodeFormatArchive(
-		pw.sess.Agent, pw.sess.File.Path, s.ID,
-		pw.sess.File.Mtime, derefString(s.FileHash), msgs,
-	) {
-		return db.Session{}, nil, sessionWritePreserved, nil
+	candidate.Session, candidate.Messages = s, msgs
+	history, err := e.reconcileProviderHistoryContext(ctx, candidate)
+	if err != nil {
+		return ingest.PreparedSession{}, sessionWritePreserved, err
 	}
-	if e.shouldPreserveRooCodeArchive(pw.sess.Agent, s.ID, msgs) {
-		return db.Session{}, nil, sessionWritePreserved, nil
+	if history.Action == ingest.HistoryPreserve {
+		return ingest.PreparedSession{}, sessionWritePreserved, nil
 	}
-	if mergedMsgs, preserve, archived := e.reconcileVisualStudioCopilotArchive(
-		pw.sess.Agent, s.ID, pw.sess.File.Size, msgs,
-	); preserve {
-		return db.Session{}, nil, sessionWritePreserved, nil
-	} else if mergedMsgs != nil {
-		parsedMsgs := msgs
-		msgs = mergedMsgs
-		msgs, _ = e.db.ProjectToolResultImages(msgs)
-		applyVisualStudioCopilotArchiveSessionFields(
-			&s, archived, parsedMsgs, msgs,
-		)
-		if err := applySessionMessageDerivedFieldsContext(
-			ctx, &s, msgs, pw.sess.CountsAuthoritative,
-		); err != nil {
-			return db.Session{}, nil, sessionWritePreserved, err
-		}
-		if err := applySessionTokenTotalsFromMessagesContext(
-			ctx, &s, msgs,
-		); err != nil {
-			return db.Session{}, nil, sessionWritePreserved, err
-		}
-	}
+	candidate = history.Candidate
 	if err := ctx.Err(); err != nil {
-		return db.Session{}, nil, sessionWritePreserved, err
+		return ingest.PreparedSession{}, sessionWritePreserved, err
 	}
-	// Snapshot, before sanitizing, whether the session's token aggregates
-	// are derived from the per-message rows or the per-usage-event rows, by
-	// matching the stored value against each source's raw sum/max. Aggregates
-	// set directly from a session-level usage summary -- agents like
-	// Warp/Vibe/Hermes/Zed -- must survive the per-row clamp untouched.
-	// Source=="session" usage events mirror those same summary totals, so
-	// exclude them from the event-derived detector and re-clamp path.
-	msgTotal, msgHasOut, msgPeak, msgHasCtx, err :=
-		messageTokenTotalsContext(ctx, msgs)
+	options := ingest.ContentOptions{
+		BlockedResultCategories: e.blockedResultCategories,
+		ToolResultImages:        e.toolResultImages,
+		ArchiveContent:          e.db.ArchiveContent(),
+	}
+	var prepared ingest.PreparedSession
+	if !derive || pw.staged != nil || e.disableSignalRecompute {
+		prepared, err = ingest.FinalizeRows(ctx, candidate, options)
+	} else {
+		prepared, err = ingest.Finalize(ctx, candidate, options)
+	}
 	if err != nil {
-		return db.Session{}, nil, sessionWritePreserved, err
+		return ingest.PreparedSession{}, sessionWritePreserved, err
 	}
-	evtTotal, evtHasOut, evtPeak, evtHasCtx, err :=
-		usageEventTokenTotalsContext(ctx, pw.usageEvents, false)
-	if err != nil {
-		return db.Session{}, nil, sessionWritePreserved, err
-	}
-	totalFromMsgs := s.HasTotalOutputTokens == msgHasOut &&
-		s.TotalOutputTokens == msgTotal
-	totalFromEvts := s.HasTotalOutputTokens == evtHasOut &&
-		s.TotalOutputTokens == evtTotal
-	peakFromMsgs := s.HasPeakContextTokens == msgHasCtx &&
-		s.PeakContextTokens == msgPeak
-	peakFromEvts := s.HasPeakContextTokens == evtHasCtx &&
-		s.PeakContextTokens == evtPeak
-
-	// Central validation/sanitization pass: every session write flows
-	// through here so all agents are covered uniformly. The returned fix
-	// counts and the parser malformed-line count are accumulated per
-	// agent for the sync summary's anomaly section.
-	vs, err := validateAndSanitizeContext(ctx, &s, msgs, nil)
-	if err != nil {
-		return db.Session{}, nil, sessionWritePreserved, err
-	}
-	e.anomalies.recordSanitize(vs)
+	s = prepared.Session
+	e.anomalies.recordSanitize(prepared.Validation)
 	e.anomalies.recordMalformedLines(
 		s.Agent, pw.sess.File.Path, s.ParserMalformedLines,
 	)
@@ -17126,324 +17065,97 @@ func (e *Engine) prepareSessionWriteContext(
 	if pw.sess.GenMetadataWithoutUsage {
 		e.anomalies.recordGenMetadataWithoutUsageSession(s.Agent)
 	}
-
-	// A per-row token clamp must not leave an inflated value stranded in a
-	// row-derived session total while the row that produced it was clamped.
-	// Re-derive a matched aggregate from its now-clamped source (messages
-	// clamped above; usage events clamped on the fly the same way
-	// toDBUsageEvents will store them). Summary-derived aggregates match
-	// neither source and are left as-is. The sum is re-summed from clamped
-	// rows rather than clamped to the per-row bound, so a legitimately large
-	// total over many rows is preserved. Re-deriving is a no-op when nothing
-	// was clamped, keeping the pass idempotent. Messages take precedence when
-	// both sources match (identical values).
-	if totalFromMsgs {
-		t, h, _, _, err := messageTokenTotalsContext(ctx, msgs)
-		if err != nil {
-			return db.Session{}, nil, sessionWritePreserved, err
-		}
-		s.TotalOutputTokens, s.HasTotalOutputTokens = t, h
-	} else if totalFromEvts {
-		t, h, _, _, err := usageEventTokenTotalsContext(
-			ctx, pw.usageEvents, true,
-		)
-		if err != nil {
-			return db.Session{}, nil, sessionWritePreserved, err
-		}
-		s.TotalOutputTokens, s.HasTotalOutputTokens = t, h
-	}
-	if peakFromMsgs {
-		_, _, p, h, err := messageTokenTotalsContext(ctx, msgs)
-		if err != nil {
-			return db.Session{}, nil, sessionWritePreserved, err
-		}
-		s.PeakContextTokens, s.HasPeakContextTokens = p, h
-	} else if peakFromEvts {
-		_, _, p, h, err := usageEventTokenTotalsContext(
-			ctx, pw.usageEvents, true,
-		)
-		if err != nil {
-			return db.Session{}, nil, sessionWritePreserved, err
-		}
-		s.PeakContextTokens, s.HasPeakContextTokens = p, h
-	}
-	return s, msgs, sessionWriteOK, ctx.Err()
+	return prepared, sessionWriteOK, ctx.Err()
 }
 
-func applySessionMessageDerivedFieldsContext(
-	ctx context.Context,
-	s *db.Session,
-	msgs []db.Message,
-	countsAuthoritative bool,
-) error {
-	if !countsAuthoritative {
-		var err error
-		s.MessageCount, s.UserMessageCount, err = postFilterCountsContext(
-			ctx, msgs,
-		)
-		if err != nil {
-			return err
-		}
+func (e *Engine) reconcileProviderHistoryContext(
+	ctx context.Context, candidate ingest.Candidate,
+) (ingest.HistoryResult, error) {
+	agent := candidate.Parsed.Session.Agent
+	options := ingest.ContentOptions{
+		BlockedResultCategories: e.blockedResultCategories,
+		ToolResultImages:        e.toolResultImages,
+		ArchiveContent:          e.db.ArchiveContent(),
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.IsAutomated = db.IsAutomatedSessionMetadata(s.Agent, s.SessionKind) ||
-		db.IsAutomatedTranscript(
-			s.UserMessageCount, msgs, s.FirstMessage,
-		)
-	return ctx.Err()
-}
-
-// messageTokenTotalsContext computes the message-derived session token
-// aggregates: the sum of per-message output tokens and the peak
-// per-message context tokens, each with a presence flag. It is the
-// canonical derivation shared by session preparation and the post-sanitize
-// reconciliation that re-derives message-derived totals from the clamped rows.
-// Absent values return 0 with a false presence.
-func messageTokenTotalsContext(
-	ctx context.Context, msgs []db.Message,
-) (totalOut int, hasOut bool, peakCtx int, hasCtx bool, err error) {
-	for _, msg := range msgs {
-		if err = ctx.Err(); err != nil {
-			return
-		}
-		if msg.HasOutputTokens {
-			hasOut = true
-			totalOut += msg.OutputTokens
-		}
-		if msg.HasContextTokens {
-			hasCtx = true
-			if msg.ContextTokens > peakCtx {
-				peakCtx = msg.ContextTokens
-			}
-		}
-	}
-	err = ctx.Err()
-	return
-}
-
-func applySessionTokenTotalsFromMessagesContext(
-	ctx context.Context, s *db.Session, msgs []db.Message,
-) error {
-	totalOut, hasOut, peakCtx, hasCtx, err := messageTokenTotalsContext(
-		ctx, msgs,
-	)
-	if err != nil {
-		return err
-	}
-	s.TotalOutputTokens = totalOut
-	s.HasTotalOutputTokens = hasOut
-	s.PeakContextTokens = peakCtx
-	s.HasPeakContextTokens = hasCtx
-	return nil
-}
-
-// usageEventTokenTotals computes event-derived session token aggregates through
-// parser.UsageEventTokenAggregate -- the same rollup per-turn event parsers use
-// to populate stored session totals (positive output summed, peak full context
-// = input + cache-creation + cache-read where positive). Session-summary usage
-// events mirror parser summary totals rather than per-turn rows, so they are
-// excluded from this detector and re-clamp path. When clamp is true each
-// included event token field is first bounded to the per-row plausibility cap,
-// matching how sanitizeUsageEvent bounds the stored usage_event row.
-func usageEventTokenTotalsContext(
-	ctx context.Context, events []parser.ParsedUsageEvent, clamp bool,
-) (totalOut int, hasOut bool, peakCtx int, hasCtx bool, err error) {
-	rolled := make([]parser.ParsedUsageEvent, 0, len(events))
-	for _, ev := range events {
-		if err = ctx.Err(); err != nil {
-			return
-		}
-		if ev.Source == "session" {
-			continue
-		}
-		rolled = append(rolled, ev)
-	}
-	if clamp {
-		for i, ev := range rolled {
-			if err = ctx.Err(); err != nil {
-				return
-			}
-			ev.InputTokens = clampedTokens(ev.InputTokens)
-			ev.OutputTokens = clampedTokens(ev.OutputTokens)
-			ev.CacheCreationInputTokens = clampedTokens(
-				ev.CacheCreationInputTokens,
-			)
-			ev.CacheReadInputTokens = clampedTokens(ev.CacheReadInputTokens)
-			rolled[i] = ev
-		}
-	}
-	totalOut, hasOut, peakCtx, hasCtx, err =
-		parser.UsageEventTokenAggregateContext(ctx, rolled)
-	return
-}
-
-func applyVisualStudioCopilotArchiveSessionFields(
-	s *db.Session, archived *db.Session,
-	parsedMsgs, mergedMsgs []db.Message,
-) {
-	if archived == nil {
-		return
-	}
-	archiveExtendsBounds := sessionTimeBefore(
-		archived.StartedAt, s.StartedAt,
-	) || sessionTimeAfter(archived.EndedAt, s.EndedAt)
-	if !visualStudioCopilotMergedFirstMessageFromParsed(
-		parsedMsgs, mergedMsgs,
+	if ingest.IsClaudeFormatTranscript(
+		agent, candidate.Parsed.Session.File.Path,
 	) {
-		s.FirstMessage = cloneStringPtr(archived.FirstMessage)
+		return ingest.ReconcileProviderHistory(
+			ctx, candidate, nil, options,
+		)
 	}
-	if archiveExtendsBounds || stringPtrEmpty(s.SessionName) {
-		s.SessionName = cloneStringPtr(archived.SessionName)
-	}
-	s.StartedAt = earlierSessionTime(archived.StartedAt, s.StartedAt)
-	s.EndedAt = laterSessionTime(archived.EndedAt, s.EndedAt)
-}
-
-func visualStudioCopilotMergedFirstMessageFromParsed(
-	parsed, merged []db.Message,
-) bool {
-	if len(parsed) == 0 || len(merged) == 0 {
-		return false
-	}
-	mergedFirst := merged[0]
-	for _, parsedMsg := range parsed {
-		if visualStudioCopilotMessagePresenceKey(parsedMsg) !=
-			visualStudioCopilotMessagePresenceKey(mergedFirst) {
-			continue
+	var prior *ingest.PriorSession
+	switch agent {
+	case parser.AgentRooCode, parser.AgentKiloLegacy:
+		if len(candidate.Messages) > 0 {
+			break
 		}
-		return !visualStudioCopilotMessageLooksIncomplete(
-			parsedMsg, mergedFirst,
-		) && !visualStudioCopilotMessageHasArchiveUpdate(
-			mergedFirst, parsedMsg,
+		store := e.archiveStore
+		if store == nil {
+			store = e.db
+		}
+		messages, err := store.GetAllMessages(
+			context.Background(), candidate.Session.ID,
 		)
-	}
-	return false
-}
-
-func stringPtrEmpty(v *string) bool {
-	return v == nil || strings.TrimSpace(*v) == ""
-}
-
-func cloneStringPtr(v *string) *string {
-	if v == nil {
-		return nil
-	}
-	clone := *v
-	return &clone
-}
-
-func sessionTimeBefore(a, b *string) bool {
-	return sessionTimeCompares(a, b, func(aTime, bTime time.Time) bool {
-		return aTime.Before(bTime)
-	})
-}
-
-func sessionTimeAfter(a, b *string) bool {
-	return sessionTimeCompares(a, b, func(aTime, bTime time.Time) bool {
-		return aTime.After(bTime)
-	})
-}
-
-func sessionTimeCompares(
-	a, b *string, compare func(time.Time, time.Time) bool,
-) bool {
-	if a == nil || b == nil {
-		return a != nil && b == nil
-	}
-	aTime, aErr := time.Parse(time.RFC3339Nano, *a)
-	bTime, bErr := time.Parse(time.RFC3339Nano, *b)
-	if aErr != nil || bErr != nil {
-		return false
-	}
-	return compare(aTime, bTime)
-}
-
-func earlierSessionTime(a, b *string) *string {
-	return chooseSessionTime(a, b, func(aTime, bTime time.Time) bool {
-		return aTime.Before(bTime)
-	})
-}
-
-func laterSessionTime(a, b *string) *string {
-	return chooseSessionTime(a, b, func(aTime, bTime time.Time) bool {
-		return aTime.After(bTime)
-	})
-}
-
-func chooseSessionTime(
-	a, b *string, chooseA func(time.Time, time.Time) bool,
-) *string {
-	switch {
-	case a == nil:
-		return cloneStringPtr(b)
-	case b == nil:
-		return cloneStringPtr(a)
-	}
-	aTime, aErr := time.Parse(time.RFC3339Nano, *a)
-	bTime, bErr := time.Parse(time.RFC3339Nano, *b)
-	switch {
-	case aErr != nil:
-		return cloneStringPtr(b)
-	case bErr != nil:
-		return cloneStringPtr(a)
-	case chooseA(aTime, bTime):
-		return cloneStringPtr(a)
+		if err == nil && len(messages) > 0 {
+			prior = &ingest.PriorSession{
+				Session: candidate.Session, Messages: messages,
+			}
+		}
+	case parser.AgentVSCopilot:
+		stored, err := e.db.GetSessionFull(
+			context.Background(), candidate.Session.ID,
+		)
+		if err == nil && stored != nil {
+			messages, messagesErr := e.db.GetAllMessages(
+				context.Background(), candidate.Session.ID,
+			)
+			if messagesErr == nil && len(messages) > 0 {
+				prior = &ingest.PriorSession{
+					Session: *stored, Messages: messages,
+				}
+			}
+		}
 	default:
-		return cloneStringPtr(b)
+		if ingest.IsOpenCodeFormatStorageAgent(agent) {
+			store := e.archiveStore
+			if store == nil {
+				store = e.db
+			}
+			stored, err := store.GetSessionFull(
+				context.Background(), candidate.Session.ID,
+			)
+			if err == nil && stored != nil {
+				messages, messagesErr := store.GetAllMessages(
+					context.Background(), candidate.Session.ID,
+				)
+				if messagesErr == nil && len(messages) > 0 {
+					prior = &ingest.PriorSession{
+						Session: *stored, Messages: messages,
+					}
+				}
+			}
+		}
 	}
-}
-
-// reconcileVisualStudioCopilotArchive returns either a preserved-archive skip
-// or a merged transcript for an incomplete Visual Studio Copilot reparse. A
-// conversation's transcript is rebuilt from every sibling trace file and
-// written with full message replacement, so when a sibling is rotated away or
-// deleted the reparse can see fewer spans or weaker span metadata and would
-// otherwise drop messages and tool results already stored in SQLite. If a
-// remaining trace gained richer data or new messages, merge those updates into
-// the archived transcript while retaining archived-only messages.
-func (e *Engine) reconcileVisualStudioCopilotArchive(
-	agent parser.AgentType, sessionID string,
-	currentSize int64, currentMsgs []db.Message,
-) (merged []db.Message, preserve bool, archived *db.Session) {
-	if agent != parser.AgentVSCopilot {
-		return nil, false, nil
-	}
-	stored, err := e.db.GetSessionFull(context.Background(), sessionID)
-	if err != nil || stored == nil {
-		return nil, false, nil
-	}
-	storedSize := derefInt64(stored.FileSize)
-	storedMsgs, err := e.db.GetAllMessages(context.Background(), sessionID)
-	if err != nil || len(storedMsgs) == 0 {
-		return nil, false, nil
-	}
-	decision := visualStudioCopilotArchiveDecision(
-		currentMsgs, storedMsgs,
+	result, err := ingest.ReconcileProviderHistory(
+		ctx, candidate, prior, options,
 	)
-	if decision.preserve {
-		log.Printf(
-			"preserve %s %s: reparse looks incomplete relative to archived "+
-				"transcript (%d stored messages, %d parsed messages, "+
-				"composite trace %d->%d bytes)",
-			agent, sessionID, len(storedMsgs), len(currentMsgs),
-			storedSize, currentSize,
-		)
-		return storedMsgs, false, stored
+	if err != nil || prior == nil {
+		return result, err
 	}
-	if decision.merged != nil {
+	switch result.Action {
+	case ingest.HistoryPreserve:
 		log.Printf(
-			"merge %s %s: reparse updated archived messages while "+
-				"retaining archived transcript rows (%d stored "+
-				"messages, %d parsed messages, composite trace "+
-				"%d->%d bytes)",
-			agent, sessionID, len(storedMsgs), len(currentMsgs),
-			storedSize, currentSize,
+			"preserve %s %s: reparse looks incomplete relative to archived transcript (%d stored messages, %d parsed messages)",
+			agent, candidate.Session.ID, len(prior.Messages), len(candidate.Messages),
 		)
-		return decision.merged, false, stored
+	case ingest.HistoryMerge:
+		log.Printf(
+			"merge %s %s: reparse updated archived messages while retaining archived transcript rows (%d stored messages, %d parsed messages)",
+			agent, candidate.Session.ID, len(prior.Messages), len(candidate.Messages),
+		)
 	}
-	return nil, false, nil
+	return result, nil
 }
 
 type visualStudioCopilotArchiveReconcile struct {
@@ -17454,414 +17166,24 @@ type visualStudioCopilotArchiveReconcile struct {
 func visualStudioCopilotArchiveDecision(
 	parsed, stored []db.Message,
 ) visualStudioCopilotArchiveReconcile {
-	if len(stored) == 0 {
-		return visualStudioCopilotArchiveReconcile{}
-	}
-	if parsed == nil {
-		return visualStudioCopilotArchiveReconcile{preserve: true}
-	}
-
-	storedByKey := make(map[string][]int, len(stored))
-	for i, msg := range stored {
-		key := visualStudioCopilotMessagePresenceKey(msg)
-		storedByKey[key] = append(storedByKey[key], i)
-	}
-	matchedStored := make([]bool, len(stored))
-	updates := make(map[int]db.Message)
-	additions := make([]db.Message, 0)
-	hasIncomplete := false
-	for _, parsedMsg := range parsed {
-		key := visualStudioCopilotMessagePresenceKey(parsedMsg)
-		candidates := storedByKey[key]
-		if len(candidates) == 0 {
-			additions = append(additions, parsedMsg)
-			continue
-		}
-		storedIndex := candidates[0]
-		storedByKey[key] = candidates[1:]
-		matchedStored[storedIndex] = true
-		storedMsg := stored[storedIndex]
-		incomplete := visualStudioCopilotMessageLooksIncomplete(
-			parsedMsg, storedMsg,
-		)
-		if incomplete {
-			hasIncomplete = true
-		}
-		if !incomplete &&
-			visualStudioCopilotMessageHasArchiveUpdate(
-				parsedMsg, storedMsg,
-			) {
-			updates[storedIndex] = parsedMsg
-		}
-	}
-	fallbackMatched := false
-	additions, fallbackMatched = visualStudioCopilotResolveArchiveAdditions(
-		stored, matchedStored, updates, additions, &hasIncomplete,
+	merged, preserve := ingest.ReconcileVisualStudioCopilotArchive(
+		parsed, stored,
 	)
-	hasArchiveOnly := false
-	for _, matched := range matchedStored {
-		if !matched {
-			hasArchiveOnly = true
-			break
-		}
+	return visualStudioCopilotArchiveReconcile{
+		preserve: preserve, merged: merged,
 	}
-	if hasIncomplete || hasArchiveOnly || fallbackMatched {
-		if len(updates) > 0 || len(additions) > 0 ||
-			(fallbackMatched && !hasIncomplete) {
-			return visualStudioCopilotArchiveReconcile{
-				merged: visualStudioCopilotMergeArchiveMessages(
-					stored, updates, additions,
-				),
-			}
-		}
-		return visualStudioCopilotArchiveReconcile{preserve: true}
-	}
-	return visualStudioCopilotArchiveReconcile{}
-}
-
-func visualStudioCopilotResolveArchiveAdditions(
-	stored []db.Message,
-	matchedStored []bool,
-	updates map[int]db.Message,
-	additions []db.Message,
-	hasIncomplete *bool,
-) ([]db.Message, bool) {
-	matched := false
-	unresolved := additions[:0]
-	for _, parsedMsg := range additions {
-		storedIndex, ok := visualStudioCopilotArchiveFallbackMatch(
-			parsedMsg, stored, matchedStored,
-		)
-		if !ok {
-			unresolved = append(unresolved, parsedMsg)
-			continue
-		}
-		matched = true
-		matchedStored[storedIndex] = true
-		storedMsg := stored[storedIndex]
-		incomplete := visualStudioCopilotMessageLooksIncomplete(
-			parsedMsg, storedMsg,
-		)
-		if incomplete {
-			*hasIncomplete = true
-			continue
-		}
-		update := visualStudioCopilotArchiveFallbackUpdate(
-			parsedMsg, storedMsg,
-		)
-		if visualStudioCopilotMessageHasArchiveUpdate(update, storedMsg) {
-			updates[storedIndex] = update
-		}
-	}
-	return unresolved, matched
-}
-
-func visualStudioCopilotArchiveFallbackMatch(
-	parsed db.Message,
-	stored []db.Message,
-	matchedStored []bool,
-) (int, bool) {
-	match := -1
-	for i, storedMsg := range stored {
-		if matchedStored[i] {
-			continue
-		}
-		if !visualStudioCopilotMessagesFallbackMatch(parsed, storedMsg) {
-			continue
-		}
-		if match != -1 {
-			return 0, false
-		}
-		match = i
-	}
-	if match == -1 {
-		return 0, false
-	}
-	return match, true
-}
-
-func visualStudioCopilotMessagesFallbackMatch(
-	parsed, stored db.Message,
-) bool {
-	if parsed.Role != stored.Role {
-		return false
-	}
-	if visualStudioCopilotMessagesShareToolIdentity(parsed, stored) {
-		return true
-	}
-	return visualStudioCopilotMessagesShareContentIdentity(parsed, stored)
-}
-
-func visualStudioCopilotMessagesShareToolIdentity(
-	parsed, stored db.Message,
-) bool {
-	if len(parsed.ToolCalls) == 0 || len(stored.ToolCalls) == 0 {
-		return false
-	}
-	parsedIDs := make(map[string]string, len(parsed.ToolCalls))
-	for _, call := range parsed.ToolCalls {
-		id := strings.TrimSpace(call.ToolUseID)
-		if id == "" {
-			continue
-		}
-		parsedIDs[id] = strings.TrimSpace(call.ToolName)
-	}
-	for _, call := range stored.ToolCalls {
-		id := strings.TrimSpace(call.ToolUseID)
-		if id == "" {
-			continue
-		}
-		parsedName, ok := parsedIDs[id]
-		if !ok {
-			continue
-		}
-		storedName := strings.TrimSpace(call.ToolName)
-		if parsedName != "" && storedName != "" &&
-			parsedName != storedName {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func visualStudioCopilotMessagesShareContentIdentity(
-	parsed, stored db.Message,
-) bool {
-	if len(parsed.ToolCalls) > 0 || len(stored.ToolCalls) > 0 {
-		return false
-	}
-	switch parsed.Role {
-	case string(parser.RoleAssistant), string(parser.RoleUser):
-	default:
-		return false
-	}
-	return parsed.Content != "" && parsed.Content == stored.Content
-}
-
-func visualStudioCopilotArchiveFallbackUpdate(
-	parsed, stored db.Message,
-) db.Message {
-	update := parsed
-	// A duplicate span can be flushed later with a different timestamp; keep
-	// the archived timestamp as the transcript anchor while taking any richer
-	// parsed payload such as tool results or token usage.
-	update.Timestamp = stored.Timestamp
-	return update
-}
-
-func visualStudioCopilotMergeArchiveMessages(
-	stored []db.Message, updates map[int]db.Message,
-	additions []db.Message,
-) []db.Message {
-	merged := make([]db.Message, 0, len(stored)+len(additions))
-	merged = append(merged, stored...)
-	for index, msg := range updates {
-		merged[index] = msg
-	}
-	merged = append(merged, additions...)
-	if len(additions) > 0 {
-		slices.SortStableFunc(
-			merged, compareVisualStudioCopilotMessageOrder,
-		)
-	}
-	for i := range merged {
-		merged[i].Ordinal = i
-	}
-	return merged
-}
-
-func compareVisualStudioCopilotMessageOrder(a, b db.Message) int {
-	aTime, aOK := visualStudioCopilotMessageTime(a)
-	bTime, bOK := visualStudioCopilotMessageTime(b)
-	if aOK && bOK {
-		switch {
-		case aTime.Before(bTime):
-			return -1
-		case aTime.After(bTime):
-			return 1
-		default:
-			return 0
-		}
-	}
-	if aOK {
-		return -1
-	}
-	if bOK {
-		return 1
-	}
-	return 0
-}
-
-func visualStudioCopilotMessageTime(msg db.Message) (time.Time, bool) {
-	if msg.Timestamp == "" {
-		return time.Time{}, false
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, msg.Timestamp)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return parsed, true
-}
-
-func visualStudioCopilotMessagePresenceKey(msg db.Message) string {
-	if msg.Timestamp != "" {
-		return msg.Role + "\x00time\x00" + msg.Timestamp
-	}
-	if msg.SourceUUID != "" {
-		return msg.Role + "\x00source\x00" + msg.SourceUUID
-	}
-	return fmt.Sprintf("%s\x00ordinal\x00%d", msg.Role, msg.Ordinal)
 }
 
 func visualStudioCopilotMessageLooksIncomplete(
 	parsed, stored db.Message,
 ) bool {
-	if parsed.Role != stored.Role {
-		return false
-	}
-	// Stored rows are sanitized and length-adjusted on write; measure the
-	// parsed side the same way so a reparse that only stripped control bytes
-	// is not judged shorter and allowed to bypass archive preservation.
-	p := sanitizedForArchiveCompare(parsed)
-	if p.ContentLength < stored.ContentLength {
-		return true
-	}
-	if stored.HasThinking && !p.HasThinking {
-		return true
-	}
-	if stored.HasOutputTokens &&
-		(!p.HasOutputTokens ||
-			p.OutputTokens < stored.OutputTokens) {
-		return true
-	}
-	if stored.HasContextTokens &&
-		(!p.HasContextTokens ||
-			p.ContextTokens < stored.ContextTokens) {
-		return true
-	}
-	if len(p.ToolCalls) < len(stored.ToolCalls) {
-		return true
-	}
-	if countToolResultEvents(p.ToolCalls) <
-		countToolResultEvents(stored.ToolCalls) {
-		return true
-	}
-	return countToolResultContentLength(p.ToolCalls) <
-		countToolResultContentLength(stored.ToolCalls)
-}
-
-// sanitizedForArchiveCompare returns a copy of m with the same
-// validation/sanitization stored rows receive on write (control runes
-// stripped, ContentLength delta-adjusted, tokens clamped), so the VS Copilot
-// archive reconcile compares freshly parsed messages against archived rows
-// like-for-like. The copy is shallow; sanitizeMessage only rewrites value
-// fields, leaving the shared ToolCalls slice untouched.
-func sanitizedForArchiveCompare(m db.Message) db.Message {
-	_ = sanitizeMessage(&m)
-	return m
+	return ingest.VisualStudioCopilotMessageLooksIncomplete(parsed, stored)
 }
 
 func visualStudioCopilotMessageHasArchiveUpdate(
 	parsed, stored db.Message,
 ) bool {
-	if parsed.Role != stored.Role {
-		return false
-	}
-	// Stored rows are sanitized and length-adjusted on write, but the parsed
-	// message still carries raw content here. Compare a sanitized copy so a
-	// reparse that differs only in stripped control bytes is not treated as
-	// an archive update, preserving idempotency.
-	p := sanitizedForArchiveCompare(parsed)
-	if p.ContentLength > stored.ContentLength {
-		return true
-	}
-	if p.ContentLength == stored.ContentLength &&
-		p.Content != stored.Content {
-		return true
-	}
-	if p.HasThinking && (!stored.HasThinking ||
-		p.ThinkingText != stored.ThinkingText) {
-		return true
-	}
-	if p.HasOutputTokens &&
-		(!stored.HasOutputTokens ||
-			p.OutputTokens > stored.OutputTokens) {
-		return true
-	}
-	if p.HasContextTokens &&
-		(!stored.HasContextTokens ||
-			p.ContextTokens > stored.ContextTokens) {
-		return true
-	}
-	if string(p.TokenUsage) != "" &&
-		string(p.TokenUsage) != string(stored.TokenUsage) {
-		return true
-	}
-	return visualStudioCopilotToolCallsHaveArchiveUpdate(
-		p.ToolCalls, stored.ToolCalls,
-	)
-}
-
-func visualStudioCopilotToolCallsHaveArchiveUpdate(
-	parsed, stored []db.ToolCall,
-) bool {
-	if len(parsed) > len(stored) {
-		return true
-	}
-	for i := 0; i < len(parsed) && i < len(stored); i++ {
-		if visualStudioCopilotToolCallHasArchiveUpdate(
-			parsed[i], stored[i],
-		) {
-			return true
-		}
-	}
-	return false
-}
-
-func visualStudioCopilotToolCallHasArchiveUpdate(
-	parsed, stored db.ToolCall,
-) bool {
-	if parsed.ResultContentLength > stored.ResultContentLength {
-		return true
-	}
-	if parsed.ResultContentLength == stored.ResultContentLength &&
-		parsed.ResultContent != "" &&
-		parsed.ResultContent != stored.ResultContent {
-		return true
-	}
-	if len(parsed.ResultEvents) > len(stored.ResultEvents) {
-		return true
-	}
-	for i := 0; i < len(parsed.ResultEvents) &&
-		i < len(stored.ResultEvents); i++ {
-		parsedEvent := parsed.ResultEvents[i]
-		storedEvent := stored.ResultEvents[i]
-		if parsedEvent.ContentLength > storedEvent.ContentLength {
-			return true
-		}
-		if parsedEvent.ContentLength == storedEvent.ContentLength &&
-			parsedEvent.Content != "" &&
-			parsedEvent.Content != storedEvent.Content {
-			return true
-		}
-		if parsedEvent.Status != "" &&
-			parsedEvent.Status != storedEvent.Status {
-			return true
-		}
-	}
-	return false
-}
-
-func countToolResultContentLength(calls []db.ToolCall) int {
-	total := 0
-	for _, call := range calls {
-		total += call.ResultContentLength
-		for _, event := range call.ResultEvents {
-			total += event.ContentLength
-		}
-	}
-	return total
+	return ingest.VisualStudioCopilotMessageHasArchiveUpdate(parsed, stored)
 }
 
 type batchSourceFile struct {
@@ -17993,8 +17315,8 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			return outcome
 		}
 		tPrep := time.Now()
-		s, msgs, verdict, prepErr := e.prepareSessionWriteContext(
-			ctx, pw, resolveWorktreeProject,
+		prepared, verdict, prepErr := e.prepareSessionNormalizedContext(
+			ctx, pw, resolveWorktreeProject, true,
 		)
 		if prepErr != nil {
 			return outcome
@@ -18006,6 +17328,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			}
 			continue
 		}
+		s, msgs := prepared.Session, prepared.Messages
 		if pw.staged != nil {
 			// Staged streaming results bypass the bulk batch: their
 			// tool-result rows live in the staging scratch database and
@@ -18045,7 +17368,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				continue
 			}
 			if err := e.db.ReplaceSessionUsageEvents(
-				s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
+				s.ID, prepared.UsageEvents,
 			); err != nil {
 				log.Printf(
 					"write usage events for %s: %v", s.ID, err,
@@ -18079,12 +17402,12 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		replaceMessages := shouldReplaceFullParseMessages(
 			pw, forceReplace, false, false,
 		)
-		var update db.SessionSignalUpdate
-		var findings []db.SecretFinding
+		update := prepared.Signals
+		findings := prepared.Findings
 		if !e.disableSignalRecompute {
 			tScan := time.Now()
 			var signalErr error
-			update, findings, signalErr = e.computeFullSignalsAndSecretsForStorage(s, msgs, nil)
+			update, signalErr = e.attachFullSignalState(s, msgs, update, nil)
 			if signalErr != nil {
 				log.Printf("compute full signals %s: %v", s.ID, signalErr)
 				outcome.failedSessions++
@@ -18110,18 +17433,12 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				checkpoint, checkpointBlobs = nil, nil
 			}
 		}
-		usageEvents, usageErr := e.usageEventsForWriteContext(
-			ctx, s.ID, pw.usageEvents,
-		)
-		if usageErr != nil {
-			return outcome
-		}
 		identityObservation, hasIdentityObservation :=
 			e.projectIdentityObservationForWrite(pw, s)
 		writes = append(writes, db.SessionBatchWrite{
 			Session:     s,
 			Messages:    msgs,
-			UsageEvents: usageEvents,
+			UsageEvents: prepared.UsageEvents,
 			IdentityObservation: identityObservationOrZero(
 				identityObservation, hasIdentityObservation,
 			),
@@ -19019,12 +18336,16 @@ func (e *Engine) writeSessionFullWithResolver(
 		return err
 	}
 	pw = preserved[0]
-	s, msgs, verdict := e.prepareSessionWrite(
-		pw, resolveWorktreeProject,
+	prepared, verdict, err := e.prepareSessionNormalizedContext(
+		ctx, pw, resolveWorktreeProject, true,
 	)
+	if err != nil {
+		return err
+	}
 	if verdict != sessionWriteOK {
 		return errSessionPreserved
 	}
+	s, msgs := prepared.Session, prepared.Messages
 	_, err = e.upsertSessionPendingContentForWrite(pw, s)
 	if err != nil {
 		if isIntentionalSessionSkip(err) {
@@ -19062,7 +18383,9 @@ func (e *Engine) writeSessionFullWithResolver(
 			return err
 		}
 	} else {
-		update, findings, signalErr := e.computeFullSignalsAndSecretsForStorage(s, msgs, nil)
+		update, signalErr := e.attachFullSignalState(
+			s, msgs, prepared.Signals, nil,
+		)
 		if signalErr != nil {
 			return signalErr
 		}
@@ -19081,7 +18404,7 @@ func (e *Engine) writeSessionFullWithResolver(
 			}
 		}
 		if err := e.db.ReplaceSessionContentWithCheckpoint(
-			s.ID, msgs, update, findings, checkpoint, checkpointBlobs,
+			s.ID, msgs, update, prepared.Findings, checkpoint, checkpointBlobs,
 		); err != nil {
 			log.Printf(
 				"replace messages for %s: %v",
@@ -19091,7 +18414,7 @@ func (e *Engine) writeSessionFullWithResolver(
 		}
 	}
 	if err := e.db.ReplaceSessionUsageEvents(
-		s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
+		s.ID, prepared.UsageEvents,
 	); err != nil {
 		log.Printf(
 			"replace usage events for %s: %v",
@@ -19117,170 +18440,12 @@ func (e *Engine) writeSessionFullWithResolver(
 	return nil
 }
 
-// shouldPreserveRooCodeArchive reports whether a zero-message RooCode
-// parse must not overwrite an archived transcript. A vanished (or
-// torn) ui_messages.json parses as a zero-message session while
-// history_item.json keeps the task discoverable, so writing that
-// parse would corrupt the session's counts on normal sync and — with
-// RooCode on the full-replace path — delete the archived messages
-// outright; on a rebuild it would recreate the session empty in the
-// fresh DB, which also blocks the orphan-copy pass from restoring it.
-// Newly created metadata-only tasks have no archived messages and
-// still write normally.
-func (e *Engine) shouldPreserveRooCodeArchive(
-	agent parser.AgentType, sessionID string, msgs []db.Message,
-) bool {
-	if (agent != parser.AgentRooCode && agent != parser.AgentKiloLegacy) || len(msgs) > 0 {
-		return false
-	}
-	store := e.archiveStore
-	if store == nil {
-		store = e.db
-	}
-	stored, err := store.GetAllMessages(context.Background(), sessionID)
-	if err != nil || len(stored) == 0 {
-		return false
-	}
-	log.Printf(
-		"skip %s session %s: transcript parsed empty but archive has %d messages",
-		agent, sessionID, len(stored),
-	)
-	return true
-}
-
-func (e *Engine) shouldPreserveOpenCodeFormatArchive(
-	agent parser.AgentType, path, sessionID string,
-	currentMtime int64,
-	currentHash string,
-	currentMsgs []db.Message,
-) bool {
-	if !isOpenCodeFormatStorageAgent(agent) {
-		return false
-	}
-	// An ICodeMate CLI transcript is a plain rewritable file, never a
-	// self-preserving OpenCode container.
-	if isClaudeFormatTranscript(agent, path) {
-		return false
-	}
-	store := e.archiveStore
-	if store == nil {
-		store = e.db
-	}
-	stored, err := store.GetSessionFull(
-		context.Background(), sessionID,
-	)
-	if err != nil || stored == nil {
-		return false
-	}
-	storedHash := derefString(stored.FileHash)
-	storedPath := derefString(stored.FilePath)
-	storedMtime := derefInt64(stored.FileMtime)
-	storedHasStorageFingerprint := hasOpenCodeFormatStorageFingerprint(
-		agent, storedHash,
-	)
-	currentIsOpenCodeStorage := isOpenCodeFormatStoragePath(agent, path) ||
-		isOpenCodeFormatSQLiteVirtualPath(agent, path)
-	storedIsOpenCodeStorage := isOpenCodeFormatStoragePath(agent, storedPath) ||
-		isOpenCodeFormatSQLiteVirtualPath(agent, storedPath) ||
-		(storedPath == "" && storedHasStorageFingerprint)
-	if !currentIsOpenCodeStorage && !storedIsOpenCodeStorage {
-		return false
-	}
-	storedIsSQLiteVirtual := isOpenCodeFormatSQLiteVirtualPath(
-		agent, storedPath,
-	)
-	storedIsStorageArchive := isOpenCodeFormatStoragePath(
-		agent, storedPath,
-	) || (storedPath == "" && storedHasStorageFingerprint)
-	if storedIsSQLiteVirtual {
-		storedIsStorageArchive = false
-	}
-	if isOpenCodeFormatSQLiteVirtualPath(agent, path) &&
-		!storedIsStorageArchive {
-		return false
-	}
-	storedMsgs, err := store.GetAllMessages(
-		context.Background(), sessionID,
-	)
-	if err != nil || len(storedMsgs) == 0 {
-		return false
-	}
-	// A changed storage fingerprint alone is not enough to
-	// preserve the archive. OpenCode legitimately rewrites
-	// live child files in place, so we only preserve when the
-	// newly parsed transcript also looks incomplete relative
-	// to what is already archived.
-	if storedHasStorageFingerprint &&
-		hasOpenCodeFormatStorageFingerprint(agent, currentHash) &&
-		!parser.OpenCodeStorageFingerprintMissing(
-			storedHash, currentHash,
-		) {
-		return false
-	}
-	if storedIsStorageArchive &&
-		isOpenCodeFormatSQLiteVirtualPath(agent, path) &&
-		currentMtime != 0 &&
-		storedMtime != 0 &&
-		currentMtime <= storedMtime {
-		log.Printf(
-			"skip %s session %s: sqlite fallback is not newer than preserved storage archive",
-			agent, sessionID,
-		)
-		return true
-	}
-	incomplete := false
-	if e.db.ArchiveContent().UsageOnly() {
-		_, comparableCurrentMsgs := e.db.ProjectSessionForStorage(
-			db.Session{}, currentMsgs,
-		)
-		_, comparableStoredMsgs := e.db.ProjectSessionForStorage(
-			db.Session{}, storedMsgs,
-		)
-		incomplete = openCodeUsageOnlyArchiveLooksIncomplete(
-			comparableCurrentMsgs, comparableStoredMsgs,
-		)
-	} else {
-		incomplete = openCodeLegacyArchiveLooksIncomplete(
-			currentMsgs, storedMsgs,
-		)
-	}
-	if incomplete {
-		if hasOpenCodeFormatStorageFingerprint(agent, storedHash) {
-			log.Printf(
-				"skip %s session %s: storage fingerprint changed but update looks incomplete relative to archive",
-				agent, sessionID,
-			)
-		} else {
-			log.Printf(
-				"skip %s session %s: storage update looks incomplete relative to legacy archive",
-				agent, sessionID,
-			)
-		}
-		return true
-	}
-	return false
-}
-
 func isOpenCodeFormatStorageAgent(agent parser.AgentType) bool {
-	return agent == parser.AgentOpenCode ||
-		agent == parser.AgentKilo ||
-		agent == parser.AgentIcodemate ||
-		agent == parser.AgentMiMoCode
+	return ingest.IsOpenCodeFormatStorageAgent(agent)
 }
 
 func openCodeFormatDBName(agent parser.AgentType) string {
-	switch agent {
-	case parser.AgentOpenCode:
-		return "opencode.db"
-	case parser.AgentKilo:
-		return "kilo.db"
-	case parser.AgentMiMoCode:
-		return "mimocode.db"
-	case parser.AgentIcodemate:
-		return "icodemate.db"
-	default:
-		return ""
-	}
+	return ingest.OpenCodeFormatDBName(agent)
 }
 
 func resolveOpenCodeFormatSource(
@@ -19317,45 +18482,22 @@ func openCodeFormatSourceMtime(
 	}
 }
 
-// hasOpenCodeFormatStorageFingerprint reports whether hash is an
-// OpenCode storage fingerprint. Kilo reuses OpenCode's storage format
-// verbatim, so the same check applies to both agents.
-func hasOpenCodeFormatStorageFingerprint(
-	agent parser.AgentType, hash string,
-) bool {
-	return isOpenCodeFormatStorageAgent(agent) &&
-		parser.HasOpenCodeStorageFingerprint(hash)
-}
-
 func isOpenCodeFormatStoragePath(
 	agent parser.AgentType, path string,
 ) bool {
-	return strings.HasSuffix(path, ".json") &&
-		!isOpenCodeFormatSQLiteVirtualPath(agent, path)
+	return ingest.IsOpenCodeFormatStoragePath(agent, path)
 }
 
 func isOpenCodeFormatContainerSource(
 	agent parser.AgentType, path string,
 ) bool {
-	return isOpenCodeFormatStorageAgent(agent) &&
-		(isOpenCodeFormatStoragePath(agent, path) ||
-			isOpenCodeFormatSQLiteVirtualPath(agent, path))
+	return ingest.IsOpenCodeFormatContainerSource(agent, path)
 }
 
 func isOpenCodeFormatSQLiteVirtualPath(
 	agent parser.AgentType, path string,
 ) bool {
-	if !isOpenCodeFormatStorageAgent(agent) {
-		return false
-	}
-	if agent == parser.AgentOpenCode {
-		_, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path)
-		return ok
-	}
-	_, _, ok := parser.ParseVirtualSourcePathForBase(
-		path, openCodeFormatDBName(agent),
-	)
-	return ok
+	return ingest.IsOpenCodeFormatSQLiteVirtualPath(agent, path)
 }
 
 func derefString(s *string) string {
@@ -19365,172 +18507,16 @@ func derefString(s *string) string {
 	return *s
 }
 
-func derefInt64(v *int64) int64 {
-	if v == nil {
-		return 0
-	}
-	return *v
-}
-
 func openCodeLegacyArchiveLooksIncomplete(
 	parsed, stored []db.Message,
 ) bool {
-	if parsed == nil {
-		return len(stored) > 0
-	}
-	if len(parsed) < len(stored) {
-		return true
-	}
-	for i := range stored {
-		if openCodeMessageLooksIncomplete(
-			parsed[i], stored[i],
-		) {
-			return true
-		}
-	}
-	return false
+	return ingest.OpenCodeLegacyArchiveLooksIncomplete(parsed, stored)
 }
 
 func openCodeUsageOnlyArchiveLooksIncomplete(
 	parsed, stored []db.Message,
 ) bool {
-	if parsed == nil {
-		return len(stored) > 0
-	}
-	if len(parsed) < len(stored) {
-		return true
-	}
-	parsedByIdentity := make(
-		map[openCodeMessageIdentity]db.Message, len(parsed),
-	)
-	for _, message := range parsed {
-		parsedByIdentity[openCodeMessageStorageIdentity(message)] = message
-		// Older archives have no source UUID. Index the ordinal/role as
-		// well so those rows can adopt the source identity on replacement.
-		// Stored rows with UUIDs still require that exact UUID to match.
-		parsedByIdentity[openCodeMessageIdentity{
-			ordinal: message.Ordinal, role: message.Role,
-		}] = message
-	}
-	for _, storedMessage := range stored {
-		parsedMessage, ok := parsedByIdentity[openCodeMessageStorageIdentity(storedMessage)]
-		if !ok || openCodeUsageOnlyMessageLooksIncomplete(
-			parsedMessage, storedMessage,
-		) {
-			return true
-		}
-	}
-	return false
-}
-
-type openCodeMessageIdentity struct {
-	sourceUUID string
-	ordinal    int
-	role       string
-}
-
-func openCodeMessageStorageIdentity(message db.Message) openCodeMessageIdentity {
-	if message.SourceUUID != "" {
-		return openCodeMessageIdentity{sourceUUID: message.SourceUUID}
-	}
-	return openCodeMessageIdentity{
-		ordinal: message.Ordinal,
-		role:    message.Role,
-	}
-}
-
-func openCodeMessageLooksIncomplete(
-	parsed, stored db.Message,
-) bool {
-	if parsed.Ordinal != stored.Ordinal ||
-		parsed.Role != stored.Role {
-		return false
-	}
-	if sanitizedMessageContentLength(parsed) <
-		sanitizedMessageContentLength(stored) {
-		return true
-	}
-	if parsed.HasThinking != stored.HasThinking &&
-		stored.HasThinking {
-		return true
-	}
-	if stored.HasOutputTokens &&
-		(!parsed.HasOutputTokens ||
-			parsed.OutputTokens < stored.OutputTokens) {
-		return true
-	}
-	if stored.HasContextTokens &&
-		(!parsed.HasContextTokens ||
-			parsed.ContextTokens < stored.ContextTokens) {
-		return true
-	}
-	if len(parsed.ToolCalls) < len(stored.ToolCalls) {
-		return true
-	}
-	return countToolResultEvents(parsed.ToolCalls) <
-		countToolResultEvents(stored.ToolCalls)
-}
-
-func openCodeUsageOnlyMessageLooksIncomplete(
-	parsed, stored db.Message,
-) bool {
-	if parsed.Role != stored.Role {
-		return false
-	}
-	if openCodeUsageLooksIncomplete(parsed, stored) {
-		return true
-	}
-	// Usage rows keep only delegation calls, so every stored call must
-	// still be present with the same delegated session; a replacement
-	// call with the same count would otherwise drop a subagent link.
-	parsedLinks := make(map[string]string, len(parsed.ToolCalls))
-	for _, call := range parsed.ToolCalls {
-		parsedLinks[call.ToolUseID] = call.SubagentSessionID
-	}
-	for _, call := range stored.ToolCalls {
-		child, ok := parsedLinks[call.ToolUseID]
-		if !ok || child != call.SubagentSessionID {
-			return true
-		}
-	}
-	return false
-}
-
-func openCodeUsageLooksIncomplete(parsed, stored db.Message) bool {
-	if stored.Model != "" && parsed.Model == "" {
-		return true
-	}
-	if len(stored.TokenUsage) == 0 {
-		return false
-	}
-	if len(parsed.TokenUsage) == 0 {
-		return true
-	}
-	parsedUsage := usagefacts.ParseTokenUsage(string(parsed.TokenUsage))
-	storedUsage := usagefacts.ParseTokenUsage(string(stored.TokenUsage))
-	return parsedUsage.InputTokens < storedUsage.InputTokens ||
-		parsedUsage.OutputTokens < storedUsage.OutputTokens ||
-		parsedUsage.ReasoningTokens < storedUsage.ReasoningTokens ||
-		parsedUsage.CacheCreationTokens < storedUsage.CacheCreationTokens ||
-		parsedUsage.CacheCreation1hTokens < storedUsage.CacheCreation1hTokens ||
-		parsedUsage.CacheReadTokens < storedUsage.CacheReadTokens ||
-		parsedUsage.WebSearchRequests < storedUsage.WebSearchRequests
-}
-
-func sanitizedMessageContentLength(msg db.Message) int {
-	sanitized := db.SanitizeUTF8(msg.Content)
-	if sanitized != msg.Content {
-		return len(sanitized)
-	}
-	return msg.ContentLength
-}
-
-func countToolResultEvents(calls []db.ToolCall) int {
-	total := 0
-	for _, call := range calls {
-		total += len(call.ResultEvents)
-	}
-	return total
+	return ingest.OpenCodeUsageOnlyArchiveLooksIncomplete(parsed, stored)
 }
 
 func (e *Engine) applyIDPrefixToSessionIDs(ids []string) []string {
@@ -19558,6 +18544,10 @@ func (e *Engine) applyRemoteRewritesContext(
 	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
 		p := applyIDPrefixToID(e.idPrefix, *s.ParentSessionID)
 		s.ParentSessionID = &p
+	}
+	if s.ParserParentSessionID != nil && *s.ParserParentSessionID != "" {
+		p := applyIDPrefixToID(e.idPrefix, *s.ParserParentSessionID)
+		s.ParserParentSessionID = &p
 	}
 	if e.pathRewriter != nil && s.FilePath != nil {
 		fp := e.pathRewriter(*s.FilePath)
@@ -19604,59 +18594,7 @@ func toDBSession(pw pendingWrite) db.Session {
 func toDBSessionContext(
 	ctx context.Context, pw pendingWrite,
 ) (db.Session, error) {
-	hasTotal, hasPeak, err := pw.sess.TokenCoverageContext(ctx, pw.msgs)
-	if err != nil {
-		return db.Session{}, err
-	}
-	s := db.Session{
-		ID:                   pw.sess.ID,
-		Project:              pw.sess.Project,
-		Machine:              pw.sess.Machine,
-		MessageCount:         pw.sess.MessageCount,
-		UserMessageCount:     pw.sess.UserMessageCount,
-		ParentSessionID:      strPtr(pw.sess.ParentSessionID),
-		RelationshipType:     string(pw.sess.RelationshipType),
-		TotalOutputTokens:    pw.sess.TotalOutputTokens,
-		PeakContextTokens:    pw.sess.PeakContextTokens,
-		HasTotalOutputTokens: hasTotal,
-		HasPeakContextTokens: hasPeak,
-		Cwd:                  pw.sess.Cwd,
-		GitBranch:            pw.sess.GitBranch,
-		SourceSessionID:      pw.sess.SourceSessionID,
-		SourceVersion:        pw.sess.SourceVersion,
-		TranscriptFidelity:   pw.sess.TranscriptFidelity,
-		ParserMalformedLines: pw.sess.MalformedLines,
-		IsTruncated:          pw.sess.IsTruncated,
-		TerminationStatus:    strPtr(string(pw.sess.TerminationStatus)),
-		// data_version is intentionally left at the
-		// existing column default (0). UpsertSession does
-		// not persist this field; the caller bumps it via
-		// SetSessionDataVersion only after the message
-		// rewrite succeeds.
-		FilePath:          strPtr(pw.sess.File.Path),
-		FileSize:          int64Ptr(pw.sess.File.Size),
-		FileMtime:         int64Ptr(pw.sess.File.Mtime),
-		NextOrdinal:       nextParsedOrdinal(0, pw.msgs),
-		LastEntryUUID:     strPtr(lastParsedSourceUUID("", pw.msgs)),
-		ClaudeLinearParse: pw.sess.ClaudeLinearParse,
-		FileInode:         int64Ptr(pw.sess.File.Inode),
-		FileDevice:        int64Ptr(pw.sess.File.Device),
-		FileHash:          strPtr(pw.sess.File.Hash),
-	}
-	db.ApplyParsedSessionIdentity(&s, pw.sess)
-	if pw.sess.FirstMessage != "" {
-		s.FirstMessage = &pw.sess.FirstMessage
-	}
-	s.SessionName = db.ParsedSessionName(pw.sess)
-	s.PreserveSessionName = pw.sess.Agent == parser.AgentCodex &&
-		!pw.sess.SessionNamePresent
-	if !pw.sess.StartedAt.IsZero() {
-		s.StartedAt = timeutil.Ptr(pw.sess.StartedAt)
-	}
-	if !pw.sess.EndedAt.IsZero() {
-		s.EndedAt = timeutil.Ptr(pw.sess.EndedAt)
-	}
-	return s, ctx.Err()
+	return ingest.ConvertSessionContext(ctx, pw.sess, pw.msgs)
 }
 
 // toDBMessages converts parsed messages to db.Message rows
@@ -19669,60 +18607,9 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 func toDBMessagesContext(
 	ctx context.Context, pw pendingWrite, blocked map[string]bool,
 ) ([]db.Message, error) {
-	msgs := make([]db.Message, len(pw.msgs))
-	for i, m := range pw.msgs {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		hasCtx, hasOut := m.TokenPresence()
-		toolCalls, err := convertToolCallsContext(ctx, pw.sess.ID, m.ToolCalls)
-		if err != nil {
-			return nil, err
-		}
-		if isCodexFormatAgent(pw.sess.Agent) {
-			for j := range toolCalls {
-				for k := range toolCalls[j].ResultEvents {
-					db.PrepareToolResultEvent(&toolCalls[j].ResultEvents[k])
-				}
-			}
-		}
-		toolResults, err := convertToolResultsContext(ctx, m.ToolResults)
-		if err != nil {
-			return nil, err
-		}
-		msgs[i] = db.Message{
-			SessionID:         pw.sess.ID,
-			Ordinal:           m.Ordinal,
-			Role:              string(m.Role),
-			Content:           m.Content,
-			ThinkingText:      m.ThinkingText,
-			Timestamp:         timeutil.Format(m.Timestamp),
-			HasThinking:       m.HasThinking,
-			HasToolUse:        m.HasToolUse,
-			ContentLength:     m.ContentLength,
-			IsSystem:          m.IsSystem,
-			Model:             m.Model,
-			ReasoningEffort:   m.ReasoningEffort,
-			ProviderID:        m.ProviderID,
-			TokenUsage:        m.TokenUsage,
-			ContextTokens:     m.ContextTokens,
-			OutputTokens:      m.OutputTokens,
-			HasContextTokens:  hasCtx,
-			HasOutputTokens:   hasOut,
-			ClaudeMessageID:   m.ClaudeMessageID,
-			ClaudeRequestID:   m.ClaudeRequestID,
-			SourceType:        m.SourceType,
-			SourceSubtype:     m.SourceSubtype,
-			PromptSource:      m.PromptSource,
-			SourceUUID:        m.SourceUUID,
-			SourceParentUUID:  m.SourceParentUUID,
-			IsSidechain:       m.IsSidechain,
-			IsCompactBoundary: m.IsCompactBoundary,
-			ToolCalls:         toolCalls,
-			ToolResults:       toolResults,
-		}
-	}
-	return pairAndFilterContext(ctx, msgs, blocked)
+	return ingest.ConvertMessagesContext(
+		ctx, pw.sess.ID, pw.sess.Agent, pw.msgs, blocked,
+	)
 }
 
 // toDBUsageEvents converts parser usage events for one session.
@@ -19742,57 +18629,7 @@ func toDBUsageEvents(
 func toDBUsageEventsContext(
 	ctx context.Context, sessionID string, events []parser.ParsedUsageEvent,
 ) ([]db.UsageEvent, validationStats, error) {
-	out := make([]db.UsageEvent, 0, len(events))
-	for _, ev := range events {
-		if err := ctx.Err(); err != nil {
-			return nil, validationStats{}, err
-		}
-		out = append(out, db.UsageEvent{
-			SessionID:                sessionID,
-			MessageOrdinal:           ev.MessageOrdinal,
-			Source:                   ev.Source,
-			Model:                    ev.Model,
-			ProviderID:               ev.ProviderID,
-			InputTokens:              ev.InputTokens,
-			OutputTokens:             ev.OutputTokens,
-			CacheCreationInputTokens: ev.CacheCreationInputTokens,
-			CacheReadInputTokens:     ev.CacheReadInputTokens,
-			ReasoningTokens:          ev.ReasoningTokens,
-			Cost:                     ev.Cost,
-			CostStatus:               ev.CostStatus,
-			CostSource:               ev.CostSource,
-			OccurredAt:               ev.OccurredAt,
-			DedupKey:                 ev.DedupKey,
-		})
-	}
-	// Route usage events through the central validation/sanitization
-	// pass so they get the same treatment as messages and sessions at
-	// every call site.
-	stats, err := validateAndSanitizeContext(ctx, nil, nil, out)
-	return out, stats, err
-}
-
-// usageEventsForWrite converts usage events for a session about to be
-// written and records the central-validation fix counts in the per-run
-// anomaly accumulator for the sync summary.
-func (e *Engine) usageEventsForWrite(
-	sessionID string, events []parser.ParsedUsageEvent,
-) []db.UsageEvent {
-	out, _ := e.usageEventsForWriteContext(
-		context.Background(), sessionID, events,
-	)
-	return out
-}
-
-func (e *Engine) usageEventsForWriteContext(
-	ctx context.Context, sessionID string, events []parser.ParsedUsageEvent,
-) ([]db.UsageEvent, error) {
-	out, vs, err := toDBUsageEventsContext(ctx, sessionID, events)
-	if err != nil {
-		return nil, err
-	}
-	e.anomalies.recordSanitize(vs)
-	return out, nil
+	return ingest.ConvertUsageEventsContext(ctx, sessionID, events)
 }
 
 // postFilterCounts returns the total and user message counts
@@ -19851,21 +18688,13 @@ func countUserMsgs(msgs []parser.ParsedMessage) int {
 func nextParsedOrdinal(
 	current int, msgs []parser.ParsedMessage,
 ) int {
-	if len(msgs) == 0 {
-		return current
-	}
-	return msgs[len(msgs)-1].Ordinal + 1
+	return ingest.NextParsedOrdinal(current, msgs)
 }
 
 func lastParsedSourceUUID(
 	current string, msgs []parser.ParsedMessage,
 ) string {
-	for _, v := range slices.Backward(msgs) {
-		if v.SourceUUID != "" {
-			return v.SourceUUID
-		}
-	}
-	return current
+	return ingest.LastParsedSourceUUID(current, msgs)
 }
 
 // FindSourceFile locates the original source file for a
@@ -21079,37 +19908,7 @@ func convertToolCalls(
 func convertToolCallsContext(
 	ctx context.Context, sessionID string, parsed []parser.ParsedToolCall,
 ) ([]db.ToolCall, error) {
-	if len(parsed) == 0 {
-		return nil, ctx.Err()
-	}
-	calls := make([]db.ToolCall, len(parsed))
-	for i, tc := range parsed {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		filePath := tc.FilePath
-		if filePath == "" {
-			filePath = parser.ResolveFilePathFromJSON(tc.InputJSON)
-		}
-		resultEvents, err := convertToolResultEventsContext(ctx, tc.ResultEvents)
-		if err != nil {
-			return nil, err
-		}
-		calls[i] = db.ToolCall{
-			SessionID:         sessionID,
-			ToolName:          tc.ToolName,
-			Category:          tc.Category,
-			ToolUseID:         tc.ToolUseID,
-			InputJSON:         tc.InputJSON,
-			Rendering:         tc.Rendering,
-			FilePath:          filePath,
-			CallIndex:         i,
-			SkillName:         tc.SkillName,
-			SubagentSessionID: tc.SubagentSessionID,
-			ResultEvents:      resultEvents,
-		}
-	}
-	return calls, ctx.Err()
+	return ingest.ConvertToolCallsContext(ctx, sessionID, parsed)
 }
 
 // prepareCodexResultIdentities runs in parse workers before their payloads
@@ -21141,50 +19940,7 @@ func prepareCodexResultIdentities(
 func convertToolResultEventsContext(
 	ctx context.Context, parsed []parser.ParsedToolResultEvent,
 ) ([]db.ToolResultEvent, error) {
-	if len(parsed) == 0 {
-		return nil, ctx.Err()
-	}
-	events := make([]db.ToolResultEvent, len(parsed))
-	for i, ev := range parsed {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		events[i] = db.ToolResultEvent{
-			RawContentDigest:  ev.RawContentDigest,
-			ToolUseID:         ev.ToolUseID,
-			AgentID:           ev.AgentID,
-			SubagentSessionID: ev.SubagentSessionID,
-			Source:            ev.Source,
-			Status:            ev.Status,
-			Content:           ev.Content,
-			ContentLength:     len(ev.Content),
-			Timestamp:         timeutil.Format(ev.Timestamp),
-			EventIndex:        i,
-		}
-	}
-	return events, ctx.Err()
-}
-
-// convertToolResults maps parsed tool results to db.ToolResult
-// structs for use in pairing before DB insert.
-func convertToolResultsContext(
-	ctx context.Context, parsed []parser.ParsedToolResult,
-) ([]db.ToolResult, error) {
-	if len(parsed) == 0 {
-		return nil, ctx.Err()
-	}
-	results := make([]db.ToolResult, len(parsed))
-	for i, tr := range parsed {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		results[i] = db.ToolResult{
-			ToolUseID:     tr.ToolUseID,
-			ContentLength: tr.ContentLength,
-			ContentRaw:    tr.ContentRaw,
-		}
-	}
-	return results, ctx.Err()
+	return ingest.ConvertToolResultEventsContext(ctx, parsed)
 }
 
 // pairAndFilter pairs tool results with their corresponding
@@ -21200,27 +19956,7 @@ func pairAndFilter(msgs []db.Message, blocked map[string]bool) []db.Message {
 func pairAndFilterContext(
 	ctx context.Context, msgs []db.Message, blocked map[string]bool,
 ) ([]db.Message, error) {
-	if err := pairToolResultsContext(ctx, msgs, blocked); err != nil {
-		return nil, err
-	}
-	if err := pairToolResultEventSummariesContext(
-		ctx, msgs, blocked,
-	); err != nil {
-		return nil, err
-	}
-	filtered := msgs[:0]
-	for _, m := range msgs {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if m.Role == "user" &&
-			len(m.ToolResults) > 0 &&
-			strings.TrimSpace(m.Content) == "" {
-			continue
-		}
-		filtered = append(filtered, m)
-	}
-	return filtered, ctx.Err()
+	return ingest.PairAndFilterContext(ctx, msgs, blocked)
 }
 
 // pairToolResults matches tool_result content to their
@@ -21233,47 +19969,7 @@ func pairToolResults(msgs []db.Message, blocked map[string]bool) {
 func pairToolResultsContext(
 	ctx context.Context, msgs []db.Message, blocked map[string]bool,
 ) error {
-	idx := make(map[string]*db.ToolCall)
-	for i := range msgs {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		for j := range msgs[i].ToolCalls {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			tc := &msgs[i].ToolCalls[j]
-			if tc.ToolUseID != "" {
-				idx[tc.ToolUseID] = tc
-			}
-		}
-	}
-	if len(idx) == 0 {
-		return ctx.Err()
-	}
-	for _, m := range msgs {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		for _, tr := range m.ToolResults {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if tc, ok := idx[tr.ToolUseID]; ok {
-				// A withheld result keeps the parser's size; a stored one
-				// is measured, matching the archive's write rule so change
-				// detection never sees a parser-side rounding difference.
-				tc.ResultContentLength = tr.ContentLength
-				if !blocked[tc.Category] {
-					tc.ResultContent = parser.DecodeContent(tr.ContentRaw)
-					tc.ResultContentLength = db.ResolveResultContentLength(
-						tc.ResultContent, tr.ContentLength,
-					)
-				}
-			}
-		}
-	}
-	return ctx.Err()
+	return ingest.PairToolResultsContext(ctx, msgs, blocked)
 }
 
 func pairToolResultEventSummaries(
@@ -21287,98 +19983,7 @@ func pairToolResultEventSummaries(
 func pairToolResultEventSummariesContext(
 	ctx context.Context, msgs []db.Message, blocked map[string]bool,
 ) error {
-	for i := range msgs {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		for j := range msgs[i].ToolCalls {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			tc := &msgs[i].ToolCalls[j]
-			if len(tc.ResultEvents) == 0 {
-				continue
-			}
-			summary, err := summarizeToolResultEventsContext(
-				ctx, tc.ResultEvents,
-			)
-			if err != nil {
-				return err
-			}
-			tc.ResultContentLength = len(summary)
-			if blocked[tc.Category] {
-				tc.ResultContent = ""
-				for k := range tc.ResultEvents {
-					tc.ResultEvents[k].Content = ""
-				}
-				continue
-			}
-			tc.ResultContent = summary
-		}
-	}
-	return ctx.Err()
-}
-
-func summarizeToolResultEventsContext(
-	ctx context.Context, events []db.ToolResultEvent,
-) (string, error) {
-	if len(events) == 0 {
-		return "", ctx.Err()
-	}
-	type agentSummary struct {
-		order   int
-		content string
-	}
-	latestByAgent := map[string]agentSummary{}
-	orderedAgents := make([]string, 0, len(events))
-	lastAnon := ""
-	allHaveAgentID := true
-	for _, ev := range events {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(ev.Content) == "" {
-			continue
-		}
-		agentID := strings.TrimSpace(ev.AgentID)
-		if agentID == "" {
-			allHaveAgentID = false
-			lastAnon = ev.Content
-			continue
-		}
-		if _, ok := latestByAgent[agentID]; !ok {
-			latestByAgent[agentID] = agentSummary{
-				order:   len(orderedAgents),
-				content: ev.Content,
-			}
-			orderedAgents = append(orderedAgents, agentID)
-			continue
-		}
-		entry := latestByAgent[agentID]
-		entry.content = ev.Content
-		latestByAgent[agentID] = entry
-	}
-	if len(latestByAgent) <= 1 {
-		if len(latestByAgent) == 1 {
-			summary := latestByAgent[orderedAgents[0]].content
-			if lastAnon != "" {
-				return summary + "\n\n" + lastAnon, ctx.Err()
-			}
-			return summary, ctx.Err()
-		}
-		return lastAnon, ctx.Err()
-	}
-	parts := make([]string, 0, len(orderedAgents))
-	for _, agentID := range orderedAgents {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
-	}
-	if !allHaveAgentID && lastAnon != "" {
-		parts = append(parts, lastAnon)
-	}
-	return strings.Join(parts, "\n\n"), ctx.Err()
+	return ingest.PairToolResultEventSummariesContext(ctx, msgs, blocked)
 }
 
 // emit fires a refresh event if an emitter is wired. Safe to call

@@ -36,6 +36,7 @@ export interface Session {
   message_count: number;
   user_message_count: number;
   parent_session_id?: string;
+  parent_session_ids?: string[];
   relationship_type?: string;
   deleted_at?: string | null;
   termination_status?: string | null;
@@ -92,6 +93,7 @@ export interface SessionPage {
 export interface SidebarSessionIndexRow {
   id: string;
   parent_session_id?: string | null;
+  parent_session_ids?: string[];
   relationship_type?: string | null;
   project: string;
   machine: string;
@@ -197,6 +199,8 @@ export interface AgentsResponse {
 
 /** Matches Go PinnedMessage struct in internal/db/pins.go */
 export interface PinnedMessage {
+  message_key?: string;
+  unresolved?: boolean;
   id: number;
   session_id: string;
   message_id: number;

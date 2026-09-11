@@ -178,6 +178,7 @@ type Server struct {
 	localCompactRunner LocalCompactRunner
 
 	artifactExchangeRunner ArtifactExchangeRunner
+	rawSyncTenant          string
 	rawSyncDeviceAuth      RawSyncDeviceAuth
 	rawSyncCustody         RawSyncCustody
 	rawSyncSchemaOnly      bool
@@ -1576,3 +1577,6 @@ func logMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// WithRawSyncTenant binds every raw credential/token identity before route work.
+func WithRawSyncTenant(tenant string) Option { return func(s *Server) { s.rawSyncTenant = tenant } }

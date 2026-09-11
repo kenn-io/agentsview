@@ -1726,6 +1726,7 @@
   "pinned_expand": "Expand",
   "pinned_copy_message": "Copy message",
   "pinned_copied_message": "Copied message",
+  "pinned_unresolved": "Pinned message is no longer in this transcript.",
   "pinned_unpin": "Unpin",
   "settings_session_providers_title": "Session Providers",
   "settings_session_providers_description": "Choose which agent session sources AgentsView discovers and syncs.",

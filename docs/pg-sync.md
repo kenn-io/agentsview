@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-11
 title: PostgreSQL Sync
 description: Share sessions across machines with PostgreSQL push sync, an auto-push service, and a read-only server
 ---
@@ -21,9 +22,28 @@ dashboard as well.
 
     [Hosted Raw Sync](/docs/hosted-raw-sync/) is a separate path that keeps original
     provider artifacts in hosted custody through authenticated, resumable uploads.
-    It does not yet turn accepted generations into hosted sessions or embeddings.
-    This does not change `pg push`, `pg push --watch`, or the read-only session UI
-    and APIs documented on this page.
+    Explicitly provisioned tenants can enable `raw_derivation` to parse accepted
+    sources directly into browsable PostgreSQL sessions, without a local SQLite
+    archive. Embedding consumption remains future work. Ordinary `pg push` and
+    read-only PostgreSQL serving keep their existing behavior; `pg push` refuses
+    a schema that has been adopted for hosted raw processing.
+
+## Hosted raw processing
+
+For uploads that the server parses itself, provision a schema and tenant with
+`agentsview pg hosted-provision <owner-target>`, then serve with a separate
+restricted runtime role. The selected PG target needs `raw_tenant`, an explicit
+schema and `raw_derivation = true`; the server also requires authentication, a
+stable cursor secret and a supported Linux/cgo sandbox. Runtime startup checks
+schema protections and grants but never runs hosted migrations.
+
+See [Hosted Raw Sync](/docs/hosted-raw-sync/#provision-a-hosted-instance) for
+the configuration, least-privilege grants and platform limits. Use `agentsview
+pg raw-reparse <runtime-target> --run-id <id> --batch-size 64` for bounded
+parser-version rollouts. To stop the worker, set `raw_derivation = false` and
+keep `raw_tenant`, authentication and the cursor secret. This preserves hosted
+public reads and raw custody. It does not restore `pg push` access to the owned
+schema.
 
 ## Quick Start
 
@@ -45,7 +65,9 @@ For multiple PostgreSQL destinations, use named `[pg.NAME]` blocks and
 `default_pg` instead of the legacy single `[pg]` block. Named target names are
 normalized case-insensitively, and `all`, `local`, plus the legacy `[pg]` field
 names `url`, `schema`, `machine_name`, `allow_insecure`, `projects`, and
-`exclude_projects` are unavailable as `[pg.NAME]` names.
+`exclude_projects`, `raw_tenant`, `raw_derivation`, `raw_poll_seconds`,
+`raw_attempt_seconds`, and `raw_max_attempts` are unavailable as `[pg.NAME]`
+names.
 
 ### 2. Push Sessions
 
@@ -317,7 +339,8 @@ to run it.
 
 ### `agentsview pg serve`
 
-Start a read-only web UI backed by PostgreSQL.
+Start the PostgreSQL web UI. Legacy mode reads pushed sessions; an explicitly
+provisioned hosted target can also derive sessions from accepted raw captures.
 
 ```bash
 agentsview pg serve [flags]
@@ -358,14 +381,14 @@ GRANT SELECT, UPDATE ON agentsview.raw_ingest_jobs TO raw_sync_runtime;
 
 Run this as the schema owner, substitute your schema and runtime role, and
 restart `pg serve`. Keep the existing `INSERT` and ingest-job sequence `USAGE`
-grants. This enables the raw-sync HTTP routes; `pg serve` does not yet start the
-internal parse worker or project hosted raw captures into browsable sessions.
+grants. This enables legacy raw-custody HTTP routes. For server-owned parsing,
+use the explicit hosted setup below.
 
-On startup, `pg serve` automatically applies any pending schema migrations to
-PostgreSQL, creating new tables and indexes added in newer AgentsView versions.
-This removes the need to run `pg push` before starting the server after an
-upgrade. If the PostgreSQL role is read-only, the migration is skipped and the
-server falls back to the schema compatibility check.
+In legacy mode, `pg serve` automatically applies any pending schema migrations
+to PostgreSQL, creating new tables and indexes added in newer AgentsView
+versions. This removes the need to run `pg push` before starting the server
+after an upgrade. If the PostgreSQL role is read-only, the migration is skipped
+and the server falls back to the schema compatibility check.
 
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
@@ -586,7 +609,7 @@ ______________________________________________________________________
   are not deleted from PostgreSQL because the local rows no longer exist at
   push time. Use a direct SQL DELETE to clean up PostgreSQL if needed.
   Soft-deleted sessions (trash) sync correctly.
-- **Schema compatibility** — `pg serve` automatically applies pending schema
+- **Schema compatibility** — legacy `pg serve` automatically applies pending schema
   migrations on startup. If the PostgreSQL role lacks DDL permissions, run
   `agentsview pg push` from a machine with write access to update the schema.
 - **Trigram index bloat on pre-0.33.0 schemas** — the content search index was

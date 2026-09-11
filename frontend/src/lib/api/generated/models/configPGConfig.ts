@@ -8,6 +8,11 @@ export interface ConfigPGConfig {
   machine_name: string;
   projects?: string[];
   push_vectors?: boolean;
+  raw_attempt_seconds?: number;
+  raw_derivation?: boolean;
+  raw_max_attempts?: number;
+  raw_poll_seconds?: number;
+  raw_tenant?: string;
   schema: string;
   url: string;
 }

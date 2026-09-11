@@ -2903,6 +2903,25 @@ describe("buildSessionGroups", () => {
     expect(groups[0]!.sessions.map((s) => s.id)).toContain("teammate");
   });
 
+  it("includes a shared hosted child under both proven parent variants", () => {
+    const rows = [
+      makeSession({ id: "parent-a", project: "proj" }),
+      makeSession({ id: "parent-b", project: "proj" }),
+      {
+        ...makeSession({ id: "shared-child", project: "proj" }),
+        parent_session_ids: ["parent-a", "parent-b"],
+        relationship_type: "subagent",
+      },
+    ];
+    const groups = buildSessionGroups(rows);
+    expect(
+      groups.map((group) => ({ key: group.key, ids: group.sessions.map((session) => session.id) })),
+    ).toEqual([
+      { key: "parent-a", ids: ["parent-a", "shared-child"] },
+      { key: "parent-b", ids: ["parent-b", "shared-child"] },
+    ]);
+  });
+
   it("groups two-session chain", () => {
     const sessions = [
       makeSession({

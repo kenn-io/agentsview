@@ -114,6 +114,11 @@ func runPGPush(
 		return err
 	}
 
+	for _, target := range targets {
+		if target.PG.RawTenant != "" || target.PG.RawDerivation {
+			return errors.New("pg push cannot mutate a hosted-owned projection")
+		}
+	}
 	applyClassifierConfig(appCfg)
 	ctx, stop := signal.NotifyContext(
 		context.Background(), os.Interrupt,
@@ -171,6 +176,9 @@ func runPGPushTarget(
 	target, err := resolvePGTargetConfig(appCfg, target)
 	if err != nil {
 		return err
+	}
+	if target.PG.RawTenant != "" || target.PG.RawDerivation {
+		return errors.New("pg push cannot mutate a hosted-owned projection")
 	}
 	if target.PG.URL == "" {
 		return fmt.Errorf("url not configured")
@@ -479,11 +487,12 @@ func loadPGServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 }
 
 type pgServeStartup struct {
-	cfg     config.Config
-	ctx     context.Context
-	rtOpts  serveRuntimeOptions
-	srv     *server.Server
-	cleanup func()
+	cfg         config.Config
+	ctx         context.Context
+	rtOpts      serveRuntimeOptions
+	srv         *server.Server
+	cleanup     func()
+	startWorker func()
 }
 
 var preparePGServe = preparePGServeImpl
@@ -501,6 +510,12 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		return pgServeStartup{}, errors.New("pg serve: url not configured")
 	}
 
+	if err := pgCfg.ValidateRawDerivation(appCfg.RequireAuth); err != nil {
+		return pgServeStartup{}, err
+	}
+	if pgCfg.RawTenant != "" {
+		return prepareHostedPGServe(appCfg, pgCfg, basePath)
+	}
 	applyClassifierConfig(appCfg)
 	store, err := postgres.NewStore(
 		pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure,
@@ -632,8 +647,16 @@ func runPGServe(appCfg config.Config, basePath string) {
 	if err != nil {
 		fatal("%v", err)
 	}
+	if err = runPreparedPGServe(startup); err != nil {
+		fatal("%v", err)
+	}
+}
+
+// Return through cleanup before the outer CLI may call os.Exit, including
+// readiness failures and unexpected server/proxy exits.
+func runPreparedPGServe(startup pgServeStartup) error {
 	defer startup.cleanup()
-	appCfg = startup.cfg
+	appCfg := startup.cfg
 	ctx := startup.ctx
 	rtOpts := startup.rtOpts
 	srv := startup.srv
@@ -646,11 +669,14 @@ func runPGServe(appCfg config.Config, basePath string) {
 	)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return
+			return nil
 		}
-		fatal("pg serve: %v", err)
+		return fmt.Errorf("pg serve: %w", err)
 	}
 
+	if startup.startWorker != nil {
+		startup.startWorker()
+	}
 	// Write the kit runtime record so CLI commands can discover this
 	// daemon. ReadOnly=true marks it as pg serve (read-only)
 	// so clients can select an appropriate transport.
@@ -677,8 +703,9 @@ func runPGServe(appCfg config.Config, basePath string) {
 	}
 
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
-		fatal("pg serve: %v", err)
+		return fmt.Errorf("pg serve: %w", err)
 	}
+	return nil
 }
 
 func writePGServeRuntimeRecord(rt *serveRuntime) bool {

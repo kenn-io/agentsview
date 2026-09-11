@@ -1726,6 +1726,7 @@
   "pinned_expand": "展開する",
   "pinned_copy_message": "メッセージをコピーする",
   "pinned_copied_message": "コピーされたメッセージ",
+  "pinned_unresolved": "ピン留めしたメッセージはこの会話に存在しません。",
   "pinned_unpin": "ピン留めを外す",
   "settings_session_providers_title": "セッションプロバイダー",
   "settings_session_providers_description": "AgentsView が検出して同期するエージェント セッション ソースを選択します。",

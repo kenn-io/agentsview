@@ -81,7 +81,9 @@ class PinsStore {
         this.#loadVersion === loadVer &&
         this.#mutationVersion === mutVer
       ) {
-        this.sessionPinIds = new Set(res.pins.map((p) => p.message_id));
+        this.sessionPinIds = new Set(
+          res.pins.filter((p) => !p.unresolved).map((p) => p.message_id),
+        );
       }
     } catch (e) {
       if (isAbortError(e) || !this.#sessionPinsRead.isCurrent(signal)) return;
@@ -116,6 +118,25 @@ class PinsStore {
   #refetchAfterMutation() {
     if (this.#inflight.size === 0 && this.#currentSessionId) {
       this.loadForSession(this.#currentSessionId);
+    }
+  }
+
+  async removeReference(pin: PinnedMessage) {
+    if (!pin.message_key) return;
+    this.#mutationVersion++;
+    try {
+      await PinsService.deleteApiV1SessionsByIdPinReferencesByMessageKey({
+        id: pin.session_id,
+        messageKey: pin.message_key,
+      });
+      this.pins = this.pins.filter(
+        (p) => !(p.session_id === pin.session_id && p.message_key === pin.message_key),
+      );
+    } catch {
+      // Reload below reconciles failed removal without losing the retained card.
+    } finally {
+      this.loadAll(this.#loadedProject);
+      if (this.#currentSessionId) this.loadForSession(this.#currentSessionId);
     }
   }
 

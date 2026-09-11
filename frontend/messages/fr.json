@@ -1725,6 +1725,7 @@
   "pinned_expand": "Déplier",
   "pinned_copy_message": "Copier le message",
   "pinned_copied_message": "Message copié",
+  "pinned_unresolved": "Le message épinglé ne figure plus dans cette conversation.",
   "pinned_unpin": "Désépingler",
   "settings_session_providers_title": "Fournisseurs de sessions",
   "settings_session_providers_description": "Choisissez les sources de sessions d’agents qu’AgentsView détecte et synchronise.",

@@ -8,14 +8,16 @@ import (
 
 // PinnedMessage represents a row in the pinned_messages table.
 type PinnedMessage struct {
-	ID        int64   `json:"id"`
-	SessionID string  `json:"session_id"`
-	MessageID int64   `json:"message_id"`
-	Ordinal   int     `json:"ordinal"`
-	Note      *string `json:"note,omitempty"`
-	Content   *string `json:"content,omitempty"`
-	Role      *string `json:"role,omitempty"`
-	CreatedAt string  `json:"created_at"`
+	MessageKey string  `json:"message_key,omitempty"`
+	Unresolved bool    `json:"unresolved,omitempty"`
+	ID         int64   `json:"id"`
+	SessionID  string  `json:"session_id"`
+	MessageID  int64   `json:"message_id"`
+	Ordinal    int     `json:"ordinal"`
+	Note       *string `json:"note,omitempty"`
+	Content    *string `json:"content,omitempty"`
+	Role       *string `json:"role,omitempty"`
+	CreatedAt  string  `json:"created_at"`
 
 	// Session metadata — populated only for the "all pins" query.
 	SessionProject      *string `json:"session_project,omitempty"`
@@ -231,4 +233,9 @@ func (db *DB) GetPinnedMessageIDs(
 		ids[id] = true
 	}
 	return ids, rows.Err()
+}
+
+// PinReferenceStore removes a retained normalized anchor after its message disappears.
+type PinReferenceStore interface {
+	RemovePinReference(ctx context.Context, sessionID, messageKey string) error
 }

@@ -39,6 +39,9 @@ type ProgressFunc func(Progress)
 // archive changes may force a harmless refresh, while the canonical artifact
 // digest remains the final consistency check.
 type SourceProbe struct {
+	HostedIdentityRevision    int64  `json:"hosted_identity_revision,omitempty"`
+	HostedSelectionRevision   int64  `json:"hosted_selection_revision,omitempty"`
+	HostedCorpusRevision      int64  `json:"hosted_corpus_revision,omitempty"`
 	SessionCount              int64  `json:"session_count"`
 	MaxSessionModified        string `json:"max_session_modified"`
 	MaxDataVersion            int64  `json:"max_data_version"`

@@ -166,6 +166,7 @@ export * from "./deleteApiV1InsightsByIdPathParameters.ts";
 export * from "./deleteApiV1SessionsByIdMessagesByMessageIdPinPathParameters.ts";
 export * from "./deleteApiV1SessionsByIdPathParameters.ts";
 export * from "./deleteApiV1SessionsByIdPermanentPathParameters.ts";
+export * from "./deleteApiV1SessionsByIdPinReferencesByMessageKeyPathParameters.ts";
 export * from "./deleteApiV1SessionsByIdStarPathParameters.ts";
 export * from "./deleteApiV1SettingsWorktreeMappingsByIdPathParameters.ts";
 export * from "./embeddingsBuildRequest.ts";

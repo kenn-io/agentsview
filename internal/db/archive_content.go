@@ -78,7 +78,42 @@ func (db *DB) requireDerivedTextStorage(kind string) error {
 }
 
 func (db *DB) sessionForStorage(session Session) Session {
-	if !db.usageOnlyStorage() {
+	return sessionForStoragePolicy(session, db.ArchiveContent())
+}
+
+func (db *DB) sessionAndMessagesForStorage(
+	session Session, messages []Message,
+) (Session, []Message) {
+	return ProjectSessionForStoragePolicy(
+		session, messages, db.ArchiveContent(),
+	)
+}
+
+// ProjectSessionForStoragePolicy applies an explicit storage policy without a
+// database handle. Hosted and local ingestion use this same projection.
+func ProjectSessionForStoragePolicy(
+	session Session, messages []Message, policy config.ArchiveContent,
+) (Session, []Message) {
+	switch policy {
+	case config.ArchiveContentUsage:
+		// Some importers do not precompute IsAutomated. Classify from the raw
+		// messages before the storage projection drops user text.
+		session.IsAutomated = sessionIsAutomated(session) ||
+			IsAutomatedTranscript(
+				session.UserMessageCount, messages, session.FirstMessage,
+			)
+		return sessionForStoragePolicy(session, policy), usageOnlyMessages(messages)
+	case config.ArchiveContentTranscripts:
+		return session, transcriptMessages(messages)
+	default:
+		return session, messages
+	}
+}
+
+func sessionForStoragePolicy(
+	session Session, policy config.ArchiveContent,
+) Session {
+	if !policy.UsageOnly() {
 		return session
 	}
 	// Derive automation while the parser/importer preview is still present.
@@ -93,25 +128,6 @@ func (db *DB) sessionForStorage(session Session) Session {
 	session.SecretLeakCount = 0
 	session.SecretsRulesVersion = ""
 	return session
-}
-
-func (db *DB) sessionAndMessagesForStorage(
-	session Session, messages []Message,
-) (Session, []Message) {
-	switch db.ArchiveContent() {
-	case config.ArchiveContentUsage:
-		// Some importers do not precompute IsAutomated. Classify from the raw
-		// messages before the storage projection drops user text.
-		session.IsAutomated = sessionIsAutomated(session) ||
-			IsAutomatedTranscript(
-				session.UserMessageCount, messages, session.FirstMessage,
-			)
-		return db.sessionForStorage(session), usageOnlyMessages(messages)
-	case config.ArchiveContentTranscripts:
-		return session, transcriptMessages(messages)
-	default:
-		return session, messages
-	}
 }
 
 // ProjectSessionForStorage applies this database handle's storage policy to a
