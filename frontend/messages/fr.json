@@ -1057,7 +1057,6 @@
   "activity_automated_peak": "Pic automatisé",
   "activity_combined_peak": "Pic global",
   "activity_peak_at": "pic {count} à {time}",
-  "activity_independent_scales": "Chaque piste a sa propre échelle.",
   "activity_all_sessions_overlay": "Superposition globale",
   "activity_class_split": "int {int} / sous-agents {sub} / auto {auto}",
   "activity_concurrency": "Simultanéité",

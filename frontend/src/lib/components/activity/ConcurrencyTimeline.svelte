@@ -19,16 +19,16 @@
     ) => void;
   } = $props();
 
-  const TRACK_HEADER_H = 24;
-  const TRACK_GAP = 10;
+  const TOP_PAD = 8;
+  const PLOT_H = 160;
   const X_LABEL_H = 18;
   const STRIP_H = 14;
   const STRIP_GAP = 6;
   const Y_LABEL_W = 32;
   const RIGHT_PAD = 16;
   const OVERLAY_AXIS_W = 48;
-  const TOP_PAD = TRACK_HEADER_H;
   const TICK_TARGET = 4;
+  const PLOT_BOTTOM = TOP_PAD + PLOT_H;
 
   const buckets = $derived(report.buckets ?? []);
 
@@ -248,7 +248,7 @@
     dragEnd = null;
   }
 
-  // Combined usage overlays the interactive track with its own right axis.
+  // Combined usage overlays the stacked plot with its own right axis.
   let overlayMetric = $state<"none" | "tokens" | "cost">("none");
   const overlayOptions: TypeaheadOption[] = $derived([
     { name: "none", label: m.activity_overlay_none(), displayLabel: m.activity_overlay_none() },
@@ -280,12 +280,29 @@
     }).format(v);
   }
 
-  function trackPeakLabel(peak: Report["peak"]): string {
-    const count = peak.agents.toLocaleString(getLocale());
-    return peak.at
-      ? m.activity_peak_at({ count, time: timeLabel(Date.parse(peak.at)) })
-      : m.activity_peak_label({ count });
+  // Sub-day ranges read the clock alone; longer ranges need the date too.
+  function peakTimeLabel(ms: number): string {
+    if (report.bucket_unit === "minute" || report.bucket_unit === "hour") {
+      return timeLabel(ms);
+    }
+    return formatDateTime(ms, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone: report.timezone,
+    });
   }
+
+  // The combined peak is the tallest stacked bar: its segments sum to
+  // report.peak.agents at that instant.
+  const peakLabel = $derived.by(() => {
+    const count = report.peak.agents.toLocaleString(getLocale());
+    return report.peak.at
+      ? m.activity_peak_at({ count, time: peakTimeLabel(Date.parse(report.peak.at)) })
+      : m.activity_peak_label({ count });
+  });
 
   function fmtOverlayTick(v: number): string {
     if (overlayMetric === "cost") return formatMoney(moneyFromMicrodollars(v));
@@ -343,63 +360,74 @@
     return { step, max };
   }
 
-  // Class maxima occur independently; a busy subagent track must not flatten
-  // the interactive track or hide a class peak outside the combined peak.
-  const tracks = $derived.by(() => {
-    const definitions = [
-      {
-        kind: "interactive",
-        label: m.activity_interactive(),
-        peakLabel: m.activity_interactive_peak(),
-        field: "max_interactive_agents" as const,
-        peak: report.interactive_peak,
-        height: 120,
-      },
-      {
-        kind: "subagent",
-        label: m.activity_subagents(),
-        peakLabel: m.activity_subagent_peak(),
-        field: "max_subagent_agents" as const,
-        peak: report.subagent_peak,
-        height: 72,
-      },
-      {
-        kind: "automated",
-        label: m.activity_automated(),
-        peakLabel: m.activity_automated_peak(),
-        field: "max_automated_agents" as const,
-        peak: report.automated_peak,
-        height: 72,
-      },
-    ];
-    let offset = 0;
-    return definitions.map((track) => {
-      const top = offset + TRACK_HEADER_H;
-      const bottom = top + track.height;
-      offset = bottom + TRACK_GAP;
-      const scale = niceScale(
-        Math.max(0, ...buckets.map((bucket) => bucket[track.field])),
-      );
-      const ticks = Array.from(
-        { length: Math.round(scale.max / scale.step) + 1 },
-        (_, i) => ({
-          y: bottom - ((i * scale.step) / scale.max) * track.height,
-          label: (i * scale.step).toLocaleString(getLocale()),
-        }),
-      );
-      return { ...track, top, bottom, scale, ticks };
-    });
-  });
-  const chartH = $derived(tracks[2]!.bottom);
+  // Segment order from the baseline up. Each segment is that class's count at
+  // the instant of the bucket's combined peak, so the stack sums to max_agents.
+  // The independent class maxima can occur at different instants and are only
+  // reported in the tooltip; stacking them would overstate overlap.
+  const classes = $derived([
+    {
+      kind: "interactive",
+      label: m.activity_interactive(),
+      peakLabel: m.activity_interactive_peak(),
+      atPeak: "interactive_at_peak" as const,
+      max: "max_interactive_agents" as const,
+    },
+    {
+      kind: "subagent",
+      label: m.activity_subagents(),
+      peakLabel: m.activity_subagent_peak(),
+      atPeak: "subagent_at_peak" as const,
+      max: "max_subagent_agents" as const,
+    },
+    {
+      kind: "automated",
+      label: m.activity_automated(),
+      peakLabel: m.activity_automated_peak(),
+      atPeak: "automated_at_peak" as const,
+      max: "max_automated_agents" as const,
+    },
+  ]);
 
-  // All three tracks, the activity strip, and selection share bucket bounds.
+  // One shared y-axis from zero to the tallest stacked bar.
+  const yScale = $derived(
+    niceScale(Math.max(0, ...buckets.map((bucket) => bucket.max_agents))),
+  );
+  const yTicks = $derived(
+    Array.from({ length: Math.round(yScale.max / yScale.step) + 1 }, (_, i) => ({
+      y: PLOT_BOTTOM - ((i * yScale.step) / yScale.max) * PLOT_H,
+      label: (i * yScale.step).toLocaleString(getLocale()),
+    })),
+  );
+
+  function segmentHeight(count: number): number {
+    return (count / yScale.max) * PLOT_H;
+  }
+
+  // The stacked bar, the activity strip, and selection share bucket bounds.
+  // Segments are stacked from the baseline in class order; zero-count classes
+  // draw nothing.
   const bars = $derived(buckets.map((bucket, idx) => {
     const start = Date.parse(bucket.start);
     const end = Date.parse(bucket.end);
     const cellX = xForMs(start);
     const cellW = Math.max(((end - start) / rangeSpanMs) * plotWidth, 1);
     const gap = Math.min(cellW * 0.2, 2);
-    return { x: cellX + gap / 2, w: Math.max(cellW - gap, 1), cellX, cellW, idx };
+    let top = PLOT_BOTTOM;
+    const segments = classes.flatMap((cls) => {
+      const count = bucket[cls.atPeak];
+      if (count <= 0) return [];
+      const height = segmentHeight(count);
+      top -= height;
+      return [{ kind: cls.kind, y: top, height }];
+    });
+    return {
+      x: cellX + gap / 2,
+      w: Math.max(cellW - gap, 1),
+      cellX,
+      cellW,
+      idx,
+      segments,
+    };
   }));
 
   const selectionBounds = $derived.by(() => {
@@ -437,7 +465,7 @@
     const values =
       overlayDataMax <= 0 ? [0] : [0, overlayDataMax / 2, overlayDataMax];
     return values.map((val) => ({
-      y: tracks[0]!.bottom - (val / overlayMax) * tracks[0]!.height,
+      y: PLOT_BOTTOM - (val / overlayMax) * PLOT_H,
       label: fmtOverlayTick(val),
     }));
   });
@@ -525,8 +553,8 @@
     bars.filter((bar) => Date.parse(buckets[bar.idx]!.start) < futureStartMs),
   );
 
-  const svgH = $derived(chartH + STRIP_GAP + STRIP_H + X_LABEL_H);
-  const stripY = $derived(chartH + STRIP_GAP);
+  const svgH = PLOT_BOTTOM + STRIP_GAP + STRIP_H + X_LABEL_H;
+  const stripY = PLOT_BOTTOM + STRIP_GAP;
 
   function setOverlayMetric(value: string) {
     overlayMetric = value as "none" | "tokens" | "cost";
@@ -565,7 +593,16 @@
     </div>
   </div>
 
-  <p class="scale-note">{m.activity_independent_scales()}</p>
+  <div class="chart-meta">
+    <div class="legend" aria-hidden="true">
+      {#each classes as cls (cls.kind)}
+        <span class="legend-item">
+          <span class={`swatch ${cls.kind}`}></span>{cls.label}
+        </span>
+      {/each}
+    </div>
+    <span class="chart-peak">{peakLabel}</span>
+  </div>
 
   <div
     class="timeline-body"
@@ -582,7 +619,7 @@
       xDomain={[rangeStartMs, rangeEndMs]}
       yDomain={[0, 1]}
       xRange={[Y_LABEL_W, Y_LABEL_W + plotWidth]}
-      yRange={[tracks[0]!.bottom, tracks[0]!.top]}
+      yRange={[PLOT_BOTTOM, TOP_PAD]}
       padding={0}
       height={svgH}
     >
@@ -594,49 +631,36 @@
             x={futureX}
             y={TOP_PAD}
             width={futureW}
-            height={chartH - TOP_PAD}
+            height={PLOT_H}
           />
         {/if}
 
-        {#each tracks as track (track.kind)}
-          <g class="concurrency-track" data-track={track.kind}>
-            <Text
-              class={`track-label ${track.kind}`}
-              value={track.label}
-              x={Y_LABEL_W}
-              y={track.top - 8}
-            />
-            <Text
-              class="track-peak"
-              value={trackPeakLabel(track.peak)}
-              x={Y_LABEL_W + plotWidth}
-              y={track.top - 8}
-              textAnchor="end"
-            />
-            {#each track.ticks as tick}
-              <Line
-                x1={Y_LABEL_W}
-                y1={tick.y}
-                x2={Y_LABEL_W + plotWidth}
-                y2={tick.y}
-                class="grid-line"
-              />
-              <Text
-                value={tick.label}
-                x={Y_LABEL_W - 4}
-                y={tick.y + 3}
-                class="y-label"
-                textAnchor="end"
-              />
-            {/each}
-            {#each bars as bar (bar.idx)}
-              {@const height = buckets[bar.idx]![track.field] / track.scale.max * track.height}
+        {#each yTicks as tick}
+          <Line
+            x1={Y_LABEL_W}
+            y1={tick.y}
+            x2={Y_LABEL_W + plotWidth}
+            y2={tick.y}
+            class="grid-line"
+          />
+          <Text
+            value={tick.label}
+            x={Y_LABEL_W - 4}
+            y={tick.y + 3}
+            class="y-label"
+            textAnchor="end"
+          />
+        {/each}
+        {#each bars as bar (bar.idx)}
+          {@const selected = activeRange !== null && bar.idx >= activeRange.start && bar.idx < activeRange.end}
+          <g class="concurrency-bar" data-concurrency-bar={bar.idx}>
+            {#each bar.segments as seg (seg.kind)}
               <Rect
-                class={`concurrency-seg ${track.kind}${activeRange && bar.idx >= activeRange.start && bar.idx < activeRange.end ? " selected" : ""}`}
+                class={`concurrency-seg ${seg.kind}${selected ? " selected" : ""}`}
                 x={bar.x}
-                y={track.bottom - height}
+                y={seg.y}
                 width={bar.w}
-                {height}
+                height={seg.height}
               />
             {/each}
           </g>
@@ -655,7 +679,7 @@
             x1={Y_LABEL_W + plotWidth}
             y1={TOP_PAD}
             x2={Y_LABEL_W + plotWidth}
-            y2={tracks[0]!.bottom}
+            y2={PLOT_BOTTOM}
           />
           {#each overlayTicks as tick}
             <Line
@@ -753,16 +777,22 @@
       >
         <div class="tooltip-date">{fmtBucketRange(tooltip.bucket)}</div>
         <dl class="tooltip-metrics">
-          {#each tracks as track (track.kind)}
+          {#each classes as cls (cls.kind)}
             <div>
-              <dt>{track.peakLabel}</dt>
-              <dd>{tooltip.bucket[track.field].toLocaleString(getLocale())}</dd>
+              <dt>{cls.label}</dt>
+              <dd>{tooltip.bucket[cls.atPeak].toLocaleString(getLocale())}</dd>
             </div>
           {/each}
           <div>
             <dt>{m.activity_combined_peak()}</dt>
             <dd>{tooltip.bucket.max_agents.toLocaleString(getLocale())}</dd>
           </div>
+          {#each classes as cls (cls.kind)}
+            <div>
+              <dt>{cls.peakLabel}</dt>
+              <dd>{tooltip.bucket[cls.max].toLocaleString(getLocale())}</dd>
+            </div>
+          {/each}
           <div>
             <dt>{m.activity_agent_min()}</dt>
             <dd>{fmtCompactValue(tooltip.bucket.agent_minutes)}</dd>
@@ -819,33 +849,52 @@
     font-size: 10px;
   }
 
-  .scale-note {
-    margin: 0 0 8px;
+  .chart-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 4px;
+  }
+
+  .legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-5);
+  }
+
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 10px;
     color: var(--text-muted);
   }
 
-  .timeline :global(.track-label) {
-    font-size: 11px;
-    font-weight: 600;
-    fill: var(--text-secondary);
+  .swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
   }
 
-  .timeline :global(.track-label.interactive) {
-    fill: var(--accent-blue);
+  .swatch.interactive {
+    background: var(--accent-blue);
   }
 
-  .timeline :global(.track-label.subagent) {
-    fill: var(--accent-violet);
+  .swatch.subagent {
+    background: var(--accent-violet);
   }
 
-  .timeline :global(.track-label.automated) {
-    fill: var(--accent-orange);
+  .swatch.automated {
+    background: var(--accent-orange);
   }
 
-  .timeline :global(.track-peak) {
+  .chart-peak {
     font-size: 10px;
-    fill: var(--text-muted);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
   }
 
   .overlay-toggle {
@@ -897,6 +946,9 @@
 
   .timeline :global(.concurrency-seg) {
     opacity: 0.75;
+    /* Surface-colored seam so stacked segments read as separate parts. */
+    stroke: var(--bg-surface);
+    stroke-width: 1;
   }
 
   .timeline :global(.concurrency-seg.interactive) {

@@ -1002,7 +1002,6 @@
   "activity_automated_peak": "自动化峰值",
   "activity_combined_peak": "总并发峰值",
   "activity_peak_at": "{time} 达到峰值 {count}",
-  "activity_independent_scales": "每条轨道使用独立刻度。",
   "activity_all_sessions_overlay": "所有会话叠加",
   "activity_class_split": "交互 {int} / 子代理 {sub} / 自动 {auto}",
   "activity_concurrency": "并发",

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { fireEvent, render } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
 import ConcurrencyTimeline from "./ConcurrencyTimeline.svelte";
@@ -268,46 +268,68 @@ describe("ConcurrencyTimeline", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders aligned tracks with independent scales and independent class peaks", async () => {
+  it("stacks the at-peak split of every bucket on one shared scale", async () => {
     const report = makeReport();
-    // The class maxima occur at different instants from the combined peak.
+    // The combined peak of 100 splits 20/60/20, while the independent class
+    // maxima (40/60/30) occur at other instants and would sum past the scale.
     report.buckets![2] = {
       ...report.buckets![2]!,
-      max_agents: 101,
-      interactive_at_peak: 1,
-      subagent_at_peak: 100,
-      automated_at_peak: 0,
-      max_interactive_agents: 2,
-      max_subagent_agents: 100,
-      max_automated_agents: 4,
+      max_agents: 100,
+      interactive_at_peak: 20,
+      subagent_at_peak: 60,
+      automated_at_peak: 20,
+      max_interactive_agents: 40,
+      max_subagent_agents: 60,
+      max_automated_agents: 30,
     };
-    report.peak = { agents: 101, at: "2026-06-16T07:00:00Z" };
-    report.subagent_peak = { agents: 100, at: "2026-06-16T07:00:00Z" };
-    report.automated_peak = { agents: 4, at: "2026-06-16T08:00:00Z" };
+    report.peak = { agents: 100, at: "2026-06-16T07:00:00Z" };
     const c = mount(ConcurrencyTimeline, { target: document.body, props: { report } });
     await tick();
 
-    const tracks = [...document.querySelectorAll(".concurrency-track")];
-    expect(tracks.map((track) => track.querySelector(".track-label")?.textContent)).toEqual([
-      "Interactive",
-      "Subagents",
-      "Automated",
+    // One y-axis, from zero to a nice ceiling of the tallest stacked bar.
+    expect([...document.querySelectorAll(".y-label")].map((el) => el.textContent)).toEqual([
+      "0",
+      "50",
+      "100",
     ]);
-    expect(tracks.map((track) => track.querySelector(".track-peak")?.textContent)).toEqual([
-      "peak 2 at 06:00",
-      "peak 100 at 07:00",
-      "peak 4 at 08:00",
-    ]);
-    const bars = tracks.map((track) => track.querySelectorAll(".concurrency-seg")[2]!);
-    expect(bars.map((bar) => bar.getAttribute("x"))).toEqual([
-      bars[0]!.getAttribute("x"),
-      bars[0]!.getAttribute("x"),
-      bars[0]!.getAttribute("x"),
-    ]);
-    expect(bars.map((bar) => Number(bar.getAttribute("height")))).toEqual([120, 72, 72]);
+    const baseline = Number([...document.querySelectorAll(".grid-line")][0]!.getAttribute("y1"));
+    const top = Number([...document.querySelectorAll(".grid-line")].at(-1)!.getAttribute("y1"));
+    const plotH = baseline - top;
+
+    const bar = document.querySelector('[data-concurrency-bar="2"]')!;
+    const seg = (kind: string) => {
+      const el = bar.querySelector(`.concurrency-seg.${kind}`)!;
+      return { y: Number(el.getAttribute("y")), h: Number(el.getAttribute("height")) };
+    };
+    const interactive = seg("interactive");
+    const subagent = seg("subagent");
+    const automated = seg("automated");
+    // Segment heights are 20%, 60%, and 20% of the plot, in that order from
+    // the baseline, so the bar top is the full plot height for a 100 peak.
+    expect(interactive.h).toBeCloseTo(plotH * 0.2);
+    expect(subagent.h).toBeCloseTo(plotH * 0.6);
+    expect(automated.h).toBeCloseTo(plotH * 0.2);
+    expect(interactive.y + interactive.h).toBeCloseTo(baseline);
+    expect(subagent.y + subagent.h).toBeCloseTo(interactive.y);
+    expect(automated.y + automated.h).toBeCloseTo(subagent.y);
+    expect(automated.y).toBeCloseTo(top);
+    expect([...bar.querySelectorAll(".concurrency-seg")].map((el) => el.getAttribute("x"))).toEqual(
+      Array(3).fill(bar.querySelector(".concurrency-seg")!.getAttribute("x")),
+    );
+
+    // A bucket with no automated work draws no automated segment; the next
+    // class still starts at the baseline.
+    const idle = document.querySelector('[data-concurrency-bar="3"]')!;
+    expect(idle.querySelector(".concurrency-seg.automated")).toBeNull();
+    const only = idle.querySelector(".concurrency-seg.interactive")!;
+    expect(Number(only.getAttribute("y")) + Number(only.getAttribute("height"))).toBeCloseTo(
+      baseline,
+    );
+
     expect(
-      tracks.map((track) => [...track.querySelectorAll(".y-label")].at(-1)?.textContent),
-    ).toEqual(["2", "100", "4"]);
+      [...document.querySelectorAll(".legend-item")].map((el) => el.textContent?.trim()),
+    ).toEqual(["Interactive", "Subagents", "Automated"]);
+    expect(document.querySelector(".chart-peak")?.textContent).toBe("peak 100 at 07:00");
     unmount(c);
   });
 
@@ -387,8 +409,8 @@ describe("ConcurrencyTimeline", () => {
     const hits = target.querySelectorAll(".slot-hit");
     expect(hits.length).toBe(2);
     expect(target.querySelector('[data-concurrency-bucket-index="2"]')).toBeNull();
-    // The future bucket keeps its (zero-height) bar segments.
-    expect(target.querySelectorAll(".concurrency-seg.interactive").length).toBe(3);
+    // The future bucket keeps its bar slot.
+    expect(target.querySelectorAll("[data-concurrency-bar]").length).toBe(3);
 
     // Shift+ArrowRight from the last live slot clamps to the live range
     // instead of extending the selection into the future bucket.
@@ -470,7 +492,7 @@ describe("ConcurrencyTimeline", () => {
     await tick();
     const tip = target.querySelector(".tooltip");
     expect(tip).toBeTruthy();
-    expect(tip!.querySelector(".tooltip-metrics > div")?.textContent).toContain("Interactive peak");
+    expect(tip!.querySelector(".tooltip-metrics > div")?.textContent).toContain("Interactive");
     hit.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
     await tick();
     expect(target.querySelector(".tooltip")).toBeNull();
@@ -492,10 +514,13 @@ describe("ConcurrencyTimeline", () => {
     expect(tip).toBeTruthy();
     const rows = Array.from(tip!.querySelectorAll(".tooltip-metrics > div"));
     expect(rows.map((row) => row.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "Interactive 2",
+      "Subagents 0",
+      "Automated 1",
+      "Combined peak 3",
       "Interactive peak 2",
       "Subagent peak 0",
       "Automated peak 1",
-      "Combined peak 3",
       "Agent-min 7.5K",
       "Input Tokens 120K",
       "Output Tokens 9K",
@@ -748,6 +773,21 @@ describe("ConcurrencyTimeline", () => {
     expect(document.body.textContent).toMatch(/Jun/);
   });
 
+  it("dates the combined peak label on day-bucketed ranges", () => {
+    const r = makeReport({
+      bucket_unit: "day",
+      range_start: "2026-06-15T00:00:00Z",
+      range_end: "2026-06-17T00:00:00Z",
+      bucket_seconds: 86400,
+      bucket_count: 2,
+      elapsed_bucket_count: 2,
+      effective_end: "2026-06-17T00:00:00Z",
+      peak: { agents: 3, at: "2026-06-16T06:30:00Z" },
+    });
+    render(ConcurrencyTimeline, { report: r });
+    expect(document.querySelector(".chart-peak")?.textContent).toBe("peak 3 at Jun 16, 06:30");
+  });
+
   it("formats a DST-safe week tooltip with the inclusive last day", async () => {
     const r = makeReport({
       bucket_unit: "week",
@@ -809,7 +849,7 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
 
-  it("labels the overlay scale on the right y-axis", async () => {
+  it("labels the overlay scale on the right y-axis of the stacked plot", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
     const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
@@ -817,11 +857,17 @@ describe("ConcurrencyTimeline", () => {
 
     await chooseOverlayMetric(target, "Cost");
 
-    const labels = Array.from(target.querySelectorAll("text.overlay-y-label")).map(
-      (el) => el.textContent?.trim() ?? "",
-    );
+    const overlayLabels = Array.from(target.querySelectorAll("text.overlay-y-label"));
+    const labels = overlayLabels.map((el) => el.textContent?.trim() ?? "");
     expect(labels).toContain("$0.90");
     expect(labels).toContain("$0.00");
+    // The overlay axis spans the same plot as the concurrency axis: its zero
+    // sits on the bar baseline and its maximum on the top concurrency tick.
+    const yLabels = Array.from(target.querySelectorAll("text.y-label"));
+    const yOf = (els: Element[], text: string) =>
+      els.find((el) => el.textContent?.trim() === text)!.getAttribute("y");
+    expect(yOf(overlayLabels, "$0.00")).toBe(yOf(yLabels, "0"));
+    expect(yOf(overlayLabels, "$0.90")).toBe(yLabels.at(-1)!.getAttribute("y"));
 
     await chooseOverlayMetric(target, "Tokens");
 

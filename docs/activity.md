@@ -67,30 +67,33 @@ shows the report's current **as of** time.
 
 ## Concurrency
 
-The **Concurrency** chart shows three aligned tracks on a shared time axis:
-**Interactive** in blue, **Subagents** in violet, and **Automated** in orange.
-Interactive is first and has more vertical space. Each track has its own scale
-and peak count, so a large subagent burst does not flatten the interactive
-activity. Each bar shows that class's maximum within the bucket; the three
-maxima may occur at different instants. The strip below the tracks marks active
-versus idle buckets across all sessions. Interactive concurrency counts
-overlapping human-facing conversations; human attention is not measured.
+The **Concurrency** chart is a stacked bar chart on one time axis. Each bucket
+is a single bar whose segments are **Interactive** in blue, **Subagents** in
+violet, and **Automated** in orange, stacked from the baseline in that order on
+one shared scale. Bar height is the bucket's combined concurrency peak, and each
+segment is that class's count at the instant of that peak, so the segments
+always add up to the bar. The legend above the chart names the segments, and the
+label on the right gives the combined peak for the range. The strip below the
+bars marks active versus idle buckets across all sessions. Interactive
+concurrency counts overlapping human-facing conversations; human attention is
+not measured.
 
 ![Weekly Activity concurrency chart](/docs/assets/generated/screenshots/activity-concurrency.png)
 
-Hover a bucket to see its time range, each class's independent peak, the
-combined peak, agent-minutes, input and output tokens, and cost. The
-**All-session overlay** control draws a combined **Tokens** or **Cost** trend
-over the Interactive track, with its own scale on the right. These usage totals
-include all three classes.
+Hover a bucket to see its time range, the stacked split at the combined peak,
+the combined peak, each class's own peak within the bucket, agent-minutes, input
+and output tokens, and cost. A class's own peak can exceed its segment when that
+class peaked at a different instant from the combined peak. The **All-session
+overlay** control draws a combined **Tokens** or **Cost** trend over the bars,
+with its own scale on the right. These usage totals include all three classes.
 
 Clicking a bucket filters the Sessions table to the sessions active in that time
-slot. Drag across buckets to select a range on all three tracks. Keyboard users
-can select with Enter or Space, extend with Shift+Arrow, and clear with Escape.
-Click the same bucket again, or dismiss the **Active:** badge in the table
-header, to clear the slot filter. Membership is computed by the same shared
-aggregator that builds the chart, then fetched as a bounded page; the browser no
-longer downloads every raw activity interval to perform this drill-down.
+slot. Drag across buckets to select a range. Keyboard users can select with
+Enter or Space, extend with Shift+Arrow, and clear with Escape. Click the same
+bucket again, or dismiss the **Active:** badge in the table header, to clear the
+slot filter. Membership is computed by the same shared aggregator that builds
+the chart, then fetched as a bounded page; the browser no longer downloads every
+raw activity interval to perform this drill-down.
 
 ## Sessions
 

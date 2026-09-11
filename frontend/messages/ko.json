@@ -1004,7 +1004,6 @@
   "activity_automated_peak": "자동화 최대 동시 실행",
   "activity_combined_peak": "전체 최대 동시 실행",
   "activity_peak_at": "{time}에 최대 {count}",
-  "activity_independent_scales": "각 트랙은 별도의 척도를 사용합니다.",
   "activity_all_sessions_overlay": "전체 세션 오버레이",
   "activity_class_split": "대화형 {int} / 하위 {sub} / 자동 {auto}",
   "activity_concurrency": "동시성",

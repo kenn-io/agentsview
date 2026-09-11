@@ -1002,7 +1002,6 @@
   "activity_automated_peak": "自動化尖峰",
   "activity_combined_peak": "總並發尖峰",
   "activity_peak_at": "{time} 達到尖峰 {count}",
-  "activity_independent_scales": "每條軌道使用獨立刻度。",
   "activity_all_sessions_overlay": "所有工作階段疊加",
   "activity_class_split": "交互 {int} / 子代理 {sub} / 自動 {auto}",
   "activity_concurrency": "並發",

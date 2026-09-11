@@ -1057,7 +1057,6 @@
   "activity_automated_peak": "Automated peak",
   "activity_combined_peak": "Combined peak",
   "activity_peak_at": "peak {count} at {time}",
-  "activity_independent_scales": "Each track has its own scale.",
   "activity_all_sessions_overlay": "All-session overlay",
   "activity_class_split": "int {int} / sub {sub} / auto {auto}",
   "activity_concurrency": "Concurrency",

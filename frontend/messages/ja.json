@@ -1057,7 +1057,6 @@
   "activity_automated_peak": "自動実行のピーク",
   "activity_combined_peak": "全体のピーク",
   "activity_peak_at": "{time} にピーク {count}",
-  "activity_independent_scales": "各トラックは独立したスケールを使用します。",
   "activity_all_sessions_overlay": "全セッションのオーバーレイ",
   "activity_class_split": "対話 {int} / サブ {sub} / 自動 {auto}",
   "activity_concurrency": "同時実行性",
