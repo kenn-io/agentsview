@@ -166,20 +166,29 @@ func (db *DB) reportingHoursFromSnapshot(
 	if err != nil {
 		return nil, err
 	}
+	gapCap := time.Duration(query.GapCapSeconds) * time.Second
 	firstSeen := buildReportingFirstSeen(
 		date,
 		end,
-		time.Duration(query.GapCapSeconds)*time.Second,
+		gapCap,
 		sessions,
 		createdAt,
 		events,
 		activityUsage,
 	)
+	// Pair in ordinal order once, retaining model inheritance from before the
+	// day. PairActivityEvents sorts the result by start time for hour selection.
+	candidates := activity.PairActivityEvents(events, date, end, gapCap)
 	for i := range hours {
 		hourStart := date.Add(time.Duration(i) * time.Hour)
 		hourEnd := hourStart.Add(time.Hour)
-		gapCap := time.Duration(query.GapCapSeconds) * time.Second
-		candidates := activity.PairActivityEvents(events, hourStart, hourEnd, gapCap)
+		lower := hourStart.Add(-gapCap)
+		first := sort.Search(len(candidates), func(j int) bool {
+			return !candidates[j].Start.Before(lower)
+		})
+		last := sort.Search(len(candidates), func(j int) bool {
+			return !candidates[j].Start.Before(hourEnd)
+		})
 		report, aggregateErr := activity.AggregateCandidates(ctx, activity.Params{
 			RangeStart:    hourStart,
 			RangeEnd:      hourEnd,
@@ -187,7 +196,7 @@ func (db *DB) reportingHoursFromSnapshot(
 			EffectiveEnd:  hourEnd,
 			GapCapSeconds: query.GapCapSeconds,
 			Bucket:        activity.BucketSpec{Unit: activity.BucketMinute, NominalSeconds: 300},
-		}, append([]activity.SessionMeta(nil), sessions...), candidates, activityUsage)
+		}, append([]activity.SessionMeta(nil), sessions...), candidates[first:last], activityUsage)
 		if aggregateErr != nil {
 			return nil, fmt.Errorf(
 				"aggregate reporting hour %s: %w",
