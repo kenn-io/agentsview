@@ -145,7 +145,7 @@ func TestCrushProviderParsesTranscriptToolsAndUsage(t *testing.T) {
 		{"type":"finish","data":{"reason":"stop","time":1789093740}}
 	]`, created+30, "glm-5.3-flash", "hyper")
 
-	session, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-1", "workstation", false)
+	session, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-1", "workstation", false, nil)
 	require.NoError(t, err)
 
 	require.NotNil(t, session)
@@ -256,7 +256,7 @@ func TestCrushZeroCostWithTokensStillEmitsEvent(t *testing.T) {
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "sess-free", "Free usage", "",
 		created, created, 1_000, 10, 0.0)
-	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-free", "m", false)
+	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-free", "m", false, nil)
 	require.NoError(t, err)
 	require.Len(t, session.UsageEvents, 1)
 	assert.Equal(t, 1_000, session.UsageEvents[0].InputTokens)
@@ -269,7 +269,7 @@ func TestCrushNoUsageEventWithoutAccountingData(t *testing.T) {
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "sess-empty", "No usage", "",
 		created, created, 0, 0, 0.0)
-	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-empty", "m", false)
+	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-empty", "m", false, nil)
 	require.NoError(t, err)
 	assert.Empty(t, session.UsageEvents)
 }
@@ -279,7 +279,7 @@ func TestCrushParentSessionRelationship(t *testing.T) {
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "parent", "Parent", "", created, created, 0, 0, 0)
 	fixture.insertSession(t, "child", "Child", "parent", created, created, 0, 0, 0)
-	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "child", "m", false)
+	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "child", "m", false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "crush:parent", session.ParentSessionID)
 	assert.Equal(t, RelSubagent, session.RelationshipType)
@@ -292,7 +292,7 @@ func TestCrushMalformedPartsFailSession(t *testing.T) {
 		created, created, 0, 0, 0)
 	fixture.insertMessage(t, "msg-bad", "sess-bad", "user", `not-json`,
 		created, "", "")
-	_, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-bad", "m", false)
+	_, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-bad", "m", false, nil)
 	require.Error(t, err)
 }
 
@@ -307,7 +307,7 @@ func TestCrushUnknownRoleIsSkipped(t *testing.T) {
 	fixture.insertMessage(t, "msg-x", "sess-roles", "internal", `[
 		{"type":"text","data":{"text":"hidden"}}
 	]`, created, "", "")
-	_, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-roles", "m", false)
+	_, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-roles", "m", false, nil)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, RoleUser, messages[0].Role)
@@ -325,7 +325,7 @@ func TestCrushSubagentToolCallLinking(t *testing.T) {
 		{"type":"tool_call","data":{"id":"chatcmpl-tool-fetch","name":"agentic_fetch","input":"{\"url\":\"https://example.test\"}","finished":true,"provider_executed":false}}
 	]`, created, "glm-5.3-flash", "")
 
-	_, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "parent", "m", false)
+	_, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "parent", "m", false, nil)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	require.Len(t, messages[0].ToolCalls, 1)
@@ -348,8 +348,12 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 		filepath.Join(registryDir, CrushProjectsFileName),
 		[]byte(registry), 0o600,
 	))
-	roots := normalizeCrushRoots([]string{registryDir})
+	roots, registryMapping, projectMapping := normalizeCrushRoots([]string{registryDir})
 	require.Equal(t, []string{fixture.dataDir}, roots)
+	require.Len(t, registryMapping, 1)
+	assert.Equal(t, []string{fixture.dataDir}, registryMapping[filepath.Clean(registryDir)])
+	require.Len(t, projectMapping, 1)
+	assert.Equal(t, filepath.Clean(fixture.projectDir), projectMapping[filepath.Clean(fixture.dataDir)])
 
 	metas := make([]dbBackedSessionMeta, 0)
 	require.NoError(t, forEachCrushSessionMeta(
@@ -370,21 +374,15 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	assert.Empty(t, meta.SessionID)
 
 	// A root pointing directly at a .crush data dir is kept as-is.
-	assert.Equal(t,
-		[]string{fixture.dataDir},
-		normalizeCrushRoots([]string{fixture.dataDir}),
-	)
+	dataDirs, _, _ := normalizeCrushRoots([]string{fixture.dataDir})
+	assert.Equal(t, []string{fixture.dataDir}, dataDirs)
 	// A root pointing at the db file resolves to its directory.
-	assert.Equal(t,
-		[]string{fixture.dataDir},
-		normalizeCrushRoots([]string{fixture.dbPath}),
-	)
+	dataDirs, _, _ = normalizeCrushRoots([]string{fixture.dbPath})
+	assert.Equal(t, []string{fixture.dataDir}, dataDirs)
 	// An unreadable registry leaves the root untouched rather than
 	// failing discovery.
-	assert.Equal(t,
-		[]string{registryDir + "-missing"},
-		normalizeCrushRoots([]string{registryDir + "-missing"}),
-	)
+	dataDirs, _, _ = normalizeCrushRoots([]string{registryDir + "-missing"})
+	assert.Equal(t, []string{registryDir + "-missing"}, dataDirs)
 }
 
 func TestCrushSchemaValidationRejectsGooseStores(t *testing.T) {
@@ -460,7 +458,7 @@ func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	session, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-summary", "m", false)
+	session, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-summary", "m", false, nil)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	message := messages[0]
