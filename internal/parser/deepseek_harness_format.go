@@ -674,9 +674,7 @@ func parseDeepSeekHarnessEvent(
 		)
 	}
 	if hasSourceEventSeqs {
-		if _, err := deepSeekHarnessSafeIntArray(sourceEventSeqs, true); err != nil {
-			return deepSeekHarnessEvent{}, errors.New("event sourceEventSeqs is invalid")
-		}
+		_ = deepSeekHarnessSafeSourceEventSeqs(sourceEventSeqs)
 	}
 	if hasSurfaceOp {
 		if err := validateDeepSeekHarnessSurfaceOp(surfaceOp); err != nil {
@@ -906,6 +904,22 @@ func deepSeekHarnessSafeIntArray(raw jsontext.Value, nonNegative bool) ([]int64,
 		out = append(out, value)
 	}
 	return out, nil
+}
+
+func deepSeekHarnessSafeSourceEventSeqs(raw jsontext.Value) []int64 {
+	flat, err := deepSeekHarnessSafeIntArray(raw, true)
+	if err == nil {
+		return flat
+	}
+	var nested [][]int64
+	if err := json.Unmarshal(raw, &nested); err != nil {
+		return nil
+	}
+	var out []int64
+	for _, inner := range nested {
+		out = append(out, inner...)
+	}
+	return out
 }
 
 func deepSeekHarnessStringArray(raw jsontext.Value) ([]string, error) {
