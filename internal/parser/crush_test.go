@@ -145,7 +145,7 @@ func TestCrushProviderParsesTranscriptToolsAndUsage(t *testing.T) {
 		{"type":"finish","data":{"reason":"stop","time":1789093740}}
 	]`, created+30, "glm-5.3-flash", "hyper")
 
-	session, messages, err := parseCrushSession(fixture.dbPath, "sess-1", "workstation")
+	session, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-1", "workstation", false)
 	require.NoError(t, err)
 
 	require.NotNil(t, session)
@@ -256,7 +256,7 @@ func TestCrushZeroCostWithTokensStillEmitsEvent(t *testing.T) {
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "sess-free", "Free usage", "",
 		created, created, 1_000, 10, 0.0)
-	session, _, err := parseCrushSession(fixture.dbPath, "sess-free", "m")
+	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-free", "m", false)
 	require.NoError(t, err)
 	require.Len(t, session.UsageEvents, 1)
 	assert.Equal(t, 1_000, session.UsageEvents[0].InputTokens)
@@ -269,7 +269,7 @@ func TestCrushNoUsageEventWithoutAccountingData(t *testing.T) {
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "sess-empty", "No usage", "",
 		created, created, 0, 0, 0.0)
-	session, _, err := parseCrushSession(fixture.dbPath, "sess-empty", "m")
+	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-empty", "m", false)
 	require.NoError(t, err)
 	assert.Empty(t, session.UsageEvents)
 }
@@ -279,7 +279,7 @@ func TestCrushParentSessionRelationship(t *testing.T) {
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "parent", "Parent", "", created, created, 0, 0, 0)
 	fixture.insertSession(t, "child", "Child", "parent", created, created, 0, 0, 0)
-	session, _, err := parseCrushSession(fixture.dbPath, "child", "m")
+	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "child", "m", false)
 	require.NoError(t, err)
 	assert.Equal(t, "crush:parent", session.ParentSessionID)
 	assert.Equal(t, RelSubagent, session.RelationshipType)
@@ -292,7 +292,7 @@ func TestCrushMalformedPartsFailSession(t *testing.T) {
 		created, created, 0, 0, 0)
 	fixture.insertMessage(t, "msg-bad", "sess-bad", "user", `not-json`,
 		created, "", "")
-	_, _, err := parseCrushSession(fixture.dbPath, "sess-bad", "m")
+	_, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-bad", "m", false)
 	require.Error(t, err)
 }
 
@@ -307,7 +307,7 @@ func TestCrushUnknownRoleIsSkipped(t *testing.T) {
 	fixture.insertMessage(t, "msg-x", "sess-roles", "internal", `[
 		{"type":"text","data":{"text":"hidden"}}
 	]`, created, "", "")
-	_, messages, err := parseCrushSession(fixture.dbPath, "sess-roles", "m")
+	_, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-roles", "m", false)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, RoleUser, messages[0].Role)
@@ -325,7 +325,7 @@ func TestCrushSubagentToolCallLinking(t *testing.T) {
 		{"type":"tool_call","data":{"id":"chatcmpl-tool-fetch","name":"agentic_fetch","input":"{\"url\":\"https://example.test\"}","finished":true,"provider_executed":false}}
 	]`, created, "glm-5.3-flash", "")
 
-	_, messages, err := parseCrushSession(fixture.dbPath, "parent", "m")
+	_, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "parent", "m", false)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	require.Len(t, messages[0].ToolCalls, 1)
@@ -353,7 +353,7 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 
 	metas := make([]dbBackedSessionMeta, 0)
 	require.NoError(t, forEachCrushSessionMeta(
-		context.Background(), crushDBPath(roots[0]),
+		context.Background(), crushDBPath(roots[0]), false,
 		func(meta dbBackedSessionMeta) error {
 			metas = append(metas, meta)
 			return nil
@@ -364,7 +364,7 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	assert.Equal(t, VirtualSourcePath(fixture.dbPath, "sess-1"), metas[0].VirtualPath)
 	assert.Positive(t, metas[0].FileMtime)
 
-	meta, found, err := crushSessionMeta(context.Background(), fixture.dbPath, "missing")
+	meta, found, err := crushSessionMeta(context.Background(), fixture.dbPath, "missing", false)
 	require.NoError(t, err)
 	assert.False(t, found)
 	assert.Empty(t, meta.SessionID)
@@ -460,7 +460,7 @@ func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	session, messages, err := parseCrushSession(fixture.dbPath, "sess-summary", "m")
+	session, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-summary", "m", false)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	message := messages[0]
@@ -481,7 +481,7 @@ func TestCrushChangedSessionIDsAreBoundedToNewRows(t *testing.T) {
 	tracker := newCrushChangeTracker()
 
 	// Cold start: no stored cursor, full enumeration is expected.
-	ids, cold, snapshot, err := tracker.changedSessionIDs(context.Background(), fixture.dbPath)
+	ids, cold, snapshot, err := tracker.changedSessionIDs(context.Background(), fixture.dbPath, false)
 	require.NoError(t, err)
 	assert.True(t, cold)
 	assert.Empty(t, ids)
@@ -491,17 +491,17 @@ func TestCrushChangedSessionIDsAreBoundedToNewRows(t *testing.T) {
 	fixture.insertMessage(t, "msg-new", "sess-a", "user", `[
 		{"type":"text","data":{"text":"more"}}
 	]`, created+1, "", "")
-	ids, cold, _, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath)
+	ids, cold, _, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath, false)
 	require.NoError(t, err)
 	assert.False(t, cold)
 	assert.Equal(t, []string{"sess-a"}, ids)
 
 	// Committing again drains the cursor.
-	_, cold, snapshot, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath)
+	_, cold, snapshot, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath, false)
 	require.NoError(t, err)
 	assert.False(t, cold)
 	tracker.commit(fixture.dbPath, snapshot)
-	ids, cold, _, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath)
+	ids, cold, _, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath, false)
 	require.NoError(t, err)
 	assert.False(t, cold)
 	assert.Empty(t, ids)
@@ -517,7 +517,7 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 	]`, created, "", "")
 
 	first, found, err := crushSessionFingerprint(
-		context.Background(), fixture.dbPath, "sess-fp",
+		context.Background(), fixture.dbPath, "sess-fp", false,
 	)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -530,7 +530,7 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 	`)
 	require.NoError(t, err)
 	second, found, err := crushSessionFingerprint(
-		context.Background(), fixture.dbPath, "sess-fp",
+		context.Background(), fixture.dbPath, "sess-fp", false,
 	)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -539,7 +539,7 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 
 	// A vanished session reports not-found rather than a stale hash.
 	_, found, err = crushSessionFingerprint(
-		context.Background(), fixture.dbPath, "sess-missing",
+		context.Background(), fixture.dbPath, "sess-missing", false,
 	)
 	require.NoError(t, err)
 	assert.False(t, found)

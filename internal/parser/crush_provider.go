@@ -39,7 +39,7 @@ func (f *crushProviderFactory) Capabilities() Capabilities {
 func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	cfg.Roots = normalizeCrushRoots(cfg.Roots)
-	spec := crushProviderSpec()
+	spec := crushProviderSpec(cfg.StableSourceSnapshots)
 	base := &dbBackedProvider{
 		Def:     cloneAgentDef(f.def),
 		Caps:    withDBBackedRawCapture(spec.caps),
@@ -95,7 +95,7 @@ func (p *crushProvider) captureDiscoveryWatermarks(
 		if dbPath == "" {
 			continue
 		}
-		state, err := readCrushTrackedDatabase(ctx, dbPath)
+		state, err := readCrushTrackedDatabase(ctx, dbPath, p.Config.StableSourceSnapshots)
 		if err != nil {
 			continue
 		}
@@ -132,7 +132,9 @@ func (p *crushProvider) SourcesForChangedPath(
 			// cannot prove that any archived Crush member was deleted.
 			return nil, nil
 		}
-		ids, cold, snapshot, err := p.tracker.changedSessionIDs(ctx, dbPath)
+		ids, cold, snapshot, err := p.tracker.changedSessionIDs(
+			ctx, dbPath, p.Config.StableSourceSnapshots,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -174,7 +176,9 @@ func (p *crushProvider) Fingerprint(
 	if !ok || !IsRegularFile(src.DBPath) {
 		return fingerprint, nil
 	}
-	hash, found, err := crushSessionFingerprint(ctx, src.DBPath, src.SessionID)
+	hash, found, err := crushSessionFingerprint(
+		ctx, src.DBPath, src.SessionID, p.Config.StableSourceSnapshots,
+	)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -210,7 +214,7 @@ func crushProviderCapabilities() Capabilities {
 	}
 }
 
-func crushProviderSpec() dbBackedProviderSpec {
+func crushProviderSpec(stableSnapshot bool) dbBackedProviderSpec {
 	return dbBackedProviderSpec{
 		agent:  AgentCrush,
 		dbName: CrushDBName,
@@ -218,15 +222,17 @@ func crushProviderSpec() dbBackedProviderSpec {
 		streamMeta: func(
 			ctx context.Context, dbPath string, yield func(dbBackedSessionMeta) error,
 		) error {
-			return forEachCrushSessionMeta(ctx, dbPath, yield)
+			return forEachCrushSessionMeta(ctx, dbPath, stableSnapshot, yield)
 		},
 		metaForID: func(
 			ctx context.Context, dbPath, sessionID string,
 		) (dbBackedSessionMeta, bool, error) {
-			return crushSessionMeta(ctx, dbPath, sessionID)
+			return crushSessionMeta(ctx, dbPath, sessionID, stableSnapshot)
 		},
-		parse: func(dbPath, sessionID, machine string) ([]ParseResult, error) {
-			sess, msgs, err := parseCrushSession(dbPath, sessionID, machine)
+		parse: func(
+			ctx context.Context, dbPath, sessionID, machine string,
+		) ([]ParseResult, error) {
+			sess, msgs, err := parseCrushSession(ctx, dbPath, sessionID, machine, stableSnapshot)
 			if err != nil || sess == nil {
 				return nil, err
 			}
@@ -300,9 +306,9 @@ func crushDBPath(dir string) string {
 // same-second metadata or parts edit produces a fresh fingerprint even
 // though the store's second-resolution timestamps did not move.
 func crushSessionFingerprint(
-	ctx context.Context, dbPath, sessionID string,
+	ctx context.Context, dbPath, sessionID string, stableSnapshot bool,
 ) (string, bool, error) {
-	db, err := openCrushDB(dbPath)
+	db, err := openCrushDB(dbPath, stableSnapshot)
 	if err != nil {
 		return "", false, err
 	}
@@ -466,7 +472,7 @@ func furthestCrushRowCursor(a, b crushRowCursor) crushRowCursor {
 // skipped — deletions are reconciliation's job — while inserts from the
 // tables whose cursors are intact are still listed.
 func (t *crushChangeTracker) changedSessionIDs(
-	ctx context.Context, dbPath string,
+	ctx context.Context, dbPath string, stableSnapshot bool,
 ) (ids []string, cold bool, snapshot crushTrackedDatabase, err error) {
 	entry := t.entry(dbPath)
 	entry.mu.Lock()
@@ -479,7 +485,7 @@ func (t *crushChangeTracker) changedSessionIDs(
 		return nil, false, crushTrackedDatabase{},
 			fmt.Errorf("stat crush sessions database: %w", err)
 	}
-	db, err := openCrushDB(dbPath)
+	db, err := openCrushDB(dbPath, stableSnapshot)
 	if err != nil {
 		return nil, false, crushTrackedDatabase{}, err
 	}
@@ -530,13 +536,13 @@ func crushTrackedDatabaseReplaced(
 }
 
 func readCrushTrackedDatabase(
-	ctx context.Context, dbPath string,
+	ctx context.Context, dbPath string, stableSnapshot bool,
 ) (crushTrackedDatabase, error) {
 	info, err := os.Stat(dbPath)
 	if err != nil {
 		return crushTrackedDatabase{}, fmt.Errorf("stat crush sessions database: %w", err)
 	}
-	db, err := openCrushDB(dbPath)
+	db, err := openCrushDB(dbPath, stableSnapshot)
 	if err != nil {
 		return crushTrackedDatabase{}, err
 	}
