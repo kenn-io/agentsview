@@ -14,7 +14,7 @@ const installationIDFilename = "telemetry-install-id"
 
 func (c *Config) readInstallationID() error {
 	path := filepath.Join(c.DataDir, installationIDFilename)
-	data, err := os.ReadFile(path)
+	data, err := readInstallationIDFile(path)
 	if err != nil {
 		return err
 	}
