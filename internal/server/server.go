@@ -600,6 +600,10 @@ func (s *Server) humaConfig() huma.Config {
 		reflect.TypeFor[jsontext.Value](),
 		reflect.TypeFor[humaArbitraryJSON](),
 	)
+	cfg.Components.Schemas.RegisterTypeAlias(
+		reflect.TypeFor[config.ZoomLevel](),
+		reflect.TypeFor[humaZoomLevel](),
+	)
 	if s.basePath != "" {
 		cfg.Servers = []*huma.Server{{
 			URL:         s.basePath,

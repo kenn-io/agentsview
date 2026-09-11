@@ -703,7 +703,7 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Ref        string                   `json:"$ref"`
-		Enum       []string                 `json:"enum"`
+		Enum       []any                    `json:"enum"`
 		Properties map[string]openAPISchema `json:"properties"`
 	}
 	type openAPIParameter struct {
@@ -745,49 +745,49 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 		path   string
 		method string
 		name   string
-		want   []string
+		want   []any
 	}{
 		{
 			path:   "/api/v1/sessions/{id}/messages",
 			method: "get",
 			name:   "direction",
-			want:   []string{"asc", "desc"},
+			want:   []any{"asc", "desc"},
 		},
 		{
 			path:   "/api/v1/search",
 			method: "get",
 			name:   "sort",
-			want:   []string{"relevance", "recency"},
+			want:   []any{"relevance", "recency"},
 		},
 		{
 			path:   "/api/v1/search/content",
 			method: "get",
 			name:   "mode",
-			want:   []string{"substring", "regex", "fts", "semantic", "hybrid"},
+			want:   []any{"substring", "regex", "fts", "semantic", "hybrid"},
 		},
 		{
 			path:   "/api/v1/search/content",
 			method: "get",
 			name:   "scope",
-			want:   []string{"top", "all", "subordinate"},
+			want:   []any{"top", "all", "subordinate"},
 		},
 		{
 			path:   "/api/v1/sessions/{id}/md",
 			method: "get",
 			name:   "depth",
-			want:   []string{"1", "all"},
+			want:   []any{"1", "all"},
 		},
 		{
 			path:   "/api/v1/analytics/activity",
 			method: "get",
 			name:   "granularity",
-			want:   []string{"day", "week", "month"},
+			want:   []any{"day", "week", "month"},
 		},
 		{
 			path:   "/api/v1/analytics/heatmap",
 			method: "get",
 			name:   "metric",
-			want:   []string{"messages", "sessions", "output_tokens"},
+			want:   []any{"messages", "sessions", "output_tokens"},
 		},
 	} {
 		pathItem, ok := spec.Paths[tt.path]
@@ -795,7 +795,7 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 		op, ok := pathItem[tt.method]
 		require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
 
-		var got []string
+		var got []any
 		for _, param := range op.Parameters {
 			if param.Name == tt.name && param.In == "query" {
 				got = param.Schema.Enum
@@ -854,7 +854,7 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 	mode, ok := schema.Properties["mode"]
 	require.True(t, ok, "post /api/v1/config/terminal missing mode property")
 	mode = resolveSchema(mode)
-	assert.Equal(t, []string{"auto", "custom", "clipboard"}, mode.Enum)
+	assert.Equal(t, []any{"auto", "custom", "clipboard"}, mode.Enum)
 }
 
 func TestSearchContentSemanticGETRequiresIntentHeader(t *testing.T) {
@@ -3635,6 +3635,30 @@ func TestSettingsChartPaletteRoundTrip(t *testing.T) {
 	assert.Equal(t, config.ChartPaletteMatplotlib, persisted.ChartPalette)
 }
 
+func TestOpenAPISettingsZoomLevels(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, "/api/openapi.json")
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var spec struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]jsontext.Value `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	for _, name := range []string{"SettingsResponse", "SettingsUpdateRequest"} {
+		var zoom struct {
+			Type string `json:"type"`
+			Enum []int  `json:"enum"`
+		}
+		require.NoError(t, json.Unmarshal(spec.Components.Schemas[name].Properties["zoom_level"], &zoom), name)
+		assert.Equal(t, "integer", zoom.Type, name)
+		assert.Equal(t, []int{67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200}, zoom.Enum, name)
+	}
+}
+
 func TestSettingsZoomLevelRoundTrip(t *testing.T) {
 	configured := config.ZoomLevel120
 	te := setup(t, func(cfg *config.Config) { cfg.ZoomLevel = &configured })
@@ -3678,7 +3702,7 @@ func TestSettingsZoomLevelRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	w = putSettings(`{"zoom_level":101}`)
 	assertStatus(t, w, http.StatusBadRequest)
-	assertBodyContains(t, w, "zoom_level must be one of")
+	assertBodyContains(t, w, "zoom_level")
 	after, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
 	require.NoError(t, err)
 	assert.Equal(t, before, after)

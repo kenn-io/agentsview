@@ -3,6 +3,7 @@
  */
 import type { SettingsUpdateRequestAgentHomes } from "./settingsUpdateRequestAgentHomes.ts";
 import type { SettingsUpdateRequestToolResultImages } from "./settingsUpdateRequestToolResultImages.ts";
+import type { SettingsUpdateRequestZoomLevel } from "./settingsUpdateRequestZoomLevel.ts";
 import type { TerminalResponse } from "./terminalResponse.ts";
 
 export interface SettingsUpdateRequest {
@@ -14,5 +15,5 @@ export interface SettingsUpdateRequest {
   terminal?: TerminalResponse;
   /** Inline tool-result image retention applied to ingestion after a daemon restart */
   tool_result_images?: SettingsUpdateRequestToolResultImages;
-  zoom_level?: number;
+  zoom_level?: SettingsUpdateRequestZoomLevel;
 }

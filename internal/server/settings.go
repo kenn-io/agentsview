@@ -1,6 +1,8 @@
 package server
 
 import (
+	"github.com/danielgtaylor/huma/v2"
+
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -47,7 +49,7 @@ type settingsUpdateRequest struct {
 	AuthToken        *string           `json:"auth_token,omitempty"`
 	RequireAuth      *bool             `json:"require_auth,omitempty"`
 	ChartPalette     *string           `json:"chart_palette,omitempty"`
-	ZoomLevel        *int              `json:"zoom_level,omitempty"`
+	ZoomLevel        *config.ZoomLevel `json:"zoom_level,omitempty"`
 	ToolResultImages *string           `json:"tool_result_images,omitempty" enum:"keep,drop" doc:"Inline tool-result image retention applied to ingestion after a daemon restart"`
 	DisabledAgents   *[]string         `json:"disabled_agents,omitempty"`
 	// AgentHomes replaces the alternate home list for each listed provider.
@@ -66,4 +68,17 @@ func toolResultImagesValue(policy config.ToolResultImages) string {
 		return string(config.ToolResultImagesDrop)
 	}
 	return toolResultImagesKeepValue
+}
+
+// humaZoomLevel supplies the API schema without coupling config to Huma.
+// Runtime values remain config.ZoomLevel, encoded as numeric percentages.
+type humaZoomLevel int
+
+func (humaZoomLevel) Schema(huma.Registry) *huma.Schema {
+	values := config.ZoomLevelValues()
+	enum := make([]any, len(values))
+	for i, value := range values {
+		enum[i] = int(value)
+	}
+	return &huma.Schema{Type: huma.TypeInteger, Enum: enum}
 }

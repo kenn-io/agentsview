@@ -142,11 +142,7 @@ func (s *Server) humaUpdateSettings(
 		patch["chart_palette"] = palette
 	}
 	if in.Body.ZoomLevel != nil {
-		zoom, err := config.ParseZoomLevel(*in.Body.ZoomLevel)
-		if err != nil {
-			return nil, apiError(http.StatusBadRequest, err.Error())
-		}
-		patch["zoom_level"] = zoom
+		patch["zoom_level"] = *in.Body.ZoomLevel
 	}
 	if in.Body.ToolResultImages != nil {
 		// The enum tag already constrained this to "keep" or "drop" before

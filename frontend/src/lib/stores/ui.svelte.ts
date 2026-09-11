@@ -1,3 +1,4 @@
+import { SettingsUpdateRequestZoomLevel as ZoomLevel } from "../api/generated/models/settingsUpdateRequestZoomLevel.js";
 import {
   getHighContrast,
   initTheme,
@@ -96,7 +97,11 @@ const VALID_TRANSCRIPT_MODES: TranscriptMode[] = ["normal", "focused"];
 const IS_DESKTOP =
   typeof window !== "undefined" && new URLSearchParams(window.location.search).has("desktop");
 
-export const ZOOM_STEPS = [67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200];
+export const ZOOM_STEPS = Object.values(ZoomLevel);
+
+function isZoomLevel(level: number): level is ZoomLevel {
+  return ZOOM_STEPS.some((step) => step === level);
+}
 const ZOOM_DEFAULT = 100;
 const FONT_SCALE_KEY = "agentsview-font-scale";
 const HIGH_CONTRAST_KEY = "agentsview-high-contrast";
@@ -104,7 +109,7 @@ const LEGACY_FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
 let zoomRequest = 0;
 let nativeZoomQueue = Promise.resolve();
 let confirmedNativeZoom = 1;
-type ZoomSaveCallback = (level: number) => void;
+type ZoomSaveCallback = (level: ZoomLevel) => void;
 
 type DesktopTauriWebviewWindow = {
   setZoom(scaleFactor: number): Promise<void>;
@@ -125,28 +130,27 @@ function currentDesktopWebviewWindow(): DesktopTauriWebviewWindow | undefined {
 function syncDesktopZoom(scaleFactor: number): Promise<void> | undefined {
   const webview = currentDesktopWebviewWindow();
   if (!webview) return;
-  nativeZoomQueue = nativeZoomQueue.catch(() => {}).then(async () => {
-    await webview.setZoom(scaleFactor);
-    confirmedNativeZoom = scaleFactor;
-  });
+  nativeZoomQueue = nativeZoomQueue
+    .catch(() => {})
+    .then(async () => {
+      await webview.setZoom(scaleFactor);
+      confirmedNativeZoom = scaleFactor;
+    });
   return nativeZoomQueue;
 }
 
 function setCssZoom(factor: number): void {
   document.documentElement.style.setProperty("zoom", String(factor));
-  document.documentElement.style.setProperty(
-    "--agentsview-zoom-compensation",
-    String(1 / factor),
-  );
+  document.documentElement.style.setProperty("--agentsview-zoom-compensation", String(1 / factor));
 }
 
-function readStoredZoom(): number {
+function readStoredZoom(): ZoomLevel {
   try {
     const zoom = Number(localStorage?.getItem(ZOOM_KEY));
-    if (ZOOM_STEPS.includes(zoom) && zoom !== ZOOM_DEFAULT) return zoom;
+    if (isZoomLevel(zoom) && zoom !== ZOOM_DEFAULT) return zoom;
     // Prefer a saved text size over the old store's automatic 100%.
     const legacy = Number(localStorage?.getItem(FONT_SCALE_KEY));
-    if (LEGACY_FONT_SCALE_STEPS.includes(legacy)) return legacy;
+    if (isZoomLevel(legacy) && LEGACY_FONT_SCALE_STEPS.includes(legacy)) return legacy;
   } catch {
     // ignore
   }
@@ -262,7 +266,7 @@ class UIStore {
   pendingScrollOrdinal: number | null = $state(null);
   pendingScrollSession: string | null = $state(null);
 
-  zoomLevel: number = $state(readStoredZoom());
+  zoomLevel: ZoomLevel = $state(readStoredZoom());
   zoomChangeVersion = 0;
   private persistZoomStorage = true;
   private zoomSaveCallback: ZoomSaveCallback | null = null;
@@ -569,13 +573,13 @@ class UIStore {
   }
 
   setZoomLevel(level: number) {
-    if (ZOOM_STEPS.includes(level)) {
+    if (isZoomLevel(level)) {
       this.setUserZoomLevel(level);
     }
   }
 
   applyZoomLevel(level: number) {
-    if (ZOOM_STEPS.includes(level)) {
+    if (isZoomLevel(level)) {
       this.persistZoomStorage = false;
       this.zoomLevel = level;
       return true;
@@ -596,7 +600,7 @@ class UIStore {
     }
   }
 
-  private setUserZoomLevel(level: number) {
+  private setUserZoomLevel(level: ZoomLevel) {
     const changed = this.zoomLevel !== level;
     this.persistZoomStorage = true;
     this.zoomLevel = level;

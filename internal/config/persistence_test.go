@@ -70,7 +70,7 @@ func TestSaveSettingsRejectsInvalidZoomWithoutChangingSelectionOrDisk(t *testing
 		"zoom_level": ZoomLevel(101),
 	})
 	require.EqualError(t, err,
-		"zoom_level must be one of 67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, or 200 (got 101)")
+		"zoom_level must be one of 67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200 (got 101)")
 	require.NotNil(t, cfg.ZoomLevel)
 	assert.Equal(t, ZoomLevel120, *cfg.ZoomLevel)
 	after, err := os.ReadFile(filepath.Join(dir, configFileName))
