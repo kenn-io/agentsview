@@ -236,7 +236,13 @@ func crushProviderSpec() dbBackedProviderSpec {
 			if err != nil || sess == nil {
 				return nil, err
 			}
-			return []ParseResult{{Session: *sess, Messages: msgs}}, nil
+			// The engine writes usage rows only from ParseResult
+			// .UsageEvents; the ParsedSession field feeds ID validation.
+			return []ParseResult{{
+				Session:     *sess,
+				Messages:    msgs,
+				UsageEvents: sess.UsageEvents,
+			}}, nil
 		},
 		caps: crushProviderCapabilities(),
 	}
