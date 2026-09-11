@@ -19,8 +19,8 @@
         await ConfigService.postApiV1ConfigGithub({ token: tokenInput.trim() });
         tokenInput = "";
         success = m.settings_github_token_saved();
-        await settings.load();
       });
+      await settings.load();
     } catch (e) {
       error = e instanceof Error ? e.message : m.settings_github_save_failed();
     } finally {

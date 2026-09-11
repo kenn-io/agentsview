@@ -31,9 +31,9 @@
         custom_bin: localBin || undefined,
         custom_args: localArgs || undefined,
       });
-      // Reload settings to pick up the saved values
-      await settings.load();
     });
+    // Reload settings after the mutation so hydration sees the saved config.
+    await settings.load();
   }
 
   let dirty = $derived(
