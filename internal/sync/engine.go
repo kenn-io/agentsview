@@ -7738,7 +7738,7 @@ func (e *Engine) syncAllLocked(
 	// through the provider facade in the file-sync phase above, so no
 	// dedicated DB-backed sync pass is needed here.
 
-	// Sync Warp, Forge, Piebald, ZCode, and Goose sessions. These are
+	// Sync Warp, Forge, Piebald, ZCode, Goose, and Crush sessions. These are
 	// provider-authoritative DB-backed providers: a shared SQLite DB hosts every
 	// session, so the provider facade enumerates sources and parses only the
 	// changed ones.
@@ -7787,9 +7787,18 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
+	if scope.includesAny(e.agentDirs[parser.AgentCrush]) {
+		if e.syncProviderDBBackedAgent(
+			ctx, parser.AgentCrush, "crush",
+			writeMode, verbose, scope, &stats, advanceDBProgress,
+		) {
+			stats.Aborted = true
+			return stats
+		}
+	}
 	// Link subagent child sessions to their parents after all DB-backed
-	// agent writes (including provider-authoritative Forge, Goose, Piebald,
-	// and ZCode).
+	// agent writes (including provider-authoritative Crush, Forge, Goose,
+	// Piebald, and ZCode).
 	// LinkSubagentSessions is idempotent — its WHERE filter and partial index
 	// make it a cheap no-op when nothing new was written — so no guard is
 	// needed.
@@ -9402,7 +9411,7 @@ func (e *Engine) providerDBBackedSourceFresh(
 }
 
 // syncProviderDBBackedAgent runs the full-sync phase for a provider-authoritative
-// DB-backed agent (Forge, Goose, Piebald, Warp, ZCode). It mirrors
+// DB-backed agent (Crush, Forge, Goose, Piebald, Warp, ZCode). It mirrors
 // syncOpenCodeFormatAgent:
 // only changed sessions are parsed (so the second sync of unchanged data is a
 // no-op), and the per-session write semantics match the legacy DB sync.
@@ -13532,7 +13541,7 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 func processFileUsesProvider(agent parser.AgentType) bool {
 	switch agent {
 	case parser.AgentForge, parser.AgentGoose, parser.AgentPiebald,
-		parser.AgentWarp, parser.AgentZCode:
+		parser.AgentWarp, parser.AgentZCode, parser.AgentCrush:
 		return true
 	default:
 		return false
@@ -13585,7 +13594,8 @@ func (e *Engine) shouldSkipProviderSource(
 
 func providerSourceSupportsPersistedFreshness(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentForge, parser.AgentGoose, parser.AgentWarp, parser.AgentZCode:
+	case parser.AgentForge, parser.AgentGoose, parser.AgentWarp, parser.AgentZCode,
+		parser.AgentCrush:
 		return true
 	default:
 		return false

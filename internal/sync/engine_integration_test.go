@@ -1284,6 +1284,127 @@ func (f openCodeStorageParseCountingFactory) NewProvider(
 	return f.provider
 }
 
+type crushParseCountingProvider struct {
+	parser.Provider
+	parseCalls atomic.Int64
+}
+
+func (p *crushParseCountingProvider) Parse(
+	ctx context.Context, req parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	p.parseCalls.Add(1)
+	return p.Provider.Parse(ctx, req)
+}
+
+func (p *crushParseCountingProvider) DiscoverEach(
+	ctx context.Context, yield func(parser.SourceRef) error,
+) error {
+	discoverer, ok := p.Provider.(parser.StreamingDiscoverer)
+	if !ok {
+		return fmt.Errorf("Crush provider does not support streaming discovery")
+	}
+	return discoverer.DiscoverEach(ctx, yield)
+}
+
+type crushParseCountingFactory struct {
+	provider *crushParseCountingProvider
+}
+
+func (f crushParseCountingFactory) Definition() parser.AgentDef {
+	return f.provider.Definition()
+}
+
+func (f crushParseCountingFactory) Capabilities() parser.Capabilities {
+	return f.provider.Capabilities()
+}
+
+func (f crushParseCountingFactory) NewProvider(
+	parser.ProviderConfig,
+) parser.Provider {
+	return f.provider
+}
+
+func TestSyncAllCrushSkipsUnchangedSessionBeforeParse(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	crushPath := filepath.Join(root, parser.CrushDBName)
+	source, err := sql.Open("sqlite3", crushPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, source.Close()) })
+	_, err = source.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			parent_session_id TEXT,
+			title TEXT NOT NULL,
+			message_count INTEGER NOT NULL DEFAULT 0,
+			prompt_tokens INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			cost REAL NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE messages (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			parts TEXT NOT NULL,
+			model TEXT,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		INSERT INTO sessions (
+			id, title, message_count, created_at, updated_at
+		) VALUES ('stable', 'Stable session', 1, 1789093626, 1789093626);
+		INSERT INTO messages (
+			id, session_id, role, parts, created_at, updated_at
+		) VALUES (
+			'message-1', 'stable', 'user',
+			'[{"type":"text","data":{"text":"Keep this session."}}]',
+			1789093626, 1789093626
+		);
+	`)
+	require.NoError(t, err)
+
+	innerFactory, ok := parser.ProviderFactoryByType(parser.AgentCrush)
+	require.True(t, ok, "Crush provider factory registered")
+	inner := innerFactory.NewProvider(parser.ProviderConfig{
+		Roots:   []string{root},
+		Machine: "local",
+	})
+	counting := &crushParseCountingProvider{Provider: inner}
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCrush: {root},
+		},
+		Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{
+			crushParseCountingFactory{provider: counting},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCrush: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+
+	first := engine.SyncAll(t.Context(), nil)
+	require.False(t, first.Aborted, "first sync aborted: %+v", first)
+	require.Equal(t, 1, first.Synced, "first sync writes the session")
+	require.Equal(t, int64(1), counting.parseCalls.Load())
+
+	second := engine.SyncAll(t.Context(), nil)
+	require.False(t, second.Aborted, "second sync aborted: %+v", second)
+	assert.Zero(t, second.Synced, "unchanged session must not be rewritten")
+	assert.Equal(t, int64(1), counting.parseCalls.Load(),
+		"unchanged session must be skipped before parsing")
+
+	engine.SyncPaths([]string{crushPath + "#stable"})
+	assert.Equal(t, int64(1), counting.parseCalls.Load(),
+		"an unchanged session path must use the stored fingerprint")
+}
+
 // A fresh engine has no in-memory storage-tree trust, so it fingerprints each
 // legacy OpenCode session once. The persisted source metadata must then prove
 // an unchanged session fresh without parsing the storage tree a second time.
