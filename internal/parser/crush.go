@@ -100,6 +100,14 @@ func crushProjectDirsMapping(registryPath string) map[string]string {
 	return mapping
 }
 
+func crushProjectDir(dbPath string, projectMapping map[string]string) string {
+	dataDir := filepath.Dir(dbPath)
+	if projectDir := projectMapping[dataDir]; projectDir != "" {
+		return projectDir
+	}
+	return filepath.Clean(filepath.Dir(dataDir))
+}
+
 func openCrushDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
 	// Immutable mode is used only for explicit stable snapshots. Live
 	// reads must not fall back to it: a WAL-backed store opened with
@@ -352,16 +360,7 @@ func parseCrushSession(
 	// Resolve the project directory: first check the registry mapping for
 	// an explicit project path, then fall back to the two-levels-above
 	// heuristic for the default <project>/.crush layout.
-	dataDir := filepath.Dir(dbPath)
-	projectDir := ""
-	if projectMapping != nil {
-		if path, ok := projectMapping[dataDir]; ok {
-			projectDir = path
-		}
-	}
-	if projectDir == "" {
-		projectDir = filepath.Clean(filepath.Dir(dataDir))
-	}
+	projectDir := crushProjectDir(dbPath, projectMapping)
 	project := ExtractProjectFromCwdWithBranchContext(ctx, projectDir, "")
 	if project == "" {
 		project = "crush"
