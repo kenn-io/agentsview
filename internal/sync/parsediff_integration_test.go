@@ -245,6 +245,49 @@ func TestParseDiffUsageOnlyArchiveIsIdentical(t *testing.T) {
 	assert.Empty(t, report.Sessions)
 }
 
+func TestParseDiffOffloadDoesNotWriteAssets(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+	const raw = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "show the image").
+		AddRaw(testjsonl.ClaudeAssistantJSON([]map[string]any{
+			{"type": "tool_use", "id": "image-call", "name": "Bash", "input": map[string]any{}},
+		}, tsEarlyS1)).
+		AddRaw(testjsonl.ClaudeToolResultUserJSON("image-call", raw, tsEarlyS5)).
+		String()
+	env.writeClaudeSession(t, "test-proj", "pd-offload.jsonl", content)
+
+	assetsDir := t.TempDir()
+	cfg := sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {env.claudeDir},
+		},
+		Machine:          "local",
+		ToolResultImages: config.ToolResultImagesOffload,
+		AssetsDir:        assetsDir,
+	}
+	ingest := sync.NewEngine(env.db, cfg)
+	t.Cleanup(ingest.Close)
+	require.Equal(t, 1, ingest.SyncAll(t.Context(), nil).Synced)
+
+	entries, err := os.ReadDir(assetsDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.NoError(t, os.Remove(filepath.Join(assetsDir, entries[0].Name())))
+
+	diff := sync.NewDiffEngine(env.db, cfg)
+	t.Cleanup(diff.Close)
+	report, err := diff.ParseDiff(t.Context(), sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentClaude},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Identical: 1}, report.Totals)
+
+	entries, err = os.ReadDir(assetsDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
 // TestParseDiffDetectsStoredDrift mutates stored rows directly after
 // a sync and verifies each drifted session is classified DiffChanged
 // with the expected field names while an untouched control session

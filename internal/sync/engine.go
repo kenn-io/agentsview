@@ -17041,6 +17041,19 @@ func (e *Engine) prepareSessionWrite(
 	return s, msgs, verdict
 }
 
+func (e *Engine) projectToolResultImagesForPrepare(
+	messages []db.Message,
+) ([]db.Message, db.ToolImageStats) {
+	if e.forceParse {
+		return e.db.ProjectToolResultImagesForComparison(
+			messages, e.toolResultImages,
+		)
+	}
+	return e.db.ProjectToolResultImagesWithPolicy(
+		messages, e.toolResultImages,
+	)
+}
+
 func (e *Engine) prepareSessionWriteContext(
 	ctx context.Context,
 	pw pendingWrite,
@@ -17050,7 +17063,7 @@ func (e *Engine) prepareSessionWriteContext(
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
 	}
-	msgs, _ = e.db.ProjectToolResultImagesWithPolicy(msgs, e.toolResultImages)
+	msgs, _ = e.projectToolResultImagesForPrepare(msgs)
 	s, err := toDBSessionContext(ctx, pw)
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
@@ -17101,7 +17114,7 @@ func (e *Engine) prepareSessionWriteContext(
 	} else if mergedMsgs != nil {
 		parsedMsgs := msgs
 		msgs = mergedMsgs
-		msgs, _ = e.db.ProjectToolResultImagesWithPolicy(msgs, e.toolResultImages)
+		msgs, _ = e.projectToolResultImagesForPrepare(msgs)
 		applyVisualStudioCopilotArchiveSessionFields(
 			&s, archived, parsedMsgs, msgs,
 		)

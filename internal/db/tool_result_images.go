@@ -49,8 +49,20 @@ func stripToolResultImageArray(content string) (string, ToolImageStats) {
 	changed := false
 	for i, raw := range blocks {
 		var block toolImageBlock
-		if err := json.Unmarshal(raw, &block); err != nil ||
-			block.Type != "input_image" {
+		if err := json.Unmarshal(raw, &block); err != nil {
+			continue
+		}
+		if block.Type == "agentsview_image" {
+			placeholder, ok := stripOffloadedImagePlaceholder(raw)
+			if !ok {
+				continue
+			}
+			projected[i] = placeholder
+			changed = true
+			stats.Payloads++
+			continue
+		}
+		if block.Type != "input_image" {
 			continue
 		}
 		var fields map[string]json.RawMessage
@@ -109,6 +121,43 @@ func stripToolResultImageArray(content string) (string, ToolImageStats) {
 	}
 	result.WriteByte(']')
 	return result.String(), stats
+}
+
+func stripOffloadedImagePlaceholder(raw json.RawMessage) (json.RawMessage, bool) {
+	var placeholder struct {
+		Type      string `json:"type"`
+		ImageRef  string `json:"image_ref"`
+		MediaType string `json:"media_type"`
+		ByteSize  int64  `json:"byte_size"`
+	}
+	if err := json.Unmarshal(raw, &placeholder); err != nil ||
+		placeholder.Type != "agentsview_image" ||
+		!strings.HasPrefix(placeholder.ImageRef, "asset://") ||
+		placeholder.MediaType == "" || placeholder.ByteSize < 0 {
+		return nil, false
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return nil, false
+	}
+	for key := range fields {
+		if strings.EqualFold(key, "image_ref") ||
+			strings.EqualFold(key, "text") {
+			delete(fields, key)
+		}
+	}
+	textValue, err := json.Marshal(fmt.Sprintf(
+		"[Image: %s, %d bytes]", placeholder.MediaType, placeholder.ByteSize,
+	))
+	if err != nil {
+		return nil, false
+	}
+	fields["text"] = textValue
+	projected, err := json.Marshal(fields)
+	if err != nil {
+		return nil, false
+	}
+	return projected, true
 }
 
 // scanSummarySections walks a labeled or anonymous tool-result summary and
@@ -393,6 +442,30 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 func projectToolResultImages(
 	messages []Message, policy config.ToolResultImages, assetsDir string,
 ) ([]Message, ToolImageStats) {
+	return projectToolResultImagesWithPut(
+		messages, policy, assetsDir,
+		func(mediaType string, body []byte) (string, bool, error) {
+			return assets.Put(assetsDir, mediaType, body)
+		},
+	)
+}
+
+func projectToolResultImagesWithoutWriting(
+	messages []Message, policy config.ToolResultImages, assetsDir string,
+) ([]Message, ToolImageStats) {
+	return projectToolResultImagesWithPut(
+		messages, policy, assetsDir,
+		func(mediaType string, body []byte) (string, bool, error) {
+			ref, err := assets.Reference(mediaType, body)
+			return ref, false, err
+		},
+	)
+}
+
+func projectToolResultImagesWithPut(
+	messages []Message, policy config.ToolResultImages, assetsDir string,
+	put imagePutFunc,
+) ([]Message, ToolImageStats) {
 	if (policy != config.ToolResultImagesDrop && policy != config.ToolResultImagesOffload) || len(messages) == 0 {
 		if messages == nil {
 			return []Message{}, ToolImageStats{}
@@ -403,7 +476,7 @@ func projectToolResultImages(
 		if policy == config.ToolResultImagesDrop {
 			return projectToolResultText(content, length, stats)
 		}
-		return ProjectToolResultImageContent(content, policy, assetsDir), stats
+		return projectToolResultImageContentWithPut(content, policy, assetsDir, put), stats
 	}
 	projected := make([]Message, len(messages))
 	copy(projected, messages)
@@ -450,6 +523,20 @@ func projectToolResultText(
 
 // ProjectToolResultImageContent publishes supported assets before returning reference text.
 func ProjectToolResultImageContent(content string, policy config.ToolResultImages, assetsDir string) string {
+	return projectToolResultImageContentWithPut(
+		content, policy, assetsDir,
+		func(mediaType string, body []byte) (string, bool, error) {
+			return assets.Put(assetsDir, mediaType, body)
+		},
+	)
+}
+
+func projectToolResultImageContentWithPut(
+	content string,
+	policy config.ToolResultImages,
+	assetsDir string,
+	put imagePutFunc,
+) string {
 	switch policy {
 	case config.ToolResultImagesDrop:
 		projected, _ := StripToolResultImages(content)
@@ -458,9 +545,7 @@ func ProjectToolResultImageContent(content string, policy config.ToolResultImage
 		if assetsDir == "" {
 			return content
 		}
-		projected, err := migrateToolResultImages(content, func(mediaType string, body []byte) (string, bool, error) {
-			return assets.Put(assetsDir, mediaType, body)
-		})
+		projected, err := migrateToolResultImages(content, put)
 		if err != nil {
 			log.Printf("offloading tool-result images: %v", err)
 			return content
@@ -510,4 +595,19 @@ func (db *DB) ProjectToolResultImagesWithPolicy(messages []Message, policy confi
 		return messages, ToolImageStats{}
 	}
 	return projectToolResultImages(messages, policy, db.AssetsDir())
+}
+
+// ProjectToolResultImagesForComparison applies the policy without publishing
+// assets. Content-addressed references still match stored offload rows, so
+// report-only parse-diff runs can compare normalized content without writes.
+func (db *DB) ProjectToolResultImagesForComparison(
+	messages []Message, policy config.ToolResultImages,
+) ([]Message, ToolImageStats) {
+	if db.ArchiveContent().OmitsToolContent() {
+		if messages == nil {
+			return []Message{}, ToolImageStats{}
+		}
+		return messages, ToolImageStats{}
+	}
+	return projectToolResultImagesWithoutWriting(messages, policy, db.AssetsDir())
 }

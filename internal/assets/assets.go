@@ -35,23 +35,34 @@ func ExtForMediaType(mediaType string) (string, bool) {
 	return ext, ok
 }
 
+// Reference returns the content-addressed asset:// reference for body.
+// mediaType must name a passive image format.
+func Reference(mediaType string, body []byte) (string, error) {
+	ext, ok := mediaTypeToExt[mediaType]
+	if !ok {
+		return "", fmt.Errorf("unsupported asset type: %s", mediaType)
+	}
+
+	sum := sha256.Sum256(body)
+	hash := fmt.Sprintf("%x", sum[:])
+	return "asset://" + hash + ext, nil
+}
+
 // Put writes body to the assets directory under its SHA-256 hash and returns
 // the asset:// reference. created is false when a complete object already
 // existed; repairing a partial one reports true. mediaType must name a passive
 // image format.
 func Put(assetsDir, mediaType string, body []byte) (ref string, created bool, err error) {
-	ext, ok := mediaTypeToExt[mediaType]
-	if !ok {
-		return "", false, fmt.Errorf("unsupported asset type: %s", mediaType)
+	ref, err = Reference(mediaType, body)
+	if err != nil {
+		return "", false, err
 	}
 
-	sum := sha256.Sum256(body)
-	hash := fmt.Sprintf("%x", sum[:])
-	filename := hash + ext
+	filename := strings.TrimPrefix(ref, "asset://")
 	destPath := filepath.Join(assetsDir, filename)
 
-	if isCompleteObject(destPath, int64(len(body)), hash) {
-		return "asset://" + filename, false, nil
+	if isCompleteObject(destPath, int64(len(body)), strings.TrimSuffix(filename, filepath.Ext(filename))) {
+		return ref, false, nil
 	}
 
 	if err := writeObject(assetsDir, destPath, func(out *os.File) error {
@@ -61,7 +72,7 @@ func Put(assetsDir, mediaType string, body []byte) (ref string, created bool, er
 		return "", false, err
 	}
 
-	return "asset://" + filename, true, nil
+	return ref, true, nil
 }
 
 // isCompleteObject reports whether the content-addressed path already holds a

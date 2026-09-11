@@ -119,6 +119,17 @@ func TestStripToolResultImagesNegativeSpace(t *testing.T) {
 	}
 }
 
+func TestStripToolResultImagesRemovesOffloadReference(t *testing.T) {
+	content := `[{"byte_size":3,"image_ref":"asset://abc.png","media_type":"image/png","sha256":"abc","text":"![Image: image/png, 3 bytes](asset://abc.png)","type":"agentsview_image","version":1}]`
+
+	got, stats := StripToolResultImages(content)
+
+	assert.Equal(t, int64(1), stats.Payloads)
+	assert.Contains(t, got, `"text":"[Image: image/png, 3 bytes]"`)
+	assert.NotContains(t, got, "image_ref")
+	assert.NotContains(t, got, "asset://")
+}
+
 func TestDBPolicyZeroValue(t *testing.T) {
 	d := testDB(t)
 	assert.Equal(t, config.ToolResultImagesKeep, d.ToolResultImages())
@@ -130,6 +141,21 @@ func TestDBPolicyZeroValue(t *testing.T) {
 
 	d.SetToolResultImages(config.ToolResultImagesDrop)
 	assert.Equal(t, config.ToolResultImagesDrop, d.ToolResultImages())
+}
+
+func TestProjectToolResultImagesForComparisonDoesNotWriteAssets(t *testing.T) {
+	d := testDB(t)
+	d.SetAssetsDir(t.TempDir())
+
+	projected, _ := d.ProjectToolResultImagesForComparison(
+		[]Message{testImageMessage("comparison")},
+		config.ToolResultImagesOffload,
+	)
+
+	assert.Contains(t, projected[0].ToolCalls[0].ResultContent, `"image_ref":"asset://`)
+	entries, err := os.ReadDir(d.AssetsDir())
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }
 
 func TestProjectToolResultImagesNormalizesNilForOmittedArchives(t *testing.T) {
