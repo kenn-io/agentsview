@@ -893,7 +893,7 @@ func (db *DB) ConfigureArtifactLocalMachine(machine string) error {
 	})
 }
 
-func configureArtifactLocalMachineTx(ctx context.Context, tx *sql.Tx, machine string) error {
+func configureArtifactLocalMachineTx(ctx context.Context, tx bun.Tx, machine string) error {
 	var existing string
 	err := tx.QueryRowContext(ctx, `
 		SELECT value FROM pg_sync_state WHERE key = ?`,

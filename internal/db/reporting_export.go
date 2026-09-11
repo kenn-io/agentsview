@@ -189,6 +189,10 @@ func (db *DB) reportingHoursFromSnapshot(
 		last := sort.Search(len(candidates), func(j int) bool {
 			return !candidates[j].Start.Before(hourEnd)
 		})
+		hourCandidates := candidates
+		if candidates != nil {
+			hourCandidates = candidates[first:last]
+		}
 		report, aggregateErr := activity.AggregateCandidates(ctx, activity.Params{
 			RangeStart:    hourStart,
 			RangeEnd:      hourEnd,
@@ -196,7 +200,7 @@ func (db *DB) reportingHoursFromSnapshot(
 			EffectiveEnd:  hourEnd,
 			GapCapSeconds: query.GapCapSeconds,
 			Bucket:        activity.BucketSpec{Unit: activity.BucketMinute, NominalSeconds: 300},
-		}, append([]activity.SessionMeta(nil), sessions...), candidates[first:last], activityUsage)
+		}, append([]activity.SessionMeta(nil), sessions...), hourCandidates, activityUsage)
 		if aggregateErr != nil {
 			return nil, fmt.Errorf(
 				"aggregate reporting hour %s: %w",

@@ -268,7 +268,7 @@ func (s *RawIngestStore) CommitManifest(
 			WITH candidate AS (
 				SELECT job.id
 				FROM raw_ingest_jobs AS job
-				WHERE job.tenant_id = $1 AND job.manifest_id = $2
+				WHERE job.tenant_id = ?0 AND job.manifest_id = ?1
 					AND job.stage = 'parse'
 					AND job.state IN ('ready', 'retrying', 'leased')
 				ORDER BY job.id

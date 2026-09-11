@@ -880,7 +880,7 @@ func (s *BunStore) bunContentPortableFTSHits(
 	}
 	hits := make([]ContentSearchHit, len(rows))
 	for i, row := range rows {
-		hits[i] = bunContentHitFromCandidate(row, filter.ftsSnippet(row.Body))
+		hits[i] = bunContentHitFromCandidate(row, filter.ftsSnippet(row.Body, ""))
 	}
 	return hits, nil
 }

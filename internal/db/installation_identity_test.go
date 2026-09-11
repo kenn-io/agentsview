@@ -1,13 +1,13 @@
 package db
 
 import (
-	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -32,7 +32,7 @@ func TestInstallationAdoptionMovesOwnedArchiveState(t *testing.T) {
 	starred, err := database.StarSession(owner)
 	require.NoError(t, err)
 	require.True(t, starred)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`INSERT INTO local_session_source_baselines VALUES (?, ?, 'claude', ?)`, owner, owner, path)
 		return err
 	}))
@@ -160,7 +160,7 @@ func TestInstallationAdoptionKeepsNewestRootObservation(t *testing.T) {
 			for _, machine := range []string{"oldhost.example", identity} {
 				observed := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 				if machine == newestMachine {
-					observed = observed.Add(time.Nanosecond)
+					observed = observed.Add(time.Microsecond)
 				}
 				require.NoError(t, database.UpsertSessionWithProjectIdentity(Session{
 					ID: machine, Machine: machine, Project: "project", Agent: "claude",

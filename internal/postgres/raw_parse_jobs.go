@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
@@ -66,13 +68,13 @@ func (s *RawIngestStore) ClaimRawParseJobs(
 					AND head.manifest_id = manifest.manifest_id
 				)
 			ORDER BY job.available_at, job.id
-			LIMIT $1
+			LIMIT ?0
 			FOR UPDATE OF job SKIP LOCKED
 		), claimed AS (
 			UPDATE raw_ingest_jobs AS job
 			SET state = 'leased', attempt_count = job.attempt_count + 1,
-				lease_owner = $2,
-				lease_expires_at = now() + ($3 * interval '1 microsecond'),
+				lease_owner = ?1,
+				lease_expires_at = now() + (?2 * interval '1 microsecond'),
 				last_error_class = '', last_error = '', updated_at = now()
 			FROM candidates
 			WHERE job.id = candidates.id
@@ -143,7 +145,7 @@ func (s *RawIngestStore) ClaimRawParseJobs(
 // traffic, and a large obsolete backlog drains across successive calls.
 func supersedeObsoleteRawParseJobs(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	limit int,
 ) error {
 	if _, err := tx.ExecContext(ctx, rawParseSupersedeSQL,
@@ -181,7 +183,7 @@ const rawParseSupersedeSQL = `
 						AND head.manifest_id = manifest.manifest_id
 				)
 			ORDER BY obsolete.id
-			LIMIT $1
+			LIMIT ?0
 			FOR UPDATE OF obsolete SKIP LOCKED
 		)`
 
@@ -199,9 +201,9 @@ func (s *RawIngestStore) HeartbeatRawParseJob(
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE raw_ingest_jobs AS job
-		SET lease_expires_at = now() + ($4 * interval '1 microsecond'),
+		SET lease_expires_at = now() + (?3 * interval '1 microsecond'),
 			updated_at = now()
-		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
+		WHERE job.id = ?0 AND job.lease_owner = ?1 AND job.attempt_count = ?2
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -236,7 +238,7 @@ func (s *RawIngestStore) CompleteRawParseJob(
 		UPDATE raw_ingest_jobs AS job
 		SET state = 'complete', lease_owner = '', lease_expires_at = NULL,
 			last_error_class = '', last_error = '', updated_at = now()
-		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
+		WHERE job.id = ?0 AND job.lease_owner = ?1 AND job.attempt_count = ?2
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -275,10 +277,10 @@ func (s *RawIngestStore) RetryRawParseJob(
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE raw_ingest_jobs AS job
-		SET state = 'retrying', available_at = $4, lease_owner = '',
-			lease_expires_at = NULL, last_error_class = $5, last_error = $6,
+		SET state = 'retrying', available_at = ?3, lease_owner = '',
+			lease_expires_at = NULL, last_error_class = ?4, last_error = ?5,
 			updated_at = now()
-		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
+		WHERE job.id = ?0 AND job.lease_owner = ?1 AND job.attempt_count = ?2
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1
@@ -315,8 +317,8 @@ func (s *RawIngestStore) FailRawParseJob(
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE raw_ingest_jobs AS job
 		SET state = 'failed', lease_owner = '', lease_expires_at = NULL,
-			last_error_class = $4, last_error = $5, updated_at = now()
-		WHERE job.id = $1 AND job.lease_owner = $2 AND job.attempt_count = $3
+			last_error_class = ?3, last_error = ?4, updated_at = now()
+		WHERE job.id = ?0 AND job.lease_owner = ?1 AND job.attempt_count = ?2
 			AND job.state = 'leased' AND job.lease_expires_at > now()
 			AND EXISTS (
 				SELECT 1

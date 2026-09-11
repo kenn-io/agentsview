@@ -19,6 +19,7 @@ type bunActivityReportScopeRow struct {
 	StartedAt   *bunmodel.Timestamp `bun:"started_at"`
 	EndedAt     *bunmodel.Timestamp `bun:"ended_at"`
 	IsAutomated bool                `bun:"is_automated"`
+	IsSubagent  bool                `bun:"is_subagent"`
 }
 
 func (s *BunStore) bunActivityReportScopeFrom(
@@ -85,7 +86,7 @@ func (s *BunStore) bunActivityReportScopeFrom(
 			NULLIF(session.project, ''), session.id) AS title,
 		session.project, session.agent, session.machine,
 		session.started_at, session.ended_at,
-		session.is_automated
+		session.is_automated, session.relationship_type = 'subagent' AS is_subagent
 	FROM activity_report_sessions AS session
 	ORDER BY session.id ASC`
 	var rows []bunActivityReportScopeRow
@@ -100,6 +101,7 @@ func (s *BunStore) bunActivityReportScopeFrom(
 			StartedAt:   bunAnalyticsTimeString(row.StartedAt),
 			EndedAt:     bunAnalyticsTimeString(row.EndedAt),
 			IsAutomated: row.IsAutomated,
+			IsSubagent:  row.IsSubagent,
 		})
 	}
 	return sessions, nil

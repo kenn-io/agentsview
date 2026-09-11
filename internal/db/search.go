@@ -582,6 +582,10 @@ func (capability sqliteFullTextCapability) SearchSession(
 func (capability sqliteFullTextCapability) SearchContent(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 ) ([]ContentSearchHit, error) {
+	ftsQuery, err := capability.store.prepareMessageFTSQuery(ctx, filter.Pattern)
+	if err != nil {
+		return nil, err
+	}
 	where, scopeArgs := buildBunSessionFilter(
 		contentSessionFilter(filter), sqliteTimestampOrderExpr,
 	)
@@ -603,7 +607,8 @@ func (capability sqliteFullTextCapability) SearchContent(
 			NULLIF(session.started_at, ''), session.created_at)) DESC,
 			message.session_id ASC, message.ordinal ASC, message.id ASC
 		LIMIT ? OFFSET ?`
-	args := []any{PrepareFTSQuery(filter.Pattern)}
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, filter.Limit, filter.Cursor)
 	var rows []bunContentCandidate
@@ -612,7 +617,7 @@ func (capability sqliteFullTextCapability) SearchContent(
 	}
 	hits := make([]ContentSearchHit, len(rows))
 	for i, row := range rows {
-		hits[i] = bunContentHitFromCandidate(row, filter.ftsSnippet(row.Body))
+		hits[i] = bunContentHitFromCandidate(row, filter.ftsSnippet(row.Body, ftsQuery.snippetTerm))
 	}
 	return hits, nil
 }
@@ -620,6 +625,10 @@ func (capability sqliteFullTextCapability) SearchContent(
 func (capability sqliteFullTextCapability) SearchHybridContent(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 ) ([]ContentSearchHit, error) {
+	ftsQuery, err := capability.store.prepareMessageFTSQuery(ctx, filter.Pattern)
+	if err != nil {
+		return nil, err
+	}
 	where, scopeArgs := buildBunSessionBaseFilter(
 		semanticContentSessionFilter(filter), sqliteTimestampOrderExpr,
 	)
@@ -637,7 +646,8 @@ func (capability sqliteFullTextCapability) SearchHybridContent(
 			AND message.session_id IN (SELECT id FROM sessions AS session WHERE ` + where + `)
 		ORDER BY messages_fts.rank, message.id
 		LIMIT ? OFFSET ?`
-	args := []any{PrepareFTSQuery(filter.Pattern)}
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, filter.Limit, filter.Cursor)
 	var rows []bunContentCandidate

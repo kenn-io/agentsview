@@ -219,7 +219,7 @@ func TestClaimRawParseJobsSupersedeBatchIsBounded(t *testing.T) {
 	reOpenSupersededRawParseJobs(t, pg)
 	require.Equal(t, 6, countState("ready"))
 
-	tx, err := pg.BeginTx(t.Context(), nil)
+	tx, err := store.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	require.NoError(t, supersedeObsoleteRawParseJobs(t.Context(), tx, 2))
 	require.NoError(t, tx.Commit())
@@ -228,7 +228,7 @@ func TestClaimRawParseJobsSupersedeBatchIsBounded(t *testing.T) {
 	assert.Equal(t, 4, countState("ready"))
 
 	for range 2 {
-		tx, err = pg.BeginTx(t.Context(), nil)
+		tx, err = store.db.BeginTx(t.Context(), nil)
 		require.NoError(t, err)
 		require.NoError(t, supersedeObsoleteRawParseJobs(t.Context(), tx, 2))
 		require.NoError(t, tx.Commit())
@@ -576,7 +576,7 @@ func claimOneRawParseJob(t *testing.T, store *RawIngestStore) rawderive.JobLease
 }
 
 func TestRawParseCleanupSkipsFutureRetryBacklog(t *testing.T) {
-	pg, _ := newRawIngestTestStore(t)
+	pg, store := newRawIngestTestStore(t)
 	var smallBuffers int
 	for _, count := range []int{100, 10000} {
 		_, err := pg.ExecContext(t.Context(), `
@@ -604,7 +604,7 @@ func TestRawParseCleanupSkipsFutureRetryBacklog(t *testing.T) {
 		`)
 		require.NoError(t, err)
 		var raw []byte
-		require.NoError(t, pg.QueryRowContext(t.Context(),
+		require.NoError(t, store.db.QueryRowContext(t.Context(),
 			"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+rawParseSupersedeSQL,
 			maxRawParseSupersedeBatch).Scan(&raw))
 		var plans []struct {

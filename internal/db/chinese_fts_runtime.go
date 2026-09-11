@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/uptrace/bun"
 )
 
 const simpleFTSDirEnv = "AGENTSVIEW_SIMPLE_DIR"
@@ -244,7 +246,7 @@ func requireRegularFile(path string) error {
 }
 
 type chineseFTSTransactor interface {
-	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	BeginTx(context.Context, *sql.TxOptions) (bun.Tx, error)
 }
 
 // ensureChineseFTS atomically reconciles the derived Chinese index with the
@@ -383,5 +385,5 @@ func ensureChineseFTS(
 }
 
 func installChineseFTSTriggers(conn *sql.DB) error {
-	return ensureChineseFTS(context.Background(), conn, false)
+	return ensureChineseFTS(context.Background(), bun.NewDB(conn, NewSQLiteArchiveDialect()), false)
 }

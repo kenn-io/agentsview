@@ -741,7 +741,7 @@ func TestArtifactQueueUsesAdoptedInstallationOwnership(t *testing.T) {
 		}},
 	} {
 		t.Run(operation.name, func(t *testing.T) {
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				_, err := tx.Exec(`DELETE FROM artifact_export_queue`)
 				return err
 			}))

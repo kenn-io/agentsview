@@ -57,17 +57,19 @@ const (
 // BackendCapabilities describes features that cannot be inferred from a
 // store's coarse public ReadOnly value.
 type BackendCapabilities struct {
-	AnalyticsDialect BunAnalyticsDialect
-	Recall           bool
-	FullText         FullTextCapability
-	SessionSearch    SessionSearchCapability
-	ContentSearch    ContentSearchCapability
-	Semantic         SemanticCapability
-	HybridLexical    HybridLexicalCapability
-	SearchDialect    BunSearchDialect
-	Writes           map[WriteOperation]bool
-	ArchiveWrites    ArchiveWriteAdapter
-	SessionMutations SessionMutationAdapter
+	// MachineMetadataTable names adapter-local machine labels and aliases.
+	MachineMetadataTable string
+	AnalyticsDialect     BunAnalyticsDialect
+	Recall               bool
+	FullText             FullTextCapability
+	SessionSearch        SessionSearchCapability
+	ContentSearch        ContentSearchCapability
+	Semantic             SemanticCapability
+	HybridLexical        HybridLexicalCapability
+	SearchDialect        BunSearchDialect
+	Writes               map[WriteOperation]bool
+	ArchiveWrites        ArchiveWriteAdapter
+	SessionMutations     SessionMutationAdapter
 }
 
 // ArchiveWriteAdapter owns SQLite's archive-only ingestion behavior while the
@@ -110,8 +112,9 @@ func (b *sqliteBunBackend) ReadOnly() bool { return b.store.readOnly }
 func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	if b.store.readOnly {
 		return BackendCapabilities{
-			AnalyticsDialect: SQLiteBunAnalyticsDialect(),
-			Recall:           true, FullText: sqliteFullTextCapability{store: b.store},
+			MachineMetadataTable: "pg_sync_state",
+			AnalyticsDialect:     SQLiteBunAnalyticsDialect(),
+			Recall:               true, FullText: sqliteFullTextCapability{store: b.store},
 			SessionSearch: sqliteFullTextCapability{store: b.store},
 			ContentSearch: sqliteFullTextCapability{store: b.store},
 			HybridLexical: sqliteFullTextCapability{store: b.store},
@@ -123,13 +126,14 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 		}
 	}
 	return BackendCapabilities{
-		AnalyticsDialect: SQLiteBunAnalyticsDialect(),
-		Recall:           true,
-		FullText:         sqliteFullTextCapability{store: b.store},
-		SessionSearch:    sqliteFullTextCapability{store: b.store},
-		ContentSearch:    sqliteFullTextCapability{store: b.store},
-		HybridLexical:    sqliteFullTextCapability{store: b.store},
-		SearchDialect:    SQLiteBunSearchDialect(),
+		MachineMetadataTable: "pg_sync_state",
+		AnalyticsDialect:     SQLiteBunAnalyticsDialect(),
+		Recall:               true,
+		FullText:             sqliteFullTextCapability{store: b.store},
+		SessionSearch:        sqliteFullTextCapability{store: b.store},
+		ContentSearch:        sqliteFullTextCapability{store: b.store},
+		HybridLexical:        sqliteFullTextCapability{store: b.store},
+		SearchDialect:        SQLiteBunSearchDialect(),
 		Semantic: NewVectorSemanticCapability(
 			b.store.getVectorSearcher,
 			func() error { return ErrSemanticUnavailable },

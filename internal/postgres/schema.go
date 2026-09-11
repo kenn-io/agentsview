@@ -3007,20 +3007,10 @@ func checkSchemaCompat(ctx context.Context, db bun.IConn) error {
 		)
 	}
 	rows.Close()
-	return nil
-}
-
-// checkPushSchemaCompat verifies schema elements that only push needs. PG serve
-// never reads sync_metadata or sessions.owner_marker, so they live outside
-// CheckSchemaCompat (which gates read-only serve startup and now probes the
-// serve-read sessions.source_archive_id/file_path provenance columns itself)
-// and are checked only on the push fast path.
-func checkPushSchemaCompat(ctx context.Context, db bun.IConn) error {
-	rows, err := db.QueryContext(ctx,
+	rows, err = db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
 	if err != nil {
-		return fmt.Errorf(
-			"sync_metadata table missing required columns: %w", err)
+		return fmt.Errorf("sync_metadata table missing required columns: %w", err)
 	}
 	rows.Close()
 	return nil
@@ -3029,7 +3019,7 @@ func checkPushSchemaCompat(ctx context.Context, db bun.IConn) error {
 // checkPushSchemaCompat verifies session ownership columns used only by push.
 // CheckSchemaCompat also checks sync_metadata because PG serve reads machine
 // display labels from it.
-func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
+func checkPushSchemaCompat(ctx context.Context, db bun.IConn) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT owner_marker, prompt_evidence_discarded FROM sessions LIMIT 0`)
 	if err != nil {
