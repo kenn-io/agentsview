@@ -693,6 +693,83 @@ func TestDeepSeekHarnessTornZstdFrameRetainsRecoveredEvents(t *testing.T) {
 	assert.Equal(t, "recovered interrupted reply", result.Messages[2].Content)
 }
 
+func TestDeepSeekHarnessKnownV0Events(t *testing.T) {
+	for _, eventType := range []string{
+		"model/selection", "session-log-deepseek/delivery-accepted",
+		"subagent/model-selection-policy", "team/member",
+		"team/message/delivered", "team/message/queued", "team/task",
+	} {
+		t.Run(eventType, func(t *testing.T) {
+			records := []any{
+				deepSeekHarnessFixtureHeader("known-event", deepSeekHarnessFixtureCwd, nil),
+				deepSeekHarnessFixtureEvent(0, eventType, map[string]any{}, nil),
+				deepSeekHarnessFixtureEvent(1, "turn/start", map[string]any{"turn": 1}, nil),
+				deepSeekHarnessFixtureEvent(2, "user/message", deepSeekHarnessUser("visible prompt", "human"), "append"),
+				deepSeekHarnessFixtureEvent(3, "turn/end", deepSeekHarnessTurnEnd(1, "completed"), nil),
+			}
+			path := writeDeepSeekHarnessFixture(t, t.TempDir(), "known-event", deepSeekHarnessFixtureCwd, "plain", records)
+			result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+			require.NoError(t, err)
+			require.Len(t, result.Messages, 1)
+			assert.Equal(t, "visible prompt", result.Messages[0].Content)
+		})
+	}
+}
+
+func TestDeepSeekHarnessSourceEventSeqs(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		raw     string
+		seq     int
+		wantErr bool
+	}{
+		{name: "flat", raw: `[1, 2, 3]`, seq: 145},
+		{name: "inclusive range", raw: `[[138, 144]]`, seq: 145},
+		{name: "mixed", raw: `[1, [3, 9], 12]`, seq: 145},
+		{name: "single entry range", raw: `[[1, 1]]`, seq: 145},
+		{name: "unordered flat", raw: `[3, 1, 2]`, seq: 145},
+		{name: "range fills count", raw: `[[0, 6]]`, seq: 7},
+		{name: "range exceeds count", raw: `[[0, 7]]`, seq: 7, wantErr: true},
+		{name: "mixed exceeds count", raw: `[0, [1, 6], 7]`, seq: 7, wantErr: true},
+		{name: "not array", raw: `1`, seq: 145, wantErr: true},
+		{name: "null", raw: `null`, seq: 145, wantErr: true},
+		{name: "invalid member", raw: `["not-a-number"]`, seq: 145, wantErr: true},
+		{name: "fraction", raw: `[1.5]`, seq: 145, wantErr: true},
+		{name: "negative", raw: `[-1]`, seq: 145, wantErr: true},
+		{name: "unsafe integer", raw: `[9007199254740992]`, seq: 145, wantErr: true},
+		{name: "short pair", raw: `[[1]]`, seq: 145, wantErr: true},
+		{name: "long pair", raw: `[[1, 2, 3]]`, seq: 145, wantErr: true},
+		{name: "fractional endpoint", raw: `[[1, 2.5]]`, seq: 145, wantErr: true},
+		{name: "reversed pair", raw: `[[3, 1]]`, seq: 145, wantErr: true},
+		{name: "nested pair", raw: `[[[1, 2]]]`, seq: 145, wantErr: true},
+		{name: "overlapping ranges", raw: `[[1, 3], [3, 5]]`, seq: 145, wantErr: true},
+		{name: "unordered mixed", raw: `[2, 1, [3, 5]]`, seq: 145, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			records := []any{deepSeekHarnessFixtureHeader("source-seqs", deepSeekHarnessFixtureCwd, nil)}
+			// Keep the reported range's references earlier than the owning event.
+			for seq := range test.seq - 1 {
+				records = append(records, deepSeekHarnessFixtureEvent(seq, "feedback/record", map[string]any{"text": "source"}, nil))
+			}
+			records = append(records, deepSeekHarnessFixtureEvent(test.seq-1, "turn/start", map[string]any{"turn": 1}, nil))
+			event := deepSeekHarnessFixtureEvent(test.seq, "user/message", deepSeekHarnessUser("derived prompt", "plugin"), "append")
+			event["sourceEventSeqs"] = jsontext.Value(test.raw)
+			records = append(records, event,
+				deepSeekHarnessFixtureEvent(test.seq+1, "turn/end", deepSeekHarnessTurnEnd(1, "completed"), nil))
+			path := writeDeepSeekHarnessFixture(t, t.TempDir(), "source-seqs", deepSeekHarnessFixtureCwd, "plain", records)
+			result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+			if test.wantErr {
+				require.ErrorContains(t, err, "corrupt committed DeepSeek Harness log")
+				assert.ErrorContains(t, err, "sourceEventSeqs")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, result.Messages, 1)
+			assert.Equal(t, "derived prompt", result.Messages[0].Content)
+		})
+	}
+}
+
 func TestDeepSeekHarnessFormatErrorsAndCrashTails(t *testing.T) {
 	t.Run("foreign version", func(t *testing.T) {
 		records := deepSeekHarnessCompleteFixture("foreign", nil)
@@ -774,82 +851,6 @@ func TestDeepSeekHarnessFormatErrorsAndCrashTails(t *testing.T) {
 		result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
 		require.NoError(t, err)
 		assert.Empty(t, result.Messages)
-	})
-
-	t.Run("model/selection accepted", func(t *testing.T) {
-		records := []any{
-			deepSeekHarnessFixtureHeader("model-select", deepSeekHarnessFixtureCwd, nil),
-			map[string]any{
-				"type": "model/selection", "seq": 0, "time": 1700000000001,
-				"data": map[string]any{"provider": "deepseek-official", "model": "deepseek-v4-flash", "reasoningEffort": "high"},
-			},
-			deepSeekHarnessFixtureEvent(1, "turn/start", map[string]any{"turn": 1}, nil),
-			deepSeekHarnessFixtureEvent(2, "turn/end", deepSeekHarnessTurnEnd(1, "completed"), nil),
-		}
-		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "model-select", deepSeekHarnessFixtureCwd, "plain", records)
-		result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-		require.NoError(t, err)
-		assert.Len(t, result.Messages, 0)
-	})
-
-	t.Run("sourceEventSeqs flat accepted", func(t *testing.T) {
-		records := []any{
-			deepSeekHarnessFixtureHeader("src-seqs-flat", deepSeekHarnessFixtureCwd, nil),
-			deepSeekHarnessFixtureEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
-			deepSeekHarnessFixtureEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
-			map[string]any{
-				"type": "assistant/message", "seq": 2, "time": 1700000000003,
-				"data": deepSeekHarnessAssistantDataMap(1, 1, "hello", nil),
-				"sourceEventSeqs": []any{float64(1), float64(2), float64(3)},
-				"surfaceOp":       "append",
-			},
-			deepSeekHarnessFixtureEvent(3, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
-			deepSeekHarnessFixtureEvent(4, "turn/end", deepSeekHarnessTurnEnd(1, "completed"), nil),
-		}
-		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "src-seqs-flat", deepSeekHarnessFixtureCwd, "plain", records)
-		result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-		require.NoError(t, err)
-		assert.NotEmpty(t, result.Messages)
-	})
-
-	t.Run("sourceEventSeqs nested accepted", func(t *testing.T) {
-		records := []any{
-			deepSeekHarnessFixtureHeader("src-seqs-nested", deepSeekHarnessFixtureCwd, nil),
-			deepSeekHarnessFixtureEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
-			deepSeekHarnessFixtureEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
-			map[string]any{
-				"type": "assistant/message", "seq": 2, "time": 1700000000003,
-				"data": deepSeekHarnessAssistantDataMap(1, 1, "hello", nil),
-				"sourceEventSeqs": []any{[]any{float64(1), float64(2)}},
-				"surfaceOp":       "append",
-			},
-			deepSeekHarnessFixtureEvent(3, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
-			deepSeekHarnessFixtureEvent(4, "turn/end", deepSeekHarnessTurnEnd(1, "completed"), nil),
-		}
-		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "src-seqs-nested", deepSeekHarnessFixtureCwd, "plain", records)
-		result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-		require.NoError(t, err)
-		assert.NotEmpty(t, result.Messages)
-	})
-
-	t.Run("sourceEventSeqs invalid accepted", func(t *testing.T) {
-		records := []any{
-			deepSeekHarnessFixtureHeader("src-seqs-bad", deepSeekHarnessFixtureCwd, nil),
-			deepSeekHarnessFixtureEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
-			deepSeekHarnessFixtureEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
-			map[string]any{
-				"type": "assistant/message", "seq": 2, "time": 1700000000003,
-				"data": deepSeekHarnessAssistantDataMap(1, 1, "hello", nil),
-				"sourceEventSeqs": []any{"not-a-number"},
-				"surfaceOp":       "append",
-			},
-			deepSeekHarnessFixtureEvent(3, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
-			deepSeekHarnessFixtureEvent(4, "turn/end", deepSeekHarnessTurnEnd(1, "completed"), nil),
-		}
-		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "src-seqs-bad", deepSeekHarnessFixtureCwd, "plain", records)
-		result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-		require.NoError(t, err)
-		assert.NotEmpty(t, result.Messages)
 	})
 
 	t.Run("unsafe event integer", func(t *testing.T) {
