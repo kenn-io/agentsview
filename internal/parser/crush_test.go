@@ -409,8 +409,8 @@ func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, plan.Scopes, 1)
 			scope := plan.Scopes[0]
-			assert.Equal(t, []string{fixture.dataDir}, scope.TraversalRoots,
-				"traversal must use the normalized data-directory root")
+			assert.Equal(t, []string{filepath.Clean(fixture.dbPath)}, scope.TraversalRoots,
+				"traversal must keep the original configured database-file root")
 			assert.Equal(t,
 				[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
 				scope.CoverageIdentities,
@@ -432,11 +432,67 @@ func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, plan.Scopes, 1)
+	assert.Equal(t, []string{filepath.Clean(fixture.dataDir)}, plan.Scopes[0].TraversalRoots)
 	assert.Equal(t,
 		[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
 		plan.Scopes[0].CoverageIdentities,
 	)
 	assert.Equal(t, []string{fixture.dbPath}, plan.Scopes[0].RetryRoots)
+}
+
+// A scoped NewProvider reconstruction from reconciliation TraversalRoots
+// must re-apply registry expansion and project mapping, so custom layouts
+// still attribute sessions to the registry's project path and the original
+// configured root for machine mapping.
+func TestCrushReconciliationTraversalRootsRestoreRegistryMetadata(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const created = int64(1_789_093_626)
+	fixture.insertSession(t, "sess-reg", "Registry project", "",
+		created, created, 0, 0, 0)
+
+	registryDir := t.TempDir()
+	registry := `{"projects":[{"path":"` + filepath.ToSlash(fixture.projectDir) +
+		`","data_dir":"` + filepath.ToSlash(fixture.dataDir) + `"}]}`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(registryDir, CrushProjectsFileName),
+		[]byte(registry), 0o600,
+	))
+
+	factory := newCrushProviderFactory(AgentDef{
+		Type: AgentCrush, IDPrefix: "crush:",
+	})
+	provider := factory.NewProvider(ProviderConfig{
+		Roots: []string{registryDir},
+	})
+	plan, err := provider.ResolveReconciliationScopes(
+		t.Context(), ReconciliationScopeRequest{Roots: []string{registryDir}},
+	)
+	require.NoError(t, err)
+	require.Len(t, plan.Scopes, 1)
+	assert.Equal(t, []string{filepath.Clean(registryDir)},
+		plan.Scopes[0].TraversalRoots,
+		"traversal must keep the configured registry root for scoped reconstruction")
+
+	// Reconstruct exactly as the sync engine does after scope resolution.
+	scoped := factory.NewProvider(ProviderConfig{
+		Roots: plan.Scopes[0].TraversalRoots,
+	})
+	sources, err := scoped.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, filepath.Clean(registryDir), sources[0].ConfiguredRoot)
+
+	outcome, err := scoped.Parse(context.Background(), ParseRequest{
+		Source:  sources[0],
+		Machine: "laptop",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	sess := outcome.Results[0].Result.Session
+	assert.Equal(t, "laptop", sess.Machine)
+	assert.Equal(t, fixture.projectDir, sess.Cwd,
+		"scoped reconstruction must keep the registry's project path")
+	assert.Equal(t, filepath.Base(fixture.projectDir), sess.Project)
 }
 
 // Sources discovered under a configured registry or crush.db root must
@@ -733,4 +789,14 @@ func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
 	assert.Equal(t, RoleUser, messages[0].Role)
 	assert.Empty(t, messages[0].ProviderID)
 	assert.False(t, messages[0].IsSystem)
+
+	// Fingerprint freshness is mandatory for Crush sync; a minimal accepted
+	// schema without messages.updated_at must still produce a hash.
+	hash, found, err := crushSessionFingerprint(
+		context.Background(), dbPath, "sess-min", false,
+	)
+	require.NoError(t, err)
+	require.True(t, found,
+		"fingerprint must work without the optional messages.updated_at column")
+	assert.NotEmpty(t, hash)
 }
