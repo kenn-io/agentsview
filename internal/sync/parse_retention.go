@@ -174,12 +174,15 @@ func (e *Engine) parseRetentionSourceBytes(file parser.DiscoveredFile) int64 {
 			path = providerPath
 		}
 	}
-	path = validatedProviderSourceStatPath(path)
-	info, err := os.Stat(path)
+	info, err := os.Stat(validatedProviderSourceStatPath(path))
 	if err != nil || !info.Mode().IsRegular() {
 		return 0
 	}
-	if members := e.sqliteContainerDiscoveredMembers(file); members > 1 {
+	// Membership follows the same resolved path as the stat: a virtual member
+	// promoted to its storage JSON shadow stats the shadow, so dividing that
+	// size by the container's membership would undercharge the parse.
+	resolved := parser.DiscoveredFile{Agent: file.Agent, Path: path}
+	if members := e.sqliteContainerDiscoveredMembers(resolved); members > 1 {
 		// Sole-member containers keep the raw size so a zero-byte container
 		// still reports zero, which retainedBytes reads as an unknown source.
 		// Above one member the share floors at a byte instead, because a

@@ -1253,6 +1253,18 @@ func TestParseRetentionKeepsCodexSourceBytesForStagingThreshold(t *testing.T) {
 		"the Codex staging threshold input must keep the whole-file size")
 }
 
+func TestParseRetentionChargesPromotedStorageShadowWholeSize(t *testing.T) {
+	engine, files, _ := newSQLiteContainerMemberFixture(t, 64<<20, 64)
+	storagePath := filepath.Join(t.TempDir(), "ses-000.json")
+	require.NoError(t, os.WriteFile(storagePath, make([]byte, 4096), 0o644))
+
+	promoted := files[0]
+	promoted.ProviderSource = &parser.SourceRef{DisplayPath: storagePath}
+
+	assert.Equal(t, int64(4096), engine.parseRetentionSourceBytes(promoted),
+		"a member promoted to its storage shadow is charged the shadow, not a container share")
+}
+
 func TestParseRetentionFallsBackToContainerSizeWithoutPass(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "mimocode.db")
 	handle, err := os.Create(dbPath)
