@@ -124,7 +124,10 @@ function currentDesktopWebviewWindow(): DesktopTauriWebviewWindow | undefined {
 function syncDesktopZoom(scaleFactor: number): Promise<void> | undefined {
   const webview = currentDesktopWebviewWindow();
   if (!webview) return;
-  nativeZoomQueue = nativeZoomQueue.catch(() => {}).then(() => webview.setZoom(scaleFactor));
+  nativeZoomQueue = nativeZoomQueue.catch(() => {}).then(async () => {
+    await webview.setZoom(scaleFactor);
+    confirmedNativeZoom = scaleFactor;
+  });
   return nativeZoomQueue;
 }
 
