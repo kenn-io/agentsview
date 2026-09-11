@@ -96,11 +96,38 @@ describe("AppearanceSettings", () => {
     expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
   });
 
-  it("disables Zoom while settings are saving", () => {
-    settings.saving = true;
-    const { getByRole } = render(AppearanceSettings);
+  it("queues a Zoom selection behind another settings save", async () => {
+    const paletteResponse = {
+      agent_dirs: {},
+      chart_palette: "matplotlib" as const,
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" as const },
+    };
+    let finishPalette!: (value: typeof paletteResponse) => void;
+    settingsService.putApiV1Settings
+      .mockReturnValueOnce(new Promise((resolve) => {
+        finishPalette = resolve;
+      }))
+      .mockResolvedValueOnce({ ...paletteResponse, zoom_level: 120 });
 
-    expect((getByRole("button", { name: "Zoom 100%" }) as HTMLButtonElement).disabled).toBe(true);
+    const paletteSave = settings.save({ chart_palette: "matplotlib" });
+    const { getByRole, getByTitle } = render(AppearanceSettings);
+    await fireEvent.click(getByTitle("Zoom"));
+    await fireEvent.mouseDown(getByRole("option", { name: "120%" }));
+
+    await waitFor(() => expect(getByTitle("Zoom").textContent).toContain("120%"));
+    expect(ui.zoomLevel).toBe(120);
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(1);
+
+    finishPalette(paletteResponse);
+    await paletteSave;
+    await waitFor(() => expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(2));
+    expect(settingsService.putApiV1Settings).toHaveBeenNthCalledWith(2, { zoom_level: 120 });
+    await waitFor(() => expect(settings.saving).toBe(false));
   });
 
   it("rejects an unlisted percentage and shows localized empty text", async () => {

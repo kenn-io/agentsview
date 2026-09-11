@@ -55,7 +55,6 @@ function forbiddenMessage(serverMessage: string): string {
 class SettingsStore {
   private mutationQueue: Promise<void> | null = null;
   private pendingZoomSave = false;
-  private zoomSaveVersion = 0;
   private loadVersion = 0;
   agentDirs: Record<string, string[]> = $state({});
   sessionProviders: SessionProvider[] = $state([]);
@@ -82,7 +81,6 @@ class SettingsStore {
 
   constructor() {
     ui.setZoomSaveCallback((level) => {
-      this.zoomSaveVersion += 1;
       if (!this.loaded || this.error || this.needsAuth) {
         this.pendingZoomSave = true;
       } else if (!this.readOnly) {
@@ -98,9 +96,8 @@ class SettingsStore {
     }
     const loadVersion = ++this.loadVersion;
     const zoomChangeVersion = ui.zoomChangeVersion;
-    const zoomSaveVersion = this.zoomSaveVersion;
-    const mutationActive = this.saving;
     const pendingZoomSave = this.pendingZoomSave;
+    const isCurrentLoad = () => loadVersion === this.loadVersion;
     let loadedData = false;
     this.loading = true;
     this.loaded = false;
@@ -109,6 +106,7 @@ class SettingsStore {
     this.needsAuth = false;
     try {
       const data = await SettingsService.getApiV1Settings();
+      if (!isCurrentLoad()) return;
       if (!isChartPalette(data.chart_palette)) {
         throw new Error(
           `Invalid chart_palette in settings response: ${String(data.chart_palette)}`,
@@ -125,13 +123,7 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
-      if (
-        loadVersion === this.loadVersion &&
-        ui.zoomChangeVersion === zoomChangeVersion &&
-        this.zoomSaveVersion === zoomSaveVersion &&
-        !mutationActive &&
-        !pendingZoomSave
-      ) {
+      if (ui.zoomChangeVersion === zoomChangeVersion && !pendingZoomSave) {
         if (data.zoom_level !== undefined) {
           ui.applyZoomLevel(data.zoom_level);
         } else {
@@ -149,6 +141,7 @@ class SettingsStore {
       }
       loadedData = true;
     } catch (e) {
+      if (!isCurrentLoad()) return;
       if (e instanceof ApiError && e.status === 401) {
         this.needsAuth = true;
       } else if (e instanceof ApiError && e.status === 403) {
@@ -157,13 +150,10 @@ class SettingsStore {
         this.error = e instanceof Error ? e.message : "Failed to load settings";
       }
     } finally {
+      if (!isCurrentLoad()) return;
       this.loading = false;
       this.loaded = true;
-      if (
-        loadedData &&
-        loadVersion === this.loadVersion &&
-        this.pendingZoomSave
-      ) {
+      if (loadedData && this.pendingZoomSave) {
         this.pendingZoomSave = false;
         if (!this.readOnly) void this.save({ zoom_level: ui.zoomLevel });
       }

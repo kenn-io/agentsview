@@ -223,7 +223,87 @@ describe("SettingsStore.load mode handling", () => {
     expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
   });
 
-  it("keeps the newest response when settings loads overlap", async () => {
+  it("keeps current metadata when a stale settings load succeeds", async () => {
+    let finishFirst!: (value: Record<string, unknown>) => void;
+    let finishSecond!: (value: Record<string, unknown>) => void;
+    settingsService.getApiV1Settings
+      .mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { finishSecond = resolve; }));
+
+    const first = settings.load();
+    const second = settings.load();
+    finishSecond({
+      agent_dirs: { current: ["/current"] },
+      session_providers: [],
+      disabled_agents: [],
+      chart_palette: "agentsview",
+      github_configured: true,
+      host: "current.example",
+      port: 9090,
+      auth_token: "current-token",
+      read_only: false,
+      require_auth: true,
+      terminal: { mode: "current" },
+      tool_result_images: "drop",
+      zoom_level: 150,
+    });
+    await second;
+    finishFirst({
+      agent_dirs: { stale: ["/stale"] },
+      session_providers: [],
+      disabled_agents: [],
+      chart_palette: "matplotlib",
+      github_configured: false,
+      host: "stale.example",
+      port: 7070,
+      auth_token: "stale-token",
+      read_only: true,
+      require_auth: false,
+      terminal: { mode: "stale" },
+      tool_result_images: "keep",
+      zoom_level: 120,
+    });
+    await first;
+
+    expect(ui.zoomLevel).toBe(150);
+    expect(settings.agentDirs).toEqual({ current: ["/current"] });
+    expect(settings.chartPalette).toBe("agentsview");
+    expect(settings.githubConfigured).toBe(true);
+    expect(settings.host).toBe("current.example");
+    expect(settings.port).toBe(9090);
+    expect(settings.authToken).toBe("current-token");
+    expect(settings.requireAuth).toBe(true);
+    expect(settings.readOnly).toBe(false);
+    expect(settings.terminal).toEqual({ mode: "current" });
+    expect(settings.toolResultImages).toBe("drop");
+    expect(settings.error).toBeNull();
+    expect(settings.needsAuth).toBe(false);
+    expect(settings.loading).toBe(false);
+    expect(settings.loaded).toBe(true);
+    expect(runtime.setAuthToken).toHaveBeenCalledWith("current-token");
+    expect(runtime.setAuthToken).not.toHaveBeenCalledWith("stale-token");
+
+    settingsService.putApiV1Settings.mockResolvedValue({
+      agent_dirs: { current: ["/current"] },
+      chart_palette: "agentsview",
+      github_configured: true,
+      host: "current.example",
+      port: 9090,
+      auth_token: "current-token",
+      read_only: false,
+      require_auth: true,
+      terminal: { mode: "current" },
+      tool_result_images: "drop",
+      zoom_level: 120,
+    });
+    ui.setZoomLevel(120);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(1);
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({ zoom_level: 120 });
+  });
+
+  it("ignores a stale settings success before validation", async () => {
     let finishFirst!: (value: Record<string, unknown>) => void;
     let finishSecond!: (value: Record<string, unknown>) => void;
     settingsService.getApiV1Settings
@@ -236,15 +316,93 @@ describe("SettingsStore.load mode handling", () => {
       agent_dirs: {},
       chart_palette: "agentsview",
       github_configured: false,
-      host: "127.0.0.1",
-      port: 8080,
+      host: "current.example",
+      port: 9090,
       read_only: false,
       require_auth: false,
       terminal: { mode: "auto" },
-      zoom_level: 150,
     });
     await second;
     finishFirst({
+      agent_dirs: {},
+      chart_palette: "obsolete",
+      github_configured: false,
+      host: "stale.example",
+      port: 7070,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    await first;
+
+    expect(settings.error).toBeNull();
+    expect(settings.loaded).toBe(true);
+    expect(settings.loading).toBe(false);
+  });
+
+  it.each([
+    ["generic error", new Error("stale load failed")],
+    ["401", apiError(401, "Unauthorized")],
+    ["403", apiError(403, "Forbidden")],
+  ])("ignores a stale settings %s", async (_name, staleError) => {
+    let rejectFirst!: (error: unknown) => void;
+    const currentResponse = {
+      agent_dirs: { current: ["/current"] },
+      chart_palette: "agentsview" as const,
+      github_configured: true,
+      host: "current.example",
+      port: 9090,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "current" },
+      zoom_level: 100,
+    };
+    settingsService.getApiV1Settings
+      .mockReturnValueOnce(new Promise((_, reject) => { rejectFirst = reject; }))
+      .mockResolvedValueOnce(currentResponse);
+
+    const first = settings.load();
+    const second = settings.load();
+    await second;
+    rejectFirst(staleError);
+    await first;
+
+    expect(settings.agentDirs).toEqual({ current: ["/current"] });
+    expect(settings.readOnly).toBe(false);
+    expect(settings.error).toBeNull();
+    expect(settings.needsAuth).toBe(false);
+    expect(settings.loading).toBe(false);
+    expect(settings.loaded).toBe(true);
+
+    settingsService.putApiV1Settings.mockResolvedValue({ ...currentResponse, zoom_level: 120 });
+    ui.setZoomLevel(120);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(1);
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({ zoom_level: 120 });
+  });
+
+  it("keeps the current load pending when a stale load finishes", async () => {
+    let rejectFirst!: (error: unknown) => void;
+    let finishSecond!: (value: Record<string, unknown>) => void;
+    settingsService.getApiV1Settings
+      .mockReturnValueOnce(new Promise((_, reject) => { rejectFirst = reject; }))
+      .mockReturnValueOnce(new Promise((resolve) => { finishSecond = resolve; }));
+
+    const first = settings.load();
+    const second = settings.load();
+    rejectFirst(new Error("stale load failed"));
+    await first;
+
+    expect(settings.loading).toBe(true);
+    expect(settings.loaded).toBe(false);
+    expect(settings.error).toBeNull();
+    expect(settings.needsAuth).toBe(false);
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+
+    ui.setZoomLevel(120);
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+    finishSecond({
       agent_dirs: {},
       chart_palette: "agentsview",
       github_configured: false,
@@ -253,11 +411,13 @@ describe("SettingsStore.load mode handling", () => {
       read_only: false,
       require_auth: false,
       terminal: { mode: "auto" },
-      zoom_level: 120,
     });
-    await first;
+    await second;
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(ui.zoomLevel).toBe(150);
+    expect(settings.loading).toBe(false);
+    expect(settings.loaded).toBe(true);
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({ zoom_level: 120 });
   });
 
   it("keeps local zoom when the server omits the field", async () => {
