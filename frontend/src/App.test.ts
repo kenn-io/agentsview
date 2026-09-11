@@ -21,6 +21,7 @@ import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import sourceRaw from "./App.svelte?raw";
 import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
 import { SessionsService } from "./lib/api/generated/index.js";
+import { dismissFlash } from "@kenn-io/kit-ui";
 // @ts-ignore
 import App, { findUserPromptOrdinal } from "./App.svelte";
 
@@ -115,6 +116,22 @@ afterEach(() => {
   settings.readOnly = false;
   settings.error = null;
   sync.serverVersion = null;
+  settings.saveError = null;
+  dismissFlash();
+});
+
+it("shows settings save errors through the app shell", async () => {
+  stubAppDependencies();
+  router.route = "settings";
+  settings.saveError = "settings endpoint unavailable";
+  component = mount(App, { target: document.body });
+  await flushEffects();
+
+  const flash = document.body.querySelector<HTMLElement>(
+    '.kit-flash-banner[data-kit-tone="danger"]',
+  );
+  expect(flash).not.toBeNull();
+  expect(flash?.textContent).toContain("settings endpoint unavailable");
 });
 
 function appSourceSlice(startMarker: string, endMarker: string): string {

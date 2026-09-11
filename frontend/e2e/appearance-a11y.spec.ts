@@ -5,6 +5,40 @@ function readZoom(page: Page): Promise<string> {
   return page.evaluate(() => document.documentElement.style.getPropertyValue("zoom"));
 }
 
+async function isolateServerZoom(page: Page): Promise<void> {
+  let settingsBody: Record<string, unknown> | undefined;
+  await page.route("**/api/v1/settings", async (route) => {
+    if (route.request().method() === "GET") {
+      const response = await route.fetch();
+      settingsBody = await response.json();
+      delete settingsBody.zoom_level;
+      await route.fulfill({
+        response,
+        body: JSON.stringify(settingsBody),
+      });
+      return;
+    }
+    if (route.request().method() === "PUT") {
+      if (!settingsBody) {
+        const response = await page.request.get("/api/v1/settings");
+        settingsBody = await response.json();
+        delete settingsBody.zoom_level;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(settingsBody),
+      });
+      return;
+    }
+    await route.continue();
+  });
+}
+
+test.beforeEach(async ({ page }) => {
+  await isolateServerZoom(page);
+});
+
 function luminance([r, g, b]: [number, number, number]): number {
   const [rr, gg, bb] = [r, g, b].map((channel) => {
     const value = channel / 255;

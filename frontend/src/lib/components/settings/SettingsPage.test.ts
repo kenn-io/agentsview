@@ -410,36 +410,4 @@ describe("SettingsPage", () => {
     unmount(component);
   });
 
-  it("shows a danger flash when a settings save fails", async () => {
-    settingsService.getApiV1Settings.mockResolvedValue({
-      agent_dirs: {},
-      chart_palette: "agentsview",
-      github_configured: false,
-      host: "127.0.0.1",
-      port: 8080,
-      read_only: false,
-      require_auth: false,
-      terminal: { mode: "auto" },
-    });
-    settingsService.putApiV1Settings.mockRejectedValue(new Error("settings endpoint unavailable"));
-    const component = mount(SettingsPage, { target: document.body });
-    await tick();
-    await tick();
-
-    const matplotlib = Array.from(
-      document.body.querySelectorAll<HTMLElement>('[role="radio"]'),
-    ).find((control) => control.textContent?.includes("Matplotlib"));
-    expect(matplotlib).toBeTruthy();
-    matplotlib!.click();
-
-    await vi.waitFor(() => {
-      const flash = document.body.querySelector<HTMLElement>(
-        '.kit-flash-banner[data-kit-tone="danger"]',
-      );
-      expect(flash).not.toBeNull();
-      expect(flash?.textContent).toContain("settings endpoint unavailable");
-    });
-
-    await unmount(component);
-  });
 });
