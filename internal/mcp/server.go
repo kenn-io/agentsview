@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/mcpdiscovery"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -35,9 +38,11 @@ const (
 // tests can control the self-reference exclusion window (defaults to
 // time.Now).
 type ServeOptions struct {
-	Service service.SessionService
-	Version string
-	Now     func() time.Time
+	DiscoveryDirectory string
+	BackendURL         string
+	Service            service.SessionService
+	Version            string
+	Now                func() time.Time
 	// Token, when non-empty, requires every StreamableHTTP request to
 	// carry "Authorization: Bearer <Token>". It has no effect on stdio.
 	// The command layer sets it for non-loopback HTTP binds so the
@@ -209,13 +214,25 @@ func isCleanStdioShutdown(err error) bool {
 // cancelled the HTTP server is shut down gracefully so in-flight tool
 // calls can finish. addr must already be validated as a safe bind
 // address (see the cmd layer's loopback guard).
-func ServeHTTP(ctx context.Context, opts ServeOptions, addr string) error {
+func ServeHTTP(ctx context.Context, opts ServeOptions, addr string) (result error) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = listener.Close() }()
+	if opts.DiscoveryDirectory != "" {
+		cleanup, err := mcpdiscovery.Publish(opts.DiscoveryDirectory, listener.Addr().String(), opts.Token, opts.BackendURL)
+		if err != nil {
+			return err
+		}
+		defer func() { result = errors.Join(result, cleanup()) }()
+	}
 	httpServer := &http.Server{Addr: addr, Handler: newHTTPHandler(opts)}
 	fmt.Fprintf(os.Stderr, "agentsview mcp: serving on %s\n", addr)
 
 	errCh := make(chan error, 1)
 	go func() {
-		err := httpServer.ListenAndServe()
+		err := httpServer.Serve(listener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return

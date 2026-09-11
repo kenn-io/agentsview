@@ -21,6 +21,20 @@ Use the MCP server when you want a coding assistant to answer questions such as:
 The tools are read-only. They expose session history and usage data, but they do
 not mutate the archive or resync files directly.
 
+### Discover running HTTP listeners
+
+Run `agentsview mcp status --json` to list HTTP MCP listeners started by this
+version. The command reads local runtime records without starting a server. Each
+entry includes `transport`, `url`, `pid`, `backend_url` when known, and
+`token_path` when the listener requires a bearer token. Read the token from that
+private file; the status output does not print it.
+
+The listener publishes its actual bound port after startup, including when
+started with port zero, and removes its record on orderly shutdown. Status omits
+records whose process has exited. Stdio sessions are not listening endpoints and
+do not appear. An empty JSON list means no HTTP listeners were found in this
+application's configured data directory.
+
 ## Quick Start
 
 For local desktop-style MCP clients, use stdio:

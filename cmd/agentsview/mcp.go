@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,6 +97,13 @@ Add to your MCP client config (e.g. Claude Desktop):
 					return err
 				}
 				opts.Token = token
+				opts.DiscoveryDirectory = filepath.Join(cfg.DataDir, "mcp")
+				opts.BackendURL, _ = cmd.Flags().GetString("server")
+				if opts.BackendURL == "" && !pgReadRequested(cmd) {
+					if runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); runtime != nil {
+						opts.BackendURL = runtime.Record.Endpoint().BaseURL()
+					}
+				}
 				serveErr = mcpserver.ServeHTTP(ctx, opts, addr)
 			} else {
 				serveErr = mcpserver.ServeStdio(ctx, opts)
@@ -129,6 +137,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 	cmd.Flags().Bool("pg", false,
 		"Read session data from configured PostgreSQL")
 
+	cmd.AddCommand(newMCPStatusCommand())
 	return cmd
 }
 
